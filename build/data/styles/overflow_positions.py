@@ -1,13 +1,12 @@
-import os
 import sys
 from pathlib import Path
 
-parent_dir = Path(__file__).resolve().parent.parent
+parent_dir = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(parent_dir))
-sys.path.append(os.path.join(parent_dir, "data", "styles"))
 
 from lang import Lang
 from value import Value
+from prebuild import Prebuild
 
 overflow_positions = [
     Value().set_generate_name("safe").add_text(Lang.EN, "safe").add_text(Lang.FA, "امن"),
@@ -18,3 +17,10 @@ overflow_positions = [
 # <overflow-position> = 
 #   unsafe  |
 #   safe    
+
+if __name__ == '__main__':
+    strings = Prebuild.to_string(
+        [value.to_dict() for value in overflow_positions]
+    )
+    Prebuild.print(strings)
+    Prebuild.save(strings, __file__)

@@ -1,5 +1,12 @@
+import sys
+from pathlib import Path
+
+parent_dir = Path(__file__).resolve().parent.parent.parent
+sys.path.append(str(parent_dir))
+
 from lang import Lang
 from value import Value
+from prebuild import Prebuild
 
 rels = [
     Value().set_generate_name("alternate").add_text(Lang.EN, "alternate").add_text(Lang.FA, "متناوب"),
@@ -16,3 +23,10 @@ rels = [
     Value().set_generate_name("search").add_text(Lang.EN, "search").add_text(Lang.FA, "جستجو"),
     Value().set_generate_name("tag").add_text(Lang.EN, "tag").add_text(Lang.FA, "برچسب")
 ]
+
+if __name__ == '__main__':
+    strings = Prebuild.to_string(
+        [value.to_dict() for value in rels]
+    )
+    Prebuild.print(strings)
+    Prebuild.save(strings, __file__)

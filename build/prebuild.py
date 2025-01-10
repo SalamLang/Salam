@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-class Build:
+class Prebuild:
     @classmethod
     def to_string(self, element_dict):
         # return json.dumps(element_dict, indent=0, ensure_ascii=False)

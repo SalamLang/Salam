@@ -1,5 +1,5 @@
 from text import Text
-from build import Build
+from prebuild import Prebuild
 from attribute import Attribute
 
 class Element:
@@ -16,7 +16,7 @@ class Element:
     def set_generate_name(self, generate_name):
         """Set the generate name for the main element."""
         self.generate_name = generate_name
-        idtok = Build.idize(generate_name.upper())
+        idtok = Prebuild.idize(generate_name.upper())
         self.id = "AST_LAYOUT_TYPE_" + idtok
 
     def set_text(self, language_code, text):

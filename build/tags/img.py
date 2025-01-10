@@ -4,7 +4,7 @@ from pathlib import Path
 
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
-sys.path.append(os.path.join(parent_dir, "data"))
+sys.path.append(os.path.join(parent_dir, "data", "tags"))
 
 from prebuild import Prebuild
 import crossorigins

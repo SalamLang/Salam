@@ -720,7 +720,8 @@ def sync_file(file: Dict[str, Any]) -> None:
             elif COMMENT_END in line:
                 started = True
 
-        f.write("\n")
+        # f.write("\n")  # Ensure final newline after all content is written
+
 
 
 def generate_document() -> str:

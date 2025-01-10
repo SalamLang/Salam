@@ -4,7 +4,7 @@ from pathlib import Path
 
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
-sys.path.append(os.path.join(parent_dir, "data"))
+sys.path.append(os.path.join(parent_dir, "data", "tags"))
 
 from prebuild import Prebuild
 
@@ -27,7 +27,8 @@ if __name__ == "__main__":
         Value().set_generate_name("flex").add_text(Lang.EN, "flex").add_text(Lang.FA, "فلکس"),
         Value().set_generate_name("grid").add_text(Lang.EN, "grid").add_text(Lang.FA, "گرید"),
         Value().set_generate_name("table").add_text(Lang.EN, "table").add_text(Lang.FA, "جدول"),
-    ]) 
+    ])
+
     property_dict = property.to_dict()
 
     property_str = Prebuild.to_string(property_dict)

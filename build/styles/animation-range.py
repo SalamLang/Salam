@@ -20,7 +20,9 @@ if __name__ == "__main__":
     property.add_text(Lang.EN, "animation-range")
     property.add_text(Lang.FA, "وضعیت پخش انیمیشن")
     property.set_type(Type.Strings)
-    property.add_reserve_values(single_animation_play_states.single_animation_play_states)
+    property.add_reserve_values(
+        single_animation_play_states.single_animation_play_states
+    )
 
     property_dict = property.to_dict()
 
@@ -29,9 +31,9 @@ if __name__ == "__main__":
     Prebuild.save(property_str, __file__)
 
 # https://developer.mozilla.org/en-US/docs/Web/CSS/animation-play-state
-# animation-play-state = 
-#   <single-animation-play-state>#  
+# animation-play-state =
+#   <single-animation-play-state>#
 
-# <single-animation-play-state> = 
+# <single-animation-play-state> =
 #   running  |
-#   paused   
+#   paused

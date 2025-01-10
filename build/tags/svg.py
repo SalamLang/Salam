@@ -19,18 +19,12 @@ if __name__ == "__main__":
     element.add_text(Lang.EN, "svg")
     element.add_text(Lang.FA, "اس وی جی")
 
-    element.add_attribute() \
-        .set_generate_name("width") \
-        .set_type(Type.Size) \
-        .add_text(Lang.EN, "width") \
-        .add_text(Lang.FA, "عرض") \
-
-    element.add_attribute() \
-        .set_generate_name("height") \
-        .set_type(Type.Size) \
-        .add_text(Lang.EN, "height") \
-        .add_text(Lang.FA, "ارتفاع") \
-
+    element.add_attribute().set_generate_name("width").set_type(Type.Size).add_text(
+        Lang.EN, "width"
+    ).add_text(Lang.FA, "عرض")
+    element.add_attribute().set_generate_name("height").set_type(Type.Size).add_text(
+        Lang.EN, "height"
+    ).add_text(Lang.FA, "ارتفاع")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

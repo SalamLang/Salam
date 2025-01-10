@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+
 class Prebuild:
     @classmethod
     def to_string(self, element_dict):
@@ -13,10 +14,14 @@ class Prebuild:
 
     @classmethod
     def save(self, element_str, file):
-        open(Path(file).stem + ".json", "w", encoding="utf-8").write(
-            element_str + "\n"
-        )
+        open(Path(file).stem + ".json", "w", encoding="utf-8").write(element_str + "\n")
 
     @classmethod
     def idize(self, value):
-        return value.replace(" ", "_").replace("-", "_").replace("/", "_").replace(".", "_").replace("__", "_")
+        return (
+            value.replace(" ", "_")
+            .replace("-", "_")
+            .replace("/", "_")
+            .replace(".", "_")
+            .replace("__", "_")
+        )

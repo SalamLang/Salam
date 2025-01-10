@@ -206,14 +206,14 @@ languages = [
     {"name": "Yoruba", "code": "yo"},
     {"name": "Zhuang", "code": "za"},
     {"name": "Chuang", "code": "za"},
-    {"name": "Zulu", "code": "zu"}
+    {"name": "Zulu", "code": "zu"},
 ]
 
 for language in languages:
     language["name"] = language["name"].lower().strip()
     language["code"] = language["code"].lower().strip()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     strings = Prebuild.to_string(languages)
     Prebuild.print(strings)
     Prebuild.save(strings, __file__)

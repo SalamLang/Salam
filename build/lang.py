@@ -20,6 +20,7 @@ class Lang:
         """Get the object for a specific language."""
         return self.languages.get(name.upper(), None)
 
+
 # Add supported languages
 Lang.add_lang("EN", "English", "English")
 Lang.add_lang("FA", "Persian", "فارسی")

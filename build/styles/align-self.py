@@ -23,17 +23,33 @@ if __name__ == "__main__":
     property.add_text(Lang.EN, "align-self")
     property.add_text(Lang.FA, "تراز خود")
     property.set_type(Type.String)
-    property.add_reserve_values([
-        Value().set_generate_name("auto").add_text(Lang.EN, "auto").add_text(Lang.FA, "اتوماتیک"),
-        Value().set_generate_name("normal").add_text(Lang.EN, "normal").add_text(Lang.FA, "نرمال"),
-        Value().set_generate_name("stretch").add_text(Lang.EN, "stretch").add_text(Lang.FA, "کشیده"),
-        Value().set_generate_name("anchor-center").add_text(Lang.EN, "anchor-center").add_text(Lang.FA, "مرکز قایق"),
-    ])
+    property.add_reserve_values(
+        [
+            Value()
+            .set_generate_name("auto")
+            .add_text(Lang.EN, "auto")
+            .add_text(Lang.FA, "اتوماتیک"),
+            Value()
+            .set_generate_name("normal")
+            .add_text(Lang.EN, "normal")
+            .add_text(Lang.FA, "نرمال"),
+            Value()
+            .set_generate_name("stretch")
+            .add_text(Lang.EN, "stretch")
+            .add_text(Lang.FA, "کشیده"),
+            Value()
+            .set_generate_name("anchor-center")
+            .add_text(Lang.EN, "anchor-center")
+            .add_text(Lang.FA, "مرکز قایق"),
+        ]
+    )
     property.add_reserve_values(baseline_positions.baseline_positions)
-    property.add_reserve_values(Values.AndOrder(
-        overflow_positions.overflow_positions,
-        self_positions.self_positions,
-    ))
+    property.add_reserve_values(
+        Values.AndOrder(
+            overflow_positions.overflow_positions,
+            self_positions.self_positions,
+        )
+    )
     property.add_reserve_values(self_positions.self_positions)
 
     property_dict = property.to_dict()
@@ -43,27 +59,27 @@ if __name__ == "__main__":
     Prebuild.save(property_str, __file__)
 
 # https://developer.mozilla.org/en-US/docs/Web/CSS/align-self
-# align-self = 
+# align-self =
 #   auto                                  |
 #   normal                                |
 #   stretch                               |
 #   <baseline-position>                   |
 #   <overflow-position>? <self-position>  |
-#   anchor-center                         
+#   anchor-center
 
-# <baseline-position> = 
+# <baseline-position> =
 #   [ first | last ]?  &&
-#   baseline           
+#   baseline
 
-# <overflow-position> = 
+# <overflow-position> =
 #   unsafe  |
-#   safe    
+#   safe
 
-# <self-position> = 
+# <self-position> =
 #   center      |
 #   start       |
 #   end         |
 #   self-start  |
 #   self-end    |
 #   flex-start  |
-#   flex-end    
+#   flex-end

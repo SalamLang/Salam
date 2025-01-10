@@ -19,18 +19,12 @@ if __name__ == "__main__":
     element.add_text(Lang.EN, "label")
     element.add_text(Lang.FA, "لیبل")
 
-    element.add_attribute() \
-        .set_generate_name("for") \
-        .set_type(Type.ID) \
-        .add_text(Lang.EN, "for") \
-        .add_text(Lang.FA, "برای") \
-
-    element.add_attribute() \
-        .set_generate_name("form") \
-        .set_type(Type.ID) \
-        .add_text(Lang.EN, "form") \
-        .add_text(Lang.FA, "فرم") \
-
+    element.add_attribute().set_generate_name("for").set_type(Type.ID).add_text(
+        Lang.EN, "for"
+    ).add_text(Lang.FA, "برای")
+    element.add_attribute().set_generate_name("form").set_type(Type.ID).add_text(
+        Lang.EN, "form"
+    ).add_text(Lang.FA, "فرم")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

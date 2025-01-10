@@ -19,18 +19,12 @@ if __name__ == "__main__":
     element.add_text(Lang.EN, "param")
     element.add_text(Lang.FA, "پارامتر شی")
 
-    element.add_attribute() \
-        .set_generate_name("name") \
-        .set_type(Type.AnyNoEmpty) \
-        .add_text(Lang.EN, "name") \
-        .add_text(Lang.FA, "نام") \
-
-    element.add_attribute() \
-        .set_generate_name("value") \
-        .set_type(Type.String) \
-        .add_text(Lang.EN, "content") \
-        .add_text(Lang.FA, "محتوا") \
-
+    element.add_attribute().set_generate_name("name").set_type(
+        Type.AnyNoEmpty
+    ).add_text(Lang.EN, "name").add_text(Lang.FA, "نام")
+    element.add_attribute().set_generate_name("value").set_type(Type.String).add_text(
+        Lang.EN, "content"
+    ).add_text(Lang.FA, "محتوا")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

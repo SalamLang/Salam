@@ -4,6 +4,7 @@ from attribute import Attribute
 from type import Type
 from value import Value
 
+
 class Property:
     def __init__(self):
         self.text = Text()
@@ -50,7 +51,5 @@ class Property:
             "generate_name": self.generate_name,
             "type": self.type,
             "text": self.text.to_dict(),
-            "reserved_values": [
-                value.to_dict() for value in self.reserved_values
-            ],
+            "reserved_values": [value.to_dict() for value in self.reserved_values],
         }

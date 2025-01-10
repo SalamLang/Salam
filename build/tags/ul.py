@@ -19,7 +19,7 @@ if __name__ == "__main__":
     element.add_text(Lang.FA, "لیست")
 
     element_dict = element.to_dict()
-    
+
     element_str = Prebuild.to_string(element_dict)
     Prebuild.print(element_str)
     Prebuild.save(element_str, __file__)

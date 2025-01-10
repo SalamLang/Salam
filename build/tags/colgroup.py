@@ -25,12 +25,9 @@ if __name__ == "__main__":
     element.add_text(Lang.EN, "colgroup")
     element.add_text(Lang.FA, "کول گروه")
 
-    element.add_attribute() \
-        .set_generate_name("span") \
-        .set_type(Type.PositiveInt) \
-        .add_text(Lang.EN, "count") \
-        .add_text(Lang.FA, "تعداد") \
-
+    element.add_attribute().set_generate_name("span").set_type(
+        Type.PositiveInt
+    ).add_text(Lang.EN, "count").add_text(Lang.FA, "تعداد")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

@@ -29,11 +29,11 @@ if __name__ == "__main__":
     Prebuild.save(property_str, __file__)
 
 # https://developer.mozilla.org/en-US/docs/Web/CSS/animation-direction
-# animation-direction = 
-#   <single-animation-direction>#  
+# animation-direction =
+#   <single-animation-direction>#
 
-# <single-animation-direction> = 
+# <single-animation-direction> =
 #   normal             |
 #   reverse            |
 #   alternate          |
-#   alternate-reverse  
+#   alternate-reverse

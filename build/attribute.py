@@ -2,6 +2,7 @@ from text import Text
 from type import Type
 from prebuild import Prebuild
 
+
 class Attribute:
     def __init__(self, parent_element):
         self.text = Text()
@@ -58,7 +59,5 @@ class Attribute:
             "type": self.type,
             "text": self.text.to_dict(),
             "is_required": self.is_required,
-            "reserved_values": [
-                value.to_dict() for value in self.reserved_values
-            ],
+            "reserved_values": [value.to_dict() for value in self.reserved_values],
         }

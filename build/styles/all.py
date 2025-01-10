@@ -20,13 +20,30 @@ if __name__ == "__main__":
     property.add_text(Lang.EN, "all")
     property.add_text(Lang.FA, "همه")
     property.set_type(Type.String)
-    property.add_reserve_values([
-        Value().set_generate_name("initial").add_text(Lang.EN, "initial").add_text(Lang.FA, "ابتدایی"),
-        Value().set_generate_name("inherit").add_text(Lang.EN, "inherit").add_text(Lang.FA, "ارث بری"),
-        Value().set_generate_name("unset").add_text(Lang.EN, "unset").add_text(Lang.FA, "رها کردن"),
-        Value().set_generate_name("revert").add_text(Lang.EN, "revert").add_text(Lang.FA, "بازگشت"),
-        Value().set_generate_name("revert-layer").add_text(Lang.EN, "revert-layer").add_text(Lang.FA, "لایه بازگشت"),
-    ])
+    property.add_reserve_values(
+        [
+            Value()
+            .set_generate_name("initial")
+            .add_text(Lang.EN, "initial")
+            .add_text(Lang.FA, "ابتدایی"),
+            Value()
+            .set_generate_name("inherit")
+            .add_text(Lang.EN, "inherit")
+            .add_text(Lang.FA, "ارث بری"),
+            Value()
+            .set_generate_name("unset")
+            .add_text(Lang.EN, "unset")
+            .add_text(Lang.FA, "رها کردن"),
+            Value()
+            .set_generate_name("revert")
+            .add_text(Lang.EN, "revert")
+            .add_text(Lang.FA, "بازگشت"),
+            Value()
+            .set_generate_name("revert-layer")
+            .add_text(Lang.EN, "revert-layer")
+            .add_text(Lang.FA, "لایه بازگشت"),
+        ]
+    )
 
     property_dict = property.to_dict()
 
@@ -35,9 +52,9 @@ if __name__ == "__main__":
     Prebuild.save(property_str, __file__)
 
 # https://developer.mozilla.org/en-US/docs/Web/CSS/all
-# all = 
+# all =
 #   initial       |
 #   inherit       |
 #   unset         |
 #   revert        |
-#   revert-layer  
+#   revert-layer

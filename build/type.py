@@ -1,5 +1,6 @@
 class Type:
     """Type of an attribute."""
+
     Any = "AST_TYPE_ANY"
     AnyNoEmpty = "AST_TYPE_ANY"
     AnyTodo = "AST_TYPE_ANY"

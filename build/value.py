@@ -2,6 +2,7 @@ from text import Text
 from lang import Lang
 from prebuild import Prebuild
 
+
 class Value:
     def __init__(self):
         self.text = Text()
@@ -25,7 +26,9 @@ class Value:
             for lang in text:
                 self.set_all_text(lang)
         elif isinstance(text, str):
-            list(map(lambda lang: self.add_text(lang, text), Lang.get_languages().keys()))
+            list(
+                map(lambda lang: self.add_text(lang, text), Lang.get_languages().keys())
+            )
         else:
             raise ValueError("The text should be a string or a list of strings.")
         return self
@@ -44,7 +47,7 @@ class Value:
             "generate_name": self.generate_name,
             "text": self.text.to_dict(),
         }
-    
+
     def to_string(self):
         """Convert the attribute value to a string, including all information."""
         return Prebuild.to_string(self.to_dict())

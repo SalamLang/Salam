@@ -10,7 +10,7 @@ single_animation_iteration_counts = [
     # TODO
 ]
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     strings = Prebuild.to_string(
         [value.to_dict() for value in single_animation_iteration_counts]
     )
@@ -18,6 +18,6 @@ if __name__ == '__main__':
     Prebuild.save(strings, __file__)
 
 # https://developer.mozilla.org/en-US/docs/Web/CSS/animation-iteration-count
-# <single-animation-iteration-count> = 
+# <single-animation-iteration-count> =
 #   infinite        |
-#   <number [0,∞]>  
+#   <number [0,∞]>

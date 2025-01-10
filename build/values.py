@@ -1,13 +1,16 @@
 import itertools
 from value import Value
 
+
 class Values:
     @staticmethod
     def generate_ordered_strings(data):
         result = {}
         for lang, text_groups in data.items():
             combinations = itertools.product(*text_groups)
-            result[lang] = [' '.join(''.join(item) for item in combo) for combo in combinations]
+            result[lang] = [
+                " ".join("".join(item) for item in combo) for combo in combinations
+            ]
 
         return result
 

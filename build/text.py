@@ -1,5 +1,6 @@
 from lang import Lang
 
+
 class Text:
     def __init__(self):
         self.translations = {}

@@ -21,8 +21,8 @@ from property import Property
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("align-content")
-    property.set_text(Lang.EN, "align-content")
-    property.set_text(Lang.FA, "تراز محتوا")
+    property.add_text(Lang.EN, "align-content")
+    property.add_text(Lang.FA, "تراز محتوا")
     property.set_type(Type.String)
     property.add_reserve_values([
         Value().set_generate_name("normal").add_text(Lang.EN, "normal").add_text(Lang.FA, "نرمال"),

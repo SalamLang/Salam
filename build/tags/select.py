@@ -16,8 +16,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("select")
-    element.set_text(Lang.EN, "select")
-    element.set_text(Lang.FA, "فهرست کشویی")
+    element.add_text(Lang.EN, "select")
+    element.add_text(Lang.FA, "فهرست کشویی")
 
     element.add_attribute() \
         .set_generate_name("autofocus") \

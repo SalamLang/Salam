@@ -16,6 +16,6 @@ extern const ast_layout_attribute_pair_t ast_layout_allowed_charset[];
 
 extern const ast_layout_attribute_pair_t ast_layout_allowed_lang[];
 
-// ----------- END AUTO GENERATED ----------- //
-#endif
+// ----------- END AUTO GENERATED ----------- //#endif
+
 

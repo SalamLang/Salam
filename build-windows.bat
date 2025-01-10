@@ -37,7 +37,8 @@ if errorlevel 1 (
 
 REM Run the executable with the provided argument
 echo Running the executable...
-%output% example\test6.salam out\
+@REM %output% example\test6.salam out\
+%output% example\input.salam out\
 if errorlevel 1 (
 	echo Error: Execution failed with exit code %errorlevel%
 	exit /b %errorlevel%

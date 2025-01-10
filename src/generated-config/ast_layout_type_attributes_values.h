@@ -225,5 +225,5 @@ const size_t valid_attributes_font_length = sizeof(valid_attributes_font) / size
 ast_layout_attribute_type_t valid_attributes_media[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
 const size_t valid_attributes_media_length = 0;
 
-// ----------- END AUTO GENERATED ----------- //
-#endif
+// ----------- END AUTO GENERATED ----------- //#endif
+

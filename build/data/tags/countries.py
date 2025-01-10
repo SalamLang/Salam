@@ -1,5 +1,10 @@
-import json
+import sys
 from pathlib import Path
+
+parent_dir = Path(__file__).resolve().parent.parent.parent
+sys.path.append(str(parent_dir))
+
+from prebuild import Prebuild
 
 countries = [
     {"name": "AFGHANISTAN", "code": "AF"},
@@ -248,7 +253,9 @@ for country in countries:
     country["name"] = country["name"].lower().strip()
     country["code"] = country["code"].lower().strip()
 
-if __name__ == "__main__":
-    j = json.dumps(countries, indent=4, ensure_ascii=False)
-    print(j)
-    open(Path(__file__).stem + ".json", "w", encoding="utf-8").write(j + "\n")
+if __name__ == '__main__':
+    strings = Prebuild.to_string(
+        [value.to_dict() for value in countries]
+    )
+    Prebuild.print(strings)
+    Prebuild.save(strings, __file__)

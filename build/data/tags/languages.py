@@ -1,5 +1,10 @@
-import json
+import sys
 from pathlib import Path
+
+parent_dir = Path(__file__).resolve().parent.parent.parent
+sys.path.append(str(parent_dir))
+
+from prebuild import Prebuild
 
 languages = [
     {"name": "Abkhazian", "code": "ab"},
@@ -208,7 +213,9 @@ for language in languages:
     language["name"] = language["name"].lower().strip()
     language["code"] = language["code"].lower().strip()
 
-if __name__ == "__main__":
-    j = json.dumps(languages, indent=4, ensure_ascii=False)
-    print(j)
-    open(Path(__file__).stem + ".json", "w", encoding="utf-8").write(j + "\n")
+if __name__ == '__main__':
+    strings = Prebuild.to_string(
+        [value.to_dict() for value in languages]
+    )
+    Prebuild.print(strings)
+    Prebuild.save(strings, __file__)

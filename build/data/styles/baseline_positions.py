@@ -1,3 +1,4 @@
+import itertools
 import os
 import sys
 from pathlib import Path
@@ -19,16 +20,6 @@ overflow_positions = Values.And(
         Value().set_generate_name("baseline").add_text(Lang.EN, "baseline").add_text(Lang.FA, "خط پایه"),
     ],
 )
-# Values.and() should generate the following:
-# Value().set_generate_name("first baseline").add_text(Lang.EN, "first baseline").add_text(Lang.FA, "خط پایه اول"),
-# Value().set_generate_name("first baseline").add_text(Lang.EN, "baseline first").add_text(Lang.FA, "اول خط پایه"),
-# Value().set_generate_name("last baseline").add_text(Lang.EN, "last baseline").add_text(Lang.FA, "خط پایه آخر"),
-# Value().set_generate_name("last baseline").add_text(Lang.EN, "baseline last").add_text(Lang.FA, "آخر خط پایه"),
-# Value().set_generate_name("baseline").add_text(Lang.EN, "baseline").add_text(Lang.FA, "خط پایه"),
-
-print(overflow_positions)
-
-
 overflow_positions += [
     Value().set_generate_name("baseline").add_text(Lang.EN, "baseline").add_text(Lang.FA, "خط پایه"),
 ]
@@ -39,3 +30,22 @@ print(overflow_positions)
 # <baseline-position> = 
 #   [ first | last ]?  &&
 #   baseline           
+
+
+# data = {
+#     'EN': [['baseline'], ['last']],
+#     'FA': [['خط پایه'], ['آخر']]
+# }
+
+# def generate_ordered_strings(data):
+#     result = {}
+#     for lang, text_groups in data.items():
+#         combinations = itertools.product(*text_groups)
+#         result[lang] = [' '.join(' '.join(item) for item in combo) for combo in combinations]
+#     return result
+
+# output = generate_ordered_strings(data)
+
+# # Print the results
+# for lang, strings in output.items():
+#     print(f"{lang}: {strings}")

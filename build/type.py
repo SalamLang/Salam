@@ -13,9 +13,12 @@ class Type:
     ID = "AST_TYPE_ANY"
     CSSMedia = "AST_TYPE_ANY"
     Coords = "AST_TYPE_STRING"
+    Color = "AST_TYPE_STRING"
+    Colors = "AST_TYPE_STRING"
     Urls = "AST_TYPE_URLS"
     Number = "AST_TYPE_NUMBER"
     Boolean = "AST_TYPE_BOOLEAN"
+    Strings = "AST_TYPE_STRING"
 
     # YYYY-MM-DDThh:mm:ssTZD
     Date = "AST_TYPE_DATE"

@@ -22,8 +22,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("link")
-    element.set_text(Lang.EN, "link")
-    element.set_text(Lang.FA, "لینک")
+    element.add_text(Lang.EN, "link")
+    element.add_text(Lang.FA, "لینک")
 
     element.add_attribute() \
         .set_generate_name("crossorigin") \

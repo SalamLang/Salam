@@ -20,8 +20,8 @@ from property import Property
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("align-items")
-    property.set_text(Lang.EN, "align-items")
-    property.set_text(Lang.FA, "الاین-آیتمز")
+    property.add_text(Lang.EN, "align-items")
+    property.add_text(Lang.FA, "الاین-آیتمز")
     property.set_type(Type.String)
     property.add_reserve_values([
         Value().set_generate_name("normal").add_text(Lang.EN, "normal").add_text(Lang.FA, "نرمال"),

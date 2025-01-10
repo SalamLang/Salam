@@ -15,8 +15,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("datalist")
-    element.set_text(Lang.EN, "datalist")
-    element.set_text(Lang.FA, "لیست داده")
+    element.add_text(Lang.EN, "datalist")
+    element.add_text(Lang.FA, "لیست داده")
 
     element_dict = element.to_dict()
 

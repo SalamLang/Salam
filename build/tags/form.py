@@ -21,8 +21,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("form")
-    element.set_text(Lang.EN, "form")
-    element.set_text(Lang.FA, "فرم")
+    element.add_text(Lang.EN, "form")
+    element.add_text(Lang.FA, "فرم")
 
     element.add_attribute() \
         .set_generate_name("accept-charset") \

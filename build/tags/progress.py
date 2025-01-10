@@ -16,8 +16,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("progress")
-    element.set_text(Lang.EN, "progress")
-    element.set_text(Lang.FA, "پیشرفت")
+    element.add_text(Lang.EN, "progress")
+    element.add_text(Lang.FA, "پیشرفت")
 
     element.add_attribute() \
         .set_generate_name("max") \

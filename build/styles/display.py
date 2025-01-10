@@ -17,8 +17,8 @@ from property import Property
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("display")
-    property.set_text(Lang.EN, "display")
-    property.set_text(Lang.FA, "نحوه نمایش")
+    property.add_text(Lang.EN, "display")
+    property.add_text(Lang.FA, "نحوه نمایش")
     property.set_type(Type.String)
     property.add_reserve_values([
         Value().set_generate_name("none").add_text(Lang.EN, "none").add_text(Lang.FA, "هیچ"),

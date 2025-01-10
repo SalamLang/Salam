@@ -17,11 +17,11 @@ from property import Property
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("animation-name")
-    property.set_text(Lang.EN, "animation-name")
-    property.set_text(Lang.FA, "نام انیمیشن")
+    property.add_text(Lang.EN, "animation-name")
+    property.add_text(Lang.FA, "نام انیمیشن")
     property.set_type(Type.AnyNoEmpty)
     property.add_reserve_values([
-        Value().set_generate_name("none").set_text(Lang.EN, "none").set_text(Lang.FA, "هیچ‌کدام"),
+        Value().set_generate_name("none").add_text(Lang.EN, "none").add_text(Lang.FA, "هیچ‌کدام"),
     ])
 
     property_dict = property.to_dict()

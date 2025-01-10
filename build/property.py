@@ -18,7 +18,7 @@ class Property:
         self.id = "AST_LAYOUT_TYPE_" + idtok
         return self
 
-    def set_text(self, language_code, text):
+    def add_text(self, language_code, text):
         """Set text for the main element."""
         self.text.add_translation(language_code, text)
         return self

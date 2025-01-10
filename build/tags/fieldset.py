@@ -16,8 +16,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("fieldset")
-    element.set_text(Lang.EN, "fieldset")
-    element.set_text(Lang.FA, "فیلد ست")
+    element.add_text(Lang.EN, "fieldset")
+    element.add_text(Lang.FA, "فیلد ست")
 
     element.add_attribute() \
         .set_generate_name("disabled") \

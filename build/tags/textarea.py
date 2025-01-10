@@ -17,8 +17,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("textarea")
-    element.set_text(Lang.EN, "textarea")
-    element.set_text(Lang.FA, "ویرایشگر")
+    element.add_text(Lang.EN, "textarea")
+    element.add_text(Lang.FA, "ویرایشگر")
 
     element.add_attribute() \
         .set_generate_name("autofocus") \

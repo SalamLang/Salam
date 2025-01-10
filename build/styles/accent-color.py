@@ -17,11 +17,11 @@ from property import Property
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("accent-color")
-    property.set_text(Lang.EN, "accent-color")
-    property.set_text(Lang.FA, "رنگ اسنت")
+    property.add_text(Lang.EN, "accent-color")
+    property.add_text(Lang.FA, "رنگ اسنت")
     property.set_type(Type.Color)
     property.add_reserve_values(
-        Value().set_generate_name("auto").set_text(Lang.EN, "auto").set_text(Lang.FA, "اتو"),
+        Value().set_generate_name("auto").add_text(Lang.EN, "auto").add_text(Lang.FA, "اتو"),
     )
 
     property_dict = property.to_dict()

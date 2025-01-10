@@ -16,8 +16,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("dialog")
-    element.set_text(Lang.EN, "dialog")
-    element.set_text(Lang.FA, "دیالوگ")
+    element.add_text(Lang.EN, "dialog")
+    element.add_text(Lang.FA, "دیالوگ")
 
     element.add_attribute() \
         .set_generate_name("open") \

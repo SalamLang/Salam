@@ -16,8 +16,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("optgroup")
-    element.set_text(Lang.EN, "optgroup")
-    element.set_text(Lang.FA, "گروه مورد کشویی")
+    element.add_text(Lang.EN, "optgroup")
+    element.add_text(Lang.FA, "گروه مورد کشویی")
 
     element.add_attribute() \
         .set_generate_name("disabled") \

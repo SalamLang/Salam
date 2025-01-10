@@ -17,8 +17,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("bdo")
-    element.set_text(Lang.EN, "bdo")
-    element.set_text(Lang.FA, "بی دی ای")
+    element.add_text(Lang.EN, "bdo")
+    element.add_text(Lang.FA, "بی دی ای")
 
     element.add_attribute() \
         .set_generate_name("dir") \

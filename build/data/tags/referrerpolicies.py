@@ -1,5 +1,12 @@
+import sys
+from pathlib import Path
+
+parent_dir = Path(__file__).resolve().parent.parent.parent
+sys.path.append(str(parent_dir))
+
 from lang import Lang
 from value import Value
+from prebuild import Prebuild
 
 referrerpolicies = [
     Value().set_generate_name("no-referrer").add_text(Lang.EN, "no-referrer").add_text(Lang.FA, "بدون ارجاع"),
@@ -10,3 +17,10 @@ referrerpolicies = [
     Value().set_generate_name("strict-origin-when-cross-origin").add_text(Lang.EN, "strict-origin-when-cross-origin").add_text(Lang.FA, "حساس به منبع"),
     Value().set_generate_name("unsafe-url").add_text(Lang.EN, "unsafe-url").add_text(Lang.FA, "آدرس ناامن"),
 ]
+
+if __name__ == '__main__':
+    strings = Prebuild.to_string(
+        [value.to_dict() for value in referrerpolicies]
+    )
+    Prebuild.print(strings)
+    Prebuild.save(strings, __file__)

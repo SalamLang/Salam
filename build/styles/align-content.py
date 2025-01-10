@@ -24,15 +24,22 @@ if __name__ == "__main__":
     property.add_text(Lang.EN, "align-content")
     property.add_text(Lang.FA, "تراز محتوا")
     property.set_type(Type.String)
-    property.add_reserve_values([
-        Value().set_generate_name("normal").add_text(Lang.EN, "normal").add_text(Lang.FA, "نرمال"),
-    ])
+    property.add_reserve_values(
+        [
+            Value()
+            .set_generate_name("normal")
+            .add_text(Lang.EN, "normal")
+            .add_text(Lang.FA, "نرمال"),
+        ]
+    )
     property.add_reserve_values(baseline_positions.baseline_positions)
     property.add_reserve_values(content_distributions.content_distributions)
-    property.add_reserve_values(Values.AndOrder(
-        overflow_positions.overflow_positions,
-        content_positions.content_positions,
-    ))
+    property.add_reserve_values(
+        Values.AndOrder(
+            overflow_positions.overflow_positions,
+            content_positions.content_positions,
+        )
+    )
     property.add_reserve_values(content_positions.content_positions)
 
     property_dict = property.to_dict()
@@ -42,29 +49,29 @@ if __name__ == "__main__":
     Prebuild.save(property_str, __file__)
 
 # https://developer.mozilla.org/en-US/docs/Web/CSS/align-content
-# align-content = 
+# align-content =
 #   normal                                   |
 #   <baseline-position>                      |
 #   <content-distribution>                   |
-#   <overflow-position>? <content-position>  
+#   <overflow-position>? <content-position>
 
-# <baseline-position> = 
+# <baseline-position> =
 #   [ first | last ]?  &&
-#   baseline           
+#   baseline
 
-# <content-distribution> = 
+# <content-distribution> =
 #   space-between  |
 #   space-around   |
 #   space-evenly   |
-#   stretch        
+#   stretch
 
-# <overflow-position> = 
+# <overflow-position> =
 #   unsafe  |
-#   safe    
+#   safe
 
-# <content-position> = 
+# <content-position> =
 #   center      |
 #   start       |
 #   end         |
 #   flex-start  |
-#   flex-end    
+#   flex-end

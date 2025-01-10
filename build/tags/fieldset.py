@@ -19,24 +19,15 @@ if __name__ == "__main__":
     element.add_text(Lang.EN, "fieldset")
     element.add_text(Lang.FA, "فیلد ست")
 
-    element.add_attribute() \
-        .set_generate_name("disabled") \
-        .set_type(Type.Boolean) \
-        .add_text(Lang.EN, "disabled") \
-        .add_text(Lang.FA, "غیرفعال") \
-
-    element.add_attribute() \
-        .set_generate_name("form") \
-        .set_type(Type.ID) \
-        .add_text(Lang.EN, "form") \
-        .add_text(Lang.FA, "فرم") \
-
-    element.add_attribute() \
-        .set_generate_name("name") \
-        .set_type(Type.AnyNoEmpty) \
-        .add_text(Lang.EN, "name") \
-        .add_text(Lang.FA, "نام") \
-
+    element.add_attribute().set_generate_name("disabled").set_type(
+        Type.Boolean
+    ).add_text(Lang.EN, "disabled").add_text(Lang.FA, "غیرفعال")
+    element.add_attribute().set_generate_name("form").set_type(Type.ID).add_text(
+        Lang.EN, "form"
+    ).add_text(Lang.FA, "فرم")
+    element.add_attribute().set_generate_name("name").set_type(
+        Type.AnyNoEmpty
+    ).add_text(Lang.EN, "name").add_text(Lang.FA, "نام")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

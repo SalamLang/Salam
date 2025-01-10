@@ -21,9 +21,14 @@ if __name__ == "__main__":
     property.add_text(Lang.EN, "animation-iteration-count")
     property.add_text(Lang.FA, "تعداد تکرار انیمیشن")
     property.set_type(Type.PositiveInt)
-    property.add_reserve_values([
-        Value().set_generate_name("infinite").add_text(Lang.EN, "infinite").add_text(Lang.FA, "بی‌پایان"),
-    ])
+    property.add_reserve_values(
+        [
+            Value()
+            .set_generate_name("infinite")
+            .add_text(Lang.EN, "infinite")
+            .add_text(Lang.FA, "بی‌پایان"),
+        ]
+    )
 
     property_dict = property.to_dict()
 
@@ -32,10 +37,9 @@ if __name__ == "__main__":
     Prebuild.save(property_str, __file__)
 
 # https://developer.mozilla.org/en-US/docs/Web/CSS/animation-iteration-count
-# animation-iteration-count = 
-#   <single-animation-iteration-count>#  
+# animation-iteration-count =
+#   <single-animation-iteration-count>#
 
-# <single-animation-iteration-count> = 
+# <single-animation-iteration-count> =
 #   infinite        |
-#   <number [0,∞]>  
-
+#   <number [0,∞]>

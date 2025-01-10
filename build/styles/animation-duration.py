@@ -27,8 +27,8 @@ if __name__ == "__main__":
     Prebuild.save(property_str, __file__)
 
 # https://developer.mozilla.org/en-US/docs/Web/CSS/animation-duration
-# animation-duration = 
-#   <time [0s,∞]>#  
+# animation-duration =
+#   <time [0s,∞]>#
 
 # 12s         Positive integer
 # -456ms      Negative integer

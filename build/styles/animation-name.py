@@ -20,9 +20,14 @@ if __name__ == "__main__":
     property.add_text(Lang.EN, "animation-name")
     property.add_text(Lang.FA, "نام انیمیشن")
     property.set_type(Type.AnyNoEmpty)
-    property.add_reserve_values([
-        Value().set_generate_name("none").add_text(Lang.EN, "none").add_text(Lang.FA, "هیچ‌کدام"),
-    ])
+    property.add_reserve_values(
+        [
+            Value()
+            .set_generate_name("none")
+            .add_text(Lang.EN, "none")
+            .add_text(Lang.FA, "هیچ‌کدام"),
+        ]
+    )
 
     property_dict = property.to_dict()
 
@@ -31,9 +36,9 @@ if __name__ == "__main__":
     Prebuild.save(property_str, __file__)
 
 # https://developer.mozilla.org/en-US/docs/Web/CSS/animation-name
-# animation-name = 
-#   [ none | <keyframes-name> ]#  
+# animation-name =
+#   [ none | <keyframes-name> ]#
 
-# <keyframes-name> = 
+# <keyframes-name> =
 #   <custom-ident>  |
-#   <string>        
+#   <string>

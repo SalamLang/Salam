@@ -20,19 +20,12 @@ if __name__ == "__main__":
     element.add_text(Lang.EN, "base")
     element.add_text(Lang.FA, "پایه")
 
-    element.add_attribute() \
-        .set_generate_name("href") \
-        .set_type(Type.Url) \
-        .add_text(Lang.EN, "source") \
-        .add_text(Lang.FA, "منبع") \
-        .set_is_required(True) \
-
-    element.add_attribute() \
-        .set_generate_name("target") \
-        .set_type(Type.Boolean) \
-        .add_text(Lang.EN, "target") \
-        .add_text(Lang.FA, "نوع") \
-        .add_reserve_values(targets.targets)
+    element.add_attribute().set_generate_name("href").set_type(Type.Url).add_text(
+        Lang.EN, "source"
+    ).add_text(Lang.FA, "منبع").set_is_required(True)
+    element.add_attribute().set_generate_name("target").set_type(Type.Boolean).add_text(
+        Lang.EN, "target"
+    ).add_text(Lang.FA, "نوع").add_reserve_values(targets.targets)
 
     element_dict = element.to_dict()
 

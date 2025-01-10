@@ -2,6 +2,7 @@ from text import Text
 from prebuild import Prebuild
 from attribute import Attribute
 
+
 class Element:
     def __init__(self):
         self.text = Text()
@@ -38,7 +39,5 @@ class Element:
             "is_mother": self.is_mother,
             "generate_name": self.generate_name,
             "text": self.text.to_dict(),
-            "attributes": [
-                attr.to_dict() for attr in self.attributes
-            ],
+            "attributes": [attr.to_dict() for attr in self.attributes],
         }

@@ -44,3 +44,7 @@ class Value:
             "generate_name": self.generate_name,
             "text": self.text.to_dict(),
         }
+    
+    def to_string(self):
+        """Convert the attribute value to a string, including all information."""
+        return Prebuild.to_string(self.to_dict())

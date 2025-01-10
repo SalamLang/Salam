@@ -20,15 +20,9 @@ if __name__ == "__main__":
     property.set_text(Lang.FA, "الاین-آیتمز")
     property.set_type(Type.String)
     property.add_reserve_values([
-        Value().set_generate_name("stretch").add_text(Lang.EN, "stretch").add_text(Lang.FA, "کشیدن"),
+        Value().set_generate_name("normal").add_text(Lang.EN, "normal").add_text(Lang.FA, "نرمال"),
+        Value().set_generate_name("stretch").add_text(Lang.EN, "stretch").add_text(Lang.FA, "کشیده"),
         Value().set_generate_name("center").add_text(Lang.EN, "center").add_text(Lang.FA, "وسط"),
-        Value().set_generate_name("flex-start").add_text(Lang.EN, "flex-start").add_text(Lang.FA, "شروع-فلکس"),
-        Value().set_generate_name("flex-end").add_text(Lang.EN, "flex-end").add_text(Lang.FA, "پایان-فلکس"),
-        Value().set_generate_name("space-between").add_text(Lang.EN, "space-between").add_text(Lang.FA, "فضا-بین"),
-        Value().set_generate_name("space-around").add_text(Lang.EN, "space-around").add_text(Lang.FA, "فضا-دور"),
-        Value().set_generate_name("space-evenly").add_text(Lang.EN, "space-evenly").add_text(Lang.FA, "فضا-یکسان"),
-        Value().set_generate_name("initial").add_text(Lang.EN, "initial").add_text(Lang.FA, "اولیه"),
-        Value().set_generate_name("inherit").add_text(Lang.EN, "inherit").add_text(Lang.FA, "ارث بری"),
     ])
 
     property_dict = property.to_dict()
@@ -36,3 +30,28 @@ if __name__ == "__main__":
     property_str = Prebuild.to_string(property_dict)
     Prebuild.print(property_str)
     Prebuild.save(property_str, __file__)
+
+# https://developer.mozilla.org/en-US/docs/Web/CSS/align-items
+# align-items = 
+#   normal                                    |
+#   stretch                                   |
+#   <baseline-position>                       |
+#   [ <overflow-position>? <self-position> ]  |
+#   anchor-center                             
+
+# <baseline-position> = 
+#   [ first | last ]?  &&
+#   baseline           
+
+# <overflow-position> = 
+#   unsafe  |
+#   safe    
+
+# <self-position> = 
+#   center      |
+#   start       |
+#   end         |
+#   self-start  |
+#   self-end    |
+#   flex-start  |
+#   flex-end    

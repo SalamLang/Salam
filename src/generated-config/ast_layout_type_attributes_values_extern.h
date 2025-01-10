@@ -1,6 +1,3 @@
-#ifndef _AST_LAYOUT_TYPE_ATTRIBUTES_VALUES_EXTERN_H_
-#define _AST_LAYOUT_TYPE_ATTRIBUTES_VALUES_EXTERN_H_
-
 // ----------- BEGIN AUTO GENERATED ----------- //
 extern ast_layout_attribute_type_t valid_attributes_link[];
 extern const size_t valid_attributes_link_length;
@@ -168,5 +165,3 @@ extern ast_layout_attribute_type_t valid_attributes_media[];
 extern const size_t valid_attributes_media_length;
 
 // ----------- END AUTO GENERATED ----------- //
-
-#endif

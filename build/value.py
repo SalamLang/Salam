@@ -1,6 +1,6 @@
 from text import Text
 from lang import Lang
-from build import Build
+from prebuild import Prebuild
 
 class Value:
     def __init__(self):
@@ -10,7 +10,7 @@ class Value:
     def set_generate_name(self, generate_name):
         """Set the generate name for the attribute value"""
         self.generate_name = generate_name
-        idtok = Build.idize(generate_name.upper())
+        idtok = Prebuild.idize(generate_name.upper())
         self.id = "AST_LAYOUT_ATTRIBUTE_VALUE_TYPE_" + idtok
         return self
 

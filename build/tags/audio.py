@@ -17,8 +17,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("audio")
-    element.set_text(Lang.EN, "audio")
-    element.set_text(Lang.FA, "صوت")
+    element.add_text(Lang.EN, "audio")
+    element.add_text(Lang.FA, "صوت")
 
     element.add_attribute() \
         .set_generate_name("autoplay") \

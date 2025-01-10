@@ -16,8 +16,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("q")
-    element.set_text(Lang.EN, "q")
-    element.set_text(Lang.FA, "نقل")
+    element.add_text(Lang.EN, "q")
+    element.add_text(Lang.FA, "نقل")
 
     element.add_attribute() \
         .set_generate_name("cite") \

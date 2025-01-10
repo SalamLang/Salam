@@ -20,8 +20,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("button")
-    element.set_text(Lang.EN, "button")
-    element.set_text(Lang.FA, "دکمه")
+    element.add_text(Lang.EN, "button")
+    element.add_text(Lang.FA, "دکمه")
 
     element.add_attribute() \
         .set_generate_name("autofocus") \

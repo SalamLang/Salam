@@ -16,8 +16,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("output")
-    element.set_text(Lang.EN, "output")
-    element.set_text(Lang.FA, "خروجی")
+    element.add_text(Lang.EN, "output")
+    element.add_text(Lang.FA, "خروجی")
 
     element.add_attribute() \
         .set_generate_name("for") \

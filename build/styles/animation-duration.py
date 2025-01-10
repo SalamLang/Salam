@@ -16,8 +16,8 @@ from property import Property
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("animation-duration")
-    property.set_text(Lang.EN, "animation-duration")
-    property.set_text(Lang.FA, "طول انیمیشن")
+    property.add_text(Lang.EN, "animation-duration")
+    property.add_text(Lang.FA, "طول انیمیشن")
     property.set_type(Type.Time)
 
     property_dict = property.to_dict()

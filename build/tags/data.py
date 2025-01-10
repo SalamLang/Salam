@@ -22,8 +22,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("data")
-    element.set_text(Lang.EN, "data")
-    element.set_text(Lang.FA, "داده")
+    element.add_text(Lang.EN, "data")
+    element.add_text(Lang.FA, "داده")
 
     element.add_attribute() \
         .set_generate_name("value") \

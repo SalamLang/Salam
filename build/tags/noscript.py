@@ -15,8 +15,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("noscript")
-    element.set_text(Lang.EN, "noscript")
-    element.set_text(Lang.FA, "بدون اسکریپت")
+    element.add_text(Lang.EN, "noscript")
+    element.add_text(Lang.FA, "بدون اسکریپت")
 
     element_dict = element.to_dict()
 

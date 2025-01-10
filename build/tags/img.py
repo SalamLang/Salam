@@ -19,8 +19,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("img")
-    element.set_text(Lang.EN, "img")
-    element.set_text(Lang.FA, "عکس")
+    element.add_text(Lang.EN, "img")
+    element.add_text(Lang.FA, "عکس")
 
     element.add_attribute() \
         .set_generate_name("alt") \

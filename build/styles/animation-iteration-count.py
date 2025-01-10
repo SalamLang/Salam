@@ -18,11 +18,11 @@ from property import Property
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("animation-iteration-count")
-    property.set_text(Lang.EN, "animation-iteration-count")
-    property.set_text(Lang.FA, "تعداد تکرار انیمیشن")
+    property.add_text(Lang.EN, "animation-iteration-count")
+    property.add_text(Lang.FA, "تعداد تکرار انیمیشن")
     property.set_type(Type.PositiveInt)
     property.add_reserve_values([
-        Value().set_generate_name("infinite").set_text(Lang.EN, "infinite").set_text(Lang.FA, "بی‌پایان"),
+        Value().set_generate_name("infinite").add_text(Lang.EN, "infinite").add_text(Lang.FA, "بی‌پایان"),
     ])
 
     property_dict = property.to_dict()

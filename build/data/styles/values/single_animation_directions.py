@@ -9,10 +9,10 @@ from value import Value
 from prebuild import Prebuild
 
 single_animation_directions = [
-    Value().set_generate_name("normal").set_text(Lang.EN, "normal").set_text(Lang.FA, "عادی"),
-    Value().set_generate_name("reverse").set_text(Lang.EN, "reverse").set_text(Lang.FA, "برعکس"),
-    Value().set_generate_name("alternate").set_text(Lang.EN, "alternate").set_text(Lang.FA, "متناوب"),
-    Value().set_generate_name("alternate-reverse").set_text(Lang.EN, "alternate-reverse").set_text(Lang.FA, "متناوب برعکس"),
+    Value().set_generate_name("normal").add_text(Lang.EN, "normal").add_text(Lang.FA, "عادی"),
+    Value().set_generate_name("reverse").add_text(Lang.EN, "reverse").add_text(Lang.FA, "برعکس"),
+    Value().set_generate_name("alternate").add_text(Lang.EN, "alternate").add_text(Lang.FA, "متناوب"),
+    Value().set_generate_name("alternate-reverse").add_text(Lang.EN, "alternate-reverse").add_text(Lang.FA, "متناوب برعکس"),
 ]
 
 if __name__ == '__main__':

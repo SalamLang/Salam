@@ -17,8 +17,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("time")
-    element.set_text(Lang.EN, "time")
-    element.set_text(Lang.FA, "زمان")
+    element.add_text(Lang.EN, "time")
+    element.add_text(Lang.FA, "زمان")
 
     element.add_attribute() \
         .set_generate_name("datetime") \

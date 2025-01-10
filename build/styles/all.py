@@ -17,8 +17,8 @@ from property import Property
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("all")
-    property.set_text(Lang.EN, "all")
-    property.set_text(Lang.FA, "همه")
+    property.add_text(Lang.EN, "all")
+    property.add_text(Lang.FA, "همه")
     property.set_type(Type.String)
     property.add_reserve_values([
         Value().set_generate_name("initial").add_text(Lang.EN, "initial").add_text(Lang.FA, "ابتدایی"),

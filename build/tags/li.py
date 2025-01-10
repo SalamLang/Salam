@@ -19,12 +19,9 @@ if __name__ == "__main__":
     element.add_text(Lang.EN, "li")
     element.add_text(Lang.FA, "ایتم لیست")
 
-    element.add_attribute() \
-        .set_generate_name("value") \
-        .set_type(Type.Number) \
-        .add_text(Lang.EN, "value") \
-        .add_text(Lang.FA, "مقدار") \
-
+    element.add_attribute().set_generate_name("value").set_type(Type.Number).add_text(
+        Lang.EN, "value"
+    ).add_text(Lang.FA, "مقدار")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

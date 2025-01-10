@@ -21,7 +21,10 @@ if __name__ == "__main__":
     property.add_text(Lang.FA, "رنگ اسنت")
     property.set_type(Type.Color)
     property.add_reserve_values(
-        Value().set_generate_name("auto").add_text(Lang.EN, "auto").add_text(Lang.FA, "اتو"),
+        Value()
+        .set_generate_name("auto")
+        .add_text(Lang.EN, "auto")
+        .add_text(Lang.FA, "اتو"),
     )
 
     property_dict = property.to_dict()
@@ -31,6 +34,6 @@ if __name__ == "__main__":
     Prebuild.save(property_str, __file__)
 
 # https://developer.mozilla.org/en-US/docs/Web/CSS/accent-color
-# accent-color = 
+# accent-color =
 #   auto     |
-#   <color>  
+#   <color>

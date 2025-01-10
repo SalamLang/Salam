@@ -20,31 +20,23 @@ if __name__ == "__main__":
     element.add_text(Lang.EN, "ol")
     element.add_text(Lang.FA, "لیست او ال")
 
-    element.add_attribute() \
-        .set_generate_name("reversed") \
-        .set_type(Type.Boolean) \
-        .add_text(Lang.EN, "reversed") \
-        .add_text(Lang.FA, "برعکس") \
-
-    element.add_attribute() \
-        .set_generate_name("start") \
-        .set_type(Type.Number) \
-        .add_text(Lang.EN, "start") \
-        .add_text(Lang.FA, "شروع") \
-
-    element.add_attribute() \
-        .set_generate_name("type") \
-        .set_type(Type.String) \
-        .add_text(Lang.EN, "type") \
-        .add_text(Lang.FA, "نوع") \
-        .add_reserve_values([
+    element.add_attribute().set_generate_name("reversed").set_type(
+        Type.Boolean
+    ).add_text(Lang.EN, "reversed").add_text(Lang.FA, "برعکس")
+    element.add_attribute().set_generate_name("start").set_type(Type.Number).add_text(
+        Lang.EN, "start"
+    ).add_text(Lang.FA, "شروع")
+    element.add_attribute().set_generate_name("type").set_type(Type.String).add_text(
+        Lang.EN, "type"
+    ).add_text(Lang.FA, "نوع").add_reserve_values(
+        [
             Value().set_generate_name("i").set_all_text("i"),
             Value().set_generate_name("I").set_all_text("I"),
             Value().set_generate_name("a").set_all_text("a"),
             Value().set_generate_name("A").set_all_text("A"),
             Value().set_generate_name("1").set_all_text("1"),
-        ]) \
-
+        ]
+    )
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

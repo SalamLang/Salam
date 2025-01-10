@@ -20,13 +20,9 @@ if __name__ == "__main__":
     element.add_text(Lang.EN, "blockquote")
     element.add_text(Lang.FA, "نقل قول")
 
-    element.add_attribute() \
-        .set_generate_name("cite") \
-        .set_type(Type.Url) \
-        .add_text(Lang.EN, "source") \
-        .add_text(Lang.FA, "منبع") \
-        .set_is_required(True) \
-
+    element.add_attribute().set_generate_name("cite").set_type(Type.Url).add_text(
+        Lang.EN, "source"
+    ).add_text(Lang.FA, "منبع").set_is_required(True)
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

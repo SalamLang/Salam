@@ -246,14 +246,14 @@ countries = [
     {"name": "WESTERN SAHARA", "code": "EH"},
     {"name": "YEMEN", "code": "YE"},
     {"name": "ZAMBIA", "code": "ZM"},
-    {"name": "ZIMBABWE", "code": "ZW"}
+    {"name": "ZIMBABWE", "code": "ZW"},
 ]
 
 for country in countries:
     country["name"] = country["name"].lower().strip()
     country["code"] = country["code"].lower().strip()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     strings = Prebuild.to_string(countries)
     Prebuild.print(strings)
     Prebuild.save(strings, __file__)

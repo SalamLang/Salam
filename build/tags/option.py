@@ -19,30 +19,18 @@ if __name__ == "__main__":
     element.add_text(Lang.EN, "option")
     element.add_text(Lang.FA, "مورد فهرست کشویی")
 
-    element.add_attribute() \
-        .set_generate_name("disabled") \
-        .set_type(Type.Boolean) \
-        .add_text(Lang.EN, "disabled") \
-        .add_text(Lang.FA, "غیرفعال") \
-
-    element.add_attribute() \
-        .set_generate_name("label") \
-        .set_type(Type.String) \
-        .add_text(Lang.EN, "label") \
-        .add_text(Lang.FA, "لیبل") \
-
-    element.add_attribute() \
-        .set_generate_name("selected") \
-        .set_type(Type.Boolean) \
-        .add_text(Lang.EN, "selected") \
-        .add_text(Lang.FA, "انتخاب شده") \
-
-    element.add_attribute() \
-        .set_generate_name("value") \
-        .set_type(Type.String) \
-        .add_text(Lang.EN, "value") \
-        .add_text(Lang.FA, "مقدار") \
-
+    element.add_attribute().set_generate_name("disabled").set_type(
+        Type.Boolean
+    ).add_text(Lang.EN, "disabled").add_text(Lang.FA, "غیرفعال")
+    element.add_attribute().set_generate_name("label").set_type(Type.String).add_text(
+        Lang.EN, "label"
+    ).add_text(Lang.FA, "لیبل")
+    element.add_attribute().set_generate_name("selected").set_type(
+        Type.Boolean
+    ).add_text(Lang.EN, "selected").add_text(Lang.FA, "انتخاب شده")
+    element.add_attribute().set_generate_name("value").set_type(Type.String).add_text(
+        Lang.EN, "value"
+    ).add_text(Lang.FA, "مقدار")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

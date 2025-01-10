@@ -29,11 +29,11 @@ if __name__ == "__main__":
     Prebuild.save(property_str, __file__)
 
 # https://developer.mozilla.org/en-US/docs/Web/CSS/animation-fill-mode
-# animation-fill-mode = 
-#   <single-animation-fill-mode>#  
+# animation-fill-mode =
+#   <single-animation-fill-mode>#
 
-# <single-animation-fill-mode> = 
+# <single-animation-fill-mode> =
 #   none       |
 #   forwards   |
 #   backwards  |
-#   both       
+#   both

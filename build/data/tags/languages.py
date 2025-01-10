@@ -214,8 +214,6 @@ for language in languages:
     language["code"] = language["code"].lower().strip()
 
 if __name__ == '__main__':
-    strings = Prebuild.to_string(
-        [value.to_dict() for value in languages]
-    )
+    strings = Prebuild.to_string(languages)
     Prebuild.print(strings)
     Prebuild.save(strings, __file__)

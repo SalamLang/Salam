@@ -9,7 +9,6 @@ sys.path.append(os.path.join(parent_dir, "data", "tags", "values"))
 
 from prebuild import Prebuild
 from lang import Lang
-from value import Value
 from element import Element
 
 if __name__ == "__main__":

@@ -20,9 +20,17 @@ if __name__ == "__main__":
     property.set_text(Lang.EN, "accent-color")
     property.set_text(Lang.FA, "رنگ اسنت")
     property.set_type(Type.Color)
+    property.add_reserve_values(
+        Value().set_generate_name("auto").set_text(Lang.EN, "auto").set_text(Lang.FA, "اتو"),
+    )
 
     property_dict = property.to_dict()
 
     property_str = Prebuild.to_string(property_dict)
     Prebuild.print(property_str)
     Prebuild.save(property_str, __file__)
+
+# https://developer.mozilla.org/en-US/docs/Web/CSS/accent-color
+# accent-color = 
+#   auto     |
+#   <color>  

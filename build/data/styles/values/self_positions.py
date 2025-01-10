@@ -18,6 +18,13 @@ self_positions = [
     Value().set_generate_name("flex-end").add_text(Lang.EN, "flex-end").add_text(Lang.FA, "پایان فلکس"),
 ]
 
+if __name__ == '__main__':
+    strings = Prebuild.to_string(
+        [value.to_dict() for value in self_positions]
+    )
+    Prebuild.print(strings)
+    Prebuild.save(strings, __file__)
+
 # https://developer.mozilla.org/en-US/docs/Web/CSS/align-items
 # <self-position> = 
 #   center      |
@@ -27,10 +34,3 @@ self_positions = [
 #   self-end    |
 #   flex-start  |
 #   flex-end
-
-if __name__ == '__main__':
-    strings = Prebuild.to_string(
-        [value.to_dict() for value in self_positions]
-    )
-    Prebuild.print(strings)
-    Prebuild.save(strings, __file__)

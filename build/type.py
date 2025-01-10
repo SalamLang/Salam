@@ -20,4 +20,5 @@ class Type:
     # YYYY-MM-DDThh:mm:ssTZD
     Date = "AST_TYPE_DATE"
     Time = "AST_TYPE_TIME"
+    Times = "AST_TYPE_TIMES"
     DateTime = "AST_TYPE_DATETIME"

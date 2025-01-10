@@ -1,7 +1,12 @@
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+parent_dir = Path(__file__).resolve().parent.parent
+sys.path.append(str(parent_dir))
+sys.path.append(os.path.join(parent_dir, "build"))
 
 import yaml
 from module.utils import command_layout_style_type, command_layout_type
@@ -668,7 +673,7 @@ def convert_to_json(file: Dict[str, Any]) -> None:
 def sync_file(file: Dict[str, Any]) -> None:
     print("Syncing file: " + file["input"] + " -> " + file["output"])
 
-    output_filename = "../src/generated-config/" + file["output"]
+    output_filename = "../../src/generated-config/" + file["output"]
     input_filename = file["input"]
 
     f = open(input_filename, "r", encoding="utf-8")

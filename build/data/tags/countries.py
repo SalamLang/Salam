@@ -254,8 +254,6 @@ for country in countries:
     country["code"] = country["code"].lower().strip()
 
 if __name__ == '__main__':
-    strings = Prebuild.to_string(
-        [value.to_dict() for value in countries]
-    )
+    strings = Prebuild.to_string(countries)
     Prebuild.print(strings)
     Prebuild.save(strings, __file__)

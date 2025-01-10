@@ -1105,8 +1105,6 @@ for mediatype in mediatypes:
     mediatype["code"] = mediatype["code"].lower().strip()
 
 if __name__ == '__main__':
-    strings = Prebuild.to_string(
-        [value.to_dict() for value in mediatypes]
-    )
+    strings = Prebuild.to_string(mediatypes)
     Prebuild.print(strings)
     Prebuild.save(strings, __file__)

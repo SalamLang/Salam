@@ -5,6 +5,7 @@ from pathlib import Path
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 sys.path.append(os.path.join(parent_dir, "data", "tags"))
+sys.path.append(os.path.join(parent_dir, "data", "tags", "values"))
 
 from prebuild import Prebuild
 import languages

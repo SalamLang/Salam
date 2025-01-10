@@ -65,5 +65,7 @@ const ast_layout_attribute_pair_t ast_layout_allowed_lang[] = {
 	{NULL, NULL},
 };
 
-// ----------- END AUTO GENERATED ----------- //#endif
+// ----------- END AUTO GENERATED ----------- //
+
+#endif
 

@@ -1,4 +1,9 @@
-// ----------- BEGIN AUTO GENERATED ----------- //
+#ifndef _AST_LAYOUT_TYPE_ATTRIBUTES_ALL_H_
+#define _AST_LAYOUT_TYPE_ATTRIBUTES_ALL_H_
+
+layout_map_entry_t layout_map[] = {
+    // ----------- BEGIN AUTO GENERATED ----------- //
+
 { AST_LAYOUT_TYPE_LINK, valid_attributes_link, valid_attributes_link_length },
 
 { AST_LAYOUT_TYPE_INCLUDE, valid_attributes_include, valid_attributes_include_length },
@@ -110,3 +115,9 @@
 { AST_LAYOUT_TYPE_MEDIA, valid_attributes_media, valid_attributes_media_length },
 
 // ----------- END AUTO GENERATED ----------- //
+
+};
+
+const size_t map_size = sizeof(layout_map) / sizeof(layout_map[0]);
+
+#endif

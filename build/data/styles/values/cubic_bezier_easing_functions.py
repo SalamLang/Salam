@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 
-parent_dir = Path(__file__).resolve().parent.parent.parent
+parent_dir = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.append(str(parent_dir))
 
 from lang import Lang
@@ -13,7 +13,7 @@ cubic_bezier_easing_functions = [
     Value().set_generate_name("ease-in").add_text(Lang.EN, "ease-in").add_text(Lang.FA, "آسان-ورودی"),
     Value().set_generate_name("ease-out").add_text(Lang.EN, "ease-out").add_text(Lang.FA, "آسان-خروجی"),
     Value().set_generate_name("ease-in-out").add_text(Lang.EN, "ease-in-out").add_text(Lang.FA, "آسان-ورودی-خروجی"),
-    Value().set_generate_name("cubic-bezier").add_text(Lang.EN, "cubic-bezier").add_text(Lang.F, "بیزیر-مکعب").set_is_function(True),
+    Value().set_generate_name("cubic-bezier").add_text(Lang.EN, "cubic-bezier").add_text(Lang.FA, "بیزیر-مکعب").set_is_function(True),
 ]
 
 if __name__ == "__main__":

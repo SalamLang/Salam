@@ -20,7 +20,7 @@ print(f"Selected Language: {SELECTED_LANGUAGE}")
 COMMENT_BEGIN = "// ----------- BEGIN AUTO GENERATED ----------- //"
 COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
 JSON_DIR = "json/"
-
+SRC_DIR = "../../src"
 
 def prettify_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     """
@@ -673,7 +673,7 @@ def convert_to_json(file: Dict[str, Any]) -> None:
 def sync_file(file: Dict[str, Any]) -> None:
     print("Syncing file: " + file["input"] + " -> " + file["output"])
 
-    output_filename = "../../src/generated-config/" + file["output"]
+    output_filename = SRC_DIR + "/generated-config/" + file["output"]
     input_filename = file["input"]
 
     f = open(input_filename, "r", encoding="utf-8")

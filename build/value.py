@@ -7,12 +7,18 @@ class Value:
     def __init__(self):
         self.text = Text()
         self.generate_name = None
+        self.is_function = False
 
     def set_generate_name(self, generate_name):
         """Set the generate name for the attribute value"""
         self.generate_name = generate_name
         idtok = Prebuild.idize(generate_name.upper())
         self.id = "AST_LAYOUT_ATTRIBUTE_VALUE_TYPE_" + idtok
+        return self
+
+    def set_is_function(self, value):
+        """Set the value is a function."""
+        self.is_function = value
         return self
 
     def add_text(self, language_code, text):
@@ -45,6 +51,7 @@ class Value:
         return {
             "id": self.id,
             "generate_name": self.generate_name,
+            "is_function": self.is_function,
             "text": self.text.to_dict(),
         }
 

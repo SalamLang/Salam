@@ -26,3 +26,6 @@ class Type:
     Time = "AST_TYPE_TIME"
     Times = "AST_TYPE_TIMES"
     DateTime = "AST_TYPE_DATETIME"
+
+    NUMBER_OR_2NUMBERS = "AST_TYPE_NUMBER_OR_2NUMBERS" # ASPECT-RATIO
+

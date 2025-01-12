@@ -19,7 +19,7 @@ if __name__ == "__main__":
     property = Property()
     property.set_generate_name("background-position-y")
     property.add_text(Lang.EN, "background-position-y")
-    property.add_text(Lang.FA, 
+    property.add_text(Lang.FA, "background-position-y")
     property.set_type(Type.SIZE)
 
     values = [

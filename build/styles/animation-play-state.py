@@ -14,13 +14,16 @@ from lang import Lang
 from type import Type
 from property import Property, PropertyType
 
+
 # Helper function to map Type to PropertyType
 def type_to_property_type(type_: Type) -> PropertyType:
     type_mapping = {
         Type.Strings: PropertyType.String,
         # Add more mappings as needed
     }
-    return type_mapping.get(type_, PropertyType.String)  # Default to STRING if not found
+    return type_mapping.get(
+        type_, PropertyType.String
+    )  # Default to STRING if not found
 
 
 if __name__ == "__main__":

@@ -27,7 +27,9 @@ if __name__ == "__main__":
 
     element.add_attribute().set_generate_name("value").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.languages["EN"]["code"], "value").add_text(Lang.languages["FA"]["code"], "مقدار")
+    ).add_text(Lang.languages["EN"]["code"], "value").add_text(
+        Lang.languages["FA"]["code"], "مقدار"
+    )
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

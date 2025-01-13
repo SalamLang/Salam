@@ -41,7 +41,9 @@ baseline_positions += [
 ]
 
 if __name__ == "__main__":
-    strings = Prebuild.to_string({"baseline_positions": [value.to_dict() for value in baseline_positions]})
+    strings = Prebuild.to_string(
+        {"baseline_positions": [value.to_dict() for value in baseline_positions]}
+    )
     Prebuild.print(strings)
     Prebuild.save(strings, __file__)
 

@@ -27,7 +27,9 @@ dirs = [
 if __name__ == "__main__":
     # Creating a dictionary for Prebuild.to_string() method
     dirs_dict = {
-        value.generate_name: value.to_dict() for value in dirs if value.generate_name is not None
+        value.generate_name: value.to_dict()
+        for value in dirs
+        if value.generate_name is not None
     }
 
     # Generating the string output

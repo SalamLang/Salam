@@ -31,7 +31,9 @@ single_animation_directions = [
 if __name__ == "__main__":
     # Creating a dictionary with generate_name as key and value.to_dict() as value
     single_animation_directions_dict = {
-        value.generate_name: value.to_dict() for value in single_animation_directions if value.generate_name is not None
+        value.generate_name: value.to_dict()
+        for value in single_animation_directions
+        if value.generate_name is not None
     }
 
     # Generating the string output

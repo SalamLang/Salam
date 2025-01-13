@@ -23,7 +23,9 @@ overflow_positions = [
 if __name__ == "__main__":
     # Creating a dictionary with generate_name as key and value.to_dict() as value
     overflow_positions_dict = {
-        value.generate_name: value.to_dict() for value in overflow_positions if value.generate_name is not None
+        value.generate_name: value.to_dict()
+        for value in overflow_positions
+        if value.generate_name is not None
     }
 
     # Generating the string output

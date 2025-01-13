@@ -14,6 +14,7 @@ from property import Property
 from value import Value
 from property import PropertyType  # Ensure this is imported or defined properly
 
+
 # Function to map Type to PropertyType
 def type_to_property_type(type_: Type) -> PropertyType:
     """Maps Type enum to PropertyType enum."""
@@ -21,9 +22,10 @@ def type_to_property_type(type_: Type) -> PropertyType:
         Type.String: PropertyType.String,
         Type.Number: PropertyType.Number,
         Type.Boolean: PropertyType.String,  # Example mapping
-        Type.Url: PropertyType.String,      # Adjust mappings as needed
+        Type.Url: PropertyType.String,  # Adjust mappings as needed
     }
     return type_mapping.get(type_, PropertyType.String)  # Default to STRING
+
 
 if __name__ == "__main__":
     property = Property()

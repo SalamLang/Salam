@@ -2,9 +2,12 @@ import itertools
 from value import Value
 from typing import Dict, List, Tuple, Any
 
+
 class Values:
     @staticmethod
-    def generate_ordered_strings(data: Dict[str, List[List[str]]]) -> Dict[str, List[str]]:
+    def generate_ordered_strings(
+        data: Dict[str, List[List[str]]]
+    ) -> Dict[str, List[str]]:
         result: Dict[str, List[str]] = {}
         for lang, text_groups in data.items():
             combinations = itertools.product(*text_groups)

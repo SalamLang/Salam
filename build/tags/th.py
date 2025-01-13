@@ -22,16 +22,22 @@ if __name__ == "__main__":
 
     element.add_attribute().set_generate_name("abbr").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.languages["EN"]["code"], "abbr").add_text(Lang.languages["FA"]["code"], "ای بی بی ار")
+    ).add_text(Lang.languages["EN"]["code"], "abbr").add_text(
+        Lang.languages["FA"]["code"], "ای بی بی ار"
+    )
     element.add_attribute().set_generate_name("colspan").set_type(
         Type.PositiveInt
-    ).add_text(Lang.languages["EN"]["code"], "colspan").add_text(Lang.languages["FA"]["code"], "کول اسپن")
+    ).add_text(Lang.languages["EN"]["code"], "colspan").add_text(
+        Lang.languages["FA"]["code"], "کول اسپن"
+    )
     element.add_attribute().set_generate_name("headers").set_type(Type.ID).add_text(
         Lang.languages["EN"]["code"], "headers"
     ).add_text(Lang.languages["FA"]["code"], "هدر")
     element.add_attribute().set_generate_name("rowspan").set_type(
         Type.PositiveInt
-    ).add_text(Lang.languages["EN"]["code"], "rowspan").add_text(Lang.languages["FA"]["code"], "رو اسپن")
+    ).add_text(Lang.languages["EN"]["code"], "rowspan").add_text(
+        Lang.languages["FA"]["code"], "رو اسپن"
+    )
     element.add_attribute().set_generate_name("scope").set_type(Type.String).add_text(
         Lang.languages["EN"]["code"], "scope"
     ).add_text(Lang.languages["FA"]["code"], "اسکوپ").add_reserve_values(

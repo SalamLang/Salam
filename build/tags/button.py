@@ -25,10 +25,14 @@ if __name__ == "__main__":
 
     element.add_attribute().set_generate_name("autofocus").set_type(
         Type.Boolean
-    ).add_text(Lang.languages["EN"]["code"], "focus").add_text(Lang.languages["FA"]["code"], "فوکوس")
+    ).add_text(Lang.languages["EN"]["code"], "focus").add_text(
+        Lang.languages["FA"]["code"], "فوکوس"
+    )
     element.add_attribute().set_generate_name("disabled").set_type(
         Type.Boolean
-    ).add_text(Lang.languages["EN"]["code"], "disabled").add_text(Lang.languages["FA"]["code"], "غیرفعال")
+    ).add_text(Lang.languages["EN"]["code"], "disabled").add_text(
+        Lang.languages["FA"]["code"], "غیرفعال"
+    )
     element.add_attribute().set_generate_name("form").set_type(Type.ID).add_text(
         Lang.languages["EN"]["code"], "form"
     ).add_text(Lang.languages["FA"]["code"], "فرم")
@@ -37,12 +41,16 @@ if __name__ == "__main__":
     ).add_text(Lang.languages["FA"]["code"], "منبع")
     element.add_attribute().set_generate_name("formenctype").set_type(
         Type.String
-    ).add_text(Lang.languages["EN"]["code"], "formenctype").add_text(Lang.languages["FA"]["code"], "نوع فرم").add_reserve_values(
+    ).add_text(Lang.languages["EN"]["code"], "formenctype").add_text(
+        Lang.languages["FA"]["code"], "نوع فرم"
+    ).add_reserve_values(
         mediatypes.mediatypes
     )
     element.add_attribute().set_generate_name("formmethod").set_type(
         Type.Boolean
-    ).add_text(Lang.languages["EN"]["code"], "method").add_text(Lang.languages["FA"]["code"], "شیوه").add_reserve_values(
+    ).add_text(Lang.languages["EN"]["code"], "method").add_text(
+        Lang.languages["FA"]["code"], "شیوه"
+    ).add_reserve_values(
         methods.methods
     )
     # TODO
@@ -56,13 +64,17 @@ if __name__ == "__main__":
     # TODO
     element.add_attribute().set_generate_name("formtarget").set_type(
         Type.String
-    ).add_text(Lang.languages["EN"]["code"], "formtarget").add_text(Lang.languages["FA"]["code"], "فرم هدف").add_reserve_values(
+    ).add_text(Lang.languages["EN"]["code"], "formtarget").add_text(
+        Lang.languages["FA"]["code"], "فرم هدف"
+    ).add_reserve_values(
         targets.targets
     )
     # TODO
     element.add_attribute().set_generate_name("popovertarget").set_type(
         Type.ID
-    ).add_text(Lang.languages["EN"]["code"], "popovertarget").add_text(Lang.languages["FA"]["code"], "پاپ روی هدف")
+    ).add_text(Lang.languages["EN"]["code"], "popovertarget").add_text(
+        Lang.languages["FA"]["code"], "پاپ روی هدف"
+    )
     # TODO
     element.add_attribute().set_generate_name("popovertargetaction").set_type(
         Type.AnyNoEmpty
@@ -86,10 +98,14 @@ if __name__ == "__main__":
     )
     element.add_attribute().set_generate_name("name").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.languages["EN"]["code"], "name").add_text(Lang.languages["FA"]["code"], "نام")
+    ).add_text(Lang.languages["EN"]["code"], "name").add_text(
+        Lang.languages["FA"]["code"], "نام"
+    )
     element.add_attribute().set_generate_name("type").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.languages["EN"]["code"], "type").add_text(Lang.languages["FA"]["code"], "نوع").add_reserve_values(
+    ).add_text(Lang.languages["EN"]["code"], "type").add_text(
+        Lang.languages["FA"]["code"], "نوع"
+    ).add_reserve_values(
         [
             Value()
             .set_generate_name("button")
@@ -107,7 +123,11 @@ if __name__ == "__main__":
     )
     element.add_attribute().set_generate_name("value").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.languages["EN"]["code"], "content").add_text(Lang.languages["FA"]["code"], "محتوا").set_is_required(True)
+    ).add_text(Lang.languages["EN"]["code"], "content").add_text(
+        Lang.languages["FA"]["code"], "محتوا"
+    ).set_is_required(
+        True
+    )
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

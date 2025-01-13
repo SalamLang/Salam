@@ -21,13 +21,17 @@ if __name__ == "__main__":
 
     element.add_attribute().set_generate_name("colspan").set_type(
         Type.PositiveInt
-    ).add_text(Lang.languages["EN"]["code"], "colspan").add_text(Lang.languages["FA"]["code"], "کول اسپن")
+    ).add_text(Lang.languages["EN"]["code"], "colspan").add_text(
+        Lang.languages["FA"]["code"], "کول اسپن"
+    )
     element.add_attribute().set_generate_name("headers").set_type(Type.ID).add_text(
         Lang.languages["EN"]["code"], "headers"
     ).add_text(Lang.languages["FA"]["code"], "هدر")
     element.add_attribute().set_generate_name("rowspan").set_type(
         Type.PositiveInt
-    ).add_text(Lang.languages["EN"]["code"], "rowspan").add_text(Lang.languages["FA"]["code"], "رو اسپن")
+    ).add_text(Lang.languages["EN"]["code"], "rowspan").add_text(
+        Lang.languages["FA"]["code"], "رو اسپن"
+    )
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

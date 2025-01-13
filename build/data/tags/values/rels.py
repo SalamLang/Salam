@@ -67,7 +67,9 @@ rels = [
 if __name__ == "__main__":
     # Correct the structure for Prebuild.to_string()
     rels_dict = {
-        value.generate_name: value.to_dict() for value in rels if value.generate_name is not None
+        value.generate_name: value.to_dict()
+        for value in rels
+        if value.generate_name is not None
     }
 
     # Generate the string output

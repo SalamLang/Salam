@@ -39,7 +39,9 @@ single_animation_directions = [
 if __name__ == "__main__":
     # Creating a dictionary for Prebuild.to_string() method
     single_animation_directions_dict = {
-        value.generate_name: value.to_dict() for value in single_animation_directions if value.generate_name is not None
+        value.generate_name: value.to_dict()
+        for value in single_animation_directions
+        if value.generate_name is not None
     }
 
     # Generating the string output
@@ -49,10 +51,10 @@ if __name__ == "__main__":
 
 
 # https://developer.mozilla.org/en-US/docs/Web/CSS/animation-timing-function
-# <step-position> = 
+# <step-position> =
 #   jump-start  |
 #   jump-end    |
 #   jump-none   |
 #   jump-both   |
 #   start       |
-#   end         
+#   end

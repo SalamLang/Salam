@@ -13,6 +13,7 @@ from type import Type
 from value import Value
 from property import Property, PropertyType
 
+
 # Function to map Type enum to PropertyType enum
 def type_to_property_type(type_: Type) -> PropertyType:
     """Maps Type enum to PropertyType enum."""
@@ -24,15 +25,16 @@ def type_to_property_type(type_: Type) -> PropertyType:
     }
     return type_mapping.get(type_, PropertyType.String)  # Default to STRING
 
+
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("block-size")
     property.add_text(Lang.languages["EN"]["code"], "block-size")
     property.add_text(Lang.languages["FA"]["code"], "اندازه بلوک")
-    
+
     # Use the mapping function to set the type
     property.set_type(type_to_property_type(Type.NUMBER_OR_2NUMBERS))
-    
+
     property.add_reserve_values(
         [
             Value()

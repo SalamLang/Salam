@@ -29,8 +29,12 @@ targets = [
 
 if __name__ == "__main__":
     # Filter out values with None as generate_name
-    strings = Prebuild.to_string({
-        value.generate_name: value.to_dict() for value in targets if value.generate_name is not None
-    })
+    strings = Prebuild.to_string(
+        {
+            value.generate_name: value.to_dict()
+            for value in targets
+            if value.generate_name is not None
+        }
+    )
     Prebuild.print(strings)
     Prebuild.save(strings, __file__)

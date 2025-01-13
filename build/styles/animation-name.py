@@ -14,13 +14,16 @@ from type import Type
 from value import Value
 from property import Property, PropertyType
 
+
 # Helper function to map Type to PropertyType
 def type_to_property_type(type_: Type) -> PropertyType:
     type_mapping = {
         Type.Strings: PropertyType.AnyNoEmpty,
         # Add more mappings as needed
     }
-    return type_mapping.get(type_, PropertyType.AnyNoEmpty)  # Default to AnyNoEmpty if not 
+    return type_mapping.get(
+        type_, PropertyType.AnyNoEmpty
+    )  # Default to AnyNoEmpty if not
 
 
 if __name__ == "__main__":

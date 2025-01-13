@@ -23,7 +23,9 @@ methods = [
 if __name__ == "__main__":
     # Creating a dictionary for Prebuild.to_string() method
     methods_dict = {
-        value.generate_name: value.to_dict() for value in methods if value.generate_name is not None
+        value.generate_name: value.to_dict()
+        for value in methods
+        if value.generate_name is not None
     }
 
     # Generating the string output

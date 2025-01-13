@@ -42,7 +42,7 @@ if __name__ == "__main__":
         .add_text(Lang.languages["EN"]["code"], "revert-layer")
         .add_text(Lang.languages["FA"]["code"], "لایه بازگشت"),
     ]
-    
+
     property.add_reserve_values(reserved_values)  # Assuming this is the correct method
     property_dict = property.to_dict()
     property_str = Prebuild.to_string(property_dict)

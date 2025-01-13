@@ -22,6 +22,7 @@ COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
 JSON_DIR = "json/"
 SRC_DIR = "../../src"
 
+
 def prettify_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     """
     Generates a formatted string for a type definition.
@@ -721,7 +722,6 @@ def sync_file(file: Dict[str, Any]) -> None:
                 started = True
 
         # f.write("\n")  # Ensure final newline after all content is written
-
 
 
 def generate_document() -> str:

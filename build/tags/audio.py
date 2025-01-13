@@ -22,10 +22,14 @@ if __name__ == "__main__":
 
     element.add_attribute().set_generate_name("autoplay").set_type(
         Type.Boolean
-    ).add_text(Lang.languages["EN"]["code"], "autoplay").add_text(Lang.languages["FA"]["code"], "خودکار")
+    ).add_text(Lang.languages["EN"]["code"], "autoplay").add_text(
+        Lang.languages["FA"]["code"], "خودکار"
+    )
     element.add_attribute().set_generate_name("controls").set_type(
         Type.Boolean
-    ).add_text(Lang.languages["EN"]["code"], "controls").add_text(Lang.languages["FA"]["code"], "کنترلر")
+    ).add_text(Lang.languages["EN"]["code"], "controls").add_text(
+        Lang.languages["FA"]["code"], "کنترلر"
+    )
     element.add_attribute().set_generate_name("loop").set_type(Type.Boolean).add_text(
         Lang.languages["EN"]["code"], "loop"
     ).add_text(Lang.languages["FA"]["code"], "تکرار")

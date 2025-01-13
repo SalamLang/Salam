@@ -24,7 +24,9 @@ if __name__ == "__main__":
     ).add_text(Lang.languages["FA"]["code"], "ارجاع")
     element.add_attribute().set_generate_name("datetime").set_type(
         Type.DateTime
-    ).add_text(Lang.languages["EN"]["code"], "datetime").add_text(Lang.languages["FA"]["code"], "زمان")
+    ).add_text(Lang.languages["EN"]["code"], "datetime").add_text(
+        Lang.languages["FA"]["code"], "زمان"
+    )
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

@@ -21,12 +21,12 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("form")
-    element.add_text(Lang.EN, "form")
-    element.add_text(Lang.FA, "فرم")
+    element.add_text(Lang.languages["EN"]["code"], "form")
+    element.add_text(Lang.languages["FA"]["code"], "فرم")
 
     element.add_attribute().set_generate_name("accept-charset").set_type(
         Type.Url
-    ).add_text(Lang.EN, "accept charset").add_text(Lang.FA, "چارست").add_reserve_values(
+    ).add_text(Lang.languages["EN"]["code"], "accept charset").add_text(Lang.languages["FA"]["code"], "چارست").add_reserve_values(
         [
             Value()
             .set_generate_name("UTF-8")
@@ -49,36 +49,36 @@ if __name__ == "__main__":
         ]
     )
     element.add_attribute().set_generate_name("action").set_type(Type.Url).add_text(
-        Lang.EN, "action"
-    ).add_text(Lang.FA, "منبع")
+        Lang.languages["EN"]["code"], "action"
+    ).add_text(Lang.languages["FA"]["code"], "منبع")
     element.add_attribute().set_generate_name("autocomplete").set_type(
         Type.Boolean
-    ).add_text(Lang.EN, "autocomplete").add_text(Lang.FA, "پر کردن خودکار")
+    ).add_text(Lang.languages["EN"]["code"], "autocomplete").add_text(Lang.languages["FA"]["code"], "پر کردن خودکار")
     element.add_attribute().set_generate_name("enctype").set_type(Type.String).add_text(
-        Lang.EN, "enctype"
-    ).add_text(Lang.FA, "انک تایپ").add_reserve_values(mediatypes.mediatypes)
+        Lang.languages["EN"]["code"], "enctype"
+    ).add_text(Lang.languages["FA"]["code"], "انک تایپ").add_reserve_values(mediatypes.mediatypes)
     element.add_attribute().set_generate_name("method").set_type(Type.String).add_text(
-        Lang.EN, "method"
-    ).add_text(Lang.FA, "متد").add_reserve_values(methods.methods).add_reserve_values(
+        Lang.languages["EN"]["code"], "method"
+    ).add_text(Lang.languages["FA"]["code"], "متد").add_reserve_values(methods.methods).add_reserve_values(
         [
             Value()
             .set_generate_name("dialog")
-            .add_text(Lang.EN, "dialog")
-            .add_text(Lang.FA, "دیالوگ"),
+            .add_text(Lang.languages["EN"]["code"], "dialog")
+            .add_text(Lang.languages["FA"]["code"], "دیالوگ"),
         ]
     )
     element.add_attribute().set_generate_name("name").set_type(Type.String).add_text(
-        Lang.EN, "name"
-    ).add_text(Lang.FA, "نام")
+        Lang.languages["EN"]["code"], "name"
+    ).add_text(Lang.languages["FA"]["code"], "نام")
     element.add_attribute().set_generate_name("novalidate").set_type(
         Type.Boolean
-    ).add_text(Lang.EN, "novalidate").add_text(Lang.FA, "بدون اعتبارسنجی")
+    ).add_text(Lang.languages["EN"]["code"], "novalidate").add_text(Lang.languages["FA"]["code"], "بدون اعتبارسنجی")
     element.add_attribute().set_generate_name("rel").set_type(Type.String).add_text(
-        Lang.EN, "rel"
-    ).add_text(Lang.FA, "ریلیشن").add_reserve_values(rels.rels)
+        Lang.languages["EN"]["code"], "rel"
+    ).add_text(Lang.languages["FA"]["code"], "ریلیشن").add_reserve_values(rels.rels)
     element.add_attribute().set_generate_name("target").set_type(Type.String).add_text(
-        Lang.EN, "target"
-    ).add_text(Lang.FA, "تارگت").add_reserve_values(targets.targets)
+        Lang.languages["EN"]["code"], "target"
+    ).add_text(Lang.languages["FA"]["code"], "تارگت").add_reserve_values(targets.targets)
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

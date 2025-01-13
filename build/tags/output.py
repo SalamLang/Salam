@@ -16,18 +16,18 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("output")
-    element.add_text(Lang.EN, "output")
-    element.add_text(Lang.FA, "خروجی")
+    element.add_text(Lang.languages["EN"]["code"], "output")
+    element.add_text(Lang.languages["FA"]["code"], "خروجی")
 
     element.add_attribute().set_generate_name("for").set_type(Type.IDs).add_text(
-        Lang.EN, "for"
-    ).add_text(Lang.FA, "برای")
+        Lang.languages["EN"]["code"], "for"
+    ).add_text(Lang.languages["FA"]["code"], "برای")
     element.add_attribute().set_generate_name("form").set_type(Type.ID).add_text(
-        Lang.EN, "form"
-    ).add_text(Lang.FA, "فرم")
+        Lang.languages["EN"]["code"], "form"
+    ).add_text(Lang.languages["FA"]["code"], "فرم")
     element.add_attribute().set_generate_name("name").set_type(Type.Number).add_text(
-        Lang.EN, "name"
-    ).add_text(Lang.FA, "نام")
+        Lang.languages["EN"]["code"], "name"
+    ).add_text(Lang.languages["FA"]["code"], "نام")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

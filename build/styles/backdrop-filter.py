@@ -12,17 +12,26 @@ from prebuild import Prebuild
 from lang import Lang
 from type import Type
 from value import Value
-from property import Property
+from property import Property, PropertyType
+
+# Mapping function for Type to PropertyType
+def type_to_property_type(type_: Type) -> PropertyType:
+    type_mapping = {
+        Type.NUMBER_OR_2NUMBERS: PropertyType.NUMBER_OR_2NUMBERS,  # Adjust mapping here
+        # Add other mappings as necessary
+    }
+    return type_mapping.get(type_, PropertyType.String)  # Default to STRING if no mapping found
+
 
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("backdrop-filter")
-    property.add_text(Lang.EN, "backdrop-filter")
-    property.add_text(Lang.FA, "فیلتر پس‌زمینه")
-    property.set_type(Type.NUMBER_OR_2NUMBERS)
+    property.add_text(Lang.languages["EN"]["code"], "backdrop-filter")
+    property.add_text(Lang.languages["FA"]["code"], "فیلتر پس‌زمینه")
+    property.set_type(type_to_property_type(Type.NUMBER_OR_2NUMBERS))
     property.add_reserve_values(
         [
-            Value().set_generate_name("auto").add_text(Lang.EN, "auto").add_text(Lang.FA, "خودکار"),
+            Value().set_generate_name("auto").add_text(Lang.languages["EN"]["code"], "auto").add_text(Lang.languages["FA"]["code"], "خودکار"),
         ]
     )
 

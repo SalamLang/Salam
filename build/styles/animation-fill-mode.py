@@ -12,14 +12,14 @@ from prebuild import Prebuild
 import single_animation_directions
 from lang import Lang
 from type import Type
-from property import Property
+from property import Property, PropertyType
 
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("animation-fill-mode")
-    property.add_text(Lang.EN, "animation-fill-mode")
-    property.add_text(Lang.FA, "شیوه پر شدن انیمیشن")
-    property.set_type(Type.Strings)
+    property.add_text(Lang.languages["EN"]["code"], "animation-fill-mode")
+    property.add_text(Lang.languages["FA"]["code"], "شیوه پر شدن انیمیشن")
+    property.set_type(PropertyType.Strings)  # Use PropertyType instead of Type
     property.add_reserve_values(single_animation_directions.single_animation_directions)
 
     property_dict = property.to_dict()

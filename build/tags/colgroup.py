@@ -22,12 +22,12 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("colgroup")
-    element.add_text(Lang.EN, "colgroup")
-    element.add_text(Lang.FA, "کول گروه")
+    element.add_text(Lang.languages["EN"]["code"], "colgroup")
+    element.add_text(Lang.languages["FA"]["code"], "کول گروه")
 
     element.add_attribute().set_generate_name("span").set_type(
         Type.PositiveInt
-    ).add_text(Lang.EN, "count").add_text(Lang.FA, "تعداد")
+    ).add_text(Lang.languages["EN"]["code"], "count").add_text(Lang.languages["FA"]["code"], "تعداد")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

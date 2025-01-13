@@ -1,9 +1,7 @@
 #!/bin/bash
 
-# Set the output executable name
 output="salam"
 
-# List all source files
 sources=(
 	"src/log.c"
 	"src/file.c"
@@ -30,7 +28,6 @@ sources=(
 	"src/main.c"
 )
 
-# Compile each source file into an object file
 for src in "${sources[@]}"; do
 	echo "Compiling $src..."
 	if ! gcc -c "$src" -o "${src%.c}.o"; then
@@ -39,7 +36,6 @@ for src in "${sources[@]}"; do
 	fi
 done
 
-# Link all object files into the final executable
 echo "Linking object files..."
 if ! gcc -o "$output" ./*.o; then
 	echo "Error: Linking failed"
@@ -49,7 +45,7 @@ fi
 # Clean up object files (optional)
 # rm ./*.o
 
-# Run the executable with the provided argument
+
 echo "Running the executable..."
 if ! ./"$output" ../example/test6.salam ../out/; then
 	echo "Error: Execution failed"

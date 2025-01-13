@@ -16,15 +16,15 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("label")
-    element.add_text(Lang.EN, "label")
-    element.add_text(Lang.FA, "لیبل")
+    element.add_text(Lang.languages["EN"]["code"], "label")
+    element.add_text(Lang.languages["FA"]["code"], "لیبل")
 
     element.add_attribute().set_generate_name("for").set_type(Type.ID).add_text(
-        Lang.EN, "for"
-    ).add_text(Lang.FA, "برای")
+        Lang.languages["EN"]["code"], "for"
+    ).add_text(Lang.languages["FA"]["code"], "برای")
     element.add_attribute().set_generate_name("form").set_type(Type.ID).add_text(
-        Lang.EN, "form"
-    ).add_text(Lang.FA, "فرم")
+        Lang.languages["EN"]["code"], "form"
+    ).add_text(Lang.languages["FA"]["code"], "فرم")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

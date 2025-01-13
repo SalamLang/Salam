@@ -1,4 +1,6 @@
-class Type:
+from enum import Enum  # Assuming Type is an Enum or similar class
+
+class Type(Enum):
     """Type of an attribute."""
 
     Any = "AST_TYPE_ANY"

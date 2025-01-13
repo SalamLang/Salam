@@ -31,6 +31,7 @@ if __name__ == "__main__":
     # Map Type to PropertyType and set it
     property.set_type(type_to_property_type(Type.Size))  # Use Type.Size instead of Type.SIZE
 
+
     values = [
         Value()
         .set_generate_name("repeat")

@@ -1,3 +1,4 @@
+// downloader.h
 /**
  * ---------------------------------------------------------------------------
  * Salam Programming Language
@@ -52,6 +53,12 @@
 #include <string.h>
 
 #include "memory.h"
+
+#ifdef _WIN32
+#define CLOSE_SOCKET(s) closesocket(s)
+#else
+#define CLOSE_SOCKET(s) close(s)
+#endif
 
 /**
  *

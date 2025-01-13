@@ -41,6 +41,7 @@ sources=(
 )
 
 DEBUG_FLAGS=""
+
 if [[ "$1" == "debug" ]]; then
 	echo "Debug mode enabled."
 	DEBUG_FLAGS="-s VERBOSE=1 -s ASSERTIONS=2 -v"
@@ -54,6 +55,7 @@ if emcc "${sources[@]}" -o "${OUTPUT_BASE}.html" \
 	"${RUNTIME_FLAGS}" \
 	"${COMMON_FLAGS}" \
 	"${DEBUG_FLAGS}"; then
+
 	echo "Compilation successful. Output files:"
 	echo "  ${OUTPUT_BASE}.html"
 	echo "  ${OUTPUT_BASE}.js"
@@ -62,6 +64,7 @@ if emcc "${sources[@]}" -o "${OUTPUT_BASE}.html" \
 	if command -v npx >/dev/null 2>&1; then
 		echo "Transpiling JavaScript for older browsers..."
 		if yes | npx esbuild "${OUTPUT_BASE}.js" --outfile="${OUTPUT_BASE}.transpiled.js" --minify=true --target=esnext; then
+
 			mv "${OUTPUT_BASE}.transpiled.js" "${OUTPUT_BASE}.js"
 		else
 			echo "Warning: Babel transpiling failed. JavaScript was not transpiled."

@@ -34,7 +34,6 @@
  *
  */
 
-
 void parse_url(const char *url, char *hostname, char *path) {
     DEBUG_ME;
     const char *start;

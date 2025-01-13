@@ -28,7 +28,9 @@ step_easing_functions = [
 if __name__ == "__main__":
     # Creating a dictionary for Prebuild.to_string() method
     step_easing_functions_dict = {
-        value.generate_name: value.to_dict() for value in step_easing_functions if value.generate_name is not None
+        value.generate_name: value.to_dict()
+        for value in step_easing_functions
+        if value.generate_name is not None
     }
 
     # Generating the string output
@@ -38,10 +40,10 @@ if __name__ == "__main__":
 
 
 # https://developer.mozilla.org/en-US/docs/Web/CSS/animation-timing-function
-# <step-easing-function> = 
+# <step-easing-function> =
 #   step-start  |
 #   step-end    |
-#   <steps()>   
+#   <steps()>
 
-# <steps()> = 
-#   steps( <integer> , <step-position>? )  
+# <steps()> =
+#   steps( <integer> , <step-position>? )

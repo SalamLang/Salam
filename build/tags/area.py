@@ -33,16 +33,22 @@ if __name__ == "__main__":
     ).add_text(Lang.languages["FA"]["code"], "موقعیت")
     element.add_attribute().set_generate_name("download").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.languages["EN"]["code"], "download").add_text(Lang.languages["FA"]["code"], "دانلود")
+    ).add_text(Lang.languages["EN"]["code"], "download").add_text(
+        Lang.languages["FA"]["code"], "دانلود"
+    )
     element.add_attribute().set_generate_name("download").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.languages["EN"]["code"], "download").add_text(Lang.languages["FA"]["code"], "دانلود")
+    ).add_text(Lang.languages["EN"]["code"], "download").add_text(
+        Lang.languages["FA"]["code"], "دانلود"
+    )
     element.add_attribute().set_generate_name("href").set_type(Type.Url).add_text(
         Lang.languages["EN"]["code"], "source"
     ).add_text(Lang.languages["FA"]["code"], "منبع")
     element.add_attribute().set_generate_name("hreflang").set_type(
         Type.String
-    ).add_text(Lang.languages["EN"]["code"], "language").add_text(Lang.languages["FA"]["code"], "زبان").add_reserve_values(
+    ).add_text(Lang.languages["EN"]["code"], "language").add_text(
+        Lang.languages["FA"]["code"], "زبان"
+    ).add_reserve_values(
         [
             Value()
             .set_generate_name(language["code"].upper())

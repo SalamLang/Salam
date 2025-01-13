@@ -1,5 +1,6 @@
 from enum import Enum  # Assuming Type is an Enum or similar class
 
+
 class Type(Enum):
     """Type of an attribute."""
 
@@ -29,5 +30,4 @@ class Type(Enum):
     Times = "AST_TYPE_TIMES"
     DateTime = "AST_TYPE_DATETIME"
 
-    NUMBER_OR_2NUMBERS = "AST_TYPE_NUMBER_OR_2NUMBERS" # ASPECT-RATIO
-
+    NUMBER_OR_2NUMBERS = "AST_TYPE_NUMBER_OR_2NUMBERS"  # ASPECT-RATIO

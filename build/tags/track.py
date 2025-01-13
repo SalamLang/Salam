@@ -23,10 +23,14 @@ if __name__ == "__main__":
 
     element.add_attribute().set_generate_name("default").set_type(
         Type.Boolean
-    ).add_text(Lang.languages["EN"]["code"], "default").add_text(Lang.languages["FA"]["code"], "پیشفرض")
+    ).add_text(Lang.languages["EN"]["code"], "default").add_text(
+        Lang.languages["FA"]["code"], "پیشفرض"
+    )
     element.add_attribute().set_generate_name("label").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.languages["EN"]["code"], "label").add_text(Lang.languages["FA"]["code"], "لیبل")
+    ).add_text(Lang.languages["EN"]["code"], "label").add_text(
+        Lang.languages["FA"]["code"], "لیبل"
+    )
     element.add_attribute().set_generate_name("src").set_type(Type.Url).add_text(
         Lang.languages["EN"]["code"], "source"
     ).add_text(Lang.languages["FA"]["code"], "منبع")

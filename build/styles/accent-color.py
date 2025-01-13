@@ -21,12 +21,14 @@ if __name__ == "__main__":
 
     property.set_type(PropertyType.Color)
 
-    property.add_reserve_values([
-        Value()
-        .set_generate_name("auto")
-        .add_text(Lang.languages["EN"]["code"], "auto")
-        .add_text(Lang.languages["FA"]["code"], "اتو"),
-    ])
+    property.add_reserve_values(
+        [
+            Value()
+            .set_generate_name("auto")
+            .add_text(Lang.languages["EN"]["code"], "auto")
+            .add_text(Lang.languages["FA"]["code"], "اتو"),
+        ]
+    )
 
     property_dict = property.to_dict()
     property_str = Prebuild.to_string(property_dict)

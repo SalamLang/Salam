@@ -14,6 +14,7 @@ from value import Value
 from property import Property
 from property import PropertyType
 
+
 # Mapping function to convert Type to PropertyType
 def type_to_property_type(type_: Type) -> PropertyType:
     type_mapping = {
@@ -21,7 +22,10 @@ def type_to_property_type(type_: Type) -> PropertyType:
         Type.Sizes: PropertyType.String,  # You can change this to other PropertyTypes if needed
         # Add other type mappings as necessary
     }
-    return type_mapping.get(type_, PropertyType.String)  # Default to PropertyType.STRING
+    return type_mapping.get(
+        type_, PropertyType.String
+    )  # Default to PropertyType.STRING
+
 
 if __name__ == "__main__":
     property = Property()

@@ -27,7 +27,9 @@ if __name__ == "__main__":
 
     element.add_attribute().set_generate_name("span").set_type(
         Type.PositiveInt
-    ).add_text(Lang.languages["EN"]["code"], "span").add_text(Lang.languages["FA"]["code"], "اسپن")
+    ).add_text(Lang.languages["EN"]["code"], "span").add_text(
+        Lang.languages["FA"]["code"], "اسپن"
+    )
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

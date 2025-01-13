@@ -13,6 +13,7 @@ from type import Type
 from value import Value
 from property import Property, PropertyType
 
+
 # Helper function to map Type enum to PropertyType enum
 def type_to_property_type(type_: Type) -> PropertyType:
     type_mapping = {
@@ -21,16 +22,18 @@ def type_to_property_type(type_: Type) -> PropertyType:
     }
     return type_mapping.get(type_, PropertyType.String)  # Default to STRING
 
+
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("background-position-y")
-    
+
     property.add_text(Lang.languages["EN"]["code"], "background-position-y")
     property.add_text(Lang.languages["FA"]["code"], "موقعیت عمودی پس‌زمینه")
-    
-    # Map Type to PropertyType and set it
-    property.set_type(type_to_property_type(Type.Size))  # Use Type.Size instead of Type.SIZE
 
+    # Map Type to PropertyType and set it
+    property.set_type(
+        type_to_property_type(Type.Size)
+    )  # Use Type.Size instead of Type.SIZE
 
     values = [
         Value()
@@ -74,11 +77,10 @@ if __name__ == "__main__":
     Prebuild.save(property_str, __file__)
 
 
-
 # https://developer.mozilla.org/en-US/docs/Web/CSS/background-position-y
-# background-position-y = 
-#   [ center | [ [ top | bottom | y-start | y-end ]? <length-percentage>? ]! ]#  
+# background-position-y =
+#   [ center | [ [ top | bottom | y-start | y-end ]? <length-percentage>? ]! ]#
 
-# <length-percentage> = 
+# <length-percentage> =
 #   <length>      |
-#   <percentage>  
+#   <percentage>

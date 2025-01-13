@@ -22,7 +22,9 @@ if __name__ == "__main__":
 
     element.add_attribute().set_generate_name("reversed").set_type(
         Type.Boolean
-    ).add_text(Lang.languages["EN"]["code"], "reversed").add_text(Lang.languages["FA"]["code"], "برعکس")
+    ).add_text(Lang.languages["EN"]["code"], "reversed").add_text(
+        Lang.languages["FA"]["code"], "برعکس"
+    )
     element.add_attribute().set_generate_name("start").set_type(Type.Number).add_text(
         Lang.languages["EN"]["code"], "start"
     ).add_text(Lang.languages["FA"]["code"], "شروع")

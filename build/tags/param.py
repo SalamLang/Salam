@@ -21,7 +21,9 @@ if __name__ == "__main__":
 
     element.add_attribute().set_generate_name("name").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.languages["EN"]["code"], "name").add_text(Lang.languages["FA"]["code"], "نام")
+    ).add_text(Lang.languages["EN"]["code"], "name").add_text(
+        Lang.languages["FA"]["code"], "نام"
+    )
     element.add_attribute().set_generate_name("value").set_type(Type.String).add_text(
         Lang.languages["EN"]["code"], "content"
     ).add_text(Lang.languages["FA"]["code"], "محتوا")

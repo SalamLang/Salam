@@ -18,8 +18,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("iframe")
-    element.add_text(Lang.EN, "iframe")
-    element.add_text(Lang.FA, "ای فریم")
+    element.add_text(Lang.languages["EN"]["code"], "iframe")
+    element.add_text(Lang.languages["FA"]["code"], "ای فریم")
 
     # element.add_attribute() \
     #     .set_generate_name("allow") \
@@ -29,76 +29,76 @@ if __name__ == "__main__":
 
     element.add_attribute().set_generate_name("allowfullscreen").set_type(
         Type.Boolean
-    ).add_text(Lang.EN, "allowfullscreen").add_text(Lang.FA, "مجاز فول صفحه")
+    ).add_text(Lang.languages["EN"]["code"], "allowfullscreen").add_text(Lang.languages["FA"]["code"], "مجاز فول صفحه")
     element.add_attribute().set_generate_name("allowpaymentrequest").set_type(
         Type.Boolean
-    ).add_text(Lang.EN, "allowpaymentrequest").add_text(Lang.FA, "مجاز پرداخت")
+    ).add_text(Lang.languages["EN"]["code"], "allowpaymentrequest").add_text(Lang.languages["FA"]["code"], "مجاز پرداخت")
     element.add_attribute().set_generate_name("height").set_type(Type.Size).add_text(
-        Lang.EN, "height"
-    ).add_text(Lang.FA, "ارتفاع")
+        Lang.languages["EN"]["code"], "height"
+    ).add_text(Lang.languages["FA"]["code"], "ارتفاع")
     element.add_attribute().set_generate_name("loading").set_type(Type.Size).add_text(
-        Lang.EN, "loading"
-    ).add_text(Lang.FA, "لودینگ").add_reserve_values(
+        Lang.languages["EN"]["code"], "loading"
+    ).add_text(Lang.languages["FA"]["code"], "لودینگ").add_reserve_values(
         [
             Value()
             .set_generate_name("eager")
-            .add_text(Lang.EN, "eager")
-            .add_text(Lang.FA, "مشتاق"),
+            .add_text(Lang.languages["EN"]["code"], "eager")
+            .add_text(Lang.languages["FA"]["code"], "مشتاق"),
             Value()
             .set_generate_name("lazy")
-            .add_text(Lang.EN, "lazy")
-            .add_text(Lang.FA, "لیزی"),
+            .add_text(Lang.languages["EN"]["code"], "lazy")
+            .add_text(Lang.languages["FA"]["code"], "لیزی"),
         ]
     )
     element.add_attribute().set_generate_name("name").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.EN, "name").add_text(Lang.FA, "نام")
+    ).add_text(Lang.languages["EN"]["code"], "name").add_text(Lang.languages["FA"]["code"], "نام")
     element.add_attribute().set_generate_name("referrerpolicy").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.EN, "referrerpolicy").add_text(
-        Lang.FA, "ریفر پالیسی"
+    ).add_text(Lang.languages["EN"]["code"], "referrerpolicy").add_text(
+        Lang.languages["FA"]["code"], "ریفر پالیسی"
     ).add_reserve_values(
         referrerpolicies.referrerpolicies
     )
     element.add_attribute().set_generate_name("sandbox").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.EN, "sandbox").add_text(Lang.FA, "سند باکس").add_reserve_values(
+    ).add_text(Lang.languages["EN"]["code"], "sandbox").add_text(Lang.languages["FA"]["code"], "سند باکس").add_reserve_values(
         [
             Value()
             .set_generate_name("allow-forms")
-            .add_text(Lang.EN, "forms")
-            .add_text(Lang.FA, "فرم"),
+            .add_text(Lang.languages["EN"]["code"], "forms")
+            .add_text(Lang.languages["FA"]["code"], "فرم"),
             Value()
             .set_generate_name("allow-pointer-lock")
-            .add_text(Lang.EN, "pointer-lock")
-            .add_text(Lang.FA, "قفل اشاره گر"),
+            .add_text(Lang.languages["EN"]["code"], "pointer-lock")
+            .add_text(Lang.languages["FA"]["code"], "قفل اشاره گر"),
             Value()
             .set_generate_name("allow-popups")
-            .add_text(Lang.EN, "popups")
-            .add_text(Lang.FA, "پاپ آپ"),
+            .add_text(Lang.languages["EN"]["code"], "popups")
+            .add_text(Lang.languages["FA"]["code"], "پاپ آپ"),
             Value()
             .set_generate_name("allow-same-origin")
-            .add_text(Lang.EN, "same-origin")
-            .add_text(Lang.FA, "اوریجن یکسان"),
+            .add_text(Lang.languages["EN"]["code"], "same-origin")
+            .add_text(Lang.languages["FA"]["code"], "اوریجن یکسان"),
             Value()
             .set_generate_name("allow-scripts")
-            .add_text(Lang.EN, "scripts")
-            .add_text(Lang.FA, "اسکریپت"),
+            .add_text(Lang.languages["EN"]["code"], "scripts")
+            .add_text(Lang.languages["FA"]["code"], "اسکریپت"),
             Value()
             .set_generate_name("allow-top-navigation")
-            .add_text(Lang.EN, "top navigation")
-            .add_text(Lang.FA, "نوار بالا"),
+            .add_text(Lang.languages["EN"]["code"], "top navigation")
+            .add_text(Lang.languages["EN"]["code"], "نوار بالا"),
         ]
     )
     element.add_attribute().set_generate_name("src").set_type(Type.Url).add_text(
-        Lang.EN, "source"
-    ).add_text(Lang.FA, "منبع")
+        Lang.languages["EN"]["code"], "source"
+    ).add_text(Lang.languages["FA"]["code"], "منبع")
     element.add_attribute().set_generate_name("srcdoc").set_type(Type.Url).add_text(
-        Lang.EN, "document"
-    ).add_text(Lang.FA, "داده")
+        Lang.languages["EN"]["code"], "document"
+    ).add_text(Lang.languages["FA"]["code"], "داده")
     element.add_attribute().set_generate_name("width").set_type(Type.Size).add_text(
-        Lang.EN, "width"
-    ).add_text(Lang.FA, "عرض")
+        Lang.languages["EN"]["code"], "width"
+    ).add_text(Lang.languages["FA"]["code"], "عرض")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

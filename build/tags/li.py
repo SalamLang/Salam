@@ -16,12 +16,12 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("li")
-    element.add_text(Lang.EN, "li")
-    element.add_text(Lang.FA, "ایتم لیست")
+    element.add_text(Lang.languages["EN"]["code"], "li")
+    element.add_text(Lang.languages["FA"]["code"], "ایتم لیست")
 
     element.add_attribute().set_generate_name("value").set_type(Type.Number).add_text(
-        Lang.EN, "value"
-    ).add_text(Lang.FA, "مقدار")
+        Lang.languages["EN"]["code"], "value"
+    ).add_text(Lang.languages["FA"]["code"], "مقدار")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

@@ -16,15 +16,15 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("progress")
-    element.add_text(Lang.EN, "progress")
-    element.add_text(Lang.FA, "پیشرفت")
+    element.add_text(Lang.languages["EN"]["code"], "progress")
+    element.add_text(Lang.languages["FA"]["code"], "پیشرفت")
 
     element.add_attribute().set_generate_name("max").set_type(
         Type.PositiveInt
-    ).add_text(Lang.EN, "max").add_text(Lang.FA, "حداکثر")
+    ).add_text(Lang.languages["EN"]["code"], "max").add_text(Lang.languages["FA"]["code"], "حداکثر")
     element.add_attribute().set_generate_name("value").set_type(
         Type.PositiveInt
-    ).add_text(Lang.EN, "value").add_text(Lang.FA, "مقدار")
+    ).add_text(Lang.languages["EN"]["code"], "value").add_text(Lang.languages["FA"]["code"], "مقدار")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

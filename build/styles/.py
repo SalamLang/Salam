@@ -33,10 +33,9 @@ if __name__ == "__main__":
     Prebuild.save(property_str, __file__)
 
 # https://developer.mozilla.org/en-US/docs/Web/CSS/aspect-ratio
-# aspect-ratio = 
+# aspect-ratio =
 #   auto     ||
-#   <ratio>  
+#   <ratio>
 
-# <ratio> = 
-#   <number [0,∞]> [ / <number [0,∞]> ]?  
-
+# <ratio> =
+#   <number [0,∞]> [ / <number [0,∞]> ]?

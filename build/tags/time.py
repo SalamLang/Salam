@@ -17,12 +17,12 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("time")
-    element.add_text(Lang.EN, "time")
-    element.add_text(Lang.FA, "زمان")
+    element.add_text(Lang.languages["EN"]["code"], "time")
+    element.add_text(Lang.languages["FA"]["code"], "زمان")
 
     element.add_attribute().set_generate_name("datetime").set_type(
         Type.DateTime
-    ).add_text(Lang.EN, "datetime").add_text(Lang.FA, "زمان")
+    ).add_text(Lang.languages["EN"]["code"], "datetime").add_text(Lang.languages["FA"]["code"], "زمان")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

@@ -11,23 +11,26 @@ from prebuild import Prebuild
 targets = [
     Value()
     .set_generate_name("_blank")
-    .add_text(Lang.EN, "blank")
-    .add_text(Lang.FA, "جدید"),
+    .add_text(Lang.languages["EN"]["code"], "blank")
+    .add_text(Lang.languages["FA"]["code"], "جدید"),
     Value()
     .set_generate_name("_self")
-    .add_text(Lang.EN, "self")
-    .add_text(Lang.FA, "خود"),
+    .add_text(Lang.languages["EN"]["code"], "self")
+    .add_text(Lang.languages["FA"]["code"], "خود"),
     Value()
     .set_generate_name("_parent")
-    .add_text(Lang.EN, "parent")
-    .add_text(Lang.FA, "والدین"),
+    .add_text(Lang.languages["EN"]["code"], "parent")
+    .add_text(Lang.languages["FA"]["code"], "والدین"),
     Value()
     .set_generate_name("_top")
-    .add_text(Lang.EN, "top")
-    .add_text(Lang.FA, "بالا"),
+    .add_text(Lang.languages["EN"]["code"], "top")
+    .add_text(Lang.languages["FA"]["code"], "بالا"),
 ]
 
 if __name__ == "__main__":
-    strings = Prebuild.to_string([value.to_dict() for value in targets])
+    # Filter out values with None as generate_name
+    strings = Prebuild.to_string({
+        value.generate_name: value.to_dict() for value in targets if value.generate_name is not None
+    })
     Prebuild.print(strings)
     Prebuild.save(strings, __file__)

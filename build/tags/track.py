@@ -18,21 +18,21 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("track")
-    element.add_text(Lang.EN, "track")
-    element.add_text(Lang.FA, "ترک فیلم")
+    element.add_text(Lang.languages["EN"]["code"], "track")
+    element.add_text(Lang.languages["FA"]["code"], "ترک فیلم")
 
     element.add_attribute().set_generate_name("default").set_type(
         Type.Boolean
-    ).add_text(Lang.EN, "default").add_text(Lang.FA, "پیشفرض")
+    ).add_text(Lang.languages["EN"]["code"], "default").add_text(Lang.languages["FA"]["code"], "پیشفرض")
     element.add_attribute().set_generate_name("label").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.EN, "label").add_text(Lang.FA, "لیبل")
+    ).add_text(Lang.languages["EN"]["code"], "label").add_text(Lang.languages["FA"]["code"], "لیبل")
     element.add_attribute().set_generate_name("src").set_type(Type.Url).add_text(
-        Lang.EN, "source"
-    ).add_text(Lang.FA, "منبع")
+        Lang.languages["EN"]["code"], "source"
+    ).add_text(Lang.languages["FA"]["code"], "منبع")
     element.add_attribute().set_generate_name("srclang").set_type(Type.String).add_text(
-        Lang.EN, "language"
-    ).add_text(Lang.FA, "زبان").add_reserve_values(
+        Lang.languages["EN"]["code"], "language"
+    ).add_text(Lang.languages["FA"]["code"], "زبان").add_reserve_values(
         [
             Value()
             .set_generate_name(language["code"].upper())

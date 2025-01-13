@@ -12,14 +12,15 @@ from prebuild import Prebuild
 import easing_functions
 from lang import Lang
 from type import Type
-from property import Property
+from property import Property, PropertyType
 
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("animation-timing-function")
-    property.add_text(Lang.EN, "animation-timing-function")
-    property.add_text(Lang.FA,  "تابع زمان انیمیشن")
-    property.set_type(Type.Strings)
+    property.add_text(Lang.languages["EN"]["code"], "animation-timing-function")
+    property.add_text(Lang.languages["FA"]["code"], "تابع زمان انیمیشن")
+    property.set_type(PropertyType.String)  # Adjusted to use PropertyType instead of Type
+
     property.add_reserve_values(easing_functions.easing_functions)
 
     property_dict = property.to_dict()
@@ -68,4 +69,4 @@ if __name__ == "__main__":
 #   jump-none   |
 #   jump-both   |
 #   start       |
-#   end         
+#   end

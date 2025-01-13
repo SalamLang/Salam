@@ -1785,7 +1785,11 @@ for mediatype in mediatypes:
     mediatype["name"] = mediatype["name"].lower().strip()
     mediatype["code"] = mediatype["code"].lower().strip()
 
+# Convert list to a dictionary for Prebuild.to_string if it expects a dict
+mediatypes_dict = {item["name"]: item["code"] for item in mediatypes}
+
 if __name__ == "__main__":
-    strings = Prebuild.to_string(mediatypes)
+    # Ensure Prebuild.to_string is compatible with dictionaries
+    strings = Prebuild.to_string(mediatypes_dict)
     Prebuild.print(strings)
     Prebuild.save(strings, __file__)

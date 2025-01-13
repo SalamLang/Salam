@@ -42,7 +42,9 @@ if ! gcc -o "$output" ./*.o; then
 	exit 1
 fi
 
-# rm *.o
+# Clean up object files (optional)
+# rm ./*.o
+
 
 echo "Running the executable..."
 if ! ./"$output" ../example/test6.salam ../out/; then

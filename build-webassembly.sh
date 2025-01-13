@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# Check for emcc installation
 if ! command -v emcc >/dev/null 2>&1; then
 	echo 'Error: emcc is not installed.' >&2
 	echo 'Install from https://emscripten.org/docs/getting_started/downloads.html'
@@ -39,11 +40,9 @@ sources=(
 	"src/main.c"
 )
 
-DEBUG=0
 DEBUG_FLAGS=""
 
 if [[ "$1" == "debug" ]]; then
-	DEBUG=1
 	echo "Debug mode enabled."
 	DEBUG_FLAGS="-s VERBOSE=1 -s ASSERTIONS=2 -v"
 else
@@ -64,7 +63,8 @@ if emcc "${sources[@]}" -o "${OUTPUT_BASE}.html" \
 
 	if command -v npx >/dev/null 2>&1; then
 		echo "Transpiling JavaScript for older browsers..."
-		if npx esbuild "${OUTPUT_BASE}.js" --outfile="${OUTPUT_BASE}.transpiled.js" --minify=true --target=esnext; then
+		if yes | npx esbuild "${OUTPUT_BASE}.js" --outfile="${OUTPUT_BASE}.transpiled.js" --minify=true --target=esnext; then
+
 			mv "${OUTPUT_BASE}.transpiled.js" "${OUTPUT_BASE}.js"
 		else
 			echo "Warning: Babel transpiling failed. JavaScript was not transpiled."

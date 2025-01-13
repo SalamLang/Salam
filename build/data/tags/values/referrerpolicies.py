@@ -8,38 +8,47 @@ from lang import Lang
 from value import Value
 from prebuild import Prebuild
 
+# Correcting the language access and constructing the list of referrer policies
 referrerpolicies = [
     Value()
     .set_generate_name("no-referrer")
-    .add_text(Lang.EN, "no-referrer")
-    .add_text(Lang.FA, "بدون ارجاع"),
+    .add_text(Lang.languages["EN"]["code"], "no-referrer")
+    .add_text(Lang.languages["FA"]["code"], "بدون ارجاع"),
     Value()
     .set_generate_name("no-referrer-when-downgrade")
-    .add_text(Lang.EN, "no-referrer-when-downgrade")
-    .add_text(Lang.FA, "منبع"),
+    .add_text(Lang.languages["EN"]["code"], "no-referrer-when-downgrade")
+    .add_text(Lang.languages["FA"]["code"], "منبع"),
     Value()
     .set_generate_name("origin")
-    .add_text(Lang.EN, "origin")
-    .add_text(Lang.FA, "منبع"),
+    .add_text(Lang.languages["EN"]["code"], "origin")
+    .add_text(Lang.languages["FA"]["code"], "منبع"),
     Value()
     .set_generate_name("origin-when-cross-origin")
-    .add_text(Lang.EN, "origin-when-cross-origin")
-    .add_text(Lang.FA, "منبع در صورت عبور از منبع"),
+    .add_text(Lang.languages["EN"]["code"], "origin-when-cross-origin")
+    .add_text(Lang.languages["FA"]["code"], "منبع در صورت عبور از منبع"),
     Value()
     .set_generate_name("same-origin")
-    .add_text(Lang.EN, "same-origin")
-    .add_text(Lang.FA, "منبع یکسان"),
+    .add_text(Lang.languages["EN"]["code"], "same-origin")
+    .add_text(Lang.languages["FA"]["code"], "منبع یکسان"),
     Value()
     .set_generate_name("strict-origin-when-cross-origin")
-    .add_text(Lang.EN, "strict-origin-when-cross-origin")
-    .add_text(Lang.FA, "حساس به منبع"),
+    .add_text(Lang.languages["EN"]["code"], "strict-origin-when-cross-origin")
+    .add_text(Lang.languages["FA"]["code"], "حساس به منبع"),
     Value()
     .set_generate_name("unsafe-url")
-    .add_text(Lang.EN, "unsafe-url")
-    .add_text(Lang.FA, "آدرس ناامن"),
+    .add_text(Lang.languages["EN"]["code"], "unsafe-url")
+    .add_text(Lang.languages["FA"]["code"], "آدرس ناامن"),
 ]
 
 if __name__ == "__main__":
-    strings = Prebuild.to_string([value.to_dict() for value in referrerpolicies])
+    # Creating a dictionary for the Prebuild.to_string() method
+    referrerpolicies_dict = {
+        value.generate_name: value.to_dict() for value in referrerpolicies if value.generate_name is not None
+    }
+
+    # Generate the string output
+    strings = Prebuild.to_string(referrerpolicies_dict)
+
+    # Print and save the output
     Prebuild.print(strings)
     Prebuild.save(strings, __file__)

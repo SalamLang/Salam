@@ -17,42 +17,42 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("audio")
-    element.add_text(Lang.EN, "audio")
-    element.add_text(Lang.FA, "صوت")
+    element.add_text(Lang.languages["EN"]["code"], "audio")
+    element.add_text(Lang.languages["FA"]["code"], "صوت")
 
     element.add_attribute().set_generate_name("autoplay").set_type(
         Type.Boolean
-    ).add_text(Lang.EN, "autoplay").add_text(Lang.FA, "خودکار")
+    ).add_text(Lang.languages["EN"]["code"], "autoplay").add_text(Lang.languages["FA"]["code"], "خودکار")
     element.add_attribute().set_generate_name("controls").set_type(
         Type.Boolean
-    ).add_text(Lang.EN, "controls").add_text(Lang.FA, "کنترلر")
+    ).add_text(Lang.languages["EN"]["code"], "controls").add_text(Lang.languages["FA"]["code"], "کنترلر")
     element.add_attribute().set_generate_name("loop").set_type(Type.Boolean).add_text(
-        Lang.EN, "loop"
-    ).add_text(Lang.FA, "تکرار")
+        Lang.languages["EN"]["code"], "loop"
+    ).add_text(Lang.languages["FA"]["code"], "تکرار")
     element.add_attribute().set_generate_name("muted").set_type(Type.Boolean).add_text(
-        Lang.EN, "muted"
-    ).add_text(Lang.FA, "بی‌صدا")
+        Lang.languages["EN"]["code"], "muted"
+    ).add_text(Lang.languages["FA"]["code"], "بی‌صدا")
     element.add_attribute().set_generate_name("preload").set_type(Type.String).add_text(
-        Lang.EN, "preload"
-    ).add_text(Lang.FA, "شکل").add_reserve_values(
+        Lang.languages["EN"]["code"], "preload"
+    ).add_text(Lang.languages["FA"]["code"], "شکل").add_reserve_values(
         [
             Value()
             .set_generate_name("auto")
-            .add_text(Lang.EN, "auto")
-            .add_text(Lang.FA, "خودکار"),
+            .add_text(Lang.languages["EN"]["code"], "auto")
+            .add_text(Lang.languages["FA"]["code"], "خودکار"),
             Value()
             .set_generate_name("metadata")
-            .add_text(Lang.EN, "metadata")
-            .add_text(Lang.FA, "داده"),
+            .add_text(Lang.languages["EN"]["code"], "metadata")
+            .add_text(Lang.languages["FA"]["code"], "داده"),
             Value()
             .set_generate_name("none")
-            .add_text(Lang.EN, "none")
-            .add_text(Lang.FA, "پیشفرض"),
+            .add_text(Lang.languages["EN"]["code"], "none")
+            .add_text(Lang.languages["FA"]["code"], "پیشفرض"),
         ]
     )
     element.add_attribute().set_generate_name("src").set_type(Type.Url).add_text(
-        Lang.EN, "source"
-    ).add_text(Lang.FA, "منبع")
+        Lang.languages["EN"]["code"], "source"
+    ).add_text(Lang.languages["FA"]["code"], "منبع")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

@@ -6,14 +6,17 @@ sys.path.append(str(parent_dir))
 
 from prebuild import Prebuild
 
-single_animation_iteration_counts = [
-    # TODO
-]
+# Create a dictionary with the animation iteration counts as a list of dictionaries
+single_animation_iteration_counts: dict[str, list[dict[str, str]]] = {
+    "iteration_counts": [
+        {"count": "infinite"},
+        {"count": "3"},
+    ]
+}
 
 if __name__ == "__main__":
-    strings = Prebuild.to_string(
-        [value.to_dict() for value in single_animation_iteration_counts]
-    )
+    # Now passing a single dictionary as expected
+    strings = Prebuild.to_string(single_animation_iteration_counts)
     Prebuild.print(strings)
     Prebuild.save(strings, __file__)
 

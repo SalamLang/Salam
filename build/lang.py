@@ -1,22 +1,24 @@
+from typing import Dict, Any
+
 class Lang:
-    languages = {}
+    languages: Dict[str, Dict[str, str]] = {}
 
     @classmethod
-    def add_lang(self, name, full_name, international_name):
+    def add_lang(cls, name: str, full_name: str, international_name: str) -> None:
         """Add a new language to the list of supported languages."""
-        self.languages[name] = {
+        cls.languages[name] = {
             "code": name,
             "full_name": full_name,
             "international_name": international_name,
         }
-        setattr(self, name, name)
+        setattr(cls, name, name)
 
     @classmethod
-    def get_languages(self):
+    def get_languages(cls) -> Dict[str, Dict[str, str]]:
         """Get the list of supported languages."""
-        return self.languages
+        return cls.languages
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         """Get the object for a specific language."""
         return self.languages.get(name.upper(), None)
 

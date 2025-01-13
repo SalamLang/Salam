@@ -16,12 +16,12 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("q")
-    element.add_text(Lang.EN, "q")
-    element.add_text(Lang.FA, "نقل")
+    element.add_text(Lang.languages["EN"]["code"], "q")
+    element.add_text(Lang.languages["FA"]["code"], "نقل")
 
     element.add_attribute().set_generate_name("cite").set_type(Type.Url).add_text(
-        Lang.EN, "cite"
-    ).add_text(Lang.FA, "منبع")
+        Lang.languages["EN"]["code"], "cite"
+    ).add_text(Lang.languages["FA"]["code"], "منبع")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

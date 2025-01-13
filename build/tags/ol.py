@@ -17,18 +17,18 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("ol")
-    element.add_text(Lang.EN, "ol")
-    element.add_text(Lang.FA, "لیست او ال")
+    element.add_text(Lang.languages["EN"]["code"], "ol")
+    element.add_text(Lang.languages["FA"]["code"], "لیست او ال")
 
     element.add_attribute().set_generate_name("reversed").set_type(
         Type.Boolean
-    ).add_text(Lang.EN, "reversed").add_text(Lang.FA, "برعکس")
+    ).add_text(Lang.languages["EN"]["code"], "reversed").add_text(Lang.languages["FA"]["code"], "برعکس")
     element.add_attribute().set_generate_name("start").set_type(Type.Number).add_text(
-        Lang.EN, "start"
-    ).add_text(Lang.FA, "شروع")
+        Lang.languages["EN"]["code"], "start"
+    ).add_text(Lang.languages["FA"]["code"], "شروع")
     element.add_attribute().set_generate_name("type").set_type(Type.String).add_text(
-        Lang.EN, "type"
-    ).add_text(Lang.FA, "نوع").add_reserve_values(
+        Lang.languages["EN"]["code"], "type"
+    ).add_text(Lang.languages["FA"]["code"], "نوع").add_reserve_values(
         [
             Value().set_generate_name("i").set_all_text("i"),
             Value().set_generate_name("I").set_all_text("I"),

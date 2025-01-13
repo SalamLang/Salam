@@ -214,6 +214,7 @@ for language in languages:
     language["code"] = language["code"].lower().strip()
 
 if __name__ == "__main__":
-    strings = Prebuild.to_string(languages)
+    data = {"languages": languages}  # Wrap the list in a dictionary
+    strings = Prebuild.to_string(data)  # Pass the dictionary
     Prebuild.print(strings)
     Prebuild.save(strings, __file__)

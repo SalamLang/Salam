@@ -13,20 +13,20 @@ from prebuild import Prebuild
 from lang import Lang
 from type import Type
 from value import Value
-from property import Property
+from property import Property, PropertyType
 
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("animation-iteration-count")
-    property.add_text(Lang.EN, "animation-iteration-count")
-    property.add_text(Lang.FA, "تعداد تکرار انیمیشن")
-    property.set_type(Type.PositiveInt)
+    property.add_text(Lang.languages["EN"]["code"], "animation-iteration-count")
+    property.add_text(Lang.languages["FA"]["code"], "تعداد تکرار انیمیشن")
+    property.set_type(PropertyType.PositiveInt)  # Use PropertyType instead of Type
     property.add_reserve_values(
         [
             Value()
             .set_generate_name("infinite")
-            .add_text(Lang.EN, "infinite")
-            .add_text(Lang.FA, "بی‌پایان"),
+            .add_text(Lang.languages["EN"]["code"], "infinite")
+            .add_text(Lang.languages["FA"]["code"], "بی‌پایان"),
         ]
     )
 

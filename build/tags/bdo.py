@@ -17,12 +17,12 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("bdo")
-    element.add_text(Lang.EN, "bdo")
-    element.add_text(Lang.FA, "بی دی ای")
+    element.add_text(Lang.languages["EN"]["code"], "bdo")
+    element.add_text(Lang.languages["FA"]["code"], "بی دی ای")
 
     element.add_attribute().set_generate_name("dir").set_type(Type.String).add_text(
-        Lang.EN, "dir"
-    ).add_text(Lang.FA, "جهت").add_reserve_values(dirs.dirs)
+        Lang.languages["EN"]["code"], "dir"
+    ).add_text(Lang.languages["FA"]["code"], "جهت").add_reserve_values(dirs.dirs)
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

@@ -11,14 +11,14 @@ from prebuild import Prebuild
 
 from lang import Lang
 from type import Type
-from property import Property
+from property import Property, PropertyType
 
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("animation-duration")
-    property.add_text(Lang.EN, "animation-duration")
-    property.add_text(Lang.FA, "طول انیمیشن")
-    property.set_type(Type.Time)
+    property.add_text(Lang.languages["EN"]["code"], "animation-duration")
+    property.add_text(Lang.languages["FA"]["code"], "طول انیمیشن")
+    property.set_type(PropertyType.Time)
 
     property_dict = property.to_dict()
 
@@ -28,7 +28,7 @@ if __name__ == "__main__":
 
 # https://developer.mozilla.org/en-US/docs/Web/CSS/animation-duration
 # animation-duration =
-#   <time [0s,∞]>#
+#   <time [0s,∞]>#a
 
 # 12s         Positive integer
 # -456ms      Negative integer

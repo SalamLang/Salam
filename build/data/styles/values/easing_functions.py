@@ -14,9 +14,12 @@ easing_functions += cubic_bezier_easing_functions.cubic_bezier_easing_functions
 easing_functions += step_easing_functions.step_easing_functions
 
 if __name__ == "__main__":
-    strings = Prebuild.to_string(
-        [value.to_dict() for value in easing_functions]
-    )
+    # Wrap the list of dictionaries in a dictionary (adjust the key as needed)
+    easing_functions_dict = {"easing_functions": [value.to_dict() for value in easing_functions]}
+    
+    # Now pass the dictionary to to_string
+    strings = Prebuild.to_string(easing_functions_dict)
+    
     Prebuild.print(strings)
     Prebuild.save(strings, __file__)
 

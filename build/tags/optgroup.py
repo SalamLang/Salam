@@ -21,7 +21,9 @@ if __name__ == "__main__":
 
     element.add_attribute().set_generate_name("disabled").set_type(
         Type.Boolean
-    ).add_text(Lang.languages["EN"]["code"], "disabled").add_text(Lang.languages["FA"]["code"], "غیرفعال")
+    ).add_text(Lang.languages["EN"]["code"], "disabled").add_text(
+        Lang.languages["FA"]["code"], "غیرفعال"
+    )
     element.add_attribute().set_generate_name("label").set_type(Type.String).add_text(
         Lang.languages["EN"]["code"], "label"
     ).add_text(Lang.languages["FA"]["code"], "لیبل")

@@ -1,5 +1,6 @@
 from typing import Dict, Any
 
+
 class Lang:
     languages: Dict[str, Dict[str, str]] = {}
 

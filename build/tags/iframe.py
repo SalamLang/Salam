@@ -29,10 +29,14 @@ if __name__ == "__main__":
 
     element.add_attribute().set_generate_name("allowfullscreen").set_type(
         Type.Boolean
-    ).add_text(Lang.languages["EN"]["code"], "allowfullscreen").add_text(Lang.languages["FA"]["code"], "مجاز فول صفحه")
+    ).add_text(Lang.languages["EN"]["code"], "allowfullscreen").add_text(
+        Lang.languages["FA"]["code"], "مجاز فول صفحه"
+    )
     element.add_attribute().set_generate_name("allowpaymentrequest").set_type(
         Type.Boolean
-    ).add_text(Lang.languages["EN"]["code"], "allowpaymentrequest").add_text(Lang.languages["FA"]["code"], "مجاز پرداخت")
+    ).add_text(Lang.languages["EN"]["code"], "allowpaymentrequest").add_text(
+        Lang.languages["FA"]["code"], "مجاز پرداخت"
+    )
     element.add_attribute().set_generate_name("height").set_type(Type.Size).add_text(
         Lang.languages["EN"]["code"], "height"
     ).add_text(Lang.languages["FA"]["code"], "ارتفاع")
@@ -52,7 +56,9 @@ if __name__ == "__main__":
     )
     element.add_attribute().set_generate_name("name").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.languages["EN"]["code"], "name").add_text(Lang.languages["FA"]["code"], "نام")
+    ).add_text(Lang.languages["EN"]["code"], "name").add_text(
+        Lang.languages["FA"]["code"], "نام"
+    )
     element.add_attribute().set_generate_name("referrerpolicy").set_type(
         Type.AnyNoEmpty
     ).add_text(Lang.languages["EN"]["code"], "referrerpolicy").add_text(
@@ -62,7 +68,9 @@ if __name__ == "__main__":
     )
     element.add_attribute().set_generate_name("sandbox").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.languages["EN"]["code"], "sandbox").add_text(Lang.languages["FA"]["code"], "سند باکس").add_reserve_values(
+    ).add_text(Lang.languages["EN"]["code"], "sandbox").add_text(
+        Lang.languages["FA"]["code"], "سند باکس"
+    ).add_reserve_values(
         [
             Value()
             .set_generate_name("allow-forms")

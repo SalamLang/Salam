@@ -37,7 +37,9 @@ if __name__ == "__main__":
     ).add_text(Lang.languages["FA"]["code"], "منبع")
     element.add_attribute().set_generate_name("hreflang").set_type(
         Type.String
-    ).add_text(Lang.languages["EN"]["code"], "language").add_text(Lang.languages["EN"]["code"], "زبان").add_reserve_values(
+    ).add_text(Lang.languages["EN"]["code"], "language").add_text(
+        Lang.languages["EN"]["code"], "زبان"
+    ).add_reserve_values(
         [
             Value()
             .set_generate_name(language["code"].upper())
@@ -64,10 +66,14 @@ if __name__ == "__main__":
     ).add_text(Lang.languages["FA"]["code"], "اندازه ها")
     element.add_attribute().set_generate_name("title").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.languages["EN"]["code"], "title").add_text(Lang.languages["FA"]["code"], "عنوان")
+    ).add_text(Lang.languages["EN"]["code"], "title").add_text(
+        Lang.languages["FA"]["code"], "عنوان"
+    )
     element.add_attribute().set_generate_name("type").set_type(Type.Number).add_text(
         Lang.languages["EN"]["code"], "type"
-    ).add_text(Lang.languages["FA"]["code"], "نوع").add_reserve_values(mediatypes.mediatypes)
+    ).add_text(Lang.languages["FA"]["code"], "نوع").add_reserve_values(
+        mediatypes.mediatypes
+    )
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

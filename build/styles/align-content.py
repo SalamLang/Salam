@@ -23,10 +23,10 @@ if __name__ == "__main__":
     property.set_generate_name("align-content")
     property.add_text(Lang.languages["EN"]["code"], "align-content")
     property.add_text(Lang.languages["FA"]["code"], "تراز محتوا")
-    
+
     # Use PropertyType.String instead of Type.String
     property.set_type(PropertyType.String)
-    
+
     property.add_reserve_values(
         [
             Value()
@@ -35,18 +35,24 @@ if __name__ == "__main__":
             .add_text(Lang.languages["FA"]["code"], "نرمال"),
         ]
     )
-    
-    property.add_reserve_values(list(baseline_positions.baseline_positions))  # Convert to list
-    property.add_reserve_values(list(content_distributions.content_distributions))  # Convert to list
-    
+
+    property.add_reserve_values(
+        list(baseline_positions.baseline_positions)
+    )  # Convert to list
+    property.add_reserve_values(
+        list(content_distributions.content_distributions)
+    )  # Convert to list
+
     property.add_reserve_values(
         Values.AndOrder(
             tuple(overflow_positions.overflow_positions),  # Convert to tuple
-            tuple(content_positions.content_positions),    # Convert to tuple
+            tuple(content_positions.content_positions),  # Convert to tuple
         )
     )
-    
-    property.add_reserve_values(list(content_positions.content_positions))  # Convert to list
+
+    property.add_reserve_values(
+        list(content_positions.content_positions)
+    )  # Convert to list
 
     property_dict = property.to_dict()
 

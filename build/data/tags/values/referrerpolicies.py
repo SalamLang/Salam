@@ -43,7 +43,9 @@ referrerpolicies = [
 if __name__ == "__main__":
     # Creating a dictionary for the Prebuild.to_string() method
     referrerpolicies_dict = {
-        value.generate_name: value.to_dict() for value in referrerpolicies if value.generate_name is not None
+        value.generate_name: value.to_dict()
+        for value in referrerpolicies
+        if value.generate_name is not None
     }
 
     # Generate the string output

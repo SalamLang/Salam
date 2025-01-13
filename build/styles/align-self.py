@@ -33,17 +33,14 @@ if __name__ == "__main__":
             .set_generate_name("auto")
             .add_text(Lang.languages["EN"]["code"], "auto")
             .add_text(Lang.languages["FA"]["code"], "اتوماتیک"),
-
             Value()
             .set_generate_name("normal")
             .add_text(Lang.languages["EN"]["code"], "normal")
             .add_text(Lang.languages["FA"]["code"], "نرمال"),
-
             Value()
             .set_generate_name("stretch")
             .add_text(Lang.languages["EN"]["code"], "stretch")
             .add_text(Lang.languages["FA"]["code"], "کشیده"),
-
             Value()
             .set_generate_name("anchor-center")
             .add_text(Lang.languages["EN"]["code"], "anchor-center")
@@ -55,14 +52,18 @@ if __name__ == "__main__":
 
     # Convert tuple to list for add_reserve_values
     property.add_reserve_values(
-        list(Values.AndOrder(  # Convert to list
-            tuple(overflow_positions.overflow_positions),
-            tuple(self_positions.self_positions),
-        ))
+        list(
+            Values.AndOrder(  # Convert to list
+                tuple(overflow_positions.overflow_positions),
+                tuple(self_positions.self_positions),
+            )
+        )
     )
 
     # Convert tuple to list for add_reserve_values
-    property.add_reserve_values(list(tuple(self_positions.self_positions)))  # Convert to list
+    property.add_reserve_values(
+        list(tuple(self_positions.self_positions))
+    )  # Convert to list
 
     property_dict = property.to_dict()
 

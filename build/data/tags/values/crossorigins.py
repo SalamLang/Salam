@@ -23,7 +23,9 @@ crossorigins = [
 if __name__ == "__main__":
     # Creating a dictionary for Prebuild.to_string() method
     crossorigins_dict = {
-        value.generate_name: value.to_dict() for value in crossorigins if value.generate_name is not None
+        value.generate_name: value.to_dict()
+        for value in crossorigins
+        if value.generate_name is not None
     }
 
     # Generating the string output

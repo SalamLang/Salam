@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# Check for emcc installation
 if ! command -v emcc >/dev/null 2>&1; then
 	echo 'Error: emcc is not installed.' >&2
 	echo 'Install from https://emscripten.org/docs/getting_started/downloads.html'

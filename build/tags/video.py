@@ -27,29 +27,32 @@ if __name__ == "__main__":
     # Add attributes with correct Type constants
     element.add_attribute().set_generate_name("autoplay").set_type(
         Type.Boolean  # استفاده از Type صحیح از همان فایل
-    ).add_text(Lang.languages["EN"]["code"], "autoplay").add_text(Lang.languages["FA"]["code"], "پخش خودکار")
+    ).add_text(Lang.languages["EN"]["code"], "autoplay").add_text(
+        Lang.languages["FA"]["code"], "پخش خودکار"
+    )
 
-    
     element.add_attribute().set_generate_name("controls").set_type(
         Type.Boolean
-    ).add_text(Lang.languages["EN"]["code"], "controls").add_text(Lang.languages["FA"]["code"], "کنترلر")
-    
+    ).add_text(Lang.languages["EN"]["code"], "controls").add_text(
+        Lang.languages["FA"]["code"], "کنترلر"
+    )
+
     element.add_attribute().set_generate_name("height").set_type(Type.Size).add_text(
         Lang.languages["EN"]["code"], "height"
     ).add_text(Lang.languages["FA"]["code"], "ارتفاع")
-    
+
     element.add_attribute().set_generate_name("loop").set_type(Type.Boolean).add_text(
         Lang.languages["EN"]["code"], "loop"
     ).add_text(Lang.languages["FA"]["code"], "تکرار")
-    
+
     element.add_attribute().set_generate_name("muted").set_type(Type.Boolean).add_text(
         Lang.languages["EN"]["code"], "muted"
     ).add_text(Lang.languages["FA"]["code"], "بی صدا")
-    
+
     element.add_attribute().set_generate_name("poster").set_type(Type.Url).add_text(
         Lang.languages["EN"]["code"], "poster"
     ).add_text(Lang.languages["FA"]["code"], "پوستر")
-    
+
     element.add_attribute().set_generate_name("preload").set_type(Type.Url).add_text(
         Lang.languages["EN"]["code"], "preload"
     ).add_text(Lang.languages["FA"]["code"], "پیش لود").add_reserve_values(
@@ -68,15 +71,15 @@ if __name__ == "__main__":
             .add_text(Lang.languages["FA"]["code"], "هیچکدام"),
         ]
     )
-    
+
     element.add_attribute().set_generate_name("src").set_type(Type.Url).add_text(
         Lang.languages["EN"]["code"], "source"
     ).add_text(Lang.languages["FA"]["code"], "منبع").set_is_required(True)
-    
+
     element.add_attribute().set_generate_name("width").set_type(Type.Size).add_text(
         Lang.languages["EN"]["code"], "width"
     ).add_text(Lang.languages["FA"]["code"], "عرض")
-    
+
     # Convert element to dictionary
     element_dict = element.to_dict()
 

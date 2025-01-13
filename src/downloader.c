@@ -33,6 +33,8 @@
  * @returns {void}
  *
  */
+
+
 void parse_url(const char *url, char *hostname, char *path) {
     DEBUG_ME;
     const char *start;
@@ -72,6 +74,7 @@ void parse_url(const char *url, char *hostname, char *path) {
  * @returns {bool} - True if the download was successful, false otherwise
  *
  */
+
 bool download(FILE *fp, const char *port, const char *hostname,
               const char *path) {
     DEBUG_ME;
@@ -84,7 +87,6 @@ bool download(FILE *fp, const char *port, const char *hostname,
 
     if (!request) {
         fprintf(stderr, "Memory allocation failed for request\n");
-
         return false;
     }
 
@@ -98,7 +100,6 @@ bool download(FILE *fp, const char *port, const char *hostname,
 
         if (!request) {
             fprintf(stderr, "Memory reallocation failed for request\n");
-
             return false;
         }
 
@@ -118,7 +119,6 @@ bool download(FILE *fp, const char *port, const char *hostname,
     if ((rv = getaddrinfo(hostname, port, &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
         free(request);
-
         return false;
     }
 
@@ -127,14 +127,12 @@ bool download(FILE *fp, const char *port, const char *hostname,
 
         if (sockfd == -1) {
             perror("socket");
-
             continue;
         }
 
         if (connect(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
             perror("connect");
-            close(sockfd);
-
+            CLOSE_SOCKET(sockfd);
             continue;
         }
         break;
@@ -143,7 +141,6 @@ bool download(FILE *fp, const char *port, const char *hostname,
     if (p == NULL) {
         fprintf(stderr, "Failed to connect.\n");
         free(request);
-
         return false;
     }
 
@@ -152,14 +149,12 @@ bool download(FILE *fp, const char *port, const char *hostname,
     if (send(sockfd, request, strlen(request), 0) == -1) {
         perror("send");
         free(request);
-        close(sockfd);
-
+        CLOSE_SOCKET(sockfd);
         return false;
     } else if (!fp) {
         perror("fopen");
         free(request);
-        close(sockfd);
-
+        CLOSE_SOCKET(sockfd);
         return false;
     }
 
@@ -182,13 +177,12 @@ bool download(FILE *fp, const char *port, const char *hostname,
     if (bytes_received == -1) {
         perror("recv");
         free(request);
-
         return false;
     }
 
     fclose(fp);
     free(request);
-    close(sockfd);
+    CLOSE_SOCKET(sockfd);
 
     return true;
 }

@@ -16,15 +16,17 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(False)
     element.set_generate_name("param")
-    element.add_text(Lang.EN, "param")
-    element.add_text(Lang.FA, "پارامتر شی")
+    element.add_text(Lang.languages["EN"]["code"], "param")
+    element.add_text(Lang.languages["FA"]["code"], "پارامتر شی")
 
     element.add_attribute().set_generate_name("name").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.EN, "name").add_text(Lang.FA, "نام")
+    ).add_text(Lang.languages["EN"]["code"], "name").add_text(
+        Lang.languages["FA"]["code"], "نام"
+    )
     element.add_attribute().set_generate_name("value").set_type(Type.String).add_text(
-        Lang.EN, "content"
-    ).add_text(Lang.FA, "محتوا")
+        Lang.languages["EN"]["code"], "content"
+    ).add_text(Lang.languages["FA"]["code"], "محتوا")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

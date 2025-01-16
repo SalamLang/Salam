@@ -12,20 +12,32 @@ from prebuild import Prebuild
 from lang import Lang
 from type import Type
 from value import Value
-from property import Property
+from property import Property, PropertyType
+
+
+# Helper function to map Type to PropertyType
+def type_to_property_type(type_: Type) -> PropertyType:
+    type_mapping = {
+        Type.Strings: PropertyType.AnyNoEmpty,
+        # Add more mappings as needed
+    }
+    return type_mapping.get(
+        type_, PropertyType.AnyNoEmpty
+    )  # Default to AnyNoEmpty if not
+
 
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("animation-name")
-    property.add_text(Lang.EN, "animation-name")
-    property.add_text(Lang.FA, "نام انیمیشن")
-    property.set_type(Type.AnyNoEmpty)
+    property.add_text(Lang.languages["EN"]["code"], "animation-name")
+    property.add_text(Lang.languages["FA"]["code"], "نام انیمیشن")
+    property.set_type(type_to_property_type(Type.AnyNoEmpty))
     property.add_reserve_values(
         [
             Value()
             .set_generate_name("none")
-            .add_text(Lang.EN, "none")
-            .add_text(Lang.FA, "هیچ‌کدام"),
+            .add_text(Lang.languages["EN"]["code"], "none")
+            .add_text(Lang.languages["FA"]["code"], "هیچ‌کدام"),
         ]
     )
 

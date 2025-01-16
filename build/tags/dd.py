@@ -15,8 +15,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("dd")
-    element.add_text(Lang.EN, "dd")
-    element.add_text(Lang.FA, "دی دی")
+    element.add_text(Lang.languages["EN"]["code"], "dd")
+    element.add_text(Lang.languages["FA"]["code"], "دی دی")
 
     element_dict = element.to_dict()
 

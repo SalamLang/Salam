@@ -15,42 +15,55 @@ from type import Type
 from value import Value
 from values import Values
 from prebuild import Prebuild
-from property import Property
+from property import Property, PropertyType
 
 if __name__ == "__main__":
     property = Property()
+
     property.set_generate_name("align-self")
-    property.add_text(Lang.EN, "align-self")
-    property.add_text(Lang.FA, "تراز خود")
-    property.set_type(Type.String)
+
+    property.add_text(Lang.languages["EN"]["code"], "align-self")
+    property.add_text(Lang.languages["FA"]["code"], "تراز خود")
+
+    property.set_type(PropertyType.String)
+
     property.add_reserve_values(
         [
             Value()
             .set_generate_name("auto")
-            .add_text(Lang.EN, "auto")
-            .add_text(Lang.FA, "اتوماتیک"),
+            .add_text(Lang.languages["EN"]["code"], "auto")
+            .add_text(Lang.languages["FA"]["code"], "اتوماتیک"),
             Value()
             .set_generate_name("normal")
-            .add_text(Lang.EN, "normal")
-            .add_text(Lang.FA, "نرمال"),
+            .add_text(Lang.languages["EN"]["code"], "normal")
+            .add_text(Lang.languages["FA"]["code"], "نرمال"),
             Value()
             .set_generate_name("stretch")
-            .add_text(Lang.EN, "stretch")
-            .add_text(Lang.FA, "کشیده"),
+            .add_text(Lang.languages["EN"]["code"], "stretch")
+            .add_text(Lang.languages["FA"]["code"], "کشیده"),
             Value()
             .set_generate_name("anchor-center")
-            .add_text(Lang.EN, "anchor-center")
-            .add_text(Lang.FA, "مرکز قایق"),
+            .add_text(Lang.languages["EN"]["code"], "anchor-center")
+            .add_text(Lang.languages["FA"]["code"], "مرکز قایق"),
         ]
     )
+
     property.add_reserve_values(baseline_positions.baseline_positions)
+
+    # Convert tuple to list for add_reserve_values
     property.add_reserve_values(
-        Values.AndOrder(
-            overflow_positions.overflow_positions,
-            self_positions.self_positions,
+        list(
+            Values.AndOrder(  # Convert to list
+                tuple(overflow_positions.overflow_positions),
+                tuple(self_positions.self_positions),
+            )
         )
     )
-    property.add_reserve_values(self_positions.self_positions)
+
+    # Convert tuple to list for add_reserve_values
+    property.add_reserve_values(
+        list(tuple(self_positions.self_positions))
+    )  # Convert to list
 
     property_dict = property.to_dict()
 

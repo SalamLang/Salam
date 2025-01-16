@@ -8,22 +8,44 @@ sys.path.append(os.path.join(parent_dir, "data", "styles"))
 sys.path.append(os.path.join(parent_dir, "data", "styles", "values"))
 
 from prebuild import Prebuild
-
 from lang import Lang
 from type import Type
 from value import Value
 from property import Property
+from property import PropertyType
+
+
+# Mapping function to convert Type to PropertyType
+def type_to_property_type(type_: Type) -> PropertyType:
+    type_mapping = {
+        Type.Size: PropertyType.String,  # You can change this as per your logic
+        Type.Sizes: PropertyType.String,  # You can change this to other PropertyTypes if needed
+        # Add other type mappings as necessary
+    }
+    return type_mapping.get(
+        type_, PropertyType.String
+    )  # Default to PropertyType.STRING
+
 
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("background-size")
-    property.add_text(Lang.EN, "background-size")
-    property.add_text(Lang.FA, "اندازه پس زمینه")
-    property.set_type(Type.SIZE)
+    property.add_text(Lang.languages["EN"]["code"], "background-size")
+    property.add_text(Lang.languages["FA"]["code"], "اندازه پس‌زمینه")
+
+    # Use the type_to_property_type function to map Type to PropertyType
+    property.set_type(type_to_property_type(Type.Size))
+
     property.add_reserve_values(
         [
-            Value().set_generate_name("visible").add_text(Lang.EN, "visible").add_text(Lang.FA, "قابل دید"),
-            Value().set_generate_name("hidden").add_text(Lang.EN, "hidden").add_text(Lang.FA, "پنهان"),
+            Value()
+            .set_generate_name("cover")
+            .add_text(Lang.languages["EN"]["code"], "cover")
+            .add_text(Lang.languages["FA"]["code"], "پوشش"),
+            Value()
+            .set_generate_name("contain")
+            .add_text(Lang.languages["EN"]["code"], "contain")
+            .add_text(Lang.languages["FA"]["code"], "شامل"),
         ]
     )
 
@@ -32,16 +54,3 @@ if __name__ == "__main__":
     property_str = Prebuild.to_string(property_dict)
     Prebuild.print(property_str)
     Prebuild.save(property_str, __file__)
-
-# https://developer.mozilla.org/en-US/docs/Web/CSS/background-size
-# background-size = 
-#   <bg-size>#  
-
-# <bg-size> = 
-#   [ <length-percentage [0,∞]> | auto ]{1,2}  |
-#   cover                                      |
-#   contain                                    
-
-# <length-percentage> = 
-#   <length>      |
-#   <percentage>  

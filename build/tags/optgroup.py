@@ -16,15 +16,17 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("optgroup")
-    element.add_text(Lang.EN, "optgroup")
-    element.add_text(Lang.FA, "گروه مورد کشویی")
+    element.add_text(Lang.languages["EN"]["code"], "optgroup")
+    element.add_text(Lang.languages["FA"]["code"], "گروه مورد کشویی")
 
     element.add_attribute().set_generate_name("disabled").set_type(
         Type.Boolean
-    ).add_text(Lang.EN, "disabled").add_text(Lang.FA, "غیرفعال")
+    ).add_text(Lang.languages["EN"]["code"], "disabled").add_text(
+        Lang.languages["FA"]["code"], "غیرفعال"
+    )
     element.add_attribute().set_generate_name("label").set_type(Type.String).add_text(
-        Lang.EN, "label"
-    ).add_text(Lang.FA, "لیبل")
+        Lang.languages["EN"]["code"], "label"
+    ).add_text(Lang.languages["FA"]["code"], "لیبل")
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

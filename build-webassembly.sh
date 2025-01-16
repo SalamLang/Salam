@@ -39,24 +39,22 @@ sources=(
 	"src/main.c"
 )
 
-DEBUG=0
+DEBUG_FLAGS=""
+
 if [[ "$1" == "debug" ]]; then
-	DEBUG=1
 	echo "Debug mode enabled."
 	DEBUG_FLAGS="-s VERBOSE=1 -s ASSERTIONS=2 -v"
 else
-	DEBUG_FLAGS=""
 	echo "Debug mode not enabled."
 fi
 
 echo "Compiling C files to WebAssembly..."
-emcc "${sources[@]}" -o ${OUTPUT_BASE}.html \
-	${MEMORY_FLAGS} \
-	${RUNTIME_FLAGS} \
-	${COMMON_FLAGS} \
-	${DEBUG_FLAGS}
+if emcc "${sources[@]}" -o "${OUTPUT_BASE}.html" \
+	"${MEMORY_FLAGS}" \
+	"${RUNTIME_FLAGS}" \
+	"${COMMON_FLAGS}" \
+	"${DEBUG_FLAGS}"; then
 
-if [ $? -eq 0 ]; then
 	echo "Compilation successful. Output files:"
 	echo "  ${OUTPUT_BASE}.html"
 	echo "  ${OUTPUT_BASE}.js"
@@ -64,9 +62,9 @@ if [ $? -eq 0 ]; then
 
 	if command -v npx >/dev/null 2>&1; then
 		echo "Transpiling JavaScript for older browsers..."
+		if yes | npx esbuild "${OUTPUT_BASE}.js" --outfile="${OUTPUT_BASE}.transpiled.js" --minify=true --target=esnext; then
 
-		if yes | npx esbuild ${OUTPUT_BASE}.js --outfile=${OUTPUT_BASE}.transpiled.js --minify=true --target=esnext; then
-			mv ${OUTPUT_BASE}.transpiled.js ${OUTPUT_BASE}.js
+			mv "${OUTPUT_BASE}.transpiled.js" "${OUTPUT_BASE}.js"
 		else
 			echo "Warning: Babel transpiling failed. JavaScript was not transpiled."
 		fi
@@ -74,13 +72,13 @@ if [ $? -eq 0 ]; then
 		echo "Warning: npx command not found. JavaScript will not be transpiled for older browsers."
 	fi
 
-	sed -i ':a;N;$!ba;s/\n/\\n/g' ${OUTPUT_BASE}.js
+	sed -i ':a;N;$!ba;s/\n/\\n/g' "${OUTPUT_BASE}.js"
 
 	if [ -d "$EDITOR_DIR" ]; then
 		echo "Copying output files to $EDITOR_DIR"
-		cp ${OUTPUT_BASE}.html "$EDITOR_DIR"
-		cp ${OUTPUT_BASE}.js "$EDITOR_DIR"
-		cp ${OUTPUT_BASE}.wasm "$EDITOR_DIR"
+		cp "${OUTPUT_BASE}.html" "$EDITOR_DIR"
+		cp "${OUTPUT_BASE}.js" "$EDITOR_DIR"
+		cp "${OUTPUT_BASE}.wasm" "$EDITOR_DIR"
 		echo "Files copied successfully."
 	else
 		echo "Directory $EDITOR_DIR does not exist. Skipping copy."

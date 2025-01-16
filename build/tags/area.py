@@ -22,27 +22,33 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("area")
-    element.add_text(Lang.EN, "area")
-    element.add_text(Lang.FA, "منطقه")
+    element.add_text(Lang.languages["EN"]["code"], "area")
+    element.add_text(Lang.languages["FA"]["code"], "منطقه")
 
     element.add_attribute().set_generate_name("alt").set_type(Type.AnyNoEmpty).add_text(
-        Lang.EN, "title"
-    ).add_text(Lang.FA, "عنوان")
+        Lang.languages["EN"]["code"], "title"
+    ).add_text(Lang.languages["FA"]["code"], "عنوان")
     element.add_attribute().set_generate_name("coords").set_type(Type.Coords).add_text(
-        Lang.EN, "coords"
-    ).add_text(Lang.FA, "موقعیت")
+        Lang.languages["EN"]["code"], "coords"
+    ).add_text(Lang.languages["FA"]["code"], "موقعیت")
     element.add_attribute().set_generate_name("download").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.EN, "download").add_text(Lang.FA, "دانلود")
+    ).add_text(Lang.languages["EN"]["code"], "download").add_text(
+        Lang.languages["FA"]["code"], "دانلود"
+    )
     element.add_attribute().set_generate_name("download").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.EN, "download").add_text(Lang.FA, "دانلود")
+    ).add_text(Lang.languages["EN"]["code"], "download").add_text(
+        Lang.languages["FA"]["code"], "دانلود"
+    )
     element.add_attribute().set_generate_name("href").set_type(Type.Url).add_text(
-        Lang.EN, "source"
-    ).add_text(Lang.FA, "منبع")
+        Lang.languages["EN"]["code"], "source"
+    ).add_text(Lang.languages["FA"]["code"], "منبع")
     element.add_attribute().set_generate_name("hreflang").set_type(
         Type.String
-    ).add_text(Lang.EN, "language").add_text(Lang.FA, "زبان").add_reserve_values(
+    ).add_text(Lang.languages["EN"]["code"], "language").add_text(
+        Lang.languages["FA"]["code"], "زبان"
+    ).add_reserve_values(
         [
             Value()
             .set_generate_name(language["code"].upper())
@@ -52,47 +58,47 @@ if __name__ == "__main__":
         ]
     )
     element.add_attribute().set_generate_name("media").set_type(Type.CSSMedia).add_text(
-        Lang.EN, "media"
-    ).add_text(Lang.FA, "رسانه")
+        Lang.languages["EN"]["code"], "media"
+    ).add_text(Lang.languages["FA"]["code"], "رسانه")
     element.add_attribute().set_generate_name("referrerpolicy").set_type(
         Type.String
-    ).add_text(Lang.EN, "referrerpolicy").add_text(
-        Lang.FA, "سیاست ارجاع"
+    ).add_text(Lang.languages["EN"]["code"], "referrerpolicy").add_text(
+        Lang.languages["FA"]["code"], "سیاست ارجاع"
     ).add_reserve_values(
         referrerpolicies.referrerpolicies
     )
     element.add_attribute().set_generate_name("rel").set_type(Type.String).add_text(
-        Lang.EN, "rel"
-    ).add_text(Lang.FA, "رابطه").add_reserve_values(rels.rels)
+        Lang.languages["EN"]["code"], "rel"
+    ).add_text(Lang.languages["FA"]["code"], "رابطه").add_reserve_values(rels.rels)
     element.add_attribute().set_generate_name("shape").set_type(Type.String).add_text(
-        Lang.EN, "shape"
-    ).add_text(Lang.FA, "شکل").add_reserve_values(
+        Lang.languages["EN"]["code"], "shape"
+    ).add_text(Lang.languages["FA"]["code"], "شکل").add_reserve_values(
         [
             Value()
             .set_generate_name("default")
-            .add_text(Lang.EN, "default")
-            .add_text(Lang.FA, "پیشفرض"),
+            .add_text(Lang.languages["EN"]["code"], "default")
+            .add_text(Lang.languages["FA"]["code"], "پیشفرض"),
             Value()
             .set_generate_name("rect")
-            .add_text(Lang.EN, "rect")
-            .add_text(Lang.FA, "مربع"),
+            .add_text(Lang.languages["EN"]["code"], "rect")
+            .add_text(Lang.languages["FA"]["code"], "مربع"),
             Value()
             .set_generate_name("circle")
-            .add_text(Lang.EN, "circle")
-            .add_text(Lang.FA, "دایره"),
+            .add_text(Lang.languages["EN"]["code"], "circle")
+            .add_text(Lang.languages["FA"]["code"], "دایره"),
             Value()
             .set_generate_name("poly")
-            .add_text(Lang.EN, "poly")
-            .add_text(Lang.FA, "چند گونه"),
+            .add_text(Lang.languages["EN"]["code"], "poly")
+            .add_text(Lang.languages["FA"]["code"], "چند گونه"),
         ]
     )
     element.add_attribute().set_generate_name("target").set_type(Type.String).add_text(
-        Lang.EN, "target"
-    ).add_text(Lang.FA, "هدف").add_reserve_values(targets.targets)
+        Lang.languages["EN"]["code"], "target"
+    ).add_text(Lang.languages["FA"]["code"], "هدف").add_reserve_values(targets.targets)
 
     element.add_attribute().set_generate_name("type").set_type(Type.String).add_text(
-        Lang.EN, "type"
-    ).add_text(Lang.FA, "نوع").add_reserve_values(
+        Lang.languages["EN"]["code"], "type"
+    ).add_text(Lang.languages["FA"]["code"], "نوع").add_reserve_values(
         [
             Value()
             .set_generate_name(mediatype["code"])

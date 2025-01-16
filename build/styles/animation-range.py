@@ -12,14 +12,26 @@ from prebuild import Prebuild
 import single_animation_play_states
 from lang import Lang
 from type import Type
-from property import Property
+from property import Property, PropertyType
+
+
+# Helper function to map Type to PropertyType
+def type_to_property_type(type_: Type) -> PropertyType:
+    type_mapping = {
+        Type.Strings: PropertyType.String,
+        # Add more mappings as needed
+    }
+    return type_mapping.get(
+        type_, PropertyType.String
+    )  # Default to STRING if not found
+
 
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("animation-range")
-    property.add_text(Lang.EN, "animation-range")
-    property.add_text(Lang.FA, "وضعیت پخش انیمیشن")
-    property.set_type(Type.Strings)
+    property.add_text(Lang.languages["EN"]["code"], "animation-range")
+    property.add_text(Lang.languages["FA"]["code"], "وضعیت پخش انیمیشن")
+    property.set_type(type_to_property_type(Type.Strings))
     property.add_reserve_values(
         single_animation_play_states.single_animation_play_states
     )

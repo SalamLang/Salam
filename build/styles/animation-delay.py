@@ -8,19 +8,16 @@ sys.path.append(os.path.join(parent_dir, "data", "styles"))
 sys.path.append(os.path.join(parent_dir, "data", "styles", "values"))
 
 from prebuild import Prebuild
-
 from lang import Lang
-from type import Type
+from property import Property, PropertyType
 from value import Value
-from property import Property
 
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("animation-delay")
-    property.add_text(Lang.EN, "animation-delay")
-    property.add_text(Lang.FA, "تاخیر انیمیشن")
-    property.set_type(Type.Times)
-
+    property.add_text(Lang.languages["EN"]["code"], "animation-delay")
+    property.add_text(Lang.languages["FA"]["code"], "تاخیر انیمیشن")
+    property.set_type(PropertyType.Times)
     property_dict = property.to_dict()
 
     property_str = Prebuild.to_string(property_dict)

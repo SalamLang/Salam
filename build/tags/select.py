@@ -16,30 +16,42 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("select")
-    element.add_text(Lang.EN, "select")
-    element.add_text(Lang.FA, "فهرست کشویی")
+    element.add_text(Lang.languages["EN"]["code"], "select")
+    element.add_text(Lang.languages["FA"]["code"], "فهرست کشویی")
 
     element.add_attribute().set_generate_name("autofocus").set_type(
         Type.Boolean
-    ).add_text(Lang.EN, "autofocus").add_text(Lang.FA, "فوکوس خودکار")
+    ).add_text(Lang.languages["EN"]["code"], "autofocus").add_text(
+        Lang.languages["FA"]["code"], "فوکوس خودکار"
+    )
     element.add_attribute().set_generate_name("disabled").set_type(
         Type.Boolean
-    ).add_text(Lang.EN, "disabled").add_text(Lang.FA, "غیرفعال")
+    ).add_text(Lang.languages["EN"]["code"], "disabled").add_text(
+        Lang.languages["FA"]["code"], "غیرفعال"
+    )
     element.add_attribute().set_generate_name("form").set_type(Type.ID).add_text(
-        Lang.EN, "form"
-    ).add_text(Lang.FA, "فرم")
+        Lang.languages["EN"]["code"], "form"
+    ).add_text(Lang.languages["FA"]["code"], "فرم")
     element.add_attribute().set_generate_name("multiple").set_type(
         Type.Boolean
-    ).add_text(Lang.EN, "multiple").add_text(Lang.FA, "چندتایی")
+    ).add_text(Lang.languages["EN"]["code"], "multiple").add_text(
+        Lang.languages["EN"]["code"], "چندتایی"
+    )
     element.add_attribute().set_generate_name("name").set_type(
         Type.AnyNoEmpty
-    ).add_text(Lang.EN, "name").add_text(Lang.FA, "نام")
+    ).add_text(Lang.languages["EN"]["code"], "name").add_text(
+        Lang.languages["FA"]["code"], "نام"
+    )
     element.add_attribute().set_generate_name("required").set_type(
         Type.Boolean
-    ).add_text(Lang.EN, "required").add_text(Lang.FA, "اجباری")
+    ).add_text(Lang.languages["EN"]["code"], "required").add_text(
+        Lang.languages["FA"]["code"], "اجباری"
+    )
     element.add_attribute().set_generate_name("size").set_type(
         Type.PositiveInt
-    ).add_text(Lang.EN, "size").add_text(Lang.FA, "تعداد")
+    ).add_text(Lang.languages["EN"]["code"], "size").add_text(
+        Lang.languages["FA"]["code"], "تعداد"
+    )
     element_dict = element.to_dict()
 
     element_str = Prebuild.to_string(element_dict)

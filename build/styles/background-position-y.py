@@ -7,12 +7,8 @@ sys.path.append(str(parent_dir))
 sys.path.append(os.path.join(parent_dir, "data", "styles"))
 sys.path.append(os.path.join(parent_dir, "data", "styles", "values"))
 
-from prebuild import Prebuild
-
 from lang import Lang
 from type import Type
-from value import Value
-from values import Values
 from property import Property
 
 if __name__ == "__main__":

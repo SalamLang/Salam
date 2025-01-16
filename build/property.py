@@ -1,6 +1,5 @@
 from text import Text
 from prebuild import Prebuild
-from attribute import Attribute
 from type import Type
 from value import Value
 

@@ -7,11 +7,6 @@ sys.path.append(str(parent_dir))
 sys.path.append(os.path.join(parent_dir, "data", "styles"))
 sys.path.append(os.path.join(parent_dir, "data", "styles", "values"))
 
-<<<<<<< HEAD
-from lang import Lang
-from type import Type
-from property import Property
-=======
 from prebuild import Prebuild
 from lang import Lang
 from type import Type
@@ -27,7 +22,6 @@ def type_to_property_type(type_: Type) -> PropertyType:
     }
     return type_mapping.get(type_, PropertyType.String)  # Default to STRING
 
->>>>>>> 1220583a90f5dca34ed8626033cd3f7a6efabfee
 
 if __name__ == "__main__":
     property = Property()

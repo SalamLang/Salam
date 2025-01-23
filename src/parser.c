@@ -534,8 +534,6 @@ ast_node_t *parser_parse_node(lexer_t *lexer) {
     } else if (match(lexer, TOKEN_PRINT)) {
         return parser_parse_print(lexer);
     } else {
-        printf("===> ");
-        PARSER_CURRENT->print(PARSER_CURRENT);
         error_parser(2, "Unknown token '%s' as statement at line %d, column %d",
                      token_type_keyword(PARSER_CURRENT->type),
                      PARSER_CURRENT->location.end_line,

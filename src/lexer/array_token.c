@@ -31,10 +31,6 @@ void array_token_functions(array_token_t *array) {
 
 array_token_t *array_token_init(size_t capacity) {
     DEBUG_ME;
-    if (capacity < 0) {
-        fprintf(stderr, "Error: Capacity must be 0 or more.\n");
-        exit(EXIT_FAILURE);
-    }
     array_token_t *array = memory_allocate(sizeof(array_token_t) * 1);
     array->tokens = memory_allocate(sizeof(token_t*) * (capacity + 1));
     array->length = 0;

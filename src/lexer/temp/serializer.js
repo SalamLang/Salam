@@ -4,7 +4,7 @@ exports.stringify = stringify;
 function stringify(obj, wantsJson = true) {
     if (wantsJson) {
         // return JSON.stringify(obj, null, 0);
-        return JSON.stringify(obj, null, 4);
+        return JSON.stringify(obj, null, 2);
     }
     return obj;
 }

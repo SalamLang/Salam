@@ -29,13 +29,12 @@ export class TokenLocation {
     }
 
     stringify(wantsJson: boolean = true): string | object {
-        const obj = {
+        const obj: object = {
             index: this.index,
             length: this.length,
             start: { line: this.startLine, column: this.startColumn },
             end: { line: this.endLine, column: this.endColumn },
         };
-
         return stringify(obj, wantsJson);
     }
 }

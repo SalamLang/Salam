@@ -1,5 +1,5 @@
 export enum TokenKeywordType {
-    TOKEN_IDENTIFIER,
+    TOKEN_IDENTIFIER = 100,
     TOKEN_IF,
     TOKEN_ELSE,
     TOKEN_PRINT,
@@ -17,7 +17,7 @@ export enum TokenKeywordType {
 };
 
 export enum TokenValueType {
-    TOKEN_STRING,
+    TOKEN_STRING = 200,
     TOKEN_BOOLEAN,
     TOKEN_NUMBER_FLOAT,
     TOKEN_NUMBER_INT,
@@ -28,7 +28,7 @@ export enum TokenValueType {
 export enum TokenOperatorType {
     // TOKEN_BLOCK_BEGIN,
     // TOKEN_BLOCK_END,
-    TOKEN_NOT_EQUAL,
+    TOKEN_NOT_EQUAL = 300,
     TOKEN_EQUAL,
     TOKEN_AND_AND,
     TOKEN_OR_OR,
@@ -67,36 +67,12 @@ export enum TokenOperatorType {
     TOKEN_RANGE,
 };
 
-// const Animals = {
-//     ...Mammals,
-//     ...Reptiles
-// }
-// export type Animals = (typeof Animals)[keyof typeof Animals]
- 
-namespace TokenType {
-    const TOKEN_ERROR = 900;
-    const TOKEN_EOF = 901;
-
-    export const Combined = {
-        ...TokenKeywordType,
-        ...TokenValueType,
-        ...TokenOperatorType,
-
-        TOKEN_ERROR: TOKEN_ERROR,
-        TOKEN_EOF: TOKEN_EOF,
-    } as const;
-
-    export type CombinedType = keyof typeof Combined;
-    // export type CombinedType = typeof Combined[keyof typeof Combined];
+export enum TokenOtherType {
+    TOKEN_ERROR,
+    TOKEN_EOF,
 };
 
-export type TokenType = typeof TokenType.Combined[keyof typeof TokenType.Combined];
-export const TokenTypeCombined = TokenType.Combined;
-// export type TokenType = keyof typeof TokenTypeCombined;
-
-// export const TOKEN_BLOCK_BEGIN = [TokenKeywordType, TokenKeywordType.TOKEN_BLOCK_BEGIN];
-// export const TOKEN_BLOCK_BEGIN = [TokenType, MergedEnum.TOKEN_COLON];
-// export const TOKEN_BLOCK_END = [TokenKeywordType, TokenKeywordType.TOKEN_BLOCK_END];
+export type TokenType = TokenKeywordType | TokenValueType | TokenOperatorType | TokenOtherType;
 
 export const operatorTypeMaps: Record<string, TokenOperatorType> = {
     "!=": TokenOperatorType.TOKEN_NOT_EQUAL,

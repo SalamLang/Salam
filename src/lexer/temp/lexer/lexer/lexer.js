@@ -37,7 +37,7 @@ class Lexer {
     pushError(message) {
         console.error(`Error: ${message} at line ${this.line}, column ${this.column}.`);
         const tokenData = new data_1.TokenData(data_2.TokenDataType.TOKEN_DATA_TYPE_STRING, message);
-        const token = new token_1.Token(type_1.TokenTypeCombined.TOKEN_ERROR, this.getLocation(), tokenData);
+        const token = new token_1.Token(type_1.TokenOtherType.TOKEN_ERROR, this.getLocation(), tokenData);
         this.pushToken(token);
     }
     pushToken(token) {

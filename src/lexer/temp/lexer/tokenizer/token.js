@@ -13,7 +13,7 @@ class Token {
         this.keywordType = keywordType;
     }
     // get isKeyword(): boolean {
-    //     return this.type === TokenTypeCombined.TOKEN_KEYWORD;
+    //     return this.type === TokenKeywordType.TOKEN_IDENTIFIER;
     // }
     // get isIdentifier(): boolean {
     //     return this.isKeyword && this.keywordType === TokenKeywordType.TOKEN_KEYWORD_IDENTIFIER;
@@ -23,8 +23,8 @@ class Token {
     }
     stringify(wantsJson = true) {
         const obj = {
-            type: type_1.TokenTypeCombined.TOKEN_KEYWORD,
-            // TokenTypeCombined[this.type],
+            type: type_1.TokenKeywordType.TOKEN_IDENTIFIER,
+            // TokenType[this.type],
             location: this.location.stringify(false),
             data: this.data?.stringify(false) || undefined,
         };

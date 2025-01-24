@@ -24,7 +24,7 @@ function lexerLexIdentifier(lexer) {
             return;
         }
     }
-    const token = new token_1.Token(type_1.TokenTypeCombined.TOKEN_IDENTIFIER, lexer.getLocation(), data);
+    const token = new token_1.Token(type_1.TokenKeywordType.TOKEN_IDENTIFIER, lexer.getLocation(), data);
     lexer.pushToken(token);
 }
 ;

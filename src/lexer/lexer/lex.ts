@@ -4,7 +4,9 @@ import { lexerLexNumber } from './number';
 import { lexerLexIdentifier } from './identifier';
 import { isUtf8Alpha, isUtf8Number } from './utf8';
 import { operatorTypeMaps } from './../tokenizer/type';
+import { lexerLexReadComment } from './comment/single';
 import { lexerLexString, stringOpenings } from './string';
+import { lexerLexReadBlockComment } from './comment/multi';
 
 export function lex(lexer: Lexer): void {
     while (lexer.index < lexer.source.length) {
@@ -52,8 +54,15 @@ export function lex(lexer: Lexer): void {
 
             case '/':
             case '÷':
-                lexer.readDoubleToken(char);
-            break;
+                if (lexer.nextChar === '/') {
+                    lexerLexReadComment(lexer);
+                } else if (lexer.nextChar === '*') {
+                    lexerLexReadBlockComment(lexer);
+                } else {
+                    lexer.advance();
+                    lexer.pushToken(new Token(operatorTypeMaps[char], lexer.getLocation()));
+                }
+                break;
 
             case '&':
                 lexer.readDoubleToken(char);
@@ -85,13 +94,11 @@ export function lex(lexer: Lexer): void {
                     lexer.advance();
                     lexer.advance();
 
-                    const token = new Token(operatorTypeMaps[char + nextChar], lexer.getLocation());
-                    lexer.pushToken(token);
+                    lexer.pushToken(new Token(operatorTypeMaps[char + nextChar], lexer.getLocation()));
                 } else {
                     lexer.advance();
 
-                    const token = new Token(operatorTypeMaps[char], lexer.getLocation());
-                    lexer.pushToken(token);
+                    lexer.pushToken(new Token(operatorTypeMaps[char], lexer.getLocation()));
                 }
                 break;
 
@@ -122,8 +129,7 @@ export function lex(lexer: Lexer): void {
             case '?':
             case '!':
             case '⩵':
-                const token = new Token(operatorTypeMaps[char], lexer.getLocation());
-                lexer.pushToken(token);
+                lexer.pushToken(new Token(operatorTypeMaps[char], lexer.getLocation()));
                 lexer.advance();
                 break;
             

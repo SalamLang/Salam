@@ -1,3 +1,6 @@
+import { lang_flag } from './../language';
+import { hasExtraArguments } from './../error';
+import { LanguageMap } from './../language/language';
 import { languageMapsValues } from './../language/data'; 
 
 export function showAvailableLanguages(): void {

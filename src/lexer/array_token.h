@@ -28,17 +28,26 @@
 #include <stdlib.h> // EXIT_FAILURE
 
 #include "token.h" // token_t
+#include "../common/memory.h" // memory_destroy
 
-typedef struct {
+struct array_token_t;
+typedef struct array_token_t {
     token_t **tokens;  // Pointer to an array of token_t pointers
-    size_t size;       // Current number of tokens
+    size_t length;       // Current number of tokens
     size_t capacity;   // Current capacity of the array
+
+    void (*destroy)(struct array_token_t *array);
+    void (*print)(struct array_token_t *array);
+    void (*stringify)(struct array_token_t *array);
 } array_token_t;
 
-void array_token_init(array_token_t *array);
-void array_token_free(array_token_t *array);
-void array_token_add(array_token_t *array, token_t *token);
+void array_token_functions(array_token_t *array);
+array_token_t *array_token_init(size_t capacity);
+void array_token_destroy(array_token_t *array);
+void array_token_push(array_token_t *array, token_t *token);
 token_t *array_token_get(array_token_t *array, size_t index);
 void array_token_remove(array_token_t *array, size_t index);
+void array_token_print(array_token_t *array);
+void array_token_stringify(array_token_t *array);
 
 #endif

@@ -11,7 +11,7 @@ function main(args: string[]): number {
     }
 
     return processCommand(args, selectedLanguage);
-}
+};
 
 const args = process?.argv?.slice(2) || [];
 process.exit(main(args));

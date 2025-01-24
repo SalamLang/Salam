@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base.h"
 #include "log.h"
 
 #if !defined(__STDC_LIB_EXT1__)

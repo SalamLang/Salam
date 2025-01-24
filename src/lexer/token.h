@@ -26,13 +26,12 @@
 
 #include <stdlib.h> // free
 #include <stddef.h> // NULL
+#include <stdbool.h> // bool
 
+#include "location.h"
+#include "../common/string_buffer.h" // string_strdup
+#include "../common/memory.h" // memory_destroy
 #include "../common/base.h" // DEBUG_ME
-
-typedef struct {
-    char *type;  // Token type (e.g., keyword, identifier, etc.)
-    char *value; // Token value (e.g., "if", "x", etc.)
-} token_t;
 
 typedef enum {
     LANGUAGE_PERSIAN,
@@ -40,6 +39,14 @@ typedef enum {
 } language_t;
 
 typedef enum {
+    // Values
+    TOKEN_STRING,
+    TOKEN_IDENTIFIER,
+    TOKEN_BOOLEAN,
+    TOKEN_NUMBER_FLOAT,
+    TOKEN_NUMBER_INT,
+
+    // Words
     TOKEN_IF,
     TOKEN_ELSE,
     TOKEN_PRINT,
@@ -54,10 +61,65 @@ typedef enum {
     TOKEN_LAYOUT,
     TOKEN_BLOCK_BEGIN,
     TOKEN_BLOCK_END,
-
+    // Operators
+    TOKEN_NOT_EQUAL,
+    TOKEN_EQUAL,
+    TOKEN_AND_AND,
+    TOKEN_OR_OR,
+    TOKEN_LESS_EQUAL,
+    TOKEN_GREATER_EQUAL,
+    TOKEN_INCREMENT,
+    TOKEN_DECREMENT,
+    TOKEN_SHIFT_LEFT,
+    TOKEN_SHIFT_RIGHT,
+    TOKEN_SHIFT_RIGHT_ASSIGN,
+    TOKEN_SHIFT_LEFT_ASSIGN,
+    TOKEN_LEFT_BRACE,
+    TOKEN_RIGHT_BRACE,
+    TOKEN_LEFT_BRACKET,
+    TOKEN_RIGHT_BRACKET,
+    TOKEN_COLON,
+    TOKEN_COMMA,
+    TOKEN_LEFT_PAREN,
+    TOKEN_RIGHT_PAREN,
+    TOKEN_PLUS,
+    TOKEN_MINUS,
+    TOKEN_MULTIPLY,
+    TOKEN_DIVIDE,
+    TOKEN_MOD,
+    TOKEN_POWER,
+    TOKEN_ASSIGN,
+    TOKEN_LESS,
+    TOKEN_GREATER,
+    TOKEN_NOT,
+    TOKEN_AND_BIT,
+    TOKEN_OR_BIT,
+    TOKEN_XOR_BIT,
+    // Others
     TOKEN_ERROR,
     TOKEN_EOF,
 } token_type_t;
+
+struct token_t;
+
+typedef struct token_t {
+    token_type_t type;
+    location_t location;
+
+    token_type_t data_type;
+    union {
+        int number_int;
+        float number_float;
+        char *string;
+        bool boolean;
+    } data;
+
+    void (*print)(struct token_t *);
+    void (*destroy)(struct token_t *);
+    char *(*name)(token_type_t);
+    char *(*stringify)(struct token_t *);
+    char *(*value_stringify)(struct token_t *);
+} token_t;
 
 typedef struct {
     token_type_t type;
@@ -69,6 +131,14 @@ typedef struct {
     token_keyword_t *keywords;
 } language_map_t;
 
-void free_token(token_t *token);
+extern token_keyword_t keywords[];
+extern token_keyword_t en_keywords[];
+extern token_keyword_t fa_keywords[];
+extern language_map_t language_maps[];
+
+void token_destroy(token_t *token);
+void token_print(token_t *token);
+char *token_stringify(token_t *token);
+
 
 #endif

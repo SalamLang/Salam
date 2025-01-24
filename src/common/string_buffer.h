@@ -344,6 +344,18 @@ uint32_t utf8_decode(const char *source, size_t *index);
 
 /**
  *
+ * @function utf8_char_length
+ * @brief Get the UTF-8 character and return the length
+ * @params {char*} source - Source code
+ * @params {size_t*} index - Index of the current character in source string
+ * @params {size_t*} num_bytes - Number of bytes
+ * @returns {int}
+ *
+ */
+char *char_utf8_decode(char *source, size_t *index, size_t *num_bytes);
+
+/**
+ *
  * @function is_wchar_alpha
  * @brief Check if a wide character is alphabetic
  * @params {uint32_t} codepoint - Wide character

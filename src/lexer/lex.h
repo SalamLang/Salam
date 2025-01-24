@@ -24,8 +24,10 @@
 #ifndef _LEXER_LEX_H_
 #define _LEXER_LEX_H_
 
+#include "token.h"
+#include "lexer.h"
 #include "array_token.h"
 
-array_token_t* lex(char *input);
+void lex(lexer_t *lexer);
 
 #endif

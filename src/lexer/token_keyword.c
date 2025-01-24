@@ -2,43 +2,43 @@
 
 token_keyword_t keywords[] = {
     // Comparison Operators
-    {TOKEN_EQUAL, "=="},
-    {TOKEN_NOT_EQUAL, "!="},
-    {TOKEN_LESS, "<"},
-    {TOKEN_GREATER, ">"},
-    {TOKEN_LESS_EQUAL, "<="},
-    {TOKEN_GREATER_EQUAL, ">="},
+    // {TOKEN_EQUAL, "=="},
+    // {TOKEN_NOT_EQUAL, "!="},
+    // {TOKEN_LESS, "<"},
+    // {TOKEN_GREATER, ">"},
+    // {TOKEN_LESS_EQUAL, "<="},
+    // {TOKEN_GREATER_EQUAL, ">="},
     
     // Logical Operators
-    {TOKEN_AND_AND, "&&"},
-    {TOKEN_OR_OR, "||"},
-    {TOKEN_NOT, "!"},
+    // {TOKEN_AND_AND, "&&"},
+    // {TOKEN_OR_OR, "||"},
+    // {TOKEN_NOT, "!"},
     
     // Bitwise Operators
-    {TOKEN_AND_BIT, "&"},
-    {TOKEN_OR_BIT, "|"},
-    {TOKEN_XOR_BIT, "^"},
-    {TOKEN_SHIFT_LEFT, "<<"},
-    {TOKEN_SHIFT_RIGHT, ">>"},
+    // {TOKEN_AND_BIT, "&"},
+    // {TOKEN_OR_BIT, "|"},
+    // {TOKEN_XOR_BIT, "^"},
+    // {TOKEN_SHIFT_LEFT, "<<"},
+    // {TOKEN_SHIFT_RIGHT, ">>"},
     
     // Assignment Operators
-    {TOKEN_ASSIGN, "="},
-    {TOKEN_SHIFT_LEFT_ASSIGN, "<<="},
-    {TOKEN_SHIFT_RIGHT_ASSIGN, ">>="},
+    // {TOKEN_ASSIGN, "="},
+    // {TOKEN_SHIFT_LEFT_ASSIGN, "<<="},
+    // {TOKEN_SHIFT_RIGHT_ASSIGN, ">>="},
     
     // Parentheses and Braces
-    {TOKEN_LEFT_PAREN, "("},
-    {TOKEN_RIGHT_PAREN, ")"},
-    {TOKEN_LEFT_BRACE, "{"},
-    {TOKEN_RIGHT_BRACE, "}"},
-    {TOKEN_LEFT_BRACKET, "["},
-    {TOKEN_RIGHT_BRACKET, "]"},
+    // {TOKEN_LEFT_PAREN, "("},
+    // {TOKEN_RIGHT_PAREN, ")"},
+    // {TOKEN_LEFT_BRACE, "{"},
+    // {TOKEN_RIGHT_BRACE, "}"},
+    // {TOKEN_LEFT_BRACKET, "["},
+    // {TOKEN_RIGHT_BRACKET, "]"},
     
     // Other Symbols
-    {TOKEN_COMMA, ","},
-    {TOKEN_COLON, ":"},
+    // {TOKEN_COMMA, ","},
+    // {TOKEN_COLON, ":"},
 
-    {TOKEN_BLOCK_BEGIN, ":"},
+    // {TOKEN_BLOCK_BEGIN, ":"},
     {TOKEN_EOF, NULL},
 };
 

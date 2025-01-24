@@ -9,22 +9,21 @@ class Token {
         this.location = location;
         this.data = data;
     }
-    setKeywordType(keywordType) {
-        this.keywordType = keywordType;
+    get isKeyword() {
+        return this.type in type_1.TokenKeywordType;
     }
-    // get isKeyword(): boolean {
-    //     return this.type === TokenKeywordType.TOKEN_IDENTIFIER;
-    // }
-    // get isIdentifier(): boolean {
-    //     return this.isKeyword && this.keywordType === TokenKeywordType.TOKEN_KEYWORD_IDENTIFIER;
-    // }
+    get isIdentifier() {
+        return this.isKeyword && this.type === type_1.TokenKeywordType.TOKEN_IDENTIFIER;
+    }
+    get isDefinedIdentifier() {
+        return this.isKeyword && this.type !== type_1.TokenKeywordType.TOKEN_IDENTIFIER;
+    }
     print() {
         console.log(this.stringify());
     }
     stringify(wantsJson = true) {
         const obj = {
-            type: type_1.TokenKeywordType.TOKEN_IDENTIFIER,
-            // TokenType[this.type],
+            type: type_1.TokenTypeCombined[this.type],
             location: this.location.stringify(false),
             data: this.data?.stringify(false) || undefined,
         };

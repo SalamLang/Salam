@@ -107,8 +107,6 @@ class Lexer {
             this.pushToken(token);
         }
     }
-    lex() {
-    }
     print() {
         console.log(this.stringify());
     }

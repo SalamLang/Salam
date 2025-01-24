@@ -26,8 +26,6 @@ export enum TokenValueType {
 };
 
 export enum TokenOperatorType {
-    // TOKEN_BLOCK_BEGIN,
-    // TOKEN_BLOCK_END,
     TOKEN_NOT_EQUAL = 300,
     TOKEN_EQUAL,
     TOKEN_AND_AND,
@@ -65,16 +63,25 @@ export enum TokenOperatorType {
     TOKEN_XOR_BIT,
     TOKEN_MEMBER,
     TOKEN_RANGE,
+    // TOKEN_BLOCK_BEGIN,
+    // TOKEN_BLOCK_END,
 };
 
 export enum TokenOtherType {
-    TOKEN_ERROR,
+    TOKEN_ERROR = 400,
     TOKEN_EOF,
 };
 
+export const TokenTypeCombined = {
+    ...TokenKeywordType,
+    ...TokenValueType,
+    ...TokenOperatorType,
+    ...TokenOtherType,
+} as const;
+
 export type TokenType = TokenKeywordType | TokenValueType | TokenOperatorType | TokenOtherType;
 
-export const operatorTypeMaps: Record<string, TokenOperatorType> = {
+export const operatorTypeMaps: Record<string, TokenType> = {
     "!=": TokenOperatorType.TOKEN_NOT_EQUAL,
     "==": TokenOperatorType.TOKEN_EQUAL,
     "===": TokenOperatorType.TOKEN_EQUAL,

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.operatorTypeMaps = exports.TokenOtherType = exports.TokenOperatorType = exports.TokenValueType = exports.TokenKeywordType = void 0;
+exports.operatorTypeMaps = exports.TokenTypeCombined = exports.TokenOtherType = exports.TokenOperatorType = exports.TokenValueType = exports.TokenKeywordType = void 0;
 var TokenKeywordType;
 (function (TokenKeywordType) {
     TokenKeywordType[TokenKeywordType["TOKEN_IDENTIFIER"] = 100] = "TOKEN_IDENTIFIER";
@@ -32,8 +32,6 @@ var TokenValueType;
 ;
 var TokenOperatorType;
 (function (TokenOperatorType) {
-    // TOKEN_BLOCK_BEGIN,
-    // TOKEN_BLOCK_END,
     TokenOperatorType[TokenOperatorType["TOKEN_NOT_EQUAL"] = 300] = "TOKEN_NOT_EQUAL";
     TokenOperatorType[TokenOperatorType["TOKEN_EQUAL"] = 301] = "TOKEN_EQUAL";
     TokenOperatorType[TokenOperatorType["TOKEN_AND_AND"] = 302] = "TOKEN_AND_AND";
@@ -71,14 +69,22 @@ var TokenOperatorType;
     TokenOperatorType[TokenOperatorType["TOKEN_XOR_BIT"] = 334] = "TOKEN_XOR_BIT";
     TokenOperatorType[TokenOperatorType["TOKEN_MEMBER"] = 335] = "TOKEN_MEMBER";
     TokenOperatorType[TokenOperatorType["TOKEN_RANGE"] = 336] = "TOKEN_RANGE";
+    // TOKEN_BLOCK_BEGIN,
+    // TOKEN_BLOCK_END,
 })(TokenOperatorType || (exports.TokenOperatorType = TokenOperatorType = {}));
 ;
 var TokenOtherType;
 (function (TokenOtherType) {
-    TokenOtherType[TokenOtherType["TOKEN_ERROR"] = 0] = "TOKEN_ERROR";
-    TokenOtherType[TokenOtherType["TOKEN_EOF"] = 1] = "TOKEN_EOF";
+    TokenOtherType[TokenOtherType["TOKEN_ERROR"] = 400] = "TOKEN_ERROR";
+    TokenOtherType[TokenOtherType["TOKEN_EOF"] = 401] = "TOKEN_EOF";
 })(TokenOtherType || (exports.TokenOtherType = TokenOtherType = {}));
 ;
+exports.TokenTypeCombined = {
+    ...TokenKeywordType,
+    ...TokenValueType,
+    ...TokenOperatorType,
+    ...TokenOtherType,
+};
 exports.operatorTypeMaps = {
     "!=": TokenOperatorType.TOKEN_NOT_EQUAL,
     "==": TokenOperatorType.TOKEN_EQUAL,

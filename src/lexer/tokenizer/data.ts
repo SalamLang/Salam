@@ -53,11 +53,10 @@ export class TokenData {
     }
 
     stringify(wantsJson: boolean = true): string | object {
-        const obj = {
+        const obj: object = {
             type: TokenDataType[this.type],
             value: this.getValue(),
         };
-
         return stringify(obj, wantsJson);
     }
 };

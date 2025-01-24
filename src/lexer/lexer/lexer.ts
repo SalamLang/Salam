@@ -14,14 +14,18 @@ export class Lexer {
     column: number;
     tokens: Token[];
     language: LanguageMap;
+    fileName: string | undefined;
+    absoluteDirPath: string | undefined;
 
-    constructor(source: string, selectedLanguage: LanguageMap) {
+    constructor(source: string, selectedLanguage: LanguageMap, fileName: string | undefined, absoluteDirPath: string | undefined) {
         this.source = source;
         this.index = 0;
         this.line = 1;
         this.column = 0;
         this.tokens = [];
         this.language = selectedLanguage;
+        this.fileName = fileName;
+        this.absoluteDirPath = absoluteDirPath;
     }
 
     get currentChar(): string {
@@ -139,7 +143,7 @@ export class Lexer {
     }
 
     stringify(): string | object {
-        const jsonArray = this.tokens.map(token => token.stringify(false));
+        const jsonArray: object = this.tokens.map(token => token.stringify(false));
         return stringify(jsonArray, true);
     }
 }

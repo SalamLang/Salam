@@ -29,6 +29,8 @@
 #include <string.h>
 
 #include "lexer.h"
+#include "language.h"
+#include "token_keyword.h"
 #include "token.h"
 #include "lex.h"
 #include "../common/base.h"

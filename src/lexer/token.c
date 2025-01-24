@@ -23,7 +23,8 @@
 
 #include "token.h"
 
-#include "config.h"
+#include "token_keyword.h"
+#include "language.h"
 
 /**
  *

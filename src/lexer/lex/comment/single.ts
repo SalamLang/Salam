@@ -1,4 +1,4 @@
-import { Lexer } from "./../lexer";
+import { Lexer } from "../lexer";
 
 export function lexerLexReadComment(lexer: Lexer) {
     lexer.advance(); // Skip the first '/'

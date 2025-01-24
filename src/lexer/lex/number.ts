@@ -1,8 +1,8 @@
 import { Lexer } from "./lexer";
-import { Token } from "./../tokenizer/token";
-import { TokenValueType } from "./../tokenizer/type";
+import { Token } from "../tokenizer/token";
+import { TokenValueType } from "../tokenizer/type";
 import { isUtf8Number, toEnglishDigit } from './utf8';
-import { TokenData, TokenDataType } from "./../tokenizer/data";
+import { TokenData, TokenDataType } from "../tokenizer/data";
 
 export function lexerLexNumber(lexer: Lexer) {
     let value = '';

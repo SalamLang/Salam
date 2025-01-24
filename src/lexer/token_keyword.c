@@ -1,7 +1,4 @@
-#ifndef _LEXER_CONFIG_H_
-#define _LEXER_CONFIG_H_
-
-#include "token.h"
+#include "token_keyword.h"
 
 token_keyword_t keywords[] = {
     // Comparison Operators
@@ -72,12 +69,3 @@ token_keyword_t fa_keywords[] = {
     {TOKEN_BLOCK_END, "پایان"},
     {TOKEN_EOF, NULL},
 };
-
-language_map_t language_maps[] = {
-    // First is default language
-    {LANGUAGE_ENGLISH, en_keywords},
-    {LANGUAGE_PERSIAN, fa_keywords},
-    {-1, NULL},
-};
-
-#endif

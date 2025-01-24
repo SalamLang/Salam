@@ -39,7 +39,6 @@ typedef struct {
     token_keyword_t *keywords;
 } language_map_t;
 
-extern token_keyword_t keywords[];
 extern token_keyword_t en_keywords[];
 extern token_keyword_t fa_keywords[];
 extern language_map_t language_maps[];

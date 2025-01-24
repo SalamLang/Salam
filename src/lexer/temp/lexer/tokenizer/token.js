@@ -12,21 +12,21 @@ class Token {
     setKeywordType(keywordType) {
         this.keywordType = keywordType;
     }
-    get isKeyword() {
-        return this.type === type_1.TokenType.TOKEN_KEYWORD;
-    }
-    get isIdentifier() {
-        return this.isKeyword && this.keywordType === type_1.TokenKeywordType.TOKEN_KEYWORD_IDENTIFIER;
-    }
+    // get isKeyword(): boolean {
+    //     return this.type === TokenTypeCombined.TOKEN_KEYWORD;
+    // }
+    // get isIdentifier(): boolean {
+    //     return this.isKeyword && this.keywordType === TokenKeywordType.TOKEN_KEYWORD_IDENTIFIER;
+    // }
     print() {
         console.log(this.stringify());
     }
     stringify(wantsJson = true) {
         const obj = {
-            type: type_1.TokenType[this.type],
+            type: type_1.TokenTypeCombined.TOKEN_KEYWORD,
+            // TokenTypeCombined[this.type],
             location: this.location.stringify(false),
             data: this.data?.stringify(false) || undefined,
-            keywordType: this.keywordType !== undefined ? type_1.TokenKeywordType[this.keywordType] : undefined
         };
         return (0, serializer_1.stringify)(obj, wantsJson);
     }

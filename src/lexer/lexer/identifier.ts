@@ -1,7 +1,7 @@
 import { Lexer } from "./lexer";
 import { isUtf8Alpha } from './utf8';
 import { Token } from "./../tokenizer/token";
-import { TokenType } from "./../tokenizer/type";
+import { TokenTypeCombined } from "./../tokenizer/type";
 import { TokenData, TokenDataType } from "./../tokenizer/data";
 import { keywordMapsValues } from './../tokenizer/keyword';
 
@@ -28,6 +28,6 @@ export function lexerLexIdentifier(lexer: Lexer) {
         }
     }
 
-    const token: Token = new Token(TokenType.TOKEN_IDENTIFIER, lexer.getLocation(), data);
+    const token: Token = new Token(TokenTypeCombined.TOKEN_IDENTIFIER, lexer.getLocation(), data);
     lexer.pushToken(token);
 };

@@ -7,95 +7,95 @@ export interface KeywordMap {
 };
 
 export const keywordMaps: Record<TokenKeywordType, KeywordMap> = {
-    [TokenKeywordType.TOKEN_KEYWORD_IDENTIFIER]: {
-        id: TokenKeywordType.TOKEN_KEYWORD_IDENTIFIER,
+    [TokenKeywordType.TOKEN_IDENTIFIER]: {
+        id: TokenKeywordType.TOKEN_IDENTIFIER,
     },
-    [TokenKeywordType.TOKEN_KEYWORD_IF]: {
-        id: TokenKeywordType.TOKEN_KEYWORD_IF,
+    [TokenKeywordType.TOKEN_IF]: {
+        id: TokenKeywordType.TOKEN_IF,
         data: {
             [LanguageID.LANGUAGE_ENGLISH]: ["if"],
             [LanguageID.LANGUAGE_PERSIAN]: ["اگر"],
         },
     },
-    [TokenKeywordType.TOKEN_KEYWORD_ELSE]: {
-        id: TokenKeywordType.TOKEN_KEYWORD_ELSE,
+    [TokenKeywordType.TOKEN_ELSE]: {
+        id: TokenKeywordType.TOKEN_ELSE,
         data: {
             [LanguageID.LANGUAGE_ENGLISH]: ["else"],
             [LanguageID.LANGUAGE_PERSIAN]: ["وگرنه"],
         },
     },
-    [TokenKeywordType.TOKEN_KEYWORD_PRINT]: {
-        id: TokenKeywordType.TOKEN_KEYWORD_PRINT,
+    [TokenKeywordType.TOKEN_PRINT]: {
+        id: TokenKeywordType.TOKEN_PRINT,
         data: {
             [LanguageID.LANGUAGE_ENGLISH]: ["print"],
             [LanguageID.LANGUAGE_PERSIAN]: ["چاپ"],
         },
     },
-    [TokenKeywordType.TOKEN_KEYWORD_FN]: {
-        id: TokenKeywordType.TOKEN_KEYWORD_FN,
+    [TokenKeywordType.TOKEN_FN]: {
+        id: TokenKeywordType.TOKEN_FN,
         data: {
             [LanguageID.LANGUAGE_ENGLISH]: ["fn"],
             [LanguageID.LANGUAGE_PERSIAN]: ["تابع"],
         },
     },
-    [TokenKeywordType.TOKEN_KEYWORD_FOR]: {
-        id: TokenKeywordType.TOKEN_KEYWORD_FOR,
+    [TokenKeywordType.TOKEN_FOR]: {
+        id: TokenKeywordType.TOKEN_FOR,
         data: {
             [LanguageID.LANGUAGE_ENGLISH]: ["for"],
             [LanguageID.LANGUAGE_PERSIAN]: ["برای"],
         },
     },
-    [TokenKeywordType.TOKEN_KEYWORD_WHILE]: {
-        id: TokenKeywordType.TOKEN_KEYWORD_WHILE,
+    [TokenKeywordType.TOKEN_WHILE]: {
+        id: TokenKeywordType.TOKEN_WHILE,
         data: {
             [LanguageID.LANGUAGE_ENGLISH]: ["while"],
             [LanguageID.LANGUAGE_PERSIAN]: ["تا"],
         },
     },
-    [TokenKeywordType.TOKEN_KEYWORD_REPEAT]: {
-        id: TokenKeywordType.TOKEN_KEYWORD_REPEAT,
+    [TokenKeywordType.TOKEN_REPEAT]: {
+        id: TokenKeywordType.TOKEN_REPEAT,
         data: {
             [LanguageID.LANGUAGE_ENGLISH]: ["repeat"],
             [LanguageID.LANGUAGE_PERSIAN]: ["تکرار"],
         },
     },
-    [TokenKeywordType.TOKEN_KEYWORD_DO]: {
-        id: TokenKeywordType.TOKEN_KEYWORD_DO,
+    [TokenKeywordType.TOKEN_DO]: {
+        id: TokenKeywordType.TOKEN_DO,
         data: {
             [LanguageID.LANGUAGE_ENGLISH]: ["do"],
             [LanguageID.LANGUAGE_PERSIAN]: ["انجام"],
         },
     },
-    [TokenKeywordType.TOKEN_KEYWORD_RET]: {
-        id: TokenKeywordType.TOKEN_KEYWORD_RET,
+    [TokenKeywordType.TOKEN_RET]: {
+        id: TokenKeywordType.TOKEN_RET,
         data: {
             [LanguageID.LANGUAGE_ENGLISH]: ["ret"],
             [LanguageID.LANGUAGE_PERSIAN]: ["برگشت"],
         },
     },
-    [TokenKeywordType.TOKEN_KEYWORD_BREAK]: {
-        id: TokenKeywordType.TOKEN_KEYWORD_BREAK,
+    [TokenKeywordType.TOKEN_BREAK]: {
+        id: TokenKeywordType.TOKEN_BREAK,
         data: {
             [LanguageID.LANGUAGE_ENGLISH]: ["break"],
             [LanguageID.LANGUAGE_PERSIAN]: ["شکست"],
         },
     },
-    [TokenKeywordType.TOKEN_KEYWORD_CONTINUE]: {
-        id: TokenKeywordType.TOKEN_KEYWORD_CONTINUE,
+    [TokenKeywordType.TOKEN_CONTINUE]: {
+        id: TokenKeywordType.TOKEN_CONTINUE,
         data: {
             [LanguageID.LANGUAGE_ENGLISH]: ["continue"],
             [LanguageID.LANGUAGE_PERSIAN]: ["ادامه"],
         },
     },
-    [TokenKeywordType.TOKEN_KEYWORD_LAYOUT]: {
-        id: TokenKeywordType.TOKEN_KEYWORD_LAYOUT,
+    [TokenKeywordType.TOKEN_LAYOUT]: {
+        id: TokenKeywordType.TOKEN_LAYOUT,
         data: {
             [LanguageID.LANGUAGE_ENGLISH]: ["layout"],
             [LanguageID.LANGUAGE_PERSIAN]: ["صفحه"],
         },
     },
-    [TokenKeywordType.TOKEN_KEYWORD_BLOCK_END]: {
-        id: TokenKeywordType.TOKEN_KEYWORD_BLOCK_END,
+    [TokenKeywordType.TOKEN_BLOCK_END]: {
+        id: TokenKeywordType.TOKEN_BLOCK_END,
         data: {
             [LanguageID.LANGUAGE_ENGLISH]: ["end"],
             [LanguageID.LANGUAGE_PERSIAN]: ["تمام"],

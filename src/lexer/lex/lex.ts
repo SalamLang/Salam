@@ -1,13 +1,13 @@
-import { Token } from "./../tokenizer/token";
+import { Token } from "../tokenizer/token";
 import { Lexer } from "./lexer";
 import { lexerLexNumber } from './number';
 import { lexerLexIdentifier } from './identifier';
 import { isUtf8Alpha, isUtf8Number } from './utf8';
-import { operatorTypeMaps } from './../tokenizer/type';
+import { operatorTypeMaps } from '../tokenizer/type';
 import { lexerLexReadComment } from './comment/single';
 import { lexerLexString, stringOpenings } from './string';
 import { lexerLexReadBlockComment } from './comment/multi';
-import { TokenOtherType } from './../tokenizer/type';
+import { TokenOtherType } from '../tokenizer/type';
 
 export function lex(lexer: Lexer): void {
     while (lexer.index < lexer.source.length) {

@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.Lexer = void 0;
 const token_1 = require("./../tokenizer/token");
 const data_1 = require("./../tokenizer/data");
+const data_2 = require("./../tokenizer/data");
 const number_1 = require("./number");
 const identifier_1 = require("./identifier");
 const string_1 = require("./string");
@@ -39,7 +40,7 @@ class Lexer {
     }
     pushError(message) {
         console.error(`Error: ${message} at line ${this.line}, column ${this.column}.`);
-        const tokenData = new data_1.TokenData(TokenDataType.TOKEN_DATA_TYPE_STRING, message);
+        const tokenData = new data_1.TokenData(data_2.TokenDataType.TOKEN_DATA_TYPE_STRING, message);
         const token = new token_1.Token(type_2.TokenType.TOKEN_ERROR, this.getLocation(), tokenData);
         this.pushToken(token);
     }

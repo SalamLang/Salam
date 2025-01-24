@@ -5,12 +5,12 @@ import { TokenData } from './data';
 export class Token {
     type: TokenType;
     location: TokenLocation;
-    data: TokenData;
+    data: TokenData | undefined;
 
     constructor(
         type: TokenType,
         location: TokenLocation,
-        data: TokenData
+        data: TokenData | undefined = undefined
     ) {
         this.type = type;
         this.location = location;
@@ -20,7 +20,12 @@ export class Token {
     print(): void {
         console.log(this.stringify());
     }
+
     stringify(): string {
-        return `Type: ${TokenType[this.type]}, ${this.location.stringify()}, Data: ${this.data.stringify()}`;
+        return JSON.stringify({
+            type: TokenType[this.type],
+            location: this.location.stringify(),
+            data: this.data?.stringify() || undefined,
+        });
     }
 };

@@ -1,5 +1,5 @@
-#ifndef _LEXER_KEYWORD_H_
-#define _LEXER_KEYWORD_H_
+#ifndef _LEXER_TOKEN_KEYWORD_H_
+#define _LEXER_TOKEN_KEYWORD_H_
 
 #include "token.h"
 

@@ -15,7 +15,7 @@ void print_version() {
     printf("Version: %s\n", SALAM_VERSION);
 }
 
-int run_code(const char *source, char *filepath, language_map_t selected_language) {
+int run_code(const char *source, const char *filepath, language_map_t selected_language) {
     DEBUG_ME;
     lexer_t* lexer = lexer_create(filepath, source, selected_language);
 

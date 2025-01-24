@@ -2,6 +2,7 @@
 #define _LEXER_LEXER_H_
 
 #include "token.h"
+#include "language.h"
 #include "array_token.h"
 
 #include "../common/base.h"

@@ -40,9 +40,9 @@ export class Token {
             type: TokenType[this.type],
             location: this.location.stringify(false),
             data: this.data?.stringify(false) || undefined,
-            keywordType: this.isKeyword ? TokenKeywordType[this.keywordType] : undefined
+            keywordType: this.keywordType !== undefined ? TokenKeywordType[this.keywordType] : undefined
         };
-
+    
         return stringify(obj, wantsJson);
     }
 };

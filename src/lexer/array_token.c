@@ -23,27 +23,42 @@
 
 #include "array_token.h"
 
-void array_token_init(array_token_t *array) {
-    DEBUG_ME;
-    array->tokens = NULL;
-    array->size = 0;
-    array->capacity = 0;
+void array_token_functions(array_token_t *array) {
+    array->destroy = array_token_destroy;
+    array->print = array_token_print;
+    array->stringify = array_token_stringify;
 }
 
-void array_token_free(array_token_t *array) {
+array_token_t *array_token_init(size_t capacity) {
     DEBUG_ME;
-    for (size_t i = 0; i < array->size; ++i) {
-        free_token(array->tokens[i]);
+    if (capacity < 0) {
+        fprintf(stderr, "Error: Capacity must be 0 or more.\n");
+        exit(EXIT_FAILURE);
     }
-    free(array->tokens);
+    array_token_t *array = memory_allocate(sizeof(array_token_t) * 1);
+    array->tokens = memory_allocate(sizeof(token_t*) * (capacity + 1));
+    array->length = 0;
+    array->capacity = capacity;
+
+    array_token_functions(array);
+
+    return array;    
+}
+
+void array_token_destroy(array_token_t *array) {
+    DEBUG_ME;
+    for (size_t i = 0; i < array->length; ++i) {
+        token_destroy(array->tokens[i]);
+    }
+    memory_destroy(array->tokens);
     array->tokens = NULL;
-    array->size = 0;
+    array->length = 0;
     array->capacity = 0;
 }
 
-static void resize_array_if_needed(array_token_t *array) {
+void resize_array_if_needed(array_token_t *array) {
     DEBUG_ME;
-    if (array->size < array->capacity) return;
+    if (array->length < array->capacity) return;
 
     size_t new_capacity = (array->capacity == 0) ? 4 : array->capacity * 2;
     token_t **new_tokens = realloc(array->tokens, new_capacity * sizeof(token_t *));
@@ -55,42 +70,58 @@ static void resize_array_if_needed(array_token_t *array) {
     array->capacity = new_capacity;
 }
 
-void array_token_add(array_token_t *array, token_t *token) {
+void array_token_push(array_token_t *array, token_t *token) {
     DEBUG_ME;
     resize_array_if_needed(array);
-    array->tokens[array->size++] = token;
+    array->tokens[array->length++] = token;
 }
 
 token_t *array_token_get(array_token_t *array, size_t index) {
     DEBUG_ME;
-    if (index >= array->size) {
+    if (index >= array->length) {
         fprintf(stderr, "Error: Index out of bounds.\n");
         exit(EXIT_FAILURE);
     }
     return array->tokens[index];
 }
 
-static void shift_tokens_left(array_token_t *array, size_t index) {
+void shift_tokens_left(array_token_t *array, size_t index) {
     DEBUG_ME;
-    for (size_t i = index; i < array->size - 1; ++i) {
+    for (size_t i = index; i < array->length - 1; ++i) {
         array->tokens[i] = array->tokens[i + 1];
     }
 }
 
 void array_token_remove(array_token_t *array, size_t index) {
     DEBUG_ME;
-    if (index >= array->size) {
+    if (index >= array->length) {
         fprintf(stderr, "Error: Index out of bounds.\n");
         exit(EXIT_FAILURE);
     }
 
-    free_token(array->tokens[index]);
+    token_destroy(array->tokens[index]);
     shift_tokens_left(array, index);
-    array->size--;
+    array->length--;
 
-    if (array->size == 0) {
-        free(array->tokens);
+    if (array->length == 0) {
+        memory_destroy(array->tokens);
         array->tokens = NULL;
         array->capacity = 0;
+    }
+}
+
+void array_token_print(array_token_t *array) {
+    DEBUG_ME;
+    for (size_t i = 0; i < array->length; ++i) {
+        token_print(array->tokens[i]);
+    }
+}
+
+void array_token_stringify(array_token_t *array) {
+    DEBUG_ME;
+    for (size_t i = 0; i < array->length; ++i) {
+        char *str = token_stringify(array->tokens[i]);
+        printf("%s ", str);
+        memory_destroy(str);
     }
 }

@@ -41,17 +41,12 @@ token_t *token_create(token_type_t type, location_t location) {
     token->type = type;
     token->location = location;
     token->data_type = TOKEN_ERROR;
-    token->name = token_name;
     token->value_stringify = token_value_stringify;
     token->print = token_print;
     token->stringify = token_stringify;
     token->destroy = token_destroy;
 
     return token;
-}
-
-char *token_name(token_t *token) {
-    return "soon";
 }
 
 /**

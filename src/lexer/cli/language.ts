@@ -1,5 +1,5 @@
-import { LanguageMap } from './language/language';
 import { languageMaps } from './language/data'; 
+import { LanguageMap } from './language/language';
 import { getLanguageIDByFlag } from './language/utils';
 import { showAvailableLanguages } from './command/help';
 

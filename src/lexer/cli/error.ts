@@ -1,3 +1,6 @@
+import { lang_flag } from './language';
+import { showUsage } from './command/help';
+
 export function handleMissingArguments(): number {
     console.error("Error: Missing arguments. Please provide at least one argument.");
     showUsage();

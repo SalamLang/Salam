@@ -8,8 +8,6 @@
 #include "../common/base.h"
 #include "../common/file.h"
 
-// typedef struct lexer_t lexer_t;
-
 typedef struct lexer_t {
     const char *file_path; // NULL if source is REPL
     char *source;

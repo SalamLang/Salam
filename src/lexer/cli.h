@@ -21,9 +21,29 @@
  * ---------------------------------------------------------------------------
  */
 
-#ifndef _LEXER_LEXER_H
-#define _LEXER_LEXER_H
+#ifndef _LEXER_CLI_H_
+#define _LEXER_CLI_H_
 
-#include "cli.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "lexer.h"
+#include "language.h"
+#include "token_keyword.h"
+#include "token.h"
+#include "lex.h"
+#include "../common/base.h"
+#include "../common/file.h"
+
+void print_help();
+void print_version();
+int run_code(const char *source, const char *filepath, language_map_t selected_language);
+int handle_file_command(const char *filename, language_map_t selected_language);
+int handle_code_command(const char *content, language_map_t selected_language);
+int handle_missing_arguments();
+int handle_missing_language_value();
+int process_language_flag(int argc, char **argv, language_map_t *selected_language);
+int process_command(int argc, char **argv, language_map_t selected_language);
 
 #endif

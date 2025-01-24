@@ -57,18 +57,18 @@ var TokenOperatorType;
     TokenOperatorType[TokenOperatorType["TOKEN_MINUS"] = 322] = "TOKEN_MINUS";
     TokenOperatorType[TokenOperatorType["TOKEN_MULTIPLY"] = 323] = "TOKEN_MULTIPLY";
     TokenOperatorType[TokenOperatorType["TOKEN_DIVIDE"] = 324] = "TOKEN_DIVIDE";
-    TokenOperatorType[TokenOperatorType["TOKEN_DIVIDE_INT"] = 325] = "TOKEN_DIVIDE_INT";
-    TokenOperatorType[TokenOperatorType["TOKEN_MOD"] = 326] = "TOKEN_MOD";
-    TokenOperatorType[TokenOperatorType["TOKEN_POWER"] = 327] = "TOKEN_POWER";
-    TokenOperatorType[TokenOperatorType["TOKEN_ASSIGN"] = 328] = "TOKEN_ASSIGN";
-    TokenOperatorType[TokenOperatorType["TOKEN_LESS"] = 329] = "TOKEN_LESS";
-    TokenOperatorType[TokenOperatorType["TOKEN_GREATER"] = 330] = "TOKEN_GREATER";
-    TokenOperatorType[TokenOperatorType["TOKEN_NOT"] = 331] = "TOKEN_NOT";
-    TokenOperatorType[TokenOperatorType["TOKEN_AND_BIT"] = 332] = "TOKEN_AND_BIT";
-    TokenOperatorType[TokenOperatorType["TOKEN_OR_BIT"] = 333] = "TOKEN_OR_BIT";
-    TokenOperatorType[TokenOperatorType["TOKEN_XOR_BIT"] = 334] = "TOKEN_XOR_BIT";
-    TokenOperatorType[TokenOperatorType["TOKEN_MEMBER"] = 335] = "TOKEN_MEMBER";
-    TokenOperatorType[TokenOperatorType["TOKEN_RANGE"] = 336] = "TOKEN_RANGE";
+    // TOKEN_DIVIDE_INT,
+    TokenOperatorType[TokenOperatorType["TOKEN_MOD"] = 325] = "TOKEN_MOD";
+    TokenOperatorType[TokenOperatorType["TOKEN_POWER"] = 326] = "TOKEN_POWER";
+    TokenOperatorType[TokenOperatorType["TOKEN_ASSIGN"] = 327] = "TOKEN_ASSIGN";
+    TokenOperatorType[TokenOperatorType["TOKEN_LESS"] = 328] = "TOKEN_LESS";
+    TokenOperatorType[TokenOperatorType["TOKEN_GREATER"] = 329] = "TOKEN_GREATER";
+    TokenOperatorType[TokenOperatorType["TOKEN_NOT"] = 330] = "TOKEN_NOT";
+    TokenOperatorType[TokenOperatorType["TOKEN_AND_BIT"] = 331] = "TOKEN_AND_BIT";
+    TokenOperatorType[TokenOperatorType["TOKEN_OR_BIT"] = 332] = "TOKEN_OR_BIT";
+    TokenOperatorType[TokenOperatorType["TOKEN_XOR_BIT"] = 333] = "TOKEN_XOR_BIT";
+    TokenOperatorType[TokenOperatorType["TOKEN_MEMBER"] = 334] = "TOKEN_MEMBER";
+    TokenOperatorType[TokenOperatorType["TOKEN_RANGE"] = 335] = "TOKEN_RANGE";
     // TOKEN_BLOCK_BEGIN,
     // TOKEN_BLOCK_END,
 })(TokenOperatorType || (exports.TokenOperatorType = TokenOperatorType = {}));
@@ -122,9 +122,9 @@ exports.operatorTypeMaps = {
     "*": TokenOperatorType.TOKEN_MULTIPLY,
     "×": TokenOperatorType.TOKEN_MULTIPLY,
     "/": TokenOperatorType.TOKEN_DIVIDE,
-    "//": TokenOperatorType.TOKEN_DIVIDE_INT,
+    // "//": TokenOperatorType.TOKEN_DIVIDE_INT,
     "÷": TokenOperatorType.TOKEN_DIVIDE,
-    "÷÷": TokenOperatorType.TOKEN_DIVIDE_INT,
+    // "÷÷": TokenOperatorType.TOKEN_DIVIDE_INT,
     "%": TokenOperatorType.TOKEN_MOD,
     "**": TokenOperatorType.TOKEN_POWER,
     "××": TokenOperatorType.TOKEN_POWER,

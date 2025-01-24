@@ -1,7 +1,7 @@
 import { Lexer } from "./lexer"; 
-import { Token } from "./../tokenizer/token";
-import { TokenValueType } from "./../tokenizer/type";
-import { TokenData, TokenDataType } from "./../tokenizer/data";
+import { Token } from "../tokenizer/token";
+import { TokenValueType } from "../tokenizer/type";
+import { TokenData, TokenDataType } from "../tokenizer/data";
 
 export const stringOpenings = [
     '"',

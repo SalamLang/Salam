@@ -1,9 +1,9 @@
 import { Lexer } from "./lexer";
 import { isUtf8Alpha } from './utf8';
-import { Token } from "./../tokenizer/token";
-import { TokenKeywordType } from "./../tokenizer/type";
-import { TokenData, TokenDataType } from "./../tokenizer/data";
-import { keywordMapsValues } from './../tokenizer/keyword';
+import { Token } from "../tokenizer/token";
+import { TokenKeywordType } from "../tokenizer/type";
+import { TokenData, TokenDataType } from "../tokenizer/data";
+import { keywordMapsValues } from '../tokenizer/keyword';
 
 export function lexerLexIdentifier(lexer: Lexer) {
     let value = '';

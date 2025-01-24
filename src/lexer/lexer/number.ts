@@ -13,7 +13,6 @@ export function lexerLexNumber(lexer: Lexer) {
         if (char === '.' && !isFloat) {
             isFloat = true;
         } else if (!isUtf8Number(char)) {
-            lexer.retreat();
             break;
         }
 

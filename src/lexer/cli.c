@@ -53,6 +53,7 @@ int handle_missing_arguments() {
     DEBUG_ME;
     fprintf(stderr, "Error: Missing arguments\n");
     print_help();
+    return EXIT_FAILURE;
 }
 
 int handle_missing_language_value(char *value) {

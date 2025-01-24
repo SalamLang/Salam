@@ -1,30 +1,33 @@
+export enum TokenKeywordType {
+    TOKEN_KEYWORD_IDENTIFIER,
+    TOKEN_KEYWORD_IF,
+    TOKEN_KEYWORD_ELSE,
+    TOKEN_KEYWORD_PRINT,
+    TOKEN_KEYWORD_FN,
+    TOKEN_KEYWORD_FOR,
+    TOKEN_KEYWORD_WHILE,
+    TOKEN_KEYWORD_REPEAT,
+    TOKEN_KEYWORD_DO,
+    TOKEN_KEYWORD_RET,
+    TOKEN_KEYWORD_BREAK,
+    TOKEN_KEYWORD_CONTINUE,
+    TOKEN_KEYWORD_LAYOUT,
+    // TOKEN_KEYWORD_BEGIN,
+    TOKEN_KEYWORD_BLOCK_END,
+};
+
 export enum TokenType {
     // Values
+    TOKEN_KEYWORD,
     TOKEN_STRING,
-    TOKEN_IDENTIFIER,
     TOKEN_BOOLEAN,
     TOKEN_NUMBER_FLOAT,
     TOKEN_NUMBER_INT,
     TOKEN_BOOL_TRUE,
     TOKEN_BOOL_FALSE,
 
-    // Words
-    TOKEN_IF,
-    TOKEN_ELSE,
-    TOKEN_PRINT,
-    TOKEN_FN,
-    TOKEN_FOR,
-    TOKEN_WHILE,
-    TOKEN_REPEAT,
-    TOKEN_DO,
-    TOKEN_RET,
-    TOKEN_BREAK,
-    TOKEN_CONTINUE,
-    TOKEN_LAYOUT,
-    TOKEN_BLOCK_BEGIN,
-    TOKEN_BLOCK_END,
-
     // Operators
+    TOKEN_BLOCK_BEGIN,
     TOKEN_NOT_EQUAL,
     TOKEN_EQUAL,
     TOKEN_AND_AND,
@@ -67,6 +70,9 @@ export enum TokenType {
     TOKEN_ERROR,
     TOKEN_EOF,
 };
+
+// export const TOKEN_BLOCK_BEGIN = TokenType.TOKEN_BEGIN;
+export const TOKEN_BLOCK_BEGIN = TokenType.TOKEN_COLON;
 
 export const operatorTypeMaps: Record<string, TokenType> = {
     "!=": TokenType.TOKEN_NOT_EQUAL,

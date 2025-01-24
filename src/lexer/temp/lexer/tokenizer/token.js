@@ -9,6 +9,15 @@ class Token {
         this.location = location;
         this.data = data;
     }
+    setKeywordType(keywordType) {
+        this.keywordType = keywordType;
+    }
+    get isKeyword() {
+        return this.type === type_1.TokenType.TOKEN_KEYWORD;
+    }
+    get isIdentifier() {
+        return this.isKeyword && this.keywordType === type_1.TokenKeywordType.TOKEN_KEYWORD_IDENTIFIER;
+    }
     print() {
         console.log(this.stringify());
     }

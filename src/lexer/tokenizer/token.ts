@@ -1,4 +1,4 @@
-import { TokenKeywordType, TokenType } from './type';
+import { TokenKeywordType, TokenType, TokenTypeCombined } from './type';
 import { TokenLocation } from './location';
 import { TokenData } from './data';
 import { stringify } from './../../serializer';
@@ -23,13 +23,13 @@ export class Token {
         this.keywordType = keywordType
     }
 
-    get isKeyword(): boolean {
-        return this.type === TokenType.TOKEN_KEYWORD;
-    }
+    // get isKeyword(): boolean {
+    //     return this.type === TokenTypeCombined.TOKEN_KEYWORD;
+    // }
 
-    get isIdentifier(): boolean {
-        return this.isKeyword && this.keywordType === TokenKeywordType.TOKEN_KEYWORD_IDENTIFIER;
-    }
+    // get isIdentifier(): boolean {
+    //     return this.isKeyword && this.keywordType === TokenKeywordType.TOKEN_KEYWORD_IDENTIFIER;
+    // }
 
     print(): void {
         console.log(this.stringify());
@@ -37,10 +37,10 @@ export class Token {
 
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
-            type: TokenType[this.type],
+            type: TokenTypeCombined.TOKEN_KEYWORD,
+            // TokenTypeCombined[this.type],
             location: this.location.stringify(false),
             data: this.data?.stringify(false) || undefined,
-            keywordType: this.keywordType !== undefined ? TokenKeywordType[this.keywordType] : undefined
         };
     
         return stringify(obj, wantsJson);

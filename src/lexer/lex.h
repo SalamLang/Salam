@@ -28,6 +28,11 @@
 #include "lexer.h"
 #include "array_token.h"
 
+token_type_t token_char_type(char c);
 void lex(lexer_t *lexer);
+token_type_t type_keyword(const char *string);
+void lexer_lex_number(lexer_t *lexer, char *uc);
+void lexer_lex_identifier(lexer_t *lexer, char *uc);
+void lexer_lex_string(lexer_t *lexer, int type);
 
 #endif

@@ -1,6 +1,6 @@
 import { Lexer } from "./lexer";
 import { Token } from "./../tokenizer/token";
-import { TokenTypeCombined } from "./../tokenizer/type";
+import { TokenValueType } from "./../tokenizer/type";
 import { isUtf8Number, toEnglishDigit } from './utf8';
 import { TokenData, TokenDataType } from "./../tokenizer/data";
 
@@ -25,7 +25,7 @@ export function lexerLexNumber(lexer: Lexer) {
         isFloat ? parseFloat(value) : parseInt(value, 10)
     );
     const token: Token = new Token(
-        isFloat ? TokenTypeCombined.TOKEN_NUMBER_FLOAT : TokenTypeCombined.TOKEN_NUMBER_INT,
+        isFloat ? TokenValueType.TOKEN_NUMBER_FLOAT : TokenValueType.TOKEN_NUMBER_INT,
         lexer.getLocation(),
         data
     );

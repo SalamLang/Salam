@@ -1,4 +1,4 @@
-import { TokenKeywordType, TokenType, TokenTypeCombined } from './type';
+import { TokenKeywordType, TokenType } from './type';
 import { TokenLocation } from './location';
 import { TokenData } from './data';
 import { stringify } from './../../serializer';
@@ -24,7 +24,7 @@ export class Token {
     }
 
     // get isKeyword(): boolean {
-    //     return this.type === TokenTypeCombined.TOKEN_KEYWORD;
+    //     return this.type === TokenKeywordType.TOKEN_IDENTIFIER;
     // }
 
     // get isIdentifier(): boolean {
@@ -37,8 +37,8 @@ export class Token {
 
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
-            type: TokenTypeCombined.TOKEN_KEYWORD,
-            // TokenTypeCombined[this.type],
+            type: TokenKeywordType.TOKEN_IDENTIFIER,
+            // TokenType[this.type],
             location: this.location.stringify(false),
             data: this.data?.stringify(false) || undefined,
         };

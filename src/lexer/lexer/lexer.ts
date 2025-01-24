@@ -1,5 +1,6 @@
 import { Token } from "./../tokenizer/token";
 import { TokenData } from "./../tokenizer/data";
+import { TokenDataType } from './../tokenizer/data';
 import { lexerLexNumber } from './number';
 import { lexerLexIdentifier } from './identifier';
 import { lexerLexString, stringOpenings } from './string';

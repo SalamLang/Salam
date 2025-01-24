@@ -53,10 +53,6 @@ char *token_name(token_t *token) {
     return "soon";
 }
 
-char *token_value_stringify(token_t *token) {
-    return "soon";
-}
-
 /**
  *
  * @function token_destroy
@@ -89,8 +85,8 @@ void token_destroy(token_t *token) {
  */
 char *token_stringify(token_t *token) {
     DEBUG_ME;
-    const char *type = ""; // token_type_stringify(token->type);
-    const char *value = ""; // token_value_stringify(token);
+    const char *type = token_type_stringify(token);
+    const char *value = token_value_stringify(token);
     const char *location = location_stringify(token->location);
 
     size_t size =

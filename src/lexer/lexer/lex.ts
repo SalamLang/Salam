@@ -7,6 +7,7 @@ import { operatorTypeMaps } from './../tokenizer/type';
 import { lexerLexReadComment } from './comment/single';
 import { lexerLexString, stringOpenings } from './string';
 import { lexerLexReadBlockComment } from './comment/multi';
+import { TokenOtherType } from './../tokenizer/type';
 
 export function lex(lexer: Lexer): void {
     while (lexer.index < lexer.source.length) {
@@ -145,5 +146,7 @@ export function lex(lexer: Lexer): void {
                     lexer.advance();
                 }
         }
+
+        lexer.pushToken(new Token(TokenOtherType.TOKEN_EOF, lexer.getLocation()));
     }
 };

@@ -40,7 +40,6 @@ export class Token {
             location: this.location.stringify(false),
             data: this.data?.stringify(false) || undefined,
         };
-    
         return stringify(obj, wantsJson);
     }
 };

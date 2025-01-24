@@ -9,13 +9,15 @@ const data_2 = require("./../tokenizer/data");
 const type_2 = require("./../tokenizer/type");
 const location_1 = require("./../tokenizer/location");
 class Lexer {
-    constructor(source, selectedLanguage) {
+    constructor(source, selectedLanguage, fileName, absoluteDirPath) {
         this.source = source;
         this.index = 0;
         this.line = 1;
         this.column = 0;
         this.tokens = [];
         this.language = selectedLanguage;
+        this.fileName = fileName;
+        this.absoluteDirPath = absoluteDirPath;
     }
     get currentChar() {
         return this.source[this.index] || '\0';

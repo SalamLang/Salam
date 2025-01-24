@@ -24,9 +24,10 @@
 #ifndef _LEXER_DIGIT_H_
 #define _LEXER_DIGIT_H_
 
-#include <stdbool.h>
-#include <wchar.h>
-#include "../common/base.h"
+#include <stdbool.h> // bool
+#include <wchar.h> // wchar_t
+
+#include "../common/base.h" // DEBUG_ME
 
 /**
  *

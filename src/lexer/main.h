@@ -36,7 +36,7 @@
 
 void print_help();
 void print_version();
-int run_code(const char *source, char *filepath, language_map_t selected_language);
+int run_code(const char *source, const char *filepath, language_map_t selected_language);
 int handle_file_command(const char *filename, language_map_t selected_language);
 int handle_code_command(const char *content, language_map_t selected_language);
 int handle_missing_arguments();

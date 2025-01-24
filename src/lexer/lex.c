@@ -54,6 +54,7 @@ void lex(lexer_t *lexer) {
 
     char c;
 
+    /*
     while ((c = LEXER_CURRENT) && c != '\0' &&
            lexer->index < lexer->source_length) {
         // printf("c: %c, i: %zu, length: %zu\n", c, lexer->index,
@@ -243,7 +244,8 @@ void lex(lexer_t *lexer) {
             } break;
         }
     }
-
+    */
+   
     token_t *token = token_create(
         TOKEN_EOF, (location_t){lexer->index, 1, lexer->line, lexer->column,
                                 lexer->line, lexer->column});

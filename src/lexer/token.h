@@ -116,7 +116,7 @@ typedef struct token_t {
 
     void (*print)(struct token_t *);
     void (*destroy)(struct token_t *);
-    char *(*name)(token_type_t);
+    char *(*name)(struct token_t *);
     char *(*stringify)(struct token_t *);
     char *(*value_stringify)(struct token_t *);
 } token_t;
@@ -136,9 +136,11 @@ extern token_keyword_t en_keywords[];
 extern token_keyword_t fa_keywords[];
 extern language_map_t language_maps[];
 
+token_t *token_create(token_type_t type, location_t location);
 void token_destroy(token_t *token);
-void token_print(token_t *token);
+char *token_name(token_t *token);
+char *token_value_stringify(token_t *token);
 char *token_stringify(token_t *token);
-
+void token_print(token_t *token);
 
 #endif

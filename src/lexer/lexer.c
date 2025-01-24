@@ -9,23 +9,34 @@
  * @returns {lexer_t*}
  *
  */
-lexer_t *lexer_create(const char *file_path, char *source, language_map_t selected_language) {
+lexer_t *lexer_create(const char *file_path, const char *source, language_map_t selected_language) {
     DEBUG_ME;
     lexer_t *lexer = memory_allocate(sizeof(lexer_t));
 
     lexer->file_path = file_path;
-    lexer->source = source;
+    lexer->source = (char *) source;
     lexer->selected_language = selected_language;
-    lexer->source_length = strlen(lexer->source);
+
     lexer->index = 0;
     lexer->line = 1;
     lexer->column = 1;
-
+    lexer->source_length = strlen(lexer->source);
     lexer->tokens = array_token_init(10);
-
     lexer->token_index = 0;
 
+    lexer->destroy = lexer_destroy;
+    lexer->print = lexer_print;
+    lexer->stringify = lexer_stringify;
+
     return lexer;
+}
+
+void lexer_print(lexer_t *lexer) {
+    printf("%s\n", lexer_stringify(lexer));
+}
+
+char *lexer_stringify(lexer_t *lexer) {
+    return "soon";
 }
 
 /**
@@ -93,17 +104,17 @@ void lexer_save(lexer_t *lexer, const char *tokens_output) {
  * @returns {void}
  *
  */
-void lexer_debug(lexer_t *lexer) {
-    DEBUG_ME;
-    printf("============= START LEXER DEBUG =============\n");
+// void lexer_debug(lexer_t *lexer) {
+//     DEBUG_ME;
+//     printf("============= START LEXER DEBUG =============\n");
 
-    printf("Lexer source: %s\n",
-           lexer->source == NULL ? "REPL" : lexer->source);
-    printf("Lexer index: %zu\n", lexer->index);
-    printf("Lexer line: %zu\n", lexer->line);
-    printf("Lexer column: %zu\n", lexer->column);
+//     printf("Lexer source: %s\n",
+//            lexer->source == NULL ? "REPL" : lexer->source);
+//     printf("Lexer index: %zu\n", lexer->index);
+//     printf("Lexer line: %zu\n", lexer->line);
+//     printf("Lexer column: %zu\n", lexer->column);
 
-    lexer->tokens->print(lexer->tokens);
+//     lexer->tokens->print(lexer->tokens);
 
-    printf("============= END LEXER DEBUG =============\n");
-}
+//     printf("============= END LEXER DEBUG =============\n");
+// }

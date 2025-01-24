@@ -26,6 +26,7 @@ class Token {
             type: type_1.TokenType[this.type],
             location: this.location.stringify(false),
             data: this.data?.stringify(false) || undefined,
+            keywordType: this.keywordType !== undefined ? type_1.TokenKeywordType[this.keywordType] : undefined
         };
         return (0, serializer_1.stringify)(obj, wantsJson);
     }

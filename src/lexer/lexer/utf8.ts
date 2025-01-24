@@ -25,3 +25,7 @@ export function utf8Decode(source: string, index: number): { char: string; newIn
         newIndex: index + 1
     };
 };
+
+export function toEnglishDigit(char: string): string {
+    return char.replace(/[\u06F0-\u06F9\u0660-\u0669]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 1728));
+};

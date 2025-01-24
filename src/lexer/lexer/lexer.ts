@@ -134,10 +134,6 @@ export class Lexer {
         }
     }
 
-    lex() {
-
-    }
-
     print(): void {
         console.log(this.stringify());
     }

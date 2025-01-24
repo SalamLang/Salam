@@ -1,6 +1,7 @@
 import { TokenType } from './type';
 import { TokenLocation } from './location';
 import { TokenData } from './data';
+import { stringify } from './../../serializer';
 
 export class Token {
     type: TokenType;
@@ -21,11 +22,13 @@ export class Token {
         console.log(this.stringify());
     }
 
-    stringify(): string {
-        return JSON.stringify({
+    stringify(wantsJson: boolean = true): string | object {
+        const obj = {
             type: TokenType[this.type],
-            location: this.location.stringify(),
-            data: this.data?.stringify() || undefined,
-        });
+            location: this.location.stringify(false),
+            data: this.data?.stringify(false) || undefined,
+        };
+
+        return stringify(obj, wantsJson);
     }
 };

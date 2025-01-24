@@ -1,3 +1,5 @@
+import { stringify } from './../../serializer';
+
 export class TokenLocation {
     index: number;
     length: number;
@@ -26,12 +28,14 @@ export class TokenLocation {
         console.log(this.stringify());
     }
 
-    stringify(): string {
-        return JSON.stringify({
+    stringify(wantsJson: boolean = true): string | object {
+        const obj = {
             index: this.index,
             length: this.length,
             start: { line: this.startLine, column: this.startColumn },
             end: { line: this.endLine, column: this.endColumn },
-        });
+        };
+
+        return stringify(obj, wantsJson);
     }
 }

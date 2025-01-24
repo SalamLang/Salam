@@ -1,3 +1,5 @@
+import { stringify } from './../../serializer';
+
 export enum TokenDataType {
     TOKEN_DATA_TYPE_INT,
     TOKEN_DATA_TYPE_FLOAT,
@@ -50,26 +52,12 @@ export class TokenData {
         console.log(this.stringify());
     }
 
-    stringify(): string {
-        return JSON.stringify({
+    stringify(wantsJson: boolean = true): string | object {
+        const obj = {
             type: TokenDataType[this.type],
             value: this.getValue(),
-        });
+        };
+
+        return stringify(obj, wantsJson);
     }
 };
-
-const intData = new TokenData(TokenDataType.TOKEN_DATA_TYPE_INT, 42);
-intData.print();
-console.log(intData.stringify());
-
-const floatData = new TokenData(TokenDataType.TOKEN_DATA_TYPE_FLOAT, 3.14);
-floatData.print();
-console.log(floatData.stringify());
-
-const stringData = new TokenData(TokenDataType.TOKEN_DATA_TYPE_STRING, "Hello, World!");
-stringData.print();
-console.log(stringData.stringify());
-
-const booleanData = new TokenData(TokenDataType.TOKEN_DATA_TYPE_BOOLEAN, true);
-booleanData.print();
-console.log(booleanData.stringify());

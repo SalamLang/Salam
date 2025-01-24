@@ -1,33 +1,30 @@
 import { Lexer } from "./lexer";
 import { Token } from "./../tokenizer/token";
-import { utf8Decode} from './utf8';
+import { TokenType } from "./../tokenizer/type";
+import { isUtf8Number } from './utf8';
+import { TokenData, TokenDataType } from "./../tokenizer/data";
 
 export function lexerLexNumber(lexer: Lexer) {
     let value = '';
     let isFloat = false;
 
     while (lexer.currentChar !== '\0') {
-        const { char, newIndex } = utf8Decode(lexer.source, lexer.index);
+        const char = lexer.currentChar;
         if (char === '.' && !isFloat) {
             isFloat = true;
-        } else if (!/\d/.test(char)) {
-            lexer.index = newIndex - 1; // Step back
+        } else if (!isUtf8Number(char)) {
+            lexer.retreat();
             break;
         }
+
         value += char;
-        lexer.index = newIndex;
+        lexer.advance();
     }
 
-    const token: Token = {
-        type: isFloat ? 'NUMBER_FLOAT' : 'NUMBER_INT',
-        dataType: isFloat ? 'NUMBER_FLOAT' : 'NUMBER_INT',
-        data: isFloat ? parseFloat(value) : parseInt(value, 10),
-        location: {
-            index: lexer.index,
-            line: lexer.line,
-            columnStart: lexer.column,
-            columnEnd: lexer.column + value.length
-        }
-    };
+    const data = new TokenData(
+        isFloat ? TokenDataType.TOKEN_DATA_TYPE_FLOAT : TokenDataType.TOKEN_DATA_TYPE_INT, 
+        isFloat ? parseFloat(value) : parseInt(value, 10)
+    );
+    const token: Token = new Token(TokenType.TOKEN_IDENTIFIER, lexer.getLocation(), data);
     lexer.pushToken(token);
-}
+};

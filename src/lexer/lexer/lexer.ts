@@ -1,7 +1,7 @@
 import { Token } from "./../tokenizer/token";
 import { stringify } from './../../serializer';
 import { TokenData } from "./../tokenizer/data";
-import { TokenType } from './../tokenizer/type';
+import { TokenTypeCombined } from './../tokenizer/type';
 import { TokenDataType } from './../tokenizer/data';
 import { operatorTypeMaps } from './../tokenizer/type';
 import { TokenLocation } from './../tokenizer/location';
@@ -49,7 +49,7 @@ export class Lexer {
     pushError(message: string) {
         console.error(`Error: ${message} at line ${this.line}, column ${this.column}.`);
         const tokenData = new TokenData(TokenDataType.TOKEN_DATA_TYPE_STRING, message);
-        const token = new Token(TokenType.TOKEN_ERROR, this.getLocation(), tokenData);
+        const token = new Token(TokenTypeCombined.TOKEN_ERROR, this.getLocation(), tokenData);
         this.pushToken(token);
     }
 

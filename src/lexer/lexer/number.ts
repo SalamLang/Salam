@@ -1,7 +1,7 @@
 import { Lexer } from "./lexer";
 import { Token } from "./../tokenizer/token";
 import { TokenType } from "./../tokenizer/type";
-import { isUtf8Number } from './utf8';
+import { isUtf8Number, toEnglishDigit } from './utf8';
 import { TokenData, TokenDataType } from "./../tokenizer/data";
 
 export function lexerLexNumber(lexer: Lexer) {
@@ -16,7 +16,7 @@ export function lexerLexNumber(lexer: Lexer) {
             break;
         }
 
-        value += char;
+        value += toEnglishDigit(char);
         lexer.advance();
     }
 

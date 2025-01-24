@@ -1,15 +1,11 @@
 import { Token } from "./../tokenizer/token";
-import { TokenData } from "./../tokenizer/data";
-import { TokenDataType } from './../tokenizer/data';
-import { lexerLexNumber } from './number';
-import { lexerLexIdentifier } from './identifier';
-import { lexerLexString, stringOpenings } from './string';
-import { isUtf8Alpha, isUtf8Number } from './utf8';
-import { operatorTypeMaps } from './../tokenizer/type';
-import { LanguageMap } from './../cli/language/language';
-import { TokenType } from './../tokenizer/type';
-import { TokenLocation } from './../tokenizer/location';
 import { stringify } from './../../serializer';
+import { TokenData } from "./../tokenizer/data";
+import { TokenType } from './../tokenizer/type';
+import { TokenDataType } from './../tokenizer/data';
+import { operatorTypeMaps } from './../tokenizer/type';
+import { TokenLocation } from './../tokenizer/location';
+import { LanguageMap } from './../cli/language/language';
 
 export class Lexer {
     source: string;
@@ -139,139 +135,7 @@ export class Lexer {
     }
 
     lex() {
-        while (this.index < this.source.length) {
-            const char = this.currentChar;
 
-            switch (char) {
-                // End of file
-                case '\0':
-                    this.advance();
-                    break;
-
-                // New line
-                case '\n':
-                    this.line++;
-                    this.column = 0;
-                    this.advance();
-                    break;
-
-                // Whitespace
-                case '\a':  // Alert
-                case '\b':  // Backspace
-                case '\f':  // Form feed
-                case '\r':  // Carriage return
-                case '\t':  // Horizontal tab
-                case '\v':  // Vertical tab
-                case ' ':   // Space
-                    this.advance();
-                    break;
-
-                case '+':
-                case '﹢':
-                case '＋':
-                    this.readDoubleToken(char);
-                    break;
-
-                case '-':
-                case '−':
-                        this.readDoubleToken(char);
-                    break;
-
-                case '*':
-                case '×':
-                    this.readDoubleToken(char);
-                break;
-
-                case '/':
-                case '÷':
-                    this.readDoubleToken(char);
-                break;
-
-                case '&':
-                    this.readDoubleToken(char);
-                    break;
-
-                case '|':
-                    this.readDoubleToken(char);
-                    break;
-
-                case ':':
-                    this.readDoubleToken(char);
-                    break;
-
-                case '|':
-                    this.readDoubleToken(char);
-                    break;
-
-                case '.':
-                    this.readDoubleToken(char);
-                    break;
-
-                case '=':
-                    this.readThreeToken(char, char);
-                    break;
-
-                case '-':
-                    if (this.nextChar === '>') {
-                        const nextChar = this.nextChar;
-                        this.advance();
-                        this.advance();
-
-                        const token = new Token(operatorTypeMaps[char + nextChar], this.getLocation());
-                        this.pushToken(token);
-                    } else {
-                        this.advance();
-
-                        const token = new Token(operatorTypeMaps[char], this.getLocation());
-                        this.pushToken(token);
-                    }
-                    break;
-
-                case '<':
-                    // <: TokenType.TOKEN_LESS
-                    // <<: TokenType.TOKEN_SHIFT_LEFT
-                    // <=: TokenType.TOKEN_LESS_EQUAL
-                    this.readThreeOrToken(char, '=');
-                    break;
-
-                case '>':
-                    // >: TokenType.TOKEN_GREATER
-                    // >>: TokenType.TOKEN_SHIFT_RIGHT
-                    // >=: TokenType.TOKEN_GREATER_EQUAL
-                    this.readThreeOrToken(char, '=');
-                    break;
-        
-                case '~':
-                case '{':
-                case '}':
-                case '[':
-                case ']':
-                case ',':
-                case '(':
-                case ')':
-                case '%':
-                case '^':
-                case '?':
-                case '!':
-                case '⩵':
-                    const token = new Token(operatorTypeMaps[char], this.getLocation());
-                    this.pushToken(token);
-                    this.advance();
-                    break;
-                
-                default:
-                    if (stringOpenings.includes(char)) {
-                        lexerLexString(this, char);
-                    } else if (isUtf8Alpha(char)) {
-                        lexerLexIdentifier(this);
-                    } else if (isUtf8Number(char)) {
-                        lexerLexNumber(this);
-                    } else {
-                        console.log(`Error: Unexpected character '${char}' at line ${this.line}, column ${this.column}.`);
-                        this.advance();
-                    }
-            }
-        }
     }
 
     print(): void {

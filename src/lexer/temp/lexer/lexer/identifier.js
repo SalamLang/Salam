@@ -19,14 +19,12 @@ function lexerLexIdentifier(lexer) {
     const data = new data_1.TokenData(data_1.TokenDataType.TOKEN_DATA_TYPE_STRING, value);
     for (const keywordMap of keyword_1.keywordMapsValues) {
         if (keywordMap.data && keywordMap.data[lexer.language.id].includes(value)) {
-            console.log(keywordMap.data, value, lexer.language.id, keywordMap.data[lexer.language.id] || "?", keywordMap.id);
-            const token = new token_1.Token(type_1.TokenType.TOKEN_KEYWORD, lexer.getLocation(), data);
-            token.setKeywordType(keywordMap.id);
+            const token = new token_1.Token(keywordMap.id, lexer.getLocation(), data);
             lexer.pushToken(token);
             return;
         }
     }
-    const token = new token_1.Token(type_1.TokenType.TOKEN_KEYWORD, lexer.getLocation(), data);
+    const token = new token_1.Token(type_1.TokenTypeCombined.TOKEN_IDENTIFIER, lexer.getLocation(), data);
     lexer.pushToken(token);
 }
 ;

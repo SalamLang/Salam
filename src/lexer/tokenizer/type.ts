@@ -67,73 +67,87 @@ export enum TokenOperatorType {
     TOKEN_RANGE,
 };
 
-const MergedEnum = Object.assign(
-    {},
-    TokenKeywordType,
-    TokenValueType,
-    TokenOperatorType,
-    {
-        TOKEN_ERROR: 900,
-        TOKEN_EOF: 901,
-    }
-);
+// const Animals = {
+//     ...Mammals,
+//     ...Reptiles
+// }
+// export type Animals = (typeof Animals)[keyof typeof Animals]
+ 
+namespace TokenType {
+    const TOKEN_ERROR = 900;
+    const TOKEN_EOF = 901;
 
-export type TokenType = typeof MergedEnum;
+    export const Combined = {
+        ...TokenKeywordType,
+        ...TokenValueType,
+        ...TokenOperatorType,
+
+        TOKEN_ERROR: TOKEN_ERROR,
+        TOKEN_EOF: TOKEN_EOF,
+    } as const;
+
+    export type CombinedType = keyof typeof Combined;
+    // export type CombinedType = typeof Combined[keyof typeof Combined];
+};
+
+export type TokenType = typeof TokenType.Combined[keyof typeof TokenType.Combined];
+export const TokenTypeCombined = TokenType.Combined;
+// export type TokenType = keyof typeof TokenTypeCombined;
 
 // export const TOKEN_BLOCK_BEGIN = [TokenKeywordType, TokenKeywordType.TOKEN_BLOCK_BEGIN];
 // export const TOKEN_BLOCK_BEGIN = [TokenType, MergedEnum.TOKEN_COLON];
 // export const TOKEN_BLOCK_END = [TokenKeywordType, TokenKeywordType.TOKEN_BLOCK_END];
 
-export const operatorTypeMaps: Record<string, TokenType> = {
-    "!=": MergedEnum.TOKEN_NOT_EQUAL,
-    "==": MergedEnum.TOKEN_EQUAL,
-    "===": MergedEnum.TOKEN_EQUAL,
-    "&&": MergedEnum.TOKEN_AND_AND,
-    "||": MergedEnum.TOKEN_OR_OR,
-    "<=": MergedEnum.TOKEN_LESS_EQUAL,
-    ">=": MergedEnum.TOKEN_GREATER_EQUAL,
-    "++": MergedEnum.TOKEN_INCREMENT,
-    "＋＋": MergedEnum.TOKEN_INCREMENT,
-    "﹢﹢": MergedEnum.TOKEN_INCREMENT,
-    "--": MergedEnum.TOKEN_DECREMENT,
-    "−−": MergedEnum.TOKEN_DECREMENT,
-    "<<": MergedEnum.TOKEN_SHIFT_LEFT,
-    ">>": MergedEnum.TOKEN_SHIFT_RIGHT,
-    ">>=": MergedEnum.TOKEN_SHIFT_RIGHT_ASSIGN,
-    "<<=": MergedEnum.TOKEN_SHIFT_LEFT_ASSIGN,
-    "{": MergedEnum.TOKEN_LEFT_BRACE,
-    "}": MergedEnum.TOKEN_RIGHT_BRACE,
-    "[": MergedEnum.TOKEN_LEFT_BRACKET,
-    "]": MergedEnum.TOKEN_RIGHT_BRACKET,
-    ":": MergedEnum.TOKEN_COLON,
-    "::": MergedEnum.TOKEN_COLON_COLON,
-    ",": MergedEnum.TOKEN_COMMA,
-    "(": MergedEnum.TOKEN_LEFT_PAREN,
-    ")": MergedEnum.TOKEN_RIGHT_PAREN,
-    "+": MergedEnum.TOKEN_PLUS,
-    "﹢": MergedEnum.TOKEN_PLUS,
-    "＋": MergedEnum.TOKEN_PLUS,
-    "-": MergedEnum.TOKEN_MINUS,
-    "−": MergedEnum.TOKEN_MINUS,
-    "->": MergedEnum.TOKEN_MEMBER,
-    ".": MergedEnum.TOKEN_MEMBER,
-    "..": MergedEnum.TOKEN_RANGE,
-    "*": MergedEnum.TOKEN_MULTIPLY,
-    "×": MergedEnum.TOKEN_MULTIPLY,
-    "/": MergedEnum.TOKEN_DIVIDE,
-    "//": MergedEnum.TOKEN_DIVIDE_INT,
-    "÷": MergedEnum.TOKEN_DIVIDE,
-    "÷÷": MergedEnum.TOKEN_DIVIDE_INT,
-    "%": MergedEnum.TOKEN_MOD,
-    "**": MergedEnum.TOKEN_POWER,
-    "××": MergedEnum.TOKEN_POWER,
-    "=": MergedEnum.TOKEN_ASSIGN,
-    "⩵": MergedEnum.TOKEN_EQUAL,
-    "<": MergedEnum.TOKEN_LESS,
-    ">": MergedEnum.TOKEN_GREATER,
-    "!": MergedEnum.TOKEN_NOT,
-    "&": MergedEnum.TOKEN_AND_BIT,
-    "|": MergedEnum.TOKEN_OR_BIT,
-    "^": MergedEnum.TOKEN_XOR_BIT,
-    "~": MergedEnum.TOKEN_XOR_BIT,
+export const operatorTypeMaps: Record<string, TokenOperatorType> = {
+    "!=": TokenOperatorType.TOKEN_NOT_EQUAL,
+    "==": TokenOperatorType.TOKEN_EQUAL,
+    "===": TokenOperatorType.TOKEN_EQUAL,
+    "&&": TokenOperatorType.TOKEN_AND_AND,
+    "||": TokenOperatorType.TOKEN_OR_OR,
+    "<=": TokenOperatorType.TOKEN_LESS_EQUAL,
+    ">=": TokenOperatorType.TOKEN_GREATER_EQUAL,
+    "++": TokenOperatorType.TOKEN_INCREMENT,
+    "＋＋": TokenOperatorType.TOKEN_INCREMENT,
+    "﹢﹢": TokenOperatorType.TOKEN_INCREMENT,
+    "--": TokenOperatorType.TOKEN_DECREMENT,
+    "−−": TokenOperatorType.TOKEN_DECREMENT,
+    "<<": TokenOperatorType.TOKEN_SHIFT_LEFT,
+    ">>": TokenOperatorType.TOKEN_SHIFT_RIGHT,
+    ">>=": TokenOperatorType.TOKEN_SHIFT_RIGHT_ASSIGN,
+    "<<=": TokenOperatorType.TOKEN_SHIFT_LEFT_ASSIGN,
+    "{": TokenOperatorType.TOKEN_LEFT_BRACE,
+    "}": TokenOperatorType.TOKEN_RIGHT_BRACE,
+    "[": TokenOperatorType.TOKEN_LEFT_BRACKET,
+    "]": TokenOperatorType.TOKEN_RIGHT_BRACKET,
+    ":": TokenOperatorType.TOKEN_COLON,
+    "::": TokenOperatorType.TOKEN_COLON_COLON,
+    ",": TokenOperatorType.TOKEN_COMMA,
+    "(": TokenOperatorType.TOKEN_LEFT_PAREN,
+    ")": TokenOperatorType.TOKEN_RIGHT_PAREN,
+    "+": TokenOperatorType.TOKEN_PLUS,
+    "﹢": TokenOperatorType.TOKEN_PLUS,
+    "＋": TokenOperatorType.TOKEN_PLUS,
+    "-": TokenOperatorType.TOKEN_MINUS,
+    "−": TokenOperatorType.TOKEN_MINUS,
+    "->": TokenOperatorType.TOKEN_MEMBER,
+    ".": TokenOperatorType.TOKEN_MEMBER,
+    "..": TokenOperatorType.TOKEN_RANGE,
+    "*": TokenOperatorType.TOKEN_MULTIPLY,
+    "×": TokenOperatorType.TOKEN_MULTIPLY,
+    "/": TokenOperatorType.TOKEN_DIVIDE,
+    "//": TokenOperatorType.TOKEN_DIVIDE_INT,
+    "÷": TokenOperatorType.TOKEN_DIVIDE,
+    "÷÷": TokenOperatorType.TOKEN_DIVIDE_INT,
+    "%": TokenOperatorType.TOKEN_MOD,
+    "**": TokenOperatorType.TOKEN_POWER,
+    "××": TokenOperatorType.TOKEN_POWER,
+    "=": TokenOperatorType.TOKEN_ASSIGN,
+    "⩵": TokenOperatorType.TOKEN_EQUAL,
+    "<": TokenOperatorType.TOKEN_LESS,
+    ">": TokenOperatorType.TOKEN_GREATER,
+    "!": TokenOperatorType.TOKEN_NOT,
+    "&": TokenOperatorType.TOKEN_AND_BIT,
+    "|": TokenOperatorType.TOKEN_OR_BIT,
+    "^": TokenOperatorType.TOKEN_XOR_BIT,
+    "~": TokenOperatorType.TOKEN_XOR_BIT,
 };

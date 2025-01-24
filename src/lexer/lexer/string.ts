@@ -1,6 +1,6 @@
 import { Lexer } from "./lexer"; 
 import { Token } from "./../tokenizer/token";
-import { TokenType } from "./../tokenizer/type";
+import { TokenTypeCombined } from "./../tokenizer/type";
 import { TokenData, TokenDataType } from "./../tokenizer/data";
 
 export const stringOpenings = [
@@ -56,6 +56,6 @@ export function lexerLexString(lexer: Lexer, opening: string): void {
     // }
 
     const tokenData = new TokenData(TokenDataType.TOKEN_DATA_TYPE_STRING, value);
-    const token: Token = new Token(TokenType.TOKEN_STRING, lexer.getLocation(), tokenData);
+    const token: Token = new Token(TokenTypeCombined.TOKEN_STRING, lexer.getLocation(), tokenData);
     lexer.pushToken(token);
 };

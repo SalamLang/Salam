@@ -1,11 +1,11 @@
-import { Token } from "../tokenizer/token";
-import { stringify } from '../../serializer';
-import { TokenData } from "../tokenizer/data";
-import { TokenOtherType } from '../tokenizer/type';
-import { TokenDataType } from '../tokenizer/data';
-import { operatorTypeMaps } from '../tokenizer/type';
-import { TokenLocation } from '../tokenizer/location';
-import { LanguageMap } from '../cli/language/language';
+import { Token } from "./../tokenizer/token";
+import { stringify } from './../../serializer';
+import { TokenData } from "./../tokenizer/data";
+import { TokenOtherType } from './../tokenizer/type';
+import { TokenDataType } from './../tokenizer/data';
+import { operatorTypeMaps } from './../tokenizer/type';
+import { TokenLocation } from './../tokenizer/location';
+import { LanguageMap } from './../cli/language/language';
 
 export class Lexer {
     source: string;
@@ -142,8 +142,8 @@ export class Lexer {
         console.log(this.stringify());
     }
 
-    stringify(): string | object {
+    stringify(wantsJson: boolean = true): string | object {
         const jsonArray: object = this.tokens.map(token => token.stringify(false));
-        return stringify(jsonArray, true);
+        return stringify(jsonArray, wantsJson);
     }
 }

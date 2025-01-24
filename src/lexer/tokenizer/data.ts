@@ -33,56 +33,24 @@ export class TokenData {
         }
     }
 
-    print(): void {
+    getValue(): number | string | boolean | undefined {
         switch (this.type) {
             case TokenDataType.TOKEN_DATA_TYPE_INT:
-                console.log(`Value: ${this.numberInt}`);
-                break;
+                return this.numberInt ?? undefined;
             case TokenDataType.TOKEN_DATA_TYPE_FLOAT:
-                console.log(`Value: ${this.numberFloat}`);
-                break;
+                return this.numberFloat ?? undefined;
             case TokenDataType.TOKEN_DATA_TYPE_STRING:
-                console.log(`Value: ${this.string}`);
-                break;
+                return this.string ?? undefined;
             case TokenDataType.TOKEN_DATA_TYPE_BOOLEAN:
-                console.log(`Value: ${this.boolean}`);
-                break;
-            default:
-                console.log("Unknown type");
+                return this.boolean ?? undefined;
         }
     }
 
-    getValue(): number | string | boolean | null {
-        switch (this.type) {
-            case TokenDataType.TOKEN_DATA_TYPE_INT:
-                return this.numberInt;
-            case TokenDataType.TOKEN_DATA_TYPE_FLOAT:
-                return this.numberFloat;
-            case TokenDataType.TOKEN_DATA_TYPE_STRING:
-                return this.string;
-            case TokenDataType.TOKEN_DATA_TYPE_BOOLEAN:
-                return this.boolean;
-            default:
-                return null;
-        }
+    print(): void {
+        console.log(this.stringify());
     }
 
     stringify(): string {
-        // const value = (() => {
-        //     switch (this.type) {
-        //         case TokenDataType.TOKEN_DATA_TYPE_INT:
-        //             return this.numberInt;
-        //         case TokenDataType.TOKEN_DATA_TYPE_FLOAT:
-        //             return this.numberFloat;
-        //         case TokenDataType.TOKEN_DATA_TYPE_STRING:
-        //             return this.string;
-        //         case TokenDataType.TOKEN_DATA_TYPE_BOOLEAN:
-        //             return this.boolean;
-        //         default:
-        //             return null;
-        //     }
-        // })();
-
         return JSON.stringify({
             type: TokenDataType[this.type],
             value: this.getValue(),

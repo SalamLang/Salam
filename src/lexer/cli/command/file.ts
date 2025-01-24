@@ -7,7 +7,7 @@ import { processCommandRun } from './../run';
 export function processCommandFile(args: string[], selectedLanguage: LanguageMap): number {
     const filePath = args[args.indexOf("file") + 1] || undefined;
 
-    let code, fileName, absoluteDirPath;
+    let source, fileName, absoluteDirPath;
 
     try {
         if (!filePath) {
@@ -22,7 +22,7 @@ export function processCommandFile(args: string[], selectedLanguage: LanguageMap
         fileName = fs.realpathSync(filePath);
         absoluteDirPath = fs.realpathSync(path.dirname(filePath));
 
-        code = fs.readFileSync(fileName, 'utf8');
+        source = fs.readFileSync(fileName, 'utf8');
     } catch (error: any) {
         if (error.code === 'ENOENT') {
             console.error(`Error: File not found - "${filePath}"`);
@@ -32,5 +32,5 @@ export function processCommandFile(args: string[], selectedLanguage: LanguageMap
         return 1;
     }
 
-    return processCommandRun(fileName, absoluteDirPath, code, selectedLanguage);
+    return processCommandRun(fileName, absoluteDirPath, source, selectedLanguage);
 };

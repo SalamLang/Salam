@@ -23,9 +23,7 @@ export class TokenLocation {
     }
 
     print(): void {
-        console.log(`Location - Index: ${this.index}, Length: ${this.length}`);
-        console.log(`Start: Line ${this.startLine}, Column ${this.startColumn}`);
-        console.log(`End: Line ${this.endLine}, Column ${this.endColumn}`);
+        console.log(this.stringify());
     }
 
     stringify(): string {

@@ -16,11 +16,11 @@ function lexerLexNumber(lexer) {
         else if (!(0, utf8_1.isUtf8Number)(char)) {
             break;
         }
-        value += char;
+        value += (0, utf8_1.toEnglishDigit)(char);
         lexer.advance();
     }
     const data = new data_1.TokenData(isFloat ? data_1.TokenDataType.TOKEN_DATA_TYPE_FLOAT : data_1.TokenDataType.TOKEN_DATA_TYPE_INT, isFloat ? parseFloat(value) : parseInt(value, 10));
-    const token = new token_1.Token(type_1.TokenType.TOKEN_IDENTIFIER, lexer.getLocation(), data);
+    const token = new token_1.Token(isFloat ? type_1.TokenType.TOKEN_NUMBER_FLOAT : type_1.TokenType.TOKEN_NUMBER_INT, lexer.getLocation(), data);
     lexer.pushToken(token);
 }
 ;

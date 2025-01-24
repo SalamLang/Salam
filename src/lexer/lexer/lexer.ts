@@ -13,7 +13,7 @@ export class Lexer {
     line: number;
     column: number;
     tokens: Token[];
-    selectedLanguage: LanguageMap;
+    language: LanguageMap;
 
     constructor(source: string, selectedLanguage: LanguageMap) {
         this.source = source;
@@ -21,7 +21,7 @@ export class Lexer {
         this.line = 1;
         this.column = 0;
         this.tokens = [];
-        this.selectedLanguage = selectedLanguage;
+        this.language = selectedLanguage;
     }
 
     get currentChar(): string {

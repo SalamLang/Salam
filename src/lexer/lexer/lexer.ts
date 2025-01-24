@@ -1,12 +1,15 @@
-// import { isUtf8Alpha } from './utf8';
 import { Token } from "./../tokenizer/token";
-// import { lexerLexNumber } from './number';
-// import { lexerLexIdentifier } from './identifier';
+import { TokenData } from "./../tokenizer/data";
+import { lexerLexNumber } from './number';
+import { lexerLexIdentifier } from './identifier';
+import { lexerLexString, stringOpenings } from './string';
+import { isUtf8Alpha, isUtf8Number } from './utf8';
 import { operatorTypeMaps } from './../tokenizer/type';
 import { LanguageMap } from './../cli/language/language';
-import { TokenType } from '../tokenizer/type';
-import { TokenLocation } from '../tokenizer/location';
-    
+import { TokenType } from './../tokenizer/type';
+import { TokenLocation } from './../tokenizer/location';
+import { stringify } from './../../serializer';
+
 export class Lexer {
     source: string;
     index: number;
@@ -46,6 +49,13 @@ export class Lexer {
         this.column--;
     }
 
+    pushError(message: string) {
+        console.error(`Error: ${message} at line ${this.line}, column ${this.column}.`);
+        const tokenData = new TokenData(TokenDataType.TOKEN_DATA_TYPE_STRING, message);
+        const token = new Token(TokenType.TOKEN_ERROR, this.getLocation(), tokenData);
+        this.pushToken(token);
+    }
+
     pushToken(token: Token) {
         this.tokens.push(token);
     }
@@ -61,40 +71,68 @@ export class Lexer {
         );
     }
 
-    readDoubleToken(char: string, tokenType: TokenType, doubleTokenType: TokenType): void {
+    readDoubleToken(char: string): void {
         const nextChar = this.nextChar;
         if (nextChar === char) {
             this.advance();
             this.advance();
 
-            const token = new Token(doubleTokenType, this.getLocation());
+            const token = new Token(operatorTypeMaps[char + char], this.getLocation());
             this.pushToken(token);
         } else {
             this.advance();
 
-            const token = new Token(tokenType, this.getLocation());
+            const token = new Token(operatorTypeMaps[char], this.getLocation());
             this.pushToken(token);
         }
     }
 
-    readThreeToken(char: string, char2: string, tokenType: TokenType, doubleTokenType: TokenType, thirdTokenType: TokenType): void {
+    readThreeOrToken(char: string, char2: string): void {
         const nextChar = this.nextChar;
         if (nextChar === char2) {
             this.advance();
             this.advance();
 
-            const token = new Token(thirdTokenType, this.getLocation());
+            const token = new Token(operatorTypeMaps[char + char2], this.getLocation());
             this.pushToken(token);
         } else if (nextChar === char) {
             this.advance();
             this.advance();
 
-            const token = new Token(doubleTokenType, this.getLocation());
+            if (this.nextChar === char2) {
+                this.advance();
+                const token = new Token(operatorTypeMaps[char + char + char2], this.getLocation());
+                this.pushToken(token);
+            } else {
+                const token = new Token(operatorTypeMaps[char + char], this.getLocation());
+                this.pushToken(token);
+            }
+        } else {
+            this.advance();
+
+            const token = new Token(operatorTypeMaps[char], this.getLocation());
+            this.pushToken(token);
+        }
+    }
+
+    readThreeToken(char: string, char2: string): void {
+        const nextChar = this.nextChar;
+        if (nextChar === char2) {
+            this.advance();
+            this.advance();
+
+            const token = new Token(operatorTypeMaps[char + char2], this.getLocation());
+            this.pushToken(token);
+        } else if (nextChar === char) {
+            this.advance();
+            this.advance();
+
+            const token = new Token(operatorTypeMaps[char + char], this.getLocation());
             this.pushToken(token);
         } else {
             this.advance();
 
-            const token = new Token(tokenType, this.getLocation());
+            const token = new Token(operatorTypeMaps[char], this.getLocation());
             this.pushToken(token);
         }
     }
@@ -130,50 +168,83 @@ export class Lexer {
                 case '+':
                 case '﹢':
                 case '＋':
-                    this.readDoubleToken(char, TokenType.TOKEN_PLUS, TokenType.TOKEN_INCREMENT);
+                    this.readDoubleToken(char);
                     break;
 
                 case '-':
                 case '−':
-                        this.readDoubleToken(char, TokenType.TOKEN_MINUS, TokenType.TOKEN_DECREMENT);
+                        this.readDoubleToken(char);
                     break;
 
                 case '*':
                 case '×':
-                    this.readDoubleToken(char, TokenType.TOKEN_MULTIPLY, TokenType.TOKEN_POWER);
+                    this.readDoubleToken(char);
                 break;
 
                 case '/':
                 case '÷':
-                    this.readDoubleToken(char, TokenType.TOKEN_DIVIDE, TokenType.TOKEN_DIVIDE_INT);
+                    this.readDoubleToken(char);
                 break;
 
                 case '&':
-                    this.readDoubleToken(char, TokenType.TOKEN_AND_BIT, TokenType.TOKEN_AND_AND);
+                    this.readDoubleToken(char);
                     break;
 
                 case '|':
-                    this.readDoubleToken(char, TokenType.TOKEN_OR_BIT, TokenType.TOKEN_OR_OR);
+                    this.readDoubleToken(char);
+                    break;
+
+                case ':':
+                    this.readDoubleToken(char);
+                    break;
+
+                case '|':
+                    this.readDoubleToken(char);
+                    break;
+
+                case '.':
+                    this.readDoubleToken(char);
                     break;
 
                 case '=':
-                    this.readDoubleToken(char, TokenType.TOKEN_EQUAL, TokenType.TOKEN_ASSIGN);
+                    this.readThreeToken(char, char);
+                    break;
+
+                case '-':
+                    if (this.nextChar === '>') {
+                        const nextChar = this.nextChar;
+                        this.advance();
+                        this.advance();
+
+                        const token = new Token(operatorTypeMaps[char + nextChar], this.getLocation());
+                        this.pushToken(token);
+                    } else {
+                        this.advance();
+
+                        const token = new Token(operatorTypeMaps[char], this.getLocation());
+                        this.pushToken(token);
+                    }
                     break;
 
                 case '<':
-                    this.readThreeToken(char, '=', TokenType.TOKEN_LESS, TokenType.TOKEN_SHIFT_LEFT, TokenType.TOKEN_LESS_EQUAL);
+                    // <: TokenType.TOKEN_LESS
+                    // <<: TokenType.TOKEN_SHIFT_LEFT
+                    // <=: TokenType.TOKEN_LESS_EQUAL
+                    this.readThreeOrToken(char, '=');
                     break;
 
                 case '>':
-                    this.readThreeToken(char, '=', TokenType.TOKEN_GREATER, TokenType.TOKEN_SHIFT_RIGHT, TokenType.TOKEN_GREATER_EQUAL);
+                    // >: TokenType.TOKEN_GREATER
+                    // >>: TokenType.TOKEN_SHIFT_RIGHT
+                    // >=: TokenType.TOKEN_GREATER_EQUAL
+                    this.readThreeOrToken(char, '=');
                     break;
         
-                // case '~':
+                case '~':
                 case '{':
                 case '}':
                 case '[':
                 case ']':
-                case ':':
                 case ',':
                 case '(':
                 case ')':
@@ -186,6 +257,18 @@ export class Lexer {
                     this.pushToken(token);
                     this.advance();
                     break;
+                
+                default:
+                    if (stringOpenings.includes(char)) {
+                        lexerLexString(this, char);
+                    } else if (isUtf8Alpha(char)) {
+                        lexerLexIdentifier(this);
+                    } else if (isUtf8Number(char)) {
+                        lexerLexNumber(this);
+                    } else {
+                        console.log(`Error: Unexpected character '${char}' at line ${this.line}, column ${this.column}.`);
+                        this.advance();
+                    }
             }
         }
     }
@@ -194,7 +277,8 @@ export class Lexer {
         console.log(this.stringify());
     }
 
-    stringify(): string {
-        return JSON.stringify(this.tokens.map(token => token.stringify()));
+    stringify(): string | object {
+        const jsonArray = this.tokens.map(token => token.stringify(false));
+        return stringify(jsonArray, true);
     }
 }

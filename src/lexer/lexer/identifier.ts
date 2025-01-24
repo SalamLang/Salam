@@ -1,6 +1,8 @@
 import { Lexer } from "./lexer";
 import { Token } from "./../tokenizer/token";
+import { TokenType } from "./../tokenizer/type";
 import { utf8Decode, isUtf8Alpha} from './utf8';
+import { TokenData, TokenDataType } from "./../tokenizer/data";
 
 export function lexerLexIdentifier(lexer: Lexer) {
     let value = '';
@@ -15,16 +17,7 @@ export function lexerLexIdentifier(lexer: Lexer) {
         lexer.index = newIndex;
     }
 
-    const token: Token = {
-        type: 'IDENTIFIER',
-        dataType: 'IDENTIFIER',
-        data: value,
-        location: {
-            index: lexer.index,
-            line: lexer.line,
-            columnStart: lexer.column,
-            columnEnd: lexer.column + value.length
-        }
-    };
+    const data = new TokenData(TokenDataType.TOKEN_DATA_TYPE_STRING, value);
+    const token: Token = new Token(TokenType.TOKEN_IDENTIFIER, lexer.getLocation(), data);
     lexer.pushToken(token);
 };

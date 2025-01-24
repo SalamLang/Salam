@@ -21,6 +21,8 @@ int run_code(const char *source, const char *filepath, language_map_t selected_l
 
     lex(lexer);
 
+    lexer_save(lexer, "tokens.txt");
+
     lexer->destroy(lexer);
 
     return EXIT_SUCCESS;

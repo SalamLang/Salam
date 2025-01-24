@@ -139,8 +139,10 @@ extern language_map_t language_maps[];
 token_t *token_create(token_type_t type, location_t location);
 void token_destroy(token_t *token);
 char *token_name(token_t *token);
-char *token_value_stringify(token_t *token);
 char *token_stringify(token_t *token);
 void token_print(token_t *token);
+
+#include "token_type.h"
+#include "token_value.h"
 
 #endif

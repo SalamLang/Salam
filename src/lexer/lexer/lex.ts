@@ -141,7 +141,7 @@ export function lex(lexer: Lexer): void {
                 } else if (isUtf8Number(char)) {
                     lexerLexNumber(lexer);
                 } else {
-                    console.log(`Error: Unexpected character '${char}' at line ${lexer.line}, column ${lexer.column}.`);
+                    lexer.pushError(`Unexpected character '${char}'`);
                     lexer.advance();
                 }
         }

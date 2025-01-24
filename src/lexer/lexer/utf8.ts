@@ -15,7 +15,7 @@ export function isArabicDigit(char: string): boolean {
 };
 
 export function isUtf8Number(char: string): boolean {
-    return /^[\d\u0660-\u0669\u06F0-\u06F9]+$/.test(char);
+    return isArabicDigit(char) || isPersianDigit(char) || isEnglishDigit(char);
 };
 
 export function toEnglishDigit(char: string): string {

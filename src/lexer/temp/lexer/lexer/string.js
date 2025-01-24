@@ -50,7 +50,7 @@ function lexerLexString(lexer, opening) {
     //     return;
     // }
     const tokenData = new data_1.TokenData(data_1.TokenDataType.TOKEN_DATA_TYPE_STRING, value);
-    const token = new token_1.Token(type_1.TokenTypeCombined.TOKEN_STRING, lexer.getLocation(), tokenData);
+    const token = new token_1.Token(type_1.TokenValueType.TOKEN_STRING, lexer.getLocation(), tokenData);
     lexer.pushToken(token);
 }
 ;

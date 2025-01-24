@@ -6,6 +6,7 @@ exports.isPersianDigit = isPersianDigit;
 exports.isArabicDigit = isArabicDigit;
 exports.isUtf8Number = isUtf8Number;
 exports.utf8Decode = utf8Decode;
+exports.toEnglishDigit = toEnglishDigit;
 function isUtf8Alpha(char) {
     return /^[_a-zA-Z\u0600-\u06FF]+$/.test(char);
 }
@@ -32,5 +33,9 @@ function utf8Decode(source, index) {
         char,
         newIndex: index + 1
     };
+}
+;
+function toEnglishDigit(char) {
+    return char.replace(/[\u06F0-\u06F9\u0660-\u0669]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 1728));
 }
 ;

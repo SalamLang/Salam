@@ -24,6 +24,10 @@ export function lexerLexNumber(lexer: Lexer) {
         isFloat ? TokenDataType.TOKEN_DATA_TYPE_FLOAT : TokenDataType.TOKEN_DATA_TYPE_INT, 
         isFloat ? parseFloat(value) : parseInt(value, 10)
     );
-    const token: Token = new Token(TokenType.TOKEN_IDENTIFIER, lexer.getLocation(), data);
+    const token: Token = new Token(
+        isFloat ? TokenType.TOKEN_NUMBER_FLOAT : TokenType.TOKEN_NUMBER_INT,
+        lexer.getLocation(),
+        data
+    );
     lexer.pushToken(token);
 };

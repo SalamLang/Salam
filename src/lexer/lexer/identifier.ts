@@ -22,8 +22,6 @@ export function lexerLexIdentifier(lexer: Lexer) {
 
     for (const keywordMap of keywordMapsValues) {
         if (keywordMap.data && keywordMap.data[lexer.language.id].includes(value)) {
-            console.log(keywordMap.data, value, lexer.language.id, keywordMap.data[lexer.language.id] || "?", keywordMap.id);
-
             const token: Token = new Token(TokenType.TOKEN_KEYWORD, lexer.getLocation(), data);
             token.setKeywordType(keywordMap.id);
             lexer.pushToken(token);

@@ -10,7 +10,7 @@ export const languageMaps: Record<LanguageID, LanguageMap> = {
             "if",
             "else",
             "while"
-        ]
+        ],
     },
     [LanguageID.LANGUAGE_PERSIAN]: {
         id: LanguageID.LANGUAGE_PERSIAN,
@@ -21,7 +21,7 @@ export const languageMaps: Record<LanguageID, LanguageMap> = {
             "اگر",
             "درغیراینصورت",
             "وقتی"
-        ]
+        ],
     }
 };
 

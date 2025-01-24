@@ -69,10 +69,8 @@ void lexer_save(lexer_t *lexer, const char *tokens_output) {
     DEBUG_ME;
     file_writes(tokens_output, "");
 
-    file_appends(tokens_output, "Tokens:\n");
     file_appends(tokens_output, "Lexer source: ");
     file_appends(tokens_output, lexer->source == NULL ? "REPL" : lexer->source);
-
     file_appends(tokens_output, "\n");
     file_appends(tokens_output, "\n");
 

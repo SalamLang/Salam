@@ -1,5 +1,5 @@
-import { SALAM_VERSION } from './../../base';
-import { hasExtraArguments } from './../cli';
+import { SALAM_VERSION } from './../../../base';
+import { hasExtraArguments } from './../error';
 
 export function processCommandVersion(args: string[]): number {
     if (hasExtraArguments(args)) {

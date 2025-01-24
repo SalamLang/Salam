@@ -46,7 +46,203 @@
 
 #define LEXER_PUSH_TOKEN(TOKEN) array_token_push(lexer->tokens, TOKEN)
 
-// token_t* lex_token()
+/**
+ *
+ * @function token_char_type
+ * @brief Get the type of a character
+ * @params {char} c - Character
+ * @returns {token_type_t}
+ *
+ */
+token_type_t token_char_type(char c) {
+    
+}
+
+/**
+ *
+ * @function lexer_lex_identifier
+ * @brief Lexing an identifier
+ * @params {lexer_t*} lexer - Lexer state
+ * @params {char*} uc - UTF8 character
+ * @returns {void}
+ *
+ */
+void lexer_lex_identifier(lexer_t *lexer, char *uc) {
+    DEBUG_ME;
+    string_t *value = string_create(25);
+
+    string_append_str(value, uc);
+
+    while (LEXER_CURRENT != '\0') {
+        size_t num_bytes;
+        uc = char_utf8_decode(lexer->source, &lexer->index, &num_bytes);
+
+        if (!is_utf8_alpha(uc)) {
+            lexer->index -= num_bytes;
+
+            memory_destroy(uc);
+
+            break;
+        }
+
+        string_append_str(value, uc);
+
+        memory_destroy(uc);
+    }
+
+    token_type_t type = type_keyword(value->data);
+    token_t *token = token_create(
+        type, (location_t){lexer->index, 1, lexer->line, lexer->column,
+                           lexer->line, lexer->column});
+    token->data_type = TOKEN_IDENTIFIER;
+    token->data.string = string_arabic2persian(value->data);
+
+    string_destroy(value);
+
+    LEXER_PUSH_TOKEN(token);
+}
+
+/**
+ *
+ * @function lexer_lex_number
+ * @brief Lexing a number
+ * @params {lexer_t*} lexer - Lexer state
+ * @params {char*} uc - UTF8 character
+ * @returns {void}
+ *
+ */
+void lexer_lex_number(lexer_t *lexer, char *uc) {
+    DEBUG_ME;
+    string_t *value = string_create(25);
+    string_append_char(value, convert_utf8_to_english_digit(uc));
+
+    bool is_float = false;
+
+    while (LEXER_CURRENT != '\0') {
+        // size_t num_bytes;
+        uc = char_utf8_decode(lexer->source, &lexer->index, NULL);
+        if (strcmp(uc, "\0") == 0) {
+            memory_destroy(uc);
+
+            break;
+        }
+
+        size_t is_dot = strcmp(uc, ".");
+
+        if (!is_utf8_digit(uc) && is_dot != 0) {
+            memory_destroy(uc);
+
+            break;
+        }
+
+        if (is_dot == 0) {
+            if (is_float) {
+                memory_destroy(uc);
+
+                break;
+            }
+
+            is_float = true;
+        }
+
+        string_append_char(value, convert_utf8_to_english_digit(uc));
+
+        memory_destroy(uc);
+    }
+
+    token_type_t type = is_float ? TOKEN_NUMBER_FLOAT : TOKEN_NUMBER_INT;
+    token_t *token = token_create(
+        type, (location_t){lexer->index, 1, lexer->line, lexer->column,
+                           lexer->line, lexer->column});
+    token->data_type = type;
+
+    if (is_float) {
+        token->data.number_float = atof(value->data);
+    } else {
+        token->data.number_int = atoi(value->data);
+    }
+
+    string_destroy(value);
+
+    LEXER_PUSH_TOKEN(token);
+}
+
+/**
+ *
+ * @function type_keyword
+ * @brief Check if a string is a keyword then return the token type
+ * @params {const char*} string - String
+ * @returns {bool}
+ *
+ */
+token_type_t type_keyword(const char *string) {
+    DEBUG_ME;
+    // for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
+    //     // TODO: keywords[i].length == length
+    //     if (strcmp(string, keywords[i].keyword) == 0) {
+    //         return keywords[i].type;
+    //     }
+    // }
+
+    return TOKEN_IDENTIFIER;
+}
+
+/**
+ *
+ * @function lexer_lex_string
+ * @brief Lexing a string
+ * @params {lexer_t*} lexer - Lexer state
+ * @params {int} type - String type (0 = english strings, 1= persian strings, 2=
+ * second persian strings)
+ * @returns {void}
+ *
+ */
+void lexer_lex_string(lexer_t *lexer, int type) {
+    DEBUG_ME;
+    // Opening quote is already consumed
+    string_t *value = string_create(25);
+
+    size_t num_bytes;
+    char *uc = char_utf8_decode(lexer->source, &lexer->index, &num_bytes);
+
+    while (strcmp(uc, "\0") != 0 && ((type == 0 && strcmp(uc, "\"") != 0) ||
+                                     (type == 1 && strcmp(uc, "»") != 0) ||
+                                     (type == 2 && strcmp(uc, "”") != 0))) {
+        string_append_str(value, uc);
+        memory_destroy(uc);
+
+        uc = char_utf8_decode(lexer->source, &lexer->index, &num_bytes);
+    }
+
+    if ((type == 0 && strcmp(uc, "\"") != 0) ||
+        (type == 1 && strcmp(uc, "»") != 0) ||
+        (type == 2 && strcmp(uc, "”") != 0)) {
+        string_destroy(value);
+
+        if (uc != NULL) {
+            memory_destroy(uc);
+        }
+
+        error_lexer(2, "Unterminated string value at line %zu, column %zu",
+                    lexer->line, lexer->column);
+
+        return;
+    }
+
+    if (uc != NULL) {
+        memory_destroy(uc);
+    }
+
+    token_t *token = token_create(
+        TOKEN_STRING, (location_t){lexer->index, 1, lexer->line, lexer->column,
+                                   lexer->line, lexer->column});
+    token->data_type = TOKEN_STRING;
+    token->data.string = string_strdup(value->data);
+
+    string_destroy(value);
+
+    LEXER_PUSH_TOKEN(token);
+}
 
 void lex(lexer_t *lexer) {
     DEBUG_ME;
@@ -54,11 +250,11 @@ void lex(lexer_t *lexer) {
 
     char c;
 
-    /*
     while ((c = LEXER_CURRENT) && c != '\0' &&
            lexer->index < lexer->source_length) {
-        // printf("c: %c, i: %zu, length: %zu\n", c, lexer->index,
-        //        lexer->source_length);
+        printf("c: %c, i: %zu, length: %zu\n", c, lexer->index,
+               lexer->source_length);
+
         size_t num_bytes;
         char *uc = char_utf8_decode(lexer->source, &lexer->index, &num_bytes);
 
@@ -244,7 +440,6 @@ void lex(lexer_t *lexer) {
             } break;
         }
     }
-    */
    
     token_t *token = token_create(
         TOKEN_EOF, (location_t){lexer->index, 1, lexer->line, lexer->column,

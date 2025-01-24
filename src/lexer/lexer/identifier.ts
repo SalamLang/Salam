@@ -1,7 +1,7 @@
 import { Lexer } from "./lexer";
+import { isUtf8Alpha } from './utf8';
 import { Token } from "./../tokenizer/token";
 import { TokenType } from "./../tokenizer/type";
-import { isUtf8Alpha} from './utf8';
 import { TokenData, TokenDataType } from "./../tokenizer/data";
 
 export function lexerLexIdentifier(lexer: Lexer) {

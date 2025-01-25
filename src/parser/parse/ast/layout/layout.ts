@@ -1,26 +1,15 @@
 import { AstNode } from './../node';
-import { AstExpression } from '../expression';
-
+import { AstExpression } from './../expression';
+import { AstLayoutAttributes } from './attributes';
 export class AstLayout extends AstNode {
 	children: AstNode[] = [];
-    globalParameters: { [key: string]: AstExpression } = {};
-    parameters: { [key: string]: AstExpression } = {};
-    styleParameters: { [key: string]: AstExpression } = {};
+    attributes: AstLayoutAttributes;
+    globalAttributes: AstLayoutAttributes;
 
     constructor() {
         super("Layout");
-    }
-
-    setGlobalParameter(key: string, value: AstExpression) {
-        this.globalParameters[key] = value;
-    }
-
-    setParameter(key: string, value: AstExpression) {
-        this.parameters[key] = value;
-    }
-
-    setStyleParameter(key: string, value: AstExpression) {
-        this.styleParameters[key] = value;
+        this.attributes = new AstLayoutAttributes();
+        this.globalAttributes = new AstLayoutAttributes();
     }
 
     pushElement(element: AstNode) {

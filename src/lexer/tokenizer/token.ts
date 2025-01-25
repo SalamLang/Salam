@@ -17,17 +17,41 @@ export class Token {
         this.location = location;
         this.data = data;
     }
+
+    get isValue(): boolean {
+        // TODO: improve code
+        for (const value of Object.values(TokenValueType)) {
+            if (this.type === value) {
+                return true;
+            }
+        }
+        return false;
+    }
     
     get isKeyword(): boolean {
-        return this.type in TokenKeywordType;
+        // TODO: improve code
+        if (this.type === TokenKeywordType.TOKEN_BLOCK_END) {
+            return false;
+        }
+        for (const value of Object.values(TokenKeywordType)) {
+            if (this.type === value) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    get isIdentifier(): boolean {
+    get isUserIdentifier(): boolean {
         return this.isKeyword && this.type === TokenKeywordType.TOKEN_IDENTIFIER;
     }
 
     get isDefinedIdentifier(): boolean {
         return this.isKeyword && this.type !== TokenKeywordType.TOKEN_IDENTIFIER;
+    }
+
+    private getTypeString<T extends Record<string, string | number>>(enumType: T): string | undefined {
+        const values = Object.values(enumType) as Array<string | number>;
+        return values.includes(this.type as string) ? (this.type as string) : undefined;
     }
 
     print(): void {
@@ -47,10 +71,5 @@ export class Token {
             data: this.data?.stringify(false) || undefined,
         };
         return stringify(obj, wantsJson);
-    }
-
-    private getTypeString<T extends Record<string, string | number>>(enumType: T): string | undefined {
-        const values = Object.values(enumType) as Array<string | number>;
-        return values.includes(this.type as string) ? (this.type as string) : undefined;
     }
 };

@@ -2,7 +2,7 @@ import { AstProgram } from './ast/program';
 import { stringify } from './../../serializer';
 import { Lexer } from './../../lexer/lex/lexer';
 import { Token } from './../../lexer/tokenizer/token';
-import { TokenType } from './../../lexer/tokenizer/type';
+import { TokenKeywordType, TokenOperatorType, TokenOtherType, TokenType } from './../../lexer/tokenizer/type';
 
 export class Parser {
     ast: AstProgram;
@@ -13,6 +13,10 @@ export class Parser {
         this.ast = new AstProgram();
         this.lexer = lexer;
         this.index = 0;
+    }
+
+    get isEnd(): boolean {
+        return this.index >= this.lexer.tokens.length || this.currentToken.type === TokenOtherType.TOKEN_EOF;
     }
 
     get currentToken(): Token {
@@ -54,7 +58,7 @@ export class Parser {
         return false;
     }
 
-    eat(tokenType: TokenType): boolean {
+    skip(tokenType: TokenType): boolean {
         if (this.has(tokenType)) {
             this.index++;
             return true;
@@ -77,6 +81,14 @@ export class Parser {
     error(message: string): void {
         console.error(`Parser error: ${message}`);
         this.ast.pushError(message);
+    }
+
+    expectBlockOpen(): void {
+        this.expect(TokenOperatorType.TOKEN_COLON);
+    }
+
+    expectBlockClose(): void {
+        this.expect(TokenKeywordType.TOKEN_BLOCK_END);
     }
 
     print(): void {

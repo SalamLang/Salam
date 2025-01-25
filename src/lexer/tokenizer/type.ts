@@ -18,7 +18,6 @@ export enum TokenKeywordType {
 
 export enum TokenValueType {
     TOKEN_STRING = "STRING",
-    TOKEN_BOOLEAN = "BOOLEAN",
     TOKEN_NUMBER_FLOAT = "NUMBER_FLOAT",
     TOKEN_NUMBER_INT = "NUMBER_INT",
     TOKEN_BOOL_TRUE = "BOOL_TRUE",

@@ -79,8 +79,15 @@ export class Parser {
     }
 
     error(message: string): void {
-        console.error(`Parser error: ${message}`);
         this.ast.pushError(message);
+    }
+
+    skipBlockOpen(): boolean {
+        return this.skip(TokenOperatorType.TOKEN_COLON);
+    }
+
+    skipBlockClose(): boolean {
+        return this.skip(TokenKeywordType.TOKEN_BLOCK_END);
     }
 
     expectBlockOpen(): void {

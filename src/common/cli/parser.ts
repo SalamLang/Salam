@@ -15,6 +15,12 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
 
     const parser = new Parser(lexer);
     parse(parser);
+    if (parser.ast.errors.length > 0) {
+        parser.ast.errors.forEach((error: string) => {
+            console.error(error);
+        });
+        return 1;
+    }
     parser.print();
 
     return 0;

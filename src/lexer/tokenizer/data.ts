@@ -48,6 +48,14 @@ export class TokenData {
         }
     }
 
+    getValueString(): string {
+        const value: any = this.getValue();
+        if (value === undefined) {
+            return "undefined";
+        }
+        return value.toString();
+    }
+
     print(): void {
         console.log(this.stringify());
     }

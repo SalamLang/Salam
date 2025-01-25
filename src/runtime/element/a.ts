@@ -8,22 +8,22 @@ import { languages } from '../data/element/language';
 export class RuntimeElementA extends RuntimeElement {
     constructor() {
         super(true, "a");
-        this.addText(LanguageID.English, "link");
-        this.addText(LanguageID.Persian, "لینک");
+        this.addText(LanguageID.LanguageEnglish, "link");
+        this.addText(LanguageID.LanguagePersian, "لینک");
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "download")
-            .addText(LanguageID.Persian, "دانلود")
-            .addText(LanguageID.English, "download")
+            .addText(LanguageID.LanguagePersian, "دانلود")
+            .addText(LanguageID.LanguageEnglish, "download")
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Url, "href")
-            .addText(LanguageID.Persian, "منبع")
-            .addText(LanguageID.English, "source")
+            .addText(LanguageID.LanguagePersian, "منبع")
+            .addText(LanguageID.LanguageEnglish, "source")
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.String, "hreflang")
-            .addText(LanguageID.Persian, "language")
-            .addText(LanguageID.English, "زبان")
+            .addText(LanguageID.LanguagePersian, "language")
+            .addText(LanguageID.LanguageEnglish, "زبان")
             .addReservedValues(
                 languages.map((language) => 
                     new RuntimeElementAttributeValue(language.code.toUpperCase())

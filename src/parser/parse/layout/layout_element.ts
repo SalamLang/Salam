@@ -14,15 +14,15 @@ export function parserParseLayoutElement(parser: Parser, tokens: Token[]): AstLa
         if (parser.currentToken.type === TokenKeywordType.TOKEN_BLOCK_END || parser.currentToken.type === TokenOtherType.TOKEN_EOF) {
             break;
         }
-
         // key = value
         // ^
         if (parser.currentToken.isKeyword) {
             const tokens: Token[] = parserParseLayoutKey(parser);
-
             // key = value
             //     ^
             if (parser.skip(TokenOperatorType.TOKEN_ASSIGN)) {
+                // key = value
+                //       ^
                 const attribute: AstLayoutAttribute | undefined = parserParseLayoutAttribute(parser, tokens);
                 if (attribute) {
                     if (! ast.globalAttributes.push(attribute)) {
@@ -31,9 +31,11 @@ export function parserParseLayoutElement(parser: Parser, tokens: Token[]): AstLa
                     }
                 }
             }
-            // key :
+            // element :
             //     ^
             else if (parser.skipBlockOpen()) {
+                // element : 
+                //       ^
                 const element: AstLayoutElement | undefined = parserParseLayoutElement(parser, tokens);
                 if (! element) {
                     parser.error("Unexpected token as element name, current token is '" + parser.currentToken.type + "'");

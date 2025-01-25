@@ -7,12 +7,19 @@ export class RuntimeElementAttribute {
     text: Map<LanguageID, string[]>;
     type: RuntimeElementAttributeType;
     reservedValues: RuntimeElementAttributeValue[];
+    is_required: boolean;
     
     constructor(type: RuntimeElementAttributeType, generate_name: string) {
         this.generate_name = generate_name;
         this.text = new Map<LanguageID, string[]>();
         this.type = type;
         this.reservedValues = [];
+        this.is_required = false;
+    }
+
+    setRequired(): RuntimeElementAttribute {
+        this.is_required = true;
+        return this;
     }
 
     addText(languageId: LanguageID, value: string): RuntimeElementAttribute {

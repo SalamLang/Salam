@@ -14,6 +14,15 @@ export class RuntimeElement {
         this.attributes = [];
     }
 
+    hasAttribute(languageId: LanguageID, name: string): boolean {
+        for (const attribute of this.attributes) {
+            if (attribute.getText(languageId)?.includes(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     addText(languageId: LanguageID, value: string): void {
         if (!this.text.has(languageId)) {
             this.text.set(languageId, []);

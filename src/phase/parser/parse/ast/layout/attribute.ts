@@ -9,19 +9,15 @@ export class AstLayoutAttribute extends AstNode {
     key: string;
     value: AstExpression;
     kind: AstLayoutAttributeType;
-    elementName: string;
-    runtimeElement: RuntimeElement;
-    runtimeElementAttribute: RuntimeElementAttribute;
+    element_name: string;
     enduser_name: string;
 
-    constructor(elementName: string, runtimeElement: RuntimeElement, key: string, runtimeElementAttribute: RuntimeElementAttribute, value: AstExpression, kind: AstLayoutAttributeType) {
+    constructor(element_name: string, key: string, value: AstExpression, kind: AstLayoutAttributeType) {
         super("LayoutAttribute");
         this.key = key;
         this.value = value;
         this.kind = kind;
-        this.elementName = elementName;
-        this.runtimeElement = runtimeElement;
-        this.runtimeElementAttribute = runtimeElementAttribute;
+        this.element_name = element_name;
         this.enduser_name = key;
     }
 

@@ -1,4 +1,4 @@
-import { processCommandRun } from '../../../../common/cli/parser';
+import { processCommandRun } from '../../../../common/cli/validation';
 import { LanguageMap } from '../../../../common/language/language';
 
 export const code_flag = "code";

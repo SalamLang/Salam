@@ -10,7 +10,7 @@ export class Parser {
     index: number;
 
     constructor(lexer: Lexer) {
-        this.ast = new AstProgram();
+        this.ast = new AstProgram(lexer.language);
         this.lexer = lexer;
         this.index = 0;
     }
@@ -54,7 +54,7 @@ export class Parser {
             this.index++;
             return true;
         }
-        this.error(`Expected token type ${tokenType}, but got ${this.currentToken.type}.`);
+        this.pushError(`Expected token type ${tokenType}, but got ${this.currentToken.type}.`);
         return false;
     }
 
@@ -78,7 +78,7 @@ export class Parser {
         }
     }
 
-    error(message: string): void {
+    pushError(message: string): void {
         this.ast.pushError(message);
     }
 

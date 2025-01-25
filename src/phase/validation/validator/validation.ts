@@ -1,11 +1,7 @@
-import { validateLayout } from "./layout/layout";
-import { AstNode } from "../../parser/parse/ast/node";
 import { AstProgram } from "../../parser/parse/ast/program";
-import { validateFunctionCall } from "./statement/function_call";
-import { AstLayout } from "../../parser/parse/ast/layout/layout";
-import { validateFunctionDeclaration } from "./statement/function_declaration";
-import { AstFunctionCall } from "../../parser/parse/ast/statement/function_call";
-import { AstFunctionDeclaration } from "../../parser/parse/ast/statement/function_declaration";
+import { RuntimeElement } from './../../../runtime/element';
+import { runtimeElements } from './../../../runtime/runtime';
+import { RuntimeElementAttribute } from './../../../runtime/element_attribute';
 
 export class Validation {
     ast: AstProgram;
@@ -16,12 +12,25 @@ export class Validation {
         this.errors = [];
     }
 
-    validate() {
-        this.ast.functions.forEach((node: AstFunctionDeclaration) => {
-            validateFunctionDeclaration(this, node as AstFunctionDeclaration);
-        });
-        if (this.ast.layout !== undefined) {
-            validateLayout(this, this.ast.layout);
+    pushError(message: string) {
+        this.errors.push("Validation error: " + message);
+    }
+
+    getElementRuntime(name: string): RuntimeElement | undefined {
+        for (const runtimeElementItem of runtimeElements) {
+            if (runtimeElementItem.getText(this.ast.language.id)?.includes(name)) {
+                return runtimeElementItem;
+            }
         }
+        return undefined;
+    }
+
+    getElementAttributeRuntime(element: RuntimeElement, key: string): RuntimeElementAttribute | undefined {
+        for (const attribute of element.attributes) {
+            if (attribute.getText(this.ast.language.id)?.includes(key)) {
+                return attribute;
+            }
+        }
+        return undefined;
     }
 };

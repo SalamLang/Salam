@@ -2,15 +2,19 @@ import { AstNode } from '../node';
 import { AstLayoutAttribute } from './attribute';
 
 export class AstLayoutAttributes extends AstNode {
-    attributes: AstLayoutAttribute[];
+    items: AstLayoutAttribute[];
 
     constructor() {
         super("LayoutAttributes");
-        this.attributes = [];
+        this.items = [];
+    }
+
+    get length(): number {
+        return this.items.length;
     }
 
     exists(attribute: AstLayoutAttribute): boolean {
-        for (let attr of this.attributes) {
+        for (let attr of this.items) {
             if (attr.getCheckSum() === attribute.getCheckSum()) {
                 return true;
             }
@@ -19,7 +23,7 @@ export class AstLayoutAttributes extends AstNode {
     }
 
     styleExists(attribute: AstLayoutAttribute): boolean {
-        for (let attr of this.attributes) {
+        for (let attr of this.items) {
             if (attr.isStyle() && attr.getCheckSum() === attribute.getCheckSum()) {
                 return true;
             }
@@ -28,7 +32,7 @@ export class AstLayoutAttributes extends AstNode {
     }
 
     normalExists(attribute: AstLayoutAttribute): boolean {
-        for (let attr of this.attributes) {
+        for (let attr of this.items) {
             if (attr.isNormal() && attr.getCheckSum() === attribute.getCheckSum()) {
                 return true;
             }
@@ -40,7 +44,7 @@ export class AstLayoutAttributes extends AstNode {
         if (this.exists(attribute)) {
             return false;
         } else {
-            this.attributes.push(attribute);
+            this.items.push(attribute);
             return true;
         }
     }

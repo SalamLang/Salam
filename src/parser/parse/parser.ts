@@ -1,16 +1,16 @@
-import { Ast } from './ast/ast';
+import { AstProgram } from './ast/program';
 import { stringify } from './../../serializer';
 import { Lexer } from './../../lexer/lex/lexer';
 import { Token } from './../../lexer/tokenizer/token';
 import { TokenType } from './../../lexer/tokenizer/type';
 
 export class Parser {
-    ast: Ast;
+    ast: AstProgram;
     lexer: Lexer;
     index: number;
 
     constructor(lexer: Lexer ) {
-        this.ast = new Ast();
+        this.ast = new AstProgram();
         this.lexer = lexer;
         this.index = 0;
     }
@@ -54,18 +54,24 @@ export class Parser {
         return false;
     }
 
-    next(): void {
-        if (this.index === this.lexer.tokens.length) {
-            return;
+    eat(tokenType: TokenType): boolean {
+        if (this.has(tokenType)) {
+            this.index++;
+            return true;
         }
-        this.index++;
+        return false;
+    }
+
+    next(): void {
+        if (this.index !== this.lexer.tokens.length) {
+            this.index++;
+        }
     }
 
     previous(): void {
-        if (this.index === 0) {
-            return;
+        if (this.index !== 0) {
+            this.index--;
         }
-        this.index--;
     }
 
     error(message: string): void {

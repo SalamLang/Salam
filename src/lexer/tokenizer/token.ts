@@ -1,4 +1,4 @@
-import { TokenType, TokenTypeCombined, TokenKeywordType } from './type';
+import { TokenType, TokenKeywordType, TokenValueType, TokenOperatorType, TokenOtherType } from './type';
 import { TokenLocation } from './location';
 import { TokenData } from './data';
 import { stringify } from './../../serializer';
@@ -35,11 +35,22 @@ export class Token {
     }
 
     stringify(wantsJson: boolean = true): string | object {
+        const typeString =
+            this.getTypeString(TokenKeywordType) ||
+            this.getTypeString(TokenValueType) ||
+            this.getTypeString(TokenOperatorType) ||
+            this.getTypeString(TokenOtherType);
+        
         const obj: object = {
-            type: TokenTypeCombined[this.type],
+            type: typeString,
             location: this.location.stringify(false),
             data: this.data?.stringify(false) || undefined,
         };
         return stringify(obj, wantsJson);
+    }
+
+    private getTypeString<T extends Record<string, string | number>>(enumType: T): string | undefined {
+        const values = Object.values(enumType) as Array<string | number>;
+        return values.includes(this.type as string) ? (this.type as string) : undefined;
     }
 };

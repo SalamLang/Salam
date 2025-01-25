@@ -1,5 +1,6 @@
 import { AstNode } from './../node';
 import { AstExpression } from './../expression';
+import { stringify } from './../../../../serializer';
 import { AstLayoutAttributeType } from './attribute_type';
 
 export class AstLayoutAttribute extends AstNode {
@@ -24,5 +25,18 @@ export class AstLayoutAttribute extends AstNode {
 
     getCheckSum(): string {
         return this.key;
+    }
+
+    print(): void {
+        console.log(this.stringify());
+    }
+
+    stringify(wantsJson: boolean = true): string | object {
+        const obj: object = {
+            key: this.key,
+            value: this.value.stringify(wantsJson),
+            kind: this.kind,
+        };
+        return stringify(obj, wantsJson);
     }
 }

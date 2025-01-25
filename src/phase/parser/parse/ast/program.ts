@@ -1,6 +1,6 @@
 import { AstNode } from './node';
 import { AstLayout } from './layout/layout';
-import { AstFunctionDeclaration } from './function_declaration';
+import { AstFunctionDeclaration } from './statement/function_declaration';
 
 export class AstProgram extends AstNode {
     errors: string[] = [];

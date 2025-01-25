@@ -3,8 +3,8 @@ import { AstBlock } from '../ast/block';
 import { parserParseBlock } from './block';
 import { AstFunctionAttribute } from '../ast/function_attribute';
 import { TokenKeywordType } from './../../../lexer/tokenizer/type';
-import { AstFunctionDeclaration } from '../ast/function_declaration';
 import { parserParseFunctionAttributes } from './function_attributes';
+import { AstFunctionDeclaration } from '../ast/statement/function_declaration';
 
 export function parserParseFunction(parser: Parser): AstFunctionDeclaration | undefined {
     parser.expect(TokenKeywordType.TOKEN_FN);

@@ -1,7 +1,7 @@
-import { AstNode } from './node';
-import { AstBlock } from './block';
-import { stringify } from '../../../../serializer';
-import { AstFunctionAttribute } from './function_attribute';
+import { AstNode } from './../node';
+import { AstBlock } from './../block';
+import { stringify } from '../../../../../serializer';
+import { AstFunctionAttribute } from './../function_attribute';
 
 export class AstFunctionDeclaration extends AstNode {
     name: string;

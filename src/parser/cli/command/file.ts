@@ -10,10 +10,10 @@ export function processCommandFile(args: string[], selectedLanguage: LanguageMap
     let source, fileName, absoluteDirPath;
 
     try {
-        if (!filePath) {
+        if (! filePath) {
             console.error(`Error: File path not provided.`);
             return 1;
-        } else if (!fs.existsSync(filePath)) {
+        } else if (! fs.existsSync(filePath)) {
             console.error(`Error: File not found - "${filePath}"`);
             return 1;
         }

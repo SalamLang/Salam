@@ -1,7 +1,7 @@
 import { AstNode } from './node';
 import { AstType } from './type';
 
-export class AstFunctionParameter extends AstNode {
+export class AstFunctionAttribute extends AstNode {
     name: string;
     value_type: AstType;
 

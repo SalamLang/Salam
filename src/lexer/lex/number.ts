@@ -12,7 +12,7 @@ export function lexerLexNumber(lexer: Lexer) {
         const char = lexer.currentChar;
         if (char === '.' && !isFloat) {
             isFloat = true;
-        } else if (!isUtf8Number(char)) {
+        } else if (! isUtf8Number(char)) {
             break;
         }
 

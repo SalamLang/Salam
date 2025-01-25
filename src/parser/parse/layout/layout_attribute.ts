@@ -15,7 +15,7 @@ export function parserParseLayoutAttribute(parser: Parser, tokens: Token[]): Ast
     const key: string = arrayName2String(tokens);
 
     const value: AstExpression | undefined = parserParseLayoutAttributeValue(parser, key);
-    if (!value) {
+    if (! value) {
         return undefined;
     }
 

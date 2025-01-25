@@ -9,6 +9,7 @@ export class RuntimeElement {
     
     constructor(is_mother: boolean, generate_name: string) {
         this.is_mother = is_mother;
+        this.text = new Map<LanguageID, string[]>();
         this.generate_name = generate_name;
         this.attributes = [];
     }
@@ -29,6 +30,6 @@ export class RuntimeElement {
     }
 
     addReservedValue(reservedValue: RuntimeElementAttribute): void {
-        this.attributes.push(attribute);
+        this.attributes.push(reservedValue);
     }
 };

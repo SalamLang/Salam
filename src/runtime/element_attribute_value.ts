@@ -6,6 +6,7 @@ export class RuntimeElementAttributeValue {
     
     constructor(generate_name: string) {
         this.generate_name = generate_name;
+        this.text = new Map<LanguageID, string[]>();
     }
 
     addText(languageId: LanguageID, value: string): RuntimeElementAttributeValue {
@@ -25,5 +26,5 @@ export class RuntimeElementAttributeValue {
 
     getText(languageId: LanguageID): string[] | undefined {
         return this.text.get(languageId);
-    }};
+    };
 };

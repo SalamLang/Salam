@@ -1,5 +1,5 @@
-import { LanguageMap } from './../language/language';
 import { processCommandRun } from '../../../common/cli/parser';
+import { LanguageMap } from './../../../common/language/language';
 
 export const code_flag = "code";
 

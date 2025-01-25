@@ -1,27 +1,17 @@
 import { LanguageID, LanguageMap } from "./language";
 
 export const languageMaps: Record<LanguageID, LanguageMap> = {
-    [LanguageID.English]: {
-        id: LanguageID.English,
+    [LanguageID.LanguageEnglish]: {
+        id: LanguageID.LanguageEnglish,
         name: "English",
         local_name: "English",
         flag: "en",
-        keywords: [
-            "if",
-            "else",
-            "while"
-        ],
     },
-    [LanguageID.Persian]: {
-        id: LanguageID.Persian,
+    [LanguageID.LanguagePersian]: {
+        id: LanguageID.LanguagePersian,
         name: "Persian",
         local_name: "فارسی",
         flag: "fa",
-        keywords: [
-            "اگر",
-            "درغیراینصورت",
-            "وقتی"
-        ],
     }
 };
 

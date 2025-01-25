@@ -1,5 +1,5 @@
-import { lang_flag } from '../../../common/cli/language';
-import { hasExtraArguments } from '../../../common/cli/error';
+import { lang_flag } from './../../../common/cli/language';
+import { hasExtraArguments } from './../../../common/cli/error';
 import { LanguageMap } from './../../../common/language/language';
 import { languageMapsValues } from './../../../common/language/data'; 
 

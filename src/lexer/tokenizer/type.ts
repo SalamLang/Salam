@@ -1,96 +1,75 @@
 export enum TokenKeywordType {
-    TOKEN_IDENTIFIER = 100,
-    TOKEN_IF,
-    TOKEN_ELSE,
-    TOKEN_PRINT,
-    TOKEN_FN,
-    TOKEN_FOR,
-    TOKEN_WHILE,
-    TOKEN_REPEAT,
-    TOKEN_DO,
-    TOKEN_RET,
-    TOKEN_BREAK,
-    TOKEN_CONTINUE,
-    TOKEN_LAYOUT,
-    // TOKEN_BLOCK_BEGIN,
-    TOKEN_BLOCK_END,
+    TOKEN_IDENTIFIER = "IDENTIFIER",
+    TOKEN_IF = "IF",
+    TOKEN_ELSE = "ELSE",
+    TOKEN_PRINT = "PRINT",
+    TOKEN_FN = "FN",
+    TOKEN_FOR = "FOR",
+    TOKEN_WHILE = "WHILE",
+    TOKEN_REPEAT = "REPEAT",
+    TOKEN_DO = "DO",
+    TOKEN_RET = "RET",
+    TOKEN_BREAK = "BREAK",
+    TOKEN_CONTINUE = "CONTINUE",
+    TOKEN_LAYOUT = "LAYOUT",
+    // TOKEN_BLOCK_BEGIN = "BLOCK_BEGIN",
+    TOKEN_BLOCK_END = "BLOCK_END",
 };
 
 export enum TokenValueType {
-    TOKEN_STRING = 200,
-    TOKEN_BOOLEAN,
-    TOKEN_NUMBER_FLOAT,
-    TOKEN_NUMBER_INT,
-    TOKEN_BOOL_TRUE,
-    TOKEN_BOOL_FALSE,
+    TOKEN_STRING = "STRING",
+    TOKEN_BOOLEAN = "BOOLEAN",
+    TOKEN_NUMBER_FLOAT = "NUMBER_FLOAT",
+    TOKEN_NUMBER_INT = "NUMBER_INT",
+    TOKEN_BOOL_TRUE = "BOOL_TRUE",
+    TOKEN_BOOL_FALSE = "BOOL_FALSE",
 };
 
 export enum TokenOperatorType {
-    TOKEN_NOT_EQUAL = 300,
-    TOKEN_EQUAL,
-    TOKEN_AND_AND,
-    TOKEN_OR_OR,
-    TOKEN_LESS_EQUAL,
-    TOKEN_GREATER_EQUAL,
-    TOKEN_INCREMENT,
-    TOKEN_DECREMENT,
-    TOKEN_SHIFT_LEFT,
-    TOKEN_SHIFT_RIGHT,
-    TOKEN_SHIFT_RIGHT_ASSIGN,
-    TOKEN_SHIFT_LEFT_ASSIGN,
-    TOKEN_LEFT_BRACE,
-    TOKEN_RIGHT_BRACE,
-    TOKEN_LEFT_BRACKET,
-    TOKEN_RIGHT_BRACKET,
-    TOKEN_COLON,
-    TOKEN_COLON_COLON,
-    TOKEN_COMMA,
-    TOKEN_LEFT_PAREN,
-    TOKEN_RIGHT_PAREN,
-    TOKEN_PLUS,
-    TOKEN_MINUS,
-    TOKEN_MULTIPLY,
-    TOKEN_DIVIDE,
-    // TOKEN_DIVIDE_INT,
-    TOKEN_MOD,
-    TOKEN_POWER,
-    TOKEN_ASSIGN,
-    TOKEN_LESS,
-    TOKEN_GREATER,
-    TOKEN_NOT,
-    TOKEN_AND_BIT,
-    TOKEN_OR_BIT,
-    TOKEN_XOR_BIT,
-    TOKEN_MEMBER,
-    TOKEN_RANGE,
-    // TOKEN_BLOCK_BEGIN,
-    // TOKEN_BLOCK_END,
+    TOKEN_NOT_EQUAL = "NOT_EQUAL",
+    TOKEN_EQUAL = "EQUAL",
+    TOKEN_AND_AND = "AND_AND",
+    TOKEN_OR_OR = "OR_OR",
+    TOKEN_LESS_EQUAL = "LESS_EQUAL",
+    TOKEN_GREATER_EQUAL = "GREATER_EQUAL",
+    TOKEN_INCREMENT = "INCREMENT",
+    TOKEN_DECREMENT = "DECREMENT",
+    TOKEN_SHIFT_LEFT = "SHIFT_LEFT",
+    TOKEN_SHIFT_RIGHT = "SHIFT_RIGHT",
+    TOKEN_SHIFT_RIGHT_ASSIGN = "SHIFT_RIGHT_ASSIGN",
+    TOKEN_SHIFT_LEFT_ASSIGN = "SHIFT_LEFT_ASSIGN",
+    TOKEN_LEFT_BRACE = "LEFT_BRACE",
+    TOKEN_RIGHT_BRACE = "RIGHT_BRACE",
+    TOKEN_LEFT_BRACKET = "LEFT_BRACKET",
+    TOKEN_RIGHT_BRACKET = "RIGHT_BRACKET",
+    TOKEN_COLON = "COLON",
+    TOKEN_COLON_COLON = "COLON_COLON",
+    TOKEN_COMMA = "COMMA",
+    TOKEN_LEFT_PAREN = "LEFT_PAREN",
+    TOKEN_RIGHT_PAREN = "RIGHT_PAREN",
+    TOKEN_PLUS = "PLUS",
+    TOKEN_MINUS = "MINUS",
+    TOKEN_MULTIPLY = "MULTIPLY",
+    TOKEN_DIVIDE = "DIVIDE",
+    // TOKEN_DIVIDE_INT = "DIVIDE_INT",
+    TOKEN_MOD = "MOD",
+    TOKEN_POWER = "POWER",
+    TOKEN_ASSIGN = "ASSIGN",
+    TOKEN_LESS = "LESS",
+    TOKEN_GREATER = "GREATER",
+    TOKEN_NOT = "NOT",
+    TOKEN_AND_BIT = "AND_BIT",
+    TOKEN_OR_BIT = "OR_BIT",
+    TOKEN_XOR_BIT = "XOR_BIT",
+    TOKEN_MEMBER = "MEMBER",
+    TOKEN_RANGE = "RANGE",
+    // TOKEN_BLOCK_BEGIN = "BLOCK_BEGIN",
+    // TOKEN_BLOCK_END = "BLOCK_END",
 };
 
 export enum TokenOtherType {
-    TOKEN_ERROR = 400,
-    TOKEN_EOF,
-};
-
-export const TokenTypeCombined = {
-    ...TokenKeywordType,
-    ...TokenValueType,
-    ...TokenOperatorType,
-    ...TokenOtherType,
-} as const;
-
-export function Token2Name(tokenType: TokenType): any {
-    if (tokenType in TokenKeywordType) {
-        return TokenKeywordType[tokenType];
-    } else if (tokenType in TokenValueType) {
-        return TokenValueType[tokenType];
-    } else if (tokenType in TokenOperatorType) {
-        return TokenOperatorType[tokenType];
-    } else if (tokenType in TokenOtherType) {
-        return TokenOtherType[tokenType];
-    } else {
-        return TokenOtherType.TOKEN_ERROR;
-    }
+    TOKEN_ERROR = "ERROR",
+    TOKEN_EOF = "EOF",
 };
 
 export type TokenType = TokenKeywordType | TokenValueType | TokenOperatorType | TokenOtherType;

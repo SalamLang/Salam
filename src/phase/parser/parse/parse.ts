@@ -2,7 +2,7 @@ import { Parser } from './parser';
 import { AstLayout } from './ast/layout/layout';
 import { parserParseLayout } from './layout/layout';
 import { parserParseFunction } from './statement/function';
-import { AstFunctionDeclaration } from './ast/function_declaration';
+import { AstFunctionDeclaration } from './ast/statement/function_declaration';
 import { TokenKeywordType, TokenOtherType } from './../../lexer/tokenizer/type';
 
 export function parse(parser: Parser): void {

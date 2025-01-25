@@ -1,5 +1,5 @@
 import { AstNode } from '../node';
-import { AstExpression } from '../expression';
+import { AstExpression } from '../expression/expression';
 import { stringify } from '../../../../../serializer';
 import { AstLayoutAttributeType } from './attribute_type';
 

@@ -73,3 +73,7 @@ export class Token {
         return stringify(obj, wantsJson);
     }
 };
+
+export function arrayName2String(array: Token[]): string {
+    return array.map(token => token.data?.getValueString()).filter(value => value).join(" ");
+};

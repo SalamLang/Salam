@@ -1,24 +1,28 @@
-import { AstNode } from '../node';
-import { AstExpression } from '../expression';
+import { AstNode } from './../node';
+import { AstLayoutAttributes } from './attributes';
+import { AstLayout } from './../../ast/layout/layout';
 
 export class AstLayoutElement extends AstNode {
-	children: AstNode[] = [];
-    parameters: { [key: string]: AstExpression } = {};
-    styleParameters: { [key: string]: AstExpression } = {};
+    name: string;
+	children: AstNode[];
+    attributes: AstLayoutAttributes;
+    globalAttributes: AstLayoutAttributes;
 
-    constructor() {
+    constructor(name: string) {
         super("LayoutElement");
-    }
-
-    setParameter(key: string, value: AstExpression) {
-        this.parameters[key] = value;
-    }
-
-    setStyleParameter(key: string, value: AstExpression) {
-        this.styleParameters[key] = value;
+        this.name = name;
+        this.children = [];
+        this.attributes = new AstLayoutAttributes();
+        this.globalAttributes = new AstLayoutAttributes();
     }
 
     pushElement(element: AstNode) {
         this.children.push(element);
+    }
+
+    applyToLayout(ast: AstLayout): void {
+        ast.attributes = this.attributes;
+        ast.globalAttributes = this.globalAttributes;
+        ast.children = this.children;
     }
 }

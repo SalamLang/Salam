@@ -1,7 +1,7 @@
-import { lex } from './../../lexer/lex/lex';
-import { Lexer } from './../../lexer/lex/lexer';
-import { parse } from './../../parser/parse/parse';
-import { Parser } from './../../parser/parse/parser';
+import { lex } from './../../phase/lexer/lex/lex';
+import { Lexer } from './../../phase/lexer/lex/lexer';
+import { parse } from './../../phase/parser/parse/parse';
+import { Parser } from './../../phase/parser/parse/parser';
 import { LanguageMap } from './../../common/language/language';
 
 export function processCommandRun(fileName: string | undefined, absoluteDirPath: string | undefined, source: string, selectedLanguage: LanguageMap): number {

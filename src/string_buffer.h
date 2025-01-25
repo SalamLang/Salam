@@ -415,7 +415,7 @@ size_t mb2strlen(const char *identifier);
 
 /**
  *
- * @function is_english_digit
+ * @function is_utf8_digit
  * @brief Check if a UTF-8 string is an Persian/Arabic/English digit
  * @params {char*} utf8 - UTF-8 string
  * @returns {bool} True if the string is a Persian/Arabic/English digit, false

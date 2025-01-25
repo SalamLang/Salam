@@ -9,7 +9,7 @@ export class Parser {
     lexer: Lexer;
     index: number;
 
-    constructor(lexer: Lexer ) {
+    constructor(lexer: Lexer) {
         this.ast = new AstProgram();
         this.lexer = lexer;
         this.index = 0;

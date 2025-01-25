@@ -20,11 +20,8 @@ export function parse(parser: Parser): void {
                 }
             }
         } else {
-            console.log("Unknown token type.");
-            console.log(token);
+            parser.error("Unexpected token in program, current token is '" + token.type + "'");
             break;
         }
     }
-
-    console.log(parser.index);
 };

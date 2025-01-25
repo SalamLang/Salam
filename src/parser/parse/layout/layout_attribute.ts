@@ -1,8 +1,8 @@
 import { Parser } from './../parser';
 import { AstExpression } from './../ast/expression';
-import { Token } from './../../../lexer/tokenizer/token';
 import { AstLayoutAttribute } from './../ast/layout/attribute';
 import { AstLayoutAttributeType } from './../ast/layout/attribute_type';
+import { Token, arrayName2String } from './../../../lexer/tokenizer/token';
 import { parserParseLayoutAttributeValue } from './layout_attribute_value';
 
 export function parserParseLayoutAttribute(parser: Parser, tokens: Token[]): AstLayoutAttribute | undefined {
@@ -12,7 +12,7 @@ export function parserParseLayoutAttribute(parser: Parser, tokens: Token[]): Ast
         parser.error("Unexpected end of tokens in layout attribute");
     }
 
-    const key: string = tokens.map(token => token.data?.getValueString()).filter(value => value).join(" ");
+    const key: string = arrayName2String(tokens);
 
     const value: AstExpression | undefined = parserParseLayoutAttributeValue(parser, key);
     if (!value) {

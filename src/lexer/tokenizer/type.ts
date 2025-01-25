@@ -79,6 +79,20 @@ export const TokenTypeCombined = {
     ...TokenOtherType,
 } as const;
 
+export function Token2Name(tokenType: TokenType): any {
+    if (tokenType in TokenKeywordType) {
+        return TokenKeywordType[tokenType];
+    } else if (tokenType in TokenValueType) {
+        return TokenValueType[tokenType];
+    } else if (tokenType in TokenOperatorType) {
+        return TokenOperatorType[tokenType];
+    } else if (tokenType in TokenOtherType) {
+        return TokenOtherType[tokenType];
+    } else {
+        return TokenOtherType.TOKEN_ERROR;
+    }
+};
+
 export type TokenType = TokenKeywordType | TokenValueType | TokenOperatorType | TokenOtherType;
 
 export const operatorTypeMaps: Record<string, TokenType> = {

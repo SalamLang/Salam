@@ -13,92 +13,92 @@ export const keywordMaps: Record<TokenKeywordType, KeywordMap> = {
     [TokenKeywordType.TOKEN_IF]: {
         id: TokenKeywordType.TOKEN_IF,
         data: {
-            [LanguageID.LANGUAGE_ENGLISH]: ["if"],
-            [LanguageID.LANGUAGE_PERSIAN]: ["اگر"],
+            [LanguageID.English]: ["if"],
+            [LanguageID.Persian]: ["اگر"],
         },
     },
     [TokenKeywordType.TOKEN_ELSE]: {
         id: TokenKeywordType.TOKEN_ELSE,
         data: {
-            [LanguageID.LANGUAGE_ENGLISH]: ["else"],
-            [LanguageID.LANGUAGE_PERSIAN]: ["وگرنه"],
+            [LanguageID.English]: ["else"],
+            [LanguageID.Persian]: ["وگرنه"],
         },
     },
     [TokenKeywordType.TOKEN_PRINT]: {
         id: TokenKeywordType.TOKEN_PRINT,
         data: {
-            [LanguageID.LANGUAGE_ENGLISH]: ["print"],
-            [LanguageID.LANGUAGE_PERSIAN]: ["چاپ"],
+            [LanguageID.English]: ["print"],
+            [LanguageID.Persian]: ["چاپ"],
         },
     },
     [TokenKeywordType.TOKEN_FN]: {
         id: TokenKeywordType.TOKEN_FN,
         data: {
-            [LanguageID.LANGUAGE_ENGLISH]: ["fn"],
-            [LanguageID.LANGUAGE_PERSIAN]: ["تابع"],
+            [LanguageID.English]: ["fn"],
+            [LanguageID.Persian]: ["تابع"],
         },
     },
     [TokenKeywordType.TOKEN_FOR]: {
         id: TokenKeywordType.TOKEN_FOR,
         data: {
-            [LanguageID.LANGUAGE_ENGLISH]: ["for"],
-            [LanguageID.LANGUAGE_PERSIAN]: ["برای"],
+            [LanguageID.English]: ["for"],
+            [LanguageID.Persian]: ["برای"],
         },
     },
     [TokenKeywordType.TOKEN_WHILE]: {
         id: TokenKeywordType.TOKEN_WHILE,
         data: {
-            [LanguageID.LANGUAGE_ENGLISH]: ["while"],
-            [LanguageID.LANGUAGE_PERSIAN]: ["تا"],
+            [LanguageID.English]: ["while"],
+            [LanguageID.Persian]: ["تا"],
         },
     },
     [TokenKeywordType.TOKEN_REPEAT]: {
         id: TokenKeywordType.TOKEN_REPEAT,
         data: {
-            [LanguageID.LANGUAGE_ENGLISH]: ["repeat"],
-            [LanguageID.LANGUAGE_PERSIAN]: ["تکرار"],
+            [LanguageID.English]: ["repeat"],
+            [LanguageID.Persian]: ["تکرار"],
         },
     },
     [TokenKeywordType.TOKEN_DO]: {
         id: TokenKeywordType.TOKEN_DO,
         data: {
-            [LanguageID.LANGUAGE_ENGLISH]: ["do"],
-            [LanguageID.LANGUAGE_PERSIAN]: ["انجام"],
+            [LanguageID.English]: ["do"],
+            [LanguageID.Persian]: ["انجام"],
         },
     },
     [TokenKeywordType.TOKEN_RET]: {
         id: TokenKeywordType.TOKEN_RET,
         data: {
-            [LanguageID.LANGUAGE_ENGLISH]: ["ret"],
-            [LanguageID.LANGUAGE_PERSIAN]: ["برگشت"],
+            [LanguageID.English]: ["ret"],
+            [LanguageID.Persian]: ["برگشت"],
         },
     },
     [TokenKeywordType.TOKEN_BREAK]: {
         id: TokenKeywordType.TOKEN_BREAK,
         data: {
-            [LanguageID.LANGUAGE_ENGLISH]: ["break"],
-            [LanguageID.LANGUAGE_PERSIAN]: ["شکست"],
+            [LanguageID.English]: ["break"],
+            [LanguageID.Persian]: ["شکست"],
         },
     },
     [TokenKeywordType.TOKEN_CONTINUE]: {
         id: TokenKeywordType.TOKEN_CONTINUE,
         data: {
-            [LanguageID.LANGUAGE_ENGLISH]: ["continue"],
-            [LanguageID.LANGUAGE_PERSIAN]: ["ادامه"],
+            [LanguageID.English]: ["continue"],
+            [LanguageID.Persian]: ["ادامه"],
         },
     },
     [TokenKeywordType.TOKEN_LAYOUT]: {
         id: TokenKeywordType.TOKEN_LAYOUT,
         data: {
-            [LanguageID.LANGUAGE_ENGLISH]: ["layout"],
-            [LanguageID.LANGUAGE_PERSIAN]: ["صفحه"],
+            [LanguageID.English]: ["layout"],
+            [LanguageID.Persian]: ["صفحه"],
         },
     },
     [TokenKeywordType.TOKEN_BLOCK_END]: {
         id: TokenKeywordType.TOKEN_BLOCK_END,
         data: {
-            [LanguageID.LANGUAGE_ENGLISH]: ["end"],
-            [LanguageID.LANGUAGE_PERSIAN]: ["تمام"],
+            [LanguageID.English]: ["end"],
+            [LanguageID.Persian]: ["تمام"],
         },
     },
 };

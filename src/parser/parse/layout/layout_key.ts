@@ -10,10 +10,10 @@ export function parserParseLayoutKey(parser: Parser): Token[] {
         
         parser.next();
         // Eating next part of the key and appending it to the tokens array
-        if (!parser.isEnd) {
+        if (! parser.isEnd) {
             while (true) {
                 const ntoken = parser.currentToken;
-                if (!ntoken.isKeyword || parser.isEnd) {
+                if (! ntoken.isKeyword || parser.isEnd) {
                     break;
                 }
                 key_tokens.push(ntoken);

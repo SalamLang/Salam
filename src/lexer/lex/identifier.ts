@@ -11,7 +11,7 @@ export function lexerLexIdentifier(lexer: Lexer) {
     while (lexer.currentChar !== '\0') {
         const char = lexer.currentChar;
 
-        if (!isUtf8Alpha(char)) {
+        if (! isUtf8Alpha(char)) {
             break;
         }
         value += char;

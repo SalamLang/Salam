@@ -13,19 +13,21 @@ export function parse(parser: Parser): void {
             break;
         } else if (token.type === TokenKeywordType.TOKEN_FN) {
             const function_declaration: AstFunctionDeclaration | undefined = parserParseFunction(parser);
-            if (!function_declaration) {
+            if (! function_declaration) {
                 parser.error("Failed to parse function staement.");
                 break;
             }
-            parser.ast.pushFunctionDeclaration(function_declaration);
+            if (! parser.ast.pushFunctionDeclaration(function_declaration)) {
+                parser.error("Failed to parse function.");
+                break;
+            }
         } else if (token.type === TokenKeywordType.TOKEN_LAYOUT) {
             const layout: AstLayout | undefined = parserParseLayout(parser);
-            if (!layout) {
+            if (! layout) {
                 parser.error("Failed to parse layout element.");
                 break;
             }
-
-            if (!parser.ast.setLayout(layout)) {
+            if (! parser.ast.setLayout(layout)) {
                 parser.error("Duplicate layout definition, cannot have more than one layout definition in a program.");
                 break;
             }

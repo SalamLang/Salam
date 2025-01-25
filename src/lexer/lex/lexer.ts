@@ -5,7 +5,7 @@ import { TokenOtherType } from './../tokenizer/type';
 import { TokenDataType } from './../tokenizer/data';
 import { operatorTypeMaps } from './../tokenizer/type';
 import { TokenLocation } from './../tokenizer/location';
-import { LanguageMap } from './../cli/language/language';
+import { LanguageMap } from './../../common/language/language';
 
 export class Lexer {
     source: string;

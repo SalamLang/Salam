@@ -1,5 +1,5 @@
-import { processCommandRun } from './../run';
 import { LanguageMap } from './../language/language';
+import { processCommandRun } from '../../../common/cli/parser';
 
 export const code_flag = "code";
 

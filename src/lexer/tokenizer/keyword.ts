@@ -1,4 +1,4 @@
-import { LanguageID } from "./../cli/language/language"; 
+import { LanguageID } from './../../common/language/language';
 import { TokenKeywordType } from "./../tokenizer/type";
 
 export interface KeywordMap {

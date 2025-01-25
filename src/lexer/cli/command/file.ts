@@ -1,8 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 
-import { LanguageMap } from './../language/language';
-import { processCommandRun } from './../run';
+import { processCommandRun } from '../../../common/cli/lexer';
+import { LanguageMap } from './../../../common/language/language';
 
 export function processCommandFile(args: string[], selectedLanguage: LanguageMap): number {
     const filePath = args[args.indexOf("file") + 1] || undefined;
@@ -13,8 +13,7 @@ export function processCommandFile(args: string[], selectedLanguage: LanguageMap
         if (!filePath) {
             console.error(`Error: File path not provided.`);
             return 1;
-        }
-        else if (!fs.existsSync(filePath)) {
+        } else if (!fs.existsSync(filePath)) {
             console.error(`Error: File not found - "${filePath}"`);
             return 1;
         }

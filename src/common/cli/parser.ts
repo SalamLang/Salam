@@ -7,7 +7,11 @@ import { LanguageMap } from "../../parser/cli/language/language";
 export function processCommandRun(fileName: string | undefined, absoluteDirPath: string | undefined, source: string, selectedLanguage: LanguageMap): number {
     const lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
     lex(lexer);
-    // lexer.print();
+    lexer.print();
+
+    console.log("=======================");
+    console.log("=======================");
+    console.log("=======================");
 
     const parser = new Parser(lexer);
     parse(parser);

@@ -137,16 +137,16 @@ export function lex(lexer: Lexer): void {
             default:
                 if (stringOpenings.includes(char)) {
                     lexerLexString(lexer, char);
-                } else if (isUtf8Alpha(char)) {
-                    lexerLexIdentifier(lexer);
                 } else if (isUtf8Number(char)) {
                     lexerLexNumber(lexer);
+                } else if (isUtf8Alpha(char)) {
+                    lexerLexIdentifier(lexer);
                 } else {
                     lexer.pushError(`Unexpected character '${char}'`);
                     lexer.advance();
                 }
         }
-
-        lexer.pushToken(new Token(TokenOtherType.TOKEN_EOF, lexer.getLocation()));
     }
+
+    lexer.pushToken(new Token(TokenOtherType.TOKEN_EOF, lexer.getLocation()));
 };

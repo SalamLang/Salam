@@ -1,7 +1,7 @@
 import { Parser } from './parser';
-import { TokenKeywordType, TokenOtherType } from './../../lexer/tokenizer/type';
 import { parserParseLayout } from './layout/layout';
 import { parserParseFunction } from './statement/function';
+import { TokenKeywordType, TokenOtherType } from './../../lexer/tokenizer/type';
 
 export function parse(parser: Parser): void {
     while (parser.index < parser.lexer.tokens.length) {
@@ -16,8 +16,8 @@ export function parse(parser: Parser): void {
         } else {
             console.log("Unknown token type.");
             console.log(token);
+            break;
         }
-        parser.index++;
     }
 
     console.log(parser.index);

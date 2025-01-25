@@ -1,27 +1,47 @@
 import { AstNode } from '../node';
-import { AstExpression } from '../expression';
+import { AstLayoutAttribute } from './attribute';
 
 export class AstLayoutAttributes extends AstNode {
-    parameters: { [key: string]: AstExpression } = {};
-    styleParameters: { [key: string]: AstExpression } = {};
+    attributes: AstLayoutAttribute[];
 
     constructor() {
         super("LayoutAttributes");
+        this.attributes = [];
     }
 
-    hasParameter(key: string): boolean {
-        return key in this.parameters;
+    exists(attribute: AstLayoutAttribute): boolean {
+        for (let attr of this.attributes) {
+            if (attr.getCheckSum() === attribute.getCheckSum()) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    hasStyleParameter(key: string): boolean {
-        return key in this.styleParameters;
+    styleExists(attribute: AstLayoutAttribute): boolean {
+        for (let attr of this.attributes) {
+            if (attr.isStyle() && attr.getCheckSum() === attribute.getCheckSum()) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    setParameter(key: string, value: AstExpression) {
-        this.parameters[key] = value;
+    normalExists(attribute: AstLayoutAttribute): boolean {
+        for (let attr of this.attributes) {
+            if (attr.isNormal() && attr.getCheckSum() === attribute.getCheckSum()) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    setStyleParameter(key: string, value: AstExpression) {
-        this.styleParameters[key] = value;
+    push(attribute: AstLayoutAttribute): boolean {
+        if (this.exists(attribute)) {
+            return false;
+        } else {
+            this.attributes.push(attribute);
+            return true;
+        }
     }
 }

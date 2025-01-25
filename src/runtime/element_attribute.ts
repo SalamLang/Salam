@@ -9,8 +9,10 @@ export class RuntimeElementAttribute {
     reservedValues: RuntimeElementAttributeValue[];
     
     constructor(type: RuntimeElementAttributeType, generate_name: string) {
-        this.type = type;
         this.generate_name = generate_name;
+        this.text = new Map<LanguageID, string[]>();
+        this.type = type;
+        this.reservedValues = [];
     }
 
     addText(languageId: LanguageID, value: string): RuntimeElementAttribute {

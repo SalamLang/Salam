@@ -1,6 +1,6 @@
 export enum LanguageID {
-    LANGUAGE_ENGLISH = 0,
-    LANGUAGE_PERSIAN = 1,
+    English = "English",
+    Persian = "Persian",
 };
 
 export interface LanguageMap {

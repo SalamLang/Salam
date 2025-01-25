@@ -35,7 +35,7 @@ export function parserParseLayoutElement(parser: Parser, tokens: Token[]): AstLa
             //     ^
             else if (parser.skipBlockOpen()) {
                 const element: AstLayoutElement | undefined = parserParseLayoutElement(parser, tokens);
-                if (!element) {
+                if (! element) {
                     parser.error("Unexpected token as element name, current token is '" + parser.currentToken.type + "'");
                     return undefined;
                 }

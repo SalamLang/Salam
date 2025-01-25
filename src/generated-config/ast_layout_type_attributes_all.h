@@ -113,7 +113,9 @@ layout_map_entry_t layout_map[] = {
 
 { AST_LAYOUT_TYPE_MEDIA, valid_attributes_media, valid_attributes_media_length },
 
-// ----------- END AUTO GENERATED ----------- //};
+// ----------- END AUTO GENERATED ----------- //
+
+};
 
 const size_t map_size = sizeof(layout_map) / sizeof(layout_map[0]);
 

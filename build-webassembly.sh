@@ -51,7 +51,7 @@ if emcc "${sources[@]}" -o "${OUTPUT_BASE}.html" \
 	-s NO_EXIT_RUNTIME=1 \
 	-s EXPORTED_FUNCTIONS="['_main']" \
 	-s TOTAL_STACK=8388608 \
-	${DEBUG_FLAGS}; then
+	"${DEBUG_FLAGS}"; then
 
 	echo "Compilation successful. Output files:"
 	echo "  ${OUTPUT_BASE}.html"

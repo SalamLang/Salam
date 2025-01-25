@@ -1,15 +1,18 @@
 import { AstNode } from './node';
 import { AstLayout } from './layout/layout';
+import { LanguageMap } from '../../../../common/language/language';
 import { AstFunctionDeclaration } from './statement/function_declaration';
 
 export class AstProgram extends AstNode {
     errors: string[] = [];
     layout: AstLayout | undefined;
     functions: AstFunctionDeclaration[];
+    language: LanguageMap;
 
-    constructor() {
+    constructor(language: LanguageMap) {
         super("Program");
         this.functions = [];
+        this.language = language;
     }
 
     hasLayout(): boolean {

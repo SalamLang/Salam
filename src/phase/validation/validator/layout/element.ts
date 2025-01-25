@@ -16,4 +16,14 @@ export function validateLayoutElement(validator: Validation, node: AstLayoutElem
     for (const attribute of node.attributes.items) {
         validateLayoutElementAttribute(validator, runtimeElement, attribute);
     }
+
+    // Check if required attributes are present
+    for (const runtimeAttribute of runtimeElement.attributes) {
+        if (runtimeAttribute.is_required) {
+            const found = node.attributes.items.find((nodeAttribute) => runtimeAttribute.getText(validator.ast.language.id)?.includes(nodeAttribute.enduser_name));
+            if (!found) {
+                validator.pushError("Attribute '" + runtimeAttribute.getText(validator.ast.language.id) + "' is required for element '" + node.enduser_name + "' but not found");
+            }
+        }
+    }
 };

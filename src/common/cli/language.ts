@@ -11,7 +11,7 @@ export function processLanguageFlag(args: string[], selectedLanguage: LanguageMa
     if (langFlagIndex !== -1) {
         const langValue: string | undefined = args[langFlagIndex + 1];
 
-        if (!langValue) {
+        if (! langValue) {
             console.error(`Error: Missing value for ${lang_flag} flag.`);
             showAvailableLanguages();
             return 1;

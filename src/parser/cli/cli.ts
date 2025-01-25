@@ -12,7 +12,7 @@ export function processCommand(args: string[], selectedLanguage: LanguageMap): n
         return !arg.startsWith("--") && previousArg !== lang_flag;
     });
 
-    if (!command) {
+    if (! command) {
         console.error("Error: No command provided.");
         return handleMissingArguments();
     }

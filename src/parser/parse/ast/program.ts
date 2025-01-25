@@ -12,8 +12,15 @@ export class AstProgram extends AstNode {
         this.functions = [];
     }
 
-    setLayout(layout: AstLayout): boolean {
+    hasLayout(): boolean {
         if (this.layout !== undefined) {
+            return true;
+        }
+        return false;
+    }
+
+    setLayout(layout: AstLayout): boolean {
+        if (this.hasLayout()) {
             this.pushError("Layout already defined.");
             return false;
         }
@@ -21,8 +28,16 @@ export class AstProgram extends AstNode {
         return true;
     }
 
+    hasFunctionDeclaration(function_declaration: AstFunctionDeclaration): boolean {
+        return false;
+    }
+
     pushFunctionDeclaration(function_declaration: AstFunctionDeclaration): boolean {
-        this.pushFunctionDeclaration(function_declaration);
+        if (this.hasFunctionDeclaration(function_declaration)) {
+            return false;
+        }
+        this.functions.push(function_declaration);
+        return true;
     }
 
     pushError(error: string): void {

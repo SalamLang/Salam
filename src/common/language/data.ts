@@ -1,8 +1,8 @@
 import { LanguageID, LanguageMap } from "./language";
 
 export const languageMaps: Record<LanguageID, LanguageMap> = {
-    [LanguageID.LANGUAGE_ENGLISH]: {
-        id: LanguageID.LANGUAGE_ENGLISH,
+    [LanguageID.English]: {
+        id: LanguageID.English,
         name: "English",
         local_name: "English",
         flag: "en",
@@ -12,8 +12,8 @@ export const languageMaps: Record<LanguageID, LanguageMap> = {
             "while"
         ],
     },
-    [LanguageID.LANGUAGE_PERSIAN]: {
-        id: LanguageID.LANGUAGE_PERSIAN,
+    [LanguageID.Persian]: {
+        id: LanguageID.Persian,
         name: "Persian",
         local_name: "فارسی",
         flag: "fa",

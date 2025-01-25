@@ -10,20 +10,8 @@ import { TokenKeywordType, TokenOperatorType, TokenOtherType } from './../../../
 
 export function parserParseLayoutElement(parser: Parser, tokens: Token[]): AstLayoutElement | undefined {
     const value: string = arrayName2String(tokens);
-    let runtimeElement: RuntimeElement | undefined = undefined;
-    for (const runtimeElementItem of runtimeElements) {
-        if (runtimeElementItem.getText(parser.lexer.language.id)?.includes(value)) {
-            runtimeElement = runtimeElementItem;
-            break;
-        }
-    }
 
-    if (runtimeElement === undefined) {
-        parser.error("Element '" + value + "' is not a valid element");
-        return undefined;
-    }
-
-    const ast: AstLayoutElement = new AstLayoutElement(value, runtimeElement);
+    const ast: AstLayoutElement = new AstLayoutElement(value);
 
     while (parser.index < parser.lexer.tokens.length) {
         if (parser.currentToken.type === TokenKeywordType.TOKEN_BLOCK_END || parser.currentToken.type === TokenOtherType.TOKEN_EOF) {
@@ -38,10 +26,10 @@ export function parserParseLayoutElement(parser: Parser, tokens: Token[]): AstLa
             if (parser.skip(TokenOperatorType.TOKEN_ASSIGN)) {
                 // key = value
                 //       ^
-                const attribute: AstLayoutAttribute | undefined = parserParseLayoutAttribute(parser, value, runtimeElement, tokens);
+                const attribute: AstLayoutAttribute | undefined = parserParseLayoutAttribute(parser, value, tokens);
                 if (attribute) {
                     if (! ast.globalAttributes.push(attribute)) {
-                        parser.error("Duplicate attribute '" + attribute.key + "' in layout");
+                        parser.pushError("Duplicate attribute '" + attribute.key + "' in layout");
                         return undefined;
                     }
                 }
@@ -53,16 +41,16 @@ export function parserParseLayoutElement(parser: Parser, tokens: Token[]): AstLa
                 //       ^
                 const element: AstLayoutElement | undefined = parserParseLayoutElement(parser, tokens);
                 if (! element) {
-                    parser.error("Unexpected token as element name, current token is '" + parser.currentToken.type + "'");
+                    parser.pushError("Unexpected token as element name, current token is '" + parser.currentToken.type + "'");
                     return undefined;
                 }
                 ast.pushElement(element);
             } else {
-                parser.error("Unexpected token in layout, current token is '" + parser.currentToken.type + "'");
+                parser.pushError("Unexpected token in layout, current token is '" + parser.currentToken.type + "'");
                 return undefined;
             }
         } else {
-            parser.error("Unexpected token in layout as attribute, current token is '" + parser.currentToken.type + "'");
+            parser.pushError("Unexpected token in layout as attribute, current token is '" + parser.currentToken.type + "'");
             return undefined;
         }
     }

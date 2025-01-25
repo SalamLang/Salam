@@ -1,22 +1,19 @@
 import { AstNode } from '../node';
 import { AstLayout } from './layout';
 import { AstLayoutAttributes } from './attributes';
-import { RuntimeElement } from './../../../../../runtime/element';
 
 export class AstLayoutElement extends AstNode {
-    name: string;
+    enduser_name: string;
 	children: AstNode[];
     attributes: AstLayoutAttributes;
     globalAttributes: AstLayoutAttributes;
-    runtimeElement: RuntimeElement;
 
-    constructor(name: string, runtimeElement: RuntimeElement) {
+    constructor(enduser_name: string) {
         super("LayoutElement");
-        this.name = name;
+        this.enduser_name = enduser_name;
         this.children = [];
         this.attributes = new AstLayoutAttributes();
         this.globalAttributes = new AstLayoutAttributes();
-        this.runtimeElement = runtimeElement;
     }
 
     pushElement(element: AstNode) {

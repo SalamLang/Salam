@@ -19,7 +19,6 @@ export function parserParseLayoutElement(parser: Parser, tokens: Token[]): AstLa
         // ^
         if (parser.currentToken.isKeyword) {
             const tokens: Token[] = parserParseLayoutKey(parser);
-            console.log(tokens);
 
             // key = value
             //     ^
@@ -28,6 +27,7 @@ export function parserParseLayoutElement(parser: Parser, tokens: Token[]): AstLa
                 if (attribute) {
                     if (! ast.globalAttributes.push(attribute)) {
                         parser.error("Duplicate attribute '" + attribute.key + "' in layout");
+                        return undefined;
                     }
                 }
             }

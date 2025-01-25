@@ -2,6 +2,7 @@ import { Parser } from './parser';
 import { AstLayout } from './ast/layout/layout';
 import { parserParseLayout } from './layout/layout';
 import { parserParseFunction } from './statement/function';
+import { AstFunctionDeclaration } from './ast/function_declaration';
 import { TokenKeywordType, TokenOtherType } from './../../lexer/tokenizer/type';
 
 export function parse(parser: Parser): void {
@@ -11,15 +12,24 @@ export function parse(parser: Parser): void {
         if (token.type === TokenOtherType.TOKEN_EOF) {
             break;
         } else if (token.type === TokenKeywordType.TOKEN_FN) {
-            parserParseFunction(parser);
+            const function_declaration: AstFunctionDeclaration | undefined = parserParseFunction(parser);
+            if (!function_declaration) {
+                parser.error("Failed to parse function staement.");
+                break;
+            }
+            parser.ast.pushFunctionDeclaration(function_declaration);
         } else if (token.type === TokenKeywordType.TOKEN_LAYOUT) {
             const layout: AstLayout | undefined = parserParseLayout(parser);
-            if (layout) {
-                if (!parser.ast.setLayout(layout)) {
-                    parser.error("Duplicate layout definition.");
-                }
+            if (!layout) {
+                parser.error("Failed to parse layout element.");
+                break;
             }
-        } else {
+
+            if (!parser.ast.setLayout(layout)) {
+                parser.error("Duplicate layout definition, cannot have more than one layout definition in a program.");
+                break;
+            }
+    } else {
             parser.error("Unexpected token in program, current token is '" + token.type + "'");
             break;
         }

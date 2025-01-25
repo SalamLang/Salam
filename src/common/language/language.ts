@@ -1,6 +1,6 @@
 export enum LanguageID {
-    English = "English",
-    Persian = "Persian",
+    LanguageEnglish = "English",
+    LanguagePersian = "Persian",
 };
 
 export interface LanguageMap {
@@ -8,6 +8,4 @@ export interface LanguageMap {
     name: string;
     local_name: string;
     flag: string;
-    keywords: string[];
-}
-
+};

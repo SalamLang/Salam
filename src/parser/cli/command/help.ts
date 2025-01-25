@@ -1,7 +1,7 @@
-import { lang_flag } from './../language';
-import { hasExtraArguments } from './../error';
-import { LanguageMap } from './../language/language';
-import { languageMapsValues } from './../language/data'; 
+import { lang_flag } from './../../../common/cli/language';
+import { hasExtraArguments } from './../../../common/cli/error';
+import { LanguageMap } from './../../../common/language/language';
+import { languageMapsValues } from './../../../common/language/data'; 
 
 export function showAvailableLanguages(): void {
     console.log("Available languages:");

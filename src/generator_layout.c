@@ -821,13 +821,10 @@ string_t *generator_code_layout_attributes(generator_t *generator,
 
                         // TODO: Why name lowercase entry->key?
                         if (attribute->final_key == NULL) {
-                            string_append_str(
-                                html_attributes,
-                                entry->key);
+                            string_append_str(html_attributes, entry->key);
                         } else {
-                            string_append_str(
-                                html_attributes,
-                                attribute->final_key);
+                            string_append_str(html_attributes,
+                                              attribute->final_key);
                         }
 
                         string_append_str(html_attributes, "=");

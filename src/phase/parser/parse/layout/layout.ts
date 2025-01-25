@@ -8,15 +8,13 @@ import { TokenKeywordType } from './../../../lexer/tokenizer/type';
 export function parserParseLayout(parser: Parser): AstLayout | undefined {
     // layout:
     // ^
-    const ast: AstLayout = new AstLayout();
-
-    console.log("Parse layout...");
-    const token : Token = parser.currentToken;
+    const token: Token = parser.currentToken;
     parser.expect(TokenKeywordType.TOKEN_LAYOUT);
+    const ast: AstLayout = new AstLayout(token?.data?.getValueString() || "layout");
+
     parser.expectBlockOpen();
 
-    const tokens: Token[] = [token];
-    const element: AstLayoutElement | undefined = parserParseLayoutElement(parser, tokens);
+    const element: AstLayoutElement | undefined = parserParseLayoutElement(parser, [token]);
     if (! element) {
         return undefined;
     }

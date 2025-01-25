@@ -1,5 +1,5 @@
-import { AstNode } from './node';
-import { stringify } from '../../../../serializer';
+import { AstNode } from '../node';
+import { stringify } from '../../../../../serializer';
 
 export class AstLoopFor extends AstNode {
     initializer: AstNode;

@@ -1,7 +1,7 @@
-import { AstNode } from './node';
-import { AstBlock } from './block';
-import { AstExpression } from './expression';
-import { stringify } from '../../../../serializer';
+import { AstNode } from '../node';
+import { AstBlock } from '../block';
+import { AstExpression } from '../expression/expression';
+import { stringify } from '../../../../../serializer';
 
 export class AstIf extends AstNode {
     condition: AstExpression;

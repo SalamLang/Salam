@@ -1,5 +1,4 @@
 import { AstNode } from './../node';
-import { AstExpression } from './../expression';
 import { AstLayoutAttributes } from './attributes';
 export class AstLayout extends AstNode {
 	children: AstNode[] = [];

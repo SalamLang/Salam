@@ -1,5 +1,5 @@
 import { Parser } from '../parser';
-import { AstExpression } from '../ast/expression';
+import { AstExpression } from '../ast/expression/expression';
 import { RuntimeElement } from '../../../../runtime/element';
 import { AstLayoutAttribute } from '../ast/layout/attribute';
 import { AstLayoutAttributeType } from '../ast/layout/attribute_type';

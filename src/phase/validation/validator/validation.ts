@@ -24,15 +24,4 @@ export class Validation {
             validateLayout(this, this.ast.layout);
         }
     }
-
-    validateNode(node: AstNode): void {
-        switch (node.type) {
-            case 'FunctionCall':
-                validateFunctionCall(this, node as AstFunctionCall);
-                break;
-            case 'Layout':
-                validateLayout(this, node as AstLayout);
-                break;
-        }
-    }
 };

@@ -29,10 +29,10 @@ export function parserParseLayoutAttribute(parser: Parser, elementName: string, 
         return undefined;
     }
 
-    const value: AstExpression | undefined = parserParseLayoutAttributeValue(parser, key);
+    const value: AstExpression | undefined = parserParseLayoutAttributeValue(parser, elementName, runtimeElement, key, runtimeElementAttribute);
     if (! value) {
         return undefined;
     }
 
-    return new AstLayoutAttribute(key, value, AstLayoutAttributeType.Normal);
+    return new AstLayoutAttribute(elementName, runtimeElement, key, runtimeElementAttribute, value, AstLayoutAttributeType.Normal);
 };

@@ -23,7 +23,7 @@ export function parserParseLayoutElement(parser: Parser, tokens: Token[]): AstLa
         return undefined;
     }
 
-    const ast: AstLayoutElement = new AstLayoutElement(value);
+    const ast: AstLayoutElement = new AstLayoutElement(value, runtimeElement);
 
     while (parser.index < parser.lexer.tokens.length) {
         if (parser.currentToken.type === TokenKeywordType.TOKEN_BLOCK_END || parser.currentToken.type === TokenOtherType.TOKEN_EOF) {

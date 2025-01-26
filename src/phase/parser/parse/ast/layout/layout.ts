@@ -4,7 +4,7 @@ import { stringify } from '../../../../../serializer';
 
 export class AstLayout extends AstNode {
     enduser_name: string;
-    generate_name: string = "TBC";
+    generate_name: string | undefined = undefined;
 	children: AstNode[] = [];
     attributes: AstLayoutAttributes;
     globalAttributes: AstLayoutAttributes;

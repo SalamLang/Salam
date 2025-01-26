@@ -3,14 +3,14 @@ import { RuntimeElementAttribute } from '../../../../runtime/element_attribute';
 import { AstLayoutAttribute } from '../../../parser/parse/ast/layout/attribute';
 import { RuntimeElementAttributeType } from '../../../../runtime/element_attribute_type';
 
-export function validateLayoutElementAttributeValue(validator: Validator, node: AstLayoutAttribute, runtimeElementAttribute: RuntimeElementAttribute): string | undefined {
+export function validateLayoutElementAttributeValue(validator: Validator, attribute: AstLayoutAttribute, runtimeElementAttribute: RuntimeElementAttribute): string | undefined {
     const attr_name = runtimeElementAttribute.getText(validator.ast.language.id);
-    const value = node.value.getString();
+    const value = attribute.value.getString();
 
-    const error = "Attribute value '" + value + "' is not a valid "+ runtimeElementAttribute.type +" for attribute '" + attr_name + "' in element '" + node.element_enduser_name + "'";
+    const error = "Attribute value '" + value + "' is not a valid "+ runtimeElementAttribute.type +" for attribute '" + attr_name + "' in element '" + attribute.element_enduser_name + "'";
 
     if (runtimeElementAttribute.type !== RuntimeElementAttributeType.String && value === "") {
-        return "Attribute value '" + value + "' is not a valid "+ runtimeElementAttribute.type +" for attribute '" + attr_name + "' as it should not be empty in element '" + node.element_enduser_name + "'";
+        return "Attribute value '" + value + "' is not a valid "+ runtimeElementAttribute.type +" for attribute '" + attr_name + "' as it should not be empty in element '" + attribute.element_enduser_name + "'";
     }
 
     switch (runtimeElementAttribute.type) {
@@ -48,6 +48,9 @@ export function validateLayoutElementAttributeValue(validator: Validator, node: 
         }
 
         case RuntimeElementAttributeType.PositiveInt: {
+            if (isNaN(Number(value)) || Number(value) < 0) {
+                return error;
+            }
             return undefined;
         }
 

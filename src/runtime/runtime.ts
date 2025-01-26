@@ -1,11 +1,13 @@
 import { RuntimeElementAttribute } from './element_attribute';
 
-import { RuntimeElementLayout } from './element/custom/layout';
 import { RuntimeElementA } from './element/a';
+import { RuntimeElementInclude } from './element/custom/include';
+import { RuntimeElementLayout } from './element/custom/layout';
 
 export const runtimeElements = [
     new RuntimeElementLayout(),
     new RuntimeElementA(),
+    new RuntimeElementInclude(),
 ];
 
 import { RuntimeStyleColor } from './style/color';
@@ -29,5 +31,8 @@ export const runtimeGlobalMotherAttributes: RuntimeElementAttribute[] = [
 export const runtimeGlobalSingleAttributes: RuntimeElementAttribute[] = [
 ];
 
+import { RuntimeGlobalAttributeRepeat } from './attribute/custom/repeat';
+
 export const runtimeGlobalAttributes: RuntimeElementAttribute[] = [
+    new RuntimeGlobalAttributeRepeat(),
 ];

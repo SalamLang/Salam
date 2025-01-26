@@ -13,6 +13,7 @@ export class AstLayoutElement extends AstNode {
     content: string | undefined;
     attributes: AstLayoutAttributes;
     globalAttributes: AstLayoutAttributes;
+    repeat: number;
 
     constructor(enduser_name: string) {
         super("LayoutElement");
@@ -25,6 +26,7 @@ export class AstLayoutElement extends AstNode {
         this.generate_name = undefined;
         this.generate_type = undefined;
         this.content = undefined;
+        this.repeat = 1;
     }
 
     print(): void {
@@ -39,6 +41,7 @@ export class AstLayoutElement extends AstNode {
             block: this.block.stringify(false),
             attributes: this.attributes.stringify(false),
             globalAttributes: this.globalAttributes.stringify(false),
+            repeat: this.repeat,
         };
         return stringify(obj, wantsJson);
     }

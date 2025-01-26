@@ -24,31 +24,31 @@ export class Generator {
         this.ident--;
     }
 
-    write(line: string): void {
-        this.source += line;
+    buffer(line: string): string {
+        return line;
     }
 
-    writeLine(line: string): void {
+    bufferLine(line: string): string {
         if (this.enableLines) {
-            this.write(line + '\n');
+            return this.buffer(line + '\n');
         } else {
-            this.write(line);
+            return this.buffer(line);
         }
     }
 
-    writeIndentNoLine(line: string): void {
+    bufferIndentNoLine(line: string): string {
         if (this.enableLines) {
-            this.write(' '.repeat(this.ident * 4) + line);
+            return this.buffer(' '.repeat(this.ident * 4) + line);
         } else {
-            this.write(line);
+            return this.buffer(line);
         }
     }
 
-    writeIndentLine(line: string): void {
+    bufferIndentLine(line: string): string {
         if (this.enableLines) {
-            this.writeIndentNoLine(line + '\n');
+            return this.bufferIndentNoLine(line + '\n');
         } else {
-            this.writeIndentNoLine(line);
+            return this.bufferIndentNoLine(line);
         }
     }
 

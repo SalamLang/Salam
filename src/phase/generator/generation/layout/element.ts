@@ -43,13 +43,28 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
 
     generator.write(`>`);
 
-    if (element.block.length > 0 || (element.content !== undefined && element.content.length > 0)) {
+    const closing: string = `</${element.generate_name}>`;
+
+    let hasContentOrChild: boolean = false;
+    if (element.block.length > 0 || (element.content !== undefined)) {
+        hasContentOrChild = true;
+    }
+
+    // Content of the element
+    if (hasContentOrChild) {
         generator.writeLine("");
         generator.indent();
+        if (element.content !== undefined) {
+            generator.writeIndentLine(element.content);
+        }
         generateLayoutBlock(generator, element.block);
         generator.outdent();
-        generator.writeIndentLine(`</${element.generate_name}>`);
+    }
+    
+    // Close the element
+    if (hasContentOrChild) {
+        generator.writeIndentLine(closing);
     } else {
-        generator.writeLine(`</${element.generate_name}>`);
+        generator.writeLine(closing);
     }
 };

@@ -4,7 +4,6 @@ import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 import { validateLayoutElementAttribute } from './element_attribute';
 
 export function validateLayoutElement(validator: Validation, node: AstLayoutElement): void {
-    console.log("validateLayoutElement:", node);
     const runtimeElement: RuntimeElement | undefined = validator.getElementRuntime(node.enduser_name);
     
     // Check if element is a valid element

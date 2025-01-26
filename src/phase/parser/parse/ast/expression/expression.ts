@@ -9,6 +9,10 @@ export class AstExpression extends AstNode {
         this.expression = expression;
     }
 
+    getString(): string {
+        return this.expression;
+    }
+
     print(): void {
         console.log(this.stringify());
     }

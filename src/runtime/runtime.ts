@@ -1,3 +1,5 @@
+import { RuntimeElementAttribute } from './element_attribute';
+
 import { RuntimeElementLayout } from './element/custom/layout';
 import { RuntimeElementA } from './element/a';
 
@@ -16,4 +18,16 @@ export const runtimeStyleAttributes = [
     new RuntimeStyleFontSize(),
     new RuntimeStyleTextAlign(),
     new RuntimeStyleBackgroundColor(),
+];
+
+import { RuntimeGlobalAttributeContent } from './attribute/content';
+
+export const runtimeGlobalMotherAttributes: RuntimeElementAttribute[] = [
+    new RuntimeGlobalAttributeContent(),
+];
+
+export const runtimeGlobalSingleAttributes: RuntimeElementAttribute[] = [
+];
+
+export const runtimeGlobalAttributes: RuntimeElementAttribute[] = [
 ];

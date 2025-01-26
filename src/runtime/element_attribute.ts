@@ -3,13 +3,13 @@ import { RuntimeElementAttributeType } from './element_attribute_type';
 import { RuntimeElementAttributeValue } from './element_attribute_value';
 
 export class RuntimeElementAttribute {
-    generate_name: string;
+    generate_name: string | undefined;
     text: Map<LanguageID, string[]>;
     type: RuntimeElementAttributeType;
     reservedValues: RuntimeElementAttributeValue[];
     is_required: boolean;
     
-    constructor(type: RuntimeElementAttributeType, generate_name: string) {
+    constructor(type: RuntimeElementAttributeType, generate_name: string | undefined) {
         this.generate_name = generate_name;
         this.text = new Map<LanguageID, string[]>();
         this.type = type;

@@ -15,8 +15,24 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
         runtimeElementAttribute = validator.getElementStyleAttributeRuntime(node.enduser_name);
 
         if (runtimeElementAttribute === undefined) {
-            validator.pushError("Attribute '" + node.enduser_name + "' is not a valid attribute for element '" + element_name + "'");
-            return;
+            // Check if this attribute is a valid global attribute
+            if (runtimeElement.is_mother) {
+                // Check if this attribute is a valid global attribute for a mother element
+                runtimeElementAttribute = validator.getElementGlobalMotherAttributeRuntime(node.enduser_name);
+            } else {
+                // Check if this attribute is a valid global attribute for a simple element
+                runtimeElementAttribute = validator.getElementGlobalSingleAttributeRuntime(node.enduser_name);
+            }
+
+            if (runtimeElementAttribute === undefined) {
+                // Check if this attribute is a valid global attribute
+                runtimeElementAttribute = validator.getElementGlobalAttributeRuntime(node.enduser_name);
+
+                if (runtimeElementAttribute === undefined) {
+                    validator.pushError("Attribute '" + node.enduser_name + "' is not a valid attribute for element '" + element_name + "'");
+                    return;
+                }
+            }
         }
     }
 

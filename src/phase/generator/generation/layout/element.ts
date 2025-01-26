@@ -1,7 +1,7 @@
 import { Generator } from './../generator';
 import { generateLayoutBlock } from './block';
 import { AstLayoutElement } from './../../../parser/parse/ast/layout/element';
-import { generateLayoutAttribute } from './attribute';
+import { generateLayoutAttributes } from './attributes';
 
 export function generateLayoutElement(generator: Generator, element: AstLayoutElement): void {
     if (element.generate_name === undefined) {
@@ -32,15 +32,18 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     }
 
     generator.writeIndentNoLine(`<${element.generate_name}`);
-    if (element.globalAttributes.items.length > 0) {
+
+    let attributes_str: string = "";
+    attributes_str += generateLayoutAttributes(generator, element.attributes);
+    if (attributes_str.length > 0) {
         generator.write(` `);
     }
-    for (const attribute of element.globalAttributes.items) {
-        generateLayoutAttribute(generator, attribute);
-    }
+    attributes_str += generateLayoutAttributes(generator, element.globalAttributes);
+    generator.write(attributes_str);
+
     generator.write(`>`);
 
-    if (element.block.length > 0) {
+    if (element.block.length > 0 || (element.content !== undefined && element.content.length > 0)) {
         generator.writeLine("");
         generator.indent();
         generateLayoutBlock(generator, element.block);

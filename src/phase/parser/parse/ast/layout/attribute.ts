@@ -1,6 +1,6 @@
 import { AstNode } from '../node';
-import { AstExpression } from '../expression/expression';
 import { stringify } from '../../../../../serializer';
+import { AstExpression } from '../expression/expression';
 import { AstLayoutAttributeType } from './attribute_type';
 
 export class AstLayoutAttribute extends AstNode {

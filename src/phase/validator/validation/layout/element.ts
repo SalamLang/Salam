@@ -1,4 +1,5 @@
 import { Validator } from "../validator";
+import { validateLayoutBlock } from './block';
 import { RuntimeElement } from '../../../../runtime/element';
 import { validateLayoutElementAttribute } from './element_attribute';
 import { AstLayoutElement } from "../../../parser/parse/ast/layout/element";
@@ -19,6 +20,8 @@ export function validateLayoutElement(validator: Validator, node: AstLayoutEleme
     for (const attribute of node.attributes.items) {
         validateLayoutElementAttribute(validator, runtimeElement, attribute);
     }
+
+    validateLayoutBlock(validator, node.block);
 
     // Check global attributes
     for (const attribute of node.globalAttributes.items) {

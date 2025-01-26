@@ -6,25 +6,25 @@ import { parserParseLayoutAttribute } from './layout_attribute';
 import { Token, arrayName2String } from './../../../lexer/tokenizer/token';
 import { TokenKeywordType, TokenOperatorType, TokenOtherType } from './../../../lexer/tokenizer/type';
 
-export function parserParseLayoutElement(parser: Parser, tokens: Token[]): AstLayoutElement | undefined {
-    const value: string = arrayName2String(tokens);
+export function parserParseLayoutElement(parser: Parser, element_key_tokens: Token[]): AstLayoutElement | undefined {
+    const element_key: string = arrayName2String(element_key_tokens);
 
-    const element: AstLayoutElement = new AstLayoutElement(value);
+    const element: AstLayoutElement = new AstLayoutElement(element_key);
 
     while (parser.index < parser.lexer.tokens.length) {
         if (parser.currentToken.type === TokenKeywordType.TOKEN_BLOCK_END || parser.currentToken.type === TokenOtherType.TOKEN_EOF) {
             break;
         }
-        // key = value
+        // (attribute_key or element_key) (: or =)
         // ^
         if (parser.currentToken.isKeyword) {
-            const tokens: Token[] = parserParseLayoutKey(parser);
-            // key = value
-            //     ^
+            const key_tokens: Token[] = parserParseLayoutKey(parser);
+            // (attribute_key or element_key) (: or =)
+            //                                ^
             if (parser.skip(TokenOperatorType.TOKEN_ASSIGN)) {
-                // key = value
-                //       ^
-                const attribute: AstLayoutAttribute | undefined = parserParseLayoutAttribute(parser, value, tokens);
+                // attribute_key = value
+                //               ^
+                const attribute: AstLayoutAttribute | undefined = parserParseLayoutAttribute(parser, element_key, key_tokens);
                 if (attribute) {
                     if (! element.globalAttributes.push(attribute)) {
                         parser.pushError("Duplicate attribute '" + attribute.key + "' in layout");
@@ -32,17 +32,17 @@ export function parserParseLayoutElement(parser: Parser, tokens: Token[]): AstLa
                     }
                 }
             }
-            // element :
-            //     ^
+            // element_key :
+            //             ^
             else if (parser.skipBlockOpen()) {
-                // element : 
-                //       ^
-                const element: AstLayoutElement | undefined = parserParseLayoutElement(parser, tokens);
-                if (! element) {
+                // element_key : 
+                //              ^
+                const sub_element: AstLayoutElement | undefined = parserParseLayoutElement(parser, key_tokens);
+                if (! sub_element) {
                     parser.pushError("Unexpected token as element name, current token is '" + parser.currentToken.type + "'");
                     return undefined;
                 }
-                element.block.push(element);
+                element.block.push(sub_element);
             } else {
                 parser.pushError("Unexpected token in layout, current token is '" + parser.currentToken.type + "'");
                 return undefined;

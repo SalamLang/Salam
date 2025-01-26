@@ -4,6 +4,7 @@ import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 import { validateLayoutElementAttribute } from './element_attribute';
 
 export function validateLayoutElement(validator: Validation, node: AstLayoutElement): void {
+    console.log("validateLayoutElement:", node);
     const runtimeElement: RuntimeElement | undefined = validator.getElementRuntime(node.enduser_name);
     
     // Check if element is a valid element
@@ -17,7 +18,12 @@ export function validateLayoutElement(validator: Validation, node: AstLayoutElem
         validateLayoutElementAttribute(validator, runtimeElement, attribute);
     }
 
-    // Check if required attributes are present
+    // Check global attributes
+    for (const attribute of node.globalAttributes.items) {
+        validateLayoutElementAttribute(validator, runtimeElement, attribute);
+    }
+
+    // Check if required attributes are not present
     for (const runtimeAttribute of runtimeElement.attributes) {
         if (runtimeAttribute.is_required) {
             const found = node.attributes.items.find((nodeAttribute) => runtimeAttribute.getText(validator.ast.language.id)?.includes(nodeAttribute.enduser_name));

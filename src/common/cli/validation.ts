@@ -38,9 +38,9 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
         return 1;
     }
 
-    console.log('=======================');
-    console.log('=======================');
-    console.log('=======================');
+    // console.log('=======================');
+    // console.log('=======================');
+    // console.log('=======================');
 
     return 0;
 };

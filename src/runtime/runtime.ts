@@ -6,6 +6,14 @@ export const runtimeElements = [
     new RuntimeElementA(),
 ];
 
-export const runtimeStyles = [
+import { RuntimeStyleColor } from './style/color';
+import { RuntimeStyleFontSize } from './style/font-size';
+import { RuntimeStyleTextAlign } from './style/text-align';
+import { RuntimeStyleBackgroundColor } from './style/background-color';
 
+export const runtimeStyleAttributes = [
+    new RuntimeStyleColor(),
+    new RuntimeStyleFontSize(),
+    new RuntimeStyleTextAlign(),
+    new RuntimeStyleBackgroundColor(),
 ];

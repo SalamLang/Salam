@@ -14,6 +14,15 @@ export class AstLayoutAttributes extends AstNode {
         return this.items.length;
     }
 
+    getByType(type: string, default_value: any = undefined): AstLayoutAttribute | undefined |  any {
+        for (let attr of this.items) {
+            if (attr.generate_type === type) {
+                return attr;
+            }
+        }
+        return default_value;
+    }
+
     exists(attribute: AstLayoutAttribute): boolean {
         for (let attr of this.items) {
             if (attr.getCheckSum() === attribute.getCheckSum()) {

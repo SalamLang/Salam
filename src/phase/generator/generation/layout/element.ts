@@ -6,32 +6,10 @@ import { AstLayoutElement } from './../../../parser/parse/ast/layout/element';
 export function generateLayoutElement(generator: Generator, element: AstLayoutElement): string {
     let result: string = "";
 
+    // Handling custom elements
     if (element.generate_name === undefined) {
-        switch (element.generate_type) {
-            case "RuntimeElementLayout": {
-                result += generator.bufferIndentLine(`<!doctype html>`);
-                result += generator.bufferIndentLine(`<html>`);
-                generator.indent();
-                result += generator.bufferIndentLine(`<head>`);
-                generator.indent();
-                result += generator.bufferIndentLine(`<title>SALAM</title>`);
-                result += generator.bufferIndentLine(`<meta charset="utf-8">`);
-                result += generator.bufferIndentLine(`<meta name="viewport" content="width=device-width, initial-scale=1">`);
-                generator.outdent();
-                result += generator.bufferIndentLine(`</head>`);
-                result += generator.bufferIndentLine(`<body>`);
-                generator.indent();
-
-                result += generateLayoutBlock(generator, element, element.block);
-
-                generator.outdent();
-                result += generator.bufferIndentLine(`</body>`);
-                generator.outdent();
-                result += generator.bufferIndentLine(`</html>`);
-
-                return result;
-            }
-        }
+        switch (element.generate_type) {}
+        return result;
     }
 
     result += generator.bufferIndentNoLine(`<${element.generate_name}`);

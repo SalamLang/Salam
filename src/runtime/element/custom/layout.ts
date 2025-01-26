@@ -30,7 +30,9 @@ export class RuntimeElementLayout extends RuntimeElement {
             .addText(LanguageID.LanguageEnglish, "direction")
             .addReservedValues([
                 new RuntimeElementAttributeValue("ltr").addText(LanguageID.LanguagePersian, "چپ به راست").addText(LanguageID.LanguageEnglish, "left to right"),
-                new RuntimeElementAttributeValue("rtl").addText(LanguageID.LanguagePersian, "راست به چپ").addText(LanguageID.LanguageEnglish, "right to left")
+                new RuntimeElementAttributeValue("rtl").addText(LanguageID.LanguagePersian, "راست به چپ").addText(LanguageID.LanguageEnglish, "right to left"),
+                new RuntimeElementAttributeValue("rtl").addAllText("rtl"),
+                new RuntimeElementAttributeValue("ltr").addAllText("ltr"),
             ])
         );
     }

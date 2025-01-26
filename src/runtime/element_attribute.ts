@@ -29,7 +29,7 @@ export class RuntimeElementAttribute {
         this.text.get(languageId)!.push(value);
         return this;
     }
-    
+
     getText(languageId: LanguageID): string[] | undefined {
         return this.text.get(languageId);
     }

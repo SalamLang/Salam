@@ -158,6 +158,9 @@ extern const size_t valid_attributes_input_length;
 extern ast_layout_attribute_type_t valid_attributes_img[];
 extern const size_t valid_attributes_img_length;
 
+extern ast_layout_attribute_type_t valid_attributes_script[];
+extern const size_t valid_attributes_script_length;
+
 extern ast_layout_attribute_type_t valid_attributes_font[];
 extern const size_t valid_attributes_font_length;
 

@@ -24,22 +24,29 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
         }
 
         case RuntimeElementAttributeType.Urls: {
-            return undefined;
-        }
-
-        case RuntimeElementAttributeType.String: {
+            // TODO: handle array of values
             return undefined;
         }
 
         case RuntimeElementAttributeType.Strings: {
+            // TODO: handle array of values
             return undefined;
+        }
+
+        case RuntimeElementAttributeType.String: {
+            if (value === "") {
+                return undefined;
+            }
+            return error;
         }
 
         case RuntimeElementAttributeType.StringNoEmpty: {
-            return undefined;
+            // TODO: it's better to remove "runtimeElementAttribute.type" from the error message
+            return error;
         }
 
         case RuntimeElementAttributeType.Sizes: {
+            // TODO: handle array of values
             return undefined;
         }
 
@@ -55,6 +62,7 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
         }
 
         case RuntimeElementAttributeType.IDs: {
+            // TODO: handle array of values
             return undefined;
         }
 

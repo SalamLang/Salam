@@ -41,24 +41,20 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
         if (element.content === "") {
             element.content = undefined;
         }
-        return;
-    }
-
-    // Check if attributes values are valid for attribute with reserved values
-    const error_reserved_value: string | undefined = validateLayoutElementAttributeReservedValue(validator, attribute, runtimeElementAttribute);
-    if (error_reserved_value === undefined) {
-        return;
     } else {
-        // Check validation for attribute values
-        const error_validate: string | undefined = validateLayoutElementAttributeValue(validator, attribute, runtimeElementAttribute);
-        if (error_validate !== undefined) {
-            validator.pushError(error_validate);
+        // Check if attributes values are valid for attribute with reserved values
+        const error_reserved_value: string | undefined = validateLayoutElementAttributeReservedValue(validator, attribute, runtimeElementAttribute);
+        if (error_reserved_value !== undefined) {
+            // Check validation for attribute values
+            const error_validate: string | undefined = validateLayoutElementAttributeValue(validator, attribute, runtimeElementAttribute);
+            if (error_validate !== undefined) {
+                validator.pushError(error_validate);
+            }
         }
     }
 
     // Handling repeat attribute (To save on element object)
     if (attribute.generate_type === "RuntimeGlobalAttributeRepeat") {
         element.repeat = parseInt(attribute.value.getString());
-        return;
     }
 };

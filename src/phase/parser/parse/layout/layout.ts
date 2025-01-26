@@ -10,7 +10,6 @@ export function parserParseLayout(parser: Parser): AstLayout | undefined {
     // ^
     const token: Token = parser.currentToken;
     parser.expect(TokenKeywordType.TOKEN_LAYOUT);
-    const ast: AstLayout = new AstLayout(token?.data?.getValueString() || "layout");
 
     parser.expectBlockOpen();
 
@@ -19,7 +18,6 @@ export function parserParseLayout(parser: Parser): AstLayout | undefined {
         return undefined;
     }
 
-    element.applyToLayout(ast);
-
+    const ast: AstLayout = new AstLayout(element);
     return ast;
 };

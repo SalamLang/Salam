@@ -3,13 +3,9 @@ import { Validator } from "../validator";
 import { AstLayout } from "../../../parser/parse/ast/layout/layout";
 
 export function validateLayout(validator: Validator, node: AstLayout): void {
-    // if (node.children.length === 0) {
+    // if (node.block.length === 0) {
     //     validator.errors.push(`Layout "${node.enduser_name}" has no children.`);
     // }
 
-    validateLayoutNode(validator, node);
-
-    for (const child of node.children) {
-        validateLayoutNode(validator, child);
-    }
+    validateLayoutNode(validator, node.root);
 };

@@ -9,7 +9,7 @@ import { TokenKeywordType, TokenOperatorType, TokenOtherType } from './../../../
 export function parserParseLayoutElement(parser: Parser, tokens: Token[]): AstLayoutElement | undefined {
     const value: string = arrayName2String(tokens);
 
-    const ast: AstLayoutElement = new AstLayoutElement(value);
+    const element: AstLayoutElement = new AstLayoutElement(value);
 
     while (parser.index < parser.lexer.tokens.length) {
         if (parser.currentToken.type === TokenKeywordType.TOKEN_BLOCK_END || parser.currentToken.type === TokenOtherType.TOKEN_EOF) {
@@ -26,7 +26,7 @@ export function parserParseLayoutElement(parser: Parser, tokens: Token[]): AstLa
                 //       ^
                 const attribute: AstLayoutAttribute | undefined = parserParseLayoutAttribute(parser, value, tokens);
                 if (attribute) {
-                    if (! ast.globalAttributes.push(attribute)) {
+                    if (! element.globalAttributes.push(attribute)) {
                         parser.pushError("Duplicate attribute '" + attribute.key + "' in layout");
                         return undefined;
                     }
@@ -42,7 +42,7 @@ export function parserParseLayoutElement(parser: Parser, tokens: Token[]): AstLa
                     parser.pushError("Unexpected token as element name, current token is '" + parser.currentToken.type + "'");
                     return undefined;
                 }
-                ast.pushElement(element);
+                element.block.push(element);
             } else {
                 parser.pushError("Unexpected token in layout, current token is '" + parser.currentToken.type + "'");
                 return undefined;
@@ -54,5 +54,5 @@ export function parserParseLayoutElement(parser: Parser, tokens: Token[]): AstLa
     }
 
     parser.expectBlockClose();
-    return ast;
+    return element;
 };

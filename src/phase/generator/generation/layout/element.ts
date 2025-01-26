@@ -20,7 +20,7 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
                 generator.writeIndentLine(`<body>`);
                 generator.indent();
 
-                generateLayoutBlock(generator, element);
+                generateLayoutBlock(generator, element.block);
 
                 generator.outdent();
                 generator.writeIndentLine(`</body>`);
@@ -40,12 +40,10 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     }
     generator.write(`>`);
 
-    if (element.children.length > 0) {
+    if (element.block.length > 0) {
         generator.writeLine("");
         generator.indent();
-        for (const child of element.children) {
-            generateLayoutElement(generator, child as AstLayoutElement);
-        }
+        generateLayoutBlock(generator, element.block);
         generator.outdent();
         generator.writeIndentLine(`</${element.generate_name}>`);
     } else {

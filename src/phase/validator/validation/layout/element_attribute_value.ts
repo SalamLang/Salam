@@ -3,7 +3,7 @@ import { RuntimeElementAttribute } from '../../../../runtime/element_attribute';
 import { AstLayoutAttribute } from '../../../parser/parse/ast/layout/attribute';
 import { RuntimeElementAttributeType } from '../../../../runtime/element_attribute_type';
 
-export function validateLayoutElementAttributeValue(validator: Validation, node: AstLayoutAttribute, runtimeElementAttribute: RuntimeElementAttribute): string | undefined {
+export function validateLayoutElementAttributeValue(validator: Validator, node: AstLayoutAttribute, runtimeElementAttribute: RuntimeElementAttribute): string | undefined {
     const attr_name = runtimeElementAttribute.getText(validator.ast.language.id);
     const value = node.value.getString();
 

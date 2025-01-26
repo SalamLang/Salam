@@ -1,4 +1,4 @@
-import { Validation } from "./Validator";
+import { Validator } from "./Validator";
 import { validateLayout } from "./layout/layout";
 import { AstNode } from "../../parser/parse/ast/node";
 import { validateFunctionCall } from "./statement/function_call";
@@ -7,7 +7,7 @@ import { validateFunctionDeclaration } from "./statement/function_declaration";
 import { AstFunctionCall } from "../../parser/parse/ast/statement/function_call";
 import { AstFunctionDeclaration } from "../../parser/parse/ast/statement/function_declaration";
 
-export function validate(validation: Validation): void {
+export function validate(validation: Validator): void {
     validation.ast.functions.forEach((node: AstFunctionDeclaration) => {
         validateFunctionDeclaration(validation, node as AstFunctionDeclaration);
     });

@@ -50,19 +50,35 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
         hasContentOrChild = true;
     }
 
-    // Content of the element
-    if (hasContentOrChild) {
+    const hasContentWithoutChild = element.content !== undefined && element.block.length === 0;
+    const hasInlineContent = element.content !== undefined && !element.content.includes("\n");
+    const hasMultiOpeningClosing = hasContentOrChild && hasContentWithoutChild && !hasInlineContent;
+    const isOnlyInlineText = hasContentWithoutChild && !hasMultiOpeningClosing;
+
+    // Write the content of the element
+    const writeContent = () => {
+        if (element.content !== undefined) {
+            if (isOnlyInlineText) {
+                generator.write(element.content);
+            } else {
+                generator.writeIndentLine(element.content);
+            }
+        }
+    };
+
+    if (isOnlyInlineText) {
+        writeContent();
+    } else if (hasContentOrChild) {
         generator.writeLine("");
         generator.indent();
-        if (element.content !== undefined) {
-            generator.writeIndentLine(element.content);
-        }
+        writeContent();
         generateLayoutBlock(generator, element.block);
         generator.outdent();
     }
     
     // Close the element
-    if (hasContentOrChild) {
+    const needsIndentClosing = hasMultiOpeningClosing || !hasContentWithoutChild;
+    if (needsIndentClosing) {
         generator.writeIndentLine(closing);
     } else {
         generator.writeLine(closing);

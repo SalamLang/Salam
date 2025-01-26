@@ -55,4 +55,10 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
             validator.pushError(error_validate);
         }
     }
+
+    // Handling repeat attribute (To save on element object)
+    if (attribute.generate_type === "RuntimeGlobalAttributeRepeat") {
+        element.repeat = parseInt(attribute.value.getString());
+        return;
+    }
 };

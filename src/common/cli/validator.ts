@@ -1,10 +1,10 @@
-import { lex } from './../../phase/lexer/lex/lex';
-import { Lexer } from './../../phase/lexer/lex/lexer';
-import { parse } from './../../phase/parser/parse/parse';
-import { Parser } from './../../phase/parser/parse/parser';
-import { LanguageMap } from './../../common/language/language';
-import { Validation } from './../../phase/validation/validator/validation';
-import { validate } from './../../phase/validation/validator/validate';
+import { lex } from '../../phase/lexer/lex/lex';
+import { LanguageMap } from '../language/language';
+import { Lexer } from '../../phase/lexer/lex/lexer';
+import { parse } from '../../phase/parser/parse/parse';
+import { Parser } from '../../phase/parser/parse/parser';
+import { validate } from '../../phase/validator/validation/validate';
+import { Validator } from '../../phase/validator/validation/validator';
 
 export function processCommandRun(fileName: string | undefined, absoluteDirPath: string | undefined, source: string, selectedLanguage: LanguageMap): number {
     const lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
@@ -29,7 +29,7 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
     console.log('=======================');
     console.log('=======================');
 
-    const validation = new Validation(parser.ast);
+    const validation = new Validator(parser.ast);
     validate(validation);
     if (validation.errors.length > 0) {
         validation.errors.forEach((error: string) => {
@@ -37,10 +37,6 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
         });
         return 1;
     }
-
-    // console.log('=======================');
-    // console.log('=======================');
-    // console.log('=======================');
 
     return 0;
 };

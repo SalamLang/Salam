@@ -1,9 +1,9 @@
+import { RuntimeElement } from '../../../runtime/element';
+import { runtimeElements } from '../../../runtime/runtime';
 import { AstProgram } from "../../parser/parse/ast/program";
-import { RuntimeElement } from './../../../runtime/element';
-import { runtimeElements } from './../../../runtime/runtime';
-import { RuntimeElementAttribute } from './../../../runtime/element_attribute';
+import { RuntimeElementAttribute } from '../../../runtime/element_attribute';
 
-export class Validation {
+export class Validator {
     ast: AstProgram;
     errors: string[];
     
@@ -13,7 +13,7 @@ export class Validation {
     }
 
     pushError(message: string) {
-        this.errors.push("Validation error: " + message);
+        this.errors.push("Validator error: " + message);
     }
 
     getElementRuntime(name: string): RuntimeElement | undefined {

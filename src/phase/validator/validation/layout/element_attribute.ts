@@ -7,33 +7,27 @@ import { validateLayoutElementAttributeReservedValue } from './element_attribute
 
 export function validateLayoutElementAttribute(validator: Validator, runtimeElement: RuntimeElement, node: AstLayoutAttribute): void {
     const element_name = runtimeElement.getText(validator.ast.language.id);
-    let runtimeElementAttribute: RuntimeElementAttribute | undefined = validator.getElementAttributeRuntime(runtimeElement, node.enduser_name);
+    const attribute_name = node.enduser_name;
 
-    // Check if this attribute is not a valid attribute for this element
+    const validationChecks = [
+        () => validator.getElementAttributeRuntime(runtimeElement, attribute_name),
+        () => validator.getElementStyleAttributeRuntime(attribute_name),
+        () => runtimeElement.is_mother
+            ? validator.getElementGlobalMotherAttributeRuntime(attribute_name)
+            : validator.getElementGlobalSingleAttributeRuntime(attribute_name),
+        () => validator.getElementGlobalAttributeRuntime(attribute_name),
+    ];
+
+    // Try each check in order, stopping when a valid result is found
+    const runtimeElementAttribute: RuntimeElementAttribute | undefined = validationChecks.reduce((result, check) => {
+        return result || check();
+    }, undefined as RuntimeElementAttribute | undefined);
+
     if (runtimeElementAttribute === undefined) {
-        // Check if this attribute is a valid style attribute for this element
-        runtimeElementAttribute = validator.getElementStyleAttributeRuntime(node.enduser_name);
-
-        if (runtimeElementAttribute === undefined) {
-            // Check if this attribute is a valid global attribute
-            if (runtimeElement.is_mother) {
-                // Check if this attribute is a valid global attribute for a mother element
-                runtimeElementAttribute = validator.getElementGlobalMotherAttributeRuntime(node.enduser_name);
-            } else {
-                // Check if this attribute is a valid global attribute for a simple element
-                runtimeElementAttribute = validator.getElementGlobalSingleAttributeRuntime(node.enduser_name);
-            }
-
-            if (runtimeElementAttribute === undefined) {
-                // Check if this attribute is a valid global attribute
-                runtimeElementAttribute = validator.getElementGlobalAttributeRuntime(node.enduser_name);
-
-                if (runtimeElementAttribute === undefined) {
-                    validator.pushError("Attribute '" + node.enduser_name + "' is not a valid attribute for element '" + element_name + "'");
-                    return;
-                }
-            }
-        }
+        validator.pushError(
+            `Attribute '${attribute_name}' is not a valid attribute for element '${element_name}'`
+        );
+        return;
     }
 
     // Update the generate name of the attribute value

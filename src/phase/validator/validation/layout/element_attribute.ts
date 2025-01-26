@@ -13,18 +13,20 @@ export function validateLayoutElementAttributeReservedValue(validator: Validator
             return error;
         }
         // Update the generate name of the attribute value
-        node.generate_name = found.generate_name;
+        node.generate_name = runtimeElementAttribute.generate_name;
+        console.log("Node generate name: ", node.generate_name);
         return undefined;
     }
     return error;
 };
 
 export function validateLayoutElementAttribute(validator: Validator, runtimeElement: RuntimeElement, node: AstLayoutAttribute): void {
+    const element_name = runtimeElement.getText(validator.ast.language.id);
     const runtimeElementAttribute: RuntimeElementAttribute | undefined = validator.getElementAttributeRuntime(runtimeElement, node.enduser_name);
 
     // Check if attributes are valid attributes for the element
     if (runtimeElementAttribute === undefined) {
-        validator.pushError("Attribute '" + node.enduser_name + "' is not a valid attribute for element '" + runtimeElement.getText(validator.ast.language.id) + "'");
+        validator.pushError("Attribute '" + node.enduser_name + "' is not a valid attribute for element '" + element_name + "'");
         return;
     }
 

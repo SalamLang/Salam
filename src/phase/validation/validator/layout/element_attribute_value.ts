@@ -1,7 +1,7 @@
 import { Validation } from "../validation";
-import { RuntimeElementAttributeType } from './../../../../runtime/element_attribute_type';
 import { RuntimeElementAttribute } from './../../../../runtime/element_attribute';
 import { AstLayoutAttribute } from './../../../parser/parse/ast/layout/attribute';
+import { RuntimeElementAttributeType } from './../../../../runtime/element_attribute_type';
 
 export function validateLayoutElementAttributeValue(validator: Validation, node: AstLayoutAttribute, runtimeElementAttribute: RuntimeElementAttribute): string | undefined {
     const attr_name = runtimeElementAttribute.getText(validator.ast.language.id);
@@ -35,7 +35,7 @@ export function validateLayoutElementAttributeValue(validator: Validation, node:
             return undefined;
         }
 
-        case RuntimeElementAttributeType.AnyNoEmpty: {
+        case RuntimeElementAttributeType.StringNoEmpty: {
             return undefined;
         }
 

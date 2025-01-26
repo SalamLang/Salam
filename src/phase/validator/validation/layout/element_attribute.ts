@@ -1,13 +1,14 @@
 import { Validator } from "../validator";
 import { RuntimeElement } from '../../../../runtime/element';
+import { AstLayoutElement } from "../../../parser/parse/ast/layout/element";
 import { validateLayoutElementAttributeValue } from './element_attribute_value';
 import { RuntimeElementAttribute } from '../../../../runtime/element_attribute';
 import { AstLayoutAttribute } from "../../../parser/parse/ast/layout/attribute";
 import { validateLayoutElementAttributeReservedValue } from './element_attribute_reserved_value';
 
-export function validateLayoutElementAttribute(validator: Validator, runtimeElement: RuntimeElement, node: AstLayoutAttribute): void {
+export function validateLayoutElementAttribute(validator: Validator, runtimeElement: RuntimeElement, attribute: AstLayoutAttribute, element: AstLayoutElement): void {
     const element_name = runtimeElement.getText(validator.ast.language.id);
-    const attribute_name = node.enduser_name;
+    const attribute_name = attribute.enduser_name;
 
     const validationChecks = [
         () => validator.getElementAttributeRuntime(runtimeElement, attribute_name),
@@ -31,16 +32,25 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
     }
 
     // Update the generate name of the attribute value
-    node.generate_name = runtimeElementAttribute.generate_name;
-    node.generate_type = runtimeElementAttribute.constructor.name;
+    attribute.generate_name = runtimeElementAttribute.generate_name;
+    attribute.generate_type = runtimeElementAttribute.constructor.name;
+
+    // Handling content attribute (To save on element object)
+    if (attribute.generate_type === "RuntimeGlobalAttributeContent") {
+        element.content = attribute.value.getString().trim();
+        if (element.content === "") {
+            element.content = undefined;
+        }
+        return;
+    }
 
     // Check if attributes values are valid for attribute with reserved values
-    const error_reserved_value: string | undefined = validateLayoutElementAttributeReservedValue(validator, node, runtimeElementAttribute);
+    const error_reserved_value: string | undefined = validateLayoutElementAttributeReservedValue(validator, attribute, runtimeElementAttribute);
     if (error_reserved_value === undefined) {
         return;
     } else {
         // Check validation for attribute values
-        const error_validate: string | undefined = validateLayoutElementAttributeValue(validator, node, runtimeElementAttribute);
+        const error_validate: string | undefined = validateLayoutElementAttributeValue(validator, attribute, runtimeElementAttribute);
         if (error_validate !== undefined) {
             validator.pushError(error_validate);
         }

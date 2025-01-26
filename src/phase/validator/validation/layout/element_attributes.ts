@@ -1,11 +1,12 @@
 import { Validator } from "../validator";
 import { RuntimeElement } from '../../../../runtime/element';
 import { validateLayoutElementAttribute } from './element_attribute';
+import { AstLayoutElement } from "../../../parser/parse/ast/layout/element";
 import { AstLayoutAttributes } from "../../../parser/parse/ast/layout/attributes";
 
-export function validateLayoutElementAttributes(validator: Validator, element_enduser_name: string, runtimeElement: RuntimeElement, attributes: AstLayoutAttributes): void {
+export function validateLayoutElementAttributes(validator: Validator, element_enduser_name: string, runtimeElement: RuntimeElement, attributes: AstLayoutAttributes, element: AstLayoutElement): void {
     for (const attribute of attributes.items) {
-        validateLayoutElementAttribute(validator, runtimeElement, attribute);
+        validateLayoutElementAttribute(validator, runtimeElement, attribute, element);
     }
 
     // Check if required attributes are not present

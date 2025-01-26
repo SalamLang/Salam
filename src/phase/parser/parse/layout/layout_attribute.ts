@@ -5,19 +5,20 @@ import { AstLayoutAttributeType } from '../ast/layout/attribute_type';
 import { Token, arrayName2String } from './../../../lexer/tokenizer/token';
 import { parserParseLayoutAttributeValue } from './layout_attribute_value';
 
-export function parserParseLayoutAttribute(parser: Parser, element_enduser_name: string, tokens: Token[]): AstLayoutAttribute | undefined {
-    // key = value
+export function parserParseLayoutAttribute(parser: Parser, element_enduser_name: string, attribute_key_tokens: Token[]): AstLayoutAttribute | undefined {
+    // attribute_key = attribute_key
     //      ^
-    if (tokens.length === 0) {
+    if (attribute_key_tokens.length === 0) {
         parser.pushError("Unexpected end of tokens in layout attribute");
     }
 
-    const key: string = arrayName2String(tokens);
+    const attribute_key: string = arrayName2String(attribute_key_tokens);
 
-    const value: AstExpression | undefined = parserParseLayoutAttributeValue(parser, element_enduser_name, key);
-    if (! value) {
+    const attribute_value: AstExpression | undefined = parserParseLayoutAttributeValue(parser, element_enduser_name, attribute_key);
+    if (! attribute_value) {
         return undefined;
     }
 
-    return new AstLayoutAttribute(element_enduser_name, key, value, AstLayoutAttributeType.Normal);
+    const attribute: AstLayoutAttribute = new AstLayoutAttribute(element_enduser_name, attribute_key, attribute_value, AstLayoutAttributeType.Normal);
+    return attribute;
 };

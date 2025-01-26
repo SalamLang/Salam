@@ -1,6 +1,7 @@
 import { Generator } from './../generator';
 import { generateLayoutBlock } from './block';
 import { AstLayoutElement } from './../../../parser/parse/ast/layout/element';
+import { generateLayoutAttribute } from './attribute';
 
 export function generateLayoutElement(generator: Generator, element: AstLayoutElement): void {
     if (element.generate_name === undefined) {
@@ -30,8 +31,24 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
         }
     }
 
-    generator.writeLine(`<${element.generate_name}>`);
-    generator.indent();
-    generator.outdent();
-    generator.writeLine(`</${element.generate_name}>`);
+    generator.writeNoLine(`<${element.generate_name}`);
+    if (element.globalAttributes.items.length > 0) {
+        generator.write(` `);
+    }
+    for (const attribute of element.globalAttributes.items) {
+        generateLayoutAttribute(generator, attribute);
+    }
+    generator.write(`>`);
+
+    if (element.children.length > 0) {
+        generator.write("\n");
+        generator.indent();
+        for (const child of element.children) {
+            generateLayoutElement(generator, child as AstLayoutElement);
+        }
+        generator.outdent();
+        generator.writeLine(`</${element.generate_name}>`);
+    } else {
+        generator.write(`</${element.generate_name}>\n`);
+    }
 };

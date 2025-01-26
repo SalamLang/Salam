@@ -23,8 +23,16 @@ export class Generator {
         this.ident--;
     }
 
+    write(line: string): void {
+        this.source += line;
+    }
+
+    writeNoLine(line: string): void {
+        this.write(' '.repeat(this.ident * 4) + line);
+    }
+
     writeLine(line: string): void {
-        this.source += ' '.repeat(this.ident * 4) + line + '\n';
+        this.writeNoLine(line + '\n');
     }
 
     pushError(message: string) {

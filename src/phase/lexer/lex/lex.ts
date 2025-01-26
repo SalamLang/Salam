@@ -45,7 +45,15 @@ export function lex(lexer: Lexer): void {
 
             case '-':
             case '−':
+                if (lexer.nextChar === '>') {
+                    const nextChar = lexer.nextChar;
+                    lexer.advance();
+                    lexer.advance();
+
+                    lexer.pushToken(new Token(operatorTypeMaps[char + nextChar], lexer.getLocation()));
+                } else {
                     lexer.readDoubleToken(char);
+                }
                 break;
 
             case '*':
@@ -77,30 +85,12 @@ export function lex(lexer: Lexer): void {
                 lexer.readDoubleToken(char);
                 break;
 
-            case '|':
-                lexer.readDoubleToken(char);
-                break;
-
             case '.':
                 lexer.readDoubleToken(char);
                 break;
 
             case '=':
                 lexer.readThreeToken(char, char);
-                break;
-
-            case '-':
-                if (lexer.nextChar === '>') {
-                    const nextChar = lexer.nextChar;
-                    lexer.advance();
-                    lexer.advance();
-
-                    lexer.pushToken(new Token(operatorTypeMaps[char + nextChar], lexer.getLocation()));
-                } else {
-                    lexer.advance();
-
-                    lexer.pushToken(new Token(operatorTypeMaps[char], lexer.getLocation()));
-                }
                 break;
 
             case '<':
@@ -133,7 +123,7 @@ export function lex(lexer: Lexer): void {
                 lexer.pushToken(new Token(operatorTypeMaps[char], lexer.getLocation()));
                 lexer.advance();
                 break;
-            
+
             default:
                 if (stringOpenings.includes(char)) {
                     lexerLexString(lexer, char);

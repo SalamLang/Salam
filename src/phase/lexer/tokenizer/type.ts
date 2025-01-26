@@ -105,6 +105,7 @@ export const operatorTypeMaps: Record<string, TokenType> = {
     "-": TokenOperatorType.TOKEN_MINUS,
     "−": TokenOperatorType.TOKEN_MINUS,
     "->": TokenOperatorType.TOKEN_MEMBER,
+    "−>": TokenOperatorType.TOKEN_MEMBER,
     ".": TokenOperatorType.TOKEN_MEMBER,
     "..": TokenOperatorType.TOKEN_RANGE,
     "*": TokenOperatorType.TOKEN_MULTIPLY,

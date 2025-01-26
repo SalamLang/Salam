@@ -19,7 +19,7 @@ export function parserParseLayoutKey(parser: Parser): Token[] {
                 key_tokens.push(ntoken);
                 parser.next();
             };
-        }
+       }
     }
     
     return key_tokens;

@@ -1,5 +1,5 @@
 import { AstNode } from '../node';
-import { AstLayout } from './layout';
+import { AstLayoutBlock } from './block';
 import { AstLayoutAttributes } from './attributes';
 import { stringify } from '../../../../../serializer';
 
@@ -9,7 +9,7 @@ export class AstLayoutElement extends AstNode {
     generate_type: string | undefined;
     parent_generate_name: string | undefined;
     parent_generate_type: string | undefined;
-	children: AstNode[];
+	block: AstLayoutBlock;
     content: string | undefined;
     attributes: AstLayoutAttributes;
     globalAttributes: AstLayoutAttributes;
@@ -17,7 +17,7 @@ export class AstLayoutElement extends AstNode {
     constructor(enduser_name: string) {
         super("LayoutElement");
         this.enduser_name = enduser_name;
-        this.children = [];
+        this.block = new AstLayoutBlock();
         this.attributes = new AstLayoutAttributes();
         this.globalAttributes = new AstLayoutAttributes();
         this.parent_generate_name = undefined;
@@ -25,16 +25,6 @@ export class AstLayoutElement extends AstNode {
         this.generate_name = undefined;
         this.generate_type = undefined;
         this.content = undefined;
-    }
-
-    pushElement(element: AstNode) {
-        this.children.push(element);
-    }
-
-    applyToLayout(ast: AstLayout): void {
-        ast.attributes = this.attributes;
-        ast.globalAttributes = this.globalAttributes;
-        ast.children = this.children;
     }
 
     print(): void {
@@ -46,7 +36,7 @@ export class AstLayoutElement extends AstNode {
             enduser_name: this.enduser_name,
             generate_name: this.generate_name,
             generate_type: this.generate_type,
-            children: this.children.map(child => child.stringify(false)),
+            block: this.block.stringify(false),
             attributes: this.attributes.stringify(false),
             globalAttributes: this.globalAttributes.stringify(false),
         };

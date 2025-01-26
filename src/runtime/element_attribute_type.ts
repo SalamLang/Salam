@@ -1,37 +1,38 @@
 export enum RuntimeElementAttributeType {
-    String = "STRING",
-    StringNoEmpty = "StringNoEmpty",
-    Strings = "Strings",
+  String = 'STRING',
+  StringNoEmpty = 'StringNoEmpty',
+  Strings = 'Strings',
 
-    Uri = "Uri",
-    Uris = "Uris",
+  Uri = 'Uri',
+  Uris = 'Uris',
 
-    Url = "Url",
-    Urls = "Urls",
+  Url = 'Url',
+  Urls = 'Urls',
 
-    Sizes = "Sizes",
-    Size = "Size",
+  Sizes = 'Sizes',
+  Size = 'Size',
 
-    PositiveInt = "PositiveInt",
+  PositiveInt = 'PositiveInt',
 
-    ID = "ID",
-    IDs = "IDs",
+  ID = 'ID',
+  IDs = 'IDs',
 
-    CSSMedia = "CSSMedia",
+  CSSMedia = 'CSSMedia',
 
-    Coords = "Coords",
+  Coords = 'Coords',
 
-    Color = "Color",
-    Colors = "Colors",
+  Color = 'Color',
+  Colors = 'Colors',
 
-    Number = "Number",
+  Number = 'Number',
 
-    Boolean = "Boolean",
+  Boolean = 'Boolean',
 
-    Date = "Date",
-    Time = "Time",
-    Times = "Times",
-    DateTime = "DateTime",
+  Date = 'Date',
+  Time = 'Time',
+  Times = 'Times',
+  DateTime = 'DateTime',
 
-    NumberOr2Numbers = "NumberOr2Numbers", // aspect-ratio
-};
+  NumberOr2Numbers = 'NumberOr2Numbers', // aspect-ratio
+  AnyNoEmpty = 'AnyNoEmpty',
+}

@@ -27,7 +27,7 @@ export class Validator {
                 if (runtimeElementItem.getText(this.ast.language.id)?.includes(name)) {
                     if (parent_element === undefined) {
                         return runtimeElementItem;
-                    } else if (runtimeElementItem.belongs_to.map((element: RuntimeElement) => element.constructor.name).includes(parent_element.constructor.name)) {
+                    } else if (runtimeElementItem.belongs_to.length === 0 || runtimeElementItem.belongs_to.map((element: RuntimeElement) => element.constructor.name).includes(parent_element.constructor.name)) {
                         return runtimeElementItem;
                     }
                 }

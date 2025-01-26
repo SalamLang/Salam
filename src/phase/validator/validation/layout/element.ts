@@ -17,10 +17,10 @@ export function validateLayoutElement(validator: Validator, node: AstLayoutEleme
     node.generate_type = runtimeElement.constructor.name;
 
     // Check attributes
-    validateLayoutElementAttributes(validator, node.enduser_name, runtimeElement, node.attributes);
+    validateLayoutElementAttributes(validator, node.enduser_name, runtimeElement, node.attributes, node);
 
     // Check global attributes
-    validateLayoutElementAttributes(validator, node.enduser_name, runtimeElement, node.globalAttributes);
+    validateLayoutElementAttributes(validator, node.enduser_name, runtimeElement, node.globalAttributes, node);
 
     // Check block
     validateLayoutBlock(validator, node.block);

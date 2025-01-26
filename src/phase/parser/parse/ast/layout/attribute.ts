@@ -2,8 +2,6 @@ import { AstNode } from '../node';
 import { AstExpression } from '../expression/expression';
 import { stringify } from '../../../../../serializer';
 import { AstLayoutAttributeType } from './attribute_type';
-import { RuntimeElement } from '../../../../../runtime/element';
-import { RuntimeElementAttribute } from '../../../../../runtime/element_attribute';
 
 export class AstLayoutAttribute extends AstNode {
     key: string;

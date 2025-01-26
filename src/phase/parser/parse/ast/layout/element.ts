@@ -5,9 +5,12 @@ import { stringify } from '../../../../../serializer';
 
 export class AstLayoutElement extends AstNode {
     enduser_name: string;
-    generate_name: string | undefined = undefined;
-    generate_type: string | undefined = undefined;
+    generate_name: string | undefined;
+    generate_type: string | undefined;
+    parent_generate_name: string | undefined;
+    parent_generate_type: string | undefined;
 	children: AstNode[];
+    content: string | undefined;
     attributes: AstLayoutAttributes;
     globalAttributes: AstLayoutAttributes;
 
@@ -17,6 +20,11 @@ export class AstLayoutElement extends AstNode {
         this.children = [];
         this.attributes = new AstLayoutAttributes();
         this.globalAttributes = new AstLayoutAttributes();
+        this.parent_generate_name = undefined;
+        this.parent_generate_type = undefined;
+        this.generate_name = undefined;
+        this.generate_type = undefined;
+        this.content = undefined;
     }
 
     pushElement(element: AstNode) {

@@ -7,31 +7,31 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     if (element.generate_name === undefined) {
         switch (element.generate_type) {
             case "RuntimeElementLayout": {
-                generator.writeLine(`<!doctype html>`);
-                generator.writeLine(`<html>`);
+                generator.writeIndentLine(`<!doctype html>`);
+                generator.writeIndentLine(`<html>`);
                 generator.indent();
-                generator.writeLine(`<head>`);
+                generator.writeIndentLine(`<head>`);
                 generator.indent();
-                generator.writeLine(`<title>SALAM</title>`);
-                generator.writeLine(`<meta charset="utf-8">`);
-                generator.writeLine(`<meta name="viewport" content="width=device-width, initial-scale=1">`);
+                generator.writeIndentLine(`<title>SALAM</title>`);
+                generator.writeIndentLine(`<meta charset="utf-8">`);
+                generator.writeIndentLine(`<meta name="viewport" content="width=device-width, initial-scale=1">`);
                 generator.outdent();
-                generator.writeLine(`</head>`);
-                generator.writeLine(`<body>`);
+                generator.writeIndentLine(`</head>`);
+                generator.writeIndentLine(`<body>`);
                 generator.indent();
 
                 generateLayoutBlock(generator, element);
 
                 generator.outdent();
-                generator.writeLine(`</body>`);
+                generator.writeIndentLine(`</body>`);
                 generator.outdent();
-                generator.writeLine(`</html>`);
+                generator.writeIndentLine(`</html>`);
                 return;
             }
         }
     }
 
-    generator.writeNoLine(`<${element.generate_name}`);
+    generator.writeIndentNoLine(`<${element.generate_name}`);
     if (element.globalAttributes.items.length > 0) {
         generator.write(` `);
     }
@@ -41,14 +41,14 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     generator.write(`>`);
 
     if (element.children.length > 0) {
-        generator.write("\n");
+        generator.writeLine("");
         generator.indent();
         for (const child of element.children) {
             generateLayoutElement(generator, child as AstLayoutElement);
         }
         generator.outdent();
-        generator.writeLine(`</${element.generate_name}>`);
+        generator.writeIndentLine(`</${element.generate_name}>`);
     } else {
-        generator.write(`</${element.generate_name}>\n`);
+        generator.writeLine(`</${element.generate_name}>`);
     }
 };

@@ -5,6 +5,7 @@ export class Generator {
     errors: string[];
     ident: number = 0;
     source: string = '';
+    enableLines: boolean = true;
 
     constructor(ast: AstProgram) {
         this.ast = ast;
@@ -27,12 +28,28 @@ export class Generator {
         this.source += line;
     }
 
-    writeNoLine(line: string): void {
-        this.write(' '.repeat(this.ident * 4) + line);
+    writeLine(line: string): void {
+        if (this.enableLines) {
+            this.write(line + '\n');
+        } else {
+            this.write(line);
+        }
     }
 
-    writeLine(line: string): void {
-        this.writeNoLine(line + '\n');
+    writeIndentNoLine(line: string): void {
+        if (this.enableLines) {
+            this.write(' '.repeat(this.ident * 4) + line);
+        } else {
+            this.write(line);
+        }
+    }
+
+    writeIndentLine(line: string): void {
+        if (this.enableLines) {
+            this.writeIndentNoLine(line + '\n');
+        } else {
+            this.writeIndentNoLine(line);
+        }
     }
 
     pushError(message: string) {

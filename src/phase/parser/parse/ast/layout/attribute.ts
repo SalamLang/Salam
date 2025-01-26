@@ -22,6 +22,13 @@ export class AstLayoutAttribute extends AstNode {
         this.element_enduser_name = element_enduser_name;
     }
 
+    getValue(): string {
+        if (this.generate_value !== undefined) {
+            return this.generate_value;
+        }
+        return this.value.getString();
+    }
+
     isStyle(): boolean {
         return this.kind === AstLayoutAttributeType.Style;
     }

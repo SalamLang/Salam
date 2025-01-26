@@ -14,13 +14,13 @@ export class AstLayoutAttributes extends AstNode {
         return this.items.length;
     }
 
-    getByType(type: string, default_value: any = undefined): AstLayoutAttribute | undefined |  any {
+    getByGenerateName(generate_name: string): AstLayoutAttribute | undefined {
         for (let attr of this.items) {
-            if (attr.generate_type === type) {
+            if (attr.generate_name === generate_name) {
                 return attr;
             }
         }
-        return default_value;
+        return undefined;
     }
 
     exists(attribute: AstLayoutAttribute): boolean {

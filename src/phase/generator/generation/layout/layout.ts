@@ -5,10 +5,12 @@ import { AstLayout } from './../../../parser/parse/ast/layout/layout';
 export function generateLayout(generator: Generator, layout: AstLayout): string {
     let result: string = "";
 
-    const attribute_title: string = layout.root.attributes.getByType("title", "Salam").getValue();
+    const attribute_dir: string = layout.root.globalAttributes.getByGenerateName("dir")?.getValue() || "rtl";
+    const attribute_lang: string = layout.root.globalAttributes.getByGenerateName("lang")?.getValue() || "fa-IR";
+    const attribute_title: string = layout.root.globalAttributes.getByGenerateName("title")?.getValue() || "Salam Untitled";
 
     result += generator.bufferIndentLine(`<!doctype html>`);
-    result += generator.bufferIndentLine(`<html>`);
+    result += generator.bufferIndentLine(`<html dir="${attribute_dir}" lang="${attribute_lang}">`);
     generator.indent();
     result += generator.bufferIndentLine(`<head>`);
     generator.indent();

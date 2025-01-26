@@ -1,6 +1,6 @@
 import { validateLayoutNode } from "./node";
-import { Validation } from "./../validation";
-import { AstLayout } from "./../../../parser/parse/ast/layout/layout";
+import { Validation } from "../Validator";
+import { AstLayout } from "../../../parser/parse/ast/layout/layout";
 
 export function validateLayout(validator: Validation, node: AstLayout): void {
     if (node.children.length === 0) {

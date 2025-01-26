@@ -3,8 +3,8 @@ import { RuntimeElementAttribute } from './element_attribute';
 
 export class RuntimeElement {
     is_mother: boolean;
-    text: Map<LanguageID, string[]>;
     generate_name: string;
+    text: Map<LanguageID, string[]>;
     attributes: RuntimeElementAttribute[];
     
     constructor(is_mother: boolean, generate_name: string) {

@@ -1,5 +1,5 @@
 import { validateLayoutNode } from "./node";
-import { Validation } from "../Validator";
+import { Validator } from "../validator";
 import { AstLayout } from "../../../parser/parse/ast/layout/layout";
 
 export function validateLayout(validator: Validator, node: AstLayout): void {

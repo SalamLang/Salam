@@ -8,6 +8,7 @@ export class AstLayoutAttribute extends AstNode {
     value: AstExpression;
     kind: AstLayoutAttributeType;
     enduser_name: string;
+    generate_name: string = "TBC";
     element_enduser_name: string;
 
     constructor(element_enduser_name: string, key: string, value: AstExpression, kind: AstLayoutAttributeType) {
@@ -40,6 +41,8 @@ export class AstLayoutAttribute extends AstNode {
             key: this.key,
             value: this.value.stringify(wantsJson),
             kind: this.kind,
+            enduser_name: this.enduser_name,
+            generate_name: this.generate_name,
         };
         return stringify(obj, wantsJson);
     }

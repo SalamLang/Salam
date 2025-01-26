@@ -2,6 +2,9 @@ import { RuntimeElement } from '../../../runtime/element';
 import { runtimeElements } from '../../../runtime/runtime';
 import { AstProgram } from "../../parser/parse/ast/program";
 import { runtimeStyleAttributes } from '../../../runtime/runtime';
+import { runtimeGlobalAttributes } from '../../../runtime/runtime';
+import { runtimeGlobalSingleAttributes } from '../../../runtime/runtime';
+import { runtimeGlobalMotherAttributes } from '../../../runtime/runtime';
 import { RuntimeElementAttribute } from '../../../runtime/element_attribute';
 
 export class Validator {
@@ -18,18 +21,55 @@ export class Validator {
     }
 
     getElementRuntime(name: string): RuntimeElement | undefined {
-        for (const runtimeElementItem of runtimeElements) {
-            if (runtimeElementItem.getText(this.ast.language.id)?.includes(name)) {
-                return runtimeElementItem;
+        if (runtimeElements.length > 0) {
+            for (const runtimeElementItem of runtimeElements) {
+                if (runtimeElementItem.getText(this.ast.language.id)?.includes(name)) {
+                    return runtimeElementItem;
+                }
+            }
+        }
+        return undefined;
+    }
+
+    getElementGlobalMotherAttributeRuntime(name: string): RuntimeElementAttribute | undefined {
+        if (runtimeGlobalMotherAttributes.length > 0) {
+            for (const runtimeAttributeItem of runtimeGlobalMotherAttributes) {
+                if (runtimeAttributeItem.getText(this.ast.language.id)?.includes(name)) {
+                    return runtimeAttributeItem;
+                }
+            }
+        }
+        return undefined;
+    }
+
+    getElementGlobalSingleAttributeRuntime(name: string): RuntimeElementAttribute | undefined {
+        if (runtimeGlobalSingleAttributes.length > 0) {
+            for (const runtimeAttributeItem of runtimeGlobalSingleAttributes) {
+                if (runtimeAttributeItem.getText(this.ast.language.id)?.includes(name)) {
+                    return runtimeAttributeItem;
+                }
+            }
+        }
+        return undefined;
+    }
+
+    getElementGlobalAttributeRuntime(name: string): RuntimeElementAttribute | undefined {
+        if (runtimeGlobalAttributes.length > 0) {
+            for (const runtimeAttributeItem of runtimeGlobalAttributes) {
+                if (runtimeAttributeItem.getText(this.ast.language.id)?.includes(name)) {
+                    return runtimeAttributeItem;
+                }
             }
         }
         return undefined;
     }
 
     getElementStyleAttributeRuntime(name: string): RuntimeElementAttribute | undefined {
-        for (const runtimeElementAttributeItem of runtimeStyleAttributes) {
-            if (runtimeElementAttributeItem.getText(this.ast.language.id)?.includes(name)) {
-                return runtimeElementAttributeItem;
+        if (runtimeStyleAttributes.length > 0) {
+            for (const runtimeAttributeItem of runtimeStyleAttributes) {
+                if (runtimeAttributeItem.getText(this.ast.language.id)?.includes(name)) {
+                    return runtimeAttributeItem;
+                }
             }
         }
         return undefined;
@@ -37,9 +77,9 @@ export class Validator {
 
     getElementAttributeRuntime(element: RuntimeElement, key: string): RuntimeElementAttribute | undefined {
         // TODO: handle global attributes
-        for (const attribute of element.attributes) {
-            if (attribute.getText(this.ast.language.id)?.includes(key)) {
-                return attribute;
+        for (const runtimeAttributeItem of element.attributes) {
+            if (runtimeAttributeItem.getText(this.ast.language.id)?.includes(key)) {
+                return runtimeAttributeItem;
             }
         }
         return undefined;

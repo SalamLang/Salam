@@ -3,5 +3,5 @@ import { generateLayoutElement } from './element';
 import { AstLayout } from './../../../parser/parse/ast/layout/layout';
 
 export function generateLayout(generator: Generator, layout: AstLayout): string {
-    return generateLayoutElement(generator, undefined, layout.root);
+    return generateLayoutElement(generator, layout.root);
 };

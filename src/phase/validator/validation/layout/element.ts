@@ -4,24 +4,24 @@ import { RuntimeElement } from '../../../../runtime/element';
 import { validateLayoutElementAttributes } from './element_attributes';
 import { AstLayoutElement } from "../../../parser/parse/ast/layout/element";
 
-export function validateLayoutElement(validator: Validator, node: AstLayoutElement): void {
-    const runtimeElement: RuntimeElement | undefined = validator.getElementRuntime(node.enduser_name);
+export function validateLayoutElement(validator: Validator, parent_element: AstLayoutElement | undefined, element: AstLayoutElement): void {
+    const runtimeElement: RuntimeElement | undefined = validator.getElementRuntime(parent_element, element.enduser_name);
 
     // Check if element is a valid element
     if (runtimeElement === undefined) {
-        validator.pushError("Element '" + node.enduser_name + "' is not a valid element");
+        validator.pushError("Element '" + element.enduser_name + "' is not a valid element");
         return;
     }
 
-    node.generate_name = runtimeElement.generate_name;
-    node.generate_type = runtimeElement.constructor.name;
+    element.generate_name = runtimeElement.generate_name;
+    element.generate_type = runtimeElement.constructor.name;
 
     // Check attributes
-    validateLayoutElementAttributes(validator, node.enduser_name, runtimeElement, node.attributes, node);
+    validateLayoutElementAttributes(validator, element.enduser_name, runtimeElement, element.attributes, element);
 
     // Check global attributes
-    validateLayoutElementAttributes(validator, node.enduser_name, runtimeElement, node.globalAttributes, node);
+    validateLayoutElementAttributes(validator, element.enduser_name, runtimeElement, element.globalAttributes, element);
 
     // Check block
-    validateLayoutBlock(validator, node.block);
+    validateLayoutBlock(validator, parent_element, element, element.block);
 };

@@ -12,7 +12,6 @@ export class AstBlock extends AstNode {
 		this.children.push(node);
 	}
 
-
 	print(): void {
 		console.log(this.stringify());
 	}

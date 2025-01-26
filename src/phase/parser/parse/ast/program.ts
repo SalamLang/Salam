@@ -48,7 +48,6 @@ export class AstProgram extends AstNode {
         this.errors.push(error);
     }
 
-
     print(): void {
         console.log(this.stringify());
     }

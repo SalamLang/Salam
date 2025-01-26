@@ -1,8 +1,6 @@
-import { MessageStruct } from './../message';
+import { MessageKeys, MessageStruct } from './../message';
 
 export const lexerMessages: MessageStruct = {
-    "ERR_INVALID_INPUT": "The input provided is invalid.",
-    "ERR_NOT_FOUND": "The requested resource could not be found.",
-    "MSG_SUCCESS": "Operation completed successfully.",
-    "ERR_AUTH_FAILED": "Authentication failed. Please check your credentials.",
+    [MessageKeys.LEXER_INVALID_UNEXPECTED_CHAR]: "Unexpected character '{0}'",
+    [MessageKeys.LEXER_UNTERMINATED_MULTI_LINE_COMMENT_BLOCK]: "Unterminated multi-line comment block",
 };

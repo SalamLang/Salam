@@ -46,7 +46,9 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
 
     console.log(validator.ast.stringify());
 
-    return 0;
+    console.log('=======================');
+    console.log('=======================');
+    console.log('=======================');
 
     const generator = new Generator(validator.ast);
     generate(generator);

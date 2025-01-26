@@ -9,7 +9,7 @@ export function showAvailableLanguages(): void {
 };
 
 export function showUsage(): void {
-    console.log("Usage: ./salam-validation [options] <command>");
+    console.log("Usage: ./salam-generator [options] <command>");
     console.log("");
     console.log("Commands:");
     console.log("  version         Display the version of Salam CLI.");

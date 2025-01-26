@@ -1,7 +1,7 @@
-import { Validation } from "../validation";
-import { RuntimeElementAttribute } from './../../../../runtime/element_attribute';
-import { AstLayoutAttribute } from './../../../parser/parse/ast/layout/attribute';
-import { RuntimeElementAttributeType } from './../../../../runtime/element_attribute_type';
+import { Validation } from "../Validator";
+import { RuntimeElementAttribute } from '../../../../runtime/element_attribute';
+import { AstLayoutAttribute } from '../../../parser/parse/ast/layout/attribute';
+import { RuntimeElementAttributeType } from '../../../../runtime/element_attribute_type';
 
 export function validateLayoutElementAttributeValue(validator: Validation, node: AstLayoutAttribute, runtimeElementAttribute: RuntimeElementAttribute): string | undefined {
     const attr_name = runtimeElementAttribute.getText(validator.ast.language.id);

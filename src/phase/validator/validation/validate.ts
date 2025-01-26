@@ -1,4 +1,4 @@
-import { Validation } from "./validation";
+import { Validation } from "./Validator";
 import { validateLayout } from "./layout/layout";
 import { AstNode } from "../../parser/parse/ast/node";
 import { validateFunctionCall } from "./statement/function_call";

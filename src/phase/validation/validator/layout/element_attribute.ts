@@ -33,7 +33,6 @@ export function validateLayoutElementAttribute(validator: Validation, runtimeEle
     } else {
         // Check validation for attribute values
         const error_validate: string | undefined = validateLayoutElementAttributeValue(validator, node, runtimeElementAttribute);
-        console.log("error_validate:", error_validate);
         if (error_validate !== undefined) {
             validator.pushError(error_validate);
         }

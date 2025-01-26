@@ -55,7 +55,7 @@ export class AstProgram extends AstNode {
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             type: this.type,
-            functions: this.functions.map((f) => f.stringify(false)),
+            functions: this.functions.map((f: AstFunctionDeclaration) => f.stringify(false)),
             layout: this.layout?.stringify(false),
             errors: this.errors,
             language: this.language,

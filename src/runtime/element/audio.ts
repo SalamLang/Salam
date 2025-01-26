@@ -42,7 +42,7 @@ export class RuntimeElementAudio extends RuntimeElement {
         .addText(LanguageID.LanguageEnglish, 'preload')
         .addText(LanguageID.LanguagePersian, 'پیش‌بارگذاری')
         .addReservedValues(
-          languages.map((language) =>
+          languages.map((language: any) =>
             new RuntimeElementAttributeValue(language.code.toUpperCase())
               .addAllText(language.name)
               .addAllText(language.code)

@@ -1,4 +1,4 @@
-import { Validator } from "../Validator";
+import { Validator } from "../validator";
 import { RuntimeElement } from '../../../../runtime/element';
 import { validateLayoutElementAttributeValue } from './element_attribute_value';
 import { RuntimeElementAttribute } from '../../../../runtime/element_attribute';
@@ -12,6 +12,8 @@ export function validateLayoutElementAttributeReservedValue(validator: Validator
         if (!found) {
             return error;
         }
+        // Update the generate name of the attribute value
+        node.generate_name = found.generate_name;
         return undefined;
     }
     return error;

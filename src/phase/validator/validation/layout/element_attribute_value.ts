@@ -1,4 +1,4 @@
-import { Validation } from "../Validator";
+import { Validator } from "../validator";
 import { RuntimeElementAttribute } from '../../../../runtime/element_attribute';
 import { AstLayoutAttribute } from '../../../parser/parse/ast/layout/attribute';
 import { RuntimeElementAttributeType } from '../../../../runtime/element_attribute_type';

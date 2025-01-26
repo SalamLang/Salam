@@ -1,6 +1,7 @@
 import { AstNode } from './node';
 import { AstLayout } from './layout/layout';
-import { LanguageMap } from '../../../../common/language/language';
+import { stringify } from './../../../../serializer';
+import { LanguageMap } from './../../../../common/language/language';
 import { AstFunctionDeclaration } from './statement/function_declaration';
 
 export class AstProgram extends AstNode {
@@ -45,5 +46,21 @@ export class AstProgram extends AstNode {
 
     pushError(error: string): void {
         this.errors.push(error);
+    }
+
+
+    print(): void {
+        console.log(this.stringify());
+    }
+
+    stringify(wantsJson: boolean = true): string | object {
+        const obj: object = {
+            type: this.type,
+            functions: this.functions.map((f) => f.stringify(wantsJson)),
+            layout: this.layout?.stringify(wantsJson),
+            errors: this.errors,
+            language: this.language,
+        };
+        return stringify(obj, wantsJson);
     }
 }

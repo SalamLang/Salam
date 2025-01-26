@@ -44,7 +44,11 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
     console.log('=======================');
     console.log('=======================');
 
-    const generator = new Generator(parser.ast);
+    console.log(validator.ast.stringify());
+
+    return 0;
+
+    const generator = new Generator(validator.ast);
     generate(generator);
     if (generator.errors.length > 0) {
         generator.errors.forEach((error: string) => {

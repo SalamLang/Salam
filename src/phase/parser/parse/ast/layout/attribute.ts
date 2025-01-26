@@ -7,16 +7,16 @@ export class AstLayoutAttribute extends AstNode {
     key: string;
     value: AstExpression;
     kind: AstLayoutAttributeType;
-    element_name: string;
     enduser_name: string;
+    element_enduser_name: string;
 
-    constructor(element_name: string, key: string, value: AstExpression, kind: AstLayoutAttributeType) {
+    constructor(element_enduser_name: string, key: string, value: AstExpression, kind: AstLayoutAttributeType) {
         super("LayoutAttribute");
         this.key = key;
         this.value = value;
         this.kind = kind;
-        this.element_name = element_name;
         this.enduser_name = key;
+        this.element_enduser_name = element_enduser_name;
     }
 
     isStyle(): boolean {

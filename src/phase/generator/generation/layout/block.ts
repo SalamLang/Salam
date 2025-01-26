@@ -7,7 +7,7 @@ export function generateLayoutBlock(generator: Generator, element: AstLayoutElem
     let result: string = "";
 
     for (const item of block.items) {
-        result += generateLayoutElement(generator, element, item as AstLayoutElement);
+        result += generateLayoutElement(generator, item as AstLayoutElement);
     }
 
     return result;

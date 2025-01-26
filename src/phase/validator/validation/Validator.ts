@@ -5,6 +5,7 @@ import { runtimeStyleAttributes } from '../../../runtime/runtime';
 import { runtimeGlobalAttributes } from '../../../runtime/runtime';
 import { runtimeGlobalSingleAttributes } from '../../../runtime/runtime';
 import { runtimeGlobalMotherAttributes } from '../../../runtime/runtime';
+import { AstLayoutElement } from '../../parser/parse/ast/layout/element';
 import { RuntimeElementAttribute } from '../../../runtime/element_attribute';
 
 export class Validator {
@@ -20,7 +21,7 @@ export class Validator {
         this.errors.push("Validator error: " + message);
     }
 
-    getElementRuntime(name: string): RuntimeElement | undefined {
+    getElementRuntime(parent_element: AstLayoutElement | undefined, name: string): RuntimeElement | undefined {
         if (runtimeElements.length > 0) {
             for (const runtimeElementItem of runtimeElements) {
                 if (runtimeElementItem.getText(this.ast.language.id)?.includes(name)) {

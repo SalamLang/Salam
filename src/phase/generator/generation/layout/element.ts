@@ -3,7 +3,7 @@ import { generateLayoutBlock } from './block';
 import { generateLayoutAttributes } from './attributes';
 import { AstLayoutElement } from './../../../parser/parse/ast/layout/element';
 
-export function generateLayoutElement(generator: Generator, parent_element: AstLayoutElement | undefined, element: AstLayoutElement): string {
+export function generateLayoutElement(generator: Generator, element: AstLayoutElement): string {
     let result: string = "";
 
     if (element.generate_name === undefined) {

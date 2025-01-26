@@ -56,7 +56,7 @@ export class AstLayoutAttributes extends AstNode {
 
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
-            items: this.items.map(item => item.stringify(wantsJson)),
+            items: this.items.map((item: AstLayoutAttribute) => item.stringify(wantsJson)),
         };
         return stringify(obj, wantsJson);
     }

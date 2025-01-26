@@ -1,92 +1,63 @@
 import { RuntimeElement } from '../../../runtime/element';
 import { runtimeElements } from '../../../runtime/runtime';
 import { AstProgram } from "../../parser/parse/ast/program";
-import { runtimeStyleAttributes } from '../../../runtime/runtime';
-import { runtimeGlobalAttributes } from '../../../runtime/runtime';
-import { runtimeGlobalSingleAttributes } from '../../../runtime/runtime';
-import { runtimeGlobalMotherAttributes } from '../../../runtime/runtime';
 import { AstLayoutElement } from '../../parser/parse/ast/layout/element';
 import { RuntimeElementAttribute } from '../../../runtime/element_attribute';
+import { runtimeStyleAttributes, runtimeGlobalAttributes, runtimeGlobalSingleAttributes, runtimeGlobalMotherAttributes } from '../../../runtime/runtime';
 
 export class Validator {
     ast: AstProgram;
     errors: string[];
-    
+
     constructor(ast: AstProgram) {
         this.ast = ast;
         this.errors = [];
     }
 
     pushError(message: string) {
-        this.errors.push("Validator error: " + message);
+        this.errors.push(`Validator error: ${message}`);
+    }
+
+    private findInCollection<T extends RuntimeElement | RuntimeElementAttribute>(
+        collection: T[],
+        name: string,
+        filterFn?: (item: T) => boolean
+    ): T | undefined {
+        return collection.find(item => {
+            if (!item.getText(this.ast.language.id)?.includes(name)) return false;
+            return filterFn ? filterFn(item) : true;
+        });
     }
 
     getElementRuntime(parent_element: AstLayoutElement | undefined, name: string): RuntimeElement | undefined {
-        if (runtimeElements.length > 0) {
-            for (const runtimeElementItem of runtimeElements) {
-                if (runtimeElementItem.getText(this.ast.language.id)?.includes(name)) {
-                    if (parent_element === undefined) {
-                        return runtimeElementItem;
-                    } else if (runtimeElementItem.belongs_to.length === 0 || runtimeElementItem.belongs_to.map((element: RuntimeElement) => element.constructor.name).includes(parent_element.constructor.name)) {
-                        return runtimeElementItem;
-                    }
-                }
-            }
-        }
-        return undefined;
+        return this.findInCollection(runtimeElements, name, runtimeElementItem => {
+            if (!parent_element) return true;
+            return (
+                runtimeElementItem.belongs_to.length === 0 ||
+                runtimeElementItem.belongs_to.some(
+                    element => element.constructor.name === parent_element.constructor.name
+                )
+            );
+        });
     }
 
     getElementGlobalMotherAttributeRuntime(name: string): RuntimeElementAttribute | undefined {
-        if (runtimeGlobalMotherAttributes.length > 0) {
-            for (const runtimeAttributeItem of runtimeGlobalMotherAttributes) {
-                if (runtimeAttributeItem.getText(this.ast.language.id)?.includes(name)) {
-                    return runtimeAttributeItem;
-                }
-            }
-        }
-        return undefined;
+        return this.findInCollection(runtimeGlobalMotherAttributes, name);
     }
 
     getElementGlobalSingleAttributeRuntime(name: string): RuntimeElementAttribute | undefined {
-        if (runtimeGlobalSingleAttributes.length > 0) {
-            for (const runtimeAttributeItem of runtimeGlobalSingleAttributes) {
-                if (runtimeAttributeItem.getText(this.ast.language.id)?.includes(name)) {
-                    return runtimeAttributeItem;
-                }
-            }
-        }
-        return undefined;
+        return this.findInCollection(runtimeGlobalSingleAttributes, name);
     }
 
     getElementGlobalAttributeRuntime(name: string): RuntimeElementAttribute | undefined {
-        if (runtimeGlobalAttributes.length > 0) {
-            for (const runtimeAttributeItem of runtimeGlobalAttributes) {
-                if (runtimeAttributeItem.getText(this.ast.language.id)?.includes(name)) {
-                    return runtimeAttributeItem;
-                }
-            }
-        }
-        return undefined;
+        return this.findInCollection(runtimeGlobalAttributes, name);
     }
 
     getElementStyleAttributeRuntime(name: string): RuntimeElementAttribute | undefined {
-        if (runtimeStyleAttributes.length > 0) {
-            for (const runtimeAttributeItem of runtimeStyleAttributes) {
-                if (runtimeAttributeItem.getText(this.ast.language.id)?.includes(name)) {
-                    return runtimeAttributeItem;
-                }
-            }
-        }
-        return undefined;
+        return this.findInCollection(runtimeStyleAttributes, name);
     }
 
     getElementAttributeRuntime(element: RuntimeElement, key: string): RuntimeElementAttribute | undefined {
-        // TODO: handle global attributes
-        for (const runtimeAttributeItem of element.attributes) {
-            if (runtimeAttributeItem.getText(this.ast.language.id)?.includes(key)) {
-                return runtimeAttributeItem;
-            }
-        }
-        return undefined;
+        return this.findInCollection(element.attributes, key);
     }
-};
+}

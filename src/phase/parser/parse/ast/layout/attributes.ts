@@ -1,5 +1,6 @@
 import { AstNode } from '../node';
 import { AstLayoutAttribute } from './attribute';
+import { stringify } from '../../../../../serializer';
 
 export class AstLayoutAttributes extends AstNode {
     items: AstLayoutAttribute[];
@@ -47,5 +48,16 @@ export class AstLayoutAttributes extends AstNode {
             this.items.push(attribute);
             return true;
         }
+    }
+
+    print(): void {
+        console.log(this.stringify());
+    }
+
+    stringify(wantsJson: boolean = true): string | object {
+        const obj: object = {
+            items: this.items.map(item => item.stringify(wantsJson)),
+        };
+        return stringify(obj, wantsJson);
     }
 }

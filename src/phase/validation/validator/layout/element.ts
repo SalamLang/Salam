@@ -1,7 +1,7 @@
 import { Validation } from "./../validation";
 import { RuntimeElement } from './../../../../runtime/element';
-import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 import { validateLayoutElementAttribute } from './element_attribute';
+import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 
 export function validateLayoutElement(validator: Validation, node: AstLayoutElement): void {
     const runtimeElement: RuntimeElement | undefined = validator.getElementRuntime(node.enduser_name);

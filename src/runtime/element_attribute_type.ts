@@ -1,7 +1,7 @@
 export enum RuntimeElementAttributeType {
-    Any = "ANY",
+    // Any = "ANY",
     AnyNoEmpty = "AnyNoEmpty",
-    AnyTodo = "AnyTodo",
+    // AnyTodo = "AnyTodo",
     String = "STRING",
     Strings = "Strings",
     Url = "Url",

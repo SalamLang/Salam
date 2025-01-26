@@ -3,7 +3,7 @@ import { generateLayoutBlock } from './block';
 import { generateLayoutAttributes } from './attributes';
 import { AstLayoutElement } from './../../../parser/parse/ast/layout/element';
 
-export function generateLayoutElement(generator: Generator, element: AstLayoutElement): string {
+export function generateLayoutElement(generator: Generator, parent_element: AstLayoutElement | undefined, element: AstLayoutElement): string {
     let result: string = "";
 
     if (element.generate_name === undefined) {
@@ -22,7 +22,7 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
                 result += generator.bufferIndentLine(`<body>`);
                 generator.indent();
 
-                result += generateLayoutBlock(generator, element.block);
+                result += generateLayoutBlock(generator, element, element.block);
 
                 generator.outdent();
                 result += generator.bufferIndentLine(`</body>`);
@@ -76,7 +76,7 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
         generator.indent();
         writeContent();
 
-        result += generateLayoutBlock(generator, element.block);
+        result += generateLayoutBlock(generator, element, element.block);
 
         generator.outdent();
     }

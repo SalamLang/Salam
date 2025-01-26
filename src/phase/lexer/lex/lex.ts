@@ -132,7 +132,7 @@ export function lex(lexer: Lexer): void {
                 } else if (isUtf8Alpha(char)) {
                     lexerLexIdentifier(lexer);
                 } else {
-                    lexer.pushError(`Unexpected character '${char}'`);
+                    lexer.pushError(errorRenderer(lexerMessages.)`Unexpected character '${char}'`);
                     lexer.advance();
                 }
         }

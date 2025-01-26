@@ -1,8 +1,6 @@
 import { Parser } from '../parser';
 import { parserParseLayoutKey } from './layout_key';
 import { AstLayoutElement } from '../ast/layout/element';
-import { RuntimeElement } from '../../../../runtime/element';
-import { runtimeElements } from '../../../../runtime/runtime';
 import { AstLayoutAttribute } from '../ast/layout/attribute';
 import { parserParseLayoutAttribute } from './layout_attribute';
 import { Token, arrayName2String } from './../../../lexer/tokenizer/token';

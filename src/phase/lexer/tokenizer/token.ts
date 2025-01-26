@@ -75,5 +75,5 @@ export class Token {
 };
 
 export function arrayName2String(array: Token[]): string {
-    return array.map(token => token.data?.getValueString()).filter(value => value).join(" ");
+    return array.map((token: Token) => token.data?.getValueString()).filter(value => value).join(" ");
 };

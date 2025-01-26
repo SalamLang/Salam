@@ -6,12 +6,14 @@ export class RuntimeElement {
     generate_name: string | undefined = undefined;
     text: Map<LanguageID, string[]>;
     attributes: RuntimeElementAttribute[];
+    belongs_to: RuntimeElement[];
     
     constructor(is_mother: boolean, generate_name: string | undefined) {
         this.is_mother = is_mother;
         this.text = new Map<LanguageID, string[]>();
         this.generate_name = generate_name;
         this.attributes = [];
+        this.belongs_to = [];
     }
 
     hasAttribute(languageId: LanguageID, name: string): boolean {

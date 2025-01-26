@@ -25,7 +25,7 @@ export class RuntimeElementA extends RuntimeElement {
             .addText(LanguageID.LanguagePersian, "language")
             .addText(LanguageID.LanguageEnglish, "زبان")
             .addReservedValues(
-                languages.map((language) => 
+                languages.map((language: any) => 
                     new RuntimeElementAttributeValue(language.code.toUpperCase())
                         .addAllText(language.name)
                         .addAllText(language.code)

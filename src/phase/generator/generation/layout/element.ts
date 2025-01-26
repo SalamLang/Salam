@@ -11,7 +11,7 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
             case "RuntimeElementLayout": {
                 result += generator.bufferIndentLine(`<!doctype html>`);
                 result += generator.bufferIndentLine(`<html>`);
-                result += generator.indent();
+                generator.indent();
                 result += generator.bufferIndentLine(`<head>`);
                 generator.indent();
                 result += generator.bufferIndentLine(`<title>SALAM</title>`);
@@ -36,8 +36,7 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
 
     result += generator.bufferIndentNoLine(`<${element.generate_name}`);
 
-    let attributes_str: string = "";
-    attributes_str += generateLayoutAttributes(generator, element.attributes);
+    let attributes_str: string = generateLayoutAttributes(generator, element.attributes);
     if (attributes_str.length > 0) {
         result += generator.buffer(` `);
     }

@@ -6,12 +6,14 @@ import { RuntimeElementAttributeValue } from '../../../../runtime/element_attrib
 export function validateLayoutElementAttributeReservedValue(validator: Validator, attribute: AstLayoutAttribute, runtimeElementAttribute: RuntimeElementAttribute): string | undefined {
     const error = "Attribute value '" + attribute.value.getString() + "' is not a valid value for attribute '" + attribute.enduser_name + "' in element '" + attribute.element_enduser_name + "'";
     if (runtimeElementAttribute.reservedValues.length > 0) {
-        const found = runtimeElementAttribute.reservedValues.find((value: RuntimeElementAttributeValue) => value.getText(validator.ast.language.id)?.includes(attribute.enduser_name));
+        const found = runtimeElementAttribute.reservedValues.find((value: RuntimeElementAttributeValue) => value.getText(validator.ast.language.id)?.includes(attribute.value.getString()));
         if (!found) {
             return error;
         }
         // Update the generate value of the attribute value
         attribute.generate_value = found.generate_name;
+        // Update the generate type of the attribute value
+        attribute.generate_type = found.constructor.name;
         return undefined;
     }
     return error;

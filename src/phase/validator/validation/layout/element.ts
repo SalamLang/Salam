@@ -3,7 +3,7 @@ import { RuntimeElement } from '../../../../runtime/element';
 import { validateLayoutElementAttribute } from './element_attribute';
 import { AstLayoutElement } from "../../../parser/parse/ast/layout/element";
 
-export function validateLayoutElement(validator: Validation, node: AstLayoutElement): void {
+export function validateLayoutElement(validator: Validator, node: AstLayoutElement): void {
     const runtimeElement: RuntimeElement | undefined = validator.getElementRuntime(node.enduser_name);
     
     // Check if element is a valid element

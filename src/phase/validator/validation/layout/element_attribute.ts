@@ -5,7 +5,6 @@ import { RuntimeElementAttribute } from '../../../../runtime/element_attribute';
 import { AstLayoutAttribute } from "../../../parser/parse/ast/layout/attribute";
 import { validateLayoutElementAttributeReservedValue } from './element_attribute_reserved_value';
 
-
 export function validateLayoutElementAttribute(validator: Validator, runtimeElement: RuntimeElement, node: AstLayoutAttribute): void {
     const element_name = runtimeElement.getText(validator.ast.language.id);
     let runtimeElementAttribute: RuntimeElementAttribute | undefined = validator.getElementAttributeRuntime(runtimeElement, node.enduser_name);
@@ -23,6 +22,7 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
 
     // Update the generate name of the attribute value
     node.generate_name = runtimeElementAttribute.generate_name;
+    node.generate_type = runtimeElementAttribute.constructor.name;
 
     // Check if attributes values are valid for attribute with reserved values
     const error_reserved_value: string | undefined = validateLayoutElementAttributeReservedValue(validator, node, runtimeElementAttribute);

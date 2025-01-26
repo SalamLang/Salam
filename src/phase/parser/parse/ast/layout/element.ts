@@ -6,6 +6,7 @@ import { stringify } from '../../../../../serializer';
 export class AstLayoutElement extends AstNode {
     enduser_name: string;
     generate_name: string | undefined = undefined;
+    generate_type: string | undefined = undefined;
 	children: AstNode[];
     attributes: AstLayoutAttributes;
     globalAttributes: AstLayoutAttributes;
@@ -36,9 +37,10 @@ export class AstLayoutElement extends AstNode {
         const obj: object = {
             enduser_name: this.enduser_name,
             generate_name: this.generate_name,
-            children: this.children.map(child => child.stringify(wantsJson)),
-            attributes: this.attributes.stringify(wantsJson),
-            globalAttributes: this.globalAttributes.stringify(wantsJson),
+            generate_type: this.generate_type,
+            children: this.children.map(child => child.stringify(false)),
+            attributes: this.attributes.stringify(false),
+            globalAttributes: this.globalAttributes.stringify(false),
         };
         return stringify(obj, wantsJson);
     }

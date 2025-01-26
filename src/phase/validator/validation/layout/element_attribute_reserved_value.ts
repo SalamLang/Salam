@@ -10,8 +10,6 @@ export function validateLayoutElementAttributeReservedValue(validator: Validator
         if (!found) {
             return error;
         }
-        // Update the generate name of the attribute value
-        node.generate_name = runtimeElementAttribute.generate_name;
         // Update the generate value of the attribute value
         node.generate_value = found.generate_name;
         return undefined;

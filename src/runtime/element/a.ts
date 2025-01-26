@@ -11,7 +11,7 @@ export class RuntimeElementA extends RuntimeElement {
         this.addText(LanguageID.LanguageEnglish, "link");
         this.addText(LanguageID.LanguagePersian, "لینک");
         this.addAttribute(
-            new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "download")
+            new RuntimeElementAttribute(RuntimeElementAttributeType.StringNoEmpty, "download")
             .addText(LanguageID.LanguagePersian, "دانلود")
             .addText(LanguageID.LanguageEnglish, "download")
         );

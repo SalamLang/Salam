@@ -1,25 +1,33 @@
 export enum RuntimeElementAttributeType {
-    // Any = "ANY",
-    AnyNoEmpty = "AnyNoEmpty",
-    // AnyTodo = "AnyTodo",
     String = "STRING",
+    StringNoEmpty = "StringNoEmpty",
     Strings = "Strings",
+
+    Uri = "Uri",
+    Uris = "Uris",
+
     Url = "Url",
     Urls = "Urls",
 
     Sizes = "Sizes",
     Size = "Size",
+
     PositiveInt = "PositiveInt",
-    IDs = "IDs",
+
     ID = "ID",
+    IDs = "IDs",
+
     CSSMedia = "CSSMedia",
+
     Coords = "Coords",
+
     Color = "Color",
     Colors = "Colors",
+
     Number = "Number",
+
     Boolean = "Boolean",
 
-    // YYYY-MM-DDThh:mm:ssTZD
     Date = "Date",
     Time = "Time",
     Times = "Times",

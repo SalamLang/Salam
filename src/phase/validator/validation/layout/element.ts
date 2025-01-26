@@ -13,7 +13,6 @@ export function validateLayoutElement(validator: Validator, node: AstLayoutEleme
     }
 
     node.generate_name = runtimeElement.generate_name;
-    console.log("Node generate name: ", node.generate_name);
 
     // Check attributes
     for (const attribute of node.attributes.items) {

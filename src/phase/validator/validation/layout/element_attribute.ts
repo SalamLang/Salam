@@ -14,7 +14,6 @@ export function validateLayoutElementAttributeReservedValue(validator: Validator
         }
         // Update the generate name of the attribute value
         node.generate_name = runtimeElementAttribute.generate_name;
-        console.log("Node generate name: ", node.generate_name);
         return undefined;
     }
     return error;

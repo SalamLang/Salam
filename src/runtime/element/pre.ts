@@ -7,4 +7,4 @@ export class RuntimeElementPre extends RuntimeElement {
         this.addText(LanguageID.LanguageEnglish, 'pre');
         this.addText(LanguageID.LanguagePersian, 'ظاهر ثابت');
     }
-}
+};

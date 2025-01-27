@@ -1,6 +1,7 @@
 import { ParserMessageKeys, ParserMessageStruct } from './../message';
 
 export const faMessages: ParserMessageStruct = {
+    [ParserMessageKeys.PARSER_PREFIX]: "خطای گرامری: ",
     [ParserMessageKeys.PARSER_FAILED_TO_PARSE_FUNCTION_STATEMENT]: "ناتوان در تجزیه و تحلیل اظهارات تابع.",
     [ParserMessageKeys.PARSER_FAILED_TO_PARSE_FUNCTION]: "ناتوان در تجزیه و تحلیل تابع.",
     [ParserMessageKeys.PARSER_FAILED_TO_PARSE_LAYOUT_ELEMENT]: "ناتوان در تجزیه و تحلیل عنصر طرح.",

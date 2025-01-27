@@ -16,25 +16,25 @@ export function parse(parser: Parser): void {
         } else if (token.type === TokenKeywordType.TOKEN_FN) {
             const function_declaration: AstFunctionDeclaration | undefined = parserParseFunction(parser);
             if (! function_declaration) {
-                parser.pushError(messageRenderer(parserMessages[parser.lexer.language.id][ParserMessageKeys.PARSER_FAILED_TO_PARSE_FUNCTION_STATEMENT]));
+                parser.pushError(messageRenderer(parserMessages, parser.lexer.language.id, ParserMessageKeys.PARSER_FAILED_TO_PARSE_FUNCTION_STATEMENT));
                 break;
             }
             if (! parser.ast.pushFunctionDeclaration(function_declaration)) {
-                parser.pushError(messageRenderer(parserMessages[parser.lexer.language.id][ParserMessageKeys.PARSER_FAILED_TO_PARSE_FUNCTION]));
+                parser.pushError(messageRenderer(parserMessages, parser.lexer.language.id, ParserMessageKeys.PARSER_FAILED_TO_PARSE_FUNCTION));
                 break;
             }
         } else if (token.type === TokenKeywordType.TOKEN_LAYOUT) {
             const layout: AstLayout | undefined = parserParseLayout(parser);
             if (! layout) {
-                parser.pushError(messageRenderer(parserMessages[parser.lexer.language.id][ParserMessageKeys.PARSER_FAILED_TO_PARSE_LAYOUT_ELEMENT]));
+                parser.pushError(messageRenderer(parserMessages, parser.lexer.language.id, ParserMessageKeys.PARSER_FAILED_TO_PARSE_LAYOUT_ELEMENT));
                 break;
             }
             if (! parser.ast.setLayout(layout)) {
-                parser.pushError(messageRenderer(parserMessages[parser.lexer.language.id][ParserMessageKeys.PARSER_DUPLICATE_LAYOUT_DEFINITION]));
+                parser.pushError(messageRenderer(parserMessages, parser.lexer.language.id, ParserMessageKeys.PARSER_DUPLICATE_LAYOUT_DEFINITION));
                 break;
             }
     } else {
-            parser.pushError(messageRenderer(parserMessages[parser.lexer.language.id][ParserMessageKeys.PARSER_UNEXPECTED_TOKEN_IN_PROGRAM], token.type));
+            parser.pushError(messageRenderer(parserMessages, parser.lexer.language.id, ParserMessageKeys.PARSER_UNEXPECTED_TOKEN_IN_PROGRAM, token.type));
             break;
         }
     }

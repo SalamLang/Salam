@@ -28,7 +28,7 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
     }, undefined as RuntimeElementAttribute | undefined);
 
     if (runtimeElementAttribute === undefined) {
-        validator.pushError(messageRenderer(validatorMessages[validator.ast.language.id][ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID], attribute_name, element_name));
+        validator.pushError(messageRenderer(validatorMessages, validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID, attribute_name, element_name));
         return;
     }
 

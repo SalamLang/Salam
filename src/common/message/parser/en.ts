@@ -1,6 +1,7 @@
 import { ParserMessageKeys, ParserMessageStruct } from './../message';
 
 export const enMessages: ParserMessageStruct = {
+    [ParserMessageKeys.PARSER_PREFIX]: "Parser error: ",
     [ParserMessageKeys.PARSER_FAILED_TO_PARSE_FUNCTION_STATEMENT]: "Failed to parse function staement.",
     [ParserMessageKeys.PARSER_FAILED_TO_PARSE_FUNCTION]: "Failed to parse function.",
     [ParserMessageKeys.PARSER_FAILED_TO_PARSE_LAYOUT_ELEMENT]: "Failed to parse layout element.",

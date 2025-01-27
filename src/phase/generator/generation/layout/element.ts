@@ -50,12 +50,12 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
         writeContent();
     } else if (hasContentOrChild) {
         result += generator.bufferLine("");
-        generator.indent();
+        generator.increaseIndent();
         writeContent();
 
         result += generateLayoutBlock(generator, element, element.block);
 
-        generator.outdent();
+        generator.decreaseIndent();
     }
     
     // Close the element

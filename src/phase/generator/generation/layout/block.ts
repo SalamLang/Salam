@@ -11,18 +11,18 @@ export function generateLayoutBlock(generator: Generator, element: AstLayoutElem
 
     for (const item of block.items) {
         // Handling custom elements
-        if (element.generate_name === undefined) {
-            switch (element.generate_type) {
-                // case "RuntimeElementLayout": {
-                //     result += generateLayoutElement(generator, item as AstLayoutElement);
-                //     break;
-                // }
+        if (item.generate_name === undefined) {
+            switch (item.generate_type) {
+                case "RuntimeElementLayout": {
+                    result += generateLayoutElement(generator, item as AstLayoutElement);
+                    break;
+                }
                 case "RuntimeElementInclude": {
-                    const include_path: string | undefined = element.attributes.getByGenerateName("source")?.getValue();
-                    // console.log("Include path: ", include_path);
-                    // if (include_path) {
-                    //     result += includeLayout(generator, include_path, []);
-                    // }
+                    const include_path: string | undefined = item.attributes.getByGenerateName("source")?.getValue();
+                    console.log("Include path: ", include_path);
+                    if (include_path) {
+                        result += includeLayout(generator, include_path, []);
+                    }
                     break;
                 }
                 default: {

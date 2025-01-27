@@ -103,4 +103,4 @@ export const keywordMaps: Record<TokenKeywordType, KeywordMap> = {
     },
 };
 
-export const keywordMapsValues = Object.values(keywordMaps);
+export const keywordMapsValues: KeywordMap[] = Object.values(keywordMaps);

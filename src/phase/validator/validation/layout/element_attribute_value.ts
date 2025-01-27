@@ -10,10 +10,10 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
     const attr_name: string = runtimeElementAttribute.getText(validator.ast.language.id)?.join(" ") || "Unknown Attribute";
     const value: string = attribute.value.getString();
 
-    const error: string = messageRenderer(validatorMessages[validator.ast.language.id][ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_VALID], value, runtimeElementAttribute.type, attr_name, attribute.element_enduser_name);
+    const error: string = messageRenderer(validatorMessages, validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_VALID, value, runtimeElementAttribute.type, attr_name, attribute.element_enduser_name);
 
     if (runtimeElementAttribute.type !== RuntimeElementAttributeType.String && value === "") {
-        return messageRenderer(validatorMessages[validator.ast.language.id][ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_EMPTY], value, runtimeElementAttribute.type, attr_name, attribute.element_enduser_name);
+        return messageRenderer(validatorMessages, validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_EMPTY, value, runtimeElementAttribute.type, attr_name, attribute.element_enduser_name);
     }
 
     switch (runtimeElementAttribute.type) {

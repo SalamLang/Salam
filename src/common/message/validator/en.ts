@@ -1,6 +1,7 @@
 import { ValidatorMessageKeys, ValidatorMessageStruct } from './../message';
 
 export const enMessages: ValidatorMessageStruct = {
+    [ValidatorMessageKeys.VALIDATOR_PREFIX]: "Validation error: ",
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_REQUIRED]: "Attribute '{0}' is required for element '{1}}' but not found",
     [ValidatorMessageKeys.VALIDATOR_ELEMENT_NOT_VALID]: "Element '{0}' is not a valid element",
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_RESERVED_VALUE_NOT_VALID]: "Attribute value '{0}' is not a valid value for attribute '{1}' in element '{2}'",

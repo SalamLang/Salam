@@ -9,7 +9,7 @@ import { Generator } from './../../phase/generator/generation/generator';
 import { Validator } from './../../phase/validator/validation/validator';
 
 export function processCommandRun(fileName: string | undefined, absoluteDirPath: string | undefined, source: string, selectedLanguage: LanguageMap): number {
-    const lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
+    const lexer: Lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
     lex(lexer);
     lexer.print();
 
@@ -17,7 +17,7 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
     console.log('=======================');
     console.log('=======================');
 
-    const parser = new Parser(lexer);
+    const parser: Parser = new Parser(lexer);
     parse(parser);
     if (parser.ast.errors.length > 0) {
         parser.ast.errors.forEach((error: string) => {
@@ -31,7 +31,7 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
     console.log('=======================');
     console.log('=======================');
 
-    const validator = new Validator(parser.ast);
+    const validator: Validator = new Validator(parser.ast);
     validate(validator);
     if (validator.errors.length > 0) {
         validator.errors.forEach((error: string) => {
@@ -50,7 +50,7 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
     console.log('=======================');
     console.log('=======================');
 
-    const generator = new Generator(validator.ast);
+    const generator: Generator = new Generator(validator.ast);
     generate(generator);
     if (generator.errors.length > 0) {
         generator.errors.forEach((error: string) => {

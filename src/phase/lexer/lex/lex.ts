@@ -13,7 +13,7 @@ import { messageRenderer, LexerMessageKeys } from './../../../common/message/mes
 
 export function lex(lexer: Lexer): void {
     while (lexer.index < lexer.source.length) {
-        const char = lexer.currentChar;
+        const char: string = lexer.currentChar;
 
         switch (char) {
             // End of file
@@ -48,7 +48,7 @@ export function lex(lexer: Lexer): void {
             case '-':
             case '−':
                 if (lexer.nextChar === '>') {
-                    const nextChar = lexer.nextChar;
+                    const nextChar: string = lexer.nextChar;
                     lexer.advance();
                     lexer.advance();
 

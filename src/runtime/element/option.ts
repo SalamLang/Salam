@@ -1,8 +1,8 @@
 import {RuntimeElement} from './../element';
 import { RuntimeElementSelect } from './select';
-import {LanguageID} from '../../common/language/language';
-import {RuntimeElementAttribute} from '../element_attribute';
-import {RuntimeElementAttributeType} from '../element_attribute_type';
+import {LanguageID} from './../../common/language/language';
+import {RuntimeElementAttribute} from './../element_attribute';
+import {RuntimeElementAttributeType} from './../element_attribute_type';
 
 export class RuntimeElementOption extends RuntimeElement {
   constructor() {

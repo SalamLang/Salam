@@ -1,10 +1,10 @@
 import { processCommandCode } from './command/code';
 import { processCommandFile } from './command/file';
-import { lang_flag } from '../../../common/cli/language';
+import { lang_flag } from './../../../common/cli/language';
 import { processCommandVersion } from './command/version';
 import { processCommandHelp, showUsage } from './command/help';
-import { LanguageMap } from '../../../common/language/language';
-import { handleMissingArguments } from '../../../common/cli/error';
+import { LanguageMap } from './../../../common/language/language';
+import { handleMissingArguments } from './../../../common/cli/error';
 
 export function processCommand(args: string[], selectedLanguage: LanguageMap): number {
     const command: string | undefined = args.find((arg: string, index: number) => {

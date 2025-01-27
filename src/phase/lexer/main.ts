@@ -1,6 +1,6 @@
 import { processCommand } from './cli/cli';
-import { processLanguageFlag } from '../../common/cli/language';
-import { languageMapsValues } from '../../common/language/data';
+import { processLanguageFlag } from './../../common/cli/language';
+import { languageMapsValues } from './../../common/language/data';
 
 function main(args: string[]): number {
     let selectedLanguage = languageMapsValues[0];

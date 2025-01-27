@@ -1,8 +1,8 @@
-import { Validator } from "../validator";
+import { Validator } from "./../validator";
 import { validateLayoutBlock } from './block';
-import { RuntimeElement } from '../../../../runtime/element';
+import { RuntimeElement } from './../../../../runtime/element';
 import { validateLayoutElementAttributes } from './element_attributes';
-import { AstLayoutElement } from "../../../parser/parse/ast/layout/element";
+import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 import { validatorMessages } from './../../../../common/message/validator/validator';
 import { messageRenderer, ValidatorMessageKeys } from './../../../../common/message/message';
 

@@ -1,4 +1,4 @@
-import { Parser } from '../parser';
+import { Parser } from './../parser';
 import { Token } from './../../../lexer/tokenizer/token';
 
 export function parserParseLayoutKey(parser: Parser): Token[] {

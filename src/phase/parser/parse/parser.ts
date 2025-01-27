@@ -1,5 +1,5 @@
 import { AstProgram } from './ast/program';
-import { stringify } from '../../../serializer';
+import { stringify } from './../../../serializer';
 import { Lexer } from './../../lexer/lex/lexer';
 import { Token } from './../../lexer/tokenizer/token';
 import { parserMessages } from './../../../common/message/parser/parser';

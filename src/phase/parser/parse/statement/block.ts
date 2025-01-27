@@ -1,5 +1,5 @@
-import { Parser } from '../parser';
-import { AstBlock } from '../ast/block';
+import { Parser } from './../parser';
+import { AstBlock } from './../ast/block';
 
 export function parserParseBlock(parser: Parser): AstBlock | undefined {
     const ast: AstBlock = new AstBlock();

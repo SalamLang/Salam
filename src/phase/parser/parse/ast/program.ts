@@ -25,7 +25,6 @@ export class AstProgram extends AstNode {
 
     setLayout(layout: AstLayout): boolean {
         if (this.hasLayout()) {
-            this.pushError("Layout already defined.");
             return false;
         }
         this.layout = layout;

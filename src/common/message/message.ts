@@ -1,8 +1,27 @@
 import { LanguageID } from './../../common/language/language';
 
+// Lexer
+export type LexerMessageStruct = {
+    [K in LexerMessageKeys]: string;
+};
+
+export type LexerMultiLanguageMessages = {
+    [L in LanguageID]: LexerMessageStruct;
+};
+
 export enum LexerMessageKeys {
     LEXER_INVALID_UNEXPECTED_CHAR,
     LEXER_UNTERMINATED_MULTI_LINE_COMMENT_BLOCK,
+    LEXER_UNCLOSED_STRING_LITERAL,
+};
+
+// Parser
+export type ParserMessageStruct = {
+    [K in ParserMessageKeys]: string;
+};
+
+export type ParserMultiLanguageMessages = {
+    [L in LanguageID]: ParserMessageStruct;
 };
 
 export enum ParserMessageKeys {
@@ -24,26 +43,43 @@ export enum ParserMessageKeys {
     PARSER_FUNCTION_NAME_IS_NOT_VALID,
     PARSER_FUNCTION_PARAMETERS_ARE_NOT_VALID,
     PARSER_FUNCTION_BODY_IS_NOT_VALID,
+
+    PARSER_EXPECTED_TOKEN_TYPE_BUT_GOT,
 };
 
-export type LexerMessageStruct = {
-    [K in LexerMessageKeys]: string;
+// Validator
+export type ValidatorMessageStruct = {
+    [K in ValidatorMessageKeys]: string;
 };
 
-export type LexerMultiLanguageMessages = {
-    [L in LanguageID]: LexerMessageStruct;
+export type ValidatorMultiLanguageMessages = {
+    [L in LanguageID]: ValidatorMessageStruct;
 };
 
-export type ParserMessageStruct = {
-    [K in ParserMessageKeys]: string;
+export enum ValidatorMessageKeys {
+    VALIDATOR_ATTRIBUTE_REQUIRED,
+    VALIDATOR_ELEMENT_NOT_VALID,
+    VALIDATOR_ATTRIBUTE_RESERVED_VALUE_NOT_VALID,
+    VALIDATOR_ATTRIBUTE_NOT_VALID,
+    VALIDATOR_ATTRIBUTE_VALUE_NOT_VALID,
+    VALIDATOR_ATTRIBUTE_VALUE_NOT_EMPTY,
 };
 
-export type ParserMultiLanguageMessages = {
-    [L in LanguageID]: ParserMessageStruct;
+// Generator
+export type GeneratorMessageStruct = {
+    [K in GeneratorMessageKeys]: string;
+};
+
+export type GeneratorMultiLanguageMessages = {
+    [L in LanguageID]: GeneratorMessageStruct;
+};
+
+export enum GeneratorMessageKeys {
+    GENERATOR_CANNOT_OUTDENT_BELOW_ZERO,
 };
 
 export function messageRenderer(message: string, ...args: string[]): string {
     return message.replace(/{(\d+)}/g, (match, number) => {
         return typeof args[number] !== "undefined" ? args[number] : match;
     });
-}
+};

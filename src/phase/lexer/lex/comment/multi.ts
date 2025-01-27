@@ -1,4 +1,4 @@
-import { Lexer } from '../lexer';
+import { Lexer } from './../lexer';
 import { lexerMessages } from './../../../../common/message/lexer/lexer';
 import { messageRenderer, LexerMessageKeys } from './../../../../common/message/message';
 

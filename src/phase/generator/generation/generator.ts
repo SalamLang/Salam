@@ -1,4 +1,4 @@
-import { AstProgram } from "../../parser/parse/ast/program";
+import { AstProgram } from "./../../parser/parse/ast/program";
 import { generatorMessages } from './../../../common/message/generator/generator';
 import { messageRenderer, GeneratorMessageKeys } from './../../../common/message/message';
 

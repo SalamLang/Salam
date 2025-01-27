@@ -1,6 +1,6 @@
-import { AstNode } from '../node';
+import { AstNode } from './../node';
 import { AstLayoutAttribute } from './attribute';
-import { stringify } from '../../../../../serializer';
+import { stringify } from './../../../../../serializer';
 
 export class AstLayoutAttributes extends AstNode {
     items: AstLayoutAttribute[];

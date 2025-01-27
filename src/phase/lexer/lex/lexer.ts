@@ -1,11 +1,11 @@
-import { Token } from "../tokenizer/token";
-import { stringify } from '../../../serializer';
-import { TokenData } from "../tokenizer/data";
-import { TokenOtherType } from '../tokenizer/type';
-import { TokenDataType } from '../tokenizer/data';
-import { operatorTypeMaps } from '../tokenizer/type';
-import { TokenLocation } from '../tokenizer/location';
-import { LanguageMap } from '../../../common/language/language';
+import { Token } from "./../tokenizer/token";
+import { stringify } from './../../../serializer';
+import { TokenData } from "./../tokenizer/data";
+import { TokenOtherType } from './../tokenizer/type';
+import { TokenDataType } from './../tokenizer/data';
+import { operatorTypeMaps } from './../tokenizer/type';
+import { TokenLocation } from './../tokenizer/location';
+import { LanguageMap } from './../../../common/language/language';
 
 export class Lexer {
     source: string;

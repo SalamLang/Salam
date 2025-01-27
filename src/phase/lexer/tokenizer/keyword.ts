@@ -1,4 +1,4 @@
-import { LanguageID } from '../../../common/language/language';
+import { LanguageID } from './../../../common/language/language';
 import { TokenKeywordType } from "./type";
 
 export interface KeywordMap {

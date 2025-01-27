@@ -3,38 +3,21 @@ import { generateLayoutAttribute } from "./attribute";
 import { AstLayoutAttributes } from "./../../../parser/parse/ast/layout/attributes";
 
 export function generateLayoutAttributes(generator: Generator, attributes: AstLayoutAttributes): string {
-    let style_result: string = "";
-    let html_result: string = "";
+    let styleResult: string = "";
+    let htmlResult: string = "";
 
     for (const attribute of attributes.items) {
-        if (attribute.isStyle()) {
-            const style_attribute: string = generateLayoutAttribute(generator, attribute);
-            if (style_attribute.length > 0) {
-                if (style_result.length > 0) {
-                    style_result += ";";
-                }
-                style_result += style_attribute;
-            }
-        } else {
-            const html_attribute: string = generateLayoutAttribute(generator, attribute);
-            if (html_attribute.length > 0) {
-                if (html_result.length > 0) {
-                    html_result += " ";
-                }
-                html_result += html_attribute;
+        const generatedAttribute = generateLayoutAttribute(generator, attribute);
+        if (generatedAttribute.length > 0) {
+            if (attribute.isStyle()) {
+                styleResult += styleResult.length > 0 ? `;${generatedAttribute}` : generatedAttribute;
+            } else {
+                htmlResult += htmlResult.length > 0 ? ` ${generatedAttribute}` : generatedAttribute;
             }
         }
     }
 
-    let result: string = "";
-    if (html_result.length > 0) {
-        result += html_result;
-    }
-    if (style_result.length > 0) {
-        if (result.length > 0) {
-            result += " ";
-        }
-        result += `style="${style_result.replace(/"/g, '\\"')}"`;
-    }
-    return result;
+    return styleResult
+        ? `${htmlResult} style="${styleResult.replace(/"/g, '\\"')}"`.trim()
+        : htmlResult;
 };

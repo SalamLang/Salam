@@ -13,21 +13,21 @@ export function generateLayoutBlock(generator: Generator, element: AstLayoutElem
         // Handling custom elements
         if (element.generate_name === undefined) {
             switch (element.generate_type) {
-                case "RuntimeElementLayout": {
-                    console.log(element);
-                    // result += generateLayoutElement(generator, element);
-                    break;
-                }
+                // case "RuntimeElementLayout": {
+                //     result += generateLayoutElement(generator, item as AstLayoutElement);
+                //     break;
+                // }
                 case "RuntimeElementInclude": {
                     const include_path: string | undefined = element.attributes.getByGenerateName("source")?.getValue();
-                    if (include_path) {
-                        result += includeLayout(generator, include_path, []);
-                    }
+                    // console.log("Include path: ", include_path);
+                    // if (include_path) {
+                    //     result += includeLayout(generator, include_path, []);
+                    // }
                     break;
                 }
                 default: {
-                    generator.pushError(messageRenderer(generatorMessages[generator.ast.language.id][GeneratorMessageKeys.GENERATOR_UNKNOWN_ELEMENT_TYPE], element.generate_type || "None"));
-                    break;
+                    // generator.pushError(messageRenderer(generatorMessages[generator.ast.language.id][GeneratorMessageKeys.GENERATOR_UNKNOWN_ELEMENT_TYPE], element.generate_type || "None"));
+                    // break;
                 }
             }
         } else {

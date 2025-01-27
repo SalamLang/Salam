@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { processCommandRun } from './../../../../common/cli/validation';
+import { processCommandRun } from './../../../../common/cli/validator';
 import { LanguageMap } from './../../../../common/language/language';
 
 export function processCommandFile(args: string[], selectedLanguage: LanguageMap): number {

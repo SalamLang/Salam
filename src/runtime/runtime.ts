@@ -3,11 +3,13 @@ import { RuntimeElementAttribute } from './element_attribute';
 import { RuntimeElementA } from './element/a';
 import { RuntimeElementInclude } from './element/custom/include';
 import { RuntimeElementLayout } from './element/custom/layout';
+import { RuntimeElementDiv } from './element/div';
 
 export const runtimeElements = [
     new RuntimeElementLayout(),
     new RuntimeElementA(),
     new RuntimeElementInclude(),
+    new RuntimeElementDiv(),
 ];
 
 import { RuntimeStyleColor } from './style/color';

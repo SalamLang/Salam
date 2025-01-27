@@ -29,6 +29,10 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
     result += generator.bufferIndentedLine(`<body>`);
     generator.increaseIndent();
 
+    if (layout.root.content !== undefined) {
+        result += generator.bufferIndentedLine(layout.root.content);
+    }
+
     result += generateLayoutBlock(generator, layout.root, layout.root.block);
 
     generator.decreaseIndent();

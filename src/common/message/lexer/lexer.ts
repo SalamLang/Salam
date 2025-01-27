@@ -1,9 +1,10 @@
 import { faMessages } from './fa';
 import { enMessages } from './en';
-import { LexerMultiLanguageMessages } from './../message';
+import { MessageStruct } from './../message';
+import { MultiLanguageMessages } from './../message';
 import { LanguageID } from './../../language/language';
 
-export const lexerMessages: LexerMultiLanguageMessages = {
+export const lexerMessages: MultiLanguageMessages<MessageStruct<object>> = {
     [LanguageID.LanguageEnglish]: enMessages,
     [LanguageID.LanguagePersian]: faMessages
 };

@@ -1,6 +1,6 @@
 import { AstProgram } from "./../../parser/parse/ast/program";
 import { generatorMessages } from './../../../common/message/generator/generator';
-import { messageRenderer, GeneratorMessageKeys } from './../../../common/message/message';
+import { messageRenderer, MessageKeys } from './../../../common/message/message';
 
 export class Generator {
     ast: AstProgram;
@@ -23,7 +23,7 @@ export class Generator {
 
     decreaseIndent(): void {
         if (this.indentLevel === 0) {
-            this.pushError(messageRenderer(generatorMessages, this.ast.language.id, GeneratorMessageKeys.GENERATOR_CANNOT_OUTDENT_BELOW_ZERO));
+            this.pushError(messageRenderer(generatorMessages, this.ast.language.id, MessageKeys.GENERATOR_CANNOT_OUTDENT_BELOW_ZERO));
             return;
         }
         this.indentLevel--;

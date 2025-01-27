@@ -2,6 +2,8 @@ import { Lexer } from "./lexer";
 import { Token } from "../tokenizer/token";
 import { TokenValueType } from "../tokenizer/type";
 import { TokenData, TokenDataType } from "../tokenizer/data";
+// import { lexerMessages } from './../../../common/message/lexer/lexer';
+// import { messageRenderer, LexerMessageKeys } from './../../../common/message/message';
 
 export const stringOpenings = [
     '"',
@@ -51,7 +53,7 @@ export function lexerLexString(lexer: Lexer, opening: string): void {
     // If we reach here and the string isn't properly closed, you can handle the error
     // Uncomment if you want error handling for unclosed strings
     // if (lexer.currentChar !== closing) {
-    //     lexer.pushError(`Unclosed string literal starting with '${opening}'`);
+    //     lexer.pushError(messageRenderer(lexerMessages[lexer.language.id][LexerMessageKeys.LEXER_UNCLOSED_STRING_LITERAL], opening));
     //     return;
     // }
 

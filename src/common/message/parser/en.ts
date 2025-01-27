@@ -19,4 +19,6 @@ export const enMessages: ParserMessageStruct = {
     [ParserMessageKeys.PARSER_FUNCTION_NAME_IS_NOT_VALID]: "Function name is not valid.",
     [ParserMessageKeys.PARSER_FUNCTION_PARAMETERS_ARE_NOT_VALID]: "Function parameters are not valid.",
     [ParserMessageKeys.PARSER_FUNCTION_BODY_IS_NOT_VALID]: "Function body is not valid.",
+
+    [ParserMessageKeys.PARSER_EXPECTED_TOKEN_TYPE_BUT_GOT]: "Expected token type {0}, but got {1}.",
 };

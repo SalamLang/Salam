@@ -1,4 +1,6 @@
 import { AstProgram } from "../../parser/parse/ast/program";
+import { generatorMessages } from './../../../common/message/generator/generator';
+import { messageRenderer, GeneratorMessageKeys } from './../../../common/message/message';
 
 export class Generator {
     ast: AstProgram;
@@ -18,7 +20,7 @@ export class Generator {
 
     outdent(): void {
         if (this.ident === 0) {
-            this.pushError('Cannot outdent below 0');
+            this.pushError(messageRenderer(generatorMessages[this.ast.language.id][GeneratorMessageKeys.GENERATOR_CANNOT_OUTDENT_BELOW_ZERO]));
             return;
         }
         this.ident--;

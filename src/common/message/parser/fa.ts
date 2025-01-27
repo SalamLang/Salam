@@ -19,4 +19,6 @@ export const faMessages: ParserMessageStruct = {
     [ParserMessageKeys.PARSER_FUNCTION_NAME_IS_NOT_VALID]: "نام تابع معتبر نیست.",
     [ParserMessageKeys.PARSER_FUNCTION_PARAMETERS_ARE_NOT_VALID]: "پارامترهای تابع معتبر نیستند.",
     [ParserMessageKeys.PARSER_FUNCTION_BODY_IS_NOT_VALID]: "بدنه تابع معتبر نیست.",
+
+    [ParserMessageKeys.PARSER_EXPECTED_TOKEN_TYPE_BUT_GOT]: "نوع نشانه {0} انتظار می‌رفت، اما {1} دریافت شد.",
 };

@@ -2,15 +2,18 @@ import { Validator } from "../validator";
 import { RuntimeElementAttribute } from '../../../../runtime/element_attribute';
 import { AstLayoutAttribute } from '../../../parser/parse/ast/layout/attribute';
 import { RuntimeElementAttributeType } from '../../../../runtime/element_attribute_type';
+import { validatorMessages } from './../../../../common/message/validator/validator';
+import { messageRenderer, ValidatorMessageKeys } from './../../../../common/message/message';
 
 export function validateLayoutElementAttributeValue(validator: Validator, attribute: AstLayoutAttribute, runtimeElementAttribute: RuntimeElementAttribute): string | undefined {
-    const attr_name = runtimeElementAttribute.getText(validator.ast.language.id);
+    // TOOD: .getText() is an array, so we should join it to get the string
+    const attr_name = runtimeElementAttribute.getText(validator.ast.language.id)?.join(" ") || "Unknown Attribute";
     const value = attribute.value.getString();
 
-    const error = "Attribute value '" + value + "' is not a valid "+ runtimeElementAttribute.type +" for attribute '" + attr_name + "' in element '" + attribute.element_enduser_name + "'";
+    const error: string = messageRenderer(validatorMessages[validator.ast.language.id][ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_VALID], value, runtimeElementAttribute.type, attr_name, attribute.element_enduser_name);
 
     if (runtimeElementAttribute.type !== RuntimeElementAttributeType.String && value === "") {
-        return "Attribute value '" + value + "' is not a valid "+ runtimeElementAttribute.type +" for attribute '" + attr_name + "' as it should not be empty in element '" + attribute.element_enduser_name + "'";
+        return messageRenderer(validatorMessages[validator.ast.language.id][ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_EMPTY], value, runtimeElementAttribute.type, attr_name, attribute.element_enduser_name);
     }
 
     switch (runtimeElementAttribute.type) {

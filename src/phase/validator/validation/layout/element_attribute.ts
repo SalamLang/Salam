@@ -4,10 +4,13 @@ import { AstLayoutElement } from "../../../parser/parse/ast/layout/element";
 import { validateLayoutElementAttributeValue } from './element_attribute_value';
 import { RuntimeElementAttribute } from '../../../../runtime/element_attribute';
 import { AstLayoutAttribute } from "../../../parser/parse/ast/layout/attribute";
+import { validatorMessages } from './../../../../common/message/validator/validator';
+import { messageRenderer, ValidatorMessageKeys } from './../../../../common/message/message';
 import { validateLayoutElementAttributeReservedValue } from './element_attribute_reserved_value';
 
 export function validateLayoutElementAttribute(validator: Validator, runtimeElement: RuntimeElement, attribute: AstLayoutAttribute, element: AstLayoutElement): void {
-    const element_name = runtimeElement.getText(validator.ast.language.id);
+    // TODO: .getText() is an array, so we should join it to get the string
+    const element_name = runtimeElement.getText(validator.ast.language.id)?.join(" ") || "Unknown Element";
     const attribute_name = attribute.enduser_name;
 
     const validationChecks = [
@@ -25,9 +28,7 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
     }, undefined as RuntimeElementAttribute | undefined);
 
     if (runtimeElementAttribute === undefined) {
-        validator.pushError(
-            `Attribute '${attribute_name}' is not a valid attribute for element '${element_name}'`
-        );
+        validator.pushError(messageRenderer(validatorMessages[validator.ast.language.id][ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID], attribute_name, element_name));
         return;
     }
 

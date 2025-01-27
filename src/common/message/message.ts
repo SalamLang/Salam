@@ -77,6 +77,9 @@ export type GeneratorMultiLanguageMessages = {
 export enum GeneratorMessageKeys {
     GENERATOR_CANNOT_OUTDENT_BELOW_ZERO,
     GENERATOR_UNKNOWN_ELEMENT_TYPE,
+    GENERATOR_INCLUDE_FILE_PATH_NOT_PROVIDED,
+    GENERATOR_INCLUDE_FILE_NOT_FOUND,
+    GENERATOR_INCLUDE_FILE_READ_ERROR,
 };
 
 export function messageRenderer(message: string, ...args: string[]): string {

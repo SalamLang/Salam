@@ -11,30 +11,30 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
     const attribute_author: string | undefined = layout.root.globalAttributes.getByGenerateName("author")?.getValue();
     const attribute_charset: string = layout.root.globalAttributes.getByGenerateName("author")?.getValue() || "utf-8";
     
-    result += generator.bufferIndentLine(`<!doctype html>`);
-    result += generator.bufferIndentLine(`<html dir="${attribute_dir}" lang="${attribute_lang}">`);
+    result += generator.bufferIndentedLine(`<!doctype html>`);
+    result += generator.bufferIndentedLine(`<html dir="${attribute_dir}" lang="${attribute_lang}">`);
     generator.increaseIndent();
-    result += generator.bufferIndentLine(`<head>`);
+    result += generator.bufferIndentedLine(`<head>`);
     generator.increaseIndent();
 
-    result += generator.bufferIndentLine(`<title>${attribute_title}</title>`);
-    result += generator.bufferIndentLine(`<meta charset="${attribute_charset}">`);
-    result += generator.bufferIndentLine(`<meta name="viewport" content="width=device-width, initial-scale=1">`);
+    result += generator.bufferIndentedLine(`<title>${attribute_title}</title>`);
+    result += generator.bufferIndentedLine(`<meta charset="${attribute_charset}">`);
+    result += generator.bufferIndentedLine(`<meta name="viewport" content="width=device-width, initial-scale=1">`);
     if (attribute_author) {
-        result += generator.bufferIndentLine(`<meta name="author" content="${attribute_author}">`);
+        result += generator.bufferIndentedLine(`<meta name="author" content="${attribute_author}">`);
     }
 
     generator.decreaseIndent();
-    result += generator.bufferIndentLine(`</head>`);
-    result += generator.bufferIndentLine(`<body>`);
+    result += generator.bufferIndentedLine(`</head>`);
+    result += generator.bufferIndentedLine(`<body>`);
     generator.increaseIndent();
 
     result += generateLayoutBlock(generator, layout.root, layout.root.block);
 
     generator.decreaseIndent();
-    result += generator.bufferIndentLine(`</body>`);
+    result += generator.bufferIndentedLine(`</body>`);
     generator.decreaseIndent();
-    result += generator.bufferIndentLine(`</html>`);
+    result += generator.bufferIndentedLine(`</html>`);
 
     return result;
 };

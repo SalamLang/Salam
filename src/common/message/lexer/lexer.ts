@@ -1,9 +1,9 @@
 import { faMessages } from './fa';
 import { enMessages } from './en';
-import { MultiLanguageMessages } from './../message';
+import { LexerMultiLanguageMessages } from './../message';
 import { LanguageID } from './../../language/language';
 
-export const lexerMessages: MultiLanguageMessages = {
+export const lexerMessages: LexerMultiLanguageMessages = {
     [LanguageID.LanguageEnglish]: enMessages,
     [LanguageID.LanguagePersian]: faMessages
 };

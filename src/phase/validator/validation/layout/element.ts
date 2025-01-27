@@ -18,11 +18,8 @@ export function validateLayoutElement(validator: Validator, parent_element: AstL
     element.generate_name = runtimeElement.generate_name;
     element.generate_type = runtimeElement.constructor.name;
 
-    // Check attributes
-    validateLayoutElementAttributes(validator, element.enduser_name, runtimeElement, element.attributes, element);
-
-    // Check global attributes
-    validateLayoutElementAttributes(validator, element.enduser_name, runtimeElement, element.globalAttributes, element);
+    // Check attributes and global attributes
+    validateLayoutElementAttributes(validator, element.enduser_name, runtimeElement, element);
 
     // Check block
     validateLayoutBlock(validator, parent_element, element, element.block);

@@ -4,34 +4,36 @@ import { parserParseBlock } from './block';
 import { AstFunctionAttribute } from '../ast/function_attribute';
 import { TokenKeywordType } from './../../../lexer/tokenizer/type';
 import { parserParseFunctionAttributes } from './function_attributes';
+import { parserMessages } from './../../../../common/message/parser/parser';
 import { AstFunctionDeclaration } from '../ast/statement/function_declaration';
+import { messageRenderer, ParserMessageKeys } from './../../../../common/message/message';
 
 export function parserParseFunction(parser: Parser): AstFunctionDeclaration | undefined {
     parser.expect(TokenKeywordType.TOKEN_FN);
 
     if (!parser.currentToken.isKeyword) {
-        parser.pushError("Function name is not valid, it should be an identifier string name.");
+        parser.pushError(messageRenderer(parserMessages[parser.lexer.language.id][ParserMessageKeys.PARSER_FUNCTION_NAME_IS_NOT_VALID_IDENTIFIER]));
         return undefined;
     } else if (parser.currentToken.isDefinedIdentifier) {
-        parser.pushError("Function name is not valid, this name already reserved in Salam, you should choose another name.");
+        parser.pushError(messageRenderer(parserMessages[parser.lexer.language.id][ParserMessageKeys.PARSER_FUNCTION_NAME_IS_RESERVED_IN_SALAM]));
         return undefined;
     }
 
     const name: string | undefined = parser.currentToken.data?.getValueString();
     if (! name) {
-        parser.pushError("Function name is not valid.");
+        parser.pushError(messageRenderer(parserMessages[parser.lexer.language.id][ParserMessageKeys.PARSER_FUNCTION_NAME_IS_NOT_VALID]));
         return undefined;
     }
 
     const params: AstFunctionAttribute[] | undefined = parserParseFunctionAttributes(parser);
     if (! params) {
-        parser.pushError("Function parameters are not valid.");
+        parser.pushError(messageRenderer(parserMessages[parser.lexer.language.id][ParserMessageKeys.PARSER_FUNCTION_PARAMETERS_ARE_NOT_VALID]));
         return undefined;
     }
 
     const body: AstBlock | undefined = parserParseBlock(parser);
     if (! body) {
-        parser.pushError("Function body is not valid.");
+        parser.pushError(messageRenderer(parserMessages[parser.lexer.language.id][ParserMessageKeys.PARSER_FUNCTION_BODY_IS_NOT_VALID]));
         return undefined;
     }
 

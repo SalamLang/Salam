@@ -10,15 +10,15 @@ import { validate } from './../../../validator/validation/validate';
 // import { generate } from './../../../generator/generation/generate';
 import { Validator } from './../../../validator/validation/validator';
 import { Generator } from './../../../generator/generation/generator';
+import { generatorMessages } from './../../../../common/message/generator/generator';
+import { messageRenderer, GeneratorMessageKeys } from './../../../../common/message/message';
 
 export function includeLayout(generator: Generator, filePath: string, params: string[]): string {
-    console.log(filePath);
-
     try {
         if (! filePath) {
-            generator.pushError("File path not provided.");
+            generator.pushError(messageRenderer(generatorMessages[generator.ast.language.id][GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_PATH_NOT_PROVIDED]));
         } else if (! fs.existsSync(filePath)) {
-            generator.pushError(`File not found - "${filePath}"`);
+            generator.pushError(messageRenderer(generatorMessages[generator.ast.language.id][GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_NOT_FOUND], filePath));
         } else {
             const fileName: string = fs.realpathSync(filePath);
             const absoluteDirPath: string = fs.realpathSync(path.dirname(filePath));
@@ -32,14 +32,15 @@ export function includeLayout(generator: Generator, filePath: string, params: st
             validate(_validator);
             const _generator: Generator = new Generator(_validator.ast);
             if (_generator.ast.layout !== undefined) {
+                console.log(_generator.ast.layout.root);
                 return generateLayoutBlock(generator, _generator.ast.layout.root, _generator.ast.layout.root.block);
             }
         }
     } catch (error: any) {
         if (error.code === 'ENOENT') {
-            generator.pushError(`File not found - "${filePath}"`);
+            generator.pushError(messageRenderer(generatorMessages[generator.ast.language.id][GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_NOT_FOUND], filePath));
         } else {
-            generator.pushError(`File read error: ${error.message}`);
+            generator.pushError(messageRenderer(generatorMessages[generator.ast.language.id][GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_READ_ERROR], error.message));
         }
     }
     return "";

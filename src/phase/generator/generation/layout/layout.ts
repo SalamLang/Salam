@@ -5,11 +5,11 @@ import { AstLayout } from './../../../parser/parse/ast/layout/layout';
 export function generateLayout(generator: Generator, layout: AstLayout): string {
     let result: string = "";
 
-    const attribute_dir: string = layout.root.globalAttributes.getByGenerateName("dir")?.getValue() || "rtl";
-    const attribute_lang: string = layout.root.globalAttributes.getByGenerateName("lang")?.getValue() || "fa-IR";
-    const attribute_title: string = layout.root.globalAttributes.getByGenerateName("title")?.getValue() || "Salam Untitled";
-    const attribute_author: string | undefined = layout.root.globalAttributes.getByGenerateName("author")?.getValue();
-    const attribute_charset: string = layout.root.globalAttributes.getByGenerateName("author")?.getValue() || "utf-8";
+    const attribute_dir: string = layout.root.attributes.getByGenerateName("dir")?.getValue() || "rtl";
+    const attribute_lang: string = layout.root.attributes.getByGenerateName("lang")?.getValue() || "fa-IR";
+    const attribute_title: string = layout.root.attributes.getByGenerateName("title")?.getValue() || "Salam Untitled";
+    const attribute_author: string | undefined = layout.root.attributes.getByGenerateName("author")?.getValue();
+    const attribute_charset: string = layout.root.attributes.getByGenerateName("author")?.getValue() || "utf-8";
     
     result += generator.bufferIndentedLine(`<!doctype html>`);
     result += generator.bufferIndentedLine(`<html dir="${attribute_dir}" lang="${attribute_lang}">`);

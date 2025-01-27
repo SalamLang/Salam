@@ -1,7 +1,7 @@
-import { AstNode } from '../node';
+import { AstNode } from './../node';
 import { AstLayoutBlock } from './block';
 import { AstLayoutAttributes } from './attributes';
-import { stringify } from '../../../../../serializer';
+import { stringify } from './../../../../../serializer';
 
 export class AstLayoutElement extends AstNode {
     enduser_name: string;

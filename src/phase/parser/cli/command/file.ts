@@ -1,8 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 
-import { processCommandRun } from '../../../../common/cli/parser';
-import { LanguageMap } from '../../../../common/language/language';
+import { processCommandRun } from './../../../../common/cli/parser';
+import { LanguageMap } from './../../../../common/language/language';
 
 export function processCommandFile(args: string[], selectedLanguage: LanguageMap): number {
     const filePath = args[args.indexOf("file") + 1] || undefined;

@@ -1,4 +1,4 @@
-import { stringify } from '../../../serializer';
+import { stringify } from './../../../serializer';
 
 export class TokenLocation {
     index: number;

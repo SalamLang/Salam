@@ -1,4 +1,4 @@
-import { ValidatorMessageKeys, ValidatorMessageStruct } from '../message';
+import { ValidatorMessageKeys, ValidatorMessageStruct } from './../message';
 
 export const faMessages: ValidatorMessageStruct = {
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_REQUIRED]: "ویژگی '{{attribute}}' برای عنصر '{{element}}' لازم است اما یافت نشد",

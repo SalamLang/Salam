@@ -1,7 +1,7 @@
 import { Lexer } from "./lexer"; 
-import { Token } from "../tokenizer/token";
-import { TokenValueType } from "../tokenizer/type";
-import { TokenData, TokenDataType } from "../tokenizer/data";
+import { Token } from "./../tokenizer/token";
+import { TokenValueType } from "./../tokenizer/type";
+import { TokenData, TokenDataType } from "./../tokenizer/data";
 // import { lexerMessages } from './../../../common/message/lexer/lexer';
 // import { messageRenderer, LexerMessageKeys } from './../../../common/message/message';
 

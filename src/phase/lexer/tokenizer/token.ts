@@ -1,7 +1,7 @@
 import { TokenType, TokenKeywordType, TokenValueType, TokenOperatorType, TokenOtherType } from './type';
 import { TokenLocation } from './location';
 import { TokenData } from './data';
-import { stringify } from '../../../serializer';
+import { stringify } from './../../../serializer';
 
 export class Token {
     type: TokenType;

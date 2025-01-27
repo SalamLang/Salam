@@ -7,15 +7,7 @@ import { messageRenderer, GeneratorMessageKeys } from './../../../../common/mess
 
 export function generateLayoutNode(generator: Generator, element: AstLayoutElement): string {
     let result: string = '';
-    // console.log("generateLayoutNode:", element.type);
-
     switch (element.generate_type) {
-        case undefined: {
-            console.log("Unknown element:", element);
-            result += "<!-- Unknown element -->";
-            result += generateLayoutElement(generator, element as AstLayoutElement);
-            break;
-        }
         case "RuntimeElementLayout": {
             result += generateLayoutElement(generator, element as AstLayoutElement);
             break;
@@ -28,7 +20,6 @@ export function generateLayoutNode(generator: Generator, element: AstLayoutEleme
             break;
         }
         default: {
-            console.log(element.generate_type, element);
             generator.pushError(messageRenderer(generatorMessages[generator.ast.language.id][GeneratorMessageKeys.GENERATOR_UNKNOWN_ELEMENT_TYPE], element.generate_type || "None"));
             break;
         }

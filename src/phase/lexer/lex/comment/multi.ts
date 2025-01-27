@@ -1,6 +1,6 @@
 import { Lexer } from '../lexer';
 import { lexerMessages } from './../../../../common/message/lexer/lexer';
-import { messageRenderer, MessageKeys } from './../../../../common/message/message';
+import { messageRenderer, LexerMessageKeys } from './../../../../common/message/message';
 
 export function lexerLexReadBlockComment(lexer: Lexer) {
     lexer.advance(); // Skip the first '/'
@@ -20,6 +20,6 @@ export function lexerLexReadBlockComment(lexer: Lexer) {
     }
 
     if (blockCommentDepth > 0) {
-        lexer.pushError(messageRenderer(lexerMessages[MessageKeys.LEXER_UNTERMINATED_MULTI_LINE_COMMENT_BLOCK]));
+        lexer.pushError(messageRenderer(lexerMessages[lexer.language.id][LexerMessageKeys.LEXER_UNTERMINATED_MULTI_LINE_COMMENT_BLOCK]));
     }
 }

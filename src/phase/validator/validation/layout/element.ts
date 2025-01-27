@@ -11,7 +11,7 @@ export function validateLayoutElement(validator: Validator, parent_element: AstL
 
     // Check if element is a valid element
     if (runtimeElement === undefined) {
-        validator.pushError(messageRenderer(validatorMessages[validator.ast.language.id][ValidatorMessageKeys.VALIDATOR_ELEMENT_NOT_VALID], element.enduser_name));
+        validator.pushError(messageRenderer(validatorMessages, validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ELEMENT_NOT_VALID, element.enduser_name));
         return;
     }
 

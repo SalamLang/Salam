@@ -6,7 +6,7 @@ import { validatorMessages } from './../../../../common/message/validator/valida
 import { messageRenderer, ValidatorMessageKeys } from './../../../../common/message/message';
 
 export function validateLayoutElementAttributeReservedValue(validator: Validator, attribute: AstLayoutAttribute, runtimeElementAttribute: RuntimeElementAttribute): string | undefined {
-    const error: string = messageRenderer(validatorMessages[validator.ast.language.id][ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_RESERVED_VALUE_NOT_VALID], attribute.value.getString(), attribute.enduser_name, attribute.element_enduser_name);
+    const error: string = messageRenderer(validatorMessages, validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_RESERVED_VALUE_NOT_VALID, attribute.value.getString(), attribute.enduser_name, attribute.element_enduser_name);
     
     if (runtimeElementAttribute.reservedValues.length > 0) {
         const found: RuntimeElementAttributeValue | undefined = runtimeElementAttribute.reservedValues.find((value: RuntimeElementAttributeValue) => value.getText(validator.ast.language.id)?.includes(attribute.value.getString()));

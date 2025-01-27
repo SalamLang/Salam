@@ -20,6 +20,6 @@ export function lexerLexReadBlockComment(lexer: Lexer) {
     }
 
     if (blockCommentDepth > 0) {
-        lexer.pushError(messageRenderer(lexerMessages[lexer.language.id][LexerMessageKeys.LEXER_UNTERMINATED_MULTI_LINE_COMMENT_BLOCK]));
+        lexer.pushError(messageRenderer(lexerMessages, lexer.language.id, LexerMessageKeys.LEXER_UNTERMINATED_MULTI_LINE_COMMENT_BLOCK));
     }
 }

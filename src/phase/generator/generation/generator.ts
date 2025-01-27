@@ -23,7 +23,7 @@ export class Generator {
 
     decreaseIndent(): void {
         if (this.indentLevel === 0) {
-            this.pushError(messageRenderer(generatorMessages[this.ast.language.id][GeneratorMessageKeys.GENERATOR_CANNOT_OUTDENT_BELOW_ZERO]));
+            this.pushError(messageRenderer(generatorMessages, this.ast.language.id, GeneratorMessageKeys.GENERATOR_CANNOT_OUTDENT_BELOW_ZERO));
             return;
         }
         this.indentLevel--;
@@ -51,7 +51,7 @@ export class Generator {
     }
 
     pushError(message: string) {
-        this.errors.push("Generator error: " + message);
+        this.errors.push(message);
     }
 
     print(): void {

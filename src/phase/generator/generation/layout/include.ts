@@ -1,8 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 
-import { generateLayoutBlock } from './block';
+import { generateLayoutNode } from './node';
 import { lex } from './../../../lexer/lex/lex';
+import { generateLayoutElement } from './element';
 import { Lexer } from './../../../lexer/lex/lexer';
 import { parse } from './../../../parser/parse/parse';
 import { Parser } from './../../../parser/parse/parser';
@@ -14,7 +15,8 @@ import { generatorMessages } from './../../../../common/message/generator/genera
 import { messageRenderer, GeneratorMessageKeys } from './../../../../common/message/message';
 
 export function includeLayout(generator: Generator, filePath: string, params: string[]): string {
-    try {
+    // console.log(filePath);
+    // try {
         if (! filePath) {
             generator.pushError(messageRenderer(generatorMessages[generator.ast.language.id][GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_PATH_NOT_PROVIDED]));
         } else if (! fs.existsSync(filePath)) {
@@ -30,18 +32,22 @@ export function includeLayout(generator: Generator, filePath: string, params: st
             parse(_parser);
             const _validator: Validator = new Validator(_parser.ast);
             validate(_validator);
+            // console.log(_validator.ast);
+
             const _generator: Generator = new Generator(_validator.ast);
             if (_generator.ast.layout !== undefined) {
-                console.log(_generator.ast.layout.root);
-                return generateLayoutBlock(generator, _generator.ast.layout.root, _generator.ast.layout.root.block);
+                // console.log("include:", _generator.ast.layout.root);
+                _generator.ast.layout.root.type = "LayoutElementInclude";
+                return generateLayoutNode(generator, _generator.ast.layout.root);
             }
         }
-    } catch (error: any) {
-        if (error.code === 'ENOENT') {
-            generator.pushError(messageRenderer(generatorMessages[generator.ast.language.id][GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_NOT_FOUND], filePath));
-        } else {
-            generator.pushError(messageRenderer(generatorMessages[generator.ast.language.id][GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_READ_ERROR], error.message));
-        }
-    }
+    // } catch (error: any) {
+    //     console.log(error);
+    //     if (error.code === 'ENOENT') {
+    //         generator.pushError(messageRenderer(generatorMessages[generator.ast.language.id][GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_NOT_FOUND], filePath));
+    //     } else {
+    //         generator.pushError(messageRenderer(generatorMessages[generator.ast.language.id][GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_READ_ERROR], error.message));
+    //     }
+    // }
     return "";
 };

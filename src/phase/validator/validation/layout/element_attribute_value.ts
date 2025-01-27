@@ -7,8 +7,8 @@ import { messageRenderer, ValidatorMessageKeys } from './../../../../common/mess
 
 export function validateLayoutElementAttributeValue(validator: Validator, attribute: AstLayoutAttribute, runtimeElementAttribute: RuntimeElementAttribute): string | undefined {
     // TOOD: .getText() is an array, so we should join it to get the string
-    const attr_name = runtimeElementAttribute.getText(validator.ast.language.id)?.join(" ") || "Unknown Attribute";
-    const value = attribute.value.getString();
+    const attr_name: string = runtimeElementAttribute.getText(validator.ast.language.id)?.join(" ") || "Unknown Attribute";
+    const value: string = attribute.value.getString();
 
     const error: string = messageRenderer(validatorMessages[validator.ast.language.id][ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_VALID], value, runtimeElementAttribute.type, attr_name, attribute.element_enduser_name);
 

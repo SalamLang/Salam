@@ -53,7 +53,7 @@ export class Lexer {
     pushError(message: string) {
         console.error(`Error: ${message} at line ${this.line}, column ${this.column}.`);
         const tokenData = new TokenData(TokenDataType.TOKEN_DATA_TYPE_STRING, message);
-        const token = new Token(TokenOtherType.TOKEN_ERROR, this.getLocation(), tokenData);
+        const token: Token = new Token(TokenOtherType.TOKEN_ERROR, this.getLocation(), tokenData);
         this.pushToken(token);
     }
 
@@ -78,12 +78,12 @@ export class Lexer {
             this.advance();
             this.advance();
 
-            const token = new Token(operatorTypeMaps[char + char], this.getLocation());
+            const token: Token = new Token(operatorTypeMaps[char + char], this.getLocation());
             this.pushToken(token);
         } else {
             this.advance();
 
-            const token = new Token(operatorTypeMaps[char], this.getLocation());
+            const token: Token = new Token(operatorTypeMaps[char], this.getLocation());
             this.pushToken(token);
         }
     }
@@ -94,7 +94,7 @@ export class Lexer {
             this.advance();
             this.advance();
 
-            const token = new Token(operatorTypeMaps[char + char2], this.getLocation());
+            const token: Token = new Token(operatorTypeMaps[char + char2], this.getLocation());
             this.pushToken(token);
         } else if (nextChar === char) {
             this.advance();
@@ -102,16 +102,16 @@ export class Lexer {
 
             if (this.nextChar === char2) {
                 this.advance();
-                const token = new Token(operatorTypeMaps[char + char + char2], this.getLocation());
+                const token: Token = new Token(operatorTypeMaps[char + char + char2], this.getLocation());
                 this.pushToken(token);
             } else {
-                const token = new Token(operatorTypeMaps[char + char], this.getLocation());
+                const token: Token = new Token(operatorTypeMaps[char + char], this.getLocation());
                 this.pushToken(token);
             }
         } else {
             this.advance();
 
-            const token = new Token(operatorTypeMaps[char], this.getLocation());
+            const token: Token = new Token(operatorTypeMaps[char], this.getLocation());
             this.pushToken(token);
         }
     }
@@ -122,18 +122,18 @@ export class Lexer {
             this.advance();
             this.advance();
 
-            const token = new Token(operatorTypeMaps[char + char2], this.getLocation());
+            const token: Token = new Token(operatorTypeMaps[char + char2], this.getLocation());
             this.pushToken(token);
         } else if (nextChar === char) {
             this.advance();
             this.advance();
 
-            const token = new Token(operatorTypeMaps[char + char], this.getLocation());
+            const token: Token = new Token(operatorTypeMaps[char + char], this.getLocation());
             this.pushToken(token);
         } else {
             this.advance();
 
-            const token = new Token(operatorTypeMaps[char], this.getLocation());
+            const token: Token = new Token(operatorTypeMaps[char], this.getLocation());
             this.pushToken(token);
         }
     }

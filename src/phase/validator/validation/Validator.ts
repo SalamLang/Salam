@@ -23,7 +23,7 @@ export class Validator {
         name: string,
         filterFn?: (item: T) => boolean
     ): T | undefined {
-        return collection.find(item => {
+        return collection.find((item: T) => {
             if (!item.getText(this.ast.language.id)?.includes(name)) return false;
             return filterFn ? filterFn(item) : true;
         });

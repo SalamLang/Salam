@@ -5,7 +5,7 @@ import { Parser } from './../../phase/parser/parse/parser';
 import { LanguageMap } from './../../common/language/language';
 
 export function processCommandRun(fileName: string | undefined, absoluteDirPath: string | undefined, source: string, selectedLanguage: LanguageMap): number {
-    const lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
+    const lexer: Lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
     lex(lexer);
     lexer.print();
 
@@ -13,7 +13,7 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
     console.log('=======================');
     console.log('=======================');
 
-    const parser = new Parser(lexer);
+    const parser: Parser = new Parser(lexer);
     parse(parser);
     if (parser.ast.errors.length > 0) {
         parser.ast.errors.forEach((error: string) => {

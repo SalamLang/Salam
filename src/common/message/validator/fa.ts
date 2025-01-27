@@ -1,6 +1,7 @@
 import { ValidatorMessageKeys, ValidatorMessageStruct } from './../message';
 
 export const faMessages: ValidatorMessageStruct = {
+    [ValidatorMessageKeys.VALIDATOR_PREFIX]: "خطا اعتبارسنجی: ",
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_REQUIRED]: "ویژگی '{0}' برای عنصر '{1}' لازم است اما یافت نشد",
     [ValidatorMessageKeys.VALIDATOR_ELEMENT_NOT_VALID]: "عنصر '{0}' یک عنصر معتبر نیست",
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_RESERVED_VALUE_NOT_VALID]: "مقدار ویژگی '{1}' برای ویژگی '{1}' در عنصر '{2}' معتبر نیست",

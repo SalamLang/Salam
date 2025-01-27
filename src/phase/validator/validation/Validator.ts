@@ -15,7 +15,7 @@ export class Validator {
     }
 
     pushError(message: string) {
-        this.errors.push(`Validator error: ${message}`);
+        this.errors.push(message);
     }
 
     private findInCollection<T extends RuntimeElement | RuntimeElementAttribute>(

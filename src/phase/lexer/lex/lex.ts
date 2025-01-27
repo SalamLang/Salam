@@ -134,7 +134,7 @@ export function lex(lexer: Lexer): void {
                 } else if (isUtf8Alpha(char)) {
                     lexerLexIdentifier(lexer);
                 } else {
-                    lexer.pushError(messageRenderer(lexerMessages[lexer.language.id][LexerMessageKeys.LEXER_INVALID_UNEXPECTED_CHAR], `${char}`));
+                    lexer.pushError(messageRenderer(lexerMessages, lexer.language.id, LexerMessageKeys.LEXER_INVALID_UNEXPECTED_CHAR, `${char}`));
                     lexer.advance();
                 }
         }

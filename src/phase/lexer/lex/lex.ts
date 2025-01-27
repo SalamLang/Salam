@@ -9,7 +9,7 @@ import { lexerLexReadComment } from './comment/single';
 import { lexerLexString, stringOpenings } from './string';
 import { lexerLexReadBlockComment } from './comment/multi';
 import { lexerMessages } from './../../../common/message/lexer/lexer';
-import { messageRenderer, MessageKeys } from './../../../common/message/message';
+import { messageRenderer, LexerMessageKeys } from './../../../common/message/message';
 
 export function lex(lexer: Lexer): void {
     while (lexer.index < lexer.source.length) {
@@ -134,7 +134,7 @@ export function lex(lexer: Lexer): void {
                 } else if (isUtf8Alpha(char)) {
                     lexerLexIdentifier(lexer);
                 } else {
-                    lexer.pushError(messageRenderer(lexerMessages, lexer.language.id, MessageKeys.LEXER_INVALID_UNEXPECTED_CHAR, `${char}`));
+                    lexer.pushError(messageRenderer(lexerMessages, lexer.language.id, LexerMessageKeys.LEXER_INVALID_UNEXPECTED_CHAR, `${char}`));
                     lexer.advance();
                 }
         }

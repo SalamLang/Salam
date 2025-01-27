@@ -5,7 +5,7 @@ import { AstLayoutAttribute } from './../ast/layout/attribute';
 import { parserParseLayoutAttribute } from './layout_attribute';
 import { Token, arrayName2String } from './../../../lexer/tokenizer/token';
 import { parserMessages } from './../../../../common/message/parser/parser';
-import { messageRenderer, MessageKeys } from './../../../../common/message/message';
+import { messageRenderer, ParserMessageKeys } from './../../../../common/message/message';
 import { TokenKeywordType, TokenOperatorType, TokenOtherType } from './../../../lexer/tokenizer/type';
 
 export function parserParseLayoutElement(parser: Parser, element_key_tokens: Token[]): AstLayoutElement | undefined {
@@ -29,7 +29,7 @@ export function parserParseLayoutElement(parser: Parser, element_key_tokens: Tok
                 const attribute: AstLayoutAttribute | undefined = parserParseLayoutAttribute(parser, element_key, key_tokens);
                 if (attribute) {
                     if (! element.attributes.push(attribute)) {
-                        parser.pushError(messageRenderer(parserMessages, parser.lexer.language.id, MessageKeys.PARSER_DUPLICATE_ATTRIBUTE_IN_LAYOUT, attribute.key));
+                        parser.pushError(messageRenderer(parserMessages, parser.lexer.language.id, ParserMessageKeys.PARSER_DUPLICATE_ATTRIBUTE_IN_LAYOUT, attribute.key));
                         return undefined;
                     }
                 }
@@ -41,16 +41,16 @@ export function parserParseLayoutElement(parser: Parser, element_key_tokens: Tok
                 //              ^
                 const sub_element: AstLayoutElement | undefined = parserParseLayoutElement(parser, key_tokens);
                 if (! sub_element) {
-                    parser.pushError(messageRenderer(parserMessages, parser.lexer.language.id, MessageKeys.PARSER_UNEXPECTED_TOKEN_AS_ELEMENT_NAME, parser.currentToken.type));
+                    parser.pushError(messageRenderer(parserMessages, parser.lexer.language.id, ParserMessageKeys.PARSER_UNEXPECTED_TOKEN_AS_ELEMENT_NAME, parser.currentToken.type));
                     return undefined;
                 }
                 element.block.push(sub_element);
             } else {
-                parser.pushError(messageRenderer(parserMessages, parser.lexer.language.id, MessageKeys.PARSER_UNEXPECTED_TOKEN_IN_LAYOUT, parser.currentToken.type));
+                parser.pushError(messageRenderer(parserMessages, parser.lexer.language.id, ParserMessageKeys.PARSER_UNEXPECTED_TOKEN_IN_LAYOUT, parser.currentToken.type));
                 return undefined;
             }
         } else {
-            parser.pushError(messageRenderer(parserMessages, parser.lexer.language.id, MessageKeys.PARSER_UNEXPECTED_TOKEN_IN_LAYOUT_AS_ATTRIBUTE, parser.currentToken.type));
+            parser.pushError(messageRenderer(parserMessages, parser.lexer.language.id, ParserMessageKeys.PARSER_UNEXPECTED_TOKEN_IN_LAYOUT_AS_ATTRIBUTE, parser.currentToken.type));
             return undefined;
         }
     }

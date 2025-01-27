@@ -7,23 +7,21 @@ import { messageRenderer, GeneratorMessageKeys } from './../../../../common/mess
 
 export function generateLayoutNode(generator: Generator, element: AstLayoutElement): string {
     let result: string = '';
-    // console.log("generateLayoutNode:", element);
+    // console.log("generateLayoutNode:", element.type);
 
     switch (element.generate_type) {
         case undefined: {
-            result += "<!-- Unknown element type -->";
+            console.log("Unknown element:", element);
+            result += "<!-- Unknown element -->";
             result += generateLayoutElement(generator, element as AstLayoutElement);
             break;
         }
         case "RuntimeElementLayout": {
-            result += "<!-- Layout element -->";
             result += generateLayoutElement(generator, element as AstLayoutElement);
             break;
         }
         case "RuntimeElementInclude": {
             const include_path: string | undefined = element.attributes.getByGenerateName("source")?.getValue();
-            result += "<!-- Include: " + include_path + " -->";
-            // console.log("Include path: ", include_path);
             if (include_path) {
                 result += includeLayout(generator, include_path, []);
             }

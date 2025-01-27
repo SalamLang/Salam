@@ -8,15 +8,21 @@ export function generateLayoutAttributes(generator: Generator, attributes: AstLa
 
     for (const attribute of attributes.items) {
         if (attribute.isStyle()) {
-            if (style_result.length > 0) {
-                style_result += ";";
+            const style_attribute: string = generateLayoutAttribute(generator, attribute);
+            if (style_attribute.length > 0) {
+                if (style_result.length > 0) {
+                    style_result += ";";
+                }
+                style_result += style_attribute;
             }
-            style_result += generateLayoutAttribute(generator, attribute);
         } else {
-            if (html_result.length > 0) {
-                html_result += " ";
+            const html_attribute: string = generateLayoutAttribute(generator, attribute);
+            if (html_attribute.length > 0) {
+                if (html_result.length > 0) {
+                    html_result += " ";
+                }
+                html_result += html_attribute;
             }
-            html_result += generateLayoutAttribute(generator, attribute);
         }
     }
 

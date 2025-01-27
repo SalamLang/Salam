@@ -14,12 +14,19 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
 
     result += generator.bufferIndented(`<${element.generate_name}`);
 
-    let attributes_str: string = generateLayoutAttributes(generator, element.attributes);
-    if (attributes_str.length > 0) {
+    // Handle attributes
+    const attributes_str1: string = generateLayoutAttributes(generator, element.attributes);
+    if (attributes_str1.length > 0) {
         result += generator.buffer(` `);
+        result += generator.buffer(attributes_str1);
     }
-    attributes_str += generateLayoutAttributes(generator, element.globalAttributes);
-    result += generator.buffer(attributes_str);
+
+    // Handle global attributes
+    const attributes_str2: string = generateLayoutAttributes(generator, element.globalAttributes);
+    if (attributes_str2.length > 0) {
+        result += generator.buffer(` `);
+        result += generator.buffer(attributes_str2);
+    }
 
     result += generator.buffer(`>`);
 

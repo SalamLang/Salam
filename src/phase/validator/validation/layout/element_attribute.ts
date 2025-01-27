@@ -5,7 +5,7 @@ import { validateLayoutElementAttributeValue } from './element_attribute_value';
 import { RuntimeElementAttribute } from './../../../../runtime/element_attribute';
 import { AstLayoutAttribute } from "./../../../parser/parse/ast/layout/attribute";
 import { validatorMessages } from './../../../../common/message/validator/validator';
-import { messageRenderer, MessageKeys } from './../../../../common/message/message';
+import { messageRenderer, ValidatorMessageKeys } from './../../../../common/message/message';
 import { validateLayoutElementAttributeReservedValue } from './element_attribute_reserved_value';
 
 export function validateLayoutElementAttribute(validator: Validator, runtimeElement: RuntimeElement, attribute: AstLayoutAttribute, element: AstLayoutElement): void {
@@ -28,7 +28,7 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
     }, undefined as RuntimeElementAttribute | undefined);
 
     if (runtimeElementAttribute === undefined) {
-        validator.pushError(messageRenderer(validatorMessages, validator.ast.language.id, MessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID, attribute_name, element_name));
+        validator.pushError(messageRenderer(validatorMessages, validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID, attribute_name, element_name));
         return;
     }
 

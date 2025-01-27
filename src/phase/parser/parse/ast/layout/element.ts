@@ -12,7 +12,6 @@ export class AstLayoutElement extends AstNode {
 	block: AstLayoutBlock;
     content: string | undefined;
     attributes: AstLayoutAttributes;
-    // globalAttributes: AstLayoutAttributes;
     repeat: number;
 
     constructor(enduser_name: string) {
@@ -20,7 +19,6 @@ export class AstLayoutElement extends AstNode {
         this.enduser_name = enduser_name;
         this.block = new AstLayoutBlock();
         this.attributes = new AstLayoutAttributes();
-        // this.globalAttributes = new AstLayoutAttributes();
         this.parent_generate_name = undefined;
         this.parent_generate_type = undefined;
         this.generate_name = undefined;
@@ -40,7 +38,6 @@ export class AstLayoutElement extends AstNode {
             generate_type: this.generate_type,
             block: this.block.stringify(false),
             attributes: this.attributes.stringify(false),
-            // globalAttributes: this.globalAttributes.stringify(false),
             repeat: this.repeat,
         };
         return stringify(obj, wantsJson);

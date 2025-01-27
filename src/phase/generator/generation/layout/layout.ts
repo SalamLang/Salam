@@ -13,9 +13,9 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
     
     result += generator.bufferIndentLine(`<!doctype html>`);
     result += generator.bufferIndentLine(`<html dir="${attribute_dir}" lang="${attribute_lang}">`);
-    generator.indent();
+    generator.increaseIndent();
     result += generator.bufferIndentLine(`<head>`);
-    generator.indent();
+    generator.increaseIndent();
 
     result += generator.bufferIndentLine(`<title>${attribute_title}</title>`);
     result += generator.bufferIndentLine(`<meta charset="${attribute_charset}">`);
@@ -24,16 +24,16 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
         result += generator.bufferIndentLine(`<meta name="author" content="${attribute_author}">`);
     }
 
-    generator.outdent();
+    generator.decreaseIndent();
     result += generator.bufferIndentLine(`</head>`);
     result += generator.bufferIndentLine(`<body>`);
-    generator.indent();
+    generator.increaseIndent();
 
     result += generateLayoutBlock(generator, layout.root, layout.root.block);
 
-    generator.outdent();
+    generator.decreaseIndent();
     result += generator.bufferIndentLine(`</body>`);
-    generator.outdent();
+    generator.decreaseIndent();
     result += generator.bufferIndentLine(`</html>`);
 
     return result;

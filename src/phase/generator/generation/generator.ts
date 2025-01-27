@@ -5,53 +5,49 @@ import { messageRenderer, GeneratorMessageKeys } from './../../../common/message
 export class Generator {
     ast: AstProgram;
     errors: string[];
-    ident: number = 0;
-    source: string = '';
-    enableLines: boolean = true;
-
+    indentLevel: number;
+    source: string;
+    enableLines: boolean;
+    
     constructor(ast: AstProgram) {
         this.ast = ast;
         this.errors = [];
+        this.indentLevel = 0;
+        this.source = '';
+        this.enableLines = true;
     }
 
-    indent(): void {
-        this.ident++;
+    increaseIndent(): void {
+        this.indentLevel++;
     }
 
-    outdent(): void {
-        if (this.ident === 0) {
+    decreaseIndent(): void {
+        if (this.indentLevel === 0) {
             this.pushError(messageRenderer(generatorMessages[this.ast.language.id][GeneratorMessageKeys.GENERATOR_CANNOT_OUTDENT_BELOW_ZERO]));
             return;
         }
-        this.ident--;
+        this.indentLevel--;
     }
 
+    //  Buffers a single line of text.
     buffer(line: string): string {
         return line;
     }
-
+    
+    // Buffers a line of text with or without a newline based on `enableLines`.
     bufferLine(line: string): string {
-        if (this.enableLines) {
-            return this.buffer(line + '\n');
-        } else {
-            return this.buffer(line);
-        }
+        return this.enableLines ? this.buffer(`${line}\n`) : this.buffer(line);
     }
 
-    bufferIndentNoLine(line: string): string {
-        if (this.enableLines) {
-            return this.buffer(' '.repeat(this.ident * 4) + line);
-        } else {
-            return this.buffer(line);
-        }
+    //  Buffers an indented line without adding a newline.
+    bufferIndented(line: string): string {
+        const indentation = ' '.repeat(this.indentLevel * 4);
+        return this.enableLines ? this.buffer(`${indentation}${line}`) : this.buffer(line);
     }
 
-    bufferIndentLine(line: string): string {
-        if (this.enableLines) {
-            return this.bufferIndentNoLine(line + '\n');
-        } else {
-            return this.bufferIndentNoLine(line);
-        }
+    // Buffers an indented line and adds a newline if `enableLines` is true.
+    bufferIndentedLine(line: string): string {
+        return this.bufferIndented(`${line}${this.enableLines ? '\n' : ''}`);
     }
 
     pushError(message: string) {
@@ -60,10 +56,10 @@ export class Generator {
 
     print(): void {
         console.log('C code:');
-        console.log(this.c());
+        console.log(this.getGeneratedSource());
     }
 
-    c(): string {
+    getGeneratedSource(): string {
         return this.source;
     }
 };

@@ -4,15 +4,22 @@ import { generatorMessages } from './generator/generator';
 import { validatorMessages } from './validator/validator';
 import { LanguageID } from './../../common/language/language';
 
-export type MessageStruct<T> = { [K in keyof T]: string };
+// export type MessageStruct<T extends keyof typeof MessageKeys> = {
+//     [K in T]: string;
+// };
+export type MessageStruct<T> = {
+    [K in keyof T]: string;
+};
 export type MultiLanguageMessages<T> = { [L in LanguageID]: MessageStruct<T> };
 
-export enum MessageKeys {
+export enum LexerMessageKeys {
     LEXER_PREFIX,
     LEXER_INVALID_UNEXPECTED_CHAR,
     LEXER_UNTERMINATED_MULTI_LINE_COMMENT_BLOCK,
     LEXER_UNCLOSED_STRING_LITERAL,
+};
 
+export enum ParserMessageKeys {
     PARSER_PREFIX,
     PARSER_FAILED_TO_PARSE_FUNCTION_STATEMENT,
     PARSER_FAILED_TO_PARSE_FUNCTION,
@@ -30,7 +37,9 @@ export enum MessageKeys {
     PARSER_FUNCTION_PARAMETERS_ARE_NOT_VALID,
     PARSER_FUNCTION_BODY_IS_NOT_VALID,
     PARSER_EXPECTED_TOKEN_TYPE_BUT_GOT,
+};
 
+export enum ValidatorMessageKeys {
     VALIDATOR_PREFIX,
     VALIDATOR_ATTRIBUTE_REQUIRED,
     VALIDATOR_ELEMENT_NOT_VALID,
@@ -38,7 +47,9 @@ export enum MessageKeys {
     VALIDATOR_ATTRIBUTE_NOT_VALID,
     VALIDATOR_ATTRIBUTE_VALUE_NOT_VALID,
     VALIDATOR_ATTRIBUTE_VALUE_NOT_EMPTY,
+};
 
+export enum GeneratorMessageKeys {
     GENERATOR_PREFIX,
     GENERATOR_CANNOT_OUTDENT_BELOW_ZERO,
     GENERATOR_UNKNOWN_ELEMENT_TYPE,
@@ -47,53 +58,35 @@ export enum MessageKeys {
     GENERATOR_INCLUDE_FILE_READ_ERROR,
 };
 
-export type LexerMessageKeys = typeof lexerMessages;
-export type ParserMessageKeys = typeof parserMessages;
-export type ValidatorMessageKeys = typeof validatorMessages;
-// export type GeneratorMessageKeys = typeof generatorMessages;
-export type GeneratorMessageKeys = {
-    GENERATOR_PREFIX: string;
-    GENERATOR_CANNOT_OUTDENT_BELOW_ZERO: string;
-    GENERATOR_UNKNOWN_ELEMENT_TYPE: string;
-    GENERATOR_INCLUDE_FILE_PATH_NOT_PROVIDED: string;
-    GENERATOR_INCLUDE_FILE_NOT_FOUND: string;
-    GENERATOR_INCLUDE_FILE_READ_ERROR: string;
-};
-
 export type MessageType = 'LEXER' | 'PARSER' | 'VALIDATOR' | 'GENERATOR';
-
-const prefixMap: Record<MessageType, MessageKeys> = {
-    LEXER: MessageKeys.LEXER_PREFIX,
-    PARSER: MessageKeys.PARSER_PREFIX,
-    VALIDATOR: MessageKeys.VALIDATOR_PREFIX,
-    GENERATOR: MessageKeys.GENERATOR_PREFIX,
-};
+export type MessageKeys = LexerMessageKeys | ParserMessageKeys | ValidatorMessageKeys | GeneratorMessageKeys;
 
 export function getMessagePrefix(
     messages: MultiLanguageMessages<any>,
     language: LanguageID,
     messageKey: MessageKeys
 ): string {
-    const messageType = Object.keys(prefixMap).find((type) =>
-        Object.values(messages).some((lang) => lang[messageKey])
-    ) as keyof typeof prefixMap;
+    // const messageType = Object.keys(prefixMap).find((type) =>
+    //     Object.values(messages).some((lang) => lang[messageKey])
+    // ) as keyof typeof prefixMap;
 
-    if (!messageType) {
-        return '';
-    }
+    // if (!messageType) {
+    //     return '';
+    // }
+    return '';
 
-    console.log(prefixMap);
-    const keyword_id = prefixMap[messageType];
+    // console.log(prefixMap);
+    // const keyword_id = prefixMap[messageType];
 
-    const keyword_value = keyword_id;// + "_PREFIX";
+    // const keyword_value = keyword_id;// + "_PREFIX";
 
-    console.log(MessageKeys);
-    console.log(messageType);
-    console.log(keyword_id);
-    console.log(keyword_value);
-    console.log(messages[language]);
+    // // console.log(MessageKeys);
+    // console.log(messageType);
+    // console.log(keyword_id);
+    // console.log(keyword_value);
+    // console.log(messages[language]);
 
-    return messages[language][keyword_value];
+    // return messages[language][keyword_value];
 };
 
 

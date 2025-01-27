@@ -3,7 +3,7 @@ import { stringify } from './../../../serializer';
 import { Lexer } from './../../lexer/lex/lexer';
 import { Token } from './../../lexer/tokenizer/token';
 import { parserMessages } from './../../../common/message/parser/parser';
-import { messageRenderer, MessageKeys } from './../../../common/message/message';
+import { messageRenderer, ParserMessageKeys } from './../../../common/message/message';
 import { TokenKeywordType, TokenOperatorType, TokenOtherType, TokenType } from './../../lexer/tokenizer/type';
 
 export class Parser {
@@ -56,7 +56,7 @@ export class Parser {
             this.index++;
             return true;
         }
-        this.pushError(messageRenderer(parserMessages, this.lexer.language.id, MessageKeys.PARSER_EXPECTED_TOKEN_TYPE_BUT_GOT, tokenType, this.currentToken.type));
+        this.pushError(messageRenderer(parserMessages, this.lexer.language.id, ParserMessageKeys.PARSER_EXPECTED_TOKEN_TYPE_BUT_GOT, tokenType, this.currentToken.type));
         return false;
     }
 

@@ -10,13 +10,13 @@ import { validate } from './../../../validator/validation/validate';
 import { Validator } from './../../../validator/validation/validator';
 import { Generator } from './../../../generator/generation/generator';
 import { generatorMessages } from './../../../../common/message/generator/generator';
-import { messageRenderer, MessageKeys } from './../../../../common/message/message';
+import { messageRenderer, GeneratorMessageKeys } from './../../../../common/message/message';
 
 export function includeLayout(generator: Generator, filePath: string, params: string[]): string {
     if (! filePath) {
-        generator.pushError(messageRenderer(generatorMessages, generator.ast.language.id, MessageKeys.GENERATOR_INCLUDE_FILE_PATH_NOT_PROVIDED));
+        generator.pushError(messageRenderer(generatorMessages, generator.ast.language.id, GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_PATH_NOT_PROVIDED));
     } else if (! fs.existsSync(filePath)) {
-        generator.pushError(messageRenderer(generatorMessages, generator.ast.language.id, MessageKeys.GENERATOR_INCLUDE_FILE_NOT_FOUND, filePath));
+        generator.pushError(messageRenderer(generatorMessages, generator.ast.language.id, GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_NOT_FOUND, filePath));
     } else {
         const fileName: string = fs.realpathSync(filePath);
         const absoluteDirPath: string = fs.realpathSync(path.dirname(filePath));

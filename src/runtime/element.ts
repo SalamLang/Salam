@@ -25,6 +25,10 @@ export class RuntimeElement {
         return false;
     }
 
+    addBelongsTo(element: RuntimeElement): void {
+        this.belongs_to.push(element);
+    }
+
     addText(languageId: LanguageID, value: string): void {
         if (!this.text.has(languageId)) {
             this.text.set(languageId, []);

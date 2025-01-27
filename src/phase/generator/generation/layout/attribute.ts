@@ -1,5 +1,5 @@
 import { Generator } from "./../generator";
-import { AstLayoutAttribute } from "../../../parser/parse/ast/layout/attribute";
+import { AstLayoutAttribute } from "./../../../parser/parse/ast/layout/attribute";
 
 export function generateLayoutAttribute(generator: Generator, attribute: AstLayoutAttribute): string {
     let result: string = "";

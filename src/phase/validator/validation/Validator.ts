@@ -1,9 +1,9 @@
-import { RuntimeElement } from '../../../runtime/element';
-import { runtimeElements } from '../../../runtime/runtime';
-import { AstProgram } from "../../parser/parse/ast/program";
-import { AstLayoutElement } from '../../parser/parse/ast/layout/element';
-import { RuntimeElementAttribute } from '../../../runtime/element_attribute';
-import { runtimeStyleAttributes, runtimeGlobalAttributes, runtimeGlobalSingleAttributes, runtimeGlobalMotherAttributes } from '../../../runtime/runtime';
+import { RuntimeElement } from './../../../runtime/element';
+import { runtimeElements } from './../../../runtime/runtime';
+import { AstProgram } from "./../../parser/parse/ast/program";
+import { AstLayoutElement } from './../../parser/parse/ast/layout/element';
+import { RuntimeElementAttribute } from './../../../runtime/element_attribute';
+import { runtimeStyleAttributes, runtimeGlobalAttributes, runtimeGlobalSingleAttributes, runtimeGlobalMotherAttributes } from './../../../runtime/runtime';
 
 export class Validator {
     ast: AstProgram;

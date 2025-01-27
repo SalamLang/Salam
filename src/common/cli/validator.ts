@@ -4,7 +4,7 @@ import { Lexer } from './../../phase/lexer/lex/lexer';
 import { parse } from './../../phase/parser/parse/parse';
 import { Parser } from './../../phase/parser/parse/parser';
 import { validate } from './../../phase/validator/validation/validate';
-import { Validator } from '../../phase/validator/validation/validator';
+import { Validator } from './../../phase/validator/validation/validator';
 
 export function processCommandRun(fileName: string | undefined, absoluteDirPath: string | undefined, source: string, selectedLanguage: LanguageMap): number {
     const lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);

@@ -1,7 +1,7 @@
-import { Parser } from '../parser';
+import { Parser } from './../parser';
 import { parserParseLayoutKey } from './layout_key';
-import { AstLayoutElement } from '../ast/layout/element';
-import { AstLayoutAttribute } from '../ast/layout/attribute';
+import { AstLayoutElement } from './../ast/layout/element';
+import { AstLayoutAttribute } from './../ast/layout/attribute';
 import { parserParseLayoutAttribute } from './layout_attribute';
 import { Token, arrayName2String } from './../../../lexer/tokenizer/token';
 import { parserMessages } from './../../../../common/message/parser/parser';

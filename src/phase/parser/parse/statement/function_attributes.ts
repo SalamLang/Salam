@@ -1,5 +1,5 @@
-import { Parser } from '../parser';
-import { AstFunctionAttribute } from '../ast/function_attribute';
+import { Parser } from './../parser';
+import { AstFunctionAttribute } from './../ast/function_attribute';
 
 export function parserParseFunctionAttributes(parser: Parser): AstFunctionAttribute[] | undefined {
     // TODO: complete parsing

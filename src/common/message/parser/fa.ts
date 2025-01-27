@@ -1,4 +1,4 @@
-import { ParserMessageKeys, ParserMessageStruct } from '../message';
+import { ParserMessageKeys, ParserMessageStruct } from './../message';
 
 export const faMessages: ParserMessageStruct = {
     [ParserMessageKeys.PARSER_FAILED_TO_PARSE_FUNCTION_STATEMENT]: "ناتوان در تجزیه و تحلیل اظهارات تابع.",

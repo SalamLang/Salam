@@ -1,4 +1,4 @@
-import { ValidatorMessageKeys, ValidatorMessageStruct } from '../message';
+import { ValidatorMessageKeys, ValidatorMessageStruct } from './../message';
 
 export const enMessages: ValidatorMessageStruct = {
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_REQUIRED]: "Attribute '{{attribute}}' is required for element '{{element}}' but not found",

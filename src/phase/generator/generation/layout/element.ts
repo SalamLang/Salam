@@ -6,12 +6,6 @@ import { AstLayoutElement } from './../../../parser/parse/ast/layout/element';
 export function generateLayoutElement(generator: Generator, element: AstLayoutElement): string {
     let result: string = "";
 
-    // Handling custom elements
-    if (element.generate_name === undefined) {
-        switch (element.generate_type) {}
-        return result;
-    }
-
     result += generator.bufferIndented(`<${element.generate_name}`);
 
     // Handle attributes

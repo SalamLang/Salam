@@ -12,6 +12,7 @@ export class RuntimeElementInclude extends RuntimeElement {
             new RuntimeElementAttribute(RuntimeElementAttributeType.Uri, "source")
             .addText(LanguageID.LanguagePersian, "منبع")
             .addText(LanguageID.LanguageEnglish, "source")
+            .setRequired()
         );
     }
 };

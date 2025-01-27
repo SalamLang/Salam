@@ -5,26 +5,21 @@ import { AstLayoutElement } from './../../../parser/parse/ast/layout/element';
 
 export function generateLayoutElement(generator: Generator, element: AstLayoutElement): string {
     let result: string = "";
-
-    result += generator.bufferIndented(`<${element.generate_name}`);
-
-    // Handle attributes
-    const attributes_str1: string = generateLayoutAttributes(generator, element.attributes);
-    if (attributes_str1.length > 0) {
-        result += generator.buffer(` `);
-        result += generator.buffer(attributes_str1);
-    }
-
-    // Handle global attributes
-    // const attributes_str2: string = generateLayoutAttributes(generator, element.globalAttributes);
-    // if (attributes_str2.length > 0) {
-    //     result += generator.buffer(` `);
-    //     result += generator.buffer(attributes_str2);
-    // }
-
-    result += generator.buffer(`>`);
+    const hasTag: boolean = element.generate_name !== undefined;
 
     const closing: string = `</${element.generate_name}>`;
+    if (hasTag) {
+        result += generator.bufferIndented(`<${element.generate_name}`);
+
+        // Handle attributes
+        const attributes_str1: string = generateLayoutAttributes(generator, element.attributes);
+        if (attributes_str1.length > 0) {
+            result += generator.buffer(` `);
+            result += generator.buffer(attributes_str1);
+        }
+
+        result += generator.buffer(`>`);
+    }
 
     let hasContentOrChild: boolean = false;
     if (element.block.length > 0 || (element.content !== undefined)) {
@@ -50,23 +45,30 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     if (isOnlyInlineText) {
         writeContent();
     } else if (hasContentOrChild) {
-        result += generator.bufferLine("");
-        generator.increaseIndent();
+        if (hasTag) {
+            result += generator.bufferLine("");
+            generator.increaseIndent();
+        }
+        
         writeContent();
-
         result += generateLayoutBlock(generator, element, element.block);
 
-        generator.decreaseIndent();
+        if (hasTag) {
+            generator.decreaseIndent();
+        }
     }
     
     // Close the element
-    const needsIndentClosing = hasMultiOpeningClosing || !hasContentWithoutChild;
-    if (needsIndentClosing) {
-        result += generator.bufferIndentedLine(closing);
-    } else {
-        result += generator.bufferLine(closing);
+    if (hasTag) {
+        const needsIndentClosing = hasMultiOpeningClosing || !hasContentWithoutChild;
+        if (needsIndentClosing) {
+            result += generator.bufferIndentedLine(closing);
+        } else {
+            result += generator.bufferLine(closing);
+        }
     }
 
+    // Repeat the element
     if (element.repeat > 1) {
         result = result.repeat(element.repeat);
     }

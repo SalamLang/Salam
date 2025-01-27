@@ -10,8 +10,9 @@ export function validateLayoutElement(validator: Validator, parent_element: AstL
     const runtimeElement: RuntimeElement | undefined = validator.getElementRuntime(parent_element, element.enduser_name);
 
     // Check if element is a valid element
+    console.log(runtimeElement, element.enduser_name);
     if (runtimeElement === undefined) {
-        validator.pushError(messageRenderer(validatorMessages[validator.ast.language.id][ValidatorMessageKeys.VALIDATOR_ELEMENT_NOT_VALID]));
+        validator.pushError(messageRenderer(validatorMessages[validator.ast.language.id][ValidatorMessageKeys.VALIDATOR_ELEMENT_NOT_VALID], element.enduser_name));
         return;
     }
 

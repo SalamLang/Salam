@@ -50,7 +50,7 @@ export class Token {
     }
 
     private getTypeString<T extends Record<string, string | number>>(enumType: T): string | undefined {
-        const values = Object.values(enumType) as Array<string | number>;
+        const values: Array<string | number> = Object.values(enumType);
         return values.includes(this.type as string) ? (this.type as string) : undefined;
     }
 

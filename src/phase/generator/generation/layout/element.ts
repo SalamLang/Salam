@@ -16,11 +16,11 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     }
 
     // Handle global attributes
-    const attributes_str2: string = generateLayoutAttributes(generator, element.globalAttributes);
-    if (attributes_str2.length > 0) {
-        result += generator.buffer(` `);
-        result += generator.buffer(attributes_str2);
-    }
+    // const attributes_str2: string = generateLayoutAttributes(generator, element.globalAttributes);
+    // if (attributes_str2.length > 0) {
+    //     result += generator.buffer(` `);
+    //     result += generator.buffer(attributes_str2);
+    // }
 
     result += generator.buffer(`>`);
 

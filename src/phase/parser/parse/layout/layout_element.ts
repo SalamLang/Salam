@@ -28,7 +28,7 @@ export function parserParseLayoutElement(parser: Parser, element_key_tokens: Tok
                 //               ^
                 const attribute: AstLayoutAttribute | undefined = parserParseLayoutAttribute(parser, element_key, key_tokens);
                 if (attribute) {
-                    if (! element.globalAttributes.push(attribute)) {
+                    if (! element.attributes.push(attribute)) {
                         parser.pushError(messageRenderer(parserMessages[parser.lexer.language.id][ParserMessageKeys.PARSER_DUPLICATE_ATTRIBUTE_IN_LAYOUT], attribute.key));
                         return undefined;
                     }

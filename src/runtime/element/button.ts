@@ -1,8 +1,9 @@
+import { RuntimeElement } from './../element';
 import { LanguageID } from './../../common/language/language';
 import { RuntimeElementAttribute } from './../element_attribute';
 import { RuntimeElementAttributeType } from './../element_attribute_type';
 import { RuntimeElementAttributeValue } from './../element_attribute_value';
-import { RuntimeElement } from './../element';
+
 export class RuntimeElementButton extends RuntimeElement {
     constructor() {
         super(true, 'button');

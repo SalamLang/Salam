@@ -12,7 +12,7 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
         return result;
     }
 
-    result += generator.bufferIndentNoLine(`<${element.generate_name}`);
+    result += generator.bufferIndented(`<${element.generate_name}`);
 
     let attributes_str: string = generateLayoutAttributes(generator, element.attributes);
     if (attributes_str.length > 0) {
@@ -41,7 +41,7 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
             if (isOnlyInlineText) {
                 result += generator.buffer(element.content);
             } else {
-                result += generator.bufferIndentLine(element.content);
+                result += generator.bufferIndentedLine(element.content);
             }
         }
     };
@@ -61,7 +61,7 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     // Close the element
     const needsIndentClosing = hasMultiOpeningClosing || !hasContentWithoutChild;
     if (needsIndentClosing) {
-        result += generator.bufferIndentLine(closing);
+        result += generator.bufferIndentedLine(closing);
     } else {
         result += generator.bufferLine(closing);
     }

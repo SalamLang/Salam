@@ -1,4 +1,4 @@
-import { LanguageID } from '../../common/language/language';
+import { LanguageID } from './../../common/language/language';
 import { RuntimeElement } from './../element';
 export class RuntimeElementKbd extends RuntimeElement {
     constructor() {

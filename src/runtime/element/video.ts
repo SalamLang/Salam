@@ -1,9 +1,9 @@
-import { LanguageID } from "../../common/language/language";
-import { RuntimeElement } from "../element";
-import { RuntimeElementAttribute } from "../element_attribute";
-import { RuntimeElementAttributeType } from "../element_attribute_type";
-import { RuntimeElementAttributeValue } from "../element_attribute_value";
-import { languages } from "../data/element/language";
+import { LanguageID } from "./../../common/language/language";
+import { RuntimeElement } from "./../element";
+import { RuntimeElementAttribute } from "./../element_attribute";
+import { RuntimeElementAttributeType } from "./../element_attribute_type";
+import { RuntimeElementAttributeValue } from "./../element_attribute_value";
+import { languages } from "./../data/element/language";
 
 export class RuntimeElementVideo extends RuntimeElement {
     constructor() {

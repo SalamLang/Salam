@@ -1,5 +1,5 @@
-import { LanguageID } from "../../common/language/language";
-import { RuntimeElement } from "../element";
+import { LanguageID } from "./../../common/language/language";
+import { RuntimeElement } from "./../element";
 
 export class RuntimeElementDel extends RuntimeElement {
     constructor() {

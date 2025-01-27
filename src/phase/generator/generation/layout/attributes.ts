@@ -3,8 +3,8 @@ import { generateLayoutAttribute } from "./attribute";
 import { AstLayoutAttributes } from "./../../../parser/parse/ast/layout/attributes";
 
 export function generateLayoutAttributes(generator: Generator, attributes: AstLayoutAttributes): string {
-    let styleResult: string = "";
     let htmlResult: string = "";
+    let styleResult: string = "";
 
     for (const attribute of attributes.items) {
         const generatedAttribute = generateLayoutAttribute(generator, attribute);

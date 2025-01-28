@@ -1,5 +1,7 @@
 import { RuntimeElement } from './element';
 import { RuntimeElementAttribute } from './element_attribute';
+import { RuntimeElementStyleState } from './element_style_state';
+import { RuntimeElementAttributeStyle } from './element_attribute_style';
 
 import { RuntimeElementA } from './element/a';
 import { RuntimeElementDiv } from './element/div';
@@ -18,7 +20,7 @@ import { RuntimeStyleFontSize } from './style/attribute/font-size';
 import { RuntimeStyleTextAlign } from './style/attribute/text-align';
 import { RuntimeStyleBackgroundColor } from './style/attribute/background-color';
 
-export const runtimeStyleAttributes = [
+export const runtimeStyleAttributes: RuntimeElementAttributeStyle[] = [
     new RuntimeStyleColor(),
     new RuntimeStyleFontSize(),
     new RuntimeStyleTextAlign(),
@@ -70,5 +72,32 @@ import { RuntimeElementStyleStateValid } from './style/state/valid';
 import { RuntimeElementStyleStateVisited } from './style/state/visited';
 
 export const runtimeStyleStates: RuntimeElementStyleState[] = [
-
+    new RuntimeElementStyleStateActive(),
+    new RuntimeElementStyleStateBlank(),
+    new RuntimeElementStyleStateChecked(),
+    new RuntimeElementStyleStateDisabled(),
+    new RuntimeElementStyleStateEmpty(),
+    new RuntimeElementStyleStateEnabled(),
+    new RuntimeElementStyleStateFirstChild(),
+    new RuntimeElementStyleStateFirstOfType(),
+    new RuntimeElementStyleStateFocusVisible(),
+    new RuntimeElementStyleStateFocusWithin(),
+    new RuntimeElementStyleStateFocus(),
+    new RuntimeElementStyleStateGlobal(),
+    new RuntimeElementStyleStateHover(),
+    new RuntimeElementStyleStateInRange(),
+    new RuntimeElementStyleStateLastChild(),
+    new RuntimeElementStyleStateLastOfType(),
+    new RuntimeElementStyleStateLink(),
+    new RuntimeElementStyleStateNthChild(),
+    new RuntimeElementStyleStateNthLastChild(),
+    new RuntimeElementStyleStateNthLastOfType(),
+    new RuntimeElementStyleStateNthOfType(),
+    new RuntimeElementStyleStateOnlyChild(),
+    new RuntimeElementStyleStateOnlyOfType(),
+    new RuntimeElementStyleStateOptional(),
+    new RuntimeElementStyleStateRoot(),
+    new RuntimeElementStyleStateTarget(),
+    new RuntimeElementStyleStateValid(),
+    new RuntimeElementStyleStateVisited(),
 ];

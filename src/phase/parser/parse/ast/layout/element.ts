@@ -1,6 +1,7 @@
 import { AstNode } from './../node';
 import { AstLayoutBlock } from './block';
 import { AstLayoutAttributes } from './attributes';
+import { AstLayoutElementKind } from './element_kind';
 import { stringify } from './../../../../../serializer';
 
 export class AstLayoutElement extends AstNode {
@@ -13,6 +14,7 @@ export class AstLayoutElement extends AstNode {
     content: string | undefined;
     attributes: AstLayoutAttributes;
     repeat: number;
+    kind: AstLayoutElementKind;
 
     constructor(enduser_name: string) {
         super("LayoutElement");
@@ -25,6 +27,7 @@ export class AstLayoutElement extends AstNode {
         this.generate_type = undefined;
         this.content = undefined;
         this.repeat = 1;
+        this.kind = AstLayoutElementKind.NormalElement;
     }
 
     print(): void {
@@ -33,6 +36,7 @@ export class AstLayoutElement extends AstNode {
 
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
+            kind: this.kind,
             enduser_name: this.enduser_name,
             generate_name: this.generate_name,
             generate_type: this.generate_type,

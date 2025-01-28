@@ -21,9 +21,10 @@ export function validateLayoutElementStyleState(validator: Validator, parent_ele
     element.generate_name = element_style_state.generate_name;
     element.kind = AstLayoutElementKind.StyleState;
     element.generate_type = element_style_state.constructor.name;
-    
+    element.built_in_selector = parent_element?.built_in_selector;
+
     // Check attributes and global attributes
-    validateLayoutElementStyleStateAttributes(validator, element.enduser_name, element_style_state, element);
+    validateLayoutElementStyleStateAttributes(validator, element.enduser_name, element_style_state, element, parent_element);
 
     // Check block
     // TODO

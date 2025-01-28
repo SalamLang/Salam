@@ -3,6 +3,8 @@ import { generateLayoutBlock } from './block';
 import { AstLayout } from './../../../parser/parse/ast/layout/layout';
 
 export function generateLayout(generator: Generator, layout: AstLayout): string {
+    const body: string = generateLayoutBlock(generator, layout.root, layout.root.block);
+
     let result: string = "";
 
     const attribute_dir: string = layout.root.attributes.getByGenerateName("dir")?.getValue() || "rtl";
@@ -24,6 +26,15 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
         result += generator.bufferIndentedLine(`<meta name="author" content="${attribute_author}">`);
     }
 
+    if (generator.styles.length > 0) {
+        result += generator.bufferIndentedLine(`<style>`);
+        result += generator.bufferIndentedLine(`/* Generated Styles */`);
+        for (const style of generator.styles) {
+            result += generator.bufferIndentedLine(style);
+        }
+        result += generator.bufferIndentedLine(`</style>`);
+    }
+
     generator.decreaseIndent();
     result += generator.bufferIndentedLine(`</head>`);
     result += generator.bufferIndentedLine(`<body>`);
@@ -33,7 +44,7 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
         result += generator.bufferIndentedLine(layout.root.content);
     }
 
-    result += generateLayoutBlock(generator, layout.root, layout.root.block);
+    result += body;
 
     generator.decreaseIndent();
     result += generator.bufferIndentedLine(`</body>`);

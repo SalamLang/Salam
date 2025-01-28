@@ -17,7 +17,13 @@ export function generateLayoutAttributes(generator: Generator, attributes: AstLa
         }
     }
 
-    return styleResult
-        ? `${htmlResult} style="${styleResult.replace(/"/g, '\\"')}"`.trim()
-        : htmlResult;
+    if (styleResult.length > 0) {
+        const element_selector: string = ".element";
+        generator.pushStyle(`${element_selector} {${styleResult}}`);
+    }
+
+    return htmlResult;
+    // return styleResult
+    //     ? `${htmlResult} style="${styleResult.replace(/"/g, '\\"')}"`.trim()
+    //     : htmlResult;
 };

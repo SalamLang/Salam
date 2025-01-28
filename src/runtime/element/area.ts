@@ -1,3 +1,4 @@
+import { languages } from './../data/element/language';
 import { LanguageID } from "../../common/language/language";
 import { RuntimeElement } from "../element";
 import { RuntimeElementAttribute } from "../element_attribute";
@@ -10,12 +11,12 @@ export class RuntimeElementArea extends RuntimeElement {
         this.addText(LanguageID.LanguageEnglish, "area");
         this.addText(LanguageID.LanguagePersian, "منطقه");
         this.addAttribute(
-            new RuntimeElementAttribute(RuntimeElementAttributeType.StringNoEmpty, "alt")
+            new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "alt")
             .addText(LanguageID.LanguagePersian, "متن جایگزین")
             .addText(LanguageID.LanguageEnglish, "alternative text")
         );
         this.addAttribute(
-            new RuntimeElementAttribute(RuntimeElementAttributeType.StringNoEmpty, "download")
+            new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "download")
             .addText(LanguageID.LanguagePersian, "دانلود")
             .addText(LanguageID.LanguageEnglish, "download")
         );
@@ -31,9 +32,16 @@ export class RuntimeElementArea extends RuntimeElement {
         );
         // Todo: Fix this
         this.addAttribute(
-            new RuntimeElementAttribute(RuntimeElementAttributeType.StringNoEmpty, "hreflang")
+            new RuntimeElementAttribute(RuntimeElementAttributeType.String, "hreflang")
             .addText(LanguageID.LanguagePersian, "زبان")
             .addText(LanguageID.LanguageEnglish, "source language")
+            .addReservedValues(
+                languages.map(language =>
+                    new RuntimeElementAttributeValue(language.code)
+                    .addAllText(language.name)
+                    .addAllText(language.code)
+                )
+            )
         );
     }
 }

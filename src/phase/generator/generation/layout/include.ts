@@ -9,14 +9,14 @@ import { Parser } from './../../../parser/parse/parser';
 import { validate } from './../../../validator/validation/validate';
 import { Validator } from './../../../validator/validation/validator';
 import { Generator } from './../../../generator/generation/generator';
-import { generatorMessages } from './../../../../common/message/generator/generator';
-import { messageRenderer, GeneratorMessageKeys } from './../../../../common/message/message';
+import { generatorMessageRenderer } from './../../../../common/message/message';
+import { GeneratorMessageKeys } from './../../../../common/message/generator/generator';
 
 export function includeLayout(generator: Generator, filePath: string, params: string[]): string {
     if (! filePath) {
-        generator.pushError(messageRenderer(generatorMessages, generator.ast.language.id, GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_PATH_NOT_PROVIDED));
+        generator.pushError(generatorMessageRenderer(generator.ast.language.id, GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_PATH_NOT_PROVIDED));
     } else if (! fs.existsSync(filePath)) {
-        generator.pushError(messageRenderer(generatorMessages, generator.ast.language.id, GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_NOT_FOUND, filePath));
+        generator.pushError(generatorMessageRenderer(generator.ast.language.id, GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_NOT_FOUND, filePath));
     } else {
         const fileName: string = fs.realpathSync(filePath);
         const absoluteDirPath: string = fs.realpathSync(path.dirname(filePath));

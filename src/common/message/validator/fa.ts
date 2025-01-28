@@ -1,6 +1,6 @@
-import { MessageKeys, MessageStruct, ValidatorMessageKeys } from './../message';
+import { ValidatorMessageKeys } from './validator';
 
-export const faMessages: MessageStruct<ValidatorMessageKeys> = {
+export const faMessages: Record<ValidatorMessageKeys, string> = {
     [ValidatorMessageKeys.VALIDATOR_PREFIX]: "خطا اعتبارسنجی: ",
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_REQUIRED]: "ویژگی '{0}' برای عنصر '{1}' لازم است اما یافت نشد",
     [ValidatorMessageKeys.VALIDATOR_ELEMENT_NOT_VALID]: "عنصر '{0}' یک عنصر معتبر نیست",

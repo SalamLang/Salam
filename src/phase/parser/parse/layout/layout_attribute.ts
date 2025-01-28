@@ -4,14 +4,14 @@ import { AstLayoutAttribute } from './../ast/layout/attribute';
 import { AstLayoutAttributeType } from './../ast/layout/attribute_type';
 import { Token, arrayName2String } from './../../../lexer/tokenizer/token';
 import { parserParseLayoutAttributeValue } from './layout_attribute_value';
-import { parserMessages } from './../../../../common/message/parser/parser';
-import { messageRenderer, ParserMessageKeys } from './../../../../common/message/message';
+import { parserMessageRenderer } from './../../../../common/message/message';
+import { ParserMessageKeys } from './../../../../common/message/parser/parser';
 
 export function parserParseLayoutAttribute(parser: Parser, element_enduser_name: string, attribute_key_tokens: Token[]): AstLayoutAttribute | undefined {
     // attribute_key = attribute_key
     //      ^
     if (attribute_key_tokens.length === 0) {
-        parser.pushError(messageRenderer(parserMessages, parser.lexer.language.id, ParserMessageKeys.PARSER_UNEXPECTED_END_OF_TOKENS_IN_LAYOUT_ATTRIBUTE));
+        parser.pushError(parserMessageRenderer(parser.lexer.language.id, ParserMessageKeys.PARSER_UNEXPECTED_END_OF_TOKENS_IN_LAYOUT_ATTRIBUTE));
     }
 
     const attribute_key: string = arrayName2String(attribute_key_tokens);

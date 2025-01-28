@@ -41,13 +41,17 @@ export class RuntimeElementAudio extends RuntimeElement {
       new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'preload')
         .addText(LanguageID.LanguageEnglish, 'preload')
         .addText(LanguageID.LanguagePersian, 'پیش‌بارگذاری')
-        .addReservedValues(
-          languages.map((language) =>
-            new RuntimeElementAttributeValue(language.code.toUpperCase())
-              .addAllText(language.name)
-              .addAllText(language.code)
-          )
-        )
+        .addReservedValues([
+          new RuntimeElementAttributeValue('auto')
+            .addText(LanguageID.LanguageEnglish, 'auto')
+            .addText(LanguageID.LanguagePersian, 'خودکار'),
+          new RuntimeElementAttributeValue('metadata')
+            .addText(LanguageID.LanguageEnglish, 'metadata')
+            .addText(LanguageID.LanguagePersian, 'داده'),
+          new RuntimeElementAttributeValue('none')
+            .addText(LanguageID.LanguageEnglish, 'none')
+            .addText(LanguageID.LanguagePersian, 'پیشفرض'),
+        ])
     );
   }
 }

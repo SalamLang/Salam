@@ -1,8 +1,8 @@
 import { LanguageID } from './../../common/language/language';
-import { RuntimeElementAttribute } from './../element_attribute';
 import { RuntimeElementAttributeType } from './../element_attribute_type';
+import { RuntimeElementAttributeStyle } from '../element_attribute_style';
 
-export class RuntimeStyleBackgroundColor extends RuntimeElementAttribute {
+export class RuntimeStyleBackgroundColor extends RuntimeElementAttributeStyle {
     constructor() {
         super(RuntimeElementAttributeType.Color, "background-color");
         this.addText(LanguageID.LanguagePersian, "رنگ پس زمینه");

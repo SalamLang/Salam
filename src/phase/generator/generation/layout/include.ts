@@ -35,11 +35,10 @@ export function includeLayout(generator: Generator, filePath: string, params: st
         checkError(_parser, _validator, undefined);
 
         const _generator: Generator = new Generator(_validator.ast);
-        checkError(_parser, _validator, _generator);
         if (_generator.ast.layout !== undefined) {
-            return generator.buffer(
-                generateLayoutNode(generator, _generator.ast.layout.root)
-            );
+            const result: string = generateLayoutNode(generator, _generator.ast.layout.root);
+            checkError(_parser, _validator, _generator);
+            return generator.buffer(result);
         }
     }
     return "";

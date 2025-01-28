@@ -1,11 +1,12 @@
-import { Parser } from './../parser';
-import { AstExpression } from './../ast/expression/expression';
-import { AstLayoutAttribute } from './../ast/layout/attribute';
-import { AstLayoutAttributeType } from './../ast/layout/attribute_type';
-import { Token, arrayName2String } from './../../../lexer/tokenizer/token';
-import { parserParseLayoutAttributeValue } from './layout_attribute_value';
-import { parserMessageRenderer } from './../../../../common/message/message';
-import { ParserMessageKeys } from './../../../../common/message/parser/parser';
+import { Parser } from '../parser';
+import { AstExpression } from '../ast/expression/expression';
+import { AstLayoutAttribute } from '../ast/layout/attribute';
+import { parserParseLayoutAttributeValue } from './attribute_value';
+import { Validator } from './../../../validator/validation/validator';
+import { AstLayoutAttributeType } from '../ast/layout/attribute_type';
+import { Token, arrayName2String } from '../../../lexer/tokenizer/token';
+import { parserMessageRenderer } from '../../../../common/message/message';
+import { ParserMessageKeys } from '../../../../common/message/parser/parser';
 
 export function parserParseLayoutAttribute(parser: Parser, element_enduser_name: string, attribute_key_tokens: Token[]): AstLayoutAttribute | undefined {
     // attribute_key = attribute_value
@@ -21,7 +22,7 @@ export function parserParseLayoutAttribute(parser: Parser, element_enduser_name:
         return undefined;
     }
 
-    const isStyle = attribute_key.startsWith("style-");
+    const isStyle = Validator.getElementAttributeStyle(parser.getLanguageId(), attribute_key);
     const attribute_kind: AstLayoutAttributeType = isStyle ? AstLayoutAttributeType.Style : AstLayoutAttributeType.Normal;
 
     const attribute: AstLayoutAttribute = new AstLayoutAttribute(element_enduser_name, attribute_key, attribute_value, attribute_kind);

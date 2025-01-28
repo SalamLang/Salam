@@ -8,6 +8,7 @@ export const faMessages: Record<ValidatorMessageKeys, string> = {
     [ValidatorMessageKeys.VALIDATOR_ELEMENT_OR_STYLE_STATE_NOT_VALID]: "عنصر یا وضعیت استایل '{0}' یک عنصر یا وضعیت استایل معتبر نیست",
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_RESERVED_VALUE_NOT_VALID]: "مقدار ویژگی '{1}' برای ویژگی '{1}' در عنصر '{2}' معتبر نیست",
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID]: "ویژگی '{0}' برای عنصر '{1}' معتبر نیست",
+    [ValidatorMessageKeys.VALIDATOR_STYLE_ATTRIBUTE_NOT_VALID]: "ویژگی استایل '{0}' برای عنصر '{1}' معتبر نیست",
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_VALID]: "مقدار ویژگی '{0}' برای ویژگی '{1}' در عنصر '{2}' یک مقدار معتبر نیست",
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_EMPTY]: "مقدار ویژگی '{0}' برای ویژگی '{1}' در عنصر '{2}' نباید خالی باشد",
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_SUPPORTED]: "ویژگی '{0}' برای عنصر '{1}' پشتیبانی نمی شود",

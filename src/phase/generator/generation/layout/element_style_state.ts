@@ -2,16 +2,12 @@ import { Generator } from './../generator';
 import { AstLayoutElement } from './../../../parser/parse/ast/layout/element';
 import { generateLayoutStyleStateAttributes } from './style_state_attributes';
 
-export function generateLayoutElementStyleState(generator: Generator, element: AstLayoutElement): string {
+export function generateLayoutElementStyleState(generator: Generator, element_style_state: AstLayoutElement): string {
     let result: string = "";
-    const attributes_str: string = generateLayoutStyleStateAttributes(generator, element.attributes);
-
-    if (attributes_str.length === 0) {
-        return "Warning: Empty style state";
-    }
+    const attributes_str: string = generateLayoutStyleStateAttributes(generator, element_style_state.attributes);
 
     const element_selector: string = ".element";
-    result += `${element_selector}:${element.generate_name} {`;
+    result += `${element_selector}:${element_style_state.generate_name} {`;
     result += attributes_str;
     result += "}";
 

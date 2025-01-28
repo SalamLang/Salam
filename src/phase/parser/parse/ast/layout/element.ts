@@ -36,6 +36,10 @@ export class AstLayoutElement extends AstNode {
         this.built_in_selector = undefined;
     }
 
+    isStateStyle(): boolean {
+        return this.kind === AstLayoutElementKind.StyleState;
+    }
+
     generateBuiltInSelector(validator: Validator): void {
         this.built_in_selector = IdentifierGenerator.get();
     }

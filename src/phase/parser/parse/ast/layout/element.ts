@@ -15,9 +15,9 @@ export class AstLayoutElement extends AstNode {
 	block: AstLayoutBlock;
     content: string | undefined;
     attributes: AstLayoutAttributes;
+    styles: AstLayoutAttributes;
     repeat: number;
     kind: AstLayoutElementKind;
-    has_style: boolean;
     built_in_selector: string | undefined;
 
     constructor(enduser_name: string) {
@@ -25,6 +25,7 @@ export class AstLayoutElement extends AstNode {
         this.enduser_name = enduser_name;
         this.block = new AstLayoutBlock();
         this.attributes = new AstLayoutAttributes();
+        this.styles = new AstLayoutAttributes();
         this.parent_generate_name = undefined;
         this.parent_generate_type = undefined;
         this.generate_name = undefined;
@@ -32,7 +33,6 @@ export class AstLayoutElement extends AstNode {
         this.content = undefined;
         this.repeat = 1;
         this.kind = AstLayoutElementKind.NormalElement;
-        this.has_style = false;
         this.built_in_selector = undefined;
     }
 
@@ -47,13 +47,13 @@ export class AstLayoutElement extends AstNode {
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             kind: this.kind,
-            has_style: this.has_style,
             built_in_selector: this.built_in_selector,
             enduser_name: this.enduser_name,
             generate_name: this.generate_name,
             generate_type: this.generate_type,
             block: this.block.stringify(false),
             attributes: this.attributes.stringify(false),
+            styles: this.styles.stringify(false),
             repeat: this.repeat,
         };
         return stringify(obj, wantsJson);

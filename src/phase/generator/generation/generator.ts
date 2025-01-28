@@ -1,4 +1,5 @@
 import { AstProgram } from "./../../parser/parse/ast/program";
+import { LanguageID } from './../../../common/language/language';
 import { generatorMessageRenderer } from './../../../common/message/message';
 import { GeneratorMessageKeys } from './../../../common/message/generator/generator';
 
@@ -67,5 +68,9 @@ export class Generator {
 
     getGeneratedSource(): string {
         return this.source;
+    }
+
+    getLanguageId(): LanguageID {
+        return this.ast.language.id;
     }
 };

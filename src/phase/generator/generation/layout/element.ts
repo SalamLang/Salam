@@ -11,7 +11,6 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     if (hasTag) {
         result += generator.bufferIndented(`<${element.generate_name}`);
 
-        console.log(element.has_style);
         console.log(element.built_in_selector);
 
         // Handle attributes

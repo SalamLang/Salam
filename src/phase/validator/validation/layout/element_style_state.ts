@@ -9,7 +9,7 @@ import { validateLayoutElementStyleStateAttributes } from './element_style_state
 export function validateLayoutElementStyleState(validator: Validator, parent_element: AstLayoutElement | undefined, element: AstLayoutElement, element_style_state: RuntimeElementStyleState | undefined = undefined): void {
     // Try to get runtime element if not provided
     if (element_style_state === undefined) {
-        element_style_state = validator.getElementStyleStateRuntime(parent_element, element.enduser_name);
+        element_style_state = Validator.getElementStyleStateRuntime(validator.getLanguageId(), parent_element, element.enduser_name);
 
         // Check if element is a valid element
         if (element_style_state === undefined) {

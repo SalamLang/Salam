@@ -7,13 +7,13 @@ import { RuntimeElementAttributeType } from './../../../../runtime/element_attri
 
 export function validateLayoutElementAttributeValue(validator: Validator, attribute: AstLayoutAttribute, runtimeElementAttribute: RuntimeElementAttribute): string | undefined {
     // TOOD: .getText() is an array, so we should join it to get the string
-    const attr_name: string = runtimeElementAttribute.getText(validator.ast.language.id)?.join(" ") || "Unknown Attribute";
+    const attr_name: string = runtimeElementAttribute.getText(validator.getLanguageId())?.join(" ") || "Unknown Attribute";
     const value: string = attribute.value.getString();
 
-    const error: string = validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_VALID, value, runtimeElementAttribute.type, attr_name, attribute.element_enduser_name);
+    const error: string = validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_VALID, value, runtimeElementAttribute.type, attr_name, attribute.element_enduser_name);
 
     if (runtimeElementAttribute.type !== RuntimeElementAttributeType.String && value === "") {
-        return validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_EMPTY, value, runtimeElementAttribute.type, attr_name, attribute.element_enduser_name);
+        return validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_EMPTY, value, runtimeElementAttribute.type, attr_name, attribute.element_enduser_name);
     }
 
     switch (runtimeElementAttribute.type) {

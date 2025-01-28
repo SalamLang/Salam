@@ -8,26 +8,15 @@ import { AstLayoutAttribute } from "./../../../parser/parse/ast/layout/attribute
 import { ValidatorMessageKeys } from './../../../../common/message/validator/validator';
 import { validateLayoutElementAttributeReservedValue } from './element_attribute_reserved_value';
 
-export function validateLayoutElementStyleStateAttribute(validator: Validator, runtimeElement: RuntimeElement, attribute: AstLayoutAttribute, element: AstLayoutElement): void {
+export function validateLayoutElementStyleStateAttribute(validator: Validator, runtimeElement: RuntimeElementStyleState, attribute: AstLayoutAttribute, element: AstLayoutElement): void {
     const element_name = element.enduser_name;
     const attribute_name = attribute.enduser_name;
 
     const runtimeElementAttribute: RuntimeElementAttribute | undefined = Validator.getElementAllAttributeRuntime(runtimeElement, attribute_name);
     console.log(runtimeElementAttribute);
     if (runtimeElementAttribute === undefined) {
-        validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID, attribute_name, element_name));
+        validator.pushError(validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID, attribute_name, element_name));
         return;
-    }
-
-    // Update has_style and built_in_selector flags
-    if (attribute.isStyle()) {
-        console.log("this attribute is style");
-        console.log("this attribute is style");
-        console.log("this attribute is style");
-        console.log("this attribute is style");
-        if (element.built_in_selector === undefined) {
-            element.generateBuiltInSelector(validator);
-        }
     }
 
     // Update the kind, generate name, generate type of the attribute value

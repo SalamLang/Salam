@@ -1,6 +1,6 @@
-import { MessageKeys, MessageStruct, ValidatorMessageKeys } from './../message';
+import { ValidatorMessageKeys } from './validator';
 
-export const enMessages: MessageStruct<ValidatorMessageKeys> = {
+export const enMessages: Record<ValidatorMessageKeys, string> = {
     [ValidatorMessageKeys.VALIDATOR_PREFIX]: "Validation error: ",
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_REQUIRED]: "Attribute '{0}' is required for element '{1}}' but not found",
     [ValidatorMessageKeys.VALIDATOR_ELEMENT_NOT_VALID]: "Element '{0}' is not a valid element",

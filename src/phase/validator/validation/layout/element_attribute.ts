@@ -2,10 +2,10 @@ import { Validator } from "./../validator";
 import { RuntimeElement } from './../../../../runtime/element';
 import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 import { validateLayoutElementAttributeValue } from './element_attribute_value';
+import { validatorMessageRenderer } from './../../../../common/message/message';
 import { RuntimeElementAttribute } from './../../../../runtime/element_attribute';
 import { AstLayoutAttribute } from "./../../../parser/parse/ast/layout/attribute";
-import { validatorMessages } from './../../../../common/message/validator/validator';
-import { messageRenderer, ValidatorMessageKeys } from './../../../../common/message/message';
+import { ValidatorMessageKeys } from './../../../../common/message/validator/validator';
 import { validateLayoutElementAttributeReservedValue } from './element_attribute_reserved_value';
 
 export function validateLayoutElementAttribute(validator: Validator, runtimeElement: RuntimeElement, attribute: AstLayoutAttribute, element: AstLayoutElement): void {
@@ -28,7 +28,7 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
     }, undefined as RuntimeElementAttribute | undefined);
 
     if (runtimeElementAttribute === undefined) {
-        validator.pushError(messageRenderer(validatorMessages, validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID, attribute_name, element_name));
+        validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID, attribute_name, element_name));
         return;
     }
 

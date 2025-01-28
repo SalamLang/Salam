@@ -1,10 +1,8 @@
-import { faMessages } from './fa';
-import { enMessages } from './en';
-import { MessageStruct } from './../message';
-import { MultiLanguageMessages } from './../message';
-import { LanguageID } from './../../language/language';
-
-export const generatorMessages: MultiLanguageMessages<MessageStruct<object>> = {
-    [LanguageID.LanguageEnglish]: enMessages,
-    [LanguageID.LanguagePersian]: faMessages
+export enum GeneratorMessageKeys {
+    GENERATOR_PREFIX = 'GENERATOR_PREFIX',
+    GENERATOR_CANNOT_OUTDENT_BELOW_ZERO = 'GENERATOR_CANNOT_OUTDENT_BELOW_ZERO',
+    GENERATOR_UNKNOWN_ELEMENT_TYPE = 'GENERATOR_UNKNOWN_ELEMENT_TYPE',
+    GENERATOR_INCLUDE_FILE_PATH_NOT_PROVIDED = 'GENERATOR_INCLUDE_FILE_PATH_NOT_PROVIDED',
+    GENERATOR_INCLUDE_FILE_NOT_FOUND = 'GENERATOR_INCLUDE_FILE_NOT_FOUND',
+    GENERATOR_INCLUDE_FILE_READ_ERROR = 'GENERATOR_INCLUDE_FILE_READ_ERROR',
 };

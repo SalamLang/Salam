@@ -80,7 +80,7 @@ export class Validator {
         );
     }
 
-    static getElementAttributeStyle(languageId: LanguageID, parent_element: AstLayoutElement | undefined, name: string): RuntimeElementAttribute | undefined {
+    static getElementAttributeStyle(languageId: LanguageID, name: string): RuntimeElementAttribute | undefined {
         return Validator.findInCollection(languageId, runtimeStyleAttributes, name);
     }
 

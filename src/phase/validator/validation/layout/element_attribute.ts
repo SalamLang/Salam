@@ -13,7 +13,6 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
     const attribute_name = attribute.enduser_name;
 
     const runtimeElementAttribute: RuntimeElementAttribute | undefined = Validator.getElementAllAttributeRuntime(validator.getLanguageId(), runtimeElement, attribute_name);
-    console.log(runtimeElementAttribute);
     if (runtimeElementAttribute === undefined) {
         validator.pushError(validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID, attribute_name, element_name));
         return;

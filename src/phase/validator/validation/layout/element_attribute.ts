@@ -9,8 +9,7 @@ import { ValidatorMessageKeys } from './../../../../common/message/validator/val
 import { validateLayoutElementAttributeReservedValue } from './element_attribute_reserved_value';
 
 export function validateLayoutElementAttribute(validator: Validator, runtimeElement: RuntimeElement, attribute: AstLayoutAttribute, element: AstLayoutElement): void {
-    // TODO: .getText() is an array, so we should join it to get the string
-    const element_name = runtimeElement.getText(validator.ast.language.id)?.join(" ") || "Unknown Element";
+    const element_name = element.enduser_name;
     const attribute_name = attribute.enduser_name;
 
     const runtimeElementAttribute: RuntimeElementAttribute | undefined = validator.getElementAllAttributeRuntime(runtimeElement, attribute_name);
@@ -18,6 +17,14 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
     if (runtimeElementAttribute === undefined) {
         validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID, attribute_name, element_name));
         return;
+    }
+
+    // Update has_style and built_in_selector flags
+    if (attribute.isStyle()) {
+        element.has_style = true;
+        if (element.built_in_selector === undefined) {
+            element.generateBuiltInSelector(validator);
+        }
     }
 
     // Update the kind, generate name, generate type of the attribute value

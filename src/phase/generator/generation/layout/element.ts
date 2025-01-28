@@ -11,8 +11,11 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     if (hasTag) {
         result += generator.bufferIndented(`<${element.generate_name}`);
 
+        console.log(element.has_style);
+        console.log(element.built_in_selector);
+
         // Handle attributes
-        const attributes_str1: string = generateLayoutAttributes(generator, element.attributes);
+        const attributes_str1: string = generateLayoutAttributes(generator, element, element.attributes);
         if (attributes_str1.length > 0) {
             result += generator.buffer(` `);
             result += generator.buffer(attributes_str1);

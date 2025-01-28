@@ -29,7 +29,28 @@ export function includeLayout(generator: Generator, filePath: string, params: st
         const _validator: Validator = new Validator(_parser.ast);
         validate(_validator);
         
+        if (_parser.ast.errors.length > 0) {
+            _parser.ast.errors.forEach((error: string) => {
+                console.error(error);
+                process.exit(1);
+            });
+        }
+        
+        if (_validator.errors.length > 0) {
+            _validator.errors.forEach((error: string) => {
+                console.error(error);
+                process.exit(1);
+            });
+        }
+
         const _generator: Generator = new Generator(_validator.ast);
+        if (_generator.errors.length > 0) {
+            _generator.errors.forEach((error: string) => {
+                console.error(error);
+                process.exit(1);
+            });
+        }
+        
         if (_generator.ast.layout !== undefined) {
             return generateLayoutNode(generator, _generator.ast.layout.root);
         }

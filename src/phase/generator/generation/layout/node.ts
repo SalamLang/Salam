@@ -1,6 +1,7 @@
 import { includeLayout } from './include';
 import { Generator } from './../generator';
 import { generateLayoutElement } from './element';
+import { generateLayoutElementStyleState } from './element_style_state';
 import { AstLayoutElement } from './../../../parser/parse/ast/layout/element';
 import { generatorMessageRenderer } from './../../../../common/message/message';
 import { GeneratorMessageKeys } from './../../../../common/message/generator/generator';

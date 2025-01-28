@@ -1,6 +1,7 @@
 export enum RuntimeElementAttributeType {
   Any = 'Any',
   AnyNoEmpty = 'AnyNoEmpty',
+  Width = 'AnyNoEmpty', // TODO
   String = 'String',
   StringNoEmpty = 'StringNoEmpty',
   Strings = 'Strings',

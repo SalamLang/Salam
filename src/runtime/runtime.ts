@@ -15,16 +15,56 @@ export const runtimeElements: RuntimeElement[] = [
     new RuntimeElementDiv(),
 ];
 
+import { RuntimeStyleAccentColor } from './style/attribute/accent-color';
+import { RuntimeStyleAll } from './style/attribute/all';
+import { RuntimeStyleAnimationComposition } from './style/attribute/animation-composition';
+import { RuntimeStyleAnimationDelay } from './style/attribute/animation-delay';
+import { RuntimeStyleAnimationDirection } from './style/attribute/animation-direction';
+import { RuntimeStyleAnimationDuration } from './style/attribute/animation-duration';
+import { RuntimeStyleAnimationFillMode } from './style/attribute/animation-fill-mode';
+import { RuntimeStyleAnimationIterationCount } from './style/attribute/animation-iteration-count';
+import { RuntimeStyleAnimationName } from './style/attribute/animation-name';
+import { RuntimeStyleAnimationPlayState } from './style/attribute/animation-play-state';
+import { RuntimeStyleAnimationTimingFunction } from './style/attribute/animation-timing-function';
+import { RuntimeStyleAppearance } from './style/attribute/appearance';
+import { RuntimeStyleAspectRation } from './style/attribute/aspect-ratio';
+import { RuntimeStyleBackdropFilter } from './style/attribute/backdrop-filter';
+import { RuntimeStyleBackfaceVisibility } from './style/attribute/backface-visibility';
+import { RuntimeStyleBackgroundColor } from './style/attribute/background-color';
+import { RuntimeStyleBlockSize } from './style/attribute/block-size';
+import { RuntimeStyleBottom } from './style/attribute/bottom';
+import { RuntimeStyleCaptionSide } from './style/attribute/caption-side';
+import { RuntimeStyleCaretColor } from './style/attribute/caret-color';
+import { RuntimeStyleClear } from './style/attribute/clear';
 import { RuntimeStyleColor } from './style/attribute/color';
 import { RuntimeStyleFontSize } from './style/attribute/font-size';
 import { RuntimeStyleTextAlign } from './style/attribute/text-align';
-import { RuntimeStyleBackgroundColor } from './style/attribute/background-color';
 
 export const runtimeStyleAttributes: RuntimeElementAttributeStyle[] = [
+    new RuntimeStyleAccentColor(),
+    new RuntimeStyleAll(),
+    new RuntimeStyleAnimationComposition(),
+    new RuntimeStyleAnimationDelay(),
+    new RuntimeStyleAnimationDirection(),
+    new RuntimeStyleAnimationDuration(),
+    new RuntimeStyleAnimationFillMode(),
+    new RuntimeStyleAnimationIterationCount(),
+    new RuntimeStyleAnimationName(),
+    new RuntimeStyleAnimationPlayState(),
+    new RuntimeStyleAnimationTimingFunction(),
+    new RuntimeStyleAppearance(),
+    new RuntimeStyleAspectRation(),
+    new RuntimeStyleBackdropFilter(),
+    new RuntimeStyleBackfaceVisibility(),
+    new RuntimeStyleBackgroundColor(),
+    new RuntimeStyleBlockSize(),
+    new RuntimeStyleBottom(),
+    new RuntimeStyleCaptionSide(),
+    new RuntimeStyleCaretColor(),
+    new RuntimeStyleClear(),
     new RuntimeStyleColor(),
     new RuntimeStyleFontSize(),
     new RuntimeStyleTextAlign(),
-    new RuntimeStyleBackgroundColor(),
 ];
 
 import { RuntimeGlobalAttributeContent } from './attribute/content';

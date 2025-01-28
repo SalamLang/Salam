@@ -32,7 +32,7 @@ export class RuntimeElement {
     getAttribute(languageId: LanguageID, name: string): RuntimeElementAttribute | undefined {
         return this.findAttribute(languageId, name);
     }
-    
+
     addBelongsTo(element: RuntimeElement): void {
         this.belongs_to.push(element);
     }

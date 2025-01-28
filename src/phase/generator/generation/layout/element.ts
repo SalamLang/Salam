@@ -32,12 +32,6 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     const isOnlyInlineText: boolean = hasContentWithoutChild && !hasMultiOpeningClosing;
     const emptyContent: boolean = element.content === undefined && element.block.length === 0;
 
-    console.log("hasContentOrChild", hasContentOrChild);
-    console.log("hasContentWithoutChild", hasContentWithoutChild);
-    console.log("hasInlineContent", hasInlineContent);
-    console.log("hasMultiOpeningClosing", hasMultiOpeningClosing);
-    console.log("isOnlyInlineText", isOnlyInlineText);
-
     // Write the content of the element
     const writeContent = () => {
         if (element.content !== undefined) {

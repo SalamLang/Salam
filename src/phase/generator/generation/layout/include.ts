@@ -37,7 +37,9 @@ export function includeLayout(generator: Generator, filePath: string, params: st
         const _generator: Generator = new Generator(_validator.ast);
         checkError(_parser, _validator, _generator);
         if (_generator.ast.layout !== undefined) {
-            return generateLayoutNode(generator, _generator.ast.layout.root);
+            return generator.buffer(
+                generateLayoutNode(generator, _generator.ast.layout.root)
+            );
         }
     }
     return "";

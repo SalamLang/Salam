@@ -3,7 +3,9 @@ import { generateLayoutBlock } from './block';
 import { AstLayout } from './../../../parser/parse/ast/layout/layout';
 
 export function generateLayout(generator: Generator, layout: AstLayout): string {
+    generator.setIndent(generator.getIndent() + 2);
     const body: string = generateLayoutBlock(generator, layout.root, layout.root.block);
+    generator.setIndent(generator.getIndent() - 2);
 
     let result: string = "";
 
@@ -38,15 +40,14 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
     generator.decreaseIndent();
     result += generator.bufferIndentedLine(`</head>`);
     result += generator.bufferIndentedLine(`<body>`);
-    generator.increaseIndent();
 
+    generator.increaseIndent();
     if (layout.root.content !== undefined) {
         result += generator.bufferIndentedLine(layout.root.content);
     }
-
     result += body;
-
     generator.decreaseIndent();
+
     result += generator.bufferIndentedLine(`</body>`);
     generator.decreaseIndent();
     result += generator.bufferIndentedLine(`</html>`);

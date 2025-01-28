@@ -7,6 +7,8 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     let result: string = "";
     const hasTag: boolean = element.generate_name !== undefined;
 
+    console.log(generator.indentLevel);
+
     const closing: string = `</${element.generate_name}>`;
     if (hasTag) {
         result += generator.bufferIndented(`<${element.generate_name}`);

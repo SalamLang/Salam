@@ -24,13 +24,21 @@ export function parserParseLayoutElement(parser: Parser, element_key_tokens: Tok
             // (attribute_key or element_key) (: or =)
             //                                ^
             if (parser.skip(TokenOperatorType.TOKEN_ASSIGN)) {
-                // attribute_key = value
+                // attribute_key = attribute_value
                 //               ^
                 const attribute: AstLayoutAttribute | undefined = parserParseLayoutAttribute(parser, element_key, key_tokens);
                 if (attribute) {
-                    if (! element.attributes.push(attribute)) {
-                        parser.pushError(parserMessageRenderer(parser.lexer.language.id, ParserMessageKeys.PARSER_DUPLICATE_ATTRIBUTE_IN_LAYOUT, attribute.key));
-                        return undefined;
+                    console.log("parser: ", attribute.isStyle());
+                    if (attribute.isStyle()) {
+                        if (! element.styles.push(attribute)) {
+                            parser.pushError(parserMessageRenderer(parser.lexer.language.id, ParserMessageKeys.PARSER_DUPLICATE_STYLE_ATTRIBUTE_IN_LAYOUT, attribute.key));
+                            return undefined;
+                        }
+                    } else {
+                        if (! element.attributes.push(attribute)) {
+                            parser.pushError(parserMessageRenderer(parser.lexer.language.id, ParserMessageKeys.PARSER_DUPLICATE_ELEMENT_ATTRIBUTE_IN_LAYOUT, attribute.key));
+                            return undefined;
+                        }
                     }
                 }
             }

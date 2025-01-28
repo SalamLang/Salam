@@ -10,7 +10,9 @@ export const enMessages: Record<ParserMessageKeys, string> = {
 
     [ParserMessageKeys.PARSER_UNEXPECTED_END_OF_TOKENS_IN_LAYOUT_ATTRIBUTE]: "Unexpected end of tokens in layout attribute",
 
-    [ParserMessageKeys.PARSER_DUPLICATE_ATTRIBUTE_IN_LAYOUT]: "Duplicate attribute '{0}' in layout",
+    [ParserMessageKeys.PARSER_DUPLICATE_STYLE_ATTRIBUTE_IN_LAYOUT]: "Duplicate style attribute '{0}' in layout",
+    [ParserMessageKeys.PARSER_DUPLICATE_ELEMENT_ATTRIBUTE_IN_LAYOUT]: "Duplicate element attribute '{0}' in layout",
+
     [ParserMessageKeys.PARSER_UNEXPECTED_TOKEN_AS_ELEMENT_NAME]: "Unexpected token as element name, current token is '{0}'",
     [ParserMessageKeys.PARSER_UNEXPECTED_TOKEN_IN_LAYOUT]: "Unexpected token in layout, current token is '{0}'",
     [ParserMessageKeys.PARSER_UNEXPECTED_TOKEN_IN_LAYOUT_AS_ATTRIBUTE]: "Unexpected token in layout as attribute, current token is '{0}'",

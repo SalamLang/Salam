@@ -7,6 +7,7 @@ import { AstLayoutAttribute } from "./../../../parser/parse/ast/layout/attribute
 import { ValidatorMessageKeys } from './../../../../common/message/validator/validator';
 
 export function validateLayoutElementAttributes(validator: Validator, element_enduser_name: string, runtime_element: RuntimeElement, element: AstLayoutElement): void {
+    // Check layout attributes
     for (const attribute of element.attributes.items) {
         validateLayoutElementAttribute(validator, runtime_element, attribute, element);
     }
@@ -26,8 +27,13 @@ export function validateLayoutElementAttributes(validator: Validator, element_en
 
     // Check if user has provided any extra attributes which are not supported
     for (const attribute of element.attributes.items) {
-        if (attribute.generate_name !== undefined && ! validator.hasElementAllAttributeRuntime(runtime_element, attribute.enduser_name)) {
+        if (attribute.generate_name !== undefined && ! Validator.hasElementAllAttributeRuntime(validator.getLanguageId(), runtime_element, attribute.enduser_name)) {
             validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_SUPPORTED, attribute.enduser_name, element_enduser_name));
         }
+    }
+
+    // Check styles
+    for (const attribute of element.styles.items) {
+        validateLayoutElementAttribute(validator, runtime_element, attribute, element);
     }
 };

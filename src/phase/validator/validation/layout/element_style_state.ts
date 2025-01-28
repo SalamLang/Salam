@@ -13,7 +13,7 @@ export function validateLayoutElementStyleState(validator: Validator, parent_ele
 
         // Check if element is a valid element
         if (element_style_state === undefined) {
-            validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ELEMENT_STYLE_STATE_NOT_VALID, element.enduser_name));
+            validator.pushError(validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ELEMENT_STYLE_STATE_NOT_VALID, element.enduser_name));
             return;
         }
     }

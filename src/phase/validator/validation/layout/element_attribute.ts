@@ -15,15 +15,8 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
     const runtimeElementAttribute: RuntimeElementAttribute | undefined = Validator.getElementAllAttributeRuntime(validator.getLanguageId(), runtimeElement, attribute_name);
     console.log(runtimeElementAttribute);
     if (runtimeElementAttribute === undefined) {
-        validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID, attribute_name, element_name));
+        validator.pushError(validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID, attribute_name, element_name));
         return;
-    }
-
-    // Update has_style and built_in_selector flags
-    if (attribute.isStyle()) {
-        if (element.built_in_selector === undefined) {
-            element.generateBuiltInSelector(validator);
-        }
     }
 
     // Update the kind, generate name, generate type of the attribute value

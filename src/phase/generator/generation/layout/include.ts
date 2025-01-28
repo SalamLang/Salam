@@ -15,9 +15,9 @@ import { GeneratorMessageKeys } from './../../../../common/message/generator/gen
 
 export function includeLayout(generator: Generator, filePath: string, params: string[]): string {
     if (! filePath) {
-        generator.pushError(generatorMessageRenderer(generator.ast.language.id, GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_PATH_NOT_PROVIDED));
+        generator.pushError(generatorMessageRenderer(generator.getLanguageId(), GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_PATH_NOT_PROVIDED));
     } else if (! fs.existsSync(filePath)) {
-        generator.pushError(generatorMessageRenderer(generator.ast.language.id, GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_NOT_FOUND, filePath));
+        generator.pushError(generatorMessageRenderer(generator.getLanguageId(), GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_NOT_FOUND, filePath));
     } else {
         const fileName: string = fs.realpathSync(filePath);
         const absoluteDirPath: string = fs.realpathSync(path.dirname(filePath));

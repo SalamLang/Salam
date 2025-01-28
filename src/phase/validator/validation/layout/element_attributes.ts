@@ -19,8 +19,8 @@ export function validateLayoutElementAttributes(validator: Validator, element_en
             
             if (foundAttributes === undefined) {
                 // TODO: .getText() is an array, so we should join it to get the string
-                const attribute_name = runtimeAttribute.getText(validator.ast.language.id)?.join(" ") || "Unknown Attribute";
-                validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_REQUIRED, attribute_name, element_enduser_name));
+                const attribute_name = runtimeAttribute.getText(validator.getLanguageId())?.join(" ") || "Unknown Attribute";
+                validator.pushError(validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_REQUIRED, attribute_name, element_enduser_name));
             }
         }
     }
@@ -28,7 +28,7 @@ export function validateLayoutElementAttributes(validator: Validator, element_en
     // Check if user has provided any extra attributes which are not supported
     for (const attribute of element.attributes.items) {
         if (attribute.generate_name !== undefined && ! Validator.hasElementAllAttributeRuntime(validator.getLanguageId(), runtime_element, attribute.enduser_name)) {
-            validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_SUPPORTED, attribute.enduser_name, element_enduser_name));
+            validator.pushError(validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_SUPPORTED, attribute.enduser_name, element_enduser_name));
         }
     }
 

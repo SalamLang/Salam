@@ -17,7 +17,7 @@ export function validateLayoutElementOrState(validator: Validator, parent_elemen
         if (runtimeStyleState !== undefined) {
             validateLayoutElementStyleState(validator, parent_element, element, runtimeStyleState);
         } else {
-            validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ELEMENT_OR_STYLE_STATE_NOT_VALID, element.enduser_name));
+            validator.pushError(validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ELEMENT_OR_STYLE_STATE_NOT_VALID, element.enduser_name));
         }
     }
 };

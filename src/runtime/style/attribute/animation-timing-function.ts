@@ -2,7 +2,7 @@ import { LanguageID } from '../../../common/language/language';
 import { RuntimeElementAttributeType } from '../../element_attribute_type';
 import { RuntimeElementAttributeStyle } from '../../element_attribute_style';
 
-export class RuntimeStyleAnimationPlayState extends RuntimeElementAttributeStyle {
+export class RuntimeStyleAnimationTimingFunction extends RuntimeElementAttributeStyle {
     constructor() {
         super(RuntimeElementAttributeType.AnyNoEmpty, "animation-timing-function");
         this.addText(LanguageID.LanguagePersian, "تابع زمانی انیمیشن");

@@ -1,3 +1,4 @@
+import { checkError } from './check-error';
 import { lex } from './../../phase/lexer/lex/lex';
 import { LanguageMap } from './../language/language';
 import { Lexer } from './../../phase/lexer/lex/lexer';
@@ -17,12 +18,7 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
 
     const parser: Parser = new Parser(lexer);
     parse(parser);
-    if (parser.ast.errors.length > 0) {
-        parser.ast.errors.forEach((error: string) => {
-            console.error(error);
-        });
-        return 1;
-    }
+    checkError(parser, undefined, undefined);
     parser.print();
 
     console.log('=======================');
@@ -31,12 +27,7 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
 
     const validator: Validator = new Validator(parser.ast);
     validate(validator);
-    if (validator.errors.length > 0) {
-        validator.errors.forEach((error: string) => {
-            console.error(error);
-        });
-        return 1;
-    }
+    checkError(parser, undefined, undefined);
 
     return 0;
 };

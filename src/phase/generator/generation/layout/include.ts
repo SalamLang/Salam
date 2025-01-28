@@ -6,6 +6,7 @@ import { lex } from './../../../lexer/lex/lex';
 import { Lexer } from './../../../lexer/lex/lexer';
 import { parse } from './../../../parser/parse/parse';
 import { Parser } from './../../../parser/parse/parser';
+import { checkError } from './../../../../common/cli/check-error';
 import { validate } from './../../../validator/validation/validate';
 import { Validator } from './../../../validator/validation/validator';
 import { Generator } from './../../../generator/generation/generator';
@@ -26,31 +27,14 @@ export function includeLayout(generator: Generator, filePath: string, params: st
         lex(_lexer);
         const _parser: Parser = new Parser(_lexer);
         parse(_parser);
+        checkError(_parser, undefined, undefined);
+
         const _validator: Validator = new Validator(_parser.ast);
         validate(_validator);
-        
-        if (_parser.ast.errors.length > 0) {
-            _parser.ast.errors.forEach((error: string) => {
-                console.error(error);
-                process.exit(1);
-            });
-        }
-        
-        if (_validator.errors.length > 0) {
-            _validator.errors.forEach((error: string) => {
-                console.error(error);
-                process.exit(1);
-            });
-        }
+        checkError(_parser, _validator, undefined);
 
         const _generator: Generator = new Generator(_validator.ast);
-        if (_generator.errors.length > 0) {
-            _generator.errors.forEach((error: string) => {
-                console.error(error);
-                process.exit(1);
-            });
-        }
-        
+        checkError(_parser, _validator, _generator);
         if (_generator.ast.layout !== undefined) {
             return generateLayoutNode(generator, _generator.ast.layout.root);
         }

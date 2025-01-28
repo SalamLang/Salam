@@ -1,8 +1,9 @@
 import { Generator } from "./../generator";
 import { generateLayoutAttribute } from "./attribute";
+import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 import { AstLayoutAttributes } from "./../../../parser/parse/ast/layout/attributes";
 
-export function generateLayoutAttributes(generator: Generator, attributes: AstLayoutAttributes): string {
+export function generateLayoutAttributes(generator: Generator, element: AstLayoutElement, attributes: AstLayoutAttributes): string {
     let htmlResult: string = "";
     let styleResult: string = "";
 
@@ -17,8 +18,11 @@ export function generateLayoutAttributes(generator: Generator, attributes: AstLa
         }
     }
 
-    if (styleResult.length > 0) {
-        const element_selector: string = ".element";
+    console.log(styleResult);
+    console.log(element);
+
+    if (styleResult.length > 0 && element.has_style && element.built_in_selector !== undefined) {
+        const element_selector: string = element.built_in_selector;
         generator.pushStyle(`${element_selector} {${styleResult}}`);
     }
 

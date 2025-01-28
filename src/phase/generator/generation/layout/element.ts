@@ -26,10 +26,17 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
         hasContentOrChild = true;
     }
 
-    const hasContentWithoutChild = element.content !== undefined && element.block.length === 0;
-    const hasInlineContent = element.content !== undefined && !element.content.includes("\n");
-    const hasMultiOpeningClosing = hasContentOrChild && hasContentWithoutChild && !hasInlineContent;
-    const isOnlyInlineText = hasContentWithoutChild && !hasMultiOpeningClosing;
+    const hasContentWithoutChild: boolean = element.content !== undefined && element.block.length === 0;
+    const hasInlineContent: boolean = element.content !== undefined && !element.content.includes("\n");
+    const hasMultiOpeningClosing: boolean = hasContentOrChild && hasContentWithoutChild && !hasInlineContent;
+    const isOnlyInlineText: boolean = hasContentWithoutChild && !hasMultiOpeningClosing;
+    const emptyContent: boolean = element.content === undefined && element.block.length === 0;
+
+    console.log("hasContentOrChild", hasContentOrChild);
+    console.log("hasContentWithoutChild", hasContentWithoutChild);
+    console.log("hasInlineContent", hasInlineContent);
+    console.log("hasMultiOpeningClosing", hasMultiOpeningClosing);
+    console.log("isOnlyInlineText", isOnlyInlineText);
 
     // Write the content of the element
     const writeContent = () => {
@@ -61,7 +68,7 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     // Close the element
     if (hasTag) {
         const needsIndentClosing = hasMultiOpeningClosing || !hasContentWithoutChild;
-        if (needsIndentClosing) {
+        if (!emptyContent && needsIndentClosing) {
             result += generator.bufferIndentedLine(closing);
         } else {
             result += generator.bufferLine(closing);

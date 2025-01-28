@@ -10,7 +10,9 @@ export const faMessages: Record<ParserMessageKeys, string> = {
 
     [ParserMessageKeys.PARSER_UNEXPECTED_END_OF_TOKENS_IN_LAYOUT_ATTRIBUTE]: "پایان غیرمنتظره نشانه‌ها در ویژگی طرح",
 
-    [ParserMessageKeys.PARSER_DUPLICATE_ATTRIBUTE_IN_LAYOUT]: "ویژگی تکراری '{0}' در طرح",
+    [ParserMessageKeys.PARSER_DUPLICATE_STYLE_ATTRIBUTE_IN_LAYOUT]: "ویژگی استایل تکراری '{0}' در طرح",
+    [ParserMessageKeys.PARSER_DUPLICATE_ELEMENT_ATTRIBUTE_IN_LAYOUT]: "ویژگی عنصر تکراری '{0}' در طرح",
+
     [ParserMessageKeys.PARSER_UNEXPECTED_TOKEN_AS_ELEMENT_NAME]: "نشانه غیرمنتظره به عنوان نام عنصر، نشانه فعلی '{0}'",
     [ParserMessageKeys.PARSER_UNEXPECTED_TOKEN_IN_LAYOUT]: "نشانه غیرمنتظره در طرح، نشانه فعلی '{0}'",
     [ParserMessageKeys.PARSER_UNEXPECTED_TOKEN_IN_LAYOUT_AS_ATTRIBUTE]: "نشانه غیرمنتظره در طرح به عنوان ویژگی، نشانه فعلی '{0}'",

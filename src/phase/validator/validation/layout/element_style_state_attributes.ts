@@ -13,7 +13,7 @@ export function validateLayoutElementStyleStateAttributes(validator: Validator, 
 
     // Check if user has provided any extra attributes which are not supported
     for (const attribute of element.attributes.items) {
-        if (attribute.generate_name !== undefined && ! validator.hasElementAllAttributeRuntime(runtime_element_style_state, attribute.enduser_name)) {
+        if (attribute.generate_name !== undefined && ! Validator.hasElementAllAttributeRuntime(validator.getLanguageId(), runtime_element_style_state, attribute.enduser_name)) {
             validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_SUPPORTED, attribute.enduser_name, element_enduser_name));
         }
     }

@@ -21,7 +21,7 @@ export function generateLayoutAttributes(generator: Generator, element: AstLayou
     console.log(styleResult);
     console.log(element);
 
-    if (styleResult.length > 0 && element.has_style && element.built_in_selector !== undefined) {
+    if (styleResult.length > 0 && element.built_in_selector !== undefined) {
         const element_selector: string = element.built_in_selector;
         generator.pushStyle(`${element_selector} {${styleResult}}`);
     }

@@ -1,4 +1,4 @@
-import { LexerMessageKeys } from './../message';
+import { LexerMessageKeys } from './lexer';
 
 export const enMessages: Record<LexerMessageKeys, string> = {
     [LexerMessageKeys.LEXER_PREFIX]: "Syntax error: ",

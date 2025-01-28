@@ -2,9 +2,9 @@ import { Validator } from "./../validator";
 import { RuntimeElement } from './../../../../runtime/element';
 import { validateLayoutElementAttribute } from './element_attribute';
 import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
+import { validatorMessageRenderer } from './../../../../common/message/message';
 import { AstLayoutAttribute } from "./../../../parser/parse/ast/layout/attribute";
-import { validatorMessages } from './../../../../common/message/validator/validator';
-import { messageRenderer, ValidatorMessageKeys } from './../../../../common/message/message';
+import { ValidatorMessageKeys } from './../../../../common/message/validator/validator';
 
 export function validateLayoutElementAttributes(validator: Validator, element_enduser_name: string, runtimeElement: RuntimeElement, element: AstLayoutElement): void {
     for (const attribute of element.attributes.items) {
@@ -19,7 +19,7 @@ export function validateLayoutElementAttributes(validator: Validator, element_en
             if (foundAttributes === undefined) {
                 // TODO: .getText() is an array, so we should join it to get the string
                 const attribute_name = runtimeAttribute.getText(validator.ast.language.id)?.join(" ") || "Unknown Attribute";
-                validator.pushError(messageRenderer(validatorMessages, validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_REQUIRED, attribute_name, element_enduser_name));
+                validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_REQUIRED, attribute_name, element_enduser_name));
             }
         }
     }

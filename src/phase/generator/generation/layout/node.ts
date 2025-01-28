@@ -2,8 +2,8 @@ import { includeLayout } from './include';
 import { Generator } from './../generator';
 import { generateLayoutElement } from './element';
 import { AstLayoutElement } from './../../../parser/parse/ast/layout/element';
-import { generatorMessages } from './../../../../common/message/generator/generator';
-import { messageRenderer, GeneratorMessageKeys } from './../../../../common/message/message';
+import { generatorMessageRenderer } from './../../../../common/message/message';
+import { GeneratorMessageKeys } from './../../../../common/message/generator/generator';
 
 export function generateLayoutNode(generator: Generator, element: AstLayoutElement): string {
     let result: string = '';
@@ -20,7 +20,7 @@ export function generateLayoutNode(generator: Generator, element: AstLayoutEleme
             break;
         }
         default: {
-            generator.pushError(messageRenderer(generatorMessages, generator.ast.language.id, GeneratorMessageKeys.GENERATOR_UNKNOWN_ELEMENT_TYPE, element.generate_type || "None"));
+            generator.pushError(generatorMessageRenderer(generator.ast.language.id, GeneratorMessageKeys.GENERATOR_UNKNOWN_ELEMENT_TYPE, element.generate_type || "None"));
             break;
         }
     }

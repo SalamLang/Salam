@@ -1,4 +1,4 @@
-import { GeneratorMessageKeys } from './../message';
+import { GeneratorMessageKeys } from './generator';
 
 export const faMessages: Record<GeneratorMessageKeys, string> = {
     [GeneratorMessageKeys.GENERATOR_PREFIX]: "خطای تولید کننده: ",

@@ -1,4 +1,4 @@
-import { LexerMessageKeys } from './../message';
+import { LexerMessageKeys } from './lexer';
 
 export const faMessages: Record<LexerMessageKeys, string> = {
     [LexerMessageKeys.LEXER_PREFIX]: 'خطای نحوی: ',

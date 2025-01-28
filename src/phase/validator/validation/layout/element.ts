@@ -3,15 +3,15 @@ import { validateLayoutBlock } from './block';
 import { RuntimeElement } from './../../../../runtime/element';
 import { validateLayoutElementAttributes } from './element_attributes';
 import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
-import { validatorMessages } from './../../../../common/message/validator/validator';
-import { messageRenderer, MessageKeys } from './../../../../common/message/message';
+import { validatorMessageRenderer } from './../../../../common/message/message';
+import { ValidatorMessageKeys } from "../../../../common/message/validator/validator";
 
 export function validateLayoutElement(validator: Validator, parent_element: AstLayoutElement | undefined, element: AstLayoutElement): void {
     const runtimeElement: RuntimeElement | undefined = validator.getElementRuntime(parent_element, element.enduser_name);
 
     // Check if element is a valid element
     if (runtimeElement === undefined) {
-        validator.pushError(messageRenderer(validatorMessages, validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ELEMENT_NOT_VALID, element.enduser_name));
+        validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ELEMENT_NOT_VALID, element.enduser_name));
         return;
     }
 

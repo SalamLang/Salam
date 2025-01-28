@@ -1,12 +1,12 @@
-import { Parser } from './../parser';
-import { parserParseLayoutKey } from './layout_key';
-import { AstLayoutElement } from './../ast/layout/element';
-import { AstLayoutAttribute } from './../ast/layout/attribute';
-import { parserParseLayoutAttribute } from './layout_attribute';
-import { Token, arrayName2String } from './../../../lexer/tokenizer/token';
-import { parserMessageRenderer } from './../../../../common/message/message';
-import { ParserMessageKeys } from './../../../../common/message/parser/parser';
-import { TokenKeywordType, TokenOperatorType, TokenOtherType } from './../../../lexer/tokenizer/type';
+import { Parser } from '../parser';
+import { parserParseLayoutKey } from './key';
+import { AstLayoutElement } from '../ast/layout/element';
+import { AstLayoutAttribute } from '../ast/layout/attribute';
+import { parserParseLayoutAttribute } from './attribute';
+import { Token, arrayName2String } from '../../../lexer/tokenizer/token';
+import { parserMessageRenderer } from '../../../../common/message/message';
+import { ParserMessageKeys } from '../../../../common/message/parser/parser';
+import { TokenKeywordType, TokenOperatorType, TokenOtherType } from '../../../lexer/tokenizer/type';
 
 export function parserParseLayoutElement(parser: Parser, element_key_tokens: Token[]): AstLayoutElement | undefined {
     const element_key: string = arrayName2String(element_key_tokens);
@@ -28,7 +28,6 @@ export function parserParseLayoutElement(parser: Parser, element_key_tokens: Tok
                 //               ^
                 const attribute: AstLayoutAttribute | undefined = parserParseLayoutAttribute(parser, element_key, key_tokens);
                 if (attribute) {
-                    console.log("parser: ", attribute.isStyle());
                     if (attribute.isStyle()) {
                         if (! element.styles.push(attribute)) {
                             parser.pushError(parserMessageRenderer(parser.lexer.language.id, ParserMessageKeys.PARSER_DUPLICATE_STYLE_ATTRIBUTE_IN_LAYOUT, attribute.key));

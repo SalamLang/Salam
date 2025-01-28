@@ -1,5 +1,5 @@
-import { Parser } from './../parser';
-import { AstExpression } from './../ast/expression/expression';
+import { Parser } from '../parser';
+import { AstExpression } from '../ast/expression/expression';
 
 export function parserParseLayoutAttributeValue(parser: Parser, element_enduser_name: string, key: string): AstExpression | undefined {
     if (parser.currentToken.isValue && parser.currentToken.data !== undefined) {

@@ -19,7 +19,7 @@ export class Generator {
         this.styles = [];
     }
 
-    appendStyle(style: string): void {
+    pushStyle(style: string): void {
         this.styles.push(style);
     }
 

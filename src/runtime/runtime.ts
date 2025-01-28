@@ -76,9 +76,13 @@ export const runtimeGlobalMotherAttributes: RuntimeElementAttribute[] = [
 export const runtimeGlobalSingleAttributes: RuntimeElementAttribute[] = [
 ];
 
+import { RuntimeGlobalAttributeId } from './attribute/id';
+import { RuntimeGlobalAttributeClass } from './attribute/class';
 import { RuntimeGlobalAttributeRepeat } from './attribute/custom/repeat';
 
 export const runtimeGlobalAttributes: RuntimeElementAttribute[] = [
+    new RuntimeGlobalAttributeId(),
+    new RuntimeGlobalAttributeClass(),
     new RuntimeGlobalAttributeRepeat(),
 ];
 

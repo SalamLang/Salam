@@ -7,9 +7,9 @@ import { RuntimeElementStyleState } from '../../../../runtime/element_style_stat
 // import { ValidatorMessageKeys } from '../../../../common/message/validator/validator';
 import { validateLayoutElementStyleStateAttribute } from './element_style_state_attribute';
 
-export function validateLayoutElementStyleStateAttributes(validator: Validator, element_enduser_name: string, runtime_element_style_state: RuntimeElementStyleState, element: AstLayoutElement): void {
+export function validateLayoutElementStyleStateAttributes(validator: Validator, element_enduser_name: string, runtime_element_style_state: RuntimeElementStyleState, element: AstLayoutElement, main_element: AstLayoutElement | undefined): void {
     for (const attribute of element.styles.items) {
-        validateLayoutElementStyleStateAttribute(validator, runtime_element_style_state, attribute, element);
+        validateLayoutElementStyleStateAttribute(validator, runtime_element_style_state, attribute, element, main_element);
     }
 
     // Check if user has provided any extra attributes which are not supported

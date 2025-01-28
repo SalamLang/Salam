@@ -13,9 +13,10 @@ export function generateLayoutBlock(generator: Generator, element: AstLayoutElem
         if (item.generate_name === undefined) {
             result += generateLayoutNode(generator, item);
         } else if (item.isStateStyle()) {
-            generator.pushStyle(
-                generateLayoutElementStyleState(generator, item)
-            );
+            const css: string = generateLayoutElementStyleState(generator, item)
+            if (css.length > 0) {
+                generator.pushStyle(css);
+            }
         } else {
             result += generateLayoutElement(generator, item as AstLayoutElement);
         }

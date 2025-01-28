@@ -10,7 +10,7 @@ import { runtimeStyleAttributes, runtimeGlobalAttributes, runtimeGlobalSingleAtt
 export class Validator {
     ast: AstProgram;
     errors: string[];
-
+    
     constructor(ast: AstProgram) {
         this.ast = ast;
         this.errors = [];

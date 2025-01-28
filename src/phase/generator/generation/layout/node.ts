@@ -21,7 +21,7 @@ export function generateLayoutNode(generator: Generator, element: AstLayoutEleme
             break;
         }
         default: {
-            generator.pushError(generatorMessageRenderer(generator.ast.language.id, GeneratorMessageKeys.GENERATOR_UNKNOWN_ELEMENT_TYPE, element.enduser_name));
+            generator.pushError(generatorMessageRenderer(generator.getLanguageId(), GeneratorMessageKeys.GENERATOR_UNKNOWN_ELEMENT_TYPE, element.enduser_name));
             break;
         }
     }

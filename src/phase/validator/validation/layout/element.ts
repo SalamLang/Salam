@@ -13,7 +13,7 @@ export function validateLayoutElement(validator: Validator, parent_element: AstL
 
         // Check if element is a valid element
         if (runtime_element === undefined) {
-            validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ELEMENT_NOT_VALID, element.enduser_name));
+            validator.pushError(validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ELEMENT_NOT_VALID, element.enduser_name));
             return;
         }
     }

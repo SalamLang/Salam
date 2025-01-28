@@ -13,6 +13,10 @@ export class AstExpression extends AstNode {
         return this.expression;
     }
 
+    setString(value: string): void {
+        this.expression = value;
+    }
+
     print(): void {
         console.log(this.stringify());
     }

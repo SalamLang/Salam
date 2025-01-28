@@ -33,7 +33,11 @@ export function validateLayoutElementAttributes(validator: Validator, element_en
     }
 
     // Check styles
-    for (const attribute of element.styles.items) {
-        validateLayoutElementAttribute(validator, runtime_element, attribute, element);
+    if (element.styles.items.length > 0) {
+        element.generateBuiltInSelector(validator);
+
+        for (const attribute of element.styles.items) {
+            validateLayoutElementAttribute(validator, runtime_element, attribute, element);
+        }
     }
 };

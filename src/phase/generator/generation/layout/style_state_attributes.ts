@@ -6,9 +6,9 @@ export function generateLayoutStyleStateAttributes(generator: Generator, attribu
     let styleResult: string = "";
 
     for (const attribute of attributes.items) {
-        const generatedAttribute = generateLayoutAttribute(generator, attribute);
-        if (generatedAttribute.length > 0) {
-            if (attribute.isStyle()) {
+        if (attribute.isStyle()) {
+            const generatedAttribute = generateLayoutAttribute(generator, attribute);
+            if (generatedAttribute.length > 0) {
                 styleResult += styleResult.length > 0 ? `;${generatedAttribute}` : generatedAttribute;
             }
         }

@@ -1,5 +1,5 @@
-import { Parser } from './../parser';
-import { Token } from './../../../lexer/tokenizer/token';
+import { Parser } from '../parser';
+import { Token } from '../../../lexer/tokenizer/token';
 
 export function parserParseLayoutKey(parser: Parser): Token[] {
     const token: Token = parser.currentToken;

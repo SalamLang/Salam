@@ -1,21 +1,22 @@
+import { RuntimeElement } from './element';
 import { RuntimeElementAttribute } from './element_attribute';
 
 import { RuntimeElementA } from './element/a';
-import { RuntimeElementInclude } from './element/custom/include';
-import { RuntimeElementLayout } from './element/custom/layout';
 import { RuntimeElementDiv } from './element/div';
+import { RuntimeElementLayout } from './element/custom/layout';
+import { RuntimeElementInclude } from './element/custom/include';
 
-export const runtimeElements = [
+export const runtimeElements: RuntimeElement[] = [
     new RuntimeElementLayout(),
     new RuntimeElementA(),
     new RuntimeElementInclude(),
     new RuntimeElementDiv(),
 ];
 
-import { RuntimeStyleColor } from './style/color';
-import { RuntimeStyleFontSize } from './style/font-size';
-import { RuntimeStyleTextAlign } from './style/text-align';
-import { RuntimeStyleBackgroundColor } from './style/background-color';
+import { RuntimeStyleColor } from './style/attribute/color';
+import { RuntimeStyleFontSize } from './style/attribute/font-size';
+import { RuntimeStyleTextAlign } from './style/attribute/text-align';
+import { RuntimeStyleBackgroundColor } from './style/attribute/background-color';
 
 export const runtimeStyleAttributes = [
     new RuntimeStyleColor(),

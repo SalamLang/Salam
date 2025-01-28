@@ -1,10 +1,6 @@
-import { faMessages } from './fa';
-import { enMessages } from './en';
-import { MessageStruct } from './../message';
-import { MultiLanguageMessages } from './../message';
-import { LanguageID } from './../../language/language';
-
-export const lexerMessages: MultiLanguageMessages<MessageStruct<object>> = {
-    [LanguageID.LanguageEnglish]: enMessages,
-    [LanguageID.LanguagePersian]: faMessages
+export enum LexerMessageKeys {
+    LEXER_PREFIX = 'LEXER_PREFIX',
+    LEXER_INVALID_UNEXPECTED_CHAR = 'LEXER_INVALID_UNEXPECTED_CHAR',
+    LEXER_UNTERMINATED_MULTI_LINE_COMMENT_BLOCK = 'LEXER_UNTERMINATED_MULTI_LINE_COMMENT_BLOCK',
+    LEXER_UNCLOSED_STRING_LITERAL = 'LEXER_UNCLOSED_STRING_LITERAL',
 };

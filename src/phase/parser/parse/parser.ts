@@ -2,8 +2,8 @@ import { AstProgram } from './ast/program';
 import { stringify } from './../../../serializer';
 import { Lexer } from './../../lexer/lex/lexer';
 import { Token } from './../../lexer/tokenizer/token';
-import { parserMessages } from './../../../common/message/parser/parser';
-import { messageRenderer, ParserMessageKeys } from './../../../common/message/message';
+import { parserMessageRenderer } from './../../../common/message/message';
+import { ParserMessageKeys } from './../../../common/message/parser/parser';
 import { TokenKeywordType, TokenOperatorType, TokenOtherType, TokenType } from './../../lexer/tokenizer/type';
 
 export class Parser {
@@ -56,7 +56,7 @@ export class Parser {
             this.index++;
             return true;
         }
-        this.pushError(messageRenderer(parserMessages, this.lexer.language.id, ParserMessageKeys.PARSER_EXPECTED_TOKEN_TYPE_BUT_GOT, tokenType, this.currentToken.type));
+        this.pushError(parserMessageRenderer(this.lexer.language.id, ParserMessageKeys.PARSER_EXPECTED_TOKEN_TYPE_BUT_GOT, tokenType, this.currentToken.type));
         return false;
     }
 

@@ -1,4 +1,4 @@
-import { ParserMessageKeys } from './../message';
+import { ParserMessageKeys } from './parser';
 
 export const enMessages: Record<ParserMessageKeys, string> = {
     [ParserMessageKeys.PARSER_PREFIX]: "Parser error: ",

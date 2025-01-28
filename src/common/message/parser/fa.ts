@@ -1,4 +1,4 @@
-import { ParserMessageKeys } from './../message';
+import { ParserMessageKeys } from './parser';
 
 export const faMessages: Record<ParserMessageKeys, string> = {
     [ParserMessageKeys.PARSER_PREFIX]: "خطای گرامری: ",

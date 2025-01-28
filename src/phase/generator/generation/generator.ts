@@ -28,6 +28,14 @@ export class Generator {
         this.indentLevel++;
     }
 
+    setIndent(level: number): void {
+        this.indentLevel = level;
+    }
+
+    getIndent(): number {
+        return this.indentLevel;
+    }
+
     decreaseIndent(): void {
         if (this.indentLevel === 0) {
             this.pushError(generatorMessageRenderer(this.getLanguageId(), GeneratorMessageKeys.GENERATOR_CANNOT_OUTDENT_BELOW_ZERO));

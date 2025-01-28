@@ -8,7 +8,7 @@ import { AstLayoutAttribute } from "./../../../parser/parse/ast/layout/attribute
 import { ValidatorMessageKeys } from './../../../../common/message/validator/validator';
 import { validateLayoutElementAttributeReservedValue } from './element_attribute_reserved_value';
 
-export function validateLayoutElementAttribute(validator: Validator, runtimeElement: RuntimeElement, attribute: AstLayoutAttribute, element: AstLayoutElement): void {
+export function validateLayoutElementStyleStateAttribute(validator: Validator, runtimeElement: RuntimeElement, attribute: AstLayoutAttribute, element: AstLayoutElement): void {
     const element_name = element.enduser_name;
     const attribute_name = attribute.enduser_name;
 
@@ -21,6 +21,10 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
 
     // Update has_style and built_in_selector flags
     if (attribute.isStyle()) {
+        console.log("this attribute is style");
+        console.log("this attribute is style");
+        console.log("this attribute is style");
+        console.log("this attribute is style");
         element.has_style = true;
         if (element.built_in_selector === undefined) {
             element.generateBuiltInSelector(validator);

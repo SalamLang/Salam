@@ -6,13 +6,13 @@ import { validatorMessageRenderer } from './../../../../common/message/message';
 import { AstLayoutAttribute } from "./../../../parser/parse/ast/layout/attribute";
 import { ValidatorMessageKeys } from './../../../../common/message/validator/validator';
 
-export function validateLayoutElementAttributes(validator: Validator, element_enduser_name: string, runtimeElement: RuntimeElement, element: AstLayoutElement): void {
+export function validateLayoutElementAttributes(validator: Validator, element_enduser_name: string, runtime_element: RuntimeElement, element: AstLayoutElement): void {
     for (const attribute of element.attributes.items) {
-        validateLayoutElementAttribute(validator, runtimeElement, attribute, element);
+        validateLayoutElementAttribute(validator, runtime_element, attribute, element);
     }
 
     // Check if required attributes are not present
-    for (const runtimeAttribute of runtimeElement.attributes) {
+    for (const runtimeAttribute of runtime_element.attributes) {
         if (runtimeAttribute.is_required && runtimeAttribute.generate_name !== undefined) {
             const foundAttributes: AstLayoutAttribute | undefined = element.attributes.getByGenerateName(runtimeAttribute.generate_name);
             
@@ -26,7 +26,7 @@ export function validateLayoutElementAttributes(validator: Validator, element_en
 
     // Check if user has provided any extra attributes which are not supported
     for (const attribute of element.attributes.items) {
-        if (attribute.generate_name !== undefined && ! validator.hasElementAllAttributeRuntime(runtimeElement, attribute.enduser_name)) {
+        if (attribute.generate_name !== undefined && ! validator.hasElementAllAttributeRuntime(runtime_element, attribute.enduser_name)) {
             validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_SUPPORTED, attribute.enduser_name, element_enduser_name));
         }
     }

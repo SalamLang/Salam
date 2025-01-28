@@ -81,10 +81,9 @@ export class Validator {
         const checks = [
             () => this.getElementAttributeRuntime(runtimeElement, attribute_name),
             () => this.findInCollection(runtimeStyleAttributes, attribute_name),
-            () =>
-                runtimeElement.is_mother
-                    ? this.findInCollection(runtimeGlobalMotherAttributes, attribute_name)
-                    : this.findInCollection(runtimeGlobalSingleAttributes, attribute_name),
+            () => runtimeElement.is_mother
+                        ? this.findInCollection(runtimeGlobalMotherAttributes, attribute_name)
+                        : this.findInCollection(runtimeGlobalSingleAttributes, attribute_name),
             () => this.findInCollection(runtimeGlobalAttributes, attribute_name),
         ];
         return this.executeChecks<RuntimeElementAttribute>(checks);

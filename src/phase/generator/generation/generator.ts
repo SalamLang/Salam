@@ -8,6 +8,7 @@ export class Generator {
     indentLevel: number;
     source: string;
     enableLines: boolean;
+    styles: string[];
     
     constructor(ast: AstProgram) {
         this.ast = ast;
@@ -15,6 +16,11 @@ export class Generator {
         this.indentLevel = 0;
         this.source = '';
         this.enableLines = true;
+        this.styles = [];
+    }
+
+    appendStyle(style: string): void {
+        this.styles.push(style);
     }
 
     increaseIndent(): void {

@@ -25,6 +25,7 @@ export function includeLayout(generator: Generator, filePath: string, params: st
 
         const _lexer: Lexer = new Lexer(source, generator.ast.language, fileName, absoluteDirPath);
         lex(_lexer);
+
         const _parser: Parser = new Parser(_lexer);
         parse(_parser);
         checkError(_parser, undefined, undefined);

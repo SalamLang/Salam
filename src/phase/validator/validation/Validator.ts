@@ -1,4 +1,4 @@
-import { RuntimeElement } from './../../../runtime/element';
+import { RuntimeElement } from './../../../runtime/element'; 
 import { runtimeElements } from './../../../runtime/runtime';
 import { AstProgram } from "./../../parser/parse/ast/program";
 import { AstLayoutElement } from './../../parser/parse/ast/layout/element';
@@ -23,15 +23,18 @@ export class Validator {
         name: string,
         filterFn?: (item: T) => boolean
     ): T | undefined {
-        return collection.find((item: T) => {
-            if (! item.getText(this.ast.language.id)?.includes(name)) return false;
+        return collection.find(item => {
+            if (!item.getText(this.ast.language.id)?.includes(name)) return false;
             return filterFn ? filterFn(item) : true;
         });
     }
 
-    getElementRuntime(parent_element: AstLayoutElement | undefined, name: string): RuntimeElement | undefined {
+    private findElementRuntime(
+        parent_element: AstLayoutElement | undefined,
+        name: string
+    ): RuntimeElement | undefined {
         return this.findInCollection(runtimeElements, name, runtimeElementItem => {
-            if (! parent_element) return true;
+            if (!parent_element) return true;
             return (
                 runtimeElementItem.belongs_to.length === 0 ||
                 runtimeElementItem.belongs_to.some(
@@ -41,38 +44,43 @@ export class Validator {
         });
     }
 
-    getElementGlobalMotherAttributeRuntime(name: string): RuntimeElementAttribute | undefined {
-        return this.findInCollection(runtimeGlobalMotherAttributes, name);
+    getElementRuntime(parent_element: AstLayoutElement | undefined, name: string): RuntimeElement | undefined {
+        return this.findElementRuntime(parent_element, name);
     }
 
-    getElementGlobalSingleAttributeRuntime(name: string): RuntimeElementAttribute | undefined {
-        return this.findInCollection(runtimeGlobalSingleAttributes, name);
-    }
-
-    getElementGlobalAttributeRuntime(name: string): RuntimeElementAttribute | undefined {
-        return this.findInCollection(runtimeGlobalAttributes, name);
-    }
-
-    getElementStyleAttributeRuntime(name: string): RuntimeElementAttribute | undefined {
-        return this.findInCollection(runtimeStyleAttributes, name);
+    hasElementRuntime(parent_element: AstLayoutElement | undefined, name: string): boolean {
+        return this.findElementRuntime(parent_element, name) !== undefined;
     }
 
     getElementAttributeRuntime(element: RuntimeElement, key: string): RuntimeElementAttribute | undefined {
         return this.findInCollection(element.attributes, key);
     }
 
-    getElementAllAttributeRuntime(runtimeElement: RuntimeElement ,attribute_name: string): RuntimeElementAttribute | undefined {
-        const validationChecks = [
+    hasElementAttributeRuntime(element: RuntimeElement, key: string): boolean {
+        return this.getElementAttributeRuntime(element, key) !== undefined;
+    }
+
+    private executeChecks<T>(checks: (() => T | undefined)[]): T | undefined {
+        return checks.reduce(
+            (result, check) => result || check(),
+            undefined as T | undefined
+        );
+    }
+
+    getElementAllAttributeRuntime(runtimeElement: RuntimeElement, attribute_name: string): RuntimeElementAttribute | undefined {
+        const checks = [
             () => this.getElementAttributeRuntime(runtimeElement, attribute_name),
-            () => this.getElementStyleAttributeRuntime(attribute_name),
-            () => runtimeElement.is_mother
-                ? this.getElementGlobalMotherAttributeRuntime(attribute_name)
-                : this.getElementGlobalSingleAttributeRuntime(attribute_name),
-            () => this.getElementGlobalAttributeRuntime(attribute_name),
+            () => this.findInCollection(runtimeStyleAttributes, attribute_name),
+            () =>
+                runtimeElement.is_mother
+                    ? this.findInCollection(runtimeGlobalMotherAttributes, attribute_name)
+                    : this.findInCollection(runtimeGlobalSingleAttributes, attribute_name),
+            () => this.findInCollection(runtimeGlobalAttributes, attribute_name),
         ];
-        const runtimeElementAttribute: RuntimeElementAttribute | undefined = validationChecks.reduce((result, check) => {
-            return result || check();
-        }, undefined as RuntimeElementAttribute | undefined);
-        return runtimeElementAttribute;
+        return this.executeChecks<RuntimeElementAttribute>(checks);
+    }
+
+    hasElementAllAttributeRuntime(runtimeElement: RuntimeElement, attribute_name: string): boolean {
+        return this.getElementAllAttributeRuntime(runtimeElement, attribute_name) !== undefined;
     }
 }

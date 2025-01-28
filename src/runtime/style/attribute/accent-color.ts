@@ -3,7 +3,7 @@ import { RuntimeElementAttributeType } from '../../element_attribute_type';
 import { RuntimeElementAttributeStyle } from '../../element_attribute_style';
 import { RuntimeElementAttributeValue } from '../../element_attribute_value';
 
-export class RuntimeStyleColor extends RuntimeElementAttributeStyle {
+export class RuntimeStyleAccentColor extends RuntimeElementAttributeStyle {
     constructor() {
         super(RuntimeElementAttributeType.Color, "accent-color");
         this.addText(LanguageID.LanguagePersian, "رنگ تاکیدی");

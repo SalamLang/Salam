@@ -60,4 +60,19 @@ export class Validator {
     getElementAttributeRuntime(element: RuntimeElement, key: string): RuntimeElementAttribute | undefined {
         return this.findInCollection(element.attributes, key);
     }
+
+    getElementAllAttributeRuntime(runtimeElement: RuntimeElement ,attribute_name: string): RuntimeElementAttribute | undefined {
+        const validationChecks = [
+            () => this.getElementAttributeRuntime(runtimeElement, attribute_name),
+            () => this.getElementStyleAttributeRuntime(attribute_name),
+            () => runtimeElement.is_mother
+                ? this.getElementGlobalMotherAttributeRuntime(attribute_name)
+                : this.getElementGlobalSingleAttributeRuntime(attribute_name),
+            () => this.getElementGlobalAttributeRuntime(attribute_name),
+        ];
+        const runtimeElementAttribute: RuntimeElementAttribute | undefined = validationChecks.reduce((result, check) => {
+            return result || check();
+        }, undefined as RuntimeElementAttribute | undefined);
+        return runtimeElementAttribute;
+    }
 }

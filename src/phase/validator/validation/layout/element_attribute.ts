@@ -13,26 +13,15 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
     const element_name = runtimeElement.getText(validator.ast.language.id)?.join(" ") || "Unknown Element";
     const attribute_name = attribute.enduser_name;
 
-    const validationChecks = [
-        () => validator.getElementAttributeRuntime(runtimeElement, attribute_name),
-        () => validator.getElementStyleAttributeRuntime(attribute_name),
-        () => runtimeElement.is_mother
-            ? validator.getElementGlobalMotherAttributeRuntime(attribute_name)
-            : validator.getElementGlobalSingleAttributeRuntime(attribute_name),
-        () => validator.getElementGlobalAttributeRuntime(attribute_name),
-    ];
-
-    // Try each check in order, stopping when a valid result is found
-    const runtimeElementAttribute: RuntimeElementAttribute | undefined = validationChecks.reduce((result, check) => {
-        return result || check();
-    }, undefined as RuntimeElementAttribute | undefined);
-
+    const runtimeElementAttribute: RuntimeElementAttribute | undefined = validator.getElementAllAttributeRuntime(runtimeElement, attribute_name);
+    console.log(runtimeElementAttribute);
     if (runtimeElementAttribute === undefined) {
         validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID, attribute_name, element_name));
         return;
     }
 
-    // Update the generate name of the attribute value
+    // Update the kind, generate name, generate type of the attribute value
+    attribute.kind = runtimeElementAttribute.kind;
     attribute.generate_name = runtimeElementAttribute.generate_name;
     attribute.generate_type = runtimeElementAttribute.constructor.name;
 

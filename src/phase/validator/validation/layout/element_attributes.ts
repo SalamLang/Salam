@@ -27,7 +27,7 @@ export function validateLayoutElementAttributes(validator: Validator, element_en
     // Check if user has provided any extra attributes which are not supported
     for (const attribute of element.attributes.items) {
         if (! runtimeElement.hasAttribute(validator.ast.language.id, attribute.enduser_name) && attribute.generate_name !== undefined) {
-            validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_SUPPORTED, attribute.generate_name, element_enduser_name));
+            // validator.pushError(validatorMessageRenderer(validator.ast.language.id, ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_SUPPORTED, attribute.enduser_name, element_enduser_name));
         }
     }
 };

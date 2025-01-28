@@ -25,6 +25,15 @@ export class RuntimeElement {
         return false;
     }
 
+    getAttribute(languageId: LanguageID, name: string): RuntimeElementAttribute | undefined {
+        for (const attribute of this.attributes) {
+            if (attribute.getText(languageId)?.includes(name)) {
+                return attribute;
+            }
+        }
+        return undefined;
+    }
+
     addBelongsTo(element: RuntimeElement): void {
         this.belongs_to.push(element);
     }

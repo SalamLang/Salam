@@ -1,8 +1,10 @@
 import { RuntimeElement } from './../../../runtime/element'; 
 import { runtimeElements } from './../../../runtime/runtime';
 import { AstProgram } from "./../../parser/parse/ast/program";
+import { runtimeStyleStates } from './../../../runtime/runtime';
 import { AstLayoutElement } from './../../parser/parse/ast/layout/element';
 import { RuntimeElementAttribute } from './../../../runtime/element_attribute';
+import { RuntimeElementStyleState } from './../../../runtime/element_style_state';
 import { runtimeStyleAttributes, runtimeGlobalAttributes, runtimeGlobalSingleAttributes, runtimeGlobalMotherAttributes } from './../../../runtime/runtime';
 
 export class Validator {
@@ -18,7 +20,7 @@ export class Validator {
         this.errors.push(message);
     }
 
-    private findInCollection<T extends RuntimeElement | RuntimeElementAttribute>(
+    private findInCollection<T extends RuntimeElement | RuntimeElementAttribute | RuntimeElementStyleState>(
         collection: T[],
         name: string,
         filterFn?: (item: T) => boolean
@@ -33,7 +35,7 @@ export class Validator {
         parent_element: AstLayoutElement | undefined,
         name: string
     ): RuntimeElement | undefined {
-        return this.findInCollection(runtimeElements, name, runtimeElementItem => {
+        return this.findInCollection(runtimeElements, name, (runtimeElementItem: RuntimeElement) => {
             if (!parent_element) return true;
             return (
                 runtimeElementItem.belongs_to.length === 0 ||
@@ -41,6 +43,14 @@ export class Validator {
                     element => element.constructor.name === parent_element.constructor.name
                 )
             );
+        });
+    }
+
+    getElementStyleStateRuntime(parent_element: AstLayoutElement | undefined, name: string): RuntimeElementStyleState | undefined {
+        return this.findInCollection<RuntimeElementStyleState>(runtimeStyleStates, name, (runtimeStyleStateItem: RuntimeElementStyleState) => {
+            if (!parent_element) return true;
+            const value = runtimeStyleStateItem.getText(this.ast.language.id);
+            return value ? true : false;
         });
     }
 

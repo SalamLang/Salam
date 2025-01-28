@@ -9,7 +9,7 @@ import { ValidatorMessageKeys } from "../../../../common/message/validator/valid
 export function validateLayoutElement(validator: Validator, parent_element: AstLayoutElement | undefined, element: AstLayoutElement, runtime_element: RuntimeElement | undefined = undefined): void {
     // Try to get runtime element if not provided
     if (runtime_element === undefined) {
-        runtime_element = validator.getElementRuntime(parent_element, element.enduser_name);
+        runtime_element = Validator.getElementRuntime(validator.getLanguageId(), parent_element, element.enduser_name);
 
         // Check if element is a valid element
         if (runtime_element === undefined) {
@@ -21,7 +21,7 @@ export function validateLayoutElement(validator: Validator, parent_element: AstL
     element.generate_name = runtime_element.generate_name;
     element.generate_type = runtime_element.constructor.name;
 
-    // Check attributes and global attributes
+    // Check attributes and styles
     validateLayoutElementAttributes(validator, element.enduser_name, runtime_element, element);
 
     // Check block

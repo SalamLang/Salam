@@ -8,8 +8,8 @@ import { parserMessageRenderer } from './../../../../common/message/message';
 import { ParserMessageKeys } from './../../../../common/message/parser/parser';
 
 export function parserParseLayoutAttribute(parser: Parser, element_enduser_name: string, attribute_key_tokens: Token[]): AstLayoutAttribute | undefined {
-    // attribute_key = attribute_key
-    //      ^
+    // attribute_key = attribute_value
+    //                 ^
     if (attribute_key_tokens.length === 0) {
         parser.pushError(parserMessageRenderer(parser.lexer.language.id, ParserMessageKeys.PARSER_UNEXPECTED_END_OF_TOKENS_IN_LAYOUT_ATTRIBUTE));
     }
@@ -21,6 +21,9 @@ export function parserParseLayoutAttribute(parser: Parser, element_enduser_name:
         return undefined;
     }
 
-    const attribute: AstLayoutAttribute = new AstLayoutAttribute(element_enduser_name, attribute_key, attribute_value, AstLayoutAttributeType.Normal);
+    const isStyle = attribute_key.startsWith("style-");
+    const attribute_kind: AstLayoutAttributeType = isStyle ? AstLayoutAttributeType.Style : AstLayoutAttributeType.Normal;
+
+    const attribute: AstLayoutAttribute = new AstLayoutAttribute(element_enduser_name, attribute_key, attribute_value, attribute_kind);
     return attribute;
 };

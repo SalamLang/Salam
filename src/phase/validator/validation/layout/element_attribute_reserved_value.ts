@@ -10,7 +10,7 @@ export function validateLayoutElementAttributeReservedValue(validator: Validator
     
     if (runtimeElementAttribute.reservedValues.length > 0) {
         const found: RuntimeElementAttributeValue | undefined = runtimeElementAttribute.reservedValues.find((value: RuntimeElementAttributeValue) => value.getText(validator.ast.language.id)?.includes(attribute.value.getString()));
-        if (!found) {
+        if (! found) {
             return error;
         }
         // Update the generate value of the attribute value

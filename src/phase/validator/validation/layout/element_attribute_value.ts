@@ -120,7 +120,7 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
         case RuntimeElementAttributeType.Date: {
             // Example: 2021-01-01
             const datePattern = /^\d{4}-\d{2}-\d{2}$/;
-            if (!datePattern.test(value) || isNaN(Date.parse(value))) {
+            if (! datePattern.test(value) || isNaN(Date.parse(value))) {
                 return error;
             }
             return undefined;
@@ -129,7 +129,7 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
         case RuntimeElementAttributeType.Time: {
             // Example: 12:00
             const timePattern = /^([01]?[0-9]|2[0-3]):([0-5][0-9])$/;
-            if (!timePattern.test(value) || isNaN(Date.parse(`1970-01-01T${value}:00Z`))) {
+            if (! timePattern.test(value) || isNaN(Date.parse(`1970-01-01T${value}:00Z`))) {
                 return error;
             }
             return undefined;
@@ -142,7 +142,7 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
         case RuntimeElementAttributeType.DateTime: {
             // Example: 2021-01-01T12:00:00
             const dateTimePattern = /^\d{4}-\d{2}-\d{2}T([01]?[0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])$/;
-            if (!dateTimePattern.test(value) || isNaN(Date.parse(value))) {
+            if (! dateTimePattern.test(value) || isNaN(Date.parse(value))) {
                 return error;
             }
             return undefined;

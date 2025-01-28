@@ -25,7 +25,7 @@ function messageRenderer<T extends string | number | symbol>(
   const prefix = getMessagePrefix(type, language, messages);
   const messageTemplate = messages[language]?.[messageKey];
 
-  if (!messageTemplate) {
+  if (! messageTemplate) {
     throw new Error(
       `Message key "${String(messageKey)}" not found for type "${type}" in language "${language}".`
     );

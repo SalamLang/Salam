@@ -24,14 +24,14 @@ export class Validator {
         filterFn?: (item: T) => boolean
     ): T | undefined {
         return collection.find((item: T) => {
-            if (!item.getText(this.ast.language.id)?.includes(name)) return false;
+            if (! item.getText(this.ast.language.id)?.includes(name)) return false;
             return filterFn ? filterFn(item) : true;
         });
     }
 
     getElementRuntime(parent_element: AstLayoutElement | undefined, name: string): RuntimeElement | undefined {
         return this.findInCollection(runtimeElements, name, runtimeElementItem => {
-            if (!parent_element) return true;
+            if (! parent_element) return true;
             return (
                 runtimeElementItem.belongs_to.length === 0 ||
                 runtimeElementItem.belongs_to.some(

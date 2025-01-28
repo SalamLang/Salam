@@ -11,7 +11,7 @@ import { AstFunctionDeclaration } from './../ast/statement/function_declaration'
 export function parserParseFunction(parser: Parser): AstFunctionDeclaration | undefined {
     parser.expect(TokenKeywordType.TOKEN_FN);
 
-    if (!parser.currentToken.isKeyword) {
+    if (! parser.currentToken.isKeyword) {
         parser.pushError(parserMessageRenderer(parser.lexer.language.id, ParserMessageKeys.PARSER_FUNCTION_NAME_IS_NOT_VALID_IDENTIFIER));
         return undefined;
     } else if (parser.currentToken.isDefinedIdentifier) {

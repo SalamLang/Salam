@@ -10,7 +10,8 @@ export function generateLayoutElementStyleState(generator: Generator, element: A
         return "Warning: Empty style state";
     }
 
-    result += element.generate_name + " {";
+    const element_selector: string = ".element";
+    result += `${element_selector}:${element.generate_name} {`;
     result += attributes_str;
     result += "}";
 

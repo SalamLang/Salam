@@ -14,7 +14,9 @@ export function generateLayoutBlock(generator: Generator, element: AstLayoutElem
         if (item.generate_name === undefined) {
             result += generateLayoutNode(generator, item);
         } else if (item.kind === AstLayoutElementKind.StyleState) {
-            result += generateLayoutElementStyleState(generator, item);
+            generator.pushStyle(
+                generateLayoutElementStyleState(generator, item)
+            );
         } else {
             result += generateLayoutElement(generator, item as AstLayoutElement);
         }

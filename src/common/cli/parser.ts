@@ -1,3 +1,4 @@
+import { checkError } from './check-error';
 import { lex } from './../../phase/lexer/lex/lex';
 import { Lexer } from './../../phase/lexer/lex/lexer';
 import { parse } from './../../phase/parser/parse/parse';
@@ -15,12 +16,7 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
 
     const parser: Parser = new Parser(lexer);
     parse(parser);
-    if (parser.ast.errors.length > 0) {
-        parser.ast.errors.forEach((error: string) => {
-            console.error(error);
-        });
-        return 1;
-    }
+    checkError(parser, undefined, undefined);
     parser.print();
 
     return 0;

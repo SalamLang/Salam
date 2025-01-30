@@ -93,11 +93,11 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
             if (value.startsWith("#") === true) {
                 if ((value.length !== 7 && value.length !== 4) || !/^#[0-9A-F]{6}$/i.test(value)) {
                     return error;
+                } else {
+                    return undefined
                 }
-            } else {
-                
             }
-            return undefined;
+            return error;
         }
 
         case RuntimeElementAttributeType.Colors: {

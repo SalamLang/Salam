@@ -6,7 +6,7 @@ Welcome to Salam! We're glad you're interested in contributing to our open-sourc
 
 1. **Code Contributions**: Fix bugs, add new features, or improve existing code. Please follow our coding conventions and guidelines when submitting code contributions.
 
-2. **Documentation**: Help write or improve documentation, including README files, code comments, and user guides, to ensure others can understand and use Salam effectively.
+2. **Documentation**: Help write or improve documentation, including readme files, code comments, and user guides, to ensure others can understand and use Salam effectively.
 
 3. **Testing**: Contribute to the quality and stability of Salam by writing and running tests, identifying bugs, and preventing regressions.
 

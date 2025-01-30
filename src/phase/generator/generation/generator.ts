@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import { AstProgram } from "./../../parser/parse/ast/program";
 import { LanguageID } from './../../../common/language/language';
 import { generatorMessageRenderer } from './../../../common/message/message';
@@ -80,5 +81,14 @@ export class Generator {
 
     getLanguageId(): LanguageID {
         return this.ast.language.id;
+    }
+
+    writeToFile(output: string): void {
+        try {
+            fs.writeFileSync(output, this.getGeneratedSource(), 'utf-8');
+            console.log(`File successfully written to ${output}`);
+        } catch (error: any) {
+            this.pushError(`Failed to write to file: ${error.message}`);
+        }
     }
 };

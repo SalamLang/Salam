@@ -1,15 +1,15 @@
 import { Lexer } from "./lexer";
 import { isUtf8Alpha } from './utf8';
-import { Token } from "../tokenizer/token";
-import { TokenKeywordType } from "../tokenizer/type";
-import { TokenData, TokenDataType } from "../tokenizer/data";
-import { keywordMapsValues } from '../tokenizer/keyword';
+import { Token } from "./../tokenizer/token";
+import { TokenKeywordType } from "./../tokenizer/type";
+import { TokenData, TokenDataType } from "./../tokenizer/data";
+import { keywordMapsValues } from './../tokenizer/keyword';
 
 export function lexerLexIdentifier(lexer: Lexer) {
-    let value = '';
+    let value: string = '';
 
     while (lexer.currentChar !== '\0') {
-        const char = lexer.currentChar;
+        const char: string = lexer.currentChar;
 
         if (! isUtf8Alpha(char)) {
             break;
@@ -18,7 +18,7 @@ export function lexerLexIdentifier(lexer: Lexer) {
         lexer.advance();
     }
 
-    const data = new TokenData(TokenDataType.TOKEN_DATA_TYPE_STRING, value);
+    const data: TokenData  = new TokenData(TokenDataType.TOKEN_DATA_TYPE_STRING, value);
 
     for (const keywordMap of keywordMapsValues) {
         if (keywordMap.data && keywordMap.data[lexer.language.id].includes(value)) {

@@ -1,4 +1,4 @@
-import { stringify } from '../../../serializer';
+import { stringify } from './../../../serializer';
 
 export enum TokenDataType {
     TOKEN_DATA_TYPE_INT,

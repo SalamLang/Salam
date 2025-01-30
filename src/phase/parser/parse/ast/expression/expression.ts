@@ -1,5 +1,5 @@
-import { AstNode } from '../node';
-import { stringify } from '../../../../../serializer';
+import { AstNode } from './../node';
+import { stringify } from './../../../../../serializer';
 
 export class AstExpression extends AstNode {
     expression: string;
@@ -11,6 +11,10 @@ export class AstExpression extends AstNode {
 
     getString(): string {
         return this.expression;
+    }
+
+    setString(value: string): void {
+        this.expression = value;
     }
 
     print(): void {

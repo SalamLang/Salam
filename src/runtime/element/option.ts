@@ -1,12 +1,16 @@
-import {LanguageID} from '../../common/language/language';
-import {RuntimeElementAttribute} from '../element_attribute';
-import {RuntimeElementAttributeType} from '../element_attribute_type';
 import {RuntimeElement} from './../element';
+import { RuntimeElementSelect } from './select';
+import {LanguageID} from './../../common/language/language';
+import {RuntimeElementAttribute} from './../element_attribute';
+import {RuntimeElementAttributeType} from './../element_attribute_type';
+
 export class RuntimeElementOption extends RuntimeElement {
   constructor() {
     super(true, 'option');
+    this.addBelongsTo(new RuntimeElementSelect());
     this.addText(LanguageID.LanguageEnglish, 'option');
     this.addText(LanguageID.LanguagePersian, 'مورد فهرست کشویی');
+
     this.addAttribute(
       new RuntimeElementAttribute(
         RuntimeElementAttributeType.Boolean,
@@ -34,4 +38,4 @@ export class RuntimeElementOption extends RuntimeElement {
         .addText(LanguageID.LanguagePersian, 'انتخاب شده')
     );
   }
-}
+};

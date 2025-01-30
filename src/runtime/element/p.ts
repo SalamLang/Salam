@@ -1,4 +1,4 @@
-import { LanguageID } from '../../common/language/language';
+import { LanguageID } from './../../common/language/language';
 import { RuntimeElement } from './../element';
 export class RuntimeElementP extends RuntimeElement {
     constructor() {

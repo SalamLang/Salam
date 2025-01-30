@@ -6,25 +6,39 @@ export class RuntimeElement {
     generate_name: string | undefined = undefined;
     text: Map<LanguageID, string[]>;
     attributes: RuntimeElementAttribute[];
+    belongs_to: RuntimeElement[];
     
     constructor(is_mother: boolean, generate_name: string | undefined) {
         this.is_mother = is_mother;
         this.text = new Map<LanguageID, string[]>();
         this.generate_name = generate_name;
         this.attributes = [];
+        this.belongs_to = [];
     }
 
+    private findAttribute(
+        languageId: LanguageID,
+        name: string
+    ): RuntimeElementAttribute | undefined {
+        return this.attributes.find(attribute =>
+            attribute.getText(languageId)?.includes(name)
+        );
+    }
+    
     hasAttribute(languageId: LanguageID, name: string): boolean {
-        for (const attribute of this.attributes) {
-            if (attribute.getText(languageId)?.includes(name)) {
-                return true;
-            }
-        }
-        return false;
+        return this.findAttribute(languageId, name) !== undefined;
+    }
+    
+    getAttribute(languageId: LanguageID, name: string): RuntimeElementAttribute | undefined {
+        return this.findAttribute(languageId, name);
+    }
+
+    addBelongsTo(element: RuntimeElement): void {
+        this.belongs_to.push(element);
     }
 
     addText(languageId: LanguageID, value: string): void {
-        if (!this.text.has(languageId)) {
+        if (! this.text.has(languageId)) {
             this.text.set(languageId, []);
         }
         this.text.get(languageId)!.push(value);

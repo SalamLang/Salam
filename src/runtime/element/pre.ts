@@ -1,5 +1,5 @@
-import { LanguageID } from "../../common/language/language";
-import { RuntimeElement } from "../element";
+import { LanguageID } from "./../../common/language/language";
+import { RuntimeElement } from "./../element";
 
 export class RuntimeElementPre extends RuntimeElement {
     constructor() {
@@ -7,4 +7,4 @@ export class RuntimeElementPre extends RuntimeElement {
         this.addText(LanguageID.LanguageEnglish, 'pre');
         this.addText(LanguageID.LanguagePersian, 'ظاهر ثابت');
     }
-}
+};

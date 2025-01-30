@@ -1,9 +1,9 @@
-import { languageMaps } from '../language/data'; 
-import { LanguageMap } from '../language/language';
-import { getLanguageIDByFlag } from '../language/utils';
-import { showAvailableLanguages } from '../../phase/lexer/cli/command/help';
+import { languageMaps } from './../language/data'; 
+import { LanguageMap } from './../language/language';
+import { getLanguageIDByFlag } from './../language/utils';
+import { showAvailableLanguages } from './../../phase/lexer/cli/command/help';
 
-export const lang_flag = "--lang";
+export const lang_flag: string = "--lang";
 
 export function processLanguageFlag(args: string[], selectedLanguage: LanguageMap): number {
     const langFlagIndex: number = args.findIndex((arg: string) => arg === lang_flag);

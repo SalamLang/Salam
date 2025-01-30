@@ -1,1 +1,1 @@
-export const SALAM_VERSION = "1.0.0";
+export const SALAM_VERSION: string = "1.0.0";

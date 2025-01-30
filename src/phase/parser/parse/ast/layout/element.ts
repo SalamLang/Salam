@@ -36,6 +36,13 @@ export class AstLayoutElement extends AstNode {
         this.built_in_selector = undefined;
     }
 
+    isStyleElement(): boolean {
+        if (this.generate_type === undefined) {
+            return false;
+        }
+        return this.generate_type.startsWith("RuntimeStyleElement");
+    }
+    
     isStateStyle(): boolean {
         return this.kind === AstLayoutElementKind.StyleState;
     }

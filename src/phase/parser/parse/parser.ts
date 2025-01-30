@@ -101,6 +101,14 @@ export class Parser {
         this.expect(TokenKeywordType.TOKEN_BLOCK_END);
     }
 
+    isBlockClose(): boolean {
+        return this.has(TokenKeywordType.TOKEN_BLOCK_END);
+    }
+
+    isBlockOpen(): boolean {
+        return this.has(TokenOperatorType.TOKEN_COLON);
+    }
+
     print(): void {
         console.log(this.stringify());
     }

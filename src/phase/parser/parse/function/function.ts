@@ -1,6 +1,6 @@
 import { Parser } from './../parser';
 import { AstBlock } from './../ast/block';
-import { parserParseBlock } from './block';
+import { parserParseBlock } from './../block';
 import { AstFunctionAttribute } from './../ast/function_attribute';
 import { TokenKeywordType } from './../../../lexer/tokenizer/type';
 import { parserParseFunctionAttributes } from './function_attributes';

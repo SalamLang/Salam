@@ -1,7 +1,7 @@
 import { LanguageID } from '../../../common/language/language';
 import { RuntimeElementAttributeType } from '../../element_attribute_type';
 import { RuntimeElementAttributeStyle } from '../../element_attribute_style';
-import { single_animation_composition } from '../../data/style/single-animation-composition';
+import { single_animation_composition } from '../../data/style/values/single-animation-composition';
 
 export class RuntimeStyleAnimationComposition extends RuntimeElementAttributeStyle {
     constructor() {

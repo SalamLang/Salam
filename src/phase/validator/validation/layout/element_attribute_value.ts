@@ -94,6 +94,8 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
                 if ((value.length !== 7 && value.length !== 4) || !/^#[0-9A-F]{6}$/i.test(value)) {
                     return error;
                 }
+            } else {
+                
             }
             return undefined;
         }

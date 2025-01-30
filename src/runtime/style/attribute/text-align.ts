@@ -1,9 +1,9 @@
-import { LanguageID } from './../../common/language/language';
-import { RuntimeElementAttribute } from '../element_attribute';
-import { RuntimeElementAttributeType } from './../element_attribute_type';
-import { RuntimeElementAttributeValue } from './../element_attribute_value';
+import { LanguageID } from '../../../common/language/language';
+import { RuntimeElementAttributeType } from '../../element_attribute_type';
+import { RuntimeElementAttributeValue } from '../../element_attribute_value';
+import { RuntimeElementAttributeStyle } from '../../element_attribute_style';
 
-export class RuntimeStyleTextAlign extends RuntimeElementAttribute {
+export class RuntimeStyleTextAlign extends RuntimeElementAttributeStyle {
     constructor() {
         super(RuntimeElementAttributeType.StringNoEmpty, "text-align");
         this.addText(LanguageID.LanguagePersian, "جهت متن");

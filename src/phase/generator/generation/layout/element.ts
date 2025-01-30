@@ -1,67 +1,46 @@
 import { Generator } from './../generator';
 import { generateLayoutBlock } from './block';
-import { AstLayoutElement } from './../../../parser/parse/ast/layout/element';
 import { generateLayoutAttributes } from './attributes';
+import { AstLayoutElement } from './../../../parser/parse/ast/layout/element';
 
-export function generateLayoutElement(generator: Generator, element: AstLayoutElement): void {
-    if (element.generate_name === undefined) {
-        switch (element.generate_type) {
-            case "RuntimeElementLayout": {
-                generator.writeIndentLine(`<!doctype html>`);
-                generator.writeIndentLine(`<html>`);
-                generator.indent();
-                generator.writeIndentLine(`<head>`);
-                generator.indent();
-                generator.writeIndentLine(`<title>SALAM</title>`);
-                generator.writeIndentLine(`<meta charset="utf-8">`);
-                generator.writeIndentLine(`<meta name="viewport" content="width=device-width, initial-scale=1">`);
-                generator.outdent();
-                generator.writeIndentLine(`</head>`);
-                generator.writeIndentLine(`<body>`);
-                generator.indent();
+export function generateLayoutElement(generator: Generator, element: AstLayoutElement): string {
+    let result: string = "";
+    const hasTag: boolean = element.generate_name !== undefined;
 
-                generateLayoutBlock(generator, element.block);
-
-                generator.outdent();
-                generator.writeIndentLine(`</body>`);
-                generator.outdent();
-                generator.writeIndentLine(`</html>`);
-                return;
-            }
-        }
-    }
-
-    generator.writeIndentNoLine(`<${element.generate_name}`);
-
-    let attributes_str: string = "";
-    attributes_str += generateLayoutAttributes(generator, element.attributes);
-    if (attributes_str.length > 0) {
-        generator.write(` `);
-    }
-    attributes_str += generateLayoutAttributes(generator, element.globalAttributes);
-    generator.write(attributes_str);
-
-    generator.write(`>`);
+    console.log(generator.indentLevel);
 
     const closing: string = `</${element.generate_name}>`;
+    if (hasTag) {
+        result += generator.bufferIndented(`<${element.generate_name}`);
+
+        // Handle attributes
+        const attributes_str1: string = generateLayoutAttributes(generator, element);
+        if (attributes_str1.length > 0) {
+            result += generator.buffer(` `);
+            result += generator.buffer(attributes_str1);
+        }
+
+        result += generator.buffer(`>`);
+    }
 
     let hasContentOrChild: boolean = false;
     if (element.block.length > 0 || (element.content !== undefined)) {
         hasContentOrChild = true;
     }
 
-    const hasContentWithoutChild = element.content !== undefined && element.block.length === 0;
-    const hasInlineContent = element.content !== undefined && !element.content.includes("\n");
-    const hasMultiOpeningClosing = hasContentOrChild && hasContentWithoutChild && !hasInlineContent;
-    const isOnlyInlineText = hasContentWithoutChild && !hasMultiOpeningClosing;
+    const hasContentWithoutChild: boolean = element.content !== undefined && element.block.length === 0;
+    const hasInlineContent: boolean = element.content !== undefined && !element.content.includes("\n");
+    const hasMultiOpeningClosing: boolean = hasContentOrChild && hasContentWithoutChild && !hasInlineContent;
+    const isOnlyInlineText: boolean = hasContentWithoutChild && !hasMultiOpeningClosing;
+    const emptyContent: boolean = element.content === undefined && element.block.length === 0;
 
     // Write the content of the element
     const writeContent = () => {
         if (element.content !== undefined) {
             if (isOnlyInlineText) {
-                generator.write(element.content);
+                result += generator.buffer(element.content);
             } else {
-                generator.writeIndentLine(element.content);
+                result += generator.bufferIndentedLine(element.content);
             }
         }
     };
@@ -69,18 +48,33 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     if (isOnlyInlineText) {
         writeContent();
     } else if (hasContentOrChild) {
-        generator.writeLine("");
-        generator.indent();
+        if (hasTag) {
+            result += generator.bufferLine("");
+            generator.increaseIndent();
+        }
+        
         writeContent();
-        generateLayoutBlock(generator, element.block);
-        generator.outdent();
+        result += generateLayoutBlock(generator, element, element.block);
+
+        if (hasTag) {
+            generator.decreaseIndent();
+        }
     }
     
     // Close the element
-    const needsIndentClosing = hasMultiOpeningClosing || !hasContentWithoutChild;
-    if (needsIndentClosing) {
-        generator.writeIndentLine(closing);
-    } else {
-        generator.writeLine(closing);
+    if (hasTag) {
+        const needsIndentClosing = hasMultiOpeningClosing || !hasContentWithoutChild;
+        if (!emptyContent && needsIndentClosing) {
+            result += generator.bufferIndentedLine(closing);
+        } else {
+            result += generator.bufferLine(closing);
+        }
     }
+
+    // Repeat the element
+    if (element.repeat > 1) {
+        result = result.repeat(element.repeat);
+    }
+
+    return result;
 };

@@ -1,10 +1,12 @@
 import { Parser } from '../parser';
-import { parserParseLayoutKey } from './layout_key';
+import { parserParseLayoutKey } from './key';
 import { AstLayoutElement } from '../ast/layout/element';
 import { AstLayoutAttribute } from '../ast/layout/attribute';
-import { parserParseLayoutAttribute } from './layout_attribute';
-import { Token, arrayName2String } from './../../../lexer/tokenizer/token';
-import { TokenKeywordType, TokenOperatorType, TokenOtherType } from './../../../lexer/tokenizer/type';
+import { parserParseLayoutAttribute } from './attribute';
+import { Token, arrayName2String } from '../../../lexer/tokenizer/token';
+import { parserMessageRenderer } from '../../../../common/message/message';
+import { ParserMessageKeys } from '../../../../common/message/parser/parser';
+import { TokenKeywordType, TokenOperatorType, TokenOtherType } from '../../../lexer/tokenizer/type';
 
 export function parserParseLayoutElement(parser: Parser, element_key_tokens: Token[]): AstLayoutElement | undefined {
     const element_key: string = arrayName2String(element_key_tokens);
@@ -22,13 +24,20 @@ export function parserParseLayoutElement(parser: Parser, element_key_tokens: Tok
             // (attribute_key or element_key) (: or =)
             //                                ^
             if (parser.skip(TokenOperatorType.TOKEN_ASSIGN)) {
-                // attribute_key = value
+                // attribute_key = attribute_value
                 //               ^
                 const attribute: AstLayoutAttribute | undefined = parserParseLayoutAttribute(parser, element_key, key_tokens);
                 if (attribute) {
-                    if (! element.globalAttributes.push(attribute)) {
-                        parser.pushError("Duplicate attribute '" + attribute.key + "' in layout");
-                        return undefined;
+                    if (attribute.isStyle()) {
+                        if (! element.styles.push(attribute)) {
+                            parser.pushError(parserMessageRenderer(parser.lexer.language.id, ParserMessageKeys.PARSER_DUPLICATE_STYLE_ATTRIBUTE_IN_LAYOUT, attribute.key));
+                            return undefined;
+                        }
+                    } else {
+                        if (! element.attributes.push(attribute)) {
+                            parser.pushError(parserMessageRenderer(parser.lexer.language.id, ParserMessageKeys.PARSER_DUPLICATE_ELEMENT_ATTRIBUTE_IN_LAYOUT, attribute.key));
+                            return undefined;
+                        }
                     }
                 }
             }
@@ -39,16 +48,16 @@ export function parserParseLayoutElement(parser: Parser, element_key_tokens: Tok
                 //              ^
                 const sub_element: AstLayoutElement | undefined = parserParseLayoutElement(parser, key_tokens);
                 if (! sub_element) {
-                    parser.pushError("Unexpected token as element name, current token is '" + parser.currentToken.type + "'");
+                    parser.pushError(parserMessageRenderer(parser.lexer.language.id, ParserMessageKeys.PARSER_UNEXPECTED_TOKEN_AS_ELEMENT_NAME, parser.currentToken.type));
                     return undefined;
                 }
                 element.block.push(sub_element);
             } else {
-                parser.pushError("Unexpected token in layout, current token is '" + parser.currentToken.type + "'");
+                parser.pushError(parserMessageRenderer(parser.lexer.language.id, ParserMessageKeys.PARSER_UNEXPECTED_TOKEN_IN_LAYOUT, parser.currentToken.type));
                 return undefined;
             }
         } else {
-            parser.pushError("Unexpected token in layout as attribute, current token is '" + parser.currentToken.type + "'");
+            parser.pushError(parserMessageRenderer(parser.lexer.language.id, ParserMessageKeys.PARSER_UNEXPECTED_TOKEN_IN_LAYOUT_AS_ATTRIBUTE, parser.currentToken.type));
             return undefined;
         }
     }

@@ -1,6 +1,6 @@
-import { AstNode } from '../node';
+import { AstNode } from './../node';
 import { AstLayoutAttribute } from './attribute';
-import { stringify } from '../../../../../serializer';
+import { stringify } from './../../../../../serializer';
 
 export class AstLayoutAttributes extends AstNode {
     items: AstLayoutAttribute[];
@@ -12,6 +12,15 @@ export class AstLayoutAttributes extends AstNode {
 
     get length(): number {
         return this.items.length;
+    }
+
+    getByGenerateName(generate_name: string): AstLayoutAttribute | undefined {
+        for (let attr of this.items) {
+            if (attr.generate_name === generate_name) {
+                return attr;
+            }
+        }
+        return undefined;
     }
 
     exists(attribute: AstLayoutAttribute): boolean {
@@ -56,7 +65,7 @@ export class AstLayoutAttributes extends AstNode {
 
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
-            items: this.items.map(item => item.stringify(wantsJson)),
+            items: this.items.map((item: AstLayoutAttribute) => item.stringify(wantsJson)),
         };
         return stringify(obj, wantsJson);
     }

@@ -1,17 +1,19 @@
-import { Token } from "../tokenizer/token";
 import { Lexer } from "./lexer";
+import { Token } from "./../tokenizer/token";
 import { lexerLexNumber } from './number';
 import { lexerLexIdentifier } from './identifier';
+import { TokenOtherType } from './../tokenizer/type';
 import { isUtf8Alpha, isUtf8Number } from './utf8';
-import { operatorTypeMaps } from '../tokenizer/type';
+import { operatorTypeMaps } from './../tokenizer/type';
 import { lexerLexReadComment } from './comment/single';
 import { lexerLexString, stringOpenings } from './string';
 import { lexerLexReadBlockComment } from './comment/multi';
-import { TokenOtherType } from '../tokenizer/type';
+import { LexerMessageKeys } from './../../../common/message/lexer/lexer';
+import { lexerMessageRenderer } from './../../../common/message/message';
 
 export function lex(lexer: Lexer): void {
     while (lexer.index < lexer.source.length) {
-        const char = lexer.currentChar;
+        const char: string = lexer.currentChar;
 
         switch (char) {
             // End of file
@@ -46,7 +48,7 @@ export function lex(lexer: Lexer): void {
             case '-':
             case '−':
                 if (lexer.nextChar === '>') {
-                    const nextChar = lexer.nextChar;
+                    const nextChar: string = lexer.nextChar;
                     lexer.advance();
                     lexer.advance();
 
@@ -132,7 +134,7 @@ export function lex(lexer: Lexer): void {
                 } else if (isUtf8Alpha(char)) {
                     lexerLexIdentifier(lexer);
                 } else {
-                    lexer.pushError(`Unexpected character '${char}'`);
+                    lexer.pushError(lexerMessageRenderer(lexer.language.id, LexerMessageKeys.LEXER_INVALID_UNEXPECTED_CHAR, `${char}`));
                     lexer.advance();
                 }
         }

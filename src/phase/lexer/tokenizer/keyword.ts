@@ -28,7 +28,7 @@ export const keywordMaps: Record<TokenKeywordType, KeywordMap> = {
         id: TokenKeywordType.TOKEN_PRINT,
         data: {
             [LanguageID.LanguageEnglish]: ["print"],
-            [LanguageID.LanguagePersian]: ["چاپ"],
+            [LanguageID.LanguagePersian]: ["چاپ", "نمایش"],
         },
     },
     [TokenKeywordType.TOKEN_FN]: {

@@ -21,6 +21,10 @@ export class Generator {
         this.styles = [];
     }
 
+    pushStyleTop(style: string): void {
+        this.styles.unshift(style);
+    }
+    
     pushStyle(style: string): void {
         this.styles.push(style);
     }

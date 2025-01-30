@@ -46,5 +46,8 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
     checkError(parser, validator, generator);
     generator.print();
 
+    const outputFileName = 'test.html';
+    generator.writeToFile(outputFileName);
+
     return 0;
 };

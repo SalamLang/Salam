@@ -1,5 +1,5 @@
-import { LanguageID } from './../../../common/language/language';
-import { RuntimeElementAttributeValue } from './../../element_attribute_value';
+import { LanguageID } from '../../../../common/language/language';
+import { RuntimeElementAttributeValue } from '../../../element_attribute_value';
 
 export const single_animation_fill_mode: RuntimeElementAttributeValue[] = [
     new RuntimeElementAttributeValue("none")

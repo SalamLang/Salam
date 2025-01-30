@@ -1,5 +1,5 @@
 import { AstNode } from './node';
-import { stringify } from '../../../../serializer';
+import { stringify } from './../../../../serializer';
 
 export class AstBlock extends AstNode {
 	children: AstNode[] = [];

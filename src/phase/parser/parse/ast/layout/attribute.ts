@@ -1,7 +1,8 @@
-import { AstNode } from '../node';
-import { AstExpression } from '../expression/expression';
-import { stringify } from '../../../../../serializer';
+import { AstNode } from './../node';
+import { stringify } from './../../../../../serializer';
+import { AstExpression } from './../expression/expression';
 import { AstLayoutAttributeType } from './attribute_type';
+import { RuntimeElementAttributeOutputType } from './../../../../../runtime/element_attribute_output_type';
 
 export class AstLayoutAttribute extends AstNode {
     key: string;
@@ -11,15 +12,24 @@ export class AstLayoutAttribute extends AstNode {
     generate_name: string | undefined = undefined;
     generate_value: string | undefined = undefined;
     generate_type: string | undefined = undefined;
+    output_type: RuntimeElementAttributeOutputType;
     element_enduser_name: string;
 
-    constructor(element_enduser_name: string, key: string, value: AstExpression, kind: AstLayoutAttributeType) {
+    constructor(element_enduser_name: string, key: string, value: AstExpression, kind: AstLayoutAttributeType, output_type: RuntimeElementAttributeOutputType = RuntimeElementAttributeOutputType.Normal) {
         super("LayoutAttribute");
         this.key = key;
         this.value = value;
         this.kind = kind;
         this.enduser_name = key;
         this.element_enduser_name = element_enduser_name;
+        this.output_type = output_type;
+    }
+
+    getValue(): string {
+        if (this.generate_value !== undefined) {
+            return this.generate_value;
+        }
+        return this.value.getString();
     }
 
     isStyle(): boolean {

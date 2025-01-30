@@ -1,7 +1,10 @@
 import { AstProgram } from './ast/program';
-import { stringify } from '../../../serializer';
+import { stringify } from './../../../serializer';
 import { Lexer } from './../../lexer/lex/lexer';
 import { Token } from './../../lexer/tokenizer/token';
+import { LanguageID } from './../../../common/language/language';
+import { parserMessageRenderer } from './../../../common/message/message';
+import { ParserMessageKeys } from './../../../common/message/parser/parser';
 import { TokenKeywordType, TokenOperatorType, TokenOtherType, TokenType } from './../../lexer/tokenizer/type';
 
 export class Parser {
@@ -54,7 +57,7 @@ export class Parser {
             this.index++;
             return true;
         }
-        this.pushError(`Expected token type ${tokenType}, but got ${this.currentToken.type}.`);
+        this.pushError(parserMessageRenderer(this.lexer.language.id, ParserMessageKeys.PARSER_EXPECTED_TOKEN_TYPE_BUT_GOT, tokenType, this.currentToken.type));
         return false;
     }
 
@@ -104,5 +107,9 @@ export class Parser {
 
     stringify(wantsJson: boolean = true): string | object {
         return stringify(this.ast, wantsJson);
+    }
+
+    getLanguageId(): LanguageID {
+        return this.ast.language.id;
     }
 };

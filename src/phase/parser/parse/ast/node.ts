@@ -1,4 +1,4 @@
-import { stringify } from '../../../../serializer';
+import { stringify } from './../../../../serializer';
 
 export class AstNode {
 	type: string;

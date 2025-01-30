@@ -1,4 +1,4 @@
-import { LanguageID } from '../../../common/language/language';
+import { LanguageID } from './../../../common/language/language';
 import { TokenKeywordType } from "./type";
 
 export interface KeywordMap {
@@ -103,4 +103,4 @@ export const keywordMaps: Record<TokenKeywordType, KeywordMap> = {
     },
 };
 
-export const keywordMapsValues = Object.values(keywordMaps);
+export const keywordMapsValues: KeywordMap[] = Object.values(keywordMaps);

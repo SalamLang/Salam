@@ -1,5 +1,6 @@
 import { Generator } from "./../generator";
-import { AstLayoutAttribute } from "../../../parser/parse/ast/layout/attribute";
+import { generateLayoutAttributeOutput } from "./attribute_output";
+import { AstLayoutAttribute } from "./../../../parser/parse/ast/layout/attribute";
 
 export function generateLayoutAttribute(generator: Generator, attribute: AstLayoutAttribute): string {
     let result: string = "";
@@ -8,19 +9,16 @@ export function generateLayoutAttribute(generator: Generator, attribute: AstLayo
         return "";
     }
     
-    result += attribute.generate_name + '=';
+    // Append the name
+    result += attribute.generate_name + (attribute.isStyle() ? ':' : '=');
 
+    // Generate the value
     if (attribute.generate_value === undefined) {
         attribute.generate_value = attribute.value.getString();
     }
 
-    if (attribute.generate_value === undefined) {
-        result += `""`;
-    } else if (attribute.generate_value.includes(' ')) {
-        result += `"${attribute.generate_value}"`;
-    } else {
-        result += attribute.generate_value;
-    }
+    // Append the value
+    result += generateLayoutAttributeOutput(generator, attribute);
 
     return result;
 };

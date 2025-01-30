@@ -1,5 +1,8 @@
 export enum RuntimeElementAttributeType {
-  String = 'STRING',
+  Any = 'Any',
+  AnyNoEmpty = 'AnyNoEmpty',
+  Width = 'AnyNoEmpty', // TODO
+  String = 'String',
   StringNoEmpty = 'StringNoEmpty',
   Strings = 'Strings',
 
@@ -34,5 +37,4 @@ export enum RuntimeElementAttributeType {
   DateTime = 'DateTime',
 
   NumberOr2Numbers = 'NumberOr2Numbers', // aspect-ratio
-  AnyNoEmpty = 'AnyNoEmpty',
-}
+};

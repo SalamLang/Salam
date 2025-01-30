@@ -1,67 +1,84 @@
-import { AstProgram } from "../../parser/parse/ast/program";
+import { AstProgram } from "./../../parser/parse/ast/program";
+import { LanguageID } from './../../../common/language/language';
+import { generatorMessageRenderer } from './../../../common/message/message';
+import { GeneratorMessageKeys } from './../../../common/message/generator/generator';
 
 export class Generator {
     ast: AstProgram;
     errors: string[];
-    ident: number = 0;
-    source: string = '';
-    enableLines: boolean = true;
-
+    indentLevel: number;
+    source: string;
+    enableLines: boolean;
+    styles: string[];
+    
     constructor(ast: AstProgram) {
         this.ast = ast;
         this.errors = [];
+        this.indentLevel = 0;
+        this.source = '';
+        this.enableLines = true;
+        this.styles = [];
     }
 
-    indent(): void {
-        this.ident++;
+    pushStyle(style: string): void {
+        this.styles.push(style);
     }
 
-    outdent(): void {
-        if (this.ident === 0) {
-            this.pushError('Cannot outdent below 0');
+    increaseIndent(): void {
+        this.indentLevel++;
+    }
+
+    setIndent(level: number): void {
+        this.indentLevel = level;
+    }
+
+    getIndent(): number {
+        return this.indentLevel;
+    }
+
+    decreaseIndent(): void {
+        if (this.indentLevel === 0) {
+            this.pushError(generatorMessageRenderer(this.getLanguageId(), GeneratorMessageKeys.GENERATOR_CANNOT_OUTDENT_BELOW_ZERO));
             return;
         }
-        this.ident--;
+        this.indentLevel--;
     }
 
-    write(line: string): void {
-        this.source += line;
+    //  Buffers a single line of text.
+    buffer(line: string): string {
+        return line;
+    }
+    
+    // Buffers a line of text with or without a newline based on `enableLines`.
+    bufferLine(line: string): string {
+        return this.enableLines ? this.buffer(`${line}\n`) : this.buffer(line);
     }
 
-    writeLine(line: string): void {
-        if (this.enableLines) {
-            this.write(line + '\n');
-        } else {
-            this.write(line);
-        }
+    //  Buffers an indented line without adding a newline.
+    bufferIndented(line: string): string {
+        const indentation = ' '.repeat(this.indentLevel * 4);
+        return this.enableLines ? this.buffer(`${indentation}${line}`) : this.buffer(line);
     }
 
-    writeIndentNoLine(line: string): void {
-        if (this.enableLines) {
-            this.write(' '.repeat(this.ident * 4) + line);
-        } else {
-            this.write(line);
-        }
-    }
-
-    writeIndentLine(line: string): void {
-        if (this.enableLines) {
-            this.writeIndentNoLine(line + '\n');
-        } else {
-            this.writeIndentNoLine(line);
-        }
+    // Buffers an indented line and adds a newline if `enableLines` is true.
+    bufferIndentedLine(line: string): string {
+        return this.bufferIndented(`${line}${this.enableLines ? '\n' : ''}`);
     }
 
     pushError(message: string) {
-        this.errors.push("Generator error: " + message);
+        this.errors.push(message);
     }
 
     print(): void {
         console.log('C code:');
-        console.log(this.c());
+        console.log(this.getGeneratedSource());
     }
 
-    c(): string {
+    getGeneratedSource(): string {
         return this.source;
+    }
+
+    getLanguageId(): LanguageID {
+        return this.ast.language.id;
     }
 };

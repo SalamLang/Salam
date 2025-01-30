@@ -1,4 +1,4 @@
-import { AstNode } from '../node';
+import { AstNode } from './../node';
 
 export class AstReturn extends AstNode {
     value: AstNode;

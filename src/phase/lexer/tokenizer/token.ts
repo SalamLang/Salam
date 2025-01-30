@@ -1,7 +1,7 @@
 import { TokenType, TokenKeywordType, TokenValueType, TokenOperatorType, TokenOtherType } from './type';
 import { TokenLocation } from './location';
 import { TokenData } from './data';
-import { stringify } from '../../../serializer';
+import { stringify } from './../../../serializer';
 
 export class Token {
     type: TokenType;
@@ -50,7 +50,7 @@ export class Token {
     }
 
     private getTypeString<T extends Record<string, string | number>>(enumType: T): string | undefined {
-        const values = Object.values(enumType) as Array<string | number>;
+        const values: Array<string | number> = Object.values(enumType);
         return values.includes(this.type as string) ? (this.type as string) : undefined;
     }
 
@@ -75,5 +75,5 @@ export class Token {
 };
 
 export function arrayName2String(array: Token[]): string {
-    return array.map(token => token.data?.getValueString()).filter(value => value).join(" ");
+    return array.map((token: Token) => token.data?.getValueString()).filter(value => value).join(" ");
 };

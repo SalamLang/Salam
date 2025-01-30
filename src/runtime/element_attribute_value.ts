@@ -10,7 +10,7 @@ export class RuntimeElementAttributeValue {
     }
 
     addText(languageId: LanguageID, value: string): RuntimeElementAttributeValue {
-        if (!this.text.has(languageId)) {
+        if (! this.text.has(languageId)) {
             this.text.set(languageId, []);
         }
         this.text.get(languageId)!.push(value);

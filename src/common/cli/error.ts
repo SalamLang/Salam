@@ -1,5 +1,5 @@
 import { lang_flag } from './language';
-import { showUsage } from '../../phase/lexer/cli/command/help';
+import { showUsage } from './../../phase/lexer/cli/command/help';
 
 export function handleMissingArguments(): number {
     console.error("Error: Missing arguments. Please provide at least one argument.");

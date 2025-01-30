@@ -15,4 +15,4 @@ export const languageMaps: Record<LanguageID, LanguageMap> = {
     }
 };
 
-export const languageMapsValues = Object.values(languageMaps);
+export const languageMapsValues: LanguageMap[] = Object.values(languageMaps);

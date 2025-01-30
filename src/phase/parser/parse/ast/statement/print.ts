@@ -1,11 +1,11 @@
 import { AstStatement } from '../statement/statement';
 import { AstExpression } from '../expression/expression';
 
-export class AstStatementReturn extends AstStatement {
+export class AstStatementPrint extends AstStatement {
     value: AstExpression;
 
     constructor(value: AstExpression) {
-        super("Return");
+        super("Print");
         this.value = value;
     }
 }

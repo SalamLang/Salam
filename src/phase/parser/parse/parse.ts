@@ -1,7 +1,7 @@
 import { Parser } from './parser';
 import { AstLayout } from './ast/layout/layout';
 import { parserParseLayout } from './layout/layout';
-import { parserParseFunction } from './statement/function';
+import { parserParseFunction } from './function/function';
 import { parserMessageRenderer } from './../../../common/message/message';
 import { ParserMessageKeys } from './../../../common/message/parser/parser';
 import { AstFunctionDeclaration } from './ast/statement/function_declaration';

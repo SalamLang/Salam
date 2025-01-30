@@ -9,6 +9,7 @@ import { ParserMessageKeys } from './../../../../common/message/parser/parser';
 import { AstFunctionDeclaration } from './../ast/statement/function_declaration';
 
 export function parserParseFunction(parser: Parser): AstFunctionDeclaration | undefined {
+    console.log("parserParseFunction");
     parser.expect(TokenKeywordType.TOKEN_FN);
 
     if (! parser.currentToken.isKeyword) {
@@ -24,6 +25,9 @@ export function parserParseFunction(parser: Parser): AstFunctionDeclaration | un
         parser.pushError(parserMessageRenderer(parser.lexer.language.id, ParserMessageKeys.PARSER_FUNCTION_NAME_IS_NOT_VALID));
         return undefined;
     }
+
+    // Eating function name
+    parser.next();
 
     const params: AstFunctionAttribute[] | undefined = parserParseFunctionAttributes(parser);
     if (! params) {

@@ -9,13 +9,19 @@ import { ValidatorMessageKeys } from "../../../../common/message/validator/valid
 export function validateLayoutElement(validator: Validator, parent_element: AstLayoutElement | undefined, element: AstLayoutElement, runtime_element: RuntimeElement | undefined = undefined): void {
     // Try to get runtime element if not provided
     if (runtime_element === undefined) {
+        // First check if element is a valid element
         runtime_element = Validator.getElementRuntime(validator.getLanguageId(), parent_element, element.enduser_name);
+
+        // Second check if element is a valid style element
+        if (runtime_element === undefined) {
+            runtime_element = Validator.getStyleElementRuntime(validator.getLanguageId(), parent_element, element.enduser_name);
+        }
 
         // Check if element is a valid element
         if (runtime_element === undefined) {
             validator.pushError(validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ELEMENT_NOT_VALID, element.enduser_name));
             return;
-        }
+    }
     }
 
     element.generate_name = runtime_element.generate_name;

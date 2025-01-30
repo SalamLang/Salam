@@ -3,6 +3,7 @@ import { runtimeElements } from './../../../runtime/runtime';
 import { AstProgram } from "./../../parser/parse/ast/program";
 import { LanguageID } from '../../../common/language/language';
 import { runtimeStyleStates } from './../../../runtime/runtime';
+import { runtimeStyleElements } from './../../../runtime/runtime';
 import { AstLayoutElement } from './../../parser/parse/ast/layout/element';
 import { RuntimeElementAttribute } from './../../../runtime/element_attribute';
 import { RuntimeElementStyleState } from './../../../runtime/element_style_state';
@@ -38,10 +39,17 @@ export class Validator {
         parent_element: AstLayoutElement | undefined,
         name: string
     ): RuntimeElement | undefined {
+        let parent_runtime_element: RuntimeElement | undefined = undefined;
+        if (parent_element !== undefined) {
+            parent_runtime_element = Validator.getElementRuntime(languageId, undefined, parent_element.enduser_name);
+        }
         return Validator.findInCollection(languageId, runtimeElements, name, (runtimeElementItem: RuntimeElement) => {
-            if (!parent_element) return true;
+            if (!parent_element) {
+                return true;
+            }
             return (
                 runtimeElementItem.belongs_to.length === 0 ||
+                parent_runtime_element === undefined ||
                 runtimeElementItem.belongs_to.some(
                     element => element.constructor.name === parent_element.constructor.name
                 )
@@ -49,9 +57,34 @@ export class Validator {
         });
     }
 
+    private static findStyleElementRuntime(
+        languageId: LanguageID,
+        parent_element: AstLayoutElement | undefined,
+        name: string
+    ): RuntimeElement | undefined {
+        let parent_runtime_element: RuntimeElement | undefined = undefined;
+        if (parent_element !== undefined) {
+            parent_runtime_element = Validator.getElementRuntime(languageId, undefined, parent_element.enduser_name);
+        }
+        return Validator.findInCollection(languageId, runtimeStyleElements, name, (runtimeElementItem: RuntimeElement) => {
+            if (!parent_element) {
+                return true;
+            }
+            return (
+                runtimeElementItem.belongs_to.length === 0 ||
+                parent_runtime_element === undefined ||
+                runtimeElementItem.belongs_to.some(
+                    element => element.constructor.name === parent_runtime_element.constructor.name
+                )
+            );
+        });
+    }
+
     static getElementStyleStateRuntime(languageId: LanguageID, parent_element: AstLayoutElement | undefined, name: string): RuntimeElementStyleState | undefined {
         return Validator.findInCollection<RuntimeElementStyleState>(languageId, runtimeStyleStates, name, (runtimeStyleStateItem: RuntimeElementStyleState) => {
-            if (!parent_element) return true;
+            if (!parent_element) {
+                return true;
+            }
             const value = runtimeStyleStateItem.getText(languageId);
             return value ? true : false;
         });
@@ -59,6 +92,10 @@ export class Validator {
 
     static getElementRuntime(languageId: LanguageID, parent_element: AstLayoutElement | undefined, name: string): RuntimeElement | undefined {
         return Validator.findElementRuntime(languageId, parent_element, name);
+    }
+
+    static getStyleElementRuntime(languageId: LanguageID, parent_element: AstLayoutElement | undefined, name: string): RuntimeElement | undefined {
+        return Validator.findStyleElementRuntime(languageId, parent_element, name);
     }
 
     static hasElementRuntime(languageId: LanguageID, parent_element: AstLayoutElement | undefined, name: string): boolean {

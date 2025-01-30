@@ -65,7 +65,7 @@ export class RuntimeElementVideo extends RuntimeElement {
         );
 
         this.addAttribute(
-            new RuntimeElementAttribute(RuntimeElementAttributeType.Url, "src")
+            new RuntimeElementAttribute(RuntimeElementAttributeType.Uri, "src")
                 .addText(LanguageID.LanguageEnglish, "source")
                 .addText(LanguageID.LanguagePersian, "منبع")
                 // .setIsRequired(true)

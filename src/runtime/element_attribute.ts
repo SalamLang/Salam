@@ -23,6 +23,16 @@ export class RuntimeElementAttribute {
         this.is_required = false;
     }
 
+    setOutputType(outputType: RuntimeElementAttributeOutputType): RuntimeElementAttribute {
+        this.output_type = outputType;
+        return this;
+    }
+
+    setStyle(): RuntimeElementAttribute {
+        this.kind = AstLayoutAttributeType.Style;
+        return this;
+    }
+
     setRequired(): RuntimeElementAttribute {
         this.is_required = true;
         return this;

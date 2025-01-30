@@ -1,9 +1,11 @@
+import { isUrl } from './../is-url';
 import { Validator } from "./../validator";
 import { validatorMessageRenderer } from './../../../../common/message/message';
 import { RuntimeElementAttribute } from './../../../../runtime/element_attribute';
 import { AstLayoutAttribute } from './../../../parser/parse/ast/layout/attribute';
 import { ValidatorMessageKeys } from './../../../../common/message/validator/validator';
 import { RuntimeElementAttributeType } from './../../../../runtime/element_attribute_type';
+import { RuntimeElementAttributeOutputType } from './../../../../runtime/element_attribute_output_type';
 
 export function validateLayoutElementAttributeValue(validator: Validator, attribute: AstLayoutAttribute, runtimeElementAttribute: RuntimeElementAttribute): string | undefined {
     // TOOD: .getText() is an array, so we should join it to get the string
@@ -18,10 +20,9 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
 
     switch (runtimeElementAttribute.type) {
         case RuntimeElementAttributeType.Url: {
-            try {
-                new URL(value);
+            if (isUrl(value)) {
                 return undefined;
-            } catch (e) {
+            } else {
                 return error;
             }
         }
@@ -33,6 +34,24 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
 
         case RuntimeElementAttributeType.Strings: {
             // TODO: handle array of values
+            return undefined;
+        }
+
+        case RuntimeElementAttributeType.FontSrc: {
+            const extenstions = [".woff", ".woff2", ".ttf", ".otf", ".eot", ".svg"];
+            const extenstionMappe: { [key: string]: string } = {
+                ".woff": "woff",
+                ".woff2": "woff2",
+                ".ttf": "truetype",
+                ".otf": "opentype",
+                ".eot": "embedded-opentype",
+                ".svg": "svg"
+            };
+            if (!extenstions.some(ext => value.endsWith(ext))) {
+                return error;
+            }
+            attribute.output_type = RuntimeElementAttributeOutputType.UrlWithFont;
+
             return undefined;
         }
 

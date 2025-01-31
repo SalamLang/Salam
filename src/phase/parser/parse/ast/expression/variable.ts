@@ -1,3 +1,4 @@
+import { stringify } from '../../../../../serializer';
 import { AstExpression } from './expression';
 
 export class AstExpressionVariable extends AstExpression {
@@ -8,10 +9,15 @@ export class AstExpressionVariable extends AstExpression {
         this.left = left;
     }
 
+    getString(): string {
+        return this.left.getString();
+    }
+
     stringify(wantsJson: boolean = true): string | object {
-        return {
+        const obj: object = {
             type: "ExpressionVariable",
-            left: this.left.stringify(wantsJson),
+            left: this.left.stringify(false),
         };
+        return stringify(obj, wantsJson);
     }
 }

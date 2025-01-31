@@ -4,33 +4,33 @@ import {RuntimeElementAttribute} from './../element_attribute';
 import {RuntimeElementAttributeType} from './../element_attribute_type';
 import {RuntimeElementAttributeValue} from './../element_attribute_value';
 
-export class RuntimeElementNoScript extends RuntimeElement {
+export class RuntimeElementOl extends RuntimeElement {
   constructor() {
-    super(false, 'noscript');
-    this.addText(LanguageID.LanguageEnglish, 'noscript');
-    this.addText(LanguageID.LanguagePersian, 'بدون اسکریپت');
+    super(true, 'ol');
+    this.addText(LanguageID.LanguageEnglish, 'ol');
+    this.addText(LanguageID.LanguagePersian, 'لیست او ال');
     this.addAttribute(
-      new RuntimeElementAttribute(
-        RuntimeElementAttributeType.Boolean,
-        'reversed'
-      )
-        .addText(LanguageID.LanguageEnglish, 'reversed')
-        .addText(LanguageID.LanguagePersian, 'برعکس')
+      new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'reserved')
+      .addText(LanguageID.LanguageEnglish, 'reserved')
+      .addText(LanguageID.LanguagePersian, 'برعکس')
     );
     this.addAttribute(
       new RuntimeElementAttribute(RuntimeElementAttributeType.Number, 'start')
-        .addText(LanguageID.LanguageEnglish, 'start')
-        .addText(LanguageID.LanguagePersian, 'شروع')
+      .addText(LanguageID.LanguageEnglish, 'start')
+      .addText(LanguageID.LanguagePersian, 'شروع')
     );
     this.addAttribute(
       new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'type')
-        .addText(LanguageID.LanguageEnglish, 'type')
-        .addText(LanguageID.LanguagePersian, 'نوع')
-        .addReservedValues(
-          ['i', 'I', 'a', 'A', '1'].map((value) =>
-            new RuntimeElementAttributeValue(value).addAllText(value)
-          )
-        )
+      .addText(LanguageID.LanguageEnglish, 'type')
+      .addText(LanguageID.LanguagePersian, 'نوع')
+      .addReservedValues([
+        new RuntimeElementAttributeValue('i').addAllText('i'),
+        new RuntimeElementAttributeValue('I').addAllText('I'),
+        new RuntimeElementAttributeValue('a').addAllText('a'),
+        new RuntimeElementAttributeValue('A').addAllText('A'),
+        new RuntimeElementAttributeValue('1').addAllText('1'),
+      ])
     );
+
   }
 }

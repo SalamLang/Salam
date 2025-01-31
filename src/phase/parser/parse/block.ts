@@ -11,7 +11,7 @@ export function parserParseBlock(parser: Parser): AstBlock | undefined {
     while (! parser.isBlockClose()) {
         const statement: AstStatement | undefined = parseStatement(parser);
         if (statement === undefined) {
-            parser.pushError(parserMessageRenderer(parser.lexer.language.id, ParserMessageKeys.PARSER_STATEMENT_IS_NOT_VALID_IN_BLOCK));
+            parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_STATEMENT_IS_NOT_VALID_IN_BLOCK));
             return undefined;
         }
         ast.addChild(statement);

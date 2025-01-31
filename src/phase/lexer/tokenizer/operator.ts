@@ -1,4 +1,5 @@
-import { TokenOperatorType, TokenType } from "./type";
+import { TokenType } from './type';
+import { TokenOperatorType } from './type';
 
 export const operatorTypeMaps: Record<string, TokenType> = {
     "!=": TokenOperatorType.TOKEN_NOT_EQUAL,
@@ -55,12 +56,12 @@ export const operatorTypeMaps: Record<string, TokenType> = {
     "~": TokenOperatorType.TOKEN_XOR_BIT,
 };
 
-export function isOperator(type: TokenType) {
+export function isOperator(type: TokenType): boolean {
     return Object.values(TokenOperatorType).includes(type as TokenOperatorType);
-};
+}
 
-export const inValidOperators: TokenType[] = [
-    TokenOperatorType.TOKEN_RIGHT_BRACKET,
+export const invalidOperators: TokenType[] = [
     TokenOperatorType.TOKEN_RIGHT_PAREN,
     TokenOperatorType.TOKEN_RIGHT_BRACE,
+    TokenOperatorType.TOKEN_RIGHT_BRACKET,
 ];

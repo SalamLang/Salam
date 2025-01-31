@@ -1,36 +1,30 @@
 import { Parser } from './../parser';
-import { parseExpressionLiteral } from './literal';
-import { parseExpressionUnaryOperator } from './unary';
-import { parseExpressionParentheses } from './parentheses';
+import { parseExpressionUnary } from './unary';
+import { parseExpressionParentheses } from './parenthese';
 import { AstExpression } from './../ast/expression/expression';
+import { isOperator } from '../../../lexer/tokenizer/operator';
+import { TokenOperatorType } from '../../../lexer/tokenizer/type';
+import { invalidOperators } from './../../../lexer/tokenizer/operator';
 
 export function parseExpressionPrimary(parser: Parser): AstExpression | undefined {
     const currentToken = parser.currentToken;
-    console.log("parseExpressionPrimary", currentToken?.type);
-    if (!currentToken) {
+    const isOp: boolean = currentToken && isOperator(currentToken.type);
+    const isInvalidOp: boolean = isOp && invalidOperators.includes(currentToken.type);
+    if (!currentToken || isInvalidOp) {
         return undefined;
     }
-
-    // Handle literals (numbers, strings, booleans)
-    const literal = parseExpressionLiteral(parser);
-    if (literal) {
-        console.log("parseExpressionPrimary", literal);
-        return literal;
-    }
-
     // Handle parentheses `(expr)`
-    const parenthesized = parseExpressionParentheses(parser);
-    if (parenthesized) {
-        console.log("parseExpressionPrimary", parenthesized);
-        return parenthesized;
+    else if (parser.skip(TokenOperatorType.TOKEN_LEFT_PAREN)) {
+        return parseExpressionParentheses(parser);
     }
-
+    // Handle literals (numbers, strings, booleans)
+    else if (currentToken.data !== undefined && !isOp) {
+        parser.next();
+        return new AstExpression(currentToken.data.getValueString());
+    }
     // Handle unary operators (-a, !b)
-    const unary = parseExpressionUnaryOperator(parser);
-    if (unary) {
-        console.log("parseExpressionPrimary", unary);
-        return unary;
+    else if (isOp && !isInvalidOp) {
+        return parseExpressionUnary(parser);
     }
-
     return undefined;
 };

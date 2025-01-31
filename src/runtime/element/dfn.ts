@@ -8,6 +8,7 @@ export class RuntimeElementDFN extends RuntimeElement {
         super(true, 'dfn');
         this.addText(LanguageID.LanguageEnglish, 'dfn');
         this.addText(LanguageID.LanguagePersian, 'عنصر');
+        
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, 'title')
             .addText(LanguageID.LanguageEnglish, 'title')

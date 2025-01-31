@@ -9,6 +9,7 @@ export class RuntimeElementOl extends RuntimeElement {
     super(false, 'ol');
     this.addText(LanguageID.LanguageEnglish, 'ol');
     this.addText(LanguageID.LanguagePersian, 'فهرست ol');
+
     this.addAttribute(
       new RuntimeElementAttribute(
         RuntimeElementAttributeType.Boolean,

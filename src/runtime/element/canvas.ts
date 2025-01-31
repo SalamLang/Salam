@@ -8,6 +8,7 @@ export class RuntimeElementCanvad extends RuntimeElement{
         super(true, 'canvas');
         this.addText(LanguageID.LanguageEnglish, 'canvas');
         this.addText(LanguageID.LanguagePersian, 'بوم');
+        
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Size, 'height')
             .addText(LanguageID.LanguageEnglish, 'height')

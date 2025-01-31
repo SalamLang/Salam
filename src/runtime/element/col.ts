@@ -8,6 +8,7 @@ export class RuntimeElementCol extends RuntimeElement {
     super(true, "col");
     this.addText(LanguageID.LanguageEnglish, "col");
     this.addText(LanguageID.LanguagePersian, "توام");
+    
     this.addAttribute(
         new RuntimeElementAttribute(RuntimeElementAttributeType.PositiveInt, 'span')
         .addText(LanguageID.LanguageEnglish, 'span')

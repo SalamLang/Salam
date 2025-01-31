@@ -8,6 +8,7 @@ export class RuntimeElementLi extends RuntimeElement {
         super(true, "li");
         this.addText(LanguageID.LanguageEnglish, "list item");
         this.addText(LanguageID.LanguagePersian, "فهرست مورد");
+        
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Number, "value")
             .addText(LanguageID.LanguagePersian, "مقدار")

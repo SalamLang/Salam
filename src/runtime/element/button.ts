@@ -9,6 +9,7 @@ export class RuntimeElementButton extends RuntimeElement {
         super(true, 'button');
         this.addText(LanguageID.LanguageEnglish, 'button');
         this.addText(LanguageID.LanguagePersian, 'دکمه');
+        
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'autofocus')
             .addText(LanguageID.LanguageEnglish, 'focus')

@@ -14,6 +14,7 @@ export class AstLayoutAttribute extends AstNode {
     generate_type: string | undefined = undefined;
     output_type: RuntimeElementAttributeOutputType;
     element_enduser_name: string;
+    is_hide: boolean;
 
     constructor(element_enduser_name: string, key: string, value: AstExpression, kind: AstLayoutAttributeType, output_type: RuntimeElementAttributeOutputType = RuntimeElementAttributeOutputType.Normal) {
         super("LayoutAttribute");
@@ -23,6 +24,7 @@ export class AstLayoutAttribute extends AstNode {
         this.enduser_name = key;
         this.element_enduser_name = element_enduser_name;
         this.output_type = output_type;
+        this.is_hide = false;
     }
 
     getValue(): string {

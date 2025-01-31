@@ -22,6 +22,7 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
     attribute.kind = runtimeElementAttribute.kind;
     attribute.generate_name = runtimeElementAttribute.generate_name;
     attribute.generate_type = runtimeElementAttribute.constructor.name;
+    attribute.is_hide = runtimeElementAttribute.is_hide;
 
     // Handling content attribute (To save on element object)
     if (attribute.generate_type === "RuntimeGlobalAttributeContent") {

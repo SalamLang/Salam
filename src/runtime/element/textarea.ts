@@ -13,12 +13,12 @@ export class RuntimeElementTextarea extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'autofocus')
                 .addText(LanguageID.LanguageEnglish, 'autofocus')
-                .addText(LanguageID.LanguagePersian, 'فوکوس خودکار')
+                .addText(LanguageID.LanguagePersian, 'کانون خودکار')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Number, 'cols')
                 .addText(LanguageID.LanguageEnglish, 'cols')
-                .addText(LanguageID.LanguagePersian, 'کول')
+                .addText(LanguageID.LanguagePersian, 'توامان')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, 'dirname')
@@ -38,7 +38,7 @@ export class RuntimeElementTextarea extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.PositiveInt, 'max_length')
                 .addText(LanguageID.LanguageEnglish, 'max length')
-                .addText(LanguageID.LanguagePersian, 'حداکثر طول')
+                .addText(LanguageID.LanguagePersian, 'بیشترین طول')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, 'name')
@@ -48,7 +48,7 @@ export class RuntimeElementTextarea extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'placeholder')
                 .addText(LanguageID.LanguageEnglish, 'placeholder')
-                .addText(LanguageID.LanguagePersian, 'راهنما')
+                .addText(LanguageID.LanguagePersian, 'اشاره')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'readonly')
@@ -68,7 +68,7 @@ export class RuntimeElementTextarea extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'wrap')
                 .addText(LanguageID.LanguageEnglish, 'wrap')
-                .addText(LanguageID.LanguagePersian, 'رپ')
+                .addText(LanguageID.LanguagePersian, 'روش')
                 .addReservedValues([
                     new RuntimeElementAttributeValue('soft')
                         .addText(LanguageID.LanguageEnglish, 'soft')

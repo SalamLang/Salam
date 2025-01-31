@@ -5,6 +5,6 @@ export class RuntimeElementSearch extends RuntimeElement {
     constructor() {
         super(true, 'search');
         this.addText(LanguageID.LanguageEnglish, 'search');
-        this.addText(LanguageID.LanguagePersian, 'جستجو');
+        this.addText(LanguageID.LanguagePersian, 'کاوش');
     }
 }

@@ -6,7 +6,7 @@ export class RuntimeElementFieldset extends RuntimeElement {
     constructor() {
         super(true, 'fieldset');
         this.addText(LanguageID.LanguageEnglish, 'fieldset');
-        this.addText(LanguageID.LanguagePersian, 'فیلدست');
+        this.addText(LanguageID.LanguagePersian, 'گروه زمینه');
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'disabled')
             .addText(LanguageID.LanguageEnglish, 'disabled')

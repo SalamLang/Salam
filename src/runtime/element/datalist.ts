@@ -4,6 +4,6 @@ export class RuntimeElementDatalist extends RuntimeElement {
     constructor() {
         super(true, 'datalist');
         this.addText(LanguageID.LanguageEnglish, 'datalist');
-        this.addText(LanguageID.LanguagePersian, 'لیست داده');
+        this.addText(LanguageID.LanguagePersian, 'فهرست داده');
     }
 }

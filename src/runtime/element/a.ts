@@ -10,13 +10,13 @@ export class RuntimeElementA extends RuntimeElement {
   constructor() {
     super(true, 'a');
     this.addText(LanguageID.LanguageEnglish, 'link');
-    this.addText(LanguageID.LanguagePersian, 'لینک');
+    this.addText(LanguageID.LanguagePersian, 'پیوند');
     this.addAttribute(
       new RuntimeElementAttribute(
         RuntimeElementAttributeType.StringNoEmpty,
         'download'
       )
-        .addText(LanguageID.LanguagePersian, 'دانلود')
+        .addText(LanguageID.LanguagePersian, 'بارگیری')
         .addText(LanguageID.LanguageEnglish, 'download')
     );
     this.addAttribute(
@@ -47,7 +47,7 @@ export class RuntimeElementA extends RuntimeElement {
     this.addAttribute(
         new RuntimeElementAttribute(RuntimeElementAttributeType.Urls, 'ping')
         .addText(LanguageID.LanguageEnglish, 'ping')
-        .addText(LanguageID.LanguagePersian, 'پینگ')
+        .addText(LanguageID.LanguagePersian, 'پژواک')
     );
     this.addAttribute(
       new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'referrerpolicy')
@@ -67,7 +67,7 @@ export class RuntimeElementA extends RuntimeElement {
     this.addAttribute(
       new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'type')
       .addText(LanguageID.LanguageEnglish, 'type')
-      .addText(LanguageID.LanguagePersian, 'نوع')
+      .addText(LanguageID.LanguagePersian, 'گونه')
       .addReservedValues(
         mediatypes.map(mediatype =>
           new RuntimeElementAttributeValue(mediatype)

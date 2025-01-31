@@ -11,7 +11,7 @@ export class RuntimeElementProgress extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.PositiveInt, 'max')
             .addText(LanguageID.LanguageEnglish, 'max')
-            .addText(LanguageID.LanguagePersian, 'حداکثر')
+            .addText(LanguageID.LanguagePersian, 'بیشترین')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.PositiveInt, 'value')

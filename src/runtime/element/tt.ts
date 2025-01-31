@@ -4,6 +4,6 @@ export class RuntimeElementTt extends RuntimeElement{
     constructor(){
         super(true, 'tt');
         this.addText(LanguageID.LanguageEnglish, 'tt');
-        this.addText(LanguageID.LanguagePersian, 'زیر خط');
+        this.addText(LanguageID.LanguagePersian, 'کلید');
     }
 }

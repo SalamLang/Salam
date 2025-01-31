@@ -4,6 +4,6 @@ export class RuntimeElementHgroup extends RuntimeElement {
     constructor() {
         super(true, 'hgroup');
         this.addText(LanguageID.LanguageEnglish, 'hgroup');
-        this.addText(LanguageID.LanguagePersian, 'هدر گروه');
+        this.addText(LanguageID.LanguagePersian, 'سرگروه');
     }
 }

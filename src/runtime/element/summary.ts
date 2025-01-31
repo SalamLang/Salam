@@ -5,6 +5,6 @@ export class RuntimeElementSummary extends RuntimeElement {
     constructor() {
         super(true, 'summary');
         this.addText(LanguageID.LanguageEnglish, 'summary');
-        this.addText(LanguageID.LanguagePersian, 'خلاصه');
+        this.addText(LanguageID.LanguagePersian, 'چکیده');
     }
 }

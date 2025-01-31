@@ -3,7 +3,6 @@ import { RuntimeElement } from "./../element";
 import { RuntimeElementAttribute } from "./../element_attribute";
 import { RuntimeElementAttributeType } from "./../element_attribute_type";
 import { RuntimeElementAttributeValue } from "./../element_attribute_value";
-import { languages } from "./../data/element/language";
 
 export class RuntimeElementVideo extends RuntimeElement {
     constructor() {
@@ -16,37 +15,31 @@ export class RuntimeElementVideo extends RuntimeElement {
                 .addText(LanguageID.LanguageEnglish, "autoplay")
                 .addText(LanguageID.LanguagePersian, "خودپخش")
         );
-
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, "controls")
                 .addText(LanguageID.LanguageEnglish, "controls")
                 .addText(LanguageID.LanguagePersian, "پایشگر")
         );
-
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Size, "height")
                 .addText(LanguageID.LanguageEnglish, "height")
                 .addText(LanguageID.LanguagePersian, "ارتفاع")
         );
-
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, "loop")
                 .addText(LanguageID.LanguageEnglish, "loop")
                 .addText(LanguageID.LanguagePersian, "تکرار")
         );
-
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, "muted")
                 .addText(LanguageID.LanguageEnglish, "muted")
                 .addText(LanguageID.LanguagePersian, "خموش")
         );
-
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Url, "poster")
                 .addText(LanguageID.LanguageEnglish, "poster")
                 .addText(LanguageID.LanguagePersian, "تصویر شاخص")
         );
-
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Url, "preload")
                 .addText(LanguageID.LanguageEnglish, "preload")
@@ -63,14 +56,12 @@ export class RuntimeElementVideo extends RuntimeElement {
                         .addText(LanguageID.LanguagePersian, "هیچکدام"),
                 ])
         );
-
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Uri, "src")
                 .addText(LanguageID.LanguageEnglish, "source")
                 .addText(LanguageID.LanguagePersian, "منبع")
                 // .setIsRequired(true)
         );
-
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Size, "width")
                 .addText(LanguageID.LanguageEnglish, "width")

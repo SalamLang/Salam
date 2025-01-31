@@ -14,7 +14,6 @@ export class RuntimeElementBase extends RuntimeElement {
         .addText(LanguageID.LanguageEnglish, 'href')
         .addText(LanguageID.LanguagePersian, 'پیوست')
     );
-
     this.addAttribute(
       new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'target')
         .addText(LanguageID.LanguageEnglish, 'target')

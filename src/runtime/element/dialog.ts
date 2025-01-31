@@ -8,6 +8,7 @@ export class RuntimeElementDialog extends RuntimeElement {
         super(true, 'dialog');
         this.addText(LanguageID.LanguageEnglish, 'dialog');
         this.addText(LanguageID.LanguagePersian, 'گفتگو');
+        
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'open')
             .addText(LanguageID.LanguageEnglish, 'open')

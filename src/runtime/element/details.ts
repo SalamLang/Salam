@@ -8,6 +8,7 @@ export class RuntimeElementDetails extends RuntimeElement {
         super(true, 'details');
         this.addText(LanguageID.LanguageEnglish, 'details');
         this.addText(LanguageID.LanguagePersian, 'جزئیات');
+        
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'open')
             .addText(LanguageID.LanguageEnglish, 'open')

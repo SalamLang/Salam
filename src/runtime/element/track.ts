@@ -15,13 +15,11 @@ export class RuntimeElementTrack extends RuntimeElement {
                 .addText(LanguageID.LanguageEnglish, 'default')
                 .addText(LanguageID.LanguagePersian, 'پیشفرض')
         );
-
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, 'label')
                 .addText(LanguageID.LanguageEnglish, 'label')
                 .addText(LanguageID.LanguagePersian, 'برچسب')
         );
-
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Url, 'src')
                 .addText(LanguageID.LanguageEnglish, 'source')

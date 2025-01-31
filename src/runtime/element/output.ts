@@ -8,6 +8,7 @@ export class RuntimeElementOutput extends RuntimeElement {
     super(true, 'output');
     this.addText(LanguageID.LanguageEnglish, 'output');
     this.addText(LanguageID.LanguagePersian, 'خروجی');
+    
     this.addAttribute(
         new RuntimeElementAttribute(RuntimeElementAttributeType.IDs, 'for')
         .addText(LanguageID.LanguageEnglish, 'for')

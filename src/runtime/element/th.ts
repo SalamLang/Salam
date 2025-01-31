@@ -15,25 +15,21 @@ export class RuntimeElementTh extends RuntimeElement {
                 .addText(LanguageID.LanguageEnglish, 'abbr')
                 .addText(LanguageID.LanguagePersian, 'اندک')
         );
-
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.PositiveInt, 'colspan')
                 .addText(LanguageID.LanguageEnglish, 'colspan')
                 .addText(LanguageID.LanguagePersian, 'ادغام ستون')
         );
-
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.ID, 'headers')
                 .addText(LanguageID.LanguageEnglish, 'headers')
                 .addText(LanguageID.LanguagePersian, 'سرگاه ها')
         );
-
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.PositiveInt, 'rowspan')
                 .addText(LanguageID.LanguageEnglish, 'rowspan')
                 .addText(LanguageID.LanguagePersian, 'ادغام ردیف')
         );
-
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'scope')
                 .addText(LanguageID.LanguageEnglish, 'scope')

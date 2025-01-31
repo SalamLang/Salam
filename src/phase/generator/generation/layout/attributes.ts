@@ -21,20 +21,21 @@ export function generateLayoutAttributes(generator: Generator, element: AstLayou
     }
 
     if (styleResult.length > 0 && element.built_in_selector !== undefined) {
-        const element_selector: string = "." + element.built_in_selector;
+        const element_selector: string = element.built_in_selector;
         generator.pushStyle(`${element_selector} {${styleResult}}`);
 
         // Check if "class" attribute exists
+        const built_in_selector: string = element.built_in_selector.replace(".", "");
         const attribute_class: AstLayoutAttribute | undefined = element.attributes.getByGenerateName("class");
         if (attribute_class !== undefined) {
-            const new_class: string = attribute_class.value.getString() + " " + element.built_in_selector;
+            const new_class: string = attribute_class.value.getString() + " " + built_in_selector;
             attribute_class.value = new AstExpressionLiteral(new_class.trim(), TokenValueType.TOKEN_STRING);
         } else {
             // Append and add a new attribute
             const class_runtime: RuntimeGlobalAttributeClass = new RuntimeGlobalAttributeClass();
             const class_attribute_key: string | undefined = class_runtime.getText(generator.getLanguageId())?.[0];
             if (class_attribute_key) {
-                const class_attribute_value: AstExpression = new AstExpressionLiteral(element.built_in_selector);
+                const class_attribute_value: AstExpression = new AstExpressionLiteral(built_in_selector);
                 const class_attribute: AstLayoutAttribute = new AstLayoutAttribute(element.enduser_name, class_attribute_key, class_attribute_value, AstLayoutAttributeType.Normal);
                 class_attribute.generate_name = class_runtime.generate_name;
                 element.attributes.push(class_attribute);

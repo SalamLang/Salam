@@ -1,5 +1,6 @@
 import { Parser } from './../parser';
 import { parseExpressionUnary } from './unary';
+import { parseExpressionLiteral } from './literal';
 import { parseExpressionParentheses } from './parenthese';
 import { AstExpression } from './../ast/expression/expression';
 import { isOperator } from '../../../lexer/tokenizer/operator';
@@ -19,8 +20,7 @@ export function parseExpressionPrimary(parser: Parser): AstExpression | undefine
     }
     // Handle literals (numbers, strings, booleans)
     else if (currentToken.data !== undefined && !isOp) {
-        parser.next();
-        return new AstExpression(currentToken.data.getValueString());
+        return parseExpressionLiteral(parser);
     }
     // Handle unary operators (-a, !b)
     else if (isOp && !isInvalidOp) {

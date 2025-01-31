@@ -6,8 +6,7 @@ export class AstExpressionBinary extends AstExpression {
     right: AstExpression;
 
     constructor(left: AstExpression, operator: string, right: AstExpression) {
-        super("ExpressionBinary");
-        // left.getString() + " " + operator + " " + right.getString()
+        super("ExpressionBinary")
         this.left = left;
         this.operator = operator;
         this.right = right;

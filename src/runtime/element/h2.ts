@@ -1,5 +1,6 @@
 import { LanguageID } from './../../common/language/language';
 import { RuntimeElement } from './../element';
+
 export class RuntimeElementH2 extends RuntimeElement {
     constructor() {
         super(true, 'h2');

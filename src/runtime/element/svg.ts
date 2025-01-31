@@ -2,6 +2,7 @@ import { LanguageID } from './../../common/language/language';
 import { RuntimeElement } from './../element';
 import { RuntimeElementAttribute } from './../element_attribute';
 import { RuntimeElementAttributeType } from './../element_attribute_type';
+
 export class RuntimeElementSvg extends RuntimeElement {
     constructor() {
         super(true, 'svg');

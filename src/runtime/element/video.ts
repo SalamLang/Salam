@@ -14,13 +14,13 @@ export class RuntimeElementVideo extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, "autoplay")
                 .addText(LanguageID.LanguageEnglish, "autoplay")
-                .addText(LanguageID.LanguagePersian, "پخش خودکار")
+                .addText(LanguageID.LanguagePersian, "خودپخش")
         );
 
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, "controls")
                 .addText(LanguageID.LanguageEnglish, "controls")
-                .addText(LanguageID.LanguagePersian, "کنترلر")
+                .addText(LanguageID.LanguagePersian, "پایشگر")
         );
 
         this.addAttribute(
@@ -38,26 +38,26 @@ export class RuntimeElementVideo extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, "muted")
                 .addText(LanguageID.LanguageEnglish, "muted")
-                .addText(LanguageID.LanguagePersian, "بی صدا")
+                .addText(LanguageID.LanguagePersian, "خموش")
         );
 
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Url, "poster")
                 .addText(LanguageID.LanguageEnglish, "poster")
-                .addText(LanguageID.LanguagePersian, "پوستر")
+                .addText(LanguageID.LanguagePersian, "تصویر شاخص")
         );
 
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Url, "preload")
                 .addText(LanguageID.LanguageEnglish, "preload")
-                .addText(LanguageID.LanguagePersian, "پیش لود")
+                .addText(LanguageID.LanguagePersian, "پیش بارگیری")
                 .addReservedValues([
                     new RuntimeElementAttributeValue("auto")
                         .addText(LanguageID.LanguageEnglish, "auto")
                         .addText(LanguageID.LanguagePersian, "خودکار"),
                     new RuntimeElementAttributeValue("metadata")
                         .addText(LanguageID.LanguageEnglish, "metadata")
-                        .addText(LanguageID.LanguagePersian, "متادیتا"),
+                        .addText(LanguageID.LanguagePersian, "فراداده"),
                     new RuntimeElementAttributeValue("none")
                         .addText(LanguageID.LanguageEnglish, "none")
                         .addText(LanguageID.LanguagePersian, "هیچکدام"),

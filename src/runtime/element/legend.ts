@@ -4,6 +4,6 @@ export class RuntimeElementLegend extends RuntimeElement {
     constructor() {
         super(true, "legend");
         this.addText(LanguageID.LanguageEnglish, "legend");
-        this.addText(LanguageID.LanguagePersian, "لگند");
+        this.addText(LanguageID.LanguagePersian, "سرلوح");
     }
 }

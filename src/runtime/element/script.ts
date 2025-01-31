@@ -5,6 +5,6 @@ export class RuntimeElementS extends RuntimeElement {
     constructor() {
         super(true, 'script');
         this.addText(LanguageID.LanguageEnglish, 'script');
-        this.addText(LanguageID.LanguagePersian, 'اسکریپت سفارشی');
+        this.addText(LanguageID.LanguagePersian, 'برنامک');
     }
 }

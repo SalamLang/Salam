@@ -17,12 +17,12 @@ export class RuntimeElementArea extends RuntimeElement {
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "download")
-            .addText(LanguageID.LanguagePersian, "دانلود")
+            .addText(LanguageID.LanguagePersian, "بارگیری")
             .addText(LanguageID.LanguageEnglish, "download")
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Coords, "coords")
-            .addText(LanguageID.LanguagePersian, "مختصات")
+            .addText(LanguageID.LanguagePersian, "جایگاه")
             .addText(LanguageID.LanguageEnglish, "coordinates")
         );
         this.addAttribute(

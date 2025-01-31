@@ -9,12 +9,12 @@ export class RuntimeElementLink extends RuntimeElement {
     constructor() {
         super(true, 'link');
         this.addText(LanguageID.LanguageEnglish, 'link');
-        this.addText(LanguageID.LanguagePersian, 'لینک');
+        this.addText(LanguageID.LanguagePersian, 'پیوند');
 
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'crossorigin')
                 .addText(LanguageID.LanguageEnglish, 'crossorigin')
-                .addText(LanguageID.LanguagePersian, 'کراس اوریجن')
+                .addText(LanguageID.LanguagePersian, 'مرزدامنه')
                 // .addReservedValues(crossorigins)
         );
 

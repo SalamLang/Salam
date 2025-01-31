@@ -9,12 +9,12 @@ export class RuntimeElementSource extends RuntimeElement {
     constructor() {
         super(true, 'source');
         this.addText(LanguageID.LanguageEnglish, 'audio source');
-        this.addText(LanguageID.LanguagePersian, 'سورس صدا');
+        this.addText(LanguageID.LanguagePersian, 'منبع آوا');
 
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.CSSMedia, 'media')
                 .addText(LanguageID.LanguageEnglish, 'media')
-                .addText(LanguageID.LanguagePersian, 'مدیا')
+                .addText(LanguageID.LanguagePersian, 'رسانه')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Sizes, 'sizes')
@@ -29,7 +29,7 @@ export class RuntimeElementSource extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Url, 'srcset')
                 .addText(LanguageID.LanguageEnglish, 'srcset')
-                .addText(LanguageID.LanguagePersian, 'تصویر')
+                .addText(LanguageID.LanguagePersian, 'تعدد')
         );
         // this.addAttribute(
         //     new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'type')

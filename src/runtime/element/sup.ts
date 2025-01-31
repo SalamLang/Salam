@@ -5,6 +5,6 @@ export class RuntimeElementSup extends RuntimeElement {
     constructor() {
         super(true, 'sup');
         this.addText(LanguageID.LanguageEnglish, 'sup');
-        this.addText(LanguageID.LanguagePersian, 'اس یو پی');
+        this.addText(LanguageID.LanguagePersian, 'ریزه رو');
     }
 }

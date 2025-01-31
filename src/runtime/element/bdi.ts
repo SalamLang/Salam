@@ -4,6 +4,6 @@ export class RuntimeElementBdi extends RuntimeElement {
     constructor() {
         super(true, 'bdi');
         this.addText(LanguageID.LanguageEnglish, 'bdi');
-        this.addText(LanguageID.LanguagePersian, 'بی دی ای');
+        this.addText(LanguageID.LanguagePersian, 'جدا');
     }
 }

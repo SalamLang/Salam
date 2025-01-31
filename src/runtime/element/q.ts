@@ -10,7 +10,7 @@ export class RuntimeElementQ extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Url,'cite')
             .addText(LanguageID.LanguageEnglish, 'cite')
-            .addText(LanguageID.LanguagePersian, 'منبع')
+            .addText(LanguageID.LanguagePersian, 'ذکر')
         );
     }
 }

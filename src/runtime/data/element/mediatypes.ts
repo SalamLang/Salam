@@ -1,1 +1,5 @@
-export const mediatypes = ['external', 'internal', 'download'];
+export const mediatypes: string[] = [
+    'external',
+    'internal',
+    'download'
+];

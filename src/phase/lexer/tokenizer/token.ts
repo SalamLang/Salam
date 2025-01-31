@@ -66,7 +66,7 @@ export class Token {
     }
 
     stringify(wantsJson: boolean = true): string | object {
-        const typeString =
+        const typeString: string | undefined =
             this.getTypeString(TokenKeywordType) ||
             this.getTypeString(TokenValueType) ||
             this.getTypeString(TokenOperatorType) ||

@@ -4,7 +4,7 @@ import { AstExpression } from './../ast/expression/expression';
 import { TokenOperatorType } from '../../../lexer/tokenizer/type';
 
 export function parseExpressionParentheses(parser: Parser): AstExpression | undefined {
-    const expr = parseExpression(parser);
+    const expr: AstExpression | undefined = parseExpression(parser);
     parser.expect(TokenOperatorType.TOKEN_RIGHT_PAREN); // Expect ')'
     return expr;
 };

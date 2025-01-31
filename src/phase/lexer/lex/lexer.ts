@@ -51,7 +51,7 @@ export class Lexer {
     }
 
     pushError(message: string) {
-        const tokenData = new TokenData(TokenDataType.TOKEN_DATA_TYPE_STRING, message);
+        const tokenData: TokenData = new TokenData(TokenDataType.TOKEN_DATA_TYPE_STRING, message);
         const token: Token = new Token(TokenOtherType.TOKEN_ERROR, this.getLocation(), undefined, tokenData);
         this.pushToken(token);
     }
@@ -72,7 +72,7 @@ export class Lexer {
     }
 
     readDoubleToken(char: string): void {
-        const nextChar = this.nextChar;
+        const nextChar: string = this.nextChar;
         if (nextChar === char) {
             this.advance();
             this.advance();
@@ -88,7 +88,7 @@ export class Lexer {
     }
 
     readThreeOrToken(char: string, char2: string): void {
-        const nextChar = this.nextChar;
+        const nextChar: string = this.nextChar;
         if (nextChar === char2) {
             this.advance();
             this.advance();
@@ -116,7 +116,7 @@ export class Lexer {
     }
 
     readThreeToken(char: string, char2: string): void {
-        const nextChar = this.nextChar;
+        const nextChar: string = this.nextChar;
         if (nextChar === char2) {
             this.advance();
             this.advance();

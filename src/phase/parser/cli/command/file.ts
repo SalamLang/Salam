@@ -5,7 +5,7 @@ import { processCommandRun } from './../../../../common/cli/parser';
 import { LanguageMap } from './../../../../common/language/language';
 
 export function processCommandFile(args: string[], selectedLanguage: LanguageMap): number {
-    const filePath = args[args.indexOf("file") + 1] || undefined;
+    const filePath: string | undefined = args[args.indexOf("file") + 1] || undefined;
 
     let source, fileName, absoluteDirPath;
 

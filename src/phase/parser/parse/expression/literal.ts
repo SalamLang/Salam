@@ -1,11 +1,12 @@
 import { Parser } from './../parser';
+import { Token } from '../../../lexer/tokenizer/token';
 import { AstExpression } from './../ast/expression/expression';
 import { AstExpressionLiteral } from '../ast/expression/literal';
 import { AstExpressionVariable } from '../ast/expression/variable';
 import { TokenKeywordType, TokenValueType } from '../../../lexer/tokenizer/type';
 
 export function parseExpressionLiteral(parser: Parser): AstExpression | undefined {
-    const currentToken = parser.currentToken;
+    const currentToken: Token = parser.currentToken;
     if (currentToken?.data !== undefined) {
         parser.next();
         switch (currentToken.type) {

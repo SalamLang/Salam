@@ -38,7 +38,7 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
         }
 
         case RuntimeElementAttributeType.FontSrc: {
-            const extenstions = [".woff", ".woff2", ".ttf", ".otf", ".eot", ".svg"];
+            const extenstions: string[] = [".woff", ".woff2", ".ttf", ".otf", ".eot", ".svg"];
             if (!extenstions.some(ext => value.endsWith(ext))) {
                 return error;
             }
@@ -91,7 +91,7 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
         }
 
         case RuntimeElementAttributeType.Coords: {
-            const coords = value.split(",");
+            const coords: string[] = value.split(",");
             if (coords.length !== 2) {
                 return error;
             } else if (isNaN(Number(coords[0])) || isNaN(Number(coords[1]))) {
@@ -132,7 +132,7 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
 
         case RuntimeElementAttributeType.Date: {
             // Example: 2021-01-01
-            const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+            const datePattern: RegExp = /^\d{4}-\d{2}-\d{2}$/;
             if (! datePattern.test(value) || isNaN(Date.parse(value))) {
                 return error;
             }
@@ -141,7 +141,7 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
     
         case RuntimeElementAttributeType.Time: {
             // Example: 12:00
-            const timePattern = /^([01]?[0-9]|2[0-3]):([0-5][0-9])$/;
+            const timePattern: RegExp = /^([01]?[0-9]|2[0-3]):([0-5][0-9])$/;
             if (! timePattern.test(value) || isNaN(Date.parse(`1970-01-01T${value}:00Z`))) {
                 return error;
             }
@@ -154,7 +154,7 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
     
         case RuntimeElementAttributeType.DateTime: {
             // Example: 2021-01-01T12:00:00
-            const dateTimePattern = /^\d{4}-\d{2}-\d{2}T([01]?[0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])$/;
+            const dateTimePattern: RegExp = /^\d{4}-\d{2}-\d{2}T([01]?[0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])$/;
             if (! dateTimePattern.test(value) || isNaN(Date.parse(value))) {
                 return error;
             }
@@ -162,7 +162,7 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
         }
       
         case RuntimeElementAttributeType.NumberOr2Numbers: {
-            const parts = value.split(" ");
+            const parts: string[] = value.split(" ");
             if (parts.length > 2) {
                 return error;
             }

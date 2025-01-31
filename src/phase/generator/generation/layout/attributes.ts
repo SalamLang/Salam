@@ -14,7 +14,7 @@ export function generateLayoutAttributes(generator: Generator, element: AstLayou
 
     // Check style attributes
     for (const attribute of element.styles.items) {
-        const generatedAttribute = generateLayoutAttribute(generator, attribute);
+        const generatedAttribute: string = generateLayoutAttribute(generator, attribute);
         if (generatedAttribute.length > 0) {
             styleResult += styleResult.length > 0 ? `;${generatedAttribute}` : generatedAttribute;
         }
@@ -31,7 +31,7 @@ export function generateLayoutAttributes(generator: Generator, element: AstLayou
             attribute_class.value = new AstExpressionLiteral(new_class.trim(), TokenValueType.TOKEN_STRING);
         } else {
             // Append and add a new attribute
-            const class_runtime = new RuntimeGlobalAttributeClass();
+            const class_runtime: RuntimeGlobalAttributeClass = new RuntimeGlobalAttributeClass();
             const class_attribute_key: string | undefined = class_runtime.getText(generator.getLanguageId())?.[0];
             if (class_attribute_key) {
                 const class_attribute_value: AstExpression = new AstExpressionLiteral(element.built_in_selector);
@@ -44,7 +44,7 @@ export function generateLayoutAttributes(generator: Generator, element: AstLayou
 
     // Check layout attributes
     for (const attribute of element.attributes.items) {
-        const generatedAttribute = generateLayoutAttribute(generator, attribute);
+        const generatedAttribute: string = generateLayoutAttribute(generator, attribute);
         if (generatedAttribute.length > 0) {
             htmlResult += htmlResult.length > 0 ? ` ${generatedAttribute}` : generatedAttribute;
         }

@@ -5,7 +5,7 @@ import { languageMapsValues } from './../../common/language/data';
 function main(args: string[]): number {
     let selectedLanguage = languageMapsValues[0];
 
-    const result = processLanguageFlag(args, selectedLanguage);
+    const result: number = processLanguageFlag(args, selectedLanguage);
     if (result !== 0) {
         return result;
     }
@@ -13,5 +13,5 @@ function main(args: string[]): number {
     return processCommand(args, selectedLanguage);
 };
 
-const args = process?.argv?.slice(2) || [];
+const args: string[] = process?.argv?.slice(2) || [];
 process.exit(main(args));

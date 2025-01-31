@@ -10,8 +10,8 @@ import { ValidatorMessageKeys } from './../../../../common/message/validator/val
 import { validateLayoutElementAttributeReservedValue } from './element_attribute_reserved_value';
 
 export function validateLayoutElementStyleStateAttribute(validator: Validator, runtime_element_style_state: RuntimeElementStyleState, attribute: AstLayoutAttribute, element: AstLayoutElement, main_element: AstLayoutElement | undefined): void {
-    const element_name = element.enduser_name;
-    const attribute_name = attribute.enduser_name;
+    const element_name: string = element.enduser_name;
+    const attribute_name: string = attribute.enduser_name;
 
     const runtimeElementAttribute: RuntimeElementAttribute | undefined = Validator.getElementAttributeStyle(validator.getLanguageId(), attribute_name);
     if (runtimeElementAttribute === undefined) {

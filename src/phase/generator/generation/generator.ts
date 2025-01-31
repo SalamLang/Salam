@@ -61,7 +61,7 @@ export class Generator {
 
     //  Buffers an indented line without adding a newline.
     bufferIndented(line: string): string {
-        const indentation = ' '.repeat(this.indentLevel * 4);
+        const indentation: string = ' '.repeat(this.indentLevel * 4);
         return this.enableLines ? this.buffer(`${indentation}${line}`) : this.buffer(line);
     }
 

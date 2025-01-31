@@ -1,31 +1,33 @@
 import { Parser } from './../parser';
-import { AstExpression } from './../ast/expression/expression';
-import { isOperator } from '../../../lexer/tokenizer/operator';
-import { inValidOperators } from '../../../lexer/tokenizer/operator';
 import { parseExpressionBinary } from './binary';
 import { parseExpressionPrimary } from './primary';
-
+import { getExpressionPrecedence } from './precedence';
+import { Token } from '../../../lexer/tokenizer/token';
+import { isOperator } from '../../../lexer/tokenizer/operator';
+import { AstExpression } from './../ast/expression/expression';
+import { invalidOperators } from './../../../lexer/tokenizer/operator';
 
 export function parseExpression(parser: Parser, precedence: number = 0): AstExpression | undefined {
-    console.log("parseExpression", precedence);
     let left: AstExpression | undefined = parseExpressionPrimary(parser);
     if (!left) {
-        return undefined; // No primary expression, return undefined
+        return undefined;
     }
 
-    // Main loop for handling binary operators
     while (!parser.isEnd && !parser.isBlockClose()) {
-        const operator = parser.currentToken;
-        console.log("Current operator", operator, left);
-        const isOp = isOperator(operator.type);
-        if (!operator || !isOp || inValidOperators.includes(operator.type)) {
-            break; // No valid operator, stop processing
+        const operator: Token = parser.currentToken;
+        const isOp: boolean = operator && isOperator(operator.type);
+        const isInvalidOp: boolean = isOp && invalidOperators.includes(operator.type);
+        if (!operator || !isOp || isInvalidOp) {
+            break;
+        }
+        const opPrecedence: number = getExpressionPrecedence(operator);
+        if (opPrecedence < precedence) {
+            break;
         }
 
-        left = parseExpressionBinary(parser, left, precedence);
-        if (!left) {
-            break; // Exit if no valid left expression is found
-        }
+        parser.next(); // Consume operator
+
+        left = parseExpressionBinary(parser, left, opPrecedence, operator);
     }
 
     return left;

@@ -39,14 +39,6 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
 
         case RuntimeElementAttributeType.FontSrc: {
             const extenstions = [".woff", ".woff2", ".ttf", ".otf", ".eot", ".svg"];
-            const extenstionMappe: { [key: string]: string } = {
-                ".woff": "woff",
-                ".woff2": "woff2",
-                ".ttf": "truetype",
-                ".otf": "opentype",
-                ".eot": "embedded-opentype",
-                ".svg": "svg"
-            };
             if (!extenstions.some(ext => value.endsWith(ext))) {
                 return error;
             }

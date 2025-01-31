@@ -10,6 +10,7 @@ export class RuntimeElementA extends RuntimeElement {
         super(true, "img");
         this.addText(LanguageID.LanguageEnglish, "image");
         this.addText(LanguageID.LanguagePersian, "تصویر");
+        
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.StringNoEmpty, "alt")
             .addText(LanguageID.LanguagePersian, "متن جایگزین")

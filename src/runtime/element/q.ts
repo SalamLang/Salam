@@ -8,6 +8,7 @@ export class RuntimeElementQ extends RuntimeElement {
         super(true, 'q');
         this.addText(LanguageID.LanguageEnglish, 'q');
         this.addText(LanguageID.LanguagePersian, 'نقل');
+        
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Url,'cite')
             .addText(LanguageID.LanguageEnglish, 'cite')

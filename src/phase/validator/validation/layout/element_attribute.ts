@@ -9,8 +9,8 @@ import { ValidatorMessageKeys } from './../../../../common/message/validator/val
 import { validateLayoutElementAttributeReservedValue } from './element_attribute_reserved_value';
 
 export function validateLayoutElementAttribute(validator: Validator, runtimeElement: RuntimeElement, attribute: AstLayoutAttribute, element: AstLayoutElement): void {
-    const element_name = element.enduser_name;
-    const attribute_name = attribute.enduser_name;
+    const element_name: string = element.enduser_name;
+    const attribute_name: string = attribute.enduser_name;
 
     const runtimeElementAttribute: RuntimeElementAttribute | undefined = Validator.getElementAllAttributeRuntime(validator.getLanguageId(), runtimeElement, attribute_name);
     if (runtimeElementAttribute === undefined) {

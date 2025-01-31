@@ -33,7 +33,7 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     const emptyContent: boolean = element.content === undefined && element.block.length === 0;
 
     // Write the content of the element
-    const writeContent = () => {
+    const writeContent: () => void = () => {
         if (element.content !== undefined) {
             if (isOnlyInlineText) {
                 result += generator.buffer(element.content);
@@ -61,7 +61,7 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     
     // Close the element
     if (hasTag) {
-        const needsIndentClosing = hasMultiOpeningClosing || !hasContentWithoutChild;
+        const needsIndentClosing: boolean = hasMultiOpeningClosing || !hasContentWithoutChild;
         if (!emptyContent && needsIndentClosing) {
             result += generator.bufferIndentedLine(closing);
         } else {

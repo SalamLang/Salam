@@ -7,6 +7,7 @@ import { AstLayoutAttributeType } from '../ast/layout/attribute_type';
 import { Token, arrayName2String } from '../../../lexer/tokenizer/token';
 import { parserMessageRenderer } from '../../../../common/message/message';
 import { ParserMessageKeys } from '../../../../common/message/parser/parser';
+import { RuntimeElementAttribute } from '../../../../runtime/element_attribute';
 
 export function parserParseLayoutAttribute(parser: Parser, element_enduser_name: string, attribute_key_tokens: Token[]): AstLayoutAttribute | undefined {
     // attribute_key = attribute_value
@@ -22,7 +23,7 @@ export function parserParseLayoutAttribute(parser: Parser, element_enduser_name:
         return undefined;
     }
 
-    const isStyle = Validator.getElementAttributeStyle(parser.getLanguageId(), attribute_key);
+    const isStyle: RuntimeElementAttribute | undefined = Validator.getElementAttributeStyle(parser.getLanguageId(), attribute_key);
     const attribute_kind: AstLayoutAttributeType = isStyle ? AstLayoutAttributeType.Style : AstLayoutAttributeType.Normal;
 
     const attribute: AstLayoutAttribute = new AstLayoutAttribute(element_enduser_name, attribute_key, attribute_value, attribute_kind);

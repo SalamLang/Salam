@@ -10,7 +10,7 @@ export function parseExpressionUnary(parser: Parser): AstExpression | undefined 
     const operator: Token = parser.currentToken;
     parser.next(); // Consume unary operator
 
-    const operand = parseExpressionPrimary(parser);
+    const operand: AstExpression | undefined = parseExpressionPrimary(parser);
     if (!operand) {
         parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_AFTER_UNARY_OPERATOR, operator.enduser));
         return undefined;

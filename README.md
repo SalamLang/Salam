@@ -148,7 +148,7 @@ docker run --rm -it -v $(pwd):/scripts salam ./salam /scripts/your_script.salam
 #### Inline Code Execution
 
 ```bash
-docker run --rm -it salam ./salam code "صفحه: محتوا = «سلام دنیا از سلام» تمام"
+docker run --rm -it salam ./salam code "چینش: محتوا = «سلام دنیا از سلام» تمام"
 ```
 
 ### Explore Salam Commands

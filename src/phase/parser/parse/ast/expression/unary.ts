@@ -6,7 +6,6 @@ export class AstExpressionUnary extends AstExpression {
 
     constructor(operator: string, operand: AstExpression) {
         super("ExpressionUnary");
-        // operator + " " + operand.getString()
         this.operator = operator;
         this.operand = operand;
     }

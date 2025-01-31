@@ -12,7 +12,7 @@ export function parserParseLayoutAttribute(parser: Parser, element_enduser_name:
     // attribute_key = attribute_value
     //                 ^
     if (attribute_key_tokens.length === 0) {
-        parser.pushError(parserMessageRenderer(parser.lexer.language.id, ParserMessageKeys.PARSER_UNEXPECTED_END_OF_TOKENS_IN_LAYOUT_ATTRIBUTE));
+        parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_UNEXPECTED_END_OF_TOKENS_IN_LAYOUT_ATTRIBUTE));
     }
 
     const attribute_key: string = arrayName2String(attribute_key_tokens);

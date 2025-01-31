@@ -74,6 +74,7 @@ export class Token {
         
         const obj: object = {
             type: typeString,
+            enduser_token: this.enduser_token,
             location: this.location.stringify(false),
             data: this.data?.stringify(false) || undefined,
         };

@@ -25,7 +25,7 @@ export class AstLayoutBlock extends AstNode {
 
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
-            items: this.items.map((item: AstLayoutElement) => item.stringify(wantsJson)),
+            items: this.items.map((item: AstLayoutElement) => item.stringify(false)),
         };
         return stringify(obj, wantsJson);
     }

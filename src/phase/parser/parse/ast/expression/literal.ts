@@ -1,5 +1,6 @@
 import { AstExpression } from './expression';
 import { TokenValueType } from '../../../../lexer/tokenizer/type';
+import { stringify } from '../../../../../serializer';
 
 export class AstExpressionLiteral extends AstExpression {
     value_type: TokenValueType;
@@ -21,10 +22,11 @@ export class AstExpressionLiteral extends AstExpression {
     }
 
     stringify(wantsJson: boolean = true): string | object {
-        return {
+        const obj: object = {
             type: "ExpressionLiteral",
             value_type: this.type,
             value: this.value,
         };
+        return stringify(obj, wantsJson);
     }
 }

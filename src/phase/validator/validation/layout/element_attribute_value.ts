@@ -15,7 +15,7 @@ export function validateLayoutElementAttributeValue(validator: Validator, attrib
     const error: string = validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_VALID, value, runtimeElementAttribute.type, attr_name, attribute.element_enduser_name);
 
     if (runtimeElementAttribute.type !== RuntimeElementAttributeType.String && value === "") {
-        return validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_EMPTY, value, runtimeElementAttribute.type, attr_name, attribute.element_enduser_name);
+        return validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_EMPTY, attr_name, attribute.element_enduser_name);
     }
 
     switch (runtimeElementAttribute.type) {

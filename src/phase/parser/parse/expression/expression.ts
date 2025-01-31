@@ -1,9 +1,10 @@
 import { Parser } from './../parser';
-import { parseExpressionBinary } from './binary';
-import { parseExpressionPrimary } from './primary';
 import { AstExpression } from './../ast/expression/expression';
 import { isOperator } from '../../../lexer/tokenizer/operator';
-import { inValidOperators } from './../../../lexer/tokenizer/operator';
+import { inValidOperators } from '../../../lexer/tokenizer/operator';
+import { parseExpressionBinary } from './binary';
+import { parseExpressionPrimary } from './primary';
+
 
 export function parseExpression(parser: Parser, precedence: number = 0): AstExpression | undefined {
     console.log("parseExpression", precedence);
@@ -12,15 +13,13 @@ export function parseExpression(parser: Parser, precedence: number = 0): AstExpr
         return undefined; // No primary expression, return undefined
     }
 
-    // The main loop for handling binary operators with precedence
+    // Main loop for handling binary operators
     while (!parser.isEnd && !parser.isBlockClose()) {
         const operator = parser.currentToken;
+        console.log("Current operator", operator, left);
         const isOp = isOperator(operator.type);
-        if (!operator || !isOp) {
+        if (!operator || !isOp || inValidOperators.includes(operator.type)) {
             break; // No valid operator, stop processing
-        }
-        if (inValidOperators.includes(operator.type)) {
-            break; // Invalid operator, stop processing
         }
 
         left = parseExpressionBinary(parser, left, precedence);

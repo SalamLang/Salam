@@ -5,7 +5,7 @@ import { TokenOperatorType } from '../../../lexer/tokenizer/type';
 
 export function parseExpressionParentheses(parser: Parser): AstExpression | undefined {
     if (parser.skip(TokenOperatorType.TOKEN_LEFT_PAREN)) {
-        const expr = parseExpression(parser); // Parse the expression inside parentheses
+        const expr: AstExpression | undefined = parseExpression(parser); // Parse the expression inside parentheses
         parser.expect(TokenOperatorType.TOKEN_RIGHT_PAREN); // Expect ')'
         return expr;
     }

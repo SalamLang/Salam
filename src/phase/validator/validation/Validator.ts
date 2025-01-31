@@ -85,7 +85,7 @@ export class Validator {
             if (!parent_element) {
                 return true;
             }
-            const value = runtimeStyleStateItem.getText(languageId);
+            const value: string[] | undefined = runtimeStyleStateItem.getText(languageId);
             return value ? true : false;
         });
     }
@@ -122,7 +122,7 @@ export class Validator {
     }
 
     static getElementAllAttributeRuntime(languageId: LanguageID, runtimeElement: RuntimeElement, attribute_name: string): RuntimeElementAttribute | undefined {
-        const checks = [
+        const checks: (() => RuntimeElementAttribute | undefined)[] = [
             () => Validator.getElementAttributeRuntime(languageId, runtimeElement, attribute_name),
             () => Validator.findInCollection(languageId, runtimeStyleAttributes, attribute_name),
             () => runtimeElement.is_mother

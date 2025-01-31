@@ -1,5 +1,6 @@
 import { Parser } from './parser';
 import { AstLayout } from './ast/layout/layout';
+import { Token } from '../../lexer/tokenizer/token';
 import { parserParseLayout } from './layout/layout';
 import { parserParseFunction } from './function/function';
 import { parserMessageRenderer } from './../../../common/message/message';
@@ -9,7 +10,7 @@ import { TokenKeywordType, TokenOtherType } from './../../lexer/tokenizer/type';
 
 export function parse(parser: Parser): void {
     while (parser.index < parser.lexer.tokens.length) {
-        const token = parser.lexer.tokens[parser.index];
+        const token: Token = parser.lexer.tokens[parser.index];
 
         if (token.type === TokenOtherType.TOKEN_EOF) {
             break;

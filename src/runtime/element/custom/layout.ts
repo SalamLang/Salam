@@ -14,21 +14,25 @@ export class RuntimeElementLayout extends RuntimeElement {
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "title")
             .addText(LanguageID.LanguagePersian, "عنوان")
             .addText(LanguageID.LanguageEnglish, "title")
+            .setHide()
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "author")
             .addText(LanguageID.LanguagePersian, "نویسنده")
             .addText(LanguageID.LanguageEnglish, "author")
+            .setHide()
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "lang")
             .addText(LanguageID.LanguagePersian, "زبان")
             .addText(LanguageID.LanguageEnglish, "language")
+            .setHide()
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.StringNoEmpty, "dir")
             .addText(LanguageID.LanguagePersian, "جهت")
             .addText(LanguageID.LanguageEnglish, "direction")
+            .setHide()
             .addReservedValues([
                 new RuntimeElementAttributeValue("ltr").addText(LanguageID.LanguagePersian, "چپ به راست").addText(LanguageID.LanguageEnglish, "left to right"),
                 new RuntimeElementAttributeValue("rtl").addText(LanguageID.LanguagePersian, "راست به چپ").addText(LanguageID.LanguageEnglish, "right to left"),

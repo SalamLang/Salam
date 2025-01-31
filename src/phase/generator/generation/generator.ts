@@ -75,7 +75,6 @@ export class Generator {
     }
 
     print(): void {
-        console.log('C code:');
         console.log(this.getGeneratedSource());
     }
 
@@ -90,7 +89,6 @@ export class Generator {
     writeToFile(output: string): void {
         try {
             fs.writeFileSync(output, this.getGeneratedSource(), 'utf-8');
-            console.log(`File successfully written to ${output}`);
         } catch (error: any) {
             this.pushError(generatorMessageRenderer(this.getLanguageId(), GeneratorMessageKeys.GENERATOR_SAVE_OUTPUT_ERROR, output, error.message));
         }

@@ -5,6 +5,8 @@ import { AstLayoutAttribute } from '../../../parser/parse/ast/layout/attribute';
 import { AstExpression } from './../../../parser/parse/ast/expression/expression';
 import { AstLayoutAttributeType } from '../../../parser/parse/ast/layout/attribute_type';
 import { RuntimeGlobalAttributeClass } from "../../../../runtime/attribute/class";
+import { AstExpressionLiteral } from "../../../parser/parse/ast/expression/literal";
+import { TokenValueType } from "../../../lexer/tokenizer/type";
 
 export function generateLayoutAttributes(generator: Generator, element: AstLayoutElement): string {
     let htmlResult: string = "";
@@ -25,8 +27,8 @@ export function generateLayoutAttributes(generator: Generator, element: AstLayou
         // Check if "class" attribute exists
         const attribute_class: AstLayoutAttribute | undefined = element.attributes.getByGenerateName("class");
         if (attribute_class !== undefined) {
-            const new_class: string = attribute_class.value.getString() + element.built_in_selector;
-            attribute_class.value.setString(new_class.trim());
+            const new_class: string = attribute_class.value.getString() + " " + element.built_in_selector;
+            attribute_class.value = new AstExpressionLiteral(new_class.trim(), TokenValueType.TOKEN_STRING);
         } else {
             // Append and add a new attribute
             const class_runtime = new RuntimeGlobalAttributeClass();

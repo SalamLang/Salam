@@ -18,7 +18,7 @@ export function parseExpressionLiteral(parser: Parser): AstExpression | undefine
             case TokenValueType.TOKEN_BOOL_TRUE:
             case TokenValueType.TOKEN_NUMBER_FLOAT:
             case TokenValueType.TOKEN_NUMBER_INT:
-                return new AstExpressionLiteral(currentToken.type, currentToken.data.getValueString());
+                return new AstExpressionLiteral(currentToken.data.getValueString(), currentToken.type);
         }
     }
     return undefined;

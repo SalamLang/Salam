@@ -1,3 +1,89 @@
+import { RuntimeElementWbr } from './element/wbr';
+import { RuntimeElementVideo } from './element/video';
+import { RuntimeElementVar } from './element/var';
+import { RuntimeElementUl } from './element/ul';
+import { RuntimeElementU } from './element/u';
+import { RuntimeElementTt } from './element/tt';
+import { RuntimeElementTrack } from './element/track';
+import { RuntimeElementTr } from './element/tr';
+import { RuntimeElementTime } from './element/time';
+import { RuntimeElementThead } from './element/thead';
+import { RuntimeElementTh } from './element/th';
+import { RuntimeElementTfoot } from './element/tfoot';
+import { RuntimeElementTextarea } from './element/textarea';
+import { RuntimeElementTemplate } from './element/template';
+import { RuntimeElementTbody } from './element/tbody';
+import { RuntimeElementTable } from './element/table';
+import { RuntimeElementSvg } from './element/svg';
+import { RuntimeElementSup } from './element/sup';
+import { RuntimeElementSummary } from './element/summary';
+import { RuntimeElementSub } from './element/sub';
+import { RuntimeElementSource } from './element/source';
+import { RuntimeElementSection } from './element/section';
+import { RuntimeElementSearch } from './element/search';
+import { RuntimeElementSamp } from './element/samp';
+import { RuntimeElementS, RuntimeElementScript } from './element/script';
+import { RuntimeElementRuby } from './element/ruby';
+import { RuntimeElementRt } from './element/rt';
+import { RuntimeElementRp } from './element/rp';
+import { RuntimeElementQ } from './element/q';
+import { RuntimeElementProgress } from './element/progress';
+import { RuntimeElementPre } from './element/pre';
+import { RuntimeElementPicture } from './element/picture';
+import { RuntimeElementParam } from './element/param';
+import { RuntimeElementP } from './element/p';
+import { RuntimeElementOutput } from './element/output';
+import { RuntimeElementOption } from './element/option';
+import { RuntimeElementOl } from './element/ol';
+import { RuntimeElementNoScript } from './element/noscript';
+import { RuntimeElementLink } from './element/link';
+import { RuntimeElementLi } from './element/li';
+import { RuntimeElementLegend } from './element/legend';
+import { RuntimeElementLabel } from './element/label';
+import { RuntimeElementKbd } from './element/kbd';
+import { RuntimeElementIns } from './element/ins';
+import { RuntimeElementInput } from './element/input';
+import { RuntimeElementIframe } from './element/iframe';
+import { RuntimeElementI } from './element/i';
+import { RuntimeElementHr } from './element/hr';
+import { RuntimeElementHgroup } from './element/hgroup';
+import { RuntimeElementHeader } from './element/header';
+import { RuntimeElementH6 } from './element/h6';
+import { RuntimeElementH3 } from './element/h3';
+import { RuntimeElementH2 } from './element/h2';
+import { RuntimeElementH1 } from './element/h1';
+import { RuntimeElementForm } from './element/form';
+import { RuntimeElementFooter } from './element/footer';
+import { RuntimeElementFigure } from './element/figure';
+import { RuntimeElementFigcaption } from './element/figcaption';
+import { RuntimeElementFieldset } from './element/fieldset';
+import { RuntimeElementEm } from './element/em';
+import { RuntimeElementDt } from './element/dt';
+import { RuntimeElementDialog } from './element/dialog';
+import { RuntimeElementDFN } from './element/dfn';
+import { RuntimeElementDetails } from './element/details';
+import { RuntimeElementDel } from './element/del';
+import { RuntimeElementDD } from './element/dd';
+import { RuntimeElementDatalist } from './element/datalist';
+import { RuntimeElementData } from './element/data';
+import { RuntimeElementColgroup } from './element/colgroup';
+import { RuntimeElementCol } from './element/col';
+import { RuntimeElementCode } from './element/code';
+import { RuntimeElementCite } from './element/cite';
+import { RuntimeElementCaption } from './element/caption';
+import { RuntimeElementButton } from './element/button';
+import { RuntimeElementBr } from './element/br';
+import { RuntimeElementBlockquote } from './element/blockquote';
+import { RuntimeElementBdo } from './element/bdo';
+import { RuntimeElementBdi } from './element/bdi';
+import { RuntimeElementBase } from './element/base';
+import { RuntimeElementB } from './element/b';
+import { RuntimeElementAudio } from './element/audio';
+import { RuntimeElementAside } from './element/aside';
+import { RuntimeElementArticle } from './element/article';
+import { RuntimeElementArea } from './element/area';
+import { RuntimeElementAddress } from './element/address';
+import { RuntimeElementAbbr } from './element/abbr';
 import { RuntimeElement } from './element';
 import { RuntimeElementAttribute } from './element_attribute';
 import { RuntimeElementStyleState } from './element_style_state';
@@ -10,10 +96,106 @@ import { RuntimeElementInclude } from './element/custom/include';
 
 export const runtimeElements: RuntimeElement[] = [
     new RuntimeElementLayout(),
-    new RuntimeElementA(),
     new RuntimeElementInclude(),
+    new RuntimeElementA(),
+    new RuntimeElementAbbr(),
+    new RuntimeElementAddress(),
+    new RuntimeElementArea(),
+    new RuntimeElementArticle(),
+    new RuntimeElementAside(),
+    new RuntimeElementAudio(),
+    new RuntimeElementB(),
+    new RuntimeElementBase(),
+    new RuntimeElementBdi(),
+    new RuntimeElementBdo(),
+    new RuntimeElementBlockquote(),
+    new RuntimeElementBr(),
+    new RuntimeElementButton(),
+    new RuntimeElementCanvas(),
+    new RuntimeElementCaption(),
+    new RuntimeElementCite(),
+    new RuntimeElementCode(),
+    new RuntimeElementCol(),
+    new RuntimeElementColgroup(),
+    new RuntimeElementData(),
+    new RuntimeElementDatalist(),
+    new RuntimeElementDD(),
+    new RuntimeElementDel(),
+    new RuntimeElementDetails(),
+    new RuntimeElementDFN(),
+    new RuntimeElementDialog(),
     new RuntimeElementDiv(),
+    new RuntimeElementDt(),
+    new RuntimeElementEm(),
+    new RuntimeElementFieldset(),
+    new RuntimeElementFigcaption(),
+    new RuntimeElementFigure(),
+    new RuntimeElementFooter(),
+    new RuntimeElementForm(),
+    new RuntimeElementH1(),
+    new RuntimeElementH2(),
+    new RuntimeElementH3(),
+    new RuntimeElementH4(),
+    new RuntimeElementH5(),
+    new RuntimeElementH6(),
+    new RuntimeElementHeader(),
+    new RuntimeElementHgroup(),
+    new RuntimeElementHr(),
+    new RuntimeElementI(),
+    new RuntimeElementIframe(),
+    new RuntimeElementImg(),
+    new RuntimeElementInput(),
+    new RuntimeElementIns(),
+    new RuntimeElementKbd(),
+    new RuntimeElementLabel(),
+    new RuntimeElementLegend(),
+    new RuntimeElementLi(),
+    new RuntimeElementLink(),
+    new RuntimeElementNoScript(),
+    new RuntimeElementOl(),
+    new RuntimeElementOption(),
+    new RuntimeElementOutput(),
+    new RuntimeElementP(),
+    new RuntimeElementParam(),
+    new RuntimeElementPicture(),
+    new RuntimeElementPre(),
+    new RuntimeElementProgress(),
+    new RuntimeElementQ(),
+    new RuntimeElementRp(),
+    new RuntimeElementRt(),
+    new RuntimeElementRuby(),
+    new RuntimeElementS(),
+    new RuntimeElementSamp(),
+    new RuntimeElementScript(),
+    new RuntimeElementSearch(),
+    new RuntimeElementSection(),
+    new RuntimeElementSelect(),
+    new RuntimeElementSmall(),
+    new RuntimeElementSource(),
+    new RuntimeElementStrong(),
+    new RuntimeElementStyle(),
+    new RuntimeElementSub(),
+    new RuntimeElementSummary(),
+    new RuntimeElementSup(),
+    new RuntimeElementSvg(),
+    new RuntimeElementTable(),
+    new RuntimeElementTbody(),
+    new RuntimeElementTemplate(),
+    new RuntimeElementTextarea(),
+    new RuntimeElementTfoot(),
+    new RuntimeElementTh(),
+    new RuntimeElementThead(),
+    new RuntimeElementTime(),
+    new RuntimeElementTr(),
+    new RuntimeElementTrack(),
+    new RuntimeElementTt(),
+    new RuntimeElementU(),
+    new RuntimeElementUl(),
+    new RuntimeElementVar(),
+    new RuntimeElementVideo(),
+    new RuntimeElementWbr(),
 ];
+
 
 import { RuntimeStyleAccentColor } from './style/attribute/accent-color';
 import { RuntimeStyleAll } from './style/attribute/all';
@@ -114,6 +296,14 @@ import { RuntimeElementStyleStateRoot } from './style/state/root';
 import { RuntimeElementStyleStateTarget } from './style/state/target';
 import { RuntimeElementStyleStateValid } from './style/state/valid';
 import { RuntimeElementStyleStateVisited } from './style/state/visited';
+import { RuntimeElementCanvas } from './element/canvas';
+import { RuntimeElementH4 } from './element/h4';
+import { RuntimeElementH5 } from './element/h5';
+import { RuntimeElementImg } from './element/img';
+import { RuntimeElementSelect } from './element/select';
+import { RuntimeElementSmall } from './element/small';
+import { RuntimeElementStrong } from './element/strong';
+import { RuntimeElementStyle } from './element/style';
 
 export const runtimeStyleStates: RuntimeElementStyleState[] = [
     new RuntimeElementStyleStateActive(),

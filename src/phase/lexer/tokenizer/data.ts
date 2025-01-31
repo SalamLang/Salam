@@ -49,7 +49,7 @@ export class TokenData {
     }
 
     getValueString(): string {
-        const value: any = this.getValue();
+        const value: number | string | boolean | undefined = this.getValue();
         if (value === undefined) {
             return "undefined";
         }

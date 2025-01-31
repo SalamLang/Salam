@@ -4,10 +4,10 @@ import { lexerLexNumber } from './number';
 import { lexerLexIdentifier } from './identifier';
 import { TokenOtherType } from './../tokenizer/type';
 import { isUtf8Alpha, isUtf8Number } from './utf8';
-import { operatorTypeMaps } from './../tokenizer/type';
 import { lexerLexReadComment } from './comment/single';
 import { lexerLexString, stringOpenings } from './string';
 import { lexerLexReadBlockComment } from './comment/multi';
+import { operatorTypeMaps } from './../tokenizer/operator';
 import { LexerMessageKeys } from './../../../common/message/lexer/lexer';
 import { lexerMessageRenderer } from './../../../common/message/message';
 

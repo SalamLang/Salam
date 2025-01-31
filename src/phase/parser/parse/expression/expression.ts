@@ -78,6 +78,17 @@ export function parseExpression(parser: Parser, precedence: number = 0): AstExpr
 
     while (!parser.isEnd && !parser.isBlockClose()) {
         const operator = parser.currentToken;
+        if (!operator) {
+            break;
+        }
+
+        const isOperator = operator && Object.values(TokenOperatorType).includes(operator.type as TokenOperatorType);
+        if (!isOperator) {
+            break;
+        }
+        if (operator.type === TokenOperatorType.TOKEN_RIGHT_PAREN || operator.type === TokenOperatorType.TOKEN_RIGHT_BRACE || operator.type === TokenOperatorType.TOKEN_RIGHT_BRACKET) {
+            break;
+        }
         const opPrecedence = getPrecedence(operator);
 
         console.log(`Operator: ${operator?.type}, Precedence: ${opPrecedence}, Left: ${left?.toString()}`);
@@ -110,8 +121,8 @@ function parsePrimary(parser: Parser): AstExpression | undefined {
     }
 
     // Handle parentheses `(expr)`
-    if (parser.has(TokenOperatorType.TOKEN_LEFT_PAREN)) {
-        parser.next(); // Consume '('
+    if (parser.skip(TokenOperatorType.TOKEN_LEFT_PAREN)) {
+        console.log("Parsing expression in parentheses", parser.currentToken);
         const expr = parseExpression(parser);
         parser.expect(TokenOperatorType.TOKEN_RIGHT_PAREN); // Expect ')'
         return expr;

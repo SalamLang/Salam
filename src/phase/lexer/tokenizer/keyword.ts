@@ -91,7 +91,7 @@ export const keywordMaps: Record<TokenKeywordType, KeywordMap> = {
         id: TokenKeywordType.TOKEN_LAYOUT,
         data: {
             [LanguageID.LanguageEnglish]: ["layout"],
-            [LanguageID.LanguagePersian]: ["چینش"],
+            [LanguageID.LanguagePersian]: ["لایه"],
         },
     },
     [TokenKeywordType.TOKEN_BLOCK_END]: {

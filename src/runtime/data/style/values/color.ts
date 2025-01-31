@@ -17,7 +17,8 @@ export const color: RuntimeElementAttributeValue[] = [
         .addText(LanguageID.LanguagePersian, "زرد"),
     new RuntimeElementAttributeValue("black")
         .addAllText("black")
-        .addText(LanguageID.LanguagePersian, "مشکی"),
+        .addText(LanguageID.LanguagePersian, "مشکی")
+        .addText(LanguageID.LanguagePersian, "سیاه"),
     new RuntimeElementAttributeValue("white")
         .addAllText("white")
         .addText(LanguageID.LanguagePersian, "سفید"),

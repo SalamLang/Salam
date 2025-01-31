@@ -6,9 +6,7 @@ import { AstLayout } from './../../../parser/parse/ast/layout/layout';
 export function generateLayout(generator: Generator, layout: AstLayout): string {
     generator.setIndent(generator.getIndent() + 2);
     
-    layout.root.built_in_selector = "body";
     const body_attrs: string = generateLayoutAttributes(generator, layout.root);
-
     const body: string = generateLayoutBlock(generator, layout.root, layout.root.block);
     generator.setIndent(generator.getIndent() - 2);
 
@@ -44,7 +42,7 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
 
     generator.decreaseIndent();
     result += generator.bufferIndentedLine(`</head>`);
-    result += generator.bufferIndentedLine(`<body>`);
+    result += generator.bufferIndentedLine(`<body${body_attrs ? " " + body_attrs : ""}>`);
 
     generator.increaseIndent();
     if (layout.root.content !== undefined) {

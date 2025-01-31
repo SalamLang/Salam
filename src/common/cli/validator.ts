@@ -10,20 +10,20 @@ import { Validator } from './../../phase/validator/validation/validator';
 export function processCommandRun(fileName: string | undefined, absoluteDirPath: string | undefined, source: string, selectedLanguage: LanguageMap): number {
     const lexer: Lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
     lex(lexer);
-    lexer.print();
+    // lexer.print();
 
-    console.log('=======================');
-    console.log('=======================');
-    console.log('=======================');
+    // console.log('=======================');
+    // console.log('=======================');
+    // console.log('=======================');
 
     const parser: Parser = new Parser(lexer);
     parse(parser);
     checkError(parser, undefined, undefined);
-    parser.print();
+    // parser.print();
 
-    console.log('=======================');
-    console.log('=======================');
-    console.log('=======================');
+    // console.log('=======================');
+    // console.log('=======================');
+    // console.log('=======================');
 
     const validator: Validator = new Validator(parser.ast);
     validate(validator);

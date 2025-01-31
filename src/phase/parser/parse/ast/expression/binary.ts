@@ -1,3 +1,4 @@
+import { stringify } from '../../../../../serializer';
 import { AstExpression } from './expression';
 
 export class AstExpressionBinary extends AstExpression {
@@ -12,12 +13,17 @@ export class AstExpressionBinary extends AstExpression {
         this.right = right;
     }
 
+    getString(): string {
+        return `${this.left.getString()} ${this.operator} ${this.right.getString()}`;
+    }
+
     stringify(wantsJson: boolean = true): string | object {
-        return {
+        const obj: object = {
             type: "ExpressionBinary",
             operator: this.operator,
-            left: this.left.stringify(wantsJson),
-            right: this.right.stringify(wantsJson),
+            left: this.left.stringify(false),
+            right: this.right.stringify(false),
         };
+        return stringify(obj, wantsJson);
     }
 }

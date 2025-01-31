@@ -92,7 +92,7 @@ export class Generator {
             fs.writeFileSync(output, this.getGeneratedSource(), 'utf-8');
             console.log(`File successfully written to ${output}`);
         } catch (error: any) {
-            this.pushError(`Failed to write to file: ${error.message}`);
+            this.pushError(generatorMessageRenderer(this.getLanguageId(), GeneratorMessageKeys.GENERATOR_SAVE_OUTPUT_ERROR, output, error.message));
         }
     }
 };

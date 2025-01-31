@@ -51,7 +51,7 @@ export class AstLayoutAttribute extends AstNode {
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             key: this.key,
-            value: this.value.stringify(wantsJson),
+            value: this.value.stringify(false),
             kind: this.kind,
             enduser_name: this.enduser_name,
             generate_name: this.generate_name,

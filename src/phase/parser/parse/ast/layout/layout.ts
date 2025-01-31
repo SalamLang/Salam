@@ -16,7 +16,7 @@ export class AstLayout extends AstNode {
 
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
-            root: this.root.stringify(wantsJson),
+            root: this.root.stringify(false),
         };
         return stringify(obj, wantsJson);
     }

@@ -22,11 +22,11 @@ export function processCommandFile(args: string[], selectedLanguage: LanguageMap
         absoluteDirPath = fs.realpathSync(path.dirname(filePath));
 
         source = fs.readFileSync(fileName, 'utf8');
-    } catch (error: any) {
-        if (error.code === 'ENOENT') {
-            console.error(`Error: File not found - "${filePath}"`);
-        } else {
+    } catch (error: unknown) {
+        if (error instanceof Error) {
             console.error(`Error reading file: ${error.message}`);
+        } else {
+            console.error(`Error: File not found - "${filePath}"`);
         }
         return 1;
     }

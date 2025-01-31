@@ -89,8 +89,22 @@ export class Generator {
     writeToFile(output: string): void {
         try {
             fs.writeFileSync(output, this.getGeneratedSource(), 'utf-8');
-        } catch (error: any) {
-            this.pushError(generatorMessageRenderer(this.getLanguageId(), GeneratorMessageKeys.GENERATOR_SAVE_OUTPUT_ERROR, output, error.message));
+        } catch (error: unknown) {
+            if (error instanceof Error) {
+                this.pushError(generatorMessageRenderer(
+                    this.getLanguageId(), 
+                    GeneratorMessageKeys.GENERATOR_SAVE_OUTPUT_ERROR, 
+                    output, 
+                    error.message
+                ));
+            } else {
+                this.pushError(generatorMessageRenderer(
+                    this.getLanguageId(), 
+                    GeneratorMessageKeys.GENERATOR_SAVE_OUTPUT_ERROR, 
+                    output, 
+                    "An unknown error occurred"
+                ));
+            }
         }
-    }
+    }    
 };

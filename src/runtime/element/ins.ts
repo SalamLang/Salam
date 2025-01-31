@@ -11,7 +11,7 @@ export class RuntimeElementIns extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Url, 'cite')
             .addText(LanguageID.LanguageEnglish, 'cite')
-            .addText(LanguageID.LanguagePersian, 'ارجاع')
+            .addText(LanguageID.LanguagePersian, 'ذکر')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.DateTime, 'datetime')

@@ -8,7 +8,7 @@ export class RuntimeElementTrack extends RuntimeElement {
     constructor() {
         super(true, 'track');
         this.addText(LanguageID.LanguageEnglish, 'track');
-        this.addText(LanguageID.LanguagePersian, 'ترک فیلم');
+        this.addText(LanguageID.LanguagePersian, 'آگاهی');
 
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'default')
@@ -19,7 +19,7 @@ export class RuntimeElementTrack extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, 'label')
                 .addText(LanguageID.LanguageEnglish, 'label')
-                .addText(LanguageID.LanguagePersian, 'لیبل')
+                .addText(LanguageID.LanguagePersian, 'برچسب')
         );
 
         this.addAttribute(

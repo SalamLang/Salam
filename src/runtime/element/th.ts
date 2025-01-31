@@ -8,36 +8,36 @@ export class RuntimeElementTh extends RuntimeElement {
     constructor() {
         super(true, 'th');
         this.addText(LanguageID.LanguageEnglish, 'th');
-        this.addText(LanguageID.LanguagePersian, 'تی اچ');
+        this.addText(LanguageID.LanguagePersian, 'ستون');
 
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, 'abbr')
                 .addText(LanguageID.LanguageEnglish, 'abbr')
-                .addText(LanguageID.LanguagePersian, 'ای بی بی ار')
+                .addText(LanguageID.LanguagePersian, 'اندک')
         );
 
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.PositiveInt, 'colspan')
                 .addText(LanguageID.LanguageEnglish, 'colspan')
-                .addText(LanguageID.LanguagePersian, 'کول اسپن')
+                .addText(LanguageID.LanguagePersian, 'ادغام ستون')
         );
 
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.ID, 'headers')
                 .addText(LanguageID.LanguageEnglish, 'headers')
-                .addText(LanguageID.LanguagePersian, 'هدر')
+                .addText(LanguageID.LanguagePersian, 'سرگاه ها')
         );
 
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.PositiveInt, 'rowspan')
                 .addText(LanguageID.LanguageEnglish, 'rowspan')
-                .addText(LanguageID.LanguagePersian, 'رو اسپن')
+                .addText(LanguageID.LanguagePersian, 'ادغام ردیف')
         );
 
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'scope')
                 .addText(LanguageID.LanguageEnglish, 'scope')
-                .addText(LanguageID.LanguagePersian, 'اسکوپ')
+                .addText(LanguageID.LanguagePersian, 'حدود')
                 .addReservedValues([
                     new RuntimeElementAttributeValue('col')
                         .addText(LanguageID.LanguageEnglish, 'col')

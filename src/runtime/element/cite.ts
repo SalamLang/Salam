@@ -4,6 +4,6 @@ export class RuntimeElementCite extends RuntimeElement {
   public constructor() {
     super(true, 'cite');
     this.addText(LanguageID.LanguageEnglish,'cite');
-    this.addText(LanguageID.LanguagePersian,'ارجاع');
+    this.addText(LanguageID.LanguagePersian,'ذکر');
   }
 }

@@ -5,6 +5,6 @@ export class RuntimeElementAddress extends RuntimeElement {
     constructor() {
         super(true, "address");
         this.addText(LanguageID.LanguageEnglish, "address");
-        this.addText(LanguageID.LanguagePersian, "آدرس");
+        this.addText(LanguageID.LanguagePersian, "نشانی");
     }
 }

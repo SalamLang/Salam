@@ -4,6 +4,6 @@ export class RuntimeElementCaption extends RuntimeElement {
     constructor() {
         super(true, 'caption');
         this.addText(LanguageID.LanguageEnglish, 'Caption');
-        this.addText(LanguageID.LanguagePersian, 'سند');
+        this.addText(LanguageID.LanguagePersian, 'پانویس');
     }
 }

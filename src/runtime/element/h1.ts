@@ -5,6 +5,6 @@ export class RuntimeElementH1 extends RuntimeElement {
     constructor() {
         super(true, 'h1');
         this.addText(LanguageID.LanguageEnglish, 'h1');
-        this.addText(LanguageID.LanguagePersian, 'هدینگ 1');
+        this.addText(LanguageID.LanguagePersian, 'سر1');
     }
 }

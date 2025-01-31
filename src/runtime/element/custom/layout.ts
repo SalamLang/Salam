@@ -8,7 +8,7 @@ export class RuntimeElementLayout extends RuntimeElement {
     constructor() {
         super(true, undefined);
         this.addText(LanguageID.LanguageEnglish, "layout");
-        this.addText(LanguageID.LanguagePersian, "صفحه");
+        this.addText(LanguageID.LanguagePersian, "چینش");
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "title")
             .addText(LanguageID.LanguagePersian, "عنوان")

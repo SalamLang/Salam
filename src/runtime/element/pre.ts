@@ -5,6 +5,6 @@ export class RuntimeElementPre extends RuntimeElement {
     constructor() {
         super(true, 'pre');
         this.addText(LanguageID.LanguageEnglish, 'pre');
-        this.addText(LanguageID.LanguagePersian, 'ظاهر ثابت');
+        this.addText(LanguageID.LanguagePersian, 'دلخواه');
     }
 };

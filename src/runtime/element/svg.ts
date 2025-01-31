@@ -6,7 +6,7 @@ export class RuntimeElementSvg extends RuntimeElement {
     constructor() {
         super(true, 'svg');
         this.addText(LanguageID.LanguageEnglish, 'svg');
-        this.addText(LanguageID.LanguagePersian, 'اس وی جی');
+        this.addText(LanguageID.LanguagePersian, 'بردار');
 
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Size, 'width')

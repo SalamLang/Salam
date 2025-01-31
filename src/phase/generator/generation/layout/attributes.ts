@@ -34,7 +34,7 @@ export function generateLayoutAttributes(generator: Generator, element: AstLayou
             const class_runtime = new RuntimeGlobalAttributeClass();
             const class_attribute_key: string | undefined = class_runtime.getText(generator.getLanguageId())?.[0];
             if (class_attribute_key) {
-                const class_attribute_value: AstExpression = new AstExpression(element.built_in_selector);
+                const class_attribute_value: AstExpression = new AstExpressionLiteral(element.built_in_selector);
                 const class_attribute: AstLayoutAttribute = new AstLayoutAttribute(element.enduser_name, class_attribute_key, class_attribute_value, AstLayoutAttributeType.Normal);
                 class_attribute.generate_name = class_runtime.generate_name;
                 element.attributes.push(class_attribute);

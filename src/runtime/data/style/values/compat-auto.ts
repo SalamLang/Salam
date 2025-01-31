@@ -10,7 +10,7 @@ export const compat_auto: RuntimeElementAttributeValue[] = [
         .addText(LanguageID.LanguagePersian, "متن"),
     new RuntimeElementAttributeValue("checkbox")
         .addText(LanguageID.LanguageEnglish, "checkbox")
-        .addText(LanguageID.LanguagePersian, "چک‌باکس"),
+        .addText(LanguageID.LanguagePersian, "چک‌جعبه"),
     new RuntimeElementAttributeValue("radio")
         .addText(LanguageID.LanguageEnglish, "radio")
         .addText(LanguageID.LanguagePersian, "رادیو"),

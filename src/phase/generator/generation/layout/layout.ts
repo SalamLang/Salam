@@ -1,9 +1,14 @@
 import { Generator } from './../generator';
 import { generateLayoutBlock } from './block';
+import { generateLayoutAttributes } from './attributes';
 import { AstLayout } from './../../../parser/parse/ast/layout/layout';
 
 export function generateLayout(generator: Generator, layout: AstLayout): string {
     generator.setIndent(generator.getIndent() + 2);
+    
+    layout.root.built_in_selector = "body";
+    const body_attrs: string = generateLayoutAttributes(generator, layout.root);
+
     const body: string = generateLayoutBlock(generator, layout.root, layout.root.block);
     generator.setIndent(generator.getIndent() - 2);
 

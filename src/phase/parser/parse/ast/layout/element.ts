@@ -48,7 +48,7 @@ export class AstLayoutElement extends AstNode {
     }
 
     generateBuiltInSelector(validator: Validator): void {
-        this.built_in_selector = IdentifierGenerator.get();
+        this.built_in_selector = "." + IdentifierGenerator.get();
     }
 
     print(): void {

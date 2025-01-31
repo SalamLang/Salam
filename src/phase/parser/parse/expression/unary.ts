@@ -1,11 +1,14 @@
 import { Parser } from './../parser';
 import { parseExpressionPrimary } from './primary';
 import { AstUnaryExpression } from './../ast/expression/unary';
-import { TokenOperatorType } from '../../../lexer/tokenizer/type';
+import { isOperator } from '../../../lexer/tokenizer/operator';
+import { inValidOperators } from '../../../lexer/tokenizer/operator';
 
 export function parseExpressionUnaryOperator(parser: Parser): AstUnaryExpression | undefined {
     const currentToken = parser.currentToken;
-    if (currentToken && Object.values(TokenOperatorType).includes(currentToken.type as TokenOperatorType)) {
+    const isOp: boolean = isOperator(currentToken.type);
+    const isInvalidOperators = inValidOperators.includes(currentToken.type);
+    if (currentToken && isOp && !isInvalidOperators) {
         const operator = currentToken;
         parser.next(); // Consume unary operator
 

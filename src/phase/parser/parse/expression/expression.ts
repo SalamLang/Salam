@@ -1,44 +1,32 @@
 import { Parser } from './../parser';
+import { parseExpressionBinary } from './binary';
 import { parseExpressionPrimary } from './primary';
-import { getExpressionPrecedence } from './precedence';
 import { AstExpression } from './../ast/expression/expression';
-import { AstBinaryExpression } from './../ast/expression/binary';
-import { TokenOperatorType } from '../../../lexer/tokenizer/type';
+import { isOperator } from '../../../lexer/tokenizer/operator';
+import { inValidOperators } from './../../../lexer/tokenizer/operator';
 
 export function parseExpression(parser: Parser, precedence: number = 0): AstExpression | undefined {
+    console.log("parseExpression", precedence);
     let left: AstExpression | undefined = parseExpressionPrimary(parser);
     if (!left) {
-        return undefined;
+        return undefined; // No primary expression, return undefined
     }
 
+    // The main loop for handling binary operators with precedence
     while (!parser.isEnd && !parser.isBlockClose()) {
         const operator = parser.currentToken;
-        if (!operator) {
-            break;
+        const isOp = isOperator(operator.type);
+        if (!operator || !isOp) {
+            break; // No valid operator, stop processing
+        }
+        if (inValidOperators.includes(operator.type)) {
+            break; // Invalid operator, stop processing
         }
 
-        const isOperator = operator && Object.values(TokenOperatorType).includes(operator.type as TokenOperatorType);
-        if (!isOperator) {
-            break;
+        left = parseExpressionBinary(parser, left, precedence);
+        if (!left) {
+            break; // Exit if no valid left expression is found
         }
-        if (operator.type === TokenOperatorType.TOKEN_RIGHT_PAREN || operator.type === TokenOperatorType.TOKEN_RIGHT_BRACE || operator.type === TokenOperatorType.TOKEN_RIGHT_BRACKET) {
-            break;
-        }
-
-        const opPrecedence = getExpressionPrecedence(operator);
-        if (opPrecedence < precedence) {
-            break;
-        }
-
-        parser.next(); // Consume operator
-
-        const right = parseExpression(parser, opPrecedence + 1);
-        if (!right) {
-            parser.pushError(`Expected expression after '${operator.type}'`);
-            return left;
-        }
-
-        left = new AstBinaryExpression(left, operator.type, right);
     }
 
     return left;

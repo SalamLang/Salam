@@ -1,7 +1,7 @@
 import { TokenType } from './type';
 import { TokenOperatorType } from './type';
 
-export const operatorTypeMaps: Record<string, TokenType> = {
+export const operatorTypeMaps: Record<string, TokenOperatorType> = {
     "!=": TokenOperatorType.TOKEN_NOT_EQUAL,
     "==": TokenOperatorType.TOKEN_EQUAL,
     "===": TokenOperatorType.TOKEN_EQUAL,

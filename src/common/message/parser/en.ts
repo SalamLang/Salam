@@ -27,7 +27,7 @@ export const enMessages: Record<ParserMessageKeys, string> = {
 
     [ParserMessageKeys.PARSER_STATEMENT_IS_NOT_VALID_IN_BLOCK]: "Statement is not valid in block.",
 
-    [ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_AFTER_OPERATOR]: "Expression expected after operator {0}.",
-    [ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_AFTER_UNARY_OPERATOR]: "Expression expected after unary operator {0}.",
-    [ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_IN_STATEMENT]: "Expression expected in {0} statement.",
+    [ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_AFTER_OPERATOR]: "Expression expected after operator '{0}'.",
+    [ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_AFTER_UNARY_OPERATOR]: "Expression expected after unary operator '{0}'.",
+    [ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_IN_STATEMENT]: "Expression expected in '{0}' statement.",
 };

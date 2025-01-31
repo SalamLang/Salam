@@ -52,7 +52,7 @@ export function lex(lexer: Lexer): void {
                     lexer.advance();
                     lexer.advance();
 
-                    lexer.pushToken(new Token(operatorTypeMaps[char + nextChar], lexer.getLocation()));
+                    lexer.pushToken(new Token(operatorTypeMaps[char + nextChar], lexer.getLocation(), char + ">", undefined));
                 } else {
                     lexer.readDoubleToken(char);
                 }
@@ -71,7 +71,7 @@ export function lex(lexer: Lexer): void {
                     lexerLexReadBlockComment(lexer);
                 } else {
                     lexer.advance();
-                    lexer.pushToken(new Token(operatorTypeMaps[char], lexer.getLocation()));
+                    lexer.pushToken(new Token(operatorTypeMaps[char], lexer.getLocation(), char, undefined));
                 }
                 break;
 
@@ -122,7 +122,7 @@ export function lex(lexer: Lexer): void {
             case '?':
             case '!':
             case '⩵':
-                lexer.pushToken(new Token(operatorTypeMaps[char], lexer.getLocation()));
+                lexer.pushToken(new Token(operatorTypeMaps[char], lexer.getLocation(), char, undefined));
                 lexer.advance();
                 break;
 
@@ -140,5 +140,5 @@ export function lex(lexer: Lexer): void {
         }
     }
 
-    lexer.pushToken(new Token(TokenOtherType.TOKEN_EOF, lexer.getLocation()));
+    lexer.pushToken(new Token(TokenOtherType.TOKEN_EOF, lexer.getLocation(), undefined, undefined));
 };

@@ -9,7 +9,6 @@ import { ParserMessageKeys } from './../../../../common/message/parser/parser';
 import { AstFunctionDeclaration } from './../ast/statement/function_declaration';
 
 export function parserParseFunction(parser: Parser): AstFunctionDeclaration | undefined {
-    console.log("parserParseFunction");
     parser.expect(TokenKeywordType.TOKEN_FN);
 
     if (! parser.currentToken.isKeyword) {

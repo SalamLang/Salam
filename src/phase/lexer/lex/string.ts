@@ -58,6 +58,6 @@ export function lexerLexString(lexer: Lexer, opening: string): void {
     // }
 
     const tokenData = new TokenData(TokenDataType.TOKEN_DATA_TYPE_STRING, value);
-    const token: Token = new Token(TokenValueType.TOKEN_STRING, lexer.getLocation(), tokenData);
+    const token: Token = new Token(TokenValueType.TOKEN_STRING, lexer.getLocation(), value, tokenData);
     lexer.pushToken(token);
 };

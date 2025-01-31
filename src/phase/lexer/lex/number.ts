@@ -27,6 +27,7 @@ export function lexerLexNumber(lexer: Lexer) {
     const token: Token = new Token(
         isFloat ? TokenValueType.TOKEN_NUMBER_FLOAT : TokenValueType.TOKEN_NUMBER_INT,
         lexer.getLocation(),
+        value,
         data
     );
     lexer.pushToken(token);

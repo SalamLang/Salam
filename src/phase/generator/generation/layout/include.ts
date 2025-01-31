@@ -37,30 +37,63 @@ export function includeLayoutString(generator: Generator, source: string, fileNa
     return "";
 };
 
-export async function includeLayout(generator: Generator, filePath: string, params: string[]): Promise<string> {
+export async function includeLayout(
+    generator: Generator,
+    filePath: string,
+    params: string[]
+): Promise<string> {
     if (isUrl(filePath)) {
         try {
-            const response: any = await axios.get(filePath, { headers: { 'User-Agent': 'Salam/' + SALAM_VERSION } });
+            const response: AxiosResponse = await axios.get(filePath, {
+                headers: { "User-Agent": "Salam/" + SALAM_VERSION },
+            });
+
             if (response.status === 200) {
                 const fileName: string = "online.salam";
                 const source: string = response.data;
                 const absoluteDirPath: string = process.cwd();
                 return includeLayoutString(generator, source, fileName, absoluteDirPath, params);
             } else {
-                generator.pushError(generatorMessageRenderer(generator.getLanguageId(), GeneratorMessageKeys.GENERATOR_INCLUDE_HTTP_ERROR_HTTP_STATUS, filePath, response.status + ""));
+                generator.pushError(
+                    generatorMessageRenderer(
+                        generator.getLanguageId(),
+                        GeneratorMessageKeys.GENERATOR_INCLUDE_HTTP_ERROR_HTTP_STATUS,
+                        filePath,
+                        response.status.toString()
+                    )
+                );
             }
-        } catch (error: any) {
-            generator.pushError(generatorMessageRenderer(generator.getLanguageId(), GeneratorMessageKeys.GENERATOR_INCLUDE_HTTP_ERROR, filePath));
+        } catch (error: unknown) {
+            if (error instanceof Error) {
+                generator.pushError(
+                    generatorMessageRenderer(
+                        generator.getLanguageId(),
+                        GeneratorMessageKeys.GENERATOR_INCLUDE_HTTP_ERROR,
+                        filePath
+                    )
+                );
+            }
         }
     } else {
         if (!filePath) {
-            generator.pushError(generatorMessageRenderer(generator.getLanguageId(), GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_PATH_NOT_PROVIDED));
+            generator.pushError(
+                generatorMessageRenderer(
+                    generator.getLanguageId(),
+                    GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_PATH_NOT_PROVIDED
+                )
+            );
         } else if (!fs.existsSync(filePath)) {
-            generator.pushError(generatorMessageRenderer(generator.getLanguageId(), GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_NOT_FOUND, filePath));
+            generator.pushError(
+                generatorMessageRenderer(
+                    generator.getLanguageId(),
+                    GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_NOT_FOUND,
+                    filePath
+                )
+            );
         } else {
             const fileName: string = fs.realpathSync(filePath);
             const absoluteDirPath: string = fs.realpathSync(path.dirname(filePath));
-            const source: string = fs.readFileSync(fileName, 'utf8');
+            const source: string = fs.readFileSync(fileName, "utf8");
             return includeLayoutString(generator, source, fileName, absoluteDirPath, params);
         }
     }

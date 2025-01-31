@@ -4,11 +4,11 @@ import {RuntimeElementAttribute} from './../element_attribute';
 import {RuntimeElementAttributeType} from './../element_attribute_type';
 import {RuntimeElementAttributeValue} from './../element_attribute_value';
 
-export class RuntimeElementNoScript extends RuntimeElement {
+export class RuntimeElementOl extends RuntimeElement {
   constructor() {
-    super(false, 'noscript');
-    this.addText(LanguageID.LanguageEnglish, 'noscript');
-    this.addText(LanguageID.LanguagePersian, 'بدون اسکریپت');
+    super(false, 'ol');
+    this.addText(LanguageID.LanguageEnglish, 'ol');
+    this.addText(LanguageID.LanguagePersian, 'فهرست ol');
     this.addAttribute(
       new RuntimeElementAttribute(
         RuntimeElementAttributeType.Boolean,

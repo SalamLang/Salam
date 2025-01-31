@@ -1,9 +1,17 @@
-import { Parser } from '../parser';
-import { Token } from '../../../lexer/tokenizer/token';
+import { Parser } from './../parser';
+import { parseExpression } from '../expression/expression';
+import { AstExpression } from '../ast/expression/expression';
 import { AstStatementReturn } from './../ast/statement/return';
+import { TokenKeywordType } from '../../../lexer/tokenizer/type';
 
 export function parseStatementReturn(parser: Parser): AstStatementReturn | undefined {
-    const current_token: Token | undefined = parser.currentToken;
-    console.log("parseStatementReturn: ", current_token.type);
-    return undefined;
+    parser.expect(TokenKeywordType.TOKEN_RET);
+    const expression: AstExpression | undefined = parseExpression(parser);
+    if (expression === undefined) {
+        parser.pushError('Expected expression after return keyword');
+        return undefined;
+    }
+
+    const ast: AstStatementReturn = new AstStatementReturn(expression);
+    return ast;
 };

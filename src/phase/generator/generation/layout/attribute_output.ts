@@ -11,7 +11,10 @@ export function generateLayoutAttributeOutput(generator: Generator, attribute: A
     // Handle different output types
     switch (attribute.output_type) {
         case RuntimeElementAttributeOutputType.Normal:
-            return `"${output}"`;
+            if (output.includes(" ") || /[^a-zA-Z0-9]/.test(output)) {
+                return `"${output}"`;
+            }
+            return output;
 
         case RuntimeElementAttributeOutputType.UrlWithFont:
             const extenstionMappe: { [key: string]: string } = {
@@ -29,10 +32,11 @@ export function generateLayoutAttributeOutput(generator: Generator, attribute: A
         case RuntimeElementAttributeOutputType.Url:
             return `url(${output})`;
 
-        default:
-            if (output.includes(" ") || /[^a-zA-Z0-9]/.test(output)) {
-                return `"${output}"`;
-            }
-            return output;
+        // default:
+        //     if (output.includes(" ") || /[^a-zA-Z0-9]/.test(output)) {
+        //         return `"${output}"`;
+        //     }
+        //     return output;
     }
+    return "";
 };

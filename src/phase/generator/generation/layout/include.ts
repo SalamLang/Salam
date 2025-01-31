@@ -40,7 +40,6 @@ export function includeLayoutString(generator: Generator, source: string, fileNa
 export async function includeLayout(generator: Generator, filePath: string, params: string[]): Promise<string> {
     if (isUrl(filePath)) {
         try {
-            // set custom-header
             const response = await axios.get<string>(filePath, { headers: { 'User-Agent': 'Salam/' + SALAM_VERSION } });
             if (response.status === 200) {
                 const fileName: string = "online.salam";

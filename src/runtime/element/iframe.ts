@@ -51,7 +51,7 @@ export class RuntimeElementIframe extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'sandbox')
             .addText(LanguageID.LanguageEnglish, 'sandbox')
-            .addText(LanguageID.LanguagePersian, 'سند باکس')
+            .addText(LanguageID.LanguagePersian, 'سند جعبه')
             .addReservedValues([
                 new RuntimeElementAttributeValue('allow-forms')
                 .addText(LanguageID.LanguageEnglish, 'forms')

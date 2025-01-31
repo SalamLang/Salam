@@ -6,7 +6,7 @@ export function generateLayoutAttributeOutput(generator: Generator, attribute: A
     if (attribute.generate_value === undefined) {
         return "";
     }
-    let output: string = attribute.generate_value;
+    const output: string = attribute.generate_value;
 
     // Handle different output types
     switch (attribute.output_type) {
@@ -31,12 +31,6 @@ export function generateLayoutAttributeOutput(generator: Generator, attribute: A
 
         case RuntimeElementAttributeOutputType.Url:
             return `url(${output})`;
-
-        // default:
-        //     if (output.includes(" ") || /[^a-zA-Z0-9]/.test(output)) {
-        //         return `"${output}"`;
-        //     }
-        //     return output;
     }
     return "";
 };

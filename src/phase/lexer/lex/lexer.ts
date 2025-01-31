@@ -3,8 +3,8 @@ import { stringify } from './../../../serializer';
 import { TokenData } from "./../tokenizer/data";
 import { TokenOtherType } from './../tokenizer/type';
 import { TokenDataType } from './../tokenizer/data';
-import { operatorTypeMaps } from './../tokenizer/type';
 import { TokenLocation } from './../tokenizer/location';
+import { operatorTypeMaps } from './../tokenizer/operator';
 import { LanguageMap } from './../../../common/language/language';
 
 export class Lexer {

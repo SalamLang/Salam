@@ -22,12 +22,12 @@ export function lexerLexIdentifier(lexer: Lexer) {
 
     for (const keywordMap of keywordMapsValues) {
         if (keywordMap.data && keywordMap.data[lexer.language.id].includes(value)) {
-            const token: Token = new Token(keywordMap.id, lexer.getLocation(), data);
+            const token: Token = new Token(keywordMap.id, lexer.getLocation(), value, data);
             lexer.pushToken(token);
             return;
         }
     }
 
-    const token: Token = new Token(TokenKeywordType.TOKEN_IDENTIFIER, lexer.getLocation(), data);
+    const token: Token = new Token(TokenKeywordType.TOKEN_IDENTIFIER, lexer.getLocation(), value, data);
     lexer.pushToken(token);
 };

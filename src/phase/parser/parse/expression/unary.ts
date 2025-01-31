@@ -12,7 +12,7 @@ export function parseExpressionUnary(parser: Parser): AstExpression | undefined 
 
     const operand = parseExpressionPrimary(parser);
     if (!operand) {
-        parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_AFTER_UNARY_OPERATOR, operator.type));
+        parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_AFTER_UNARY_OPERATOR, operator.enduser));
         return undefined;
     }
 

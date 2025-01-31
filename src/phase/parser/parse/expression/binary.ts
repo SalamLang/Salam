@@ -9,7 +9,7 @@ import { ParserMessageKeys } from "../../../../common/message/parser/parser";
 export function parseExpressionBinary(parser: Parser, left: AstExpression, opPrecedence: number, operator: Token): AstExpression {
     const right: AstExpression | undefined = parseExpression(parser, opPrecedence + 1);
     if (!right) {
-        parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_AFTER_OPERATOR, operator.type));
+        parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_AFTER_OPERATOR, operator.enduser));
         return left;
     }
 

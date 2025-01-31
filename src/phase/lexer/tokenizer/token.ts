@@ -7,15 +7,22 @@ export class Token {
     type: TokenType;
     location: TokenLocation;
     data: TokenData | undefined;
+    enduser_token: string | undefined;
 
     constructor(
         type: TokenType,
         location: TokenLocation,
-        data: TokenData | undefined = undefined
+        enduser_token: string | undefined,
+        data: TokenData | undefined
     ) {
         this.type = type;
         this.location = location;
+        this.enduser_token = enduser_token;
         this.data = data;
+    }
+
+    get enduser(): string {
+        return this.enduser_token || this.type;
     }
 
     get isValue(): boolean {

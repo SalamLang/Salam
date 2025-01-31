@@ -27,7 +27,7 @@ export const faMessages: Record<ParserMessageKeys, string> = {
 
     [ParserMessageKeys.PARSER_STATEMENT_IS_NOT_VALID_IN_BLOCK]: "این دستور در بلوک معتبر نیست.",
 
-    [ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_AFTER_OPERATOR]: "مقداری بعد از عملگر {0} انتظار می‌رفت.",
-    [ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_AFTER_UNARY_OPERATOR]: "مقداری بعد از عملگر یک‌تایی {0} انتظار می‌رفت.",
-    [ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_IN_STATEMENT]: "مقداری در دستور {0} انتظار می‌رفت.",
+    [ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_AFTER_OPERATOR]: "مقداری بعد از عملگر '{0}' انتظار می‌رفت.",
+    [ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_AFTER_UNARY_OPERATOR]: "مقداری بعد از عملگر یک‌تایی '{0}' انتظار می‌رفت.",
+    [ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_IN_STATEMENT]: "مقداری در دستور '{0}' انتظار می‌رفت.",
 };

@@ -101,6 +101,42 @@ export const keywordMaps: Record<TokenKeywordType, KeywordMap> = {
             [LanguageID.LanguagePersian]: ["تمام"],
         },
     },
+    // Types
+    [TokenKeywordType.TOKEN_TYPE_INT]: {
+        id: TokenKeywordType.TOKEN_TYPE_INT,
+        data: {
+            [LanguageID.LanguageEnglish]: ["int"],
+            [LanguageID.LanguagePersian]: ["صحیح"],
+        },
+    },
+    [TokenKeywordType.TOKEN_TYPE_FLOAT]: {
+        id: TokenKeywordType.TOKEN_TYPE_FLOAT,
+        data: {
+            [LanguageID.LanguageEnglish]: ["float"],
+            [LanguageID.LanguagePersian]: ["اعشار"],
+        },
+    },
+    [TokenKeywordType.TOKEN_TYPE_CHAR]: {
+        id: TokenKeywordType.TOKEN_TYPE_CHAR,
+        data: {
+            [LanguageID.LanguageEnglish]: ["char"],
+            [LanguageID.LanguagePersian]: ["حرف"],
+        },
+    },
+    [TokenKeywordType.TOKEN_TYPE_STRING]: {
+        id: TokenKeywordType.TOKEN_TYPE_STRING,
+        data: {
+            [LanguageID.LanguageEnglish]: ["string"],
+            [LanguageID.LanguagePersian]: ["رشته"],
+        },
+    },
+    [TokenKeywordType.TOKEN_TYPE_BOOL]: {
+        id: TokenKeywordType.TOKEN_TYPE_BOOL,
+        data: {
+            [LanguageID.LanguageEnglish]: ["bool"],
+            [LanguageID.LanguagePersian]: ["درستی"],
+        },
+    },
 };
 
 export const keywordMapsValues: KeywordMap[] = Object.values(keywordMaps);

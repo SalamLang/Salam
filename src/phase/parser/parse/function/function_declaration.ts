@@ -1,12 +1,12 @@
-import { Parser } from './../parser';
-import { AstBlock } from './../ast/block';
-import { parserParseBlock } from './../block';
-import { AstFunctionAttribute } from './../ast/function_attribute';
-import { TokenKeywordType } from './../../../lexer/tokenizer/type';
+import { Parser } from '../parser';
+import { AstBlock } from '../ast/block';
+import { parserParseBlock } from '../block';
+import { AstFunctionAttribute } from '../ast/function_attribute';
+import { TokenKeywordType } from '../../../lexer/tokenizer/type';
 import { parserParseFunctionAttributes } from './function_attributes';
-import { parserMessageRenderer } from './../../../../common/message/message';
-import { ParserMessageKeys } from './../../../../common/message/parser/parser';
-import { AstFunctionDeclaration } from './../ast/statement/function_declaration';
+import { parserMessageRenderer } from '../../../../common/message/message';
+import { ParserMessageKeys } from '../../../../common/message/parser/parser';
+import { AstFunctionDeclaration } from '../ast/statement/function_declaration';
 
 export function parserParseFunction(parser: Parser): AstFunctionDeclaration | undefined {
     parser.expect(TokenKeywordType.TOKEN_FN);

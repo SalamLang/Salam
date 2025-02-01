@@ -9,6 +9,7 @@ export class Generator {
     errors: string[];
     indentLevel: number;
     source: string;
+    source_c: string;
     enableLines: boolean;
     styles: string[];
     
@@ -17,6 +18,7 @@ export class Generator {
         this.errors = [];
         this.indentLevel = 0;
         this.source = '';
+        this.source_c = '';
         this.enableLines = true;
         this.styles = [];
     }
@@ -76,10 +78,15 @@ export class Generator {
 
     print(): void {
         console.log(this.getGeneratedSource());
+        console.log(this.getGeneratedSourceC());
     }
 
     getGeneratedSource(): string {
         return this.source;
+    }
+
+    getGeneratedSourceC(): string {
+        return this.source_c;
     }
 
     getLanguageId(): LanguageID {

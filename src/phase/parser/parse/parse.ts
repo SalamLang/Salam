@@ -5,7 +5,7 @@ import { parserParseLayout } from './layout/layout';
 import { parserParseFunction } from './function/function_declaration';
 import { parserMessageRenderer } from './../../../common/message/message';
 import { ParserMessageKeys } from './../../../common/message/parser/parser';
-import { AstFunctionDeclaration } from './ast/statement/function_declaration';
+import { AstFunctionDeclaration } from './ast/function/function_declaration';
 import { TokenKeywordType, TokenOtherType } from './../../lexer/tokenizer/type';
 
 export function parse(parser: Parser): void {

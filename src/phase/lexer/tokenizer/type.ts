@@ -21,6 +21,8 @@ export enum TokenKeywordType {
     TOKEN_LAYOUT = "LAYOUT",
     // TOKEN_BLOCK_BEGIN = "BLOCK_BEGIN",
     TOKEN_BLOCK_END = "BLOCK_END",
+    TOKEN_BOOL_TRUE = "BOOL_TRUE",
+    TOKEN_BOOL_FALSE = "BOOL_FALSE",
 };
 
 export enum TokenValueType {

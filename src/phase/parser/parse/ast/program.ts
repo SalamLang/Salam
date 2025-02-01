@@ -2,7 +2,7 @@ import { AstNode } from './node';
 import { AstLayout } from './layout/layout';
 import { stringify } from './../../../../serializer';
 import { LanguageMap } from './../../../../common/language/language';
-import { AstFunctionDeclaration } from './statement/function_declaration';
+import { AstFunctionDeclaration } from './function/function_declaration';
 
 export class AstProgram extends AstNode {
     errors: string[] = [];

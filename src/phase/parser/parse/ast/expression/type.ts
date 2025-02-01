@@ -2,21 +2,21 @@ import { stringify } from '../../../../../serializer';
 import { AstNode } from './../node';
 
 export class AstType extends AstNode {
-    value_type: string;
+    type_kind: string;
 
     constructor(value_type: string) {
         super("Type");
-        this.value_type = value_type;
+        this.type_kind = value_type;
     }
 
     getString(): string {
-        return this.value_type;
+        return this.type_kind;
     }
 
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             type: "Type",
-            value_type: this.value_type,
+            type_kind: this.type_kind,
         };
         return stringify(obj, wantsJson);
     }
@@ -42,6 +42,6 @@ export class AstType extends AstNode {
     }
 
     isEqual(type: AstType): boolean {
-        return this.value_type === type.value_type;
+        return this.type_kind === type.type_kind;
     }
 }

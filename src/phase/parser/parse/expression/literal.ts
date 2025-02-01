@@ -19,10 +19,10 @@ export function parseExpressionLiteral(parser: Parser): AstExpression | undefine
                 return new AstExpressionLiteral(currentToken.data.getValueString(), AstType.createString());
 
             case TokenValueType.TOKEN_BOOL_FALSE:
-                return new AstExpressionLiteral(currentToken.data.getValueString(), AstType.createBool());
+                return new AstExpressionLiteral("TRUE", AstType.createBool());
 
             case TokenValueType.TOKEN_BOOL_TRUE:
-                return new AstExpressionLiteral(currentToken.data.getValueString(), AstType.createBool());
+                return new AstExpressionLiteral("TRUE", AstType.createBool());
 
             case TokenValueType.TOKEN_NUMBER_FLOAT:
                 return new AstExpressionLiteral(currentToken.data.getValueString(), AstType.createFloat());

@@ -56,21 +56,6 @@ export class Token {
         return this.isKeyword && this.type !== TokenKeywordType.TOKEN_IDENTIFIER;
     }
 
-    get isValueType(): boolean {
-        if (!this.isKeyword) {
-            return false;
-        } else if (
-            this.type === TokenKeywordType.TOKEN_TYPE_BOOL ||
-            this.type === TokenKeywordType.TOKEN_TYPE_INT ||
-            this.type === TokenKeywordType.TOKEN_TYPE_FLOAT ||
-            this.type === TokenKeywordType.TOKEN_TYPE_STRING ||
-            this.type === TokenKeywordType.TOKEN_TYPE_CHAR
-        ) {
-            return true;
-        }
-        return false;
-    }
-
     private getTypeString<T extends Record<string, string | number>>(enumType: T): string | undefined {
         const values: Array<string | number> = Object.values(enumType);
         return values.includes(this.type as string) ? (this.type as string) : undefined;

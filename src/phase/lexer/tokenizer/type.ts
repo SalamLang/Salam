@@ -1,11 +1,14 @@
+import { Token } from "./token";
+
+export enum TokenKeywordDataType {
+    TOKEN_DATA_TYPE_BOOL = "DATA_TYPE_BOOL",
+    TOKEN_DATA_TYPE_INT = "DATA_TYPE_INT",
+    TOKEN_DATA_TYPE_FLOAT= "DATA_TYPE_FLOAT",
+    TOKEN_DATA_TYPE_STRING = "DATA_TYPE_STRING",
+    TOKEN_DATA_TYPE_CHAR = "DATA_TYPE_CHAR",
+};
+
 export enum TokenKeywordType {
-    // types
-    TOKEN_TYPE_BOOL = "TYPE_BOOL",
-    TOKEN_TYPE_INT = "TYPE_INT",
-    TOKEN_TYPE_FLOAT= "TYPE_FLOAT",
-    TOKEN_TYPE_STRING = "TYPE_STRING",
-    TOKEN_TYPE_CHAR = "TOKEN_TYPE_CHAR",
-    // words
     TOKEN_IDENTIFIER = "IDENTIFIER",
     TOKEN_IF = "IF",
     TOKEN_ELSE = "ELSE",
@@ -80,4 +83,10 @@ export enum TokenOtherType {
     TOKEN_EOF = "EOF",
 };
 
-export type TokenType = TokenKeywordType | TokenValueType | TokenOperatorType | TokenOtherType;
+export type TokenType = TokenKeywordType | TokenKeywordDataType | TokenValueType | TokenOperatorType | TokenOtherType;
+
+export const TokenKeywordDataTypeValues: TokenKeywordDataType[] = Object.values(TokenKeywordDataType);
+
+export function isDataTypeToken(token: Token): boolean {
+    return TokenKeywordDataTypeValues.includes(token.type as TokenKeywordDataType);
+};

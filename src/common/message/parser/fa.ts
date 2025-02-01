@@ -23,7 +23,7 @@ export const faMessages: Record<ParserMessageKeys, string> = {
     [ParserMessageKeys.PARSER_FUNCTION_PARAMETERS_ARE_NOT_VALID]: "پارامترهای تابع معتبر نیستند.",
     [ParserMessageKeys.PARSER_FUNCTION_BODY_IS_NOT_VALID]: "بدنه تابع معتبر نیست.",
 
-    [ParserMessageKeys.PARSER_EXPECTED_TOKEN_TYPE_BUT_GOT]: "نوع نشانه {0} انتظار می‌رفت، اما {1} دریافت شد.",
+    [ParserMessageKeys.PARSER_EXPECTED_TOKEN_DATA_TYPE_BUT_GOT]: "نوع نشانه {0} انتظار می‌رفت، اما {1} دریافت شد.",
 
     [ParserMessageKeys.PARSER_STATEMENT_IS_NOT_VALID_IN_BLOCK]: "این دستور در بلوک معتبر نیست.",
 

@@ -1,7 +1,7 @@
 import { generateBlock } from './block';
 import { Generator } from './../generator';
 import { generateFunctionParameters } from './function-parameters';
-import { AstFunctionDeclaration } from './../../../parser/parse/ast/statement/function_declaration';
+import { AstFunctionDeclaration } from './../../../parser/parse/ast/function/function_declaration';
 
 export function generateFunctionDeclaration(generator: Generator, func: AstFunctionDeclaration): string {
     let result: string = "";

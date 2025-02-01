@@ -1,5 +1,5 @@
 import { LanguageID } from './../../../common/language/language';
-import { TokenKeywordType } from "./type";
+import { TokenKeywordType, TokenValueType } from "./type";
 
 export interface KeywordMap {
     id: TokenKeywordType;
@@ -135,6 +135,20 @@ export const keywordMaps: Record<TokenKeywordType, KeywordMap> = {
         data: {
             [LanguageID.LanguageEnglish]: ["bool"],
             [LanguageID.LanguagePersian]: ["درستی"],
+        },
+    },
+    [TokenValueType.TOKEN_BOOL_TRUE]: {
+        id: TokenValueType.TOKEN_BOOL_TRUE,
+        data: {
+            [LanguageID.LanguageEnglish]: ["true"],
+            [LanguageID.LanguagePersian]: ["درست"],
+        },
+    },
+    [TokenValueType.TOKEN_BOOL_FALSE]: {
+        id: TokenValueType.TOKEN_BOOL_FALSE,
+        data: {
+            [LanguageID.LanguageEnglish]: ["false"],
+            [LanguageID.LanguagePersian]: ["غلط"],
         },
     },
 };

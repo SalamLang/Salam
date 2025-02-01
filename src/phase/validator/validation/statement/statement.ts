@@ -6,7 +6,6 @@ import { AstStatementPrint } from "../../../parser/parse/ast/statement/print";
 import { AstStatementReturn } from "../../../parser/parse/ast/statement/return";
 
 export function validateStatement(validator: Validator, stmt: AstStatement): void {
-    console.log(stmt.type, stmt);
     switch (stmt.type) {
         case "Print":
             validateStatementPrint(validator, stmt as AstStatementPrint);

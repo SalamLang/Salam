@@ -1,5 +1,6 @@
 import { Generator } from './../generator';
-import { generateExpression, generateExpressionOperator } from './expression';
+import { generateExpression } from './expression';
+import { generateExpressionOperator } from './operator';
 import { AstExpressionUnary } from '../../../parser/parse/ast/expression/unary';
 
 export function generateExpressionUnary(generator: Generator, expr: AstExpressionUnary): string {

@@ -1,5 +1,6 @@
 import { Generator } from './../generator';
-import { generateExpression, generateExpressionOperator } from './expression';
+import { generateExpression } from './expression';
+import { generateExpressionOperator } from './operator';
 import { AstExpressionBinary } from '../../../parser/parse/ast/expression/binary';
 
 export function generateExpressionBinary(generator: Generator, expr: AstExpressionBinary): string {

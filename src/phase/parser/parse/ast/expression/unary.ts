@@ -1,11 +1,12 @@
-import { stringify } from '../../../../../serializer';
 import { AstExpression } from './expression';
+import { stringify } from '../../../../../serializer';
+import { TokenType } from '../../../../lexer/tokenizer/type';
 
 export class AstExpressionUnary extends AstExpression {
-    operator: string;
+    operator: TokenType;
     right: AstExpression;
 
-    constructor(operator: string, operand: AstExpression) {
+    constructor(operator: TokenType, operand: AstExpression) {
         super("ExpressionUnary");
         this.operator = operator;
         this.right = operand;

@@ -6,7 +6,7 @@ import { TokenKeywordType } from '../../../lexer/tokenizer/type';
 import { parserParseFunctionAttributes } from './function_attributes';
 import { parserMessageRenderer } from '../../../../common/message/message';
 import { ParserMessageKeys } from '../../../../common/message/parser/parser';
-import { AstFunctionDeclaration } from '../ast/statement/function_declaration';
+import { AstFunctionDeclaration } from '../ast/function/function_declaration';
 
 export function parserParseFunction(parser: Parser): AstFunctionDeclaration | undefined {
     parser.expect(TokenKeywordType.TOKEN_FN);

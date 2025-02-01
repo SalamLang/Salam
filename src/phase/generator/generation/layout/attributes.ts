@@ -1,12 +1,12 @@
 import { Generator } from "./../generator";
 import { generateLayoutAttribute } from "./attribute";
+import { AstType } from "../../../parser/parse/ast/expression/type";
 import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 import { AstLayoutAttribute } from '../../../parser/parse/ast/layout/attribute';
 import { AstExpression } from './../../../parser/parse/ast/expression/expression';
-import { AstLayoutAttributeType } from '../../../parser/parse/ast/layout/attribute_type';
 import { RuntimeGlobalAttributeClass } from "../../../../runtime/attribute/class";
 import { AstExpressionLiteral } from "../../../parser/parse/ast/expression/literal";
-import { TokenValueType } from "../../../lexer/tokenizer/type";
+import { AstLayoutAttributeType } from '../../../parser/parse/ast/layout/attribute_type';
 
 export function generateLayoutAttributes(generator: Generator, element: AstLayoutElement): string {
     let htmlResult: string = "";
@@ -29,13 +29,13 @@ export function generateLayoutAttributes(generator: Generator, element: AstLayou
         const attribute_class: AstLayoutAttribute | undefined = element.attributes.getByGenerateName("class");
         if (attribute_class !== undefined) {
             const new_class: string = attribute_class.value.getString() + " " + built_in_selector;
-            attribute_class.value = new AstExpressionLiteral(new_class.trim(), TokenValueType.TOKEN_STRING);
+            attribute_class.value = new AstExpressionLiteral(new_class.trim(), AstType.createString());
         } else {
             // Append and add a new attribute
             const class_runtime: RuntimeGlobalAttributeClass = new RuntimeGlobalAttributeClass();
             const class_attribute_key: string | undefined = class_runtime.getText(generator.getLanguageId())?.[0];
             if (class_attribute_key) {
-                const class_attribute_value: AstExpression = new AstExpressionLiteral(built_in_selector);
+                const class_attribute_value: AstExpression = new AstExpressionLiteral(built_in_selector, AstType.createString());
                 const class_attribute: AstLayoutAttribute = new AstLayoutAttribute(element.enduser_name, class_attribute_key, class_attribute_value, AstLayoutAttributeType.Normal);
                 class_attribute.generate_name = class_runtime.generate_name;
                 element.attributes.push(class_attribute);

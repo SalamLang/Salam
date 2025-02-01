@@ -12,6 +12,9 @@ export class Generator {
     source_c: string;
     enableLines: boolean;
     styles: string[];
+    functions: string[];
+    sign_functions: string[];
+    libraries: string[];
     
     constructor(ast: AstProgram) {
         this.ast = ast;
@@ -21,6 +24,19 @@ export class Generator {
         this.source_c = '';
         this.enableLines = true;
         this.styles = [];
+        this.functions = [];
+        this.sign_functions = [];
+        this.libraries = [];
+        this.libraries.push("#include <stdio.h>");
+        this.libraries.push("#include <stdlib.h>");
+    }
+    
+    pushFunction(func: string): void {
+        this.functions.push(func);
+    }
+
+    pushSignFunction(func: string): void {
+        this.sign_functions.push(func);
     }
 
     pushStyleTop(style: string): void {
@@ -77,7 +93,9 @@ export class Generator {
     }
 
     print(): void {
-        console.log(this.getGeneratedSource());
+        if (this.source.length > 0) {
+            console.log(this.getGeneratedSource());
+        }
         console.log(this.getGeneratedSourceC());
     }
 
@@ -86,7 +104,22 @@ export class Generator {
     }
 
     getGeneratedSourceC(): string {
-        return this.source_c;
+        let result: string = "";
+
+        if (this.libraries.length > 0) {
+            result += this.libraries.join("\n");
+            result += "\n";
+            result += "\n";
+        }
+        if (this.sign_functions.length > 0) {
+            result += this.sign_functions.join("\n");
+            result += "\n";
+            result += "\n";
+        }
+
+        result += this.functions.join("\n");
+
+        return result;
     }
 
     getLanguageId(): LanguageID {

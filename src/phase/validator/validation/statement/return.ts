@@ -1,5 +1,7 @@
 import { Validator } from "./../validator";
-import { AstNode } from "./../../../parser/parse/ast/node";
+import { validateExpression } from './../expression/expression';
+import { AstStatementReturn } from "../../../parser/parse/ast/statement/return";
 
-export function validateReturn(validator: Validator, node: AstNode) {
+export function validateStatementReturn(validator: Validator, stmt: AstStatementReturn): void {
+    validateExpression(validator, stmt.value);
 };

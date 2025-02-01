@@ -1,8 +1,8 @@
 import { Generator } from './../generator';
 import { generateType } from '../expression/type';
-import { AstFunctionAttribute } from '../../../parser/parse/ast/function_attribute';
+import { AstFunctionParameter } from '../../../parser/parse/ast/function_parameter';
 
-export function generateFunctionParameters(generator: Generator, parameters: AstFunctionAttribute[]): string {
+export function generateFunctionParameters(generator: Generator, parameters: AstFunctionParameter[]): string {
     let result: string = "";
     for (const parameter of parameters) {
         if (result.length > 0) {

@@ -3,10 +3,10 @@ import { AstType } from '../ast/expression/type';
 import { parserParseType } from '../expression/type';
 import { Token } from '../../../lexer/tokenizer/token';
 import { TokenOperatorType } from '../../../lexer/tokenizer/type';
-import { AstFunctionAttribute } from './../ast/function_attribute';
+import { AstFunctionParameter } from '../ast/function_parameter';
 
-export function parserParseFunctionAttributes(parser: Parser): AstFunctionAttribute[] | undefined {
-    const params: AstFunctionAttribute[] = [];
+export function parserParseFunctionAttributes(parser: Parser): AstFunctionParameter[] | undefined {
+    const params: AstFunctionParameter[] = [];
 
     if (!parser.skip(TokenOperatorType.TOKEN_LEFT_PAREN)) {
         return params;
@@ -26,7 +26,7 @@ export function parserParseFunctionAttributes(parser: Parser): AstFunctionAttrib
         const name: string = token.data.getValueString();
         parser.next(); // Eating attribute name
 
-        const attribute: AstFunctionAttribute = new AstFunctionAttribute(name, type);
+        const attribute: AstFunctionParameter = new AstFunctionParameter(name, type);
         params.push(attribute);
         if (parser.currentToken.type === TokenOperatorType.TOKEN_RIGHT_PAREN) {
             break;

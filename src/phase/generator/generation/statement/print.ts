@@ -22,7 +22,12 @@ export function generateStatementPrint(generator: Generator, stmt: AstStatementP
     result += format;
 
     result += `", `;
+
     result += generateExpression(generator, stmt.value);
+    if (stmt.value.value_type.type_kind === "bool") {
+        result += " ? \"true\" : \"false\"";
+    }
     result += ");\n";
+    
     return result;
 };

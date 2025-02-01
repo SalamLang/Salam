@@ -20,4 +20,24 @@ export class AstType extends AstNode {
         };
         return stringify(obj, wantsJson);
     }
+
+    static createString(): AstType {
+        return new AstType("string");
+    }
+
+    static createBool(): AstType {
+        return new AstType("bool");
+    }
+
+    static createFloat(): AstType {
+        return new AstType("float");
+    }
+
+    static createInt(): AstType {
+        return new AstType("int");
+    }
+
+    static createVoid(): AstType {
+        return new AstType("void");
+    }
 }

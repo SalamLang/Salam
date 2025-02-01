@@ -35,7 +35,7 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
     // console.log('=======================');
     // console.log('=======================');
 
-    // console.log(validator.ast.stringify());
+    console.log(validator.ast.stringify());
 
     // console.log('=======================');
     // console.log('=======================');

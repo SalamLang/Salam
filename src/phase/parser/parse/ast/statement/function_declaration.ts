@@ -5,13 +5,13 @@ import { AstFunctionAttribute } from './../function_attribute';
 
 export class AstFunctionDeclaration extends AstNode {
     name: string;
-    params: AstFunctionAttribute[];
+    parameters: AstFunctionAttribute[];
     body: AstBlock;
 
     constructor(name: string, params: AstFunctionAttribute[], body: AstBlock) {
         super("FunctionDeclaration");
         this.name = name;
-        this.params = params;
+        this.parameters = params;
         this.body = body;
     }
 
@@ -22,7 +22,7 @@ export class AstFunctionDeclaration extends AstNode {
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             name: this.name,
-            params: this.params,
+            parameters: this.parameters,
             body: this.body.stringify(false),
         };
         return stringify(obj, wantsJson);

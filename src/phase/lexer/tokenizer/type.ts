@@ -1,4 +1,11 @@
 export enum TokenKeywordType {
+    // types
+    TOKEN_TYPE_BOOL = "TYPE_BOOL",
+    TOKEN_TYPE_INT = "TYPE_INT",
+    TOKEN_TYPE_FLOAT= "TYPE_FLOAT",
+    TOKEN_TYPE_STRING = "TYPE_STRING",
+    TOKEN_TYPE_CHAR = "TOKEN_TYPE_CHAR",
+    // words
     TOKEN_IDENTIFIER = "IDENTIFIER",
     TOKEN_IF = "IF",
     TOKEN_ELSE = "ELSE",

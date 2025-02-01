@@ -9,7 +9,7 @@ export function parseType(parser: Parser): AstType | undefined {
         parser.pushError("Expected type, but is not valid!");
         return undefined;
     }
-    const ast: AstType = new AstType(token.data.getValueString());
+    const ast: AstType = new AstType(token.type.replace("DATA_TYPE_", "").toLowerCase());
     parser.next();
     return ast;
 };

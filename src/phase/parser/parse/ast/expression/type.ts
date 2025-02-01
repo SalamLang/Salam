@@ -1,12 +1,12 @@
-import { stringify } from '../../../../../serializer';
 import { AstNode } from './../node';
+import { stringify } from '../../../../../serializer';
 
 export class AstType extends AstNode {
     type_kind: string;
 
-    constructor(value_type: string) {
+    constructor(type_kind: string) {
         super("Type");
-        this.type_kind = value_type;
+        this.type_kind = type_kind;
     }
 
     getString(): string {

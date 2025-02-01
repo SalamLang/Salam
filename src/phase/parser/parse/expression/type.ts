@@ -1,10 +1,11 @@
 import { Parser } from './../parser';
 import { AstType } from '../ast/expression/type';
 import { Token } from '../../../lexer/tokenizer/token';
+import { isDataTypeToken } from '../../../lexer/tokenizer/type';
 
-export function parserParseType(parser: Parser): AstType | undefined {
+export function parseType(parser: Parser): AstType | undefined {
     const token: Token = parser.currentToken;
-    if (!token.isValueType || token.data === undefined) {
+    if (!isDataTypeToken(token) || token.data === undefined) {
         parser.pushError("Expected type, but is not valid!");
         return undefined;
     }

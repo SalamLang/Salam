@@ -2,11 +2,11 @@ import { Parser } from './parser';
 import { AstLayout } from './ast/layout/layout';
 import { Token } from '../../lexer/tokenizer/token';
 import { parserParseLayout } from './layout/layout';
-import { parserParseFunction } from './function/function_declaration';
 import { parserMessageRenderer } from './../../../common/message/message';
 import { ParserMessageKeys } from './../../../common/message/parser/parser';
 import { AstFunctionDeclaration } from './ast/function/function_declaration';
 import { TokenKeywordType, TokenOtherType } from './../../lexer/tokenizer/type';
+import { parserParseFunctionDeclaration } from './function/function_declaration';
 
 export function parse(parser: Parser): void {
     while (parser.index < parser.lexer.tokens.length) {
@@ -15,7 +15,7 @@ export function parse(parser: Parser): void {
         if (token.type === TokenOtherType.TOKEN_EOF) {
             break;
         } else if (token.type === TokenKeywordType.TOKEN_FN) {
-            const function_declaration: AstFunctionDeclaration | undefined = parserParseFunction(parser);
+            const function_declaration: AstFunctionDeclaration | undefined = parserParseFunctionDeclaration(parser);
             if (! function_declaration) {
                 parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FAILED_TO_PARSE_FUNCTION_STATEMENT));
                 break;

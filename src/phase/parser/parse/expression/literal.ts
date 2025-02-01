@@ -11,7 +11,7 @@ export function parseExpressionLiteral(parser: Parser): AstExpression | undefine
         parser.next();
         switch (currentToken.type) {
             case TokenKeywordType.TOKEN_IDENTIFIER:
-                const varable_identifier: AstExpression = new AstExpression(currentToken.data.getValueString());
+                const varable_identifier: AstExpression = new AstExpressionLiteral(currentToken.data.getValueString(), TokenValueType.TOKEN_STRING);
                 return new AstExpressionVariable(varable_identifier);
 
             case TokenValueType.TOKEN_STRING:

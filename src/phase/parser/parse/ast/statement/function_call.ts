@@ -1,12 +1,14 @@
 import { AstNode } from './../node';
+import { AstExpression } from '../expression/expression';
+import { AstFunctionParameter } from '../function_parameter';
 
 export class AstFunctionCall extends AstNode {
-    name: string;
-    params: string[];
+    name: AstExpression;
+    parameters: AstFunctionAttribute[];
 
-    constructor(name: string, params: string[]) {
+    constructor(name: AstExpression, parameters: AstFunctionParameter[]) {
         super("FunctionCall");
         this.name = name;
-        this.params = params;
+        this.parameters = parameters;
     }
 }

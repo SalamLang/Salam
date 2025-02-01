@@ -1,7 +1,7 @@
 import { Parser } from '../parser';
 import { AstBlock } from '../ast/block';
 import { parserParseBlock } from '../block';
-import { AstFunctionAttribute } from '../ast/function_attribute';
+import { AstFunctionParameter } from '../ast/function_parameter';
 import { TokenKeywordType } from '../../../lexer/tokenizer/type';
 import { parserParseFunctionAttributes } from './function_attributes';
 import { parserMessageRenderer } from '../../../../common/message/message';
@@ -28,7 +28,7 @@ export function parserParseFunction(parser: Parser): AstFunctionDeclaration | un
     // Eating function name
     parser.next();
 
-    const params: AstFunctionAttribute[] | undefined = parserParseFunctionAttributes(parser);
+    const params: AstFunctionParameter[] | undefined = parserParseFunctionAttributes(parser);
     if (! params) {
         parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_PARAMETERS_ARE_NOT_VALID));
         return undefined;

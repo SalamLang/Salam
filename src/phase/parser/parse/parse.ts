@@ -2,7 +2,7 @@ import { Parser } from './parser';
 import { AstLayout } from './ast/layout/layout';
 import { Token } from '../../lexer/tokenizer/token';
 import { parserParseLayout } from './layout/layout';
-import { parserParseFunction } from './function/function';
+import { parserParseFunction } from './function/function_declaration';
 import { parserMessageRenderer } from './../../../common/message/message';
 import { ParserMessageKeys } from './../../../common/message/parser/parser';
 import { AstFunctionDeclaration } from './ast/statement/function_declaration';

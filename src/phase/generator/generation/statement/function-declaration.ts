@@ -1,5 +1,6 @@
 import { generateBlock } from './block';
 import { Generator } from './../generator';
+import { generateFunctionParameters } from './function-parameters';
 import { AstFunctionDeclaration } from './../../../parser/parse/ast/statement/function_declaration';
 
 export function generateFunctionDeclaration(generator: Generator, func: AstFunctionDeclaration): string {
@@ -9,11 +10,9 @@ export function generateFunctionDeclaration(generator: Generator, func: AstFunct
     sign += "void ";
     sign += func.name;
     sign += "(";
-    // if (func.parameters) {
-    //     sign += func.parameters.map(param => {
-    //         return param.type + " " + param.name;
-    //     }).join(", ");
-    // }
+    if (func.parameters) {
+        sign += generateFunctionParameters(generator, func.parameters);
+    }
     sign += ")";
 
     generator.pushSignFunction(sign + ";");

@@ -3,10 +3,16 @@ import { stringify } from '../../../../../serializer';
 
 export class AstType extends AstNode {
     type_kind: string;
+    is_pointer: boolean;
+    is_reference: boolean;
+    is_array: boolean;
 
     constructor(type_kind: string) {
         super("Type");
         this.type_kind = type_kind;
+        this.is_pointer = false;
+        this.is_reference = false;
+        this.is_array = false;
     }
 
     getString(): string {

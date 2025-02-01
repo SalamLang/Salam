@@ -8,6 +8,12 @@ export enum TokenKeywordDataType {
     TOKEN_DATA_TYPE_CHAR = "DATA_TYPE_CHAR",
 };
 
+export const TokenKeywordDataTypeValues: TokenKeywordDataType[] = Object.values(TokenKeywordDataType);
+
+export function isDataTypeToken(token: Token): boolean {
+    return TokenKeywordDataTypeValues.includes(token.type as TokenKeywordDataType);
+};
+
 export enum TokenKeywordType {
     TOKEN_IDENTIFIER = "IDENTIFIER",
     TOKEN_IF = "IF",
@@ -84,9 +90,3 @@ export enum TokenOtherType {
 };
 
 export type TokenType = TokenKeywordType | TokenKeywordDataType | TokenValueType | TokenOperatorType | TokenOtherType;
-
-export const TokenKeywordDataTypeValues: TokenKeywordDataType[] = Object.values(TokenKeywordDataType);
-
-export function isDataTypeToken(token: Token): boolean {
-    return TokenKeywordDataTypeValues.includes(token.type as TokenKeywordDataType);
-};

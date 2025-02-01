@@ -1,12 +1,12 @@
 import { LanguageID } from './../../../common/language/language';
-import { TokenKeywordType, TokenValueType } from "./type";
+import { TokenKeywordDataType, TokenKeywordType, TokenType, TokenValueType } from "./type";
 
 export interface KeywordMap {
-    id: TokenKeywordType;
+    id: TokenType;
     data?: Record<LanguageID, string[]>;
 };
 
-export const keywordMaps: Record<TokenKeywordType, KeywordMap> = {
+export const keywordMaps: Record<TokenKeywordType | TokenKeywordDataType, KeywordMap> = {
     [TokenKeywordType.TOKEN_IDENTIFIER]: {
         id: TokenKeywordType.TOKEN_IDENTIFIER,
     },
@@ -102,36 +102,36 @@ export const keywordMaps: Record<TokenKeywordType, KeywordMap> = {
         },
     },
     // Types
-    [TokenKeywordType.TOKEN_TYPE_INT]: {
-        id: TokenKeywordType.TOKEN_TYPE_INT,
+    [TokenKeywordDataType.TOKEN_DATA_TYPE_INT]: {
+        id: TokenKeywordDataType.TOKEN_DATA_TYPE_INT,
         data: {
             [LanguageID.LanguageEnglish]: ["int"],
             [LanguageID.LanguagePersian]: ["صحیح"],
         },
     },
-    [TokenKeywordType.TOKEN_TYPE_FLOAT]: {
-        id: TokenKeywordType.TOKEN_TYPE_FLOAT,
+    [TokenKeywordDataType.TOKEN_DATA_TYPE_FLOAT]: {
+        id: TokenKeywordDataType.TOKEN_DATA_TYPE_FLOAT,
         data: {
             [LanguageID.LanguageEnglish]: ["float"],
             [LanguageID.LanguagePersian]: ["اعشار"],
         },
     },
-    [TokenKeywordType.TOKEN_TYPE_CHAR]: {
-        id: TokenKeywordType.TOKEN_TYPE_CHAR,
+    [TokenKeywordDataType.TOKEN_DATA_TYPE_CHAR]: {
+        id: TokenKeywordDataType.TOKEN_DATA_TYPE_CHAR,
         data: {
             [LanguageID.LanguageEnglish]: ["char"],
             [LanguageID.LanguagePersian]: ["حرف"],
         },
     },
-    [TokenKeywordType.TOKEN_TYPE_STRING]: {
-        id: TokenKeywordType.TOKEN_TYPE_STRING,
+    [TokenKeywordDataType.TOKEN_DATA_TYPE_STRING]: {
+        id: TokenKeywordDataType.TOKEN_DATA_TYPE_STRING,
         data: {
             [LanguageID.LanguageEnglish]: ["string"],
             [LanguageID.LanguagePersian]: ["رشته"],
         },
     },
-    [TokenKeywordType.TOKEN_TYPE_BOOL]: {
-        id: TokenKeywordType.TOKEN_TYPE_BOOL,
+    [TokenKeywordDataType.TOKEN_DATA_TYPE_BOOL]: {
+        id: TokenKeywordDataType.TOKEN_DATA_TYPE_BOOL,
         data: {
             [LanguageID.LanguageEnglish]: ["bool"],
             [LanguageID.LanguagePersian]: ["درستی"],

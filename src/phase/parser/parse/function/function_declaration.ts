@@ -8,7 +8,7 @@ import { parserMessageRenderer } from '../../../../common/message/message';
 import { ParserMessageKeys } from '../../../../common/message/parser/parser';
 import { AstFunctionDeclaration } from '../ast/function/function_declaration';
 
-export function parserParseFunction(parser: Parser): AstFunctionDeclaration | undefined {
+export function parserParseFunctionDeclaration(parser: Parser): AstFunctionDeclaration | undefined {
     parser.expect(TokenKeywordType.TOKEN_FN);
 
     if (! parser.currentToken.isKeyword) {

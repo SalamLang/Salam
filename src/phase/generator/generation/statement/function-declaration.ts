@@ -4,15 +4,22 @@ import { AstFunctionDeclaration } from './../../../parser/parse/ast/statement/fu
 
 export function generateFunctionDeclaration(generator: Generator, func: AstFunctionDeclaration): string {
     let result: string = "";
-    result += "void ";
-    result += func.name;
-    result += "(";
+    let sign: string = "";
+
+    sign += "void ";
+    sign += func.name;
+    sign += "(";
     // if (func.parameters) {
-    //     result += func.parameters.map(param => {
+    //     sign += func.parameters.map(param => {
     //         return param.type + " " + param.name;
     //     }).join(", ");
     // }
-    result += ") ";
+    sign += ")";
+
+    generator.pushSignFunction(sign + ";");
+
+    result += sign;
+    result += " ";
     result += generateBlock(generator, func.body);
     return result;
 };

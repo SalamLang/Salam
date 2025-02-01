@@ -33,7 +33,6 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
 
     if (generator.styles.length > 0) {
         result += generator.bufferIndentedLine(`<style>`);
-        result += generator.bufferIndentedLine(`/* Generated Styles */`);
         for (const style of generator.styles) {
             result += generator.bufferIndentedLine(style);
         }

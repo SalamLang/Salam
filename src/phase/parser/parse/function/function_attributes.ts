@@ -1,6 +1,6 @@
 import { Parser } from './../parser';
 import { AstType } from '../ast/expression/type';
-import { parserParseType } from '../expression/type';
+import { parseType } from '../expression/type';
 import { Token } from '../../../lexer/tokenizer/token';
 import { TokenOperatorType } from '../../../lexer/tokenizer/type';
 import { AstFunctionParameter } from '../ast/function_parameter';
@@ -13,7 +13,7 @@ export function parserParseFunctionAttributes(parser: Parser): AstFunctionParame
     }
     
     while (!parser.isEnd) {
-        const type: AstType | undefined = parserParseType(parser);
+        const type: AstType | undefined = parseType(parser);
         const token: Token = parser.currentToken;
         if (type === undefined) {
             parser.pushError("function attribute type is not valid!");

@@ -52,12 +52,21 @@ export class Parser {
         return this.currentToken.type === tokenType;
     }
 
+    expectGet(tokenType: TokenType): Token | undefined {
+        if (this.has(tokenType)) {
+            this.index++;
+            return this.previousToken;
+        }
+        this.pushError(parserMessageRenderer(this.lexer.language.id, ParserMessageKeys.PARSER_EXPECTED_TOKEN_DATA_TYPE_BUT_GOT, tokenType, this.currentToken.type));
+        return undefined;
+    }
+
     expect(tokenType: TokenType): boolean {
         if (this.has(tokenType)) {
             this.index++;
             return true;
         }
-        this.pushError(parserMessageRenderer(this.lexer.language.id, ParserMessageKeys.PARSER_EXPECTED_TOKEN_TYPE_BUT_GOT, tokenType, this.currentToken.type));
+        this.pushError(parserMessageRenderer(this.lexer.language.id, ParserMessageKeys.PARSER_EXPECTED_TOKEN_DATA_TYPE_BUT_GOT, tokenType, this.currentToken.type));
         return false;
     }
 

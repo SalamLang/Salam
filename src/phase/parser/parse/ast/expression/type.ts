@@ -40,4 +40,8 @@ export class AstType extends AstNode {
     static createVoid(): AstType {
         return new AstType("void");
     }
+
+    isEqual(type: AstType): boolean {
+        return this.value_type === type.value_type;
+    }
 }

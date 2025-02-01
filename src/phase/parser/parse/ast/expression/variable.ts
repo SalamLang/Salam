@@ -1,6 +1,6 @@
 import { AstType } from './type';
-import { stringify } from '../../../../../serializer';
 import { AstExpression } from './expression';
+import { stringify } from '../../../../../serializer';
 
 export class AstExpressionVariable extends AstExpression {
     left: AstExpression;

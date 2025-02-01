@@ -1,14 +1,14 @@
 import { AstNode } from './../node';
 import { AstBlock } from './../block';
 import { stringify } from './../../../../../serializer';
-import { AstFunctionAttribute } from './../function_attribute';
+import { AstFunctionParameter } from '../function_parameter';
 
 export class AstFunctionDeclaration extends AstNode {
     name: string;
-    parameters: AstFunctionAttribute[];
+    parameters: AstFunctionParameter[];
     body: AstBlock;
 
-    constructor(name: string, params: AstFunctionAttribute[], body: AstBlock) {
+    constructor(name: string, params: AstFunctionParameter[], body: AstBlock) {
         super("FunctionDeclaration");
         this.name = name;
         this.parameters = params;

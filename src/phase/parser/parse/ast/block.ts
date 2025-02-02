@@ -4,11 +4,11 @@ import { SymbolTable } from '../../../validator/validation/symbol-table';
 
 export class AstBlock extends AstNode {
 	children: AstNode[] = [];
-	table: SymbolTable;
+	symbol_table: SymbolTable;
 
 	constructor() {
 		super("Block");
-		this.table = new SymbolTable();
+		this.symbol_table = new SymbolTable();
 	}
 
 	addChild(node: AstNode): void {
@@ -22,6 +22,7 @@ export class AstBlock extends AstNode {
 	stringify(wantsJson: boolean = true): string | object {
 		const obj: object = {
 			children: this.children,
+			symbol_table: this.symbol_table.stringify(false),
 		};
 		return stringify(obj, wantsJson);
 	}

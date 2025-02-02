@@ -8,6 +8,8 @@ import { AstExpressionUnary } from '../../../parser/parse/ast/expression/unary';
 import { AstExpressionBinary } from '../../../parser/parse/ast/expression/binary';
 import { AstExpressionLiteral } from '../../../parser/parse/ast/expression/literal';
 import { AstExpressionVariable } from '../../../parser/parse/ast/expression/variable';
+import { AstExpressionFunctionCall } from '../../../parser/parse/ast/function/function_call';
+import { generateExpressionFunctionCall } from '../function/function_call';
 
 export function generateExpression(generator: Generator, expr: AstExpression): string {
     switch (expr.type) {
@@ -22,6 +24,9 @@ export function generateExpression(generator: Generator, expr: AstExpression): s
         
         case "ExpressionVariable":
             return generateExpressionVariable(generator, expr as AstExpressionVariable);
+        
+        case "ExpressionFunctionCall":
+            return generateExpressionFunctionCall(generator, expr as AstExpressionFunctionCall);
     }
     return "Unkjnown expression type " + expr.type;
 };

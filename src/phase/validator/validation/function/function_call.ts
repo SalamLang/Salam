@@ -1,6 +1,13 @@
 import { Validator } from "./../validator";
-import { AstFunctionCall } from "./../../../parser/parse/ast/function/function_call";
+import { validateExpression } from "../expression/expression";
+import { validateFunctionParameters } from "./function_parameters";
+import { AstType } from "../../../parser/parse/ast/expression/type";
 
-export function validateFunctionCall(validator: Validator, node: AstFunctionCall) {
-    
+export function validateExpressionFunctionCall(validator: Validator, node: any) {
+    validateExpression(validator, node.left);
+
+    validateFunctionParameters(validator, node.parameters);
+
+    // TODO: check if the variable is defined
+    node.value_type = AstType.createInt();
 };

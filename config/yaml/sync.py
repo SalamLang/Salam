@@ -664,7 +664,7 @@ def convert_to_json(file: Dict[str, Any]) -> None:
             os.makedirs(directory)
 
         with open(json_filename, "w", encoding="utf-8") as json_file:
-            json.dump(data, json_file, ensure_ascii=False, indent=2)
+            json.dump(data + "\n", json_file, ensure_ascii=False, indent=2)
 
         print(f"Converted {file['input']} to {file['output']}")
     except Exception as e:

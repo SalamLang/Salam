@@ -5,6 +5,6 @@ import { validateFunctionArguments } from "./function_arguments";
 import { AstFunctionDeclaration } from "./../../../parser/parse/ast/function/function_declaration";
 
 export function validateFunctionDeclaration(validator: Validator, parent_block: AstBlock, func: AstFunctionDeclaration): void {
-    validateFunctionArguments(validator, func.args);
+    validateFunctionArguments(validator, parent_block, func.args);
     validateBlock(validator, parent_block, func.body);
 };

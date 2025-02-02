@@ -1,11 +1,16 @@
 import { AstNode } from './../node';
 import { stringify } from '../../../../../serializer';
+import { AstFunctionArgument } from '../function/function_argument';
 
 export class AstType extends AstNode {
     type_kind: string;
     is_pointer: boolean;
     is_reference: boolean;
     is_array: boolean;
+    members: AstType[]; // Only when type_kind is `package` or `struct`
+    func_name: string | undefined;
+    func_args: AstFunctionArgument[];
+    func_return_type: AstType | undefined;
 
     constructor(type_kind: string) {
         super("Type");
@@ -13,6 +18,34 @@ export class AstType extends AstNode {
         this.is_pointer = false;
         this.is_reference = false;
         this.is_array = false;
+        this.members = [];
+        this.func_name = undefined;
+        this.func_args = [];
+        this.func_return_type = undefined;
+    }
+
+    addMemberFunction(item: AstType): boolean {
+        if (this.isPackage === false) {
+            return false;
+        }
+        this.members.push(item)
+        return true;
+    }
+
+    get isFunction(): boolean {
+        return this.type_kind === "function";
+    }
+
+    get isIdentifier(): boolean {
+        return this.type_kind === "identifier";
+    }
+
+    get isPackage(): boolean {
+        return this.type_kind === "package";
+    }
+
+    get isStruct(): boolean {
+        return this.type_kind === "struct";
     }
 
     getString(): string {
@@ -25,6 +58,14 @@ export class AstType extends AstNode {
             type_kind: this.type_kind,
         };
         return stringify(obj, wantsJson);
+    }
+
+    static createFunction(name: string, args: AstFunctionArgument[], return_type: AstType): AstType {
+        const type: AstType = new AstType("function");
+        type.func_name = name;
+        type.func_args = args;
+        type.func_return_type = return_type;
+        return type;
     }
 
     static createIdentifier(): AstType {

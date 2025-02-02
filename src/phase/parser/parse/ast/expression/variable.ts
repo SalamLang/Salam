@@ -4,7 +4,7 @@ import { stringify } from '../../../../../serializer';
 
 export class AstExpressionVariable extends AstExpression {
     left: AstExpression;
-    value_type: AstType | undefined;    
+    value_type: AstType | undefined;
 
     constructor(left: AstExpression) {
         super("ExpressionVariable");

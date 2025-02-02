@@ -3,6 +3,7 @@ import { parseExpressionUnary } from './unary';
 import { parseExpressionLiteral } from './literal';
 import { Token } from '../../../lexer/tokenizer/token';
 import { parseExpressionParentheses } from './parenthese';
+import { parseExpressionFunctionCall } from '../function/function_call';
 import { AstExpression } from './../ast/expression/expression';
 import { isOperator } from '../../../lexer/tokenizer/operator';
 import { TokenOperatorType } from '../../../lexer/tokenizer/type';
@@ -21,7 +22,15 @@ export function parseExpressionPrimary(parser: Parser): AstExpression | undefine
     }
     // Handle literals (numbers, strings, booleans)
     else if (currentToken.data !== undefined && !isOp) {
-        return parseExpressionLiteral(parser);
+        const expr: AstExpression | undefined = parseExpressionLiteral(parser);
+        if (expr === undefined) {
+            return undefined;
+        }
+        // Check if this is a function call (identifier followed by `(`)
+        if (parser.has(TokenOperatorType.TOKEN_LEFT_PAREN)) {
+            return parseExpressionFunctionCall(parser, expr);
+        }
+        return expr;
     }
     // Handle unary operators (-a, !b)
     else if (isOp && !isInvalidOp) {

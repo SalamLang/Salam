@@ -1,14 +1,27 @@
-import { AstNode } from './../node';
-import { AstExpression } from '../expression/expression';
-import { AstFunctionParameter } from '../function_parameter';
+import { AstExpression } from './../expression/expression';
+import { stringify } from '../../../../../serializer';
+import { AstFunctionParameter } from './../function/function_parameter';
 
-export class AstFunctionCall extends AstNode {
-    name: AstExpression;
-    parameters: AstFunctionAttribute[];
+export class AstExpressionFunctionCall extends AstExpression {
+    left: AstExpression;
+    parameters: AstFunctionParameter[];
 
-    constructor(name: AstExpression, parameters: AstFunctionParameter[]) {
-        super("FunctionCall");
-        this.name = name;
+    constructor(left: AstExpression, parameters: AstFunctionParameter[]) {
+        super("ExpressionFunctionCall");
+        this.left = left;
         this.parameters = parameters;
+    }
+
+    getString(): string {
+        return this.left.getString();
+    }
+
+    stringify(wantsJson: boolean = true): string | object {
+        const obj: object = {
+            type: "ExpressionFunctionCall",
+            left: this.left.stringify(false),
+            parameters: this.parameters.map((param) => param.stringify(false)),
+        };
+        return stringify(obj, wantsJson);
     }
 }

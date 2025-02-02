@@ -1,3 +1,4 @@
+import { stringify } from "../../../serializer";
 import { AstType } from "../../parser/parse/ast/expression/type";
 
 export class SymbolTable {
@@ -21,5 +22,16 @@ export class SymbolTable {
 
     removeSymbol(name: string): boolean {
         return this.table.delete(name);
+    }
+
+    print(): void {
+        console.log(this.stringify());
+    }
+
+    stringify(wantsJson: boolean = true): string | object {
+        const obj: object = {
+            table: this.table.entries(),
+        };
+        return stringify(obj, wantsJson);
     }
 }

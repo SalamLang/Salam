@@ -24,10 +24,6 @@ export class SymbolTable {
         return this.table.delete(name);
     }
 
-    print(): void {
-        console.log(this.stringify());
-    }
-
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             table: this.table.entries(),

@@ -5,8 +5,9 @@ import { validateLayoutElementAttributes } from './element_attributes';
 import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 import { validatorMessageRenderer } from './../../../../common/message/message';
 import { ValidatorMessageKeys } from "../../../../common/message/validator/validator";
+import { AstBlock } from "../../../parser/parse/ast/block";
 
-export function validateLayoutElement(validator: Validator, parent_element: AstLayoutElement | undefined, element: AstLayoutElement, runtime_element: RuntimeElement | undefined = undefined): void {
+export function validateLayoutElement(validator: Validator, parent_block: AstBlock, parent_element: AstLayoutElement | undefined, element: AstLayoutElement, runtime_element: RuntimeElement | undefined = undefined): void {
     // Try to get runtime element if not provided
     if (runtime_element === undefined) {
         // First check if element is a valid element

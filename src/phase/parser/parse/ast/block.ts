@@ -1,17 +1,16 @@
 import { AstNode } from './node';
 import { stringify } from './../../../../serializer';
 import { SymbolTable } from '../../../validator/validation/symbol-table';
+import { AstType } from './expression/type';
 
 export class AstBlock extends AstNode {
 	children: AstNode[] = [];
 	symbol_table: SymbolTable;
-	checkVariables: boolean;
 	parent_block: AstBlock | undefined;
 
 	constructor() {
 		super("Block");
 		this.symbol_table = new SymbolTable();
-		this.checkVariables = true;
 		this.parent_block = undefined;
 	}
 
@@ -21,6 +20,20 @@ export class AstBlock extends AstNode {
 
 	addChild(node: AstNode): void {
 		this.children.push(node);
+	}
+
+	lookUp(name: string): AstType | undefined {
+		let currentBlock: AstBlock | undefined = this;
+
+		while (currentBlock) {
+			const symbol = currentBlock.symbol_table.getSymbol(name);
+			if (symbol !== undefined) {
+				return symbol;
+			}
+			currentBlock = currentBlock.parent_block;
+		}
+	
+		return undefined;
 	}
 
 	print(): void {

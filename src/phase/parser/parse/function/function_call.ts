@@ -29,7 +29,7 @@ export function parseExpressionFunctionCall(parser: Parser, functionName: AstExp
         }
     } else {
         // Consume `)`
-        parser.next();
+        parser.expect(TokenOperatorType.TOKEN_RIGHT_PAREN);
     }
 
     return new AstExpressionFunctionCall(functionName, parameters);

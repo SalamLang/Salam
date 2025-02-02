@@ -1,11 +1,14 @@
 import { AstNode } from './node';
 import { stringify } from './../../../../serializer';
+import { SymbolTable } from '../../../validator/validation/symbol-table';
 
 export class AstBlock extends AstNode {
 	children: AstNode[] = [];
+	table: SymbolTable;
 
 	constructor() {
 		super("Block");
+		this.table = new SymbolTable();
 	}
 
 	addChild(node: AstNode): void {

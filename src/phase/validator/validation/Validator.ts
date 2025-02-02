@@ -1,3 +1,4 @@
+import { SymbolTable } from './symbol-table';
 import { RuntimeElement } from './../../../runtime/element'; 
 import { runtimeElements } from './../../../runtime/runtime';
 import { AstProgram } from "./../../parser/parse/ast/program";
@@ -12,10 +13,12 @@ import { runtimeStyleAttributes, runtimeGlobalAttributes, runtimeGlobalSingleAtt
 export class Validator {
     ast: AstProgram;
     errors: string[];
+    symbol_table: SymbolTable;
     
     constructor(ast: AstProgram) {
         this.ast = ast;
         this.errors = [];
+        this.symbol_table = new SymbolTable();
     }
 
     pushError(message: string) {

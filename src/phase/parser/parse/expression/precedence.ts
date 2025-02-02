@@ -45,11 +45,11 @@ export const OPERATOR_PRECEDENCE: Record<TokenOperatorType, number> = {
 
     // Grouping
     [TokenOperatorType.TOKEN_LEFT_PAREN]: 17,
-    [TokenOperatorType.TOKEN_RIGHT_PAREN]: 17,
+    // [TokenOperatorType.TOKEN_RIGHT_PAREN]: 17,
     [TokenOperatorType.TOKEN_LEFT_BRACE]: 17,
-    [TokenOperatorType.TOKEN_RIGHT_BRACE]: 17,
+    // [TokenOperatorType.TOKEN_RIGHT_BRACE]: 17,
     [TokenOperatorType.TOKEN_LEFT_BRACKET]: 17,
-    [TokenOperatorType.TOKEN_RIGHT_BRACKET]: 17,
+    // [TokenOperatorType.TOKEN_RIGHT_BRACKET]: 17,
 
     // Miscellaneous
     [TokenOperatorType.TOKEN_COMMA]: 18,

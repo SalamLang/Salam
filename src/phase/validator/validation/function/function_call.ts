@@ -6,8 +6,7 @@ import { AstType } from "../../../parser/parse/ast/expression/type";
 import { AstExpressionFunctionCall } from "../../../parser/parse/ast/function/function_call";
 
 export function validateExpressionFunctionCall(validator: Validator, block: AstBlock, node: AstExpressionFunctionCall) {
-    block.checkVariables = false;
-    // validateExpression(validator, block, node.left);
+    validateExpression(validator, block, node.left);
 
     validateFunctionParameters(validator, block, node.parameters);
 

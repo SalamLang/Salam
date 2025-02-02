@@ -14,9 +14,7 @@ export class Parser {
     index: number;
 
     constructor(lexer: Lexer) {
-        const block: AstBlock = new AstBlock();
-        
-        this.ast = new AstProgram(lexer.language, block);
+        this.ast = new AstProgram(lexer.language);
         this.lexer = lexer;
         this.index = 0;
     }

@@ -4,6 +4,7 @@ import { generateExpression } from '../expression/expression';
 
 export function generateStatementPrint(generator: Generator, stmt: AstStatementPrint): string {
     if (stmt.value.value_type === undefined) {
+        generator.pushError("Cannot print value of undefined type");
         return "";
     }
 

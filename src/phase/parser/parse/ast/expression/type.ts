@@ -27,6 +27,10 @@ export class AstType extends AstNode {
         return stringify(obj, wantsJson);
     }
 
+    static createIdentifier(): AstType {
+        return new AstType("identifier");
+    }
+    
     static createString(): AstType {
         return new AstType("string");
     }

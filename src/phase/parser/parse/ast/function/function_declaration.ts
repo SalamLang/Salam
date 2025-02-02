@@ -1,17 +1,17 @@
 import { AstNode } from './../node';
 import { AstBlock } from './../block';
 import { stringify } from './../../../../../serializer';
-import { AstFunctionParameter } from '../function_parameter';
+import { AstFunctionArgument } from './function_argument';
 
 export class AstFunctionDeclaration extends AstNode {
     name: string;
-    parameters: AstFunctionParameter[];
+    args: AstFunctionArgument[];
     body: AstBlock;
 
-    constructor(name: string, params: AstFunctionParameter[], body: AstBlock) {
+    constructor(name: string, args: AstFunctionArgument[], body: AstBlock) {
         super("FunctionDeclaration");
         this.name = name;
-        this.parameters = params;
+        this.args = args;
         this.body = body;
     }
 
@@ -22,7 +22,7 @@ export class AstFunctionDeclaration extends AstNode {
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             name: this.name,
-            parameters: this.parameters,
+            args: this.args,
             body: this.body.stringify(false),
         };
         return stringify(obj, wantsJson);

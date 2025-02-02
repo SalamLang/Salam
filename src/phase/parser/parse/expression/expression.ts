@@ -10,6 +10,7 @@ import { TokenOperatorType } from '../../../lexer/tokenizer/type';
 import { parseExpressionFunctionCall } from '../function/function_call';
 
 export function parseExpression(parser: Parser, precedence: number = 0): AstExpression | undefined {
+    console.log("parseExpression", parser.currentToken);
     let left: AstExpression | undefined = parseExpressionPrimary(parser);
     if (left === undefined) {
         parser.pushError('Failed to parse primary expression');
@@ -17,7 +18,7 @@ export function parseExpression(parser: Parser, precedence: number = 0): AstExpr
     }
 
     while (!parser.isEnd && !parser.isBlockClose()) {
-        console.log("Left is:", left);
+        console.log("parseExpression-loop-left:", parser.currentToken, left);
         const operator: Token = parser.currentToken;
         const isOp: boolean = operator && isOperator(operator.type);
         const isInvalidOp: boolean = isOp && invalidOperators.includes(operator.type);
@@ -36,6 +37,7 @@ export function parseExpression(parser: Parser, precedence: number = 0): AstExpr
         }
 
         const opPrecedence: number = getExpressionPrecedence(operator);
+        console.log(operator.enduser_token, opPrecedence, precedence, opPrecedence < precedence);
         if (opPrecedence < precedence) {
             break;
         }

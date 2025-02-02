@@ -9,17 +9,15 @@ export function showAvailableLanguages(): void {
 };
 
 export function showUsage(): void {
-    console.log("Usage: ./salam-validator [options] <command>");
-    console.log("");
-    console.log("Commands:");
-    console.log("  version         Display the version of Salam CLI.");
-    console.log("  help            Display this help message.");
-    console.log("  file <path>     Process a file with the specified path.");
-    console.log("  code <value>    Process the provided code snippet.");
-    console.log("");
-    console.log("Options:");
-    console.log(`  ${lang_flag} <value>    Select the language to use.`);
-    showAvailableLanguages();
+    console.log(`Usage: ./salam-validator [options] <command>\n
+        Commands:
+          version         Display the version of Salam CLI.
+          help            Display this help message.
+          file <path>     Process a file with the specified path.
+          code <value>    Process the provided code snippet.\n
+        Options:
+          ${lang_flag} <value>    Select the language to use.`);
+            showAvailableLanguages();
 };
 
 export function processCommandHelp(args: string[]): number {

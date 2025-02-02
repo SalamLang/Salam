@@ -14,7 +14,7 @@ export function validateExpressionVariable(validator: Validator, block: AstBlock
     const name: string = expr.left.getString();
     const symbol_type: AstType | undefined = block.symbol_table.getSymbol(name);
 
-    if (symbol_type === undefined) {
+    if (symbol_type === undefined && block.checkVariables === true) {
         validator.pushError(`Variable '${name}' is not defined`);
         return;
     }

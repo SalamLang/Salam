@@ -1,4 +1,5 @@
 import { AstNode } from './node';
+import { AstBlock } from './block';
 import { AstLayout } from './layout/layout';
 import { stringify } from './../../../../serializer';
 import { LanguageMap } from './../../../../common/language/language';
@@ -9,11 +10,13 @@ export class AstProgram extends AstNode {
     layout: AstLayout | undefined;
     functions: AstFunctionDeclaration[];
     language: LanguageMap;
+    block: AstBlock;
 
-    constructor(language: LanguageMap) {
+    constructor(language: LanguageMap, block: AstBlock) {
         super("Program");
         this.functions = [];
         this.language = language;
+        this.block = block;
     }
 
     hasLayout(): boolean {

@@ -1,14 +1,14 @@
 import { Parser } from '../parser';
 import { AstBlock } from '../ast/block';
 import { parserParseBlock } from '../block';
-import { AstFunctionParameter } from '../ast/function_parameter';
 import { TokenKeywordType } from '../../../lexer/tokenizer/type';
 import { parserParseFunctionArguments } from './function_attributes';
+import { AstFunctionArgument } from '../ast/function/function_argument';
 import { parserMessageRenderer } from '../../../../common/message/message';
 import { ParserMessageKeys } from '../../../../common/message/parser/parser';
 import { AstFunctionDeclaration } from '../ast/function/function_declaration';
 
-export function parserParseFunctionDeclaration(parser: Parser): AstFunctionDeclaration | undefined {
+export function parserParseFunctionDeclaration(parser: Parser, parent_block: AstBlock): AstFunctionDeclaration | undefined {
     parser.expect(TokenKeywordType.TOKEN_FN);
 
     if (! parser.currentToken.isKeyword) {
@@ -28,7 +28,7 @@ export function parserParseFunctionDeclaration(parser: Parser): AstFunctionDecla
     // Eating function name
     parser.next();
 
-    const params: AstFunctionParameter[] | undefined = parserParseFunctionArguments(parser);
+    const params: AstFunctionArgument[] | undefined = parserParseFunctionArguments(parser);
     if (! params) {
         parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_PARAMETERS_ARE_NOT_VALID));
         return undefined;

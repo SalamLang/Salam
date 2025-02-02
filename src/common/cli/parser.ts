@@ -8,16 +8,11 @@ import { LanguageMap } from './../../common/language/language';
 export function processCommandRun(fileName: string | undefined, absoluteDirPath: string | undefined, source: string, selectedLanguage: LanguageMap): number {
     const lexer: Lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
     lex(lexer);
-    // lexer.print();
-
-    // console.log('=======================');
-    // console.log('=======================');
-    // console.log('=======================');
 
     const parser: Parser = new Parser(lexer);
     parse(parser);
     checkError(parser, undefined, undefined);
-    parser.print();
+    console.log(parser.stringify());
 
     return 0;
 };

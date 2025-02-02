@@ -12,39 +12,22 @@ import { Validator } from './../../phase/validator/validation/validator';
 export function processCommandRun(fileName: string | undefined, absoluteDirPath: string | undefined, source: string, selectedLanguage: LanguageMap): number {
     const lexer: Lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
     lex(lexer);
-    // lexer.print();
-
-    // console.log('=======================');
-    // console.log('=======================');
-    // console.log('=======================');
 
     const parser: Parser = new Parser(lexer);
     parse(parser);
     checkError(parser, undefined, undefined);
-    // parser.print();
-
-    // console.log('=======================');
-    // console.log('=======================');
-    // console.log('=======================');
 
     const validator: Validator = new Validator(parser.ast);
     validate(validator);
     checkError(parser, validator, undefined);
 
-    // console.log('=======================');
-    // console.log('=======================');
-    // console.log('=======================');
-
     console.log(validator.ast.stringify());
-
-    console.log('=======================');
-    console.log('=======================');
     console.log('=======================');
 
     const generator: Generator = new Generator(validator.ast);
     generate(generator);
     checkError(parser, validator, generator);
-    generator.print();
+    console.log(generator.stringify());
 
     const outputFileName: string = 'test.html';
     generator.writeToFile(outputFileName);

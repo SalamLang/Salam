@@ -21,7 +21,7 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
     const parser: Parser = new Parser(lexer);
     parse(parser);
     checkError(parser, undefined, undefined);
-    parser.print();
+    // parser.print();
 
     // console.log('=======================');
     // console.log('=======================');
@@ -35,11 +35,11 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
     // console.log('=======================');
     // console.log('=======================');
 
-    // console.log(validator.ast.stringify());
+    console.log(validator.ast.stringify());
 
-    // console.log('=======================');
-    // console.log('=======================');
-    // console.log('=======================');
+    console.log('=======================');
+    console.log('=======================');
+    console.log('=======================');
 
     const generator: Generator = new Generator(validator.ast);
     generate(generator);

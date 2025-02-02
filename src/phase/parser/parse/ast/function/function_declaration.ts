@@ -15,10 +15,6 @@ export class AstFunctionDeclaration extends AstNode {
         this.body = body;
     }
 
-    print(): void {
-        console.log(this.stringify());
-    }
-
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             name: this.name,

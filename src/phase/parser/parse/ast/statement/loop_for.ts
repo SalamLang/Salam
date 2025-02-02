@@ -20,10 +20,6 @@ export class AstLoopFor extends AstNode {
         this.body = body;
     }
 
-    print(): void {
-        console.log(this.stringify());
-    }
-
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             initializer: this.initializer,

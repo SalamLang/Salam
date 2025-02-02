@@ -10,10 +10,6 @@ export class AstLayout extends AstNode {
         this.root = root;
     }
 
-    print(): void {
-        console.log(this.stringify());
-    }
-
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             root: this.root.stringify(false),

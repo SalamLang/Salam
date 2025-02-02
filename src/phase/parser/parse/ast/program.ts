@@ -54,10 +54,6 @@ export class AstProgram extends AstNode {
         this.errors.push(error);
     }
 
-    print(): void {
-        console.log(this.stringify());
-    }
-
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             type: this.type,

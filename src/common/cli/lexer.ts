@@ -5,7 +5,7 @@ import { Lexer } from "./../../phase/lexer/lex/lexer";
 export function processCommandRun(fileName: string | undefined, absoluteDirPath: string | undefined, source: string, selectedLanguage: LanguageMap): number {
     const lexer: Lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
     lex(lexer);
-    lexer.print();
+    console.log(lexer.stringify());
 
     return 0;
 };

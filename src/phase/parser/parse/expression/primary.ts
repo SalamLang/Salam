@@ -22,15 +22,7 @@ export function parseExpressionPrimary(parser: Parser): AstExpression | undefine
     }
     // Handle literals (numbers, strings, booleans)
     else if (currentToken.data !== undefined && !isOp) {
-        const expr: AstExpression | undefined = parseExpressionLiteral(parser);
-        if (expr === undefined) {
-            return undefined;
-        }
-        // Check if this is a function call (identifier followed by `(`)
-        if (parser.has(TokenOperatorType.TOKEN_LEFT_PAREN)) {
-            return parseExpressionFunctionCall(parser, expr);
-        }
-        return expr;
+        return parseExpressionLiteral(parser);
     }
     // Handle unary operators (-a, !b)
     else if (isOp && !isInvalidOp) {

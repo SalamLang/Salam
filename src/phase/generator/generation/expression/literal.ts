@@ -7,6 +7,12 @@ export function generateExpressionLiteral(generator: Generator, expr: AstExpress
         return `"${value}"`;
     } else if (expr.value_type.type_kind === "bool") {
         return value;
+    } else if (expr.value_type.type_kind === "identifier") {
+        return value;
+    } else if (expr.value_type.type_kind === "int") {
+        return value;
+    } else if (expr.value_type.type_kind === "float") {
+        return value;
     }
-    return value;
+    return `<...${value}...>`;
 };

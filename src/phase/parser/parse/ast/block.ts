@@ -36,10 +36,6 @@ export class AstBlock extends AstNode {
 		return undefined;
 	}
 
-	print(): void {
-		console.log(this.stringify());
-	}
-
 	stringify(wantsJson: boolean = true): string | object {
 		const obj: object = {
 			children: this.children,

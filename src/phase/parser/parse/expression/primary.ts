@@ -14,6 +14,7 @@ export function parseExpressionPrimary(parser: Parser): AstExpression | undefine
     const isOp: boolean = currentToken && isOperator(currentToken.type);
     const isInvalidOp: boolean = isOp && invalidOperators.includes(currentToken.type);
     if (!currentToken || isInvalidOp) {
+        parser.pushError("Invalid operator inside primary expression " + currentToken.enduser_token);
         return undefined;
     }
     // Handle parentheses `(expr)`
@@ -28,5 +29,7 @@ export function parseExpressionPrimary(parser: Parser): AstExpression | undefine
     else if (isOp && !isInvalidOp) {
         return parseExpressionUnary(parser);
     }
+    // console.log(parser.currentToken);
+    // parser.pushError("Failed to parse primary expression???");
     return undefined;
 };

@@ -21,16 +21,13 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
     validate(validator);
     checkError(parser, validator, undefined);
 
-    console.log(validator.ast.stringify());
-    console.log('=======================');
-
     const generator: Generator = new Generator(validator.ast);
     generate(generator);
-    checkError(parser, validator, generator);
-    console.log(generator.stringify());
 
     const outputFileName: string = 'test.html';
     generator.writeToFile(outputFileName);
+
+    checkError(parser, validator, generator);
 
     return 0;
 };

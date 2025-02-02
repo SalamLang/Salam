@@ -137,10 +137,6 @@ export class Lexer {
         }
     }
 
-    print(): void {
-        console.log(this.stringify());
-    }
-
     stringify(wantsJson: boolean = true): string | object {
         const jsonArray: object = this.tokens.map(token => token.stringify(false));
         return stringify(jsonArray, wantsJson);

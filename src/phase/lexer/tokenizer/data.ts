@@ -56,10 +56,6 @@ export class TokenData {
         return value.toString();
     }
 
-    print(): void {
-        console.log(this.stringify());
-    }
-
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             type: TokenDataType[this.type],

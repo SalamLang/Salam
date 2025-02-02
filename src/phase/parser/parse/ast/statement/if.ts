@@ -17,10 +17,6 @@ export class AstIf extends AstNode {
         }
     }
 
-    print(): void {
-        console.log(this.stringify());
-    }
-
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             condition: this.condition,

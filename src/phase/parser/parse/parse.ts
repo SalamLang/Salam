@@ -15,7 +15,7 @@ export function parse(parser: Parser): void {
         if (token.type === TokenOtherType.TOKEN_EOF) {
             break;
         } else if (token.type === TokenKeywordType.TOKEN_FN) {
-            const function_declaration: AstFunctionDeclaration | undefined = parserParseFunctionDeclaration(parser);
+            const function_declaration: AstFunctionDeclaration | undefined = parserParseFunctionDeclaration(parser, parser.ast.block);
             if (! function_declaration) {
                 parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FAILED_TO_PARSE_FUNCTION_STATEMENT));
                 break;
@@ -25,7 +25,7 @@ export function parse(parser: Parser): void {
                 break;
             }
         } else if (token.type === TokenKeywordType.TOKEN_LAYOUT) {
-            const layout: AstLayout | undefined = parserParseLayout(parser);
+            const layout: AstLayout | undefined = parserParseLayout(parser, parser.ast.block);
             if (! layout) {
                 parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FAILED_TO_PARSE_LAYOUT_ELEMENT));
                 break;

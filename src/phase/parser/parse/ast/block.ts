@@ -5,10 +5,18 @@ import { SymbolTable } from '../../../validator/validation/symbol-table';
 export class AstBlock extends AstNode {
 	children: AstNode[] = [];
 	symbol_table: SymbolTable;
+	checkVariables: boolean;
+	parent_block: AstBlock | undefined;
 
 	constructor() {
 		super("Block");
 		this.symbol_table = new SymbolTable();
+		this.checkVariables = true;
+		this.parent_block = undefined;
+	}
+
+	setParentBlock(parent_block: AstBlock): void {
+		this.parent_block = parent_block;
 	}
 
 	addChild(node: AstNode): void {

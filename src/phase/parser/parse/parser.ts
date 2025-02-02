@@ -6,6 +6,7 @@ import { LanguageID } from './../../../common/language/language';
 import { parserMessageRenderer } from './../../../common/message/message';
 import { ParserMessageKeys } from './../../../common/message/parser/parser';
 import { TokenKeywordType, TokenOperatorType, TokenOtherType, TokenType } from './../../lexer/tokenizer/type';
+import { AstBlock } from './ast/block';
 
 export class Parser {
     ast: AstProgram;
@@ -13,7 +14,9 @@ export class Parser {
     index: number;
 
     constructor(lexer: Lexer) {
-        this.ast = new AstProgram(lexer.language);
+        const block: AstBlock = new AstBlock();
+        
+        this.ast = new AstProgram(lexer.language, block);
         this.lexer = lexer;
         this.index = 0;
     }

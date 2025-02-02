@@ -6,20 +6,21 @@ import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 import { validatorMessageRenderer } from './../../../../common/message/message';
 import { RuntimeElementStyleState } from "../../../../runtime/element_style_state";
 import { ValidatorMessageKeys } from "../../../../common/message/validator/validator";
+import { AstBlock } from "../../../parser/parse/ast/block";
 
-export function validateLayoutElementOrState(validator: Validator, parent_element: AstLayoutElement | undefined, element: AstLayoutElement): void {
+export function validateLayoutElementOrState(validator: Validator, parent_block: AstBlock, parent_element: AstLayoutElement | undefined, element: AstLayoutElement): void {
     const runtime_element: RuntimeElement | undefined = Validator.getElementRuntime(validator.getLanguageId(), parent_element, element.enduser_name);
 
     // First check if element is a valid element
     if (runtime_element !== undefined) {
-        validateLayoutElement(validator, parent_element, element, runtime_element);
+        validateLayoutElement(validator, parent_block, parent_element, element, runtime_element);
         return;
     }
     
     // Second check if element is a valid style element
     const runtime_style_element: RuntimeElement | undefined = Validator.getStyleElementRuntime(validator.getLanguageId(), parent_element, element.enduser_name);
     if (runtime_style_element !== undefined) {
-        validateLayoutElement(validator, parent_element, element, runtime_style_element);
+        validateLayoutElement(validator, parent_block, parent_element, element, runtime_style_element);
         return;
     }
 

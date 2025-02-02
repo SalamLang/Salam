@@ -3,6 +3,7 @@ import { AstProgram } from "./../../parser/parse/ast/program";
 import { LanguageID } from './../../../common/language/language';
 import { generatorMessageRenderer } from './../../../common/message/message';
 import { GeneratorMessageKeys } from './../../../common/message/generator/generator';
+import { stringify } from '../../../serializer';
 
 export class Generator {
     ast: AstProgram;
@@ -92,13 +93,6 @@ export class Generator {
         this.errors.push(message);
     }
 
-    print(): void {
-        if (this.source.length > 0) {
-            console.log(this.getGeneratedSource());
-        }
-        console.log(this.getGeneratedSourceC());
-    }
-
     getGeneratedSource(): string {
         return this.source;
     }
@@ -126,9 +120,14 @@ export class Generator {
         return this.ast.language.id;
     }
 
+    stringify(wantsJson: boolean = true): string | object {
+        return stringify(this, wantsJson);
+    }
+
     writeToFile(output: string): void {
         try {
-            fs.writeFileSync(output, this.getGeneratedSource(), 'utf-8');
+            fs.writeFileSync(output.replace(".html", ".json"), this.stringify(), 'utf-8');
+            fs.writeFileSync(output, this.getGeneratedSourceC() + "\n" + this.getGeneratedSource(), 'utf-8');
         } catch (error: unknown) {
             if (error instanceof Error) {
                 this.pushError(generatorMessageRenderer(

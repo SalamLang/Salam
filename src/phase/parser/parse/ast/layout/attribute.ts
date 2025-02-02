@@ -46,10 +46,6 @@ export class AstLayoutAttribute extends AstNode {
         return this.key;
     }
 
-    print(): void {
-        console.log(this.stringify());
-    }
-
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             key: this.key,

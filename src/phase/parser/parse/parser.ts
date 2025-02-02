@@ -119,10 +119,6 @@ export class Parser {
         return this.has(TokenOperatorType.TOKEN_COLON);
     }
 
-    print(): void {
-        console.log(this.stringify());
-    }
-
     stringify(wantsJson: boolean = true): string | object {
         return stringify(this.ast, wantsJson);
     }

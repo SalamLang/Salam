@@ -51,10 +51,6 @@ export class AstLayoutElement extends AstNode {
         this.built_in_selector = "." + IdentifierGenerator.get();
     }
 
-    print(): void {
-        console.log(this.stringify());
-    }
-
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             kind: this.kind,

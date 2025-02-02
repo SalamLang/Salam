@@ -61,10 +61,6 @@ export class Token {
         return values.includes(this.type as string) ? (this.type as string) : undefined;
     }
 
-    print(): void {
-        console.log(this.stringify());
-    }
-
     stringify(wantsJson: boolean = true): string | object {
         const typeString: string | undefined =
             this.getTypeString(TokenKeywordType) ||

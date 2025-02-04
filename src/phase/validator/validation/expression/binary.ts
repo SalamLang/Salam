@@ -1,11 +1,8 @@
 import { Validator } from "../validator";
 import { validateExpression } from "./expression";
 import { AstBlock } from "../../../parser/parse/ast/block";
-import { AstType } from './../../../parser/parse/ast/expression/type';
-import { AstExpressionBinary } from "../../../parser/parse/ast/expression/binary";
 import { TokenOperatorType } from "../../../lexer/tokenizer/type";
-import { AstExpressionVariable } from "../../../parser/parse/ast/expression/variable";
-import { AstExpressionFunctionCall } from "../../../parser/parse/ast/function/function_call";
+import { AstExpressionBinary } from "../../../parser/parse/ast/expression/binary";
 
 export function validateExpressionBinary(validator: Validator, block: AstBlock, expr: AstExpressionBinary): void {
     validateExpression(validator, block, expr.left);
@@ -19,35 +16,26 @@ export function validateExpressionBinary(validator: Validator, block: AstBlock, 
             validator.pushError("Cannot apply member operator on a value which is not a package or struct, this value is " + expr.left.value_type.type_kind);
             return;
         }
-        let hasError: boolean = true;
-        if (expr.right.type === "ExpressionFunctionCall") {
-            const right: AstExpressionFunctionCall | undefined = expr.right as AstExpressionFunctionCall;
-            if (right.left.type === "ExpressionVariable") {
-                hasError = false;
-            }
-        } else if (expr.right.type === "ExpressionVariable") {
-            hasError = false;
-        }
-
-        if (hasError) {
-            validator.pushError("Right side of member operator should be an identifier to get an sub element from the package or struct.");
-        }
-
-        expr.left.value_type.members
-
-        console.error(expr.left.value_type.members);
         
+        if (expr.right.type === "ExpressionVariable") {
+            expr.value_type = expr.left.value_type?.getMember(expr.right.getString());
+            if (expr.value_type === undefined) {
+                validator.pushError("Member " + expr.right.getString() + " does not exist in the package or struct.");
+            }
+            return;
+        } else {
+            validator.pushError("Right side of member operator should be an identifier to get an sub element from the package or struct.");
+            return;
+        }
     } else {
         validateExpression(validator, block, expr.right);
-    }
 
-    if (expr.right.value_type === undefined) {
-        return;
-    }
+        if (expr.right.value_type === undefined) {
+            return;
+        }
 
-    if (expr.left.value_type.isEqual(expr.right.value_type)) {
-        expr.value_type = expr.left.value_type;
-    } else {
-        expr.value_type = AstType.createVoid();
+        if (expr.left.value_type.isEqual(expr.right.value_type)) {
+            expr.value_type = expr.left.value_type;
+        }
     }
 };

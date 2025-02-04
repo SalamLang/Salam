@@ -12,6 +12,7 @@ export function parseExpressionPrefix(parser: Parser, min_bp: number): AstExpres
         parser.pushError("Expected prefix operator but got '" + op.enduser_token + "'");
         return undefined;
     }
+    
     parser.next();
 
     const right: AstExpression | undefined = parseExpression(parser, min_bp);

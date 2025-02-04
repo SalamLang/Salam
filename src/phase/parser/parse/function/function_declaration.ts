@@ -7,6 +7,8 @@ import { AstFunctionArgument } from '../ast/function/function_argument';
 import { parserMessageRenderer } from '../../../../common/message/message';
 import { ParserMessageKeys } from '../../../../common/message/parser/parser';
 import { AstFunctionDeclaration } from '../ast/function/function_declaration';
+import { parseType } from '../expression/type';
+import { AstType } from '../ast/expression/type';
 
 export function parserParseFunctionDeclaration(parser: Parser, parent_block: AstBlock): AstFunctionDeclaration | undefined {
     parser.expect(TokenKeywordType.TOKEN_FN);
@@ -40,6 +42,8 @@ export function parserParseFunctionDeclaration(parser: Parser, parent_block: Ast
         return undefined;
     }
 
-    const ast: AstFunctionDeclaration = new AstFunctionDeclaration(name, params, body);
+    const return_type: AstType = AstType.createVoid(); // parseType();
+
+    const ast: AstFunctionDeclaration = new AstFunctionDeclaration(name, params, body, return_type);
     return ast;
 };

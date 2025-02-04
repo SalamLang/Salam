@@ -1,6 +1,6 @@
 import { Generator } from './generator';
 import { generateLayout } from './layout/layout';
-import { generateFunctionDeclaration } from './statement/function-declaration';
+import { generateFunctionDeclaration } from './statement/function_declaration';
 
 export function generate(generator: Generator): void {
     if (generator.ast.layout) {

@@ -5,7 +5,7 @@ import { generateStatementExpression } from './expression';
 import { AstStatement } from '../../../parser/parse/ast/statement/statement';
 import { AstStatementPrint } from '../../../parser/parse/ast/statement/print';
 import { AstStatementReturn } from '../../../parser/parse/ast/statement/return';
-import { generateStatementExpressionDeclaration } from './expression-declaration';
+import { generateStatementExpressionDeclaration } from './expression_declaration';
 import { AstStatementExpression } from '../../../parser/parse/ast/statement/expression';
 import { AstStatementExpressionDeclaration } from '../../../parser/parse/ast/statement/expression_declaration';
 

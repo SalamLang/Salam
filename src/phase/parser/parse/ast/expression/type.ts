@@ -7,7 +7,11 @@ export class AstType extends AstNode {
     is_pointer: boolean;
     is_reference: boolean;
     is_array: boolean;
+
     members: AstType[]; // Only when type_kind is `package` or `struct`
+
+    member_name: string | undefined;
+
     func_name: string | undefined;
     func_args: AstFunctionArgument[];
     func_return_type: AstType | undefined;
@@ -24,12 +28,24 @@ export class AstType extends AstNode {
         this.func_return_type = undefined;
     }
 
-    addMemberFunction(item: AstType): boolean {
+    addMember(item: AstType): boolean {
         if (this.isPackage === false) {
             return false;
         }
         this.members.push(item)
         return true;
+    }
+
+    getMember(name: string): AstType | undefined {
+        if (this.isPackage === false && this.isStruct === false) {
+            return undefined;
+        }
+        for (const member of this.members) {
+            if (member.func_name === name || member.member_name === name) {
+                return member;
+            }
+        }
+        return undefined;
     }
 
     get isFunction(): boolean {
@@ -60,11 +76,16 @@ export class AstType extends AstNode {
         return stringify(obj, wantsJson);
     }
 
-    static createFunction(name: string, args: AstFunctionArgument[], return_type: AstType): AstType {
+    static createMemberFunction(name: string, args: AstFunctionArgument[], return_type: AstType): AstType {
         const type: AstType = new AstType("function");
         type.func_name = name;
         type.func_args = args;
         type.func_return_type = return_type;
+        return type;
+    }
+
+    static createMemberValue(name: string, type: AstType): AstType {
+        type.member_name = name;
         return type;
     }
 

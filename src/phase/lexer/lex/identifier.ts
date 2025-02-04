@@ -1,5 +1,5 @@
 import { Lexer } from "./lexer";
-import { isUtf8Alpha } from './utf8';
+import { isUtf8Alpha, isUtf8Number } from './utf8';
 import { Token } from "./../tokenizer/token";
 import { TokenKeywordType } from "./../tokenizer/type";
 import { TokenData, TokenDataType } from "./../tokenizer/data";
@@ -11,7 +11,7 @@ export function lexerLexIdentifier(lexer: Lexer) {
     while (lexer.currentChar !== '\0') {
         const char: string = lexer.currentChar;
 
-        if (! isUtf8Alpha(char)) {
+        if (! isUtf8Alpha(char) && ! isUtf8Number(char)) {
             break;
         }
         value += char;

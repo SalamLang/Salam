@@ -8,8 +8,12 @@ import { AstExpressionFunctionCall } from "../../../parser/parse/ast/function/fu
 export function validateExpressionFunctionCall(validator: Validator, block: AstBlock, node: AstExpressionFunctionCall) {
     validateExpression(validator, block, node.left);
 
+    if (!node.left.value_type?.isFunction) {
+        validator.pushError("Cannot call an invalid value which is not a real function!");
+        return;
+    }
+
     validateFunctionParameters(validator, block, node.parameters);
 
-    // TODO: check if the variable is defined
-    node.value_type = AstType.createInt();
+    node.value_type = node.left.value_type;
 };

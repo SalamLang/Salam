@@ -16,12 +16,18 @@ export class Validator {
     errors: string[];
     symbol_table: SymbolTable;
     extendedVariables: Record<string, AstType>;
+    packages: Record<string, AstType>;
 
     constructor(ast: AstProgram) {
         this.ast = ast;
         this.errors = [];
         this.symbol_table = new SymbolTable();
         this.extendedVariables = {};
+        this.packages = {};
+    }
+
+    pushPackage(name: string, type: AstType): void {
+        this.packages[name] = type;
     }
 
     pushExtendedVariable(name: string, type: AstType): void {

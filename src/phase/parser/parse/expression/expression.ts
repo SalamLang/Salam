@@ -47,6 +47,7 @@ export function bp_lookup(whichOperator: TokenType): binding_power {
         case TokenOperatorType.TOKEN_NOT: return RightAssociative(400);
         case TokenOperatorType.TOKEN_MEMBER: return RightAssociative(800);
         //Note: Postfix operators are always RightAssociative
+        case TokenOperatorType.TOKEN_LEFT_PAREN: return RightAssociative(10);
 
         default: return no_binding_power;
     }
@@ -58,9 +59,10 @@ export function prefix_bp_lookup(whichOperator: TokenType): number {
         case TokenOperatorType.TOKEN_NOT: return 300;
         case TokenOperatorType.TOKEN_PLUS: return 300;
         case TokenOperatorType.TOKEN_MINUS: return 300;
+        // case TokenOperatorType.TOKEN_LEFT_PAREN: return 900;
         default: return 0;
     }
-}
+};
 
 export function parseExpression(parser: Parser, binding_power_to_my_right: number = 0): AstExpression | undefined {
     let result: AstExpression | undefined = parseExpressionPrimary(parser);
@@ -74,8 +76,6 @@ export function parseExpression(parser: Parser, binding_power_to_my_right: numbe
             parser.pushError("Expected expression but we got undefined in process of parsing expression.");
             return undefined;
         }
-        
-        console.log("inside loop", parser.currentToken);
         // Is it a postfix expression?
         if (parser.has(TokenOperatorType.TOKEN_NOT)) {
             result = parseExpresssionPostfix(parser, result);
@@ -84,7 +84,6 @@ export function parseExpression(parser: Parser, binding_power_to_my_right: numbe
             result = parseExpressionTernary(parser, result);
         }
         else if (parser.has(TokenOperatorType.TOKEN_LEFT_PAREN)) {
-            console.log("has (");
             result = parseExpressionFunctionCall(parser, result);
         }
         else {

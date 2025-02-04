@@ -22,10 +22,10 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
     validate(validator);
     checkError(parser, validator, undefined);
 
-    const generator: Generator = new Generator(validator.ast);
+    const generator: Generator = new Generator(validator.ast, validator.extendedVariables);
     generate(generator);
 
-    const outputFileName: string = 'test.html';
+    const outputFileName: string = 'test.c';
 
     if (fs.existsSync(outputFileName)) {
         fs.unlinkSync(outputFileName);

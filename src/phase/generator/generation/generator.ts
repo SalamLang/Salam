@@ -4,6 +4,9 @@ import { LanguageID } from './../../../common/language/language';
 import { generatorMessageRenderer } from './../../../common/message/message';
 import { GeneratorMessageKeys } from './../../../common/message/generator/generator';
 import { stringify } from '../../../serializer';
+import { AstType } from '../../parser/parse/ast/expression/type';
+import { generateType } from './expression/type';
+import { generateFunctionArguments } from './statement/function_arguments';
 
 export class Generator {
     ast: AstProgram;
@@ -16,9 +19,10 @@ export class Generator {
     functions: string[];
     sign_functions: string[];
     libraries: string[];
-    extended_functions: string[];
-    
-    constructor(ast: AstProgram) {
+    extendedFunctions: Record<string, AstType>;
+    extendedVariables: Record<string, AstType>;
+      
+    constructor(ast: AstProgram, extendedVariables: Record<string, AstType>) {
         this.ast = ast;
         this.errors = [];
         this.indentLevel = 0;
@@ -29,10 +33,15 @@ export class Generator {
         this.functions = [];
         this.sign_functions = [];
         this.libraries = [];
-        this.extended_functions = [];
-        
+        this.extendedFunctions = {};
+        this.extendedVariables = extendedVariables;
+
         this.libraries.push("#include <stdio.h>");
         this.libraries.push("#include <stdlib.h>");
+    }
+
+    pushExtendedFunction(name: string, type: AstType): void {
+        this.extendedFunctions[name] = type;
     }
     
     pushFunction(func: string): void {
@@ -103,17 +112,54 @@ export class Generator {
     getGeneratedSourceC(): string {
         let result: string = "";
 
+        result += "// Libraries\n";
         if (this.libraries.length > 0) {
             result += this.libraries.join("\n");
             result += "\n";
             result += "\n";
         }
+
+        const extendedFunctionsEntries = Object.entries(this.extendedFunctions);
+        if (extendedFunctionsEntries.length > 0) {
+            result += "// Extended functions\n";
+            for (const [name, value] of extendedFunctionsEntries) {
+                if (value && value.func_return_type && value.func_name && value.func_args) {
+                    result += "extern ";
+                    result += generateType(this, value.func_return_type);
+                    result += " ";
+                    result += name;
+                    // result += value.func_name;
+                    result += "(";
+                    result += generateFunctionArguments(this, value.func_args);
+                    result += ");\n";
+                }
+            }
+            result += "\n";
+        }
+
+        const extendedVariablesEntries = Object.entries(this.extendedVariables);
+        if (extendedVariablesEntries.length > 0) {
+            result += "// Extended variables\n";
+            for (const [name, value] of extendedVariablesEntries) {
+                if (value) {
+                    result += "extern ";
+                    result += generateType(this, value);
+                    result += " ";
+                    result += name;
+                    result += ";\n";
+                }
+            }
+            result += "\n";
+        }
+
         if (this.sign_functions.length > 0) {
+            result += "// Sign functions\n";
             result += this.sign_functions.join("\n");
             result += "\n";
             result += "\n";
         }
 
+        result += "// Functions\n";
         result += this.functions.join("\n");
 
         return result;

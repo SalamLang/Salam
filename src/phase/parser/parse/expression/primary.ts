@@ -10,13 +10,9 @@ import { TokenOperatorType } from '../../../lexer/tokenizer/type';
 import { invalidOperators } from './../../../lexer/tokenizer/operator';
 
 export function parseExpressionPrimary(parser: Parser): AstExpression | undefined {
-    console.log("parseExpressionPrimary", parser.currentToken);
-
     const currentToken: Token = parser.currentToken;
     const isOp: boolean = currentToken && isOperator(currentToken.type);
     const isInvalidOp: boolean = isOp && invalidOperators.includes(currentToken.type);
-    // console.log(currentToken, isOp, isInvalidOp, parser.currentToken);
-
     if (!currentToken || isInvalidOp) {
         parser.pushError("Invalid operator inside primary expression " + currentToken.enduser_token);
         return undefined;

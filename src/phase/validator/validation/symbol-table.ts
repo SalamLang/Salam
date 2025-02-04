@@ -12,6 +12,10 @@ export class SymbolTable {
         this.table.set(name, type);
     }
 
+    addSystemSymbol(name: string, type: AstType): void {
+        this.table.set(name, type);
+    }
+
     getSymbol(name: string): AstType | undefined {
         return this.table.get(name);
     }

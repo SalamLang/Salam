@@ -22,6 +22,18 @@ export function validateExpressionBinary(validator: Validator, block: AstBlock, 
             if (expr.value_type === undefined) {
                 validator.pushError("Member " + expr.right.getString() + " does not exist in the package or struct.");
             }
+
+            // Left is package
+            if (expr.left.value_type.isPackage) {
+                expr.generated_value = expr.left.getString() + "_" + expr.right.getString();
+                if (expr.value_type !== undefined && !expr.value_type?.isFunction) {
+                    validator.pushExtendedVariable(expr.generated_value, expr.value_type);
+                }
+            }
+            // Left is struct
+            else {
+                expr.generated_value = expr.left.getString() + "." + expr.right.getString();
+            }
             return;
         } else {
             validator.pushError("Right side of member operator should be an identifier to get an sub element from the package or struct.");

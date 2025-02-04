@@ -15,13 +15,17 @@ export class RuntimeBlock {
         math_type.addMember(math_tan_type);
         const math_creator_type: AstType = AstType.createMemberValue("creator", AstType.createString());
         math_type.addMember(math_creator_type);
-        block.symbol_table.addSymbol("math", math_type);
+        math_type.setSyetem();
+        block.symbol_table.addSystemSymbol("math", math_type);
 
         const pi_type: AstType = AstType.createFloat();
-        block.symbol_table.addSymbol("pi", pi_type);
+        pi_type.setSyetem();
+        console.log(pi_type);
+        block.symbol_table.addSystemSymbol("pi", pi_type);
 
         const version_type: AstType = AstType.createString();
-        block.symbol_table.addSymbol("version", version_type);
+        version_type.setSyetem();
+        block.symbol_table.addSystemSymbol("version", version_type);
 
         return block;
     }

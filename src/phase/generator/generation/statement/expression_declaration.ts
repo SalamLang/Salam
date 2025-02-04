@@ -1,4 +1,4 @@
-import { Generator } from './../generator';
+import { Generator } from '../generator';
 import { generateType } from '../expression/type';
 import { generateExpression } from '../expression/expression';
 import { AstStatementExpressionDeclaration } from '../../../parser/parse/ast/statement/expression_declaration';

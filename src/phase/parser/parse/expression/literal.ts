@@ -1,10 +1,10 @@
 import { Parser } from './../parser';
-import { AstType } from '../ast/expression/type';
 import { Token } from '../../../lexer/tokenizer/token';
 import { AstExpression } from './../ast/expression/expression';
-import { AstExpressionLiteral } from '../ast/expression/literal';
-import { AstExpressionVariable } from '../ast/expression/variable';
 import { TokenKeywordType, TokenValueType } from '../../../lexer/tokenizer/type';
+import { AstExpressionVariable } from '../ast/expression/variable';
+import { AstExpressionLiteral } from '../ast/expression/literal';
+import { AstType } from '../ast/expression/type';
 
 export function parseExpressionLiteral(parser: Parser): AstExpression | undefined {
     const currentToken: Token = parser.currentToken;
@@ -32,4 +32,5 @@ export function parseExpressionLiteral(parser: Parser): AstExpression | undefine
         }
     }
     return undefined;
-};
+}
+

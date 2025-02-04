@@ -1,7 +1,7 @@
 import { generateBlock } from './block';
-import { Generator } from './../generator';
-import { generateFunctionParameters } from './function-parameters';
-import { AstFunctionDeclaration } from './../../../parser/parse/ast/function/function_declaration';
+import { Generator } from '../generator';
+import { generateFunctionArguments } from './function_arguments';
+import { AstFunctionDeclaration } from '../../../parser/parse/ast/function/function_declaration';
 
 export function generateFunctionDeclaration(generator: Generator, func: AstFunctionDeclaration): string {
     let result: string = "";
@@ -10,9 +10,7 @@ export function generateFunctionDeclaration(generator: Generator, func: AstFunct
     sign += "void ";
     sign += func.name;
     sign += "(";
-    if (func.parameters) {
-        sign += generateFunctionParameters(generator, func.parameters);
-    }
+    sign += generateFunctionArguments(generator, func.args);
     sign += ")";
 
     generator.pushSignFunction(sign + ";");

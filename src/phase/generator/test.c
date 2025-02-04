@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+// External libraries
+// Import math
+
 // Extended functions
 extern float math_sin(float value);
 
@@ -9,9 +12,15 @@ extern float math_sin(float value);
 extern char* math_creator;
 
 // Sign functions
+void test();
 void main();
 
 // Functions
+void test() {
+int ge = 1;
+return ("hey");
+}
+
 void main() {
 printf("%d", 5);
 printf("%d", 5 + 5);

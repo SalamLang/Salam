@@ -10,13 +10,16 @@ export function validateExpressionVariable(validator: Validator, block: AstBlock
         return;
     }
 
-    console.log(expr.left.value_type);
-
     const name: string = expr.left.getString();
     const symbol_type: AstType | undefined = block.lookUp(name);
     if (symbol_type === undefined) {
         validator.pushError(`Variable '${name}' is not defined`);
         return;
     }
+
+    if (symbol_type.isPackage) {
+        validator.pushPackage(name, symbol_type);
+    }
+
     expr.value_type = symbol_type;
 };

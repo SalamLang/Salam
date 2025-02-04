@@ -22,7 +22,7 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
     validate(validator);
     checkError(parser, validator, undefined);
 
-    const generator: Generator = new Generator(validator.ast, validator.extendedVariables);
+    const generator: Generator = new Generator(validator.ast, validator.extendedVariables, validator.packages);
     generate(generator);
 
     const outputFileName: string = 'test.c';

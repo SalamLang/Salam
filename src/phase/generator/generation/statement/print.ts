@@ -1,7 +1,7 @@
 import { Generator } from './../generator';
-import { AstStatementPrint } from '../../../parser/parse/ast/statement/print';
 import { generateExpression } from '../expression/expression';
 import { AstType } from '../../../parser/parse/ast/expression/type';
+import { AstStatementPrint } from '../../../parser/parse/ast/statement/print';
 
 export function generateStatementPrint(generator: Generator, stmt: AstStatementPrint): string {
     if (stmt.value.value_type === undefined) {

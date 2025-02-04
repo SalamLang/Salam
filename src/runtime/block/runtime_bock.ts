@@ -20,7 +20,7 @@ export class RuntimeBlock {
 
         const pi_type: AstType = AstType.createFloat();
         pi_type.setSyetem();
-        console.log(pi_type);
+        // console.log(pi_type);
         block.symbol_table.addSystemSymbol("pi", pi_type);
 
         const version_type: AstType = AstType.createString();

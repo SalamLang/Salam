@@ -5,4 +5,3 @@ float math_sin(float value) {
 }
 
 char* math_creator = "Max";
-

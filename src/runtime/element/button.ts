@@ -70,7 +70,7 @@ export class RuntimeElementButton extends RuntimeElement {
                 .addText(LanguageID.LanguagePersian, 'پنهان'),
                 new RuntimeElementAttributeValue('show')
                 .addText(LanguageID.LanguageEnglish, 'show')
-                .addText(LanguageID.LanguagePersian, 'نمایش'),
+                .addText(LanguageID.LanguagePersian, 'چاپ'),
                 new RuntimeElementAttributeValue('toggle')
                 .addText(LanguageID.LanguageEnglish, 'toggle')
                 .addText(LanguageID.LanguagePersian, 'متغیر بودن')

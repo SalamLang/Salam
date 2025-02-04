@@ -1,9 +1,9 @@
 import { Parser } from './../parser';
-import { parseExpressionUnary } from './unary';
+import { prefix_bp_lookup } from './expression';
+import { parseExpressionPrefix } from './prefix';
 import { parseExpressionLiteral } from './literal';
 import { Token } from '../../../lexer/tokenizer/token';
 import { parseExpressionParentheses } from './parenthese';
-import { parseExpressionFunctionCall } from '../function/function_call';
 import { AstExpression } from './../ast/expression/expression';
 import { isOperator } from '../../../lexer/tokenizer/operator';
 import { TokenOperatorType } from '../../../lexer/tokenizer/type';
@@ -27,9 +27,10 @@ export function parseExpressionPrimary(parser: Parser): AstExpression | undefine
     }
     // Handle unary operators (-a, !b)
     else if (isOp && !isInvalidOp) {
-        return parseExpressionUnary(parser);
+        return parseExpressionPrefix(parser, prefix_bp_lookup(currentToken.type));
     }
-    // console.log(parser.currentToken);
-    // parser.pushError("Failed to parse primary expression???");
+    else {
+        parser.pushError("Failed to parse primary expression???");
+    }
     return undefined;
 };

@@ -6,7 +6,7 @@ import { AstFunctionParameter } from '../ast/function/function_parameter';
 import { AstExpressionFunctionCall } from '../ast/function/function_call';
 
 export function parseExpressionFunctionCall(parser: Parser, functionName: AstExpression): AstExpressionFunctionCall | undefined {
-    console.log("parseExpressionFunctionCall", parser.currentToken);
+    // console.log("parseExpressionFunctionCall", parser.currentToken);
     const parameters: AstFunctionParameter[] = [];
    
     // Consume `(` token

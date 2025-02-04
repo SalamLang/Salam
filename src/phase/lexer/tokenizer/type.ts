@@ -43,6 +43,7 @@ export enum TokenValueType {
 };
 
 export enum TokenOperatorType {
+    TOKEN_QUESTION = "TOKEN_QUESTION",
     TOKEN_NOT_EQUAL = "NOT_EQUAL",
     TOKEN_EQUAL = "EQUAL",
     TOKEN_AND_AND = "AND_AND",

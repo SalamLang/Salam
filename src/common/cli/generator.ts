@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import { checkError } from './check-error';
 import { lex } from './../../phase/lexer/lex/lex';
 import { LanguageMap } from './../language/language';
@@ -25,6 +26,11 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
     generate(generator);
 
     const outputFileName: string = 'test.html';
+
+    if (fs.existsSync(outputFileName)) {
+        fs.unlinkSync(outputFileName);
+    }
+    
     generator.writeToFile(outputFileName);
 
     checkError(parser, validator, generator);

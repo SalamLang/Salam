@@ -5,14 +5,19 @@ import { AstFunctionParameter } from './../function/function_parameter';
 export class AstExpressionFunctionCall extends AstExpression {
     left: AstExpression;
     parameters: AstFunctionParameter[];
+    generated_value: string | undefined;
 
     constructor(left: AstExpression, parameters: AstFunctionParameter[]) {
         super("ExpressionFunctionCall");
         this.left = left;
         this.parameters = parameters;
+        this.generated_value = undefined;
     }
 
     getString(): string {
+        if (this.generated_value !== undefined) {
+            return this.generated_value;
+        }
         return this.left.getString();
     }
 

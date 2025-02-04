@@ -8,6 +8,7 @@ export class AstExpressionBinary extends AstExpression {
     operator: TokenType;
     right: AstExpression;
     value_type: AstType | undefined;
+    generated_value: string | undefined;
 
     constructor(left: AstExpression, operator: TokenType, right: AstExpression) {
         super("ExpressionBinary")
@@ -15,10 +16,14 @@ export class AstExpressionBinary extends AstExpression {
         this.operator = operator;
         this.right = right;
         this.value_type = undefined;
+        this.generated_value = undefined;
     }
 
     getString(): string {
-        return `${this.left.getString()} ${this.operator} ${this.right.getString()}`;
+        if (this.generated_value === undefined) {
+            return `${this.left.getString()} ${this.operator} ${this.right.getString()}`;
+        }
+        return this.generated_value;
     }
 
     stringify(wantsJson: boolean = true): string | object {

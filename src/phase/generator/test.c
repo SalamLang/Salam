@@ -12,16 +12,16 @@ extern float math_sin(float value);
 extern char* math_creator;
 
 // Sign functions
-void test();
-void main();
+void undefinedtest();
+void undefinedmain();
 
 // Functions
-void test() {
+void undefinedtest() {
 int ge = 1;
 return ("hey");
 }
 
-void main() {
+void undefinedmain() {
 printf("%d", 5);
 printf("%d", 5 + 5);
 printf("%d", 5 * 2 - 3);

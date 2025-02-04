@@ -16,6 +16,7 @@ export class Generator {
     functions: string[];
     sign_functions: string[];
     libraries: string[];
+    extended_functions: string[];
     
     constructor(ast: AstProgram) {
         this.ast = ast;
@@ -28,6 +29,8 @@ export class Generator {
         this.functions = [];
         this.sign_functions = [];
         this.libraries = [];
+        this.extended_functions = [];
+        
         this.libraries.push("#include <stdio.h>");
         this.libraries.push("#include <stdlib.h>");
     }

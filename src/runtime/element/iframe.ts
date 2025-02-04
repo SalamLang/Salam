@@ -13,7 +13,7 @@ export class RuntimeElementIframe extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'allowfullscreen')
             .addText(LanguageID.LanguageEnglish, 'allowfullscreen')
-            .addText(LanguageID.LanguagePersian, 'نمایش کامل مجاز')
+            .addText(LanguageID.LanguagePersian, 'چاپ کامل مجاز')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'allowpaymentrequest')

@@ -26,15 +26,14 @@ export function parseExpression(parser: Parser, precedence: number = 0): AstExpr
             break;
         }
 
-        // Check if this is a function call (identifier followed by `(`)
-        if (parser.has(TokenOperatorType.TOKEN_LEFT_PAREN)) {
-            left = parseExpressionFunctionCall(parser, left);
-            if (left === undefined) {
-                parser.pushError('Failed to parse function call');
-                return undefined;
-            }
-            continue;
-        }
+        // if (parser.has(TokenOperatorType.TOKEN_LEFT_PAREN)) {
+        //     left = parseExpressionFunctionCall(parser, left);
+        //     if (left === undefined) {
+        //         parser.pushError('Failed to parse function call');
+        //         return undefined;
+        //     }
+        //     break;
+        // }
 
         const opPrecedence: number = getExpressionPrecedence(operator);
         console.log(operator.enduser_token, opPrecedence, precedence, opPrecedence < precedence);
@@ -45,6 +44,18 @@ export function parseExpression(parser: Parser, precedence: number = 0): AstExpr
         parser.next(); // Consume operator
 
         left = parseExpressionBinary(parser, left, opPrecedence, operator);
+
+        console.log("inside loop at end:", parser.currentToken, left);
+
+        // Check if this is a function call (identifier followed by `(`)
+        // if (parser.has(TokenOperatorType.TOKEN_LEFT_PAREN)) {
+        //     left = parseExpressionFunctionCall(parser, left);
+        //     if (left === undefined) {
+        //         parser.pushError('Failed to parse function call');
+        //         return undefined;
+        //     }
+        //     break;
+        // }
     }
 
     return left;

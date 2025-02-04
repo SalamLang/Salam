@@ -44,7 +44,7 @@ export const OPERATOR_PRECEDENCE: Record<TokenOperatorType, number> = {
     [TokenOperatorType.TOKEN_RANGE]: 16,
 
     // Grouping
-    [TokenOperatorType.TOKEN_LEFT_PAREN]: 17,
+    // [TokenOperatorType.TOKEN_LEFT_PAREN]: 17,
     // [TokenOperatorType.TOKEN_RIGHT_PAREN]: 17,
     [TokenOperatorType.TOKEN_LEFT_BRACE]: 17,
     // [TokenOperatorType.TOKEN_RIGHT_BRACE]: 17,

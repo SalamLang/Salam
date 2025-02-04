@@ -22,15 +22,10 @@ export function parseExpressionFunctionCall(parser: Parser, functionName: AstExp
             const parameter: AstFunctionParameter = new AstFunctionParameter(parameter_value);
             parameters.push(parameter);
         } while (parser.skip(TokenOperatorType.TOKEN_COMMA));
-        
-        // Ensure closing `)`
-        if (!parser.skip(TokenOperatorType.TOKEN_RIGHT_PAREN)) {
-            parser.pushError("Expected closing parenthesis `)` after function arguments.");
-        }
-    } else {
-        // Consume `)`
-        parser.expect(TokenOperatorType.TOKEN_RIGHT_PAREN);
     }
+
+    // Consume `)`
+    parser.expect(TokenOperatorType.TOKEN_RIGHT_PAREN);
 
     return new AstExpressionFunctionCall(functionName, parameters);
 }

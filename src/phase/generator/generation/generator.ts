@@ -21,8 +21,9 @@ export class Generator {
     libraries: string[];
     extendedFunctions: Record<string, AstType>;
     extendedVariables: Record<string, AstType>;
+    packages: Record<string, AstType>;
       
-    constructor(ast: AstProgram, extendedVariables: Record<string, AstType>) {
+    constructor(ast: AstProgram, extendedVariables: Record<string, AstType>, packages: Record<string, AstType>) {
         this.ast = ast;
         this.errors = [];
         this.indentLevel = 0;
@@ -35,6 +36,7 @@ export class Generator {
         this.libraries = [];
         this.extendedFunctions = {};
         this.extendedVariables = extendedVariables;
+        this.packages = packages;
 
         this.libraries.push("#include <stdio.h>");
         this.libraries.push("#include <stdlib.h>");
@@ -116,6 +118,15 @@ export class Generator {
         if (this.libraries.length > 0) {
             result += this.libraries.join("\n");
             result += "\n";
+            result += "\n";
+        }
+
+        const packagesEntries = Object.entries(this.packages);
+        if (packagesEntries.length > 0) {
+            result += "// External libraries\n";
+            for (const [name, value] of packagesEntries) {
+                result += "// Import " + name + "\n";
+            }
             result += "\n";
         }
 

@@ -45,6 +45,7 @@ export function bp_lookup(whichOperator: TokenType): binding_power {
 
         // --- Postfix --- (Always Right Associative)
         case TokenOperatorType.TOKEN_NOT: return RightAssociative(400);
+        case TokenOperatorType.TOKEN_MEMBER: return RightAssociative(800);
         //Note: Postfix operators are always RightAssociative
 
         default: return no_binding_power;
@@ -74,12 +75,17 @@ export function parseExpression(parser: Parser, binding_power_to_my_right: numbe
             return undefined;
         }
         
+        console.log("inside loop", parser.currentToken);
         // Is it a postfix expression?
         if (parser.has(TokenOperatorType.TOKEN_NOT)) {
             result = parseExpresssionPostfix(parser, result);
         }
         else if (parser.has(TokenOperatorType.TOKEN_QUESTION)) {
-            result = parseExpressionTernary(parser, result)
+            result = parseExpressionTernary(parser, result);
+        }
+        else if (parser.has(TokenOperatorType.TOKEN_LEFT_PAREN)) {
+            console.log("has (");
+            result = parseExpressionFunctionCall(parser, result);
         }
         else {
             // It must be a binary expression

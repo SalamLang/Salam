@@ -9,16 +9,23 @@ import { AstLayoutElement } from './../../parser/parse/ast/layout/element';
 import { RuntimeElementAttribute } from './../../../runtime/element_attribute';
 import { RuntimeElementStyleState } from './../../../runtime/element_style_state';
 import { runtimeStyleAttributes, runtimeGlobalAttributes, runtimeGlobalSingleAttributes, runtimeGlobalMotherAttributes } from './../../../runtime/runtime';
+import { AstType } from '../../parser/parse/ast/expression/type';
 
 export class Validator {
     ast: AstProgram;
     errors: string[];
     symbol_table: SymbolTable;
-    
+    extendedVariables: Record<string, AstType>;
+
     constructor(ast: AstProgram) {
         this.ast = ast;
         this.errors = [];
         this.symbol_table = new SymbolTable();
+        this.extendedVariables = {};
+    }
+
+    pushExtendedVariable(name: string, type: AstType): void {
+        this.extendedVariables[name] = type;
     }
 
     pushError(message: string) {

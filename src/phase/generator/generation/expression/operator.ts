@@ -37,7 +37,7 @@ export function generateExpressionOperator(generator: Generator, left: string, o
             if (right === undefined) {
                 return left;
             }
-            return `${left}_${right}`;
+            return `${left}.${right}`;
     }
     return "Unknown operator " + op;
 };

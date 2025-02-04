@@ -3,6 +3,8 @@ import { stringify } from '../../../../../serializer';
 import { AstFunctionArgument } from '../function/function_argument';
 
 export class AstType extends AstNode {
+    is_system: boolean;
+
     type_kind: string;
     is_pointer: boolean;
     is_reference: boolean;
@@ -18,6 +20,7 @@ export class AstType extends AstNode {
 
     constructor(type_kind: string) {
         super("Type");
+        this.is_system = false;
         this.type_kind = type_kind;
         this.is_pointer = false;
         this.is_reference = false;
@@ -26,6 +29,10 @@ export class AstType extends AstNode {
         this.func_name = undefined;
         this.func_args = [];
         this.func_return_type = undefined;
+    }
+
+    setSyetem(): void {
+        this.is_system = true;
     }
 
     addMember(item: AstType): boolean {

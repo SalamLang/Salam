@@ -4,6 +4,7 @@ import { AstFunctionArgument } from '../function/function_argument';
 
 export class AstType extends AstNode {
     is_system: boolean;
+    is_primitive: boolean;
 
     type_kind: string;
     is_pointer: boolean;
@@ -21,6 +22,7 @@ export class AstType extends AstNode {
     constructor(type_kind: string) {
         super("Type");
         this.is_system = false;
+        this.is_primitive = false;
         this.type_kind = type_kind;
         this.is_pointer = false;
         this.is_reference = false;
@@ -31,8 +33,28 @@ export class AstType extends AstNode {
         this.func_return_type = undefined;
     }
 
-    setSyetem(): void {
+    getType(): AstType {
+        if (this.isFunction && this.func_return_type) {
+            return this.func_return_type;
+        }
+        return this;
+    }
+
+    getKindType(): string {
+        if (this.isFunction && this.func_return_type) {
+            return this.func_return_type?.getKindType();
+        }
+        return this.type_kind;
+    }
+
+    setPrimitive(): AstType {
+        this.is_primitive = true;
+        return this;
+    }
+
+    setSyetem(): AstType {
         this.is_system = true;
+        return this;
     }
 
     addMember(item: AstType): boolean {

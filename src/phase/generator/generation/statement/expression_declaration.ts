@@ -14,35 +14,65 @@ export function generateStatementExpressionDeclaration(generator: Generator, stm
     if (stmt.value !== undefined) {
         result += " = ";
         const expr: string = generateExpression(generator, stmt.value);
+
         if (stmt.value.value_type?.isString) {
             if (stmt.value.type === "ExpressionBinary") {
                 const stmt_value = stmt.value as AstExpressionBinary;
-                if (stmt_value.left.value_type?.isString && stmt_value.right.value_type?.isString) {
-                    // need to continue checking it recursivly so check if stmt_value.left is a binary and stmt_value.left.left is string adn stmt_value.left.right is string
-                    // ...
-                    
-                    const expr_left: string = generateExpression(generator, stmt_value.left);
-                    const expr_right: string = generateExpression(generator, stmt_value.right);
-                    result += `(char*) malloc(strlen(${expr_left}) + strlen(${expr_right}) + 1);\n`;
-                } else {
-                    generator.pushError("Binary expression with non-string types is not supported yet");
-                    return "";
+
+                function computeStringLength(expr: AstExpressionBinary): string {
+                    let leftLen = expr.left.type === "ExpressionBinary"
+                        ? computeStringLength(expr.left as AstExpressionBinary)
+                        : `strlen(${generateExpression(generator, expr.left)})`;
+
+                    let rightLen = expr.right.type === "ExpressionBinary"
+                        ? computeStringLength(expr.right as AstExpressionBinary)
+                        : `strlen(${generateExpression(generator, expr.right)})`;
+
+                    return `${leftLen} + ${rightLen}`;
                 }
+
+                const totalSize = computeStringLength(stmt_value) + " + 1";
+                result += `(char*) malloc(${totalSize});\n`;
+
+                result += `if (${stmt.name} == NULL) {\n`;
+                result += `    printf("Memory allocation failed in ${stmt.name}\\n");\n`;
+                result += `    exit(1);\n`;
+                result += `}\n`;
+
+                function generateStrcat(expr: AstExpressionBinary, varName: string): string {
+                    let strcatCode = "";
+                    if (expr.left.type === "ExpressionBinary") {
+                        strcatCode += generateStrcat(expr.left as AstExpressionBinary, varName);
+                    } else {
+                        strcatCode += `strcpy(${varName}, ${generateExpression(generator, expr.left)});\n`;
+                    }
+
+                    if (expr.right.type === "ExpressionBinary") {
+                        strcatCode += generateStrcat(expr.right as AstExpressionBinary, varName);
+                    } else {
+                        strcatCode += `strcat(${varName}, ${generateExpression(generator, expr.right)});\n`;
+                    }
+
+                    return strcatCode;
+                }
+
+                result += generateStrcat(stmt_value, stmt.name);
+
             } else {
                 result += `(char*) malloc(strlen(${expr}) + 1);\n`;
+
+                result += `if (${stmt.name} == NULL) {\n`;
+                result += `    printf("Memory allocation failed in ${stmt.name}\\n");\n`;
+                result += `    exit(1);\n`;
+                result += `}\n`;
+
+                result += `strcpy(${stmt.name}, ${expr});\n`;
             }
-
-
-            result += `if (${stmt.name} == NULL) {\n`;
-            result += `    printf("Memory allocation failed in ${stmt.name}");\n`;
-            result += `    exit(1);\n`;
-            result += `}\n`;
-            result += `strcpy(${stmt.name}, ${expr})`;
         } else {
             result += expr;
+            result += ";\n";
         }
     }
-    result += ";\n";
 
     return result;
 };

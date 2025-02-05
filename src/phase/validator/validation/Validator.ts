@@ -1,33 +1,44 @@
+import * as fs from 'fs';
 import { SymbolTable } from './symbol-table';
 import { RuntimeElement } from './../../../runtime/element'; 
 import { runtimeElements } from './../../../runtime/runtime';
 import { AstProgram } from "./../../parser/parse/ast/program";
 import { LanguageID } from '../../../common/language/language';
 import { runtimeStyleStates } from './../../../runtime/runtime';
+import { AstType } from '../../parser/parse/ast/expression/type';
 import { runtimeStyleElements } from './../../../runtime/runtime';
 import { AstLayoutElement } from './../../parser/parse/ast/layout/element';
+import { validatorMessageRenderer } from '../../../common/message/message';
 import { RuntimeElementAttribute } from './../../../runtime/element_attribute';
 import { RuntimeElementStyleState } from './../../../runtime/element_style_state';
+import { ValidatorMessageKeys } from '../../../common/message/validator/validator';
 import { runtimeStyleAttributes, runtimeGlobalAttributes, runtimeGlobalSingleAttributes, runtimeGlobalMotherAttributes } from './../../../runtime/runtime';
-import { AstType } from '../../parser/parse/ast/expression/type';
 
 export class Validator {
     ast: AstProgram;
     errors: string[];
     symbol_table: SymbolTable;
+    extendedFunctions: Record<string, AstType>;
     extendedVariables: Record<string, AstType>;
     packages: Record<string, AstType>;
+    packageFunctions: AstType[];
 
     constructor(ast: AstProgram) {
         this.ast = ast;
         this.errors = [];
         this.symbol_table = new SymbolTable();
+        this.extendedFunctions = {};
         this.extendedVariables = {};
         this.packages = {};
+        this.packageFunctions = [];
     }
 
     pushPackage(name: string, type: AstType): void {
         this.packages[name] = type;
+    }
+
+    pushExtendedFunction(name: string, type: AstType): void {
+        this.extendedFunctions[name] = type;
     }
 
     pushExtendedVariable(name: string, type: AstType): void {
@@ -156,4 +167,25 @@ export class Validator {
     getLanguageId(): LanguageID {
         return this.ast.language.id;
     }
+    
+    writeToFile(fileName: string): void {
+        try {
+            fs.writeFileSync(fileName, this.ast.stringify(true), 'utf-8');
+        } catch (error: unknown) {
+            if (error instanceof Error) {
+                this.pushError(validatorMessageRenderer(
+                    this.getLanguageId(), 
+                    ValidatorMessageKeys.VALIDATOR_SAVE_OUTPUT_ERROR, 
+                    fileName, 
+                    error.message
+                ));
+            } else {
+                this.pushError(validatorMessageRenderer(
+                    this.getLanguageId(), 
+                    ValidatorMessageKeys.VALIDATOR_SAVE_OUTPUT_ERROR, 
+                    fileName, 
+                    "An unknown error occurred"
+                ));
+            }
+        }    }
 }

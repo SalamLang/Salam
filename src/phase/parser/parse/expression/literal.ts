@@ -16,19 +16,19 @@ export function parseExpressionLiteral(parser: Parser): AstExpression | undefine
                 return new AstExpressionVariable(varable_identifier);
 
             case TokenValueType.TOKEN_STRING:
-                return new AstExpressionLiteral(currentToken.data.getValueString(), AstType.createString());
+                return new AstExpressionLiteral(currentToken.data.getValueString(), AstType.createString().setPrimitive());
 
             case TokenValueType.TOKEN_BOOL_FALSE:
-                return new AstExpressionLiteral("TRUE", AstType.createBool());
+                return new AstExpressionLiteral("TRUE", AstType.createBool().setPrimitive());
 
             case TokenValueType.TOKEN_BOOL_TRUE:
-                return new AstExpressionLiteral("TRUE", AstType.createBool());
+                return new AstExpressionLiteral("TRUE", AstType.createBool().setPrimitive());
 
             case TokenValueType.TOKEN_NUMBER_FLOAT:
-                return new AstExpressionLiteral(currentToken.data.getValueString(), AstType.createFloat());
+                return new AstExpressionLiteral(currentToken.data.getValueString(), AstType.createFloat().setPrimitive());
 
             case TokenValueType.TOKEN_NUMBER_INT:
-                return new AstExpressionLiteral(currentToken.data.getValueString(), AstType.createInt());
+                return new AstExpressionLiteral(currentToken.data.getValueString(), AstType.createInt().setPrimitive());
         }
     }
     return undefined;

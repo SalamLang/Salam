@@ -24,7 +24,6 @@ export class AstBlock extends AstNode {
 
 	lookUp(name: string): AstType | undefined {
 		let currentBlock: AstBlock | undefined = this;
-
 		while (currentBlock) {
 			const symbol = currentBlock.symbol_table.getSymbol(name);
 			if (symbol !== undefined) {
@@ -32,14 +31,13 @@ export class AstBlock extends AstNode {
 			}
 			currentBlock = currentBlock.parent_block;
 		}
-	
 		return undefined;
 	}
 
 	stringify(wantsJson: boolean = true): string | object {
 		const obj: object = {
 			children: this.children,
-			symbol_table: this.symbol_table.stringify(false),
+			// symbol_table: this.symbol_table.stringify(false),
 		};
 		return stringify(obj, wantsJson);
 	}

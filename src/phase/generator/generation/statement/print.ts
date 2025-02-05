@@ -2,6 +2,7 @@ import { Generator } from './../generator';
 import { generateExpression } from '../expression/expression';
 import { AstType } from '../../../parser/parse/ast/expression/type';
 import { AstStatementPrint } from '../../../parser/parse/ast/statement/print';
+import { ExpressionPair } from '../../../parser/parse/ast/expression/expression';
 
 export function generateStatementPrint(generator: Generator, stmt: AstStatementPrint): string {
     if (stmt.value.value_type === undefined) {
@@ -19,7 +20,11 @@ export function generateStatementPrint(generator: Generator, stmt: AstStatementP
         return "";
     }
 
-    let result: string = `printf("`;
+    const expr: ExpressionPair = generateExpression(generator, stmt.value);
+
+    let result: string = ``;
+    result += expr.key;
+    result += `printf("`;
 
     let format: string = "";
     if (type.type_kind === "string") {
@@ -32,10 +37,8 @@ export function generateStatementPrint(generator: Generator, stmt: AstStatementP
         format = "%s";
     }
     result += format;
-
     result += `", `;
-
-    result += generateExpression(generator, stmt.value);
+    result += expr.value;
     
     if (type.type_kind === "bool") {
         result += " ? \"true\" : \"false\"";

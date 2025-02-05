@@ -1,14 +1,16 @@
 import * as fs from 'fs';
+import { stringify } from '../../../serializer';
+import { generateType } from './expression/type';
 import { AstProgram } from "./../../parser/parse/ast/program";
 import { LanguageID } from './../../../common/language/language';
+import { AstType } from '../../parser/parse/ast/expression/type';
+import { generateFunctionArguments } from './statement/function_arguments';
 import { generatorMessageRenderer } from './../../../common/message/message';
 import { GeneratorMessageKeys } from './../../../common/message/generator/generator';
-import { stringify } from '../../../serializer';
-import { AstType } from '../../parser/parse/ast/expression/type';
-import { generateType } from './expression/type';
-import { generateFunctionArguments } from './statement/function_arguments';
 
 export class Generator {
+    private static tempVarCounter: number = 0;
+
     ast: AstProgram;
     errors: string[];
     indentLevel: number;
@@ -22,8 +24,9 @@ export class Generator {
     extendedFunctions: Record<string, AstType>;
     extendedVariables: Record<string, AstType>;
     packages: Record<string, AstType>;
-      
-    constructor(ast: AstProgram, extendedVariables: Record<string, AstType>, packages: Record<string, AstType>) {
+    temp: string;
+
+    constructor(ast: AstProgram, extendedFunctions: Record<string, AstType>, extendedVariables: Record<string, AstType>, packages: Record<string, AstType>) {
         this.ast = ast;
         this.errors = [];
         this.indentLevel = 0;
@@ -34,9 +37,10 @@ export class Generator {
         this.functions = [];
         this.sign_functions = [];
         this.libraries = [];
-        this.extendedFunctions = {};
+        this.extendedFunctions = extendedFunctions;
         this.extendedVariables = extendedVariables;
         this.packages = packages;
+        this.temp = '';
 
         this.libraries.push("#include <stdio.h>");
         this.libraries.push("#include <stdlib.h>");
@@ -45,6 +49,20 @@ export class Generator {
         this.libraries.push("#include <math.h>");
         this.libraries.push("#include <time.h>");
         this.libraries.push("#include <ctype.h>");
+    }
+    
+    static getTempVar(): string {
+        return `temp_var_${this.tempVarCounter++}`;
+    }
+
+    setTemp(temp: string): void {
+        this.temp = temp;
+    }
+
+    getTemp(): string {
+        const temp: string = this.temp;
+        this.setTemp("");
+        return temp;
     }
 
     pushExtendedFunction(name: string, type: AstType): void {
@@ -139,12 +157,11 @@ export class Generator {
         if (extendedFunctionsEntries.length > 0) {
             result += "// Extended functions\n";
             for (const [name, value] of extendedFunctionsEntries) {
-                if (value && value.func_return_type && value.func_name && value.func_args) {
+                if (value && value.func_return_type && value.func_args) {
                     result += "extern ";
                     result += generateType(this, value.func_return_type);
                     result += " ";
                     result += name;
-                    // result += value.func_name;
                     result += "(";
                     result += generateFunctionArguments(this, value.func_args);
                     result += ");\n";
@@ -189,23 +206,22 @@ export class Generator {
         return stringify(this, wantsJson);
     }
 
-    writeToFile(output: string): void {
+    writeToFile(fileName: string): void {
         try {
-            fs.writeFileSync(output.replace(".html", ".json"), this.stringify(), 'utf-8');
-            fs.writeFileSync(output, this.getGeneratedSourceC() + "\n" + this.getGeneratedSource(), 'utf-8');
+            fs.writeFileSync(fileName, this.getGeneratedSourceC() + "\n" + this.getGeneratedSource(), 'utf-8');
         } catch (error: unknown) {
             if (error instanceof Error) {
                 this.pushError(generatorMessageRenderer(
                     this.getLanguageId(), 
                     GeneratorMessageKeys.GENERATOR_SAVE_OUTPUT_ERROR, 
-                    output, 
+                    fileName, 
                     error.message
                 ));
             } else {
                 this.pushError(generatorMessageRenderer(
                     this.getLanguageId(), 
                     GeneratorMessageKeys.GENERATOR_SAVE_OUTPUT_ERROR, 
-                    output, 
+                    fileName, 
                     "An unknown error occurred"
                 ));
             }

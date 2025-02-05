@@ -1,21 +1,25 @@
 import { Generator } from './../generator';
-import { AstStatementPrint } from '../../../parser/parse/ast/statement/print';
 import { generateExpression } from '../expression/expression';
-import { AstType } from '../../../parser/parse/ast/expression/type';
+import { AstStatementPrint } from '../../../parser/parse/ast/statement/print';
+import { ExpressionPair } from '../../../parser/parse/ast/expression/expression';
 
 export function generateStatementReturn(generator: Generator, stmt: AstStatementPrint): string {
+    let result: string = '';
     if (stmt.value.value_type === undefined) {
         generator.pushError("Cannot return value of undefined type");
-        return "";
+        return result;
     }
     else if (stmt.value.value_type.isPackage) {
         generator.pushError("Cannot return value of a package");
-        return "";
+        return result;
     }
 
-    let result: string = `return (`;
+    const expr: ExpressionPair = generateExpression(generator, stmt.value);
+    result += expr.key;
 
-    result += generateExpression(generator, stmt.value);
+    result += `return (`;
+
+    result += expr.value;
     
     result += ");\n";
     

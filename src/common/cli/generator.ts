@@ -21,18 +21,19 @@ export function processCommandRun(fileName: string | undefined, absoluteDirPath:
     const validator: Validator = new Validator(parser.ast);
     validate(validator);
     checkError(parser, validator, undefined);
+    const astFileName: string = 'test.json';
+    if (fs.existsSync(astFileName)) {
+        fs.unlinkSync(astFileName);
+    }
+    validator.writeToFile(astFileName);
 
-    const generator: Generator = new Generator(validator.ast, validator.extendedVariables, validator.packages);
+    const generator: Generator = new Generator(validator.ast, validator.extendedFunctions, validator.extendedVariables, validator.packages);
     generate(generator);
-
     const outputFileName: string = 'test.c';
-
     if (fs.existsSync(outputFileName)) {
         fs.unlinkSync(outputFileName);
     }
-    
     generator.writeToFile(outputFileName);
-
     checkError(parser, validator, generator);
 
     return 0;

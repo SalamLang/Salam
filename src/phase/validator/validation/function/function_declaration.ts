@@ -6,6 +6,16 @@ import { AstFunctionDeclaration } from "./../../../parser/parse/ast/function/fun
 import { AstType } from "../../../parser/parse/ast/expression/type";
 
 export function validateFunctionDeclaration(validator: Validator, parent_block: AstBlock, func: AstFunctionDeclaration): void {
+    const table_func: AstType | undefined = parent_block.lookUp(func.name);
+    if (table_func !== undefined) {
+        if (table_func.isFunction) {
+            validator.pushError("Another function with the same name is already defiend!");
+        } else {
+            validator.pushError("Another variable with the same name is already defiend!");
+        }
+        return;
+    }
+
     validateFunctionArguments(validator, parent_block, func.args);
 
     for (const argument of func.args) {

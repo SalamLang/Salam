@@ -1,7 +1,7 @@
 import { Parser } from '../parser';
 import { AstBlock } from '../ast/block';
 import { parserParseBlock } from '../block';
-import { TokenKeywordType } from '../../../lexer/tokenizer/type';
+import { TokenKeywordType, TokenOperatorType } from '../../../lexer/tokenizer/type';
 import { parserParseFunctionArguments } from './function_attributes';
 import { AstFunctionArgument } from '../ast/function/function_argument';
 import { parserMessageRenderer } from '../../../../common/message/message';
@@ -22,7 +22,7 @@ export function parserParseFunctionDeclaration(parser: Parser, parent_block: Ast
     }
 
     const name: string | undefined = parser.currentToken.data?.getValueString();
-    if (! name) {
+    if (name === undefined) {
         parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_NAME_IS_NOT_VALID));
         return undefined;
     }
@@ -36,13 +36,24 @@ export function parserParseFunctionDeclaration(parser: Parser, parent_block: Ast
         return undefined;
     }
 
+    let return_type: AstType | undefined = undefined;
+    if (parser.skip(TokenOperatorType.TOKEN_MEMBER_POINTER)) {
+        return_type = parseType(parser);
+        if (return_type === undefined) {
+            parser.pushError("Invalid data type as return type of function " + name);
+            return undefined;
+        }
+    }
+    
+    if (return_type === undefined) {
+        return_type = AstType.createVoid();
+    }
+
     const body: AstBlock | undefined = parserParseBlock(parser);
     if (! body) {
         parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_BODY_IS_NOT_VALID));
         return undefined;
     }
-
-    const return_type: AstType = AstType.createVoid(); // parseType();
 
     const ast: AstFunctionDeclaration = new AstFunctionDeclaration(name, params, body, return_type);
     return ast;

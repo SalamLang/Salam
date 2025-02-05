@@ -1,4 +1,4 @@
-import { Validator } from "./../validator";
+import { Validator } from "../validator";
 import { validateType } from "../expression/type";
 import { AstBlock } from "../../../parser/parse/ast/block";
 import { validateExpression } from "../expression/expression";
@@ -9,10 +9,16 @@ export function validateStatementExpressionDeclaration(validator: Validator, blo
 
     if (stmt.value_type.type_kind === "Void") {
         validator.pushError("Cannot declare a variable of type 'void'.");
+        return;
     }
 
     if (stmt.value !== undefined) {
         validateExpression(validator, block, stmt.value);
+    }
+
+    if (! stmt.value?.value_type?.isEqual(stmt.value_type)) {
+        validator.pushError("Value type does not match variable type in '"+ stmt.name +"' var, cannot save " + stmt.value?.value_type?.getString() + " in " + stmt.value_type.getString() + " variable.");
+        return;
     }
 
     if (block.symbol_table.hasSymbol(stmt.name)) {

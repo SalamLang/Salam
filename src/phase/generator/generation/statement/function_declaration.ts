@@ -8,8 +8,8 @@ export function generateFunctionDeclaration(generator: Generator, func: AstFunct
     let result: string = "";
     let sign: string = "";
 
-    sign += "void ";
     sign += generateType(generator, func.return_type)
+    sign += " ";
     sign += func.name;
     sign += "(";
     sign += generateFunctionArguments(generator, func.args);

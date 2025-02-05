@@ -40,6 +40,11 @@ export class Generator {
 
         this.libraries.push("#include <stdio.h>");
         this.libraries.push("#include <stdlib.h>");
+        this.libraries.push("#include <string.h>");
+        this.libraries.push("#include <stdbool.h>");
+        this.libraries.push("#include <math.h>");
+        this.libraries.push("#include <time.h>");
+        this.libraries.push("#include <ctype.h>");
     }
 
     pushExtendedFunction(name: string, type: AstType): void {

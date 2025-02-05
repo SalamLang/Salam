@@ -1,33 +1,41 @@
 // Libraries
 #include <stdio.h>
 #include <stdlib.h>
-
-// External libraries
-// Import math
-
-// Extended functions
-extern float math_sin(float value);
-
-// Extended variables
-extern char* math_creator;
+#include <string.h>
+#include <stdbool.h>
+#include <math.h>
+#include <time.h>
+#include <ctype.h>
 
 // Sign functions
-void undefinedtest();
-void undefinedmain();
+char* test();
+int age(int age);
+void main();
 
 // Functions
-void undefinedtest() {
-int ge = 1;
-return ("hey");
+char* test() {
+char* bbb = (char*) malloc(strlen("hey") + 1);
+if (bbb == NULL) {
+    printf("Memory allocation failed in bbb");
+    exit(1);
+}
+strcpy(bbb, "hey");
+char* aaa = (char*) malloc(strlen(strcat(bbb, "!!!")) + strlen(bbb) + 1);
+if (aaa == NULL) {
+    printf("Memory allocation failed in aaa");
+    exit(1);
+}
+strcpy(aaa, strcat(strcat(bbb, "!!!"), bbb));
+return (aaa);
 }
 
-void undefinedmain() {
-printf("%d", 5);
-printf("%d", 5 + 5);
-printf("%d", 5 * 2 - 3);
-printf("%d", 5 * 2 - 3);
-printf("%g", math_sin(90));
-printf("%g", math_sin(90));
-printf("%s", math_creator);
+int age(int age) {
+return (age * 10);
+}
+
+void main() {
+printf("%d", age(200));
+printf("%s", "Hello, World");
+printf("%s", test());
 }
 

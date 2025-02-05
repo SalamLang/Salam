@@ -6,7 +6,7 @@ import { AstBlock } from "../../../parser/parse/ast/block";
 import { AstStatement } from "../../../parser/parse/ast/statement/statement";
 import { AstStatementPrint } from "../../../parser/parse/ast/statement/print";
 import { AstStatementReturn } from "../../../parser/parse/ast/statement/return";
-import { validateStatementExpressionDeclaration } from "./expression-declaration";
+import { validateStatementExpressionDeclaration } from "./expression_declaration";
 import { AstStatementExpression } from "../../../parser/parse/ast/statement/expression";
 import { AstStatementExpressionDeclaration } from "../../../parser/parse/ast/statement/expression_declaration";
 

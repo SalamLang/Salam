@@ -1,16 +1,18 @@
 import { Generator } from '../generator';
-import { generateExpression } from '../expression/expression';
+import { generateFunctionParameter } from '../function/function_parameter';
+import { ExpressionPair } from '../../../parser/parse/ast/expression/expression';
 import { AstFunctionParameter } from '../../../parser/parse/ast/function/function_parameter';
 
-export function generateFunctionParameters(generator: Generator, parameters: AstFunctionParameter[]): string {
-    let result: string = "";
+export function generateFunctionParameters(generator: Generator, parameters: AstFunctionParameter[]): ExpressionPair {
+    let result: ExpressionPair = { key: '', value: '' };
     for (const parameter of parameters) {
-        if (result.length > 0) {
-            result += ", ";
+        if (result.value.length > 0) {
+            result.value += ", ";
         }
-
         if (parameter.value.value_type !== undefined) {
-            result += generateExpression(generator, parameter.value);
+            const parameter_pair: ExpressionPair = generateFunctionParameter(generator, parameter);
+            result.key += parameter_pair.key;
+            result.value += parameter_pair.value;
         }
     }
     return result;

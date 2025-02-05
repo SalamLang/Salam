@@ -47,7 +47,7 @@ export function bp_lookup(whichOperator: TokenType): binding_power {
         case TokenOperatorType.TOKEN_NOT: return RightAssociative(400);
         case TokenOperatorType.TOKEN_MEMBER: return RightAssociative(800);
         //Note: Postfix operators are always RightAssociative
-        case TokenOperatorType.TOKEN_LEFT_PAREN: return RightAssociative(10);
+        case TokenOperatorType.TOKEN_LEFT_PAREN: return RightAssociative(400);
 
         default: return no_binding_power;
     }

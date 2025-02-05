@@ -2,7 +2,10 @@ import { Generator } from './../generator';
 import { AstType } from '../../../parser/parse/ast/expression/type';
 
 export function generateTypePrimary(type: AstType): string {
-    if (type.type_kind === "int") {
+    if (type.type_kind === "void") {
+        return "void";
+    }
+    else if (type.type_kind === "int") {
         return "int";
     }
     else if (type.type_kind === "float") {

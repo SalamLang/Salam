@@ -7,11 +7,11 @@ export class RuntimeBlock {
         const block: AstBlock = new AstBlock();
 
         const math_type: AstType = new AstType("package");
-        const math_sin_type: AstType = AstType.createMemberFunction("sin", [new AstFunctionArgument("value", AstType.createFloat())], AstType.createFloat());
+        const math_sin_type: AstType = AstType.createFunction("sin", [new AstFunctionArgument("value", AstType.createFloat())], AstType.createFloat());
         math_type.addMember(math_sin_type);
-        const math_cos_type: AstType = AstType.createMemberFunction("cos", [new AstFunctionArgument("value", AstType.createFloat())], AstType.createFloat());
+        const math_cos_type: AstType = AstType.createFunction("cos", [new AstFunctionArgument("value", AstType.createFloat())], AstType.createFloat());
         math_type.addMember(math_cos_type);
-        const math_tan_type: AstType = AstType.createMemberFunction("tan", [new AstFunctionArgument("value", AstType.createFloat())], AstType.createFloat());
+        const math_tan_type: AstType = AstType.createFunction("tan", [new AstFunctionArgument("value", AstType.createFloat())], AstType.createFloat());
         math_type.addMember(math_tan_type);
         const math_creator_type: AstType = AstType.createMemberValue("creator", AstType.createString());
         math_type.addMember(math_creator_type);

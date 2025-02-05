@@ -67,6 +67,22 @@ export class AstType extends AstNode {
         return this.type_kind === "package";
     }
 
+    get isString(): boolean {
+        return this.type_kind === "string";
+    }
+
+    get isNumber(): boolean {
+        return this.isFloat || this.isInt;
+    }
+
+    get isFloat(): boolean {
+        return this.type_kind === "float";
+    }
+
+    get isInt(): boolean {
+        return this.type_kind === "int";
+    }
+
     get isStruct(): boolean {
         return this.type_kind === "struct";
     }
@@ -83,7 +99,7 @@ export class AstType extends AstNode {
         return stringify(obj, wantsJson);
     }
 
-    static createMemberFunction(name: string, args: AstFunctionArgument[], return_type: AstType): AstType {
+    static createFunction(name: string, args: AstFunctionArgument[], return_type: AstType): AstType {
         const type: AstType = new AstType("function");
         type.func_name = name;
         type.func_args = args;

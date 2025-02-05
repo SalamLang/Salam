@@ -29,7 +29,6 @@ export function lex(lexer: Lexer): void {
                 break;
 
             // Whitespace
-            case '\a':  // Alert
             case '\b':  // Backspace
             case '\f':  // Form feed
             case '\r':  // Carriage return

@@ -41,6 +41,26 @@ export class RuntimeBlock {
         memory_alloc_type.setSyetem();
         block.symbol_table.addSystemSymbol("malloc", memory_alloc_type);
 
+        const memory_realloc_type: AstType = AstType.createFunction("realloc", "realloc", [new AstFunctionArgument("pointer", AstType.createPointer()), new AstFunctionArgument("size", AstType.createSize())], AstType.createPointer());
+        memory_realloc_type.setSyetem();
+        block.symbol_table.addSystemSymbol("realloc", memory_realloc_type);
+
+        const free_type: AstType = AstType.createFunction("free", "free", [new AstFunctionArgument("pointer", AstType.createPointer())], AstType.createVoid());
+        free_type.setSyetem();
+        block.symbol_table.addSystemSymbol("free", free_type);
+
+        const strdup_type: AstType = AstType.createFunction("strdup", "strdup", [new AstFunctionArgument("value", AstType.createString())], AstType.createVoid());
+        strdup_type.setSyetem();
+        block.symbol_table.addSystemSymbol("strdup", strdup_type);
+
+        const strcpy_type: AstType = AstType.createFunction("strcpy", "strcpy", [new AstFunctionArgument("pointer", AstType.createPointer()), new AstFunctionArgument("value", AstType.createString())], AstType.createVoid());
+        strcpy_type.setSyetem();
+        block.symbol_table.addSystemSymbol("strcpy", strcpy_type);
+
+        const strcat_type: AstType = AstType.createFunction("strcat", "strcat", [new AstFunctionArgument("target", AstType.createString()), new AstFunctionArgument("append", AstType.createString())], AstType.createVoid());
+        strcat_type.setSyetem();
+        block.symbol_table.addSystemSymbol("strcat", strcat_type);
+
         return block;
     }
 };

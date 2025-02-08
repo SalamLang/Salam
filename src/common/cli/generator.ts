@@ -13,6 +13,7 @@ import { Validator } from './../../phase/validator/validation/validator';
 export function processCommandRun(fileName: string | undefined, absoluteDirPath: string | undefined, source: string, selectedLanguage: LanguageMap): number {
     const lexer: Lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
     lex(lexer);
+    // console.log(lexer.tokens);
 
     const parser: Parser = new Parser(lexer);
     parse(parser);

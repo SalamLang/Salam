@@ -187,5 +187,6 @@ export class Validator {
                     "An unknown error occurred"
                 ));
             }
-        }    }
+        }
+    }
 }

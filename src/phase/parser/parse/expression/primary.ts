@@ -6,7 +6,7 @@ import { Token } from '../../../lexer/tokenizer/token';
 import { parseExpressionParentheses } from './parenthese';
 import { AstExpression } from './../ast/expression/expression';
 import { isOperator } from '../../../lexer/tokenizer/operator';
-import { TokenOperatorType } from '../../../lexer/tokenizer/type';
+import { TokenOperatorType, TokenOtherType } from '../../../lexer/tokenizer/type';
 import { invalidOperators } from './../../../lexer/tokenizer/operator';
 
 export function parseExpressionPrimary(parser: Parser): AstExpression | undefined {
@@ -30,7 +30,11 @@ export function parseExpressionPrimary(parser: Parser): AstExpression | undefine
         return parseExpressionPrefix(parser, prefix_bp_lookup(currentToken.type));
     }
     else {
-        parser.pushError("Failed to parse primary expression???");
+        if (currentToken.type == TokenOtherType.TOKEN_EOF) {
+            parser.pushError("Failed to parse primary expression - we expect some expression value but facing END");
+        } else {
+            parser.pushError("Failed to parse primary expression???");
+        }
     }
     return undefined;
 };

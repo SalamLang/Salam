@@ -16,6 +16,7 @@ export class AstType extends AstNode {
     member_name: string | undefined;
 
     func_name: string | undefined;
+    func_generated_name: string | undefined;
     func_args: AstFunctionArgument[];
     func_return_type: AstType | undefined;
 
@@ -29,6 +30,7 @@ export class AstType extends AstNode {
         this.is_array = false;
         this.members = [];
         this.func_name = undefined;
+        this.func_generated_name = undefined;
         this.func_args = [];
         this.func_return_type = undefined;
     }
@@ -121,9 +123,10 @@ export class AstType extends AstNode {
         return stringify(obj, wantsJson);
     }
 
-    static createFunction(name: string, args: AstFunctionArgument[], return_type: AstType): AstType {
+    static createFunction(name: string, generated_name: string, args: AstFunctionArgument[], return_type: AstType): AstType {
         const type: AstType = new AstType("function");
         type.func_name = name;
+        type.func_generated_name = generated_name;
         type.func_args = args;
         type.func_return_type = return_type;
         return type;

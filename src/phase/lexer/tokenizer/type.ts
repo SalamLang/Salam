@@ -16,6 +16,7 @@ export function isDataTypeToken(token: Token): boolean {
 
 export enum TokenKeywordType {
     TOKEN_IDENTIFIER = "IDENTIFIER",
+    TOKEN_DEFER = "DEFER",
     TOKEN_IF = "IF",
     TOKEN_ELSE = "ELSE",
     TOKEN_PRINT = "PRINT",

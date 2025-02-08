@@ -1,12 +1,11 @@
 import { AstProgram } from './ast/program';
-import { stringify } from './../../../serializer';
 import { Lexer } from './../../lexer/lex/lexer';
+import { stringify } from './../../../serializer';
 import { Token } from './../../lexer/tokenizer/token';
 import { LanguageID } from './../../../common/language/language';
 import { parserMessageRenderer } from './../../../common/message/message';
 import { ParserMessageKeys } from './../../../common/message/parser/parser';
 import { TokenKeywordType, TokenOperatorType, TokenOtherType, TokenType } from './../../lexer/tokenizer/type';
-import { AstBlock } from './ast/block';
 
 export class Parser {
     ast: AstProgram;

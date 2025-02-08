@@ -41,12 +41,12 @@ export class RuntimeStyleTextAlign extends RuntimeElementAttributeStyle {
         );
         this.addReservedValue(
             new RuntimeElementAttributeValue("match-parent")
-            .addText(LanguageID.LanguageEnglish, "match-parent")
+            .addText(LanguageID.LanguageEnglish, "match parent")
             .addText(LanguageID.LanguagePersian, "مطابق والد")
         );
         this.addReservedValue(
             new RuntimeElementAttributeValue("justify-all")
-            .addText(LanguageID.LanguageEnglish, "justify-all")
+            .addText(LanguageID.LanguageEnglish, "justify all")
             .addText(LanguageID.LanguagePersian, "تراز همه")
         );
     }

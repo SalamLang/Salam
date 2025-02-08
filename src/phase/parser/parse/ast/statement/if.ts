@@ -3,17 +3,19 @@ import { AstBlock } from './../block';
 import { AstExpression } from './../expression/expression';
 import { stringify } from './../../../../../serializer';
 
-export class AstIf extends AstNode {
+export class AstStatementIf extends AstNode {
     condition: AstExpression;
     thenBranch: AstBlock;
-    elseBranch?: AstBlock;
+    elseBranch: AstBlock | undefined;
   
-    constructor(condition: AstExpression, thenBranch: AstBlock, elseBranch?: AstBlock) {
+    constructor(condition: AstExpression, thenBranch: AstBlock, elseBranch: AstBlock | undefined) {
         super("If");
         this.condition = condition;
         this.thenBranch = thenBranch;
-        if (elseBranch) {
+        if (elseBranch !== undefined) {
             this.elseBranch = elseBranch;
+        } else {
+            this.elseBranch = undefined;
         }
     }
 

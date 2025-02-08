@@ -16,7 +16,7 @@ export function validateStatementExpressionDeclaration(validator: Validator, blo
         validateExpression(validator, block, stmt.value);
     }
 
-    if (! stmt.value?.value_type?.isEqual(stmt.value_type)) {
+    if (! stmt.value?.value_type?.castablle(stmt.value_type)) {
         validator.pushError("Value type does not match variable type in '"+ stmt.name +"' var, cannot save " + stmt.value?.value_type?.getString() + " in " + stmt.value_type.getString() + " variable.");
         return;
     }

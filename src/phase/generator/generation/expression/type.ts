@@ -14,12 +14,19 @@ export function generateTypePrimary(type: AstType): string {
     else if (type.type_kind === "bool") {
         return "bool";
     }
+    else if (type.type_kind === "size") {
+        return "size_t";
+    }
+    else if (type.type_kind === "pointer") {
+        return "void*";
+    }
     else if (type.type_kind === "string") {
         return "char*";
     }
     else if (type.type_kind === "char") {
         return "char";
     }
+    return "undefined_type?";
 };
 
 export function generateType(generator: Generator, type: AstType): string {

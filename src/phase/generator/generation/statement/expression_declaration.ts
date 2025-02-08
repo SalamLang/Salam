@@ -96,7 +96,8 @@ export function generateStatementExpressionDeclaration(generator: Generator, stm
                 result += `strcpy(${stmt.name}, ${expr.value});\n`;
             }
         } else {
-            result += expr;
+            result = expr.key + result;
+            result += expr.value;
             result += ";\n";
         }
     }

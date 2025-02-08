@@ -8,6 +8,7 @@
 #include <ctype.h>
 
 // Extended functions
+extern void* malloc(size_t size);
 extern char* int2str(int value);
 
 // Sign functions
@@ -20,6 +21,7 @@ return ("110");
 }
 
 char* main() {
+char* m = malloc(40);
 char* bbb = (char*) malloc(strlen("hey") + 1);
 if (bbb == NULL) {
     printf("Memory allocation failed in bbb\n");

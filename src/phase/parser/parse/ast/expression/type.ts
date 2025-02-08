@@ -123,6 +123,10 @@ export class AstType extends AstNode {
         return stringify(obj, wantsJson);
     }
 
+    static createPointer(): AstType {
+        return new AstType("pointer");
+    }
+
     static createFunction(name: string, generated_name: string, args: AstFunctionArgument[], return_type: AstType): AstType {
         const type: AstType = new AstType("function");
         type.func_name = name;
@@ -130,6 +134,10 @@ export class AstType extends AstNode {
         type.func_args = args;
         type.func_return_type = return_type;
         return type;
+    }
+
+    static createPackage(): AstType {
+        return new AstType("package");
     }
 
     static createMemberValue(name: string, type: AstType): AstType {
@@ -153,6 +161,10 @@ export class AstType extends AstNode {
         return new AstType("float");
     }
 
+    static createSize(): AstType {
+        return new AstType("size");
+    }
+
     static createInt(): AstType {
         return new AstType("int");
     }
@@ -163,5 +175,12 @@ export class AstType extends AstNode {
 
     isEqual(type: AstType): boolean {
         return this.type_kind === type.type_kind;
+    }
+
+    castablle(type: AstType): boolean {
+        if (type.type_kind === "string" && this.type_kind === "pointer") {
+            return true;
+        }
+        return this.isEqual(type);
     }
 }

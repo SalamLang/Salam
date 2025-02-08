@@ -6,7 +6,7 @@ export class RuntimeBlock {
     static generate(): AstBlock {
         const block: AstBlock = new AstBlock();
 
-        const math_type: AstType = new AstType("package");
+        const math_type: AstType = AstType.createPackage();
         math_type.setSyetem();
         const math_sin_type: AstType = AstType.createFunction("sin", "sin", [new AstFunctionArgument("value", AstType.createFloat())], AstType.createFloat());
         math_sin_type.setSyetem();
@@ -36,6 +36,10 @@ export class RuntimeBlock {
         const float2str_type: AstType = AstType.createFunction("float2str", "float2str", [new AstFunctionArgument("value", AstType.createFloat())], AstType.createString());
         float2str_type.setSyetem();
         block.symbol_table.addSystemSymbol("float2str", float2str_type);
+
+        const memory_alloc_type: AstType = AstType.createFunction("malloc", "malloc", [new AstFunctionArgument("size", AstType.createSize())], AstType.createPointer());
+        memory_alloc_type.setSyetem();
+        block.symbol_table.addSystemSymbol("malloc", memory_alloc_type);
 
         return block;
     }

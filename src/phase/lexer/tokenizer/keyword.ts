@@ -11,6 +11,13 @@ export const keywordMaps: KeywordMap[] = [
         id: TokenKeywordType.TOKEN_IDENTIFIER,
     },
     {
+        id: TokenKeywordType.TOKEN_DEFER,
+        data: {
+            [LanguageID.LanguageEnglish]: ["defer"],
+            [LanguageID.LanguagePersian]: ["اجرا"],
+        },
+    },
+    {
         id: TokenKeywordType.TOKEN_IF,
         data: {
             [LanguageID.LanguageEnglish]: ["if"],

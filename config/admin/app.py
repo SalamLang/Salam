@@ -15,7 +15,7 @@ PORT = 5000
 DEBUG = False
 DEBUG = True
 YAML_DIR = "../"
-LANGUAEG_FILE = "language.yaml"
+LANGUAEG_FILE = "yaml/language.yaml"
 
 
 def get_dynamic_columns(data: dict) -> List[str]:

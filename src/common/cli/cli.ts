@@ -17,15 +17,15 @@ export function processCommand(type: string, args: string[], selectedLanguage: L
         return handleMissingArguments(type);
     }
     else if (command === "version") {
-        return processCommandVersion(args);
+        return processCommandVersion(type, args);
     }
     else if (command === "help") {
         return processCommandHelp(type, args);
     }
     else if (command === "file") {
-        return processCommandFile(args, selectedLanguage);
+        return processCommandFile(type, args, selectedLanguage);
     } else if (command === "code") {
-        return processCommandCode(args, selectedLanguage);
+        return processCommandCode(type, args, selectedLanguage);
     }
     else {
         console.error("Error: Invalid command.");

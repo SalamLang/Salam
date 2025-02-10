@@ -1,10 +1,10 @@
 import fs from 'fs';
 import path from 'path';
     
-import { processCommandRun } from './../../cli/lexer';
+import { processCommandRun } from '../run/run';
 import { LanguageMap } from './../../language/language';
 
-export function processCommandFile(args: string[], selectedLanguage: LanguageMap): number {
+export function processCommandFile(type: string, args: string[], selectedLanguage: LanguageMap): number {
     const filePath: string | undefined = args[args.indexOf("file") + 1] || undefined;
 
     let source, fileName, absoluteDirPath;
@@ -35,5 +35,5 @@ export function processCommandFile(args: string[], selectedLanguage: LanguageMap
         return 1;
     }
 
-    return processCommandRun(fileName, absoluteDirPath, source, selectedLanguage);
+    return processCommandRun(type, fileName, absoluteDirPath, source, selectedLanguage);
 };

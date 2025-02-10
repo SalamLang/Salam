@@ -16,10 +16,17 @@ export function processCommandRunParser(
 
     const parser: Parser = new Parser(lexer);
     parse(parser);
+    if (typeof window !== "undefined") {
+        (window as any).lexer = lexer;
+        (window as any).parser = parser;
+    }
     if (! checkError(parser, undefined, undefined)) {
         return 1;
     }
-    console.log(parser.stringify());
+
+    if (typeof window === "undefined") {
+        console.log(parser.stringify());
+    }
 
     return 0;
 };

@@ -15,29 +15,34 @@ export function processCommandRunGenerator(
     source: string,
     selectedLanguage: LanguageMap,
 ): number {
+    let fs: any;
+    if (typeof window === "undefined") {
+        fs = import('fs');
+    }
+
     const lexer: Lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
     lex(lexer);
-    // console.log(lexer.tokens);
 
     const parser: Parser = new Parser(lexer);
     parse(parser);
+    if (typeof window !== "undefined") {
+        (window as any).lexer = lexer;
+        (window as any).parser = parser;
+    }
     if (! checkError(parser, undefined, undefined)) {
         return 1;
     }
 
     const validator: Validator = new Validator(parser.ast);
     validate(validator);
+    if (typeof window !== "undefined") {
+        (window as any).validator = validator;
+    }
     if (! checkError(parser, validator, undefined)) {
         return 1;
     }
-    const astFileName: string = 'test.json';
-
-    let fs: any;
     if (typeof window === "undefined") {
-        fs = import('fs');
-    }
-
-    if (typeof window === "undefined") {
+        const astFileName: string = 'test.json';
         if (fs.existsSync(astFileName)) {
             fs.unlinkSync(astFileName);
         }
@@ -46,16 +51,19 @@ export function processCommandRunGenerator(
 
     const generator: Generator = new Generator(validator.ast, validator.extendedFunctions, validator.extendedVariables, validator.packages);
     generate(generator);
-    const outputFileName: string = 'test.c';
-    
+    if (typeof window !== "undefined") {
+        (window as any).generator = generator;
+    }
+    if (! checkError(parser, validator, generator)) {
+        return 1;
+    }
+
     if (typeof window === "undefined") {
+        const outputFileName: string = 'test.c';
         if (fs.existsSync(outputFileName)) {
             fs.unlinkSync(outputFileName);
         }
         generator.writeToFile(outputFileName);
-    }
-    if (! checkError(parser, validator, generator)) {
-        return 1;
     }
 
     return 0;

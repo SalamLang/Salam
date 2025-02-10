@@ -1,6 +1,7 @@
 import { Parser } from './../parser';
 import { parseExpressionBinary } from './binary';
 import { parseExpressionPrimary } from './primary';
+// @ts-expect-error TS(2307): Cannot find module './precedence' or its correspon... Remove this comment to see the full error message
 import { getExpressionPrecedence } from './precedence';
 import { Token } from '../../../lexer/tokenizer/token';
 import { isOperator } from '../../../lexer/tokenizer/operator';

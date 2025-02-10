@@ -48,11 +48,24 @@ function fetchUrlSync(url: string): string {
 }
 
 export function includeLayout(generator: Generator, filePath: string, params: string[]): string {
-    let fs: any;
-    let path: any;
+    let fs: any = undefined;
+    let path: any = undefined;
     if (typeof window === "undefined") {
-        fs = import('fs');
-        path = import('path');
+        let requireFunc: any;
+        try {
+          requireFunc = typeof require !== "undefined" ? require : eval("require");
+        } catch (error) {
+          console.error("Error: Unable to obtain the require function.");
+          return 1;
+        }
+    
+        try {
+          fs = requireFunc("fs");
+          path = requireFunc("path");
+        } catch (error) {
+          console.error("Error: Unable to load 'fs' or 'path' modules.");
+          return 1;
+        }
     }
 
     if (isUrl(filePath)) {

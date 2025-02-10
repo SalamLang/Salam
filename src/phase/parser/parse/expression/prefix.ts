@@ -1,9 +1,9 @@
 import { Parser } from './../parser';
+import { parseExpression } from './expression';
 import { Token } from '../../../lexer/tokenizer/token';
 import { AstExpression } from './../ast/expression/expression';
 import { AstExpressionPrefix } from '../ast/expression/prefix';
 import { AstExpressionPostfix } from '../ast/expression/postfix';
-import { parseExpression, prefix_bp_lookup } from './expression';
 import { TokenOperatorType } from '../../../lexer/tokenizer/type';
 
 export function parseExpressionPrefix(parser: Parser, min_bp: number): AstExpression | undefined {

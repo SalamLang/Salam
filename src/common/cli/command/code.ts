@@ -3,7 +3,7 @@ import { LanguageMap } from './../../language/language';
 
 export const code_flag: string = "code";
 
-export function processCommandCode(type: string, args: string[], selectedLanguage: LanguageMap): number {
+export function processCommandCode(type: string, args: string[], selectedLanguage: LanguageMap, languageCheck: number): number {
     const source: string = args[args.indexOf(code_flag) + 1];
 
     if (! source) {
@@ -11,5 +11,5 @@ export function processCommandCode(type: string, args: string[], selectedLanguag
         return 1;
     }
 
-    return processCommandRun(type, undefined, undefined, source, selectedLanguage);
+    return processCommandRun(type, undefined, undefined, source, selectedLanguage, languageCheck);
 };

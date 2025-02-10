@@ -1,4 +1,4 @@
-import { processCommand } from './cli/cli';
+import { processCommand } from './../../common/cli/cli';
 import { processLanguageFlag } from './../../common/cli/language';
 import { languageMapsValues } from './../../common/language/data';
 
@@ -10,7 +10,7 @@ function main(args: string[]): number {
         return result;
     }
 
-    return processCommand(args, selectedLanguage);
+    return processCommand("parser", args, selectedLanguage);
 };
 
 const args: string[] = process?.argv?.slice(2) || [];

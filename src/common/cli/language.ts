@@ -1,7 +1,7 @@
 import { languageMaps } from './../language/data'; 
-import { LanguageID, LanguageMap } from './../language/language';
+import { showAvailableLanguages } from './command/help';
 import { getLanguageIDByFlag } from './../language/utils';
-import { showAvailableLanguages } from './../../phase/lexer/cli/command/help';
+import { LanguageID, LanguageMap } from './../language/language';
 
 export const lang_flag: string = "--lang";
 

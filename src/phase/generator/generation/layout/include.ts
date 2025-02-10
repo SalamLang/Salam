@@ -1,5 +1,7 @@
 import fs from 'fs';
 import path from 'path';
+
+// @ts-expect-error TS(7016): Could not find a declaration file for module 'sync... Remove this comment to see the full error message
 import fetch from 'sync-fetch';
 
 import { generateLayoutNode } from './node';
@@ -28,6 +30,8 @@ export function includeLayoutString(generator: Generator, source: string, fileNa
     validate(_validator);
     checkError(_parser, _validator, undefined);
 
+
+    // @ts-expect-error TS(2554): Expected 4 arguments, but got 1.
     const _generator = new Generator(_validator.ast);
     if (_generator.ast.layout !== undefined) {
         _generator.ast.layout.root.generate_name = "div";

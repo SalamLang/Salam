@@ -32,5 +32,5 @@ export function validateLayoutElement(validator: Validator, parent_block: AstBlo
     validateLayoutElementAttributes(validator, element.enduser_name, runtime_element, element);
 
     // Check block
-    validateLayoutBlock(validator, parent_element, element, element.block);
+    validateLayoutBlock(validator, parent_block, parent_element, element, element.block);
 };

@@ -6,7 +6,7 @@ import { processCommandVersion } from './command/version';
 import { processCommandHelp, showUsage } from './command/help';
 import { LanguageMap } from './../../common/language/language';
 
-export function processCommand(type: string, args: string[], selectedLanguage: LanguageMap): number {
+export function processCommand(type: string, args: string[], selectedLanguage: LanguageMap, languageCheck: number): number {
     const command: string | undefined = args.find((arg: string, index: number) => {
         const previousArg: string | undefined = args[index - 1];
         return !arg.startsWith("--") && previousArg !== lang_flag;
@@ -23,9 +23,9 @@ export function processCommand(type: string, args: string[], selectedLanguage: L
         return processCommandHelp(type, args);
     }
     else if (command === "file") {
-        return processCommandFile(type, args, selectedLanguage);
+        return processCommandFile(type, args, selectedLanguage, languageCheck);
     } else if (command === "code") {
-        return processCommandCode(type, args, selectedLanguage);
+        return processCommandCode(type, args, selectedLanguage, languageCheck);
     }
     else {
         console.error("Error: Invalid command.");

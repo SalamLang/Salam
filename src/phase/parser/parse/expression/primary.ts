@@ -1,13 +1,13 @@
 import { Parser } from './../parser';
-import { prefix_bp_lookup } from './expression';
+import { prefix_bp_lookup } from './precedence';
 import { parseExpressionPrefix } from './prefix';
 import { parseExpressionLiteral } from './literal';
 import { Token } from '../../../lexer/tokenizer/token';
 import { parseExpressionParentheses } from './parenthese';
 import { AstExpression } from './../ast/expression/expression';
 import { isOperator } from '../../../lexer/tokenizer/operator';
-import { TokenOperatorType, TokenOtherType } from '../../../lexer/tokenizer/type';
 import { invalidOperators } from './../../../lexer/tokenizer/operator';
+import { TokenOperatorType, TokenOtherType } from '../../../lexer/tokenizer/type';
 
 export function parseExpressionPrimary(parser: Parser): AstExpression | undefined {
     const currentToken: Token = parser.currentToken;

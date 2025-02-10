@@ -13,5 +13,7 @@ function main(args: string[]): number {
     return processCommand("validator", args, selectedLanguage, result);
 };
 
-const args: string[] = process?.argv?.slice(2) || [];
-process.exit(main(args));
+if (typeof window === "undefined") {
+    const args: string[] = process?.argv?.slice(2) || [];
+    process.exit(main(args));
+}

@@ -1,19 +1,17 @@
-import * as fs from 'fs';
-
 import { SymbolTable } from './symbol-table';
-import { RuntimeElement } from './../../../runtime/element'; 
-import { runtimeElements } from './../../../runtime/runtime';
-import { AstProgram } from "./../../parser/parse/ast/program";
+import { RuntimeElement } from '../../../runtime/element'; 
+import { runtimeElements } from '../../../runtime/runtime';
+import { AstProgram } from "../../parser/parse/ast/program";
 import { LanguageID } from '../../../common/language/language';
-import { runtimeStyleStates } from './../../../runtime/runtime';
+import { runtimeStyleStates } from '../../../runtime/runtime';
 import { AstType } from '../../parser/parse/ast/expression/type';
-import { runtimeStyleElements } from './../../../runtime/runtime';
-import { AstLayoutElement } from './../../parser/parse/ast/layout/element';
+import { runtimeStyleElements } from '../../../runtime/runtime';
+import { AstLayoutElement } from '../../parser/parse/ast/layout/element';
 import { validatorMessageRenderer } from '../../../common/message/message';
-import { RuntimeElementAttribute } from './../../../runtime/element_attribute';
-import { RuntimeElementStyleState } from './../../../runtime/element_style_state';
+import { RuntimeElementAttribute } from '../../../runtime/element_attribute';
+import { RuntimeElementStyleState } from '../../../runtime/element_style_state';
 import { ValidatorMessageKeys } from '../../../common/message/validator/validator';
-import { runtimeStyleAttributes, runtimeGlobalAttributes, runtimeGlobalSingleAttributes, runtimeGlobalMotherAttributes } from './../../../runtime/runtime';
+import { runtimeStyleAttributes, runtimeGlobalAttributes, runtimeGlobalSingleAttributes, runtimeGlobalMotherAttributes } from '../../../runtime/runtime';
 
 export class Validator {
     ast: AstProgram;
@@ -170,6 +168,13 @@ export class Validator {
     }
     
     writeToFile(fileName: string): void {
+        let fs: any;
+        if (typeof window === "undefined") {
+            fs = import('fs');
+        } else {
+            return;
+        }
+
         try {
             fs.writeFileSync(fileName, this.ast.stringify(true), 'utf-8');
         } catch (error: unknown) {

@@ -5,7 +5,7 @@ export class RuntimeElementStyleStatePlaceholderShown extends RuntimeElementStyl
     constructor() {
         super("placeholder-shown");
 
-        this.addText(LanguageID.LanguagePersian, "راهنما نمایش داده شده");
+        this.addText(LanguageID.LanguagePersian, "راهنما چاپ داده شده");
         this.addText(LanguageID.LanguageEnglish, "placeholder-shown");
     }
 };

@@ -220,6 +220,7 @@ import { RuntimeStyleCaretColor } from './style/attribute/caret-color';
 import { RuntimeStyleClear } from './style/attribute/clear';
 import { RuntimeStyleColor } from './style/attribute/color';
 import { RuntimeStyleFontSize } from './style/attribute/font-size';
+import { RuntimeStyleFontFamily } from './style/attribute/font-family';
 import { RuntimeStyleTextAlign } from './style/attribute/text-align';
 
 export const runtimeStyleAttributes: RuntimeElementAttributeStyle[] = [
@@ -246,6 +247,7 @@ export const runtimeStyleAttributes: RuntimeElementAttributeStyle[] = [
     new RuntimeStyleClear(),
     new RuntimeStyleColor(),
     new RuntimeStyleFontSize(),
+    new RuntimeStyleFontFamily(),
     new RuntimeStyleTextAlign(),
 ];
 
@@ -334,4 +336,10 @@ export const runtimeStyleStates: RuntimeElementStyleState[] = [
     new RuntimeElementStyleStateTarget(),
     new RuntimeElementStyleStateValid(),
     new RuntimeElementStyleStateVisited(),
+];
+
+import { RuntimeStyleElementFont } from './style/element/font';
+
+export const runtimeStyleElements: RuntimeElement[] = [
+    new RuntimeStyleElementFont(),
 ];

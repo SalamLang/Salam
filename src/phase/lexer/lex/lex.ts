@@ -4,10 +4,10 @@ import { lexerLexNumber } from './number';
 import { lexerLexIdentifier } from './identifier';
 import { TokenOtherType } from './../tokenizer/type';
 import { isUtf8Alpha, isUtf8Number } from './utf8';
-import { operatorTypeMaps } from './../tokenizer/type';
 import { lexerLexReadComment } from './comment/single';
 import { lexerLexString, stringOpenings } from './string';
 import { lexerLexReadBlockComment } from './comment/multi';
+import { operatorTypeMaps } from './../tokenizer/operator';
 import { LexerMessageKeys } from './../../../common/message/lexer/lexer';
 import { lexerMessageRenderer } from './../../../common/message/message';
 
@@ -29,7 +29,6 @@ export function lex(lexer: Lexer): void {
                 break;
 
             // Whitespace
-            case '\a':  // Alert
             case '\b':  // Backspace
             case '\f':  // Form feed
             case '\r':  // Carriage return
@@ -52,7 +51,7 @@ export function lex(lexer: Lexer): void {
                     lexer.advance();
                     lexer.advance();
 
-                    lexer.pushToken(new Token(operatorTypeMaps[char + nextChar], lexer.getLocation()));
+                    lexer.pushToken(new Token(operatorTypeMaps[char + nextChar], lexer.getLocation(), char + ">", undefined));
                 } else {
                     lexer.readDoubleToken(char);
                 }
@@ -71,7 +70,7 @@ export function lex(lexer: Lexer): void {
                     lexerLexReadBlockComment(lexer);
                 } else {
                     lexer.advance();
-                    lexer.pushToken(new Token(operatorTypeMaps[char], lexer.getLocation()));
+                    lexer.pushToken(new Token(operatorTypeMaps[char], lexer.getLocation(), char, undefined));
                 }
                 break;
 
@@ -122,7 +121,7 @@ export function lex(lexer: Lexer): void {
             case '?':
             case '!':
             case '⩵':
-                lexer.pushToken(new Token(operatorTypeMaps[char], lexer.getLocation()));
+                lexer.pushToken(new Token(operatorTypeMaps[char], lexer.getLocation(), char, undefined));
                 lexer.advance();
                 break;
 
@@ -140,5 +139,5 @@ export function lex(lexer: Lexer): void {
         }
     }
 
-    lexer.pushToken(new Token(TokenOtherType.TOKEN_EOF, lexer.getLocation()));
+    lexer.pushToken(new Token(TokenOtherType.TOKEN_EOF, lexer.getLocation(), undefined, undefined));
 };

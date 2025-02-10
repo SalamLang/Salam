@@ -1,4 +1,4 @@
-import { Validator } from "./../validator";
+import { Validator } from "../validator";
 import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 import { validatorMessageRenderer } from './../../../../common/message/message';
 import { RuntimeElementStyleState } from "../../../../runtime/element_style_state";

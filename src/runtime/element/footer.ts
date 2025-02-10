@@ -5,6 +5,6 @@ export class RuntimeElementFooter extends RuntimeElement{
     constructor(){
         super(true, 'footer');
         this.addText(LanguageID.LanguageEnglish, 'footer');
-        this.addText(LanguageID.LanguagePersian, 'فوتر');
+        this.addText(LanguageID.LanguagePersian, 'پاورقی');
     }
 }

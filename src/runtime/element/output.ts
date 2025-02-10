@@ -2,11 +2,13 @@ import { LanguageID } from './../../common/language/language';
 import { RuntimeElementAttribute } from './../element_attribute';
 import { RuntimeElementAttributeType } from './../element_attribute_type';
 import { RuntimeElement } from './../element';
+
 export class RuntimeElementOutput extends RuntimeElement {
   constructor() {
     super(true, 'output');
     this.addText(LanguageID.LanguageEnglish, 'output');
     this.addText(LanguageID.LanguagePersian, 'خروجی');
+    
     this.addAttribute(
         new RuntimeElementAttribute(RuntimeElementAttributeType.IDs, 'for')
         .addText(LanguageID.LanguageEnglish, 'for')

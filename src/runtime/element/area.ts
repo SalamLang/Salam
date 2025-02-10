@@ -9,6 +9,7 @@ export class RuntimeElementArea extends RuntimeElement {
         super(true, "area");
         this.addText(LanguageID.LanguageEnglish, "area");
         this.addText(LanguageID.LanguagePersian, "منطقه");
+
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "alt")
             .addText(LanguageID.LanguagePersian, "متن جایگزین")
@@ -16,7 +17,7 @@ export class RuntimeElementArea extends RuntimeElement {
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "download")
-            .addText(LanguageID.LanguagePersian, "دانلود")
+            .addText(LanguageID.LanguagePersian, "بارگیری")
             .addText(LanguageID.LanguageEnglish, "download")
         );
         this.addAttribute(

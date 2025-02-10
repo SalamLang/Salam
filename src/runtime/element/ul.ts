@@ -5,6 +5,6 @@ export class RuntimeElementUl extends RuntimeElement{
     constructor(){
         super(true, 'ul');
         this.addText(LanguageID.LanguageEnglish, 'ul');
-        this.addText(LanguageID.LanguagePersian, 'لیست');
+        this.addText(LanguageID.LanguagePersian, 'فهرست');
     }
 }

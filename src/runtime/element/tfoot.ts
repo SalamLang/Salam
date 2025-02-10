@@ -5,6 +5,6 @@ export class RuntimeElementTfoot extends RuntimeElement{
     constructor(){
         super(true, 'tfoot');
         this.addText(LanguageID.LanguageEnglish, 'tfoot');
-        this.addText(LanguageID.LanguagePersian, 'فوتر جدول');
+        this.addText(LanguageID.LanguagePersian, 'پاورقی جدول');
     }
 }

@@ -9,7 +9,7 @@ export class RuntimeElementOption extends RuntimeElement {
     super(true, 'option');
     this.addBelongsTo(new RuntimeElementSelect());
     this.addText(LanguageID.LanguageEnglish, 'option');
-    this.addText(LanguageID.LanguagePersian, 'مورد فهرست کشویی');
+    this.addText(LanguageID.LanguagePersian, 'گزینه');
 
     this.addAttribute(
       new RuntimeElementAttribute(
@@ -35,7 +35,7 @@ export class RuntimeElementOption extends RuntimeElement {
         'selected'
       )
         .addText(LanguageID.LanguageEnglish, 'selected')
-        .addText(LanguageID.LanguagePersian, 'انتخاب شده')
+        .addText(LanguageID.LanguagePersian, 'منتخب')
     );
   }
 };

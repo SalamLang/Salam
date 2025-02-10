@@ -5,6 +5,6 @@ export class RuntimeElementSection extends RuntimeElement {
     constructor() {
         super(true, 'section');
         this.addText(LanguageID.LanguageEnglish, 'section');
-        this.addText(LanguageID.LanguagePersian, 'سکشن');
+        this.addText(LanguageID.LanguagePersian, 'بخش');
     }
 }

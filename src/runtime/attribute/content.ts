@@ -4,7 +4,7 @@ import { RuntimeElementAttributeType } from './../element_attribute_type';
 
 export class RuntimeGlobalAttributeContent extends RuntimeElementAttribute {
     constructor() {
-        super(RuntimeElementAttributeType.String, undefined);
+        super(RuntimeElementAttributeType.AnyNoEmpty, undefined);
         this.addText(LanguageID.LanguagePersian, "محتوا");
         this.addText(LanguageID.LanguageEnglish, "content");
     }

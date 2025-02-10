@@ -3,7 +3,7 @@ import { AstLayoutBlock } from './block';
 import { AstLayoutAttributes } from './attributes';
 import { AstLayoutElementKind } from './element_kind';
 import { stringify } from './../../../../../serializer';
-import { Validator } from './../../../../validator/validation/validator';
+import { Validator } from '../../../../validator/validation/validator';
 import { IdentifierGenerator } from './../../../../../common/identifier-generator';
 
 export class AstLayoutElement extends AstNode {

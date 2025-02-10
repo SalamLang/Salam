@@ -2,14 +2,14 @@ import { processCommand } from './common/cli/cli';
 import { processLanguageFlag } from './common/cli/language';
 import { languageMapsValues } from './common/language/data';
 
-export const phases: string[] = [
+const phases: string[] = [
     "lexer",
     "parser",
     "validator",
     "generator",
 ];
 
-export const finalPhase: string = phases[phases.length - 1];
+const finalPhase: string = phases[phases.length - 1];
 
 function displayHelp() {
     console.log("You need to choose a phase of the Salam programming language:");
@@ -17,9 +17,9 @@ function displayHelp() {
         console.log(`    ${phase}`);
     });
     console.log("");
-}
+};
 
-function main(args: string[]): number {
+export function mainSalam(args: string[]): number {
     if (args.length === 0) {
         displayHelp();
         return 1;
@@ -38,9 +38,13 @@ function main(args: string[]): number {
     }
 
     const remainingArgs: string[] = args.slice(1);
-    
-    return processCommand(selectedPhase, remainingArgs, selectedLanguage, languageResult);
-}
 
-const args: string[] = process?.argv?.slice(2) || [];
-process.exit(main(args));
+    return processCommand(selectedPhase, remainingArgs, selectedLanguage, languageResult);
+};
+
+if (typeof window === "undefined") {
+    const args: string[] = process?.argv?.slice(2) || [];
+    process.exit(mainSalam(args));
+} else {
+    (window as any).mainSalam = mainSalam;
+}

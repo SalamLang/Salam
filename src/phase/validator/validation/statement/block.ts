@@ -1,4 +1,4 @@
-import { Validator } from "./../validator";
+import { Validator } from "../validator";
 import { validateStatement } from "./statement";
 import { AstBlock } from "../../../parser/parse/ast/block";
 

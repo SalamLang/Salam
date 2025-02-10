@@ -1,4 +1,4 @@
-import { Validator } from "./../validator";
+import { Validator } from "../validator";
 import { validateExpressionUnary } from "./unary";
 import { validateExpressionBinary } from "./binary";
 import { validateExpressionVariable } from "./variable";

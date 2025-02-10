@@ -1,5 +1,3 @@
-import * as fs from 'fs';
-
 import { stringify } from '../../../serializer';
 import { generateType } from './expression/type';
 import { AstProgram } from "./../../parser/parse/ast/program";
@@ -208,6 +206,13 @@ export class Generator {
     }
 
     writeToFile(fileName: string): void {
+        let fs: any;
+        if (typeof window === "undefined") {
+            fs = import('fs');
+        } else {
+            return;
+        }
+
         try {
             fs.writeFileSync(fileName, this.getGeneratedSourceC() + "\n" + this.getGeneratedSource(), 'utf-8');
         } catch (error: unknown) {

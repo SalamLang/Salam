@@ -1,4 +1,4 @@
-import { Validator } from "./../validator";
+import { Validator } from "../validator";
 import { AstBlock } from "../../../parser/parse/ast/block";
 import { validateLayoutElementOrState } from './element_or_state';
 import { AstLayoutBlock } from "./../../../parser/parse/ast/layout/block";

@@ -1,4 +1,4 @@
-import { Validator } from "./../validator";
+import { Validator } from "../validator";
 import { validateLayoutBlock } from './block';
 import { RuntimeElement } from './../../../../runtime/element';
 import { validateLayoutElementAttributes } from './element_attributes';

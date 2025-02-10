@@ -1,5 +1,3 @@
-import fs from 'fs';
-import path from 'path';
 import fetch from 'sync-fetch';
 
 import { generateLayoutNode } from './node';
@@ -11,7 +9,7 @@ import { Parser } from './../../../parser/parse/parser';
 import { isUrl } from './../../../validator/validation/is-url';
 import { checkError } from './../../../../common/cli/check-error';
 import { validate } from './../../../validator/validation/validate';
-import { Validator } from './../../../validator/validation/validator';
+import { Validator } from '../../../validator/validation/validator';
 import { Generator } from './../../../generator/generation/generator';
 import { generatorMessageRenderer } from './../../../../common/message/message';
 import { GeneratorMessageKeys } from './../../../../common/message/generator/generator';
@@ -50,6 +48,13 @@ function fetchUrlSync(url: string): string {
 }
 
 export function includeLayout(generator: Generator, filePath: string, params: string[]): string {
+    let fs: any;
+    let path: any;
+    if (typeof window === "undefined") {
+        fs = import('fs');
+        path = import('path');
+    }
+
     if (isUrl(filePath)) {
         try {
             const source = fetchUrlSync(filePath);
@@ -73,7 +78,7 @@ export function includeLayout(generator: Generator, filePath: string, params: st
                 )
             );
         }
-    } else {
+    } else if (fs && path) {
         if (!filePath) {
             generator.pushError(
                 generatorMessageRenderer(

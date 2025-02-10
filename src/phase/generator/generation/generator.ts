@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+
 import { stringify } from '../../../serializer';
 import { generateType } from './expression/type';
 import { AstProgram } from "./../../parser/parse/ast/program";

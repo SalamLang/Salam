@@ -5,7 +5,12 @@ import { parse } from '../../../phase/parser/parse/parse';
 import { Parser } from '../../../phase/parser/parse/parser';
 import { LanguageMap } from '../../language/language';
 
-export function processCommandRunParser(fileName: string | undefined, absoluteDirPath: string | undefined, source: string, selectedLanguage: LanguageMap): number {
+export function processCommandRunParser(
+    fileName: string | undefined, 
+    absoluteDirPath: string | undefined, 
+    source: string, 
+    selectedLanguage: LanguageMap, 
+): number {
     const lexer: Lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
     lex(lexer);
 

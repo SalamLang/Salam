@@ -1,12 +1,29 @@
 import { processCommandRunLexer } from './lexer';
 import { processCommandRunParser } from './parser';
 import { LanguageMap } from './../../language/language';
+import { languageMapsValues } from './../../language/data';
 import { processCommandRunValidator } from './validator';
 import { processCommandRunGenerator } from './generator';
 
 export const code_flag: string = "code";
 
-export function processCommandRun(type: string, fileName: string | undefined, absoluteDirPath: string | undefined, source: string, selectedLanguage: LanguageMap): number {
+export function processCommandRun(
+    type: string, 
+    fileName: string | undefined, 
+    absoluteDirPath: string | undefined, 
+    source: string, 
+    selectedLanguage: LanguageMap, 
+    languageCheck: number
+): number {
+    // No language has been selected, so let's attempt to select one automatically.
+    if (languageCheck === -1 && fileName !== undefined) {
+        if (fileName.endsWith(".en.salam")) {
+            selectedLanguage = languageMapsValues[0];
+        } else if (fileName.endsWith(".fa.salam")) {
+            selectedLanguage = languageMapsValues[1];
+        } 
+    }
+
     switch (type) {
         case "lexer": return processCommandRunLexer(fileName, absoluteDirPath, source, selectedLanguage);
         case "parser": return processCommandRunParser(fileName, absoluteDirPath, source, selectedLanguage);

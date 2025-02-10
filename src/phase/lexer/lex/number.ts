@@ -21,7 +21,7 @@ export function lexerLexNumber(lexer: Lexer) {
     }
 
     const data: TokenData = new TokenData(
-        isFloat ? TokenDataType.TOKEN_DATA_TYPE_FLOAT : TokenDataType.TOKEN_DATA_TYPE_INT, 
+        isFloat ? TokenDataType.TOKEN_DATA_TYPE_FLOAT : TokenDataType.TOKEN_DATA_TYPE_INT,
         isFloat ? parseFloat(value) : parseInt(value, 10)
     );
     const token: Token = new Token(

@@ -175,16 +175,16 @@ export class Validator {
         } catch (error: unknown) {
             if (error instanceof Error) {
                 this.pushError(validatorMessageRenderer(
-                    this.getLanguageId(), 
-                    ValidatorMessageKeys.VALIDATOR_SAVE_OUTPUT_ERROR, 
-                    fileName, 
+                    this.getLanguageId(),
+                    ValidatorMessageKeys.VALIDATOR_SAVE_OUTPUT_ERROR,
+                    fileName,
                     error.message
                 ));
             } else {
                 this.pushError(validatorMessageRenderer(
-                    this.getLanguageId(), 
-                    ValidatorMessageKeys.VALIDATOR_SAVE_OUTPUT_ERROR, 
-                    fileName, 
+                    this.getLanguageId(),
+                    ValidatorMessageKeys.VALIDATOR_SAVE_OUTPUT_ERROR,
+                    fileName,
                     "An unknown error occurred"
                 ));
             }

@@ -1,5 +1,5 @@
-import { hasExtraArguments } from './../../../../common/cli/error';
-import { SALAM_VERSION } from './../../../../base';
+import { SALAM_VERSION } from './../../../base';
+import { hasExtraArguments } from './../error';
 
 export function processCommandVersion(args: string[]): number {
     if (hasExtraArguments(args)) {
@@ -8,4 +8,3 @@ export function processCommandVersion(args: string[]): number {
     console.log("Salam CLI, version " + SALAM_VERSION);
     return 0;
 };
-

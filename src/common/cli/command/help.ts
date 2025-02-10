@@ -1,15 +1,15 @@
-import { lang_flag } from './../../../../common/cli/language';
-import { hasExtraArguments } from './../../../../common/cli/error';
-import { LanguageMap } from './../../../../common/language/language';
-import { languageMapsValues } from './../../../../common/language/data'; 
+import { lang_flag } from './../language';
+import { hasExtraArguments } from './../error';
+import { LanguageMap } from './../../language/language';
+import { languageMapsValues } from './../../language/data'; 
 
 export function showAvailableLanguages(): void {
     console.log("Available languages:");
     languageMapsValues.forEach((lang: LanguageMap) => console.log(`  ${lang.flag} - ${lang.name}`));
 };
 
-export function showUsage(): void {
-    console.log(`Usage: ./salam-parser [options] <command>\n
+export function showUsage(type: string): void {
+    console.log(`Usage: ./salam-${type} [options] <command>\n
         Commands:
           version         Display the version of Salam CLI.
           help            Display this help message.
@@ -20,10 +20,10 @@ export function showUsage(): void {
             showAvailableLanguages();
 };
 
-export function processCommandHelp(args: string[]): number {
+export function processCommandHelp(type: string, args: string[]): number {
     if (hasExtraArguments(args)) {
         return 1;
     }
-    showUsage();
+    showUsage(type);
     return 0;
 };

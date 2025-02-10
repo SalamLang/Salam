@@ -1,9 +1,10 @@
-import { AstNode } from './../node';
+import { AstStatement } from '../statement/statement';
+import { AstExpression } from '../expression/expression';
 
-export class AstReturn extends AstNode {
-    value: AstNode;
+export class AstStatementReturn extends AstStatement {
+    value: AstExpression;
 
-    constructor(value: AstNode) {
+    constructor(value: AstExpression) {
         super("Return");
         this.value = value;
     }

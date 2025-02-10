@@ -1,4 +1,4 @@
-import { Validator } from "./../validator";
+import { Validator } from "../validator";
 import { RuntimeElement } from './../../../../runtime/element';
 import { validateLayoutElementAttribute } from './element_attribute';
 import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
@@ -19,7 +19,7 @@ export function validateLayoutElementAttributes(validator: Validator, element_en
             
             if (foundAttributes === undefined) {
                 // TODO: .getText() is an array, so we should join it to get the string
-                const attribute_name = runtimeAttribute.getText(validator.getLanguageId())?.join(" ") || "Unknown Attribute";
+                const attribute_name: string = runtimeAttribute.getText(validator.getLanguageId())?.join(" ") || "Unknown Attribute";
                 validator.pushError(validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_REQUIRED, attribute_name, element_enduser_name));
             }
         }
@@ -34,7 +34,9 @@ export function validateLayoutElementAttributes(validator: Validator, element_en
 
     // Check styles
     if (element.styles.items.length > 0) {
-        element.generateBuiltInSelector(validator);
+        if (element.built_in_selector === undefined) {
+            element.generateBuiltInSelector(validator);
+        }
 
         for (const attribute of element.styles.items) {
             validateLayoutElementAttribute(validator, runtime_element, attribute, element);

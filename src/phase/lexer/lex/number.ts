@@ -9,7 +9,7 @@ export function lexerLexNumber(lexer: Lexer) {
     let isFloat = false;
 
     while (lexer.currentChar !== '\0') {
-        const char = lexer.currentChar;
+        const char: string = lexer.currentChar;
         if (char === '.' && !isFloat) {
             isFloat = true;
         } else if (! isUtf8Number(char)) {
@@ -20,13 +20,14 @@ export function lexerLexNumber(lexer: Lexer) {
         lexer.advance();
     }
 
-    const data = new TokenData(
-        isFloat ? TokenDataType.TOKEN_DATA_TYPE_FLOAT : TokenDataType.TOKEN_DATA_TYPE_INT, 
+    const data: TokenData = new TokenData(
+        isFloat ? TokenDataType.TOKEN_DATA_TYPE_FLOAT : TokenDataType.TOKEN_DATA_TYPE_INT,
         isFloat ? parseFloat(value) : parseInt(value, 10)
     );
     const token: Token = new Token(
         isFloat ? TokenValueType.TOKEN_NUMBER_FLOAT : TokenValueType.TOKEN_NUMBER_INT,
         lexer.getLocation(),
+        value,
         data
     );
     lexer.pushToken(token);

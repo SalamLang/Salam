@@ -1,7 +1,7 @@
 import { LanguageID } from '../../../common/language/language';
 import { RuntimeElementAttributeType } from '../../element_attribute_type';
 import { RuntimeElementAttributeStyle } from '../../element_attribute_style';
-import { single_animation_fill_mode } from '../../data/style/single-animation-fill-mode';
+import { single_animation_fill_mode } from '../../data/style/values/single-animation-fill-mode';
 
 export class RuntimeStyleAnimationFillMode extends RuntimeElementAttributeStyle {
     constructor() {

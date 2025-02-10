@@ -22,8 +22,8 @@ function messageRenderer<T extends string | number | symbol>(
   messageKey: T,
   ...args: string[]
 ): string {
-  const prefix = getMessagePrefix(type, language, messages);
-  const messageTemplate = messages[language]?.[messageKey];
+  const prefix: string = getMessagePrefix(type, language, messages);
+  const messageTemplate: string | undefined = messages[language]?.[messageKey];
 
   if (! messageTemplate) {
     throw new Error(
@@ -39,30 +39,38 @@ function getMessagePrefix<T extends string | number | symbol>(
   language: LanguageID,
   messages: MultiLanguageMessages<T>
 ): string {
-  const prefixKey = `${type}_PREFIX` as T;
+  const prefixKey: T = `${type}_PREFIX` as T;
   return messages[language]?.[prefixKey] || '';
 }
 
-export const lexerMessageRenderer = (
+export function lexerMessageRenderer(
   language: LanguageID,
   messageKey: LexerMessageKeys,
   ...args: string[]
-): string => messageRenderer('LEXER', lexerMessages, language, messageKey, ...args);
+): string {
+  return messageRenderer('LEXER', lexerMessages, language, messageKey, ...args);
+};
 
-export const parserMessageRenderer = (
+export function parserMessageRenderer(
   language: LanguageID,
   messageKey: ParserMessageKeys,
   ...args: string[]
-): string => messageRenderer('PARSER', parserMessages, language, messageKey, ...args);
+): string {
+  return messageRenderer('PARSER', parserMessages, language, messageKey, ...args);
+};
 
-export const validatorMessageRenderer = (
+export function validatorMessageRenderer(
   language: LanguageID,
   messageKey: ValidatorMessageKeys,
   ...args: string[]
-): string => messageRenderer('VALIDATOR', validatorMessages, language, messageKey, ...args);
+): string {
+  return messageRenderer('VALIDATOR', validatorMessages, language, messageKey, ...args);
+};
 
-export const generatorMessageRenderer = (
+export function generatorMessageRenderer(
   language: LanguageID,
   messageKey: GeneratorMessageKeys,
   ...args: string[]
-): string => messageRenderer('GENERATOR', generatorMessages, language, messageKey, ...args);
+): string {
+  return messageRenderer('GENERATOR', generatorMessages, language, messageKey, ...args);
+};

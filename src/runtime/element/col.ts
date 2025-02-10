@@ -7,11 +7,12 @@ export class RuntimeElementCol extends RuntimeElement {
   constructor() {
     super(true, "col");
     this.addText(LanguageID.LanguageEnglish, "col");
-    this.addText(LanguageID.LanguagePersian, "کول");
+    this.addText(LanguageID.LanguagePersian, "توام");
+    
     this.addAttribute(
         new RuntimeElementAttribute(RuntimeElementAttributeType.PositiveInt, 'span')
         .addText(LanguageID.LanguageEnglish, 'span')
-        .addText(LanguageID.LanguagePersian, 'اسپن')
+        .addText(LanguageID.LanguagePersian, 'مجزا')
     );
   }
 }

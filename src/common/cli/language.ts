@@ -1,7 +1,7 @@
-import { languageMaps } from './../language/data'; 
-import { LanguageMap } from './../language/language';
-import { getLanguageIDByFlag } from './../language/utils';
-import { showAvailableLanguages } from './../../phase/lexer/cli/command/help';
+import { languageMaps } from '../language/data'; 
+import { showAvailableLanguages } from './command/help';
+import { getLanguageIDByFlag } from '../language/utils';
+import { LanguageID, LanguageMap } from '../language/language';
 
 export const lang_flag: string = "--lang";
 
@@ -17,11 +17,12 @@ export function processLanguageFlag(args: string[], selectedLanguage: LanguageMa
             return 1;
         }
 
-        const languageId = getLanguageIDByFlag(langValue);
+        const languageId: LanguageID | undefined = getLanguageIDByFlag(langValue);
 
         if (languageId !== undefined) {
-            const language = languageMaps[languageId];
+            const language: LanguageMap = languageMaps[languageId];
             Object.assign(selectedLanguage, language);
+            return 0;
         } else {
             console.error(`Error: Invalid language value "${langValue}".`);
             showAvailableLanguages();
@@ -29,5 +30,5 @@ export function processLanguageFlag(args: string[], selectedLanguage: LanguageMa
         }
     }
 
-    return 0;
+    return -1;
 };

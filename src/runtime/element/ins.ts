@@ -8,10 +8,11 @@ export class RuntimeElementIns extends RuntimeElement {
         super(true, 'ins');
         this.addText(LanguageID.LanguageEnglish, 'inserted text');
         this.addText(LanguageID.LanguagePersian, 'متن درج شده');
+        
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Url, 'cite')
             .addText(LanguageID.LanguageEnglish, 'cite')
-            .addText(LanguageID.LanguagePersian, 'ارجاع')
+            .addText(LanguageID.LanguagePersian, 'ذکر')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.DateTime, 'datetime')

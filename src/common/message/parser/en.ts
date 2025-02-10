@@ -23,5 +23,11 @@ export const enMessages: Record<ParserMessageKeys, string> = {
     [ParserMessageKeys.PARSER_FUNCTION_PARAMETERS_ARE_NOT_VALID]: "Function parameters are not valid.",
     [ParserMessageKeys.PARSER_FUNCTION_BODY_IS_NOT_VALID]: "Function body is not valid.",
 
-    [ParserMessageKeys.PARSER_EXPECTED_TOKEN_TYPE_BUT_GOT]: "Expected token type {0}, but got {1}.",
+    [ParserMessageKeys.PARSER_EXPECTED_TOKEN_DATA_TYPE_BUT_GOT]: "Expected token type {0}, but got {1}.",
+
+    [ParserMessageKeys.PARSER_STATEMENT_IS_NOT_VALID_IN_BLOCK]: "Statement is not valid in block.",
+
+    [ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_AFTER_OPERATOR]: "Expression expected after operator '{0}'.",
+    [ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_AFTER_UNARY_OPERATOR]: "Expression expected after unary operator '{0}'.",
+    [ParserMessageKeys.PARSER_EXPRESSION_EXPECTED_IN_STATEMENT]: "Expression expected in '{0}' statement.",
 };

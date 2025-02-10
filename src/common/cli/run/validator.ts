@@ -18,11 +18,15 @@ export function processCommandRunValidator(
 
     const parser: Parser = new Parser(lexer);
     parse(parser);
-    checkError(parser, undefined, undefined);
+    if (! checkError(parser, undefined, undefined)) {
+        return 1;
+    }
 
     const validator: Validator = new Validator(parser.ast);
     validate(validator);
-    checkError(parser, undefined, undefined);
+    if (! checkError(parser, validator, undefined)) {
+        return 1;
+    }
 
     return 0;
 };

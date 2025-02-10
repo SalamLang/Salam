@@ -2,13 +2,13 @@ import { Parser } from './../../phase/parser/parse/parser';
 import { Validator } from '../../phase/validator/validation/validator';
 import { Generator } from './../../phase/generator/generation/generator';
 
-export function checkError(parser: Parser | undefined, validator: Validator | undefined, generator: Generator | undefined): void | never {
+export function checkError(parser: Parser | undefined, validator: Validator | undefined, generator: Generator | undefined): boolean {
     if (parser) {
         if (parser.ast.errors.length > 0) {
             parser.ast.errors.forEach((error: string) => {
                 console.error(error);
-                process.exit(1);
             });
+            return false;
         }
     }
     
@@ -16,8 +16,8 @@ export function checkError(parser: Parser | undefined, validator: Validator | un
         if (validator.errors.length > 0) {
             validator.errors.forEach((error: string) => {
                 console.error(error);
-                process.exit(1);
             });
+            return false;
         }
     }
 
@@ -25,8 +25,10 @@ export function checkError(parser: Parser | undefined, validator: Validator | un
         if (generator.errors.length > 0) {
             generator.errors.forEach((error: string) => {
                 console.error(error);
-                process.exit(1);
             });
+            return false;
         }
     }
+
+    return true;
 };

@@ -14,7 +14,7 @@ export function processLanguageFlag(args: string[], selectedLanguage: LanguageMa
         if (! langValue) {
             console.error(`Error: Missing value for ${lang_flag} flag.`);
             showAvailableLanguages();
-            return 0;
+            return 1;
         }
 
         const languageId: LanguageID | undefined = getLanguageIDByFlag(langValue);
@@ -22,11 +22,11 @@ export function processLanguageFlag(args: string[], selectedLanguage: LanguageMa
         if (languageId !== undefined) {
             const language: LanguageMap = languageMaps[languageId];
             Object.assign(selectedLanguage, language);
-            return 1;
+            return 0;
         } else {
             console.error(`Error: Invalid language value "${langValue}".`);
             showAvailableLanguages();
-            return 0;
+            return 1;
         }
     }
 

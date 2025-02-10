@@ -13,7 +13,7 @@ function main(args: string[]): number {
     let selectedLanguage = languageMapsValues[0];
 
     const result: number = processLanguageFlag(args, selectedLanguage);
-    if (result === 0) {
+    if (result === 1) {
         return result;
     }
 

@@ -17,7 +17,7 @@ export function showUsage(type: string): void {
           code <value>    Process the provided code snippet.\n
         Options:
           ${lang_flag} <value>    Select the language to use.`);
-            showAvailableLanguages();
+    showAvailableLanguages();
 };
 
 export function processCommandHelp(type: string, args: string[]): number {

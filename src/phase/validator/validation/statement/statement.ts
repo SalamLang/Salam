@@ -1,4 +1,4 @@
-import { Validator } from "./../validator";
+import { Validator } from "../validator";
 import { validateStatementIf } from "./if";
 import { validateStatementDefer } from "./defer";
 import { validateStatementPrint } from "./print";

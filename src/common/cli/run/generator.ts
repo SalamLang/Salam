@@ -1,5 +1,3 @@
-import * as fs from 'fs';
-
 import { checkError } from '../check-error';
 import { lex } from '../../../phase/lexer/lex/lex';
 import { LanguageMap } from '../../language/language';
@@ -29,18 +27,29 @@ export function processCommandRunGenerator(
     validate(validator);
     checkError(parser, validator, undefined);
     const astFileName: string = 'test.json';
-    if (fs.existsSync(astFileName)) {
-        fs.unlinkSync(astFileName);
+
+    let fs: any;
+    if (typeof window === "undefined") {
+        fs = import('fs');
     }
-    validator.writeToFile(astFileName);
+
+    if (typeof window === "undefined") {
+        if (fs.existsSync(astFileName)) {
+            fs.unlinkSync(astFileName);
+        }
+        validator.writeToFile(astFileName);
+    }
 
     const generator: Generator = new Generator(validator.ast, validator.extendedFunctions, validator.extendedVariables, validator.packages);
     generate(generator);
     const outputFileName: string = 'test.c';
-    if (fs.existsSync(outputFileName)) {
-        fs.unlinkSync(outputFileName);
+    
+    if (typeof window === "undefined") {
+        if (fs.existsSync(outputFileName)) {
+            fs.unlinkSync(outputFileName);
+        }
+        generator.writeToFile(outputFileName);
     }
-    generator.writeToFile(outputFileName);
     checkError(parser, validator, generator);
 
     return 0;

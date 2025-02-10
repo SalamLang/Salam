@@ -1,4 +1,4 @@
-import { Validator } from "./../validator";
+import { Validator } from "../validator";
 import { AstType } from "../../../parser/parse/ast/expression/type";
 
 export function validateType(validator: Validator, node: AstType): void {

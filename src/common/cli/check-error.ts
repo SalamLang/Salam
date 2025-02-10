@@ -1,5 +1,5 @@
 import { Parser } from './../../phase/parser/parse/parser';
-import { Validator } from './../../phase/validator/validation/validator';
+import { Validator } from '../../phase/validator/validation/validator';
 import { Generator } from './../../phase/generator/generation/generator';
 
 export function checkError(parser: Parser | undefined, validator: Validator | undefined, generator: Generator | undefined): void | never {

@@ -210,9 +210,22 @@ export class Generator {
     }
 
     writeToFile(fileName: string): void {
-        let fs: any;
+        let fs: any = undefined;
         if (typeof window === "undefined") {
-            fs = import('fs');
+            let requireFunc: any;
+            try {
+              requireFunc = typeof require !== "undefined" ? require : eval("require");
+            } catch (error) {
+              console.error("Error: Unable to obtain the require function.");
+              return;
+            }
+        
+            try {
+              fs = requireFunc("fs");
+            } catch (error) {
+              console.error("Error: Unable to load 'fs' or 'path' modules.");
+              return;
+            }
         } else {
             return;
         }

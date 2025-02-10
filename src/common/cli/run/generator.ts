@@ -15,9 +15,24 @@ export function processCommandRunGenerator(
     source: string,
     selectedLanguage: LanguageMap,
 ): number {
-    let fs: any;
+    let fs: any = undefined;
+    let path: any = undefined;
     if (typeof window === "undefined") {
-        fs = import('fs');
+        let requireFunc: any;
+        try {
+          requireFunc = typeof require !== "undefined" ? require : eval("require");
+        } catch (error) {
+          console.error("Error: Unable to obtain the require function.");
+          return 1;
+        }
+    
+        try {
+          fs = requireFunc("fs");
+          path = requireFunc("path");
+        } catch (error) {
+          console.error("Error: Unable to load 'fs' or 'path' modules.");
+          return 1;
+        }
     }
 
     const lexer: Lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
@@ -41,7 +56,7 @@ export function processCommandRunGenerator(
     if (! checkError(parser, validator, undefined)) {
         return 1;
     }
-    if (typeof window === "undefined") {
+    if (typeof window === "undefined" && fs !== undefined) {
         const astFileName: string = 'test.json';
         if (fs.existsSync(astFileName)) {
             fs.unlinkSync(astFileName);

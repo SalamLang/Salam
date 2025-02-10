@@ -1,5 +1,5 @@
 import { processCommand } from './../../common/cli/cli';
-import { processLanguageFlag } from './../../common/cli/language';
+import { processLanguageFlag } from '../../common/cli/language';
 import { languageMapsValues } from './../../common/language/data';
 
 function main(args: string[]): number {

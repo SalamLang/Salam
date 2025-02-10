@@ -1,7 +1,7 @@
-import { languageMaps } from './../language/data'; 
+import { languageMaps } from '../language/data'; 
 import { showAvailableLanguages } from './command/help';
-import { getLanguageIDByFlag } from './../language/utils';
-import { LanguageID, LanguageMap } from './../language/language';
+import { getLanguageIDByFlag } from '../language/utils';
+import { LanguageID, LanguageMap } from '../language/language';
 
 export const lang_flag: string = "--lang";
 

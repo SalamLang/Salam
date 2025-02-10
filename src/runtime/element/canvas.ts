@@ -3,7 +3,7 @@ import { RuntimeElement } from "./../element";
 import { RuntimeElementAttribute } from "./../element_attribute";
 import { RuntimeElementAttributeType } from "./../element_attribute_type";
 
-export class RuntimeElementCanvad extends RuntimeElement{
+export class RuntimeElementCanvas extends RuntimeElement{
     constructor(){
         super(true, 'canvas');
         this.addText(LanguageID.LanguageEnglish, 'canvas');

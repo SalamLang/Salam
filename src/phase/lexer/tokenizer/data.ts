@@ -49,15 +49,11 @@ export class TokenData {
     }
 
     getValueString(): string {
-        const value: any = this.getValue();
+        const value: number | string | boolean | undefined = this.getValue();
         if (value === undefined) {
             return "undefined";
         }
         return value.toString();
-    }
-
-    print(): void {
-        console.log(this.stringify());
     }
 
     stringify(wantsJson: boolean = true): string | object {

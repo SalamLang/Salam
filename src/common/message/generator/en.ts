@@ -7,4 +7,7 @@ export const enMessages: Record<GeneratorMessageKeys, string> = {
     [GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_NOT_FOUND]: "File not found in include command - \"{0}\"",
     [GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_READ_ERROR]: "Error reading file in include command - \"{0}\"",
     [GeneratorMessageKeys.GENERATOR_INCLUDE_FILE_PATH_NOT_PROVIDED]: "File path not provided in include command",
+    [GeneratorMessageKeys.GENERATOR_INCLUDE_HTTP_ERROR_HTTP_STATUS]: "Error in including from internet address - \"{0}\" - HTTP status code: {1}",
+    [GeneratorMessageKeys.GENERATOR_INCLUDE_HTTP_ERROR]: "Error in including from internet address - \"{0}\"",
+    [GeneratorMessageKeys.GENERATOR_SAVE_OUTPUT_ERROR]: "Error saving output in '{0}' - {1}",
 };

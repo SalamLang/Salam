@@ -1,4 +1,4 @@
-import { Validator } from "./../validator";
+import { Validator } from "../validator";
 import { RuntimeElement } from './../../../../runtime/element';
 import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 import { validateLayoutElementAttributeValue } from './element_attribute_value';
@@ -9,8 +9,8 @@ import { ValidatorMessageKeys } from './../../../../common/message/validator/val
 import { validateLayoutElementAttributeReservedValue } from './element_attribute_reserved_value';
 
 export function validateLayoutElementAttribute(validator: Validator, runtimeElement: RuntimeElement, attribute: AstLayoutAttribute, element: AstLayoutElement): void {
-    const element_name = element.enduser_name;
-    const attribute_name = attribute.enduser_name;
+    const element_name: string = element.enduser_name;
+    const attribute_name: string = attribute.enduser_name;
 
     const runtimeElementAttribute: RuntimeElementAttribute | undefined = Validator.getElementAllAttributeRuntime(validator.getLanguageId(), runtimeElement, attribute_name);
     if (runtimeElementAttribute === undefined) {
@@ -22,6 +22,7 @@ export function validateLayoutElementAttribute(validator: Validator, runtimeElem
     attribute.kind = runtimeElementAttribute.kind;
     attribute.generate_name = runtimeElementAttribute.generate_name;
     attribute.generate_type = runtimeElementAttribute.constructor.name;
+    attribute.is_hide = runtimeElementAttribute.is_hide;
 
     // Handling content attribute (To save on element object)
     if (attribute.generate_type === "RuntimeGlobalAttributeContent") {

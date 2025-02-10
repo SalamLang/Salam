@@ -3,8 +3,8 @@ import { stringify } from './../../../serializer';
 import { TokenData } from "./../tokenizer/data";
 import { TokenOtherType } from './../tokenizer/type';
 import { TokenDataType } from './../tokenizer/data';
-import { operatorTypeMaps } from './../tokenizer/type';
 import { TokenLocation } from './../tokenizer/location';
+import { operatorTypeMaps } from './../tokenizer/operator';
 import { LanguageMap } from './../../../common/language/language';
 
 export class Lexer {
@@ -51,8 +51,8 @@ export class Lexer {
     }
 
     pushError(message: string) {
-        const tokenData = new TokenData(TokenDataType.TOKEN_DATA_TYPE_STRING, message);
-        const token: Token = new Token(TokenOtherType.TOKEN_ERROR, this.getLocation(), tokenData);
+        const tokenData: TokenData = new TokenData(TokenDataType.TOKEN_DATA_TYPE_STRING, message);
+        const token: Token = new Token(TokenOtherType.TOKEN_ERROR, this.getLocation(), undefined, tokenData);
         this.pushToken(token);
     }
 
@@ -72,28 +72,28 @@ export class Lexer {
     }
 
     readDoubleToken(char: string): void {
-        const nextChar = this.nextChar;
+        const nextChar: string = this.nextChar;
         if (nextChar === char) {
             this.advance();
             this.advance();
 
-            const token: Token = new Token(operatorTypeMaps[char + char], this.getLocation());
+            const token: Token = new Token(operatorTypeMaps[char + char], this.getLocation(), char + char, undefined);
             this.pushToken(token);
         } else {
             this.advance();
 
-            const token: Token = new Token(operatorTypeMaps[char], this.getLocation());
+            const token: Token = new Token(operatorTypeMaps[char], this.getLocation(), char, undefined);
             this.pushToken(token);
         }
     }
 
     readThreeOrToken(char: string, char2: string): void {
-        const nextChar = this.nextChar;
+        const nextChar: string = this.nextChar;
         if (nextChar === char2) {
             this.advance();
             this.advance();
 
-            const token: Token = new Token(operatorTypeMaps[char + char2], this.getLocation());
+            const token: Token = new Token(operatorTypeMaps[char + char2], this.getLocation(), char + char2, undefined);
             this.pushToken(token);
         } else if (nextChar === char) {
             this.advance();
@@ -101,44 +101,40 @@ export class Lexer {
 
             if (this.nextChar === char2) {
                 this.advance();
-                const token: Token = new Token(operatorTypeMaps[char + char + char2], this.getLocation());
+                const token: Token = new Token(operatorTypeMaps[char + char + char2], this.getLocation(), char + char + char2, undefined);
                 this.pushToken(token);
             } else {
-                const token: Token = new Token(operatorTypeMaps[char + char], this.getLocation());
+                const token: Token = new Token(operatorTypeMaps[char + char], this.getLocation(), char + char, undefined);
                 this.pushToken(token);
             }
         } else {
             this.advance();
 
-            const token: Token = new Token(operatorTypeMaps[char], this.getLocation());
+            const token: Token = new Token(operatorTypeMaps[char], this.getLocation(), char, undefined);
             this.pushToken(token);
         }
     }
 
     readThreeToken(char: string, char2: string): void {
-        const nextChar = this.nextChar;
+        const nextChar: string = this.nextChar;
         if (nextChar === char2) {
             this.advance();
             this.advance();
 
-            const token: Token = new Token(operatorTypeMaps[char + char2], this.getLocation());
+            const token: Token = new Token(operatorTypeMaps[char + char2], this.getLocation(), char + char2, undefined);
             this.pushToken(token);
         } else if (nextChar === char) {
             this.advance();
             this.advance();
 
-            const token: Token = new Token(operatorTypeMaps[char + char], this.getLocation());
+            const token: Token = new Token(operatorTypeMaps[char + char], this.getLocation(), char + char, undefined);
             this.pushToken(token);
         } else {
             this.advance();
 
-            const token: Token = new Token(operatorTypeMaps[char], this.getLocation());
+            const token: Token = new Token(operatorTypeMaps[char], this.getLocation(), char, undefined);
             this.pushToken(token);
         }
-    }
-
-    print(): void {
-        console.log(this.stringify());
     }
 
     stringify(wantsJson: boolean = true): string | object {

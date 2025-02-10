@@ -24,10 +24,6 @@ export class TokenLocation {
         this.endColumn = endColumn;
     }
 
-    print(): void {
-        console.log(this.stringify());
-    }
-
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             index: this.index,

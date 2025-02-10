@@ -12,7 +12,7 @@ export function parserParseLayoutKey(parser: Parser): Token[] {
         // Eating next part of the key and appending it to the tokens array
         if (! parser.isEnd) {
             while (true) {
-                const ntoken = parser.currentToken;
+                const ntoken: Token = parser.currentToken;
                 if (! ntoken.isKeyword || parser.isEnd) {
                     break;
                 }

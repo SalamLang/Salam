@@ -5,6 +5,6 @@ export class RuntimeElementRuby extends RuntimeElement {
     constructor() {
         super(true, 'ruby');
         this.addText(LanguageID.LanguageEnglish, 'ruby');
-        this.addText(LanguageID.LanguagePersian, 'الماس');
+        this.addText(LanguageID.LanguagePersian, 'گویش');
     }
 }

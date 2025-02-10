@@ -1,4 +1,4 @@
-import { Validator } from "./../validator";
+import { Validator } from "../validator";
 import { validateExpression } from "./expression";
 import { AstBlock } from "../../../parser/parse/ast/block";
 import { AstType } from "../../../parser/parse/ast/expression/type";

@@ -1,10 +1,17 @@
-import fs from 'fs';
-import path from 'path';
-    
 import { processCommandRun } from '../run/run';
 import { LanguageMap } from './../../language/language';
 
 export function processCommandFile(type: string, args: string[], selectedLanguage: LanguageMap, languageCheck: number): number {
+    let fs: any;
+    let path: any;
+    if (typeof window === "undefined") {
+        fs = import('fs');
+        path = import('path');
+    }
+    if (!fs || !path) {
+        return 1;
+    }
+
     const filePath: string | undefined = args[args.indexOf("file") + 1] || undefined;
 
     let source, fileName, absoluteDirPath;

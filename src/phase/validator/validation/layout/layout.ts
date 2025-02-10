@@ -1,4 +1,4 @@
-import { Validator } from "./../validator";
+import { Validator } from "../validator";
 import { validateLayoutElement } from "./element";
 import { AstBlock } from "../../../parser/parse/ast/block";
 import { AstLayout } from "./../../../parser/parse/ast/layout/layout";

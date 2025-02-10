@@ -5,7 +5,7 @@ import { RuntimeElementAttributeType } from './../element_attribute_type';
 import { crossorigins } from './../data/element/values/crossorigin';
 import { RuntimeElementAttributeValue } from '../element_attribute_value';
 
-export class RuntimeElementA extends RuntimeElement {
+export class RuntimeElementImg extends RuntimeElement {
     constructor() {
         super(true, "img");
         this.addText(LanguageID.LanguageEnglish, "image");

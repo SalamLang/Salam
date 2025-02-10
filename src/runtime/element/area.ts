@@ -1,10 +1,9 @@
+import { RuntimeElementAttributeValue } from './../element_attribute_value';
 import { languages } from './../data/element/language';
 import { LanguageID } from "../../common/language/language";
 import { RuntimeElement } from "../element";
 import { RuntimeElementAttribute } from "../element_attribute";
 import { RuntimeElementAttributeType } from "../element_attribute_type";
-import { RuntimeElementAttributeValue } from "../element_attribute_value";
-
 export class RuntimeElementArea extends RuntimeElement {
     constructor() {
         super(true, "area");
@@ -14,7 +13,7 @@ export class RuntimeElementArea extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "alt")
             .addText(LanguageID.LanguagePersian, "متن جایگزین")
-            .addText(LanguageID.LanguageEnglish, "alternative text")
+            .addText(LanguageID.LanguageEnglish, "alt")
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "download")
@@ -23,15 +22,14 @@ export class RuntimeElementArea extends RuntimeElement {
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Coords, "coords")
-            .addText(LanguageID.LanguagePersian, "جایگاه")
-            .addText(LanguageID.LanguageEnglish, "coordinates")
+            .addText(LanguageID.LanguagePersian, "مختصات")
+            .addText(LanguageID.LanguageEnglish, "coords")
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Url, "href")
             .addText(LanguageID.LanguagePersian, "منبع")
             .addText(LanguageID.LanguageEnglish, "source")
         );
-        // Todo: Fix this
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.String, "hreflang")
             .addText(LanguageID.LanguagePersian, "زبان")
@@ -43,6 +41,53 @@ export class RuntimeElementArea extends RuntimeElement {
                     .addAllText(language.code)
                 )
             )
+        );
+        this.addAttribute(
+            new RuntimeElementAttribute(RuntimeElementAttributeType.CSSMedia, 'media')
+            .addText(LanguageID.LanguageEnglish, 'media')
+            .addText(LanguageID.LanguagePersian, 'رسانه')
+        );
+        this.addAttribute(
+            new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'referrerpolicy')
+            .addText(LanguageID.LanguageEnglish, 'referrerpolicy')
+            .addText(LanguageID.LanguagePersian, 'سیاست ارجاع')
+        );
+        this.addAttribute(
+            new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'rel')
+            .addText(LanguageID.LanguageEnglish, 'rel')
+            .addText(LanguageID. LanguagePersian, 'رابطه')
+        );
+        this.addAttribute(
+            new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'shape')
+            .addText(LanguageID.LanguageEnglish, 'shape')
+            .addText(LanguageID.LanguagePersian, 'شکل')
+            .addReservedValues([
+                new RuntimeElementAttributeValue('default')
+                .addText(LanguageID.LanguageEnglish, 'default')
+                .addText(LanguageID.LanguagePersian, 'پیشفرض'),
+                new RuntimeElementAttributeValue('rect')
+                .addText(LanguageID.LanguageEnglish, 'rect')
+                .addText(LanguageID.LanguagePersian, 'مربع'),
+                new RuntimeElementAttributeValue('circle')
+                .addText(LanguageID.LanguageEnglish, 'circle')
+                .addText(LanguageID.LanguagePersian, 'دایره'),
+                new RuntimeElementAttributeValue('poly')
+                .addText(LanguageID.LanguageEnglish, 'poly')
+                .addText(LanguageID.LanguagePersian, 'چندگونه')
+            ])
+        );
+        this.addAttribute(
+            new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'target')
+            .addText(LanguageID.LanguageEnglish, 'target')
+            .addText(LanguageID.LanguagePersian, 'هدف')
+        );
+        this.addAttribute(
+            new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'type')
+            .addText(LanguageID.LanguageEnglish, 'type')
+            .addText(LanguageID.LanguagePersian, 'نوع')
+            .addReservedValues([
+
+            ])
         );
     }
 }

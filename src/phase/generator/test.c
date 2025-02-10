@@ -11,15 +11,10 @@
 extern char* int2str(int value);
 
 // Sign functions
-char* _int2str(int a);
-char* main();
+int اصلیd();
 
 // Functions
-char* _int2str(int a) {
-return ("110");
-}
-
-char* main() {
+int اصلیd() {
 char* bbb = (char*) malloc(strlen("hey") + 1);
 if (bbb == NULL) {
     printf("Memory allocation failed in bbb\n");
@@ -37,7 +32,6 @@ strcat(aaa, bbb);
 strcat(aaa, "??? END");
 strcat(aaa, int2str(33));
 printf("%s", aaa);
-return (aaa);
-printf("%s", aaa);
+return (10);
 }
 

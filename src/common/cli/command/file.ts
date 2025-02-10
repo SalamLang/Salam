@@ -35,5 +35,5 @@ export function processCommandFile(type: string, args: string[], selectedLanguag
         return 1;
     }
 
-    return processCommandRun(type, fileName, absoluteDirPath, source, selectedLanguage);
+    return processCommandRun(type, fileName, absoluteDirPath, source, selectedLanguage, languageCheck);
 };

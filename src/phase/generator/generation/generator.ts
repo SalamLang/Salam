@@ -136,6 +136,10 @@ export class Generator {
     getGeneratedSourceC(): string {
         let result: string = "";
 
+        if (this.functions.length === 0) {
+            return result;
+        }
+
         result += "// Libraries\n";
         if (this.libraries.length > 0) {
             result += this.libraries.join("\n");

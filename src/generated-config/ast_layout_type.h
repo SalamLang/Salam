@@ -79,6 +79,8 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_AUDIO, "AUDIO", "audio", "audio", "صدا", fals
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_IFRAME, "IFRAME", "iframe", "iframe", "سایت", false)
 
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_STYLE, "STYLE", "style", "style", "ظاهر سفارشی", true)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_CANVAS, "CANVAS", "canvas", "canvas", "گرافیکی", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "فهرست غیرمرتب", false)

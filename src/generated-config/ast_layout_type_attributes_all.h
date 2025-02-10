@@ -75,6 +75,8 @@ layout_map_entry_t layout_map[] = {
 
 { AST_LAYOUT_TYPE_IFRAME, valid_attributes_iframe, valid_attributes_iframe_length },
 
+{ AST_LAYOUT_TYPE_STYLE, valid_attributes_style, valid_attributes_style_length },
+
 { AST_LAYOUT_TYPE_CANVAS, valid_attributes_canvas, valid_attributes_canvas_length },
 
 { AST_LAYOUT_TYPE_UL, valid_attributes_ul, valid_attributes_ul_length },
@@ -115,8 +117,7 @@ layout_map_entry_t layout_map[] = {
 
 { AST_LAYOUT_TYPE_MEDIA, valid_attributes_media, valid_attributes_media_length },
 
-// ----------- END AUTO GENERATED ----------- //
-};
+// ----------- END AUTO GENERATED ----------- //};
 
 const size_t map_size = sizeof(layout_map) / sizeof(layout_map[0]);
 

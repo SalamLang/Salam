@@ -12,10 +12,10 @@ import { Generator } from '../../../phase/generator/generation/generator';
 import { Validator } from '../../../phase/validator/validation/validator';
 
 export function processCommandRunGenerator(
-    fileName: string | undefined, 
-    absoluteDirPath: string | undefined, 
-    source: string, 
-    selectedLanguage: LanguageMap, 
+    fileName: string | undefined,
+    absoluteDirPath: string | undefined,
+    source: string,
+    selectedLanguage: LanguageMap,
 ): number {
     const lexer: Lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
     lex(lexer);

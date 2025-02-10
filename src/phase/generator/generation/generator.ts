@@ -231,7 +231,7 @@ export class Generator {
         }
 
         try {
-            fs.writeFileSync(fileName, this.getGeneratedSourceC() + "\n" + this.getGeneratedSource(), 'utf-8');
+            fs.writeFileSync(fileName, (this.getGeneratedSourceC() + "\n" + this.getGeneratedSource()).trim(), 'utf-8');
         } catch (error: unknown) {
             if (error instanceof Error) {
                 this.pushError(generatorMessageRenderer(

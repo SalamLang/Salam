@@ -7,7 +7,8 @@ export class RuntimeElementColgroup extends RuntimeElement {
   constructor() {
     super(true, "colgroup");
     this.addText(LanguageID.LanguageEnglish, "colgroup");
-    this.addText(LanguageID.LanguagePersian, "کول گروه");
+    this.addText(LanguageID.LanguagePersian, "دسته توام");
+    
     this.addAttribute(
         new RuntimeElementAttribute(RuntimeElementAttributeType.PositiveInt, 'span')
         .addText(LanguageID.LanguageEnglish, 'count')

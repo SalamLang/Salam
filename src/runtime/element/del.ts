@@ -5,6 +5,6 @@ export class RuntimeElementDel extends RuntimeElement {
     constructor() {
         super(true, 'del');
         this.addText(LanguageID.LanguageEnglish, 'del');
-        this.addText(LanguageID.LanguagePersian, 'خط خورده');
+        this.addText(LanguageID.LanguagePersian, 'فسخ');
     }
 }

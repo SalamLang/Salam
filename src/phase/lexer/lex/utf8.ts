@@ -1,5 +1,5 @@
 export function isUtf8Alpha(char: string): boolean {
-    return /^[_a-zA-Z\u0600-\u06FF]+$/.test(char);
+    return /^[\_a-zA-Z\u0600-\u06FF]+$/.test(char);
 };
 
 export function isEnglishDigit(char: string): boolean {

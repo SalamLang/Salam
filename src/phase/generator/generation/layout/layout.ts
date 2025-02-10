@@ -14,7 +14,8 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
 
     const attribute_dir: string = layout.root.attributes.getByGenerateName("dir")?.getValue() || "rtl";
     const attribute_lang: string = layout.root.attributes.getByGenerateName("lang")?.getValue() || "fa-IR";
-    const attribute_title: string = layout.root.attributes.getByGenerateName("title")?.getValue() || "Salam Untitled";
+    const default_title: string = generator.ast.language.flag === "en" ? "Salam Untitled" : "سلام بدون عنوان";
+    const attribute_title: string = layout.root.attributes.getByGenerateName("title")?.getValue() || default_title;
     const attribute_author: string | undefined = layout.root.attributes.getByGenerateName("author")?.getValue();
     const attribute_charset: string = layout.root.attributes.getByGenerateName("author")?.getValue() || "utf-8";
     

@@ -10,7 +10,11 @@ export function processCommandRunLexer(
 ): number {
     const lexer: Lexer = new Lexer(source, selectedLanguage, fileName, absoluteDirPath);
     lex(lexer);
-    console.log(lexer.stringify());
+    if (typeof window === "undefined") {
+        console.log(lexer.stringify());
+    } else {
+        (window as any).lexer = lexer;
+    }
 
     return 0;
 };

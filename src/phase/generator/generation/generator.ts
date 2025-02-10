@@ -213,16 +213,16 @@ export class Generator {
         } catch (error: unknown) {
             if (error instanceof Error) {
                 this.pushError(generatorMessageRenderer(
-                    this.getLanguageId(), 
-                    GeneratorMessageKeys.GENERATOR_SAVE_OUTPUT_ERROR, 
-                    fileName, 
+                    this.getLanguageId(),
+                    GeneratorMessageKeys.GENERATOR_SAVE_OUTPUT_ERROR,
+                    fileName,
                     error.message
                 ));
             } else {
                 this.pushError(generatorMessageRenderer(
-                    this.getLanguageId(), 
-                    GeneratorMessageKeys.GENERATOR_SAVE_OUTPUT_ERROR, 
-                    fileName, 
+                    this.getLanguageId(),
+                    GeneratorMessageKeys.GENERATOR_SAVE_OUTPUT_ERROR,
+                    fileName,
                     "An unknown error occurred"
                 ));
             }

@@ -4,7 +4,7 @@ import path from 'path';
 import { processCommandRun } from '../run/run';
 import { LanguageMap } from './../../language/language';
 
-export function processCommandFile(type: string, args: string[], selectedLanguage: LanguageMap): number {
+export function processCommandFile(type: string, args: string[], selectedLanguage: LanguageMap, languageCheck: number): number {
     const filePath: string | undefined = args[args.indexOf("file") + 1] || undefined;
 
     let source, fileName, absoluteDirPath;

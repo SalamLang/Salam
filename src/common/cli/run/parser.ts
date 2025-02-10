@@ -16,7 +16,9 @@ export function processCommandRunParser(
 
     const parser: Parser = new Parser(lexer);
     parse(parser);
-    checkError(parser, undefined, undefined);
+    if (! checkError(parser, undefined, undefined)) {
+        return 1;
+    }
     console.log(parser.stringify());
 
     return 0;

@@ -14,7 +14,7 @@ export function processCommand(type: string, args: string[], selectedLanguage: L
 
     if (command === undefined) {
         console.error("Error: No command provided.");
-        return handleMissingArguments();
+        return handleMissingArguments(type);
     }
     else if (command === "version") {
         return processCommandVersion(args);

@@ -149,6 +149,9 @@ ast_layout_attribute_type_t valid_attributes_audio[] = { AST_LAYOUT_ATTRIBUTE_TY
 const size_t valid_attributes_audio_length = 0;
 
 ast_layout_attribute_type_t valid_attributes_iframe[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_WIDTH,
+    AST_LAYOUT_ATTRIBUTE_TYPE_HEIGHT,
+    AST_LAYOUT_ATTRIBUTE_TYPE_TITLE,
     AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
 };
 const size_t valid_attributes_iframe_length = sizeof(valid_attributes_iframe) / sizeof(valid_attributes_iframe[0]);

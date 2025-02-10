@@ -29,7 +29,7 @@ export function processCommand(type: string, args: string[], selectedLanguage: L
     }
     else {
         console.error("Error: Invalid command.");
-        showUsage();
+        showUsage(type);
         return 1;
     }
 };

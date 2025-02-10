@@ -6,11 +6,12 @@ function main(args: string[]): number {
     let selectedLanguage = languageMapsValues[0];
 
     const result: number = processLanguageFlag(args, selectedLanguage);
-    if (result !== 0) {
+    if (result === 1) {
+        return result;
         return result;
     }
 
-    return processCommand("lexer", args, selectedLanguage);
+    return processCommand("lexer", args, selectedLanguage, result);
 };
 
 const args: string[] = process?.argv?.slice(2) || [];

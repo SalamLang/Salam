@@ -1,3 +1,4 @@
+import { languages } from './../data/element/language';
 import { LanguageID } from "./../../common/language/language";
 import { RuntimeElement } from "./../element";
 import { RuntimeElementAttribute } from "./../element_attribute";
@@ -26,17 +27,17 @@ export class RuntimeElementTrack extends RuntimeElement {
                 .addText(LanguageID.LanguagePersian, 'منبع')
         );
 
-        // this.addAttribute(
-        //     new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'srclang')
-        //         .addText(LanguageID.LanguageEnglish, 'language')
-        //         .addText(LanguageID.LanguagePersian, 'زبان')
-        //         .addReservedValues(
-        //             languages.map(language =>
-        //                 new RuntimeElementAttributeValue(language.code.toUpperCase())
-        //                     .addText(LanguageID.LanguageEnglish, language.name)
-        //                     .addText(LanguageID.LanguagePersian, language.code)
-        //             )
-        //         )
-        // );
+        this.addAttribute(
+            new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'srclang')
+                .addText(LanguageID.LanguageEnglish, 'language')
+                .addText(LanguageID.LanguagePersian, 'زبان')
+                .addReservedValues(
+                    languages.map(language =>
+                        new RuntimeElementAttributeValue(language.code.toUpperCase())
+                            .addText(LanguageID.LanguageEnglish, language.name)
+                            .addText(LanguageID.LanguagePersian, language.code)
+                    )
+                )
+        );
     }
 }

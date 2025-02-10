@@ -1,5 +1,5 @@
-import { processCommandRun } from './../../../../common/cli/generator';
-import { LanguageMap } from './../../../../common/language/language';
+import { processCommandRun } from './../../cli/lexer';
+import { LanguageMap } from './../../language/language';
 
 export const code_flag: string = "code";
 

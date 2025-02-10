@@ -1,18 +1,18 @@
+import { lang_flag } from './language';
 import { processCommandCode } from './command/code';
 import { processCommandFile } from './command/file';
-import { lang_flag } from './../../../common/cli/language';
+import { handleMissingArguments } from './../cli/error';
 import { processCommandVersion } from './command/version';
 import { processCommandHelp, showUsage } from './command/help';
-import { LanguageMap } from './../../../common/language/language';
-import { handleMissingArguments } from './../../../common/cli/error';
+import { LanguageMap } from './../../common/language/language';
 
-export function processCommand(args: string[], selectedLanguage: LanguageMap): number {
+export function processCommand(type: string, args: string[], selectedLanguage: LanguageMap): number {
     const command: string | undefined = args.find((arg: string, index: number) => {
         const previousArg: string | undefined = args[index - 1];
         return !arg.startsWith("--") && previousArg !== lang_flag;
     });
 
-    if (! command) {
+    if (command === undefined) {
         console.error("Error: No command provided.");
         return handleMissingArguments();
     }
@@ -20,7 +20,7 @@ export function processCommand(args: string[], selectedLanguage: LanguageMap): n
         return processCommandVersion(args);
     }
     else if (command === "help") {
-        return processCommandHelp(args);
+        return processCommandHelp(type, args);
     }
     else if (command === "file") {
         return processCommandFile(args, selectedLanguage);

@@ -101,6 +101,8 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_AUDIO) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_IFRAME) {
 }
+else if (attribute->parent_node_type == AST_LAYOUT_TYPE_STYLE) {
+}
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_CANVAS) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_UL) {

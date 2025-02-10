@@ -107,6 +107,9 @@ extern const size_t valid_attributes_audio_length;
 extern ast_layout_attribute_type_t valid_attributes_iframe[];
 extern const size_t valid_attributes_iframe_length;
 
+extern ast_layout_attribute_type_t valid_attributes_style[];
+extern const size_t valid_attributes_style_length;
+
 extern ast_layout_attribute_type_t valid_attributes_canvas[];
 extern const size_t valid_attributes_canvas_length;
 

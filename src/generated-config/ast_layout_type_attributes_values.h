@@ -148,8 +148,10 @@ const size_t valid_attributes_video_length = 0;
 ast_layout_attribute_type_t valid_attributes_audio[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
 const size_t valid_attributes_audio_length = 0;
 
-ast_layout_attribute_type_t valid_attributes_iframe[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
-const size_t valid_attributes_iframe_length = 0;
+ast_layout_attribute_type_t valid_attributes_iframe[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
+};
+const size_t valid_attributes_iframe_length = sizeof(valid_attributes_iframe) / sizeof(valid_attributes_iframe[0]);
 
 ast_layout_attribute_type_t valid_attributes_style[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
 const size_t valid_attributes_style_length = 0;

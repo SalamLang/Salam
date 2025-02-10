@@ -100,6 +100,9 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_VIDEO) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_AUDIO) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_IFRAME) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_iframe, valid_attributes_iframe_length)) {
+        return true;
+    }
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_STYLE) {
 }

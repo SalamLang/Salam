@@ -8,6 +8,10 @@ export function generateLayoutAttribute(generator: Generator, attribute: AstLayo
     if (attribute.generate_name === undefined) {
         return "";
     }
+
+    if (attribute.is_hide === true) {
+        return "";
+    }
     
     // Append the name
     result += attribute.generate_name + (attribute.isStyle() ? ':' : '=');

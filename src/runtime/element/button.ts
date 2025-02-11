@@ -9,10 +9,11 @@ export class RuntimeElementButton extends RuntimeElement {
         super(true, 'button');
         this.addText(LanguageID.LanguageEnglish, 'button');
         this.addText(LanguageID.LanguagePersian, 'دکمه');
+        
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'autofocus')
             .addText(LanguageID.LanguageEnglish, 'focus')
-            .addText(LanguageID.LanguagePersian, 'فوکوس')
+            .addText(LanguageID.LanguagePersian, 'کانون')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'disabled')
@@ -57,7 +58,7 @@ export class RuntimeElementButton extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.ID, 'popovertarget')
             .addText(LanguageID.LanguageEnglish, 'popovertarget')
-            .addText(LanguageID.LanguagePersian, 'پاپ روی هدف')
+            .addText(LanguageID.LanguagePersian, 'بالا زدن روی هدف')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, 'typepopovertargetaction')
@@ -69,7 +70,7 @@ export class RuntimeElementButton extends RuntimeElement {
                 .addText(LanguageID.LanguagePersian, 'پنهان'),
                 new RuntimeElementAttributeValue('show')
                 .addText(LanguageID.LanguageEnglish, 'show')
-                .addText(LanguageID.LanguagePersian, 'نمایش'),
+                .addText(LanguageID.LanguagePersian, 'چاپ'),
                 new RuntimeElementAttributeValue('toggle')
                 .addText(LanguageID.LanguageEnglish, 'toggle')
                 .addText(LanguageID.LanguagePersian, 'متغیر بودن')

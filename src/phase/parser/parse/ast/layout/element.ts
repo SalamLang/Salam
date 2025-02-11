@@ -3,7 +3,7 @@ import { AstLayoutBlock } from './block';
 import { AstLayoutAttributes } from './attributes';
 import { AstLayoutElementKind } from './element_kind';
 import { stringify } from './../../../../../serializer';
-import { Validator } from './../../../../validator/validation/validator';
+import { Validator } from '../../../../validator/validation/validator';
 import { IdentifierGenerator } from './../../../../../common/identifier-generator';
 
 export class AstLayoutElement extends AstNode {
@@ -36,16 +36,19 @@ export class AstLayoutElement extends AstNode {
         this.built_in_selector = undefined;
     }
 
+    isStyleElement(): boolean {
+        if (this.generate_type === undefined) {
+            return false;
+        }
+        return this.generate_type.startsWith("RuntimeStyleElement");
+    }
+    
     isStateStyle(): boolean {
         return this.kind === AstLayoutElementKind.StyleState;
     }
 
     generateBuiltInSelector(validator: Validator): void {
-        this.built_in_selector = IdentifierGenerator.get();
-    }
-
-    print(): void {
-        console.log(this.stringify());
+        this.built_in_selector = "." + IdentifierGenerator.get();
     }
 
     stringify(wantsJson: boolean = true): string | object {

@@ -1,19 +1,26 @@
 import { AstNode } from './node';
+import { AstBlock } from './block';
 import { AstLayout } from './layout/layout';
 import { stringify } from './../../../../serializer';
 import { LanguageMap } from './../../../../common/language/language';
-import { AstFunctionDeclaration } from './statement/function_declaration';
-
+import { RuntimeBlock } from './../../../../runtime/block/runtime_bock';
+import { AstFunctionDeclaration } from './function/function_declaration';
 export class AstProgram extends AstNode {
     errors: string[] = [];
     layout: AstLayout | undefined;
     functions: AstFunctionDeclaration[];
     language: LanguageMap;
+    block: AstBlock;
 
-    constructor(language: LanguageMap) {
+    constructor(language: LanguageMap, block: AstBlock | undefined = undefined) {
         super("Program");
         this.functions = [];
         this.language = language;
+        if (block === undefined) {
+            this.block = RuntimeBlock.generate();
+        } else {
+            this.block = block;
+        }
     }
 
     hasLayout(): boolean {
@@ -45,10 +52,6 @@ export class AstProgram extends AstNode {
 
     pushError(error: string): void {
         this.errors.push(error);
-    }
-
-    print(): void {
-        console.log(this.stringify());
     }
 
     stringify(wantsJson: boolean = true): string | object {

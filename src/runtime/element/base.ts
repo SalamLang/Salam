@@ -12,9 +12,8 @@ export class RuntimeElementBase extends RuntimeElement {
     this.addAttribute(
       new RuntimeElementAttribute(RuntimeElementAttributeType.Url, 'href')
         .addText(LanguageID.LanguageEnglish, 'href')
-        .addText(LanguageID.LanguagePersian, 'منبع')
+        .addText(LanguageID.LanguagePersian, 'پیوست')
     );
-
     this.addAttribute(
       new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'target')
         .addText(LanguageID.LanguageEnglish, 'target')

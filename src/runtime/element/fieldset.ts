@@ -2,11 +2,13 @@ import { LanguageID } from './../../common/language/language';
 import { RuntimeElementAttribute } from './../element_attribute';
 import { RuntimeElementAttributeType } from './../element_attribute_type';
 import { RuntimeElement } from './../element';
+
 export class RuntimeElementFieldset extends RuntimeElement {
     constructor() {
         super(true, 'fieldset');
         this.addText(LanguageID.LanguageEnglish, 'fieldset');
-        this.addText(LanguageID.LanguagePersian, 'فیلدست');
+        this.addText(LanguageID.LanguagePersian, 'گروه زمینه');
+        
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'disabled')
             .addText(LanguageID.LanguageEnglish, 'disabled')

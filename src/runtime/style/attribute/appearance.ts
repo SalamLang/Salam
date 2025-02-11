@@ -1,6 +1,6 @@
-import { compat_auto } from '../../data/style/compat-auto';
+import { compat_auto } from '../../data/style/values/compat-auto';
 import { LanguageID } from '../../../common/language/language';
-import { compat_special } from '../../data/style/compat-special';
+import { compat_special } from '../../data/style/values/compat-special';
 import { RuntimeElementAttributeType } from '../../element_attribute_type';
 import { RuntimeElementAttributeStyle } from '../../element_attribute_style';
 import { RuntimeElementAttributeValue } from '../../element_attribute_value';

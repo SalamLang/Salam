@@ -7,7 +7,8 @@ export class RuntimeElementAbbr extends RuntimeElement {
   constructor() {
     super(true, 'abbr');
     this.addText(LanguageID.LanguageEnglish, 'abbreviation');
-    this.addText(LanguageID.LanguagePersian, 'مخفف');
+    this.addText(LanguageID.LanguagePersian, 'کاسته');
+
     this.addAttribute(
       new RuntimeElementAttribute(
         RuntimeElementAttributeType.StringNoEmpty,

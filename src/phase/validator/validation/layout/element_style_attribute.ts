@@ -1,4 +1,4 @@
-import { Validator } from "./../validator";
+import { Validator } from "../validator";
 import { RuntimeElement } from './../../../../runtime/element';
 import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 import { validateLayoutElementAttributeValue } from './element_attribute_value';
@@ -9,8 +9,8 @@ import { ValidatorMessageKeys } from './../../../../common/message/validator/val
 import { validateLayoutElementAttributeReservedValue } from './element_attribute_reserved_value';
 
 export function validateLayoutElementStyleAttribute(validator: Validator, runtimeElement: RuntimeElement, attribute: AstLayoutAttribute, element: AstLayoutElement): void {
-    const element_name = element.enduser_name;
-    const attribute_name = attribute.enduser_name;
+    const element_name: string = element.enduser_name;
+    const attribute_name: string = attribute.enduser_name;
 
     const runtimeElementStyleAttribute: RuntimeElementAttribute | undefined = Validator.getElementAttributeStyle(validator.getLanguageId(), attribute_name);
     if (runtimeElementStyleAttribute === undefined) {

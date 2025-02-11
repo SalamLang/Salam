@@ -5,6 +5,6 @@ export class RuntimeElementThead extends RuntimeElement{
     constructor(){
         super(true, 'thead');
         this.addText(LanguageID.LanguageEnglish, 'thead');
-        this.addText(LanguageID.LanguagePersian, 'هدر جدول');
+        this.addText(LanguageID.LanguagePersian, 'سرجدول');
     }
 }

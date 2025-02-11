@@ -1,30 +1,23 @@
+import { AstType } from './type';
 import { AstNode } from './../node';
-import { stringify } from './../../../../../serializer';
 
-export class AstExpression extends AstNode {
-    expression: string;
+export type ExpressionPair = {
+    key: string;
+    value: string;
+};
   
-    constructor(expression: string) {
-        super("Expression");
-        this.expression = expression;
+export class AstExpression extends AstNode {
+    value_type: AstType | undefined;
+    generated_value: string | undefined;
+
+    constructor(type: string) {
+        super(type);
     }
 
     getString(): string {
-        return this.expression;
+        if (this.generated_value === undefined) {
+            return "";
+        }
+        return this.generated_value;
     }
-
-    setString(value: string): void {
-        this.expression = value;
-    }
-
-    print(): void {
-        console.log(this.stringify());
-    }
-
-    stringify(wantsJson: boolean = true): string | object {
-        const obj: object = {
-            expression: this.expression,
-        };
-        return stringify(obj, wantsJson);
-    }
-}
+};

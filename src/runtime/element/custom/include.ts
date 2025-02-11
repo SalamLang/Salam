@@ -7,7 +7,8 @@ export class RuntimeElementInclude extends RuntimeElement {
     constructor() {
         super(true, undefined);
         this.addText(LanguageID.LanguageEnglish, "include");
-        this.addText(LanguageID.LanguagePersian, "بارگیری");
+        this.addText(LanguageID.LanguagePersian, "شامل");
+        
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Uri, "source")
             .addText(LanguageID.LanguagePersian, "منبع")

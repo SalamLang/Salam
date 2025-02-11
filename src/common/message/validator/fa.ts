@@ -10,6 +10,7 @@ export const faMessages: Record<ValidatorMessageKeys, string> = {
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_VALID]: "ویژگی '{0}' برای عنصر '{1}' معتبر نیست",
     [ValidatorMessageKeys.VALIDATOR_STYLE_ATTRIBUTE_NOT_VALID]: "ویژگی استایل '{0}' برای عنصر '{1}' معتبر نیست",
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_VALID]: "مقدار ویژگی '{0}' برای ویژگی '{1}' در عنصر '{2}' یک مقدار معتبر نیست",
-    [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_EMPTY]: "مقدار ویژگی '{0}' برای ویژگی '{1}' در عنصر '{2}' نباید خالی باشد",
+    [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_VALUE_NOT_EMPTY]: "مقدار ویژگی '{0}' در عنصر '{1}' نباید خالی باشد",
     [ValidatorMessageKeys.VALIDATOR_ATTRIBUTE_NOT_SUPPORTED]: "ویژگی '{0}' برای عنصر '{1}' پشتیبانی نمی شود",
+    [ValidatorMessageKeys.VALIDATOR_SAVE_OUTPUT_ERROR]: "خطا در ذخیره درخت در فایل '{0}' - {1}",
 };

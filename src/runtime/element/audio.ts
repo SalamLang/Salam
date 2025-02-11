@@ -9,7 +9,7 @@ export class RuntimeElementAudio extends RuntimeElement {
   constructor() {
     super(true, 'audio');
     this.addText(LanguageID.LanguageEnglish, 'audio');
-    this.addText(LanguageID.LanguagePersian, 'صوت');
+    this.addText(LanguageID.LanguagePersian, 'آوا');
 
     this.addAttribute(
       new RuntimeElementAttribute(
@@ -17,7 +17,7 @@ export class RuntimeElementAudio extends RuntimeElement {
         'autoplay'
       )
         .addText(LanguageID.LanguageEnglish, 'autoplay')
-        .addText(LanguageID.LanguagePersian, 'خودکار')
+        .addText(LanguageID.LanguagePersian, 'خودپخش')
     );
     this.addAttribute(
       new RuntimeElementAttribute(
@@ -35,12 +35,12 @@ export class RuntimeElementAudio extends RuntimeElement {
     this.addAttribute(
       new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'muted')
         .addText(LanguageID.LanguageEnglish, 'muted')
-        .addText(LanguageID.LanguagePersian, 'بی‌صدا')
+        .addText(LanguageID.LanguagePersian, 'خموش')
     );
     this.addAttribute(
       new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'preload')
         .addText(LanguageID.LanguageEnglish, 'preload')
-        .addText(LanguageID.LanguagePersian, 'پیش‌بارگذاری')
+        .addText(LanguageID.LanguagePersian, 'پیش بارگیری')
         .addReservedValues([
           new RuntimeElementAttributeValue('auto')
             .addText(LanguageID.LanguageEnglish, 'auto')

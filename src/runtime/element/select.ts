@@ -7,12 +7,12 @@ export class RuntimeElementSelect extends RuntimeElement {
     constructor() {
         super(true, 'select');
         this.addText(LanguageID.LanguageEnglish, 'select');
-        this.addText(LanguageID.LanguagePersian, 'فهرست کشویی');
+        this.addText(LanguageID.LanguagePersian, 'انتخاب');
 
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'autofocus')
                 .addText(LanguageID.LanguageEnglish, 'autofocus')
-                .addText(LanguageID.LanguagePersian, 'فوکوس خودکار')
+                .addText(LanguageID.LanguagePersian, 'کانون خودکار')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'disabled')

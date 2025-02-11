@@ -197,7 +197,6 @@ export const runtimeElements: RuntimeElement[] = [
     new RuntimeElementWbr(),
 ];
 
-
 import { RuntimeStyleAccentColor } from './style/attribute/accent-color';
 import { RuntimeStyleAll } from './style/attribute/all';
 import { RuntimeStyleAnimationComposition } from './style/attribute/animation-composition';

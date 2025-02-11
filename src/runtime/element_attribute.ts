@@ -12,6 +12,7 @@ export class RuntimeElementAttribute {
     output_type: RuntimeElementAttributeOutputType;
     reservedValues: RuntimeElementAttributeValue[];
     is_required: boolean;
+    is_hide: boolean;
     
     constructor(type: RuntimeElementAttributeType, generate_name: string | undefined) {
         this.kind = AstLayoutAttributeType.Normal;
@@ -21,6 +22,22 @@ export class RuntimeElementAttribute {
         this.output_type = RuntimeElementAttributeOutputType.Normal;
         this.reservedValues = [];
         this.is_required = false;
+        this.is_hide = false;
+    }
+
+    setOutputType(outputType: RuntimeElementAttributeOutputType): RuntimeElementAttribute {
+        this.output_type = outputType;
+        return this;
+    }
+
+    setStyle(): RuntimeElementAttribute {
+        this.kind = AstLayoutAttributeType.Style;
+        return this;
+    }
+
+    setHide(): RuntimeElementAttribute {
+        this.is_hide = true;
+        return this;
     }
 
     setRequired(): RuntimeElementAttribute {

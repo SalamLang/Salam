@@ -7,7 +7,8 @@ export class RuntimeElementBlockquote extends RuntimeElement {
     constructor() {
         super(true, 'blockquote');
         this.addText(LanguageID.LanguageEnglish, 'blockquote');
-        this.addText(LanguageID.LanguagePersian, 'نقل قول');
+        this.addText(LanguageID.LanguagePersian, 'بازگفت');
+        
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Url, 'cite')
             .addText(LanguageID.LanguageEnglish, 'source')

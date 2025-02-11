@@ -6,9 +6,9 @@ import {RuntimeElementAttributeValue} from './../element_attribute_value';
 
 export class RuntimeElementOl extends RuntimeElement {
   constructor() {
-    super(true, 'ol');
+    super(false, 'ol');
     this.addText(LanguageID.LanguageEnglish, 'ol');
-    this.addText(LanguageID.LanguagePersian, 'لیست او ال');
+    this.addText(LanguageID.LanguagePersian, 'فهرست ol');
     this.addAttribute(
       new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'reserved')
       .addText(LanguageID.LanguageEnglish, 'reserved')

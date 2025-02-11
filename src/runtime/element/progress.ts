@@ -8,10 +8,11 @@ export class RuntimeElementProgress extends RuntimeElement {
         super(true, 'progress');
         this.addText(LanguageID.LanguageEnglish, 'progress');
         this.addText(LanguageID.LanguagePersian, 'پیشرفت');
+        
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.PositiveInt, 'max')
             .addText(LanguageID.LanguageEnglish, 'max')
-            .addText(LanguageID.LanguagePersian, 'حداکثر')
+            .addText(LanguageID.LanguagePersian, 'بیشترین')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.PositiveInt, 'value')

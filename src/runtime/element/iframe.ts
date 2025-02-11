@@ -8,12 +8,12 @@ export class RuntimeElementIframe extends RuntimeElement {
     constructor() {
         super(true, 'iframe');
         this.addText(LanguageID.LanguageEnglish, 'iframe');
-        this.addText(LanguageID.LanguagePersian, 'فریم');
+        this.addText(LanguageID.LanguagePersian, 'قاب');
 
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'allowfullscreen')
             .addText(LanguageID.LanguageEnglish, 'allowfullscreen')
-            .addText(LanguageID.LanguagePersian, 'مجاز فول صفحه')
+            .addText(LanguageID.LanguagePersian, 'چاپ کامل مجاز')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'allowpaymentrequest')
@@ -28,14 +28,14 @@ export class RuntimeElementIframe extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Size, 'loading')
             .addText(LanguageID.LanguageEnglish, 'loading')
-            .addText(LanguageID.LanguagePersian, 'لودینگ')
+            .addText(LanguageID.LanguagePersian, 'بارگیری')
             .addReservedValues([
                 new RuntimeElementAttributeValue('eager')
                 .addText(LanguageID.LanguageEnglish, 'eager')
-                .addText(LanguageID.LanguagePersian, 'مشتاق'),
+                .addText(LanguageID.LanguagePersian, 'بی درنگ'),
                 new RuntimeElementAttributeValue('lazy')
                 .addText(LanguageID.LanguageEnglish, 'lazy')
-                .addText(LanguageID.LanguagePersian, 'تنبل')
+                .addText(LanguageID.LanguagePersian, 'درنگ')
             ])
         );
         this.addAttribute(
@@ -46,19 +46,19 @@ export class RuntimeElementIframe extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'referrerpolicy')
             .addText(LanguageID.LanguageEnglish, 'referrerpolicy')
-            .addText(LanguageID.LanguagePersian, 'ریفر پالیسی')
+            .addText(LanguageID.LanguagePersian, 'سیاست ارجاع')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'sandbox')
             .addText(LanguageID.LanguageEnglish, 'sandbox')
-            .addText(LanguageID.LanguagePersian, 'سند باکس')
+            .addText(LanguageID.LanguagePersian, 'قاب امن')
             .addReservedValues([
                 new RuntimeElementAttributeValue('allow-forms')
                 .addText(LanguageID.LanguageEnglish, 'forms')
                 .addText(LanguageID.LanguagePersian, 'فرم'),
                 new RuntimeElementAttributeValue('allow-same-origin')
                 .addText(LanguageID.LanguageEnglish, 'same-origin')
-                .addText(LanguageID.LanguagePersian, 'اوریجین یکسان'),
+                .addText(LanguageID.LanguagePersian, 'نسبت یکسان'),
                 new RuntimeElementAttributeValue('allow-scripts')
                 .addText(LanguageID.LanguageEnglish, 'scripts')
                 .addText(LanguageID.LanguagePersian, 'اسکریپت'),
@@ -67,7 +67,7 @@ export class RuntimeElementIframe extends RuntimeElement {
                 .addText(LanguageID.LanguagePersian, 'قفل اشاره گر'),
                 new RuntimeElementAttributeValue('allow-popups')
                 .addText(LanguageID.LanguageEnglish, 'popups')
-                .addText(LanguageID.LanguagePersian, 'پاپ آپ'),
+                .addText(LanguageID.LanguagePersian, 'روجست'),
                 new RuntimeElementAttributeValue('allow-top-navigation')
                 .addText(LanguageID.LanguageEnglish, 'top navigation')
                 .addText(LanguageID.LanguagePersian, 'نوار بالا')
@@ -81,7 +81,7 @@ export class RuntimeElementIframe extends RuntimeElement {
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Size, 'srcdoc')
             .addText(LanguageID.LanguageEnglish, 'document')
-            .addText(LanguageID.LanguagePersian, 'داده')
+            .addText(LanguageID.LanguagePersian, 'سند')
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.Size, 'width')

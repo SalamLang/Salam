@@ -7,10 +7,6 @@ export class AstNode {
 		this.type = type;
 	}
 
-	print(): void {
-		console.log(this.stringify());
-	}
-
 	stringify(wantsJson: boolean = true): string | object {
 		const obj: object = {
 			type: this.type

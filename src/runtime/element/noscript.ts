@@ -5,6 +5,6 @@ export class RuntimeElementNoScript extends RuntimeElement {
     constructor() {
         super(false, 'noscript');
         this.addText(LanguageID.LanguageEnglish, 'noscript');
-        this.addText(LanguageID.LanguagePersian, 'بدون اسکریپت');
+        this.addText(LanguageID.LanguagePersian, 'بی برنامک');
     }
 }

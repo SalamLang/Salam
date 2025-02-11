@@ -5,6 +5,6 @@ export class RuntimeElementHeader extends RuntimeElement {
     constructor() {
         super(true, 'header');
         this.addText(LanguageID.LanguageEnglish, 'header');
-        this.addText(LanguageID.LanguagePersian, 'هدر');
+        this.addText(LanguageID.LanguagePersian, 'سرگاه');
     }
 }

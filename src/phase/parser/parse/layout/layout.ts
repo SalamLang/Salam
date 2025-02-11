@@ -1,11 +1,12 @@
 import { Parser } from './../parser';
+import { AstBlock } from '../ast/block';
 import { AstLayout } from './../ast/layout/layout';
 import { Token } from './../../../lexer/tokenizer/token';
 import { AstLayoutElement } from './../ast/layout/element';
 import { parserParseLayoutElement } from './element';
 import { TokenKeywordType } from './../../../lexer/tokenizer/type';
 
-export function parserParseLayout(parser: Parser): AstLayout | undefined {
+export function parserParseLayout(parser: Parser, parent_block: AstBlock): AstLayout | undefined {
     // layout:
     // ^
     const token: Token = parser.currentToken;

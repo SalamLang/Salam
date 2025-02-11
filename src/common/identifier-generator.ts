@@ -6,8 +6,8 @@ export class IdentifierGenerator {
     }
 
     static get(): string {
-        const identifier = this.current;
-        const currentLength = this.current.length;
+        const identifier: string = this.current;
+        const currentLength: number = this.current.length;
 
         for (let i = currentLength - 1; i >= 0; i--) {
             if (this.current[i] < 'z') {
@@ -27,7 +27,7 @@ export class IdentifierGenerator {
 
 
     private static updateCurrentIdentifier(index: number): string {
-        const updatedChar = String.fromCharCode(this.current.charCodeAt(index) + 1);
+        const updatedChar: string = String.fromCharCode(this.current.charCodeAt(index) + 1);
         return this.current.slice(0, index) + updatedChar + this.current.slice(index + 1);
     }
 

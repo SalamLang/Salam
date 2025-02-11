@@ -1,9 +1,12 @@
 import { Generator } from './../generator';
 import { generateLayoutBlock } from './block';
+import { generateLayoutAttributes } from './attributes';
 import { AstLayout } from './../../../parser/parse/ast/layout/layout';
 
 export function generateLayout(generator: Generator, layout: AstLayout): string {
     generator.setIndent(generator.getIndent() + 2);
+    
+    const body_attrs: string = generateLayoutAttributes(generator, layout.root);
     const body: string = generateLayoutBlock(generator, layout.root, layout.root.block);
     generator.setIndent(generator.getIndent() - 2);
 
@@ -11,7 +14,8 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
 
     const attribute_dir: string = layout.root.attributes.getByGenerateName("dir")?.getValue() || "rtl";
     const attribute_lang: string = layout.root.attributes.getByGenerateName("lang")?.getValue() || "fa-IR";
-    const attribute_title: string = layout.root.attributes.getByGenerateName("title")?.getValue() || "Salam Untitled";
+    const default_title: string = generator.ast.language.flag === "en" ? "Salam Untitled" : "سلام بدون عنوان";
+    const attribute_title: string = layout.root.attributes.getByGenerateName("title")?.getValue() || default_title;
     const attribute_author: string | undefined = layout.root.attributes.getByGenerateName("author")?.getValue();
     const attribute_charset: string = layout.root.attributes.getByGenerateName("author")?.getValue() || "utf-8";
     
@@ -30,7 +34,6 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
 
     if (generator.styles.length > 0) {
         result += generator.bufferIndentedLine(`<style>`);
-        result += generator.bufferIndentedLine(`/* Generated Styles */`);
         for (const style of generator.styles) {
             result += generator.bufferIndentedLine(style);
         }
@@ -39,7 +42,7 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
 
     generator.decreaseIndent();
     result += generator.bufferIndentedLine(`</head>`);
-    result += generator.bufferIndentedLine(`<body>`);
+    result += generator.bufferIndentedLine(`<body${body_attrs ? " " + body_attrs : ""}>`);
 
     generator.increaseIndent();
     if (layout.root.content !== undefined) {

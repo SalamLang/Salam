@@ -14,6 +14,7 @@ export class AstLayoutAttribute extends AstNode {
     generate_type: string | undefined = undefined;
     output_type: RuntimeElementAttributeOutputType;
     element_enduser_name: string;
+    is_hide: boolean;
 
     constructor(element_enduser_name: string, key: string, value: AstExpression, kind: AstLayoutAttributeType, output_type: RuntimeElementAttributeOutputType = RuntimeElementAttributeOutputType.Normal) {
         super("LayoutAttribute");
@@ -23,6 +24,7 @@ export class AstLayoutAttribute extends AstNode {
         this.enduser_name = key;
         this.element_enduser_name = element_enduser_name;
         this.output_type = output_type;
+        this.is_hide = false;
     }
 
     getValue(): string {
@@ -44,14 +46,10 @@ export class AstLayoutAttribute extends AstNode {
         return this.key;
     }
 
-    print(): void {
-        console.log(this.stringify());
-    }
-
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
             key: this.key,
-            value: this.value.stringify(wantsJson),
+            value: this.value.stringify(false),
             kind: this.kind,
             enduser_name: this.enduser_name,
             generate_name: this.generate_name,

@@ -7,15 +7,22 @@ export class Token {
     type: TokenType;
     location: TokenLocation;
     data: TokenData | undefined;
+    enduser_token: string | undefined;
 
     constructor(
         type: TokenType,
         location: TokenLocation,
-        data: TokenData | undefined = undefined
+        enduser_token: string | undefined,
+        data: TokenData | undefined
     ) {
         this.type = type;
         this.location = location;
+        this.enduser_token = enduser_token;
         this.data = data;
+    }
+
+    get enduser(): string {
+        return this.enduser_token || this.type;
     }
 
     get isValue(): boolean {
@@ -54,12 +61,8 @@ export class Token {
         return values.includes(this.type as string) ? (this.type as string) : undefined;
     }
 
-    print(): void {
-        console.log(this.stringify());
-    }
-
     stringify(wantsJson: boolean = true): string | object {
-        const typeString =
+        const typeString: string | undefined =
             this.getTypeString(TokenKeywordType) ||
             this.getTypeString(TokenValueType) ||
             this.getTypeString(TokenOperatorType) ||
@@ -67,6 +70,7 @@ export class Token {
         
         const obj: object = {
             type: typeString,
+            enduser_token: this.enduser_token,
             location: this.location.stringify(false),
             data: this.data?.stringify(false) || undefined,
         };

@@ -90,7 +90,7 @@ ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "فهرست نا م
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OL, "OL", "ol", "ol", "فهرست مرتب", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OPTION, "OPTION", "option", "li", "مورد", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OPTION, "OPTION", "option", "option", "مورد", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "مورد", false)
 

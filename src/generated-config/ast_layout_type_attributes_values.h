@@ -1,6 +1,7 @@
 // ----------- BEGIN AUTO GENERATED ----------- //
 ast_layout_attribute_type_t valid_attributes_link[] = {
     AST_LAYOUT_ATTRIBUTE_TYPE_HREF,
+    AST_LAYOUT_ATTRIBUTE_TYPE_TYPE,
 };
 const size_t valid_attributes_link_length = sizeof(valid_attributes_link) / sizeof(valid_attributes_link[0]);
 

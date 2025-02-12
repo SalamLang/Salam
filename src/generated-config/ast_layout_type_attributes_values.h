@@ -30,6 +30,8 @@ ast_layout_attribute_type_t valid_attributes_layout[] = {
 const size_t valid_attributes_layout_length = sizeof(valid_attributes_layout) / sizeof(valid_attributes_layout[0]);
 
 ast_layout_attribute_type_t valid_attributes_div[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_ID,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CLASS,
     AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT,
     AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
 };
@@ -42,8 +44,8 @@ ast_layout_attribute_type_t valid_attributes_paragraph[] = {
 const size_t valid_attributes_paragraph_length = sizeof(valid_attributes_paragraph) / sizeof(valid_attributes_paragraph[0]);
 
 ast_layout_attribute_type_t valid_attributes_button[] = {
-    AST_LAYOUT_ATTRIBUTE_TYPE_CLASS,
     AST_LAYOUT_ATTRIBUTE_TYPE_ID,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CLASS,
     AST_LAYOUT_ATTRIBUTE_TYPE_ALERT,
     AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT,
     AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,

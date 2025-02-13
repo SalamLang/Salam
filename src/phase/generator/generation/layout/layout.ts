@@ -12,9 +12,12 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
 
     let result: string = "";
 
-    const attribute_dir: string = layout.root.attributes.getByGenerateName("dir")?.getValue() || "rtl";
-    const attribute_lang: string = layout.root.attributes.getByGenerateName("lang")?.getValue() || "fa-IR";
+    const default_dir: string = generator.ast.language.flag === "en" ? "ltr" : "rtl";
+    const default_lang: string = generator.ast.language.flag === "en" ? "en-US" : "fa-IR";
     const default_title: string = generator.ast.language.flag === "en" ? "Salam Untitled" : "سلام بدون عنوان";
+
+    const attribute_dir: string = layout.root.attributes.getByGenerateName("dir")?.getValue() || default_dir;
+    const attribute_lang: string = layout.root.attributes.getByGenerateName("lang")?.getValue() || default_lang;
     const attribute_title: string = layout.root.attributes.getByGenerateName("title")?.getValue() || default_title;
     const attribute_author: string | undefined = layout.root.attributes.getByGenerateName("author")?.getValue();
     const attribute_charset: string = layout.root.attributes.getByGenerateName("author")?.getValue() || "utf-8";
@@ -28,8 +31,13 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
     result += generator.bufferIndentedLine(`<title>${attribute_title}</title>`);
     result += generator.bufferIndentedLine(`<meta charset="${attribute_charset}">`);
     result += generator.bufferIndentedLine(`<meta name="viewport" content="width=device-width, initial-scale=1">`);
+
     if (attribute_author) {
         result += generator.bufferIndentedLine(`<meta name="author" content="${attribute_author}">`);
+    }
+
+    for (const head of generator.heads) {
+        result += generator.bufferIndentedLine(head);
     }
 
     if (generator.styles.length > 0) {

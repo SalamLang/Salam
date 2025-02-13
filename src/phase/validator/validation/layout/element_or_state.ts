@@ -1,6 +1,7 @@
 import { Validator } from "../validator";
 import { validateLayoutElement } from './element';
 import { AstBlock } from "../../../parser/parse/ast/block";
+import { validateLayoutStyleElement } from "./style_element";
 import { RuntimeElement } from './../../../../runtime/element';
 import { validateLayoutElementStyleState } from './element_style_state';
 import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
@@ -16,11 +17,11 @@ export function validateLayoutElementOrState(validator: Validator, parent_block:
         validateLayoutElement(validator, parent_block, parent_element, element, runtime_element);
         return;
     }
-    
+
     // Second check if element is a valid style element
     const runtime_style_element: RuntimeElement | undefined = Validator.getStyleElementRuntime(validator.getLanguageId(), parent_element, element.enduser_name);
     if (runtime_style_element !== undefined) {
-        validateLayoutElement(validator, parent_block, parent_element, element, runtime_style_element);
+        validateLayoutStyleElement(validator, parent_block, parent_element, element, runtime_style_element);
         return;
     }
 

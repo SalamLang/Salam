@@ -14,7 +14,7 @@ export class RuntimeStyleElementIcon extends RuntimeStyleElement {
         this.addBelongsTo(new RuntimeElementLayout);
 
         this.addAttribute(
-            new RuntimeElementAttribute(RuntimeElementAttributeType.FontSrc, "source")
+            new RuntimeElementAttribute(RuntimeElementAttributeType.Uri, "source")
             .addText(LanguageID.LanguagePersian, "منبع")
             .addText(LanguageID.LanguageEnglish, "source")
             .setStyle()
@@ -26,7 +26,6 @@ export class RuntimeStyleElementIcon extends RuntimeStyleElement {
             .addText(LanguageID.LanguageEnglish, "size")
             .setOutputType(RuntimeElementAttributeOutputType.Normal)
             .setStyle()
-            .setRequired()
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.String, "format")

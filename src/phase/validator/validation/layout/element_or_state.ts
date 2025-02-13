@@ -10,12 +10,6 @@ import { ValidatorMessageKeys } from "../../../../common/message/validator/valid
 
 export function validateLayoutElementOrState(validator: Validator, parent_block: AstBlock, parent_element: AstLayoutElement | undefined, element: AstLayoutElement): void {
     const runtime_element: RuntimeElement | undefined = Validator.getElementRuntime(validator.getLanguageId(), parent_element, element.enduser_name);
-    // if (runtime_element === undefined) {
-    //     console.log("validateLayoutElementOrState.element.enduser_name:", element.enduser_name);
-    //     // console.log(parent_element);
-    //     console.log("validateLayoutElementOrState.parent_element?.enduser_name:", parent_element?.enduser_name);
-    //     console.log("validateLayoutElementOrState.runtime_element:", runtime_element);
-    // }
 
     // First check if element is a valid element
     if (runtime_element !== undefined) {
@@ -25,7 +19,6 @@ export function validateLayoutElementOrState(validator: Validator, parent_block:
     
     // Second check if element is a valid style element
     const runtime_style_element: RuntimeElement | undefined = Validator.getStyleElementRuntime(validator.getLanguageId(), parent_element, element.enduser_name);
-    console.log("validateLayoutElementOrState.runtime_style_element", runtime_style_element, element.enduser_name);
     if (runtime_style_element !== undefined) {
         validateLayoutElement(validator, parent_block, parent_element, element, runtime_style_element);
         return;

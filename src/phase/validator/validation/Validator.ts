@@ -73,11 +73,18 @@ export class Validator {
             if (!parent_element) {
                 return true;
             }
+            // if (parent_runtime_element && runtimeElementItem.belongs_to && runtimeElementItem.belongs_to[0]) {
+            //     console.log("belongs_to:", runtimeElementItem.belongs_to[0].generate_name || "");
+            //     console.log("parent_runtime_element:", parent_runtime_element?.generate_name);
+            //     console.log(runtimeElementItem.belongs_to[0].generate_name, parent_element.generate_name);
+            // } else {
+            //     console.log("belongs_to:", "null");
+            // }
             return (
                 runtimeElementItem.belongs_to.length === 0 ||
                 parent_runtime_element === undefined ||
                 runtimeElementItem.belongs_to.some(
-                    element => element.constructor.name === parent_element.constructor.name
+                    element => element.generate_name === parent_element.generate_name
                 )
             );
         });

@@ -66,11 +66,19 @@ export class Validator {
         name: string
     ): RuntimeElement | undefined {
         let parent_runtime_element: RuntimeElement | undefined = undefined;
+        console.log("findElementRuntime.name:", name);
+        console.log("findElementRuntime.parent_element.enduser_name:", parent_element?.enduser_name);
         if (parent_element !== undefined) {
             parent_runtime_element = Validator.getElementRuntime(languageId, undefined, parent_element.enduser_name);
+            console.log("findElementRuntime.parent_runtime_element", parent_runtime_element?.text);
         }
+        console.log("a");
         return Validator.findInCollection(languageId, runtimeElements, name, (runtimeElementItem: RuntimeElement) => {
-            if (!parent_element) {
+            // console.log(runtimeElementItem);
+            // console.log("b", parent_runtime_element, parent_element, parent_element?.enduser_name);
+            if (parent_element === undefined) {
+                // console.log("=================================");
+                // console.log("=================================");
                 return true;
             }
             // if (parent_runtime_element && runtimeElementItem.belongs_to && runtimeElementItem.belongs_to[0]) {
@@ -84,7 +92,7 @@ export class Validator {
                 runtimeElementItem.belongs_to.length === 0 ||
                 parent_runtime_element === undefined ||
                 runtimeElementItem.belongs_to.some(
-                    element => element.generate_name === parent_element.generate_name
+                    runtime_element => runtime_element.constructor.name === parent_runtime_element.constructor.name
                 )
             );
         });
@@ -99,15 +107,17 @@ export class Validator {
         if (parent_element !== undefined) {
             parent_runtime_element = Validator.getElementRuntime(languageId, undefined, parent_element.enduser_name);
         }
+        console.log("------------->", name);
         return Validator.findInCollection(languageId, runtimeStyleElements, name, (runtimeElementItem: RuntimeElement) => {
-            if (!parent_element) {
+            console.log("--->", runtimeElementItem);
+            if (parent_element === undefined) {
                 return true;
             }
             return (
                 runtimeElementItem.belongs_to.length === 0 ||
                 parent_runtime_element === undefined ||
                 runtimeElementItem.belongs_to.some(
-                    element => element.constructor.name === parent_runtime_element.constructor.name
+                    runtime_element => runtime_element.constructor.name === parent_runtime_element.constructor.name
                 )
             );
         });
@@ -132,7 +142,7 @@ export class Validator {
     }
 
     static hasElementRuntime(languageId: LanguageID, parent_element: AstLayoutElement | undefined, name: string): boolean {
-        return Validator.findElementRuntime(languageId, parent_element, name) !== undefined;
+        return Validator.getElementRuntime(languageId, parent_element, name) !== undefined;
     }
 
     static getElementAttributeRuntime(languageId: LanguageID, element: RuntimeElement, key: string): RuntimeElementAttribute | undefined {

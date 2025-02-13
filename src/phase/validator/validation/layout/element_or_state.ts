@@ -10,6 +10,12 @@ import { AstBlock } from "../../../parser/parse/ast/block";
 
 export function validateLayoutElementOrState(validator: Validator, parent_block: AstBlock, parent_element: AstLayoutElement | undefined, element: AstLayoutElement): void {
     const runtime_element: RuntimeElement | undefined = Validator.getElementRuntime(validator.getLanguageId(), parent_element, element.enduser_name);
+    if (runtime_element === undefined) {
+        console.log(element.enduser_name);
+        // console.log(parent_element);
+        console.log(parent_element?.enduser_name);
+        console.log(runtime_element);
+    }
 
     // First check if element is a valid element
     if (runtime_element !== undefined) {

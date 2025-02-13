@@ -34,7 +34,7 @@ export function parse(parser: Parser): void {
                 parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_DUPLICATE_LAYOUT_DEFINITION));
                 break;
             }
-    } else {
+        } else {
             parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_UNEXPECTED_TOKEN_IN_PROGRAM, token.type));
             break;
         }

@@ -8,8 +8,9 @@ export class RuntimeElementOption extends RuntimeElement {
   constructor() {
     super(true, 'option');
     this.addBelongsTo(new RuntimeElementSelect());
-    this.addText(LanguageID.LanguageEnglish, 'option');
-    this.addText(LanguageID.LanguagePersian, 'گزینه');
+    this.addText(LanguageID.LanguageEnglish, 'item');
+    this.addText(LanguageID.LanguagePersian, 'مورد');
+    // this.addText(LanguageID.LanguagePersian, 'گزینه');
 
     this.addAttribute(
       new RuntimeElementAttribute(

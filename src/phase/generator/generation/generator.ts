@@ -17,6 +17,7 @@ export class Generator {
     source_c: string;
     enableLines: boolean;
     styles: string[];
+    heads: string[];
     functions: string[];
     sign_functions: string[];
     libraries: string[];
@@ -33,6 +34,7 @@ export class Generator {
         this.source_c = '';
         this.enableLines = true;
         this.styles = [];
+        this.heads = [];
         this.functions = [];
         this.sign_functions = [];
         this.libraries = [];
@@ -82,6 +84,14 @@ export class Generator {
     
     pushStyle(style: string): void {
         this.styles.push(style);
+    }
+
+    pushHeadTop(head: string): void {
+        this.heads.unshift(head);
+    }
+    
+    pushHead(head: string): void {
+        this.heads.push(head);
     }
 
     increaseIndent(): void {

@@ -14,6 +14,7 @@ export enum RuntimeElementAttributeType {
 
   Sizes = 'Sizes',
   Size = 'Size',
+  PairSize = 'PairSize',
 
   FontSrc = 'FontSrc',
 

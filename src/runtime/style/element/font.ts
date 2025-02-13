@@ -9,7 +9,7 @@ export class RuntimeStyleElementFont extends RuntimeStyleElement {
     constructor() {
         super(true, "font");
         this.addText(LanguageID.LanguageEnglish, "font");
-        this.addText(LanguageID.LanguagePersian, "فونت");
+        this.addText(LanguageID.LanguagePersian, "قلم");
         this.addBelongsTo(new RuntimeElementLayout);
 
         this.addAttribute(
@@ -52,19 +52,19 @@ export class RuntimeStyleElementFont extends RuntimeStyleElement {
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "font-variant")
-            .addText(LanguageID.LanguagePersian, "نوع فونت")
+            .addText(LanguageID.LanguagePersian, "نوع قلم")
             .addText(LanguageID.LanguageEnglish, "variant")
             .setStyle()
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "font-feature-settings")
-            .addText(LanguageID.LanguagePersian, "تنظیمات ویژگی فونت")
+            .addText(LanguageID.LanguagePersian, "تنظیمات ویژگی قلم")
             .addText(LanguageID.LanguageEnglish, "feature settings")
             .setStyle()
         );
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "font-variation-settings")
-            .addText(LanguageID.LanguagePersian, "تنظیمات تغییر فونت")
+            .addText(LanguageID.LanguagePersian, "تنظیمات تغییر قلم")
             .addText(LanguageID.LanguageEnglish, "variation settings")
             .setStyle()
         );

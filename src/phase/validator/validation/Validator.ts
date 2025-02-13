@@ -66,28 +66,13 @@ export class Validator {
         name: string
     ): RuntimeElement | undefined {
         let parent_runtime_element: RuntimeElement | undefined = undefined;
-        console.log("findElementRuntime.name:", name);
-        console.log("findElementRuntime.parent_element.enduser_name:", parent_element?.enduser_name);
         if (parent_element !== undefined) {
             parent_runtime_element = Validator.getElementRuntime(languageId, undefined, parent_element.enduser_name);
-            console.log("findElementRuntime.parent_runtime_element", parent_runtime_element?.text);
         }
-        console.log("a");
         return Validator.findInCollection(languageId, runtimeElements, name, (runtimeElementItem: RuntimeElement) => {
-            // console.log(runtimeElementItem);
-            // console.log("b", parent_runtime_element, parent_element, parent_element?.enduser_name);
             if (parent_element === undefined) {
-                // console.log("=================================");
-                // console.log("=================================");
                 return true;
             }
-            // if (parent_runtime_element && runtimeElementItem.belongs_to && runtimeElementItem.belongs_to[0]) {
-            //     console.log("belongs_to:", runtimeElementItem.belongs_to[0].generate_name || "");
-            //     console.log("parent_runtime_element:", parent_runtime_element?.generate_name);
-            //     console.log(runtimeElementItem.belongs_to[0].generate_name, parent_element.generate_name);
-            // } else {
-            //     console.log("belongs_to:", "null");
-            // }
             return (
                 runtimeElementItem.belongs_to.length === 0 ||
                 parent_runtime_element === undefined ||
@@ -107,9 +92,7 @@ export class Validator {
         if (parent_element !== undefined) {
             parent_runtime_element = Validator.getElementRuntime(languageId, undefined, parent_element.enduser_name);
         }
-        console.log("------------->", name);
         return Validator.findInCollection(languageId, runtimeStyleElements, name, (runtimeElementItem: RuntimeElement) => {
-            console.log("--->", runtimeElementItem);
             if (parent_element === undefined) {
                 return true;
             }

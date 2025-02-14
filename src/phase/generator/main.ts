@@ -3,7 +3,7 @@ import { processLanguageFlag } from '../../common/cli/language';
 import { languageMapsValues } from './../../common/language/data';
 
 function main(args: string[]): number {
-    let selectedLanguage = languageMapsValues[0];
+    let selectedLanguage = Object.assign({}, languageMapsValues[0]);
 
     const result: number = processLanguageFlag(args, selectedLanguage);
     if (result === 1) {

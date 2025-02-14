@@ -214,7 +214,6 @@ import { RuntimeStyleBackdropFilter } from './style/attribute/backdrop-filter';
 import { RuntimeStyleBackfaceVisibility } from './style/attribute/backface-visibility';
 import { RuntimeStyleBackgroundColor } from './style/attribute/background-color';
 import { RuntimeStyleBlockSize } from './style/attribute/block-size';
-import { RuntimeStyleBottom } from './style/attribute/bottom';
 import { RuntimeStyleCaptionSide } from './style/attribute/caption-side';
 import { RuntimeStyleCaretColor } from './style/attribute/caret-color';
 import { RuntimeStyleClear } from './style/attribute/clear';
@@ -222,6 +221,21 @@ import { RuntimeStyleColor } from './style/attribute/color';
 import { RuntimeStyleFontSize } from './style/attribute/font-size';
 import { RuntimeStyleFontFamily } from './style/attribute/font-family';
 import { RuntimeStyleTextAlign } from './style/attribute/text-align';
+
+import { RuntimeStyleMarginTop } from './style/attribute/margin-top';
+import { RuntimeStyleMarginRight } from './style/attribute/margin-right';
+import { RuntimeStyleMarginLeft } from './style/attribute/margin-left';
+import { RuntimeStyleMarginBottom } from './style/attribute/margin-bottom';
+
+import { RuntimeStylePaddingTop } from './style/attribute/padding-top';
+import { RuntimeStylePaddingRight } from './style/attribute/padding-right';
+import { RuntimeStylePaddingLeft } from './style/attribute/padding-left';
+import { RuntimeStylePaddingBottom } from './style/attribute/padding-bottom';
+
+import { RuntimeStyleTop } from './style/attribute/top';
+import { RuntimeStyleRight } from './style/attribute/right';
+import { RuntimeStyleLeft } from './style/attribute/left';
+import { RuntimeStyleBottom } from './style/attribute/bottom';
 
 export const runtimeStyleAttributes: RuntimeElementAttributeStyle[] = [
     new RuntimeStyleAccentColor(),
@@ -249,6 +263,21 @@ export const runtimeStyleAttributes: RuntimeElementAttributeStyle[] = [
     new RuntimeStyleFontSize(),
     new RuntimeStyleFontFamily(),
     new RuntimeStyleTextAlign(),
+
+    new RuntimeStyleMarginTop(),
+    new RuntimeStyleMarginRight(),
+    new RuntimeStyleMarginLeft(),
+    new RuntimeStyleMarginBottom(),
+
+    new RuntimeStylePaddingTop(),
+    new RuntimeStylePaddingRight(),
+    new RuntimeStylePaddingLeft(),
+    new RuntimeStylePaddingBottom(),
+
+    new RuntimeStyleTop(),
+    new RuntimeStyleRight(),
+    new RuntimeStyleLeft(),
+    new RuntimeStyleBottom(),    
 ];
 
 import { RuntimeGlobalAttributeContent } from './attribute/content';

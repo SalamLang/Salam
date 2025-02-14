@@ -5,7 +5,7 @@ import { RuntimeElementAttributeValue } from '../../element_attribute_value';
 
 export class RuntimeStyleBottom extends RuntimeElementAttributeStyle {
     constructor() {
-        super(RuntimeElementAttributeType.AnyNoEmpty, "bottom");
+        super(RuntimeElementAttributeType.Size, "bottom");
         this.addText(LanguageID.LanguagePersian, "پایین");
         this.addText(LanguageID.LanguageEnglish, "bottom");
         

@@ -18,9 +18,9 @@ export function processCommandRun(
     // No language has been selected, so let's attempt to select one automatically.
     if (languageCheck === -1 && fileName !== undefined) {
         if (fileName.endsWith(".en.salam")) {
-            selectedLanguage = languageMapsValues[0];
+            selectedLanguage = Object.assign({}, languageMapsValues[0]);
         } else if (fileName.endsWith(".fa.salam")) {
-            selectedLanguage = languageMapsValues[1];
+            selectedLanguage = Object.assign({}, languageMapsValues[1]);
         }
     }
 

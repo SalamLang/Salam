@@ -25,7 +25,7 @@ export function mainSalam(args: string[]): number {
         return 1;
     }
 
-    const selectedLanguage = languageMapsValues[0];
+    const selectedLanguage = Object.assign({}, languageMapsValues[0]);
 
     const languageResult: number = processLanguageFlag(args, selectedLanguage);
     if (languageResult === 1) {

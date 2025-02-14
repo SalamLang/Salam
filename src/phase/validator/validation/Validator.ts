@@ -170,14 +170,17 @@ export class Validator {
     writeToFile(fileName: string): void {
         let fs: any = undefined;
         if (typeof window === "undefined") {
-            let requireFunc: any;
+            let requireFunc: any = undefined;
             try {
-              requireFunc = typeof require !== "undefined" ? require : eval("require");
+                requireFunc = typeof require !== "undefined" ? require : undefined;
             } catch (error) {
               console.error("Error: Unable to obtain the require function.");
               return;
             }
-        
+            if (requireFunc === undefined) {
+                return 1;
+            }
+            
             try {
               fs = requireFunc("fs");
             } catch (error) {

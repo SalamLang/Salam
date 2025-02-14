@@ -1,2 +1,3 @@
 @echo off
-bun run main.ts %*
+@REM bun run main.ts %*
+bun run main.ts generator file test.salam %*

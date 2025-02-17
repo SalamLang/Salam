@@ -5,7 +5,7 @@ import { RuntimeElementAttributeValue } from "../../element_attribute_value";
 
 export class RuntimeStyleBackgroundAttachment extends RuntimeElementAttributeStyle{
     constructor(){
-        super(RuntimeElementAttributeType.Color, 'background-attachment');
+        super(RuntimeElementAttributeType.String, 'background-attachment');
         this.addText(LanguageID.LanguageEnglish, 'background-attachment');
         this.addText(LanguageID.LanguagePersian, 'پیوست پس زمینه');
         this.addReservedValue(

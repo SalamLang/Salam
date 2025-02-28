@@ -78,6 +78,8 @@ if emcc "${sources[@]}" -o "${OUTPUT_BASE}.html" \
 		cp "${OUTPUT_BASE}.html" "$EDITOR_DIR"
 		cp "${OUTPUT_BASE}.js" "$EDITOR_DIR"
 		cp "${OUTPUT_BASE}.wasm" "$EDITOR_DIR"
+		cp "${OUTPUT_BASE}.js" "$EDITOR_DIR/public/"
+		cp "${OUTPUT_BASE}.wasm" "$EDITOR_DIR/public/"
 		echo "Files copied successfully."
 	else
 		echo "Directory $EDITOR_DIR does not exist. Skipping copy."

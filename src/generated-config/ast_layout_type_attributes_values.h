@@ -1,5 +1,7 @@
 // ----------- BEGIN AUTO GENERATED ----------- //
 ast_layout_attribute_type_t valid_attributes_link[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_ID,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CLASS,
     AST_LAYOUT_ATTRIBUTE_TYPE_HREF,
     AST_LAYOUT_ATTRIBUTE_TYPE_TYPE,
 };
@@ -15,6 +17,8 @@ ast_layout_attribute_type_t valid_attributes_error[] = { AST_LAYOUT_ATTRIBUTE_TY
 const size_t valid_attributes_error_length = 0;
 
 ast_layout_attribute_type_t valid_attributes_layout[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_ID,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CLASS,
     AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
     AST_LAYOUT_ATTRIBUTE_TYPE_TITLE,
     AST_LAYOUT_ATTRIBUTE_TYPE_LANG,
@@ -149,6 +153,8 @@ ast_layout_attribute_type_t valid_attributes_figcaption[] = { AST_LAYOUT_ATTRIBU
 const size_t valid_attributes_figcaption_length = 0;
 
 ast_layout_attribute_type_t valid_attributes_video[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_ID,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CLASS,
     AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
 };
 const size_t valid_attributes_video_length = sizeof(valid_attributes_video) / sizeof(valid_attributes_video[0]);
@@ -157,6 +163,8 @@ ast_layout_attribute_type_t valid_attributes_audio[] = { AST_LAYOUT_ATTRIBUTE_TY
 const size_t valid_attributes_audio_length = 0;
 
 ast_layout_attribute_type_t valid_attributes_iframe[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_ID,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CLASS,
     AST_LAYOUT_ATTRIBUTE_TYPE_WIDTH,
     AST_LAYOUT_ATTRIBUTE_TYPE_HEIGHT,
     AST_LAYOUT_ATTRIBUTE_TYPE_TITLE,
@@ -170,19 +178,26 @@ const size_t valid_attributes_style_length = 0;
 ast_layout_attribute_type_t valid_attributes_canvas[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
 const size_t valid_attributes_canvas_length = 0;
 
-ast_layout_attribute_type_t valid_attributes_ul[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
-const size_t valid_attributes_ul_length = 0;
+ast_layout_attribute_type_t valid_attributes_ul[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_ID,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CLASS,
+};
+const size_t valid_attributes_ul_length = sizeof(valid_attributes_ul) / sizeof(valid_attributes_ul[0]);
 
 ast_layout_attribute_type_t valid_attributes_ol[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
 const size_t valid_attributes_ol_length = 0;
 
 ast_layout_attribute_type_t valid_attributes_option[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_ID,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CLASS,
     AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
     AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT,
 };
 const size_t valid_attributes_option_length = sizeof(valid_attributes_option) / sizeof(valid_attributes_option[0]);
 
 ast_layout_attribute_type_t valid_attributes_li[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_ID,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CLASS,
     AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
     AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT,
 };
@@ -219,6 +234,8 @@ ast_layout_attribute_type_t valid_attributes_hr[] = { AST_LAYOUT_ATTRIBUTE_TYPE_
 const size_t valid_attributes_hr_length = 0;
 
 ast_layout_attribute_type_t valid_attributes_input[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_ID,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CLASS,
     AST_LAYOUT_ATTRIBUTE_TYPE_VALUE,
     AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
     AST_LAYOUT_ATTRIBUTE_TYPE_PLACEHOLDER,
@@ -226,6 +243,8 @@ ast_layout_attribute_type_t valid_attributes_input[] = {
 const size_t valid_attributes_input_length = sizeof(valid_attributes_input) / sizeof(valid_attributes_input[0]);
 
 ast_layout_attribute_type_t valid_attributes_img[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_ID,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CLASS,
     AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
 };
 const size_t valid_attributes_img_length = sizeof(valid_attributes_img) / sizeof(valid_attributes_img[0]);

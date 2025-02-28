@@ -112,6 +112,9 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_STYLE) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_CANVAS) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_UL) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_ul, valid_attributes_ul_length)) {
+        return true;
+    }
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_OL) {
 }

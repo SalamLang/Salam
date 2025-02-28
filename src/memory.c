@@ -72,6 +72,7 @@ void *memory_callocate(size_t count, size_t size) {
 void memory_destroy(void *ptr) {
     DEBUG_ME;
     if (ptr == NULL) {
+        return;
         panic("Failed to destroy memory");
     }
 

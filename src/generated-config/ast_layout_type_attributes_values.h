@@ -148,8 +148,10 @@ const size_t valid_attributes_figure_length = 0;
 ast_layout_attribute_type_t valid_attributes_figcaption[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
 const size_t valid_attributes_figcaption_length = 0;
 
-ast_layout_attribute_type_t valid_attributes_video[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
-const size_t valid_attributes_video_length = 0;
+ast_layout_attribute_type_t valid_attributes_video[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
+};
+const size_t valid_attributes_video_length = sizeof(valid_attributes_video) / sizeof(valid_attributes_video[0]);
 
 ast_layout_attribute_type_t valid_attributes_audio[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
 const size_t valid_attributes_audio_length = 0;

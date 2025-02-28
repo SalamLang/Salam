@@ -156,6 +156,7 @@ ast_layout_attribute_type_t valid_attributes_video[] = {
     AST_LAYOUT_ATTRIBUTE_TYPE_ID,
     AST_LAYOUT_ATTRIBUTE_TYPE_CLASS,
     AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CONTROLS,
 };
 const size_t valid_attributes_video_length = sizeof(valid_attributes_video) / sizeof(valid_attributes_video[0]);
 

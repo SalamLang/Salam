@@ -96,6 +96,9 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FIGURE) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FIGCAPTION) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_VIDEO) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_video, valid_attributes_video_length)) {
+        return true;
+    }
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_AUDIO) {
 }

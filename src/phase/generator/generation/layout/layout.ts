@@ -30,14 +30,20 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
 
     result += generator.bufferIndentedLine(`<title>${attribute_title}</title>`);
     result += generator.bufferIndentedLine(`<meta charset="${attribute_charset}">`);
-    result += generator.bufferIndentedLine(`<meta name="viewport" content="width=device-width, initial-scale=1">`);
 
     if (attribute_author) {
         result += generator.bufferIndentedLine(`<meta name="author" content="${attribute_author}">`);
     }
 
+    let has_viewport: boolean = false;
     for (const head of generator.heads) {
+        if (head.startsWith(`<meta name="viewport"`)) {
+            has_viewport = true;
+        }
         result += generator.bufferIndentedLine(head);
+    }
+    if (has_viewport === false) {
+        result += generator.bufferIndentedLine(`<meta name="viewport" content="width=device-width, initial-scale=1">`);
     }
 
     if (generator.styles.length > 0) {

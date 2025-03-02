@@ -3,14 +3,25 @@
     <head>
         <title>Salam Untitled</title>
         <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
         <link rel="icon" type="image/x-icon" href="test.png">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0>>>">
         <style>
-        .a {margin-top:10}
+        @font-face {font-family:"سلام تست";src:url('test.ttf') format('truetype')}
+        .a {color:white;background-color:black}
+        .a:focus {background-color:green}
+        .b {background-color:yellow}
+        .b:hover {background-color:red}
+        .c {margin-top:10}
         </style>
     </head>
     <body>
-        <div class=a>
+        <style>*{padding:0; margin:0}</style>
+        <script>alert('hey');</script>
+        <input class=a>
+        </input>
+        <div class="ssss b">
+        </div>
+        <div class=c>
             Hey mate!
             <ul>
                 <li>first</li>
@@ -21,7 +32,7 @@
                 <option>third</option>
             </select>
         </div>
-        <div class=a>
+        <div class=c>
             Hey mate!
             <ul>
                 <li>first</li>

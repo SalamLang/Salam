@@ -23,13 +23,27 @@ export function generateLayoutStyleElement(generator: Generator, element: AstLay
                 head += `<link rel="icon"`;
                 head += ` type="${attribute_format}"`;
                 head += ` href="${attribute_source}">`;
+                generator.pushHead(head);
             } else if (attribute_type === "apple") {
                 head += `<link rel="apple-touch-icon"`
                 head += ` sizes="${attribute_size}"`;
                 head += ` href="${attribute_source}">`;
+                generator.pushHead(head);
             }
+            return "";
+        }
+        case "RuntimeStyleElementViewport": {
+            let head: string = "";
 
-            generator.pushHead(head);
+            const attribute_content: string | undefined = element.attributes.getByGenerateName("content")?.getValue();
+            if (attribute_content !== undefined) {
+                head += `<meta name="viewport" content="${attribute_content}">`;
+                generator.pushHead(head);
+            }
+            return "";
+        }
+        default: {
+            generator.pushError("Error: cannot handle " + element.generate_type);
         }
     }
 

@@ -369,8 +369,10 @@ export const runtimeStyleStates: RuntimeElementStyleState[] = [
 
 import { RuntimeStyleElementFont } from './style/element/font';
 import { RuntimeStyleElementIcon } from './style/element/icon';
+import { RuntimeStyleElementViewport } from './style/element/viewport';
 
 export const runtimeStyleElements: RuntimeElement[] = [
     new RuntimeStyleElementFont(),
     new RuntimeStyleElementIcon(),
+    new RuntimeStyleElementViewport(),
 ];

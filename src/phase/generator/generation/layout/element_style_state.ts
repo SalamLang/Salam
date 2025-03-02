@@ -8,7 +8,9 @@ export function generateLayoutElementStyleState(generator: Generator, element_st
 
     const element_selector: string | undefined = element_style_state.built_in_selector;
     if (element_selector) {
-        result += `${element_selector}:${element_style_state.generate_name} {`;
+        result += `${element_selector}`;
+        result += ":";
+        result += `${element_style_state.generate_name} {`;
         result += attributes_str;
         result += "}";
     }

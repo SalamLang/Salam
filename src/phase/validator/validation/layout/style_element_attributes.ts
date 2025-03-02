@@ -35,10 +35,13 @@ export function validateLayoutStyleElementAttributes(validator: Validator, eleme
     // Check styles
     if (element.styles.items.length > 0) {
         if (element.built_in_selector === undefined) {
+            // console.log("element inside style-element:", element);
             element.generateBuiltInSelector(validator);
+            // console.log("style-element-attributes-style-items->", element.built_in_selector);
         }
 
         for (const attribute of element.styles.items) {
+            // console.log("attr:", attribute.enduser_name);
             validateLayoutElementAttribute(validator, runtime_element, attribute, element);
         }
     }

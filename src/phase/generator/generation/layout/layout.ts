@@ -6,8 +6,8 @@ import { AstLayout } from './../../../parser/parse/ast/layout/layout';
 export function generateLayout(generator: Generator, layout: AstLayout): string {
     generator.setIndent(generator.getIndent() + 2);
     
-    const body_attrs: string = generateLayoutAttributes(generator, layout.root);
     const body: string = generateLayoutBlock(generator, layout.root, layout.root.block);
+    const body_attrs: string = generateLayoutAttributes(generator, layout.root);
     generator.setIndent(generator.getIndent() - 2);
 
     let result: string = "";
@@ -46,10 +46,13 @@ export function generateLayout(generator: Generator, layout: AstLayout): string 
         result += generator.bufferIndentedLine(`<meta name="viewport" content="width=device-width, initial-scale=1">`);
     }
 
-    if (generator.styles.length > 0) {
+    if (generator.styles.length > 0 || generator.media_styles.length > 0) {
         result += generator.bufferIndentedLine(`<style>`);
         for (const style of generator.styles) {
             result += generator.bufferIndentedLine(style);
+        }
+        for (const media_style of generator.media_styles) {
+            result += generator.bufferIndentedLine(media_style);
         }
         result += generator.bufferIndentedLine(`</style>`);
     }

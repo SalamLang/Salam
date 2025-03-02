@@ -1,4 +1,5 @@
 import { Generator } from './../generator';
+import { generateLayoutBlock } from './block';
 import { AstLayoutElement } from './../../../parser/parse/ast/layout/element';
 import { generateLayoutStyleStateAttributes } from './style_state_attributes';
 
@@ -9,6 +10,23 @@ export function generateLayoutStyleElement(generator: Generator, element: AstLay
             style += generateLayoutStyleStateAttributes(generator, element.attributes);
             style += "}";
             generator.pushStyleTop(style);
+            return "";
+        }
+        case "RuntimeStyleElementMedia": {
+            let style: string = "@media ";
+            const attribute_condition: string | undefined = element.attributes.getByGenerateName("condition")?.getValue();
+            style += attribute_condition;
+            style += " {";
+            style += element.built_in_selector;
+            style += " {";
+            // console.log("media-element:", element);
+            const attributes_str: string = generateLayoutStyleStateAttributes(generator, element.styles);
+            if (attributes_str !== "") {
+                style += attributes_str;
+            }
+            style += "}";
+            style += "}";
+            generator.pushMediaStyle(style);
             return "";
         }
         case "RuntimeStyleElementIcon": {

@@ -17,6 +17,7 @@ export class Generator {
     source_c: string;
     enableLines: boolean;
     styles: string[];
+    media_styles: string[];
     heads: string[];
     functions: string[];
     sign_functions: string[];
@@ -34,6 +35,7 @@ export class Generator {
         this.source_c = '';
         this.enableLines = true;
         this.styles = [];
+        this.media_styles = [];
         this.heads = [];
         this.functions = [];
         this.sign_functions = [];
@@ -84,6 +86,14 @@ export class Generator {
     
     pushStyle(style: string): void {
         this.styles.push(style);
+    }
+
+    pushMediaStyle(media_style: string): void {
+        this.media_styles.push(media_style);
+    }
+
+    pushMediaStyleTop(media_style: string): void {
+        this.media_styles.unshift(media_style);
     }
 
     pushHeadTop(head: string): void {

@@ -22,11 +22,16 @@ export function validateLayoutElement(validator: Validator, parent_block: AstBlo
         if (runtime_element === undefined) {
             validator.pushError(validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ELEMENT_NOT_VALID, element.enduser_name));
             return;
-    }
+        }
     }
 
     element.generate_name = runtime_element.generate_name;
     element.generate_type = runtime_element.constructor.name;
+
+    console.log("parent_element:", parent_element);
+    // if (parent_element) {
+    //     element.built_in_selector = parent_element.built_in_selector;
+    // }
 
     // Check attributes and styles
     validateLayoutElementAttributes(validator, element.enduser_name, runtime_element, element);

@@ -5,8 +5,14 @@ import { RuntimeElementStyleState } from "../../../../runtime/element_style_stat
 import { ValidatorMessageKeys } from "../../../../common/message/validator/validator";
 import { AstLayoutElementKind } from './../../../parser/parse/ast/layout/element_kind';
 import { validateLayoutElementStyleStateAttributes } from './element_style_state_attributes';
+import { AstBlock } from "../../../parser/parse/ast/block";
+import { validateLayoutBlock } from "./block";
 
-export function validateLayoutElementStyleState(validator: Validator, parent_element: AstLayoutElement | undefined, element: AstLayoutElement, element_style_state: RuntimeElementStyleState | undefined = undefined): void {
+export function validateLayoutElementStyleState(validator: Validator, parent_element: AstLayoutElement | undefined, element: AstLayoutElement, element_style_state: RuntimeElementStyleState | undefined = undefined, parent_block: AstBlock): void {
+    // console.log(element.generate_type, parent_element.generate_type);
+    // console.log("validateLayoutElementStyleState:", element.kind, parent_element.kind);
+    // console.log(parent_element);
+
     // Try to get runtime element if not provided
     if (element_style_state === undefined) {
         element_style_state = Validator.getElementStyleStateRuntime(validator.getLanguageId(), parent_element, element.enduser_name);
@@ -18,14 +24,18 @@ export function validateLayoutElementStyleState(validator: Validator, parent_ele
         }
     }
 
-    element.generate_name = element_style_state.generate_name;
     element.kind = AstLayoutElementKind.StyleState;
+    element.generate_name = element_style_state.generate_name;
     element.generate_type = element_style_state.constructor.name;
     element.built_in_selector = parent_element?.built_in_selector;
+
+    if (parent_element && element.kind === "StyleState" && parent_element.kind === "StyleState") {
+        validator.pushError(`Cannot have '${element.enduser_name}' style state inner of '${parent_element.enduser_name}' style state.`);
+    }
 
     // Check attributes and global attributes
     validateLayoutElementStyleStateAttributes(validator, element.enduser_name, element_style_state, element, parent_element);
 
     // Check block
-    // TODO
+    validateLayoutBlock(validator, parent_block, parent_element, element, element.block);
 };

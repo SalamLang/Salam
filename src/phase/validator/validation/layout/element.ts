@@ -33,6 +33,9 @@ export function validateLayoutElement(validator: Validator, parent_block: AstBlo
     //     element.built_in_selector = parent_element.built_in_selector;
     // }
 
+    // Check if this element has belons to the parent
+    if (runtime_element.not_belongs_to_itself === true && parent_element)
+
     // Check attributes and styles
     validateLayoutElementAttributes(validator, element.enduser_name, runtime_element, element);
 

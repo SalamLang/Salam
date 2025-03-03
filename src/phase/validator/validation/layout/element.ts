@@ -1,11 +1,11 @@
 import { Validator } from "../validator";
 import { validateLayoutBlock } from './block';
+import { AstBlock } from "../../../parser/parse/ast/block";
 import { RuntimeElement } from './../../../../runtime/element';
 import { validateLayoutElementAttributes } from './element_attributes';
 import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 import { validatorMessageRenderer } from './../../../../common/message/message';
 import { ValidatorMessageKeys } from "../../../../common/message/validator/validator";
-import { AstBlock } from "../../../parser/parse/ast/block";
 
 export function validateLayoutElement(validator: Validator, parent_block: AstBlock, parent_element: AstLayoutElement | undefined, element: AstLayoutElement, runtime_element: RuntimeElement | undefined = undefined): void {
     // Try to get runtime element if not provided
@@ -27,12 +27,6 @@ export function validateLayoutElement(validator: Validator, parent_block: AstBlo
 
     element.generate_name = runtime_element.generate_name;
     element.generate_type = runtime_element.constructor.name;
-
-    // Check if this element has belons to the parent
-    // console.log("validateLayoutElement:", element.generate_name, element.kind, element.enduser_name, parent_element?.kind);
-    // if (runtime_element && parent_element && runtime_element.not_belongs_to_itself === true && parent_element.enduser_name === element.enduser_name) {
-    //     validator.pushError(`Cannot use element "${element.enduser_name}" in itself`);
-    // }
 
     // Check attributes and styles
     validateLayoutElementAttributes(validator, element.enduser_name, runtime_element, element);

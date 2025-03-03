@@ -24,10 +24,10 @@ export function validateLayoutStyleElement(validator: Validator, parent_block: A
     element.generate_type = runtime_element.constructor.name;
 
     // console.log("element:", element);
-    console.log("style-elm parent_element:", parent_element);
+    // console.log("style-elm parent_element:", parent_element?.generate_name);
 
     // Check attributes and styles
-    validateLayoutStyleElementAttributes(validator, element.enduser_name, runtime_element, element);
+    validateLayoutStyleElementAttributes(validator, element.enduser_name, runtime_element, element, parent_element);
 
     // Check block
     validateLayoutBlock(validator, parent_block, parent_element, element, element.block);

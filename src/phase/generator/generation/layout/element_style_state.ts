@@ -1,8 +1,10 @@
 import { Generator } from './../generator';
+import { generateLayoutBlock } from './block';
+import { AstLayoutBlock } from '../../../parser/parse/ast/layout/block';
 import { AstLayoutElement } from './../../../parser/parse/ast/layout/element';
 import { generateLayoutStyleStateAttributes } from './style_state_attributes';
 
-export function generateLayoutElementStyleState(generator: Generator, element_style_state: AstLayoutElement): string {
+export function generateLayoutElementStyleState(generator: Generator, block: AstLayoutBlock, element_style_state: AstLayoutElement): string {
     let result: string = "";
     const attributes_str: string = generateLayoutStyleStateAttributes(generator, element_style_state.styles);
 
@@ -14,6 +16,8 @@ export function generateLayoutElementStyleState(generator: Generator, element_st
         result += attributes_str;
         result += "}";
     }
+
+    generateLayoutBlock(generator, element_style_state, element_style_state.block);
 
     return result;
 };

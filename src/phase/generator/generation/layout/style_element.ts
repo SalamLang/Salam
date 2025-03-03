@@ -1,9 +1,8 @@
 import { Generator } from './../generator';
-import { generateLayoutBlock } from './block';
 import { AstLayoutElement } from './../../../parser/parse/ast/layout/element';
 import { generateLayoutStyleStateAttributes } from './style_state_attributes';
 
-export function generateLayoutStyleElement(generator: Generator, element: AstLayoutElement): string {
+export function generateLayoutStyleElement(generator: Generator, parent_element: AstLayoutElement, element: AstLayoutElement): string {
     switch (element.generate_type) {
         case "RuntimeStyleElementFont": {
             let style: string = "@font-face {";
@@ -18,6 +17,10 @@ export function generateLayoutStyleElement(generator: Generator, element: AstLay
             style += attribute_condition;
             style += " {";
             style += element.built_in_selector;
+            if (parent_element.kind === "StyleState") {
+                style += ":";
+                style += parent_element.generate_name;
+            }
             style += " {";
             const attributes_str: string = generateLayoutStyleStateAttributes(generator, element.styles);
             if (attributes_str !== "") {

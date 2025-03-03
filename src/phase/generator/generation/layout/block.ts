@@ -14,12 +14,12 @@ export function generateLayoutBlock(generator: Generator, element: AstLayoutElem
         if (item.generate_name === undefined) {
             result += generateLayoutNode(generator, item);
         } else if (item.isStateStyle()) {
-            const css: string = generateLayoutElementStyleState(generator, item)
+            const css: string = generateLayoutElementStyleState(generator, block, item)
             if (css.length > 0) {
                 generator.pushStyle(css);
             }
         } else if (item.isStyleElement()) {
-            result += generateLayoutStyleElement(generator, item as AstLayoutElement);
+            result += generateLayoutStyleElement(generator, element, item as AstLayoutElement);
         } else {
             result += generateLayoutElement(generator, item as AstLayoutElement);
         }

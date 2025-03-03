@@ -6,7 +6,7 @@ import { validatorMessageRenderer } from './../../../../common/message/message';
 import { AstLayoutAttribute } from "./../../../parser/parse/ast/layout/attribute";
 import { ValidatorMessageKeys } from './../../../../common/message/validator/validator';
 
-export function validateLayoutStyleElementAttributes(validator: Validator, element_enduser_name: string, runtime_element: RuntimeStyleElement, element: AstLayoutElement, parent_element: AstLayoutElement): void {
+export function validateLayoutStyleElementAttributes(validator: Validator, element_enduser_name: string, runtime_element: RuntimeStyleElement, element: AstLayoutElement, parent_element: AstLayoutElement | undefined): void {
     // console.log(element.kind, element.enduser_name, element.type);
     // if (parent_element && element.generate_type?.startsWith("RuntimeStyle") && parent_element.generate_type?.startsWith("RuntimeStyle")) {
     //     validator.pushError("Cannot have this element inside that element.");
@@ -41,11 +41,11 @@ export function validateLayoutStyleElementAttributes(validator: Validator, eleme
     // Check styles
     if (element.styles.items.length > 0) {
         if (element.built_in_selector === undefined) {
-            // console.log("element inside style-element:", element);
-            element.built_in_selector = parent_element.built_in_selector;
-            // element.generateBuiltInSelector(validator);
-            // element.built_in_selector += ".2";
-            // console.log("style-element-attributes-style-items->", element.built_in_selector);
+            if (parent_element && parent_element.built_in_selector) {
+                element.built_in_selector = parent_element.built_in_selector;
+            } else {
+                element.generateBuiltInSelector(validator);
+            }
         }
 
         for (const attribute of element.styles.items) {

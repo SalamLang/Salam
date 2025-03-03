@@ -43,6 +43,10 @@ export class RuntimeElement {
         this.not_belongs_to_itself = true;
     }
 
+    getNotBelongsToItself(): boolean {
+        return this.not_belongs_to_itself;
+    }
+
     addText(languageId: LanguageID, value: string): void {
         if (! this.text.has(languageId)) {
             this.text.set(languageId, []);

@@ -9,10 +9,6 @@ import { AstBlock } from "../../../parser/parse/ast/block";
 import { validateLayoutBlock } from "./block";
 
 export function validateLayoutElementStyleState(validator: Validator, parent_element: AstLayoutElement | undefined, element: AstLayoutElement, element_style_state: RuntimeElementStyleState | undefined = undefined, parent_block: AstBlock): void {
-    // console.log(element.generate_type, parent_element.generate_type);
-    // console.log("validateLayoutElementStyleState:", element.kind, parent_element.kind);
-    // console.log(parent_element);
-
     // Try to get runtime element if not provided
     if (element_style_state === undefined) {
         element_style_state = Validator.getElementStyleStateRuntime(validator.getLanguageId(), parent_element, element.enduser_name);

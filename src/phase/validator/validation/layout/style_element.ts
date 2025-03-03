@@ -24,7 +24,6 @@ export function validateLayoutStyleElement(validator: Validator, parent_block: A
     element.generate_type = runtime_element.constructor.name;
 
     // Check if this element has belons to the parent
-    // console.log("validateLayoutStyleElement:", element.kind, element.generate_name, runtime_element.getNotBelongsToItself(), parent_element);
     if (runtime_element && parent_element && runtime_element.not_belongs_to_itself === true && parent_element.enduser_name === element.enduser_name) {
         validator.pushError(`Cannot use element "${element.enduser_name}" in itself`);
     }

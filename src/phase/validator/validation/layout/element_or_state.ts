@@ -10,8 +10,6 @@ import { RuntimeElementStyleState } from "../../../../runtime/element_style_stat
 import { ValidatorMessageKeys } from "../../../../common/message/validator/validator";
 
 export function validateLayoutElementOrState(validator: Validator, parent_block: AstBlock, parent_element: AstLayoutElement | undefined, element: AstLayoutElement): void {
-    // console.log("validateLayoutElementOrState:", element.enduser_name);
-    // console.log("validateLayoutElementOrState:", element.kind, element.enduser_name);
     const runtime_element: RuntimeElement | undefined = Validator.getElementRuntime(validator.getLanguageId(), parent_element, element.enduser_name);
 
     // First check if element is a valid element

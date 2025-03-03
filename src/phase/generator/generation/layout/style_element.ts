@@ -19,7 +19,6 @@ export function generateLayoutStyleElement(generator: Generator, element: AstLay
             style += " {";
             style += element.built_in_selector;
             style += " {";
-            // console.log("media-element:", element);
             const attributes_str: string = generateLayoutStyleStateAttributes(generator, element.styles);
             if (attributes_str !== "") {
                 style += attributes_str;

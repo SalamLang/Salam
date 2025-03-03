@@ -28,9 +28,10 @@ export function validateLayoutElementOrState(validator: Validator, parent_block:
     }
 
     // Third check if element is a valid style state
-    const runtimeStyleState: RuntimeElementStyleState | undefined = Validator.getElementStyleStateRuntime(validator.getLanguageId(), parent_element, element.enduser_name);
-    if (runtimeStyleState !== undefined) {
-        validateLayoutElementStyleState(validator, parent_element, element, runtimeStyleState, parent_block);
+    const runtime_style_state: RuntimeElementStyleState | undefined = Validator.getElementStyleStateRuntime(validator.getLanguageId(), parent_element, element.enduser_name);
+    if (runtime_style_state !== undefined) {
+        validateLayoutElementStyleState(validator, parent_element, element, runtime_style_state, parent_block);
+        return;
     } else {
         validator.pushError(validatorMessageRenderer(validator.getLanguageId(), ValidatorMessageKeys.VALIDATOR_ELEMENT_OR_STYLE_STATE_NOT_VALID, element.enduser_name));
     }

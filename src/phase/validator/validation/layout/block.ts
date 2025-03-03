@@ -6,6 +6,6 @@ import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 
 export function validateLayoutBlock(validator: Validator, parent_block: AstBlock, parent_element: AstLayoutElement | undefined, element: AstLayoutElement, block: AstLayoutBlock): void {
     for (const item of block.items) {
-        validateLayoutElementOrState(validator, parent_block, parent_element, item);
+        validateLayoutElementOrState(validator, parent_block, element, item);
     }
 };

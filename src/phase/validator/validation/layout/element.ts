@@ -28,13 +28,11 @@ export function validateLayoutElement(validator: Validator, parent_block: AstBlo
     element.generate_name = runtime_element.generate_name;
     element.generate_type = runtime_element.constructor.name;
 
-    // console.log("element file->parent_element:", parent_element?.generate_name);
-    // if (parent_element) {
-    //     element.built_in_selector = parent_element.built_in_selector;
-    // }
-
     // Check if this element has belons to the parent
-    if (runtime_element.not_belongs_to_itself === true && parent_element)
+    // console.log("validateLayoutElement:", element.generate_name, element.kind, element.enduser_name, parent_element?.kind);
+    // if (runtime_element && parent_element && runtime_element.not_belongs_to_itself === true && parent_element.enduser_name === element.enduser_name) {
+    //     validator.pushError(`Cannot use element "${element.enduser_name}" in itself`);
+    // }
 
     // Check attributes and styles
     validateLayoutElementAttributes(validator, element.enduser_name, runtime_element, element);

@@ -1,3 +1,6 @@
+import { RuntimeElementLayout } from './element/custom/layout';
+import { RuntimeElementInclude } from './element/custom/include';
+
 import { RuntimeElementWbr } from './element/wbr';
 import { RuntimeElementVideo } from './element/video';
 import { RuntimeElementVar } from './element/var';
@@ -89,11 +92,16 @@ import { RuntimeElement } from './element';
 import { RuntimeElementAttribute } from './element_attribute';
 import { RuntimeElementStyleState } from './element_style_state';
 import { RuntimeElementAttributeStyle } from './element_attribute_style';
-
 import { RuntimeElementA } from './element/a';
 import { RuntimeElementDiv } from './element/div';
-import { RuntimeElementLayout } from './element/custom/layout';
-import { RuntimeElementInclude } from './element/custom/include';
+import { RuntimeElementCanvas } from './element/canvas';
+import { RuntimeElementH4 } from './element/h4';
+import { RuntimeElementH5 } from './element/h5';
+import { RuntimeElementImg } from './element/img';
+import { RuntimeElementSelect } from './element/select';
+import { RuntimeElementSmall } from './element/small';
+import { RuntimeElementStrong } from './element/strong';
+import { RuntimeElementStyle } from './element/style';
 
 export const runtimeElements: RuntimeElement[] = [
     new RuntimeElementLayout(),
@@ -327,14 +335,6 @@ import { RuntimeElementStyleStateRoot } from './style/state/root';
 import { RuntimeElementStyleStateTarget } from './style/state/target';
 import { RuntimeElementStyleStateValid } from './style/state/valid';
 import { RuntimeElementStyleStateVisited } from './style/state/visited';
-import { RuntimeElementCanvas } from './element/canvas';
-import { RuntimeElementH4 } from './element/h4';
-import { RuntimeElementH5 } from './element/h5';
-import { RuntimeElementImg } from './element/img';
-import { RuntimeElementSelect } from './element/select';
-import { RuntimeElementSmall } from './element/small';
-import { RuntimeElementStrong } from './element/strong';
-import { RuntimeElementStyle } from './element/style';
 
 export const runtimeStyleStates: RuntimeElementStyleState[] = [
     new RuntimeElementStyleStateActive(),

@@ -7,6 +7,7 @@ export class RuntimeElement {
     text: Map<LanguageID, string[]>;
     attributes: RuntimeElementAttribute[];
     belongs_to: RuntimeElement[];
+    not_belongs_to_itself: boolean;
     
     constructor(is_mother: boolean, generate_name: string | undefined) {
         this.is_mother = is_mother;
@@ -14,6 +15,7 @@ export class RuntimeElement {
         this.generate_name = generate_name;
         this.attributes = [];
         this.belongs_to = [];
+        this.not_belongs_to_itself = false;
     }
 
     private findAttribute(
@@ -37,8 +39,8 @@ export class RuntimeElement {
         this.belongs_to.push(element);
     }
 
-    addBelongsToAll(): void {
-        
+    notBelongsToItself(): void {
+        this.not_belongs_to_itself = true;
     }
 
     addText(languageId: LanguageID, value: string): void {

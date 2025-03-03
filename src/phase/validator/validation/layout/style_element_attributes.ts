@@ -7,6 +7,12 @@ import { AstLayoutAttribute } from "./../../../parser/parse/ast/layout/attribute
 import { ValidatorMessageKeys } from './../../../../common/message/validator/validator';
 
 export function validateLayoutStyleElementAttributes(validator: Validator, element_enduser_name: string, runtime_element: RuntimeStyleElement, element: AstLayoutElement, parent_element: AstLayoutElement): void {
+    // console.log(element.kind, element.enduser_name, element.type);
+    // if (parent_element && element.generate_type?.startsWith("RuntimeStyle") && parent_element.generate_type?.startsWith("RuntimeStyle")) {
+    //     validator.pushError("Cannot have this element inside that element.");
+    //     validator.pushError(`Cannot have '${element.enduser_name}' style  inner of '${parent_element.enduser_name}' style state.`);
+    // }
+
     // Check layout attributes
     for (const attribute of element.attributes.items) {
         validateLayoutElementAttribute(validator, runtime_element, attribute, element);

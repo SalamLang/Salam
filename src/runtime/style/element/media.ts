@@ -8,7 +8,7 @@ export class RuntimeStyleElementMedia extends RuntimeStyleElement {
         super(true, "media");
         this.addText(LanguageID.LanguageEnglish, "media");
         this.addText(LanguageID.LanguagePersian, "واکنش گرا");
-        this.addBelongsToAll();
+        this.notBelongsToItself();
 
         this.addAttribute(
             new RuntimeElementAttribute(RuntimeElementAttributeType.AnyNoEmpty, "condition")

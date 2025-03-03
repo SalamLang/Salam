@@ -22,6 +22,7 @@ export function validateLayoutElementStyleAttribute(validator: Validator, runtim
     attribute.kind = runtimeElementStyleAttribute.kind;
     attribute.generate_name = runtimeElementStyleAttribute.generate_name;
     attribute.generate_type = runtimeElementStyleAttribute.constructor.name;
+    attribute.is_hide = runtimeElementStyleAttribute.is_hide;
 
     // Check if attributes values are valid for attribute with reserved values
     const error_reserved_value: string | undefined = validateLayoutElementAttributeReservedValue(validator, attribute, runtimeElementStyleAttribute);

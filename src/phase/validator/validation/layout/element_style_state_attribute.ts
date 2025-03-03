@@ -23,6 +23,7 @@ export function validateLayoutElementStyleStateAttribute(validator: Validator, r
     attribute.kind = runtimeElementAttribute.kind;
     attribute.generate_name = runtimeElementAttribute.generate_name;
     attribute.generate_type = runtimeElementAttribute.constructor.name;
+    attribute.is_hide = runtimeElementAttribute.is_hide;
 
     // Check if attributes values are valid for attribute with reserved values
     const error_reserved_value: string | undefined = validateLayoutElementAttributeReservedValue(validator, attribute, runtimeElementAttribute);

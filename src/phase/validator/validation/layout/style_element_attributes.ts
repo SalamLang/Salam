@@ -6,7 +6,7 @@ import { validatorMessageRenderer } from './../../../../common/message/message';
 import { AstLayoutAttribute } from "./../../../parser/parse/ast/layout/attribute";
 import { ValidatorMessageKeys } from './../../../../common/message/validator/validator';
 
-export function validateLayoutStyleElementAttributes(validator: Validator, element_enduser_name: string, runtime_element: RuntimeStyleElement, element: AstLayoutElement): void {
+export function validateLayoutStyleElementAttributes(validator: Validator, element_enduser_name: string, runtime_element: RuntimeStyleElement, element: AstLayoutElement, parent_element: AstLayoutElement): void {
     // Check layout attributes
     for (const attribute of element.attributes.items) {
         validateLayoutElementAttribute(validator, runtime_element, attribute, element);
@@ -36,7 +36,9 @@ export function validateLayoutStyleElementAttributes(validator: Validator, eleme
     if (element.styles.items.length > 0) {
         if (element.built_in_selector === undefined) {
             // console.log("element inside style-element:", element);
-            element.generateBuiltInSelector(validator);
+            element.built_in_selector = parent_element.built_in_selector;
+            // element.generateBuiltInSelector(validator);
+            // element.built_in_selector += ".2";
             // console.log("style-element-attributes-style-items->", element.built_in_selector);
         }
 

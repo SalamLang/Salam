@@ -28,7 +28,7 @@ export function validateLayoutElement(validator: Validator, parent_block: AstBlo
     element.generate_name = runtime_element.generate_name;
     element.generate_type = runtime_element.constructor.name;
 
-    console.log("parent_element:", parent_element);
+    // console.log("element file->parent_element:", parent_element?.generate_name);
     // if (parent_element) {
     //     element.built_in_selector = parent_element.built_in_selector;
     // }

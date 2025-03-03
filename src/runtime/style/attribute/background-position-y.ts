@@ -6,7 +6,7 @@ import { RuntimeElementAttributeValue } from '../../element_attribute_value';
 export class RuntimeStyleBackgroundY extends RuntimeElementAttributeStyle {
   constructor() {
     super(RuntimeElementAttributeType.String, 'background-position-y');
-    this.addText(LanguageID.LanguageEnglish, 'background-position-y');
+    this.addText(LanguageID.LanguageEnglish, 'background position y');
     this.addText(LanguageID.LanguagePersian, 'موقعیت عمودی پس زمینه');
     this.addReservedValue(
       new RuntimeElementAttributeValue('length')

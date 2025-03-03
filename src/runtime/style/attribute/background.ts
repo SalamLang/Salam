@@ -7,7 +7,7 @@ export class RuntimeStypeBackgrount extends RuntimeElementAttributeStyle{
         super(RuntimeElementAttributeType.Color, 'background');
         this.addText(LanguageID.LanguageEnglish, 'backgound');
         this.addText(LanguageID.LanguagePersian, 'پس زمینه');
-
-
     }
 }
+
+// TODO

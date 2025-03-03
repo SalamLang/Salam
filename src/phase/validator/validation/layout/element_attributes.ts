@@ -36,8 +36,6 @@ export function validateLayoutElementAttributes(validator: Validator, element_en
     if (element.styles.items.length > 0) {
         if (element.built_in_selector === undefined) {
             element.generateBuiltInSelector(validator);
-            // element.built_in_selector += ".1";
-            // console.log("element-attributes-style-items->", element.built_in_selector);
         }
 
         for (const attribute of element.styles.items) {

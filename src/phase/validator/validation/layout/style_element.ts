@@ -23,8 +23,11 @@ export function validateLayoutStyleElement(validator: Validator, parent_block: A
     element.generate_name = runtime_element.generate_name;
     element.generate_type = runtime_element.constructor.name;
 
-    // console.log("element:", element);
-    // console.log("style-elm parent_element:", parent_element?.generate_name);
+    // Check if this element has belons to the parent
+    // console.log("validateLayoutStyleElement:", element.kind, element.generate_name, runtime_element.getNotBelongsToItself(), parent_element);
+    if (runtime_element && parent_element && runtime_element.not_belongs_to_itself === true && parent_element.enduser_name === element.enduser_name) {
+        validator.pushError(`Cannot use element "${element.enduser_name}" in itself`);
+    }
 
     // Check attributes and styles
     validateLayoutStyleElementAttributes(validator, element.enduser_name, runtime_element, element, parent_element);

@@ -5,11 +5,16 @@
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
+        .a {color:white;background-color:black}
+        .a:hover {background-color:white}
+        .a:focus {background-color:green}
+        @media screen and (min-width: 400px) {.a:hover {background-color:pink}}
+        @media screen and (min-width: 400px) {.a:focus {background-color:pink}}
         @media screen and (min-width: 400px) {.a {background-color:pink}}
         </style>
     </head>
     <body>
-        <input>
+        <input class=a>
         </input>
     </body>
 </html>

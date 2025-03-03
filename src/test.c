@@ -3,11 +3,10 @@
     <head>
         <title>Salam Untitled</title>
         <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0>>>">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-        .a {color:white;background-color:black}
-        .a:focus {background-color:green}
-        @media screen and (min-width: 400px) {.b {background-color:pink}}
+        .a {color:white}
+        @media screen and (min-width: 400px) {.a {background-color:pink}}
         </style>
     </head>
     <body>

@@ -10,6 +10,7 @@ export class AstLayoutElement extends AstNode {
     enduser_name: string;
     generate_name: string | undefined;
     generate_type: string | undefined;
+    generate_is_mother: boolean | undefined;
     parent_generate_name: string | undefined;
     parent_generate_type: string | undefined;
 	block: AstLayoutBlock;
@@ -30,6 +31,7 @@ export class AstLayoutElement extends AstNode {
         this.parent_generate_type = undefined;
         this.generate_name = undefined;
         this.generate_type = undefined;
+        this.generate_is_mother = undefined;
         this.content = undefined;
         this.repeat = 1;
         this.kind = AstLayoutElementKind.NormalElement;

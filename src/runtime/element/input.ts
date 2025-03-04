@@ -6,7 +6,7 @@ import { RuntimeElementAttributeValue } from "./../element_attribute_value";
 
 export class RuntimeElementInput extends RuntimeElement {
     constructor() {
-        super(true, 'input');
+        super(false, 'input');
         this.addText(LanguageID.LanguageEnglish, 'input');
         this.addText(LanguageID.LanguagePersian, 'ورودی');
 

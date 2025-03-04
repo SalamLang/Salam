@@ -27,6 +27,7 @@ export function validateLayoutElement(validator: Validator, parent_block: AstBlo
 
     element.generate_name = runtime_element.generate_name;
     element.generate_type = runtime_element.constructor.name;
+    element.generate_is_mother = runtime_element.is_mother;
 
     // Check attributes and styles
     validateLayoutElementAttributes(validator, element.enduser_name, runtime_element, element);

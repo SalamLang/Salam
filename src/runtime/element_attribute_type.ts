@@ -9,6 +9,8 @@ export enum RuntimeElementAttributeType {
   Uri = 'Uri',
   Uris = 'Uris',
 
+  UrlXY = 'UrlXY',
+
   Url = 'Url',
   Urls = 'Urls',
 

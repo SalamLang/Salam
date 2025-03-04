@@ -1,12 +1,12 @@
 import { Validator } from "../validator";
+import { validateLayoutBlock } from "./block";
+import { AstBlock } from "../../../parser/parse/ast/block";
 import { AstLayoutElement } from "./../../../parser/parse/ast/layout/element";
 import { validatorMessageRenderer } from './../../../../common/message/message';
 import { RuntimeElementStyleState } from "../../../../runtime/element_style_state";
 import { ValidatorMessageKeys } from "../../../../common/message/validator/validator";
 import { AstLayoutElementKind } from './../../../parser/parse/ast/layout/element_kind';
 import { validateLayoutElementStyleStateAttributes } from './element_style_state_attributes';
-import { AstBlock } from "../../../parser/parse/ast/block";
-import { validateLayoutBlock } from "./block";
 
 export function validateLayoutElementStyleState(validator: Validator, parent_element: AstLayoutElement | undefined, element: AstLayoutElement, element_style_state: RuntimeElementStyleState | undefined = undefined, parent_block: AstBlock): void {
     // Try to get runtime element if not provided

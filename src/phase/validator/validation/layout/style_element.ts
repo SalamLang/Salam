@@ -22,6 +22,7 @@ export function validateLayoutStyleElement(validator: Validator, parent_block: A
 
     element.generate_name = runtime_element.generate_name;
     element.generate_type = runtime_element.constructor.name;
+    element.generate_is_mother = runtime_element.is_mother;
 
     // Check if this element has belons to the parent
     if (runtime_element && parent_element && runtime_element.not_belongs_to_itself === true && parent_element.enduser_name === element.enduser_name) {

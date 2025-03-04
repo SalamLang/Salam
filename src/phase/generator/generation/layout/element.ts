@@ -61,11 +61,13 @@ export function generateLayoutElement(generator: Generator, element: AstLayoutEl
     
     // Close the element
     if (hasTag) {
-        const needsIndentClosing: boolean = hasMultiOpeningClosing || !hasContentWithoutChild;
-        if (!emptyContent && needsIndentClosing) {
-            result += generator.bufferIndentedLine(closing);
-        } else {
-            result += generator.bufferLine(closing);
+        if (element.generate_is_mother && element.generate_is_mother === true) {
+            const needsIndentClosing: boolean = hasMultiOpeningClosing || !hasContentWithoutChild;
+            if (!emptyContent && needsIndentClosing) {
+                result += generator.bufferIndentedLine(closing);
+            } else {
+                result += generator.bufferLine(closing);
+            }
         }
     }
 

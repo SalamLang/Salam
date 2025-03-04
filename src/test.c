@@ -15,6 +15,14 @@
     </head>
     <body>
         <input class=a>
-        </input>
+        <input class=a>
+        <input class=a>
+        <input class=a>
+        <input class=a>
+        <input class=a>
+        <input class=a>
+        <input class=a>
+        <input class=a>
+        <input class=a>
     </body>
 </html>

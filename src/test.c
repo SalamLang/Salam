@@ -7,6 +7,9 @@
 #include <time.h>
 #include <ctype.h>
 
+// Extended functions
+extern char* int2str(int c);
+
 // Sign functions
 char* test();
 char* main();

@@ -19,6 +19,7 @@ if (a == NULL) {
     exit(1);
 }
 strcpy(a, "Hey ");
+printf("%s", int2str(412));
 return (a);
 }
 

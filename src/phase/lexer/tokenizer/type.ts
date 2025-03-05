@@ -21,6 +21,7 @@ export enum TokenKeywordType {
     TOKEN_ELSE = "ELSE",
     TOKEN_PRINT = "PRINT",
     TOKEN_FN = "FN",
+    TOKEN_EXTERN = "EXTERN",
     TOKEN_FOR = "FOR",
     TOKEN_WHILE = "WHILE",
     TOKEN_REPEAT = "REPEAT",

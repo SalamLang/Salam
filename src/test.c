@@ -9,7 +9,6 @@
 
 // Extended functions
 extern char* int2str(int c);
-extern char* test();
 
 // Sign functions
 char* test();
@@ -17,22 +16,52 @@ char* main();
 
 // Functions
 char* test() {
-char* a = (char*) malloc(strlen("Hey ") + 1);
-if (a == NULL) {
-    printf("Memory allocation failed in a\n");
-    exit(1);
-}
-strcpy(a, "Hey ");
-printf("%s", int2str(412));
-char* temp_var_1 = a;
-char* temp_var_2 = int2str(500);
-char* temp_var_0 = malloc(sizeof(char) * (strlen(temp_var_1) + strlen(temp_var_2)) + 1);
-strcpy(temp_var_0, temp_var_1);
-strcat(temp_var_0, temp_var_2);
-return (temp_var_0);
+return ("");
 }
 
 char* main() {
-printf("%s", "\n");
-printf("%s", test());
+char* bbb = (char*) malloc(strlen("hey") + 1);
+if (bbb == NULL) {
+    printf("Memory allocation failed in bbb\n");
+    exit(1);
 }
+strcpy(bbb, "hey");
+char* aaa = (char*) malloc(strlen3("...") + strlen4("!!!") + strlen4("??? END") + strlen4(int2str(33)) + 1);
+if (aaa == NULL) {
+    printf("Memory allocation failed in aaa\n");
+    exit(1);
+}
+strcat(aaa, "...");
+strcat(aaa, "!!!");
+strcat(aaa, "??? END");
+strcat(aaa, int2str(33));
+}
+
+<!doctype html>
+<html dir="ltr" lang="en-US">
+    <head>
+        <title>Salam Untitled</title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+        .a {color:white;background-color:black;margin-top:20;padding-top:20px}
+        .a:hover {background-color:white}
+        .a:focus {background-color:green}
+        @media screen and (min-width: 400px) {.a:hover {background-color:pink}}
+        @media screen and (min-width: 400px) {.a:focus {background-color:pink}}
+        @media screen and (min-width: 400px) {.a {background-color:pink}}
+        </style>
+    </head>
+    <body>
+        <input class=a>
+        <input class=a>
+        <input class=a>
+        <input class=a>
+        <input class=a>
+        <input class=a>
+        <input class=a>
+        <input class=a>
+        <input class=a>
+        <input class=a>
+    </body>
+</html>

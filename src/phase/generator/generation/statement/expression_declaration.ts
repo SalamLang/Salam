@@ -12,6 +12,10 @@ export function generateStatementExpressionDeclaration(generator: Generator, stm
     result += " ";
     result += stmt.name;
 
+    let first_key: string = "";
+    let tempVarLeft: string = '';
+    let tempVarRight: string = '';
+
     if (stmt.value !== undefined) {
         result += " = ";
         const expr: ExpressionPair = generateExpression(generator, stmt.value);
@@ -28,7 +32,7 @@ export function generateStatementExpressionDeclaration(generator: Generator, stm
                     if (expr.left.type === "ExpressionBinary") {
                         leftLen = computeStringLength(expr.left as AstExpressionBinary);
                     } else {
-                        leftLen = `strlen(${leftExpr.value})`;
+                        leftLen = `strlen3(${leftExpr.value})`;
                     }
 
                     const rightExpr: ExpressionPair = generateExpression(generator, expr.right);
@@ -37,7 +41,7 @@ export function generateStatementExpressionDeclaration(generator: Generator, stm
                     if (expr.right.type === "ExpressionBinary") {
                         computeStringLength(expr.right as AstExpressionBinary)
                     } else {
-                        rightLen = `strlen(${rightExpr.value})`;
+                        rightLen = `strlen4(${rightExpr.value})`;
                     }
 
                     return `${leftLen} + ${rightLen}`;
@@ -83,8 +87,9 @@ export function generateStatementExpressionDeclaration(generator: Generator, stm
                 }
 
                 result += generateStrcat(stmt_value, stmt.name);
-
+                expr.key = first_key + expr.key;
             } else {
+                expr.key = first_key + expr.key;
                 result = expr.key + result;
                 result += `(char*) malloc(strlen(${expr.value}) + 1);\n`;
 
@@ -96,6 +101,7 @@ export function generateStatementExpressionDeclaration(generator: Generator, stm
                 result += `strcpy(${stmt.name}, ${expr.value});\n`;
             }
         } else {
+            expr.key = first_key + expr.key;
             result = expr.key + result;
             result += expr.value;
             result += ";\n";

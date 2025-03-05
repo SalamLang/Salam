@@ -36,12 +36,20 @@ export class Validator {
         this.packages[name] = type;
     }
 
-    pushExtendedFunction(name: string, type: AstType): void {
+    pushExtendedFunction(name: string, type: AstType): boolean {
+        if (false) {
+            return false;
+        }
         this.extendedFunctions[name] = type;
+        return true;
     }
 
-    pushExtendedVariable(name: string, type: AstType): void {
+    pushExtendedVariable(name: string, type: AstType): boolean {
+        if (false) {
+            return false;
+        }
         this.extendedVariables[name] = type;
+        return true;
     }
 
     pushError(message: string) {

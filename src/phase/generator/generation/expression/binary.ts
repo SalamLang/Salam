@@ -2,8 +2,8 @@ import { Generator } from './../generator';
 import { generateExpression } from './expression';
 import { generateExpressionOperator } from './operator';
 import { TokenOperatorType } from '../../../lexer/tokenizer/type';
-import { AstExpressionBinary } from '../../../parser/parse/ast/expression/binary';
 import { ExpressionPair } from '../../../parser/parse/ast/expression/expression';
+import { AstExpressionBinary } from '../../../parser/parse/ast/expression/binary';
 
 export function generateExpressionBinary(generator: Generator, expr: AstExpressionBinary): ExpressionPair {
     let result: ExpressionPair = { key: '', value: ''};
@@ -35,7 +35,7 @@ export function generateExpressionBinary(generator: Generator, expr: AstExpressi
             } else {
                 tempVarLeft = Generator.getTempVar();
                 first_key += `char* ${tempVarLeft} = ${left.value};\n`
-                result.key += `strlen(${tempVarLeft})`;
+                result.key += `strlen1(${tempVarLeft})`;
             }
             result.key += ` + `;
             if (expr.right.value_type.is_primitive) {
@@ -43,7 +43,7 @@ export function generateExpressionBinary(generator: Generator, expr: AstExpressi
             } else {
                 tempVarRight = Generator.getTempVar();
                 first_key += `char* ${tempVarRight} = ${right.value};\n`
-                result.key += `strlen(${tempVarRight})`;
+                result.key += `strlen2(${tempVarRight})`;
             }
             result.key += `) + 1);\n`;
             if (tempVarLeft !== '') {

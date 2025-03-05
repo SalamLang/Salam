@@ -25,4 +25,8 @@ export function validateExtern(validator: Validator, parent_block: AstBlock, ext
 
     const extern_type: AstType = AstType.createFunction(extern.name, generated_name, extern.args, extern.return_type);
     parent_block.symbol_table.addSymbol(extern.name, extern_type);
+
+    // console.log("Extern:", extern.generate_name)
+    // console.log(extern_type.stringify())
+    // console.log(extern.args);
 };

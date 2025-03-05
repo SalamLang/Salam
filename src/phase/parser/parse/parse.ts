@@ -7,6 +7,8 @@ import { ParserMessageKeys } from './../../../common/message/parser/parser';
 import { AstFunctionDeclaration } from './ast/function/function_declaration';
 import { TokenKeywordType, TokenOtherType } from './../../lexer/tokenizer/type';
 import { parserParseFunctionDeclaration } from './function/function_declaration';
+import { AstExtern } from './ast/extern';
+import { parserParseExtern } from './extern';
 
 export function parse(parser: Parser): void {
     while (parser.index < parser.lexer.tokens.length) {
@@ -14,6 +16,16 @@ export function parse(parser: Parser): void {
 
         if (token.type === TokenOtherType.TOKEN_EOF) {
             break;
+        } else if (token.type === TokenKeywordType.TOKEN_EXTERN) {
+            const extern: AstExtern | undefined = parserParseExtern(parser, parser.ast.block);
+            if (! extern) {
+                parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FAILED_TO_PARSE_FUNCTION_STATEMENT));
+                break;
+            }
+            if (! parser.ast.pushExtern(extern)) {
+                parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FAILED_TO_PARSE_FUNCTION));
+                break;
+            }
         } else if (token.type === TokenKeywordType.TOKEN_FN) {
             const function_declaration: AstFunctionDeclaration | undefined = parserParseFunctionDeclaration(parser, parser.ast.block);
             if (! function_declaration) {

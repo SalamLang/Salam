@@ -1,5 +1,6 @@
 import { AstNode } from './node';
 import { AstBlock } from './block';
+import { AstExtern } from './extern';
 import { AstLayout } from './layout/layout';
 import { stringify } from './../../../../serializer';
 import { LanguageMap } from './../../../../common/language/language';
@@ -8,6 +9,7 @@ import { AstFunctionDeclaration } from './function/function_declaration';
 export class AstProgram extends AstNode {
     errors: string[] = [];
     layout: AstLayout | undefined;
+    externs: AstExtern[];
     functions: AstFunctionDeclaration[];
     language: LanguageMap;
     block: AstBlock;
@@ -15,6 +17,7 @@ export class AstProgram extends AstNode {
     constructor(language: LanguageMap, block: AstBlock | undefined = undefined) {
         super("Program");
         this.functions = [];
+        this.externs = [];
         this.language = language;
         if (block === undefined) {
             this.block = RuntimeBlock.generate();
@@ -40,6 +43,11 @@ export class AstProgram extends AstNode {
 
     hasFunctionDeclaration(function_declaration: AstFunctionDeclaration): boolean {
         return false;
+    }
+
+    pushExtern(extern: AstExtern): boolean {
+        this.externs.push(extern);
+        return true;
     }
 
     pushFunctionDeclaration(function_declaration: AstFunctionDeclaration): boolean {

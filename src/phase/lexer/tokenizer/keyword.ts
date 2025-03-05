@@ -46,6 +46,13 @@ export const keywordMaps: KeywordMap[] = [
         },
     },
     {
+        id: TokenKeywordType.TOKEN_EXTERN,
+        data: {
+            [LanguageID.LanguageEnglish]: ["extern"],
+            [LanguageID.LanguagePersian]: ["ارث"],
+        },
+    },
+    {
         id: TokenKeywordType.TOKEN_FOR,
         data: {
             [LanguageID.LanguageEnglish]: ["for"],

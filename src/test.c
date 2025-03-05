@@ -9,6 +9,7 @@
 
 // Extended functions
 extern char* int2str(int c);
+extern char* test();
 
 // Sign functions
 char* test();
@@ -23,9 +24,15 @@ if (a == NULL) {
 }
 strcpy(a, "Hey ");
 printf("%s", int2str(412));
-return (a);
+char* temp_var_1 = a;
+char* temp_var_2 = int2str(500);
+char* temp_var_0 = malloc(sizeof(char) * (strlen(temp_var_1) + strlen(temp_var_2)) + 1);
+strcpy(temp_var_0, temp_var_1);
+strcat(temp_var_0, temp_var_2);
+return (temp_var_0);
 }
 
 char* main() {
 printf("%s", "\n");
+printf("%s", test());
 }

@@ -30,9 +30,9 @@ export class RuntimeBlock {
         version_type.setSyetem();
         block.symbol_table.addSystemSymbol("version", version_type);
 
-        const int2str_type: AstType = AstType.createFunction("int2str", "int2str", [new AstFunctionArgument("value", AstType.createInt())], AstType.createString());
-        int2str_type.setSyetem();
-        block.symbol_table.addSystemSymbol("int2str", int2str_type);
+        // const int2str_type: AstType = AstType.createFunction("int2str", "int2str", [new AstFunctionArgument("value", AstType.createInt())], AstType.createString());
+        // int2str_type.setSyetem();
+        // block.symbol_table.addSystemSymbol("int2str", int2str_type);
         const float2str_type: AstType = AstType.createFunction("float2str", "float2str", [new AstFunctionArgument("value", AstType.createFloat())], AstType.createString());
         float2str_type.setSyetem();
         block.symbol_table.addSystemSymbol("float2str", float2str_type);

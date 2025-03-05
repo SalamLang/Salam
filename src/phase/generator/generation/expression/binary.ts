@@ -47,7 +47,7 @@ export function generateExpressionBinary(generator: Generator, expr: AstExpressi
             }
             result.key += `) + 1);\n`;
             if (tempVarLeft !== '') {
-                first_key += `strcpy(${tempVar}, ${tempVarLeft});\n`;
+                result.key += `strcpy(${tempVar}, ${tempVarLeft});\n`;
             } else {
                 result.key += `strcpy(${tempVar}, ${left.value});\n`;
             }

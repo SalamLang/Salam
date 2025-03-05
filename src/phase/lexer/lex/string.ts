@@ -38,11 +38,17 @@ export function lexerLexString(lexer: Lexer, opening: string): void {
 
         if (lexer.currentChar === '\\') {
             lexer.advance();
-            // if (lexer.currentChar === '"' || lexer.currentChar === "'" || lexer.currentChar === '\\') {
-            //     value += lexer.currentChar;
-            // } else {
-            //     value += '\\';
-            // }
+            switch (lexer.currentChar) {
+                case 'n': value += '\\n'; break;
+                case 't': value += '\\t'; break;
+                case 'r': value += '\\r'; break;
+                case '\\': value += '\\\\'; break;
+                case '"': value += '\\"'; break;
+                case "'": value += "'"; break;
+                case '`': value += '`'; break;
+                default: 
+                    value += '\\' + lexer.currentChar;
+            }
         } else {
             value += lexer.currentChar;
         }

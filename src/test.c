@@ -1,28 +1,32 @@
-<!doctype html>
-<html dir="ltr" lang="en-US">
-    <head>
-        <title>Salam Untitled</title>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-        .a {color:white;background-color:black;margin-top:20;padding-top:20px}
-        .a:hover {background-color:white}
-        .a:focus {background-color:green}
-        @media screen and (min-width: 400px) {.a:hover {background-color:pink}}
-        @media screen and (min-width: 400px) {.a:focus {background-color:pink}}
-        @media screen and (min-width: 400px) {.a {background-color:pink}}
-        </style>
-    </head>
-    <body>
-        <input class=a>
-        <input class=a>
-        <input class=a>
-        <input class=a>
-        <input class=a>
-        <input class=a>
-        <input class=a>
-        <input class=a>
-        <input class=a>
-        <input class=a>
-    </body>
-</html>
+// Libraries
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <math.h>
+#include <time.h>
+#include <ctype.h>
+
+// Sign functions
+char* _int2str(int a);
+char* test();
+char* main();
+
+// Functions
+char* _int2str(int a) {
+return ("110");
+}
+
+char* test() {
+char* a = (char*) malloc(strlen("Hey ") + 1);
+if (a == NULL) {
+    printf("Memory allocation failed in a\n");
+    exit(1);
+}
+strcpy(a, "Hey ");
+return (a);
+}
+
+char* main() {
+printf("%s", "\n");
+}

@@ -6,10 +6,11 @@ import { stringify } from './../../../../serializer';
 import { LanguageMap } from './../../../../common/language/language';
 import { RuntimeBlock } from './../../../../runtime/block/runtime_bock';
 import { AstFunctionDeclaration } from './function/function_declaration';
+import { AstExternType } from './extern_type';
 export class AstProgram extends AstNode {
     errors: string[] = [];
     layout: AstLayout | undefined;
-    externs: AstExtern[];
+    externs: Record<AstExternType,AstExtern[]>;
     functions: AstFunctionDeclaration[];
     language: LanguageMap;
     block: AstBlock;
@@ -17,7 +18,14 @@ export class AstProgram extends AstNode {
     constructor(language: LanguageMap, block: AstBlock | undefined = undefined) {
         super("Program");
         this.functions = [];
-        this.externs = [];
+        this.externs = {
+            [AstExternType.EXTERN_FN]: [],
+            [AstExternType.EXTERN_HEADER]: [],
+            [AstExternType.EXTERN_INC]: [],
+            [AstExternType.EXTERN_OBJ]: [],
+            [AstExternType.EXTERN_LIB]: [],
+            [AstExternType.EXTERN_VAR]: [],
+        };
         this.language = language;
         if (block === undefined) {
             this.block = RuntimeBlock.generate();
@@ -46,7 +54,7 @@ export class AstProgram extends AstNode {
     }
 
     pushExtern(extern: AstExtern): boolean {
-        this.externs.push(extern);
+        this.externs[extern.kind].push(extern);
         return true;
     }
 

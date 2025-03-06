@@ -56,17 +56,6 @@ export function parserParseExternObj(parser: Parser, parent_block: AstBlock): As
     return ast;
 };
 
-// if (parser.currentToken.isKeyword) {
-//     parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_NAME_IS_NOT_VALID_IDENTIFIER));
-//     return undefined;
-// } else if (
-//     (is_function === true && parser.currentToken.isDefinedIdentifier === true) ||
-//     (is_function === false && parser.currentToken.isDefinedIdentifier === true)
-// ) {
-//     parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_NAME_IS_RESERVED_IN_SALAM));
-//     return undefined;
-// }
-
 export function parserParseExternFn(parser: Parser, parent_block: AstBlock): AstExtern | undefined {
     const name: string | undefined = parser.currentToken.data?.getValueString();
     if (name === undefined) {
@@ -137,22 +126,16 @@ export function parserParseExtern(parser: Parser, parent_block: AstBlock): AstEx
     parser.expect(TokenKeywordType.TOKEN_EXTERN);
 
     if (parser.skip(TokenKeywordType.TOKEN_FN)) {
-        console.log("fn");
         return parserParseExternFn(parser, parent_block);
     } else if (parser.skipIdentifiers({[LanguageID.LanguageEnglish]: "library", [LanguageID.LanguagePersian]: "کتابخانه"})) {
-        console.log("library");
         return parserParseExternLib(parser, parent_block);
     } else if (parser.skipIdentifiers({[LanguageID.LanguageEnglish]: "include", [LanguageID.LanguagePersian]: "فراخوانی"})) {
-        console.log("include");
         return parserParseExternInc(parser, parent_block);
     } else if (parser.skipIdentifiers({[LanguageID.LanguageEnglish]: "header", [LanguageID.LanguagePersian]: "هدر"})) {
-        console.log("header");
         return parserParseExternHeader(parser, parent_block);
     } else if (parser.skipIdentifiers({[LanguageID.LanguageEnglish]: "object", [LanguageID.LanguagePersian]: "شی"})) {
-        console.log("object");
         return parserParseExternObj(parser, parent_block);
     } else {
-        console.log("var");
         return parserParseExternVar(parser, parent_block);
     }
 };

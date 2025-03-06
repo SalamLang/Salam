@@ -5,6 +5,7 @@
 extern char* int2str(int c);
 
 // Extern Variables
+extern int age;
 
 // Sign functions
 int main();
@@ -25,5 +26,5 @@ char* temp_var_2 = malloc(sizeof(char) * (14 + 1) + 1);
 strcpy(temp_var_2, temp_var_0);
 strcat(temp_var_2, "!");
 printf("%s", temp_var_2);
-return (1);
+return ("fgdfg");
 }

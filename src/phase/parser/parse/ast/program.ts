@@ -2,11 +2,12 @@ import { AstNode } from './node';
 import { AstBlock } from './block';
 import { AstExtern } from './extern';
 import { AstLayout } from './layout/layout';
+import { AstExternType } from './extern_type';
 import { stringify } from './../../../../serializer';
 import { LanguageMap } from './../../../../common/language/language';
 import { RuntimeBlock } from './../../../../runtime/block/runtime_bock';
 import { AstFunctionDeclaration } from './function/function_declaration';
-import { AstExternType } from './extern_type';
+
 export class AstProgram extends AstNode {
     errors: string[] = [];
     layout: AstLayout | undefined;

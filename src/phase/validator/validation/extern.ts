@@ -15,16 +15,23 @@ export function validateExtern(validator: Validator, parent_block: AstBlock, ext
         return;
     }
 
-    validateFunctionArguments(validator, parent_block, extern.args);
+    if (extern.args !== undefined) {
+        validateFunctionArguments(validator, parent_block, extern.args);
 
-    for (const argument of extern.args) {
-        parent_block.symbol_table.addSymbol(argument.name, argument.value_type);
+        for (const argument of extern.args) {
+            parent_block.symbol_table.addSymbol(argument.name, argument.value_type);
+        }
     }
+
 
     let generated_name: string = extern.generate_name;
 
-    const extern_type: AstType = AstType.createFunction(extern.name, generated_name, extern.args, extern.return_type);
-    parent_block.symbol_table.addSymbol(extern.name, extern_type);
+    if (extern.args === undefined) {
+        parent_block.symbol_table.addSymbol(extern.name, extern.return_type);
+    } else {
+        const extern_type: AstType = AstType.createFunction(extern.name, generated_name, extern.args, extern.return_type);
+        parent_block.symbol_table.addSymbol(extern.name, extern_type);
+    }
 
     // console.log("Extern:", extern.generate_name)
     // console.log(extern_type.stringify())

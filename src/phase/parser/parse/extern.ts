@@ -11,12 +11,11 @@ import { TokenKeywordType, TokenOperatorType } from '../../lexer/tokenizer/type'
 
 export function parserParseExtern(parser: Parser, parent_block: AstBlock): AstExtern | undefined {
     parser.expect(TokenKeywordType.TOKEN_EXTERN);
-    console.log("===> extern");
     let is_function: boolean = false;
     if (parser.skip(TokenKeywordType.TOKEN_FN)) {
         is_function = true;
     }
-    console.log(parser.currentToken.isKeyword, parser.currentToken.isDefinedIdentifier);
+
     // if (parser.currentToken.isKeyword) {
     //     parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_NAME_IS_NOT_VALID_IDENTIFIER));
     //     return undefined;
@@ -28,8 +27,6 @@ export function parserParseExtern(parser: Parser, parent_block: AstBlock): AstEx
     //     return undefined;
     // }
 
-    console.log("is function:", is_function);
-
     let return_type: AstType | undefined = undefined;
     if (is_function === false) {
         return_type = parseType(parser);
@@ -39,15 +36,15 @@ export function parserParseExtern(parser: Parser, parent_block: AstBlock): AstEx
         }
     }
 
+    // Eating function name
     const name: string | undefined = parser.currentToken.data?.getValueString();
-    console.log("extern name:", name);
     if (name === undefined) {
         parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_NAME_IS_NOT_VALID));
         return undefined;
     }
-    // Eating function name
     parser.next();
 
+    // Parameters for function externs
     let params: AstFunctionArgument[] | undefined = undefined;
     if (is_function === true) {
         params = parserParseFunctionArguments(parser);
@@ -74,6 +71,11 @@ export function parserParseExtern(parser: Parser, parent_block: AstBlock): AstEx
         return undefined;
     }
     parser.expect(TokenKeywordType.TOKEN_IDENTIFIER);
+
+    if (return_type === undefined) {
+        parser.pushError("Invalid data type as return type of extern");
+        return undefined;
+    }
 
     const ast: AstExtern = new AstExtern(name, params, return_type, generate_name);
     return ast;

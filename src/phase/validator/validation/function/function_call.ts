@@ -36,8 +36,8 @@ export function validateExpressionFunctionCall(validator: Validator, block: AstB
 
     // if (node.generated_value !== undefined && node.left.value_type !== undefined && node.left.value_type.is_system) {
     if (node.generated_value !== undefined && node.left.value_type !== undefined) {
-        // console.log("is function", node.generated_value, node);
-        validator.pushExtendedFunction(node.generated_value, node.left.value_type);
+        // TODO: EXTERN
+        // validator.pushExtendedFunction(node.generated_value, node.left.value_type);
 
         const func_args: AstFunctionArgument[] = node.left.value_type.func_args;
         const user_func_args: AstFunctionParameter[] = node.parameters;

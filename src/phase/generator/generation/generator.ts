@@ -67,10 +67,6 @@ export class Generator {
         this.setTemp("");
         return temp;
     }
-
-    pushExtendedFunction(name: string, type: AstType): void {
-        this.extendedFunctions[name] = type;
-    }
     
     pushFunction(func: string): void {
         this.functions.push(func);

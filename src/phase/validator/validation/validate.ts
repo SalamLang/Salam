@@ -1,14 +1,12 @@
 import { Validator } from "./validator";
-import { validateExtern } from "./extern";
+import { validateAllExterns, validateExtern } from "./extern";
 import { validateLayout } from "./layout/layout";
 import { AstExtern } from "../../parser/parse/ast/extern";
 import { validateFunctionDeclaration } from "./function/function_declaration";
 import { AstFunctionDeclaration } from "./../../parser/parse/ast/function/function_declaration";
 
 export function validate(validator: Validator): void {
-    validator.ast.externs.forEach((node: AstExtern) => {
-        validateExtern(validator, validator.ast.block, node);
-    });
+    validateAllExterns(validator);
 
     validator.ast.functions.forEach((node: AstFunctionDeclaration) => {
         validateFunctionDeclaration(validator, validator.ast.block, node as AstFunctionDeclaration);

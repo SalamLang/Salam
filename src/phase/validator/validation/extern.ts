@@ -2,7 +2,18 @@ import { Validator } from "./validator";
 import { AstBlock } from "../../parser/parse/ast/block";
 import { AstExtern } from "../../parser/parse/ast/extern";
 import { AstType } from "../../parser/parse/ast/expression/type";
+import { AstExternType } from "../../parser/parse/ast/extern_type";
 import { validateFunctionArguments } from "./function/function_arguments";
+
+export function validateAllExterns(validator: Validator) {
+    Object.keys(validator.ast.externs).forEach((key) => {
+        const typedKey = key as AstExternType;
+        const externsArray: AstExtern[] = validator.ast.externs[typedKey];
+        externsArray.forEach((node: AstExtern) => {
+            validateExtern(validator, validator.ast.block, node);
+        });
+    });
+};
 
 export function validateExtern(validator: Validator, parent_block: AstBlock, extern: AstExtern): void {
     const table_func: AstType | undefined = parent_block.lookUp(extern.name);
@@ -23,13 +34,10 @@ export function validateExtern(validator: Validator, parent_block: AstBlock, ext
         }
     }
 
-
-    let generated_name: string = extern.generate_name;
-
-    if (extern.args === undefined) {
+    if (extern.kind === AstExternType.EXTERN_VAR && extern.return_type) {
         parent_block.symbol_table.addSymbol(extern.name, extern.return_type);
-    } else {
-        const extern_type: AstType = AstType.createFunction(extern.name, generated_name, extern.args, extern.return_type);
+    } else if (extern.kind === AstExternType.EXTERN_FN && extern.args && extern.return_type) {
+        const extern_type: AstType = AstType.createFunction(extern.name, extern.generate_name, extern.args, extern.return_type);
         parent_block.symbol_table.addSymbol(extern.name, extern_type);
     }
 };

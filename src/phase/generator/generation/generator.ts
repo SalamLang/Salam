@@ -6,6 +6,7 @@ import { AstType } from '../../parser/parse/ast/expression/type';
 import { generateFunctionArguments } from './statement/function_arguments';
 import { generatorMessageRenderer } from './../../../common/message/message';
 import { GeneratorMessageKeys } from './../../../common/message/generator/generator';
+import { AstExternType } from '../../parser/parse/ast/extern_type';
 
 export class Generator {
     private static tempVarCounter: number = 0;
@@ -41,13 +42,6 @@ export class Generator {
         this.packages = packages;
         this.temp = '';
 
-        // this.libraries.push("#include <stdio.h>");
-        // this.libraries.push("#include <stdlib.h>");
-        // this.libraries.push("#include <string.h>");
-        // this.libraries.push("#include <stdbool.h>");
-        // this.libraries.push("#include <math.h>");
-        // this.libraries.push("#include <time.h>");
-        // this.libraries.push("#include <ctype.h>");
     }
     
     static getTempVar(): string {
@@ -145,6 +139,60 @@ export class Generator {
         return this.source;
     }
 
+    getGeneratedSourceExternIncludes(): string {
+        let result: string = "// Extern Includes\n";
+        if (this.ast.externs[AstExternType.EXTERN_INC].length > 0) {
+            for (const include of this.ast.externs[AstExternType.EXTERN_INC]) {
+                result += "#include ";
+                if (include.name.startsWith("./")) {
+                    result += `"${include.name}"`;
+                } else {
+                    result += `<${include.name}>`;
+                }
+                result += "\n";
+            }
+            result += "\n";
+        }
+        return result;
+    }
+
+    getGeneratedSourceExternFunctions(): string {
+        let result: string = "// Extern Functions\n";
+        if (this.ast.externs[AstExternType.EXTERN_FN].length > 0) {
+            for (const fn of this.ast.externs[AstExternType.EXTERN_FN]) {
+                if (fn.return_type && fn.args) {
+                    result += "extern ";
+                    result += generateType(this, fn.return_type);
+                    result += " ";
+                    result += fn.generate_name;
+                    result += "(";
+                    result += generateFunctionArguments(this, fn.args);
+                    result += ")";
+                    result += ";\n";
+                }
+            }
+            result += "\n";
+        }
+        return result;
+    }
+
+    getGeneratedSourceExternVariables(): string {
+        let result: string = "// Extern Variables\n";
+        if (this.ast.externs[AstExternType.EXTERN_VAR].length > 0) {
+            for (const fn of this.ast.externs[AstExternType.EXTERN_VAR]) {
+                if (fn.return_type && fn.args) {
+                    result += "extern ";
+                    result += generateType(this, fn.return_type);
+                    result += " ";
+                    result += fn.generate_name;
+                    result += ";\n";
+                }
+            }
+            result += "\n";
+        }
+        return result;
+    }
+
     getGeneratedSourceC(): string {
         let result: string = "";
 
@@ -152,51 +200,15 @@ export class Generator {
             return result;
         }
 
-        result += "// Libraries\n";
-        if (this.extern
-        // if (this.libraries.length > 0) {
-        //     result += this.libraries.join("\n");
-        //     result += "\n";
-        //     result += "\n";
-        // }
+        result += this.getGeneratedSourceExternIncludes();
+        result += this.getGeneratedSourceExternFunctions();
+        result += this.getGeneratedSourceExternVariables();
 
         const packagesEntries = Object.entries(this.packages);
         if (packagesEntries.length > 0) {
             result += "// External libraries\n";
             for (const [name, value] of packagesEntries) {
                 result += "// Import " + name + "\n";
-            }
-            result += "\n";
-        }
-
-        const extendedFunctionsEntries = Object.entries(this.extendedFunctions);
-        if (extendedFunctionsEntries.length > 0) {
-            result += "// Extended functions\n";
-            for (const [name, value] of extendedFunctionsEntries) {
-                if (value && value.func_return_type && value.func_args) {
-                    result += "extern ";
-                    result += generateType(this, value.func_return_type);
-                    result += " ";
-                    result += name;
-                    result += "(";
-                    result += generateFunctionArguments(this, value.func_args);
-                    result += ");\n";
-                }
-            }
-            result += "\n";
-        }
-
-        const extendedVariablesEntries = Object.entries(this.extendedVariables);
-        if (extendedVariablesEntries.length > 0) {
-            result += "// Extended variables\n";
-            for (const [name, value] of extendedVariablesEntries) {
-                if (value) {
-                    result += "extern ";
-                    result += generateType(this, value);
-                    result += " ";
-                    result += name;
-                    result += ";\n";
-                }
             }
             result += "\n";
         }

@@ -26,7 +26,7 @@ export function includeLayoutString(generator: Generator, source: string, fileNa
     validate(_validator);
     checkError(_parser, _validator, undefined);
 
-    const _generator = new Generator(_validator.ast, _validator.extendedFunctions, _validator.extendedVariables, _validator.packages);
+    const _generator = new Generator(_validator.ast, _validator.packages);
     if (_generator.ast.layout !== undefined) {
         _generator.ast.layout.root.generate_name = "div";
         const result = generateLayoutNode(generator, _generator.ast.layout.root);

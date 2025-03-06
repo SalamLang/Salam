@@ -5,4 +5,4 @@ export enum AstExternType {
     EXTERN_OBJ = "EXTERN_OBJ",
     EXTERN_INC = "EXTERN_INC",
     EXTERN_HEADER = "EXTERN_HEADER",
-}
+};

@@ -21,13 +21,11 @@ export class Generator {
     heads: string[];
     functions: string[];
     sign_functions: string[];
-    libraries: string[];
-    extendedFunctions: Record<string, AstType>;
-    extendedVariables: Record<string, AstType>;
+    // libraries: string[];
     packages: Record<string, AstType>;
     temp: string;
 
-    constructor(ast: AstProgram, extendedFunctions: Record<string, AstType>, extendedVariables: Record<string, AstType>, packages: Record<string, AstType>) {
+    constructor(ast: AstProgram, packages: Record<string, AstType>) {
         this.ast = ast;
         this.errors = [];
         this.indentLevel = 0;
@@ -39,19 +37,17 @@ export class Generator {
         this.heads = [];
         this.functions = [];
         this.sign_functions = [];
-        this.libraries = [];
-        this.extendedFunctions = extendedFunctions;
-        this.extendedVariables = extendedVariables;
+        // this.libraries = [];
         this.packages = packages;
         this.temp = '';
 
-        this.libraries.push("#include <stdio.h>");
-        this.libraries.push("#include <stdlib.h>");
-        this.libraries.push("#include <string.h>");
-        this.libraries.push("#include <stdbool.h>");
-        this.libraries.push("#include <math.h>");
-        this.libraries.push("#include <time.h>");
-        this.libraries.push("#include <ctype.h>");
+        // this.libraries.push("#include <stdio.h>");
+        // this.libraries.push("#include <stdlib.h>");
+        // this.libraries.push("#include <string.h>");
+        // this.libraries.push("#include <stdbool.h>");
+        // this.libraries.push("#include <math.h>");
+        // this.libraries.push("#include <time.h>");
+        // this.libraries.push("#include <ctype.h>");
     }
     
     static getTempVar(): string {
@@ -157,11 +153,12 @@ export class Generator {
         }
 
         result += "// Libraries\n";
-        if (this.libraries.length > 0) {
-            result += this.libraries.join("\n");
-            result += "\n";
-            result += "\n";
-        }
+        if (this.extern
+        // if (this.libraries.length > 0) {
+        //     result += this.libraries.join("\n");
+        //     result += "\n";
+        //     result += "\n";
+        // }
 
         const packagesEntries = Object.entries(this.packages);
         if (packagesEntries.length > 0) {

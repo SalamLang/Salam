@@ -78,6 +78,19 @@ export class Parser {
         return false;
     }
 
+    skipIdentifier(value: string): boolean {
+        if (this.has(TokenKeywordType.TOKEN_IDENTIFIER) && this.currentToken.data?.getValueString() === value) {
+            this.index++;
+            return true;
+        }
+        return false;
+    }
+
+    skipIdentifiers(values: Record<LanguageID, string>): boolean {
+        const value: string = values[this.getLanguageId()];
+        return this.skipIdentifier(value);
+    }
+
     next(): void {
         if (this.index !== this.lexer.tokens.length) {
             this.index++;

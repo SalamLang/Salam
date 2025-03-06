@@ -1,16 +1,19 @@
 import { AstNode } from './node';
 import { AstType } from './expression/type';
+import { AstExternType } from './extern_type';
 import { stringify } from './../../../../serializer';
 import { AstFunctionArgument } from './function/function_argument';
 
 export class AstExtern extends AstNode {
+    kind: AstExternType;
     name: string;
     args: AstFunctionArgument[] | undefined;
-    return_type: AstType;
+    return_type: AstType | undefined;
     generate_name: string;
 
-    constructor(name: string, args: AstFunctionArgument[] | undefined, return_type: AstType, generate_name: string) {
+    constructor(kind: AstExternType, name: string, args: AstFunctionArgument[] | undefined, return_type: AstType | undefined, generate_name: string) {
         super("Extern");
+        this.kind = kind;
         this.name = name;
         this.args = args;
         this.generate_name = generate_name;

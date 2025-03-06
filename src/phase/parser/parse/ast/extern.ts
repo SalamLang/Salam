@@ -5,11 +5,11 @@ import { AstFunctionArgument } from './function/function_argument';
 
 export class AstExtern extends AstNode {
     name: string;
-    args: AstFunctionArgument[];
+    args: AstFunctionArgument[] | undefined;
     return_type: AstType;
     generate_name: string;
 
-    constructor(name: string, args: AstFunctionArgument[], return_type: AstType, generate_name: string) {
+    constructor(name: string, args: AstFunctionArgument[] | undefined, return_type: AstType, generate_name: string) {
         super("Extern");
         this.name = name;
         this.args = args;

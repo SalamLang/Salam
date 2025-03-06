@@ -1,0 +1,8 @@
+export enum AstExternType {
+    EXTERN_FN = "EXTERN_FN",
+    EXTERN_VAR = "EXTERN_VAR",
+    EXTERN_LIB = "EXTERN_LIB",
+    EXTERN_OBJ = "EXTERN_OBJ",
+    EXTERN_INC = "EXTERN_INC",
+    EXTERN_HEADER = "EXTERN_HEADER",
+}

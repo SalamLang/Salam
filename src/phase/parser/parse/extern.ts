@@ -3,40 +3,71 @@ import { AstBlock } from './ast/block';
 import { AstExtern } from './ast/extern';
 import { parseType } from './expression/type';
 import { AstType } from './ast/expression/type';
+import { AstExternType } from './ast/extern_type';
+import { Token } from '../../lexer/tokenizer/token';
+import { LanguageID } from '../../../common/language/language';
 import { AstFunctionArgument } from './ast/function/function_argument';
 import { parserMessageRenderer } from '../../../common/message/message';
 import { ParserMessageKeys } from '../../../common/message/parser/parser';
 import { parserParseFunctionArguments } from './function/function_attributes';
-import { TokenKeywordType, TokenOperatorType } from '../../lexer/tokenizer/type';
+import { TokenKeywordType, TokenOperatorType, TokenValueType } from '../../lexer/tokenizer/type';
 
-export function parserParseExtern(parser: Parser, parent_block: AstBlock): AstExtern | undefined {
-    parser.expect(TokenKeywordType.TOKEN_EXTERN);
-    let is_function: boolean = false;
-    if (parser.skip(TokenKeywordType.TOKEN_FN)) {
-        is_function = true;
+export function parserParseExternHeader(parser: Parser, parent_block: AstBlock): AstExtern | undefined {
+    const name: Token | undefined = parser.expectGet(TokenValueType.TOKEN_STRING);
+    if (name === undefined) {
+        parser.pushError("Expected a string value for the extern header but got something else.");
+        return undefined;
     }
+    const generate_name: string = name?.data?.getValueString() || "";
+    const ast: AstExtern = new AstExtern(AstExternType.EXTERN_HEADER, generate_name, undefined, undefined, generate_name);
+    return ast;
+};
 
-    // if (parser.currentToken.isKeyword) {
-    //     parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_NAME_IS_NOT_VALID_IDENTIFIER));
-    //     return undefined;
-    // } else if (
-    //     (is_function === true && parser.currentToken.isDefinedIdentifier === true) ||
-    //     (is_function === false && parser.currentToken.isDefinedIdentifier === true)
-    // ) {
-    //     parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_NAME_IS_RESERVED_IN_SALAM));
-    //     return undefined;
-    // }
-
-    let return_type: AstType | undefined = undefined;
-    if (is_function === false) {
-        return_type = parseType(parser);
-        if (return_type === undefined) {
-            parser.pushError("Invalid data type as return type of extern variable");
-            return undefined;
-        }
+export function parserParseExternLib(parser: Parser, parent_block: AstBlock): AstExtern | undefined {
+    const name: Token | undefined = parser.expectGet(TokenValueType.TOKEN_STRING);
+    if (name === undefined) {
+        parser.pushError("Expected a string value for the extern library but got something else.");
+        return undefined;
     }
+    const generate_name: string = name?.data?.getValueString() || "";
+    const ast: AstExtern = new AstExtern(AstExternType.EXTERN_LIB, generate_name, undefined, undefined, generate_name);
+    return ast;
+};
 
-    // Eating function name
+export function parserParseExternInc(parser: Parser, parent_block: AstBlock): AstExtern | undefined {
+    const name: Token | undefined = parser.expectGet(TokenValueType.TOKEN_STRING);
+    if (name === undefined) {
+        parser.pushError("Expected a string value for the extern include but got something else.");
+        return undefined;
+    }
+    const generate_name: string = name?.data?.getValueString() || "";
+    const ast: AstExtern = new AstExtern(AstExternType.EXTERN_INC, generate_name, undefined, undefined, generate_name);
+    return ast;
+};
+
+export function parserParseExternObj(parser: Parser, parent_block: AstBlock): AstExtern | undefined {
+    const name: Token | undefined = parser.expectGet(TokenValueType.TOKEN_STRING);
+    if (name === undefined) {
+        parser.pushError("Expected a string value for the extern object but got something else.");
+        return undefined;
+    }
+    const generate_name: string = name?.data?.getValueString() || "";
+    const ast: AstExtern = new AstExtern(AstExternType.EXTERN_OBJ, generate_name, undefined, undefined, generate_name);
+    return ast;
+};
+
+// if (parser.currentToken.isKeyword) {
+//     parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_NAME_IS_NOT_VALID_IDENTIFIER));
+//     return undefined;
+// } else if (
+//     (is_function === true && parser.currentToken.isDefinedIdentifier === true) ||
+//     (is_function === false && parser.currentToken.isDefinedIdentifier === true)
+// ) {
+//     parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_NAME_IS_RESERVED_IN_SALAM));
+//     return undefined;
+// }
+
+export function parserParseExternFn(parser: Parser, parent_block: AstBlock): AstExtern | undefined {
     const name: string | undefined = parser.currentToken.data?.getValueString();
     if (name === undefined) {
         parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_NAME_IS_NOT_VALID));
@@ -44,39 +75,84 @@ export function parserParseExtern(parser: Parser, parent_block: AstBlock): AstEx
     }
     parser.next();
 
-    // Parameters for function externs
     let params: AstFunctionArgument[] | undefined = undefined;
-    if (is_function === true) {
-        params = parserParseFunctionArguments(parser);
-        if (params === undefined) {
-            parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_PARAMETERS_ARE_NOT_VALID));
+    params = parserParseFunctionArguments(parser);
+    if (params === undefined) {
+        parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_PARAMETERS_ARE_NOT_VALID));
+        return undefined;
+    }
+    
+    let return_type: AstType | undefined = undefined;
+    if (parser.skip(TokenOperatorType.TOKEN_MEMBER_POINTER)) {
+        return_type = parseType(parser);
+        if (return_type === undefined) {
+            parser.pushError("Invalid data type as return type of extern function " + name);
             return undefined;
         }
-        
-        if (parser.skip(TokenOperatorType.TOKEN_MEMBER_POINTER)) {
-            return_type = parseType(parser);
-            if (return_type === undefined) {
-                parser.pushError("Invalid data type as return type of extern function " + name);
-                return undefined;
-            }
-        } else {
-            return_type = AstType.createVoid();
-        }
+    } else {
+        return_type = AstType.createVoid();
     }
 
     parser.expect(TokenOperatorType.TOKEN_COLON);
+
     const generate_name: string | undefined = parser.currentToken.data?.getValueString();
     if (generate_name === undefined) {
-        parser.pushError("Invalid data as generate name of an externed " + (is_function ? "function": "variable"));
+        parser.pushError("Invalid data as generate name of an externed function");
         return undefined;
     }
     parser.expect(TokenKeywordType.TOKEN_IDENTIFIER);
 
+    const ast: AstExtern = new AstExtern(AstExternType.EXTERN_FN, name, params, return_type, generate_name);
+    return ast;
+};
+
+export function parserParseExternVar(parser: Parser, parent_block: AstBlock): AstExtern | undefined {
+    let return_type: AstType | undefined = parseType(parser);
     if (return_type === undefined) {
-        parser.pushError("Invalid data type as return type of extern");
+        parser.pushError("Invalid data type as return type of extern variable");
         return undefined;
     }
 
-    const ast: AstExtern = new AstExtern(name, params, return_type, generate_name);
+    const name: string | undefined = parser.currentToken.data?.getValueString();
+    if (name === undefined) {
+        parser.pushError(parserMessageRenderer(parser.getLanguageId(), ParserMessageKeys.PARSER_FUNCTION_NAME_IS_NOT_VALID));
+        return undefined;
+    }
+    parser.next();
+
+    parser.expect(TokenOperatorType.TOKEN_COLON);
+
+    const generate_name: string | undefined = parser.currentToken.data?.getValueString();
+    if (generate_name === undefined) {
+        parser.pushError("Invalid data as generate name of an externed variable");
+        return undefined;
+    }
+    parser.expect(TokenKeywordType.TOKEN_IDENTIFIER);
+
+    const ast: AstExtern = new AstExtern(AstExternType.EXTERN_VAR, name, undefined, return_type, generate_name);
     return ast;
+};
+
+export function parserParseExtern(parser: Parser, parent_block: AstBlock): AstExtern | undefined {
+    parser.expect(TokenKeywordType.TOKEN_EXTERN);
+
+    if (parser.skip(TokenKeywordType.TOKEN_FN)) {
+        console.log("fn");
+        return parserParseExternFn(parser, parent_block);
+    } else if (parser.skipIdentifiers({[LanguageID.LanguageEnglish]: "library", [LanguageID.LanguagePersian]: "کتابخانه"})) {
+        console.log("library");
+        return parserParseExternLib(parser, parent_block);
+    } else if (parser.skipIdentifiers({[LanguageID.LanguageEnglish]: "include", [LanguageID.LanguagePersian]: "فراخوانی"})) {
+        console.log("include");
+        return parserParseExternInc(parser, parent_block);
+    } else if (parser.skipIdentifiers({[LanguageID.LanguageEnglish]: "header", [LanguageID.LanguagePersian]: "هدر"})) {
+        console.log("header");
+        return parserParseExternHeader(parser, parent_block);
+    } else if (parser.skipIdentifiers({[LanguageID.LanguageEnglish]: "object", [LanguageID.LanguagePersian]: "شی"})) {
+        console.log("object");
+        return parserParseExternObj(parser, parent_block);
+    } else {
+        console.log("var");
+        return parserParseExternVar(parser, parent_block);
+    }
 };

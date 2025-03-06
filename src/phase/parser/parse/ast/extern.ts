@@ -22,10 +22,11 @@ export class AstExtern extends AstNode {
 
     stringify(wantsJson: boolean = true): string | object {
         const obj: object = {
+            kind: this.kind,
             name: this.name,
             args: this.args,
-            return_type: this.return_type.stringify(false),
             generate_name: this.generate_name,
+            return_type: this.return_type?.stringify(false),
         };
         return stringify(obj, wantsJson);
     }

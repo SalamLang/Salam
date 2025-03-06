@@ -179,12 +179,12 @@ export class Generator {
     getGeneratedSourceExternVariables(): string {
         let result: string = "// Extern Variables\n";
         if (this.ast.externs[AstExternType.EXTERN_VAR].length > 0) {
-            for (const fn of this.ast.externs[AstExternType.EXTERN_VAR]) {
-                if (fn.return_type && fn.args) {
+            for (const variable of this.ast.externs[AstExternType.EXTERN_VAR]) {
+                if (variable.return_type) {
                     result += "extern ";
-                    result += generateType(this, fn.return_type);
+                    result += generateType(this, variable.return_type);
                     result += " ";
-                    result += fn.generate_name;
+                    result += variable.generate_name;
                     result += ";\n";
                 }
             }

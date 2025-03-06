@@ -1,7 +1,6 @@
 import { Validator } from "./validator";
-import { validateAllExterns, validateExtern } from "./extern";
+import { validateAllExterns } from "./extern";
 import { validateLayout } from "./layout/layout";
-import { AstExtern } from "../../parser/parse/ast/extern";
 import { validateFunctionDeclaration } from "./function/function_declaration";
 import { AstFunctionDeclaration } from "./../../parser/parse/ast/function/function_declaration";
 

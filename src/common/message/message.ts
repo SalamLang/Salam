@@ -56,6 +56,7 @@ export function parserMessageRenderer(
   messageKey: ParserMessageKeys,
   ...args: string[]
 ): string {
+  console.log(messageKey);
   return messageRenderer('PARSER', parserMessages, language, messageKey, ...args);
 };
 

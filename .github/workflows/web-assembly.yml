@@ -1,88 +1,67 @@
 name: Build and Deploy WebAssembly
+
 on:
   push:
     branches:
+      - next-generation-ts
       - main
+
 permissions:
   contents: write
+
 jobs:
   build-deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Cache Emscripten SDK
-        uses: actions/cache@v4
-        with:
-          path: emsdk
-          key: ${{ runner.os }}-emsdk-${{ hashFiles('emsdk/.emscripten') }}
-          restore-keys: |
-            ${{ runner.os }}-emsdk-
-      - name: Install Emscripten (if not cached)
-        run: |
-          if [ ! -d "emsdk" ]; then
-            git clone https://github.com/emscripten-core/emsdk.git
-          fi
-          cd emsdk
-          ./emsdk install latest
-          ./emsdk activate latest
 
-          chmod +x emsdk_env.sh
-          source emsdk_env.sh
-      - name: Install Node.js and npx
+      - name: Install Bun
         run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm
-          npx --version
-      - name: Cache apt package manager's archives
-        uses: actions/cache@v4
-        with:
-          path: /var/cache/apt/archives
-          key: ${{ runner.os }}-apt-cache-${{ hashFiles('**/apt-packages-list.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-apt-cache-
-      - name: Source Emscripten environment
-        run: |
-          echo "EMSDK=/home/runner/work/Salam/Salam/emsdk" >> $GITHUB_ENV
-          echo "PATH=$PATH:/home/runner/work/Salam/Salam/emsdk:/home/runner/work/Salam/Salam/emsdk/upstream/emscripten" >> $GITHUB_ENV
-      - name: Run WebAssembly build script
-        run: bash build-webassembly.sh
-      - name: Clone Salam-Editor repository
-        run: |
-          FIRST_NAME="Max"
-          DOMAIN="gmail.com"
-          EMAIL="${FIRST_NAME}BaseCode@${DOMAIN}"
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.bun/bin:$PATH"
+          bun --version
 
+      - name: Setup GIT config
+        run: |
           git clone https://github.com/SalamLang/Salam-Editor.git
 
           git config --global user.name "Max Base (Salam)"
           git config --global user.email "$EMAIL"
+
+      - name: Run WebAssembly build script
+        run: |
+          cd src
+          bunx esbuild main.ts --bundle --platform=browser --outfile=../salam-wa.js --external:fs --external:path
+          cd ..
+          bunx terser salam-wa.js --compress --mangle -o salam-wa.js
+          bunx javascript-obfuscator salam-wa.js --output salam-wa.js --compact true --control-flow-flattening true
+
       - name: Calculate checksums of original files
         id: original_checksums
         run: |
-          ls -l salam-wa.js salam-wa.wasm
+          ls -l salam-wa.js
           sha256sum salam-wa.js > js-checksum.txt || echo "Error calculating checksum for salam-wa.js"
-          sha256sum salam-wa.wasm > wasm-checksum.txt || echo "Error calculating checksum for salam-wa.wasm"
-
           echo "JS_CHECKSUM=$(cat js-checksum.txt | awk '{ print $1 }')" >> $GITHUB_ENV
-          echo "WASM_CHECKSUM=$(cat wasm-checksum.txt | awk '{ print $1 }')" >> $GITHUB_ENV
+
       - name: Calculate checksums of new files in Salam-Editor
         id: new_checksums
         run: |
-          cd Salam-Editor/public/
-          ls -l salam-wa.js salam-wa.wasm
+          cd ..
+          cd Salam-Editor
+          git checkout dev
+          cd src/scripts/
+          ls -l salam-wa.js
           sha256sum salam-wa.js > js-checksum-editor.txt || echo "Error calculating checksum for salam-wa.js"
-          sha256sum salam-wa.wasm > wasm-checksum-editor.txt || echo "Error calculating checksum for salam-wa.wasm"
-
           echo "JS_CHECKSUM_EDITOR=$(cat js-checksum-editor.txt | awk '{ print $1 }')" >> $GITHUB_ENV
-          echo "WASM_CHECKSUM_EDITOR=$(cat wasm-checksum-editor.txt | awk '{ print $1 }')" >> $GITHUB_ENV
+
       - name: Commit and push changes if needed
-        if: ${{ env.JS_CHECKSUM != env.JS_CHECKSUM_EDITOR || env.WASM_CHECKSUM != env.WASM_CHECKSUM_EDITOR }}
+        if: ${{ env.JS_CHECKSUM != env.JS_CHECKSUM_EDITOR }}
         run: |
-          cp ./salam-wa.js ./Salam-Editor/public/
-          cp ./salam-wa.wasm ./Salam-Editor/public/
+          cp ./salam-wa.js ./Salam-Editor/src/scripts/
           cd Salam-Editor
           sudo chown -R www-data:www-data *
-          git add public/salam-wa.js public/salam-wa.wasm
+          git add src/scripts/salam-wa.js
           git commit -m "Release: Update WebAssembly files"
           git push https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/SalamLang/Salam-Editor.git

@@ -7,7 +7,8 @@
  * @returns {void}
  *
  */
-void buffer_append_wchar(buffer_t *str, wchar_t c) {
+void buffer_append_wchar(buffer_t *str, wchar_t c)
+{
     DEBUG_ME;
     char buffer[30];
     int len = wctomb(buffer, c);

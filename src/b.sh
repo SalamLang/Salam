@@ -20,6 +20,12 @@ items=(
     "utility/memory/memory_realloc/memory_realloc.c"
     # file
     "utility/file/file_reads/file_reads.c"
+    "utility/file/file_exists/file_exists.c"
+    "utility/file/file_write/file_write.c"
+    "utility/file/file_delete/file_delete.c"
+    "utility/file/file_append/file_append.c"
+    "utility/file/file_create/file_create.c"
+    "utility/file/file_size/file_size.c"
     # string
     "utility/string/string_hash/string_hash.c"
     "utility/string/string_length/string_length.c"
@@ -40,12 +46,15 @@ items=(
     "utility/hashmap/hashmap_put/hashmap_put.c"
     "utility/hashmap/hashmap_remove/hashmap_remove.c"
     "utility/hashmap/hashmap_size/hashmap_size.c"
+    # io
+    "utility/io/io_directory/io_directory.c"
 
     # ------------- stage
     # scanner
     "stage/scanner/scanner_free/scanner_free.c"
     "stage/scanner/scanner_create/scanner_create.c"
     "stage/scanner/scanner_log/scanner_log.c"
+    "stage/scanner/scanner_set/scanner_set.c"
     # token
     "stage/token/token_create/token_create.c"
     "stage/token/token_free/token_free.c"

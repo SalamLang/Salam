@@ -6,9 +6,14 @@
 typedef struct scanner_t
 {
     char* source;                // Pointer to the source code
+    char* directory;             // Directory of the source code
+    char* file_name;             // File name of the source code
+
     int line;                    // Current line number
     int column;                  // Current column number
     int index;                   // Current index in the source code
+    int length;                  // Length of the source code
+
     array_t* tokens;             // Array of tokens
 } scanner_t;
 

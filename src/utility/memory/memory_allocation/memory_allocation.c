@@ -4,7 +4,7 @@ void* memory_allocation(size_t siz)
 {
     void* ptr = malloc(siz);
     if (ptr == NULL) {
-        log_fatal("Memory allocation failed\n");
+        log_fatal("Memory allocation failed (soft)\n");
     }
     return ptr;
 }

@@ -42,9 +42,15 @@ items=(
     "utility/hashmap/hashmap_size/hashmap_size.c"
 
     # ------------- stage
+    # scanner
     "stage/scanner/scanner_free/scanner_free.c"
     "stage/scanner/scanner_create/scanner_create.c"
     "stage/scanner/scanner_log/scanner_log.c"
+    # token
+    "stage/token/token_create/token_create.c"
+    "stage/token/token_free/token_free.c"
+    "stage/token/token_name/token_name.c"
+    "stage/token/token_type/token_type.c"
 
     # ------------- entry point
     "main.c"

@@ -1,0 +1,57 @@
+import {LanguageID} from './../../common/language/language';
+import {languages} from './../data/element/language';
+import {RuntimeElement} from './../element';
+import {RuntimeElementAttribute} from './../element_attribute';
+import {RuntimeElementAttributeType} from './../element_attribute_type';
+import {RuntimeElementAttributeValue} from './../element_attribute_value';
+
+export class RuntimeElementAudio extends RuntimeElement {
+  constructor() {
+    super(true, 'audio');
+    this.addText(LanguageID.LanguageEnglish, 'audio');
+    this.addText(LanguageID.LanguagePersian, 'آوا');
+
+    this.addAttribute(
+      new RuntimeElementAttribute(
+        RuntimeElementAttributeType.Boolean,
+        'autoplay'
+      )
+        .addText(LanguageID.LanguageEnglish, 'autoplay')
+        .addText(LanguageID.LanguagePersian, 'خودپخش')
+    );
+    this.addAttribute(
+      new RuntimeElementAttribute(
+        RuntimeElementAttributeType.Boolean,
+        'controls'
+      )
+        .addText(LanguageID.LanguageEnglish, 'controls')
+        .addText(LanguageID.LanguagePersian, 'کنترل')
+    );
+    this.addAttribute(
+      new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'loop')
+        .addText(LanguageID.LanguageEnglish, 'loop')
+        .addText(LanguageID.LanguagePersian, 'تکرار')
+    );
+    this.addAttribute(
+      new RuntimeElementAttribute(RuntimeElementAttributeType.Boolean, 'muted')
+        .addText(LanguageID.LanguageEnglish, 'muted')
+        .addText(LanguageID.LanguagePersian, 'خموش')
+    );
+    this.addAttribute(
+      new RuntimeElementAttribute(RuntimeElementAttributeType.String, 'preload')
+        .addText(LanguageID.LanguageEnglish, 'preload')
+        .addText(LanguageID.LanguagePersian, 'پیش بارگیری')
+        .addReservedValues([
+          new RuntimeElementAttributeValue('auto')
+            .addText(LanguageID.LanguageEnglish, 'auto')
+            .addText(LanguageID.LanguagePersian, 'خودکار'),
+          new RuntimeElementAttributeValue('metadata')
+            .addText(LanguageID.LanguageEnglish, 'metadata')
+            .addText(LanguageID.LanguagePersian, 'داده'),
+          new RuntimeElementAttributeValue('none')
+            .addText(LanguageID.LanguageEnglish, 'none')
+            .addText(LanguageID.LanguagePersian, 'پیشفرض'),
+        ])
+    );
+  }
+}

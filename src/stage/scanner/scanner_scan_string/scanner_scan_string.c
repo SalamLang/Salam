@@ -24,7 +24,7 @@ void scanner_scan_string(scanner_t *scanner, int type) {
         buffer_append_str(value, uc);
         memory_destroy(uc);
 
-        uc = char_utf8_decode(scanner->source, &scanner->index, &num_bytes);
+        uc = utf8_char_decode(scanner->source, &scanner->index, &num_bytes);
     }
 
     if ((type == 0 && string_compare(uc, "\"") != 0) ||

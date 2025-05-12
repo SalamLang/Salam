@@ -1,3 +1,5 @@
+#include <utility/buffer/buffer_equals/buffer_equals.h>
+
 /**
  *
  * @function buffer_equals

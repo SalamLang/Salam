@@ -1,3 +1,5 @@
+#include <utility/buffer/buffer_append_str/buffer_append_str.h>
+
 /**
  *
  * @function buffer_append_str

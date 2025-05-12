@@ -1,3 +1,5 @@
+#include <utility/buffer/buffer_print/buffer_print.h>
+
 /**
  *
  * @function buffer_print

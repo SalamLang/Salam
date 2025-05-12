@@ -1,7 +1,7 @@
 #include <stddef.h>  // for NULL
 
 // memory
-#include <utility/memory/memory_free/memory_free.h>
+#include <utility/memory/memory_destroy/memory_destroy.h>
 // token
 #include <stage/token/type.h>
 

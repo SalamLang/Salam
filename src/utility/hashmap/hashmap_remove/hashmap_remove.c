@@ -12,8 +12,8 @@ void hashmap_remove(hashmap_t* map, const char* key)
             else map->buckets[idx] = curr->next;
 
             if (map->free_value) map->free_value(curr->value);
-            memory_free(curr->key);
-            memory_free(curr);
+            memory_destroy(curr->key);
+            memory_destroy(curr);
             map->size--;
             return;
         }

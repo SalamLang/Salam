@@ -13,8 +13,33 @@ items=(
     # memory
     "utility/memory/memory_free/memory_free.c"
     "utility/memory/memory_allocation/memory_allocation.c"
+    "utility/memory/memory_allocation_soft/memory_allocation_soft.c"
+    "utility/memory/memory_calloc/memory_calloc.c"
+    "utility/memory/memory_copy/memory_copy.c"
+    "utility/memory/memory_move/memory_move.c"
+    "utility/memory/memory_realloc/memory_realloc.c"
     # file
     "utility/file/file_reads/file_reads.c"
+    # string
+    "utility/string/string_hash/string_hash.c"
+    "utility/string/string_length/string_length.c"
+    "utility/string/string_compare/string_compare.c"
+    "utility/string/string_duplicate/string_duplicate.c"
+    # array
+    "utility/array/array_append/array_append.c"
+    "utility/array/array_create/array_create.c"
+    "utility/array/array_delete/array_delete.c"
+    "utility/array/array_free/array_free.c"
+    "utility/array/array_get/array_get.c"
+    "utility/array/array_prepend/array_prepend.c"
+    "utility/array/array_resize/array_resize.c"
+    "utility/array/array_size/array_size.c"
+    # hashmap
+    "utility/hashmap/hashmap_create/hashmap_create.c"
+    "utility/hashmap/hashmap_free/hashmap_free.c"
+    "utility/hashmap/hashmap_put/hashmap_put.c"
+    "utility/hashmap/hashmap_remove/hashmap_remove.c"
+    "utility/hashmap/hashmap_size/hashmap_size.c"
 
     # ------------- stage
     "stage/scanner/scanner_free/scanner_free.c"

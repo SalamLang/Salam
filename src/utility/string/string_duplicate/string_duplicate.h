@@ -4,4 +4,4 @@
 // string
 #include <utility/string/string_length/string_length.h>
 
-static char* string_duplicate(const char* s);
+char* string_duplicate(const char* s);

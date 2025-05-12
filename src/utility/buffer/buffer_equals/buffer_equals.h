@@ -1,3 +1,6 @@
+#include <stdbool.h> // for bool
+#include <string.h> // for strcmp
+
 // base
 #include <base.h>
 

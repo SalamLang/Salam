@@ -11,9 +11,9 @@
 char *buffer_lower_str(const char *str)
 {
     DEBUG_ME;
-    char *buffer = buffer_strdup(str);
+    char *buffer = string_duplicate(str);
 
-    for (size_t i = 0; i < strlen(buffer); i++) {
+    for (size_t i = 0; i < string_length(buffer); i++) {
         buffer[i] = tolower(buffer[i]);
     }
 

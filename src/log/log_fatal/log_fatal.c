@@ -1,4 +1,4 @@
-#include "log_fatal.h"
+#include <log/log_fatal/log_fatal.h>
 
 void log_fatal(const char* format, ...)
 {

@@ -1,3 +1,5 @@
+#include <utility/string/string_ends/string_ends.h>
+
 /**
  *
  * @function string_ends

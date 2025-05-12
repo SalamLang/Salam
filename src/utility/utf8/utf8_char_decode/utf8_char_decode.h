@@ -10,6 +10,9 @@
 // log
 #include <utility/log/log_fatal/log_fatal.h>
 
+// memory
+#include <utility/memory/memory_allocation/memory_allocation.h>
+
 char *utf8_char_decode(char *source, size_t *index, size_t *num_bytes);
 
 #endif

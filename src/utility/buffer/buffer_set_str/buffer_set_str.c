@@ -1,3 +1,5 @@
+#include <utility/buffer/buffer_set_str/buffer_set_str.h>
+
 /**
  *
  * @function buffer_set_str

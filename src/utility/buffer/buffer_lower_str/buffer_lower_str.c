@@ -1,3 +1,5 @@
+#include <utility/buffer/buffer_lower_str/buffer_lower_str.h>
+
 /**
  *
  * @function buffer_lower_str

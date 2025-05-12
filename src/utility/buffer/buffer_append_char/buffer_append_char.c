@@ -1,3 +1,5 @@
+#include <utility/buffer/buffer_append_char/buffer_append_char.h>
+
 /**
  *
  * @function buffer_append_char

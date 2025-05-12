@@ -1,3 +1,5 @@
+#include <utility/buffer/buffer_append_wchar/buffer_append_wchar.h>
+
 /**
  *
  * @function buffer_append_wchar

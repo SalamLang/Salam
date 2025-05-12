@@ -1,3 +1,5 @@
+#include <utility/buffer/buffer_upper_str/buffer_upper_str.h>
+
 /**
  *
  * @function buffer_upper_str

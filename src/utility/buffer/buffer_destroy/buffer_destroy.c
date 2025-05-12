@@ -1,3 +1,5 @@
+#include <utility/buffer/buffer_destroy/buffer_destroy.h>
+
 /**
  *
  * @function buffer_destroy

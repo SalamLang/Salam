@@ -55,6 +55,7 @@ items=(
     "stage/scanner/scanner_create/scanner_create.c"
     "stage/scanner/scanner_log/scanner_log.c"
     "stage/scanner/scanner_set/scanner_set.c"
+    "stage/scanner/scanner_scan/scanner_scan.c"
     # token
     "stage/token/token_create/token_create.c"
     "stage/token/token_free/token_free.c"

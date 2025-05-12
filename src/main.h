@@ -18,3 +18,5 @@
 #include <stage/scanner/scanner_free/scanner_free.h>
 #include <stage/scanner/scanner_log/scanner_log.h>
 #include <stage/scanner/scanner_set/scanner_set.h>
+#include <stage/scanner/scanner_scan/scanner_scan.h>
+

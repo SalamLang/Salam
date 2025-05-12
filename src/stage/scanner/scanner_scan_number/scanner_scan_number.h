@@ -1,0 +1,27 @@
+// base
+#include <base.h>
+
+// memory
+#include <utility/memory/memory_destroy/memory_destroy.h>
+
+// utf8
+#include <utility/utf8/utf8_is_digit/utf8_is_digit.h>
+
+// buffer
+#include <utility/buffer/type.h>
+#include <utility/buffer/buffer_create/buffer_create.h>
+#include <utility/buffer/buffer_append_char/buffer_append_char.h>
+#include <utility/buffer/buffer_destroy/buffer_destroy.h>
+
+// string
+#include <utility/string/string_compare/string_compare.h>
+#include <utility/string/string_convert_utf8_to_english_digit/string_convert_utf8_to_english_digit.h>
+
+// scanner
+#include <stage/scanner/type.h>
+
+// token
+#include <stage/token/type.h>
+#include <stage/token/token_create/token_create.h>
+
+void scanner_scan_number(scanner_t *scanner, char *uc);

@@ -1,3 +1,6 @@
+// base
+#include <base.h>
+
 // memory
 #include <utility/memory/memory_destroy/memory_destroy.h>
 // array

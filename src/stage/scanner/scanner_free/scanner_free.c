@@ -2,6 +2,7 @@
 
 void scanner_free(scanner_t* scanner)
 {
+    array_free(scanner->tokens);
     memory_free(scanner->source);
     memory_free(scanner);
 }

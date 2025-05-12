@@ -8,7 +8,7 @@ hashmap_t* hashmap_create(size_t capacity, void (*free_value)(void*))
     map->free_value = free_value;
     map->buckets = memory_calloc(capacity, sizeof(hashmap_entry_t*));
     if (!map->buckets) {
-        memory_free(map);
+        memory_destroy(map);
         return NULL;
     }
 

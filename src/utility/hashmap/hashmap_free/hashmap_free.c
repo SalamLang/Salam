@@ -7,11 +7,11 @@ void hashmap_free(hashmap_t* map)
         while (curr) {
             hashmap_entry_t* next = curr->next;
             if (map->free_value) map->free_value(curr->value);
-            memory_free(curr->key);
-            memory_free(curr);
+            memory_destroy(curr->key);
+            memory_destroy(curr);
             curr = next;
         }
     }
-    memory_free(map->buckets);
-    memory_free(map);
+    memory_destroy(map->buckets);
+    memory_destroy(map);
 }

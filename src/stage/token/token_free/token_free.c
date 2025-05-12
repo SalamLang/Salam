@@ -4,7 +4,7 @@ void token_free(token_t* token)
 {
     if (token->value != NULL)
     {
-        memory_free(token->value);
+        memory_destroy(token->value);
         token->value = NULL;
     }
 
@@ -20,5 +20,5 @@ void token_free(token_t* token)
 
     token->type = TOKEN_TYPE_UNKNOWN;
 
-    memory_free(token);
+    memory_destroy(token);
 }

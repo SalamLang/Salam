@@ -6,7 +6,8 @@
  * @returns {char*} - Lowercase buffer
  *
  */
-char *buffer_lower_str(const char *str) {
+char *buffer_lower_str(const char *str)
+{
     DEBUG_ME;
     char *buffer = buffer_strdup(str);
 

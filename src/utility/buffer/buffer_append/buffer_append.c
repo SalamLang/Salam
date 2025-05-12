@@ -7,7 +7,8 @@
  * @returns {void}
  *
  */
-void buffer_append(buffer_t *str, const buffer_t *value) {
+void buffer_append(buffer_t *str, const buffer_t *value)
+{
     DEBUG_ME;
     if (value->length == 0) {
         return;

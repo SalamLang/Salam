@@ -6,7 +6,8 @@
  * @returns {char*} - Uppercase buffer
  *
  */
-char *buffer_upper_str(const char *str) {
+char *buffer_upper_str(const char *str)
+{
     DEBUG_ME;
     char *buffer = buffer_strdup(str);
 

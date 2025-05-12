@@ -7,7 +7,8 @@
  * @returns {void}
  *
  */
-void buffer_append_char_begin(buffer_t *str, char c) {
+void buffer_append_char_begin(buffer_t *str, char c)
+{
     DEBUG_ME;
     if (str->length + 1 >= str->capacity) {
         str->capacity *= 2;

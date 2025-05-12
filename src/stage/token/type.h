@@ -1,0 +1,9 @@
+typedef enum token_type_t {
+    TOKEN_TYPE_UNKNOWN = 0,
+    TOKEN_TYPE_IDENTIFIER,
+    TOKEN_TYPE_KEYWORD,
+    TOKEN_TYPE_STRING,
+    TOKEN_TYPE_NUMBER_INT,
+    TOKEN_TYPE_NUMBER_FLOAT,
+    TOKEN_TYPE_OPERATOR,
+} token_type_t;

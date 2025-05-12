@@ -16,8 +16,8 @@
 
 void scanner_scan(scanner_t* scanner)
 {
-    char c;
     /*
+    char c;
     while ((c = SCANNER_CURRENT) && c != '\0' &&
            scanner->index < scanner->length) {
         size_t num_bytes;
@@ -190,7 +190,7 @@ void scanner_scan(scanner_t* scanner)
                     scanner_lex_string(scanner, 2);
                 } else if (is_utf8_digit(uc)) {
                     scanner_lex_number(scanner, uc);
-                } else if (c == '_' || is_utf8_alpha(uc) || is_char_alpha(c)) {
+                } else if (c == '_' || utf8_is_alpha(uc) || is_char_alpha(c)) {
                     scanner_lex_identifier(scanner, uc);
                 } else {
                     error_scanner(

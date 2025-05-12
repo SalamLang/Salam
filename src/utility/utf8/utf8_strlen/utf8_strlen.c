@@ -1,4 +1,6 @@
-/**
+#include <utility/utf8/utf8_strlen/utf8_strlen.h>
+
+/*
  *
  * @function utf8_strlen
  * @brief Get the length of a UTF-8 string
@@ -22,9 +24,7 @@ size_t utf8_strlen(const char *str)
             str += bytes;
             len++;
         } else if (bytes == -1) {
-            perror("mbrtowc");
-
-            exit(EXIT_FAILURE);
+            log_fatal("mbrtowc");
         } else {
             break;
         }

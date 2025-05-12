@@ -1,3 +1,5 @@
+#include <utility/utf8/utf8_is_continuation_byte/utf8_is_continuation_byte.h>
+
 /**
  *
  * @function utf8_is_continuation_byte

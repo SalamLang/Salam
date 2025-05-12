@@ -13,7 +13,7 @@
 char *utf8_char_decode(char *source, size_t *index, size_t *num_bytes)
 {
     DEBUG_ME;
-    char *utf8_char = memory_allocate(5);
+    char *utf8_char = memory_allocation(5);
     utf8_char[0] = source[*index];
 
     size_t bytes = 0;
@@ -32,7 +32,7 @@ char *utf8_char_decode(char *source, size_t *index, size_t *num_bytes)
             *num_bytes = bytes;
         }
 
-        log_fatal(3, "Invalid UTF-8 encoding detected at index %d", *index);
+        log_fatal("Invalid UTF-8 encoding detected at index %d", *index);
     }
 
     for (size_t i = 1; i < bytes; ++i) {

@@ -7,7 +7,8 @@
  * @returns {bool}
  *
  */
-bool buffer_equals(buffer_t *str1, buffer_t *str2) {
+bool buffer_equals(buffer_t *str1, buffer_t *str2)
+{
     DEBUG_ME;
     if (str1 == NULL || str2 == NULL) {
         return false;

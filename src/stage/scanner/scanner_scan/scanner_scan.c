@@ -147,7 +147,7 @@ void scanner_scan(scanner_t* scanner)
                         continue;
 
                     default:
-                        if (c == '_' || is_char_alpha(c)) {
+                        if (c == '_' || string_char_is_alpha(c)) {
                             scanner_scan_identifier(scanner, uc);
                         } else {
                             scanner_error("Unknown character '%s' at line %zu, "
@@ -172,7 +172,7 @@ void scanner_scan(scanner_t* scanner)
                     scanner_scan_string(scanner, 2);
                 } else if (utf8_is_digit(uc)) {
                     scanner_scan_number(scanner, uc);
-                } else if (c == '_' || utf8_is_alpha(uc) || is_char_alpha(c)) {
+                } else if (c == '_' || utf8_is_alpha(uc) || string_char_is_alpha(c)) {
                     scanner_scan_identifier(scanner, uc);
                 } else {
                     scanner_error("Unknown character '%s' at line %zu, column %zu", uc,

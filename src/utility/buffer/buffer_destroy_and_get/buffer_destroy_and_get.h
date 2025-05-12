@@ -3,6 +3,7 @@
 
 // buffer
 #include <utility/buffer/type.h>
+#include <utility/buffer/buffer_destroy/buffer_destroy.h>
 
 // log
 #include <utility/log/log_fatal/log_fatal.h>

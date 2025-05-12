@@ -1,11 +1,15 @@
 #!/bin/bash
 
+clear
+
 SALAM_OUTPUT=s
 
 items=(
     # ------------- utility
     # log
+    "utility/log/log_info/log_info.c"
     "utility/log/log_fatal/log_fatal.c"
+    "utility/log/log_error/log_error.c"
     # memory
     "utility/memory/memory_free/memory_free.c"
     "utility/memory/memory_allocation/memory_allocation.c"
@@ -13,7 +17,11 @@ items=(
     "utility/file/file_reads/file_reads.c"
 
     # ------------- stage
+    "stage/scanner/scanner_free/scanner_free.c"
+    "stage/scanner/scanner_create/scanner_create.c"
+    "stage/scanner/scanner_log/scanner_log.c"
 
+    # ------------- entry point
     "main.c"
 )
 

@@ -1,6 +1,6 @@
 #include <utility/array/array_create/array_create.h>
 
-array_t* array_create(array_free_func freer)
+array_t* array_create(array_free_func_t freer)
 {
     const size_t INITIAL_CAPACITY = 4;
     array_t* array = memory_allocation(sizeof(array_t));

@@ -16,7 +16,7 @@ void buffer_append_wchar(buffer_t *str, wchar_t c)
     int len = wctomb(buffer, c);
 
     if (len <= 0) {
-        error(2, "Failed to convert wide character to multibyte character");
+        log_fatal("Failed to convert wide character to multibyte character");
         return;
     }
 

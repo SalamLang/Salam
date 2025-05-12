@@ -1,3 +1,5 @@
+#include <utility/convert/convert_float2string/convert_float2string.h>
+
 /**
  *
  * @function convert_float2string

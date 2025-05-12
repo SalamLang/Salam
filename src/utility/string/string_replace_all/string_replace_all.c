@@ -1,3 +1,5 @@
+#include <utility/string/string_replace_all/string_replace_all.h>
+
 /**
  *
  * @function string_replace_all
@@ -16,12 +18,12 @@ char *string_replace_all(const char *str, const char *old_substr,
         return NULL;
     }
 
-    size_t str_len = strlen(str);
-    size_t old_len = strlen(old_substr);
-    size_t new_len = strlen(new_substr);
+    size_t str_len = string_length(str);
+    size_t old_len = string_length(old_substr);
+    size_t new_len = string_length(new_substr);
 
     if (old_len == 0) {
-        char *result = memory_allocate(str_len + 1);
+        char *result = memory_allocation(str_len + 1);
 
         strcpy(result, str);
 
@@ -35,7 +37,7 @@ char *string_replace_all(const char *str, const char *old_substr,
         tmp += old_len;
     }
 
-    char *result = memory_allocate(max_result_len + 1);
+    char *result = memory_allocation(max_result_len + 1);
 
     char *result_ptr = result;
     const char *search_start = str;

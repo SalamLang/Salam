@@ -1,3 +1,5 @@
+#include <utility/string/string_starts/string_starts.h>
+
 /**
  *
  * @function string_starts

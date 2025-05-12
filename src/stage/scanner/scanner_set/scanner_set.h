@@ -1,5 +1,9 @@
+// base
+#include <base.h>
+
 // scanner
 #include <stage/scanner/type.h>
+
 // token
 #include <stage/token/type.h>
 

@@ -16,7 +16,7 @@ bool buffer_is(buffer_t *str1, const char *str2)
         return false;
     }
 
-    if (str1->length != strlen(str2)) {
+    if (str1->length != string_length(str2)) {
         return false;
     }
 

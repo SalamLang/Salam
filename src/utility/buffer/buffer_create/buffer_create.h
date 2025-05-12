@@ -3,6 +3,8 @@
 
 // buffer
 #include <utility/buffer/type.h>
+#include <utility/buffer/buffer_print/buffer_print.h>
+#include <utility/buffer/buffer_destroy/buffer_destroy.h>
 
 // memory
 #include <utility/memory/memory_allocation/memory_allocation.h>

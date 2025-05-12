@@ -14,7 +14,7 @@ size_t utf8_strlen(const char *str)
     size_t len = 0;
     mbstate_t state;
 
-    memset_s(&state, sizeof(state), 0, sizeof(state));
+    memory_set(&state, sizeof(state), 0);
 
     while (*str) {
         wchar_t wc;

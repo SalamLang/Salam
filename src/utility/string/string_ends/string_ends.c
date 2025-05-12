@@ -19,5 +19,5 @@ bool string_ends(const char *source, const char *search)
         return false;
     }
 
-    return strncmp(source + source_len - search_len, search) == 0;
+    return strncmp(source + source_len - search_len, search, search_len) == 0;
 }

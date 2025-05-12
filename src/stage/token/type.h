@@ -3,6 +3,7 @@
 
 typedef enum token_type_t {
     TOKEN_TYPE_UNKNOWN = 0,
+    TOKEN_TYPE_EOF,
     TOKEN_TYPE_IDENTIFIER,
     TOKEN_TYPE_KEYWORD,
     TOKEN_TYPE_STRING,

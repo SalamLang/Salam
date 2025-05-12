@@ -2,7 +2,7 @@
 
 // memory
 #include <utility/memory/memory_allocation/memory_allocation.h>
-#include <utility/memory/memory_free/memory_free.h>
+#include <utility/memory/memory_destroy/memory_destroy.h>
 // log
 #include <utility/log/log_fatal/log_fatal.h>
 

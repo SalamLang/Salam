@@ -11,7 +11,7 @@ items=(
     "utility/log/log_fatal/log_fatal.c"
     "utility/log/log_error/log_error.c"
     # memory
-    "utility/memory/memory_free/memory_free.c"
+    "utility/memory/memory_destroy/memory_destroy.c"
     "utility/memory/memory_allocation/memory_allocation.c"
     "utility/memory/memory_allocation_soft/memory_allocation_soft.c"
     "utility/memory/memory_calloc/memory_calloc.c"

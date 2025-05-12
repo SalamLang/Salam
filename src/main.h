@@ -5,7 +5,7 @@
 #include <utility/file/file_reads/file_reads.h>
 #include <utility/file/file_exists/file_exists.h>
 // memory
-#include <utility/memory/memory_free/memory_free.h>
+#include <utility/memory/memory_destroy/memory_destroy.h>
 // log
 #include <utility/log/log_fatal/log_fatal.h>
 // io

@@ -8,6 +8,6 @@ void array_free(array_t* array)
             if (array->items[i]) array->freer(array->items[i]);
         }
     }
-    memory_free(array->items);
-    memory_free(array);
+    memory_destroy(array->items);
+    memory_destroy(array);
 }

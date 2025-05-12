@@ -9,7 +9,7 @@ array_t* array_create(array_free_func_t freer)
     array->freer = freer;
     array->items = memory_allocation_soft(sizeof(void*) * array->capacity);
     if (!array->items) {
-        memory_free(array);
+        memory_destroy(array);
         return NULL;
     }
     return array;

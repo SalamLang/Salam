@@ -1,0 +1,1 @@
+char* convert_float2string(float value);

@@ -1,5 +1,5 @@
 #include <stdio.h> // for printf
 
-#include <file/file_reads/file_reads.h>
-#include <memory/memory_free/memory_free.h>
-#include <log/log_fatal/log_fatal.h>
+#include <utility/file/file_reads/file_reads.h>
+#include <utility/memory/memory_free/memory_free.h>
+#include <utility/log/log_fatal/log_fatal.h>

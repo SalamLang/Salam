@@ -1,27 +1,12 @@
 #include <stage/scanner/scanner_scan/scanner_scan.h>
 
-#define SCANNER_CURRENT (scanner->source[scanner->index])
-#define SCANNER_CURRENT_PREV (scanner->source[scanner->index - 1])
-#define SCANNER_CURRENT_NEXT (scanner->source[scanner->index + 1])
-
-#define SCANNER_NEXT scanner->index++
-#define SCANNER_PREV scanner->index--
-
-#define SCANNER_NEXT_LINE scanner->line++
-#define SCANNER_NEXT_COLUMN scanner->column++
-
-#define SCANNER_ZERO_COLUMN scanner->column = 0
-
-#define SCANNER_PUSH_TOKEN(TOKEN) array_append(scanner->tokens, TOKEN)
-
 void scanner_scan(scanner_t* scanner)
 {
-    /*
     char c;
     while ((c = SCANNER_CURRENT) && c != '\0' &&
            scanner->index < scanner->length) {
         size_t num_bytes;
-        char *uc = utf8_decode(scanner->source, &scanner->index, &num_bytes);
+        char *uc = utf8_char_decode(scanner->source, &scanner->index, &num_bytes);
 
         switch (num_bytes) {
             case 0: {
@@ -29,7 +14,7 @@ void scanner_scan(scanner_t* scanner)
                     memory_destroy(uc);
                 }
 
-                error_scanner(3, "Invalid UTF-8 encoding detected at index %d",
+                scanner_error("Invalid UTF-8 encoding detected at index %d",
                             scanner->index);
             } break;
 
@@ -105,9 +90,7 @@ void scanner_scan(scanner_t* scanner)
 
                             while (1) {
                                 if (SCANNER_CURRENT == '\0') {
-                                    error_scanner(
-                                        2,
-                                        "Unterminated multiline comment at "
+                                    scanner_error("Unterminated multiline comment at "
                                         "line %zu, column %zu",
                                         scanner->line, scanner->column);
                                     break;
@@ -143,7 +126,7 @@ void scanner_scan(scanner_t* scanner)
                             memory_destroy(uc);
                         }
 
-                        scanner_lex_string(scanner, 0);
+                        scanner_scan_string(scanner, 0);
                         continue;
 
                     case '0':
@@ -156,7 +139,7 @@ void scanner_scan(scanner_t* scanner)
                     case '7':
                     case '8':
                     case '9':
-                        scanner_lex_number(scanner, uc);
+                        scanner_scan_number(scanner, uc);
 
                         if (uc != NULL) {
                             memory_destroy(uc);
@@ -165,10 +148,9 @@ void scanner_scan(scanner_t* scanner)
 
                     default:
                         if (c == '_' || is_char_alpha(c)) {
-                            scanner_lex_identifier(scanner, uc);
+                            scanner_scan_identifier(scanner, uc);
                         } else {
-                            error_scanner(1,
-                                        "Unknown character '%s' at line %zu, "
+                            scanner_error("Unknown character '%s' at line %zu, "
                                         "column %zu",
                                         uc, scanner->line, scanner->column);
                         }
@@ -184,17 +166,16 @@ void scanner_scan(scanner_t* scanner)
             case 3:
             case 4:
             default: {
-                if (strcmp(uc, "«") == 0) {
-                    scanner_lex_string(scanner, 1);
-                } else if (strcmp(uc, "“") == 0) {
-                    scanner_lex_string(scanner, 2);
-                } else if (is_utf8_digit(uc)) {
-                    scanner_lex_number(scanner, uc);
+                if (string_compare(uc, "«") == 0) {
+                    scanner_scan_string(scanner, 1);
+                } else if (string_compare(uc, "“") == 0) {
+                    scanner_scan_string(scanner, 2);
+                } else if (utf8_is_digit(uc)) {
+                    scanner_scan_number(scanner, uc);
                 } else if (c == '_' || utf8_is_alpha(uc) || is_char_alpha(c)) {
-                    scanner_lex_identifier(scanner, uc);
+                    scanner_scan_identifier(scanner, uc);
                 } else {
-                    error_scanner(
-                        1, "Unknown character '%s' at line %zu, column %zu", uc,
+                    scanner_error("Unknown character '%s' at line %zu, column %zu", uc,
                         scanner->line, scanner->column);
                 }
 
@@ -205,7 +186,6 @@ void scanner_scan(scanner_t* scanner)
             } break;
         }
     }
-    */
 
     token_t *token = token_create(TOKEN_TYPE_EOF);
     token->location = (token_location_t){scanner->line, scanner->column, scanner->index,

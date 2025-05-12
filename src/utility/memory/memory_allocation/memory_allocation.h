@@ -3,4 +3,4 @@
 
 #include <utility/log/log_fatal/log_fatal.h>
 
-void* memory_alloc(size_t);
+void* memory_allocation(size_t);

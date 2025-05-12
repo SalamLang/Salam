@@ -1,6 +1,6 @@
 #include <utility/memory/memory_allocation/memory_allocation.h>
 
-void* memory_alloc(size_t siz)
+void* memory_allocation(size_t siz)
 {
     void* ptr = malloc(siz);
     if (ptr == NULL) {

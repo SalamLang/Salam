@@ -4,4 +4,5 @@
 
 #include <stdio.h> // for FILE, fopen, fclose, fseek, ftell
 
-char* file_size(const char* file_path);
+long file_size(const char* file_path);
+

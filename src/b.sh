@@ -3,10 +3,17 @@
 SALAM_OUTPUT=s
 
 items=(
-    "log/log_fatal/log_fatal.c"
-    "memory/memory_free/memory_free.c"
-    "memory/memory_allocation/memory_allocation.c"
-    "file/file_reads/file_reads.c"
+    # ------------- utility
+    # log
+    "utility/log/log_fatal/log_fatal.c"
+    # memory
+    "utility/memory/memory_free/memory_free.c"
+    "utility/memory/memory_allocation/memory_allocation.c"
+    # file
+    "utility/file/file_reads/file_reads.c"
+
+    # ------------- stage
+
     "main.c"
 )
 

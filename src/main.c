@@ -12,6 +12,7 @@ int main(int argc, char** argv)
     }
     char* source = file_reads(argv[1]);
     scanner_set(scanner, source, directory, argv[1]);
+    scanner_scan(scanner);
     scanner_log(scanner);
     scanner_free(scanner);
     return 0;

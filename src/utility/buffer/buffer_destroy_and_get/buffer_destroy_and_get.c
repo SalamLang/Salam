@@ -1,3 +1,5 @@
+#include <utility/buffer/buffer_destroy_and_get/buffer_destroy_and_get.h>
+
 /**
  *
  * @function buffer_destroy_and_get

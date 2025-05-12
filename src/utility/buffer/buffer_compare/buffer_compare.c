@@ -1,3 +1,5 @@
+#include <utility/buffer/buffer_compare/buffer_compare.h>
+
 /**
  *
  * @function buffer_compare

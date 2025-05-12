@@ -66,6 +66,8 @@ items=(
     "main.c"
 )
 
+mapfile -t items < <(find . -type f -name "*.c")
+
 gcc -g -Wall -Wextra -pedantic -I$(pwd) "${items[@]}" -o "$SALAM_OUTPUT" 2> compile_warnings.txt
 
 cat compile_warnings.txt

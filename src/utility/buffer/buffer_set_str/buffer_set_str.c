@@ -12,5 +12,5 @@
 void buffer_set_str(buffer_t *str, const char *value)
 {
     DEBUG_ME;
-    return buffer_append_str(str, value);
+    buffer_append_str(str, value);
 }

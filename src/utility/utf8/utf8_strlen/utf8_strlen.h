@@ -8,4 +8,7 @@
 // log
 #include <utility/log/log_fatal/log_fatal.h>
 
+// memory
+#include <utility/memory/memory_set/memory_set.h>
+
 size_t utf8_strlen(const char *str);

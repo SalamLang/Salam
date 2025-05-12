@@ -1,3 +1,5 @@
+#include <utility/convert/convert_double2string/convert_double2string.h>
+
 /**
  *
  * @function convert_double2string

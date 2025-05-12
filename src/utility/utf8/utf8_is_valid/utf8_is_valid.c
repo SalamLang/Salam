@@ -1,3 +1,5 @@
+#include <utility/utf8/utf8_is_valid/utf8_is_valid.h>
+
 /**
  *
  * @function utf8_is_valid

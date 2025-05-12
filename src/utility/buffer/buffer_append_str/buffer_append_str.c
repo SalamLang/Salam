@@ -16,14 +16,14 @@ void buffer_append_str(buffer_t *str, const char *suffix)
         return;
     }
 
-    size_t suffix_len = strlen(suffix);
+    size_t suffix_len = string_length(suffix);
     if (suffix_len == 0) {
         return;
     }
 
     while (str->length + suffix_len >= str->capacity) {
         str->capacity *= 2;
-        str->data = memory_reallocate(str->data, str->capacity * sizeof(char));
+        str->data = memory_realloc(str->data, str->capacity * sizeof(char));
     }
 
     strcpy(str->data + str->length, suffix);

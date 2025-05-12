@@ -1,12 +1,14 @@
+#include <utility/utf8/utf8_is_alpha/utf8_is_alpha.h>
+
 /**
  *
- * @function is_utf8_alpha
+ * @function utf8_is_alpha
  * @brief Check if a UTF-8 string is an alphabet
  * @params {char*} utf8 - UTF-8 string
  * @returns {bool} True if the string is an alphabet, false otherwise
  *
  */
-bool is_utf8_alpha(char *utf8)
+bool utf8_is_alpha(char *utf8)
 {
     DEBUG_ME;
     // wchar_t wc;

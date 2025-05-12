@@ -6,7 +6,8 @@
  * @returns {buffer_t*}
  *
  */
-buffer_t *buffer_create(size_t initial_capacity) {
+buffer_t *buffer_create(size_t initial_capacity)
+{
     DEBUG_ME;
     buffer_t *str = memory_allocate(sizeof(buffer_t));
 

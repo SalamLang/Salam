@@ -6,7 +6,8 @@
  * @returns {char*}
  *
  */
-char *buffer_destroy_and_get(buffer_t *str) {
+char *buffer_destroy_and_get(buffer_t *str)
+{
     DEBUG_ME;
     char *res = buffer_strdup(str->data);
     buffer_destroy(str);

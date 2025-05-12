@@ -6,7 +6,8 @@
  * @returns {void}
  *
  */
-void buffer_destroy(buffer_t *str) {
+void buffer_destroy(buffer_t *str)
+{
     DEBUG_ME;
     if (str != NULL) {
         if (str->data != NULL) {

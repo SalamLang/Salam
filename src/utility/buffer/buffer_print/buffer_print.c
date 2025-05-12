@@ -6,7 +6,8 @@
  * @returns {void}
  *
  */
-void buffer_print(buffer_t *str) {
+void buffer_print(buffer_t *str)
+{
     DEBUG_ME;
     if (str == NULL || str->data == NULL) {
         printf("NULL\n");

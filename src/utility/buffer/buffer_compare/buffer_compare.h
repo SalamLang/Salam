@@ -1,3 +1,6 @@
+#include <stdbool.h> // for bool
+
+// base
 #include <base.h>
 
 // buffer

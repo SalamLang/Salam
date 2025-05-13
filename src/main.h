@@ -26,6 +26,10 @@
 #include <stage/scanner/scanner_json/scanner_json.h>
 
 // parser
+#include <stage/parser/type.h>
+#include <stage/parser/parser_create/parser_create.h>
+#include <stage/parser/parser_log/parser_log.h>
+#include <stage/parser/parser_destroy/parser_destroy.h>
 
 // ast
 #include <stage/ast/type.h>

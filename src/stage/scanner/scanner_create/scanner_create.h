@@ -14,4 +14,8 @@
 #include <stage/token/type.h>
 #include <stage/token/token_free/token_free.h>
 
-scanner_t* scanner_create();
+scanner_t* scanner_create(
+    char* source,
+    char* directory,
+    char* file_name
+);

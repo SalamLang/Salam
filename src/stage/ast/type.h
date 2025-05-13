@@ -6,6 +6,9 @@
 // base
 #include <base.h>
 
+// array
+#include <utility/array/type.h>
+
 typedef struct ast_t ast_t;
 
 typedef enum ast_node_type_t {
@@ -64,19 +67,19 @@ typedef struct {
 
 typedef struct {
     char* name;
-    char** params;
+    array_t* params;
     size_t param_count;
     ast_t* body;
 } ast_function_decl_t;
 
 // typedef struct {
 //     ast_t* callee;
-//     ast_t** args;
+//     array_t* args;
 //     size_t arg_count;
 // } ast_call_t;
 
 typedef struct {
-    ast_t** statements;
+    array_t* statements;
     size_t statement_count;
 } ast_block_t;
 
@@ -100,7 +103,7 @@ typedef struct {
 // } ast_expression_statement_t;
 
 typedef struct {
-    ast_t** declarations;
+    array_t* declarations;
     size_t declaration_count;
 } ast_program_t;
 

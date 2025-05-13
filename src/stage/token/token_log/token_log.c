@@ -16,10 +16,9 @@ void token_log(token_t* token)
              token->location.length);
     
     if (token->value == NULL) {
-        log_info(", Value: NULL");
+        log_info(", Value: NULL\n");
     } else {
         log_info(", ");
         value_log(token->value);
     }
-    log_info("\n");
 }

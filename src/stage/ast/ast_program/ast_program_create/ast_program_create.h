@@ -13,6 +13,7 @@
 #include <stage/ast/type.h>
 #include <stage/ast/ast_alloc/ast_alloc.h>
 #include <stage/ast/ast_destroy/ast_destroy.h>
+#include <stage/ast/ast_program/ast_program_destroy/ast_program_destroy.h>
 
 ast_t* ast_program_create(array_t* declarations, size_t declaration_count);
 

@@ -17,6 +17,7 @@
 // string
 #include <utility/string/string_compare/string_compare.h>
 #include <utility/string/string_convert_utf8_to_english_digit/string_convert_utf8_to_english_digit.h>
+#include <utility/string/string_duplicate/string_duplicate.h>
 
 // scanner
 #include <stage/scanner/type.h>
@@ -24,5 +25,9 @@
 // token
 #include <stage/token/type.h>
 #include <stage/token/token_create/token_create.h>
+
+// value
+#include <stage/value/type.h>
+#include <stage/value/value_create/value_create.h>
 
 void scanner_scan_number(scanner_t *scanner, char *uc);

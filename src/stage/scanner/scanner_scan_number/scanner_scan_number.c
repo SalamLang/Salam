@@ -12,8 +12,8 @@
 void scanner_scan_number(scanner_t *scanner, char *uc)
 {
     DEBUG_ME;
-    buffer_t *value = buffer_create(25);
-    buffer_append_char(value, string_convert_utf8_to_english_digit(uc));
+    buffer_t *temp = buffer_create(25);
+    buffer_append_char(temp, string_convert_utf8_to_english_digit(uc));
 
     bool is_float = false;
 
@@ -44,24 +44,25 @@ void scanner_scan_number(scanner_t *scanner, char *uc)
             is_float = true;
         }
 
-        buffer_append_char(value, string_convert_utf8_to_english_digit(uc));
+        buffer_append_char(temp, string_convert_utf8_to_english_digit(uc));
 
         memory_destroy(uc);
     }
 
     token_type_t type = is_float ? TOKEN_TYPE_VALUE_NUMBER_FLOAT : TOKEN_TYPE_VALUE_NUMBER_INT;
     token_t *token = token_create(type);
+    token->source = string_duplicate(temp->data);
     token->location = (token_location_t){scanner->line, scanner->column, scanner->index,
                                          scanner->line, scanner->column, scanner->index,
                                          1};
-    // token->data_type = type;
-    // if (is_float) {
-    //     token->data.number_float = atof(value->data);
-    // } else {
-    //     token->data.number_int = atoi(value->data);
-    // }
+    token->value = value_create(is_float ? VALUE_TYPE_NUMBER_FLOAT : VALUE_TYPE_NUMBER_INT);
+    if (is_float) {
+        token->value->raw.float_value = atof(temp->data);
+    } else {
+        token->value->raw.int_value = atoi(temp->data);
+    }
 
-    buffer_destroy(value);
+    buffer_destroy(temp);
 
     SCANNER_PUSH_TOKEN(token);
 }

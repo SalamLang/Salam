@@ -7,7 +7,7 @@ void token_log(token_t* token)
         return;
     }
 
-    log_info("Token: Type: %s(%d) (%s), Start: %zu:%zu(%zu), End:%zu:%zu(%zu), Length: %zu\n",
+    log_info("Token: Type: %s(%d) (%s), Start: %zu:%zu(%zu), End:%zu:%zu(%zu), Length: %zu",
              token_name(token->type),
              token->type,
              token->source ? token->source : "NULL",
@@ -16,18 +16,10 @@ void token_log(token_t* token)
              token->location.length);
     
     if (token->value == NULL) {
-        log_info("Token: Value: NULL\n");
-        return;
+        log_info(", Value: NULL");
     } else {
+        log_info(", ");
         value_log(token->value);
     }
-    // if (token->type == TOKEN_TYPE_IDENTIFIER) {
-    //     log_info("Identifier: '%s'\n", token->value);
-    // } else if (token->type == TOKEN_TYPE_VALUE_STRING) {
-    //     log_info("String: '%s'\n", token->value);
-    // } else if (token->type == TOKEN_TYPE_VALUE_NUMBER_INT) {
-    //     log_info("NumberInt: '%s'\n", token->value);
-    // } else if (token->type == TOKEN_TYPE_VALUE_NUMBER_FLOAT) {
-    //     log_info("NumberFloat: '%s'\n", token->value);
-    // }
+    log_info("\n");
 }

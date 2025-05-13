@@ -30,7 +30,7 @@ typedef void (*ast_destroy_t)(ast_t*);
 
 typedef struct ast_base_t {
     ast_node_type_t type;
-    ast_destroy_t free;
+    ast_destroy_t destroy;
 } ast_base_t;
 
 // typedef struct {

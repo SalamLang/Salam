@@ -11,14 +11,18 @@ char* token_json(const token_t* token)
 
         // type
         buffer_append_str(temp, "\"type\": ");
+        buffer_append_char(temp, '"');
         buffer_append_str(temp, token_name(token->type));
+        buffer_append_char(temp, '"');
         buffer_append_str(temp, ", ");
 
         // source
         buffer_append_str(temp, "\"source\": ");
         if (token->source) {
             buffer_append_char(temp, '"');
-            buffer_append_str(temp, token->source);  // Consider escaping if needed
+            char* token_source = string_escaping(token->source);
+            buffer_append_str(temp, token_source);
+            memory_destroy(token_source);
             buffer_append_char(temp, '"');
         } else {
             buffer_append_str(temp, "null");

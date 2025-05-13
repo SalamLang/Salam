@@ -10,9 +10,13 @@
 
 // string
 #include <utility/string/string_duplicate/string_duplicate.h>
+#include <utility/string/string_escaping/string_escaping.h>
 
 // convert
 #include <utility/convert/convert_size2string/convert_size2string.h>
+
+// memory
+#include <utility/memory/memory_destroy/memory_destroy.h>
 
 // value
 #include <stage/value/type.h>

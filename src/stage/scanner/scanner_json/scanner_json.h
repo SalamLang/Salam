@@ -1,0 +1,27 @@
+// base
+#include <base.h>
+
+// buffer
+#include <utility/buffer/type.h>
+#include <utility/buffer/buffer_create/buffer_create.h>
+#include <utility/buffer/buffer_destroy/buffer_destroy.h>
+
+// array
+#include <utility/array/type.h>
+#include <utility/array/array_size/array_size.h>
+#include <utility/array/array_get/array_get.h>
+
+// memory
+#include <utility/memory/memory_destroy/memory_destroy.h>
+
+// string
+#include <utility/string/string_duplicate/string_duplicate.h>
+#include <utility/string/string_escaping/string_escaping.h>
+
+// scanner
+#include <stage/scanner/type.h>
+
+// token
+#include <stage/token/token_json/token_json.h>
+
+char* scanner_json(scanner_t* scanner);

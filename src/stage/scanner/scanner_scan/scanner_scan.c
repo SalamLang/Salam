@@ -113,9 +113,9 @@ void scanner_scan(scanner_t* scanner)
                         } else {
                             token_type_t type = token_char_type(c);
                             token_t *token = token_create(
-                                type, (token_location_t){scanner->index, 1, scanner->line,
-                                                   scanner->column, scanner->line,
-                                                   scanner->column});
+                                type, (token_location_t){scanner->line, scanner->column, scanner->index,
+                                                         scanner->line, scanner->column, scanner->index,
+                                                         1});
 
                             SCANNER_PUSH_TOKEN(token);
                         }
@@ -189,7 +189,7 @@ void scanner_scan(scanner_t* scanner)
 
     token_t *token = token_create(TOKEN_TYPE_EOF);
     token->location = (token_location_t){scanner->line, scanner->column, scanner->index,
-                                   scanner->line, scanner->column, scanner->index,
-                                   1};
+                                         scanner->line, scanner->column, scanner->index,
+                                         1};
     SCANNER_PUSH_TOKEN(token);
 }

@@ -8,6 +8,7 @@
 
 // string
 #include <utility/string/string_compare/string_compare.h>
+#include <utility/string/string_duplicate/string_duplicate.h>
 
 // utf8
 #include <utility/utf8/utf8_char_decode/utf8_char_decode.h>

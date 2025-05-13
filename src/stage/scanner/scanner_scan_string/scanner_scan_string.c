@@ -50,7 +50,8 @@ void scanner_scan_string(scanner_t *scanner, int type) {
     token->location = (token_location_t){scanner->line, scanner->column, scanner->index,
                                          scanner->line, scanner->column, scanner->index,
                                          1};
-    // token->data_type = TOKEN_STRING;
+    token->value.type = VALUE_TYPE_STRING;
+    token->value.value.string_value = string_duplicate(value->data);
     // token->data.string = string_strdup(value->data);
 
     buffer_destroy(value);

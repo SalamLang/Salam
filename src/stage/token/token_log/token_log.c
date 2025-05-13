@@ -10,11 +10,17 @@ void token_log(token_t* token)
     log_info("Token: Type: %s(%d) (%s), Start: %zu:%zu(%zu), End:%zu:%zu(%zu), Length: %zu\n",
              token_name(token->type),
              token->type,
-             token->value ? token->value : "NULL",
+             token->source ? token->source : "NULL",
              token->location.begin_line, token->location.begin_column, token->location.begin_index,
              token->location.end_line, token->location.end_column, token->location.end_index,
              token->location.length);
-
+    
+    if (token->value == NULL) {
+        log_info("Token: Value: NULL\n");
+        return;
+    } else {
+        value_log(token->value);
+    }
     // if (token->type == TOKEN_TYPE_IDENTIFIER) {
     //     log_info("Identifier: '%s'\n", token->value);
     // } else if (token->type == TOKEN_TYPE_VALUE_STRING) {

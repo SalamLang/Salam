@@ -2,7 +2,7 @@
 
 ast_t* ast_create_function_decl(const char* name, char** params, size_t param_count, ast_t* body)
 {
-    ast_t* node = ast_alloc(AST_TYPE_FUNCTION_DECL, ast_destroy);
+    ast_t* node = ast_alloc(AST_TYPE_FUNCTION_DECL, ast_function_decl_destroy);
     node->function_decl.name = string_duplicate(name);
     node->function_decl.param_count = param_count;
 

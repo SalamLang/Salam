@@ -18,7 +18,7 @@ void scanner_scan_identifier(scanner_t *scanner, char *uc)
 
     while (SCANNER_CURRENT != '\0') {
         size_t num_bytes;
-        uc = char_utf8_decode(scanner->source, &scanner->index, &num_bytes);
+        uc = utf8_char_decode(scanner->source, &scanner->index, &num_bytes);
 
         if (!utf8_is_alpha(uc)) {
             scanner->index -= num_bytes;
@@ -33,10 +33,11 @@ void scanner_scan_identifier(scanner_t *scanner, char *uc)
         memory_destroy(uc);
     }
 
-    token_type_t type = type_keyword(value->data);
-    token_t *token = token_create(
-        type, (token_location_t){scanner->index, 1, scanner->line, scanner->column,
-                           scanner->line, scanner->column});
+    token_type_t type = token_keyword_type(value->data);
+    token_t *token = token_create(type);
+    token->location = (token_location_t){scanner->line, scanner->column, scanner->index,
+                                         scanner->line, scanner->column, scanner->index,
+                                         1};
     // token->data_type = TOKEN_IDENTIFIER;
     // token->data.string = buffer_arabic2persian(value->data);
 

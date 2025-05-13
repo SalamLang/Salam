@@ -11,7 +11,7 @@ char* file_reads(const char* file_path)
     long file_size = ftell(file);
     rewind(file);
 
-    char* data = (char*)memory_allocation(file_size + 1);
+    char* data = memory_allocation(file_size + 1);
     size_t read_size = fread(data, 1, file_size, file);
     data[read_size] = '\0';
 

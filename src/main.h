@@ -28,6 +28,11 @@
 // parser
 
 // ast
+#include <stage/ast/type.h>
+#include <stage/ast/ast_create/ast_create.h>
+#include <stage/ast/ast_log/ast_log.h>
+#include <stage/ast/ast_json/ast_json.h>
+#include <stage/ast/ast_destroy/ast_destroy.h>
 
 // generator
 

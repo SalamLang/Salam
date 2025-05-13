@@ -5,4 +5,4 @@
 // array
 #include <utility/array/type.h>
 
-array_t* array_create(array_free_func_t freer);
+array_t* array_create(array_destroy_func_t destroyer);

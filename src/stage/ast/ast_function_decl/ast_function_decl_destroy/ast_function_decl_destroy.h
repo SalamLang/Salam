@@ -3,6 +3,10 @@
 // base
 #include <base.h>
 
+// array
+#include <utility/array/type.h>
+#include <utility/array/array_destroy/array_destroy.h>
+
 // memory
 #include <utility/memory/memory_destroy/memory_destroy.h>
 

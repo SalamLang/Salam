@@ -10,7 +10,7 @@ void token_free(token_t* token)
 
     if (token->value != NULL)
     {
-        value_direct_destroy(token->value);
+        value_destroy(token->value);
         token->value = NULL;
     }
 

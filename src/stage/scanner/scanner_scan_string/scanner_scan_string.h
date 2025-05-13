@@ -24,4 +24,8 @@
 #include <stage/scanner/type.h>
 #include <stage/scanner/scanner_error/scanner_error.h>
 
+// value
+#include <stage/value/type.h>
+#include <stage/value/value_create/value_create.h>
+
 void scanner_scan_string(scanner_t *lexer, int type);

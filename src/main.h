@@ -4,6 +4,7 @@
 // file
 #include <utility/file/file_reads/file_reads.h>
 #include <utility/file/file_exists/file_exists.h>
+#include <utility/file/file_write/file_write.h>
 
 // memory
 #include <utility/memory/memory_destroy/memory_destroy.h>
@@ -23,5 +24,11 @@
 #include <stage/scanner/scanner_set/scanner_set.h>
 #include <stage/scanner/scanner_scan/scanner_scan.h>
 #include <stage/scanner/scanner_json/scanner_json.h>
+
+// parser
+
+// ast
+
+// generator
 
 int main(int argc, char** argv);

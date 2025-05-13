@@ -1,5 +1,5 @@
-#ifndef _STAGE_AST_AST_PROGRAM_AST_PROGRAM_DESTROY_AST_PROGRAM_DESTROY_H_
-#define _STAGE_AST_AST_PROGRAM_AST_PROGRAM_DESTROY_AST_PROGRAM_DESTROY_H_
+#ifndef _STAGE_AST_AST_BLOCK_AST_BLOCK_DIRECT_DESTROY_AST_BLOCK_DIRECT_DESTROY_H_
+#define _STAGE_AST_AST_BLOCK_AST_BLOCK_DIRECT_DESTROY_AST_BLOCK_DIRECT_DESTROY_H_
 
 #include <stddef.h> // for size_t
 
@@ -13,6 +13,6 @@
 #include <stage/ast/type.h>
 #include <stage/ast/ast_destroy/ast_destroy.h>
 
-void ast_program_destroy(ast_program_t* program);
+void ast_block_direct_destroy(ast_block_t block);
 
 #endif

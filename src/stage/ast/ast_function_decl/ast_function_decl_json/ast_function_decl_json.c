@@ -1,4 +1,4 @@
-#include <stage/ast/ast_function_decl_json/ast_function_decl_json.h>
+#include <stage/ast/ast_function_decl/ast_function_decl_json/ast_function_decl_json.h>
 
 char* ast_function_decl_json(ast_function_decl_t* function_decl)
 {

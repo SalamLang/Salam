@@ -1,6 +1,6 @@
-#include <stage/ast/ast_block_json/ast_block_json.h>
+#include <stage/ast/ast_program/ast_program_json/ast_program_json.h>
 
-char* ast_block_json(ast_block_t* block)
+char* ast_program_json(ast_program_t* block)
 {
     buffer_t* temp = buffer_create(24);
 

@@ -10,5 +10,6 @@
 // ast
 #include <stage/ast/type.h>
 #include <stage/ast/ast_alloc/ast_alloc.h>
+#include <stage/ast/ast_destroy/ast_destroy.h>
 
 ast_t* ast_create_var_decl(const char* name, ast_t* value);

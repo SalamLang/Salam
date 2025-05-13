@@ -1,4 +1,4 @@
-#include <stage/ast/ast_block_json/ast_block_json.h>
+#include <stage/ast/ast_block/ast_block_json/ast_block_json.h>
 
 char* ast_block_json(ast_block_t* block)
 {

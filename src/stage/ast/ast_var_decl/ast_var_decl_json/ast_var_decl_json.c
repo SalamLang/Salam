@@ -1,4 +1,4 @@
-#include <stage/ast/ast_var_decl_json/ast_var_decl_json.h>
+#include <stage/ast/ast_var_decl/ast_var_decl_json/ast_var_decl_json.h>
 
 char* ast_var_decl_json(ast_var_decl_t* var_decl)
 {

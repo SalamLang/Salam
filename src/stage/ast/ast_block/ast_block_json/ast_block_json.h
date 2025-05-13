@@ -8,4 +8,7 @@
 // string
 #include <utility/string/string_duplicate/string_duplicate.h>
 
+// ast
+#include <stage/ast/type.h>
+
 char* ast_block_json(ast_block_t* block);

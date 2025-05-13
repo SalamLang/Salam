@@ -8,4 +8,7 @@
 // string
 #include <utility/string/string_duplicate/string_duplicate.h>
 
-char* ast_program_json(ast_program_t* program);
+// ast
+#include <stage/ast/type.h>
+
+char* ast_program_json(ast_program_t* block);

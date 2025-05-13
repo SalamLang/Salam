@@ -25,5 +25,7 @@
 #include <stage/scanner/scanner_scan_string/scanner_scan_string.h>
 #include <stage/scanner/scanner_scan_number/scanner_scan_number.h>
 #include <stage/scanner/scanner_scan_identifier/scanner_scan_identifier.h>
+#include <stage/scanner/scanner_scan_comment_inline/scanner_scan_comment_inline.h>
+#include <stage/scanner/scanner_scan_comment_multiline/scanner_scan_comment_multiline.h>
 
 void scanner_scan(scanner_t* scanner);

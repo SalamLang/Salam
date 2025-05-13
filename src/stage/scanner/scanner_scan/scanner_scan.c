@@ -24,21 +24,24 @@ void scanner_scan(scanner_t* scanner)
                 switch (ucf) {
                     // End of file
                     case '\0':
+                    {
                         if (uc != NULL) {
                             memory_destroy(uc);
                         }
-
-                        break;
+                    } break;
 
                     // New line
                     case '\n':
+                    {
                         if (uc != NULL) {
                             memory_destroy(uc);
                         }
 
                         SCANNER_NEXT_LINE;
                         SCANNER_ZERO_COLUMN;
+
                         continue;
+                    } break;
 
                     case '\a':  // Alert
                     case '\b':  // Backspace
@@ -47,11 +50,13 @@ void scanner_scan(scanner_t* scanner)
                     case '\t':  // Horizontal tab
                     case '\v':  // Vertical tab
                     case ' ':   // Space
+                    {
                         if (uc != NULL) {
                             memory_destroy(uc);
                         }
 
                         continue;
+                    } break;
 
                     case '{':
                     case '}':
@@ -71,62 +76,41 @@ void scanner_scan(scanner_t* scanner)
                     case '<':
                     case '>':
                     case '!':
+                    {
                         if (uc != NULL) {
                             memory_destroy(uc);
                         }
 
-                        if (SCANNER_CURRENT == '/') {
-                            SCANNER_NEXT;
-                            SCANNER_NEXT_COLUMN;
+                        if (SCANNER_CURRENT == '/' && SCANNER_HAS_NEXT && SCANNER_NEXT == '/') {
+                            scanner_scan_comment_inline(scanner);
 
-                            while (SCANNER_CURRENT != '\n' &&
-                                   SCANNER_CURRENT != '\0') {
-                                SCANNER_NEXT;
-                                SCANNER_NEXT_COLUMN;
-                            }
-                        } else if (SCANNER_CURRENT == '*') {
-                            SCANNER_NEXT;
-                            SCANNER_NEXT_COLUMN;
+                            continue;
+                        }
+                        else if (SCANNER_CURRENT == '/' && SCANNER_HAS_NEXT && SCANNER_NEXT == '*') {
+                            scanner_scan_comment_multiline(scanner);
 
-                            while (1) {
-                                if (SCANNER_CURRENT == '\0') {
-                                    scanner_error("Unterminated multiline comment at "
-                                        "line %zu, column %zu",
-                                        scanner->line, scanner->column);
-                                    break;
-                                }
-
-                                if (SCANNER_CURRENT == '*') {
-                                    SCANNER_NEXT;
-                                    SCANNER_NEXT_COLUMN;
-
-                                    if (SCANNER_CURRENT == '/') {
-                                        SCANNER_NEXT;
-                                        SCANNER_NEXT_COLUMN;
-                                        break;
-                                    }
-                                } else {
-                                    SCANNER_NEXT;
-                                    SCANNER_NEXT_COLUMN;
-                                }
-                            }
-                        } else {
+                            continue;
+                        }
+                        else {
                             token_type_t type = token_char_type(c);
                             token_t *token = token_create(type);
                             token->location = (token_location_t){scanner->line, scanner->column, scanner->index,
-                                                                 scanner->line, scanner->column, scanner->index,
+                                                                    scanner->line, scanner->column, scanner->index,
                                                                 1};
                             SCANNER_PUSH_TOKEN(token);
+                            continue;
                         }
-                        continue;
+                    } break;
 
                     case '"':
+                    {
                         if (uc != NULL) {
                             memory_destroy(uc);
                         }
 
                         scanner_scan_string(scanner, 0);
                         continue;
+                    } break;
 
                     case '0':
                     case '1':
@@ -138,14 +122,17 @@ void scanner_scan(scanner_t* scanner)
                     case '7':
                     case '8':
                     case '9':
+                    {
                         scanner_scan_number(scanner, uc);
 
                         if (uc != NULL) {
                             memory_destroy(uc);
                         }
                         continue;
+                    } break;
 
                     default:
+                    {
                         if (c == '_' || string_char_is_alpha(c)) {
                             scanner_scan_identifier(scanner, uc);
                         } else {
@@ -158,6 +145,7 @@ void scanner_scan(scanner_t* scanner)
                             memory_destroy(uc);
                         }
                         continue;
+                    } break;
                 }
             } break;
 

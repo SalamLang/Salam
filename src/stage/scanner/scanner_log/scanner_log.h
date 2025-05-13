@@ -6,8 +6,13 @@
 
 // array
 #include <utility/array/array_size/array_size.h>
+#include <utility/array/array_get/array_get.h>
 
 // scanner
 #include <stage/scanner/type.h>
+
+// token
+#include <stage/token/type.h>
+#include <stage/token/token_log/token_log.h>
 
 void scanner_log(scanner_t* scanner);

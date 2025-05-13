@@ -4,6 +4,9 @@
 // memory
 #include <utility/memory/memory_destroy/memory_destroy.h>
 
+// string
+#include <utility/string/string_duplicate/string_duplicate.h>
+
 // buffer
 #include <utility/buffer/type.h>
 #include <utility/buffer/buffer_create/buffer_create.h>

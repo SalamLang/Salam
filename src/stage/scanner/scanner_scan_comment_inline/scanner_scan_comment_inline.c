@@ -4,8 +4,6 @@ void scanner_scan_comment_inline(scanner_t* scanner)
 {
     SCANNER_NEXT;  // move past '/'
     SCANNER_NEXT_COLUMN;
-    SCANNER_NEXT;  // move past '/'
-    SCANNER_NEXT_COLUMN;
 
     while (scanner->index < scanner->length) {
         if (SCANNER_CURRENT == '\0') {

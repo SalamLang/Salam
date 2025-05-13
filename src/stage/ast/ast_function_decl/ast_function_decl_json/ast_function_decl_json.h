@@ -8,4 +8,7 @@
 // string
 #include <utility/string/string_duplicate/string_duplicate.h>
 
+// ast
+#include <stage/ast/type.h>
+
 char* ast_function_decl_json(ast_function_decl_t* function_decl);

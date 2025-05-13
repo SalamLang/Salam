@@ -18,6 +18,16 @@ int main(int argc, char** argv)
     printf("%s\n", json_scanner);
     file_write("tokens.json", json_scanner);
     memory_destroy(json_scanner);
+
+    // ast
+    ast_t* ast = ast_create();
+    ast_log(ast);
+    char* json_ast = ast_json(ast);
+    printf("%s\n", json_ast);
+    file_write("ast.json", json_ast);
+    memory_destroy(json_ast);
+    ast_destroy(ast);
+
     scanner_free(scanner);
     return 0;
 }

@@ -11,4 +11,3 @@ bool file_write(const char* path, const char* content)
     fclose(file);
     return true;
 }
-

@@ -1,3 +1,5 @@
+#include <stddef.h> // for size_t
+
 // base
 #include <base.h>
 
@@ -7,4 +9,4 @@
 // ast
 #include <stage/ast/type.h>
 
-void ast_destroy(ast_t* ast);
+void ast_program_destroy(ast_program_t* program);

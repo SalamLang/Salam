@@ -6,5 +6,6 @@
 
 // ast
 #include <stage/ast/type.h>
+#include <stage/ast/ast_destroy/ast_destroy.h>
 
-void ast_destroy(ast_t* ast);
+void ast_var_decl_destroy(ast_var_decl_t* var_decl);

@@ -1,11 +1,11 @@
-#include <utility/array/array_free/array_free.h>
+#include <utility/array/array_destroy/array_destroy.h>
 
-void array_free(array_t* array)
+void array_destroy(array_t* array)
 {
     if (!array) return;
-    if (array->freer) {
+    if (array->destroyer) {
         for (size_t i = 0; i < array->size; ++i) {
-            if (array->items[i]) array->freer(array->items[i]);
+            if (array->items[i]) array->destroyer(array->items[i]);
         }
     }
     memory_destroy(array->items);

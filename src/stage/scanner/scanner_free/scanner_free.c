@@ -2,7 +2,7 @@
 
 void scanner_free(scanner_t* scanner)
 {
-    array_free(scanner->tokens);
+    array_destroy(scanner->tokens);
     memory_destroy(scanner->source);
     memory_destroy(scanner);
 }

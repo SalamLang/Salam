@@ -4,8 +4,8 @@ void value_direct_destroy(value_t value)
 {
     switch (value.type) {
         case VALUE_TYPE_STRING:
-            if (value.value.string_value != NULL) {
-                memory_destroy(value.value.string_value);
+            if (value.raw.string_value != NULL) {
+                memory_destroy(value.raw.string_value);
             }
             break;
         case VALUE_TYPE_NUMBER_INT:

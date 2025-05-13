@@ -13,7 +13,7 @@
 void scanner_scan_string(scanner_t *scanner, int type) {
     DEBUG_ME;
     // Opening quote is already consumed
-    buffer_t *value = buffer_create(25);
+    buffer_t *temp = buffer_create(25);
 
     size_t num_bytes;
     char *uc = utf8_char_decode(scanner->source, &scanner->index, &num_bytes);
@@ -21,7 +21,7 @@ void scanner_scan_string(scanner_t *scanner, int type) {
     while (string_compare(uc, "\0") != 0 && ((type == 0 && string_compare(uc, "\"") != 0) ||
                                      (type == 1 && string_compare(uc, "»") != 0) ||
                                      (type == 2 && string_compare(uc, "”") != 0))) {
-        buffer_append_str(value, uc);
+        buffer_append_str(temp, uc);
         memory_destroy(uc);
 
         uc = utf8_char_decode(scanner->source, &scanner->index, &num_bytes);
@@ -30,7 +30,7 @@ void scanner_scan_string(scanner_t *scanner, int type) {
     if ((type == 0 && string_compare(uc, "\"") != 0) ||
         (type == 1 && string_compare(uc, "»") != 0) ||
         (type == 2 && string_compare(uc, "”") != 0)) {
-        buffer_destroy(value);
+        buffer_destroy(temp);
 
         if (uc != NULL) {
             memory_destroy(uc);
@@ -47,14 +47,14 @@ void scanner_scan_string(scanner_t *scanner, int type) {
     }
 
     token_t *token = token_create(TOKEN_TYPE_VALUE_STRING);
+    token->source = string_duplicate(temp->data);
     token->location = (token_location_t){scanner->line, scanner->column, scanner->index,
                                          scanner->line, scanner->column, scanner->index,
                                          1};
-    token->value.type = VALUE_TYPE_STRING;
-    token->value.value.string_value = string_duplicate(value->data);
-    // token->data.string = string_strdup(value->data);
+    token->value = value_create(VALUE_TYPE_STRING);
+    token->value->raw.string_value = string_duplicate(temp->data);
 
-    buffer_destroy(value);
+    buffer_destroy(temp);
 
     SCANNER_PUSH_TOKEN(token);
 }

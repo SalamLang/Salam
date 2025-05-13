@@ -4,4 +4,4 @@
 // value
 #include <stage/value/type.h>
 
-void value_destroy(value_t* value);
+void value_direct_destroy(value_t* value);

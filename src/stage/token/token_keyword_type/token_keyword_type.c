@@ -15,5 +15,5 @@ token_type_t token_keyword_type(char* value)
     } else if (string_compare(value, "fn") == 0) {
         return TOKEN_TYPE_KEYWORD_FN;
     }
-    return TOKEN_TYPE_UNKNOWN;
+    return TOKEN_TYPE_IDENTIFIER;
 }

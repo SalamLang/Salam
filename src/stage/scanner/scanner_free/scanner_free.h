@@ -4,7 +4,7 @@
 // memory
 #include <utility/memory/memory_destroy/memory_destroy.h>
 // array
-#include <utility/array/array_free/array_free.h>
+#include <utility/array/array_destroy/array_destroy.h>
 
 // scanner
 #include <stage/scanner/type.h>

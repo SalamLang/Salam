@@ -35,12 +35,10 @@ void scanner_scan_identifier(scanner_t *scanner, char *uc)
 
     token_type_t type = token_keyword_type(value->data);
     token_t *token = token_create(type);
+    token->source = string_duplicate(value->data);
     token->location = (token_location_t){scanner->line, scanner->column, scanner->index,
                                          scanner->line, scanner->column, scanner->index,
                                          1};
-    // token->data_type = TOKEN_IDENTIFIER;
-    // token->data.string = buffer_arabic2persian(value->data);
-
     buffer_destroy(value);
 
     SCANNER_PUSH_TOKEN(token);

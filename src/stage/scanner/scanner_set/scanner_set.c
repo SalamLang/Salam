@@ -8,6 +8,8 @@ void scanner_set(
 )
 {
     scanner->source = source;
+    scanner->length = string_length(source);
+
     scanner->directory = directory;
     scanner->file_name = file_name;
 }

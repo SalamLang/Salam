@@ -46,8 +46,10 @@ void scanner_scan_string(scanner_t *scanner, int type) {
         memory_destroy(uc);
     }
 
-    token_t *token = token_create(TOKEN_TYPE_STRING, (token_location_t){scanner->index, 1, scanner->line, scanner->column,
-                                   scanner->line, scanner->column});
+    token_t *token = token_create(TOKEN_TYPE_VALUE_STRING);
+    token->location = (token_location_t){scanner->line, scanner->column, scanner->index,
+                                         scanner->line, scanner->column, scanner->index,
+                                         1};
     // token->data_type = TOKEN_STRING;
     // token->data.string = string_strdup(value->data);
 

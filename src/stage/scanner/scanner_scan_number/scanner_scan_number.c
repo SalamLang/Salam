@@ -13,13 +13,13 @@ void scanner_scan_number(scanner_t *scanner, char *uc)
 {
     DEBUG_ME;
     buffer_t *value = buffer_create(25);
-    buffer_append_char(value, convert_utf8_to_english_digit(uc));
+    buffer_append_char(value, string_convert_utf8_to_english_digit(uc));
 
     bool is_float = false;
 
     while (SCANNER_CURRENT != '\0') {
         // size_t num_bytes;
-        uc = char_utf8_decode(scanner->source, &scanner->index, NULL);
+        uc = utf8_char_decode(scanner->source, &scanner->index, NULL);
         if (string_compare(uc, "\0") == 0) {
             memory_destroy(uc);
 
@@ -49,10 +49,11 @@ void scanner_scan_number(scanner_t *scanner, char *uc)
         memory_destroy(uc);
     }
 
-    token_type_t type = is_float ? TOKEN_TYPE_NUMBER_FLOAT : TOKEN_TYPE_NUMBER_INT;
-    token_t *token = token_create(
-        type, (token_location_t){scanner->index, 1, scanner->line, scanner->column,
-                           scanner->line, scanner->column});
+    token_type_t type = is_float ? TOKEN_TYPE_VALUE_NUMBER_FLOAT : TOKEN_TYPE_VALUE_NUMBER_INT;
+    token_t *token = token_create(type);
+    token->location = (token_location_t){scanner->line, scanner->column, scanner->index,
+                                         scanner->line, scanner->column, scanner->index,
+                                         1};
     // token->data_type = type;
     // if (is_float) {
     //     token->data.number_float = atof(value->data);

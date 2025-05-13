@@ -6,7 +6,7 @@ void value_destroy(value_t* value)
         return;
     }
 
-    value_direct_destroy(value);
+    value_direct_destroy(*value);
     
     memory_destroy(value);
 }

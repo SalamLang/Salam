@@ -14,6 +14,9 @@ int main(int argc, char** argv)
     scanner_set(scanner, source, directory, argv[1]);
     scanner_scan(scanner);
     scanner_log(scanner);
+    char* json_scanner = scanner_json(scanner);
+    printf("%s\n", json_scanner);
+    memory_destroy(json_scanner);
     scanner_free(scanner);
     return 0;
 }

@@ -4,10 +4,13 @@
 // file
 #include <utility/file/file_reads/file_reads.h>
 #include <utility/file/file_exists/file_exists.h>
+
 // memory
 #include <utility/memory/memory_destroy/memory_destroy.h>
+
 // log
 #include <utility/log/log_fatal/log_fatal.h>
+
 // io
 #include <utility/io/io_directory/io_directory.h>
 
@@ -19,3 +22,6 @@
 #include <stage/scanner/scanner_log/scanner_log.h>
 #include <stage/scanner/scanner_set/scanner_set.h>
 #include <stage/scanner/scanner_scan/scanner_scan.h>
+#include <stage/scanner/scanner_json/scanner_json.h>
+
+int main(int argc, char** argv);

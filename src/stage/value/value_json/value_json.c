@@ -9,7 +9,9 @@ char* value_json(const value_t* value)
     else {
         buffer_append_str(temp, "{");
         buffer_append_str(temp, "\"type\": ");
+        buffer_append_char(temp, '"');
         buffer_append_str(temp, value_name(value->type));
+        buffer_append_char(temp, '"');
         buffer_append_str(temp, ", ");
         buffer_append_str(temp, "\"value\": ");
 
@@ -21,10 +23,11 @@ char* value_json(const value_t* value)
                 buffer_append_str(temp, convert_size2string(value->raw.float_value));
             } break;
             case VALUE_TYPE_STRING: {
-                char *value_str = value->raw.string_value;
-                if (value_str) {
+                if (value->raw.string_value) {
                     buffer_append_char(temp, '"');
-                    buffer_append_str(temp, value_str); // TODO: consider escaping if needed
+                    char* value_str = string_escaping(value->raw.string_value);
+                    buffer_append_str(temp, value_str);
+                    memory_destroy(value_str);
                     buffer_append_char(temp, '"');
                 } else {
                     buffer_append_str(temp, "null");

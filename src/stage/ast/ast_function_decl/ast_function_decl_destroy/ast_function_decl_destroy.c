@@ -1,4 +1,4 @@
-#include <stage/ast/ast_function_decl_destroy/ast_function_decl_destroy.h>
+#include <stage/ast/ast_function_decl/ast_function_decl_destroy/ast_function_decl_destroy.h>
 
 void ast_function_decl_destroy(ast_function_decl_t* function_decl)
 {

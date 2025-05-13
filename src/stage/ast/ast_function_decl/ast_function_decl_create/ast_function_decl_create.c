@@ -1,8 +1,8 @@
-#include <stage/ast/ast_function_decl_create/ast_function_decl_create.h>
+#include <stage/ast/ast_function_decl/ast_function_decl_create/ast_function_decl_create.h>
 
 ast_t* ast_create_function_decl(const char* name, char** params, size_t param_count, ast_t* body)
 {
-    ast_t* node = ast_alloc(AST_TYPE_FUNCTION_DECL, ast_free);
+    ast_t* node = ast_alloc(AST_TYPE_FUNCTION_DECL, ast_destroy);
     node->function_decl.name = string_duplicate(name);
     node->function_decl.param_count = param_count;
 

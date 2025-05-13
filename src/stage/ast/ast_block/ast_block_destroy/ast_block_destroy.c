@@ -1,4 +1,4 @@
-#include <stage/ast/ast_block_destroy/ast_block_destroy.h>
+#include <stage/ast/ast_block/ast_block_destroy/ast_block_destroy.h>
 
 void ast_block_destroy(ast_block_t* block)
 {

@@ -11,6 +11,9 @@
 #include <utility/buffer/buffer_append_char/buffer_append_char.h>
 #include <utility/buffer/buffer_destroy/buffer_destroy.h>
 
+// string
+#include <utility/string/string_duplicate/string_duplicate.h>
+
 // memory
 #include <utility/memory/memory_destroy/memory_destroy.h>
 

@@ -20,7 +20,7 @@ int main(int argc, char** argv)
     memory_destroy(json_scanner);
 
     // ast
-    ast_t* ast = ast_create();
+    ast_t* ast = ast_create(AST_TYPE_PROGRAM, ast_program_direct_destroy);
     ast_log(ast);
     char* json_ast = ast_json(ast);
     printf("%s\n", json_ast);

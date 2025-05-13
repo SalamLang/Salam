@@ -12,9 +12,12 @@
 
 // utf8
 #include <utility/utf8/utf8_is_alpha/utf8_is_alpha.h>
+#include <utility/utf8/utf8_char_decode/utf8_char_decode.h>
 
 // token
 #include <stage/token/type.h>
+#include <stage/token/token_create/token_create.h>
+#include <stage/token/token_keyword_type/token_keyword_type.h>
 
 // scanner
 #include <stage/scanner/type.h>

@@ -23,7 +23,7 @@ void buffer_append_str(buffer_t *str, const char *suffix)
 
     while (str->length + suffix_len >= str->capacity) {
         str->capacity *= 2;
-        str->data = (char*) memory_realloc(str->data, str->capacity * sizeof(char));
+        str->data = memory_realloc(str->data, str->capacity * sizeof(char));
     }
 
     strcpy(str->data + str->length, suffix);

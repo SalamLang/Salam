@@ -9,6 +9,7 @@
 
 // string
 #include <utility/string/string_compare/string_compare.h>
+#include <utility/string/string_char_is_alpha/string_char_is_alpha.h>
 
 // utf8
 #include <utility/utf8/utf8_char_decode/utf8_char_decode.h>

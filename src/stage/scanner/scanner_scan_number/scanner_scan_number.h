@@ -6,6 +6,7 @@
 
 // utf8
 #include <utility/utf8/utf8_is_digit/utf8_is_digit.h>
+#include <utility/utf8/utf8_char_decode/utf8_char_decode.h>
 
 // buffer
 #include <utility/buffer/type.h>

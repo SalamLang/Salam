@@ -1,6 +1,8 @@
 #ifndef _STAGE_SCANNER_TYPE_H_
 #define _STAGE_SCANNER_TYPE_H_
 
+#include <stddef.h> // for size_t
+
 // base
 #include <base.h>
 
@@ -14,10 +16,10 @@ typedef struct scanner_t
     char* directory;             // Directory of the source code
     char* file_name;             // File name of the source code
 
-    int line;                    // Current line number
-    int column;                  // Current column number
-    int index;                   // Current index in the source code
-    int length;                  // Length of the source code
+    size_t line;                    // Current line number
+    size_t column;                  // Current column number
+    size_t index;                   // Current index in the source code
+    size_t length;                  // Length of the source code
 
     array_t* tokens;             // Array of tokens
 } scanner_t;

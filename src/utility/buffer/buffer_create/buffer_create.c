@@ -20,7 +20,7 @@ buffer_t *buffer_create(size_t initial_capacity)
     str->data[0] = '\0';
 
     str->print = cast(void (*)(void *), buffer_print);
-    str->destroy = cast(void (*)(void *), buffer_destroy);
+    str->destroyer = cast(void (*)(void *), buffer_destroy);
 
     return str;
 }

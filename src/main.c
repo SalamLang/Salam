@@ -16,6 +16,7 @@ int main(int argc, char** argv)
     scanner_log(scanner);
     char* json_scanner = scanner_json(scanner);
     printf("%s\n", json_scanner);
+    file_write("tokens.json", json_scanner);
     memory_destroy(json_scanner);
     scanner_free(scanner);
     return 0;

@@ -3,6 +3,12 @@
 
 #include <stddef.h> // for size_t
 
+// base
+#include <base.h>
+
+// value
+#include <stage/value/type.h>
+
 typedef enum token_type_t {
     TOKEN_TYPE_UNKNOWN = 0,
     TOKEN_TYPE_EOF,
@@ -40,9 +46,10 @@ typedef struct token_location_t
 
 typedef struct token_t
 {
-    char* value;                 // Pointer to the token value
-    token_location_t location;   // Location of the token in the source code
-    token_type_t type;           // Type of the token
+    char* source;                          // Pointer to the token value
+    token_location_t location;            // Location of the token in the source code
+    token_type_t type;                    // Type of the token
+    value_t* value;                       // Pointer to the value of the token
 } token_t;
 
 #endif

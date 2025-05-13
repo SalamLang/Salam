@@ -3,6 +3,8 @@
 const char* token_name(token_type_t type)
 {
     switch (type) {
+        case TOKEN_TYPE_EOF: return "EOF";
+        
         case TOKEN_TYPE_OPERATOR:     return "OPERATOR";
 
         case TOKEN_TYPE_IDENTIFIER:   return "IDENTIFIER";

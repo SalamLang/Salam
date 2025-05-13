@@ -2,9 +2,15 @@
 
 void token_free(token_t* token)
 {
+    if (token->source != NULL)
+    {
+        memory_destroy(token->source);
+        token->source = NULL;
+    }
+
     if (token->value != NULL)
     {
-        memory_destroy(token->value);
+        value_direct_destroy(token->value);
         token->value = NULL;
     }
 

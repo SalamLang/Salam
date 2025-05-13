@@ -81,17 +81,22 @@ void scanner_scan(scanner_t* scanner)
                             memory_destroy(uc);
                         }
 
-                        if (SCANNER_CURRENT == '/' && SCANNER_HAS_NEXT && SCANNER_NEXT == '/') {
+                        printf("Cur: %c, Next: %c\n", ucf, SCANNER_CURRENT);
+                        
+                        if (ucf == '/' && SCANNER_CURRENT == '/') {
+                            printf("scanner_scan_comment_inline\n");
                             scanner_scan_comment_inline(scanner);
 
                             continue;
                         }
-                        else if (SCANNER_CURRENT == '/' && SCANNER_HAS_NEXT && SCANNER_NEXT == '*') {
+                        else if (ucf == '/' && SCANNER_CURRENT == '*') {
+                            printf("scanner_scan_comment_multiline\n");
                             scanner_scan_comment_multiline(scanner);
 
                             continue;
                         }
                         else {
+                            printf("not inline and multiline comments\n");
                             token_type_t type = token_char_type(c);
                             token_t *token = token_create(type);
                             token->location = (token_location_t){scanner->line, scanner->column, scanner->index,

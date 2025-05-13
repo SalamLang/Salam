@@ -2,8 +2,6 @@
 
 void scanner_scan_comment_multiline(scanner_t* scanner)
 {
-    SCANNER_NEXT;  // move past '/'
-    SCANNER_NEXT_COLUMN;
     SCANNER_NEXT;  // move past '*'
     SCANNER_NEXT_COLUMN;
     size_t opened_comments = 1;

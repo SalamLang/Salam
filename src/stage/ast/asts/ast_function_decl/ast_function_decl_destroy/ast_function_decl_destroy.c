@@ -12,8 +12,8 @@ void ast_function_decl_destroy(ast_function_decl_t* function_decl)
         array_destroy(function_decl->params);
     }
 
-    if (function_decl->body != NULL) {
-        ast_destroy(function_decl->body);
+    if (function_decl->block != NULL) {
+        ast_destroy(function_decl->block);
     }
 
     memory_destroy(function_decl);

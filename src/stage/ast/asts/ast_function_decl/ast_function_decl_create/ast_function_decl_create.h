@@ -19,4 +19,4 @@
 #include <stage/ast/asts/ast_function_decl/ast_function_decl_destroy/ast_function_decl_destroy.h>
 #include <stage/ast/asts/ast_function_decl/ast_function_decl_direct_destroy/ast_function_decl_direct_destroy.h>
 
-ast_t* ast_function_decl_create(const char* name, array_t* params, size_t param_count, ast_t* body);
+ast_t* ast_function_decl_create(const char* name, const ast_t* parameters, const ast_t* block);

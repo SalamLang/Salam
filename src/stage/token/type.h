@@ -9,6 +9,48 @@
 // value
 #include <stage/value/type.h>
 
+typedef enum token_operator_type_t {
+    TOKEN_OPERATOR_TYPE_UNKNOWN = 1000,
+    TOKEN_OPERATOR_TYPE_BRACE_OPEN, // {
+    TOKEN_OPERATOR_TYPE_BRACE_CLOSE, // }
+    TOKEN_OPERATOR_TYPE_PAREN_OPEN, // (
+    TOKEN_OPERATOR_TYPE_PAREN_CLOSE, // )
+    TOKEN_OPERATOR_TYPE_BRACKET_OPEN, // [
+    TOKEN_OPERATOR_TYPE_BRACKET_CLOSE, // ]
+    TOKEN_OPERATOR_TYPE_COMMA, // ,
+    TOKEN_OPERATOR_TYPE_SEMICOLON, // ;
+    TOKEN_OPERATOR_TYPE_COLON, // :
+    TOKEN_OPERATOR_TYPE_DOT, // .
+    TOKEN_OPERATOR_TYPE_DOT_DOT, // ..
+    TOKEN_OPERATOR_TYPE_DOT_DOT_DOT, // ...
+    TOKEN_OPERATOR_TYPE_ARROW, // ->
+    TOKEN_OPERATOR_TYPE_HASH, // #
+    TOKEN_OPERATOR_TYPE_ASSIGN, // =
+    TOKEN_OPERATOR_TYPE_PLUS, // +
+    TOKEN_OPERATOR_TYPE_MINUS, // -
+    TOKEN_OPERATOR_TYPE_ASTERISK, // *
+    TOKEN_OPERATOR_TYPE_SLASH, // /
+    TOKEN_OPERATOR_TYPE_PERCENT, // %
+    TOKEN_OPERATOR_TYPE_CARET, // ^
+    TOKEN_OPERATOR_TYPE_AMPERSAND, // &
+    TOKEN_OPERATOR_TYPE_PIPE, // |
+    TOKEN_OPERATOR_TYPE_TILDE, // ~
+    TOKEN_OPERATOR_TYPE_EXCLAMATION, // !
+    TOKEN_OPERATOR_TYPE_QUESTION, // ?
+    TOKEN_OPERATOR_TYPE_NULL_COALESCING, // ??
+    TOKEN_OPERATOR_TYPE_NULLISH_COALESCING, // ?:
+    TOKEN_OPERATOR_TYPE_LT, // <
+    TOKEN_OPERATOR_TYPE_GT, // >
+    TOKEN_OPERATOR_TYPE_LT_EQ, // <=
+    TOKEN_OPERATOR_TYPE_GT_EQ, // >=
+    TOKEN_OPERATOR_TYPE_EQ, // ==
+    TOKEN_OPERATOR_TYPE_NOT_EQ, // !=
+    TOKEN_OPERATOR_TYPE_AND, // &&
+    TOKEN_OPERATOR_TYPE_OR, // ||
+    TOKEN_OPERATOR_TYPE_INC, // ++
+    TOKEN_OPERATOR_TYPE_DEC, // --
+} token_operator_type_t;
+
 typedef enum token_type_t {
     TOKEN_TYPE_UNKNOWN = 0,
     TOKEN_TYPE_EOF,
@@ -24,11 +66,25 @@ typedef enum token_type_t {
     TOKEN_TYPE_KEYWORD_WHILE,
     TOKEN_TYPE_KEYWORD_RET,
     TOKEN_TYPE_KEYWORD_FN,
+    TOKEN_TYPE_KEYWORD_END,
+
+    // kind
+    TOKEN_TYPE_KIND_INT,
+    TOKEN_TYPE_KIND_FLOAT,
+    TOKEN_TYPE_KIND_STRING,
+    TOKEN_TYPE_KIND_BOOL,
+    TOKEN_TYPE_KIND_ARRAY,
+    TOKEN_TYPE_KIND_MAP,
+    TOKEN_TYPE_KIND_SET,
+    TOKEN_TYPE_KIND_VOID,
 
     // value
     TOKEN_TYPE_VALUE_STRING,
     TOKEN_TYPE_VALUE_NUMBER_INT,
     TOKEN_TYPE_VALUE_NUMBER_FLOAT,
+    TOKEN_TYPE_VALUE_TRUE,
+    TOKEN_TYPE_VALUE_FALSE,
+    TOKEN_TYPE_VALUE_NULL,
 } token_type_t;
 
 typedef struct token_location_t
@@ -46,9 +102,10 @@ typedef struct token_location_t
 
 typedef struct token_t
 {
-    char* source;                          // Pointer to the token value
+    char* source;                         // Pointer to the token value
     token_location_t location;            // Location of the token in the source code
     token_type_t type;                    // Type of the token
+    token_operator_type_t operator_type;  // Operator type of the token
     value_t* value;                       // Pointer to the value of the token
 } token_t;
 

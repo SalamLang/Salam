@@ -66,9 +66,8 @@ typedef struct {
 
 typedef struct {
     char* name;
-    array_t* params;
-    size_t param_count;
-    ast_t* body;
+    ast_t* parameters;
+    ast_t* block;
 } ast_function_decl_t;
 
 // typedef struct {
@@ -90,7 +89,7 @@ typedef struct {
 
 // typedef struct {
 //     ast_t* condition;
-//     ast_t* body;
+//     ast_t* block;
 // } ast_while_t;
 
 // typedef struct {

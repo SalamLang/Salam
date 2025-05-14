@@ -11,6 +11,9 @@ typedef enum value_type_t
     VALUE_TYPE_STRING = 0,
     VALUE_TYPE_NUMBER_INT,
     VALUE_TYPE_NUMBER_FLOAT,
+    VALUE_TYPE_BOOL,
+    VALUE_TYPE_NULL,
+    // TODO: VALUE_TYPE_ARRAY,
 } value_type_t;
 
 typedef struct value_t
@@ -20,6 +23,7 @@ typedef struct value_t
         char* string_value;               // String value
         int int_value;                    // Integer value
         double float_value;               // Float value
+        bool bool_value;                  // Boolean value
     } raw;                                // Value of the token
 } value_t;
 

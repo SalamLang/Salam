@@ -29,7 +29,7 @@ beautify_json_if_valid() {
 # ────── Compilation ──────
 mapfile -t items < <(find . -type f -name "*.c")
 
-gcc -g -Wall -Wextra -pedantic -I$(pwd) "${items[@]}" -o "$SALAM_OUTPUT" 2> compile_warnings.txt
+gcc -Wno-unused-parameter -g -Wall -Wextra -pedantic -I$(pwd) "${items[@]}" -o "$SALAM_OUTPUT" 2> compile_warnings.txt
 
 cat compile_warnings.txt
 

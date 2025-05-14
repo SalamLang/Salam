@@ -4,6 +4,9 @@
 // memory
 #include <utility/memory/memory_allocation/memory_allocation.h>
 
+// string
+#include <utility/string/string_length/string_length.h>
+
 // array
 #include <utility/array/array_create/array_create.h>
 

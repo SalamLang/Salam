@@ -17,7 +17,7 @@ scanner_t* scanner_create(
     scanner->index = 0;
     scanner->length = string_length(source);
 
-    scanner->tokens = array_create((array_destroy_func_t)token_free);
+    scanner->tokens = array_create((array_destroy_t)token_free);
 
     return scanner;
 }

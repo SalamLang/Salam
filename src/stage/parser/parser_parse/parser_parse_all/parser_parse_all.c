@@ -1,6 +1,6 @@
-#include <stage/parser/parser_parse/parser_parse.h>
+#include <stage/parser/parser_parse_all/parser_parse_all.h>
 
-ast_t* parser_parse(parser_t* parser)
+ast_t* parser_parse_all(parser_t* parser)
 {
     DEBUG_ME;
     size_t declaration_count = 0;

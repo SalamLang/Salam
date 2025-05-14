@@ -9,7 +9,7 @@
 
 typedef struct parser_t
 {
-    scanner_t* scanner;
+    const scanner_t* scanner;
 } parser_t;
 
 #endif

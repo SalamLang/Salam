@@ -3,13 +3,20 @@
 
 #include <stddef.h> // for size_t
 
-typedef struct {
+// base
+#include <base.h>
+
+struct buffer_t;
+
+typedef void (*buffer_destroy_t)(struct buffer_t *);
+
+typedef struct buffer_t {
     size_t capacity;
     size_t length;
     char *data;
 
-    void (*print)(void *);
-    void (*destroy)(void *);
+    void (*print)(struct buffer_t *);
+    buffer_destroy_t destroyer;
 } buffer_t;
 
 #endif

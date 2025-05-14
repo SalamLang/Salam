@@ -18,13 +18,19 @@ typedef enum ast_node_type_t {
 
     AST_TYPE_PROGRAM,
 
+    AST_TYPE_PACKAGE,
+
+    AST_TYPE_IMPORT,
+
+    AST_TYPE_TYPE_DECL,
+
     AST_TYPE_VAR_DECL,
 
     AST_TYPE_FUNCTION_DECL,
 
     AST_TYPE_BLOCK,
 
-    // parameters - a list of pairs of name and type
+    // parameters - a list of pairs of name, type, and optional default value
     AST_TYPE_PARAMETER,
     AST_TYPE_PARAMETERS,
 
@@ -36,11 +42,8 @@ typedef enum ast_node_type_t {
     AST_TYPE_ARGUMENT,
     AST_TYPE_ARGUMENTS,
 
-    AST_TYPE_IF_STMT,
-    AST_TYPE_WHILE_LOOP,
-    AST_TYPE_RETURN_STMT,
-    AST_TYPE_ASSIGNMENT,
-
+    // expressions
+    AST_TYPE_EXPRESSIONS,
     AST_TYPE_EXPRESSION,
     AST_TYPE_EXPRESSION_LITERAL,
     AST_TYPE_EXPRESSION_IDENTIFIER,
@@ -49,7 +52,13 @@ typedef enum ast_node_type_t {
     AST_TYPE_EXPRESSION_INDEX,
     AST_TYPE_EXPRESSION_FUNCTION_CALL,
 
-    AST_TYPE_EXPRESSION_STATEMENT,
+    // statements
+    AST_TYPE_STATEMENT_IF,
+    AST_TYPE_STATEMENT_WHILE,
+    AST_TYPE_STATEMENT_RETURN,
+    AST_TYPE_STATEMENT_PRINT,
+    AST_TYPE_STATEMENT_VAR_DECL,
+    AST_TYPE_STATEMENT_EXPRESSION,
 } ast_node_type_t;
 
 typedef struct ast_base_t {
@@ -99,6 +108,27 @@ typedef struct {
 
 typedef struct {
     char* name;
+    hashmap_t* values; // key is string, value is optional ast_expression_t
+} ast_enum_t;
+
+typedef struct {
+    // TODO
+} ast_union_t;
+
+typedef struct {
+    char* name;
+    ast_t* parameters; // ast_parameters_t (type, name, and optional default value)
+    ast_t* functions; // ast_function_declarations_t
+} ast_struct_t;
+
+typedef struct {
+    char* name;
+    ast_t* type; // ast_type_t
+    ast_t* value; // ast_expression_t (nullable)
+} ast_statement_var_decl_t;
+
+typedef struct {
+    char* name;
     ast_t* parameters; // ast_parameters_t
     ast_t* block; // ast_block_t
 } ast_function_decl_t;
@@ -113,28 +143,44 @@ typedef struct {
     ast_t* condition; // ast_expression_t (nullable)
     ast_t* then_branch; // ast_block_t
     ast_t* else_branch; // ast_block_t (nullable)
-} ast_if_t;
+} ast_statement_if_t;
 
 typedef struct {
     ast_t* condition; // ast_expression_t
     ast_t* block; // ast_block_t
-} ast_while_t;
+} ast_statement_while_t;
 
 typedef struct {
     ast_t* value; // ast_expression_t
 } ast_expression_statement_t;
 
 typedef struct {
+    ast_node_type_t type;
 
+    union {
+        ast_expression_literal_t literal;
+        ast_expression_identifier_t identifier;
+        ast_expression_binary_t binary;
+        ast_expression_unary_t unary;
+        ast_expression_index_t index;
+        ast_expression_call_t call;
+    } raw;
+
+    ast_type_t* runtime_type; // (nullable)
 } ast_expression_t;
 
 typedef struct {
-    ast_t* value; // ast_expression_t
-} ast_return_t;
+    array_t* values; // array of ast_expression_t
+    size_t value_count;
+} ast_expressions_t;
 
 typedef struct {
     ast_t* value; // ast_expression_t
-} ast_print_t;
+} ast_statement_return_t;
+
+typedef struct {
+    ast_t* value; // ast_expression_t
+} ast_statement_print_t;
 
 typedef struct {
     array_t* var_declarations; // ast_var_decl_t
@@ -237,16 +283,22 @@ typedef struct ast_t {
         ast_argument_t argument_value;
         ast_arguments_t arguments_value;
 
-        // ast_literal_t literal_value;
-        // ast_identifier_t identifier_value;
-        // ast_binary_t binary_value;
-        // ast_unary_t unary_value;
-        // ast_assign_t assign_value;
-        // ast_call_t call_value;
-        // ast_if_t if_stmt_value;
-        // ast_while_t while_stmt_value;
-        // ast_return_t return_stmt_value;
-        // ast_expression_statement_t expression_stmt_value;
+        // expressions
+        ast_expression_literal_t expression_literal_value;
+        ast_expression_identifier_t expression_identifier_value;
+        ast_expression_binary_t expression_binary_value;
+        ast_expression_unary_t expression_unary_value;
+        ast_expression_index_t expression_index_value;
+        ast_expression_call_t expression_call_value;
+        ast_expression_t expression_value;
+        ast_expressions_t expressions_value;
+
+        // statements
+        ast_statement_if_t statement_if_value;
+        ast_statement_while_t statement_while_value;
+        ast_statement_return_t statement_return_value;
+        ast_statement_print_t statement_print_value;
+        ast_statement_expression_t statement_expression_value;
     } raw;
 } ast_t;
 

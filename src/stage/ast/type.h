@@ -9,6 +9,8 @@
 // array
 #include <utility/array/type.h>
 
+struct ast_t;
+
 typedef struct ast_t ast_t;
 
 typedef enum ast_node_type_t {
@@ -29,11 +31,8 @@ typedef enum ast_node_type_t {
     // AST_TYPE_EXPRESSION_STATEMENT,
 } ast_node_type_t;
 
-typedef void (*ast_destroy_t)(ast_t*);
-
 typedef struct ast_base_t {
     ast_node_type_t type;
-    ast_destroy_t destroyer;
 } ast_base_t;
 
 // typedef struct {
@@ -110,21 +109,21 @@ typedef struct {
 typedef struct ast_t {
     ast_base_t base;
     union {
-        // ast_literal_t literal;
-        // ast_identifier_t identifier;
-        // ast_binary_t binary;
-        // ast_unary_t unary;
-        ast_var_decl_t var_decl;
-        // ast_assign_t assign;
-        ast_function_decl_t function_decl;
-        // ast_call_t call;
-        ast_block_t block;
-        // ast_if_t if_stmt;
-        // ast_while_t while_stmt;
-        // ast_return_t return_stmt;
-        // ast_expression_statement_t expression_stmt;
-        ast_program_t program;
-    };
+        // ast_literal_t literal_value;
+        // ast_identifier_t identifier_value;
+        // ast_binary_t binary_value;
+        // ast_unary_t unary_value;
+        ast_var_decl_t var_decl_value;
+        // ast_assign_t assign_value;
+        ast_function_decl_t function_decl_value;
+        // ast_call_t call_value;
+        ast_block_t block_value;
+        // ast_if_t if_stmt_value;
+        // ast_while_t while_stmt_value;
+        // ast_return_t return_stmt_value;
+        // ast_expression_statement_t expression_stmt_value;
+        ast_program_t program_value;
+    } raw;
 } ast_t;
 
 // now write create and destroy function for all.

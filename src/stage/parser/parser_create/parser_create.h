@@ -4,6 +4,9 @@
 // base
 #include <base.h>
 
+// memory
+#include <utility/memory/memory_allocation/memory_allocation.h>
+
 // parser
 #include <stage/parser/type.h>
 

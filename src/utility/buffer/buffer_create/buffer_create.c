@@ -19,8 +19,8 @@ buffer_t *buffer_create(size_t initial_capacity)
     str->data = memory_allocation(initial_capacity * sizeof(char));
     str->data[0] = '\0';
 
-    str->print = cast(void (*)(void *), buffer_print);
-    str->destroyer = cast(void (*)(void *), buffer_destroy);
+    str->print = buffer_print;
+    str->destroyer = buffer_destroy;
 
     return str;
 }

@@ -20,6 +20,7 @@
 // ast
 #include <stage/ast/type.h>
 #include <stage/ast/ast_destroy/ast_destroy.h>
+#include <stage/ast/asts/ast_program/ast_program_create/ast_program_create.h>
 
 ast_t* parser_parse(parser_t* parser);
 

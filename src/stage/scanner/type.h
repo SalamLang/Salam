@@ -10,6 +10,9 @@
 #include <utility/array/type.h>
 #include <utility/array/array_append/array_append.h>
 
+// token
+#include <stage/token/type.h>
+
 typedef struct scanner_t
 {
     char* source;                   // Pointer to the source code
@@ -42,7 +45,7 @@ typedef struct scanner_t
 
 #define SCANNER_ZERO_COLUMN scanner->column = 0
 
-#define SCANNER_CURRENT_LOCATION (token_location) { \
+#define SCANNER_CURRENT_LOCATION (token_location_t) { \
     .begin_line = scanner->line, \
     .begin_column = scanner->column, \
     .begin_index = scanner->index, \

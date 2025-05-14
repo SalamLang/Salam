@@ -5,6 +5,13 @@ void scanner_destroy(scanner_t* scanner)
     DEBUG_ME;
     // if (! scanner) return;
 
-    memory_destroy(scanner->source);
+    if (scanner->tokens != NULL) {
+        array_destroy(scanner->tokens);
+    }
+
+    if (scanner->source != NULL) {
+        memory_destroy(scanner->directory);
+    }
+
     memory_destroy(scanner);
 }

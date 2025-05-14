@@ -34,10 +34,20 @@ void scanner_scan_identifier(scanner_t *scanner, char *uc)
     }
 
     token_type_t type = token_keyword_type(value->data);
+    token_operator_type_t operator_type = TOKEN_OPERATOR_TYPE_UNKNOWN;
+    if (type == TOKEN_TYPE_IDENTIFIER) {
+        operator_type = token_operator_keyword_type(value->data);
+        if (operator_type != TOKEN_OPERATOR_TYPE_UNKNOWN) {
+            type = TOKEN_TYPE_OPERATOR;
+        }
+    }
+
     token_t *token = token_create(type, SCANNER_CURRENT_LOCATION);
+    if (type == TOKEN_TYPE_OPERATOR) {
+        token->operator_type = operator_type;
+    }
     token->source = string_duplicate(value->data);
     buffer_destroy(value);
 
     SCANNER_PUSH_TOKEN(token);
 }
-

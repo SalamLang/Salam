@@ -7,9 +7,23 @@
 // buffer
 #include <utility/buffer/type.h>
 #include <utility/buffer/buffer_destroy/buffer_destroy.h>
+#include <utility/buffer/buffer_append_str/buffer_append_str.h>
+#include <utility/buffer/buffer_append_char/buffer_append_char.h>
 
 // string
 #include <utility/string/string_duplicate/string_duplicate.h>
+
+// parser
+#include <stage/parser/type.h>
+
+// token
+#include <stage/token/type.h>
+#include <stage/token/token_name/token_name.h>
+#include <stage/token/token_json/token_json.h>
+
+// value
+#include <stage/value/type.h>
+#include <stage/value/value_json/value_json.h>
 
 char* parser_json(parser_t* parser);
 

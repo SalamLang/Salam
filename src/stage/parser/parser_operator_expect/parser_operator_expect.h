@@ -1,5 +1,5 @@
-#ifndef _STAGE_PARSER_PARSER_EXPECT_PARSER_EXPECT_H_
-#define _STAGE_PARSER_PARSER_EXPECT_PARSER_EXPECT_H_
+#ifndef _STAGE_PARSER_PARSER_OPERATOR_EXPECT_PARSER_OPERATOR_EXPECT_H_
+#define _STAGE_PARSER_PARSER_OPERATOR_EXPECT_PARSER_OPERATOR_EXPECT_H_
 
 // base
 #include <base.h>
@@ -16,6 +16,6 @@
 #include <stage/token/token_name/token_name.h>
 #include <stage/token/token_operator_name/token_operator_name.h>
 
-void parser_expect(parser_t* parser, token_type_t type);
+void parser_operator_expect(parser_t* parser, token_operator_type_t operator_type);
 
 #endif

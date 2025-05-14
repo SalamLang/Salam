@@ -2,6 +2,7 @@
 
 parser_t* parser_create(const scanner_t* scanner)
 {
+    DEBUG_ME;
     parser_t* parser = memory_allocation(sizeof(parser_t));
     parser->scanner = scanner;
     parser->tokens = scanner->tokens;

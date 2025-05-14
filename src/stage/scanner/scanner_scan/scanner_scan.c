@@ -2,6 +2,7 @@
 
 void scanner_scan(scanner_t* scanner)
 {
+    DEBUG_ME;
     char c;
     while ((c = SCANNER_CURRENT) && c != '\0' &&
            scanner->index < scanner->length) {

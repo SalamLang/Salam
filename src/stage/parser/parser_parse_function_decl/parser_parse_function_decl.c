@@ -2,6 +2,7 @@
 
 ast_t* parser_parse_function_decl(parser_t* parser)
 {
+    DEBUG_ME;
     ast_t* ast = NULL;
     parser_expect(parser, TOKEN_TYPE_KEYWORD_FN);
     token_t* name = parser_expect_get(parser, TOKEN_TYPE_IDENTIFIER);

@@ -19,7 +19,7 @@
 // scanner
 #include <stage/scanner/type.h>
 #include <stage/scanner/scanner_create/scanner_create.h>
-#include <stage/scanner/scanner_free/scanner_free.h>
+#include <stage/scanner/scanner_destroy/scanner_destroy.h>
 #include <stage/scanner/scanner_log/scanner_log.h>
 #include <stage/scanner/scanner_set/scanner_set.h>
 #include <stage/scanner/scanner_scan/scanner_scan.h>

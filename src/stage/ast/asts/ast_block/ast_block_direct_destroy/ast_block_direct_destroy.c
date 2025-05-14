@@ -2,6 +2,7 @@
 
 void ast_block_direct_destroy(ast_block_t block)
 {
+    DEBUG_ME;
     // if (! block) return;
 
     array_destroy(block.statements);

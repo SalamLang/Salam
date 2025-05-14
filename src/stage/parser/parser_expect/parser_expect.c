@@ -2,6 +2,7 @@
 
 void parser_expect(parser_t* parser, token_type_t type)
 {
+    DEBUG_ME;
     if (!parser) return;
     if (!PARSER_HAS_CURRENT) {
         log_fatal("Error: no current token\n");

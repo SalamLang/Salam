@@ -11,4 +11,4 @@
 // ast
 #include <stage/ast/type.h>
 
-char* ast_var_decl_json(ast_var_decl_t* var_decl);
+char* ast_variable_decl_json(ast_variable_decl_t* variable_decl);

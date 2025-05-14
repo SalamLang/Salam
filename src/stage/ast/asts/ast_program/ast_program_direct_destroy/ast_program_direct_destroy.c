@@ -2,5 +2,8 @@
 
 void ast_program_direct_destroy(ast_program_t program)
 {
-    array_destroy(program.declarations);
+    DEBUG_ME;
+    if (program.declarations != NULL) {
+        array_destroy(program.declarations);
+    }
 }

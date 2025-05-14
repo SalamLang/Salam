@@ -2,6 +2,12 @@
 
 void ast_var_decl_direct_destroy(ast_var_decl_t var_decl)
 {
-    memory_destroy(var_decl.name);
-    ast_destroy(var_decl.value);
+    DEBUG_ME;
+    if (var_decl.name != NULL) {
+        memory_destroy(var_decl.name);
+    }
+
+    if (var_decl.value != NULL) {
+        ast_destroy(var_decl.value);
+    }
 }

@@ -2,6 +2,7 @@
 
 void ast_destroy(ast_t* ast)
 {
+    DEBUG_ME;
     // if (!ast) return;
 
     switch (ast->base.type) {

@@ -50,11 +50,8 @@ void scanner_scan_number(scanner_t *scanner, char *uc)
     }
 
     token_type_t type = is_float ? TOKEN_TYPE_VALUE_NUMBER_FLOAT : TOKEN_TYPE_VALUE_NUMBER_INT;
-    token_t *token = token_create(type);
+    token_t *token = token_create(type, token_location);
     token->source = string_duplicate(temp->data);
-    token->location = (token_location_t){scanner->line, scanner->column, scanner->index,
-                                         scanner->line, scanner->column, scanner->index,
-                                         1};
     token->value = value_create(is_float ? VALUE_TYPE_NUMBER_FLOAT : VALUE_TYPE_NUMBER_INT);
     if (is_float) {
         token->value->raw.float_value = atof(temp->data);

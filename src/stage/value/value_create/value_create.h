@@ -1,3 +1,6 @@
+#ifndef _STAGE_VALUE_VALUE_CREATE_VALUE_CREATE_H_
+#define _STAGE_VALUE_VALUE_CREATE_VALUE_CREATE_H_
+
 // base
 #include <base.h>
 
@@ -7,4 +10,6 @@
 // value
 #include <stage/value/type.h>
 
-value_t* value_create();
+value_t* value_create(value_type_t type);
+
+#endif

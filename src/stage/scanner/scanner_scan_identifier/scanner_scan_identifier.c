@@ -34,11 +34,8 @@ void scanner_scan_identifier(scanner_t *scanner, char *uc)
     }
 
     token_type_t type = token_keyword_type(value->data);
-    token_t *token = token_create(type);
+    token_t *token = token_create(type, SCANNER_CURRENT_LOCATION);
     token->source = string_duplicate(value->data);
-    token->location = (token_location_t){scanner->line, scanner->column, scanner->index,
-                                         scanner->line, scanner->column, scanner->index,
-                                         1};
     buffer_destroy(value);
 
     SCANNER_PUSH_TOKEN(token);

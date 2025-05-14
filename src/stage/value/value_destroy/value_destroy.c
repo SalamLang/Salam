@@ -17,6 +17,12 @@ void value_destroy(value_t* value)
         case VALUE_TYPE_NUMBER_FLOAT:
             // No need to free float_value
             break;
+        case VALUE_TYPE_BOOL:
+            // No need to free bool_value
+            break;
+        case VALUE_TYPE_NULL:
+            // No need to free null_value
+            break;
     }
 
     memory_destroy(value);

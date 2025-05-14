@@ -22,6 +22,12 @@ char* value_json(const value_t* value)
             case VALUE_TYPE_NUMBER_FLOAT: {
                 buffer_append_str(temp, convert_size2string(value->raw.float_value));
             } break;
+            case VALUE_TYPE_BOOL: {
+                buffer_append_str(temp, value->raw.bool_value ? "true" : "false");
+            } break;
+            case VALUE_TYPE_NULL: {
+                buffer_append_str(temp, "null");
+            } break;
             case VALUE_TYPE_STRING: {
                 if (value->raw.string_value) {
                     buffer_append_char(temp, '"');

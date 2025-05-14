@@ -17,5 +17,11 @@ void value_log(value_t* value)
         case VALUE_TYPE_NUMBER_FLOAT:
             log_info("Value: Float(%f)\n", value->raw.float_value);
             break;
+        case VALUE_TYPE_BOOL:
+            log_info("Value: Bool(%s)\n", value->raw.bool_value ? "true" : "false");
+            break;
+        case VALUE_TYPE_NULL:
+            log_info("Value: Null\n");
+            break;
     }
 }

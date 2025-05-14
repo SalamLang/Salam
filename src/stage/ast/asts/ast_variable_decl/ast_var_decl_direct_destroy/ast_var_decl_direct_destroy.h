@@ -11,6 +11,6 @@
 #include <stage/ast/type.h>
 #include <stage/ast/ast_destroy/ast_destroy.h>
 
-void ast_var_decl_direct_destroy(ast_var_decl_t var_decl);
+void ast_variable_decl_direct_destroy(ast_variable_decl_t variable_decl);
 
 #endif

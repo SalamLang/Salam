@@ -20,7 +20,7 @@ typedef struct value_t
         char* string_value;               // String value
         int int_value;                    // Integer value
         double float_value;               // Float value
-    } raw;                              // Value of the token
+    } raw;                                // Value of the token
 } value_t;
 
 #endif

@@ -13,6 +13,7 @@
 
 // token
 #include <stage/token/type.h>
+#include <stage/token/token_name/token_name.h>
 
 void parser_expect(parser_t* parser, token_type_t type);
 

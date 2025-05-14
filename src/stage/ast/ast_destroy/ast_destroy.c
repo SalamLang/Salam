@@ -32,7 +32,7 @@ void ast_destroy(ast_t* ast)
             break;
 
         case AST_TYPE_VAR_DECL:
-            ast_var_decl_direct_destroy(ast->raw.var_decl_value);
+            ast_variable_decl_direct_destroy(ast->raw.variable_decl_value);
             break;
 
         case AST_TYPE_FUNCTION_DECL:

@@ -10,6 +10,6 @@
 // ast
 #include <stage/ast/type.h>
 
-void ast_var_decl_log(ast_var_decl_t* var_decl);
+void ast_variable_decl_log(ast_variable_decl_t* variable_decl);
 
 #endif

@@ -10,7 +10,7 @@ void scanner_destroy(scanner_t* scanner)
     }
 
     if (scanner->source != NULL) {
-        memory_destroy(scanner->directory);
+        memory_destroy(scanner->source);
     }
 
     memory_destroy(scanner);

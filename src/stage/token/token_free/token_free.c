@@ -2,16 +2,11 @@
 
 void token_free(token_t* token)
 {
+    // if (! token) return;
+
     if (token->source != NULL)
     {
         memory_destroy(token->source);
-        token->source = NULL;
-    }
-
-    if (token->value != NULL)
-    {
-        value_destroy(token->value);
-        token->value = NULL;
     }
 
     token->location.begin_line = 0;
@@ -25,6 +20,11 @@ void token_free(token_t* token)
     token->location.length = 0;
 
     token->type = TOKEN_TYPE_UNKNOWN;
+
+    if (token->value != NULL)
+    {
+        value_destroy(token->value);
+    }
 
     memory_destroy(token);
 }

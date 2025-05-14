@@ -2,9 +2,8 @@
 
 void value_destroy(value_t* value)
 {
-    if (value == NULL) {
-        return;
-    }
+    DEBUG_ME;
+    if (! value) return;
 
     switch (value->type) {
         case VALUE_TYPE_STRING:
@@ -19,6 +18,6 @@ void value_destroy(value_t* value)
             // No need to free float_value
             break;
     }
-    
+
     memory_destroy(value);
 }

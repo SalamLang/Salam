@@ -22,11 +22,11 @@ int main(int argc, char** argv)
     // parser
     parser_t* parser = parser_create(scanner);
     ast_t* ast = parser_parse(parser);
-    parser_log(parser);
+    // parser_log(parser);
     parser_destroy(parser);
 
     // ast
-    ast_log(ast);
+    // ast_log(ast);
     char* json_ast = ast_json(ast);
     printf("%s\n", json_ast);
     file_write("ast.json", json_ast);

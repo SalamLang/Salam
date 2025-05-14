@@ -4,5 +4,6 @@ parser_t* parser_create(const scanner_t* scanner)
 {
     parser_t* parser = memory_allocation(sizeof(parser_t));
     parser->scanner = scanner;
+    parser->tokens = scanner->tokens;
     return parser;
 }

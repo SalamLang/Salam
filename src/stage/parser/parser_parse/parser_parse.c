@@ -2,6 +2,7 @@
 
 ast_t* parser_parse(parser_t* parser)
 {
+    DEBUG_ME;
     size_t declaration_count = 0;
     array_t* declarations = array_create((array_destroy_t)ast_destroy);
 

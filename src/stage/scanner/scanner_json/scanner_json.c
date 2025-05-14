@@ -2,6 +2,7 @@
 
 char* scanner_json(scanner_t* scanner)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(256);
     if (scanner == NULL) {
         buffer_append_str(temp, "null");
@@ -61,7 +62,7 @@ char* scanner_json(scanner_t* scanner)
             }
         }
         buffer_append_str(temp, "]");
-        
+
         buffer_append_str(temp, "}");
     }
 

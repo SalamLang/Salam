@@ -2,6 +2,7 @@
 
 void scanner_scan_comment_inline(scanner_t* scanner)
 {
+    DEBUG_ME;
     SCANNER_NEXT;  // move past '/'
     SCANNER_NEXT_COLUMN;
 

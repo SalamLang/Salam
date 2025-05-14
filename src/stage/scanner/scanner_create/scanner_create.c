@@ -6,6 +6,7 @@ scanner_t* scanner_create(
     char* file_name
 )
 {
+    DEBUG_ME;
     scanner_t* scanner = memory_allocation(sizeof(scanner_t));
 
     scanner->source = source;

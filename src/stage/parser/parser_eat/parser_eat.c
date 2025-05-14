@@ -2,6 +2,7 @@
 
 token_t* parser_eat(parser_t* parser)
 {
+    DEBUG_ME;
     if (!parser) return NULL;
     if (!PARSER_HAS_CURRENT) {
         log_fatal("Error: no current token\n");

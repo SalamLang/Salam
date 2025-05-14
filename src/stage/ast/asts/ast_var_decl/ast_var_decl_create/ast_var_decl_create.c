@@ -2,8 +2,8 @@
 
 ast_t* ast_var_decl_create(const char* name, ast_t* value)
 {
-    ast_t* node = ast_alloc(AST_TYPE_VAR_DECL);
-    node->raw.var_decl_value.name = string_duplicate(name);
-    node->raw.var_decl_value.value = value;
-    return node;
+    ast_t* ast = ast_alloc(AST_TYPE_VAR_DECL);
+    ast->raw.var_decl_value.name = string_duplicate(name);
+    ast->raw.var_decl_value.value = value;
+    return ast;
 }

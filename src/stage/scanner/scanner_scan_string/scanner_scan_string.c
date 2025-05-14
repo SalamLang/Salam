@@ -42,16 +42,7 @@ void scanner_scan_string(scanner_t *scanner, int type) {
         memory_destroy(uc);
     }
 
-    token_location_t token_location = {
-        .begin_line = scanner->line,
-        .begin_column = scanner->column,
-        .begin_index = scanner->index,
-        .end_line = scanner->line,
-        .end_column = scanner->column,
-        .end_index = scanner->index,
-        .length = 1,
-    }
-    token_t *token = token_create(TOKEN_TYPE_VALUE_STRING, token_location);
+    token_t *token = token_create(TOKEN_TYPE_VALUE_STRING, SCANNER_CURRENT_LOCATION);
     token->source = string_duplicate(temp->data);
     token->value = value_create(VALUE_TYPE_STRING);
     token->value->raw.string_value = string_duplicate(temp->data);

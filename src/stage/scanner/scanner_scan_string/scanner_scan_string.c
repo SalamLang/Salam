@@ -23,7 +23,6 @@ void scanner_scan_string(scanner_t *scanner, int type) {
                                      (type == 2 && string_compare(uc, "”") != 0))) {
         buffer_append_str(temp, uc);
         memory_destroy(uc);
-
         uc = utf8_char_decode(scanner->source, &scanner->index, &num_bytes);
     }
 
@@ -31,14 +30,11 @@ void scanner_scan_string(scanner_t *scanner, int type) {
         (type == 1 && string_compare(uc, "»") != 0) ||
         (type == 2 && string_compare(uc, "”") != 0)) {
         buffer_destroy(temp);
-
         if (uc != NULL) {
             memory_destroy(uc);
         }
-
         scanner_error("Unterminated string value at line %zu, column %zu",
                     scanner->line, scanner->column);
-
         return;
     }
 
@@ -46,15 +42,20 @@ void scanner_scan_string(scanner_t *scanner, int type) {
         memory_destroy(uc);
     }
 
-    token_t *token = token_create(TOKEN_TYPE_VALUE_STRING);
+    token_location_t token_location = {
+        .begin_line = scanner->line,
+        .begin_column = scanner->column,
+        .begin_index = scanner->index,
+        .end_line = scanner->line,
+        .end_column = scanner->column,
+        .end_index = scanner->index,
+        .length = 1,
+    }
+    token_t *token = token_create(TOKEN_TYPE_VALUE_STRING, token_location);
     token->source = string_duplicate(temp->data);
-    token->location = (token_location_t){scanner->line, scanner->column, scanner->index,
-                                         scanner->line, scanner->column, scanner->index,
-                                         1};
     token->value = value_create(VALUE_TYPE_STRING);
     token->value->raw.string_value = string_duplicate(temp->data);
 
     buffer_destroy(temp);
-
     SCANNER_PUSH_TOKEN(token);
 }

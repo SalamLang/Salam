@@ -42,8 +42,15 @@ typedef struct scanner_t
 
 #define SCANNER_ZERO_COLUMN scanner->column = 0
 
-// SCANNER_PEEK
-
+#define SCANNER_CURRENT_LOCATION (token_location) { \
+    .begin_line = scanner->line, \
+    .begin_column = scanner->column, \
+    .begin_index = scanner->index, \
+    .end_line = scanner->line, \
+    .end_column = scanner->column, \
+    .end_index = scanner->index, \
+    .length = 1, \
+}
 
 #define SCANNER_PUSH_TOKEN(TOKEN) array_append(scanner->tokens, TOKEN)
 

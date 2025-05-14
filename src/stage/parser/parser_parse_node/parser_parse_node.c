@@ -2,6 +2,7 @@
 
 ast_t* parser_parse_node(parser_t* parser)
 {
+    DEBUG_ME;
     if (!parser) return NULL;
 
     if (PARSER_CURRENT->type == TOKEN_TYPE_KEYWORD_FN) {

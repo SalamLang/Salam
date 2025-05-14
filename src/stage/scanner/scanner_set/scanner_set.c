@@ -7,6 +7,7 @@ void scanner_set(
     char* file_name
 )
 {
+    DEBUG_ME;
     scanner->source = source;
     scanner->length = string_length(source);
 

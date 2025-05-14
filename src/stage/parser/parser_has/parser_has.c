@@ -2,6 +2,7 @@
 
 bool parser_has(parser_t* parser, token_type_t type)
 {
+    DEBUG_ME;
     if (!parser) return false;
     if (!PARSER_HAS_CURRENT) return false;
 

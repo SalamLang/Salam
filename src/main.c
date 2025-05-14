@@ -33,6 +33,6 @@ int main(int argc, char** argv)
     memory_destroy(json_ast);
     ast_destroy(ast);
 
-    scanner_free(scanner);
+    scanner_destroy(scanner);
     return 0;
 }

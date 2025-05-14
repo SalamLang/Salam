@@ -2,6 +2,7 @@
 
 void parser_log(parser_t* parser)
 {
+    DEBUG_ME;
     if (!parser) return;
 
     log_info("Parser Scanner: %p\n", parser->scanner);

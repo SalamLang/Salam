@@ -12,24 +12,24 @@
 
 typedef struct scanner_t
 {
-    char* source;                // Pointer to the source code
-    char* directory;             // Directory of the source code
-    char* file_name;             // File name of the source code
+    char* source;                   // Pointer to the source code
+    char* directory;                // Directory of the source code
+    char* file_name;                // File name of the source code
 
     size_t line;                    // Current line number
     size_t column;                  // Current column number
     size_t index;                   // Current index in the source code
     size_t length;                  // Length of the source code
 
-    array_t* tokens;             // Array of tokens
+    array_t* tokens;                // Array of tokens
 } scanner_t;
 
-#define SCANNER_CURRENT (scanner->source[scanner->index])
-#define SCANNER_CURRENT_NEXT (scanner->source[scanner->index + 1])
-#define SCANNER_CURRENT_PREV (scanner->source[scanner->index - 1])
+#define SCANNER_CURRENT             (scanner->source[scanner->index])
+#define SCANNER_CURRENT_NEXT        (scanner->source[scanner->index + 1])
+#define SCANNER_CURRENT_PREV        (scanner->source[scanner->index - 1])
 
-#define SCANNER_HAS_NEXT      (scanner->index + 1 < scanner->length && SCANNER_CURRENT_NEXT != '\0')
-#define SCANNER_HAS_PREV      (scanner->index > 0)
+#define SCANNER_HAS_NEXT            (scanner->index + 1 < scanner->length && SCANNER_CURRENT_NEXT != '\0')
+#define SCANNER_HAS_PREV            (scanner->index > 0)
 
 #define SCANNER_NEXT scanner->index++
 #define SCANNER_PREV scanner->index--

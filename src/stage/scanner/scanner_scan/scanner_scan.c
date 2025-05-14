@@ -94,10 +94,16 @@ void scanner_scan(scanner_t* scanner)
                         }
                         else {
                             token_type_t type = token_char_type(c);
-                            token_t *token = token_create(type);
-                            token->location = (token_location_t){scanner->line, scanner->column, scanner->index,
-                                                                    scanner->line, scanner->column, scanner->index,
-                                                                1};
+                            token_location_t token_location = {
+                                .begin_line = scanner->line,
+                                .begin_column = scanner->column,
+                                .begin_index = scanner->index,
+                                .end_line = scanner->line,
+                                .end_column = scanner->column,
+                                .end_index = scanner->index,
+                                .length = 1,
+                            };
+                            token_t *token = token_create(type, SCANNER_CURRENT_LOCATION);
                             SCANNER_PUSH_TOKEN(token);
                             continue;
                         }
@@ -175,9 +181,6 @@ void scanner_scan(scanner_t* scanner)
         }
     }
 
-    token_t *token = token_create(TOKEN_TYPE_EOF);
-    token->location = (token_location_t){scanner->line, scanner->column, scanner->index,
-                                         scanner->line, scanner->column, scanner->index,
-                                         1};
+    token_t *token = token_create(TOKEN_TYPE_EOF, SCANNER_CURRENT_LOCATION);
     SCANNER_PUSH_TOKEN(token);
 }

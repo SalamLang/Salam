@@ -6,6 +6,7 @@
 
 // buffer
 #include <utility/buffer/type.h>
+#include <utility/buffer/buffer_create/buffer_create.h>
 #include <utility/buffer/buffer_destroy/buffer_destroy.h>
 #include <utility/buffer/buffer_append_str/buffer_append_str.h>
 #include <utility/buffer/buffer_append_char/buffer_append_char.h>
@@ -27,4 +28,4 @@
 
 char* parser_json(parser_t* parser);
 
-#endif;
+#endif

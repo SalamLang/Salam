@@ -22,7 +22,7 @@ typedef enum ast_node_type_t {
 
     AST_TYPE_IMPORT,
 
-    AST_TYPE_KIND_DECL,
+    AST_KIND_TYPE_DECL,
     AST_TYPE_STRUCT,
     AST_TYPE_ENUM,
     AST_TYPE_UNION,
@@ -84,28 +84,28 @@ typedef struct
 typedef struct
 {
     char* op;
-    ast_t* left; // ast_expression_t
-    ast_t* right; // ast_expression_t
+    ast_t* left; // ast_expression_decl_t
+    ast_t* right; // ast_expression_decl_t
     ast_type_t* runtime_type; // (nullable)
 } ast_expression_binary_t;
 
 typedef struct
 {
-    ast_t* object; // ast_expression_t
-    ast_t* index; // ast_expression_t
+    ast_t* object; // ast_expression_decl_t
+    ast_t* index; // ast_expression_decl_t
     ast_type_t* runtime_type; // (nullable)
 } ast_expression_index_t;
 
 typedef struct
 {
     token_operator_type_t op_type;
-    ast_t* operand; // ast_expression_t
+    ast_t* operand; // ast_expression_decl_t
     ast_type_t* runtime_type; // (nullable)
 } ast_expression_unary_t;
 
 typedef struct
 {
-    ast_t* callee; // ast_expression_t
+    ast_t* callee; // ast_expression_decl_t
     ast_t* args; // ast_expressions_t
     ast_type_t* runtime_type; // (nullable)
 } ast_expression_call_t;
@@ -114,7 +114,7 @@ typedef struct
 {
     char* name;
     ast_t* type; // ast_type_t
-    ast_t* value; // ast_expression_t (nullable)
+    ast_t* value; // ast_expression_decl_t (nullable)
 } ast_variable_decl_t;
 
 typedef struct
@@ -132,7 +132,7 @@ typedef enum
 {
     AST_EXTERN_TYPE_FUNCTION,
     AST_EXTERN_TYPE_VARIABLE,
-} ast_extern_type_t;
+} ast_extern_decl_type_t;
 
 typedef struct
 {
@@ -147,13 +147,13 @@ typedef struct
     char* name;
     char* alias; // (nullable)
     ast_t* type; // ast_type_t
-} ast_extern_variable_t;
+} ast_kind_enum_t;
 
 typedef struct
 {
-    ast_extern_type_t type;
+    ast_extern_decl_type_t type;
     ast_t* value; // ast_extern_function_t or ast_extern_variable_t
-} ast_extern_t;
+} ast_extern_decl_t;
 
 typedef enum
 {
@@ -172,7 +172,7 @@ typedef struct
 typedef struct
 {
     char* name;
-    hashmap_t* values; // key is string, value is optional ast_expression_t
+    hashmap_t* values; // key is string, value is optional ast_expression_decl_t
 } ast_kind_enum_t;
 
 typedef struct
@@ -190,7 +190,7 @@ typedef struct
 {
     char* name;
     ast_t* type; // ast_type_t
-    ast_t* value; // ast_expression_t (nullable)
+    ast_t* value; // ast_expression_decl_t (nullable)
 } ast_statement_variable_decl_t;
 
 typedef struct
@@ -209,28 +209,28 @@ typedef struct
 typedef struct
 {
     bool is_last; // true if this is the last statement in the if
-    ast_t* condition; // ast_expression_t (nullable)
+    ast_t* condition; // ast_expression_decl_t (nullable)
     ast_t* then_branch; // ast_block_t
     ast_t* else_branch; // ast_block_t (nullable)
 } ast_statement_if_t;
 
 typedef struct {
     ast_t* initializer; // ast_variable_decl_t or ast_statement_expression_t (nullable)
-    ast_t* condition;   // ast_expression_t (nullable)
-    ast_t* increment;   // ast_expression_t (nullable)
+    ast_t* condition;   // ast_expression_decl_t (nullable)
+    ast_t* increment;   // ast_expression_decl_t (nullable)
     ast_t* block;       // ast_block_t
 } ast_statement_for_t;
 
 typedef struct {
     char* loop_variable;   // name of the item variable
-    ast_t* iterable;       // ast_expression_t (e.g., an array or map)
+    ast_t* iterable;       // ast_expression_decl_t (e.g., an array or map)
     ast_type_t* type;      // type of the loop variable (nullable)
     ast_t* block;          // ast_block_t
 } ast_statement_foreach_t;
 
 typedef struct
 {
-    ast_t* value; // ast_expression_t
+    ast_t* value; // ast_expression_decl_t
 } ast_statement_expression_t;
 
 typedef struct
@@ -247,22 +247,22 @@ typedef struct
     } raw;
 
     ast_type_t* runtime_type; // (nullable)
-} ast_expression_t;
+} ast_expression_decl_t;
 
 typedef struct
 {
-    array_t* values; // array of ast_expression_t
+    array_t* values; // array of ast_expression_decl_t
     size_t value_count;
 } ast_expressions_t;
 
 typedef struct
 {
-    ast_t* value; // ast_expression_t
+    ast_t* value; // ast_expression_decl_t
 } ast_statement_return_t;
 
 typedef struct
 {
-    ast_t* value; // ast_expression_t
+    ast_t* value; // ast_expression_decl_t
 } ast_statement_print_t;
 
 typedef struct
@@ -273,23 +273,23 @@ typedef struct
 } ast_program_t;
 
 typedef enum {
-    AST_TYPE_KIND_INT,
-    AST_TYPE_KIND_FLOAT,
-    AST_TYPE_KIND_STRING,
-    AST_TYPE_KIND_BOOL,
-    AST_TYPE_KIND_ARRAY,
-    AST_TYPE_KIND_MAP,
-    AST_TYPE_KIND_SET,
-    AST_TYPE_KIND_TUPLE,
-    AST_TYPE_KIND_VOID,
-    AST_TYPE_KIND_ANY,
-    AST_TYPE_KIND_USER_DEFINED,
-} ast_type_kind_t;
+    AST_KIND_TYPE_INT,
+    AST_KIND_TYPE_FLOAT,
+    AST_KIND_TYPE_STRING,
+    AST_KIND_TYPE_BOOL,
+    AST_KIND_TYPE_ARRAY,
+    AST_KIND_TYPE_MAP,
+    AST_KIND_TYPE_SET,
+    AST_KIND_TYPE_TUPLE,
+    AST_KIND_TYPE_VOID,
+    AST_KIND_TYPE_ANY,
+    AST_KIND_TYPE_USER_DEFINED,
+} ast_kind_type_t;
 
 typedef struct ast_type_t ast_type_t;
 
 struct ast_type_t {
-    ast_type_kind_t kind;
+    ast_kind_type_t kind;
 
     // Base type modifiers
     bool is_pointer;
@@ -317,12 +317,12 @@ typedef struct
 {
     char* name;
     ast_t* type;
-    ast_t* default_value; // ast_expression_t (nullable)
-} ast_parameter_t;
+    ast_t* default_value; // ast_expression_decl_t (nullable)
+} ast_parameter_item_t;
 
 typedef struct
 {
-    array_t* values; // ast_parameter_t
+    array_t* values; // ast_parameter_item_t
     size_t value_count;
 } ast_parameters_t;
 
@@ -331,11 +331,11 @@ typedef struct
 {
     char* name;
     ast_t* value;
-} ast_attribute_t;
+} ast_attribute_item_t;
 
 typedef struct
 {
-    array_t* values; // ast_attribute_t
+    array_t* values; // ast_attribute_item_t
     size_t value_count;
 } ast_attributes_t;
 
@@ -343,11 +343,11 @@ typedef struct
 typedef struct
 {
     ast_t* value;
-} ast_argument_t;
+} ast_argument_item_t;
 
 typedef struct
 {
-    array_t* values; // ast_argument_t
+    array_t* values; // ast_argument_item_t
     size_t value_count;
 } ast_arguments_t;
 
@@ -364,7 +364,7 @@ typedef struct ast_t {
         ast_import_t import_value;
 
         // extern
-        ast_extern_t extern_value;
+        ast_extern_decl_t extern_decl_value;
         ast_extern_variable_t extern_variable_value;
         ast_extern_function_t extern_function_value;
 
@@ -384,15 +384,15 @@ typedef struct ast_t {
         ast_block_t block_value;
 
         // parameters - a list of pairs of name, type, and optional default value
-        ast_parameter_t parameter_value;
+        ast_parameter_item_t parameter_value;
         ast_parameters_t parameters_value;
 
         // attributes - a list of pairs of name and value
-        ast_attribute_t attribute_value;
+        ast_attribute_item_t attribute_value;
         ast_attributes_t attributes_value;
 
         // arguments - a list of values
-        ast_argument_t argument_value;
+        ast_argument_item_t argument_value;
         ast_arguments_t arguments_value;
 
         // expression(s)
@@ -402,7 +402,7 @@ typedef struct ast_t {
         ast_expression_unary_t expression_unary_value;
         ast_expression_index_t expression_index_value;
         ast_expression_call_t expression_call_value;
-        ast_expression_t expression_value;
+        ast_expression_decl_t expression_value;
         ast_expressions_t expressions_value;
 
         // statement(s)

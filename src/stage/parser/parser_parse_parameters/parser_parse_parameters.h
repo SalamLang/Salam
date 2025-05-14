@@ -10,6 +10,9 @@
 // token
 #include <stage/token/type.h>
 
+// ast
+#include <stage/ast/type.h>
+
 ast_t* parser_parse_parameters(parser_t* parser);
 
 #endif

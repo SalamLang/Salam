@@ -23,8 +23,15 @@
 #include <stage/parser/parser_prev/parser_prev.h>
 #include <stage/parser/parser_has/parser_has.h>
 #include <stage/parser/parser_expect/parser_expect.h>
+#include <stage/parser/parser_operator_expect/parser_operator_expect.h>
 #include <stage/parser/parser_eat/parser_eat.h>
 #include <stage/parser/parser_skip/parser_skip.h>
+#include <stage/parser/parser_parse_statement/parser_parse_statement.h>
+
+// ast
+#include <stage/ast/type.h>
+#include <stage/ast/ast_destroy/ast_destroy.h>
+#include <stage/ast/asts/ast_block/ast_block_create/ast_block_create.h>
 
 ast_t* parser_parse_block(parser_t* parser);
 

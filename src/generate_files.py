@@ -10,7 +10,7 @@ def create_header_file(c_file_path):
         return
 
     guard = base_name.upper() + "_H"
-    content = f"#ifndef {guard}\n#define {guard}\n\n// Declarations for {base_name}.c\n\n#endif // {guard}\n"
+    content = f"#ifndef {guard}\n#define {guard}\n\n// base\n#include <base.h>\n\n... {c_file_path}(...);\n\n#endif\n"
 
     with open(h_file_path, "w") as h_file:
         h_file.write(content)
@@ -35,7 +35,7 @@ def create_c_and_h_files_for_empty_directory(directory):
 
     guard = base_name.upper() + "_H"
     with open(h_path, "w") as h_file:
-        h_file.write(f"#ifndef {guard}\n#define {guard}\n\n// Declarations here\n\n#endif // {guard}\n")
+        h_file.write(f"#ifndef {guard}\n#define {guard}\n\n\n\n#endif // {guard}\n")
     print(f"[CREATE] Header: {h_path}")
 
 def scan_directory(root):

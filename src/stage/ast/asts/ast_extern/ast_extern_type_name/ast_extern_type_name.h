@@ -9,4 +9,4 @@
 
 char* ast_extern_type_name(ast_extern_decl_type_t type);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_EXTERN_AST_EXTERN_TYPE_NAME_AST_EXTERN_TYPE_NAME_H_

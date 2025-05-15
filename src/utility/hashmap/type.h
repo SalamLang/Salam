@@ -16,4 +16,4 @@ typedef struct {
     void (*free_value)(void*);
 } hashmap_t;
 
-#endif
+#endif // _UTILITY_HASHMAP_TYPE_H_

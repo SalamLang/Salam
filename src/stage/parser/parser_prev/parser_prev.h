@@ -15,4 +15,4 @@
 
 void parser_prev(parser_t* parser);
 
-#endif
+#endif // _STAGE_PARSER_PARSER_PREV_PARSER_PREV_H_

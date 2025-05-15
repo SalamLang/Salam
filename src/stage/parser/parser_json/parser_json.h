@@ -28,4 +28,4 @@
 
 char* parser_json(parser_t* parser);
 
-#endif
+#endif // _STAGE_PARSER_PARSER_JSON_PARSER_JSON_H_

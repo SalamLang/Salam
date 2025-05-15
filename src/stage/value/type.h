@@ -27,4 +27,4 @@ typedef struct value_t
     } raw;                                // Value of the token
 } value_t;
 
-#endif
+#endif // _STAGE_VALUE_TYPE_H_

@@ -1,3 +1,6 @@
+#ifndef _STAGE_AST_ASTS_AST_BLOCK_AST_BLOCK_DESTROY_AST_BLOCK_DESTROY_H_
+#define _STAGE_AST_ASTS_AST_BLOCK_AST_BLOCK_DESTROY_AST_BLOCK_DESTROY_H_
+
 #include <stddef.h> // for size_t
 
 // base
@@ -15,3 +18,5 @@
 #include <stage/ast/ast_destroy/ast_destroy.h>
 
 void ast_block_destroy(ast_block_t* block);
+
+#endif // _STAGE_AST_ASTS_AST_BLOCK_AST_BLOCK_DESTROY_AST_BLOCK_DESTROY_H_

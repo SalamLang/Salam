@@ -1,3 +1,6 @@
+#ifndef _STAGE_AST_AST_JSON_AST_JSON_H_
+#define _STAGE_AST_AST_JSON_AST_JSON_H_
+
 // base
 #include <base.h>
 
@@ -15,3 +18,5 @@
 #include <stage/ast/type.h>
 
 char* ast_json(ast_t* ast);
+
+#endif // _STAGE_AST_AST_JSON_AST_JSON_H_

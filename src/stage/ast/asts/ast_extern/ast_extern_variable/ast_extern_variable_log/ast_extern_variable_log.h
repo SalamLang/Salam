@@ -12,4 +12,4 @@
 
 void ast_extern_variable_log(ast_extern_variable_t* extern_variable);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_EXTERN_AST_EXTERN_VARIABLE_AST_EXTERN_VARIABLE_LOG_AST_EXTERN_VARIABLE_LOG_H_

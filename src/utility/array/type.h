@@ -17,4 +17,4 @@ typedef struct {
     array_destroy_t destroyer;         // custom free function (NULL means no-op)
 } array_t;
 
-#endif
+#endif // _UTILITY_ARRAY_TYPE_H_

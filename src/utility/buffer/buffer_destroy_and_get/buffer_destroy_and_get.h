@@ -1,3 +1,6 @@
+#ifndef _UTILITY_BUFFER_BUFFER_DESTROY_AND_GET_BUFFER_DESTROY_AND_GET_H_
+#define _UTILITY_BUFFER_BUFFER_DESTROY_AND_GET_BUFFER_DESTROY_AND_GET_H_
+
 // base
 #include <base.h>
 
@@ -12,3 +15,5 @@
 #include <utility/string/string_duplicate/string_duplicate.h>
 
 char *buffer_destroy_and_get(buffer_t *str);
+
+#endif // _UTILITY_BUFFER_BUFFER_DESTROY_AND_GET_BUFFER_DESTROY_AND_GET_H_

@@ -1,3 +1,6 @@
+#ifndef _STAGE_SCANNER_SCANNER_SET_SCANNER_SET_H_
+#define _STAGE_SCANNER_SCANNER_SET_SCANNER_SET_H_
+
 // base
 #include <base.h>
 
@@ -16,3 +19,5 @@ void scanner_set(
     char* directory,
     char* file_name
 );
+
+#endif // _STAGE_SCANNER_SCANNER_SET_SCANNER_SET_H_

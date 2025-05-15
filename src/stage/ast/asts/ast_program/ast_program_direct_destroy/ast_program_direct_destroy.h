@@ -19,4 +19,4 @@
 
 void ast_program_direct_destroy(ast_program_t program);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_PROGRAM_AST_PROGRAM_DIRECT_DESTROY_AST_PROGRAM_DIRECT_DESTROY_H_

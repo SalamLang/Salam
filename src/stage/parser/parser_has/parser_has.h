@@ -17,4 +17,4 @@
 
 bool parser_has(parser_t* parser, token_type_t type);
 
-#endif
+#endif // _STAGE_PARSER_PARSER_HAS_PARSER_HAS_H_

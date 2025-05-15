@@ -18,4 +18,4 @@
 
 void parser_expect(parser_t* parser, token_type_t type);
 
-#endif
+#endif // _STAGE_PARSER_PARSER_EXPECT_PARSER_EXPECT_H_

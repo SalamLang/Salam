@@ -1,3 +1,6 @@
+#ifndef _UTILITY_STRING_STRING_CONVERT_UTF8_TO_ENGLISH_DIGIT_STRING_CONVERT_UTF8_TO_ENGLISH_DIGIT_H_
+#define _UTILITY_STRING_STRING_CONVERT_UTF8_TO_ENGLISH_DIGIT_STRING_CONVERT_UTF8_TO_ENGLISH_DIGIT_H_
+
 // base
 #include <base.h>
 
@@ -5,3 +8,5 @@
 #include <utility/string/string_compare/string_compare.h>
 
 char string_convert_utf8_to_english_digit(char *uc);
+
+#endif // _UTILITY_STRING_STRING_CONVERT_UTF8_TO_ENGLISH_DIGIT_STRING_CONVERT_UTF8_TO_ENGLISH_DIGIT_H_

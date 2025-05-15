@@ -1,0 +1,6 @@
+#ifndef AST_EXPRESSION_IDENTIFIER_H
+#define AST_EXPRESSION_IDENTIFIER_H
+
+// Declarations here
+
+#endif // AST_EXPRESSION_IDENTIFIER_H

@@ -1,1 +1,6 @@
+#ifndef _UTILITY_STRING_STRING_HASH_STRING_HASH_H_
+#define _UTILITY_STRING_STRING_HASH_STRING_HASH_H_
+
 unsigned long string_hash(const char* str);
+
+#endif // _UTILITY_STRING_STRING_HASH_STRING_HASH_H_

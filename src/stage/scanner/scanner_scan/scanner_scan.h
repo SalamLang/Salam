@@ -1,3 +1,6 @@
+#ifndef _STAGE_SCANNER_SCANNER_SCAN_SCANNER_SCAN_H_
+#define _STAGE_SCANNER_SCANNER_SCAN_SCANNER_SCAN_H_
+
 // base
 #include <base.h>
 
@@ -29,3 +32,5 @@
 #include <stage/scanner/scanner_scan_comment_multiline/scanner_scan_comment_multiline.h>
 
 void scanner_scan(scanner_t* scanner);
+
+#endif // _STAGE_SCANNER_SCANNER_SCAN_SCANNER_SCAN_H_

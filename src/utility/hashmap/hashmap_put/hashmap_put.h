@@ -1,3 +1,6 @@
+#ifndef _UTILITY_HASHMAP_HASHMAP_PUT_HASHMAP_PUT_H_
+#define _UTILITY_HASHMAP_HASHMAP_PUT_HASHMAP_PUT_H_
+
 // hashmap
 #include <utility/hashmap/type.h>
 // memory
@@ -8,3 +11,5 @@
 #include <utility/string/string_hash/string_hash.h>
 
 void hashmap_put(hashmap_t* map, const char* key, void* value);
+
+#endif // _UTILITY_HASHMAP_HASHMAP_PUT_HASHMAP_PUT_H_

@@ -1,3 +1,6 @@
+#ifndef _STAGE_SCANNER_SCANNER_SCAN_STRING_SCANNER_SCAN_STRING_H_
+#define _STAGE_SCANNER_SCANNER_SCAN_STRING_SCANNER_SCAN_STRING_H_
+
 // base
 #include <base.h>
 
@@ -29,3 +32,5 @@
 #include <stage/value/value_create/value_create.h>
 
 void scanner_scan_string(scanner_t *lexer, int type);
+
+#endif // _STAGE_SCANNER_SCANNER_SCAN_STRING_SCANNER_SCAN_STRING_H_

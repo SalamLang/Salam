@@ -1,3 +1,6 @@
+#ifndef _STAGE_TOKEN_TOKEN_JSON_TOKEN_JSON_H_
+#define _STAGE_TOKEN_TOKEN_JSON_TOKEN_JSON_H_
+
 // base
 #include <base.h>
 
@@ -28,3 +31,5 @@
 #include <stage/value/value_json/value_json.h>
 
 char* token_json(const token_t* token);
+
+#endif // _STAGE_TOKEN_TOKEN_JSON_TOKEN_JSON_H_

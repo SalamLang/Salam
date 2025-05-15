@@ -28,4 +28,4 @@
 
 char* ast_extern_function_json(ast_extern_function_t* extern_function);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_EXTERN_AST_EXTERN_FUNCTION_AST_EXTERN_FUNCTION_JSON_AST_EXTERN_FUNCTION_JSON_H_

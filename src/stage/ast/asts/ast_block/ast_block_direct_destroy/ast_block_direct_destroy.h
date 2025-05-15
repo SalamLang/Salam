@@ -19,4 +19,4 @@
 
 void ast_block_direct_destroy(ast_block_t block);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_BLOCK_AST_BLOCK_DIRECT_DESTROY_AST_BLOCK_DIRECT_DESTROY_H_

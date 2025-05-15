@@ -1,3 +1,6 @@
+#ifndef _STAGE_SCANNER_SCANNER_LOG_SCANNER_LOG_H_
+#define _STAGE_SCANNER_SCANNER_LOG_SCANNER_LOG_H_
+
 // base
 #include <base.h>
 
@@ -16,3 +19,5 @@
 #include <stage/token/token_log/token_log.h>
 
 void scanner_log(scanner_t* scanner);
+
+#endif // _STAGE_SCANNER_SCANNER_LOG_SCANNER_LOG_H_

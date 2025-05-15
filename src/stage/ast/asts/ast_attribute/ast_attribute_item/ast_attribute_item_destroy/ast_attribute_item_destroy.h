@@ -13,4 +13,4 @@
 
 void ast_attribute_item_destroy(ast_attribute_item_t* attribute_item);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_ATTRIBUTE_AST_ATTRIBUTE_ITEM_AST_ATTRIBUTE_ITEM_DESTROY_AST_ATTRIBUTE_ITEM_DESTROY_H_

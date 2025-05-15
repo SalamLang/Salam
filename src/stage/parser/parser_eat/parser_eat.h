@@ -16,4 +16,4 @@
 
 token_t* parser_eat(parser_t* parser);
 
-#endif
+#endif // _STAGE_PARSER_PARSER_EAT_PARSER_EAT_H_

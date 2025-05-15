@@ -12,4 +12,4 @@
 
 void ast_function_decl_log(ast_function_decl_t* function_decl);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_FUNCTION_DECL_AST_FUNCTION_DECL_LOG_AST_FUNCTION_DECL_LOG_H_

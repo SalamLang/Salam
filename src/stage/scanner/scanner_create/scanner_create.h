@@ -1,3 +1,6 @@
+#ifndef _STAGE_SCANNER_SCANNER_CREATE_SCANNER_CREATE_H_
+#define _STAGE_SCANNER_SCANNER_CREATE_SCANNER_CREATE_H_
+
 // base
 #include <base.h>
 
@@ -22,3 +25,5 @@ scanner_t* scanner_create(
     char* directory,
     char* file_name
 );
+
+#endif // _STAGE_SCANNER_SCANNER_CREATE_SCANNER_CREATE_H_

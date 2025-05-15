@@ -1,3 +1,6 @@
+#ifndef _STAGE_TOKEN_TOKEN_FREE_TOKEN_FREE_H_
+#define _STAGE_TOKEN_TOKEN_FREE_TOKEN_FREE_H_
+
 #include <stddef.h>  // for NULL
 
 // base
@@ -14,3 +17,5 @@
 #include <stage/value/value_destroy/value_destroy.h>
 
 void token_free(token_t* token);
+
+#endif // _STAGE_TOKEN_TOKEN_FREE_TOKEN_FREE_H_

@@ -13,7 +13,7 @@
 
 // parser
 #include <stage/parser/type.h>
-#include <stage/parser/parser_parse_node/parser_parse_node.h>
+#include <stage/parser/parser_parse/parser_parse_node/parser_parse_node.h>
 
 // scanner
 #include <stage/scanner/type.h>

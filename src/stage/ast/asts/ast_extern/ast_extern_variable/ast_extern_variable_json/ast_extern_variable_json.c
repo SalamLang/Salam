@@ -1,10 +1,10 @@
-#include <stage/ast/asts/ast_extern/ast_extern_function/ast_extern_function_json/ast_extern_function_json.h>
+#include <stage/ast/asts/ast_extern/ast_extern_variable/ast_extern_variable_json/ast_extern_variable_json.h>
 
-char* ast_extern_function_json(ast_extern_function_t* extern_function)
+char* ast_extern_variable_json(ast_extern_variable_t* extern_variable)
 {
     buffer_t* temp = buffer_create(10);
 
-    if (extern_function == NULL) {
+    if (extern_variable == NULL) {
         buffer_append_str(temp, "null");
     }
     else {
@@ -12,31 +12,25 @@ char* ast_extern_function_json(ast_extern_function_t* extern_function)
 
         // name
         buffer_append_str(temp, "\"name\":");
-        char* name = string_escaping(extern_function->name);
+        char* name = string_escaping(extern_variable->name);
         buffer_append_str(temp, name);
         memory_destroy(name);
 
         // alias
         buffer_append_str(temp, "\"alias\":");
-        if (extern_function->alias == NULL) {
+        if (extern_variable->alias == NULL) {
             buffer_append_str(temp, "null");
         } else {
-            char* alias = string_escaping(extern_function->alias);
+            char* alias = string_escaping(extern_variable->alias);
             buffer_append_str(temp, scanner_directory);
             memory_destroy(scanner_directory);
         }
 
         // type
         buffer_append_str(temp, "\"type\":");
-        char* type = ast_json(extern_function->type);
+        char* type = ast_json(extern_variable->type);
         buffer_append_str(temp, type);
         memory_destroy(type);
-
-        // attributes
-        buffer_append_str(temp, "\"attributes\":");
-        char* attributes = ast_json(extern_function->attributes);
-        buffer_append_str(temp, attributes);
-        memory_destroy(attributes);
 
         buffer_append_char(temp, '}');
     }

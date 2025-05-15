@@ -1,11 +1,11 @@
-#include <stage/ast/asts/ast_extern/ast_extern_function/ast_extern_function_log/ast_extern_function_log.h>
+#include <stage/ast/asts/ast_extern/ast_extern_variable/ast_extern_variable_log/ast_extern_variable_log.h>
 
-void ast_extern_function_log(ast_extern_function_t* extern_function)
+void ast_extern_variable_log(ast_extern_variable_t* extern_variable)
 {
-    if (!extern_function) {
-        log_info("Extern Function is NULL");
+    if (!extern_variable) {
+        log_info("Extern Variable is NULL");
         return;
     }
 
-    log_info("Extern Function...");
+    log_info("Extern Variable...");
 }

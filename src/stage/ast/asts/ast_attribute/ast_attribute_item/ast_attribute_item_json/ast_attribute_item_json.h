@@ -1,5 +1,5 @@
-#ifndef _STAGE_AST_ASTS_AST_EXTERN_AST_EXTERN_VARIABLE_AST_EXTERN_VARIABLE_JSON_AST_EXTERN_VARIABLE_JSON_H_
-#define _STAGE_AST_ASTS_AST_EXTERN_AST_EXTERN_VARIABLE_AST_EXTERN_VARIABLE_JSON_AST_EXTERN_VARIABLE_JSON_H_
+#ifndef _STAGE_AST_ASTS_AST_ATTRIBUTE_AST_ATTRIBUTE_ITEM_AST_ATTRIBUTE_ITEM_JSON_AST_ATTRIBUTE_ITEM_JSON_H_
+#define _STAGE_AST_ASTS_AST_ATTRIBUTE_AST_ATTRIBUTE_ITEM_AST_ATTRIBUTE_ITEM_JSON_AST_ATTRIBUTE_ITEM_JSON_H_
 
 // base
 #include <base.h>
@@ -26,6 +26,6 @@
 #include <stage/ast/ast_json/ast_json.h>
 #include <stage/ast/asts/ast_extern/ast_extern_type_name/ast_extern_type_name.h>
 
-char* ast_extern_variable_json(ast_extern_variable_t* extern_variable);
+char* ast_attribute_item_json(ast_attribute_item_t* attribute_item);
 
 #endif

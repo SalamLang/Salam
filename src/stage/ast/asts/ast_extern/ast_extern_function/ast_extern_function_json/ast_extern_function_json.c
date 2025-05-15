@@ -22,8 +22,8 @@ char* ast_extern_function_json(ast_extern_function_t* extern_function)
             buffer_append_str(temp, "null");
         } else {
             char* alias = string_escaping(extern_function->alias);
-            buffer_append_str(temp, scanner_directory);
-            memory_destroy(scanner_directory);
+            buffer_append_str(temp, alias);
+            memory_destroy(alias);
         }
 
         // type

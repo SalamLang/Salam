@@ -2,6 +2,9 @@
 
 clear
 
+python3 generate_files.py
+python3 generate_base_all.py
+
 SALAM_OUTPUT=s
 
 # ────── Function to beautify JSON ──────

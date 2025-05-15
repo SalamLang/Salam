@@ -9,6 +9,9 @@
 // array
 #include <utility/array/type.h>
 
+// hashmap
+#include <utility/hashmap/type.h>
+
 struct ast_t;
 
 typedef struct ast_t ast_t;
@@ -73,6 +76,8 @@ typedef enum ast_node_type_t {
 typedef struct ast_base_t {
     ast_node_type_t type;
 } ast_base_t;
+
+typedef struct ast_type_t ast_type_t;
 
 typedef struct
 {
@@ -178,12 +183,6 @@ typedef struct
 {
     char* name;
     char* alias; // (nullable)
-    ast_t* type; // ast_type_t
-} ast_kind_enum_t;
-
-typedef struct
-{
-    char* name;
     hashmap_t* values; // key is string, value is optional ast_expression_item_t
 } ast_kind_enum_t;
 
@@ -298,9 +297,8 @@ typedef enum {
     AST_KIND_TYPE_USER_DEFINED,
 } ast_kind_type_t;
 
-typedef struct ast_type_t ast_type_t;
-
-struct ast_type_t {
+struct ast_type_t
+{
     ast_kind_type_t kind;
 
     // Base type modifiers

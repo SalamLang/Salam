@@ -1,3 +1,6 @@
+#ifndef _STAGE_VALUE_VALUE_JSON_VALUE_JSON_H_
+#define _STAGE_VALUE_VALUE_JSON_VALUE_JSON_H_
+
 // base
 #include <base.h>
 
@@ -23,3 +26,5 @@
 #include <stage/value/value_name/value_name.h>
 
 char* value_json(const value_t* value);
+
+#endif // _STAGE_VALUE_VALUE_JSON_VALUE_JSON_H_

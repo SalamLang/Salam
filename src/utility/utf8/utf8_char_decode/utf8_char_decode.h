@@ -15,4 +15,4 @@
 
 char *utf8_char_decode(char *source, size_t *index, size_t *num_bytes);
 
-#endif
+#endif // _UTILITY_UTF8_UTF8_CHAR_DECODE_UTF8_CHAR_DECODE_H_

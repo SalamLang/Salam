@@ -14,4 +14,4 @@
 
 token_operator_type_t token_operator_keyword_type(char* value);
 
-#endif
+#endif // _STAGE_TOKEN_TOKEN_OPERATOR_KEYWORD_TYPE_TOKEN_OPERATOR_KEYWORD_TYPE_H_

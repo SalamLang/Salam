@@ -1,6 +1,11 @@
+#ifndef _UTILITY_CONVERT_CONVERT_DOUBLE2STRING_CONVERT_DOUBLE2STRING_H_
+#define _UTILITY_CONVERT_CONVERT_DOUBLE2STRING_CONVERT_DOUBLE2STRING_H_
+
 #include <stdio.h>  // for snprintf
 
 // base
 #include <base.h>
 
 char *convert_double2string(double value);
+
+#endif // _UTILITY_CONVERT_CONVERT_DOUBLE2STRING_CONVERT_DOUBLE2STRING_H_

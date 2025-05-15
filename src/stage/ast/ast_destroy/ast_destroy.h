@@ -33,4 +33,4 @@
 
 void ast_destroy(ast_t* ast);
 
-#endif
+#endif // _STAGE_AST_AST_DESTROY_AST_DESTROY_H_

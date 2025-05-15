@@ -13,4 +13,4 @@
 
 void ast_extern_function_destroy(ast_extern_function_t* extern_function);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_EXTERN_AST_EXTERN_FUNCTION_AST_EXTERN_FUNCTION_DESTROY_AST_EXTERN_FUNCTION_DESTROY_H_

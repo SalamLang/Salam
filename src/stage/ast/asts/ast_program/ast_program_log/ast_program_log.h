@@ -12,4 +12,4 @@
 
 void ast_program_log(ast_program_t* program);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_PROGRAM_AST_PROGRAM_LOG_AST_PROGRAM_LOG_H_

@@ -15,4 +15,4 @@
 
 parser_t* parser_create(const scanner_t* scanner);
 
-#endif
+#endif // _STAGE_PARSER_PARSER_CREATE_PARSER_CREATE_H_

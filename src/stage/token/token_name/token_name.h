@@ -9,4 +9,4 @@
 
 const char* token_name(token_type_t type);
 
-#endif
+#endif // _STAGE_TOKEN_TOKEN_NAME_TOKEN_NAME_H_

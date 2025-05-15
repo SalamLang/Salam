@@ -18,4 +18,4 @@
 
 ast_t* ast_block_create(array_t* statements, size_t statement_count);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_BLOCK_AST_BLOCK_CREATE_AST_BLOCK_CREATE_H_

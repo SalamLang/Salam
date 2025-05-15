@@ -16,4 +16,4 @@
 
 token_t* parser_expect_get(parser_t* parser, token_type_t type);
 
-#endif
+#endif // _STAGE_PARSER_PARSER_EXPECT_GET_PARSER_EXPECT_GET_H_

@@ -10,4 +10,4 @@
 
 ast_t* ast_extern_variable_create(char* name, char* alias, ast_t* type);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_EXTERN_AST_EXTERN_VARIABLE_AST_EXTERN_VARIABLE_CREATE_AST_EXTERN_VARIABLE_CREATE_H_

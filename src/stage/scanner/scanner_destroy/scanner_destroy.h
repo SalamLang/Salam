@@ -16,4 +16,4 @@
 
 void scanner_destroy(scanner_t* scanner);
 
-#endif
+#endif // _STAGE_SCANNER_SCANNER_DESTROY_SCANNER_DESTROY_H_

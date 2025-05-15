@@ -15,4 +15,4 @@
 
 void parser_next(parser_t* parser);
 
-#endif
+#endif // _STAGE_PARSER_PARSER_NEXT_PARSER_NEXT_H_

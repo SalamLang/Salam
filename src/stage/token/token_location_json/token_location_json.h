@@ -1,3 +1,6 @@
+#ifndef _STAGE_TOKEN_TOKEN_LOCATION_JSON_TOKEN_LOCATION_JSON_H_
+#define _STAGE_TOKEN_TOKEN_LOCATION_JSON_TOKEN_LOCATION_JSON_H_
+
 // base
 #include <base.h>
 
@@ -16,3 +19,5 @@
 #include <stage/token/type.h>
 
 char* token_location_json(token_location_t location);
+
+#endif // _STAGE_TOKEN_TOKEN_LOCATION_JSON_TOKEN_LOCATION_JSON_H_

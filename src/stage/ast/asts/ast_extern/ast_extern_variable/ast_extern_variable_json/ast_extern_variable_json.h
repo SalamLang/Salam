@@ -28,4 +28,4 @@
 
 char* ast_extern_variable_json(ast_extern_variable_t* extern_variable);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_EXTERN_AST_EXTERN_VARIABLE_AST_EXTERN_VARIABLE_JSON_AST_EXTERN_VARIABLE_JSON_H_

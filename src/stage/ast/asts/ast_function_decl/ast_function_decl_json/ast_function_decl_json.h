@@ -1,3 +1,6 @@
+#ifndef _STAGE_AST_ASTS_AST_FUNCTION_DECL_AST_FUNCTION_DECL_JSON_AST_FUNCTION_DECL_JSON_H_
+#define _STAGE_AST_ASTS_AST_FUNCTION_DECL_AST_FUNCTION_DECL_JSON_AST_FUNCTION_DECL_JSON_H_
+
 // base
 #include <base.h>
 
@@ -12,3 +15,5 @@
 #include <stage/ast/type.h>
 
 char* ast_function_decl_json(ast_function_decl_t* function_decl);
+
+#endif // _STAGE_AST_ASTS_AST_FUNCTION_DECL_AST_FUNCTION_DECL_JSON_AST_FUNCTION_DECL_JSON_H_

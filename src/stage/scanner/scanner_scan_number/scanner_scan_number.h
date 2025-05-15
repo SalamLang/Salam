@@ -1,3 +1,6 @@
+#ifndef _STAGE_SCANNER_SCANNER_SCAN_NUMBER_SCANNER_SCAN_NUMBER_H_
+#define _STAGE_SCANNER_SCANNER_SCAN_NUMBER_SCANNER_SCAN_NUMBER_H_
+
 // base
 #include <base.h>
 
@@ -31,3 +34,5 @@
 #include <stage/value/value_create/value_create.h>
 
 void scanner_scan_number(scanner_t *scanner, char *uc);
+
+#endif // _STAGE_SCANNER_SCANNER_SCAN_NUMBER_SCANNER_SCAN_NUMBER_H_

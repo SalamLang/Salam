@@ -118,4 +118,4 @@ typedef struct token_t
     value_t* value;                       // Pointer to the value of the token
 } token_t;
 
-#endif
+#endif // _STAGE_TOKEN_TYPE_H_

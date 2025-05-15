@@ -27,4 +27,4 @@
 
 char* ast_extern_decl_json(ast_extern_decl_t* extern_decl);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_EXTERN_AST_EXTERN_DECL_AST_EXTERN_DECL_JSON_AST_EXTERN_DECL_JSON_H_

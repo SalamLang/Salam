@@ -12,4 +12,4 @@
 
 ast_t* ast_alloc(ast_node_type_t type);
 
-#endif
+#endif // _STAGE_AST_AST_ALLOC_AST_ALLOC_H_

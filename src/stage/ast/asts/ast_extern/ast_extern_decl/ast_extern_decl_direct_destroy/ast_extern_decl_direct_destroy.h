@@ -13,4 +13,4 @@
 
 void ast_extern_decl_direct_destroy(ast_extern_decl_t extern_decl);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_EXTERN_AST_EXTERN_DECL_AST_EXTERN_DECL_DIRECT_DESTROY_AST_EXTERN_DECL_DIRECT_DESTROY_H_

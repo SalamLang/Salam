@@ -9,4 +9,4 @@
 
 const char* token_operator_name(token_operator_type_t operator_type);
 
-#endif
+#endif // _STAGE_TOKEN_TOKEN_OPERATOR_NAME_TOKEN_OPERATOR_NAME_H_

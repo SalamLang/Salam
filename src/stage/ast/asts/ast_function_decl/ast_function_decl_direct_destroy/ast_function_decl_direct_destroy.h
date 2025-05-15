@@ -19,4 +19,4 @@
 
 void ast_function_decl_direct_destroy(ast_function_decl_t function_decl);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_FUNCTION_DECL_AST_FUNCTION_DECL_DIRECT_DESTROY_AST_FUNCTION_DECL_DIRECT_DESTROY_H_

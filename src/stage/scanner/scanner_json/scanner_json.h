@@ -1,3 +1,6 @@
+#ifndef _STAGE_SCANNER_SCANNER_JSON_SCANNER_JSON_H_
+#define _STAGE_SCANNER_SCANNER_JSON_SCANNER_JSON_H_
+
 // base
 #include <base.h>
 
@@ -25,3 +28,5 @@
 #include <stage/token/token_json/token_json.h>
 
 char* scanner_json(scanner_t* scanner);
+
+#endif // _STAGE_SCANNER_SCANNER_JSON_SCANNER_JSON_H_

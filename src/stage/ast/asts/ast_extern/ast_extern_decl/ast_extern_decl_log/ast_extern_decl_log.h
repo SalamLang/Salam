@@ -12,4 +12,4 @@
 
 void ast_extern_decl_log(ast_extern_decl_t* extern_decl);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_EXTERN_AST_EXTERN_DECL_AST_EXTERN_DECL_LOG_AST_EXTERN_DECL_LOG_H_

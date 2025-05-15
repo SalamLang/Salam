@@ -19,4 +19,4 @@ typedef struct buffer_t {
     buffer_destroy_t destroyer;
 } buffer_t;
 
-#endif
+#endif // _UTILITY_BUFFER_TYPE_H_

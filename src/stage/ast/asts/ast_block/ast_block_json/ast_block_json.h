@@ -1,3 +1,6 @@
+#ifndef _STAGE_AST_ASTS_AST_BLOCK_AST_BLOCK_JSON_AST_BLOCK_JSON_H_
+#define _STAGE_AST_ASTS_AST_BLOCK_AST_BLOCK_JSON_AST_BLOCK_JSON_H_
+
 // base
 #include <base.h>
 
@@ -12,3 +15,5 @@
 #include <stage/ast/type.h>
 
 char* ast_block_json(ast_block_t* block);
+
+#endif // _STAGE_AST_ASTS_AST_BLOCK_AST_BLOCK_JSON_AST_BLOCK_JSON_H_

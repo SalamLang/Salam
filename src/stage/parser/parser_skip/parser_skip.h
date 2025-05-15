@@ -17,4 +17,4 @@
 
 bool parser_skip(parser_t* parser, token_type_t type);
 
-#endif
+#endif // _STAGE_PARSER_PARSER_SKIP_PARSER_SKIP_H_

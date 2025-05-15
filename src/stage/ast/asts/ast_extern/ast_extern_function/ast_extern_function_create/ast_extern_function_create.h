@@ -10,4 +10,4 @@
 
 ast_t* ast_extern_function_create(ast_extern_function_type_t type, ast_t* value);
 
-#endif
+#endif // _STAGE_AST_ASTS_AST_EXTERN_AST_EXTERN_FUNCTION_AST_EXTERN_FUNCTION_CREATE_AST_EXTERN_FUNCTION_CREATE_H_

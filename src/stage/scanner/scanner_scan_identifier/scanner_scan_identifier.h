@@ -1,3 +1,6 @@
+#ifndef _STAGE_SCANNER_SCANNER_SCAN_IDENTIFIER_SCANNER_SCAN_IDENTIFIER_H_
+#define _STAGE_SCANNER_SCANNER_SCAN_IDENTIFIER_SCANNER_SCAN_IDENTIFIER_H_
+
 // base
 #include <base.h>
 
@@ -27,3 +30,5 @@
 #include <stage/scanner/type.h>
 
 void scanner_scan_identifier(scanner_t *scanner, char *uc);
+
+#endif // _STAGE_SCANNER_SCANNER_SCAN_IDENTIFIER_SCANNER_SCAN_IDENTIFIER_H_

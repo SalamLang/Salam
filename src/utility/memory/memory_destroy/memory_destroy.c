@@ -2,5 +2,6 @@
 
 void memory_destroy(void* ptr)
 {
+    // if (! ptr) return;
     free(ptr);
 }

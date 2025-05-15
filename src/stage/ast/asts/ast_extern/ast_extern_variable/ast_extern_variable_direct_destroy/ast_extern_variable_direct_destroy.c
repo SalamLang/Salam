@@ -1,8 +1,16 @@
-#include <stage/ast/asts/ast_extern/ast_extern_function/ast_extern_function_direct_destroy/ast_extern_function_direct_destroy.h>
+#include <stage/ast/asts/ast_extern/ast_extern_variable/ast_extern_variable_direct_destroy/ast_extern_variable_direct_destroy.h>
 
-void ast_extern_function_direct_destroy(ast_extern_function_t extern_function)
+void ast_extern_variable_direct_destroy(ast_extern_variable_t extern_variable)
 {
-    if (extern_function.value != NULL) {
-        ast_destroy(extern_function.value);
+    if (extern_variable.name != NULL) {
+        memory_destroy(extern_variable.name);
+    }
+
+    if (extern_variable.alias != NULL) {
+        memory_destroy(extern_variable.alias);
+    }
+
+    if (extern_variable.type != NULL) {
+        ast_destroy(extern_variable.type);
     }
 }

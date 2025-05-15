@@ -8,6 +8,6 @@
 #include <stage/ast/type.h>
 #include <stage/ast/ast_alloc/ast_alloc.h>
 
-ast_t* ast_extern_variable_create(ast_extern_variable_type_t type, ast_t* value);
+ast_t* ast_extern_variable_create(char* name, char* alias, ast_t* type);
 
 #endif

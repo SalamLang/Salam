@@ -1,4 +1,4 @@
-#include "ast_statement_if_json.h"
+#include "ast_statement_if_direct_json.h"
 
 char* ast_statement_if_direct_json(ast_statement_if_t statement_if)
 {

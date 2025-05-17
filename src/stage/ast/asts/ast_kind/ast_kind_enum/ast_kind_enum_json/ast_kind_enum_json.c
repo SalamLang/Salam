@@ -11,29 +11,29 @@ char* ast_kind_enum_json(ast_kind_enum_t* kind_enum)
 
         // name
         buffer_append_str(temp, ", \"name\": ");
-        if (kind_decl->name == NULL) {
+        if (kind_enum->name == NULL) {
             buffer_append_str(temp, "null");
         }
         else {
-            char* buffer = string_escaping(kind_decl->name);
+            char* buffer = string_escaping(kind_enum->name);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
         }
 
         // alias
         buffer_append_str(temp, ", \"alias\": ");
-        if (kind_decl->alias == NULL) {
+        if (kind_enum->alias == NULL) {
             buffer_append_str(temp, "null");
         }
         else {
-            char* buffer = string_escaping(kind_decl->alias);
+            char* buffer = string_escaping(kind_enum->alias);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
         }
 
         // values
         buffer_append_str(temp, ", \"values\": ");
-        if (kind_decl->values == NULL) {
+        if (kind_enum->values == NULL) {
             buffer_append_str(temp, "null");
         }
         else {

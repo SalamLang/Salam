@@ -8,33 +8,33 @@ char* ast_kind_struct_direct_json(ast_kind_struct_t kind_struct)
 
     // name
     buffer_append_str(temp, ", \"name\": ");
-    if (kind_decl->name == NULL) {
+    if (kind_struct.name == NULL) {
         buffer_append_str(temp, "null");
     }
     else {
-        char* buffer = string_escaping(kind_decl->name);
+        char* buffer = string_escaping(kind_struct.name);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);
     }
 
     // parameters
     buffer_append_str(temp, ", \"parameters\": ");
-    if (kind_decl->parameters == NULL) {
+    if (kind_struct.parameters == NULL) {
         buffer_append_str(temp, "null");
     }
     else {
-        char* buffer = ast_json(kind_decl->parameters);
+        char* buffer = ast_json(kind_struct.parameters);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);
     }
 
     // functions
     buffer_append_str(temp, ", \"functions\": ");
-    if (kind_decl->functions == NULL) {
+    if (kind_struct.functions == NULL) {
         buffer_append_str(temp, "null");
     }
     else {
-        char* buffer = ast_json(kind_decl->functions);
+        char* buffer = ast_json(kind_struct.functions);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);
     }

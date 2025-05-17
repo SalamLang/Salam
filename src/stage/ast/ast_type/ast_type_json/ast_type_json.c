@@ -1,4 +1,4 @@
-#include <stage/ast/ast_type_json/ast_type_json.h>
+#include <stage/ast/ast_type/ast_type_json/ast_type_json.h>
 
 char* ast_type_json(ast_type_t* type)
 {
@@ -8,7 +8,7 @@ char* ast_type_json(ast_type_t* type)
     }
     else {
         buffer_append_char(temp, '{');
-        buffer_append_str(temp, '\"type\":null');
+        buffer_append_str(temp, "\"type\":null");
         buffer_append_char(temp, '}');
     }
 

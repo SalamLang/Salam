@@ -1,4 +1,4 @@
-#include <stage/parser/parser_parse_function_decl/parser_parse_function_decl.h>
+#include <stage/parser/parser_parse/parser_parse_function_decl/parser_parse_function_decl.h>
 
 ast_t* parser_parse_function_decl(parser_t* parser)
 {

@@ -8,39 +8,39 @@ char* ast_expression_call_direct_json(ast_expression_call_t expression_call)
 
     // callee
     buffer_append_str(temp, "\"callee\": ");
-    if (expression_call->callee == NULL)
+    if (expression_call.callee == NULL)
     {
         buffer_append_str(temp, "null");
     }
     else
     {
-        char* buffer = ast_json(expression_call->callee);
+        char* buffer = ast_json(expression_call.callee);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);
     }
 
     // args
     buffer_append_str(temp, ",\"args\": ");
-    if (expression_call->args == NULL)
+    if (expression_call.args == NULL)
     {
         buffer_append_str(temp, "null");
     }
     else
     {
-        char* buffer = ast_json(expression_call->args);
+        char* buffer = ast_json(expression_call.args);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);
     }
 
     // runtime_type
     buffer_append_str(temp, ",\"runtime_type\": ");
-    if (expression_call->runtime_type == NULL)
+    if (expression_call.runtime_type == NULL)
     {
         buffer_append_str(temp, "null");
     }
     else
     {
-        char* buffer = ast_type_json(expression_call->runtime_type);
+        char* buffer = ast_type_json(expression_call.runtime_type);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);
     }

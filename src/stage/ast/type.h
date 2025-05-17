@@ -115,6 +115,13 @@ typedef struct
 
 typedef struct
 {
+    ast_t* callee; // ast_expression_item_t
+    ast_t* args; // ast_expressions_t
+    ast_type_t* runtime_type; // (nullable)
+} ast_expression_function_call_t;
+
+typedef struct
+{
     token_operator_type_t op_type;
     ast_t* operand; // ast_expression_item_t
     ast_type_t* runtime_type; // (nullable)
@@ -388,9 +395,9 @@ typedef struct ast_t {
 
         // global kind
         ast_kind_decl_t kind_decl_value;
-        ast_kind_struct_t struct_value;
-        ast_kind_enum_t enum_value;
-        ast_kind_union_t union_value;
+        ast_kind_struct_t kind_struct_value;
+        ast_kind_enum_t kind_enum_value;
+        ast_kind_union_t kind_union_value;
 
         // global variable
         ast_variable_decl_t variable_decl_value;
@@ -419,6 +426,7 @@ typedef struct ast_t {
         ast_expression_binary_t expression_binary_value;
         ast_expression_unary_t expression_unary_value;
         ast_expression_index_t expression_index_value;
+        ast_expression_function_call_t expression_function_call_value;
         ast_expression_call_t expression_call_value;
         ast_expression_item_t expression_item_value;
         ast_expressions_t expressions_value;
@@ -429,6 +437,7 @@ typedef struct ast_t {
         ast_statement_foreach_t statement_foreach_value;
         ast_statement_return_t statement_return_value;
         ast_statement_print_t statement_print_value;
+        ast_statement_variable_decl_t statement_variable_decl_value;
         ast_statement_expression_t statement_expression_value;
     } raw;
 } ast_t;

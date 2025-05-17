@@ -37,7 +37,7 @@ char* ast_statement_variable_decl_json(ast_statement_variable_decl_t* statement_
         {
             char* type = ast_json(statement_variable_decl->type);
             buffer_append_str(temp, type);
-            memory_destroy(name);
+            memory_destroy(type);
         }
 
         // value
@@ -50,7 +50,7 @@ char* ast_statement_variable_decl_json(ast_statement_variable_decl_t* statement_
         {
             char* value = ast_json(statement_variable_decl->value);
             buffer_append_str(temp, value);
-            memory_destroy(name);
+            memory_destroy(value);
         }
 
         buffer_append_str(temp, "}");

@@ -24,7 +24,7 @@ char* ast_kind_decl_json(ast_kind_decl_t* kind_decl)
             memory_destroy(buffer);
         }
 
-        buffer_append_str(temp, "}");
+        buffer_append_char(temp, '}');
     }
     char* result = string_duplicate(temp->data);
     buffer_destroy(temp);

@@ -39,7 +39,7 @@ char* ast_kind_struct_direct_json(ast_kind_struct_t kind_struct)
         memory_destroy(buffer);
     }
 
-    buffer_append_str(temp, "}");
+    buffer_append_char(temp, '}');
 
     char* result = string_duplicate(temp->data);
     buffer_destroy(temp);

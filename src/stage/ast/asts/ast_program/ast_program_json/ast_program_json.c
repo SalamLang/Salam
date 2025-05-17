@@ -58,7 +58,7 @@ char* ast_program_json(ast_program_t* program)
             buffer_append_char(temp, ']');
         }
 
-        buffer_append_str(temp, "}");
+        buffer_append_char(temp, '}');
     }
 
     char* result = string_duplicate(temp->data);

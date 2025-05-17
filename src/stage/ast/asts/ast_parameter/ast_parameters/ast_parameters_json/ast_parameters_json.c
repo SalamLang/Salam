@@ -17,13 +17,14 @@ char* ast_parameters_json(ast_parameters_t* parameters)
         buffer_append_str(temp, convert_size2string(parameters->value_count));
 
         // values
-        buffer_append_str(temp, "\"values\": ");
+        buffer_append_str(temp, ",\"values\": ");
         if (parameters->values == NULL)
         {
             buffer_append_str(temp, "null");
         }
         else
         {
+            buffer_append_char(temp, '[');
             for (size_t i = 0; i < parameters->value_count; i++)
             {
                 if (i > 0)
@@ -35,6 +36,7 @@ char* ast_parameters_json(ast_parameters_t* parameters)
                 buffer_append_str(temp, buffer);
                 memory_destroy(buffer);
             }
+            buffer_append_char(temp, ']');
         }
 
         buffer_append_char(temp, '}');

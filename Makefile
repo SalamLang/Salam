@@ -46,6 +46,7 @@ SRCS := \
 	src/stage/ast/asts/ast_block/ast_block_create/ast_block_create.c \
 	src/stage/ast/asts/ast_block/ast_block_destroy/ast_block_destroy.c \
 	src/stage/ast/asts/ast_block/ast_block_direct_destroy/ast_block_direct_destroy.c \
+	src/stage/ast/asts/ast_block/ast_block_direct_json/ast_block_direct_json.c \
 	src/stage/ast/asts/ast_block/ast_block_json/ast_block_json.c \
 	src/stage/ast/asts/ast_block/ast_block_log/ast_block_log.c \
 	src/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_create/ast_expression_binary_create.c \
@@ -71,6 +72,7 @@ SRCS := \
 	src/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_create/ast_expression_item_create.c \
 	src/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_destroy/ast_expression_item_destroy.c \
 	src/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_direct_destroy/ast_expression_item_direct_destroy.c \
+	src/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_direct_json/ast_expression_item_direct_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_json/ast_expression_item_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_log/ast_expression_item_log.c \
 	src/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_create/ast_expression_literal_create.c \
@@ -78,6 +80,7 @@ SRCS := \
 	src/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_direct_destroy/ast_expression_literal_direct_destroy.c \
 	src/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_json/ast_expression_literal_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_log/ast_expression_literal_log.c \
+	src/stage/ast/asts/ast_expression/ast_expression_type_name/ast_expression_type_name.c \
 	src/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_create/ast_expression_unary_create.c \
 	src/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_destroy/ast_expression_unary_destroy.c \
 	src/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_direct_destroy/ast_expression_unary_direct_destroy.c \
@@ -129,16 +132,19 @@ SRCS := \
 	src/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_create/ast_kind_enum_create.c \
 	src/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_destroy/ast_kind_enum_destroy.c \
 	src/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_direct_destroy/ast_kind_enum_direct_destroy.c \
+	src/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_direct_json/ast_kind_enum_direct_json.c \
 	src/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_json/ast_kind_enum_json.c \
 	src/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_log/ast_kind_enum_log.c \
 	src/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_create/ast_kind_struct_create.c \
 	src/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_destroy/ast_kind_struct_destroy.c \
 	src/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_direct_destroy/ast_kind_struct_direct_destroy.c \
+	src/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_direct_json/ast_kind_struct_direct_json.c \
 	src/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_json/ast_kind_struct_json.c \
 	src/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_log/ast_kind_struct_log.c \
 	src/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_create/ast_kind_union_create.c \
 	src/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_destroy/ast_kind_union_destroy.c \
 	src/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_direct_destroy/ast_kind_union_direct_destroy.c \
+	src/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_direct_json/ast_kind_union_direct_json.c \
 	src/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_json/ast_kind_union_json.c \
 	src/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_log/ast_kind_union_log.c \
 	src/stage/ast/asts/ast_package/ast_package_create/ast_package_create.c \
@@ -374,6 +380,7 @@ OBJS := \
 	build/stage/ast/asts/ast_block/ast_block_create/ast_block_create.o \
 	build/stage/ast/asts/ast_block/ast_block_destroy/ast_block_destroy.o \
 	build/stage/ast/asts/ast_block/ast_block_direct_destroy/ast_block_direct_destroy.o \
+	build/stage/ast/asts/ast_block/ast_block_direct_json/ast_block_direct_json.o \
 	build/stage/ast/asts/ast_block/ast_block_json/ast_block_json.o \
 	build/stage/ast/asts/ast_block/ast_block_log/ast_block_log.o \
 	build/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_create/ast_expression_binary_create.o \
@@ -399,6 +406,7 @@ OBJS := \
 	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_create/ast_expression_item_create.o \
 	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_destroy/ast_expression_item_destroy.o \
 	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_direct_destroy/ast_expression_item_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_direct_json/ast_expression_item_direct_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_json/ast_expression_item_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_log/ast_expression_item_log.o \
 	build/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_create/ast_expression_literal_create.o \
@@ -406,6 +414,7 @@ OBJS := \
 	build/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_direct_destroy/ast_expression_literal_direct_destroy.o \
 	build/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_json/ast_expression_literal_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_log/ast_expression_literal_log.o \
+	build/stage/ast/asts/ast_expression/ast_expression_type_name/ast_expression_type_name.o \
 	build/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_create/ast_expression_unary_create.o \
 	build/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_destroy/ast_expression_unary_destroy.o \
 	build/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_direct_destroy/ast_expression_unary_direct_destroy.o \
@@ -457,16 +466,19 @@ OBJS := \
 	build/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_create/ast_kind_enum_create.o \
 	build/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_destroy/ast_kind_enum_destroy.o \
 	build/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_direct_destroy/ast_kind_enum_direct_destroy.o \
+	build/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_direct_json/ast_kind_enum_direct_json.o \
 	build/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_json/ast_kind_enum_json.o \
 	build/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_log/ast_kind_enum_log.o \
 	build/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_create/ast_kind_struct_create.o \
 	build/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_destroy/ast_kind_struct_destroy.o \
 	build/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_direct_destroy/ast_kind_struct_direct_destroy.o \
+	build/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_direct_json/ast_kind_struct_direct_json.o \
 	build/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_json/ast_kind_struct_json.o \
 	build/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_log/ast_kind_struct_log.o \
 	build/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_create/ast_kind_union_create.o \
 	build/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_destroy/ast_kind_union_destroy.o \
 	build/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_direct_destroy/ast_kind_union_direct_destroy.o \
+	build/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_direct_json/ast_kind_union_direct_json.o \
 	build/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_json/ast_kind_union_json.o \
 	build/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_log/ast_kind_union_log.o \
 	build/stage/ast/asts/ast_package/ast_package_create/ast_package_create.o \

@@ -1,4 +1,4 @@
-#include <stage/ast/asts/ast_extern/ast_attribute_item/ast_attribute_item_json/ast_attribute_item_json.h>
+#include <stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_json/ast_attribute_item_json.h>
 
 char* ast_attribute_item_json(ast_attribute_item_t* attribute_item)
 {

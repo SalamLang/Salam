@@ -42,8 +42,8 @@ typedef enum ast_node_type_t {
     AST_TYPE_EXTERN_VARIABLE,
     AST_TYPE_EXTERN_FUNCTION,
 
-    // AST_TYPE_VARIABLE_DECL,
-    // AST_TYPE_FUNCTION_DECL,
+    AST_TYPE_VARIABLE_DECL,
+    AST_TYPE_FUNCTION_DECL,
 
     AST_TYPE_BLOCK,
 
@@ -286,7 +286,8 @@ typedef struct
 {
     array_t* variable_declarations; // ast_variable_decl_t
     array_t* function_declarations; // ast_function_decl_t
-    size_t declaration_count;
+    size_t variable_declaration_count;
+    size_t function_declaration_count;
 } ast_program_t;
 
 typedef enum {

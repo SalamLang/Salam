@@ -1,6 +1,6 @@
 import os
 
-base_dir = os.getcwd()
+base_dir = os.path.join(os.getcwd(), "src")
 output_file = os.path.join(base_dir, "base_all.h")
 
 header_files = []
@@ -10,6 +10,7 @@ for dirpath, _, filenames in os.walk(base_dir):
         if filename.endswith(".h"):
             full_path = os.path.join(dirpath, filename)
             rel_path = os.path.relpath(full_path, base_dir)
+
             if rel_path.endswith("base.h") or rel_path.endswith("base_all.h") or rel_path.endswith("main.h"):
                 continue
             header_files.append(rel_path)

@@ -36,6 +36,7 @@
 #include <stage/ast/asts/ast_block/ast_block_create/ast_block_create.h>
 #include <stage/ast/asts/ast_block/ast_block_destroy/ast_block_destroy.h>
 #include <stage/ast/asts/ast_block/ast_block_direct_destroy/ast_block_direct_destroy.h>
+#include <stage/ast/asts/ast_block/ast_block_direct_json/ast_block_direct_json.h>
 #include <stage/ast/asts/ast_block/ast_block_json/ast_block_json.h>
 #include <stage/ast/asts/ast_block/ast_block_log/ast_block_log.h>
 #include <stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_create/ast_expression_binary_create.h>
@@ -61,6 +62,7 @@
 #include <stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_create/ast_expression_item_create.h>
 #include <stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_destroy/ast_expression_item_destroy.h>
 #include <stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_direct_destroy/ast_expression_item_direct_destroy.h>
+#include <stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_direct_json/ast_expression_item_direct_json.h>
 #include <stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_json/ast_expression_item_json.h>
 #include <stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_log/ast_expression_item_log.h>
 #include <stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_create/ast_expression_literal_create.h>
@@ -68,6 +70,7 @@
 #include <stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_direct_destroy/ast_expression_literal_direct_destroy.h>
 #include <stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_json/ast_expression_literal_json.h>
 #include <stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_log/ast_expression_literal_log.h>
+#include <stage/ast/asts/ast_expression/ast_expression_type_name/ast_expression_type_name.h>
 #include <stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_create/ast_expression_unary_create.h>
 #include <stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_destroy/ast_expression_unary_destroy.h>
 #include <stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_direct_destroy/ast_expression_unary_direct_destroy.h>
@@ -120,16 +123,19 @@
 #include <stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_create/ast_kind_enum_create.h>
 #include <stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_destroy/ast_kind_enum_destroy.h>
 #include <stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_direct_destroy/ast_kind_enum_direct_destroy.h>
+#include <stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_direct_json/ast_kind_enum_direct_json.h>
 #include <stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_json/ast_kind_enum_json.h>
 #include <stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_log/ast_kind_enum_log.h>
 #include <stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_create/ast_kind_struct_create.h>
 #include <stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_destroy/ast_kind_struct_destroy.h>
 #include <stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_direct_destroy/ast_kind_struct_direct_destroy.h>
+#include <stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_direct_json/ast_kind_struct_direct_json.h>
 #include <stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_json/ast_kind_struct_json.h>
 #include <stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_log/ast_kind_struct_log.h>
 #include <stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_create/ast_kind_union_create.h>
 #include <stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_destroy/ast_kind_union_destroy.h>
 #include <stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_direct_destroy/ast_kind_union_direct_destroy.h>
+#include <stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_direct_json/ast_kind_union_direct_json.h>
 #include <stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_json/ast_kind_union_json.h>
 #include <stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_log/ast_kind_union_log.h>
 #include <stage/ast/asts/ast_kind/type.h>

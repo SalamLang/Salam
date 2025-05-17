@@ -27,10 +27,10 @@ int main(int argc, char** argv)
 
     // ast
     // ast_log(ast);
-    // char* json_ast = ast_json(ast);
-    // printf("%s\n", json_ast);
-    // file_write("ast.json", json_ast);
-    // memory_destroy(json_ast);
+    char* json_ast = ast_json(ast);
+    printf("%s\n", json_ast);
+    file_write("ast.json", json_ast);
+    memory_destroy(json_ast);
     ast_destroy(ast);
 
     scanner_destroy(scanner);

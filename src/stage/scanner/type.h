@@ -31,8 +31,8 @@ typedef struct scanner_t
 
 
 
-
-
+#define SCANNER_CURRENT_LOCATION \
+{ \
     .begin_line = scanner->line, \
     .begin_column = scanner->column, \
     .begin_index = scanner->index, \

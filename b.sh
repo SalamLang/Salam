@@ -2,10 +2,9 @@
 
 # clear
 
-# python3 generate_files.py
-# python3 generate_base_all.py
-
 SALAM_OUTPUT=s
+# COMPILER=tcc
+COMPILER=gcc
 
 # ────── Function to beautify JSON ──────
 beautify_json_if_valid() {
@@ -30,7 +29,7 @@ beautify_json_if_valid() {
 }
 
 # ────── Compilation ──────
-gcc -Wno-unused-parameter -g -Wall -Wextra -pedantic -I$(pwd) $(cat c_files.txt) -o "$SALAM_OUTPUT" 2> compile_warnings.txt
+"$COMPILER" -Wno-unused-parameter -g -Wall -Wextra -pedantic -I$(pwd) $(cat c_files.txt) -o "$SALAM_OUTPUT" 2> compile_warnings.txt
 
 cat compile_warnings.txt
 

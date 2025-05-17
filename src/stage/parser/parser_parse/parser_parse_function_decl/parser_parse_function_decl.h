@@ -24,8 +24,8 @@
 #include <stage/parser/parser_expect/parser_expect.h>
 #include <stage/parser/parser_eat/parser_eat.h>
 #include <stage/parser/parser_skip/parser_skip.h>
-#include <stage/parser/parser_parse_block/parser_parse_block.h>
-#include <stage/parser/parser_parse_parameters/parser_parse_parameters.h>
+#include <stage/parser/parser_parse/parser_parse_block/parser_parse_block.h>
+#include <stage/parser/parser_parse/parser_parse_parameters/parser_parse_parameters.h>
 
 ast_t* parser_parse_function_decl(parser_t* parser);
 

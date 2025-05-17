@@ -232,6 +232,7 @@ set(SRC_FILES
     src/stage/token/token_name/token_name.c
     src/stage/token/token_operator_keyword_type/token_operator_keyword_type.c
     src/stage/token/token_operator_name/token_operator_name.c
+    src/stage/token/token_operator_type/token_operator_type.c
     src/stage/token/token_type/token_type.c
     src/stage/value/value_create/value_create.c
     src/stage/value/value_destroy/value_destroy.c

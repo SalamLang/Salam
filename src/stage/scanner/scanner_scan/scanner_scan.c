@@ -94,7 +94,15 @@ void scanner_scan(scanner_t* scanner)
                         }
                         else {
                             token_type_t type = token_char_type(c);
+                            if (type == TOKEN_TYPE_UNKNOWN) {
+                                scanner_error("Unknown character '%s' at line %zu, "
+                                            "column %zu",
+                                            uc, scanner->line, scanner->column);
+                            }
+
                             token_t *token = token_create(type, SCANNER_CURRENT_LOCATION);
+                            token->source = string_duplicate(uc);
+                            token->operator_type = token_operator_type(uc);
                             SCANNER_PUSH_TOKEN(token);
                             continue;
                         }

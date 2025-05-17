@@ -6,12 +6,12 @@ rem ----------- Configuration -----------
 rem Choose: tcc or gcc
 set COMPILER=gcc
 set SALAM_OUTPUT=s
+set C_FILES=c_files.txt
 
 set CFLAGS_COMMON=
-@REM -Wno-unused-parameter -g -Wall -Wextra -pedantic
+@REM set CFLAGS_COMMON=-Wno-unused-parameter -g -Wall -Wextra -pedantic
 set INCLUDE_DIRS=-I. -Isrc
 
-rem Separate flags for compilation and linking if needed
 set CFLAGS=%CFLAGS_COMMON% %INCLUDE_DIRS%
 set LDFLAGS=
 
@@ -42,7 +42,7 @@ if /i "%COMPILER%"=="tcc" (
     )
 ) else if /i "%COMPILER%"=="gcc" (
     echo Compiling and linking with GCC...
-    %COMPILER% %CFLAGS% @c_files.txt -o %SALAM_OUTPUT% %LDFLAGS%
+    %COMPILER% %CFLAGS% @%C_FILES% -o %SALAM_OUTPUT% %LDFLAGS%
     if errorlevel 1 (
         echo Compilation or linking failed!
         exit /b 1

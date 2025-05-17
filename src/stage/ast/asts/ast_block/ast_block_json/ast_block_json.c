@@ -24,6 +24,7 @@ char* ast_block_json(ast_block_t* block)
         }
         else
         {
+            buffer_append_char(temp, '[');
             for (size_t i = 0; block->statements->size; i++) {
                 if (i > 0)
                 {
@@ -34,6 +35,7 @@ char* ast_block_json(ast_block_t* block)
                 buffer_append_str(temp, buffer);
                 memory_destroy(buffer);
             }
+            buffer_append_char(temp, ']');
         }
 
         buffer_append_char(temp, '}');

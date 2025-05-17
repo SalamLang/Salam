@@ -18,6 +18,7 @@ char* ast_attributes_direct_json(ast_attributes_t attributes)
     }
     else
     {
+        buffer_append_char(temp, '[');
         for (size_t i = 0; i < attributes.value_count; i++)
         {
             if (i > 0)
@@ -29,6 +30,7 @@ char* ast_attributes_direct_json(ast_attributes_t attributes)
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
         }
+        buffer_append_char(temp, ']');
     }
 
     buffer_append_char(temp, '}');

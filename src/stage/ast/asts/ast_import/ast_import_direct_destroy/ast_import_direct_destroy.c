@@ -1,3 +1,9 @@
 #include "ast_import_direct_destroy.h"
 
-// Implementation here
+void ast_import_directly_destroy(ast_import_t import)
+{
+    DEBUG_ME;
+    if (import.name != NULL) {
+        memory_destroy(import.name);
+    }
+}

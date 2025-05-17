@@ -12,6 +12,6 @@ void ast_parameter_item_direct_destroy(ast_parameter_item_t parameter_item)
     }
 
     if (parameter_item.default_value != NULL) {
-        ast_destroy(default_value.type);
+        ast_destroy(parameter_item.default_value);
     }
 }

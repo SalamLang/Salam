@@ -7,7 +7,7 @@ char* token_json(const token_t* token)
         buffer_append_str(temp, "null");
     }
     else {
-        buffer_append_str(temp, "{");
+        buffer_append_char(temp, '{');
 
         // type
         buffer_append_str(temp, "\"type\": ");

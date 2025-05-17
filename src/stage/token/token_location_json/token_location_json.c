@@ -4,7 +4,7 @@ char* token_location_json(token_location_t location)
 {
     buffer_t *temp = buffer_create(256);
 
-    buffer_append_str(temp, "{");
+    buffer_append_char(temp, '{');
     buffer_append_str(temp, "\"begin_line\": ");
     buffer_append_str(temp, convert_size2string(location.begin_line));
     buffer_append_str(temp, ", \"begin_column\": ");

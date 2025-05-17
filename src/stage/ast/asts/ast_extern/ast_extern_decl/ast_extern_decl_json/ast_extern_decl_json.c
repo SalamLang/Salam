@@ -9,10 +9,13 @@ char* ast_extern_decl_json(ast_extern_decl_t* extern_decl)
     }
     else {
         buffer_append_char(temp, '{');
+
+        // type
         buffer_append_str(temp, "\"type\":");
         buffer_append_str(temp, ast_extern_type_name(extern_decl->type));
-        buffer_append_str(temp, "\"value\":");
 
+        // value
+        buffer_append_str(temp, "\"value\":");
         char* value = ast_json(extern_decl->value);
         buffer_append_str(temp, value);
         memory_destroy(value);

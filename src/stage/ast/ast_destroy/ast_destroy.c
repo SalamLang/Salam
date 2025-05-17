@@ -144,6 +144,7 @@ void ast_destroy(ast_t* ast)
 
 
         case AST_TYPE_UNKNOWN:
+            log_fatal("Unhandled AST type in ast_destroy: %d\n", ast->base.type);
             break;
 
         default:

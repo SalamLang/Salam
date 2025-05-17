@@ -2,11 +2,12 @@
 setlocal ENABLEEXTENSIONS
 
 rem ----------- Configuration -----------
+set COMPILER=gcc
 set SALAM_OUTPUT=s
 
 rem ----------- Compilation -----------
 echo Compiling C files listed in c_files.txt...
-gcc -Wno-unused-parameter -g -Wall -Wextra -pedantic -I. @c_files.txt -o %SALAM_OUTPUT% 2> compile_warnings.txt
+%COMPILER% -Wno-unused-parameter -g -Wall -Wextra -pedantic -I. @c_files.txt -o %SALAM_OUTPUT% 2> compile_warnings.txt
 
 type compile_warnings.txt
 

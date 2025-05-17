@@ -10,6 +10,8 @@ for dirpath, _, filenames in os.walk(base_dir):
         if filename.endswith(".h"):
             full_path = os.path.join(dirpath, filename)
             rel_path = os.path.relpath(full_path, base_dir)
+            if rel_path.endswith("base.h") or rel_path.endswith("base_all.h") or rel_path.endswith("main.h"):
+                continue
             header_files.append(rel_path)
 
 with open(output_file, "w", encoding="utf-8") as f:

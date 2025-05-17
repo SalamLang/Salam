@@ -15,8 +15,8 @@ for dirpath, _, filenames in os.walk(base_dir):
             header_files.append(rel_path)
 
 with open(output_file, "w", encoding="utf-8") as f:
-    f.write("#ifndef _BASE_ALL_H_\n#define _BASE_ALL_H_\n\n")
     f.write("// Auto-generated header including all .h files\n\n")
+    f.write("#ifndef _BASE_ALL_H_\n#define _BASE_ALL_H_\n\n")
     for header in sorted(header_files):
         f.write(f'#include "{header}"\n')
     f.write("\n#endif // _BASE_ALL_H_\n")

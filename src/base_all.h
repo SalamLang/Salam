@@ -1,4 +1,6 @@
 // Auto-generated header including all .h files
+#ifndef _BASE_ALL_H_
+#define _BASE_ALL_H_
 
 #include "stage/ast/ast_alloc/ast_alloc.h"
 #include "stage/ast/ast_create/ast_create.h"
@@ -300,3 +302,5 @@
 #include "utility/utf8/utf8_is_digit/utf8_is_digit.h"
 #include "utility/utf8/utf8_is_valid/utf8_is_valid.h"
 #include "utility/utf8/utf8_strlen/utf8_strlen.h"
+
+#endif // _BASE_ALL_H_

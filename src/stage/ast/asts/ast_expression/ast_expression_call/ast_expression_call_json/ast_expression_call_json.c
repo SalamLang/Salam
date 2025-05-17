@@ -46,7 +46,7 @@ char* ast_expression_call_json(ast_expression_call_t* expression_call)
         }
         else
         {
-            char* buffer = ast_json(expression_call->runtime_type);
+            char* buffer = ast_type_json(expression_call->runtime_type);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
         }

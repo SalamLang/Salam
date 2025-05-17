@@ -1,6 +1,6 @@
 #include <stage/ast/asts/ast_block/ast_block_direct_json/ast_block_direct_json.h>
 
-char* ast_block_direct_json(ast_block block)
+char* ast_block_direct_json(ast_block_t block)
 {
     buffer_t* temp = buffer_create(24);
 
@@ -8,17 +8,17 @@ char* ast_block_direct_json(ast_block block)
 
     // statement_count
     buffer_append_str(temp, "\"statement_count\": ");
-    buffer_append_str(temp, convert_size2string(block>statement_count));
+    buffer_append_str(temp, convert_size2string(block.statement_count));
 
     // statements
     buffer_append_str(temp, ",\"statements\": ");
-    if (statement_print->statements == NULL)
+    if (block.statements == NULL)
     {
         buffer_append_str(temp, "null");
     }
     else
     {
-        for (size_t i = 0; block->statements->size; i++) {
+        for (size_t i = 0; block.statements->size; i++) {
             if (i > 0)
             {
                 buffer_append_str(temp, ", ");

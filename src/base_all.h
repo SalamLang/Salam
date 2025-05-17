@@ -226,6 +226,7 @@
 #include <stage/token/token_name/token_name.h>
 #include <stage/token/token_operator_keyword_type/token_operator_keyword_type.h>
 #include <stage/token/token_operator_name/token_operator_name.h>
+#include <stage/token/token_operator_type/token_operator_type.h>
 #include <stage/token/token_type/token_type.h>
 #include <stage/token/type.h>
 #include <stage/value/type.h>

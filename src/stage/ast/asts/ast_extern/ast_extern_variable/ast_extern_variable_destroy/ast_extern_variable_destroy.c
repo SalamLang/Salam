@@ -2,7 +2,7 @@
 
 void ast_extern_variable_destroy(ast_extern_variable_t* extern_variable)
 {
-    if (!extern_variable) return NULL;
+    if (!extern_variable) return;
 
     if (extern_variable->name != NULL) {
         memory_destroy(extern_variable->name);

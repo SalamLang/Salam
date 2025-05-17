@@ -21,6 +21,7 @@
 #include <stage/token/type.h>
 #include <stage/token/token_create/token_create.h>
 #include <stage/token/token_char_type/token_char_type.h>
+#include <stage/token/token_operator_type/token_operator_type.h>
 
 // scanner
 #include <stage/scanner/type.h>

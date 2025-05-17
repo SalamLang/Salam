@@ -47,7 +47,7 @@ void scanner_scan_identifier(scanner_t *scanner, char *uc)
         token->operator_type = operator_type;
     }
     token->source = string_duplicate(value->data);
-    buffer_destroy(value);
 
+    buffer_destroy(value);
     SCANNER_PUSH_TOKEN(token);
 }

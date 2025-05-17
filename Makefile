@@ -1,13 +1,13 @@
-CC = gcc
-CFLAGS = -Wall -Wextra -pedantic -std=c99 -g -I src/
-SRC_DIR = src
-BUILD_DIR = build
-TARGET = salam
-BIN_TARGET = $(BUILD_DIR)/$(TARGET).bin
-INPUT_FILE = src/input.salam
+CC := gcc
+CFLAGS := -Wall -Wextra -pedantic -std=c99 -g -I src/
+SRC_DIR := src
+BUILD_DIR := build
+TARGET := salam
+BIN_TARGET := $(BUILD_DIR)/$(TARGET).bin
+INPUT_FILE := src/input.salam
 
-SRCS = $(shell find $(SRC_DIR) -name '*.c')
-OBJS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS))
+SRCS := $(shell find $(SRC_DIR) -name '*.c')
+OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS))
 
 all: $(BUILD_DIR)/$(TARGET)
 
@@ -28,9 +28,9 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 run: all
-	valgrind -s --leak-check=full --show-leak-kinds=all --track-origins=yes ./build/$(TARGET) $(INPUT_FILE)
+	valgrind -s --leak-check=full --show-leak-kinds=all --track-origins=yes ./$(BUILD_DIR)/$(TARGET) $(INPUT_FILE)
 
-test: all bin
+test: bin
 	@echo "Running test with $(INPUT_FILE)..."
 	./$(BUILD_DIR)/$(TARGET) $(INPUT_FILE)
 

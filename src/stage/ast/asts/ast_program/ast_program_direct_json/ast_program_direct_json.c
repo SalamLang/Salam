@@ -22,12 +22,17 @@ char* ast_program_direct_json(ast_program_t program)
         buffer_append_str(temp, "null");
     }
     else {
-        for (size_t i = 0; i < program.variable_declaration_count; i++) {
+        buffer_append_char(temp, '[');
+        for (size_t i = 0; i < program.variable_declarations->size; i++) {
+            if (i > 0) {
+                buffer_append_str(temp, ", ");
+            }
             ast_t* variable_decl = (ast_t*)array_get(program.variable_declarations, i);
             char* buffer = ast_json(variable_decl);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
         }
+        buffer_append_char(temp, ']');
     }
 
     // function_declarations
@@ -36,12 +41,17 @@ char* ast_program_direct_json(ast_program_t program)
         buffer_append_str(temp, "null");
     }
     else {
-        for (size_t i = 0; i < program.function_declaration_count; i++) {
+        buffer_append_char(temp, '[');
+        for (size_t i = 0; i < program.function_declarations->size; i++) {
+            if (i > 0) {
+                buffer_append_str(temp, ", ");
+            }
             ast_t* function_decl = (ast_t*)array_get(program.function_declarations, i);
             char* buffer = ast_json(function_decl);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
         }
+        buffer_append_char(temp, ']');
     }
 
     buffer_append_str(temp, "}");

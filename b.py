@@ -10,32 +10,31 @@ import logging
 import hashlib
 from typing import List, Tuple, Optional
 
-logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
-
-# ----------- Configuration -----------
+# ----------- Constants & Logging -----------
 JSON_FILES_TO_BEAUTIFY = ["tokens.json", "ast.json"]
-COMPILE_TIMEOUT = 60  # seconds
+COMPILE_TIMEOUT = 60
 LINK_TIMEOUT = 60
 
-# ----------- Helper Functions -----------
+logger = logging.getLogger()
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+
+# ----------- Utility Functions -----------
 def run_command(cmd: List[str], capture_output: bool = False, timeout: Optional[int] = None) -> Optional[str]:
     try:
         if capture_output:
             result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout)
             return result.stdout
-        else:
-            subprocess.run(cmd, check=True, timeout=timeout)
+        subprocess.run(cmd, check=True, timeout=timeout)
     except subprocess.CalledProcessError as e:
-        logging.error(f"Command failed: {' '.join(cmd)}")
+        logger.error(f"Command failed: {' '.join(cmd)}")
         if e.stdout:
-            logging.error(e.stdout)
+            logger.error(e.stdout)
         if e.stderr:
-            logging.error(e.stderr)
+            logger.error(e.stderr)
         sys.exit(1)
     except subprocess.TimeoutExpired:
-        logging.error(f"Command timed out: {' '.join(cmd)}")
+        logger.error(f"Command timed out: {''.join(cmd)}")
         sys.exit(1)
-    return None
 
 def file_hash(filepath: Path) -> str:
     hasher = hashlib.sha256()
@@ -55,14 +54,14 @@ def compile_c_file(args: Tuple[str, str, str]) -> str:
     if obj_file.exists() and hash_file.exists():
         cached_hash = hash_file.read_text().strip()
         if cached_hash == src_hash:
-            logging.info(f"Skipping compilation (cached): {filename}")
+            logger.debug(f"Skipping compilation (cached): {filename}")
             return str(obj_file)
 
     cmd = [compiler, "-c"] + cflags.split() + [filename, "-o", str(obj_file)]
-    logging.info(f"Compiling {filename} ...")
+    logger.info(f"Compiling {filename} ...")
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=COMPILE_TIMEOUT)
     if result.returncode != 0:
-        logging.error(f"Compilation failed for {filename}:\n{result.stderr}")
+        logger.error(f"Compilation failed for {filename}:\n{result.stderr}")
         sys.exit(1)
 
     hash_file.write_text(src_hash)
@@ -70,26 +69,26 @@ def compile_c_file(args: Tuple[str, str, str]) -> str:
 
 def link_objects(compiler: str, output: str, obj_files: List[str], ldflags: str) -> None:
     cmd = [compiler, "-o", output] + obj_files + ldflags.split()
-    logging.info(f"Linking {output} ...")
+    logger.info(f"Linking {output} ...")
     run_command(cmd, timeout=LINK_TIMEOUT)
 
 def run_program(executable: str, args: List[str]) -> None:
     exec_path = Path(f"./{executable}")
     if not exec_path.exists():
-        logging.error(f"Executable {executable} not found. Cannot run program.")
+        logger.error(f"Executable {executable} not found. Cannot run program.")
         sys.exit(1)
-    logging.info(f"Running program: {executable} {' '.join(args)}")
+    logger.info(f"Running program: {executable} {' '.join(args)}")
     try:
         subprocess.run([str(exec_path)] + args, check=True)
-        logging.info("Program executed successfully.")
+        logger.info("Program executed successfully.")
     except subprocess.CalledProcessError:
-        logging.error("Program execution failed!")
+        logger.error("Program execution failed!")
         sys.exit(1)
 
 def beautify_json_if_valid(filepath: str) -> None:
     path = Path(filepath)
     if not path.exists():
-        logging.warning(f"{filepath} not found. Skipping beautification.")
+        logger.warning(f"{filepath} not found. Skipping beautification.")
         return
 
     try:
@@ -99,11 +98,11 @@ def beautify_json_if_valid(filepath: str) -> None:
         with path.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
-        logging.info(f"Beautified {filepath} successfully.")
+        logger.info(f"Beautified {filepath} successfully.")
     except json.JSONDecodeError as e:
-        logging.warning(f"{filepath} contains invalid JSON. Skipping. ({e})")
+        logger.warning(f"{filepath} contains invalid JSON. Skipping. ({e})")
     except Exception as e:
-        logging.error(f"Unexpected error while beautifying {filepath}: {e}")
+        logger.error(f"Unexpected error while beautifying {filepath}: {e}")
 
 def clean_build(c_files: List[str]) -> None:
     for filename in c_files:
@@ -111,62 +110,63 @@ def clean_build(c_files: List[str]) -> None:
         hash_file = obj_file.with_suffix('.o.hash')
         for f in [obj_file, hash_file]:
             if f.exists():
-                logging.info(f"Removing {f}")
+                logger.info(f"Removing {f}")
                 f.unlink()
 
-# ----------- Main -----------
+# ----------- Main Entry Point -----------
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Parallel C build script",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
-    parser.add_argument("--compiler", default="gcc", choices=["gcc", "tcc"], help="Compiler to use")
+    parser = argparse.ArgumentParser(description="Parallel C build script")
+    parser.add_argument("--compiler", default="gcc", help="Compiler to use (e.g., gcc, clang, tcc)")
     parser.add_argument("--output", default="s", help="Output executable name")
-    parser.add_argument("--files", default="c_files.txt", help="File containing list of C source files")
+    parser.add_argument("--files", default="c_files.txt", help="Text file containing list of .c files")
     parser.add_argument("--jobs", type=int, default=os.cpu_count(), help="Number of parallel compile jobs")
-    parser.add_argument("--beautify-json", action="store_true", help="Beautify tokens.json and ast.json if valid")
-    parser.add_argument("--run-args", nargs="*", default=["input.salam"], help="Arguments to pass when running the program")
-    parser.add_argument("--clean", action="store_true", help="Clean object and hash files before building")
+    parser.add_argument("--clean", action="store_true", help="Clean object/hash files before compiling")
+    parser.add_argument("--run-args", nargs="*", default=["input.salam"], help="Arguments for running the executable")
+    parser.add_argument("--no-run", action="store_true", help="Do not run the final executable")
+    parser.add_argument("--beautify-json", action="store_true", default=True, help="Beautify JSON output files if valid")
+    parser.add_argument("--cflags", default=os.getenv("CFLAGS", "-Wno-unused-parameter -g -Wall -Wextra -pedantic -I. -Isrc"), help="Compiler flags")
+    parser.add_argument("--ldflags", default=os.getenv("LDFLAGS", ""), help="Linker flags")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose debug logging")
     args = parser.parse_args()
+
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
 
     try:
         source_list_path = Path(args.files)
         if not source_list_path.exists():
-            logging.error(f"Source file list '{args.files}' not found.")
+            logger.error(f"Source file list '{args.files}' not found.")
             sys.exit(1)
 
         with source_list_path.open() as f:
             c_files = [line.strip() for line in f if line.strip()]
 
         if not c_files:
-            logging.error("No source files found to compile.")
+            logger.error("No source files found.")
             sys.exit(1)
 
         if args.clean:
             clean_build(c_files)
 
-        cflags_common = "-Wno-unused-parameter -g -Wall -Wextra -pedantic"
-        include_dirs = "-I. -Isrc"
-        cflags = f"{cflags_common} {include_dirs}"
-        ldflags = ""
-
         if args.compiler == "tcc":
-            logging.info("tcc selected (non-parallel)...")
-            obj_files = [compile_c_file((c_file, args.compiler, cflags)) for c_file in c_files]
+            logger.info("Using TCC (non-parallel)...")
+            obj_files = [compile_c_file((f, args.compiler, args.cflags)) for f in c_files]
         else:
-            logging.info(f"{args.compiler} selected (parallel compile, max jobs={args.jobs})...")
+            logger.info(f"{args.compiler} selected (parallel compile, max jobs={args.jobs})")
             with ProcessPoolExecutor(max_workers=args.jobs) as executor:
-                obj_files = list(executor.map(compile_c_file, [(f, args.compiler, cflags) for f in c_files]))
+                obj_files = list(executor.map(compile_c_file, [(f, args.compiler, args.cflags) for f in c_files]))
 
-        link_objects(args.compiler, args.output, obj_files, ldflags)
-        run_program(args.output, args.run_args)
+        link_objects(args.compiler, args.output, obj_files, args.ldflags)
+
+        if not args.no_run:
+            run_program(args.output, args.run_args)
 
         if args.beautify_json:
             for json_file in JSON_FILES_TO_BEAUTIFY:
                 beautify_json_if_valid(json_file)
 
     except KeyboardInterrupt:
-        logging.warning("Build interrupted by user.")
+        logger.warning("Build interrupted by user.")
         sys.exit(130)
 
 if __name__ == "__main__":

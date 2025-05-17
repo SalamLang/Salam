@@ -8,7 +8,7 @@ char* scanner_json(scanner_t* scanner)
         buffer_append_str(temp, "null");
     }
     else {
-        buffer_append_str(temp, "{");
+        buffer_append_char(temp, '{');
 
         // source
         buffer_append_str(temp, "\"source\": ");

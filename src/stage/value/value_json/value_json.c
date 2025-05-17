@@ -7,7 +7,7 @@ char* value_json(const value_t* value)
         buffer_append_str(temp, "null");
     }
     else {
-        buffer_append_str(temp, "{");
+        buffer_append_char(temp, '{');
         buffer_append_str(temp, "\"type\": ");
         buffer_append_char(temp, '"');
         buffer_append_str(temp, value_name(value->type));

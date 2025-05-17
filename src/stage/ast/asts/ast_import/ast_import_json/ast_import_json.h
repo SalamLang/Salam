@@ -1,6 +1,9 @@
 #ifndef _STAGE_AST_ASTS_AST_IMPORT_AST_IMPORT_JSON_AST_IMPORT_JSON_H_
 #define _STAGE_AST_ASTS_AST_IMPORT_AST_IMPORT_JSON_AST_IMPORT_JSON_H_
 
+// base
+#include <base.h>
 
+char* ast_import_json(ast_import_t* import);
 
 #endif // _STAGE_AST_ASTS_AST_IMPORT_AST_IMPORT_JSON_AST_IMPORT_JSON_H_

@@ -20,7 +20,7 @@ char* ast_expression_literal_json(ast_expression_literal_t* expression_literal)
         }
         else
         {
-            char* buffer = ast_json(expression_literal->value);
+            char* buffer = value_json(expression_literal->value);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
         }

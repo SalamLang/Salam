@@ -8,26 +8,26 @@ char* ast_expression_identifier_direct_json(ast_expression_identifier_t expressi
 
     // name
     buffer_append_str(temp, "\"name\": ");
-    if (expression_identifier->name == NULL)
+    if (expression_identifier.name == NULL)
     {
         buffer_append_str(temp, "null");
     }
     else
     {
-        char* buffer = string_escaping(expression_identifier->name);
+        char* buffer = string_escaping(expression_identifier.name);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);
     }
 
     // runtime_type
     buffer_append_str(temp, ",\"runtime_type\": ");
-    if (expression_identifier->runtime_type == NULL)
+    if (expression_identifier.runtime_type == NULL)
     {
         buffer_append_str(temp, "null");
     }
     else
     {
-        char* buffer = ast_type_json(expression_identifier->runtime_type);
+        char* buffer = ast_type_json(expression_identifier.runtime_type);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);
     }

@@ -2,6 +2,7 @@ import subprocess
 import sys
 import os
 import shutil
+import json
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 import argparse
@@ -16,11 +17,8 @@ JSON_FILES_TO_BEAUTIFY = ["tokens.json", "ast.json"]
 COMPILE_TIMEOUT = 60  # seconds
 LINK_TIMEOUT = 60
 
-JQ_PATH: Optional[str] = shutil.which("jq")
-
 # ----------- Helper Functions -----------
 def run_command(cmd: List[str], capture_output: bool = False, timeout: Optional[int] = None) -> Optional[str]:
-    """Run a system command safely, returning stdout if capture_output is True."""
     try:
         if capture_output:
             result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout)
@@ -40,7 +38,6 @@ def run_command(cmd: List[str], capture_output: bool = False, timeout: Optional[
     return None
 
 def file_hash(filepath: Path) -> str:
-    """Return SHA-256 hash of the file contents."""
     hasher = hashlib.sha256()
     with filepath.open('rb') as f:
         while chunk := f.read(8192):
@@ -68,18 +65,15 @@ def compile_c_file(args: Tuple[str, str, str]) -> str:
         logging.error(f"Compilation failed for {filename}:\n{result.stderr}")
         sys.exit(1)
 
-    # Save hash to detect changes later
     hash_file.write_text(src_hash)
     return str(obj_file)
 
 def link_objects(compiler: str, output: str, obj_files: List[str], ldflags: str) -> None:
-    """Link object files into final executable."""
     cmd = [compiler, "-o", output] + obj_files + ldflags.split()
     logging.info(f"Linking {output} ...")
     run_command(cmd, timeout=LINK_TIMEOUT)
 
 def run_program(executable: str, args: List[str]) -> None:
-    """Run the compiled executable with provided arguments."""
     exec_path = Path(f"./{executable}")
     if not exec_path.exists():
         logging.error(f"Executable {executable} not found. Cannot run program.")
@@ -93,29 +87,25 @@ def run_program(executable: str, args: List[str]) -> None:
         sys.exit(1)
 
 def beautify_json_if_valid(filepath: str) -> None:
-    """Beautify JSON file if valid, using jq tool."""
     path = Path(filepath)
     if not path.exists():
         logging.warning(f"{filepath} not found. Skipping beautification.")
         return
 
-    if JQ_PATH is None:
-        logging.warning("'jq' not installed. Skipping beautification.")
-        return
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
 
-    logging.info(f"Checking if {filepath} is valid JSON...")
-    result = subprocess.run([JQ_PATH, "empty", filepath], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if result.returncode == 0:
-        pretty_file = path.with_suffix(".pretty")
-        with pretty_file.open("w") as pf:
-            subprocess.run([JQ_PATH, ".", filepath], stdout=pf, check=True)
-        shutil.move(str(pretty_file), str(path))
-        logging.info(f"Beautification of {filepath} complete.")
-    else:
-        logging.warning(f"{filepath} contains invalid JSON. Skipping.")
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+        logging.info(f"Beautified {filepath} successfully.")
+    except json.JSONDecodeError as e:
+        logging.warning(f"{filepath} contains invalid JSON. Skipping. ({e})")
+    except Exception as e:
+        logging.error(f"Unexpected error while beautifying {filepath}: {e}")
 
 def clean_build(c_files: List[str]) -> None:
-    """Remove object and hash files for a clean rebuild."""
     for filename in c_files:
         obj_file = Path(filename).with_suffix('.o')
         hash_file = obj_file.with_suffix('.o.hash')
@@ -126,7 +116,6 @@ def clean_build(c_files: List[str]) -> None:
 
 # ----------- Main -----------
 def main() -> None:
-    """Parse arguments and run build pipeline."""
     parser = argparse.ArgumentParser(
         description="Parallel C build script",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -163,10 +152,7 @@ def main() -> None:
 
         if args.compiler == "tcc":
             logging.info("tcc selected (non-parallel)...")
-            obj_files = []
-            for c_file in c_files:
-                obj_file = compile_c_file((c_file, args.compiler, cflags))
-                obj_files.append(obj_file)
+            obj_files = [compile_c_file((c_file, args.compiler, cflags)) for c_file in c_files]
         else:
             logging.info(f"{args.compiler} selected (parallel compile, max jobs={args.jobs})...")
             with ProcessPoolExecutor(max_workers=args.jobs) as executor:

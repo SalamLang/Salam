@@ -13,8 +13,8 @@ void ast_statement_variable_decl_destroy(ast_statement_variable_decl_t* statemen
         ast_destroy(statement_variable_decl->type);
     }
 
-    if (statement_variable_decl->values != NULL) {
-        ast_destroy(statement_variable_decl->values);
+    if (statement_variable_decl->value != NULL) {
+        ast_destroy(statement_variable_decl->value);
     }
 
     memory_destroy(statement_variable_decl);

@@ -110,8 +110,8 @@ void ast_destroy(ast_t* ast)
             ast_expression_index_direct_destroy(ast->raw.expression_index_value);
             break;
 
-        case AST_TYPE_EXPRESSION_FUNCTION_CALL:
-            ast_expression_call_direct_destroy(ast->raw.expression_function_call_value);
+        case AST_TYPE_EXPRESSION_CALL:
+            ast_expression_call_direct_destroy(ast->raw.expression_call_value);
             break;
 
         case AST_TYPE_STATEMENT_IF:
@@ -144,6 +144,10 @@ void ast_destroy(ast_t* ast)
 
 
         case AST_TYPE_UNKNOWN:
+            break;
+
+        default:
+            log_fatal("Unhandled AST type in ast_destroy: %d\n", ast->base.type);
             break;
     }
 

@@ -44,8 +44,14 @@ It is designed for simplicity, accessibility, and inclusivity—bridging the gap
 To explore Salam, run the following commands:
 
 ```bash
+# Build
+cmake -S . -B build
+cmake --build build -j 8
+
 # Build all
-cmake --build build -j 7
+mkdir -p build
+cd build
+cmake ..
 
 # Run test
 cmake --build build --target test

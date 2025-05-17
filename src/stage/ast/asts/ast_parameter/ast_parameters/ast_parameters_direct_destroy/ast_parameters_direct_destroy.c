@@ -1,4 +1,4 @@
-#include <stage/ast/asts/ast_parameter/ast_parameters_direct_destroy/ast_parameters_direct_destroy.h>
+#include <stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_direct_destroy/ast_parameters_direct_destroy.h>
 
 void ast_parameters_direct_destroy(ast_parameters_t parameters)
 {

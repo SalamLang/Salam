@@ -12,6 +12,12 @@
 // hashmap
 #include <utility/hashmap/type.h>
 
+// token
+#include <stage/token/type.h>
+
+// value
+#include <stage/value/type.h>
+
 struct ast_t;
 
 typedef struct ast_t ast_t;
@@ -295,11 +301,11 @@ typedef enum {
     AST_KIND_TYPE_VOID,
     AST_KIND_TYPE_ANY,
     AST_KIND_TYPE_USER_DEFINED,
-} ast_kind_type_t;
+} ast_type_type_t;
 
 struct ast_type_t
 {
-    ast_kind_type_t kind;
+    ast_type_type_t kind;
 
     // Base type modifiers
     bool is_pointer;

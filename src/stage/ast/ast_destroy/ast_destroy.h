@@ -9,6 +9,7 @@
 
 // ast
 #include <stage/ast/type.h>
+
 #include <stage/ast/asts/ast_variable_decl/ast_variable_decl_direct_destroy/ast_variable_decl_direct_destroy.h>
 #include <stage/ast/asts/ast_function_decl/ast_function_decl_direct_destroy/ast_function_decl_direct_destroy.h>
 #include <stage/ast/asts/ast_block/ast_block_direct_destroy/ast_block_direct_destroy.h>

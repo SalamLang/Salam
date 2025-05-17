@@ -9,5 +9,5 @@ char* value_name(value_type_t type)
         case VALUE_TYPE_BOOL: return "BOOL";
         case VALUE_TYPE_NULL: return "NULL";
     }
-    return "UNKNOWN";
+    return "VALUE_UNKNOWN";
 }

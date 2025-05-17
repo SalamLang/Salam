@@ -60,6 +60,5 @@ void scanner_scan_number(scanner_t *scanner, char *uc)
     }
 
     buffer_destroy(temp);
-
     SCANNER_PUSH_TOKEN(token);
 }

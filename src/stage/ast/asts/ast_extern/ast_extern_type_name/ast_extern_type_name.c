@@ -7,5 +7,5 @@ char* ast_extern_type_name(ast_extern_decl_type_t type)
         case AST_EXTERN_TYPE_FUNCTION: return "EXTERN_FUNCTION";
         case AST_EXTERN_TYPE_VARIABLE: return "EXTERN_VARIABLE";
     }
-    return "UNKNOWN";
+    return "EXTERN_TYPE_UNKNOWN";
 }

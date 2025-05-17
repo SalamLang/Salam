@@ -1,11 +1,13 @@
 CC := gcc
-CFLAGS := -Wall -Wextra -pedantic -std=c99 -g -I src/
-
 SRC_DIR := src
+CFLAGS := -Wall -Wextra -pedantic -std=c99 -g -I $(SRC_DIR)/
+
 BUILD_DIR := build
 
 TARGET := salam
-BIN_TARGET := $(BUILD_DIR)/$(TARGET).bin
+BIN_TARGET := $(BUILD_DIR)/$(TARGET)
+TEST_INPUT := input.salam
+TEST_OUTPUT := output.salam
 
 # ---------- START FILES ----------
 SRCS := \
@@ -310,21 +312,337 @@ SRCS := \
 	src/utility/utf8/utf8_is_digit/utf8_is_digit.c \
 	src/utility/utf8/utf8_is_valid/utf8_is_valid.c \
 	src/utility/utf8/utf8_strlen/utf8_strlen.c
-    # ---------- END FILES ----------
+# ---------- END FILES ----------
 
-OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS))
+# ---------- START OBJECT FILES ----------
+OBJS := \
+	build/main.o \
+	build/stage/ast/ast_alloc/ast_alloc.o \
+	build/stage/ast/ast_create/ast_create.o \
+	build/stage/ast/ast_destroy/ast_destroy.o \
+	build/stage/ast/ast_json/ast_json.o \
+	build/stage/ast/ast_log/ast_log.o \
+	build/stage/ast/ast_type/ast_type_destroy/ast_type_destroy.o \
+	build/stage/ast/ast_type/ast_type_direct_destroy/ast_type_direct_destroy.o \
+	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_create/ast_argument_item_create.o \
+	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_destroy/ast_argument_item_destroy.o \
+	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_direct_destroy/ast_argument_item_direct_destroy.o \
+	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_json/ast_argument_item_json.o \
+	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_log/ast_argument_item_log.o \
+	build/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_create/ast_arguments_create.o \
+	build/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_destroy/ast_arguments_destroy.o \
+	build/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_direct_destroy/ast_arguments_direct_destroy.o \
+	build/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_json/ast_arguments_json.o \
+	build/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_log/ast_arguments_log.o \
+	build/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_create/ast_attribute_item_create.o \
+	build/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_destroy/ast_attribute_item_destroy.o \
+	build/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_direct_destroy/ast_attribute_item_direct_destroy.o \
+	build/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_json/ast_attribute_item_json.o \
+	build/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_log/ast_attribute_item_log.o \
+	build/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_create/ast_attributes_create.o \
+	build/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_destroy/ast_attributes_destroy.o \
+	build/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_direct_destroy/ast_attributes_direct_destroy.o \
+	build/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_json/ast_attributes_json.o \
+	build/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_log/ast_attributes_log.o \
+	build/stage/ast/asts/ast_block/ast_block_create/ast_block_create.o \
+	build/stage/ast/asts/ast_block/ast_block_destroy/ast_block_destroy.o \
+	build/stage/ast/asts/ast_block/ast_block_direct_destroy/ast_block_direct_destroy.o \
+	build/stage/ast/asts/ast_block/ast_block_json/ast_block_json.o \
+	build/stage/ast/asts/ast_block/ast_block_log/ast_block_log.o \
+	build/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_create/ast_expression_binary_create.o \
+	build/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_destroy/ast_expression_binary_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_direct_destroy/ast_expression_binary_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_json/ast_expression_binary_json.o \
+	build/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_log/ast_expression_binary_log.o \
+	build/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_create/ast_expression_call_create.o \
+	build/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_destroy/ast_expression_call_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_direct_destroy/ast_expression_call_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_json/ast_expression_call_json.o \
+	build/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_log/ast_expression_call_log.o \
+	build/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_create/ast_expression_identifier_create.o \
+	build/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_destroy/ast_expression_identifier_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_direct_destroy/ast_expression_identifier_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_json/ast_expression_identifier_json.o \
+	build/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_log/ast_expression_identifier_log.o \
+	build/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_create/ast_expression_index_create.o \
+	build/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_destroy/ast_expression_index_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_direct_destroy/ast_expression_index_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_json/ast_expression_index_json.o \
+	build/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_log/ast_expression_index_log.o \
+	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_create/ast_expression_item_create.o \
+	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_destroy/ast_expression_item_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_direct_destroy/ast_expression_item_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_json/ast_expression_item_json.o \
+	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_log/ast_expression_item_log.o \
+	build/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_create/ast_expression_literal_create.o \
+	build/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_destroy/ast_expression_literal_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_direct_destroy/ast_expression_literal_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_json/ast_expression_literal_json.o \
+	build/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_log/ast_expression_literal_log.o \
+	build/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_create/ast_expression_unary_create.o \
+	build/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_destroy/ast_expression_unary_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_direct_destroy/ast_expression_unary_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_json/ast_expression_unary_json.o \
+	build/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_log/ast_expression_unary_log.o \
+	build/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_create/ast_expressions_create.o \
+	build/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_destroy/ast_expressions_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_direct_destroy/ast_expressions_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_json/ast_expressions_json.o \
+	build/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_log/ast_expressions_log.o \
+	build/stage/ast/asts/ast_extern/ast_extern_decl/ast_extern_decl_create/ast_extern_decl_create.o \
+	build/stage/ast/asts/ast_extern/ast_extern_decl/ast_extern_decl_destroy/ast_extern_decl_destroy.o \
+	build/stage/ast/asts/ast_extern/ast_extern_decl/ast_extern_decl_direct_destroy/ast_extern_decl_direct_destroy.o \
+	build/stage/ast/asts/ast_extern/ast_extern_decl/ast_extern_decl_json/ast_extern_decl_json.o \
+	build/stage/ast/asts/ast_extern/ast_extern_decl/ast_extern_decl_log/ast_extern_decl_log.o \
+	build/stage/ast/asts/ast_extern/ast_extern_function/ast_extern_function_create/ast_extern_function_create.o \
+	build/stage/ast/asts/ast_extern/ast_extern_function/ast_extern_function_destroy/ast_extern_function_destroy.o \
+	build/stage/ast/asts/ast_extern/ast_extern_function/ast_extern_function_direct_destroy/ast_extern_function_direct_destroy.o \
+	build/stage/ast/asts/ast_extern/ast_extern_function/ast_extern_function_json/ast_extern_function_json.o \
+	build/stage/ast/asts/ast_extern/ast_extern_function/ast_extern_function_log/ast_extern_function_log.o \
+	build/stage/ast/asts/ast_extern/ast_extern_type_name/ast_extern_type_name.o \
+	build/stage/ast/asts/ast_extern/ast_extern_variable/ast_extern_variable_create/ast_extern_variable_create.o \
+	build/stage/ast/asts/ast_extern/ast_extern_variable/ast_extern_variable_destroy/ast_extern_variable_destroy.o \
+	build/stage/ast/asts/ast_extern/ast_extern_variable/ast_extern_variable_direct_destroy/ast_extern_variable_direct_destroy.o \
+	build/stage/ast/asts/ast_extern/ast_extern_variable/ast_extern_variable_json/ast_extern_variable_json.o \
+	build/stage/ast/asts/ast_extern/ast_extern_variable/ast_extern_variable_log/ast_extern_variable_log.o \
+	build/stage/ast/asts/ast_function_decl/ast_function_decl_create/ast_function_decl_create.o \
+	build/stage/ast/asts/ast_function_decl/ast_function_decl_destroy/ast_function_decl_destroy.o \
+	build/stage/ast/asts/ast_function_decl/ast_function_decl_direct_destroy/ast_function_decl_direct_destroy.o \
+	build/stage/ast/asts/ast_function_decl/ast_function_decl_json/ast_function_decl_json.o \
+	build/stage/ast/asts/ast_function_decl/ast_function_decl_log/ast_function_decl_log.o \
+	build/stage/ast/asts/ast_import/ast_import_create/ast_import_create.o \
+	build/stage/ast/asts/ast_import/ast_import_destroy/ast_import_destroy.o \
+	build/stage/ast/asts/ast_import/ast_import_direct_destroy/ast_import_direct_destroy.o \
+	build/stage/ast/asts/ast_import/ast_import_json/ast_import_json.o \
+	build/stage/ast/asts/ast_import/ast_import_log/ast_import_log.o \
+	build/stage/ast/asts/ast_kind/ast_kind_decl/ast_kind_decl_create/ast_kind_decl_create.o \
+	build/stage/ast/asts/ast_kind/ast_kind_decl/ast_kind_decl_destroy/ast_kind_decl_destroy.o \
+	build/stage/ast/asts/ast_kind/ast_kind_decl/ast_kind_decl_direct_destroy/ast_kind_decl_direct_destroy.o \
+	build/stage/ast/asts/ast_kind/ast_kind_decl/ast_kind_decl_json/ast_kind_decl_json.o \
+	build/stage/ast/asts/ast_kind/ast_kind_decl/ast_kind_decl_log/ast_kind_decl_log.o \
+	build/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_create/ast_kind_enum_create.o \
+	build/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_destroy/ast_kind_enum_destroy.o \
+	build/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_direct_destroy/ast_kind_enum_direct_destroy.o \
+	build/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_json/ast_kind_enum_json.o \
+	build/stage/ast/asts/ast_kind/ast_kind_enum/ast_kind_enum_log/ast_kind_enum_log.o \
+	build/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_create/ast_kind_struct_create.o \
+	build/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_destroy/ast_kind_struct_destroy.o \
+	build/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_direct_destroy/ast_kind_struct_direct_destroy.o \
+	build/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_json/ast_kind_struct_json.o \
+	build/stage/ast/asts/ast_kind/ast_kind_struct/ast_kind_struct_log/ast_kind_struct_log.o \
+	build/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_create/ast_kind_union_create.o \
+	build/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_destroy/ast_kind_union_destroy.o \
+	build/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_direct_destroy/ast_kind_union_direct_destroy.o \
+	build/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_json/ast_kind_union_json.o \
+	build/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_log/ast_kind_union_log.o \
+	build/stage/ast/asts/ast_package/ast_package_create/ast_package_create.o \
+	build/stage/ast/asts/ast_package/ast_package_destroy/ast_package_destroy.o \
+	build/stage/ast/asts/ast_package/ast_package_direct_destroy/ast_package_direct_destroy.o \
+	build/stage/ast/asts/ast_package/ast_package_json/ast_package_json.o \
+	build/stage/ast/asts/ast_package/ast_package_log/ast_package_log.o \
+	build/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_create/ast_parameter_item_create.o \
+	build/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_destroy/ast_parameter_item_destroy.o \
+	build/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_direct_destroy/ast_parameter_item_direct_destroy.o \
+	build/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_json/ast_parameter_item_json.o \
+	build/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_log/ast_parameter_item_log.o \
+	build/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_create/ast_parameters_create.o \
+	build/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_destroy/ast_parameters_destroy.o \
+	build/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_direct_destroy/ast_parameters_direct_destroy.o \
+	build/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_json/ast_parameters_json.o \
+	build/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_log/ast_parameters_log.o \
+	build/stage/ast/asts/ast_program/ast_program_create/ast_program_create.o \
+	build/stage/ast/asts/ast_program/ast_program_destroy/ast_program_destroy.o \
+	build/stage/ast/asts/ast_program/ast_program_direct_destroy/ast_program_direct_destroy.o \
+	build/stage/ast/asts/ast_program/ast_program_json/ast_program_json.o \
+	build/stage/ast/asts/ast_program/ast_program_log/ast_program_log.o \
+	build/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_create/ast_statement_expression_create.o \
+	build/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_destroy/ast_statement_expression_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_direct_destroy/ast_statement_expression_direct_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_json/ast_statement_expression_json.o \
+	build/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_log/ast_statement_expression_log.o \
+	build/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_create/ast_statement_for_create.o \
+	build/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_destroy/ast_statement_for_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_direct_destroy/ast_statement_for_direct_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_json/ast_statement_for_json.o \
+	build/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_log/ast_statement_for_log.o \
+	build/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_create/ast_statement_foreach_create.o \
+	build/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_destroy/ast_statement_foreach_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_direct_destroy/ast_statement_foreach_direct_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_json/ast_statement_foreach_json.o \
+	build/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_log/ast_statement_foreach_log.o \
+	build/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_create/ast_statement_if_create.o \
+	build/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_destroy/ast_statement_if_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_direct_destroy/ast_statement_if_direct_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_json/ast_statement_if_json.o \
+	build/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_log/ast_statement_if_log.o \
+	build/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_create/ast_statement_print_create.o \
+	build/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_destroy/ast_statement_print_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_direct_destroy/ast_statement_print_direct_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_json/ast_statement_print_json.o \
+	build/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_log/ast_statement_print_log.o \
+	build/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_create/ast_statement_return_create.o \
+	build/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_destroy/ast_statement_return_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_direct_destroy/ast_statement_return_direct_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_json/ast_statement_return_json.o \
+	build/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_log/ast_statement_return_log.o \
+	build/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_create/ast_statement_variable_decl_create.o \
+	build/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_destroy/ast_statement_variable_decl_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_direct_destroy/ast_statement_variable_decl_direct_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_json/ast_statement_variable_decl_json.o \
+	build/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_log/ast_statement_variable_decl_log.o \
+	build/stage/ast/asts/ast_variable_decl/ast_variable_decl_create/ast_variable_decl_create.o \
+	build/stage/ast/asts/ast_variable_decl/ast_variable_decl_destroy/ast_variable_decl_destroy.o \
+	build/stage/ast/asts/ast_variable_decl/ast_variable_decl_direct_destroy/ast_variable_decl_direct_destroy.o \
+	build/stage/ast/asts/ast_variable_decl/ast_variable_decl_json/ast_variable_decl_json.o \
+	build/stage/ast/asts/ast_variable_decl/ast_variable_decl_log/ast_variable_decl_log.o \
+	build/stage/parser/parser_create/parser_create.o \
+	build/stage/parser/parser_destroy/parser_destroy.o \
+	build/stage/parser/parser_eat/parser_eat.o \
+	build/stage/parser/parser_expect/parser_expect.o \
+	build/stage/parser/parser_expect_get/parser_expect_get.o \
+	build/stage/parser/parser_has/parser_has.o \
+	build/stage/parser/parser_json/parser_json.o \
+	build/stage/parser/parser_log/parser_log.o \
+	build/stage/parser/parser_next/parser_next.o \
+	build/stage/parser/parser_operator_expect/parser_operator_expect.o \
+	build/stage/parser/parser_parse/parser_parse_all/parser_parse_all.o \
+	build/stage/parser/parser_parse/parser_parse_arguments/parser_parse_arguments.o \
+	build/stage/parser/parser_parse/parser_parse_block/parser_parse_block.o \
+	build/stage/parser/parser_parse/parser_parse_function_decl/parser_parse_function_decl.o \
+	build/stage/parser/parser_parse/parser_parse_node/parser_parse_node.o \
+	build/stage/parser/parser_parse/parser_parse_parameters/parser_parse_parameters.o \
+	build/stage/parser/parser_parse/parser_parse_statement/parser_parse_statement.o \
+	build/stage/parser/parser_prev/parser_prev.o \
+	build/stage/parser/parser_skip/parser_skip.o \
+	build/stage/scanner/scanner_create/scanner_create.o \
+	build/stage/scanner/scanner_destroy/scanner_destroy.o \
+	build/stage/scanner/scanner_error/scanner_error.o \
+	build/stage/scanner/scanner_json/scanner_json.o \
+	build/stage/scanner/scanner_log/scanner_log.o \
+	build/stage/scanner/scanner_scan/scanner_scan.o \
+	build/stage/scanner/scanner_scan_comment_inline/scanner_scan_comment_inline.o \
+	build/stage/scanner/scanner_scan_comment_multiline/scanner_scan_comment_multiline.o \
+	build/stage/scanner/scanner_scan_identifier/scanner_scan_identifier.o \
+	build/stage/scanner/scanner_scan_number/scanner_scan_number.o \
+	build/stage/scanner/scanner_scan_string/scanner_scan_string.o \
+	build/stage/scanner/scanner_set/scanner_set.o \
+	build/stage/token/token_char_type/token_char_type.o \
+	build/stage/token/token_create/token_create.o \
+	build/stage/token/token_free/token_free.o \
+	build/stage/token/token_json/token_json.o \
+	build/stage/token/token_keyword_type/token_keyword_type.o \
+	build/stage/token/token_location_json/token_location_json.o \
+	build/stage/token/token_log/token_log.o \
+	build/stage/token/token_name/token_name.o \
+	build/stage/token/token_operator_keyword_type/token_operator_keyword_type.o \
+	build/stage/token/token_operator_name/token_operator_name.o \
+	build/stage/token/token_type/token_type.o \
+	build/stage/value/value_create/value_create.o \
+	build/stage/value/value_destroy/value_destroy.o \
+	build/stage/value/value_json/value_json.o \
+	build/stage/value/value_log/value_log.o \
+	build/stage/value/value_name/value_name.o \
+	build/utility/array/array_append/array_append.o \
+	build/utility/array/array_create/array_create.o \
+	build/utility/array/array_delete/array_delete.o \
+	build/utility/array/array_destroy/array_destroy.o \
+	build/utility/array/array_get/array_get.o \
+	build/utility/array/array_prepend/array_prepend.o \
+	build/utility/array/array_resize/array_resize.o \
+	build/utility/array/array_size/array_size.o \
+	build/utility/buffer/buffer_append/buffer_append.o \
+	build/utility/buffer/buffer_append_char/buffer_append_char.o \
+	build/utility/buffer/buffer_append_char_begin/buffer_append_char_begin.o \
+	build/utility/buffer/buffer_append_str/buffer_append_str.o \
+	build/utility/buffer/buffer_append_str_begin/buffer_append_str_begin.o \
+	build/utility/buffer/buffer_append_wchar/buffer_append_wchar.o \
+	build/utility/buffer/buffer_compare/buffer_compare.o \
+	build/utility/buffer/buffer_create/buffer_create.o \
+	build/utility/buffer/buffer_destroy/buffer_destroy.o \
+	build/utility/buffer/buffer_destroy_and_get/buffer_destroy_and_get.o \
+	build/utility/buffer/buffer_equals/buffer_equals.o \
+	build/utility/buffer/buffer_is/buffer_is.o \
+	build/utility/buffer/buffer_lower_str/buffer_lower_str.o \
+	build/utility/buffer/buffer_print/buffer_print.o \
+	build/utility/buffer/buffer_set/buffer_set.o \
+	build/utility/buffer/buffer_set_str/buffer_set_str.o \
+	build/utility/buffer/buffer_upper_str/buffer_upper_str.o \
+	build/utility/convert/convert_double2string/convert_double2string.o \
+	build/utility/convert/convert_float2string/convert_float2string.o \
+	build/utility/convert/convert_int2string/convert_int2string.o \
+	build/utility/convert/convert_size2string/convert_size2string.o \
+	build/utility/file/file_append/file_append.o \
+	build/utility/file/file_create/file_create.o \
+	build/utility/file/file_delete/file_delete.o \
+	build/utility/file/file_exists/file_exists.o \
+	build/utility/file/file_reads/file_reads.o \
+	build/utility/file/file_size/file_size.o \
+	build/utility/file/file_write/file_write.o \
+	build/utility/hashmap/hashmap_create/hashmap_create.o \
+	build/utility/hashmap/hashmap_destroy/hashmap_destroy.o \
+	build/utility/hashmap/hashmap_put/hashmap_put.o \
+	build/utility/hashmap/hashmap_remove/hashmap_remove.o \
+	build/utility/hashmap/hashmap_size/hashmap_size.o \
+	build/utility/io/io_directory/io_directory.o \
+	build/utility/log/log_error/log_error.o \
+	build/utility/log/log_fatal/log_fatal.o \
+	build/utility/log/log_info/log_info.o \
+	build/utility/memory/memory_allocation/memory_allocation.o \
+	build/utility/memory/memory_allocation_soft/memory_allocation_soft.o \
+	build/utility/memory/memory_calloc/memory_calloc.o \
+	build/utility/memory/memory_copy/memory_copy.o \
+	build/utility/memory/memory_destroy/memory_destroy.o \
+	build/utility/memory/memory_move/memory_move.o \
+	build/utility/memory/memory_realloc/memory_realloc.o \
+	build/utility/memory/memory_set/memory_set.o \
+	build/utility/string/string_arabic2persian/string_arabic2persian.o \
+	build/utility/string/string_char_is_alnum/string_char_is_alnum.o \
+	build/utility/string/string_char_is_alpha/string_char_is_alpha.o \
+	build/utility/string/string_char_is_digit/string_char_is_digit.o \
+	build/utility/string/string_compare/string_compare.o \
+	build/utility/string/string_convert_utf8_to_english_digit/string_convert_utf8_to_english_digit.o \
+	build/utility/string/string_duplicate/string_duplicate.o \
+	build/utility/string/string_ends/string_ends.o \
+	build/utility/string/string_escaping/string_escaping.o \
+	build/utility/string/string_hash/string_hash.o \
+	build/utility/string/string_length/string_length.o \
+	build/utility/string/string_replace_all/string_replace_all.o \
+	build/utility/string/string_replace_all_substrings/string_replace_all_substrings.o \
+	build/utility/string/string_starts/string_starts.o \
+	build/utility/utf8/utf8_char_decode/utf8_char_decode.o \
+	build/utility/utf8/utf8_char_length/utf8_char_length.o \
+	build/utility/utf8/utf8_decode/utf8_decode.o \
+	build/utility/utf8/utf8_is_alpha/utf8_is_alpha.o \
+	build/utility/utf8/utf8_is_continuation_byte/utf8_is_continuation_byte.o \
+	build/utility/utf8/utf8_is_digit/utf8_is_digit.o \
+	build/utility/utf8/utf8_is_valid/utf8_is_valid.o \
+	build/utility/utf8/utf8_strlen/utf8_strlen.o
+# ---------- END OBJECT FILES ----------
 
 all: $(BIN_TARGET)
 
 $(BIN_TARGET): $(OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $^ -o $@
+	@echo "=== Linking $@ START at $$(date +'%T') ==="
+	@start_time=$$(date +%s); \
+	$(CC) $(CFLAGS) $^ -o $@; \
+	end_time=$$(date +%s); \
+	echo "=== Linking $@ END at $$(date +'%T'), duration: $$((end_time - start_time)) seconds ==="
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	@echo "+++ Compiling $< START at $$(date +'%T') +++"
+	@start_time=$$(date +%s); \
+	$(CC) $(CFLAGS) -c $< -o $@; \
+	end_time=$$(date +%s); \
+	echo "+++ Compiling $< END at $$(date +'%T'), duration: $$((end_time - start_time)) seconds +++"
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+.PHONY: test
+test: $(BIN_TARGET)
+	@echo "Running test with input file"
+	@./$(BIN_TARGET) $(TEST_INPUT) > $(TEST_OUTPUT)
 
 .PHONY: all clean

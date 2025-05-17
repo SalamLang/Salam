@@ -7,6 +7,7 @@ BIN_TARGET := $(BUILD_DIR)/$(TARGET).bin
 INPUT_FILE := src/input.salam
 
 # ---------- START FILES ----------
+SRCS := \
 	src/main.c \
 	src/stage/ast/ast_alloc/ast_alloc.c \
 	src/stage/ast/ast_create/ast_create.c \

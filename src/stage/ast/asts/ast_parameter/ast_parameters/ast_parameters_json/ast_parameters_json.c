@@ -30,7 +30,8 @@ char* ast_parameters_json(ast_parameters_t* parameters)
                 {
                     buffer_append_str(temp, ", ");
                 }
-                char* buffer = ast_json((ast_t*)parameters->values[i]);
+                ast_t* item = parameters->values->items[i];
+                char* buffer = ast_json(item);
                 buffer_append_str(temp, buffer);
                 memory_destroy(buffer);
             }

@@ -215,7 +215,7 @@ char* ast_json(ast_t* ast)
                 break;
 
             case AST_TYPE_UNKNOWN:
-                log_fatal("Unhandled AST type in ast_destroy: %d\n", ast->base.type);
+                log_fatal("Unknown AST type in ast_destroy: %d\n", ast->base.type);
                 break;
 
             default:

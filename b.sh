@@ -30,10 +30,6 @@ beautify_json_if_valid() {
 }
 
 # ────── Compilation ──────
-# mapfile -t items < <(find . -type f -name "*.c")
-# find . -type f -name "*.c" > c_files.txt
-# gcc -Wno-unused-parameter -g -Wall -Wextra -pedantic -I$(pwd) "${items[@]}" -o "$SALAM_OUTPUT" 2> compile_warnings.txt
-
 gcc -Wno-unused-parameter -g -Wall -Wextra -pedantic -I$(pwd) $(cat c_files.txt) -o "$SALAM_OUTPUT" 2> compile_warnings.txt
 
 cat compile_warnings.txt

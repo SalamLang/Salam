@@ -1,15 +1,15 @@
 #ifndef _STAGE_TOKEN_TYPE_H_
 #define _STAGE_TOKEN_TYPE_H_
 
-enum token_type_t;
-enum token_operator_type_t;
-struct token_t;
-struct token_location_t;
+// enum token_type_t;
+// enum token_operator_type_t;
+// struct token_t;
+// struct token_location_t;
 
-typedef enum token_type_t token_type_t;
-typedef enum token_operator_type_t token_operator_type_t;
-typedef struct token_t token_t;
-typedef struct token_location_t token_location_t;
+// typedef enum token_type_t token_type_t;
+// typedef enum token_operator_type_t token_operator_type_t;
+// typedef struct token_t token_t;
+// typedef struct token_location_t token_location_t;
 
 #include <stddef.h> // for size_t
 

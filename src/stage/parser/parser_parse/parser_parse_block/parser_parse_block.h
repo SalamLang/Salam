@@ -26,7 +26,7 @@
 #include <stage/parser/parser_operator_expect/parser_operator_expect.h>
 #include <stage/parser/parser_eat/parser_eat.h>
 #include <stage/parser/parser_skip/parser_skip.h>
-#include <stage/parser/parser_parse_statement/parser_parse_statement.h>
+#include <stage/parser/parser_parse/parser_parse_statement/parser_parse_statement.h>
 
 // ast
 #include <stage/ast/type.h>

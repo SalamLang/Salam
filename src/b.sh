@@ -1,9 +1,9 @@
 #!/bin/bash
 
-clear
+# clear
 
-python3 generate_files.py
-python3 generate_base_all.py
+# python3 generate_files.py
+# python3 generate_base_all.py
 
 SALAM_OUTPUT=s
 
@@ -30,9 +30,11 @@ beautify_json_if_valid() {
 }
 
 # ────── Compilation ──────
-mapfile -t items < <(find . -type f -name "*.c")
+# mapfile -t items < <(find . -type f -name "*.c")
+# find . -type f -name "*.c" > c_files.txt
+# gcc -Wno-unused-parameter -g -Wall -Wextra -pedantic -I$(pwd) "${items[@]}" -o "$SALAM_OUTPUT" 2> compile_warnings.txt
 
-gcc -Wno-unused-parameter -g -Wall -Wextra -pedantic -I$(pwd) "${items[@]}" -o "$SALAM_OUTPUT" 2> compile_warnings.txt
+gcc -Wno-unused-parameter -g -Wall -Wextra -pedantic -I$(pwd) $(cat c_files.txt) -o "$SALAM_OUTPUT" 2> compile_warnings.txt
 
 cat compile_warnings.txt
 

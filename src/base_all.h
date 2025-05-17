@@ -1,8 +1,8 @@
 // Auto-generated header including all .h files
 
-#include "base.h"
-#include "base_all.h"
-#include "main.h"
+// #include "base.h"
+// #include "base_all.h"
+// #include "main.h"
 #include "stage/ast/ast_alloc/ast_alloc.h"
 #include "stage/ast/ast_create/ast_create.h"
 #include "stage/ast/ast_destroy/ast_destroy.h"

@@ -1,4 +1,4 @@
-#include <stage/parser/parser_parse_all/parser_parse_all.h>
+#include <stage/parser/parser_parse/parser_parse_all/parser_parse_all.h>
 
 ast_t* parser_parse_all(parser_t* parser)
 {

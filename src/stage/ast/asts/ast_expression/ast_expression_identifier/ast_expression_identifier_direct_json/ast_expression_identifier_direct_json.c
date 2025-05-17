@@ -27,7 +27,7 @@ char* ast_expression_identifier_direct_json(ast_expression_identifier_t expressi
     }
     else
     {
-        char* buffer = ast_json(expression_identifier->runtime_type);
+        char* buffer = ast_type_json(expression_identifier->runtime_type);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);
     }

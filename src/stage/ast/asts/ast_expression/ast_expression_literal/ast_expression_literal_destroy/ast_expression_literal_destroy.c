@@ -5,7 +5,7 @@ void ast_expression_literal_destroy(ast_expression_literal_t* expression_literal
     DEBUG_ME;
     if (!expression_literal) return;
 
-    if (expression_literal->values != NULL) {
+    if (expression_literal->value != NULL) {
         value_destroy(expression_literal->value);
     }
 

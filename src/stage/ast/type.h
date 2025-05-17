@@ -68,7 +68,7 @@ typedef enum ast_node_type_t {
     AST_TYPE_EXPRESSION_BINARY,
     AST_TYPE_EXPRESSION_UNARY,
     AST_TYPE_EXPRESSION_INDEX,
-    AST_TYPE_EXPRESSION_FUNCTION_CALL,
+    AST_TYPE_EXPRESSION_CALL,
 
     // statements
     AST_TYPE_STATEMENT_IF,
@@ -118,7 +118,7 @@ typedef struct
     ast_t* callee; // ast_expression_item_t
     ast_t* args; // ast_expressions_t
     ast_type_t* runtime_type; // (nullable)
-} ast_expression_function_call_t;
+} ast_expression_call_t;
 
 typedef struct
 {
@@ -126,13 +126,6 @@ typedef struct
     ast_t* operand; // ast_expression_item_t
     ast_type_t* runtime_type; // (nullable)
 } ast_expression_unary_t;
-
-typedef struct
-{
-    ast_t* callee; // ast_expression_item_t
-    ast_t* args; // ast_expressions_t
-    ast_type_t* runtime_type; // (nullable)
-} ast_expression_call_t;
 
 typedef struct
 {
@@ -436,7 +429,6 @@ typedef struct ast_t {
         ast_expression_binary_t expression_binary_value;
         ast_expression_unary_t expression_unary_value;
         ast_expression_index_t expression_index_value;
-        ast_expression_function_call_t expression_function_call_value;
         ast_expression_call_t expression_call_value;
         ast_expression_item_t expression_item_value;
         ast_expressions_t expressions_value;

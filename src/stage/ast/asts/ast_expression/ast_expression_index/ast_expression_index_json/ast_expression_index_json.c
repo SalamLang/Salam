@@ -46,7 +46,7 @@ char* ast_expression_index_json(ast_expression_index_t* expression_index)
         }
         else
         {
-            char* buffer = ast_json(expression_index->runtime_type);
+            char* buffer = ast_type_json(expression_index->runtime_type);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
         }

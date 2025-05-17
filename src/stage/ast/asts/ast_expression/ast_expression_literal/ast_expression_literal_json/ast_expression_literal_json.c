@@ -33,7 +33,7 @@ char* ast_expression_literal_json(ast_expression_literal_t* expression_literal)
         }
         else
         {
-            char* buffer = ast_json(expression_literal->runtime_type);
+            char* buffer = ast_type_json(expression_literal->runtime_type);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
         }

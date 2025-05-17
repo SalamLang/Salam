@@ -37,7 +37,7 @@ char* ast_expression_unary_json(ast_expression_unary_t* expression_unary)
         }
         else
         {
-            char* buffer = ast_json(expression_unary->runtime_type);
+            char* buffer = ast_type_json(expression_unary->runtime_type);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
         }

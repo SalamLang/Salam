@@ -59,7 +59,7 @@ char* ast_expression_binary_json(ast_expression_binary_t* expression_binary)
         }
         else
         {
-            char* buffer = ast_json(expression_binary->runtime_type);
+            char* buffer = ast_type_json(expression_binary->runtime_type);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
         }

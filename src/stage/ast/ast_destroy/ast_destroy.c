@@ -7,21 +7,21 @@ void ast_destroy(ast_t* ast)
 
     switch (ast->base.type) {
         case AST_TYPE_PARAMETER_ITEM:
-            ast_parameter_direct_destroy(ast->raw.parameter_value);
+            ast_parameter_direct_destroy(ast->raw.parameter_item_value);
             break;
         case AST_TYPE_PARAMETERS:
             ast_parameters_direct_destroy(ast->raw.parameters_value);
             break;
 
         case AST_TYPE_ATTRIBUTE_ITEM:
-            ast_attribute_direct_destroy(ast->raw.attribute_value);
+            ast_attribute_direct_destroy(ast->raw.attribute_item_value);
             break;
         case AST_TYPE_ATTRIBUTES:
             ast_attributes_direct_destroy(ast->raw.attributes_value);
             break;
 
         case AST_TYPE_ARGUMENT_ITEM:
-            ast_argument_direct_destroy(ast->raw.argument_value);
+            ast_argument_direct_destroy(ast->raw.argument_item_value);
             break;
         case AST_TYPE_ARGUMENTS:
             ast_arguments_direct_destroy(ast->raw.arguments_value);

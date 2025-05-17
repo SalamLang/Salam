@@ -52,6 +52,8 @@
 #define BRIGHT_CYAN "\033[96m"
 #define BRIGHT_WHITE "\033[97m"
 
+#include <stdbool.h> // for bool, true, false
+#include <stddef.h> // for size_t
 #include <stdio.h> // for printf
 
 #define DEBUG_ME printf(GRAY "DEBUG: %s:%d in %s\n" RESET, __FILE__, __LINE__, __func__)

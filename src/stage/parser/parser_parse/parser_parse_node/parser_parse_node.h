@@ -18,7 +18,7 @@
 #include <stage/parser/parser_has/parser_has.h>
 #include <stage/parser/parser_skip/parser_skip.h>
 #include <stage/parser/parser_expect/parser_expect.h>
-#include <stage/parser/parser_parse_function_decl/parser_parse_function_decl.h>
+#include <stage/parser/parser_parse/parser_parse_function_decl/parser_parse_function_decl.h>
 
 // token
 #include <stage/token/token_log/token_log.h>

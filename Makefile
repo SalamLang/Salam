@@ -22,6 +22,7 @@ SRCS := \
 	src/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_create/ast_argument_item_create.c \
 	src/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_destroy/ast_argument_item_destroy.c \
 	src/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_direct_destroy/ast_argument_item_direct_destroy.c \
+	src/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_direct_json/ast_argument_item_direct_json.c \
 	src/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_json/ast_argument_item_json.c \
 	src/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_log/ast_argument_item_log.c \
 	src/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_create/ast_arguments_create.c \
@@ -33,6 +34,7 @@ SRCS := \
 	src/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_create/ast_attribute_item_create.c \
 	src/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_destroy/ast_attribute_item_destroy.c \
 	src/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_direct_destroy/ast_attribute_item_direct_destroy.c \
+	src/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_direct_json/ast_attribute_item_direct_json.c \
 	src/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_json/ast_attribute_item_json.c \
 	src/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_log/ast_attribute_item_log.c \
 	src/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_create/ast_attributes_create.c \
@@ -108,6 +110,7 @@ SRCS := \
 	src/stage/ast/asts/ast_function_decl/ast_function_decl_create/ast_function_decl_create.c \
 	src/stage/ast/asts/ast_function_decl/ast_function_decl_destroy/ast_function_decl_destroy.c \
 	src/stage/ast/asts/ast_function_decl/ast_function_decl_direct_destroy/ast_function_decl_direct_destroy.c \
+	src/stage/ast/asts/ast_function_decl/ast_function_decl_direct_json/ast_function_decl_direct_json.c \
 	src/stage/ast/asts/ast_function_decl/ast_function_decl_json/ast_function_decl_json.c \
 	src/stage/ast/asts/ast_function_decl/ast_function_decl_log/ast_function_decl_log.c \
 	src/stage/ast/asts/ast_import/ast_import_create/ast_import_create.c \
@@ -347,6 +350,7 @@ OBJS := \
 	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_create/ast_argument_item_create.o \
 	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_destroy/ast_argument_item_destroy.o \
 	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_direct_destroy/ast_argument_item_direct_destroy.o \
+	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_direct_json/ast_argument_item_direct_json.o \
 	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_json/ast_argument_item_json.o \
 	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_log/ast_argument_item_log.o \
 	build/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_create/ast_arguments_create.o \
@@ -358,6 +362,7 @@ OBJS := \
 	build/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_create/ast_attribute_item_create.o \
 	build/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_destroy/ast_attribute_item_destroy.o \
 	build/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_direct_destroy/ast_attribute_item_direct_destroy.o \
+	build/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_direct_json/ast_attribute_item_direct_json.o \
 	build/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_json/ast_attribute_item_json.o \
 	build/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_log/ast_attribute_item_log.o \
 	build/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_create/ast_attributes_create.o \
@@ -433,6 +438,7 @@ OBJS := \
 	build/stage/ast/asts/ast_function_decl/ast_function_decl_create/ast_function_decl_create.o \
 	build/stage/ast/asts/ast_function_decl/ast_function_decl_destroy/ast_function_decl_destroy.o \
 	build/stage/ast/asts/ast_function_decl/ast_function_decl_direct_destroy/ast_function_decl_direct_destroy.o \
+	build/stage/ast/asts/ast_function_decl/ast_function_decl_direct_json/ast_function_decl_direct_json.o \
 	build/stage/ast/asts/ast_function_decl/ast_function_decl_json/ast_function_decl_json.o \
 	build/stage/ast/asts/ast_function_decl/ast_function_decl_log/ast_function_decl_log.o \
 	build/stage/ast/asts/ast_import/ast_import_create/ast_import_create.o \

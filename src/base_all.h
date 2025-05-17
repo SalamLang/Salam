@@ -12,6 +12,7 @@
 #include <stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_create/ast_argument_item_create.h>
 #include <stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_destroy/ast_argument_item_destroy.h>
 #include <stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_direct_destroy/ast_argument_item_direct_destroy.h>
+#include <stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_direct_json/ast_argument_item_direct_json.h>
 #include <stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_json/ast_argument_item_json.h>
 #include <stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_log/ast_argument_item_log.h>
 #include <stage/ast/asts/ast_argument/ast_arguments/ast_arguments_create/ast_arguments_create.h>
@@ -23,6 +24,7 @@
 #include <stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_create/ast_attribute_item_create.h>
 #include <stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_destroy/ast_attribute_item_destroy.h>
 #include <stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_direct_destroy/ast_attribute_item_direct_destroy.h>
+#include <stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_direct_json/ast_attribute_item_direct_json.h>
 #include <stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_json/ast_attribute_item_json.h>
 #include <stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_log/ast_attribute_item_log.h>
 #include <stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_create/ast_attributes_create.h>
@@ -99,6 +101,7 @@
 #include <stage/ast/asts/ast_function_decl/ast_function_decl_create/ast_function_decl_create.h>
 #include <stage/ast/asts/ast_function_decl/ast_function_decl_destroy/ast_function_decl_destroy.h>
 #include <stage/ast/asts/ast_function_decl/ast_function_decl_direct_destroy/ast_function_decl_direct_destroy.h>
+#include <stage/ast/asts/ast_function_decl/ast_function_decl_direct_json/ast_function_decl_direct_json.h>
 #include <stage/ast/asts/ast_function_decl/ast_function_decl_json/ast_function_decl_json.h>
 #include <stage/ast/asts/ast_function_decl/ast_function_decl_log/ast_function_decl_log.h>
 #include <stage/ast/asts/ast_import/ast_import_create/ast_import_create.h>

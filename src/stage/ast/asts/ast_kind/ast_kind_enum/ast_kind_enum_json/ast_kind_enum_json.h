@@ -1,6 +1,9 @@
 #ifndef _STAGE_AST_ASTS_AST_KIND_AST_KIND_ENUM_AST_KIND_ENUM_JSON_AST_KIND_ENUM_JSON_H_
 #define _STAGE_AST_ASTS_AST_KIND_AST_KIND_ENUM_AST_KIND_ENUM_JSON_AST_KIND_ENUM_JSON_H_
 
+// base
+#include <base.h>
 
+char* ast_kind_enum_json(ast_kind_enum_t* kind_enum);
 
 #endif // _STAGE_AST_ASTS_AST_KIND_AST_KIND_ENUM_AST_KIND_ENUM_JSON_AST_KIND_ENUM_JSON_H_

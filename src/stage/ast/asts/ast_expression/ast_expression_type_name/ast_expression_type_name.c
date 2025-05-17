@@ -1,8 +1,8 @@
 #include "ast_expression_type_name.h"
 
-char* ast_expression_type_name(ast_expression_item_t* expression_item)
+char* ast_expression_type_name(ast_expression_type_t type)
 {
-    switch (expression_item->type)
+    switch (type)
     {
         case AST_EXPRESSION_TYPE_LITERAL: return "literal";
             break;

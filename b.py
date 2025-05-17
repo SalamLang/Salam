@@ -1,9 +1,9 @@
 import subprocess
 import sys
 import os
-import shutil
 import json
 from pathlib import Path
+import platform
 from concurrent.futures import ProcessPoolExecutor
 import argparse
 import logging
@@ -147,6 +147,9 @@ def main() -> None:
 
         if args.clean:
             clean_build(c_files)
+
+        if platform.system() == "Windows" and not args.output.endswith(".exe"):
+            args.output += ".exe"
 
         if args.compiler == "tcc":
             logger.info("Using TCC (non-parallel)...")

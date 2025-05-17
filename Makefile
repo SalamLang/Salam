@@ -3,6 +3,8 @@ CFLAGS = -Wall -Wextra -pedantic -std=c99 -g -I src/
 SRC_DIR = src
 BUILD_DIR = build
 TARGET = salam
+BIN_TARGET = $(BUILD_DIR)/$(TARGET).bin
+INPUT_FILE = src/input.salam
 
 SRCS = $(shell find $(SRC_DIR) -name '*.c')
 OBJS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS))
@@ -17,10 +19,19 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+bin: $(BIN_TARGET)
+
+$(BIN_TARGET): $(BUILD_DIR)/$(TARGET)
+	objcopy -O binary $< $@
+
 clean:
 	rm -rf $(BUILD_DIR)
 
 run: all
-	valgrind -s --leak-check=full --show-leak-kinds=all --track-origins=yes ./build/$(TARGET) input.salam
+	valgrind -s --leak-check=full --show-leak-kinds=all --track-origins=yes ./build/$(TARGET) $(INPUT_FILE)
 
-.PHONY: all clean run
+test: all bin
+	@echo "Running test with $(INPUT_FILE)..."
+	./$(BUILD_DIR)/$(TARGET) $(INPUT_FILE)
+
+.PHONY: all clean run bin test

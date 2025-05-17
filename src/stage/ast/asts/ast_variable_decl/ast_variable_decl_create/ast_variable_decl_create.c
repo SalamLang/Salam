@@ -2,7 +2,7 @@
 
 ast_t* ast_variable_decl_create(const char* name, ast_t* value)
 {
-    ast_t* ast = ast_alloc(AST_TYPE_VAR_DECL);
+    ast_t* ast = ast_alloc(AST_TYPE_VARIABLE_DECL);
     ast->raw.variable_decl_value.name = string_duplicate(name);
     ast->raw.variable_decl_value.value = value;
     return ast;

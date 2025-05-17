@@ -1,6 +1,6 @@
-#include "ast_kind_enum_json.h"
+#include "ast_kind_enum_direct_json.h"
 
-char* ast_kind_enum_json(ast_kind_enum_t* kind_enum)
+char* ast_kind_enum_direct_json(ast_kind_enum_t kind_enum)
 {
     buffer_t* temp = buffer_create(256);
     if (kind_enum == NULL) {

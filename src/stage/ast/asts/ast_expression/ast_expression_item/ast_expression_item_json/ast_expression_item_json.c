@@ -14,7 +14,7 @@ char* ast_expression_item_json(ast_expression_item_t* expression_item)
 
         // type
         buffer_append_str(temp, "\"type\": ");
-        buffer_append_str(temp, ast_expression_type_name(expression_item));
+        buffer_append_str(temp, ast_expression_type_name(expression_item->type));
         buffer_append_char(temp, ',');
 
         // raw

@@ -1,6 +1,6 @@
-#include "ast_expressions_json.h"
+#include "ast_expressions_direct_json.h"
 
-char* ast_expressions_json(ast_expressions_t* expressions)
+char* ast_expressions_direct_json(ast_expressions_t expressions)
 {
     buffer_t* temp = buffer_create(24);
 
@@ -14,23 +14,23 @@ char* ast_expressions_json(ast_expressions_t* expressions)
 
         // value_count
         buffer_append_str(temp, "\"value_count\": ");
-        buffer_append_str(temp, convert_size2string(expressions->value_count));
+        buffer_append_str(temp, convert_size2string(expressions.value_count));
 
         // values
         buffer_append_str(temp, "\"values\": ");
-        if (expressions->values == NULL)
+        if (expressions.values == NULL)
         {
             buffer_append_str(temp, "null");
         }
         else
         {
-            for (size_t i = 0; i < expressions->value_count; i++)
+            for (size_t i = 0; i < expressions.value_count; i++)
             {
                 if (i > 0)
                 {
                     buffer_append_str(temp, ", ");
                 }
-                ast_t* item = expressions->values->items[i];
+                ast_t* item = expressions.values.items[i];
                 char* buffer = ast_json(item);
                 buffer_append_str(temp, buffer);
                 memory_destroy(buffer);

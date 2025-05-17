@@ -52,21 +52,25 @@ SRCS := \
 	src/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_create/ast_expression_binary_create.c \
 	src/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_destroy/ast_expression_binary_destroy.c \
 	src/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_direct_destroy/ast_expression_binary_direct_destroy.c \
+	src/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_direct_json/ast_expression_binary_direct_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_json/ast_expression_binary_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_log/ast_expression_binary_log.c \
 	src/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_create/ast_expression_call_create.c \
 	src/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_destroy/ast_expression_call_destroy.c \
 	src/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_direct_destroy/ast_expression_call_direct_destroy.c \
+	src/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_direct_json/ast_expression_call_direct_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_json/ast_expression_call_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_log/ast_expression_call_log.c \
 	src/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_create/ast_expression_identifier_create.c \
 	src/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_destroy/ast_expression_identifier_destroy.c \
 	src/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_direct_destroy/ast_expression_identifier_direct_destroy.c \
+	src/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_direct_json/ast_expression_identifier_direct_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_json/ast_expression_identifier_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_log/ast_expression_identifier_log.c \
 	src/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_create/ast_expression_index_create.c \
 	src/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_destroy/ast_expression_index_destroy.c \
 	src/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_direct_destroy/ast_expression_index_direct_destroy.c \
+	src/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_direct_json/ast_expression_index_direct_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_json/ast_expression_index_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_log/ast_expression_index_log.c \
 	src/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_create/ast_expression_item_create.c \
@@ -78,12 +82,14 @@ SRCS := \
 	src/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_create/ast_expression_literal_create.c \
 	src/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_destroy/ast_expression_literal_destroy.c \
 	src/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_direct_destroy/ast_expression_literal_direct_destroy.c \
+	src/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_direct_json/ast_expression_literal_direct_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_json/ast_expression_literal_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_log/ast_expression_literal_log.c \
 	src/stage/ast/asts/ast_expression/ast_expression_type_name/ast_expression_type_name.c \
 	src/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_create/ast_expression_unary_create.c \
 	src/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_destroy/ast_expression_unary_destroy.c \
 	src/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_direct_destroy/ast_expression_unary_direct_destroy.c \
+	src/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_direct_json/ast_expression_unary_direct_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_json/ast_expression_unary_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_log/ast_expression_unary_log.c \
 	src/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_create/ast_expressions_create.c \
@@ -386,21 +392,25 @@ OBJS := \
 	build/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_create/ast_expression_binary_create.o \
 	build/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_destroy/ast_expression_binary_destroy.o \
 	build/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_direct_destroy/ast_expression_binary_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_direct_json/ast_expression_binary_direct_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_json/ast_expression_binary_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_binary/ast_expression_binary_log/ast_expression_binary_log.o \
 	build/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_create/ast_expression_call_create.o \
 	build/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_destroy/ast_expression_call_destroy.o \
 	build/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_direct_destroy/ast_expression_call_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_direct_json/ast_expression_call_direct_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_json/ast_expression_call_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_call/ast_expression_call_log/ast_expression_call_log.o \
 	build/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_create/ast_expression_identifier_create.o \
 	build/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_destroy/ast_expression_identifier_destroy.o \
 	build/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_direct_destroy/ast_expression_identifier_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_direct_json/ast_expression_identifier_direct_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_json/ast_expression_identifier_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_identifier/ast_expression_identifier_log/ast_expression_identifier_log.o \
 	build/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_create/ast_expression_index_create.o \
 	build/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_destroy/ast_expression_index_destroy.o \
 	build/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_direct_destroy/ast_expression_index_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_direct_json/ast_expression_index_direct_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_json/ast_expression_index_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_log/ast_expression_index_log.o \
 	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_create/ast_expression_item_create.o \
@@ -412,12 +422,14 @@ OBJS := \
 	build/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_create/ast_expression_literal_create.o \
 	build/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_destroy/ast_expression_literal_destroy.o \
 	build/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_direct_destroy/ast_expression_literal_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_direct_json/ast_expression_literal_direct_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_json/ast_expression_literal_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_log/ast_expression_literal_log.o \
 	build/stage/ast/asts/ast_expression/ast_expression_type_name/ast_expression_type_name.o \
 	build/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_create/ast_expression_unary_create.o \
 	build/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_destroy/ast_expression_unary_destroy.o \
 	build/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_direct_destroy/ast_expression_unary_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_direct_json/ast_expression_unary_direct_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_json/ast_expression_unary_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_unary/ast_expression_unary_log/ast_expression_unary_log.o \
 	build/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_create/ast_expressions_create.o \

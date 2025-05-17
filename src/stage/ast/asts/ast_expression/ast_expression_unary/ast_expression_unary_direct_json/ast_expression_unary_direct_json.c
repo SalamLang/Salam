@@ -1,10 +1,10 @@
-#include "ast_expression_literal_json.h"
+#include "ast_expression_unary_direct_json.h"
 
-char* ast_expression_literal_json(ast_expression_literal_t* expression_literal)
+char* ast_expression_unary_direct_json(ast_expression_unary_t expression_unary)
 {
     buffer_t* temp = buffer_create(24);
 
-    if (expression_literal == NULL)
+    if (expression_unary == NULL)
     {
         buffer_append_str(temp, "null");
     }
@@ -12,28 +12,32 @@ char* ast_expression_literal_json(ast_expression_literal_t* expression_literal)
     {
         buffer_append_char(temp, '{');
 
-        // value
-        buffer_append_str(temp, ",\"value\": ");
-        if (expression_literal->value == NULL)
+        // op_type
+        buffer_append_str(temp, "\"op_type\": ");
+        buffer_append_str(temp, token_operator_name(expression_unary.op_type));
+
+        // operand
+        buffer_append_str(temp, ",\"operand\": ");
+        if (expression_unary.operand == NULL)
         {
             buffer_append_str(temp, "null");
         }
         else
         {
-            char* buffer = ast_json(expression_literal->value);
+            char* buffer = ast_json(expression_unary.operand);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
         }
 
         // runtime_type
         buffer_append_str(temp, ",\"runtime_type\": ");
-        if (expression_literal->runtime_type == NULL)
+        if (expression_unary.runtime_type == NULL)
         {
             buffer_append_str(temp, "null");
         }
         else
         {
-            char* buffer = ast_json(expression_literal->runtime_type);
+            char* buffer = ast_json(expression_unary.runtime_type);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
         }

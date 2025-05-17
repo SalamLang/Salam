@@ -44,6 +44,14 @@ It is designed for simplicity, accessibility, and inclusivity—bridging the gap
 To explore Salam, run the following commands:
 
 ```bash
+# Build all
+cmake --build build -j 7
+
+# Run test
+cmake --build build --target test
+```
+
+```bash
 $ ./salam
 Welcome to Salam Programming Language!
 Salam is the first Persian/Iranian computer scripting language.

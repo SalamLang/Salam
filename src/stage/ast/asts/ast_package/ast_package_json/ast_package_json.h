@@ -1,6 +1,9 @@
 #ifndef _STAGE_AST_ASTS_AST_PACKAGE_AST_PACKAGE_JSON_AST_PACKAGE_JSON_H_
 #define _STAGE_AST_ASTS_AST_PACKAGE_AST_PACKAGE_JSON_AST_PACKAGE_JSON_H_
 
+// base
+#include <base.h>
 
+char* ast_package_json(ast_package_t* package);
 
 #endif // _STAGE_AST_ASTS_AST_PACKAGE_AST_PACKAGE_JSON_AST_PACKAGE_JSON_H_

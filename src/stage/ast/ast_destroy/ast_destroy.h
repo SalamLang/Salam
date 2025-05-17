@@ -7,6 +7,9 @@
 // memory
 #include <utility/memory/memory_destroy/memory_destroy.h>
 
+// log
+#include <utility/log/log_fatal/log_fatal.h>
+
 // ast
 #include <stage/ast/type.h>
 

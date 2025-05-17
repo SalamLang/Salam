@@ -19,7 +19,7 @@ char* token_location_json(token_location_t location)
     buffer_append_str(temp, convert_size2string(location.end_index));
     buffer_append_str(temp, ", \"length\": ");
     buffer_append_str(temp, convert_size2string(location.length));
-    buffer_append_str(temp, "}");
+    buffer_append_char(temp, '}');
 
     char* result = string_duplicate(temp->data);
     buffer_destroy(temp);

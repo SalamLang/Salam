@@ -38,7 +38,7 @@ char* ast_expression_identifier_json(ast_expression_identifier_t* expression_ide
             memory_destroy(buffer);
         }
 
-        buffer_append_str(temp, "}");
+        buffer_append_char(temp, '}');
     }
 
     char* result = string_duplicate(temp->data);

@@ -45,7 +45,7 @@ char* ast_expression_call_direct_json(ast_expression_call_t expression_call)
         memory_destroy(buffer);
     }
 
-    buffer_append_str(temp, "}");
+    buffer_append_char(temp, '}');
 
     char* result = string_duplicate(temp->data);
     buffer_destroy(temp);

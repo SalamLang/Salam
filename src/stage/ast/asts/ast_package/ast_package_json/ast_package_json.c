@@ -27,7 +27,7 @@ char* ast_package_json(ast_package_t* package)
             buffer_append_str(temp, "\"");
         }
 
-        buffer_append_str(temp, "}");
+        buffer_append_char(temp, '}');
     }
 
     char* result = string_duplicate(temp->data);

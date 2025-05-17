@@ -47,7 +47,7 @@ char* ast_statement_variable_decl_direct_json(ast_statement_variable_decl_t stat
         memory_destroy(value);
     }
 
-    buffer_append_str(temp, "}");
+    buffer_append_char(temp, '}');
 
     char* result = string_duplicate(temp->data);
     buffer_destroy(temp);

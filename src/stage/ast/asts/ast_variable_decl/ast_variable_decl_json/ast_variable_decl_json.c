@@ -45,7 +45,7 @@ char* ast_variable_decl_json(ast_variable_decl_t* variable_decl)
             memory_destroy(buffer);
         }
 
-        buffer_append_str(temp, "}");
+        buffer_append_char(temp, '}');
     }
 
 

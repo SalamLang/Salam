@@ -64,7 +64,7 @@ char* ast_expression_binary_json(ast_expression_binary_t* expression_binary)
             memory_destroy(buffer);
         }
 
-        buffer_append_str(temp, "}");
+        buffer_append_char(temp, '}');
     }
 
     char* result = string_duplicate(temp->data);

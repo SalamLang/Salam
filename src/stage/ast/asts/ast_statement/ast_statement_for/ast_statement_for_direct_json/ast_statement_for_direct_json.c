@@ -59,7 +59,7 @@ char* ast_statement_for_direct_json(ast_statement_for_t statement_for)
     }
 
 
-    buffer_append_str(temp, "}");
+    buffer_append_char(temp, '}');
 
     char* result = string_duplicate(temp->data);
     buffer_destroy(temp);

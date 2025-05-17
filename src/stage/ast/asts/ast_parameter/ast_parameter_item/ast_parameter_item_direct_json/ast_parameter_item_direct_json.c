@@ -47,7 +47,7 @@ char* ast_parameter_item_direct_json(ast_parameter_item_t parameter_item)
         memory_destroy(default_value);
     }
 
-    buffer_append_str(temp, "}");
+    buffer_append_char(temp, '}');
 
     char* result = string_duplicate(temp->data);
     buffer_destroy(temp);

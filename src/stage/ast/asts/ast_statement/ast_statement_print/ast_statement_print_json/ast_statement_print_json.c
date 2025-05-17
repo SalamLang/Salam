@@ -25,7 +25,7 @@ char* ast_statement_print_json(ast_statement_print_t* statement_print)
             memory_destroy(name);
         }
 
-        buffer_append_str(temp, "}");
+        buffer_append_char(temp, '}');
     }
 
     char* result = string_duplicate(temp->data);

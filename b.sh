@@ -1,10 +1,64 @@
 #!/bin/bash
+set -e
 
 # clear
 
-SALAM_OUTPUT=s
-# COMPILER=tcc
-COMPILER=gcc
+# ----------- Configuration -----------
+# Choose: tcc or gcc
+COMPILER="gcc"
+SALAM_OUTPUT="s"
+C_FILES="c_files.txt"
+
+# CFLAGS_COMMON=""
+CFLAGS_COMMON="-Wno-unused-parameter -g -Wall -Wextra -pedantic"
+INCLUDE_DIRS="-I. -Isrc"
+
+CFLAGS="$CFLAGS_COMMON $INCLUDE_DIRS"
+LDFLAGS=""
+
+OBJ_FILES=""
+
+# ----------- Compilation -----------
+if [[ "$COMPILER" == "tcc" ]]; then
+    while IFS= read -r file; do
+        echo "Compiling $file ..."
+        if ! $COMPILER -c $CFLAGS "$file" -o "${file%.*}.o" 2> compile_error.tmp; then
+            echo "Compilation failed for $file:"
+            cat compile_error.tmp
+            rm -f compile_error.tmp
+            exit 1
+        fi
+        rm -f compile_error.tmp
+        OBJ_FILES="$OBJ_FILES ${file%.*}.o"
+    done < "$C_FILES"
+
+    echo "Linking..."
+    if ! $COMPILER -o "$SALAM_OUTPUT" $OBJ_FILES $LDFLAGS; then
+        echo "Linking failed!"
+        exit 1
+    fi
+
+elif [[ "$COMPILER" == "gcc" ]]; then
+    echo "Compiling and linking with GCC..."
+    if ! $COMPILER $CFLAGS @"$C_FILES" -o "$SALAM_OUTPUT" $LDFLAGS; then
+        echo "Compilation or linking failed!"
+        exit 1
+    fi
+
+else
+    echo "Unknown compiler: $COMPILER"
+    exit 1
+fi
+
+echo "Compilation and linking successful."
+
+# ----------- Run Program -----------
+echo "Running program..."
+if ! ./"$SALAM_OUTPUT" input.salam; then
+    echo "Program execution failed!"
+    exit 1
+fi
+echo "Program executed successfully."
 
 # ────── Function to beautify JSON ──────
 beautify_json_if_valid() {
@@ -27,26 +81,6 @@ beautify_json_if_valid() {
         echo "$file not found. Skipping beautification."
     fi
 }
-
-# ────── Compilation ──────
-"$COMPILER" -Wno-unused-parameter -g -Wall -Wextra -pedantic -I$(pwd) $(cat c_files.txt) -o "$SALAM_OUTPUT" 2> compile_warnings.txt
-
-cat compile_warnings.txt
-
-if [ $? -ne 0 ]; then
-    echo "Compilation and linking failed!"
-    exit 1
-fi
-
-# ────── Run the program ──────
-echo "Running program with Valgrind to check for memory leaks and issues..."
-valgrind -s --leak-check=full --show-leak-kinds=all --track-origins=yes ./"$SALAM_OUTPUT" input.salam
-
-VALGRIND_EXIT_CODE=$?
-if [ $VALGRIND_EXIT_CODE -ne 0 ]; then
-    echo "Program execution failed (exit code $VALGRIND_EXIT_CODE). Skipping JSON beautification."
-    exit $VALGRIND_EXIT_CODE
-fi
 
 # ────── Beautify JSON outputs ──────
 beautify_json_if_valid "tokens.json"

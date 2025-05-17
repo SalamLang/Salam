@@ -78,18 +78,20 @@ void scanner_scan(scanner_t* scanner)
                     case '>':
                     case '!':
                     {
-                        if (uc != NULL) {
-                            memory_destroy(uc);
-                        }
-
                         if (ucf == '/' && SCANNER_CURRENT == '/') {
                             scanner_scan_comment_inline(scanner);
 
+                            if (uc != NULL) {
+                                memory_destroy(uc);
+                            }
                             continue;
                         }
                         else if (ucf == '/' && SCANNER_CURRENT == '*') {
                             scanner_scan_comment_multiline(scanner);
 
+                            if (uc != NULL) {
+                                memory_destroy(uc);
+                            }
                             continue;
                         }
                         else {
@@ -104,6 +106,10 @@ void scanner_scan(scanner_t* scanner)
                             token->source = string_duplicate(uc);
                             token->operator_type = token_operator_type(uc);
                             SCANNER_PUSH_TOKEN(token);
+
+                            if (uc != NULL) {
+                                memory_destroy(uc);
+                            }
                             continue;
                         }
                     } break;

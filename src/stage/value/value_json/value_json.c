@@ -40,7 +40,7 @@ char* value_json(const value_t* value)
                 }
             } break;
         }
-        buffer_append_str(temp, "}");
+        buffer_append_char(temp, '}');
     }
 
     char* result = string_duplicate(temp->data);

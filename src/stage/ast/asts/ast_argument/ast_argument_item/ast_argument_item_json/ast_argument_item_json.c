@@ -19,7 +19,7 @@ char* ast_argument_item_json(ast_argument_item_t* argument_item)
         memory_destroy(value);
     }
 
-    buffer_append_str(temp, "}");
+    buffer_append_char(temp, '}');
 
     char* result = string_duplicate(temp->data);
     buffer_destroy(temp);

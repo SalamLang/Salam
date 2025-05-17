@@ -42,7 +42,7 @@ char* ast_expression_unary_json(ast_expression_unary_t* expression_unary)
             memory_destroy(buffer);
         }
 
-        buffer_append_str(temp, "}");
+        buffer_append_char(temp, '}');
     }
 
     char* result = string_duplicate(temp->data);

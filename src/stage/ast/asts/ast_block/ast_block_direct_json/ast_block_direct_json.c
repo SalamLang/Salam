@@ -30,7 +30,7 @@ char* ast_block_direct_json(ast_block block)
         }
     }
 
-    buffer_append_str(temp, "}");
+    buffer_append_char(temp, '}');
 
     char* result = string_duplicate(temp->data);
     buffer_destroy(temp);

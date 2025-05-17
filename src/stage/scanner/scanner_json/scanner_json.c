@@ -63,7 +63,7 @@ char* scanner_json(scanner_t* scanner)
         }
         buffer_append_str(temp, "]");
 
-        buffer_append_str(temp, "}");
+        buffer_append_char(temp, '}');
     }
 
     char* result = string_duplicate(temp->data);

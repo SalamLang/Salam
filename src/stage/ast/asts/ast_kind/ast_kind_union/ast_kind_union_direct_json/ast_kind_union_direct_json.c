@@ -9,7 +9,7 @@ char* ast_kind_union_direct_json(ast_kind_union_t kind_union)
     // TODO
     buffer_append_str(temp, "TODO");
 
-    buffer_append_str(temp, "}");
+    buffer_append_char(temp, '}');
 
     char* result = string_duplicate(temp->data);
     buffer_destroy(temp);

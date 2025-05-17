@@ -43,7 +43,7 @@ char* token_json(const token_t* token)
         buffer_append_str(temp, json_value);
         memory_destroy(json_value);
 
-        buffer_append_str(temp, "}");
+        buffer_append_char(temp, '}');
     }
 
     char* result = string_duplicate(temp->data);

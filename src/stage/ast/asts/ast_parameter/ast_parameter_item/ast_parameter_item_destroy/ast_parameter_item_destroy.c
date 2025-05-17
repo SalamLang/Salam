@@ -1,4 +1,4 @@
-#include <stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_destroy/ast_parameter_item_destroy->h>
+#include <stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_destroy/ast_parameter_item_destroy.h>
 
 void ast_parameter_item_destroy(ast_parameter_item_t* parameter_item)
 {
@@ -12,8 +12,8 @@ void ast_parameter_item_destroy(ast_parameter_item_t* parameter_item)
     }
 
     if (parameter_item->default_value != NULL) {
-        ast_destroy(default_value->type);
+        ast_destroy(parameter_item->default_value);
     }
 
-    memory_destroy(default_value);
+    memory_destroy(parameter_item);
 }

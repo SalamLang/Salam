@@ -258,9 +258,19 @@ typedef struct
     ast_t* value; // ast_expression_item_t
 } ast_statement_expression_t;
 
+typedef enum
+{
+    AST_EXPRESSION_TYPE_LITERAL,
+    AST_EXPRESSION_TYPE_IDENTIFIER,
+    AST_EXPRESSION_TYPE_BINARY,
+    AST_EXPRESSION_TYPE_UNARY,
+    AST_EXPRESSION_TYPE_INDEX,
+    AST_EXPRESSION_TYPE_CALL
+} ast_expression_type_t;
+
 typedef struct
 {
-    ast_node_type_t type;
+    ast_expression_type_t type;
 
     union {
         ast_expression_literal_t literal;

@@ -14,30 +14,30 @@ char* ast_expression_unary_json(ast_expression_unary_t* expression_unary)
 
         // op_type
         buffer_append_str(temp, "\"op_type\": ");
-        buffer_append_str(temp, token_operator_name(expression_unary->op_type));
+        buffer_append_str(temp, token_operator_name(expression_unary.op_type));
 
         // operand
         buffer_append_str(temp, ",\"operand\": ");
-        if (expression_unary->operand == NULL)
+        if (expression_unary.operand == NULL)
         {
             buffer_append_str(temp, "null");
         }
         else
         {
-            char* buffer = ast_json(expression_unary->operand);
+            char* buffer = ast_json(expression_unary.operand);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
         }
 
         // runtime_type
         buffer_append_str(temp, ",\"runtime_type\": ");
-        if (expression_unary->runtime_type == NULL)
+        if (expression_unary.runtime_type == NULL)
         {
             buffer_append_str(temp, "null");
         }
         else
         {
-            char* buffer = ast_type_json(expression_unary->runtime_type);
+            char* buffer = ast_type_json(expression_unary.runtime_type);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
         }

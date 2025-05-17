@@ -27,6 +27,7 @@ SRCS := \
 	src/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_create/ast_arguments_create.c \
 	src/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_destroy/ast_arguments_destroy.c \
 	src/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_direct_destroy/ast_arguments_direct_destroy.c \
+	src/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_direct_json/ast_arguments_direct_json.c \
 	src/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_json/ast_arguments_json.c \
 	src/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_log/ast_arguments_log.c \
 	src/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_create/ast_attribute_item_create.c \
@@ -37,6 +38,7 @@ SRCS := \
 	src/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_create/ast_attributes_create.c \
 	src/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_destroy/ast_attributes_destroy.c \
 	src/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_direct_destroy/ast_attributes_direct_destroy.c \
+	src/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_direct_json/ast_attributes_direct_json.c \
 	src/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_json/ast_attributes_json.c \
 	src/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_log/ast_attributes_log.c \
 	src/stage/ast/asts/ast_block/ast_block_create/ast_block_create.c \
@@ -145,11 +147,13 @@ SRCS := \
 	src/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_create/ast_parameter_item_create.c \
 	src/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_destroy/ast_parameter_item_destroy.c \
 	src/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_direct_destroy/ast_parameter_item_direct_destroy.c \
+	src/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_direct_json/ast_parameter_item_direct_json.c \
 	src/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_json/ast_parameter_item_json.c \
 	src/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_log/ast_parameter_item_log.c \
 	src/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_create/ast_parameters_create.c \
 	src/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_destroy/ast_parameters_destroy.c \
 	src/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_direct_destroy/ast_parameters_direct_destroy.c \
+	src/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_direct_json/ast_parameters_direct_json.c \
 	src/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_json/ast_parameters_json.c \
 	src/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_log/ast_parameters_log.c \
 	src/stage/ast/asts/ast_program/ast_program_create/ast_program_create.c \
@@ -161,11 +165,13 @@ SRCS := \
 	src/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_create/ast_statement_expression_create.c \
 	src/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_destroy/ast_statement_expression_destroy.c \
 	src/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_direct_destroy/ast_statement_expression_direct_destroy.c \
+	src/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_direct_json/ast_statement_expression_direct_json.c \
 	src/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_json/ast_statement_expression_json.c \
 	src/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_log/ast_statement_expression_log.c \
 	src/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_create/ast_statement_for_create.c \
 	src/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_destroy/ast_statement_for_destroy.c \
 	src/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_direct_destroy/ast_statement_for_direct_destroy.c \
+	src/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_direct_json/ast_statement_for_direct_json.c \
 	src/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_json/ast_statement_for_json.c \
 	src/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_log/ast_statement_for_log.c \
 	src/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_create/ast_statement_foreach_create.c \
@@ -176,21 +182,25 @@ SRCS := \
 	src/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_create/ast_statement_if_create.c \
 	src/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_destroy/ast_statement_if_destroy.c \
 	src/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_direct_destroy/ast_statement_if_direct_destroy.c \
+	src/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_direct_json/ast_statement_if_direct_json.c \
 	src/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_json/ast_statement_if_json.c \
 	src/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_log/ast_statement_if_log.c \
 	src/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_create/ast_statement_print_create.c \
 	src/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_destroy/ast_statement_print_destroy.c \
 	src/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_direct_destroy/ast_statement_print_direct_destroy.c \
+	src/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_direct_json/ast_statement_print_direct_json.c \
 	src/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_json/ast_statement_print_json.c \
 	src/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_log/ast_statement_print_log.c \
 	src/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_create/ast_statement_return_create.c \
 	src/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_destroy/ast_statement_return_destroy.c \
 	src/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_direct_destroy/ast_statement_return_direct_destroy.c \
+	src/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_direct_json/ast_statement_return_direct_json.c \
 	src/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_json/ast_statement_return_json.c \
 	src/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_log/ast_statement_return_log.c \
 	src/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_create/ast_statement_variable_decl_create.c \
 	src/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_destroy/ast_statement_variable_decl_destroy.c \
 	src/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_direct_destroy/ast_statement_variable_decl_direct_destroy.c \
+	src/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_direct_json/ast_statement_variable_decl_direct_json.c \
 	src/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_json/ast_statement_variable_decl_json.c \
 	src/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_log/ast_statement_variable_decl_log.c \
 	src/stage/ast/asts/ast_variable_decl/ast_variable_decl_create/ast_variable_decl_create.c \
@@ -342,6 +352,7 @@ OBJS := \
 	build/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_create/ast_arguments_create.o \
 	build/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_destroy/ast_arguments_destroy.o \
 	build/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_direct_destroy/ast_arguments_direct_destroy.o \
+	build/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_direct_json/ast_arguments_direct_json.o \
 	build/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_json/ast_arguments_json.o \
 	build/stage/ast/asts/ast_argument/ast_arguments/ast_arguments_log/ast_arguments_log.o \
 	build/stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_create/ast_attribute_item_create.o \
@@ -352,6 +363,7 @@ OBJS := \
 	build/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_create/ast_attributes_create.o \
 	build/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_destroy/ast_attributes_destroy.o \
 	build/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_direct_destroy/ast_attributes_direct_destroy.o \
+	build/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_direct_json/ast_attributes_direct_json.o \
 	build/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_json/ast_attributes_json.o \
 	build/stage/ast/asts/ast_attribute/ast_attributes/ast_attributes_log/ast_attributes_log.o \
 	build/stage/ast/asts/ast_block/ast_block_create/ast_block_create.o \
@@ -460,11 +472,13 @@ OBJS := \
 	build/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_create/ast_parameter_item_create.o \
 	build/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_destroy/ast_parameter_item_destroy.o \
 	build/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_direct_destroy/ast_parameter_item_direct_destroy.o \
+	build/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_direct_json/ast_parameter_item_direct_json.o \
 	build/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_json/ast_parameter_item_json.o \
 	build/stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_log/ast_parameter_item_log.o \
 	build/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_create/ast_parameters_create.o \
 	build/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_destroy/ast_parameters_destroy.o \
 	build/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_direct_destroy/ast_parameters_direct_destroy.o \
+	build/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_direct_json/ast_parameters_direct_json.o \
 	build/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_json/ast_parameters_json.o \
 	build/stage/ast/asts/ast_parameter/ast_parameters/ast_parameters_log/ast_parameters_log.o \
 	build/stage/ast/asts/ast_program/ast_program_create/ast_program_create.o \
@@ -476,11 +490,13 @@ OBJS := \
 	build/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_create/ast_statement_expression_create.o \
 	build/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_destroy/ast_statement_expression_destroy.o \
 	build/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_direct_destroy/ast_statement_expression_direct_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_direct_json/ast_statement_expression_direct_json.o \
 	build/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_json/ast_statement_expression_json.o \
 	build/stage/ast/asts/ast_statement/ast_statement_expression/ast_statement_expression_log/ast_statement_expression_log.o \
 	build/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_create/ast_statement_for_create.o \
 	build/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_destroy/ast_statement_for_destroy.o \
 	build/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_direct_destroy/ast_statement_for_direct_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_direct_json/ast_statement_for_direct_json.o \
 	build/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_json/ast_statement_for_json.o \
 	build/stage/ast/asts/ast_statement/ast_statement_for/ast_statement_for_log/ast_statement_for_log.o \
 	build/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_create/ast_statement_foreach_create.o \
@@ -491,21 +507,25 @@ OBJS := \
 	build/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_create/ast_statement_if_create.o \
 	build/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_destroy/ast_statement_if_destroy.o \
 	build/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_direct_destroy/ast_statement_if_direct_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_direct_json/ast_statement_if_direct_json.o \
 	build/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_json/ast_statement_if_json.o \
 	build/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_log/ast_statement_if_log.o \
 	build/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_create/ast_statement_print_create.o \
 	build/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_destroy/ast_statement_print_destroy.o \
 	build/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_direct_destroy/ast_statement_print_direct_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_direct_json/ast_statement_print_direct_json.o \
 	build/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_json/ast_statement_print_json.o \
 	build/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_log/ast_statement_print_log.o \
 	build/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_create/ast_statement_return_create.o \
 	build/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_destroy/ast_statement_return_destroy.o \
 	build/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_direct_destroy/ast_statement_return_direct_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_direct_json/ast_statement_return_direct_json.o \
 	build/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_json/ast_statement_return_json.o \
 	build/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_log/ast_statement_return_log.o \
 	build/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_create/ast_statement_variable_decl_create.o \
 	build/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_destroy/ast_statement_variable_decl_destroy.o \
 	build/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_direct_destroy/ast_statement_variable_decl_direct_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_direct_json/ast_statement_variable_decl_direct_json.o \
 	build/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_json/ast_statement_variable_decl_json.o \
 	build/stage/ast/asts/ast_statement/ast_statement_variable_decl/ast_statement_variable_decl_log/ast_statement_variable_decl_log.o \
 	build/stage/ast/asts/ast_variable_decl/ast_variable_decl_create/ast_variable_decl_create.o \

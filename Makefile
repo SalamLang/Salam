@@ -6,9 +6,7 @@ TARGET := salam
 BIN_TARGET := $(BUILD_DIR)/$(TARGET).bin
 INPUT_FILE := src/input.salam
 
-# SRCS := $(shell find $(SRC_DIR) -name '*.c')
-SRCS := \
-    # ---------- START FILES ----------
+# ---------- START FILES ----------
 	src/main.c \
 	src/stage/ast/ast_alloc/ast_alloc.c \
 	src/stage/ast/ast_create/ast_create.c \

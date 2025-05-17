@@ -2,7 +2,7 @@
 
 void ast_extern_function_destroy(ast_extern_function_t* extern_function)
 {
-    if (!extern_function) return NULL;
+    if (!extern_function) return;
 
     if (extern_function->name != NULL) {
         memory_destroy(extern_function->name);

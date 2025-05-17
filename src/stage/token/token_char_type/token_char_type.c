@@ -31,7 +31,7 @@ token_type_t token_char_type(char c)
         case '>':
         case '!':
             return TOKEN_TYPE_OPERATOR;
-        
+
         default:
             return TOKEN_TYPE_UNKNOWN;
     }

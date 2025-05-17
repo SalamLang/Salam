@@ -9,6 +9,8 @@
 #include <stage/ast/ast_log/ast_log.h>
 #include <stage/ast/ast_type/ast_type_destroy/ast_type_destroy.h>
 #include <stage/ast/ast_type/ast_type_direct_destroy/ast_type_direct_destroy.h>
+#include <stage/ast/ast_type/ast_type_direct_json/ast_type_direct_json.h>
+#include <stage/ast/ast_type/ast_type_json/ast_type_json.h>
 #include <stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_create/ast_argument_item_create.h>
 #include <stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_destroy/ast_argument_item_destroy.h>
 #include <stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_direct_destroy/ast_argument_item_direct_destroy.h>
@@ -85,6 +87,7 @@
 #include <stage/ast/asts/ast_expression/ast_expressions/ast_expressions_create/ast_expressions_create.h>
 #include <stage/ast/asts/ast_expression/ast_expressions/ast_expressions_destroy/ast_expressions_destroy.h>
 #include <stage/ast/asts/ast_expression/ast_expressions/ast_expressions_direct_destroy/ast_expressions_direct_destroy.h>
+#include <stage/ast/asts/ast_expression/ast_expressions/ast_expressions_direct_json/ast_expressions_direct_json.h>
 #include <stage/ast/asts/ast_expression/ast_expressions/ast_expressions_json/ast_expressions_json.h>
 #include <stage/ast/asts/ast_expression/ast_expressions/ast_expressions_log/ast_expressions_log.h>
 #include <stage/ast/asts/ast_extern/ast_extern_decl/ast_extern_decl_create/ast_extern_decl_create.h>
@@ -184,6 +187,7 @@
 #include <stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_create/ast_statement_foreach_create.h>
 #include <stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_destroy/ast_statement_foreach_destroy.h>
 #include <stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_direct_destroy/ast_statement_foreach_direct_destroy.h>
+#include <stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_direct_json/ast_statement_foreach_direct_json.h>
 #include <stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_json/ast_statement_foreach_json.h>
 #include <stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_log/ast_statement_foreach_log.h>
 #include <stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_create/ast_statement_if_create.h>

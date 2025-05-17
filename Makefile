@@ -19,6 +19,8 @@ SRCS := \
 	src/stage/ast/ast_log/ast_log.c \
 	src/stage/ast/ast_type/ast_type_destroy/ast_type_destroy.c \
 	src/stage/ast/ast_type/ast_type_direct_destroy/ast_type_direct_destroy.c \
+	src/stage/ast/ast_type/ast_type_direct_json/ast_type_direct_json.c \
+	src/stage/ast/ast_type/ast_type_json/ast_type_json.c \
 	src/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_create/ast_argument_item_create.c \
 	src/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_destroy/ast_argument_item_destroy.c \
 	src/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_direct_destroy/ast_argument_item_direct_destroy.c \
@@ -95,6 +97,7 @@ SRCS := \
 	src/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_create/ast_expressions_create.c \
 	src/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_destroy/ast_expressions_destroy.c \
 	src/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_direct_destroy/ast_expressions_direct_destroy.c \
+	src/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_direct_json/ast_expressions_direct_json.c \
 	src/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_json/ast_expressions_json.c \
 	src/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_log/ast_expressions_log.c \
 	src/stage/ast/asts/ast_extern/ast_extern_decl/ast_extern_decl_create/ast_extern_decl_create.c \
@@ -192,6 +195,7 @@ SRCS := \
 	src/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_create/ast_statement_foreach_create.c \
 	src/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_destroy/ast_statement_foreach_destroy.c \
 	src/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_direct_destroy/ast_statement_foreach_direct_destroy.c \
+	src/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_direct_json/ast_statement_foreach_direct_json.c \
 	src/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_json/ast_statement_foreach_json.c \
 	src/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_log/ast_statement_foreach_log.c \
 	src/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_create/ast_statement_if_create.c \
@@ -359,6 +363,8 @@ OBJS := \
 	build/stage/ast/ast_log/ast_log.o \
 	build/stage/ast/ast_type/ast_type_destroy/ast_type_destroy.o \
 	build/stage/ast/ast_type/ast_type_direct_destroy/ast_type_direct_destroy.o \
+	build/stage/ast/ast_type/ast_type_direct_json/ast_type_direct_json.o \
+	build/stage/ast/ast_type/ast_type_json/ast_type_json.o \
 	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_create/ast_argument_item_create.o \
 	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_destroy/ast_argument_item_destroy.o \
 	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_direct_destroy/ast_argument_item_direct_destroy.o \
@@ -435,6 +441,7 @@ OBJS := \
 	build/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_create/ast_expressions_create.o \
 	build/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_destroy/ast_expressions_destroy.o \
 	build/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_direct_destroy/ast_expressions_direct_destroy.o \
+	build/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_direct_json/ast_expressions_direct_json.o \
 	build/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_json/ast_expressions_json.o \
 	build/stage/ast/asts/ast_expression/ast_expressions/ast_expressions_log/ast_expressions_log.o \
 	build/stage/ast/asts/ast_extern/ast_extern_decl/ast_extern_decl_create/ast_extern_decl_create.o \
@@ -532,6 +539,7 @@ OBJS := \
 	build/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_create/ast_statement_foreach_create.o \
 	build/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_destroy/ast_statement_foreach_destroy.o \
 	build/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_direct_destroy/ast_statement_foreach_direct_destroy.o \
+	build/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_direct_json/ast_statement_foreach_direct_json.o \
 	build/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_json/ast_statement_foreach_json.o \
 	build/stage/ast/asts/ast_statement/ast_statement_foreach/ast_statement_foreach_log/ast_statement_foreach_log.o \
 	build/stage/ast/asts/ast_statement/ast_statement_if/ast_statement_if_create/ast_statement_if_create.o \

@@ -24,6 +24,7 @@ char* ast_expressions_json(ast_expressions_t* expressions)
         }
         else
         {
+            buffer_append_char(temp, '[');
             for (size_t i = 0; i < expressions->value_count; i++)
             {
                 if (i > 0)
@@ -35,6 +36,7 @@ char* ast_expressions_json(ast_expressions_t* expressions)
                 buffer_append_str(temp, buffer);
                 memory_destroy(buffer);
             }
+            buffer_append_char(temp, ']');
         }
 
         buffer_append_char(temp, '}');

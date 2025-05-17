@@ -56,7 +56,7 @@ char* ast_statement_if_direct_json(ast_statement_if_t statement_if)
         memory_destroy(else_branch);
     }
 
-    buffer_append_str(temp, "}");
+    buffer_append_char(temp, '}');
 
     char* result = string_duplicate(temp->data);
     buffer_destroy(temp);

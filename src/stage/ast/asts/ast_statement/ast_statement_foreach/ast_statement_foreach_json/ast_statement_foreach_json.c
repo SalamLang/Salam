@@ -65,7 +65,7 @@ char* ast_statement_foreach_json(ast_statement_foreach_t* statement_foreach)
         }
 
 
-        buffer_append_str(temp, "}");
+        buffer_append_char(temp, '}');
     }
 
     char* result = string_duplicate(temp->data);

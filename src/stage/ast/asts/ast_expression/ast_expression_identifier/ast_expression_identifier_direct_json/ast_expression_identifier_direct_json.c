@@ -32,7 +32,7 @@ char* ast_expression_identifier_direct_json(ast_expression_identifier_t expressi
         memory_destroy(buffer);
     }
 
-    buffer_append_str(temp, "}");
+    buffer_append_char(temp, '}');
 
     char* result = string_duplicate(temp->data);
     buffer_destroy(temp);

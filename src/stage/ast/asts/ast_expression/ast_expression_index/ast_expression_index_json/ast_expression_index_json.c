@@ -51,7 +51,7 @@ char* ast_expression_index_json(ast_expression_index_t* expression_index)
             memory_destroy(buffer);
         }
 
-        buffer_append_str(temp, "}");
+        buffer_append_char(temp, '}');
     }
 
     char* result = string_duplicate(temp->data);

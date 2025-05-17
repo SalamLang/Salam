@@ -1,6 +1,7 @@
 #ifndef _STAGE_VALUE_TYPE_H_
 #define _STAGE_VALUE_TYPE_H_
 
+#include <stdbool.h> // for bool, true, false
 #include <stddef.h> // for size_t
 
 // base

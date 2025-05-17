@@ -9,6 +9,10 @@ void ast_variable_decl_destroy(ast_variable_decl_t* variable_decl)
         memory_destroy(variable_decl->name);
     }
 
+    if (variable_decl->type != NULL) {
+        ast_destroy(variable_decl->type);
+    }
+
     if (variable_decl->value != NULL) {
         ast_destroy(variable_decl->value);
     }

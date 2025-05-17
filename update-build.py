@@ -45,14 +45,17 @@ def format_for_make(files):
 
 # === Update file content ===
 def update_makefile_content(content, new_file_list):
-    pattern = rf"(.*\n)?{re.escape(START_MARKER)}.*?{re.escape(END_MARKER)}"
-    match = re.search(pattern, content, flags=re.DOTALL)
-    if not match:
-        print(f"⚠️  Markers not found in Makefile. Skipping update.")
+    new_block = f"{START_MARKER}\nSRCS := \\\n{new_file_list.rstrip(' \\')}\n    {END_MARKER}"
+    updated_content, count = re.subn(
+        rf"{re.escape(START_MARKER)}.*?{re.escape(END_MARKER)}",
+        new_block,
+        content,
+        flags=re.DOTALL
+    )
+    if count == 0:
+        print(f"⚠️ Markers not found. Skipping update.")
         return None
-    prev_line = match.group(1) or ""
-    new_block = f"{prev_line}{START_MARKER}\n{new_file_list.rstrip(' \\')}\n    {END_MARKER}"
-    return content[:match.start()] + new_block + content[match.end():]
+    return updated_content
 
 def update_generic_file_content(content, new_file_list):
     new_block = f"{START_MARKER}\n{new_file_list.rstrip(' \\')}\n    {END_MARKER}"
@@ -63,7 +66,7 @@ def update_generic_file_content(content, new_file_list):
         flags=re.DOTALL
     )
     if count == 0:
-        print(f"⚠️  Markers not found. Skipping update.")
+        print(f"⚠️ Markers not found. Skipping update.")
         return None
     return updated_content
 

@@ -32,7 +32,7 @@ ast_t* parser_parse_expression_item(parser_t* parser)
         return ast_expression_literal_create(value, NULL);
     }
     else {
-        fatal_error("Expected a value, got: %s\n", token_name(PARSER_CURRENT->type));
+        log_fatal("Expected a value, got: %s\n", token_name(PARSER_CURRENT->type));
     }
     return NULL;
 }

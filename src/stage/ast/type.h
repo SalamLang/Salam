@@ -19,9 +19,9 @@
 // value
 #include <stage/value/type.h>
 
-struct ast_t;
-
+// struct ast_t;
 typedef struct ast_t ast_t;
+typedef struct ast_type_t ast_type_t;
 
 typedef enum ast_node_type_t {
     AST_TYPE_UNKNOWN = 0,
@@ -74,7 +74,7 @@ typedef enum ast_node_type_t {
     AST_TYPE_STATEMENT_IF,
     AST_TYPE_STATEMENT_FOR,
     AST_TYPE_STATEMENT_FOREACH,
-    AST_TYPE_STATEMENT_RETURN,
+    AST_TYPE_STATEMENT_RET,
     AST_TYPE_STATEMENT_PRINT,
     AST_TYPE_STATEMENT_VARIABLE_DECL,
     AST_TYPE_STATEMENT_EXPRESSION,
@@ -83,8 +83,6 @@ typedef enum ast_node_type_t {
 typedef struct ast_base_t {
     ast_node_type_t type;
 } ast_base_t;
-
-typedef struct ast_type_t ast_type_t;
 
 typedef struct
 {

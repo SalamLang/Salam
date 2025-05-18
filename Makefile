@@ -17,6 +17,7 @@ SRCS := \
 	src/stage/ast/ast_destroy/ast_destroy.c \
 	src/stage/ast/ast_json/ast_json.c \
 	src/stage/ast/ast_log/ast_log.c \
+	src/stage/ast/ast_node_type_name/ast_node_type_name.c \
 	src/stage/ast/ast_type/ast_type_destroy/ast_type_destroy.c \
 	src/stage/ast/ast_type/ast_type_direct_destroy/ast_type_direct_destroy.c \
 	src/stage/ast/ast_type/ast_type_direct_json/ast_type_direct_json.c \
@@ -365,6 +366,7 @@ OBJS := \
 	build/stage/ast/ast_destroy/ast_destroy.o \
 	build/stage/ast/ast_json/ast_json.o \
 	build/stage/ast/ast_log/ast_log.o \
+	build/stage/ast/ast_node_type_name/ast_node_type_name.o \
 	build/stage/ast/ast_type/ast_type_destroy/ast_type_destroy.o \
 	build/stage/ast/ast_type/ast_type_direct_destroy/ast_type_direct_destroy.o \
 	build/stage/ast/ast_type/ast_type_direct_json/ast_type_direct_json.o \

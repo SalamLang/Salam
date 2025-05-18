@@ -2,6 +2,7 @@
 
 char* ast_extern_variable_direct_json(ast_extern_variable_t extern_variable)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(10);
 
     buffer_append_char(temp, '{');

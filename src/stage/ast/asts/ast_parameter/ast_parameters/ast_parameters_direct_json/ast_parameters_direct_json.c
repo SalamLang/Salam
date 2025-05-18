@@ -2,6 +2,7 @@
 
 char* ast_parameters_direct_json(ast_parameters_t parameters)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
     buffer_append_char(temp, '{');

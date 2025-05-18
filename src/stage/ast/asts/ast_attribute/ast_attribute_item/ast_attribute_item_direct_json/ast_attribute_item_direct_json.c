@@ -2,6 +2,7 @@
 
 char* ast_attribute_item_direct_json(ast_attribute_item_t attribute_item)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(10);
 
     buffer_append_char(temp, '{');

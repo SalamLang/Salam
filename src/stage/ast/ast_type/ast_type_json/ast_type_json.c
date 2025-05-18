@@ -2,6 +2,7 @@
 
 char* ast_type_json(ast_type_t* type)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(256);
     if (type == NULL) {
         buffer_append_str(temp, "null");

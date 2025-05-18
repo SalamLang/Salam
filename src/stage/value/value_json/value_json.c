@@ -2,6 +2,7 @@
 
 char* value_json(const value_t* value)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(256);
     if (value == NULL) {
         buffer_append_str(temp, "null");

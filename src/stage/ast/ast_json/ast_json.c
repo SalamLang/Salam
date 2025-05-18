@@ -3,7 +3,7 @@
 char* ast_json(ast_t* ast)
 {
     DEBUG_ME;
-    log_info("Ast Json for type %s", ast_node_type_name(ast->base.type));
+    log_info("Ast Json for type %s\n", ast_node_type_name(ast->base.type));
     buffer_t* temp = buffer_create(256);
     if (ast == NULL) {
         buffer_append_str(temp, "null");

@@ -2,6 +2,7 @@
 
 char* ast_expression_binary_direct_json(ast_expression_binary_t expression_binary)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
     buffer_append_char(temp, '{');

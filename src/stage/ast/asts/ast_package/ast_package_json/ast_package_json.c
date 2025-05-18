@@ -2,6 +2,7 @@
 
 char* ast_package_json(ast_package_t* package)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
     if (package == NULL)

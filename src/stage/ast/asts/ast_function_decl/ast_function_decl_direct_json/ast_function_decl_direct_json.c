@@ -2,6 +2,7 @@
 
 char* ast_function_decl_direct_json(ast_function_decl_t function_decl)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
     buffer_append_char(temp, '{');

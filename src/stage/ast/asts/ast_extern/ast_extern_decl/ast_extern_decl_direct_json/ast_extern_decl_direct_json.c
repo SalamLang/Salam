@@ -2,6 +2,7 @@
 
 char* ast_extern_decl_direct_json(ast_extern_decl_t extern_decl)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(10);
 
     buffer_append_char(temp, '{');

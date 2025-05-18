@@ -3,9 +3,9 @@
 void ast_program_log(ast_program_t* program)
 {
     if (!program) {
-        log_info("Program is NULL");
+        log_info("Program is NULL\n");
         return;
     }
 
-    log_info("Program: TODO");
+    log_info("Program: TODO\n");
 }

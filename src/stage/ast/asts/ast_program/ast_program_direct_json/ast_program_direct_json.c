@@ -2,6 +2,7 @@
 
 char* ast_program_direct_json(ast_program_t program)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
     buffer_append_char(temp, '{');

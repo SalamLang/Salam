@@ -2,6 +2,7 @@
 
 char* string_escaping(const char* input)
 {
+    DEBUG_ME;
     if (!input) return NULL;
 
     char* temp = string_replace_all(input, "\\", "\\\\");

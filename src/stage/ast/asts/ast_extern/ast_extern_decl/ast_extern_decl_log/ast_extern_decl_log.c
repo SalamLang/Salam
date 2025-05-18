@@ -3,9 +3,9 @@
 void ast_extern_decl_log(ast_extern_decl_t* extern_decl)
 {
     if (!extern_decl) {
-        log_info("Extern Declaration is NULL");
+        log_info("Extern Declaration is NULL\n");
         return;
     }
 
-    log_info("Extern Declaration...");
+    log_info("Extern Declaration...\n");
 }

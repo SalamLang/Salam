@@ -2,6 +2,7 @@
 
 char* ast_kind_decl_direct_json(ast_kind_decl_t kind_decl)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(256);
     buffer_append_char(temp, '{');
 

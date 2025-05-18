@@ -2,6 +2,7 @@
 
 char* ast_package_direct_json(ast_package_t package)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
     buffer_append_char(temp, '{');

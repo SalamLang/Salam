@@ -18,7 +18,6 @@ void scanner_scan_number(scanner_t *scanner, char *uc)
     bool is_float = false;
 
     while (SCANNER_CURRENT != '\0') {
-        // size_t num_bytes;
         uc = utf8_char_decode(scanner->source, &scanner->index, NULL);
         if (string_compare(uc, "\0") == 0) {
             memory_destroy(uc);
@@ -53,6 +52,7 @@ void scanner_scan_number(scanner_t *scanner, char *uc)
     token_t *token = token_create(type, SCANNER_CURRENT_LOCATION);
     token->source = string_duplicate(temp->data);
     token->value = value_create(is_float ? VALUE_TYPE_NUMBER_FLOAT : VALUE_TYPE_NUMBER_INT);
+    log_info("New number token - type:", token_name(type));
     if (is_float) {
         token->value->raw.float_value = atof(temp->data);
     } else {

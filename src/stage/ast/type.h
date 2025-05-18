@@ -285,12 +285,14 @@ typedef struct
 
 typedef struct
 {
-    ast_t* value; // ast_expression_item_t
+    ast_t* values; // ast_expressions_t with single value for now...
+    size_t value_count;
 } ast_statement_return_t;
 
 typedef struct
 {
-    ast_t* value; // ast_expression_item_t
+    ast_t* values; // ast_expressions_t with single value for now...
+    size_t value_count;
 } ast_statement_print_t;
 
 typedef struct

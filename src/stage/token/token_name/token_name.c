@@ -18,6 +18,7 @@ const char* token_name(token_type_t type)
         case TOKEN_TYPE_KEYWORD_RET:        return "KEYWORD_RET";
         case TOKEN_TYPE_KEYWORD_FN:         return "KEYWORD_FN";
         case TOKEN_TYPE_KEYWORD_END:        return "KEYWORD_END";
+        case TOKEN_TYPE_KEYWORD_PRINT:      return "KEYWORD_PRINT";
         case TOKEN_TYPE_KEYWORD_IMPORT:     return "KEYWORD_IMPORT";
         case TOKEN_TYPE_KEYWORD_PACKAGE:    return "KEYWORD_PACKAGE";
         case TOKEN_TYPE_KEYWORD_STRUCT:     return "KEYWORD_STRUCT";

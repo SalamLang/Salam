@@ -242,10 +242,14 @@ set(SRC_FILES
     src/stage/parser/parser_parse/parser_parse_all/parser_parse_all.c
     src/stage/parser/parser_parse/parser_parse_arguments/parser_parse_arguments.c
     src/stage/parser/parser_parse/parser_parse_block/parser_parse_block.c
+    src/stage/parser/parser_parse/parser_parse_expression_item/parser_parse_expression_item.c
+    src/stage/parser/parser_parse/parser_parse_expressions/parser_parse_expressions.c
     src/stage/parser/parser_parse/parser_parse_function_decl/parser_parse_function_decl.c
     src/stage/parser/parser_parse/parser_parse_node/parser_parse_node.c
     src/stage/parser/parser_parse/parser_parse_parameters/parser_parse_parameters.c
     src/stage/parser/parser_parse/parser_parse_statement/parser_parse_statement.c
+    src/stage/parser/parser_parse/parser_parse_statement_print/parser_parse_statement_print.c
+    src/stage/parser/parser_parse/parser_parse_statement_return/parser_parse_statement_return.c
     src/stage/parser/parser_prev/parser_prev.c
     src/stage/parser/parser_skip/parser_skip.c
     src/stage/scanner/scanner_create/scanner_create.c

@@ -4,6 +4,9 @@
 // base
 #include <base.h>
 
-ast_t* ast_statement_print_create(ast_t* expressions, size_t expression_count);
+// ast
+#include <stage/ast/type.h>
+
+ast_t* ast_statement_print_create(ast_t* values, size_t value_count);
 
 #endif // _STAGE_AST_ASTS_AST_STATEMENT_AST_TYPE_STATEMENT_PRINT_AST_TYPE_STATEMENT_PRINT_CREATE_AST_TYPE_STATEMENT_PRINT_CREATE_H_

@@ -18,6 +18,9 @@ token_type_t token_type(const char* name)
     else if (string_compare(name, "STRING") == 0)       return TOKEN_TYPE_VALUE_STRING;
     else if (string_compare(name, "NUMBER_INT") == 0)   return TOKEN_TYPE_VALUE_NUMBER_INT;
     else if (string_compare(name, "NUMBER_FLOAT") == 0) return TOKEN_TYPE_VALUE_NUMBER_FLOAT;
-    
+    else if (string_compare(name, "TRUE") == 0) return TOKEN_TYPE_VALUE_TRUE;
+    else if (string_compare(name, "FALSE") == 0) return TOKEN_TYPE_VALUE_FALSE;
+    else if (string_compare(name, "NULL") == 0) return TOKEN_TYPE_VALUE_NULL;
+
     return TOKEN_TYPE_UNKNOWN;
 }

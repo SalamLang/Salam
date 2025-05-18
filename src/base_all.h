@@ -7,6 +7,7 @@
 #include <stage/ast/ast_destroy/ast_destroy.h>
 #include <stage/ast/ast_json/ast_json.h>
 #include <stage/ast/ast_log/ast_log.h>
+#include <stage/ast/ast_node_type_name/ast_node_type_name.h>
 #include <stage/ast/ast_type/ast_type_destroy/ast_type_destroy.h>
 #include <stage/ast/ast_type/ast_type_direct_destroy/ast_type_direct_destroy.h>
 #include <stage/ast/ast_type/ast_type_direct_json/ast_type_direct_json.h>

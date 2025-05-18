@@ -9,7 +9,7 @@ ast_t* parser_parse_node(parser_t* parser)
         return parser_parse_function_decl(parser);
     }
 
-    log_error("Unknown token type: %s\n", token_name(PARSER_CURRENT->type));
+    log_error("Unknown token node type: %s\n", token_name(PARSER_CURRENT->type));
     PARSER_NEXT;
     return NULL;
 }

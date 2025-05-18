@@ -1,3 +1,13 @@
 #include "ast_statement_return_create.h"
 
-// Implementation here
+ast_t* ast_statement_return_create(ast_t* values, size_t value_count)
+{
+    DEBUG_ME;
+    if (!expressions) return NULL;
+
+    ast_t* ast = ast_aloc(AST_STATEMENT_RETURN);
+    ast->raw.statement_return_value.values = values;
+    ast->raw.statement_return_value->value_count = value_count;
+
+    return ast;
+}

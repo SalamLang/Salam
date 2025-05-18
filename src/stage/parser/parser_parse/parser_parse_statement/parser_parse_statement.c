@@ -5,6 +5,30 @@ ast_t* parser_parse_statement(parser_t* parser)
     DEBUG_ME;
     if (!parser) return NULL;
 
+    switch (PARSER_CURRENT->type) {
+        case TOKEN_TYPE_KEYWORD_ENUM:
+        case TOKEN_TYPE_KEYWORD_UNION:
+        case TOKEN_TYPE_KEYWORD_TYPE:
+        case TOKEN_TYPE_KEYWORD_STRUCT:
+        case TOKEN_TYPE_KEYWORD_PACKAGE:
+        case TOKEN_TYPE_KEYWORD_IMPORT:
+        case TOKEN_TYPE_KEYWORD_FN:
+            fatal_error("Cannot write this statement inside a sub block, you need to define it in the main block of the file");
+            return NULL;
+
+        // case TOKEN_TYPE_KEYWORD_RAW:
+        //     return parser_parse_raw(parser);
+
+        case TOKEN_TYPE_KEYWORD_PRINT:
+            return parser_parse_statement_print(parser);
+
+        case TOKEN_TYPE_KEYWORD_RET:
+            return parser_parse_statement_return(parser);
+
+        default:
+            break;
+    }
+
     log_error("Unknown token type: %s\n", token_name(PARSER_CURRENT->type));
     PARSER_NEXT;
     return NULL;

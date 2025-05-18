@@ -12,17 +12,17 @@ char* ast_statement_print_json(ast_statement_print_t* statement_print)
     {
         buffer_append_char(temp, '{');
 
-        // value
-        buffer_append_str(temp, "\"value\": ");
-        if (statement_print->value == NULL)
+        // values
+        buffer_append_str(temp, "\"values\": ");
+        if (statement_print->values == NULL)
         {
             buffer_append_str(temp, "null");
         }
         else
         {
-            char* name = ast_json(statement_print->value);
-            buffer_append_str(temp, name);
-            memory_destroy(name);
+            char* values = ast_json(statement_print->values);
+            buffer_append_str(temp, values);
+            memory_destroy(values);
         }
 
         buffer_append_char(temp, '}');

@@ -9,8 +9,6 @@ ast_t* parser_parse_all(parser_t* parser)
     array_t* function_declarations = array_create((array_destroy_t)ast_destroy);
 
     while (PARSER_HAS_CURRENT) {
-        log_info("Parse node -> %d\n", PARSER_CURRENT->type);
-        log_info("Token name: %s\n", token_name(PARSER_CURRENT->type));
         ast_t* ast = parser_parse_node(parser);
         if (ast == NULL) {
             continue;

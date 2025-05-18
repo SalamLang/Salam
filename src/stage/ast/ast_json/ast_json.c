@@ -190,7 +190,7 @@ char* ast_json(ast_t* ast)
                 memory_destroy(buffer);
                 break;
 
-            case AST_TYPE_STATEMENT_RETURN:
+            case AST_TYPE_STATEMENT_RET:
                 buffer = ast_statement_return_direct_json(ast->raw.statement_return_value);
                 buffer_append_str(temp, buffer);
                 memory_destroy(buffer);

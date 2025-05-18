@@ -13,7 +13,7 @@ ast_t* parser_parse_statement(parser_t* parser)
         case TOKEN_TYPE_KEYWORD_PACKAGE:
         case TOKEN_TYPE_KEYWORD_IMPORT:
         case TOKEN_TYPE_KEYWORD_FN:
-            fatal_error("Cannot write this statement inside a sub block, you need to define it in the main block of the file");
+            log_fatal("Cannot write this statement inside a sub block, you need to define it in the main block of the file");
             return NULL;
 
         // case TOKEN_TYPE_KEYWORD_RAW:

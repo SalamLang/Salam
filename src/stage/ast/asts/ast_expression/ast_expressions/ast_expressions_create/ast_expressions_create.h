@@ -4,6 +4,9 @@
 // base
 #include <base.h>
 
+// ast
+#include <stage/ast/ast_alloc/ast_alloc.h>
+
 ast_t* ast_expressions_create();
 
 #endif // _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSIONS_AST_EXPRESSIONS_CREATE_AST_EXPRESSIONS_CREATE_H_

@@ -20,7 +20,7 @@ char* ast_expressions_direct_json(ast_expressions_t expressions)
     else
     {
         buffer_append_char(temp, '[');
-        for (size_t i = 0; i < expressions.value_count; i++)
+        for (size_t i = 0; i < expressions.values->size; i++)
         {
             if (i > 0)
             {

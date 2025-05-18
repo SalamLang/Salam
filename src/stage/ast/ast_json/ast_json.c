@@ -2,6 +2,8 @@
 
 char* ast_json(ast_t* ast)
 {
+    DEBUG_ME;
+    log_info("Ast Json for type %s", ast_node_type_name(ast->base.type));
     buffer_t* temp = buffer_create(256);
     if (ast == NULL) {
         buffer_append_str(temp, "null");
@@ -215,11 +217,11 @@ char* ast_json(ast_t* ast)
                 break;
 
             case AST_TYPE_UNKNOWN:
-                log_fatal("Unknown AST type in ast_destroy: %d\n", ast->base.type);
+                log_fatal("Unknown AST type in ast_json: %d\n", ast->base.type);
                 break;
 
             default:
-                log_fatal("Unhandled AST type in ast_destroy: %d\n", ast->base.type);
+                log_fatal("Unhandled AST type in ast_json: %d\n", ast->base.type);
                 break;
         }
     }

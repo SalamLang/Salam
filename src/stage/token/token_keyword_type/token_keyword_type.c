@@ -17,6 +17,22 @@ token_type_t token_keyword_type(char* value)
         return TOKEN_TYPE_KEYWORD_FN;
     } else if (string_compare(value, "end") == 0) {
         return TOKEN_TYPE_KEYWORD_END;
+    } else if (string_compare(value, "print") == 0) {
+        return TOKEN_TYPE_KEYWORD_PRINT;
+    } else if (string_compare(value, "import") == 0) {
+        return TOKEN_TYPE_KEYWORD_IMPORT;
+    } else if (string_compare(value, "package") == 0) {
+        return TOKEN_TYPE_KEYWORD_PACKAGE;
+    } else if (string_compare(value, "struct") == 0) {
+        return TOKEN_TYPE_KEYWORD_STRUCT;
+    } else if (string_compare(value, "enum") == 0) {
+        return TOKEN_TYPE_KEYWORD_ENUM;
+    } else if (string_compare(value, "union") == 0) {
+        return TOKEN_TYPE_KEYWORD_UNION;
+    } else if (string_compare(value, "type") == 0) {
+        return TOKEN_TYPE_KEYWORD_TYPE;
+    } else if (string_compare(value, "raw") == 0) {
+        return TOKEN_TYPE_KEYWORD_RAW;
     }
 
     // kind

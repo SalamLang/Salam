@@ -2,6 +2,7 @@
 
 char* ast_statement_variable_decl_direct_json(ast_statement_variable_decl_t statement_variable_decl)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
     buffer_append_char(temp, '{');

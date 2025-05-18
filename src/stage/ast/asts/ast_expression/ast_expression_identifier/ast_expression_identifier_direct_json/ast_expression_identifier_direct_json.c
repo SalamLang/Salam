@@ -2,6 +2,7 @@
 
 char* ast_expression_identifier_direct_json(ast_expression_identifier_t expression_identifier)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
     buffer_append_char(temp, '{');

@@ -3,9 +3,9 @@
 void ast_function_decl_log(ast_function_decl_t* function_decl)
 {
     if (!function_decl) {
-        log_info("function_decl is NULL");
+        log_info("function_decl is NULL\n");
         return;
     }
 
-    log_info("function_decl: todo");
+    log_info("function_decl: todo\n");
 }

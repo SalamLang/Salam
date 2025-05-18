@@ -3,9 +3,9 @@
 void ast_attribute_item_log(ast_attribute_item_t* attribute_item)
 {
     if (!attribute_item) {
-        log_info("Attribute Item is NULL");
+        log_info("Attribute Item is NULL\n");
         return;
     }
 
-    log_info("Attribute Item...");
+    log_info("Attribute Item...\n");
 }

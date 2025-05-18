@@ -3,9 +3,9 @@
 void ast_extern_function_log(ast_extern_function_t* extern_function)
 {
     if (!extern_function) {
-        log_info("Extern Function is NULL");
+        log_info("Extern Function is NULL\n");
         return;
     }
 
-    log_info("Extern Function...");
+    log_info("Extern Function...\n");
 }

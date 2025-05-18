@@ -2,6 +2,7 @@
 
 char* ast_kind_enum_direct_json(ast_kind_enum_t kind_enum)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(256);
     buffer_append_char(temp, '{');
 

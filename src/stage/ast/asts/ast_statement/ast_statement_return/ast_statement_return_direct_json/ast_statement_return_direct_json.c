@@ -2,21 +2,22 @@
 
 char* ast_statement_return_direct_json(ast_statement_return_t statement_return)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
     buffer_append_char(temp, '{');
 
-    // value
-    buffer_append_str(temp, "\"value\": ");
-    if (statement_return.value == NULL)
+    // values
+    buffer_append_str(temp, "\"values\": ");
+    if (statement_return.values == NULL)
     {
         buffer_append_str(temp, "null");
     }
     else
     {
-        char* name = ast_json(statement_return.value);
-        buffer_append_str(temp, name);
-        memory_destroy(name);
+        char* values = ast_json(statement_return.values);
+        buffer_append_str(temp, values);
+        memory_destroy(values);
     }
 
     buffer_append_char(temp, '}');

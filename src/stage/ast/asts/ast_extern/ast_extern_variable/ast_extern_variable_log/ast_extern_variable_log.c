@@ -3,9 +3,9 @@
 void ast_extern_variable_log(ast_extern_variable_t* extern_variable)
 {
     if (!extern_variable) {
-        log_info("Extern Variable is NULL");
+        log_info("Extern Variable is NULL\n");
         return;
     }
 
-    log_info("Extern Variable...");
+    log_info("Extern Variable...\n");
 }

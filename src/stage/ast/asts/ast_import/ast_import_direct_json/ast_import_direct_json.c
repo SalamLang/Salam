@@ -2,6 +2,7 @@
 
 char* ast_import_direct_json(ast_import_t import)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
     buffer_append_char(temp, '{');

@@ -2,6 +2,7 @@
 
 char* ast_statement_foreach_direct_json(ast_statement_foreach_t statement_foreach)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
     buffer_append_char(temp, '{');

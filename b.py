@@ -120,7 +120,7 @@ def main() -> None:
     parser.add_argument("--compiler", default="gcc", help="Compiler to use (e.g., gcc, clang, tcc)")
     parser.add_argument("--output", default="s", help="Output executable name")
     parser.add_argument("--files", default="c_files.txt", help="Text file containing list of .c files")
-    parser.add_argument("--jobs", type=int, default=os.cpu_count(), help="Number of parallel compile jobs")
+    parser.add_argument("--jobs", type=int, default=os.cpu_count() * 3, help="Number of parallel compile jobs")
     parser.add_argument("--clean", action="store_true", help="Clean object/hash files before compiling")
     parser.add_argument("--run-args", nargs="*", default=["input.salam"], help="Arguments for running the executable")
     parser.add_argument("--no-run", action="store_true", help="Do not run the final executable")

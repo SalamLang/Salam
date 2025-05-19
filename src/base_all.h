@@ -363,9 +363,12 @@
 #include <utility/string/string_escaping/string_escaping.h>
 #include <utility/string/string_hash/string_hash.h>
 #include <utility/string/string_length/string_length.h>
+#include <utility/string/string_ltrim/string_ltrim.h>
 #include <utility/string/string_replace_all/string_replace_all.h>
 #include <utility/string/string_replace_all_substrings/string_replace_all_substrings.h>
+#include <utility/string/string_rtrim/string_rtrim.h>
 #include <utility/string/string_starts/string_starts.h>
+#include <utility/string/string_trim/string_trim.h>
 #include <utility/utf8/utf8_char_decode/utf8_char_decode.h>
 #include <utility/utf8/utf8_char_length/utf8_char_length.h>
 #include <utility/utf8/utf8_decode/utf8_decode.h>

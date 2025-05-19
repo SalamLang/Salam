@@ -85,8 +85,10 @@ void scanner_scan_identifier(scanner_t *scanner, char *uc)
             log_fatal("Unterminated raw block; expected matching '}'");
         }
 
-        token->source = string_duplicate(raw_value->data);
+        char* trim_raw_value = string_trim(raw_value->data);
+        token->source = string_duplicate(trim_raw_value);
         buffer_destroy(raw_value);
+        memory_destroy(trim_raw_value);
     } else {
         token->source = string_duplicate(value->data);
     }

@@ -5,34 +5,31 @@ void ast_expression_item_destroy(ast_expression_item_t* expression_item)
     DEBUG_ME;
     if (!expression_item) return;
 
-    // raw.literal
-    if (expression_item->type == AST_EXPRESSION_TYPE_LITERAL && expression_item->raw.literal != NULL) {
-        ast_expression_item_destroy(expression_item->raw.literal);
-    }
+    // raw
+    switch (expression_item->type) {
+        case AST_EXPRESSION_TYPE_LITERAL:
+            ast_expression_literal_direct_destroy(expression_item->raw.literal);
+            break;
 
-    // raw.identifier
-    if (expression_item->type == AST_EXPRESSION_TYPE_IDENTIFIER && expression_item->raw.identifier != NULL) {
-        ast_expression_identifier_destroy(expression_item->raw.identifier);
-    }
+        case AST_EXPRESSION_TYPE_IDENTIFIER:
+            ast_expression_identifier_direct_destroy(expression_item->raw.identifier);
+            break;
 
-    // raw.binary
-    if (expression_item->type == AST_EXPRESSION_TYPE_BINARY && expression_item->raw.binary != NULL) {
-        ast_expression_binary_destroy(expression_item->raw.binary);
-    }
+        case AST_EXPRESSION_TYPE_BINARY:
+            ast_expression_binary_direct_destroy(expression_item->raw.binary);
+            break;
 
-    // raw.unary
-    if (expression_item->type == AST_EXPRESSION_TYPE_UNARY && expression_item->raw.unary != NULL) {
-        ast_expression_unary_destroy(expression_item->raw.unary);
-    }
+        case AST_EXPRESSION_TYPE_UNARY:
+            ast_expression_unary_direct_destroy(expression_item->raw.unary);
+            break;
 
-    // raw.index
-    if (expression_item->type == AST_EXPRESSION_TYPE_INDEX && expression_item->raw.index != NULL) {
-        ast_expression_index_destroy(expression_item->raw.index);
-    }
+        case AST_EXPRESSION_TYPE_INDEX:
+            ast_expression_index_direct_destroy(expression_item->raw.index);
+            break;
 
-    // raw.call
-    if (expression_item->type == AST_EXPRESSION_TYPE_CALL && expression_item->raw.call != NULL) {
-        ast_expression_call_destroy(expression_item->raw.call);
+        case AST_EXPRESSION_TYPE_CALL:
+            ast_expression_call_direct_destroy(expression_item->raw.call);
+            break;
     }
 
     // runtime_type

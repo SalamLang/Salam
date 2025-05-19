@@ -255,6 +255,7 @@ SRCS := \
 	src/stage/parser/parser_parse/parser_parse_arguments/parser_parse_arguments.c \
 	src/stage/parser/parser_parse/parser_parse_block/parser_parse_block.c \
 	src/stage/parser/parser_parse/parser_parse_expression_item/parser_parse_expression_item.c \
+	src/stage/parser/parser_parse/parser_parse_expression_literal/parser_parse_expression_literal.c \
 	src/stage/parser/parser_parse/parser_parse_expressions/parser_parse_expressions.c \
 	src/stage/parser/parser_parse/parser_parse_function_decl/parser_parse_function_decl.c \
 	src/stage/parser/parser_parse/parser_parse_node/parser_parse_node.c \
@@ -616,6 +617,7 @@ OBJS := \
 	build/stage/parser/parser_parse/parser_parse_arguments/parser_parse_arguments.o \
 	build/stage/parser/parser_parse/parser_parse_block/parser_parse_block.o \
 	build/stage/parser/parser_parse/parser_parse_expression_item/parser_parse_expression_item.o \
+	build/stage/parser/parser_parse/parser_parse_expression_literal/parser_parse_expression_literal.o \
 	build/stage/parser/parser_parse/parser_parse_expressions/parser_parse_expressions.o \
 	build/stage/parser/parser_parse/parser_parse_function_decl/parser_parse_function_decl.o \
 	build/stage/parser/parser_parse/parser_parse_node/parser_parse_node.o \

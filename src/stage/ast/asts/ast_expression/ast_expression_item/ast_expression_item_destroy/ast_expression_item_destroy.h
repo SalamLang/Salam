@@ -1,6 +1,15 @@
 #ifndef _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSION_ITEM_AST_EXPRESSION_ITEM_DESTROY_AST_EXPRESSION_ITEM_DESTROY_H_
 #define _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSION_ITEM_AST_EXPRESSION_ITEM_DESTROY_AST_EXPRESSION_ITEM_DESTROY_H_
 
+// base
+#include <base.h>
 
+// ast
+#include <stage/ast/type.h>
+
+// generator
+#include <stage/generator/type.h>
+
+void ast_expression_item_destroy(ast_expression_item_t* expression_item);
 
 #endif // _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSION_ITEM_AST_EXPRESSION_ITEM_DESTROY_AST_EXPRESSION_ITEM_DESTROY_H_

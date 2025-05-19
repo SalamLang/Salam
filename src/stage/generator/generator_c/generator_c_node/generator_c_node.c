@@ -23,6 +23,11 @@ buffer_t* generator_c_node(generator_t* generator, ast_t* ast)
             return temp;
             break;
 
+        case AST_TYPE_STATEMENT_RAW:
+            temp = generator_c_statement_raw(generator, ast);
+            return temp;
+            break;
+
         case AST_TYPE_STATEMENT_RET:
             temp = generator_c_statement_ret(generator, ast);
             return temp;

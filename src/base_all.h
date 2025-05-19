@@ -203,6 +203,12 @@
 #include <stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_direct_json/ast_statement_print_direct_json.h>
 #include <stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_json/ast_statement_print_json.h>
 #include <stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_log/ast_statement_print_log.h>
+#include <stage/ast/asts/ast_statement/ast_statement_raw/ast_statement_raw_create/ast_statement_raw_create.h>
+#include <stage/ast/asts/ast_statement/ast_statement_raw/ast_statement_raw_destroy/ast_statement_raw_destroy.h>
+#include <stage/ast/asts/ast_statement/ast_statement_raw/ast_statement_raw_direct_destroy/ast_statement_raw_direct_destroy.h>
+#include <stage/ast/asts/ast_statement/ast_statement_raw/ast_statement_raw_direct_json/ast_statement_raw_direct_json.h>
+#include <stage/ast/asts/ast_statement/ast_statement_raw/ast_statement_raw_json/ast_statement_raw_json.h>
+#include <stage/ast/asts/ast_statement/ast_statement_raw/ast_statement_raw_log/ast_statement_raw_log.h>
 #include <stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_create/ast_statement_return_create.h>
 #include <stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_destroy/ast_statement_return_destroy.h>
 #include <stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_direct_destroy/ast_statement_return_direct_destroy.h>
@@ -232,6 +238,7 @@
 #include <stage/generator/generator_c/generator_c_program/generator_c_program.h>
 #include <stage/generator/generator_c/generator_c_statement/generator_c_statement_print/generator_c_statement_print.h>
 #include <stage/generator/generator_c/generator_c_statement/generator_c_statement_ret/generator_c_statement_ret.h>
+#include <stage/generator/generator_c/generator_c_statement_raw/generator_c_statement_raw.h>
 #include <stage/generator/generator_c/generator_c_type/generator_c_type.h>
 #include <stage/generator/generator_c/generator_c_variable_decl/generator_c_variable_decl.h>
 #include <stage/generator/generator_create/generator_create.h>

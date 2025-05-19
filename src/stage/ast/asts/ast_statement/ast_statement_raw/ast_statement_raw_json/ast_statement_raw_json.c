@@ -1,0 +1,34 @@
+#include "ast_statement_raw_json.h"
+
+char* ast_statement_raw_json(ast_statement_raw_t* statement_raw)
+{
+    buffer_t* temp = buffer_create(24);
+
+    if (statement_raw == NULL)
+    {
+        buffer_append_str(temp, "null");
+    }
+    else
+    {
+        buffer_append_char(temp, '{');
+
+        // value
+        buffer_append_str(temp, "\"value\": ");
+        if (statement_raw->value == NULL)
+        {
+            buffer_append_str(temp, "null");
+        }
+        else
+        {
+            char* value = string_escaping(statement_raw->value);
+            buffer_append_str(temp, value);
+            memory_destroy(value);
+        }
+
+        buffer_append_char(temp, '}');
+    }
+
+    char* result = string_duplicate(temp->data);
+    buffer_destroy(temp);
+    return result;
+}

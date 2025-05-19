@@ -362,9 +362,12 @@ SRCS := \
 	src/utility/string/string_escaping/string_escaping.c \
 	src/utility/string/string_hash/string_hash.c \
 	src/utility/string/string_length/string_length.c \
+	src/utility/string/string_ltrim/string_ltrim.c \
 	src/utility/string/string_replace_all/string_replace_all.c \
 	src/utility/string/string_replace_all_substrings/string_replace_all_substrings.c \
+	src/utility/string/string_rtrim/string_rtrim.c \
 	src/utility/string/string_starts/string_starts.c \
+	src/utility/string/string_trim/string_trim.c \
 	src/utility/utf8/utf8_char_decode/utf8_char_decode.c \
 	src/utility/utf8/utf8_char_length/utf8_char_length.c \
 	src/utility/utf8/utf8_decode/utf8_decode.c \
@@ -728,9 +731,12 @@ OBJS := \
 	build/utility/string/string_escaping/string_escaping.o \
 	build/utility/string/string_hash/string_hash.o \
 	build/utility/string/string_length/string_length.o \
+	build/utility/string/string_ltrim/string_ltrim.o \
 	build/utility/string/string_replace_all/string_replace_all.o \
 	build/utility/string/string_replace_all_substrings/string_replace_all_substrings.o \
+	build/utility/string/string_rtrim/string_rtrim.o \
 	build/utility/string/string_starts/string_starts.o \
+	build/utility/string/string_trim/string_trim.o \
 	build/utility/utf8/utf8_char_decode/utf8_char_decode.o \
 	build/utility/utf8/utf8_char_length/utf8_char_length.o \
 	build/utility/utf8/utf8_decode/utf8_decode.o \

@@ -19,7 +19,7 @@ int main(int argc, char** argv)
     file_write("tokens.json", json_scanner);
     memory_destroy(json_scanner);
 
-    /*
+    // /*
 
 
     // parser
@@ -45,7 +45,7 @@ int main(int argc, char** argv)
 
     ast_destroy(ast);
 
-    */
+    // */
 
     scanner_destroy(scanner);
     return 0;

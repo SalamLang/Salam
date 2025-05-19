@@ -198,6 +198,12 @@ void ast_destroy(ast_t* ast)
             return;
             break;
 
+        case AST_TYPE_STATEMENT_RAW:
+            ast_statement_raw_direct_destroy(ast->raw.statement_raw_value);
+            memory_destroy(ast);
+            return;
+            break;
+
         case AST_TYPE_STATEMENT_VARIABLE_DECL:
             ast_statement_variable_decl_direct_destroy(ast->raw.statement_variable_decl_value);
             memory_destroy(ast);

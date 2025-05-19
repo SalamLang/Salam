@@ -30,14 +30,14 @@ char* token_json(const token_t* token)
 
         // source
         buffer_append_str(temp, ",\"source\": ");
-        if (token->source) {
+        if (token->source == NULL) {
+            buffer_append_str(temp, "null");
+        } else {
             buffer_append_char(temp, '"');
             char* token_source = string_escaping(token->source);
             buffer_append_str(temp, token_source);
             memory_destroy(token_source);
             buffer_append_char(temp, '"');
-        } else {
-            buffer_append_str(temp, "null");
         }
         buffer_append_str(temp, ",");
 

@@ -52,7 +52,7 @@ void scanner_scan_number(scanner_t *scanner, char *uc)
     token_t *token = token_create(type, SCANNER_CURRENT_LOCATION);
     token->source = string_duplicate(temp->data);
     token->value = value_create(is_float ? VALUE_TYPE_NUMBER_FLOAT : VALUE_TYPE_NUMBER_INT);
-    log_info("New number token - type:", token_name(type));
+    log_info("New number token - type: %s\n", token_name(type));
     if (is_float) {
         token->value->raw.float_value = atof(temp->data);
     } else {

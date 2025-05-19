@@ -181,7 +181,7 @@ typedef struct
 {
     char* name;
     ast_t* parameters; // ast_parameters_t (type, name, and optional default value)
-    ast_t* functions; // ast_function_declarations_t
+    ast_t* functions; // ast_function_decls_t
 } ast_kind_struct_t;
 
 typedef struct
@@ -212,6 +212,7 @@ typedef struct
 typedef struct
 {
     char* name;
+    ast_type_t* return_type; // ast_type_t
     ast_t* parameters; // ast_parameters_t
     ast_t* block; // ast_block_t
 } ast_function_decl_t;
@@ -295,8 +296,8 @@ typedef struct
 
 typedef struct
 {
-    array_t* variable_declarations; // ast_variable_decl_t
-    array_t* function_declarations; // ast_function_decl_t
+    array_t* variable_declarations; // ast_t(ast_variable_decl_t)
+    array_t* function_declarations; // ast_t(ast_function_decl_t)
     size_t variable_declaration_count;
     size_t function_declaration_count;
 } ast_program_t;

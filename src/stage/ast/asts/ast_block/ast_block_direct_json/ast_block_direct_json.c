@@ -7,6 +7,9 @@ char* ast_block_direct_json(ast_block_t block)
 
     buffer_append_char(temp, '{');
 
+    // base
+    buffer_append_str(temp, "\"base\": \"ast_block_t\",");
+
     // statement_count
     buffer_append_str(temp, "\"statement_count\": ");
     buffer_append_str(temp, convert_size2string(block.statement_count));
@@ -20,7 +23,7 @@ char* ast_block_direct_json(ast_block_t block)
     else
     {
         buffer_append_char(temp, '[');
-        for (size_t i = 0; block.statements->size; i++) {
+        for (size_t i = 0; i < block.statements->size; i++) {
             if (i > 0)
             {
                 buffer_append_str(temp, ", ");

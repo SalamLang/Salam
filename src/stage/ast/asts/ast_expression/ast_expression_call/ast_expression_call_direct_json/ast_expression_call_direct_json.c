@@ -7,6 +7,9 @@ char* ast_expression_call_direct_json(ast_expression_call_t expression_call)
 
     buffer_append_char(temp, '{');
 
+    // base
+    buffer_append_str(temp, "\"base\": \"ast_expression_call_t\",");
+
     // callee
     buffer_append_str(temp, "\"callee\": ");
     if (expression_call.callee == NULL)

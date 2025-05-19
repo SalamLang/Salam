@@ -7,6 +7,9 @@ char* ast_function_decl_direct_json(ast_function_decl_t function_decl)
 
     buffer_append_char(temp, '{');
 
+    // base
+    buffer_append_str(temp, "\"base\": \"ast_function_decl_t\",");
+
     // name
     buffer_append_str(temp, "\"name\":");
     if (function_decl.name == NULL) {

@@ -19,18 +19,15 @@ ast_t* parser_parse_expression_literal(parser_t* parser)
     }
     else if (PARSER_CURRENT->type == TOKEN_TYPE_VALUE_STRING) {
         value_t* value = value_create(VALUE_TYPE_STRING);
-        value->raw.int_value = PARSER_CURRENT->value->raw.int_value;
+        value->raw.string_value = string_duplicate(PARSER_CURRENT->value->raw.string_value);
         PARSER_NEXT;
         return ast_expression_literal_create(value, NULL);
     }
-    else if (PARSER_CURRENT->type == TOKEN_TYPE_VALUE_TRUE) {
+    else if (
+        PARSER_CURRENT->type == TOKEN_TYPE_VALUE_TRUE ||
+        PARSER_CURRENT->type == TOKEN_TYPE_VALUE_FALSE
+    ) {
         value_t* value = value_create(VALUE_TYPE_BOOL);
-        value->raw.bool_value = PARSER_CURRENT->value->raw.bool_value;
-        PARSER_NEXT;
-        return ast_expression_literal_create(value, NULL);
-    }
-    else if (PARSER_CURRENT->type == TOKEN_TYPE_VALUE_FALSE) {
-        value_t* value = value_create(VALUE_TYPE_NUMBER_INT);
         value->raw.bool_value = PARSER_CURRENT->value->raw.bool_value;
         PARSER_NEXT;
         return ast_expression_literal_create(value, NULL);

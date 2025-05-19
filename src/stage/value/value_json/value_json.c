@@ -21,6 +21,8 @@ char* value_json(const value_t* value)
         buffer_append_char(temp, '"');
         buffer_append_str(temp, ", ");
 
+        log_info("Value type: %s\n", value_name(value->type));
+
         // value
         buffer_append_str(temp, "\"value\": ");
 
@@ -38,17 +40,18 @@ char* value_json(const value_t* value)
                 buffer_append_str(temp, "null");
             } break;
             case VALUE_TYPE_STRING: {
-                if (value->raw.string_value) {
+                if (value->raw.string_value == NULL) {
+                    buffer_append_str(temp, "null");
+                } else {
                     buffer_append_char(temp, '"');
                     char* value_str = string_escaping(value->raw.string_value);
                     buffer_append_str(temp, value_str);
                     memory_destroy(value_str);
                     buffer_append_char(temp, '"');
-                } else {
-                    buffer_append_str(temp, "null");
                 }
             } break;
         }
+
         buffer_append_char(temp, '}');
     }
 

@@ -232,6 +232,7 @@ SRCS := \
 	src/stage/generator/generator_c/generator_c_block/generator_c_block.c \
 	src/stage/generator/generator_c/generator_c_code/generator_c_code.c \
 	src/stage/generator/generator_c/generator_c_function_decl/generator_c_function_decl.c \
+	src/stage/generator/generator_c/generator_c_ident/generator_c_ident.c \
 	src/stage/generator/generator_c/generator_c_node/generator_c_node.c \
 	src/stage/generator/generator_c/generator_c_program/generator_c_program.c \
 	src/stage/generator/generator_c/generator_c_statement/generator_c_statement_print/generator_c_statement_print.c \
@@ -592,6 +593,7 @@ OBJS := \
 	build/stage/generator/generator_c/generator_c_block/generator_c_block.o \
 	build/stage/generator/generator_c/generator_c_code/generator_c_code.o \
 	build/stage/generator/generator_c/generator_c_function_decl/generator_c_function_decl.o \
+	build/stage/generator/generator_c/generator_c_ident/generator_c_ident.o \
 	build/stage/generator/generator_c/generator_c_node/generator_c_node.o \
 	build/stage/generator/generator_c/generator_c_program/generator_c_program.o \
 	build/stage/generator/generator_c/generator_c_statement/generator_c_statement_print/generator_c_statement_print.o \

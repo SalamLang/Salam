@@ -76,6 +76,7 @@ typedef enum ast_node_type_t {
     AST_TYPE_STATEMENT_FOREACH,
     AST_TYPE_STATEMENT_RET,
     AST_TYPE_STATEMENT_PRINT,
+    AST_TYPE_STATEMENT_RAW,
     AST_TYPE_STATEMENT_VARIABLE_DECL,
     AST_TYPE_STATEMENT_EXPRESSION,
 } ast_node_type_t;
@@ -296,6 +297,11 @@ typedef struct
 
 typedef struct
 {
+    char* value;
+} ast_statement_raw_t;
+
+typedef struct
+{
     array_t* variable_declarations; // ast_t(ast_variable_decl_t)
     array_t* function_declarations; // ast_t(ast_function_decl_t)
     size_t variable_declaration_count;
@@ -440,6 +446,7 @@ typedef struct ast_t {
         ast_statement_foreach_t statement_foreach_value;
         ast_statement_return_t statement_return_value;
         ast_statement_print_t statement_print_value;
+        ast_statement_raw_t statement_raw_value;
         ast_statement_variable_decl_t statement_variable_decl_value;
         ast_statement_expression_t statement_expression_value;
     } raw;

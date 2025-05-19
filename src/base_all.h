@@ -249,6 +249,7 @@
 #include <stage/parser/parser_parse/parser_parse_arguments/parser_parse_arguments.h>
 #include <stage/parser/parser_parse/parser_parse_block/parser_parse_block.h>
 #include <stage/parser/parser_parse/parser_parse_expression_item/parser_parse_expression_item.h>
+#include <stage/parser/parser_parse/parser_parse_expression_literal/parser_parse_expression_literal.h>
 #include <stage/parser/parser_parse/parser_parse_expressions/parser_parse_expressions.h>
 #include <stage/parser/parser_parse/parser_parse_function_decl/parser_parse_function_decl.h>
 #include <stage/parser/parser_parse/parser_parse_node/parser_parse_node.h>

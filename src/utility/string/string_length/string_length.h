@@ -4,6 +4,9 @@
 #include <string.h> // for strlen
 #include <stddef.h> // for size_t
 
-size_t string_length(const char* str);
+// base
+#include <base.h>
+
+size_t string_length(const char* input);
 
 #endif // _UTILITY_STRING_STRING_LENGTH_STRING_LENGTH_H_

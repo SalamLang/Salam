@@ -1,3 +1,6 @@
+#ifndef _STAGE_GENERATOR_GENERATOR_C_GENERATOR_C_VARIABLE_DECL_GENERATOR_C_VARIABLE_DECL_H_
+#define _STAGE_GENERATOR_GENERATOR_C_GENERATOR_C_VARIABLE_DECL_GENERATOR_C_VARIABLE_DECL_H_
+
 // base
 #include <base.h>
 
@@ -13,3 +16,5 @@
 #include <stage/ast/type.h>
 
 buffer_t* generator_c_variable_decl(generator_t* generator, ast_t* ast);
+
+#endif // _STAGE_GENERATOR_GENERATOR_C_GENERATOR_C_VARIABLE_DECL_GENERATOR_C_VARIABLE_DECL_H_

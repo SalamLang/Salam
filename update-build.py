@@ -154,7 +154,7 @@ def ensure_include_guards_in_headers(h_files, src_dir):
         if lines and lines[0].strip().startswith("#ifndef"):
             continue
 
-        macro = "_" + re.sub(r'[^a-zA-Z0-9\.]', '_', rel_path.upper()) + "_"
+        macro = "_" + re.sub(r'[^a-zA-Z0-9]', '_', rel_path.upper()) + "_"
         guarded_content = [
             f"#ifndef {macro}\n",
             f"#define {macro}\n\n",
@@ -199,6 +199,7 @@ if __name__ == "__main__":
     update_makefile_objects_section(MAKEFILE, o_files)
 
     h_files = collect_h_files(SRC_DIR)
+    ensure_include_guards_in_headers(h_files, SRC_DIR)
     generate_base_all_header(h_files, BASE_ALL_HEADER)
 
     print("\n🎉 All done!")

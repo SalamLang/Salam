@@ -29,6 +29,7 @@ void ast_expression_item_direct_destroy(ast_expression_item_t expression_item)
             break;
     }
 
+    // runtime_type
     if (expression_item.runtime_type != NULL) {
         ast_type_destroy(expression_item.runtime_type);
     }

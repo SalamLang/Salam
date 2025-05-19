@@ -224,6 +224,8 @@
 #include <stage/ast/type.h>
 #include <stage/generator/generator_c/generator_c_block/generator_c_block.h>
 #include <stage/generator/generator_c/generator_c_code/generator_c_code.h>
+#include <stage/generator/generator_c/generator_c_expression/generator_c_expression/generator_c_expressions.h>
+#include <stage/generator/generator_c/generator_c_expression/generator_c_expression_item/generator_c_expression_item.h>
 #include <stage/generator/generator_c/generator_c_function_decl/generator_c_function_decl.h>
 #include <stage/generator/generator_c/generator_c_ident/generator_c_ident.h>
 #include <stage/generator/generator_c/generator_c_node/generator_c_node.h>

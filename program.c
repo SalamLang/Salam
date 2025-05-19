@@ -1,5 +1,6 @@
 void main() {
-  printf("Hi!\n");
-  printf("Hi!\n");
-  printf("Hi!\n");
+  printf("%s", "Hey!\n");
+  printf("%s", "Hey!\n");
+  printf("%s", "Hey!\n");
+  printf("%s", "Hey!\n");
 }

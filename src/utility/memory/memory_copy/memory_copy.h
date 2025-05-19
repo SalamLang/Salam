@@ -5,6 +5,9 @@
 #include <stdlib.h> // for NULL
 #include <string.h> // for memcpy
 
+// base
+#include <base.h>
+
 void* memory_copy(void* destination, const void* source, size_t size);
 
 #endif // _UTILITY_MEMORY_MEMORY_COPY_MEMORY_COPY_H_

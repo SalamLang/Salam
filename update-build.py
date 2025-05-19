@@ -52,6 +52,20 @@ def format_for_make_objects(files):
     return formatted
 
 # === Update file content ===
+def generate_base_all_header(h_files, output_path):
+    include_lines = "\n".join(f'#include <{f}>' for f in h_files)
+    content = f"""#ifndef _BASE_ALL_H_
+#define _BASE_ALL_H_
+// Auto-generated header including all .h files
+
+{include_lines}
+
+#endif // _BASE_ALL_H_
+"""
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    print(f"🧩 Generated '{output_path}' with {len(h_files)} includes.")
+
 def update_makefile_content(content, new_file_list):
     new_block = f"{START_FILES_MARKER}\nSRCS := \\\n{new_file_list.rstrip(' \\')}\n{END_FILES_MARKER}"
     updated_content, count = re.subn(
@@ -172,20 +186,6 @@ def write_c_file_list(files, output_path):
         f.write("\n".join(files) + "\n")
     print(f"📄 Generated '{output_path}' with {len(files)} entries.")
 
-def generate_base_all_header(h_files, output_path):
-    include_lines = "\n".join(f'#include <{f}>' for f in h_files)
-    content = f"""#ifndef _BASE_ALL_H_
-#define _BASE_ALL_H_
-// Auto-generated header including all .h files
-
-{include_lines}
-
-#endif // _BASE_ALL_H_
-"""
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(content)
-    print(f"🧩 Generated '{output_path}' with {len(h_files)} includes.")
-
 # === Main ===
 if __name__ == "__main__":
     print("🚀 Starting file generation process...\n")
@@ -200,6 +200,7 @@ if __name__ == "__main__":
 
     h_files = collect_h_files(SRC_DIR)
     ensure_include_guards_in_headers(h_files, SRC_DIR)
+
     generate_base_all_header(h_files, BASE_ALL_HEADER)
 
     print("\n🎉 All done!")

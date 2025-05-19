@@ -15,6 +15,7 @@ buffer_t* generator_c_statement_raw(generator_t* generator, ast_t* ast)
     buffer_append(temp, ident);
 
     buffer_append_str(temp, raw.value);
+    buffer_append_char(temp, '\n');
 
     buffer_destroy(ident);
 

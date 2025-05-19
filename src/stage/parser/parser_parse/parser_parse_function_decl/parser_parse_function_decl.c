@@ -15,6 +15,6 @@ ast_t* parser_parse_function_decl(parser_t* parser)
 
     ast_t* block = parser_parse_block(parser);
 
-    ast_t* ast = ast_function_decl_create(name->source, parameters, block, return_type);
+    ast_t* ast = ast_function_decl_create(name->source, return_type, parameters, block);
     return ast;
 }

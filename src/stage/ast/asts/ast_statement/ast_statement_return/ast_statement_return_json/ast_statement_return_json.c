@@ -12,15 +12,15 @@ char* ast_statement_return_json(ast_statement_return_t* statement_return)
     {
         buffer_append_char(temp, '{');
 
-        // value
-        buffer_append_str(temp, "\"value\": ");
-        if (statement_return->value == NULL)
+        // values
+        buffer_append_str(temp, "\"values\": ");
+        if (statement_return->values == NULL)
         {
             buffer_append_str(temp, "null");
         }
         else
         {
-            char* name = ast_json(statement_return->value);
+            char* name = ast_json(statement_return->values);
             buffer_append_str(temp, name);
             memory_destroy(name);
         }

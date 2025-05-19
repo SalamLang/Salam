@@ -60,7 +60,7 @@ void scanner_scan_identifier(scanner_t *scanner, char *uc)
         SCANNER_NEXT;
 
         buffer_t *raw_value = buffer_create(64);
-        int brace_depth = 1;
+        size_t brace_depth = 1;
 
         while (SCANNER_CURRENT != '\0' && brace_depth > 0) {
             char c = SCANNER_CURRENT;

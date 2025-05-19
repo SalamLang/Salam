@@ -212,6 +212,12 @@ set(SRC_FILES
     src/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_direct_json/ast_statement_print_direct_json.c
     src/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_json/ast_statement_print_json.c
     src/stage/ast/asts/ast_statement/ast_statement_print/ast_statement_print_log/ast_statement_print_log.c
+    src/stage/ast/asts/ast_statement/ast_statement_raw/ast_statement_raw_create/ast_statement_raw_create.c
+    src/stage/ast/asts/ast_statement/ast_statement_raw/ast_statement_raw_destroy/ast_statement_raw_destroy.c
+    src/stage/ast/asts/ast_statement/ast_statement_raw/ast_statement_raw_direct_destroy/ast_statement_raw_direct_destroy.c
+    src/stage/ast/asts/ast_statement/ast_statement_raw/ast_statement_raw_direct_json/ast_statement_raw_direct_json.c
+    src/stage/ast/asts/ast_statement/ast_statement_raw/ast_statement_raw_json/ast_statement_raw_json.c
+    src/stage/ast/asts/ast_statement/ast_statement_raw/ast_statement_raw_log/ast_statement_raw_log.c
     src/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_create/ast_statement_return_create.c
     src/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_destroy/ast_statement_return_destroy.c
     src/stage/ast/asts/ast_statement/ast_statement_return/ast_statement_return_direct_destroy/ast_statement_return_direct_destroy.c
@@ -240,6 +246,7 @@ set(SRC_FILES
     src/stage/generator/generator_c/generator_c_program/generator_c_program.c
     src/stage/generator/generator_c/generator_c_statement/generator_c_statement_print/generator_c_statement_print.c
     src/stage/generator/generator_c/generator_c_statement/generator_c_statement_ret/generator_c_statement_ret.c
+    src/stage/generator/generator_c/generator_c_statement_raw/generator_c_statement_raw.c
     src/stage/generator/generator_c/generator_c_type/generator_c_type.c
     src/stage/generator/generator_c/generator_c_variable_decl/generator_c_variable_decl.c
     src/stage/generator/generator_create/generator_create.c

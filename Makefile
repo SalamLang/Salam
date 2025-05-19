@@ -241,6 +241,7 @@ SRCS := \
 	src/stage/generator/generator_c/generator_c_variable_decl/generator_c_variable_decl.c \
 	src/stage/generator/generator_create/generator_create.c \
 	src/stage/generator/generator_destroy/generator_destroy.c \
+	src/stage/generator/generator_llvm/generator_llvm.c \
 	src/stage/parser/parser_create/parser_create.c \
 	src/stage/parser/parser_destroy/parser_destroy.c \
 	src/stage/parser/parser_eat/parser_eat.c \
@@ -603,6 +604,7 @@ OBJS := \
 	build/stage/generator/generator_c/generator_c_variable_decl/generator_c_variable_decl.o \
 	build/stage/generator/generator_create/generator_create.o \
 	build/stage/generator/generator_destroy/generator_destroy.o \
+	build/stage/generator/generator_llvm/generator_llvm.o \
 	build/stage/parser/parser_create/parser_create.o \
 	build/stage/parser/parser_destroy/parser_destroy.o \
 	build/stage/parser/parser_eat/parser_eat.o \

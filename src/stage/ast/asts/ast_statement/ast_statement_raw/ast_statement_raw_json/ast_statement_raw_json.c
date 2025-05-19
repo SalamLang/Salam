@@ -12,6 +12,9 @@ char* ast_statement_raw_json(ast_statement_raw_t* statement_raw)
     {
         buffer_append_char(temp, '{');
 
+        // base
+        buffer_append_str(temp, "\"base\":\"ast_statement_raw_t\",");
+
         // value
         buffer_append_str(temp, "\"value\": ");
         if (statement_raw->value == NULL)

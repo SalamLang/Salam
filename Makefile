@@ -231,6 +231,8 @@ SRCS := \
 	src/stage/ast/asts/ast_variable_decl/ast_variable_decl_log/ast_variable_decl_log.c \
 	src/stage/generator/generator_c/generator_c_block/generator_c_block.c \
 	src/stage/generator/generator_c/generator_c_code/generator_c_code.c \
+	src/stage/generator/generator_c/generator_c_expression/generator_c_expression/generator_c_expressions.c \
+	src/stage/generator/generator_c/generator_c_expression/generator_c_expression_item/generator_c_expression_item.c \
 	src/stage/generator/generator_c/generator_c_function_decl/generator_c_function_decl.c \
 	src/stage/generator/generator_c/generator_c_ident/generator_c_ident.c \
 	src/stage/generator/generator_c/generator_c_node/generator_c_node.c \
@@ -594,6 +596,8 @@ OBJS := \
 	build/stage/ast/asts/ast_variable_decl/ast_variable_decl_log/ast_variable_decl_log.o \
 	build/stage/generator/generator_c/generator_c_block/generator_c_block.o \
 	build/stage/generator/generator_c/generator_c_code/generator_c_code.o \
+	build/stage/generator/generator_c/generator_c_expression/generator_c_expression/generator_c_expressions.o \
+	build/stage/generator/generator_c/generator_c_expression/generator_c_expression_item/generator_c_expression_item.o \
 	build/stage/generator/generator_c/generator_c_function_decl/generator_c_function_decl.o \
 	build/stage/generator/generator_c/generator_c_ident/generator_c_ident.o \
 	build/stage/generator/generator_c/generator_c_node/generator_c_node.o \

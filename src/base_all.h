@@ -234,6 +234,7 @@
 #include <stage/generator/generator_c/generator_c_variable_decl/generator_c_variable_decl.h>
 #include <stage/generator/generator_create/generator_create.h>
 #include <stage/generator/generator_destroy/generator_destroy.h>
+#include <stage/generator/generator_llvm/generator_llvm.h>
 #include <stage/generator/type.h>
 #include <stage/parser/parser_create/parser_create.h>
 #include <stage/parser/parser_destroy/parser_destroy.h>

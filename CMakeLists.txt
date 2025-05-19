@@ -242,6 +242,7 @@ set(SRC_FILES
     src/stage/generator/generator_c/generator_c_variable_decl/generator_c_variable_decl.c
     src/stage/generator/generator_create/generator_create.c
     src/stage/generator/generator_destroy/generator_destroy.c
+    src/stage/generator/generator_llvm/generator_llvm.c
     src/stage/parser/parser_create/parser_create.c
     src/stage/parser/parser_destroy/parser_destroy.c
     src/stage/parser/parser_eat/parser_eat.c
@@ -370,7 +371,7 @@ set(SRC_FILES
     src/utility/utf8/utf8_is_digit/utf8_is_digit.c
     src/utility/utf8/utf8_is_valid/utf8_is_valid.c
     src/utility/utf8/utf8_strlen/utf8_strlen.c
-    # ---------- END FILES ----------
+# ---------- END FILES ----------
 )
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})

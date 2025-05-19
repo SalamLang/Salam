@@ -6,5 +6,6 @@ generator_t* generator_create(ast_t* ast)
     generator_t* generator = memory_allocation(sizeof(generator_t));
     generator->ast = ast;
     generator->package = NULL;
+    generator->ident = 0;
     return generator;
 }

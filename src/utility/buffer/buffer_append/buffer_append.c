@@ -12,9 +12,8 @@
 void buffer_append(buffer_t *str, const buffer_t *value)
 {
     DEBUG_ME;
-    if (value->length == 0) {
-        return;
-    }
+    if (value == NULL) return;
+    else if (value->length == 0) return;
 
     buffer_append_str(str, value->data);
 }

@@ -225,6 +225,7 @@
 #include <stage/generator/generator_c/generator_c_block/generator_c_block.h>
 #include <stage/generator/generator_c/generator_c_code/generator_c_code.h>
 #include <stage/generator/generator_c/generator_c_function_decl/generator_c_function_decl.h>
+#include <stage/generator/generator_c/generator_c_ident/generator_c_ident.h>
 #include <stage/generator/generator_c/generator_c_node/generator_c_node.h>
 #include <stage/generator/generator_c/generator_c_program/generator_c_program.h>
 #include <stage/generator/generator_c/generator_c_statement/generator_c_statement_print/generator_c_statement_print.h>

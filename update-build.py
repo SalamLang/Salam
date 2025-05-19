@@ -93,7 +93,7 @@ def update_generic_file_content(content, new_file_list):
 
 def update_file(filepath, files, formatter):
     print(f"🔄 Updating '{filepath}'...")
-    with open(filepath, "r") as f:
+    with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
 
     new_file_list = formatter(files)
@@ -107,14 +107,14 @@ def update_file(filepath, files, formatter):
         print(f"❌ Failed to update '{filepath}'.")
         return
 
-    with open(filepath, "w") as f:
+    with open(filepath, "w", encoding="utf-8") as f:
         f.write(updated_content)
 
     print(f"✅ Updated '{filepath}' with {len(files)} files.")
 
 def update_makefile_objects_section(filepath, o_files):
     print(f"🔄 Updating object files section in '{filepath}'...")
-    with open(filepath, "r") as f:
+    with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
 
     new_obj_list = format_for_make_objects(o_files)
@@ -124,7 +124,7 @@ def update_makefile_objects_section(filepath, o_files):
         print(f"❌ Failed to update object files section in '{filepath}'.")
         return
 
-    with open(filepath, "w") as f:
+    with open(filepath, "w", encoding="utf-8") as f:
         f.write(updated_content)
 
     print(f"✅ Updated '{filepath}' object files section with {len(o_files)} entries.")
@@ -145,8 +145,30 @@ def c_files_to_o_files(c_files, build_dir="build"):
     return sorted(o_files)
 
 # === Write auxiliary files ===
+def ensure_include_guards_in_headers(h_files, src_dir):
+    for rel_path in h_files:
+        full_path = os.path.join(src_dir, rel_path)
+        with open(full_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        if lines and lines[0].strip().startswith("#ifndef"):
+            continue
+
+        macro = "_" + re.sub(r'[^a-zA-Z0-9\.]', '_', rel_path.upper()) + "_"
+        guarded_content = [
+            f"#ifndef {macro}\n",
+            f"#define {macro}\n\n",
+            *lines,
+            f"\n#endif // {macro}\n"
+        ]
+
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.writelines(guarded_content)
+
+        print(f"🛡️  Added include guard to '{rel_path}'")
+
 def write_c_file_list(files, output_path):
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(files) + "\n")
     print(f"📄 Generated '{output_path}' with {len(files)} entries.")
 
@@ -160,7 +182,7 @@ def generate_base_all_header(h_files, output_path):
 
 #endif // _BASE_ALL_H_
 """
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write(content)
     print(f"🧩 Generated '{output_path}' with {len(h_files)} includes.")
 

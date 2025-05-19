@@ -1,4 +1,9 @@
+#ifndef _STAGE_GENERATOR_GENERATOR_DESTROY_GENERATOR_DESTROY_H_
+#define _STAGE_GENERATOR_GENERATOR_DESTROY_GENERATOR_DESTROY_H_
+
 // base
 #include <base.h>
 
 void generator_destroy(generator_t* generator);
+
+#endif // _STAGE_GENERATOR_GENERATOR_DESTROY_GENERATOR_DESTROY_H_

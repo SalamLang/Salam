@@ -1,3 +1,6 @@
+#ifndef _STAGE_GENERATOR_GENERATOR_C_GENERATOR_C_IDENT_GENERATOR_C_IDENT_H_
+#define _STAGE_GENERATOR_GENERATOR_C_GENERATOR_C_IDENT_GENERATOR_C_IDENT_H_
+
 // base
 #include <base.h>
 
@@ -8,3 +11,5 @@
 #include <stage/ast/type.h>
 
 buffer_t* generator_c_ident(generator_t* generator);
+
+#endif // _STAGE_GENERATOR_GENERATOR_C_GENERATOR_C_IDENT_GENERATOR_C_IDENT_H_

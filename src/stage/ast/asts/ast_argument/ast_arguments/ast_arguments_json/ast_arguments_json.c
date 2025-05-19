@@ -17,7 +17,7 @@ char* ast_arguments_json(ast_arguments_t* arguments)
         buffer_append_str(temp, convert_size2string(arguments->value_count));
 
         // values
-        buffer_append_str(temp, "\"values\": ");
+        buffer_append_str(temp, ",\"values\": ");
         if (arguments->values == NULL)
         {
             buffer_append_str(temp, "null");
@@ -25,7 +25,7 @@ char* ast_arguments_json(ast_arguments_t* arguments)
         else
         {
             buffer_append_char(temp, '[');
-            for (size_t i = 0; i < arguments->value_count; i++)
+            for (size_t i = 0; i < arguments->values->size; i++)
             {
                 if (i > 0)
                 {

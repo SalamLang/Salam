@@ -7,6 +7,9 @@ char* ast_statement_print_direct_json(ast_statement_print_t statement_print)
 
     buffer_append_char(temp, '{');
 
+    // base
+    buffer_append_str(temp, "\"base\": \"ast_statement_print_t\",");
+
     // values
     buffer_append_str(temp, "\"values\": ");
     if (statement_print.values == NULL)

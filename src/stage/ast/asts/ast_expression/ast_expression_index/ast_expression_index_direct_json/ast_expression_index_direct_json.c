@@ -7,6 +7,9 @@ char* ast_expression_index_direct_json(ast_expression_index_t expression_index)
 
     buffer_append_char(temp, '{');
 
+    // base
+    buffer_append_str(temp, "\"base\": \"ast_expression_index_t\",");
+
     // object
     buffer_append_str(temp, "\"object\": ");
     if (expression_index.object == NULL)

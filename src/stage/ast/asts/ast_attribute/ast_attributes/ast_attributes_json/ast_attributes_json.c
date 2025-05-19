@@ -12,6 +12,9 @@ char* ast_attributes_json(ast_attributes_t* attributes)
     {
         buffer_append_char(temp, '{');
 
+        // base
+        buffer_append_str(temp, "\"base\": \"ast_attributes_t\",");
+
         // value_count
         buffer_append_str(temp, "\"value_count\": ");
         buffer_append_str(temp, convert_size2string(attributes->value_count));

@@ -15,8 +15,10 @@ buffer_t* generator_c_block(generator_t* generator, ast_t* ast)
         for (size_t i = 0; i < block.statements->size; i++) {
             ast_t* node = block.statements->items[i];
             buffer_t* node_temp = generator_c_node(generator, node);
-            buffer_append(temp, node_temp);
-            buffer_destroy(node_temp);
+            if (node_temp != NULL) {
+                buffer_append(temp, node_temp);
+                buffer_destroy(node_temp);
+            }
         }
 
         generator->ident--;

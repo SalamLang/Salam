@@ -254,6 +254,7 @@ SRCS := \
 	src/stage/parser/parser_log/parser_log.c \
 	src/stage/parser/parser_next/parser_next.c \
 	src/stage/parser/parser_operator_expect/parser_operator_expect.c \
+	src/stage/parser/parser_operator_skip/parser_operator_skip.c \
 	src/stage/parser/parser_parse/parser_parse_all/parser_parse_all.c \
 	src/stage/parser/parser_parse/parser_parse_arguments/parser_parse_arguments.c \
 	src/stage/parser/parser_parse/parser_parse_block/parser_parse_block.c \
@@ -619,6 +620,7 @@ OBJS := \
 	build/stage/parser/parser_log/parser_log.o \
 	build/stage/parser/parser_next/parser_next.o \
 	build/stage/parser/parser_operator_expect/parser_operator_expect.o \
+	build/stage/parser/parser_operator_skip/parser_operator_skip.o \
 	build/stage/parser/parser_parse/parser_parse_all/parser_parse_all.o \
 	build/stage/parser/parser_parse/parser_parse_arguments/parser_parse_arguments.o \
 	build/stage/parser/parser_parse/parser_parse_block/parser_parse_block.o \

@@ -6,17 +6,22 @@ buffer_t* generator_c_block(generator_t* generator, ast_t* ast)
 
     ast_block_t block = ast->raw.block_value;
 
-    buffer_append_str(temp, "{\n");
+    if (block.statements->size == 0) {
+        buffer_append_str(temp, " {}\n");
+    } else {
+        buffer_append_str(temp, " {\n");
+        generator->ident++;
 
-    buffer_append_str(temp, "\t// TODO\n");
-    for (size_t i = 0; i < block.statements->size; i++) {
-        ast_t* node = block.statements->items[i];
-        buffer_t* node_temp = generator_c_node(generator, node);
-        buffer_append(temp, node_temp);
-        buffer_destroy(node_temp);
+        for (size_t i = 0; i < block.statements->size; i++) {
+            ast_t* node = block.statements->items[i];
+            buffer_t* node_temp = generator_c_node(generator, node);
+            buffer_append(temp, node_temp);
+            buffer_destroy(node_temp);
+        }
+
+        generator->ident--;
+        buffer_append_str(temp, "}\n");
     }
-
-    buffer_append_str(temp, "}\n");
 
     return temp;
 }

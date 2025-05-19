@@ -1,5 +1,4 @@
-void main()
-{
-	// TODO
-printf("Hi!\n");
+void main() {
+  printf("Hi!\n");
+  printf("Hi!\n");
 }

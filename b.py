@@ -72,18 +72,19 @@ def link_objects(compiler: str, output: str, obj_files: List[str], ldflags: str)
     logger.info(f"Linking {output} ...")
     run_command(cmd, timeout=LINK_TIMEOUT)
 
-def run_program(executable: str, args: List[str]) -> None:
+def run_program(executable: str, args: List[str]) -> bool:
     exec_path = Path(f"./{executable}")
     if not exec_path.exists():
         logger.error(f"Executable {executable} not found. Cannot run program.")
-        sys.exit(1)
+        return False
     logger.info(f"Running program: {executable} {' '.join(args)}")
     try:
         subprocess.run([str(exec_path)] + args, check=True)
         logger.info("Program executed successfully.")
+        return True
     except subprocess.CalledProcessError:
         logger.error("Program execution failed!")
-        sys.exit(1)
+        return False
 
 def beautify_json_if_valid(filepath: str) -> None:
     path = Path(filepath)
@@ -161,12 +162,16 @@ def main() -> None:
 
         link_objects(args.compiler, args.output, obj_files, args.ldflags)
 
+        program_succeeded = True
         if not args.no_run:
-            run_program(args.output, args.run_args)
+            program_succeeded = run_program(args.output, args.run_args)
 
         if args.beautify_json:
             for json_file in JSON_FILES_TO_BEAUTIFY:
                 beautify_json_if_valid(json_file)
+
+        if not program_succeeded:
+            sys.exit(1)
 
     except KeyboardInterrupt:
         logger.warning("Build interrupted by user.")

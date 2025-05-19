@@ -17,7 +17,7 @@ char* ast_expressions_json(ast_expressions_t* expressions)
         buffer_append_str(temp, convert_size2string(expressions->value_count));
 
         // values
-        buffer_append_str(temp, "\"values\": ");
+        buffer_append_str(temp, ",\"values\": ");
         if (expressions->values == NULL)
         {
             buffer_append_str(temp, "null");
@@ -25,7 +25,7 @@ char* ast_expressions_json(ast_expressions_t* expressions)
         else
         {
             buffer_append_char(temp, '[');
-            for (size_t i = 0; i < expressions->value_count; i++)
+            for (size_t i = 0; i < expressions->values->size; i++)
             {
                 if (i > 0)
                 {

@@ -7,6 +7,9 @@ char* ast_expression_unary_direct_json(ast_expression_unary_t expression_unary)
 
     buffer_append_char(temp, '{');
 
+    // base
+    buffer_append_str(temp, "\"base\": \"ast_expression_unary_t\",");
+
     // op_type
     buffer_append_str(temp, "\"op_type\": ");
     buffer_append_str(temp, token_operator_name(expression_unary.op_type));

@@ -31,6 +31,15 @@ int main(int argc, char** argv)
     printf("%s\n", json_ast);
     file_write("ast.json", json_ast);
     memory_destroy(json_ast);
+
+    // generator
+    generator_t* generator = generator_create(ast);
+    char* code = generator_c_code(generator);
+    printf("C:\n%s\n", code);
+    file_write("program.c", code);
+    memory_destroy(code);
+    generator_destroy(generator);
+
     ast_destroy(ast);
 
     scanner_destroy(scanner);

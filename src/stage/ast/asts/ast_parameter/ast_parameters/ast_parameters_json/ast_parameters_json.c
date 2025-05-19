@@ -12,6 +12,9 @@ char* ast_parameters_json(ast_parameters_t* parameters)
     {
         buffer_append_char(temp, '{');
 
+        // base
+        buffer_append_str(temp, "\"base\": \"ast_parameters_t\",");
+
         // value_count
         buffer_append_str(temp, "\"value_count\": ");
         buffer_append_str(temp, convert_size2string(parameters->value_count));

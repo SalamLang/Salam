@@ -9,6 +9,9 @@ char* token_json(const token_t* token)
     else {
         buffer_append_char(temp, '{');
 
+        // base
+        buffer_append_str(temp, "\"base\": \"token_t\",");
+
         // type
         buffer_append_str(temp, "\"type\": ");
         buffer_append_char(temp, '"');

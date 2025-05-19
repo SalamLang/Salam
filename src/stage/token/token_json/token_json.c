@@ -17,10 +17,19 @@ char* token_json(const token_t* token)
         buffer_append_char(temp, '"');
         buffer_append_str(temp, token_name(token->type));
         buffer_append_char(temp, '"');
-        buffer_append_str(temp, ", ");
+
+        // operator_type
+        buffer_append_str(temp, ",\"operator_type\": ");
+        if (token->type != TOKEN_TYPE_OPERATOR) {
+            buffer_append_str(temp, "null");
+        } else {
+            buffer_append_char(temp, '\"');
+            buffer_append_str(temp, token_operator_name(token->operator_type));
+            buffer_append_char(temp, '\"');
+        }
 
         // source
-        buffer_append_str(temp, "\"source\": ");
+        buffer_append_str(temp, ",\"source\": ");
         if (token->source) {
             buffer_append_char(temp, '"');
             char* token_source = string_escaping(token->source);
@@ -30,7 +39,7 @@ char* token_json(const token_t* token)
         } else {
             buffer_append_str(temp, "null");
         }
-        buffer_append_str(temp, ", ");
+        buffer_append_str(temp, ",");
 
         // location
         buffer_append_str(temp, "\"location\": ");
@@ -38,7 +47,7 @@ char* token_json(const token_t* token)
         buffer_append_str(temp, json_location);
         memory_destroy(json_location);
 
-        buffer_append_str(temp, ", ");
+        buffer_append_str(temp, ",");
 
         // value
         buffer_append_str(temp, "\"value\": ");

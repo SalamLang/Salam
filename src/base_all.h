@@ -248,6 +248,7 @@
 #include <stage/parser/parser_log/parser_log.h>
 #include <stage/parser/parser_next/parser_next.h>
 #include <stage/parser/parser_operator_expect/parser_operator_expect.h>
+#include <stage/parser/parser_operator_skip/parser_operator_skip.h>
 #include <stage/parser/parser_parse/parser_parse_all/parser_parse_all.h>
 #include <stage/parser/parser_parse/parser_parse_arguments/parser_parse_arguments.h>
 #include <stage/parser/parser_parse/parser_parse_block/parser_parse_block.h>

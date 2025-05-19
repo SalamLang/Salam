@@ -265,12 +265,12 @@ typedef struct
     ast_expression_type_t type;
 
     union {
-        ast_expression_literal_t literal;
-        ast_expression_identifier_t identifier;
-        ast_expression_binary_t binary;
-        ast_expression_unary_t unary;
-        ast_expression_index_t index;
-        ast_expression_call_t call;
+        ast_expression_literal_t* literal;
+        ast_expression_identifier_t* identifier;
+        ast_expression_binary_t* binary;
+        ast_expression_unary_t* unary;
+        ast_expression_index_t* index;
+        ast_expression_call_t* call;
     } raw;
 
     ast_type_t* runtime_type; // (nullable)

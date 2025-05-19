@@ -255,6 +255,7 @@ set(SRC_FILES
     src/stage/parser/parser_log/parser_log.c
     src/stage/parser/parser_next/parser_next.c
     src/stage/parser/parser_operator_expect/parser_operator_expect.c
+    src/stage/parser/parser_operator_skip/parser_operator_skip.c
     src/stage/parser/parser_parse/parser_parse_all/parser_parse_all.c
     src/stage/parser/parser_parse/parser_parse_arguments/parser_parse_arguments.c
     src/stage/parser/parser_parse/parser_parse_block/parser_parse_block.c

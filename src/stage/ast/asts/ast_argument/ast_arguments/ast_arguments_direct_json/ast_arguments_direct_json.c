@@ -7,6 +7,9 @@ char* ast_arguments_direct_json(ast_arguments_t arguments)
 
     buffer_append_char(temp, '{');
 
+    // base
+    buffer_append_str(temp, "\"base\": \"ast_arguments_t\",");
+
     // value_count
     buffer_append_str(temp, "\"value_count\": ");
     buffer_append_str(temp, convert_size2string(arguments.value_count));

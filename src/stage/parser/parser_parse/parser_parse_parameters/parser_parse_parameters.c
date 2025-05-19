@@ -3,9 +3,12 @@
 ast_t* parser_parse_parameters(parser_t* parser)
 {
     DEBUG_ME;
-    // TODO
+    if (!parser) return NULL;
+
     array_t* values = array_create((array_destroy_t)ast_destroy);
-    size_t value_count = 0;
-    ast_t* ast = ast_parameters_create(values, value_count);
+
+    // TODO
+
+    ast_t* ast = ast_parameters_create(values, values->size);
     return ast;
 }

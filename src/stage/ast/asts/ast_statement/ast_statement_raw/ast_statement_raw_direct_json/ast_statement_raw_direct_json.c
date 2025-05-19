@@ -3,15 +3,15 @@
 char* ast_statement_raw_direct_json(ast_statement_raw_t statement_raw)
 {
     DEBUG_ME;
-    buffer_t* temp = buffer_create(24);
+    buffer_t* temp = buffer_create(124);
 
     buffer_append_char(temp, '{');
 
     // base
-    buffer_append_str(temp, "\"base\": \"ast_statement_raw_t\",");
+    buffer_append_str(temp, "\"base\":\"ast_statement_raw_t\",");
 
-    // values
-    buffer_append_str(temp, "\"value\": ");
+    // value
+    buffer_append_str(temp, "\"value\":");
     if (statement_raw.value == NULL)
     {
         buffer_append_str(temp, "null");

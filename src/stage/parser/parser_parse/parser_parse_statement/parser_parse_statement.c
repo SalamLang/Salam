@@ -22,6 +22,9 @@ ast_t* parser_parse_statement(parser_t* parser)
         case TOKEN_TYPE_KEYWORD_PRINT:
             return parser_parse_statement_print(parser);
 
+        case TOKEN_TYPE_KEYWORD_RAW:
+            return parser_parse_statement_raw(parser);
+
         case TOKEN_TYPE_KEYWORD_RET:
             return parser_parse_statement_return(parser);
 

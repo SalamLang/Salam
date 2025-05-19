@@ -2,6 +2,7 @@
 
 void memory_destroy(void* ptr)
 {
+    DEBUG_ME;
     // if (! ptr) return;
     free(ptr);
 }

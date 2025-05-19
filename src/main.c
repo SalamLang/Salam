@@ -19,6 +19,9 @@ int main(int argc, char** argv)
     file_write("tokens.json", json_scanner);
     memory_destroy(json_scanner);
 
+    /*
+
+
     // parser
     parser_t* parser = parser_create(scanner);
     ast_t* ast = parser_parse_all(parser);
@@ -41,6 +44,8 @@ int main(int argc, char** argv)
     generator_destroy(generator);
 
     ast_destroy(ast);
+
+    */
 
     scanner_destroy(scanner);
     return 0;

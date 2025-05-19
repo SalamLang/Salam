@@ -1,6 +1,8 @@
 #ifndef _STAGE_SCANNER_SCANNER_SCAN_IDENTIFIER_SCANNER_SCAN_IDENTIFIER_H_
 #define _STAGE_SCANNER_SCANNER_SCAN_IDENTIFIER_SCANNER_SCAN_IDENTIFIER_H_
 
+#include <ctype.h> // for isspace
+
 // base
 #include <base.h>
 

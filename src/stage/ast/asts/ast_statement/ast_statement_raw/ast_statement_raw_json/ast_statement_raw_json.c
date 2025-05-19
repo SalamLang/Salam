@@ -23,9 +23,11 @@ char* ast_statement_raw_json(ast_statement_raw_t* statement_raw)
         }
         else
         {
+            buffer_append_char(temp, '"');
             char* value = string_escaping(statement_raw->value);
             buffer_append_str(temp, value);
             memory_destroy(value);
+            buffer_append_char(temp, '"');
         }
 
         buffer_append_char(temp, '}');

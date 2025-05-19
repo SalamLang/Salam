@@ -1,4 +1,4 @@
-#include "ast_statement_print_destroy.h"
+#include "ast_statement_raw_destroy.h"
 
 void ast_statement_raw_destroy(ast_statement_raw_t* statement_raw)
 {

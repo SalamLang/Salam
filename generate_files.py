@@ -15,23 +15,34 @@ def clean_and_regenerate_guard(h_file_path, root):
     if not os.path.exists(h_file_path):
         return
 
-    with open(h_file_path, "r") as file:
+    with open(h_file_path, "r", encoding="utf-8") as file:
         lines = file.readlines()
 
+    guard_define_line = None
+    guard_ifndef_line = None
+    endif_line = None
+    inside_guard = False
+
     new_lines = []
-    for line in lines:
-        if re.match(r"#\s*ifndef\s+", line):
+    for i, line in enumerate(lines):
+        if re.match(r"#\s*ifndef\s+_[A-Z0-9_]+", line):
+            guard_ifndef_line = i
+            inside_guard = True
             continue
-        if re.match(r"#\s*define\s+", line):
+        elif inside_guard and re.match(r"#\s*define\s+_[A-Z0-9_]+", line):
+            guard_define_line = i
             continue
-        if re.match(r"#\s*endif\s*", line):
+        elif inside_guard and re.match(r"#\s*endif\s*(//.*)?", line):
+            endif_line = i
+            inside_guard = False
             continue
-        new_lines.append(line)
+        elif not inside_guard:
+            new_lines.append(line)
 
     guard = generate_guard_from_path(h_file_path, root)
     content = f"#ifndef {guard}\n#define {guard}\n\n" + "".join(new_lines).strip() + f"\n\n#endif // {guard}\n"
 
-    with open(h_file_path, "w") as file:
+    with open(h_file_path, "w", encoding="utf-8") as file:
         file.write(content)
 
     print(f"[REGENERATE] Header guard: {h_file_path}")
@@ -47,7 +58,7 @@ def create_header_file(c_file_path, root):
     guard = generate_guard_from_path(h_file_path, root)
     content = f"#ifndef {guard}\n#define {guard}\n\n// base\n#include <base.h>\n\n... {base_name}(...);\n\n#endif // {guard}\n"
 
-    with open(h_file_path, "w") as h_file:
+    with open(h_file_path, "w", encoding="utf-8") as h_file:
         h_file.write(content)
 
     print(f"[CREATE] Header: {h_file_path}")
@@ -64,12 +75,12 @@ def create_c_and_h_files_for_empty_directory(directory, root):
     c_path = os.path.join(directory, base_name + ".c")
     h_path = os.path.join(directory, base_name + ".h")
 
-    with open(c_path, "w") as c_file:
+    with open(c_path, "w", encoding="utf-8") as c_file:
         c_file.write(f'#include "{base_name}.h"\n\n... {base_name}(...)\n' + "{\n\n}\n")
     print(f"[CREATE] C File: {c_path}")
 
     guard = generate_guard_from_path(h_path, root)
-    with open(h_path, "w") as h_file:
+    with open(h_path, "w", encoding="utf-8") as h_file:
         h_file.write(f"#ifndef {guard}\n#define {guard}\n\n\n\n#endif // {guard}\n")
     print(f"[CREATE] Header: {h_path}")
 

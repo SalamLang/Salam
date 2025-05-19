@@ -7,6 +7,9 @@ char* ast_expression_binary_direct_json(ast_expression_binary_t expression_binar
 
     buffer_append_char(temp, '{');
 
+    // base
+    buffer_append_str(temp, "\"base\": \"ast_expression_binary_t\",");
+
     // op
     buffer_append_str(temp, "\"op\": ");
     if (expression_binary.op == NULL)

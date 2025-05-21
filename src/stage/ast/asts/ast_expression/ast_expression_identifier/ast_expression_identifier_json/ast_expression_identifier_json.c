@@ -2,6 +2,7 @@
 
 char* ast_expression_identifier_json(ast_expression_identifier_t* expression_identifier)
 {
+    DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
     if (expression_identifier == NULL)
@@ -12,6 +13,9 @@ char* ast_expression_identifier_json(ast_expression_identifier_t* expression_ide
     {
         buffer_append_char(temp, '{');
 
+        // base
+        buffer_append_str(temp, "\"base\": \"ast_expression_identifier_t\",");
+
         // name
         buffer_append_str(temp, "\"name\": ");
         if (expression_identifier->name == NULL)
@@ -20,9 +24,11 @@ char* ast_expression_identifier_json(ast_expression_identifier_t* expression_ide
         }
         else
         {
+            buffer_append_char(temp, '"');
             char* buffer = string_escaping(expression_identifier->name);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
+            buffer_append_char(temp, '"');
         }
 
         // runtime_type

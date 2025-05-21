@@ -77,6 +77,7 @@ SRCS := \
 	src/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_json/ast_expression_index_json.c \
 	src/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_log/ast_expression_index_log.c \
 	src/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_create/ast_expression_item_create.c \
+	src/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_create_from/ast_expression_item_create_from.c \
 	src/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_destroy/ast_expression_item_destroy.c \
 	src/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_direct_destroy/ast_expression_item_direct_destroy.c \
 	src/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_direct_json/ast_expression_item_direct_json.c \
@@ -454,6 +455,7 @@ OBJS := \
 	build/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_json/ast_expression_index_json.o \
 	build/stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_log/ast_expression_index_log.o \
 	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_create/ast_expression_item_create.o \
+	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_create_from/ast_expression_item_create_from.o \
 	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_destroy/ast_expression_item_destroy.o \
 	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_direct_destroy/ast_expression_item_direct_destroy.o \
 	build/stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_direct_json/ast_expression_item_direct_json.o \

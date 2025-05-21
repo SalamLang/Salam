@@ -37,6 +37,11 @@ ast_t* parser_parse_expression_literal(parser_t* parser)
         PARSER_NEXT;
         return ast_expression_literal_create(value, NULL);
     }
+    else if (PARSER_CURRENT->type == TOKEN_TYPE_VALUE_IDENTIFIER) {
+        char* name = PARSER_CURRENT->value->raw.string_value;
+        PARSER_NEXT;
+        return ast_expression_identifier_create(name, NULL);
+    }
 
     log_fatal("parser_parse_expression_literal - Expected a value, got: %s\n", token_name(PARSER_CURRENT->type));
     return NULL;

@@ -6,7 +6,7 @@ ast_t* parser_parse_expression_item(parser_t* parser)
     if (!parser) return NULL;
 
     // TODO: only supprting literal value for now...
-    ast_t* ast_literal = parser_parse_expression_literal(parser);
+    ast_t* ast = parser_parse_expression_literal(parser);
 
-    return ast_literal;
+    return ast_expression_item_create_from(ast);
 }

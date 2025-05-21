@@ -67,6 +67,7 @@
 #include <stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_json/ast_expression_index_json.h>
 #include <stage/ast/asts/ast_expression/ast_expression_index/ast_expression_index_log/ast_expression_index_log.h>
 #include <stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_create/ast_expression_item_create.h>
+#include <stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_create_from/ast_expression_item_create_from.h>
 #include <stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_destroy/ast_expression_item_destroy.h>
 #include <stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_direct_destroy/ast_expression_item_direct_destroy.h>
 #include <stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_direct_json/ast_expression_item_direct_json.h>

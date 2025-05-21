@@ -8,7 +8,5 @@ ast_t* parser_parse_expression_item(parser_t* parser)
     // TODO: only supprting literal value for now...
     ast_t* ast_literal = parser_parse_expression_literal(parser);
 
-    ast_t* ast = ast_expression_item_create(AST_EXPRESSION_TYPE_LITERAL, NULL);
-    ast->raw.expression_item_value.raw.literal = ast_literal->raw.expression_literal_value;
-    return ast;
+    return ast_literal;
 }

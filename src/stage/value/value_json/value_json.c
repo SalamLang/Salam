@@ -50,6 +50,12 @@ char* value_json(const value_t* value)
                     buffer_append_char(temp, '"');
                 }
             } break;
+            case VALUE_TYPE_SIZE: {
+                buffer_append_str(temp, convert_size2string(value->raw.size_value));
+            } break;
+            default: {
+                buffer_append_str(temp, "\"value error\"");
+            } break;
         }
 
         buffer_append_char(temp, '}');

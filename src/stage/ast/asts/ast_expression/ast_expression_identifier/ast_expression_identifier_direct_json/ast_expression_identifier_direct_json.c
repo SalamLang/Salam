@@ -7,6 +7,9 @@ char* ast_expression_identifier_direct_json(ast_expression_identifier_t expressi
 
     buffer_append_char(temp, '{');
 
+    // base
+    buffer_append_str(temp, "\"base\": \"ast_expression_identifier_t\",");
+
     // name
     buffer_append_str(temp, "\"name\": ");
     if (expression_identifier.name == NULL)
@@ -15,9 +18,11 @@ char* ast_expression_identifier_direct_json(ast_expression_identifier_t expressi
     }
     else
     {
+        buffer_append_char(temp, '"');
         char* buffer = string_escaping(expression_identifier.name);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);
+        buffer_append_char(temp, '"');
     }
 
     // runtime_type

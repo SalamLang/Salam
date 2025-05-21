@@ -14,6 +14,7 @@
 // ast
 #include <stage/ast/type.h>
 #include <stage/ast/asts/ast_expression/ast_expression_literal/ast_expression_literal_create/ast_expression_literal_create.h>
+#include <stage/ast/asts/ast_expression/ast_expression_item/ast_expression_item_create_from/ast_expression_item_create_from.h>
 
 ast_t* parser_parse_expression_item(parser_t* parser);
 

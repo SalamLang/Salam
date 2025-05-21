@@ -12,6 +12,9 @@ char* ast_expression_literal_json(ast_expression_literal_t* expression_literal)
     {
         buffer_append_char(temp, '{');
 
+        // base
+        buffer_append_str(temp, "\"base\": \"ast_expression_literal_t\",");
+
         // value
         buffer_append_str(temp, ",\"value\": ");
         if (expression_literal->value == NULL)

@@ -2,6 +2,7 @@
 
 int array_delete(array_t* array, size_t index)
 {
+    DEBUG_ME;
     if (!array || index >= array->size) return 0;
     if (array->destroyer && array->items[index]) {
         array->destroyer(array->items[index]);

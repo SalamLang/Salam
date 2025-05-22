@@ -24,7 +24,7 @@ typedef struct ast_t ast_t;
 typedef struct ast_type_t ast_type_t;
 
 typedef enum ast_node_type_t {
-    AST_TYPE_UNKNOWN = 0,
+    AST_TYPE_UNKNOWN = 3000,
 
     AST_TYPE_PROGRAM,
 
@@ -129,7 +129,7 @@ typedef struct
 typedef struct
 {
     char* name;
-    ast_t* type; // ast_type_t
+    ast_type_t* type; // ast_type_t
     ast_t* value; // ast_expression_item_t (nullable)
 } ast_variable_decl_t;
 
@@ -146,7 +146,7 @@ typedef struct
 
 typedef enum
 {
-    AST_EXTERN_TYPE_FUNCTION,
+    AST_EXTERN_TYPE_FUNCTION = 2000,
     AST_EXTERN_TYPE_VARIABLE,
 } ast_extern_decl_type_t;
 
@@ -173,7 +173,7 @@ typedef struct
 
 typedef enum
 {
-    AST_KIND_TYPE_STRUCT,
+    AST_KIND_TYPE_STRUCT = 1000,
     AST_KIND_TYPE_ENUM,
     AST_KIND_TYPE_UNION,
 } ast_kind_type_t;
@@ -253,7 +253,7 @@ typedef struct
 
 typedef enum
 {
-    AST_EXPRESSION_TYPE_LITERAL,
+    AST_EXPRESSION_TYPE_LITERAL = 200,
     AST_EXPRESSION_TYPE_IDENTIFIER,
     AST_EXPRESSION_TYPE_BINARY,
     AST_EXPRESSION_TYPE_UNARY,
@@ -309,7 +309,7 @@ typedef struct
 } ast_program_t;
 
 typedef enum {
-    AST_KIND_TYPE_INT,
+    AST_KIND_TYPE_INT = 300,
     AST_KIND_TYPE_FLOAT,
     AST_KIND_TYPE_STRING,
     AST_KIND_TYPE_BOOL,
@@ -357,7 +357,7 @@ typedef struct
 
 typedef struct
 {
-    array_t* values; // ast_parameter_item_t
+    array_t* values; // ast_t(ast_parameter_item_t)
     size_t value_count;
 } ast_parameters_t;
 
@@ -370,7 +370,7 @@ typedef struct
 
 typedef struct
 {
-    array_t* values; // ast_attribute_item_t
+    array_t* values; // ast_t(ast_attribute_item_t)
     size_t value_count;
 } ast_attributes_t;
 
@@ -382,7 +382,7 @@ typedef struct
 
 typedef struct
 {
-    array_t* values; // ast_argument_item_t
+    array_t* values; // ast_t(ast_argument_item_t)
     size_t value_count;
 } ast_arguments_t;
 

@@ -1,6 +1,6 @@
 #include "generator_c_type.h"
 
-buffer_t* generator_c_type(generator_t* generator, ast_type_t* ast)
+buffer_t* generator_c_type(generator_t* generator, ast_t* ast)
 {
     DEBUG_ME;
     buffer_t* temp = buffer_create(12);

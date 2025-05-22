@@ -7,9 +7,14 @@ buffer_t* generator_c_function_decl(generator_t* generator, ast_t* ast)
 
     ast_function_decl_t function_decl = ast->raw.function_decl_value;
 
-    buffer_t* return_type = generator_c_node(generator, function_decl.return_type);
-    buffer_append(temp, return_type);
-    buffer_destroy(return_type);
+    // TODO function_decl.return_type is not never NULL
+    if (function_decl.return_type == NULL) {
+        buffer_append_str(temp, "void");
+    } else {
+        buffer_t* return_type = generator_c_node(generator, function_decl.return_type);
+        buffer_append(temp, return_type);
+        buffer_destroy(return_type);
+    }
 
     buffer_append_char(temp, ' ');
     buffer_append_str(temp, function_decl.name);

@@ -7,6 +7,6 @@
 // generator
 #include <stage/generator/type.h>
 
-buffer_t* generator_c_type(generator_t* generator, ast_type_t* ast);
+buffer_t* generator_c_type(generator_t* generator, ast_t* ast);
 
 #endif // _STAGE_GENERATOR_GENERATOR_C_GENERATOR_C_TYPE_GENERATOR_C_TYPE_H_

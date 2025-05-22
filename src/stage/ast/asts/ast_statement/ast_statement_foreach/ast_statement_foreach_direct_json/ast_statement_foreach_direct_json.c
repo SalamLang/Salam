@@ -41,7 +41,7 @@ char* ast_statement_foreach_direct_json(ast_statement_foreach_t statement_foreac
     }
     else
     {
-        char* type = ast_type_json(statement_foreach.type);
+        char* type = ast_json(statement_foreach.type);
         buffer_append_str(temp, type);
         memory_destroy(type);
     }

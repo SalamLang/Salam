@@ -27,7 +27,7 @@ char* ast_function_decl_direct_json(ast_function_decl_t function_decl)
     if (function_decl.return_type == NULL) {
         buffer_append_str(temp, "null");
     } else {
-        char* return_type = ast_type_json(function_decl.return_type);
+        char* return_type = ast_json(function_decl.return_type);
         buffer_append_str(temp, return_type);
         memory_destroy(return_type);
     }

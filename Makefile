@@ -18,9 +18,13 @@ SRCS := \
 	src/stage/ast/ast_json/ast_json.c \
 	src/stage/ast/ast_log/ast_log.c \
 	src/stage/ast/ast_node_type_name/ast_node_type_name.c \
+	src/stage/ast/ast_type/ast_type_create/ast_type_create.c \
+	src/stage/ast/ast_type/ast_type_create_primitive/ast_type_create_primitive.c \
 	src/stage/ast/ast_type/ast_type_destroy/ast_type_destroy.c \
 	src/stage/ast/ast_type/ast_type_direct_destroy/ast_type_direct_destroy.c \
 	src/stage/ast/ast_type/ast_type_direct_json/ast_type_direct_json.c \
+	src/stage/ast/ast_type/ast_type_exact_create/ast_type_exact_create.c \
+	src/stage/ast/ast_type/ast_type_exact_create_primitive/ast_type_exact_create_primitive.c \
 	src/stage/ast/ast_type/ast_type_json/ast_type_json.c \
 	src/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_create/ast_argument_item_create.c \
 	src/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_destroy/ast_argument_item_destroy.c \
@@ -401,9 +405,13 @@ OBJS := \
 	build/stage/ast/ast_json/ast_json.o \
 	build/stage/ast/ast_log/ast_log.o \
 	build/stage/ast/ast_node_type_name/ast_node_type_name.o \
+	build/stage/ast/ast_type/ast_type_create/ast_type_create.o \
+	build/stage/ast/ast_type/ast_type_create_primitive/ast_type_create_primitive.o \
 	build/stage/ast/ast_type/ast_type_destroy/ast_type_destroy.o \
 	build/stage/ast/ast_type/ast_type_direct_destroy/ast_type_direct_destroy.o \
 	build/stage/ast/ast_type/ast_type_direct_json/ast_type_direct_json.o \
+	build/stage/ast/ast_type/ast_type_exact_create/ast_type_exact_create.o \
+	build/stage/ast/ast_type/ast_type_exact_create_primitive/ast_type_exact_create_primitive.o \
 	build/stage/ast/ast_type/ast_type_json/ast_type_json.o \
 	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_create/ast_argument_item_create.o \
 	build/stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_destroy/ast_argument_item_destroy.o \

@@ -8,9 +8,13 @@
 #include <stage/ast/ast_json/ast_json.h>
 #include <stage/ast/ast_log/ast_log.h>
 #include <stage/ast/ast_node_type_name/ast_node_type_name.h>
+#include <stage/ast/ast_type/ast_type_create/ast_type_create.h>
+#include <stage/ast/ast_type/ast_type_create_primitive/ast_type_create_primitive.h>
 #include <stage/ast/ast_type/ast_type_destroy/ast_type_destroy.h>
 #include <stage/ast/ast_type/ast_type_direct_destroy/ast_type_direct_destroy.h>
 #include <stage/ast/ast_type/ast_type_direct_json/ast_type_direct_json.h>
+#include <stage/ast/ast_type/ast_type_exact_create/ast_type_exact_create.h>
+#include <stage/ast/ast_type/ast_type_exact_create_primitive/ast_type_exact_create_primitive.h>
 #include <stage/ast/ast_type/ast_type_json/ast_type_json.h>
 #include <stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_create/ast_argument_item_create.h>
 #include <stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_destroy/ast_argument_item_destroy.h>

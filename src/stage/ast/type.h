@@ -206,16 +206,16 @@ typedef struct
 typedef struct
 {
     char* name;
-    ast_t* type; // ast_type_t
-    ast_t* value; // ast_expression_item_t (nullable)
+    ast_t* type; // ast_t(ast_type_t)
+    ast_t* value; // ast_t(ast_expression_item_t) (nullable)
 } ast_statement_variable_decl_t;
 
 typedef struct
 {
     char* name;
     ast_type_t* return_type; // ast_type_t
-    ast_t* parameters; // ast_parameters_t
-    ast_t* block; // ast_block_t
+    ast_t* parameters; // ast_t(ast_parameters_t)
+    ast_t* block; // ast_t(ast_block_t)
 } ast_function_decl_t;
 
 typedef struct
@@ -285,13 +285,13 @@ typedef struct
 
 typedef struct
 {
-    ast_t* values; // ast_expressions_t with single value for now...
+    ast_t* values; // ast_t(ast_expressions_t)
     size_t value_count;
-} ast_statement_return_t;
+} ast_statement_ret_t;
 
 typedef struct
 {
-    ast_t* values; // ast_expressions_t with single value for now...
+    ast_t* values; // ast_t(ast_expressions_t)
     size_t value_count;
 } ast_statement_print_t;
 
@@ -444,7 +444,7 @@ typedef struct ast_t {
         ast_statement_if_t statement_if_value;
         ast_statement_for_t statement_for_value;
         ast_statement_foreach_t statement_foreach_value;
-        ast_statement_return_t statement_return_value;
+        ast_statement_ret_t statement_ret_value;
         ast_statement_print_t statement_print_value;
         ast_statement_raw_t statement_raw_value;
         ast_statement_variable_decl_t statement_variable_decl_value;

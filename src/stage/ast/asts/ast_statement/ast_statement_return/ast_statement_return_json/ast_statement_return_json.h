@@ -4,6 +4,6 @@
 // base
 #include <base.h>
 
-char* ast_statement_return_json(ast_statement_return_t* statement_return);
+char* ast_statement_return_json(ast_statement_ret_t* statement_return);
 
 #endif // _STAGE_AST_ASTS_AST_STATEMENT_AST_TYPE_STATEMENT_RET_AST_TYPE_STATEMENT_RET_JSON_AST_TYPE_STATEMENT_RET_JSON_H_

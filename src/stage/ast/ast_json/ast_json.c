@@ -21,6 +21,7 @@ char* ast_json(ast_t* ast)
                 break;
 
         switch (ast->base.type) {
+            HANDLE_AST_JSON(AST_TYPE_TYPE, type_value, ast_type_direct_json)
             HANDLE_AST_JSON(AST_TYPE_PARAMETER_ITEM, parameter_item_value, ast_parameter_item_direct_json)
             HANDLE_AST_JSON(AST_TYPE_PARAMETERS, parameters_value, ast_parameters_direct_json)
             HANDLE_AST_JSON(AST_TYPE_ATTRIBUTE_ITEM, attribute_item_value, ast_attribute_item_direct_json)

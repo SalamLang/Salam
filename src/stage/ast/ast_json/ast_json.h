@@ -16,6 +16,7 @@
 
 // ast
 #include <stage/ast/type.h>
+#include <stage/ast/ast_type/ast_type_direct_json/ast_type_direct_json.h>
 
 char* ast_json(ast_t* ast);
 

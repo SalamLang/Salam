@@ -22,7 +22,6 @@ void validator_validate(ast_t* ast)
 
         case AST_TYPE_PACKAGE:
             DEBUG_ME;
-            validator_validate(ast->raw.package_value.body);
             break;
 
         case AST_TYPE_IMPORT:
@@ -30,16 +29,27 @@ void validator_validate(ast_t* ast)
             break;
 
         case AST_TYPE_KIND_DECL:
+            DEBUG_ME;
+            validator_validate(ast->raw.kind_decl_value.value);
+            break;
+
         case AST_TYPE_KIND_STRUCT:
+            DEBUG_ME;
+            validator_validate(ast->raw.kind_struct_value.functions);
+            validator_validate(ast->raw.kind_struct_value.parameters);
+            break;
+
         case AST_TYPE_KIND_ENUM:
+            DEBUG_ME;
+            break;
+
         case AST_TYPE_KIND_UNION:
             DEBUG_ME;
-            validator_validate(ast->raw.kind_decl_value.body);
             break;
 
         case AST_TYPE_EXTERN_DECL:
             DEBUG_ME;
-            validator_validate(ast->raw.extern_decl_value.body);
+            validator_validate(ast->raw.extern_decl_value.value);
             break;
 
         case AST_TYPE_EXTERN_VARIABLE:
@@ -49,8 +59,8 @@ void validator_validate(ast_t* ast)
 
         case AST_TYPE_EXTERN_FUNCTION:
             DEBUG_ME;
-            validator_validate(ast->raw.extern_function_value.parameters);
-            validator_validate_type(ast->raw.extern_function_value.return_type);
+            validator_validate_type(ast->raw.extern_function_value.type);
+            validator_validate(ast->raw.extern_function_value.attributes);
             break;
 
         case AST_TYPE_VARIABLE_DECL:
@@ -112,7 +122,8 @@ void validator_validate(ast_t* ast)
 
         case AST_TYPE_EXPRESSION_ITEM:
             DEBUG_ME;
-            validator_validate(ast->raw.expression_item_value.value);
+            validator_validate_expression_item(ast);
+            validator_validate_type(ast->raw.expression_item_value.runtime_type);
             break;
 
         case AST_TYPE_EXPRESSIONS:
@@ -124,54 +135,60 @@ void validator_validate(ast_t* ast)
 
         case AST_TYPE_EXPRESSION_LITERAL:
             DEBUG_ME;
+            validator_validate_value(ast->raw.expression_literal_value.value);
+            validator_validate_type(ast->raw.expression_literal_value.runtime_type);
             break;
 
         case AST_TYPE_EXPRESSION_IDENTIFIER:
             DEBUG_ME;
-
+            validator_validate_type(ast->raw.expression_identifier_value.runtime_type);
             break;
 
         case AST_TYPE_EXPRESSION_BINARY:
             DEBUG_ME;
             validator_validate(ast->raw.expression_binary_value.left);
             validator_validate(ast->raw.expression_binary_value.right);
+            validator_validate_type(ast->raw.expression_binary_value.runtime_type);
             break;
 
         case AST_TYPE_EXPRESSION_UNARY:
             DEBUG_ME;
-            validator_validate(ast->raw.expression_unary_value.value);
+            validator_validate(ast->raw.expression_unary_value.operand);
+            validator_validate_type(ast->raw.expression_unary_value.runtime_type);
             break;
 
         case AST_TYPE_EXPRESSION_INDEX:
             DEBUG_ME;
-            validator_validate(ast->raw.expression_index_value.left);
+            validator_validate(ast->raw.expression_index_value.object);
             validator_validate(ast->raw.expression_index_value.index);
+            validator_validate_type(ast->raw.expression_index_value.runtime_type);
             break;
 
         case AST_TYPE_EXPRESSION_CALL:
             DEBUG_ME;
-            validator_validate(ast->raw.expression_call_value.target);
-            validator_validate(ast->raw.expression_call_value.arguments);
+            validator_validate(ast->raw.expression_call_value.callee);
+            validator_validate(ast->raw.expression_call_value.args);
+            validator_validate_type(ast->raw.expression_call_value.runtime_type);
             break;
 
         case AST_TYPE_STATEMENT_IF:
             DEBUG_ME;
             validator_validate(ast->raw.statement_if_value.condition);
-            validator_validate(ast->raw.statement_if_value.then_block);
-            validator_validate(ast->raw.statement_if_value.else_block);
+            validator_validate(ast->raw.statement_if_value.then_branch);
+            validator_validate(ast->raw.statement_if_value.else_branch);
             break;
 
         case AST_TYPE_STATEMENT_FOR:
             DEBUG_ME;
-            validator_validate(ast->raw.statement_for_value.init);
+            validator_validate(ast->raw.statement_for_value.initializer);
             validator_validate(ast->raw.statement_for_value.condition);
-            validator_validate(ast->raw.statement_for_value.step);
+            validator_validate(ast->raw.statement_for_value.increment);
             validator_validate(ast->raw.statement_for_value.block);
             break;
 
         case AST_TYPE_STATEMENT_FOREACH:
             DEBUG_ME;
-            validator_validate(ast->raw.statement_foreach_value.iterator);
+            validator_validate(ast->raw.statement_foreach_value.iterable);
             validator_validate(ast->raw.statement_foreach_value.iterable);
             validator_validate(ast->raw.statement_foreach_value.block);
             break;

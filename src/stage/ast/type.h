@@ -21,7 +21,46 @@
 
 // struct ast_t;
 typedef struct ast_t ast_t;
-typedef struct ast_type_t ast_type_t;
+// typedef struct ast_type_t ast_type_t;
+
+typedef enum {
+    AST_KIND_TYPE_INT = 300,
+    AST_KIND_TYPE_FLOAT,
+    AST_KIND_TYPE_STRING,
+    AST_KIND_TYPE_BOOL,
+    AST_KIND_TYPE_ARRAY,
+    AST_KIND_TYPE_MAP,
+    AST_KIND_TYPE_SET,
+    AST_KIND_TYPE_TUPLE,
+    AST_KIND_TYPE_VOID,
+    AST_KIND_TYPE_ANY,
+    AST_KIND_TYPE_USER_DEFINED,
+} ast_type_type_t;
+
+struct ast_type_t
+{
+    ast_type_type_t type;
+
+    // Base type modifiers
+    bool is_pointer;
+    bool is_reference;
+    bool is_const;
+
+    // For user-defined types
+    char* name; // e.g., "MyStruct"
+
+    // For array types (e.g., int[][] = array of array of int)
+    ast_t* element_type; // ast_t*(ast_type_t)
+
+    // For map types: key_type and value_type
+    ast_t* key_type; // ast_t*(ast_type_t)
+    ast_t* value_type; // ast_t*(ast_type_t)
+
+    // For tuple types: list of element types
+    array_t* tuple_elements;  // ast_t*(ast_type_t)
+
+    // token_location_t location;
+} ast_type_t;
 
 typedef enum ast_node_type_t {
     AST_TYPE_UNKNOWN = 3000,
@@ -309,45 +348,6 @@ typedef struct
     size_t variable_declaration_count;
     size_t function_declaration_count;
 } ast_program_t;
-
-typedef enum {
-    AST_KIND_TYPE_INT = 300,
-    AST_KIND_TYPE_FLOAT,
-    AST_KIND_TYPE_STRING,
-    AST_KIND_TYPE_BOOL,
-    AST_KIND_TYPE_ARRAY,
-    AST_KIND_TYPE_MAP,
-    AST_KIND_TYPE_SET,
-    AST_KIND_TYPE_TUPLE,
-    AST_KIND_TYPE_VOID,
-    AST_KIND_TYPE_ANY,
-    AST_KIND_TYPE_USER_DEFINED,
-} ast_type_type_t;
-
-struct ast_type_t
-{
-    ast_type_type_t kind;
-
-    // Base type modifiers
-    bool is_pointer;
-    bool is_reference;
-    bool is_const;
-
-    // For user-defined types
-    char* name; // e.g., "MyStruct"
-
-    // For array types (e.g., int[][] = array of array of int)
-    ast_t* element_type; // ast_t*(ast_type_t)
-
-    // For map types: key_type and value_type
-    ast_t* key_type; // ast_t*(ast_type_t)
-    ast_t* value_type; // ast_t*(ast_type_t)
-
-    // For tuple types: list of element types
-    array_t* tuple_elements;  // ast_t*(ast_type_t)
-
-    // token_location_t location;
-};
 
 // parameters - a list of pairs of name and type
 typedef struct

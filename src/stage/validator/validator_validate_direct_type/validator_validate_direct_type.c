@@ -1,30 +1,28 @@
-#include "validator_validate_type.h"
+#include "validator_validate_direct_type.h"
 
-void validator_validate_type(ast_type_t* type)
+void validator_validate_direct_type(ast_type_t type)
 {
     DEBUG_ME;
-    if (!type) return;
-
-    if (type->element_type != NULL) {
-        validator_validate(type->element_type);
+    if (type.element_type != NULL) {
+        validator_validate(type.element_type);
     }
 
-    if (type->key_type != NULL) {
-        validator_validate(type->key_type);
+    if (type.key_type != NULL) {
+        validator_validate(type.key_type);
     }
 
-    if (type->value_type != NULL) {
-        validator_validate(type->value_type);
+    if (type.value_type != NULL) {
+        validator_validate(type.value_type);
     }
 
-    for (size_t i = 0; i < type->tuple_elements->size; i++) {
-        ast_t* element = array_get(type->tuple_elements, i);
+    for (size_t i = 0; i < type.tuple_elements->size; i++) {
+        ast_t* element = array_get(type.tuple_elements, i);
         if (element != NULL) {
             validator_validate(element);
         }
     }
 
-    switch (type->kind) {
+    switch (type.kind) {
         case AST_KIND_TYPE_INT:
             break;
 
@@ -59,7 +57,7 @@ void validator_validate_type(ast_type_t* type)
             break;
 
         default:
-            log_error("Unknown type kind: %d\n", type->kind);
+            log_error("Unknown type kind: %d\n", type.kind);
             break;
     }
 }

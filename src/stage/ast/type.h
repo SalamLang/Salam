@@ -26,6 +26,8 @@ typedef struct ast_type_t ast_type_t;
 typedef enum ast_node_type_t {
     AST_TYPE_UNKNOWN = 3000,
 
+    AST_TYPE_TYPE, // data type
+
     AST_TYPE_PROGRAM,
 
     AST_TYPE_PACKAGE,
@@ -391,6 +393,9 @@ typedef struct ast_t {
     union {
         // program
         ast_program_t program_value;
+
+        // type
+        ast_type_t type_value;
 
         // package
         ast_package_t package_value;

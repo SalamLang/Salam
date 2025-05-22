@@ -187,7 +187,7 @@ void ast_destroy(ast_t* ast)
             break;
 
         case AST_TYPE_STATEMENT_RET:
-            ast_statement_return_direct_destroy(ast->raw.statement_return_value);
+            ast_statement_return_direct_destroy(ast->raw.statement_ret_value);
             memory_destroy(ast);
             return;
             break;

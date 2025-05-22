@@ -1,6 +1,6 @@
 #include "ast_statement_return_direct_json.h"
 
-char* ast_statement_return_direct_json(ast_statement_return_t statement_return)
+char* ast_statement_return_direct_json(ast_statement_ret_t statement_return)
 {
     DEBUG_ME;
     buffer_t* temp = buffer_create(24);

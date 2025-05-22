@@ -304,7 +304,8 @@ set(SRC_FILES
     src/stage/token/token_operator_type/token_operator_type.c
     src/stage/token/token_type/token_type.c
     src/stage/validator/validator_validate/validator_validate.c
-    src/stage/validator/validator_validate_expression_item/validator_validate_expression_item.c
+    src/stage/validator/validator_validate_direct_type/validator_validate_direct_type.c
+    src/stage/validator/validator_validate_expression_item/validator_validate_direct_expression_item.c
     src/stage/validator/validator_validate_type/validator_validate_type.c
     src/stage/validator/validator_validate_value/validator_validate_value.c
     src/stage/value/value_create/value_create.c

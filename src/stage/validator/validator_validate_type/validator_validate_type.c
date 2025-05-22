@@ -5,14 +5,23 @@ void validator_validate_type(ast_type_t* type)
     DEBUG_ME;
     if (!type) return;
 
-    validator_validate_type(type->element_type);
+    if (type->element_type != NULL) {
+        validator_validate(type->element_type);
+    }
 
-    validator_validate_type(type->key_type);
-    validator_validate_type(type->value_type);
+    if (type->key_type != NULL) {
+        validator_validate(type->key_type);
+    }
+
+    if (type->value_type != NULL) {
+        validator_validate(type->value_type);
+    }
 
     for (size_t i = 0; i < type->tuple_elements->size; i++) {
-        ast_type_t* element = array_get(type->tuple_elements, i);
-        validator_validate_type(element);
+        ast_t* element = array_get(type->tuple_elements, i);
+        if (element != NULL) {
+            validator_validate(element);
+        }
     }
 
     switch (type->kind) {

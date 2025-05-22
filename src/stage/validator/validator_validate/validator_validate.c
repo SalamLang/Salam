@@ -10,6 +10,10 @@ void validator_validate(ast_t* ast)
             DEBUG_ME;
             break;
 
+        case AST_TYPE_TYPE:
+            DEBUG_ME;
+            validator_validate_direct_type(ast->raw.type_value);
+
         case AST_TYPE_PROGRAM:
             DEBUG_ME;
             for (size_t i = 0; i < ast->raw.program_value.variable_declarations->size; i++) {
@@ -54,18 +58,18 @@ void validator_validate(ast_t* ast)
 
         case AST_TYPE_EXTERN_VARIABLE:
             DEBUG_ME;
-            validator_validate_type(ast->raw.extern_variable_value.type);
+            validator_validate(ast->raw.extern_variable_value.type);
             break;
 
         case AST_TYPE_EXTERN_FUNCTION:
             DEBUG_ME;
-            validator_validate_type(ast->raw.extern_function_value.type);
+            validator_validate(ast->raw.extern_function_value.type);
             validator_validate(ast->raw.extern_function_value.attributes);
             break;
 
         case AST_TYPE_VARIABLE_DECL:
             DEBUG_ME;
-            validator_validate_type(ast->raw.variable_decl_value.type);
+            validator_validate(ast->raw.variable_decl_value.type);
             validator_validate(ast->raw.variable_decl_value.value);
             break;
 
@@ -73,7 +77,7 @@ void validator_validate(ast_t* ast)
             DEBUG_ME;
             validator_validate(ast->raw.function_decl_value.parameters);
             validator_validate(ast->raw.function_decl_value.block);
-            validator_validate_type(ast->raw.function_decl_value.return_type);
+            validator_validate(ast->raw.function_decl_value.return_type);
             break;
 
         case AST_TYPE_BLOCK:
@@ -122,8 +126,7 @@ void validator_validate(ast_t* ast)
 
         case AST_TYPE_EXPRESSION_ITEM:
             DEBUG_ME;
-            validator_validate_expression_item(ast);
-            validator_validate_type(ast->raw.expression_item_value.runtime_type);
+            validator_validate_direct_expression_item(ast->raw.expression_item_value);
             break;
 
         case AST_TYPE_EXPRESSIONS:

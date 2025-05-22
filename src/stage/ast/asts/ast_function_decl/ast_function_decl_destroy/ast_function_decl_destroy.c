@@ -9,7 +9,7 @@ void ast_function_decl_destroy(ast_function_decl_t* function_decl)
     }
 
     if (function_decl->return_type!= NULL) {
-        ast_type_destroy(function_decl->return_type);
+        ast_destroy(function_decl->return_type);
     }
 
     if (function_decl->parameters != NULL) {

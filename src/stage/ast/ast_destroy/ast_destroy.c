@@ -6,6 +6,12 @@ void ast_destroy(ast_t* ast)
     if (!ast) return;
 
     switch (ast->base.type) {
+        case AST_TYPE_TYPE:
+            ast_type_direct_destroy(ast->raw.type_value);
+            memory_destroy(ast);
+            return;
+            break;
+
         case AST_TYPE_PARAMETER_ITEM:
             ast_parameter_item_direct_destroy(ast->raw.parameter_item_value);
             memory_destroy(ast);

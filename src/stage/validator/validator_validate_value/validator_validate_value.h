@@ -1,0 +1,12 @@
+#ifndef _STAGE_VALIDATOR_VALIDATOR_VALIDATE_VALUE_VALIDATOR_VALIDATE_VALUE_H_
+#define _STAGE_VALIDATOR_VALIDATOR_VALIDATE_VALUE_VALIDATOR_VALIDATE_VALUE_H_
+
+// base
+#include <base.h>
+
+// value
+#include <stage/value/type.h>
+
+void validator_validate_value(value_t* value);
+
+#endif // _STAGE_VALIDATOR_VALIDATOR_VALIDATE_VALUE_VALIDATOR_VALIDATE_VALUE_H_

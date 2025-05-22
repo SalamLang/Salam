@@ -2,6 +2,7 @@
 
 array_t* array_create(array_destroy_t destroyer)
 {
+    DEBUG_ME;
     const size_t INITIAL_CAPACITY = 4;
     array_t* array = memory_allocation(sizeof(array_t));
     array->capacity = INITIAL_CAPACITY;

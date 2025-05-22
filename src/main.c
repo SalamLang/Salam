@@ -11,6 +11,8 @@ int main(int argc, char** argv)
     }
     char* source = file_reads(argv[1]);
 
+    // scanner
+    printf("\n\n==================== SCANNER\n");
     scanner_t* scanner = scanner_create(source, directory, argv[1]);
     scanner_scan(scanner);
     scanner_log(scanner);
@@ -19,23 +21,27 @@ int main(int argc, char** argv)
     file_write("tokens.json", json_scanner);
     memory_destroy(json_scanner);
 
-    // /*
-
-
     // parser
+    printf("\n\n==================== PARSER\n");
     parser_t* parser = parser_create(scanner);
     ast_t* ast = parser_parse_all(parser);
     // parser_log(parser);
     parser_destroy(parser);
 
     // ast
+    printf("\n\n==================== AST\n");
     // ast_log(ast);
     char* json_ast = ast_json(ast);
     printf("%s\n", json_ast);
     file_write("ast.json", json_ast);
     memory_destroy(json_ast);
 
+    // validator
+    printf("\n\n==================== VALIDATOR\n");
+    validator_validate(ast);
+
     // generator
+    printf("\n\n==================== GENERATOR\n");
     generator_t* generator = generator_create(ast);
     char* code = generator_c_code(generator);
     printf("C:\n%s\n", code);
@@ -44,8 +50,6 @@ int main(int argc, char** argv)
     generator_destroy(generator);
 
     ast_destroy(ast);
-
-    // */
 
     scanner_destroy(scanner);
     return 0;

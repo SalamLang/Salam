@@ -2,6 +2,7 @@
 
 void array_destroy(array_t* array)
 {
+    DEBUG_ME;
     if (!array) return;
 
     if (array->items != NULL) {

@@ -302,6 +302,8 @@ SRCS := \
 	src/stage/token/token_operator_name/token_operator_name.c \
 	src/stage/token/token_operator_type/token_operator_type.c \
 	src/stage/token/token_type/token_type.c \
+	src/stage/validator/validator_validate/validator_validate.c \
+	src/stage/validator/validator_validate_type/validator_validate_type.c \
 	src/stage/value/value_create/value_create.c \
 	src/stage/value/value_destroy/value_destroy.c \
 	src/stage/value/value_json/value_json.c \
@@ -680,6 +682,8 @@ OBJS := \
 	build/stage/token/token_operator_name/token_operator_name.o \
 	build/stage/token/token_operator_type/token_operator_type.o \
 	build/stage/token/token_type/token_type.o \
+	build/stage/validator/validator_validate/validator_validate.o \
+	build/stage/validator/validator_validate_type/validator_validate_type.o \
 	build/stage/value/value_create/value_create.o \
 	build/stage/value/value_destroy/value_destroy.o \
 	build/stage/value/value_json/value_json.o \

@@ -1,0 +1,12 @@
+#ifndef _STAGE_VALIDATOR_VALIDATOR_VALIDATE_TYPE_VALIDATOR_VALIDATE_TYPE_H_
+#define _STAGE_VALIDATOR_VALIDATOR_VALIDATE_TYPE_VALIDATOR_VALIDATE_TYPE_H_
+
+// base
+#include <base.h>
+
+// ast
+#include <stage/ast/type.h>
+
+void validator_validate_type(ast_type_t* type);
+
+#endif // _STAGE_VALIDATOR_VALIDATOR_VALIDATE_TYPE_VALIDATOR_VALIDATE_TYPE_H_

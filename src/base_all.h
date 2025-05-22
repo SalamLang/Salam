@@ -299,6 +299,9 @@
 #include <stage/token/token_operator_type/token_operator_type.h>
 #include <stage/token/token_type/token_type.h>
 #include <stage/token/type.h>
+#include <stage/validator/type.h>
+#include <stage/validator/validator_validate/validator_validate.h>
+#include <stage/validator/validator_validate_type/validator_validate_type.h>
 #include <stage/value/type.h>
 #include <stage/value/value_create/value_create.h>
 #include <stage/value/value_destroy/value_destroy.h>

@@ -8,6 +8,11 @@ buffer_t* generator_c_node(generator_t* generator, ast_t* ast)
 
     switch (ast->base.type)
     {
+        case AST_TYPE_TYPE:
+            temp = generator_c_type(generator, ast);
+            return temp;
+            break;
+
         case AST_TYPE_PROGRAM:
             temp = generator_c_program(generator, ast);
             return temp;

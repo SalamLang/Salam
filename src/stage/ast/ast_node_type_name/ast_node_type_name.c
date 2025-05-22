@@ -3,6 +3,10 @@
 char* ast_node_type_name(ast_node_type_t type)
 {
     switch (type) {
+        // type
+        case AST_TYPE_TYPE: return "AST_TYPE_TYPE";
+
+        // general
         case AST_TYPE_UNKNOWN: return "AST_TYPE_UNKNOWN";
         case AST_TYPE_PROGRAM: return "AST_TYPE_PROGRAM";
         case AST_TYPE_PACKAGE: return "AST_TYPE_PACKAGE";

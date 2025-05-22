@@ -4,6 +4,6 @@
 // base
 #include <base.h>
 
-char* ast_type_json(ast_type_t* type);
+char* ast_type_direct_json(ast_type_t type);
 
 #endif // _STAGE_AST_AST_TYPE_AST_TYPE_DIRECT_JSON_AST_TYPE_DIRECT_JSON_H_

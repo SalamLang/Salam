@@ -14,7 +14,7 @@ void ast_statement_foreach_destroy(ast_statement_foreach_t* statement_foreach)
     }
 
     if (statement_foreach->type != NULL) {
-        ast_type_destroy(statement_foreach->type);
+        ast_destroy(statement_foreach->type);
     }
 
     if (statement_foreach->block != NULL) {

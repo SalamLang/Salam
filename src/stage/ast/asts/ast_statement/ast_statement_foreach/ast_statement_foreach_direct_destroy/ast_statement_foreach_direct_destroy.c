@@ -12,7 +12,7 @@ void ast_statement_foreach_direct_destroy(ast_statement_foreach_t statement_fore
     }
 
     if (statement_foreach.type != NULL) {
-        ast_type_destroy(statement_foreach.type);
+        ast_destroy(statement_foreach.type);
     }
 
     if (statement_foreach.block != NULL) {

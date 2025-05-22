@@ -22,7 +22,7 @@ void validator_validate_direct_type(ast_type_t type)
         }
     }
 
-    switch (type.kind) {
+    switch (type.type) {
         case AST_KIND_TYPE_INT:
             break;
 
@@ -57,7 +57,7 @@ void validator_validate_direct_type(ast_type_t type)
             break;
 
         default:
-            log_error("Unknown type kind: %d\n", type.kind);
+            log_error("Unknown type type: %d\n", type.type);
             break;
     }
 }

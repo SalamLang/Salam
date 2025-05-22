@@ -7,7 +7,7 @@ buffer_t* generator_c_function_decl(generator_t* generator, ast_t* ast)
 
     ast_function_decl_t function_decl = ast->raw.function_decl_value;
 
-    buffer_t* return_type = generator_c_type(generator, function_decl.return_type);
+    buffer_t* return_type = generator_c_node(generator, function_decl.return_type);
     buffer_append(temp, return_type);
     buffer_destroy(return_type);
 

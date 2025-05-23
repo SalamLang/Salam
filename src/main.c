@@ -28,6 +28,10 @@ int main(int argc, char** argv)
     // parser_log(parser);
     parser_destroy(parser);
 
+    // validator
+    printf("\n\n==================== VALIDATOR\n");
+    validator_validate(ast);
+
     // ast
     printf("\n\n==================== AST\n");
     // ast_log(ast);
@@ -35,10 +39,6 @@ int main(int argc, char** argv)
     printf("%s\n", json_ast);
     file_write("ast.json", json_ast);
     memory_destroy(json_ast);
-
-    // validator
-    printf("\n\n==================== VALIDATOR\n");
-    validator_validate(ast);
 
     // generator
     printf("\n\n==================== GENERATOR\n");

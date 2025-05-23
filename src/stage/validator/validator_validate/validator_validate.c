@@ -126,7 +126,7 @@ void validator_validate(ast_t* ast)
 
         case AST_TYPE_EXPRESSION_ITEM:
             DEBUG_ME;
-            validator_validate_direct_expression_item(ast->raw.expression_item_value);
+            ast->raw.expression_item_value = validator_validate_direct_expression_item(ast->raw.expression_item_value);
             break;
 
         case AST_TYPE_EXPRESSIONS:

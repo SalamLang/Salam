@@ -10,8 +10,11 @@ char* ast_variable_decl_json(ast_variable_decl_t* variable_decl)
     else {
         buffer_append_char(temp, '{');
 
+        // base
+        buffer_append_str(temp, "\"base\":\"ast_variable_decl_t\"");
+
         // name
-        buffer_append_str(temp, "\"name\":");
+        buffer_append_str(temp, ",\"name\":");
         if (variable_decl->name == NULL) {
             buffer_append_str(temp, "null");
         }

@@ -21,7 +21,7 @@
 
 // struct ast_t;
 typedef struct ast_t ast_t;
-// typedef struct ast_type_t ast_type_t;
+typedef struct ast_type_t ast_type_t;
 
 typedef enum {
     AST_KIND_TYPE_INT = 300,
@@ -60,7 +60,7 @@ struct ast_type_t
     array_t* tuple_elements;  // ast_t*(ast_type_t)
 
     // token_location_t location;
-} ast_type_t;
+};
 
 typedef enum ast_node_type_t {
     AST_TYPE_UNKNOWN = 3000,

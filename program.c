@@ -1,8 +1,8 @@
 void main() {
-  printf("%d", "Hey!\n");
-  printf("%f", "Hey!\n");
-  printf("%d", "Hey!\n");
-  printf("%s%s%s%s", "Hey!\n", "Hey!\n", "Hey!\n", "Hey!\n");
-  printf("%d", "Hey!\n");
+  printf("%d", 5);
+  printf("%f", 3.000000);
+  printf("%d", 3);
+  printf("%s%s%s%s", "hi", "hoo", "aaa", "bbb");
+  printf("%d", pi);
   printf("%d\n", 11+11);
 }

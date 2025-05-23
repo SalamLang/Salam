@@ -11,7 +11,7 @@ char* ast_expression_item_direct_json(ast_expression_item_t expression_item)
     buffer_append_str(temp, "\"base\": \"ast_expression_item_t\",");
 
     // type
-    buffer_append_str(temp, "\"type\": ");
+    buffer_append_str(temp, "\"type\":");
     buffer_append_char(temp, '"');
     buffer_append_str(temp, ast_expression_type_name(expression_item.type));
     buffer_append_char(temp, '"');
@@ -22,7 +22,7 @@ char* ast_expression_item_direct_json(ast_expression_item_t expression_item)
     #define HANDLE_EXPR_JSON(TYPE, FIELD, FUNC, KEY) \
         case TYPE: \
             log_info("ast_expression_item_direct_json - Entering case " #TYPE "\n"); \
-            buffer_append_str(temp, "\"" KEY "\": "); \
+            buffer_append_str(temp, "\"" KEY "\":"); \
             value = FUNC(expression_item.raw.FIELD); \
             buffer_append_str(temp, value); \
             memory_destroy(value); \
@@ -48,7 +48,7 @@ char* ast_expression_item_direct_json(ast_expression_item_t expression_item)
     #undef HANDLE_EXPR_JSON
 
     // runtime_type
-    buffer_append_str(temp, ",\"runtime_type\": ");
+    buffer_append_str(temp, ",\"runtime_type\":");
     if (expression_item.runtime_type == NULL)
     {
         buffer_append_str(temp, "null");

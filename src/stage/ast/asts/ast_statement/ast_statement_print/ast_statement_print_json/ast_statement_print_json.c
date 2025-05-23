@@ -13,7 +13,7 @@ char* ast_statement_print_json(ast_statement_print_t* statement_print)
         buffer_append_char(temp, '{');
 
         // values
-        buffer_append_str(temp, "\"values\": ");
+        buffer_append_str(temp, "\"values\":");
         if (statement_print->values == NULL)
         {
             buffer_append_str(temp, "null");

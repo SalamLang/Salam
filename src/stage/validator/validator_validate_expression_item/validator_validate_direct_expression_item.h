@@ -7,6 +7,6 @@
 // ast
 #include <stage/ast/type.h>
 
-void validator_validate_direct_expression_item(ast_expression_item_t expression_item);
+ast_expression_item_t validator_validate_direct_expression_item(ast_expression_item_t expression_item);
 
 #endif // _STAGE_VALIDATOR_VALIDATOR_VALIDATE_EXPRESSION_ITEM_VALIDATOR_VALIDATE_DIRECT_EXPRESSION_ITEM_H_

@@ -17,10 +17,12 @@ void validator_validate_type(ast_type_t* type)
         validator_validate(type->value_type);
     }
 
-    for (size_t i = 0; i < type->tuple_elements->size; i++) {
-        ast_t* element = array_get(type->tuple_elements, i);
-        if (element != NULL) {
-            validator_validate(element);
+    if (type->tuple_elements != NULL) {
+        for (size_t i = 0; i < type->tuple_elements->size; i++) {
+            ast_t* element = array_get(type->tuple_elements, i);
+            if (element != NULL) {
+                validator_validate(element);
+            }
         }
     }
 

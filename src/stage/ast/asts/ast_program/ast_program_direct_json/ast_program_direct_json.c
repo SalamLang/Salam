@@ -11,17 +11,17 @@ char* ast_program_direct_json(ast_program_t program)
     buffer_append_str(temp, "\"base\": \"ast_program_t\",");
 
     // variable_declaration_count
-    buffer_append_str(temp, "\"variable_declaration_count\": ");
+    buffer_append_str(temp, "\"variable_declaration_count\":");
     buffer_append_str(temp, convert_size2string(program.variable_declaration_count));
     buffer_append_str(temp, ", ");
 
     // function_declaration_count
-    buffer_append_str(temp, "\"function_declaration_count\": ");
+    buffer_append_str(temp, "\"function_declaration_count\":");
     buffer_append_str(temp, convert_size2string(program.function_declaration_count));
     buffer_append_str(temp, ", ");
 
     // variable_declarations
-    buffer_append_str(temp, "\"variable_declarations\": ");
+    buffer_append_str(temp, "\"variable_declarations\":");
     if (program.variable_declarations == NULL) {
         buffer_append_str(temp, "null");
     }
@@ -40,7 +40,7 @@ char* ast_program_direct_json(ast_program_t program)
     }
 
     // function_declarations
-    buffer_append_str(temp, ", \"function_declarations\": ");
+    buffer_append_str(temp, ", \"function_declarations\":");
     if (program.function_declarations == NULL) {
         buffer_append_str(temp, "null");
     }

@@ -8,7 +8,7 @@ char* ast_parameter_item_direct_json(ast_parameter_item_t parameter_item)
     buffer_append_char(temp, '{');
 
     // name
-    buffer_append_str(temp, "\"name\": ");
+    buffer_append_str(temp, "\"name\":");
     if (parameter_item.name == NULL)
     {
         buffer_append_str(temp, "null");
@@ -23,7 +23,7 @@ char* ast_parameter_item_direct_json(ast_parameter_item_t parameter_item)
     }
 
     // type
-    buffer_append_str(temp, "\"type\": ");
+    buffer_append_str(temp, "\"type\":");
     if (parameter_item.type == NULL)
     {
         buffer_append_str(temp, "null");
@@ -36,7 +36,7 @@ char* ast_parameter_item_direct_json(ast_parameter_item_t parameter_item)
     }
 
     // default_value
-    buffer_append_str(temp, "\"default_value\": ");
+    buffer_append_str(temp, "\"default_value\":");
     if (parameter_item.default_value == NULL)
     {
         buffer_append_str(temp, "null");

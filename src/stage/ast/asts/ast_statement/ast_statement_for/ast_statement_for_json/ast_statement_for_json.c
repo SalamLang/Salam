@@ -13,7 +13,7 @@ char* ast_statement_for_json(ast_statement_for_t* statement_for)
         buffer_append_char(temp, '{');
 
         // initializer
-        buffer_append_str(temp, "\"initializer\": ");
+        buffer_append_str(temp, "\"initializer\":");
         if (statement_for->initializer == NULL)
         {
             buffer_append_str(temp, "null");
@@ -26,7 +26,7 @@ char* ast_statement_for_json(ast_statement_for_t* statement_for)
         }
 
         // condition
-        buffer_append_str(temp, "\"condition\": ");
+        buffer_append_str(temp, "\"condition\":");
         if (statement_for->condition == NULL)
         {
             buffer_append_str(temp, "null");
@@ -39,7 +39,7 @@ char* ast_statement_for_json(ast_statement_for_t* statement_for)
         }
 
         // increment
-        buffer_append_str(temp, "\"increment\": ");
+        buffer_append_str(temp, "\"increment\":");
         if (statement_for->increment == NULL)
         {
             buffer_append_str(temp, "null");
@@ -52,7 +52,7 @@ char* ast_statement_for_json(ast_statement_for_t* statement_for)
         }
 
         // block
-        buffer_append_str(temp, "\"block\": ");
+        buffer_append_str(temp, "\"block\":");
         if (statement_for->block == NULL)
         {
             buffer_append_str(temp, "null");

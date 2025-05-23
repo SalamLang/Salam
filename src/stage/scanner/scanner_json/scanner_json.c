@@ -11,7 +11,7 @@ char* scanner_json(scanner_t* scanner)
         buffer_append_char(temp, '{');
 
         // source
-        buffer_append_str(temp, "\"source\": ");
+        buffer_append_str(temp, "\"source\":");
         if (scanner->source) {
             buffer_append_char(temp, '"');
             char* scanner_source = string_escaping(scanner->source);
@@ -24,7 +24,7 @@ char* scanner_json(scanner_t* scanner)
         buffer_append_str(temp, ", ");
 
         // directory
-        buffer_append_str(temp, "\"directory\": ");
+        buffer_append_str(temp, "\"directory\":");
         if (scanner->directory) {
             buffer_append_char(temp, '"');
             char* scanner_directory = string_escaping(scanner->directory);
@@ -37,7 +37,7 @@ char* scanner_json(scanner_t* scanner)
         buffer_append_str(temp, ", ");
 
         // file_name
-        buffer_append_str(temp, "\"file_name\": ");
+        buffer_append_str(temp, "\"file_name\":");
         if (scanner->file_name) {
             buffer_append_char(temp, '"');
             char* scanner_file_name = string_escaping(scanner->file_name);

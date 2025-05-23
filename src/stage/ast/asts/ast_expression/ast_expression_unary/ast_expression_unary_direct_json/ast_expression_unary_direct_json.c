@@ -11,11 +11,11 @@ char* ast_expression_unary_direct_json(ast_expression_unary_t expression_unary)
     buffer_append_str(temp, "\"base\": \"ast_expression_unary_t\",");
 
     // op_type
-    buffer_append_str(temp, "\"op_type\": ");
+    buffer_append_str(temp, "\"op_type\":");
     buffer_append_str(temp, token_operator_name(expression_unary.op_type));
 
     // operand
-    buffer_append_str(temp, ",\"operand\": ");
+    buffer_append_str(temp, ",\"operand\":");
     if (expression_unary.operand == NULL)
     {
         buffer_append_str(temp, "null");
@@ -28,7 +28,7 @@ char* ast_expression_unary_direct_json(ast_expression_unary_t expression_unary)
     }
 
     // runtime_type
-    buffer_append_str(temp, ",\"runtime_type\": ");
+    buffer_append_str(temp, ",\"runtime_type\":");
     if (expression_unary.runtime_type == NULL)
     {
         buffer_append_str(temp, "null");

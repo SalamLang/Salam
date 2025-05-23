@@ -13,7 +13,7 @@ char* ast_statement_foreach_json(ast_statement_foreach_t* statement_foreach)
         buffer_append_char(temp, '{');
 
         // loop_variable
-        buffer_append_str(temp, "\"loop_variable\": ");
+        buffer_append_str(temp, "\"loop_variable\":");
         if (statement_foreach->loop_variable == NULL)
         {
             buffer_append_str(temp, "null");
@@ -26,7 +26,7 @@ char* ast_statement_foreach_json(ast_statement_foreach_t* statement_foreach)
         }
 
         // iterable
-        buffer_append_str(temp, "\"iterable\": ");
+        buffer_append_str(temp, "\"iterable\":");
         if (statement_foreach->iterable == NULL)
         {
             buffer_append_str(temp, "null");
@@ -39,7 +39,7 @@ char* ast_statement_foreach_json(ast_statement_foreach_t* statement_foreach)
         }
 
         // type
-        buffer_append_str(temp, "\"type\": ");
+        buffer_append_str(temp, "\"type\":");
         if (statement_foreach->type == NULL)
         {
             buffer_append_str(temp, "null");
@@ -52,7 +52,7 @@ char* ast_statement_foreach_json(ast_statement_foreach_t* statement_foreach)
         }
 
         // block
-        buffer_append_str(temp, "\"block\": ");
+        buffer_append_str(temp, "\"block\":");
         if (statement_foreach->block == NULL)
         {
             buffer_append_str(temp, "null");

@@ -7,11 +7,11 @@ char* ast_kind_decl_direct_json(ast_kind_decl_t kind_decl)
     buffer_append_char(temp, '{');
 
     // kind_type
-    buffer_append_str(temp, "\"kind_type\": ");
+    buffer_append_str(temp, "\"kind_type\":");
     buffer_append_str(temp, ast_kind_decl_type_name(kind_decl.kind_type));
 
     // value
-    buffer_append_str(temp, ", \"value\": ");
+    buffer_append_str(temp, ", \"value\":");
     if (kind_decl.value == NULL) {
         buffer_append_str(temp, "null");
     }

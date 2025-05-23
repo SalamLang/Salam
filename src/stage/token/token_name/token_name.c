@@ -38,6 +38,7 @@ const char* token_name(token_type_t type)
         case TOKEN_TYPE_KIND_TUPLE:         return "KIND_TUPLE";
         case TOKEN_TYPE_KIND_VOID:          return "KIND_VOID";
         case TOKEN_TYPE_KIND_ANY:           return "KIND_ANY";
+        case TOKEN_TYPE_KIND_SIZE:          return "KIND_SIZE";
 
         // value
         case TOKEN_TYPE_VALUE_STRING:       return "STRING";

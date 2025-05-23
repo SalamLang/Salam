@@ -9,6 +9,7 @@
 #include <stage/ast/ast_log/ast_log.h>
 #include <stage/ast/ast_node_type_name/ast_node_type_name.h>
 #include <stage/ast/ast_type/ast_type_create/ast_type_create.h>
+#include <stage/ast/ast_type/ast_type_create_from_token/ast_type_create_from_token.h>
 #include <stage/ast/ast_type/ast_type_create_primitive/ast_type_create_primitive.h>
 #include <stage/ast/ast_type/ast_type_destroy/ast_type_destroy.h>
 #include <stage/ast/ast_type/ast_type_direct_destroy/ast_type_direct_destroy.h>
@@ -277,6 +278,8 @@
 #include <stage/parser/parser_parse/parser_parse_statement_print/parser_parse_statement_print.h>
 #include <stage/parser/parser_parse/parser_parse_statement_raw/parser_parse_statement_raw.h>
 #include <stage/parser/parser_parse/parser_parse_statement_return/parser_parse_statement_return.h>
+#include <stage/parser/parser_parse/parser_parse_type/parser_parse_type.h>
+#include <stage/parser/parser_parse/parser_parse_variable_decl/parser_parse_variable_decl.h>
 #include <stage/parser/parser_prev/parser_prev.h>
 #include <stage/parser/parser_skip/parser_skip.h>
 #include <stage/parser/type.h>

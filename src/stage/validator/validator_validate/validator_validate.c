@@ -13,6 +13,7 @@ void validator_validate(ast_t* ast)
         case AST_TYPE_TYPE:
             DEBUG_ME;
             validator_validate_direct_type(ast->raw.type_value);
+            break;
 
         case AST_TYPE_PROGRAM:
             DEBUG_ME;
@@ -70,6 +71,7 @@ void validator_validate(ast_t* ast)
         case AST_TYPE_VARIABLE_DECL:
             DEBUG_ME;
             validator_validate(ast->raw.variable_decl_value.type);
+            validator_validate(ast->raw.variable_decl_value.value);
             validator_validate(ast->raw.variable_decl_value.value);
             break;
 

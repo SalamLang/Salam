@@ -11,11 +11,22 @@ ast_t* parser_parse_statement(parser_t* parser)
         case TOKEN_TYPE_KEYWORD_STRUCT:
         case TOKEN_TYPE_KEYWORD_PACKAGE:
         case TOKEN_TYPE_KEYWORD_IMPORT:
+        case TOKEN_TYPE_KEYWORD_TYPE:
         case TOKEN_TYPE_KEYWORD_FN:
             log_fatal("Cannot write this statement inside a sub block, you need to define it in the main block of the file");
             return NULL;
 
-        case TOKEN_TYPE_KEYWORD_TYPE:
+        case TOKEN_TYPE_KIND_INT:
+        case TOKEN_TYPE_KIND_FLOAT:
+        case TOKEN_TYPE_KIND_STRING:
+        case TOKEN_TYPE_KIND_BOOL:
+        case TOKEN_TYPE_KIND_ARRAY:
+        case TOKEN_TYPE_KIND_MAP:
+        case TOKEN_TYPE_KIND_SET:
+        case TOKEN_TYPE_KIND_TUPLE:
+        case TOKEN_TYPE_KIND_VOID:
+        case TOKEN_TYPE_KIND_ANY:
+        case TOKEN_TYPE_KIND_SIZE:
             return parser_parse_variable_decl(parser);
 
         case TOKEN_TYPE_KEYWORD_PRINT:

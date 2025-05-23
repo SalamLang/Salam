@@ -11,7 +11,7 @@ buffer_t* generator_c_expressions(generator_t* generator, ast_t* ast)
             buffer_append_str(temp, ", ");
         }
         ast_t* expression_item = expressions.values->items[i];
-        buffer_t* temp_expression_item = generator_c_expression_item(generator, expression_item);
+        buffer_t* temp_expression_item = generator_c_node(generator, expression_item);
         buffer_append(temp, temp_expression_item);
         buffer_destroy(temp_expression_item);
     }

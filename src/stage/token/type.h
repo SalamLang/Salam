@@ -98,6 +98,7 @@ typedef enum token_type_t {
     TOKEN_TYPE_KIND_TUPLE,
     TOKEN_TYPE_KIND_VOID,
     TOKEN_TYPE_KIND_ANY,
+    TOKEN_TYPE_KIND_SIZE,
 
     // value
     TOKEN_TYPE_VALUE_STRING,

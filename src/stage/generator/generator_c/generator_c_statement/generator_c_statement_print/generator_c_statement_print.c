@@ -13,7 +13,27 @@ buffer_t* generator_c_statement_print(generator_t* generator, ast_t* ast)
 
     buffer_append_char(temp, '\"');
     for (size_t i = 0; i < print.value_count; i++) {
-        buffer_append_str(temp, "%s");
+        ast_t* expression_item = array_get(print.values->raw.expressions_value.values, i);
+        switch (expression_item->raw.expression_item_value.runtime_type->type) {
+            case AST_KIND_TYPE_INT:
+                buffer_append_str(temp, "%d");
+                break;
+            case AST_KIND_TYPE_FLOAT:
+                buffer_append_str(temp, "%f");
+                break;
+            case AST_KIND_TYPE_SIZE:
+                buffer_append_str(temp, "%zu");
+                break;
+            case AST_KIND_TYPE_STRING:
+                buffer_append_str(temp, "%s");
+                break;
+            case AST_KIND_TYPE_BOOL:
+                buffer_append_str(temp, "%s");
+                break;
+            default:
+                buffer_append_str(temp, "%s");
+                break;
+        }
     }
     buffer_append_char(temp, '\"');
 

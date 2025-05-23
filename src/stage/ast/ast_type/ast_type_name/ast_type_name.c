@@ -5,6 +5,7 @@ char* ast_type_name(ast_type_type_t type)
     switch (type) {
         case AST_KIND_TYPE_INT: return "TYPE_INT";
         case AST_KIND_TYPE_FLOAT: return "TYPE_FLOAT";
+        case AST_KIND_TYPE_SIZE: return "TYPE_SIZE";
         case AST_KIND_TYPE_STRING: return "TYPE_STRING";
         case AST_KIND_TYPE_BOOL: return "TYPE_BOOL";
         case AST_KIND_TYPE_ARRAY: return "TYPE_ARRAY";

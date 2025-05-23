@@ -10,9 +10,14 @@ char* ast_type_json(ast_type_t* type)
     else {
         buffer_append_char(temp, '{');
 
+        // base
+        buffer_append_str(temp, "\"base\":\"ast_type_t\"");
+
         // type
-        buffer_append_str(temp, "\"type\":");
+        buffer_append_str(temp, ",\"type\":");
+        buffer_append_char(temp, '"');
         buffer_append_str(temp, ast_type_name(type->type));
+        buffer_append_char(temp, '"');
 
         // is_pointer
         buffer_append_str(temp, ",\"is_pointer\":");
@@ -32,7 +37,7 @@ char* ast_type_json(ast_type_t* type)
             buffer_append_str(temp, "null");
         } else {
             buffer_append_char(temp, '"');
-            char* name = string_escaping(type->name):
+            char* name = string_escaping(type->name);
             buffer_append_str(temp, name);
             memory_destroy(name);
             buffer_append_char(temp, '"');

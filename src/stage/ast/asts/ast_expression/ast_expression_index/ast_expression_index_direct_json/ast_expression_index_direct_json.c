@@ -11,7 +11,7 @@ char* ast_expression_index_direct_json(ast_expression_index_t expression_index)
     buffer_append_str(temp, "\"base\": \"ast_expression_index_t\",");
 
     // object
-    buffer_append_str(temp, "\"object\": ");
+    buffer_append_str(temp, "\"object\":");
     if (expression_index.object == NULL)
     {
         buffer_append_str(temp, "null");
@@ -24,7 +24,7 @@ char* ast_expression_index_direct_json(ast_expression_index_t expression_index)
     }
 
     // index
-    buffer_append_str(temp, ",\"index\": ");
+    buffer_append_str(temp, ",\"index\":");
     if (expression_index.index == NULL)
     {
         buffer_append_str(temp, "null");
@@ -37,7 +37,7 @@ char* ast_expression_index_direct_json(ast_expression_index_t expression_index)
     }
 
     // runtime_type
-    buffer_append_str(temp, ",\"runtime_type\": ");
+    buffer_append_str(temp, ",\"runtime_type\":");
     if (expression_index.runtime_type == NULL)
     {
         buffer_append_str(temp, "null");

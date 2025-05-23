@@ -10,7 +10,7 @@ char* ast_kind_enum_json(ast_kind_enum_t* kind_enum)
         buffer_append_char(temp, '{');
 
         // name
-        buffer_append_str(temp, ", \"name\": ");
+        buffer_append_str(temp, ", \"name\":");
         if (kind_enum->name == NULL) {
             buffer_append_str(temp, "null");
         }
@@ -21,7 +21,7 @@ char* ast_kind_enum_json(ast_kind_enum_t* kind_enum)
         }
 
         // alias
-        buffer_append_str(temp, ", \"alias\": ");
+        buffer_append_str(temp, ", \"alias\":");
         if (kind_enum->alias == NULL) {
             buffer_append_str(temp, "null");
         }
@@ -32,7 +32,7 @@ char* ast_kind_enum_json(ast_kind_enum_t* kind_enum)
         }
 
         // values
-        buffer_append_str(temp, ", \"values\": ");
+        buffer_append_str(temp, ", \"values\":");
         if (kind_enum->values == NULL) {
             buffer_append_str(temp, "null");
         }

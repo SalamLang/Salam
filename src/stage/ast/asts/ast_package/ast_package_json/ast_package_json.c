@@ -14,7 +14,7 @@ char* ast_package_json(ast_package_t* package)
         buffer_append_char(temp, '{');
 
         // name
-        buffer_append_str(temp, "\"name\": ");
+        buffer_append_str(temp, "\"name\":");
         if (package->name == NULL)
         {
             buffer_append_str(temp, "null");

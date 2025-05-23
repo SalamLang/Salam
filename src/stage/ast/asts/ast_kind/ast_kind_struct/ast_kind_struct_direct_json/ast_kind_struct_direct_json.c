@@ -7,7 +7,7 @@ char* ast_kind_struct_direct_json(ast_kind_struct_t kind_struct)
     buffer_append_char(temp, '{');
 
     // name
-    buffer_append_str(temp, ", \"name\": ");
+    buffer_append_str(temp, ", \"name\":");
     if (kind_struct.name == NULL) {
         buffer_append_str(temp, "null");
     }
@@ -18,7 +18,7 @@ char* ast_kind_struct_direct_json(ast_kind_struct_t kind_struct)
     }
 
     // parameters
-    buffer_append_str(temp, ", \"parameters\": ");
+    buffer_append_str(temp, ", \"parameters\":");
     if (kind_struct.parameters == NULL) {
         buffer_append_str(temp, "null");
     }
@@ -29,7 +29,7 @@ char* ast_kind_struct_direct_json(ast_kind_struct_t kind_struct)
     }
 
     // functions
-    buffer_append_str(temp, ", \"functions\": ");
+    buffer_append_str(temp, ", \"functions\":");
     if (kind_struct.functions == NULL) {
         buffer_append_str(temp, "null");
     }

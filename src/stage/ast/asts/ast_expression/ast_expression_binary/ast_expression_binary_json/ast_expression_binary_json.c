@@ -13,7 +13,7 @@ char* ast_expression_binary_json(ast_expression_binary_t* expression_binary)
         buffer_append_char(temp, '{');
 
         // op
-        buffer_append_str(temp, "\"op\": ");
+        buffer_append_str(temp, "\"op\":");
         if (expression_binary->op == NULL)
         {
             buffer_append_str(temp, "null");
@@ -26,7 +26,7 @@ char* ast_expression_binary_json(ast_expression_binary_t* expression_binary)
         }
 
         // left
-        buffer_append_str(temp, ",\"left\": ");
+        buffer_append_str(temp, ",\"left\":");
         if (expression_binary->left == NULL)
         {
             buffer_append_str(temp, "null");
@@ -39,7 +39,7 @@ char* ast_expression_binary_json(ast_expression_binary_t* expression_binary)
         }
 
         // right
-        buffer_append_str(temp, ",\"right\": ");
+        buffer_append_str(temp, ",\"right\":");
         if (expression_binary->right == NULL)
         {
             buffer_append_str(temp, "null");
@@ -52,7 +52,7 @@ char* ast_expression_binary_json(ast_expression_binary_t* expression_binary)
         }
 
         // runtime_type
-        buffer_append_str(temp, ",\"runtime_type\": ");
+        buffer_append_str(temp, ",\"runtime_type\":");
         if (expression_binary->runtime_type == NULL)
         {
             buffer_append_str(temp, "null");

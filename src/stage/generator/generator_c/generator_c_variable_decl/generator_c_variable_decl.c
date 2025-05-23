@@ -7,6 +7,9 @@ buffer_t* generator_c_variable_decl(generator_t* generator, ast_t* ast)
 
     ast_variable_decl_t variable_decl = ast->raw.variable_decl_value;
 
+    buffer_t* ident = generator_c_ident(generator);
+    buffer_append(temp, ident);
+
     buffer_t* type = generator_c_node(generator, variable_decl.type);
     buffer_append(temp, type);
     buffer_destroy(type);
@@ -23,6 +26,8 @@ buffer_t* generator_c_variable_decl(generator_t* generator, ast_t* ast)
         buffer_destroy(value);
         buffer_append_str(temp, ";\n");
     }
+
+    buffer_destroy(ident);
 
     return temp;
 }

@@ -26,6 +26,7 @@ typedef struct ast_type_t ast_type_t;
 typedef enum {
     AST_KIND_TYPE_INT = 300,
     AST_KIND_TYPE_FLOAT,
+    AST_KIND_TYPE_SIZE,
     AST_KIND_TYPE_STRING,
     AST_KIND_TYPE_BOOL,
     AST_KIND_TYPE_ARRAY,

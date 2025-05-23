@@ -1,6 +1,6 @@
 #include "validator_validate_direct_expression_item.h"
 
-void validator_validate_direct_expression_item(ast_expression_item_t expression_item)
+ast_expression_item_t validator_validate_direct_expression_item(ast_expression_item_t expression_item)
 {
     DEBUG_ME;
     if (expression_item.runtime_type != NULL) {
@@ -32,4 +32,5 @@ void validator_validate_direct_expression_item(ast_expression_item_t expression_
             expression_item.runtime_type = expression_item.raw.call.runtime_type;
             break;
     }
+    return expression_item;
 }

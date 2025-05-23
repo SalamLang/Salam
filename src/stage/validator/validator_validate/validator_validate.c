@@ -138,40 +138,26 @@ void validator_validate(ast_t* ast)
 
         case AST_TYPE_EXPRESSION_LITERAL:
             DEBUG_ME;
-            validator_validate_value(ast->raw.expression_literal_value.value);
-            validator_validate_type(ast->raw.expression_literal_value.runtime_type);
             break;
 
         case AST_TYPE_EXPRESSION_IDENTIFIER:
             DEBUG_ME;
-            validator_validate_type(ast->raw.expression_identifier_value.runtime_type);
             break;
 
         case AST_TYPE_EXPRESSION_BINARY:
             DEBUG_ME;
-            validator_validate(ast->raw.expression_binary_value.left);
-            validator_validate(ast->raw.expression_binary_value.right);
-            validator_validate_type(ast->raw.expression_binary_value.runtime_type);
             break;
 
         case AST_TYPE_EXPRESSION_UNARY:
             DEBUG_ME;
-            validator_validate(ast->raw.expression_unary_value.operand);
-            validator_validate_type(ast->raw.expression_unary_value.runtime_type);
             break;
 
         case AST_TYPE_EXPRESSION_INDEX:
             DEBUG_ME;
-            validator_validate(ast->raw.expression_index_value.object);
-            validator_validate(ast->raw.expression_index_value.index);
-            validator_validate_type(ast->raw.expression_index_value.runtime_type);
             break;
 
         case AST_TYPE_EXPRESSION_CALL:
             DEBUG_ME;
-            validator_validate(ast->raw.expression_call_value.callee);
-            validator_validate(ast->raw.expression_call_value.args);
-            validator_validate_type(ast->raw.expression_call_value.runtime_type);
             break;
 
         case AST_TYPE_STATEMENT_IF:

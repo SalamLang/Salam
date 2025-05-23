@@ -8,7 +8,7 @@ char* ast_statement_expression_direct_json(ast_statement_expression_t statement_
     buffer_append_char(temp, '{');
 
     // value
-    buffer_append_str(temp, "\"value\": ");
+    buffer_append_str(temp, "\"value\":");
     if (statement_expression.value == NULL)
     {
         buffer_append_str(temp, "null");

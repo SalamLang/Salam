@@ -11,7 +11,7 @@ char* ast_expression_call_direct_json(ast_expression_call_t expression_call)
     buffer_append_str(temp, "\"base\": \"ast_expression_call_t\",");
 
     // callee
-    buffer_append_str(temp, "\"callee\": ");
+    buffer_append_str(temp, "\"callee\":");
     if (expression_call.callee == NULL)
     {
         buffer_append_str(temp, "null");
@@ -24,7 +24,7 @@ char* ast_expression_call_direct_json(ast_expression_call_t expression_call)
     }
 
     // args
-    buffer_append_str(temp, ",\"args\": ");
+    buffer_append_str(temp, ",\"args\":");
     if (expression_call.args == NULL)
     {
         buffer_append_str(temp, "null");
@@ -37,7 +37,7 @@ char* ast_expression_call_direct_json(ast_expression_call_t expression_call)
     }
 
     // runtime_type
-    buffer_append_str(temp, ",\"runtime_type\": ");
+    buffer_append_str(temp, ",\"runtime_type\":");
     if (expression_call.runtime_type == NULL)
     {
         buffer_append_str(temp, "null");

@@ -11,7 +11,7 @@ char* ast_variable_decl_direct_json(ast_variable_decl_t variable_decl)
     buffer_append_str(temp, "\"base\":\"ast_variable_decl_t\"");
 
     // name
-    buffer_append_str(temp, ",\"name\": ");
+    buffer_append_str(temp, ",\"name\":");
     if (variable_decl.name == NULL) {
         buffer_append_str(temp, "null");
     }
@@ -24,7 +24,7 @@ char* ast_variable_decl_direct_json(ast_variable_decl_t variable_decl)
     }
 
     // type
-    buffer_append_str(temp, ", \"type\": ");
+    buffer_append_str(temp, ", \"type\":");
     if (variable_decl.type == NULL) {
         buffer_append_str(temp, "null");
     }
@@ -35,7 +35,7 @@ char* ast_variable_decl_direct_json(ast_variable_decl_t variable_decl)
     }
 
     // value
-    buffer_append_str(temp, ", \"value\": ");
+    buffer_append_str(temp, ", \"value\":");
     if (variable_decl.value == NULL) {
         buffer_append_str(temp, "null");
     }

@@ -8,7 +8,7 @@ char* ast_import_direct_json(ast_import_t import)
     buffer_append_char(temp, '{');
 
     // name
-    buffer_append_str(temp, "\"name\": ");
+    buffer_append_str(temp, "\"name\":");
     if (import.name == NULL)
     {
         buffer_append_str(temp, "null");

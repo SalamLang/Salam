@@ -7,7 +7,7 @@ char* ast_argument_item_json(ast_argument_item_t* argument_item)
     buffer_append_char(temp, '{');
 
     // value
-    buffer_append_str(temp, "\"value\": ");
+    buffer_append_str(temp, "\"value\":");
     if (argument_item->value == NULL)
     {
         buffer_append_str(temp, "null");

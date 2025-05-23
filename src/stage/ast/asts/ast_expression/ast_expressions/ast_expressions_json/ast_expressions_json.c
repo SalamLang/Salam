@@ -16,11 +16,11 @@ char* ast_expressions_json(ast_expressions_t* expressions)
         buffer_append_str(temp, "\"base\": \"ast_expressions_t\",");
 
         // value_count
-        buffer_append_str(temp, "\"value_count\": ");
+        buffer_append_str(temp, "\"value_count\":");
         buffer_append_str(temp, convert_size2string(expressions->value_count));
 
         // values
-        buffer_append_str(temp, ",\"values\": ");
+        buffer_append_str(temp, ",\"values\":");
         if (expressions->values == NULL)
         {
             buffer_append_str(temp, "null");

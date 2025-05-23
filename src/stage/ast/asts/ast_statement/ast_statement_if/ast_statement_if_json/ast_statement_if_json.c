@@ -13,7 +13,7 @@ char* ast_statement_if_json(ast_statement_if_t* statement_if)
         buffer_append_char(temp, '{');
 
         // is_last
-        buffer_append_str(temp, "\"is_last\": ");
+        buffer_append_str(temp, "\"is_last\":");
         if (statement_if->is_last == true)
         {
             buffer_append_str(temp, "true");
@@ -24,7 +24,7 @@ char* ast_statement_if_json(ast_statement_if_t* statement_if)
         }
 
         // condition
-        buffer_append_str(temp, "\"condition\": ");
+        buffer_append_str(temp, "\"condition\":");
         if (statement_if->condition == NULL)
         {
             buffer_append_str(temp, "null");
@@ -37,7 +37,7 @@ char* ast_statement_if_json(ast_statement_if_t* statement_if)
         }
 
         // then_branch
-        buffer_append_str(temp, "\"then_branch\": ");
+        buffer_append_str(temp, "\"then_branch\":");
         if (statement_if->then_branch == NULL)
         {
             buffer_append_str(temp, "null");
@@ -50,7 +50,7 @@ char* ast_statement_if_json(ast_statement_if_t* statement_if)
         }
 
         // else_branch
-        buffer_append_str(temp, "\"else_branch\": ");
+        buffer_append_str(temp, "\"else_branch\":");
         if (statement_if->else_branch == NULL)
         {
             buffer_append_str(temp, "null");

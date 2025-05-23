@@ -11,11 +11,11 @@ char* ast_attributes_direct_json(ast_attributes_t attributes)
     buffer_append_str(temp, "\"base\": \"ast_attributes_t\",");
 
     // value_count
-    buffer_append_str(temp, "\"value_count\": ");
+    buffer_append_str(temp, "\"value_count\":");
     buffer_append_str(temp, convert_size2string(attributes.value_count));
 
     // values
-    buffer_append_str(temp, ",\"values\": ");
+    buffer_append_str(temp, ",\"values\":");
     if (attributes.values == NULL)
     {
         buffer_append_str(temp, "null");

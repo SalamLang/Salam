@@ -11,11 +11,11 @@ char* ast_block_direct_json(ast_block_t block)
     buffer_append_str(temp, "\"base\": \"ast_block_t\",");
 
     // statement_count
-    buffer_append_str(temp, "\"statement_count\": ");
+    buffer_append_str(temp, "\"statement_count\":");
     buffer_append_str(temp, convert_size2string(block.statement_count));
 
     // statements
-    buffer_append_str(temp, ",\"statements\": ");
+    buffer_append_str(temp, ",\"statements\":");
     if (block.statements == NULL)
     {
         buffer_append_str(temp, "null");

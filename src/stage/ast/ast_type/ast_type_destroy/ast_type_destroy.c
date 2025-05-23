@@ -24,5 +24,6 @@ void ast_type_destroy(ast_type_t* type)
     if (type->tuple_elements != NULL) {
         array_destroy(type->tuple_elements);
     }
+
     memory_destroy(type);
 }

@@ -14,6 +14,7 @@ ast_expression_item_t validator_validate_direct_expression_item(ast_expression_i
             break;
 
         case AST_EXPRESSION_TYPE_IDENTIFIER:
+            expression_item.raw.identifier.runtime_type = ast_type_exact_create_primitive(AST_KIND_TYPE_INT, false, false, false);
             expression_item.runtime_type = ast_type_exact_create_primitive(AST_KIND_TYPE_INT, false, false, false);
             break;
 

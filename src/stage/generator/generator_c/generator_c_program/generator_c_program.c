@@ -14,6 +14,13 @@ buffer_t* generator_c_program(generator_t* generator, ast_t* ast)
     log_info("variable_declaration_count: %zu\n", variable_declaration_count);
     log_info("function_declaration_count: %zu\n", function_declaration_count);
 
+    if (function_declaration_count > 0)
+    {
+        buffer_append_str(temp, "#include <stdio.h>\n");
+        buffer_append_str(temp, "#include <stdlib.h>\n");
+        buffer_append_str(temp, "\n");
+    }
+
     if (variable_declaration_count > 0)
     {
         for (size_t i = 0; i < variable_declaration_count; i++)

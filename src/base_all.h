@@ -16,6 +16,7 @@
 #include <stage/ast/ast_type/ast_type_exact_create/ast_type_exact_create.h>
 #include <stage/ast/ast_type/ast_type_exact_create_primitive/ast_type_exact_create_primitive.h>
 #include <stage/ast/ast_type/ast_type_json/ast_type_json.h>
+#include <stage/ast/ast_type/ast_type_name/ast_type_name.h>
 #include <stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_create/ast_argument_item_create.h>
 #include <stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_destroy/ast_argument_item_destroy.h>
 #include <stage/ast/asts/ast_argument/ast_argument_item/ast_argument_item_direct_destroy/ast_argument_item_direct_destroy.h>

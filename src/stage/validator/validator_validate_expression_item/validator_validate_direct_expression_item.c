@@ -9,11 +9,11 @@ void validator_validate_direct_expression_item(ast_expression_item_t expression_
 
     switch (expression_item.type) {
         case AST_EXPRESSION_TYPE_IDENTIFIER:
-            expression_item.runtime_type = ast_type_exact_create_primitive(AST_KIND_TYPE_INT);
+            expression_item.runtime_type = ast_type_exact_create_primitive(AST_KIND_TYPE_INT, false, false, false);
             break;
 
         case AST_EXPRESSION_TYPE_LITERAL:
-            expression_item.runtime_type = ast_type_exact_create_primitive(expression_item.raw.literal.value->type);
+            expression_item.runtime_type = ast_type_exact_create_primitive(expression_item.raw.literal.value->type, false, false, false);
             break;
 
         case AST_EXPRESSION_TYPE_BINARY:

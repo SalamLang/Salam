@@ -18,7 +18,9 @@ buffer_t* generator_c_variable_decl(generator_t* generator, ast_t* ast)
         buffer_append_str(temp, ";\n");
     } else {
         buffer_append_str(temp, " = ");
-        buffer_append_str(temp, "TODO"); // TODO: handling expression value
+        buffer_t* value = generator_c_expression_item(generator, variable_decl.value);
+        buffer_append(temp, value);
+        buffer_destroy(value);
         buffer_append_str(temp, ";\n");
     }
 

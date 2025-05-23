@@ -61,6 +61,11 @@ buffer_t* generator_c_node(generator_t* generator, ast_t* ast)
             return temp;
             break;
 
+        case AST_TYPE_EXPRESSION_ITEM:
+            temp = generator_c_expression_item(generator, ast);
+            return temp;
+            break;
+
         case AST_TYPE_UNKNOWN:
         case AST_TYPE_PACKAGE:
         case AST_TYPE_IMPORT:
@@ -77,7 +82,6 @@ buffer_t* generator_c_node(generator_t* generator, ast_t* ast)
         case AST_TYPE_ATTRIBUTES:
         case AST_TYPE_ARGUMENT_ITEM:
         case AST_TYPE_ARGUMENTS:
-        case AST_TYPE_EXPRESSION_ITEM:
         case AST_TYPE_EXPRESSIONS:
         case AST_TYPE_EXPRESSION_LITERAL:
         case AST_TYPE_EXPRESSION_IDENTIFIER:

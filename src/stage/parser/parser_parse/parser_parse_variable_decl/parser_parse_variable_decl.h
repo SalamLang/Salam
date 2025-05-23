@@ -1,0 +1,12 @@
+#ifndef _STAGE_PARSER_PARSER_PARSE_PARSER_PARSE_VARIABLE_DECL_PARSER_PARSE_VARIABLE_DECL_H_
+#define _STAGE_PARSER_PARSER_PARSE_PARSER_PARSE_VARIABLE_DECL_PARSER_PARSE_VARIABLE_DECL_H_
+
+// base
+#include <base.h>
+
+// ast
+#include <stage/ast/type.h>
+
+ast_t* parser_parse_variable_decl(parser_t* parser);
+
+#endif // _STAGE_PARSER_PARSER_PARSE_PARSER_PARSE_VARIABLE_DECL_PARSER_PARSE_VARIABLE_DECL_H_

@@ -34,6 +34,9 @@ void validator_validate_type(ast_type_t* type)
         case AST_KIND_TYPE_STRING:
             break;
 
+        case AST_KIND_TYPE_SIZE:
+            break;
+
         case AST_KIND_TYPE_BOOL:
             break;
 

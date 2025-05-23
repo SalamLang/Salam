@@ -20,6 +20,7 @@ set(SRC_FILES
     src/stage/ast/ast_log/ast_log.c
     src/stage/ast/ast_node_type_name/ast_node_type_name.c
     src/stage/ast/ast_type/ast_type_create/ast_type_create.c
+    src/stage/ast/ast_type/ast_type_create_from_token/ast_type_create_from_token.c
     src/stage/ast/ast_type/ast_type_create_primitive/ast_type_create_primitive.c
     src/stage/ast/ast_type/ast_type_destroy/ast_type_destroy.c
     src/stage/ast/ast_type/ast_type_direct_destroy/ast_type_direct_destroy.c
@@ -284,6 +285,8 @@ set(SRC_FILES
     src/stage/parser/parser_parse/parser_parse_statement_print/parser_parse_statement_print.c
     src/stage/parser/parser_parse/parser_parse_statement_raw/parser_parse_statement_raw.c
     src/stage/parser/parser_parse/parser_parse_statement_return/parser_parse_statement_return.c
+    src/stage/parser/parser_parse/parser_parse_type/parser_parse_type.c
+    src/stage/parser/parser_parse/parser_parse_variable_decl/parser_parse_variable_decl.c
     src/stage/parser/parser_prev/parser_prev.c
     src/stage/parser/parser_skip/parser_skip.c
     src/stage/scanner/scanner_create/scanner_create.c

@@ -8,7 +8,6 @@ ast_t* parser_parse_statement(parser_t* parser)
     switch (PARSER_CURRENT->type) {
         case TOKEN_TYPE_KEYWORD_ENUM:
         case TOKEN_TYPE_KEYWORD_UNION:
-        case TOKEN_TYPE_KEYWORD_TYPE:
         case TOKEN_TYPE_KEYWORD_STRUCT:
         case TOKEN_TYPE_KEYWORD_PACKAGE:
         case TOKEN_TYPE_KEYWORD_IMPORT:
@@ -16,8 +15,8 @@ ast_t* parser_parse_statement(parser_t* parser)
             log_fatal("Cannot write this statement inside a sub block, you need to define it in the main block of the file");
             return NULL;
 
-        // case TOKEN_TYPE_KEYWORD_RAW:
-        //     return parser_parse_raw(parser);
+        case TOKEN_TYPE_KEYWORD_TYPE:
+            return parser_parse_variable_decl(parser);
 
         case TOKEN_TYPE_KEYWORD_PRINT:
             return parser_parse_statement_print(parser);

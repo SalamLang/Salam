@@ -128,4 +128,3 @@ layout_map_entry_t layout_map[] = {
 const size_t map_size = sizeof(layout_map) / sizeof(layout_map[0]);
 
 #endif
-

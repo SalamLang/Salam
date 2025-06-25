@@ -15,7 +15,7 @@ PORT = 5000
 DEBUG = False
 DEBUG = True
 YAML_DIR = "../"
-LANGUAEG_FILE = "yaml/language.yaml"
+LANGUAGE_FILE = "yaml/language.yaml"
 
 
 def get_dynamic_columns(data: dict) -> List[str]:
@@ -57,10 +57,10 @@ def get_dynamic_columns(data: dict) -> List[str]:
 
 
 def get_language_keys() -> list[str]:
-    global LANGUAEG_FILE
+    global LANGUAGE_FILE
 
     keys = set()  # This can remain a set
-    file_path = os.path.join(YAML_DIR, LANGUAEG_FILE)
+    file_path = os.path.join(YAML_DIR, LANGUAGE_FILE)
 
     data = read_yaml(file_path)
 

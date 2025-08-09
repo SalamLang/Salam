@@ -15,7 +15,7 @@ def clean_and_regenerate_guard(h_file_path, root):
     if not os.path.exists(h_file_path):
         return
 
-    with open(h_file_path, "r", encoding="utf-8") as file:
+    with open(h_file_path, encoding="utf-8") as file:
         lines = file.readlines()
 
     guard_define_line = None

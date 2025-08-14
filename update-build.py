@@ -90,7 +90,7 @@ def update_marked_block(content, marker_start, marker_end, body):
 
 def update_file(filepath, files, formatter):
     log_info(f"Updating '{filepath}'...")
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8") as f:
         content = f.read()
 
     new_list = formatter(files)
@@ -111,7 +111,7 @@ def update_file(filepath, files, formatter):
 
 def update_makefile_objects_section(filepath, o_files):
     log_info(f"Updating object files section in '{filepath}'...")
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8") as f:
         content = f.read()
 
     new_obj_list = format_for_make_objects(o_files)
@@ -130,7 +130,7 @@ def update_makefile_objects_section(filepath, o_files):
 def ensure_include_guards_in_headers(h_files, src_dir):
     for rel_path in h_files:
         full_path = os.path.join(src_dir, rel_path)
-        with open(full_path, "r", encoding="utf-8") as f:
+        with open(full_path, encoding="utf-8") as f:
             lines = f.readlines()
 
         if lines and lines[0].strip().startswith("#ifndef"):

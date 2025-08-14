@@ -19,7 +19,7 @@ logger = logging.getLogger()
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 # ----------- Utility Functions -----------
-def run_command(cmd: List[str], capture_output: bool = False, timeout: Optional[int] = None) -> Optional[str]:
+def run_command(cmd: list[str], capture_output: bool = False, timeout: int | None = None) -> str | None:
     try:
         if capture_output:
             result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout)
@@ -43,7 +43,7 @@ def file_hash(filepath: Path) -> str:
             hasher.update(chunk)
     return hasher.hexdigest()
 
-def compile_c_file(args: Tuple[str, str, str]) -> str:
+def compile_c_file(args: tuple[str, str, str]) -> str:
     filename, compiler, cflags = args
     src_path = Path(filename)
     obj_file = src_path.with_suffix('.o')
@@ -59,7 +59,7 @@ def compile_c_file(args: Tuple[str, str, str]) -> str:
 
     cmd = [compiler, "-c"] + cflags.split() + [filename, "-o", str(obj_file)]
     logger.info(f"Compiling {filename} ...")
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=COMPILE_TIMEOUT)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=COMPILE_TIMEOUT)
     if result.returncode != 0:
         logger.error(f"Compilation failed for {filename}:\n{result.stderr}")
         sys.exit(1)
@@ -67,12 +67,12 @@ def compile_c_file(args: Tuple[str, str, str]) -> str:
     hash_file.write_text(src_hash)
     return str(obj_file)
 
-def link_objects(compiler: str, output: str, obj_files: List[str], ldflags: str) -> None:
+def link_objects(compiler: str, output: str, obj_files: list[str], ldflags: str) -> None:
     cmd = [compiler, "-o", output] + obj_files + ldflags.split()
     logger.info(f"Linking {output} ...")
     run_command(cmd, timeout=LINK_TIMEOUT)
 
-def run_program(executable: str, args: List[str]) -> bool:
+def run_program(executable: str, args: list[str]) -> bool:
     exec_path = Path(f"./{executable}")
     if not exec_path.exists():
         logger.error(f"Executable {executable} not found. Cannot run program.")
@@ -105,7 +105,7 @@ def beautify_json_if_valid(filepath: str) -> None:
     except Exception as e:
         logger.error(f"Unexpected error while beautifying {filepath}: {e}")
 
-def clean_build(c_files: List[str]) -> None:
+def clean_build(c_files: list[str]) -> None:
     for filename in c_files:
         obj_file = Path(filename).with_suffix('.o')
         hash_file = obj_file.with_suffix('.o.hash')

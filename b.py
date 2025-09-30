@@ -1,14 +1,14 @@
+import argparse
+import hashlib
+import json
+import logging
+import os
+import platform
 import subprocess
 import sys
-import os
-import json
-from pathlib import Path
-import platform
 from concurrent.futures import ProcessPoolExecutor
-import argparse
-import logging
-import hashlib
-from typing import List, Tuple, Optional
+from pathlib import Path
+from typing import List, Optional, Tuple
 
 # ----------- Constants & Logging -----------
 JSON_FILES_TO_BEAUTIFY = ["tokens.json", "ast.json"]

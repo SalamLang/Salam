@@ -1,6 +1,6 @@
 import os
-import sys
 import re
+import sys
 
 IGNORED_ROOT_HEADERS = {"base.h", "base_all.h", "main.h"}
 

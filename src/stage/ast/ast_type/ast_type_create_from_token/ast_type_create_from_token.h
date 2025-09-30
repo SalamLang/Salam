@@ -9,4 +9,4 @@
 
 ast_t* ast_type_create_from_token(token_t* token);
 
-#endif // _STAGE_AST_AST_TYPE_AST_TYPE_CREATE_FROM_TOKEN_AST_TYPE_CREATE_FROM_TOKEN_H_
+#endif  // _STAGE_AST_AST_TYPE_AST_TYPE_CREATE_FROM_TOKEN_AST_TYPE_CREATE_FROM_TOKEN_H_

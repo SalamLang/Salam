@@ -9,10 +9,9 @@
  * @returns {void}
  *
  */
-void scanner_scan_number(scanner_t *scanner, char *uc)
-{
+void scanner_scan_number(scanner_t* scanner, char* uc) {
     DEBUG_ME;
-    buffer_t *temp = buffer_create(25);
+    buffer_t* temp = buffer_create(25);
     buffer_append_char(temp, string_convert_utf8_to_english_digit(uc));
 
     bool is_float = false;
@@ -48,10 +47,12 @@ void scanner_scan_number(scanner_t *scanner, char *uc)
         memory_destroy(uc);
     }
 
-    token_type_t type = is_float ? TOKEN_TYPE_VALUE_NUMBER_FLOAT : TOKEN_TYPE_VALUE_NUMBER_INT;
-    token_t *token = token_create(type, SCANNER_CURRENT_LOCATION);
+    token_type_t type =
+        is_float ? TOKEN_TYPE_VALUE_NUMBER_FLOAT : TOKEN_TYPE_VALUE_NUMBER_INT;
+    token_t* token = token_create(type, SCANNER_CURRENT_LOCATION);
     token->source = string_duplicate(temp->data);
-    token->value = value_create(is_float ? VALUE_TYPE_NUMBER_FLOAT : VALUE_TYPE_NUMBER_INT);
+    token->value = value_create(is_float ? VALUE_TYPE_NUMBER_FLOAT
+                                         : VALUE_TYPE_NUMBER_INT);
     log_info("New number token - type: %s\n", token_name(type));
     if (is_float) {
         token->value->raw.float_value = atof(temp->data);

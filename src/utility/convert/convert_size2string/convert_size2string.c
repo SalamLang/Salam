@@ -8,8 +8,7 @@
  * @returns {char*}
  *
  */
-char *convert_size2string(size_t value)
-{
+char* convert_size2string(size_t value) {
     DEBUG_ME;
     static char buffer[256];
     snprintf(buffer, sizeof(buffer), "%zu", value);

@@ -1,7 +1,6 @@
 #include <stage/ast/asts/ast_function_decl/ast_function_decl_direct_json/ast_function_decl_direct_json.h>
 
-char* ast_function_decl_direct_json(ast_function_decl_t function_decl)
-{
+char* ast_function_decl_direct_json(ast_function_decl_t function_decl) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
@@ -32,7 +31,7 @@ char* ast_function_decl_direct_json(ast_function_decl_t function_decl)
         memory_destroy(return_type);
     }
 
-        // parameters
+    // parameters
     buffer_append_str(temp, ", \"parameters\":");
     if (function_decl.parameters == NULL) {
         buffer_append_str(temp, "null");

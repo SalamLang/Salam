@@ -1,5 +1,4 @@
 #ifndef _STAGE_VALIDATOR_TYPE_H_
 #define _STAGE_VALIDATOR_TYPE_H_
 
-
-#endif // _STAGE_VALIDATOR_TYPE_H_
+#endif  // _STAGE_VALIDATOR_TYPE_H_

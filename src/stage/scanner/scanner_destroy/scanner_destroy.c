@@ -1,7 +1,6 @@
 #include <stage/scanner/scanner_destroy/scanner_destroy.h>
 
-void scanner_destroy(scanner_t* scanner)
-{
+void scanner_destroy(scanner_t* scanner) {
     DEBUG_ME;
     // if (! scanner) return;
 

@@ -403,4 +403,4 @@
 #include <utility/utf8/utf8_is_valid/utf8_is_valid.h>
 #include <utility/utf8/utf8_strlen/utf8_strlen.h>
 
-#endif // _BASE_ALL_H_
+#endif  // _BASE_ALL_H_

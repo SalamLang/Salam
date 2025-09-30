@@ -16,4 +16,4 @@
 
 char* ast_block_direct_json(ast_block_t block);
 
-#endif // _STAGE_AST_ASTS_AST_BLOCK_AST_BLOCK_DIRECT_JSON_AST_BLOCK_DIRECT_JSON_H_
+#endif  // _STAGE_AST_ASTS_AST_BLOCK_AST_BLOCK_DIRECT_JSON_AST_BLOCK_DIRECT_JSON_H_

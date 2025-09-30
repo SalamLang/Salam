@@ -1,12 +1,7 @@
 #include <stage/scanner/scanner_set/scanner_set.h>
 
-void scanner_set(
-    scanner_t* scanner,
-    char* source,
-    char* directory,
-    char* file_name
-)
-{
+void scanner_set(scanner_t* scanner, char* source, char* directory,
+                 char* file_name) {
     DEBUG_ME;
     scanner->source = source;
     scanner->length = string_length(source);

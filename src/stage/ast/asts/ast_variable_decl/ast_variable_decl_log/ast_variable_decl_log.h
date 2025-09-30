@@ -12,4 +12,4 @@
 
 void ast_variable_decl_log(ast_variable_decl_t* variable_decl);
 
-#endif // _STAGE_AST_ASTS_AST_VARIABLE_DECL_AST_VAR_DECL_LOG_AST_VAR_DECL_LOG_H_
+#endif  // _STAGE_AST_ASTS_AST_VARIABLE_DECL_AST_VAR_DECL_LOG_AST_VAR_DECL_LOG_H_

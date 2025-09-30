@@ -13,11 +13,7 @@
 // token
 #include <stage/token/type.h>
 
-void scanner_set(
-    scanner_t* scanner,
-    char* source,
-    char* directory,
-    char* file_name
-);
+void scanner_set(scanner_t* scanner, char* source, char* directory,
+                 char* file_name);
 
-#endif // _STAGE_SCANNER_SCANNER_SET_SCANNER_SET_H_
+#endif  // _STAGE_SCANNER_SCANNER_SET_SCANNER_SET_H_

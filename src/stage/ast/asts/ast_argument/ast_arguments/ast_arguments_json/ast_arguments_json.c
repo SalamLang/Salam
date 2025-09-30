@@ -1,15 +1,11 @@
 #include "ast_arguments_json.h"
 
-char* ast_arguments_json(ast_arguments_t* arguments)
-{
+char* ast_arguments_json(ast_arguments_t* arguments) {
     buffer_t* temp = buffer_create(24);
 
-    if (arguments == NULL)
-    {
+    if (arguments == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         buffer_append_char(temp, '{');
 
         // base
@@ -21,17 +17,12 @@ char* ast_arguments_json(ast_arguments_t* arguments)
 
         // values
         buffer_append_str(temp, ",\"values\":");
-        if (arguments->values == NULL)
-        {
+        if (arguments->values == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else
-        {
+        } else {
             buffer_append_char(temp, '[');
-            for (size_t i = 0; i < arguments->values->size; i++)
-            {
-                if (i > 0)
-                {
+            for (size_t i = 0; i < arguments->values->size; i++) {
+                if (i > 0) {
                     buffer_append_str(temp, ", ");
                 }
                 ast_t* item = arguments->values->items[i];

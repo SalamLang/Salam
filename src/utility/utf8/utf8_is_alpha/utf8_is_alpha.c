@@ -8,8 +8,7 @@
  * @returns {bool} True if the string is an alphabet, false otherwise
  *
  */
-bool utf8_is_alpha(char *utf8)
-{
+bool utf8_is_alpha(char* utf8) {
     DEBUG_ME;
     // wchar_t wc;
     // int wcl = mbtowc(&wc, utf8, MB_CUR_MAX);
@@ -23,7 +22,7 @@ bool utf8_is_alpha(char *utf8)
     }
 
     uint32_t codepoint;
-    const unsigned char *s = (const unsigned char *)utf8;
+    const unsigned char* s = (const unsigned char*)utf8;
 
     // Decode UTF-8 byte sequence to codepoint
     if (*s <= 0x7F) {

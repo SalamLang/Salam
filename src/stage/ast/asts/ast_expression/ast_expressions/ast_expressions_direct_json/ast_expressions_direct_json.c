@@ -1,7 +1,6 @@
 #include "ast_expressions_direct_json.h"
 
-char* ast_expressions_direct_json(ast_expressions_t expressions)
-{
+char* ast_expressions_direct_json(ast_expressions_t expressions) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
@@ -16,17 +15,12 @@ char* ast_expressions_direct_json(ast_expressions_t expressions)
 
     // values
     buffer_append_str(temp, ",\"values\":");
-    if (expressions.values == NULL)
-    {
+    if (expressions.values == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         buffer_append_char(temp, '[');
-        for (size_t i = 0; i < expressions.values->size; i++)
-        {
-            if (i > 0)
-            {
+        for (size_t i = 0; i < expressions.values->size; i++) {
+            if (i > 0) {
                 buffer_append_str(temp, ", ");
             }
             ast_t* item = expressions.values->items[i];

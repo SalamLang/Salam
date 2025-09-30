@@ -1,8 +1,8 @@
 #ifndef _UTILITY_STRING_STRING_REPLACE_ALL_STRING_REPLACE_ALL_H_
 #define _UTILITY_STRING_STRING_REPLACE_ALL_STRING_REPLACE_ALL_H_
 
-#include <stddef.h> // for size_t
-#include <string.h> // for strcpy
+#include <stddef.h>  // for size_t
+#include <string.h>  // for strcpy
 
 // base
 #include <base.h>
@@ -13,6 +13,7 @@
 // memory
 #include <utility/memory/memory_allocation/memory_allocation.h>
 
-char *string_replace_all(const char *str, const char *old_substr, const char *new_substr);
+char* string_replace_all(const char* str, const char* old_substr,
+                         const char* new_substr);
 
-#endif // _UTILITY_STRING_STRING_REPLACE_ALL_STRING_REPLACE_ALL_H_
+#endif  // _UTILITY_STRING_STRING_REPLACE_ALL_STRING_REPLACE_ALL_H_

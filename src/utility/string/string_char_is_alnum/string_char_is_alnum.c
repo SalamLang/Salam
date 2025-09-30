@@ -8,8 +8,7 @@
  * @returns {bool}
  *
  */
-bool string_char_is_alnum(char c)
-{
+bool string_char_is_alnum(char c) {
     DEBUG_ME;
     return string_char_is_alpha(c) || string_char_is_digit(c);
 }

@@ -4,6 +4,7 @@
 // base
 #include <base.h>
 
-char* ast_statement_variable_decl_json(ast_statement_variable_decl_t* statement_variable_decl);
+char* ast_statement_variable_decl_json(
+    ast_statement_variable_decl_t* statement_variable_decl);
 
-#endif // _STAGE_AST_ASTS_AST_STATEMENT_AST_STATEMENT_VARIABLE_DECL_AST_STATEMENT_VARIABLE_DECL_JSON_AST_STATEMENT_VARIABLE_DECL_JSON_H_
+#endif  // _STAGE_AST_ASTS_AST_STATEMENT_AST_STATEMENT_VARIABLE_DECL_AST_STATEMENT_VARIABLE_DECL_JSON_AST_STATEMENT_VARIABLE_DECL_JSON_H_

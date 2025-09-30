@@ -12,4 +12,4 @@
 
 value_t* value_create(value_type_t type);
 
-#endif // _STAGE_VALUE_VALUE_CREATE_VALUE_CREATE_H_
+#endif  // _STAGE_VALUE_VALUE_CREATE_VALUE_CREATE_H_

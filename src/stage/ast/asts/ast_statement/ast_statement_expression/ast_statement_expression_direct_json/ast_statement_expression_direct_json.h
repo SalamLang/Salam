@@ -4,6 +4,7 @@
 // base
 #include <base.h>
 
-char* ast_statement_expression_direct_json(ast_statement_expression_t statement_expression);
+char* ast_statement_expression_direct_json(
+    ast_statement_expression_t statement_expression);
 
-#endif // _STAGE_AST_ASTS_AST_STATEMENT_AST_STATEMENT_EXPRESSION_AST_STATEMENT_EXPRESSION_DIRECT_JSON_AST_STATEMENT_EXPRESSION_DIRECT_JSON_H_
+#endif  // _STAGE_AST_ASTS_AST_STATEMENT_AST_STATEMENT_EXPRESSION_AST_STATEMENT_EXPRESSION_DIRECT_JSON_AST_STATEMENT_EXPRESSION_DIRECT_JSON_H_

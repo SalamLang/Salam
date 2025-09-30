@@ -4,6 +4,7 @@
 // base
 #include <base.h>
 
-char* ast_expression_binary_direct_json(ast_expression_binary_t expression_binary);
+char* ast_expression_binary_direct_json(
+    ast_expression_binary_t expression_binary);
 
-#endif // _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSION_BINARY_AST_EXPRESSION_BINARY_DIRECT_JSON_AST_EXPRESSION_BINARY_DIRECT_JSON_H_
+#endif  // _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSION_BINARY_AST_EXPRESSION_BINARY_DIRECT_JSON_AST_EXPRESSION_BINARY_DIRECT_JSON_H_

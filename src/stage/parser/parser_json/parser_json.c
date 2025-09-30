@@ -1,7 +1,6 @@
 #include <stage/parser/parser_json/parser_json.h>
 
-char* parser_json(parser_t* parser)
-{
+char* parser_json(parser_t* parser) {
     buffer_t* temp = buffer_create(24);
 
     // TODO

@@ -1,7 +1,6 @@
 #include "validator_validate_type.h"
 
-void validator_validate_type(ast_type_t* type)
-{
+void validator_validate_type(ast_type_t* type) {
     DEBUG_ME;
     if (!type) return;
 

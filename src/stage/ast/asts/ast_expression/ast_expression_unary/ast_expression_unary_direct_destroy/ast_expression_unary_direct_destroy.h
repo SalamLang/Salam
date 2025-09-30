@@ -4,6 +4,7 @@
 // base
 #include <base.h>
 
-void ast_expression_unary_direct_destroy(ast_expression_unary_t expression_unary);
+void ast_expression_unary_direct_destroy(
+    ast_expression_unary_t expression_unary);
 
-#endif // _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSION_UNARY_AST_EXPRESSION_UNARY_DIRECT_DESTROY_AST_EXPRESSION_UNARY_DIRECT_DESTROY_H_
+#endif  // _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSION_UNARY_AST_EXPRESSION_UNARY_DIRECT_DESTROY_AST_EXPRESSION_UNARY_DIRECT_DESTROY_H_

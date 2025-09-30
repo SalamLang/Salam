@@ -1,25 +1,18 @@
 #include "ast_expression_call_json.h"
 
-char* ast_expression_call_json(ast_expression_call_t* expression_call)
-{
+char* ast_expression_call_json(ast_expression_call_t* expression_call) {
     buffer_t* temp = buffer_create(24);
 
-    if (expression_call == NULL)
-    {
+    if (expression_call == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         buffer_append_char(temp, '{');
 
         // callee
         buffer_append_str(temp, "\"callee\":");
-        if (expression_call->callee == NULL)
-        {
+        if (expression_call->callee == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else
-        {
+        } else {
             char* buffer = ast_json(expression_call->callee);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
@@ -27,12 +20,9 @@ char* ast_expression_call_json(ast_expression_call_t* expression_call)
 
         // args
         buffer_append_str(temp, ",\"args\":");
-        if (expression_call->args == NULL)
-        {
+        if (expression_call->args == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else
-        {
+        } else {
             char* buffer = ast_json(expression_call->args);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
@@ -40,12 +30,9 @@ char* ast_expression_call_json(ast_expression_call_t* expression_call)
 
         // runtime_type
         buffer_append_str(temp, ",\"runtime_type\":");
-        if (expression_call->runtime_type == NULL)
-        {
+        if (expression_call->runtime_type == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else
-        {
+        } else {
             char* buffer = ast_type_json(expression_call->runtime_type);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);

@@ -9,4 +9,4 @@
 
 token_type_t token_type(const char* name);
 
-#endif // _STAGE_TOKEN_TOKEN_TYPE_TOKEN_TYPE_H_
+#endif  // _STAGE_TOKEN_TOKEN_TYPE_TOKEN_TYPE_H_

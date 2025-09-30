@@ -1,7 +1,6 @@
 #include <stage/token/token_keyword_type/token_keyword_type.h>
 
-token_type_t token_keyword_type(char* value)
-{
+token_type_t token_keyword_type(char* value) {
     // keyword
     if (string_compare(value, "if") == 0) {
         return TOKEN_TYPE_KEYWORD_IF;

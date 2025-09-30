@@ -1,7 +1,7 @@
 #ifndef _UTILITY_STRING_STRING_TRIM_STRING_TRIM_H_
 #define _UTILITY_STRING_STRING_TRIM_STRING_TRIM_H_
 
-#include <ctype.h> // for
+#include <ctype.h>  // for
 
 // base
 #include <base.h>
@@ -18,4 +18,4 @@
 
 char* string_trim(const char* input);
 
-#endif // _UTILITY_STRING_STRING_TRIM_STRING_TRIM_H_
+#endif  // _UTILITY_STRING_STRING_TRIM_STRING_TRIM_H_

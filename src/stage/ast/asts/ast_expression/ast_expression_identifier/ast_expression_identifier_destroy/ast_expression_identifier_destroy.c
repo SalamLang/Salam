@@ -1,7 +1,7 @@
 #include "ast_expression_identifier_destroy.h"
 
-void ast_expression_identifier_destroy(ast_expression_identifier_t* expression_identifier)
-{
+void ast_expression_identifier_destroy(
+    ast_expression_identifier_t* expression_identifier) {
     DEBUG_ME;
     if (!expression_identifier) return;
 

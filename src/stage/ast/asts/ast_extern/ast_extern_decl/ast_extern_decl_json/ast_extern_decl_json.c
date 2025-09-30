@@ -1,13 +1,11 @@
 #include <stage/ast/asts/ast_extern/ast_extern_decl/ast_extern_decl_json/ast_extern_decl_json.h>
 
-char* ast_extern_decl_json(ast_extern_decl_t* extern_decl)
-{
+char* ast_extern_decl_json(ast_extern_decl_t* extern_decl) {
     buffer_t* temp = buffer_create(10);
 
     if (extern_decl == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else {
+    } else {
         buffer_append_char(temp, '{');
 
         // type

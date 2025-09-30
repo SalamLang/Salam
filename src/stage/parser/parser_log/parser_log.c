@@ -1,7 +1,6 @@
 #include <stage/parser/parser_log/parser_log.h>
 
-void parser_log(parser_t* parser)
-{
+void parser_log(parser_t* parser) {
     DEBUG_ME;
     if (!parser) return;
 

@@ -5,9 +5,9 @@
 #include <base.h>
 
 // buffer
-#include <utility/buffer/type.h>
-#include <utility/buffer/buffer_create/buffer_create.h>
 #include <utility/buffer/buffer_append_str/buffer_append_str.h>
+#include <utility/buffer/buffer_create/buffer_create.h>
+#include <utility/buffer/type.h>
 
 // string
 #include <utility/string/string_duplicate/string_duplicate.h>
@@ -20,4 +20,4 @@
 
 char* token_location_json(token_location_t location);
 
-#endif // _STAGE_TOKEN_TOKEN_LOCATION_JSON_TOKEN_LOCATION_JSON_H_
+#endif  // _STAGE_TOKEN_TOKEN_LOCATION_JSON_TOKEN_LOCATION_JSON_H_

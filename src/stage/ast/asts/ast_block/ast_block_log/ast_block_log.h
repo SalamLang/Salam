@@ -12,4 +12,4 @@
 
 void ast_block_log(ast_block_t* block);
 
-#endif // _STAGE_AST_ASTS_AST_BLOCK_AST_BLOCK_LOG_AST_BLOCK_LOG_H_
+#endif  // _STAGE_AST_ASTS_AST_BLOCK_AST_BLOCK_LOG_AST_BLOCK_LOG_H_

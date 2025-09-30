@@ -4,6 +4,7 @@
 // base
 #include <base.h>
 
-void ast_statement_expression_direct_destroy(ast_statement_expression_t statement_expression);
+void ast_statement_expression_direct_destroy(
+    ast_statement_expression_t statement_expression);
 
-#endif // _STAGE_AST_ASTS_AST_STATEMENT_AST_STATEMENT_EXPRESSION_AST_STATEMENT_EXPRESSION_DIRECT_DESTROY_AST_STATEMENT_EXPRESSION_DIRECT_DESTROY_H_
+#endif  // _STAGE_AST_ASTS_AST_STATEMENT_AST_STATEMENT_EXPRESSION_AST_STATEMENT_EXPRESSION_DIRECT_DESTROY_AST_STATEMENT_EXPRESSION_DIRECT_DESTROY_H_

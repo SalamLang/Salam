@@ -8,10 +8,9 @@
  * @returns {char*}
  *
  */
-char *buffer_destroy_and_get(buffer_t *str)
-{
+char* buffer_destroy_and_get(buffer_t* str) {
     DEBUG_ME;
-    char *res = string_duplicate(str->data);
+    char* res = string_duplicate(str->data);
     buffer_destroy(str);
 
     if (res == NULL) {

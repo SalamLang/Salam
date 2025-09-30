@@ -1,7 +1,6 @@
 #include "ast_expression_binary_destroy.h"
 
-void ast_expression_binary_destroy(ast_expression_binary_t* expression_binary)
-{
+void ast_expression_binary_destroy(ast_expression_binary_t* expression_binary) {
     DEBUG_ME;
     if (!expression_binary) return;
 

@@ -8,8 +8,7 @@
  * @returns {size_t} Length of the string
  *
  */
-size_t utf8_strlen(const char *str)
-{
+size_t utf8_strlen(const char* str) {
     DEBUG_ME;
     size_t len = 0;
     mbstate_t state;

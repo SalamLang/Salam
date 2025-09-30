@@ -1,7 +1,6 @@
 #include <utility/array/array_destroy/array_destroy.h>
 
-void array_destroy(array_t* array)
-{
+void array_destroy(array_t* array) {
     DEBUG_ME;
     if (!array) return;
 

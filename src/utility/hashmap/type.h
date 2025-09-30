@@ -1,7 +1,7 @@
 #ifndef _UTILITY_HASHMAP_TYPE_H_
 #define _UTILITY_HASHMAP_TYPE_H_
 
-#include <stddef.h> // for size_t
+#include <stddef.h>  // for size_t
 
 typedef struct hashmap_entry_t {
     char* key;
@@ -16,4 +16,4 @@ typedef struct {
     void (*free_value)(void*);
 } hashmap_t;
 
-#endif // _UTILITY_HASHMAP_TYPE_H_
+#endif  // _UTILITY_HASHMAP_TYPE_H_

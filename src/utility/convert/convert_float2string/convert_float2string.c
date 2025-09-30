@@ -8,8 +8,7 @@
  * @returns {char*}
  *
  */
-char *convert_float2string(float value)
-{
+char* convert_float2string(float value) {
     DEBUG_ME;
     static char buffer[256];
     snprintf(buffer, sizeof(buffer), "%f", value);

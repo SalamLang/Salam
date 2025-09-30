@@ -1,13 +1,11 @@
 #include <stage/ast/ast_type/ast_type_json/ast_type_json.h>
 
-char* ast_type_json(ast_type_t* type)
-{
+char* ast_type_json(ast_type_t* type) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(256);
     if (type == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else {
+    } else {
         buffer_append_char(temp, '{');
 
         // base

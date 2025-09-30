@@ -6,4 +6,4 @@
 
 char* ast_type_direct_json(ast_type_t type);
 
-#endif // _STAGE_AST_AST_TYPE_AST_TYPE_DIRECT_JSON_AST_TYPE_DIRECT_JSON_H_
+#endif  // _STAGE_AST_AST_TYPE_AST_TYPE_DIRECT_JSON_AST_TYPE_DIRECT_JSON_H_

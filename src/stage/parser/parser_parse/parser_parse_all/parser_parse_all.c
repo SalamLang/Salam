@@ -1,7 +1,6 @@
 #include <stage/parser/parser_parse/parser_parse_all/parser_parse_all.h>
 
-ast_t* parser_parse_all(parser_t* parser)
-{
+ast_t* parser_parse_all(parser_t* parser) {
     DEBUG_ME;
     size_t variable_declaration_count = 0;
     array_t* variable_declarations = array_create((array_destroy_t)ast_destroy);
@@ -23,6 +22,8 @@ ast_t* parser_parse_all(parser_t* parser)
         }
     }
 
-    ast_t* ast = ast_program_create(variable_declarations, function_declarations, variable_declaration_count, function_declaration_count);
+    ast_t* ast = ast_program_create(
+        variable_declarations, function_declarations,
+        variable_declaration_count, function_declaration_count);
     return ast;
 }

@@ -9,8 +9,7 @@
  * false otherwise
  *
  */
-bool utf8_is_digit(char *utf8)
-{
+bool utf8_is_digit(char* utf8) {
     DEBUG_ME;
     // Persian digits
     if (string_compare(utf8, "۰") == 0 ||  // Persian 0

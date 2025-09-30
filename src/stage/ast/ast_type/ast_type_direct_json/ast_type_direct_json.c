@@ -1,7 +1,6 @@
 #include <stage/ast/ast_type/ast_type_direct_json/ast_type_direct_json.h>
 
-char* ast_type_direct_json(ast_type_t type)
-{
+char* ast_type_direct_json(ast_type_t type) {
     buffer_t* temp = buffer_create(256);
     buffer_append_char(temp, '{');
     buffer_append_str(temp, "\"type\":null");

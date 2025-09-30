@@ -1,7 +1,6 @@
 #include "generator_c_code.h"
 
-char* generator_c_code(generator_t* generator)
-{
+char* generator_c_code(generator_t* generator) {
     DEBUG_ME;
 
     // TODO: handling import, package, etc...

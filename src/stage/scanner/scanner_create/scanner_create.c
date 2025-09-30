@@ -1,11 +1,6 @@
 #include <stage/scanner/scanner_create/scanner_create.h>
 
-scanner_t* scanner_create(
-    char* source,
-    char* directory,
-    char* file_name
-)
-{
+scanner_t* scanner_create(char* source, char* directory, char* file_name) {
     DEBUG_ME;
     scanner_t* scanner = memory_allocation(sizeof(scanner_t));
 

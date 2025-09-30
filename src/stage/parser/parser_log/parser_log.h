@@ -12,4 +12,4 @@
 
 void parser_log(parser_t* parser);
 
-#endif // _STAGE_PARSER_PARSER_LOG_PARSER_LOG_H_
+#endif  // _STAGE_PARSER_PARSER_LOG_PARSER_LOG_H_

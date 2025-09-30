@@ -1,7 +1,6 @@
 #include "generator_c_expression_item.h"
 
-buffer_t* generator_c_expression_item(generator_t* generator, ast_t* ast)
-{
+buffer_t* generator_c_expression_item(generator_t* generator, ast_t* ast) {
     DEBUG_ME;
     ast_expression_item_t expression_item = ast->raw.expression_item_value;
 
@@ -46,7 +45,8 @@ buffer_t* generator_c_expression_item(generator_t* generator, ast_t* ast)
             break;
 
         default:
-            log_fatal("Unknown expression item type: %d\n", expression_item.type);
+            log_fatal("Unknown expression item type: %d\n",
+                      expression_item.type);
             break;
     }
 

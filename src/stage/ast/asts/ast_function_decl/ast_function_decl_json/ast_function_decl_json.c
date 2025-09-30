@@ -1,14 +1,11 @@
 #include <stage/ast/asts/ast_function_decl/ast_function_decl_json/ast_function_decl_json.h>
 
-char* ast_function_decl_json(ast_function_decl_t* function_decl)
-{
+char* ast_function_decl_json(ast_function_decl_t* function_decl) {
     buffer_t* temp = buffer_create(24);
 
-    if (function_decl == NULL)
-    {
+    if (function_decl == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else {
+    } else {
         buffer_append_char(temp, '{');
 
         // name

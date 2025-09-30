@@ -8,8 +8,7 @@
  * @returns {token_type_t}
  *
  */
-token_type_t token_char_type(char c)
-{
+token_type_t token_char_type(char c) {
     DEBUG_ME;
     switch (c) {
         case '{':

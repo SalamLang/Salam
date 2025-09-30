@@ -5,9 +5,9 @@
 #include <base.h>
 
 // ast
-#include <stage/ast/type.h>
 #include <stage/ast/ast_alloc/ast_alloc.h>
+#include <stage/ast/type.h>
 
 ast_t* ast_attribute_item_create(char* name, ast_t* value);
 
-#endif // _STAGE_AST_ASTS_AST_ATTRIBUTE_AST_ATTRIBUTE_ITEM_AST_ATTRIBUTE_ITEM_CREATE_AST_ATTRIBUTE_ITEM_CREATE_H_
+#endif  // _STAGE_AST_ASTS_AST_ATTRIBUTE_AST_ATTRIBUTE_ITEM_AST_ATTRIBUTE_ITEM_CREATE_AST_ATTRIBUTE_ITEM_CREATE_H_

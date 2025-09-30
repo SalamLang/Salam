@@ -2,7 +2,7 @@
 #define _UTILITY_MEMORY_MEMORY_MOVE_MEMORY_MOVE_H_
 
 #include <stddef.h>  // for size_t
-#include <string.h> // for memmove
+#include <string.h>  // for memmove
 
 // base
 #include <base.h>
@@ -12,4 +12,4 @@
 
 void memory_move(void* dest, const void* src, size_t size);
 
-#endif // _UTILITY_MEMORY_MEMORY_MOVE_MEMORY_MOVE_H_
+#endif  // _UTILITY_MEMORY_MEMORY_MOVE_MEMORY_MOVE_H_

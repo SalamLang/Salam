@@ -18,4 +18,4 @@
 
 void token_free(token_t* token);
 
-#endif // _STAGE_TOKEN_TOKEN_FREE_TOKEN_FREE_H_
+#endif  // _STAGE_TOKEN_TOKEN_FREE_TOKEN_FREE_H_

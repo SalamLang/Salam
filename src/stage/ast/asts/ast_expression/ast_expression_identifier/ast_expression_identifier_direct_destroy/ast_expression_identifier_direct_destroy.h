@@ -4,6 +4,7 @@
 // base
 #include <base.h>
 
-void ast_expression_identifier_direct_destroy(ast_expression_identifier_t expression_identifier);
+void ast_expression_identifier_direct_destroy(
+    ast_expression_identifier_t expression_identifier);
 
-#endif // _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSION_IDENTIFIER_AST_EXPRESSION_IDENTIFIER_DIRECT_DESTROY_AST_EXPRESSION_IDENTIFIER_DIRECT_DESTROY_H_
+#endif  // _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSION_IDENTIFIER_AST_EXPRESSION_IDENTIFIER_DIRECT_DESTROY_AST_EXPRESSION_IDENTIFIER_DIRECT_DESTROY_H_

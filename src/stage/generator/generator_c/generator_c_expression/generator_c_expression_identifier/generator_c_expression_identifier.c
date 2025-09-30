@@ -8,7 +8,7 @@ buffer_t* generator_c_expression_identifier(generator_t* generator, ast_t* ast)
 
     buffer_t* temp = buffer_create(12);
 
-    // TODO: validate if the variable already defiend or not.
+    // TODO: validate if the variable is already defined or not.
     buffer_append_str(temp, expression_identifier.name);
 
     return temp;

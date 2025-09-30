@@ -1,8 +1,9 @@
 import os
-import sys
 import re
+import sys
 
 IGNORED_ROOT_HEADERS = {"base.h", "base_all.h", "main.h"}
+
 
 def generate_guard_from_path(h_file_path, root):
     rel_path = os.path.relpath(h_file_path, root)
@@ -10,6 +11,7 @@ def generate_guard_from_path(h_file_path, root):
     guard = "_".join(parts).upper().replace(".", "_") + "_"
     guard = "_" + guard
     return guard
+
 
 def clean_and_regenerate_guard(h_file_path, root):
     if not os.path.exists(h_file_path):
@@ -40,12 +42,17 @@ def clean_and_regenerate_guard(h_file_path, root):
             new_lines.append(line)
 
     guard = generate_guard_from_path(h_file_path, root)
-    content = f"#ifndef {guard}\n#define {guard}\n\n" + "".join(new_lines).strip() + f"\n\n#endif // {guard}\n"
+    content = (
+        f"#ifndef {guard}\n#define {guard}\n\n"
+        + "".join(new_lines).strip()
+        + f"\n\n#endif // {guard}\n"
+    )
 
     with open(h_file_path, "w", encoding="utf-8") as file:
         file.write(content)
 
     print(f"[REGENERATE] Header guard: {h_file_path}")
+
 
 def create_header_file(c_file_path, root):
     base_name = os.path.splitext(os.path.basename(c_file_path))[0]
@@ -62,6 +69,7 @@ def create_header_file(c_file_path, root):
         h_file.write(content)
 
     print(f"[CREATE] Header: {h_file_path}")
+
 
 def create_c_and_h_files_for_empty_directory(directory, root):
     if not os.path.isdir(directory):
@@ -84,6 +92,7 @@ def create_c_and_h_files_for_empty_directory(directory, root):
         h_file.write(f"#ifndef {guard}\n#define {guard}\n\n\n\n#endif // {guard}\n")
     print(f"[CREATE] Header: {h_path}")
 
+
 def scan_directory(root):
     for dirpath, dirnames, filenames in os.walk(root):
         for filename in filenames:
@@ -104,6 +113,7 @@ def scan_directory(root):
         for dirname in dirnames:
             subdir_path = os.path.join(dirpath, dirname)
             create_c_and_h_files_for_empty_directory(subdir_path, root)
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:

@@ -1,14 +1,14 @@
+import argparse
+import hashlib
+import json
+import logging
+import os
+import platform
 import subprocess
 import sys
-import os
-import json
-from pathlib import Path
-import platform
 from concurrent.futures import ProcessPoolExecutor
-import argparse
-import logging
-import hashlib
-from typing import List, Tuple, Optional
+from pathlib import Path
+from typing import List, Optional, Tuple
 
 # ----------- Constants & Logging -----------
 JSON_FILES_TO_BEAUTIFY = ["tokens.json", "ast.json"]
@@ -16,13 +16,18 @@ COMPILE_TIMEOUT = 60
 LINK_TIMEOUT = 60
 
 logger = logging.getLogger()
-logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+
 
 # ----------- Utility Functions -----------
-def run_command(cmd: List[str], capture_output: bool = False, timeout: Optional[int] = None) -> Optional[str]:
+def run_command(
+    cmd: List[str], capture_output: bool = False, timeout: Optional[int] = None
+) -> Optional[str]:
     try:
         if capture_output:
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout)
+            result = subprocess.run(
+                cmd, check=True, capture_output=True, text=True, timeout=timeout
+            )
             return result.stdout
         subprocess.run(cmd, check=True, timeout=timeout)
     except subprocess.CalledProcessError as e:
@@ -36,18 +41,20 @@ def run_command(cmd: List[str], capture_output: bool = False, timeout: Optional[
         logger.error(f"Command timed out: {''.join(cmd)}")
         sys.exit(1)
 
+
 def file_hash(filepath: Path) -> str:
     hasher = hashlib.sha256()
-    with filepath.open('rb') as f:
+    with filepath.open("rb") as f:
         while chunk := f.read(8192):
             hasher.update(chunk)
     return hasher.hexdigest()
 
+
 def compile_c_file(args: Tuple[str, str, str]) -> str:
     filename, compiler, cflags = args
     src_path = Path(filename)
-    obj_file = src_path.with_suffix('.o')
-    hash_file = obj_file.with_suffix('.o.hash')
+    obj_file = src_path.with_suffix(".o")
+    hash_file = obj_file.with_suffix(".o.hash")
 
     src_hash = file_hash(src_path)
 
@@ -59,7 +66,13 @@ def compile_c_file(args: Tuple[str, str, str]) -> str:
 
     cmd = [compiler, "-c"] + cflags.split() + [filename, "-o", str(obj_file)]
     logger.info(f"Compiling {filename} ...")
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=COMPILE_TIMEOUT)
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=COMPILE_TIMEOUT,
+    )
     if result.returncode != 0:
         logger.error(f"Compilation failed for {filename}:\n{result.stderr}")
         sys.exit(1)
@@ -67,10 +80,14 @@ def compile_c_file(args: Tuple[str, str, str]) -> str:
     hash_file.write_text(src_hash)
     return str(obj_file)
 
-def link_objects(compiler: str, output: str, obj_files: List[str], ldflags: str) -> None:
+
+def link_objects(
+    compiler: str, output: str, obj_files: List[str], ldflags: str
+) -> None:
     cmd = [compiler, "-o", output] + obj_files + ldflags.split()
     logger.info(f"Linking {output} ...")
     run_command(cmd, timeout=LINK_TIMEOUT)
+
 
 def run_program(executable: str, args: List[str]) -> bool:
     exec_path = Path(f"./{executable}")
@@ -85,6 +102,7 @@ def run_program(executable: str, args: List[str]) -> bool:
     except subprocess.CalledProcessError:
         logger.error("Program execution failed!")
         return False
+
 
 def beautify_json_if_valid(filepath: str) -> None:
     path = Path(filepath)
@@ -105,29 +123,64 @@ def beautify_json_if_valid(filepath: str) -> None:
     except Exception as e:
         logger.error(f"Unexpected error while beautifying {filepath}: {e}")
 
+
 def clean_build(c_files: List[str]) -> None:
     for filename in c_files:
-        obj_file = Path(filename).with_suffix('.o')
-        hash_file = obj_file.with_suffix('.o.hash')
+        obj_file = Path(filename).with_suffix(".o")
+        hash_file = obj_file.with_suffix(".o.hash")
         for f in [obj_file, hash_file]:
             if f.exists():
                 logger.info(f"Removing {f}")
                 f.unlink()
 
+
 # ----------- Main Entry Point -----------
 def main() -> None:
     parser = argparse.ArgumentParser(description="Parallel C build script")
-    parser.add_argument("--compiler", default="gcc", help="Compiler to use (e.g., gcc, clang, tcc)")
+    parser.add_argument(
+        "--compiler", default="gcc", help="Compiler to use (e.g., gcc, clang, tcc)"
+    )
     parser.add_argument("--output", default="s", help="Output executable name")
-    parser.add_argument("--files", default="c_files.txt", help="Text file containing list of .c files")
-    parser.add_argument("--jobs", type=int, default=os.cpu_count() * 3, help="Number of parallel compile jobs")
-    parser.add_argument("--clean", action="store_true", help="Clean object/hash files before compiling")
-    parser.add_argument("--run-args", nargs="*", default=["input.salam"], help="Arguments for running the executable")
-    parser.add_argument("--no-run", action="store_true", help="Do not run the final executable")
-    parser.add_argument("--beautify-json", action="store_true", default=True, help="Beautify JSON output files if valid")
-    parser.add_argument("--cflags", default=os.getenv("CFLAGS", "-Wno-unused-parameter -g -Wall -Wextra -pedantic -I. -Isrc"), help="Compiler flags")
-    parser.add_argument("--ldflags", default=os.getenv("LDFLAGS", ""), help="Linker flags")
-    parser.add_argument("--verbose", action="store_true", help="Enable verbose debug logging")
+    parser.add_argument(
+        "--files", default="c_files.txt", help="Text file containing list of .c files"
+    )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=os.cpu_count() * 3,
+        help="Number of parallel compile jobs",
+    )
+    parser.add_argument(
+        "--clean", action="store_true", help="Clean object/hash files before compiling"
+    )
+    parser.add_argument(
+        "--run-args",
+        nargs="*",
+        default=["input.salam"],
+        help="Arguments for running the executable",
+    )
+    parser.add_argument(
+        "--no-run", action="store_true", help="Do not run the final executable"
+    )
+    parser.add_argument(
+        "--beautify-json",
+        action="store_true",
+        default=True,
+        help="Beautify JSON output files if valid",
+    )
+    parser.add_argument(
+        "--cflags",
+        default=os.getenv(
+            "CFLAGS", "-Wno-unused-parameter -g -Wall -Wextra -pedantic -I. -Isrc"
+        ),
+        help="Compiler flags",
+    )
+    parser.add_argument(
+        "--ldflags", default=os.getenv("LDFLAGS", ""), help="Linker flags"
+    )
+    parser.add_argument(
+        "--verbose", action="store_true", help="Enable verbose debug logging"
+    )
     args = parser.parse_args()
 
     if args.verbose:
@@ -154,11 +207,20 @@ def main() -> None:
 
         if args.compiler == "tcc":
             logger.info("Using TCC (non-parallel)...")
-            obj_files = [compile_c_file((f, args.compiler, args.cflags)) for f in c_files]
+            obj_files = [
+                compile_c_file((f, args.compiler, args.cflags)) for f in c_files
+            ]
         else:
-            logger.info(f"{args.compiler} selected (parallel compile, max jobs={args.jobs})")
+            logger.info(
+                f"{args.compiler} selected (parallel compile, max jobs={args.jobs})"
+            )
             with ProcessPoolExecutor(max_workers=args.jobs) as executor:
-                obj_files = list(executor.map(compile_c_file, [(f, args.compiler, args.cflags) for f in c_files]))
+                obj_files = list(
+                    executor.map(
+                        compile_c_file,
+                        [(f, args.compiler, args.cflags) for f in c_files],
+                    )
+                )
 
         link_objects(args.compiler, args.output, obj_files, args.ldflags)
 
@@ -176,6 +238,7 @@ def main() -> None:
     except KeyboardInterrupt:
         logger.warning("Build interrupted by user.")
         sys.exit(130)
+
 
 if __name__ == "__main__":
     main()

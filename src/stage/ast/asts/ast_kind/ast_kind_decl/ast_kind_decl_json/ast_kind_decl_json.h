@@ -6,4 +6,4 @@
 
 char* ast_kind_decl_json(ast_kind_decl_t* kind_decl);
 
-#endif // _STAGE_AST_ASTS_AST_KIND_AST_KIND_DECL_AST_KIND_DECL_JSON_AST_KIND_DECL_JSON_H_
+#endif  // _STAGE_AST_ASTS_AST_KIND_AST_KIND_DECL_AST_KIND_DECL_JSON_AST_KIND_DECL_JSON_H_

@@ -1,7 +1,6 @@
 #include <utility/string/string_ltrim/string_ltrim.h>
 
-char* string_ltrim(const char* input)
-{
+char* string_ltrim(const char* input) {
     DEBUG_ME;
     if (!input) return NULL;
 

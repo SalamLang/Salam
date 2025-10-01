@@ -8,4 +8,4 @@
 
 int array_delete(array_t* array, size_t index);
 
-#endif // _UTILITY_ARRAY_ARRAY_DELETE_ARRAY_DELETE_H_
+#endif  // _UTILITY_ARRAY_ARRAY_DELETE_ARRAY_DELETE_H_

@@ -1,7 +1,6 @@
 #include <stage/ast/asts/ast_parameter/ast_parameter_item/ast_parameter_item_destroy/ast_parameter_item_destroy.h>
 
-void ast_parameter_item_destroy(ast_parameter_item_t* parameter_item)
-{
+void ast_parameter_item_destroy(ast_parameter_item_t* parameter_item) {
     DEBUG_ME;
     if (parameter_item->name != NULL) {
         memory_destroy(parameter_item->name);

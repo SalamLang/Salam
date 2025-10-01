@@ -12,4 +12,4 @@
 
 void array_destroy(array_t* array);
 
-#endif // _UTILITY_ARRAY_ARRAY_DESTROY_ARRAY_DESTROY_H_
+#endif  // _UTILITY_ARRAY_ARRAY_DESTROY_ARRAY_DESTROY_H_

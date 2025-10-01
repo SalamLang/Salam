@@ -1,7 +1,7 @@
 #ifndef _UTILITY_STRING_STRING_REPLACE_ALL_SUBSTRINGS_STRING_REPLACE_ALL_SUBSTRINGS_H_
 #define _UTILITY_STRING_STRING_REPLACE_ALL_SUBSTRINGS_STRING_REPLACE_ALL_SUBSTRINGS_H_
 
-#include <string.h> // for strstr, strncpy, strcpy
+#include <string.h>  // for strstr, strncpy, strcpy
 
 // base
 #include <base.h>
@@ -12,6 +12,7 @@
 // memory
 #include <utility/memory/memory_allocation/memory_allocation.h>
 
-char *string_replace_all_substrings(const char *str, const char *old_substr, const char *new_substr);
+char* string_replace_all_substrings(const char* str, const char* old_substr,
+                                    const char* new_substr);
 
-#endif // _UTILITY_STRING_STRING_REPLACE_ALL_SUBSTRINGS_STRING_REPLACE_ALL_SUBSTRINGS_H_
+#endif  // _UTILITY_STRING_STRING_REPLACE_ALL_SUBSTRINGS_STRING_REPLACE_ALL_SUBSTRINGS_H_

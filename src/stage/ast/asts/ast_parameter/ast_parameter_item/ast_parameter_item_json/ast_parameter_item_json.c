@@ -1,25 +1,18 @@
 #include "ast_parameter_item_json.h"
 
-char* ast_parameter_item_json(ast_parameter_item_t* parameter_item)
-{
+char* ast_parameter_item_json(ast_parameter_item_t* parameter_item) {
     buffer_t* temp = buffer_create(24);
 
-    if (parameter_item == NULL)
-    {
+    if (parameter_item == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         buffer_append_char(temp, '{');
 
         // name
         buffer_append_str(temp, "\"name\":");
-        if (parameter_item->name == NULL)
-        {
+        if (parameter_item->name == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else
-        {
+        } else {
             buffer_append_str(temp, "\"");
             char* name = string_escaping(parameter_item->name);
             buffer_append_str(temp, name);
@@ -29,12 +22,9 @@ char* ast_parameter_item_json(ast_parameter_item_t* parameter_item)
 
         // type
         buffer_append_str(temp, "\"type\":");
-        if (parameter_item->type == NULL)
-        {
+        if (parameter_item->type == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else
-        {
+        } else {
             char* type = ast_json(parameter_item->type);
             buffer_append_str(temp, type);
             memory_destroy(type);
@@ -42,12 +32,9 @@ char* ast_parameter_item_json(ast_parameter_item_t* parameter_item)
 
         // default_value
         buffer_append_str(temp, "\"default_value\":");
-        if (parameter_item->default_value == NULL)
-        {
+        if (parameter_item->default_value == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else
-        {
+        } else {
             char* default_value = ast_json(parameter_item->default_value);
             buffer_append_str(temp, default_value);
             memory_destroy(default_value);

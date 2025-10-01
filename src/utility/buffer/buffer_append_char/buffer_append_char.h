@@ -10,6 +10,6 @@
 // buffer
 #include <utility/buffer/type.h>
 
-void buffer_append_char(buffer_t *str, char c);
+void buffer_append_char(buffer_t* str, char c);
 
-#endif // _UTILITY_BUFFER_BUFFER_APPEND_CHAR_BUFFER_APPEND_CHAR_H_
+#endif  // _UTILITY_BUFFER_BUFFER_APPEND_CHAR_BUFFER_APPEND_CHAR_H_

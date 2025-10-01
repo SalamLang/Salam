@@ -1,7 +1,6 @@
 #include <stage/ast/asts/ast_extern/ast_extern_decl/ast_extern_decl_direct_json/ast_extern_decl_direct_json.h>
 
-char* ast_extern_decl_direct_json(ast_extern_decl_t extern_decl)
-{
+char* ast_extern_decl_direct_json(ast_extern_decl_t extern_decl) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(10);
 

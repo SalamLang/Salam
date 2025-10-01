@@ -1,7 +1,6 @@
 #include "generator_c_variable_decl.h"
 
-buffer_t* generator_c_variable_decl(generator_t* generator, ast_t* ast)
-{
+buffer_t* generator_c_variable_decl(generator_t* generator, ast_t* ast) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(1024);
 

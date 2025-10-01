@@ -1,7 +1,6 @@
 #include "parser_parse_statement_raw.h"
 
-ast_t* parser_parse_statement_raw(parser_t* parser)
-{
+ast_t* parser_parse_statement_raw(parser_t* parser) {
     DEBUG_ME;
     if (!parser) return NULL;
 

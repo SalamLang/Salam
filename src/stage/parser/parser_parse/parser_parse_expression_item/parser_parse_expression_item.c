@@ -1,7 +1,6 @@
 #include "parser_parse_expression_item.h"
 
-ast_t* parser_parse_expression_item(parser_t* parser)
-{
+ast_t* parser_parse_expression_item(parser_t* parser) {
     DEBUG_ME;
     if (!parser) return NULL;
 

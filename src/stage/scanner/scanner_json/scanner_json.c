@@ -1,13 +1,11 @@
 #include <stage/scanner/scanner_json/scanner_json.h>
 
-char* scanner_json(scanner_t* scanner)
-{
+char* scanner_json(scanner_t* scanner) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(256);
     if (scanner == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else {
+    } else {
         buffer_append_char(temp, '{');
 
         // source

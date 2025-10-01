@@ -7,6 +7,6 @@
 // string
 #include <utility/string/string_replace_all_substrings/string_replace_all_substrings.h>
 
-char *string_arabic2persian(const char *arabic);
+char* string_arabic2persian(const char* arabic);
 
-#endif // _UTILITY_STRING_STRING_ARABIC2PERSIAN_STRING_ARABIC2PERSIAN_H_
+#endif  // _UTILITY_STRING_STRING_ARABIC2PERSIAN_STRING_ARABIC2PERSIAN_H_

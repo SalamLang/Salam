@@ -8,10 +8,9 @@
  * @returns {bool} True if the string is a valid UTF-8 sequence, false otherwise
  *
  */
-bool utf8_is_valid(const char *str)
-{
+bool utf8_is_valid(const char* str) {
     DEBUG_ME;
-    const unsigned char *bytes = (const unsigned char *)str;
+    const unsigned char* bytes = (const unsigned char*)str;
 
     while (*bytes) {
         if (*bytes <= 0x7F) {

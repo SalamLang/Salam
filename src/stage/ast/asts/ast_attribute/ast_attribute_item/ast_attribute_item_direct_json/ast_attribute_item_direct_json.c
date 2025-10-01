@@ -1,7 +1,6 @@
 #include <stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_direct_json/ast_attribute_item_direct_json.h>
 
-char* ast_attribute_item_direct_json(ast_attribute_item_t attribute_item)
-{
+char* ast_attribute_item_direct_json(ast_attribute_item_t attribute_item) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(10);
 

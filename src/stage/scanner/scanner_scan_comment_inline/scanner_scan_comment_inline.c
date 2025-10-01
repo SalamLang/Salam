@@ -1,7 +1,6 @@
 #include <stage/scanner/scanner_scan_comment_inline/scanner_scan_comment_inline.h>
 
-void scanner_scan_comment_inline(scanner_t* scanner)
-{
+void scanner_scan_comment_inline(scanner_t* scanner) {
     DEBUG_ME;
     SCANNER_NEXT;  // move past '/'
     SCANNER_NEXT_COLUMN;
@@ -9,8 +8,7 @@ void scanner_scan_comment_inline(scanner_t* scanner)
     while (scanner->index < scanner->length) {
         if (SCANNER_CURRENT == '\0') {
             break;
-        }
-        else if (SCANNER_CURRENT == '\n') {
+        } else if (SCANNER_CURRENT == '\n') {
             SCANNER_NEXT;
             SCANNER_NEXT_COLUMN;
             break;

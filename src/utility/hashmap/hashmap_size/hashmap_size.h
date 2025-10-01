@@ -5,4 +5,4 @@
 
 size_t hashmap_size(const hashmap_t* map);
 
-#endif // _UTILITY_HASHMAP_HASHMAP_SIZE_HASHMAP_SIZE_H_
+#endif  // _UTILITY_HASHMAP_HASHMAP_SIZE_HASHMAP_SIZE_H_

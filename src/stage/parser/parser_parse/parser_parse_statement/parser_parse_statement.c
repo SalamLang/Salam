@@ -1,7 +1,6 @@
 #include <stage/parser/parser_parse/parser_parse_statement/parser_parse_statement.h>
 
-ast_t* parser_parse_statement(parser_t* parser)
-{
+ast_t* parser_parse_statement(parser_t* parser) {
     DEBUG_ME;
     if (!parser) return NULL;
 
@@ -13,7 +12,9 @@ ast_t* parser_parse_statement(parser_t* parser)
         case TOKEN_TYPE_KEYWORD_IMPORT:
         case TOKEN_TYPE_KEYWORD_TYPE:
         case TOKEN_TYPE_KEYWORD_FN:
-            log_fatal("Cannot write this statement inside a sub block, you need to define it in the main block of the file");
+            log_fatal(
+                "Cannot write this statement inside a sub block, you need to "
+                "define it in the main block of the file");
             return NULL;
 
         case TOKEN_TYPE_KIND_INT:

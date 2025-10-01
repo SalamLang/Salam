@@ -1,7 +1,6 @@
 #include "ast_expression_call_destroy.h"
 
-void ast_expression_call_destroy(ast_expression_call_t* expression_call)
-{
+void ast_expression_call_destroy(ast_expression_call_t* expression_call) {
     DEBUG_ME;
     if (!expression_call) return;
 

@@ -2,7 +2,7 @@
 #define _UTILITY_MEMORY_MEMORY_REALLOC_MEMORY_REALLOC_H_
 
 #include <stddef.h>  // for size_t
-#include <stdlib.h> // for realloc
+#include <stdlib.h>  // for realloc
 
 // base
 #include <base.h>
@@ -12,4 +12,4 @@
 
 void* memory_realloc(void* ptr, size_t new_size);
 
-#endif // _UTILITY_MEMORY_MEMORY_REALLOC_MEMORY_REALLOC_H_
+#endif  // _UTILITY_MEMORY_MEMORY_REALLOC_MEMORY_REALLOC_H_

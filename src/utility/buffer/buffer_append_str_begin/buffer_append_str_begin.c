@@ -9,8 +9,7 @@
  * @returns {void}
  *
  */
-void buffer_append_str_begin(buffer_t *str, const char *prefix)
-{
+void buffer_append_str_begin(buffer_t* str, const char* prefix) {
     DEBUG_ME;
     size_t prefix_len = strlen(prefix);
 

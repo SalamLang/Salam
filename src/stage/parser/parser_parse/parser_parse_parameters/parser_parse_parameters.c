@@ -1,7 +1,6 @@
 #include <stage/parser/parser_parse/parser_parse_parameters/parser_parse_parameters.h>
 
-ast_t* parser_parse_parameters(parser_t* parser)
-{
+ast_t* parser_parse_parameters(parser_t* parser) {
     DEBUG_ME;
     if (!parser) return NULL;
 

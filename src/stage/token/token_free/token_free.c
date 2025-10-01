@@ -1,11 +1,9 @@
 #include <stage/token/token_free/token_free.h>
 
-void token_free(token_t* token)
-{
+void token_free(token_t* token) {
     // if (! token) return;
 
-    if (token->source != NULL)
-    {
+    if (token->source != NULL) {
         memory_destroy(token->source);
     }
 
@@ -21,8 +19,7 @@ void token_free(token_t* token)
 
     token->type = TOKEN_TYPE_UNKNOWN;
 
-    if (token->value != NULL)
-    {
+    if (token->value != NULL) {
         value_destroy(token->value);
     }
 

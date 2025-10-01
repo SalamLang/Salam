@@ -22,7 +22,7 @@ OBJ_FILES=""
 if [[ "$COMPILER" == "tcc" ]]; then
 	while IFS= read -r file; do
 		echo "Compiling $file ..."
-		if ! $COMPILER -c $CFLAGS "$file" -o "${file%.*}.o" 2> compile_error.tmp; then
+		if ! $COMPILER -c $CFLAGS "$file" -o "${file%.*}.o" 2>compile_error.tmp; then
 			echo "Compilation failed for $file:"
 			cat compile_error.tmp
 			rm -f compile_error.tmp
@@ -30,7 +30,7 @@ if [[ "$COMPILER" == "tcc" ]]; then
 		fi
 		rm -f compile_error.tmp
 		OBJ_FILES="$OBJ_FILES ${file%.*}.o"
-	done < "$C_FILES"
+	done <"$C_FILES"
 
 	echo "Linking..."
 	if ! $COMPILER -o "$SALAM_OUTPUT" $OBJ_FILES $LDFLAGS; then
@@ -68,7 +68,7 @@ beautify_json_if_valid() {
 			echo "Checking if $file is valid JSON..."
 			if jq empty "$file" >/dev/null 2>&1; then
 				echo "Beautifying $file using jq..."
-				jq . "$file" > "${file}.pretty" && mv "${file}.pretty" "$file"
+				jq . "$file" >"${file}.pretty" && mv "${file}.pretty" "$file"
 				echo "Beautification of $file complete."
 			else
 				echo "$file contains invalid JSON. Skipping beautification."

@@ -20,10 +20,10 @@ Welcome to Salam! We're glad you're interested in contributing to our open-sourc
 
 1. **Fork the Repository**: Create a copy of the project by forking the SalamLang/Salam repository on GitHub.
 
-2. **Clone Your Fork**: Clone the repository to your local machine using:
+2. **Clone Your Fork**: Clone the repository to your local machine by replacing `your-user-name` with your own:
 
    ```
-   git clone https://github.com/SalamLang/Salam.git
+   git clone https://github.com/your-user-name/Salam.git
    ```
 
 3. **Create a Branch**: Create a new branch for your contribution with a descriptive name, such as `feature/my-new-feature`.

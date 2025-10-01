@@ -83,7 +83,7 @@ To help maintain consistent code quality, we use the following formatting and li
 
 ### Commit Hooks
 
-We recommend using Git hooks or pre-commit hooks to automatically run formatters or linters before each commit. You can set this up with the following steps:
+We use [Git hooks](https://git-scm.com/book/ms/v2/Customizing-Git-Git-Hooks) or [pre-commit](https://pypi.org/project/pre-commit/) hooks to automatically run formatters or linters before each commit. You can set this up with the following steps:
 
 1. Install `pre-commit`:
 
@@ -95,6 +95,12 @@ We recommend using Git hooks or pre-commit hooks to automatically run formatters
 
    ```bash
    pre-commit install
+   ```
+
+3. Run all hooks against all files:
+
+   ```bash
+   pre-commit run --all-files
    ```
 
 ## Feedback and Support

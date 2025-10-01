@@ -88,7 +88,7 @@ We recommend using Git hooks or pre-commit hooks to automatically run formatters
 1. Install `pre-commit`:
 
    ```bash
-   pip install pre-commit
+   pip install -r requirements.txt
    ```
 
 2. Set up the hooks:

@@ -105,24 +105,17 @@ def run_program(executable: str, args: List[str]) -> bool:
         return False
 
 
-def beautify_json_if_valid(filepath: str) -> None:
-    path = Path(filepath)
-    if not path.exists():
-        logger.warning(f"{filepath} not found. Skipping beautification.")
-        return
-
+def format_with_biome(files: List[str]) -> None:
+    """Formats a list of files using Biome if available."""
     try:
-        with path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        with path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-
-        logger.info(f"Beautified {filepath} successfully.")
-    except json.JSONDecodeError as e:
-        logger.warning(f"{filepath} contains invalid JSON. Skipping. ({e})")
-    except Exception as e:
-        logger.error(f"Unexpected error while beautifying {filepath}: {e}")
+        # Check if biome is available before trying to run it
+        subprocess.run(["biome", "--version"], check=True, capture_output=True)
+        logger.info("Formatting JSON files with Biome...")
+        run_command(["biome", "format", "--write"] + files)
+        logger.info("JSON files formatted successfully.")
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        logger.warning("`biome` command not found or failed. Skipping JSON formatting.")
+        logger.warning("Please install Biome (https://biomejs.dev) for consistent formatting.")
 
 
 def clean_build(c_files: List[str]) -> None:
@@ -230,8 +223,7 @@ def main() -> None:
             program_succeeded = run_program(args.output, args.run_args)
 
         if args.beautify_json:
-            for json_file in JSON_FILES_TO_BEAUTIFY:
-                beautify_json_if_valid(json_file)
+            format_with_biome(JSON_FILES_TO_BEAUTIFY)
 
         if not program_succeeded:
             sys.exit(1)

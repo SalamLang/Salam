@@ -1,8 +1,8 @@
-# 🤝 Contributing Guide for SalamLang/Salam
+# Contributing Guide for SalamLang/Salam
 
 Welcome to Salam! We're glad you're interested in contributing to our open-source project. This guide will help you understand the contribution process and ensure your contributions are valuable and well-received.
 
-## 🌟 Ways to Contribute
+## Ways to Contribute
 
 1. **Code Contributions**: Fix bugs, add new features, or improve existing code. Please follow our coding conventions and guidelines when submitting code contributions.
 
@@ -16,7 +16,7 @@ Welcome to Salam! We're glad you're interested in contributing to our open-sourc
 
 6. **Community Support**: Assist others by answering questions, providing support, and sharing your expertise on mailing lists, forums, or chat channels.
 
-## 🚀 Getting Started
+## Getting Started
 
 1. **Fork the Repository**: Create a copy of the project by forking the SalamLang/Salam repository on GitHub.
 
@@ -50,7 +50,7 @@ Welcome to Salam! We're glad you're interested in contributing to our open-sourc
 
 8. **Submit a Pull Request**: Submit a pull request from your branch to the main repository, providing a description of your changes and their value.
 
-## 📝 Code Style and Guidelines
+## Code Style and Guidelines
 
 To maintain consistency and readability, please follow these coding conventions when contributing code:
 
@@ -59,7 +59,7 @@ To maintain consistency and readability, please follow these coding conventions 
 - Keep your changes focused and atomic. Avoid mixing unrelated changes in the same pull request.
 - Test your code thoroughly to ensure its functionality and prevent regressions.
 
-### 🛠️ Formatting Tools
+### Formatting Tools
 
 To help maintain consistent code quality, we use the following formatting and linting tools:
 
@@ -81,7 +81,7 @@ To help maintain consistent code quality, we use the following formatting and li
 
 - **Other Tools**: You may also use additional linting or static analysis tools, such as `cppcheck` or `valgrind`, to improve the efficiency and correctness of the code.
 
-### 🪝 Commit Hooks
+### Commit Hooks
 
 We use [Git hooks](https://git-scm.com/book/ms/v2/Customizing-Git-Git-Hooks) or [pre-commit](https://pypi.org/project/pre-commit/) hooks to automatically run formatters or linters before each commit. You can set this up with the following steps:
 
@@ -103,7 +103,7 @@ We use [Git hooks](https://git-scm.com/book/ms/v2/Customizing-Git-Git-Hooks) or 
    pre-commit run --all-files
    ```
 
-## 💬 Feedback and Support
+## Feedback and Support
 
 If you have any questions or need assistance, feel free to reach out to the project maintainers or the community. We're here to support each other in making Salam the best it can be.
 

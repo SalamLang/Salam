@@ -20,22 +20,16 @@ def clean_and_regenerate_guard(h_file_path, root):
     with open(h_file_path, "r", encoding="utf-8") as file:
         lines = file.readlines()
 
-    guard_define_line = None
-    guard_ifndef_line = None
-    endif_line = None
     inside_guard = False
 
     new_lines = []
     for i, line in enumerate(lines):
         if re.match(r"#\s*ifndef\s+_[A-Z0-9_]+", line):
-            guard_ifndef_line = i
             inside_guard = True
             continue
         elif inside_guard and re.match(r"#\s*define\s+_[A-Z0-9_]+", line):
-            guard_define_line = i
             continue
         elif inside_guard and re.match(r"#\s*endif\s*(//.*)?", line):
-            endif_line = i
             inside_guard = False
             continue
         elif not inside_guard:

@@ -98,7 +98,8 @@ def generate_base_all_header(h_files, output_path):
 
 
 def update_marked_block(content, marker_start, marker_end, body):
-    new_block = f"{marker_start}\n{body.rstrip(' \\')}\n{marker_end}"
+    backslash = " \\"
+    new_block = f"{marker_start}\n{body.rstrip(backslash)}\n{marker_end}"
     updated, count = re.subn(
         rf"{re.escape(marker_start)}.*?{re.escape(marker_end)}",
         new_block,

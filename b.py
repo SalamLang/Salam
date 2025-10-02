@@ -28,6 +28,7 @@ def run_command(cmd: List[str], capture_output: bool = False, timeout: Optional[
             )
             return result.stdout
         subprocess.run(cmd, check=True, timeout=timeout)
+        return None  # Explicit return for mypy
     except subprocess.CalledProcessError as e:
         logger.error(f"Command failed: {' '.join(cmd)}")
         if e.stdout:
@@ -143,7 +144,7 @@ def main() -> None:
     parser.add_argument(
         "--jobs",
         type=int,
-        default=os.cpu_count() * 3,
+        default=(os.cpu_count() or 1) * 3,  # fix: handle None properly
         help="Number of parallel compile jobs",
     )
     parser.add_argument(

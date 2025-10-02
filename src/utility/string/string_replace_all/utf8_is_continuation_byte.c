@@ -11,5 +11,5 @@
 bool utf8_is_continuation_byte(char c)
 {
     DEBUG_ME;
-    return (c & 0xC0) == 0x80;
+    return ((unsigned char)c & 0xC0) == 0x80;
 }

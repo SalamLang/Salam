@@ -21,7 +21,10 @@ logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 # ----------- Utility Functions -----------
 def run_command(
-    cmd: List[str], capture_output: bool = False, timeout: Optional[int] = None
+    cmd: List[str],
+    capture_output: bool = False,
+    timeout: Optional[int] = None,
+    exit_on_error: bool = True,
 ) -> Optional[str]:
     try:
         if capture_output:
@@ -37,10 +40,12 @@ def run_command(
             logger.error(e.stdout)
         if e.stderr:
             logger.error(e.stderr)
-        sys.exit(1)
+        if exit_on_error:
+            sys.exit(1)
     except subprocess.TimeoutExpired:
         logger.error(f"Command timed out: {''.join(cmd)}")
-        sys.exit(1)
+        if exit_on_error:
+            sys.exit(1)
 
 
 def file_hash(filepath: Path) -> str:
@@ -106,13 +111,13 @@ def run_program(executable: str, args: List[str]) -> bool:
 
 
 def format_with_biome(files: List[str]) -> None:
-    """Formats a list of files using Biome if available."""
+    """Formats a list of files using Biome if available, without halting the build on failure."""
     try:
         # Check if biome is available before trying to run it
         subprocess.run(["biome", "--version"], check=True, capture_output=True)
         logger.info("Formatting JSON files with Biome...")
-        run_command(["biome", "format", "--write"] + files)
-        logger.info("JSON files formatted successfully.")
+        run_command(["biome", "format", "--write"] + files, exit_on_error=False)
+        # The success message is now optimistic; run_command will log errors.
     except (FileNotFoundError, subprocess.CalledProcessError):
         logger.warning("`biome` command not found or failed. Skipping JSON formatting.")
         logger.warning("Please install Biome (https://biomejs.dev) for consistent formatting.")

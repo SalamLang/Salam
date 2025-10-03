@@ -88,7 +88,7 @@ We use [Git hooks](https://git-scm.com/book/ms/v2/Customizing-Git-Git-Hooks) or 
 1. Install `pre-commit`:
 
    ```bash
-   pip install -r requirements.txt
+   pip install -r requirements-dev.txt
    ```
 
 2. Set up the hooks:

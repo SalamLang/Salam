@@ -13,6 +13,12 @@ Unlock the joy of coding—accessible, intuitive, and culturally resonant.
 
 </div>
 
+[![Basic Checks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/test-git-clone.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/test-git-clone.yml)
+[![Dependabot Updates Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates)
+[![GitHub Pages Build Deployment Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment)
+[![Proselint Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/proselint.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/proselint.yml)
+[![Pull Request Labeler Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml)
+
 ---
 
 ## ✨ Introducing Salam Language

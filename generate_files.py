@@ -31,7 +31,7 @@ def clean_and_regenerate_guard(h_file_path, root):
         elif inside_guard and re.match(r"#\s*endif\s*(//.*)?", line):
             inside_guard = False
             continue
-        elif not inside_guard:
+        else:
             new_lines.append(line)
 
     guard = generate_guard_from_path(h_file_path, root)

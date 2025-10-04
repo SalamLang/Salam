@@ -817,23 +817,16 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	echo "+++ Compiling $< END at $$(date +'%T'), duration: $$((end_time - start_time)) seconds +++"
 
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR) $(TEST_OUTPUT)
 
-.PHONY: test
 test: $(BIN_TARGET)
 	@echo "Running test with input file"
 	@./$(BIN_TARGET) $(TEST_INPUT) > $(TEST_OUTPUT)
 
 # ---------- PRE-COMMIT ----------
-.PHONY: check ck
 check ck: checkinstall
-	@if ! command -v pre-commit >/dev/null 2>&1; then \
-		echo "Error: pre-commit is not installed. Please install it first."; \
-		exit 1; \
-	fi
 	pre-commit run --all-files
 
-.PHONY: checkinstall cki
 checkinstall cki:
 	@if ! command -v pre-commit >/dev/null 2>&1; then \
 		echo "Error: pre-commit is not installed. Please install it first."; \
@@ -841,18 +834,15 @@ checkinstall cki:
 	fi
 	pre-commit install
 
-.PHONY: checkupdate cku
 checkupdate cku: checkinstall
-	@if ! command -v pre-commit >/dev/null 2>&1; then \
-		echo "Error: pre-commit is not installed. Please install it first."; \
-		exit 1; \
-	fi
 	pre-commit autoupdate
 
-.PHONY: install i
 install i:
-	@if ! command -v pip >/dev/null 2>&1; then \
-		echo "Error: pip is not installed. Please install it first."; \
+	@if ! $(PYTHON) -m pip --version >/dev/null 2>&1; then \
+		echo "Error: pip is not available for $(PYTHON). Please install it first."; \
 		exit 1; \
 	fi
 	$(PYTHON) -m pip install -r requirements.txt
+
+# ---------- PHONY TARGETS ----------
+.PHONY: all clean test check ck checkinstall cki checkupdate cku install i

@@ -9,6 +9,9 @@ BIN_TARGET := $(BUILD_DIR)/$(TARGET)
 TEST_INPUT := input.salam
 TEST_OUTPUT := output.salam
 
+PYTHON := $(shell command -v python || command -v python3 || echo python)
+TEST_MAIN_FILE := test/tests.py
+
 # ---------- START FILES ----------
 SRCS := \
 	src/main.c \
@@ -821,4 +824,35 @@ test: $(BIN_TARGET)
 	@echo "Running test with input file"
 	@./$(BIN_TARGET) $(TEST_INPUT) > $(TEST_OUTPUT)
 
-.PHONY: all clean
+# ---------- PRE-COMMIT ----------
+.PHONY: check ck
+check ck: checkinstall
+	@if ! command -v pre-commit >/dev/null 2>&1; then \
+		echo "Error: pre-commit is not installed. Please install it first."; \
+		exit 1; \
+	fi
+	pre-commit run --all-files
+
+.PHONY: checkinstall cki
+checkinstall cki:
+	@if ! command -v pre-commit >/dev/null 2>&1; then \
+		echo "Error: pre-commit is not installed. Please install it first."; \
+		exit 1; \
+	fi
+	pre-commit install
+
+.PHONY: checkupdate cku
+checkupdate cku: checkinstall
+	@if ! command -v pre-commit >/dev/null 2>&1; then \
+		echo "Error: pre-commit is not installed. Please install it first."; \
+		exit 1; \
+	fi
+	pre-commit autoupdate
+
+.PHONY: install i
+install i:
+	@if ! command -v pip >/dev/null 2>&1; then \
+		echo "Error: pip is not installed. Please install it first."; \
+		exit 1; \
+	fi
+	$(PYTHON) -m pip install -r requirements.txt

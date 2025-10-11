@@ -2,6 +2,7 @@
 
 char* parser_json(parser_t* parser)
 {
+    (void)parser; // Suppress unused parameter warning
     buffer_t* temp = buffer_create(24);
 
     // TODO

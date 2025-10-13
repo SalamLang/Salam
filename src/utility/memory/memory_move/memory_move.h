@@ -1,5 +1,5 @@
-#ifndef _UTILITY_MEMORY_MEMORY_MOVE_MEMORY_MOVE_H_
-#define _UTILITY_MEMORY_MEMORY_MOVE_MEMORY_MOVE_H_
+#ifndef _SRC_UTILITY_MEMORY_MEMORY_MOVE_MEMORY_MOVE_H_
+#define _SRC_UTILITY_MEMORY_MEMORY_MOVE_MEMORY_MOVE_H_
 
 #include <stddef.h>  // for size_t
 #include <string.h> // for memmove
@@ -12,4 +12,4 @@
 
 void memory_move(void* dest, const void* src, size_t size);
 
-#endif // _UTILITY_MEMORY_MEMORY_MOVE_MEMORY_MOVE_H_
+#endif // _SRC_UTILITY_MEMORY_MEMORY_MOVE_MEMORY_MOVE_H_

@@ -1,5 +1,5 @@
-#ifndef _STAGE_TOKEN_TYPE_H_
-#define _STAGE_TOKEN_TYPE_H_
+#ifndef _SRC_STAGE_TOKEN_TYPE_H_
+#define _SRC_STAGE_TOKEN_TYPE_H_
 
 // enum token_type_t;
 // enum token_operator_type_t;
@@ -131,4 +131,4 @@ typedef struct token_t
     value_t* value;                       // Pointer to the value of the token
 } token_t;
 
-#endif // _STAGE_TOKEN_TYPE_H_
+#endif // _SRC_STAGE_TOKEN_TYPE_H_

@@ -1,5 +1,5 @@
-#ifndef _UTILITY_HASHMAP_HASHMAP_CREATE_HASHMAP_CREATE_H_
-#define _UTILITY_HASHMAP_HASHMAP_CREATE_HASHMAP_CREATE_H_
+#ifndef _SRC_UTILITY_HASHMAP_HASHMAP_CREATE_HASHMAP_CREATE_H_
+#define _SRC_UTILITY_HASHMAP_HASHMAP_CREATE_HASHMAP_CREATE_H_
 
 #include <utility/hashmap/type.h>
 #include <utility/memory/memory_destroy/memory_destroy.h>
@@ -11,4 +11,4 @@
 
 hashmap_t* hashmap_create(size_t capacity, void (*free_value)(void*));
 
-#endif // _UTILITY_HASHMAP_HASHMAP_CREATE_HASHMAP_CREATE_H_
+#endif // _SRC_UTILITY_HASHMAP_HASHMAP_CREATE_HASHMAP_CREATE_H_

@@ -1,3 +1,6 @@
+#ifndef _SRC_BASE_H_
+#define _SRC_BASE_H_
+
 /**
  * ---------------------------------------------------------------------------
  * Salam Programming Language
@@ -21,8 +24,6 @@
  * ---------------------------------------------------------------------------
  */
 
-#ifndef _BASE_H_
-#define _BASE_H_
 
 // #ifdef __EMSCRIPTEN__
 // #include <emscripten/emscripten.h>
@@ -30,7 +31,6 @@
 
 #define cast(TYPE, VALUE) ((TYPE)VALUE)
 
-#define _CRT_NONSTDC_NO_DEPRECATE
 
 #define GRAY "\033[90m"
 #define BLACK "\033[30m"
@@ -65,4 +65,4 @@
 
 #include <base_all.h>
 
-#endif
+#endif // _SRC_BASE_H_

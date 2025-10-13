@@ -1,5 +1,5 @@
-#ifndef _STAGE_PARSER_PARSER_LOG_PARSER_LOG_H_
-#define _STAGE_PARSER_PARSER_LOG_PARSER_LOG_H_
+#ifndef _SRC_STAGE_PARSER_PARSER_LOG_PARSER_LOG_H_
+#define _SRC_STAGE_PARSER_PARSER_LOG_PARSER_LOG_H_
 
 // base
 #include <base.h>
@@ -12,4 +12,4 @@
 
 void parser_log(parser_t* parser);
 
-#endif // _STAGE_PARSER_PARSER_LOG_PARSER_LOG_H_
+#endif // _SRC_STAGE_PARSER_PARSER_LOG_PARSER_LOG_H_

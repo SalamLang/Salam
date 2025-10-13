@@ -1,5 +1,5 @@
-#ifndef _UTILITY_ARRAY_ARRAY_APPEND_ARRAY_APPEND_H_
-#define _UTILITY_ARRAY_ARRAY_APPEND_ARRAY_APPEND_H_
+#ifndef _SRC_UTILITY_ARRAY_ARRAY_APPEND_ARRAY_APPEND_H_
+#define _SRC_UTILITY_ARRAY_ARRAY_APPEND_ARRAY_APPEND_H_
 
 // array
 #include <utility/array/type.h>
@@ -7,4 +7,4 @@
 
 int array_append(array_t* array, void* item);
 
-#endif // _UTILITY_ARRAY_ARRAY_APPEND_ARRAY_APPEND_H_
+#endif // _SRC_UTILITY_ARRAY_ARRAY_APPEND_ARRAY_APPEND_H_

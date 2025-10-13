@@ -1,5 +1,5 @@
-#ifndef _STAGE_PARSER_PARSER_HAS_PARSER_HAS_H_
-#define _STAGE_PARSER_PARSER_HAS_PARSER_HAS_H_
+#ifndef _SRC_STAGE_PARSER_PARSER_HAS_PARSER_HAS_H_
+#define _SRC_STAGE_PARSER_PARSER_HAS_PARSER_HAS_H_
 
 #include <stdbool.h> // for bool, true, false
 
@@ -17,4 +17,4 @@
 
 bool parser_has(parser_t* parser, token_type_t type);
 
-#endif // _STAGE_PARSER_PARSER_HAS_PARSER_HAS_H_
+#endif // _SRC_STAGE_PARSER_PARSER_HAS_PARSER_HAS_H_

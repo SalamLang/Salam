@@ -1,5 +1,5 @@
-#ifndef _UTILITY_FILE_FILE_SIZE_FILE_SIZE_H_
-#define _UTILITY_FILE_FILE_SIZE_FILE_SIZE_H_
+#ifndef _SRC_UTILITY_FILE_FILE_SIZE_FILE_SIZE_H_
+#define _SRC_UTILITY_FILE_FILE_SIZE_FILE_SIZE_H_
 
 #include <stdio.h> // for FILE, fopen, fclose, fseek, ftell
 
@@ -11,4 +11,4 @@
 
 long file_size(const char* file_path);
 
-#endif // _UTILITY_FILE_FILE_SIZE_FILE_SIZE_H_
+#endif // _SRC_UTILITY_FILE_FILE_SIZE_FILE_SIZE_H_

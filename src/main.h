@@ -1,5 +1,5 @@
-#ifndef _MAIN_H_
-#define _MAIN_H_
+#ifndef _SRC_MAIN_H_
+#define _SRC_MAIN_H_
 
 #include <stdio.h> // for printf
 
@@ -46,4 +46,4 @@
 
 int main(int argc, char** argv);
 
-#endif // _MAIN_H_
+#endif // _SRC_MAIN_H_

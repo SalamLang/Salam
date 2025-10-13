@@ -1,5 +1,5 @@
-#ifndef _UTILITY_LOG_LOG_ERROR_LOG_ERROR_H_
-#define _UTILITY_LOG_LOG_ERROR_LOG_ERROR_H_
+#ifndef _SRC_UTILITY_LOG_LOG_ERROR_LOG_ERROR_H_
+#define _SRC_UTILITY_LOG_LOG_ERROR_LOG_ERROR_H_
 
 #include <stdio.h> // for vfprintf
 #include <stdarg.h> // for va_list, va_start, va_end
@@ -7,4 +7,4 @@
 
 void log_error(const char* format, ...);
 
-#endif // _UTILITY_LOG_LOG_ERROR_LOG_ERROR_H_
+#endif // _SRC_UTILITY_LOG_LOG_ERROR_LOG_ERROR_H_

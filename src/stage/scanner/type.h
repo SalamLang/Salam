@@ -1,5 +1,5 @@
-#ifndef _STAGE_SCANNER_TYPE_H_
-#define _STAGE_SCANNER_TYPE_H_
+#ifndef _SRC_STAGE_SCANNER_TYPE_H_
+#define _SRC_STAGE_SCANNER_TYPE_H_
 
 #include <stddef.h> // for size_t
 
@@ -57,4 +57,4 @@ typedef struct scanner_t
 
 #define SCANNER_PUSH_TOKEN(TOKEN) array_append(scanner->tokens, TOKEN)
 
-#endif // _STAGE_SCANNER_TYPE_H_
+#endif // _SRC_STAGE_SCANNER_TYPE_H_

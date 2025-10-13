@@ -1,5 +1,5 @@
-#ifndef _STAGE_AST_TYPE_H_
-#define _STAGE_AST_TYPE_H_
+#ifndef _SRC_STAGE_AST_TYPE_H_
+#define _SRC_STAGE_AST_TYPE_H_
 
 #include <stddef.h>
 
@@ -458,4 +458,4 @@ typedef struct ast_t {
     } raw;
 } ast_t;
 
-#endif // _STAGE_AST_TYPE_H_
+#endif // _SRC_STAGE_AST_TYPE_H_

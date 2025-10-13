@@ -1,5 +1,5 @@
-#ifndef _STAGE_GENERATOR_TYPE_H_
-#define _STAGE_GENERATOR_TYPE_H_
+#ifndef _SRC_STAGE_GENERATOR_TYPE_H_
+#define _SRC_STAGE_GENERATOR_TYPE_H_
 
 #include <stddef.h> // for size_t
 
@@ -16,4 +16,4 @@ typedef struct
     size_t ident;
 } generator_t;
 
-#endif
+#endif // _SRC_STAGE_GENERATOR_TYPE_H_

@@ -1,5 +1,5 @@
-#ifndef _STAGE_VALUE_VALUE_JSON_VALUE_JSON_H_
-#define _STAGE_VALUE_VALUE_JSON_VALUE_JSON_H_
+#ifndef _SRC_STAGE_VALUE_VALUE_JSON_VALUE_JSON_H_
+#define _SRC_STAGE_VALUE_VALUE_JSON_VALUE_JSON_H_
 
 // base
 #include <base.h>
@@ -27,4 +27,4 @@
 
 char* value_json(const value_t* value);
 
-#endif // _STAGE_VALUE_VALUE_JSON_VALUE_JSON_H_
+#endif // _SRC_STAGE_VALUE_VALUE_JSON_VALUE_JSON_H_

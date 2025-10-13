@@ -1,5 +1,5 @@
-#ifndef _STAGE_AST_AST_LOG_AST_LOG_H_
-#define _STAGE_AST_AST_LOG_AST_LOG_H_
+#ifndef _SRC_STAGE_AST_AST_LOG_AST_LOG_H_
+#define _SRC_STAGE_AST_AST_LOG_AST_LOG_H_
 
 // base
 #include <base.h>
@@ -9,4 +9,4 @@
 
 void ast_log(ast_t* ast);
 
-#endif // _STAGE_AST_AST_LOG_AST_LOG_H_
+#endif // _SRC_STAGE_AST_AST_LOG_AST_LOG_H_

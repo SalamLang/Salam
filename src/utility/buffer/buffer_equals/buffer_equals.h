@@ -1,5 +1,5 @@
-#ifndef _UTILITY_BUFFER_BUFFER_EQUALS_BUFFER_EQUALS_H_
-#define _UTILITY_BUFFER_BUFFER_EQUALS_BUFFER_EQUALS_H_
+#ifndef _SRC_UTILITY_BUFFER_BUFFER_EQUALS_BUFFER_EQUALS_H_
+#define _SRC_UTILITY_BUFFER_BUFFER_EQUALS_BUFFER_EQUALS_H_
 
 #include <stdbool.h> // for bool
 #include <string.h> // for strcmp
@@ -12,4 +12,4 @@
 
 bool buffer_equals(buffer_t *str1, buffer_t *str2);
 
-#endif // _UTILITY_BUFFER_BUFFER_EQUALS_BUFFER_EQUALS_H_
+#endif // _SRC_UTILITY_BUFFER_BUFFER_EQUALS_BUFFER_EQUALS_H_

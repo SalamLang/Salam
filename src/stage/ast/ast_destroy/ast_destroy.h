@@ -1,5 +1,5 @@
-#ifndef _STAGE_AST_AST_DESTROY_AST_DESTROY_H_
-#define _STAGE_AST_AST_DESTROY_AST_DESTROY_H_
+#ifndef _SRC_STAGE_AST_AST_DESTROY_AST_DESTROY_H_
+#define _SRC_STAGE_AST_AST_DESTROY_AST_DESTROY_H_
 
 // base
 #include <base.h>
@@ -51,4 +51,4 @@
 
 void ast_destroy(ast_t* ast);
 
-#endif // _STAGE_AST_AST_DESTROY_AST_DESTROY_H_
+#endif // _SRC_STAGE_AST_AST_DESTROY_AST_DESTROY_H_

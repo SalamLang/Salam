@@ -1,5 +1,5 @@
-#ifndef _STAGE_PARSER_PARSER_EAT_PARSER_EAT_H_
-#define _STAGE_PARSER_PARSER_EAT_PARSER_EAT_H_
+#ifndef _SRC_STAGE_PARSER_PARSER_EAT_PARSER_EAT_H_
+#define _SRC_STAGE_PARSER_PARSER_EAT_PARSER_EAT_H_
 
 // base
 #include <base.h>
@@ -16,4 +16,4 @@
 
 token_t* parser_eat(parser_t* parser);
 
-#endif // _STAGE_PARSER_PARSER_EAT_PARSER_EAT_H_
+#endif // _SRC_STAGE_PARSER_PARSER_EAT_PARSER_EAT_H_

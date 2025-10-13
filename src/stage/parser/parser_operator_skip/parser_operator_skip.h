@@ -1,5 +1,5 @@
-#ifndef _STAGE_PARSER_PARSER_SKIP_PARSER_SKIP_H_
-#define _STAGE_PARSER_PARSER_SKIP_PARSER_SKIP_H_
+#ifndef _SRC_STAGE_PARSER_PARSER_OPERATOR_SKIP_PARSER_OPERATOR_SKIP_H_
+#define _SRC_STAGE_PARSER_PARSER_OPERATOR_SKIP_PARSER_OPERATOR_SKIP_H_
 
 #include <stdbool.h> // for bool, true, false
 
@@ -17,4 +17,4 @@
 
 bool parser_operator_skip(parser_t* parser, token_operator_type_t operator_type);
 
-#endif // _STAGE_PARSER_PARSER_SKIP_PARSER_SKIP_H_
+#endif // _SRC_STAGE_PARSER_PARSER_OPERATOR_SKIP_PARSER_OPERATOR_SKIP_H_

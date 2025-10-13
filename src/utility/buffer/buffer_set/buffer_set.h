@@ -1,5 +1,5 @@
-#ifndef _UTILITY_BUFFER_BUFFER_SET_BUFFER_SET_H_
-#define _UTILITY_BUFFER_BUFFER_SET_BUFFER_SET_H_
+#ifndef _SRC_UTILITY_BUFFER_BUFFER_SET_BUFFER_SET_H_
+#define _SRC_UTILITY_BUFFER_BUFFER_SET_BUFFER_SET_H_
 
 // base
 #include <base.h>
@@ -10,4 +10,4 @@
 
 void buffer_set(buffer_t *str, buffer_t *value);
 
-#endif // _UTILITY_BUFFER_BUFFER_SET_BUFFER_SET_H_
+#endif // _SRC_UTILITY_BUFFER_BUFFER_SET_BUFFER_SET_H_

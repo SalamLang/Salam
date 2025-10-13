@@ -1,5 +1,5 @@
-#ifndef _UTILITY_BUFFER_BUFFER_COMPARE_BUFFER_COMPARE_H_
-#define _UTILITY_BUFFER_BUFFER_COMPARE_BUFFER_COMPARE_H_
+#ifndef _SRC_UTILITY_BUFFER_BUFFER_COMPARE_BUFFER_COMPARE_H_
+#define _SRC_UTILITY_BUFFER_BUFFER_COMPARE_BUFFER_COMPARE_H_
 
 #include <string.h> // for strcmp
 #include <stdbool.h> // for bool
@@ -12,4 +12,4 @@
 
 bool buffer_compare(buffer_t *str1, buffer_t *str2);
 
-#endif // _UTILITY_BUFFER_BUFFER_COMPARE_BUFFER_COMPARE_H_
+#endif // _SRC_UTILITY_BUFFER_BUFFER_COMPARE_BUFFER_COMPARE_H_

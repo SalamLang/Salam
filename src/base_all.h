@@ -1,5 +1,6 @@
-#ifndef _BASE_ALL_H_
-#define _BASE_ALL_H_
+#ifndef _SRC_BASE_ALL_H_
+#define _SRC_BASE_ALL_H_
+
 // Auto-generated header including all .h files
 
 #include <stage/ast/ast_alloc/ast_alloc.h>
@@ -403,4 +404,4 @@
 #include <utility/utf8/utf8_is_valid/utf8_is_valid.h>
 #include <utility/utf8/utf8_strlen/utf8_strlen.h>
 
-#endif // _BASE_ALL_H_
+#endif // _SRC_BASE_ALL_H_

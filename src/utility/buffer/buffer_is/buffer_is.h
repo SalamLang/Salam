@@ -1,5 +1,5 @@
-#ifndef _UTILITY_BUFFER_BUFFER_IS_BUFFER_IS_H_
-#define _UTILITY_BUFFER_BUFFER_IS_BUFFER_IS_H_
+#ifndef _SRC_UTILITY_BUFFER_BUFFER_IS_BUFFER_IS_H_
+#define _SRC_UTILITY_BUFFER_BUFFER_IS_BUFFER_IS_H_
 
 #include <stdbool.h> // for bool
 #include <string.h> // for strcmp
@@ -15,4 +15,4 @@
 
 bool buffer_is(buffer_t *str1, const char *str2);
 
-#endif // _UTILITY_BUFFER_BUFFER_IS_BUFFER_IS_H_
+#endif // _SRC_UTILITY_BUFFER_BUFFER_IS_BUFFER_IS_H_

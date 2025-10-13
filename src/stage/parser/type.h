@@ -1,5 +1,5 @@
-#ifndef _STAGE_PARSER_TYPE_H_
-#define _STAGE_PARSER_TYPE_H_
+#ifndef _SRC_STAGE_PARSER_TYPE_H_
+#define _SRC_STAGE_PARSER_TYPE_H_
 
 #include <stddef.h> // for size_t
 
@@ -27,4 +27,4 @@ typedef struct parser_t
 #define PARSER_NEXT parser->index++
 #define PARSER_PREV parser->index--
 
-#endif // _STAGE_PARSER_TYPE_H_
+#endif // _SRC_STAGE_PARSER_TYPE_H_

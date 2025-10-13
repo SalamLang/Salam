@@ -1,5 +1,5 @@
-#ifndef _UTILITY_ARRAY_ARRAY_PREPEND_ARRAY_PREPEND_H_
-#define _UTILITY_ARRAY_ARRAY_PREPEND_ARRAY_PREPEND_H_
+#ifndef _SRC_UTILITY_ARRAY_ARRAY_PREPEND_ARRAY_PREPEND_H_
+#define _SRC_UTILITY_ARRAY_ARRAY_PREPEND_ARRAY_PREPEND_H_
 
 #include <utility/array/type.h>
 #include <utility/array/array_resize/array_resize.h>
@@ -7,4 +7,4 @@
 
 int array_prepend(array_t* array, void* item);
 
-#endif // _UTILITY_ARRAY_ARRAY_PREPEND_ARRAY_PREPEND_H_
+#endif // _SRC_UTILITY_ARRAY_ARRAY_PREPEND_ARRAY_PREPEND_H_

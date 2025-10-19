@@ -237,6 +237,7 @@ typedef struct
 typedef struct
 {
     // TODO
+    char dummy;
 } ast_kind_union_t;
 
 typedef struct
@@ -389,7 +390,7 @@ typedef struct
     size_t value_count;
 } ast_arguments_t;
 
-typedef struct ast_t {
+struct ast_t {
     ast_base_t base;
     union {
         // program
@@ -456,6 +457,6 @@ typedef struct ast_t {
         ast_statement_variable_decl_t statement_variable_decl_value;
         ast_statement_expression_t statement_expression_value;
     } raw;
-} ast_t;
+};
 
 #endif // _STAGE_AST_TYPE_H_

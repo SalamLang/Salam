@@ -1,5 +1,5 @@
-#ifndef _STAGE_PARSER_PARSER_JSON_PARSER_JSON_H_
-#define _STAGE_PARSER_PARSER_JSON_PARSER_JSON_H_
+#ifndef _SRC_STAGE_PARSER_PARSER_JSON_PARSER_JSON_H_
+#define _SRC_STAGE_PARSER_PARSER_JSON_PARSER_JSON_H_
 
 // base
 #include <base.h>
@@ -28,4 +28,4 @@
 
 char* parser_json(parser_t* parser);
 
-#endif // _STAGE_PARSER_PARSER_JSON_PARSER_JSON_H_
+#endif // _SRC_STAGE_PARSER_PARSER_JSON_PARSER_JSON_H_

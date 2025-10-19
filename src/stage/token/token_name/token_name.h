@@ -1,5 +1,5 @@
-#ifndef _STAGE_TOKEN_TOKEN_NAME_TOKEN_NAME_H_
-#define _STAGE_TOKEN_TOKEN_NAME_TOKEN_NAME_H_
+#ifndef _SRC_STAGE_TOKEN_TOKEN_NAME_TOKEN_NAME_H_
+#define _SRC_STAGE_TOKEN_TOKEN_NAME_TOKEN_NAME_H_
 
 // base
 #include <base.h>
@@ -9,4 +9,4 @@
 
 const char* token_name(token_type_t type);
 
-#endif // _STAGE_TOKEN_TOKEN_NAME_TOKEN_NAME_H_
+#endif // _SRC_STAGE_TOKEN_TOKEN_NAME_TOKEN_NAME_H_

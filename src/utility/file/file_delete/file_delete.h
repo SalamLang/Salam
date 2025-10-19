@@ -1,5 +1,5 @@
-#ifndef _UTILITY_FILE_FILE_DELETE_FILE_DELETE_H_
-#define _UTILITY_FILE_FILE_DELETE_FILE_DELETE_H_
+#ifndef _SRC_UTILITY_FILE_FILE_DELETE_FILE_DELETE_H_
+#define _SRC_UTILITY_FILE_FILE_DELETE_FILE_DELETE_H_
 
 #include <stdio.h> // for FILE, fputs
 #include <stdlib.h> // for fopen, fclose
@@ -7,4 +7,4 @@
 
 bool file_delete(const char* path);
 
-#endif // _UTILITY_FILE_FILE_DELETE_FILE_DELETE_H_
+#endif // _SRC_UTILITY_FILE_FILE_DELETE_FILE_DELETE_H_

@@ -1,5 +1,5 @@
-#ifndef _STAGE_TOKEN_TOKEN_LOG_TOKEN_LOG_H_
-#define _STAGE_TOKEN_TOKEN_LOG_TOKEN_LOG_H_
+#ifndef _SRC_STAGE_TOKEN_TOKEN_LOG_TOKEN_LOG_H_
+#define _SRC_STAGE_TOKEN_TOKEN_LOG_TOKEN_LOG_H_
 
 // base
 #include <base.h>
@@ -17,4 +17,4 @@
 
 void token_log(token_t* token);
 
-#endif // _STAGE_TOKEN_TOKEN_LOG_TOKEN_LOG_H_
+#endif // _SRC_STAGE_TOKEN_TOKEN_LOG_TOKEN_LOG_H_

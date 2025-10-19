@@ -1,5 +1,5 @@
-#ifndef _UTILITY_STRING_STRING_ENDS_STRING_ENDS_H_
-#define _UTILITY_STRING_STRING_ENDS_STRING_ENDS_H_
+#ifndef _SRC_UTILITY_STRING_STRING_ENDS_STRING_ENDS_H_
+#define _SRC_UTILITY_STRING_STRING_ENDS_STRING_ENDS_H_
 
 #include <stddef.h> // for size_t
 #include <string.h> // for strncmp
@@ -13,4 +13,4 @@
 
 bool string_ends(const char *source, const char *search);
 
-#endif // _UTILITY_STRING_STRING_ENDS_STRING_ENDS_H_
+#endif // _SRC_UTILITY_STRING_STRING_ENDS_STRING_ENDS_H_

@@ -1,5 +1,5 @@
-#ifndef _UTILITY_UTF8_UTF8_STRLEN_UTF8_STRLEN_H_
-#define _UTILITY_UTF8_UTF8_STRLEN_UTF8_STRLEN_H_
+#ifndef _SRC_UTILITY_UTF8_UTF8_STRLEN_UTF8_STRLEN_H_
+#define _SRC_UTILITY_UTF8_UTF8_STRLEN_UTF8_STRLEN_H_
 
 #include <wchar.h> // for mbrtowc, MB_CUR_MAX
 #include <stddef.h> // for size_t
@@ -16,4 +16,4 @@
 
 size_t utf8_strlen(const char *str);
 
-#endif // _UTILITY_UTF8_UTF8_STRLEN_UTF8_STRLEN_H_
+#endif // _SRC_UTILITY_UTF8_UTF8_STRLEN_UTF8_STRLEN_H_

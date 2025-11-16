@@ -5,6 +5,10 @@ void ast_program_destroy(ast_program_t* program)
     DEBUG_ME;
     // if (!program) return;
 
+    if (program->layout != NULL) {
+        ast_layout_destroy(program->layout);
+    }
+
     if (program->variable_declarations != NULL) {
         array_destroy(program->variable_declarations);
     }

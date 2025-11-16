@@ -13,5 +13,8 @@ void scanner_destroy(scanner_t* scanner)
         memory_destroy(scanner->source);
     }
 
+    // Not allocated: file_name
+    // Not allocated: directory
+
     memory_destroy(scanner);
 }

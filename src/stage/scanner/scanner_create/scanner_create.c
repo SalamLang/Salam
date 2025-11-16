@@ -22,5 +22,7 @@ scanner_t* scanner_create(
 
     scanner->tokens = array_create((array_destroy_t)token_free);
 
+    printf("===>%s\n", scanner->source);
+
     return scanner;
 }

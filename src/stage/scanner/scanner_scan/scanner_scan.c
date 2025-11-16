@@ -4,6 +4,7 @@ void scanner_scan(scanner_t* scanner)
 {
     DEBUG_ME;
     char c;
+    printf("===>%s\n", scanner->source);
     while ((c = SCANNER_CURRENT) && c != '\0' &&
            scanner->index < scanner->length) {
         size_t num_bytes;

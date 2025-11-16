@@ -16,7 +16,9 @@ void scanner_scan_identifier(scanner_t *scanner, char *uc)
 
     buffer_append_str(value, uc);
 
+    printf("first uc is %s\n", uc);
     while (SCANNER_CURRENT != '\0') {
+        printf("---> at index %zu char is %c\n", scanner->index, SCANNER_CURRENT);
         size_t num_bytes;
         uc = utf8_char_decode(scanner->source, &scanner->index, &num_bytes);
 
@@ -28,6 +30,7 @@ void scanner_scan_identifier(scanner_t *scanner, char *uc)
             break;
         }
 
+        printf("uc is %s\n", uc);
         buffer_append_str(value, uc);
 
         memory_destroy(uc);

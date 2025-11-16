@@ -13,8 +13,14 @@
 // token
 #include <stage/token/type.h>
 
+typedef enum {
+    SCANNER_TYPE_PROGRAM,
+    SCANNER_TYPE_LAYOUT,
+} scanner_type_t;
+
 typedef struct scanner_t
 {
+    scanner_type_t scanner_type;
     char* source;                   // Pointer to the source code
     char* directory;                // Directory of the source code
     char* file_name;                // File name of the source code

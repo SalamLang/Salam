@@ -9,6 +9,8 @@ scanner_t* scanner_create(
     DEBUG_ME;
     scanner_t* scanner = memory_allocation(sizeof(scanner_t));
 
+    scanner->scanner_type = SCANNER_TYPE_LAYOUT; // For now: DSL is web
+
     scanner->source = source;
     scanner->directory = directory;
     scanner->file_name = file_name;

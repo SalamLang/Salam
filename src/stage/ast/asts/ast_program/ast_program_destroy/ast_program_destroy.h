@@ -12,6 +12,7 @@
 // ast
 #include <stage/ast/type.h>
 #include <stage/ast/ast_destroy/ast_destroy.h>
+#include <stage/ast/ast_layout/ast_layout_destroy/ast_layout_destroy.h>
 
 void ast_program_destroy(ast_program_t* program);
 

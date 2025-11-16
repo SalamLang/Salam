@@ -353,13 +353,13 @@ typedef struct
 typedef struct
 {
     token_t* node_name;
-    array_t* attributes;
-    ast_layout_children_t* children;
+    array_t* attributes; // ast_t*(ast_attribute_item_t)
+    ast_t* children; // ast_t*(ast_layout_children_t)
 } ast_layout_node_t;
 
 typedef struct
 {
-    ast_layout_node_t* root;
+    ast_t* root; // ast_t*(ast_layout_node_t)
 } ast_layout_t;
 
 typedef struct

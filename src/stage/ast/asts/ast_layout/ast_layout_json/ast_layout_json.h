@@ -1,0 +1,9 @@
+#ifndef _SRC_STAGE_AST_ASTS_AST_LAYOUT_AST_LAYOUT_JSON_AST_LAYOUT_JSON_H_
+#define _SRC_STAGE_AST_ASTS_AST_LAYOUT_AST_LAYOUT_JSON_AST_LAYOUT_JSON_H_
+
+// base
+#include <base.h>
+
+char* ast_layout_json(ast_layout_t* ast_layout);
+
+#endif // _SRC_STAGE_AST_ASTS_AST_LAYOUT_AST_LAYOUT_JSON_AST_LAYOUT_JSON_H_

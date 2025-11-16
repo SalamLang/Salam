@@ -69,6 +69,8 @@ typedef enum ast_node_type_t {
     AST_TYPE_TYPE, // data type
 
     AST_TYPE_PROGRAM,
+    
+    AST_TYPE_LAYOUT,
 
     AST_TYPE_PACKAGE,
 
@@ -344,6 +346,25 @@ typedef struct
 
 typedef struct
 {
+    array_t* values; // ast_t*(ast_layout_node_t)
+    size_t value_count;
+} ast_layout_children_t;
+
+typedef struct
+{
+    token_t* node_name;
+    array_t* attributes;
+    ast_layout_children_t* children;
+} ast_layout_node_t;
+
+typedef struct
+{
+    ast_layout_node_t* root;
+} ast_layout_t;
+
+typedef struct
+{
+    ast_layout_t* layout;
     array_t* variable_declarations; // ast_t*(ast_variable_decl_t)
     array_t* function_declarations; // ast_t*(ast_function_decl_t)
     size_t variable_declaration_count;

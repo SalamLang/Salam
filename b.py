@@ -30,7 +30,7 @@ def run_command(
             )
             return result.stdout
         subprocess.run(cmd, check=True, timeout=timeout)
-        return None  # Explicit return for mypy
+        return None
     except subprocess.CalledProcessError as e:
         logger.error(f"Command failed: {' '.join(cmd)}")
         if e.stdout:
@@ -91,17 +91,24 @@ def link_objects(
 
 
 def run_program(executable: str, args: List[str]) -> bool:
-    exec_path = Path(f"./{executable}")
+    if sys.platform.startswith("win") and not executable.lower().endswith(".exe"):
+        executable += ".exe"
+
+    exec_path = Path(executable)
     if not exec_path.exists():
-        logger.error(f"Executable {executable} not found. Cannot run program.")
+        logger.error(f"Executable {exec_path} not found. Cannot run program.")
         return False
+
+    if not sys.platform.startswith("win"):
+        executable = "./" + executable
     logger.info(f"Running program: {executable} {' '.join(args)}")
+
     try:
-        subprocess.run([str(exec_path)] + args, check=True)
+        subprocess.run([executable, *args], check=True)
         logger.info("Program executed successfully.")
         return True
-    except subprocess.CalledProcessError:
-        logger.error("Program execution failed!")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Program execution failed: {e}")
         return False
 
 

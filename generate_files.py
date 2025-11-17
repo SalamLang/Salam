@@ -20,39 +20,40 @@ def clean_and_regenerate_guard(h_file_path, root):
     with open(h_file_path, "r", encoding="utf-8") as file:
         lines = file.readlines()
 
-    guard_define_line = None
-    guard_ifndef_line = None
-    endif_line = None
+    stripped = []
     inside_guard = False
 
-    new_lines = []
-    for i, line in enumerate(lines):
-        if re.match(r"#\s*ifndef\s+_[A-Z0-9_]+", line):
-            guard_ifndef_line = i
+    saw_ifndef = False
+    saw_define = False
+
+    for line in lines:
+        if not saw_ifndef and re.match(r"#\s*ifndef\s+_[A-Z0-9_]+", line):
+            saw_ifndef = True 
             inside_guard = True
             continue
-        elif inside_guard and re.match(r"#\s*define\s+_[A-Z0-9_]+", line):
-            guard_define_line = i
+
+        if saw_ifndef and not saw_define and re.match(r"#\s*define\s+_[A-Z0-9_]+", line):
+            saw_define = True
             continue
-        elif inside_guard and re.match(r"#\s*endif\s*(//.*)?", line):
-            endif_line = i
+
+        if inside_guard and re.match(r"#\s*endif\s*(//.*)?", line):
             inside_guard = False
             continue
-        elif not inside_guard:
-            new_lines.append(line)
 
+        stripped.append(line) # KEEP everything else
+    
     guard = generate_guard_from_path(h_file_path, root)
+
     content = (
-        f"#ifndef {guard}\n#define {guard}\n\n"
-        + "".join(new_lines).strip()
-        + f"\n\n#endif // {guard}\n"
+        f"#ifndef {guard}\n#define {guard}"
+        + "".join(stripped).rstrip()
+        + f"\n#endif // {guard}\n"
     )
 
     with open(h_file_path, "w", encoding="utf-8") as file:
         file.write(content)
 
     print(f"[REGENERATE] Header guard: {h_file_path}")
-
 
 def create_header_file(c_file_path, root):
     base_name = os.path.splitext(os.path.basename(c_file_path))[0]

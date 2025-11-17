@@ -156,6 +156,13 @@
 #include <stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_json/ast_kind_union_json.h>
 #include <stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_log/ast_kind_union_log.h>
 #include <stage/ast/asts/ast_kind/type.h>
+#include <stage/ast/asts/ast_layout/ast_layout_create/ast_layout_create.h>
+#include <stage/ast/asts/ast_layout/ast_layout_destroy/ast_layout_destroy.h>
+#include <stage/ast/asts/ast_layout/ast_layout_direct_destroy/ast_layout_direct_destroy.h>
+#include <stage/ast/asts/ast_layout/ast_layout_direct_json/ast_layout_direct_json.h>
+#include <stage/ast/asts/ast_layout/ast_layout_json/ast_layout_json.h>
+#include <stage/ast/asts/ast_layout/ast_layout_log/ast_layout_log.h>
+#include <stage/ast/asts/ast_layout/type.h>
 #include <stage/ast/asts/ast_package/ast_package_create/ast_package_create.h>
 #include <stage/ast/asts/ast_package/ast_package_destroy/ast_package_destroy.h>
 #include <stage/ast/asts/ast_package/ast_package_direct_destroy/ast_package_direct_destroy.h>

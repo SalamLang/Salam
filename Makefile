@@ -164,6 +164,12 @@ SRCS := \
 	src/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_direct_json/ast_kind_union_direct_json.c \
 	src/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_json/ast_kind_union_json.c \
 	src/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_log/ast_kind_union_log.c \
+	src/stage/ast/asts/ast_layout/ast_layout_create/ast_layout_create.c \
+	src/stage/ast/asts/ast_layout/ast_layout_destroy/ast_layout_destroy.c \
+	src/stage/ast/asts/ast_layout/ast_layout_direct_destroy/ast_layout_direct_destroy.c \
+	src/stage/ast/asts/ast_layout/ast_layout_direct_json/ast_layout_direct_json.c \
+	src/stage/ast/asts/ast_layout/ast_layout_json/ast_layout_json.c \
+	src/stage/ast/asts/ast_layout/ast_layout_log/ast_layout_log.c \
 	src/stage/ast/asts/ast_package/ast_package_create/ast_package_create.c \
 	src/stage/ast/asts/ast_package/ast_package_destroy/ast_package_destroy.c \
 	src/stage/ast/asts/ast_package/ast_package_direct_destroy/ast_package_direct_destroy.c \
@@ -557,6 +563,12 @@ OBJS := \
 	build/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_direct_json/ast_kind_union_direct_json.o \
 	build/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_json/ast_kind_union_json.o \
 	build/stage/ast/asts/ast_kind/ast_kind_union/ast_kind_union_log/ast_kind_union_log.o \
+	build/stage/ast/asts/ast_layout/ast_layout_create/ast_layout_create.o \
+	build/stage/ast/asts/ast_layout/ast_layout_destroy/ast_layout_destroy.o \
+	build/stage/ast/asts/ast_layout/ast_layout_direct_destroy/ast_layout_direct_destroy.o \
+	build/stage/ast/asts/ast_layout/ast_layout_direct_json/ast_layout_direct_json.o \
+	build/stage/ast/asts/ast_layout/ast_layout_json/ast_layout_json.o \
+	build/stage/ast/asts/ast_layout/ast_layout_log/ast_layout_log.o \
 	build/stage/ast/asts/ast_package/ast_package_create/ast_package_create.o \
 	build/stage/ast/asts/ast_package/ast_package_destroy/ast_package_destroy.o \
 	build/stage/ast/asts/ast_package/ast_package_direct_destroy/ast_package_direct_destroy.o \

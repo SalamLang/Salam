@@ -5,7 +5,7 @@
 #include <base.h>
 
 // ast
-#include <ast/asts/ast_layout/type.h>
+#include <stage/ast/asts/ast_layout/type.h>
 
 void ast_layout_destroy(ast_layout_t* ast_layout);
 

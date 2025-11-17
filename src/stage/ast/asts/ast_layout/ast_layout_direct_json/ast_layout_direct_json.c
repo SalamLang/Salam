@@ -1,4 +1,4 @@
-#include <src/strage/ast/asts/ast_layout/ast_layout_direct_json/ast_layout_direct_json.h>
+#include <stage/ast/asts/ast_layout/ast_layout_direct_json/ast_layout_direct_json.h>
 
 char* ast_layout_direct_json(ast_layout_t ast_layout)
 {

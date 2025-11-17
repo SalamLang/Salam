@@ -1,4 +1,4 @@
-#include <src/stage/ast/asts/ast_layout/ast_layout_json/ast_layout_json.h>
+#include <stage/ast/asts/ast_layout/ast_layout_json/ast_layout_json.h>
 
 char* ast_layout_json(ast_layout_t* ast_layout)
 {

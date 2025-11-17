@@ -94,7 +94,10 @@ def create_c_and_h_files_for_empty_directory(directory, root):
 
 
 def scan_directory(root):
+    IGNORE_DIRS = {".git", "__pycache__", ".vscode", "build", "out"}
+
     for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in IGNORE_DIRS]
         for filename in filenames:
             if filename.endswith(".c"):
                 c_file_path = os.path.join(dirpath, filename)

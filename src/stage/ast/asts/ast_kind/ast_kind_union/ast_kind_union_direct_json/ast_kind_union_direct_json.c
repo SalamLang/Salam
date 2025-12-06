@@ -15,4 +15,3 @@ char* ast_kind_union_direct_json(ast_kind_union_t kind_union)
     buffer_destroy(temp);
     return result;
 }
-

@@ -27,4 +27,3 @@ char* ast_kind_decl_direct_json(ast_kind_decl_t kind_decl)
     buffer_destroy(temp);
     return result;
 }
-

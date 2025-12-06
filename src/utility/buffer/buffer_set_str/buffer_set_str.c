@@ -9,8 +9,7 @@
  * @returns {void}
  *
  */
-void buffer_set_str(buffer_t *str, const char *value)
-{
+void buffer_set_str(buffer_t* str, const char* value) {
     DEBUG_ME;
     buffer_append_str(str, value);
 }

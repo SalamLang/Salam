@@ -4,6 +4,7 @@
 // base
 #include <base.h>
 
-void ast_statement_variable_decl_destroy(ast_statement_variable_decl_t* statement_variable_decl);
+void ast_statement_variable_decl_destroy(
+    ast_statement_variable_decl_t* statement_variable_decl);
 
-#endif // _STAGE_AST_ASTS_AST_STATEMENT_AST_STATEMENT_VARIABLE_DECL_AST_STATEMENT_VARIABLE_DECL_DESTROY_AST_STATEMENT_VARIABLE_DECL_DESTROY_H_
+#endif  // _STAGE_AST_ASTS_AST_STATEMENT_AST_STATEMENT_VARIABLE_DECL_AST_STATEMENT_VARIABLE_DECL_DESTROY_AST_STATEMENT_VARIABLE_DECL_DESTROY_H_

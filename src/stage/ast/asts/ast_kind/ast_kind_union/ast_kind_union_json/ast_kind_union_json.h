@@ -6,4 +6,4 @@
 
 char* ast_kind_union_json(ast_kind_union_t* kind_union);
 
-#endif // _STAGE_AST_ASTS_AST_KIND_AST_KIND_UNION_AST_KIND_UNION_JSON_AST_KIND_UNION_JSON_H_
+#endif  // _STAGE_AST_ASTS_AST_KIND_AST_KIND_UNION_AST_KIND_UNION_JSON_AST_KIND_UNION_JSON_H_

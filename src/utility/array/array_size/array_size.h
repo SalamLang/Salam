@@ -9,4 +9,4 @@
 
 size_t array_size(array_t* array);
 
-#endif // _UTILITY_ARRAY_ARRAY_SIZE_ARRAY_SIZE_H_
+#endif  // _UTILITY_ARRAY_ARRAY_SIZE_ARRAY_SIZE_H_

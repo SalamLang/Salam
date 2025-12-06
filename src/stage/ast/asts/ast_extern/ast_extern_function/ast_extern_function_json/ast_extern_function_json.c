@@ -1,13 +1,11 @@
 #include <stage/ast/asts/ast_extern/ast_extern_function/ast_extern_function_json/ast_extern_function_json.h>
 
-char* ast_extern_function_json(ast_extern_function_t* extern_function)
-{
+char* ast_extern_function_json(ast_extern_function_t* extern_function) {
     buffer_t* temp = buffer_create(10);
 
     if (extern_function == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else {
+    } else {
         buffer_append_char(temp, '{');
 
         // name

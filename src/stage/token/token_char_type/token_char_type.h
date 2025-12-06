@@ -9,4 +9,4 @@
 
 token_type_t token_char_type(char c);
 
-#endif // _STAGE_TOKEN_TOKEN_CHAR_TYPE_TOKEN_CHAR_TYPE_H_
+#endif  // _STAGE_TOKEN_TOKEN_CHAR_TYPE_TOKEN_CHAR_TYPE_H_

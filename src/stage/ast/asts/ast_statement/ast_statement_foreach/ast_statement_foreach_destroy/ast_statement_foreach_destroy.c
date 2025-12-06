@@ -1,7 +1,6 @@
 #include "ast_statement_foreach_destroy.h"
 
-void ast_statement_foreach_destroy(ast_statement_foreach_t* statement_foreach)
-{
+void ast_statement_foreach_destroy(ast_statement_foreach_t* statement_foreach) {
     DEBUG_ME;
     if (!statement_foreach) return;
 

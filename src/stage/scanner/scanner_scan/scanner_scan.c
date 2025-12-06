@@ -1,13 +1,13 @@
 #include <stage/scanner/scanner_scan/scanner_scan.h>
 
-void scanner_scan(scanner_t* scanner)
-{
+void scanner_scan(scanner_t* scanner) {
     DEBUG_ME;
     char c;
     while ((c = SCANNER_CURRENT) && c != '\0' &&
            scanner->index < scanner->length) {
         size_t num_bytes;
-        char *uc = utf8_char_decode(scanner->source, &scanner->index, &num_bytes);
+        char* uc =
+            utf8_char_decode(scanner->source, &scanner->index, &num_bytes);
 
         switch (num_bytes) {
             case 0: {
@@ -16,7 +16,7 @@ void scanner_scan(scanner_t* scanner)
                 }
 
                 scanner_error("Invalid UTF-8 encoding detected at index %d",
-                            scanner->index);
+                              scanner->index);
             } break;
 
             case 1: {
@@ -24,16 +24,14 @@ void scanner_scan(scanner_t* scanner)
 
                 switch (ucf) {
                     // End of file
-                    case '\0':
-                    {
+                    case '\0': {
                         if (uc != NULL) {
                             memory_destroy(uc);
                         }
                     } break;
 
                     // New line
-                    case '\n':
-                    {
+                    case '\n': {
                         if (uc != NULL) {
                             memory_destroy(uc);
                         }
@@ -76,8 +74,7 @@ void scanner_scan(scanner_t* scanner)
                     case '=':
                     case '<':
                     case '>':
-                    case '!':
-                    {
+                    case '!': {
                         if (ucf == '/' && SCANNER_CURRENT == '/') {
                             scanner_scan_comment_inline(scanner);
 
@@ -85,24 +82,24 @@ void scanner_scan(scanner_t* scanner)
                                 memory_destroy(uc);
                             }
                             continue;
-                        }
-                        else if (ucf == '/' && SCANNER_CURRENT == '*') {
+                        } else if (ucf == '/' && SCANNER_CURRENT == '*') {
                             scanner_scan_comment_multiline(scanner);
 
                             if (uc != NULL) {
                                 memory_destroy(uc);
                             }
                             continue;
-                        }
-                        else {
+                        } else {
                             token_type_t type = token_char_type(c);
                             if (type == TOKEN_TYPE_UNKNOWN) {
-                                scanner_error("Unknown character '%s' at line %zu, "
-                                            "column %zu",
-                                            uc, scanner->line, scanner->column);
+                                scanner_error(
+                                    "Unknown character '%s' at line %zu, "
+                                    "column %zu",
+                                    uc, scanner->line, scanner->column);
                             }
 
-                            token_t *token = token_create(type, SCANNER_CURRENT_LOCATION);
+                            token_t* token =
+                                token_create(type, SCANNER_CURRENT_LOCATION);
                             token->source = string_duplicate(uc);
                             token->operator_type = token_operator_type(uc);
                             SCANNER_PUSH_TOKEN(token);
@@ -114,8 +111,7 @@ void scanner_scan(scanner_t* scanner)
                         }
                     } break;
 
-                    case '"':
-                    {
+                    case '"': {
                         if (uc != NULL) {
                             memory_destroy(uc);
                         }
@@ -133,8 +129,7 @@ void scanner_scan(scanner_t* scanner)
                     case '6':
                     case '7':
                     case '8':
-                    case '9':
-                    {
+                    case '9': {
                         scanner_scan_number(scanner, uc);
 
                         if (uc != NULL) {
@@ -143,14 +138,14 @@ void scanner_scan(scanner_t* scanner)
                         continue;
                     } break;
 
-                    default:
-                    {
+                    default: {
                         if (c == '_' || string_char_is_alpha(c)) {
                             scanner_scan_identifier(scanner, uc);
                         } else {
-                            scanner_error("Unknown character '%s' at line %zu, "
-                                        "column %zu",
-                                        uc, scanner->line, scanner->column);
+                            scanner_error(
+                                "Unknown character '%s' at line %zu, "
+                                "column %zu",
+                                uc, scanner->line, scanner->column);
                         }
 
                         if (uc != NULL) {
@@ -171,10 +166,12 @@ void scanner_scan(scanner_t* scanner)
                     scanner_scan_string(scanner, 2);
                 } else if (utf8_is_digit(uc)) {
                     scanner_scan_number(scanner, uc);
-                } else if (c == '_' || utf8_is_alpha(uc) || string_char_is_alpha(c)) {
+                } else if (c == '_' || utf8_is_alpha(uc) ||
+                           string_char_is_alpha(c)) {
                     scanner_scan_identifier(scanner, uc);
                 } else {
-                    scanner_error("Unknown character '%s' at line %zu, column %zu", uc,
+                    scanner_error(
+                        "Unknown character '%s' at line %zu, column %zu", uc,
                         scanner->line, scanner->column);
                 }
 
@@ -186,6 +183,6 @@ void scanner_scan(scanner_t* scanner)
         }
     }
 
-    token_t *token = token_create(TOKEN_TYPE_EOF, SCANNER_CURRENT_LOCATION);
+    token_t* token = token_create(TOKEN_TYPE_EOF, SCANNER_CURRENT_LOCATION);
     SCANNER_PUSH_TOKEN(token);
 }

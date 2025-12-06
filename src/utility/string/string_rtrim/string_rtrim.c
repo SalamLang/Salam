@@ -1,7 +1,6 @@
 #include <utility/string/string_rtrim/string_rtrim.h>
 
-char* string_rtrim(const char* input)
-{
+char* string_rtrim(const char* input) {
     DEBUG_ME;
     if (!input) return NULL;
 

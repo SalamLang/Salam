@@ -4,6 +4,7 @@
 // base
 #include <base.h>
 
-char* ast_statement_foreach_direct_json(ast_statement_foreach_t statement_foreach);
+char* ast_statement_foreach_direct_json(
+    ast_statement_foreach_t statement_foreach);
 
-#endif // _STAGE_AST_ASTS_AST_STATEMENT_AST_STATEMENT_FOREACH_AST_STATEMENT_FOREACH_DIRECT_JSON_AST_STATEMENT_FOREACH_DIRECT_JSON_H_
+#endif  // _STAGE_AST_ASTS_AST_STATEMENT_AST_STATEMENT_FOREACH_AST_STATEMENT_FOREACH_DIRECT_JSON_AST_STATEMENT_FOREACH_DIRECT_JSON_H_

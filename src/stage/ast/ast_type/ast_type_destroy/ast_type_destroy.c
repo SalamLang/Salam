@@ -1,9 +1,8 @@
 #include "ast_type_destroy.h"
 
-void ast_type_destroy(ast_type_t* type)
-{
+void ast_type_destroy(ast_type_t* type) {
     DEBUG_ME;
-    if (! type) return;
+    if (!type) return;
 
     if (type->name != NULL) {
         memory_destroy(type->name);

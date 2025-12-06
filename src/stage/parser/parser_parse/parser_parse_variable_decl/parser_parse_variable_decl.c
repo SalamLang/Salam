@@ -1,7 +1,6 @@
 #include "parser_parse_variable_decl.h"
 
-ast_t* parser_parse_variable_decl(parser_t* parser)
-{
+ast_t* parser_parse_variable_decl(parser_t* parser) {
     DEBUG_ME;
     if (!parser) return NULL;
     ast_t* type = parser_parse_type(parser);

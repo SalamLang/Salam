@@ -1,7 +1,6 @@
 #include "ast_statement_for_destroy.h"
 
-void ast_statement_for_destroy(ast_statement_for_t* statement_for)
-{
+void ast_statement_for_destroy(ast_statement_for_t* statement_for) {
     DEBUG_ME;
     if (!statement_for) return;
 

@@ -16,4 +16,4 @@
 
 char* ast_variable_decl_json(ast_variable_decl_t* variable_decl);
 
-#endif // _STAGE_AST_ASTS_AST_VARIABLE_DECL_AST_VAR_DECL_JSON_AST_VAR_DECL_JSON_H_
+#endif  // _STAGE_AST_ASTS_AST_VARIABLE_DECL_AST_VAR_DECL_JSON_AST_VAR_DECL_JSON_H_

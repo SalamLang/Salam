@@ -1,7 +1,6 @@
 #include <stage/ast/asts/ast_extern/ast_extern_function/ast_extern_function_direct_json/ast_extern_function_direct_json.h>
 
-char* ast_extern_function_direct_json(ast_extern_function_t extern_function)
-{
+char* ast_extern_function_direct_json(ast_extern_function_t extern_function) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(10);
 

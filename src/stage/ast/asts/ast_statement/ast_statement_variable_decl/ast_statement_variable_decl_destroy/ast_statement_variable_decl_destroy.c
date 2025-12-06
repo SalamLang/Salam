@@ -1,7 +1,7 @@
 #include "ast_statement_variable_decl_destroy.h"
 
-void ast_statement_variable_decl_destroy(ast_statement_variable_decl_t* statement_variable_decl)
-{
+void ast_statement_variable_decl_destroy(
+    ast_statement_variable_decl_t* statement_variable_decl) {
     DEBUG_ME;
     if (!statement_variable_decl) return;
 

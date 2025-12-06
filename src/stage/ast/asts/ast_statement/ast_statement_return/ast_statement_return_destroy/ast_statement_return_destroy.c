@@ -1,7 +1,6 @@
 #include "ast_statement_return_destroy.h"
 
-void ast_statement_return_destroy(ast_statement_ret_t* statement_return)
-{
+void ast_statement_return_destroy(ast_statement_ret_t* statement_return) {
     DEBUG_ME;
     if (!statement_return) return;
 

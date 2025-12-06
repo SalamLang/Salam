@@ -14,4 +14,4 @@
 
 array_t* array_create(array_destroy_t destroyer);
 
-#endif // _UTILITY_ARRAY_ARRAY_CREATE_ARRAY_CREATE_H_
+#endif  // _UTILITY_ARRAY_ARRAY_CREATE_ARRAY_CREATE_H_

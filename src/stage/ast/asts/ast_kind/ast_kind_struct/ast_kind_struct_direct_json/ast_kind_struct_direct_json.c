@@ -1,7 +1,6 @@
 #include "ast_kind_struct_direct_json.h"
 
-char* ast_kind_struct_direct_json(ast_kind_struct_t kind_struct)
-{
+char* ast_kind_struct_direct_json(ast_kind_struct_t kind_struct) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(256);
     buffer_append_char(temp, '{');
@@ -10,8 +9,7 @@ char* ast_kind_struct_direct_json(ast_kind_struct_t kind_struct)
     buffer_append_str(temp, ", \"name\":");
     if (kind_struct.name == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else {
+    } else {
         char* buffer = string_escaping(kind_struct.name);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);
@@ -21,8 +19,7 @@ char* ast_kind_struct_direct_json(ast_kind_struct_t kind_struct)
     buffer_append_str(temp, ", \"parameters\":");
     if (kind_struct.parameters == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else {
+    } else {
         char* buffer = ast_json(kind_struct.parameters);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);
@@ -32,8 +29,7 @@ char* ast_kind_struct_direct_json(ast_kind_struct_t kind_struct)
     buffer_append_str(temp, ", \"functions\":");
     if (kind_struct.functions == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else {
+    } else {
         char* buffer = ast_json(kind_struct.functions);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);

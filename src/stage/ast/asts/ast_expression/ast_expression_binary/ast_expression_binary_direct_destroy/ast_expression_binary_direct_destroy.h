@@ -4,6 +4,7 @@
 // base
 #include <base.h>
 
-void ast_expression_binary_direct_destroy(ast_expression_binary_t expression_binary);
+void ast_expression_binary_direct_destroy(
+    ast_expression_binary_t expression_binary);
 
-#endif // _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSION_BINARY_AST_EXPRESSION_BINARY_DIRECT_DESTROY_AST_EXPRESSION_BINARY_DIRECT_DESTROY_H_
+#endif  // _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSION_BINARY_AST_EXPRESSION_BINARY_DIRECT_DESTROY_AST_EXPRESSION_BINARY_DIRECT_DESTROY_H_

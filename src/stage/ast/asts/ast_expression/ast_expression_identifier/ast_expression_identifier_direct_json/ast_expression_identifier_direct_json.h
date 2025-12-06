@@ -4,6 +4,7 @@
 // base
 #include <base.h>
 
-char* ast_expression_identifier_direct_json(ast_expression_identifier_t expression_identifier);
+char* ast_expression_identifier_direct_json(
+    ast_expression_identifier_t expression_identifier);
 
-#endif // _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSION_IDENTIFIER_AST_EXPRESSION_IDENTIFIER_DIRECT_JSON_AST_EXPRESSION_IDENTIFIER_DIRECT_JSON_H_
+#endif  // _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSION_IDENTIFIER_AST_EXPRESSION_IDENTIFIER_DIRECT_JSON_AST_EXPRESSION_IDENTIFIER_DIRECT_JSON_H_

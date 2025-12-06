@@ -12,4 +12,4 @@
 
 void value_log(value_t* value);
 
-#endif // _STAGE_VALUE_VALUE_LOG_VALUE_LOG_H_
+#endif  // _STAGE_VALUE_VALUE_LOG_VALUE_LOG_H_

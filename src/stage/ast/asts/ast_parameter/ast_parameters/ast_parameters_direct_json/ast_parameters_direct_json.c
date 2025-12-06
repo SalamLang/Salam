@@ -1,7 +1,6 @@
 #include "ast_parameters_direct_json.h"
 
-char* ast_parameters_direct_json(ast_parameters_t parameters)
-{
+char* ast_parameters_direct_json(ast_parameters_t parameters) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
@@ -16,17 +15,12 @@ char* ast_parameters_direct_json(ast_parameters_t parameters)
 
     // values
     buffer_append_str(temp, ",\"values\":");
-    if (parameters.values == NULL)
-    {
+    if (parameters.values == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         buffer_append_char(temp, '[');
-        for (size_t i = 0; i < parameters.value_count; i++)
-        {
-            if (i > 0)
-            {
+        for (size_t i = 0; i < parameters.value_count; i++) {
+            if (i > 0) {
                 buffer_append_str(temp, ", ");
             }
             ast_t* item = parameters.values->items[i];

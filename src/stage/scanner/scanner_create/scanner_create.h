@@ -17,13 +17,9 @@
 #include <stage/scanner/type.h>
 
 // token
-#include <stage/token/type.h>
 #include <stage/token/token_free/token_free.h>
+#include <stage/token/type.h>
 
-scanner_t* scanner_create(
-    char* source,
-    char* directory,
-    char* file_name
-);
+scanner_t* scanner_create(char* source, char* directory, char* file_name);
 
-#endif // _STAGE_SCANNER_SCANNER_CREATE_SCANNER_CREATE_H_
+#endif  // _STAGE_SCANNER_SCANNER_CREATE_SCANNER_CREATE_H_

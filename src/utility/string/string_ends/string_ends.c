@@ -9,8 +9,7 @@
  * @returns {bool} ends with it or not
  *
  */
-bool string_ends(const char *source, const char *search)
-{
+bool string_ends(const char* source, const char* search) {
     DEBUG_ME;
     size_t source_len = string_length(source);
     size_t search_len = string_length(search);

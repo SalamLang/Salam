@@ -10,8 +10,8 @@
  * @returns {char*} - New string
  *
  */
-char *string_replace_all_substrings(const char *str, const char *old_substr, const char *new_substr)
-{
+char* string_replace_all_substrings(const char* str, const char* old_substr,
+                                    const char* new_substr) {
     DEBUG_ME;
     if (str == NULL || old_substr == NULL || new_substr == NULL) {
         return NULL;
@@ -22,7 +22,7 @@ char *string_replace_all_substrings(const char *str, const char *old_substr, con
     size_t new_len = string_length(new_substr);
 
     if (old_len == 0) {
-        char *result = memory_allocation(str_len + 1);
+        char* result = memory_allocation(str_len + 1);
 
         strcpy(result, str);
 
@@ -30,17 +30,17 @@ char *string_replace_all_substrings(const char *str, const char *old_substr, con
     }
 
     size_t max_result_len = str_len;
-    const char *tmp = str;
+    const char* tmp = str;
     while ((tmp = strstr(tmp, old_substr)) != NULL) {
         max_result_len += (new_len - old_len);
         tmp += old_len;
     }
 
-    char *result = memory_allocation(max_result_len + 1);
+    char* result = memory_allocation(max_result_len + 1);
 
-    char *result_ptr = result;
-    const char *search_start = str;
-    const char *pos;
+    char* result_ptr = result;
+    const char* search_start = str;
+    const char* pos;
 
     while ((pos = strstr(search_start, old_substr)) != NULL) {
         size_t bytes_to_copy = pos - search_start;

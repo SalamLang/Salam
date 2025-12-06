@@ -1,25 +1,18 @@
 #include "ast_statement_print_json.h"
 
-char* ast_statement_print_json(ast_statement_print_t* statement_print)
-{
+char* ast_statement_print_json(ast_statement_print_t* statement_print) {
     buffer_t* temp = buffer_create(24);
 
-    if (statement_print == NULL)
-    {
+    if (statement_print == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         buffer_append_char(temp, '{');
 
         // values
         buffer_append_str(temp, "\"values\":");
-        if (statement_print->values == NULL)
-        {
+        if (statement_print->values == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else
-        {
+        } else {
             char* values = ast_json(statement_print->values);
             buffer_append_str(temp, values);
             memory_destroy(values);

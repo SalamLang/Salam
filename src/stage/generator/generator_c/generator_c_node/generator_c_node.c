@@ -1,18 +1,16 @@
 #include "generator_c_node.h"
 
-buffer_t* generator_c_node(generator_t* generator, ast_t* ast)
-{
+buffer_t* generator_c_node(generator_t* generator, ast_t* ast) {
     DEBUG_ME;
-    if (ast == NULL)
-    {
+    if (ast == NULL) {
         log_fatal("generator_c_node: ast is NULL");
         return NULL;
     }
-    log_info("generator_c_node: %s(%d)\n", ast_node_type_name(ast->base.type), ast->base.type);
+    log_info("generator_c_node: %s(%d)\n", ast_node_type_name(ast->base.type),
+             ast->base.type);
     buffer_t* temp;
 
-    switch (ast->base.type)
-    {
+    switch (ast->base.type) {
         case AST_TYPE_TYPE:
             DEBUG_ME;
             temp = generator_c_type(generator, ast);
@@ -95,7 +93,7 @@ buffer_t* generator_c_node(generator_t* generator, ast_t* ast)
         case AST_TYPE_STATEMENT_VARIABLE_DECL:
         case AST_TYPE_STATEMENT_EXPRESSION:
             break;
-        }
+    }
 
     log_fatal("generator_c_node: unhandled AST type: %d", ast->base.type);
     return NULL;

@@ -9,4 +9,4 @@
 
 char* generator_c_code(generator_t* generator);
 
-#endif // _STAGE_GENERATOR_GENERATOR_C_GENERATOR_C_CODE_GENERATOR_C_CODE_H_
+#endif  // _STAGE_GENERATOR_GENERATOR_C_GENERATOR_C_CODE_GENERATOR_C_CODE_H_

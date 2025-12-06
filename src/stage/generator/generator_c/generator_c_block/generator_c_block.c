@@ -1,7 +1,6 @@
 #include "generator_c_block.h"
 
-buffer_t* generator_c_block(generator_t* generator, ast_t* ast)
-{
+buffer_t* generator_c_block(generator_t* generator, ast_t* ast) {
     buffer_t* temp = buffer_create(124);
 
     ast_block_t block = ast->raw.block_value;

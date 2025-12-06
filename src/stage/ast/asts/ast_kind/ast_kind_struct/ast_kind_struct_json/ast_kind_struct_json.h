@@ -6,4 +6,4 @@
 
 char* ast_kind_struct_json(ast_kind_struct_t* kind_struct);
 
-#endif // _STAGE_AST_ASTS_AST_KIND_AST_KIND_STRUCT_AST_KIND_STRUCT_JSON_AST_KIND_STRUCT_JSON_H_
+#endif  // _STAGE_AST_ASTS_AST_KIND_AST_KIND_STRUCT_AST_KIND_STRUCT_JSON_AST_KIND_STRUCT_JSON_H_

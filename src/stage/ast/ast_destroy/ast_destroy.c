@@ -1,7 +1,6 @@
 #include <stage/ast/ast_destroy/ast_destroy.h>
 
-void ast_destroy(ast_t* ast)
-{
+void ast_destroy(ast_t* ast) {
     DEBUG_ME;
     if (!ast) return;
 
@@ -139,31 +138,36 @@ void ast_destroy(ast_t* ast)
             break;
 
         case AST_TYPE_EXPRESSION_LITERAL:
-            ast_expression_literal_direct_destroy(ast->raw.expression_literal_value);
+            ast_expression_literal_direct_destroy(
+                ast->raw.expression_literal_value);
             memory_destroy(ast);
             return;
             break;
 
         case AST_TYPE_EXPRESSION_IDENTIFIER:
-            ast_expression_identifier_direct_destroy(ast->raw.expression_identifier_value);
+            ast_expression_identifier_direct_destroy(
+                ast->raw.expression_identifier_value);
             memory_destroy(ast);
             return;
             break;
 
         case AST_TYPE_EXPRESSION_BINARY:
-            ast_expression_binary_direct_destroy(ast->raw.expression_binary_value);
+            ast_expression_binary_direct_destroy(
+                ast->raw.expression_binary_value);
             memory_destroy(ast);
             return;
             break;
 
         case AST_TYPE_EXPRESSION_UNARY:
-            ast_expression_unary_direct_destroy(ast->raw.expression_unary_value);
+            ast_expression_unary_direct_destroy(
+                ast->raw.expression_unary_value);
             memory_destroy(ast);
             return;
             break;
 
         case AST_TYPE_EXPRESSION_INDEX:
-            ast_expression_index_direct_destroy(ast->raw.expression_index_value);
+            ast_expression_index_direct_destroy(
+                ast->raw.expression_index_value);
             memory_destroy(ast);
             return;
             break;
@@ -187,7 +191,8 @@ void ast_destroy(ast_t* ast)
             break;
 
         case AST_TYPE_STATEMENT_FOREACH:
-            ast_statement_foreach_direct_destroy(ast->raw.statement_foreach_value);
+            ast_statement_foreach_direct_destroy(
+                ast->raw.statement_foreach_value);
             memory_destroy(ast);
             return;
             break;
@@ -211,13 +216,15 @@ void ast_destroy(ast_t* ast)
             break;
 
         case AST_TYPE_STATEMENT_VARIABLE_DECL:
-            ast_statement_variable_decl_direct_destroy(ast->raw.statement_variable_decl_value);
+            ast_statement_variable_decl_direct_destroy(
+                ast->raw.statement_variable_decl_value);
             memory_destroy(ast);
             return;
             break;
 
         case AST_TYPE_STATEMENT_EXPRESSION:
-            ast_statement_expression_direct_destroy(ast->raw.statement_expression_value);
+            ast_statement_expression_direct_destroy(
+                ast->raw.statement_expression_value);
             memory_destroy(ast);
             return;
             break;

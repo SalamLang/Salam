@@ -1,7 +1,6 @@
 #include "generator_c_statement_raw.h"
 
-buffer_t* generator_c_statement_raw(generator_t* generator, ast_t* ast)
-{
+buffer_t* generator_c_statement_raw(generator_t* generator, ast_t* ast) {
     DEBUG_ME;
     ast_statement_raw_t raw = ast->raw.statement_raw_value;
     if (raw.value == NULL) return NULL;

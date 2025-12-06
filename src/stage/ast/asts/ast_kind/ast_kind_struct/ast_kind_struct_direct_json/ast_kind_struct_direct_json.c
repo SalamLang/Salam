@@ -45,4 +45,3 @@ char* ast_kind_struct_direct_json(ast_kind_struct_t kind_struct)
     buffer_destroy(temp);
     return result;
 }
-

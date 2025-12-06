@@ -44,4 +44,3 @@ char string_convert_utf8_to_english_digit(char *uc)
 
     return '\0';
 }
-

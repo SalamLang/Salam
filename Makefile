@@ -9,6 +9,8 @@ BIN_TARGET := $(BUILD_DIR)/$(TARGET)
 TEST_INPUT := input.salam
 TEST_OUTPUT := output.salam
 
+PYTHON := $(shell command -v python || command -v python3 || echo python)
+
 # ---------- START FILES ----------
 SRCS := \
 	src/main.c \
@@ -814,11 +816,32 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	echo "+++ Compiling $< END at $$(date +'%T'), duration: $$((end_time - start_time)) seconds +++"
 
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR) $(TEST_OUTPUT)
 
-.PHONY: test
 test: $(BIN_TARGET)
 	@echo "Running test with input file"
 	@./$(BIN_TARGET) $(TEST_INPUT) > $(TEST_OUTPUT)
 
-.PHONY: all clean
+# ---------- PRE-COMMIT ----------
+check ck: checkinstall
+	pre-commit run --all-files
+
+checkinstall cki:
+	@if ! command -v pre-commit >/dev/null 2>&1; then \
+		echo "Error: pre-commit is not installed. Please install it first."; \
+		exit 1; \
+	fi
+	pre-commit install
+
+checkupdate cku: checkinstall
+	pre-commit autoupdate
+
+install i:
+	@if ! $(PYTHON) -m pip --version >/dev/null 2>&1; then \
+		echo "Error: pip is not available for $(PYTHON). Please install it first."; \
+		exit 1; \
+	fi
+	$(PYTHON) -m pip install -r requirements.txt
+
+# ---------- PHONY TARGETS ----------
+.PHONY: all clean test check ck checkinstall cki checkupdate cku install i

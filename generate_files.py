@@ -28,11 +28,15 @@ def clean_and_regenerate_guard(h_file_path, root):
 
     for line in lines:
         if not saw_ifndef and re.match(r"#\s*ifndef\s+_[A-Z0-9_]+", line):
-            saw_ifndef = True 
+            saw_ifndef = True
             inside_guard = True
             continue
 
-        if saw_ifndef and not saw_define and re.match(r"#\s*define\s+_[A-Z0-9_]+", line):
+        if (
+            saw_ifndef
+            and not saw_define
+            and re.match(r"#\s*define\s+_[A-Z0-9_]+", line)
+        ):
             saw_define = True
             continue
 
@@ -40,8 +44,8 @@ def clean_and_regenerate_guard(h_file_path, root):
             inside_guard = False
             continue
 
-        stripped.append(line) # KEEP everything else
-    
+        stripped.append(line)  # KEEP everything else
+
     guard = generate_guard_from_path(h_file_path, root)
 
     content = (
@@ -54,6 +58,7 @@ def clean_and_regenerate_guard(h_file_path, root):
         file.write(content)
 
     print(f"[REGENERATE] Header guard: {h_file_path}")
+
 
 def create_header_file(c_file_path, root):
     base_name = os.path.splitext(os.path.basename(c_file_path))[0]

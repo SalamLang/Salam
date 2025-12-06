@@ -10,7 +10,6 @@ TEST_INPUT := input.salam
 TEST_OUTPUT := output.salam
 
 PYTHON := $(shell command -v python || command -v python3 || echo python)
-TEST_MAIN_FILE := test/tests.py
 
 # ---------- START FILES ----------
 SRCS := \

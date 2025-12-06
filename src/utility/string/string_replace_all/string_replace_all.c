@@ -59,5 +59,3 @@ char *string_replace_all(const char *str, const char *old_substr,
     DEBUG_ME;
     return result;
 }
-
-

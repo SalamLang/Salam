@@ -58,4 +58,3 @@ ast_t* ast_type_create_from_token(token_t* token)
 
     return NULL;
 }
-

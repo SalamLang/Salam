@@ -23,5 +23,8 @@ void value_log(value_t* value)
         case VALUE_TYPE_NULL:
             log_info("Value: Null\n");
             break;
+        case VALUE_TYPE_SIZE:
+            log_info("Value: Size(%zu)\n", value->raw.size_value);
+            break;
     }
 }

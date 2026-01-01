@@ -2,6 +2,7 @@
 
 buffer_t* generator_c_type(generator_t* generator, ast_t* ast)
 {
+    (void)generator; // Suppress unused parameter warning
     DEBUG_ME;
     buffer_t* temp = buffer_create(12);
 

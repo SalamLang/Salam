@@ -12,4 +12,4 @@
 
 token_type_t token_keyword_type(char* value);
 
-#endif // _STAGE_TOKEN_TOKEN_KEYWORD_TYPE_TOKEN_KEYWORD_TYPE_H_
+#endif  // _STAGE_TOKEN_TOKEN_KEYWORD_TYPE_TOKEN_KEYWORD_TYPE_H_

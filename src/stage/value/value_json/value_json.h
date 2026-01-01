@@ -5,11 +5,11 @@
 #include <base.h>
 
 // buffer
-#include <utility/buffer/type.h>
-#include <utility/buffer/buffer_create/buffer_create.h>
-#include <utility/buffer/buffer_append_str/buffer_append_str.h>
 #include <utility/buffer/buffer_append_char/buffer_append_char.h>
+#include <utility/buffer/buffer_append_str/buffer_append_str.h>
+#include <utility/buffer/buffer_create/buffer_create.h>
 #include <utility/buffer/buffer_destroy/buffer_destroy.h>
+#include <utility/buffer/type.h>
 
 // string
 #include <utility/string/string_duplicate/string_duplicate.h>
@@ -27,4 +27,4 @@
 
 char* value_json(const value_t* value);
 
-#endif // _STAGE_VALUE_VALUE_JSON_VALUE_JSON_H_
+#endif  // _STAGE_VALUE_VALUE_JSON_VALUE_JSON_H_

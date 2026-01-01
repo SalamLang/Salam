@@ -1,7 +1,7 @@
 #include "ast_statement_expression_destroy.h"
 
-void ast_statement_expression_destroy(ast_statement_expression_t* statement_expression)
-{
+void ast_statement_expression_destroy(
+    ast_statement_expression_t* statement_expression) {
     DEBUG_ME;
     if (!statement_expression) return;
 

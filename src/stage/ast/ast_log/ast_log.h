@@ -9,4 +9,4 @@
 
 void ast_log(ast_t* ast);
 
-#endif // _STAGE_AST_AST_LOG_AST_LOG_H_
+#endif  // _STAGE_AST_AST_LOG_AST_LOG_H_

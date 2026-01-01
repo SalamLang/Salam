@@ -1,7 +1,6 @@
 #include <utility/hashmap/hashmap_destroy/hashmap_destroy.h>
 
-void hashmap_destroy(hashmap_t* map)
-{
+void hashmap_destroy(hashmap_t* map) {
     for (size_t i = 0; i < map->capacity; ++i) {
         hashmap_entry_t* curr = map->buckets[i];
         while (curr) {

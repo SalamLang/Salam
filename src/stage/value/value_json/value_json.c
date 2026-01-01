@@ -1,13 +1,11 @@
 #include <stage/value/value_json/value_json.h>
 
-char* value_json(const value_t* value)
-{
+char* value_json(const value_t* value) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(256);
     if (value == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else {
+    } else {
         log_info("Value type: %s\n", value_name(value->type));
         buffer_append_char(temp, '{');
 
@@ -28,13 +26,16 @@ char* value_json(const value_t* value)
 
         switch (value->type) {
             case VALUE_TYPE_NUMBER_INT: {
-                buffer_append_str(temp, convert_size2string(value->raw.int_value));
+                buffer_append_str(temp,
+                                  convert_size2string(value->raw.int_value));
             } break;
             case VALUE_TYPE_NUMBER_FLOAT: {
-                buffer_append_str(temp, convert_size2string(value->raw.float_value));
+                buffer_append_str(temp,
+                                  convert_size2string(value->raw.float_value));
             } break;
             case VALUE_TYPE_BOOL: {
-                buffer_append_str(temp, value->raw.bool_value ? "true" : "false");
+                buffer_append_str(temp,
+                                  value->raw.bool_value ? "true" : "false");
             } break;
             case VALUE_TYPE_NULL: {
                 buffer_append_str(temp, "null");
@@ -51,7 +52,8 @@ char* value_json(const value_t* value)
                 }
             } break;
             case VALUE_TYPE_SIZE: {
-                buffer_append_str(temp, convert_size2string(value->raw.size_value));
+                buffer_append_str(temp,
+                                  convert_size2string(value->raw.size_value));
             } break;
             default: {
                 buffer_append_str(temp, "\"value error\"");

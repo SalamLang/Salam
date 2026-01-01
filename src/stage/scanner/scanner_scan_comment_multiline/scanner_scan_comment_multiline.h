@@ -5,9 +5,9 @@
 #include <base.h>
 
 // scanner
-#include <stage/scanner/type.h>
 #include <stage/scanner/scanner_error/scanner_error.h>
+#include <stage/scanner/type.h>
 
 void scanner_scan_comment_multiline(scanner_t* scanner);
 
-#endif // _STAGE_SCANNER_SCANNER_SCAN_COMMENT_MULTILINE_SCANNER_SCAN_COMMENT_MULTILINE_H_
+#endif  // _STAGE_SCANNER_SCANNER_SCAN_COMMENT_MULTILINE_SCANNER_SCAN_COMMENT_MULTILINE_H_

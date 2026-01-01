@@ -1,7 +1,6 @@
 #include "ast_expression_item_direct_destroy.h"
 
-void ast_expression_item_direct_destroy(ast_expression_item_t expression_item)
-{
+void ast_expression_item_direct_destroy(ast_expression_item_t expression_item) {
     DEBUG_ME;
     switch (expression_item.type) {
         case AST_EXPRESSION_TYPE_LITERAL:
@@ -9,7 +8,8 @@ void ast_expression_item_direct_destroy(ast_expression_item_t expression_item)
             break;
 
         case AST_EXPRESSION_TYPE_IDENTIFIER:
-            ast_expression_identifier_direct_destroy(expression_item.raw.identifier);
+            ast_expression_identifier_direct_destroy(
+                expression_item.raw.identifier);
             break;
 
         case AST_EXPRESSION_TYPE_BINARY:

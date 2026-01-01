@@ -1,13 +1,11 @@
 #include <stage/ast/asts/ast_attribute/ast_attribute_item/ast_attribute_item_json/ast_attribute_item_json.h>
 
-char* ast_attribute_item_json(ast_attribute_item_t* attribute_item)
-{
+char* ast_attribute_item_json(ast_attribute_item_t* attribute_item) {
     buffer_t* temp = buffer_create(10);
 
     if (attribute_item == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else {
+    } else {
         buffer_append_char(temp, '{');
 
         // name

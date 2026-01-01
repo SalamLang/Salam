@@ -1,7 +1,6 @@
 #include "generator_c_type.h"
 
-buffer_t* generator_c_type(generator_t* generator, ast_t* ast)
-{
+buffer_t* generator_c_type(generator_t* generator, ast_t* ast) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(12);
 
@@ -12,8 +11,7 @@ buffer_t* generator_c_type(generator_t* generator, ast_t* ast)
 
     ast_type_t type = ast->raw.type_value;
 
-    switch (type.type)
-    {
+    switch (type.type) {
         case AST_KIND_TYPE_INT:
             buffer_append_str(temp, "int");
             break;

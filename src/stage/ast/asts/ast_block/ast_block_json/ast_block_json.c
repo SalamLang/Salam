@@ -1,15 +1,11 @@
 #include <stage/ast/asts/ast_block/ast_block_json/ast_block_json.h>
 
-char* ast_block_json(ast_block_t* block)
-{
+char* ast_block_json(ast_block_t* block) {
     buffer_t* temp = buffer_create(24);
 
-    if (block == NULL)
-    {
+    if (block == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         buffer_append_char(temp, '{');
 
         // statement_count
@@ -18,16 +14,12 @@ char* ast_block_json(ast_block_t* block)
 
         // statements
         buffer_append_str(temp, ",\"statements\":");
-        if (block->statements == NULL)
-        {
+        if (block->statements == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else
-        {
+        } else {
             buffer_append_char(temp, '[');
             for (size_t i = 0; block->statements->size; i++) {
-                if (i > 0)
-                {
+                if (i > 0) {
                     buffer_append_str(temp, ", ");
                 }
                 ast_t* item = block->statements->items[i];

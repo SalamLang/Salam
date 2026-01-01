@@ -1,7 +1,6 @@
 #include "validator_validate_direct_type.h"
 
-void validator_validate_direct_type(ast_type_t type)
-{
+void validator_validate_direct_type(ast_type_t type) {
     DEBUG_ME;
     if (type.element_type != NULL) {
         DEBUG_ME;

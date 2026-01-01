@@ -15,4 +15,4 @@
 
 void parser_destroy(parser_t* parser);
 
-#endif // _STAGE_PARSER_PARSER_DESTROY_PARSER_DESTROY_H_
+#endif  // _STAGE_PARSER_PARSER_DESTROY_PARSER_DESTROY_H_

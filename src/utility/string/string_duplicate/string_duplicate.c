@@ -1,7 +1,6 @@
 #include <utility/string/string_duplicate/string_duplicate.h>
 
-char* string_duplicate(const char* s)
-{
+char* string_duplicate(const char* s) {
     DEBUG_ME;
     if (s == NULL) return NULL;
 

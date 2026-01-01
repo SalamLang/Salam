@@ -1,7 +1,6 @@
 #include "ast_statement_print_create.h"
 
-ast_t* ast_statement_print_create(ast_t* values, size_t value_count)
-{
+ast_t* ast_statement_print_create(ast_t* values, size_t value_count) {
     DEBUG_ME;
     if (!values) return NULL;
 

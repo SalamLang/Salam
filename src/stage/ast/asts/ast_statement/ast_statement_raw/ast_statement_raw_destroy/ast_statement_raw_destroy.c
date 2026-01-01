@@ -1,7 +1,6 @@
 #include "ast_statement_raw_destroy.h"
 
-void ast_statement_raw_destroy(ast_statement_raw_t* statement_raw)
-{
+void ast_statement_raw_destroy(ast_statement_raw_t* statement_raw) {
     DEBUG_ME;
     if (!statement_raw) return;
 

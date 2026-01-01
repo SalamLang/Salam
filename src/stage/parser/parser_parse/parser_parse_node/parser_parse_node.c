@@ -1,7 +1,6 @@
 #include <stage/parser/parser_parse/parser_parse_node/parser_parse_node.h>
 
-ast_t* parser_parse_node(parser_t* parser)
-{
+ast_t* parser_parse_node(parser_t* parser) {
     DEBUG_ME;
     if (!parser) return NULL;
 
@@ -9,7 +8,8 @@ ast_t* parser_parse_node(parser_t* parser)
         return parser_parse_function_decl(parser);
     }
 
-    log_error("Unknown token node type: %s\n", token_name(PARSER_CURRENT->type));
+    log_error("Unknown token node type: %s\n",
+              token_name(PARSER_CURRENT->type));
     PARSER_NEXT;
     return NULL;
 }

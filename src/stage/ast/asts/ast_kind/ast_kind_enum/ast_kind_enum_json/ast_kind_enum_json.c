@@ -1,20 +1,17 @@
 #include "ast_kind_enum_json.h"
 
-char* ast_kind_enum_json(ast_kind_enum_t* kind_enum)
-{
+char* ast_kind_enum_json(ast_kind_enum_t* kind_enum) {
     buffer_t* temp = buffer_create(256);
     if (kind_enum == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else {
+    } else {
         buffer_append_char(temp, '{');
 
         // name
         buffer_append_str(temp, ", \"name\":");
         if (kind_enum->name == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else {
+        } else {
             char* buffer = string_escaping(kind_enum->name);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
@@ -24,8 +21,7 @@ char* ast_kind_enum_json(ast_kind_enum_t* kind_enum)
         buffer_append_str(temp, ", \"alias\":");
         if (kind_enum->alias == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else {
+        } else {
             char* buffer = string_escaping(kind_enum->alias);
             buffer_append_str(temp, buffer);
             memory_destroy(buffer);
@@ -35,8 +31,7 @@ char* ast_kind_enum_json(ast_kind_enum_t* kind_enum)
         buffer_append_str(temp, ", \"values\":");
         if (kind_enum->values == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else {
+        } else {
             // TODO
             buffer_append_str(temp, "\"TODO\"");
         }

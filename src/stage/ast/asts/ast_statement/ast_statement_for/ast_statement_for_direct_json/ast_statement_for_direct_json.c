@@ -1,7 +1,6 @@
 #include "ast_statement_for_direct_json.h"
 
-char* ast_statement_for_direct_json(ast_statement_for_t statement_for)
-{
+char* ast_statement_for_direct_json(ast_statement_for_t statement_for) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
@@ -9,12 +8,9 @@ char* ast_statement_for_direct_json(ast_statement_for_t statement_for)
 
     // initializer
     buffer_append_str(temp, "\"initializer\":");
-    if (statement_for.initializer == NULL)
-    {
+    if (statement_for.initializer == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         char* initializer = ast_json(statement_for.initializer);
         buffer_append_str(temp, initializer);
         memory_destroy(initializer);
@@ -22,12 +18,9 @@ char* ast_statement_for_direct_json(ast_statement_for_t statement_for)
 
     // condition
     buffer_append_str(temp, "\"condition\":");
-    if (statement_for.condition == NULL)
-    {
+    if (statement_for.condition == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         char* condition = ast_json(statement_for.condition);
         buffer_append_str(temp, condition);
         memory_destroy(condition);
@@ -35,12 +28,9 @@ char* ast_statement_for_direct_json(ast_statement_for_t statement_for)
 
     // increment
     buffer_append_str(temp, "\"increment\":");
-    if (statement_for.increment == NULL)
-    {
+    if (statement_for.increment == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         char* increment = ast_json(statement_for.increment);
         buffer_append_str(temp, increment);
         memory_destroy(increment);
@@ -48,17 +38,13 @@ char* ast_statement_for_direct_json(ast_statement_for_t statement_for)
 
     // block
     buffer_append_str(temp, "\"block\":");
-    if (statement_for.block == NULL)
-    {
+    if (statement_for.block == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         char* block = ast_json(statement_for.block);
         buffer_append_str(temp, block);
         memory_destroy(block);
     }
-
 
     buffer_append_char(temp, '}');
 

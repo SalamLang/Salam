@@ -1,7 +1,6 @@
 #include "ast_kind_decl_direct_json.h"
 
-char* ast_kind_decl_direct_json(ast_kind_decl_t kind_decl)
-{
+char* ast_kind_decl_direct_json(ast_kind_decl_t kind_decl) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(256);
     buffer_append_char(temp, '{');
@@ -14,8 +13,7 @@ char* ast_kind_decl_direct_json(ast_kind_decl_t kind_decl)
     buffer_append_str(temp, ", \"value\":");
     if (kind_decl.value == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else {
+    } else {
         char* buffer = ast_json(kind_decl.value);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);

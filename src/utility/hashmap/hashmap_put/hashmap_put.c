@@ -1,7 +1,6 @@
 #include <utility/hashmap/hashmap_put/hashmap_put.h>
 
-void hashmap_put(hashmap_t* map, const char* key, void* value)
-{
+void hashmap_put(hashmap_t* map, const char* key, void* value) {
     unsigned long idx = string_hash(key) % map->capacity;
     hashmap_entry_t* curr = map->buckets[idx];
 

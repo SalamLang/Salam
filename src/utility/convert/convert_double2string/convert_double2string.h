@@ -6,6 +6,6 @@
 // base
 #include <base.h>
 
-char *convert_double2string(double value);
+char* convert_double2string(double value);
 
-#endif // _UTILITY_CONVERT_CONVERT_DOUBLE2STRING_CONVERT_DOUBLE2STRING_H_
+#endif  // _UTILITY_CONVERT_CONVERT_DOUBLE2STRING_CONVERT_DOUBLE2STRING_H_

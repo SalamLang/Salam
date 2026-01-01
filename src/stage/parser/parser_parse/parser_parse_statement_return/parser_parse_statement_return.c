@@ -1,7 +1,6 @@
 #include "parser_parse_statement_return.h"
 
-ast_t* parser_parse_statement_return(parser_t* parser)
-{
+ast_t* parser_parse_statement_return(parser_t* parser) {
     DEBUG_ME;
     if (!parser) return NULL;
 

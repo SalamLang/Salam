@@ -9,8 +9,7 @@
  * @returns {bool}
  *
  */
-bool buffer_is(buffer_t *str1, const char *str2)
-{
+bool buffer_is(buffer_t* str1, const char* str2) {
     DEBUG_ME;
     if (str1 == NULL || str2 == NULL) {
         return false;

@@ -1,7 +1,6 @@
 #include <utility/file/file_reads/file_reads.h>
 
-char* file_reads(const char* file_path)
-{
+char* file_reads(const char* file_path) {
     FILE* file = fopen(file_path, "rb");
     if (!file) {
         log_fatal("Error: cannot open file '%s'\n", file_path);

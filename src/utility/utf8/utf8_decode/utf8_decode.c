@@ -1,7 +1,6 @@
 #include <utility/utf8/utf8_decode/utf8_decode.h>
 
-uint32_t utf8_decode(const char *source, size_t *index)
-{
+uint32_t utf8_decode(const char* source, size_t* index) {
     DEBUG_ME;
     size_t length = utf8_char_length(source[*index]);
     uint32_t codepoint = 0;

@@ -1,7 +1,7 @@
 #include "ast_statement_expression_direct_json.h"
 
-char* ast_statement_expression_direct_json(ast_statement_expression_t statement_expression)
-{
+char* ast_statement_expression_direct_json(
+    ast_statement_expression_t statement_expression) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
@@ -9,12 +9,9 @@ char* ast_statement_expression_direct_json(ast_statement_expression_t statement_
 
     // value
     buffer_append_str(temp, "\"value\":");
-    if (statement_expression.value == NULL)
-    {
+    if (statement_expression.value == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         char* name = ast_json(statement_expression.value);
         buffer_append_str(temp, name);
         memory_destroy(name);

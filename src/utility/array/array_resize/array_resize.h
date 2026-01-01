@@ -6,4 +6,4 @@
 
 int array_resize(array_t* array, size_t new_capacity);
 
-#endif // _UTILITY_ARRAY_ARRAY_RESIZE_ARRAY_RESIZE_H_
+#endif  // _UTILITY_ARRAY_ARRAY_RESIZE_ARRAY_RESIZE_H_

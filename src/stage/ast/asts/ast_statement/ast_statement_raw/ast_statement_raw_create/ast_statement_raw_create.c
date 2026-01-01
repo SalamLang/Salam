@@ -1,7 +1,6 @@
 #include "ast_statement_raw_create.h"
 
-ast_t* ast_statement_raw_create(token_t* token)
-{
+ast_t* ast_statement_raw_create(token_t* token) {
     DEBUG_ME;
     if (!token) return NULL;
 

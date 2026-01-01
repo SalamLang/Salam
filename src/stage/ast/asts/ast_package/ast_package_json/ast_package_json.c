@@ -1,26 +1,19 @@
 #include "ast_package_json.h"
 
-char* ast_package_json(ast_package_t* package)
-{
+char* ast_package_json(ast_package_t* package) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
-    if (package == NULL)
-    {
+    if (package == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         buffer_append_char(temp, '{');
 
         // name
         buffer_append_str(temp, "\"name\":");
-        if (package->name == NULL)
-        {
+        if (package->name == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else
-        {
+        } else {
             buffer_append_str(temp, "\"");
             char* name = string_escaping(package->name);
             buffer_append_str(temp, name);

@@ -3,4 +3,4 @@
 
 char* io_directory();
 
-#endif // _UTILITY_IO_IO_DIRECTORY_IO_DIRECTORY_H_
+#endif  // _UTILITY_IO_IO_DIRECTORY_IO_DIRECTORY_H_

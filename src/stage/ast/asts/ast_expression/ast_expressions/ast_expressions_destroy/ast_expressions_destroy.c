@@ -1,7 +1,6 @@
 #include "ast_expressions_destroy.h"
 
-void ast_expressions_destroy(ast_expressions_t* expressions)
-{
+void ast_expressions_destroy(ast_expressions_t* expressions) {
     DEBUG_ME;
     if (!expressions) return;
 

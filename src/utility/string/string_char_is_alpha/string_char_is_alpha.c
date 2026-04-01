@@ -8,8 +8,7 @@
  * @returns {bool}
  *
  */
-bool string_char_is_alpha(const char c)
-{
+bool string_char_is_alpha(const char c) {
     DEBUG_ME;
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }

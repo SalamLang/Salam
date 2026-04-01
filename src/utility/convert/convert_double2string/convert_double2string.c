@@ -8,8 +8,7 @@
  * @returns {char*}
  *
  */
-char *convert_double2string(double value)
-{
+char* convert_double2string(double value) {
     DEBUG_ME;
     static char buffer[256];
     snprintf(buffer, sizeof(buffer), "%f", value);

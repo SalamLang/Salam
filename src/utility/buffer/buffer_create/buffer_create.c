@@ -8,10 +8,9 @@
  * @returns {buffer_t*}
  *
  */
-buffer_t *buffer_create(size_t initial_capacity)
-{
+buffer_t* buffer_create(size_t initial_capacity) {
     DEBUG_ME;
-    buffer_t *str = memory_allocation(sizeof(buffer_t));
+    buffer_t* str = memory_allocation(sizeof(buffer_t));
 
     str->capacity = initial_capacity;
     str->length = 0;

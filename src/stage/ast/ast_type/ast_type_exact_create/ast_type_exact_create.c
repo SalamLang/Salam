@@ -1,7 +1,9 @@
 #include "ast_type_exact_create.h"
 
-ast_type_t* ast_type_exact_create(ast_type_type_t type, bool is_pointer, bool is_reference, bool is_const, char *name, ast_t* element_type, ast_t* key_type, ast_t* value_type, array_t* tuple_elements)
-{
+ast_type_t* ast_type_exact_create(ast_type_type_t type, bool is_pointer,
+                                  bool is_reference, bool is_const, char* name,
+                                  ast_t* element_type, ast_t* key_type,
+                                  ast_t* value_type, array_t* tuple_elements) {
     DEBUG_ME;
     ast_type_t* ast_type = memory_allocation(sizeof(ast_type_t));
     ast_type->type = type;

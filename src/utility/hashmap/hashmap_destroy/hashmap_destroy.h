@@ -6,4 +6,4 @@
 
 void hashmap_destroy(hashmap_t* map);
 
-#endif // _UTILITY_HASHMAP_HASHMAP_FREE_HASHMAP_DESTROY_H_
+#endif  // _UTILITY_HASHMAP_HASHMAP_FREE_HASHMAP_DESTROY_H_

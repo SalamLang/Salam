@@ -1,7 +1,7 @@
 #include "ast_statement_variable_decl_direct_json.h"
 
-char* ast_statement_variable_decl_direct_json(ast_statement_variable_decl_t statement_variable_decl)
-{
+char* ast_statement_variable_decl_direct_json(
+    ast_statement_variable_decl_t statement_variable_decl) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
@@ -9,12 +9,9 @@ char* ast_statement_variable_decl_direct_json(ast_statement_variable_decl_t stat
 
     // name
     buffer_append_str(temp, "\"name\":");
-    if (statement_variable_decl.name == NULL)
-    {
+    if (statement_variable_decl.name == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         buffer_append_str(temp, "\"");
         char* name = string_escaping(statement_variable_decl.name);
         buffer_append_str(temp, name);
@@ -24,12 +21,9 @@ char* ast_statement_variable_decl_direct_json(ast_statement_variable_decl_t stat
 
     // type
     buffer_append_str(temp, "\"type\":");
-    if (statement_variable_decl.type == NULL)
-    {
+    if (statement_variable_decl.type == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         char* type = ast_json(statement_variable_decl.type);
         buffer_append_str(temp, type);
         memory_destroy(type);
@@ -37,12 +31,9 @@ char* ast_statement_variable_decl_direct_json(ast_statement_variable_decl_t stat
 
     // value
     buffer_append_str(temp, "\"value\":");
-    if (statement_variable_decl.value == NULL)
-    {
+    if (statement_variable_decl.value == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         char* value = ast_json(statement_variable_decl.value);
         buffer_append_str(temp, value);
         memory_destroy(value);

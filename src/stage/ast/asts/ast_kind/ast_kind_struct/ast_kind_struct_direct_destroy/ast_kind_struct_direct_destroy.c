@@ -1,7 +1,6 @@
 #include "ast_kind_struct_direct_destroy.h"
 
-void ast_kind_struct_direct_destroy(ast_kind_struct_t kind_struct)
-{
+void ast_kind_struct_direct_destroy(ast_kind_struct_t kind_struct) {
     DEBUG_ME;
     if (kind_struct.name != NULL) {
         memory_destroy(kind_struct.name);

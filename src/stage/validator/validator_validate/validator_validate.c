@@ -1,7 +1,6 @@
 #include "validator_validate.h"
 
-void validator_validate(ast_t* ast)
-{
+void validator_validate(ast_t* ast) {
     DEBUG_ME;
     if (!ast) return;
 
@@ -17,11 +16,15 @@ void validator_validate(ast_t* ast)
 
         case AST_TYPE_PROGRAM:
             DEBUG_ME;
-            for (size_t i = 0; i < ast->raw.program_value.variable_declarations->size; i++) {
-                validator_validate(array_get(ast->raw.program_value.variable_declarations, i));
+            for (size_t i = 0;
+                 i < ast->raw.program_value.variable_declarations->size; i++) {
+                validator_validate(
+                    array_get(ast->raw.program_value.variable_declarations, i));
             }
-            for (size_t i = 0; i < ast->raw.program_value.function_declarations->size; i++) {
-                validator_validate(array_get(ast->raw.program_value.function_declarations, i));
+            for (size_t i = 0;
+                 i < ast->raw.program_value.function_declarations->size; i++) {
+                validator_validate(
+                    array_get(ast->raw.program_value.function_declarations, i));
             }
             break;
 
@@ -85,7 +88,8 @@ void validator_validate(ast_t* ast)
         case AST_TYPE_BLOCK:
             DEBUG_ME;
             for (size_t i = 0; i < ast->raw.block_value.statements->size; i++) {
-                validator_validate(array_get(ast->raw.block_value.statements, i));
+                validator_validate(
+                    array_get(ast->raw.block_value.statements, i));
             }
             break;
 
@@ -97,8 +101,10 @@ void validator_validate(ast_t* ast)
 
         case AST_TYPE_PARAMETERS:
             DEBUG_ME;
-            for (size_t i = 0; i < ast->raw.parameters_value.values->size; i++) {
-                validator_validate(array_get(ast->raw.parameters_value.values, i));
+            for (size_t i = 0; i < ast->raw.parameters_value.values->size;
+                 i++) {
+                validator_validate(
+                    array_get(ast->raw.parameters_value.values, i));
             }
             break;
 
@@ -109,8 +115,10 @@ void validator_validate(ast_t* ast)
 
         case AST_TYPE_ATTRIBUTES:
             DEBUG_ME;
-            for (size_t i = 0; i < ast->raw.attributes_value.values->size; i++) {
-                validator_validate(array_get(ast->raw.attributes_value.values, i));
+            for (size_t i = 0; i < ast->raw.attributes_value.values->size;
+                 i++) {
+                validator_validate(
+                    array_get(ast->raw.attributes_value.values, i));
             }
             break;
 
@@ -122,19 +130,24 @@ void validator_validate(ast_t* ast)
         case AST_TYPE_ARGUMENTS:
             DEBUG_ME;
             for (size_t i = 0; i < ast->raw.arguments_value.values->size; i++) {
-                validator_validate(array_get(ast->raw.arguments_value.values, i));
+                validator_validate(
+                    array_get(ast->raw.arguments_value.values, i));
             }
             break;
 
         case AST_TYPE_EXPRESSION_ITEM:
             DEBUG_ME;
-            ast->raw.expression_item_value = validator_validate_direct_expression_item(ast->raw.expression_item_value);
+            ast->raw.expression_item_value =
+                validator_validate_direct_expression_item(
+                    ast->raw.expression_item_value);
             break;
 
         case AST_TYPE_EXPRESSIONS:
             DEBUG_ME;
-            for (size_t i = 0; i < ast->raw.expressions_value.values->size; i++) {
-                validator_validate(array_get(ast->raw.expressions_value.values, i));
+            for (size_t i = 0; i < ast->raw.expressions_value.values->size;
+                 i++) {
+                validator_validate(
+                    array_get(ast->raw.expressions_value.values, i));
             }
             break;
 
@@ -211,7 +224,8 @@ void validator_validate(ast_t* ast)
 
         default:
             DEBUG_ME;
-            log_fatal("Unknown AST type in validator_validate: %d\n", ast->base.type);
+            log_fatal("Unknown AST type in validator_validate: %d\n",
+                      ast->base.type);
             break;
     }
 }

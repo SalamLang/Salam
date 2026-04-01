@@ -12,4 +12,4 @@
 
 ast_t* ast_create();
 
-#endif // _STAGE_AST_AST_CREATE_AST_CREATE_H_
+#endif  // _STAGE_AST_AST_CREATE_AST_CREATE_H_

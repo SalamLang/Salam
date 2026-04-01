@@ -1,7 +1,6 @@
 #include <stage/parser/parser_skip/parser_skip.h>
 
-bool parser_skip(parser_t* parser, token_type_t type)
-{
+bool parser_skip(parser_t* parser, token_type_t type) {
     DEBUG_ME;
     if (!parser) return false;
     if (!PARSER_HAS_CURRENT) return false;

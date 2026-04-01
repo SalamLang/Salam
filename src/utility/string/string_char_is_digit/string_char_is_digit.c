@@ -8,8 +8,7 @@
  * @returns {bool}
  *
  */
-bool string_char_is_digit(char c)
-{
+bool string_char_is_digit(char c) {
     DEBUG_ME;
     return c >= '0' && c <= '9';
 }

@@ -1,7 +1,7 @@
 #include "ast_expression_index_direct_json.h"
 
-char* ast_expression_index_direct_json(ast_expression_index_t expression_index)
-{
+char* ast_expression_index_direct_json(
+    ast_expression_index_t expression_index) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
@@ -12,12 +12,9 @@ char* ast_expression_index_direct_json(ast_expression_index_t expression_index)
 
     // object
     buffer_append_str(temp, "\"object\":");
-    if (expression_index.object == NULL)
-    {
+    if (expression_index.object == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         char* buffer = ast_json(expression_index.object);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);
@@ -25,12 +22,9 @@ char* ast_expression_index_direct_json(ast_expression_index_t expression_index)
 
     // index
     buffer_append_str(temp, ",\"index\":");
-    if (expression_index.index == NULL)
-    {
+    if (expression_index.index == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         char* buffer = ast_json(expression_index.index);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);
@@ -38,12 +32,9 @@ char* ast_expression_index_direct_json(ast_expression_index_t expression_index)
 
     // runtime_type
     buffer_append_str(temp, ",\"runtime_type\":");
-    if (expression_index.runtime_type == NULL)
-    {
+    if (expression_index.runtime_type == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         char* buffer = ast_type_json(expression_index.runtime_type);
         buffer_append_str(temp, buffer);
         memory_destroy(buffer);

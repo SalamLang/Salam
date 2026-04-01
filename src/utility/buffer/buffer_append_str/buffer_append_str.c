@@ -9,8 +9,7 @@
  * @returns {void}
  *
  */
-void buffer_append_str(buffer_t *str, const char *suffix)
-{
+void buffer_append_str(buffer_t* str, const char* suffix) {
     DEBUG_ME;
     if (suffix == NULL) {
         return;

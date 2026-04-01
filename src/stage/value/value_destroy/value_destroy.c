@@ -1,9 +1,8 @@
 #include <stage/value/value_destroy/value_destroy.h>
 
-void value_destroy(value_t* value)
-{
+void value_destroy(value_t* value) {
     DEBUG_ME;
-    if (! value) return;
+    if (!value) return;
 
     switch (value->type) {
         case VALUE_TYPE_STRING:

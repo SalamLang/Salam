@@ -1,7 +1,7 @@
 #include "ast_expression_binary_direct_destroy.h"
 
-void ast_expression_binary_direct_destroy(ast_expression_binary_t expression_binary)
-{
+void ast_expression_binary_direct_destroy(
+    ast_expression_binary_t expression_binary) {
     DEBUG_ME;
     if (expression_binary.op != NULL) {
         memory_destroy(expression_binary.op);

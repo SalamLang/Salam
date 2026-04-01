@@ -1,7 +1,6 @@
 #include <utility/utf8/utf8_char_length/utf8_char_length.h>
 
-size_t utf8_char_length(char c)
-{
+size_t utf8_char_length(char c) {
     DEBUG_ME;
     if ((c & 0x80) == 0) {
         return 1;  // 0xxxxxxx

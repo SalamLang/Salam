@@ -9,4 +9,4 @@
 
 token_t* token_create(token_type_t type, token_location_t token_location);
 
-#endif // _STAGE_TOKEN_TOKEN_CREATE_TOKEN_CREATE_H_
+#endif  // _STAGE_TOKEN_TOKEN_CREATE_TOKEN_CREATE_H_

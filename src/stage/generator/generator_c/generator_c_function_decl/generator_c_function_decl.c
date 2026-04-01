@@ -1,7 +1,6 @@
 #include "generator_c_function_decl.h"
 
-buffer_t* generator_c_function_decl(generator_t* generator, ast_t* ast)
-{
+buffer_t* generator_c_function_decl(generator_t* generator, ast_t* ast) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(1024);
 
@@ -11,7 +10,8 @@ buffer_t* generator_c_function_decl(generator_t* generator, ast_t* ast)
     if (function_decl.return_type == NULL) {
         buffer_append_str(temp, "void");
     } else {
-        buffer_t* return_type = generator_c_node(generator, function_decl.return_type);
+        buffer_t* return_type =
+            generator_c_node(generator, function_decl.return_type);
         buffer_append(temp, return_type);
         buffer_destroy(return_type);
     }

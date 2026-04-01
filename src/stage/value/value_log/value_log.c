@@ -1,7 +1,6 @@
 #include <stage/value/value_log/value_log.h>
 
-void value_log(value_t* value)
-{
+void value_log(value_t* value) {
     if (value == NULL) {
         log_info("Value: NULL\n");
         return;
@@ -18,7 +17,8 @@ void value_log(value_t* value)
             log_info("Value: Float(%f)\n", value->raw.float_value);
             break;
         case VALUE_TYPE_BOOL:
-            log_info("Value: Bool(%s)\n", value->raw.bool_value ? "true" : "false");
+            log_info("Value: Bool(%s)\n",
+                     value->raw.bool_value ? "true" : "false");
             break;
         case VALUE_TYPE_NULL:
             log_info("Value: Null\n");

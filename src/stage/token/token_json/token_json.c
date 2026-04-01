@@ -1,12 +1,10 @@
 #include <stage/token/token_json/token_json.h>
 
-char* token_json(const token_t* token)
-{
-    buffer_t *temp = buffer_create(256);
+char* token_json(const token_t* token) {
+    buffer_t* temp = buffer_create(256);
     if (token == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else {
+    } else {
         buffer_append_char(temp, '{');
 
         // base

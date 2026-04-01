@@ -13,4 +13,4 @@
 
 char* string_duplicate(const char* s);
 
-#endif // _UTILITY_STRING_STRING_DUPLICATE_STRING_DUPLICATE_H_
+#endif  // _UTILITY_STRING_STRING_DUPLICATE_STRING_DUPLICATE_H_

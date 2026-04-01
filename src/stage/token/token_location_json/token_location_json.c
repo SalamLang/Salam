@@ -1,8 +1,7 @@
 #include <stage/token/token_location_json/token_location_json.h>
 
-char* token_location_json(token_location_t location)
-{
-    buffer_t *temp = buffer_create(256);
+char* token_location_json(token_location_t location) {
+    buffer_t* temp = buffer_create(256);
 
     buffer_append_char(temp, '{');
 

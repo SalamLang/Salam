@@ -8,10 +8,10 @@
  * @returns {char} English digit
  *
  */
-char string_convert_utf8_to_english_digit(char *uc)
-{
+char string_convert_utf8_to_english_digit(char* uc) {
     DEBUG_ME;
-    if (string_compare(uc, "۰") == 0 || string_compare(uc, "٠") == 0 || string_compare(uc, "0") == 0) {
+    if (string_compare(uc, "۰") == 0 || string_compare(uc, "٠") == 0 ||
+        string_compare(uc, "0") == 0) {
         return '0';
     } else if (string_compare(uc, "۱") == 0 || string_compare(uc, "١") == 0 ||
                string_compare(uc, "1") == 0) {

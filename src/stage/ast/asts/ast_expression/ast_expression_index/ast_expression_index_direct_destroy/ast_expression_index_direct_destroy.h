@@ -4,6 +4,7 @@
 // base
 #include <base.h>
 
-void ast_expression_index_direct_destroy(ast_expression_index_t expression_index);
+void ast_expression_index_direct_destroy(
+    ast_expression_index_t expression_index);
 
-#endif // _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSION_INDEX_AST_EXPRESSION_INDEX_DIRECT_DESTROY_AST_EXPRESSION_INDEX_DIRECT_DESTROY_H_
+#endif  // _STAGE_AST_ASTS_AST_EXPRESSION_AST_EXPRESSION_INDEX_AST_EXPRESSION_INDEX_DIRECT_DESTROY_AST_EXPRESSION_INDEX_DIRECT_DESTROY_H_

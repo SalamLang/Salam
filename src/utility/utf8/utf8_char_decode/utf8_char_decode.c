@@ -10,10 +10,9 @@
  * @returns {int}
  *
  */
-char *utf8_char_decode(char *source, size_t *index, size_t *num_bytes)
-{
+char* utf8_char_decode(char* source, size_t* index, size_t* num_bytes) {
     DEBUG_ME;
-    char *utf8_char = memory_allocation(5);
+    char* utf8_char = memory_allocation(5);
     utf8_char[0] = source[*index];
 
     size_t bytes = 0;

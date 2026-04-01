@@ -9,10 +9,9 @@
  * @returns {void}
  *
  */
-void scanner_scan_identifier(scanner_t *scanner, char *uc)
-{
+void scanner_scan_identifier(scanner_t* scanner, char* uc) {
     DEBUG_ME;
-    buffer_t *value = buffer_create(25);
+    buffer_t* value = buffer_create(25);
 
     buffer_append_str(value, uc);
 
@@ -42,7 +41,7 @@ void scanner_scan_identifier(scanner_t *scanner, char *uc)
         }
     }
 
-    token_t *token = token_create(type, SCANNER_CURRENT_LOCATION);
+    token_t* token = token_create(type, SCANNER_CURRENT_LOCATION);
     if (type == TOKEN_TYPE_OPERATOR) {
         token->operator_type = operator_type;
     }
@@ -54,12 +53,13 @@ void scanner_scan_identifier(scanner_t *scanner, char *uc)
         }
 
         if (SCANNER_CURRENT != '{') {
-            log_fatal("Expected '{' after raw keyword, but got '%c'", SCANNER_CURRENT);
+            log_fatal("Expected '{' after raw keyword, but got '%c'",
+                      SCANNER_CURRENT);
         }
 
         SCANNER_NEXT;
 
-        buffer_t *raw_value = buffer_create(64);
+        buffer_t* raw_value = buffer_create(64);
         size_t brace_depth = 1;
 
         while (SCANNER_CURRENT != '\0' && brace_depth > 0) {

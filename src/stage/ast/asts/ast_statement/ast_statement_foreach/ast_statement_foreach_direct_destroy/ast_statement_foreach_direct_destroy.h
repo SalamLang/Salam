@@ -4,6 +4,7 @@
 // base
 #include <base.h>
 
-void ast_statement_foreach_direct_destroy(ast_statement_foreach_t statement_foreach);
+void ast_statement_foreach_direct_destroy(
+    ast_statement_foreach_t statement_foreach);
 
-#endif // _STAGE_AST_ASTS_AST_STATEMENT_AST_STATEMENT_FOREACH_AST_STATEMENT_FOREACH_DIRECT_DESTROY_AST_STATEMENT_FOREACH_DIRECT_DESTROY_H_
+#endif  // _STAGE_AST_ASTS_AST_STATEMENT_AST_STATEMENT_FOREACH_AST_STATEMENT_FOREACH_DIRECT_DESTROY_AST_STATEMENT_FOREACH_DIRECT_DESTROY_H_

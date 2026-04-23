@@ -1,7 +1,6 @@
 #include "generator_c_statement_print.h"
 
-buffer_t* generator_c_statement_print(generator_t* generator, ast_t* ast)
-{
+buffer_t* generator_c_statement_print(generator_t* generator, ast_t* ast) {
     DEBUG_ME;
     ast_statement_print_t print = ast->raw.statement_print_value;
     buffer_t* temp = buffer_create(1024);
@@ -13,7 +12,8 @@ buffer_t* generator_c_statement_print(generator_t* generator, ast_t* ast)
 
     buffer_append_char(temp, '\"');
     for (size_t i = 0; i < print.value_count; i++) {
-        ast_t* expression_item = array_get(print.values->raw.expressions_value.values, i);
+        ast_t* expression_item =
+            array_get(print.values->raw.expressions_value.values, i);
         switch (expression_item->raw.expression_item_value.runtime_type->type) {
             case AST_KIND_TYPE_INT:
                 buffer_append_str(temp, "%d");

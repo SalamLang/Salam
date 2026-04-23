@@ -1,7 +1,7 @@
 #ifndef _UTILITY_FILE_FILE_SIZE_FILE_SIZE_H_
 #define _UTILITY_FILE_FILE_SIZE_FILE_SIZE_H_
 
-#include <stdio.h> // for FILE, fopen, fclose, fseek, ftell
+#include <stdio.h>  // for FILE, fopen, fclose, fseek, ftell
 
 // memory
 #include <utility/memory/memory_allocation/memory_allocation.h>
@@ -11,4 +11,4 @@
 
 long file_size(const char* file_path);
 
-#endif // _UTILITY_FILE_FILE_SIZE_FILE_SIZE_H_
+#endif  // _UTILITY_FILE_FILE_SIZE_FILE_SIZE_H_

@@ -19,4 +19,4 @@
 
 char* ast_program_json(ast_program_t* program);
 
-#endif // _STAGE_AST_ASTS_AST_PROGRAM_AST_PROGRAM_JSON_AST_PROGRAM_JSON_H_
+#endif  // _STAGE_AST_ASTS_AST_PROGRAM_AST_PROGRAM_JSON_AST_PROGRAM_JSON_H_

@@ -9,4 +9,4 @@
 
 char* value_name(value_type_t type);
 
-#endif // _STAGE_VALUE_VALUE_NAME_VALUE_NAME_H_
+#endif  // _STAGE_VALUE_VALUE_NAME_VALUE_NAME_H_

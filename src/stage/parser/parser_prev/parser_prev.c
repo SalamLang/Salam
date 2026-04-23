@@ -1,7 +1,6 @@
 #include <stage/parser/parser_prev/parser_prev.h>
 
-void parser_prev(parser_t* parser)
-{
+void parser_prev(parser_t* parser) {
     DEBUG_ME;
     if (!parser) return;
     if (!PARSER_HAS_PREV) {

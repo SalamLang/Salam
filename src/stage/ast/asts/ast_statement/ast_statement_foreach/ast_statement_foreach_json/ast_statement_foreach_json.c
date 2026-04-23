@@ -1,38 +1,29 @@
 #include "ast_statement_foreach_json.h"
 
-char* ast_statement_foreach_json(ast_statement_foreach_t* statement_foreach)
-{
+char* ast_statement_foreach_json(ast_statement_foreach_t* statement_foreach) {
     buffer_t* temp = buffer_create(24);
 
-    if (statement_foreach == NULL)
-    {
+    if (statement_foreach == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         buffer_append_char(temp, '{');
 
         // loop_variable
         buffer_append_str(temp, "\"loop_variable\":");
-        if (statement_foreach->loop_variable == NULL)
-        {
+        if (statement_foreach->loop_variable == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else
-        {
-            char* loop_variable = string_escaping(statement_foreach->loop_variable);
+        } else {
+            char* loop_variable =
+                string_escaping(statement_foreach->loop_variable);
             buffer_append_str(temp, loop_variable);
             memory_destroy(loop_variable);
         }
 
         // iterable
         buffer_append_str(temp, "\"iterable\":");
-        if (statement_foreach->iterable == NULL)
-        {
+        if (statement_foreach->iterable == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else
-        {
+        } else {
             char* iterable = ast_json(statement_foreach->iterable);
             buffer_append_str(temp, iterable);
             memory_destroy(iterable);
@@ -40,12 +31,9 @@ char* ast_statement_foreach_json(ast_statement_foreach_t* statement_foreach)
 
         // type
         buffer_append_str(temp, "\"type\":");
-        if (statement_foreach->type == NULL)
-        {
+        if (statement_foreach->type == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else
-        {
+        } else {
             char* type = ast_json(statement_foreach->type);
             buffer_append_str(temp, type);
             memory_destroy(type);
@@ -53,17 +41,13 @@ char* ast_statement_foreach_json(ast_statement_foreach_t* statement_foreach)
 
         // block
         buffer_append_str(temp, "\"block\":");
-        if (statement_foreach->block == NULL)
-        {
+        if (statement_foreach->block == NULL) {
             buffer_append_str(temp, "null");
-        }
-        else
-        {
+        } else {
             char* block = ast_json(statement_foreach->block);
             buffer_append_str(temp, block);
             memory_destroy(block);
         }
-
 
         buffer_append_char(temp, '}');
     }

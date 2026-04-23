@@ -5,9 +5,9 @@
 #include <base.h>
 
 // buffer
-#include <utility/buffer/type.h>
 #include <utility/buffer/buffer_append_str/buffer_append_str.h>
+#include <utility/buffer/type.h>
 
-void buffer_set_str(buffer_t *str, const char *value);
+void buffer_set_str(buffer_t* str, const char* value);
 
-#endif // _UTILITY_BUFFER_BUFFER_SET_STR_BUFFER_SET_STR_H_
+#endif  // _UTILITY_BUFFER_BUFFER_SET_STR_BUFFER_SET_STR_H_

@@ -1,7 +1,6 @@
 #include <stage/parser/parser_eat/parser_eat.h>
 
-token_t* parser_eat(parser_t* parser)
-{
+token_t* parser_eat(parser_t* parser) {
     DEBUG_ME;
     if (!parser) return NULL;
 

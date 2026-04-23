@@ -1,7 +1,6 @@
 #include <utility/log/log_fatal/log_fatal.h>
 
-void log_fatal(const char* format, ...)
-{
+void log_fatal(const char* format, ...) {
     va_list args;
     va_start(args, format);
     vfprintf(stderr, format, args);

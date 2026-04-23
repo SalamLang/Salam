@@ -1,7 +1,6 @@
 #include <stage/ast/asts/ast_extern/ast_extern_variable/ast_extern_variable_direct_destroy/ast_extern_variable_direct_destroy.h>
 
-void ast_extern_variable_direct_destroy(ast_extern_variable_t extern_variable)
-{
+void ast_extern_variable_direct_destroy(ast_extern_variable_t extern_variable) {
     if (extern_variable.name != NULL) {
         memory_destroy(extern_variable.name);
     }

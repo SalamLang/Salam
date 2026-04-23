@@ -12,4 +12,4 @@
 
 generator_t* generator_create(ast_t* ast);
 
-#endif // _STAGE_GENERATOR_GENERATOR_CREATE_GENERATOR_CREATE_H_
+#endif  // _STAGE_GENERATOR_GENERATOR_CREATE_GENERATOR_CREATE_H_

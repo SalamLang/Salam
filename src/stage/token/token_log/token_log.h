@@ -8,8 +8,8 @@
 #include <utility/log/log_info/log_info.h>
 
 // token
-#include <stage/token/type.h>
 #include <stage/token/token_name/token_name.h>
+#include <stage/token/type.h>
 
 // value
 #include <stage/value/type.h>
@@ -17,4 +17,4 @@
 
 void token_log(token_t* token);
 
-#endif // _STAGE_TOKEN_TOKEN_LOG_TOKEN_LOG_H_
+#endif  // _STAGE_TOKEN_TOKEN_LOG_TOKEN_LOG_H_

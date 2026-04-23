@@ -11,8 +11,8 @@
 #include <stage/ast/type.h>
 
 // generator
-#include <stage/generator/type.h>
 #include <stage/generator/generator_c/generator_c_node/generator_c_node.h>
+#include <stage/generator/type.h>
 
 buffer_t* generator_c_program(generator_t* generator, ast_t* ast);
 

@@ -1,7 +1,6 @@
 #include <utility/string/string_trim/string_trim.h>
 
-char* string_trim(const char* input)
-{
+char* string_trim(const char* input) {
     DEBUG_ME;
     if (!input) return NULL;
 

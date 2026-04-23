@@ -1,7 +1,6 @@
 #include "ast_import_direct_json.h"
 
-char* ast_import_direct_json(ast_import_t import)
-{
+char* ast_import_direct_json(ast_import_t import) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
@@ -9,12 +8,9 @@ char* ast_import_direct_json(ast_import_t import)
 
     // name
     buffer_append_str(temp, "\"name\":");
-    if (import.name == NULL)
-    {
+    if (import.name == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         buffer_append_str(temp, "\"");
         char* name = string_escaping(import.name);
         buffer_append_str(temp, name);

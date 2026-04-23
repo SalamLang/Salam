@@ -8,8 +8,7 @@
  * @returns {char*}
  *
  */
-char *convert_int2string(int value)
-{
+char* convert_int2string(int value) {
     DEBUG_ME;
     static char buffer[256];
     snprintf(buffer, sizeof(buffer), "%d", value);

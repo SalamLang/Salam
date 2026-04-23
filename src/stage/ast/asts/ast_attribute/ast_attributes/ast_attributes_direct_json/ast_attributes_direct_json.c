@@ -1,7 +1,6 @@
 #include "ast_attributes_direct_json.h"
 
-char* ast_attributes_direct_json(ast_attributes_t attributes)
-{
+char* ast_attributes_direct_json(ast_attributes_t attributes) {
     DEBUG_ME;
     buffer_t* temp = buffer_create(24);
 
@@ -16,17 +15,12 @@ char* ast_attributes_direct_json(ast_attributes_t attributes)
 
     // values
     buffer_append_str(temp, ",\"values\":");
-    if (attributes.values == NULL)
-    {
+    if (attributes.values == NULL) {
         buffer_append_str(temp, "null");
-    }
-    else
-    {
+    } else {
         buffer_append_char(temp, '[');
-        for (size_t i = 0; i < attributes.values->size; i++)
-        {
-            if (i > 0)
-            {
+        for (size_t i = 0; i < attributes.values->size; i++) {
+            if (i > 0) {
                 buffer_append_str(temp, ", ");
             }
             ast_t* item = attributes.values->items[i];

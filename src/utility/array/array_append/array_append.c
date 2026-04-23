@@ -1,7 +1,6 @@
 #include <utility/array/array_append/array_append.h>
 
-int array_append(array_t* array, void* item)
-{
+int array_append(array_t* array, void* item) {
     DEBUG_ME;
     if (!array) return 0;
 

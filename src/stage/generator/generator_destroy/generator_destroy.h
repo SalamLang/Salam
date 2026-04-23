@@ -6,4 +6,4 @@
 
 void generator_destroy(generator_t* generator);
 
-#endif // _STAGE_GENERATOR_GENERATOR_DESTROY_GENERATOR_DESTROY_H_
+#endif  // _STAGE_GENERATOR_GENERATOR_DESTROY_GENERATOR_DESTROY_H_

@@ -2,8 +2,7 @@
 
 #define GENERATOR_C_IDENT_SIZE 2
 
-buffer_t* generator_c_ident(generator_t* generator)
-{
+buffer_t* generator_c_ident(generator_t* generator) {
     DEBUG_ME;
     if (generator->ident == 0) return NULL;
 

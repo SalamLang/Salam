@@ -8,16 +8,16 @@
 #include <utility/log/log_info/log_info.h>
 
 // array
-#include <utility/array/array_size/array_size.h>
 #include <utility/array/array_get/array_get.h>
+#include <utility/array/array_size/array_size.h>
 
 // scanner
 #include <stage/scanner/type.h>
 
 // token
-#include <stage/token/type.h>
 #include <stage/token/token_log/token_log.h>
+#include <stage/token/type.h>
 
 void scanner_log(scanner_t* scanner);
 
-#endif // _STAGE_SCANNER_SCANNER_LOG_SCANNER_LOG_H_
+#endif  // _STAGE_SCANNER_SCANNER_LOG_SCANNER_LOG_H_

@@ -3,4 +3,4 @@
 
 unsigned long string_hash(const char* str);
 
-#endif // _UTILITY_STRING_STRING_HASH_STRING_HASH_H_
+#endif  // _UTILITY_STRING_STRING_HASH_STRING_HASH_H_

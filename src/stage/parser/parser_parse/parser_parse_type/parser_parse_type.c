@@ -15,4 +15,3 @@ ast_t* parser_parse_type(parser_t* parser)
 
     return type;
 }
-

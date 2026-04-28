@@ -47,4 +47,3 @@ char* ast_kind_enum_json(ast_kind_enum_t* kind_enum)
     buffer_destroy(temp);
     return result;
 }
-

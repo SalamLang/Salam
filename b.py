@@ -20,9 +20,7 @@ logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 
 # ----------- Utility Functions -----------
-def run_command(
-    cmd: List[str], capture_output: bool = False, timeout: Optional[int] = None
-) -> Optional[str]:
+def run_command(cmd: List[str], capture_output: bool = False, timeout: Optional[int] = None) -> Optional[str]:
     try:
         if capture_output:
             result = subprocess.run(
@@ -39,7 +37,7 @@ def run_command(
             logger.error(e.stderr)
         sys.exit(1)
     except subprocess.TimeoutExpired:
-        logger.error(f"Command timed out: {''.join(cmd)}")
+        logger.error(f"Command timed out: {' '.join(cmd)}")
         sys.exit(1)
 
 
@@ -82,9 +80,7 @@ def compile_c_file(args: Tuple[str, str, str]) -> str:
     return str(obj_file)
 
 
-def link_objects(
-    compiler: str, output: str, obj_files: List[str], ldflags: str
-) -> None:
+def link_objects(compiler: str, output: str, obj_files: List[str], ldflags: str) -> None:
     cmd = [compiler, "-o", output] + obj_files + ldflags.split()
     logger.info(f"Linking {output} ...")
     run_command(cmd, timeout=LINK_TIMEOUT)

@@ -17,6 +17,9 @@ char* value_name(value_type_t type)
 
         case VALUE_TYPE_NULL: return "NULL";
         break;
+
+        case VALUE_TYPE_SIZE: return "SIZE";
+        break;
     }
     return "VALUE_UNKNOWN";
 }

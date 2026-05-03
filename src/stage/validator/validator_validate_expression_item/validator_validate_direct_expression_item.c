@@ -7,9 +7,9 @@ ast_expression_item_t validator_validate_direct_expression_item(ast_expression_i
         validator_validate_type(expression_item.runtime_type);
     }
 
+    ast_type_type_t type;
     switch (expression_item.type) {
         case AST_EXPRESSION_TYPE_LITERAL:
-            ast_type_type_t type;
             switch (expression_item.raw.literal.value->type) {
                 case VALUE_TYPE_STRING:
                     type = AST_KIND_TYPE_STRING;

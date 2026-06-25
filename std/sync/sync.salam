@@ -1,0 +1,99 @@
+package sync
+@if SALAM_OS_UNIX
+@ifndef SALAM_CC_TCC
+link "pthread"
+@end
+@end
+extern "C":
+    func salam_alloc(size u64) void*
+    func salam_free(ptr void*)
+end
+@if SALAM_OS_WINDOWS
+extern "C":
+    func CreateMutexA(attr void*, init_owned i32, name void*) void*
+    func WaitForSingleObject(handle void*, milliseconds i32) i32
+    func ReleaseMutex(handle void*) i32
+    func CloseHandle(handle void*) i32
+    func Sleep(ms i32)
+end
+func mutex_new() void*:
+    ret CreateMutexA(null, 0, null)
+end
+func mutex_lock(h void*) i32:
+    if WaitForSingleObject(h, 0 - 1) == 0: ret 0 end
+    ret 0 - 1
+end
+func mutex_unlock(h void*) i32:
+    if ReleaseMutex(h) != 0: ret 0 end
+    ret 0 - 1
+end
+func mutex_free(h void*):
+    CloseHandle(h)
+end
+func _sync_sleep_ms(ms i32): Sleep(ms) end
+@else
+extern "C":
+    func pthread_mutex_init(mutex void*, attr void*) i32
+    func pthread_mutex_lock(mutex void*) i32
+    func pthread_mutex_unlock(mutex void*) i32
+    func pthread_mutex_destroy(mutex void*) i32
+    func usleep(us i32) i32
+end
+func mutex_new() void*:
+    m void* = salam_alloc(80 as u64)
+    pthread_mutex_init(m, null)
+    ret m
+end
+func mutex_lock(h void*) i32:
+    if pthread_mutex_lock(h) == 0: ret 0 end
+    ret 0 - 1
+end
+func mutex_unlock(h void*) i32:
+    if pthread_mutex_unlock(h) == 0: ret 0 end
+    ret 0 - 1
+end
+func mutex_free(h void*):
+    pthread_mutex_destroy(h)
+    salam_free(h)
+end
+func _sync_sleep_ms(ms i32):
+    if ms > 0: usleep(ms * 1000) end
+end
+@end
+pub struct Mutex:
+    handle void* = null
+end
+pub func NewMutex() Mutex:        ret Mutex { handle = mutex_new() } end
+pub func Lock(m Mutex) i32:       ret mutex_lock(m.handle) end
+pub func Unlock(m Mutex) i32:     ret mutex_unlock(m.handle) end
+pub func Destroy(m Mutex):        mutex_free(m.handle) end
+pub struct WaitGroup:
+    counter i64* = null
+    mu void* = null
+end
+pub func NewWaitGroup() WaitGroup:
+    mut c i64* = salam_alloc(8 as u64) as i64*
+    c[0] = 0
+    ret WaitGroup { counter = c, mu = mutex_new() }
+end
+pub func Add(wg WaitGroup, delta i64):
+    mut c i64* = wg.counter
+    mutex_lock(wg.mu)
+    c[0] = c[0] + delta
+    mutex_unlock(wg.mu)
+end
+pub func Done(wg WaitGroup):
+    mut c i64* = wg.counter
+    mutex_lock(wg.mu)
+    c[0] = c[0] - 1
+    mutex_unlock(wg.mu)
+end
+pub func Wait(wg WaitGroup):
+    while wg.counter[0] > 0:
+        _sync_sleep_ms(1)
+    end
+end
+pub func DestroyWaitGroup(wg WaitGroup):
+    salam_free(wg.counter as void*)
+    mutex_free(wg.mu)
+end

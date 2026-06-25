@@ -1,0 +1,168 @@
+package regex
+func _re_atom_len(pat str, pi i32) i32:
+    pl i32 = pat.len()
+    if pi >= pl: ret 1 end
+    c str = pat.substr(pi, 1)
+    if c == "\\":
+        if pi + 1 < pl: ret 2 end
+        ret 1
+    end
+    if c == "[":
+        mut q i32 = pi + 1
+        if q < pl && pat.substr(q, 1) == "^": q = q + 1 end
+        if q < pl && pat.substr(q, 1) == "]": q = q + 1 end
+        while q < pl && pat.substr(q, 1) != "]":
+            q = q + 1
+        end
+        if q < pl && pat.substr(q, 1) == "]":
+            ret q - pi + 1
+        end
+        ret q - pi
+    end
+    ret 1
+end
+func _re_atom_match(pat str, pi i32, c str) bool:
+    if c == "": ret false end
+    pl i32 = pat.len()
+    if pi >= pl: ret false end
+    pc str = pat.substr(pi, 1)
+    if pc == "\\":
+        if pi + 1 >= pl: ret false end
+        ec str = pat.substr(pi + 1, 1)
+        code i32 = char_code(c)
+        if ec == "d": ret code >= 48 && code <= 57 end
+        if ec == "w":
+            ret (code >= 97 && code <= 122) || (code >= 65 && code <= 90) || (code >= 48 && code <= 57) || c == "_"
+        end
+        if ec == "s": ret c == " " || c == "\t" || c == "\n" || c == "\r" end
+        ret c == ec
+    end
+    if pc == "[":
+        mut q i32 = pi + 1
+        mut neg bool = false
+        mut found bool = false
+        if q < pl && pat.substr(q, 1) == "^":
+            neg = true
+            q = q + 1
+        end
+        while q < pl && pat.substr(q, 1) != "]":
+            if q + 2 < pl && pat.substr(q + 1, 1) == "-" && pat.substr(q + 2, 1) != "]":
+                lo i32 = char_code(pat.substr(q, 1))
+                hi i32 = char_code(pat.substr(q + 2, 1))
+                cc i32 = char_code(c)
+                if cc >= lo && cc <= hi: found = true end
+                q = q + 3
+            else:
+                if c == pat.substr(q, 1): found = true end
+                q = q + 1
+            end
+        end
+        if neg: ret !found end
+        ret found
+    end
+    if pc == ".": ret true end
+    ret c == pc
+end
+func _re_here(pat str, pi i32, text str, si i32) i32:
+    pl i32 = pat.len()
+    tl i32 = text.len()
+    if pi >= pl: ret si end
+    pc str = pat.substr(pi, 1)
+    if pc == "$" && pi + 1 >= pl:
+        if si >= tl: ret si end
+        ret -1
+    end
+    alen i32 = _re_atom_len(pat, pi)
+    qi i32 = pi + alen
+    mut quant str = ""
+    if qi < pl: quant = pat.substr(qi, 1) end
+    if quant == "*":
+        mut count i32 = 0
+        while si + count < tl && _re_atom_match(pat, pi, text.substr(si + count, 1)):
+            count = count + 1
+        end
+        mut n i32 = count
+        while n >= 0:
+            r i32 = _re_here(pat, qi + 1, text, si + n)
+            if r >= 0: ret r end
+            n = n - 1
+        end
+        ret -1
+    end
+    if quant == "+":
+        mut count i32 = 0
+        while si + count < tl && _re_atom_match(pat, pi, text.substr(si + count, 1)):
+            count = count + 1
+        end
+        mut n i32 = count
+        while n >= 1:
+            r i32 = _re_here(pat, qi + 1, text, si + n)
+            if r >= 0: ret r end
+            n = n - 1
+        end
+        ret -1
+    end
+    if quant == "?":
+        if si < tl && _re_atom_match(pat, pi, text.substr(si, 1)):
+            r i32 = _re_here(pat, qi + 1, text, si + 1)
+            if r >= 0: ret r end
+        end
+        ret _re_here(pat, qi + 1, text, si)
+    end
+    if si < tl && _re_atom_match(pat, pi, text.substr(si, 1)):
+        ret _re_here(pat, qi, text, si + 1)
+    end
+    ret -1
+end
+mut _re_last_end i32 = -1
+func _re_search(pat str, text str) i32:
+    pl i32 = pat.len()
+    tl i32 = text.len()
+    mut pi i32 = 0
+    mut anchored bool = false
+    if pi < pl && pat.substr(pi, 1) == "^":
+        anchored = true
+        pi = pi + 1
+    end
+    mut si i32 = 0
+    while si <= tl:
+        e i32 = _re_here(pat, pi, text, si)
+        if e >= 0:
+            _re_last_end = e
+            ret si
+        end
+        if anchored: ret -1 end
+        si = si + 1
+    end
+    ret -1
+end
+pub struct Regex:
+    pattern str = ""
+end
+pub func Compile(pattern str) Regex:
+    ret Regex { pattern = pattern }
+end
+pub func Match(re Regex, text str) bool:
+    ret _re_search(re.pattern, text) >= 0
+end
+pub func Find(re Regex, text str) i32:
+    ret _re_search(re.pattern, text)
+end
+pub func Replace(re Regex, text str, with str) str:
+    idx i32 = _re_search(re.pattern, text)
+    if idx < 0: ret text end
+    end_idx i32 = _re_last_end
+    mlen i32 = end_idx - idx
+    tl i32 = text.len()
+    ret text.substr(0, idx).concat(with).concat(text.substr(idx + mlen, tl - idx - mlen))
+end
+pub func MatchStr(pattern str, text str) bool:
+    ret _re_search(pattern, text) >= 0
+end
+pub func FindStr(pattern str, text str) i32:
+    ret _re_search(pattern, text)
+end
+pub func ReplaceStr(pattern str, text str, with str) str:
+    re Regex = Compile(pattern)
+    ret Replace(re, text, with)
+end

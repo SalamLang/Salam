@@ -1,0 +1,168 @@
+package mem
+@if SALAM_MEM_DEBUG
+mut _md_allocs i64 = 0
+mut _md_frees  i64 = 0
+mut _md_live   i64 = 0
+mut _md_peak   i64 = 0
+extern "C":
+    func malloc(size u64) void*
+    func realloc(ptr void*, size u64) void*
+    func free(ptr void*)
+    func salam_alloc(size u64) void*:
+        p void* = malloc(size + (8 as u64))
+        if p == null: ret null end
+        mut hdr i64* = p as i64*
+        hdr[0] = size as i64
+        _md_allocs = _md_allocs + 1
+        _md_live = _md_live + (size as i64)
+        if _md_live > _md_peak: _md_peak = _md_live end
+        ret ((p as i64) + 8) as void*
+    end
+    func salam_realloc(ptr void*, size u64) void*:
+        if ptr == null: ret salam_alloc(size) end
+        orig void* = ((ptr as i64) - 8) as void*
+        ohdr i64* = orig as i64*
+        old_sz i64 = ohdr[0]
+        p void* = realloc(orig, size + (8 as u64))
+        if p == null: ret null end
+        mut hdr i64* = p as i64*
+        hdr[0] = size as i64
+        if _md_live > old_sz:
+            _md_live = _md_live - old_sz + (size as i64)
+        else:
+            _md_live = size as i64
+        end
+        if _md_live > _md_peak: _md_peak = _md_live end
+        ret ((p as i64) + 8) as void*
+    end
+    func salam_free(ptr void*):
+        if ptr == null: ret end
+        orig void* = ((ptr as i64) - 8) as void*
+        hdr i64* = orig as i64*
+        sz i64 = hdr[0]
+        if _md_live >= sz: _md_live = _md_live - sz end
+        _md_frees = _md_frees + 1
+        free(orig)
+    end
+end
+pub func AllocCount() i64:  ret _md_allocs end
+pub func FreeCount() i64:   ret _md_frees  end
+pub func LiveBytes() i64:   ret _md_live   end
+pub func PeakBytes() i64:   ret _md_peak   end
+pub func IsMemDebug() bool: ret true       end
+@else
+extern "C":
+    func malloc(size u64) void*
+    func realloc(ptr void*, size u64) void*
+    func free(ptr void*)
+    func salam_alloc(size u64) void*:
+        ret malloc(size)
+    end
+    func salam_realloc(ptr void*, size u64) void*:
+        ret realloc(ptr, size)
+    end
+    func salam_free(ptr void*):
+        free(ptr)
+    end
+end
+pub func AllocCount() i64:  ret 0     end
+pub func FreeCount() i64:   ret 0     end
+pub func LiveBytes() i64:   ret 0     end
+pub func PeakBytes() i64:   ret 0     end
+pub func IsMemDebug() bool: ret false end
+@end
+@if SALAM_ASAN
+pub func IsAsanActive() bool: ret true  end
+@else
+pub func IsAsanActive() bool: ret false end
+@end
+extern "C":
+    func memset(ptr void*, value i32, n u64) void*
+    func memcpy(dst void*, src void*, n u64) void*
+end
+pub func Allocate(size u64) void*:               ret salam_alloc(size)          end
+pub func Reallocate(ptr void*, size u64) void*:  ret salam_realloc(ptr, size)   end
+pub func Free(ptr void*):                         salam_free(ptr)                end
+pub func Set(ptr void*, value i32, n u64):
+    memset(ptr, value, n)
+end
+pub func Copy(dst void*, src void*, n u64):
+    memcpy(dst, src, n)
+end
+pub func AllocateZeroed(size u64) void*:
+    mut p void* = salam_alloc(size)
+    memset(p, 0, size)
+    ret p
+end
+pub func AllocateArray(count u64, size u64) void*:
+    ret AllocateZeroed(count * size)
+end
+pub func MemDebugActive() bool:
+    ret IsMemDebug() || IsAsanActive()
+end
+func _itos(n i64) str:
+    if n == 0: ret "0" end
+    mut v i64 = n
+    mut r str = ""
+    while v > 0:
+        r = char_from_code((v % 10) as i32 + 48).concat(r)
+        v = v / 10
+    end
+    ret r
+end
+pub func CheckLeaks():
+    if IsAsanActive():
+        !__ "[salam memcheck] ASAN is active - leak report will appear at process exit."
+    else IsMemDebug():
+        a i64 = AllocCount()
+        f i64 = FreeCount()
+        lb i64 = LiveBytes()
+        pb i64 = PeakBytes()
+        !_ "[salam memcheck] allocs="
+        !_ _itos(a)
+        !_ "  frees="
+        !_ _itos(f)
+        !_ "  live_bytes="
+        !_ _itos(lb)
+        !_ "  peak_bytes="
+        !__ _itos(pb)
+        if lb > 0:
+            !_ "[salam memcheck] WARNING: "
+            !_ _itos(lb)
+            !__ " bytes still allocated (possible leak)"
+        end
+    end
+end
+
+extern "C":
+    func salam_memcpy(dst void*, src void*, n u64) void*:
+        mut d i8* = dst as i8*
+        s i8* = src as i8*
+        ni i32 = n as i32
+        mut i i32 = 0
+        while i < ni:
+            d[i] = s[i]
+            i = i + 1
+        end
+        ret dst
+    end
+    func salam_memmove(dst void*, src void*, n u64) void*:
+        mut d i8* = dst as i8*
+        s i8* = src as i8*
+        ni i32 = n as i32
+        if (dst as i64) < (src as i64):
+            mut i i32 = 0
+            while i < ni:
+                d[i] = s[i]
+                i = i + 1
+            end
+        else:
+            mut i i32 = ni - 1
+            while i >= 0:
+                d[i] = s[i]
+                i = i - 1
+            end
+        end
+        ret dst
+    end
+end

@@ -830,7 +830,6 @@ static llv_t ll_literal(ll_t *ll, ast_node_t *n)
             return (llv_t){ ll_fmt(ll, "%lld", (long long)n->value.as.i), ts };
         }
         case TK_FLOAT: {
-            
             char buf[64]; snprintf(buf, sizeof buf, "%.17g", n->value.as.f);
             if (!strpbrk(buf, ".eEnN")) { strncat(buf, ".0", sizeof(buf)-strlen(buf)-1); }
             return (llv_t){ arena_strdup(ll->a, buf), n->type_str ? n->type_str : "f64" };
@@ -875,7 +874,6 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
         }
         case AST_CALL: return ll_call(ll, n);
         case AST_MEMBER: {
-            
             if (n->a && n->a->kind == AST_IDENTIFIER) {
                 symbol_t *e = ll_enum_sym(ll, n->a->name);
                 if (e) {
@@ -887,7 +885,6 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
             return ll_load_addr(ll, n);
         }
         case AST_INDEX: {
-            
             if (n->a && n->a->type_str) {
                 const char *sname;
                 symbol_t *oss = ll_op_struct(ll, n->a->type_str, &sname);

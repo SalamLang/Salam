@@ -210,7 +210,6 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             if (c != nm) { nm = c; callee->name = c; sym = scope_lookup(s->cur, nm); }
         }
         if (!sym || (sym->kind != SYM_FUNC && sym->kind != SYM_METHOD)) {
-            
             if (!strcmp(nm, "len") && argtypes.len == 1) {
                 type_kind_t ak = ((type_t *)argtypes.data[0])->kind;
                 if (ak == TY_ARRAY || ak == TY_STR) {
@@ -259,7 +258,6 @@ type_t *check_call(sema_t *s, ast_node_t *n)
     if (callee && callee->kind == AST_MEMBER && callee->a && callee->a->kind == AST_IDENTIFIER) {
         symbol_t *pk = scope_lookup(s->cur, callee->a->name);
         if (pk && pk->kind == SYM_PACKAGE) {
-            
             callee->name = pkg_member_canon(pk, callee->name);
             const char *fname = callee->name;
             symbol_t *fn = scope_lookup_local(pk->members, fname);

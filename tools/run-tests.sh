@@ -110,10 +110,25 @@ for f in tests/$lang/fmt/*.salam; do
     rm -f "$WORK/$name.exe"
     "$SALAMC" build "$WORK/$name.salam" --output="$WORK/$name.exe" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
     got=$([ -x "$WORK/$name.exe" ] && "$WORK/$name.exe" 2>&1 | tr -d '\r')
-    if [ "$idem" -eq 0 ] && [ "$got" = "$(tr -d '\r' < "$exp")" ]; then
+
+    TAB=$(printf '\t')
+    cp "$f" "$WORK/${name}_tab.salam"
+    "$SALAMC" fmt "$WORK/${name}_tab.salam" --tabs --lang=$lang --no-color --log-level=error >/dev/null 2>&1
+    "$SALAMC" fmt "$WORK/${name}_tab.salam" --tabs --check --lang=$lang --no-color --log-level=error >/dev/null 2>&1
+    tabidem=$?
+    hastab=1; grep -q "$TAB" "$WORK/${name}_tab.salam" && hastab=0
+    rm -f "$WORK/${name}_tab.exe"
+    "$SALAMC" build "$WORK/${name}_tab.salam" --output="$WORK/${name}_tab.exe" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
+    gottab=$([ -x "$WORK/${name}_tab.exe" ] && "$WORK/${name}_tab.exe" 2>&1 | tr -d '\r')
+
+    if [ "$idem" -eq 0 ] && [ "$got" = "$(tr -d '\r' < "$exp")" ] && \
+       [ "$tabidem" -eq 0 ] && [ "$hastab" -eq 0 ] && [ "$gottab" = "$(tr -d '\r' < "$exp")" ]; then
         echo "PASS fmt/$lang/$name"; pass=$((pass+1))
     else
-        echo "FAIL fmt/$lang/$name (idempotent=$idem)"; echo "  got: $(echo "$got" | tr '\n' '|')"; fail=$((fail+1))
+        echo "FAIL fmt/$lang/$name (idempotent=$idem tab-idem=$tabidem has-tab=$hastab)"
+        echo "  got: $(echo "$got" | tr '\n' '|')"
+        echo "  tab: $(echo "$gottab" | tr '\n' '|')"
+        fail=$((fail+1))
     fi
 done
 done

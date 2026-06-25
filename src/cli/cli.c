@@ -23,6 +23,8 @@ static void cli_set_defaults(options_t *out)
     out->safe = false;
     out->fmt_check = false;
     out->fmt_recursive = false;
+    out->fmt_tabs = false;
+    out->fmt_indent_width = 4;
     out->debug_info = false;
     out->asan = false;
     out->interp = false;

@@ -310,7 +310,17 @@ static const i18n_pair_t k_msg_fa[] = {
     { "salamc: '%s' already exists\n",                       "salamc: '%s' از پیش وجود دارد\n" },
     { "salamc: cannot create directory '%s': %s\n",          "salamc: نمی‌توان پوشه‌ی '%s' را ساخت: %s\n" },
     { "salamc: cannot write '%s': %s\n",                     "salamc: نمی‌توان '%s' را نوشت: %s\n" },
-    
+    { "salamc: 'new' takes a single project name ('%s' after '%s')\n", "salamc: 'new' تنها یک نام پروژه می‌پذیرد ('%s' پس از '%s')\n" },
+    { "salamc: too many input files\n",                      "salamc: فایل‌های ورودی بیش از حد مجاز است\n" },
+    { "salamc: multiple input files require the 'build' command ('%s' after '%s')\n", "salamc: چند فایل ورودی به فرمان 'build' نیاز دارد ('%s' پس از '%s')\n" },
+    { "salamc: too many macro definitions\n",                "salamc: تعریف‌های ماکرو بیش از حد مجاز است\n" },
+    { "salamc: invalid --indent value '%s' (use 'tab' or a width 1-16)\n", "salamc: مقدار --indent نامعتبر است '%s' (از 'tab' یا عرض ۱ تا ۱۶ استفاده کنید)\n" },
+    { "salamc: -o requires a file argument\n",               "salamc: -o به یک آرگومان فایل نیاز دارد\n" },
+    { "salamc: invalid error style '%s' (rust|gcc|clang)\n", "salamc: سبک خطای نامعتبر '%s' (rust|gcc|clang)\n" },
+    { "salamc: invalid error format '%s' (human|json|xml)\n", "salamc: قالب خطای نامعتبر '%s' (human|json|xml)\n" },
+    { "salamc: invalid log level '%s'\n",                    "salamc: سطح گزارش نامعتبر '%s'\n" },
+    { "salamc: unknown option '%s'\n",                       "salamc: گزینه‌ی ناشناخته '%s'\n" },
+
     { "cannot format '%s': fix the lexical errors first",    "نمی‌توان '%s' را قالب‌بندی کرد: ابتدا خطاهای واژگانی را برطرف کنید" },
     { "formatted %s\n",                                      "قالب‌بندی شد %s\n" },
     { "done: %d formatted, %d unchanged\n",                  "انجام شد: %d قالب‌بندی شد، %d بدون تغییر\n" },

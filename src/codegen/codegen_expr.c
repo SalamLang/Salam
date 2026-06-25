@@ -186,7 +186,6 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
             return cg_cident(cg, n->name);
         case AST_THIS: return "this";
         case AST_BINARY: {
-            
             if (n->a && n->a->type_str) {
                 char sname[96];
                 symbol_t *ssym = cg_struct_of(cg, n->a->type_str, sname, sizeof sname);
@@ -229,7 +228,6 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
             return cg_fmt(cg, "(%s %s %s)", cg_expr(cg, n->a), cg_op(n->op), cg_expr(cg, n->b));
         }
         case AST_UNARY: {
-            
             if (n->a && n->a->type_str) {
                 char sname[96];
                 symbol_t *ssym = cg_struct_of(cg, n->a->type_str, sname, sizeof sname);
@@ -248,7 +246,6 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
             return cg_fmt(cg, "(%s%s)", cg_op(n->op), cg_expr(cg, n->a));
         }
         case AST_CAST: {
-            
             if (n->type_str && !strncmp(n->type_str, "dyn ", 4) &&
                 n->type_str[strlen(n->type_str) - 1] != '*')
                 return cg_dyn_box(cg, n);
@@ -288,7 +285,6 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
             return cg_fmt(cg, "%s%s%s", cg_expr(cg, n->a), ptr ? "->" : ".", cg_cident(cg, n->name));
         }
         case AST_INDEX: {
-            
             if (n->a && n->a->type_str) {
                 char sname[96];
                 symbol_t *ssym = cg_struct_of(cg, n->a->type_str, sname, sizeof sname);

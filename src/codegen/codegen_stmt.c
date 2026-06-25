@@ -59,7 +59,6 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             break;
         }
         case AST_ASSIGN: {
-            
             if (n->op == TK_ASSIGN && n->a && n->a->kind == AST_INDEX &&
                 n->a->a && n->a->a->type_str) {
                 char sname[96];

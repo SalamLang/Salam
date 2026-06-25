@@ -41,17 +41,17 @@ static void deleg_buf(fbuf_t *fb, const char *s, int n)
     fb_str(fb, s, (size_t)n);
 }
 
-static void deleg_int (fbuf_t *fb, const char *sp, int v)           { char t[320]; deleg_buf(fb, t, snprintf(t, sizeof t, sp, v)); }
+static void deleg_int (fbuf_t *fb, const char *sp, int v)           { char t[320]; int n = snprintf(t, sizeof t, sp, v); if (n >= (int)sizeof t) n = (int)sizeof t - 1; deleg_buf(fb, t, n); }
 
-static void deleg_uint(fbuf_t *fb, const char *sp, unsigned v)      { char t[320]; deleg_buf(fb, t, snprintf(t, sizeof t, sp, v)); }
+static void deleg_uint(fbuf_t *fb, const char *sp, unsigned v)      { char t[320]; int n = snprintf(t, sizeof t, sp, v); if (n >= (int)sizeof t) n = (int)sizeof t - 1; deleg_buf(fb, t, n); }
 
-static void deleg_long(fbuf_t *fb, const char *sp, long v)          { char t[320]; deleg_buf(fb, t, snprintf(t, sizeof t, sp, v)); }
+static void deleg_long(fbuf_t *fb, const char *sp, long v)          { char t[320]; int n = snprintf(t, sizeof t, sp, v); if (n >= (int)sizeof t) n = (int)sizeof t - 1; deleg_buf(fb, t, n); }
 
-static void deleg_ulong(fbuf_t *fb, const char *sp, unsigned long v){ char t[320]; deleg_buf(fb, t, snprintf(t, sizeof t, sp, v)); }
+static void deleg_ulong(fbuf_t *fb, const char *sp, unsigned long v){ char t[320]; int n = snprintf(t, sizeof t, sp, v); if (n >= (int)sizeof t) n = (int)sizeof t - 1; deleg_buf(fb, t, n); }
 
-static void deleg_dbl (fbuf_t *fb, const char *sp, double v)        { char t[320]; deleg_buf(fb, t, snprintf(t, sizeof t, sp, v)); }
+static void deleg_dbl (fbuf_t *fb, const char *sp, double v)        { char t[320]; int n = snprintf(t, sizeof t, sp, v); if (n >= (int)sizeof t) n = (int)sizeof t - 1; deleg_buf(fb, t, n); }
 
-static void deleg_ptr (fbuf_t *fb, const char *sp, void *v)         { char t[320]; deleg_buf(fb, t, snprintf(t, sizeof t, sp, v)); }
+static void deleg_ptr (fbuf_t *fb, const char *sp, void *v)         { char t[320]; int n = snprintf(t, sizeof t, sp, v); if (n >= (int)sizeof t) n = (int)sizeof t - 1; deleg_buf(fb, t, n); }
 
 static void deleg_str(fbuf_t *fb, const char *sp, const char *v)
 {

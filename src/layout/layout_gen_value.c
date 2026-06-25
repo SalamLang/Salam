@@ -71,7 +71,6 @@ const char *val_str(layout_ctx_t *cx, ast_node_t *v)
             }
         case AST_IDENTIFIER: return v->name ? v->name : "";
         case AST_CALL: {
-            
             const char *fn = (v->a && v->a->kind == AST_IDENTIFIER) ? v->a->name : "fn";
             sb_t b; sb_init(&b); sb_puts(&b, fn); sb_putc(&b, '(');
             { size_t i = 0; for (; i < v->list.len; i++) {

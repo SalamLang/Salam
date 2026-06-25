@@ -55,7 +55,7 @@ Requires a C compiler. **tcc** is the default backend (bundled math, fast); gcc/
 
 ```sh
 sh tools/build-compiler.sh        # quick build with tcc  ->  ./salamc
-# or, with CMake (also builds libsalam.a and enables ctest):
+# or, with CMake (out-of-tree build, then run the test suite via ctest):
 cmake -B build && cmake --build build && ctest --test-dir build
 ```
 

@@ -1,0 +1,217 @@
+package json
+func _jws(s str, i i32) i32:
+    l i32 = s.len()
+    mut p i32 = i
+    while p < l:
+        code i32 = char_code(s.substr(p, 1))
+        if code != 32 && code != 9 && code != 10 && code != 13:
+            ret p
+        end
+        p = p + 1
+    end
+    ret p
+end
+func _jstr(s str, i i32) i32:
+    l i32 = s.len()
+    if i >= l || s.substr(i, 1) != "\"": ret -1 end
+    mut p i32 = i + 1
+    while p < l:
+        code i32 = char_code(s.substr(p, 1))
+        if code == 34: ret p + 1 end
+        if code == 92:
+            p = p + 1
+            if p >= l: ret -1 end
+        end
+        p = p + 1
+    end
+    ret -1
+end
+func _jnum(s str, i i32) i32:
+    l i32 = s.len()
+    mut p i32 = i
+    if p < l && s.substr(p, 1) == "-": p = p + 1 end
+    start i32 = p
+    while p < l:
+        code i32 = char_code(s.substr(p, 1))
+        if code < 48 || code > 57: break end
+        p = p + 1
+    end
+    if p == start: ret -1 end
+    if p < l && s.substr(p, 1) == ".":
+        p = p + 1
+        while p < l:
+            code i32 = char_code(s.substr(p, 1))
+            if code < 48 || code > 57: break end
+            p = p + 1
+        end
+    end
+    if p < l && (s.substr(p, 1) == "e" || s.substr(p, 1) == "E"):
+        p = p + 1
+        if p < l && (s.substr(p, 1) == "+" || s.substr(p, 1) == "-"): p = p + 1 end
+        while p < l:
+            code i32 = char_code(s.substr(p, 1))
+            if code < 48 || code > 57: break end
+            p = p + 1
+        end
+    end
+    ret p
+end
+func _jval(s str, i i32) i32:
+    p0 i32 = _jws(s, i)
+    l i32 = s.len()
+    if p0 >= l: ret -1 end
+    c str = s.substr(p0, 1)
+    if c == "\"": ret _jstr(s, p0) end
+    if c == "{":
+        mut q i32 = _jws(s, p0 + 1)
+        if q < l && s.substr(q, 1) == "}": ret q + 1 end
+        while q < l:
+            q = _jws(s, q)
+            qk i32 = _jstr(s, q)
+            if qk < 0: ret -1 end
+            q = _jws(s, qk)
+            if q >= l || s.substr(q, 1) != ":": ret -1 end
+            q = _jval(s, q + 1)
+            if q < 0: ret -1 end
+            q = _jws(s, q)
+            if q < l && s.substr(q, 1) == ",":
+                q = q + 1
+                continue
+            end
+            if q < l && s.substr(q, 1) == "}": ret q + 1 end
+            ret -1
+        end
+        ret -1
+    end
+    if c == "[":
+        mut q i32 = _jws(s, p0 + 1)
+        if q < l && s.substr(q, 1) == "]": ret q + 1 end
+        while q < l:
+            q = _jval(s, q)
+            if q < 0: ret -1 end
+            q = _jws(s, q)
+            if q < l && s.substr(q, 1) == ",":
+                q = q + 1
+                continue
+            end
+            if q < l && s.substr(q, 1) == "]": ret q + 1 end
+            ret -1
+        end
+        ret -1
+    end
+    if p0 + 4 <= l && s.substr(p0, 4) == "true":  ret p0 + 4 end
+    if p0 + 5 <= l && s.substr(p0, 5) == "false": ret p0 + 5 end
+    if p0 + 4 <= l && s.substr(p0, 4) == "null":  ret p0 + 4 end
+    ret _jnum(s, p0)
+end
+pub func Valid(text str) bool:
+    if text.len() == 0: ret false end
+    e i32 = _jval(text, 0)
+    if e < 0: ret false end
+    ret _jws(text, e) == text.len()
+end
+pub func Get(text str, key str) str:
+    if text.len() == 0 || key.len() == 0: ret "" end
+    start i32 = _jws(text, 0)
+    l i32 = text.len()
+    if start >= l || text.substr(start, 1) != "{": ret "" end
+    kl i32 = key.len()
+    mut p i32 = start + 1
+    while p < l:
+        p = _jws(text, p)
+        if p >= l || text.substr(p, 1) != "\"": ret "" end
+        ke i32 = _jstr(text, p)
+        if ke < 0: ret "" end
+        this_kl i32 = ke - p - 2
+        is_key bool = this_kl == kl && text.substr(p + 1, kl) == key
+        p = _jws(text, ke)
+        if p >= l || text.substr(p, 1) != ":": ret "" end
+        vs i32 = _jws(text, p + 1)
+        ve i32 = _jval(text, vs)
+        if ve < 0: ret "" end
+        if is_key:
+            if vs < l && text.substr(vs, 1) == "\"":
+                ret text.substr(vs + 1, ve - vs - 2)
+            end
+            ret text.substr(vs, ve - vs)
+        end
+        p = _jws(text, ve)
+        if p < l && text.substr(p, 1) == ",":
+            p = p + 1
+            continue
+        end
+        ret ""
+    end
+    ret ""
+end
+pub func Escape(s str) str:
+    l i32 = s.len()
+    mut result str = ""
+    mut i i32 = 0
+    while i < l:
+        code i32 = char_code(s.substr(i, 1))
+        if code == 34:
+            result = result.concat("\\\"")
+        else if code == 92:
+            result = result.concat("\\\\")
+        else if code == 10:
+            result = result.concat("\\n")
+        else if code == 9:
+            result = result.concat("\\t")
+        else if code == 13:
+            result = result.concat("\\r")
+        else:
+            result = result.concat(s.substr(i, 1))
+        end
+        i = i + 1
+    end
+    ret result
+end
+pub func Minify(text str) str:
+    l i32 = text.len()
+    mut result str = ""
+    mut instr bool = false
+    mut i i32 = 0
+    while i < l:
+        c str = text.substr(i, 1)
+        code i32 = char_code(c)
+        if instr:
+            result = result.concat(c)
+            if code == 92 && i + 1 < l:
+                i = i + 1
+                result = result.concat(text.substr(i, 1))
+            else if code == 34:
+                instr = false
+            end
+        else:
+            if code == 34:
+                instr = true
+                result = result.concat(c)
+            else if code != 32 && code != 9 && code != 10 && code != 13:
+                result = result.concat(c)
+            end
+        end
+        i = i + 1
+    end
+    ret result
+end
+pub func Compact(text str) str:
+    ret Minify(text)
+end
+pub func Member(key str, value str) str:
+    mut out str = "\""
+    out = out.concat(Escape(key))
+    out = out.concat("\": \"")
+    out = out.concat(Escape(value))
+    out = out.concat("\"")
+    ret out
+end
+pub func GetInt(text str, key str) i32:
+    ret Get(text, key).to_int()
+end
+pub func GetFloat(text str, key str) f64:
+    ret Get(text, key).to_float()
+end
+pub func Has(text str, key str) bool:
+    ret Get(text, key).len() > 0
+end

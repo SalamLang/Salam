@@ -199,7 +199,7 @@ static char *repl_readline(const char *prompt)
             }
             continue;
         }
-        if ((unsigned char)c >= 32 && c < 128 && len < REPL_LINE_MAX - 1) {
+        if (c >= 32 && len < REPL_LINE_MAX - 1) {
             memmove(buf+pos+1, buf+pos, (size_t)(len-pos)); buf[pos] = (char)c; len++;
             WR(buf+pos, len-pos); { int i = pos+1; for (; i < len; i++) WRC('\b'); }
             pos++; fflush(stdout);

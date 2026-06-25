@@ -59,7 +59,6 @@ ast_node_t *parse_primary(parser_t *p)
             p_fin(p, n); return n;
         }
         default: {
-            
             p_error(p, "expected an expression");
             ast_node_t *n = p_mk(p, AST_IDENTIFIER);
             n->name = "<error>";

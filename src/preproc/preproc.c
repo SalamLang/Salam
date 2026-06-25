@@ -128,7 +128,6 @@ char *preproc_run(arena_t *a, logger_t *log, const char *text,
             } else over++;
             LOG_T(log, PH_DRIVER, "preproc: @if -> %s", c ? "active" : "skipped");
         } else if (strncmp(t, "@else", 5) == 0) {
-            
             const char *cond_start = pp_skip_ws(t + 5);
             bool has_cond = (*cond_start != '\0' && *cond_start != '\n' && *cond_start != '\r');
             if (depth > 0) {

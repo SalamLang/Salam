@@ -4,9 +4,6 @@ from pathlib import Path
 
 SKIP_DIRS = {".git", "node_modules", "dist", "build", ".venv", "vendor"}
 
-# A `/` begins a regex literal (not division) when the previous significant
-# token leaves us in expression position: after these punctuators, or after one
-# of these keywords, or at the very start of input.
 _REGEX_PREV_PUNCT = set("(,=:[!&|?{};~+-*/%<>^")
 _REGEX_PREV_KEYWORDS = {
     "return", "typeof", "instanceof", "in", "of", "new", "delete",
@@ -53,16 +50,13 @@ def strip_comments(text: str, line_comments: bool, templates: bool) -> str:
                 break
             i = j + 2
             continue
-        # Regex literal: consume it whole so an inner `/*`, `//` or quote is
-        # never mistaken for a comment or string. Only when `/` is in
-        # expression position (decided by the previous significant token).
         if line_comments and c == "/" and _regex_allowed(_prev_token(out)):
             out.append(c)
             i += 1
             in_class = False
             while i < n:
                 ch = text[i]
-                if ch == "\n":           # unterminated literal; stop consuming
+                if ch == "\n":
                     break
                 out.append(ch)
                 if ch == "\\" and i + 1 < n:

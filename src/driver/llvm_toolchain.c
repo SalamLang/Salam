@@ -11,6 +11,7 @@
 #else
 #define SALAM_PATH_MAX 4096
 #endif
+
 #define LLVM_CLANG "clang-22"
 #define LLVM_LLC   "llc-22"
 #define LLVM_OPT   "opt-22"
@@ -35,8 +36,8 @@ static void to_tool_path(const char *host, char *out, size_t cap)
     size_t k = 0;
     if (isalpha((unsigned char)abs[0]) && abs[1] == ':') {
         k = (size_t)snprintf(out, cap, "/mnt/%c", (char)tolower((unsigned char)abs[0]));
-        for (const char *p = abs + 2; *p && k < cap - 1; p++)
-            out[k++] = (*p == '\\') ? '/' : *p;
+        { const char *p = abs + 2; for (; *p && k < cap - 1; p++)
+            out[k++] = (*p == '\\') ? '/' : *p; }
         out[k] = 0;
     } else {
         snprintf(out, cap, "%s", abs);

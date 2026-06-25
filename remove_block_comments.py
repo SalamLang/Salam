@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import sys
 from pathlib import Path
+
 SRC_DIR = Path(__file__).parent / "src"
+
 def strip_block_comments(text: str) -> str:
     out = []
     i = 0
@@ -41,6 +43,7 @@ def strip_block_comments(text: str) -> str:
         out.append(c)
         i += 1
     return "".join(out)
+
 def main() -> int:
     if not SRC_DIR.is_dir():
         print(f"error: {SRC_DIR} not found", file=sys.stderr)
@@ -55,5 +58,6 @@ def main() -> int:
             print(f"stripped: {path.relative_to(SRC_DIR.parent)}")
     print(f"\nDone. Modified {changed} file(s).")
     return 0
+
 if __name__ == "__main__":
     raise SystemExit(main())

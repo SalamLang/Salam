@@ -3,8 +3,24 @@
 #include "fmt/fmt_internal.h"
 #include "lexer/lexer.h"
 
-void fmt_tokens(const token_stream_t *toks, sb_t *out)
+fmt_style_t fmt_style_default(void)
 {
+    fmt_style_t s; s.tabs = false; s.width = FMT_INDENT_WIDTH; return s;
+}
+
+static void fmt_emit_indent(sb_t *out, const fmt_style_t *st, int indent)
+{
+    if (st->tabs) {
+        int s = 0; for (; s < indent; s++) sb_putc(out, '\t');
+    } else {
+        int s = 0; for (; s < indent * st->width; s++) sb_putc(out, ' ');
+    }
+}
+
+void fmt_tokens(const token_stream_t *toks, const fmt_style_t *style, sb_t *out)
+{
+    fmt_style_t def = fmt_style_default();
+    const fmt_style_t *st = style ? style : &def;
     size_t n = token_stream_count(toks);
     int  indent = 0;          
     int  bracket = 0;         
@@ -53,10 +69,9 @@ void fmt_tokens(const token_stream_t *toks, sb_t *out)
             if (indent > 0) indent--;
         }
         if (!line_has_content) {
-            
             if (prev != NULL && t->span.begin.line > prev_end_line + 1)
                 sb_putc(out, '\n');
-            { int s = 0; for (; s < indent * FMT_INDENT_WIDTH; s++) sb_putc(out, ' '); }
+            fmt_emit_indent(out, st, indent);
         } else if (!no_space_next && fmt_need_space(prev, t, prev_unary)) {
             sb_putc(out, ' ');
         }
@@ -88,12 +103,12 @@ void fmt_tokens(const token_stream_t *toks, sb_t *out)
 }
 
 bool fmt_source(arena_t *a, logger_t *log, const langpack_t *pack,
-                const source_file_t *src, sb_t *out)
+                const source_file_t *src, const fmt_style_t *style, sb_t *out)
 {
     token_stream_t *toks = NULL;
-    
+
     bool ok = lexer_run_ex(a, log, pack, src, true, &toks);
     if (!ok) return false;
-    fmt_tokens(toks, out);
+    fmt_tokens(toks, style, out);
     return true;
 }

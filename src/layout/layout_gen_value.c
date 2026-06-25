@@ -1,0 +1,105 @@
+#include "core/prelude.h"
+#include "layout/layout_internal.h"
+#include "i18n/i18n.h"
+
+const char *lfmt(layout_ctx_t *cx, const char *fmt, ...)
+{
+    va_list ap, ap2; va_start(ap, fmt); va_copy(ap2, ap);
+    int n = vsnprintf(NULL, 0, fmt, ap); va_end(ap);
+    char *b = (char *)arena_alloc(cx->a, (size_t)n + 1);
+    vsnprintf(b, (size_t)n + 1, fmt, ap2); va_end(ap2);
+    return b;
+}
+
+void html_line(layout_ctx_t *cx, const char *fmt, ...)
+{
+    for (int i = 0; i < cx->indent; i++) sb_puts(cx->html, "  ");
+    va_list ap, ap2; va_start(ap, fmt); va_copy(ap2, ap);
+    int n = vsnprintf(NULL, 0, fmt, ap); va_end(ap);
+    char *b = (char *)arena_alloc(cx->a, (size_t)n + 1);
+    vsnprintf(b, (size_t)n + 1, fmt, ap2); va_end(ap2);
+    sb_puts(cx->html, b); sb_putc(cx->html, '\n');
+}
+
+unsigned djb2(const char *s)
+{
+    unsigned h = 5381;
+    for (; *s; s++) h = ((h << 5) + h) + (unsigned char)*s;
+    return h;
+}
+
+bool starts_with(const char *s, const char *p)
+{
+    size_t n = strlen(p);
+    return strncmp(s, p, n) == 0;
+}
+
+const char *hyphenate(layout_ctx_t *cx, const char *s)
+{
+    char *r = (char *)arena_strdup(cx->a, s);
+    for (char *p = r; *p; p++) if (*p == '_' || *p == ' ') *p = '-';
+    return r;
+}
+
+const char *html_escape(layout_ctx_t *cx, const char *s)
+{
+    sb_t b; sb_init(&b);
+    for (const char *p = s; *p; p++) {
+        switch (*p) {
+            case '&': sb_puts(&b, "&amp;"); break;
+            case '<': sb_puts(&b, "&lt;"); break;
+            case '>': sb_puts(&b, "&gt;"); break;
+            default:  sb_putc(&b, *p); break;
+        }
+    }
+    const char *r = arena_strdup(cx->a, sb_cstr(&b)); sb_free(&b); return r;
+}
+
+const char *val_str(layout_ctx_t *cx, ast_node_t *v)
+{
+    if (!v) return "";
+    switch (v->kind) {
+        case AST_LITERAL:
+            switch (v->op) {
+                case TK_STRING: case TK_TRIPLE_STRING: return v->value.as.s ? v->value.as.s : "";
+                case TK_INT:    return lfmt(cx, "%llu", (unsigned long long)v->value.as.i);
+                case TK_FLOAT:  return lfmt(cx, "%g", v->value.as.f);
+                case TK_KW_TRUE:  return "true";
+                case TK_KW_FALSE: return "false";
+                default: return v->name ? v->name : "";
+            }
+        case AST_IDENTIFIER: return v->name ? v->name : "";
+        case AST_CALL: {
+            
+            const char *fn = (v->a && v->a->kind == AST_IDENTIFIER) ? v->a->name : "fn";
+            sb_t b; sb_init(&b); sb_puts(&b, fn); sb_putc(&b, '(');
+            for (size_t i = 0; i < v->list.len; i++) {
+                ast_node_t *arg = (ast_node_t *)v->list.data[i];
+                if (i) sb_puts(&b, ", ");
+                if (arg->kind == AST_LITERAL &&
+                    (arg->op == TK_STRING || arg->op == TK_TRIPLE_STRING)) {
+                    sb_putc(&b, '"'); sb_puts(&b, val_str(cx, arg)); sb_putc(&b, '"');
+                } else {
+                    sb_puts(&b, val_str(cx, arg));
+                }
+            }
+            sb_putc(&b, ')');
+            const char *r = arena_strdup(cx->a, sb_cstr(&b)); sb_free(&b); return r;
+        }
+        default: return "";
+    }
+}
+
+void emit_rule(layout_ctx_t *cx, const char *rule)
+{
+    for (size_t i = 0; i < cx->css_seen.len; i++)
+        if (strcmp((const char *)cx->css_seen.data[i], rule) == 0) return;
+    vec_push(cx->a, &cx->css_seen, (void *)rule);
+    sb_puts(cx->css, rule); sb_putc(cx->css, '\n');
+}
+
+bool is_bool_attr(const char *n)
+{
+    return !strcmp(n,"required")||!strcmp(n,"checked")||!strcmp(n,"disabled")||
+           !strcmp(n,"hidden")||!strcmp(n,"selected")||!strcmp(n,"multiple");
+}

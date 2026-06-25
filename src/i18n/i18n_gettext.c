@@ -351,14 +351,44 @@ static const i18n_pair_t k_msg_fa[] = {
     { "layout build failed",                                 "ساخت چیدمان ناموفق بود" },
     { "this program has no layout block; use a `layout:` block to build an HTML page",
       "این برنامه بلوک چیدمان ندارد؛ برای ساخت صفحه‌ی HTML از یک بلوک ‹layout:› استفاده کنید" },
+
+    { "'%s' is not an interface (required after 'dyn')",     "'%s' یک واسط نیست (پس از 'dyn' یک واسط لازم است)" },
+    { "repeat count must be a number, got '%s'",             "شمار تکرار باید یک عدد باشد، اما '%s' دریافت شد" },
+    { "repeat range bound must be a number, got '%s'",       "کران بازه‌ی تکرار باید یک عدد باشد، اما '%s' دریافت شد" },
+    { "repeat step must be a number, got '%s'",              "گام تکرار باید یک عدد باشد، اما '%s' دریافت شد" },
+    { "layout uses 'repeat' but a nested element has an 'id'", "چیدمان از 'repeat' استفاده می‌کند اما یک عنصر تودرتو 'id' دارد" },
+    { "field '%s': a `dyn` value cannot yet be a struct field; make '%s' generic (`<T: %s>`) or store the data another way",
+      "فیلد '%s': یک مقدار `dyn` هنوز نمی‌تواند فیلد ساختار باشد؛ '%s' را جنریک کنید (`<T: %s>`) یا داده را به‌گونه‌ای دیگر ذخیره کنید" },
+
+    { "link directive needs a library name or path",        "دستور link به نام یا مسیر یک کتابخانه نیاز دارد" },
+    { "linked library not found: '%s' (resolved to '%s')",  "کتابخانه‌ی پیوندشده یافت نشد: '%s' (به '%s' تبدیل شد)" },
+    { "linked library not found: '%s'",                     "کتابخانه‌ی پیوندشده یافت نشد: '%s'" },
+    { "'%s' in `impl ... for ...` is not an interface",     "'%s' در `impl ... for ...` یک واسط نیست" },
+
+    { "bound '%s' on type parameter '%s' is not an interface", "کران '%s' روی پارامتر نوع '%s' یک واسط نیست" },
+    { "'%s' does not satisfy '%s': no struct definition or `impl` block provides its methods",
+      "'%s' شرط '%s' را برآورده نمی‌کند: هیچ تعریف ساختار یا بلوک `impl` متدهای آن را فراهم نمی‌کند" },
+    { "'%s' does not implement interface '%s': missing method '%s'",
+      "'%s' واسط '%s' را پیاده‌سازی نمی‌کند: متد '%s' موجود نیست" },
+    { "'%s' implements method '%s' with a signature that does not match interface '%s'",
+      "'%s' متد '%s' را با امضایی پیاده‌سازی می‌کند که با واسط '%s' هم‌خوان نیست" },
+
+    { "callhandler(fn, arg) takes a function pointer and an i64 argument",
+      "callhandler(fn, arg) یک اشاره‌گر تابع و یک آرگومان i64 می‌گیرد" },
+    { "sizeof(Type) takes a single type operand",           "sizeof(Type) تنها یک عملوند نوع می‌گیرد" },
+    { "function value takes %zu argument(s), got %zu",       "مقدار تابعی %zu آرگومان می‌گیرد، اما %zu دریافت شد" },
+    { "argument %zu: cannot pass '%s' to '%s'",             "آرگومان %zu: نمی‌توان '%s' را به '%s' پاس داد" },
+    { "lang() takes no arguments",                          "()lang هیچ آرگومانی نمی‌گیرد" },
+    { "interface '%s' has no method '%s'",                  "واسط '%s' متدی به نام '%s' ندارد" },
+
     { NULL, NULL }
 };
 const char *i18n_tr(const char *msgid)
 {
     if (!msgid) return msgid;
     if (strcmp(i18n_active_lang(), "fa") == 0) {
-        for (const i18n_pair_t *p = k_msg_fa; p->key; p++)
-            if (strcmp(p->key, msgid) == 0) return p->val;
+        { const i18n_pair_t *p = k_msg_fa; for (; p->key; p++)
+            if (strcmp(p->key, msgid) == 0) return p->val; }
     }
     return msgid;
 }

@@ -32,7 +32,7 @@ const char *langpack_entry_for(const char *code)
 
 const char *langpack_end_spelling(const langpack_t *p)
 {
-    for (const kw_entry_t *e = p->keywords; e->spelling != NULL; e++)
-        if (e->kind == TK_KW_END) return e->spelling;
+    { const kw_entry_t *e = p->keywords; for (; e->spelling != NULL; e++)
+        if (e->kind == TK_KW_END) return e->spelling; }
     return "end";
 }

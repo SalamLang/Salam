@@ -1,4 +1,5 @@
 #include "core/prelude.h"
+#include "core/numstr.h"
 #include "ast/ast.h"
 
 static void ast_emit_value(xml_writer_t *w, const token_value_t *v)
@@ -8,7 +9,7 @@ static void ast_emit_value(xml_writer_t *w, const token_value_t *v)
         case TV_NONE: return;
         case TV_INT:
             xml_open(w, "value"); xml_attr(w, "kind", "int");
-            snprintf(buf, sizeof(buf), "%llu", (unsigned long long)v->as.i);
+            sal_u64toa((uint64_t)v->as.i, buf);
             xml_text(w, buf); xml_close(w); break;
         case TV_FLOAT:
             xml_open(w, "value"); xml_attr(w, "kind", "float");
@@ -19,7 +20,7 @@ static void ast_emit_value(xml_writer_t *w, const token_value_t *v)
             xml_text(w, v->as.s ? v->as.s : ""); xml_close(w); break;
         case TV_CHAR:
             xml_open(w, "value"); xml_attr(w, "kind", "char");
-            snprintf(buf, sizeof(buf), "%llu", (unsigned long long)v->as.i);
+            sal_u64toa((uint64_t)v->as.i, buf);
             xml_text(w, buf); xml_close(w); break;
         case TV_BOOL:
             xml_open(w, "value"); xml_attr(w, "kind", "bool");
@@ -49,9 +50,9 @@ static void ast_child(xml_writer_t *w, const char *role, const ast_node_t *n)
 static void ast_child_list(xml_writer_t *w, const char *role, const vec_t *list)
 {
     xml_open(w, role);
-    for (size_t i = 0; i < list->len; i++) {
+    { size_t i = 0; for (; i < list->len; i++) {
         ast_to_xml(w, (const ast_node_t *)list->data[i]);
-    }
+    } }
     xml_close(w);
 }
 

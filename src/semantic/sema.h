@@ -1,5 +1,6 @@
 #ifndef SALAM_SEMANTIC_SEMA_H
 #define SALAM_SEMANTIC_SEMA_H
+
 #include "core/prelude.h"
 #include "core/arena.h"
 #include "logger/logger.h"
@@ -19,8 +20,13 @@ typedef struct {
                              * packages' AST directly instead of reimplementing the
                              * stdlib in C; codegen/LLVM reach the same .salam source. */
 } sema_result_t;
+
 sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const char *file);
+
 void symbols_to_xml(xml_writer_t *w, const sema_result_t *r);
+
 const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec);
+
 void salam_set_stdlib_root(const char *root);
+
 #endif /* SALAM_SEMANTIC_SEMA_H */

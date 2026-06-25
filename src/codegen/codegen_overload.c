@@ -3,28 +3,28 @@
 
 func_sig_t *sig_of_decl(symbol_t *fsym, ast_node_t *decl)
 {
-    for (size_t i = 0; i < fsym->overloads.len; i++) {
+    { size_t i = 0; for (; i < fsym->overloads.len; i++) {
         func_sig_t *sig = (func_sig_t *)fsym->overloads.data[i];
         if (sig->decl == decl) return sig;
-    }
+    } }
     return NULL;
 }
 
 func_sig_t *pick_overload(cg_t *cg, symbol_t *fsym, ast_node_t *call)
 {
     func_sig_t *fallback = NULL;
-    for (size_t i = 0; i < fsym->overloads.len; i++) {
+    { size_t i = 0; for (; i < fsym->overloads.len; i++) {
         func_sig_t *sig = (func_sig_t *)fsym->overloads.data[i];
         if (!fallback) fallback = sig;
         if (sig->params.len != call->list.len) continue;
         bool ok = true;
-        for (size_t j = 0; j < call->list.len; j++) {
+        { size_t j = 0; for (; j < call->list.len; j++) {
             ast_node_t *arg = (ast_node_t *)call->list.data[j];
             const char *pt = type_to_string(cg->sem->tc, (type_t *)sig->params.data[j]);
             if (!arg->type_str || strcmp(arg->type_str, pt) != 0) { ok = false; break; }
-        }
+        } }
         if (ok) return sig;
-    }
+    } }
     return fallback;
 }
 
@@ -83,11 +83,11 @@ func_sig_t *pick_op_overload(cg_t *cg, symbol_t *msym, size_t want_nparams)
 {
     (void)cg;
     func_sig_t *fallback = NULL;
-    for (size_t i = 0; i < msym->overloads.len; i++) {
+    { size_t i = 0; for (; i < msym->overloads.len; i++) {
         func_sig_t *sig = (func_sig_t *)msym->overloads.data[i];
         if (sig->params.len == want_nparams) {
             if (!fallback) fallback = sig;
         }
-    }
+    } }
     return fallback;
 }

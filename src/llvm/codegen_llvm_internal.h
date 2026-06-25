@@ -1,5 +1,6 @@
 #ifndef SALAM_LLVM_CODEGEN_LLVM_INTERNAL_H
 #define SALAM_LLVM_CODEGEN_LLVM_INTERNAL_H
+
 #include "core/prelude.h"
 #include "core/arena.h"
 #include "core/sb.h"
@@ -11,9 +12,14 @@
 #include "llvm/codegen_llvm.h"
 
 typedef struct { const char *ref; const char *ts; } llv_t;
+
+
 typedef struct { const char *ptr; const char *ts; } ll_addr_t;
+
 typedef struct { const char *name; const char *ptr; const char *ts; } lvar_t;
+
 typedef struct { const char *bytes; size_t len; const char *gref; } lstr_t;
+
 typedef struct {
     arena_t       *a;
     logger_t      *log;
@@ -63,67 +69,123 @@ typedef struct {
     const char    *src_file;  /* DIFile filename (source basename)             */
     const char    *src_dir;   /* DIFile directory                              */
 } ll_t;
-static inline bool ll_is_str(const char *ts)    { return ts && !strcmp(ts, "str"); }
 
-static inline bool ll_is_bool(const char *ts)   { return ts && !strcmp(ts, "bool"); }
+SAL_INLINE bool ll_is_str(const char *ts)    { return ts && !strcmp(ts, "str"); }
 
-static inline bool ll_is_float(const char *ts)  { return ts && (!strcmp(ts,"f32") || !strcmp(ts,"f64")); }
+SAL_INLINE bool ll_is_bool(const char *ts)   { return ts && !strcmp(ts, "bool"); }
 
-static inline bool ll_is_ptr_ts(const char *ts) { return ts && *ts && ts[strlen(ts)-1] == '*'; }
+SAL_INLINE bool ll_is_float(const char *ts)  { return ts && (!strcmp(ts,"f32") || !strcmp(ts,"f64")); }
 
-static inline llv_t ll_poison(const char *ts) { return (llv_t){ "0", ts ? ts : "i32" }; }
+SAL_INLINE bool ll_is_ptr_ts(const char *ts) { return ts && *ts && ts[strlen(ts)-1] == '*'; }
+
+SAL_INLINE llv_t ll_poison(const char *ts) { return (llv_t){ "0", ts ? ts : "i32" }; }
 
 const char *ll_fmt(ll_t *ll, const char *fmt, ...);        /* arena printf            */
+
 void        ll_emit(ll_t *ll, const char *fmt, ...);       /* one indented instr line */
+
 void        ll_emit_label(ll_t *ll, const char *label);    /* place a BB label        */
+
 void        ll_emit_term(ll_t *ll, const char *fmt, ...);  /* a terminator (br/ret)   */
+
 const char *ll_new_tmp(ll_t *ll);                          /* fresh %tN               */
+
 const char *ll_new_lbl(ll_t *ll, const char *tag);         /* fresh label LN_tag      */
+
 void        ll_error(ll_t *ll, const ast_node_t *n, const char *fmt, ...); /* report + ok=false */
+
 const char *ll_strconst(ll_t *ll, const char *s);          /* intern -> ptr global    */
+
 void        ll_local_add(ll_t *ll, const char *name, const char *ptr, const char *ts);
+
 lvar_t     *ll_local_find(ll_t *ll, const char *name);
+
 lvar_t     *ll_global_find(ll_t *ll, const char *name);   /* module-level global, or NULL */
+
 int         ll_int_bits(const char *ts);
+
 bool        ll_is_int(const char *ts);
+
 bool        ll_is_signed(const char *ts);
+
 const char *ll_ty(ll_t *ll, const char *ts);
+
 const char *ll_conv(ll_t *ll, llv_t v, const char *to_ts);
+
 const char *ll_common(const char *a, const char *b);
+
 const char *ll_as_i1(ll_t *ll, llv_t v);
+
 long        ll_array_dim(const char *ts);             /* outer dim of "T[N]...", or 0 */
+
+
 const char *ll_array_elem(ll_t *ll, const char *ts);  /* "T[N][M]" -> "T[M]"          */
+
 const char *ll_struct_ltype(ll_t *ll, const char *name); /* -> "%struct.<id>"         */
+
 symbol_t   *ll_sym(ll_t *ll, const char *name);          /* global, then current package */
+
 symbol_t   *ll_struct_sym(ll_t *ll, const char *name);   /* SYM_STRUCT, or NULL       */
+
 symbol_t   *ll_enum_sym(ll_t *ll, const char *name);     /* SYM_ENUM, or NULL         */
+
 int         ll_field_index(symbol_t *ssym, const char *field, symbol_t **out_field);
+
 const char *ll_zero(const char *ts);                  /* the zero literal for a type  */
+
 const char *ll_func_ret(ll_t *ll, const char *ts);    /* "func(..)Ret" -> "Ret"/"void" */
+
 void        ll_func_params(ll_t *ll, const char *ts, vec_t *out); /* -> const char* param types */
+
 llv_t ll_expr(ll_t *ll, ast_node_t *n);
+
 llv_t ll_binary(ll_t *ll, ast_node_t *n);   /* also used by compound assignment */
+
 ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n);   /* address of an lvalue (id/member/index) */
+
 bool ll_index_set(ll_t *ll, ast_node_t *index_target, ast_node_t *value); /* struct s[i]=v */
+
 void ll_stmt(ll_t *ll, ast_node_t *n);
+
 void ll_block(ll_t *ll, ast_node_t *block);
+
 void ll_emit_return(ll_t *ll, ast_node_t *value);   /* used by ll_function fall-through */
+
 const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *sig);
+
 func_sig_t *ll_pick_overload(ll_t *ll, symbol_t *sym, ast_node_t *call);
+
+
 void        ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner); /* owner=struct for methods */
+
 void        ll_emit_lambda(ll_t *ll, ast_node_t *n);  /* lift a lambda -> a function + env type */
+
 void        ll_emit_struct_types(ll_t *ll, ast_node_t *program); /* %struct.X = type {..} */
+
 void        ll_emit_globals(ll_t *ll, ast_node_t *program);      /* @g.<id> = global ...   */
+
 void        ll_emit_externs(ll_t *ll);                           /* declare @extern_fn(..)  */
+
 void        ll_emit_impls(ll_t *ll);                             /* `impl Iface for T` methods */
+
 void        ll_emit_packages(ll_t *ll);                          /* imported modules' defs   */
+
 void        ll_ensure_fn(ll_t *ll, ast_node_t *fn, symbol_t *owner, scope_t *pscope);
+
 const char *ll_box_dyn(ll_t *ll, llv_t v, const char *iface);
+
 const char *ll_mangle_ti(ll_t *ll, const char *typestr, const char *fn, func_sig_t *sig);
+
 void        ll_emit_global_inits(ll_t *ll);                      /* deferred inits, at main */
+
 const char *ll_meta_add(ll_t *ll, const char *text);  /* "!N = text"; returns "!N" */
+
 void        ll_debug_init(ll_t *ll, const char *src_path);   /* DIFile/CU/flags    */
+
 const char *ll_debug_subprogram(ll_t *ll, const char *name, unsigned line);
+
 const char *ll_debug_location(ll_t *ll, unsigned line, unsigned col); /* in cur_sp */
+
 void        ll_debug_finalize(ll_t *ll);              /* emit named + node metadata */
+
 #endif /* SALAM_LLVM_CODEGEN_LLVM_INTERNAL_H */

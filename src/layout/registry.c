@@ -11,8 +11,8 @@ void layout_registry_set_elements(const layout_elem_def_t *defs, size_t n)
 
 const layout_elem_def_t *layout_elem_lookup(const char *name)
 {
-    for (size_t i = 0; i < g_elems_n; i++)
-        if (strcmp(g_elems[i].name, name) == 0) return &g_elems[i];
+    { size_t i = 0; for (; i < g_elems_n; i++)
+        if (strcmp(g_elems[i].name, name) == 0) return &g_elems[i]; }
     return NULL;
 }
 
@@ -25,8 +25,8 @@ void layout_registry_set_attributes(const layout_attr_def_t *defs, size_t n)
 
 const layout_attr_def_t *layout_attr_lookup(const char *name)
 {
-    for (size_t i = 0; i < g_attrs_n; i++)
-        if (strcmp(g_attrs[i].name, name) == 0) return &g_attrs[i];
+    { size_t i = 0; for (; i < g_attrs_n; i++)
+        if (strcmp(g_attrs[i].name, name) == 0) return &g_attrs[i]; }
     return NULL;
 }
 #define LAYOUT_DYN_VAL_MAX 512
@@ -41,9 +41,9 @@ void layout_registry_add_value(const char *group, const char *spelling, const ch
 
 static const char *dyn_value(const char *group, const char *v)
 {
-    for (int i = 0; i < g_vals_n; i++)
+    { int i = 0; for (; i < g_vals_n; i++)
         if (strcmp(g_vals[i].group, group) == 0 && strcmp(g_vals[i].spelling, v) == 0)
-            return g_vals[i].canon;
+            return g_vals[i].canon; }
     return NULL;
 }
 
@@ -51,13 +51,13 @@ static bool csv_has(const char *csv, const char *v)
 {
     if (!csv || !v) return false;
     size_t vl = strlen(v);
-    for (const char *p = csv; *p; ) {
+    { const char *p = csv; for (; *p; ) {
         const char *c = strchr(p, ',');
         size_t len = c ? (size_t)(c - p) : strlen(p);
         if (len == vl && strncmp(p, v, vl) == 0) return true;
         if (!c) break;
         p = c + 1;
-    }
+    } }
     return false;
 }
 

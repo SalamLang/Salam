@@ -1,9 +1,12 @@
 #ifndef SALAM_CLI_OPTIONS_H
 #define SALAM_CLI_OPTIONS_H
+
 #include "core/prelude.h"
 #include "logger/logger.h"
 #include "diag/diag_render.h"
+
 #define SALAM_MAX_INPUTS 64
+
 typedef enum {
     CMD_INSPECT = 0,   /* salamc <file>          inspect / emit XML (default)   */
     CMD_BUILD,         /* salamc build <files>   compile to an executable       */
@@ -20,6 +23,7 @@ typedef enum {
     CMD_HELP,          /* salamc help            print usage                    */
     CMD_VERSION        /* salamc version         print version                  */
 } cli_command_t;
+
 typedef struct {
     cli_command_t command;         /* the sub-command (CMD_INSPECT default)     */
     const char  *input;            /* positional: source file (required) */
@@ -54,6 +58,9 @@ typedef struct {
     bool         llvm_verify;       /* --verify-ir                            */
     const char  *llvm_target;       /* --target=TRIPLE (NULL = host)          */
 } options_t;
+
 bool cli_parse(int argc, char **argv, options_t *out);
+
 void cli_print_usage(FILE *out);
+
 #endif /* SALAM_CLI_OPTIONS_H */

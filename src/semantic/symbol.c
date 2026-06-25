@@ -1,5 +1,6 @@
 #include "core/prelude.h"
 #include "semantic/symbol.h"
+#include "core/sal_format.h"
 
 scope_t *scope_new(arena_t *a, scope_kind_t kind, scope_t *parent)
 {
@@ -22,15 +23,15 @@ symbol_t *symbol_new(arena_t *a, sym_kind_t kind, const char *name)
 }
 symbol_t *scope_lookup_local(scope_t *s, const char *name)
 {
-    for (size_t i = 0; i < s->symbols.len; i++) {
+    { size_t i = 0; for (; i < s->symbols.len; i++) {
         symbol_t *sym = (symbol_t *)s->symbols.data[i];
         if (strcmp(sym->name, name) == 0) return sym;
-    }
+    } }
     return NULL;
 }
 symbol_t *scope_lookup(scope_t *s, const char *name)
 {
-    for (scope_t *cur = s; cur; cur = cur->parent) {
+    { scope_t *cur = s; for (; cur; cur = cur->parent) {
         symbol_t *sym = scope_lookup_local(cur, name);
         if (sym) return sym;
         
@@ -38,7 +39,7 @@ symbol_t *scope_lookup(scope_t *s, const char *name)
             sym = scope_lookup(cur->aux, name);
             if (sym) return sym;
         }
-    }
+    } }
     return NULL;
 }
 symbol_t *scope_define(arena_t *a, scope_t *s, symbol_t *sym)
@@ -75,7 +76,7 @@ static size_t buf_appendf(char *buf, size_t cap, size_t n, const char *fmt, ...)
 {
     if (n >= cap) return cap - 1;
     va_list ap; va_start(ap, fmt);
-    int w = vsnprintf(buf + n, cap - n, fmt, ap);
+    int w = sal_vsnprintf(buf + n, cap - n, fmt, ap);
     va_end(ap);
     if (w < 0) return n;                 
     n += (size_t)w;
@@ -90,10 +91,10 @@ const char *mangle_func(arena_t *a, const char *struct_name,
     if (struct_name) n = buf_appendf(buf, sizeof(buf), n, "S_%s_", struct_name);
     n = buf_appendf(buf, sizeof(buf), n, "%s__", fn);
     if (param_types && param_types->len) {
-        for (size_t i = 0; i < param_types->len && n < sizeof(buf) - 16; i++) {
+        { size_t i = 0; for (; i < param_types->len && n < sizeof(buf) - 16; i++) {
             const type_t *t = (const type_t *)param_types->data[i];
             n = buf_appendf(buf, sizeof(buf), n, "%s%s", i ? "_" : "", type_code(a, t));
-        }
+        } }
     } else {
         n = buf_appendf(buf, sizeof(buf), n, "void");
     }

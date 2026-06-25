@@ -1,5 +1,6 @@
 #include "core/prelude.h"
 #include "core/sb.h"
+#include "core/sal_format.h"
 
 void sb_init(sb_t *s)
 {
@@ -47,12 +48,12 @@ void sb_printf(sb_t *s, const char *fmt, ...)
 {
     va_list ap, ap2;
     va_start(ap, fmt);
-    va_copy(ap2, ap);
-    int n = vsnprintf(NULL, 0, fmt, ap);
+    SAL_VA_COPY(ap2, ap);
+    int n = sal_vsnprintf(NULL, 0, fmt, ap);
     va_end(ap);
     if (n > 0) {
         sb_ensure(s, (size_t)n);
-        vsnprintf(s->data + s->len, (size_t)n + 1, fmt, ap2);
+        sal_vsnprintf(s->data + s->len, (size_t)n + 1, fmt, ap2);
         s->len += (size_t)n;
     }
     va_end(ap2);

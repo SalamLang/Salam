@@ -63,17 +63,17 @@ ast_node_t *ast_clone(arena_t *a, const ast_node_t *n)
     c->b = ast_clone(a, n->b);
     c->c = ast_clone(a, n->c);
     c->d = ast_clone(a, n->d);
-    for (size_t i = 0; i < n->list.len; i++)
-        vec_push(a, &c->list, ast_clone(a, (const ast_node_t *)n->list.data[i]));
-    for (size_t i = 0; i < n->dims.len; i++)
-        vec_push(a, &c->dims, ast_clone(a, (const ast_node_t *)n->dims.data[i]));
-    for (size_t i = 0; i < n->typarams.len; i++)
-        vec_push(a, &c->typarams, n->typarams.data[i]);   
-    for (size_t i = 0; i < n->typaram_bounds.len; i++)
-        vec_push(a, &c->typaram_bounds, n->typaram_bounds.data[i]); 
-    for (size_t i = 0; i < n->aliases.len; i++)
-        vec_push(a, &c->aliases, n->aliases.data[i]);     
-    for (size_t i = 0; i < n->captures.len; i++)
-        vec_push(a, &c->captures, ast_clone(a, (const ast_node_t *)n->captures.data[i]));
+    { size_t i = 0; for (; i < n->list.len; i++)
+        vec_push(a, &c->list, ast_clone(a, (const ast_node_t *)n->list.data[i])); }
+    { size_t i = 0; for (; i < n->dims.len; i++)
+        vec_push(a, &c->dims, ast_clone(a, (const ast_node_t *)n->dims.data[i])); }
+    { size_t i = 0; for (; i < n->typarams.len; i++)
+        vec_push(a, &c->typarams, n->typarams.data[i]); }   
+    { size_t i = 0; for (; i < n->typaram_bounds.len; i++)
+        vec_push(a, &c->typaram_bounds, n->typaram_bounds.data[i]); } 
+    { size_t i = 0; for (; i < n->aliases.len; i++)
+        vec_push(a, &c->aliases, n->aliases.data[i]); }     
+    { size_t i = 0; for (; i < n->captures.len; i++)
+        vec_push(a, &c->captures, ast_clone(a, (const ast_node_t *)n->captures.data[i])); }
     return c;
 }

@@ -7,18 +7,18 @@ static void assign_to(interp_t *I, env_t *env, ast_node_t *target, value_t v)
         if (b) { b->val = v; return; }
         binding_t *self = env_find(env, "this");
         if (self && self->val.kind == VAL_STRUCT) {
-            for (size_t i = 0; i < self->val.as.st->nfields; i++)
+            { size_t i = 0; for (; i < self->val.as.st->nfields; i++)
                 if (strcmp(self->val.as.st->fields[i].name, target->name) == 0)
-                    { self->val.as.st->fields[i].val = v; return; }
+                    { self->val.as.st->fields[i].val = v; return; } }
         }
         rt_error(I, target, "assignment to undeclared variable '%s'", target->name);
     }
     if (target->kind == AST_MEMBER) {
         value_t obj = eval(I, env, target->a);
         if (obj.kind != VAL_STRUCT) rt_error(I, target, "cannot assign to member of non-struct");
-        for (size_t i = 0; i < obj.as.st->nfields; i++)
+        { size_t i = 0; for (; i < obj.as.st->nfields; i++)
             if (strcmp(obj.as.st->fields[i].name, target->name) == 0)
-                { obj.as.st->fields[i].val = v; return; }
+                { obj.as.st->fields[i].val = v; return; } }
         rt_error(I, target, "struct '%s' has no field '%s'", obj.as.st->type_name, target->name);
     }
     if (target->kind == AST_INDEX) {
@@ -40,10 +40,10 @@ static void assign_to(interp_t *I, env_t *env, ast_node_t *target, value_t v)
 }
 flow_t exec_list(interp_t *I, env_t *env, frame_t *fr, vec_t *list, value_t *ret)
 {
-    for (size_t i = 0; i < list->len; i++) {
+    { size_t i = 0; for (; i < list->len; i++) {
         flow_t f = exec_stmt(I, env, fr, (ast_node_t *)list->data[i], ret);
         if (f != FLOW_NORMAL) return f;
-    }
+    } }
     return FLOW_NORMAL;
 }
 flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *ret)
@@ -119,13 +119,13 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
                 start = 0; end -= 1; step = 1;   
             }
             #undef REP_NUM
-            for (int64_t k = start; k <= end; k += step) {
+            { int64_t k = start; for (; k <= end; k += step) {
                 tick(I);
                 env_t *c = env_new(I, env);
                 flow_t f = exec_list(I, c, fr, &n->b->list, ret);
                 if (f == FLOW_RETURN) return f;
                 if (f == FLOW_BREAK)  break;
-            }
+            } }
             return FLOW_NORMAL;
         }
         case AST_FOR: {

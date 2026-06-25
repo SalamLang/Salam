@@ -80,16 +80,17 @@ static ast_node_t *parse_statement(parser_t *p)
                     default:
                         is_decl = false; break;       
                 }
-                for (size_t i = 0; i + 1 < m; i++)    
+                { size_t i = 0; for (; i + 1 < m; i++)    
                     if (p_peekn(p, i)->kind == TK_IDENT &&
-                        strcmp(p_peekn(p, i)->lexeme, "dyn") == 0) { is_decl = true; break; }
+                        strcmp(p_peekn(p, i)->lexeme, "dyn") == 0) { is_decl = true; break; } }
             }
             if (is_decl) {
                 ast_node_t *n = parse_bare_var_decl(p);
                 p_term(p);
                 return n;
             }
-        } 
+            __attribute__((fallthrough));
+        }
         default: {
             ast_node_t *e = parse_expr(p);
             ast_node_t *stmt;

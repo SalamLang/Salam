@@ -84,8 +84,8 @@ char *preproc_run(arena_t *a, logger_t *log, const char *text,
     int nos = count_os_defs();
     int total = nos + ndefines;
     const char **all = (const char **)arena_alloc(a, (size_t)(total + 1) * sizeof(char *));
-    for (int i = 0; i < nos; i++) all[i] = s_os_defs[i];
-    for (int i = 0; i < ndefines; i++) all[nos + i] = defines[i];
+    { int i = 0; for (; i < nos; i++) all[i] = s_os_defs[i]; }
+    { int i = 0; for (; i < ndefines; i++) all[nos + i] = defines[i]; }
     all[total] = NULL;
     defines = all;
     ndefines = total;
@@ -152,7 +152,7 @@ char *preproc_run(arena_t *a, logger_t *log, const char *text,
             if (over > 0) over--;            
             else if (depth > 0) depth--;
         } else {
-            if (emitting) { for (size_t i = 0; i < len; i++) sb_putc(&out, line[i]); }
+            if (emitting) { { size_t i = 0; for (; i < len; i++) sb_putc(&out, line[i]); } }
             
         }
         if (has_nl) sb_putc(&out, '\n');
@@ -164,7 +164,7 @@ char *preproc_run(arena_t *a, logger_t *log, const char *text,
 source_file_t *preproc_source(arena_t *a, logger_t *log, const source_file_t *src,
                               const char *const *defines, int ndefines)
 {
-    if (!strstr(src->text, "@if")) return (source_file_t *)src;  
+    if (!strstr(src->text, "@if")) return CONST_CAST(src);  
     char *text = preproc_run(a, log, src->text, defines, ndefines);
     source_file_t *out = (source_file_t *)arena_alloc(a, sizeof(*out));
     out->path = src->path;

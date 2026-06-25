@@ -108,7 +108,7 @@ int driver_build(options_t *opt)
     const char *links[SALAM_MAX_INPUTS]; const char *link_kinds[SALAM_MAX_INPUTS]; int nlinks = 0;
     
     const char *defs[SALAM_MAX_INPUTS]; int ndefs = 0;
-    for (int i = 0; i < opt->ndefines && ndefs < SALAM_MAX_INPUTS; i++) defs[ndefs++] = opt->defines[i];
+    { int i = 0; for (; i < opt->ndefines && ndefs < SALAM_MAX_INPUTS; i++) defs[ndefs++] = opt->defines[i]; }
     if (opt->asan && ndefs < SALAM_MAX_INPUTS) defs[ndefs++] = "SALAM_MEM_DEBUG";
     if (opt->asan && ndefs < SALAM_MAX_INPUTS) defs[ndefs++] = "SALAM_ASAN";
     
@@ -118,8 +118,8 @@ int driver_build(options_t *opt)
                       : (strstr(opt->cc, "clang") ? "SALAM_CC_CLANG" : "SALAM_CC_GCC");
     
     const char *work[SALAM_MAX_INPUTS]; int nwork = 0;
-    for (int i = 0; i < opt->input_count && nwork < SALAM_MAX_INPUTS; i++)
-        work[nwork++] = opt->inputs[i];
+    { int i = 0; for (; i < opt->input_count && nwork < SALAM_MAX_INPUTS; i++)
+        work[nwork++] = opt->inputs[i]; }
     
     {
         const char *memp = salam_resolve_import(arena, "", "mem");
@@ -138,10 +138,10 @@ int driver_build(options_t *opt)
         FILE *yf = cryp ? fopen(cryp, "rb") : NULL;
         if (yf) { fclose(yf); if (nwork < SALAM_MAX_INPUTS) work[nwork++] = cryp; }
     }
-    for (int wi = 0; wi < nwork; wi++) {
+    { int wi = 0; for (; wi < nwork; wi++) {
         const char *path = work[wi];
         bool dup = false;
-        for (int j = 0; j < wi; j++) if (strcmp(work[j], path) == 0) dup = true;
+        { int j = 0; for (; j < wi; j++) if (strcmp(work[j], path) == 0) dup = true; }
         if (dup) continue;
         source_file_t *src = source_load(arena, path);
         if (!src) { LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"), path); all_ok = false; continue; }
@@ -158,19 +158,19 @@ int driver_build(options_t *opt)
         bool pok = parser_run(arena, log, toks, &program);
         sema_result_t *sr = sema_run(arena, log, program, src->path);
         if (!lok || !pok || !sr->ok) { all_ok = false; continue; }
-        for (size_t k = 0; k < program->list.len; k++) {
+        { size_t k = 0; for (; k < program->list.len; k++) {
             ast_node_t *d = (ast_node_t *)program->list.data[k];
             if (d->kind == AST_FUNC_DEF && d->name && strcmp(d->name, entry) == 0) { has_entry = true; break; }
-        }
+        } }
         
         const char *idir = dir_of(arena, path);
-        for (size_t k = 0; k < program->list.len && nwork < SALAM_MAX_INPUTS; k++) {
+        { size_t k = 0; for (; k < program->list.len && nwork < SALAM_MAX_INPUTS; k++) {
             ast_node_t *d = (ast_node_t *)program->list.data[k];
             if (d->kind == AST_LINK) {
                 const char *lib = (d->value.kind == TV_STRING && d->value.as.s) ? d->value.as.s : NULL;
                 if (lib && nlinks < SALAM_MAX_INPUTS) {
                     bool seen = false;
-                    for (int j = 0; j < nlinks; j++) if (strcmp(links[j], lib) == 0) seen = true;
+                    { int j = 0; for (; j < nlinks; j++) if (strcmp(links[j], lib) == 0) seen = true; }
                     if (!seen) {
                         link_kinds[nlinks] = d->name;   
                         links[nlinks++] = lib;
@@ -179,15 +179,15 @@ int driver_build(options_t *opt)
                             size_t ll = strlen(lib);
                             char *def = (char *)arena_alloc(arena, ll + 12);
                             strcpy(def, "SALAM_LINK_");
-                            for (size_t c = 0; c < ll; c++) {
+                            { size_t c = 0; for (; c < ll; c++) {
                                 char ch = lib[c];
                                 if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
                                 else if (!((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9'))) ch = '_';
                                 def[11 + c] = ch;
-                            }
+                            } }
                             def[11 + ll] = 0;
                             bool dseen = false;
-                            for (int j = 0; j < ndefs; j++) if (strcmp(defs[j], def) == 0) dseen = true;
+                            { int j = 0; for (; j < ndefs; j++) if (strcmp(defs[j], def) == 0) dseen = true; }
                             if (!dseen) defs[ndefs++] = def;
                         }
                     }
@@ -199,33 +199,33 @@ int driver_build(options_t *opt)
             if (!spec) continue;
             const char *ipath = salam_resolve_import(arena, idir, spec);
             bool known = false;
-            for (int j = 0; j < nwork; j++) if (strcmp(work[j], ipath) == 0) known = true;
+            { int j = 0; for (; j < nwork; j++) if (strcmp(work[j], ipath) == 0) known = true; }
             if (!known) work[nwork++] = ipath;
-        }
+        } }
         codegen_output_t *out = codegen_run(arena, log, program, sr, module, opt->safe,
                                             opt->debug_info, src->path, langpack_entry(pack));
         size_t pfxlen = strlen(SALAM_MOD_PREFIX);
-        const char *cpath = (const char *)arena_alloc(arena, pfxlen + strlen(module) + 3);
-        const char *hpath = (const char *)arena_alloc(arena, pfxlen + strlen(module) + 3);
-        sprintf((char *)cpath, "%s%s.c", SALAM_MOD_PREFIX, module);
-        sprintf((char *)hpath, "%s%s.h", SALAM_MOD_PREFIX, module);
+        char *cpath = (char *)arena_alloc(arena, pfxlen + strlen(module) + 3);
+        char *hpath = (char *)arena_alloc(arena, pfxlen + strlen(module) + 3);
+        sprintf(cpath, "%s%s.c", SALAM_MOD_PREFIX, module);
+        sprintf(hpath, "%s%s.h", SALAM_MOD_PREFIX, module);
         if (!write_file(log, cpath, out->c_src) || !write_file(log, hpath, out->h_src))
             { all_ok = false; continue; }
         cfiles[ncfiles++] = cpath;
         generated[ngen++] = cpath;
         generated[ngen++] = hpath;
-    }
+    } }
     
     if (!all_ok) {
         LOG_E(log, PH_DRIVER, i18n_tr("build aborted: errors in source"));
-        if (!opt->keep_c) for (int i = 0; i < ngen; i++) remove(generated[i]);
+        if (!opt->keep_c) { int i = 0; for (; i < ngen; i++) remove(generated[i]); }
         logger_free(log); arena_free(arena);
         return 1;
     }
     
     if (opt->command != CMD_OBJ && !has_entry) {
         LOG_E(log, PH_DRIVER, i18n_tr("no entry point: define a '%s' function"), entry);
-        if (!opt->keep_c) for (int i = 0; i < ngen; i++) remove(generated[i]);
+        if (!opt->keep_c) { int i = 0; for (; i < ngen; i++) remove(generated[i]); }
         logger_free(log); arena_free(arena);
         return 1;
     }
@@ -233,14 +233,14 @@ int driver_build(options_t *opt)
     if (opt->command == CMD_OBJ) {
         
         const char *dbg_flag = (opt->debug_info && !strstr(opt->cc, "tcc")) ? " -g" : "";
-        for (int i = 0; i < ncfiles && crc == 0; i++) {
+        { int i = 0; for (; i < ncfiles && crc == 0; i++) {
             char obj[260]; snprintf(obj, sizeof(obj), "%.*s.o", (int)(strlen(cfiles[i]) - 2), cfiles[i]);
             sb_t cmd; sb_init(&cmd);
             sb_puts(&cmd, opt->cc); sb_puts(&cmd, " -c -I."); sb_puts(&cmd, dbg_flag);
             sb_puts(&cmd, " "); sb_puts(&cmd, cfiles[i]); sb_puts(&cmd, " -o "); sb_puts(&cmd, obj);
             LOG_I(log, PH_DRIVER, "assembling: %s", sb_cstr(&cmd));
             crc = system(sb_cstr(&cmd)); sb_free(&cmd);
-        }
+        } }
         if (crc != 0) { LOG_E(log, PH_DRIVER, i18n_tr("C compiler '%s' failed (exit %d)"), opt->cc, crc); rc = 3; }
         else          LOG_I(log, PH_DRIVER, "produced object files (.o)");
     } else {
@@ -271,7 +271,7 @@ int driver_build(options_t *opt)
                 LOG_E(log, PH_DRIVER,
                       "tcc does not support AddressSanitizer; use --cc=gcc or --cc=clang");
                 sb_free(&cmd);
-                if (!opt->keep_c) for (int i = 0; i < ngen; i++) remove(generated[i]);
+                if (!opt->keep_c) { int i = 0; for (; i < ngen; i++) remove(generated[i]); }
                 logger_free(log); arena_free(arena);
                 return 2;
             }
@@ -280,20 +280,20 @@ int driver_build(options_t *opt)
             sb_puts(&cmd, " -DSALAM_MEM_DEBUG");
         }
         
-        for (int i = 0; i < nlinks; i++) {
+        { int i = 0; for (; i < nlinks; i++) {
             sb_puts(&cmd, " -DSALAM_LINK_");
-            for (const char *p = links[i]; *p; p++) {
+            { const char *p = links[i]; for (; *p; p++) {
                 char c = *p;
                 if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
                 else if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) c = '_';
                 sb_putc(&cmd, c);
-            }
-        }
-        for (int i = 0; i < ncfiles; i++) { sb_putc(&cmd, ' '); sb_puts(&cmd, cfiles[i]); }
+            } }
+        } }
+        { int i = 0; for (; i < ncfiles; i++) { sb_putc(&cmd, ' '); sb_puts(&cmd, cfiles[i]); } }
         sb_puts(&cmd, lm);  
         
-        for (int i = 0; i < nlinks; i++)
-            emit_link(&cmd, log, links[i], link_kinds[i], use_tcc);
+        { int i = 0; for (; i < nlinks; i++)
+            emit_link(&cmd, log, links[i], link_kinds[i], use_tcc); }
         LOG_I(log, PH_DRIVER, "linking: %s", sb_cstr(&cmd));
         crc = system(sb_cstr(&cmd)); sb_free(&cmd);
         if (crc != 0) { LOG_E(log, PH_DRIVER, i18n_tr("C compiler '%s' failed (exit %d)"), opt->cc, crc); rc = 3; }
@@ -304,7 +304,7 @@ int driver_build(options_t *opt)
                 snprintf(opt->exe_path, sizeof(opt->exe_path), "%s", output);
         }
     }
-    if (!opt->keep_c) for (int i = 0; i < ngen; i++) remove(generated[i]);
+    if (!opt->keep_c) { int i = 0; for (; i < ngen; i++) remove(generated[i]); }
     else              LOG_I(log, PH_DRIVER, "kept generated C files");
     logger_free(log);
     arena_free(arena);

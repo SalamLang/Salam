@@ -11,8 +11,8 @@ void layout_localize_names(ast_node_t *node)
     if (!node) return;
     if (node->kind == AST_LAYOUT_ELEMENT || node->kind == AST_LAYOUT_ATTR)
         node->name = i18n_layout_word(node->name);
-    for (size_t i = 0; i < node->list.len; i++)
-        layout_localize_names((ast_node_t *)node->list.data[i]);
+    { size_t i = 0; for (; i < node->list.len; i++)
+        layout_localize_names((ast_node_t *)node->list.data[i]); }
 }
 layout_result_t *layout_generate(arena_t *a, logger_t *log, diag_engine_t *diag,
                                  const char *file, ast_node_t *layout_block)
@@ -27,7 +27,7 @@ layout_result_t *layout_generate(arena_t *a, logger_t *log, diag_engine_t *diag,
     LOG_I(log, PH_CODEGEN, "generating layout output");
     
     long body_repeat = 1;
-    for (size_t i = 0; i < layout_block->list.len; i++) {
+    { size_t i = 0; for (; i < layout_block->list.len; i++) {
         ast_node_t *item = (ast_node_t *)layout_block->list.data[i];
         if (item->kind != AST_LAYOUT_ATTR) continue;
         const char *v = val_str(&cx, item->a);
@@ -38,10 +38,10 @@ layout_result_t *layout_generate(arena_t *a, logger_t *log, diag_engine_t *diag,
             if (item->a && item->a->kind == AST_LITERAL && item->a->value.kind == TV_INT)
                 body_repeat = (long)item->a->value.as.i < 1 ? 1 : (long)item->a->value.as.i;
         }
-    }
+    } }
     
-    for (long r = 0; r < body_repeat; r++) {
-        for (size_t i = 0; i < layout_block->list.len; i++) {
+    { long r = 0; for (; r < body_repeat; r++) {
+        { size_t i = 0; for (; i < layout_block->list.len; i++) {
             ast_node_t *item = (ast_node_t *)layout_block->list.data[i];
             if (item->kind == AST_LAYOUT_ATTR) {
                 
@@ -53,8 +53,8 @@ layout_result_t *layout_generate(arena_t *a, logger_t *log, diag_engine_t *diag,
             } else if (item->kind == AST_LAYOUT_ELEMENT) {
                 gen_element_n(&cx, item, "layout", NULL);
             }
-        }
-    }
+        } }
+    } }
     layout_result_t *r = (layout_result_t *)arena_alloc(a, sizeof(*r));
     r->html  = arena_strdup(a, sb_cstr(&html));
     r->css   = arena_strdup(a, sb_cstr(&css));

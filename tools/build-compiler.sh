@@ -15,7 +15,7 @@ case "$CC" in
 esac
 "$CC" -Wall -Isrc -o salamc \
     src/salamc.c \
-    src/core/arena.c src/core/vec.c src/core/sb.c \
+    src/core/arena.c src/core/vec.c src/core/sb.c src/core/numstr.c src/core/sal_format.c \
     src/source/source.c src/logger/logger.c src/logger/logger_emit.c src/logger/logger_level.c \
     src/xml/xml.c src/xml/xml_emit.c \
     src/preproc/preproc.c src/preproc/preproc_cond.c \
@@ -38,7 +38,7 @@ esac
     src/semantic/sema.c src/semantic/sema_layout.c src/semantic/sema_generic.c \
     src/semantic/sema_util.c src/semantic/sema_type.c \
     src/semantic/sema_decl.c src/semantic/sema_expr.c src/semantic/sema_stmt.c \
-    src/semantic/sema_lit.c src/semantic/sema_member.c src/semantic/sema_call.c \
+    src/semantic/sema_lit.c src/semantic/sema_call.c \
     src/codegen/codegen.c src/codegen/codegen_emit.c src/codegen/codegen_type.c \
     src/codegen/codegen_overload.c src/codegen/codegen_expr.c src/codegen/codegen_call.c \
     src/codegen/codegen_stmt.c src/codegen/codegen_lambda.c \

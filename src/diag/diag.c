@@ -1,6 +1,7 @@
 #include "core/prelude.h"
 #include "diag/diag.h"
 #include "i18n/i18n.h"
+#include "core/sal_format.h"
 
 diag_engine_t *diag_new(arena_t *a, logger_t *log, phase_t phase)
 {
@@ -20,7 +21,7 @@ void diag_report(diag_engine_t *e, severity_t sev, int code,
     char body[512];
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(body, sizeof(body), i18n_tr(fmt), ap);   
+    sal_vsnprintf(body, sizeof(body), i18n_tr(fmt), ap);   
     va_end(ap);
     char full[640];
     snprintf(full, sizeof(full), "%c%03d: %s", sev == SEV_ERROR ? 'E' : 'W', code, body);

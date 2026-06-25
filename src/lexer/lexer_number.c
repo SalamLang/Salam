@@ -63,13 +63,13 @@ static bool scan_decimal(lx_t *L, const src_pos_t *b, bool *bad)
 static void normalize_number(const char *text, size_t tlen, char *out, size_t cap)
 {
     size_t ci = 0;
-    for (size_t i = 0; i < tlen && ci < cap - 1; ) {
+    { size_t i = 0; for (; i < tlen && ci < cap - 1; ) {
         if (text[i] == '_') { i++; continue; }
         int val;
         int len = lx_decimal_digit(text + i, tlen - i, &val);
         if (len == 2) { out[ci++] = (char)('0' + val); i += 2; }
         else          { out[ci++] = text[i++]; }
-    }
+    } }
     out[ci] = '\0';
 }
 

@@ -1,5 +1,6 @@
 #ifndef SALAM_TOKEN_TOKEN_H
 #define SALAM_TOKEN_TOKEN_H
+
 #include "core/prelude.h"
 #include "core/arena.h"
 #include "core/span.h"
@@ -47,12 +48,15 @@ typedef enum token_kind_t {
     TK_COMMENT_BLOCK,     /* `/`+`* ... *`+`/` block comment (may span lines)       */
     TK__COUNT
 } token_kind_t;
-static inline bool tk_is_keyword(token_kind_t k) {
+
+SAL_INLINE bool tk_is_keyword(token_kind_t k) {
     return k >= TK_KW_FUNC && k <= TK_KW_STEP;
 }
+
 typedef enum {
     TV_NONE = 0, TV_INT, TV_FLOAT, TV_STRING, TV_CHAR, TV_BOOL
 } token_value_kind_t;
+
 typedef struct {
     token_value_kind_t kind;
     union {
@@ -62,6 +66,7 @@ typedef struct {
         bool        b;   /* TV_BOOL  */
     } as;
 } token_value_t;
+
 typedef struct {
     token_kind_t  kind;
     const char   *lexeme;      /* raw arena slice of the source (NUL-terminated) */
@@ -69,12 +74,21 @@ typedef struct {
     token_value_t value;       /* decoded literal value (TV_NONE if not a literal) */
     bool          layout_mode; /* true if scanned inside a layout: block */
 } token_t;
+
 const char *token_kind_name(token_kind_t kind);
+
 typedef struct token_stream token_stream_t;
+
 token_stream_t *token_stream_new(arena_t *a, const char *file);
+
 void            token_stream_push(arena_t *a, token_stream_t *ts, const token_t *tok);
+
 size_t          token_stream_count(const token_stream_t *ts);
+
 const token_t  *token_stream_at(const token_stream_t *ts, size_t i);
+
 const char     *token_stream_file(const token_stream_t *ts);
+
 void tokens_to_xml(xml_writer_t *w, const token_stream_t *ts);
+
 #endif /* SALAM_TOKEN_TOKEN_H */

@@ -1,4 +1,5 @@
 #include "core/prelude.h"
+#include "core/numstr.h"
 #include "token/token.h"
 
 static void token_value_to_xml(xml_writer_t *w, const token_value_t *v)
@@ -9,7 +10,7 @@ static void token_value_to_xml(xml_writer_t *w, const token_value_t *v)
             return;
         case TV_INT:
             xml_open(w, "value"); xml_attr(w, "kind", "int");
-            snprintf(buf, sizeof(buf), "%llu", (unsigned long long)v->as.i);
+            sal_u64toa((uint64_t)v->as.i, buf);
             xml_text(w, buf); xml_close(w);
             break;
         case TV_FLOAT:
@@ -24,7 +25,7 @@ static void token_value_to_xml(xml_writer_t *w, const token_value_t *v)
             break;
         case TV_CHAR:
             xml_open(w, "value"); xml_attr(w, "kind", "char");
-            snprintf(buf, sizeof(buf), "%llu", (unsigned long long)v->as.i);
+            sal_u64toa((uint64_t)v->as.i, buf);
             xml_text(w, buf); xml_close(w);
             break;
         case TV_BOOL:
@@ -40,7 +41,7 @@ void tokens_to_xml(xml_writer_t *w, const token_stream_t *ts)
     xml_open(w, "tokens");
     xml_attr(w, "source", token_stream_file(ts) ? token_stream_file(ts) : "");
     xml_attr_int(w, "count", (long long)token_stream_count(ts));
-    for (size_t i = 0; i < token_stream_count(ts); i++) {
+    { size_t i = 0; for (; i < token_stream_count(ts); i++) {
         const token_t *t = token_stream_at(ts, i);
         xml_open(w, "token");
             if (t->layout_mode) xml_attr(w, "mode", "layout");
@@ -55,6 +56,6 @@ void tokens_to_xml(xml_writer_t *w, const token_stream_t *ts)
                 xml_leaf_int(w, "end_column",   t->span.end.col);
             xml_close(w);
         xml_close(w);
-    }
+    } }
     xml_close(w);
 }

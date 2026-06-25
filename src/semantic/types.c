@@ -7,12 +7,12 @@ type_ctx_t *type_ctx_new(arena_t *a)
     tc->a = a;
     vec_init(&tc->arrays);
     vec_init(&tc->ptrs);
-    for (int k = 0; k <= TY_F64; k++) {
+    { int k = 0; for (; k <= TY_F64; k++) {
         type_t *t = (type_t *)arena_alloc(a, sizeof(*t));
         memset(t, 0, sizeof(*t));
         t->kind = (type_kind_t)k;
         tc->prims[k] = t;
-    }
+    } }
     return tc;
 }
 type_t *type_prim(type_ctx_t *tc, type_kind_t kind)
@@ -22,10 +22,10 @@ type_t *type_prim(type_ctx_t *tc, type_kind_t kind)
 }
 type_t *type_array(type_ctx_t *tc, type_t *elem, size_t length)
 {
-    for (size_t i = 0; i < tc->arrays.len; i++) {
+    { size_t i = 0; for (; i < tc->arrays.len; i++) {
         type_t *t = (type_t *)tc->arrays.data[i];
         if (t->elem == elem && t->length == length) return t;
-    }
+    } }
     type_t *t = (type_t *)arena_alloc(tc->a, sizeof(*t));
     memset(t, 0, sizeof(*t));
     t->kind = TY_ARRAY; t->elem = elem; t->length = length;
@@ -34,10 +34,10 @@ type_t *type_array(type_ctx_t *tc, type_t *elem, size_t length)
 }
 type_t *type_ptr(type_ctx_t *tc, type_t *pointee)
 {
-    for (size_t i = 0; i < tc->ptrs.len; i++) {
+    { size_t i = 0; for (; i < tc->ptrs.len; i++) {
         type_t *t = (type_t *)tc->ptrs.data[i];
         if (t->pointee == pointee) return t;
-    }
+    } }
     type_t *t = (type_t *)arena_alloc(tc->a, sizeof(*t));
     memset(t, 0, sizeof(*t));
     t->kind = TY_PTR; t->pointee = pointee;
@@ -97,8 +97,8 @@ type_t *type_func(type_ctx_t *tc, type_t *ret, const vec_t *params)
     t->elem = ret;               
     vec_init(&t->params);
     if (params)
-        for (size_t i = 0; i < params->len; i++)
-            vec_push(tc->a, &t->params, params->data[i]);
+        { size_t i = 0; for (; i < params->len; i++)
+            vec_push(tc->a, &t->params, params->data[i]); }
     return t;
 }
 
@@ -118,8 +118,8 @@ int type_prim_kind_from_name(const char *name)
         {"اعشاری۳۲",TY_F32},{"اعشاری",TY_F32},{"اعشاری۶۴",TY_F64},
         {"اعشاری32",TY_F32},{"اعشاری64",TY_F64},
     };
-    for (size_t i = 0; i < sizeof(tab)/sizeof(tab[0]); i++)
-        if (strcmp(name, tab[i].n) == 0) return (int)tab[i].k;
+    { size_t i = 0; for (; i < sizeof(tab)/sizeof(tab[0]); i++)
+        if (strcmp(name, tab[i].n) == 0) return (int)tab[i].k; }
     return -1;
 }
 
@@ -164,9 +164,9 @@ bool type_equiv(const type_t *a, const type_t *b)
         case TY_FUNC: {
             if (!type_equiv(a->elem, b->elem)) return false;   
             if (a->params.len != b->params.len) return false;
-            for (size_t i = 0; i < a->params.len; i++)
+            { size_t i = 0; for (; i < a->params.len; i++)
                 if (!type_equiv((type_t *)a->params.data[i], (type_t *)b->params.data[i]))
-                    return false;
+                    return false; }
             return true;
         }
         default:        return true;     
@@ -276,9 +276,9 @@ const char *type_to_string(type_ctx_t *tc, const type_t *t)
         case TY_FUNC: {
             char buf[256]; size_t o = 0;
             o += (size_t)snprintf(buf + o, sizeof(buf) - o, "func(");
-            for (size_t i = 0; i < t->params.len && o < sizeof(buf) - 32; i++)
+            { size_t i = 0; for (; i < t->params.len && o < sizeof(buf) - 32; i++)
                 o += (size_t)snprintf(buf + o, sizeof(buf) - o, "%s%s",
-                        i ? ", " : "", type_to_string(tc, (type_t *)t->params.data[i]));
+                        i ? ", " : "", type_to_string(tc, (type_t *)t->params.data[i])); }
             o += (size_t)snprintf(buf + o, sizeof(buf) - o, ") %s", type_to_string(tc, t->elem));
             return arena_strdup(tc->a, buf);
         }

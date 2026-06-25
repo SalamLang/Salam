@@ -1,5 +1,6 @@
 #ifndef SALAM_SEMANTIC_SYMBOL_H
 #define SALAM_SEMANTIC_SYMBOL_H
+
 #include "core/prelude.h"
 #include "core/arena.h"
 #include "core/vec.h"
@@ -11,11 +12,13 @@ typedef enum {
     SYM_FUNC, SYM_METHOD,
     SYM_STRUCT, SYM_ENUM, SYM_ALIAS, SYM_ENUM_MEMBER,
     SYM_PACKAGE, SYM_INTERFACE,
-    SYM_TYPEIMPL    /* synthetic owner of `impl Iface for Type` methods (Type may
-                     * be a primitive); members = its methods; type = target type */
+    SYM_TYPEIMPL    /* synthetic owner of `impl Iface for Type` methods (Type may be a primitive); members = its methods; type = target type */
 } sym_kind_t;
+
 typedef struct scope_t scope_t;
+
 typedef struct symbol_t symbol_t;
+
 typedef struct {
     vec_t        params;        /* type_t* */
     size_t       required;      /* params without defaults */
@@ -27,6 +30,7 @@ typedef struct {
     bool         infer_ret;     /* lambda with an inferred return type: the first
                                  * `ret` sets `ret` instead of being checked against it */
 } func_sig_t;
+
 struct symbol_t {
     sym_kind_t   kind;
     const char  *name;
@@ -47,7 +51,9 @@ struct symbol_t {
     scope_t     *home;          /* defining package's global scope (for instantiating an
                                  * imported/prelude generic in its own package context)   */
 };
+
 typedef enum { SCOPE_GLOBAL, SCOPE_STRUCT, SCOPE_FUNC, SCOPE_BLOCK } scope_kind_t;
+
 struct scope_t {
     scope_kind_t kind;
     scope_t     *parent;
@@ -64,12 +70,20 @@ struct scope_t {
                                  * the use-site's global. The parent chain still reaches
                                  * the use-site global for use-site-local type args. */
 };
+
 scope_t  *scope_new(arena_t *a, scope_kind_t kind, scope_t *parent);
+
 symbol_t *symbol_new(arena_t *a, sym_kind_t kind, const char *name);
+
 symbol_t *scope_define(arena_t *a, scope_t *s, symbol_t *sym);
+
 symbol_t *scope_lookup_local(scope_t *s, const char *name);
+
 symbol_t *scope_lookup(scope_t *s, const char *name);
+
 const char *mangle_func(arena_t *a, const char *struct_name /*nullable*/,
                         const char *fn, const vec_t *param_types);
-const char *impl_owner_key(arena_t *a, const char *typestr);
+
+                        const char *impl_owner_key(arena_t *a, const char *typestr);
+
 #endif /* SALAM_SEMANTIC_SYMBOL_H */

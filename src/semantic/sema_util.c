@@ -37,8 +37,8 @@ const char *intrinsic_type_canon(const char *name)
         { "پرونده",         "File"    },
     };
     if (!name) return name;
-    for (size_t i = 0; i < sizeof(tab)/sizeof(tab[0]); i++)
-        if (strcmp(name, tab[i].fa) == 0) return tab[i].en;
+    { size_t i = 0; for (; i < sizeof(tab)/sizeof(tab[0]); i++)
+        if (strcmp(name, tab[i].fa) == 0) return tab[i].en; }
     return name;
 }
 
@@ -64,16 +64,16 @@ const char *intrinsic_method_canon(const char *name)
         { "به_اعشار","to_float" },
     };
     if (!name) return name;
-    for (size_t i = 0; i < sizeof(tab)/sizeof(tab[0]); i++)
-        if (strcmp(name, tab[i].fa) == 0) return tab[i].en;
+    { size_t i = 0; for (; i < sizeof(tab)/sizeof(tab[0]); i++)
+        if (strcmp(name, tab[i].fa) == 0) return tab[i].en; }
     return name;
 }
 
 const char *alias_for_lang(const vec_t *aliases, const char *lang)
 {
-    for (size_t i = 0; i + 1 < aliases->len; i += 2)
+    { size_t i = 0; for (; i + 1 < aliases->len; i += 2)
         if (strcmp((const char *)aliases->data[i], lang) == 0)
-            return (const char *)aliases->data[i + 1];
+            return (const char *)aliases->data[i + 1]; }
     return NULL;
 }
 
@@ -81,12 +81,12 @@ const char *scope_member_canon(scope_t *members, const char *name)
 {
     const char *lang = i18n_lang();
     if (!name || strcmp(lang, "en") == 0 || !members) return name;
-    for (size_t i = 0; i < members->symbols.len; i++) {
+    { size_t i = 0; for (; i < members->symbols.len; i++) {
         symbol_t *m = (symbol_t *)members->symbols.data[i];
         if (!m->decl) continue;
         const char *a = alias_for_lang(&m->decl->aliases, lang);
         if (a && strcmp(a, name) == 0) return m->name;   
-    }
+    } }
     return name;
 }
 

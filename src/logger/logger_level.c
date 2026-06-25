@@ -28,12 +28,12 @@ bool log_level_from_string(const char *s, log_level_t *out)
         { "warn", LOG_WARN }, { "warning", LOG_WARN }, { "error", LOG_ERROR },
         { "off", LOG_OFF },
     };
-    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
+    { size_t i = 0; for (; i < sizeof(table) / sizeof(table[0]); i++) {
 #if defined(_WIN32)
         if (_stricmp(s, table[i].name) == 0) { *out = table[i].level; return true; }
 #else
         if (strcasecmp(s, table[i].name) == 0) { *out = table[i].level; return true; }
 #endif
-    }
+    } }
     return false;
 }

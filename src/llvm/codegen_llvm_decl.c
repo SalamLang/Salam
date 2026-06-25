@@ -3,7 +3,7 @@
 
 void ll_emit_struct_types(ll_t *ll, ast_node_t *program)
 {
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (d->kind != AST_STRUCT_DEF || d->typarams.len > 0) continue;
         symbol_t *ssym = ll_struct_sym(ll, d->name);
@@ -12,37 +12,37 @@ void ll_emit_struct_types(ll_t *ll, ast_node_t *program)
         sb_t b; sb_init(&b);
         sb_puts(&b, ll_fmt(ll, "%s = type { ", ll_struct_ltype(ll, sname)));
         int nf = 0;
-        for (size_t j = 0; j < ssym->members->symbols.len; j++) {
+        { size_t j = 0; for (; j < ssym->members->symbols.len; j++) {
             symbol_t *f = (symbol_t *)ssym->members->symbols.data[j];
             if (f->kind != SYM_FIELD) continue;
             if (nf) sb_puts(&b, ", ");
             sb_puts(&b, ll_ty(ll, type_to_string(ll->sem->tc, f->type)));
             nf++;
-        }
+        } }
         sb_puts(&b, " }\n");
         sb_puts(ll->g, sb_cstr(&b)); sb_free(&b);
-    }
+    } }
     sb_puts(ll->g, "\n");
 }
 
 static void ll_put_ident(sb_t *b, const char *name)
 {
-    for (const unsigned char *p = (const unsigned char *)name; p && *p; p++) {
+    { const unsigned char *p = (const unsigned char *)name; for (; p && *p; p++) {
         if (isalnum(*p) || *p == '_') sb_putc(b, (char)*p);
         else { char h[5]; snprintf(h, sizeof h, "_%02x", *p); sb_puts(b, h); }
-    }
+    } }
 }
 
 
 static void ll_put_type_code(sb_t *b, const char *ts)
 {
-    for (const unsigned char *p = (const unsigned char *)ts; p && *p; p++) {
+    { const unsigned char *p = (const unsigned char *)ts; for (; p && *p; p++) {
         if (*p == '*') sb_puts(b, "_ptr");
         else if (*p == '[') sb_puts(b, "_arr");
         else if (*p == ']' || *p == ' ') {}
         else if (isalnum(*p) || *p == '_') sb_putc(b, (char)*p);
         else { char h[5]; snprintf(h, sizeof h, "_%02x", *p); sb_puts(b, h); }
-    }
+    } }
 }
 
 const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *sig)
@@ -52,10 +52,10 @@ const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *s
     if (owner) { ll_put_ident(&b, owner); sb_putc(&b, '_'); }
     ll_put_ident(&b, fn);
     if (sig)
-        for (size_t i = 0; i < sig->params.len; i++) {
+        { size_t i = 0; for (; i < sig->params.len; i++) {
             sb_putc(&b, '_');
             ll_put_type_code(&b, type_to_string(ll->sem->tc, (type_t *)sig->params.data[i]));
-        }
+        } }
     const char *r = arena_strdup(ll->a, sb_cstr(&b)); sb_free(&b); return r;
 }
 
@@ -63,18 +63,18 @@ const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *s
 func_sig_t *ll_pick_overload(ll_t *ll, symbol_t *sym, ast_node_t *call)
 {
     func_sig_t *arity = NULL;
-    for (size_t i = 0; i < sym->overloads.len; i++) {
+    { size_t i = 0; for (; i < sym->overloads.len; i++) {
         func_sig_t *sig = (func_sig_t *)sym->overloads.data[i];
         if (sig->params.len != call->list.len) continue;
         if (!arity) arity = sig;
         bool ok = true;
-        for (size_t j = 0; j < sig->params.len && ok; j++) {
+        { size_t j = 0; for (; j < sig->params.len && ok; j++) {
             ast_node_t *arg = (ast_node_t *)call->list.data[j];
             const char *pt = type_to_string(ll->sem->tc, (type_t *)sig->params.data[j]);
             if (!arg->type_str || strcmp(arg->type_str, pt) != 0) ok = false;
-        }
+        } }
         if (ok) return sig;
-    }
+    } }
     return arity ? arity : (sym->overloads.len ? (func_sig_t *)sym->overloads.data[0] : NULL);
 }
 
@@ -83,10 +83,10 @@ static func_sig_t *ll_sig_of(ll_t *ll, ast_node_t *fn, symbol_t *owner)
     symbol_t *s = owner ? scope_lookup_local(owner->members, fn->name)
                         : ll_sym(ll, fn->name);
     if (!s) return NULL;
-    for (size_t i = 0; i < s->overloads.len; i++) {
+    { size_t i = 0; for (; i < s->overloads.len; i++) {
         func_sig_t *sig = (func_sig_t *)s->overloads.data[i];
         if (sig->decl == fn) return sig;
-    }
+    } }
     return s->overloads.len ? (func_sig_t *)s->overloads.data[0] : NULL;
 }
 
@@ -97,14 +97,14 @@ static const char *ll_fn_header(ll_t *ll, ast_node_t *fn, func_sig_t *sig,
     sb_puts(&hdr, ll_fmt(ll, "define %s @%s(", ret_lty, fname));
     bool first = true;
     if (recv_param) { sb_puts(&hdr, recv_param); first = false; }
-    for (size_t i = 0; i < fn->list.len; i++) {
+    { size_t i = 0; for (; i < fn->list.len; i++) {
         ast_node_t *p = (ast_node_t *)fn->list.data[i];
         const char *pts = type_to_string(ll->sem->tc, (type_t *)sig->params.data[i]);
         if (!first) sb_puts(&hdr, ", ");
         sb_puts(&hdr, p->is_ref ? ll_fmt(ll, "ptr %%arg%zu", i)
                                 : ll_fmt(ll, "%s %%arg%zu", ll_ty(ll, pts), i));
         first = false;
-    }
+    } }
     sb_puts(&hdr, ")");
     if (ll->debug && ll->cur_sp) sb_puts(&hdr, ll_fmt(ll, " !dbg %s", ll->cur_sp));
     sb_puts(&hdr, " {\n");
@@ -113,7 +113,7 @@ static const char *ll_fn_header(ll_t *ll, ast_node_t *fn, func_sig_t *sig,
 
 static void ll_spill_params(ll_t *ll, ast_node_t *fn, func_sig_t *sig)
 {
-    for (size_t i = 0; i < fn->list.len; i++) {
+    { size_t i = 0; for (; i < fn->list.len; i++) {
         ast_node_t *p = (ast_node_t *)fn->list.data[i];
         const char *pts = type_to_string(ll->sem->tc, (type_t *)sig->params.data[i]);
         if (p->is_ref) {
@@ -124,7 +124,7 @@ static void ll_spill_params(ll_t *ll, ast_node_t *fn, func_sig_t *sig)
         ll_emit(ll, "%s = alloca %s", ptr, ll_ty(ll, pts));
         ll_emit(ll, "store %s %%arg%zu, ptr %s", ll_ty(ll, pts), i, ptr);
         ll_local_add(ll, p->name, ptr, pts);
-    }
+    } }
 }
 
 void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
@@ -147,9 +147,9 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
                            : is_impl ? ll_fmt(ll, "%s %%this", ll_ty(ll, recv_ts)) : "ptr %this";
 
     
-    for (size_t i = 0; i < ll->emitted.len; i++)
-        if (!strcmp(fname, (const char *)ll->emitted.data[i])) return;
-    vec_push(ll->a, &ll->emitted, (void *)fname);
+    { size_t i = 0; for (; i < ll->emitted.len; i++)
+        if (!strcmp(fname, (const char *)ll->emitted.data[i])) return; }
+    vec_push(ll->a, &ll->emitted, CONST_CAST(fname));
 
     sb_t body; sb_init(&body);
     sb_t  *saved_b = ll->b;
@@ -212,10 +212,10 @@ static const char *ll_vtbl_name(ll_t *ll, const char *iface, const char *concret
 static func_sig_t *ll_match_sig(symbol_t *m, size_t want)
 {
     func_sig_t *first = m->overloads.len ? (func_sig_t *)m->overloads.data[0] : NULL;
-    for (size_t i = 0; i < m->overloads.len; i++) {
+    { size_t i = 0; for (; i < m->overloads.len; i++) {
         func_sig_t *sig = (func_sig_t *)m->overloads.data[i];
         if (sig->params.len == want) return sig;
-    }
+    } }
     return first;
 }
 
@@ -223,13 +223,13 @@ static func_sig_t *ll_match_sig(symbol_t *m, size_t want)
 static void ll_ensure_vtbl(ll_t *ll, const char *iface, const char *concrete)
 {
     const char *name = ll_vtbl_name(ll, iface, concrete);
-    for (size_t i = 0; i < ll->emitted.len; i++)
-        if (!strcmp(name, (const char *)ll->emitted.data[i])) return;
-    vec_push(ll->a, &ll->emitted, (void *)name);
+    { size_t i = 0; for (; i < ll->emitted.len; i++)
+        if (!strcmp(name, (const char *)ll->emitted.data[i])) return; }
+    vec_push(ll->a, &ll->emitted, CONST_CAST(name));
     symbol_t *isym = ll_sym(ll, iface), *csym = ll_sym(ll, concrete);
     if (!isym || isym->kind != SYM_INTERFACE || !csym || !csym->members) return;
     sb_t slots; sb_init(&slots); int n = 0;
-    for (size_t m = 0; m < isym->members->symbols.len; m++) {
+    { size_t m = 0; for (; m < isym->members->symbols.len; m++) {
         symbol_t *im = (symbol_t *)isym->members->symbols.data[m];
         if (im->kind != SYM_METHOD || !im->overloads.len) continue;
         func_sig_t *isig = (func_sig_t *)im->overloads.data[0];
@@ -243,7 +243,7 @@ static void ll_ensure_vtbl(ll_t *ll, const char *iface, const char *concrete)
             sb_puts(&slots, "ptr null");   
         }
         n++;
-    }
+    } }
     sb_puts(ll->g, ll_fmt(ll, "%s = constant [%d x ptr] [%s]\n", name, n, sb_cstr(&slots)));
     sb_free(&slots);
 }
@@ -252,7 +252,7 @@ static void ll_ensure_vtbl(ll_t *ll, const char *iface, const char *concrete)
 const char *ll_box_dyn(ll_t *ll, llv_t v, const char *iface)
 {
     char ib[160]; size_t k = 0;                 
-    for (const char *p = iface; *p && *p != '*' && *p != '[' && k < sizeof ib - 1; p++) ib[k++] = *p;
+    { const char *p = iface; for (; *p && *p != '*' && *p != '[' && k < sizeof ib - 1; p++) ib[k++] = *p; }
     ib[k] = 0;
     ll_ensure_vtbl(ll, ib, v.ts);
     const char *cty = ll_struct_ltype(ll, v.ts);
@@ -274,28 +274,28 @@ const char *ll_mangle_ti(ll_t *ll, const char *typestr, const char *fn, func_sig
     ll_put_type_code(&b, typestr);
     sb_putc(&b, '_'); ll_put_ident(&b, fn);
     if (sig)
-        for (size_t i = 0; i < sig->params.len; i++) {
+        { size_t i = 0; for (; i < sig->params.len; i++) {
             sb_putc(&b, '_');
             ll_put_type_code(&b, type_to_string(ll->sem->tc, (type_t *)sig->params.data[i]));
-        }
+        } }
     const char *r = arena_strdup(ll->a, sb_cstr(&b)); sb_free(&b); return r;
 }
 
 
 static void ll_emit_impls_in(ll_t *ll, scope_t *g)
 {
-    for (size_t i = 0; i < g->symbols.len; i++) {
+    { size_t i = 0; for (; i < g->symbols.len; i++) {
         symbol_t *owner = (symbol_t *)g->symbols.data[i];
         if (owner->kind != SYM_TYPEIMPL || !owner->members) continue;
-        for (size_t j = 0; j < owner->members->symbols.len; j++) {
+        { size_t j = 0; for (; j < owner->members->symbols.len; j++) {
             symbol_t *m = (symbol_t *)owner->members->symbols.data[j];
             if (m->kind != SYM_METHOD) continue;
-            for (size_t k = 0; k < m->overloads.len; k++) {
+            { size_t k = 0; for (; k < m->overloads.len; k++) {
                 func_sig_t *sig = (func_sig_t *)m->overloads.data[k];
                 if (sig && sig->decl) ll_function(ll, sig->decl, owner);
-            }
-        }
-    }
+            } }
+        } }
+    } }
 }
 
 void ll_emit_impls(ll_t *ll) { ll_emit_impls_in(ll, ll->sem->global); }
@@ -312,8 +312,8 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     size_t ncap = n->captures.len;
 
     sb_t et; sb_init(&et); sb_puts(&et, ll_fmt(ll, "%s = type { ptr", envty));
-    for (size_t i = 0; i < ncap; i++)
-        sb_puts(&et, ll_fmt(ll, ", %s", ll_ty(ll, ((ast_node_t *)n->captures.data[i])->type_str)));
+    { size_t i = 0; for (; i < ncap; i++)
+        sb_puts(&et, ll_fmt(ll, ", %s", ll_ty(ll, ((ast_node_t *)n->captures.data[i])->type_str))); }
     sb_puts(&et, " }\n");
     sb_puts(ll->g, sb_cstr(&et)); sb_free(&et);
     if (ncap == 0)
@@ -337,23 +337,23 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
 
     sb_t hdr; sb_init(&hdr);
     sb_puts(&hdr, ll_fmt(ll, "define %s @%s(ptr %%env", ll_ty(ll, rts), name));
-    for (size_t i = 0; i < n->list.len; i++) {
+    { size_t i = 0; for (; i < n->list.len; i++) {
         ast_node_t *p = (ast_node_t *)n->list.data[i];
         sb_puts(&hdr, p->is_ref ? ll_fmt(ll, ", ptr %%arg%zu", i)
                                 : ll_fmt(ll, ", %s %%arg%zu", ll_ty(ll, p->type_str), i));
-    }
+    } }
     sb_puts(&hdr, ") {\n");
     const char *header = arena_strdup(ll->a, sb_cstr(&hdr)); sb_free(&hdr);
 
     ll_emit_label(ll, "entry");
-    for (size_t i = 0; i < n->list.len; i++) {
+    { size_t i = 0; for (; i < n->list.len; i++) {
         ast_node_t *p = (ast_node_t *)n->list.data[i];
         if (p->is_ref) { ll_local_add(ll, p->name, ll_fmt(ll, "%%arg%zu", i), p->type_str); continue; }
         const char *ptr = ll_fmt(ll, "%%p.%s", p->name);
         ll_emit(ll, "%s = alloca %s", ptr, ll_ty(ll, p->type_str));
         ll_emit(ll, "store %s %%arg%zu, ptr %s", ll_ty(ll, p->type_str), i, ptr);
         ll_local_add(ll, p->name, ptr, p->type_str);
-    }
+    } }
     if (n->a) ll_block(ll, n->a);
     if (!ll->term) ll_emit_return(ll, NULL);
 
@@ -378,7 +378,7 @@ static bool ll_const_init(const ast_node_t *init)
 void ll_emit_globals(ll_t *ll, ast_node_t *program)
 {
     int any = 0;
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (d->kind != AST_CONST_DECL && d->kind != AST_VAR_DECL) continue;
         if (d->is_extern) continue;
@@ -398,7 +398,7 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
         gv->name = d->name; gv->ptr = gref; gv->ts = ts;
         vec_push(ll->a, &ll->globals, gv);
         any = 1;
-    }
+    } }
     if (any) sb_puts(ll->g, "\n");
 }
 
@@ -410,31 +410,31 @@ static bool ll_extern_seen(ll_t *ll, const char *name)
                                       "malloc","memcpy","realloc","free","memmove",
                                       "abort","exit","snprintf","strtol","strtod",
                                       "strstr", NULL };
-    for (int p = 0; prologue[p]; p++) if (!strcmp(name, prologue[p])) return true;
-    for (size_t i = 0; i < ll->extern_names.len; i++)
-        if (!strcmp(name, (const char *)ll->extern_names.data[i])) return true;
+    { int p = 0; for (; prologue[p]; p++) if (!strcmp(name, prologue[p])) return true; }
+    { size_t i = 0; for (; i < ll->extern_names.len; i++)
+        if (!strcmp(name, (const char *)ll->extern_names.data[i])) return true; }
     return false;
 }
 
 static void ll_emit_externs_in(ll_t *ll, scope_t *g)
 {
-    for (size_t i = 0; i < g->symbols.len; i++) {
+    { size_t i = 0; for (; i < g->symbols.len; i++) {
         symbol_t *s = (symbol_t *)g->symbols.data[i];
         if (s->kind != SYM_FUNC || s->overloads.len == 0) continue;
         func_sig_t *sig = (func_sig_t *)s->overloads.data[0];
         if (!sig->decl || !sig->decl->is_extern || sig->decl->a) continue;   
         if (ll_extern_seen(ll, s->name)) continue;
-        vec_push(ll->a, &ll->extern_names, (void *)s->name);
+        vec_push(ll->a, &ll->extern_names, CONST_CAST(s->name));
         sb_t b; sb_init(&b);
         sb_puts(&b, ll_fmt(ll, "declare %s @%s(", ll_ty(ll, type_to_string(ll->sem->tc, sig->ret)), s->name));
-        for (size_t j = 0; j < sig->params.len; j++) {
+        { size_t j = 0; for (; j < sig->params.len; j++) {
             if (j) sb_puts(&b, ", ");
             sb_puts(&b, ll_ty(ll, type_to_string(ll->sem->tc, (type_t *)sig->params.data[j])));
-        }
+        } }
         if (sig->variadic) sb_puts(&b, sig->params.len ? ", ..." : "...");
         sb_puts(&b, ")\n");
         sb_puts(ll->g, sb_cstr(&b)); sb_free(&b);
-    }
+    } }
 }
 
 void ll_emit_externs(ll_t *ll) { ll_emit_externs_in(ll, ll->sem->global); }
@@ -443,7 +443,7 @@ void ll_emit_externs(ll_t *ll) { ll_emit_externs_in(ll, ll->sem->global); }
 void ll_emit_packages(ll_t *ll)
 {
     vec_t *pkgs = &ll->sem->packages;
-    for (size_t p = 0; p < pkgs->len; p++) {
+    { size_t p = 0; for (; p < pkgs->len; p++) {
         symbol_t *pk = (symbol_t *)pkgs->data[p];
         if (!pk || pk->kind != SYM_PACKAGE || !pk->decl) continue;
         ast_node_t *prog = pk->decl;
@@ -456,16 +456,16 @@ void ll_emit_packages(ll_t *ll)
         if (pk->members) ll_emit_impls_in(ll, pk->members);
         
         ll->pkg_scope = saved;
-    }
+    } }
 }
 
 void ll_emit_global_inits(ll_t *ll)
 {
-    for (size_t i = 0; i < ll->gdefer.len; i++) {
+    { size_t i = 0; for (; i < ll->gdefer.len; i++) {
         ast_node_t *d = (ast_node_t *)ll->gdefer.data[i];
         lvar_t *g = ll_global_find(ll, d->name);
         if (!g) continue;
         const char *v = ll_conv(ll, ll_expr(ll, d->a), g->ts);
         ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, g->ts), v, g->ptr);
-    }
+    } }
 }

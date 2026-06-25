@@ -1,13 +1,14 @@
 #include "interp/interp_internal.h"
+#include "core/sal_format.h"
 #include <math.h>
 
 const char *afmt(interp_t *I, const char *fmt, ...)
 {
     va_list ap, ap2;
-    va_start(ap, fmt); va_copy(ap2, ap);
-    int n = vsnprintf(NULL, 0, fmt, ap); va_end(ap);
+    va_start(ap, fmt); SAL_VA_COPY(ap2, ap);
+    int n = sal_vsnprintf(NULL, 0, fmt, ap); va_end(ap);
     char *buf = (char *)arena_alloc(I->a, (size_t)n + 1);
-    vsnprintf(buf, (size_t)n + 1, fmt, ap2); va_end(ap2);
+    sal_vsnprintf(buf, (size_t)n + 1, fmt, ap2); va_end(ap2);
     return buf;
 }
 
@@ -76,21 +77,21 @@ const char *to_str(interp_t *I, value_t v)
         }
         case VAL_ARRAY: {
             sb_t b; sb_init(&b); sb_putc(&b, '[');
-            for (size_t i = 0; i < v.as.arr->len; i++) {
+            { size_t i = 0; for (; i < v.as.arr->len; i++) {
                 if (i) sb_puts(&b, ", ");
                 sb_puts(&b, to_str(I, v.as.arr->data[i]));
-            }
+            } }
             sb_putc(&b, ']');
             const char *r = arena_strdup(I->a, sb_cstr(&b)); sb_free(&b); return r;
         }
         case VAL_STRUCT: {
             sb_t b; sb_init(&b);
             sb_puts(&b, v.as.st->type_name); sb_puts(&b, "{");
-            for (size_t i = 0; i < v.as.st->nfields; i++) {
+            { size_t i = 0; for (; i < v.as.st->nfields; i++) {
                 if (i) sb_puts(&b, ", ");
                 sb_puts(&b, v.as.st->fields[i].name); sb_puts(&b, "=");
                 sb_puts(&b, to_str(I, v.as.st->fields[i].val));
-            }
+            } }
             sb_puts(&b, "}");
             const char *r = arena_strdup(I->a, sb_cstr(&b)); sb_free(&b); return r;
         }
@@ -142,8 +143,8 @@ static bool key_eq(value_t a, value_t b)
 
 void map_put(interp_t *I, smap_t *m, value_t k, value_t val)
 {
-    for (size_t i = 0; i < m->cap; i++)
-        if (m->entries[i].used && key_eq(m->entries[i].key, k)) { m->entries[i].val = val; return; }
+    { size_t i = 0; for (; i < m->cap; i++)
+        if (m->entries[i].used && key_eq(m->entries[i].key, k)) { m->entries[i].val = val; return; } }
     if (m->count + 1 > m->cap) {     
         size_t nc = salam_grow_cap(m->cap, m->count + 1, 8);
         smap_entry_t *ne = (smap_entry_t *)arena_alloc(I->a, salam_size_mul(nc, sizeof(smap_entry_t)));
@@ -151,13 +152,13 @@ void map_put(interp_t *I, smap_t *m, value_t k, value_t val)
         memcpy(ne, m->entries, salam_size_mul(m->cap, sizeof(smap_entry_t)));
         m->entries = ne; m->cap = nc;
     }
-    for (size_t i = 0; i < m->cap; i++)
-        if (!m->entries[i].used) { m->entries[i].key = k; m->entries[i].val = val; m->entries[i].used = true; m->count++; return; }
+    { size_t i = 0; for (; i < m->cap; i++)
+        if (!m->entries[i].used) { m->entries[i].key = k; m->entries[i].val = val; m->entries[i].used = true; m->count++; return; } }
 }
 smap_entry_t *map_find(smap_t *m, value_t k)
 {
-    for (size_t i = 0; i < m->cap; i++)
-        if (m->entries[i].used && key_eq(m->entries[i].key, k)) return &m->entries[i];
+    { size_t i = 0; for (; i < m->cap; i++)
+        if (m->entries[i].used && key_eq(m->entries[i].key, k)) return &m->entries[i]; }
     return NULL;
 }
 value_t mk_map(smap_t *m)   { value_t v; v.kind = VAL_MAP;  v.as.map = m; return v; }
@@ -192,7 +193,7 @@ bool is_int_typename(const char *b)
 {
     static const char *ints[] = { "i8","i16","i32","i64","u8","u16","u32","u64",
                                   "int","byte","char","isize","usize", NULL };
-    for (int i = 0; ints[i]; i++) if (strcmp(b, ints[i]) == 0) return true;
+    { int i = 0; for (; ints[i]; i++) if (strcmp(b, ints[i]) == 0) return true; }
     return false;
 }
 
@@ -213,12 +214,12 @@ value_t default_for_type(interp_t *I, const char *ts)
     const char *lb = strchr(ts, '[');
     if (!lb) return val_null();
     long n = 0;
-    for (const char *p = lb + 1; *p && *p != ']'; p++)
-        if (*p >= '0' && *p <= '9') n = n * 10 + (*p - '0');
+    { const char *p = lb + 1; for (; *p && *p != ']'; p++)
+        if (*p >= '0' && *p <= '9') n = n * 10 + (*p - '0'); }
     char base[96]; base_typename(ts, base, sizeof base);
     value_t zero = zero_for_base(base);
     sarray_t *a = array_new(I, n > 0 ? (size_t)n : 4);
-    for (long i = 0; i < n; i++) array_push(I, a, zero);
+    { long i = 0; for (; i < n; i++) array_push(I, a, zero); }
     return mk_array(I, a);
 }
 

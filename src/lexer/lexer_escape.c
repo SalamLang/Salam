@@ -42,7 +42,7 @@ const char *lx_decode_string(lx_t *L, const char *lex, bool triple)
     size_t clen = lexlen - 2 * q;
     char *out = (char *)arena_alloc(L->a, clen + 1);
     size_t oi = 0;
-    for (size_t i = 0; i < clen; i++) {
+    { size_t i = 0; for (; i < clen; i++) {
         char ch = c[i];
         if (ch != '\\' || i + 1 >= clen) { out[oi++] = ch; continue; }
         char e = c[++i];  
@@ -66,7 +66,7 @@ const char *lx_decode_string(lx_t *L, const char *lex, bool triple)
         } else {
             out[oi++] = e;  
         }
-    }
+    } }
     out[oi] = '\0';
     return out;
 }

@@ -4,10 +4,18 @@
 #include "i18n/i18n.h"
 #include <stdlib.h>
 #include <ctype.h>
+#include <limits.h>
+
+#if defined(PATH_MAX)
+#define SALAM_PATH_MAX PATH_MAX
+#else
+#define SALAM_PATH_MAX 4096
+#endif
 #define LLVM_CLANG "clang-22"
 #define LLVM_LLC   "llc-22"
 #define LLVM_OPT   "opt-22"
 #define LLVM_LLI   "lli-22"
+
 static const char *opt_flag(llvm_opt_level_t l)
 {
     switch (l) {
@@ -20,7 +28,7 @@ static const char *opt_flag(llvm_opt_level_t l)
 
 static void to_tool_path(const char *host, char *out, size_t cap)
 {
-    char abs[1024];
+    char abs[SALAM_PATH_MAX];
 #if defined(_WIN32)
     if (!_fullpath(abs, host, sizeof abs)) snprintf(abs, sizeof abs, "%s", host);
     
@@ -83,9 +91,9 @@ static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
 int salam_llvm_toolchain(logger_t *log, const char *ll_path,
                          const codegen_llvm_options_t *opts)
 {
-    char in_tp[1100]; to_tool_path(ll_path, in_tp, sizeof in_tp);
+    char in_tp[SALAM_PATH_MAX]; to_tool_path(ll_path, in_tp, sizeof in_tp);
     bool needs_out = opts->output_mode != LLVM_OUT_JIT && opts->output_mode != LLVM_OUT_IR;
-    char out_tp[1100]; out_tp[0] = 0;
+    char out_tp[SALAM_PATH_MAX]; out_tp[0] = 0;
     if (needs_out && opts->output_file) to_tool_path(opts->output_file, out_tp, sizeof out_tp);
     
     sb_t script; sb_init(&script);
@@ -99,7 +107,7 @@ int salam_llvm_toolchain(logger_t *log, const char *ll_path,
     if (!sf) { LOG_E(log, PH_DRIVER, i18n_tr("cannot write '%s'"), spath); sb_free(&script); return 2; }
     fputs(sb_cstr(&script), sf); fclose(sf);
     sb_free(&script);
-    char script_tp[1100]; to_tool_path(spath, script_tp, sizeof script_tp);
+    char script_tp[SALAM_PATH_MAX]; to_tool_path(spath, script_tp, sizeof script_tp);
     sb_t cmd; sb_init(&cmd);
 #if defined(_WIN32)
     sb_puts(&cmd, "wsl.exe -e bash \""); sb_puts(&cmd, script_tp); sb_puts(&cmd, "\"");

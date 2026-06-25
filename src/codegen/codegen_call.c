@@ -11,7 +11,7 @@ static const char *arg_at(cg_t *cg, ast_node_t *n, size_t i)
 static const char *call_args(cg_t *cg, ast_node_t *call, func_sig_t *sig)
 {
     sb_t b; sb_init(&b);
-    for (size_t i = 0; i < call->list.len; i++) {
+    { size_t i = 0; for (; i < call->list.len; i++) {
         ast_node_t *arg = (ast_node_t *)call->list.data[i];
         if (i) sb_puts(&b, ", ");
         bool arg_is_ref = sig && sig->decl && i < sig->decl->list.len &&
@@ -26,15 +26,15 @@ static const char *call_args(cg_t *cg, ast_node_t *call, func_sig_t *sig)
                 sb_puts(&b, cg_fmt(cg, "&(%s)", cg_expr(cg, arg)));
         }
         else            sb_puts(&b, cg_expr(cg, arg));
-    }
+    } }
     const char *r = arena_strdup(cg->a, sb_cstr(&b)); sb_free(&b); return r;
 }
 
 static const char *call_args_lead(cg_t *cg, ast_node_t *call)
 {
     sb_t b; sb_init(&b);
-    for (size_t i = 0; i < call->list.len; i++)
-        { sb_puts(&b, ", "); sb_puts(&b, cg_expr(cg, (ast_node_t *)call->list.data[i])); }
+    { size_t i = 0; for (; i < call->list.len; i++)
+        { sb_puts(&b, ", "); sb_puts(&b, cg_expr(cg, (ast_node_t *)call->list.data[i])); } }
     const char *r = arena_strdup(cg->a, sb_cstr(&b)); sb_free(&b); return r;
 }
 
@@ -59,7 +59,7 @@ static const char *call_value(cg_t *cg, ast_node_t *n, ast_node_t *callee)
 static const char *cg_print_legacy(cg_t *cg, ast_node_t *n, bool nl, int err)
 {
     sb_t b; sb_init(&b); sb_puts(&b, "({ ");
-    for (size_t i = 0; i < n->list.len; i++) {
+    { size_t i = 0; for (; i < n->list.len; i++) {
         ast_node_t *arg = (ast_node_t *)n->list.data[i];
         char piece[40];
         if (i) { snprintf(piece, sizeof piece, "salam_emit(\" \", %d); ", err); sb_puts(&b, piece); }
@@ -71,7 +71,7 @@ static const char *cg_print_legacy(cg_t *cg, ast_node_t *n, bool nl, int err)
             sb_puts(&b, piece); sb_puts(&b, cg_expr(cg, arg));
             snprintf(piece, sizeof piece, "), %d); ", err); sb_puts(&b, piece);
         }
-    }
+    } }
     if (nl) { char z[40]; snprintf(z, sizeof z, "salam_emit(\"\\n\", %d); ", err); sb_puts(&b, z); }
     sb_puts(&b, "})");
     const char *r = arena_strdup(cg->a, sb_cstr(&b)); sb_free(&b); return r;
@@ -83,15 +83,15 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
     vec_t segs; vec_init(&segs);
     pf_build(cg->a, n, nl, &segs);
     if (segs.len == 0) return "(void)0";
-    for (size_t i = 0; i < segs.len; i++)
+    { size_t i = 0; for (; i < segs.len; i++)
         if (((pf_seg_t *)segs.data[i])->kind == PF_CHAR)
-            return cg_print_legacy(cg, n, nl, err);
+            return cg_print_legacy(cg, n, nl, err); }
     sb_t fmt; sb_init(&fmt);
     sb_t args; sb_init(&args);
-    for (size_t i = 0; i < segs.len; i++) {
+    { size_t i = 0; for (; i < segs.len; i++) {
         pf_seg_t *s = (pf_seg_t *)segs.data[i];
         if (s->kind == PF_LIT) {
-            for (const char *p = s->text; *p; p++) { if (*p == '%') sb_putc(&fmt, '%'); sb_putc(&fmt, *p); }
+            { const char *p = s->text; for (; *p; p++) { if (*p == '%') sb_putc(&fmt, '%'); sb_putc(&fmt, *p); } }
             continue;
         }
         sb_puts(&fmt, pf_spec(s->kind));
@@ -107,7 +107,7 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
             default:      a = e; break;
         }
         sb_puts(&args, ", "); sb_puts(&args, a);
-    }
+    } }
     const char *cfmt = cg_cescape(cg, sb_cstr(&fmt));
     const char *al = arena_strdup(cg->a, sb_cstr(&args));
     sb_free(&fmt); sb_free(&args);
@@ -196,10 +196,10 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
     symbol_t *fsym0 = scope_lookup(cg->sem->global, nm);
     if (bi && !fsym0) {
         sb_t b; sb_init(&b); sb_puts(&b, bi->runtime); sb_putc(&b, '(');
-        for (size_t i = 0; i < n->list.len; i++) {
+        { size_t i = 0; for (; i < n->list.len; i++) {
             if (i) sb_puts(&b, ", ");
             sb_puts(&b, cg_expr(cg, (ast_node_t *)n->list.data[i]));
-        }
+        } }
         sb_putc(&b, ')');
         const char *r = arena_strdup(cg->a, sb_cstr(&b)); sb_free(&b); return r;
     }

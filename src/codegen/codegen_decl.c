@@ -33,14 +33,14 @@ const char *func_signature(cg_t *cg, ast_node_t *fn, symbol_t *owner, func_sig_t
         else    sb_puts(&b, cg_fmt(cg, "%s* this", cg_cident(cg, owner->name)));
         first = false;
     }
-    for (size_t i = 0; i < fn->list.len; i++) {
+    { size_t i = 0; for (; i < fn->list.len; i++) {
         ast_node_t *p = (ast_node_t *)fn->list.data[i];
         const char *pts = type_to_string(cg->sem->tc, (type_t *)sig->params.data[i]);
         if (!first) sb_puts(&b, ", ");
         if (p->is_ref) sb_puts(&b, cg_fmt(cg, "%s* %s", cg_ctype(cg, pts), cg_cident(cg, p->name)));
         else           sb_puts(&b, cg_decl(cg, pts, p->name));
         first = false;
-    }
+    } }
     if (sret) {
         if (!first) sb_puts(&b, ", ");
         sb_puts(&b, cg_fmt(cg, "%s* __ret", cg_ctype(cg, type_to_string(cg->sem->tc, sig->ret))));
@@ -57,14 +57,14 @@ const char *cg_extern_proto(cg_t *cg, ast_node_t *fn, func_sig_t *sig)
     sb_t b; sb_init(&b);
     sb_puts(&b, cg_fmt(cg, "extern %s %s(", ret, fn->name));
     bool first = true;
-    for (size_t i = 0; i < fn->list.len; i++) {
+    { size_t i = 0; for (; i < fn->list.len; i++) {
         ast_node_t *p = (ast_node_t *)fn->list.data[i];
         const char *pts = type_to_string(cg->sem->tc, (type_t *)sig->params.data[i]);
         if (!first) sb_puts(&b, ", ");
         if (p->is_ref) sb_puts(&b, cg_fmt(cg, "%s* %s", cg_ctype(cg, pts), cg_cident(cg, p->name)));
         else           sb_puts(&b, cg_decl(cg, pts, p->name));
         first = false;
-    }
+    } }
     if (fn->is_variadic) { if (!first) sb_puts(&b, ", "); sb_puts(&b, "..."); first = false; }
     if (first) sb_puts(&b, "void");
     sb_putc(&b, ')');
@@ -83,8 +83,8 @@ void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
     cg->cur_sret = sig_is_sret(sig, is_main);
     cg->locals.len = 0;
     if (owner) local_add(cg, "this");
-    for (size_t i = 0; i < fn->list.len; i++)
-        local_add(cg, ((ast_node_t *)fn->list.data[i])->name);
+    { size_t i = 0; for (; i < fn->list.len; i++)
+        local_add(cg, ((ast_node_t *)fn->list.data[i])->name); }
     vec_t saved_defers = cg->fn_defers;
     vec_init(&cg->fn_defers);
     cg_source_line(cg, &fn->span);
@@ -92,8 +92,8 @@ void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
     cg->indent++;
     if (is_main) {
         cg_line(cg, "salam_set_args(argc, argv);");
-        for (size_t i = 0; i < cg->deferred.len; i++)
-            cg_line(cg, "%s", (const char *)cg->deferred.data[i]);
+        { size_t i = 0; for (; i < cg->deferred.len; i++)
+            cg_line(cg, "%s", (const char *)cg->deferred.data[i]); }
     }
     if (fn->a) cg_block(cg, fn->a);
     cg_emit_defers(cg);

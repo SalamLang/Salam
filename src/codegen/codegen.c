@@ -3,7 +3,7 @@
 
 static void emit_private_protos(cg_t *cg, ast_node_t *program)
 {
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (d->typarams.len > 0) continue;
         if (d->synthetic) continue;   
@@ -13,13 +13,13 @@ static void emit_private_protos(cg_t *cg, ast_node_t *program)
             func_sig_t *sig = sig_of_decl(fsym, d);
             if (sig) sb_puts(cg->c, cg_fmt(cg, "%s;\n", func_signature(cg, d, NULL, sig, false)));
         }
-    }
+    } }
     sb_puts(cg->c, "\n");
 }
 
 static void emit_globals(cg_t *cg, ast_node_t *program)
 {
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (d->kind != AST_CONST_DECL && d->kind != AST_VAR_DECL) continue;
         if (d->is_extern) continue;   
@@ -29,8 +29,8 @@ static void emit_globals(cg_t *cg, ast_node_t *program)
         bool can_defer = d->kind == AST_VAR_DECL && d->a && d->a->kind != AST_LITERAL && !is_array;
         if (can_defer) {
             sb_puts(cg->c, cg_fmt(cg, "%s;\n", decl));   
-            vec_push(cg->a, &cg->deferred, (void *)cg_fmt(cg, "%s = %s;",
-                     cg_cident(cg, d->name), cg_expr(cg, d->a)));
+            vec_push(cg->a, &cg->deferred, CONST_CAST(cg_fmt(cg, "%s = %s;",
+                     cg_cident(cg, d->name), cg_expr(cg, d->a))));
         } else {
             bool want_const = (d->kind == AST_CONST_DECL || !d->is_mut);
             bool gct_const  = want_const &&
@@ -39,47 +39,47 @@ static void emit_globals(cg_t *cg, ast_node_t *program)
             if (d->a) sb_puts(cg->c, cg_fmt(cg, "%s%s = %s;\n", pfx, decl, cg_expr(cg, d->a)));
             else      sb_puts(cg->c, cg_fmt(cg, "%s%s;\n", pfx, decl));
         }
-    }
+    } }
     sb_puts(cg->c, "\n");
 }
 
 
 static void emit_impl_protos(cg_t *cg)
 {
-    for (size_t i = 0; i < cg->sem->global->symbols.len; i++) {
+    { size_t i = 0; for (; i < cg->sem->global->symbols.len; i++) {
         symbol_t *owner = (symbol_t *)cg->sem->global->symbols.data[i];
         if (owner->kind != SYM_TYPEIMPL || !owner->members) continue;
-        for (size_t j = 0; j < owner->members->symbols.len; j++) {
+        { size_t j = 0; for (; j < owner->members->symbols.len; j++) {
             symbol_t *m = (symbol_t *)owner->members->symbols.data[j];
             if (m->kind != SYM_METHOD) continue;
-            for (size_t k = 0; k < m->overloads.len; k++) {
+            { size_t k = 0; for (; k < m->overloads.len; k++) {
                 func_sig_t *sig = (func_sig_t *)m->overloads.data[k];
                 if (sig && sig->decl)
                     sb_puts(cg->c, cg_fmt(cg, "%s;\n", func_signature(cg, sig->decl, owner, sig, false)));
-            }
-        }
-    }
+            } }
+        } }
+    } }
 }
 
 static void emit_impl_bodies(cg_t *cg)
 {
-    for (size_t i = 0; i < cg->sem->global->symbols.len; i++) {
+    { size_t i = 0; for (; i < cg->sem->global->symbols.len; i++) {
         symbol_t *owner = (symbol_t *)cg->sem->global->symbols.data[i];
         if (owner->kind != SYM_TYPEIMPL || !owner->members) continue;
-        for (size_t j = 0; j < owner->members->symbols.len; j++) {
+        { size_t j = 0; for (; j < owner->members->symbols.len; j++) {
             symbol_t *m = (symbol_t *)owner->members->symbols.data[j];
             if (m->kind != SYM_METHOD) continue;
-            for (size_t k = 0; k < m->overloads.len; k++) {
+            { size_t k = 0; for (; k < m->overloads.len; k++) {
                 func_sig_t *sig = (func_sig_t *)m->overloads.data[k];
                 if (sig && sig->decl) cg_function(cg, sig->decl, owner);
-            }
-        }
-    }
+            } }
+        } }
+    } }
 }
 
 static void emit_function_bodies(cg_t *cg, ast_node_t *program)
 {
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (d->typarams.len > 0) continue;
         if (d->synthetic) continue;   
@@ -88,14 +88,14 @@ static void emit_function_bodies(cg_t *cg, ast_node_t *program)
             cg_function(cg, d, NULL);
         } else if (d->kind == AST_STRUCT_DEF) {
             symbol_t *ssym = scope_lookup_local(cg->sem->global, d->name);
-            for (size_t j = 0; j < d->list.len; j++) {
+            { size_t j = 0; for (; j < d->list.len; j++) {
                 ast_node_t *m = (ast_node_t *)d->list.data[j];
                 if (m->kind == AST_FUNC_DEF) cg_function(cg, m, ssym);
-            }
+            } }
         } else if (d->kind == AST_LAYOUT_BLOCK) {
             sb_puts(cg->c, "/* layout block omitted in general (C) mode */\n\n");
         }
-    }
+    } }
 }
 
 
@@ -108,7 +108,7 @@ static void emit_instances_header(cg_t *cg, ast_node_t *program)
 {
     sb_t *h = cg->h;
     
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (!d->synthetic) continue;
         if (d->kind == AST_FUNC_DEF && !d->is_extern) {
@@ -121,7 +121,7 @@ static void emit_instances_header(cg_t *cg, ast_node_t *program)
         } else if (d->kind == AST_STRUCT_DEF) {
             symbol_t *ssym = scope_lookup_local(cg->sem->global, d->name);
             if (!ssym) continue;
-            for (size_t j = 0; j < d->list.len; j++) {
+            { size_t j = 0; for (; j < d->list.len; j++) {
                 ast_node_t *m = (ast_node_t *)d->list.data[j];
                 if (m->kind != AST_FUNC_DEF) continue;
                 symbol_t *msym = scope_lookup_local(ssym->members, m->name);
@@ -130,12 +130,12 @@ static void emit_instances_header(cg_t *cg, ast_node_t *program)
                 const char *nm = inst_fn_name(cg, ssym, m, sig);
                 sb_puts(h, cg_fmt(cg, "#ifndef SALAM_IP_%s\n#define SALAM_IP_%s\n%s;\n#endif\n",
                                   nm, nm, func_signature(cg, m, ssym, sig, false)));
-            }
+            } }
         }
-    }
+    } }
     
     sb_t *savec = cg->c; cg->c = h;
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (!d->synthetic) continue;
         if (d->kind == AST_FUNC_DEF && !d->is_extern && d->a) {
@@ -149,7 +149,7 @@ static void emit_instances_header(cg_t *cg, ast_node_t *program)
         } else if (d->kind == AST_STRUCT_DEF) {
             symbol_t *ssym = scope_lookup_local(cg->sem->global, d->name);
             if (!ssym) continue;
-            for (size_t j = 0; j < d->list.len; j++) {
+            { size_t j = 0; for (; j < d->list.len; j++) {
                 ast_node_t *m = (ast_node_t *)d->list.data[j];
                 if (m->kind != AST_FUNC_DEF) continue;
                 symbol_t *msym = scope_lookup_local(ssym->members, m->name);
@@ -159,9 +159,9 @@ static void emit_instances_header(cg_t *cg, ast_node_t *program)
                 sb_puts(h, cg_fmt(cg, "#ifndef SALAM_IB_%s\n#define SALAM_IB_%s\n", nm, nm));
                 cg_function(cg, m, ssym);
                 sb_puts(h, "#endif\n");
-            }
+            } }
         }
-    }
+    } }
     cg->c = savec;
 }
 
@@ -170,7 +170,7 @@ static const char *cg_tidy(arena_t *a, const char *src)
     sb_t out; sb_init(&out);
     bool emitted = false;       
     bool pending_blank = false; 
-    for (const char *p = src; *p; ) {
+    { const char *p = src; for (; *p; ) {
         const char *nl = strchr(p, '\n');
         size_t len = nl ? (size_t)(nl - p) : strlen(p);
         size_t end = len;
@@ -179,13 +179,13 @@ static const char *cg_tidy(arena_t *a, const char *src)
             if (emitted) pending_blank = true;  
         } else {
             if (pending_blank) { sb_putc(&out, '\n'); pending_blank = false; }
-            for (size_t i = 0; i < end; i++) sb_putc(&out, p[i]);
+            { size_t i = 0; for (; i < end; i++) sb_putc(&out, p[i]); }
             sb_putc(&out, '\n');
             emitted = true;
         }
         if (!nl) break;
         p = nl + 1;
-    }
+    } }
     const char *r = arena_strdup(a, sb_cstr(&out)); sb_free(&out); return r;
 }
 codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,

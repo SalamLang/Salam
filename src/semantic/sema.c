@@ -1,4 +1,5 @@
 #include "core/prelude.h"
+#include "core/numstr.h"
 #include "semantic/sema.h"
 #include "semantic/sema_internal.h"
 #include "source/source.h"
@@ -68,7 +69,7 @@ static void index_pkg_file(arena_t *a, const char *path)
     const char *txt = src->text;
     const char *pkg = strstr(txt, "package ");
     size_t limit = pkg ? (size_t)(pkg - txt) : src->len;
-    for (size_t i = 0; i + 4 < limit && g_pkg_alias_n < 128; i++) {
+    { size_t i = 0; for (; i + 4 < limit && g_pkg_alias_n < 128; i++) {
         if (txt[i] != '@') continue;
         bool en = txt[i+1]=='e' && txt[i+2]=='n';
         bool fa = txt[i+1]=='f' && txt[i+2]=='a';
@@ -81,7 +82,7 @@ static void index_pkg_file(arena_t *a, const char *path)
         g_pkg_aliases[g_pkg_alias_n].path  = path;
         g_pkg_alias_n++;
         i = (size_t)(e - txt);                               
-    }
+    } }
 }
 
 static void build_pkg_alias_index(arena_t *a, const char *root)
@@ -92,20 +93,20 @@ static void build_pkg_alias_index(arena_t *a, const char *root)
     else                 snprintf(base, sizeof base, "std");
     const char *entries[256];
     int ne = list_entries(a, base, entries, 256);
-    for (int i = 0; i < ne; i++) {
+    { int i = 0; for (; i < ne; i++) {
         
         size_t need = strlen(base) + 2 * strlen(entries[i]) + sizeof("//.salam");
         char *pf = (char *)arena_alloc(a, need);
         snprintf(pf, need, "%s/%s/%s.salam", base, entries[i], entries[i]);
         if (file_exists(pf)) index_pkg_file(a, pf);
-    }
+    } }
 }
 
 static const char *resolve_pkg_alias(arena_t *a, const char *root, const char *spec)
 {
     if (g_pkg_alias_n < 0) build_pkg_alias_index(a, root);
-    for (int i = 0; i < g_pkg_alias_n; i++)
-        if (strcmp(g_pkg_aliases[i].alias, spec) == 0) return g_pkg_aliases[i].path;
+    { int i = 0; for (; i < g_pkg_alias_n; i++)
+        if (strcmp(g_pkg_aliases[i].alias, spec) == 0) return g_pkg_aliases[i].path; }
     return NULL;
 }
 
@@ -157,9 +158,9 @@ static const char *dir_of(arena_t *a, const char *path)
 static void load_imports(sema_t *s, ast_node_t *program);
 static symbol_t *pkg_cache_get(sema_t *s, const char *path)
 {
-    for (size_t i = 0; i + 1 < s->pkg_cache.len; i += 2)
+    { size_t i = 0; for (; i + 1 < s->pkg_cache.len; i += 2)
         if (strcmp((const char *)s->pkg_cache.data[i], path) == 0)
-            return (symbol_t *)s->pkg_cache.data[i + 1];
+            return (symbol_t *)s->pkg_cache.data[i + 1]; }
     return NULL;
 }
 
@@ -167,11 +168,11 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
 {
     symbol_t *cached = pkg_cache_get(s, path);
     if (cached) return cached;
-    for (size_t i = 0; i < s->loading.len; i++)
+    { size_t i = 0; for (; i < s->loading.len; i++)
         if (strcmp((const char *)s->loading.data[i], path) == 0) {
             SERR(s, 8, &imp->span, "circular import detected: '%s'", path);
             return NULL;
-        }
+        } }
     source_file_t *src = source_load(s->a, path);
     if (!src) { SERR(s, 8, &imp->span, "import not found: '%s'", path); return NULL; }
     src = preproc_source(s->a, s->log, src, NULL, 0); 
@@ -193,7 +194,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     s->pkg = prog->name ? prog->name : "main";
     s->program = prog;                       
     vec_init(&s->pending);
-    vec_push(s->a, &s->loading, (void *)path);
+    vec_push(s->a, &s->loading, CONST_CAST(path));
     load_imports(s, prog);       
     sema_collect(s, prog);
     sema_check_pass(s, prog);
@@ -204,7 +205,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     pk->members = pkgscope;
     pk->pkgname = prog->name ? prog->name : "main";
     pk->decl = prog;
-    vec_push(s->a, &s->pkg_cache, (void *)path);
+    vec_push(s->a, &s->pkg_cache, CONST_CAST(path));
     vec_push(s->a, &s->pkg_cache, (void *)pk);
     return pk;
 }
@@ -240,10 +241,10 @@ static void load_import_file(sema_t *s, ast_node_t *imp)
 
 static void load_imports(sema_t *s, ast_node_t *program)
 {
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (d->kind == AST_IMPORT) load_import_file(s, d);
-    }
+    } }
 }
 
 
@@ -291,8 +292,8 @@ sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const ch
     r->ok = (s.diag->errors == 0);
     
     vec_init(&r->packages);
-    for (size_t i = 1; i < s.pkg_cache.len; i += 2)
-        vec_push(a, &r->packages, s.pkg_cache.data[i]);
+    { size_t i = 1; for (; i < s.pkg_cache.len; i += 2)
+        vec_push(a, &r->packages, s.pkg_cache.data[i]); }
     return r;
 }
 
@@ -316,8 +317,8 @@ static void emit_sig(xml_writer_t *w, type_ctx_t *tc, func_sig_t *sig)
     xml_attr(w, "mangled", sig->mangled ? sig->mangled : "");
     xml_attr(w, "returns", type_to_string(tc, sig->ret));
     xml_open(w, "params");
-    for (size_t i = 0; i < sig->params.len; i++)
-        xml_leaf(w, "param", type_to_string(tc, (type_t *)sig->params.data[i]));
+    { size_t i = 0; for (; i < sig->params.len; i++)
+        xml_leaf(w, "param", type_to_string(tc, (type_t *)sig->params.data[i])); }
     xml_close(w);
     xml_close(w);
 }
@@ -333,17 +334,17 @@ static void emit_symbol(xml_writer_t *w, type_ctx_t *tc, symbol_t *sym)
     if (sym->kind == SYM_VAR || sym->kind == SYM_CONST)
         xml_attr(w, "mut", sym->is_mut ? "true" : "false");
     if (sym->kind == SYM_ENUM_MEMBER) {
-        char buf[32]; snprintf(buf, sizeof(buf), "%lld", sym->enum_value);
+        char buf[32]; sal_i64toa((int64_t)sym->enum_value, buf);
         xml_attr(w, "value", buf);
     }
     if (sym->kind == SYM_FUNC || sym->kind == SYM_METHOD) {
-        for (size_t i = 0; i < sym->overloads.len; i++)
-            emit_sig(w, tc, (func_sig_t *)sym->overloads.data[i]);
+        { size_t i = 0; for (; i < sym->overloads.len; i++)
+            emit_sig(w, tc, (func_sig_t *)sym->overloads.data[i]); }
     }
     if (sym->members) {
         xml_open(w, "members");
-        for (size_t i = 0; i < sym->members->symbols.len; i++)
-            emit_symbol(w, tc, (symbol_t *)sym->members->symbols.data[i]);
+        { size_t i = 0; for (; i < sym->members->symbols.len; i++)
+            emit_symbol(w, tc, (symbol_t *)sym->members->symbols.data[i]); }
         xml_close(w);
     }
     xml_close(w);
@@ -354,7 +355,7 @@ void symbols_to_xml(xml_writer_t *w, const sema_result_t *r)
     xml_open(w, "symbols");
     xml_attr_int(w, "errors", (long long)r->errors);
     xml_attr_int(w, "warnings", (long long)r->warnings);
-    for (size_t i = 0; i < r->global->symbols.len; i++)
-        emit_symbol(w, r->tc, (symbol_t *)r->global->symbols.data[i]);
+    { size_t i = 0; for (; i < r->global->symbols.len; i++)
+        emit_symbol(w, r->tc, (symbol_t *)r->global->symbols.data[i]); }
     xml_close(w);
 }

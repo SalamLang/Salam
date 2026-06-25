@@ -1,31 +1,63 @@
 #
-# Salam compiler - top-level Makefile (alternative to CMake / tools/build-compiler.sh).
-#   make            build ./salamc
-#   make test       build, then run the test suite
-#   make CC=tcc     build with tcc (the default backend; gcc/clang also work)
-#   make clean
+# Salam compiler - Makefile with incremental builds, auto‑dependencies,
+# and separate debug/release targets.
 #
 
-CC      ?= cc
-# -std=gnu11 (not c11): keeps C11 language features but enables glibc's default
-# feature set (_DEFAULT_SOURCE) so POSIX/BSD functions used across the tree
-# (strcasecmp, usleep/useconds_t, fileno, strdup, isatty) are declared.
-CFLAGS  ?= -O2 -Isrc -std=gnu11
-SRCDIRS := core source preproc logger xml diag i18n langpack token lexer ast parser \
-           semantic codegen llvm interp layout fmt cli driver
-SRC     := $(filter-out src/salamc.c,$(wildcard $(addsuffix /*.c,$(addprefix src/,$(SRCDIRS)))))
-ifneq (,$(findstring tcc,$(CC)))
-LDLIBS ?=
+CC       ?= cc
+BUILD    ?= release
+TARGET   := salamc
+
+SRCDIRS := core source preproc logger xml diag i18n langpack         \
+           token lexer ast parser semantic codegen llvm interp       \
+           layout fmt cli driver
+
+SRCS     := $(filter-out src/salamc.c, $(wildcard $(addsuffix /*.c, $(addprefix src/,$(SRCDIRS)))))
+MAIN_SRC := src/salamc.c
+
+ifeq ($(BUILD),debug)
+  OPTIMIZE := -O0 -g
 else
-LDLIBS ?= -lm
+  OPTIMIZE := -O2
 endif
-all: salamc
-salamc: src/salamc.c $(SRC)
-	$(CC) $(CFLAGS) -o $@ src/salamc.c $(SRC) $(LDLIBS)
-test: salamc
+
+CPPFLAGS ?= -Isrc
+CFLAGS   ?= $(OPTIMIZE) -std=gnu89 -Wall -Wextra                    \
+            -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable
+DEPFLAGS  = -MMD -MP
+
+ifneq (,$(findstring tcc,$(CC)))
+  LDLIBS ?=
+else
+  LDLIBS ?= -lm
+endif
+
+BUILD_DIR ?= build/$(BUILD)
+OBJS      := $(SRCS:src/%.c=$(BUILD_DIR)/%.o)
+MAIN_OBJ  := $(MAIN_SRC:src/%.c=$(BUILD_DIR)/%.o)
+DEPS      := $(OBJS:.o=.d) $(MAIN_OBJ:.o=.d)
+
+$(shell mkdir -p $(dir $(OBJS) $(MAIN_OBJ)))
+
+.PHONY: all test dist clean debug
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS) $(MAIN_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD_DIR)/%.o: src/%.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+-include $(DEPS)
+
+test: $(TARGET)
 	sh tools/run-tests.sh
+
 dist: all
 	sh tools/build-release.sh
+
+debug: BUILD = debug
+debug: clean all
+
 clean:
-	rm -f salamc salamc.exe *.o
-.PHONY: all test dist clean
+	rm -rf build $(TARGET) $(TARGET).exe

@@ -10,28 +10,28 @@ void cg_emit_lambda(cg_t *cg, ast_node_t *n)
     size_t ncap = n->captures.len;
     
     sb_t params; sb_init(&params); sb_puts(&params, "void *__envp");
-    for (size_t i = 0; i < n->list.len; i++) {
+    { size_t i = 0; for (; i < n->list.len; i++) {
         ast_node_t *p = (ast_node_t *)n->list.data[i];
         sb_puts(&params, ", ");
         sb_puts(&params, cg_decl(cg, p->type_str, p->name));
-    }
+    } }
     const char *ps = arena_strdup(cg->a, sb_cstr(&params)); sb_free(&params);
     
     if (ncap) {
         sb_t st; sb_init(&st);
         sb_puts(&st, cg_fmt(cg, "typedef struct { void *fn;"));
-        for (size_t i = 0; i < ncap; i++) {
+        { size_t i = 0; for (; i < ncap; i++) {
             ast_node_t *c = (ast_node_t *)n->captures.data[i];
             sb_puts(&st, cg_fmt(cg, " %s;", cg_decl(cg, c->type_str, c->name)));
-        }
+        } }
         sb_puts(&st, cg_fmt(cg, " } %s_env;\n", name));
         sb_puts(cg->lam_decls, sb_cstr(&st)); sb_free(&st);
         sb_puts(cg->lam_decls, cg_fmt(cg, "static void *%s_make(", name));
-        for (size_t i = 0; i < ncap; i++) {
+        { size_t i = 0; for (; i < ncap; i++) {
             ast_node_t *c = (ast_node_t *)n->captures.data[i];
             if (i) sb_puts(cg->lam_decls, ", ");
             sb_puts(cg->lam_decls, cg_decl(cg, c->type_str, c->name));
-        }
+        } }
         sb_puts(cg->lam_decls, ");\n");
     }
     sb_puts(cg->lam_decls, cg_fmt(cg, "static %s %s(%s);\n", cret, name, ps));
@@ -44,8 +44,8 @@ void cg_emit_lambda(cg_t *cg, ast_node_t *n)
     cg->c = cg->lam_defs; cg->indent = 0;
     vec_init(&cg->locals); vec_init(&cg->fn_defers);
     cg->cur_sret = false; cg->cur_struct = NULL; cg->cur_lambda = n;
-    for (size_t i = 0; i < n->list.len; i++)
-        local_add(cg, ((ast_node_t *)n->list.data[i])->name);
+    { size_t i = 0; for (; i < n->list.len; i++)
+        local_add(cg, ((ast_node_t *)n->list.data[i])->name); }
     cg_line(cg, "static %s %s(%s) {", cret, name, ps);
     cg->indent++;
     if (ncap)
@@ -60,20 +60,20 @@ void cg_emit_lambda(cg_t *cg, ast_node_t *n)
     
     if (ncap) {
         sb_t mp; sb_init(&mp);
-        for (size_t i = 0; i < ncap; i++) {
+        { size_t i = 0; for (; i < ncap; i++) {
             ast_node_t *c = (ast_node_t *)n->captures.data[i];
             if (i) sb_puts(&mp, ", ");
             sb_puts(&mp, cg_decl(cg, c->type_str, c->name));
-        }
+        } }
         const char *mps = arena_strdup(cg->a, sb_cstr(&mp)); sb_free(&mp);
         cg_line(cg, "static void *%s_make(%s) {", name, mps);
         cg->indent++;
         cg_line(cg, "%s_env *e = (%s_env *)salam_alloc(sizeof(%s_env));", name, name, name);
         cg_line(cg, "e->fn = (void*)&%s;", name);
-        for (size_t i = 0; i < ncap; i++) {
+        { size_t i = 0; for (; i < ncap; i++) {
             ast_node_t *c = (ast_node_t *)n->captures.data[i];
             cg_line(cg, "e->%s = %s;", cg_cident(cg, c->name), cg_cident(cg, c->name));
-        }
+        } }
         cg_line(cg, "return e;");
         cg->indent--;
         cg_line(cg, "}");
@@ -92,10 +92,10 @@ const char *cg_lambda_value(cg_t *cg, ast_node_t *n)
     if (n->captures.len == 0)
         return cg_fmt(cg, "(void*)&%s_env", n->name);
     sb_t a; sb_init(&a);
-    for (size_t i = 0; i < n->captures.len; i++) {
+    { size_t i = 0; for (; i < n->captures.len; i++) {
         if (i) sb_puts(&a, ", ");
         sb_puts(&a, cg_expr(cg, (ast_node_t *)n->captures.data[i]));
-    }
+    } }
     const char *args = arena_strdup(cg->a, sb_cstr(&a)); sb_free(&a);
     return cg_fmt(cg, "%s_make(%s)", n->name, args);
 }
@@ -106,6 +106,6 @@ void cg_lift_walk(cg_t *cg, ast_node_t *node)
     if (node->kind == AST_LAMBDA) { cg_lift_walk(cg, node->a); cg_emit_lambda(cg, node); return; }
     cg_lift_walk(cg, node->a); cg_lift_walk(cg, node->b);
     cg_lift_walk(cg, node->c); cg_lift_walk(cg, node->d);
-    for (size_t i = 0; i < node->list.len; i++)
-        cg_lift_walk(cg, (ast_node_t *)node->list.data[i]);
+    { size_t i = 0; for (; i < node->list.len; i++)
+        cg_lift_walk(cg, (ast_node_t *)node->list.data[i]); }
 }

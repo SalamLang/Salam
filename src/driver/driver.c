@@ -209,13 +209,13 @@ static bool file_has_entry(arena_t *a, langpack_t *pack, const char *entry, cons
         ast_node_t *program = NULL;
         parser_run(a, quiet, toks, &program);
         if (program) {
-            for (size_t i = 0; i < program->list.len; i++) {
+            { size_t i = 0; for (; i < program->list.len; i++) {
                 ast_node_t *d = (ast_node_t *)program->list.data[i];
                 if (d->kind == AST_FUNC_DEF && d->name && strcmp(d->name, entry) == 0) {
                     found = true;
                     break;
                 }
-            }
+            } }
         }
     }
     logger_free(quiet);
@@ -242,8 +242,8 @@ static int driver_run(options_t *opt)
             arena_free(arena); logger_free(log); return 2;
         }
         const char *entries[SALAM_MAX_INPUTS]; int nentries = 0;
-        for (int i = 0; i < nfiles; i++)
-            if (file_has_entry(arena, pack, entry, files[i])) entries[nentries++] = files[i];
+        { int i = 0; for (; i < nfiles; i++)
+            if (file_has_entry(arena, pack, entry, files[i])) entries[nentries++] = files[i]; }
         if (nentries == 0) {
             LOG_E(log, PH_DRIVER,
                   i18n_tr("no entry point: none of the %d .salam file(s) here defines a '%s' function"),
@@ -252,8 +252,8 @@ static int driver_run(options_t *opt)
         }
         if (nentries > 1) {
             LOG_E(log, PH_DRIVER, i18n_tr("ambiguous entry point: %d files define '%s':"), nentries, entry);
-            for (int i = 0; i < nentries; i++)
-                fprintf(stderr, "    %s\n", entries[i]);
+            { int i = 0; for (; i < nentries; i++)
+                fprintf(stderr, "    %s\n", entries[i]); }
             fprintf(stderr, "  run a specific one with: salamc run <file.salam>\n");
             arena_free(arena); logger_free(log); return 2;
         }
@@ -318,8 +318,8 @@ static int driver_interp(options_t *opt)
         const char *files[SALAM_MAX_INPUTS]; int nfiles = 0;
         list_salam_files(arena, files, &nfiles);
         const char *entries[SALAM_MAX_INPUTS]; int nentries = 0;
-        for (int i = 0; i < nfiles; i++)
-            if (file_has_entry(arena, pack, entry, files[i])) entries[nentries++] = files[i];
+        { int i = 0; for (; i < nfiles; i++)
+            if (file_has_entry(arena, pack, entry, files[i])) entries[nentries++] = files[i]; }
         if (nentries != 1) {
             LOG_E(log, PH_DRIVER, i18n_tr("no entry point: define a '%s' function"), entry);
             arena_free(arena); logger_free(log); return 2;
@@ -457,11 +457,11 @@ static int driver_fmt(options_t *opt)
     if (opt->input_count == 0) {
         fmt_walk(&c, ".");                    
     } else {
-        for (int i = 0; i < opt->input_count; i++) {
+        { int i = 0; for (; i < opt->input_count; i++) {
             const char *p = opt->inputs[i];
             if (path_is_dir(p))  fmt_walk(&c, p);
             else                 fmt_one_file(&c, p);
-        }
+        } }
     }
     (void)opt->fmt_recursive;   
     if (c.check) {

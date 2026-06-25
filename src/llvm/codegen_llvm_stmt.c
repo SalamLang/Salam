@@ -3,8 +3,8 @@
 
 static void ll_emit_defers(ll_t *ll)
 {
-    for (size_t i = ll->defers.len; i > 0; i--)
-        ll_stmt(ll, (ast_node_t *)ll->defers.data[i - 1]);
+    { size_t i = ll->defers.len; for (; i > 0; i--)
+        ll_stmt(ll, (ast_node_t *)ll->defers.data[i - 1]); }
 }
 
 void ll_emit_return(ll_t *ll, ast_node_t *value)
@@ -72,8 +72,8 @@ static void ll_assign(ll_t *ll, ast_node_t *n)
 static void ll_stmts_scoped(ll_t *ll, ast_node_t *block)
 {
     size_t mark = ll->locals.len;
-    for (size_t i = 0; i < block->list.len; i++)
-        ll_stmt(ll, (ast_node_t *)block->list.data[i]);
+    { size_t i = 0; for (; i < block->list.len; i++)
+        ll_stmt(ll, (ast_node_t *)block->list.data[i]); }
     ll->locals.len = mark;
 }
 

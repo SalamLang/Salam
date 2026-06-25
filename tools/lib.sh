@@ -1,4 +1,4 @@
-# Shared helpers for the tools/*.sh scripts — not executable on its own.
+# Shared helpers for the tools/*.sh scripts, not executable on its own.
 
 cd "$(dirname "$0")/.." || exit 1
 SALAM_ROOT="$(pwd)"

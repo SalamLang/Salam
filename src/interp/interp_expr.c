@@ -6,29 +6,60 @@ static value_t *eval_args(interp_t *I, env_t *env, ast_node_t *call, size_t *out
     *outn = n;
     if (n == 0) return NULL;
     value_t *args = (value_t *)arena_alloc(I->a, salam_size_mul(n, sizeof(value_t)));
-    for (size_t i = 0; i < n; i++)
-        args[i] = eval(I, env, (ast_node_t *)call->list.data[i]);
+    { size_t i = 0; for (; i < n; i++)
+        args[i] = eval(I, env, (ast_node_t *)call->list.data[i]); }
     return args;
+}
+
+static int64_t interp_sizeof_typename(interp_t *I, const char *ts);
+
+static int64_t interp_alignof_typename(interp_t *I, const char *ts)
+{
+    if (!ts || !*ts) return 8;
+    size_t len = strlen(ts);
+    if (ts[len - 1] == '*') return 8;
+    if (!strcmp(ts,"i8")||!strcmp(ts,"u8")||!strcmp(ts,"bool")||!strcmp(ts,"char")) return 1;
+    if (!strcmp(ts,"i16")||!strcmp(ts,"u16")) return 2;
+    if (!strcmp(ts,"i32")||!strcmp(ts,"u32")||!strcmp(ts,"f32")) return 4;
+    if (!strcmp(ts,"i64")||!strcmp(ts,"u64")||!strcmp(ts,"f64")||!strcmp(ts,"str")) return 8;
+    ast_node_t *sd = find_struct(I, ts);
+    if (sd) {
+        int64_t maxalign = 1;
+        { size_t i = 0; for (; i < sd->list.len; i++) {
+            ast_node_t *f = (ast_node_t *)sd->list.data[i];
+            if (f->kind != AST_FIELD) continue;
+            int64_t al = interp_alignof_typename(I, f->type ? f->type->type_str : NULL);
+            if (al > maxalign) maxalign = al;
+        } }
+        return maxalign;
+    }
+    return 8;
 }
 
 static int64_t interp_sizeof_typename(interp_t *I, const char *ts)
 {
     if (!ts || !*ts) return 8;
     size_t len = strlen(ts);
-    if (ts[len - 1] == '*') return 8;                       
+    if (ts[len - 1] == '*') return 8;
     if (!strcmp(ts,"i8")||!strcmp(ts,"u8")||!strcmp(ts,"bool")||!strcmp(ts,"char")) return 1;
     if (!strcmp(ts,"i16")||!strcmp(ts,"u16")) return 2;
     if (!strcmp(ts,"i32")||!strcmp(ts,"u32")||!strcmp(ts,"f32")) return 4;
     if (!strcmp(ts,"i64")||!strcmp(ts,"u64")||!strcmp(ts,"f64")||!strcmp(ts,"str")) return 8;
-    ast_node_t *sd = find_struct(I, ts);                    
+    ast_node_t *sd = find_struct(I, ts);
     if (sd) {
-        int64_t total = 0;
-        for (size_t i = 0; i < sd->list.len; i++) {
+        int64_t off = 0, maxalign = 1;
+        { size_t i = 0; for (; i < sd->list.len; i++) {
             ast_node_t *f = (ast_node_t *)sd->list.data[i];
             if (f->kind != AST_FIELD) continue;
-            total += interp_sizeof_typename(I, f->type ? f->type->type_str : NULL);
-        }
-        return total ? total : 8;
+            const char *fts = f->type ? f->type->type_str : NULL;
+            int64_t sz = interp_sizeof_typename(I, fts);
+            int64_t al = interp_alignof_typename(I, fts);
+            off = (off + al - 1) & ~(al - 1);
+            off += sz;
+            if (al > maxalign) maxalign = al;
+        } }
+        off = (off + maxalign - 1) & ~(maxalign - 1);
+        return off ? off : 8;
     }
     return 8;
 }
@@ -99,12 +130,12 @@ static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
             if (!m) m = struct_method(recv.as.st->def, method);
             if (m) return call_func(I, m, I->globals, &recv, args, na);
             
-            for (size_t i = 0; i < recv.as.st->nfields; i++)
+            { size_t i = 0; for (; i < recv.as.st->nfields; i++)
                 if (strcmp(recv.as.st->fields[i].name, method) == 0 &&
                     recv.as.st->fields[i].val.kind == VAL_FUNC) {
                     value_t fv = recv.as.st->fields[i].val;
                     return call_func(I, fv.as.fn->fn, fv.as.fn->env, NULL, args, na);
-                }
+                } }
             rt_error(I, n, "struct '%s' has no method '%s'", recv.as.st->type_name, method);
         }
         
@@ -131,21 +162,21 @@ value_t call_func(interp_t *I, ast_node_t *fn, env_t *defenv,
         rt_error(I, fn, "call stack too deep (possible infinite recursion)");
     env_t *env = env_new(I, defenv);
     if (thisv) env_define(I, env, "this", *thisv);
-    for (size_t i = 0; i < fn->list.len; i++) {
+    { size_t i = 0; for (; i < fn->list.len; i++) {
         ast_node_t *p = (ast_node_t *)fn->list.data[i];
         if (i < nargs)            env_define(I, env, p->name, args[i]);
         else if (p->a)            env_define(I, env, p->name, eval(I, env, p->a));  
         else                      env_define(I, env, p->name, val_null());
-    }
+    } }
     frame_t fr; vec_init(&fr.defers);
     value_t ret = val_null();
     if (fn->a) exec_list(I, env, &fr, &fn->a->list, &ret);
-    for (size_t i = fr.defers.len; i > 0; i--) {
+    { size_t i = fr.defers.len; for (; i > 0; i--) {
         defer_t *d = (defer_t *)fr.defers.data[i - 1];
         value_t dummy = val_null();
         frame_t inner; vec_init(&inner.defers);   
         exec_stmt(I, d->env, &inner, d->stmt, &dummy);
-    }
+    } }
     I->depth--;   
     return ret;
 }
@@ -173,9 +204,9 @@ value_t eval(interp_t *I, env_t *env, ast_node_t *n)
             
             binding_t *self = env_find(env, "this");
             if (self && self->val.kind == VAL_STRUCT) {
-                for (size_t i = 0; i < self->val.as.st->nfields; i++)
+                { size_t i = 0; for (; i < self->val.as.st->nfields; i++)
                     if (strcmp(self->val.as.st->fields[i].name, n->name) == 0)
-                        return self->val.as.st->fields[i].val;
+                        return self->val.as.st->fields[i].val; }
             }
             ast_node_t *fn = find_func(I, n->name, (size_t)-1);
             if (fn) return mk_closure(I, fn, I->globals);
@@ -234,11 +265,11 @@ value_t eval(interp_t *I, env_t *env, ast_node_t *n)
             if (obj->kind == AST_IDENTIFIER && !env_find(env, obj->name)) {
                 ast_node_t *edef = find_enum(I, obj->name);
                 if (edef) {
-                    for (size_t i = 0, val = 0; i < edef->list.len; i++, val++) {
+                    { size_t i = 0, val = 0; for (; i < edef->list.len; i++, val++) {
                         ast_node_t *m = (ast_node_t *)edef->list.data[i];
                         if (m->a) val = (size_t)to_int(eval(I, I->globals, m->a));
                         if (m->name && strcmp(m->name, n->name) == 0) return val_int((int64_t)val);
-                    }
+                    } }
                     rt_error(I, n, "enum '%s' has no member '%s'", obj->name, n->name);
                 }
             }
@@ -249,9 +280,9 @@ value_t eval(interp_t *I, env_t *env, ast_node_t *n)
                 rt_error(I, n, "package '%s' has no member '%s'", recv.as.mod->name, n->name);
             }
             if (recv.kind == VAL_STRUCT) {
-                for (size_t i = 0; i < recv.as.st->nfields; i++)
+                { size_t i = 0; for (; i < recv.as.st->nfields; i++)
                     if (strcmp(recv.as.st->fields[i].name, n->name) == 0)
-                        return recv.as.st->fields[i].val;
+                        return recv.as.st->fields[i].val; }
                 rt_error(I, n, "struct '%s' has no field '%s'", recv.as.st->type_name, n->name);
             }
             rt_error(I, n, "cannot access member '%s'", n->name);
@@ -286,30 +317,30 @@ value_t eval(interp_t *I, env_t *env, ast_node_t *n)
             if (!sdef) rt_error(I, n, "unknown struct '%s'", n->name);
             
             size_t nf = 0;
-            for (size_t i = 0; i < sdef->list.len; i++)
-                if (((ast_node_t *)sdef->list.data[i])->kind == AST_FIELD) nf++;
+            { size_t i = 0; for (; i < sdef->list.len; i++)
+                if (((ast_node_t *)sdef->list.data[i])->kind == AST_FIELD) nf++; }
             value_t sv = mk_struct(I, sdef->name, sdef, nf);
             size_t fi = 0;
-            for (size_t i = 0; i < sdef->list.len; i++) {
+            { size_t i = 0; for (; i < sdef->list.len; i++) {
                 ast_node_t *f = (ast_node_t *)sdef->list.data[i];
                 if (f->kind != AST_FIELD) continue;
                 ast_node_t *provided = NULL;
-                for (size_t j = 0; j < n->list.len; j++) {
+                { size_t j = 0; for (; j < n->list.len; j++) {
                     ast_node_t *p = (ast_node_t *)n->list.data[j];
                     if (p->name && strcmp(p->name, f->name) == 0) { provided = p; break; }
-                }
+                } }
                 value_t fv = provided ? eval(I, env, provided->a)
                            : (f->a ? eval(I, I->globals, f->a) : val_null());
                 sv.as.st->fields[fi].name = f->name;
                 sv.as.st->fields[fi].val  = fv;
                 fi++;
-            }
+            } }
             return sv;
         }
         case AST_ARRAY_LIT: {
             sarray_t *a = array_new(I, n->list.len ? n->list.len : 4);
-            for (size_t i = 0; i < n->list.len; i++)
-                array_push(I, a, eval(I, env, (ast_node_t *)n->list.data[i]));
+            { size_t i = 0; for (; i < n->list.len; i++)
+                array_push(I, a, eval(I, env, (ast_node_t *)n->list.data[i])); }
             return mk_array(I, a);
         }
         default:

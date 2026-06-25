@@ -108,11 +108,11 @@ static void parse_typarams(parser_t *p, ast_node_t *n)
     do {
         const char *tp = p_name(p, "expected type parameter name");
         if (!tp) break;
-        vec_push(p->a, &n->typarams, (void *)tp);
+        vec_push(p->a, &n->typarams, CONST_CAST(tp));
         const char *bound = NULL;
         if (p_match(p, TK_COLON))
             bound = p_name(p, "expected an interface name after ':' in type parameter bound");
-        vec_push(p->a, &n->typaram_bounds, (void *)bound);   
+        vec_push(p->a, &n->typaram_bounds, CONST_CAST(bound));   
     } while (p_match(p, TK_COMMA));
     p_expect(p, TK_GT, "'>' to close type parameters");
 }
@@ -202,7 +202,7 @@ static ast_node_t *parse_struct(parser_t *p)
         if (p_at(p, TK_KW_END) || p_at_eof(p)) break;
         ast_node_t *member = p_at(p, TK_KW_FUNC) ? parse_function(p) : parse_field(p);
         if (member) {
-            for (size_t i = 0; i < mpend.len; i++) vec_push(p->a, &member->aliases, mpend.data[i]);
+            { size_t i = 0; for (; i < mpend.len; i++) vec_push(p->a, &member->aliases, mpend.data[i]); }
             ast_add(p->a, n, member);
         }
         mpend.len = 0;
@@ -273,7 +273,7 @@ static ast_node_t *parse_function(parser_t *p)
         token_kind_t after = p_peekn(p, m)->kind;
         if (m >= 2 && after != TK_LPAREN && after != TK_LT) {
             sb_t b; sb_init(&b);
-            for (size_t i = 0; i < m - 1; i++) { if (i) sb_putc(&b, ' '); sb_puts(&b, p_peek(p)->lexeme); p_advance(p); }
+            { size_t i = 0; for (; i < m - 1; i++) { if (i) sb_putc(&b, ' '); sb_puts(&b, p_peek(p)->lexeme); p_advance(p); } }
             n->name = arena_strdup(p->a, sb_cstr(&b)); sb_free(&b);
         } else {
             n->name = p_munch_name(p);

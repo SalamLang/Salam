@@ -28,20 +28,20 @@ static const char *attr_string(ast_node_t *attr)
 
 static ast_node_t *elem_attr(ast_node_t *el, const char *name)
 {
-    for (size_t i = 0; i < el->list.len; i++) {
+    { size_t i = 0; for (; i < el->list.len; i++) {
         ast_node_t *c = (ast_node_t *)el->list.data[i];
         if (c->kind == AST_LAYOUT_ATTR && c->name && !strcmp(c->name, name)) return c;
-    }
+    } }
     return NULL;
 }
 
 static bool subtree_has_id(ast_node_t *el)
 {
-    for (size_t i = 0; i < el->list.len; i++) {
+    { size_t i = 0; for (; i < el->list.len; i++) {
         ast_node_t *c = (ast_node_t *)el->list.data[i];
         if (c->kind != AST_LAYOUT_ELEMENT) continue;
         if (elem_attr(c, "id") || subtree_has_id(c)) return true;
-    }
+    } }
     return false;
 }
 
@@ -78,11 +78,11 @@ static void check_required(sema_t *s, ast_node_t *element, const layout_elem_def
         const char *comma = strchr(p, ',');
         size_t len = comma ? (size_t)(comma - p) : strlen(p);
         bool found = false;
-        for (size_t i = 0; i < element->list.len; i++) {
+        { size_t i = 0; for (; i < element->list.len; i++) {
             ast_node_t *c = (ast_node_t *)element->list.data[i];
             if (c->kind == AST_LAYOUT_ATTR && c->name &&
                 strlen(c->name) == len && strncmp(c->name, p, len) == 0) { found = true; break; }
-        }
+        } }
         if (!found)
             SERR(s, 5, &element->span, "element '%s' is missing required attribute '%.*s'",
                  element->name, (int)len, p);
@@ -100,11 +100,11 @@ void sema_check_layout(sema_t *s, ast_node_t *node, const char *parent)
         if (elem_attr(node, "repeat") && subtree_has_id(node))
             SERR(s, 19, &node->span,
                  "layout uses 'repeat' but a nested element has an 'id'");
-        for (size_t i = 0; i < node->list.len; i++) {
+        { size_t i = 0; for (; i < node->list.len; i++) {
             ast_node_t *c = (ast_node_t *)node->list.data[i];
             if (c->kind == AST_LAYOUT_ELEMENT) sema_check_layout(s, c, "layout");
             else if (c->kind == AST_LAYOUT_ATTR) check_attr(s, c);
-        }
+        } }
         return;
     }
     if (node->kind == AST_LAYOUT_ELEMENT) {
@@ -118,11 +118,11 @@ void sema_check_layout(sema_t *s, ast_node_t *node, const char *parent)
             check_required(s, node, reg);
         }
         check_repeat(s, node);
-        for (size_t i = 0; i < node->list.len; i++) {
+        { size_t i = 0; for (; i < node->list.len; i++) {
             ast_node_t *c = (ast_node_t *)node->list.data[i];
             if (c->kind == AST_LAYOUT_ELEMENT) sema_check_layout(s, c, node->name);
             else if (c->kind == AST_LAYOUT_ATTR) check_attr(s, c);
-        }
+        } }
         return;
     }
 }

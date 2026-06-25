@@ -125,10 +125,10 @@ static void ll_toplevel(ll_t *ll, ast_node_t *d)
         case AST_STRUCT_DEF: {
             if (d->typarams.len > 0) break;      
             symbol_t *ssym = ll_struct_sym(ll, d->name);   
-            for (size_t i = 0; i < d->list.len; i++) {
+            { size_t i = 0; for (; i < d->list.len; i++) {
                 ast_node_t *m = (ast_node_t *)d->list.data[i];
                 if (m->kind == AST_FUNC_DEF) ll_function(ll, m, ssym);
-            }
+            } }
             break;                               
         }
         case AST_ENUM_DEF:                        
@@ -179,8 +179,8 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     ll_emit_packages(&ll);                
     LOG_I(log, PH_CODEGEN, "generating LLVM IR for module '%s'%s",
           module, ll.debug ? i18n_tr(" (+debug info)") : "");
-    for (size_t i = 0; i < program->list.len; i++)
-        ll_toplevel(&ll, (ast_node_t *)program->list.data[i]);
+    { size_t i = 0; for (; i < program->list.len; i++)
+        ll_toplevel(&ll, (ast_node_t *)program->list.data[i]); }
     if (ll.debug) ll_debug_finalize(&ll);
     llvm_output_t *out = (llvm_output_t *)arena_alloc(a, sizeof *out);
     out->module = module;

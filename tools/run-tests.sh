@@ -163,7 +163,9 @@ fi
 if want llvm; then
 for lang in $LANGS; do
     [ -d "tests/$lang/llvm" ] || continue
-    probe=$("$SALAMC" llvm "tests/$lang/llvm/_probe.salam" --jit --no-color --log-level=error 2>/dev/null | tr -d '\r')
+    probe_raw=$("$SALAMC" llvm "tests/$lang/llvm/_probe.salam" --jit --no-color --log-level=error 2>/dev/null)
+    prc=$?
+    probe=$(printf '%s' "$probe_raw" | tr -d '\r')
     rm -f _probe.ll _probe.ll.run.sh 2>/dev/null
     if [ "$probe" = "OK" ]; then
         for f in tests/$lang/llvm/*.salam; do
@@ -176,6 +178,9 @@ for lang in $LANGS; do
             rm -f "$name.ll" "$name.ll.run.sh" 2>/dev/null
             check_out "llvm/$lang/$name" "$exp" "$got"
         done
+    elif [ "$prc" -ge 128 ]; then
+        echo "FAIL llvm/$lang/* (salamc crashed on probe, signal $((prc-128)); rebuild salamc via tools/build-compiler.sh)"
+        fail=$((fail+1))
     else
         echo "SKIP llvm/$lang/* (LLVM toolchain unavailable: 'salamc llvm --jit' probe failed)"
     fi

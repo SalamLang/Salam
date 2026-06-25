@@ -46,11 +46,11 @@ static value_t str_split(interp_t *I, const char *s, const char *sep)
 void do_print(interp_t *I, env_t *env, ast_node_t *call, bool newline, bool to_err)
 {
     FILE *f = to_err ? I->err : I->out;
-    for (size_t i = 0; i < call->list.len; i++) {
+    { size_t i = 0; for (; i < call->list.len; i++) {
         if (i) fputc(' ', f);
         value_t v = eval(I, env, (ast_node_t *)call->list.data[i]);
         fputs(to_str(I, v), f);
-    }
+    } }
     if (newline) fputc('\n', f);
 }
 value_t do_input(interp_t *I)
@@ -130,11 +130,11 @@ static const struct { const char *name; intrinsic_fn fn; } INTRINSICS[] = {
 value_t call_intrinsic(interp_t *I, ast_node_t *call, const char *name,
                        value_t *args, size_t nargs, bool *handled)
 {
-    for (size_t i = 0; i < sizeof INTRINSICS / sizeof INTRINSICS[0]; i++)
+    { size_t i = 0; for (; i < sizeof INTRINSICS / sizeof INTRINSICS[0]; i++)
         if (strcmp(INTRINSICS[i].name, name) == 0) {
             *handled = true;
             return INTRINSICS[i].fn(I, call, args, nargs);
-        }
+        } }
     *handled = false;
     return val_null();
 }
@@ -189,8 +189,8 @@ value_t call_builtin_method(interp_t *I, ast_node_t *call, value_t recv,
         }
         case VAL_MAPITER: {
             smapiter_t *it = recv.as.iter;
-            if (!strcmp(method, "has_next")) { for (size_t i = it->idx; i < it->map->cap; i++)
-                                                   if (it->map->entries[i].used) return val_bool(true);
+            if (!strcmp(method, "has_next")) { { size_t i = it->idx; for (; i < it->map->cap; i++)
+                                                   if (it->map->entries[i].used) return val_bool(true); }
                                                return val_bool(false); }
             if (!strcmp(method, "next")) { while (it->idx < it->map->cap && !it->map->entries[it->idx].used) it->idx++;
                                            if (it->idx < it->map->cap) it->idx++;

@@ -1,5 +1,6 @@
 #ifndef SALAM_DIAG_DIAG_RENDER_H
 #define SALAM_DIAG_DIAG_RENDER_H
+
 #include "core/prelude.h"
 #include "core/span.h"
 

@@ -2,8 +2,8 @@
 
 void cg_emit_defers(cg_t *cg)
 {
-    for (size_t i = cg->fn_defers.len; i > 0; i--)
-        cg_stmt(cg, (ast_node_t *)cg->fn_defers.data[i - 1]);
+    { size_t i = cg->fn_defers.len; for (; i > 0; i--)
+        cg_stmt(cg, (ast_node_t *)cg->fn_defers.data[i - 1]); }
 }
 
 static const char *cg_vardecl_inline(cg_t *cg, ast_node_t *n)  
@@ -44,9 +44,9 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
                 n->a && n->a->kind == AST_ARRAY_LIT) {
                 local_add(cg, n->name);
                 cg_line(cg, "%s;", cg_decl(cg, n->type_str, n->name));
-                for (size_t i = 0; i < n->a->list.len; i++)
+                { size_t i = 0; for (; i < n->a->list.len; i++)
                     cg_line(cg, "%s[%zu] = %s;", cg_cident(cg, n->name), i,
-                            cg_expr(cg, (ast_node_t *)n->a->list.data[i]));
+                            cg_expr(cg, (ast_node_t *)n->a->list.data[i])); }
                 break;
             }
             cg_line(cg, "%s;", cg_vardecl_inline(cg, n)); break;
@@ -136,13 +136,13 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         case AST_IF:
             cg_line(cg, "if (%s) {", cg_expr(cg, n->a));
             cg->indent++; { size_t m = cg->locals.len;
-                for (size_t i = 0; i < n->b->list.len; i++) cg_stmt(cg, (ast_node_t *)n->b->list.data[i]);
+                { size_t i = 0; for (; i < n->b->list.len; i++) cg_stmt(cg, (ast_node_t *)n->b->list.data[i]); }
                 cg->locals.len = m; } cg->indent--;
             if (n->c && n->c->kind == AST_IF) { cg_indent(cg); sb_puts(cg->c, "} else ");
                 
                 sb_puts(cg->c, cg_fmt(cg, "if (%s) {\n", cg_expr(cg, n->c->a)));
                 cg->indent++; { size_t m = cg->locals.len;
-                    for (size_t i = 0; i < n->c->b->list.len; i++) cg_stmt(cg, (ast_node_t *)n->c->b->list.data[i]);
+                    { size_t i = 0; for (; i < n->c->b->list.len; i++) cg_stmt(cg, (ast_node_t *)n->c->b->list.data[i]); }
                     cg->locals.len = m; } cg->indent--;
                 if (n->c->c) { cg_line(cg, "} else {");
                     cg->indent++; cg_stmt(cg, n->c->c); cg->indent--; }
@@ -150,7 +150,7 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             } else if (n->c) {
                 cg_line(cg, "} else {");
                 cg->indent++; { size_t m = cg->locals.len;
-                    for (size_t i = 0; i < n->c->list.len; i++) cg_stmt(cg, (ast_node_t *)n->c->list.data[i]);
+                    { size_t i = 0; for (; i < n->c->list.len; i++) cg_stmt(cg, (ast_node_t *)n->c->list.data[i]); }
                     cg->locals.len = m; } cg->indent--;
                 cg_line(cg, "}");
             } else {
@@ -160,7 +160,7 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         case AST_WHILE:
             cg_line(cg, "while (%s) {", cg_expr(cg, n->a));
             cg->indent++; { size_t m = cg->locals.len;
-                for (size_t i = 0; i < n->b->list.len; i++) cg_stmt(cg, (ast_node_t *)n->b->list.data[i]);
+                { size_t i = 0; for (; i < n->b->list.len; i++) cg_stmt(cg, (ast_node_t *)n->b->list.data[i]); }
                 cg->locals.len = m; } cg->indent--;
             cg_line(cg, "}");
             break;
@@ -180,7 +180,7 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
                         t, t, cg_expr(cg, n->a), t, t, t);
             }
             cg->indent++; { size_t m = cg->locals.len;
-                for (size_t i = 0; i < n->b->list.len; i++) cg_stmt(cg, (ast_node_t *)n->b->list.data[i]);
+                { size_t i = 0; for (; i < n->b->list.len; i++) cg_stmt(cg, (ast_node_t *)n->b->list.data[i]); }
                 cg->locals.len = m; } cg->indent--;
             cg_line(cg, "}");
             break;
@@ -192,7 +192,7 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             const char *post = n->c ? cg_simple_inline(cg, n->c) : "";
             cg_line(cg, "for (%s; %s; %s) {", init, cond, post);
             cg->indent++;
-            for (size_t i = 0; i < n->d->list.len; i++) cg_stmt(cg, (ast_node_t *)n->d->list.data[i]);
+            { size_t i = 0; for (; i < n->d->list.len; i++) cg_stmt(cg, (ast_node_t *)n->d->list.data[i]); }
             cg->indent--;
             cg_line(cg, "}");
             cg->locals.len = mark;
@@ -205,7 +205,7 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
 void cg_block(cg_t *cg, ast_node_t *block)
 {
     size_t mark = cg->locals.len;
-    for (size_t i = 0; i < block->list.len; i++)
-        cg_stmt(cg, (ast_node_t *)block->list.data[i]);
+    { size_t i = 0; for (; i < block->list.len; i++)
+        cg_stmt(cg, (ast_node_t *)block->list.data[i]); }
     cg->locals.len = mark;
 }

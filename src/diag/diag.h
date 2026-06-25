@@ -1,5 +1,6 @@
 #ifndef SALAM_DIAG_DIAG_H
 #define SALAM_DIAG_DIAG_H
+
 #include "core/prelude.h"
 #include "core/arena.h"
 #include "core/vec.h"

@@ -2,7 +2,7 @@
 
 static void xml_escaped(xml_writer_t *w, const char *s)
 {
-    for (const char *p = s; *p; p++) {
+    { const char *p = s; for (; *p; p++) {
         switch (*p) {
             case '&':  sb_puts(w->out, "&amp;");  break;
             case '<':  sb_puts(w->out, "&lt;");   break;
@@ -11,7 +11,7 @@ static void xml_escaped(xml_writer_t *w, const char *s)
             case '\'': sb_puts(w->out, "&apos;"); break;
             default:   sb_putc(w->out, *p);       break;
         }
-    }
+    } }
 }
 
 void xml_attr(xml_writer_t *w, const char *key, const char *value)

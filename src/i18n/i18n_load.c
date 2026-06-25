@@ -22,12 +22,12 @@ const char *i18n_layout_word(const char *name)
 {
     if (!name) return name;
     const char *lang = i18n_active_lang();
-    for (int i = 0; i < g_dyn_words_n; i++)   
+    { int i = 0; for (; i < g_dyn_words_n; i++)   
         if (strcmp(g_dyn_words[i].lang, lang) == 0 && strcmp(g_dyn_words[i].alias, name) == 0)
-            return g_dyn_words[i].canon;
+            return g_dyn_words[i].canon; }
     if (strcmp(lang, "fa") == 0) {
-        for (const i18n_pair_t *p = k_layout_fa; p->key; p++)
-            if (strcmp(p->key, name) == 0) return p->val;
+        { const i18n_pair_t *p = k_layout_fa; for (; p->key; p++)
+            if (strcmp(p->key, name) == 0) return p->val; }
     }
     return name;
 }
@@ -52,13 +52,13 @@ const char *i18n_layout_value(const char *value)
     if (!value) return value;
     const char *lang = i18n_active_lang();
     
-    for (int i = 0; i < g_dyn_vals_n; i++)
+    { int i = 0; for (; i < g_dyn_vals_n; i++)
         if ((g_dyn_vals[i].lang[0] == '*' || strcmp(g_dyn_vals[i].lang, lang) == 0) &&
             strcmp(g_dyn_vals[i].alias, value) == 0)
-            return g_dyn_vals[i].canon;
+            return g_dyn_vals[i].canon; }
     if (strcmp(lang, "fa") == 0) {
-        for (const i18n_pair_t *p = k_value_fa; p->key; p++)
-            if (strcmp(p->key, value) == 0) return p->val;
+        { const i18n_pair_t *p = k_value_fa; for (; p->key; p++)
+            if (strcmp(p->key, value) == 0) return p->val; }
     }
     return value;
 }

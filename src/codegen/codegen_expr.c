@@ -24,7 +24,7 @@ const char *cg_str_operand(cg_t *cg, ast_node_t *n)
 const char *cg_cescape(cg_t *cg, const char *s)
 {
     sb_t b; sb_init(&b); sb_putc(&b, '"');
-    for (const char *p = s; *p; p++) {
+    { const char *p = s; for (; *p; p++) {
         unsigned char ch = (unsigned char)*p;
         switch (ch) {
             case '\n': sb_puts(&b, "\\n");  break;
@@ -37,16 +37,16 @@ const char *cg_cescape(cg_t *cg, const char *s)
             case '"':  sb_puts(&b, "\\\""); break;
             case '\\': sb_puts(&b, "\\\\"); break;
             default:
-                if (ch < 0x20) {
-                    
-                    char hex[5]; snprintf(hex, sizeof(hex), "\\x%02x", ch);
-                    sb_puts(&b, hex);
+                if (ch < 0x20 || ch >= 0x7f) {
+
+                    char oct[5]; snprintf(oct, sizeof(oct), "\\%03o", ch);
+                    sb_puts(&b, oct);
                 } else {
                     sb_putc(&b, (char)ch);
                 }
                 break;
         }
-    }
+    } }
     sb_putc(&b, '"');
     const char *r = arena_strdup(cg->a, sb_cstr(&b)); sb_free(&b); return r;
 }
@@ -112,21 +112,24 @@ static const char *cg_struct_lit(cg_t *cg, ast_node_t *n)
     sb_puts(&b, cg_fmt(cg, "(%s){ ", cg_cident(cg, sl_cn)));
     bool first = true;
     if (ssym) {
-        for (size_t i = 0; i < ssym->members->symbols.len; i++) {
+        { size_t i = 0; for (; i < ssym->members->symbols.len; i++) {
             symbol_t *f = (symbol_t *)ssym->members->symbols.data[i];
             if (f->kind != SYM_FIELD) continue;
             ast_node_t *provided = NULL;
-            for (size_t j = 0; j < n->list.len; j++) {
+            { size_t j = 0; for (; j < n->list.len; j++) {
                 ast_node_t *fi = (ast_node_t *)n->list.data[j];
                 if (fi->name && !strcmp(fi->name, f->name)) { provided = fi; break; }
-            }
-            const char *val = provided ? cg_expr(cg, provided->a)
-                            : (f->decl && f->decl->a ? cg_expr(cg, f->decl->a) : "0");
+            } }
+            const char *val = provided        ? cg_expr(cg, provided->a)
+                            : (f->decl && f->decl->a) ? cg_expr(cg, f->decl->a)
+                            : NULL;
+            if (!val) continue;
             if (!first) sb_puts(&b, ", ");
             sb_puts(&b, cg_fmt(cg, ".%s = %s", cg_cident(cg, f->name), val));
             first = false;
-        }
+        } }
     }
+    if (first) sb_puts(&b, "0");
     sb_puts(&b, " }");
     const char *r = arena_strdup(cg->a, sb_cstr(&b)); sb_free(&b); return r;
 }
@@ -168,9 +171,9 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
             
             if (cg->cur_lambda) {
                 vec_t *caps = &cg->cur_lambda->captures;
-                for (size_t i = 0; i < caps->len; i++)
+                { size_t i = 0; for (; i < caps->len; i++)
                     if (!strcmp(((ast_node_t *)caps->data[i])->name, n->name))
-                        return cg_fmt(cg, "__env->%s", cg_cident(cg, n->name));
+                        return cg_fmt(cg, "__env->%s", cg_cident(cg, n->name)); }
             }
             if (local_known(cg, n->name)) {
                 if (n->is_ref) return cg_fmt(cg, "(*%s)", cg_cident(cg, n->name));
@@ -310,8 +313,8 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         case AST_STRUCT_LIT: return cg_struct_lit(cg, n);
         case AST_ARRAY_LIT: {
             sb_t b; sb_init(&b); sb_putc(&b, '{');
-            for (size_t i = 0; i < n->list.len; i++)
-                { if (i) sb_puts(&b, ", "); sb_puts(&b, cg_expr(cg, (ast_node_t *)n->list.data[i])); }
+            { size_t i = 0; for (; i < n->list.len; i++)
+                { if (i) sb_puts(&b, ", "); sb_puts(&b, cg_expr(cg, (ast_node_t *)n->list.data[i])); } }
             sb_putc(&b, '}');
             const char *r = arena_strdup(cg->a, sb_cstr(&b)); sb_free(&b); return r;
         }

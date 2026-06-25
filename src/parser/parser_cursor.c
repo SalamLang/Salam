@@ -149,9 +149,9 @@ ast_node_t *p_error_node(parser_t *p)
 const token_t *p_peekn(const parser_t *p, size_t k)
 {
     size_t i = skip_comments_from(p, p->pos);
-    for (size_t c = 0; c < k; c++) {
+    { size_t c = 0; for (; c < k; c++) {
         if (i < p->count - 1) { i++; i = skip_comments_from(p, i); }
-    }
+    } }
     if (i >= p->count) i = p->count - 1;
     return token_stream_at(p->toks, i);
 }
@@ -184,10 +184,10 @@ const char *parse_decl_name(parser_t *p)
     size_t m = p_ident_run_len(p);                  
     
     long dynidx = -1;
-    for (size_t i = 0; i + 1 < m; i++) {
+    { size_t i = 0; for (; i + 1 < m; i++) {
         const token_t *t = p_peekn(p, i);
         if (t->kind == TK_IDENT && strcmp(t->lexeme, "dyn") == 0) { dynidx = (long)i; break; }
-    }
+    } }
     token_kind_t after = p_peekn(p, m)->kind;
     size_t name_words;
     if (dynidx >= 1)                                   
@@ -200,11 +200,11 @@ const char *parse_decl_name(parser_t *p)
         name_words = 1;                                
     if (name_words < 1) name_words = 1;
     sb_t b; sb_init(&b);
-    for (size_t i = 0; i < name_words; i++) {
+    { size_t i = 0; for (; i < name_words; i++) {
         if (i) sb_putc(&b, ' ');
         sb_puts(&b, p_peek(p)->lexeme);
         p_advance(p);
-    }
+    } }
     const char *r = arena_strdup(p->a, sb_cstr(&b));
     sb_free(&b);
     return r;

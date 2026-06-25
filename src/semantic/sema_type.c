@@ -18,7 +18,7 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
             return err_ty(s);
         }
         type_t *dt = type_dyn(s->tc, iface, tnode->name);
-        for (size_t i = tnode->dims.len; i-- > 0; ) {       
+        { size_t i = tnode->dims.len; for (; i-- > 0; ) {       
             ast_node_t *dim = (ast_node_t *)tnode->dims.data[i];
             size_t len = 0;
             if (dim && dim->kind == AST_LITERAL && dim->value.kind == TV_INT) len = (size_t)dim->value.as.i;
@@ -28,7 +28,7 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
                 else SERR(s, 11, &dim->span, "array size must be a constant integer");
             } else if (dim) SERR(s, 11, &dim->span, "array size must be a constant integer");
             dt = type_array(s->tc, dt, len);
-        }
+        } }
         if (tnode->is_pointer) dt = type_ptr(s->tc, dt);   
         return dt;
     }
@@ -77,8 +77,8 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
     
     if (tnode->name && strcmp(tnode->name, "func") == 0) {
         vec_t ptypes; vec_init(&ptypes);
-        for (size_t i = 0; i < tnode->list.len; i++)
-            vec_push(s->a, &ptypes, sema_resolve_type(s, (ast_node_t *)tnode->list.data[i]));
+        { size_t i = 0; for (; i < tnode->list.len; i++)
+            vec_push(s->a, &ptypes, sema_resolve_type(s, (ast_node_t *)tnode->list.data[i])); }
         type_t *ret = tnode->type ? sema_resolve_type(s, tnode->type) : ty(s, TY_VOID);
         base = type_func(s->tc, ret, &ptypes);
         if (tnode->is_pointer) base = type_ptr(s->tc, base);
@@ -129,7 +129,7 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
         }
     }
     
-    for (size_t i = tnode->dims.len; i-- > 0; ) {
+    { size_t i = tnode->dims.len; for (; i-- > 0; ) {
         ast_node_t *dim = (ast_node_t *)tnode->dims.data[i];
         size_t len = 0;
         if (dim && dim->kind == AST_LITERAL && dim->value.kind == TV_INT) {
@@ -142,7 +142,7 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
             SERR(s, 11, &dim->span, "array size must be a constant integer");
         }
         base = type_array(s->tc, base, len);
-    }
+    } }
     if (tnode->is_pointer) base = type_ptr(s->tc, base);
     decorate(s, tnode, base);
     return base;

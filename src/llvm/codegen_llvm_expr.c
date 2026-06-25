@@ -121,10 +121,10 @@ static symbol_t *ll_op_struct(ll_t *ll, const char *ts, const char **sname)
 
 static func_sig_t *ll_pick_arity(symbol_t *ms, size_t want)
 {
-    for (size_t i = 0; i < ms->overloads.len; i++) {
+    { size_t i = 0; for (; i < ms->overloads.len; i++) {
         func_sig_t *sig = (func_sig_t *)ms->overloads.data[i];
         if (sig->params.len == want) return sig;
-    }
+    } }
     return NULL;
 }
 
@@ -279,10 +279,10 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
     if (segs.len == 0) return;
     sb_t fmt; sb_init(&fmt);
     sb_t args; sb_init(&args);     
-    for (size_t i = 0; i < segs.len; i++) {
+    { size_t i = 0; for (; i < segs.len; i++) {
         pf_seg_t *s = (pf_seg_t *)segs.data[i];
         if (s->kind == PF_LIT) {
-            for (const char *p = s->text; *p; p++) { if (*p == '%') sb_putc(&fmt, '%'); sb_putc(&fmt, *p); }
+            { const char *p = s->text; for (; *p; p++) { if (*p == '%') sb_putc(&fmt, '%'); sb_putc(&fmt, *p); } }
             continue;
         }
         llv_t v = ll_expr(ll, s->expr);     
@@ -304,7 +304,7 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
             case PF_U64:  sb_puts(&args, ll_fmt(ll, ", i64 %s", v.ref)); break;
             default: break;
         }
-    }
+    } }
     const char *f = ll_strconst(ll, sb_cstr(&fmt));
     const char *t = ll_new_tmp(ll);
     if (err) ll_emit(ll, "%s = call i32 (i32, ptr, ...) @dprintf(i32 2, ptr %s%s)", t, f, sb_cstr(&args));
@@ -341,10 +341,10 @@ static llv_t ll_call_user(ll_t *ll, ast_node_t *n, const char *nm)
     func_sig_t *sig = ll_pick_overload(ll, fsym, n);
     ll_ensure_fn(ll, sig->decl, NULL, ll->pkg_scope);   
     sb_t ab; sb_init(&ab);
-    for (size_t i = 0; i < n->list.len; i++) {
+    { size_t i = 0; for (; i < n->list.len; i++) {
         if (i) sb_puts(&ab, ", ");
         ll_emit_arg(ll, &ab, (ast_node_t *)n->list.data[i], sig, i);
-    }
+    } }
     const char *args = arena_strdup(ll->a, sb_cstr(&ab)); sb_free(&ab);
     const char *rts = type_to_string(ll->sem->tc, sig->ret);
     
@@ -353,10 +353,10 @@ static llv_t ll_call_user(ll_t *ll, ast_node_t *n, const char *nm)
     const char *callty = "";
     if (is_ext && sig->variadic) {
         sb_t sp; sb_init(&sp); sb_putc(&sp, '(');
-        for (size_t i = 0; i < sig->params.len; i++) {
+        { size_t i = 0; for (; i < sig->params.len; i++) {
             if (i) sb_puts(&sp, ", ");
             sb_puts(&sp, ll_ty(ll, type_to_string(ll->sem->tc, (type_t *)sig->params.data[i])));
-        }
+        } }
         sb_puts(&sp, sig->params.len ? ", ...)" : "...)");
         callty = ll_fmt(ll, " %s", arena_strdup(ll->a, sb_cstr(&sp))); sb_free(&sp);
     }
@@ -393,11 +393,11 @@ static llv_t ll_emit_call(ll_t *ll, ast_node_t *n, func_sig_t *sig, const char *
     sb_t ab; sb_init(&ab);
     bool first = !lead || !lead[0];
     if (!first) sb_puts(&ab, lead);
-    for (size_t i = 0; i < n->list.len; i++) {
+    { size_t i = 0; for (; i < n->list.len; i++) {
         if (!first) sb_puts(&ab, ", ");
         ll_emit_arg(ll, &ab, (ast_node_t *)n->list.data[i], sig, i);
         first = false;
-    }
+    } }
     const char *args = arena_strdup(ll->a, sb_cstr(&ab)); sb_free(&ab);
     if (rts && !strcmp(rts, "void")) {
         ll_emit(ll, "call void @%s(%s)", fname, args);
@@ -480,7 +480,7 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
 static llv_t ll_call_dyn(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *iface, const char *mname)
 {
     char ib[160]; size_t k = 0;
-    for (const char *p = iface; *p && *p != '*' && *p != '[' && k < sizeof ib - 1; p++) ib[k++] = *p;
+    { const char *p = iface; for (; *p && *p != '*' && *p != '[' && k < sizeof ib - 1; p++) ib[k++] = *p; }
     ib[k] = 0;
     symbol_t *isym = ll_sym(ll, ib);
     if (!isym || isym->kind != SYM_INTERFACE) {
@@ -488,12 +488,12 @@ static llv_t ll_call_dyn(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *i
         return ll_poison(n->type_str);
     }
     int idx = 0, slot = -1; func_sig_t *msig = NULL;
-    for (size_t m = 0; m < isym->members->symbols.len; m++) {
+    { size_t m = 0; for (; m < isym->members->symbols.len; m++) {
         symbol_t *im = (symbol_t *)isym->members->symbols.data[m];
         if (im->kind != SYM_METHOD || !im->overloads.len) continue;
         if (!strcmp(im->name, mname)) { slot = idx; msig = (func_sig_t *)im->overloads.data[0]; break; }
         idx++;
-    }
+    } }
     if (slot < 0) { ll_error(ll, n, "interface '%s' has no method '%s'", ib, mname); return ll_poison(n->type_str); }
 
     llv_t dv = ll_expr(ll, obj);                       
@@ -504,12 +504,12 @@ static llv_t ll_call_dyn(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *i
     ll_emit(ll, "%s = load ptr, ptr %s", fn, sl);
 
     sb_t ab; sb_init(&ab); sb_puts(&ab, ll_fmt(ll, "ptr %s", data));
-    for (size_t i = 0; i < n->list.len; i++) {
+    { size_t i = 0; for (; i < n->list.len; i++) {
         llv_t v = ll_expr(ll, (ast_node_t *)n->list.data[i]);
         const char *pt = msig && i < msig->params.len
                        ? type_to_string(ll->sem->tc, (type_t *)msig->params.data[i]) : v.ts;
         sb_puts(&ab, ll_fmt(ll, ", %s %s", ll_ty(ll, pt), ll_conv(ll, v, pt)));
-    }
+    } }
     const char *args = arena_strdup(ll->a, sb_cstr(&ab)); sb_free(&ab);
     const char *rts = type_to_string(ll->sem->tc, msig->ret);
     if (rts && !strcmp(rts, "void")) {
@@ -578,11 +578,11 @@ static llv_t ll_call_indirect(ll_t *ll, ast_node_t *n, ast_node_t *callee)
     const char *rts = ll_func_ret(ll, fts);
     vec_t pts; ll_func_params(ll, fts, &pts);
     sb_t ab; sb_init(&ab); sb_puts(&ab, ll_fmt(ll, "ptr %s", env.ref));
-    for (size_t i = 0; i < n->list.len; i++) {
+    { size_t i = 0; for (; i < n->list.len; i++) {
         llv_t v = ll_expr(ll, (ast_node_t *)n->list.data[i]);
         const char *pt = i < pts.len ? (const char *)pts.data[i] : v.ts;
         sb_puts(&ab, ll_fmt(ll, ", %s %s", ll_ty(ll, pt), ll_conv(ll, v, pt)));
-    }
+    } }
     const char *args = arena_strdup(ll->a, sb_cstr(&ab)); sb_free(&ab);
     if (rts && !strcmp(rts, "void")) {
         ll_emit(ll, "call void %s(%s)", fn, args);
@@ -658,7 +658,7 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
             
             if (ll->cur_lambda) {
                 vec_t *caps = &ll->cur_lambda->captures;
-                for (size_t i = 0; i < caps->len; i++) {
+                { size_t i = 0; for (; i < caps->len; i++) {
                     ast_node_t *c = (ast_node_t *)caps->data[i];
                     if (!strcmp(c->name, n->name)) {
                         const char *r = ll_new_tmp(ll);
@@ -666,7 +666,7 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
                                 r, ll->env_ty, ll->env_ref, i + 1);
                         return (ll_addr_t){ r, c->type_str };
                     }
-                }
+                } }
             }
             if (ll->self_ts) {
                 symbol_t *ss = ll_struct_sym(ll, ll->self_ts), *fs = NULL;
@@ -758,22 +758,22 @@ static llv_t ll_struct_lit(ll_t *ll, ast_node_t *n)
     const char *sty = ll_struct_ltype(ll, sname);
     const char *cur = "zeroinitializer";
     int idx = 0;
-    for (size_t i = 0; i < ss->members->symbols.len; i++) {
+    { size_t i = 0; for (; i < ss->members->symbols.len; i++) {
         symbol_t *f = (symbol_t *)ss->members->symbols.data[i];
         if (f->kind != SYM_FIELD) continue;
         const char *fts = type_to_string(ll->sem->tc, f->type);
         ast_node_t *prov = NULL;
-        for (size_t j = 0; j < n->list.len; j++) {
+        { size_t j = 0; for (; j < n->list.len; j++) {
             ast_node_t *fi = (ast_node_t *)n->list.data[j];
             if (fi->name && !strcmp(fi->name, f->name)) { prov = fi; break; }
-        }
+        } }
         const char *val = prov ? ll_conv(ll, ll_expr(ll, prov->a), fts)
                         : (f->decl && f->decl->a ? ll_conv(ll, ll_expr(ll, f->decl->a), fts)
                                                  : ll_zero(fts));
         const char *r = ll_new_tmp(ll);
         ll_emit(ll, "%s = insertvalue %s %s, %s %s, %d", r, sty, cur, ll_ty(ll, fts), val, idx);
         cur = r; idx++;
-    }
+    } }
     return (llv_t){ idx ? cur : "zeroinitializer", sname };
 }
 
@@ -787,12 +787,12 @@ static llv_t ll_array_lit(ll_t *ll, ast_node_t *n)
     const char *ety = ll_array_elem(ll, ats);
     const char *aty = ll_ty(ll, ats), *lety = ll_ty(ll, ety);
     const char *cur = "zeroinitializer";
-    for (size_t i = 0; i < n->list.len; i++) {
+    { size_t i = 0; for (; i < n->list.len; i++) {
         const char *v = ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[i]), ety);
         const char *r = ll_new_tmp(ll);
         ll_emit(ll, "%s = insertvalue %s %s, %s %s, %zu", r, aty, cur, lety, v, i);
         cur = r;
-    }
+    } }
     return (llv_t){ n->list.len ? cur : "zeroinitializer", ats };
 }
 
@@ -812,13 +812,13 @@ static llv_t ll_lambda_value(ll_t *ll, ast_node_t *n)
     const char *f0 = ll_new_tmp(ll);
     ll_emit(ll, "%s = getelementptr %s, ptr %s, i32 0, i32 0", f0, envty, env);
     ll_emit(ll, "store ptr @%s, ptr %s", name, f0);
-    for (size_t i = 0; i < ncap; i++) {
+    { size_t i = 0; for (; i < ncap; i++) {
         ast_node_t *c = (ast_node_t *)n->captures.data[i];
         llv_t cv = ll_expr(ll, c);
         const char *fp = ll_new_tmp(ll);
         ll_emit(ll, "%s = getelementptr %s, ptr %s, i32 0, i32 %zu", fp, envty, env, i + 1);
         ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, c->type_str), ll_conv(ll, cv, c->type_str), fp);
-    }
+    } }
     return (llv_t){ env, n->type_str };
 }
 

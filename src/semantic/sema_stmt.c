@@ -266,14 +266,14 @@ void sema_check_block(sema_t *s, ast_node_t *block)
     scope_t *sc = scope_new(s->a, SCOPE_BLOCK, s->cur);
     scope_t *saved = s->cur; s->cur = sc;
     LOG_D(s->log, PH_SEMANTIC, "enter block scope (%zu stmts)", block->list.len);
-    for (size_t i = 0; i < block->list.len; i++)
-        check_stmt(s, (ast_node_t *)block->list.data[i]);
+    { size_t i = 0; for (; i < block->list.len; i++)
+        check_stmt(s, (ast_node_t *)block->list.data[i]); }
     
-    for (size_t i = 0; i < sc->symbols.len; i++) {
+    { size_t i = 0; for (; i < sc->symbols.len; i++) {
         symbol_t *v = (symbol_t *)sc->symbols.data[i];
         if (v->kind == SYM_VAR && !v->used && v->decl && v->name && v->name[0] != '_')
             SERR(s, 59, &v->decl->span, "unused variable '%s' (prefix with '_' if intentional)", v->name);
-    }
+    } }
     s->cur = saved;
     LOG_D(s->log, PH_SEMANTIC, "exit block scope");
 }

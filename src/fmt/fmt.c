@@ -17,7 +17,7 @@ void fmt_tokens(const token_stream_t *toks, sb_t *out)
     const token_t *prev = NULL;
     bool     prev_unary = false;
     uint32_t prev_end_line = 0;
-    for (size_t i = 0; i < n; i++) {
+    { size_t i = 0; for (; i < n; i++) {
         const token_t *t = token_stream_at(toks, i);
         token_kind_t   k = t->kind;
         if (k == TK_EOF) break;
@@ -56,7 +56,7 @@ void fmt_tokens(const token_stream_t *toks, sb_t *out)
             
             if (prev != NULL && t->span.begin.line > prev_end_line + 1)
                 sb_putc(out, '\n');
-            for (int s = 0; s < indent * FMT_INDENT_WIDTH; s++) sb_putc(out, ' ');
+            { int s = 0; for (; s < indent * FMT_INDENT_WIDTH; s++) sb_putc(out, ' '); }
         } else if (!no_space_next && fmt_need_space(prev, t, prev_unary)) {
             sb_putc(out, ' ');
         }
@@ -83,7 +83,7 @@ void fmt_tokens(const token_stream_t *toks, sb_t *out)
         if (k == TK_COMMENT_LINE) force_break = true;
         prev = t;
         prev_end_line = t->span.end.line;
-    }
+    } }
     if (line_has_content) sb_putc(out, '\n');       
 }
 

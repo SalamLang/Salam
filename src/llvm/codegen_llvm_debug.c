@@ -12,10 +12,10 @@ static const char *di_escape(ll_t *ll, const char *s)
 {
     if (!s) return "";
     sb_t b; sb_init(&b);
-    for (const char *p = s; *p; p++) {
+    { const char *p = s; for (; *p; p++) {
         if (*p == '\\' || *p == '"') sb_putc(&b, '\\');
         sb_putc(&b, *p);
-    }
+    } }
     const char *r = arena_strdup(ll->a, sb_cstr(&b)); sb_free(&b); return r;
 }
 

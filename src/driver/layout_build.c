@@ -27,8 +27,8 @@ static const char *module_of(arena_t *a, const char *path)
 static const char *dir_of(arena_t *a, const char *path)
 {
     const char *slash = NULL;
-    for (const char *p = path; *p; p++)
-        if (*p == '/' || *p == '\\') slash = p;
+    { const char *p = path; for (; *p; p++)
+        if (*p == '/' || *p == '\\') slash = p; }
     if (!slash) return "";
     return arena_strndup(a, path, (size_t)(slash - path));
 }
@@ -52,10 +52,10 @@ static const char *path_ext(arena_t *a, const char *mod, const char *ext)
 
 static ast_node_t *find_layout(ast_node_t *program)
 {
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (d->kind == AST_LAYOUT_BLOCK) return d;
-    }
+    } }
     return NULL;
 }
 
@@ -72,7 +72,7 @@ int driver_layout_build(options_t *opt)
     const char *modules[SALAM_MAX_INPUTS];
     layout_result_t *results[SALAM_MAX_INPUTS];
     int n = 0;
-    for (int i = 0; i < opt->input_count; i++) {
+    { int i = 0; for (; i < opt->input_count; i++) {
         const char *path = opt->inputs[i];
         source_file_t *src = source_load(arena, path);
         if (!src) { LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"), path); rc = 2; continue; }
@@ -89,11 +89,11 @@ int driver_layout_build(options_t *opt)
         modules[n] = module_of(arena, path);
         results[n] = layout_generate(arena, log, diag, src->path, lb);
         n++;
-    }
+    } }
     if (diag->errors) rc = 1;
     
     sb_t mcss, mjs; sb_init(&mcss); sb_init(&mjs);
-    for (int i = 0; i < n; i++) {
+    { int i = 0; for (; i < n; i++) {
         const char *mod = modules[i];
         layout_result_t *r = results[i];
         const char *html_path = (opt->output && !multi) ? opt->output : path_ext(arena, mod, "html");
@@ -110,7 +110,7 @@ int driver_layout_build(options_t *opt)
             if (css_href) write_file(log, css_href, r->css);
             if (js_href)  write_file(log, js_href, r->js);
         }
-    }
+    } }
     if (multi && !opt->inline_mode) {
         if (mcss.len) write_file(log, "style.css", sb_cstr(&mcss));
         if (mjs.len)  write_file(log, "script.js", sb_cstr(&mjs));

@@ -11,14 +11,14 @@ symbol_t *generic_template(sema_t *s, const char *name, sym_kind_t kind)
 static void g_sanitize(const char *ts, char *out, size_t cap)
 {
     size_t o = 0;
-    for (const char *p = ts; *p && o + 6 < cap; p++) {
+    { const char *p = ts; for (; *p && o + 6 < cap; p++) {
         char c = *p;
         if (c == '*')      { memcpy(out + o, "_ptr", 4); o += 4; }
         else if (c == '[') { memcpy(out + o, "_arr", 4); o += 4; }
         else if (c == '<' || c == ',') out[o++] = '_';
         else if (c == '>' || c == ' ' || c == ']') {  }
         else out[o++] = c;
-    }
+    } }
     out[o] = 0;
 }
 
@@ -28,10 +28,10 @@ static void g_subst(arena_t *a, ast_node_t *n, vec_t *params, vec_t *args)
     g_subst(a, n->type, params, args);
     g_subst(a, n->a, params, args); g_subst(a, n->b, params, args);
     g_subst(a, n->c, params, args); g_subst(a, n->d, params, args);
-    for (size_t i = 0; i < n->list.len; i++) g_subst(a, (ast_node_t *)n->list.data[i], params, args);
-    for (size_t i = 0; i < n->dims.len; i++) g_subst(a, (ast_node_t *)n->dims.data[i], params, args);
+    { size_t i = 0; for (; i < n->list.len; i++) g_subst(a, (ast_node_t *)n->list.data[i], params, args); }
+    { size_t i = 0; for (; i < n->dims.len; i++) g_subst(a, (ast_node_t *)n->dims.data[i], params, args); }
     if (n->kind == AST_TYPE && n->name) {
-        for (size_t i = 0; i < params->len; i++) {
+        { size_t i = 0; for (; i < params->len; i++) {
             if (strcmp(n->name, (const char *)params->data[i]) != 0) continue;
             ast_node_t *cc = ast_clone(a, (const ast_node_t *)args->data[i]);
             bool ptr = n->is_pointer || cc->is_pointer;
@@ -40,11 +40,11 @@ static void g_subst(arena_t *a, ast_node_t *n, vec_t *params, vec_t *args)
             n->is_pointer = ptr;
             n->is_dyn = cc->is_dyn;   
             vec_t merged; vec_init(&merged);
-            for (size_t k = 0; k < cc->dims.len; k++) vec_push(a, &merged, cc->dims.data[k]);
-            for (size_t k = 0; k < n->dims.len; k++)  vec_push(a, &merged, n->dims.data[k]);
+            { size_t k = 0; for (; k < cc->dims.len; k++) vec_push(a, &merged, cc->dims.data[k]); }
+            { size_t k = 0; for (; k < n->dims.len; k++)  vec_push(a, &merged, n->dims.data[k]); }
             n->dims = merged;
             break;
-        }
+        } }
     }
 }
 
@@ -52,11 +52,11 @@ static const char *g_instance_name(sema_t *s, const char *base, vec_t *argtypes)
 {
     char buf[512]; size_t o = 0;
     o += (size_t)snprintf(buf + o, sizeof buf - o, "%s", base);
-    for (size_t i = 0; i < argtypes->len && o < sizeof buf - 130; i++) {
+    { size_t i = 0; for (; i < argtypes->len && o < sizeof buf - 130; i++) {
         char san[128];
         g_sanitize(type_to_string(s->tc, (type_t *)argtypes->data[i]), san, sizeof san);
         o += (size_t)snprintf(buf + o, sizeof buf - o, "_%s", san);
-    }
+    } }
     return arena_strdup(s->a, buf);
 }
 
@@ -102,7 +102,7 @@ static bool iface_satisfied(sema_t *s, type_t *concrete, const char *iface_name,
         return false;
     }
     bool ok = true;
-    for (size_t i = 0; i < iface->members->symbols.len; i++) {
+    { size_t i = 0; for (; i < iface->members->symbols.len; i++) {
         symbol_t *im = (symbol_t *)iface->members->symbols.data[i];
         if (im->kind != SYM_METHOD || im->overloads.len == 0) continue;
         func_sig_t *want = (func_sig_t *)im->overloads.data[0];
@@ -113,32 +113,32 @@ static bool iface_satisfied(sema_t *s, type_t *concrete, const char *iface_name,
             ok = false; continue;
         }
         bool sig_ok = false;
-        for (size_t k = 0; k < sm->overloads.len; k++) {
+        { size_t k = 0; for (; k < sm->overloads.len; k++) {
             func_sig_t *have = (func_sig_t *)sm->overloads.data[k];
             if (have->params.len != want->params.len) continue;
             bool pm = true;
-            for (size_t p = 0; p < want->params.len; p++)
-                if (!type_equiv((type_t *)have->params.data[p], (type_t *)want->params.data[p])) { pm = false; break; }
+            { size_t p = 0; for (; p < want->params.len; p++)
+                if (!type_equiv((type_t *)have->params.data[p], (type_t *)want->params.data[p])) { pm = false; break; } }
             if (pm && type_equiv(have->ret, want->ret)) { sig_ok = true; break; }
-        }
+        } }
         if (!sig_ok) {
             SERR(s, 2, span, "'%s' implements method '%s' with a signature that does not match interface '%s'",
                  type_to_string(s->tc, concrete), im->name, iface_name);
             ok = false;
         }
-    }
+    } }
     return ok;
 }
 
 static void g_check_bounds(sema_t *s, ast_node_t *tmpl, vec_t *argtypes, const src_span_t *span)
 {
-    for (size_t i = 0; i < tmpl->typarams.len && i < argtypes->len; i++) {
+    { size_t i = 0; for (; i < tmpl->typarams.len && i < argtypes->len; i++) {
         const char *bound = i < tmpl->typaram_bounds.len
                           ? (const char *)tmpl->typaram_bounds.data[i] : NULL;
         if (bound)
             iface_satisfied(s, (type_t *)argtypes->data[i], bound,
                             (const char *)tmpl->typarams.data[i], span);
-    }
+    } }
 }
 
 ast_node_t *coerce_to_dyn(sema_t *s, type_t *expected, ast_node_t *expr, type_t *etype)
@@ -156,12 +156,12 @@ ast_node_t *coerce_to_dyn(sema_t *s, type_t *expected, ast_node_t *expr, type_t 
 void coerce_args_to_dyn(sema_t *s, ast_node_t *call, vec_t *argtypes, func_sig_t *sig)
 {
     if (!sig) return;
-    for (size_t i = 0; i < call->list.len && i < sig->params.len && i < argtypes->len; i++) {
+    { size_t i = 0; for (; i < call->list.len && i < sig->params.len && i < argtypes->len; i++) {
         type_t *pt = (type_t *)sig->params.data[i];
         if (pt && pt->kind == TY_DYN)
             call->list.data[i] = coerce_to_dyn(s, pt, (ast_node_t *)call->list.data[i],
                                                (type_t *)argtypes->data[i]);
-    }
+    } }
 }
 symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes, const src_span_t *span)
 {
@@ -171,8 +171,8 @@ symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes, c
         return NULL;
     }
     vec_t argtypes; vec_init(&argtypes);
-    for (size_t i = 0; i < targ_nodes->len; i++)
-        vec_push(s->a, &argtypes, sema_resolve_type(s, (ast_node_t *)targ_nodes->data[i]));
+    { size_t i = 0; for (; i < targ_nodes->len; i++)
+        vec_push(s->a, &argtypes, sema_resolve_type(s, (ast_node_t *)targ_nodes->data[i])); }
     const char *iname = g_instance_name(s, tmpl->name, &argtypes);
     symbol_t *existing = scope_lookup_local(s->global, iname);
     if (existing) return existing;
@@ -194,10 +194,10 @@ symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes, c
     sym->home = s->gen_pkg;
     sym->generic_base = tmpl->name;          
     vec_init(&sym->generic_args);
-    for (size_t i = 0; i < argtypes.len; i++)
-        vec_push(s->a, &sym->generic_args, argtypes.data[i]);
+    { size_t i = 0; for (; i < argtypes.len; i++)
+        vec_push(s->a, &sym->generic_args, argtypes.data[i]); }
     scope_define(s->a, s->global, sym);   
-    for (size_t j = 0; j < inst->list.len; j++) {
+    { size_t j = 0; for (; j < inst->list.len; j++) {
         ast_node_t *m = (ast_node_t *)inst->list.data[j];
         if (m->kind == AST_FIELD) {
             symbol_t *f = symbol_new(s->a, SYM_FIELD, m->name);
@@ -209,7 +209,7 @@ symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes, c
             vec_push(s->a, &mm->overloads, build_sig(s, m, sym));
             mm->type = sym->type;
         }
-    }
+    } }
     vec_push(s->a, &s->pending, inst);   
     return sym;
 }
@@ -222,8 +222,8 @@ static symbol_t *g_instantiate_func(sema_t *s, ast_node_t *tmpl, vec_t *targ_nod
         return NULL;
     }
     vec_t argtypes; vec_init(&argtypes);
-    for (size_t i = 0; i < targ_nodes->len; i++)
-        vec_push(s->a, &argtypes, sema_resolve_type(s, (ast_node_t *)targ_nodes->data[i]));
+    { size_t i = 0; for (; i < targ_nodes->len; i++)
+        vec_push(s->a, &argtypes, sema_resolve_type(s, (ast_node_t *)targ_nodes->data[i])); }
     const char *iname = g_instance_name(s, tmpl->name, &argtypes);
     symbol_t *existing = scope_lookup_local(s->global, iname);
     if (existing) return existing;
@@ -262,11 +262,11 @@ static type_t *g_unify(ast_node_t *pty, type_t *at, const char *T)
         symbol_t *isym = (symbol_t *)at->decl;
         if (isym->generic_base && strcmp(isym->generic_base, pty->name) == 0) {
             size_t k = pty->list.len < isym->generic_args.len ? pty->list.len : isym->generic_args.len;
-            for (size_t i = 0; i < k; i++) {
+            { size_t i = 0; for (; i < k; i++) {
                 type_t *u = g_unify((ast_node_t *)pty->list.data[i],
                                     (type_t *)isym->generic_args.data[i], T);
                 if (u) return u;
-            }
+            } }
         }
     }
     return NULL;
@@ -275,20 +275,20 @@ symbol_t *g_infer_call(sema_t *s, symbol_t *tsym, vec_t *argtypes, const src_spa
 {
     ast_node_t *tmpl = tsym->decl;
     vec_t targ_nodes; vec_init(&targ_nodes);
-    for (size_t t = 0; t < tmpl->typarams.len; t++) {
+    { size_t t = 0; for (; t < tmpl->typarams.len; t++) {
         const char *T = (const char *)tmpl->typarams.data[t];
         type_t *bound = NULL;
-        for (size_t pi = 0; pi < tmpl->list.len && pi < argtypes->len; pi++) {
+        { size_t pi = 0; for (; pi < tmpl->list.len && pi < argtypes->len; pi++) {
             ast_node_t *p = (ast_node_t *)tmpl->list.data[pi];
             if (p->kind != AST_PARAM) continue;
             type_t *u = g_unify(p->type, (type_t *)argtypes->data[pi], T);
             if (u) { bound = u; break; }
-        }
+        } }
         if (!bound) {
             SERR(s, 1, span, "cannot infer type parameter '%s' of generic function '%s'", T, tmpl->name);
             return NULL;
         }
         vec_push(s->a, &targ_nodes, g_type_to_ast(s, bound, span));
-    }
+    } }
     return g_instantiate_func(s, tmpl, &targ_nodes, span);
 }

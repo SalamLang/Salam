@@ -17,7 +17,7 @@ bool ll_is_int(const char *ts)
     if (!ts) return false;
     static const char *ints[] = { "bool","char","i8","i16","i32","i64",
                                   "u8","u16","u32","u64", NULL };
-    for (int i = 0; ints[i]; i++) if (!strcmp(ts, ints[i])) return true;
+    { int i = 0; for (; ints[i]; i++) if (!strcmp(ts, ints[i])) return true; }
     return false;
 }
 
@@ -35,8 +35,8 @@ long ll_array_dim(const char *ts)
     const char *lb = strchr(ts, '[');
     if (!lb) return 0;
     long n = 0;
-    for (const char *p = lb + 1; *p && *p != ']'; p++)
-        if (*p >= '0' && *p <= '9') n = n * 10 + (*p - '0');
+    { const char *p = lb + 1; for (; *p && *p != ']'; p++)
+        if (*p >= '0' && *p <= '9') n = n * 10 + (*p - '0'); }
     return n;
 }
 
@@ -52,15 +52,15 @@ const char *ll_array_elem(ll_t *ll, const char *ts)
 const char *ll_struct_ltype(ll_t *ll, const char *name)
 {
     bool ascii = name && name[0] && !isdigit((unsigned char)name[0]);
-    for (const unsigned char *p = (const unsigned char *)name; ascii && *p; p++)
-        if (!(isalnum(*p) || *p == '_')) ascii = false;
+    { const unsigned char *p = (const unsigned char *)name; for (; ascii && *p; p++)
+        if (!(isalnum(*p) || *p == '_')) ascii = false; }
     if (ascii) return ll_fmt(ll, "%%struct.%s", name);
     sb_t b; sb_init(&b); sb_puts(&b, "%struct.");
     if (name && isdigit((unsigned char)name[0])) sb_putc(&b, '_');
-    for (const unsigned char *p = (const unsigned char *)name; p && *p; p++) {
+    { const unsigned char *p = (const unsigned char *)name; for (; p && *p; p++) {
         if (isalnum(*p) || *p == '_') sb_putc(&b, (char)*p);
         else { char h[5]; snprintf(h, sizeof h, "_%02x", *p); sb_puts(&b, h); }
-    }
+    } }
     const char *r = arena_strdup(ll->a, sb_cstr(&b)); sb_free(&b); return r;
 }
 symbol_t *ll_sym(ll_t *ll, const char *name)
@@ -70,10 +70,10 @@ symbol_t *ll_sym(ll_t *ll, const char *name)
     if (!s && ll->pkg_scope) s = scope_lookup_local(ll->pkg_scope, name);
     
     if (!s)
-        for (size_t i = 0; i < ll->sem->packages.len && !s; i++) {
+        { size_t i = 0; for (; i < ll->sem->packages.len && !s; i++) {
             symbol_t *pk = (symbol_t *)ll->sem->packages.data[i];
             if (pk && pk->members) s = scope_lookup_local(pk->members, name);
-        }
+        } }
     return s;
 }
 symbol_t *ll_struct_sym(ll_t *ll, const char *name)
@@ -90,12 +90,12 @@ symbol_t *ll_enum_sym(ll_t *ll, const char *name)
 int ll_field_index(symbol_t *ssym, const char *field, symbol_t **out_field)
 {
     int idx = 0;
-    for (size_t i = 0; i < ssym->members->symbols.len; i++) {
+    { size_t i = 0; for (; i < ssym->members->symbols.len; i++) {
         symbol_t *f = (symbol_t *)ssym->members->symbols.data[i];
         if (f->kind != SYM_FIELD) continue;
         if (!strcmp(f->name, field)) { if (out_field) *out_field = f; return idx; }
         idx++;
-    }
+    } }
     return -1;
 }
 
@@ -115,7 +115,7 @@ void ll_func_params(ll_t *ll, const char *ts, vec_t *out)
     vec_init(out);
     if (!ts || strncmp(ts, "func(", 5)) return;
     const char *start = ts + 5; int depth = 0;
-    for (const char *p = start; ; p++) {
+    { const char *p = start; for (; ; p++) {
         if (*p == '<' || *p == '(') depth++;
         else if (*p == '>') depth--;
         else if (*p == ')' && depth > 0) depth--;
@@ -127,7 +127,7 @@ void ll_func_params(ll_t *ll, const char *ts, vec_t *out)
             if (*p == ')' || *p == '\0') break;
             start = p + 1;
         }
-    }
+    } }
 }
 
 const char *ll_zero(const char *ts)

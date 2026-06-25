@@ -1,4 +1,5 @@
 #include "core/prelude.h"
+#include "core/numstr.h"
 #include "layout/layout_expand.h"
 #include "core/vec.h"
 #include "core/sb.h"
@@ -43,8 +44,8 @@ static bool is_content_word(const char *n) { return name_eq(n, "content") || nam
 static const char *dir_of(arena_t *a, const char *path)
 {
     const char *slash = NULL;
-    for (const char *p = path; *p; p++)
-        if (*p == '/' || *p == '\\') slash = p;
+    { const char *p = path; for (; *p; p++)
+        if (*p == '/' || *p == '\\') slash = p; }
     if (!slash) return "";
     return arena_strndup(a, path, (size_t)(slash - path));
 }
@@ -67,7 +68,7 @@ static const char *node_text(expand_t *ex, ast_node_t *v)
         char buf[32];
         switch (v->op) {
             case TK_STRING: case TK_TRIPLE_STRING: return v->value.as.s ? v->value.as.s : "";
-            case TK_INT:    snprintf(buf, sizeof(buf), "%llu", (unsigned long long)v->value.as.i);
+            case TK_INT:    sal_u64toa((uint64_t)v->value.as.i, buf);
                             return arena_strdup(ex->a, buf);
             case TK_FLOAT:  snprintf(buf, sizeof(buf), "%g", v->value.as.f);
                             return arena_strdup(ex->a, buf);
@@ -83,19 +84,19 @@ static ast_node_t *frame_lookup(frame_t *f, const char *name, bool *found)
 {
     *found = false;
     if (!f) return NULL;
-    for (size_t i = 0; i < f->names.len; i++)
+    { size_t i = 0; for (; i < f->names.len; i++)
         if (name_eq((const char *)f->names.data[i], name)) {
             *found = true;
             return (ast_node_t *)f->vals.data[i];
-        }
+        } }
     return NULL;
 }
 
 static void frame_set(expand_t *ex, frame_t *f, const char *name, ast_node_t *val)
 {
-    for (size_t i = 0; i < f->names.len; i++)
-        if (name_eq((const char *)f->names.data[i], name)) { f->vals.data[i] = val; return; }
-    vec_push(ex->a, &f->names, (void *)name);
+    { size_t i = 0; for (; i < f->names.len; i++)
+        if (name_eq((const char *)f->names.data[i], name)) { f->vals.data[i] = val; return; } }
+    vec_push(ex->a, &f->names, CONST_CAST(name));
     vec_push(ex->a, &f->vals, val);
 }
 
@@ -104,7 +105,7 @@ static const char *interpolate(expand_t *ex, const char *s, frame_t *frame)
     if (!frame || !s || !strchr(s, '{')) return s;
     sb_t out; sb_init(&out);
     bool changed = false;
-    for (const char *p = s; *p; ) {
+    { const char *p = s; for (; *p; ) {
         if (*p == '{') {
             const char *close = strchr(p, '}');
             if (close) {
@@ -122,7 +123,7 @@ static const char *interpolate(expand_t *ex, const char *s, frame_t *frame)
         }
         sb_putc(&out, *p);
         p++;
-    }
+    } }
     const char *r = changed ? arena_strdup(ex->a, sb_cstr(&out)) : s;
     sb_free(&out);
     return r;
@@ -146,27 +147,27 @@ static ast_node_t *subst_value(expand_t *ex, ast_node_t *v, frame_t *frame)
 
 static comp_t *find_comp(expand_t *ex, const char *name)
 {
-    for (size_t i = 0; i < ex->comps.len; i++) {
+    { size_t i = 0; for (; i < ex->comps.len; i++) {
         comp_t *c = (comp_t *)ex->comps.data[i];
         if (name_eq(c->name, name)) return c;
-    }
+    } }
     return NULL;
 }
 
 static bool body_has_content_sink(ast_node_t *node)
 {
-    for (size_t i = 0; i < node->list.len; i++) {
+    { size_t i = 0; for (; i < node->list.len; i++) {
         ast_node_t *c = (ast_node_t *)node->list.data[i];
         if (c->kind != AST_LAYOUT_ELEMENT) continue;
         if (is_content_word(c->name)) return true;
         if (body_has_content_sink(c)) return true;
-    }
+    } }
     return false;
 }
 
 static void register_components(expand_t *ex, ast_node_t *program, const char *dir)
 {
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (d->kind != AST_LAYOUT_COMPONENT) continue;
         if (find_comp(ex, d->name)) {
@@ -174,42 +175,42 @@ static void register_components(expand_t *ex, ast_node_t *program, const char *d
             continue;
         }
         
-        for (size_t j = 0; j < d->list.len; j++) {
+        { size_t j = 0; for (; j < d->list.len; j++) {
             ast_node_t *p = (ast_node_t *)d->list.data[j];
             if (p->kind == AST_PARAM && is_content_word(p->name))
                 EXERR(ex, "component '%s': 'content' is reserved and cannot be a parameter", d->name);
-        }
+        } }
         comp_t *c = (comp_t *)arena_alloc(ex->a, sizeof(*c));
         c->name = d->name; c->def = d; c->dir = dir;
         c->mother = d->a ? body_has_content_sink(d->a) : false;
         vec_push(ex->a, &ex->comps, c);
         LOG_D(ex->log, PH_DRIVER, "registered component '%s' (%s)",
               d->name, c->mother ? "mother" : "single");
-    }
+    } }
 }
 
 static ast_node_t *find_layout_block(ast_node_t *program)
 {
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (d->kind == AST_LAYOUT_BLOCK) return d;
-    }
+    } }
     return NULL;
 }
 
 static bool has_component_def(ast_node_t *program)
 {
-    for (size_t i = 0; i < program->list.len; i++)
-        if (((ast_node_t *)program->list.data[i])->kind == AST_LAYOUT_COMPONENT) return true;
+    { size_t i = 0; for (; i < program->list.len; i++)
+        if (((ast_node_t *)program->list.data[i])->kind == AST_LAYOUT_COMPONENT) return true; }
     return false;
 }
 
 static loaded_t *find_loaded(expand_t *ex, const char *path)
 {
-    for (size_t i = 0; i < ex->loaded.len; i++) {
+    { size_t i = 0; for (; i < ex->loaded.len; i++) {
         loaded_t *l = (loaded_t *)ex->loaded.data[i];
         if (name_eq(l->path, path)) return l;
-    }
+    } }
     return NULL;
 }
 
@@ -238,17 +239,17 @@ static void scan_includes(expand_t *ex, ast_node_t *container, const char *dir, 
 static void collect(expand_t *ex, ast_node_t *program, const char *dir, int depth)
 {
     register_components(ex, program, dir);
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (d->kind == AST_LAYOUT_BLOCK)          scan_includes(ex, d, dir, depth);
         else if (d->kind == AST_LAYOUT_COMPONENT) scan_includes(ex, d->a, dir, depth);
-    }
+    } }
 }
 
 static void scan_includes(expand_t *ex, ast_node_t *container, const char *dir, int depth)
 {
     if (!container || depth > LX_EXPAND_MAX_DEPTH) return;
-    for (size_t i = 0; i < container->list.len; i++) {
+    { size_t i = 0; for (; i < container->list.len; i++) {
         ast_node_t *item = (ast_node_t *)container->list.data[i];
         if (item->kind == AST_LAYOUT_ATTR && is_include_attr(item->name)) {
             const char *spec = (item->a && item->a->kind == AST_LITERAL &&
@@ -262,7 +263,7 @@ static void scan_includes(expand_t *ex, ast_node_t *container, const char *dir, 
         } else if (item->kind == AST_LAYOUT_ELEMENT) {
             scan_includes(ex, item, dir, depth);
         }
-    }
+    } }
 }
 
 static void expand_items(expand_t *ex, vec_t *out, ast_node_t *container,
@@ -278,14 +279,14 @@ static void expand_component(expand_t *ex, vec_t *out, ast_node_t *invocation,
     }
     frame_t fr; vec_init(&fr.names); vec_init(&fr.vals); vec_init(&fr.content);
     
-    for (size_t i = 0; i < comp->def->list.len; i++) {
+    { size_t i = 0; for (; i < comp->def->list.len; i++) {
         ast_node_t *param = (ast_node_t *)comp->def->list.data[i];
         if (param->kind == AST_PARAM)
             frame_set(ex, &fr, param->name, param->a);   
-    }
+    } }
     
     bool got_content = false;
-    for (size_t i = 0; i < invocation->list.len; i++) {
+    { size_t i = 0; for (; i < invocation->list.len; i++) {
         ast_node_t *a = (ast_node_t *)invocation->list.data[i];
         if (a->kind == AST_LAYOUT_ATTR) {
             if (is_content_word(a->name)) {
@@ -302,7 +303,7 @@ static void expand_component(expand_t *ex, vec_t *out, ast_node_t *invocation,
             expand_item(ex, &fr.content, a, caller, dir, depth);
             if (fr.content.len > before) got_content = true;
         }
-    }
+    } }
     if (!comp->mother && got_content)
         EXERR(ex, "component '%s' does not accept content (it has no `content:` placeholder)",
               comp->name);
@@ -345,8 +346,8 @@ static void expand_item(expand_t *ex, vec_t *out, ast_node_t *item,
         
         if (frame && is_content_word(item->name)) {
             if (frame->content.len)
-                for (size_t i = 0; i < frame->content.len; i++)
-                    vec_push(ex->a, out, frame->content.data[i]);
+                { size_t i = 0; for (; i < frame->content.len; i++)
+                    vec_push(ex->a, out, frame->content.data[i]); }
             else
                 expand_items(ex, out, item, frame, dir, depth);
             return;
@@ -354,8 +355,8 @@ static void expand_item(expand_t *ex, vec_t *out, ast_node_t *item,
         
         ast_node_t *el = ast_new(ex->a, AST_LAYOUT_ELEMENT, &item->span);
         el->name = item->name;
-        for (size_t i = 0; i < item->aliases.len; i++)
-            vec_push(ex->a, &el->aliases, item->aliases.data[i]);
+        { size_t i = 0; for (; i < item->aliases.len; i++)
+            vec_push(ex->a, &el->aliases, item->aliases.data[i]); }
         expand_items(ex, &el->list, item, frame, dir, depth);
         vec_push(ex->a, out, el);
         return;
@@ -371,8 +372,8 @@ static void expand_items(expand_t *ex, vec_t *out, ast_node_t *container,
         EXERR(ex, "layout include/component nesting too deep");
         return;
     }
-    for (size_t i = 0; i < container->list.len; i++)
-        expand_item(ex, out, (ast_node_t *)container->list.data[i], frame, dir, depth);
+    { size_t i = 0; for (; i < container->list.len; i++)
+        expand_item(ex, out, (ast_node_t *)container->list.data[i], frame, dir, depth); }
 }
 size_t layout_expand(arena_t *a, logger_t *log, const langpack_t *pack,
                      ast_node_t *program, const char *base_dir)

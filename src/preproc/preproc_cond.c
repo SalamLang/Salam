@@ -5,17 +5,17 @@ const char *pp_skip_ws(const char *p) { while (*p == ' ' || *p == '\t') p++; ret
 
 static bool pp_defined(const char *const *defs, int n, const char *name, size_t len)
 {
-    for (int i = 0; i < n; i++)
-        if (strlen(defs[i]) == len && strncmp(defs[i], name, len) == 0) return true;
+    { int i = 0; for (; i < n; i++)
+        if (strlen(defs[i]) == len && strncmp(defs[i], name, len) == 0) return true; }
     return false;
 }
 
 static const char *pp_get_value(const char *const *defs, int n,
                                 const char *name, size_t namelen)
 {
-    for (int i = 0; i < n; i++)
+    { int i = 0; for (; i < n; i++)
         if (strncmp(defs[i], name, namelen) == 0 && defs[i][namelen] == '=')
-            return defs[i] + namelen + 1;
+            return defs[i] + namelen + 1; }
     return NULL;
 }
 

@@ -1,5 +1,6 @@
 #ifndef SALAM_AST_AST_H
 #define SALAM_AST_AST_H
+
 #include "core/prelude.h"
 #include "core/arena.h"
 #include "core/vec.h"
@@ -29,7 +30,9 @@ typedef enum {
     AST_LAYOUT_COMPONENT, /* named layout fragment; name; list=params; a=body block */
     AST__COUNT
 } ast_kind_t;
+
 typedef struct ast_node ast_node_t;
+
 struct ast_node {
     ast_kind_t    kind;
     src_span_t    span;
@@ -59,9 +62,15 @@ struct ast_node {
                                * nodes carrying name + resolved type_str) */
     const char   *type_str;   /* resolved type name, filled by semantic phase */
 };
+
 ast_node_t *ast_new(arena_t *a, ast_kind_t kind, const src_span_t *span);
+
 void        ast_add(arena_t *a, ast_node_t *parent, ast_node_t *child);
+
 const char *ast_kind_name(ast_kind_t kind);
+
 ast_node_t *ast_clone(arena_t *a, const ast_node_t *n);
+
 void ast_to_xml(xml_writer_t *w, const ast_node_t *node);
+
 #endif /* SALAM_AST_AST_H */

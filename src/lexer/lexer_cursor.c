@@ -52,7 +52,7 @@ int lx_take_digit(lx_t *L)
     int val;
     int len = lx_decimal_digit(L->s + L->pos, L->n - L->pos, &val);
     if (len == 0) return -1;
-    for (int i = 0; i < len; i++) lx_adv(L);
+    { int i = 0; for (; i < len; i++) lx_adv(L); }
     return val;
 }
 

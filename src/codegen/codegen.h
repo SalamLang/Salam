@@ -1,18 +1,23 @@
 #ifndef SALAM_CODEGEN_CODEGEN_H
 #define SALAM_CODEGEN_CODEGEN_H
+
 #include "core/prelude.h"
 #include "core/arena.h"
 #include "logger/logger.h"
 #include "ast/ast.h"
 #include "semantic/sema.h"
+
 #define SALAM_MOD_PREFIX "salam_mod_"
+
 typedef struct {
     const char *module;   /* module name (from file stem) */
     const char *h_src;    /* generated header  */
     const char *c_src;    /* generated source  */
 } codegen_output_t;
+
 codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
                               sema_result_t *sem, const char *module, bool safe,
                               bool debug_info, const char *src_path,
                               const char *entry);
+
 #endif /* SALAM_CODEGEN_CODEGEN_H */

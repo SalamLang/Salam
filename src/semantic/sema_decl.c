@@ -13,13 +13,13 @@ func_sig_t *build_sig(sema_t *s, ast_node_t *fn, symbol_t *owner)
     sig->owner = owner;
     sig->variadic = fn->is_variadic;
     size_t required = 0; bool seen_default = false;
-    for (size_t i = 0; i < fn->list.len; i++) {
+    { size_t i = 0; for (; i < fn->list.len; i++) {
         ast_node_t *param = (ast_node_t *)fn->list.data[i];
         type_t *pt = sema_resolve_type(s, param->type);
         vec_push(s->a, &sig->params, pt);
         if (param->a) seen_default = true;
         else if (!seen_default) required++;
-    }
+    } }
     sig->required = required;
     sig->mangled = mangle_func(s->a, owner ? owner->name : NULL, fn->name, &sig->params);
     return sig;
@@ -61,7 +61,7 @@ static void check_link(sema_t *s, ast_node_t *d)
 void sema_collect(sema_t *s, ast_node_t *program)
 {
     
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (d->synthetic) continue;   
         if (d->kind == AST_STRUCT_DEF) {
@@ -105,9 +105,9 @@ void sema_collect(sema_t *s, ast_node_t *program)
             if (scope_define(s->a, s->global, sym))
                 SERR(s, 1, &d->span, "redefinition of '%s'", d->name);
         }
-    }
+    } }
     
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (d->synthetic) continue;   
         switch (d->kind) {
@@ -122,7 +122,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
                     SERR(s, 58, &d->span, "empty struct '%s' (declare at least one field or method)", d->name);
                 if (d->typarams.len > 0) break;   
                 symbol_t *sym = scope_lookup_local(s->global, d->name);
-                for (size_t j = 0; j < d->list.len; j++) {
+                { size_t j = 0; for (; j < d->list.len; j++) {
                     ast_node_t *m = (ast_node_t *)d->list.data[j];
                     if (m->kind == AST_FIELD) {
                         symbol_t *f = symbol_new(s->a, SYM_FIELD, m->name);
@@ -141,7 +141,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
                         vec_push(s->a, &mm->overloads, build_sig(s, m, sym));
                         mm->type = sym->type;   
                     }
-                }
+                } }
                 break;
             }
             case AST_INTERFACE_DEF: {
@@ -149,13 +149,13 @@ void sema_collect(sema_t *s, ast_node_t *program)
                     SERR(s, 58, &d->span, "empty interface '%s' (declare at least one method)", d->name);
                 symbol_t *sym = scope_lookup_local(s->global, d->name);
                 if (!sym) break;
-                for (size_t j = 0; j < d->list.len; j++) {
+                { size_t j = 0; for (; j < d->list.len; j++) {
                     ast_node_t *m = (ast_node_t *)d->list.data[j];
                     if (m->kind != AST_FUNC_DEF) continue;
                     symbol_t *mm = get_or_make_func(s, sym->members, m->name, SYM_METHOD);
                     if (!mm->decl) mm->decl = m;
                     vec_push(s->a, &mm->overloads, build_sig(s, m, sym));
-                }
+                } }
                 break;
             }
             case AST_IMPL_DEF: {
@@ -176,14 +176,14 @@ void sema_collect(sema_t *s, ast_node_t *program)
                 symbol_t *iface = scope_lookup(s->global, d->name);
                 if (!iface || iface->kind != SYM_INTERFACE)
                     SERR(s, 1, &d->span, "'%s' in `impl ... for ...` is not an interface", d->name);
-                for (size_t j = 0; j < d->list.len; j++) {
+                { size_t j = 0; for (; j < d->list.len; j++) {
                     ast_node_t *m = (ast_node_t *)d->list.data[j];
                     if (m->kind != AST_FUNC_DEF) continue;
                     symbol_t *mm = get_or_make_func(s, owner->members, m->name, SYM_METHOD);
                     if (!mm->decl) mm->decl = m;
                     vec_push(s->a, &mm->overloads, build_sig(s, m, owner));
                     mm->type = owner->type;
-                }
+                } }
                 break;
             }
             case AST_ENUM_DEF: {
@@ -191,7 +191,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
                     SERR(s, 58, &d->span, "empty enum '%s' (declare at least one member)", d->name);
                 symbol_t *sym = scope_lookup_local(s->global, d->name);
                 long long next = 0;
-                for (size_t j = 0; j < d->list.len; j++) {
+                { size_t j = 0; for (; j < d->list.len; j++) {
                     ast_node_t *m = (ast_node_t *)d->list.data[j];
                     symbol_t *em = symbol_new(s->a, SYM_ENUM_MEMBER, m->name);
                     if (m->a && m->a->kind == AST_LITERAL && m->a->value.kind == TV_INT)
@@ -200,7 +200,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
                     em->type = sym->type;
                     if (scope_define(s->a, sym->members, em))
                         SERR(s, 1, &m->span, "duplicate enum member '%s'", m->name);
-                }
+                } }
                 break;
             }
             case AST_FUNC_DEF: {
@@ -228,15 +228,15 @@ void sema_collect(sema_t *s, ast_node_t *program)
             }
             default: break;
         }
-    }
+    } }
 }
 
 static func_sig_t *find_sig(symbol_t *fsym, ast_node_t *decl)
 {
-    for (size_t i = 0; i < fsym->overloads.len; i++) {
+    { size_t i = 0; for (; i < fsym->overloads.len; i++) {
         func_sig_t *sig = (func_sig_t *)fsym->overloads.data[i];
         if (sig->decl == decl) return sig;
-    }
+    } }
     return NULL;
 }
 
@@ -263,7 +263,7 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
     } else {
         s->self_type = NULL;
     }
-    for (size_t i = 0; i < fn->list.len; i++) {
+    { size_t i = 0; for (; i < fn->list.len; i++) {
         ast_node_t *param = (ast_node_t *)fn->list.data[i];
         symbol_t *ps = symbol_new(s->a, SYM_PARAM, param->name);
         
@@ -275,7 +275,7 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
         ps->decl = param;
         if (scope_define(s->a, sc, ps))
             SERR(s, 1, &param->span, "duplicate parameter '%s'", param->name);
-    }
+    } }
     LOG_D(s->log, PH_SEMANTIC, "enter function '%s'%s", fn->name, owner ? i18n_tr(" (method)") : "");
     
     if (fn->a && fn->a->kind == AST_BLOCK && fn->a->list.len == 0)
@@ -284,12 +284,12 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
     LOG_D(s->log, PH_SEMANTIC, "exit function '%s'", fn->name);
     
     if (fn->a) {
-        for (size_t i = 0; i < sc->symbols.len; i++) {
+        { size_t i = 0; for (; i < sc->symbols.len; i++) {
             symbol_t *p = (symbol_t *)sc->symbols.data[i];
             if (p->kind == SYM_PARAM && !p->used && p->decl &&
                 p->name && p->name[0] != '_' && strcmp(p->name, "this") != 0)
                 SERR(s, 62, &p->decl->span, "unused parameter '%s' (prefix with '_' if intentional)", p->name);
-        }
+        } }
     }
     s->cur = saved; s->self_type = saved_self; s->cur_func = saved_func;
 }
@@ -305,7 +305,7 @@ static void check_toplevel(sema_t *s, ast_node_t *d)
         case AST_STRUCT_DEF: {
             symbol_t *ssym = scope_lookup_local(s->global, d->name);
             if (!ssym) break;
-            for (size_t j = 0; j < d->list.len; j++) {
+            { size_t j = 0; for (; j < d->list.len; j++) {
                 ast_node_t *m = (ast_node_t *)d->list.data[j];
                 if (m->kind == AST_FUNC_DEF) {
                     symbol_t *msym = scope_lookup_local(ssym->members, m->name);
@@ -325,7 +325,7 @@ static void check_toplevel(sema_t *s, ast_node_t *d)
                         SERR(s, 2, &m->span, "default for field '%s': cannot assign '%s' to '%s'",
                              m->name, type_to_string(s->tc, vt), type_to_string(s->tc, f->type));
                 }
-            }
+            } }
             break;
         }
         case AST_IMPL_DEF: {
@@ -333,12 +333,12 @@ static void check_toplevel(sema_t *s, ast_node_t *d)
             if (!tt) break;
             symbol_t *owner = scope_lookup_local(s->global, impl_owner_key(s->a, type_to_string(s->tc, tt)));
             if (!owner) break;
-            for (size_t j = 0; j < d->list.len; j++) {
+            { size_t j = 0; for (; j < d->list.len; j++) {
                 ast_node_t *m = (ast_node_t *)d->list.data[j];
                 if (m->kind != AST_FUNC_DEF) continue;
                 symbol_t *msym = scope_lookup_local(owner->members, m->name);
                 check_function(s, m, owner, find_sig(msym, m));
-            }
+            } }
             break;
         }
         case AST_VAR_DECL:
@@ -357,12 +357,12 @@ static void check_toplevel(sema_t *s, ast_node_t *d)
 
 void sema_check_pass(sema_t *s, ast_node_t *program)
 {
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (d->synthetic || d->typarams.len > 0) continue;  
         check_toplevel(s, d);
-    }
+    } }
     
-    for (size_t i = 0; i < s->pending.len; i++)
-        check_toplevel(s, (ast_node_t *)s->pending.data[i]);
+    { size_t i = 0; for (; i < s->pending.len; i++)
+        check_toplevel(s, (ast_node_t *)s->pending.data[i]); }
 }

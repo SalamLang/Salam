@@ -1,5 +1,6 @@
 
 #include "codegen/print_fmt.h"
+#include "core/numstr.h"
 #include "core/sb.h"
 #include "token/token.h"
 
@@ -10,7 +11,7 @@ static bool ts_is_int(const char *ts)
     if (!ts) return true;   
     static const char *k[] = { "i8","i16","i32","i64","int",
                                "u8","u16","u32","u64","uint", 0 };
-    for (int i = 0; k[i]; i++) if (!strcmp(ts, k[i])) return true;
+    { int i = 0; for (; k[i]; i++) if (!strcmp(ts, k[i])) return true; }
     return false;
 }
 
@@ -132,8 +133,8 @@ static bool pf_try_fold(ast_node_t *arg, sb_t *sb)
         long long v;
         if (fold_int(arg, &v)) {
             char b[32];
-            if (ts_is_unsigned(ts)) snprintf(b, sizeof b, "%llu", (unsigned long long)v);
-            else                    snprintf(b, sizeof b, "%lld", v);
+            if (ts_is_unsigned(ts)) sal_u64toa((uint64_t)v, b);
+            else                    sal_i64toa((int64_t)v, b);
             sb_puts(sb, b);
             return true;
         }
@@ -155,7 +156,7 @@ static void push_lit(arena_t *a, vec_t *out, sb_t *lit)
 void pf_build(arena_t *a, ast_node_t *call, bool nl, vec_t *out)
 {
     sb_t lit; sb_init(&lit);
-    for (size_t i = 0; i < call->list.len; i++) {
+    { size_t i = 0; for (; i < call->list.len; i++) {
         ast_node_t *arg = (ast_node_t *)call->list.data[i];
         if (i) sb_putc(&lit, ' ');                 
         if (pf_try_fold(arg, &lit)) continue;      
@@ -165,7 +166,7 @@ void pf_build(arena_t *a, ast_node_t *call, bool nl, vec_t *out)
         s->text = NULL;
         s->expr = arg;
         vec_push(a, out, s);
-    }
+    } }
     if (nl) sb_putc(&lit, '\n');
     push_lit(a, out, &lit);
     sb_free(&lit);

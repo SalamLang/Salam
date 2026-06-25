@@ -80,9 +80,14 @@ int driver_llvm(options_t *opt)
                                                entry, &o, src->path);
     
     bool ir_mode = (o.output_mode == LLVM_OUT_IR);
-    const char *llpath = ir_mode && opt->output ? opt->output
-                       : (char *)arena_alloc(arena, strlen(module) + 4);
-    if (!(ir_mode && opt->output)) sprintf((char *)llpath, "%s.ll", module);
+    const char *llpath;
+    if (ir_mode && opt->output) {
+        llpath = opt->output;
+    } else {
+        char *buf = (char *)arena_alloc(arena, strlen(module) + 4);
+        sprintf(buf, "%s.ll", module);
+        llpath = buf;
+    }
     FILE *f = fopen(llpath, "wb");
     if (!f) { LOG_E(log, PH_DRIVER, i18n_tr("cannot write '%s'"), llpath);
               logger_free(log); arena_free(arena); return 2; }

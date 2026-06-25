@@ -13,34 +13,34 @@ func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,
     func_sig_t *match = NULL;
     size_t nmatch = 0;
     
-    for (size_t i = 0; i < fsym->overloads.len; i++) {
+    { size_t i = 0; for (; i < fsym->overloads.len; i++) {
         func_sig_t *sig = (func_sig_t *)fsym->overloads.data[i];
         if (argtypes->len < sig->required) continue;
         if (!sig->variadic && argtypes->len > sig->params.len) continue;
         size_t nfix = argtypes->len < sig->params.len ? argtypes->len : sig->params.len;
         bool ok = true;
-        for (size_t j = 0; j < nfix; j++) {
+        { size_t j = 0; for (; j < nfix; j++) {
             if (!type_equiv((type_t *)sig->params.data[j], (type_t *)argtypes->data[j])) { ok = false; break; }
-        }
+        } }
         if (ok) { match = sig; nmatch++; }
-    }
+    } }
     if (nmatch == 1) return match;
     if (nmatch > 1) {
         SERR(s, 12, span, "ambiguous call to '%s' (%zu candidates)", what, nmatch);
         return NULL;
     }
     
-    for (size_t i = 0; i < fsym->overloads.len; i++) {
+    { size_t i = 0; for (; i < fsym->overloads.len; i++) {
         func_sig_t *sig = (func_sig_t *)fsym->overloads.data[i];
         if (argtypes->len < sig->required) continue;
         if (!sig->variadic && argtypes->len > sig->params.len) continue;
         size_t nfix = argtypes->len < sig->params.len ? argtypes->len : sig->params.len;
         bool ok = true;
-        for (size_t j = 0; j < nfix; j++) {
+        { size_t j = 0; for (; j < nfix; j++) {
             if (!type_assignable((type_t *)sig->params.data[j], (type_t *)argtypes->data[j])) { ok = false; break; }
-        }
+        } }
         if (ok) { match = sig; nmatch++; }
-    }
+    } }
     if (nmatch == 1) return match;
     if (nmatch == 0)
         SERR(s, 12, span, "no matching overload for '%s' with %zu argument(s)", what, argtypes->len);
@@ -78,10 +78,10 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             return decorate(s, n, ty(s, TY_I64));
         }
         bool ok = false;
-        for (size_t i = 0; i < fsym->overloads.len; i++) {
+        { size_t i = 0; for (; i < fsym->overloads.len; i++) {
             func_sig_t *sig = (func_sig_t *)fsym->overloads.data[i];
             if (sig->params.len == 0 && sig->ret && sig->ret->kind == TY_VOID) ok = true;
-        }
+        } }
         if (!ok) SERR(s, 12, &n->span, "spawn requires a function taking no arguments and returning nothing");
         decorate(s, fn, ty(s, TY_VOID));
         decorate(s, callee, ty(s, TY_VOID));
@@ -128,8 +128,8 @@ type_t *check_call(sema_t *s, ast_node_t *n)
     }
     
     vec_t argtypes; vec_init(&argtypes);
-    for (size_t i = 0; i < n->list.len; i++)
-        vec_push(s->a, &argtypes, sema_check_expr(s, (ast_node_t *)n->list.data[i]));
+    { size_t i = 0; for (; i < n->list.len; i++)
+        vec_push(s->a, &argtypes, sema_check_expr(s, (ast_node_t *)n->list.data[i])); }
     
     {
         type_t *ft = NULL;
@@ -149,11 +149,11 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             if (argtypes.len != ft->params.len)
                 SERR(s, 12, &n->span, "function value takes %zu argument(s), got %zu",
                      ft->params.len, argtypes.len);
-            else for (size_t i = 0; i < argtypes.len; i++)
+            else { size_t i = 0; for (; i < argtypes.len; i++)
                 if (!type_assignable((type_t *)ft->params.data[i], (type_t *)argtypes.data[i]))
                     SERR(s, 2, &n->span, "argument %zu: cannot pass '%s' to '%s'", i + 1,
                          type_to_string(s->tc, (type_t *)argtypes.data[i]),
-                         type_to_string(s->tc, (type_t *)ft->params.data[i]));
+                         type_to_string(s->tc, (type_t *)ft->params.data[i])); }
             return decorate(s, n, ft->elem);
         }
     }
@@ -232,10 +232,10 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                 
                 if (strcmp(b->arg, "*") != 0) {
                     int ak = type_prim_kind_from_name(b->arg);
-                    for (size_t i = 0; i < argtypes.len; i++)
+                    { size_t i = 0; for (; i < argtypes.len; i++)
                         if (!type_assignable(ty(s, (type_kind_t)ak), (type_t *)argtypes.data[i]))
                             SERR(s, 2, &n->span, "builtin '%s' expects '%s', got '%s'",
-                                 nm, b->arg, type_to_string(s->tc, (type_t *)argtypes.data[i]));
+                                 nm, b->arg, type_to_string(s->tc, (type_t *)argtypes.data[i])); }
                 }
                 decorate(s, callee, ty(s, TY_VOID));
                 return decorate(s, n, ty(s, (type_kind_t)type_prim_kind_from_name(b->ret)));
@@ -418,11 +418,11 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             if (argtypes.len != ft->params.len)
                 SERR(s, 12, &n->span, "function value takes %zu argument(s), got %zu",
                      ft->params.len, argtypes.len);
-            else for (size_t i = 0; i < argtypes.len; i++)
+            else { size_t i = 0; for (; i < argtypes.len; i++)
                 if (!type_assignable((type_t *)ft->params.data[i], (type_t *)argtypes.data[i]))
                     SERR(s, 2, &n->span, "argument %zu: cannot pass '%s' to '%s'", i + 1,
                          type_to_string(s->tc, (type_t *)argtypes.data[i]),
-                         type_to_string(s->tc, (type_t *)ft->params.data[i]));
+                         type_to_string(s->tc, (type_t *)ft->params.data[i])); }
             return decorate(s, n, ft->elem);
         }
         if (!m || m->kind != SYM_METHOD) {

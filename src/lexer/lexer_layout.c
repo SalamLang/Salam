@@ -95,7 +95,7 @@ static bool layout_try_end_inline(lx_t *L, const src_pos_t *b)
         }
     }
     if (!matched_kw) return false;
-    for (size_t i = 0; i < matched_len; i++) lx_adv(L);
+    { size_t i = 0; for (; i < matched_len; i++) lx_adv(L); }
     lx_emit(L, TK_KW_END, b, matched_kw);
     layout_close_block(L);
     return true;

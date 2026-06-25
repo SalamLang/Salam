@@ -3,6 +3,7 @@
 #include "logger/logger_internal.h"
 #include "diag/diag_render.h"
 #include "i18n/i18n.h"
+#include "core/sal_format.h"
 #include <time.h>
 
 static const char *const k_level_colors[] = {
@@ -30,7 +31,7 @@ static void logger_emit_rich(logger_t *lg, log_level_t level,
                              const char *fmt, va_list ap)
 {
     char msg_buf[640];
-    vsnprintf(msg_buf, sizeof(msg_buf), fmt, ap);
+    sal_vsnprintf(msg_buf, sizeof(msg_buf), fmt, ap);
     
     int         code     = 0;
     bool        is_error = (level == LOG_ERROR);
@@ -71,7 +72,7 @@ static void logger_emit_plain(logger_t *lg, phase_t phase, log_level_t level,
                 i18n_tr(log_phase_name(phase)), i18n_tr(log_level_name(level)));
     }
     
-    vfprintf(lg->sink, i18n_tr(fmt), ap);
+    sal_vfprintf(lg->sink, i18n_tr(fmt), ap);
     if (file && span) {
         fprintf(lg->sink, " (%s:%u:%u)", file, span->begin.line, span->begin.col);
     }

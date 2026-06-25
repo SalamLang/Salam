@@ -20,15 +20,15 @@ const char *cg_cident(cg_t *cg, const char *name)
 {
     if (!name || !name[0]) return "_";
     bool ok = !isdigit((unsigned char)name[0]);
-    for (const unsigned char *p = (const unsigned char *)name; ok && *p; p++)
-        if (!(isalnum(*p) || *p == '_')) ok = false;
+    { const unsigned char *p = (const unsigned char *)name; for (; ok && *p; p++)
+        if (!(isalnum(*p) || *p == '_')) ok = false; }
     if (ok) return name;
     sb_t b; sb_init(&b);
     if (isdigit((unsigned char)name[0])) sb_putc(&b, '_');
-    for (const unsigned char *p = (const unsigned char *)name; *p; p++) {
+    { const unsigned char *p = (const unsigned char *)name; for (; *p; p++) {
         if (isalnum(*p) || *p == '_') sb_putc(&b, (char)*p);
         else { char h[5]; snprintf(h, sizeof(h), "_%02x", *p); sb_puts(&b, h); }
-    }
+    } }
     const char *r = arena_strdup(cg->a, sb_cstr(&b)); sb_free(&b); return r;
 }
 
@@ -40,8 +40,8 @@ static const char *base_ctype(const char *base)
         {"u8","uint8_t"},{"u16","uint16_t"},{"u32","uint32_t"},{"u64","uint64_t"},
         {"f32","float"},{"f64","double"},{"File","salam_file"},
     };
-    for (size_t i = 0; i < sizeof(m)/sizeof(m[0]); i++)
-        if (strcmp(base, m[i].s) == 0) return m[i].c;
+    { size_t i = 0; for (; i < sizeof(m)/sizeof(m[0]); i++)
+        if (strcmp(base, m[i].s) == 0) return m[i].c; }
     return base;   
 }
 
@@ -61,7 +61,7 @@ void parse_typestr(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dim
             const char *rb = strchr(p, ']');
             if (!rb) break;
             size_t n = 0;
-            for (const char *q = p + 1; q < rb; q++) if (*q >= '0' && *q <= '9') n = n*10 + (size_t)(*q - '0');
+            { const char *q = p + 1; for (; q < rb; q++) if (*q >= '0' && *q <= '9') n = n*10 + (size_t)(*q - '0'); }
             size_t *slot = (size_t *)arena_alloc(a, sizeof(size_t));
             *slot = n; vec_push(a, dims, slot);
             p = rb + 1;
@@ -75,7 +75,7 @@ bool cg_is_int_typestr(const char *ts)
 {
     static const char *const ints[] = {
         "i8","i16","i32","i64","u8","u16","u32","u64", NULL };
-    for (int i = 0; ints[i]; i++) if (!strcmp(ts, ints[i])) return true;
+    { int i = 0; for (; ints[i]; i++) if (!strcmp(ts, ints[i])) return true; }
     return false;
 }
 
@@ -93,13 +93,13 @@ void cg_vec_elem(const char *ts, char *ebuf, size_t cap)
 static const char *cg_vec_code_str(cg_t *cg, const char *elem)
 {
     sb_t s; sb_init(&s);
-    for (const unsigned char *p = (const unsigned char *)elem; *p; p++) {
+    { const unsigned char *p = (const unsigned char *)elem; for (; *p; p++) {
         if (*p == '*') sb_puts(&s, "_ptr");
         else if (*p == '[') sb_puts(&s, "_arr");
         else if (*p == ']' || *p == ' ') {}
         else if (isalnum(*p) || *p == '_') sb_putc(&s, (char)*p);
         else { char h[5]; snprintf(h, sizeof(h), "_%02x", *p); sb_puts(&s, h); }
-    }
+    } }
     const char *r = arena_strdup(cg->a, sb_cstr(&s)); sb_free(&s); return r;
 }
 
@@ -150,8 +150,8 @@ const char *cg_decl(cg_t *cg, const char *ts, const char *name)
     if (dims.len) {
         sb_t s; sb_init(&s);
         sb_puts(&s, bc); sb_putc(&s, ' '); sb_puts(&s, name);
-        for (size_t i = 0; i < dims.len; i++)
-            { char b[32]; snprintf(b,sizeof(b),"[%zu]", *(size_t*)dims.data[i]); sb_puts(&s, b); }
+        { size_t i = 0; for (; i < dims.len; i++)
+            { char b[32]; snprintf(b,sizeof(b),"[%zu]", *(size_t*)dims.data[i]); sb_puts(&s, b); } }
         const char *r = arena_strdup(cg->a, sb_cstr(&s)); sb_free(&s); return r;
     }
     if (ptr) return cg_fmt(cg, "%s* %s", bc, name);
@@ -162,13 +162,13 @@ static const char *type_code(cg_t *cg, type_t *t)
 {
     const char *ts = type_to_string(cg->sem->tc, t);
     sb_t s; sb_init(&s);
-    for (const unsigned char *p = (const unsigned char *)ts; *p; p++) {
+    { const unsigned char *p = (const unsigned char *)ts; for (; *p; p++) {
         if (*p == '*') sb_puts(&s, "_ptr");
         else if (*p == '[') sb_puts(&s, "_arr");
         else if (*p == ']') {}
         else if (isalnum(*p) || *p == '_') sb_putc(&s, (char)*p);
         else { char h[5]; snprintf(h, sizeof(h), "_%02x", *p); sb_puts(&s, h); }
-    }
+    } }
     const char *r = arena_strdup(cg->a, sb_cstr(&s)); sb_free(&s); return r;
 }
 
@@ -179,8 +179,8 @@ const char *cg_mangle_in(cg_t *cg, const char *pkg, const char *struct_name,
     sb_puts(&s, "_Salam_"); sb_puts(&s, cg_cident(cg, pkg ? pkg : "main"));
     if (struct_name) { sb_puts(&s, "_S_"); sb_puts(&s, cg_cident(cg, struct_name)); }
     sb_putc(&s, '_'); sb_puts(&s, cg_cident(cg, fn));
-    for (size_t i = 0; i < params->len; i++)
-        { sb_putc(&s, '_'); sb_puts(&s, type_code(cg, (type_t *)params->data[i])); }
+    { size_t i = 0; for (; i < params->len; i++)
+        { sb_putc(&s, '_'); sb_puts(&s, type_code(cg, (type_t *)params->data[i])); } }
     const char *r = arena_strdup(cg->a, sb_cstr(&s)); sb_free(&s); return r;
 }
 
@@ -220,7 +220,7 @@ static const char *func_cast_params(cg_t *cg, const char *ts)
     const char *s = ts + 5;                 
     sb_t out; sb_init(&out); sb_putc(&out, '(');
     int depth = 0; const char *start = s; bool any = false;
-    for (const char *p = s; ; p++) {
+    { const char *p = s; for (; ; p++) {
         if (*p=='<' || *p=='(') depth++;
         else if (*p=='>' ) depth--;
         else if (*p==')' && depth>0) depth--;
@@ -237,7 +237,7 @@ static const char *func_cast_params(cg_t *cg, const char *ts)
             if (*p==')' || *p=='\0') break;
             start = p + 1;
         }
-    }
+    } }
     if (!any) sb_puts(&out, "void");
     sb_putc(&out, ')');
     const char *r = arena_strdup(cg->a, sb_cstr(&out)); sb_free(&out); return r;
@@ -261,8 +261,8 @@ long array_size_of(const char *ts)
     const char *lb = strchr(ts, '[');
     if (!lb) return 0;
     long n = 0;
-    for (const char *p = lb + 1; *p && *p != ']'; p++)
-        if (*p >= '0' && *p <= '9') n = n * 10 + (*p - '0');
+    { const char *p = lb + 1; for (; *p && *p != ']'; p++)
+        if (*p >= '0' && *p <= '9') n = n * 10 + (*p - '0'); }
     return n;
 }
 

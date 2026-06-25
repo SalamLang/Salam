@@ -26,28 +26,28 @@ static size_t get_src_line(const char *text, size_t text_len,
 static size_t visual_col(const char *line, size_t byte_off)
 {
     size_t vis = 0;
-    for (size_t i = 0; i < byte_off; i++) {
+    { size_t i = 0; for (; i < byte_off; i++) {
         if (line[i] == '\t')
             vis += TAB_WIDTH - (vis % TAB_WIDTH);
         else
             vis++;
-    }
+    } }
     return vis;
 }
 
 static void write_expanded(FILE *sink, const char *line, size_t len)
 {
     size_t col = 0;
-    for (size_t i = 0; i < len; i++) {
+    { size_t i = 0; for (; i < len; i++) {
         if (line[i] == '\t') {
             size_t sp = TAB_WIDTH - (col % TAB_WIDTH);
-            for (size_t s = 0; s < sp; s++) fputc(' ', sink);
+            { size_t s = 0; for (; s < sp; s++) fputc(' ', sink); }
             col += sp;
         } else {
             fputc((unsigned char)line[i], sink);
             col++;
         }
-    }
+    } }
 }
 
 static void write_diag_code(FILE *sink, bool is_error, int code)
@@ -154,8 +154,8 @@ void diag_render_rust(FILE *sink,
         size_t vis_s, vis_w;
         span_visuals(line_buf, line_len, span, &vis_s, &vis_w);
         if (color) fputs(lc, sink);
-        for (size_t i = 0; i < vis_s; i++) fputc(' ', sink);
-        for (size_t i = 0; i < vis_w; i++) fputc('^', sink);
+        { size_t i = 0; for (; i < vis_s; i++) fputc(' ', sink); }
+        { size_t i = 0; for (; i < vis_w; i++) fputc('^', sink); }
         if (color) fputs(reset, sink);
     }
     fputc('\n', sink);
@@ -209,9 +209,9 @@ void diag_render_gcc(FILE *sink,
         span_visuals(line_buf, line_len, span, &vis_s, &vis_w);
         fputs("    ", sink);
         if (color) fputs(lc, sink);
-        for (size_t i = 0; i < vis_s; i++) fputc(' ', sink);
+        { size_t i = 0; for (; i < vis_s; i++) fputc(' ', sink); }
         fputc('^', sink);
-        for (size_t i = 1; i < vis_w; i++) fputc('~', sink);
+        { size_t i = 1; for (; i < vis_w; i++) fputc('~', sink); }
         if (color) fputs(reset, sink);
         fputc('\n', sink);
     }
@@ -258,22 +258,22 @@ void diag_render_clang(FILE *sink,
     
     fputs("    ", sink);
     if (color) fputs(lc, sink);
-    for (size_t i = 0; i < vis_s; i++) fputc(' ', sink);
+    { size_t i = 0; for (; i < vis_s; i++) fputc(' ', sink); }
     fputc('^', sink);
-    for (size_t i = 1; i < vis_w; i++) fputc('~', sink);
+    { size_t i = 1; for (; i < vis_w; i++) fputc('~', sink); }
     if (color) fputs(reset, sink);
     fputc('\n', sink);
     
     fputs("    ", sink);
     if (color) fputs(lc, sink);
-    for (size_t i = 0; i < vis_s; i++) fputc(' ', sink);
+    { size_t i = 0; for (; i < vis_s; i++) fputc(' ', sink); }
     fprintf(sink, "| %s", body);
     if (color) fputs(reset, sink);
     fputc('\n', sink);
     
     if (help) {
         fputs("    ", sink);
-        for (size_t i = 0; i < vis_s; i++) fputc(' ', sink);
+        { size_t i = 0; for (; i < vis_s; i++) fputc(' ', sink); }
         fprintf(sink, "%s= %s%s\n", color ? A_GREEN : "", reset, help);
     }
 }

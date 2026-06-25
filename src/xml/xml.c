@@ -2,15 +2,6 @@
 
 #define XML_INIT_DEPTH 128
 
-static char *xstrdup(const char *s)
-{
-    size_t n = strlen(s);
-    char *p = (char *)malloc(n + 1);
-    if (!p) abort();
-    memcpy(p, s, n + 1);
-    return p;
-}
-
 xml_writer_t *xml_new(sb_t *out)
 {
     xml_writer_t *w = (xml_writer_t *)malloc(sizeof(*w));
@@ -25,7 +16,6 @@ xml_writer_t *xml_new(sb_t *out)
 
 void xml_free(xml_writer_t *w)
 {
-    
     while (w->depth > 0) {
         free(w->stack[--w->depth].name);
     }
@@ -35,7 +25,7 @@ void xml_free(xml_writer_t *w)
 
 static void xml_indent(xml_writer_t *w, int depth)
 {
-    for (int i = 0; i < depth; i++) sb_puts(w->out, "  ");
+    { int i = 0; for (; i < depth; i++) sb_puts(w->out, "  "); }
 }
 
 void xml_decl(xml_writer_t *w)
@@ -62,7 +52,7 @@ void xml_open(xml_writer_t *w, const char *tag)
         if (!w->stack) abort();
     }
     xml_frame_t *f = &w->stack[w->depth++];
-    f->name = xstrdup(tag);
+    f->name = sal_strdup(tag);
     f->printed_gt = false;
     f->inlined = false;
 }

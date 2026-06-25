@@ -1,5 +1,6 @@
 #ifndef SALAM_XML_XML_H
 #define SALAM_XML_XML_H
+
 #include "core/sb.h"
 
 typedef struct xml_writer xml_writer_t;
@@ -13,4 +14,5 @@ void xml_text(xml_writer_t *w, const char *text);
 void xml_leaf(xml_writer_t *w, const char *tag, const char *text);
 void xml_leaf_int(xml_writer_t *w, const char *tag, long long value);
 void xml_close(xml_writer_t *w);
+
 #endif /* SALAM_XML_XML_H */

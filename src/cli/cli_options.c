@@ -44,7 +44,7 @@ static bool cli_positional(const char *arg, options_t *out)
 
 bool cli_parse_options(int argc, char **argv, int start, options_t *out)
 {
-    for (int i = start; i < argc; i++) {
+    { int i = start; for (; i < argc; i++) {
         const char *arg = argv[i];
         const char *val;
         if (strcmp(arg, "--keep-c") == 0) {
@@ -130,6 +130,6 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
             
             if (!cli_positional(arg, out)) return false;
         }
-    }
+    } }
     return true;
 }

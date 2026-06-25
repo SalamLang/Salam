@@ -9,8 +9,8 @@ static void        parse_imports_into(parser_t *p, ast_node_t *prog);
 
 static void attach_pending(parser_t *p, ast_node_t *target, vec_t *pending)
 {
-    for (size_t i = 0; i < pending->len; i++)
-        vec_push(p->a, &target->aliases, pending->data[i]);
+    { size_t i = 0; for (; i < pending->len; i++)
+        vec_push(p->a, &target->aliases, pending->data[i]); }
     pending->len = 0;
 }
 
@@ -24,8 +24,8 @@ void parse_metas(parser_t *p, vec_t *out)
             p_advance(p);
             while (!p_at(p, TK_RBRACKET) && !p_at_eof(p)) {
                 if (p_at(p, TK_STRING)) {
-                    vec_push(p->a, out, (void *)lang);
-                    vec_push(p->a, out, (void *)p_peek(p)->value.as.s);
+                    vec_push(p->a, out, CONST_CAST(lang));
+                    vec_push(p->a, out, CONST_CAST(p_peek(p)->value.as.s));
                     p_advance(p);
                 } else if (p_at(p, TK_COMMA) || p_at(p, TK_STMT_END)) {
                     p_advance(p);                   
@@ -33,8 +33,8 @@ void parse_metas(parser_t *p, vec_t *out)
             }
             p_expect(p, TK_RBRACKET, "']' to close annotation list");
         } else if (p_at(p, TK_STRING)) {            
-            vec_push(p->a, out, (void *)lang);
-            vec_push(p->a, out, (void *)p_peek(p)->value.as.s);
+            vec_push(p->a, out, CONST_CAST(lang));
+            vec_push(p->a, out, CONST_CAST(p_peek(p)->value.as.s));
             p_advance(p);
         } else {
             p_error(p, "expected a string after '@' annotation");

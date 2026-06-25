@@ -33,10 +33,10 @@ arena_t *arena_new(size_t block_size)
 static arena_block *arena_add_block(arena_t *a, size_t need)
 {
     size_t cap = need > a->block_size ? need : a->block_size;
-    arena_block *b = (arena_block *)malloc(sizeof(*b));
+    size_t total_size = salam_size_add(sizeof(arena_block), cap);
+    arena_block *b = (arena_block *)malloc(total_size);
     if (!b) abort();
-    b->data = (char *)malloc(cap);
-    if (!b->data) abort();
+    b->data = (char *)(b + 1);
     b->cap = cap;
     b->used = 0;
     b->next = a->head;
@@ -74,7 +74,6 @@ void arena_free(arena_t *a)
     arena_block *b = a->head;
     while (b) {
         arena_block *next = b->next;
-        free(b->data);
         free(b);
         b = next;
     }

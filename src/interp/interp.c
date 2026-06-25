@@ -1,10 +1,11 @@
 #include "interp/interp_internal.h"
-#include "i18n/i18n.h"   
+#include "i18n/i18n.h"
+#include "core/sal_format.h"   
 
 SALAM_NORETURN void rt_error(interp_t *I, ast_node_t *n, const char *fmt, ...)
 {
     va_list ap; va_start(ap, fmt);
-    vsnprintf(I->errmsg, sizeof I->errmsg, i18n_tr(fmt), ap);   
+    sal_vsnprintf(I->errmsg, sizeof I->errmsg, i18n_tr(fmt), ap);   
     va_end(ap);
     if (n) { I->errspan = n->span; I->have_errspan = true; }
     longjmp(I->on_error, 1);
@@ -23,10 +24,10 @@ env_t *env_new(interp_t *I, env_t *parent)
 }
 binding_t *env_find_local(env_t *e, const char *name)
 {
-    for (size_t i = 0; i < e->bindings.len; i++) {
+    { size_t i = 0; for (; i < e->bindings.len; i++) {
         binding_t *b = (binding_t *)e->bindings.data[i];
         if (strcmp(b->name, name) == 0) return b;
-    }
+    } }
     return NULL;
 }
 binding_t *env_find(env_t *e, const char *name)
@@ -49,78 +50,78 @@ void env_define(interp_t *I, env_t *e, const char *name, value_t v)
 
 ast_node_t *find_struct(interp_t *I, const char *name)
 {
-    for (size_t i = 0; i < I->structs.len; i++) {
+    { size_t i = 0; for (; i < I->structs.len; i++) {
         ast_node_t *s = (ast_node_t *)I->structs.data[i];
         if (s->name && strcmp(s->name, name) == 0) return s;
-    }
+    } }
     return NULL;
 }
 
 ast_node_t *find_enum(interp_t *I, const char *name)
 {
-    for (size_t i = 0; i < I->enums.len; i++) {
+    { size_t i = 0; for (; i < I->enums.len; i++) {
         ast_node_t *e = (ast_node_t *)I->enums.data[i];
         if (e->name && strcmp(e->name, name) == 0) return e;
-    }
+    } }
     return NULL;
 }
 
 ast_node_t *find_func(interp_t *I, const char *name, size_t nargs)
 {
     ast_node_t *by_name = NULL;
-    for (size_t i = 0; i < I->funcs.len; i++) {
+    { size_t i = 0; for (; i < I->funcs.len; i++) {
         ast_node_t *f = (ast_node_t *)I->funcs.data[i];
         if (!f->name || strcmp(f->name, name) != 0) continue;
         if (f->list.len == nargs) return f;
         if (!by_name) by_name = f;
-    }
+    } }
     return by_name;
 }
 module_t *find_module(interp_t *I, const char *name)
 {
-    for (size_t i = 0; i < I->modules.len; i++) {
+    { size_t i = 0; for (; i < I->modules.len; i++) {
         module_t *m = (module_t *)I->modules.data[i];
         if (strcmp(m->name, name) == 0) return m;
-    }
+    } }
     return NULL;
 }
 
 ast_node_t *find_impl_method(interp_t *I, const char *typestr, const char *method, size_t nargs)
 {
     if (!typestr) return NULL;
-    for (size_t i = 0; i < I->impls.len; i++) {
+    { size_t i = 0; for (; i < I->impls.len; i++) {
         ast_node_t *d = (ast_node_t *)I->impls.data[i];
         const char *tt = d->type ? d->type->type_str : NULL;
         if (!tt || strcmp(tt, typestr) != 0) continue;
         ast_node_t *m = struct_method_arity(d, method, nargs);
         if (!m) m = struct_method(d, method);
         if (m) return m;
-    }
+    } }
     return NULL;
 }
 
 ast_node_t *struct_method(ast_node_t *sdef, const char *name)
 {
-    for (size_t i = 0; i < sdef->list.len; i++) {
+    { size_t i = 0; for (; i < sdef->list.len; i++) {
         ast_node_t *m = (ast_node_t *)sdef->list.data[i];
         if (m->kind == AST_FUNC_DEF && m->name && strcmp(m->name, name) == 0) return m;
-    }
+    } }
     return NULL;
 }
 
 ast_node_t *struct_method_arity(ast_node_t *sdef, const char *name, size_t nparams)
 {
-    for (size_t i = 0; i < sdef->list.len; i++) {
+    { size_t i = 0; for (; i < sdef->list.len; i++) {
         ast_node_t *m = (ast_node_t *)sdef->list.data[i];
         if (m->kind == AST_FUNC_DEF && m->name && strcmp(m->name, name) == 0 &&
             m->list.len == nparams) return m;
-    }
+    } }
     return NULL;
 }
 
 static void collect_decls(interp_t *I, ast_node_t *program)
 {
-    for (size_t i = 0; i < program->list.len; i++) {
+    { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         switch (d->kind) {
             case AST_FUNC_DEF:
@@ -139,18 +140,18 @@ static void collect_decls(interp_t *I, ast_node_t *program)
             }
             default: break;
         }
-    }
+    } }
     
-    for (size_t i = 0; i < I->funcs.len; i++) {
+    { size_t i = 0; for (; i < I->funcs.len; i++) {
         ast_node_t *f = (ast_node_t *)I->funcs.data[i];
         if (f->name && !env_find_local(I->globals, f->name))
             env_define(I, I->globals, f->name, mk_closure(I, f, I->globals));
-    }
+    } }
 }
 
 static void collect_module_funcs(interp_t *I, module_t *mod, ast_node_t *prog)
 {
-    for (size_t i = 0; i < prog->list.len; i++) {
+    { size_t i = 0; for (; i < prog->list.len; i++) {
         ast_node_t *d = (ast_node_t *)prog->list.data[i];
         switch (d->kind) {
             case AST_FUNC_DEF:
@@ -164,27 +165,27 @@ static void collect_module_funcs(interp_t *I, module_t *mod, ast_node_t *prog)
             case AST_IMPL_DEF:   vec_push(I->a, &I->impls, d); break;
             default: break;
         }
-    }
+    } }
 }
 
 static void wire_imports(interp_t *I, env_t *env, scope_t *scope)
 {
     if (!scope) return;
-    for (size_t i = 0; i < scope->symbols.len; i++) {
+    { size_t i = 0; for (; i < scope->symbols.len; i++) {
         symbol_t *sym = (symbol_t *)scope->symbols.data[i];
         if (sym->kind != SYM_PACKAGE || !sym->pkgname) continue;
         module_t *target = find_module(I, sym->pkgname);
         if (target) env_define(I, env, sym->name, val_module(target));
-    }
+    } }
 }
 
 static void eval_module_consts(interp_t *I, module_t *mod, ast_node_t *prog)
 {
-    for (size_t i = 0; i < prog->list.len; i++) {
+    { size_t i = 0; for (; i < prog->list.len; i++) {
         ast_node_t *d = (ast_node_t *)prog->list.data[i];
         if (d->kind == AST_CONST_DECL || d->kind == AST_VAR_DECL)
             env_define(I, mod->env, d->name, d->a ? eval(I, mod->env, d->a) : val_null());
-    }
+    } }
 }
 
 void build_modules(interp_t *I, ast_node_t *program)
@@ -194,7 +195,7 @@ void build_modules(interp_t *I, ast_node_t *program)
     if (!sem) return;
     vec_t *pkgs = &sem->packages;
     
-    for (size_t i = 0; i < pkgs->len; i++) {
+    { size_t i = 0; for (; i < pkgs->len; i++) {
         symbol_t *pk = (symbol_t *)pkgs->data[i];
         const char *name = pk->pkgname ? pk->pkgname : (pk->decl ? pk->decl->name : NULL);
         if (!name || !pk->decl || find_module(I, name)) continue;
@@ -203,22 +204,22 @@ void build_modules(interp_t *I, ast_node_t *program)
         mod->env  = env_new(I, NULL);   
         vec_push(I->a, &I->modules, mod);
         collect_module_funcs(I, mod, pk->decl);
-    }
+    } }
     
-    for (size_t i = 0; i < pkgs->len; i++) {
+    { size_t i = 0; for (; i < pkgs->len; i++) {
         symbol_t *pk = (symbol_t *)pkgs->data[i];
         const char *name = pk->pkgname ? pk->pkgname : (pk->decl ? pk->decl->name : NULL);
         module_t *mod = name ? find_module(I, name) : NULL;
         if (mod) wire_imports(I, mod->env, pk->members);
-    }
+    } }
     wire_imports(I, I->globals, sem->global);
     
-    for (size_t i = 0; i < pkgs->len; i++) {
+    { size_t i = 0; for (; i < pkgs->len; i++) {
         symbol_t *pk = (symbol_t *)pkgs->data[i];
         const char *name = pk->pkgname ? pk->pkgname : (pk->decl ? pk->decl->name : NULL);
         module_t *mod = name ? find_module(I, name) : NULL;
         if (mod && pk->decl) eval_module_consts(I, mod, pk->decl);
-    }
+    } }
 }
 
 int interp_run(arena_t *a, logger_t *log, ast_node_t *program,

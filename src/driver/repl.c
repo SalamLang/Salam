@@ -1,4 +1,5 @@
 #include "core/prelude.h"
+#include "driver/driver.h"
 #include "driver/repl.h"
 #include "core/arena.h"
 #include "core/sb.h"
@@ -23,12 +24,11 @@
 #  define REPL_USE_WINCON 0
 #endif
 
-bool resolve_color(int flag);
-
 #define REPL_HIST_MAX  200
 #define REPL_LINE_MAX 4096
 static char *repl_hist[REPL_HIST_MAX];
 static int   repl_nhist = 0;
+
 static void repl_hist_push(const char *line)
 {
     if (!line || !line[0]) return;
@@ -38,7 +38,7 @@ static void repl_hist_push(const char *line)
         memmove(repl_hist, repl_hist + 1, (REPL_HIST_MAX - 1) * sizeof *repl_hist);
         repl_nhist--;
     }
-    repl_hist[repl_nhist++] = strdup(line);
+    repl_hist[repl_nhist++] = sal_strdup(line);
 }
 
 static char *repl_readline(const char *prompt)
@@ -134,7 +134,7 @@ static char *repl_readline(const char *prompt)
     if (!buf) { tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig); return NULL; }
     int len = 0, pos = 0, hi = repl_nhist;
     char saved[REPL_LINE_MAX]; saved[0] = '\0'; int saved_len = 0;
-#define WR(s,n)  (void)write(STDOUT_FILENO, (s), (size_t)(n))
+#define WR(s,n)  do { ssize_t _wr = write(STDOUT_FILENO, (s), (size_t)(n)); (void)_wr; } while(0)
 #define WRC(c)   do { char _wc = (char)(c); WR(&_wc, 1); } while(0)
     for (;;) {
         unsigned char c;
@@ -144,17 +144,17 @@ static char *repl_readline(const char *prompt)
             if (pos > 0) {
                 memmove(buf+pos-1, buf+pos, (size_t)(len-pos)); pos--; len--;
                 WRC('\b'); WR(buf+pos, len-pos); WRC(' ');
-                for (int i = pos; i <= len; i++) WRC('\b');
+                { int i = pos; for (; i <= len; i++) WRC('\b'); }
                 fflush(stdout);
             }
             continue;
         }
-        if (c == 1)  { for (int i = 0; i < pos; i++) WRC('\b'); pos = 0; fflush(stdout); continue; }
+        if (c == 1)  { { int i = 0; for (; i < pos; i++) WRC('\b'); } pos = 0; fflush(stdout); continue; }
         if (c == 5)  { WR(buf+pos, len-pos); pos = len; fflush(stdout); continue; }
         if (c == 21) {
-            for (int i = 0; i < pos; i++) WRC('\b');
-            for (int i = 0; i < len; i++) WRC(' ');
-            for (int i = 0; i < len; i++) WRC('\b');
+            { int i = 0; for (; i < pos; i++) WRC('\b'); }
+            { int i = 0; for (; i < len; i++) WRC(' '); }
+            { int i = 0; for (; i < len; i++) WRC('\b'); }
             len = pos = 0; fflush(stdout); continue;
         }
         if (c == 3 || (c == 4 && len == 0)) {
@@ -168,9 +168,9 @@ static char *repl_readline(const char *prompt)
             if (s2 == 'A') { 
                 if (hi == repl_nhist) { memcpy(saved, buf, (size_t)len); saved[len] = '\0'; saved_len = len; }
                 if (hi > 0) {
-                    hi--; for (int i = 0; i < pos; i++) WRC('\b');
-                    for (int i = 0; i < len; i++) WRC(' ');
-                    for (int i = 0; i < len; i++) WRC('\b');
+                    hi--; { int i = 0; for (; i < pos; i++) WRC('\b'); }
+                    { int i = 0; for (; i < len; i++) WRC(' '); }
+                    { int i = 0; for (; i < len; i++) WRC('\b'); }
                     int hlen = (int)strlen(repl_hist[hi]);
                     memcpy(buf, repl_hist[hi], (size_t)(hlen+1)); len = pos = hlen;
                     WR(buf, len); fflush(stdout);
@@ -179,9 +179,9 @@ static char *repl_readline(const char *prompt)
                 if (hi < repl_nhist) {
                     hi++; const char *h = (hi == repl_nhist) ? saved : repl_hist[hi];
                     int hlen = (hi == repl_nhist) ? saved_len : (int)strlen(h);
-                    for (int i = 0; i < pos; i++) WRC('\b');
-                    for (int i = 0; i < len; i++) WRC(' ');
-                    for (int i = 0; i < len; i++) WRC('\b');
+                    { int i = 0; for (; i < pos; i++) WRC('\b'); }
+                    { int i = 0; for (; i < len; i++) WRC(' '); }
+                    { int i = 0; for (; i < len; i++) WRC('\b'); }
                     memcpy(buf, h, (size_t)(hlen+1)); len = pos = hlen;
                     WR(buf, len); fflush(stdout);
                 }
@@ -193,7 +193,7 @@ static char *repl_readline(const char *prompt)
                 if (tilde == '~' && pos < len) {
                     memmove(buf+pos, buf+pos+1, (size_t)(len-pos-1)); len--;
                     WR(buf+pos, len-pos); WRC(' ');
-                    for (int i = pos; i <= len; i++) WRC('\b');
+                    { int i = pos; for (; i <= len; i++) WRC('\b'); }
                     fflush(stdout);
                 }
             }
@@ -201,7 +201,7 @@ static char *repl_readline(const char *prompt)
         }
         if ((unsigned char)c >= 32 && c < 128 && len < REPL_LINE_MAX - 1) {
             memmove(buf+pos+1, buf+pos, (size_t)(len-pos)); buf[pos] = (char)c; len++;
-            WR(buf+pos, len-pos); for (int i = pos+1; i < len; i++) WRC('\b');
+            WR(buf+pos, len-pos); { int i = pos+1; for (; i < len; i++) WRC('\b'); }
             pos++; fflush(stdout);
         }
     }
@@ -220,52 +220,39 @@ static bool repl_is_def(const char *line)
         "func ", "struct ", "enum ", "type ",
         "import ", "package ", "link ", "//", NULL
     };
-    for (int i = 0; kws[i]; i++)
-        if (strncmp(line, kws[i], strlen(kws[i])) == 0) return true;
+    { int i = 0; for (; kws[i]; i++)
+        if (strncmp(line, kws[i], strlen(kws[i])) == 0) return true; }
     return false;
 }
 
-static int repl_block_depth(const char *src, bool layout_mode)
+static int repl_block_depth(const langpack_t *pack, const char *src,
+                            bool layout_mode)
 {
     (void)layout_mode;
+    arena_t  *a  = arena_new(1 << 16);
+    logger_t *lg = logger_new(stderr, LOG_OFF, false);
+    source_file_t sf;
+    sf.path = "<repl>"; sf.text = CONST_CAST(src); sf.len = strlen(src);
+    token_stream_t *toks = NULL;
     int depth = 0;
-    const char *p = src;
-    while (*p) {
-        
-        if (*p == '"') {
-            p++;
-            while (*p && *p != '"') { if (*p == '\\' && p[1]) p++; if (*p) p++; }
-            if (*p) p++;
-            continue;
-        }
-        
-        if (*p == '`') {
-            p++;
-            while (*p && *p != '`') p++;
-            if (*p) p++;
-            continue;
-        }
-        
-        if (p[0] == '/' && p[1] == '/') {
-            while (*p && *p != '\n') p++;
-            continue;
-        }
-        
-        if ((p[0]=='e' || p[0]=='E') &&
-            (p[1]=='n' || p[1]=='N') &&
-            (p[2]=='d' || p[2]=='D')) {
-            int lb = (p == src) || !(isalnum((unsigned char)p[-1]) || p[-1]=='_');
-            int rb = !(isalnum((unsigned char)p[3]) || p[3]=='_');
-            if (lb && rb) { depth--; p += 3; continue; }
-        }
-        
-        if (*p == ':') {
-            int lws = (p == src) || (p[-1]==' '||p[-1]=='\t'||p[-1]=='\n'||p[-1]=='\r');
-            int nxt = !p[1] || p[1]==' '||p[1]=='\t'||p[1]=='\n'||p[1]=='\r';
-            if (!lws && nxt) { depth++; p++; continue; }
-        }
-        p++;
+    if (lexer_run(a, lg, pack, &sf, &toks)) {
+        size_t n = token_stream_count(toks);
+        { size_t i = 0; for (; i < n; i++) {
+            const token_t *t = token_stream_at(toks, i);
+            if (t->kind == TK_KW_END) {
+                depth--;
+            } else if (t->kind == TK_COLON) {
+                uint32_t idx = t->span.begin.index;
+                int lws = (idx == 0) ||
+                          src[idx-1]==' '||src[idx-1]=='\t'||
+                          src[idx-1]=='\n'||src[idx-1]=='\r';
+                char nx = src[idx+1];
+                int nxt = nx=='\0'||nx==' '||nx=='\t'||nx=='\n'||nx=='\r';
+                if (!lws && nxt) depth++;
+            }
+        } }
     }
+    logger_free(lg); arena_free(a);
     return depth;
 }
 
@@ -306,7 +293,7 @@ static bool repl_exec(const char *full_src, const char *cc,
     arena_t  *a  = arena_new(1 << 20);
     logger_t *lg = logger_new(stderr, LOG_ERROR, resolve_color(opt->color));
     source_file_t sf;
-    sf.path = "<repl>"; sf.text = (char *)full_src; sf.len = strlen(full_src);
+    sf.path = "<repl>"; sf.text = CONST_CAST(full_src); sf.len = strlen(full_src);
     logger_set_diag_source(lg, sf.text, sf.len, opt->diag_style, opt->diag_format);
     token_stream_t *toks = NULL;
     bool ok = lexer_run(a, lg, pack, &sf, &toks);
@@ -323,8 +310,8 @@ static bool repl_exec(const char *full_src, const char *cc,
     
     static const char *const RT_PKGS[] = { "mem", "core", "map", "text", "console", "fs", "thread" };
     bool have_pkg[sizeof(RT_PKGS)/sizeof(RT_PKGS[0])];
-    for (size_t i = 0; i < sizeof(RT_PKGS)/sizeof(RT_PKGS[0]); i++)
-        have_pkg[i] = repl_compile_pkg(a, lg, pack, opt, RT_PKGS[i]);
+    { size_t i = 0; for (; i < sizeof(RT_PKGS)/sizeof(RT_PKGS[0]); i++)
+        have_pkg[i] = repl_compile_pkg(a, lg, pack, opt, RT_PKGS[i]); }
     sb_t cmd; sb_init(&cmd);
     sb_puts(&cmd, cc);
     sb_puts(&cmd, " -I. -o _salam_repl_");
@@ -332,8 +319,8 @@ static bool repl_exec(const char *full_src, const char *cc,
     sb_puts(&cmd, ".exe");
 #endif
     sb_puts(&cmd, " salam_mod__repl_.c");
-    for (size_t i = 0; i < sizeof(RT_PKGS)/sizeof(RT_PKGS[0]); i++)
-        if (have_pkg[i]) { sb_puts(&cmd, " salam_mod_"); sb_puts(&cmd, RT_PKGS[i]); sb_puts(&cmd, ".c"); }
+    { size_t i = 0; for (; i < sizeof(RT_PKGS)/sizeof(RT_PKGS[0]); i++)
+        if (have_pkg[i]) { sb_puts(&cmd, " salam_mod_"); sb_puts(&cmd, RT_PKGS[i]); sb_puts(&cmd, ".c"); } }
 #ifdef _WIN32
     sb_puts(&cmd, " -lmsvcrt -lws2_32 -lwinhttp");
 #else
@@ -343,19 +330,20 @@ static bool repl_exec(const char *full_src, const char *cc,
     sb_free(&cmd);
     if (crc == 0) {
 #ifdef _WIN32
-        system(".\\_salam_repl_.exe");
+        int _src = system(".\\_salam_repl_.exe");
 #else
-        system("./_salam_repl_");
+        int _src = system("./_salam_repl_");
 #endif
+        (void)_src;
         fflush(stdout);
     }
     remove("salam_mod__repl_.c"); remove("salam_mod__repl_.h");
-    for (size_t i = 0; i < sizeof(RT_PKGS)/sizeof(RT_PKGS[0]); i++) {
+    { size_t i = 0; for (; i < sizeof(RT_PKGS)/sizeof(RT_PKGS[0]); i++) {
         char cp[64], hp[64];
         snprintf(cp, sizeof cp, "salam_mod_%s.c", RT_PKGS[i]);
         snprintf(hp, sizeof hp, "salam_mod_%s.h", RT_PKGS[i]);
         remove(cp); remove(hp);
-    }
+    } }
 #ifdef _WIN32
     remove("_salam_repl_.exe");
 #else
@@ -367,10 +355,10 @@ static bool repl_exec(const char *full_src, const char *cc,
 
 static ast_node_t *repl_find_layout(ast_node_t *prog)
 {
-    for (size_t i = 0; i < prog->list.len; i++) {
+    { size_t i = 0; for (; i < prog->list.len; i++) {
         ast_node_t *d = (ast_node_t *)prog->list.data[i];
         if (d->kind == AST_LAYOUT_BLOCK) return d;
-    }
+    } }
     return NULL;
 }
 
@@ -380,7 +368,7 @@ static void repl_layout_exec(const char *src_text, const langpack_t *pack,
     arena_t  *arena = arena_new(1 << 20);
     logger_t *log   = logger_new(stderr, LOG_ERROR, resolve_color(opt->color));
     source_file_t sf;
-    sf.path = "<repl>"; sf.text = (char *)src_text; sf.len = strlen(src_text);
+    sf.path = "<repl>"; sf.text = CONST_CAST(src_text); sf.len = strlen(src_text);
     logger_set_diag_source(log, sf.text, sf.len, opt->diag_style, opt->diag_format);
     token_stream_t *toks = NULL;
     bool ok = lexer_run(arena, log, pack, &sf, &toks);
@@ -472,11 +460,11 @@ int driver_repl(options_t *opt)
                 repl_exec(sb_cstr(&session), cc, pack, opt);
             fflush(stdout); repl_hist_push(line); free(line); continue;
         }
-        
+
         sb_t block; sb_init(&block);
         sb_puts(&block, line); sb_putc(&block, '\n');
         bool is_layout = (opt->command == CMD_REPL_LAYOUT);
-        while (repl_block_depth(sb_cstr(&block), is_layout) > 0) {
+        while (repl_block_depth(pack, sb_cstr(&block), is_layout) > 0) {
             char *cont = repl_readline("  ... ");
             if (!cont) break;
             sb_puts(&block, cont); sb_putc(&block, '\n');
@@ -495,13 +483,13 @@ int driver_repl(options_t *opt)
             }
             sb_free(&block); repl_hist_push(line); free(line); continue;
         }
-        
+
         if (repl_is_def(first)) {
             sb_t test; sb_init(&test);
             sb_puts(&test, sb_cstr(&session));
             sb_puts(&test, sb_cstr(&block));
             source_file_t sf;
-            sf.path = "<repl>"; sf.text = (char *)sb_cstr(&test); sf.len = strlen(sf.text);
+            sf.path = "<repl>"; sf.text = CONST_CAST(sb_cstr(&test)); sf.len = strlen(sf.text);
             logger_t *vl = logger_new(stderr, LOG_ERROR, resolve_color(opt->color));
             logger_set_diag_source(vl, sf.text, sf.len, opt->diag_style, opt->diag_format);
             arena_t *va = arena_new(1 << 20);
@@ -524,7 +512,7 @@ int driver_repl(options_t *opt)
             }
             sb_free(&block); repl_hist_push(line); free(line); continue;
         }
-        
+
         if (has_main) {
             printf("func main is defined - ':run' to execute, ':clear' to reset.\n");
             fflush(stdout);
@@ -542,7 +530,7 @@ int driver_repl(options_t *opt)
     }
     printf("bye.\n");
     sb_free(&session);
-    for (int i = 0; i < repl_nhist; i++) free(repl_hist[i]);
+    { int i = 0; for (; i < repl_nhist; i++) free(repl_hist[i]); }
     repl_nhist = 0;
     logger_free(log); arena_free(arena);
     return 0;

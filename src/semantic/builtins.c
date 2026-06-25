@@ -8,7 +8,7 @@ static const salam_builtin_t k_builtins[] = {
 };
 const salam_builtin_t *salam_builtin_lookup(const char *name)
 {
-    for (size_t i = 0; i < sizeof(k_builtins)/sizeof(k_builtins[0]); i++)
-        if (strcmp(k_builtins[i].name, name) == 0) return &k_builtins[i];
+    { size_t i = 0; for (; i < sizeof(k_builtins)/sizeof(k_builtins[0]); i++)
+        if (strcmp(k_builtins[i].name, name) == 0) return &k_builtins[i]; }
     return NULL;
 }

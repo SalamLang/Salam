@@ -6,33 +6,33 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
                         const char *parent_class);
 static long repeat_count(ast_node_t *el)
 {
-    for (size_t i = 0; i < el->list.len; i++) {
+    { size_t i = 0; for (; i < el->list.len; i++) {
         ast_node_t *a = (ast_node_t *)el->list.data[i];
         if (a->kind == AST_LAYOUT_ATTR && a->name && !strcmp(a->name, "repeat") &&
             a->a && a->a->kind == AST_LITERAL && a->a->value.kind == TV_INT)
             return (long)a->a->value.as.i < 1 ? 1 : (long)a->a->value.as.i;
-    }
+    } }
     return 1;
 }
 
 void gen_element_n(layout_ctx_t *cx, ast_node_t *el, const char *parent, const char *parent_class)
 {
     long n = repeat_count(el);
-    for (long i = 0; i < n; i++) gen_element(cx, el, parent, parent_class);
+    { long i = 0; for (; i < n; i++) gen_element(cx, el, parent, parent_class); }
 }
 
 static void gen_children(layout_ctx_t *cx, ast_node_t *el, const char *klass)
 {
-    for (size_t i = 0; i < el->list.len; i++) {
+    { size_t i = 0; for (; i < el->list.len; i++) {
         ast_node_t *c = (ast_node_t *)el->list.data[i];
         if (c->kind == AST_LAYOUT_ELEMENT) gen_element_n(cx, c, el->name, klass);
-    }
+    } }
 }
 
 static bool has_child_elements(ast_node_t *el)
 {
-    for (size_t i = 0; i < el->list.len; i++)
-        if (((ast_node_t *)el->list.data[i])->kind == AST_LAYOUT_ELEMENT) return true;
+    { size_t i = 0; for (; i < el->list.len; i++)
+        if (((ast_node_t *)el->list.data[i])->kind == AST_LAYOUT_ELEMENT) return true; }
     return false;
 }
 
@@ -46,12 +46,12 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent, co
     
     if (!strcmp(el->name, "heading")) {
         long sz = 1;
-        for (size_t i = 0; i < el->list.len; i++) {
+        { size_t i = 0; for (; i < el->list.len; i++) {
             ast_node_t *attr = (ast_node_t *)el->list.data[i];
             if (attr->kind == AST_LAYOUT_ATTR && attr->name && !strcmp(attr->name, "size") &&
                 attr->a && attr->a->kind == AST_LITERAL && attr->a->value.kind == TV_INT)
                 sz = (long)attr->a->value.as.i;
-        }
+        } }
         if (sz < 1) sz = 1;
         if (sz > 6) sz = 6;
         tag = lfmt(cx, "h%ld", sz);
@@ -62,7 +62,7 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent, co
     sb_init(&active); sb_init(&before); sb_init(&after);
     const char *content = NULL, *userclass = NULL, *source = NULL;
     const char *src = NULL, *type_val = NULL, *condition = NULL;
-    for (size_t i = 0; i < el->list.len; i++) {
+    { size_t i = 0; for (; i < el->list.len; i++) {
         ast_node_t *attr = (ast_node_t *)el->list.data[i];
         if (attr->kind != AST_LAYOUT_ATTR) continue;
         const char *nm = attr->name;
@@ -110,7 +110,7 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent, co
             }
             case LA_META: break;   
         }
-    }
+    } }
     bool has_css = css.len > 0;
     bool needs_class = has_css || hover.len || focus.len || active.len || before.len || after.len;
     char autobuf[16];

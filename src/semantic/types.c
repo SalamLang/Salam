@@ -248,7 +248,6 @@ const char *type_to_string(type_ctx_t *tc, const type_t *t)
             return arena_strdup(tc->a, buf);
         }
         case TY_ARRAY: {
-            
             char dims[128] = ""; size_t dn = 0;
             const type_t *cur = t;
             while (cur && cur->kind == TY_ARRAY) {

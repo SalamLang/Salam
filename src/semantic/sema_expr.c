@@ -69,7 +69,6 @@ static type_t *check_binary(sema_t *s, ast_node_t *n)
     {
         symbol_t *ssym = struct_sym_of(l);
         if (ssym) {
-            
             if (op == TK_NE) {
                 symbol_t *m_ne = scope_lookup_local(ssym->members, "operator_ne");
                 if (!m_ne || m_ne->kind != SYM_METHOD) {

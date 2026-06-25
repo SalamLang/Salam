@@ -3,6 +3,7 @@
 
 func_sig_t *sig_of_decl(symbol_t *fsym, ast_node_t *decl)
 {
+    if (!fsym) return NULL;
     { size_t i = 0; for (; i < fsym->overloads.len; i++) {
         func_sig_t *sig = (func_sig_t *)fsym->overloads.data[i];
         if (sig->decl == decl) return sig;

@@ -349,11 +349,12 @@ static int driver_interp(options_t *opt)
 typedef struct {
     const langpack_t *pack;
     logger_t         *log;
-    bool              check;     
-    int               changed;   
-    int               ok;        
-    int               errors;    
-    int               total;     
+    bool              check;
+    fmt_style_t       style;
+    int               changed;
+    int               ok;
+    int               errors;
+    int               total;
 } fmt_ctx_t;
 static bool has_salam_ext(const char *name)
 {
@@ -382,7 +383,7 @@ static void fmt_one_file(fmt_ctx_t *c, const char *path)
     }
     c->total++;
     sb_t sb; sb_init(&sb);
-    if (!fmt_source(a, c->log, c->pack, src, &sb)) {
+    if (!fmt_source(a, c->log, c->pack, src, &c->style, &sb)) {
         LOG_E(c->log, PH_DRIVER,
               i18n_tr("cannot format '%s': fix the lexical errors first"), path);
         c->errors++; sb_free(&sb); arena_free(a); return;
@@ -454,6 +455,8 @@ static int driver_fmt(options_t *opt)
     fmt_ctx_t c;
     memset(&c, 0, sizeof c);
     c.pack = pack; c.log = log; c.check = opt->fmt_check;
+    c.style.tabs = opt->fmt_tabs;
+    c.style.width = opt->fmt_indent_width;
     if (opt->input_count == 0) {
         fmt_walk(&c, ".");                    
     } else {

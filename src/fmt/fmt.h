@@ -9,9 +9,16 @@
 #include "source/source.h"
 #include "token/token.h"
 
-void fmt_tokens(const token_stream_t *toks, sb_t *out);
+typedef struct {
+    bool tabs;
+    int  width;
+} fmt_style_t;
+
+fmt_style_t fmt_style_default(void);
+
+void fmt_tokens(const token_stream_t *toks, const fmt_style_t *style, sb_t *out);
 
 bool fmt_source(arena_t *a, logger_t *log, const langpack_t *pack,
-                const source_file_t *src, sb_t *out);
+                const source_file_t *src, const fmt_style_t *style, sb_t *out);
 
 #endif /* SALAM_FMT_FMT_H */

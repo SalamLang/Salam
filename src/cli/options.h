@@ -46,6 +46,8 @@ typedef struct {
     bool         safe;             /* --safe (runtime bounds checks)     */
     bool         fmt_check;        /* fmt --check: report, don't rewrite */
     bool         fmt_recursive;    /* fmt -r/--recursive: walk directories */
+    bool         fmt_tabs;         /* fmt --tabs/--indent=tab: indent with tabs */
+    int          fmt_indent_width; /* fmt --indent=N: spaces per level (default 4) */
     bool         debug_info;       /* -g / --debug-info: DWARF symbols   */
     bool         asan;             /* --asan: AddressSanitizer           */
     bool         interp;           /* run via the tree-walking interpreter */

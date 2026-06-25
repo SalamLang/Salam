@@ -65,7 +65,6 @@ static ast_node_t *parse_statement(parser_t *p)
         case TK_KW_BREAK:  { ast_node_t *n = p_mk(p, AST_BREAK); p_advance(p); p_fin(p, n); p_term(p); return n; }
         case TK_KW_CONTINUE: { ast_node_t *n = p_mk(p, AST_CONTINUE); p_advance(p); p_fin(p, n); p_term(p); return n; }
         case TK_IDENT: {
-            
             size_t m = p_ident_run_len(p);
             token_kind_t after = p_peekn(p, m)->kind;
             bool is_decl;
@@ -176,10 +175,8 @@ static ast_node_t *parse_if_tail(parser_t *p)
         
         p_match(p, TK_KW_IF);
         if (!p_at(p, TK_COLON)) {
-            
             n->c = parse_if_tail(p);
         } else {
-            
             n->c = p_mk(p, AST_BLOCK);
             p_expect(p, TK_COLON, "':' after else");
             fill_block_body(p, n->c);

@@ -17,7 +17,6 @@ static const char *call_args(cg_t *cg, ast_node_t *call, func_sig_t *sig)
         bool arg_is_ref = sig && sig->decl && i < sig->decl->list.len &&
                           ((ast_node_t *)sig->decl->list.data[i])->is_ref;
         if (arg_is_ref) {
-            
             type_t *pt = (i < sig->params.len) ? (type_t *)sig->params.data[i] : NULL;
             if (pt)
                 sb_puts(&b, cg_fmt(cg, "(%s*)&(%s)",

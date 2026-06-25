@@ -223,7 +223,6 @@ static void check_stmt(sema_t *s, ast_node_t *n)
             break;
         }
         case AST_RETURN: {
-            
             if (s->cur_func && s->cur_func->infer_ret) {
                 type_t *vt = n->a ? sema_check_expr(s, n->a) : ty(s, TY_VOID);
                 s->cur_func->ret = vt;

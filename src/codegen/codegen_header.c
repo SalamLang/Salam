@@ -203,7 +203,6 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
     { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (d->kind == AST_IMPORT) {
-            
             const char *p = (d->value.kind == TV_STRING && d->value.as.s) ? d->value.as.s : d->name;
             if (!p) continue;
             const char *resolved = salam_resolve_import(cg->a, "", p);

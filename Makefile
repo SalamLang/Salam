@@ -36,8 +36,6 @@ OBJS      := $(SRCS:src/%.c=$(BUILD_DIR)/%.o)
 MAIN_OBJ  := $(MAIN_SRC:src/%.c=$(BUILD_DIR)/%.o)
 DEPS      := $(OBJS:.o=.d) $(MAIN_OBJ:.o=.d)
 
-$(shell mkdir -p $(dir $(OBJS) $(MAIN_OBJ)))
-
 .PHONY: all test dist clean debug
 
 all: $(TARGET)
@@ -46,6 +44,7 @@ $(TARGET): $(OBJS) $(MAIN_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD_DIR)/%.o: src/%.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 -include $(DEPS)

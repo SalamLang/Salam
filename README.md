@@ -59,8 +59,9 @@ sh tools/build-compiler.sh        # quick build with tcc  ->  ./salamc
 cmake -B build && cmake --build build && ctest --test-dir build
 ```
 
-`runtime/` builds into `libsalam.a` (linked into compiled programs). `salamc build` also
-embeds a self-contained runtime copy, so generated programs compile with no external deps.
+There is no separate runtime library: `salamc build` emits the small C runtime
+(print/strcat/pow/alloc and optional bounds checks) inline into the generated C, so
+compiled programs are self-contained and link only `-lm` (`-lmsvcrt` with tcc).
 
 ### Usage
 
@@ -85,6 +86,8 @@ salamc fmt app.salam                            # reformat one file
 salamc fmt                                      # reformat every .salam under the cwd, recursively
 salamc fmt src/ examples/                       # reformat given files and/or directories
 salamc fmt --check                              # report files that need formatting (exit 1 if any)
+salamc fmt app.salam --tabs                     # indent with tabs (convert spaces to tabs)
+salamc fmt src/ --indent=2                      # indent with 2 spaces per level
 salamc fmt page.salam --lang=fa                 # Persian source
 
 # REPLs
@@ -99,18 +102,6 @@ func main {
     println("Hello, World!")
 }
 ```
-
-### Documentation
-
-- [doc/user-guide.md](doc/user-guide.md) - language tour + CLI guide.
-- [doc/architecture.md](doc/architecture.md) - compiler internals for contributors.
-- [doc/hashmap.md](doc/hashmap.md) - arrays and the HashMap type.
-- [doc/interface.md](doc/interface.md) - interfaces as generic bounds (`<T: Shape>`); struct vs interface.
-- [doc/extern.md](doc/extern.md) - calling C directly via `extern "C"` (FFI) + `@link`.
-- [doc/format.md](doc/format.md) - the `salamc fmt` source formatter (rules, comments, recursion).
-- [doc/abi.md](doc/abi.md) - the C ABI: type mapping, struct layout, linkage.
-- Specs: [SALAM-SPEC.md](SALAM-SPEC.md) · [SALAM-TYPES.md](SALAM-TYPES.md) · [SALAM-GRAMMAR.md](SALAM-GRAMMAR.md).
-- Tests: `sh tools/run-tests.sh`.
 
 ## 🤝 Contributing
 

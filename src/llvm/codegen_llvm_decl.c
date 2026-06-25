@@ -387,7 +387,6 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
         const char *lty = ll_ty(ll, ts);
         const char *init;
         if (ll_const_init(d->a)) {
-            
             init = ll_expr(ll, d->a).ref;
         } else {
             init = ll_zero(ts);

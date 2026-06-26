@@ -8,7 +8,7 @@ PORT="${1:-3000}"
 EDITOR_DIR=../editor
 
 if [ ! -f "$EDITOR_DIR/salam-wa.js" ]; then
-    echo "note: $EDITOR_DIR/salam-wa.js is missing — the editor loads but the compiler" >&2
+    echo "note: $EDITOR_DIR/salam-wa.js is missing the editor loads but the compiler" >&2
     echo "      won't run until you build it with: sh tools/bash/build-wasm.sh" >&2
 fi
 

@@ -286,10 +286,11 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             }
             
             if (fn->decl && fn->decl->typarams.len > 0) {
-                
-                scope_t *save_cur = s->cur; s->cur = pk->members;
+
+                scope_t *save_cur = s->cur; scope_t *save_gp = s->gen_pkg;
+                s->cur = pk->members; s->gen_pkg = pk->members;
                 symbol_t *inst = g_infer_call(s, fn, &argtypes, &n->span);
-                s->cur = save_cur;
+                s->cur = save_cur; s->gen_pkg = save_gp;
                 if (!inst) return decorate(s, n, err_ty(s));
                 callee->kind = AST_IDENTIFIER;       
                 callee->name = inst->name;

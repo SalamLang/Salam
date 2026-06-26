@@ -2,14 +2,13 @@
 
 <p>
     <a href="https://salamlang.ir/">
-        <img width="150" src="https://raw.githubusercontent.com/SalamLang/Salam/main/assets/logo-box.svg" alt="The Salam Programming Language - زبان برنامه نویسی سلام">
+        <img width="150" src="https://raw.githubusercontent.com/SalamLang/Salam/main/design/logo/logo-box.svg" alt="The Salam Programming Language - زبان برنامه نویسی سلام">
     </a>
 </p>
 
-# Salam Language
+# Salam Programming Language
 
-A new programming language empowering developers in Persian and Arabic-speaking communities.
-Unlock the joy of coding-accessible, intuitive, and culturally resonant.
+Salam is a general-purpose and systems programming language designed for efficient software development, featuring a built-in domain-specific language (DSL)
 
 </div>
 
@@ -22,7 +21,7 @@ Unlock the joy of coding-accessible, intuitive, and culturally resonant.
 
 ---
 
-## ✨ Introducing Salam Language
+## ✨ Introducing Salam
 
 **Salam Language**, inspired by the word _salam_ (سلام), meaning _peace_, is the first **Persian/Arabic-based programming language**.
 It is designed for simplicity, accessibility, and inclusivity-bridging the gap between developers and technology in Persian, Arabic, and related linguistic communities.
@@ -112,6 +111,62 @@ func main {
     println("Hello, World!")
 }
 ```
+
+## 🐳 Docker & Docker Compose
+
+The repository ships a multi-stage [`Dockerfile`](Dockerfile) and a
+[`docker-compose.yml`](docker-compose.yml) built on **Alpine Linux** (musl, the
+lightest practical base). The image includes everything the compiler needs:
+a C compiler (`gcc` + `tcc`), the **LLVM 22** backend (`clang-22`, `llc-22`,
+`opt-22`, `lli-22`), and `make`, no CMake required.
+
+There are two modes:
+
+### Development (live reload)
+
+The source tree is bind-mounted and `./salam` is **recompiled automatically on
+every change** to `src/` (powered by `entr`, see [`tools/docker-dev.sh`](tools/docker-dev.sh)):
+
+```sh
+docker compose up dev          # first build, then watch & rebuild on save
+```
+
+Edit any file under `src/` on your host and the container rebuilds `./salam`
+incrementally. To get a shell inside the same environment:
+
+```sh
+docker compose run --rm dev sh
+```
+
+### Production (copy & build)
+
+The production stage runs `COPY .` then `make && make install`, baking a fully
+built, self-contained compiler into the image. `salam` is the entrypoint:
+
+```sh
+docker compose build prod                                  # build the image
+docker compose run --rm prod build examples/en/hello.salam --output=hello
+docker compose run --rm prod layout build page.salam --inline
+docker compose run --rm prod --help
+```
+
+Your current directory is mounted at `/work`, so the compiler can read your
+`.salam` sources and write its output back to the host.
+
+### Plain Docker (without Compose)
+
+```sh
+docker build --target prod -t salam:prod .                 # production image
+docker run --rm -v "$PWD":/work salam:prod build app.salam --output=app
+
+docker build --target dev  -t salam:dev  .                 # dev image
+docker run --rm -it -v "$PWD":/app salam:dev               # live-rebuild loop
+```
+
+> The LLVM and Alpine versions are configurable build args
+> (`--build-arg LLVM_VERSION=22`, `--build-arg ALPINE_VERSION=edge`). LLVM 22
+> currently lives in Alpine's `edge` repositories, which is why `edge` is the
+> default base.
 
 ## 🤝 Contributing
 

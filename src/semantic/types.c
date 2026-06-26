@@ -29,11 +29,13 @@ type_ctx_t *type_ctx_new(arena_t *a)
     } }
     return tc;
 }
+
 type_t *type_prim(type_ctx_t *tc, type_kind_t kind)
 {
     if (kind < 0 || kind > TY_F64) return tc->prims[TY_ERROR];
     return tc->prims[kind];
 }
+
 type_t *type_array(type_ctx_t *tc, type_t *elem, size_t length)
 {
     { size_t i = 0; for (; i < tc->arrays.len; i++) {
@@ -46,6 +48,7 @@ type_t *type_array(type_ctx_t *tc, type_t *elem, size_t length)
     vec_push(tc->a, &tc->arrays, t);
     return t;
 }
+
 type_t *type_ptr(type_ctx_t *tc, type_t *pointee)
 {
     { size_t i = 0; for (; i < tc->ptrs.len; i++) {
@@ -58,6 +61,7 @@ type_t *type_ptr(type_ctx_t *tc, type_t *pointee)
     vec_push(tc->a, &tc->ptrs, t);
     return t;
 }
+
 type_t *type_struct(type_ctx_t *tc, void *decl, const char *name)
 {
     type_t *t = (type_t *)arena_alloc(tc->a, sizeof(*t));
@@ -65,6 +69,7 @@ type_t *type_struct(type_ctx_t *tc, void *decl, const char *name)
     t->kind = TY_STRUCT; t->decl = decl; t->name = name;
     return t;
 }
+
 type_t *type_enum(type_ctx_t *tc, void *decl, const char *name)
 {
     type_t *t = (type_t *)arena_alloc(tc->a, sizeof(*t));
@@ -72,6 +77,7 @@ type_t *type_enum(type_ctx_t *tc, void *decl, const char *name)
     t->kind = TY_ENUM; t->decl = decl; t->name = name;
     return t;
 }
+
 type_t *type_dyn(type_ctx_t *tc, void *iface_decl, const char *name)
 {
     type_t *t = (type_t *)arena_alloc(tc->a, sizeof(*t));
@@ -87,8 +93,11 @@ static type_t *type_kv(type_ctx_t *tc, type_kind_t kind, type_t *key, type_t *va
     t->kind = kind; t->key = key; t->elem = val;
     return t;
 }
+
 type_t *type_map(type_ctx_t *tc, type_t *key, type_t *val)      { return type_kv(tc, TY_MAP, key, val); }
+
 type_t *type_map_iter(type_ctx_t *tc, type_t *key, type_t *val) { return type_kv(tc, TY_MAP_ITER, key, val); }
+
 type_t *type_vec(type_ctx_t *tc, type_t *elem)
 {
     type_t *t = (type_t *)arena_alloc(tc->a, sizeof(*t));
@@ -96,6 +105,7 @@ type_t *type_vec(type_ctx_t *tc, type_t *elem)
     t->kind = TY_VEC; t->elem = elem;
     return t;
 }
+
 type_t *type_file(type_ctx_t *tc)
 {
     type_t *t = (type_t *)arena_alloc(tc->a, sizeof(*t));
@@ -103,6 +113,7 @@ type_t *type_file(type_ctx_t *tc)
     t->kind = TY_FILE; t->name = "File";
     return t;   
 }
+
 type_t *type_func(type_ctx_t *tc, type_t *ret, const vec_t *params)
 {
     type_t *t = (type_t *)arena_alloc(tc->a, sizeof(*t));
@@ -227,6 +238,7 @@ bool type_castable(const type_t *dst, const type_t *src)
     if (sn && dn) return true;       
     return false;
 }
+
 type_t *type_common_arith(type_ctx_t *tc, type_t *a, type_t *b)
 {
     if (!type_is_numeric(a) || !type_is_numeric(b)) return NULL;

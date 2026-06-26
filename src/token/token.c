@@ -104,15 +104,18 @@ static const char *const k_token_names[TK__COUNT] = {
     [TK_COMMENT_LINE]     = "COMMENT_LINE",
     [TK_COMMENT_BLOCK]    = "COMMENT_BLOCK",
 };
+
 const char *token_kind_name(token_kind_t kind)
 {
     if (kind < 0 || kind >= TK__COUNT || !k_token_names[kind]) return "UNKNOWN";
     return k_token_names[kind];
 }
+
 struct token_stream {
     vec_t       v;       
     const char *file;
 };
+
 token_stream_t *token_stream_new(arena_t *a, const char *file)
 {
     token_stream_t *ts = (token_stream_t *)arena_alloc(a, sizeof(*ts));
@@ -127,6 +130,7 @@ void token_stream_push(arena_t *a, token_stream_t *ts, const token_t *tok)
     *slot = *tok;
     vec_push(a, &ts->v, slot);
 }
+
 size_t token_stream_count(const token_stream_t *ts)
 {
     return ts->v.len;

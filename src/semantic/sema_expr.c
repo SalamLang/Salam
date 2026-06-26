@@ -51,6 +51,7 @@ const char *sema_op_method(token_kind_t k)
         default:         return NULL;
     }
 }
+
 token_kind_t sema_compound_base(token_kind_t k)
 {
     switch (k) {
@@ -62,6 +63,7 @@ token_kind_t sema_compound_base(token_kind_t k)
         default:            return TK_EOF;
     }
 }
+
 type_t *sema_try_op_overload(sema_t *s, ast_node_t *n, symbol_t *ssym,
                              const char *mname, type_t *rhs_type)
 {
@@ -145,7 +147,6 @@ static type_t *check_binary(sema_t *s, ast_node_t *n)
 
 static type_t *check_member(sema_t *s, ast_node_t *n)
 {
-    
     if (n->a && n->a->kind == AST_IDENTIFIER) {
         symbol_t *pk = scope_lookup(s->cur, n->a->name);
         if (pk && pk->kind == SYM_PACKAGE) {
@@ -191,6 +192,7 @@ static type_t *check_member(sema_t *s, ast_node_t *n)
     }
     return decorate(s, n, f->type);
 }
+
 type_t *sema_check_expr(sema_t *s, ast_node_t *n)
 {
     if (!n) return ty(s, TY_VOID);

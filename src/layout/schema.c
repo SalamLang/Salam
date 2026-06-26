@@ -32,6 +32,12 @@
 
 #define SCHEMA_MAX_ELEMS 256
 
+static const char *or_null(const char *s) { return (s && s[0]) ? s : NULL; }
+
+typedef struct { const char *canon, *lang; } word_reg_t;
+
+typedef struct { const char *group, *canon, *lang; } value_reg_t;
+
 static layout_elem_type_t kind_of(const char *k)
 {
     if (!k) return LE_MOTHER;
@@ -97,8 +103,6 @@ static void alias_foreach(const ast_node_t *def, const char *lang,
             fn((const char *)def->aliases.data[i + 1], ctx); }
 }
 
-static const char *or_null(const char *s) { return (s && s[0]) ? s : NULL; }
-typedef struct { const char *canon, *lang; } word_reg_t;
 static void register_word(const char *spelling, void *ctx)
 {
     word_reg_t *r = (word_reg_t *)ctx;
@@ -193,7 +197,7 @@ static void load_attr_file(arena_t *a, logger_t *log, langpack_t *pack,
         register_name_spellings(d, name);   
     } }
 }
-typedef struct { const char *group, *canon, *lang; } value_reg_t;
+
 static void register_value_spelling(const char *spelling, void *ctx)
 {
     value_reg_t *r = (value_reg_t *)ctx;

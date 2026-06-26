@@ -20,9 +20,9 @@ static type_t *ty(sema_t *s, type_kind_t k) { return sema_ty(s, k); }
 static type_t *err_ty(sema_t *s)            { return sema_err_ty(s); }
 
 static type_t *decorate(sema_t *s, ast_node_t *n, type_t *t) { return sema_decorate(s, n, t); }
+
 type_t *check_struct_lit(sema_t *s, ast_node_t *n)
 {
-    
     if (n->name) n->name = intrinsic_type_canon(local_canon(s, n->name));   
     type_t *exp = s->expected; s->expected = NULL;   
     if (exp && exp->kind == TY_STRUCT && n->name &&
@@ -65,6 +65,7 @@ type_t *check_struct_lit(sema_t *s, ast_node_t *n)
     } }
     return decorate(s, n, ssym->type);
 }
+
 type_t *check_array_lit(sema_t *s, ast_node_t *n)
 {
     type_t *exp = s->expected; s->expected = NULL;   
@@ -118,9 +119,9 @@ void record_capture(sema_t *s, ast_node_t *id, type_t *t)
         vec_push(s->a, &lam->captures, cap);
     } }
 }
+
 type_t *check_lambda(sema_t *s, ast_node_t *n)
 {
-    
     scope_t *sc = scope_new(s->a, SCOPE_FUNC, s->cur);
     scope_t *saved = s->cur;
     func_sig_t *saved_func = s->cur_func;

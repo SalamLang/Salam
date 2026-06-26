@@ -43,6 +43,7 @@ command -v "$EMCC" >/dev/null 2>&1 || [ -e "$EMCC" ] || {
     fi
     exit 1
 }
+
 OUT_DIR="web"
 mkdir -p "$OUT_DIR"
 PY="$(salam_python)"

@@ -52,6 +52,7 @@ static void assign_to(interp_t *I, env_t *env, ast_node_t *target, value_t v)
     }
     rt_error(I, target, "invalid assignment target");
 }
+
 flow_t exec_list(interp_t *I, env_t *env, frame_t *fr, vec_t *list, value_t *ret)
 {
     { size_t i = 0; for (; i < list->len; i++) {
@@ -60,6 +61,7 @@ flow_t exec_list(interp_t *I, env_t *env, frame_t *fr, vec_t *list, value_t *ret
     } }
     return FLOW_NORMAL;
 }
+
 flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *ret)
 {
     tick(I);

@@ -124,7 +124,6 @@ const char *layout_attr_value_map(const layout_attr_def_t *ad, const char *value
 
 const char *layout_value_type_name(layout_value_type_t vt)
 {
-    
     switch (vt) {
         case VT_STRING: return i18n_tr("a string");
         case VT_INT:    return i18n_tr("an integer");

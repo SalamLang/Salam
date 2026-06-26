@@ -82,8 +82,8 @@ compiled programs are self-contained and link only `-lm` (`-lmsvcrt` with tcc).
 
 ```sh
 # general language -> native executable
-salam build app.salam --output=app.exe        # then ./app.exe
-salam cli build app.salam --keep-c            # optional 'cli' prefix; keep generated C
+salam build app.salam --output=app.exe         # then ./app.exe
+salam cli build app.salam --keep-c             # optional 'cli' prefix; keep generated C
 salam obj app.salam                            # compile to .o only
 
 # layout DSL -> website

@@ -41,8 +41,14 @@ void symbols_to_xml(xml_writer_t *w, const sema_result_t *r);
 
 const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec);
 
+int salam_package_files(arena_t *a, const char *main_path, const char **out, int max);
+
+void salam_merge_program(arena_t *a, ast_node_t *dst, ast_node_t *src);
+
 void salam_set_stdlib_root(const char *root);
 
 const char *salam_get_stdlib_root(void);
+
+bool salam_find_bundled_tool(const char *name, char *out, size_t n);
 
 #endif /* SALAM_SEMANTIC_SEMA_H */

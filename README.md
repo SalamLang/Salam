@@ -25,11 +25,11 @@ Salam is a general-purpose and systems programming language designed for efficie
 [![VS Code Marketplace Version](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 [![VS Code Marketplace Installs](https://vsmarketplacebadges.dev/installs/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 
-[![GitHub Repo stars](https://img.shields.io/github/stars/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam/network/members)
-[![GitHub issues](https://img.shields.io/github/issues/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam/issues)
-[![GitHub pull requests](https://img.shields.io/github/issues-pr/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam/pulls)
-[![GitHub contributors](https://img.shields.io/github/contributors/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam/graphs/contributors)
+[![Commits per week](https://img.shields.io/github/commit-activity/w/SalamLang/Salam/main?style=for-the-badge&label=Commits%2FWeek)](https://github.com/SalamLang/Salam/commits/main)
+[![Awesome Salam](https://img.shields.io/badge/Awesome-Salam%20%F0%9F%95%B6-black?style=for-the-badge)](https://salamlang.ir)
+[![License](https://img.shields.io/github/license/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam/blob/main/LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/SalamLang/Salam/main?style=for-the-badge)](https://github.com/SalamLang/Salam/commits/main)
+[![Repo Size](https://img.shields.io/github/repo-size/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam)
 
 ---
 

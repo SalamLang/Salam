@@ -1,3 +1,17 @@
+/*
+ * Salam Programming Language (2024–2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
 #include "xml/xml_internal.h"
 
 static void xml_escaped(xml_writer_t *w, const char *s)

@@ -16,6 +16,8 @@ Salam is a general-purpose and systems programming language designed for efficie
 [![Dependabot Updates Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates)
 [![GitHub Pages Build Deployment Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment)
 [![Pull Request Labeler Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml)
+[![VS Code Marketplace Version](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
+[![VS Code Marketplace Installs](https://vsmarketplacebadges.dev/installs/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 
 ---
 
@@ -42,6 +44,14 @@ It is designed for simplicity, accessibility, and inclusivity-bridging the gap b
 - 🚀 Docker support for seamless development.
 - 🔧 Linting and code checks for best practices.
 - 🔄 Built-in commands for versioning and updates.
+
+## 🧩 Editor Support
+
+### Visual Studio Code
+
+Install the official Salam Language extension from the VS Code Marketplace for syntax highlighting and language support.
+
+[![Install on VS Code](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 
 ## 🛠️ The Compiler (`salam`)
 

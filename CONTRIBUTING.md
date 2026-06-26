@@ -155,25 +155,36 @@ We use the following formatting and linting tools to maintain consistent code qu
 
 ### 🪝 Commit Hooks
 
-We use [pre-commit](https://pypi.org/project/pre-commit/) hooks to automatically run formatters or linters before each commit.
+We use [prek](https://prek.j178.dev) — a fast, Rust-based drop-in alternative to `pre-commit` — to automatically run formatters and linters before each commit. It is fully compatible with `.pre-commit-config.yaml` and requires no Python runtime.
 
-1. Install `pre-commit`:
+See our config: [`.pre-commit-config.yaml`](./.pre-commit-config.yaml)
 
-   ```bash
-   pip install -r requirements-dev.txt
-   ```
+**Install prek:**
 
-2. Set up the hooks:
+```bash
+# Using pip
+pip install prek
 
-   ```bash
-   pre-commit install
-   ```
+# Using uv (recommended)
+uv tool install prek
 
-3. Run all hooks against all files:
+# Using pipx
+pipx install prek
+```
 
-   ```bash
-   pre-commit run --all-files
-   ```
+**Set up hooks:**
+
+```bash
+prek install
+```
+
+**Run all hooks against all files:**
+
+```bash
+prek run -a
+```
+
+That's it — every `git commit` will now trigger prek automatically.
 
 ---
 

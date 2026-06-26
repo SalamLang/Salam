@@ -1,3 +1,17 @@
+/*
+ * Salam Programming Language (2024–2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
 #include "interp/interp_internal.h"
 
 static void assign_to(interp_t *I, env_t *env, ast_node_t *target, value_t v)

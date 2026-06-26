@@ -17,6 +17,7 @@
 #include "i18n/i18n.h"
 
 static type_t *ty(sema_t *s, type_kind_t k) { return sema_ty(s, k); }
+
 func_sig_t *build_sig(sema_t *s, ast_node_t *fn, symbol_t *owner)
 {
     func_sig_t *sig = (func_sig_t *)arena_alloc(s->a, sizeof(*sig));
@@ -38,6 +39,7 @@ func_sig_t *build_sig(sema_t *s, ast_node_t *fn, symbol_t *owner)
     sig->mangled = mangle_func(s->a, owner ? owner->name : NULL, fn->name, &sig->params);
     return sig;
 }
+
 symbol_t *get_or_make_func(sema_t *s, scope_t *sc, const char *name, sym_kind_t kind)
 {
     symbol_t *sym = scope_lookup_local(sc, name);
@@ -74,7 +76,6 @@ static void check_link(sema_t *s, ast_node_t *d)
 
 void sema_collect(sema_t *s, ast_node_t *program)
 {
-    
     { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
         if (d->synthetic) continue;   

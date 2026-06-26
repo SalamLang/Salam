@@ -177,6 +177,7 @@ void coerce_args_to_dyn(sema_t *s, ast_node_t *call, vec_t *argtypes, func_sig_t
                                                (type_t *)argtypes->data[i]);
     } }
 }
+
 symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes, const src_span_t *span)
 {
     if (targ_nodes->len != tmpl->typarams.len) {
@@ -285,6 +286,7 @@ static type_t *g_unify(ast_node_t *pty, type_t *at, const char *T)
     }
     return NULL;
 }
+
 symbol_t *g_infer_call(sema_t *s, symbol_t *tsym, vec_t *argtypes, const src_span_t *span)
 {
     ast_node_t *tmpl = tsym->decl;

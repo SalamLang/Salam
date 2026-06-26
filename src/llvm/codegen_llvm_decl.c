@@ -46,7 +46,6 @@ static void ll_put_ident(sb_t *b, const char *name)
     } }
 }
 
-
 static void ll_put_type_code(sb_t *b, const char *ts)
 {
     { const unsigned char *p = (const unsigned char *)ts; for (; p && *p; p++) {
@@ -71,7 +70,6 @@ const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *s
         } }
     const char *r = arena_strdup(ll->a, sb_cstr(&b)); sb_free(&b); return r;
 }
-
 
 func_sig_t *ll_pick_overload(ll_t *ll, symbol_t *sym, ast_node_t *call)
 {
@@ -203,7 +201,6 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
     ll->locals = saved_locals; ll->defers = saved_defers;
 }
 
-
 void ll_ensure_fn(ll_t *ll, ast_node_t *fn, symbol_t *owner, scope_t *pscope)
 {
     if (!fn) return;
@@ -213,14 +210,12 @@ void ll_ensure_fn(ll_t *ll, ast_node_t *fn, symbol_t *owner, scope_t *pscope)
     ll->pkg_scope = saved;
 }
 
-
 static const char *ll_vtbl_name(ll_t *ll, const char *iface, const char *concrete)
 {
     sb_t b; sb_init(&b); sb_puts(&b, "@vtbl.");
     ll_put_ident(&b, iface); sb_putc(&b, '.'); ll_put_ident(&b, concrete);
     const char *r = arena_strdup(ll->a, sb_cstr(&b)); sb_free(&b); return r;
 }
-
 
 static func_sig_t *ll_match_sig(symbol_t *m, size_t want)
 {
@@ -231,7 +226,6 @@ static func_sig_t *ll_match_sig(symbol_t *m, size_t want)
     } }
     return first;
 }
-
 
 static void ll_ensure_vtbl(ll_t *ll, const char *iface, const char *concrete)
 {
@@ -261,7 +255,6 @@ static void ll_ensure_vtbl(ll_t *ll, const char *iface, const char *concrete)
     sb_free(&slots);
 }
 
-
 const char *ll_box_dyn(ll_t *ll, llv_t v, const char *iface)
 {
     char ib[160]; size_t k = 0;                 
@@ -280,7 +273,6 @@ const char *ll_box_dyn(ll_t *ll, llv_t v, const char *iface)
     return t1;
 }
 
-
 const char *ll_mangle_ti(ll_t *ll, const char *typestr, const char *fn, func_sig_t *sig)
 {
     sb_t b; sb_init(&b); sb_puts(&b, "salam_ti_");
@@ -293,7 +285,6 @@ const char *ll_mangle_ti(ll_t *ll, const char *typestr, const char *fn, func_sig
         } }
     const char *r = arena_strdup(ll->a, sb_cstr(&b)); sb_free(&b); return r;
 }
-
 
 static void ll_emit_impls_in(ll_t *ll, scope_t *g)
 {
@@ -312,7 +303,6 @@ static void ll_emit_impls_in(ll_t *ll, scope_t *g)
 }
 
 void ll_emit_impls(ll_t *ll) { ll_emit_impls_in(ll, ll->sem->global); }
-
 
 void ll_emit_lambda(ll_t *ll, ast_node_t *n)
 {
@@ -415,7 +405,6 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
 }
 
 
-
 static bool ll_extern_seen(ll_t *ll, const char *name)
 {
     static const char *prologue[] = { "printf","dprintf","strlen","strcmp",
@@ -450,7 +439,6 @@ static void ll_emit_externs_in(ll_t *ll, scope_t *g)
 }
 
 void ll_emit_externs(ll_t *ll) { ll_emit_externs_in(ll, ll->sem->global); }
-
 
 void ll_emit_packages(ll_t *ll)
 {

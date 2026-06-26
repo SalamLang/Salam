@@ -17,7 +17,6 @@
 #include "i18n/i18n_internal.h"
 
 static const i18n_pair_t k_msg_fa[] = {
-    
     { "error",                                               "خطا" },
     { "warning",                                             "هشدار" },
     { "note",                                                "یادداشت" },

@@ -59,7 +59,6 @@ int lx_at_digit(lx_t *L, size_t k)
     return lx_decimal_digit(L->s + p, L->n - p, &val);
 }
 
-
 int lx_take_digit(lx_t *L)
 {
     if (L->pos >= L->n) return -1;
@@ -83,6 +82,7 @@ bool lx_expect(lx_t *L, char close, const src_pos_t *begin, const char *errmsg)
     lx_error(L, begin, errmsg);
     return false;
 }
+
 size_t lx_trim_ws_end(const char *s, size_t start, size_t end)
 {
     while (end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\r')) end--;

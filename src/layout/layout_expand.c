@@ -389,6 +389,7 @@ static void expand_items(expand_t *ex, vec_t *out, ast_node_t *container,
     { size_t i = 0; for (; i < container->list.len; i++)
         expand_item(ex, out, (ast_node_t *)container->list.data[i], frame, dir, depth); }
 }
+
 size_t layout_expand(arena_t *a, logger_t *log, const langpack_t *pack,
                      ast_node_t *program, const char *base_dir)
 {

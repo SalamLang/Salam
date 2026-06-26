@@ -38,6 +38,7 @@ bool to_bool(value_t v)
         default:        return true;
     }
 }
+
 double to_float(value_t v)
 {
     switch (v.kind) {
@@ -116,6 +117,7 @@ const char *to_str(interp_t *I, value_t v)
     }
     return "";
 }
+
 sarray_t *array_new(interp_t *I, size_t cap)
 {
     sarray_t *a = (sarray_t *)arena_alloc(I->a, sizeof *a);
@@ -134,7 +136,9 @@ void array_push(interp_t *I, sarray_t *a, value_t v)
     }
     a->data[a->len++] = v;
 }
+
 value_t mk_array(interp_t *I, sarray_t *a) { (void)I; value_t v; v.kind = VAL_ARRAY; v.as.arr = a; return v; }
+
 smap_t *map_new(interp_t *I)
 {
     smap_t *m = (smap_t *)arena_alloc(I->a, sizeof *m);
@@ -169,13 +173,16 @@ void map_put(interp_t *I, smap_t *m, value_t k, value_t val)
     { size_t i = 0; for (; i < m->cap; i++)
         if (!m->entries[i].used) { m->entries[i].key = k; m->entries[i].val = val; m->entries[i].used = true; m->count++; return; } }
 }
+
 smap_entry_t *map_find(smap_t *m, value_t k)
 {
     { size_t i = 0; for (; i < m->cap; i++)
         if (m->entries[i].used && key_eq(m->entries[i].key, k)) return &m->entries[i]; }
     return NULL;
 }
+
 value_t mk_map(smap_t *m)   { value_t v; v.kind = VAL_MAP;  v.as.map = m; return v; }
+
 value_t mk_struct(interp_t *I, const char *name, ast_node_t *def, size_t nfields)
 {
     sstruct_t *s = (sstruct_t *)arena_alloc(I->a, sizeof *s);
@@ -183,6 +190,7 @@ value_t mk_struct(interp_t *I, const char *name, ast_node_t *def, size_t nfields
     s->fields = nfields ? (sfield_t *)arena_alloc(I->a, salam_size_mul(nfields, sizeof(sfield_t))) : NULL;
     value_t v; v.kind = VAL_STRUCT; v.as.st = s; return v;
 }
+
 value_t mk_closure(interp_t *I, ast_node_t *fn, env_t *env)
 {
     sclosure_t *c = (sclosure_t *)arena_alloc(I->a, sizeof *c);
@@ -222,6 +230,7 @@ static value_t zero_for_base(const char *base)
     if (!strcmp(base, "str"))    return val_str("");
     return val_null();
 }
+
 value_t default_for_type(interp_t *I, const char *ts)
 {
     if (!ts) return val_null();
@@ -255,6 +264,7 @@ static const char *binop_method(token_kind_t op)
         default:         return NULL;
     }
 }
+
 token_kind_t compound_base(token_kind_t op)
 {
     switch (op) {
@@ -266,6 +276,7 @@ token_kind_t compound_base(token_kind_t op)
         default:            return TK_EOF;
     }
 }
+
 value_t try_struct_op(interp_t *I, token_kind_t op, value_t a, value_t b,
                       bool has_b, bool *found)
 {
@@ -287,9 +298,9 @@ value_t try_struct_op(interp_t *I, token_kind_t op, value_t a, value_t b,
     *found = true;
     return call_func(I, m, I->globals, &a, has_b ? &b : NULL, has_b ? 1 : 0);
 }
+
 value_t arith(interp_t *I, ast_node_t *n, token_kind_t op, value_t a, value_t b)
 {
-    
     if (op == TK_PLUS && (a.kind == VAL_STR || b.kind == VAL_STR))
         return val_str(afmt(I, "%s%s", to_str(I, a), to_str(I, b)));
     if (op == TK_POWER) {

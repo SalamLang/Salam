@@ -334,7 +334,6 @@ static const char *call_method(cg_t *cg, ast_node_t *n, ast_node_t *obj,
                   cg_ctype(cg, objts), t, oexpr, mangled, t, as);
 }
 
-
 static const char *call_impl(cg_t *cg, ast_node_t *n, ast_node_t *obj,
                              ast_node_t *callee, const char *objts, symbol_t *owner)
 {

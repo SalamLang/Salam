@@ -238,7 +238,6 @@ static bool file_has_entry(arena_t *a, langpack_t *pack, const char *entry, cons
 
 static int driver_run(options_t *opt)
 {
-    
     if (opt->log_level == LOG_INFO) opt->log_level = LOG_WARN;
     logger_t *log   = logger_new(stderr, opt->log_level, resolve_color(opt->color));
     arena_t  *arena = arena_new(1 << 20);
@@ -360,6 +359,7 @@ static int driver_interp(options_t *opt)
     arena_free(arena); logger_free(log);
     return rc;
 }
+
 typedef struct {
     const langpack_t *pack;
     logger_t         *log;
@@ -370,6 +370,7 @@ typedef struct {
     int               errors;
     int               total;
 } fmt_ctx_t;
+
 static bool has_salam_ext(const char *name)
 {
     size_t L = strlen(name);

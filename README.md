@@ -18,7 +18,7 @@ Salam is a general-purpose and systems programming language designed for efficie
 [![Pull Request Labeler Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml)
 [![Prek Standard Hooks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/prek.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/prek.yml)
 [![Prek Manual Hooks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/prek-manual.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/prek-manual.yml)
-[![Build and Test Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/make-run.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/make-run.yml)
+[![Docker Build & Test Alpine + LLVM 22 Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/make-run.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/make-run.yml)
 [![Build and Release Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/build-release.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/build-release.yml)
 [![Super-Linter Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/super-linter.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/super-linter.yml)
 [![WebAssembly Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/web-assembly.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/web-assembly.yml)
@@ -26,9 +26,10 @@ Salam is a general-purpose and systems programming language designed for efficie
 [![VS Code Marketplace Installs](https://vsmarketplacebadges.dev/installs/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 
 [![Commits per week](https://img.shields.io/github/commit-activity/w/SalamLang/Salam/main?style=for-the-badge&label=Commits%2FWeek)](https://github.com/SalamLang/Salam/commits/main)
-[![Awesome Salam](https://img.shields.io/badge/Awesome-Salam%20%F0%9F%95%B6-black?style=for-the-badge)](https://salamlang.ir)
 [![License](https://img.shields.io/github/license/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam/blob/main/LICENSE)
 [![Repo Size](https://img.shields.io/github/repo-size/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam)
+
+[![Awesome Salam](https://img.shields.io/badge/Awesome-Salam%20%F0%9F%95%B6-black?style=for-the-badge)](#)
 
 ---
 

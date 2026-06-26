@@ -76,7 +76,6 @@ sh tools/build-compiler.sh   # builds ./salam
 ### Build with CMake
 
 ```bash
-cd compiler
 cmake -B build
 cmake --build build
 ctest --test-dir build   # run the test suite

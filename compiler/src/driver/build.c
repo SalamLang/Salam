@@ -107,8 +107,22 @@ int driver_build(options_t *opt)
     langpack_t *pack = langpack_load(opt->lang);
     if (!pack) { LOG_E(log, PH_DRIVER, i18n_tr("unknown language pack '%s'"), opt->lang);
                  logger_free(log); arena_free(arena); return 2; }
-    salam_set_stdlib_root(opt->stdlib_path);   
-    
+    salam_set_stdlib_root(opt->stdlib_path);
+
+    /* Self-contained installs ship a C toolchain next to salam (mingw-w64/LLVM).
+     * When the user didn't pick a compiler (the default is "tcc"), prefer a
+     * gcc/clang/tcc bundled beside the binary over whatever is on PATH, so the
+     * distribution works with nothing installed. */
+    if (opt->cc && strcmp(opt->cc, "tcc") == 0) {
+        static char bundled_cc[1200];
+        if (salam_find_bundled_tool("gcc",   bundled_cc, sizeof bundled_cc) ||
+            salam_find_bundled_tool("clang", bundled_cc, sizeof bundled_cc) ||
+            salam_find_bundled_tool("tcc",   bundled_cc, sizeof bundled_cc)) {
+            opt->cc = bundled_cc;
+            LOG_I(log, PH_DRIVER, "using bundled C compiler: %s", opt->cc);
+        }
+    }
+
     const char *cfiles[SALAM_MAX_INPUTS];
     int         ncfiles = 0;
     const char *generated[SALAM_MAX_INPUTS * 2 + 2];
@@ -170,6 +184,22 @@ int driver_build(options_t *opt)
         bool lok = lexer_run(arena, log, pack, src, &toks);
         ast_node_t *program = NULL;
         bool pok = parser_run(arena, log, toks, &program);
+
+        /* A package may span several .salam files in one directory: parse each
+         * sibling and merge it into this module before checking / codegen. */
+        { const char *pfiles[SALAM_MAX_INPUTS];
+          int npf = salam_package_files(arena, path, pfiles, SALAM_MAX_INPUTS);
+          int pi = 1; for (; pi < npf; pi++) {
+            source_file_t *psrc = source_load(arena, pfiles[pi]);
+            if (!psrc) { LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"), pfiles[pi]); all_ok = false; continue; }
+            psrc = preproc_source(arena, log, psrc, defs, ndefs);
+            token_stream_t *ptoks = NULL;
+            if (!lexer_run(arena, log, pack, psrc, &ptoks)) lok = false;
+            ast_node_t *pprog = NULL;
+            if (!parser_run(arena, log, ptoks, &pprog)) pok = false;
+            salam_merge_program(arena, program, pprog);
+        } }
+
         sema_result_t *sr = sema_run(arena, log, program, src->path);
         if (!lok || !pok || !sr->ok) { all_ok = false; continue; }
         { size_t k = 0; for (; k < program->list.len; k++) {
@@ -265,10 +295,12 @@ int driver_build(options_t *opt)
             output = o;
         }
 #ifdef _WIN32
-        
-        const char *lm = use_tcc ? " -lmsvcrt" : " -lm";
+        /* tcc needs an explicit -lmsvcrt; clang (MSVC target) keeps libm in the
+         * CRT, so -lm would fail to link. Only mingw gcc wants -lm on Windows. */
+        const char *lm = use_tcc ? " -lmsvcrt"
+                       : (strstr(opt->cc, "clang") ? "" : " -lm");
 #else
-        
+
         const char *lm = " -lm";
 #endif
         sb_t cmd; sb_init(&cmd);

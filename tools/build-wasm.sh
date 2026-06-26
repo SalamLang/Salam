@@ -5,7 +5,7 @@ set -e
 . "$(dirname "$0")/lib.sh"
 salam_ensure_compiler
 rm -f salam_mod_*.c salam_mod_*.h
-"$SALAMC" run tools/gen-examples.salam
+"$SALAM" run tools/gen-examples.salam
 EMCC="${EMCC:-emcc}"
 if ! command -v "$EMCC" >/dev/null 2>&1; then
     EMSDK_DIR="${SALAM_EMSDK:-C:/emsdk-wasm}"

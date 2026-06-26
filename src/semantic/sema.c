@@ -24,12 +24,199 @@
 #include "preproc/preproc.h"
 #if defined(_WIN32)
 #  include <io.h>
+#  include <windows.h>
 #else
 #  include <dirent.h>
+#  include <unistd.h>
+#endif
+#if defined(__APPLE__)
+#  include <mach-o/dyld.h>
 #endif
 
-static const char *g_stdlib_root = NULL;
-void salam_set_stdlib_root(const char *root) { g_stdlib_root = root; }
+/* --------------------------------------------------------------------------
+ * Standard-library root resolution.
+ *
+ * The "root" is the directory that contains the "std/" tree. Imports are then
+ * resolved as <root>/std/<pkg>/<pkg>.salam (see salam_resolve_import). An empty
+ * root ("") means "look for std/ relative to the current working directory",
+ * which is the in-repo development convention.
+ *
+ * Resolution order (first hit wins):
+ *   1. explicit --stdlib-path=DIR
+ *   2. $SALAM_STD environment variable
+ *   3. a "salam.cfg" file sitting next to the salam binary (stdlib_path=DIR)
+ *   4. auto-discovery relative to the binary (portable installs / in-repo)
+ *   5. the compile-time install prefix baked in via -DSALAM_STDLIB_PREFIX
+ *   6. fall back to "" (cwd-relative std/)
+ *
+ * Steps 1–3 accept either the root itself or the std/ directory directly; both
+ * are normalised to the root form by derive_root().
+ * ------------------------------------------------------------------------ */
+
+static char  g_stdlib_root_buf[1200];
+static const char *g_stdlib_root = NULL;   /* resolved root, or "" for cwd */
+static bool        g_stdlib_resolved = false;
+
+static bool file_exists(const char *p);    /* fwd decl */
+
+/* True if <root>/std/core/core.salam exists (our sentinel std file). */
+static bool root_has_std(const char *root)
+{
+    char p[1100];
+    if (root && root[0]) snprintf(p, sizeof p, "%s/std/core/core.salam", root);
+    else                 snprintf(p, sizeof p, "std/core/core.salam");
+    return file_exists(p);
+}
+
+/* Normalise a user-supplied path to root form: if it points at the std/ dir
+   itself, return its parent; otherwise return it unchanged. */
+static void derive_root(const char *path, char *out, size_t n)
+{
+    char probe[1100];
+    snprintf(probe, sizeof probe, "%s/std/core/core.salam", path);
+    if (file_exists(probe)) { snprintf(out, n, "%s", path); return; }
+
+    snprintf(probe, sizeof probe, "%s/core/core.salam", path);
+    if (file_exists(probe)) {                 /* path is the std/ dir itself */
+        snprintf(out, n, "%s", path);
+        char *s = out + strlen(out);
+        while (s > out && (s[-1] == '/' || s[-1] == '\\')) *--s = '\0';
+        char *slash = strrchr(out, '/');
+        char *bs    = strrchr(out, '\\');
+        char *cut   = (bs && (!slash || bs > slash)) ? bs : slash;
+        if (cut) *cut = '\0'; else out[0] = '\0';
+        return;
+    }
+    snprintf(out, n, "%s", path);             /* trust as-is */
+}
+
+/* Absolute directory holding the running executable (no trailing slash). */
+static bool get_exe_dir(char *out, size_t n)
+{
+    char buf[1024];
+#if defined(_WIN32)
+    DWORD len = GetModuleFileNameA(NULL, buf, (DWORD)sizeof buf);
+    if (len == 0 || len >= sizeof buf) return false;
+#elif defined(__APPLE__)
+    uint32_t sz = (uint32_t)sizeof buf;
+    if (_NSGetExecutablePath(buf, &sz) != 0) return false;
+#elif defined(__linux__)
+    ssize_t len = readlink("/proc/self/exe", buf, sizeof buf - 1);
+    if (len <= 0) return false;
+    buf[len] = '\0';
+#else
+    (void)buf; (void)out; (void)n; return false;
+#endif
+#if !defined(__linux__) && !defined(_WIN32) && !defined(__APPLE__)
+    return false;
+#else
+    {
+        char *slash = strrchr(buf, '/');
+        char *bs    = strrchr(buf, '\\');
+        char *cut   = (bs && (!slash || bs > slash)) ? bs : slash;
+        if (!cut) return false;
+        *cut = '\0';
+        snprintf(out, n, "%s", buf);
+        return true;
+    }
+#endif
+}
+
+/* Read a "stdlib_path = DIR" (or "stdlib = DIR") entry from a config file. */
+static bool read_cfg_stdlib(const char *cfg, char *out, size_t n)
+{
+    FILE *f = fopen(cfg, "rb");
+    if (!f) return false;
+    char line[1024];
+    bool found = false;
+    while (fgets(line, sizeof line, f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || *p == ';') continue;
+        const char *key = NULL;
+        if      (strncmp(p, "stdlib_path", 11) == 0) key = p + 11;
+        else if (strncmp(p, "stdlib",      6)  == 0) key = p + 6;
+        if (!key) continue;
+        while (*key == ' ' || *key == '\t') key++;
+        if (*key != '=') continue;
+        key++;
+        while (*key == ' ' || *key == '\t') key++;
+        size_t len = strlen(key);
+        while (len > 0 && (key[len-1] == '\n' || key[len-1] == '\r' ||
+                           key[len-1] == ' '  || key[len-1] == '\t')) len--;
+        if (len == 0 || len >= n) continue;
+        memcpy(out, key, len); out[len] = '\0';
+        found = true;
+        break;
+    }
+    fclose(f);
+    return found;
+}
+
+static const char *resolve_stdlib_root(const char *explicit_path)
+{
+    char *buf = g_stdlib_root_buf;
+    size_t  N = sizeof g_stdlib_root_buf;
+
+    /* 1. explicit --stdlib-path */
+    if (explicit_path && explicit_path[0]) {
+        derive_root(explicit_path, buf, N);
+        return buf;
+    }
+    /* 2. $SALAM_STD */
+    {
+        const char *env = getenv("SALAM_STD");
+        if (env && env[0]) { derive_root(env, buf, N); return buf; }
+    }
+    {
+        char exedir[1024];
+        if (get_exe_dir(exedir, sizeof exedir)) {
+            /* 3. salam.cfg next to the binary */
+            char cfg[1100], val[1024];
+            snprintf(cfg, sizeof cfg, "%s/salam.cfg", exedir);
+            if (read_cfg_stdlib(cfg, val, sizeof val)) {
+                derive_root(val, buf, N);
+                if (root_has_std(buf)) return buf;
+            }
+            /* 4. auto-discovery relative to the binary */
+            {
+                static const char *rel[] = {
+                    ".",                /* binary sits next to std/ (in-repo / portable) */
+                    "../share/salam",   /* PREFIX/bin + PREFIX/share/salam (make install) */
+                    "../lib/salam",
+                    ".."
+                };
+                size_t i = 0;
+                for (; i < sizeof rel / sizeof rel[0]; i++) {
+                    char cand[1200];
+                    snprintf(cand, sizeof cand, "%s/%s", exedir, rel[i]);
+                    if (root_has_std(cand)) { snprintf(buf, N, "%s", cand); return buf; }
+                }
+            }
+        }
+    }
+    /* 5. compile-time install prefix */
+#ifdef SALAM_STDLIB_PREFIX
+    if (root_has_std(SALAM_STDLIB_PREFIX)) {
+        snprintf(buf, N, "%s", SALAM_STDLIB_PREFIX);
+        return buf;
+    }
+#endif
+    /* 6. cwd-relative std/ */
+    return "";
+}
+
+void salam_set_stdlib_root(const char *root)
+{
+    g_stdlib_root     = resolve_stdlib_root(root);
+    g_stdlib_resolved = true;
+}
+
+const char *salam_get_stdlib_root(void)
+{
+    if (!g_stdlib_resolved) salam_set_stdlib_root(NULL);
+    return g_stdlib_root ? g_stdlib_root : "";
+}
 
 static char *path_normalize(char *p)
 {
@@ -129,7 +316,7 @@ static const char *resolve_pkg_alias(arena_t *a, const char *root, const char *s
 
 const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec)
 {
-    const char *root = g_stdlib_root ? g_stdlib_root : "";
+    const char *root = salam_get_stdlib_root();
     bool has_ext = strstr(spec, ".salam") != NULL;
     size_t n = strlen(root) + strlen(dir) + 2 * strlen(spec) + 16;
     char *p = (char *)arena_alloc(a, n);

@@ -70,8 +70,7 @@ All build commands should be run from the root directory.
 Requires a C compiler. `tcc` is the default backend (bundled, fast); `gcc` or `clang` also work.
 
 ```bash
-cd compiler
-sh tools/bash/build-compiler.sh   # builds ./salam
+sh tools/build-compiler.sh   # builds ./salam
 ```
 
 ### Build with CMake

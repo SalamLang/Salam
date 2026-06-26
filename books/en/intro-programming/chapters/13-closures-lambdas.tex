@@ -1,0 +1,218 @@
+% ===================== Chapter 13 =====================
+\chapter{Closures and Lambdas}
+\label{ch:closures-lambdas}
+
+So far functions have been things we \emph{define} and \emph{call}. In this
+chapter functions become \emph{values}: things we can store in a variable, pass to
+another function, and create on the spot without giving them a name. A small,
+unnamed function is called a \textbf{lambda}, and when one captures variables from
+around it, it becomes a \textbf{closure}. These ideas unlock a flexible,
+expressive style of programming.
+
+\section{Functions as values}
+
+A \textbf{lambda} is a function written as an expression, with no name. Its syntax
+is a parameter list, the arrow \code{=>}, and a body. For a one-expression body,
+just write the expression:
+
+\begin{salam}
+func main:
+    double auto = (x i32) => x * 2
+    println double(21)
+end
+\end{salam}
+
+\begin{progout}
+42
+\end{progout}
+
+Here \code{(x i32) => x * 2} is a function value: it takes an \code{i32} called
+\code{x} and produces \code{x * 2}. We store it in the variable \code{double}
+(letting \code{auto} infer its type) and then \emph{call} it just like any
+function: \code{double(21)}. The lambda has no name of its own --- the name
+\code{double} belongs to the variable, not the function.
+
+\subsection{The type of a function value}
+
+The type of \code{double} is \code{func(i32) i32}: ``a function taking an
+\code{i32} and returning an \code{i32}.'' In general a function-value type is
+written \code{func(}\textit{argument types}\code{) }\textit{return type}. A
+function value taking nothing and returning an \code{i32} has type
+\code{func() i32}. You will see these types most often where one function accepts
+another as a parameter.
+
+\subsection{Multi-statement bodies}
+
+When a lambda needs more than one statement, give it a block body: a colon after
+the arrow, the statements, and \code{end} --- exactly like a named function, just
+without the name:
+
+\begin{salam}
+(x i32) => :
+    mut y i32 = x * x
+    ret y + 1
+end
+\end{salam}
+
+The single-expression form (\code{=> x * 2}) is shorthand for the common case; the
+block form (\code{=> : ... end}) is there when you need it.
+
+\section{Higher-order functions}
+
+A function that takes another function as a parameter --- or returns one --- is
+called a \textbf{higher-order function}. Because a function value has a type like
+\code{func(i32) i32}, you can declare a parameter of that type and call it inside:
+
+\begin{salam}
+func apply(f func(i32) i32, x i32) i32:
+    ret f(x)
+end
+
+func main:
+    println apply((x i32) => x + 100, 5)
+end
+\end{salam}
+
+\begin{progout}
+105
+\end{progout}
+
+\code{apply} does not know or care what \code{f} does; it just calls \code{f(x)}.
+We hand it a lambda created right at the call site, \code{(x i32) => x + 100}, and
+\code{apply} runs it on \code{5}. This is the essence of higher-order
+programming: behaviour passed around as data. The same \code{apply} could square,
+negate, or double its argument, depending only on the lambda you give it.
+
+\section{Closures: capturing the surrounding state}
+
+Here is where function values become truly powerful. A lambda can \emph{use
+variables from the scope in which it was created} --- not just its own parameters.
+When it does, it ``closes over'' those variables, and we call it a
+\textbf{closure}. The captured values travel with the function, even after the
+scope that created them has returned.
+
+The classic example is a function that \emph{builds} another function:
+
+\begin{salam}
+func make_adder(n i32) func(i32) i32:
+    ret (x i32) => x + n
+end
+
+func main:
+    add10 auto = make_adder(10)
+    add100 auto = make_adder(100)
+    println add10(5)
+    println add100(5)
+end
+\end{salam}
+
+\begin{progout}
+15
+105
+\end{progout}
+
+\code{make\_adder} returns a lambda that adds \code{n} --- but \code{n} is
+\code{make\_adder}'s parameter, not the lambda's. The returned closure
+\emph{captures} the value of \code{n}. So \code{make\_adder(10)} produces a
+function that always adds 10, and \code{make\_adder(100)} produces a separate one
+that always adds 100. Each closure remembers its own captured \code{n}, long after
+\code{make\_adder} has finished running.
+
+\section{Closures that remember and change state}
+
+Because a closure carries its captured variables with it, it can also \emph{update}
+them between calls --- giving a function that has memory. A counter is the
+canonical example:
+
+\begin{salam}
+func make_counter() func() i32:
+    mut count i32 = 0
+    ret () => :
+        count = count + 1
+        ret count
+    end
+end
+
+func main:
+    next func() i32 = make_counter()
+    println next()
+    println next()
+    println next()
+end
+\end{salam}
+
+\begin{progout}
+1
+2
+3
+\end{progout}
+
+Each call to \code{next()} increments and returns the captured \code{count}. The
+variable \code{count} lives on inside the closure even though \code{make\_counter}
+returned long ago --- the closure has kept it alive. Call \code{make\_counter()} a
+second time and you get a fresh, independent counter starting again at zero.
+
+\begin{deep}[In Depth: how closures are implemented]
+A closure is more than a pointer to code --- it must also carry the variables it
+captured. Salam implements this by allocating a small \emph{environment} on the
+heap holding the captured values, and pairing it with the lambda's code. The
+function value you pass around is really this code-plus-environment bundle. When
+you call it, the captured variables are read from (and written to) that
+environment, which is why \code{count} survives between calls and why two counters
+do not interfere. The compiler performs this ``lifting'' of the lambda and its
+captures automatically; you simply write the closure and it works.
+\end{deep}
+
+\section{Why closures matter}
+
+Closures let you parameterise \emph{behaviour}, not just values. A sort routine
+can take a closure describing how to compare two elements; a retry helper can take
+a closure describing the work to attempt; an event system can take closures to run
+when something happens. In each case you hand over a small piece of custom logic,
+created exactly where it is needed and carrying whatever surrounding context it
+requires. This keeps general machinery (the sorter, the retrier) cleanly separated
+from the specific behaviour you plug into it.
+
+\begin{tip}
+Lambdas are at their best when they are small --- a comparison, a transformation, a
+quick test. If a lambda grows into a substantial block of logic, give it a real
+name with \code{func} instead; a named function is easier to read, reuse, and
+discuss. Reach for a lambda when naming it would add noise, not clarity.
+\end{tip}
+
+\section{Chapter summary}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item A \textbf{lambda} is an unnamed function value:
+        \code{(params) => expression}, or \code{(params) => : ... end} for a
+        block body.
+  \item A function value has a type like \code{func(i32) i32} or \code{func()
+        i32}.
+  \item A \textbf{higher-order function} takes or returns a function value; call a
+        function-typed parameter just like any function.
+  \item A \textbf{closure} is a lambda that captures variables from its
+        surrounding scope; the captured values live on with the closure.
+  \item Closures can carry mutable state (e.g. a counter), and each closure
+        instance has its own independent captured variables.
+  \item Use lambdas for small, local behaviour; promote anything substantial to a
+        named function.
+\end{itemize}
+
+\section{Exercises}
+
+\exercise Create a lambda \code{square} that returns its argument times itself,
+store it with \code{auto}, and print \code{square(7)}.
+
+\exercise Write a higher-order function \code{apply\_twice(f func(i32) i32, x
+i32) i32} that returns \code{f(f(x))}, and test it with a lambda that adds 3.
+
+\exercise Write \code{make\_multiplier(factor i32) func(i32) i32} that returns a
+closure multiplying by \code{factor}. Build a ``times 3'' and a ``times 10''
+function from it.
+
+\exercise Using \code{make\_counter}, create two independent counters and show by
+interleaving their calls that they do not share state.
+
+\exercise Write a higher-order function \code{transform\_all} that takes a
+\code{Vector<i32>} and a \code{func(i32) i32}, and returns a new vector with the
+function applied to every element. Test it with a doubling lambda.

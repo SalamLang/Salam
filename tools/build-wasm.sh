@@ -44,14 +44,9 @@ command -v "$EMCC" >/dev/null 2>&1 || [ -e "$EMCC" ] || {
     exit 1
 }
 
-OUT_DIR="web"
+OUT_DIR="editor"
 mkdir -p "$OUT_DIR"
-PY="$(salam_python)"
-if [ -n "$PY" ]; then
-    "$PY" tools/gen-editor-keywords.py || echo "warning: keyword generation failed; using existing web/keywords.js" >&2
-else
-    echo "note: python not found; using existing web/keywords.js" >&2
-fi
+"$SALAM" run tools/gen-editor-keywords.salam || echo "warning: keyword generation failed; using existing editor/keywords.js" >&2
 SRC_DIRS="core source logger xml preproc token langpack i18n lexer ast parser
           diag semantic interp layout codegen llvm web"
 SRCS=""

@@ -61,10 +61,10 @@ $(BUILD_DIR)/%.o: src/%.c
 -include $(DEPS)
 
 test: $(TARGET)
-	sh tools/run-tests.sh
+	sh tools/bash/run-tests.sh
 
 dist: all
-	sh tools/build-release.sh
+	sh tools/bash/build-release.sh
 
 debug: BUILD = debug
 debug: clean all

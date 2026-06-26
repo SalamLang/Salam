@@ -5,7 +5,7 @@ set -u
 . "$(dirname "$0")/lib.sh"
 salam_ensure_compiler
 pass=0; fail=0; skip=0
-for f in examples/fa/*/*.salam; do
+for f in ../examples/fa/*/*.salam; do
     case "$f" in */editor-selected/*) continue;; esac
     name=$(basename "$f" .salam)
     if grep -qE 'صفحه:|func main' "$f"; then

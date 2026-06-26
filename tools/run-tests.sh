@@ -85,7 +85,7 @@ for f in tests/$lang/layout/*.salam; do
     [ -e "$f" ] || continue
     name=$(basename "$f" .salam)
     case "$name" in _*) continue;; esac
-    expect=$(grep -o 'EXPECT: .*' "$f" | head -1 | sed 's/EXPECT: //')
+    expect=$(grep -o 'EXPECT: .*' "$f" | head -1 | sed 's/EXPECT: //' | tr -d '\r')
     "$SALAMC" layout build "$f" --inline --output="$WORK/$name.html" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
     if [ -f "$WORK/$name.html" ] && grep -qF "$expect" "$WORK/$name.html"; then
         echo "PASS layout/$lang/$name (has '$expect')"; pass=$((pass+1))

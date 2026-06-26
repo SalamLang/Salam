@@ -33,33 +33,12 @@
 #  include <mach-o/dyld.h>
 #endif
 
-/* --------------------------------------------------------------------------
- * Standard-library root resolution.
- *
- * The "root" is the directory that contains the "std/" tree. Imports are then
- * resolved as <root>/std/<pkg>/<pkg>.salam (see salam_resolve_import). An empty
- * root ("") means "look for std/ relative to the current working directory",
- * which is the in-repo development convention.
- *
- * Resolution order (first hit wins):
- *   1. explicit --stdlib-path=DIR
- *   2. $SALAM_STD environment variable
- *   3. a "salam.cfg" file sitting next to the salam binary (stdlib_path=DIR)
- *   4. auto-discovery relative to the binary (portable installs / in-repo)
- *   5. the compile-time install prefix baked in via -DSALAM_STDLIB_PREFIX
- *   6. fall back to "" (cwd-relative std/)
- *
- * Steps 1–3 accept either the root itself or the std/ directory directly; both
- * are normalised to the root form by derive_root().
- * ------------------------------------------------------------------------ */
-
 static char  g_stdlib_root_buf[1200];
 static const char *g_stdlib_root = NULL;   /* resolved root, or "" for cwd */
 static bool        g_stdlib_resolved = false;
 
 static bool file_exists(const char *p);    /* fwd decl */
 
-/* True if <root>/std/core/core.salam exists (our sentinel std file). */
 static bool root_has_std(const char *root)
 {
     char p[1100];
@@ -68,8 +47,6 @@ static bool root_has_std(const char *root)
     return file_exists(p);
 }
 
-/* Normalise a user-supplied path to root form: if it points at the std/ dir
-   itself, return its parent; otherwise return it unchanged. */
 static void derive_root(const char *path, char *out, size_t n)
 {
     char probe[1100];
@@ -90,7 +67,6 @@ static void derive_root(const char *path, char *out, size_t n)
     snprintf(out, n, "%s", path);             /* trust as-is */
 }
 
-/* Absolute directory holding the running executable (no trailing slash). */
 static bool get_exe_dir(char *out, size_t n)
 {
     char buf[1024];
@@ -122,7 +98,6 @@ static bool get_exe_dir(char *out, size_t n)
 #endif
 }
 
-/* Read a "stdlib_path = DIR" (or "stdlib = DIR") entry from a config file. */
 static bool read_cfg_stdlib(const char *cfg, char *out, size_t n)
 {
     FILE *f = fopen(cfg, "rb");
@@ -158,12 +133,10 @@ static const char *resolve_stdlib_root(const char *explicit_path)
     char *buf = g_stdlib_root_buf;
     size_t  N = sizeof g_stdlib_root_buf;
 
-    /* 1. explicit --stdlib-path */
     if (explicit_path && explicit_path[0]) {
         derive_root(explicit_path, buf, N);
         return buf;
     }
-    /* 2. $SALAM_STD */
     {
         const char *env = getenv("SALAM_STD");
         if (env && env[0]) { derive_root(env, buf, N); return buf; }
@@ -195,14 +168,12 @@ static const char *resolve_stdlib_root(const char *explicit_path)
             }
         }
     }
-    /* 5. compile-time install prefix */
 #ifdef SALAM_STDLIB_PREFIX
     if (root_has_std(SALAM_STDLIB_PREFIX)) {
         snprintf(buf, N, "%s", SALAM_STDLIB_PREFIX);
         return buf;
     }
 #endif
-    /* 6. cwd-relative std/ */
     return "";
 }
 
@@ -216,6 +187,33 @@ const char *salam_get_stdlib_root(void)
 {
     if (!g_stdlib_resolved) salam_set_stdlib_root(NULL);
     return g_stdlib_root ? g_stdlib_root : "";
+}
+
+bool salam_find_bundled_tool(const char *name, char *out, size_t n)
+{
+    char exedir[1024];
+    static const char *rel[] = { "", "bin", "mingw64/bin", "llvm/bin", "tcc" };
+#if defined(_WIN32)
+    static const char *suffix = ".exe";
+#else
+    static const char *suffix = "";
+#endif
+    size_t i;
+
+    if (!name || !name[0]) return false;
+    if (!get_exe_dir(exedir, sizeof exedir)) return false;
+
+    for (i = 0; i < sizeof rel / sizeof rel[0]; i++) {
+        char cand[1200];
+        FILE *f;
+        if (rel[i][0])
+            snprintf(cand, sizeof cand, "%s/%s/%s%s", exedir, rel[i], name, suffix);
+        else
+            snprintf(cand, sizeof cand, "%s/%s%s", exedir, name, suffix);
+        f = fopen(cand, "rb");
+        if (f) { fclose(f); snprintf(out, n, "%s", cand); return true; }
+    }
+    return false;
 }
 
 static char *path_normalize(char *p)
@@ -359,6 +357,112 @@ static const char *dir_of(arena_t *a, const char *path)
     return arena_strndup(a, path, (size_t)(cut - path));
 }
 
+static const char *base_of(const char *path)
+{
+    const char *slash = strrchr(path, '/');
+    const char *bs = strrchr(path, '\\');
+    const char *cut = slash;
+    if (bs && (!slash || bs > slash)) cut = bs;
+    return cut ? cut + 1 : path;
+}
+
+int salam_package_files(arena_t *a, const char *main_path, const char **out, int max)
+{
+    if (max <= 0) return 0;
+    int n = 0;
+    out[n++] = main_path;
+    const char *dir = dir_of(a, main_path);
+    const char *mainbase = base_of(main_path);
+
+    {
+        const char *dot = strrchr(mainbase, '.');
+        size_t stemlen = dot ? (size_t)(dot - mainbase) : strlen(mainbase);
+        const char *dirseg = (dir && dir[0]) ? base_of(dir) : "";
+        if (strlen(dirseg) != stemlen || strncmp(dirseg, mainbase, stemlen) != 0)
+            return n;   /* not a package main file: load it alone */
+    }
+
+    char dbuf[1024];
+    if (!dir || !dir[0]) snprintf(dbuf, sizeof dbuf, ".");
+    else                 snprintf(dbuf, sizeof dbuf, "%s", dir);
+#if defined(_WIN32)
+    char pat[1100];
+    snprintf(pat, sizeof pat, "%s/*.salam", dbuf);
+    struct _finddata_t fd;
+    intptr_t h = _findfirst(pat, &fd);
+    if (h != -1) {
+        do {
+            if (fd.attrib & _A_SUBDIR) continue;
+            if (strcmp(fd.name, mainbase) == 0) continue;
+            if (n >= max) break;
+            char *full = (char *)arena_alloc(a, strlen(dbuf) + strlen(fd.name) + 2);
+            sprintf(full, "%s/%s", dbuf, fd.name);
+            out[n++] = full;
+        } while (_findnext(h, &fd) == 0);
+        _findclose(h);
+    }
+#else
+    DIR *d = opendir(dbuf);
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL && n < max) {
+            size_t L = strlen(e->d_name);
+            if (L <= 6 || strcmp(e->d_name + L - 6, ".salam") != 0) continue;
+            if (strcmp(e->d_name, mainbase) == 0) continue;
+            char *full = (char *)arena_alloc(a, strlen(dbuf) + L + 2);
+            sprintf(full, "%s/%s", dbuf, e->d_name);
+            out[n++] = full;
+        }
+        closedir(d);
+    }
+#endif
+    /* Stable order for reproducible builds; leave out[0] (main) pinned. */
+    { int i = 2; for (; i < n; i++) {
+        const char *key = out[i]; int j = i - 1;
+        while (j >= 1 && strcmp(out[j], key) > 0) { out[j + 1] = out[j]; j--; }
+        out[j + 1] = key;
+    } }
+    return n;
+}
+
+static const char *import_spec_of(ast_node_t *d)
+{
+    if (d->value.kind == TV_STRING && d->value.as.s) return d->value.as.s;
+    return d->name;
+}
+
+void salam_merge_program(arena_t *a, ast_node_t *dst, ast_node_t *src)
+{
+    size_t i = 0;
+    for (; i < src->list.len; i++) {
+        ast_node_t *d = (ast_node_t *)src->list.data[i];
+        if (d->kind == AST_IMPORT) {
+            const char *spec = import_spec_of(d);
+            bool dup = false;
+            { size_t j = 0; for (; j < dst->list.len; j++) {
+                ast_node_t *e = (ast_node_t *)dst->list.data[j];
+                if (e->kind == AST_IMPORT) {
+                    const char *es = import_spec_of(e);
+                    if (spec && es && strcmp(spec, es) == 0) { dup = true; break; }
+                }
+            } }
+            if (dup) continue;
+        } else if (d->kind == AST_LINK) {
+            const char *lib = (d->value.kind == TV_STRING && d->value.as.s) ? d->value.as.s : NULL;
+            bool dup = false;
+            if (lib) { size_t j = 0; for (; j < dst->list.len; j++) {
+                ast_node_t *e = (ast_node_t *)dst->list.data[j];
+                if (e->kind == AST_LINK) {
+                    const char *el = (e->value.kind == TV_STRING && e->value.as.s) ? e->value.as.s : NULL;
+                    if (el && strcmp(lib, el) == 0) { dup = true; break; }
+                }
+            } }
+            if (dup) continue;
+        }
+        ast_add(a, dst, d);
+    }
+}
+
 static void load_imports(sema_t *s, ast_node_t *program);
 static symbol_t *pkg_cache_get(sema_t *s, const char *path)
 {
@@ -379,12 +483,22 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
         } }
     source_file_t *src = source_load(s->a, path);
     if (!src) { SERR(s, 8, &imp->span, "import not found: '%s'", path); return NULL; }
-    src = preproc_source(s->a, s->log, src, NULL, 0); 
-    
+    src = preproc_source(s->a, s->log, src, NULL, 0);
+
     langpack_t *pack = langpack_load(i18n_lang());
     if (!pack) pack = langpack_load("en");
     token_stream_t *toks = NULL; lexer_run(s->a, s->log, pack, src, &toks);
     ast_node_t *prog = NULL;     parser_run(s->a, s->log, toks, &prog);
+
+    { const char *files[256]; int nf = salam_package_files(s->a, path, files, 256);
+      int fi = 1; for (; fi < nf; fi++) {
+        source_file_t *fsrc = source_load(s->a, files[fi]);
+        if (!fsrc) continue;
+        fsrc = preproc_source(s->a, s->log, fsrc, NULL, 0);
+        token_stream_t *ftoks = NULL; lexer_run(s->a, s->log, pack, fsrc, &ftoks);
+        ast_node_t *fprog = NULL;     parser_run(s->a, s->log, ftoks, &fprog);
+        salam_merge_program(s->a, prog, fprog);
+    } }
     LOG_D(s->log, PH_SEMANTIC, "resolving package %s", path);
     
     scope_t *pkgscope = scope_new(s->a, SCOPE_GLOBAL, NULL);

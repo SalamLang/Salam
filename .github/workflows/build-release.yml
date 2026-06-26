@@ -54,15 +54,54 @@ jobs:
       - name: 'GCC Version'
         run: |
           gcc --version
-      - name: Build salam.exe for Windows
+
+      - name: Build salam.exe
         run: |
-          build-windows.bat
-        shell: cmd
-      - name: Upload artifact
+          CC=gcc sh compiler/tools/bash/build-compiler.sh
+          test -f compiler/salam.exe || mv compiler/salam compiler/salam.exe
+          ./compiler/salam.exe version
+
+      - name: Stage self-contained bundle
+        run: |
+          set -eu
+          DIST="salam-windows"
+          mkdir -p "$DIST"
+          cp compiler/salam.exe "$DIST/"
+          cp -r compiler/std    "$DIST/std"
+          GCC_BIN="$(dirname "$(command -v gcc)")"
+          MINGW_ROOT="$(dirname "$GCC_BIN")"
+          cp -r "$MINGW_ROOT" "$DIST/mingw64"
+          cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          {
+            echo "Salam for Windows - self-contained."
+            echo ""
+            echo "No installation needed. From this folder:"
+            echo ""
+            echo "  salam.exe version"
+            echo "  salam.exe exec  myprogram.salam            (run via the interpreter)"
+            echo "  salam.exe build myprogram.salam --output=myprogram.exe"
+            echo ""
+            echo "salam.exe finds its std/ library and the bundled C compiler"
+            echo "(mingw64/) automatically - keep them next to salam.exe."
+          } > "$DIST/RUN-ME.txt"
+          echo "bundle contents:"; ls -la "$DIST"
+
+      - name: Zip the bundle
+        run: |
+          7z a -tzip salam-windows.zip salam-windows >/dev/null
+          ls -la salam-windows.zip
+
+      - name: Upload self-contained bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: salam-windows-bundle
+          path: salam-windows.zip
+
+      - name: Upload salam.exe
         uses: actions/upload-artifact@v7
         with:
           name: salam-windows
-          path: salam.exe
+          path: compiler/salam.exe
   create-release:
     if: |
       startsWith(github.event.head_commit.message, 'release:') &&
@@ -103,6 +142,11 @@ jobs:
       - name: Rename Window binary
         run: |
           mv ./release/salam.exe ./release/salam-windows.exe
+      - name: Download Windows self-contained bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: salam-windows-bundle
+          path: ./release
       - name: Post Linux release file to SERVER_VERSIONS_API
         env:
           SERVER_VERSIONS_API: ${{ secrets.SERVER_VERSIONS_API }}
@@ -182,5 +226,6 @@ jobs:
             release/salam-linux
             release/salam-mac
             release/salam-windows.exe
+            release/salam-windows.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,240 @@
+% ===================== Chapter 19 =====================
+\chapter{The Foreign Function Interface}
+\label{ch:ffi}
+
+Salam compiles to C, which gives it a superpower: it can call C functions
+directly, with no glue code and no performance penalty. The decades of C
+libraries the world runs on --- math, compression, databases, graphics, the
+operating system itself --- are all reachable from Salam through the
+\textbf{foreign function interface}, or FFI. This chapter shows how to declare a C
+function and call it as if it were your own.
+
+\section{Declaring a C function}
+
+To call a C function you first tell Salam about it: its name, its parameters, and
+its return type. You do this in an \code{extern "C"} block, which lists the
+\emph{signatures} of C functions without bodies --- the bodies live in C, after
+all:
+
+\begin{salam}
+extern "C":
+    func printf(format str, ...) i32
+    func strlen(s str) u64
+end
+
+func main:
+    printf("Hello from C's printf!\n")
+    msg str = "external"
+    printf("the length of \"%s\" is %d\n", msg, strlen(msg))
+end
+\end{salam}
+
+\begin{progout}
+Hello from C's printf!
+the length of "external" is 8
+\end{progout}
+
+Inside the \code{extern "C"} block, each \code{func} line is a \emph{declaration}:
+it says ``a C function with this name and shape exists; let me call it.'' There is
+no body. When you call \code{printf} or \code{strlen} from Salam, the compiler
+emits a direct call to the real C function --- exactly as a C program would. The
+trailing \code{...} on \code{printf} marks it \textbf{variadic} (it accepts a
+variable number of arguments), which is how \code{printf} takes its format
+arguments.
+
+\section{How Salam types map to C}
+
+For an FFI call to work, Salam's types must line up with C's. The mapping is
+direct and is why the integration is seamless:
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Salam} & \textbf{C} & \textbf{Notes} \\
+\midrule
+\code{i32} & \code{int32\_t} & a 32-bit signed integer \\
+\code{i64} & \code{int64\_t} & a 64-bit signed integer \\
+\code{u64} & \code{uint64\_t} & a 64-bit unsigned integer \\
+\code{f64} & \code{double} & a 64-bit float \\
+\code{f32} & \code{float} & a 32-bit float \\
+\code{bool} & one byte & \\
+\code{char} & one byte & \\
+\code{str} & \code{const char*} & a NUL-terminated C string \\
+\code{void*} & \code{void*} & an untyped pointer \\
+(no return type) & \code{void} & a procedure \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+When you declare an \code{extern} function, choose the Salam types that match the C
+function's real signature according to this table. \code{strlen} in C takes a
+\code{const char*} and returns a \code{size\_t}, so we declared it as
+\code{func strlen(s str) u64}.
+
+\section{Calling the C math library}
+
+A practical example: C's math library (\code{libm}) has fast, accurate
+implementations of functions like \code{sqrt}, \code{pow}, and \code{hypot}.
+Declare the ones you want and call them:
+
+\begin{salam}
+extern "C":
+    func printf(format str, ...) i32
+    func sqrt(x f64) f64
+    func pow(base f64, exp f64) f64
+    func hypot(x f64, y f64) f64
+end
+
+func main:
+    printf("sqrt(2)    = %.6f\n", sqrt(2.0))
+    printf("2^10       = %.0f\n", pow(2.0, 10.0))
+    printf("hypot(3,4) = %.1f\n", hypot(3.0, 4.0))
+end
+\end{salam}
+
+\begin{progout}
+sqrt(2)    = 1.414214
+2^10       = 1024
+hypot(3,4) = 5.0
+\end{progout}
+
+Each declared function is called like any Salam function, and the result comes
+straight back from the C implementation. (Of course, for these particular
+functions you would normally just use Salam's own \code{math} module --- which is
+itself partly built on \code{libm} --- but the same technique works for \emph{any}
+C library, including ones with no Salam wrapper.)
+
+\section{Linking external libraries}
+
+The functions above --- \code{printf}, \code{sqrt} --- come from the C standard
+library, which is always linked in, so declaring them is enough. To use a function
+from a \emph{separate} library, you must also tell the compiler to link that
+library, with a \code{link} directive before the \code{extern} block:
+
+\begin{salam}
+link "sqlite3"
+
+extern "C":
+    func sqlite3_libversion() str
+    func printf(format str, ...) i32
+end
+
+func main:
+    printf("SQLite version: %s\n", sqlite3_libversion())
+end
+\end{salam}
+
+\code{link "sqlite3"} instructs the compiler to link against the SQLite library
+(the equivalent of passing \code{-lsqlite3} to a C compiler), making its functions
+available to your \code{extern} declarations. You can link several libraries with
+several \code{link} lines.
+
+\begin{deep}[In Depth: platform-conditional linking]
+Library names sometimes differ across operating systems. Salam's preprocessor lets
+you choose the right one at build time with \code{@if}:
+\begin{salam}
+@if SALAM_OS_WINDOWS
+link "winsqlite3"
+@else
+link "sqlite3"
+@end
+\end{salam}
+The symbols \code{SALAM\_OS\_WINDOWS}, \code{SALAM\_OS\_LINUX}, and
+\code{SALAM\_OS\_MACOS} let a single program link the correct library on each
+platform --- the same technique C programmers use with \code{\#ifdef}, expressed in
+Salam.
+\end{deep}
+
+\section{Working with pointers across the boundary}
+
+Many C functions deal in pointers --- \code{malloc} returns one, \code{free} takes
+one. Salam's \code{void*} type matches C's, so you can call them directly:
+
+\begin{salam}
+extern "C":
+    func malloc(size u64) void*
+    func free(ptr void*)
+    func puts(s str) i32
+end
+
+func main:
+    mut p void* = malloc(64 as u64)
+    if p == null:
+        puts("malloc failed")
+    else:
+        puts("malloc(64) gave a non-null pointer")
+        free(p)
+    end
+end
+\end{salam}
+
+\begin{progout}
+malloc(64) gave a non-null pointer
+\end{progout}
+
+Notice that the safe habits from Chapter~18 carry straight over the boundary:
+check the pointer against \code{null}, and free what you allocate. The FFI does not
+add safety of its own --- you are calling C, with C's rules --- so the discipline is
+yours to keep.
+
+\section{When to use the FFI}
+
+The FFI is a bridge to be crossed deliberately, not a place to live. Reach for it
+when:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item you need a capability that exists as a mature C library --- a database
+        driver, a compression codec, an image format --- and rewriting it in Salam
+        would be wasteful;
+  \item you must call an operating-system function the standard library does not
+        wrap;
+  \item you are integrating Salam into an existing C codebase.
+\end{itemize}
+
+For everything else, prefer Salam's own standard library and types: they are safer
+(the compiler checks them), more convenient, and bilingual. The FFI is the escape
+hatch for when you genuinely need the wider C world --- powerful exactly because it
+is there when you need it and ignorable when you do not.
+
+\begin{warn}
+Code reached through the FFI is outside Salam's safety net. The compiler trusts
+your \code{extern} declarations: if you declare a function with the wrong types,
+or pass a bad pointer, the result is a crash or corruption, not a friendly
+compile-time error. Declare each C function to match its real signature exactly,
+and treat values that cross the boundary with the same care a C programmer would.
+\end{warn}
+
+\section{Chapter summary}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item An \code{extern "C":} block declares C functions (name, parameters,
+        return type, no body) so Salam can call them directly.
+  \item Salam types map one-to-one onto C types (\code{i32}$\to$\code{int32\_t},
+        \code{str}$\to$\code{const char*}, \code{void*}$\to$\code{void*}, \dots);
+        declare each function to match.
+  \item A trailing \code{...} marks a variadic function such as \code{printf}.
+  \item Standard-library C functions need only declaration; others need a
+        \code{link "lib"} directive (optionally guarded by \code{@if} for
+        per-platform names).
+  \item The FFI adds no safety --- check pointers, free what you allocate, and
+        declare signatures exactly.
+  \item Use the FFI to reach mature C libraries and OS functions; prefer Salam's
+        own library otherwise.
+\end{itemize}
+
+\section{Exercises}
+
+\exercise Declare C's \code{puts} (\code{func puts(s str) i32}) and use it to print
+two lines.
+
+\exercise Declare \code{sqrt} and \code{pow} from the math library and print the
+square root of 2 and 2 to the 16th power.
+
+\exercise Declare \code{getenv(name str) str} and print the value of an environment
+variable of your choice.
+
+\exercise Declare \code{malloc} and \code{free}, allocate 256 bytes, check for
+\code{null}, and free them --- guarding the free with \code{defer}.
+
+\exercise Explain in a comment why an incorrect \code{extern} declaration cannot be
+caught by the Salam compiler, and what discipline protects you instead.

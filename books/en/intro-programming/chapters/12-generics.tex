@@ -1,0 +1,243 @@
+% ===================== Chapter 12 =====================
+\chapter{Generics}
+\label{ch:generics}
+
+You met \code{Vector<i32>} back in Chapter~7 and the bound \code{<T: Shape>} in
+Chapter~11. Both rely on \textbf{generics}: the ability to write code that works
+for \emph{any} type, with the type filled in later. Generics let you write a
+function or a data structure once and reuse it for integers, strings, your own
+structs --- anything --- without copying and pasting. This chapter brings the idea
+into full focus.
+
+\section{The problem generics solve}
+
+Suppose you want a function that returns the larger of two values. For integers:
+
+\begin{salam}
+func max_i32(a i32, b i32) i32:
+    if a > b: ret a end
+    ret b
+end
+\end{salam}
+
+For floating-point numbers you would write \emph{the same logic again} with
+\code{f64} in place of \code{i32}, and again for any other comparable type. That
+is wasteful and error-prone --- a bug fixed in one copy lingers in the others.
+Generics let you write the logic a single time.
+
+\section{Generic functions}
+
+A \textbf{type parameter} in angle brackets after the function name turns a
+function generic. The parameter --- conventionally \code{T} --- stands for ``some
+type, chosen by the caller,'' and you use it like any other type within the
+function:
+
+\begin{salam}
+func Max<T>(a T, b T) T:
+    if a > b: ret a end
+    ret b
+end
+
+func main:
+    println Max(10, 20)        // T is i32
+    println Max(2.5, 1.5)      // T is f64
+end
+\end{salam}
+
+\begin{progout}
+20
+2.5
+\end{progout}
+
+One \code{Max} now serves every type. The caller writes \code{Max(10, 20)} with
+no angle brackets; Salam looks at the arguments and \emph{infers} that \code{T} is
+\code{i32} for the first call and \code{f64} for the second. The two parameters
+\code{a} and \code{b} share the type \code{T}, so they must be the \emph{same}
+type at each call --- you cannot write \code{Max(10, 2.5)}, because \code{T} cannot
+be both \code{i32} and \code{f64} at once.
+
+\section{Generic structs}
+
+Data structures benefit even more from generics. A ``box that holds one value''
+should not care whether that value is an integer or a string. Declare a type
+parameter after the struct's name and use it for fields:
+
+\begin{salam}
+struct Box<T>:
+    value T
+end
+
+func main:
+    mut a Box<i32> = Box { value = 42 }
+    mut b Box<str> = Box { value = "hi" }
+    println a.value
+    println b.value
+end
+\end{salam}
+
+\begin{progout}
+42
+hi
+\end{progout}
+
+\code{Box<i32>} is a box of integers; \code{Box<str>} is a box of strings. You
+spell out the concrete type in the variable's declaration --- \code{Box<i32>} ---
+and from then on the field \code{value} has that type. This is precisely how
+\code{Vector<T>} works: it is a generic struct holding a growable buffer of
+\code{T}.
+
+\begin{note}
+At the \emph{call site} of a generic function, you usually omit the type ---
+\code{Max(10, 20)} --- because Salam infers it from the arguments. But when you
+declare a variable of a generic \emph{struct} type, you write the concrete type
+explicitly: \code{Box<i32>}, \code{Vector<str>}. The struct's type parameter
+cannot always be inferred from an empty \code{Box \{\}}, so you state it.
+\end{note}
+
+\section{A generic container: a simple stack}
+
+Let us build something real: a generic stack, a last-in-first-out store, on top of
+a fixed array. Because it is generic, the same code gives you a stack of
+integers, a stack of strings, or a stack of anything:
+
+\begin{salam}
+struct Stack<T>:
+    items T[16] = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+    count i32 = 0
+    func push(x T):
+        this.items[this.count] = x
+        this.count = this.count + 1
+    end
+    func pop() T:
+        this.count = this.count - 1
+        ret this.items[this.count]
+    end
+    func is_empty() bool:
+        ret this.count == 0
+    end
+end
+
+func main:
+    mut s Stack<i32> = Stack {}
+    s.push(3)
+    s.push(7)
+    s.push(1)
+    println s.pop()
+    println s.pop()
+    println s.is_empty()
+end
+\end{salam}
+
+\begin{progout}
+1
+7
+false
+\end{progout}
+
+The methods \code{push} and \code{pop} are written entirely in terms of \code{T}.
+Declare \code{Stack<i32>} and you get an integer stack; declare \code{Stack<str>}
+and the very same definition gives you a string stack. This is how the standard
+library's collections are built, and how you build your own.
+
+\begin{note}
+The \code{items} field carries a default (sixteen zeros) so that \code{Stack
+\{\}} is a complete value with every field initialized --- the same rule from
+Chapter~9 that every struct field needs a default if you want to construct the
+struct with empty braces. For a real, growable container you would build on
+\code{Vector<T>} (Chapter~7) instead of a fixed array; this small fixed-size
+stack keeps the focus on the generics.
+\end{note}
+
+\section{Bounded generics revisited}
+
+A bare \code{<T>} accepts \emph{any} type, but then you can only do to a \code{T}
+what every type supports. The moment you call a method on a \code{T} ---
+\code{s.area()}, say --- the compiler must know that \code{T} actually \emph{has}
+that method. That is what an interface \textbf{bound} (Chapter~11) provides:
+\code{<T: Shape>} means ``any \code{T}, as long as it conforms to \code{Shape},''
+which unlocks the interface's methods inside the function.
+
+\begin{salam}
+interface Shape:
+    func area() f64
+end
+
+func total_area<T: Shape>(a T, b T) f64:
+    ret a.area() + b.area()
+end
+\end{salam}
+
+So there is a spectrum: \code{<T>} for code that treats values opaquely (store,
+move, return them), and \code{<T: SomeInterface>} for code that needs to
+\emph{do} something specific with them. You reach for the bound exactly when you
+need to call the interface's methods.
+
+\section{How generics work: monomorphization}
+
+\begin{deep}[In Depth: one template, many concrete copies]
+Salam implements generics by \emph{monomorphization}, the same mechanism behind
+interface bounds. The generic definition --- \code{Max<T>} or \code{Stack<T>} ---
+is a \emph{template}; the compiler never emits it directly. Instead, each time you
+use it with a concrete type, the compiler stamps out a specialised copy with the
+type filled in: \code{Max} becomes a real \code{Max\_i32} and a real
+\code{Max\_f64}; \code{Stack<i32>} becomes a concrete C struct with a
+\code{i32[16]} field. Those copies are ordinary, fully type-checked code, as fast
+as anything hand-written --- there is no boxing, no run-time type tag, no
+indirection. The trade-off is compiled size: one copy exists for each distinct
+type you instantiate. In practice that is a small price for code that is both
+reusable and fast.
+
+To make this possible, the compiler needs to know an element's size at compile
+time. The built-in \code{sizeof(T)} gives it: the standard library's
+\code{Vector<T>}, for instance, uses \code{sizeof(T)} to allocate exactly enough
+bytes for each element when it grows its buffer. You rarely call \code{sizeof}
+yourself, but it is the quiet machinery that lets one generic container hold
+elements of any size.
+\end{deep}
+
+\section{When to make something generic}
+
+Generics are powerful, but not everything needs them. A good rule:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item Make a \emph{container} generic almost always --- a stack, queue, list, or
+        tree is naturally indifferent to what it stores.
+  \item Make a \emph{function} generic when you find yourself about to copy it for
+        a second type. The first copy is fine; the second is the signal.
+  \item Do \emph{not} reach for generics when a single concrete type is all you
+        will ever need --- the extra abstraction earns its keep only when there is
+        real reuse.
+\end{itemize}
+
+\section{Chapter summary}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item Generics write code once for \emph{any} type, using a type parameter
+        \code{<T>}.
+  \item A generic function infers \code{T} from its arguments at the call site;
+        parameters sharing \code{T} must be the same type.
+  \item A generic struct (\code{Box<T>}, \code{Stack<T>}, \code{Vector<T>}) is
+        declared with its concrete type, e.g. \code{Stack<i32>}.
+  \item A bare \code{<T>} treats values opaquely; an interface bound \code{<T:
+        Iface>} lets you call the interface's methods on a \code{T}.
+  \item Generics compile by \emph{monomorphization} into specialised, fast copies;
+        \code{sizeof(T)} is the machinery that lets a container size its elements.
+\end{itemize}
+
+\section{Exercises}
+
+\exercise Write a generic function \code{Min<T>(a T, b T) T} mirroring \code{Max},
+and test it on integers and floats.
+
+\exercise Write a generic function \code{first\_of<T>(a T, b T) T} that simply
+returns its first argument, and explain why it needs no bound.
+
+\exercise Define a generic \code{struct Pair<T>} holding two values of type
+\code{T} and a method \code{swap()} that exchanges them. Test it with a pair of
+integers.
+
+\exercise Extend the generic \code{Stack} with a \code{peek()} method that returns
+the top element without removing it. Test it with a \code{Stack<str>}.
+
+\exercise Explain in a comment why \code{Max(10, 2.5)} fails to compile, in terms
+of the type parameter \code{T}.

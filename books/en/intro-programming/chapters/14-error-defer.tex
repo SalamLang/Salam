@@ -1,0 +1,323 @@
+% ===================== Chapter 14 =====================
+\chapter{Error Handling and Deferred Execution}
+\label{ch:error-defer}
+
+Real programs deal with things that can go wrong: a withdrawal larger than the
+balance, a number that will not parse, a file that is not there. Equally, real
+programs acquire resources --- open files, allocated memory --- that must be
+released no matter how the work turns out. This chapter covers Salam's
+straightforward approach to both: reporting failure through return values, and
+guaranteeing cleanup with \code{defer}.
+
+\section{Salam's philosophy: errors are values}
+
+Salam has no exceptions, no \code{try}/\code{catch}, no invisible control flow
+that whisks you off to some distant handler. Instead, a function that can fail
+\emph{says so in what it returns}, and the caller checks. This keeps the flow of
+your program on the page: every place that can fail is visible, and every failure
+is handled where it happens. There are a few common patterns, from simplest to
+most expressive.
+
+\section{Pattern 1: a boolean success flag}
+
+The simplest signal is a \code{bool}: \code{true} for success, \code{false} for
+failure. You saw this in Chapter~9 with the bank account, whose \code{withdraw}
+returned whether it succeeded:
+
+\begin{salam}
+struct Account:
+    balance i32 = 0
+    func withdraw(amount i32) bool:
+        if amount > this.balance:
+            ret false              // failure: not enough funds
+        end
+        this.balance = this.balance - amount
+        ret true                   // success
+    end
+end
+
+func main:
+    mut acc Account = Account { balance = 100 }
+    if acc.withdraw(30):
+        println "withdrew 30; balance is", acc.balance
+    else:
+        println "withdrawal failed"
+    end
+    if acc.withdraw(1000):
+        println "withdrew 1000"
+    else:
+        println "withdrawal failed: insufficient funds"
+    end
+end
+\end{salam}
+
+\begin{progout}
+withdrew 30; balance is 70
+withdrawal failed: insufficient funds
+\end{progout}
+
+The caller cannot ignore the outcome by accident: it is right there in the
+\code{if}. This pattern is perfect when the only thing you need to know is
+``did it work?''
+
+\section{Pattern 2: a sentinel return value}
+
+When a function returns a value but might have nothing meaningful to give back, a
+\textbf{sentinel} --- a special value that means ``no result'' --- is a common
+choice. A search that returns the index of an item can return \code{-1} to mean
+``not found,'' since a real index is never negative:
+
+\begin{salam}
+func index_of(values i32[5], target i32) i32:
+    for mut i = 0; i < 5; i = i + 1:
+        if values[i] == target:
+            ret i
+        end
+    end
+    ret -1                         // sentinel: not found
+end
+
+func main:
+    nums i32[5] = [10, 20, 30, 40, 50]
+    found auto = index_of(nums, 30)
+    if found >= 0:
+        println "found at index", found
+    else:
+        println "not found"
+    end
+    println "search for 99:", index_of(nums, 99)
+end
+\end{salam}
+
+\begin{progout}
+found at index 2
+search for 99: -1
+\end{progout}
+
+\begin{warn}
+A sentinel only works when there is a value the real results can never take. For
+an index, \code{-1} is safe. But ``zero means failure'' is dangerous if zero is a
+legitimate result, and ``empty string means error'' fails if the empty string is
+valid data. When no value can be safely reserved, prefer the \code{Option}
+approach below.
+\end{warn}
+
+\section{Pattern 3: \texttt{Option} --- a value that may be absent}
+
+The standard library's \code{Option} type makes ``maybe a value, maybe nothing''
+explicit and safe, without stealing a value from the result's range. An
+\code{Option<T>} either holds a \code{T} (it is \emph{some} value) or holds
+nothing (it is \emph{none}). Import it with \code{import "option"}.
+
+\begin{salam}
+import "option"
+
+func safe_divide(a i32, b i32) option.Option<i32>:
+    if b == 0:
+        ret Option { value = 0, present = false }    // none
+    end
+    ret option.Some(a / b)                            // some result
+end
+
+func main:
+    r1 auto = safe_divide(10, 2)
+    r2 auto = safe_divide(10, 0)
+    println "10/2 is some?", option.IsSome(r1)
+    println "10/0 is some?", option.IsSome(r2)
+    println "10/2 =", option.UnwrapOr(r1, -1)
+    println "10/0 =", option.UnwrapOr(r2, -1)    // falls back to -1
+end
+\end{salam}
+
+\begin{progout}
+10/2 is some? true
+10/0 is some? false
+10/2 = 0
+10/0 = -1
+\end{progout}
+
+The \code{option} module gives you the tools to work with these values safely:
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Function} & \textbf{What it does} \\
+\midrule
+\code{option.Some(x)}        & wrap \code{x} as a present value \\
+\code{option.IsSome(o)}      & \code{true} if \code{o} holds a value \\
+\code{option.IsNone(o)}      & \code{true} if \code{o} holds nothing \\
+\code{option.UnwrapOr(o, d)} & the held value, or \code{d} if none \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{UnwrapOr} is especially handy: it gets the value out, supplying a fallback
+for the ``none'' case in one step, so you never accidentally use a value that is
+not there. To build a ``none,'' you construct the \code{Option} with
+\code{present = false}, as the example shows.
+
+\begin{note}
+\code{Option} is the type to reach for whenever ``no answer'' is a legitimate
+outcome: a lookup that may miss, a parse that may fail, the first element of a
+possibly-empty collection. It forces the caller to acknowledge the empty case,
+turning a whole class of ``forgot to check'' bugs into something the type system
+helps you remember.
+\end{note}
+
+\section{Deferred execution with \texttt{defer}}
+
+Now to the second half of the chapter: making sure cleanup happens. The
+\code{defer} keyword schedules a statement to run \emph{when the current function
+exits} --- no matter how it exits. You write the cleanup right next to the thing it
+cleans up, and Salam guarantees it runs later:
+
+\begin{salam}
+func main:
+    defer println "cleanup runs last"
+    println "doing work"
+    println "more work"
+end
+\end{salam}
+
+\begin{progout}
+doing work
+more work
+cleanup runs last
+\end{progout}
+
+The \code{defer}'d line was \emph{written} first but \emph{ran} last, at the
+moment \code{main} finished. The point is that the cleanup is registered the
+instant you set up whatever needs cleaning, so you can never forget it later.
+
+\subsection{Defers run in reverse order}
+
+If you register several defers, they run in \textbf{last-in, first-out} order ---
+the most recently deferred runs first. This mirrors how resources nest: the last
+thing you opened is the first thing you should close.
+
+\begin{salam}
+func main:
+    defer println "cleanup 1"
+    defer println "cleanup 2"
+    println "start"
+    println "end"
+end
+\end{salam}
+
+\begin{progout}
+start
+end
+cleanup 2
+cleanup 1
+\end{progout}
+
+\subsection{Defer runs even on an early return}
+
+The real power of \code{defer} is that it runs however the function ends ---
+including an early \code{ret} from somewhere in the middle. This is what makes it
+reliable: the cleanup cannot be skipped by a code path you forgot about.
+
+\begin{salam}
+func greet(name str):
+    defer println "done greeting"
+    println "hello"
+    if name == "":
+        println "no name given"
+        ret                        // early return -- defer still runs
+    end
+    println name
+end
+
+func main:
+    greet("Ali")
+    println "---"
+    greet("")
+end
+\end{salam}
+
+\begin{progout}
+hello
+Ali
+done greeting
+---
+hello
+no name given
+done greeting
+\end{progout}
+
+Both calls print \code{"done greeting"} --- the normal path through \code{Ali} and
+the early-return path through the empty name. You write the cleanup once, and it
+fires on every exit.
+
+\section{Putting it together: acquire, defer, use}
+
+The idiomatic pattern is: acquire a resource, immediately \code{defer} its
+release, then use it freely without worrying about the exits. Whether the function
+returns normally, returns early on an error, or falls through, the resource is
+released exactly once. We will see this with real files and memory in Chapters~17
+and~18; the shape is always the same:
+
+\begin{salam}
+func process():
+    // acquire something here
+    defer println "release the resource"
+
+    println "use the resource"
+    if true:
+        println "early exit on some condition"
+        ret               // the defer above still runs
+    end
+    println "this line is skipped"
+end
+
+func main:
+    process()
+end
+\end{salam}
+
+\begin{progout}
+use the resource
+early exit on some condition
+release the resource
+\end{progout}
+
+\begin{tip}
+Pair every acquisition with a \code{defer} on the very next line. Reading top to
+bottom, ``open file; defer close file'' is impossible to get wrong --- the close is
+guaranteed and sits right where you can see it. This single habit eliminates the
+most common kind of resource leak.
+\end{tip}
+
+\section{Chapter summary}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item Salam reports errors through \emph{return values}, not exceptions --- every
+        failure is visible and handled at the call site.
+  \item Return a \code{bool} when the caller only needs ``did it work?''.
+  \item Return a \textbf{sentinel} (like \code{-1}) when a value's range has room
+        for a ``no result'' marker --- but only then.
+  \item Use \code{option.Option<T>} (\code{Some}, \code{IsSome}, \code{IsNone},
+        \code{UnwrapOr}) when ``no value'' must be represented safely.
+  \item \code{defer} schedules a statement to run when the function exits, in
+        last-in-first-out order, \emph{including} on early returns.
+  \item The reliable pattern is: acquire, immediately \code{defer} the release,
+        then use.
+\end{itemize}
+
+\section{Exercises}
+
+\exercise Write \code{safe\_sqrt(x f64) option.Option<f64>} that returns
+\code{none} for negative input and \code{Some} of the square root otherwise (use
+the \code{math} module from the next chapter, or \code{x ** 0.5}).
+
+\exercise Write a function \code{find\_first\_negative(a i32[5]) i32} that returns
+the index of the first negative element or \code{-1} if there is none.
+
+\exercise Add two \code{defer} statements and a normal statement to a function,
+and predict the output order before running it.
+
+\exercise Write a function with an early \code{ret} guarded by a condition and a
+\code{defer} that prints ``finished''. Verify ``finished'' prints on both paths.
+
+\exercise Rewrite the \code{safe\_divide} example so the caller prints a friendly
+message in the ``none'' case instead of using \code{UnwrapOr}.

@@ -2,7 +2,7 @@
 
 <p>
     <a href="https://salamlang.ir/">
-        <img width="150" src="https://raw.githubusercontent.com/SalamLang/Salam/main/assets/logo-box.svg" alt="The Salam Programming Language - زبان برنامه نویسی سلام">
+        <img width="150" src="https://raw.githubusercontent.com/SalamLang/Salam/main/design/logo/logo-box.svg" alt="The Salam Programming Language - زبان برنامه نویسی سلام">
     </a>
 </p>
 
@@ -109,7 +109,7 @@ The repository ships a multi-stage [`Dockerfile`](Dockerfile) and a
 [`docker-compose.yml`](docker-compose.yml) built on **Alpine Linux** (musl, the
 lightest practical base). The image includes everything the compiler needs:
 a C compiler (`gcc` + `tcc`), the **LLVM 22** backend (`clang-22`, `llc-22`,
-`opt-22`, `lli-22`), and `make` — no CMake required.
+`opt-22`, `lli-22`), and `make`, no CMake required.
 
 There are two modes:
 

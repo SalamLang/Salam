@@ -107,11 +107,11 @@ For a consistent build environment using Docker:
 
 ```bash
 # Development mode (live reload on src/ changes)
-docker compose -f compiler/docker/docker-compose.yml up dev
+docker compose -f docker/docker-compose.yml up dev
 
 # Production build
-docker compose -f compiler/docker/docker-compose.yml build prod
-docker compose -f compiler/docker/docker-compose.yml run --rm prod build examples/en/basics/hello.salam --output=hello
+docker compose -f docker/docker-compose.yml build prod
+docker compose -f docker/docker-compose.yml run --rm prod build examples/en/basics/hello.salam --output=hello
 ```
 
 ---

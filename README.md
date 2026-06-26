@@ -19,7 +19,7 @@ Salam is a general-purpose and systems programming language designed for efficie
 
 ---
 
-## ✨ Introducing Salam Language
+## ✨ Introducing Salam
 
 **Salam Language**, inspired by the word _salam_ (سلام), meaning _peace_, is the first **Persian/Arabic-based programming language**.
 It is designed for simplicity, accessibility, and inclusivity-bridging the gap between developers and technology in Persian, Arabic, and related linguistic communities.

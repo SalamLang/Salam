@@ -168,10 +168,10 @@ static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
     rt_error(I, n, "value is not callable");
     return val_null();
 }
+
 value_t call_func(interp_t *I, ast_node_t *fn, env_t *defenv,
                   value_t *thisv, value_t *args, size_t nargs)
 {
-    
     if (++I->depth > INTERP_MAX_DEPTH)
         rt_error(I, fn, "call stack too deep (possible infinite recursion)");
     env_t *env = env_new(I, defenv);
@@ -194,6 +194,7 @@ value_t call_func(interp_t *I, ast_node_t *fn, env_t *defenv,
     I->depth--;   
     return ret;
 }
+
 value_t eval(interp_t *I, env_t *env, ast_node_t *n)
 {
     if (!n) return val_null();

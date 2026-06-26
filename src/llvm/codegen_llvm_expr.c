@@ -45,7 +45,6 @@ static bool ll_is_cmp(token_kind_t k)
     return k==TK_EQ||k==TK_NE||k==TK_LT||k==TK_GT||k==TK_LE||k==TK_GE;
 }
 
-
 static const char *ll_to_ptr(ll_t *ll, llv_t v)
 {
     if (ll_is_ptr_ts(v.ts) || ll_is_str(v.ts) || !strcmp(v.ts, "null")) return v.ref;
@@ -53,7 +52,6 @@ static const char *ll_to_ptr(ll_t *ll, llv_t v)
     ll_emit(ll, "%s = inttoptr %s %s to ptr", r, ll_ty(ll, v.ts), v.ref);
     return r;
 }
-
 
 static const char *ll_str_operand(ll_t *ll, ast_node_t *n)
 {
@@ -109,7 +107,6 @@ static llv_t ll_binary_pow(ll_t *ll, ast_node_t *n)
     return (llv_t){ r, n->type_str ? n->type_str : "f64" };
 }
 
-
 static const char *ll_op_method_name(token_kind_t k)
 {
     switch (k) {
@@ -123,14 +120,12 @@ static const char *ll_op_method_name(token_kind_t k)
     }
 }
 
-
 static symbol_t *ll_op_struct(ll_t *ll, const char *ts, const char **sname)
 {
     if (!ts) return NULL;
     *sname = ll_is_ptr_ts(ts) ? arena_strndup(ll->a, ts, strlen(ts) - 1) : ts;
     return ll_struct_sym(ll, *sname);
 }
-
 
 static func_sig_t *ll_pick_arity(symbol_t *ms, size_t want)
 {
@@ -140,7 +135,6 @@ static func_sig_t *ll_pick_arity(symbol_t *ms, size_t want)
     } }
     return NULL;
 }
-
 
 static bool ll_op_call(ll_t *ll, ast_node_t *recv, const char *sname, symbol_t *ss,
                        const char *mname, ast_node_t *rhs, llv_t *out)
@@ -170,7 +164,6 @@ static bool ll_op_call(ll_t *ll, ast_node_t *recv, const char *sname, symbol_t *
     ll_emit(ll, "%s = call %s @%s(%s)", r, ll_ty(ll, rts), fname, args);
     *out = (llv_t){ r, rts }; return true;
 }
-
 
 bool ll_index_set(ll_t *ll, ast_node_t *idx, ast_node_t *value)
 {
@@ -256,7 +249,6 @@ llv_t ll_binary(ll_t *ll, ast_node_t *n)
 
 static llv_t ll_unary(ll_t *ll, ast_node_t *n)
 {
-    
     if (n->a && (n->op == TK_MINUS || n->op == TK_NOT)) {
         const char *sname;
         symbol_t *oss = ll_op_struct(ll, n->a->type_str, &sname);
@@ -399,7 +391,6 @@ static llv_t ll_call_len(ll_t *ll, ast_node_t *n)
     return (llv_t){ r, "i32" };
 }
 
-
 static llv_t ll_emit_call(ll_t *ll, ast_node_t *n, func_sig_t *sig, const char *lead,
                           const char *fname, const char *rts)
 {
@@ -421,7 +412,6 @@ static llv_t ll_emit_call(ll_t *ll, ast_node_t *n, func_sig_t *sig, const char *
     return (llv_t){ r, rts };
 }
 
-
 static llv_t ll_call_pkg(ll_t *ll, ast_node_t *n, symbol_t *pk, const char *fname_)
 {
     symbol_t *fs = scope_lookup_local(pk->members, fname_);
@@ -435,7 +425,6 @@ static llv_t ll_call_pkg(ll_t *ll, ast_node_t *n, symbol_t *pk, const char *fnam
     const char *fname = is_ext ? fname_ : ll_mangle(ll, NULL, fname_, sig);
     return ll_emit_call(ll, n, sig, "", fname, type_to_string(ll->sem->tc, sig->ret));
 }
-
 
 static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m, llv_t *out)
 {
@@ -488,7 +477,6 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
     }
     return false;
 }
-
 
 static llv_t ll_call_dyn(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *iface, const char *mname)
 {
@@ -581,7 +569,6 @@ static llv_t ll_call_method(ll_t *ll, ast_node_t *n, ast_node_t *callee)
     return ll_poison(n->type_str);
 }
 
-
 static llv_t ll_call_indirect(ll_t *ll, ast_node_t *n, ast_node_t *callee)
 {
     const char *fts = callee->type_str;
@@ -607,7 +594,6 @@ static llv_t ll_call_indirect(ll_t *ll, ast_node_t *n, ast_node_t *callee)
 }
 
 static bool ll_is_func_ts(const char *ts) { return ts && !strncmp(ts, "func(", 5); }
-
 
 static bool ll_call_intrinsic(ll_t *ll, ast_node_t *n, const char *nm, llv_t *out)
 {
@@ -809,7 +795,6 @@ static llv_t ll_array_lit(ll_t *ll, ast_node_t *n)
     return (llv_t){ n->list.len ? cur : "zeroinitializer", ats };
 }
 
-
 static llv_t ll_lambda_value(ll_t *ll, ast_node_t *n)
 {
     ll_emit_lambda(ll, n);                          
@@ -857,6 +842,7 @@ static llv_t ll_literal(ll_t *ll, ast_node_t *n)
         default:          return (llv_t){ "0", "i32" };
     }
 }
+
 llv_t ll_expr(ll_t *ll, ast_node_t *n)
 {
     if (!n) return (llv_t){ "0", "i32" };

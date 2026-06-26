@@ -30,12 +30,14 @@ void tick(interp_t *I)
     if ((++I->steps & 0xFFFFF) == 0 && I->deadline && clock() > I->deadline)
         rt_error(I, NULL, "execution timed out (possible infinite loop)");
 }
+
 env_t *env_new(interp_t *I, env_t *parent)
 {
     env_t *e = (env_t *)arena_alloc(I->a, sizeof *e);
     e->parent = parent; vec_init(&e->bindings);
     return e;
 }
+
 binding_t *env_find_local(env_t *e, const char *name)
 {
     { size_t i = 0; for (; i < e->bindings.len; i++) {
@@ -44,6 +46,7 @@ binding_t *env_find_local(env_t *e, const char *name)
     } }
     return NULL;
 }
+
 binding_t *env_find(env_t *e, const char *name)
 {
     for (; e; e = e->parent) {
@@ -91,6 +94,7 @@ ast_node_t *find_func(interp_t *I, const char *name, size_t nargs)
     } }
     return by_name;
 }
+
 module_t *find_module(interp_t *I, const char *name)
 {
     { size_t i = 0; for (; i < I->modules.len; i++) {

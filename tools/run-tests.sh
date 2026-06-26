@@ -18,7 +18,9 @@ check_out() {
         fail=$((fail+1))
     fi
 }
+
 SECTIONS="$*"
+
 want() {
     [ -z "$SECTIONS" ] && return 0
     for s in $SECTIONS; do
@@ -27,6 +29,7 @@ want() {
     done
     return 1
 }
+
 if want general; then
 for lang in $LANGS; do
 for f in tests/$lang/general/*.salam; do

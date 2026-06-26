@@ -169,6 +169,7 @@ const token_t *p_peekn(const parser_t *p, size_t k)
     if (i >= p->count) i = p->count - 1;
     return token_stream_at(p->toks, i);
 }
+
 size_t p_ident_run_len(const parser_t *p)
 {
     size_t m = 0;

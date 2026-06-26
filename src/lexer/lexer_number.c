@@ -73,7 +73,6 @@ static bool scan_decimal(lx_t *L, const src_pos_t *b, bool *bad)
     return is_float;
 }
 
-
 static void normalize_number(const char *text, size_t tlen, char *out, size_t cap)
 {
     size_t ci = 0;

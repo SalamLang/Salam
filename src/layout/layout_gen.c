@@ -28,6 +28,7 @@ void layout_localize_names(ast_node_t *node)
     { size_t i = 0; for (; i < node->list.len; i++)
         layout_localize_names((ast_node_t *)node->list.data[i]); }
 }
+
 layout_result_t *layout_generate(arena_t *a, logger_t *log, diag_engine_t *diag,
                                  const char *file, ast_node_t *layout_block)
 {

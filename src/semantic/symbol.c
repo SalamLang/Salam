@@ -26,6 +26,7 @@ scope_t *scope_new(arena_t *a, scope_kind_t kind, scope_t *parent)
     if (parent) { s->self_type = parent->self_type; s->func = parent->func; }
     return s;
 }
+
 symbol_t *symbol_new(arena_t *a, sym_kind_t kind, const char *name)
 {
     symbol_t *sym = (symbol_t *)arena_alloc(a, sizeof(*sym));
@@ -35,6 +36,7 @@ symbol_t *symbol_new(arena_t *a, sym_kind_t kind, const char *name)
     vec_init(&sym->overloads);
     return sym;
 }
+
 symbol_t *scope_lookup_local(scope_t *s, const char *name)
 {
     { size_t i = 0; for (; i < s->symbols.len; i++) {
@@ -43,6 +45,7 @@ symbol_t *scope_lookup_local(scope_t *s, const char *name)
     } }
     return NULL;
 }
+
 symbol_t *scope_lookup(scope_t *s, const char *name)
 {
     { scope_t *cur = s; for (; cur; cur = cur->parent) {
@@ -56,6 +59,7 @@ symbol_t *scope_lookup(scope_t *s, const char *name)
     } }
     return NULL;
 }
+
 symbol_t *scope_define(arena_t *a, scope_t *s, symbol_t *sym)
 {
     symbol_t *existing = scope_lookup_local(s, sym->name);

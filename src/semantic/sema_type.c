@@ -20,6 +20,7 @@ static type_t *ty(sema_t *s, type_kind_t k) { return sema_ty(s, k); }
 static type_t *err_ty(sema_t *s)            { return sema_err_ty(s); }
 
 static type_t *decorate(sema_t *s, ast_node_t *n, type_t *t) { return sema_decorate(s, n, t); }
+
 type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
 {
     if (!tnode) return ty(s, TY_VOID);

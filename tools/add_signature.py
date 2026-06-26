@@ -24,7 +24,6 @@ MARKER = "Salam Programming Language (2024–2026)"
 
 SKIP_DIRS = {".git", "build", "out", "node_modules", "third_party", "vendor"}
 
-
 def has_signature(content: str) -> bool:
     """Return True if the file already begins with the banner."""
     head = content[:len(SIGNATURE) + 50].lstrip("﻿").lstrip()

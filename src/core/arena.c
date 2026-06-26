@@ -31,7 +31,6 @@ struct arena {
 
 static size_t align_up(size_t n)
 {
-    
     return salam_size_add(n, ARENA_ALIGN - 1) & ~(size_t)(ARENA_ALIGN - 1);
 }
 

@@ -59,6 +59,7 @@ void logger_set_level(logger_t *lg, log_level_t min_level)
 {
     lg->min_level = min_level;
 }
+
 log_level_t logger_get_level(const logger_t *lg)
 {
     return lg->min_level;

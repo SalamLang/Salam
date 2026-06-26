@@ -42,6 +42,7 @@ bool ll_is_signed(const char *ts)
     if (!strcmp(ts, "char")) return false;   
     return true;
 }
+
 long ll_array_dim(const char *ts)
 {
     if (!ts) return 0;
@@ -76,6 +77,7 @@ const char *ll_struct_ltype(ll_t *ll, const char *name)
     } }
     const char *r = arena_strdup(ll->a, sb_cstr(&b)); sb_free(&b); return r;
 }
+
 symbol_t *ll_sym(ll_t *ll, const char *name)
 {
     if (!name) return NULL;
@@ -89,11 +91,13 @@ symbol_t *ll_sym(ll_t *ll, const char *name)
         } }
     return s;
 }
+
 symbol_t *ll_struct_sym(ll_t *ll, const char *name)
 {
     symbol_t *s = ll_sym(ll, name);
     return (s && s->kind == SYM_STRUCT) ? s : NULL;
 }
+
 symbol_t *ll_enum_sym(ll_t *ll, const char *name)
 {
     symbol_t *s = ll_sym(ll, name);
@@ -112,7 +116,6 @@ int ll_field_index(symbol_t *ssym, const char *field, symbol_t **out_field)
     return -1;
 }
 
-
 const char *ll_func_ret(ll_t *ll, const char *ts)
 {
     if (!ts || strncmp(ts, "func(", 5)) return "void";
@@ -121,7 +124,6 @@ const char *ll_func_ret(ll_t *ll, const char *ts)
     while (*p == ' ') p++;
     return *p ? arena_strdup(ll->a, p) : "void";
 }
-
 
 void ll_func_params(ll_t *ll, const char *ts, vec_t *out)
 {

@@ -20,7 +20,6 @@
 #define PP_MAX_DEPTH 64
 typedef struct { bool active; bool taken; bool parent; } pp_frame_t;
 static const char *s_os_defs[] = {
-    
 #if defined(_WIN32)
     "SALAM_OS_WINDOWS",
     "SALAM_OS=windows",
@@ -94,7 +93,6 @@ static int count_os_defs(void)
 char *preproc_run(arena_t *a, logger_t *log, const char *text,
                   const char *const *defines, int ndefines)
 {
-    
     int nos = count_os_defs();
     int total = nos + ndefines;
     const char **all = (const char **)arena_alloc(a, (size_t)(total + 1) * sizeof(char *));
@@ -174,6 +172,7 @@ char *preproc_run(arena_t *a, logger_t *log, const char *text,
     sb_free(&out);
     return r;
 }
+
 source_file_t *preproc_source(arena_t *a, logger_t *log, const source_file_t *src,
                               const char *const *defines, int ndefines)
 {

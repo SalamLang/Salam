@@ -84,7 +84,6 @@ ctest --test-dir build   # run the test suite
 ### Build with Make
 
 ```bash
-cd compiler
 make   # release build
 ```
 

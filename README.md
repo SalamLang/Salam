@@ -25,12 +25,6 @@ Salam is a general-purpose and systems programming language designed for efficie
 [![VS Code Marketplace Version](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 [![VS Code Marketplace Installs](https://vsmarketplacebadges.dev/installs/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 
-[![Commits per week](https://img.shields.io/github/commit-activity/w/SalamLang/Salam/main?style=for-the-badge&label=Commits%2FWeek)](https://github.com/SalamLang/Salam/commits/main)
-[![License](https://img.shields.io/github/license/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam/blob/main/LICENSE)
-[![Repo Size](https://img.shields.io/github/repo-size/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam)
-
-[![Awesome Salam](https://img.shields.io/badge/Awesome-Salam%20%F0%9F%95%B6-black?style=for-the-badge)](#)
-
 ---
 
 ## ✨ Introducing Salam

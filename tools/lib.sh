@@ -10,13 +10,13 @@ salam_python() {
 }
 
 salam_ensure_compiler() {
-    : "${SALAMC:=./salamc}"
-    [ -x "$SALAMC" ] && return 0
-    echo "building salamc..." >&2
+    : "${SALAM:=./salam}"
+    [ -x "$SALAM" ] && return 0
+    echo "building salam..." >&2
     if [ "${1:-}" = "--quiet" ]; then
         sh tools/build-compiler.sh >/dev/null 2>&1
     else
         sh tools/build-compiler.sh
     fi
-    SALAMC=./salamc
+    SALAM=./salam
 }

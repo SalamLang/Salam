@@ -22,20 +22,20 @@
 #define SALAM_MAX_INPUTS 64
 
 typedef enum {
-    CMD_INSPECT = 0,   /* salamc <file>          inspect / emit XML (default)   */
-    CMD_BUILD,         /* salamc build <files>   compile to an executable       */
-    CMD_OBJ,           /* salamc obj   <files>   compile to an object file      */
-    CMD_LLVM,          /* salamc llvm  <file>    emit LLVM IR (.ll)             */
-    CMD_RUN,           /* salamc run [file]      build (auto-detect) + run       */
-    CMD_LAYOUT_BUILD,  /* salamc layout build    layout DSL -> HTML/CSS/JS      */
-    CMD_DEBUG,         /* salamc debug <file>    build -g + launch GDB/LLDB     */
-    CMD_MEMCHECK,      /* salamc memcheck <file> build ASAN + run memchecker    */
-    CMD_NEW,           /* salamc new [name]      scaffold a project directory   */
-    CMD_FMT,           /* salamc fmt [files|dirs] format .salam source in place  */
-    CMD_REPL,          /* salamc cli             general REPL                   */
-    CMD_REPL_LAYOUT,   /* salamc layout          layout REPL                    */
-    CMD_HELP,          /* salamc help            print usage                    */
-    CMD_VERSION        /* salamc version         print version                  */
+    CMD_INSPECT = 0,   /* salam <file>          inspect / emit XML (default)   */
+    CMD_BUILD,         /* salam build <files>   compile to an executable       */
+    CMD_OBJ,           /* salam obj   <files>   compile to an object file      */
+    CMD_LLVM,          /* salam llvm  <file>    emit LLVM IR (.ll)             */
+    CMD_RUN,           /* salam run [file]      build (auto-detect) + run       */
+    CMD_LAYOUT_BUILD,  /* salam layout build    layout DSL -> HTML/CSS/JS      */
+    CMD_DEBUG,         /* salam debug <file>    build -g + launch GDB/LLDB     */
+    CMD_MEMCHECK,      /* salam memcheck <file> build ASAN + run memchecker    */
+    CMD_NEW,           /* salam new [name]      scaffold a project directory   */
+    CMD_FMT,           /* salam fmt [files|dirs] format .salam source in place  */
+    CMD_REPL,          /* salam cli             general REPL                   */
+    CMD_REPL_LAYOUT,   /* salam layout          layout REPL                    */
+    CMD_HELP,          /* salam help            print usage                    */
+    CMD_VERSION        /* salam version         print version                  */
 } cli_command_t;
 
 typedef struct {

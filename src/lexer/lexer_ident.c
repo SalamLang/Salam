@@ -22,8 +22,8 @@ void lx_scan_ident(lx_t *L)
     lx_skip_ident(L);
     const char *text = lx_slice(L, start);
     token_kind_t k = langpack_lookup_keyword(L->pack, text);
-    
-    if (k == TK_IDENT) {
+
+    if (k == TK_IDENT && !L->keep_comments) {
         const char *canon = langpack_canon_word(L->pack, text);
         if (canon) text = canon;
     }
@@ -44,8 +44,10 @@ void lx_scan_meta(lx_t *L)
     size_t start = L->pos;
     lx_skip_ident(L);
     const char *name = lx_slice(L, start);
-    
-    const char *canon = langpack_canon_word(L->pack, name);
-    if (canon) name = canon;
+
+    if (!L->keep_comments) {            /* keep original spelling when formatting */
+        const char *canon = langpack_canon_word(L->pack, name);
+        if (canon) name = canon;
+    }
     lx_emit(L, TK_META, &b, name);
 }

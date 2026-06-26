@@ -43,4 +43,6 @@ const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec);
 
 void salam_set_stdlib_root(const char *root);
 
+const char *salam_get_stdlib_root(void);
+
 #endif /* SALAM_SEMANTIC_SEMA_H */

@@ -12,7 +12,7 @@ for f in examples/fa/*/*.salam; do
         echo "SKIP $name (not a fa console app)"; skip=$((skip+1)); continue
     fi
     rm -f salam_mod_*.* 2>/dev/null
-    "$SALAMC" build "$f" --output="/tmp/$name.exe" --lang=fa --no-color --log-level=error >/dev/null 2>&1
+    "$SALAM" build "$f" --output="/tmp/$name.exe" --lang=fa --no-color --log-level=error >/dev/null 2>&1
     if [ -x "/tmp/$name.exe" ] && out=$("/tmp/$name.exe" 2>&1) && [ -n "$out" ]; then
         echo "PASS $name"; pass=$((pass+1))
     else

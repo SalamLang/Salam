@@ -1,0 +1,221 @@
+% ===================== Chapter 18 =====================
+\chapter{Memory Management}
+\label{ch:memory}
+
+Every value your program works with lives somewhere in the computer's memory.
+Most of the time Salam handles that for you and you need not think about it. But
+the growable containers --- vectors, hash maps --- and a few advanced techniques do
+involve memory you are responsible for. This chapter explains Salam's memory model
+plainly, so you know which memory takes care of itself and which you must tend.
+
+\section{Two kinds of memory}
+
+It helps to picture memory in two parts. The \textbf{stack} holds your local
+variables --- the \code{i32}s, the \code{bool}s, the fixed-size arrays and structs.
+This memory is managed completely automatically: when a variable comes into scope
+it is created, and when its scope ends it is reclaimed. You have been relying on
+this since Chapter~2 without a second thought, and you can continue to.
+
+The \textbf{heap} holds things whose size is not known until the program runs, or
+that must outlive the function that created them --- the growable buffer behind a
+vector, the entries of a hash map. Heap memory must be explicitly released when no
+longer needed, which is why those containers have a \code{free} method.
+
+\section{Values that manage themselves}
+
+The good news first: the great majority of what you write needs no memory
+management at all.
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{Scalars} --- \code{i32}, \code{f64}, \code{bool}, \code{char}, an
+        enum --- live on the stack and vanish automatically.
+  \item \textbf{Fixed-size arrays and structs} live inline, on the stack, and are
+        likewise reclaimed automatically when they go out of scope. Recall from
+        Chapter~9 that assigning or passing a struct \emph{copies} it --- there is
+        no shared hidden allocation to worry about.
+  \item \textbf{Strings} are special: although a \code{str} points at heap bytes,
+        Salam manages those bytes for you (see the box below). You never
+        \code{free} a string.
+\end{itemize}
+
+\begin{deep}[In Depth: the string arena]
+Joining strings with \code{+}, or calling functions like \code{str.Upper}, must
+allocate room for the new text on the heap --- yet you never free a string. How?
+Salam keeps a per-program \emph{arena} for string data: all the bytes that string
+operations produce are allocated from it, and the whole arena is released at once
+when the program ends. The trade-off is deliberate: you get the convenience of
+never managing string memory, at the cost of strings living until the program
+exits. For the short-lived, string-heavy programs that are most common, this is
+exactly the right bargain.
+\end{deep}
+
+\section{Containers you must free}
+
+The exception to ``it manages itself'' is the growable containers. A
+\code{Vector<T>} or a \code{HashMap<K, V>} owns a heap buffer that it resizes as
+it grows, and that buffer must be returned to the system when you are finished. So
+every growable container has a \code{free} method, and you should call it:
+
+\begin{salam}
+func main:
+    mut v Vector<i32> = Vector {}
+    v.push(1)
+    v.push(2)
+    v.push(3)
+    println "sum of three pushes:", v.get(0)[0] + v.get(1)[0] + v.get(2)[0]
+    v.free()              // release the buffer
+end
+\end{salam}
+
+\begin{progout}
+sum of three pushes: 6
+\end{progout}
+
+This applies to \code{Vector}, \code{HashMap}, \code{Stack}, \code{Queue}, and the
+other growable collections. The fixed-size array \code{i32[5]}, by contrast, needs
+no freeing --- it lives on the stack.
+
+\subsection{Pairing creation with \texttt{free} using \texttt{defer}}
+
+The cleanest way never to forget a \code{free} is to schedule it the moment you
+create the container, with the \code{defer} you learned in Chapter~14. Written
+together on adjacent lines, the release is guaranteed and impossible to overlook:
+
+\begin{salam}
+func sum_first_n(n i32) i32:
+    mut v Vector<i32> = Vector {}
+    defer v.free()                 // guaranteed cleanup, however we return
+    for mut i = 1; i <= n; i = i + 1:
+        v.push(i)
+    end
+    mut total i32 = 0
+    mut j i32 = 0
+    while j < v.len():
+        total += v.get(j)[0]
+        j += 1
+    end
+    ret total
+end
+
+func main:
+    println sum_first_n(5)
+end
+\end{salam}
+
+\begin{progout}
+15
+\end{progout}
+
+Because \code{defer v.free()} runs whenever \code{sum\_first\_n} returns --- through
+the normal path or any early \code{ret} --- the vector's memory is always released.
+This ``create, defer free, use'' pattern is the single most important habit for
+leak-free Salam code.
+
+\begin{warn}
+Two mistakes to avoid. \textbf{Forgetting to free} a container leaks its
+memory --- harmless in a tiny script that exits immediately, but a real problem in a
+long-running program that creates containers in a loop. \textbf{Using a container
+after freeing it} is worse: the buffer is gone, and reading it is undefined
+behaviour. Free a container exactly once, as the last thing you do with it ---
+which is precisely what \code{defer} at the point of creation guarantees.
+\end{warn}
+
+\section{No hidden ownership rules}
+
+If you have heard of languages with elaborate ``ownership'' and ``borrowing''
+systems, you can relax: Salam has none of that ceremony. There are no lifetime
+annotations to write, no borrow checker to satisfy, no move semantics to learn.
+The model is the simple one above --- stack values manage themselves, growable
+containers get a \code{free} --- and the discipline is the single habit of pairing
+each container with a \code{defer free}.
+
+This simplicity is a deliberate design choice. It keeps the language approachable
+and the code readable, at the cost of asking you to remember \code{free} for the
+handful of containers that need it. In practice that is a small, learnable
+responsibility, and \code{defer} reduces it to a reflex.
+
+\section{Manual memory with \texttt{mem}}
+
+For most programs the containers are all the heap memory you will ever touch. But
+when you need raw control --- implementing your own data structure, or working at
+the boundary with C (Chapter~19) --- the \code{mem} module gives you direct
+allocation, the same primitives the standard library's containers are built on:
+
+\begin{salam}
+import "mem"
+
+func main:
+    p void* = mem.Allocate(64 as u64)     // ask for 64 bytes
+    if p == null:
+        println "allocation failed"
+        ret
+    end
+    println "got 64 bytes"
+    mem.Free(p)                            // hand them back
+    println "released"
+end
+\end{salam}
+
+\begin{progout}
+got 64 bytes
+released
+\end{progout}
+
+\code{mem.Allocate(n)} requests \code{n} bytes and returns a \code{void*} (a raw,
+untyped pointer), or \code{null} if the request fails --- which you should check.
+\code{mem.Free(p)} returns the memory. The module also offers
+\code{mem.Reallocate} to resize a block, \code{mem.Set} to fill bytes, and
+\code{mem.Copy} to copy them.
+
+\begin{warn}
+Manual memory is powerful and unforgiving: a missing \code{Free} leaks, a double
+\code{Free} corrupts, and using freed memory crashes. You will rarely need
+\code{mem} directly --- the built-in containers cover almost every case. Reach for
+it only when you are building something the standard library does not provide, and
+when you do, guard every allocation with a \code{defer mem.Free} just as you would
+a container.
+\end{warn}
+
+\begin{deep}[In Depth: tracking down leaks]
+Because Salam compiles to C, the usual C tooling works on Salam programs. The
+compiler can build with AddressSanitizer (the \code{--asan} flag, or the
+\code{salam memcheck} command) to catch use-after-free and out-of-bounds errors
+at run time, and the \code{mem} module exposes counters --- allocations made, frees
+done, bytes still live --- that let a program audit its own memory use. If you ever
+suspect a leak, these turn ``something is wrong'' into a precise location.
+\end{deep}
+
+\section{Chapter summary}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item Scalars, fixed arrays, and structs live on the stack and are reclaimed
+        automatically; you never manage them.
+  \item Strings are heap-backed but managed by a per-program arena --- never
+        \code{free} a string.
+  \item Growable containers (\code{Vector}, \code{HashMap}, \code{Stack},
+        \code{Queue}) own heap buffers and must be \code{free}d.
+  \item Pair every container creation with \code{defer x.free()} to guarantee
+        cleanup on every exit path.
+  \item Salam has no ownership/borrowing system --- the model is deliberately
+        simple.
+  \item \code{mem} (\code{Allocate}, \code{Free}, \code{Reallocate}, \code{Set},
+        \code{Copy}) provides raw manual memory for advanced use; guard it
+        carefully.
+\end{itemize}
+
+\section{Exercises}
+
+\exercise Write a function that builds a \code{Vector<str>} of three greetings,
+prints them, and frees the vector using \code{defer}.
+
+\exercise Take a function that creates a \code{HashMap}, returns early on some
+condition, and uses \code{defer} to ensure the map is freed on both paths.
+
+\exercise Explain in a comment why a fixed array \code{i32[10]} needs no
+\code{free} but a \code{Vector<i32>} does.
+
+\exercise Use \code{mem.Allocate} and \code{mem.Free} to grab and release 128
+bytes, checking for a \code{null} result, and guard the free with \code{defer}.
+
+\exercise Describe, in your own words, what the string arena does and one
+situation where its ``strings live until the program ends'' behaviour could matter.

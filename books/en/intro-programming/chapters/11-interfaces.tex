@@ -1,0 +1,197 @@
+% ===================== Chapter 11 =====================
+\chapter{Interfaces and Polymorphism}
+\label{ch:interfaces}
+
+A \code{Circle} and a \code{Rect} are different structs, with different fields,
+yet both have an \emph{area}. Often you want to write code that works with
+``anything that has an area'' without caring exactly which shape it is. An
+\textbf{interface} captures that idea: it describes a set of methods a type must
+provide, and lets you write code against the interface rather than any one
+concrete type. This ability to treat many types through one shared description is
+called \textbf{polymorphism}.
+
+\section{Defining an interface}
+
+An interface is declared with the \code{interface} keyword and a list of method
+\emph{signatures} --- method names with their parameters and return types, but no
+bodies:
+
+\begin{salam}
+interface Shape:
+    func area() f64
+    func name() str
+end
+\end{salam}
+
+This says: ``a \code{Shape} is anything that has an \code{area()} returning an
+\code{f64} and a \code{name()} returning a \code{str}.'' The interface promises
+what methods exist; it does not say how they work --- that is each type's job.
+
+\section{Implementing an interface}
+
+Here is the pleasant part: in Salam a struct implements an interface simply by
+\emph{having the right methods}. There is no \code{implements} clause to write and
+nothing to declare --- if a struct has an \code{area()} and a \code{name()} with
+matching signatures, it already \emph{is} a \code{Shape}. This is called
+\textbf{structural conformance}.
+
+\begin{salam}
+interface Shape:
+    func area() f64
+    func name() str
+end
+
+struct Circle:
+    r f64 = 0.0
+    func area() f64: ret 3.14159 * this.r * this.r end
+    func name() str: ret "circle" end
+end
+
+struct Rect:
+    w f64 = 0.0
+    h f64 = 0.0
+    func area() f64: ret this.w * this.h end
+    func name() str: ret "rect" end
+end
+\end{salam}
+
+Both \code{Circle} and \code{Rect} provide \code{area()} and \code{name()}, so
+both conform to \code{Shape} --- automatically, without either struct mentioning
+the interface. Now we can write code that works with any \code{Shape}.
+
+\section{Static polymorphism: interface bounds}
+
+The first and most efficient way to use an interface is as a \textbf{bound} on a
+generic function. The notation \code{<T: Shape>} after a function name means ``for
+any type \code{T} that conforms to \code{Shape}.'' Inside the function you may
+call any of the interface's methods on a value of type \code{T}:
+
+\begin{salam}
+func describe<T: Shape>(s T):
+    println s.name(), "area =", s.area()
+end
+
+func main:
+    describe(Circle { r = 2.0 })
+    describe(Rect { w = 3.0, h = 4.0 })
+end
+\end{salam}
+
+\begin{progout}
+circle area = 12.5664
+rect area = 12
+\end{progout}
+
+The one \code{describe} function serves both shapes. You did not have to write it
+twice, and you did not have to tell it which type you are passing --- the compiler
+works that out from the argument. Notice there are no angle brackets at the call
+site: you just write \code{describe(Circle \{ r = 2.0 \})}, and Salam infers that
+\code{T} is \code{Circle}.
+
+\begin{deep}[In Depth: monomorphization, or ``zero-cost'' generics]
+When you call \code{describe(Circle \{...\})}, the compiler generates a
+specialised copy of \code{describe} in which \code{T} is exactly \code{Circle},
+and another copy for \code{Rect}. Each copy calls the methods directly, with no
+run-time lookup --- it is as fast as if you had written two separate functions by
+hand. This technique, called \emph{monomorphization}, is why interface bounds are
+described as ``zero-cost'': you get the convenience of writing one generic
+function and the speed of hand-specialised code. The price is a little extra
+compiled size, one copy per type you actually use.
+\end{deep}
+
+\section{Dynamic polymorphism: \texttt{dyn}}
+
+Interface bounds are resolved at compile time, which means each call site knows
+the concrete type. But sometimes you want a \emph{single} collection holding a
+mixture of shapes --- some circles, some rectangles --- and to call \code{area()}
+on each without knowing which is which until the program runs. For that, Salam
+offers \code{dyn}.
+
+A value of type \code{dyn Shape} is ``some shape, decided at run time.'' You can
+store different concrete types in one place and call interface methods on them,
+and Salam dispatches each call to the right type's method dynamically:
+
+\begin{salam}
+func describe(s dyn Shape):
+    println s.name(), "area =", s.area()
+end
+
+func main:
+    describe(Circle { r = 1.0 })
+    describe(Rect { w = 2.0, h = 3.0 })
+end
+\end{salam}
+
+\begin{progout}
+circle area = 3.14159
+rect area = 6
+\end{progout}
+
+The difference from the bounded version is what happens under the hood: a
+\code{dyn Shape} carries, alongside the data, a hidden table of which methods to
+call, so the right \code{area()} is chosen at run time. This is exactly what lets
+a single list hold a heterogeneous mix of shapes.
+
+\begin{note}
+\textbf{When to use which.} Reach for an interface \emph{bound} (\code{<T:
+Shape>}) by default --- it is faster and is the right tool when each call works
+with one known type. Reach for \code{dyn} when you genuinely need to mix different
+concrete types in one collection or behind one variable, and decide the method at
+run time. Bounds are about writing one function for many types; \code{dyn} is
+about holding many types in one container.
+\end{note}
+
+\section{Designing with interfaces}
+
+Interfaces let you program to a \emph{capability} rather than a concrete type,
+which keeps your code flexible. A function that sorts ``anything comparable,'' a
+logger that writes to ``anything writable,'' a renderer that draws ``any
+shape'' --- each is expressed by naming the interface it needs and ignoring
+everything else about its inputs. When you later add a new type that conforms, the
+existing code works with it unchanged, because it only ever depended on the
+methods, never the specific struct.
+
+\begin{tip}
+Keep interfaces small. An interface with one or two methods (``has an area,''
+``can be drawn'') is easy for many types to satisfy and easy to reason about. A
+large interface demanding a dozen methods is a burden to implement and tends to
+couple your code to one specific design. Prefer several small interfaces over one
+big one.
+\end{tip}
+
+\section{Chapter summary}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item An \code{interface} lists method signatures (no bodies) that a conforming
+        type must provide.
+  \item Conformance is \emph{structural}: a struct implements an interface just by
+        having the matching methods --- no \code{implements} declaration.
+  \item An interface \emph{bound}, \code{func f<T: Iface>(x T)}, writes one
+        function usable with any conforming type; the type is inferred at the call
+        site and resolved at compile time (monomorphization, zero run-time cost).
+  \item \code{dyn Iface} holds ``some conforming type, decided at run time,''
+        enabling heterogeneous collections via dynamic dispatch.
+  \item Use bounds by default; use \code{dyn} when you must mix concrete types in
+        one place.
+  \item Favour small interfaces that many types can easily satisfy.
+\end{itemize}
+
+\section{Exercises}
+
+\exercise Define an interface \code{Greeter} with a method \code{greet() str}, and
+two structs (say \code{Formal} and \code{Casual}) that conform. Write a bounded
+function that prints any greeter's greeting.
+
+\exercise Add a third shape, \code{Triangle} (base and height), to the
+\code{Shape} example. Confirm the existing \code{describe} works on it with no
+changes.
+
+\exercise Give \code{Shape} a third method \code{perimeter() f64} and implement it
+for \code{Circle} and \code{Rect}. What error do you get if you forget one?
+
+\exercise Write a bounded function \code{bigger<T: Shape>(a T, b T) str} that
+returns the name of whichever shape has the larger area. (Both arguments are the
+same type here --- why?)
+
+\exercise Explain, in a short comment, when you would choose \code{dyn Shape} over
+\code{<T: Shape>}, using a list of mixed shapes as your example.

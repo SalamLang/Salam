@@ -8,8 +8,7 @@
 
 # Salam Language
 
-A new programming language empowering developers in Persian and Arabic-speaking communities.
-Unlock the joy of coding-accessible, intuitive, and culturally resonant.
+Salam — a general-purpose and systems programming language designed for efficient software development, featuring a built-in domain-specific language (DSL)
 
 </div>
 

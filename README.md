@@ -45,6 +45,7 @@ It is designed for simplicity, accessibility, and inclusivity-bridging the gap b
 - 🚀 Docker support for seamless development.
 - 🔧 Linting and code checks for best practices.
 - 🔄 Built-in commands for versioning and updates.
+
 ## 🧩 Editor Support
 
 ### Visual Studio Code

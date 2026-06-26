@@ -49,7 +49,7 @@ It is designed for simplicity, accessibility, and inclusivity-bridging the gap b
 
 ### Visual Studio Code
 
-Install the official Salam Language extension from the VS Code Marketplace for syntax highlighting and language support.
+Install the official Salam Language extension from the Visual Studio Code Marketplace for syntax highlighting and language support.
 
 [![Install on VS Code](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 

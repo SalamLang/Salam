@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuild the Salam online playground (web/) from the current sources.
+# Rebuild the Salam online playground (editor/) from the current sources.
 
 set -eu
 . "$(dirname "$0")/lib.sh"
@@ -26,7 +26,7 @@ fi
 echo "==> Building WebAssembly bundle (tools/build-wasm.sh) ..."
 sh tools/build-wasm.sh
 echo "==> Editor bundle:"
-for f in web/salam-wa.js web/salam-wa.wasm web/salam-wa.data; do
+for f in editor/salam-wa.js editor/salam-wa.wasm editor/salam-wa.data; do
     if [ -f "$f" ]; then
         size=$(wc -c < "$f" | tr -d ' ')
         printf '    %-22s %s bytes\n' "$f" "$size"
@@ -36,7 +36,7 @@ for f in web/salam-wa.js web/salam-wa.wasm web/salam-wa.data; do
 done
 echo "==> Exported entry points:"
 for sym in _salam_web_run_app _salam_web_build_layout _salam_web_emit; do
-    if grep -q "$sym" web/salam-wa.js 2>/dev/null; then echo "    ok   $sym"
+    if grep -q "$sym" editor/salam-wa.js 2>/dev/null; then echo "    ok   $sym"
     else echo "    WARN missing $sym" >&2; fi
 done
 echo "==> Done. Reload the editor to pick up the new build."

@@ -1,0 +1,264 @@
+// Regenerates editor/keywords.js (the playground's syntax-highlight vocabulary)
+// from the compiler sources, so the editor never drifts from the language.
+// Sources: src/langpack/langpack_data.c, src/semantic/types.c,
+// std/layout/elements/*.salam.
+import (
+    "os" "str"
+)
+langpack_file str = "src/langpack/langpack_data.c"
+types_file str = "src/semantic/types.c"
+elements_dir str = "std/layout/elements"
+out_file str = "editor/keywords.js"
+// --- small string helpers ---
+func find_from(s str, sub str, start i32) i32:
+    if start >= s.len(): ret 0 - 1 end
+    rest str = s.substr(start, s.len() - start)
+    k i32 = rest.find(sub)
+    if k < 0: ret 0 - 1 end
+    ret start + k
+end
+// Inner content of a "..." literal whose opening quote is at index q.
+func str_lit(text str, q i32) str:
+    mut out str = ""
+    n i32 = text.len()
+    mut i i32 = q + 1
+    while i < n:
+        c str = text.substr(i, 1)
+        if c == "\\" && i + 1 < n:
+            out = out.concat(c).concat(text.substr(i + 1, 1))
+            i = i + 2
+            continue
+        end
+        if c == "\"": break end
+        out = out.concat(c)
+        i = i + 1
+    end
+    ret out
+end
+// Index of the closing quote of a "..." literal opened at q (or len if unterminated).
+func str_end(text str, q i32) i32:
+    n i32 = text.len()
+    mut i i32 = q + 1
+    while i < n:
+        c str = text.substr(i, 1)
+        if c == "\\" && i + 1 < n:
+            i = i + 2
+            continue
+        end
+        if c == "\"": ret i end
+        i = i + 1
+    end
+    ret n
+end
+func all_underscore(s str) bool:
+    if s.len() == 0: ret false end
+    for mut i = 0; i < s.len(); i = i + 1:
+        if s.substr(i, 1) != "_": ret false end
+    end
+    ret true
+end
+func contains(v Vector<str>, s str) bool:
+    for mut i = 0; i < v.len(); i = i + 1:
+        if v.get(i)[0] == s: ret true end
+    end
+    ret false
+end
+func uniq(v Vector<str>) Vector<str>:
+    mut out Vector<str> = Vector {}
+    for mut i = 0; i < v.len(); i = i + 1:
+        s str = v.get(i)[0]
+        if contains(out, s) == false: out.push(s) end
+    end
+    ret out
+end
+func json_escape(s str) str:
+    mut out str = ""
+    mut i i32 = 0
+    while i < s.len():
+        c str = s.substr(i, 1)
+        if c == "\\": out = out.concat("\\\\")
+        else if c == "\"": out = out.concat("\\\"")
+        else if c == "\n": out = out.concat("\\n")
+        else if c == "\t": out = out.concat("\\t")
+        else if c == "\r": out = out.concat("")
+        else: out = out.concat(c)
+        end
+        i = i + 1
+    end
+    ret out
+end
+func json_array(v Vector<str>) str:
+    mut out str = "["
+    for mut i = 0; i < v.len(); i = i + 1:
+        if i > 0: out = out.concat(", ") end
+        out = out.concat("\"").concat(json_escape(v.get(i)[0])).concat("\"")
+    end
+    ret out.concat("]")
+end
+// Keep keyword strings from src/langpack/langpack_data.c: every { TK_KW_*, "..." } row.
+func collect_keywords(text str) Vector<str>:
+    mut out Vector<str> = Vector {}
+    mut i i32 = 0
+    while i < text.len():
+        k i32 = find_from(text, "TK_KW_", i)
+        if k < 0: break end
+        q i32 = find_from(text, "\"", k)
+        if q < 0: break end
+        val str = str_lit(text, q)
+        e i32 = str_end(text, q)
+        if all_underscore(val) == false && val.len() > 0:
+            out.push(val)
+        end
+        i = e + 1
+    end
+    ret out
+end
+// True when the bytes after closing-quote index e are `, TY_` (a { "name", TY_* } row).
+func type_follows(text str, e i32) bool:
+    n i32 = text.len()
+    mut j i32 = e + 1
+    while j < n:
+        c str = text.substr(j, 1)
+        if c == " " || c == "\t" || c == "\n" || c == "\r":
+            j = j + 1
+            continue
+        end
+        break
+    end
+    if j >= n: ret false end
+    if text.substr(j, 1) != ",": ret false end
+    j = j + 1
+    while j < n:
+        c str = text.substr(j, 1)
+        if c == " " || c == "\t" || c == "\n" || c == "\r":
+            j = j + 1
+            continue
+        end
+        break
+    end
+    if j + 3 > n: ret false end
+    ret text.substr(j, 3) == "TY_"
+end
+// Keep type names from src/semantic/types.c: the "name" in every { "name", TY_* } row.
+func collect_types(text str) Vector<str>:
+    mut out Vector<str> = Vector {}
+    n i32 = text.len()
+    mut i i32 = 0
+    while i < n:
+        c str = text.substr(i, 1)
+        if c == "\"":
+            val str = str_lit(text, i)
+            e i32 = str_end(text, i)
+            if type_follows(text, e):
+                out.push(val)
+            end
+            i = e + 1
+            continue
+        end
+        i = i + 1
+    end
+    ret out
+end
+// The single line following a `@marker` directive in a layout element file.
+func line_after(text str, marker str) str:
+    m i32 = text.find(marker)
+    if m < 0: ret "" end
+    start i32 = m + marker.len()
+    rest str = text.substr(start, text.len() - start)
+    nl i32 = rest.find("\n")
+    if nl < 0: ret rest end
+    ret rest.substr(0, nl)
+end
+func first_string(region str) str:
+    q i32 = region.find("\"")
+    if q < 0: ret "" end
+    ret str_lit(region, q)
+end
+func collect_strings(region str) Vector<str>:
+    mut out Vector<str> = Vector {}
+    n i32 = region.len()
+    mut i i32 = 0
+    while i < n:
+        c str = region.substr(i, 1)
+        if c == "\"":
+            out.push(str_lit(region, i))
+            i = str_end(region, i) + 1
+            continue
+        end
+        i = i + 1
+    end
+    ret out
+end
+// Byte-wise lexicographic comparison (element filenames are ASCII).
+func str_less(a str, b str) bool:
+    la i32 = a.len()
+    lb i32 = b.len()
+    mut i i32 = 0
+    while i < la && i < lb:
+        ca i32 = char_code(a.substr(i, 1))
+        cb i32 = char_code(b.substr(i, 1))
+        if ca != cb: ret ca < cb end
+        i = i + 1
+    end
+    ret la < lb
+end
+func main:
+    lang_src str = os.ReadFile(langpack_file)
+    mut kw Vector<str> = collect_keywords(lang_src)
+    types_src str = os.ReadFile(types_file)
+    mut ty Vector<str> = collect_types(types_src)
+    ty.push("auto")
+    ty.push("خودکار")
+    ty.push("byte")
+    ty.push("HashMap")
+    ty.push("Vector")
+    ty.push("MapIter")
+    // Collect and sort the element source files for a deterministic order.
+    mut entries Vector<str> = os.ListDir(elements_dir)
+    mut files Vector<str> = Vector {}
+    for mut i = 0; i < entries.len(); i = i + 1:
+        name str = entries.get(i)[0]
+        if str.EndsWith(name, ".salam"): files.push(name) end
+    end
+    n i32 = files.len()
+    for mut i = 0; i < n - 1; i = i + 1:
+        mut lo i32 = i
+        for mut j = i + 1; j < n; j = j + 1:
+            if str_less(files.get(j)[0], files.get(lo)[0]): lo = j end
+        end
+        if lo != i:
+            t str = files.get(i)[0]
+            files.set(i, files.get(lo)[0])
+            files.set(lo, t)
+        end
+    end
+    // For each element: the first @en name, then every space-free @fa alias.
+    mut el Vector<str> = Vector {}
+    for mut i = 0; i < n; i = i + 1:
+        name str = files.get(i)[0]
+        text str = os.ReadFile(elements_dir.concat("/").concat(name))
+        en str = first_string(line_after(text, "@en"))
+        if en.len() > 0:
+            if en.find(" ") < 0: el.push(en) end
+        end
+        mut fa Vector<str> = collect_strings(line_after(text, "@fa"))
+        for mut j = 0; j < fa.len(); j = j + 1:
+            s str = fa.get(j)[0]
+            if s.find(" ") < 0: el.push(s) end
+        end
+    end
+    kw = uniq(kw)
+    ty = uniq(ty)
+    el = uniq(el)
+    mut out str = "// AUTO-GENERATED by tools/gen-editor-keywords.salam from the compiler sources.\n"
+    out = out.concat("// Do NOT edit by hand, run `salam run tools/gen-editor-keywords.salam`\n")
+    out = out.concat("// (tools/build-wasm.sh runs it automatically). Sources: src/langpack/langpack_data.c,\n")
+    out = out.concat("// src/semantic/types.c, std/layout/elements/*.salam.\n")
+    out = out.concat("window.SALAM_LEX = {\n")
+    out = out.concat("  kw: ").concat(json_array(kw)).concat(",\n")
+    out = out.concat("  ty: ").concat(json_array(ty)).concat(",\n")
+    out = out.concat("  el: ").concat(json_array(el)).concat("\n")
+    out = out.concat("};\n")
+    os.WriteFile(out_file, out)
+    println "wrote editor/keywords.js:", kw.len(), "keywords,", ty.len(), "types,", el.len(), "elements"
+end

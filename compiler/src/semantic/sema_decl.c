@@ -257,15 +257,22 @@ static func_sig_t *find_sig(symbol_t *fsym, ast_node_t *decl)
 
 static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_t *sig)
 {
-    scope_t *parent = owner ? owner->members : s->global;
+    scope_t *home = NULL;
+    if (!owner) {
+        symbol_t *fs = scope_lookup_local(s->global, fn->name);
+        if (fs && fs->home) home = fs->home;
+    }
+    scope_t *parent = owner ? owner->members : (home ? home : s->global);
     scope_t *sc = scope_new(s->a, SCOPE_FUNC, parent);
     sc->label = fn->name;
     sc->func = sig;
     scope_t *saved = s->cur;
     type_t  *saved_self = s->self_type;
     func_sig_t *saved_func = s->cur_func;
+    scope_t *saved_gp = s->gen_pkg;
     s->cur = sc;
     s->cur_func = sig;
+    if (home) s->gen_pkg = home;   /* nested same-package instances inherit it */
     if (owner) {
         
         s->self_type = (owner->kind == SYM_TYPEIMPL)
@@ -307,6 +314,7 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
         } }
     }
     s->cur = saved; s->self_type = saved_self; s->cur_func = saved_func;
+    s->gen_pkg = saved_gp;
 }
 
 static void check_toplevel(sema_t *s, ast_node_t *d)

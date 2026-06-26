@@ -5,7 +5,7 @@ set -e
 . "$(dirname "$0")/lib.sh"
 salam_ensure_compiler
 rm -f salam_mod_*.c salam_mod_*.h
-"$SALAM" run tools/gen-examples.salam
+"$SALAM" run tools/salam/gen-examples.salam
 EMCC="${EMCC:-emcc}"
 if ! command -v "$EMCC" >/dev/null 2>&1; then
     EMSDK_DIR="${SALAM_EMSDK:-C:/emsdk-wasm}"
@@ -44,9 +44,9 @@ command -v "$EMCC" >/dev/null 2>&1 || [ -e "$EMCC" ] || {
     exit 1
 }
 
-OUT_DIR="editor"
+OUT_DIR="../editor"
 mkdir -p "$OUT_DIR"
-"$SALAM" run tools/gen-editor-keywords.salam || echo "warning: keyword generation failed; using existing editor/keywords.js" >&2
+"$SALAM" run tools/salam/gen-editor-keywords.salam || echo "warning: keyword generation failed; using existing ../editor/keywords.js" >&2
 SRC_DIRS="core source logger xml preproc token langpack i18n lexer ast parser
           diag semantic interp layout codegen llvm web"
 SRCS=""

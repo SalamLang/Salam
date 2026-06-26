@@ -49,7 +49,7 @@ It is designed for simplicity, accessibility, and inclusivity-bridging the gap b
 
 ### Visual Studio Code
 
-Install the official Salam Language extension from the VS Code Marketplace for syntax highlighting and language support.
+Install the official Salam Language extension from the Visual Studio Code Marketplace for syntax highlighting and language support.
 
 [![Install on VS Code](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 
@@ -82,8 +82,8 @@ compiled programs are self-contained and link only `-lm` (`-lmsvcrt` with tcc).
 
 ```sh
 # general language -> native executable
-salam build app.salam --output=app.exe        # then ./app.exe
-salam cli build app.salam --keep-c            # optional 'cli' prefix; keep generated C
+salam build app.salam --output=app.exe         # then ./app.exe
+salam cli build app.salam --keep-c             # optional 'cli' prefix; keep generated C
 salam obj app.salam                            # compile to .o only
 
 # layout DSL -> website

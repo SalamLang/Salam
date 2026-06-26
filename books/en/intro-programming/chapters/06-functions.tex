@@ -1,0 +1,380 @@
+% ===================== Chapter 6 =====================
+\chapter{Functions}
+\label{ch:functions}
+
+We have used \code{main} since the first page, and a few helper functions along
+the way. Now we study functions properly, because they are the single most
+important tool for organising a program. A \textbf{function} is a named,
+reusable piece of code that takes some inputs, does some work, and (often) hands
+back a result. Functions let you write a piece of logic once, give it a name,
+and call it as many times as you like.
+
+\section{Defining and calling a function}
+
+You have already seen the shape. A function definition is the keyword
+\code{func}, a name, a parenthesised list of parameters, an optional return
+type, a colon, the body, and \code{end}:
+
+\begin{salam}
+func square(n i32) i32:
+    ret n * n
+end
+
+func main:
+    println square(5)
+    println square(9)
+end
+\end{salam}
+
+\begin{progout}
+25
+81
+\end{progout}
+
+\code{square} takes one \textbf{parameter}, \code{n} of type \code{i32}, and its
+\textbf{return type} (written after the parameter list) is also \code{i32}. The
+body computes \code{n * n} and hands it back with \code{ret}. In \code{main} we
+\textbf{call} the function by writing its name and an \textbf{argument} in
+parentheses: \code{square(5)}. The argument \code{5} becomes the parameter
+\code{n} for that call.
+
+\begin{note}
+\emph{Parameter} and \emph{argument} are two ends of the same connection. The
+parameter is the name in the definition (\code{n}); the argument is the value you
+pass at the call site (\code{5}). The argument is copied into the parameter when
+the call begins.
+\end{note}
+
+\section{Returning a value}
+
+The \code{ret} keyword does two things at once: it ends the function immediately
+and sends a value back to the caller. The type of that value must match the
+function's declared return type.
+
+A function can have several \code{ret} statements --- useful when different cases
+produce different answers. The first one reached wins:
+
+\begin{salam}
+func abs(n i32) i32:
+    if n < 0:
+        ret -n
+    end
+    ret n
+end
+
+func main:
+    println abs(-7), abs(7)
+end
+\end{salam}
+
+\begin{progout}
+7 7
+\end{progout}
+
+If \code{n} is negative, the first \code{ret} fires and the function is done; the
+final \code{ret n} is reached only for non-negative inputs. Using an early
+\code{ret} to dispatch a special case, then letting the main path continue
+un-indented, is a clean and common style.
+
+\section{Functions that return nothing}
+
+Some functions \emph{do} something rather than \emph{compute} something --- they
+print, they update, they save a file. Such a function has no return type: you
+simply omit it after the parameter list. Its (implicit) result type is
+\code{void}, the ``no value'' type from Chapter~2.
+
+\begin{salam}
+func greet(name str):
+    println "Hello,", name
+    println "Welcome to Salam."
+end
+
+func main:
+    greet("Sara")
+    greet("Ali")
+end
+\end{salam}
+
+\begin{progout}
+Hello, Sara
+Welcome to Salam.
+Hello, Ali
+Welcome to Salam.
+\end{progout}
+
+Inside a \code{void} function you may still use a bare \code{ret} (with no value)
+to return early --- for instance to bail out when an input is invalid --- but you
+never return a value from one.
+
+\section{Multiple parameters}
+
+A function may take any number of parameters, separated by commas. Each needs its
+own type:
+
+\begin{salam}
+func add(a i32, b i32) i32:
+    ret a + b
+end
+
+func max3(a i32, b i32, c i32) i32:
+    mut m i32 = a
+    if b > m: m = b end
+    if c > m: m = c end
+    ret m
+end
+
+func main:
+    println add(3, 4)
+    println max3(7, 2, 9)
+end
+\end{salam}
+
+\begin{progout}
+7
+9
+\end{progout}
+
+Arguments are matched to parameters \emph{by position}: in \code{add(3, 4)},
+\code{3} becomes \code{a} and \code{4} becomes \code{b}.
+
+\begin{warn}
+The current version of Salam does not support \emph{default} parameter values, so
+every parameter must be supplied at every call. Calling \code{add(3)} is an
+error. (To offer a ``default,'' write a second overload --- see below.)
+\end{warn}
+
+\section{Arguments are passed by value}
+
+When you pass an argument, the function receives a \emph{copy} of it. Changing a
+parameter inside the function therefore does \emph{not} change the caller's
+variable:
+
+\begin{salam}
+func tryToChange(x i32):
+    mut local i32 = x
+    local = 999            // only the copy changes
+end
+
+func main:
+    n i32 = 5
+    tryToChange(n)
+    println n              // still 5
+end
+\end{salam}
+
+\begin{progout}
+5
+\end{progout}
+
+This ``pass by value'' rule makes functions easy to reason about: a function
+cannot secretly reach back and alter the variables you passed in. When you want a
+function to produce a new value, the clean approach is to \emph{return} it and let
+the caller decide what to do:
+
+\begin{salam}
+func incremented(x i32) i32:
+    ret x + 1
+end
+
+func main:
+    mut n i32 = 5
+    n = incremented(n)     // the caller chooses to update n
+    println n
+end
+\end{salam}
+
+\begin{progout}
+6
+\end{progout}
+
+\begin{note}
+Salam deliberately has no ``pass by reference'' for ordinary variables --- you
+cannot take the address of a local with \code{\&} and hand it to a function. This
+keeps the flow of data visible: values go \emph{in} as arguments and come
+\emph{out} as return values. (In Chapter~9 you will see that a struct's own
+methods can update the struct they belong to; that is the sanctioned way to
+modify data in place.)
+\end{note}
+
+\section{Recursion}
+
+A function is allowed to call \emph{itself}. This is called \textbf{recursion},
+and it is the natural way to express anything defined in terms of a smaller
+version of itself. The classic example is the factorial, where
+$n! = n \times (n-1)!$:
+
+\begin{salam}
+func fact(n i32) i32:
+    if n <= 1:
+        ret 1
+    end
+    ret n * fact(n - 1)
+end
+
+func main:
+    println fact(5)
+end
+\end{salam}
+
+\begin{progout}
+120
+\end{progout}
+
+Every recursive function needs two things to be correct: a \textbf{base case}
+that stops the recursion (here, \code{n <= 1} returns \code{1} without calling
+again), and a \textbf{recursive step} that moves \emph{toward} the base case
+(here, calling \code{fact(n - 1)} with a smaller argument). Trace \code{fact(5)}:
+it becomes \code{5 * fact(4)}, which becomes \code{5 * 4 * fact(3)}, and so on
+down to \code{fact(1)}, which is \code{1} --- then the multiplications unwind:
+$5\times4\times3\times2\times1 = 120$.
+
+\begin{warn}
+Forget the base case --- or fail to shrink the argument --- and a recursive
+function calls itself forever, until the program runs out of stack space and
+crashes. Always ask: ``what stops this?'' and ``does each call get closer to
+stopping?''
+\end{warn}
+
+\begin{deep}[In Depth: recursion versus iteration]
+Anything you can compute with recursion you can also compute with a loop, and
+vice versa. Recursion often expresses a problem more clearly (tree walks, divide
+and conquer), while a loop avoids the small cost of repeated function calls. For
+factorials a loop is perfectly natural:
+\begin{salam}
+func fact(n i32) i32:
+    mut result i32 = 1
+    for mut i = 2; i <= n; i = i + 1:
+        result = result * i
+    end
+    ret result
+end
+\end{salam}
+Choose whichever makes the intent clearest; both are idiomatic Salam.
+\end{deep}
+
+\section{Definition order does not matter}
+
+You may call a function that is defined \emph{later} in the file. Salam reads all
+the top-level definitions before it runs anything, so \code{main} can freely call
+helpers written below it:
+
+\begin{salam}
+func main:
+    println later()
+end
+
+func later() str:
+    ret "defined after main"
+end
+\end{salam}
+
+\begin{progout}
+defined after main
+\end{progout}
+
+This means you never need ``forward declarations,'' and you are free to put
+\code{main} at the top of the file where a reader expects to find it.
+
+\section{Function overloading}
+
+Two functions may share a name as long as their parameters differ --- in number or
+in type. This is called \textbf{overloading}, and Salam picks the right one based
+on the arguments at each call:
+
+\begin{salam}
+func add(a i32, b i32) i32:
+    ret a + b
+end
+
+func add(a f64, b f64) f64:
+    ret a + b
+end
+
+func main:
+    println add(2, 3)        // calls the i32 version
+    println add(1.5, 2.5)    // calls the f64 version
+end
+\end{salam}
+
+\begin{progout}
+5
+4
+\end{progout}
+
+The two \code{add}s are genuinely different functions that happen to share a name.
+Overloading lets a family of related operations present one consistent name
+instead of \code{addInt}, \code{addFloat}, and so on. (The second result prints as
+\code{4} because it is the floating value \code{4.0}.)
+
+\section{Use every parameter}
+
+Salam is tidy about parameters: if you declare one and never use it, the compiler
+reports an error rather than letting the dead weight slip by. If you genuinely
+need a parameter you do not use --- perhaps to match an expected shape --- prefix
+its name with an underscore to say ``unused on purpose'':
+
+\begin{salam}
+func ignore_second(a i32, _b i32) i32:
+    ret a
+end
+\end{salam}
+
+\begin{tip}
+This rule nudges you toward honest signatures: a function's parameter list should
+list exactly what it needs. When the compiler flags an unused parameter, it is
+often pointing at a leftover from an earlier version of the code that you can
+simply delete.
+\end{tip}
+
+\section{Designing good functions}
+
+Functions are how you tame complexity. A few guidelines that pay off:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{One job each.} A function should do a single, nameable thing. If
+        you struggle to name it, it is probably doing too much.
+  \item \textbf{Short is good.} If a function grows past a screenful, look for a
+        piece you can lift out into its own well-named helper.
+  \item \textbf{Name for the result.} \code{is\_leap(year)} and
+        \code{average(scores)} tell the reader what comes back. A good name turns
+        a call site into a readable sentence.
+  \item \textbf{Prefer returning over reaching out.} Compute a value and return
+        it, rather than relying on shared mutable state.
+\end{itemize}
+
+\section{Chapter summary}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item A function is \code{func name(params) RetType:} \dots\ \code{end};
+        \code{ret} returns a value and ends the function.
+  \item Omit the return type for a function that returns nothing (\code{void});
+        a bare \code{ret} returns early from one.
+  \item Parameters are matched by position and passed \emph{by value} (the
+        function gets a copy). There are no default parameters and no reference
+        parameters.
+  \item A function may call itself (recursion); give it a base case and make each
+        call smaller.
+  \item Definition order is irrelevant --- you can call functions defined later.
+  \item Functions may be \emph{overloaded} by differing parameters.
+  \item Every declared parameter must be used, or prefixed with \code{\_}.
+\end{itemize}
+
+\section{Exercises}
+
+\exercise Write a function \code{cube(n i32) i32} that returns $n^3$ using
+multiplication, and print the cubes of 1 through 5 with a loop.
+
+\exercise Write a \code{void} function \code{banner(text str)} that prints the
+text surrounded by a line of dashes above and below it.
+
+\exercise Write \code{min2(a i32, b i32) i32} and use it to build
+\code{min3(a, b, c)} by calling \code{min2} twice.
+
+\exercise Write a recursive function \code{sum\_to(n i32) i32} that returns
+$1 + 2 + \dots + n$. Identify its base case and recursive step in comments.
+
+\exercise Overload a function \code{describe} so that \code{describe(42)} prints
+``an integer'' and \code{describe(3.14)} prints ``a float''. Test both.
+
+\exercise Rewrite the recursive \code{sum\_to} from a previous exercise as a loop,
+and confirm both give the same answers.

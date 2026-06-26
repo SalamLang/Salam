@@ -176,7 +176,6 @@ static ast_node_t *parse_defer(parser_t *p)
 
 static ast_node_t *parse_if_tail(parser_t *p)
 {
-    
     if (!p_recurse_enter(p, "if/else chain nested too deeply")) return p_mk(p, AST_IF);
     ast_node_t *n = p_mk(p, AST_IF);
     n->a = parse_cond_expr(p);

@@ -17,7 +17,9 @@
 #include "i18n/i18n.h"
 
 type_t *sema_ty(sema_t *s, type_kind_t k) { return type_prim(s->tc, k); }
+
 type_t *sema_err_ty(sema_t *s)            { return type_prim(s->tc, TY_ERROR); }
+
 type_t *sema_decorate(sema_t *s, ast_node_t *n, type_t *t)
 {
     if (n) n->type_str = type_to_string(s->tc, t);
@@ -33,6 +35,7 @@ type_t *sema_vec_str(sema_t *s, const src_span_t *span)
     ast_add(s->a, tn, e);
     return sema_resolve_type(s, tn);
 }
+
 symbol_t *struct_sym_of(type_t *t)
 {
     if (!t) return NULL;

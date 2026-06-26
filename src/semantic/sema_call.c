@@ -21,6 +21,7 @@ static type_t *ty(sema_t *s, type_kind_t k) { return sema_ty(s, k); }
 static type_t *err_ty(sema_t *s)            { return sema_err_ty(s); }
 
 static type_t *decorate(sema_t *s, ast_node_t *n, type_t *t) { return sema_decorate(s, n, t); }
+
 func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,
                              const src_span_t *span, const char *what)
 {
@@ -62,7 +63,6 @@ func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,
         SERR(s, 12, span, "ambiguous call to '%s' (%zu candidates)", what, nmatch);
     return NULL;
 }
-
 
 static type_t *try_impl_call(sema_t *s, ast_node_t *n, ast_node_t *callee,
                              type_t *objt, vec_t *argtypes)

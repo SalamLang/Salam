@@ -67,6 +67,7 @@ void do_print(interp_t *I, env_t *env, ast_node_t *call, bool newline, bool to_e
     } }
     if (newline) fputc('\n', f);
 }
+
 value_t do_input(interp_t *I)
 {
     if (I->in_data) {                 
@@ -92,17 +93,27 @@ value_t call_module_func(interp_t *I, ast_node_t *call, module_t *mod,
         rt_error(I, call, "package '%s' has no exported function '%s'", mod->name, fn);
     return call_func(I, b->val.as.fn->fn, b->val.as.fn->env, NULL, args, nargs);
 }
+
 typedef value_t (*intrinsic_fn)(interp_t *I, ast_node_t *call, value_t *a, size_t n);
+
 #define IN1F(name, expr) static value_t name(interp_t *I, ast_node_t *call, value_t *a, size_t n) \
     { (void)I; (void)call; (void)n; double x = to_float(a[0]); return val_float(expr); }
+
 #define IN2F(name, expr) static value_t name(interp_t *I, ast_node_t *call, value_t *a, size_t n) \
     { (void)I; (void)call; (void)n; double x = to_float(a[0]), y = to_float(a[1]); return val_float(expr); }
+
 IN1F(in_sqrt,  sqrt(x))   IN1F(in_sin,   sin(x))    IN1F(in_cos,   cos(x))
+
 IN1F(in_tan,   tan(x))    IN1F(in_asin,  asin(x))   IN1F(in_acos,  acos(x))
+
 IN1F(in_atan,  atan(x))   IN1F(in_log,   log(x))    IN1F(in_log10, log10(x))
+
 IN1F(in_exp,   exp(x))    IN1F(in_floor, floor(x))  IN1F(in_ceil,  ceil(x))
+
 IN1F(in_fabs,  fabs(x))
+
 IN2F(in_atan2, atan2(x, y)) IN2F(in_fmod, fmod(x, y)) IN2F(in_pow, pow(x, y))
+
 static value_t in_strlen(interp_t *I, ast_node_t *call, value_t *a, size_t n)
 { (void)call; (void)n; return val_int((int64_t)strlen(to_str(I, a[0]))); }
 
@@ -152,6 +163,7 @@ value_t call_intrinsic(interp_t *I, ast_node_t *call, const char *name,
     *handled = false;
     return val_null();
 }
+
 value_t call_builtin_method(interp_t *I, ast_node_t *call, value_t recv,
                             const char *method, value_t *args, size_t nargs)
 {

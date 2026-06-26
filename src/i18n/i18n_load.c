@@ -16,13 +16,25 @@
 #include "i18n/i18n.h"
 #include "i18n/i18n_internal.h"
 
-static const i18n_pair_t k_layout_fa[] = {
-    
+#define I18N_DYN_MAX 512
+#define I18N_DYN_VAL_MAX 256
+
+static int g_dyn_words_n = 0;
+
+static int g_dyn_vals_n = 0;
+
+static const i18n_pair_t k_value_fa[] = {
     { NULL, NULL }
 };
-#define I18N_DYN_MAX 512
+
+static const i18n_pair_t k_layout_fa[] = {
+    { NULL, NULL }
+};
+
+static struct { const char *lang, *alias, *canon; } g_dyn_vals[I18N_DYN_VAL_MAX];
+
 static struct { const char *lang, *alias, *canon; } g_dyn_words[I18N_DYN_MAX];
-static int g_dyn_words_n = 0;
+
 void i18n_register_layout_word(const char *lang, const char *alias, const char *canonical)
 {
     if (!lang || !alias || !canonical || g_dyn_words_n >= I18N_DYN_MAX) return;
@@ -46,12 +58,6 @@ const char *i18n_layout_word(const char *name)
     return name;
 }
 
-static const i18n_pair_t k_value_fa[] = {
-    { NULL, NULL }
-};
-#define I18N_DYN_VAL_MAX 256
-static struct { const char *lang, *alias, *canon; } g_dyn_vals[I18N_DYN_VAL_MAX];
-static int g_dyn_vals_n = 0;
 void i18n_register_layout_value(const char *lang, const char *alias, const char *canonical)
 {
     if (!lang || !alias || !canonical || g_dyn_vals_n >= I18N_DYN_VAL_MAX) return;

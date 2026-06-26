@@ -29,7 +29,6 @@ bool lx_is_alpha(char c)
 
 bool lx_is_ident_start(char c)
 {
-    
     unsigned char u = (unsigned char)c;
     return lx_is_alpha(c) || c == '_' || u >= 0x80;
 }
@@ -56,7 +55,6 @@ bool lx_is_base_digit(char c, char base)
         default:            return false;
     }
 }
-
 
 int lx_decimal_digit(const char *s, size_t n, int *val)
 {

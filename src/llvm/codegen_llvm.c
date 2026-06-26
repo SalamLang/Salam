@@ -165,6 +165,7 @@ const char *codegen_llvm_error(const llvm_output_t *out)
 {
     return out ? out->error : NULL;
 }
+
 llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *program,
                                      sema_result_t *sem, const char *module,
                                      const char *entry,
@@ -205,6 +206,7 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
           strlen(out->ll_src), ll.ok ? "" : i18n_tr(" (with unsupported constructs)"));
     return out;
 }
+
 llvm_output_t *codegen_llvm_run(arena_t *a, logger_t *log, ast_node_t *program,
                                 sema_result_t *sem, const char *module,
                                 const char *entry)

@@ -153,7 +153,6 @@ static void ll_for(ll_t *ll, ast_node_t *n)
 
 static void ll_repeat(ll_t *ll, ast_node_t *n)
 {
-    
     const char *initv, *boundv, *stepv;
     const char *cmpop;
     if (n->c) {

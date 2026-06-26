@@ -118,6 +118,7 @@ void ll_local_add(ll_t *ll, const char *name, const char *ptr, const char *ts)
     v->name = name; v->ptr = ptr; v->ts = ts;
     vec_push(ll->a, &ll->locals, v);
 }
+
 lvar_t *ll_local_find(ll_t *ll, const char *name)
 {
     { size_t i = ll->locals.len; for (; i > 0; i--) {
@@ -126,6 +127,7 @@ lvar_t *ll_local_find(ll_t *ll, const char *name)
     } }
     return NULL;
 }
+
 lvar_t *ll_global_find(ll_t *ll, const char *name)
 {
     { size_t i = 0; for (; i < ll->globals.len; i++) {

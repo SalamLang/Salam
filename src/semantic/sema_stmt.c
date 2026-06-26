@@ -49,6 +49,7 @@ static void define_local(sema_t *s, ast_node_t *decl, sym_kind_t kind, type_t *t
     if (scope_define(s->a, s->cur, sym))
         SERR(s, 1, &decl->span, "redefinition of '%s'", decl->name);
 }
+
 type_t *sema_check_var_decl(sema_t *s, ast_node_t *n)
 {
     type_t *declared = n->type ? sema_resolve_type(s, n->type) : NULL;

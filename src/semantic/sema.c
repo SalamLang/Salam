@@ -33,7 +33,6 @@ void salam_set_stdlib_root(const char *root) { g_stdlib_root = root; }
 
 static char *path_normalize(char *p)
 {
-    
     while (p[0] == '.' && p[1] == '/') memmove(p, p + 2, strlen(p + 2) + 1);
     
     char *q;
@@ -73,9 +72,13 @@ static int list_entries(arena_t *a, const char *dir, const char **out, int max)
 #endif
     return n;
 }
+
 typedef struct { const char *alias; const char *path; } pkg_alias_t;
+
 static pkg_alias_t g_pkg_aliases[128];
+
 static int         g_pkg_alias_n = -1;   
+
 static void index_pkg_file(arena_t *a, const char *path)
 {
     source_file_t *src = source_load(a, path);
@@ -260,7 +263,6 @@ static void load_imports(sema_t *s, ast_node_t *program)
         if (d->kind == AST_IMPORT) load_import_file(s, d);
     } }
 }
-
 
 void sema_load_prelude(sema_t *s)
 {

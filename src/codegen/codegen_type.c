@@ -202,7 +202,6 @@ const char *cg_mangle(cg_t *cg, const char *struct_name, const char *fn, vec_t *
     return cg_mangle_in(cg, cg->pkg, struct_name, fn, params);
 }
 
-
 const char *cg_mangle_method(cg_t *cg, const char *sname, symbol_t *owner,
                              const char *fn, vec_t *params)
 {
@@ -211,7 +210,6 @@ const char *cg_mangle_method(cg_t *cg, const char *sname, symbol_t *owner,
     if (inst) return cg_mangle_in(cg, "g", sn, fn, params);
     return cg_mangle_in(cg, cg->pkg, sn, fn, params);
 }
-
 
 const char *cg_mangle_ti(cg_t *cg, const char *typestr, const char *fn, vec_t *params)
 {
@@ -265,9 +263,9 @@ const char *func_cast_params_env(cg_t *cg, const char *ts)
 
 bool type_is_byval_agg(const type_t *t)
 {
-    
     return t && (t->kind == TY_STRUCT || t->kind == TY_VEC || t->kind == TY_DYN);
 }
+
 long array_size_of(const char *ts)
 {
     if (!ts) return 0;

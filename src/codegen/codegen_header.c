@@ -195,7 +195,6 @@ static void vec_emit(cg_t *cg, sb_t *h, const char *ts)
 
 static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
 {
-    
     sb_puts(h, "#pragma once\n");
     sb_puts(h, cg_fmt(cg, "#ifndef SALAM_MODULE_%s_H\n#define SALAM_MODULE_%s_H\n", cg->module, cg->module));
     
@@ -285,7 +284,6 @@ static void emit_struct_def(cg_t *cg, symbol_t *ssym, const char *gcn, sb_t *h)
     sb_puts(h, "};\n#endif\n");
 }
 
-
 static const char *struct_dep_cname(cg_t *cg, type_t *t)
 {
     while (t && t->kind == TY_ARRAY) t = t->elem;   
@@ -293,7 +291,6 @@ static const char *struct_dep_cname(cg_t *cg, type_t *t)
         return cg_ctype(cg, type_to_string(cg->sem->tc, t));
     return NULL;
 }
-
 
 static void hdr_struct_visit(cg_t *cg, sb_t *h, size_t i, symbol_t **syms,
                              const char **gcns, size_t n, char *state)

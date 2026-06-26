@@ -56,7 +56,6 @@ static void emit_globals(cg_t *cg, ast_node_t *program)
     sb_puts(cg->c, "\n");
 }
 
-
 static void emit_impl_protos(cg_t *cg)
 {
     { size_t i = 0; for (; i < cg->sem->global->symbols.len; i++) {
@@ -110,7 +109,6 @@ static void emit_function_bodies(cg_t *cg, ast_node_t *program)
         }
     } }
 }
-
 
 static const char *inst_fn_name(cg_t *cg, symbol_t *owner, ast_node_t *fn, func_sig_t *sig)
 {
@@ -201,6 +199,7 @@ static const char *cg_tidy(arena_t *a, const char *src)
     } }
     const char *r = arena_strdup(a, sb_cstr(&out)); sb_free(&out); return r;
 }
+
 codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
                               sema_result_t *sem, const char *module, bool safe,
                               bool debug_info, const char *src_path,

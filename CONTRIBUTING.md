@@ -63,7 +63,7 @@ Please read our [Code of Conduct](./CODE_OF_CONDUCT.md) before contributing.
 
 ## 🔨 Building & Testing
 
-The compiler lives in the `compiler/` subdirectory. All build commands should be run from there.
+All build commands should be run from the root directory.
 
 ### Quick Build (recommended)
 

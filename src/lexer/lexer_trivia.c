@@ -18,7 +18,11 @@
 static bool token_continues(token_kind_t k)
 {
     switch (k) {
-        case TK_PLUS: case TK_MINUS: case TK_STAR: case TK_SLASH: case TK_PERCENT:
+        /* TK_STAR is intentionally excluded: a line-final `*` is virtually
+         * always a pointer-type suffix (`void*`, `T*`) that ends a statement,
+         * not a dangling multiply. Treating it as a continuation swallows the
+         * statement terminator and merges the next statement onto the line. */
+        case TK_PLUS: case TK_MINUS: case TK_SLASH: case TK_PERCENT:
         case TK_POWER: case TK_EQ: case TK_NE: case TK_LT: case TK_GT: case TK_LE:
         case TK_GE: case TK_AND: case TK_OR: case TK_NOT:
         case TK_ASSIGN: case TK_PLUS_EQ: case TK_MINUS_EQ: case TK_STAR_EQ:

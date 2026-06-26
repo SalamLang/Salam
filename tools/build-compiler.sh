@@ -1,5 +1,5 @@
 #!/bin/sh
-# Quick build of salamc.
+# Quick build of salam.
 
 set -e
 . "$(dirname "$0")/lib.sh"
@@ -13,8 +13,8 @@ case "$CC" in
     *tcc*) LDLIBS="" ;;
     *)     LDLIBS="-lm" ;;
 esac
-"$CC" -Wall -Isrc -o salamc \
-    src/salamc.c \
+"$CC" -Wall -Isrc -o salam \
+    src/salam.c \
     src/core/arena.c src/core/vec.c src/core/sb.c src/core/numstr.c src/core/sal_format.c \
     src/source/source.c src/logger/logger.c src/logger/logger_emit.c src/logger/logger_level.c \
     src/xml/xml.c src/xml/xml_emit.c \
@@ -56,4 +56,4 @@ esac
     src/driver/llvm_toolchain.c \
     src/driver/layout_build.c src/driver/debug_cmd.c src/driver/repl.c \
     $LDLIBS
-echo "built ./salamc with $CC"
+echo "built ./salam with $CC"

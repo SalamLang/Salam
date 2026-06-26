@@ -44,7 +44,7 @@ It is designed for simplicity, accessibility, and inclusivity-bridging the gap b
 - 🔧 Linting and code checks for best practices.
 - 🔄 Built-in commands for versioning and updates.
 
-## 🛠️ The Compiler (`salamc`)
+## 🛠️ The Compiler (`salam`)
 
 Salam is statically typed and compiled. The **general** language transpiles to C and is
 built to a native executable; embedded **`layout:`** blocks compile to HTML/CSS/JS.
@@ -54,12 +54,12 @@ built to a native executable; embedded **`layout:`** blocks compile to HTML/CSS/
 Requires a C compiler. **tcc** is the default backend (bundled math, fast); gcc/clang also work.
 
 ```sh
-sh tools/build-compiler.sh        # quick build with tcc  ->  ./salamc
+sh tools/build-compiler.sh        # quick build with tcc  ->  ./salam
 # or, with CMake (out-of-tree build, then run the test suite via ctest):
 cmake -B build && cmake --build build && ctest --test-dir build
 ```
 
-There is no separate runtime library: `salamc build` emits the small C runtime
+There is no separate runtime library: `salam build` emits the small C runtime
 (print/strcat/pow/alloc and optional bounds checks) inline into the generated C, so
 compiled programs are self-contained and link only `-lm` (`-lmsvcrt` with tcc).
 
@@ -67,32 +67,32 @@ compiled programs are self-contained and link only `-lm` (`-lmsvcrt` with tcc).
 
 ```sh
 # general language -> native executable
-salamc build app.salam --output=app.exe        # then ./app.exe
-salamc cli build app.salam --keep-c            # optional 'cli' prefix; keep generated C
-salamc obj app.salam                            # compile to .o only
+salam build app.salam --output=app.exe        # then ./app.exe
+salam cli build app.salam --keep-c            # optional 'cli' prefix; keep generated C
+salam obj app.salam                            # compile to .o only
 
 # layout DSL -> website
-salamc layout build page.salam                  # page.html + page.css + page.js
-salamc layout build page.salam --inline         # one self-contained page.html
-salamc layout build a.salam b.salam             # per-page html + merged style.css/script.js
+salam layout build page.salam                  # page.html + page.css + page.js
+salam layout build page.salam --inline         # one self-contained page.html
+salam layout build a.salam b.salam             # per-page html + merged style.css/script.js
 
 # inspect any stage (general or layout)
-salamc app.salam --emit-tokens-xml | --emit-ast-xml | --emit-symbol-xml
-salamc app.salam --log-level=trace
-salamc build app.salam -DDEBUG                  # preprocessor define
+salam app.salam --emit-tokens-xml | --emit-ast-xml | --emit-symbol-xml
+salam app.salam --log-level=trace
+salam build app.salam -DDEBUG                  # preprocessor define
 
 # format source in place (auto-detects nothing - pass --lang=fa for Persian files)
-salamc fmt app.salam                            # reformat one file
-salamc fmt                                      # reformat every .salam under the cwd, recursively
-salamc fmt src/ examples/                       # reformat given files and/or directories
-salamc fmt --check                              # report files that need formatting (exit 1 if any)
-salamc fmt app.salam --tabs                     # indent with tabs (convert spaces to tabs)
-salamc fmt src/ --indent=2                      # indent with 2 spaces per level
-salamc fmt page.salam --lang=fa                 # Persian source
+salam fmt app.salam                            # reformat one file
+salam fmt                                      # reformat every .salam under the cwd, recursively
+salam fmt src/ examples/                       # reformat given files and/or directories
+salam fmt --check                              # report files that need formatting (exit 1 if any)
+salam fmt app.salam --tabs                     # indent with tabs (convert spaces to tabs)
+salam fmt src/ --indent=2                      # indent with 2 spaces per level
+salam fmt page.salam --lang=fa                 # Persian source
 
 # REPLs
-salamc cli       # general
-salamc layout    # layout
+salam cli       # general
+salam layout    # layout
 ```
 
 Hello, World:

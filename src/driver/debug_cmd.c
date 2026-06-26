@@ -35,7 +35,7 @@ static void path_stem(const char *path, char *out, size_t cap)
 int driver_debug(options_t *opt)
 {
     if (opt->input_count == 0) {
-        fprintf(stderr, "salamc debug: no input file\n");
+        fprintf(stderr, "salam debug: no input file\n");
         return 2;
     }
     
@@ -63,7 +63,7 @@ int driver_debug(options_t *opt)
     sb_puts(&cmd, " -o 'breakpoint set --name main' -o 'run' -- ");
     sb_puts(&cmd, target);
     fprintf(stdout,
-        "\nsalamc: launching %s\n"
+        "\nsalam: launching %s\n"
         "  (lldb) breakpoint set --name main  → already set\n"
         "  (lldb) next / step                 → step over / into\n"
         "  (lldb) frame variable <var>        → inspect a variable\n"
@@ -81,7 +81,7 @@ int driver_debug(options_t *opt)
     sb_puts(&cmd, " ");
     sb_puts(&cmd, target);
     fprintf(stdout,
-        "\nsalamc: launching %s\n"
+        "\nsalam: launching %s\n"
         "  Tip: (gdb) break main   → set a breakpoint\n"
         "       (gdb) run          → start the program\n"
         "       (gdb) next / step  → step over / into\n"
@@ -98,7 +98,7 @@ int driver_debug(options_t *opt)
     sb_puts(&cmd, " -ex 'break main' -ex 'run' ");
     sb_puts(&cmd, target);
     fprintf(stdout,
-        "\nsalamc: launching %s\n"
+        "\nsalam: launching %s\n"
         "  (gdb) break main  → already set\n"
         "  (gdb) next / step → step over / into\n"
         "  (gdb) print <var> → inspect a variable\n"
@@ -110,7 +110,7 @@ int driver_debug(options_t *opt)
 #endif
     if (rc == 127) {
         fprintf(stderr,
-            "salamc debug: '%s' not found in PATH.\n"
+            "salam debug: '%s' not found in PATH.\n"
             "  Linux:  sudo apt-get install gdb      (or: sudo apt-get install lldb)\n"
             "  macOS:  xcode-select --install         (ships lldb)\n"
             "          or: brew install llvm           (provides a newer lldb)\n"
@@ -123,15 +123,15 @@ int driver_debug(options_t *opt)
 int driver_memcheck(options_t *opt)
 {
     if (opt->input_count == 0) {
-        fprintf(stderr, "salamc memcheck: no input file\n");
+        fprintf(stderr, "salam memcheck: no input file\n");
         return 2;
     }
     
     if (strstr(opt->cc, "tcc")) {
         fprintf(stderr,
-            "salamc memcheck: tcc does not support AddressSanitizer.\n"
+            "salam memcheck: tcc does not support AddressSanitizer.\n"
             "  Use --cc=gcc or --cc=clang:\n"
-            "    salamc memcheck %s --cc=gcc\n", opt->inputs[0]);
+            "    salam memcheck %s --cc=gcc\n", opt->inputs[0]);
         return 2;
     }
     opt->debug_info   = true;
@@ -145,7 +145,7 @@ int driver_memcheck(options_t *opt)
         snprintf(exe, sizeof(exe), "%s.exe", stem);
         opt->output = exe;
     }
-    fprintf(stdout, "salamc memcheck: building with AddressSanitizer + debug symbols...\n");
+    fprintf(stdout, "salam memcheck: building with AddressSanitizer + debug symbols...\n");
     fflush(stdout);
     int rc = driver_build(opt);
     if (rc != 0) return rc;
@@ -154,19 +154,19 @@ int driver_memcheck(options_t *opt)
 #if defined(_WIN32)
     
     fprintf(stdout,
-        "salamc memcheck: Valgrind is not available on Windows.\n"
+        "salam memcheck: Valgrind is not available on Windows.\n"
         "  Running binary with ASAN error reporting...\n\n");
     sb_puts(&cmd, target);
 #else
     
     if (system("valgrind --version > /dev/null 2>&1") == 0) {
-        fprintf(stdout, "salamc memcheck: running under Valgrind...\n\n");
+        fprintf(stdout, "salam memcheck: running under Valgrind...\n\n");
         sb_puts(&cmd, "valgrind --leak-check=full --track-origins=yes "
                        "--show-leak-kinds=all --error-exitcode=1 ");
         sb_puts(&cmd, target);
     } else {
         fprintf(stdout,
-            "salamc memcheck: valgrind not found; running with ASAN error reporting.\n"
+            "salam memcheck: valgrind not found; running with ASAN error reporting.\n"
             "  (Install: sudo apt-get install valgrind)\n\n");
         sb_puts(&cmd, target);
     }
@@ -175,9 +175,9 @@ int driver_memcheck(options_t *opt)
     rc = system(sb_cstr(&cmd));
     sb_free(&cmd);
     if (rc == 0)
-        fprintf(stdout, "\nsalamc memcheck: no memory errors detected.\n");
+        fprintf(stdout, "\nsalam memcheck: no memory errors detected.\n");
     else
-        fprintf(stderr, "\nsalamc memcheck: errors detected (exit %d). "
+        fprintf(stderr, "\nsalam memcheck: errors detected (exit %d). "
                         "Review the output above.\n", rc);
     return rc == 0 ? 0 : 1;
 }

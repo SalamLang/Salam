@@ -40,10 +40,10 @@ for f in tests/$lang/general/*.salam; do
     [ -f "$exp" ] || continue
     def=$(grep -o 'DEFINE: [A-Za-z0-9_]*' "$f" | sed 's/DEFINE: /-D/')
     rm -f "$WORK/$name.exe"
-    "$SALAMC" build "$f" --output="$WORK/$name.exe" --no-color --log-level=error --lang=$lang $def >/dev/null 2>&1
+    "$SALAM" build "$f" --output="$WORK/$name.exe" --no-color --log-level=error --lang=$lang $def >/dev/null 2>&1
     if [ ! -x "$WORK/$name.exe" ]; then
         sleep 1
-        "$SALAMC" build "$f" --output="$WORK/$name.exe" --no-color --log-level=error --lang=$lang $def >/dev/null 2>&1
+        "$SALAM" build "$f" --output="$WORK/$name.exe" --no-color --log-level=error --lang=$lang $def >/dev/null 2>&1
     fi
     if [ ! -x "$WORK/$name.exe" ]; then
         echo "FAIL general/$lang/$name (build failed)"; fail=$((fail+1)); continue
@@ -61,7 +61,7 @@ for f in tests/$lang/exec/*.salam; do
     case "$name" in _*) continue;; esac
     exp="tests/$lang/exec/$name.out"
     [ -f "$exp" ] || continue
-    got=$("$SALAMC" exec "$f" --no-color --log-level=error --lang=$lang 2>&1 | tr -d '\r')
+    got=$("$SALAM" exec "$f" --no-color --log-level=error --lang=$lang 2>&1 | tr -d '\r')
     check_out "exec/$lang/$name" "$exp" "$got"
 done
 done
@@ -73,7 +73,7 @@ for f in tests/$lang/errors/*.salam; do
     name=$(basename "$f" .salam)
     case "$name" in _*) continue;; esac
     code=$(grep -o 'EXPECT: [^ ]*' "$f" | head -1 | sed 's/EXPECT: //' | tr -d '\r')
-    out=$("$SALAMC" "$f" --emit-symbol-xml --no-color --log-level=error --lang=$lang 2>&1 >/dev/null)
+    out=$("$SALAM" "$f" --emit-symbol-xml --no-color --log-level=error --lang=$lang 2>&1 >/dev/null)
     if [ -n "$code" ] && echo "$out" | grep -qF "$code"; then
         echo "PASS errors/$lang/$name ($code)"; pass=$((pass+1))
     else
@@ -89,7 +89,7 @@ for f in tests/$lang/layout/*.salam; do
     name=$(basename "$f" .salam)
     case "$name" in _*) continue;; esac
     expect=$(grep -o 'EXPECT: .*' "$f" | head -1 | sed 's/EXPECT: //' | tr -d '\r')
-    "$SALAMC" layout build "$f" --inline --output="$WORK/$name.html" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
+    "$SALAM" layout build "$f" --inline --output="$WORK/$name.html" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
     if [ -f "$WORK/$name.html" ] && grep -qF "$expect" "$WORK/$name.html"; then
         echo "PASS layout/$lang/$name (has '$expect')"; pass=$((pass+1))
     else
@@ -107,21 +107,29 @@ for f in tests/$lang/fmt/*.salam; do
     exp="tests/$lang/fmt/$name.out"
     [ -f "$exp" ] || continue
     cp "$f" "$WORK/$name.salam"
-    "$SALAMC" fmt "$WORK/$name.salam" --lang=$lang --no-color --log-level=error >/dev/null 2>&1
-    "$SALAMC" fmt "$WORK/$name.salam" --check --lang=$lang --no-color --log-level=error >/dev/null 2>&1
+    "$SALAM" fmt "$WORK/$name.salam" --lang=$lang --no-color --log-level=error >/dev/null 2>&1
+    "$SALAM" fmt "$WORK/$name.salam" --check --lang=$lang --no-color --log-level=error >/dev/null 2>&1
     idem=$?
     rm -f "$WORK/$name.exe"
-    "$SALAMC" build "$WORK/$name.salam" --output="$WORK/$name.exe" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
+    "$SALAM" build "$WORK/$name.salam" --output="$WORK/$name.exe" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
+    if [ ! -x "$WORK/$name.exe" ]; then
+        sleep 1
+        "$SALAM" build "$WORK/$name.salam" --output="$WORK/$name.exe" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
+    fi
     got=$([ -x "$WORK/$name.exe" ] && "$WORK/$name.exe" 2>&1 | tr -d '\r')
 
     TAB=$(printf '\t')
     cp "$f" "$WORK/${name}_tab.salam"
-    "$SALAMC" fmt "$WORK/${name}_tab.salam" --tabs --lang=$lang --no-color --log-level=error >/dev/null 2>&1
-    "$SALAMC" fmt "$WORK/${name}_tab.salam" --tabs --check --lang=$lang --no-color --log-level=error >/dev/null 2>&1
+    "$SALAM" fmt "$WORK/${name}_tab.salam" --tabs --lang=$lang --no-color --log-level=error >/dev/null 2>&1
+    "$SALAM" fmt "$WORK/${name}_tab.salam" --tabs --check --lang=$lang --no-color --log-level=error >/dev/null 2>&1
     tabidem=$?
     hastab=1; grep -q "$TAB" "$WORK/${name}_tab.salam" && hastab=0
     rm -f "$WORK/${name}_tab.exe"
-    "$SALAMC" build "$WORK/${name}_tab.salam" --output="$WORK/${name}_tab.exe" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
+    "$SALAM" build "$WORK/${name}_tab.salam" --output="$WORK/${name}_tab.exe" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
+    if [ ! -x "$WORK/${name}_tab.exe" ]; then
+        sleep 1
+        "$SALAM" build "$WORK/${name}_tab.salam" --output="$WORK/${name}_tab.exe" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
+    fi
     gottab=$([ -x "$WORK/${name}_tab.exe" ] && "$WORK/${name}_tab.exe" 2>&1 | tr -d '\r')
 
     if [ "$idem" -eq 0 ] && [ "$got" = "$(tr -d '\r' < "$exp")" ] && \
@@ -157,10 +165,10 @@ for lang in $LANGS; do
             [ -f "$exp" ] || continue
             exe="$WORK/db_${name}_$$.exe"
             rm -f "$exe"
-            "$SALAMC" build "$f" --output="$exe" --cc="$DBCC" --no-color --log-level=error --lang=$lang -DSALAM_DB_MOCK >/dev/null 2>&1
+            "$SALAM" build "$f" --output="$exe" --cc="$DBCC" --no-color --log-level=error --lang=$lang -DSALAM_DB_MOCK >/dev/null 2>&1
             if [ ! -x "$exe" ]; then
                 sleep 1
-                "$SALAMC" build "$f" --output="$exe" --cc="$DBCC" --no-color --log-level=error --lang=$lang -DSALAM_DB_MOCK >/dev/null 2>&1
+                "$SALAM" build "$f" --output="$exe" --cc="$DBCC" --no-color --log-level=error --lang=$lang -DSALAM_DB_MOCK >/dev/null 2>&1
             fi
             if [ ! -x "$exe" ]; then
                 echo "FAIL db/$lang/$name (build failed)"; fail=$((fail+1)); continue
@@ -181,7 +189,7 @@ fi
 if want llvm; then
 for lang in $LANGS; do
     [ -d "tests/$lang/llvm" ] || continue
-    probe_raw=$("$SALAMC" llvm "tests/$lang/llvm/_probe.salam" --jit --no-color --log-level=error 2>/dev/null)
+    probe_raw=$("$SALAM" llvm "tests/$lang/llvm/_probe.salam" --jit --no-color --log-level=error 2>/dev/null)
     prc=$?
     probe=$(printf '%s' "$probe_raw" | tr -d '\r')
     rm -f _probe.ll _probe.ll.run.sh 2>/dev/null
@@ -192,15 +200,15 @@ for lang in $LANGS; do
             case "$name" in _*) continue;; esac
             exp="tests/$lang/llvm/$name.out"
             [ -f "$exp" ] || continue
-            got=$("$SALAMC" llvm "$f" --jit --no-color --log-level=error 2>/dev/null | tr -d '\r')
+            got=$("$SALAM" llvm "$f" --jit --no-color --log-level=error 2>/dev/null | tr -d '\r')
             rm -f "$name.ll" "$name.ll.run.sh" 2>/dev/null
             check_out "llvm/$lang/$name" "$exp" "$got"
         done
     elif [ "$prc" -ge 128 ]; then
-        echo "FAIL llvm/$lang/* (salamc crashed on probe, signal $((prc-128)); rebuild salamc via tools/build-compiler.sh)"
+        echo "FAIL llvm/$lang/* (salam crashed on probe, signal $((prc-128)); rebuild salam via tools/build-compiler.sh)"
         fail=$((fail+1))
     else
-        echo "SKIP llvm/$lang/* (LLVM toolchain unavailable: 'salamc llvm --jit' probe failed)"
+        echo "SKIP llvm/$lang/* (LLVM toolchain unavailable: 'salam llvm --jit' probe failed)"
     fi
 done
 fi

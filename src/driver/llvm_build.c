@@ -64,7 +64,7 @@ int driver_llvm(options_t *opt)
     const char *entry = langpack_entry(pack);
     salam_set_stdlib_root(opt->stdlib_path);
     if (!opt->input) {
-        LOG_E(log, PH_DRIVER, i18n_tr("salamc: no input file"));
+        LOG_E(log, PH_DRIVER, i18n_tr("salam: no input file"));
         logger_free(log); arena_free(arena); return 2;
     }
     source_file_t *src = source_load(arena, opt->input);

@@ -4,7 +4,7 @@
 # Quick start (native):
 #   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 #   cmake --build build -j
-#   ./build/salamc version
+#   ./build/salam version
 #
 # WebAssembly playground bundle:
 #   emcmake cmake -S . -B build-wasm
@@ -59,13 +59,13 @@ if(NOT SALAM_SOURCES)
     message(FATAL_ERROR "No Salam sources found under src/ - is the source tree intact?")
 endif()
 
-add_executable(salamc
+add_executable(salam
     ${SALAM_SOURCES}
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/salamc.c")
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/salam.c")
 
-target_include_directories(salamc PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(salam PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
-set_target_properties(salamc PROPERTIES
+set_target_properties(salam PROPERTIES
     C_STANDARD 90
     C_EXTENSIONS ON)
 
@@ -75,28 +75,28 @@ if(CMAKE_C_COMPILER MATCHES "tcc")
 endif()
 
 if(MSVC)
-    target_compile_options(salamc PRIVATE /W3 /wd4244 /wd4267 /wd4101)
-    target_compile_definitions(salamc PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(salam PRIVATE /W3 /wd4244 /wd4267 /wd4101)
+    target_compile_definitions(salam PRIVATE _CRT_SECURE_NO_WARNINGS)
 else()
-    target_compile_options(salamc PRIVATE
+    target_compile_options(salam PRIVATE
         -Wall -Wextra
         -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable)
 endif()
 
 if(NOT _is_tcc AND NOT EMSCRIPTEN AND NOT MSVC)
-    target_link_libraries(salamc PRIVATE m)
+    target_link_libraries(salam PRIVATE m)
 endif()
 
 if(EMSCRIPTEN)
     file(GLOB _web_srcs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/web/*.c")
-    target_sources(salamc PRIVATE ${_web_srcs})
+    target_sources(salam PRIVATE ${_web_srcs})
 
-    set_target_properties(salamc PROPERTIES
+    set_target_properties(salam PROPERTIES
         OUTPUT_NAME "salam-wa"
         SUFFIX ".js")
 
-    target_compile_options(salamc PRIVATE -O2)
-    target_link_options(salamc PRIVATE
+    target_compile_options(salam PRIVATE -O2)
+    target_link_options(salam PRIVATE
         "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/std@/std"
         "-sMODULARIZE=0"
         "-sENVIRONMENT=web,worker,node"
@@ -111,7 +111,7 @@ if(EMSCRIPTEN)
 endif()
 
 include(GNUInstallDirs)
-install(TARGETS salamc RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+install(TARGETS salam RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/std")
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/std"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/salam")
@@ -123,7 +123,7 @@ if(SALAM_BUILD_TESTS AND SALAM_SH)
     add_custom_target(run-tests
         COMMAND "${SALAM_SH}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-tests.sh"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        DEPENDS salamc
+        DEPENDS salam
         USES_TERMINAL
         COMMENT "Running Salam end-to-end test suite")
 
@@ -132,21 +132,21 @@ if(SALAM_BUILD_TESTS AND SALAM_SH)
         COMMAND "${SALAM_SH}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-tests.sh"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     set_tests_properties(salam-suite PROPERTIES
-        ENVIRONMENT "SALAMC=$<TARGET_FILE:salamc>")
+        ENVIRONMENT "SALAM=$<TARGET_FILE:salam>")
 endif()
 
 if(SALAM_SH)
     add_custom_target(dist
         COMMAND "${SALAM_SH}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-release.sh"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        DEPENDS salamc
+        DEPENDS salam
         USES_TERMINAL
         COMMENT "Staging a distributable release into dist/")
 endif()
 
 message(STATUS "Salam ${SALAM_VERSION} - C compiler: ${CMAKE_C_COMPILER_ID} (${CMAKE_C_COMPILER})")
 list(LENGTH SALAM_SOURCES _n_srcs)
-message(STATUS "Salam: ${_n_srcs} library sources + src/salamc.c")
+message(STATUS "Salam: ${_n_srcs} library sources + src/salam.c")
 if(EMSCRIPTEN)
     message(STATUS "Salam: WebAssembly build enabled (output salam-wa.js)")
 endif()

@@ -55,7 +55,7 @@
 #  define salam_mkdir(p)   mkdir((p), 0755)
 #endif
 
-#define SALAMC_VERSION "0.2.0"
+#define SALAM_VERSION "0.2.0"
 
 bool resolve_color(int flag)
 {
@@ -125,7 +125,7 @@ static int driver_new(options_t *opt)
         printf("Project name: ");
         fflush(stdout);
         if (!fgets(namebuf, sizeof namebuf, stdin)) {
-            fprintf(stderr, "%s", i18n_tr("salamc: no project name provided\n"));
+            fprintf(stderr, "%s", i18n_tr("salam: no project name provided\n"));
             return 2;
         }
         size_t n = strlen(namebuf);
@@ -136,18 +136,18 @@ static int driver_new(options_t *opt)
         name = p;
     }
     if (!name[0]) {
-        fprintf(stderr, "%s", i18n_tr("salamc: project name cannot be empty\n"));
+        fprintf(stderr, "%s", i18n_tr("salam: project name cannot be empty\n"));
         return 2;
     }
     if (strchr(name, '/') || strchr(name, '\\')) {
-        fprintf(stderr, i18n_tr("salamc: project name must not contain path separators ('%s')\n"), name);
+        fprintf(stderr, i18n_tr("salam: project name must not contain path separators ('%s')\n"), name);
         return 2;
     }
     if (salam_mkdir(name) != 0) {
         if (errno == EEXIST)
-            fprintf(stderr, i18n_tr("salamc: '%s' already exists\n"), name);
+            fprintf(stderr, i18n_tr("salam: '%s' already exists\n"), name);
         else
-            fprintf(stderr, i18n_tr("salamc: cannot create directory '%s': %s\n"), name, strerror(errno));
+            fprintf(stderr, i18n_tr("salam: cannot create directory '%s': %s\n"), name, strerror(errno));
         return 2;
     }
     bool fa = opt->lang && strcmp(opt->lang, "fa") == 0;
@@ -167,7 +167,7 @@ static int driver_new(options_t *opt)
     snprintf(path, sizeof path, "%s/main.salam", name);
     FILE *f = fopen(path, "wb");
     if (!f) {
-        fprintf(stderr, i18n_tr("salamc: cannot write '%s': %s\n"), path, strerror(errno));
+        fprintf(stderr, i18n_tr("salam: cannot write '%s': %s\n"), path, strerror(errno));
         return 2;
     }
     fputs(content, f);
@@ -175,7 +175,7 @@ static int driver_new(options_t *opt)
     printf("Created project '%s':\n", name);
     printf("  %s\n", path);
     printf("\nNext steps:\n");
-    printf("  salamc build %s --output=%s%s\n", path, name,
+    printf("  salam build %s --output=%s%s\n", path, name,
 #if defined(_WIN32)
            ".exe");
 #else
@@ -267,7 +267,7 @@ static int driver_run(options_t *opt)
             LOG_E(log, PH_DRIVER, i18n_tr("ambiguous entry point: %d files define '%s':"), nentries, entry);
             { int i = 0; for (; i < nentries; i++)
                 fprintf(stderr, "    %s\n", entries[i]); }
-            fprintf(stderr, "  run a specific one with: salamc run <file.salam>\n");
+            fprintf(stderr, "  run a specific one with: salam run <file.salam>\n");
             arena_free(arena); logger_free(log); return 2;
         }
         opt->inputs[0]  = entries[0];
@@ -388,6 +388,81 @@ static bool path_is_dir(const char *p)
 #endif
 }
 
+static const char *fmt_marker_lang(const char *text, size_t len)
+{
+    static const char tag[] = "lang:";   /* matched case-insensitively */
+    size_t i = 0; int line = 0;
+    while (i < len && line < 8) {
+        size_t ls = i;
+        while (ls < len && (text[ls] == ' ' || text[ls] == '\t')) ls++;
+        size_t le = ls;
+        while (le < len && text[le] != '\n') le++;
+        if (ls + 1 < len && text[ls] == '/' && text[ls + 1] == '/') {
+            size_t p = ls;
+            for (; p + 5 <= le; p++) {
+                int hit = 1, k = 0;
+                for (; k < 5; k++) {
+                    char ch = text[p + k];
+                    if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+                    if (ch != tag[k]) { hit = 0; break; }
+                }
+                if (!hit) continue;
+                size_t q = p + 5;
+                while (q < le && (text[q] == ' ' || text[q] == '\t')) q++;
+                size_t cs = q;
+                while (q < le && ((text[q] >= 'a' && text[q] <= 'z') ||
+                                  (text[q] >= 'A' && text[q] <= 'Z'))) q++;
+                size_t clen = q - cs;
+                if (clen == 2 && (text[cs] == 'f' || text[cs] == 'F') &&
+                    (text[cs + 1] == 'a' || text[cs + 1] == 'A')) return "fa";
+                if (clen == 2 && (text[cs] == 'e' || text[cs] == 'E') &&
+                    (text[cs + 1] == 'n' || text[cs + 1] == 'N')) return "en";
+                return NULL;   /* a marker is present but the code is unknown */
+            }
+        }
+        i = (le < len) ? le + 1 : le;
+        line++;
+    }
+    return NULL;
+}
+
+static int fmt_count_keywords(arena_t *a, logger_t *quiet,
+                              const langpack_t *pack, const source_file_t *src)
+{
+    token_stream_t *toks = NULL;
+    lexer_run(a, quiet, pack, src, &toks);
+    if (!toks) return 0;
+    int count = 0;
+    size_t n = token_stream_count(toks);
+    { size_t i = 0; for (; i < n; i++) {
+        const token_t *t = token_stream_at(toks, i);
+        if (t->kind == TK_EOF) break;
+        if (tk_is_keyword(t->kind)) count++;
+    } }
+    return count;
+}
+
+static const langpack_t *fmt_detect_lang(arena_t *a, const source_file_t *src,
+                                         const langpack_t *fallback)
+{
+    const char *marked = fmt_marker_lang(src->text, src->len);
+    if (marked) {
+        const langpack_t *p = langpack_load(marked);
+        if (p) return p;
+    }
+    static const char *codes[] = { "en", "fa" };
+    logger_t *quiet = logger_new(stderr, LOG_OFF, false);
+    const langpack_t *best = fallback; int best_kw = 0;
+    { size_t i = 0; for (; i < sizeof codes / sizeof codes[0]; i++) {
+        const langpack_t *p = langpack_load(codes[i]);
+        if (!p) continue;
+        int kw = fmt_count_keywords(a, quiet, p, src);
+        if (kw > best_kw) { best_kw = kw; best = p; }
+    } }
+    logger_free(quiet);
+    return best;
+}
+
 static void fmt_one_file(fmt_ctx_t *c, const char *path)
 {
     arena_t *a = arena_new(1 << 18);
@@ -397,8 +472,9 @@ static void fmt_one_file(fmt_ctx_t *c, const char *path)
         c->errors++; arena_free(a); return;
     }
     c->total++;
+    const langpack_t *pack = fmt_detect_lang(a, src, c->pack);
     sb_t sb; sb_init(&sb);
-    if (!fmt_source(a, c->log, c->pack, src, &c->style, &sb)) {
+    if (!fmt_source(a, c->log, pack, src, &c->style, &sb)) {
         LOG_E(c->log, PH_DRIVER,
               i18n_tr("cannot format '%s': fix the lexical errors first"), path);
         c->errors++; sb_free(&sb); arena_free(a); return;
@@ -415,7 +491,7 @@ static void fmt_one_file(fmt_ctx_t *c, const char *path)
     } else {
         FILE *f = fopen(path, "wb");
         if (!f) {
-            LOG_E(c->log, PH_DRIVER, i18n_tr("salamc: cannot write '%s': %s\n"),
+            LOG_E(c->log, PH_DRIVER, i18n_tr("salam: cannot write '%s': %s\n"),
                   path, strerror(errno));
             c->errors++;
         } else {
@@ -504,15 +580,16 @@ int driver_main(int argc, char **argv)
     if (!cli_parse(argc, argv, &opt)) {
         return 2;
     }
-    i18n_set_lang(opt.lang);   
-    layout_schema_init(opt.stdlib_path);   
+    i18n_set_lang(opt.lang);
+    salam_set_stdlib_root(opt.stdlib_path);          /* resolve std/ root once, up front */
+    layout_schema_init(salam_get_stdlib_root());
     
     switch (opt.command) {
     case CMD_HELP:
         cli_print_usage(stdout);
         return 0;
     case CMD_VERSION:
-        printf("salamc %s\n", SALAMC_VERSION);
+        printf("salam %s\n", SALAM_VERSION);
         return 0;
     case CMD_NEW:
         return driver_new(&opt);
@@ -530,20 +607,20 @@ int driver_main(int argc, char **argv)
     case CMD_BUILD:
     case CMD_OBJ:
         if (opt.input_count == 0) {
-            fprintf(stderr, i18n_tr("salamc: '%s' requires at least one input file\n"),
+            fprintf(stderr, i18n_tr("salam: '%s' requires at least one input file\n"),
                     opt.command == CMD_OBJ ? "obj" : "build");
             return 2;
         }
         return driver_build(&opt);
     case CMD_LLVM:
         if (opt.input_count == 0) {
-            fprintf(stderr, "%s", i18n_tr("salamc: 'llvm' requires an input file\n"));
+            fprintf(stderr, "%s", i18n_tr("salam: 'llvm' requires an input file\n"));
             return 2;
         }
         return driver_llvm(&opt);
     case CMD_LAYOUT_BUILD:
         if (opt.input_count == 0) {
-            fprintf(stderr, "%s", i18n_tr("salamc: 'layout build' requires at least one input file\n"));
+            fprintf(stderr, "%s", i18n_tr("salam: 'layout build' requires at least one input file\n"));
             return 2;
         }
         return driver_layout_build(&opt);
@@ -551,7 +628,7 @@ int driver_main(int argc, char **argv)
         break;   
     }
     if (!opt.input) {
-        fprintf(stderr, "%s", i18n_tr("salamc: no input file\n\n"));
+        fprintf(stderr, "%s", i18n_tr("salam: no input file\n\n"));
         cli_print_usage(stderr);
         return 2;
     }

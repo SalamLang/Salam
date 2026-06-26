@@ -60,7 +60,7 @@ void ll_debug_init(ll_t *ll, const char *src_path)
         di_escape(ll, ll->src_file), di_escape(ll, ll->src_dir)));
     ll->di_cu = ll_meta_add(ll, ll_fmt(ll,
         "distinct !DICompileUnit(language: DW_LANG_C99, file: %s, "
-        "producer: \"salamc\", isOptimized: false, runtimeVersion: 0, "
+        "producer: \"salam\", isOptimized: false, runtimeVersion: 0, "
         "emissionKind: FullDebug)", ll->di_file));
     const char *types = ll_meta_add(ll, "!{null}");
     ll->di_subty = ll_meta_add(ll, ll_fmt(ll, "!DISubroutineType(types: %s)", types));

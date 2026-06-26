@@ -17,7 +17,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 if command -v taskkill >/dev/null 2>&1; then
-    taskkill //F //IM salamc.exe >/dev/null 2>&1 || true
+    taskkill //F //IM salam.exe >/dev/null 2>&1 || true
 fi
 if [ "$WASM_ONLY" -eq 0 ]; then
     echo "==> Building native compiler (tools/build-compiler.sh) ..."

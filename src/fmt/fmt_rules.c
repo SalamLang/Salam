@@ -64,6 +64,9 @@ bool fmt_need_space(const token_t *pt, const token_t *ct, bool prev_unary)
     
     if (p == TK_LT || p == TK_GT || c == TK_LT || c == TK_GT)
         return fmt_gap_in_source(pt, ct);
+
+    if (p == TK_STAR || c == TK_STAR)
+        return fmt_gap_in_source(pt, ct);
     return true;
 }
 

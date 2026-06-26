@@ -30,7 +30,7 @@ static bool cli_positional(const char *arg, options_t *out)
     switch (out->command) {
     case CMD_NEW:
         if (out->new_name != NULL) {
-            fprintf(stderr, i18n_tr("salamc: 'new' takes a single project name "
+            fprintf(stderr, i18n_tr("salam: 'new' takes a single project name "
                             "('%s' after '%s')\n"), arg, out->new_name);
             return false;
         }
@@ -39,7 +39,7 @@ static bool cli_positional(const char *arg, options_t *out)
     case CMD_BUILD: case CMD_OBJ: case CMD_LLVM: case CMD_RUN: case CMD_LAYOUT_BUILD:
     case CMD_DEBUG: case CMD_MEMCHECK: case CMD_FMT:
         if (out->input_count >= SALAM_MAX_INPUTS) {
-            fprintf(stderr, "%s", i18n_tr("salamc: too many input files\n"));
+            fprintf(stderr, "%s", i18n_tr("salam: too many input files\n"));
             return false;
         }
         out->inputs[out->input_count++] = arg;
@@ -47,7 +47,7 @@ static bool cli_positional(const char *arg, options_t *out)
         break;
     default:   
         if (out->input != NULL) {
-            fprintf(stderr, i18n_tr("salamc: multiple input files require the 'build' command "
+            fprintf(stderr, i18n_tr("salam: multiple input files require the 'build' command "
                             "('%s' after '%s')\n"), arg, out->input);
             return false;
         }
@@ -97,7 +97,7 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                 long n = strtol(val, &endp, 10);
                 if (endp == val || *endp != '\0' || n < 1 || n > 16) {
                     fprintf(stderr,
-                            i18n_tr("salamc: invalid --indent value '%s' "
+                            i18n_tr("salam: invalid --indent value '%s' "
                             "(use 'tab' or a width 1-16)\n"), val);
                     return false;
                 }
@@ -115,7 +115,7 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
         } else if ((val = cli_opt_value(arg, "--output")) != NULL) {
             out->output = val;
         } else if (strcmp(arg, "-o") == 0) {
-            if (i + 1 >= argc) { fprintf(stderr, "%s", i18n_tr("salamc: -o requires a file argument\n")); return false; }
+            if (i + 1 >= argc) { fprintf(stderr, "%s", i18n_tr("salam: -o requires a file argument\n")); return false; }
             out->output = argv[++i];
         } else if ((val = cli_opt_value(arg, "--cc")) != NULL) {
             out->cc = val;
@@ -123,13 +123,13 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
             out->stdlib_path = val;
         } else if ((val = cli_opt_value(arg, "--define")) != NULL) {
             if (out->ndefines >= SALAM_MAX_INPUTS) {
-                fprintf(stderr, "%s", i18n_tr("salamc: too many macro definitions\n"));
+                fprintf(stderr, "%s", i18n_tr("salam: too many macro definitions\n"));
                 return false;
             }
             out->defines[out->ndefines++] = val;
         } else if (strncmp(arg, "-D", 2) == 0 && arg[2]) {
             if (out->ndefines >= SALAM_MAX_INPUTS) {
-                fprintf(stderr, "%s", i18n_tr("salamc: too many macro definitions\n"));
+                fprintf(stderr, "%s", i18n_tr("salam: too many macro definitions\n"));
                 return false;
             }
             out->defines[out->ndefines++] = arg + 2;
@@ -147,18 +147,18 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
         } else if ((val = cli_opt_value(arg, "--error-style")) != NULL) {
             if (!diag_style_from_string(val, &out->diag_style)) {
                 fprintf(stderr,
-                        i18n_tr("salamc: invalid error style '%s' (rust|gcc|clang)\n"), val);
+                        i18n_tr("salam: invalid error style '%s' (rust|gcc|clang)\n"), val);
                 return false;
             }
         } else if ((val = cli_opt_value(arg, "--error-format")) != NULL) {
             if (!diag_format_from_string(val, &out->diag_format)) {
                 fprintf(stderr,
-                        i18n_tr("salamc: invalid error format '%s' (human|json|xml)\n"), val);
+                        i18n_tr("salam: invalid error format '%s' (human|json|xml)\n"), val);
                 return false;
             }
         } else if ((val = cli_opt_value(arg, "--log-level")) != NULL) {
             if (!log_level_from_string(val, &out->log_level)) {
-                fprintf(stderr, i18n_tr("salamc: invalid log level '%s'\n"), val);
+                fprintf(stderr, i18n_tr("salam: invalid log level '%s'\n"), val);
                 return false;
             }
         } else if ((val = cli_opt_value(arg, "--lang")) != NULL) {
@@ -166,7 +166,7 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
         } else if ((val = cli_opt_value(arg, "--xml-out")) != NULL) {
             out->xml_out = val;
         } else if (arg[0] == '-' && arg[1] != '\0') {
-            fprintf(stderr, i18n_tr("salamc: unknown option '%s'\n"), arg);
+            fprintf(stderr, i18n_tr("salam: unknown option '%s'\n"), arg);
             return false;
         } else {
             if (!cli_positional(arg, out)) return false;

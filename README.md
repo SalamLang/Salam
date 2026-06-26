@@ -6,9 +6,9 @@
     </a>
 </p>
 
-# Salam Language
+# Salam Programming Language
 
-Salam — a general-purpose and systems programming language designed for efficient software development, featuring a built-in domain-specific language (DSL)
+Salam is a general-purpose and systems programming language designed for efficient software development, featuring a built-in domain-specific language (DSL)
 
 </div>
 

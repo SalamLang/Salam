@@ -18,8 +18,18 @@ Salam is a general-purpose and systems programming language designed for efficie
 [![Pull Request Labeler Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml)
 [![Prek Standard Hooks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/prek.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/prek.yml)
 [![Prek Manual Hooks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/prek-manual.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/prek-manual.yml)
+[![Build and Test Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/make-run.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/make-run.yml)
+[![Build and Release Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/build-release.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/build-release.yml)
+[![Super-Linter Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/super-linter.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/super-linter.yml)
+[![WebAssembly Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/web-assembly.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/web-assembly.yml)
 [![VS Code Marketplace Version](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 [![VS Code Marketplace Installs](https://vsmarketplacebadges.dev/installs/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
+
+[![GitHub Repo stars](https://img.shields.io/github/stars/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam/network/members)
+[![GitHub issues](https://img.shields.io/github/issues/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam/issues)
+[![GitHub pull requests](https://img.shields.io/github/issues-pr/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam/pulls)
+[![GitHub contributors](https://img.shields.io/github/contributors/SalamLang/Salam?style=for-the-badge)](https://github.com/SalamLang/Salam/graphs/contributors)
 
 ---
 

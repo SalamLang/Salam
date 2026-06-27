@@ -1,9 +1,7 @@
 <div align="center">
 
 <p>
-    <a href="https://salamlang.ir/">
-        <img width="150" src="https://raw.githubusercontent.com/SalamLang/Salam/main/design/logo/logo-box.svg" alt="The Salam Programming Language - زبان برنامه نویسی سلام">
-    </a>
+    <img width="150" src="https://raw.githubusercontent.com/SalamLang/Salam/main/design/logo/logo-box.svg" alt="The Salam Programming Language - زبان برنامه نویسی سلام">
 </p>
 
 # Salam Programming Language
@@ -192,6 +190,5 @@ We welcome contributions from the community!
 - 🌟 Follow our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Together, let’s make coding accessible to all.
-For inquiries or feedback, visit: [salamlang.ir](https://salamlang.ir)
 
 © 2024-2026 Salam Language Team

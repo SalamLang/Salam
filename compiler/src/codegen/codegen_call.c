@@ -24,9 +24,8 @@ static const char *arg_at(cg_t *cg, ast_node_t *n, size_t i)
 
 static void cg_fill_defaults(cg_t *cg, sb_t *b, ast_node_t *call, func_sig_t *sig, size_t emitted)
 {
-    if (!sig || !sig->decl) { fprintf(stderr, "[DBG] fill: sig=%p decl=%p\n", (void*)sig, (void*)(sig?sig->decl:0)); return; }
+    if (!sig || !sig->decl) return;
     size_t np = sig->decl->list.len;
-    fprintf(stderr, "[DBG] fill: np=%zu listlen=%zu required=%zu\n", np, call->list.len, sig->required);
     { size_t i = call->list.len; for (; i < np; i++) {
         ast_node_t *param = (ast_node_t *)sig->decl->list.data[i];
         if (!param->a) continue;

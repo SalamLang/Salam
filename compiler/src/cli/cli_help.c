@@ -38,7 +38,7 @@ void cli_print_usage(FILE *out)
         "  cli                                           Start the general REPL\n"
         "  layout                                        Start the layout REPL\n"
         "  help                                          Show this help\n"
-        "  version                                       Show the compiler version\n"
+        "  version                                       Show version, git commit, and build date\n"
         "\n"
         "Build options:\n"
         "  --output=FILE            Output executable (default: <module>.exe)\n"

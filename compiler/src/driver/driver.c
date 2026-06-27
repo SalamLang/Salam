@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/build_info.h"
 #include "driver/driver.h"
 #include "driver/build.h"
 #include "driver/llvm_build.h"
@@ -54,8 +55,6 @@
 #  define salam_fileno(f)  fileno(f)
 #  define salam_mkdir(p)   mkdir((p), 0755)
 #endif
-
-#define SALAM_VERSION "0.2.0"
 
 bool resolve_color(int flag)
 {
@@ -390,7 +389,7 @@ static bool path_is_dir(const char *p)
 
 static const char *fmt_marker_lang(const char *text, size_t len)
 {
-    static const char tag[] = "lang:";   /* matched case-insensitively */
+    static const char tag[] = "lang:";
     size_t i = 0; int line = 0;
     while (i < len && line < 8) {
         size_t ls = i;
@@ -417,7 +416,7 @@ static const char *fmt_marker_lang(const char *text, size_t len)
                     (text[cs + 1] == 'a' || text[cs + 1] == 'A')) return "fa";
                 if (clen == 2 && (text[cs] == 'e' || text[cs] == 'E') &&
                     (text[cs + 1] == 'n' || text[cs + 1] == 'N')) return "en";
-                return NULL;   /* a marker is present but the code is unknown */
+                return NULL;
             }
         }
         i = (le < len) ? le + 1 : le;
@@ -574,6 +573,14 @@ static int driver_fmt(options_t *opt)
     return rc;
 }
 
+static void driver_print_version(void)
+{
+    printf("salam %s\n", SALAM_VERSION);
+    printf("commit:  %s%s\n", SALAM_GIT_COMMIT, SALAM_GIT_DIRTY);
+    printf("date:    %s\n", SALAM_GIT_DATE);
+    printf("built:   %s\n", SALAM_BUILD_DATE);
+}
+
 int driver_main(int argc, char **argv)
 {
     options_t opt;
@@ -581,7 +588,7 @@ int driver_main(int argc, char **argv)
         return 2;
     }
     i18n_set_lang(opt.lang);
-    salam_set_stdlib_root(opt.stdlib_path);          /* resolve std/ root once, up front */
+    salam_set_stdlib_root(opt.stdlib_path);
     layout_schema_init(salam_get_stdlib_root());
     
     switch (opt.command) {
@@ -589,7 +596,7 @@ int driver_main(int argc, char **argv)
         cli_print_usage(stdout);
         return 0;
     case CMD_VERSION:
-        printf("salam %s\n", SALAM_VERSION);
+        driver_print_version();
         return 0;
     case CMD_NEW:
         return driver_new(&opt);

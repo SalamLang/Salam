@@ -92,7 +92,7 @@
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)
 # define SAL_VA_COPY(d, s) va_copy((d), (s))
 #elif defined(__GNUC__)
-# define SAL_VA_COPY(d, s) __va_copy((d), (s))
+# define SAL_VA_COPY(d, s) __builtin_va_copy((d), (s))
 #else
 # define SAL_VA_COPY(d, s) ((void)memcpy(&(d), &(s), sizeof(va_list)))
 #endif

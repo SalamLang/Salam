@@ -34,9 +34,11 @@ typedef struct {
     const char    *title;
     const char    *lang;
     const char    *dir;
-    vec_t          css_seen;   /* const char* rule strings (dedup) */
+    vec_t          css_seen;   /* const char* rule strings (dedup)       */
+    vec_t          cls_keys;   /* const char* style-identity keys        */
+    vec_t          cls_names;  /* const char* assigned names (parallel)  */
+    unsigned       cls_next;   /* next sequential class index (a,b,...)   */
     int            indent;
-    unsigned       cls_seed;
 } layout_ctx_t;
 
 #define LWARN(cx, code, span, ...) \
@@ -47,6 +49,8 @@ const char *lfmt(layout_ctx_t *cx, const char *fmt, ...);   /* arena-printf     
 void        html_line(layout_ctx_t *cx, const char *fmt, ...); /* indented + '\n' */
 
 unsigned    djb2(const char *s);                            /* hash -> auto class */
+
+const char *class_for_key(layout_ctx_t *cx, const char *key); /* style -> a,b,c… */
 
 bool        starts_with(const char *s, const char *p);
 

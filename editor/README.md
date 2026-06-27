@@ -1,14 +1,12 @@
 # Salam Web Playground
 
-Run Salam entirely in the browser — edit code, run it, and preview layout pages —
+Run Salam entirely in the browser. Edit code, run it, and preview layout pages —
 powered by the Salam compiler compiled to **WebAssembly** plus a small
 text editor. Switching to **فارسی** flips the whole UI **and** the editor to
 true right-to-left (right-aligned, lines starting from the right); English is
 left-to-right. No server, no C toolchain in the browser.
 
 > The editor is a plain `<textarea>` precisely so it can be genuinely RTL in
-> Persian — Monaco/CodeMirror-class editors don't render real RTL (the code
-> disappears). The trade-off is no syntax highlighting or line numbers.
 
 ## How it works
 
@@ -46,7 +44,7 @@ sh tools/bash/build-wasm.sh # -> ../editor/salam-wa.js, ../editor/salam-wa.wasm,
 Serve the `editor/` directory over HTTP (WASM needs a real origin, not `file://`):
 
 ```sh
-sh compiler/tools/bash/editor-serve.sh        # http://localhost:8080  (no rebuild — for UI dev)
+sh compiler/tools/bash/editor-serve.sh        # http://localhost:8080  (no rebuild for UI dev)
 sh compiler/tools/bash/editor-serve.sh 9000   # ... on a custom port
 ```
 
@@ -60,8 +58,8 @@ you to run `compiler/tools/bash/build-wasm.sh`.
 The same interpreter runs natively:
 
 ```sh
-salam exec examples/fa_07_struct.salam --lang=fa
-salam run  --interp examples/brainfuck.salam
+salam exec examples/fa/types/07_struct.salam --lang=fa
+salam run  --interp examples/en/apps/brainfuck.salam
 ```
 
 ## Scope
@@ -70,8 +68,8 @@ The interpreter targets pure-compute programs (functions, structs, enums,
 arrays, `Vector`, `HashMap`, lambdas/closures, operator overloading, generics,
 `defer`, `char`/strings, control flow) in both English and Persian, and matches
 the C backend's output across the example suite. It intentionally does **not**
-support things that need a real OS or the C ABI — file/socket/thread/HTTP/SQLite
-APIs, FFI/`extern "C"`, manual memory (`salam_alloc`), and `raw:` C blocks — none
+support things that need a real OS or the C ABI file/socket/thread/HTTP/SQLite
+APIs, FFI/`extern "C"`, and manual memory (`salam_alloc`).
 of which apply in a browser sandbox. The `&ref` scalar parameters, multi-file
 user imports, and the fully Persian-localized std API (`ریاضی.جذر`) are current
 limitations of the interpreter, not the language.

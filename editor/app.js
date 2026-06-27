@@ -336,6 +336,7 @@
     lang = next;
     var rtl = lang === "fa";
     var dict = I18N[lang];
+    document.title = dict.title;
     document.documentElement.lang = lang;
     document.documentElement.dir = rtl ? "rtl" : "ltr";
     document.querySelectorAll("[data-i18n]").forEach(function (el) {
@@ -649,6 +650,7 @@
   }
   function applyLangChrome() {
     var rtl = lang === "fa", dict = I18N[lang];
+    document.title = dict.title;
     document.documentElement.lang = lang;
     document.documentElement.dir = rtl ? "rtl" : "ltr";
     document.querySelectorAll("[data-i18n]").forEach(function (el) {

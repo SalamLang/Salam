@@ -78,7 +78,7 @@ value_t do_input(interp_t *I)
         I->in_pos += len + (nl ? 1 : 0);
         return val_str(arena_strndup(I->a, p, len));
     }
-    char buf[4096];
+    char buf[4096] = "";
     if (!fgets(buf, sizeof buf, stdin)) return val_str("");
     size_t n = strlen(buf);
     while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r')) n--;

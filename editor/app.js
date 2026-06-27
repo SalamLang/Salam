@@ -89,8 +89,8 @@
     // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
     while ((m = TOK.exec(src)) !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
-      let tok = m[0],
-        cls = null;
+      const tok = m[0];
+      let cls = null;
       if (m[1]) cls = "c";
       else if (m[2]) cls = "s";
       else if (m[3]) cls = "n";
@@ -126,13 +126,13 @@
     // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
     while ((m = XML_TOK.exec(src)) !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
-      const t = m[0];
-      if (t.slice(0, 4) === "<!--") {
-        out += `<span class="xc">${esc(t)}</span>`;
-      } else if (t.slice(0, 2) === "<?") {
-        out += `<span class="xp">${esc(t)}</span>`;
+      const tag = m[0];
+      if (tag.slice(0, 4) === "<!--") {
+        out += `<span class="xc">${esc(tag)}</span>`;
+      } else if (tag.slice(0, 2) === "<?") {
+        out += `<span class="xp">${esc(tag)}</span>`;
       } else {
-        const tm = /^(<\/?)([\w:.-]+)([\s\S]*?)(\/?>)$/.exec(t);
+        const tm = /^(<\/?)([\w:.-]+)([\s\S]*?)(\/?>)$/.exec(tag);
         if (tm) {
           out +=
             '<span class="xb">' +
@@ -146,7 +146,7 @@
             esc(tm[4]) +
             "</span>";
         } else {
-          out += esc(t);
+          out += esc(tag);
         }
       }
       last = XML_TOK.lastIndex;
@@ -334,8 +334,8 @@
     // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
     while ((m = IR_TOK.exec(src)) !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
-      let tok = m[0],
-        cls = null;
+      let tok = m[0];
+      let cls = null;
       if (m[1]) cls = "ic";
       else if (m[2]) cls = "is";
       else if (m[3]) cls = "ig";
@@ -473,8 +473,8 @@
     // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
     while ((m = C_TOK.exec(src)) !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
-      let tok = m[0],
-        cls = null;
+      const tok = m[0];
+      let cls = null;
       if (m[1]) cls = "cm";
       else if (m[2]) {
         out += highlightPre(tok);
@@ -504,8 +504,8 @@
     // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
     while ((m = CSS_TOK.exec(src)) !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
-      let tok = m[0],
-        cls = null;
+      const tok = m[0];
+      let cls = null;
       if (m[1]) cls = "cm";
       else if (m[2]) cls = "cs";
       else if (m[3]) cls = "cn";
@@ -581,8 +581,8 @@
     // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
     while ((m = JS_TOK.exec(src)) !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
-      let tok = m[0],
-        cls = null;
+      const tok = m[0];
+      let cls = null;
       if (m[1]) cls = "cm";
       else if (m[2]) cls = "cs";
       else if (m[3]) cls = "cn";
@@ -636,7 +636,9 @@
             view: view,
           }),
         );
-      } catch {}
+      } catch {
+        /* ignore: best-effort, non-critical */
+      }
     }, 200);
   }
   function loadState() {
@@ -964,7 +966,9 @@
     ta.select();
     try {
       document.execCommand("copy");
-    } catch {}
+    } catch {
+      /* ignore: best-effort, non-critical */
+    }
     document.body.removeChild(ta);
   }
   function flashCopied(btn) {
@@ -1077,19 +1081,19 @@
         .slice(ls, le)
         .split("\n")
         .map((line, i) => {
-          var d = 0;
+          let depth = 0;
           if (outdent) {
-            const m = line.match(/^( {1,4}|\t)/);
-            if (m) {
-              d = -m[0].length;
-              line = line.slice(m[0].length);
+            const indentMatch = line.match(/^( {1,4}|\t)/);
+            if (indentMatch) {
+              depth = -indentMatch[0].length;
+              line = line.slice(indentMatch[0].length);
             }
           } else if (line.length) {
-            d = INDENT.length;
+            depth = INDENT.length;
             line = INDENT + line;
           }
-          if (i === 0) firstDelta = d;
-          totalDelta += d;
+          if (i === 0) firstDelta = depth;
+          totalDelta += depth;
           return line;
         })
         .join("\n");
@@ -1110,11 +1114,18 @@
       var ctrl = e.ctrlKey || e.metaKey;
       if (e.key === "Tab") {
         e.preventDefault();
-        const s = ta.selectionStart,
-          en = ta.selectionEnd;
+        const selStart = ta.selectionStart,
+          selEnd = ta.selectionEnd;
         if (e.shiftKey) blockIndent(true);
-        else if (val_has_nl(ta.value, s, en)) blockIndent(false);
-        else setRange(s, en, INDENT, s + INDENT.length, s + INDENT.length);
+        else if (val_has_nl(ta.value, selStart, selEnd)) blockIndent(false);
+        else
+          setRange(
+            selStart,
+            selEnd,
+            INDENT,
+            selStart + INDENT.length,
+            selStart + INDENT.length,
+          );
       } else if (ctrl && (e.key === "]" || e.code === "BracketRight")) {
         e.preventDefault();
         blockIndent(false);
@@ -1286,11 +1297,11 @@
       if (!dragging) return;
       var rect = split.getBoundingClientRect();
       if (isRows()) {
-        const h = Math.max(
+        const height = Math.max(
           MIN,
           Math.min(e.clientY - rect.top, rect.height - MIN - GUT),
         );
-        split.style.setProperty("--row-a", `${h}px`);
+        split.style.setProperty("--row-a", `${height}px`);
       } else {
         const rtl = document.documentElement.dir === "rtl";
         let w = rtl ? rect.right - e.clientX : e.clientX - rect.left;
@@ -1313,7 +1324,9 @@
       else saved2.cols = parseFloat(split.style.getPropertyValue("--col-a"));
       try {
         localStorage.setItem(SPLIT_KEY, JSON.stringify(saved2));
-      } catch {}
+      } catch {
+        /* ignore: best-effort, non-critical */
+      }
     }
     gutter.addEventListener("pointerdown", (e) => {
       dragging = true;
@@ -1330,7 +1343,9 @@
       saved2 = null;
       try {
         localStorage.removeItem(SPLIT_KEY);
-      } catch {}
+      } catch {
+        /* ignore: best-effort, non-critical */
+      }
     });
     (rowsMQ.addEventListener
       ? rowsMQ.addEventListener.bind(rowsMQ, "change")

@@ -80,10 +80,12 @@ func_sig_t *ll_pick_overload(ll_t *ll, symbol_t *sym, ast_node_t *call)
     func_sig_t *arity = NULL;
     { size_t i = 0; for (; i < sym->overloads.len; i++) {
         func_sig_t *sig = (func_sig_t *)sym->overloads.data[i];
-        if (sig->params.len != call->list.len) continue;
+        if (call->list.len < sig->required) continue;
+        if (!sig->variadic && call->list.len > sig->params.len) continue;
         if (!arity) arity = sig;
+        size_t nfix = call->list.len < sig->params.len ? call->list.len : sig->params.len;
         bool ok = true;
-        { size_t j = 0; for (; j < sig->params.len && ok; j++) {
+        { size_t j = 0; for (; j < nfix && ok; j++) {
             ast_node_t *arg = (ast_node_t *)call->list.data[j];
             const char *pt = type_to_string(ll->sem->tc, (type_t *)sig->params.data[j]);
             if (!arg->type_str || strcmp(arg->type_str, pt) != 0) ok = false;

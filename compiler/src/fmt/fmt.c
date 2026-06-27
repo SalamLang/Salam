@@ -18,6 +18,7 @@
 #include "lexer/lexer.h"
 
 #define FMT_MAX_BRACKET 256
+#define FMT_MAX_BLOCK   256
 
 typedef struct {
     const fmt_style_t *st;
@@ -28,6 +29,8 @@ typedef struct {
     int  bracket_indent;
     bool ml_stack[FMT_MAX_BRACKET];
     int  ml_top;
+    uint32_t block_line[FMT_MAX_BLOCK]; /* source line each open `:` block began on */
+    int  block_top;
     bool line_has_content;
     bool force_break;
     bool no_space_next;
@@ -71,6 +74,39 @@ static bool fmt_bracket_multiline(const token_stream_t *toks, size_t open_idx)
     return false;
 }
 
+/*
+ * Decide whether a `<` at `lt_idx` opens a generic argument list (e.g.
+ * `Vector<str>`, `HashMap<K, V>`) rather than being a less-than comparison
+ * (`i < 2`). A generic closes with a matching `>` over type-like tokens only;
+ * a comparison contains literals/operators or never closes before the
+ * expression ends. Without this, an unspaced comparison such as `i<2` would be
+ * mistaken for an open generic, leaving `angle` stuck > 0 and disabling block
+ * indentation for the rest of the file.
+ */
+static bool fmt_angle_is_generic(const token_stream_t *toks, size_t lt_idx)
+{
+    size_t n = token_stream_count(toks);
+    int    depth = 0;
+    int    steps = 0;
+    size_t i = lt_idx;
+    for (; i < n && steps < 256; i++, steps++) {
+        token_kind_t k = token_stream_at(toks, i)->kind;
+        switch (k) {
+            case TK_LT: depth++; break;
+            case TK_GT:
+                if (--depth == 0) return true;   /* balanced: a real generic */
+                break;
+            case TK_IDENT: case TK_COMMA: case TK_DOT:
+            case TK_STAR:  case TK_AMP:
+            case TK_LBRACKET: case TK_RBRACKET:
+                break;                            /* type-like; keep scanning  */
+            default:
+                return false;                     /* not a type → comparison   */
+        }
+    }
+    return false;
+}
+
 static void fmt_step_stmt_end(fmt_ctx_t *c, const token_t *t, bool cur_ml)
 {
     if (c->bracket > 0) {
@@ -109,10 +145,18 @@ static void fmt_step_break_before(fmt_ctx_t *c, const token_t *t, token_kind_t k
     c->open_colon_line = 0;
 }
 
-static void fmt_step_dedent(fmt_ctx_t *c, token_kind_t k)
+static void fmt_step_dedent(fmt_ctx_t *c, const token_t *t, token_kind_t k)
 {
     if (c->bracket == 0 && c->angle == 0 &&
         (k == TK_KW_END || k == TK_KW_ELSE)) {
+        if (c->block_top > 0 && c->block_top <= FMT_MAX_BLOCK &&
+            c->line_has_content &&
+            t->span.begin.line > c->block_line[c->block_top - 1]) {
+            sb_putc(c->out, '\n');
+            c->line_has_content = false;
+            c->force_break = false;
+        }
+        if (c->block_top > 0) c->block_top--;
         if (c->indent > 0) c->indent--;
     }
 }
@@ -138,13 +182,16 @@ static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
                                  const token_stream_t *toks, size_t i)
 {
     if (c->bracket == 0 && c->angle == 0 && k == TK_COLON) {
-        c->indent++;                         /* a `:` opens a block; body indents */
+        c->indent++;
         c->open_colon_line = t->span.end.line;
+        if (c->block_top < FMT_MAX_BLOCK)
+            c->block_line[c->block_top] = t->span.begin.line;
+        c->block_top++;
         if (c->prev != NULL && c->prev->kind == TK_KW_ELSE) c->force_break = true;
     }
 
     if (k == TK_LT && c->prev != NULL && fmt_is_value_end(c->prev->kind) &&
-        !fmt_gap_in_source(c->prev, t))
+        !fmt_gap_in_source(c->prev, t) && fmt_angle_is_generic(toks, i))
         c->angle++;
     else if (k == TK_GT && c->angle > 0) {
         c->angle--;
@@ -186,7 +233,7 @@ void fmt_tokens(const token_stream_t *toks, const fmt_style_t *style, sb_t *out)
         if (k == TK_STMT_END) { fmt_step_stmt_end(&c, t, cur_ml); continue; }
 
         fmt_step_break_before(&c, t, k, cur_ml);
-        fmt_step_dedent(&c, k);
+        fmt_step_dedent(&c, t, k);
         fmt_step_leading(&c, t, k);
 
         if (k == TK_META) sb_putc(out, '@');

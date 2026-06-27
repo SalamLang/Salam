@@ -22,6 +22,22 @@ static const char *arg_at(cg_t *cg, ast_node_t *n, size_t i)
     return n->list.len > i ? cg_expr(cg, (ast_node_t *)n->list.data[i]) : "0";
 }
 
+/* Emit the default-value expressions for parameters the caller omitted.
+ * `emitted` is how many arguments were already written; each appended
+ * default is preceded by ", " when something already precedes it. */
+static void cg_fill_defaults(cg_t *cg, sb_t *b, ast_node_t *call, func_sig_t *sig, size_t emitted)
+{
+    if (!sig || !sig->decl) return;
+    size_t np = sig->decl->list.len;
+    { size_t i = call->list.len; for (; i < np; i++) {
+        ast_node_t *param = (ast_node_t *)sig->decl->list.data[i];
+        if (!param->a) continue;
+        if (emitted) sb_puts(b, ", ");
+        sb_puts(b, cg_expr(cg, param->a));
+        emitted++;
+    } }
+}
+
 static const char *call_args(cg_t *cg, ast_node_t *call, func_sig_t *sig)
 {
     sb_t b; sb_init(&b);
@@ -40,22 +56,27 @@ static const char *call_args(cg_t *cg, ast_node_t *call, func_sig_t *sig)
         }
         else            sb_puts(&b, cg_expr(cg, arg));
     } }
+    cg_fill_defaults(cg, &b, call, sig, call->list.len);
     const char *r = arena_strdup(cg->a, sb_cstr(&b)); sb_free(&b); return r;
 }
 
-static const char *call_args_lead(cg_t *cg, ast_node_t *call)
+/* Method/impl arguments: every argument (and filled default) is led by ", "
+ * because the receiver is always emitted first. */
+static const char *call_args_lead(cg_t *cg, ast_node_t *call, func_sig_t *sig)
 {
     sb_t b; sb_init(&b);
     { size_t i = 0; for (; i < call->list.len; i++)
         { sb_puts(&b, ", "); sb_puts(&b, cg_expr(cg, (ast_node_t *)call->list.data[i])); } }
+    cg_fill_defaults(cg, &b, call, sig, 1);   /* receiver precedes, so always lead */
     const char *r = arena_strdup(cg->a, sb_cstr(&b)); sb_free(&b); return r;
 }
 
 static const char *call_sret(cg_t *cg, type_t *ret, const char *mangled,
-                             const char *args, bool has_args)
+                             const char *args)
 {
     const char *Rc = cg_ctype(cg, type_to_string(cg->sem->tc, ret));
-    int t = ++cg->tmpn; const char *sep = has_args ? ", " : "";
+    int t = ++cg->tmpn;
+    const char *sep = (args && args[0]) ? ", " : "";   /* args may be all defaults */
     return cg_fmt(cg, "({ %s __s%d; %s(%s%s&__s%d); __s%d; })", Rc, t, mangled, args, sep, t, t);
 }
 
@@ -63,7 +84,7 @@ static const char *call_value(cg_t *cg, ast_node_t *n, ast_node_t *callee)
 {
     const char *cret = cg_ctype(cg, func_ret_of(callee->type_str));
     const char *cps  = func_cast_params_env(cg, callee->type_str);
-    const char *args = call_args_lead(cg, n);
+    const char *args = call_args_lead(cg, n, NULL);   /* function value: no defaults */
     const char *tmp = cg_fmt(cg, "_clz%d", cg->clos_n++);
     return cg_fmt(cg, "({ void *%s = (void*)(%s); ((%s(*)%s)(*(void**)%s))(%s%s); })",
                   tmp, cg_expr(cg, callee), cret, cps, tmp, tmp, args);
@@ -225,7 +246,7 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
                         : sig ? cg_mangle(cg, NULL, nm, &sig->params) : nm;
     const char *args = call_args(cg, n, sig);
     if (sig && type_is_byval_agg(sig->ret))
-        return call_sret(cg, sig->ret, mangled, args, n->list.len > 0);
+        return call_sret(cg, sig->ret, mangled, args);
     return cg_fmt(cg, "%s(%s)", mangled, args);
 }
 
@@ -241,7 +262,7 @@ static const char *call_pkg(cg_t *cg, ast_node_t *n, symbol_t *pk, ast_node_t *c
                                        sig ? &sig->params : &empty);
     const char *args = call_args(cg, n, sig);
     if (sig && type_is_byval_agg(sig->ret))
-        return call_sret(cg, sig->ret, mangled, args, n->list.len > 0);
+        return call_sret(cg, sig->ret, mangled, args);
     return cg_fmt(cg, "%s(%s)", mangled, args);
 }
 
@@ -256,7 +277,7 @@ static const char *call_dyn(cg_t *cg, ast_node_t *n, ast_node_t *obj,
     if (!strcmp(callee->name, "free"))
         return cg_fmt(cg, "({ %s __dv%d = (%s); salam_free(__dv%d%sdata); })",
                       dynct, t, recv, t, acc);
-    const char *as = call_args_lead(cg, n);
+    const char *as = call_args_lead(cg, n, NULL);   /* dynamic dispatch: no default fill */
     return cg_fmt(cg, "({ %s __dv%d = (%s); __dv%d%svtable->%s(__dv%d%sdata%s); })",
                   dynct, t, recv, t, acc, cg_cident(cg, callee->name), t, acc, as);
 }
@@ -311,7 +332,7 @@ static const char *call_method(cg_t *cg, ast_node_t *n, ast_node_t *obj,
     func_sig_t *sig = msym ? pick_overload(cg, msym, n) : NULL;
     vec_t empty; vec_init(&empty);
     const char *mangled = cg_mangle_method(cg, sname, ssym, callee->name, sig ? &sig->params : &empty);
-    const char *as = call_args_lead(cg, n);
+    const char *as = call_args_lead(cg, n, sig);
     bool addressable = cg_addressable(obj);
     bool ret_struct = sig && type_is_byval_agg(sig->ret);
     const char *Rc = ret_struct ? cg_ctype(cg, type_to_string(cg->sem->tc, sig->ret)) : NULL;
@@ -341,7 +362,7 @@ static const char *call_impl(cg_t *cg, ast_node_t *n, ast_node_t *obj,
     func_sig_t *sig = msym ? pick_overload(cg, msym, n) : NULL;
     vec_t empty; vec_init(&empty);
     const char *mangled = cg_mangle_ti(cg, objts, callee->name, sig ? &sig->params : &empty);
-    const char *as = call_args_lead(cg, n);
+    const char *as = call_args_lead(cg, n, sig);
     const char *recv = cg_expr(cg, obj);
     if (sig && type_is_byval_agg(sig->ret)) {
         const char *Rc = cg_ctype(cg, type_to_string(cg->sem->tc, sig->ret));

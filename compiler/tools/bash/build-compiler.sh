@@ -45,7 +45,7 @@ esac
     src/codegen/codegen_decl.c src/codegen/codegen_header.c src/codegen/print_fmt.c \
     src/llvm/codegen_llvm.c src/llvm/codegen_llvm_emit.c src/llvm/codegen_llvm_type.c \
     src/llvm/codegen_llvm_expr.c src/llvm/codegen_llvm_stmt.c src/llvm/codegen_llvm_decl.c \
-    src/llvm/codegen_llvm_debug.c \
+    src/llvm/codegen_llvm_debug.c src/llvm/llvm_native.c \
     src/interp/interp.c src/interp/interp_builtin.c src/interp/interp_value.c \
     src/interp/interp_expr.c src/interp/interp_stmt.c \
     src/layout/registry.c src/layout/layout_gen.c src/layout/layout_gen_element.c \

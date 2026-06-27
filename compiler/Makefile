@@ -78,9 +78,14 @@ ifeq ($(WITH_LLVM),1)
   CPPFLAGS += -DSALAM_HAVE_LLVM -I$(shell $(LLVM_CONFIG) --includedir) \
               -DSALAM_LLVM_VERSION_MAJOR=$(shell $(LLVM_CONFIG) --version | cut -d. -f1)
   LDFLAGS  += $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --ldflags)
+  LLVM_SYSTEM_LIBS := $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --system-libs)
+  ifeq ($(IS_WINDOWS),1)
+    LLVM_SYSTEM_LIBS := $(patsubst %libzstd.dll.a,-l:libzstd.a,$(LLVM_SYSTEM_LIBS))
+    LLVM_SYSTEM_LIBS := $(patsubst -lzstd,-l:libzstd.a,$(LLVM_SYSTEM_LIBS))
+  endif
   # libLLVM is C++, so pull in the C++ runtime and LLVM's system deps last.
   LDLIBS   += $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --libs $(LLVM_COMPONENTS)) \
-              $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --system-libs) $(LLVM_CXXLIB)
+              $(LLVM_SYSTEM_LIBS) $(LLVM_CXXLIB)
 endif
 
 BUILD_DIR ?= build/$(BUILD)

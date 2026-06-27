@@ -7,6 +7,8 @@ on:
       - 'compiler/src/**'
       - 'compiler/std/**'
       - 'compiler/tools/**'
+      - 'editor/**'
+      - 'examples/**'
       - '.github/workflows/web-assembly.yml'
   workflow_dispatch:
 permissions:
@@ -41,6 +43,18 @@ jobs:
           echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
           echo "EM_CONFIG=$EMSDK/.emscripten" >> "$GITHUB_ENV"
 
+      - name: Verify editor source files are present
+        run: |
+          set -eu
+          missing=0
+          for f in editor/index.html editor/style.css editor/app.js editor/logo.svg; do
+            if [ ! -f "$f" ]; then
+              echo "::error::missing editor source file: $f (is it committed? editor/* is gitignored except sources)"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+
       - name: Build native compiler + WebAssembly playground bundle
         run: |
           set -e
@@ -48,19 +62,28 @@ jobs:
           cd compiler
           sh tools/bash/update-playground.sh
 
-      - name: Show generated editor assets
+      - name: Verify generated editor assets
         run: |
-          ls -l editor/salam-wa.js editor/salam-wa.wasm editor/salam-wa.data editor/keywords.js
+          set -eu
+          missing=0
+          for f in editor/salam-wa.js editor/salam-wa.wasm editor/salam-wa.data \
+                   editor/keywords.js editor/examples.js; do
+            if [ ! -f "$f" ]; then
+              echo "::error::missing generated asset: $f"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          echo "==> Editor directory to be published:"
+          ls -l editor/
 
       - name: Publish playground to gh-pages
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
-          # editor/ is gitignored on main; publish it to a clean orphan
-          # gh-pages branch (single-commit history, force-pushed each build).
           PUBDIR="$(mktemp -d)"
-          cp -r editor/. "$PUBDIR/"
+          cp -rT editor "$PUBDIR"
           touch "$PUBDIR/.nojekyll"
           cd "$PUBDIR"
           git init -q
@@ -70,4 +93,5 @@ jobs:
           git add -A
           git commit -q -m "Deploy WebAssembly playground [skip ci]"
           git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
-          echo "Published $(ls -1 | wc -l) files to gh-pages."
+          echo "Published the following files to gh-pages:"
+          git ls-files

@@ -61,6 +61,15 @@ RUN salam --version || true
 FROM toolchain AS prod
 COPY --from=builder /usr/local/bin/salam /usr/local/bin/salam
 COPY --from=builder /usr/local/share/salam /usr/local/share/salam
+
+ARG SALAM_UID=1000
+ARG SALAM_GID=1000
+RUN addgroup -g "${SALAM_GID}" salam \
+    && adduser -D -u "${SALAM_UID}" -G salam salam \
+    && mkdir -p /work \
+    && chown -R salam:salam /work
 WORKDIR /work
+USER salam
+
 ENTRYPOINT ["salam"]
 CMD ["--help"]

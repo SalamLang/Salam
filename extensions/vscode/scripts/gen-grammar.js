@@ -1,5 +1,4 @@
 // Generates the Salam TextMate grammar (source.salam).
-"use strict";
 
 const UNI = [
   "\\x{0600}-\\x{06FF}", // Arabic
@@ -403,4 +402,4 @@ const grammar = {
   },
 };
 
-process.stdout.write(JSON.stringify(grammar, null, "\t") + "\n");
+process.stdout.write(`${JSON.stringify(grammar, null, "\t")}\n`);

@@ -1,5 +1,4 @@
-(function () {
-  "use strict";
+(() => {
   var EXAMPLES = window.SALAM_EXAMPLES || [];
   var STORE_KEY = "salam:playground";
   var I18N = {
@@ -81,7 +80,7 @@
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
   var TOK =
-    /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|`[^`]*`|'(?:[^'\\]|\\.)*')|(\d+\.\d+|\d+)|([A-Za-z_؀-ۿ‌][\w؀-ۿ‌]*)|([=!<>+\-*\/%&|:^~?]+)/g;
+    /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|`[^`]*`|'(?:[^'\\]|\\.)*')|(\d+\.\d+|\d+)|([A-Za-z_؀-ۿ‌][\w؀-ۿ‌]*)|([=!<>+\-*/%&|:^~?]+)/g;
   function highlight(src) {
     var out = "",
       last = 0,
@@ -97,32 +96,27 @@
       else if (m[4])
         cls = KW.has(tok) || EL.has(tok) ? "k" : TY.has(tok) ? "t" : null;
       else if (m[5]) cls = "o";
-      out += cls
-        ? '<span class="' + cls + '">' + esc(tok) + "</span>"
-        : esc(tok);
+      out += cls ? `<span class="${cls}">${esc(tok)}</span>` : esc(tok);
       last = TOK.lastIndex;
     }
     out += esc(src.slice(last));
-    return out + "\n";
+    return `${out}\n`;
   }
   function highlightAttrs(s) {
     return s.replace(
-      /([\w:.\-]+)(\s*=\s*)("[^"]*"|'[^']*')/g,
-      function (_, name, eq, val) {
-        return (
-          '<span class="xa">' +
-          esc(name) +
-          "</span>" +
-          esc(eq) +
-          '<span class="xv">' +
-          esc(val) +
-          "</span>"
-        );
-      },
+      /([\w:.-]+)(\s*=\s*)("[^"]*"|'[^']*')/g,
+      (_, name, eq, val) =>
+        '<span class="xa">' +
+        esc(name) +
+        "</span>" +
+        esc(eq) +
+        '<span class="xv">' +
+        esc(val) +
+        "</span>",
     );
   }
   var XML_TOK =
-    /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<\/?[\w:.\-]+(?:"[^"]*"|'[^']*'|[^"'>])*>/g;
+    /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<\/?[\w:.-]+(?:"[^"]*"|'[^']*'|[^"'>])*>/g;
   function highlightXML(src) {
     var out = "",
       last = 0,
@@ -132,11 +126,11 @@
       if (m.index > last) out += esc(src.slice(last, m.index));
       var t = m[0];
       if (t.slice(0, 4) === "<!--") {
-        out += '<span class="xc">' + esc(t) + "</span>";
+        out += `<span class="xc">${esc(t)}</span>`;
       } else if (t.slice(0, 2) === "<?") {
-        out += '<span class="xp">' + esc(t) + "</span>";
+        out += `<span class="xp">${esc(t)}</span>`;
       } else {
-        var tm = /^(<\/?)([\w:.\-]+)([\s\S]*?)(\/?>)$/.exec(t);
+        var tm = /^(<\/?)([\w:.-]+)([\s\S]*?)(\/?>)$/.exec(t);
         if (tm) {
           out +=
             '<span class="xb">' +
@@ -329,7 +323,7 @@
     );
   }
   var IR_TOK =
-    /(;[^\n]*)|(c?"(?:[^"\\]|\\.)*")|(@[\w.$\-]+|@"(?:[^"\\]|\\.)*")|(%[\w.$\-]+|%"(?:[^"\\]|\\.)*")|([!#][\w.$\-]*)|(-?0x[0-9A-Fa-f]+|-?\d+\.\d+(?:[eE][+\-]?\d+)?|-?\d+)|([A-Za-z_.$][\w.$\-]*)|([=,*{}()\[\]<>])/g;
+    /(;[^\n]*)|(c?"(?:[^"\\]|\\.)*")|(@[\w.$-]+|@"(?:[^"\\]|\\.)*")|(%[\w.$-]+|%"(?:[^"\\]|\\.)*")|([!#][\w.$-]*)|(-?0x[0-9A-Fa-f]+|-?\d+\.\d+(?:[eE][+-]?\d+)?|-?\d+)|([A-Za-z_.$][\w.$-]*)|([=,*{}()[\]<>])/g;
   function highlightIR(src) {
     var out = "",
       last = 0,
@@ -357,9 +351,7 @@
           cls = IR_KW.has(tok) ? "ik" : isIRType(tok) ? "it" : null;
         }
       } else if (m[8]) cls = "io";
-      out += cls
-        ? '<span class="' + cls + '">' + esc(tok) + "</span>"
-        : esc(tok);
+      out += cls ? `<span class="${cls}">${esc(tok)}</span>` : esc(tok);
       last = IR_TOK.lastIndex;
     }
     out += esc(src.slice(last));
@@ -461,14 +453,14 @@
       m;
     while ((m = re.exec(s)) !== null) {
       if (m.index > last) out += esc(s.slice(last, m.index));
-      out += '<span class="cs">' + esc(m[0]) + "</span>";
+      out += `<span class="cs">${esc(m[0])}</span>`;
       last = re.lastIndex;
     }
     out += esc(s.slice(last));
-    return '<span class="cpp">' + out + "</span>";
+    return `<span class="cpp">${out}</span>`;
   }
   var C_TOK =
-    /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|(^[ \t]*#[^\n]*)|("(?:[^"\\]|\\.)*")|('(?:[^'\\]|\\.)*')|(\.?\d[\w.]*(?:[eEpP][+\-]?\w+)?)|([A-Za-z_]\w*)|([-+*\/%=!<>&|^~?:.,;(){}\[\]])/gm;
+    /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|(^[ \t]*#[^\n]*)|("(?:[^"\\]|\\.)*")|('(?:[^'\\]|\\.)*')|(\.?\d[\w.]*(?:[eEpP][+-]?\w+)?)|([A-Za-z_]\w*)|([-+*/%=!<>&|^~?:.,;(){}[\]])/gm;
   function highlightC(src) {
     var out = "",
       last = 0,
@@ -491,16 +483,14 @@
         else if (C_TY.has(tok)) cls = "ct";
         else if (src.charCodeAt(C_TOK.lastIndex) === 40) cls = "cf";
       } else if (m[7]) cls = "co";
-      out += cls
-        ? '<span class="' + cls + '">' + esc(tok) + "</span>"
-        : esc(tok);
+      out += cls ? `<span class="${cls}">${esc(tok)}</span>` : esc(tok);
       last = C_TOK.lastIndex;
     }
     out += esc(src.slice(last));
     return out;
   }
   var CSS_TOK =
-    /(\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(#[0-9A-Fa-f]{3,8}\b)|(-?(?:\d*\.\d+|\d+)(?:px|em|rem|%|vh|vw|vmin|vmax|pt|pc|cm|mm|in|ex|ch|deg|rad|turn|s|ms|fr|dpi)?)|(@[A-Za-z-]+)|(!important)|([A-Za-z_][\w-]*)|([{}();:,>~+*.#\[\]=])/g;
+    /(\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(#[0-9A-Fa-f]{3,8}\b)|(-?(?:\d*\.\d+|\d+)(?:px|em|rem|%|vh|vw|vmin|vmax|pt|pc|cm|mm|in|ex|ch|deg|rad|turn|s|ms|fr|dpi)?)|(@[A-Za-z-]+)|(!important)|([A-Za-z_][\w-]*)|([{}();:,>~+*.#[\]=])/g;
   function highlightCSS(src) {
     var out = "",
       last = 0,
@@ -521,9 +511,7 @@
         while (src.charCodeAt(j) === 32 || src.charCodeAt(j) === 9) j++;
         cls = src.charCodeAt(j) === 58 ? "cf" : "ct";
       } else if (m[8]) cls = "co";
-      out += cls
-        ? '<span class="' + cls + '">' + esc(tok) + "</span>"
-        : esc(tok);
+      out += cls ? `<span class="${cls}">${esc(tok)}</span>` : esc(tok);
       last = CSS_TOK.lastIndex;
     }
     out += esc(src.slice(last));
@@ -578,7 +566,7 @@
     "Infinity",
   ]);
   var JS_TOK =
-    /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\.?\d[\w.]*)|([A-Za-z_$][\w$]*)|([-+*\/%=!<>&|^~?:.,;(){}\[\]])/g;
+    /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\.?\d[\w.]*)|([A-Za-z_$][\w$]*)|([-+*/%=!<>&|^~?:.,;(){}[\]])/g;
   function highlightJS(src) {
     var out = "",
       last = 0,
@@ -595,9 +583,7 @@
         if (JS_KW.has(tok)) cls = "ck";
         else if (src.charCodeAt(JS_TOK.lastIndex) === 40) cls = "cf";
       } else if (m[5]) cls = "co";
-      out += cls
-        ? '<span class="' + cls + '">' + esc(tok) + "</span>"
-        : esc(tok);
+      out += cls ? `<span class="${cls}">${esc(tok)}</span>` : esc(tok);
       last = JS_TOK.lastIndex;
     }
     out += esc(src.slice(last));
@@ -613,9 +599,7 @@
   var runTimer = null,
     saveTimer = null;
   var wasm = { ready: false, runApp: null, buildLayout: null, emit: null };
-  var $ = function (id) {
-    return document.getElementById(id);
-  };
+  var $ = (id) => document.getElementById(id);
   function findExample(id) {
     for (var i = 0; i < EXAMPLES.length; i++)
       if (EXAMPLES[i].id === id) return EXAMPLES[i];
@@ -631,7 +615,7 @@
   }
   function saveState() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(function () {
+    saveTimer = setTimeout(() => {
       try {
         localStorage.setItem(
           STORE_KEY,
@@ -665,7 +649,7 @@
     var b = $("theme");
     b.querySelector(".theme-ico").textContent = THEME_ICON[themePref];
     b.querySelector(".theme-lbl").textContent =
-      I18N[lang]["theme_" + themePref];
+      I18N[lang][`theme_${themePref}`];
     if (editor) renderHL();
   }
   function cycleTheme() {
@@ -695,18 +679,16 @@
     [
       ["app", I18N[lang].g_console],
       ["layout", I18N[lang].g_web],
-    ].forEach(function (g) {
-      var items = EXAMPLES.filter(function (e) {
-        return e.mode === g[0];
-      });
+    ].forEach((g) => {
+      var items = EXAMPLES.filter((e) => e.mode === g[0]);
       if (!items.length) return;
       var head = document.createElement("li");
-      head.className = "dd-head" + (g[0] === "layout" ? " web" : "");
+      head.className = `dd-head${g[0] === "layout" ? " web" : ""}`;
       head.textContent = g[1];
       list.appendChild(head);
-      items.forEach(function (ex) {
+      items.forEach((ex) => {
         var li = document.createElement("li");
-        li.className = "dd-item" + (ex.mode === "layout" ? " is-web" : "");
+        li.className = `dd-item${ex.mode === "layout" ? " is-web" : ""}`;
         li.dataset.id = ex.id;
         li.innerHTML =
           modeIcon(ex.mode) +
@@ -714,7 +696,7 @@
           esc(ex.title[lang]) +
           "</span>" +
           (ex.mode === "layout"
-            ? '<span class="dd-badge">' + esc(I18N[lang].badge_web) + "</span>"
+            ? `<span class="dd-badge">${esc(I18N[lang].badge_web)}</span>`
             : "");
         if (ex.id === exampleId) li.classList.add("sel");
         list.appendChild(li);
@@ -733,7 +715,7 @@
     }
     var curIcon = exampleId === "custom" ? modeIcon("custom") : modeIcon(mode);
     $("dd-label").innerHTML =
-      curIcon + '<span class="dd-text">' + esc(dropdownLabel()) + "</span>";
+      `${curIcon}<span class="dd-text">${esc(dropdownLabel())}</span>`;
   }
   function openDropdown(open) {
     $("dd-list").hidden = !open;
@@ -762,11 +744,11 @@
     document.title = dict.title;
     document.documentElement.lang = lang;
     document.documentElement.dir = rtl ? "rtl" : "ltr";
-    document.querySelectorAll("[data-i18n]").forEach(function (el) {
+    document.querySelectorAll("[data-i18n]").forEach((el) => {
       var k = el.getAttribute("data-i18n");
       if (dict[k]) el.textContent = dict[k];
     });
-    document.querySelectorAll("#lang-seg .seg-btn").forEach(function (b) {
+    document.querySelectorAll("#lang-seg .seg-btn").forEach((b) => {
       b.classList.toggle("active", b.getAttribute("data-lang") === lang);
     });
     if (editor) {
@@ -792,25 +774,25 @@
   function setStatus(key, cls) {
     var s = $("status");
     s.textContent = I18N[lang][key] || "";
-    s.className = "status" + (cls ? " " + cls : "");
+    s.className = `status${cls ? ` ${cls}` : ""}`;
   }
   function applyMode(next) {
     mode = next;
-    document.querySelectorAll("#mode-seg .seg-btn").forEach(function (b) {
+    document.querySelectorAll("#mode-seg .seg-btn").forEach((b) => {
       b.classList.toggle("active", b.getAttribute("data-mode") === mode);
     });
     applyView();
     saveState();
   }
   function viewAllowed(v) {
-    var b = document.querySelector('#view-seg .seg-btn[data-view="' + v + '"]');
+    var b = document.querySelector(`#view-seg .seg-btn[data-view="${v}"]`);
     if (!b) return false;
     var only = b.getAttribute("data-only");
     return !only || only === mode;
   }
   function applyView() {
     if (!viewAllowed(view)) view = "run";
-    document.querySelectorAll("#view-seg .seg-btn").forEach(function (b) {
+    document.querySelectorAll("#view-seg .seg-btn").forEach((b) => {
       var only = b.getAttribute("data-only");
       b.hidden = !!(only && only !== mode);
       b.classList.toggle("active", b.getAttribute("data-view") === view);
@@ -829,7 +811,7 @@
   function scheduleRun() {
     if (!autorun) return;
     clearTimeout(runTimer);
-    runTimer = setTimeout(function () {
+    runTimer = setTimeout(() => {
       if (autorun && wasm.ready) run();
     }, 500);
   }
@@ -870,7 +852,7 @@
     if (!wasm.ready || !editor) return;
     var src = editor.getValue();
     setStatus("running", "busy");
-    setTimeout(function () {
+    setTimeout(() => {
       try {
         if (view !== "run") {
           showPhase(src);
@@ -898,12 +880,12 @@
           var pre = $("output");
           var isErr = /error\[|runtime error|timed out|aborted|خطا/i.test(out);
           pre.textContent = out || "(no output)";
-          pre.className = "output" + (isErr ? " error" : "");
+          pre.className = `output${isErr ? " error" : ""}`;
           pre.setAttribute("dir", lang === "fa" ? "rtl" : "ltr");
           setStatus(isErr ? "error" : "done", isErr ? "err" : "ok");
         }
       } catch (e) {
-        $("output").textContent = "Internal error: " + ((e && e.message) || e);
+        $("output").textContent = `Internal error: ${e?.message || e}`;
         $("output").className = "output error";
         setStatus("error", "err");
       }
@@ -918,13 +900,11 @@
   function bootWasm() {
     setStatus("loading", "busy");
     window.Module = {
-      locateFile: function (p) {
-        return p;
-      },
-      printErr: function (t) {
+      locateFile: (p) => p,
+      printErr: (t) => {
         console.warn("[salam]", t);
       },
-      onRuntimeInitialized: function () {
+      onRuntimeInitialized: () => {
         wasm.runApp = Module.cwrap("salam_web_run_app", "string", [
           "string",
           "string",
@@ -946,7 +926,7 @@
     };
     var s = document.createElement("script");
     s.src = "salam-wa.js";
-    s.onerror = function () {
+    s.onerror = () => {
       setStatus("error", "err");
       showBanner(
         "The WebAssembly build was not found. Build it with " +
@@ -984,7 +964,7 @@
     if (lbl) lbl.textContent = I18N[lang].copied;
     btn.setAttribute("title", I18N[lang].copied);
     clearTimeout(btn._copyT);
-    btn._copyT = setTimeout(function () {
+    btn._copyT = setTimeout(() => {
       btn.classList.remove("copied");
       if (lbl) lbl.textContent = I18N[lang].copy;
       btn.setAttribute("title", I18N[lang].copy);
@@ -992,11 +972,11 @@
   }
   function doCopy(text, btn) {
     if (!text) return;
-    var ok = function () {
+    var ok = () => {
       flashCopied(btn);
     };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(ok, function () {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(ok, () => {
         legacyCopy(text);
         ok();
       });
@@ -1011,7 +991,7 @@
     return "";
   }
   function syncCopyChrome() {
-    ["copy-code", "copy-out"].forEach(function (id) {
+    ["copy-code", "copy-out"].forEach((id) => {
       var b = $(id);
       if (!b || b.classList.contains("copied")) return;
       b.setAttribute("title", I18N[lang].copy);
@@ -1043,17 +1023,15 @@
     var ta = $("code");
     editor = {
       el: ta,
-      getValue: function () {
-        return ta.value;
-      },
-      setValue: function (v) {
+      getValue: () => ta.value,
+      setValue: (v) => {
         ta.value = v;
         ta.scrollTop = 0;
         renderHL();
       },
     };
     ta.addEventListener("input", onEdit);
-    ta.addEventListener("scroll", function () {
+    ta.addEventListener("scroll", () => {
       var hl = $("hl");
       hl.scrollTop = ta.scrollTop;
       hl.scrollLeft = ta.scrollLeft;
@@ -1089,7 +1067,7 @@
       var out = val
         .slice(ls, le)
         .split("\n")
-        .map(function (line, i) {
+        .map((line, i) => {
           var d = 0;
           if (outdent) {
             var m = line.match(/^( {1,4}|\t)/);
@@ -1115,10 +1093,10 @@
       var ls = val.lastIndexOf("\n", s - 1) + 1;
       var indent = (val.slice(ls, s).match(/^[ \t]*/) || [""])[0];
       var extra = /:$/.test(val.slice(ls, s).replace(/\s+$/, "")) ? INDENT : "";
-      var ins = "\n" + indent + extra;
+      var ins = `\n${indent}${extra}`;
       setRange(s, e, ins, s + ins.length, s + ins.length);
     }
-    ta.addEventListener("keydown", function (e) {
+    ta.addEventListener("keydown", (e) => {
       if (e.isComposing || e.keyCode === 229) return;
       var ctrl = e.ctrlKey || e.metaKey;
       if (e.key === "Tab") {
@@ -1193,11 +1171,11 @@
     document.title = dict.title;
     document.documentElement.lang = lang;
     document.documentElement.dir = rtl ? "rtl" : "ltr";
-    document.querySelectorAll("[data-i18n]").forEach(function (el) {
+    document.querySelectorAll("[data-i18n]").forEach((el) => {
       var k = el.getAttribute("data-i18n");
       if (dict[k]) el.textContent = dict[k];
     });
-    document.querySelectorAll("#lang-seg .seg-btn").forEach(function (b) {
+    document.querySelectorAll("#lang-seg .seg-btn").forEach((b) => {
       b.classList.toggle("active", b.getAttribute("data-lang") === lang);
     });
     $("code").dir = rtl ? "rtl" : "ltr";
@@ -1205,27 +1183,27 @@
     applyTheme();
     syncCopyChrome();
   }
-  document.addEventListener("click", function (e) {
+  document.addEventListener("click", (e) => {
     var t = e.target;
-    if (t.closest && t.closest("#menu-toggle")) {
+    if (t.closest?.("#menu-toggle")) {
       setMenu(!menuOpen());
       return;
     }
-    if (t.closest && t.closest("#scrim")) {
+    if (t.closest?.("#scrim")) {
       setMenu(false);
       return;
     }
-    var cpc = t.closest && t.closest("#copy-code");
+    var cpc = t.closest?.("#copy-code");
     if (cpc) {
       doCopy(editor ? editor.getValue() : "", cpc);
       return;
     }
-    var cpo = t.closest && t.closest("#copy-out");
+    var cpo = t.closest?.("#copy-out");
     if (cpo) {
       doCopy(resultText(), cpo);
       return;
     }
-    var seg = t.closest && t.closest(".seg-btn, #autorun, #run, #theme");
+    var seg = t.closest?.(".seg-btn, #autorun, #run, #theme");
     if (seg) {
       if (seg.id === "run") {
         if (view !== "run") {
@@ -1245,12 +1223,12 @@
       if (!seg.dataset.view) setMenu(false);
       return;
     }
-    var ddBtn = t.closest && t.closest("#dd-button");
+    var ddBtn = t.closest?.("#dd-button");
     if (ddBtn) {
       openDropdown($("dd-list").hidden);
       return;
     }
-    var item = t.closest && t.closest(".dd-item");
+    var item = t.closest?.(".dd-item");
     if (item) {
       openDropdown(false);
       selectExample(item.dataset.id);
@@ -1259,13 +1237,13 @@
     }
     openDropdown(false);
   });
-  document.addEventListener("keydown", function (e) {
+  document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && menuOpen()) setMenu(false);
   });
-  window.addEventListener("resize", function () {
+  window.addEventListener("resize", () => {
     if (window.innerWidth > 1024 && menuOpen()) setMenu(false);
   });
-  setInterval(function () {
+  setInterval(() => {
     if (themePref === "auto") applyTheme();
   }, 60000);
   function setupSplit() {
@@ -1276,9 +1254,7 @@
       MIN = 140,
       GUT = 6;
     var rowsMQ = window.matchMedia("(max-width: 900px)");
-    var isRows = function () {
-      return rowsMQ.matches;
-    };
+    var isRows = () => rowsMQ.matches;
     var saved2;
     try {
       saved2 = JSON.parse(localStorage.getItem(SPLIT_KEY) || "null");
@@ -1289,10 +1265,10 @@
       if (!saved2) return;
       if (isRows()) {
         if (saved2.rows != null)
-          split.style.setProperty("--row-a", saved2.rows + "px");
+          split.style.setProperty("--row-a", `${saved2.rows}px`);
       } else {
         if (saved2.cols != null)
-          split.style.setProperty("--col-a", saved2.cols + "px");
+          split.style.setProperty("--col-a", `${saved2.cols}px`);
       }
     }
     applySaved();
@@ -1305,12 +1281,12 @@
           MIN,
           Math.min(e.clientY - rect.top, rect.height - MIN - GUT),
         );
-        split.style.setProperty("--row-a", h + "px");
+        split.style.setProperty("--row-a", `${h}px`);
       } else {
         var rtl = document.documentElement.dir === "rtl";
         var w = rtl ? rect.right - e.clientX : e.clientX - rect.left;
         w = Math.max(MIN, Math.min(w, rect.width - MIN - GUT));
-        split.style.setProperty("--col-a", w + "px");
+        split.style.setProperty("--col-a", `${w}px`);
       }
       e.preventDefault();
     }
@@ -1330,7 +1306,7 @@
         localStorage.setItem(SPLIT_KEY, JSON.stringify(saved2));
       } catch (e) {}
     }
-    gutter.addEventListener("pointerdown", function (e) {
+    gutter.addEventListener("pointerdown", (e) => {
       dragging = true;
       gutter.classList.add("dragging");
       document.body.style.cursor = isRows() ? "row-resize" : "col-resize";
@@ -1339,7 +1315,7 @@
       window.addEventListener("pointerup", onUp);
       e.preventDefault();
     });
-    gutter.addEventListener("dblclick", function () {
+    gutter.addEventListener("dblclick", () => {
       split.style.removeProperty("--col-a");
       split.style.removeProperty("--row-a");
       saved2 = null;

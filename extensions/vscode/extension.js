@@ -1,13 +1,12 @@
 /*
  * Salam Programming Language - VS Code extension entry point.
  */
-"use strict";
 
 const vscode = require("vscode");
-const cp = require("child_process");
-const os = require("os");
-const fs = require("fs");
-const path = require("path");
+const cp = require("node:child_process");
+const os = require("node:os");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const LANG_ID = "salam";
 const OUTPUT_NAME = "Salam";
@@ -28,7 +27,7 @@ function compilerPath() {
 function shellQuote(arg) {
   if (arg === "") return '""';
   if (/^[A-Za-z0-9_\-./:\\]+$/.test(arg)) return arg;
-  return '"' + String(arg).replace(/(["\\$`])/g, "\\$1") + '"';
+  return `"${String(arg).replace(/(["\\$`])/g, "\\$1")}"`;
 }
 
 function detectLang(document) {
@@ -65,9 +64,9 @@ async function activeSalamDoc() {
 }
 
 function commonArgs(document) {
-  const args = ["--lang=" + detectLang(document)];
+  const args = [`--lang=${detectLang(document)}`];
   const stdlib = cfg().get("stdlibPath", "");
-  if (stdlib) args.push("--stdlib-path=" + stdlib);
+  if (stdlib) args.push(`--stdlib-path=${stdlib}`);
   return args;
 }
 
@@ -75,7 +74,7 @@ function runInTerminal(args, cwd) {
   const term = getTerminal();
   term.show(true);
   const cmd = [compilerPath(), ...args].map(shellQuote).join(" ");
-  if (cwd) term.sendText("cd " + shellQuote(cwd));
+  if (cwd) term.sendText(`cd ${shellQuote(cwd)}`);
   term.sendText(cmd);
 }
 
@@ -95,7 +94,7 @@ async function cmdBuild() {
     process.platform === "win32" ? ".exe" : "",
   );
   runInTerminal(
-    ["build", file, "--output=" + out, ...commonArgs(doc)],
+    ["build", file, `--output=${out}`, ...commonArgs(doc)],
     path.dirname(file),
   );
 }
@@ -161,10 +160,10 @@ async function formatText(text, lang) {
   const tmpFile = path.join(tmpDir, "document.salam");
   try {
     fs.writeFileSync(tmpFile, text, "utf8");
-    const args = ["fmt", tmpFile, "--lang=" + lang];
+    const args = ["fmt", tmpFile, `--lang=${lang}`];
     const indent = String(cfg().get("format.indent", "4")).trim();
     if (indent === "tab" || indent === "tabs") args.push("--tabs");
-    else if (/^\d+$/.test(indent)) args.push("--indent=" + indent);
+    else if (/^\d+$/.test(indent)) args.push(`--indent=${indent}`);
 
     const res = await execCapture(args, tmpDir);
     if (res.spawnError) {
@@ -173,7 +172,7 @@ async function formatText(text, lang) {
     }
     if (res.code !== 0) {
       const msg = (res.stderr || res.stdout).trim();
-      output.appendLine("[fmt] " + msg);
+      output.appendLine(`[fmt] ${msg}`);
       vscode.window.showErrorMessage(
         'Salam: formatting failed (see "Salam" output for details).',
       );
@@ -181,7 +180,7 @@ async function formatText(text, lang) {
     }
     return fs.readFileSync(tmpFile, "utf8");
   } catch (e) {
-    output.appendLine("[fmt] " + (e && e.message ? e.message : String(e)));
+    output.appendLine(`[fmt] ${e?.message ? e.message : String(e)}`);
     return null;
   } finally {
     try {
@@ -238,8 +237,8 @@ async function cmdNewProject() {
   if (!langPick) return;
 
   const folders = vscode.workspace.workspaceFolders;
-  const cwd = folders && folders.length ? folders[0].uri.fsPath : os.homedir();
-  runInTerminal(["new", name, "--lang=" + langPick.value], cwd);
+  const cwd = folders?.length ? folders[0].uri.fsPath : os.homedir();
+  runInTerminal(["new", name, `--lang=${langPick.value}`], cwd);
 }
 
 function activate(context) {

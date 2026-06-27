@@ -39,7 +39,8 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
 #include <llvm-c/BitWriter.h>
 #include <llvm-c/Analysis.h>
 #include <llvm-c/Error.h>
-#include <llvm-c/ExecutionEngine.h>
+#include <llvm-c/Orc.h>
+#include <llvm-c/LLJIT.h>
 #include <llvm-c/Transforms/PassBuilder.h>
 
 int salam_llvm_native_available(void) { return 1; }
@@ -154,31 +155,76 @@ static int link_executable(logger_t *log, const char *obj, const char *out)
     return rc == 0 ? 0 : 1;
 }
 
-static int jit_run(logger_t *log, LLVMModuleRef mod, llvm_opt_level_t level)
+/* Log and consume an LLVMErrorRef; returns 1 (for chaining into rc). */
+static int orc_fail(logger_t *log, const char *what, LLVMErrorRef e)
 {
-    LLVMLinkInMCJIT();
+    char *msg = LLVMGetErrorMessage(e);   /* consumes e */
+    LOG_E(log, PH_DRIVER, "%s: %s", what, msg ? msg : "(unknown)");
+    if (msg) LLVMDisposeErrorMessage(msg);
+    return 1;
+}
+
+/*
+ * JIT-run main() with ORC LLJIT, entirely in-process. ORC's JITLink handles
+ * COFF/ELF/MachO across platforms (MCJIT's RuntimeDyld crashes on Windows
+ * COFF), and external symbols (printf, malloc, ...) resolve against the host
+ * process. Parses the IR into the JIT's own thread-safe context.
+ */
+static int jit_run_file(logger_t *log, const char *ll_path)
+{
     LLVMInitializeNativeTarget();
     LLVMInitializeNativeAsmPrinter();
 
-    char *err = NULL;
-    struct LLVMMCJITCompilerOptions opt;
-    LLVMInitializeMCJITCompilerOptions(&opt, sizeof opt);
-    opt.OptLevel = (level == LLVM_OPT_O0) ? 0u : (level == LLVM_OPT_O1 ? 1u : 3u);
+    LLVMOrcThreadSafeContextRef tsctx = LLVMOrcCreateNewThreadSafeContext();
+    LLVMContextRef ctx = LLVMOrcThreadSafeContextGetContext(tsctx);
 
-    LLVMExecutionEngineRef ee = NULL;
-    if (LLVMCreateMCJITCompilerForModule(&ee, mod, &opt, sizeof opt, &err)) {
-        LOG_E(log, PH_DRIVER, "JIT init failed: %s", err ? err : "(unknown)");
+    LLVMMemoryBufferRef buf = NULL;
+    char *err = NULL;
+    if (LLVMCreateMemoryBufferWithContentsOfFile(ll_path, &buf, &err)) {
+        LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"), ll_path);
         if (err) LLVMDisposeMessage(err);
-        return 1;
+        LLVMOrcDisposeThreadSafeContext(tsctx);
+        return 2;
     }
-    LLVMValueRef fn = NULL;
-    if (LLVMFindFunction(ee, "main", &fn) || !fn) {
-        LOG_E(log, PH_DRIVER, i18n_tr("no 'main' function to run"));
-        LLVMDisposeExecutionEngine(ee);
-        return 1;
+    LLVMModuleRef mod = NULL;
+    if (LLVMParseIRInContext(ctx, buf, &mod, &err)) {
+        LOG_E(log, PH_DRIVER, "LLVM IR parse error: %s", err ? err : "(unknown)");
+        if (err) LLVMDisposeMessage(err);
+        LLVMOrcDisposeThreadSafeContext(tsctx);
+        return 2;
     }
-    int rc = (int)LLVMRunFunctionAsMain(ee, fn, 0, NULL, NULL);
-    LLVMDisposeExecutionEngine(ee);
+
+    /* Wrap the module; the TSModule keeps its own ref to the context. */
+    LLVMOrcThreadSafeModuleRef tsm = LLVMOrcCreateNewThreadSafeModule(mod, tsctx);
+    LLVMOrcDisposeThreadSafeContext(tsctx);
+
+    LLVMOrcLLJITRef jit = NULL;
+    LLVMErrorRef e = LLVMOrcCreateLLJIT(&jit, NULL);
+    if (e) { LLVMOrcDisposeThreadSafeModule(tsm); return orc_fail(log, "JIT init failed", e); }
+
+    LLVMOrcJITDylibRef jd = LLVMOrcLLJITGetMainJITDylib(jit);
+
+    /* Resolve libc/runtime symbols the program references from this process. */
+    LLVMOrcDefinitionGeneratorRef gen = NULL;
+    e = LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess(
+            &gen, LLVMOrcLLJITGetGlobalPrefix(jit), NULL, NULL);
+    if (e) { LLVMOrcDisposeLLJIT(jit); LLVMOrcDisposeThreadSafeModule(tsm);
+             return orc_fail(log, "JIT symbol generator failed", e); }
+    LLVMOrcJITDylibAddGenerator(jd, gen);
+
+    e = LLVMOrcLLJITAddLLVMIRModule(jit, jd, tsm);   /* consumes tsm */
+    if (e) { LLVMOrcDisposeLLJIT(jit); return orc_fail(log, "JIT add module failed", e); }
+
+    LLVMOrcExecutorAddress addr = 0;
+    e = LLVMOrcLLJITLookup(jit, &addr, "main");
+    if (e) { LLVMOrcDisposeLLJIT(jit); return orc_fail(log, i18n_tr("no 'main' function to run"), e); }
+    if (!addr) { LLVMOrcDisposeLLJIT(jit);
+                 LOG_E(log, PH_DRIVER, i18n_tr("no 'main' function to run")); return 1; }
+
+    int (*main_fn)(void) = (int (*)(void))(size_t)addr;
+    int rc = main_fn();
+
+    LLVMOrcDisposeLLJIT(jit);   /* tears down the JIT and its module */
     return rc;
 }
 
@@ -186,6 +232,10 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
                       const codegen_llvm_options_t *opts)
 {
     init_targets_once();
+
+    /* JIT runs through ORC, which parses into its own thread-safe context. */
+    if (opts->output_mode == LLVM_OUT_JIT)
+        return jit_run_file(log, ll_path);
 
     LLVMContextRef ctx = NULL;
     LLVMModuleRef mod = NULL;
@@ -207,14 +257,6 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
             goto cleanup;
         }
         if (verr) LLVMDisposeMessage(verr);
-    }
-
-    if (opts->output_mode == LLVM_OUT_JIT) {
-        rc = jit_run(log, mod, opts->opt_level);
-        mod = NULL;
-        LLVMContextDispose(ctx);
-        LLVMDisposeMessage(host_triple);
-        return rc;
     }
 
     if (opts->output_mode == LLVM_OUT_IR) {

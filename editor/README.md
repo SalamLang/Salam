@@ -68,8 +68,8 @@ The interpreter targets pure-compute programs (functions, structs, enums,
 arrays, `Vector`, `HashMap`, lambdas/closures, operator overloading, generics,
 `defer`, `char`/strings, control flow) in both English and Persian, and matches
 the C backend's output across the example suite. It intentionally does **not**
-support things that need a real OS or the C ABI file/socket/thread/HTTP/SQLite
-APIs, FFI/`extern "C"`, and manual memory (`salam_alloc`).
+support things that need a real OS or the C ABI (file/socket/thread/HTTP/SQLite
+APIs, FFI/`extern "C"`, and manual memory (`salam_alloc`)), none
 of which apply in a browser sandbox. The `&ref` scalar parameters, multi-file
 user imports, and the fully Persian-localized std API (`ریاضی.جذر`) are current
 limitations of the interpreter, not the language.

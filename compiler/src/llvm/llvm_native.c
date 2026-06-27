@@ -162,6 +162,33 @@ static int orc_fail(logger_t *log, const char *what, LLVMErrorRef e)
     return 1;
 }
 
+static void define_runtime_symbols(LLVMOrcLLJITRef jit, LLVMOrcJITDylibRef jd)
+{
+#define RT_FLAGS { LLVMJITSymbolGenericFlagsExported | LLVMJITSymbolGenericFlagsCallable, 0 }
+#define RT_SYM(fn) { LLVMOrcLLJITMangleAndIntern(jit, #fn), \
+                     { (LLVMOrcExecutorAddress)(size_t)&fn, RT_FLAGS } }
+    LLVMOrcCSymbolMapPair syms[] = {
+        RT_SYM(printf),  RT_SYM(snprintf), RT_SYM(strlen),  RT_SYM(strcmp),
+        RT_SYM(malloc),  RT_SYM(realloc),  RT_SYM(free),    RT_SYM(memcpy),
+        RT_SYM(memmove), RT_SYM(abort),    RT_SYM(exit),    RT_SYM(strtol),
+        RT_SYM(strtod),  RT_SYM(strstr)
+    };
+    LLVMOrcJITDylibDefine(jd,
+        LLVMOrcAbsoluteSymbols(syms, sizeof syms / sizeof syms[0]));
+#if defined(_WIN32)
+    {
+        extern void __main(void);
+        LLVMOrcCSymbolMapPair w[] = {
+            { LLVMOrcLLJITMangleAndIntern(jit, "__main"),
+              { (LLVMOrcExecutorAddress)(size_t)&__main, RT_FLAGS } }
+        };
+        LLVMOrcJITDylibDefine(jd, LLVMOrcAbsoluteSymbols(w, 1));
+    }
+#endif
+#undef RT_SYM
+#undef RT_FLAGS
+}
+
 static int jit_run_file(logger_t *log, const char *ll_path)
 {
     LLVMInitializeNativeTarget();
@@ -207,6 +234,7 @@ static int jit_run_file(logger_t *log, const char *ll_path)
     if (e) { LLVMOrcDisposeLLJIT(jit); LLVMOrcDisposeThreadSafeModule(tsm);
              return orc_fail(log, "JIT symbol generator failed", e); }
     LLVMOrcJITDylibAddGenerator(jd, gen);
+    define_runtime_symbols(jit, jd);
 
     e = LLVMOrcLLJITAddLLVMIRModule(jit, jd, tsm);
     if (e) { LLVMOrcDisposeLLJIT(jit); return orc_fail(log, "JIT add module failed", e); }

@@ -51,6 +51,8 @@ SRC_DIRS="core source logger xml preproc token langpack i18n lexer ast parser
           diag semantic interp layout codegen llvm web"
 SRCS=""
 for d in $SRC_DIRS; do SRCS="$SRCS src/$d/*.c"; done
+# SRCS holds whitespace-separated glob patterns that must word-split and expand.
+# shellcheck disable=SC2086
 "$EMCC" -O2 -Isrc $SRCS \
   -o "$OUT_DIR/salam-wa.js" \
   --preload-file std@/std \

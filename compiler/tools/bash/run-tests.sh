@@ -24,7 +24,7 @@ SECTIONS="$*"
 want() {
     [ -z "$SECTIONS" ] && return 0
     for s in $SECTIONS; do
-        case "$s" in c|codegen) s=general;; interp|interpreter) s=exec;; esac
+        case "$s" in c|codegen) s=general;; interp|interpreter) s="exec";; esac
         [ "$s" = "$1" ] && return 0
     done
     return 1

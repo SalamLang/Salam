@@ -1,7 +1,7 @@
+# shellcheck shell=sh
 # Shared helpers for the tools/bash/*.sh scripts, not executable on its own.
 
 cd "$(dirname "$0")/../.." || exit 1
-SALAM_ROOT="$(pwd)"
 
 salam_python() {
     if   command -v python  >/dev/null 2>&1; then echo python

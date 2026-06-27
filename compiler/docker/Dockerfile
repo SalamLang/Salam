@@ -71,5 +71,8 @@ RUN addgroup -g "${SALAM_GID}" salam \
 WORKDIR /work
 USER salam
 
+HEALTHCHECK --interval=5m --timeout=10s --start-period=5s --retries=3 \
+    CMD salam --version || exit 1
+
 ENTRYPOINT ["salam"]
 CMD ["--help"]

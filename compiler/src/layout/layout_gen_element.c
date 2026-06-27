@@ -127,15 +127,14 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent, co
     } }
     bool has_css = css.len > 0;
     bool needs_class = has_css || hover.len || focus.len || active.len || before.len || after.len;
-    char autobuf[16];
     const char *klass = userclass;
     if (needs_class && !klass) {
         sb_t k; sb_init(&k);
-        sb_puts(&k, sb_cstr(&css));    sb_puts(&k, sb_cstr(&hover));  sb_puts(&k, sb_cstr(&focus));
-        sb_puts(&k, sb_cstr(&active)); sb_puts(&k, sb_cstr(&before)); sb_puts(&k, sb_cstr(&after));
-        snprintf(autobuf, sizeof(autobuf), "s%08x", djb2(sb_cstr(&k)));
+        sb_puts(&k, sb_cstr(&css));    sb_putc(&k, '\x1f'); sb_puts(&k, sb_cstr(&hover));
+        sb_putc(&k, '\x1f'); sb_puts(&k, sb_cstr(&focus));  sb_putc(&k, '\x1f'); sb_puts(&k, sb_cstr(&active));
+        sb_putc(&k, '\x1f'); sb_puts(&k, sb_cstr(&before)); sb_putc(&k, '\x1f'); sb_puts(&k, sb_cstr(&after));
+        klass = class_for_key(cx, sb_cstr(&k));
         sb_free(&k);
-        klass = arena_strdup(cx->a, autobuf);
     }
     
     if (!strcmp(el->name, "media")) {

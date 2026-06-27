@@ -7,8 +7,6 @@ CC       ?= cc
 BUILD    ?= release
 TARGET   := salam
 
-# Host/target OS detection. MSYS2/MinGW shells report MINGW*/MSYS* via uname,
-# and GNU make on Windows sets OS=Windows_NT. Either marks a Windows build.
 UNAME_S := $(shell uname -s 2>/dev/null)
 ifneq (,$(filter Windows_NT,$(OS)))
   IS_WINDOWS := 1
@@ -78,12 +76,12 @@ ifeq ($(WITH_LLVM),1)
   CPPFLAGS += -DSALAM_HAVE_LLVM -I$(shell $(LLVM_CONFIG) --includedir) \
               -DSALAM_LLVM_VERSION_MAJOR=$(shell $(LLVM_CONFIG) --version | cut -d. -f1)
   LDFLAGS  += $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --ldflags)
-  LLVM_SYSTEM_LIBS := $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --system-libs)
   ifeq ($(IS_WINDOWS),1)
-    LLVM_SYSTEM_LIBS := $(patsubst %libzstd.dll.a,-l:libzstd.a,$(LLVM_SYSTEM_LIBS))
-    LLVM_SYSTEM_LIBS := $(patsubst -lzstd,-l:libzstd.a,$(LLVM_SYSTEM_LIBS))
+    LLVM_SYSTEM_LIBS := $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --system-libs \
+        | tr ' ' '\n' | grep -viE 'zstd' | tr '\n' ' ') -l:libzstd.a
+  else
+    LLVM_SYSTEM_LIBS := $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --system-libs)
   endif
-  # libLLVM is C++, so pull in the C++ runtime and LLVM's system deps last.
   LDLIBS   += $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --libs $(LLVM_COMPONENTS)) \
               $(LLVM_SYSTEM_LIBS) $(LLVM_CXXLIB)
 endif

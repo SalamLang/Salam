@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "driver/llvm_toolchain.h"
+#include "llvm/llvm_native.h"
 #include "core/sb.h"
 #include "i18n/i18n.h"
 #include <stdlib.h>
@@ -106,6 +107,14 @@ static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
 int salam_llvm_toolchain(logger_t *log, const char *ll_path,
                          const codegen_llvm_options_t *opts)
 {
+    /* When salam embeds LLVM, do everything in-process: no external
+     * clang/llc/lli and no WSL hop. Returns -1 only in non-LLVM builds,
+     * in which case we fall through to the external-tool path below. */
+    if (salam_llvm_native_available()) {
+        int nrc = salam_llvm_native(log, ll_path, opts);
+        if (nrc >= 0) return nrc;
+    }
+
     char in_tp[SALAM_PATH_MAX]; to_tool_path(ll_path, in_tp, sizeof in_tp);
     bool needs_out = opts->output_mode != LLVM_OUT_JIT && opts->output_mode != LLVM_OUT_IR;
     char out_tp[SALAM_PATH_MAX]; out_tp[0] = 0;

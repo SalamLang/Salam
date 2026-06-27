@@ -16,6 +16,12 @@ Salam is a general-purpose and systems programming language designed for efficie
 [![Dependabot Updates Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates)
 [![GitHub Pages Build Deployment Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment)
 [![Pull Request Labeler Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml)
+[![Prek Standard Hooks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/prek.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/prek.yml)
+[![Prek Manual Hooks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/prek-manual.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/prek-manual.yml)
+[![Docker Build & Test Alpine + LLVM 22 Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/make-run.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/make-run.yml)
+[![Build and Release Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/build-release.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/build-release.yml)
+[![Super-Linter Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/super-linter.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/super-linter.yml)
+[![WebAssembly Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/web-assembly.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/web-assembly.yml)
 [![VS Code Marketplace Version](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 [![VS Code Marketplace Installs](https://vsmarketplacebadges.dev/installs/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 

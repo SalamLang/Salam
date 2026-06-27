@@ -52,18 +52,6 @@ static bool fmt_bracket_multiline(const token_stream_t *toks, size_t open_idx)
     return false;
 }
 
-static bool fmt_next_is_if(const token_stream_t *toks, size_t i)
-{
-    size_t n = token_stream_count(toks);
-    size_t j = i + 1;
-    for (; j < n; j++) {
-        token_kind_t kk = token_stream_at(toks, j)->kind;
-        if (kk == TK_COMMENT_LINE || kk == TK_COMMENT_BLOCK) continue;
-        return kk == TK_KW_IF;
-    }
-    return false;
-}
-
 void fmt_tokens(const token_stream_t *toks, const fmt_style_t *style, sb_t *out)
 {
     fmt_style_t def = fmt_style_default();
@@ -72,15 +60,13 @@ void fmt_tokens(const token_stream_t *toks, const fmt_style_t *style, sb_t *out)
     int  indent = 0;
     int  bracket = 0;
     int  angle = 0;
-    int  bracket_indent = 0;        /* extra indent from open multi-line brackets */
-    bool ml_stack[FMT_MAX_BRACKET]; /* per open bracket: is the group multi-line? */
+    int  bracket_indent = 0;
+    bool ml_stack[FMT_MAX_BRACKET];
     int  ml_top = 0;
-    bool blk_stack[FMT_MAX_BRACKET];/* per `:`-block: is it a flattened `else: if`? */
-    int  blk_top = 0;
     bool line_has_content = false;
     bool force_break = false;
     bool no_space_next = false;
-    bool prev_gt_generic = false;   /* previous token was a generic-closing `>` */
+    bool prev_gt_generic = false;
     uint32_t open_colon_line = 0;
     const token_t *prev = NULL;
     bool     prev_unary = false;
@@ -126,10 +112,8 @@ void fmt_tokens(const token_stream_t *toks, const fmt_style_t *style, sb_t *out)
         open_colon_line = 0;
 
         if (bracket == 0 && angle == 0 && k == TK_KW_END) {
-            bool elif = blk_top > 0 ? blk_stack[--blk_top] : false;
-            if (!elif && indent > 0) indent--;
+            if (indent > 0) indent--;
         } else if (bracket == 0 && angle == 0 && k == TK_KW_ELSE) {
-            if (blk_top > 0) blk_top--;      /* the if-body block this else ends */
             if (indent > 0) indent--;
         }
         if (!line_has_content) {
@@ -143,17 +127,15 @@ void fmt_tokens(const token_stream_t *toks, const fmt_style_t *style, sb_t *out)
             if (need) sb_putc(out, ' ');
         }
         no_space_next = false;
-        prev_gt_generic = false;   /* re-armed below only for a generic `>` */
+        prev_gt_generic = false;
         if (k == TK_META) sb_putc(out, '@');
         sb_puts(out, t->lexeme ? t->lexeme : "");
         line_has_content = true;
 
         if (bracket == 0 && angle == 0 && k == TK_COLON) {
-            bool elif = prev != NULL && prev->kind == TK_KW_ELSE &&
-                        fmt_next_is_if(toks, i);
-            if (blk_top < FMT_MAX_BRACKET) blk_stack[blk_top++] = elif;
-            if (!elif) indent++;
+            indent++;
             open_colon_line = t->span.end.line;
+            if (prev != NULL && prev->kind == TK_KW_ELSE) force_break = true;
         }
 
         if (k == TK_LT && prev != NULL && fmt_is_value_end(prev->kind) &&
@@ -161,14 +143,14 @@ void fmt_tokens(const token_stream_t *toks, const fmt_style_t *style, sb_t *out)
             angle++;
         else if (k == TK_GT && angle > 0) {
             angle--;
-            prev_gt_generic = true;   /* this `>` closed a generic argument list */
+            prev_gt_generic = true;
         }
         if (fmt_is_open(k)) {
             bool ml = fmt_bracket_multiline(toks, i);
             if (ml_top < FMT_MAX_BRACKET) ml_stack[ml_top] = ml;
             ml_top++;
             bracket++;
-            if (ml) { bracket_indent++; force_break = true; }  /* break after opener */
+            if (ml) { bracket_indent++; force_break = true; }
         } else if (fmt_is_close(k)) {
             if (ml_top > 0) ml_top--;
             if (bracket > 0) bracket--;

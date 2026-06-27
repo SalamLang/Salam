@@ -7,10 +7,6 @@ CC       ?= cc
 BUILD    ?= release
 TARGET   := salam
 
-# Where the built binary lands. Defaults to the repository root (the parent of
-# compiler/), so `make` inside compiler/ drops `salam` at the repo root. Set
-# OUTDIR=. to keep it inside compiler/ (used by the Docker images and the
-# container CI, where compiler/ IS the build root).
 OUTDIR   ?= ..
 OUTBIN   := $(OUTDIR)/$(TARGET)
 

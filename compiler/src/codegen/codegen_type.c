@@ -29,19 +29,24 @@ void cg_kv(const char *ts, char *kbuf, char *vbuf, size_t cap)
     size_t vl = (size_t)(ve - vs); if (vl >= cap) vl = cap - 1; memcpy(vbuf, vs, vl); vbuf[vl] = 0;
 }
 
+void cg_put_ident_byte(sb_t *b, unsigned char c)
+{
+    if (isalnum(c))      sb_putc(b, (char)c);
+    else if (c == '_')   sb_puts(b, "__");
+    else { char h[5]; snprintf(h, sizeof(h), "_%02x", c); sb_puts(b, h); }
+}
+
 const char *cg_cident(cg_t *cg, const char *name)
 {
     if (!name || !name[0]) return "_";
     bool ok = !isdigit((unsigned char)name[0]);
     { const unsigned char *p = (const unsigned char *)name; for (; ok && *p; p++)
-        if (!(isalnum(*p) || *p == '_')) ok = false; }
+        if (!(isalnum(*p))) ok = false; }
     if (ok) return name;
     sb_t b; sb_init(&b);
     if (isdigit((unsigned char)name[0])) sb_putc(&b, '_');
-    { const unsigned char *p = (const unsigned char *)name; for (; *p; p++) {
-        if (isalnum(*p) || *p == '_') sb_putc(&b, (char)*p);
-        else { char h[5]; snprintf(h, sizeof(h), "_%02x", *p); sb_puts(&b, h); }
-    } }
+    { const unsigned char *p = (const unsigned char *)name; for (; *p; p++)
+        cg_put_ident_byte(&b, *p); }
     const char *r = arena_strdup(cg->a, sb_cstr(&b)); sb_free(&b); return r;
 }
 
@@ -110,8 +115,7 @@ static const char *cg_vec_code_str(cg_t *cg, const char *elem)
         if (*p == '*') sb_puts(&s, "_ptr");
         else if (*p == '[') sb_puts(&s, "_arr");
         else if (*p == ']' || *p == ' ') {}
-        else if (isalnum(*p) || *p == '_') sb_putc(&s, (char)*p);
-        else { char h[5]; snprintf(h, sizeof(h), "_%02x", *p); sb_puts(&s, h); }
+        else cg_put_ident_byte(&s, *p);
     } }
     const char *r = arena_strdup(cg->a, sb_cstr(&s)); sb_free(&s); return r;
 }
@@ -179,8 +183,7 @@ static const char *type_code(cg_t *cg, type_t *t)
         if (*p == '*') sb_puts(&s, "_ptr");
         else if (*p == '[') sb_puts(&s, "_arr");
         else if (*p == ']') {}
-        else if (isalnum(*p) || *p == '_') sb_putc(&s, (char)*p);
-        else { char h[5]; snprintf(h, sizeof(h), "_%02x", *p); sb_puts(&s, h); }
+        else cg_put_ident_byte(&s, *p);
     } }
     const char *r = arena_strdup(cg->a, sb_cstr(&s)); sb_free(&s); return r;
 }

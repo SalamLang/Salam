@@ -649,6 +649,7 @@
     bootWasm();
   }
   function applyLangChrome() {
+    if (!I18N[lang]) lang = "en";
     var rtl = lang === "fa", dict = I18N[lang];
     document.title = dict.title;
     document.documentElement.lang = lang;

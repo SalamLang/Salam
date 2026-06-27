@@ -7,6 +7,19 @@ CC       ?= cc
 BUILD    ?= release
 TARGET   := salam
 
+# Host/target OS detection. MSYS2/MinGW shells report MINGW*/MSYS* via uname,
+# and GNU make on Windows sets OS=Windows_NT. Either marks a Windows build.
+UNAME_S := $(shell uname -s 2>/dev/null)
+ifneq (,$(filter Windows_NT,$(OS)))
+  IS_WINDOWS := 1
+endif
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+  IS_WINDOWS := 1
+endif
+ifneq (,$(findstring MSYS,$(UNAME_S)))
+  IS_WINDOWS := 1
+endif
+
 PREFIX   ?= /usr/local
 DESTDIR  ?=
 BINDIR   := $(PREFIX)/bin
@@ -56,6 +69,9 @@ ifeq ($(WITH_LLVM),1)
                      native passes target all-targets
   ifeq ($(LLVM_LINK_STATIC),1)
     LLVM_STATIC_FLAG := --link-static
+    ifeq ($(IS_WINDOWS),1)
+      LDFLAGS += -static -static-libgcc -static-libstdc++
+    endif
   else
     LLVM_STATIC_FLAG :=
   endif

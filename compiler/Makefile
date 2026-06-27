@@ -7,6 +7,19 @@ CC       ?= cc
 BUILD    ?= release
 TARGET   := salam
 
+# Host/target OS detection. MSYS2/MinGW shells report MINGW*/MSYS* via uname,
+# and GNU make on Windows sets OS=Windows_NT. Either marks a Windows build.
+UNAME_S := $(shell uname -s 2>/dev/null)
+ifneq (,$(filter Windows_NT,$(OS)))
+  IS_WINDOWS := 1
+endif
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+  IS_WINDOWS := 1
+endif
+ifneq (,$(findstring MSYS,$(UNAME_S)))
+  IS_WINDOWS := 1
+endif
+
 PREFIX   ?= /usr/local
 DESTDIR  ?=
 BINDIR   := $(PREFIX)/bin
@@ -27,6 +40,16 @@ endif
 
 CPPFLAGS ?= -Isrc
 CPPFLAGS += -DSALAM_STDLIB_PREFIX='"$(DATADIR)"'
+
+GIT             := git
+SALAM_GIT_COMMIT := $(shell $(GIT) rev-parse --short HEAD 2>/dev/null)
+SALAM_GIT_DATE   := $(shell $(GIT) show -s --format=%cs HEAD 2>/dev/null)
+SALAM_GIT_DIRTY  := $(shell test -n "$$($(GIT) status --porcelain 2>/dev/null)" && echo '-dirty')
+ifneq ($(SALAM_GIT_COMMIT),)
+  CPPFLAGS += -DSALAM_GIT_COMMIT='"$(SALAM_GIT_COMMIT)"' \
+              -DSALAM_GIT_DATE='"$(SALAM_GIT_DATE)"'     \
+              -DSALAM_GIT_DIRTY='"$(SALAM_GIT_DIRTY)"'
+endif
 CFLAGS   ?= $(OPTIMIZE) -std=gnu89 -Wall -Wextra                    \
             -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable
 DEPFLAGS  = -MMD -MP
@@ -46,6 +69,9 @@ ifeq ($(WITH_LLVM),1)
                      native passes target all-targets
   ifeq ($(LLVM_LINK_STATIC),1)
     LLVM_STATIC_FLAG := --link-static
+    ifeq ($(IS_WINDOWS),1)
+      LDFLAGS += -static -static-libgcc -static-libstdc++
+    endif
   else
     LLVM_STATIC_FLAG :=
   endif

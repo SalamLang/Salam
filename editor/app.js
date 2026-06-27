@@ -86,9 +86,10 @@
       last = 0,
       m;
     TOK.lastIndex = 0;
+    // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
     while ((m = TOK.exec(src)) !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
-      var tok = m[0],
+      let tok = m[0],
         cls = null;
       if (m[1]) cls = "c";
       else if (m[2]) cls = "s";
@@ -122,15 +123,16 @@
       last = 0,
       m;
     XML_TOK.lastIndex = 0;
+    // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
     while ((m = XML_TOK.exec(src)) !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
-      var t = m[0];
+      const t = m[0];
       if (t.slice(0, 4) === "<!--") {
         out += `<span class="xc">${esc(t)}</span>`;
       } else if (t.slice(0, 2) === "<?") {
         out += `<span class="xp">${esc(t)}</span>`;
       } else {
-        var tm = /^(<\/?)([\w:.-]+)([\s\S]*?)(\/?>)$/.exec(t);
+        const tm = /^(<\/?)([\w:.-]+)([\s\S]*?)(\/?>)$/.exec(t);
         if (tm) {
           out +=
             '<span class="xb">' +
@@ -329,9 +331,10 @@
       last = 0,
       m;
     IR_TOK.lastIndex = 0;
+    // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
     while ((m = IR_TOK.exec(src)) !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
-      var tok = m[0],
+      let tok = m[0],
         cls = null;
       if (m[1]) cls = "ic";
       else if (m[2]) cls = "is";
@@ -451,6 +454,7 @@
       out = "",
       last = 0,
       m;
+    // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
     while ((m = re.exec(s)) !== null) {
       if (m.index > last) out += esc(s.slice(last, m.index));
       out += `<span class="cs">${esc(m[0])}</span>`;
@@ -466,9 +470,10 @@
       last = 0,
       m;
     C_TOK.lastIndex = 0;
+    // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
     while ((m = C_TOK.exec(src)) !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
-      var tok = m[0],
+      let tok = m[0],
         cls = null;
       if (m[1]) cls = "cm";
       else if (m[2]) {
@@ -496,9 +501,10 @@
       last = 0,
       m;
     CSS_TOK.lastIndex = 0;
+    // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
     while ((m = CSS_TOK.exec(src)) !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
-      var tok = m[0],
+      let tok = m[0],
         cls = null;
       if (m[1]) cls = "cm";
       else if (m[2]) cls = "cs";
@@ -507,7 +513,7 @@
       else if (m[5]) cls = "ck";
       else if (m[6]) cls = "ck";
       else if (m[7]) {
-        var j = CSS_TOK.lastIndex;
+        let j = CSS_TOK.lastIndex;
         while (src.charCodeAt(j) === 32 || src.charCodeAt(j) === 9) j++;
         cls = src.charCodeAt(j) === 58 ? "cf" : "ct";
       } else if (m[8]) cls = "co";
@@ -572,9 +578,10 @@
       last = 0,
       m;
     JS_TOK.lastIndex = 0;
+    // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
     while ((m = JS_TOK.exec(src)) !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
-      var tok = m[0],
+      let tok = m[0],
         cls = null;
       if (m[1]) cls = "cm";
       else if (m[2]) cls = "cs";
@@ -601,7 +608,7 @@
   var wasm = { ready: false, runApp: null, buildLayout: null, emit: null };
   var $ = (id) => document.getElementById(id);
   function findExample(id) {
-    for (var i = 0; i < EXAMPLES.length; i++)
+    for (let i = 0; i < EXAMPLES.length; i++)
       if (EXAMPLES[i].id === id) return EXAMPLES[i];
     return null;
   }
@@ -629,13 +636,13 @@
             view: view,
           }),
         );
-      } catch (e) {}
+      } catch {}
     }, 200);
   }
   function loadState() {
     try {
       return JSON.parse(localStorage.getItem(STORE_KEY) || "null");
-    } catch (e) {
+    } catch {
       return null;
     }
   }
@@ -703,7 +710,7 @@
       });
     });
     if (exampleId === "custom") {
-      var li = document.createElement("li");
+      const li = document.createElement("li");
       li.className = "dd-item sel custom";
       li.dataset.id = "custom";
       li.innerHTML =
@@ -722,7 +729,7 @@
     $("examples").classList.toggle("open", open);
   }
   function defaultExampleFor(m) {
-    for (var i = 0; i < EXAMPLES.length; i++)
+    for (let i = 0; i < EXAMPLES.length; i++)
       if (EXAMPLES[i].mode === m) return EXAMPLES[i].id;
     return EXAMPLES.length ? EXAMPLES[0].id : "hello";
   }
@@ -754,11 +761,11 @@
     if (editor) {
       $("code").dir = rtl ? "rtl" : "ltr";
       if (keepExample !== "custom") {
-        var ex = findExample(keepExample);
+        const ex = findExample(keepExample);
         if (ex) editor.setValue(ex.code[lang] || editor.getValue());
       } else {
         exampleId = defaultExampleFor(mode);
-        var dex = findExample(exampleId);
+        const dex = findExample(exampleId);
         editor.setValue(dex ? dex.code[lang] || "" : "");
       }
       renderHL();
@@ -859,12 +866,12 @@
           return;
         }
         if (mode === "layout") {
-          var res = wasm.buildLayout(src, lang);
+          const res = wasm.buildLayout(src, lang);
           if (/^\s*</.test(res)) {
             $("preview").srcdoc = res;
             setStatus("done", "ok");
           } else {
-            var dir = lang === "fa" ? "rtl" : "ltr";
+            const dir = lang === "fa" ? "rtl" : "ltr";
             $("preview").srcdoc =
               '<!doctype html><meta charset="utf-8">' +
               '<div dir="' +
@@ -876,9 +883,11 @@
             setStatus("error", "err");
           }
         } else {
-          var out = wasm.runApp(src, lang);
-          var pre = $("output");
-          var isErr = /error\[|runtime error|timed out|aborted|خطا/i.test(out);
+          const out = wasm.runApp(src, lang);
+          const pre = $("output");
+          const isErr = /error\[|runtime error|timed out|aborted|خطا/i.test(
+            out,
+          );
           pre.textContent = out || "(no output)";
           pre.className = `output${isErr ? " error" : ""}`;
           pre.setAttribute("dir", lang === "fa" ? "rtl" : "ltr");
@@ -955,7 +964,7 @@
     ta.select();
     try {
       document.execCommand("copy");
-    } catch (e) {}
+    } catch {}
     document.body.removeChild(ta);
   }
   function flashCopied(btn) {
@@ -1010,7 +1019,7 @@
   function onEdit() {
     renderHL();
     if (exampleId !== "custom") {
-      var ex = findExample(exampleId);
+      const ex = findExample(exampleId);
       if (!ex || editor.getValue() !== ex.code[lang]) {
         exampleId = "custom";
         rebuildDropdown();
@@ -1070,7 +1079,7 @@
         .map((line, i) => {
           var d = 0;
           if (outdent) {
-            var m = line.match(/^( {1,4}|\t)/);
+            const m = line.match(/^( {1,4}|\t)/);
             if (m) {
               d = -m[0].length;
               line = line.slice(m[0].length);
@@ -1101,7 +1110,7 @@
       var ctrl = e.ctrlKey || e.metaKey;
       if (e.key === "Tab") {
         e.preventDefault();
-        var s = ta.selectionStart,
+        const s = ta.selectionStart,
           en = ta.selectionEnd;
         if (e.shiftKey) blockIndent(true);
         else if (val_has_nl(ta.value, s, en)) blockIndent(false);
@@ -1258,7 +1267,7 @@
     var saved2;
     try {
       saved2 = JSON.parse(localStorage.getItem(SPLIT_KEY) || "null");
-    } catch (e) {
+    } catch {
       saved2 = null;
     }
     function applySaved() {
@@ -1277,14 +1286,14 @@
       if (!dragging) return;
       var rect = split.getBoundingClientRect();
       if (isRows()) {
-        var h = Math.max(
+        const h = Math.max(
           MIN,
           Math.min(e.clientY - rect.top, rect.height - MIN - GUT),
         );
         split.style.setProperty("--row-a", `${h}px`);
       } else {
-        var rtl = document.documentElement.dir === "rtl";
-        var w = rtl ? rect.right - e.clientX : e.clientX - rect.left;
+        const rtl = document.documentElement.dir === "rtl";
+        let w = rtl ? rect.right - e.clientX : e.clientX - rect.left;
         w = Math.max(MIN, Math.min(w, rect.width - MIN - GUT));
         split.style.setProperty("--col-a", `${w}px`);
       }
@@ -1304,7 +1313,7 @@
       else saved2.cols = parseFloat(split.style.getPropertyValue("--col-a"));
       try {
         localStorage.setItem(SPLIT_KEY, JSON.stringify(saved2));
-      } catch (e) {}
+      } catch {}
     }
     gutter.addEventListener("pointerdown", (e) => {
       dragging = true;
@@ -1321,7 +1330,7 @@
       saved2 = null;
       try {
         localStorage.removeItem(SPLIT_KEY);
-      } catch (e) {}
+      } catch {}
     });
     (rowsMQ.addEventListener
       ? rowsMQ.addEventListener.bind(rowsMQ, "change")

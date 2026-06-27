@@ -1,6 +1,6 @@
 # Salam Web Playground
 
-Run Salam entirely in the browser. Edit code, run it, and preview layout pages —
+Run Salam entirely in the browser. Edit code, run it, and preview layout pages -
 powered by the Salam compiler compiled to **WebAssembly** plus a small
 text editor. Switching to **فارسی** flips the whole UI **and** the editor to
 true right-to-left (right-aligned, lines starting from the right); English is

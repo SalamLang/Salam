@@ -45,32 +45,53 @@ jobs:
   build-windows:
     name: Build Salam for Windows
     runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: 'GCC Version'
-        run: |
-          gcc --version
 
-      - name: Build salam.exe
+      # Use the MSYS2 toolchain preinstalled at C:\msys64 so the gcc that
+      # builds salam.exe and the static libLLVM we link against share one ABI.
+      - name: Install MINGW64 toolchain + static LLVM
+        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
+        env:
+          MSYSTEM: MINGW64
+          CHERE_INVOKING: '1'
         run: |
-          CC=gcc sh compiler/tools/bash/build-compiler.sh
+          pacman -Sy --noconfirm --needed \
+            mingw-w64-x86_64-gcc \
+            mingw-w64-x86_64-llvm \
+            make
+          gcc --version | head -1
+          llvm-config --version
+
+      # libLLVM is linked statically INTO salam.exe (the LLVM backend then runs
+      # in-process: no external clang/llc/lli, no WSL). -static also folds in
+      # libstdc++/libgcc/winpthread so salam.exe is a single standalone binary.
+      - name: Build salam.exe with embedded LLVM (static)
+        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
+        env:
+          MSYSTEM: MINGW64
+          CHERE_INVOKING: '1'
+        run: |
+          make -C compiler -j2 \
+            WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config CC=gcc \
+            EXTRA_LDFLAGS="-static -static-libgcc -static-libstdc++"
           test -f compiler/salam.exe || mv compiler/salam compiler/salam.exe
           ./compiler/salam.exe version
 
       - name: Stage self-contained bundle
+        shell: bash
         run: |
           set -eu
           DIST="salam-windows"
           mkdir -p "$DIST"
           cp compiler/salam.exe "$DIST/"
           cp -r compiler/std    "$DIST/std"
-          GCC_BIN="$(dirname "$(command -v gcc)")"
-          MINGW_ROOT="$(dirname "$GCC_BIN")"
-          cp -r "$MINGW_ROOT" "$DIST/mingw64"
+          # Bundle a real Tiny C Compiler next to salam for the default C
+          # backend (salam build). salam auto-discovers <dir>/tcc/tcc.exe.
+          curl -fsSL -o tcc.zip \
+            https://download.savannah.gnu.org/releases/tinycc/tcc-0.9.27-win64-bin.zip
+          7z x tcc.zip -o"$DIST" >/dev/null
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           {
             echo "Salam for Windows - self-contained."
@@ -78,15 +99,19 @@ jobs:
             echo "No installation needed. From this folder:"
             echo ""
             echo "  salam.exe version"
-            echo "  salam.exe exec  myprogram.salam            (run via the interpreter)"
-            echo "  salam.exe build myprogram.salam --output=myprogram.exe"
+            echo "  salam.exe exec  myprogram.salam              (tree-walking interpreter)"
+            echo "  salam.exe build myprogram.salam              (C backend via bundled tcc)"
+            echo "  salam.exe llvm  myprogram.salam --jit        (run via the built-in LLVM)"
+            echo "  salam.exe llvm  myprogram.salam --exec       (native exe via built-in LLVM)"
             echo ""
-            echo "salam.exe finds its std/ library and the bundled C compiler"
-            echo "(mingw64/) automatically - keep them next to salam.exe."
+            echo "LLVM is compiled into salam.exe itself - no clang/llc/lli needed."
+            echo "salam.exe finds its std/ library and the bundled tcc/ automatically;"
+            echo "keep them next to salam.exe."
           } > "$DIST/RUN-ME.txt"
           echo "bundle contents:"; ls -la "$DIST"
 
       - name: Zip the bundle
+        shell: bash
         run: |
           7z a -tzip salam-windows.zip salam-windows >/dev/null
           ls -la salam-windows.zip

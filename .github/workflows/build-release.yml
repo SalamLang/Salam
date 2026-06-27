@@ -12,14 +12,26 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Install dependencies
-        run: sudo apt-get install build-essential
-      - name: 'GCC Version'
+      - name: Install dependencies (static LLVM + system deps)
         run: |
-          gcc --version
-      - name: Build salam for Linux
+          sudo apt-get update
+          sudo apt-get install -y build-essential \
+            llvm-18-dev libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev
+          gcc --version | head -1
+          llvm-config-18 --version
+      - name: Build salam for Linux (embedded static LLVM)
         run: |
-          make -C compiler -j"$(nproc)"
+          make -C compiler -j"$(nproc)" \
+            WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config-18 CC=gcc \
+            EXTRA_LDFLAGS="-static-libgcc -static-libstdc++"
+          ./compiler/salam version
+      - name: Smoke-test the embedded LLVM backend
+        run: |
+          printf 'func main:\n    __ "ok-llvm"\nend\n' > smoke.salam
+          ./compiler/salam llvm smoke.salam --jit --log-level=warn
+          ./compiler/salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
+          ./compiler/salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
+          rm -f smoke.salam smoke_exe smoke.o salam_mod_*.c salam_mod_*.h
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -31,12 +43,26 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: 'GCC Version'
+      - name: Install dependencies (static LLVM)
         run: |
-          gcc --version
-      - name: Build salam for macOS
+          brew install llvm@18
+          "$(brew --prefix llvm@18)/bin/llvm-config" --version
+      - name: Build salam for macOS (embedded static LLVM)
         run: |
-          make -C compiler
+          LLVM_PREFIX="$(brew --prefix llvm@18)"
+          make -C compiler -j"$(sysctl -n hw.ncpu)" \
+            WITH_LLVM=1 LLVM_LINK_STATIC=1 \
+            LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config" CC=clang \
+            LLVM_CXXLIB=-lc++ \
+            EXTRA_LDFLAGS="-L$(brew --prefix)/lib"
+          ./compiler/salam version
+      - name: Smoke-test the embedded LLVM backend
+        run: |
+          printf 'func main:\n    __ "ok-llvm"\nend\n' > smoke.salam
+          ./compiler/salam llvm smoke.salam --jit --log-level=warn
+          ./compiler/salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
+          ./compiler/salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
+          rm -f smoke.salam smoke_exe smoke.o salam_mod_*.c salam_mod_*.h
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -105,20 +131,30 @@ jobs:
           } > "$DIST/RUN-ME.txt"
           echo "bundle contents:"; ls -la "$DIST"
 
-      - name: Smoke-test the embedded LLVM backend (diagnostic)
+      - name: Smoke-test the embedded LLVM backend
         shell: bash
         run: |
+          set -e
           cd salam-windows
           printf 'func main:\n    __ "ok-llvm"\nend\n' > smoke.salam
-          echo "== emit-obj =="; ./salam.exe llvm smoke.salam --emit-obj -o smoke.o --log-level=warn && ls -l smoke.o && echo "RESULT obj=OK" || echo "RESULT obj=FAIL rc=$?"
-          echo "== emit-asm =="; ./salam.exe llvm smoke.salam --emit-asm -o smoke.s --log-level=warn && echo "RESULT asm=OK" || echo "RESULT asm=FAIL rc=$?"
-          echo "== jit =="; ./salam.exe llvm smoke.salam --jit --log-level=warn && echo "RESULT jit=OK" || echo "RESULT jit=FAIL rc=$?"
-          echo "== build via bundled tcc =="; ./salam.exe build smoke.salam --output=smoke_tcc.exe --log-level=warn && ./smoke_tcc.exe && echo "RESULT tccbuild=OK" || echo "RESULT tccbuild=FAIL rc=$?"
-          echo "== llvm --exec (obj + bundled-tcc link) =="; ./salam.exe llvm smoke.salam --exec -o smoke_llvm.exe --log-level=warn && ./smoke_llvm.exe && echo "RESULT llvmexec=OK" || echo "RESULT llvmexec=FAIL rc=$?"
-          echo "== raw tcc link of an LLVM object =="; ./tcc/tcc.exe smoke.o -o smoke_raw.exe -lmsvcrt && ./smoke_raw.exe && echo "RESULT tcclinkobj=OK" || echo "RESULT tcclinkobj=FAIL rc=$?"
-          rm -f smoke.* smoke_*.exe salam_mod_*.c salam_mod_*.h
+          echo "[1] LLVM JIT (in-process ORC, no external tools)"
+          ./salam.exe llvm smoke.salam --jit --log-level=warn
+          echo "[2] LLVM emit-obj (in-process)"
+          ./salam.exe llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
+          ls -l smoke.o
+          echo "[3] C backend via bundled tcc"
+          ./salam.exe build smoke.salam --output=smoke_tcc.exe --log-level=warn
+          ./smoke_tcc.exe
+          echo "[4] LLVM --exec (best-effort: tcc cannot link LLVM COFF objects)"
+          if ./salam.exe llvm smoke.salam --exec -o smoke_llvm.exe --log-level=warn \
+               && ./smoke_llvm.exe; then
+            echo "    llvm --exec OK"
+          else
+            echo "    note: llvm --exec unavailable on Windows (no LLVM-capable linker);"
+            echo "          use 'salam llvm --jit' to run, or 'salam build' for a native exe."
+          fi
+          rm -f smoke.salam smoke*.exe smoke.o salam_mod_*.c salam_mod_*.h
           cd ..
-          echo "(diagnostic only; does not gate the build)"
 
       - name: Zip the bundle
         shell: bash

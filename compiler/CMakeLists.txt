@@ -74,6 +74,38 @@ if(CMAKE_C_COMPILER MATCHES "tcc")
     set(_is_tcc TRUE)
 endif()
 
+find_package(Git QUIET)
+set(SALAM_GIT_COMMIT "")
+set(SALAM_GIT_DATE "")
+set(SALAM_GIT_DIRTY "")
+if(Git_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../.git")
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE SALAM_GIT_COMMIT
+        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" show -s --format=%cs HEAD
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE SALAM_GIT_DATE
+        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" status --porcelain
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE SALAM_GIT_STATUS
+        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(NOT SALAM_GIT_STATUS STREQUAL "")
+        set(SALAM_GIT_DIRTY "-dirty")
+    endif()
+endif()
+if(SALAM_GIT_COMMIT)
+    target_compile_definitions(salam PRIVATE
+        SALAM_GIT_COMMIT="${SALAM_GIT_COMMIT}"
+        SALAM_GIT_DATE="${SALAM_GIT_DATE}"
+        SALAM_GIT_DIRTY="${SALAM_GIT_DIRTY}")
+    message(STATUS "Salam: git ${SALAM_GIT_COMMIT}${SALAM_GIT_DIRTY} (${SALAM_GIT_DATE})")
+endif()
+
 if(MSVC)
     target_compile_options(salam PRIVATE /W3 /wd4244 /wd4267 /wd4101)
     target_compile_definitions(salam PRIVATE _CRT_SECURE_NO_WARNINGS)

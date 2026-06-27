@@ -27,6 +27,16 @@ endif
 
 CPPFLAGS ?= -Isrc
 CPPFLAGS += -DSALAM_STDLIB_PREFIX='"$(DATADIR)"'
+
+GIT             := git
+SALAM_GIT_COMMIT := $(shell $(GIT) rev-parse --short HEAD 2>/dev/null)
+SALAM_GIT_DATE   := $(shell $(GIT) show -s --format=%cs HEAD 2>/dev/null)
+SALAM_GIT_DIRTY  := $(shell test -n "$$($(GIT) status --porcelain 2>/dev/null)" && echo '-dirty')
+ifneq ($(SALAM_GIT_COMMIT),)
+  CPPFLAGS += -DSALAM_GIT_COMMIT='"$(SALAM_GIT_COMMIT)"' \
+              -DSALAM_GIT_DATE='"$(SALAM_GIT_DATE)"'     \
+              -DSALAM_GIT_DIRTY='"$(SALAM_GIT_DIRTY)"'
+endif
 CFLAGS   ?= $(OPTIMIZE) -std=gnu89 -Wall -Wextra                    \
             -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable
 DEPFLAGS  = -MMD -MP

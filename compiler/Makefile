@@ -40,19 +40,21 @@ endif
 WITH_LLVM       ?= 0
 LLVM_CONFIG     ?= llvm-config
 LLVM_LINK_STATIC ?= 0
+LLVM_CXXLIB     ?= -lstdc++
 ifeq ($(WITH_LLVM),1)
-  LLVM_COMPONENTS := core irreader bitwriter analysis executionengine mcjit \
+  LLVM_COMPONENTS := core irreader bitwriter analysis orcjit \
                      native passes target all-targets
   ifeq ($(LLVM_LINK_STATIC),1)
     LLVM_STATIC_FLAG := --link-static
   else
     LLVM_STATIC_FLAG :=
   endif
-  CPPFLAGS += -DSALAM_HAVE_LLVM -I$(shell $(LLVM_CONFIG) --includedir)
+  CPPFLAGS += -DSALAM_HAVE_LLVM -I$(shell $(LLVM_CONFIG) --includedir) \
+              -DSALAM_LLVM_VERSION_MAJOR=$(shell $(LLVM_CONFIG) --version | cut -d. -f1)
   LDFLAGS  += $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --ldflags)
   # libLLVM is C++, so pull in the C++ runtime and LLVM's system deps last.
   LDLIBS   += $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --libs $(LLVM_COMPONENTS)) \
-              $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --system-libs) -lstdc++
+              $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --system-libs) $(LLVM_CXXLIB)
 endif
 
 BUILD_DIR ?= build/$(BUILD)

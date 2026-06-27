@@ -1,9 +1,7 @@
 <div align="center">
 
 <p>
-    <a href="#">
-        <img width="150" src="https://raw.githubusercontent.com/SalamLang/Salam/main/design/logo/logo-box.svg" alt="The Salam Programming Language - زبان برنامه نویسی سلام">
-    </a>
+    <img width="150" src="https://raw.githubusercontent.com/SalamLang/Salam/main/design/logo/logo-box.svg" alt="The Salam Programming Language - زبان برنامه نویسی سلام">
 </p>
 
 # Salam Programming Language

@@ -49,8 +49,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # Use the MSYS2 toolchain preinstalled at C:\msys64 so the gcc that
-      # builds salam.exe and the static libLLVM we link against share one ABI.
       - name: Install MINGW64 toolchain + static LLVM
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
@@ -64,9 +62,6 @@ jobs:
           gcc --version | head -1
           llvm-config --version
 
-      # libLLVM is linked statically INTO salam.exe (the LLVM backend then runs
-      # in-process: no external clang/llc/lli, no WSL). -static also folds in
-      # libstdc++/libgcc/winpthread so salam.exe is a single standalone binary.
       - name: Build salam.exe with embedded LLVM (static)
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
@@ -109,6 +104,30 @@ jobs:
             echo "keep them next to salam.exe."
           } > "$DIST/RUN-ME.txt"
           echo "bundle contents:"; ls -la "$DIST"
+
+      - name: Smoke-test the embedded LLVM backend
+        shell: bash
+        run: |
+          set -e
+          cd salam-windows
+          printf 'func main:\n    __ "ok-llvm"\nend\n' > smoke.salam
+          echo "[1] LLVM JIT (in-process, no external tools)"
+          ./salam.exe llvm smoke.salam --jit --log-level=warn
+          echo "[2] LLVM emit-obj (in-process)"
+          ./salam.exe llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
+          ls -l smoke.o
+          echo "[3] C backend via bundled tcc"
+          ./salam.exe build smoke.salam --output=smoke_tcc.exe --log-level=warn
+          ./smoke_tcc.exe
+          echo "[4] LLVM exec (in-process obj + bundled-tcc link) [best-effort]"
+          if ./salam.exe llvm smoke.salam --exec -o smoke_llvm.exe --log-level=warn \
+               && ./smoke_llvm.exe; then
+            echo "    llvm --exec OK"
+          else
+            echo "    WARN: llvm --exec link failed; --jit and --emit-obj still work"
+          fi
+          rm -f smoke.salam smoke*.exe smoke.o salam_mod_*.c salam_mod_*.h
+          cd ..
 
       - name: Zip the bundle
         shell: bash

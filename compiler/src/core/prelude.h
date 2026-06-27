@@ -24,6 +24,12 @@
 
 #define CONST_CAST(p) ((void *)(uintptr_t)(const void *)(p))
 
+#if defined(__GNUC__) && !defined(__TINYC__)
+#  define SALAM_FALLTHROUGH __attribute__((fallthrough))
+#else
+#  define SALAM_FALLTHROUGH ((void)0)
+#endif
+
 SAL_INLINE char *sal_strdup(const char *s)
 {
     size_t n = strlen(s) + 1;

@@ -36,6 +36,8 @@ layout_result_t *layout_generate(arena_t *a, logger_t *log, diag_engine_t *diag,
     cx.a = a; cx.log = log; cx.diag = diag; cx.file = file;
     cx.title = "Salam Page"; cx.lang = "en"; cx.dir = "ltr";
     vec_init(&cx.css_seen);
+    vec_init(&cx.cls_keys);
+    vec_init(&cx.cls_names);
     sb_t html, css, js; sb_init(&html); sb_init(&css); sb_init(&js);
     cx.html = &html; cx.css = &css; cx.js = &js; cx.indent = 0;
     layout_localize_names(layout_block);   

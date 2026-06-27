@@ -102,7 +102,7 @@ static ast_node_t *parse_statement(parser_t *p)
                 p_term(p);
                 return n;
             }
-            __attribute__((fallthrough));
+            SALAM_FALLTHROUGH;
         }
         default: {
             ast_node_t *e = parse_expr(p);

@@ -385,10 +385,9 @@ static llv_t ll_call_len(ll_t *ll, ast_node_t *n)
         return ll_poison("i32");
     }
     llv_t v = ll_expr(ll, arg);
-    const char *l = ll_new_tmp(ll), *r = ll_new_tmp(ll);
-    ll_emit(ll, "%s = call i64 @strlen(ptr %s)", l, v.ref);
-    ll_emit(ll, "%s = trunc i64 %s to i32", r, l);
-    return (llv_t){ r, "i32" };
+    const char *l = ll_new_tmp(ll);
+    ll_emit(ll, "%s = call %s @strlen(ptr %s)", l, ll->usize, v.ref);
+    return (llv_t){ ll_usize_to_i32(ll, l), "i32" };
 }
 
 static llv_t ll_emit_call(ll_t *ll, ast_node_t *n, func_sig_t *sig, const char *lead,
@@ -432,10 +431,9 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
     const char *recv = ll_expr(ll, obj).ref;
     const char *r;
     if (!strcmp(m, "len") || !strcmp(m, "length")) {
-        const char *l = ll_new_tmp(ll); r = ll_new_tmp(ll);
-        ll_emit(ll, "%s = call i64 @strlen(ptr %s)", l, recv);
-        ll_emit(ll, "%s = trunc i64 %s to i32", r, l);
-        *out = (llv_t){ r, "i32" }; return true;
+        const char *l = ll_new_tmp(ll);
+        ll_emit(ll, "%s = call %s @strlen(ptr %s)", l, ll->usize, recv);
+        *out = (llv_t){ ll_usize_to_i32(ll, l), "i32" }; return true;
     }
     if (!strcmp(m, "concat") && na == 1) {
         const char *a = ll_expr(ll, (ast_node_t *)n->list.data[0]).ref;

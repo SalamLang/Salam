@@ -31,9 +31,17 @@ void cg_kv(const char *ts, char *kbuf, char *vbuf, size_t cap)
 
 void cg_put_ident_byte(sb_t *b, unsigned char c)
 {
+    static const char hex[] = "0123456789abcdef";
     if (isalnum(c))      sb_putc(b, (char)c);
     else if (c == '_')   sb_puts(b, "__");
-    else { char h[5]; snprintf(h, sizeof(h), "_%02x", c); sb_puts(b, h); }
+    else {
+        char h[4];
+        h[0] = '_';
+        h[1] = hex[(c >> 4) & 0xf];
+        h[2] = hex[c & 0xf];
+        h[3] = '\0';
+        sb_puts(b, h);
+    }
 }
 
 const char *cg_cident(cg_t *cg, const char *name)
@@ -108,15 +116,27 @@ void cg_vec_elem(const char *ts, char *ebuf, size_t cap)
     memcpy(ebuf, es, el); ebuf[el] = 0;
 }
 
+/* Append `str` to `s`, encoded as a C-identifier fragment for the symbol
+ * manglers: `*` -> "_ptr", `[` -> "_arr", `]` dropped (it pairs with "_arr"),
+ * and every other byte via cg_put_ident_byte. `skip_spaces` drops spaces
+ * (used for Vector element names) instead of hex-encoding them as "_20"
+ * (used for function-parameter type codes); the two callers differ only here. */
+static void cg_encode_typestr(sb_t *s, const char *str, bool skip_spaces)
+{
+    const unsigned char *p = (const unsigned char *)str;
+    for (; *p; p++) {
+        if (*p == '*')                     sb_puts(s, "_ptr");
+        else if (*p == '[')                sb_puts(s, "_arr");
+        else if (*p == ']')                { /* array close: dropped */ }
+        else if (*p == ' ' && skip_spaces) { /* dropped */ }
+        else                               cg_put_ident_byte(s, *p);
+    }
+}
+
 static const char *cg_vec_code_str(cg_t *cg, const char *elem)
 {
     sb_t s; sb_init(&s);
-    { const unsigned char *p = (const unsigned char *)elem; for (; *p; p++) {
-        if (*p == '*') sb_puts(&s, "_ptr");
-        else if (*p == '[') sb_puts(&s, "_arr");
-        else if (*p == ']' || *p == ' ') {}
-        else cg_put_ident_byte(&s, *p);
-    } }
+    cg_encode_typestr(&s, elem, true);
     const char *r = arena_strdup(cg->a, sb_cstr(&s)); sb_free(&s); return r;
 }
 
@@ -179,12 +199,7 @@ static const char *type_code(cg_t *cg, type_t *t)
 {
     const char *ts = type_to_string(cg->sem->tc, t);
     sb_t s; sb_init(&s);
-    { const unsigned char *p = (const unsigned char *)ts; for (; *p; p++) {
-        if (*p == '*') sb_puts(&s, "_ptr");
-        else if (*p == '[') sb_puts(&s, "_arr");
-        else if (*p == ']') {}
-        else cg_put_ident_byte(&s, *p);
-    } }
+    cg_encode_typestr(&s, ts, false);
     const char *r = arena_strdup(cg->a, sb_cstr(&s)); sb_free(&s); return r;
 }
 

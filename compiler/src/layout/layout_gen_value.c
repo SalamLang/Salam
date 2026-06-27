@@ -104,6 +104,28 @@ const char *val_str(layout_ctx_t *cx, ast_node_t *v)
     }
 }
 
+static const char *class_seq_name(arena_t *a, unsigned n)
+{
+    char tmp[16]; int i = 0;
+    unsigned x = n + 1;
+    while (x > 0) { x--; tmp[i++] = (char)('a' + (x % 26)); x /= 26; }
+    char buf[16]; int j = 0;
+    while (i > 0) buf[j++] = tmp[--i];
+    buf[j] = '\0';
+    return arena_strdup(a, buf);
+}
+
+const char *class_for_key(layout_ctx_t *cx, const char *key)
+{
+    { size_t i = 0; for (; i < cx->cls_keys.len; i++)
+        if (strcmp((const char *)cx->cls_keys.data[i], key) == 0)
+            return (const char *)cx->cls_names.data[i]; }
+    const char *name = class_seq_name(cx->a, cx->cls_next++);
+    vec_push(cx->a, &cx->cls_keys, CONST_CAST(arena_strdup(cx->a, key)));
+    vec_push(cx->a, &cx->cls_names, CONST_CAST(name));
+    return name;
+}
+
 void emit_rule(layout_ctx_t *cx, const char *rule)
 {
     { size_t i = 0; for (; i < cx->css_seen.len; i++)

@@ -238,7 +238,10 @@ const char *salam_web_emit(const char *source, const char *lang, const char *pha
             free(d);
             goto done;
         }
-        const char *part = !strcmp(phase, "html") ? res->html
+        const char *css_href = (res->css && res->css[0]) ? "style.css"  : NULL;
+        const char *js_href  = (res->js  && res->js[0])  ? "script.js"  : NULL;
+        const char *part = !strcmp(phase, "html")
+                             ? layout_document(arena, res, false, css_href, js_href)
                          : !strcmp(phase, "css")  ? res->css
                                                   : res->js;
         r = set_result(part ? part : "");

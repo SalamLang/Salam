@@ -2,10 +2,18 @@ name: 🌐 Build and Deploy WebAssembly
 on:
   push:
     branches:
-      - next-generation-ts
       - main
+    paths:
+      - 'compiler/src/**'
+      - 'compiler/std/**'
+      - 'compiler/tools/**'
+      - '.github/workflows/web-assembly.yml'
+  workflow_dispatch:
 permissions:
   contents: write
+concurrency:
+  group: web-assembly-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build-deploy:
     name: Build and Deploy
@@ -13,46 +21,40 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Install Bun
+
+      - name: Install Emscripten SDK
         run: |
-          curl -fsSL https://bun.sh/install | bash
-          echo "$HOME/.bun/bin" >> $GITHUB_PATH
-          export PATH="$HOME/.bun/bin:$PATH"
-          bun --version
-      - name: Setup GIT config
+          set -e
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          cd "$HOME/emsdk"
+          ./emsdk install latest
+          ./emsdk activate latest
+          . ./emsdk_env.sh
+          echo "$EMSDK" >> "$GITHUB_PATH"
+          echo "$EMSDK/upstream/emscripten" >> "$GITHUB_PATH"
+          echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+          echo "EM_CONFIG=$EMSDK/.emscripten" >> "$GITHUB_ENV"
+
+      - name: Build native compiler + WebAssembly playground bundle
         run: |
-          git clone https://github.com/SalamLang/Salam-Editor.git
-          git config --global user.name "Max Base (Salam)"
-          git config --global user.email "$EMAIL"
-      - name: Run WebAssembly build script
+          set -e
+          emcc --version
+          cd compiler
+          sh tools/bash/update-playground.sh
+
+      - name: Show generated editor assets
         run: |
-          cd compiler/src
-          bunx esbuild main.ts --bundle --platform=browser --outfile=../../salam-wa.js --external:fs --external:path
-          cd ..
-          bunx terser salam-wa.js --compress --mangle -o salam-wa.js
-          bunx javascript-obfuscator salam-wa.js --output salam-wa.js --compact true --control-flow-flattening true
-      - name: Calculate checksums of original files
-        id: original_checksums
+          ls -l editor/salam-wa.js editor/salam-wa.wasm editor/salam-wa.data editor/keywords.js
+
+      - name: Commit and push regenerated editor assets
         run: |
-          ls -l salam-wa.js
-          sha256sum salam-wa.js > js-checksum.txt || echo "Error calculating checksum for salam-wa.js"
-          echo "JS_CHECKSUM=$(cat js-checksum.txt | awk '{ print $1 }')" >> $GITHUB_ENV
-      - name: Calculate checksums of new files in Salam-Editor
-        id: new_checksums
-        run: |
-          cd ..
-          cd Salam-Editor
-          git checkout dev
-          cd src/scripts/
-          ls -l salam-wa.js
-          sha256sum salam-wa.js > js-checksum-editor.txt || echo "Error calculating checksum for salam-wa.js"
-          echo "JS_CHECKSUM_EDITOR=$(cat js-checksum-editor.txt | awk '{ print $1 }')" >> $GITHUB_ENV
-      - name: Commit and push changes if needed
-        if: ${{ env.JS_CHECKSUM != env.JS_CHECKSUM_EDITOR }}
-        run: |
-          cp ./salam-wa.js ./Salam-Editor/src/scripts/
-          cd Salam-Editor
-          sudo chown -R www-data:www-data *
-          git add src/scripts/salam-wa.js
-          git commit -m "Release: Update WebAssembly files"
-          git push https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/SalamLang/Salam-Editor.git
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add editor/salam-wa.js editor/salam-wa.wasm editor/salam-wa.data editor/keywords.js
+          if git diff --cached --quiet; then
+            echo "No changes to the editor bundle; nothing to commit."
+            exit 0
+          fi
+          git commit -m "Release: Rebuild WebAssembly playground bundle [skip ci]"
+          git push origin HEAD:${GITHUB_REF_NAME}

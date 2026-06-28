@@ -45,13 +45,33 @@ void cg_put_ident_byte(sb_t *b, unsigned char c)
     }
 }
 
+/* True when `s` is a C reserved keyword or a <stdbool.h> macro. Such a name is a
+ * valid Salam identifier (e.g. a struct field `if` or `type`) but cannot be used
+ * verbatim in generated C, so cg_cident appends '_' to it. Strict C compilers
+ * (gcc, modern tcc) reject `bool if;`; only lenient tcc builds let it slide. */
+static bool cg_is_c_keyword(const char *s)
+{
+    static const char *const kw[] = {
+        "auto","break","case","char","const","continue","default","do","double",
+        "else","enum","extern","float","for","goto","if","inline","int","long",
+        "register","restrict","return","short","signed","sizeof","static","struct",
+        "switch","typedef","union","unsigned","void","volatile","while","asm",
+        "bool","true","false","_Bool","_Complex","_Imaginary","_Alignas","_Alignof",
+        "_Atomic","_Generic","_Noreturn","_Static_assert","_Thread_local",
+    };
+    size_t i = 0;
+    for (; i < sizeof(kw) / sizeof(kw[0]); i++)
+        if (strcmp(s, kw[i]) == 0) return true;
+    return false;
+}
+
 const char *cg_cident(cg_t *cg, const char *name)
 {
     if (!name || !name[0]) return "_";
     bool ok = !isdigit((unsigned char)name[0]);
     { const unsigned char *p = (const unsigned char *)name; for (; ok && *p; p++)
         if (!(isalnum(*p))) ok = false; }
-    if (ok) return name;
+    if (ok) return cg_is_c_keyword(name) ? cg_fmt(cg, "%s_", name) : name;
     sb_t b; sb_init(&b);
     if (isdigit((unsigned char)name[0])) sb_putc(&b, '_');
     { const unsigned char *p = (const unsigned char *)name; for (; *p; p++)

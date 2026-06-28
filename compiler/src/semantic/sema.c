@@ -35,10 +35,10 @@
 #endif
 
 static char  g_stdlib_root_buf[1200];
-static const char *g_stdlib_root = NULL;   /* resolved root, or "" for cwd */
+static const char *g_stdlib_root = NULL;
 static bool        g_stdlib_resolved = false;
 
-static bool file_exists(const char *p);    /* fwd decl */
+static bool file_exists(const char *p);
 
 static bool root_has_std(const char *root)
 {
@@ -55,7 +55,7 @@ static void derive_root(const char *path, char *out, size_t n)
     if (file_exists(probe)) { sal_snprintf(out, n, "%s", path); return; }
 
     sal_snprintf(probe, sizeof probe, "%s/core/core.salam", path);
-    if (file_exists(probe)) {                 /* path is the std/ dir itself */
+    if (file_exists(probe)) {
         sal_snprintf(out, n, "%s", path);
         char *s = out + strlen(out);
         while (s > out && (s[-1] == '/' || s[-1] == '\\')) *--s = '\0';
@@ -65,7 +65,7 @@ static void derive_root(const char *path, char *out, size_t n)
         if (cut) *cut = '\0'; else out[0] = '\0';
         return;
     }
-    sal_snprintf(out, n, "%s", path);             /* trust as-is */
+    sal_snprintf(out, n, "%s", path);
 }
 
 static bool get_exe_dir(char *out, size_t n)
@@ -145,18 +145,16 @@ static const char *resolve_stdlib_root(const char *explicit_path)
     {
         char exedir[1024];
         if (get_exe_dir(exedir, sizeof exedir)) {
-            /* 3. salam.cfg next to the binary */
             char cfg[1100], val[1024];
             sal_snprintf(cfg, sizeof cfg, "%s/salam.cfg", exedir);
             if (read_cfg_stdlib(cfg, val, sizeof val)) {
                 derive_root(val, buf, N);
                 if (root_has_std(buf)) return buf;
             }
-            /* 4. auto-discovery relative to the binary */
             {
                 static const char *rel[] = {
-                    ".",                /* binary sits next to std/ (in-repo / portable) */
-                    "../share/salam",   /* PREFIX/bin + PREFIX/share/salam (make install) */
+                    ".",
+                    "../share/salam",
                     "../lib/salam",
                     ".."
                 };
@@ -380,7 +378,7 @@ int salam_package_files(arena_t *a, const char *main_path, const char **out, int
         size_t stemlen = dot ? (size_t)(dot - mainbase) : strlen(mainbase);
         const char *dirseg = (dir && dir[0]) ? base_of(dir) : "";
         if (strlen(dirseg) != stemlen || strncmp(dirseg, mainbase, stemlen) != 0)
-            return n;   /* not a package main file: load it alone */
+            return n;
     }
 
     char dbuf[1024];
@@ -419,7 +417,6 @@ int salam_package_files(arena_t *a, const char *main_path, const char **out, int
         closedir(d);
     }
 #endif
-    /* Stable order for reproducible builds; leave out[0] (main) pinned. */
     { int i = 2; for (; i < n; i++) {
         const char *key = out[i]; int j = i - 1;
         while (j >= 1 && strcmp(out[j], key) > 0) { out[j + 1] = out[j]; j--; }

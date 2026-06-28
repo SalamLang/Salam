@@ -19,15 +19,15 @@
 #include "core/span.h"
 
 typedef enum {
-    DIAG_STYLE_RUST  = 0, /* Rust-like: multi-line with --> and ^^ (default) */
-    DIAG_STYLE_GCC,       /* GCC-like : file:line:col: error: msg + ^ caret  */
-    DIAG_STYLE_CLANG,     /* Clang-like: range underline with vertical label  */
+    DIAG_STYLE_RUST  = 0,
+    DIAG_STYLE_GCC,
+    DIAG_STYLE_CLANG,
 } diag_style_t;
 
 typedef enum {
-    DIAG_FORMAT_HUMAN = 0, /* ASCII-art (default)            */
-    DIAG_FORMAT_JSON,      /* JSON for IDE / tool integration */
-    DIAG_FORMAT_XML,       /* XML for IDE / tool integration  */
+    DIAG_FORMAT_HUMAN = 0,
+    DIAG_FORMAT_JSON,
+    DIAG_FORMAT_XML,
 } diag_format_t;
 
 bool diag_style_from_string(const char *s, diag_style_t *out);

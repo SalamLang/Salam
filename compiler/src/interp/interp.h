@@ -22,11 +22,11 @@
 #include "semantic/sema.h"
 
 typedef struct {
-    FILE       *out;          /* print / println sink (default stdout)   */
-    FILE       *err;          /* printerr sink (default stderr)          */
-    const char *input_data;   /* preloaded stdin (web); NULL => real stdin */
-    const char *lang;         /* language code for lang() (default "en") */
-    int         timeout_ms;   /* watchdog: max run time; 0 => default (5000)  */
+    FILE       *out;
+    FILE       *err;
+    const char *input_data;
+    const char *lang;
+    int         timeout_ms;
 } interp_options_t;
 
 int interp_run(arena_t *a, logger_t *log, ast_node_t *program,

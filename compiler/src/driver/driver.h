@@ -15,7 +15,7 @@
 #ifndef SALAM_DRIVER_DRIVER_H
 #define SALAM_DRIVER_DRIVER_H
 
-#include "core/sal_types.h" /* bool */
+#include "core/sal_types.h"
 
 int driver_main(int argc, char **argv);
 

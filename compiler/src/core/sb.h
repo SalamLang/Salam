@@ -35,6 +35,6 @@ void        sb_printf(sb_t *s, const char *fmt, ...);
 
 void        sb_put_shell_arg(sb_t *s, const char *arg);
 
-const char *sb_cstr(const sb_t *s);   /* never NULL; "" when empty */
+const char *sb_cstr(const sb_t *s);
 
 #endif /* SALAM_CORE_SB_H */

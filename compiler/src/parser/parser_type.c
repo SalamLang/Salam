@@ -19,8 +19,16 @@
 static void parse_array_dims(parser_t *p, ast_node_t *n)
 {
     while (p_match(p, TK_LBRACKET)) {
+        p_skip_terminators(p);
+
+        if (p_at(p, TK_COLON)) {
+            p_advance(p);
+            p_skip_terminators(p);
+            p_expect(p, TK_RBRACKET, "']' to close slice type 'T[:]'");
+            n->is_slice = true;
+            return;
+        }
         ast_node_t *dim = NULL;
-        p_skip_terminators(p);                      
         if (!p_at(p, TK_RBRACKET)) dim = parse_expr(p);
         p_skip_terminators(p);
         p_expect(p, TK_RBRACKET, "']' in array type");

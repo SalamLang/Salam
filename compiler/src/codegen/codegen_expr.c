@@ -311,6 +311,16 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                     }
                 }
             }
+            if (cg_is_slice_ts(n->a->type_str)) {
+                char elem[96]; cg_slice_elem(n->a->type_str, elem, sizeof elem);
+                const char *ec = cg_ctype(cg, elem);
+                const char *s   = cg_expr(cg, n->a);
+                const char *idx = cg_expr(cg, n->b);
+                /* lvalue: deref the element pointer. The slice value, index and
+                   element size are passed to salam_slice_at once each. */
+                return cg_fmt(cg, "(*(%s*)salam_slice_at(%s, %s, (int64_t)sizeof(%s), %d))",
+                              ec, s, idx, ec, cg->safe ? 1 : 0);
+            }
             const char *arr = cg_expr(cg, n->a);
             const char *idx = cg_expr(cg, n->b);
             if (cg->safe) {
@@ -318,6 +328,23 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                 if (sz > 0) return cg_fmt(cg, "%s[salam_idx(%s, %ld)]", arr, idx, sz);
             }
             return cg_fmt(cg, "%s[%s]", arr, idx);
+        }
+        case AST_SLICE: {
+            char elem[96]; cg_slice_elem(n->type_str, elem, sizeof elem);
+            const char *ec = cg_ctype(cg, elem);
+            const char *base = cg_expr(cg, n->a);
+            const char *lo = n->b ? cg_expr(cg, n->b) : "0";
+            if (cg_is_slice_ts(n->a->type_str)) {
+                if (n->c)
+                    return cg_fmt(cg, "salam_slice_sub(%s, %s, %s, 1, (int64_t)sizeof(%s))",
+                                  base, lo, cg_expr(cg, n->c), ec);
+                return cg_fmt(cg, "salam_slice_sub(%s, %s, 0, 0, (int64_t)sizeof(%s))",
+                              base, lo, ec);
+            }
+            const char *hi = n->c ? cg_expr(cg, n->c)
+                                  : cg_fmt(cg, "%ld", array_size_of(n->a->type_str));
+            return cg_fmt(cg, "salam_slice_new((void*)(%s), %s, %s, (int64_t)sizeof(%s))",
+                          base, lo, hi, ec);
         }
         case AST_LAMBDA:
             return cg_lambda_value(cg, n);

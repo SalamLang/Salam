@@ -66,11 +66,11 @@ static void g_subst(arena_t *a, ast_node_t *n, vec_t *params, vec_t *args)
 static const char *g_instance_name(sema_t *s, const char *base, vec_t *argtypes)
 {
     char buf[512]; size_t o = 0;
-    o += (size_t)sal_snprintf(buf + o, sizeof buf - o, "%s", base);
+    o = sal_catf(buf, sizeof buf, o, "%s", base);
     { size_t i = 0; for (; i < argtypes->len && o < sizeof buf - 130; i++) {
         char san[128];
         g_sanitize(type_to_string(s->tc, (type_t *)argtypes->data[i]), san, sizeof san);
-        o += (size_t)sal_snprintf(buf + o, sizeof buf - o, "_%s", san);
+        o = sal_catf(buf, sizeof buf, o, "_%s", san);
     } }
     return arena_strdup(s->a, buf);
 }

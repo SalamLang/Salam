@@ -278,8 +278,8 @@ const char *type_to_string(type_ctx_t *tc, const type_t *t)
             char dims[128] = ""; size_t dn = 0;
             const type_t *cur = t;
             while (cur && cur->kind == TY_ARRAY) {
-                if (cur->length) dn += (size_t)sal_snprintf(dims + dn, sizeof(dims) - dn, "[%zu]", cur->length);
-                else             dn += (size_t)sal_snprintf(dims + dn, sizeof(dims) - dn, "[]");
+                if (cur->length) dn = sal_catf(dims, sizeof(dims), dn, "[%zu]", cur->length);
+                else             dn = sal_catf(dims, sizeof(dims), dn, "[]");
                 cur = cur->elem;
             }
             char buf[160];
@@ -301,11 +301,11 @@ const char *type_to_string(type_ctx_t *tc, const type_t *t)
         case TY_FILE: return "File";
         case TY_FUNC: {
             char buf[256]; size_t o = 0;
-            o += (size_t)sal_snprintf(buf + o, sizeof(buf) - o, "func(");
+            o = sal_catf(buf, sizeof(buf), o, "func(");
             { size_t i = 0; for (; i < t->params.len && o < sizeof(buf) - 32; i++)
-                o += (size_t)sal_snprintf(buf + o, sizeof(buf) - o, "%s%s",
+                o = sal_catf(buf, sizeof(buf), o, "%s%s",
                         i ? ", " : "", type_to_string(tc, (type_t *)t->params.data[i])); }
-            o += (size_t)sal_snprintf(buf + o, sizeof(buf) - o, ") %s", type_to_string(tc, t->elem));
+            o = sal_catf(buf, sizeof(buf), o, ") %s", type_to_string(tc, t->elem));
             return arena_strdup(tc->a, buf);
         }
     }

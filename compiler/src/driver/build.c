@@ -283,7 +283,8 @@ int driver_build(options_t *opt)
             char obj[260]; sal_snprintf(obj, sizeof(obj), "%.*s.o", (int)(strlen(cfiles[i]) - 2), cfiles[i]);
             sb_t cmd; sb_init(&cmd);
             sb_puts(&cmd, opt->cc); sb_puts(&cmd, " -c -I."); sb_puts(&cmd, dbg_flag);
-            sb_puts(&cmd, " "); sb_puts(&cmd, cfiles[i]); sb_puts(&cmd, " -o "); sb_puts(&cmd, obj);
+            sb_putc(&cmd, ' '); sb_put_shell_arg(&cmd, cfiles[i]);
+            sb_puts(&cmd, " -o "); sb_put_shell_arg(&cmd, obj);
             LOG_I(log, PH_DRIVER, "assembling: %s", sb_cstr(&cmd));
             crc = system(sb_cstr(&cmd)); sb_free(&cmd);
         } }
@@ -307,7 +308,7 @@ int driver_build(options_t *opt)
         const char *lm = " -lm";
 #endif
         sb_t cmd; sb_init(&cmd);
-        sb_puts(&cmd, opt->cc); sb_puts(&cmd, " -I. -o "); sb_puts(&cmd, output);
+        sb_puts(&cmd, opt->cc); sb_puts(&cmd, " -I. -o "); sb_put_shell_arg(&cmd, output);
         if (opt->debug_info) {
             if (use_tcc)
                 LOG_W(log, PH_DRIVER,
@@ -338,7 +339,7 @@ int driver_build(options_t *opt)
                 sb_putc(&cmd, c);
             } }
         } }
-        { int i = 0; for (; i < ncfiles; i++) { sb_putc(&cmd, ' '); sb_puts(&cmd, cfiles[i]); } }
+        { int i = 0; for (; i < ncfiles; i++) { sb_putc(&cmd, ' '); sb_put_shell_arg(&cmd, cfiles[i]); } }
         sb_puts(&cmd, lm);  
         
         { int i = 0; for (; i < nlinks; i++)

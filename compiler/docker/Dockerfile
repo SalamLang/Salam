@@ -55,7 +55,7 @@ ENTRYPOINT ["sh", "tools/bash/docker-dev.sh"]
 
 FROM toolchain AS builder
 COPY . .
-RUN make -j"$(nproc)" && make install PREFIX=/usr/local
+RUN make OUTDIR=. -j"$(nproc)" && make OUTDIR=. install PREFIX=/usr/local
 RUN salam --version || true
 
 FROM toolchain AS prod

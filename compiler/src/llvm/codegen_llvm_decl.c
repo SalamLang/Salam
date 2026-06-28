@@ -38,12 +38,17 @@ void ll_emit_struct_types(ll_t *ll, ast_node_t *program)
     sb_puts(ll->g, "\n");
 }
 
+static void ll_put_ident_byte(sb_t *b, unsigned char c)
+{
+    if (isalnum(c))      sb_putc(b, (char)c);
+    else if (c == '_')   sb_puts(b, "__");
+    else { char h[5]; snprintf(h, sizeof h, "_%02x", c); sb_puts(b, h); }
+}
+
 static void ll_put_ident(sb_t *b, const char *name)
 {
-    { const unsigned char *p = (const unsigned char *)name; for (; p && *p; p++) {
-        if (isalnum(*p) || *p == '_') sb_putc(b, (char)*p);
-        else { char h[5]; snprintf(h, sizeof h, "_%02x", *p); sb_puts(b, h); }
-    } }
+    { const unsigned char *p = (const unsigned char *)name; for (; p && *p; p++)
+        ll_put_ident_byte(b, *p); }
 }
 
 static void ll_put_type_code(sb_t *b, const char *ts)
@@ -52,8 +57,7 @@ static void ll_put_type_code(sb_t *b, const char *ts)
         if (*p == '*') sb_puts(b, "_ptr");
         else if (*p == '[') sb_puts(b, "_arr");
         else if (*p == ']' || *p == ' ') {}
-        else if (isalnum(*p) || *p == '_') sb_putc(b, (char)*p);
-        else { char h[5]; snprintf(h, sizeof h, "_%02x", *p); sb_puts(b, h); }
+        else ll_put_ident_byte(b, *p);
     } }
 }
 
@@ -76,10 +80,12 @@ func_sig_t *ll_pick_overload(ll_t *ll, symbol_t *sym, ast_node_t *call)
     func_sig_t *arity = NULL;
     { size_t i = 0; for (; i < sym->overloads.len; i++) {
         func_sig_t *sig = (func_sig_t *)sym->overloads.data[i];
-        if (sig->params.len != call->list.len) continue;
+        if (call->list.len < sig->required) continue;
+        if (!sig->variadic && call->list.len > sig->params.len) continue;
         if (!arity) arity = sig;
+        size_t nfix = call->list.len < sig->params.len ? call->list.len : sig->params.len;
         bool ok = true;
-        { size_t j = 0; for (; j < sig->params.len && ok; j++) {
+        { size_t j = 0; for (; j < nfix && ok; j++) {
             ast_node_t *arg = (ast_node_t *)call->list.data[j];
             const char *pt = type_to_string(ll->sem->tc, (type_t *)sig->params.data[j]);
             if (!arg->type_str || strcmp(arg->type_str, pt) != 0) ok = false;
@@ -264,8 +270,8 @@ const char *ll_box_dyn(ll_t *ll, llv_t v, const char *iface)
     const char *cty = ll_struct_ltype(ll, v.ts);
     const char *szp = ll_new_tmp(ll), *sz = ll_new_tmp(ll), *data = ll_new_tmp(ll);
     ll_emit(ll, "%s = getelementptr %s, ptr null, i32 1", szp, cty);
-    ll_emit(ll, "%s = ptrtoint ptr %s to i64", sz, szp);
-    ll_emit(ll, "%s = call ptr @malloc(i64 %s)", data, sz);
+    ll_emit(ll, "%s = ptrtoint ptr %s to %s", sz, szp, ll->usize);
+    ll_emit(ll, "%s = call ptr @malloc(%s %s)", data, ll->usize, sz);
     ll_emit(ll, "store %s %s, ptr %s", cty, v.ref, data);
     const char *t0 = ll_new_tmp(ll), *t1 = ll_new_tmp(ll);
     ll_emit(ll, "%s = insertvalue %%dyn undef, ptr %s, 0", t0, data);

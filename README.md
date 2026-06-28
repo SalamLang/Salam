@@ -75,7 +75,7 @@ cd compiler
 sh tools/bash/build-compiler.sh   # quick build with tcc  ->  ./salam
 # or, with CMake (out-of-tree build, then run the test suite via ctest):
 cmake -B build && cmake --build build && ctest --test-dir build
-# or just: make            # (release build via the Makefile)
+# or just: make            # (release build via the Makefile -> ../salam at the repo root)
 ```
 
 There is no separate runtime library: `salam build` emits the small C runtime

@@ -24,13 +24,13 @@ jobs:
           make -C compiler -j"$(nproc)" \
             WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config-18 CC=gcc \
             EXTRA_LDFLAGS="-static-libgcc -static-libstdc++"
-          ./compiler/salam version
+          ./salam version
       - name: Smoke-test the embedded LLVM backend
         run: |
           printf 'func main:\n    __ "ok-llvm"\nend\n' > smoke.salam
-          ./compiler/salam llvm smoke.salam --jit --log-level=warn
-          ./compiler/salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
-          ./compiler/salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
+          ./salam llvm smoke.salam --jit --log-level=warn
+          ./salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
+          ./salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
           rm -f smoke.salam smoke_exe smoke.o salam_mod_*.c salam_mod_*.h
       - name: Stage versioned archive
         run: |
@@ -38,7 +38,7 @@ jobs:
           VERSION=$(tr -d ' \t\r\n' < VERSION)
           DIST="salam-linux"
           mkdir -p "$DIST"
-          cp compiler/salam "$DIST/salam"
+          cp salam "$DIST/salam"
           cp -r compiler/std "$DIST/std"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           zip -r "salam-${VERSION}-linux.zip" "$DIST" >/dev/null
@@ -52,7 +52,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: salam-linux
-          path: compiler/salam
+          path: salam
   build-macos:
     name: Build Salam for macOS
     runs-on: macos-latest
@@ -71,13 +71,13 @@ jobs:
             LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config" CC=clang \
             LLVM_CXXLIB=-lc++ \
             EXTRA_LDFLAGS="-L$(brew --prefix)/lib"
-          ./compiler/salam version
+          ./salam version
       - name: Smoke-test the embedded LLVM backend
         run: |
           printf 'func main:\n    __ "ok-llvm"\nend\n' > smoke.salam
-          ./compiler/salam llvm smoke.salam --jit --log-level=warn
-          ./compiler/salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
-          ./compiler/salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
+          ./salam llvm smoke.salam --jit --log-level=warn
+          ./salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
+          ./salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
           rm -f smoke.salam smoke_exe smoke.o salam_mod_*.c salam_mod_*.h
       - name: Stage versioned archive
         run: |
@@ -85,7 +85,7 @@ jobs:
           VERSION=$(tr -d ' \t\r\n' < VERSION)
           DIST="salam-mac"
           mkdir -p "$DIST"
-          cp compiler/salam "$DIST/salam"
+          cp salam "$DIST/salam"
           cp -r compiler/std "$DIST/std"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           zip -r "salam-${VERSION}-mac.zip" "$DIST" >/dev/null
@@ -99,7 +99,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: salam-macos
-          path: compiler/salam
+          path: salam
   build-windows:
     name: Build Salam for Windows
     runs-on: windows-latest
@@ -137,8 +137,8 @@ jobs:
           make -C compiler -j2 \
             WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config CC=gcc \
             EXTRA_LDFLAGS="-static -static-libgcc -static-libstdc++"
-          test -f compiler/salam.exe || mv compiler/salam compiler/salam.exe
-          ./compiler/salam.exe version
+          test -f salam.exe || mv salam salam.exe
+          ./salam.exe version
 
       - name: Verify salam.exe is self-contained (no third-party DLLs)
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
@@ -146,7 +146,6 @@ jobs:
           MSYSTEM: MINGW64
           CHERE_INVOKING: '1'
         run: |
-          cd compiler
           echo "DLL imports of salam.exe:"
           objdump -p salam.exe | grep -i 'DLL Name' || true
           bad=$(objdump -p salam.exe | grep -i 'DLL Name' \
@@ -165,7 +164,7 @@ jobs:
           set -eu
           DIST="salam-windows"
           mkdir -p "$DIST"
-          cp compiler/salam.exe "$DIST/"
+          cp salam.exe "$DIST/"
           cp -r compiler/std    "$DIST/std"
           curl -fsSL -o tcc.zip \
             https://download.savannah.gnu.org/releases/tinycc/tcc-0.9.27-win64-bin.zip
@@ -230,14 +229,248 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: salam-windows
-          path: compiler/salam.exe
+          path: salam.exe
+
+  build-windows-i686:
+    name: Build Salam for Windows (32-bit / i686)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Cache MSYS2 packages (mingw32)
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: C:\msys64\var\cache\pacman\pkg
+          key: msys2-mingw32-pkgs-${{ github.run_id }}
+          restore-keys: |
+            msys2-mingw32-pkgs-
+
+      - name: Install MINGW32 toolchain + static LLVM
+        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
+        env:
+          MSYSTEM: MINGW32
+          CHERE_INVOKING: '1'
+        run: |
+          pacman -Sy --noconfirm --needed \
+            mingw-w64-i686-gcc \
+            mingw-w64-i686-llvm \
+            make
+          gcc --version | head -1
+          gcc -dumpmachine
+          llvm-config --version
+
+      - name: Build 32-bit salam.exe (embedded LLVM, C-backend fallback)
+        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
+        env:
+          MSYSTEM: MINGW32
+          CHERE_INVOKING: '1'
+        run: |
+          if make -C compiler -j2 \
+               WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config CC=gcc \
+               EXTRA_LDFLAGS="-static -static-libgcc -static-libstdc++"; then
+            echo "HAS_LLVM=1" >> "$GITHUB_ENV"
+            echo "Embedded LLVM build succeeded."
+          else
+            echo "Embedded static LLVM failed to link on i686; using C backend."
+            make -C compiler clean
+            make -C compiler -j2 WITH_LLVM=0 CC=gcc \
+              EXTRA_LDFLAGS="-static -static-libgcc"
+            echo "HAS_LLVM=0" >> "$GITHUB_ENV"
+          fi
+          test -f salam.exe || mv salam salam.exe
+          ./salam.exe version
+          file salam.exe || true
+
+      - name: Verify salam.exe is self-contained (no third-party DLLs)
+        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
+        env:
+          MSYSTEM: MINGW32
+          CHERE_INVOKING: '1'
+        run: |
+          echo "DLL imports of salam.exe:"
+          objdump -p salam.exe | grep -i 'DLL Name' || true
+          bad=$(objdump -p salam.exe | grep -i 'DLL Name' \
+            | grep -iE 'libzstd|libstdc\+\+|libgcc|libwinpthread|libxml2|libz\.dll|zlib|libz3|libffi|libLLVM|libc\+\+' \
+            || true)
+          if [ -n "$bad" ]; then
+            echo "ERROR: salam.exe depends on non-system DLLs:"
+            echo "$bad"
+            exit 1
+          fi
+          echo "OK: salam.exe imports only Windows system DLLs."
+
+      - name: Stage self-contained 32-bit bundle
+        shell: bash
+        run: |
+          set -eu
+          DIST="salam-windows-i686"
+          mkdir -p "$DIST"
+          cp salam.exe "$DIST/"
+          cp -r compiler/std    "$DIST/std"
+          curl -fsSL -o tcc.zip \
+            https://download.savannah.gnu.org/releases/tinycc/tcc-0.9.27-win32-bin.zip
+          7z x tcc.zip -o"$DIST" >/dev/null
+          cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          {
+            echo "Salam for Windows (32-bit / i686) - self-contained."
+            echo ""
+            echo "Runs on 32-bit and 64-bit Windows. From this folder:"
+            echo ""
+            echo "  salam.exe version"
+            echo "  salam.exe exec  myprogram.salam              (tree-walking interpreter)"
+            echo "  salam.exe build myprogram.salam              (C backend via bundled 32-bit tcc)"
+            echo "  salam.exe llvm  myprogram.salam --jit        (run via the built-in LLVM)"
+            echo ""
+            echo "LLVM is compiled into salam.exe itself - no clang/llc/lli needed."
+          } > "$DIST/RUN-ME.txt"
+          echo "bundle contents:"; ls -la "$DIST"
+
+      - name: Smoke-test the 32-bit build
+        shell: bash
+        run: |
+          set -e
+          cd salam-windows-i686
+          printf 'func main:\n    __ "ok-win32"\nend\n' > smoke.salam
+          if [ "${HAS_LLVM:-0}" = "1" ]; then
+            echo "[LLVM JIT]"
+            ./salam.exe llvm smoke.salam --jit --log-level=warn
+          else
+            echo "note: this 32-bit build ships the C backend only (no embedded LLVM)."
+          fi
+          echo "[C backend via bundled 32-bit tcc]"
+          ./salam.exe build smoke.salam --output=smoke_tcc.exe --log-level=warn
+          ./smoke_tcc.exe
+          rm -f smoke.salam smoke*.exe salam_mod_*.c salam_mod_*.h
+          cd ..
+
+      - name: Zip the 32-bit bundle
+        shell: bash
+        run: |
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          7z a -tzip "salam-${VERSION}-windows-i686.zip" salam-windows-i686 >/dev/null
+          ls -la "salam-${VERSION}-windows-i686.zip"
+
+      - name: Upload 32-bit Windows bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: salam-windows-i686-bundle
+          path: salam-*-windows-i686.zip
+
+      - name: Upload 32-bit salam.exe
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: salam-windows-i686
+          path: salam.exe
+
+  build-linux-i686:
+    name: Build Salam for Linux (32-bit / i686)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install 32-bit toolchain
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib libc6-dev-i386
+          gcc -m32 --version | head -1
+      - name: Build 32-bit salam (C backend)
+        run: |
+          make -C compiler -j"$(nproc)" CC="gcc -m32"
+          file salam
+          ./salam version
+      - name: Smoke-test the 32-bit binary
+        run: |
+          printf 'func main:\n    __ "ok-linux-32"\nend\n' > smoke.salam
+          ./salam build smoke.salam --output=smoke --log-level=warn && ./smoke
+          ./salam exec smoke.salam --log-level=warn || true
+          rm -f smoke smoke.salam salam_mod_*.c salam_mod_*.h
+      - name: Stage versioned archive
+        run: |
+          set -eu
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          DIST="salam-linux-i686"
+          mkdir -p "$DIST"
+          cp salam "$DIST/salam"
+          cp -r compiler/std "$DIST/std"
+          cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          zip -r "salam-${VERSION}-linux-i686.zip" "$DIST" >/dev/null
+          ls -la "salam-${VERSION}-linux-i686.zip"
+      - name: Upload versioned archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: salam-linux-i686-zip
+          path: salam-*-linux-i686.zip
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: salam-linux-i686
+          path: salam
+
+  build-linux-arm:
+    name: Build Salam for Linux ARM (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            cc: aarch64-linux-gnu-gcc
+            pkg: gcc-aarch64-linux-gnu
+            qemu: qemu-aarch64-static
+          - arch: armhf
+            cc: arm-linux-gnueabihf-gcc
+            pkg: gcc-arm-linux-gnueabihf
+            qemu: qemu-arm-static
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install cross toolchain + qemu
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.pkg }} qemu-user-static
+          ${{ matrix.cc }} --version | head -1
+      - name: Cross-build salam for ${{ matrix.arch }}
+        run: |
+          make -C compiler -j"$(nproc)" CC=${{ matrix.cc }}
+          file salam
+      - name: Smoke-test under qemu
+        run: |
+          ${{ matrix.qemu }} ./salam version
+      - name: Stage versioned archive
+        run: |
+          set -eu
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          DIST="salam-linux-${{ matrix.arch }}"
+          mkdir -p "$DIST"
+          cp salam "$DIST/salam"
+          cp -r compiler/std "$DIST/std"
+          cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          zip -r "salam-${VERSION}-linux-${{ matrix.arch }}.zip" "$DIST" >/dev/null
+          ls -la "salam-${VERSION}-linux-${{ matrix.arch }}.zip"
+      - name: Upload versioned archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: salam-linux-${{ matrix.arch }}-zip
+          path: salam-*-linux-${{ matrix.arch }}.zip
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: salam-linux-${{ matrix.arch }}
+          path: salam
+
   create-release:
     if: |
       startsWith(github.event.head_commit.message, 'release:') &&
       github.repository == 'SalamLang/Salam'
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [build-linux, build-macos, build-windows]
+    needs: [build-linux, build-macos, build-windows,
+            build-windows-i686, build-linux-i686, build-linux-arm]
     permissions:
       contents: write
     steps:
@@ -290,42 +523,98 @@ jobs:
         with:
           name: salam-macos-zip
           path: ./release
-      - name: Post Linux release file to SERVER_VERSIONS_API
-        env:
-          SERVER_VERSIONS_API: ${{ secrets.SERVER_VERSIONS_API }}
-          SERVER_VERSIONS_KEY: ${{ secrets.SERVER_VERSIONS_KEY }}
+      - name: Download Windows i686 binary
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: salam-windows-i686
+          path: ./release-win-i686
+      - name: Download Windows i686 bundle
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: salam-windows-i686-bundle
+          path: ./release
+      - name: Download Linux i686 binary
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: salam-linux-i686
+          path: ./release-linux-i686
+      - name: Download Linux i686 archive
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: salam-linux-i686-zip
+          path: ./release
+      - name: Download Linux aarch64 binary
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: salam-linux-aarch64
+          path: ./release-linux-aarch64
+      - name: Download Linux aarch64 archive
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: salam-linux-aarch64-zip
+          path: ./release
+      - name: Download Linux armhf binary
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: salam-linux-armhf
+          path: ./release-linux-armhf
+      - name: Download Linux armhf archive
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: salam-linux-armhf-zip
+          path: ./release
+      - name: Collect 32-bit / cross binaries (rename to avoid name clashes)
         run: |
-          curl -X POST "$SERVER_VERSIONS_API" \
-            -F "file=@./release/salam-linux" \
-            -F "version=${{ env.VERSION }}" \
-            -F "date=$(date +'%Y-%m-%d')" \
-            -F "time=$(date +'%H:%M:%S')" \
-            -F "key='$SERVER_VERSIONS_KEY'" \
-            -F "platform=linux"
-      - name: Post macOS release file to SERVER_VERSIONS_API
-        env:
-          SERVER_VERSIONS_API: ${{ secrets.SERVER_VERSIONS_API }}
-          SERVER_VERSIONS_KEY: ${{ secrets.SERVER_VERSIONS_KEY }}
-        run: |
-          curl -X POST "$SERVER_VERSIONS_API" \
-            -F "file=@./release/salam-mac" \
-            -F "version=${{ env.VERSION }}" \
-            -F "date=$(date +'%Y-%m-%d')" \
-            -F "time=$(date +'%H:%M:%S')" \
-            -F "key='$SERVER_VERSIONS_KEY'" \
-            -F "platform=macos"
-      - name: Post Windows release file to SERVER_VERSIONS_API
-        env:
-          SERVER_VERSIONS_API: ${{ secrets.SERVER_VERSIONS_API }}
-          SERVER_VERSIONS_KEY: ${{ secrets.SERVER_VERSIONS_KEY }}
-        run: |
-          curl -X POST "$SERVER_VERSIONS_API" \
-            -F "file=@./release/salam-windows.exe" \
-            -F "version=${{ env.VERSION }}" \
-            -F "date=$(date +'%Y-%m-%d')" \
-            -F "time=$(date +'%H:%M:%S')" \
-            -F "key='$SERVER_VERSIONS_KEY'" \
-            -F "platform=windows"
+          set -eu
+          [ -f ./release-win-i686/salam.exe ]     && mv ./release-win-i686/salam.exe     ./release/salam-windows-i686.exe || true
+          [ -f ./release-linux-i686/salam ]       && mv ./release-linux-i686/salam       ./release/salam-linux-i686       || true
+          [ -f ./release-linux-aarch64/salam ]    && mv ./release-linux-aarch64/salam    ./release/salam-linux-aarch64    || true
+          [ -f ./release-linux-armhf/salam ]      && mv ./release-linux-armhf/salam      ./release/salam-linux-armhf      || true
+          echo "release/ now contains:"; ls -la ./release
+      # - name: Post Linux release file to SERVER_VERSIONS_API
+      #   env:
+      #     SERVER_VERSIONS_API: ${{ secrets.SERVER_VERSIONS_API }}
+      #     SERVER_VERSIONS_KEY: ${{ secrets.SERVER_VERSIONS_KEY }}
+      #   run: |
+      #     curl -X POST "$SERVER_VERSIONS_API" \
+      #       -F "file=@./release/salam-linux" \
+      #       -F "version=${{ env.VERSION }}" \
+      #       -F "date=$(date +'%Y-%m-%d')" \
+      #       -F "time=$(date +'%H:%M:%S')" \
+      #       -F "key='$SERVER_VERSIONS_KEY'" \
+      #       -F "platform=linux"
+      # - name: Post macOS release file to SERVER_VERSIONS_API
+      #   env:
+      #     SERVER_VERSIONS_API: ${{ secrets.SERVER_VERSIONS_API }}
+      #     SERVER_VERSIONS_KEY: ${{ secrets.SERVER_VERSIONS_KEY }}
+      #   run: |
+      #     curl -X POST "$SERVER_VERSIONS_API" \
+      #       -F "file=@./release/salam-mac" \
+      #       -F "version=${{ env.VERSION }}" \
+      #       -F "date=$(date +'%Y-%m-%d')" \
+      #       -F "time=$(date +'%H:%M:%S')" \
+      #       -F "key='$SERVER_VERSIONS_KEY'" \
+      #       -F "platform=macos"
+      # - name: Post Windows release file to SERVER_VERSIONS_API
+      #   env:
+      #     SERVER_VERSIONS_API: ${{ secrets.SERVER_VERSIONS_API }}
+      #     SERVER_VERSIONS_KEY: ${{ secrets.SERVER_VERSIONS_KEY }}
+      #   run: |
+      #     curl -X POST "$SERVER_VERSIONS_API" \
+      #       -F "file=@./release/salam-windows.exe" \
+      #       -F "version=${{ env.VERSION }}" \
+      #       -F "date=$(date +'%Y-%m-%d')" \
+      #       -F "time=$(date +'%H:%M:%S')" \
+      #       -F "key='$SERVER_VERSIONS_KEY'" \
+      #       -F "platform=windows"
       - name: Delete existing release and tag if found
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -342,13 +631,25 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -eu
+          shopt -s nullglob
+          candidates=(
+            release/salam-linux
+            release/salam-mac
+            release/salam-windows.exe
+            release/salam-linux-i686
+            release/salam-windows-i686.exe
+            release/salam-linux-aarch64
+            release/salam-linux-armhf
+            release/salam-*.zip
+          )
+          assets=()
+          for c in "${candidates[@]}"; do
+            for f in $c; do [ -e "$f" ] && assets+=("$f"); done
+          done
+          echo "Publishing ${#assets[@]} assets:"; printf '  %s\n' "${assets[@]}"
           gh release create "v${{ env.VERSION }}" \
             --target "$GITHUB_SHA" \
             --title "Salam Release v${{ env.VERSION }}" \
             --generate-notes \
-            release/salam-linux \
-            release/salam-mac \
-            release/salam-windows.exe \
-            release/salam-*-linux.zip \
-            release/salam-*-mac.zip \
-            release/salam-*-windows.zip
+            "${assets[@]}"

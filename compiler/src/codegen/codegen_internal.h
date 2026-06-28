@@ -66,6 +66,8 @@ void        cg_kv(const char *ts, char *kbuf, char *vbuf, size_t cap);
 
 const char *cg_cident(cg_t *cg, const char *name);
 
+void        cg_put_ident_byte(sb_t *b, unsigned char c);
+
 void        parse_typestr(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dims, arena_t *a);
 
 bool        cg_is_int_typestr(const char *ts);

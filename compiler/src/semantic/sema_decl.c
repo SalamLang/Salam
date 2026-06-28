@@ -272,7 +272,30 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
     scope_t *saved_gp = s->gen_pkg;
     s->cur = sc;
     s->cur_func = sig;
-    if (home) s->gen_pkg = home;   /* nested same-package instances inherit it */
+    if (home) s->gen_pkg = home;
+    { bool seen_default = false; size_t i = 0; for (; i < fn->list.len; i++) {
+        ast_node_t *param = (ast_node_t *)fn->list.data[i];
+        if (!param->a) {
+            if (seen_default)
+                SERR(s, 64, &param->span,
+                     "parameter '%s' without a default value cannot follow a parameter with one",
+                     param->name);
+            continue;
+        }
+        seen_default = true;
+        if (fn->is_extern)
+            SERR(s, 64, &param->span,
+                 "extern parameter '%s' cannot have a default value", param->name);
+        type_t *pt = (sig && i < sig->params.len) ? (type_t *)sig->params.data[i]
+                                                  : sema_resolve_type(s, param->type);
+        if (param->a->kind == AST_STRUCT_LIT && pt && pt->kind == TY_STRUCT)
+            s->expected = pt;
+        type_t *dt = sema_check_expr(s, param->a);
+        if (pt && dt && !type_assignable(pt, dt))
+            SERR(s, 2, &param->span,
+                 "default for parameter '%s': cannot assign '%s' to '%s'", param->name,
+                 type_to_string(s->tc, dt), type_to_string(s->tc, pt));
+    } }
     if (owner) {
         
         s->self_type = (owner->kind == SYM_TYPEIMPL)

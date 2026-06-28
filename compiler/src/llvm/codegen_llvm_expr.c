@@ -705,7 +705,7 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
         default: {
             llv_t v = ll_expr(ll, n);
             const char *p = ll_fmt(ll, "%%agg.%d", ll->tmp++);
-            ll_emit(ll, "%s = alloca %s", p, ll_ty(ll, v.ts));
+            ll_emit_alloca(ll, "%s = alloca %s", p, ll_ty(ll, v.ts));
             ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, v.ts), v.ref, p);
             return (ll_addr_t){ p, v.ts };
         }

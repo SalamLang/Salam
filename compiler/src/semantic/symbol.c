@@ -83,7 +83,7 @@ static const char *type_code(arena_t *a, const type_t *t)
             return arena_strdup(a, buf);
         }
         case TY_ARRAY: {
-            char buf[96]; snprintf(buf, sizeof(buf), "A%zu%s", t->length, type_code(a, t->elem));
+            char buf[96]; sal_snprintf(buf, sizeof(buf), "A%zu%s", t->length, type_code(a, t->elem));
             return arena_strdup(a, buf);
         }
         default: return "x";

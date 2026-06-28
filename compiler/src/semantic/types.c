@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "semantic/types.h"
+#include "core/sal_format.h"
 
 type_ctx_t *type_ctx_new(arena_t *a)
 {
@@ -277,8 +278,8 @@ const char *type_to_string(type_ctx_t *tc, const type_t *t)
             char dims[128] = ""; size_t dn = 0;
             const type_t *cur = t;
             while (cur && cur->kind == TY_ARRAY) {
-                if (cur->length) dn += (size_t)snprintf(dims + dn, sizeof(dims) - dn, "[%zu]", cur->length);
-                else             dn += (size_t)snprintf(dims + dn, sizeof(dims) - dn, "[]");
+                if (cur->length) dn += (size_t)sal_snprintf(dims + dn, sizeof(dims) - dn, "[%zu]", cur->length);
+                else             dn += (size_t)sal_snprintf(dims + dn, sizeof(dims) - dn, "[]");
                 cur = cur->elem;
             }
             char buf[160];

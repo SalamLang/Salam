@@ -235,6 +235,14 @@ jobs:
     name: Build Salam for Windows (32-bit / i686)
     runs-on: windows-latest
     continue-on-error: true
+    timeout-minutes: 330
+    env:
+      LLVM_VER: '18.1.8'
+      LLVM_PREFIX: 'C:/llvm-i686'
+      CACHE_REV: 'v1'
+      CCACHE_DIR: 'C:/ccache-i686'
+      CCACHE_MAXSIZE: '2G'
+      CCACHE_COMPRESS: '1'
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -247,34 +255,135 @@ jobs:
           restore-keys: |
             msys2-mingw32-pkgs-
 
-      - name: Install MINGW32 toolchain + static LLVM
+      - name: Install MINGW32 toolchain + LLVM build tools
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW32
           CHERE_INVOKING: '1'
         run: |
-          pacman -Sy --noconfirm --needed \
-            mingw-w64-i686-gcc \
-            mingw-w64-i686-llvm \
-            make
+          pacman -Sy --noconfirm --needed mingw-w64-i686-gcc make tar xz
+          pacman -S  --noconfirm --needed \
+            mingw-w64-i686-cmake mingw-w64-i686-ninja mingw-w64-i686-python \
+            || pacman -S --noconfirm --needed cmake ninja python || true
+          pacman -S --noconfirm --needed ccache || true
           gcc --version | head -1
           gcc -dumpmachine
-          llvm-config --version
+          cmake --version | head -1 || true
+          ninja --version || true
+          ccache --version | head -1 || true
 
-      - name: Build 32-bit salam.exe (embedded LLVM, C-backend fallback)
+      - name: Restore prebuilt i686 LLVM
+        id: llvmcache
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: C:\llvm-i686
+          key: llvm-i686-${{ env.LLVM_VER }}-x86-minsizerel-${{ env.CACHE_REV }}
+
+      - name: Restore ccache (i686 LLVM objects)
+        id: ccacherestore
+        if: steps.llvmcache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: C:\ccache-i686
+          key: ccache-i686-llvm-${{ env.LLVM_VER }}-${{ env.CACHE_REV }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-i686-llvm-${{ env.LLVM_VER }}-${{ env.CACHE_REV }}-
+            ccache-i686-llvm-${{ env.LLVM_VER }}-
+
+      - name: Build LLVM ${{ env.LLVM_VER }} from source for i686 (X86 only)
+        id: llvmbuild
+        if: steps.llvmcache.outputs.cache-hit != 'true'
+        continue-on-error: true
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW32
           CHERE_INVOKING: '1'
         run: |
-          if make -C compiler -j2 \
-               WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config CC=gcc \
-               EXTRA_LDFLAGS="-static -static-libgcc -static-libstdc++"; then
-            echo "HAS_LLVM=1" >> "$GITHUB_ENV"
-            echo "Embedded LLVM build succeeded."
+          set -e
+          command -v cmake >/dev/null && command -v ninja >/dev/null || {
+            echo "cmake/ninja unavailable for i686; skipping LLVM build."; exit 1; }
+          CCACHE_FLAGS=""
+          if command -v ccache >/dev/null; then
+            ccache --max-size="${CCACHE_MAXSIZE}" >/dev/null 2>&1 || true
+            ccache --zero-stats >/dev/null 2>&1 || true
+            CCACHE_FLAGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+          fi
+          src="llvm-project-${LLVM_VER}.src"
+          curl -fsSL -o llvm.tar.xz \
+            "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VER}/${src}.tar.xz"
+          tar -xf llvm.tar.xz
+          cmake -S "${src}/llvm" -B llvm-build -G Ninja \
+            $CCACHE_FLAGS \
+            -DCMAKE_BUILD_TYPE=MinSizeRel \
+            -DCMAKE_INSTALL_PREFIX="${LLVM_PREFIX}" \
+            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
+            -DLLVM_TARGETS_TO_BUILD=X86 \
+            -DLLVM_ENABLE_PROJECTS='' -DLLVM_ENABLE_RUNTIMES='' \
+            -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF \
+            -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_TERMINFO=OFF \
+            -DLLVM_ENABLE_LIBEDIT=OFF -DLLVM_ENABLE_Z3_SOLVER=OFF \
+            -DLLVM_ENABLE_LIBPFM=OFF -DLLVM_ENABLE_PLUGINS=OFF \
+            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF \
+            -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_DOCS=OFF \
+            -DLLVM_BUILD_TOOLS=OFF -DLLVM_BUILD_UTILS=OFF \
+            -DLLVM_BUILD_RUNTIME=OFF -DLLVM_OPTIMIZED_TABLEGEN=ON \
+            -DLLVM_PARALLEL_LINK_JOBS=1
+          ninja -C llvm-build
+          ninja -C llvm-build llvm-config
+          ninja -C llvm-build install
+          mkdir -p "${LLVM_PREFIX}/bin"
+          ninja -C llvm-build install-llvm-config 2>/dev/null \
+            || cp -f llvm-build/bin/llvm-config.exe "${LLVM_PREFIX}/bin/" 2>/dev/null || true
+          "${LLVM_PREFIX}/bin/llvm-config" --version
+          "${LLVM_PREFIX}/bin/llvm-config" --libdir
+          command -v ccache >/dev/null && ccache --show-stats || true
+          libdir="$("${LLVM_PREFIX}/bin/llvm-config" --libdir)"
+          nlibs=$(ls "$libdir"/libLLVM*.a 2>/dev/null | wc -l)
+          echo "Installed $nlibs LLVM static libraries in $libdir"
+          [ "$nlibs" -ge 1 ] || { echo "ERROR: no LLVM static libs installed"; exit 1; }
+          rm -rf llvm-build "llvm-project-${LLVM_VER}.src" llvm.tar.xz || true
+          df -h / 2>/dev/null | tail -1 || true
+          echo "llvm_built=1" >> "$GITHUB_OUTPUT"
+
+      - name: Save ccache (i686 LLVM objects)
+        if: steps.llvmcache.outputs.cache-hit != 'true' && steps.llvmbuild.outcome == 'success'
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: C:\ccache-i686
+          key: ccache-i686-llvm-${{ env.LLVM_VER }}-${{ env.CACHE_REV }}-${{ github.run_id }}
+
+      - name: Save prebuilt i686 LLVM
+        if: steps.llvmcache.outputs.cache-hit != 'true' && steps.llvmbuild.outputs.llvm_built == '1'
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: C:\llvm-i686
+          key: llvm-i686-${{ env.LLVM_VER }}-x86-minsizerel-${{ env.CACHE_REV }}
+
+      - name: Build 32-bit salam.exe (embedded LLVM if available, else C backend)
+        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
+        env:
+          MSYSTEM: MINGW32
+          CHERE_INVOKING: '1'
+        run: |
+          LC="${LLVM_PREFIX}/bin/llvm-config"
+          built=0
+          if [ -x "$LC" ] || [ -x "$LC.exe" ]; then
+            echo "Found i686 llvm-config; attempting embedded static LLVM link."
+            if make -C compiler -j2 \
+                 WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG="$LC" CC=gcc \
+                 LLVM_ZSTD_LIB= \
+                 EXTRA_LDFLAGS="-static -static-libgcc -static-libstdc++ -Wl,--no-keep-memory -Wl,--reduce-memory-overheads"; then
+              built=1
+              echo "HAS_LLVM=1" >> "$GITHUB_ENV"
+              echo "Embedded LLVM build succeeded."
+            else
+              echo "32-bit static LLVM link failed (likely address-space limit); using C backend."
+              make -C compiler clean
+            fi
           else
-            echo "Embedded static LLVM failed to link on i686; using C backend."
-            make -C compiler clean
+            echo "No i686 LLVM available; building C backend only."
+          fi
+          if [ "$built" != "1" ]; then
             make -C compiler -j2 WITH_LLVM=0 CC=gcc \
               EXTRA_LDFLAGS="-static -static-libgcc"
             echo "HAS_LLVM=0" >> "$GITHUB_ENV"
@@ -321,9 +430,16 @@ jobs:
             echo "  salam.exe version"
             echo "  salam.exe exec  myprogram.salam              (tree-walking interpreter)"
             echo "  salam.exe build myprogram.salam              (C backend via bundled 32-bit tcc)"
-            echo "  salam.exe llvm  myprogram.salam --jit        (run via the built-in LLVM)"
-            echo ""
-            echo "LLVM is compiled into salam.exe itself - no clang/llc/lli needed."
+            if [ "${HAS_LLVM:-0}" = "1" ]; then
+              echo "  salam.exe llvm  myprogram.salam --jit        (run via the built-in LLVM)"
+              echo ""
+              echo "LLVM is compiled into salam.exe itself - no clang/llc/lli needed."
+            else
+              echo ""
+              echo "Note: this 32-bit build ships the interpreter and the C backend"
+              echo "(bundled tcc) only - the embedded LLVM backend could not be built"
+              echo "for 32-bit. Use the 64-bit Windows build if you need 'salam llvm'."
+            fi
           } > "$DIST/RUN-ME.txt"
           echo "bundle contents:"; ls -la "$DIST"
 
@@ -334,15 +450,20 @@ jobs:
           cd salam-windows-i686
           printf 'func main:\n    __ "ok-win32"\nend\n' > smoke.salam
           if [ "${HAS_LLVM:-0}" = "1" ]; then
-            echo "[LLVM JIT]"
+            echo "[1] LLVM JIT (in-process, 32-bit)"
             ./salam.exe llvm smoke.salam --jit --log-level=warn
+            echo "[2] LLVM emit-obj (32-bit object)"
+            ./salam.exe llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
+            file smoke.o || true
           else
             echo "note: this 32-bit build ships the C backend only (no embedded LLVM)."
           fi
-          echo "[C backend via bundled 32-bit tcc]"
+          echo "[3] C backend via bundled 32-bit tcc"
           ./salam.exe build smoke.salam --output=smoke_tcc.exe --log-level=warn
           ./smoke_tcc.exe
-          rm -f smoke.salam smoke*.exe salam_mod_*.c salam_mod_*.h
+          echo "[4] interpreter"
+          ./salam.exe exec smoke.salam --log-level=warn
+          rm -f smoke.salam smoke*.exe smoke.o salam_mod_*.c salam_mod_*.h
           cd ..
 
       - name: Zip the 32-bit bundle
@@ -422,10 +543,12 @@ jobs:
             cc: aarch64-linux-gnu-gcc
             pkg: gcc-aarch64-linux-gnu
             qemu: qemu-aarch64-static
+            sysroot: /usr/aarch64-linux-gnu
           - arch: armhf
             cc: arm-linux-gnueabihf-gcc
             pkg: gcc-arm-linux-gnueabihf
             qemu: qemu-arm-static
+            sysroot: /usr/arm-linux-gnueabihf
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -440,7 +563,7 @@ jobs:
           file salam
       - name: Smoke-test under qemu
         run: |
-          ${{ matrix.qemu }} ./salam version
+          ${{ matrix.qemu }} -L ${{ matrix.sysroot }} ./salam version
       - name: Stage versioned archive
         run: |
           set -eu
@@ -634,13 +757,13 @@ jobs:
           set -eu
           shopt -s nullglob
           candidates=(
-            release/salam-linux
-            release/salam-mac
-            release/salam-windows.exe
-            release/salam-linux-i686
-            release/salam-windows-i686.exe
-            release/salam-linux-aarch64
-            release/salam-linux-armhf
+            # release/salam-linux
+            # release/salam-mac
+            # release/salam-windows.exe
+            # release/salam-linux-i686
+            # release/salam-windows-i686.exe
+            # release/salam-linux-aarch64
+            # release/salam-linux-armhf
             release/salam-*.zip
           )
           assets=()

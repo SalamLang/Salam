@@ -65,6 +65,7 @@ WITH_LLVM       ?= 0
 LLVM_CONFIG     ?= llvm-config
 LLVM_LINK_STATIC ?= 0
 LLVM_CXXLIB     ?= -lstdc++
+LLVM_ZSTD_LIB   ?= -l:libzstd.a
 ifeq ($(WITH_LLVM),1)
   LLVM_COMPONENTS := core irreader bitwriter analysis orcjit \
                      native passes target all-targets
@@ -81,7 +82,7 @@ ifeq ($(WITH_LLVM),1)
   LDFLAGS  += $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --ldflags)
   ifeq ($(IS_WINDOWS),1)
     LLVM_SYSTEM_LIBS := $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --system-libs \
-        | tr ' ' '\n' | grep -viE 'zstd' | tr '\n' ' ') -l:libzstd.a
+        | tr ' ' '\n' | grep -viE 'zstd' | tr '\n' ' ') $(LLVM_ZSTD_LIB)
   else
     LLVM_SYSTEM_LIBS := $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --system-libs)
   endif

@@ -13,6 +13,7 @@
  */
 
 #include "llvm/codegen_llvm_internal.h"
+#include "core/sal_format.h"
 
 int ll_int_bits(const char *ts)
 {
@@ -96,7 +97,7 @@ const char *ll_struct_ltype(ll_t *ll, const char *name)
     { const unsigned char *p = (const unsigned char *)name; for (; p && *p; p++) {
         if (isalnum(*p))    sb_putc(&b, (char)*p);
         else if (*p == '_') sb_puts(&b, "__");
-        else { char h[5]; snprintf(h, sizeof h, "_%02x", *p); sb_puts(&b, h); }
+        else { char h[5]; sal_snprintf(h, sizeof h, "_%02x", *p); sb_puts(&b, h); }
     } }
     const char *r = arena_strdup(ll->a, sb_cstr(&b)); sb_free(&b); return r;
 }

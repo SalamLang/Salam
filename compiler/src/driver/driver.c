@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "core/build_info.h"
 #include "driver/driver.h"
 #include "driver/build.h"
@@ -163,7 +164,7 @@ static int driver_new(options_t *opt)
         "\xD9\xBE\xD8\xA7\xDB\x8C\xD8\xA7\xD9\x86\n";
     const char *content = fa ? fa_content : en_content;
     char path[512];
-    snprintf(path, sizeof path, "%s/main.salam", name);
+    sal_snprintf(path, sizeof path, "%s/main.salam", name);
     FILE *f = fopen(path, "wb");
     if (!f) {
         fprintf(stderr, i18n_tr("salam: cannot write '%s': %s\n"), path, strerror(errno));
@@ -280,10 +281,10 @@ static int driver_run(options_t *opt)
     if (temp_exe) {
 #if defined(_WIN32)
         const char *t = getenv("TEMP"); if (!t) t = getenv("TMP"); if (!t) t = ".";
-        snprintf(tmp_exe, sizeof tmp_exe, "%s\\salam-run-%lu.exe", t, (unsigned long)_getpid());
+        sal_snprintf(tmp_exe, sizeof tmp_exe, "%s\\salam-run-%lu.exe", t, (unsigned long)_getpid());
 #else
         const char *t = getenv("TMPDIR"); if (!t) t = "/tmp";
-        snprintf(tmp_exe, sizeof tmp_exe, "%s/salam-run-%lu", t, (unsigned long)getpid());
+        sal_snprintf(tmp_exe, sizeof tmp_exe, "%s/salam-run-%lu", t, (unsigned long)getpid());
 #endif
         opt->output = tmp_exe;
     }
@@ -300,10 +301,10 @@ static int driver_run(options_t *opt)
     const char *exe = opt->exe_path[0] ? opt->exe_path : opt->output;
     char cmd[700];
 #if defined(_WIN32)
-    snprintf(cmd, sizeof cmd, "\"%s\"", exe);
+    sal_snprintf(cmd, sizeof cmd, "\"%s\"", exe);
 #else
-    if (strchr(exe, '/')) snprintf(cmd, sizeof cmd, "\"%s\"", exe);
-    else                  snprintf(cmd, sizeof cmd, "\"./%s\"", exe);
+    if (strchr(exe, '/')) sal_snprintf(cmd, sizeof cmd, "\"%s\"", exe);
+    else                  sal_snprintf(cmd, sizeof cmd, "\"./%s\"", exe);
 #endif
     int run_rc = system(cmd);
     if (temp_exe) remove(exe);
@@ -506,14 +507,14 @@ static void fmt_walk(fmt_ctx_t *c, const char *dir)
 {
 #if defined(_WIN32)
     char pattern[1024];
-    snprintf(pattern, sizeof pattern, "%s/*", dir);
+    sal_snprintf(pattern, sizeof pattern, "%s/*", dir);
     struct _finddata_t fd;
     intptr_t h = _findfirst(pattern, &fd);
     if (h == -1) return;
     do {
         if (fd.name[0] == '.') continue;
         char child[1024];
-        snprintf(child, sizeof child, "%s/%s", dir, fd.name);
+        sal_snprintf(child, sizeof child, "%s/%s", dir, fd.name);
         if (fd.attrib & _A_SUBDIR)        fmt_walk(c, child);
         else if (has_salam_ext(fd.name))  fmt_one_file(c, child);
     } while (_findnext(h, &fd) == 0);
@@ -525,7 +526,7 @@ static void fmt_walk(fmt_ctx_t *c, const char *dir)
     while ((e = readdir(d)) != NULL) {
         if (e->d_name[0] == '.') continue;
         char child[1024];
-        snprintf(child, sizeof child, "%s/%s", dir, e->d_name);
+        sal_snprintf(child, sizeof child, "%s/%s", dir, e->d_name);
         if (path_is_dir(child))             fmt_walk(c, child);
         else if (has_salam_ext(e->d_name))  fmt_one_file(c, child);
     }

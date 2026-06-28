@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "driver/debug_cmd.h"
 #include "driver/build.h"
 #include "core/sb.h"
@@ -44,10 +45,10 @@ int driver_debug(options_t *opt)
     
     char exe[512]; exe[0] = '\0';
     if (opt->output) {
-        snprintf(exe, sizeof(exe), "%s", opt->output);
+        sal_snprintf(exe, sizeof(exe), "%s", opt->output);
     } else {
         char stem[256]; path_stem(opt->inputs[0], stem, sizeof(stem));
-        snprintf(exe, sizeof(exe), "%s.exe", stem);
+        sal_snprintf(exe, sizeof(exe), "%s.exe", stem);
         opt->output = exe;
     }
     int rc = driver_build(opt);
@@ -139,10 +140,10 @@ int driver_memcheck(options_t *opt)
     opt->command      = CMD_BUILD;   
     char exe[512]; exe[0] = '\0';
     if (opt->output) {
-        snprintf(exe, sizeof(exe), "%s", opt->output);
+        sal_snprintf(exe, sizeof(exe), "%s", opt->output);
     } else {
         char stem[256]; path_stem(opt->inputs[0], stem, sizeof(stem));
-        snprintf(exe, sizeof(exe), "%s.exe", stem);
+        sal_snprintf(exe, sizeof(exe), "%s.exe", stem);
         opt->output = exe;
     }
     fprintf(stdout, "salam memcheck: building with AddressSanitizer + debug symbols...\n");

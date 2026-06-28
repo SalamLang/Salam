@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "layout/schema.h"
 #include "layout/registry.h"
 #include "core/arena.h"
@@ -229,13 +230,13 @@ static int list_schema_files(arena_t *a, const char *dir, const char **out, int 
 {
     int n = 0;
 #if defined(_WIN32)
-    char pat[512]; snprintf(pat, sizeof pat, "%s/*.salam", dir);
+    char pat[512]; sal_snprintf(pat, sizeof pat, "%s/*.salam", dir);
     struct _finddata_t fd;
     intptr_t h = _findfirst(pat, &fd);
     if (h == -1) return 0;
     do {
         if (!(fd.attrib & _A_SUBDIR) && n < max) {
-            char p[512]; snprintf(p, sizeof p, "%s/%s", dir, fd.name);
+            char p[512]; sal_snprintf(p, sizeof p, "%s/%s", dir, fd.name);
             out[n++] = arena_strdup(a, p);
         }
     } while (_findnext(h, &fd) == 0);
@@ -247,7 +248,7 @@ static int list_schema_files(arena_t *a, const char *dir, const char **out, int 
     while ((e = readdir(d)) != NULL && n < max) {
         size_t L = strlen(e->d_name);
         if (L > 6 && strcmp(e->d_name + L - 6, ".salam") == 0) {
-            char p[512]; snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+            char p[512]; sal_snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
             out[n++] = arena_strdup(a, p);
         }
     }
@@ -259,15 +260,15 @@ static int list_schema_files(arena_t *a, const char *dir, const char **out, int 
 void layout_schema_init(const char *root)
 {
     char base[480];
-    if (root && root[0]) snprintf(base, sizeof base, "%s/std/layout", root);
-    else                 snprintf(base, sizeof base, "std/layout");
+    if (root && root[0]) sal_snprintf(base, sizeof base, "%s/std/layout", root);
+    else                 sal_snprintf(base, sizeof base, "std/layout");
     arena_t  *arena = arena_new(1 << 19);   
     logger_t *log   = logger_new(stderr, LOG_OFF, false);
     langpack_t *pack = langpack_load("en");
     const char *files[SCHEMA_MAX_ELEMS];
     char dir[512];
     
-    snprintf(dir, sizeof dir, "%s/elements", base);
+    sal_snprintf(dir, sizeof dir, "%s/elements", base);
     int nf = list_schema_files(arena, dir, files, SCHEMA_MAX_ELEMS);
     if (nf > 0) {
         layout_elem_def_t *defs =
@@ -281,16 +282,16 @@ void layout_schema_init(const char *root)
         layout_attr_def_t *adefs =
             (layout_attr_def_t *)arena_alloc(arena, sizeof(*adefs) * SCHEMA_MAX_ELEMS);
         size_t an = 0;
-        snprintf(dir, sizeof dir, "%s/attributes", base);
+        sal_snprintf(dir, sizeof dir, "%s/attributes", base);
         nf = list_schema_files(arena, dir, files, SCHEMA_MAX_ELEMS);
         { int i = 0; for (; i < nf; i++) load_attr_file(arena, log, pack, files[i], adefs, &an); }
-        snprintf(dir, sizeof dir, "%s/style", base);
+        sal_snprintf(dir, sizeof dir, "%s/style", base);
         nf = list_schema_files(arena, dir, files, SCHEMA_MAX_ELEMS);
         { int i = 0; for (; i < nf; i++) load_attr_file(arena, log, pack, files[i], adefs, &an); }
         if (an > 0) layout_registry_set_attributes(adefs, an);
     }
     
-    snprintf(dir, sizeof dir, "%s/values", base);
+    sal_snprintf(dir, sizeof dir, "%s/values", base);
     nf = list_schema_files(arena, dir, files, SCHEMA_MAX_ELEMS);
     { int i = 0; for (; i < nf; i++) load_value_file(arena, log, pack, files[i]); }
     logger_free(log);

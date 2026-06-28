@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "core/numstr.h"
 #include "semantic/sema.h"
 #include "semantic/sema_internal.h"
@@ -42,20 +43,20 @@ static bool file_exists(const char *p);    /* fwd decl */
 static bool root_has_std(const char *root)
 {
     char p[1100];
-    if (root && root[0]) snprintf(p, sizeof p, "%s/std/core/core.salam", root);
-    else                 snprintf(p, sizeof p, "std/core/core.salam");
+    if (root && root[0]) sal_snprintf(p, sizeof p, "%s/std/core/core.salam", root);
+    else                 sal_snprintf(p, sizeof p, "std/core/core.salam");
     return file_exists(p);
 }
 
 static void derive_root(const char *path, char *out, size_t n)
 {
     char probe[1100];
-    snprintf(probe, sizeof probe, "%s/std/core/core.salam", path);
-    if (file_exists(probe)) { snprintf(out, n, "%s", path); return; }
+    sal_snprintf(probe, sizeof probe, "%s/std/core/core.salam", path);
+    if (file_exists(probe)) { sal_snprintf(out, n, "%s", path); return; }
 
-    snprintf(probe, sizeof probe, "%s/core/core.salam", path);
+    sal_snprintf(probe, sizeof probe, "%s/core/core.salam", path);
     if (file_exists(probe)) {                 /* path is the std/ dir itself */
-        snprintf(out, n, "%s", path);
+        sal_snprintf(out, n, "%s", path);
         char *s = out + strlen(out);
         while (s > out && (s[-1] == '/' || s[-1] == '\\')) *--s = '\0';
         char *slash = strrchr(out, '/');
@@ -64,7 +65,7 @@ static void derive_root(const char *path, char *out, size_t n)
         if (cut) *cut = '\0'; else out[0] = '\0';
         return;
     }
-    snprintf(out, n, "%s", path);             /* trust as-is */
+    sal_snprintf(out, n, "%s", path);             /* trust as-is */
 }
 
 static bool get_exe_dir(char *out, size_t n)
@@ -92,7 +93,7 @@ static bool get_exe_dir(char *out, size_t n)
         char *cut   = (bs && (!slash || bs > slash)) ? bs : slash;
         if (!cut) return false;
         *cut = '\0';
-        snprintf(out, n, "%s", buf);
+        sal_snprintf(out, n, "%s", buf);
         return true;
     }
 #endif
@@ -146,7 +147,7 @@ static const char *resolve_stdlib_root(const char *explicit_path)
         if (get_exe_dir(exedir, sizeof exedir)) {
             /* 3. salam.cfg next to the binary */
             char cfg[1100], val[1024];
-            snprintf(cfg, sizeof cfg, "%s/salam.cfg", exedir);
+            sal_snprintf(cfg, sizeof cfg, "%s/salam.cfg", exedir);
             if (read_cfg_stdlib(cfg, val, sizeof val)) {
                 derive_root(val, buf, N);
                 if (root_has_std(buf)) return buf;
@@ -162,15 +163,15 @@ static const char *resolve_stdlib_root(const char *explicit_path)
                 size_t i = 0;
                 for (; i < sizeof rel / sizeof rel[0]; i++) {
                     char cand[1200];
-                    snprintf(cand, sizeof cand, "%s/%s", exedir, rel[i]);
-                    if (root_has_std(cand)) { snprintf(buf, N, "%s", cand); return buf; }
+                    sal_snprintf(cand, sizeof cand, "%s/%s", exedir, rel[i]);
+                    if (root_has_std(cand)) { sal_snprintf(buf, N, "%s", cand); return buf; }
                 }
             }
         }
     }
 #ifdef SALAM_STDLIB_PREFIX
     if (root_has_std(SALAM_STDLIB_PREFIX)) {
-        snprintf(buf, N, "%s", SALAM_STDLIB_PREFIX);
+        sal_snprintf(buf, N, "%s", SALAM_STDLIB_PREFIX);
         return buf;
     }
 #endif
@@ -207,11 +208,11 @@ bool salam_find_bundled_tool(const char *name, char *out, size_t n)
         char cand[1200];
         FILE *f;
         if (rel[i][0])
-            snprintf(cand, sizeof cand, "%s/%s/%s%s", exedir, rel[i], name, suffix);
+            sal_snprintf(cand, sizeof cand, "%s/%s/%s%s", exedir, rel[i], name, suffix);
         else
-            snprintf(cand, sizeof cand, "%s/%s%s", exedir, name, suffix);
+            sal_snprintf(cand, sizeof cand, "%s/%s%s", exedir, name, suffix);
         f = fopen(cand, "rb");
-        if (f) { fclose(f); snprintf(out, n, "%s", cand); return true; }
+        if (f) { fclose(f); sal_snprintf(out, n, "%s", cand); return true; }
     }
     return false;
 }
@@ -236,7 +237,7 @@ static int list_entries(arena_t *a, const char *dir, const char **out, int max)
 {
     int n = 0;
 #if defined(_WIN32)
-    char pat[512]; snprintf(pat, sizeof pat, "%s/*", dir);
+    char pat[512]; sal_snprintf(pat, sizeof pat, "%s/*", dir);
     struct _finddata_t fd;
     intptr_t h = _findfirst(pat, &fd);
     if (h == -1) return 0;
@@ -291,15 +292,15 @@ static void build_pkg_alias_index(arena_t *a, const char *root)
 {
     g_pkg_alias_n = 0;
     char base[512];
-    if (root && root[0]) snprintf(base, sizeof base, "%s/std", root);
-    else                 snprintf(base, sizeof base, "std");
+    if (root && root[0]) sal_snprintf(base, sizeof base, "%s/std", root);
+    else                 sal_snprintf(base, sizeof base, "std");
     const char *entries[256];
     int ne = list_entries(a, base, entries, 256);
     { int i = 0; for (; i < ne; i++) {
         
         size_t need = strlen(base) + 2 * strlen(entries[i]) + sizeof("//.salam");
         char *pf = (char *)arena_alloc(a, need);
-        snprintf(pf, need, "%s/%s/%s.salam", base, entries[i], entries[i]);
+        sal_snprintf(pf, need, "%s/%s/%s.salam", base, entries[i], entries[i]);
         if (file_exists(pf)) index_pkg_file(a, pf);
     } }
 }
@@ -320,15 +321,15 @@ const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec)
     char *p = (char *)arena_alloc(a, n);
     
     if (has_ext) {
-        if (dir && dir[0]) snprintf(p, n, "%s/%s", dir, spec);
-        else               snprintf(p, n, "%s", spec);
+        if (dir && dir[0]) sal_snprintf(p, n, "%s/%s", dir, spec);
+        else               sal_snprintf(p, n, "%s", spec);
         return path_normalize(p);
     }
     
     const char *slash = strrchr(spec, '/');
     const char *last  = slash ? slash + 1 : spec;
-    if (root[0]) snprintf(p, n, "%s/std/%s/%s.salam", root, spec, last);
-    else         snprintf(p, n, "std/%s/%s.salam", spec, last);
+    if (root[0]) sal_snprintf(p, n, "%s/std/%s/%s.salam", root, spec, last);
+    else         sal_snprintf(p, n, "std/%s/%s.salam", spec, last);
     
     if (!file_exists(p)) {
         const char *aliased = resolve_pkg_alias(a, root, spec);
@@ -383,11 +384,11 @@ int salam_package_files(arena_t *a, const char *main_path, const char **out, int
     }
 
     char dbuf[1024];
-    if (!dir || !dir[0]) snprintf(dbuf, sizeof dbuf, ".");
-    else                 snprintf(dbuf, sizeof dbuf, "%s", dir);
+    if (!dir || !dir[0]) sal_snprintf(dbuf, sizeof dbuf, ".");
+    else                 sal_snprintf(dbuf, sizeof dbuf, "%s", dir);
 #if defined(_WIN32)
     char pat[1100];
-    snprintf(pat, sizeof pat, "%s/*.salam", dbuf);
+    sal_snprintf(pat, sizeof pat, "%s/*.salam", dbuf);
     struct _finddata_t fd;
     intptr_t h = _findfirst(pat, &fd);
     if (h != -1) {

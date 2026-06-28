@@ -13,6 +13,7 @@
  */
 
 #include "codegen/codegen_internal.h"
+#include "core/sal_format.h"
 #include "semantic/sema.h"   
 
 static void vec_collect_one(cg_t *cg, const char *ts)
@@ -67,7 +68,7 @@ static void dyn_collect(cg_t *cg, ast_node_t *n)
         n->a && n->a->type_str) {
         const char *iface = n->type_str + 4;
         dyn_set_add(cg, &cg->dyn_ifaces, iface);
-        char pair[256]; snprintf(pair, sizeof pair, "%s|%s", iface, n->a->type_str);
+        char pair[256]; sal_snprintf(pair, sizeof pair, "%s|%s", iface, n->a->type_str);
         dyn_set_add(cg, &cg->dyn_impls, pair);
     }
     dyn_collect(cg, n->type); dyn_collect(cg, n->a); dyn_collect(cg, n->b);

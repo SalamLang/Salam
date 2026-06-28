@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "driver/llvm_build.h"
 #include "core/arena.h"
 #include "logger/logger.h"
@@ -131,7 +132,7 @@ int driver_llvm(options_t *opt)
         if (rc == 0) {
             LOG_I(log, PH_DRIVER, "wrote %s", o.output_file);
             if (opt->exe_path[0] == '\0' && o.output_mode == LLVM_OUT_EXEC)
-                snprintf(opt->exe_path, sizeof(opt->exe_path), "%s", o.output_file);
+                sal_snprintf(opt->exe_path, sizeof(opt->exe_path), "%s", o.output_file);
         }
     }
     logger_free(log);

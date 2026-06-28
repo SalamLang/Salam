@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "driver/layout_build.h"
 #include "core/arena.h"
 #include "core/sb.h"
@@ -60,7 +61,7 @@ static const char *path_ext(arena_t *a, const char *mod, const char *ext)
 {
     size_t n = strlen(mod) + strlen(ext) + 2;
     char *p = (char *)arena_alloc(a, n);
-    snprintf(p, n, "%s.%s", mod, ext);
+    sal_snprintf(p, n, "%s.%s", mod, ext);
     return p;
 }
 

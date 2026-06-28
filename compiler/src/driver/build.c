@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "driver/build.h"
 #include "core/arena.h"
 #include "core/sb.h"
@@ -278,7 +279,7 @@ int driver_build(options_t *opt)
         
         const char *dbg_flag = (opt->debug_info && !strstr(opt->cc, "tcc")) ? " -g" : "";
         { int i = 0; for (; i < ncfiles && crc == 0; i++) {
-            char obj[260]; snprintf(obj, sizeof(obj), "%.*s.o", (int)(strlen(cfiles[i]) - 2), cfiles[i]);
+            char obj[260]; sal_snprintf(obj, sizeof(obj), "%.*s.o", (int)(strlen(cfiles[i]) - 2), cfiles[i]);
             sb_t cmd; sb_init(&cmd);
             sb_puts(&cmd, opt->cc); sb_puts(&cmd, " -c -I."); sb_puts(&cmd, dbg_flag);
             sb_puts(&cmd, " "); sb_puts(&cmd, cfiles[i]); sb_puts(&cmd, " -o "); sb_puts(&cmd, obj);
@@ -347,7 +348,7 @@ int driver_build(options_t *opt)
             LOG_I(log, PH_DRIVER, "built executable: %s", output);
             
             if (opt->exe_path[0] == '\0')
-                snprintf(opt->exe_path, sizeof(opt->exe_path), "%s", output);
+                sal_snprintf(opt->exe_path, sizeof(opt->exe_path), "%s", output);
         }
     }
     if (!opt->keep_c) { int i = 0; for (; i < ngen; i++) remove(generated[i]); }

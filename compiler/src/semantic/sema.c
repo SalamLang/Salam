@@ -396,8 +396,9 @@ int salam_package_files(arena_t *a, const char *main_path, const char **out, int
             if (fd.attrib & _A_SUBDIR) continue;
             if (strcmp(fd.name, mainbase) == 0) continue;
             if (n >= max) break;
-            char *full = (char *)arena_alloc(a, strlen(dbuf) + strlen(fd.name) + 2);
-            sprintf(full, "%s/%s", dbuf, fd.name);
+            size_t fcap = strlen(dbuf) + strlen(fd.name) + 2;
+            char *full = (char *)arena_alloc(a, fcap);
+            sal_snprintf(full, fcap, "%s/%s", dbuf, fd.name);
             out[n++] = full;
         } while (_findnext(h, &fd) == 0);
         _findclose(h);
@@ -410,8 +411,9 @@ int salam_package_files(arena_t *a, const char *main_path, const char **out, int
             size_t L = strlen(e->d_name);
             if (L <= 6 || strcmp(e->d_name + L - 6, ".salam") != 0) continue;
             if (strcmp(e->d_name, mainbase) == 0) continue;
-            char *full = (char *)arena_alloc(a, strlen(dbuf) + L + 2);
-            sprintf(full, "%s/%s", dbuf, e->d_name);
+            size_t fcap = strlen(dbuf) + L + 2;
+            char *full = (char *)arena_alloc(a, fcap);
+            sal_snprintf(full, fcap, "%s/%s", dbuf, e->d_name);
             out[n++] = full;
         }
         closedir(d);

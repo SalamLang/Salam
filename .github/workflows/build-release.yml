@@ -15,15 +15,24 @@ jobs:
       - name: Install dependencies (static LLVM + system deps)
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential \
+          sudo apt-get install -y build-essential ccache \
             llvm-18-dev libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev
           gcc --version | head -1
           llvm-config-18 --version
+      - name: Cache ccache (Linux)
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ~/.ccache
+          key: ccache-linux-${{ github.run_id }}
+          restore-keys: |
+            ccache-linux-
       - name: Build salam for Linux (embedded static LLVM)
         run: |
+          export CCACHE_DIR="$HOME/.ccache"; ccache --max-size=500M >/dev/null 2>&1 || true
           make -C compiler -j"$(nproc)" \
-            WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config-18 CC=gcc \
+            WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config-18 CC="ccache gcc" \
             EXTRA_LDFLAGS="-static-libgcc -static-libstdc++"
+          ccache --show-stats 2>/dev/null | head -5 || true
           ./salam version
       - name: Smoke-test the embedded LLVM backend
         run: |
@@ -67,18 +76,37 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Cache Homebrew downloads
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-dl-${{ runner.arch }}-${{ github.run_id }}
+          restore-keys: |
+            brew-dl-${{ runner.arch }}-
       - name: Install dependencies (static LLVM)
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
         run: |
-          brew install llvm@18
+          brew install llvm@18 ccache
           "$(brew --prefix llvm@18)/bin/llvm-config" --version
+      - name: Cache ccache (macOS)
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ~/.ccache
+          key: ccache-macos-${{ github.run_id }}
+          restore-keys: |
+            ccache-macos-
       - name: Build salam for macOS (embedded static LLVM)
         run: |
+          export CCACHE_DIR="$HOME/.ccache"; ccache --max-size=500M >/dev/null 2>&1 || true
           LLVM_PREFIX="$(brew --prefix llvm@18)"
           make -C compiler -j"$(sysctl -n hw.ncpu)" \
             WITH_LLVM=1 LLVM_LINK_STATIC=1 \
-            LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config" CC=clang \
+            LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config" CC="ccache clang" \
             LLVM_CXXLIB=-lc++ \
             EXTRA_LDFLAGS="-L$(brew --prefix)/lib"
+          ccache --show-stats 2>/dev/null | head -5 || true
           ./salam version
       - name: Smoke-test the embedded LLVM backend
         run: |
@@ -87,10 +115,6 @@ jobs:
           ./salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
           ./salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
           rm -f smoke.salam smoke_exe smoke.o salam_mod_*.c salam_mod_*.h
-      # Release gate (macOS): tcc has no working arm64-macOS codegen, so the
-      # C-backend 'general'/'fmt' sections cannot run here; validate the
-      # portable sections (interpreter, LLVM, diagnostics, layout). The C
-      # backend on macOS is covered by `salam build`/LLVM smoke above + Linux.
       - name: Validate test suite (release gate)
         if: startsWith(github.event.head_commit.message, 'release:')
         run: |
@@ -143,19 +167,30 @@ jobs:
           pacman -Sy --noconfirm --needed \
             mingw-w64-x86_64-gcc \
             mingw-w64-x86_64-llvm \
-            make
+            make ccache
           gcc --version | head -1
           llvm-config --version
+
+      - name: Cache ccache (Windows)
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: C:\ccache-win64
+          key: ccache-win64-${{ github.run_id }}
+          restore-keys: |
+            ccache-win64-
 
       - name: Build salam.exe with embedded LLVM (static)
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW64
           CHERE_INVOKING: '1'
+          CCACHE_DIR: 'C:/ccache-win64'
         run: |
+          ccache --max-size=500M >/dev/null 2>&1 || true
           make -C compiler -j2 \
-            WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config CC=gcc \
+            WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config CC="ccache gcc" \
             EXTRA_LDFLAGS="-static -static-libgcc -static-libstdc++"
+          ccache --show-stats 2>/dev/null | head -5 || true
           test -f salam.exe || mv salam salam.exe
           ./salam.exe version
 
@@ -231,6 +266,16 @@ jobs:
           rm -f smoke.salam smoke*.exe smoke.o salam_mod_*.c salam_mod_*.h
           cd ..
 
+      - name: Validate test suite (release gate)
+        if: startsWith(github.event.head_commit.message, 'release:')
+        shell: bash
+        run: |
+          cd compiler
+          SALAM="$GITHUB_WORKSPACE/salam-windows/salam.exe" \
+            sh tools/bash/run-tests.sh general exec errors layout llvm 2>&1 | tee /tmp/tests.log
+          grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
+            || { echo "::error::Windows test suite failed - blocking release"; exit 1; }
+
       - name: Zip the bundle
         shell: bash
         run: |
@@ -266,7 +311,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Cache MSYS2 packages (mingw32)
+      - name: Cache MSYS2 package downloads (mingw32)
         uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: C:\msys64\var\cache\pacman\pkg
@@ -274,17 +319,30 @@ jobs:
           restore-keys: |
             msys2-mingw32-pkgs-
 
-      - name: Install MINGW32 toolchain + LLVM build tools
+      - name: Cache MSYS2 mingw32 toolchain tree
+        id: toolcache
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: C:\msys64\mingw32
+          key: msys2-mingw32-tree-${{ env.CACHE_REV }}
+
+      - name: Install toolchain (only what the cache is missing)
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW32
           CHERE_INVOKING: '1'
         run: |
-          pacman -Sy --noconfirm --needed mingw-w64-i686-gcc make tar xz
-          pacman -S  --noconfirm --needed \
-            mingw-w64-i686-cmake mingw-w64-i686-ninja mingw-w64-i686-python \
-            || pacman -S --noconfirm --needed cmake ninja python || true
-          pacman -S --noconfirm --needed ccache || true
+          pacman -Sy --noconfirm --needed make tar xz ccache \
+            || pacman -Sy --noconfirm --needed make tar xz || true
+          if ! command -v gcc >/dev/null 2>&1; then
+            echo "mingw32 toolchain cache miss - installing gcc + build tools"
+            pacman -S --noconfirm --needed \
+              mingw-w64-i686-gcc mingw-w64-i686-cmake \
+              mingw-w64-i686-ninja mingw-w64-i686-python \
+              || pacman -S --noconfirm --needed mingw-w64-i686-gcc cmake ninja python || true
+          else
+            echo "mingw32 toolchain restored from cache - skipping pacman install"
+          fi
           gcc --version | head -1
           gcc -dumpmachine
           cmake --version | head -1 || true
@@ -515,11 +573,20 @@ jobs:
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y gcc-multilib libc6-dev-i386
+          sudo apt-get install -y gcc-multilib libc6-dev-i386 ccache
           gcc -m32 --version | head -1
+      - name: Cache ccache (Linux i686)
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ~/.ccache
+          key: ccache-linux-i686-${{ github.run_id }}
+          restore-keys: |
+            ccache-linux-i686-
       - name: Build 32-bit salam (C backend)
         run: |
-          make -C compiler -j"$(nproc)" CC="gcc -m32"
+          export CCACHE_DIR="$HOME/.ccache"; ccache --max-size=300M >/dev/null 2>&1 || true
+          make -C compiler -j"$(nproc)" CC="ccache gcc -m32"
+          ccache --show-stats 2>/dev/null | head -5 || true
           file salam
           ./salam version
       - name: Smoke-test the 32-bit binary
@@ -574,11 +641,20 @@ jobs:
       - name: Install cross toolchain + qemu
         run: |
           sudo apt-get update
-          sudo apt-get install -y ${{ matrix.pkg }} qemu-user-static
+          sudo apt-get install -y ${{ matrix.pkg }} qemu-user-static ccache
           ${{ matrix.cc }} --version | head -1
+      - name: Cache ccache (${{ matrix.arch }})
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ~/.ccache
+          key: ccache-linux-${{ matrix.arch }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-linux-${{ matrix.arch }}-
       - name: Cross-build salam for ${{ matrix.arch }}
         run: |
-          make -C compiler -j"$(nproc)" CC=${{ matrix.cc }}
+          export CCACHE_DIR="$HOME/.ccache"; ccache --max-size=300M >/dev/null 2>&1 || true
+          make -C compiler -j"$(nproc)" CC="ccache ${{ matrix.cc }}"
+          ccache --show-stats 2>/dev/null | head -5 || true
           file salam
       - name: Smoke-test under qemu
         run: |

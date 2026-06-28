@@ -223,7 +223,7 @@ int driver_build(options_t *opt)
                         if (ndefs < SALAM_MAX_INPUTS) {
                             size_t ll = strlen(lib);
                             char *def = (char *)arena_alloc(arena, ll + 12);
-                            strcpy(def, "SALAM_LINK_");
+                            memcpy(def, "SALAM_LINK_", sizeof("SALAM_LINK_") - 1);
                             { size_t c = 0; for (; c < ll; c++) {
                                 char ch = lib[c];
                                 if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
@@ -250,10 +250,11 @@ int driver_build(options_t *opt)
         codegen_output_t *out = codegen_run(arena, log, program, sr, module, opt->safe,
                                             opt->debug_info, src->path, langpack_entry(pack));
         size_t pfxlen = strlen(SALAM_MOD_PREFIX);
-        char *cpath = (char *)arena_alloc(arena, pfxlen + strlen(module) + 3);
-        char *hpath = (char *)arena_alloc(arena, pfxlen + strlen(module) + 3);
-        sprintf(cpath, "%s%s.c", SALAM_MOD_PREFIX, module);
-        sprintf(hpath, "%s%s.h", SALAM_MOD_PREFIX, module);
+        size_t pathcap = pfxlen + strlen(module) + 3;
+        char *cpath = (char *)arena_alloc(arena, pathcap);
+        char *hpath = (char *)arena_alloc(arena, pathcap);
+        sal_snprintf(cpath, pathcap, "%s%s.c", SALAM_MOD_PREFIX, module);
+        sal_snprintf(hpath, pathcap, "%s%s.h", SALAM_MOD_PREFIX, module);
         if (!write_file(log, cpath, out->c_src) || !write_file(log, hpath, out->h_src))
             { all_ok = false; continue; }
         cfiles[ncfiles++] = cpath;
@@ -291,8 +292,9 @@ int driver_build(options_t *opt)
     } else {
         const char *output = opt->output;
         if (!output) {
-            char *o = (char *)arena_alloc(arena, strlen(first_module) + 5);
-            sprintf(o, "%s.exe", first_module);
+            size_t ocap = strlen(first_module) + 5;
+            char *o = (char *)arena_alloc(arena, ocap);
+            sal_snprintf(o, ocap, "%s.exe", first_module);
             output = o;
         }
 #ifdef _WIN32

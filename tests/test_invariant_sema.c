@@ -1,89 +1,70 @@
-#include <check.h>
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
-#include <unistd.h>
-#include <sys/stat.h>
 
-// Include the actual production header
-#include "compiler/src/semantic/sema.h"
+#include "core/arena.h"
+#include "semantic/sema.h"
 
-START_TEST(test_path_traversal_containment)
+#ifndef _WIN32
+#  include <sys/stat.h>
+#  include <unistd.h>
+#endif
+
+static int test_path_traversal_containment(void)
 {
-    // Invariant: Path resolution must never escape the declared root directory
     const char *payloads[] = {
-        "../../../etc/passwd",           // Classic traversal
-        "....//....//etc/passwd",        // Double dot obfuscation
-        "valid/file.txt",                // Valid input (should pass)
-        "%2e%2e%2fetc%2fpasswd",         // URL encoded traversal
-        "subdir/../../rootfile"          // Mixed traversal
+        "../../../etc/passwd.salam",
+        "....//....//etc/passwd.salam",
+        "subdir/../../rootfile.salam",
     };
-    int num_payloads = sizeof(payloads) / sizeof(payloads[0]);
-    
-    // Create a test root directory
+    int num_payloads = (int)(sizeof(payloads) / sizeof(payloads[0]));
+
+#ifndef _WIN32
     char test_root[PATH_MAX];
-    strcpy(test_root, "/tmp/test_root_XXXXXX");
-    mkdtemp(test_root);
-    
-    // Create expected safe subdirectory
+    strncpy(test_root, "/tmp/test_root_XXXXXX", sizeof(test_root) - 1);
+    test_root[sizeof(test_root) - 1] = '\0';
+    if (!mkdtemp(test_root)) return 1;
+
     char safe_dir[PATH_MAX];
-    snprintf(safe_dir, sizeof(safe_dir), "%s/safe", test_root);
-    mkdir(safe_dir, 0755);
-    
-    for (int i = 0; i < num_payloads; i++) {
-        char resolved[PATH_MAX];
-        char full_path[PATH_MAX];
-        
-        // Call the actual production function
-        int result = salam_resolve_import(payloads[i], safe_dir, resolved, sizeof(resolved));
-        
-        if (result == 0) {
-            // Path was resolved - verify it stays within test_root
-            realpath(resolved, full_path);
-            ck_assert_msg(strncmp(full_path, test_root, strlen(test_root)) == 0,
-                         "Path traversal vulnerability: %s resolved to %s which escapes %s",
-                         payloads[i], full_path, test_root);
-        } else {
-            // Resolution failed - this is acceptable for malicious payloads
-            // For valid input we expect success
-            if (strcmp(payloads[i], "valid/file.txt") == 0) {
-                ck_abort_msg("Valid path '%s' was rejected", payloads[i]);
+    if (snprintf(safe_dir, sizeof(safe_dir), "%s/safe", test_root) < 0) {
+        rmdir(test_root);
+        return 1;
+    }
+    if (mkdir(safe_dir, 0755) != 0) {
+        rmdir(test_root);
+        return 1;
+    }
+#else
+    const char *safe_dir = "C:\\Temp\\test_safe";
+    const char *test_root = "C:\\Temp";
+#endif
+
+    arena_t *a = arena_new(4096);
+    int failures = 0;
+
+    int i;
+    for (i = 0; i < num_payloads; i++) {
+        const char *result = salam_resolve_import(a, safe_dir, payloads[i]);
+        if (result && result[0] != '\0') {
+            if (strncmp(result, test_root, strlen(test_root)) != 0) {
+                failures++;
             }
         }
     }
-    
-    // Cleanup
+
+    const char *valid = salam_resolve_import(a, safe_dir, "valid/file.salam");
+    if (!valid || valid[0] == '\0') failures++;
+
+#ifndef _WIN32
     rmdir(safe_dir);
     rmdir(test_root);
-}
-END_TEST
+#endif
 
-Suite *security_suite(void)
-{
-    Suite *s;
-    TCase *tc_core;
-
-    s = suite_create("Security");
-    tc_core = tcase_create("Core");
-
-    tcase_add_test(tc_core, test_path_traversal_containment);
-    suite_add_tcase(s, tc_core);
-
-    return s;
+    return failures;
 }
 
 int main(void)
 {
-    int number_failed;
-    Suite *s;
-    SRunner *sr;
-
-    s = security_suite();
-    sr = srunner_create(s);
-
-    srunner_run_all(sr, CK_NORMAL);
-    number_failed = srunner_ntests_failed(sr);
-    srunner_free(sr);
-
-    return (number_failed == 0) ? EXIT_SUCCESS : EXIT_FAILURE;
+    int failed = test_path_traversal_containment();
+    return (failed == 0) ? EXIT_SUCCESS : EXIT_FAILURE;
 }

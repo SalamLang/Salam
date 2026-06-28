@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "core/numstr.h"
+#include "core/sal_format.h"
 #include "semantic/sema.h"
 #include "semantic/sema_internal.h"
 #include "source/source.h"
@@ -218,20 +219,39 @@ bool salam_find_bundled_tool(const char *name, char *out, size_t n)
 
 static char *path_normalize(char *p)
 {
-    while (p[0] == '.' && p[1] == '/') memmove(p, p + 2, strlen(p + 2) + 1);
+    size_t len = strlen(p);
+    char *tmp = (char *)malloc(len + 1);
+    if (!tmp) return p;
+    memcpy(tmp, p, len + 1);
 
-    char *q;
-    while ((q = strstr(p, "/./")) != NULL) memmove(q + 1, q + 3, strlen(q + 3) + 1);
-
-    /* Collapse dir/../ sequences to prevent directory traversal */
-    while ((q = strstr(p, "/../")) != NULL) {
-        char *s = q;
-        while (s > p && s[-1] != '/') s--;
-        memmove(s, q + 4, strlen(q + 4) + 1);
+    const char *segs[256];
+    int ns = 0;
+    char *tok = tmp;
+    while (*tok) {
+        char *slash = strchr(tok, '/');
+        if (slash) *slash = '\0';
+        if (strcmp(tok, ".") == 0 || tok[0] == '\0') {
+            /* skip */
+        } else if (strcmp(tok, "..") == 0) {
+            if (ns > 0) ns--;
+        } else {
+            if (ns < 256) segs[ns++] = tok;
+        }
+        if (!slash) break;
+        tok = slash + 1;
     }
-    /* Strip leading ../ sequences */
-    while (p[0] == '.' && p[1] == '.' && p[2] == '/') memmove(p, p + 3, strlen(p + 3) + 1);
 
+    size_t out = 0;
+    int i;
+    for (i = 0; i < ns; i++) {
+        size_t slen = strlen(segs[i]);
+        if (i > 0) p[out++] = '/';
+        memcpy(p + out, segs[i], slen);
+        out += slen;
+    }
+    p[out] = '\0';
+
+    free(tmp);
     return p;
 }
 
@@ -330,9 +350,13 @@ const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec)
     char *p = (char *)arena_alloc(a, n);
     
     if (has_ext) {
-        if (dir && dir[0]) snprintf(p, n, "%s/%s", dir, spec);
-        else               snprintf(p, n, "%s", spec);
-        return path_normalize(p);
+        if (dir && dir[0]) sal_snprintf(p, n, "%s/%s", dir, spec);
+        else               sal_snprintf(p, n, "%s", spec);
+        path_normalize(p);
+        if (dir && dir[0] && dir[0] == '/' &&
+            strncmp(p, dir, strlen(dir)) != 0)
+            return "";
+        return p;
     }
     
     const char *slash = strrchr(spec, '/');
@@ -406,7 +430,7 @@ int salam_package_files(arena_t *a, const char *main_path, const char **out, int
             if (strcmp(fd.name, mainbase) == 0) continue;
             if (n >= max) break;
             char *full = (char *)arena_alloc(a, strlen(dbuf) + strlen(fd.name) + 2);
-            snprintf(full, strlen(dbuf) + strlen(fd.name) + 2, "%s/%s", dbuf, fd.name);
+            sal_snprintf(full, strlen(dbuf) + strlen(fd.name) + 2, "%s/%s", dbuf, fd.name);
             out[n++] = full;
         } while (_findnext(h, &fd) == 0);
         _findclose(h);
@@ -420,7 +444,7 @@ int salam_package_files(arena_t *a, const char *main_path, const char **out, int
             if (L <= 6 || strcmp(e->d_name + L - 6, ".salam") != 0) continue;
             if (strcmp(e->d_name, mainbase) == 0) continue;
             char *full = (char *)arena_alloc(a, strlen(dbuf) + L + 2);
-            snprintf(full, strlen(dbuf) + L + 2, "%s/%s", dbuf, e->d_name);
+            sal_snprintf(full, strlen(dbuf) + L + 2, "%s/%s", dbuf, e->d_name);
             out[n++] = full;
         }
         closedir(d);

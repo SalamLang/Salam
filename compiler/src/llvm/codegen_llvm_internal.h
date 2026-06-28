@@ -141,6 +141,10 @@ long        ll_array_dim(const char *ts);
 
 const char *ll_array_elem(ll_t *ll, const char *ts);
 
+bool        ll_is_slice_ts(const char *ts);
+
+const char *ll_slice_elem(ll_t *ll, const char *ts);
+
 const char *ll_struct_ltype(ll_t *ll, const char *name);
 
 symbol_t   *ll_sym(ll_t *ll, const char *name);

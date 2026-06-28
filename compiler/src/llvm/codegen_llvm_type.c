@@ -83,7 +83,18 @@ const char *ll_array_elem(ll_t *ll, const char *ts)
     if (!lb) return ts;
     const char *rb = strchr(lb, ']');
     if (!rb) return ts;
-    return ll_fmt(ll, "%.*s%s", (int)(lb - ts), ts, rb + 1);   
+    return ll_fmt(ll, "%.*s%s", (int)(lb - ts), ts, rb + 1);
+}
+
+bool ll_is_slice_ts(const char *ts) { return ts && !strncmp(ts, "slice<", 6); }
+
+const char *ll_slice_elem(ll_t *ll, const char *ts)
+{
+    if (!ts) return "i32";
+    const char *lt = strchr(ts, '<');
+    const char *gt = strrchr(ts, '>');
+    if (!lt || !gt || gt <= lt) return "i32";
+    return arena_strndup(ll->a, lt + 1, (size_t)(gt - lt - 1));
 }
 
 const char *ll_struct_ltype(ll_t *ll, const char *name)
@@ -184,7 +195,8 @@ const char *ll_ty(ll_t *ll, const char *ts)
     if (!strncmp(ts, "dyn ", 4) && !strchr(ts, '[')) return "%dyn";  
     if (ll_is_str(ts))   return "ptr";
     if (ll_is_ptr_ts(ts)) return "ptr";
-    if (strchr(ts, '['))                                    
+    if (ll_is_slice_ts(ts)) return "{ ptr, i64 }";
+    if (strchr(ts, '['))
         return ll_fmt(ll, "[%ld x %s]", ll_array_dim(ts), ll_ty(ll, ll_array_elem(ll, ts)));
     if (!strcmp(ts, "f32")) return "float";
     if (!strcmp(ts, "f64")) return "double";

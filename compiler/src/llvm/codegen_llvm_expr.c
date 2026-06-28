@@ -13,6 +13,7 @@
  */
 
 #include "llvm/codegen_llvm_internal.h"
+#include "core/sal_format.h"
 #include "codegen/print_fmt.h"
 
 static const char *ll_arith_op(token_kind_t k, bool isflt, bool issigned)
@@ -844,8 +845,8 @@ static llv_t ll_literal(ll_t *ll, ast_node_t *n)
             return (llv_t){ ll_fmt(ll, "%lld", (long long)n->value.as.i), ts };
         }
         case TK_FLOAT: {
-            char buf[64]; snprintf(buf, sizeof buf, "%.17g", n->value.as.f);
-            if (!strpbrk(buf, ".eEnN")) { strncat(buf, ".0", sizeof(buf)-strlen(buf)-1); }
+            char buf[64]; sal_snprintf(buf, sizeof buf, "%.17g", n->value.as.f);
+            if (!strpbrk(buf, ".eEnN")) sal_snprintf(buf, sizeof buf, "%.17g.0", n->value.as.f);
             return (llv_t){ arena_strdup(ll->a, buf), n->type_str ? n->type_str : "f64" };
         }
         case TK_STRING: case TK_TRIPLE_STRING: case TK_RAW_STRING: case TK_UTF8_CHAR:

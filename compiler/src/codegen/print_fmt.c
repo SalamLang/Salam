@@ -13,6 +13,7 @@
  */
 
 #include "codegen/print_fmt.h"
+#include "core/sal_format.h"
 #include "core/numstr.h"
 #include "core/sb.h"
 #include "token/token.h"
@@ -139,7 +140,7 @@ static bool pf_try_fold(ast_node_t *arg, sb_t *sb)
         }
     }
     if (ts_is_float(ts)) {
-        double f; if (fold_flt(arg, &f)) { char b[40]; snprintf(b, sizeof b, "%g", f); sb_puts(sb, b); return true; }
+        double f; if (fold_flt(arg, &f)) { char b[40]; sal_snprintf(b, sizeof b, "%g", f); sb_puts(sb, b); return true; }
         return false;
     }
     if (ts_is_int(ts)) {

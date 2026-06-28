@@ -87,7 +87,7 @@ const char *to_str(interp_t *I, value_t v)
         case VAL_NULL:  return "null";
         case VAL_FLOAT: {
             char buf[64];
-            snprintf(buf, sizeof buf, "%.15g", v.as.f);
+            sal_snprintf(buf, sizeof buf, "%.15g", v.as.f);
             return arena_strdup(I->a, buf);
         }
         case VAL_ARRAY: {

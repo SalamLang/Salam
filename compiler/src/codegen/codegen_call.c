@@ -13,6 +13,7 @@
  */
 
 #include "codegen/codegen_internal.h"
+#include "core/sal_format.h"
 #include "codegen/print_fmt.h"
 #include "i18n/i18n.h"
 #include "semantic/builtins.h"
@@ -91,17 +92,17 @@ static const char *cg_print_legacy(cg_t *cg, ast_node_t *n, bool nl, int err)
     { size_t i = 0; for (; i < n->list.len; i++) {
         ast_node_t *arg = (ast_node_t *)n->list.data[i];
         char piece[40];
-        if (i) { snprintf(piece, sizeof piece, "salam_emit(\" \", %d); ", err); sb_puts(&b, piece); }
+        if (i) { sal_snprintf(piece, sizeof piece, "salam_emit(\" \", %d); ", err); sb_puts(&b, piece); }
         if (arg->type_str && !strcmp(arg->type_str, "str")) {
             sb_puts(&b, "salam_emit("); sb_puts(&b, cg_expr(cg, arg));
-            snprintf(piece, sizeof piece, ", %d); ", err); sb_puts(&b, piece);
+            sal_snprintf(piece, sizeof piece, ", %d); ", err); sb_puts(&b, piece);
         } else {
-            snprintf(piece, sizeof piece, "salam_emit_owned(salam_tostr_%s(", prim_suffix(print_tag(arg->type_str)));
+            sal_snprintf(piece, sizeof piece, "salam_emit_owned(salam_tostr_%s(", prim_suffix(print_tag(arg->type_str)));
             sb_puts(&b, piece); sb_puts(&b, cg_expr(cg, arg));
-            snprintf(piece, sizeof piece, "), %d); ", err); sb_puts(&b, piece);
+            sal_snprintf(piece, sizeof piece, "), %d); ", err); sb_puts(&b, piece);
         }
     } }
-    if (nl) { char z[40]; snprintf(z, sizeof z, "salam_emit(\"\\n\", %d); ", err); sb_puts(&b, z); }
+    if (nl) { char z[40]; sal_snprintf(z, sizeof z, "salam_emit(\"\\n\", %d); ", err); sb_puts(&b, z); }
     sb_puts(&b, "})");
     const char *r = arena_strdup(cg->a, sb_cstr(&b)); sb_free(&b); return r;
 }

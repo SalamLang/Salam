@@ -73,6 +73,16 @@ void sb_printf(sb_t *s, const char *fmt, ...)
     va_end(ap2);
 }
 
+void sb_put_shell_arg(sb_t *s, const char *arg)
+{
+    sb_putc(s, '"');
+    { const char *p = arg; for (; *p; p++) {
+        if (*p == '"') sb_putc(s, '\\');
+        sb_putc(s, *p);
+    } }
+    sb_putc(s, '"');
+}
+
 const char *sb_cstr(const sb_t *s)
 {
     return s->data ? s->data : "";

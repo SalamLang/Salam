@@ -13,6 +13,7 @@
  */
 
 #include "xml/xml_internal.h"
+#include "core/sal_format.h"
 
 static void xml_escaped(xml_writer_t *w, const char *s)
 {
@@ -66,6 +67,6 @@ void xml_leaf(xml_writer_t *w, const char *tag, const char *text)
 void xml_leaf_int(xml_writer_t *w, const char *tag, long long value)
 {
     char buf[32];
-    snprintf(buf, sizeof(buf), "%lld", value);
+    sal_snprintf(buf, sizeof(buf), "%lld", value);
     xml_leaf(w, tag, buf);
 }

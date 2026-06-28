@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "semantic/sema_internal.h"
 #include "i18n/i18n.h"
 
@@ -63,7 +64,7 @@ static void check_link(sema_t *s, ast_node_t *d)
     if (!absolute && s->dir && s->dir[0]) {
         size_t n = strlen(s->dir) + 1 + strlen(spec) + 1;
         char *buf = (char *)arena_alloc(s->a, n);
-        snprintf(buf, n, "%s/%s", s->dir, spec);
+        sal_snprintf(buf, n, "%s/%s", s->dir, spec);
         full = buf;
     }
     FILE *f = fopen(full, "rb");
@@ -86,7 +87,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
             const char *c_type_name = d->name;
             if (s->pkg && s->pkg[0] && strcmp(s->pkg, "main") != 0) {
                 char _ctn[512];
-                snprintf(_ctn, sizeof(_ctn), "%s_%s", s->pkg, d->name);
+                sal_snprintf(_ctn, sizeof(_ctn), "%s_%s", s->pkg, d->name);
                 c_type_name = arena_strdup(s->a, _ctn);
             }
             sym->type = type_struct(s->tc, sym, c_type_name);
@@ -101,7 +102,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
             const char *c_enum_name = d->name;
             if (s->pkg && s->pkg[0] && strcmp(s->pkg, "main") != 0) {
                 char _cen[512];
-                snprintf(_cen, sizeof(_cen), "%s_%s", s->pkg, d->name);
+                sal_snprintf(_cen, sizeof(_cen), "%s_%s", s->pkg, d->name);
                 c_enum_name = arena_strdup(s->a, _cen);
             }
             sym->type = type_enum(s->tc, sym, c_enum_name);

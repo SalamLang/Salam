@@ -255,7 +255,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         if (!sym || (sym->kind != SYM_FUNC && sym->kind != SYM_METHOD)) {
             if (!strcmp(nm, "len") && argtypes.len == 1) {
                 type_kind_t ak = ((type_t *)argtypes.data[0])->kind;
-                if (ak == TY_ARRAY || ak == TY_STR) {
+                if (ak == TY_ARRAY || ak == TY_SLICE || ak == TY_STR) {
                     decorate(s, callee, ty(s, TY_VOID));
                     return decorate(s, n, ty(s, TY_I32));
                 }

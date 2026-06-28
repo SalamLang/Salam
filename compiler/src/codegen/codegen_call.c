@@ -212,6 +212,8 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
     }
     if (!strcmp(nm,"len") && n->list.len == 1) {
         ast_node_t *arg = (ast_node_t *)n->list.data[0];
+        if (cg_is_slice_ts(arg->type_str))
+            return cg_fmt(cg, "(int32_t)(%s).len", cg_expr(cg, arg));
         if (arg->type_str && strchr(arg->type_str, '[')) {
             long sz = array_size_of(arg->type_str);
             return cg_fmt(cg, "%ld", sz);

@@ -36,7 +36,7 @@ typedef enum {
     AST_RETURN, AST_BREAK, AST_CONTINUE, AST_DEFER, AST_EXPR_STMT,
     AST_BINARY, AST_UNARY, AST_CAST,
     AST_LITERAL, AST_IDENTIFIER, AST_THIS,
-    AST_CALL, AST_MEMBER, AST_INDEX,
+    AST_CALL, AST_MEMBER, AST_INDEX, AST_SLICE,
     AST_LAMBDA,
     AST_ARRAY_LIT, AST_STRUCT_LIT, AST_FIELD_INIT,
     AST_TYPE,
@@ -61,6 +61,7 @@ struct ast_node {
     bool          is_dyn;
     bool          is_ref;
     bool          is_pub;
+    bool          is_slice;
     ast_node_t   *type;
     ast_node_t   *a, *b, *c, *d;
     vec_t         list;

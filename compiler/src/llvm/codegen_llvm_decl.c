@@ -333,7 +333,8 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
 
     
     sb_t body; sb_init(&body);
-    sb_t *saved_b = ll->b;
+    sb_t allocs; sb_init(&allocs);
+    sb_t *saved_b = ll->b, *saved_allocas = ll->allocas;
     int saved_tmp = ll->tmp, saved_lbl = ll->lbl, saved_nloop = ll->nloop;
     bool saved_main = ll->is_main, saved_term = ll->term;
     const char *saved_ret = ll->ret_ts, *saved_self = ll->self_ts, *saved_this = ll->this_ref;
@@ -342,7 +343,8 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     const char *saved_env = ll->env_ref, *saved_envty = ll->env_ty;
     vec_t saved_locals = ll->locals, saved_defers = ll->defers;
 
-    ll->b = &body; ll->tmp = 0; ll->lbl = 0; ll->nloop = 0; ll->term = false;
+    ll->b = &body; ll->allocas = &allocs;
+    ll->tmp = 0; ll->lbl = 0; ll->nloop = 0; ll->term = false;
     ll->is_main = false; ll->ret_ts = rts; ll->self_ts = NULL; ll->this_ref = NULL;
     ll->cur_lambda = n; ll->env_ref = "%env"; ll->env_ty = envty;
     vec_init(&ll->locals); vec_init(&ll->defers);
@@ -357,7 +359,6 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     sb_puts(&hdr, ") {\n");
     const char *header = arena_strdup(ll->a, sb_cstr(&hdr)); sb_free(&hdr);
 
-    ll_emit_label(ll, "entry");
     { size_t i = 0; for (; i < n->list.len; i++) {
         ast_node_t *p = (ast_node_t *)n->list.data[i];
         if (p->is_ref) { ll_local_add(ll, p->name, ll_fmt(ll, "%%arg%zu", i), p->type_str); continue; }
@@ -370,9 +371,11 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     if (!ll->term) ll_emit_return(ll, NULL);
 
     sb_puts(ll->g, header);
+    sb_puts(ll->g, "entry:\n");
+    sb_puts(ll->g, sb_cstr(&allocs));
     sb_puts(ll->g, sb_cstr(&body));
     sb_puts(ll->g, "}\n\n");
-    sb_free(&body);
+    sb_free(&body); sb_free(&allocs); ll->allocas = saved_allocas;
 
     ll->b = saved_b; ll->tmp = saved_tmp; ll->lbl = saved_lbl; ll->nloop = saved_nloop;
     ll->is_main = saved_main; ll->term = saved_term; ll->ret_ts = saved_ret;

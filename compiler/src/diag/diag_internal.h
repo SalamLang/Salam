@@ -22,17 +22,17 @@
 
 #define A_BOLD   "\033[1m"
 
-#define A_RED    "\033[1;31m"   /* bold red    - error   */
+#define A_RED    "\033[1;31m"
 
-#define A_YELLOW "\033[1;33m"   /* bold yellow - warning */
+#define A_YELLOW "\033[1;33m"
 
-#define A_CYAN   "\033[1;36m"   /* bold cyan   - note    */
+#define A_CYAN   "\033[1;36m"
 
-#define A_GREEN  "\033[1;32m"   /* bold green  - help    */
+#define A_GREEN  "\033[1;32m"
 
-#define A_BLUE   "\033[34m"     /* blue        - gutter  */
+#define A_BLUE   "\033[34m"
 
-#define A_BBLUE  "\033[1;34m"   /* bold blue   - line numbers */
+#define A_BBLUE  "\033[1;34m"
 
 void diag_render_rust(FILE *sink,
                       const char *level, int code, bool is_error,

@@ -15,12 +15,12 @@
 #ifndef SALAM_CORE_PRELUDE_H
 #define SALAM_CORE_PRELUDE_H
 
-#include <stdlib.h>   /* size_t, NULL, malloc/free/abort, strtol */
-#include <string.h>   /* memcpy, strlen, strcmp */
-#include <stdio.h>    /* FILE, fprintf, vsnprintf, snprintf */
-#include <stdarg.h>   /* va_list */
-#include "core/sal_types.h" /* uint32_t/int64_t/bool: <stdint.h>+<stdbool.h> */
-#include <ctype.h>    /* isdigit, isalpha, isspace, isalnum */
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include "core/sal_types.h"
+#include <ctype.h>
 
 #define CONST_CAST(p) ((void *)(uintptr_t)(const void *)(p))
 

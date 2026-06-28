@@ -18,11 +18,11 @@
 #include "core/prelude.h"
 
 typedef struct {
-    const char *name;     /* Salam name      */
-    const char *runtime;  /* C runtime symbol */
+    const char *name;
+    const char *runtime;
     int         nargs;
-    const char *ret;      /* return type     */
-    const char *arg;      /* each arg's type */
+    const char *ret;
+    const char *arg;
 } salam_builtin_t;
 
 const salam_builtin_t *salam_builtin_lookup(const char *name);

@@ -32,43 +32,43 @@ typedef struct { const char *name; value_t val; } binding_t;
 
 typedef struct env {
     struct env *parent;
-    vec_t       bindings;   /* binding_t* */
+    vec_t       bindings;
 } env_t;
 
 typedef struct module {
-    const char *name;   /* canonical package name (pkgname), e.g. "math"  */
-    env_t      *env;    /* the package's top-level scope (funcs + consts) */
+    const char *name;
+    env_t      *env;
 } module_t;
 
 typedef enum { FLOW_NORMAL = 0, FLOW_RETURN, FLOW_BREAK, FLOW_CONTINUE } flow_t;
 
 typedef struct { ast_node_t *stmt; env_t *env; } defer_t;
 
-typedef struct { vec_t defers; /* defer_t* */ } frame_t;
+typedef struct { vec_t defers; } frame_t;
 
 typedef struct {
-    arena_t       *a;          /* runtime arena (values, strings, objects)    */
+    arena_t       *a;
     logger_t      *log;
     sema_result_t *sem;
-    const char    *entry;      /* entry-point function name ("main"/"اصلی")    */
+    const char    *entry;
     FILE          *out;
     FILE          *err;
     const char    *lang;
     env_t         *globals;
-    vec_t          funcs;      /* ast_node_t* AST_FUNC_DEF (top-level)         */
-    vec_t          structs;    /* ast_node_t* AST_STRUCT_DEF                   */
-    vec_t          enums;      /* ast_node_t* AST_ENUM_DEF                     */
-    vec_t          impls;      /* ast_node_t* AST_IMPL_DEF (impl Iface for T)  */
-    vec_t          modules;    /* module_t*  imported packages (std .salam)   */
-    const char    *in_data;    /* preloaded stdin                              */
+    vec_t          funcs;
+    vec_t          structs;
+    vec_t          enums;
+    vec_t          impls;
+    vec_t          modules;
+    const char    *in_data;
     size_t         in_pos;
     jmp_buf        on_error;
     char           errmsg[512];
     src_span_t     errspan;
     bool           have_errspan;
-    unsigned long long steps;   /* watchdog: work counter */
-    clock_t        deadline;    /* watchdog: abort once clock() passes this (0 = off) */
-    unsigned       depth;       /* watchdog: native call-recursion depth */
+    unsigned long long steps;
+    clock_t        deadline;
+    unsigned       depth;
 } interp_t;
 
 #define INTERP_MAX_DEPTH 1000
@@ -143,11 +143,11 @@ value_t default_for_type(interp_t *I, const char *ts);
 
 value_t arith(interp_t *I, ast_node_t *n, token_kind_t op, value_t a, value_t b);
 
-int     value_cmp(interp_t *I, value_t a, value_t b);   /* -1 / 0 / 1 */
+int     value_cmp(interp_t *I, value_t a, value_t b);
 
 bool    value_eq(interp_t *I, value_t a, value_t b);
 
-token_kind_t compound_base(token_kind_t op);   /* `+=` -> `+`, etc. */
+token_kind_t compound_base(token_kind_t op);
 
 value_t try_struct_op(interp_t *I, token_kind_t op, value_t a, value_t b,
                       bool has_b, bool *found);

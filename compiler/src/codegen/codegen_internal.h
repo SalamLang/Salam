@@ -29,25 +29,25 @@ typedef struct {
     sb_t          *h;
     sb_t          *c;
     int            indent;
-    vec_t          locals;     /* const char* names currently in scope */
-    symbol_t      *cur_struct; /* enclosing struct (method bodies) */
-    bool           safe;       /* emit runtime bounds checks */
-    bool           debug_info; /* emit #line directives for GDB/LLDB */
-    const char    *src_path;   /* .salam source path used in #line "..." */
-    int            tmpn;       /* counter for materialized temporaries */
-    bool           cur_sret;   /* current function returns a struct via __ret */
-    vec_t          vec_types;  /* distinct "Vector<T>" type strings (monomorphization) */
-    vec_t          dyn_ifaces; /* distinct interface names used as `dyn Iface`        */
-    vec_t          dyn_impls;  /* distinct "Iface|Concrete" coercion pairs (vtables)  */
-    const char    *pkg;        /* package name of the module being compiled */
-    const char    *entry;      /* source entry-point name ("main"/"اصلی") -> C main */
-    vec_t          deferred;   /* const char* assignment stmts for non-constant globals */
-    vec_t          fn_defers;  /* ast_node_t* deferred stmts in current function (LIFO) */
-    sb_t          *lam_decls;  /* forward decls of lifted lambdas */
-    sb_t          *lam_defs;   /* definitions of lifted lambdas (emitted top-level) */
-    int            lam_n;      /* lifted-lambda counter */
-    int            clos_n;     /* counter for unique closure-call temporaries */
-    ast_node_t    *cur_lambda; /* lambda whose body is being emitted (capture rewrite) */
+    vec_t          locals;
+    symbol_t      *cur_struct;
+    bool           safe;
+    bool           debug_info;
+    const char    *src_path;
+    int            tmpn;
+    bool           cur_sret;
+    vec_t          vec_types;
+    vec_t          dyn_ifaces;
+    vec_t          dyn_impls;
+    const char    *pkg;
+    const char    *entry;
+    vec_t          deferred;
+    vec_t          fn_defers;
+    sb_t          *lam_decls;
+    sb_t          *lam_defs;
+    int            lam_n;
+    int            clos_n;
+    ast_node_t    *cur_lambda;
 } cg_t;
 
 const char *cg_fmt(cg_t *cg, const char *fmt, ...);

@@ -45,7 +45,7 @@ void lx_scan_meta(lx_t *L)
     lx_skip_ident(L);
     const char *name = lx_slice(L, start);
 
-    if (!L->keep_comments) {            /* keep original spelling when formatting */
+    if (!L->keep_comments) {
         const char *canon = langpack_canon_word(L->pack, name);
         if (canon) name = canon;
     }

@@ -24,8 +24,8 @@ typedef struct { const char *canon; const char *spelling; } ctx_entry_t;
 struct langpack {
     const char       *code;
     const kw_entry_t *keywords;
-    const char       *entry;       /* entry-point function name (-> C `main`) */
-    const ctx_entry_t *contextual; /* localized contextual words, or NULL */
+    const char       *entry;
+    const ctx_entry_t *contextual;
 };
 
 extern struct langpack g_lang_en;

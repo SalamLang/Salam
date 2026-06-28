@@ -29,9 +29,9 @@ typedef struct {
     arena_t              *a;
     logger_t             *log;
     bool                  had_error;
-    bool                  panic;        /* in error-recovery mode */
-    bool                  no_struct_lit;/* suppress struct literals in conditions */
-    int                   depth;        /* current recursion depth (stack-overflow guard) */
+    bool                  panic;
+    bool                  no_struct_lit;
+    int                   depth;
 } parser_t;
 
 const token_t *p_peek(const parser_t *p);
@@ -88,29 +88,29 @@ void p_comma_list(parser_t *p, ast_node_t *parent, token_kind_t close, p_elem_fn
     LOG_T_AT((p)->log, PH_PARSER, (p)->file, p_peek(p)->span, "rule %s @ %s", \
              (nm), token_kind_name(p_peek(p)->kind))
 
-ast_node_t *parse_expr(parser_t *p);            /* parser_expr.c */
+ast_node_t *parse_expr(parser_t *p);
 
-ast_node_t *parse_primary(parser_t *p);         /* parser_expr_primary.c */
+ast_node_t *parse_primary(parser_t *p);
 
-ast_node_t *parse_type(parser_t *p);            /* parser_type.c */
+ast_node_t *parse_type(parser_t *p);
 
-ast_node_t *parse_type_anno(parser_t *p);       /* parser_type.c */
+ast_node_t *parse_type_anno(parser_t *p);
 
-ast_node_t *parse_top_level(parser_t *p);       /* parser_decl.c */
+ast_node_t *parse_top_level(parser_t *p);
 
-ast_node_t *parse_const(parser_t *p);           /* parser_decl.c */
+ast_node_t *parse_const(parser_t *p);
 
-ast_node_t *parse_block(parser_t *p);           /* parser_stmt.c */
+ast_node_t *parse_block(parser_t *p);
 
-ast_node_t *parse_var_decl(parser_t *p);        /* parser_decl_var.c */
+ast_node_t *parse_var_decl(parser_t *p);
 
-ast_node_t *parse_bare_var_decl(parser_t *p);   /* parser_decl_var.c */
+ast_node_t *parse_bare_var_decl(parser_t *p);
 
-ast_node_t *parse_layout_block(parser_t *p);    /* parser_layout.c */
+ast_node_t *parse_layout_block(parser_t *p);
 
-ast_node_t *parse_component(parser_t *p);       /* parser_layout.c */
+ast_node_t *parse_component(parser_t *p);
 
-void        parse_metas(parser_t *p, vec_t *out); /* parser.c */
+void        parse_metas(parser_t *p, vec_t *out);
 
 void parse_extern_into(parser_t *p, ast_node_t *prog);
 

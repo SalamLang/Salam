@@ -22,12 +22,12 @@
 #include "ast/ast.h"
 
 typedef struct {
-    const char *html;   /* <body> inner HTML */
-    const char *css;    /* collected CSS rules */
-    const char *js;     /* collected inline JS */
+    const char *html;
+    const char *css;
+    const char *js;
     const char *title;
-    const char *lang;   /* mapped (e.g. "en") */
-    const char *dir;    /* mapped (e.g. "ltr") */
+    const char *lang;
+    const char *dir;
 } layout_result_t;
 
 void layout_localize_names(ast_node_t *node);

@@ -17,10 +17,6 @@
 
 #include <stddef.h>
 
-/* Prefer the real <stdint.h> whenever it can be detected -- not only on C99.
-   Many libcs (e.g. glibc) ship <stdint.h> even when the compiler is in a
-   pre-C99 mode (gnu89), and there int64_t may be `long`, not `long long`; our
-   fallback typedef would then conflict. __has_include catches that. */
 #if defined(__has_include)
 # if __has_include(<stdint.h>)
 #  define SAL_HAVE_STDINT_H 1

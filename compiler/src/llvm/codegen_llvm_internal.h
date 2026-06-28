@@ -39,52 +39,50 @@ typedef struct {
     logger_t      *log;
     sema_result_t *sem;
     const char    *module;
-    const char    *entry;     /* source entry-point name -> emitted as C `main` */
-    sb_t          *g;         /* module-level: string constants, function defs   */
-    sb_t          *b;         /* current function body                           */
-    int            tmp;       /* SSA temporary counter (%tN)                     */
-    int            lbl;       /* label counter (%LN)                             */
-    bool           term;      /* current basic block already has a terminator   */
-    vec_t          locals;    /* lvar_t* in scope                               */
-    vec_t          strings;   /* lstr_t* interned string constants             */
-    const char    *ret_ts;    /* current function's return type string          */
-    bool           is_main;   /* current function is the entry point            */
-    const char    *brk[64];   /* loop break-target labels (stack)              */
-    const char    *cont[64];  /* loop continue-target labels (stack)           */
+    const char    *entry;
+    sb_t          *g;
+    sb_t          *b;
+    sb_t          *allocas;
+    int            tmp;
+    int            lbl;
+    bool           term;
+    vec_t          locals;
+    vec_t          strings;
+    const char    *ret_ts;
+    bool           is_main;
+    const char    *brk[64];
+    const char    *cont[64];
     int            nloop;
-    vec_t          defers;    /* ast_node_t* deferred statements (LIFO)         */
-    const char    *self_ts;   /* receiver type when emitting a method body, else NULL */
-    const char    *this_ref;  /* pointer to the receiver (param %this, or its spill) */
-    bool           self_byval;/* receiver is by value (impl-on-type method), so
-                               * `this` loads from this_ref instead of being the ptr */
-    vec_t          globals;   /* lvar_t* module-level globals (ptr = "@g.<id>")     */
-    vec_t          gdefer;    /* ast_node_t* globals whose init runs at main entry  */
-    vec_t          extern_names; /* const char* extern symbols already `declare`d   */
-    scope_t       *pkg_scope;  /* members of the package whose body is being emitted,
-                                * else NULL: a fallback for resolving sibling symbols */
-    vec_t          emitted;    /* const char* mangled names already defined (dedup +
-                                * lazy on-demand emission of imported package fns)   */
-    ast_node_t    *cur_lambda;/* AST_LAMBDA being emitted (captures resolve via env) */
-    const char    *env_ref;   /* the lambda's environment pointer SSA ("%env")      */
-    const char    *env_ty;    /* the lambda's environment struct type ("%lam.N.env")*/
-    int            lam_n;      /* lifted-lambda counter (unique names)               */
-    bool           ok;        /* cleared by ll_error on any unsupported construct */
-    const char    *first_error; /* first message ll_error recorded, or NULL    */
-    bool           debug;     /* emit DWARF metadata                            */
-    sb_t          *meta;      /* accumulates "!N = ..." metadata node defs      */
-    int            meta_n;    /* next metadata node id                          */
-    const char    *di_file;   /* "!N" of the DIFile                             */
-    const char    *di_cu;     /* "!N" of the DICompileUnit                      */
-    const char    *di_subty;  /* "!N" of a generic DISubroutineType (reused)    */
-    const char    *cur_sp;    /* "!N" of the function's DISubprogram            */
-    const char    *cur_dbg;   /* "!N" DILocation to attach to emitted instrs    */
-    const char    *di_flag_dwarf;  /* "!N" Dwarf Version module-flag node       */
-    const char    *di_flag_debug;  /* "!N" Debug Info Version module-flag node  */
-    const char    *src_file;  /* DIFile filename (source basename)             */
-    const char    *src_dir;   /* DIFile directory                              */
-    const char    *triple;    /* target triple (--target=...), or NULL = host  */
-    const char    *usize;     /* target size_t/uintptr IR type: "i64" or "i32" */
-    int            ptr_bits;  /* target pointer width in bits: 64 or 32         */
+    vec_t          defers;
+    const char    *self_ts;
+    const char    *this_ref;
+    bool           self_byval;
+    vec_t          globals;
+    vec_t          gdefer;
+    vec_t          extern_names;
+    scope_t       *pkg_scope;
+    vec_t          emitted;
+    ast_node_t    *cur_lambda;
+    const char    *env_ref;
+    const char    *env_ty;
+    int            lam_n;
+    bool           ok;
+    const char    *first_error;
+    bool           debug;
+    sb_t          *meta;
+    int            meta_n;
+    const char    *di_file;
+    const char    *di_cu;
+    const char    *di_subty;
+    const char    *cur_sp;
+    const char    *cur_dbg;
+    const char    *di_flag_dwarf;
+    const char    *di_flag_debug;
+    const char    *src_file;
+    const char    *src_dir;
+    const char    *triple;
+    const char    *usize;
+    int            ptr_bits;
 } ll_t;
 
 SAL_INLINE bool ll_is_str(const char *ts)    { return ts && !strcmp(ts, "str"); }
@@ -97,21 +95,23 @@ SAL_INLINE bool ll_is_ptr_ts(const char *ts) { return ts && *ts && ts[strlen(ts)
 
 SAL_INLINE llv_t ll_poison(const char *ts) { return (llv_t){ "0", ts ? ts : "i32" }; }
 
-const char *ll_fmt(ll_t *ll, const char *fmt, ...);        /* arena printf            */
+const char *ll_fmt(ll_t *ll, const char *fmt, ...);
 
-void        ll_emit(ll_t *ll, const char *fmt, ...);       /* one indented instr line */
+void        ll_emit(ll_t *ll, const char *fmt, ...);
 
-void        ll_emit_label(ll_t *ll, const char *label);    /* place a BB label        */
+void        ll_emit_alloca(ll_t *ll, const char *fmt, ...);
 
-void        ll_emit_term(ll_t *ll, const char *fmt, ...);  /* a terminator (br/ret)   */
+void        ll_emit_label(ll_t *ll, const char *label);
 
-const char *ll_new_tmp(ll_t *ll);                          /* fresh %tN               */
+void        ll_emit_term(ll_t *ll, const char *fmt, ...);
 
-const char *ll_new_lbl(ll_t *ll, const char *tag);         /* fresh label LN_tag      */
+const char *ll_new_tmp(ll_t *ll);
 
-void        ll_error(ll_t *ll, const ast_node_t *n, const char *fmt, ...); /* report + ok=false */
+const char *ll_new_lbl(ll_t *ll, const char *tag);
 
-const char *ll_strconst(ll_t *ll, const char *s);          /* intern -> ptr global    */
+void        ll_error(ll_t *ll, const ast_node_t *n, const char *fmt, ...);
+
+const char *ll_strconst(ll_t *ll, const char *s);
 
 void        ll_local_add(ll_t *ll, const char *name, const char *ptr, const char *ts);
 
@@ -138,7 +138,6 @@ const char *ll_common(const char *a, const char *b);
 const char *ll_as_i1(ll_t *ll, llv_t v);
 
 long        ll_array_dim(const char *ts);
-
 
 const char *ll_array_elem(ll_t *ll, const char *ts);
 
@@ -176,20 +175,19 @@ const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *s
 
 func_sig_t *ll_pick_overload(ll_t *ll, symbol_t *sym, ast_node_t *call);
 
+void        ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner);
 
-void        ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner); /* owner=struct for methods */
+void        ll_emit_lambda(ll_t *ll, ast_node_t *n);
 
-void        ll_emit_lambda(ll_t *ll, ast_node_t *n);  /* lift a lambda -> a function + env type */
+void        ll_emit_struct_types(ll_t *ll, ast_node_t *program);
 
-void        ll_emit_struct_types(ll_t *ll, ast_node_t *program); /* %struct.X = type {..} */
+void        ll_emit_globals(ll_t *ll, ast_node_t *program);
 
-void        ll_emit_globals(ll_t *ll, ast_node_t *program);      /* @g.<id> = global ...   */
+void        ll_emit_externs(ll_t *ll);
 
-void        ll_emit_externs(ll_t *ll);                           /* declare @extern_fn(..)  */
+void        ll_emit_impls(ll_t *ll);
 
-void        ll_emit_impls(ll_t *ll);                             /* `impl Iface for T` methods */
-
-void        ll_emit_packages(ll_t *ll);                          /* imported modules' defs   */
+void        ll_emit_packages(ll_t *ll);
 
 void        ll_ensure_fn(ll_t *ll, ast_node_t *fn, symbol_t *owner, scope_t *pscope);
 
@@ -197,16 +195,16 @@ const char *ll_box_dyn(ll_t *ll, llv_t v, const char *iface);
 
 const char *ll_mangle_ti(ll_t *ll, const char *typestr, const char *fn, func_sig_t *sig);
 
-void        ll_emit_global_inits(ll_t *ll);                      /* deferred inits, at main */
+void        ll_emit_global_inits(ll_t *ll);
 
-const char *ll_meta_add(ll_t *ll, const char *text);  /* "!N = text"; returns "!N" */
+const char *ll_meta_add(ll_t *ll, const char *text);
 
-void        ll_debug_init(ll_t *ll, const char *src_path);   /* DIFile/CU/flags    */
+void        ll_debug_init(ll_t *ll, const char *src_path);
 
 const char *ll_debug_subprogram(ll_t *ll, const char *name, unsigned line);
 
-const char *ll_debug_location(ll_t *ll, unsigned line, unsigned col); /* in cur_sp */
+const char *ll_debug_location(ll_t *ll, unsigned line, unsigned col);
 
-void        ll_debug_finalize(ll_t *ll);              /* emit named + node metadata */
+void        ll_debug_finalize(ll_t *ll);
 
 #endif /* SALAM_LLVM_CODEGEN_LLVM_INTERNAL_H */

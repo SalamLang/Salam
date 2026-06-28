@@ -29,10 +29,7 @@ typedef struct {
     bool        ok;
     size_t      errors;
     size_t      warnings;
-    vec_t       packages;   /* symbol_t* SYM_PACKAGE, one per loaded module (deduped
-                             * by path). The tree-walking interpreter executes these
-                             * packages' AST directly instead of reimplementing the
-                             * stdlib in C; codegen/LLVM reach the same .salam source. */
+    vec_t       packages;
 } sema_result_t;
 
 sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const char *file);

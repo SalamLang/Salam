@@ -337,9 +337,6 @@ static void ll_emit_arg(ll_t *ll, sb_t *ab, ast_node_t *arg, func_sig_t *sig, si
     sb_puts(ab, ll_fmt(ll, "%s %s", ll_ty(ll, pts), ll_conv(ll, v, pts)));
 }
 
-/* Append default-value arguments for trailing parameters the caller omitted.
- * `first` tracks whether any argument has been written yet (so the comma
- * separator is emitted correctly across both real and default arguments). */
 static void ll_fill_defaults(ll_t *ll, sb_t *ab, ast_node_t *n, func_sig_t *sig, bool first)
 {
     if (!sig || !sig->decl) return;
@@ -705,7 +702,7 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
         default: {
             llv_t v = ll_expr(ll, n);
             const char *p = ll_fmt(ll, "%%agg.%d", ll->tmp++);
-            ll_emit(ll, "%s = alloca %s", p, ll_ty(ll, v.ts));
+            ll_emit_alloca(ll, "%s = alloca %s", p, ll_ty(ll, v.ts));
             ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, v.ts), v.ref, p);
             return (ll_addr_t){ p, v.ts };
         }

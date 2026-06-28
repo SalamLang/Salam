@@ -76,6 +76,10 @@ void        cg_vec_elem(const char *ts, char *ebuf, size_t cap);
 
 const char *cg_vec_cname(cg_t *cg, const char *ts);
 
+bool        cg_is_slice_ts(const char *ts);
+
+void        cg_slice_elem(const char *ts, char *ebuf, size_t cap);
+
 const char *cg_ctype(cg_t *cg, const char *ts);
 
 const char *cg_decl(cg_t *cg, const char *ts, const char *name);

@@ -324,6 +324,17 @@ value_t eval(interp_t *I, env_t *env, ast_node_t *n)
             if (to_int(idx) == 0) return a;
             rt_error(I, n, "value is not indexable");
         }
+        case AST_SLICE: {
+            value_t base = eval(I, env, n->a);
+            if (base.kind != VAL_ARRAY) rt_error(I, n, "cannot slice a non-array value");
+            int64_t blen = (int64_t)base.as.arr->len;
+            int64_t lo = n->b ? to_int(eval(I, env, n->b)) : 0;
+            int64_t hi = n->c ? to_int(eval(I, env, n->c)) : blen;
+            if (lo < 0)    lo = 0;
+            if (hi > blen) hi = blen;
+            if (hi < lo)   hi = lo;
+            return mk_array(I, array_view(I, base.as.arr, (size_t)lo, (size_t)(hi - lo)));
+        }
         case AST_LAMBDA: return mk_closure(I, n, env);
         case AST_STRUCT_LIT: {
             if (n->name && !strcmp(n->name, "HashMap")) return mk_map(map_new(I));

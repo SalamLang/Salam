@@ -393,7 +393,13 @@ static llv_t ll_call_len(ll_t *ll, ast_node_t *n)
 {
     ast_node_t *arg = (ast_node_t *)n->list.data[0];
     const char *ts = arg->type_str;
-    if (ts && strchr(ts, '['))                       
+    if (ll_is_slice_ts(ts)) {
+        llv_t v = ll_expr(ll, arg);
+        const char *l = ll_new_tmp(ll);
+        ll_emit(ll, "%s = extractvalue { ptr, i64 } %s, 1", l, v.ref);
+        return (llv_t){ ll_conv(ll, (llv_t){ l, "i64" }, "i32"), "i32" };
+    }
+    if (ts && strchr(ts, '['))
         return (llv_t){ ll_fmt(ll, "%ld", ll_array_dim(ts)), "i32" };
     if (!ts || !ll_is_str(ts)) {
         ll_error(ll, n, "len() of an unsupported type");
@@ -736,6 +742,16 @@ static ll_addr_t ll_member_addr(ll_t *ll, ast_node_t *n)
 static ll_addr_t ll_index_addr(ll_t *ll, ast_node_t *n)
 {
     const char *ots = n->a->type_str ? n->a->type_str : "";
+    if (ll_is_slice_ts(ots)) {
+        const char *ets = ll_slice_elem(ll, ots);
+        llv_t sv = ll_expr(ll, n->a);
+        const char *data = ll_new_tmp(ll);
+        ll_emit(ll, "%s = extractvalue { ptr, i64 } %s, 0", data, sv.ref);
+        const char *idx = ll_conv(ll, ll_expr(ll, n->b), "i64");
+        const char *r = ll_new_tmp(ll);
+        ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i64 %s", r, ll_ty(ll, ets), data, idx);
+        return (ll_addr_t){ r, ets };
+    }
     if (ll_is_ptr_ts(ots)) {
         const char *base = ll_expr(ll, n->a).ref;
         const char *ets  = arena_strndup(ll->a, ots, strlen(ots) - 1);
@@ -807,6 +823,42 @@ static llv_t ll_array_lit(ll_t *ll, ast_node_t *n)
         cur = r;
     } }
     return (llv_t){ n->list.len ? cur : "zeroinitializer", ats };
+}
+
+static llv_t ll_slice_expr(ll_t *ll, ast_node_t *n)
+{
+    const char *sts = n->type_str;                  /* slice<T> */
+    const char *ets = ll_slice_elem(ll, sts);       /* element type T */
+    const char *let = ll_ty(ll, ets);               /* LLVM element type */
+    const char *bts = n->a->type_str ? n->a->type_str : "";
+
+    const char *lo = n->b ? ll_conv(ll, ll_expr(ll, n->b), "i64") : "0";
+    const char *data, *blen;
+
+    if (ll_is_slice_ts(bts)) {
+        llv_t bv = ll_expr(ll, n->a);
+        const char *bp = ll_new_tmp(ll);
+        ll_emit(ll, "%s = extractvalue { ptr, i64 } %s, 0", bp, bv.ref);
+        blen = ll_new_tmp(ll);
+        ll_emit(ll, "%s = extractvalue { ptr, i64 } %s, 1", blen, bv.ref);
+        data = ll_new_tmp(ll);
+        ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i64 %s", data, let, bp, lo);
+    } else {
+        ll_addr_t b = ll_addr_of(ll, n->a);
+        blen = ll_fmt(ll, "%ld", ll_array_dim(bts));
+        data = ll_new_tmp(ll);
+        ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i64 0, i64 %s",
+                data, ll_ty(ll, bts), b.ptr, lo);
+    }
+
+    const char *hi  = n->c ? ll_conv(ll, ll_expr(ll, n->c), "i64") : blen;
+    const char *len = ll_new_tmp(ll);
+    ll_emit(ll, "%s = sub i64 %s, %s", len, hi, lo);
+
+    const char *a0 = ll_new_tmp(ll), *a1 = ll_new_tmp(ll);
+    ll_emit(ll, "%s = insertvalue { ptr, i64 } zeroinitializer, ptr %s, 0", a0, data);
+    ll_emit(ll, "%s = insertvalue { ptr, i64 } %s, i64 %s, 1", a1, a0, len);
+    return (llv_t){ a1, sts };
 }
 
 static llv_t ll_lambda_value(ll_t *ll, ast_node_t *n)
@@ -909,6 +961,7 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
         }
         case AST_STRUCT_LIT: return ll_struct_lit(ll, n);
         case AST_ARRAY_LIT:  return ll_array_lit(ll, n);
+        case AST_SLICE:      return ll_slice_expr(ll, n);
         case AST_LAMBDA:     return ll_lambda_value(ll, n);
         default:
             ll_error(ll, n, "%s expression", ast_kind_name(n->kind));

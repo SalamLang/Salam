@@ -205,6 +205,7 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "typedef struct salam_file salam_file;\n"
                "typedef struct salam_map salam_map;\n"
                "typedef struct salam_map_iter salam_map_iter;\n"
+               "typedef struct { void* data; int64_t len; } salam_slice;\n"
                "typedef void (*salam_thread_fn)(void);\n"
                
                "extern void* salam_alloc(uint64_t size);\n"

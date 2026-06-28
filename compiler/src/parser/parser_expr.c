@@ -96,12 +96,33 @@ static ast_node_t *led_call(parser_t *p, ast_node_t *lhs)
 
 static ast_node_t *led_index(parser_t *p, ast_node_t *lhs)
 {
-    ast_node_t *idx = ast_new(p->a, AST_INDEX, &lhs->span);
-    idx->a = lhs;
-    p_advance(p);                                  
-    p_skip_terminators(p);                         
-    idx->b = parse_expr_bp(p, 0);
+    src_span_t span = lhs->span;
+    p_advance(p);                                  /* consume '[' */
     p_skip_terminators(p);
+
+
+    ast_node_t *lo = NULL;
+    if (!p_at(p, TK_COLON)) lo = parse_expr_bp(p, 0);
+    p_skip_terminators(p);
+
+
+    if (p_at(p, TK_COLON)) {
+        p_advance(p);                              /* consume ':' */
+        p_skip_terminators(p);
+        ast_node_t *hi = NULL;
+        if (!p_at(p, TK_RBRACKET)) hi = parse_expr_bp(p, 0);
+        p_skip_terminators(p);
+        p_expect(p, TK_RBRACKET, "']' to close slice range 'a[lo:hi]'");
+        ast_node_t *sl = ast_new(p->a, AST_SLICE, &span);
+        sl->a = lhs; sl->b = lo; sl->c = hi;
+        p_fin(p, sl);
+        return sl;
+    }
+
+
+    ast_node_t *idx = ast_new(p->a, AST_INDEX, &span);
+    idx->a = lhs;
+    idx->b = lo;
     p_expect(p, TK_RBRACKET, "']' after index");
     p_fin(p, idx);
     return idx;

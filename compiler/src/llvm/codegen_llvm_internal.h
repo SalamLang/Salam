@@ -42,6 +42,8 @@ typedef struct {
     const char    *entry;     /* source entry-point name -> emitted as C `main` */
     sb_t          *g;         /* module-level: string constants, function defs   */
     sb_t          *b;         /* current function body                           */
+    sb_t          *allocas;   /* current function's entry-block alloca buffer
+                               * (hoisted there; NULL while not inside a body)   */
     int            tmp;       /* SSA temporary counter (%tN)                     */
     int            lbl;       /* label counter (%LN)                             */
     bool           term;      /* current basic block already has a terminator   */
@@ -97,21 +99,23 @@ SAL_INLINE bool ll_is_ptr_ts(const char *ts) { return ts && *ts && ts[strlen(ts)
 
 SAL_INLINE llv_t ll_poison(const char *ts) { return (llv_t){ "0", ts ? ts : "i32" }; }
 
-const char *ll_fmt(ll_t *ll, const char *fmt, ...);        /* arena printf            */
+const char *ll_fmt(ll_t *ll, const char *fmt, ...);
 
-void        ll_emit(ll_t *ll, const char *fmt, ...);       /* one indented instr line */
+void        ll_emit(ll_t *ll, const char *fmt, ...);
 
-void        ll_emit_label(ll_t *ll, const char *label);    /* place a BB label        */
+void        ll_emit_alloca(ll_t *ll, const char *fmt, ...);
 
-void        ll_emit_term(ll_t *ll, const char *fmt, ...);  /* a terminator (br/ret)   */
+void        ll_emit_label(ll_t *ll, const char *label);
 
-const char *ll_new_tmp(ll_t *ll);                          /* fresh %tN               */
+void        ll_emit_term(ll_t *ll, const char *fmt, ...);
 
-const char *ll_new_lbl(ll_t *ll, const char *tag);         /* fresh label LN_tag      */
+const char *ll_new_tmp(ll_t *ll);
 
-void        ll_error(ll_t *ll, const ast_node_t *n, const char *fmt, ...); /* report + ok=false */
+const char *ll_new_lbl(ll_t *ll, const char *tag);
 
-const char *ll_strconst(ll_t *ll, const char *s);          /* intern -> ptr global    */
+void        ll_error(ll_t *ll, const ast_node_t *n, const char *fmt, ...);
+
+const char *ll_strconst(ll_t *ll, const char *s);
 
 void        ll_local_add(ll_t *ll, const char *name, const char *ptr, const char *ts);
 
@@ -138,7 +142,6 @@ const char *ll_common(const char *a, const char *b);
 const char *ll_as_i1(ll_t *ll, llv_t v);
 
 long        ll_array_dim(const char *ts);
-
 
 const char *ll_array_elem(ll_t *ll, const char *ts);
 
@@ -175,7 +178,6 @@ void ll_emit_return(ll_t *ll, ast_node_t *value);
 const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *sig);
 
 func_sig_t *ll_pick_overload(ll_t *ll, symbol_t *sym, ast_node_t *call);
-
 
 void        ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner); /* owner=struct for methods */
 

@@ -7,6 +7,9 @@ CC       ?= cc
 BUILD    ?= release
 TARGET   := salam
 
+OUTDIR   ?= ..
+OUTBIN   := $(OUTDIR)/$(TARGET)
+
 UNAME_S := $(shell uname -s 2>/dev/null)
 ifneq (,$(filter Windows_NT,$(OS)))
   IS_WINDOWS := 1
@@ -41,7 +44,7 @@ CPPFLAGS += -DSALAM_STDLIB_PREFIX='"$(DATADIR)"'
 
 GIT             := git
 SALAM_GIT_COMMIT := $(shell $(GIT) rev-parse --short HEAD 2>/dev/null)
-SALAM_GIT_DATE   := $(shell $(GIT) show -s --format=%cs HEAD 2>/dev/null)
+SALAM_GIT_DATE   := $(shell $(GIT) show -s --format=%ci HEAD 2>/dev/null)
 SALAM_GIT_DIRTY  := $(shell test -n "$$($(GIT) status --porcelain 2>/dev/null)" && echo '-dirty')
 ifneq ($(SALAM_GIT_COMMIT),)
   CPPFLAGS += -DSALAM_GIT_COMMIT='"$(SALAM_GIT_COMMIT)"' \
@@ -93,9 +96,9 @@ DEPS      := $(OBJS:.o=.d) $(MAIN_OBJ:.o=.d)
 
 .PHONY: all test dist clean debug install uninstall
 
-all: $(TARGET)
+all: $(OUTBIN)
 
-$(TARGET): $(OBJS) $(MAIN_OBJ)
+$(OUTBIN): $(OBJS) $(MAIN_OBJ)
 	$(CC) $(LDFLAGS) $(EXTRA_LDFLAGS) -o $@ $^ $(LDLIBS) $(EXTRA_LDLIBS)
 
 $(BUILD_DIR)/%.o: src/%.c
@@ -104,8 +107,8 @@ $(BUILD_DIR)/%.o: src/%.c
 
 -include $(DEPS)
 
-test: $(TARGET)
-	sh tools/bash/run-tests.sh
+test: $(OUTBIN)
+	SALAM=$(OUTBIN) sh tools/bash/run-tests.sh
 
 dist: all
 	sh tools/bash/build-release.sh
@@ -116,7 +119,7 @@ debug: clean all
 install: all
 	@echo "Installing salam -> $(DESTDIR)$(BINDIR)"
 	mkdir -p $(DESTDIR)$(BINDIR)
-	cp -f $(TARGET) $(DESTDIR)$(BINDIR)/$(TARGET)
+	cp -f $(OUTBIN) $(DESTDIR)$(BINDIR)/$(TARGET)
 	chmod 0755 $(DESTDIR)$(BINDIR)/$(TARGET)
 	@echo "Installing std/ -> $(DESTDIR)$(DATADIR)/std"
 	rm -rf $(DESTDIR)$(DATADIR)/std
@@ -129,4 +132,4 @@ uninstall:
 	rm -rf $(DESTDIR)$(DATADIR)
 
 clean:
-	rm -rf build $(TARGET) $(TARGET).exe
+	rm -rf build $(OUTBIN) $(OUTBIN).exe $(TARGET) $(TARGET).exe

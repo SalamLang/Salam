@@ -15,118 +15,130 @@
 #include "llvm/codegen_llvm_internal.h"
 #include "i18n/i18n.h"
 
-static const char *LL_PROLOGUE =
-    "; Salam -> LLVM IR (textual). Target-independent: compile with\n"
-    ";   clang prog.ll -o prog      (native)\n"
-    ";   clang -target wasm32 ...   (WebAssembly)\n"
-    "declare i32 @printf(ptr, ...)\n"
-    "declare i32 @dprintf(i32, ptr, ...)\n"
-    "declare i64 @strlen(ptr)\n"
-    "declare i32 @strcmp(ptr, ptr)\n"
-    "declare ptr @malloc(i64)\n"
-    "declare ptr @realloc(ptr, i64)\n"
-    "declare void @free(ptr)\n"
-    "declare ptr @memcpy(ptr, ptr, i64)\n"
-    "declare ptr @memmove(ptr, ptr, i64)\n"
-    "declare void @abort()\n"
-    "declare void @exit(i32)\n"
-    "declare i32 @snprintf(ptr, i64, ptr, ...)\n"
-    "declare i64 @strtol(ptr, ptr, i32)\n"
-    "declare double @strtod(ptr, ptr)\n"
-    "declare ptr @strstr(ptr, ptr)\n"
-    "declare double @llvm.pow.f64(double, double)\n"
-    "\n"
-    "; str.substr(start,len): a fresh NUL-terminated slice\n"
-    "define ptr @salam_ll_substr(ptr %s, i32 %start, i32 %len) {\n"
-    "entry:\n"
-    "  %l = sext i32 %len to i64\n"
-    "  %t = add i64 %l, 1\n"
-    "  %buf = call ptr @malloc(i64 %t)\n"
-    "  %so = sext i32 %start to i64\n"
-    "  %src = getelementptr i8, ptr %s, i64 %so\n"
-    "  %c = call ptr @memcpy(ptr %buf, ptr %src, i64 %l)\n"
-    "  %e = getelementptr i8, ptr %buf, i64 %l\n"
-    "  store i8 0, ptr %e\n"
-    "  ret ptr %buf\n"
-    "}\n"
-    "\n"
-    "@.panicfmt = private unnamed_addr constant [17 x i8] c\"salam panic: %s\\0A\\00\"\n"
-    "\n"
-    "; `dyn Iface` fat pointer: { data, vtable } (vtable = [N x ptr] of methods)\n"
-    "%dyn = type { ptr, ptr }\n"
-    "\n"
-    "; hash intrinsics (match std/mem salam_str_hash / salam_hash_int, FNV-style)\n"
-    "define i64 @salam_ll_strhash(ptr %s) {\n"
-    "entry:\n  br label %loop\n"
-    "loop:\n"
-    "  %j = phi i64 [ 0, %entry ], [ %jn, %body ]\n"
-    "  %h = phi i64 [ 14695981039346656037, %entry ], [ %hn, %body ]\n"
-    "  %p = getelementptr i8, ptr %s, i64 %j\n"
-    "  %c8 = load i8, ptr %p\n"
-    "  %z = icmp eq i8 %c8, 0\n"
-    "  br i1 %z, label %done, label %body\n"
-    "body:\n"
-    "  %c = zext i8 %c8 to i64\n"
-    "  %hm = mul i64 %h, 1099511628211\n"
-    "  %hn = add i64 %hm, %c\n"
-    "  %jn = add i64 %j, 1\n"
-    "  br label %loop\n"
-    "done:\n  ret i64 %h\n}\n"
-    "define i64 @salam_ll_inthash(i64 %x) {\n"
-    "entry:\n"
-    "  %h0 = add i64 %x, 14695981039346656037\n"
-    "  %h1 = mul i64 %h0, 1099511628211\n"
-    "  %h2 = add i64 %h1, 1099511628211\n"
-    "  %h3 = mul i64 %h2, 1099511628211\n"
-    "  ret i64 %h3\n}\n"
-    "\n"
-    "@.sfmt.lld = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n"
-    "@.sfmt.llu = private unnamed_addr constant [5 x i8] c\"%llu\\00\"\n"
-    "@.sfmt.g   = private unnamed_addr constant [3 x i8] c\"%g\\00\"\n"
-    "\n"
-    "; number/char -> freshly heap-allocated decimal string (for `str + x`)\n"
-    "define ptr @salam_ll_i64str(i64 %v) {\n"
-    "entry:\n"
-    "  %b = call ptr @malloc(i64 32)\n"
-    "  %r = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %b, i64 32, ptr @.sfmt.lld, i64 %v)\n"
-    "  ret ptr %b\n"
-    "}\n"
-    "define ptr @salam_ll_u64str(i64 %v) {\n"
-    "entry:\n"
-    "  %b = call ptr @malloc(i64 32)\n"
-    "  %r = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %b, i64 32, ptr @.sfmt.llu, i64 %v)\n"
-    "  ret ptr %b\n"
-    "}\n"
-    "define ptr @salam_ll_f64str(double %v) {\n"
-    "entry:\n"
-    "  %b = call ptr @malloc(i64 32)\n"
-    "  %r = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %b, i64 32, ptr @.sfmt.g, double %v)\n"
-    "  ret ptr %b\n"
-    "}\n"
-    "define ptr @salam_ll_charstr(i32 %c) {\n"
-    "entry:\n"
-    "  %b = call ptr @malloc(i64 2)\n"
-    "  %t = trunc i32 %c to i8\n"
-    "  store i8 %t, ptr %b\n"
-    "  %p1 = getelementptr i8, ptr %b, i64 1\n"
-    "  store i8 0, ptr %p1\n"
-    "  ret ptr %b\n"
-    "}\n"
-    "\n"
-    "; heap-concatenate two NUL-terminated strings\n"
-    "define ptr @salam_ll_strcat(ptr %a, ptr %b) {\n"
-    "entry:\n"
-    "  %la = call i64 @strlen(ptr %a)\n"
-    "  %lb = call i64 @strlen(ptr %b)\n"
-    "  %sum = add i64 %la, %lb\n"
-    "  %tot = add i64 %sum, 1\n"
-    "  %buf = call ptr @malloc(i64 %tot)\n"
-    "  %c1 = call ptr @memcpy(ptr %buf, ptr %a, i64 %la)\n"
-    "  %end = getelementptr i8, ptr %buf, i64 %la\n"
-    "  %lb1 = add i64 %lb, 1\n"
-    "  %c2 = call ptr @memcpy(ptr %end, ptr %b, i64 %lb1)\n"
-    "  ret ptr %buf\n"
-    "}\n\n";
+static const char *pl_widen(ll_t *ll, sb_t *g, const char *src, const char *dst)
+{
+    if (ll->ptr_bits <= 32) return src;
+    sb_puts(g, "  "); sb_puts(g, dst); sb_puts(g, " = sext i32 ");
+    sb_puts(g, src); sb_puts(g, " to "); sb_puts(g, ll->usize); sb_puts(g, "\n");
+    return dst;
+}
+
+static void ll_emit_prologue(ll_t *ll)
+{
+    sb_t *g = ll->g;
+    const char *U = ll->usize;
+
+    sb_puts(g, "; Salam -> LLVM IR (textual). usize = ");
+    sb_puts(g, U);
+    sb_puts(g, " (");
+    sb_puts(g, ll->ptr_bits == 32 ? "32" : "64");
+    sb_puts(g, "-bit target). Compile with a matching toolchain:\n");
+    sb_puts(g, ";   clang prog.ll -o prog            (native host)\n");
+    sb_puts(g, ";   clang -m32 / --target=i686-... prog.ll   (32-bit)\n");
+
+    sb_puts(g, "declare i32 @printf(ptr, ...)\n");
+    sb_puts(g, "declare i32 @dprintf(i32, ptr, ...)\n");
+    sb_puts(g, ll_fmt(ll, "declare %s @strlen(ptr)\n", U));
+    sb_puts(g, "declare i32 @strcmp(ptr, ptr)\n");
+    sb_puts(g, ll_fmt(ll, "declare ptr @malloc(%s)\n", U));
+    sb_puts(g, ll_fmt(ll, "declare ptr @realloc(ptr, %s)\n", U));
+    sb_puts(g, "declare void @free(ptr)\n");
+    sb_puts(g, ll_fmt(ll, "declare ptr @memcpy(ptr, ptr, %s)\n", U));
+    sb_puts(g, ll_fmt(ll, "declare ptr @memmove(ptr, ptr, %s)\n", U));
+    sb_puts(g, "declare void @abort()\n");
+    sb_puts(g, "declare void @exit(i32)\n");
+    sb_puts(g, ll_fmt(ll, "declare i32 @snprintf(ptr, %s, ptr, ...)\n", U));
+    sb_puts(g, "declare i64 @strtol(ptr, ptr, i32)\n");
+    sb_puts(g, "declare double @strtod(ptr, ptr)\n");
+    sb_puts(g, "declare ptr @strstr(ptr, ptr)\n");
+    sb_puts(g, "declare double @llvm.pow.f64(double, double)\n\n");
+
+    sb_puts(g, "define ptr @salam_ll_substr(ptr %s, i32 %start, i32 %len) {\nentry:\n");
+    const char *L  = pl_widen(ll, g, "%len",   "%l");
+    const char *SO = pl_widen(ll, g, "%start", "%so");
+    sb_puts(g, ll_fmt(ll, "  %%t = add %s %s, 1\n", U, L));
+    sb_puts(g, ll_fmt(ll, "  %%buf = call ptr @malloc(%s %%t)\n", U));
+    sb_puts(g, ll_fmt(ll, "  %%src = getelementptr i8, ptr %%s, %s %s\n", U, SO));
+    sb_puts(g, ll_fmt(ll, "  %%c = call ptr @memcpy(ptr %%buf, ptr %%src, %s %s)\n", U, L));
+    sb_puts(g, ll_fmt(ll, "  %%e = getelementptr i8, ptr %%buf, %s %s\n", U, L));
+    sb_puts(g, "  store i8 0, ptr %e\n  ret ptr %buf\n}\n\n");
+
+    sb_puts(g, "@.panicfmt = private unnamed_addr constant [17 x i8] c\"salam panic: %s\\0A\\00\"\n\n");
+
+    sb_puts(g, "; `dyn Iface` fat pointer: { data, vtable } (vtable = [N x ptr] of methods)\n");
+    sb_puts(g, "%dyn = type { ptr, ptr }\n\n");
+
+    sb_puts(g,
+        "define i64 @salam_ll_strhash(ptr %s) {\n"
+        "entry:\n  br label %loop\n"
+        "loop:\n"
+        "  %j = phi i64 [ 0, %entry ], [ %jn, %body ]\n"
+        "  %h = phi i64 [ 14695981039346656037, %entry ], [ %hn, %body ]\n"
+        "  %p = getelementptr i8, ptr %s, i64 %j\n"
+        "  %c8 = load i8, ptr %p\n"
+        "  %z = icmp eq i8 %c8, 0\n"
+        "  br i1 %z, label %done, label %body\n"
+        "body:\n"
+        "  %c = zext i8 %c8 to i64\n"
+        "  %hm = mul i64 %h, 1099511628211\n"
+        "  %hn = add i64 %hm, %c\n"
+        "  %jn = add i64 %j, 1\n"
+        "  br label %loop\n"
+        "done:\n  ret i64 %h\n}\n"
+        "define i64 @salam_ll_inthash(i64 %x) {\n"
+        "entry:\n"
+        "  %h0 = add i64 %x, 14695981039346656037\n"
+        "  %h1 = mul i64 %h0, 1099511628211\n"
+        "  %h2 = add i64 %h1, 1099511628211\n"
+        "  %h3 = mul i64 %h2, 1099511628211\n"
+        "  ret i64 %h3\n}\n\n");
+
+    sb_puts(g, "@.sfmt.lld = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n");
+    sb_puts(g, "@.sfmt.llu = private unnamed_addr constant [5 x i8] c\"%llu\\00\"\n");
+    sb_puts(g, "@.sfmt.g   = private unnamed_addr constant [3 x i8] c\"%g\\00\"\n\n");
+
+    sb_puts(g, ll_fmt(ll,
+        "define ptr @salam_ll_i64str(i64 %%v) {\n"
+        "entry:\n"
+        "  %%b = call ptr @malloc(%s 32)\n"
+        "  %%r = call i32 (ptr, %s, ptr, ...) @snprintf(ptr %%b, %s 32, ptr @.sfmt.lld, i64 %%v)\n"
+        "  ret ptr %%b\n}\n", U, U, U));
+    sb_puts(g, ll_fmt(ll,
+        "define ptr @salam_ll_u64str(i64 %%v) {\n"
+        "entry:\n"
+        "  %%b = call ptr @malloc(%s 32)\n"
+        "  %%r = call i32 (ptr, %s, ptr, ...) @snprintf(ptr %%b, %s 32, ptr @.sfmt.llu, i64 %%v)\n"
+        "  ret ptr %%b\n}\n", U, U, U));
+    sb_puts(g, ll_fmt(ll,
+        "define ptr @salam_ll_f64str(double %%v) {\n"
+        "entry:\n"
+        "  %%b = call ptr @malloc(%s 32)\n"
+        "  %%r = call i32 (ptr, %s, ptr, ...) @snprintf(ptr %%b, %s 32, ptr @.sfmt.g, double %%v)\n"
+        "  ret ptr %%b\n}\n", U, U, U));
+    sb_puts(g, ll_fmt(ll,
+        "define ptr @salam_ll_charstr(i32 %%c) {\n"
+        "entry:\n"
+        "  %%b = call ptr @malloc(%s 2)\n"
+        "  %%t = trunc i32 %%c to i8\n"
+        "  store i8 %%t, ptr %%b\n"
+        "  %%p1 = getelementptr i8, ptr %%b, i64 1\n"
+        "  store i8 0, ptr %%p1\n"
+        "  ret ptr %%b\n}\n\n", U));
+
+    sb_puts(g, ll_fmt(ll,
+        "define ptr @salam_ll_strcat(ptr %%a, ptr %%b) {\n"
+        "entry:\n"
+        "  %%la = call %s @strlen(ptr %%a)\n"
+        "  %%lb = call %s @strlen(ptr %%b)\n"
+        "  %%sum = add %s %%la, %%lb\n"
+        "  %%tot = add %s %%sum, 1\n"
+        "  %%buf = call ptr @malloc(%s %%tot)\n"
+        "  %%c1 = call ptr @memcpy(ptr %%buf, ptr %%a, %s %%la)\n"
+        "  %%end = getelementptr i8, ptr %%buf, %s %%la\n"
+        "  %%lb1 = add %s %%lb, 1\n"
+        "  %%c2 = call ptr @memcpy(ptr %%end, ptr %%b, %s %%lb1)\n"
+        "  ret ptr %%buf\n}\n\n", U, U, U, U, U, U, U, U, U));
+}
 static void ll_toplevel(ll_t *ll, ast_node_t *d)
 {
     switch (d->kind) {
@@ -177,6 +189,10 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     ll.entry = (entry && entry[0]) ? entry : "main";
     ll.ok = true;
     ll.debug = opts && opts->debug_info;
+    ll.triple   = (opts && opts->target_triple && opts->target_triple[0])
+                      ? opts->target_triple : NULL;
+    ll.ptr_bits = ll_target_ptr_bits(ll.triple);
+    ll.usize    = ll.ptr_bits == 32 ? "i32" : "i64";
     vec_init(&ll.locals); vec_init(&ll.strings); vec_init(&ll.defers);
     vec_init(&ll.globals); vec_init(&ll.gdefer); vec_init(&ll.extern_names);
     vec_init(&ll.emitted);
@@ -184,7 +200,12 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     ll.g = &g; ll.b = &g; ll.meta = &meta;
     sb_puts(&g, ll_fmt(&ll, "; ModuleID = '%s'\n", module));
     sb_puts(&g, ll_fmt(&ll, "source_filename = \"%s.salam\"\n\n", module));
-    sb_puts(&g, LL_PROLOGUE);
+    /* When a concrete target is requested, name it so llc/clang lower for that
+     * target and the usize width below matches its ABI. The datalayout itself
+     * is supplied by the backend for the named triple. */
+    if (ll.triple)
+        sb_puts(&g, ll_fmt(&ll, "target triple = \"%s\"\n\n", ll.triple));
+    ll_emit_prologue(&ll);
     ll_emit_struct_types(&ll, program);   
     ll_emit_externs(&ll);                 
     ll_emit_globals(&ll, program);

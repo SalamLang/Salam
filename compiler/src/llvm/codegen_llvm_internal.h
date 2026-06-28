@@ -82,6 +82,9 @@ typedef struct {
     const char    *di_flag_debug;  /* "!N" Debug Info Version module-flag node  */
     const char    *src_file;  /* DIFile filename (source basename)             */
     const char    *src_dir;   /* DIFile directory                              */
+    const char    *triple;    /* target triple (--target=...), or NULL = host  */
+    const char    *usize;     /* target size_t/uintptr IR type: "i64" or "i32" */
+    int            ptr_bits;  /* target pointer width in bits: 64 or 32         */
 } ll_t;
 
 SAL_INLINE bool ll_is_str(const char *ts)    { return ts && !strcmp(ts, "str"); }
@@ -114,9 +117,13 @@ void        ll_local_add(ll_t *ll, const char *name, const char *ptr, const char
 
 lvar_t     *ll_local_find(ll_t *ll, const char *name);
 
-lvar_t     *ll_global_find(ll_t *ll, const char *name);   /* module-level global, or NULL */
+lvar_t     *ll_global_find(ll_t *ll, const char *name);
 
 int         ll_int_bits(const char *ts);
+
+int         ll_target_ptr_bits(const char *triple);
+
+const char *ll_usize_to_i32(ll_t *ll, const char *ref);
 
 bool        ll_is_int(const char *ts);
 
@@ -130,40 +137,40 @@ const char *ll_common(const char *a, const char *b);
 
 const char *ll_as_i1(ll_t *ll, llv_t v);
 
-long        ll_array_dim(const char *ts);             /* outer dim of "T[N]...", or 0 */
+long        ll_array_dim(const char *ts);
 
 
-const char *ll_array_elem(ll_t *ll, const char *ts);  /* "T[N][M]" -> "T[M]"          */
+const char *ll_array_elem(ll_t *ll, const char *ts);
 
-const char *ll_struct_ltype(ll_t *ll, const char *name); /* -> "%struct.<id>"         */
+const char *ll_struct_ltype(ll_t *ll, const char *name);
 
-symbol_t   *ll_sym(ll_t *ll, const char *name);          /* global, then current package */
+symbol_t   *ll_sym(ll_t *ll, const char *name);
 
-symbol_t   *ll_struct_sym(ll_t *ll, const char *name);   /* SYM_STRUCT, or NULL       */
+symbol_t   *ll_struct_sym(ll_t *ll, const char *name);
 
-symbol_t   *ll_enum_sym(ll_t *ll, const char *name);     /* SYM_ENUM, or NULL         */
+symbol_t   *ll_enum_sym(ll_t *ll, const char *name);
 
 int         ll_field_index(symbol_t *ssym, const char *field, symbol_t **out_field);
 
-const char *ll_zero(const char *ts);                  /* the zero literal for a type  */
+const char *ll_zero(const char *ts);
 
-const char *ll_func_ret(ll_t *ll, const char *ts);    /* "func(..)Ret" -> "Ret"/"void" */
+const char *ll_func_ret(ll_t *ll, const char *ts);
 
-void        ll_func_params(ll_t *ll, const char *ts, vec_t *out); /* -> const char* param types */
+void        ll_func_params(ll_t *ll, const char *ts, vec_t *out);
 
 llv_t ll_expr(ll_t *ll, ast_node_t *n);
 
-llv_t ll_binary(ll_t *ll, ast_node_t *n);   /* also used by compound assignment */
+llv_t ll_binary(ll_t *ll, ast_node_t *n);
 
-ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n);   /* address of an lvalue (id/member/index) */
+ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n);
 
-bool ll_index_set(ll_t *ll, ast_node_t *index_target, ast_node_t *value); /* struct s[i]=v */
+bool ll_index_set(ll_t *ll, ast_node_t *index_target, ast_node_t *value);
 
 void ll_stmt(ll_t *ll, ast_node_t *n);
 
 void ll_block(ll_t *ll, ast_node_t *block);
 
-void ll_emit_return(ll_t *ll, ast_node_t *value);   /* used by ll_function fall-through */
+void ll_emit_return(ll_t *ll, ast_node_t *value);
 
 const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *sig);
 

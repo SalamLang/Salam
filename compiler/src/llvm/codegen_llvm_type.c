@@ -25,6 +25,28 @@ int ll_int_bits(const char *ts)
     return 32;
 }
 
+int ll_target_ptr_bits(const char *triple)
+{
+    if (!triple || !triple[0]) return (int)(sizeof(void *) * 8);
+    static const char *w64[] = {
+        "x86_64", "amd64", "aarch64", "arm64", "riscv64", "wasm64",
+        "powerpc64", "ppc64", "mips64", "sparc64", "s390x", "loongarch64", NULL };
+    static const char *w32[] = {
+        "i386", "i486", "i586", "i686", "wasm32", "armv6", "armv7", "armv5",
+        "thumb", "mipsel", "mips", "riscv32", "powerpc", "ppc", "arm", NULL };
+    { int i = 0; for (; w64[i]; i++) if (strstr(triple, w64[i])) return 64; }
+    { int i = 0; for (; w32[i]; i++) if (strstr(triple, w32[i])) return 32; }
+    return (int)(sizeof(void *) * 8);
+}
+
+const char *ll_usize_to_i32(ll_t *ll, const char *ref)
+{
+    if (ll->ptr_bits <= 32) return ref;
+    const char *r = ll_new_tmp(ll);
+    ll_emit(ll, "%s = trunc %s %s to i32", r, ll->usize, ref);
+    return r;
+}
+
 bool ll_is_int(const char *ts)
 {
     if (!ts) return false;
@@ -67,12 +89,13 @@ const char *ll_struct_ltype(ll_t *ll, const char *name)
 {
     bool ascii = name && name[0] && !isdigit((unsigned char)name[0]);
     { const unsigned char *p = (const unsigned char *)name; for (; ascii && *p; p++)
-        if (!(isalnum(*p) || *p == '_')) ascii = false; }
+        if (!isalnum(*p)) ascii = false; }
     if (ascii) return ll_fmt(ll, "%%struct.%s", name);
     sb_t b; sb_init(&b); sb_puts(&b, "%struct.");
     if (name && isdigit((unsigned char)name[0])) sb_putc(&b, '_');
     { const unsigned char *p = (const unsigned char *)name; for (; p && *p; p++) {
-        if (isalnum(*p) || *p == '_') sb_putc(&b, (char)*p);
+        if (isalnum(*p))    sb_putc(&b, (char)*p);
+        else if (*p == '_') sb_puts(&b, "__");
         else { char h[5]; snprintf(h, sizeof h, "_%02x", *p); sb_puts(&b, h); }
     } }
     const char *r = arena_strdup(ll->a, sb_cstr(&b)); sb_free(&b); return r;

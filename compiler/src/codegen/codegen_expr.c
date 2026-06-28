@@ -316,8 +316,6 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                 const char *ec = cg_ctype(cg, elem);
                 const char *s   = cg_expr(cg, n->a);
                 const char *idx = cg_expr(cg, n->b);
-                /* lvalue: deref the element pointer. The slice value, index and
-                   element size are passed to salam_slice_at once each. */
                 return cg_fmt(cg, "(*(%s*)salam_slice_at(%s, %s, (int64_t)sizeof(%s), %d))",
                               ec, s, idx, ec, cg->safe ? 1 : 0);
             }

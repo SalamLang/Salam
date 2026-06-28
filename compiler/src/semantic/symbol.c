@@ -79,7 +79,7 @@ static const char *type_code(arena_t *a, const type_t *t)
         case TY_F32:return "f32"; case TY_F64:return "f64";
         case TY_STRUCT: case TY_ENUM: return t->name ? t->name : "T";
         case TY_PTR: {
-            char buf[96]; snprintf(buf, sizeof(buf), "P%s", type_code(a, t->pointee));
+            char buf[96]; sal_snprintf(buf, sizeof(buf), "P%s", type_code(a, t->pointee));
             return arena_strdup(a, buf);
         }
         case TY_ARRAY: {
@@ -122,6 +122,6 @@ const char *mangle_func(arena_t *a, const char *struct_name,
 const char *impl_owner_key(arena_t *a, const char *typestr)
 {
     char buf[256];
-    snprintf(buf, sizeof(buf), "impl@%s", typestr ? typestr : "");
+    sal_snprintf(buf, sizeof(buf), "impl@%s", typestr ? typestr : "");
     return arena_strdup(a, buf);
 }

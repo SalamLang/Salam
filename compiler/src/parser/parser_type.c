@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "parser/parser_internal.h"
 
 static void parse_array_dims(parser_t *p, ast_node_t *n)
@@ -66,7 +67,7 @@ static ast_node_t *parse_type_named(parser_t *p, ast_node_t *n)
         const char *pkg = n->name, *ty = p_peek(p)->lexeme; p_advance(p);
         size_t ln = strlen(pkg) + strlen(ty) + 2;
         char *q = (char *)arena_alloc(p->a, ln);
-        snprintf(q, ln, "%s.%s", pkg, ty);
+        sal_snprintf(q, ln, "%s.%s", pkg, ty);
         n->name = q;
     }
     

@@ -13,6 +13,7 @@
  */
 
 #include "codegen/codegen_internal.h"
+#include "core/sal_format.h"
 
 const char *cg_op(token_kind_t k)
 {
@@ -53,7 +54,7 @@ const char *cg_cescape(cg_t *cg, const char *s)
             default:
                 if (ch < 0x20 || ch >= 0x7f) {
 
-                    char oct[5]; snprintf(oct, sizeof(oct), "\\%03o", ch);
+                    char oct[5]; sal_snprintf(oct, sizeof(oct), "\\%03o", ch);
                     sb_puts(&b, oct);
                 } else {
                     sb_putc(&b, (char)ch);
@@ -164,7 +165,7 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                 case TK_FLOAT: {
                     
                     char buf[64];
-                    snprintf(buf, sizeof buf, "%.17g", n->value.as.f);
+                    sal_snprintf(buf, sizeof buf, "%.17g", n->value.as.f);
                     if (!strpbrk(buf, ".eEnN"))   
                         return cg_fmt(cg, "%s.0", buf);
                     return cg_fmt(cg, "%s", buf);

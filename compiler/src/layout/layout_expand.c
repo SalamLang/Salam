@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "core/numstr.h"
 #include "layout/layout_expand.h"
 #include "core/vec.h"
@@ -84,7 +85,7 @@ static const char *node_text(expand_t *ex, ast_node_t *v)
             case TK_STRING: case TK_TRIPLE_STRING: return v->value.as.s ? v->value.as.s : "";
             case TK_INT:    sal_u64toa((uint64_t)v->value.as.i, buf);
                             return arena_strdup(ex->a, buf);
-            case TK_FLOAT:  snprintf(buf, sizeof(buf), "%g", v->value.as.f);
+            case TK_FLOAT:  sal_snprintf(buf, sizeof(buf), "%g", v->value.as.f);
                             return arena_strdup(ex->a, buf);
             case TK_KW_TRUE:  return "true";
             case TK_KW_FALSE: return "false";

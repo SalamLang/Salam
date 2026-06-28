@@ -218,6 +218,17 @@ int sal_snprintf(char *buf, size_t cap, const char *fmt, ...)
     return n;
 }
 
+size_t sal_catf(char *buf, size_t cap, size_t off, const char *fmt, ...)
+{
+    va_list ap; int n;
+    if (off >= cap) return off;
+    va_start(ap, fmt);
+    n = sal_vsnprintf(buf + off, cap - off, fmt, ap);
+    va_end(ap);
+    if (n < 0) return off;
+    return off + ((size_t)n < cap - off ? (size_t)n : cap - off - 1);
+}
+
 void sal_vfprintf(FILE *f, const char *fmt, va_list ap)
 {
     va_list ap2;

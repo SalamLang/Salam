@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "diag/diag_internal.h"
 
 static void json_str(FILE *sink, const char *s)
@@ -37,7 +38,7 @@ void diag_render_json(FILE *sink,
     fputs("{\"level\":\"", sink); json_str(sink, level); fputc('"', sink);
     if (code > 0) {
         char cs[16];
-        snprintf(cs, sizeof(cs), "%c%03d", is_error ? 'E' : 'W', code);
+        sal_snprintf(cs, sizeof(cs), "%c%03d", is_error ? 'E' : 'W', code);
         fputs(",\"code\":\"", sink); json_str(sink, cs); fputc('"', sink);
     }
     fputs(",\"message\":\"", sink); json_str(sink, body); fputc('"', sink);

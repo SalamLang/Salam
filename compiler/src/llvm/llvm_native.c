@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "llvm/llvm_native.h"
 #include "core/sb.h"
 #include "semantic/sema.h"
@@ -323,7 +324,7 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
             }
         } else if (opts->output_mode == LLVM_OUT_EXEC) {
             char objpath[1024];
-            snprintf(objpath, sizeof objpath, "%s.o", opts->output_file);
+            sal_snprintf(objpath, sizeof objpath, "%s.o", opts->output_file);
             char *eerr = NULL;
             if (LLVMTargetMachineEmitToFile(tm, mod, objpath,
                     LLVMObjectFile, &eerr)) {

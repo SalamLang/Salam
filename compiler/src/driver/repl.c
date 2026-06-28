@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "driver/driver.h"
 #include "driver/repl.h"
 #include "core/arena.h"
@@ -293,8 +294,8 @@ static bool repl_compile_pkg(arena_t *a, logger_t *lg, langpack_t *pack,
     codegen_output_t *out = codegen_run(a, lg, prog, sr, pkg, false, false,
                                         src->path, langpack_entry(pack));
     char cpath[64], hpath[64];
-    snprintf(cpath, sizeof cpath, "salam_mod_%s.c", pkg);
-    snprintf(hpath, sizeof hpath, "salam_mod_%s.h", pkg);
+    sal_snprintf(cpath, sizeof cpath, "salam_mod_%s.c", pkg);
+    sal_snprintf(hpath, sizeof hpath, "salam_mod_%s.h", pkg);
     FILE *f;
     if ((f = fopen(cpath, "wb"))) { fputs(out->c_src, f); fclose(f); }
     if ((f = fopen(hpath, "wb"))) { fputs(out->h_src, f); fclose(f); }
@@ -354,8 +355,8 @@ static bool repl_exec(const char *full_src, const char *cc,
     remove("salam_mod__repl_.c"); remove("salam_mod__repl_.h");
     { size_t i = 0; for (; i < sizeof(RT_PKGS)/sizeof(RT_PKGS[0]); i++) {
         char cp[64], hp[64];
-        snprintf(cp, sizeof cp, "salam_mod_%s.c", RT_PKGS[i]);
-        snprintf(hp, sizeof hp, "salam_mod_%s.h", RT_PKGS[i]);
+        sal_snprintf(cp, sizeof cp, "salam_mod_%s.c", RT_PKGS[i]);
+        sal_snprintf(hp, sizeof hp, "salam_mod_%s.h", RT_PKGS[i]);
         remove(cp); remove(hp);
     } }
 #ifdef _WIN32

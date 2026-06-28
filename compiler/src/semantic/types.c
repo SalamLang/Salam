@@ -266,46 +266,46 @@ const char *type_to_string(type_ctx_t *tc, const type_t *t)
         case TY_F32:return "f32"; case TY_F64:return "f64";
         case TY_STRUCT: case TY_ENUM: return t->name ? t->name : "<anon>";
         case TY_DYN: {
-            char buf[128]; snprintf(buf, sizeof(buf), "dyn %s", t->name ? t->name : "<anon>");
+            char buf[128]; sal_snprintf(buf, sizeof(buf), "dyn %s", t->name ? t->name : "<anon>");
             return arena_strdup(tc->a, buf);
         }
         case TY_PTR: {
             const char *inner = type_to_string(tc, t->pointee);
-            char buf[128]; snprintf(buf, sizeof(buf), "%s*", inner);
+            char buf[128]; sal_snprintf(buf, sizeof(buf), "%s*", inner);
             return arena_strdup(tc->a, buf);
         }
         case TY_ARRAY: {
             char dims[128] = ""; size_t dn = 0;
             const type_t *cur = t;
             while (cur && cur->kind == TY_ARRAY) {
-                if (cur->length) dn += (size_t)sal_snprintf(dims + dn, sizeof(dims) - dn, "[%zu]", cur->length);
-                else             dn += (size_t)sal_snprintf(dims + dn, sizeof(dims) - dn, "[]");
+                if (cur->length) dn = sal_catf(dims, sizeof(dims), dn, "[%zu]", cur->length);
+                else             dn = sal_catf(dims, sizeof(dims), dn, "[]");
                 cur = cur->elem;
             }
             char buf[160];
-            snprintf(buf, sizeof(buf), "%s%s", type_to_string(tc, cur), dims);
+            sal_snprintf(buf, sizeof(buf), "%s%s", type_to_string(tc, cur), dims);
             return arena_strdup(tc->a, buf);
         }
         case TY_MAP: case TY_MAP_ITER: {
             char buf[160];
-            snprintf(buf, sizeof(buf), "%s<%s, %s>",
+            sal_snprintf(buf, sizeof(buf), "%s<%s, %s>",
                      t->kind == TY_MAP ? "HashMap" : "MapIter",
                      type_to_string(tc, t->key), type_to_string(tc, t->elem));
             return arena_strdup(tc->a, buf);
         }
         case TY_VEC: {
             char buf[160];
-            snprintf(buf, sizeof(buf), "Vector<%s>", type_to_string(tc, t->elem));
+            sal_snprintf(buf, sizeof(buf), "Vector<%s>", type_to_string(tc, t->elem));
             return arena_strdup(tc->a, buf);
         }
         case TY_FILE: return "File";
         case TY_FUNC: {
             char buf[256]; size_t o = 0;
-            o += (size_t)snprintf(buf + o, sizeof(buf) - o, "func(");
+            o = sal_catf(buf, sizeof(buf), o, "func(");
             { size_t i = 0; for (; i < t->params.len && o < sizeof(buf) - 32; i++)
-                o += (size_t)snprintf(buf + o, sizeof(buf) - o, "%s%s",
+                o = sal_catf(buf, sizeof(buf), o, "%s%s",
                         i ? ", " : "", type_to_string(tc, (type_t *)t->params.data[i])); }
-            o += (size_t)snprintf(buf + o, sizeof(buf) - o, ") %s", type_to_string(tc, t->elem));
+            o = sal_catf(buf, sizeof(buf), o, ") %s", type_to_string(tc, t->elem));
             return arena_strdup(tc->a, buf);
         }
     }

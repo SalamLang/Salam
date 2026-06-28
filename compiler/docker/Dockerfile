@@ -30,6 +30,9 @@ RUN for i in 1 2 3 4 5; do \
             llvm${LLVM_VERSION} \
             bash \
             git \
+            sqlite-dev \
+            sqlite-static \
+            mariadb-connector-c-dev \
         && break; \
         echo "apk add attempt $i failed; retrying in 5s..." >&2; sleep 5; \
     done

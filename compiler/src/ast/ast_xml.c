@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "core/numstr.h"
 #include "ast/ast.h"
 
@@ -27,7 +28,7 @@ static void ast_emit_value(xml_writer_t *w, const token_value_t *v)
             xml_text(w, buf); xml_close(w); break;
         case TV_FLOAT:
             xml_open(w, "value"); xml_attr(w, "kind", "float");
-            snprintf(buf, sizeof(buf), "%g", v->as.f);
+            sal_snprintf(buf, sizeof(buf), "%g", v->as.f);
             xml_text(w, buf); xml_close(w); break;
         case TV_STRING:
             xml_open(w, "value"); xml_attr(w, "kind", "string");

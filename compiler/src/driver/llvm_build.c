@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "driver/llvm_build.h"
 #include "core/arena.h"
 #include "logger/logger.h"
@@ -48,8 +49,9 @@ static const char *default_output(arena_t *a, const char *module, llvm_output_mo
         case LLVM_OUT_EXEC:    ext = "";     break;   
         default:               ext = ".ll";  break;
     }
-    char *o = (char *)arena_alloc(a, strlen(module) + strlen(ext) + 1);
-    sprintf(o, "%s%s", module, ext);
+    size_t ocap = strlen(module) + strlen(ext) + 1;
+    char *o = (char *)arena_alloc(a, ocap);
+    sal_snprintf(o, ocap, "%s%s", module, ext);
     return o;
 }
 
@@ -98,8 +100,9 @@ int driver_llvm(options_t *opt)
     if (ir_mode && opt->output) {
         llpath = opt->output;
     } else {
-        char *buf = (char *)arena_alloc(arena, strlen(module) + 4);
-        sprintf(buf, "%s.ll", module);
+        size_t bcap = strlen(module) + 4;
+        char *buf = (char *)arena_alloc(arena, bcap);
+        sal_snprintf(buf, bcap, "%s.ll", module);
         llpath = buf;
     }
     FILE *f = fopen(llpath, "wb");
@@ -131,7 +134,7 @@ int driver_llvm(options_t *opt)
         if (rc == 0) {
             LOG_I(log, PH_DRIVER, "wrote %s", o.output_file);
             if (opt->exe_path[0] == '\0' && o.output_mode == LLVM_OUT_EXEC)
-                snprintf(opt->exe_path, sizeof(opt->exe_path), "%s", o.output_file);
+                sal_snprintf(opt->exe_path, sizeof(opt->exe_path), "%s", o.output_file);
         }
     }
     logger_free(log);

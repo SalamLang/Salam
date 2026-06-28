@@ -13,6 +13,7 @@
  */
 
 #include "llvm/codegen_llvm_internal.h"
+#include "core/sal_format.h"
 
 void ll_emit_struct_types(ll_t *ll, ast_node_t *program)
 {
@@ -42,7 +43,7 @@ static void ll_put_ident_byte(sb_t *b, unsigned char c)
 {
     if (isalnum(c))      sb_putc(b, (char)c);
     else if (c == '_')   sb_puts(b, "__");
-    else { char h[5]; snprintf(h, sizeof h, "_%02x", c); sb_puts(b, h); }
+    else { char h[5]; sal_snprintf(h, sizeof h, "_%02x", c); sb_puts(b, h); }
 }
 
 static void ll_put_ident(sb_t *b, const char *name)

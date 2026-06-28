@@ -25,7 +25,7 @@ typedef enum {
     LOG_INFO,
     LOG_WARN,
     LOG_ERROR,
-    LOG_OFF        /* sentinel: silences everything */
+    LOG_OFF
 } log_level_t;
 
 typedef enum {

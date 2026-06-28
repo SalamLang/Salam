@@ -300,10 +300,32 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
                 SERR(s, 21, &n->span, "array index must be an integer, got '%s'",
                      type_to_string(s->tc, idx));
             if (arr->kind == TY_ARRAY) return decorate(s, n, arr->elem);
-            if (arr->kind == TY_PTR)   return decorate(s, n, arr->pointee);  
+            if (arr->kind == TY_SLICE) return decorate(s, n, arr->elem);
+            if (arr->kind == TY_PTR)   return decorate(s, n, arr->pointee);
             if (!type_is_error(arr))
                 SERR(s, 21, &n->span, "cannot index non-array type '%s'",
                      type_to_string(s->tc, arr));
+            return decorate(s, n, err_ty(s));
+        }
+        case AST_SLICE: {
+            type_t *base = sema_check_expr(s, n->a);
+            if (n->b) {
+                type_t *lo = sema_check_expr(s, n->b);
+                if (!type_is_error(lo) && !type_is_integer(lo))
+                    SERR(s, 21, &n->span, "slice bound must be an integer, got '%s'",
+                         type_to_string(s->tc, lo));
+            }
+            if (n->c) {
+                type_t *hi = sema_check_expr(s, n->c);
+                if (!type_is_error(hi) && !type_is_integer(hi))
+                    SERR(s, 21, &n->span, "slice bound must be an integer, got '%s'",
+                         type_to_string(s->tc, hi));
+            }
+            if (base->kind == TY_ARRAY || base->kind == TY_SLICE)
+                return decorate(s, n, type_slice(s->tc, base->elem));
+            if (!type_is_error(base))
+                SERR(s, 21, &n->span, "cannot slice non-array type '%s'",
+                     type_to_string(s->tc, base));
             return decorate(s, n, err_ty(s));
         }
         case AST_ARRAY_LIT:   return check_array_lit(s, n);

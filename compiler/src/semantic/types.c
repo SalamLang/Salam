@@ -50,6 +50,14 @@ type_t *type_array(type_ctx_t *tc, type_t *elem, size_t length)
     return t;
 }
 
+type_t *type_slice(type_ctx_t *tc, type_t *elem)
+{
+    type_t *t = (type_t *)arena_alloc(tc->a, sizeof(*t));
+    memset(t, 0, sizeof(*t));
+    t->kind = TY_SLICE; t->elem = elem;
+    return t;
+}
+
 type_t *type_ptr(type_ctx_t *tc, type_t *pointee)
 {
     { size_t i = 0; for (; i < tc->ptrs.len; i++) {
@@ -177,6 +185,7 @@ bool type_equiv(const type_t *a, const type_t *b)
     if (a->kind != b->kind) return false;
     switch (a->kind) {
         case TY_ARRAY:  return a->length == b->length && type_equiv(a->elem, b->elem);
+        case TY_SLICE:  return type_equiv(a->elem, b->elem);
         case TY_PTR:    return type_equiv(a->pointee, b->pointee);
         case TY_MAP:
         case TY_MAP_ITER: return type_equiv(a->key, b->key) && type_equiv(a->elem, b->elem);
@@ -296,6 +305,11 @@ const char *type_to_string(type_ctx_t *tc, const type_t *t)
         case TY_VEC: {
             char buf[160];
             sal_snprintf(buf, sizeof(buf), "Vector<%s>", type_to_string(tc, t->elem));
+            return arena_strdup(tc->a, buf);
+        }
+        case TY_SLICE: {
+            char buf[160];
+            sal_snprintf(buf, sizeof(buf), "slice<%s>", type_to_string(tc, t->elem));
             return arena_strdup(tc->a, buf);
         }
         case TY_FILE: return "File";

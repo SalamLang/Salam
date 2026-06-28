@@ -117,6 +117,8 @@ const char *to_str(interp_t *I, value_t v);
 
 sarray_t   *array_new(interp_t *I, size_t cap);
 
+sarray_t   *array_view(interp_t *I, sarray_t *base, size_t off, size_t len);
+
 void        array_push(interp_t *I, sarray_t *a, value_t v);
 
 value_t     mk_array(interp_t *I, sarray_t *a);

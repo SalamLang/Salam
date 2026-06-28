@@ -158,9 +158,21 @@ const char *cg_vec_cname(cg_t *cg, const char *ts)
     return cg_fmt(cg, "Vector_%s", cg_vec_code_str(cg, elem));
 }
 
+bool cg_is_slice_ts(const char *ts)
+{
+    return ts && !strncmp(ts, "slice<", 6);
+}
+
+void cg_slice_elem(const char *ts, char *ebuf, size_t cap)
+{
+    if (!ts) { if (cap) ebuf[0] = 0; return; }
+    cg_vec_elem(ts, ebuf, cap);   /* extracts the type between '<' and '>' */
+}
+
 const char *cg_ctype(cg_t *cg, const char *ts)
 {
     if (!ts) return "void";
+    if (cg_is_slice_ts(ts)) return "salam_slice";
     if (!strncmp(ts, "dyn ", 4)) {
         const char *suf = strpbrk(ts + 4, "[*");   
         char iface[96]; size_t il = suf ? (size_t)(suf - (ts + 4)) : strlen(ts + 4);
@@ -181,6 +193,7 @@ const char *cg_ctype(cg_t *cg, const char *ts)
 
 const char *cg_decl(cg_t *cg, const char *ts, const char *name)
 {
+    if (cg_is_slice_ts(ts)) return cg_fmt(cg, "salam_slice %s", cg_cident(cg, name));
     if (!strncmp(ts, "dyn ", 4)) {
         const char *suf = strpbrk(ts + 4, "[*");
         char iface[96]; size_t il = suf ? (size_t)(suf - (ts + 4)) : strlen(ts + 4);

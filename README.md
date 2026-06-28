@@ -8,7 +8,7 @@
 
 Salam is a general-purpose and systems programming language designed for efficient software development, featuring a built-in domain-specific language (DSL)
 
-[![Discord](https://dcbadge.limes.pink/api/server/https://discord.gg/HfY3QHDPdv)](https://discord.gg/HfY3QHDPdv)
+[![Discord](https://dcbadge.limes.pink/api/server/HfY3QHDPdv)](https://discord.gg/HfY3QHDPdv)
 [![GitHub Release](https://img.shields.io/github/v/release/salamlang/salam?style=for-the-badge&color=007ACC)](https://github.com/SalamLang/Salam/releases)
 [![GitHub repo size](https://img.shields.io/github/repo-size/salamlang/salam?style=for-the-badge&color=444444)](https://github.com/SalamLang/Salam)
 

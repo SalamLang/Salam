@@ -4,8 +4,6 @@
     <img width="150" src="https://raw.githubusercontent.com/SalamLang/Salam/main/design/logo/logo-box.svg" alt="The Salam Programming Language - زبان برنامه نویسی سلام">
 </p>
 
-[![Language](https://img.shields.io/badge/Language-Salam-1A1A1A?style=for-the-badge&labelColor=333333&color=00FFCC)](https://github.com/SalamLang/Salam)
-
 # Salam Programming Language
 
 Salam is a general-purpose and systems programming language designed for efficient software development, featuring a built-in domain-specific language (DSL)
@@ -13,6 +11,8 @@ Salam is a general-purpose and systems programming language designed for efficie
 [![Discord](https://dcbadge.limes.pink/api/server/https://discord.gg/HfY3QHDPdv)](https://discord.gg/HfY3QHDPdv)
 [![GitHub Release](https://img.shields.io/github/v/release/salamlang/salam?style=for-the-badge&color=007ACC)](https://github.com/SalamLang/Salam/releases)
 [![GitHub repo size](https://img.shields.io/github/repo-size/salamlang/salam?style=for-the-badge&color=444444)](https://github.com/SalamLang/Salam)
+
+[![Salam Programming Language Playground](https://img.shields.io/badge/Salam-Playground-1A1A1A?style=for-the-badge&labelColor=333333&color=00FFCC)](https://salamlang.github.io/Salam/)
 
 ---
 

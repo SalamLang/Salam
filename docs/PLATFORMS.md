@@ -58,7 +58,7 @@ The backend now carries a target **`usize`** width derived from the target
 triple:
 
 ```
-salam llvm prog.salam --emit-llvm                       # host width (i64 on x86-64)
+salam llvm prog.salam --emit-llvm                           # host width (i64 on x86-64)
 salam llvm prog.salam --emit-llvm --target=i686-linux-gnu   # 32-bit: usize = i32
 ```
 

@@ -4,7 +4,7 @@
     <img width="150" src="https://raw.githubusercontent.com/SalamLang/Salam/main/design/logo/logo-box.svg" alt="The Salam Programming Language - زبان برنامه نویسی سلام">
 </p>
 
-[![Language](https://img.shields.io/badge/Language-Salam-1A1A1A?style=for-the-badge&labelColor=333333&color=00FFCC)](#)
+[![Language](https://img.shields.io/badge/Language-Salam-1A1A1A?style=for-the-badge&labelColor=333333&color=00FFCC)](https://github.com/SalamLang/Salam)
 
 # Salam Programming Language
 

@@ -219,9 +219,19 @@ bool salam_find_bundled_tool(const char *name, char *out, size_t n)
 static char *path_normalize(char *p)
 {
     while (p[0] == '.' && p[1] == '/') memmove(p, p + 2, strlen(p + 2) + 1);
-    
+
     char *q;
     while ((q = strstr(p, "/./")) != NULL) memmove(q + 1, q + 3, strlen(q + 3) + 1);
+
+    /* Collapse dir/../ sequences to prevent directory traversal */
+    while ((q = strstr(p, "/../")) != NULL) {
+        char *s = q;
+        while (s > p && s[-1] != '/') s--;
+        memmove(s, q + 4, strlen(q + 4) + 1);
+    }
+    /* Strip leading ../ sequences */
+    while (p[0] == '.' && p[1] == '.' && p[2] == '/') memmove(p, p + 3, strlen(p + 3) + 1);
+
     return p;
 }
 
@@ -396,7 +406,7 @@ int salam_package_files(arena_t *a, const char *main_path, const char **out, int
             if (strcmp(fd.name, mainbase) == 0) continue;
             if (n >= max) break;
             char *full = (char *)arena_alloc(a, strlen(dbuf) + strlen(fd.name) + 2);
-            sprintf(full, "%s/%s", dbuf, fd.name);
+            snprintf(full, strlen(dbuf) + strlen(fd.name) + 2, "%s/%s", dbuf, fd.name);
             out[n++] = full;
         } while (_findnext(h, &fd) == 0);
         _findclose(h);
@@ -410,7 +420,7 @@ int salam_package_files(arena_t *a, const char *main_path, const char **out, int
             if (L <= 6 || strcmp(e->d_name + L - 6, ".salam") != 0) continue;
             if (strcmp(e->d_name, mainbase) == 0) continue;
             char *full = (char *)arena_alloc(a, strlen(dbuf) + L + 2);
-            sprintf(full, "%s/%s", dbuf, e->d_name);
+            snprintf(full, strlen(dbuf) + L + 2, "%s/%s", dbuf, e->d_name);
             out[n++] = full;
         }
         closedir(d);

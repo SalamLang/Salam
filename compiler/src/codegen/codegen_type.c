@@ -165,7 +165,8 @@ bool cg_is_slice_ts(const char *ts)
 
 void cg_slice_elem(const char *ts, char *ebuf, size_t cap)
 {
-    cg_vec_elem(ts, ebuf, cap);
+    if (!ts) { if (cap) ebuf[0] = 0; return; }
+    cg_vec_elem(ts, ebuf, cap);   /* extracts the type between '<' and '>' */
 }
 
 const char *cg_ctype(cg_t *cg, const char *ts)

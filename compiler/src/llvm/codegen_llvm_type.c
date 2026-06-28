@@ -90,6 +90,7 @@ bool ll_is_slice_ts(const char *ts) { return ts && !strncmp(ts, "slice<", 6); }
 
 const char *ll_slice_elem(ll_t *ll, const char *ts)
 {
+    if (!ts) return "i32";
     const char *lt = strchr(ts, '<');
     const char *gt = strrchr(ts, '>');
     if (!lt || !gt || gt <= lt) return "i32";

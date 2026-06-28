@@ -206,6 +206,13 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "typedef struct salam_map salam_map;\n"
                "typedef struct salam_map_iter salam_map_iter;\n"
                "typedef struct { void* data; int64_t len; } salam_slice;\n"
+               "extern int64_t salam_idx(int64_t, int64_t);\n"
+               "static inline salam_slice salam_slice_new(void* b, int64_t lo, int64_t hi, int64_t esz)"
+               "{ salam_slice s; s.data=(void*)((char*)b+(lo)*(esz)); s.len=(hi)-(lo); return s; }\n"
+               "static inline salam_slice salam_slice_sub(salam_slice b, int64_t lo, int64_t hi, int has_hi, int64_t esz)"
+               "{ salam_slice s; if(!has_hi) hi=b.len; s.data=(void*)((char*)b.data+(lo)*(esz)); s.len=(hi)-(lo); return s; }\n"
+               "static inline void* salam_slice_at(salam_slice s, int64_t i, int64_t esz, int sf)"
+               "{ return (void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n"
                "typedef void (*salam_thread_fn)(void);\n"
                
                "extern void* salam_alloc(uint64_t size);\n"

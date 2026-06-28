@@ -336,6 +336,22 @@ static void ll_emit_arg(ll_t *ll, sb_t *ab, ast_node_t *arg, func_sig_t *sig, si
     sb_puts(ab, ll_fmt(ll, "%s %s", ll_ty(ll, pts), ll_conv(ll, v, pts)));
 }
 
+/* Append default-value arguments for trailing parameters the caller omitted.
+ * `first` tracks whether any argument has been written yet (so the comma
+ * separator is emitted correctly across both real and default arguments). */
+static void ll_fill_defaults(ll_t *ll, sb_t *ab, ast_node_t *n, func_sig_t *sig, bool first)
+{
+    if (!sig || !sig->decl) return;
+    size_t np = sig->decl->list.len;
+    { size_t i = n->list.len; for (; i < np; i++) {
+        ast_node_t *param = (ast_node_t *)sig->decl->list.data[i];
+        if (!param->a) continue;
+        if (!first) sb_puts(ab, ", ");
+        ll_emit_arg(ll, ab, param->a, sig, i);
+        first = false;
+    } }
+}
+
 static llv_t ll_call_user(ll_t *ll, ast_node_t *n, const char *nm)
 {
     symbol_t *fsym = ll_sym(ll, nm);
@@ -350,9 +366,10 @@ static llv_t ll_call_user(ll_t *ll, ast_node_t *n, const char *nm)
         if (i) sb_puts(&ab, ", ");
         ll_emit_arg(ll, &ab, (ast_node_t *)n->list.data[i], sig, i);
     } }
+    ll_fill_defaults(ll, &ab, n, sig, n->list.len == 0);
     const char *args = arena_strdup(ll->a, sb_cstr(&ab)); sb_free(&ab);
     const char *rts = type_to_string(ll->sem->tc, sig->ret);
-    
+
     bool is_ext = sig->decl && sig->decl->is_extern;
     const char *fname = is_ext ? nm : ll_mangle(ll, NULL, nm, sig);
     const char *callty = "";
@@ -385,10 +402,9 @@ static llv_t ll_call_len(ll_t *ll, ast_node_t *n)
         return ll_poison("i32");
     }
     llv_t v = ll_expr(ll, arg);
-    const char *l = ll_new_tmp(ll), *r = ll_new_tmp(ll);
-    ll_emit(ll, "%s = call i64 @strlen(ptr %s)", l, v.ref);
-    ll_emit(ll, "%s = trunc i64 %s to i32", r, l);
-    return (llv_t){ r, "i32" };
+    const char *l = ll_new_tmp(ll);
+    ll_emit(ll, "%s = call %s @strlen(ptr %s)", l, ll->usize, v.ref);
+    return (llv_t){ ll_usize_to_i32(ll, l), "i32" };
 }
 
 static llv_t ll_emit_call(ll_t *ll, ast_node_t *n, func_sig_t *sig, const char *lead,
@@ -402,6 +418,7 @@ static llv_t ll_emit_call(ll_t *ll, ast_node_t *n, func_sig_t *sig, const char *
         ll_emit_arg(ll, &ab, (ast_node_t *)n->list.data[i], sig, i);
         first = false;
     } }
+    ll_fill_defaults(ll, &ab, n, sig, first);
     const char *args = arena_strdup(ll->a, sb_cstr(&ab)); sb_free(&ab);
     if (rts && !strcmp(rts, "void")) {
         ll_emit(ll, "call void @%s(%s)", fname, args);
@@ -432,10 +449,9 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
     const char *recv = ll_expr(ll, obj).ref;
     const char *r;
     if (!strcmp(m, "len") || !strcmp(m, "length")) {
-        const char *l = ll_new_tmp(ll); r = ll_new_tmp(ll);
-        ll_emit(ll, "%s = call i64 @strlen(ptr %s)", l, recv);
-        ll_emit(ll, "%s = trunc i64 %s to i32", r, l);
-        *out = (llv_t){ r, "i32" }; return true;
+        const char *l = ll_new_tmp(ll);
+        ll_emit(ll, "%s = call %s @strlen(ptr %s)", l, ll->usize, recv);
+        *out = (llv_t){ ll_usize_to_i32(ll, l), "i32" }; return true;
     }
     if (!strcmp(m, "concat") && na == 1) {
         const char *a = ll_expr(ll, (ast_node_t *)n->list.data[0]).ref;

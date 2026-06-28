@@ -110,6 +110,9 @@ static const i18n_pair_t k_msg_fa[] = {
     { "assignment target is not assignable",                 "هدف انتساب قابل مقداردهی نیست" },
     { "cannot assign to immutable target",                   "نمی‌توان به هدف تغییرناپذیر مقدار داد" },
     { "default for field '%s': cannot assign '%s' to '%s'",  "مقدار پیش‌فرض فیلد '%s': نمی‌توان '%s' را به '%s' نسبت داد" },
+    { "default for parameter '%s': cannot assign '%s' to '%s'", "مقدار پیش‌فرض پارامتر '%s': نمی‌توان '%s' را به '%s' نسبت داد" },
+    { "parameter '%s' without a default value cannot follow a parameter with one", "پارامتر '%s' بدون مقدار پیش‌فرض نمی‌تواند پس از پارامتری با مقدار پیش‌فرض بیاید" },
+    { "extern parameter '%s' cannot have a default value",   "پارامتر extern یعنی '%s' نمی‌تواند مقدار پیش‌فرض داشته باشد" },
     { "field '%s': cannot assign '%s' to '%s'",              "فیلد '%s': نمی‌توان '%s' را به '%s' نسبت داد" },
     
     { "operator cannot be applied to '%s' and '%s'",         "این عملگر روی '%s' و '%s' قابل اعمال نیست" },
@@ -137,6 +140,9 @@ static const i18n_pair_t k_msg_fa[] = {
     
     { "call to undefined function '%s'",                     "فراخوانی تابع تعریف‌نشده‌ی '%s'" },
     { "no matching overload for '%s' with %zu argument(s)",  "هیچ نسخه‌ی متناظری برای '%s' با %zu آرگومان یافت نشد" },
+    { "'%s' expects %zu argument(s), got %zu",               "'%s' به %zu آرگومان نیاز دارد، اما %zu دریافت شد" },
+    { "'%s' expects at least %zu argument(s), got %zu",      "'%s' به حداقل %zu آرگومان نیاز دارد، اما %zu دریافت شد" },
+    { "'%s' expects %zu to %zu argument(s), got %zu",        "'%s' به %zu تا %zu آرگومان نیاز دارد، اما %zu دریافت شد" },
     { "ambiguous call to '%s' (%zu candidates)",             "فراخوانی مبهم '%s' (%zu گزینه‌ی ممکن)" },
     { "builtin '%s' takes %d argument(s), got %zu",          "تابع درون‌ساخت '%s' به %d آرگومان نیاز دارد، اما %zu دریافت شد" },
     { "builtin '%s' expects '%s', got '%s'",                 "تابع درون‌ساخت '%s' انتظار '%s' را دارد، اما '%s' دریافت شد" },

@@ -49,7 +49,7 @@ no special handling in Salam is required.
 
 Salam emits textual LLVM IR. Previously every `size_t`-typed position
 (`malloc`, `realloc`, `memcpy`, `memmove`, `snprintf`, `strlen`) and the
-internal helpers were hard-coded to `i64`, which is wrong on a 32-bit target -
+internal helpers were hardcoded to `i64`, which is wrong on a 32-bit target -
 the IR declarations would not match the real libc ABI (most visibly,
 `snprintf`'s vararg layout breaks when its `size_t` argument is the wrong
 width).

@@ -827,9 +827,9 @@ static llv_t ll_array_lit(ll_t *ll, ast_node_t *n)
 
 static llv_t ll_slice_expr(ll_t *ll, ast_node_t *n)
 {
-    const char *sts = n->type_str;                  /* slice<T> */
-    const char *ets = ll_slice_elem(ll, sts);       /* element type T */
-    const char *let = ll_ty(ll, ets);               /* LLVM element type */
+    const char *sts = n->type_str;
+    const char *ets = ll_slice_elem(ll, sts);
+    const char *let = ll_ty(ll, ets);
     const char *bts = n->a->type_str ? n->a->type_str : "";
 
     const char *lo = n->b ? ll_conv(ll, ll_expr(ll, n->b), "i64") : "0";

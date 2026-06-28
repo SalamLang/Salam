@@ -97,17 +97,15 @@ static ast_node_t *led_call(parser_t *p, ast_node_t *lhs)
 static ast_node_t *led_index(parser_t *p, ast_node_t *lhs)
 {
     src_span_t span = lhs->span;
-    p_advance(p);                                  /* consume '[' */
+    p_advance(p);
     p_skip_terminators(p);
-
 
     ast_node_t *lo = NULL;
     if (!p_at(p, TK_COLON)) lo = parse_expr_bp(p, 0);
     p_skip_terminators(p);
 
-
     if (p_at(p, TK_COLON)) {
-        p_advance(p);                              /* consume ':' */
+        p_advance(p);
         p_skip_terminators(p);
         ast_node_t *hi = NULL;
         if (!p_at(p, TK_RBRACKET)) hi = parse_expr_bp(p, 0);
@@ -118,7 +116,6 @@ static ast_node_t *led_index(parser_t *p, ast_node_t *lhs)
         p_fin(p, sl);
         return sl;
     }
-
 
     ast_node_t *idx = ast_new(p->a, AST_INDEX, &span);
     idx->a = lhs;

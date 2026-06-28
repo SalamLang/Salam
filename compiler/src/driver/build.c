@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "driver/build.h"
 #include "core/arena.h"
 #include "core/sb.h"
@@ -222,7 +223,7 @@ int driver_build(options_t *opt)
                         if (ndefs < SALAM_MAX_INPUTS) {
                             size_t ll = strlen(lib);
                             char *def = (char *)arena_alloc(arena, ll + 12);
-                            strcpy(def, "SALAM_LINK_");
+                            memcpy(def, "SALAM_LINK_", sizeof("SALAM_LINK_") - 1);
                             { size_t c = 0; for (; c < ll; c++) {
                                 char ch = lib[c];
                                 if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
@@ -249,10 +250,11 @@ int driver_build(options_t *opt)
         codegen_output_t *out = codegen_run(arena, log, program, sr, module, opt->safe,
                                             opt->debug_info, src->path, langpack_entry(pack));
         size_t pfxlen = strlen(SALAM_MOD_PREFIX);
-        char *cpath = (char *)arena_alloc(arena, pfxlen + strlen(module) + 3);
-        char *hpath = (char *)arena_alloc(arena, pfxlen + strlen(module) + 3);
-        sprintf(cpath, "%s%s.c", SALAM_MOD_PREFIX, module);
-        sprintf(hpath, "%s%s.h", SALAM_MOD_PREFIX, module);
+        size_t pathcap = pfxlen + strlen(module) + 3;
+        char *cpath = (char *)arena_alloc(arena, pathcap);
+        char *hpath = (char *)arena_alloc(arena, pathcap);
+        sal_snprintf(cpath, pathcap, "%s%s.c", SALAM_MOD_PREFIX, module);
+        sal_snprintf(hpath, pathcap, "%s%s.h", SALAM_MOD_PREFIX, module);
         if (!write_file(log, cpath, out->c_src) || !write_file(log, hpath, out->h_src))
             { all_ok = false; continue; }
         cfiles[ncfiles++] = cpath;
@@ -278,10 +280,11 @@ int driver_build(options_t *opt)
         
         const char *dbg_flag = (opt->debug_info && !strstr(opt->cc, "tcc")) ? " -g" : "";
         { int i = 0; for (; i < ncfiles && crc == 0; i++) {
-            char obj[260]; snprintf(obj, sizeof(obj), "%.*s.o", (int)(strlen(cfiles[i]) - 2), cfiles[i]);
+            char obj[260]; sal_snprintf(obj, sizeof(obj), "%.*s.o", (int)(strlen(cfiles[i]) - 2), cfiles[i]);
             sb_t cmd; sb_init(&cmd);
             sb_puts(&cmd, opt->cc); sb_puts(&cmd, " -c -I."); sb_puts(&cmd, dbg_flag);
-            sb_puts(&cmd, " "); sb_puts(&cmd, cfiles[i]); sb_puts(&cmd, " -o "); sb_puts(&cmd, obj);
+            sb_putc(&cmd, ' '); sb_put_shell_arg(&cmd, cfiles[i]);
+            sb_puts(&cmd, " -o "); sb_put_shell_arg(&cmd, obj);
             LOG_I(log, PH_DRIVER, "assembling: %s", sb_cstr(&cmd));
             crc = system(sb_cstr(&cmd)); sb_free(&cmd);
         } }
@@ -290,8 +293,9 @@ int driver_build(options_t *opt)
     } else {
         const char *output = opt->output;
         if (!output) {
-            char *o = (char *)arena_alloc(arena, strlen(first_module) + 5);
-            sprintf(o, "%s.exe", first_module);
+            size_t ocap = strlen(first_module) + 5;
+            char *o = (char *)arena_alloc(arena, ocap);
+            sal_snprintf(o, ocap, "%s.exe", first_module);
             output = o;
         }
 #ifdef _WIN32
@@ -304,7 +308,7 @@ int driver_build(options_t *opt)
         const char *lm = " -lm";
 #endif
         sb_t cmd; sb_init(&cmd);
-        sb_puts(&cmd, opt->cc); sb_puts(&cmd, " -I. -o "); sb_puts(&cmd, output);
+        sb_puts(&cmd, opt->cc); sb_puts(&cmd, " -I. -o "); sb_put_shell_arg(&cmd, output);
         if (opt->debug_info) {
             if (use_tcc)
                 LOG_W(log, PH_DRIVER,
@@ -335,7 +339,7 @@ int driver_build(options_t *opt)
                 sb_putc(&cmd, c);
             } }
         } }
-        { int i = 0; for (; i < ncfiles; i++) { sb_putc(&cmd, ' '); sb_puts(&cmd, cfiles[i]); } }
+        { int i = 0; for (; i < ncfiles; i++) { sb_putc(&cmd, ' '); sb_put_shell_arg(&cmd, cfiles[i]); } }
         sb_puts(&cmd, lm);  
         
         { int i = 0; for (; i < nlinks; i++)
@@ -347,7 +351,7 @@ int driver_build(options_t *opt)
             LOG_I(log, PH_DRIVER, "built executable: %s", output);
             
             if (opt->exe_path[0] == '\0')
-                snprintf(opt->exe_path, sizeof(opt->exe_path), "%s", output);
+                sal_snprintf(opt->exe_path, sizeof(opt->exe_path), "%s", output);
         }
     }
     if (!opt->keep_c) { int i = 0; for (; i < ngen; i++) remove(generated[i]); }

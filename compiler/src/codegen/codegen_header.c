@@ -13,6 +13,7 @@
  */
 
 #include "codegen/codegen_internal.h"
+#include "core/sal_format.h"
 #include "semantic/sema.h"   
 
 static void vec_collect_one(cg_t *cg, const char *ts)
@@ -67,7 +68,7 @@ static void dyn_collect(cg_t *cg, ast_node_t *n)
         n->a && n->a->type_str) {
         const char *iface = n->type_str + 4;
         dyn_set_add(cg, &cg->dyn_ifaces, iface);
-        char pair[256]; snprintf(pair, sizeof pair, "%s|%s", iface, n->a->type_str);
+        char pair[256]; sal_snprintf(pair, sizeof pair, "%s|%s", iface, n->a->type_str);
         dyn_set_add(cg, &cg->dyn_impls, pair);
     }
     dyn_collect(cg, n->type); dyn_collect(cg, n->a); dyn_collect(cg, n->b);
@@ -118,7 +119,7 @@ static void cg_emit_dyn_types(cg_t *cg, sb_t *h)
 void cg_emit_dyn_vtables(cg_t *cg, sb_t *c)
 {
     { size_t i = 0; for (; i < cg->dyn_impls.len; i++) {
-        char buf[256]; strncpy(buf, (const char *)cg->dyn_impls.data[i], sizeof buf - 1); buf[sizeof buf - 1] = 0;
+        char buf[256]; sal_snprintf(buf, sizeof buf, "%s", (const char *)cg->dyn_impls.data[i]);
         char *bar = strchr(buf, '|'); if (!bar) continue; *bar = 0;
         const char *I = buf, *C = bar + 1;
         const char *cI = cg_cident(cg, I), *cC = cg_cident(cg, C);

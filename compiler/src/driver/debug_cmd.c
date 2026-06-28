@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "driver/debug_cmd.h"
 #include "driver/build.h"
 #include "core/sb.h"
@@ -44,10 +45,10 @@ int driver_debug(options_t *opt)
     
     char exe[512]; exe[0] = '\0';
     if (opt->output) {
-        snprintf(exe, sizeof(exe), "%s", opt->output);
+        sal_snprintf(exe, sizeof(exe), "%s", opt->output);
     } else {
         char stem[256]; path_stem(opt->inputs[0], stem, sizeof(stem));
-        snprintf(exe, sizeof(exe), "%s.exe", stem);
+        sal_snprintf(exe, sizeof(exe), "%s.exe", stem);
         opt->output = exe;
     }
     int rc = driver_build(opt);
@@ -61,7 +62,7 @@ int driver_debug(options_t *opt)
     sb_t cmd; sb_init(&cmd);
     sb_puts(&cmd, dbg);
     sb_puts(&cmd, " -o 'breakpoint set --name main' -o 'run' -- ");
-    sb_puts(&cmd, target);
+    sb_put_shell_arg(&cmd, target);
     fprintf(stdout,
         "\nsalam: launching %s\n"
         "  (lldb) breakpoint set --name main  → already set\n"
@@ -79,7 +80,7 @@ int driver_debug(options_t *opt)
     sb_t cmd; sb_init(&cmd);
     sb_puts(&cmd, dbg);
     sb_puts(&cmd, " ");
-    sb_puts(&cmd, target);
+    sb_put_shell_arg(&cmd, target);
     fprintf(stdout,
         "\nsalam: launching %s\n"
         "  Tip: (gdb) break main   → set a breakpoint\n"
@@ -96,7 +97,7 @@ int driver_debug(options_t *opt)
     sb_t cmd; sb_init(&cmd);
     sb_puts(&cmd, dbg);
     sb_puts(&cmd, " -ex 'break main' -ex 'run' ");
-    sb_puts(&cmd, target);
+    sb_put_shell_arg(&cmd, target);
     fprintf(stdout,
         "\nsalam: launching %s\n"
         "  (gdb) break main  → already set\n"
@@ -139,10 +140,10 @@ int driver_memcheck(options_t *opt)
     opt->command      = CMD_BUILD;   
     char exe[512]; exe[0] = '\0';
     if (opt->output) {
-        snprintf(exe, sizeof(exe), "%s", opt->output);
+        sal_snprintf(exe, sizeof(exe), "%s", opt->output);
     } else {
         char stem[256]; path_stem(opt->inputs[0], stem, sizeof(stem));
-        snprintf(exe, sizeof(exe), "%s.exe", stem);
+        sal_snprintf(exe, sizeof(exe), "%s.exe", stem);
         opt->output = exe;
     }
     fprintf(stdout, "salam memcheck: building with AddressSanitizer + debug symbols...\n");
@@ -156,19 +157,19 @@ int driver_memcheck(options_t *opt)
     fprintf(stdout,
         "salam memcheck: Valgrind is not available on Windows.\n"
         "  Running binary with ASAN error reporting...\n\n");
-    sb_puts(&cmd, target);
+    sb_put_shell_arg(&cmd, target);
 #else
     
     if (system("valgrind --version > /dev/null 2>&1") == 0) {
         fprintf(stdout, "salam memcheck: running under Valgrind...\n\n");
         sb_puts(&cmd, "valgrind --leak-check=full --track-origins=yes "
                        "--show-leak-kinds=all --error-exitcode=1 ");
-        sb_puts(&cmd, target);
+        sb_put_shell_arg(&cmd, target);
     } else {
         fprintf(stdout,
             "salam memcheck: valgrind not found; running with ASAN error reporting.\n"
             "  (Install: sudo apt-get install valgrind)\n\n");
-        sb_puts(&cmd, target);
+        sb_put_shell_arg(&cmd, target);
     }
 #endif
     fflush(stdout);

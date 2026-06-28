@@ -50,8 +50,8 @@ typedef struct {
 typedef struct {
     sqlite3_stmt *stmt;
     int ncols;
-    char **rowbuf;           /* ncols slots, refreshed each fetch_row */
-    char *namecell;          /* backing slot for fetch_field_direct */
+    char **rowbuf;
+    char *namecell;
 } MockRes;
 
 void *mysql_init(void *unused) {

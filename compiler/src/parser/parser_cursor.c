@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "core/sb.h"
 #include "parser/parser_internal.h"
 #include "i18n/i18n.h"
@@ -91,7 +92,7 @@ bool p_expect(parser_t *p, token_kind_t k, const char *what)
 {
     if (p_at(p, k)) { p_advance(p); return true; }
     char buf[128];
-    snprintf(buf, sizeof(buf), i18n_tr("expected %s"), i18n_tr(what));
+    sal_snprintf(buf, sizeof(buf), i18n_tr("expected %s"), i18n_tr(what));
     p_error(p, buf);
     return false;
 }

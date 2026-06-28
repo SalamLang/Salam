@@ -84,7 +84,7 @@ static const char *ll_escape(ll_t *ll, const char *s, size_t len, size_t *arr_le
     { size_t i = 0; for (; i < len; i++) {
         unsigned char c = (unsigned char)s[i];
         if (c == '"' || c == '\\' || c < 0x20 || c > 0x7e) {
-            char hx[8]; snprintf(hx, sizeof hx, "\\%02X", c); sb_puts(&b, hx);
+            char hx[8]; sal_snprintf(hx, sizeof hx, "\\%02X", c); sb_puts(&b, hx);
         } else {
             sb_putc(&b, (char)c);
         }

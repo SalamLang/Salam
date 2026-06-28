@@ -57,10 +57,39 @@ func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,
         if (ok) { match = sig; nmatch++; }
     } }
     if (nmatch == 1) return match;
-    if (nmatch == 0)
-        SERR(s, 12, span, "no matching overload for '%s' with %zu argument(s)", what, argtypes->len);
-    else
+    if (nmatch > 1) {
         SERR(s, 12, span, "ambiguous call to '%s' (%zu candidates)", what, nmatch);
+        return NULL;
+    }
+    /* Single, non-overloaded function: report the precise reason the call is
+     * invalid (wrong argument count, or the first ill-typed argument) instead
+     * of the generic "no matching overload". */
+    if (fsym->overloads.len == 1) {
+        func_sig_t *sig = (func_sig_t *)fsym->overloads.data[0];
+        if (argtypes->len < sig->required ||
+            (!sig->variadic && argtypes->len > sig->params.len)) {
+            if (sig->variadic)
+                SERR(s, 12, span, "'%s' expects at least %zu argument(s), got %zu",
+                     what, sig->required, argtypes->len);
+            else if (sig->required == sig->params.len)
+                SERR(s, 12, span, "'%s' expects %zu argument(s), got %zu",
+                     what, sig->params.len, argtypes->len);
+            else
+                SERR(s, 12, span, "'%s' expects %zu to %zu argument(s), got %zu",
+                     what, sig->required, sig->params.len, argtypes->len);
+            return NULL;
+        }
+        size_t nfix = argtypes->len < sig->params.len ? argtypes->len : sig->params.len;
+        { size_t j = 0; for (; j < nfix; j++) {
+            if (!type_assignable((type_t *)sig->params.data[j], (type_t *)argtypes->data[j])) {
+                SERR(s, 12, span, "argument %zu: cannot pass '%s' to '%s'", j + 1,
+                     type_to_string(s->tc, (type_t *)argtypes->data[j]),
+                     type_to_string(s->tc, (type_t *)sig->params.data[j]));
+                return NULL;
+            }
+        } }
+    }
+    SERR(s, 12, span, "no matching overload for '%s' with %zu argument(s)", what, argtypes->len);
     return NULL;
 }
 

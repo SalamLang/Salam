@@ -17,6 +17,6 @@
 #define SALAM_GIT_DIRTY ""
 #endif
 
-#define SALAM_BUILD_DATE __DATE__
+#define SALAM_BUILD_DATE __DATE__ " " __TIME__
 
 #endif /* SALAM_BUILD_INFO_H */

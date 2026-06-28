@@ -24,9 +24,9 @@
 #define SALAM_MOD_PREFIX "salam_mod_"
 
 typedef struct {
-    const char *module;   /* module name (from file stem) */
-    const char *h_src;    /* generated header  */
-    const char *c_src;    /* generated source  */
+    const char *module;
+    const char *h_src;
+    const char *c_src;
 } codegen_output_t;
 
 codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,

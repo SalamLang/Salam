@@ -28,7 +28,7 @@ typedef enum {
     AST_FUNC_DEF, AST_PARAM,
     AST_STRUCT_DEF, AST_FIELD,
     AST_INTERFACE_DEF,
-    AST_IMPL_DEF,            /* `impl Iface for Type:` block (name=iface, type=target, list=methods) */
+    AST_IMPL_DEF,
     AST_ENUM_DEF, AST_ENUM_MEMBER,
     AST_BLOCK,
     AST_VAR_DECL, AST_ASSIGN,
@@ -41,7 +41,7 @@ typedef enum {
     AST_ARRAY_LIT, AST_STRUCT_LIT, AST_FIELD_INIT,
     AST_TYPE,
     AST_LAYOUT_BLOCK, AST_LAYOUT_ELEMENT, AST_LAYOUT_ATTR,
-    AST_LAYOUT_COMPONENT, /* named layout fragment; name; list=params; a=body block */
+    AST_LAYOUT_COMPONENT,
     AST__COUNT
 } ast_kind_t;
 
@@ -50,31 +50,26 @@ typedef struct ast_node ast_node_t;
 struct ast_node {
     ast_kind_t    kind;
     src_span_t    span;
-    const char   *name;       /* identifier / op-less name / type base / etc. */
-    token_value_t value;      /* literal value (TV_NONE otherwise)            */
-    token_kind_t  op;         /* operator or literal token kind               */
+    const char   *name;
+    token_value_t value;
+    token_kind_t  op;
     bool          is_mut;
-    bool          is_pointer; /* AST_TYPE pointer suffix                      */
-    bool          synthetic;  /* generated (e.g. a monomorphized generic instance) */
-    bool          is_extern;  /* FUNC_DEF/VAR_DECL declared in an `extern "C"` block:
-                               * no body/definition; linked to an external C symbol */
-    bool          is_variadic;/* FUNC_DEF: trailing `...` (C variadic call ABI)     */
-    bool          is_dyn;     /* AST_TYPE: `dyn Iface` dynamic-interface fat pointer */
-    bool          is_ref;     /* AST_PARAM: pass-by-reference; AST_IDENTIFIER: refers to a ref param */
-    bool          is_pub;     /* top-level def marked `pub`/`عمومی`: exported from its package */
-    ast_node_t   *type;       /* annotation / cast target / return / aliased  */
+    bool          is_pointer;
+    bool          synthetic;
+    bool          is_extern;
+    bool          is_variadic;
+    bool          is_dyn;
+    bool          is_ref;
+    bool          is_pub;
+    ast_node_t   *type;
     ast_node_t   *a, *b, *c, *d;
-    vec_t         list;       /* variable-arity children                      */
-    vec_t         dims;       /* AST_TYPE array dimensions (expr* or NULL)     */
-    vec_t         typarams;   /* generic type-parameter names (const char*):
-                               * on AST_STRUCT_DEF / AST_FUNC_DEF templates    */
-    vec_t         typaram_bounds; /* parallel to typarams: interface bound name
-                               * (const char*) for each `T: Iface`, or NULL     */
-    vec_t         aliases;    /* localization metadata: alternating (lang, name)
-                               * const char* pairs from `@lang "name"` annotations */
-    vec_t         captures;   /* AST_LAMBDA: captured enclosing locals (AST_IDENTIFIER
-                               * nodes carrying name + resolved type_str) */
-    const char   *type_str;   /* resolved type name, filled by semantic phase */
+    vec_t         list;
+    vec_t         dims;
+    vec_t         typarams;
+    vec_t         typaram_bounds;
+    vec_t         aliases;
+    vec_t         captures;
+    const char   *type_str;
 };
 
 ast_node_t *ast_new(arena_t *a, ast_kind_t kind, const src_span_t *span);

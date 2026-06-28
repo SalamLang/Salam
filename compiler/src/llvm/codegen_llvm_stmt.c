@@ -37,7 +37,7 @@ static void ll_vardecl(ll_t *ll, ast_node_t *n)
 {
     const char *ts = n->type_str ? n->type_str : "i32";
     const char *ptr = ll_fmt(ll, "%%v.%s.%d", n->name, ll->tmp++);
-    ll_emit(ll, "%s = alloca %s", ptr, ll_ty(ll, ts));
+    ll_emit_alloca(ll, "%s = alloca %s", ptr, ll_ty(ll, ts));
     ll_local_add(ll, n->name, ptr, ts);
     if (n->a) {
         const char *v = ll_conv(ll, ll_expr(ll, n->a), ts);
@@ -167,7 +167,7 @@ static void ll_repeat(ll_t *ll, ast_node_t *n)
         cmpop  = "slt";                     
     }
     const char *ctr = ll_new_tmp(ll);
-    ll_emit(ll, "%s = alloca i64", ctr);
+    ll_emit_alloca(ll, "%s = alloca i64", ctr);
     ll_emit(ll, "store i64 %s, ptr %s", initv, ctr);
     const char *condL = ll_new_lbl(ll, "rcond");
     const char *bodyL = ll_new_lbl(ll, "rbody");

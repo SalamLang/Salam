@@ -25,14 +25,14 @@ typedef enum { SEV_ERROR = 0, SEV_WARNING } severity_t;
 
 typedef struct {
     severity_t  sev;
-    int         code;          /* numeric part of E0xx / W0xx */
+    int         code;
     src_span_t  span;
     const char *file;
-    const char *message;       /* "E012: ..." (arena) */
+    const char *message;
 } diag_t;
 
 typedef struct {
-    vec_t      items;          /* diag_t* */
+    vec_t      items;
     size_t     errors;
     size_t     warnings;
     arena_t   *a;

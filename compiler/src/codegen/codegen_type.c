@@ -45,10 +45,6 @@ void cg_put_ident_byte(sb_t *b, unsigned char c)
     }
 }
 
-/* True when `s` is a C reserved keyword or a <stdbool.h> macro. Such a name is a
- * valid Salam identifier (e.g. a struct field `if` or `type`) but cannot be used
- * verbatim in generated C, so cg_cident appends '_' to it. Strict C compilers
- * (gcc, modern tcc) reject `bool if;`; only lenient tcc builds let it slide. */
 static bool cg_is_c_keyword(const char *s)
 {
     static const char *const kw[] = {
@@ -143,8 +139,8 @@ static void cg_encode_typestr(sb_t *s, const char *str, bool skip_spaces)
     for (; *p; p++) {
         if (*p == '*')                     sb_puts(s, "_ptr");
         else if (*p == '[')                sb_puts(s, "_arr");
-        else if (*p == ']')                { /* array close: dropped */ }
-        else if (*p == ' ' && skip_spaces) { /* dropped */ }
+        else if (*p == ']')                { }
+        else if (*p == ' ' && skip_spaces) { }
         else                               cg_put_ident_byte(s, *p);
     }
 }

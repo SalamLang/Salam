@@ -108,9 +108,6 @@ static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
 int salam_llvm_toolchain(logger_t *log, const char *ll_path,
                          const codegen_llvm_options_t *opts)
 {
-    /* When salam embeds LLVM, do everything in-process: no external
-     * clang/llc/lli and no WSL hop. Returns -1 only in non-LLVM builds,
-     * in which case we fall through to the external-tool path below. */
     if (salam_llvm_native_available()) {
         int nrc = salam_llvm_native(log, ll_path, opts);
         if (nrc >= 0) return nrc;

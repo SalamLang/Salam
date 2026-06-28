@@ -30,8 +30,6 @@ func_sig_t *pick_overload(cg_t *cg, symbol_t *fsym, ast_node_t *call)
     { size_t i = 0; for (; i < fsym->overloads.len; i++) {
         func_sig_t *sig = (func_sig_t *)fsym->overloads.data[i];
         if (!fallback) fallback = sig;
-        /* Default parameters let a call supply between `required` and
-         * `params.len` arguments (or more, when variadic). */
         if (call->list.len < sig->required) continue;
         if (!sig->variadic && call->list.len > sig->params.len) continue;
         size_t nfix = call->list.len < sig->params.len ? call->list.len : sig->params.len;

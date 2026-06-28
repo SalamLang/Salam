@@ -200,9 +200,6 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     ll.g = &g; ll.b = &g; ll.meta = &meta;
     sb_puts(&g, ll_fmt(&ll, "; ModuleID = '%s'\n", module));
     sb_puts(&g, ll_fmt(&ll, "source_filename = \"%s.salam\"\n\n", module));
-    /* When a concrete target is requested, name it so llc/clang lower for that
-     * target and the usize width below matches its ABI. The datalayout itself
-     * is supplied by the backend for the named triple. */
     if (ll.triple)
         sb_puts(&g, ll_fmt(&ll, "target triple = \"%s\"\n\n", ll.triple));
     ll_emit_prologue(&ll);

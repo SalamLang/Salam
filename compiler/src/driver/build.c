@@ -110,10 +110,6 @@ int driver_build(options_t *opt)
                  logger_free(log); arena_free(arena); return 2; }
     salam_set_stdlib_root(opt->stdlib_path);
 
-    /* Self-contained installs ship a C toolchain next to salam (mingw-w64/LLVM).
-     * When the user didn't pick a compiler (the default is "tcc"), prefer a
-     * gcc/clang/tcc bundled beside the binary over whatever is on PATH, so the
-     * distribution works with nothing installed. */
     if (opt->cc && strcmp(opt->cc, "tcc") == 0) {
         static char bundled_cc[1200];
         if (salam_find_bundled_tool("gcc",   bundled_cc, sizeof bundled_cc) ||
@@ -186,8 +182,6 @@ int driver_build(options_t *opt)
         ast_node_t *program = NULL;
         bool pok = parser_run(arena, log, toks, &program);
 
-        /* A package may span several .salam files in one directory: parse each
-         * sibling and merge it into this module before checking / codegen. */
         { const char *pfiles[SALAM_MAX_INPUTS];
           int npf = salam_package_files(arena, path, pfiles, SALAM_MAX_INPUTS);
           int pi = 1; for (; pi < npf; pi++) {
@@ -299,8 +293,6 @@ int driver_build(options_t *opt)
             output = o;
         }
 #ifdef _WIN32
-        /* tcc needs an explicit -lmsvcrt; clang (MSVC target) keeps libm in the
-         * CRT, so -lm would fail to link. Only mingw gcc wants -lm on Windows. */
         const char *lm = use_tcc ? " -lmsvcrt"
                        : (strstr(opt->cc, "clang") ? "" : " -lm");
 #else

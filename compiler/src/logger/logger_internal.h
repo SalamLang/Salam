@@ -27,7 +27,7 @@ struct logger {
     bool          diag_rich;
     diag_style_t  diag_style;
     diag_format_t diag_format;
-    const char   *src_text;   /* may be NULL - suppresses source snippet */
+    const char   *src_text;
     size_t        src_len;
 };
 

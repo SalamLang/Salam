@@ -16,10 +16,10 @@ The whole frontend (lexer → parser → semantic analyzer) plus the interpreter
 and the layout engine are compiled to `salam-wa.wasm`/`salam-wa.js` with
 Emscripten and driven from JavaScript:
 
-| Mode    | JS entry point                        | What runs                                   |
-|---------|---------------------------------------|---------------------------------------------|
-| **App** | `salam_web_run_app(source, lang)`     | the interpreter; returns the program output |
-| **Layout** | `salam_web_build_layout(source, lang)` | the layout backend; returns an HTML page  |
+| Mode       | JS entry point                         | What runs                                   |
+| ---------- | -------------------------------------- | ------------------------------------------- |
+| **App**    | `salam_web_run_app(source, lang)`      | the interpreter; returns the program output |
+| **Layout** | `salam_web_build_layout(source, lang)` | the layout backend; returns an HTML page    |
 
 The editor (`editor/app.js`) is bilingual: switching **English / فارسی** updates
 both the UI strings and the document **direction (ltr/rtl)** in sync, and ships

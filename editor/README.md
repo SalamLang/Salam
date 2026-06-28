@@ -12,7 +12,7 @@ left-to-right. No server, no C toolchain in the browser.
 
 The browser cannot run a C compiler, so general programs run through Salam's
 **tree-walking interpreter** (`src/interp`) rather than the C-codegen backend.
-The whole front end (lexer → parser → semantic analyzer) plus the interpreter
+The whole frontend (lexer → parser → semantic analyzer) plus the interpreter
 and the layout engine are compiled to `salam-wa.wasm`/`salam-wa.js` with
 Emscripten and driven from JavaScript:
 
@@ -25,7 +25,7 @@ The editor (`editor/app.js`) is bilingual: switching **English / فارسی** up
 both the UI strings and the document **direction (ltr/rtl)** in sync, and ships
 matching English and Persian sample programs.
 
-## Building the WASM module
+## Building the Wasm module
 
 Requires the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html):
 
@@ -41,7 +41,7 @@ sh tools/bash/build-wasm.sh # -> ../editor/salam-wa.js, ../editor/salam-wa.wasm,
 
 ## Running it
 
-Serve the `editor/` directory over HTTP (WASM needs a real origin, not `file://`):
+Serve the `editor/` directory over HTTP (Wasm needs a real origin, not `file://`):
 
 ```sh
 sh compiler/tools/bash/editor-serve.sh        # http://localhost:8080  (no rebuild for UI dev)

@@ -29,7 +29,7 @@ typedef struct {
     int  bracket_indent;
     bool ml_stack[FMT_MAX_BRACKET];
     int  ml_top;
-    uint32_t block_line[FMT_MAX_BLOCK]; /* source line each open `:` block began on */
+    uint32_t block_line[FMT_MAX_BLOCK];
     int  block_top;
     bool line_has_content;
     bool force_break;
@@ -94,14 +94,14 @@ static bool fmt_angle_is_generic(const token_stream_t *toks, size_t lt_idx)
         switch (k) {
             case TK_LT: depth++; break;
             case TK_GT:
-                if (--depth == 0) return true;   /* balanced: a real generic */
+                if (--depth == 0) return true;
                 break;
             case TK_IDENT: case TK_COMMA: case TK_DOT:
             case TK_STAR:  case TK_AMP:
             case TK_LBRACKET: case TK_RBRACKET:
-                break;                            /* type-like; keep scanning  */
+                break;
             default:
-                return false;                     /* not a type → comparison   */
+                return false;
         }
     }
     return false;
@@ -166,7 +166,7 @@ static void fmt_step_leading(fmt_ctx_t *c, const token_t *t, token_kind_t k)
     if (!c->line_has_content) {
         if (c->bracket == 0 && c->prev != NULL &&
             t->span.begin.line > c->prev_end_line + 1)
-            sb_putc(c->out, '\n');           /* preserve one blank line */
+            sb_putc(c->out, '\n');
         fmt_emit_indent(c->out, c->st, c->indent + c->bracket_indent);
     } else if (!c->no_space_next) {
         bool need = fmt_need_space(c->prev, t, c->prev_unary);

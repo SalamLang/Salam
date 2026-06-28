@@ -19,14 +19,14 @@
 #include "xml/xml.h"
 
 typedef struct {
-    char *name;        /* heap copy of the tag name */
-    bool  printed_gt;  /* has the start tag's '>' been emitted? */
-    bool  inlined;     /* does this element hold inline text (close on same line)? */
+    char *name;
+    bool  printed_gt;
+    bool  inlined;
 } xml_frame_t;
 
 struct xml_writer {
     sb_t        *out;
-    xml_frame_t *stack;   /* grows on demand: deeply nested input must not overflow */
+    xml_frame_t *stack;
     int          depth;
     int          cap;
 };

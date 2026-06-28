@@ -74,19 +74,19 @@ typedef enum {
 typedef struct {
     token_value_kind_t kind;
     union {
-        uint64_t    i;   /* TV_INT, TV_CHAR (byte/codepoint) */
-        double      f;   /* TV_FLOAT */
-        const char *s;   /* TV_STRING (decoded, arena) */
-        bool        b;   /* TV_BOOL  */
+        uint64_t    i;
+        double      f;
+        const char *s;
+        bool        b;
     } as;
 } token_value_t;
 
 typedef struct {
     token_kind_t  kind;
-    const char   *lexeme;      /* raw arena slice of the source (NUL-terminated) */
+    const char   *lexeme;
     src_span_t    span;
-    token_value_t value;       /* decoded literal value (TV_NONE if not a literal) */
-    bool          layout_mode; /* true if scanned inside a layout: block */
+    token_value_t value;
+    bool          layout_mode;
 } token_t;
 
 const char *token_kind_name(token_kind_t kind);

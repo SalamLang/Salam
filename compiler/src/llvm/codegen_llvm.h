@@ -51,10 +51,10 @@ typedef struct {
 void codegen_llvm_options_default(codegen_llvm_options_t *o);
 
 typedef struct {
-    const char *module;   /* module name (file stem)                 */
-    const char *ll_src;   /* generated LLVM IR (textual .ll)          */
-    bool        ok;        /* false if an unsupported construct was hit */
-    const char *error;     /* first codegen error message, or NULL    */
+    const char *module;
+    const char *ll_src;
+    bool        ok;
+    const char *error;
 } llvm_output_t;
 
 llvm_output_t *codegen_llvm_run(arena_t *a, logger_t *log, ast_node_t *program,

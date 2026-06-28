@@ -56,7 +56,12 @@ CFLAGS   ?= $(OPTIMIZE) -std=gnu89 -Wall -Wextra                    \
 DEPFLAGS  = -MMD -MP
 
 ifneq (,$(findstring tcc,$(CC)))
-  LDLIBS ?=
+  ifeq ($(IS_WINDOWS),1)
+    LDLIBS ?=          # Windows tcc bundles libm in its runtime
+  else
+    LDLIBS ?= -lm      # Unix tcc still needs libm for math symbols
+  endif
+  DEPFLAGS :=          # tcc lacks -MMD/-MP dependency generation
 else
   LDLIBS ?= -lm
 endif

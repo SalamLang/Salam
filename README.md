@@ -8,6 +8,14 @@
 
 Salam is a general-purpose and systems programming language designed for efficient software development, featuring a built-in domain-specific language (DSL)
 
+[![Discord](https://dcbadge.limes.pink/api/server/https://discord.gg/HfY3QHDPdv)](https://discord.gg/HfY3QHDPdv)
+[![GitHub Release](https://img.shields.io/github/v/release/salamlang/salam?style=for-the-badge&color=007ACC)](https://github.com/SalamLang/Salam/releases)
+[![GitHub repo size](https://img.shields.io/github/repo-size/salamlang/salam?style=for-the-badge&color=444444)](https://github.com/SalamLang/Salam)
+
+[![Salam Programming Language Playground](https://img.shields.io/badge/Salam-Playground-1A1A1A?style=for-the-badge&labelColor=333333&color=00FFCC)](https://salamlang.github.io/Salam/)
+
+---
+
 </div>
 
 [![Basic Checks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/test-git-clone.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/test-git-clone.yml)
@@ -25,10 +33,20 @@ Salam is a general-purpose and systems programming language designed for efficie
 
 ---
 
+<div align="center">
+
 ## ✨ Introducing Salam
 
-**Salam Language**, inspired by the word _salam_ (سلام), meaning _peace_, is the first **Persian/Arabic-based programming language**.
-It is designed for simplicity, accessibility, and inclusivity-bridging the gap between developers and technology in Persian, Arabic, and related linguistic communities.
+</div>
+
+**Salam Language**, inspired by the word _salam_ (سلام), meaning _peace_, is
+engineered for exceptional efficiency, reliability, and modern software
+development. Designed from the
+ground up to balance low-level control with developer productivity, Salam
+eliminates the unnecessary syntactic friction often found in systems
+engineering. By prioritizing a clean, scannable, and intuitive architecture,
+it lowers the cognitive barrier to entry, fostering an accessible and
+inclusive environment for building high-performance software.
 
 ### Supported Languages
 

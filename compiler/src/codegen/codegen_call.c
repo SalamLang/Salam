@@ -13,6 +13,7 @@
  */
 
 #include "codegen/codegen_internal.h"
+#include "core/sal_format.h"
 #include "codegen/print_fmt.h"
 #include "i18n/i18n.h"
 #include "semantic/builtins.h"
@@ -62,7 +63,7 @@ static const char *call_args_lead(cg_t *cg, ast_node_t *call, func_sig_t *sig)
     sb_t b; sb_init(&b);
     { size_t i = 0; for (; i < call->list.len; i++)
         { sb_puts(&b, ", "); sb_puts(&b, cg_expr(cg, (ast_node_t *)call->list.data[i])); } }
-    cg_fill_defaults(cg, &b, call, sig, 1);   /* receiver precedes, so always lead */
+    cg_fill_defaults(cg, &b, call, sig, 1);
     const char *r = arena_strdup(cg->a, sb_cstr(&b)); sb_free(&b); return r;
 }
 
@@ -71,7 +72,7 @@ static const char *call_sret(cg_t *cg, type_t *ret, const char *mangled,
 {
     const char *Rc = cg_ctype(cg, type_to_string(cg->sem->tc, ret));
     int t = ++cg->tmpn;
-    const char *sep = (args && args[0]) ? ", " : "";   /* args may be all defaults */
+    const char *sep = (args && args[0]) ? ", " : "";
     return cg_fmt(cg, "({ %s __s%d; %s(%s%s&__s%d); __s%d; })", Rc, t, mangled, args, sep, t, t);
 }
 
@@ -79,7 +80,7 @@ static const char *call_value(cg_t *cg, ast_node_t *n, ast_node_t *callee)
 {
     const char *cret = cg_ctype(cg, func_ret_of(callee->type_str));
     const char *cps  = func_cast_params_env(cg, callee->type_str);
-    const char *args = call_args_lead(cg, n, NULL);   /* function value: no defaults */
+    const char *args = call_args_lead(cg, n, NULL);
     const char *tmp = cg_fmt(cg, "_clz%d", cg->clos_n++);
     return cg_fmt(cg, "({ void *%s = (void*)(%s); ((%s(*)%s)(*(void**)%s))(%s%s); })",
                   tmp, cg_expr(cg, callee), cret, cps, tmp, tmp, args);
@@ -91,17 +92,17 @@ static const char *cg_print_legacy(cg_t *cg, ast_node_t *n, bool nl, int err)
     { size_t i = 0; for (; i < n->list.len; i++) {
         ast_node_t *arg = (ast_node_t *)n->list.data[i];
         char piece[40];
-        if (i) { snprintf(piece, sizeof piece, "salam_emit(\" \", %d); ", err); sb_puts(&b, piece); }
+        if (i) { sal_snprintf(piece, sizeof piece, "salam_emit(\" \", %d); ", err); sb_puts(&b, piece); }
         if (arg->type_str && !strcmp(arg->type_str, "str")) {
             sb_puts(&b, "salam_emit("); sb_puts(&b, cg_expr(cg, arg));
-            snprintf(piece, sizeof piece, ", %d); ", err); sb_puts(&b, piece);
+            sal_snprintf(piece, sizeof piece, ", %d); ", err); sb_puts(&b, piece);
         } else {
-            snprintf(piece, sizeof piece, "salam_emit_owned(salam_tostr_%s(", prim_suffix(print_tag(arg->type_str)));
+            sal_snprintf(piece, sizeof piece, "salam_emit_owned(salam_tostr_%s(", prim_suffix(print_tag(arg->type_str)));
             sb_puts(&b, piece); sb_puts(&b, cg_expr(cg, arg));
-            snprintf(piece, sizeof piece, "), %d); ", err); sb_puts(&b, piece);
+            sal_snprintf(piece, sizeof piece, "), %d); ", err); sb_puts(&b, piece);
         }
     } }
-    if (nl) { char z[40]; snprintf(z, sizeof z, "salam_emit(\"\\n\", %d); ", err); sb_puts(&b, z); }
+    if (nl) { char z[40]; sal_snprintf(z, sizeof z, "salam_emit(\"\\n\", %d); ", err); sb_puts(&b, z); }
     sb_puts(&b, "})");
     const char *r = arena_strdup(cg->a, sb_cstr(&b)); sb_free(&b); return r;
 }
@@ -272,7 +273,7 @@ static const char *call_dyn(cg_t *cg, ast_node_t *n, ast_node_t *obj,
     if (!strcmp(callee->name, "free"))
         return cg_fmt(cg, "({ %s __dv%d = (%s); salam_free(__dv%d%sdata); })",
                       dynct, t, recv, t, acc);
-    const char *as = call_args_lead(cg, n, NULL);   /* dynamic dispatch: no default fill */
+    const char *as = call_args_lead(cg, n, NULL);
     return cg_fmt(cg, "({ %s __dv%d = (%s); __dv%d%svtable->%s(__dv%d%sdata%s); })",
                   dynct, t, recv, t, acc, cg_cident(cg, callee->name), t, acc, as);
 }

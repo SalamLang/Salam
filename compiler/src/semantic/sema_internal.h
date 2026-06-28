@@ -24,7 +24,7 @@
 
 typedef struct lambda_ctx_t {
     scope_t                *boundary;
-    ast_node_t             *node;     /* the AST_LAMBDA whose `captures` we fill */
+    ast_node_t             *node;
     struct lambda_ctx_t    *prev;
 } lambda_ctx_t;
 
@@ -35,42 +35,39 @@ typedef struct {
     const char    *file;
     type_ctx_t    *tc;
     scope_t       *global;
-    scope_t       *cur;       /* current scope */
-    type_t        *self_type; /* *Struct inside a method, else NULL */
-    func_sig_t    *cur_func;  /* enclosing function (return checks) */
+    scope_t       *cur;
+    type_t        *self_type;
+    func_sig_t    *cur_func;
     int            loop_depth;
-    const char    *dir;       /* directory of the current file (import resolution) */
-    vec_t          imported;  /* const char* absolute import paths (legacy dedup) */
-    const char    *pkg;       /* package name of the file being analyzed */
-    vec_t          pkg_cache; /* alternating const char* path, symbol_t* (loaded packages) */
-    vec_t          loading;   /* const char* paths on the import stack (cycle detection) */
-    ast_node_t    *program;   /* the module being analyzed (generic instances appended here) */
-    vec_t          pending;   /* ast_node_t* generic instances awaiting body checks */
-    type_t        *expected;  /* contextual expected type (return value / var init); for generic struct-lit retargeting */
-    lambda_ctx_t  *lam;       /* innermost lambda being checked (capture detection), else NULL */
-    scope_t       *gen_pkg;   /* when instantiating a cross-package generic, the defining
-                               * package's scope: used as the instance's member-scope parent
-                               * so deferred method-body checks resolve sibling/package types */
-    scope_t       *prelude;   /* std/collections package scope: bare type names not found
-                               * locally (Vector/HashMap/MapIter/...) resolve against it */
-    bool           prelude_tried; /* lazy-load attempted (success or not) */
+    const char    *dir;
+    vec_t          imported;
+    const char    *pkg;
+    vec_t          pkg_cache;
+    vec_t          loading;
+    ast_node_t    *program;
+    vec_t          pending;
+    type_t        *expected;
+    lambda_ctx_t  *lam;
+    scope_t       *gen_pkg;
+    scope_t       *prelude;
+    bool           prelude_tried;
 } sema_t;
 
-void sema_load_prelude(sema_t *s);   /* lazily load std/collections as the prelude */
+void sema_load_prelude(sema_t *s);
 
 #define SERR(s, code, span, ...)  diag_report((s)->diag, SEV_ERROR,   (code), (s)->file, (span), __VA_ARGS__)
 
 #define SWARN(s, code, span, ...) diag_report((s)->diag, SEV_WARNING, (code), (s)->file, (span), __VA_ARGS__)
 
-type_t     *sema_ty(sema_t *s, type_kind_t k);   /* interned primitive type */
+type_t     *sema_ty(sema_t *s, type_kind_t k);
 
-type_t     *sema_err_ty(sema_t *s);              /* the poison TY_ERROR type */
+type_t     *sema_err_ty(sema_t *s);
 
-type_t     *sema_decorate(sema_t *s, ast_node_t *n, type_t *t); /* stamp + return t */
+type_t     *sema_decorate(sema_t *s, ast_node_t *n, type_t *t);
 
-symbol_t   *struct_sym_of(type_t *t);            /* struct symbol behind T or *T */
+symbol_t   *struct_sym_of(type_t *t);
 
-type_t     *sema_vec_str(sema_t *s, const src_span_t *span); /* library Vector<str> */
+type_t     *sema_vec_str(sema_t *s, const src_span_t *span);
 
 const char *alias_for_lang(const vec_t *aliases, const char *lang);
 

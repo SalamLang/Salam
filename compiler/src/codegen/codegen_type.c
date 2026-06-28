@@ -13,6 +13,7 @@
  */
 
 #include "codegen/codegen_internal.h"
+#include "core/sal_format.h"
 
 void cg_kv(const char *ts, char *kbuf, char *vbuf, size_t cap)
 {
@@ -44,13 +45,29 @@ void cg_put_ident_byte(sb_t *b, unsigned char c)
     }
 }
 
+static bool cg_is_c_keyword(const char *s)
+{
+    static const char *const kw[] = {
+        "auto","break","case","char","const","continue","default","do","double",
+        "else","enum","extern","float","for","goto","if","inline","int","long",
+        "register","restrict","return","short","signed","sizeof","static","struct",
+        "switch","typedef","union","unsigned","void","volatile","while","asm",
+        "bool","true","false","_Bool","_Complex","_Imaginary","_Alignas","_Alignof",
+        "_Atomic","_Generic","_Noreturn","_Static_assert","_Thread_local",
+    };
+    size_t i = 0;
+    for (; i < sizeof(kw) / sizeof(kw[0]); i++)
+        if (strcmp(s, kw[i]) == 0) return true;
+    return false;
+}
+
 const char *cg_cident(cg_t *cg, const char *name)
 {
     if (!name || !name[0]) return "_";
     bool ok = !isdigit((unsigned char)name[0]);
     { const unsigned char *p = (const unsigned char *)name; for (; ok && *p; p++)
         if (!(isalnum(*p))) ok = false; }
-    if (ok) return name;
+    if (ok) return cg_is_c_keyword(name) ? cg_fmt(cg, "%s_", name) : name;
     sb_t b; sb_init(&b);
     if (isdigit((unsigned char)name[0])) sb_putc(&b, '_');
     { const unsigned char *p = (const unsigned char *)name; for (; *p; p++)
@@ -116,19 +133,14 @@ void cg_vec_elem(const char *ts, char *ebuf, size_t cap)
     memcpy(ebuf, es, el); ebuf[el] = 0;
 }
 
-/* Append `str` to `s`, encoded as a C-identifier fragment for the symbol
- * manglers: `*` -> "_ptr", `[` -> "_arr", `]` dropped (it pairs with "_arr"),
- * and every other byte via cg_put_ident_byte. `skip_spaces` drops spaces
- * (used for Vector element names) instead of hex-encoding them as "_20"
- * (used for function-parameter type codes); the two callers differ only here. */
 static void cg_encode_typestr(sb_t *s, const char *str, bool skip_spaces)
 {
     const unsigned char *p = (const unsigned char *)str;
     for (; *p; p++) {
         if (*p == '*')                     sb_puts(s, "_ptr");
         else if (*p == '[')                sb_puts(s, "_arr");
-        else if (*p == ']')                { /* array close: dropped */ }
-        else if (*p == ' ' && skip_spaces) { /* dropped */ }
+        else if (*p == ']')                { }
+        else if (*p == ' ' && skip_spaces) { }
         else                               cg_put_ident_byte(s, *p);
     }
 }
@@ -188,7 +200,7 @@ const char *cg_decl(cg_t *cg, const char *ts, const char *name)
         sb_t s; sb_init(&s);
         sb_puts(&s, bc); sb_putc(&s, ' '); sb_puts(&s, name);
         { size_t i = 0; for (; i < dims.len; i++)
-            { char b[32]; snprintf(b,sizeof(b),"[%zu]", *(size_t*)dims.data[i]); sb_puts(&s, b); } }
+            { char b[32]; sal_snprintf(b,sizeof(b),"[%zu]", *(size_t*)dims.data[i]); sb_puts(&s, b); } }
         const char *r = arena_strdup(cg->a, sb_cstr(&s)); sb_free(&s); return r;
     }
     if (ptr) return cg_fmt(cg, "%s* %s", bc, name);

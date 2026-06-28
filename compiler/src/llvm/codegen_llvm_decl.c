@@ -13,6 +13,7 @@
  */
 
 #include "llvm/codegen_llvm_internal.h"
+#include "core/sal_format.h"
 
 void ll_emit_struct_types(ll_t *ll, ast_node_t *program)
 {
@@ -42,7 +43,7 @@ static void ll_put_ident_byte(sb_t *b, unsigned char c)
 {
     if (isalnum(c))      sb_putc(b, (char)c);
     else if (c == '_')   sb_puts(b, "__");
-    else { char h[5]; snprintf(h, sizeof h, "_%02x", c); sb_puts(b, h); }
+    else { char h[5]; sal_snprintf(h, sizeof h, "_%02x", c); sb_puts(b, h); }
 }
 
 static void ll_put_ident(sb_t *b, const char *name)
@@ -138,7 +139,7 @@ static void ll_spill_params(ll_t *ll, ast_node_t *fn, func_sig_t *sig)
             continue;
         }
         const char *ptr = ll_fmt(ll, "%%p.%s", p->name);
-        ll_emit(ll, "%s = alloca %s", ptr, ll_ty(ll, pts));
+        ll_emit_alloca(ll, "%s = alloca %s", ptr, ll_ty(ll, pts));
         ll_emit(ll, "store %s %%arg%zu, ptr %s", ll_ty(ll, pts), i, ptr);
         ll_local_add(ll, p->name, ptr, pts);
     } }
@@ -169,13 +170,15 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
     vec_push(ll->a, &ll->emitted, CONST_CAST(fname));
 
     sb_t body; sb_init(&body);
-    sb_t  *saved_b = ll->b;
+    sb_t allocs; sb_init(&allocs);
+    sb_t  *saved_b = ll->b, *saved_allocas = ll->allocas;
     int    saved_tmp = ll->tmp, saved_lbl = ll->lbl, saved_nloop = ll->nloop;
     bool   saved_main = ll->is_main, saved_byval = ll->self_byval, saved_term = ll->term;
     const char *saved_ret = ll->ret_ts, *saved_sp = ll->cur_sp, *saved_dbg = ll->cur_dbg;
     const char *saved_self = ll->self_ts, *saved_this = ll->this_ref;
     vec_t saved_locals = ll->locals, saved_defers = ll->defers;
-    ll->b = &body; ll->tmp = 0; ll->lbl = 0; ll->nloop = 0; ll->term = false;
+    ll->b = &body; ll->allocas = &allocs;
+    ll->tmp = 0; ll->lbl = 0; ll->nloop = 0; ll->term = false;
     ll->ret_ts = rts; ll->is_main = is_main;
     ll->self_ts = recv_ts; ll->self_byval = is_impl;
     ll->this_ref = owner ? "%this" : NULL;
@@ -185,10 +188,8 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
         ll->cur_dbg = ll_debug_location(ll, fn->span.begin.line, fn->span.begin.col);
     }
     const char *header = ll_fn_header(ll, fn, sig, ret_lty, fname, recv_param);
-    ll_emit_label(ll, "entry");
-    
     if (is_impl) {
-        ll_emit(ll, "%%p.this = alloca %s", ll_ty(ll, recv_ts));
+        ll_emit_alloca(ll, "%%p.this = alloca %s", ll_ty(ll, recv_ts));
         ll_emit(ll, "store %s %%this, ptr %%p.this", ll_ty(ll, recv_ts));
         ll->this_ref = "%p.this";
     }
@@ -197,9 +198,11 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
     if (fn->a) ll_block(ll, fn->a);
     if (!ll->term) ll_emit_return(ll, NULL);
     sb_puts(ll->g, header);
+    sb_puts(ll->g, "entry:\n");
+    sb_puts(ll->g, sb_cstr(&allocs));
     sb_puts(ll->g, sb_cstr(&body));
     sb_puts(ll->g, "}\n\n");
-    sb_free(&body);
+    sb_free(&body); sb_free(&allocs); ll->allocas = saved_allocas;
     ll->b = saved_b; ll->tmp = saved_tmp; ll->lbl = saved_lbl; ll->nloop = saved_nloop;
     ll->is_main = saved_main; ll->ret_ts = saved_ret; ll->self_byval = saved_byval;
     ll->term = saved_term; ll->cur_sp = saved_sp; ll->cur_dbg = saved_dbg;
@@ -330,7 +333,8 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
 
     
     sb_t body; sb_init(&body);
-    sb_t *saved_b = ll->b;
+    sb_t allocs; sb_init(&allocs);
+    sb_t *saved_b = ll->b, *saved_allocas = ll->allocas;
     int saved_tmp = ll->tmp, saved_lbl = ll->lbl, saved_nloop = ll->nloop;
     bool saved_main = ll->is_main, saved_term = ll->term;
     const char *saved_ret = ll->ret_ts, *saved_self = ll->self_ts, *saved_this = ll->this_ref;
@@ -339,7 +343,8 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     const char *saved_env = ll->env_ref, *saved_envty = ll->env_ty;
     vec_t saved_locals = ll->locals, saved_defers = ll->defers;
 
-    ll->b = &body; ll->tmp = 0; ll->lbl = 0; ll->nloop = 0; ll->term = false;
+    ll->b = &body; ll->allocas = &allocs;
+    ll->tmp = 0; ll->lbl = 0; ll->nloop = 0; ll->term = false;
     ll->is_main = false; ll->ret_ts = rts; ll->self_ts = NULL; ll->this_ref = NULL;
     ll->cur_lambda = n; ll->env_ref = "%env"; ll->env_ty = envty;
     vec_init(&ll->locals); vec_init(&ll->defers);
@@ -354,12 +359,11 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     sb_puts(&hdr, ") {\n");
     const char *header = arena_strdup(ll->a, sb_cstr(&hdr)); sb_free(&hdr);
 
-    ll_emit_label(ll, "entry");
     { size_t i = 0; for (; i < n->list.len; i++) {
         ast_node_t *p = (ast_node_t *)n->list.data[i];
         if (p->is_ref) { ll_local_add(ll, p->name, ll_fmt(ll, "%%arg%zu", i), p->type_str); continue; }
         const char *ptr = ll_fmt(ll, "%%p.%s", p->name);
-        ll_emit(ll, "%s = alloca %s", ptr, ll_ty(ll, p->type_str));
+        ll_emit_alloca(ll, "%s = alloca %s", ptr, ll_ty(ll, p->type_str));
         ll_emit(ll, "store %s %%arg%zu, ptr %s", ll_ty(ll, p->type_str), i, ptr);
         ll_local_add(ll, p->name, ptr, p->type_str);
     } }
@@ -367,9 +371,11 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     if (!ll->term) ll_emit_return(ll, NULL);
 
     sb_puts(ll->g, header);
+    sb_puts(ll->g, "entry:\n");
+    sb_puts(ll->g, sb_cstr(&allocs));
     sb_puts(ll->g, sb_cstr(&body));
     sb_puts(ll->g, "}\n\n");
-    sb_free(&body);
+    sb_free(&body); sb_free(&allocs); ll->allocas = saved_allocas;
 
     ll->b = saved_b; ll->tmp = saved_tmp; ll->lbl = saved_lbl; ll->nloop = saved_nloop;
     ll->is_main = saved_main; ll->term = saved_term; ll->ret_ts = saved_ret;

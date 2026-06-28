@@ -42,6 +42,18 @@ void ll_emit(ll_t *ll, const char *fmt, ...)
     sb_puts(ll->b, buf); ll_attach_dbg(ll); sb_putc(ll->b, '\n');
 }
 
+void ll_emit_alloca(ll_t *ll, const char *fmt, ...)
+{
+    sb_t *dst = ll->allocas ? ll->allocas : ll->b;
+    sb_puts(dst, "  ");
+    va_list ap, ap2;
+    va_start(ap, fmt); SAL_VA_COPY(ap2, ap);
+    int n = sal_vsnprintf(NULL, 0, fmt, ap); va_end(ap);
+    char *buf = (char *)arena_alloc(ll->a, (size_t)n + 1);
+    sal_vsnprintf(buf, (size_t)n + 1, fmt, ap2); va_end(ap2);
+    sb_puts(dst, buf); sb_putc(dst, '\n');
+}
+
 void ll_emit_label(ll_t *ll, const char *label)
 {
     sb_puts(ll->b, label); sb_puts(ll->b, ":\n");
@@ -84,7 +96,7 @@ static const char *ll_escape(ll_t *ll, const char *s, size_t len, size_t *arr_le
     { size_t i = 0; for (; i < len; i++) {
         unsigned char c = (unsigned char)s[i];
         if (c == '"' || c == '\\' || c < 0x20 || c > 0x7e) {
-            char hx[8]; snprintf(hx, sizeof hx, "\\%02X", c); sb_puts(&b, hx);
+            char hx[8]; sal_snprintf(hx, sizeof hx, "\\%02X", c); sb_puts(&b, hx);
         } else {
             sb_putc(&b, (char)c);
         }

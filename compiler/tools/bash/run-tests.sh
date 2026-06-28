@@ -214,3 +214,4 @@ done
 fi
 echo "----------------------------------------"
 echo "RESULT: $pass passed, $fail failed"
+[ "$fail" -eq 0 ]

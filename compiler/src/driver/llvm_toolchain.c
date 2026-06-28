@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "driver/llvm_toolchain.h"
 #include "llvm/llvm_native.h"
 #include "core/sb.h"
@@ -46,21 +47,21 @@ static void to_tool_path(const char *host, char *out, size_t cap)
 {
     char abs[SALAM_PATH_MAX];
 #if defined(_WIN32)
-    if (!_fullpath(abs, host, sizeof abs)) snprintf(abs, sizeof abs, "%s", host);
+    if (!_fullpath(abs, host, sizeof abs)) sal_snprintf(abs, sizeof abs, "%s", host);
     
     size_t k = 0;
     if (isalpha((unsigned char)abs[0]) && abs[1] == ':') {
-        k = (size_t)snprintf(out, cap, "/mnt/%c", (char)tolower((unsigned char)abs[0]));
+        k = (size_t)sal_snprintf(out, cap, "/mnt/%c", (char)tolower((unsigned char)abs[0]));
         { const char *p = abs + 2; for (; *p && k < cap - 1; p++)
             out[k++] = (*p == '\\') ? '/' : *p; }
         out[k] = 0;
     } else {
-        snprintf(out, cap, "%s", abs);
+        sal_snprintf(out, cap, "%s", abs);
     }
 #else
     extern char *realpath(const char *, char *);
-    if (host[0] == '/' || !realpath(host, abs)) snprintf(abs, sizeof abs, "%s", host);
-    snprintf(out, cap, "%s", abs);
+    if (host[0] == '/' || !realpath(host, abs)) sal_snprintf(abs, sizeof abs, "%s", host);
+    sal_snprintf(out, cap, "%s", abs);
 #endif
 }
 
@@ -107,9 +108,6 @@ static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
 int salam_llvm_toolchain(logger_t *log, const char *ll_path,
                          const codegen_llvm_options_t *opts)
 {
-    /* When salam embeds LLVM, do everything in-process: no external
-     * clang/llc/lli and no WSL hop. Returns -1 only in non-LLVM builds,
-     * in which case we fall through to the external-tool path below. */
     if (salam_llvm_native_available()) {
         int nrc = salam_llvm_native(log, ll_path, opts);
         if (nrc >= 0) return nrc;
@@ -126,7 +124,7 @@ int salam_llvm_toolchain(logger_t *log, const char *ll_path,
     if (out_tp[0]) { sb_puts(&script, "OUT='"); sb_puts(&script, out_tp); sb_puts(&script, "'\n"); }
     emit_tool_cmd(&script, opts);
     
-    char spath[1024]; snprintf(spath, sizeof spath, "%s.run.sh", ll_path);
+    char spath[1024]; sal_snprintf(spath, sizeof spath, "%s.run.sh", ll_path);
     FILE *sf = fopen(spath, "wb");
     if (!sf) { LOG_E(log, PH_DRIVER, i18n_tr("cannot write '%s'"), spath); sb_free(&script); return 2; }
     fputs(sb_cstr(&script), sf); fclose(sf);

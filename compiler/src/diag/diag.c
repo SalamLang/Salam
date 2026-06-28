@@ -38,7 +38,7 @@ void diag_report(diag_engine_t *e, severity_t sev, int code,
     sal_vsnprintf(body, sizeof(body), i18n_tr(fmt), ap);   
     va_end(ap);
     char full[640];
-    snprintf(full, sizeof(full), "%c%03d: %s", sev == SEV_ERROR ? 'E' : 'W', code, body);
+    sal_snprintf(full, sizeof(full), "%c%03d: %s", sev == SEV_ERROR ? 'E' : 'W', code, body);
     diag_t *d = (diag_t *)arena_alloc(e->a, sizeof(*d));
     d->sev = sev;
     d->code = code;

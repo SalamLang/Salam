@@ -33,6 +33,8 @@ void        sb_puts(sb_t *s, const char *str);
 
 void        sb_printf(sb_t *s, const char *fmt, ...);
 
-const char *sb_cstr(const sb_t *s);   /* never NULL; "" when empty */
+void        sb_put_shell_arg(sb_t *s, const char *arg);
+
+const char *sb_cstr(const sb_t *s);
 
 #endif /* SALAM_CORE_SB_H */

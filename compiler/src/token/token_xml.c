@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "core/numstr.h"
 #include "token/token.h"
 
@@ -29,7 +30,7 @@ static void token_value_to_xml(xml_writer_t *w, const token_value_t *v)
             break;
         case TV_FLOAT:
             xml_open(w, "value"); xml_attr(w, "kind", "float");
-            snprintf(buf, sizeof(buf), "%g", v->as.f);
+            sal_snprintf(buf, sizeof(buf), "%g", v->as.f);
             xml_text(w, buf); xml_close(w);
             break;
         case TV_STRING:

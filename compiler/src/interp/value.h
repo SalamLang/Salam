@@ -22,17 +22,17 @@
 
 typedef enum {
     VAL_NULL = 0,
-    VAL_INT,        /* i64 (covers all Salam integer widths)            */
-    VAL_CHAR,       /* char: an int code, but prints as its glyph       */
-    VAL_FLOAT,      /* f64                                              */
+    VAL_INT,
+    VAL_CHAR,
+    VAL_FLOAT,
     VAL_BOOL,
-    VAL_STR,        /* arena, NUL-terminated UTF-8                      */
-    VAL_ARRAY,      /* fixed arrays and Vector<T> alike                 */
-    VAL_MAP,        /* HashMap<K,V>                                     */
-    VAL_MAPITER,    /* MapIter<K,V>                                     */
-    VAL_STRUCT,     /* user struct instance                            */
-    VAL_FUNC,       /* function / lambda value (closure)               */
-    VAL_MODULE      /* an imported package namespace (std .salam)     */
+    VAL_STR,
+    VAL_ARRAY,
+    VAL_MAP,
+    VAL_MAPITER,
+    VAL_STRUCT,
+    VAL_FUNC,
+    VAL_MODULE
 } val_kind_t;
 
 typedef struct value      value_t;
@@ -47,9 +47,9 @@ typedef struct sstruct    sstruct_t;
 
 typedef struct sclosure   sclosure_t;
 
-struct env;      /* defined in interp_internal.h */
+struct env;
 
-struct module;   /* defined in interp_internal.h: an imported package */
+struct module;
 
 struct value {
     val_kind_t kind;
@@ -81,13 +81,13 @@ typedef struct {
 
 struct smap {
     smap_entry_t *entries;
-    size_t        count;   /* live entries */
-    size_t        cap;     /* allocated slots */
+    size_t        count;
+    size_t        cap;
 };
 
 struct smapiter {
     smap_t *map;
-    size_t  idx;           /* next slot to visit */
+    size_t  idx;
 };
 
 typedef struct {
@@ -96,15 +96,15 @@ typedef struct {
 } sfield_t;
 
 struct sstruct {
-    const char *type_name;   /* struct def name, as written in source        */
-    ast_node_t *def;         /* AST_STRUCT_DEF (used for method lookup)       */
+    const char *type_name;
+    ast_node_t *def;
     sfield_t   *fields;
     size_t      nfields;
 };
 
 struct sclosure {
-    ast_node_t  *fn;         /* AST_FUNC_DEF or AST_LAMBDA */
-    struct env  *env;        /* captured environment       */
+    ast_node_t  *fn;
+    struct env  *env;
 };
 
 SAL_INLINE value_t val_null(void)        { value_t v; v.kind = VAL_NULL;  return v; }

@@ -39,7 +39,14 @@ Salam is a general-purpose and systems programming language designed for efficie
 
 </div>
 
-**Salam Language**, inspired by the word _salam_ (سلام) meaning peace, is a general-purpose and systems programming language engineered for exceptional efficiency, reliability, and modern software development. Designed from the ground up to balance low-level control with developer productivity, Salam eliminates the unnecessary syntactic friction often found in systems engineering. By prioritizing a clean, scannable, and intuitive architecture, it lowers the cognitive barrier to entry, fostering an accessible and inclusive environment for building high-performance software.
+**Salam Language**, inspired by the word _salam_ (سلام), meaning _peace_, is a
+general-purpose and systems programming language engineered for exceptional
+efficiency, reliability, and modern software development. Designed from the
+ground up to balance low-level control with developer productivity, Salam
+eliminates the unnecessary syntactic friction often found in systems
+engineering. By prioritizing a clean, scannable, and intuitive architecture,
+it lowers the cognitive barrier to entry, fostering an accessible and
+inclusive environment for building high-performance software.
 
 ### Supported Languages
 

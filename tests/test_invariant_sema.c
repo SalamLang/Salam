@@ -53,7 +53,14 @@ static int test_path_traversal_containment(void)
     }
 
     const char *valid = salam_resolve_import(a, safe_dir, "valid/file.salam");
-    if (!valid || valid[0] == '\0') failures++;
+    if (!valid || valid[0] == '\0') {
+        failures++;
+    } else {
+        size_t sd = strlen(safe_dir);
+        char boundary = (valid[sd] == '\\') ? '/' : valid[sd];
+        if (strncmp(valid, safe_dir, sd) != 0 || (boundary != '/' && boundary != '\0'))
+            failures++;
+    }
 
 #ifndef _WIN32
     rmdir(safe_dir);

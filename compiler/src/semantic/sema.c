@@ -219,8 +219,14 @@ static char *path_normalize(char *p)
 {
     size_t len = strlen(p);
     char *tmp = (char *)malloc(len + 1);
-    if (!tmp) return p;
+    if (!tmp) { p[0] = '\0'; return p; }
     memcpy(tmp, p, len + 1);
+
+    size_t j;
+    for (j = 0; j < len; j++)
+        if (tmp[j] == '\\') tmp[j] = '/';
+
+    bool is_absolute = (tmp[0] == '/');
 
     const char *segs[256];
     int ns = 0;
@@ -240,6 +246,7 @@ static char *path_normalize(char *p)
     }
 
     size_t out = 0;
+    if (is_absolute) p[out++] = '/';
     int i;
     for (i = 0; i < ns; i++) {
         size_t slen = strlen(segs[i]);
@@ -351,9 +358,21 @@ const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec)
         if (dir && dir[0]) sal_snprintf(p, n, "%s/%s", dir, spec);
         else               sal_snprintf(p, n, "%s", spec);
         path_normalize(p);
-        if (dir && dir[0] && dir[0] == '/' &&
-            strncmp(p, dir, strlen(dir)) != 0)
-            return "";
+        if (dir && dir[0]) {
+            size_t dlen = strlen(dir);
+            size_t ci;
+            bool match = true;
+            for (ci = 0; ci < dlen; ci++) {
+                char dc = (dir[ci] == '\\') ? '/' : dir[ci];
+                char pc = (p[ci]   == '\\') ? '/' : p[ci];
+                if (dc != pc) { match = false; break; }
+            }
+            if (match) {
+                char next = (p[dlen] == '\\') ? '/' : p[dlen];
+                if (next != '\0' && next != '/') match = false;
+            }
+            if (!match) return "";
+        }
         return p;
     }
     

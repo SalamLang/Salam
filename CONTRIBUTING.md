@@ -247,14 +247,6 @@ To maintain consistency and readability, please follow these coding conventions 
 
 To help maintain consistent code quality, we use the following formatting and linting tools:
 
-- **clang-tidy**: Use `clang-tidy` to catch common errors, style issues, and potential bugs. It's recommended to run `clang-tidy` as part of your workflow.
-
-  To run `clang-tidy`:
-
-  ```bash
-  clang-tidy <your-file>
-  ```
-
 - **Other Tools**: You may also use additional linting or static analysis tools, such as `cppcheck` or `valgrind`, to improve the efficiency and correctness of the code.
 
 ### 🪝 Commit Hooks

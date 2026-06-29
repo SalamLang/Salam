@@ -18,5 +18,8 @@ if command -v php >/dev/null 2>&1; then
     exec php -S "0.0.0.0:$PORT"
 fi
 PY="$(salam_python)"
-[ -n "$PY" ] || { echo "error: neither php nor python found on PATH" >&2; exit 1; }
+[ -n "$PY" ] || {
+    echo "error: neither php nor python found on PATH" >&2
+    exit 1
+}
 exec "$PY" -m http.server "$PORT"

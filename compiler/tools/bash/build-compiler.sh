@@ -4,14 +4,17 @@
 set -e
 . "$(dirname "$0")/lib.sh"
 if [ -z "${CC:-}" ]; then
-    if   command -v gcc   >/dev/null 2>&1; then CC=gcc
-    elif command -v clang >/dev/null 2>&1; then CC=clang
-    else CC=tcc
+    if command -v gcc >/dev/null 2>&1; then
+        CC=gcc
+    elif command -v clang >/dev/null 2>&1; then
+        CC=clang
+    else
+        CC=tcc
     fi
 fi
 case "$CC" in
-    *tcc*) LDLIBS="" ;;
-    *)     LDLIBS="-lm" ;;
+*tcc*) LDLIBS="" ;;
+*) LDLIBS="-lm" ;;
 esac
 "$CC" -Wall -Isrc -o salam \
     src/salam.c \

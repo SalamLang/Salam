@@ -8,11 +8,20 @@ SERVE=0
 PORT=8080
 while [ $# -gt 0 ]; do
     case "$1" in
-        --wasm-only) WASM_ONLY=1 ;;
-        --serve)     SERVE=1 ;;
-        --port)      shift; PORT="${1:?--port needs a number}" ;;
-        -h|--help)   sed -n '2,19p' "$0"; exit 0 ;;
-        *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
+    --wasm-only) WASM_ONLY=1 ;;
+    --serve) SERVE=1 ;;
+    --port)
+        shift
+        PORT="${1:?--port needs a number}"
+        ;;
+    -h | --help)
+        sed -n '2,19p' "$0"
+        exit 0
+        ;;
+    *)
+        echo "unknown option: $1 (try --help)" >&2
+        exit 2
+        ;;
     esac
     shift
 done
@@ -28,7 +37,7 @@ sh tools/bash/build-wasm.sh
 echo "==> Editor bundle:"
 for f in ../editor/salam-wa.js ../editor/salam-wa.wasm ../editor/salam-wa.data; do
     if [ -f "$f" ]; then
-        size=$(wc -c < "$f" | tr -d ' ')
+        size=$(wc -c <"$f" | tr -d ' ')
         printf '    %-22s %s bytes\n' "$f" "$size"
     else
         echo "    MISSING: $f" >&2
@@ -36,7 +45,8 @@ for f in ../editor/salam-wa.js ../editor/salam-wa.wasm ../editor/salam-wa.data; 
 done
 echo "==> Exported entry points:"
 for sym in _salam_web_run_app _salam_web_build_layout _salam_web_emit; do
-    if grep -q "$sym" ../editor/salam-wa.js 2>/dev/null; then echo "    ok   $sym"
+    if grep -q "$sym" ../editor/salam-wa.js 2>/dev/null; then
+        echo "    ok   $sym"
     else echo "    WARN missing $sym" >&2; fi
 done
 echo "==> Done. Reload the editor to pick up the new build."

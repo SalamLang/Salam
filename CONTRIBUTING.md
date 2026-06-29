@@ -245,7 +245,6 @@ To maintain consistency and readability, please follow these coding conventions 
 
 ### 🛠️ Additional Code Quality Tools
 
-To help improve efficiency and correctness, you may use linting or static analysis tools, such as `cppcheck` or `valgrind`.
 
 ### 🪝 Commit Hooks
 

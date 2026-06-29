@@ -146,7 +146,7 @@ git add .
 git commit -m "fix: describe what and why in plain terms"
 ```
 
-Write commit messages in the imperative mood: *"Add feature"*, *"Fix crash"*, *"Update docs"*.
+Write commit messages in the imperative mood: _"Add feature"_, _"Fix crash"_, _"Update docs"_.
 
 ### 5. Keep your branch up to date (optional but recommended)
 

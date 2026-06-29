@@ -393,73 +393,8 @@ All checks must pass before a pull request can be merged. If a check fails:
 
 If you are unsure why a check failed, leave a comment on the PR and a maintainer will help you.
 
-## 🔍 Joining Code Reviews
-
-**Everyone is welcome — and encouraged — to participate in code reviews.** You do not need to be a core maintainer to review a pull request. In fact, reviewing PRs is one of the most impactful ways to contribute to Salam, and we want to make it as approachable as possible.
-
-> 💡 **Code review is harder than writing code.** Reading someone else's work, understanding their intent, spotting edge cases, and communicating feedback kindly and clearly takes real skill. If you are doing it, thank you — it matters enormously.
-
-### How a GitHub PR Review Works
-
-Open any pull request, then click the **Files changed** tab to see a diff of every file that was modified.
-
-#### Leaving an inline comment
-
-1. Hover over any line number in the diff — a blue **`+`** button appears.
-2. Click it to open a comment box for that specific line or block.
-3. Write your thought, then click **Start a review** (not "Add single comment") so all your notes are batched together.
-
-#### Suggesting a code change
-
-Inside an inline comment you can propose an exact replacement using a fenced suggestion block:
-
-````markdown
-```suggestion
-your replacement code here
-```
-````
-
-The author can accept your suggestion with a single click — no manual editing required.
-
-#### Submitting the review
-
-When you have finished reading all the files:
-
-1. Click the green **Review changes** button (top right of the diff).
-2. Write an overall summary comment.
-3. Choose one of three outcomes:
-   - 💬 **Comment** — share thoughts without formally approving or blocking. Great for questions, first-timer feedback, or discussion starters.
-   - ✅ **Approve** — you are satisfied with the changes. This is the **green tick** that moves a PR toward merging. Only approve if you have read the changes carefully.
-   - 🚫 **Request changes** — something needs to be fixed before the PR can merge. Be specific and constructive.
-4. Click **Submit review**.
-
-#### Tips for great reviews
-
-- **A simple comment is perfectly fine.** If you are new to reviewing, just leaving a thoughtful question or noting something you learned is genuinely valuable. You don't have to approve or block.
-- **Be kind and specific.** Point to the exact line, explain _why_ something may be a concern, and suggest an alternative when you can.
-- **Assume good intent.** The author put effort into this. Phrase feedback as questions ("Could this be…?") rather than commands ("Change this to…").
-- **First-timer PRs deserve extra warmth.** If a contributor's bio or commit history shows they are new, a short encouraging note goes a long way.
-- **Approve when you mean it.** The green checkmark signals trust. Reserve it for changes you have genuinely read and feel confident about.
-
-## 🌱 Growing with the Community
-
-Consistent reviewers and contributors are noticed. Active participation in reviews, issues, and discussions is how community members become trusted collaborators. Over time, standout contributors may be invited to join the **Salam core team** and take on additional responsibilities:
-
-- 🏷️ **Triage role** — help label, categorise, and prioritise incoming issues and pull requests.
-- 🛡️ **Discord / Telegram moderator** — help keep real-time channels welcoming and on-topic.
-- 🔑 **Maintainer access** — merge PRs, manage releases, and help shape the roadmap.
-
-## 💬 Community and Support
+## 💬 Feedback and Support
 
 If you have any questions or need assistance, feel free to reach out to the project maintainers or the community. We're here to support each other in making Salam the best it can be.
-
-Join our real-time channels to ask questions, share ideas, or just say hello:
-
-| Platform | Link |
-| --- | --- |
-| **Discord** | [discord.gg/HfY3QHDPdv](https://discord.gg/HfY3QHDPdv) |
-| **Telegram** | [t.me/SalamProgrammingLanguage](https://t.me/SalamProgrammingLanguage) |
-
-These spaces are open to everyone — from curious newcomers to experienced systems programmers. The more voices the better.
 
 Thank you for your interest in contributing to Salam! We appreciate your help in making this project a success. Happy coding!

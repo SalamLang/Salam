@@ -247,14 +247,6 @@ To maintain consistency and readability, please follow these coding conventions 
 
 To help maintain consistent code quality, we use the following formatting and linting tools:
 
-- **clang-format**: We use `clang-format` to ensure consistent formatting for C/C++ files. Please run `clang-format` before submitting a pull request. You can configure your editor to do this automatically.
-
-  To format your code using `clang-format`:
-
-  ```bash
-  clang-format -i <your-file>
-  ```
-
 - **clang-tidy**: Use `clang-tidy` to catch common errors, style issues, and potential bugs. It's recommended to run `clang-tidy` as part of your workflow.
 
   To run `clang-tidy`:

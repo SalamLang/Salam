@@ -83,25 +83,121 @@ To help maintain consistent code quality, we use the following formatting and li
 
 ### 🪝 Commit Hooks
 
-We use [Git hooks](https://git-scm.com/book/ms/v2/Customizing-Git-Git-Hooks) or [pre-commit](https://pypi.org/project/pre-commit/) hooks to automatically run formatters or linters before each commit. You can set this up with the following steps:
+We use [`prek`](https://prek.j178.dev) for repository hooks. Salam currently has three hook modes:
 
-1. Install `pre-commit`:
+- **Standard hooks**: the default checks in `prek.toml` that run for the installed Git hook stages (currently `pre-commit` and `pre-push`).
+- **Manual hooks**: hooks in `prek.toml` that are marked for the `manual` stage and are run on demand.
+- **Audit hooks**: security-focused hooks in `prek-audit.toml` that are run separately from the standard set.
+
+#### Install `prek`
+
+Choose any of these supported installation methods:
+
+- **Homebrew**
+
+  ```bash
+  brew install prek
+  ```
+
+- **uv**
+
+  ```bash
+  uv tool install prek
+  ```
+
+- **pipx**
+
+  ```bash
+  pipx install prek
+  ```
+
+- **pip**
+
+  ```bash
+  python -m pip install prek
+  ```
+
+#### Set up and run hooks
+
+1. Install the standard Git hooks and prepare hook environments:
 
    ```bash
-   pip install -r requirements-dev.txt
+   prek install --prepare-hooks
    ```
 
-2. Set up the hooks:
+2. Run the standard hooks across the repository:
 
    ```bash
-   pre-commit install
+   prek run --all-files
    ```
 
-3. Run all hooks against all files:
+3. Run the manual hooks:
 
    ```bash
-   pre-commit run --all-files
+   prek run --all-files --stage manual
    ```
+
+4. Run the audit hooks:
+
+   ```bash
+   prek run --all-files --config prek-audit.toml
+   ```
+
+#### Useful hook commands
+
+Run just one hook:
+
+```bash
+prek run markdownlint --files CONTRIBUTING.md
+```
+
+Skip one or more hooks for a single `prek` run:
+
+```bash
+SKIP=markdownlint,codespell prek run --files CONTRIBUTING.md
+```
+
+Skip installed Git hooks for one commit:
+
+```bash
+git commit --no-verify -m "docs: update contributing guide"
+```
+
+Use `git commit --no-verify` only when you intentionally need to bypass the installed Git hooks. If you skip hooks locally, make sure you run the relevant `prek` command yourself before opening or updating a pull request.
+
+Check `prek run` help and output controls:
+
+```bash
+prek run -h
+```
+
+A few useful output flags from `prek run -h` are:
+
+- `--no-progress`: hides the live progress display, such as spinners and in-place progress updates, while still showing the normal hook results.
+- `-q`, `--quiet`: suppresses normal hook output so you can focus on failures or just rely on the exit status. Environment variable: `PREK_QUIET`.
+- `-v`, `--verbose`: increases output verbosity so you can inspect extra hook execution detail when troubleshooting.
+
+Clean cached hook environments:
+
+```bash
+prek clean
+```
+
+`prek clean` removes cached hook data so the next run recreates hook environments. This is useful after upgrading `prek`, changing hook definitions, or recovering from a broken local hook cache.
+
+#### Hook priority in this repository
+
+Hooks run from the lowest `priority` value to the highest value.
+
+In this repository, that means:
+
+- `10`: repository meta checks such as `identity` and `check-hooks-apply`
+- `20`: early file cleanup such as `fix-byte-order-marker`
+- `30`: whitespace cleanup such as `trailing-whitespace`
+- `40`: formatters such as `prettier`, `biome-check`, and `shfmt`
+- `50`: validation and audit hooks such as `codespell`, `markdownlint`, `yamllint`, `detect-private-key`, and `gitleaks`
+
+This ordering lets fast repository checks and automatic cleanup happen before the heavier validation and audit steps.
 
 ## 💬 Feedback and Support
 

@@ -18,37 +18,221 @@ Welcome to Salam! We're glad you're interested in contributing to our open-sourc
 
 ## 🚀 Getting Started
 
-1. **Fork the Repository**: Create a copy of the project by forking the SalamLang/Salam repository on GitHub.
+1. **Fork the Repository**: Visit [SalamLang/Salam](https://github.com/SalamLang/Salam) on GitHub and click **Fork** to create your own copy under your account.
 
-2. **Clone Your Fork**: Clone the repository to your local machine by replacing `your-user-name` with your own:
+2. **Clone Your Fork**: Clone your fork to your local machine, replacing `your-user-name` with your GitHub username:
 
-   ```
+   ```bash
    git clone https://github.com/your-user-name/Salam.git
+   cd Salam
    ```
 
-3. **Create a Branch**: Create a new branch for your contribution with a descriptive name, such as `feature/my-new-feature`.
+3. **Add the Upstream Remote**: Connect your local clone to the original repository so you can keep your fork in sync:
 
+   ```bash
+   git remote add upstream https://github.com/SalamLang/Salam.git
    ```
+
+4. **Sync Your Fork**: Before starting any new work, always pull the latest changes from upstream into your local `main` branch and push them to your fork:
+
+   ```bash
+   git checkout main
+   git fetch upstream
+   git merge upstream/main
+   git push origin main
+   ```
+
+5. **Create a Clean Feature Branch**: Create a new branch from a freshly synced `main` for **every pull request**. Use a short, descriptive name:
+
+   ```bash
    git checkout -b feature/my-new-feature
    ```
 
-4. **Make Changes**: Implement your changes to the code, documentation, or tests as necessary.
+   > **Important**: Always use a fresh branch per PR. Never reuse a branch that was already merged or submitted as a PR — start from a clean, up-to-date `main` each time.
 
-5. **Test Your Changes**: Ensure your changes work as expected by testing them thoroughly.
+6. **Make Changes**: Implement your changes to the code, documentation, or tests as necessary.
 
-6. **Commit Your Changes**: Commit your changes with a clear and descriptive message.
+7. **Test Your Changes**: Ensure your changes work as expected by testing them thoroughly.
 
-   ```
+8. **Commit Your Changes**: Commit your changes with a clear and descriptive message.
+
+   ```bash
    git commit -am 'Add new feature'
    ```
 
-7. **Push Your Changes**: Push your changes to your fork on GitHub.
+9. **Push Your Branch**: Push your feature branch to your fork on GitHub.
 
-   ```
+   ```bash
    git push origin feature/my-new-feature
    ```
 
-8. **Submit a Pull Request**: Submit a pull request from your branch to the main repository, providing a description of your changes and their value.
+10. **Submit a Pull Request**: On GitHub, open a pull request from your feature branch to `SalamLang/Salam:main`, providing a clear description of your changes and their purpose.
+
+## 🏁 Basic Usage
+
+After building the compiler (see the [Build section in the README](README.md#build)), you can run Salam programs right away.
+
+**Build the compiler** from the `compiler/` directory:
+
+```bash
+cd compiler
+sh tools/bash/build-compiler.sh   # quick build -> ./salam
+```
+
+Or with CMake:
+
+```bash
+cmake -B build && cmake --build build
+```
+
+**Hello, World** — save the following as `hello.salam`:
+
+```salam
+func main {
+    println("Hello, World!")
+}
+```
+
+Then compile and run it:
+
+```bash
+salam build hello.salam --output=hello
+./hello
+```
+
+**Layout DSL** — compile a `.salam` layout page to HTML/CSS/JS:
+
+```bash
+salam layout build page.salam --inline
+```
+
+For a full list of commands and flags, see the [Usage section in the README](README.md#usage) or run:
+
+```bash
+salam --help
+```
+
+## 🔄 Git Daily Workflow
+
+This is the typical day-to-day cycle for working on a contribution from start to finish.
+
+### 1. Sync your fork
+
+Always start from an up-to-date `main`:
+
+```bash
+git checkout main
+git fetch upstream
+git merge upstream/main
+git push origin main
+```
+
+### 2. Create a fresh feature branch
+
+```bash
+git checkout -b fix/describe-the-fix
+```
+
+Use a prefix that matches your change: `feature/`, `fix/`, `docs/`, `test/`, etc.
+
+### 3. Make your changes
+
+Edit files, add tests, update documentation as needed.
+
+### 4. Stage and commit
+
+```bash
+git add .
+git commit -m "fix: describe what and why in plain terms"
+```
+
+Write commit messages in the imperative mood: _"Add feature"_, _"Fix crash"_, _"Update docs"_.
+
+### 5. Keep your branch up to date (optional but recommended)
+
+If `main` has moved on while you were working, merge the latest upstream changes into your branch:
+
+```bash
+git fetch upstream
+git merge upstream/main
+```
+
+Resolve any conflicts, commit the merge, then push normally. Merging keeps a clear history and makes it easy to see exactly what changed on GitHub.
+
+### 6. Push your branch
+
+```bash
+git push origin fix/describe-the-fix
+```
+
+### 7. Open a Pull Request
+
+On GitHub, navigate to your fork and click **Compare & pull request**. Fill in the title and description, then submit. A maintainer will review your PR and may request changes.
+
+### 8. Address review feedback
+
+Make the requested changes locally, commit them, and push to the same branch — the PR updates automatically:
+
+```bash
+git add .
+git commit -m "address review: clarify error message"
+git push origin fix/describe-the-fix
+```
+
+### 9. After the PR is merged
+
+Delete your feature branch locally and remotely to keep things tidy:
+
+```bash
+git checkout main
+git branch -d fix/describe-the-fix
+git push origin --delete fix/describe-the-fix
+```
+
+Then sync your fork so it is ready for your next contribution:
+
+```bash
+git fetch upstream
+git merge upstream/main
+git push origin main
+```
+
+## ↩️ Keeping Your Branch Up to Date with Rebase (Alternative)
+
+Some contributors prefer to rebase instead of merge when bringing in upstream changes. Rebasing replays your commits on top of the latest `main`, resulting in a linear history with no merge commits.
+
+> **Note**: Rebasing rewrites commit history. Avoid it on branches that other people are also working on, and never rebase commits that have already been pushed to a shared branch without coordinating with your team.
+
+### Rebase your branch onto upstream
+
+```bash
+git fetch upstream
+git rebase upstream/main
+```
+
+If there are conflicts, Git will pause and let you resolve them file by file:
+
+```bash
+# After resolving each conflict:
+git add <resolved-file>
+git rebase --continue
+```
+
+To abort and return to the state before the rebase started:
+
+```bash
+git rebase --abort
+```
+
+### Force-push after rebasing
+
+Because rebase rewrites history, you need to force-push after rebasing a branch that you have already pushed:
+
+```bash
+git push --force-with-lease origin fix/describe-the-fix
+```
+
+Use `--force-with-lease` rather than `--force` — it refuses to overwrite if someone else has pushed to the branch since your last fetch, protecting against accidental data loss.
 
 ## 📝 Code Style and Guidelines
 

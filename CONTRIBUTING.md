@@ -85,35 +85,59 @@ To help maintain consistent code quality, we use the following formatting and li
 
 We use [`prek`](https://prek.j178.dev) for repository hooks. Salam currently has three hook modes:
 
-- **Standard hooks**: the default checks in `/home/runner/work/Salam/Salam/prek.toml` that run for the installed Git hook stages (currently `pre-commit` and `pre-push`).
-- **Manual hooks**: hooks in `/home/runner/work/Salam/Salam/prek.toml` that are marked for the `manual` stage and are run on demand.
-- **Audit hooks**: security-focused hooks in `/home/runner/work/Salam/Salam/prek-audit.toml` that are run separately from the standard set.
+- **Standard hooks**: the default checks in `prek.toml` that run for the installed Git hook stages (currently `pre-commit` and `pre-push`).
+- **Manual hooks**: hooks in `prek.toml` that are marked for the `manual` stage and are run on demand.
+- **Audit hooks**: security-focused hooks in `prek-audit.toml` that are run separately from the standard set.
 
-1. Install `prek`:
+#### Install `prek`
 
-   ```bash
-   python -m pip install prek
-   ```
+Choose any of these supported installation methods:
 
-2. Install the standard Git hooks and prepare hook environments:
+- **Homebrew**
+
+  ```bash
+  brew install prek
+  ```
+
+- **uv**
+
+  ```bash
+  uv tool install prek
+  ```
+
+- **pipx**
+
+  ```bash
+  pipx install prek
+  ```
+
+- **pip**
+
+  ```bash
+  python -m pip install prek
+  ```
+
+#### Set up and run hooks
+
+1. Install the standard Git hooks and prepare hook environments:
 
    ```bash
    prek install --prepare-hooks
    ```
 
-3. Run the standard hooks across the repository:
+2. Run the standard hooks across the repository:
 
    ```bash
    prek run --all-files
    ```
 
-4. Run the manual hooks:
+3. Run the manual hooks:
 
    ```bash
    prek run --all-files --stage manual
    ```
 
-5. Run the audit hooks:
+4. Run the audit hooks:
 
    ```bash
    prek run --all-files --config prek-audit.toml

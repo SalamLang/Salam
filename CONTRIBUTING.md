@@ -243,9 +243,9 @@ To maintain consistency and readability, please follow these coding conventions 
 - Keep your changes focused and atomic. Avoid mixing unrelated changes in the same pull request.
 - Test your code thoroughly to ensure its functionality and prevent regressions.
 
-### 🛠️ Formatting Tools
+### 🛠️ Additional Code Quality Tools
 
-To help maintain consistent code quality, we use the following formatting and linting tools:
+To help improve efficiency and correctness, you may use the following linting and static analysis tools:
 
 - **Other Tools**: You may also use additional linting or static analysis tools, such as `cppcheck` or `valgrind`, to improve the efficiency and correctness of the code.
 

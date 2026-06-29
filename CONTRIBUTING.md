@@ -243,28 +243,6 @@ To maintain consistency and readability, please follow these coding conventions 
 - Keep your changes focused and atomic. Avoid mixing unrelated changes in the same pull request.
 - Test your code thoroughly to ensure its functionality and prevent regressions.
 
-### 🛠️ Formatting Tools
-
-To help maintain consistent code quality, we use the following formatting and linting tools:
-
-- **clang-format**: We use `clang-format` to ensure consistent formatting for C/C++ files. Please run `clang-format` before submitting a pull request. You can configure your editor to do this automatically.
-
-  To format your code using `clang-format`:
-
-  ```bash
-  clang-format -i <your-file>
-  ```
-
-- **clang-tidy**: Use `clang-tidy` to catch common errors, style issues, and potential bugs. It's recommended to run `clang-tidy` as part of your workflow.
-
-  To run `clang-tidy`:
-
-  ```bash
-  clang-tidy <your-file>
-  ```
-
-- **Other Tools**: You may also use additional linting or static analysis tools, such as `cppcheck` or `valgrind`, to improve the efficiency and correctness of the code.
-
 ### 🪝 Commit Hooks
 
 We use [`prek`](https://prek.j178.dev) for repository hooks. Salam currently has three hook modes:

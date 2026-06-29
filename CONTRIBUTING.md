@@ -150,29 +150,19 @@ Write commit messages in the imperative mood: *"Add feature"*, *"Fix crash"*, *"
 
 ### 5. Keep your branch up to date (optional but recommended)
 
-If `main` has moved on while you were working, rebase onto it:
+If `main` has moved on while you were working, merge the latest upstream changes into your branch:
 
 ```bash
 git fetch upstream
-git rebase upstream/main
+git merge upstream/main
 ```
 
-Resolve any conflicts, then continue:
-
-```bash
-git rebase --continue
-```
+Resolve any conflicts, commit the merge, then push normally. Merging keeps a clear history and makes it easy to see exactly what changed on GitHub.
 
 ### 6. Push your branch
 
 ```bash
 git push origin fix/describe-the-fix
-```
-
-If you rebased after a previous push, you may need to force-push:
-
-```bash
-git push --force-with-lease origin fix/describe-the-fix
 ```
 
 ### 7. Open a Pull Request
@@ -206,6 +196,43 @@ git fetch upstream
 git merge upstream/main
 git push origin main
 ```
+
+## ↩️ Keeping Your Branch Up to Date with Rebase (Alternative)
+
+Some contributors prefer to rebase instead of merge when bringing in upstream changes. Rebasing replays your commits on top of the latest `main`, resulting in a linear history with no merge commits.
+
+> **Note**: Rebasing rewrites commit history. Avoid it on branches that other people are also working on, and never rebase commits that have already been pushed to a shared branch without coordinating with your team.
+
+### Rebase your branch onto upstream
+
+```bash
+git fetch upstream
+git rebase upstream/main
+```
+
+If there are conflicts, Git will pause and let you resolve them file by file:
+
+```bash
+# After resolving each conflict:
+git add <resolved-file>
+git rebase --continue
+```
+
+To abort and return to the state before the rebase started:
+
+```bash
+git rebase --abort
+```
+
+### Force-push after rebasing
+
+Because rebase rewrites history, you need to force-push after rebasing a branch that you have already pushed:
+
+```bash
+git push --force-with-lease origin fix/describe-the-fix
+```
+
+Use `--force-with-lease` rather than `--force` — it refuses to overwrite if someone else has pushed to the branch since your last fetch, protecting against accidental data loss.
 
 ## 📝 Code Style and Guidelines
 

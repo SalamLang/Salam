@@ -243,7 +243,6 @@ To maintain consistency and readability, please follow these coding conventions 
 - Keep your changes focused and atomic. Avoid mixing unrelated changes in the same pull request.
 - Test your code thoroughly to ensure its functionality and prevent regressions.
 
-
 ### 🪝 Commit Hooks
 
 We use [`prek`](https://prek.j178.dev) for repository hooks. Salam currently has three hook modes:

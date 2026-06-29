@@ -205,7 +205,7 @@ docker run --rm -it -v "$PWD/compiler":/app salam:dev                           
 We welcome contributions from the community!
 
 - 📖 Read our [Contributing Guide](CONTRIBUTING.md).
-- 🌟 Follow our [Code of Conduct](https://github.com/SalamLang/Salam/blob/main/CODE_OF_CONDUCT.md).
+- 🌟 Follow our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Together, let’s make coding accessible to all.
 

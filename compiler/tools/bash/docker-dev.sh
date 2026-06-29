@@ -10,7 +10,7 @@ make OUTDIR=. -j"$JOBS" || echo "[salam] initial build failed - waiting for chan
 
 echo "[salam] watching src/ and Makefile for changes (Ctrl-C to stop) ..."
 while true; do
-    find src Makefile -type f \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) \
-        | entr -d -c sh -c 'make OUTDIR=. -j'"$JOBS"' && echo "[salam] rebuilt ./salam"' \
-        || true
+    find src Makefile -type f \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) |
+        entr -d -c sh -c 'make OUTDIR=. -j'"$JOBS"' && echo "[salam] rebuilt ./salam"' ||
+        true
 done

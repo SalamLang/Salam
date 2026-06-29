@@ -205,7 +205,7 @@ docker run --rm -it -v "$PWD/compiler":/app salam:dev                           
 We welcome contributions from the community!
 
 - 📖 Read our [Contributing Guide](CONTRIBUTING.md).
-- 🌟 Follow our [Code of Conduct](CODE_OF_CONDUCT.md).
+- 🌟 Follow our [Code of Conduct](https://github.com/SalamLang/Salam/blob/main/CODE_OF_CONDUCT.md).
 
 Together, let’s make coding accessible to all.
 
@@ -274,7 +274,7 @@ The Salam core team lives in our real-time channels. Join us to ask questions, s
 | Platform | Link |
 |---|---|
 | **Discord** | [discord.gg/HfY3QHDPdv](https://discord.gg/HfY3QHDPdv) |
-| **Telegram** | [t.me/salamlang](https://t.me/salamlang) |
+| **Telegram** | [t.me/SalamProgrammingLanguage](https://t.me/SalamProgrammingLanguage) |
 
 These spaces are open to everyone — from curious newcomers to experienced systems programmers. The more voices the better.
 

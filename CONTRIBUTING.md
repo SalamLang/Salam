@@ -174,7 +174,7 @@ prek run -h
 A few useful output flags from `prek run -h` are:
 
 - `--no-progress`: hides the live progress display, such as spinners and in-place progress updates, while still showing the normal hook results.
-- `-q`, `--quiet`: suppresses normal hook output so you can focus on failures or just rely on the exit status. `PREK_QUIET` can also be used to set this through the environment.
+- `-q`, `--quiet`: suppresses normal hook output so you can focus on failures or just rely on the exit status. Environment variable: `PREK_QUIET`.
 - `-v`, `--verbose`: increases output verbosity so you can inspect extra hook execution detail when troubleshooting.
 
 Clean cached hook environments:

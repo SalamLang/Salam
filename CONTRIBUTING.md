@@ -165,6 +165,18 @@ git commit --no-verify -m "docs: update contributing guide"
 
 Use `git commit --no-verify` only when you intentionally need to bypass the installed Git hooks. If you skip hooks locally, make sure you run the relevant `prek` command yourself before opening or updating a pull request.
 
+Check `prek run` help and output controls:
+
+```bash
+prek run -h
+```
+
+A few useful output flags from `prek run -h` are:
+
+- `--no-progress`: hides progress spinners and progress output, which is useful in CI logs or when you want cleaner terminal output.
+- `-q`, `--quiet`: reduces output verbosity. `PREK_QUIET` can also be used to set this through the environment.
+- `-v`, `--verbose`: increases output verbosity so you can inspect more hook execution detail when troubleshooting.
+
 Clean cached hook environments:
 
 ```bash

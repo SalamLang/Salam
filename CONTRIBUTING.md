@@ -393,6 +393,7 @@ All checks must pass before a pull request can be merged. If a check fails:
 
 If you are unsure why a check failed, leave a comment on the PR and a maintainer will help you.
 
+We are currently triaging issues with the **Super-Linter** workflow and the team will be fixing each individual linter check mostly via separate pull requests. Please don't not try to fix all or multiple Super-Linter checks in the same pull request. If you would like to fix a basic check please submit a small self contained and focused pull request. We like to combine and match local prek hooks with the Super-Linter so always research prek, hooks and the Super-Linter before submitting an issue or pull request
 ## 💬 Feedback and Support
 
 If you have any questions or need assistance, feel free to reach out to the project maintainers or the community. We're here to support each other in making Salam the best it can be.

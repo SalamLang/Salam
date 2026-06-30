@@ -16,6 +16,17 @@ Welcome to Salam! We're glad you're interested in contributing to our open-sourc
 
 6. **Community Support**: Assist others by answering questions, providing support, and sharing your expertise on mailing lists, forums, or chat channels.
 
+## 📋 Opening Issues
+
+Before opening an issue, search the [existing issues](https://github.com/SalamLang/Salam/issues) to avoid duplicates.
+
+We provide two issue templates to keep reports clear and actionable:
+
+- **Bug report** — use this when something is broken or behaves unexpectedly. Include steps to reproduce the problem, what you expected to happen, and details about your environment (OS, compiler version, etc.).
+- **Feature request** — use this to propose a new capability or improvement. Describe the problem you are trying to solve and why it would benefit others.
+
+Both templates are available when you click **New issue** on GitHub. Fill in all the relevant sections so maintainers can triage your report quickly.
+
 ## 🚀 Getting Started
 
 1. **Fork the Repository**: Visit [SalamLang/Salam](https://github.com/SalamLang/Salam) on GitHub and click **Fork** to create your own copy under your account.
@@ -70,7 +81,7 @@ Welcome to Salam! We're glad you're interested in contributing to our open-sourc
 
 ## 🏁 Basic Usage
 
-After building the compiler (see the [Build section in the README](README.md#build)), you can run Salam programs right away.
+After building the compiler (see the [Build section in the readme](README.md#build)), you can run Salam programs right away.
 
 **Build the compiler** from the `compiler/` directory:
 
@@ -106,7 +117,7 @@ salam build hello.salam --output=hello
 salam layout build page.salam --inline
 ```
 
-For a full list of commands and flags, see the [Usage section in the README](README.md#usage) or run:
+For a full list of commands and flags, see the [Usage section in the readme](README.md#usage) or run:
 
 ```bash
 salam --help
@@ -360,6 +371,29 @@ In this repository, that means:
 - `50`: validation and audit hooks such as `codespell`, `markdownlint`, `yamllint`, `detect-private-key`, and `gitleaks`
 
 This ordering lets fast repository checks and automatic cleanup happen before the heavier validation and audit steps.
+
+## ⚙️ Continuous Integration
+
+Every pull request triggers a suite of automated checks. Understanding what runs helps you resolve failures quickly.
+
+| Workflow                | What it checks                                                                                                                                 |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Prek Standard Hooks** | Runs `prek run --all-files` on Ubuntu, macOS, and Windows to verify formatting, spelling, linting, and security checks defined in `prek.toml`. |
+| **Prek Manual Hooks**   | Runs the `manual`-stage hooks (e.g. `shfmt`, `chmod`) across the same platform matrix.                                                         |
+| **Super-Linter**        | Runs a broad set of language-specific linters across the repository.                                                                           |
+| **Docker Build & Test** | Builds the compiler inside an Alpine + LLVM Docker image and runs the test suite.                                                              |
+| **Build and Release**   | Compiles release binaries for all supported targets.                                                                                           |
+| **WebAssembly**         | Builds the playground WebAssembly module and publishes it to GitHub Pages.                                                                     |
+
+All checks must pass before a pull request can be merged. If a check fails:
+
+1. Open the **Checks** tab on your PR and click the failing workflow name.
+2. Expand the failing step to read the log output.
+3. Fix the issue locally, commit, and push — the checks re-run automatically.
+
+If you are unsure why a check failed, leave a comment on the PR and a maintainer will help you.
+
+We are currently triaging issues with the **Super-Linter** workflow and the team will be fixing each individual linter check mostly via separate pull requests. Please do not try to fix all or multiple Super-Linter checks in the same pull request. If you would like to fix a basic check please submit a small self contained and focused pull request. We like to combine and match local prek hooks with the Super-Linter so always research prek, hooks and the Super-Linter before submitting an issue or pull request.
 
 ## 💬 Feedback and Support
 

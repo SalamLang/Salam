@@ -10,6 +10,21 @@
 #  include <unistd.h>
 #endif
 
+static int path_contained(const char *path, const char *dir)
+{
+    size_t dlen = strlen(dir);
+    while (dlen > 0 && (dir[dlen-1] == '/' || dir[dlen-1] == '\\')) dlen--;
+    if (strlen(path) < dlen) return 0;
+    size_t i;
+    for (i = 0; i < dlen; i++) {
+        char dc = (dir[i]  == '\\') ? '/' : dir[i];
+        char pc = (path[i] == '\\') ? '/' : path[i];
+        if (dc != pc) return 0;
+    }
+    char next = (path[dlen] == '\\') ? '/' : path[dlen];
+    return (next == '/' || next == '\0');
+}
+
 static int test_path_traversal_containment(void)
 {
     const char *payloads[] = {
@@ -26,7 +41,8 @@ static int test_path_traversal_containment(void)
     if (!mkdtemp(test_root)) return 1;
 
     char safe_dir[PATH_MAX];
-    if (snprintf(safe_dir, sizeof(safe_dir), "%s/safe", test_root) < 0) {
+    int sret = snprintf(safe_dir, sizeof(safe_dir), "%s/safe", test_root);
+    if (sret < 0 || sret >= (int)sizeof(safe_dir)) {
         rmdir(test_root);
         return 1;
     }
@@ -37,6 +53,7 @@ static int test_path_traversal_containment(void)
 #else
     const char *safe_dir = "C:\\Temp\\test_safe";
     const char *test_root = "C:\\Temp";
+    (void)test_root;
 #endif
 
     arena_t *a = arena_new(4096);
@@ -46,9 +63,8 @@ static int test_path_traversal_containment(void)
     for (i = 0; i < num_payloads; i++) {
         const char *result = salam_resolve_import(a, safe_dir, payloads[i]);
         if (result && result[0] != '\0') {
-            if (strncmp(result, test_root, strlen(test_root)) != 0) {
+            if (!path_contained(result, safe_dir))
                 failures++;
-            }
         }
     }
 
@@ -56,9 +72,7 @@ static int test_path_traversal_containment(void)
     if (!valid || valid[0] == '\0') {
         failures++;
     } else {
-        size_t sd = strlen(safe_dir);
-        char boundary = (valid[sd] == '\\') ? '/' : valid[sd];
-        if (strncmp(valid, safe_dir, sd) != 0 || (boundary != '/' && boundary != '\0'))
+        if (!path_contained(valid, safe_dir))
             failures++;
     }
 

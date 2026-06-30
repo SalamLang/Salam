@@ -237,7 +237,11 @@ static char *path_normalize(char *p)
         if (strcmp(tok, ".") == 0 || tok[0] == '\0') {
             /* skip */
         } else if (strcmp(tok, "..") == 0) {
-            if (ns > 0) ns--;
+            if (ns > 0 && strcmp(segs[ns - 1], "..") != 0) {
+                ns--;
+            } else if (!is_absolute) {
+                if (ns < 256) segs[ns++] = tok;
+            }
         } else {
             if (ns < 256) segs[ns++] = tok;
         }
@@ -360,6 +364,8 @@ const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec)
         path_normalize(p);
         if (dir && dir[0]) {
             size_t dlen = strlen(dir);
+            while (dlen > 0 && (dir[dlen-1] == '/' || dir[dlen-1] == '\\')) dlen--;
+            if (strlen(p) < dlen) return "";
             size_t ci;
             bool match = true;
             for (ci = 0; ci < dlen; ci++) {
@@ -380,7 +386,8 @@ const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec)
     const char *last  = slash ? slash + 1 : spec;
     if (root[0]) sal_snprintf(p, n, "%s/std/%s/%s.salam", root, spec, last);
     else         sal_snprintf(p, n, "std/%s/%s.salam", spec, last);
-    
+    path_normalize(p);
+
     if (!file_exists(p)) {
         const char *aliased = resolve_pkg_alias(a, root, spec);
         if (aliased) return aliased;

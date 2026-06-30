@@ -18,14 +18,14 @@ if ! command -v "$EMCC" >/dev/null 2>&1; then
         if [ -z "$EM_CONFIG" ] && [ ! -f "$EMSDK_DIR/.emscripten" ]; then
             NODE_EXE="$(command -v node)"
             {
-              echo "LLVM_ROOT = '$EMSDK_DIR/install/bin'"
-              echo "BINARYEN_ROOT = '$EMSDK_DIR/install'"
-              echo "EMSCRIPTEN_ROOT = '$EMSDK_DIR/install/emscripten'"
-              echo "NODE_JS = '$(cygpath -m "$NODE_EXE" 2>/dev/null || echo "$NODE_EXE")'"
-              echo "CACHE = '$EMSDK_DIR/cache'"
-              echo "COMPILER_ENGINE = NODE_JS"
-              echo "JS_ENGINES = [NODE_JS]"
-            } > "$EMSDK_DIR/.emscripten"
+                echo "LLVM_ROOT = '$EMSDK_DIR/install/bin'"
+                echo "BINARYEN_ROOT = '$EMSDK_DIR/install'"
+                echo "EMSCRIPTEN_ROOT = '$EMSDK_DIR/install/emscripten'"
+                echo "NODE_JS = '$(cygpath -m "$NODE_EXE" 2>/dev/null || echo "$NODE_EXE")'"
+                echo "CACHE = '$EMSDK_DIR/cache'"
+                echo "COMPILER_ENGINE = NODE_JS"
+                echo "JS_ENGINES = [NODE_JS]"
+            } >"$EMSDK_DIR/.emscripten"
         fi
         export EM_CONFIG="${EM_CONFIG:-$EMSDK_DIR/.emscripten}"
     fi
@@ -48,22 +48,22 @@ OUT_DIR="../editor"
 mkdir -p "$OUT_DIR"
 "$SALAM" run tools/salam/gen-editor-keywords.salam || echo "warning: keyword generation failed; using existing ../editor/keywords.js" >&2
 SRC_DIRS="core source logger xml preproc token langpack i18n lexer ast parser
-          diag semantic interp layout codegen llvm web"
+        diag semantic interp layout codegen llvm web"
 SRCS=""
 for d in $SRC_DIRS; do SRCS="$SRCS src/$d/*.c"; done
 # SRCS holds whitespace-separated glob patterns that must word-split and expand.
 # shellcheck disable=SC2086
 "$EMCC" -O2 -Isrc $SRCS \
-  -o "$OUT_DIR/salam-wa.js" \
-  --preload-file std@/std \
-  -s MODULARIZE=0 \
-  -s ENVIRONMENT=web,worker,node \
-  -s ALLOW_MEMORY_GROWTH=1 \
-  -s INITIAL_MEMORY=33554432 \
-  -s STACK_SIZE=4194304 \
-  -s EXIT_RUNTIME=0 \
-  -s IGNORE_MISSING_MAIN=1 \
-  -s FILESYSTEM=1 \
-  -s EXPORTED_FUNCTIONS="['_salam_web_run_app','_salam_web_build_layout','_salam_web_emit','_salam_web_version','_malloc','_free']" \
-  -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']"
+    -o "$OUT_DIR/salam-wa.js" \
+    --preload-file std@/std \
+    -s MODULARIZE=0 \
+    -s ENVIRONMENT=web,worker,node \
+    -s ALLOW_MEMORY_GROWTH=1 \
+    -s INITIAL_MEMORY=33554432 \
+    -s STACK_SIZE=4194304 \
+    -s EXIT_RUNTIME=0 \
+    -s IGNORE_MISSING_MAIN=1 \
+    -s FILESYSTEM=1 \
+    -s EXPORTED_FUNCTIONS="['_salam_web_run_app','_salam_web_build_layout','_salam_web_emit','_salam_web_version','_malloc','_free']" \
+    -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']"
 echo "built $OUT_DIR/salam-wa.js (+ .wasm, .data)"

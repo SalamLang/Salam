@@ -16,39 +16,234 @@ Welcome to Salam! We're glad you're interested in contributing to our open-sourc
 
 6. **Community Support**: Assist others by answering questions, providing support, and sharing your expertise on mailing lists, forums, or chat channels.
 
+## 📋 Opening Issues
+
+Before opening an issue, search the [existing issues](https://github.com/SalamLang/Salam/issues) to avoid duplicates.
+
+We provide two issue templates to keep reports clear and actionable:
+
+- **Bug report** — use this when something is broken or behaves unexpectedly. Include steps to reproduce the problem, what you expected to happen, and details about your environment (OS, compiler version, etc.).
+- **Feature request** — use this to propose a new capability or improvement. Describe the problem you are trying to solve and why it would benefit others.
+
+Both templates are available when you click **New issue** on GitHub. Fill in all the relevant sections so maintainers can triage your report quickly.
+
 ## 🚀 Getting Started
 
-1. **Fork the Repository**: Create a copy of the project by forking the SalamLang/Salam repository on GitHub.
+1. **Fork the Repository**: Visit [SalamLang/Salam](https://github.com/SalamLang/Salam) on GitHub and click **Fork** to create your own copy under your account.
 
-2. **Clone Your Fork**: Clone the repository to your local machine by replacing `your-user-name` with your own:
+2. **Clone Your Fork**: Clone your fork to your local machine, replacing `your-user-name` with your GitHub username:
 
-   ```
+   ```bash
    git clone https://github.com/your-user-name/Salam.git
+   cd Salam
    ```
 
-3. **Create a Branch**: Create a new branch for your contribution with a descriptive name, such as `feature/my-new-feature`.
+3. **Add the Upstream Remote**: Connect your local clone to the original repository so you can keep your fork in sync:
 
+   ```bash
+   git remote add upstream https://github.com/SalamLang/Salam.git
    ```
+
+4. **Sync Your Fork**: Before starting any new work, always pull the latest changes from upstream into your local `main` branch and push them to your fork:
+
+   ```bash
+   git checkout main
+   git fetch upstream
+   git merge upstream/main
+   git push origin main
+   ```
+
+5. **Create a Clean Feature Branch**: Create a new branch from a freshly synced `main` for **every pull request**. Use a short, descriptive name:
+
+   ```bash
    git checkout -b feature/my-new-feature
    ```
 
-4. **Make Changes**: Implement your changes to the code, documentation, or tests as necessary.
+   > **Important**: Always use a fresh branch per PR. Never reuse a branch that was already merged or submitted as a PR — start from a clean, up-to-date `main` each time.
 
-5. **Test Your Changes**: Ensure your changes work as expected by testing them thoroughly.
+6. **Make Changes**: Implement your changes to the code, documentation, or tests as necessary.
 
-6. **Commit Your Changes**: Commit your changes with a clear and descriptive message.
+7. **Test Your Changes**: Ensure your changes work as expected by testing them thoroughly.
 
-   ```
+8. **Commit Your Changes**: Commit your changes with a clear and descriptive message.
+
+   ```bash
    git commit -am 'Add new feature'
    ```
 
-7. **Push Your Changes**: Push your changes to your fork on GitHub.
+9. **Push Your Branch**: Push your feature branch to your fork on GitHub.
 
-   ```
+   ```bash
    git push origin feature/my-new-feature
    ```
 
-8. **Submit a Pull Request**: Submit a pull request from your branch to the main repository, providing a description of your changes and their value.
+10. **Submit a Pull Request**: On GitHub, open a pull request from your feature branch to `SalamLang/Salam:main`, providing a clear description of your changes and their purpose.
+
+## 🏁 Basic Usage
+
+After building the compiler (see the [Build section in the readme](README.md#build)), you can run Salam programs right away.
+
+**Build the compiler** from the `compiler/` directory:
+
+```bash
+cd compiler
+sh tools/bash/build-compiler.sh   # quick build -> ./salam
+```
+
+Or with CMake:
+
+```bash
+cmake -B build && cmake --build build
+```
+
+**Hello, World** — save the following as `hello.salam`:
+
+```salam
+func main {
+    println("Hello, World!")
+}
+```
+
+Then compile and run it:
+
+```bash
+salam build hello.salam --output=hello
+./hello
+```
+
+**Layout DSL** — compile a `.salam` layout page to HTML/CSS/JS:
+
+```bash
+salam layout build page.salam --inline
+```
+
+For a full list of commands and flags, see the [Usage section in the readme](README.md#usage) or run:
+
+```bash
+salam --help
+```
+
+## 🔄 Git Daily Workflow
+
+This is the typical day-to-day cycle for working on a contribution from start to finish.
+
+### 1. Sync your fork
+
+Always start from an up-to-date `main`:
+
+```bash
+git checkout main
+git fetch upstream
+git merge upstream/main
+git push origin main
+```
+
+### 2. Create a fresh feature branch
+
+```bash
+git checkout -b fix/describe-the-fix
+```
+
+Use a prefix that matches your change: `feature/`, `fix/`, `docs/`, `test/`, etc.
+
+### 3. Make your changes
+
+Edit files, add tests, update documentation as needed.
+
+### 4. Stage and commit
+
+```bash
+git add .
+git commit -m "fix: describe what and why in plain terms"
+```
+
+Write commit messages in the imperative mood: _"Add feature"_, _"Fix crash"_, _"Update docs"_.
+
+### 5. Keep your branch up to date (optional but recommended)
+
+If `main` has moved on while you were working, merge the latest upstream changes into your branch:
+
+```bash
+git fetch upstream
+git merge upstream/main
+```
+
+Resolve any conflicts, commit the merge, then push normally. Merging keeps a clear history and makes it easy to see exactly what changed on GitHub.
+
+### 6. Push your branch
+
+```bash
+git push origin fix/describe-the-fix
+```
+
+### 7. Open a Pull Request
+
+On GitHub, navigate to your fork and click **Compare & pull request**. Fill in the title and description, then submit. A maintainer will review your PR and may request changes.
+
+### 8. Address review feedback
+
+Make the requested changes locally, commit them, and push to the same branch — the PR updates automatically:
+
+```bash
+git add .
+git commit -m "address review: clarify error message"
+git push origin fix/describe-the-fix
+```
+
+### 9. After the PR is merged
+
+Delete your feature branch locally and remotely to keep things tidy:
+
+```bash
+git checkout main
+git branch -d fix/describe-the-fix
+git push origin --delete fix/describe-the-fix
+```
+
+Then sync your fork so it is ready for your next contribution:
+
+```bash
+git fetch upstream
+git merge upstream/main
+git push origin main
+```
+
+## ↩️ Keeping Your Branch Up to Date with Rebase (Alternative)
+
+Some contributors prefer to rebase instead of merge when bringing in upstream changes. Rebasing replays your commits on top of the latest `main`, resulting in a linear history with no merge commits.
+
+> **Note**: Rebasing rewrites commit history. Avoid it on branches that other people are also working on, and never rebase commits that have already been pushed to a shared branch without coordinating with your team.
+
+### Rebase your branch onto upstream
+
+```bash
+git fetch upstream
+git rebase upstream/main
+```
+
+If there are conflicts, Git will pause and let you resolve them file by file:
+
+```bash
+# After resolving each conflict:
+git add <resolved-file>
+git rebase --continue
+```
+
+To abort and return to the state before the rebase started:
+
+```bash
+git rebase --abort
+```
+
+### Force-push after rebasing
+
+Because rebase rewrites history, you need to force-push after rebasing a branch that you have already pushed:
+
+```bash
+git push --force-with-lease origin fix/describe-the-fix
+```
+
+Use `--force-with-lease` rather than `--force` — it refuses to overwrite if someone else has pushed to the branch since your last fetch, protecting against accidental data loss.
 
 ## 📝 Code Style and Guidelines
 
@@ -59,49 +254,146 @@ To maintain consistency and readability, please follow these coding conventions 
 - Keep your changes focused and atomic. Avoid mixing unrelated changes in the same pull request.
 - Test your code thoroughly to ensure its functionality and prevent regressions.
 
-### 🛠️ Formatting Tools
-
-To help maintain consistent code quality, we use the following formatting and linting tools:
-
-- **clang-format**: We use `clang-format` to ensure consistent formatting for C/C++ files. Please run `clang-format` before submitting a pull request. You can configure your editor to do this automatically.
-
-  To format your code using `clang-format`:
-
-  ```bash
-  clang-format -i <your-file>
-  ```
-
-- **clang-tidy**: Use `clang-tidy` to catch common errors, style issues, and potential bugs. It's recommended to run `clang-tidy` as part of your workflow.
-
-  To run `clang-tidy`:
-
-  ```bash
-  clang-tidy <your-file>
-  ```
-
-- **Other Tools**: You may also use additional linting or static analysis tools, such as `cppcheck` or `valgrind`, to improve the efficiency and correctness of the code.
-
 ### 🪝 Commit Hooks
 
-We use [Git hooks](https://git-scm.com/book/ms/v2/Customizing-Git-Git-Hooks) or [pre-commit](https://pypi.org/project/pre-commit/) hooks to automatically run formatters or linters before each commit. You can set this up with the following steps:
+We use [`prek`](https://prek.j178.dev) for repository hooks. Salam currently has three hook modes:
 
-1. Install `pre-commit`:
+- **Standard hooks**: the default checks in `prek.toml` that run for the installed Git hook stages (currently `pre-commit` and `pre-push`).
+- **Manual hooks**: hooks in `prek.toml` that are marked for the `manual` stage and are run on demand.
+- **Audit hooks**: security-focused hooks in `prek-audit.toml` that are run separately from the standard set.
+
+#### Install `prek`
+
+Choose any of these supported installation methods:
+
+- **Homebrew**
+
+  ```bash
+  brew install prek
+  ```
+
+- **uv**
+
+  ```bash
+  uv tool install prek
+  ```
+
+- **pipx**
+
+  ```bash
+  pipx install prek
+  ```
+
+- **pip**
+
+  ```bash
+  python -m pip install prek
+  ```
+
+#### Set up and run hooks
+
+1. Install the standard Git hooks and prepare hook environments:
 
    ```bash
-   pip install -r requirements-dev.txt
+   prek install --prepare-hooks
    ```
 
-2. Set up the hooks:
+2. Run the standard hooks across the repository:
 
    ```bash
-   pre-commit install
+   prek run --all-files
    ```
 
-3. Run all hooks against all files:
+3. Run the manual hooks:
 
    ```bash
-   pre-commit run --all-files
+   prek run --all-files --stage manual
    ```
+
+4. Run the audit hooks:
+
+   ```bash
+   prek run --all-files --config prek-audit.toml
+   ```
+
+#### Useful hook commands
+
+Run just one hook:
+
+```bash
+prek run markdownlint --files CONTRIBUTING.md
+```
+
+Skip one or more hooks for a single `prek` run:
+
+```bash
+SKIP=markdownlint,codespell prek run --files CONTRIBUTING.md
+```
+
+Skip installed Git hooks for one commit:
+
+```bash
+git commit --no-verify -m "docs: update contributing guide"
+```
+
+Use `git commit --no-verify` only when you intentionally need to bypass the installed Git hooks. If you skip hooks locally, make sure you run the relevant `prek` command yourself before opening or updating a pull request.
+
+Check `prek run` help and output controls:
+
+```bash
+prek run -h
+```
+
+A few useful output flags from `prek run -h` are:
+
+- `--no-progress`: hides the live progress display, such as spinners and in-place progress updates, while still showing the normal hook results.
+- `-q`, `--quiet`: suppresses normal hook output so you can focus on failures or just rely on the exit status. Environment variable: `PREK_QUIET`.
+- `-v`, `--verbose`: increases output verbosity so you can inspect extra hook execution detail when troubleshooting.
+
+Clean cached hook environments:
+
+```bash
+prek clean
+```
+
+`prek clean` removes cached hook data so the next run recreates hook environments. This is useful after upgrading `prek`, changing hook definitions, or recovering from a broken local hook cache.
+
+#### Hook priority in this repository
+
+Hooks run from the lowest `priority` value to the highest value.
+
+In this repository, that means:
+
+- `10`: repository meta checks such as `identity` and `check-hooks-apply`
+- `20`: early file cleanup such as `fix-byte-order-marker`
+- `30`: whitespace cleanup such as `trailing-whitespace`
+- `40`: formatters such as `prettier`, `biome-check`, and `shfmt`
+- `50`: validation and audit hooks such as `codespell`, `markdownlint`, `yamllint`, `detect-private-key`, and `gitleaks`
+
+This ordering lets fast repository checks and automatic cleanup happen before the heavier validation and audit steps.
+
+## ⚙️ Continuous Integration
+
+Every pull request triggers a suite of automated checks. Understanding what runs helps you resolve failures quickly.
+
+| Workflow                | What it checks                                                                                                                                 |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Prek Standard Hooks** | Runs `prek run --all-files` on Ubuntu, macOS, and Windows to verify formatting, spelling, linting, and security checks defined in `prek.toml`. |
+| **Prek Manual Hooks**   | Runs the `manual`-stage hooks (e.g. `shfmt`, `chmod`) across the same platform matrix.                                                         |
+| **Super-Linter**        | Runs a broad set of language-specific linters across the repository.                                                                           |
+| **Docker Build & Test** | Builds the compiler inside an Alpine + LLVM Docker image and runs the test suite.                                                              |
+| **Build and Release**   | Compiles release binaries for all supported targets.                                                                                           |
+| **WebAssembly**         | Builds the playground WebAssembly module and publishes it to GitHub Pages.                                                                     |
+
+All checks must pass before a pull request can be merged. If a check fails:
+
+1. Open the **Checks** tab on your PR and click the failing workflow name.
+2. Expand the failing step to read the log output.
+3. Fix the issue locally, commit, and push — the checks re-run automatically.
+
+If you are unsure why a check failed, leave a comment on the PR and a maintainer will help you.
+
+We are currently triaging issues with the **Super-Linter** workflow and the team will be fixing each individual linter check mostly via separate pull requests. Please do not try to fix all or multiple Super-Linter checks in the same pull request. If you would like to fix a basic check please submit a small self contained and focused pull request. We like to combine and match local prek hooks with the Super-Linter so always research prek, hooks and the Super-Linter before submitting an issue or pull request.
 
 ## 💬 Feedback and Support
 

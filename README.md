@@ -8,6 +8,14 @@
 
 Salam is a general-purpose and systems programming language designed for efficient software development, featuring a built-in domain-specific language (DSL)
 
+[![Discord](https://dcbadge.limes.pink/api/server/https://discord.gg/HfY3QHDPdv)](https://discord.gg/HfY3QHDPdv)
+[![GitHub Release](https://img.shields.io/github/v/release/salamlang/salam?style=for-the-badge&color=007ACC)](https://github.com/SalamLang/Salam/releases)
+[![GitHub repo size](https://img.shields.io/github/repo-size/salamlang/salam?style=for-the-badge&color=444444)](https://github.com/SalamLang/Salam)
+
+[![Salam Programming Language Playground](https://img.shields.io/badge/Salam-Playground-1A1A1A?style=for-the-badge&labelColor=333333&color=00FFCC)](https://salamlang.github.io/Salam/)
+
+---
+
 </div>
 
 [![Basic Checks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/test-git-clone.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/test-git-clone.yml)
@@ -16,6 +24,7 @@ Salam is a general-purpose and systems programming language designed for efficie
 [![Pull Request Labeler Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml)
 [![Prek Standard Hooks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/prek.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/prek.yml)
 [![Prek Manual Hooks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/prek-manual.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/prek-manual.yml)
+[![Prek Audit Hooks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/prek-audit.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/prek-audit.yml)
 [![Docker Build & Test Alpine + LLVM 22 Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/make-run.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/make-run.yml)
 [![Build and Release Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/build-release.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/build-release.yml)
 [![Super-Linter Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/super-linter.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/super-linter.yml)
@@ -25,10 +34,20 @@ Salam is a general-purpose and systems programming language designed for efficie
 
 ---
 
+<div align="center">
+
 ## ✨ Introducing Salam
 
-**Salam Language**, inspired by the word _salam_ (سلام), meaning _peace_, is the first **Persian/Arabic-based programming language**.
-It is designed for simplicity, accessibility, and inclusivity-bridging the gap between developers and technology in Persian, Arabic, and related linguistic communities.
+</div>
+
+**Salam Language**, inspired by the word _salam_ (سلام), meaning _peace_, is
+engineered for exceptional efficiency, reliability, and modern software
+development. Designed from the
+ground up to balance low-level control with developer productivity, Salam
+eliminates the unnecessary syntactic friction often found in systems
+engineering. By prioritizing a clean, scannable, and intuitive architecture,
+it lowers the cognitive barrier to entry, fostering an accessible and
+inclusive environment for building high-performance software.
 
 ### Supported Languages
 
@@ -190,5 +209,76 @@ We welcome contributions from the community!
 - 🌟 Follow our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Together, let’s make coding accessible to all.
+
+---
+
+## 🔍 Joining Code Reviews
+
+**Everyone is welcome — and encouraged — to participate in code reviews.** You do not need to be a core maintainer to review a pull request. In fact, reviewing PRs is one of the most impactful ways to contribute to Salam, and we want to make it as approachable as possible.
+
+> 💡 **Code review is harder than writing code.** Reading someone else's work, understanding their intent, spotting edge cases, and communicating feedback kindly and clearly takes real skill. If you are doing it, thank you — it matters enormously.
+
+### How a GitHub PR Review Works
+
+Open any pull request, then click the **Files changed** tab to see a diff of every file that was modified.
+
+#### Leaving an inline comment
+
+1. Hover over any line number in the diff — a blue **`+`** button appears.
+2. Click it to open a comment box for that specific line or block.
+3. Write your thought, then click **Start a review** (not "Add single comment") so all your notes are batched together.
+
+#### Suggesting a code change
+
+Inside an inline comment you can propose an exact replacement using a fenced suggestion block:
+
+````markdown
+```suggestion
+your replacement code here
+```
+````
+
+The author can accept your suggestion with a single click — no manual editing required.
+
+#### Submitting the review
+
+When you have finished reading all the files:
+
+1. Click the green **Review changes** button (top right of the diff).
+2. Write an overall summary comment.
+3. Choose one of three outcomes:
+   - 💬 **Comment** — share thoughts without formally approving or blocking. Great for questions, first-timer feedback, or discussion starters.
+   - ✅ **Approve** — you are satisfied with the changes. This is the **green tick** that moves a PR toward merging. Only approve if you have read the changes carefully.
+   - 🚫 **Request changes** — something needs to be fixed before the PR can merge. Be specific and constructive.
+4. Click **Submit review**.
+
+#### Tips for great reviews
+
+- **A simple comment is perfectly fine.** If you are new to reviewing, just leaving a thoughtful question or noting something you learned is genuinely valuable. You don't have to approve or block.
+- **Be kind and specific.** Point to the exact line, explain _why_ something may be a concern, and suggest an alternative when you can.
+- **Assume good intent.** The author put effort into this. Phrase feedback as questions ("Could this be…?") rather than commands ("Change this to…").
+- **First-timer PRs deserve extra warmth.** If a contributor's bio or commit history shows they are new, a short encouraging note goes a long way.
+- **Approve when you mean it.** The green checkmark signals trust. Reserve it for changes you have genuinely read and feel confident about.
+
+### Growing with the Community
+
+Consistent reviewers and contributors are noticed. Active participation in reviews, issues, and discussions is how community members become trusted collaborators. Over time, standout contributors may be invited to join the **Salam core team** and take on additional responsibilities:
+
+- 🏷️ **Triage role** — help label, categorise, and prioritise incoming issues and pull requests.
+- 🛡️ **Discord / Telegram moderator** — help keep real-time channels welcoming and on-topic.
+- 🔑 **Maintainer access** — merge PRs, manage releases, and help shape the roadmap.
+
+### 💬 Real-Time Community
+
+The Salam core team lives in our real-time channels. Join us to ask questions, share ideas, discuss reviews in progress, or just say hello:
+
+| Platform | Link |
+|---|---|
+| **Discord** | [discord.gg/HfY3QHDPdv](https://discord.gg/HfY3QHDPdv) |
+| **Telegram** | [t.me/SalamProgrammingLanguage](https://t.me/SalamProgrammingLanguage) |
+
+These spaces are open to everyone — from curious newcomers to experienced systems programmers. The more voices the better.
+
+---
 
 © 2024-2026 Salam Language Team

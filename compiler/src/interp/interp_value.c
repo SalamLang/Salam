@@ -126,6 +126,15 @@ sarray_t *array_new(interp_t *I, size_t cap)
     return a;
 }
 
+sarray_t *array_view(interp_t *I, sarray_t *base, size_t off, size_t len)
+{
+    sarray_t *a = (sarray_t *)arena_alloc(I->a, sizeof *a);
+    a->data = base->data + off;
+    a->len  = len;
+    a->cap  = 0;
+    return a;
+}
+
 void array_push(interp_t *I, sarray_t *a, value_t v)
 {
     if (a->len == a->cap) {

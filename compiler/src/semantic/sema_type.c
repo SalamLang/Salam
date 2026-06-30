@@ -158,6 +158,7 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
         }
         base = type_array(s->tc, base, len);
     } }
+    if (tnode->is_slice) base = type_slice(s->tc, base);
     if (tnode->is_pointer) base = type_ptr(s->tc, base);
     decorate(s, tnode, base);
     return base;

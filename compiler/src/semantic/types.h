@@ -27,7 +27,8 @@ typedef enum {
     TY_F32, TY_F64,
     TY_ARRAY, TY_PTR, TY_STRUCT, TY_ENUM, TY_MAP, TY_MAP_ITER, TY_VEC, TY_FILE,
     TY_FUNC,
-    TY_DYN
+    TY_DYN,
+    TY_SLICE
 } type_kind_t;
 
 typedef struct type_t type_t;
@@ -55,6 +56,8 @@ type_ctx_t *type_ctx_new(arena_t *a);
 type_t *type_prim(type_ctx_t *tc, type_kind_t kind);
 
 type_t *type_array(type_ctx_t *tc, type_t *elem, size_t length);
+
+type_t *type_slice(type_ctx_t *tc, type_t *elem);
 
 type_t *type_ptr(type_ctx_t *tc, type_t *pointee);
 

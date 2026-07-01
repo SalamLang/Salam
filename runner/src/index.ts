@@ -4,6 +4,7 @@ export interface Env {
 
 // Restrict this to your official deployment origin
 const ALLOWED_ORIGIN = "https://salamlang.workers.dev";
+const MAX_PAYLOAD_SIZE = 5 * 1024 * 1024; // 5MB
 
 export default {
   async fetch(
@@ -59,7 +60,7 @@ export default {
       // SECURITY: Protect edge runtime memory limits from infinite stream attacks (5MB Threshold)
       const contentLengthHeader = request.headers.get("content-length");
       const contentLength = contentLengthHeader ? parseInt(contentLengthHeader, 10) : 0;
-      if (isNaN(contentLength) || contentLength > 5 * 1024 * 1024) {
+      if (isNaN(contentLength) || contentLength < 0 || contentLength > MAX_PAYLOAD_SIZE) {
         return new Response("Payload Too Large", {
           status: 413,
           headers: getCorsHeaders(),
@@ -80,16 +81,15 @@ export default {
       const decoder = new TextDecoder("utf-8");
       const encoder = new TextEncoder();
 
-      const MAX_PAYLOAD_SIZE = 5 * 1024 * 1024;
       let totalBytes = 0;
 
       const { readable, writable } = new TransformStream({
         transform(chunk: Uint8Array, controller) {
-          totalBytes += chunk.byteLength;
-          if (totalBytes > MAX_PAYLOAD_SIZE) {
+          if (totalBytes + chunk.byteLength > MAX_PAYLOAD_SIZE) {
             controller.error(new Error("Payload Too Large"));
             return;
           }
+          totalBytes += chunk.byteLength;
           // stream: true stores fragments of split multi-byte UTF-8 sequences safely until the next chunk arrives
           const text = decoder.decode(chunk, { stream: true });
 

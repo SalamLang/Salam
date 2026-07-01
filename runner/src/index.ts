@@ -16,16 +16,17 @@ export default {
 
     // 2. Protect against DoS by checking the Content-Length header first
     const contentLengthHeader = request.headers.get("content-length");
-    const contentLength = contentLengthHeader
-      ? parseInt(contentLengthHeader, 10)
-      : NaN;
+    if (contentLengthHeader === null) {
+      return new Response("Length Required", { status: 411 });
+    }
+
+    const contentLength = parseInt(contentLengthHeader, 10);
     const MAX_ALLOWED_SIZE = 100 * 1024; // Limit to 100 KB
 
     if (
-      contentLengthHeader !== null &&
-      (isNaN(contentLength) ||
-        contentLength < 0 ||
-        contentLength > MAX_ALLOWED_SIZE)
+      isNaN(contentLength) ||
+      contentLength < 0 ||
+      contentLength > MAX_ALLOWED_SIZE
     ) {
       return new Response("Payload Too Large", { status: 413 });
     }

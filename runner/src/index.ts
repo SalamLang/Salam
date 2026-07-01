@@ -15,19 +15,20 @@ export default {
     }
 
     // 2. Protect against DoS by checking the Content-Length header first
-    const contentLength = parseInt(
-      request.headers.get("content-length") || "0",
-      10,
-    );
+    const contentLengthHeader = request.headers.get("content-length");
+    const contentLength = contentLengthHeader ? parseInt(contentLengthHeader, 10) : NaN;
     const MAX_ALLOWED_SIZE = 100 * 1024; // Limit to 100 KB
 
-    if (contentLength > MAX_ALLOWED_SIZE) {
+    if (contentLengthHeader !== null && (isNaN(contentLength) || contentLength < 0 || contentLength > MAX_ALLOWED_SIZE)) {
       return new Response("Payload Too Large", { status: 413 });
     }
 
     try {
       // 3. Read the body safely
       const bodyText = await request.text();
+      if (bodyText.length > MAX_ALLOWED_SIZE) {
+        return new Response("Payload Too Large", { status: 413 });
+      }
 
       // 4. Truncate input before logging to prevent log flooding
       const safeLogSnippet = bodyText.substring(0, 500);

@@ -1,6 +1,122 @@
+export type Env = {};
+
+// Restrict this to your official deployment origin
+const ALLOWED_ORIGIN = "https://salamlang.workers.dev";
+
 export default {
-  async fetch(request): Promise<Response> {
-    const html = `<!DOCTYPE html>
+  async fetch(
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext,
+  ): Promise<Response> {
+    const url = new URL(request.url);
+    const origin = request.headers.get("Origin");
+
+    // Helper to generate security headers dynamically
+    function getCorsHeaders() {
+      const headers = new Headers();
+      // Only echo the origin back if it matches our strictly allowed domain boundary
+      if (origin === ALLOWED_ORIGIN) {
+        headers.set("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
+      }
+      headers.set("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+      headers.set("Access-Control-Allow-Headers", "Content-Type");
+      headers.set("X-Content-Type-Options", "nosniff");
+      headers.set("X-Frame-Options", "DENY");
+      return headers;
+    }
+
+    // 1. Handle CORS Preflight Options Request securely
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: getCorsHeaders(),
+      });
+    }
+
+    // 2. API Secure Endpoint Pipeline: Handle JSON streaming compilations
+    if (request.method === "POST" && url.pathname === "/") {
+      const contentType = request.headers.get("content-type") || "";
+
+      // SECURITY: Reject anomalous payloads that aren't explicit JSON
+      if (!contentType.includes("application/json")) {
+        return new Response(
+          JSON.stringify({
+            error: "Unsupported Media Type. Must be application/json",
+          }),
+          {
+            status: 415,
+            headers: {
+              ...Object.fromEntries(getCorsHeaders()),
+              "content-type": "application/json",
+            },
+          },
+        );
+      }
+
+      // SECURITY: Protect edge runtime memory limits from infinite stream attacks (5MB Threshold)
+      const contentLength = parseInt(
+        request.headers.get("content-length") || "0",
+        10,
+      );
+      if (contentLength > 5 * 1024 * 1024) {
+        return new Response("Payload Too Large", {
+          status: 413,
+          headers: getCorsHeaders(),
+        });
+      }
+
+      if (!request.body) {
+        return new Response(JSON.stringify({ error: "Missing body stream" }), {
+          status: 400,
+          headers: {
+            ...Object.fromEntries(getCorsHeaders()),
+            "content-type": "application/json",
+          },
+        });
+      }
+
+      // Instantiate stateful decoders to ensure multi-byte character strings don't fragment
+      const decoder = new TextDecoder("utf-8");
+      const encoder = new TextEncoder();
+
+      const { readable, writable } = new TransformStream({
+        transform(chunk: Uint8Array, controller) {
+          // stream: true stores fragments of split multi-byte UTF-8 sequences safely until the next chunk arrives
+          const text = decoder.decode(chunk, { stream: true });
+
+          // --- Target Processing Engine Block ---
+          const modifiedText = text.toUpperCase();
+          // --------------------------------------
+
+          controller.enqueue(encoder.encode(modifiedText));
+        },
+        flush(controller) {
+          // Flush out any remaining pending buffer elements safely at stream termination
+          const finalSlice = decoder.decode();
+          if (finalSlice) {
+            controller.enqueue(encoder.encode(finalSlice.toUpperCase()));
+          }
+        },
+      });
+
+      // Hand the payload stream down into the transformer. Catching guarantees no unhandled promise rejections
+      request.body.pipeTo(writable).catch((err) => {
+        console.error(
+          "Downstream execution processing broke mid-stream pipeline:",
+          err,
+        );
+      });
+
+      const responseHeaders = getCorsHeaders();
+      responseHeaders.set("content-type", "application/json;charset=UTF-8");
+
+      return new Response(readable, { headers: responseHeaders });
+    }
+
+    // 3. UI Dashboard Documentation Interface Layer (GET)
+    if (request.method === "GET" && url.pathname === "/") {
+      const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -146,12 +262,18 @@ curl -X POST https://your-runner.workers.dev/ \\
 
     </main>
 
-</body>`;
+</body>
+</html>`;
 
-    return new Response(html, {
-      headers: {
-        "content-type": "text/html;charset=UTF-8",
-      },
+      const pageHeaders = getCorsHeaders();
+      pageHeaders.set("content-type", "text/html;charset=UTF-8");
+      return new Response(html, { headers: pageHeaders });
+    }
+
+    // 4. Default Fallback
+    return new Response("Not Found", {
+      status: 404,
+      headers: getCorsHeaders(),
     });
   },
-} satisfies ExportedHandler;
+} satisfies ExportedHandler<Env>;

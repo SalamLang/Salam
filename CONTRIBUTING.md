@@ -376,15 +376,15 @@ This ordering lets fast repository checks and automatic cleanup happen before th
 
 Every pull request triggers a suite of automated checks. Understanding what runs helps you resolve failures quickly.
 
-| Workflow                | What it checks                                                                                                                                 |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Prek Standard Hooks** | Runs `prek run --all-files` on Ubuntu, macOS, and Windows to verify formatting, spelling, linting, and security checks defined in `prek.toml`. |
-| **Prek Manual Hooks**   | Runs the `manual`-stage hooks (e.g. `shfmt`, `chmod`) across the same platform matrix.                                                         |
+| Workflow                | What it checks                                                                                                                                              |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Prek Standard Hooks** | Runs `prek run --all-files` on Ubuntu, macOS, and Windows to verify formatting, spelling, linting, and security checks defined in `prek.toml`.              |
+| **Prek Manual Hooks**   | Runs the `manual`-stage hooks (e.g. `shfmt`, `chmod`) across the same platform matrix.                                                                      |
 | **Prek Audit Hooks**    | Runs `prek run --all-files --config prek-audit.toml` across the same platform matrix to perform security-focused audit checks defined in `prek-audit.toml`. |
-| **Super-Linter**        | Runs a broad set of language-specific linters across the repository.                                                                           |
-| **Docker Build & Test** | Builds the compiler inside an Alpine + LLVM Docker image and runs the test suite.                                                              |
-| **Build and Release**   | Compiles release binaries for all supported targets.                                                                                           |
-| **WebAssembly**         | Builds the playground WebAssembly module and publishes it to GitHub Pages.                                                                     |
+| **Super-Linter**        | Runs a broad set of language-specific linters across the repository.                                                                                        |
+| **Docker Build & Test** | Builds the compiler inside an Alpine + LLVM Docker image and runs the test suite.                                                                           |
+| **Build and Release**   | Compiles release binaries for all supported targets.                                                                                                        |
+| **WebAssembly**         | Builds the playground WebAssembly module and publishes it to GitHub Pages.                                                                                  |
 
 All checks must pass before a pull request can be merged. If a check fails:
 

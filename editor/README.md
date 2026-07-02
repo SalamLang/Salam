@@ -1,18 +1,18 @@
 # Salam Web Playground
 
 Run Salam entirely in the browser. Edit code, run it, and preview layout pages -
-powered by the Salam compiler compiled to **WebAssembly** plus a small
+powered by the Salam compiler compiled to **[WebAssembly](https://webassembly.org/)** plus a small
 text editor. Switching to **فارسی** flips the whole UI **and** the editor to
-true right-to-left (right-aligned, lines starting from the right); English is
-left-to-right. No server, no C toolchain in the browser.
+true [right-to-left](https://en.wikipedia.org/wiki/Right-to-left_script) (right-aligned, lines starting from the right); English is
+[left-to-right](https://en.wikipedia.org/wiki/Writing_system#Directionality). No server, no C toolchain in the browser.
 
 > The editor is a plain `<textarea>` precisely so it can be genuinely RTL in
 
 ## How it works
 
 The browser cannot run a C compiler, so general programs run through Salam's
-**tree-walking interpreter** (`src/interp`) rather than the C-codegen backend.
-The whole frontend (lexer → parser → semantic analyzer) plus the interpreter
+**[tree-walking interpreter](https://en.wikipedia.org/wiki/Interpreter_(computing)#Tree-walking_interpreters)** (`src/interp`) rather than the C-codegen backend.
+The whole frontend ([lexer](https://en.wikipedia.org/wiki/Lexical_analysis) → [parser](https://en.wikipedia.org/wiki/Parsing) → [semantic analyzer](https://en.wikipedia.org/wiki/Semantic_analysis_(compilers))) plus the interpreter
 and the layout engine are compiled to `salam-wa.wasm`/`salam-wa.js` with
 Emscripten and driven from JavaScript:
 
@@ -65,11 +65,11 @@ salam run  --interp examples/en/apps/brainfuck.salam
 ## Scope
 
 The interpreter targets pure-compute programs (functions, structs, enums,
-arrays, `Vector`, `HashMap`, lambdas/closures, operator overloading, generics,
-`defer`, `char`/strings, control flow) in both English and Persian, and matches
+arrays, [`Vector`](https://en.wikipedia.org/wiki/Dynamic_array), [`HashMap`](https://en.wikipedia.org/wiki/Hash_table), [lambdas](https://en.wikipedia.org/wiki/Anonymous_function)/[closures](https://en.wikipedia.org/wiki/Closure_(computer_programming)), [operator overloading](https://en.wikipedia.org/wiki/Operator_overloading), [generics](https://en.wikipedia.org/wiki/Generic_programming),
+[`defer`](https://en.wikipedia.org/wiki/Defer_(programming_idiom)), `char`/strings, control flow) in both English and Persian, and matches
 the C backend's output across the example suite. It intentionally does **not**
-support things that need a real OS or the C ABI (file/socket/thread/HTTP/SQLite
-APIs, FFI/`extern "C"`, and manual memory (`salam_alloc`)), none
+support things that need a real OS or the [C ABI](https://en.wikipedia.org/wiki/Application_binary_interface) (file/socket/thread/HTTP/SQLite
+APIs, [FFI](https://en.wikipedia.org/wiki/Foreign_function_interface)/`extern "C"`, and manual memory (`salam_alloc`)), none
 of which apply in a browser sandbox. The `&ref` scalar parameters, multi-file
 user imports, and the fully Persian-localized std API (`ریاضی.جذر`) are current
 limitations of the interpreter, not the language.

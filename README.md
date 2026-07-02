@@ -34,6 +34,51 @@ Salam is a general-purpose and systems programming language designed for efficie
 
 ---
 
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+- [✨ Introducing Salam](#-introducing-salam)
+  - [Supported Languages](#supported-languages)
+  - [Why Choose Salam?](#why-choose-salam)
+  - [Key Features](#key-features)
+- [🧩 Editor Support](#-editor-support)
+  - [Visual Studio Code](#visual-studio-code)
+- [🛠️ The Compiler (`salam`)](#-the-compiler-salam)
+  - [Build](#build)
+  - [Usage](#usage)
+- [🐳 Docker & Docker Compose](#-docker--docker-compose)
+  - [Development (live reload)](#development-live-reload)
+  - [Production (copy & build)](#production-copy--build)
+  - [Plain Docker (without Compose)](#plain-docker-without-compose)
+- [🚀 Bun Workspaces: Multi-App Development & Static Site Guide](#-bun-workspaces-multi-app-development--static-site-guide)
+  - [🚀 1. Quickstart Execution Guide](#-1-quickstart-execution-guide)
+  - [📁 2. Monorepo Architecture & Core Setup](#-2-monorepo-architecture--core-setup)
+    - [Root Configuration Files](#root-configuration-files)
+      - [`package.json` (Workspace Root)](#packagejson-workspace-root)
+      - [`bunfig.toml` (Workspace Root)](#bunfigtoml-workspace-root)
+  - [🛠️ 3. Static Site Package Implementation](#-3-static-site-package-implementation)
+    - [Static Site Configuration](#static-site-configuration)
+  - [⚡ 4. The Serve Methods Evaluated](#-4-the-serve-methods-evaluated)
+    - [Method A: Bun Native Dev Engine (`bun run --watch index.html`)](#method-a-bun-native-dev-engine-bun-run---watch-indexhtml)
+    - [Method B: The Local Isolation Method (`bunx http-server`)](#method-b-the-local-isolation-method-bunx-http-server)
+  - [🔄 5. Global Monorepo Package Updates](#-5-global-monorepo-package-updates)
+    - [Explaining the Flags Behind the Script (`bun update -i -r`)](#explaining-the-flags-behind-the-script-bun-update--i--r)
+  - [🔒 6. Security Breakdown & Best Practices](#-6-security-breakdown--best-practices)
+    - [The Port Selection Architecture](#the-port-selection-architecture)
+    - [Network Address Binding (`0.0.0.0` vs `127.0.0.1`)](#network-address-binding-0000-vs-127001)
+    - [Safe Command Formula](#safe-command-formula)
+- [🤝 Contributing](#-contributing)
+- [🔍 Joining Code Reviews](#-joining-code-reviews)
+  - [How a GitHub PR Review Works](#how-a-github-pr-review-works)
+    - [Leaving an inline comment](#leaving-an-inline-comment)
+    - [Suggesting a code change](#suggesting-a-code-change)
+    - [Submitting the review](#submitting-the-review)
+    - [Tips for great reviews](#tips-for-great-reviews)
+  - [Growing with the Community](#growing-with-the-community)
+  - [💬 Real-Time Community](#-real-time-community)
+
+<!-- END doctoc -->
+
 <div align="center">
 
 ## ✨ Introducing Salam
@@ -200,6 +245,223 @@ docker run --rm -it -v "$PWD/compiler":/app salam:dev                           
 > (`--build-arg LLVM_VERSION=22`, `--build-arg ALPINE_VERSION=edge`). LLVM 22
 > currently lives in Alpine's `edge` repositories, which is why `edge` is the
 > default base.
+
+## 🚀 Bun Workspaces: Multi-App Development & Static Site Guide
+
+### 🚀 1. Quickstart Execution Guide
+
+To kick off your entire localized monorepo environment simultaneously, run the following steps from your root directory:
+
+```bash
+# 1. Install workspace links and cached instances
+bun install
+
+# 2. Boot up all servers concurrently on high ports
+bun run dev:all
+```
+
+Your terminal window will display interleaved logs, cleanly prefixed by their respective package origins:
+
+```text
+Salam % bun run dev:all
+$ bun run --filter='*' --parallel dev
+@workspace/editor:dev | Starting up http-server, serving .
+@workspace/editor:dev |
+@workspace/editor:dev | http-server version: 14.1.1
+@workspace/editor:dev |
+@workspace/editor:dev | http-server settings:
+@workspace/editor:dev | CORS: disabled
+@workspace/editor:dev | Cache: -1 seconds
+@workspace/editor:dev | Connection Timeout: 120 seconds
+@workspace/editor:dev | Directory Listings: visible
+@workspace/editor:dev | AutoIndex: visible
+@workspace/editor:dev | Serve GZIP Files: false
+@workspace/editor:dev | Serve Brotli Files: false
+@workspace/editor:dev | Default File Extension: none
+@workspace/editor:dev |
+@workspace/editor:dev | Available on:
+@workspace/editor:dev |   http://127.0.0.1:55001
+@workspace/editor:dev |   http://192.168.1.103:55001
+@workspace/editor:dev | Hit CTRL-C to stop the server
+@workspace/editor:dev |
+@workspace/pages:dev  | Starting up http-server, serving .
+@workspace/pages:dev  |
+@workspace/pages:dev  | http-server version: 14.1.1
+@workspace/pages:dev  |
+@workspace/pages:dev  | http-server settings:
+@workspace/pages:dev  | CORS: disabled
+@workspace/pages:dev  | Cache: -1 seconds
+@workspace/pages:dev  | Connection Timeout: 120 seconds
+@workspace/pages:dev  | Directory Listings: visible
+@workspace/pages:dev  | AutoIndex: visible
+@workspace/pages:dev  | Serve GZIP Files: false
+@workspace/pages:dev  | Serve Brotli Files: false
+@workspace/pages:dev  | Default File Extension: none
+@workspace/pages:dev  |
+@workspace/pages:dev  | Available on:
+@workspace/pages:dev  |   http://127.0.0.1:55002
+@workspace/pages:dev  |   http://192.168.1.103:55002
+@workspace/pages:dev  | Hit CTRL-C to stop the server
+@workspace/pages:dev  |
+vercel-editor:dev     |
+vercel-editor:dev     |   VITE v8.1.3  ready in 212 ms
+vercel-editor:dev     |
+vercel-editor:dev     |   ➜  Local:   http://localhost:5173/
+vercel-editor:dev     |   ➜  Network: use --host to expose
+runner:dev            |
+runner:dev            |  ⛅️ wrangler 4.107.0
+runner:dev            | ────────────────────
+runner:dev            | ⎔ Starting local server...
+runner:dev            | [wrangler:info] Ready on http://localhost:8787
+```
+
+---
+
+### 📁 2. Monorepo Architecture & Core Setup
+
+To configure the workspace, structure your repository directory tree alphabetically as follows:
+
+```text
+salam-monorepo/
+├── bunfig.toml
+├── package.json
+├── editor/
+├── extensions/
+│   └── vscode/
+├── pages/
+├── runner/
+└── vercel-editor/
+```
+
+#### Root Configuration Files
+
+##### `package.json` (Workspace Root)
+
+This file defines the workspaces in strict alphabetical order and leverages Bun's parallel filtering mechanics. It contains your global batch scripts, your automated interactive update target, and custom individual granular app triggers.
+
+```json
+{
+  "name": "salam-monorepo",
+  "private": true,
+  "workspaces": [
+    "editor",
+    "extensions/vscode",
+    "pages",
+    "runner",
+    "vercel-editor"
+  ],
+  "scripts": {
+    "dev:all": "bun run --filter='*' --parallel dev",
+    "dev:editor": "bun run --filter='editor' dev",
+    "dev:pages": "bun run --filter='@workspace/pages' dev",
+    "dev:runner": "bun run --filter='runner' dev",
+    "dev:vercel": "bun run --filter='vercel-editor' dev",
+    "build:all": "bun run --filter='*' build",
+    "update:deps": "bun update -i -r",
+    "clean": "rm -rf node_modules **/node_modules .bun-cache"
+  }
+}
+```
+
+##### `bunfig.toml` (Workspace Root)
+
+Forces Bun to persistently treat execution environments with development-first behaviors.
+
+```toml
+[development]
+development = true
+```
+
+---
+
+### 🛠️ 3. Static Site Package Implementation
+
+The independent workspace utilizes your specific package scope (`@workspace/pages`). It is set to `"private": true` to protect against accidental package publishing to the public npm registry.
+
+#### Static Site Configuration
+
+`pages/package.json`
+
+```json
+{
+  "name": "@workspace/pages",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "bunx http-server . -p 55002 -c-1 -a 127.0.0.1"
+  }
+}
+```
+
+---
+
+### ⚡ 4. The Serve Methods Evaluated
+
+Depending on your asset compilation pipelines, you can run and serve your static file assets via two distinct command-line approaches.
+
+#### Method A: Bun Native Dev Engine (`bun run --watch index.html`)
+
+Bun acts as a full-stack compiler. It looks for runtime entry points, hooks a watcher loop, and injects code straight into the runtime.
+
+```bash
+PORT=55002 bun run --watch index.html
+```
+
+- 🟥 **The Critical Crash Bug**: If an HTML file links a `<script src="./app.js">` tag and `app.js` is missing, deleted, or generated out-of-order by another builder script, Bun's dependency engine throws a fatal compilation or segmentation panic and crashes your entire root dev terminal.
+
+#### Method B: The Local Isolation Method (`bunx http-server`)
+
+Bypasses Bun's strict internal compilation logic entirely. It mounts a Node-compatible, file-agnostic server context over the directory.
+
+```bash
+bunx http-server . -p 55002 -c-1 -a 127.0.0.1
+```
+
+- 🟩 **The Fix**: Missing scripts or components safely emit standard frontend browser `404 Not Found` messages instead of breaking your backend engine processes.
+
+---
+
+### 🔄 5. Global Monorepo Package Updates
+
+To manage and upgrade your external dependencies across all application subdirectories together without navigating into individual package folders, trigger your custom root shortcut:
+
+```bash
+bun run update:deps
+```
+
+#### Explaining the Flags Behind the Script (`bun update -i -r`)
+
+- **`-i` (`--interactive`)**: Spawns an interactive Terminal User Interface (TUI) mapping out all out-of-date assets. Use your Arrow keys and spacebar to selectively pick packages to upgrade, or toggle `l` to force a package beyond its defined semver range to its absolute `--latest` release.
+- **`-r` (`--recursive`)**: Forces Bun's resolution engine to sweep across all items listed under your `workspaces` field (`editor`, `pages`, `runner`, etc.) instead of executing purely inside the main directory.
+
+When initialized, Bun appends a **Workspace** column to your terminal output grid so you can verify exactly where every target module upgrade is bound before writing the changes to disk.
+
+---
+
+### 🔒 6. Security Breakdown & Best Practices
+
+When operating servers on your host machine, observe these boundaries:
+
+#### The Port Selection Architecture
+
+Network ports scale from `1` to `65535`.
+
+- **`1` – `1023`**: System-privileged root ports. Avoid using these.
+- **`1024` – `49151`**: Registered user application ports (e.g., `8080`, `3000`). High risk of overlapping with other applications.
+- **`49152` – `65535`**: **Dynamic, Private, and High Ports**. Ideal for setting up workspace dev contexts cleanly.
+
+#### Network Address Binding (`0.0.0.0` vs `127.0.0.1`)
+
+- **`0.0.0.0` (All Interfaces)**: Default configuration for most servers. If you are on an open public Wi-Fi network (like a cafe), anyone on that network can read your unreleased static code by querying your local IP address.
+- **`127.0.0.1` (Loopback Localhost)**: Hardware-restricted isolation. Only your exact physical computer can access the ports. Highly recommended for untrusted networks.
+
+#### Safe Command Formula
+
+To enforce instant browser updates, skip disk caches, isolate network eavesdroppers, and bypass compiler engine crashes, use this script formula:
+
+```bash
+bunx http-server . -p 55002 -c-1 -a 127.0.0.1
+```
 
 ## 🤝 Contributing
 

@@ -367,7 +367,6 @@ The independent workspace utilizes your specific package scope (`@workspace/page
     "dev": "bunx vite --port 55002 --host 127.0.0.1"
   }
 }
-
 ```
 
 ---

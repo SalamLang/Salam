@@ -1,0 +1,93 @@
+---
+name: 🌐 Build WebAssembly on PRs
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'compiler/src/**'
+      - 'compiler/std/**'
+      - 'compiler/tools/**'
+      - 'editor/**'
+      - 'examples/**'
+      - '.github/workflows/web-assembly-build-on-prs.yml'
+permissions:
+  contents: read
+concurrency:
+  group: web-assembly-pr-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build-deploy:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies (tcc)
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y tcc
+
+      - name: Cache Emscripten SDK
+        id: emsdk-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/emsdk
+          key: emsdk-${{ runner.os }}-v1
+
+      - name: Install Emscripten SDK
+        run: |
+          set -e
+          if [ ! -x "$HOME/emsdk/emsdk" ]; then
+            git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          fi
+          cd "$HOME/emsdk"
+          if [ ! -d "upstream/emscripten" ]; then
+            ./emsdk install latest
+            ./emsdk activate latest
+          else
+            echo "Emscripten SDK restored from cache - skipping install"
+          fi
+          . ./emsdk_env.sh
+          echo "$EMSDK" >> "$GITHUB_PATH"
+          echo "$EMSDK/upstream/emscripten" >> "$GITHUB_PATH"
+          echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+          echo "EM_CONFIG=$EMSDK/.emscripten" >> "$GITHUB_ENV"
+
+      - name: Verify editor source files are present
+        run: |
+          set -eu
+          missing=0
+          for f in editor/index.html editor/style.css editor/app.js editor/logo.svg; do
+            if [ ! -f "$f" ]; then
+              echo "::error::missing editor source file: $f (is it committed? editor/* is gitignored except sources)"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+
+      - name: Build native compiler + WebAssembly playground bundle
+        run: |
+          set -e
+          emcc --version
+          cd compiler
+          sh tools/bash/update-playground.sh
+
+      - name: Verify generated editor assets
+        run: |
+          set -eu
+          missing=0
+          for f in editor/salam-wa.js editor/salam-wa.wasm editor/salam-wa.data \
+                   editor/keywords.js editor/examples.js; do
+            if [ ! -f "$f" ]; then
+              echo "::error::missing generated asset: $f"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          echo "==> Editor directory to be published:"
+          ls -l editor/

@@ -263,28 +263,12 @@ bun run dev:all
 Your terminal window will display interleaved logs, cleanly prefixed by their respective package origins:
 
 ```text
-Salam % bun run dev:all
+Salam % bun run dev:all  
 $ bun run --filter='*' --parallel dev
 @workspace/editor:dev | Starting up http-server, serving .
+@workspace/pages:dev  | Starting up http-server, serving .
 @workspace/editor:dev |
 @workspace/editor:dev | http-server version: 14.1.1
-@workspace/editor:dev |
-@workspace/editor:dev | http-server settings:
-@workspace/editor:dev | CORS: disabled
-@workspace/editor:dev | Cache: -1 seconds
-@workspace/editor:dev | Connection Timeout: 120 seconds
-@workspace/editor:dev | Directory Listings: visible
-@workspace/editor:dev | AutoIndex: visible
-@workspace/editor:dev | Serve GZIP Files: false
-@workspace/editor:dev | Serve Brotli Files: false
-@workspace/editor:dev | Default File Extension: none
-@workspace/editor:dev |
-@workspace/editor:dev | Available on:
-@workspace/editor:dev |   http://127.0.0.1:55001
-@workspace/editor:dev |   http://192.168.1.103:55001
-@workspace/editor:dev | Hit CTRL-C to stop the server
-@workspace/editor:dev |
-@workspace/pages:dev  | Starting up http-server, serving .
 @workspace/pages:dev  |
 @workspace/pages:dev  | http-server version: 14.1.1
 @workspace/pages:dev  |
@@ -300,11 +284,25 @@ $ bun run --filter='*' --parallel dev
 @workspace/pages:dev  |
 @workspace/pages:dev  | Available on:
 @workspace/pages:dev  |   http://127.0.0.1:55002
-@workspace/pages:dev  |   http://192.168.1.103:55002
 @workspace/pages:dev  | Hit CTRL-C to stop the server
+@workspace/editor:dev |
+@workspace/editor:dev | http-server settings:
+@workspace/editor:dev | CORS: disabled
+@workspace/editor:dev | Cache: -1 seconds
+@workspace/editor:dev | Connection Timeout: 120 seconds
+@workspace/editor:dev | Directory Listings: visible
+@workspace/editor:dev | AutoIndex: visible
+@workspace/editor:dev | Serve GZIP Files: false
+@workspace/editor:dev | Serve Brotli Files: false
+@workspace/editor:dev | Default File Extension: none
+@workspace/editor:dev |
+@workspace/editor:dev | Available on:
+@workspace/editor:dev |   http://127.0.0.1:55001
+@workspace/editor:dev | Hit CTRL-C to stop the server
+@workspace/editor:dev |
 @workspace/pages:dev  |
 vercel-editor:dev     |
-vercel-editor:dev     |   VITE v8.1.3  ready in 212 ms
+vercel-editor:dev     |   VITE v8.1.3  ready in 175 ms
 vercel-editor:dev     |
 vercel-editor:dev     |   ➜  Local:   http://localhost:5173/
 vercel-editor:dev     |   ➜  Network: use --host to expose

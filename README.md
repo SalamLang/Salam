@@ -6,7 +6,7 @@
 
 # Salam Programming Language
 
-Salam is a general-purpose and systems programming language designed for efficient software development, featuring a built-in domain-specific language (DSL)
+Salam is a general-purpose and systems programming language designed for efficient software development, featuring a built-in [domain-specific language (DSL)](https://en.wikipedia.org/wiki/Domain-specific_language)
 
 [![Discord](https://dcbadge.limes.pink/api/server/https://discord.gg/HfY3QHDPdv)](https://discord.gg/HfY3QHDPdv)
 [![GitHub Release](https://img.shields.io/github/v/release/salamlang/salam?style=for-the-badge&color=007ACC)](https://github.com/SalamLang/Salam/releases)
@@ -115,20 +115,20 @@ inclusive environment for building high-performance software.
 
 ## 🧩 Editor Support
 
-### Visual Studio Code
+### [Visual Studio Code](https://code.visualstudio.com/)
 
-Install the official Salam Language extension from the Visual Studio Code Marketplace for syntax highlighting and language support.
+Install the official Salam Language extension from the [Visual Studio Code Marketplace](https://marketplace.visualstudio.com/) for syntax highlighting and language support.
 
 [![Install on VS Code](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 
 ## 🛠️ The Compiler (`salam`)
 
-Salam is statically typed and compiled. The **general** language transpiles to C and is
+Salam is statically typed and compiled. The **general** language transpiles to [C](https://en.wikipedia.org/wiki/C_(programming_language)) and is
 built to a native executable; embedded **`layout:`** blocks compile to HTML/CSS/JS.
 
 ### Build
 
-Requires a C compiler. **tcc** is the default backend (bundled math, fast); gcc/clang also work.
+Requires a C compiler. [**tcc**](https://bellard.org/tcc/) is the default backend (bundled math, fast); [gcc](https://gcc.gnu.org/)/[clang](https://clang.llvm.org/) also work.
 
 The compiler lives in [`compiler/`](compiler/) (a self-contained subproject:
 `src/`, `std/`, `tests/`, `tools/`, `Makefile`, `CMakeLists.txt`). Build it from
@@ -186,14 +186,14 @@ func main {
 }
 ```
 
-## 🐳 Docker & Docker Compose
+## 🐳 [Docker](https://www.docker.com/) & [Docker Compose](https://docs.docker.com/compose/)
 
 The compiler ships a multi-stage [`Dockerfile`](compiler/docker/Dockerfile) and a
-[`docker-compose.yml`](compiler/docker/docker-compose.yml) built on **Alpine Linux**
-(musl, the lightest practical base). The build context is the compiler root
+[`docker-compose.yml`](compiler/docker/docker-compose.yml) built on [**Alpine Linux**](https://www.alpinelinux.org/)
+([musl](https://musl.libc.org/), the lightest practical base). The build context is the compiler root
 (`compiler/`). The image includes everything the compiler needs: a C compiler
-(`gcc` + `tcc`), the **LLVM 22** backend (`clang-22`, `llc-22`, `opt-22`,
-`lli-22`), and `make`, no CMake required.
+(`gcc` + `tcc`), the [**LLVM 22**](https://llvm.org/) backend (`clang-22`, `llc-22`, `opt-22`,
+`lli-22`), and [`make`](https://www.gnu.org/software/make/), no [CMake](https://cmake.org/) required.
 
 The compose file lives in `compiler/docker/`; pass it with `-f` so you can run
 from the repository root. There are two modes:
@@ -201,7 +201,7 @@ from the repository root. There are two modes:
 ### Development (live reload)
 
 The compiler tree is bind-mounted and `./salam` is **recompiled automatically on
-every change** to `src/` (powered by `entr`, see
+every change** to `src/` (powered by [`entr`](https://eradman.com/entrproject/), see
 [`tools/bash/docker-dev.sh`](compiler/tools/bash/docker-dev.sh)):
 
 ```sh
@@ -246,7 +246,7 @@ docker run --rm -it -v "$PWD/compiler":/app salam:dev                           
 > currently lives in Alpine's `edge` repositories, which is why `edge` is the
 > default base.
 
-## 🚀 Bun Workspaces: Multi-App Development & Static Site Guide
+## 🚀 [Bun](https://bun.sh/) Workspaces: Multi-App Development & Static Site Guide
 
 ### 🚀 1. Quickstart Execution Guide
 
@@ -374,7 +374,7 @@ development = true
 
 ### 🛠️ 3. Static Site Package Implementation
 
-The independent workspace utilizes your specific package scope (`@workspace/pages`). It is set to `"private": true` to protect against accidental package publishing to the public npm registry.
+The independent workspace utilizes your specific package scope (`@workspace/pages`). It is set to `"private": true` to protect against accidental package publishing to the public [npm](https://www.npmjs.com/) registry.
 
 #### Static Site Configuration
 
@@ -429,7 +429,7 @@ bun run update:deps
 
 #### Explaining the Flags Behind the Script (`bun update -i -r`)
 
-- **`-i` (`--interactive`)**: Spawns an interactive Terminal User Interface (TUI) mapping out all out-of-date assets. Use your Arrow keys and spacebar to selectively pick packages to upgrade, or toggle `l` to force a package beyond its defined SemVer range to its absolute `--latest` release.
+- **`-i` (`--interactive`)**: Spawns an interactive Terminal User Interface (TUI) mapping out all out-of-date assets. Use your Arrow keys and spacebar to selectively pick packages to upgrade, or toggle `l` to force a package beyond its defined [SemVer](https://semver.org/) range to its absolute `--latest` release.
 - **`-r` (`--recursive`)**: Forces Bun's resolution engine to sweep across all items listed under your `workspaces` field (`editor`, `pages`, `runner`, etc.) instead of executing purely inside the main directory.
 
 When initialized, Bun appends a **Workspace** column to your terminal output grid so you can verify exactly where every target module upgrade is bound before writing the changes to disk.

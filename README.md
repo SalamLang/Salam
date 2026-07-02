@@ -322,14 +322,19 @@ This file defines the workspaces in strict alphabetical order and leverages Bun'
     "vercel-editor"
   ],
   "scripts": {
-    "dev:all": "bun run --filter='*' --parallel dev",
+    "dev:all": "bun run --filter='*' --parallel --if-present dev",
     "dev:editor": "bun run --filter='@workspace/editor' dev",
     "dev:pages": "bun run --filter='@workspace/pages' dev",
     "dev:runner": "bun run --filter='@workspace/runner' dev",
     "dev:vercel": "bun run --filter='@workspace/vercel-editor' dev",
-    "build:all": "bun run --filter='*' build",
+    "build:all": "bun run --filter='*' --if-present build",
     "update:deps": "bun update -i -r",
     "clean": "rm -rf node_modules **/node_modules .bun-cache"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.2",
+    "@vitejs/plugin-react": "^6.0.3",
+    "vite": "^8.1.3"
   }
 }
 ```
@@ -432,7 +437,7 @@ Network ports scale from `1` to `65535`.
 To enforce instant browser updates, skip disk caches, isolate network eavesdroppers, and bypass compiler engine crashes, use this script formula:
 
 ```bash
-bunx http-server . -p 55002 -c-1 -a 127.0.0.1
+bunx vite --port 55002 --host 127.0.0.1
 ```
 
 ## 🤝 Contributing

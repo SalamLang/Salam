@@ -53,6 +53,23 @@ Or serve it directly: `cd editor && python -m http.server 8080`.
 If `salam-wa.js` is missing, the editor still loads and shows a banner telling
 you to run `compiler/tools/bash/build-wasm.sh`.
 
+## macOS 26 setup (Homebrew)
+
+Install the required tools with Homebrew, then build and run the editor:
+
+```sh
+brew update
+brew install emscripten python
+
+cd /path/to/Salam/compiler
+sh tools/bash/build-wasm.sh
+
+cd /path/to/Salam
+sh compiler/tools/bash/editor-serve.sh 8080
+```
+
+Then open `http://localhost:8080` in your browser.
+
 ## Trying the interpreter without the browser
 
 The same interpreter runs natively:

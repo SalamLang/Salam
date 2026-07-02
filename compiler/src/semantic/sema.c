@@ -217,10 +217,50 @@ bool salam_find_bundled_tool(const char *name, char *out, size_t n)
 
 static char *path_normalize(char *p)
 {
-    while (p[0] == '.' && p[1] == '/') memmove(p, p + 2, strlen(p + 2) + 1);
-    
-    char *q;
-    while ((q = strstr(p, "/./")) != NULL) memmove(q + 1, q + 3, strlen(q + 3) + 1);
+    size_t len = strlen(p);
+    char *tmp = (char *)malloc(len + 1);
+    if (!tmp) { p[0] = '\0'; return p; }
+    memcpy(tmp, p, len + 1);
+
+    size_t j;
+    for (j = 0; j < len; j++)
+        if (tmp[j] == '\\') tmp[j] = '/';
+
+    bool is_absolute = (tmp[0] == '/');
+
+    const char *segs[256];
+    int ns = 0;
+    char *tok = tmp;
+    while (*tok) {
+        char *slash = strchr(tok, '/');
+        if (slash) *slash = '\0';
+        if (strcmp(tok, ".") == 0 || tok[0] == '\0') {
+            /* skip */
+        } else if (strcmp(tok, "..") == 0) {
+            if (ns > 0 && strcmp(segs[ns - 1], "..") != 0) {
+                ns--;
+            } else if (!is_absolute) {
+                if (ns < 256) segs[ns++] = tok;
+            }
+        } else {
+            if (ns < 256) segs[ns++] = tok;
+        }
+        if (!slash) break;
+        tok = slash + 1;
+    }
+
+    size_t out = 0;
+    if (is_absolute) p[out++] = '/';
+    int i;
+    for (i = 0; i < ns; i++) {
+        size_t slen = strlen(segs[i]);
+        if (i > 0) p[out++] = '/';
+        memcpy(p + out, segs[i], slen);
+        out += slen;
+    }
+    p[out] = '\0';
+
+    free(tmp);
     return p;
 }
 
@@ -321,14 +361,33 @@ const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec)
     if (has_ext) {
         if (dir && dir[0]) sal_snprintf(p, n, "%s/%s", dir, spec);
         else               sal_snprintf(p, n, "%s", spec);
-        return path_normalize(p);
+        path_normalize(p);
+        if (dir && dir[0]) {
+            size_t dlen = strlen(dir);
+            while (dlen > 0 && (dir[dlen-1] == '/' || dir[dlen-1] == '\\')) dlen--;
+            if (strlen(p) < dlen) return "";
+            size_t ci;
+            bool match = true;
+            for (ci = 0; ci < dlen; ci++) {
+                char dc = (dir[ci] == '\\') ? '/' : dir[ci];
+                char pc = (p[ci]   == '\\') ? '/' : p[ci];
+                if (dc != pc) { match = false; break; }
+            }
+            if (match) {
+                char next = (p[dlen] == '\\') ? '/' : p[dlen];
+                if (next != '\0' && next != '/') match = false;
+            }
+            if (!match) return "";
+        }
+        return p;
     }
     
     const char *slash = strrchr(spec, '/');
     const char *last  = slash ? slash + 1 : spec;
     if (root[0]) sal_snprintf(p, n, "%s/std/%s/%s.salam", root, spec, last);
     else         sal_snprintf(p, n, "std/%s/%s.salam", spec, last);
-    
+    path_normalize(p);
+
     if (!file_exists(p)) {
         const char *aliased = resolve_pkg_alias(a, root, spec);
         if (aliased) return aliased;

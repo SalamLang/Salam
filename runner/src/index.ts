@@ -41,37 +41,6 @@ export default {
 
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-12">
 
-            <section class="lg:col-span-7 space-y-6">
-                <h2 class="text-lg font-bold text-slate-100 tracking-wide flex items-center gap-2">
-                    <span class="text-teal-500">&gt;</span> DEVELOPMENT CONTROL
-                </h2>
-
-                <div class="bg-slate-900/40 border border-slate-800/80 rounded-xl p-6 backdrop-blur-sm hover:border-slate-700/50 transition-colors duration-200">
-                    <div class="flex items-center justify-between mb-4">
-                        <h3 class="text-sm font-bold text-slate-200 tracking-wide">1. INITIAL PACKAGE INSTALL</h3>
-                        <span class="text-xs text-slate-500">BUN ENVIRONMENT</span>
-                    </div>
-                    <div class="bg-[#070a0f] rounded-lg p-4 border border-slate-950 flex items-center justify-between group">
-                        <code class="text-sm text-teal-400">bun install</code>
-                        <span class="text-xs text-slate-600 group-hover:text-slate-400 transition-colors cursor-pointer select-none">Copy</span>
-                    </div>
-                </div>
-
-                <div class="bg-slate-900/40 border border-slate-800/80 rounded-xl p-6 backdrop-blur-sm hover:border-slate-700/50 transition-colors duration-200">
-                    <div class="flex items-center justify-between mb-4">
-                        <h3 class="text-sm font-bold text-slate-200 tracking-wide">2. LAUNCH LOCAL DEVELOPMENT ENGINE</h3>
-                        <span class="text-xs text-slate-500">WRANGLER / CLOUDFLARE</span>
-                    </div>
-                    <div class="bg-[#070a0f] rounded-lg p-4 border border-slate-950 flex items-center justify-between group">
-                        <code class="text-sm text-emerald-400">bun run dev</code>
-                        <span class="text-xs text-slate-600 group-hover:text-slate-400 transition-colors cursor-pointer select-none">Copy</span>
-                    </div>
-                    <p class="text-xs text-slate-500 mt-3 leading-relaxed">
-                        Starts the local serverless execution stack at <span class="text-slate-400 font-medium">http://localhost:8787</span> with hot reloading active.
-                    </p>
-                </div>
-            </section>
-
             <section class="lg:col-span-5 space-y-6">
                 <h2 class="text-lg font-bold text-slate-100 tracking-wide flex items-center gap-2">
                     <span class="text-teal-500">&gt;</span> DEPLOYMENT & INTERFACE

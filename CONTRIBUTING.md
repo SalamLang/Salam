@@ -289,9 +289,9 @@ To maintain consistency and readability, please follow these coding conventions 
 
 We use [`prek`](https://prek.j178.dev) for repository hooks. Salam currently has three hook modes:
 
-- **Standard hooks**: the default checks in `prek.toml` that run for the installed Git hook stages (currently `pre-commit` and `pre-push`).
-- **Manual hooks**: hooks in `prek.toml` that are marked for the `manual` stage and are run on demand.
-- **Audit hooks**: security-focused hooks in `prek-audit.toml` that are run separately from the standard set.
+- **Standard hooks**: the default checks in `prek.toml` that run for installed Git hook stages (currently `pre-commit` and `pre-push`).
+- **Manual hooks**: hooks in `prek.toml` that are marked for the `manual` stage and run only when requested.
+- **Audit hooks**: security-focused hooks in `prek-audit.toml` that run separately from the standard set.
 
 #### Install `prek`
 
@@ -347,6 +347,8 @@ Choose any of these supported installation methods:
    prek run --all-files --config prek-audit.toml
    ```
 
+Manual hooks include cleanup and platform-specific tasks such as `chmod` and `shfmt`. If you are on Windows, run the manual stage only for hooks that apply to your environment.
+
 #### Useful hook commands
 
 Run just one hook:
@@ -391,17 +393,19 @@ prek clean
 
 #### Hook priority in this repository
 
-Hooks run from the lowest `priority` value to the highest value.
+Hooks run from the lowest `priority` value to the highest value, within the active config and stage.
 
-In this repository, that means:
+Current priorities in this repository are:
 
-- `10`: repository meta checks such as `identity` and `check-hooks-apply`
-- `20`: early file cleanup such as `fix-byte-order-marker`
-- `30`: whitespace cleanup such as `trailing-whitespace`
-- `40`: formatters such as `prettier`, `biome-check`, and `shfmt`
-- `50`: validation and audit hooks such as `codespell`, `markdownlint`, `yamllint`, `detect-private-key`, and `gitleaks`
+- `10`: repository meta checks (`identity`, `check-hooks-apply`)
+- `20`: early cleanup (`fix-byte-order-marker`)
+- `30`: whitespace cleanup (`trailing-whitespace`)
+- `35`: manual permission normalization (`chmod`, manual stage)
+- `40`: formatters (`prettier`, `file-contents-sorter`, `shfmt` in manual stage)
+- `45`: `biome-check`
+- `50`: validation and security checks (`codespell`, `markdownlint`, `yamllint`, `detect-private-key`, `gitleaks`, and other safety checks)
 
-This ordering lets fast repository checks and automatic cleanup happen before the heavier validation and audit steps.
+Because the `manual` stage and `prek-audit.toml` run separately, only hooks in the command you execute are considered for ordering.
 
 ## ⚙️ Continuous Integration
 

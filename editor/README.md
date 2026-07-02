@@ -44,11 +44,11 @@ sh tools/bash/build-wasm.sh # -> ../editor/salam-wa.js, ../editor/salam-wa.wasm,
 Serve the `editor/` directory over HTTP (Wasm needs a real origin, not `file://`):
 
 ```sh
-sh compiler/tools/bash/editor-serve.sh        # http://localhost:8080  (no rebuild for UI dev)
+sh compiler/tools/bash/editor-serve.sh        # http://localhost:3000  (no rebuild for UI dev)
 sh compiler/tools/bash/editor-serve.sh 9000   # ... on a custom port
 ```
 
-Or serve it directly: `cd editor && python -m http.server 8080`.
+Or serve it directly: `cd editor && python -m http.server 3000`.
 
 If `salam-wa.js` is missing, the editor still loads and shows a banner telling
 you to run `compiler/tools/bash/build-wasm.sh`.

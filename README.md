@@ -429,7 +429,7 @@ bun run update:deps
 
 #### Explaining the Flags Behind the Script (`bun update -i -r`)
 
-- **`-i` (`--interactive`)**: Spawns an interactive Terminal User Interface (TUI) mapping out all out-of-date assets. Use your Arrow keys and spacebar to selectively pick packages to upgrade, or toggle `l` to force a package beyond its defined semver range to its absolute `--latest` release.
+- **`-i` (`--interactive`)**: Spawns an interactive Terminal User Interface (TUI) mapping out all out-of-date assets. Use your Arrow keys and spacebar to selectively pick packages to upgrade, or toggle `l` to force a package beyond its defined SemVer range to its absolute `--latest` release.
 - **`-r` (`--recursive`)**: Forces Bun's resolution engine to sweep across all items listed under your `workspaces` field (`editor`, `pages`, `runner`, etc.) instead of executing purely inside the main directory.
 
 When initialized, Bun appends a **Workspace** column to your terminal output grid so you can verify exactly where every target module upgrade is bound before writing the changes to disk.

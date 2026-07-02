@@ -60,7 +60,7 @@ Salam is a general-purpose and systems programming language designed for efficie
     - [Static Site Configuration](#static-site-configuration)
   - [⚡ 4. The Serve Methods Evaluated](#-4-the-serve-methods-evaluated)
     - [Method A: Bun Native Dev Engine (`bun run --watch index.html`)](#method-a-bun-native-dev-engine-bun-run---watch-indexhtml)
-    - [Method B: The Local Isolation Method (`bunx http-server`)](#method-b-the-local-isolation-method-bunx-http-server)
+    - [Method B: The Local Isolation Method (`bunx vite`)](#method-b-the-local-isolation-method-bunx-vite)
   - [🔄 5. Global Monorepo Package Updates](#-5-global-monorepo-package-updates)
     - [Explaining the Flags Behind the Script (`bun update -i -r`)](#explaining-the-flags-behind-the-script-bun-update--i--r)
   - [🔒 6. Security Breakdown & Best Practices](#-6-security-breakdown--best-practices)
@@ -263,54 +263,27 @@ bun run dev:all
 Your terminal window will display interleaved logs, cleanly prefixed by their respective package origins:
 
 ```text
-Salam % bun run dev:all  
+Salam % bun run dev:all
 $ bun run --filter='*' --parallel dev
-@workspace/editor:dev | Starting up http-server, serving .
-@workspace/pages:dev  | Starting up http-server, serving .
-@workspace/editor:dev |
-@workspace/editor:dev | http-server version: 14.1.1
-@workspace/pages:dev  |
-@workspace/pages:dev  | http-server version: 14.1.1
-@workspace/pages:dev  |
-@workspace/pages:dev  | http-server settings:
-@workspace/pages:dev  | CORS: disabled
-@workspace/pages:dev  | Cache: -1 seconds
-@workspace/pages:dev  | Connection Timeout: 120 seconds
-@workspace/pages:dev  | Directory Listings: visible
-@workspace/pages:dev  | AutoIndex: visible
-@workspace/pages:dev  | Serve GZIP Files: false
-@workspace/pages:dev  | Serve Brotli Files: false
-@workspace/pages:dev  | Default File Extension: none
-@workspace/pages:dev  |
-@workspace/pages:dev  | Available on:
-@workspace/pages:dev  |   http://127.0.0.1:55002
-@workspace/pages:dev  | Hit CTRL-C to stop the server
-@workspace/editor:dev |
-@workspace/editor:dev | http-server settings:
-@workspace/editor:dev | CORS: disabled
-@workspace/editor:dev | Cache: -1 seconds
-@workspace/editor:dev | Connection Timeout: 120 seconds
-@workspace/editor:dev | Directory Listings: visible
-@workspace/editor:dev | AutoIndex: visible
-@workspace/editor:dev | Serve GZIP Files: false
-@workspace/editor:dev | Serve Brotli Files: false
-@workspace/editor:dev | Default File Extension: none
-@workspace/editor:dev |
-@workspace/editor:dev | Available on:
-@workspace/editor:dev |   http://127.0.0.1:55001
-@workspace/editor:dev | Hit CTRL-C to stop the server
-@workspace/editor:dev |
-@workspace/pages:dev  |
-vercel-editor:dev     |
-vercel-editor:dev     |   VITE v8.1.3  ready in 175 ms
-vercel-editor:dev     |
-vercel-editor:dev     |   ➜  Local:   http://localhost:5173/
-vercel-editor:dev     |   ➜  Network: use --host to expose
-runner:dev            |
-runner:dev            |  ⛅️ wrangler 4.107.0
-runner:dev            | ────────────────────
-runner:dev            | ⎔ Starting local server...
-runner:dev            | [wrangler:info] Ready on http://localhost:8787
+@workspace/pages:dev         |
+@workspace/pages:dev         |   VITE v8.1.3  ready in 61 ms
+@workspace/pages:dev         |
+@workspace/pages:dev         |   ➜  Local:   http://127.0.0.1:55002/
+@workspace/editor:dev        |
+@workspace/editor:dev        |   VITE v8.1.3  ready in 65 ms
+@workspace/editor:dev        |
+@workspace/editor:dev        |   ➜  Local:   http://127.0.0.1:55001/
+@workspace/vercel-editor:dev |
+@workspace/vercel-editor:dev |   VITE v8.1.3  ready in 91 ms
+@workspace/vercel-editor:dev |
+@workspace/vercel-editor:dev |   ➜  Local:   http://localhost:5173/
+@workspace/vercel-editor:dev |   ➜  Network: use --host to expose
+@workspace/runner:dev        |
+@workspace/runner:dev        |  ⛅️ wrangler 4.107.0
+@workspace/runner:dev        | ────────────────────
+@workspace/runner:dev        | ⎔ Starting local server...
+@workspace/runner:dev        | [wrangler:info] Ready on http://localhost:8787
+@workspace/runner:dev        | [wrangler:info] GET / 200 OK (7ms)
 ```
 
 ---
@@ -349,14 +322,19 @@ This file defines the workspaces in strict alphabetical order and leverages Bun'
     "vercel-editor"
   ],
   "scripts": {
-    "dev:all": "bun run --filter='*' --parallel dev",
-    "dev:editor": "bun run --filter='editor' dev",
+    "dev:all": "bun run --filter='*' --parallel --if-present dev",
+    "dev:editor": "bun run --filter='@workspace/editor' dev",
     "dev:pages": "bun run --filter='@workspace/pages' dev",
-    "dev:runner": "bun run --filter='runner' dev",
-    "dev:vercel": "bun run --filter='vercel-editor' dev",
-    "build:all": "bun run --filter='*' build",
+    "dev:runner": "bun run --filter='@workspace/runner' dev",
+    "dev:vercel": "bun run --filter='@workspace/vercel-editor' dev",
+    "build:all": "bun run --filter='*' --if-present build",
     "update:deps": "bun update -i -r",
     "clean": "rm -rf node_modules **/node_modules .bun-cache"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.2",
+    "@vitejs/plugin-react": "^6.0.3",
+    "vite": "^8.1.3"
   }
 }
 ```
@@ -386,7 +364,7 @@ The independent workspace utilizes your specific package scope (`@workspace/page
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "bunx http-server . -p 55002 -c-1 -a 127.0.0.1"
+    "dev": "bunx vite --port 55002 --host 127.0.0.1"
   }
 }
 ```
@@ -407,12 +385,12 @@ PORT=55002 bun run --watch index.html
 
 - 🟥 **The Critical Crash Bug**: If an HTML file links a `<script src="./app.js">` tag and `app.js` is missing, deleted, or generated out-of-order by another builder script, Bun's dependency engine throws a fatal compilation or segmentation panic and crashes your entire root dev terminal.
 
-#### Method B: The Local Isolation Method (`bunx http-server`)
+#### Method B: The Local Isolation Method (`bunx vite`)
 
-Bypasses Bun's strict internal compilation logic entirely. It mounts a Node-compatible, file-agnostic server context over the directory.
+Bypasses complex multi-environment integrations entirely by mounting a dedicated Vite development context over the directory.
 
 ```bash
-bunx http-server . -p 55002 -c-1 -a 127.0.0.1
+bunx vite --port 55002 --host 127.0.0.1
 ```
 
 - 🟩 **The Fix**: Missing scripts or components safely emit standard frontend browser `404 Not Found` messages instead of breaking your backend engine processes.
@@ -458,7 +436,7 @@ Network ports scale from `1` to `65535`.
 To enforce instant browser updates, skip disk caches, isolate network eavesdroppers, and bypass compiler engine crashes, use this script formula:
 
 ```bash
-bunx http-server . -p 55002 -c-1 -a 127.0.0.1
+bunx vite --port 55002 --host 127.0.0.1
 ```
 
 ## 🤝 Contributing

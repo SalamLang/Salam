@@ -18,21 +18,31 @@ export default function App() {
 
   useEffect(() => {
     const root = document.documentElement;
-    const isDarkSystem = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
-    if (theme === "dark" || (theme === "auto" && isDarkSystem)) {
-      root.classList.add("dark");
-    } else {
-      root.classList.remove("dark");
+    const syncTheme = () => {
+      const isDarkSystem = mediaQuery.matches;
+      const shouldBeDark = theme === "dark" || (theme === "auto" && isDarkSystem);
+
+      if (shouldBeDark) {
+        root.classList.add("dark");
+        root.setAttribute("data-theme", "dark");
+      } else {
+        root.classList.remove("dark");
+        root.setAttribute("data-theme", "light");
+      }
+    };
+
+    syncTheme();
+
+    if (theme === "auto") {
+      mediaQuery.addEventListener("change", syncTheme);
+      return () => mediaQuery.removeEventListener("change", syncTheme);
     }
   }, [theme]);
 
-  const handleRun = (): void => {
-    console.log("Compiling & Running Salam code...");
-  };
-
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-sans transition-colors duration-200">
+    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans transition-colors duration-200">
       <Header
         mode={mode}
         setMode={setMode}
@@ -42,15 +52,15 @@ export default function App() {
         setTheme={setTheme}
         autoRun={autoRun}
         setAutoRun={setAutoRun}
-        onRun={handleRun}
+        onRun={() => console.log("Code run triggered...")}
       />
 
       <main className="flex-1 flex items-center justify-center p-8">
-        <p className="text-sm border border-dashed border-slate-300 dark:border-slate-700 p-12 rounded-lg text-slate-400 dark:text-slate-500">
+        <div className="text-sm border border-dashed border-slate-300 dark:border-slate-800 p-12 rounded-lg text-slate-400 dark:text-slate-500">
           {lang === "en"
             ? "Workspace Panes (Editor & Results) go here."
             : "صفحه ویرایشگر و خروجی اینجا قرار می‌گیرند."}
-        </p>
+        </div>
       </main>
     </div>
   );

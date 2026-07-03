@@ -559,56 +559,56 @@ These spaces are open to everyone — from curious newcomers to experienced syst
 
 Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and the [editor readme](editor/README.md).
 
-| Term | Definition                                                                                                                                                                                       |
-|---|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Alpine Linux** | Lightweight Linux distribution built on musl libc. Used as the base image for Salam's Docker containers.                                                                                         |
-| **AST (Abstract Syntax Tree)** | Tree representation of parsed source code. Each node represents a construct (expression, statement, declaration). The Salam compiler builds an AST before semantic analysis and code generation. |
-| **Biome** | Fast JavaScript/TypeScript linter and formatter. Run as a prek hook (`biome-check`).                                                                                                             |
-| **Bun** | JavaScript runtime, package manager, and bundler. Used in the Salam monorepo to manage workspaces and run dev servers.                                                                           |
-| **C ABI** | C Application Binary Interface — the low-level contract for how functions are called and data is laid out in memory. Salam's FFI and `extern "C"` declarations rely on the C ABI.                |
-| **CI (Continuous Integration)** | Automated pipeline that builds, tests, and lints every pull request. Salam uses GitHub Actions for CI.                                                                                           |
-| **Clang** | LLVM-based C compiler. One of the supported backends for building the Salam compiler.                                                                                                            |
-| **CMake** | Cross-platform build tool generator. The Salam compiler can be built with `cmake -B build && cmake --build build`.                                                                               |
-| **Codegen** | Code-generation backend. Transforms the compiler's AST and type information into target output (C source, LLVM IR, or a WebAssembly module).                                                     |
-| **Codespell** | Spell checker for source code and documentation. Run as a prek hook to catch typos.                                                                                                              |
-| **CTest** | CMake's built-in test runner. Invoked with `ctest --test-dir build` after a CMake build of the compiler.                                                                                         |
-| **defer** | Salam keyword that schedules a statement or block to run at the end of the enclosing scope, regardless of how the scope is exited.                                                               |
-| **Docker** | Container platform used to build and run the Salam compiler in an isolated, reproducible environment.                                                                                            |
-| **Docker Compose** | Tool for defining and running multi-container Docker applications. Salam provides a `docker-compose.yml` in `compiler/docker/` with `dev` and `prod` service targets.                            |
-| **doctoc** | Tool that auto-generates a Table of Contents inside Markdown files. The TOC blocks in this readme and the Contributing Guide are maintained by doctoc.                                           |
-| **DSL (Domain-Specific Language)** | A language tailored to a specific problem domain. Salam includes a built-in layout DSL that compiles `.salam` files to HTML, CSS, and JavaScript.                                                |
-| **Emscripten** | LLVM-based toolchain that compiles C/C++ to WebAssembly. Used to build `salam-wa.wasm` and `salam-wa.js` for the web playground.                                                                 |
-| **entr** | Utility that re-runs a command whenever watched files change. Used in Salam's Docker dev mode to rebuild the compiler on source edits.                                                           |
-| **FFI (Foreign Function Interface)** | Mechanism for calling functions written in another language (typically C). Salam supports FFI via `extern "C"` declarations.                                                                     |
-| **Fork** | A personal copy of a repository on GitHub. Contributors fork `SalamLang/Salam`, work in their fork, then open a pull request back to the original.                                               |
-| **GCC** | GNU Compiler Collection. A C compiler supported by the Salam build tool.                                                                                                                         |
-| **Gitleaks** | Secret-detection tool run as a prek audit hook to prevent accidental commits of API keys or credentials.                                                                                         |
-| **GitHub Actions** | Salam's CI/CD platform. Workflows are defined in `.github/workflows/`.                                                                                                                           |
-| **Layout DSL** | Salam's built-in sublanguage for describing UIs. `layout:` blocks, or `.salam` files processed with `salam layout build`, compile to HTML, CSS, and JavaScript.                                  |
-| **Lexer** | First stage of the compiler pipeline: reads source text and produces a stream of tokens.                                                                                                         |
-| **LLVM** | Low Level Virtual Machine — a compiler infrastructure project. Used as an optional backend (`clang-22`, `llc-22`, `opt-22`, `lli-22` are included in the Docker image).                          |
-| **Makefile** | GNU Make build script (`compiler/Makefile`). Running `make` from `compiler/` produces a release build of the `salam` binary at the repository root.                                              |
-| **Markdownlint** | Linter for Markdown files. Enforces consistent style in `README.md`, `CONTRIBUTING.md`, and other docs.                                                                                          |
-| **musl** | A C standard library used by Alpine Linux. Salam's Docker images are based on Alpine + musl for a minimal footprint.                                                                             |
-| **npm** | Node Package Manager. Used alongside Bun for package management in the Salam monorepo.                                                                                                           |
-| **Parser** | Second stage of the compiler pipeline: consumes the token stream from the lexer and builds an AST.                                                                                               |
-| **PR (Pull Request)** | A GitHub mechanism for proposing changes: a contributor opens a PR from a feature branch, reviewers comment, and a maintainer merges it.                                                         |
-| **prek** | Git hook manager used by Salam. Hooks are defined in `prek.toml` (standard and manual stages) and `prek-audit.toml` (security-focused audit checks).                                             |
-| **prek-audit.toml** | prek configuration file for security-focused audit hooks. Run separately with `prek run --all-files --config prek-audit.toml`.                                                                   |
-| **Prettier** | Opinionated code formatter for JavaScript, TypeScript, CSS, and JSON. Run as a prek hook.                                                                                                        |
-| **REPL** | Read-Eval-Print Loop — an interactive session where you type expressions and see results immediately. `salam cli` starts a general REPL; `salam layout` starts a layout REPL.                    |
-| **RTL (Right-to-Left)** | Text direction used by Arabic and Persian scripts. The Salam web playground supports RTL and switches direction when the Persian language is selected.                                           |
-| **Semantic Analyzer** | Third stage of the compiler pipeline: resolves names, checks types, and validates the AST before code generation.                                                                                |
-| **SemVer (Semantic Versioning)** | Version numbering scheme (`MAJOR.MINOR.PATCH`). Used by Bun's interactive update tooling and GitHub releases.                                                                                    |
-| **shfmt** | Shell script formatter. Run as a prek manual-stage hook to normalise indentation and style in `.sh` files.                                                                                       |
-| **Super-Linter** | GitHub Actions workflow that runs a broad set of language-specific linters across the repository in CI.                                                                                          |
-| **TCC (Tiny C Compiler)** | Lightweight, fast C compiler. The default backend used by Salam's quick-build script.                                                                                                            |
-| **Tree-walking interpreter** | An interpreter that evaluates the AST directly without first compiling to native code. Used by the web playground and via `salam exec` / `salam run --interp` for pure-compute programs.         |
-| **Upstream** | The original `SalamLang/Salam` repository. Contributors add it as a Git remote (`git remote add upstream …`) to keep their fork in sync.                                                         |
-| **Virtual filesystem** | Emscripten's in-browser filesystem layer. `build-wasm.sh` preloads the `std/` directory into it so import resolution and the layout schema work when running Salam in the browser.               |
-| **Vite** | Frontend build tool and dev server. Used in the Salam monorepo to serve the editor and pages workspaces.                                                                                         |
-| **WebAssembly (Wasm)** | Portable binary instruction format that runs at near-native speed in modern browsers. Salam's web playground is powered by a Wasm build of the compiler produced by Emscripten.                  |
-| **yamllint** | YAML linter. Run as a prek hook to validate `.yml` workflow and configuration files.                                                                                                             |
+| Term | Definition |
+|---|---|
+| **[Alpine Linux](https://alpinelinux.org/)** | Lightweight Linux distribution built on musl libc. Used as the base image for Salam's Docker containers. |
+| **[AST (Abstract Syntax Tree)](https://en.wikipedia.org/wiki/Abstract_syntax_tree)** | Tree representation of parsed source code. Each node represents a construct (expression, statement, declaration). The Salam compiler builds an AST before semantic analysis and code generation. |
+| **[Biome](https://biomejs.dev/)** | Fast JavaScript/TypeScript linter and formatter. Run as a prek hook (`biome-check`). |
+| **[Bun](https://bun.sh/)** | JavaScript runtime, package manager, and bundler. Used in the Salam monorepo to manage workspaces and run dev servers. |
+| **[C ABI](https://en.wikipedia.org/wiki/Application_binary_interface)** | C Application Binary Interface — the low-level contract for how functions are called and data is laid out in memory. Salam's FFI and `extern "C"` declarations rely on the C ABI. |
+| **[CI (Continuous Integration)](https://en.wikipedia.org/wiki/Continuous_integration)** | Automated pipeline that builds, tests, and lints every pull request. Salam uses GitHub Actions for CI. |
+| **[Clang](https://clang.llvm.org/)** | LLVM-based C compiler. One of the supported backends for building the Salam compiler. |
+| **[CMake](https://cmake.org/)** | Cross-platform build tool generator. The Salam compiler can be built with `cmake -B build && cmake --build build`. |
+| **[Codegen](https://en.wikipedia.org/wiki/Code_generation_(compiler))** | Code-generation backend. Transforms the compiler's AST and type information into target output (C source, LLVM IR, or a WebAssembly module). |
+| **[Codespell](https://github.com/codespell-project/codespell)** | Spell checker for source code and documentation. Run as a prek hook to catch typos. |
+| **[CTest](https://cmake.org/cmake/help/latest/manual/ctest.1.html)** | CMake's built-in test runner. Invoked with `ctest --test-dir build` after a CMake build of the compiler. |
+| **defer** | Salam keyword that schedules a statement or block to run at the end of the enclosing scope, regardless of how the scope is exited. |
+| **[Docker](https://www.docker.com/)** | Container platform used to build and run the Salam compiler in an isolated, reproducible environment. |
+| **[Docker Compose](https://docs.docker.com/compose/)** | Tool for defining and running multi-container Docker applications. Salam provides a `docker-compose.yml` in `compiler/docker/` with `dev` and `prod` service targets. |
+| **[doctoc](https://github.com/thlorenz/doctoc)** | Tool that auto-generates a Table of Contents inside Markdown files. The TOC blocks in this readme and the Contributing Guide are maintained by doctoc. |
+| **[DSL (Domain-Specific Language)](https://en.wikipedia.org/wiki/Domain-specific_language)** | A language tailored to a specific problem domain. Salam includes a built-in layout DSL that compiles `.salam` files to HTML, CSS, and JavaScript. |
+| **[Emscripten](https://emscripten.org/)** | LLVM-based toolchain that compiles C/C++ to WebAssembly. Used to build `salam-wa.wasm` and `salam-wa.js` for the web playground. |
+| **[entr](https://eradman.com/entrproject/)** | Utility that re-runs a command whenever watched files change. Used in Salam's Docker dev mode to rebuild the compiler on source edits. |
+| **[FFI (Foreign Function Interface)](https://en.wikipedia.org/wiki/Foreign_function_interface)** | Mechanism for calling functions written in another language (typically C). Salam supports FFI via `extern "C"` declarations. |
+| **[Fork](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo)** | A personal copy of a repository on GitHub. Contributors fork `SalamLang/Salam`, work in their fork, then open a pull request back to the original. |
+| **[GCC](https://gcc.gnu.org/)** | GNU Compiler Collection. A C compiler supported by the Salam build tool. |
+| **[Gitleaks](https://github.com/gitleaks/gitleaks)** | Secret-detection tool run as a prek audit hook to prevent accidental commits of API keys or credentials. |
+| **[GitHub Actions](https://docs.github.com/en/actions)** | Salam's CI/CD platform. Workflows are defined in `.github/workflows/`. |
+| **Layout DSL** | Salam's built-in sublanguage for describing UIs. `layout:` blocks, or `.salam` files processed with `salam layout build`, compile to HTML, CSS, and JavaScript. |
+| **[Lexer](https://en.wikipedia.org/wiki/Lexical_analysis)** | First stage of the compiler pipeline: reads source text and produces a stream of tokens. |
+| **[LLVM](https://llvm.org/)** | Low Level Virtual Machine — a compiler infrastructure project. Used as an optional backend (`clang-22`, `llc-22`, `opt-22`, `lli-22` are included in the Docker image). |
+| **[Makefile](https://www.gnu.org/software/make/)** | GNU Make build script (`compiler/Makefile`). Running `make` from `compiler/` produces a release build of the `salam` binary at the  root. |
+| **[Markdownlint](https://github.com/igorshubovych/markdownlint-cli)** | Linter for Markdown files. Enforces consistent style in `README.md`, `CONTRIBUTING.md`, and other docs. |
+| **[musl](https://musl.libc.org/)** | A C standard library used by Alpine Linux. Salam's Docker images are based on Alpine + musl for a minimal footprint. |
+| **[npm](https://www.npmjs.com/)** | Node Package Manager. Used alongside Bun for package management in the Salam monorepo. |
+| **[Parser](https://en.wikipedia.org/wiki/Parsing)** | Second stage of the compiler pipeline: consumes the token stream from the lexer and builds an AST. |
+| **[PR (Pull Request)](https://docs.github.com/en/pull-requests)** | A GitHub mechanism for proposing changes: a contributor opens a PR from a feature branch, reviewers comment, and a maintainer merges it. |
+| **[prek](https://prek.j178.dev/)** | Git hook manager used by Salam. Hooks are defined in `prek.toml` (standard and manual stages) and `prek-audit.toml` (security-focused audit checks). |
+| **prek-audit.toml** | prek configuration file for security-focused audit hooks. Run separately with `prek run --all-files --config prek-audit.toml`. |
+| **[Prettier](https://prettier.io/)** | Opinionated code formatter for JavaScript, TypeScript, CSS, and JSON. Run as a prek hook. |
+| **[REPL](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop)** | Read-Eval-Print Loop — an interactive session where you type expressions and see results immediately. `salam cli` starts a general REPL; `salam layout` starts a layout REPL. |
+| **[RTL (Right-to-Left)](https://en.wikipedia.org/wiki/Right-to-left_script)** | Text direction used by Arabic and Persian scripts. The Salam web playground supports RTL and switches direction when the Persian language is selected. |
+| **[Semantic Analyzer](https://en.wikipedia.org/wiki/Semantic_analysis_(compilers))** | Third stage of the compiler pipeline: resolves names, checks types, and validates the AST before code generation. |
+| **[SemVer (Semantic Versioning)](https://semver.org/)** | Version numbering scheme (`MAJOR.MINOR.PATCH`). Used by Bun's interactive update tooling and GitHub releases. |
+| **[shfmt](https://github.com/mvdan/sh)** | Shell script formatter. Run as a prek manual-stage hook to normalise indentation and style in `.sh` files. |
+| **[Super-Linter](https://github.com/super-linter/super-linter)** | GitHub Actions workflow that runs a broad set of language-specific linters across the repository in CI. |
+| **[TCC (Tiny C Compiler)](https://bellard.org/tcc/)** | Lightweight, fast C compiler. The default backend used by Salam's quick-build script. |
+| **[Tree-walking interpreter](https://en.wikipedia.org/wiki/Interpreter_(computing))** | An interpreter that evaluates the AST directly without first compiling to native code. Used by the web playground and via `salam exec` / `salam run --interp` for pure-compute programs. |
+| **[Upstream](https://en.wikipedia.org/wiki/Upstream_(software_development))** | The original `SalamLang/Salam` repository. Contributors add it as a Git remote (`git remote add upstream …`) to keep their fork in sync. |
+| **[Virtual filesystem](https://en.wikipedia.org/wiki/Virtual_file_system)** | Emscripten's in-browser filesystem layer. `build-wasm.sh` preloads the `std/` directory into it so import resolution and the layout schema work when running Salam in the browser. |
+| **[Vite](https://vite.dev/)** | Frontend build tool and dev server. Used in the Salam monorepo to serve the editor and pages workspaces. |
+| **[WebAssembly (Wasm)](https://webassembly.org/)** | Portable binary instruction format that runs at near-native speed in modern browsers. Salam's web playground is powered by a Wasm build of the compiler produced by Emscripten. |
+| **[yamllint](https://github.com/adrienverge/yamllint)** | YAML linter. Run as a prek hook to validate `.yml` workflow and configuration files. |
 
 ---
 

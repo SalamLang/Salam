@@ -292,7 +292,8 @@ static type_t *g_unify(ast_node_t *pty, type_t *at, const char *T)
     return NULL;
 }
 
-symbol_t *g_infer_call(sema_t *s, symbol_t *tsym, vec_t *argtypes, const src_span_t *span)
+symbol_t *g_infer_call(sema_t *s, symbol_t *tsym, vec_t *argtypes,
+                       const src_span_t *span, type_t *expected)
 {
     ast_node_t *tmpl = tsym->decl;
     vec_t targ_nodes; vec_init(&targ_nodes);
@@ -305,6 +306,12 @@ symbol_t *g_infer_call(sema_t *s, symbol_t *tsym, vec_t *argtypes, const src_spa
             type_t *u = g_unify(p->type, (type_t *)argtypes->data[pi], T);
             if (u) { bound = u; break; }
         } }
+        /* When a type parameter cannot be inferred from the arguments (e.g. a
+         * nullary constructor like None<T>()), fall back to unifying the
+         * function's declared return type against the expected type supplied
+         * by the call context (assignment target or enclosing return). */
+        if (!bound && expected && tmpl->type)
+            bound = g_unify(tmpl->type, expected, T);
         if (!bound) {
             SERR(s, 1, span, "cannot infer type parameter '%s' of generic function '%s'", T, tmpl->name);
             return NULL;

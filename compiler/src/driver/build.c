@@ -82,8 +82,11 @@ static void emit_link(sb_t *cmd, logger_t *log, const char *spec, const char *ki
 #endif
         return;
     }
-    if (spec[0] == '-' || strpbrk(spec, "/\\.") != NULL) {   
-        sb_putc(cmd, ' '); sb_puts(cmd, spec);
+    /* A raw flag (-lfoo, -Lpath) or an explicit path (./lib.a): pass it as a
+       single shell-quoted argument so metacharacters cannot escape into the
+       command executed by system(). */
+    if (spec[0] == '-' || strpbrk(spec, "/\\.") != NULL) {
+        sb_putc(cmd, ' '); sb_put_shell_arg(cmd, spec);
         return;
     }
     if (is_static && !use_tcc) {
@@ -91,13 +94,13 @@ static void emit_link(sb_t *cmd, logger_t *log, const char *spec, const char *ki
         LOG_W(log, PH_DRIVER,
               "static link of bare name '%s' is unsupported by the macOS linker; "
               "pass an explicit .a path. Linking it normally.", spec);
-        sb_puts(cmd, " -l"); sb_puts(cmd, spec);
+        sb_puts(cmd, " -l"); sb_put_shell_arg(cmd, spec);
 #else
-        sb_puts(cmd, " -Wl,-Bstatic -l"); sb_puts(cmd, spec); sb_puts(cmd, " -Wl,-Bdynamic");
+        sb_puts(cmd, " -Wl,-Bstatic -l"); sb_put_shell_arg(cmd, spec); sb_puts(cmd, " -Wl,-Bdynamic");
 #endif
         return;
     }
-    sb_puts(cmd, " -l"); sb_puts(cmd, spec);
+    sb_puts(cmd, " -l"); sb_put_shell_arg(cmd, spec);
 }
 
 int driver_build(options_t *opt)

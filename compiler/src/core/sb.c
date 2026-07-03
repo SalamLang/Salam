@@ -75,12 +75,26 @@ void sb_printf(sb_t *s, const char *fmt, ...)
 
 void sb_put_shell_arg(sb_t *s, const char *arg)
 {
+#if defined(_WIN32) || defined(__CYGWIN__)
+    /* cmd.exe: wrap in double quotes; a double quote is escaped as "". The
+       compilers we invoke (gcc/clang/tcc) strip the surrounding quotes. */
     sb_putc(s, '"');
     { const char *p = arg; for (; *p; p++) {
-        if (*p == '"') sb_putc(s, '\\');
+        if (*p == '"') sb_putc(s, '"');
         sb_putc(s, *p);
     } }
     sb_putc(s, '"');
+#else
+    /* POSIX sh: single quotes neutralize everything ($, `, \, ; etc.). A
+       literal single quote is emitted as the sequence '\'' (close, escaped
+       quote, reopen). This is the only fully injection-safe quoting. */
+    sb_putc(s, '\'');
+    { const char *p = arg; for (; *p; p++) {
+        if (*p == '\'') sb_puts(s, "'\\''");
+        else sb_putc(s, *p);
+    } }
+    sb_putc(s, '\'');
+#endif
 }
 
 const char *sb_cstr(const sb_t *s)

@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from "react";
+import { useState } from "react";
 import type { AppMode, Language, AppTheme } from "../App";
 
 interface HeaderProps {
@@ -20,10 +20,10 @@ interface LocaleStrings {
   examples: string;
   autoRun: string;
   run: string;
-  // Added theme variant translations to the interface schema
   themeAuto: string;
   themeLight: string;
   themeDark: string;
+  themeRandom: string;
 }
 
 const TRANSLATION_MAP: Record<Language, LocaleStrings> = {
@@ -37,6 +37,7 @@ const TRANSLATION_MAP: Record<Language, LocaleStrings> = {
     themeAuto: "◐ Auto",
     themeLight: "☼ Light",
     themeDark: "🌙 Dark",
+    themeRandom: "🎲 Random",
   },
   fa: {
     title: "محیط آزمایشی سلام",
@@ -48,6 +49,7 @@ const TRANSLATION_MAP: Record<Language, LocaleStrings> = {
     themeAuto: "◐ خودکار",
     themeLight: "☼ روشن",
     themeDark: "🌙 تاریک",
+    themeRandom: "🎲 تصادفی",
   },
 };
 
@@ -66,13 +68,19 @@ export default function Header({
   const t = TRANSLATION_MAP[lang];
 
   const cycleTheme = (): void => {
-    const modes: AppTheme[] = ["auto", "light", "dark"];
+    const modes: AppTheme[] = ["auto", "light", "dark", "random"];
     const nextIndex = (modes.indexOf(theme) + 1) % modes.length;
     setTheme(modes[nextIndex]);
   };
 
   return (
-    <header className="flex flex-col md:flex-row items-center justify-between px-4 py-3 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-xs relative z-50 select-none transition-colors duration-200">
+    <header
+      className="flex flex-col md:flex-row items-center justify-between px-4 py-3 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-xs relative z-50 select-none transition-colors duration-200"
+      style={{
+        backgroundColor: theme === "random" ? "var(--custom-header-bg)" : undefined,
+        borderColor: theme === "random" ? "var(--custom-border)" : undefined,
+      }}
+    >
       {/* Brand Header */}
       <div className="w-full md:w-auto flex items-center justify-between">
         <a href="?" className="flex items-center gap-2 group">
@@ -100,7 +108,10 @@ export default function Header({
       <div className={`${menuOpen ? "flex" : "hidden"} md:flex flex-col md:flex-row w-full md:w-auto items-stretch md:items-center gap-3 mt-4 md:mt-0`}>
 
         {/* Mode Segments */}
-        <div className="inline-flex bg-slate-100 dark:bg-slate-800 p-0.5 rounded-md border border-slate-200 dark:border-slate-700">
+        <div
+          className="inline-flex bg-slate-100 dark:bg-slate-800 p-0.5 rounded-md border border-slate-200 dark:border-slate-700"
+          style={{ borderColor: theme === "random" ? "var(--custom-border)" : undefined }}
+        >
           <button
             type="button"
             onClick={() => setMode("app")}
@@ -118,7 +129,10 @@ export default function Header({
         </div>
 
         {/* Language Segments */}
-        <div className="inline-flex bg-slate-100 dark:bg-slate-800 p-0.5 rounded-md border border-slate-200 dark:border-slate-700">
+        <div
+          className="inline-flex bg-slate-100 dark:bg-slate-800 p-0.5 rounded-md border border-slate-200 dark:border-slate-700"
+          style={{ borderColor: theme === "random" ? "var(--custom-border)" : undefined }}
+        >
           <button
             type="button"
             onClick={() => setLang("en")}
@@ -138,9 +152,14 @@ export default function Header({
         {/* Custom Examples Dropdown Wrapper */}
         <div className="relative">
           <select
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => console.log("Selected example:", e.target.value)}
+            onChange={() => { /* example loading not yet implemented */ }}
             className="w-full md:w-auto appearance-none bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm px-3 py-1.5 pe-8 rounded-md focus:outline-hidden focus:border-brand"
             defaultValue=""
+            style={{
+              borderColor: theme === "random" ? "var(--custom-border)" : undefined,
+              backgroundColor: theme === "random" ? "var(--custom-header-bg)" : undefined,
+              color: theme === "random" ? "var(--custom-text)" : undefined,
+            }}
           >
             <option value="" disabled hidden>{t.examples}</option>
             <option value="hello">Hello World</option>
@@ -149,14 +168,18 @@ export default function Header({
           <span className={`absolute top-1/2 -translate-y-1/2 pointer-events-none text-xs text-slate-400 ${lang === 'fa' ? 'left-2.5' : 'right-2.5'}`}>▼</span>
         </div>
 
-        {/* Theme Toggle Button — FIXED: Maps strings safely via active t translation map */}
+        {/* Theme Toggle Button */}
         <button
           type="button"
           onClick={cycleTheme}
           className="flex items-center justify-center gap-1.5 px-3 py-1.5 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-md text-sm text-slate-600 dark:text-slate-300 cursor-pointer select-none transition-colors"
+          style={{
+            borderColor: theme === "random" ? "var(--custom-border)" : undefined,
+            color: theme === "random" ? "var(--custom-text)" : undefined,
+          }}
         >
           <span>
-            {theme === "auto" ? t.themeAuto : theme === "light" ? t.themeLight : t.themeDark}
+            {theme === "auto" ? t.themeAuto : theme === "light" ? t.themeLight : theme === "dark" ? t.themeDark : t.themeRandom}
           </span>
         </button>
 
@@ -169,6 +192,10 @@ export default function Header({
               ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400"
               : "border-slate-200 dark:border-slate-700 text-slate-500"
           }`}
+          style={{
+            borderColor: theme === "random" ? "var(--custom-border)" : undefined,
+            color: (theme === "random" && !autoRun) ? "var(--custom-text)" : undefined,
+          }}
         >
           <span className={`w-2 h-2 rounded-full ${autoRun ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`} />
           <span>{t.autoRun}</span>

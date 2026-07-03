@@ -25,6 +25,38 @@ interface LocaleStrings {
   run: string;
 }
 
+// Fixed: Moved outside the component to prevent re-allocation on every render
+const TRANSLATION_MAP: Record<Language, LocaleStrings> = {
+  en: {
+    title: "Salam Playground",
+    app: "App",
+    layout: "Layout",
+    examples: "Examples",
+    themeAuto: "Auto",
+    themeLight: "Light",
+    themeDark: "Dark",
+    autoRun: "Auto-run",
+    run: "Run",
+  },
+  fa: {
+    title: "محیط آزمایشی سلام",
+    app: "برنامه",
+    layout: "چیدمان",
+    examples: "نمونه‌ها",
+    themeAuto: "خودکار",
+    themeLight: "روشن",
+    themeDark: "تاریک",
+    autoRun: "اجرای خودکار",
+    run: "اجرا",
+  },
+};
+
+const THEME_ICONS: Record<AppTheme, string> = {
+  auto: "◐",
+  light: "☼",
+  dark: "🌙"
+};
+
 export default function Header({
   mode,
   setMode,
@@ -38,40 +70,13 @@ export default function Header({
 }: HeaderProps) {
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
 
-  const translationMap: Record<Language, LocaleStrings> = {
-    en: {
-      title: "Salam Playground",
-      app: "App",
-      layout: "Layout",
-      examples: "Examples",
-      themeAuto: "Auto",
-      themeLight: "Light",
-      themeDark: "Dark",
-      autoRun: "Auto-run",
-      run: "Run",
-    },
-    fa: {
-      title: "محیط آزمایشی سلام",
-      app: "برنامه",
-      layout: "چیدمان",
-      examples: "نمونه‌ها",
-      themeAuto: "خودکار",
-      themeLight: "روشن",
-      themeDark: "تاریک",
-      autoRun: "اجرای خودکار",
-      run: "اجرا",
-    },
-  };
-
-  const t = translationMap[lang];
+  const t = TRANSLATION_MAP[lang];
 
   const cycleTheme = (): void => {
     const modes: AppTheme[] = ["auto", "light", "dark"];
     const nextIndex = (modes.indexOf(theme) + 1) % modes.length;
     setTheme(modes[nextIndex]);
   };
-
-  const themeIcon: Record<AppTheme, string> = { auto: "◐", light: "☼", dark: "🌙" };
 
   const handleExampleChange = (e: ChangeEvent<HTMLSelectElement>): void => {
     console.log("Selected example:", e.target.value);
@@ -82,7 +87,6 @@ export default function Header({
       {/* Brand Header */}
       <div className="w-full md:w-auto flex items-center justify-between">
         <a href="?" className="flex items-center gap-2 group">
-          {/* FIXED: Uses your modern v4 theme brand color rule directly */}
           <span className="w-5 h-5 rounded-full bg-brand shadow-sm group-hover:scale-105 transition-transform" aria-hidden="true" />
           <span className="font-bold text-lg tracking-tight text-slate-800 dark:text-white">
             {t.title}
@@ -158,7 +162,7 @@ export default function Header({
           onClick={cycleTheme}
           className="flex items-center justify-center gap-1.5 px-3 py-1.5 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 rounded-md text-sm text-slate-600 dark:text-slate-300"
         >
-          <span>{themeIcon[theme]}</span>
+          <span>{THEME_ICONS[theme]}</span>
           <span className="capitalize">
             {theme === "auto" ? t.themeAuto : theme === "light" ? t.themeLight : t.themeDark}
           </span>

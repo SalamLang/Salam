@@ -581,6 +581,11 @@ sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const ch
 {
     sema_t s;
     memset(&s, 0, sizeof(s));
+    /* Invalidate the package-alias cache: its entries hold pointers into a
+     * previous run's arena. Resetting here forces a rebuild bound to this
+     * run's arena, avoiding a use-after-free when several files are compiled
+     * in one process (e.g. the web playground / batch driver). */
+    g_pkg_alias_n = -1;
     s.a = a;
     s.log = log;
     s.file = file;

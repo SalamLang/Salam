@@ -3,6 +3,7 @@ import "mem"
 @if SALAM_OS_WINDOWS
 link "winhttp"
 @end
+
 pub struct Response:
     status i32 = 0
     body str = ""
@@ -24,6 +25,7 @@ extern "C":
     func WinHttpAddRequestHeaders(req void*, headers void*, hlen i32, modifiers i32) i32
     func WinHttpCloseHandle(handle void*) i32
 end
+
 func _make_str(buf void*, len i32) str:
     if buf == null || len <= 0:
         ret ""
@@ -33,6 +35,7 @@ func _make_str(buf void*, len i32) str:
     mem.Copy(dst, buf, len as u64)
     ret dst as str
 end
+
 func _str_to_wide(s str) void*:
     n i32 = MultiByteToWideChar(65001, 0, s, 0 - 1, null, 0)
     if n <= 0:
@@ -42,6 +45,7 @@ func _str_to_wide(s str) void*:
     MultiByteToWideChar(65001, 0, s, 0 - 1, w, n)
     ret w
 end
+
 func _wide_to_str(w void*) str:
     if w == null: ret "" end
     n i32 = WideCharToMultiByte(65001, 0, w, 0 - 1, null, 0, null, null)
@@ -50,6 +54,7 @@ func _wide_to_str(w void*) str:
     WideCharToMultiByte(65001, 0, w, 0 - 1, buf, n, null, null)
     ret _make_str(buf, n - 1)
 end
+
 func _fetch_https(method str, url str, headers str, body str) str:
     mut p str = url
     mut secure i32 = 1
@@ -181,12 +186,14 @@ const _CURLOPT_FOLLOWLOCATION = 52
 func _cbuf() void*:
     ret mem.AllocateZeroed(24 as u64)
 end
+
 func _cbuf_str(b void*) str:
     p i64* = b as i64*
     if p[0] == 0: ret "" end
     d void* = p[0] as void*
     ret d as str
 end
+
 func _curl_write(ptr void*, size u64, nmemb u64, ud void*) u64:
     n i64 = (size * nmemb) as i64
     mut b i64* = ud as i64*
@@ -210,6 +217,7 @@ func _curl_write(ptr void*, size u64, nmemb u64, ud void*) u64:
     mem.Set(term, 0, 1 as u64)
     ret n as u64
 end
+
 func _fetch_https(method str, url str, headers str, body str) str:
     h void* = curl_easy_init()
     if h == null: ret "" end
@@ -279,10 +287,12 @@ func _parse_response(req str) Response:
     _g_http_headers = ""
     ret Response { status = _g_http_status, body = req, head = "" }
 end
+
 pub func NewHeaders() HashMap<str, str>:
     m HashMap<str, str> = HashMap {}
     ret m
 end
+
 func serialize(headers HashMap<str, str>) str:
     mut out str = ""
     it MapIter<str, str> = headers.iter()
@@ -292,6 +302,7 @@ func serialize(headers HashMap<str, str>) str:
     end
     ret out
 end
+
 func send(method str, url str, header_block str, body str) Response:
     _g_http_status = 0
     _g_http_headers = ""
@@ -304,29 +315,37 @@ func send(method str, url str, header_block str, body str) Response:
     req str = _fetch_https(method, url, effective_headers, body)
     ret _parse_response(req)
 end
+
 pub func Get(url str) Response: ret send("GET", url, "", "") end
 pub func Post(url str, body str) Response: ret send("POST", url, "", body) end
 pub func GetWith(url str, headers HashMap<str, str>) Response:
     ret send("GET", url, serialize(headers), "")
 end
+
 pub func PostWith(url str, body str, headers HashMap<str, str>) Response:
     ret send("POST", url, serialize(headers), body)
 end
+
 pub func Request(method str, url str, headers HashMap<str, str>, body str) Response:
     ret send(method, url, serialize(headers), body)
 end
+
 pub func RequestRaw(method str, url str, header_block str, body str) Response:
     ret send(method, url, header_block, body)
 end
+
 pub func Ok(r Response) bool:
     ret r.status >= 200 && r.status < 300
 end
+
 pub func Status(r Response) i32:
     ret r.status
 end
+
 pub func Body(r Response) str:
     ret r.body
 end
+
 pub func Headers(r Response) HashMap<str, str>:
     m HashMap<str, str> = HashMap {}
     lines Vector<str> = r.head.split("\r\n")
@@ -344,13 +363,52 @@ pub func Headers(r Response) HashMap<str, str>:
     lines.free()
     ret m
 end
-pub func GetHeader(r Response, name str) str:
-    h HashMap<str, str> = Headers(r)
-    ret h.get(name)
+// ASCII lowercase (header names are ASCII); kept local to avoid a str import.
+func _hdr_lower(s str) str:
+    l i32 = s.len()
+    mut out str = ""
+    mut i i32 = 0
+    while i < l:
+        code i32 = char_code(s.substr(i, 1))
+        if code >= 65 && code <= 90:
+            out = out.concat(char_from_code(code + 32))
+        else:
+            out = out.concat(s.substr(i, 1))
+        end
+        i = i + 1
+    end
+    ret out
 end
+// GetHeader looks up a header by name case-insensitively, as HTTP requires, and
+// returns "" when absent. It scans the header lines directly rather than
+// building (and leaking) a HashMap.
+pub func GetHeader(r Response, name str) str:
+    target str = _hdr_lower(name)
+    lines Vector<str> = r.head.split("\r\n")
+    mut result str = ""
+    mut found bool = false
+    mut i = 0
+    while i < lines.len():
+        if found == false:
+            line str = lines.get(i)[0]
+            c i32 = line.find(":")
+            if c > 0:
+                if _hdr_lower(line.substr(0, c)) == target:
+                    result = line.substr(c + 1, line.len() - c - 1).trim()
+                    found = true
+                end
+            end
+        end
+        i = i + 1
+    end
+    lines.free()
+    ret result
+end
+
 pub func Raw(r Response) str:
     ret r.head.concat(r.body)
 end
+
 pub func RawHeaders(r Response) str:
     ret r.head
 end

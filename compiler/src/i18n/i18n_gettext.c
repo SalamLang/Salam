@@ -461,6 +461,7 @@ static const i18n_pair_t k_msg_fa[] = {
     /* semantic diagnostics */
     { "operator '+' on a string requires the other operand to be a string, number, bool, or char (got '%s' and '%s')",
       "عملگر '+' روی رشته نیازمند آن است که عملوند دیگر رشته، عدد، منطقی یا نویسه باشد (دریافت '%s' و '%s')" },
+    { "cannot infer the struct type of this literal",        "نمی‌توان نوع ساختار این مقدار را استنتاج کرد" },
 
     { NULL, NULL }
 };

@@ -18,43 +18,37 @@ interface LocaleStrings {
   app: string;
   layout: string;
   examples: string;
+  autoRun: string;
+  run: string;
+  // Added theme variant translations to the interface schema
   themeAuto: string;
   themeLight: string;
   themeDark: string;
-  autoRun: string;
-  run: string;
 }
 
-// Fixed: Moved outside the component to prevent re-allocation on every render
 const TRANSLATION_MAP: Record<Language, LocaleStrings> = {
   en: {
     title: "Salam Playground",
     app: "App",
     layout: "Layout",
     examples: "Examples",
-    themeAuto: "Auto",
-    themeLight: "Light",
-    themeDark: "Dark",
     autoRun: "Auto-run",
     run: "Run",
+    themeAuto: "◐ Auto",
+    themeLight: "☼ Light",
+    themeDark: "🌙 Dark",
   },
   fa: {
     title: "محیط آزمایشی سلام",
     app: "برنامه",
     layout: "چیدمان",
     examples: "نمونه‌ها",
-    themeAuto: "خودکار",
-    themeLight: "روشن",
-    themeDark: "تاریک",
     autoRun: "اجرای خودکار",
     run: "اجرا",
+    themeAuto: "◐ خودکار",
+    themeLight: "☼ روشن",
+    themeDark: "🌙 تاریک",
   },
-};
-
-const THEME_ICONS: Record<AppTheme, string> = {
-  auto: "◐",
-  light: "☼",
-  dark: "🌙"
 };
 
 export default function Header({
@@ -69,7 +63,6 @@ export default function Header({
   onRun,
 }: HeaderProps) {
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
-
   const t = TRANSLATION_MAP[lang];
 
   const cycleTheme = (): void => {
@@ -78,12 +71,8 @@ export default function Header({
     setTheme(modes[nextIndex]);
   };
 
-  const handleExampleChange = (e: ChangeEvent<HTMLSelectElement>): void => {
-    console.log("Selected example:", e.target.value);
-  };
-
   return (
-    <header className="flex flex-col md:flex-row items-center justify-between px-4 py-3 bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 shadow-xs relative z-50 select-none">
+    <header className="flex flex-col md:flex-row items-center justify-between px-4 py-3 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-xs relative z-50 select-none transition-colors duration-200">
       {/* Brand Header */}
       <div className="w-full md:w-auto flex items-center justify-between">
         <a href="?" className="flex items-center gap-2 group">
@@ -111,32 +100,36 @@ export default function Header({
       <div className={`${menuOpen ? "flex" : "hidden"} md:flex flex-col md:flex-row w-full md:w-auto items-stretch md:items-center gap-3 mt-4 md:mt-0`}>
 
         {/* Mode Segments */}
-        <div className="inline-flex bg-slate-100 dark:bg-slate-900 p-0.5 rounded-md border border-slate-200 dark:border-slate-800">
+        <div className="inline-flex bg-slate-100 dark:bg-slate-800 p-0.5 rounded-md border border-slate-200 dark:border-slate-700">
           <button
+            type="button"
             onClick={() => setMode("app")}
-            className={`px-3 py-1 text-sm font-medium rounded-sm transition-all ${mode === "app" ? "bg-white dark:bg-slate-800 text-brand shadow-xs" : "text-slate-600 dark:text-slate-400"}`}
+            className={`px-3 py-1 text-sm font-medium rounded-sm transition-all ${mode === "app" ? "bg-white dark:bg-slate-700 text-brand shadow-xs" : "text-slate-600 dark:text-slate-400"}`}
           >
             {t.app}
           </button>
           <button
+            type="button"
             onClick={() => setMode("layout")}
-            className={`px-3 py-1 text-sm font-medium rounded-sm transition-all ${mode === "layout" ? "bg-white dark:bg-slate-800 text-brand shadow-xs" : "text-slate-600 dark:text-slate-400"}`}
+            className={`px-3 py-1 text-sm font-medium rounded-sm transition-all ${mode === "layout" ? "bg-white dark:bg-slate-700 text-brand shadow-xs" : "text-slate-600 dark:text-slate-400"}`}
           >
             {t.layout}
           </button>
         </div>
 
         {/* Language Segments */}
-        <div className="inline-flex bg-slate-100 dark:bg-slate-900 p-0.5 rounded-md border border-slate-200 dark:border-slate-800">
+        <div className="inline-flex bg-slate-100 dark:bg-slate-800 p-0.5 rounded-md border border-slate-200 dark:border-slate-700">
           <button
+            type="button"
             onClick={() => setLang("en")}
-            className={`px-3 py-1 text-xs font-semibold rounded-sm transition-all ${lang === "en" ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs" : "text-slate-500"}`}
+            className={`px-3 py-1 text-xs font-semibold rounded-sm transition-all ${lang === "en" ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs" : "text-slate-500"}`}
           >
             English
           </button>
           <button
+            type="button"
             onClick={() => setLang("fa")}
-            className={`px-3 py-1 text-xs font-semibold rounded-sm transition-all ${lang === "fa" ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs" : "text-slate-500"}`}
+            className={`px-3 py-1 text-xs font-semibold rounded-sm transition-all ${lang === "fa" ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs" : "text-slate-500"}`}
           >
             فارسی
           </button>
@@ -145,8 +138,8 @@ export default function Header({
         {/* Custom Examples Dropdown Wrapper */}
         <div className="relative">
           <select
-            onChange={handleExampleChange}
-            className="w-full md:w-auto appearance-none bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 text-sm px-3 py-1.5 pe-8 rounded-md focus:outline-hidden focus:border-brand"
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => console.log("Selected example:", e.target.value)}
+            className="w-full md:w-auto appearance-none bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm px-3 py-1.5 pe-8 rounded-md focus:outline-hidden focus:border-brand"
             defaultValue=""
           >
             <option value="" disabled hidden>{t.examples}</option>
@@ -156,14 +149,13 @@ export default function Header({
           <span className={`absolute top-1/2 -translate-y-1/2 pointer-events-none text-xs text-slate-400 ${lang === 'fa' ? 'left-2.5' : 'right-2.5'}`}>▼</span>
         </div>
 
-        {/* Theme Toggle Button */}
+        {/* Theme Toggle Button — FIXED: Maps strings safely via active t translation map */}
         <button
           type="button"
           onClick={cycleTheme}
-          className="flex items-center justify-center gap-1.5 px-3 py-1.5 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 rounded-md text-sm text-slate-600 dark:text-slate-300"
+          className="flex items-center justify-center gap-1.5 px-3 py-1.5 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-md text-sm text-slate-600 dark:text-slate-300 cursor-pointer select-none transition-colors"
         >
-          <span>{THEME_ICONS[theme]}</span>
-          <span className="capitalize">
+          <span>
             {theme === "auto" ? t.themeAuto : theme === "light" ? t.themeLight : t.themeDark}
           </span>
         </button>
@@ -175,14 +167,14 @@ export default function Header({
           className={`flex items-center justify-center gap-2 px-3 py-1.5 border rounded-md text-sm transition-colors ${
             autoRun
               ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400"
-              : "border-slate-200 dark:border-slate-800 text-slate-500"
+              : "border-slate-200 dark:border-slate-700 text-slate-500"
           }`}
         >
           <span className={`w-2 h-2 rounded-full ${autoRun ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`} />
           <span>{t.autoRun}</span>
         </button>
 
-        {/* Main Compile Run Trigger */}
+        {/* Main Run Trigger */}
         <button
           type="button"
           onClick={onRun}

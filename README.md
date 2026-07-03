@@ -309,19 +309,39 @@ salam-monorepo/
 
 ##### `package.json` (Workspace Root)
 
-This file defines the workspaces in strict alphabetical order and leverages Bun's parallel filtering mechanics. It contains your global batch scripts, your automated interactive update target, and custom individual granular app triggers.
+This file defines the workspaces in strict alphabetical order and
+leverages Bun's parallel filtering mechanics. It also centralizes shared
+dependency versions via Bun's workspace `catalog` and exposes root
+scripts for local development, builds, Wrangler type generation, and
+dependency updates.
 
 ```json
 {
   "name": "salam-monorepo",
   "private": true,
-  "workspaces": [
-    "editor",
-    "extensions/vscode",
-    "pages",
-    "runner",
-    "vercel-editor"
-  ],
+  "workspaces": {
+    "packages": [
+      "editor",
+      "extensions/vscode",
+      "pages",
+      "runner",
+      "vercel-editor"
+    ],
+    "catalog": {
+      "react": "^19.2.7",
+      "react-dom": "^19.2.7",
+      "tailwindcss": "^4.3.2",
+      "@tailwindcss/vite": "^4.3.2",
+      "@vitejs/plugin-react": "^6.0.3",
+      "vite": "^8.1.3",
+      "typescript": "^6.0.3",
+      "wrangler": "^4.107.0",
+      "@types/bun": "latest",
+      "@types/node": "^26.1.0",
+      "@types/react": "^19.2.17",
+      "@types/react-dom": "^19.2.3"
+    }
+  },
   "scripts": {
     "dev:all": "bun run --filter='*' --parallel --if-present dev",
     "dev:editor": "bun run --filter='@workspace/editor' dev",
@@ -329,16 +349,31 @@ This file defines the workspaces in strict alphabetical order and leverages Bun'
     "dev:runner": "bun run --filter='@workspace/runner' dev",
     "dev:vercel": "bun run --filter='@workspace/vercel-editor' dev",
     "build:all": "bun run --filter='*' --if-present build",
+    "build:vercel": "bun run --filter='@workspace/vercel-editor' build",
     "update:deps": "bun update -i -r",
-    "clean": "rm -rf node_modules **/node_modules .bun-cache"
+    "clean": "rm -rf node_modules **/node_modules .bun-cache",
+    "generate": "bun run --filter='@workspace/runner' generate",
+    "typecheck": "bun run --filter='@workspace/runner' typecheck"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.2",
-    "@vitejs/plugin-react": "^6.0.3",
-    "vite": "^8.1.3"
+    "@tailwindcss/vite": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "vite": "catalog:"
   }
 }
 ```
+
+Useful root commands:
+
+- `bun run dev:all`: start every workspace that exposes a `dev` script
+- `bun run dev:editor`, `bun run dev:pages`, `bun run dev:runner`, and
+  `bun run dev:vercel`: start one workspace at a time
+- `bun run build:all`: run every workspace `build` script that exists
+- `bun run build:vercel`: build the React/Vite app in `vercel-editor/`
+- `bun run generate`: refresh Cloudflare Wrangler types for `runner/`
+- `bun run typecheck`: regenerate Wrangler types and run the `runner/`
+  TypeScript check
+- `bun run update:deps`: interactively update dependencies across the workspace
 
 ##### `bunfig.toml` (Workspace Root)
 

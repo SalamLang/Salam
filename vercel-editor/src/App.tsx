@@ -33,12 +33,14 @@ export default function App() {
   const [lang, setLang] = useState<Language>("en");
   const [theme, setTheme] = useState<AppTheme>("auto");
   const [autoRun, setAutoRun] = useState<boolean>(true);
-  const [randomPalette, setRandomPalette] = useState<RandomPalette | null>(null);
+  const [randomPalette, setRandomPalette] = useState<RandomPalette>(generateRandomPalette);
 
-  // Re-generate palette options on demand or on component layout initialization
+  // Re-generate palette whenever switching back to the random theme
   useEffect(() => {
-    setRandomPalette(generateRandomPalette());
-  }, [theme === "random"]); // Triggers a fresh look whenever toggling back to random
+    if (theme === "random") {
+      setRandomPalette(generateRandomPalette());
+    }
+  }, [theme]);
 
   useEffect(() => {
     document.documentElement.dir = lang === "fa" ? "rtl" : "ltr";
@@ -49,13 +51,18 @@ export default function App() {
     const root = document.documentElement;
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
-    // Clean tracking properties when navigating across standard styles
+    // Remove only the custom properties set by the random theme when leaving it
     if (theme !== "random") {
-      root.removeAttribute("style");
+      root.style.removeProperty("--custom-bg");
+      root.style.removeProperty("--custom-bg-darker");
+      root.style.removeProperty("--custom-text");
+      root.style.removeProperty("--custom-text-muted");
+      root.style.removeProperty("--custom-border");
+      root.style.removeProperty("--custom-header-bg");
     }
 
     const syncTheme = () => {
-      if (theme === "random" && randomPalette) {
+      if (theme === "random") {
         root.classList.add("dark");
         root.setAttribute("data-theme", "random");
 
@@ -100,7 +107,7 @@ export default function App() {
         setTheme={setTheme}
         autoRun={autoRun}
         setAutoRun={setAutoRun}
-        onRun={() => console.log("Compilation loop sequence activated.")}
+        onRun={() => {}}
       />
 
       <main className="flex-1 flex items-center justify-center p-8 bg-slate-50 dark:bg-slate-950">

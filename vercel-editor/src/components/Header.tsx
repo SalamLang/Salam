@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from "react";
+import { useState } from "react";
 import type { AppMode, Language, AppTheme } from "../App";
 
 interface HeaderProps {
@@ -85,7 +85,6 @@ export default function Header({
       <div className="w-full md:w-auto flex items-center justify-between">
         <a href="?" className="flex items-center gap-2 group">
           <span className="w-5 h-5 rounded-full bg-brand shadow-sm group-hover:scale-105 transition-transform" aria-hidden="true" />
-          {/* UPDATED: Added text-slate-800 dark:text-slate-100 to ensure high-visibility on dark/random targets */}
           <span className="font-bold text-lg tracking-tight text-slate-800 dark:text-slate-100">
             {t.title}
           </span>
@@ -153,7 +152,7 @@ export default function Header({
         {/* Custom Examples Dropdown Wrapper */}
         <div className="relative">
           <select
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => console.log("Selected example:", e.target.value)}
+            onChange={() => {}}
             className="w-full md:w-auto appearance-none bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm px-3 py-1.5 pe-8 rounded-md focus:outline-hidden focus:border-brand"
             defaultValue=""
             style={{
@@ -180,10 +179,7 @@ export default function Header({
           }}
         >
           <span>
-            {theme === "auto" && t.themeAuto}
-            {theme === "light" && t.themeLight}
-            {theme === "dark" && t.themeDark}
-            {theme === "random" && t.themeRandom}
+            {theme === "auto" ? t.themeAuto : theme === "light" ? t.themeLight : theme === "dark" ? t.themeDark : t.themeRandom}
           </span>
         </button>
 

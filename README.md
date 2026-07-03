@@ -309,7 +309,11 @@ salam-monorepo/
 
 ##### `package.json` (Workspace Root)
 
-This file defines the workspaces in strict alphabetical order and leverages Bun's parallel filtering mechanics. It also centralizes shared dependency versions via Bun's workspace `catalog` and exposes root scripts for local development, builds, Wrangler type generation, and dependency updates.
+This file defines the workspaces in strict alphabetical order and
+leverages Bun's parallel filtering mechanics. It also centralizes shared
+dependency versions via Bun's workspace `catalog` and exposes root
+scripts for local development, builds, Wrangler type generation, and
+dependency updates.
 
 ```json
 {
@@ -362,11 +366,13 @@ This file defines the workspaces in strict alphabetical order and leverages Bun'
 Useful root commands:
 
 - `bun run dev:all`: start every workspace that exposes a `dev` script
-- `bun run dev:editor`, `bun run dev:pages`, `bun run dev:runner`, `bun run dev:vercel`: start one workspace at a time
+- `bun run dev:editor`, `bun run dev:pages`, `bun run dev:runner`, and
+  `bun run dev:vercel`: start one workspace at a time
 - `bun run build:all`: run every workspace `build` script that exists
 - `bun run build:vercel`: build the React/Vite app in `vercel-editor/`
 - `bun run generate`: refresh Cloudflare Wrangler types for `runner/`
-- `bun run typecheck`: regenerate Wrangler types and run the `runner/` TypeScript check
+- `bun run typecheck`: regenerate Wrangler types and run the `runner/`
+  TypeScript check
 - `bun run update:deps`: interactively update dependencies across the workspace
 
 ##### `bunfig.toml` (Workspace Root)

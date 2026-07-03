@@ -164,7 +164,7 @@ export default function Header({
         >
           <span>{THEME_ICONS[theme]}</span>
           <span className="capitalize">
-            {theme === "auto" ? t.themeAuto : theme === "light" ? t.themeLight : theme === "dark" ? t.themeDark : theme}
+            {theme === "auto" ? t.themeAuto : theme === "light" ? t.themeLight : t.themeDark}
           </span>
         </button>
 

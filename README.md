@@ -10,7 +10,7 @@ Salam is a general-purpose and systems programming language designed for efficie
 
 [![Discord](https://dcbadge.limes.pink/api/server/https://discord.gg/HfY3QHDPdv)](https://discord.gg/HfY3QHDPdv)
 [![GitHub Release](https://img.shields.io/github/v/release/salamlang/salam?style=for-the-badge&color=007ACC)](https://github.com/SalamLang/Salam/releases)
-[![GitHub repo size](https://img.shields.io/github/repo-size/salamlang/salam?style=for-the-badge&color=444444)](https://github.com/SalamLang/Salam)
+[![GitHub repository size](https://img.shields.io/github/repo-size/salamlang/salam?style=for-the-badge&color=444444)](https://github.com/SalamLang/Salam)
 
 [![Salam Programming Language Playground](https://img.shields.io/badge/Salam-Playground-1A1A1A?style=for-the-badge&labelColor=333333&color=00FFCC)](https://salamlang.github.io/Salam/)
 
@@ -568,9 +568,9 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[C ABI](https://en.wikipedia.org/wiki/Application_binary_interface)** | C Application Binary Interface — the low-level contract for how functions are called and data is laid out in memory. Salam's FFI and `extern "C"` declarations rely on the C ABI. |
 | **[CI (Continuous Integration)](https://en.wikipedia.org/wiki/Continuous_integration)** | Automated pipeline that builds, tests, and lints every pull request. Salam uses GitHub Actions for CI. |
 | **[Clang](https://clang.llvm.org/)** | LLVM-based C compiler. One of the supported backends for building the Salam compiler. |
-| **[CMake](https://cmake.org/)** | Cross-platform build system generator. The Salam compiler can be built with `cmake -B build && cmake --build build`. |
+| **[CMake](https://cmake.org/)** | Cross-platform build tool generator. The Salam compiler can be built with `cmake -B build && cmake --build build`. |
 | **[Codegen](https://en.wikipedia.org/wiki/Code_generation_(compiler))** | Code-generation backend. Transforms the compiler's AST and type information into target output (C source, LLVM IR, or a WebAssembly module). |
-| **[Codespell](https://github.com/codespell-project/codespell)** | Spell-checker for source code and documentation. Run as a prek hook to catch typos. |
+| **[Codespell](https://github.com/codespell-project/codespell)** | Spell checker for source code and documentation. Run as a prek hook to catch typos. |
 | **[CTest](https://cmake.org/cmake/help/latest/manual/ctest.1.html)** | CMake's built-in test runner. Invoked with `ctest --test-dir build` after a CMake build of the compiler. |
 | **defer** | Salam keyword that schedules a statement or block to run at the end of the enclosing scope, regardless of how the scope is exited. |
 | **[Docker](https://www.docker.com/)** | Container platform used to build and run the Salam compiler in an isolated, reproducible environment. |
@@ -581,13 +581,13 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[entr](https://eradman.com/entrproject/)** | Utility that re-runs a command whenever watched files change. Used in Salam's Docker dev mode to rebuild the compiler on source edits. |
 | **[FFI (Foreign Function Interface)](https://en.wikipedia.org/wiki/Foreign_function_interface)** | Mechanism for calling functions written in another language (typically C). Salam supports FFI via `extern "C"` declarations. |
 | **[Fork](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo)** | A personal copy of a repository on GitHub. Contributors fork `SalamLang/Salam`, work in their fork, then open a pull request back to the original. |
-| **[GCC](https://gcc.gnu.org/)** | GNU Compiler Collection. A C compiler supported by the Salam build system. |
+| **[GCC](https://gcc.gnu.org/)** | GNU Compiler Collection. A C compiler supported by the Salam build tool. |
 | **[Gitleaks](https://github.com/gitleaks/gitleaks)** | Secret-detection tool run as a prek audit hook to prevent accidental commits of API keys or credentials. |
 | **[GitHub Actions](https://docs.github.com/en/actions)** | Salam's CI/CD platform. Workflows are defined in `.github/workflows/`. |
 | **Layout DSL** | Salam's built-in sublanguage for describing UIs. `layout:` blocks, or `.salam` files processed with `salam layout build`, compile to HTML, CSS, and JavaScript. |
 | **[Lexer](https://en.wikipedia.org/wiki/Lexical_analysis)** | First stage of the compiler pipeline: reads source text and produces a stream of tokens. |
 | **[LLVM](https://llvm.org/)** | Low Level Virtual Machine — a compiler infrastructure project. Used as an optional backend (`clang-22`, `llc-22`, `opt-22`, `lli-22` are included in the Docker image). |
-| **[Makefile](https://www.gnu.org/software/make/)** | GNU Make build script (`compiler/Makefile`). Running `make` from `compiler/` produces a release build of the `salam` binary at the repo root. |
+| **[Makefile](https://www.gnu.org/software/make/)** | GNU Make build script (`compiler/Makefile`). Running `make` from `compiler/` produces a release build of the `salam` binary at the repository root. |
 | **[Markdownlint](https://github.com/igorshubovych/markdownlint-cli)** | Linter for Markdown files. Enforces consistent style in `README.md`, `CONTRIBUTING.md`, and other docs. |
 | **[musl](https://musl.libc.org/)** | A C standard library used by Alpine Linux. Salam's Docker images are based on Alpine + musl for a minimal footprint. |
 | **[npm](https://www.npmjs.com/)** | Node Package Manager. Used alongside Bun for package management in the Salam monorepo. |

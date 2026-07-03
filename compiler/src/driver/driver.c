@@ -388,9 +388,44 @@ static bool path_is_dir(const char *p)
 #endif
 }
 
+/* Match the ASCII tag at [p,le) case-insensitively; return its length or 0. */
+static size_t fmt_match_tag_ci(const char *text, size_t p, size_t le,
+                               const char *tag, size_t n)
+{
+    size_t k = 0;
+    if (p + n > le) return 0;
+    for (; k < n; k++) {
+        char ch = text[p + k];
+        if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+        if (ch != tag[k]) return 0;
+    }
+    return n;
+}
+
+/* Match a raw byte sequence at [p,le); return its length or 0. */
+static size_t fmt_match_bytes(const char *text, size_t p, size_t le,
+                              const char *tag, size_t n)
+{
+    size_t k = 0;
+    if (p + n > le) return 0;
+    for (; k < n; k++) if (text[p + k] != tag[k]) return 0;
+    return n;
+}
+
+/*
+ * Detect a language marker in the first few comment lines. Both the English
+ * `// lang: <code>` and the Persian `// زبان: <code>` forms are accepted, and
+ * the value may be an ASCII code (fa/en) or its Persian name (فارسی/انگلیسی),
+ * so `// LANG: fa` and `// زبان: فارسی` are equivalent.
+ */
 static const char *fmt_marker_lang(const char *text, size_t len)
 {
-    static const char tag[] = "lang:";
+    static const char en_tag[] = "lang";
+    /* Persian words encoded as raw UTF-8 bytes so the source stays ASCII-only. */
+    static const char fa_tag[] = "\xd8\xb2\xd8\xa8\xd8\xa7\xd9\x86";              /* زبان    */
+    static const char fa_val[] = "\xd9\x81\xd8\xa7\xd8\xb1\xd8\xb3\xdb\x8c";      /* فارسی   */
+    static const char en_val[] = "\xd8\xa7\xd9\x86\xda\xaf\xd9\x84\xdb\x8c"
+                                 "\xd8\xb3\xdb\x8c";                             /* انگلیسی */
     size_t i = 0; int line = 0;
     while (i < len && line < 8) {
         size_t ls = i;
@@ -398,17 +433,19 @@ static const char *fmt_marker_lang(const char *text, size_t len)
         size_t le = ls;
         while (le < len && text[le] != '\n') le++;
         if (ls + 1 < len && text[ls] == '/' && text[ls + 1] == '/') {
-            size_t p = ls;
-            for (; p + 5 <= le; p++) {
-                int hit = 1, k = 0;
-                for (; k < 5; k++) {
-                    char ch = text[p + k];
-                    if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
-                    if (ch != tag[k]) { hit = 0; break; }
-                }
-                if (!hit) continue;
-                size_t q = p + 5;
+            size_t p = ls + 2;
+            for (; p < le; p++) {
+                size_t tlen = fmt_match_tag_ci(text, p, le, en_tag, 4);
+                if (!tlen) tlen = fmt_match_bytes(text, p, le, fa_tag, 8);
+                if (!tlen) continue;
+                size_t q = p + tlen;
                 while (q < le && (text[q] == ' ' || text[q] == '\t')) q++;
+                if (q >= le || text[q] != ':') continue;
+                q++;
+                while (q < le && (text[q] == ' ' || text[q] == '\t')) q++;
+                /* Persian names (multi-byte) take priority over ASCII codes. */
+                if (fmt_match_bytes(text, q, le, fa_val, 10)) return "fa";
+                if (fmt_match_bytes(text, q, le, en_val, 14)) return "en";
                 size_t cs = q;
                 while (q < le && ((text[q] >= 'a' && text[q] <= 'z') ||
                                   (text[q] >= 'A' && text[q] <= 'Z'))) q++;

@@ -139,18 +139,28 @@ type_t *type_func(type_ctx_t *tc, type_t *ret, const vec_t *params)
 int type_prim_kind_from_name(const char *name)
 {
     struct { const char *n; type_kind_t k; } tab[] = {
-        {"void",TY_VOID},{"bool",TY_BOOL},{"char",TY_CHAR},{"str",TY_STR},
+        {"void",TY_VOID},
+        {"bool",TY_BOOL},
+        {"char",TY_CHAR},
+        {"str",TY_STR},
+
         {"i8",TY_I8},{"i16",TY_I16},{"i32",TY_I32},{"int",TY_I32},{"i64",TY_I64},
         {"u8",TY_U8},{"u16",TY_U16},{"u32",TY_U32},{"uint",TY_U32},{"u64",TY_U64},
         {"f32",TY_F32},{"float",TY_F32},{"f64",TY_F64},
         
-        {"تهی",TY_VOID},{"منطقی",TY_BOOL},{"نویسه",TY_CHAR},{"رشته",TY_STR},
+        {"تهی",TY_VOID},
+        {"منطقی",TY_BOOL},
+        {"نویسه",TY_CHAR},
+        {"رشته",TY_STR},
+
         {"صحیح۸",TY_I8},{"صحیح۱۶",TY_I16},{"صحیح۳۲",TY_I32},{"صحیح",TY_I32},{"صحیح۶۴",TY_I64},
         {"صحیح8",TY_I8},{"صحیح16",TY_I16},{"صحیح32",TY_I32},{"صحیح64",TY_I64},
+
         {"طبیعی۸",TY_U8},{"طبیعی۱۶",TY_U16},{"طبیعی۳۲",TY_U32},{"طبیعی",TY_U32},{"طبیعی۶۴",TY_U64},
         {"طبیعی8",TY_U8},{"طبیعی16",TY_U16},{"طبیعی32",TY_U32},{"طبیعی64",TY_U64},
-        {"اعشاری۳۲",TY_F32},{"اعشاری",TY_F32},{"اعشاری۶۴",TY_F64},
-        {"اعشاری32",TY_F32},{"اعشاری64",TY_F64},
+
+        {"اعشار۳۲",TY_F32},{"اعشار",TY_F32},{"اعشار۶۴",TY_F64},
+        {"اعشار32",TY_F32},{"اعشار64",TY_F64},
     };
     { size_t i = 0; for (; i < sizeof(tab)/sizeof(tab[0]); i++)
         if (strcmp(name, tab[i].n) == 0) return (int)tab[i].k; }

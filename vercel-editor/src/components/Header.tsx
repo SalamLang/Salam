@@ -85,7 +85,7 @@ export default function Header({
       <div className="w-full md:w-auto flex items-center justify-between">
         <a href="?" className="flex items-center gap-2 group">
           <span className="w-5 h-5 rounded-full bg-brand shadow-sm group-hover:scale-105 transition-transform" aria-hidden="true" />
-          <span className="font-bold text-lg tracking-tight text-slate-800 dark:text-slate-100">
+          <span className="font-bold text-lg tracking-tight text-slate-800 dark:text-white">
             {t.title}
           </span>
         </a>

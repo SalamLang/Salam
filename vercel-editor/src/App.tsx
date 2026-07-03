@@ -3,13 +3,42 @@ import Header from "./components/Header";
 
 export type AppMode = "app" | "layout";
 export type Language = "en" | "fa";
-export type AppTheme = "auto" | "light" | "dark";
+export type AppTheme = "auto" | "light" | "dark" | "random";
+
+interface RandomPalette {
+  bg: string;
+  bgDarker: string;
+  text: string;
+  textMuted: string;
+  border: string;
+  headerBg: string;
+}
+
+const generateRandomPalette = (): RandomPalette => {
+  const randomHue = Math.floor(Math.random() * 360);
+
+  // High contrast neon/retro-futuristic dark mode parameters
+  return {
+    bg: `hsl(${randomHue}, 40%, 8%)`,
+    bgDarker: `hsl(${randomHue}, 45%, 4%)`,
+    headerBg: `hsl(${randomHue}, 35%, 12%)`,
+    text: `hsl(${(randomHue + 150) % 360}, 95%, 80%)`,
+    textMuted: `hsl(${(randomHue + 150) % 360}, 60%, 65%)`,
+    border: `hsl(${randomHue}, 50%, 22%)`,
+  };
+};
 
 export default function App() {
   const [mode, setMode] = useState<AppMode>("app");
   const [lang, setLang] = useState<Language>("en");
   const [theme, setTheme] = useState<AppTheme>("auto");
   const [autoRun, setAutoRun] = useState<boolean>(true);
+  const [randomPalette, setRandomPalette] = useState<RandomPalette | null>(null);
+
+  // Re-generate palette options on demand or on component layout initialization
+  useEffect(() => {
+    setRandomPalette(generateRandomPalette());
+  }, [theme === "random"]); // Triggers a fresh look whenever toggling back to random
 
   useEffect(() => {
     document.documentElement.dir = lang === "fa" ? "rtl" : "ltr";
@@ -20,7 +49,26 @@ export default function App() {
     const root = document.documentElement;
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
+    // Clean tracking properties when navigating across standard styles
+    if (theme !== "random") {
+      root.removeAttribute("style");
+    }
+
     const syncTheme = () => {
+      if (theme === "random" && randomPalette) {
+        root.classList.add("dark");
+        root.setAttribute("data-theme", "random");
+
+        // Push full theme palette array straight to global CSS window namespace
+        root.style.setProperty("--custom-bg", randomPalette.bg);
+        root.style.setProperty("--custom-bg-darker", randomPalette.bgDarker);
+        root.style.setProperty("--custom-text", randomPalette.text);
+        root.style.setProperty("--custom-text-muted", randomPalette.textMuted);
+        root.style.setProperty("--custom-border", randomPalette.border);
+        root.style.setProperty("--custom-header-bg", randomPalette.headerBg);
+        return;
+      }
+
       const isDarkSystem = mediaQuery.matches;
       const shouldBeDark = theme === "dark" || (theme === "auto" && isDarkSystem);
 
@@ -39,10 +87,10 @@ export default function App() {
       mediaQuery.addEventListener("change", syncTheme);
       return () => mediaQuery.removeEventListener("change", syncTheme);
     }
-  }, [theme]);
+  }, [theme, randomPalette]);
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans transition-colors duration-200">
+    <div className="min-h-screen flex flex-col font-sans transition-colors duration-200 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
       <Header
         mode={mode}
         setMode={setMode}
@@ -52,11 +100,11 @@ export default function App() {
         setTheme={setTheme}
         autoRun={autoRun}
         setAutoRun={setAutoRun}
-        onRun={() => console.log("Code run triggered...")}
+        onRun={() => console.log("Compilation loop sequence activated.")}
       />
 
-      <main className="flex-1 flex items-center justify-center p-8">
-        <div className="text-sm border border-dashed border-slate-300 dark:border-slate-800 p-12 rounded-lg text-slate-400 dark:text-slate-500">
+      <main className="flex-1 flex items-center justify-center p-8 bg-slate-50 dark:bg-slate-950">
+        <div className="text-sm border border-dashed border-slate-300 dark:border-slate-800 p-12 rounded-lg text-slate-500 dark:text-slate-400">
           {lang === "en"
             ? "Workspace Panes (Editor & Results) go here."
             : "صفحه ویرایشگر و خروجی اینجا قرار می‌گیرند."}

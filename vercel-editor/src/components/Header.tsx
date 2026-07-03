@@ -18,11 +18,12 @@ interface LocaleStrings {
   app: string;
   layout: string;
   examples: string;
+  autoRun: string;
+  run: string;
+  // Added theme variant translations to the interface schema
   themeAuto: string;
   themeLight: string;
   themeDark: string;
-  autoRun: string;
-  run: string;
 }
 
 const TRANSLATION_MAP: Record<Language, LocaleStrings> = {
@@ -31,29 +32,23 @@ const TRANSLATION_MAP: Record<Language, LocaleStrings> = {
     app: "App",
     layout: "Layout",
     examples: "Examples",
-    themeAuto: "Auto",
-    themeLight: "Light",
-    themeDark: "Dark",
     autoRun: "Auto-run",
     run: "Run",
+    themeAuto: "◐ Auto",
+    themeLight: "☼ Light",
+    themeDark: "🌙 Dark",
   },
   fa: {
     title: "محیط آزمایشی سلام",
     app: "برنامه",
     layout: "چیدمان",
     examples: "نمونه‌ها",
-    themeAuto: "خودکار",
-    themeLight: "روشن",
-    themeDark: "تاریک",
     autoRun: "اجرای خودکار",
     run: "اجرا",
+    themeAuto: "◐ خودکار",
+    themeLight: "☼ روشن",
+    themeDark: "🌙 تاریک",
   },
-};
-
-const THEME_LABELS: Record<AppTheme, string> = {
-  auto: "◐ Auto",
-  light: "☼ Light",
-  dark: "🌙 Dark",
 };
 
 export default function Header({
@@ -154,13 +149,15 @@ export default function Header({
           <span className={`absolute top-1/2 -translate-y-1/2 pointer-events-none text-xs text-slate-400 ${lang === 'fa' ? 'left-2.5' : 'right-2.5'}`}>▼</span>
         </div>
 
-        {/* Theme Toggle Button */}
+        {/* Theme Toggle Button — FIXED: Maps strings safely via active t translation map */}
         <button
           type="button"
           onClick={cycleTheme}
           className="flex items-center justify-center gap-1.5 px-3 py-1.5 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-md text-sm text-slate-600 dark:text-slate-300 cursor-pointer select-none transition-colors"
         >
-          <span>{THEME_LABELS[theme]}</span>
+          <span>
+            {theme === "auto" ? t.themeAuto : theme === "light" ? t.themeLight : t.themeDark}
+          </span>
         </button>
 
         {/* Auto-run Switch Button */}

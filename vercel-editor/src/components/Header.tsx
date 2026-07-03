@@ -152,7 +152,7 @@ export default function Header({
         {/* Custom Examples Dropdown Wrapper */}
         <div className="relative">
           <select
-            onChange={() => {}}
+            onChange={() => { /* example loading not yet implemented */ }}
             className="w-full md:w-auto appearance-none bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm px-3 py-1.5 pe-8 rounded-md focus:outline-hidden focus:border-brand"
             defaultValue=""
             style={{

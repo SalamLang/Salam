@@ -66,7 +66,7 @@ export default function App() {
         root.classList.add("dark");
         root.setAttribute("data-theme", "random");
 
-        // Push full theme palette array straight to global CSS window namespace
+        // Set all custom CSS properties for the random palette
         root.style.setProperty("--custom-bg", randomPalette.bg);
         root.style.setProperty("--custom-bg-darker", randomPalette.bgDarker);
         root.style.setProperty("--custom-text", randomPalette.text);

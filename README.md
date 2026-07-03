@@ -587,7 +587,7 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **Layout DSL** | Salam's built-in sublanguage for describing UIs. `layout:` blocks, or `.salam` files processed with `salam layout build`, compile to HTML, CSS, and JavaScript. |
 | **[Lexer](https://en.wikipedia.org/wiki/Lexical_analysis)** | First stage of the compiler pipeline: reads source text and produces a stream of tokens. |
 | **[LLVM](https://llvm.org/)** | Low Level Virtual Machine — a compiler infrastructure project. Used as an optional backend (`clang-22`, `llc-22`, `opt-22`, `lli-22` are included in the Docker image). |
-| **[Makefile](https://www.gnu.org/software/make/)** | GNU Make build script (`compiler/Makefile`). Running `make` from `compiler/` produces a release build of the `salam` binary at the  root. |
+| **[Makefile](https://www.gnu.org/software/make/)** | GNU Make build script (`compiler/Makefile`). Running `make` from `compiler/` produces a release build of the `salam` binary at the repository root. |
 | **[Markdownlint](https://github.com/igorshubovych/markdownlint-cli)** | Linter for Markdown files. Enforces consistent style in `README.md`, `CONTRIBUTING.md`, and other docs. |
 | **[musl](https://musl.libc.org/)** | A C standard library used by Alpine Linux. Salam's Docker images are based on Alpine + musl for a minimal footprint. |
 | **[npm](https://www.npmjs.com/)** | Node Package Manager. Used alongside Bun for package management in the Salam monorepo. |

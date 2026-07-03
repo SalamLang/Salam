@@ -1,19 +1,57 @@
-function App() {
+import { useState, useEffect } from "react";
+import Header from "./components/Header";
+
+export type AppMode = "app" | "layout";
+export type Language = "en" | "fa";
+export type AppTheme = "auto" | "light" | "dark";
+
+export default function App() {
+  const [mode, setMode] = useState<AppMode>("app");
+  const [lang, setLang] = useState<Language>("en");
+  const [theme, setTheme] = useState<AppTheme>("auto");
+  const [autoRun, setAutoRun] = useState<boolean>(true);
+
+  useEffect(() => {
+    document.documentElement.dir = lang === "fa" ? "rtl" : "ltr";
+    document.documentElement.lang = lang;
+  }, [lang]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const isDarkSystem = window.matchMedia("(prefers-color-scheme: dark)").matches;
+
+    if (theme === "dark" || (theme === "auto" && isDarkSystem)) {
+      root.classList.add("dark");
+    } else {
+      root.classList.remove("dark");
+    }
+  }, [theme]);
+
+  const handleRun = (): void => {
+    console.log("Compiling & Running Salam code...");
+  };
+
   return (
-    <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4">
-      <div className="max-w-xl text-center bg-slate-800 p-8 rounded-2xl shadow-xl border border-slate-700">
-        <h1 className="text-4xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
-          Bun + Vite + React + Tailwind v4
-        </h1>
-        <p className="mt-4 text-slate-400">
-          Your static HTML and CSS migration skeleton is ready.
+    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-sans transition-colors duration-200">
+      <Header
+        mode={mode}
+        setMode={setMode}
+        lang={lang}
+        setLang={setLang}
+        theme={theme}
+        setTheme={setTheme}
+        autoRun={autoRun}
+        setAutoRun={setAutoRun}
+        onRun={handleRun}
+      />
+
+      <main className="flex-1 flex items-center justify-center p-8">
+        <p className="text-sm border border-dashed border-slate-300 dark:border-slate-700 p-12 rounded-lg text-slate-400 dark:text-slate-500">
+          {lang === "en"
+            ? "Workspace Panes (Editor & Results) go here."
+            : "صفحه ویرایشگر و خروجی اینجا قرار می‌گیرند."}
         </p>
-        <button className="mt-6 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 font-medium rounded-lg transition-colors shadow-lg shadow-blue-500/20">
-          Get Started
-        </button>
-      </div>
+      </main>
     </div>
   );
 }
-
-export default App;

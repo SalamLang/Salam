@@ -60,6 +60,10 @@ const CONTROL = [
   "نهاية",
 ];
 
+// Logical operators expressed as words: و / یا (Persian) and أو (Arabic),
+// the localized forms of && / ||. Highlighted as operators, not control words.
+const LOGICAL = ["و", "یا", "أو"];
+
 const STORAGE = [
   "func",
   "mut",
@@ -406,6 +410,7 @@ const grammar = {
     keywords: {
       patterns: [
         { name: "keyword.control.salam", match: kw(CONTROL) },
+        { name: "keyword.operator.logical.salam", match: kw(LOGICAL) },
         { name: "storage.type.salam", match: kw(STORAGE) },
         { name: "support.function.builtin.salam", match: kw(IO) },
         {

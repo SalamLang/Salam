@@ -169,6 +169,7 @@ type_t *type_func(type_ctx_t *tc, type_t *ret, const vec_t *params)
 
 int type_prim_kind_from_name(const char *name, const char *lang)
 {
+    if (!name) return -1;
     enum { L_EN = 1, L_FA = 2, L_AR = 3 };
     struct {
         const char *n;

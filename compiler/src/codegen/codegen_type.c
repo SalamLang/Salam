@@ -79,6 +79,7 @@ static const char *base_ctype(const char *base)
 {
     struct { const char *s, *c; } m[] = {
         {"void","void"},{"bool","bool"},{"char","char"},{"str","const char*"},
+        {"uchar","const char*"},
         {"i8","int8_t"},{"i16","int16_t"},{"i32","int32_t"},{"i64","int64_t"},
         {"u8","uint8_t"},{"u16","uint16_t"},{"u32","uint32_t"},{"u64","uint64_t"},
         {"f32","float"},{"f64","double"},{"File","salam_file"},
@@ -323,7 +324,8 @@ long array_size_of(const char *ts)
 int print_tag(const char *ts)
 {
     if (!ts) return 7;
-    if (!strcmp(ts,"str")) return 7;       
+    if (!strcmp(ts,"str")) return 7;
+    if (!strcmp(ts,"uchar")) return 7;
     if (!strcmp(ts,"bool")) return 5;      
     if (!strcmp(ts,"char")) return 6;      
     if (!strcmp(ts,"f32")||!strcmp(ts,"f64")) return 4;  

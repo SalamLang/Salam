@@ -211,11 +211,33 @@ llv_t ll_binary(ll_t *ll, ast_node_t *n)
     if (ll_binary_string(ll, n, op, &handled)) return handled;
     
     if (op == TK_AND || op == TK_OR) {
-        const char *l  = ll_as_i1(ll, ll_expr(ll, n->a));
-        const char *rr = ll_as_i1(ll, ll_expr(ll, n->b));
-        const char *r = ll_new_tmp(ll);
-        ll_emit(ll, "%s = %s i1 %s, %s", r, op == TK_AND ? "and" : "or", l, rr);
-        return (llv_t){ r, "bool" };
+        /* Short-circuit like the C backend and interpreter: for `a && b` the
+         * right side is only evaluated when a is true; for `a || b` only when
+         * a is false. A phi merges the constant short-circuit result with the
+         * evaluated right side. The empty `sc`/`join` blocks give the phi
+         * predecessors known labels without tracking the current block. */
+        bool is_and = (op == TK_AND);
+        const char *rhsL  = ll_new_lbl(ll, "sc_rhs");
+        const char *scL   = ll_new_lbl(ll, "sc_short");
+        const char *joinL = ll_new_lbl(ll, "sc_join");
+        const char *endL  = ll_new_lbl(ll, "sc_end");
+        const char *la = ll_as_i1(ll, ll_expr(ll, n->a));
+        if (is_and)
+            ll_emit_term(ll, "br i1 %s, label %%%s, label %%%s", la, rhsL, scL);
+        else
+            ll_emit_term(ll, "br i1 %s, label %%%s, label %%%s", la, scL, rhsL);
+        ll_emit_label(ll, scL);
+        ll_emit_term(ll, "br label %%%s", endL);
+        ll_emit_label(ll, rhsL);
+        const char *lb = ll_as_i1(ll, ll_expr(ll, n->b));
+        ll_emit_term(ll, "br label %%%s", joinL);
+        ll_emit_label(ll, joinL);
+        ll_emit_term(ll, "br label %%%s", endL);
+        ll_emit_label(ll, endL);
+        { const char *r = ll_new_tmp(ll);
+          ll_emit(ll, "%s = phi i1 [ %s, %%%s ], [ %s, %%%s ]",
+                  r, is_and ? "false" : "true", scL, lb, joinL);
+          return (llv_t){ r, "bool" }; }
     }
     if (op == TK_POWER) return ll_binary_pow(ll, n);
     llv_t L = ll_expr(ll, n->a), R = ll_expr(ll, n->b);

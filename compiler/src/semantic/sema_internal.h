@@ -33,6 +33,7 @@ typedef struct {
     logger_t      *log;
     diag_engine_t *diag;
     const char    *file;
+    const char    *lang;   /* language of the module being checked ("fa"/"en") */
     type_ctx_t    *tc;
     scope_t       *global;
     scope_t       *cur;
@@ -85,7 +86,8 @@ symbol_t *generic_template(sema_t *s, const char *name, sym_kind_t kind);
 
 symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes, const src_span_t *span);
 
-symbol_t *g_infer_call(sema_t *s, symbol_t *tsym, vec_t *argtypes, const src_span_t *span);
+symbol_t *g_infer_call(sema_t *s, symbol_t *tsym, vec_t *argtypes,
+                       const src_span_t *span, type_t *expected);
 
 ast_node_t *coerce_to_dyn(sema_t *s, type_t *expected, ast_node_t *expr, type_t *etype);
 

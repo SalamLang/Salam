@@ -289,7 +289,7 @@ static bool repl_compile_pkg(arena_t *a, logger_t *lg, langpack_t *pack,
     if (!lexer_run(a, lg, pack, src, &toks)) return false;
     ast_node_t *prog = NULL;
     if (!parser_run(a, lg, toks, &prog)) return false;
-    sema_result_t *sr = sema_run(a, lg, prog, src->path);
+    sema_result_t *sr = sema_run(a, lg, prog, src->path, langpack_code(pack));
     if (!sr || !sr->ok) return false;
     codegen_output_t *out = codegen_run(a, lg, prog, sr, pkg, false, false,
                                         src->path, langpack_entry(pack));
@@ -314,7 +314,7 @@ static bool repl_exec(const char *full_src, const char *cc,
     bool ok = lexer_run(a, lg, pack, &sf, &toks);
     ast_node_t *prog = NULL;
     ok = ok && parser_run(a, lg, toks, &prog);
-    sema_result_t *sr = ok ? sema_run(a, lg, prog, sf.path) : NULL;
+    sema_result_t *sr = ok ? sema_run(a, lg, prog, sf.path, langpack_code(pack)) : NULL;
     ok = sr && sr->ok;
     if (!ok) { logger_free(lg); arena_free(a); return false; }
     codegen_output_t *out = codegen_run(a, lg, prog, sr, "_repl_", false, false, sf.path,
@@ -389,7 +389,7 @@ static void repl_layout_exec(const char *src_text, const langpack_t *pack,
     bool ok = lexer_run(arena, log, pack, &sf, &toks);
     ast_node_t *prog = NULL;
     ok = ok && parser_run(arena, log, toks, &prog);
-    if (ok) sema_run(arena, log, prog, sf.path);
+    if (ok) sema_run(arena, log, prog, sf.path, langpack_code(pack));
     if (ok) {
         ast_node_t *lb = repl_find_layout(prog);
         if (lb) {
@@ -512,7 +512,7 @@ int driver_repl(options_t *opt)
             bool ok = lexer_run(va, vl, pack, &sf, &toks);
             ast_node_t *prog = NULL;
             ok = ok && parser_run(va, vl, toks, &prog);
-            sema_result_t *sr = ok ? sema_run(va, vl, prog, sf.path) : NULL;
+            sema_result_t *sr = ok ? sema_run(va, vl, prog, sf.path, langpack_code(pack)) : NULL;
             ok = sr && sr->ok;
             arena_free(va); logger_free(vl); sb_free(&test);
             if (ok) {

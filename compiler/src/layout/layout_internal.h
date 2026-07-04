@@ -58,6 +58,8 @@ const char *hyphenate(layout_ctx_t *cx, const char *s);
 
 const char *html_escape(layout_ctx_t *cx, const char *s);
 
+void        sb_put_html_escaped(sb_t *b, const char *s);
+
 const char *val_str(layout_ctx_t *cx, ast_node_t *v);
 
 void        emit_rule(layout_ctx_t *cx, const char *rule);

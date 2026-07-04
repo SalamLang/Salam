@@ -124,11 +124,16 @@ static ast_node_t *parse_import_entry(parser_t *p)
 static void parse_imports_into(parser_t *p, ast_node_t *prog)
 {
     p_advance(p);                                       
-    if (p_match(p, TK_LPAREN)) {                         
+    if (p_match(p, TK_LPAREN)) {
         p_skip_terminators(p);
         while (!p_at(p, TK_RPAREN) && !p_at_eof(p)) {
+            size_t before = p->pos;
             ast_add(p->a, prog, parse_import_entry(p));
             p_skip_terminators(p);
+            /* parse_import_entry does not consume a token that is neither a
+             * string nor an identifier; force progress so a stray token (e.g.
+             * `import ( 42 )`) cannot spin this loop forever. */
+            if (p->pos == before) p_advance(p);
         }
         p_expect(p, TK_RPAREN, "')' to close import group");
     } else {

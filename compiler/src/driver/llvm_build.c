@@ -75,11 +75,12 @@ int driver_llvm(options_t *opt)
     src = preproc_source(arena, log, src, opt->defines, opt->ndefines);
     logger_set_diag_source(log, src->text, src->len, opt->diag_style, opt->diag_format);
     const char *module = module_of(arena, opt->input);
+    const langpack_t *modpack = langpack_detect(arena, src, pack);
     token_stream_t *toks = NULL;
-    bool lok = lexer_run(arena, log, pack, src, &toks);
+    bool lok = lexer_run(arena, log, modpack, src, &toks);
     ast_node_t *program = NULL;
     bool pok = parser_run(arena, log, toks, &program);
-    sema_result_t *sr = sema_run(arena, log, program, src->path);
+    sema_result_t *sr = sema_run(arena, log, program, src->path, langpack_code(modpack));
     if (!lok || !pok || !sr->ok) {
         LOG_E(log, PH_DRIVER, i18n_tr("build aborted: errors in source"));
         logger_free(log); arena_free(arena); return 1;

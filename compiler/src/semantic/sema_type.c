@@ -88,7 +88,11 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
         return base;
     }
     
-    if (tnode->name) tnode->name = intrinsic_type_canon(local_canon(s, tnode->name));
+    /* A primitive type name wins over a package/member alias of the same
+     * spelling (e.g. the Persian رشته type vs. the str package's fa alias
+     * رشته), so only canonicalise names that are not primitive types. */
+    if (tnode->name && type_prim_kind_from_name(tnode->name, NULL) < 0)
+        tnode->name = intrinsic_type_canon(local_canon(s, tnode->name));
     
     if (tnode->name && strcmp(tnode->name, "func") == 0) {
         vec_t ptypes; vec_init(&ptypes);
@@ -100,7 +104,10 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
         decorate(s, tnode, base);
         return base;
     }
-    int pk = tnode->name ? type_prim_kind_from_name(tnode->name) : -1;
+    /* Resolution itself is language-agnostic so cross-language interop with the
+     * (English) stdlib always works; strictness is enforced separately by the
+     * per-module type lint (sema_lint_lang) over each file's own annotations. */
+    int pk = tnode->name ? type_prim_kind_from_name(tnode->name, NULL) : -1;
     
     if (tnode->name && strcmp(tnode->name, "File") == 0) {
         base = type_file(s->tc);

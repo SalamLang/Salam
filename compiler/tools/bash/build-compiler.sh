@@ -28,7 +28,7 @@ esac
     src/lexer/lexer.c src/lexer/lexer_cursor.c src/lexer/lexer_char.c \
     src/lexer/lexer_number.c src/lexer/lexer_string.c src/lexer/lexer_escape.c \
     src/lexer/lexer_trivia.c src/lexer/lexer_ident.c src/lexer/lexer_operator.c \
-    src/lexer/lexer_layout.c \
+    src/lexer/lexer_layout.c src/lexer/lexer_detect.c \
     src/ast/ast.c src/ast/ast_xml.c \
     src/parser/parser.c src/parser/parser_cursor.c \
     src/parser/parser_ffi.c src/parser/parser_type.c \

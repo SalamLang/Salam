@@ -29,4 +29,13 @@ bool lexer_run_ex(arena_t *a, logger_t *log, const langpack_t *pack,
                   const source_file_t *src, bool keep_comments,
                   token_stream_t **out);
 
+/*
+ * Per-file language detection. Returns the langpack matching a source file's
+ * own language (explicit marker comment, else keyword-count inference), falling
+ * back to `fallback` when nothing is recognised. See lexer_detect.c.
+ */
+const char *langpack_marker_code(const char *text, size_t len);
+const langpack_t *langpack_detect(arena_t *a, const source_file_t *src,
+                                  const langpack_t *fallback);
+
 #endif /* SALAM_LEXER_LEXER_H */

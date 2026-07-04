@@ -93,7 +93,7 @@ const char *layout_document(arena_t *a, const layout_result_t *r, bool inl,
     sb_puts(&d, "<head>\n");
     sb_puts(&d, "  <meta charset=\"utf-8\">\n");
     sb_puts(&d, "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
-    sb_puts(&d, "  <title>"); sb_puts(&d, r->title); sb_puts(&d, "</title>\n");
+    sb_puts(&d, "  <title>"); sb_put_html_escaped(&d, r->title); sb_puts(&d, "</title>\n");
     if (inl) {
         if (r->css && r->css[0]) {
             sb_puts(&d, "  <style>\n"); sb_puts(&d, r->css); sb_puts(&d, "  </style>\n");

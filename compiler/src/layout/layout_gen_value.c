@@ -56,18 +56,30 @@ const char *hyphenate(layout_ctx_t *cx, const char *s)
     return r;
 }
 
+/* Escape a string for safe inclusion in HTML text or a double-quoted
+   attribute value. Covers the five characters that can break out of either
+   context, preventing markup/JS injection in generated pages (and XSS in the
+   web playground, which renders this HTML). */
+void sb_put_html_escaped(sb_t *b, const char *s)
+{
+    const char *p = s;
+    for (; *p; p++) {
+        switch (*p) {
+            case '&':  sb_puts(b, "&amp;");  break;
+            case '<':  sb_puts(b, "&lt;");   break;
+            case '>':  sb_puts(b, "&gt;");   break;
+            case '"':  sb_puts(b, "&quot;"); break;
+            case '\'': sb_puts(b, "&#39;");  break;
+            default:   sb_putc(b, *p);       break;
+        }
+    }
+}
+
 const char *html_escape(layout_ctx_t *cx, const char *s)
 {
     sb_t b; sb_init(&b);
-    { const char *p = s; for (; *p; p++) {
-        switch (*p) {
-            case '&': sb_puts(&b, "&amp;"); break;
-            case '<': sb_puts(&b, "&lt;"); break;
-            case '>': sb_puts(&b, "&gt;"); break;
-            default:  sb_putc(&b, *p); break;
-        }
-    } }
-    const char *r = arena_strdup(cx->a, sb_cstr(&b)); sb_free(&b); return r;
+    sb_put_html_escaped(&b, s);
+    { const char *r = arena_strdup(cx->a, sb_cstr(&b)); sb_free(&b); return r; }
 }
 
 const char *val_str(layout_ctx_t *cx, ast_node_t *v)

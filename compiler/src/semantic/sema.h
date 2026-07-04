@@ -32,7 +32,8 @@ typedef struct {
     vec_t       packages;
 } sema_result_t;
 
-sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const char *file);
+sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program,
+                        const char *file, const char *lang);
 
 void symbols_to_xml(xml_writer_t *w, const sema_result_t *r);
 

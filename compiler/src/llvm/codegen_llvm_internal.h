@@ -85,7 +85,9 @@ typedef struct {
     int            ptr_bits;
 } ll_t;
 
-SAL_INLINE bool ll_is_str(const char *ts)    { return ts && !strcmp(ts, "str"); }
+/* uchar is a one-codepoint value backed by a UTF-8 string pointer, so it lowers
+   and behaves exactly like str in the LLVM backend (ptr type, concat, compare). */
+SAL_INLINE bool ll_is_str(const char *ts)    { return ts && (!strcmp(ts, "str") || !strcmp(ts, "uchar")); }
 
 SAL_INLINE bool ll_is_bool(const char *ts)   { return ts && !strcmp(ts, "bool"); }
 

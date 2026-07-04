@@ -212,7 +212,7 @@ symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes, c
     vec_init(&sym->generic_args);
     { size_t i = 0; for (; i < argtypes.len; i++)
         vec_push(s->a, &sym->generic_args, argtypes.data[i]); }
-    scope_define(s->a, s->global, sym);   
+    scope_define(s->a, s->global, sym);
     { size_t j = 0; for (; j < inst->list.len; j++) {
         ast_node_t *m = (ast_node_t *)inst->list.data[j];
         if (m->kind == AST_FIELD) {
@@ -226,7 +226,7 @@ symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes, c
             mm->type = sym->type;
         }
     } }
-    vec_push(s->a, &s->pending, inst);   
+    vec_push(s->a, &s->pending, inst);
     return sym;
 }
 

@@ -86,6 +86,8 @@ static const i18n_pair_t k_msg_fa[] = {
     { " (method)",                                           " (متد)" },
     
     { "unknown type '%s'",                                   "نوع ناشناخته '%s'" },
+    { "type name '%s' must be Persian in a Persian file",    "نام نوع '%s' در یک فایل فارسی باید فارسی باشد" },
+    { "type name '%s' must be English in an English file",   "نام نوع '%s' در یک فایل انگلیسی باید انگلیسی باشد" },
     { "unknown struct '%s'",                                 "ساختار ناشناخته '%s'" },
     { "unknown identifier '%s'",                             "شناسه‌ی ناشناخته '%s'" },
     { "type '%s' used as a value",                           "نوع '%s' به‌جای مقدار استفاده شده است" },

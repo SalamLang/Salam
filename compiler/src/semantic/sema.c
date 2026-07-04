@@ -504,6 +504,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     
     scope_t *pkgscope = scope_new(s->a, SCOPE_GLOBAL, NULL);
     pkgscope->label = prog->name;
+    pkgscope->lang = langpack_code(pack);
     scope_t *save_global = s->global, *save_cur = s->cur;
     const char *save_dir = s->dir, *save_pkg = s->pkg;
     const char *save_lang = s->lang;
@@ -598,6 +599,7 @@ sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program,
     s.tc = type_ctx_new(a);
     s.diag = diag_new(a, log, PH_SEMANTIC);
     s.global = scope_new(a, SCOPE_GLOBAL, NULL);
+    s.global->lang = s.lang;
     s.cur = s.global;
     s.dir = dir_of(a, file);
     s.pkg = program->name ? program->name : "main";

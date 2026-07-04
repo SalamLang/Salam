@@ -345,11 +345,12 @@ static int driver_interp(options_t *opt)
                 arena_free(arena); logger_free(log); return 2; }
     src = preproc_source(arena, log, src, opt->defines, opt->ndefines);
     logger_set_diag_source(log, src->text, src->len, opt->diag_style, opt->diag_format);
+    const langpack_t *modpack = langpack_detect(arena, src, pack);
     token_stream_t *toks = NULL;
-    bool lok = lexer_run(arena, log, pack, src, &toks);
+    bool lok = lexer_run(arena, log, modpack, src, &toks);
     ast_node_t *program = NULL;
     bool pok = parser_run(arena, log, toks, &program);
-    sema_result_t *sr = sema_run(arena, log, program, src->path);
+    sema_result_t *sr = sema_run(arena, log, program, src->path, langpack_code(modpack));
     if (!lok || !pok || !sr->ok) {
         LOG_E(log, PH_DRIVER, i18n_tr("build aborted: errors in source"));
         arena_free(arena); logger_free(log); return 1;
@@ -586,8 +587,9 @@ int driver_main(int argc, char **argv)
                            opt.diag_style, opt.diag_format);
     LOG_I(log, PH_DRIVER, "compiling %s (lang=%s, %zu bytes)",
           src->path, opt.lang, src->len);
+    const langpack_t *modpack = langpack_detect(arena, src, pack);
     token_stream_t *toks = NULL;
-    bool ok = lexer_run(arena, log, pack, src, &toks);
+    bool ok = lexer_run(arena, log, modpack, src, &toks);
     LOG_I(log, PH_LEXER, "produced %zu tokens%s",
           token_stream_count(toks), ok ? "" : i18n_tr(" (with errors)"));
     if (opt.emit_tokens_xml) {
@@ -597,7 +599,7 @@ int driver_main(int argc, char **argv)
     if (opt.emit_ast_xml || opt.emit_symbol_xml) {
         ast_node_t *program = NULL;
         bool pok = parser_run(arena, log, toks, &program);
-        sema_result_t *sr = sema_run(arena, log, program, src->path);  
+        sema_result_t *sr = sema_run(arena, log, program, src->path, langpack_code(modpack));
         if (opt.emit_ast_xml) {
             int xrc = emit_ast_xml(log, program, opt.xml_out);
             if (xrc != 0) rc = xrc;

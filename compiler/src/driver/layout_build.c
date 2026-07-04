@@ -93,12 +93,13 @@ int driver_layout_build(options_t *opt)
         if (!src) { LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"), path); rc = 2; continue; }
         src = preproc_source(arena, log, src, opt->defines, opt->ndefines);
         LOG_I(log, PH_DRIVER, "layout build %s", path);
-        token_stream_t *toks = NULL; lexer_run(arena, log, pack, src, &toks);
+        const langpack_t *modpack = langpack_detect(arena, src, pack);
+        token_stream_t *toks = NULL; lexer_run(arena, log, modpack, src, &toks);
         ast_node_t *program = NULL; parser_run(arena, log, toks, &program);
-        
+
         const char *base_dir = dir_of(arena, src->path);
-        if (layout_expand(arena, log, pack, program, base_dir)) rc = 1;
-        sema_run(arena, log, program, src->path);     
+        if (layout_expand(arena, log, modpack, program, base_dir)) rc = 1;
+        sema_run(arena, log, program, src->path, langpack_code(modpack));
         ast_node_t *lb = find_layout(program);
         if (!lb) { LOG_W(log, PH_DRIVER, i18n_tr("%s has no layout block"), path); continue; }
         modules[n] = module_of(arena, path);

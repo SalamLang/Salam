@@ -279,14 +279,14 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                          nm, b->nargs, argtypes.len);
                 
                 if (strcmp(b->arg, "*") != 0) {
-                    int ak = type_prim_kind_from_name(b->arg);
+                    int ak = type_prim_kind_from_name(b->arg, NULL);
                     { size_t i = 0; for (; i < argtypes.len; i++)
                         if (!type_assignable(ty(s, (type_kind_t)ak), (type_t *)argtypes.data[i]))
                             SERR(s, 2, &n->span, "builtin '%s' expects '%s', got '%s'",
                                  nm, b->arg, type_to_string(s->tc, (type_t *)argtypes.data[i])); }
                 }
                 decorate(s, callee, ty(s, TY_VOID));
-                return decorate(s, n, ty(s, (type_kind_t)type_prim_kind_from_name(b->ret)));
+                return decorate(s, n, ty(s, (type_kind_t)type_prim_kind_from_name(b->ret, NULL)));
             }
             SERR(s, 12, &n->span, "call to undefined function '%s'", nm);
             return decorate(s, n, err_ty(s));

@@ -487,37 +487,13 @@ bunx vite --port 55002 --host 127.0.0.1
 
 ### 📚 7. MyST Documentation
 
-The repository ships a [MyST (Markedly Structured Text)](https://mystmd.org/) documentation site powered by the [`mystmd`](https://mystmd.org/guide) package. MyST transforms the Markdown and notebook files under `docs/` into a polished, navigable website.
+The repository ships a [MyST (Markedly Structured Text)](https://mystmd.org/) docs site powered by [`mystmd`](https://mystmd.org/guide). Source content lives in `docs/`.
 
 #### Configuration Files
 
-- **[`myst.yml`](myst.yml)** — project-level MyST configuration. Declares the project ID, links to the GitHub repository, and sets the site template (`book-theme`) and custom stylesheet (`style.css`):
-
-  ```yaml
-  version: 1
-  project:
-    github: https://github.com/SalamLang/Salam
-  site:
-    template: book-theme
-    options:
-      style: ./style.css
-  ```
-
-- **[`.readthedocs.yaml`](.readthedocs.yaml)** — instructs [Read the Docs](https://readthedocs.org/) to build and host the documentation. It installs `mystmd` globally, runs `myst build --html`, and copies the output to the expected location:
-
-  ```yaml
-  build:
-    os: ubuntu-22.04
-    tools:
-      python: '3.14'
-      nodejs: '24'
-    commands:
-      - npm install -g mystmd
-      - myst build --html
-      - mkdir -p $READTHEDOCS_OUTPUT/html/
-      - cp -r _build/html/. "$READTHEDOCS_OUTPUT/html"
-      - rm -rf _build
-  ```
+- **[`myst.yml`](myst.yml)** — MyST project config (site template, repository link, and custom style file).
+- **[`.readthedocs.yaml`](.readthedocs.yaml)** — [Read the Docs](https://readthedocs.org/) build config used to host the generated documentation.
+- **`_build/`** — generated static output directory from `myst build --html` (including `_build/html/`), ignored by git in [`.gitignore`](.gitignore).
 
 #### Running the Documentation Locally
 
@@ -532,7 +508,7 @@ bun run docs:myst
 bun run build:myst
 ```
 
-The dev server (`myst start`) watches the `docs/` directory and rebuilds on every change. Built output lands in `_build/html/` which is listed in `.gitignore` and is never committed.
+The dev server (`myst start`) watches `docs/` and rebuilds on changes. Read the Docs uses `.readthedocs.yaml` to build MyST HTML and publish the `_build/html/` output.
 
 ## 🤝 Contributing
 

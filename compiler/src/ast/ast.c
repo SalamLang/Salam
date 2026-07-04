@@ -16,23 +16,50 @@
 #include "ast/ast.h"
 
 static const char *const k_ast_names[AST__COUNT] = {
-    [AST_PROGRAM]="Program", [AST_IMPORT]="Import", [AST_LINK]="Link", [AST_TYPE_ALIAS]="TypeAlias",
-    [AST_CONST_DECL]="ConstDecl", [AST_FUNC_DEF]="FunctionDef", [AST_PARAM]="Param",
-    [AST_STRUCT_DEF]="StructDef", [AST_FIELD]="Field", [AST_INTERFACE_DEF]="InterfaceDef",
-    [AST_IMPL_DEF]="ImplDef",
-    [AST_ENUM_DEF]="EnumDef",
-    [AST_ENUM_MEMBER]="EnumMember", [AST_BLOCK]="Block", [AST_VAR_DECL]="VariableDecl",
-    [AST_ASSIGN]="Assignment", [AST_IF]="IfStmt", [AST_WHILE]="WhileStmt",
-    [AST_FOR]="ForStmt", [AST_REPEAT]="RepeatStmt", [AST_RETURN]="ReturnStmt", [AST_BREAK]="BreakStmt",
-    [AST_CONTINUE]="ContinueStmt", [AST_DEFER]="DeferStmt", [AST_EXPR_STMT]="ExprStmt", [AST_BINARY]="BinaryExpr",
-    [AST_UNARY]="UnaryExpr", [AST_CAST]="Cast", [AST_LITERAL]="Literal",
-    [AST_IDENTIFIER]="Identifier", [AST_THIS]="This", [AST_CALL]="Call",
-    [AST_MEMBER]="MemberAccess", [AST_INDEX]="ArrayAccess", [AST_SLICE]="SliceExpr",
-    [AST_ARRAY_LIT]="ArrayLiteral",
-    [AST_LAMBDA]="Lambda",
-    [AST_STRUCT_LIT]="StructLiteral", [AST_FIELD_INIT]="FieldInit", [AST_TYPE]="Type",
-    [AST_LAYOUT_BLOCK]="LayoutBlock", [AST_LAYOUT_ELEMENT]="LayoutElement",
-    [AST_LAYOUT_ATTR]="LayoutAttribute", [AST_LAYOUT_COMPONENT]="LayoutComponent",
+    [AST_PROGRAM] = "Program",
+    [AST_IMPORT] = "Import",
+    [AST_LINK] = "Link",
+    [AST_TYPE_ALIAS] = "TypeAlias",
+    [AST_CONST_DECL] = "ConstDecl",
+    [AST_FUNC_DEF] = "FunctionDef",
+    [AST_PARAM] = "Param",
+    [AST_STRUCT_DEF] = "StructDef",
+    [AST_FIELD] = "Field",
+    [AST_INTERFACE_DEF] = "InterfaceDef",
+    [AST_IMPL_DEF] = "ImplDef",
+    [AST_ENUM_DEF] = "EnumDef",
+    [AST_ENUM_MEMBER] = "EnumMember",
+    [AST_BLOCK] = "Block",
+    [AST_VAR_DECL] = "VariableDecl",
+    [AST_ASSIGN] = "Assignment",
+    [AST_IF] = "IfStmt",
+    [AST_WHILE] = "WhileStmt",
+    [AST_FOR] = "ForStmt",
+    [AST_REPEAT] = "RepeatStmt",
+    [AST_RETURN] = "ReturnStmt",
+    [AST_BREAK] = "BreakStmt",
+    [AST_CONTINUE] = "ContinueStmt",
+    [AST_DEFER] = "DeferStmt",
+    [AST_EXPR_STMT] = "ExprStmt",
+    [AST_BINARY] = "BinaryExpr",
+    [AST_UNARY] = "UnaryExpr",
+    [AST_CAST] = "Cast",
+    [AST_LITERAL] = "Literal",
+    [AST_IDENTIFIER] = "Identifier",
+    [AST_THIS] = "This",
+    [AST_CALL] = "Call",
+    [AST_MEMBER] = "MemberAccess",
+    [AST_INDEX] = "ArrayAccess",
+    [AST_SLICE] = "SliceExpr",
+    [AST_ARRAY_LIT] = "ArrayLiteral",
+    [AST_LAMBDA] = "Lambda",
+    [AST_STRUCT_LIT] = "StructLiteral",
+    [AST_FIELD_INIT] = "FieldInit",
+    [AST_TYPE] = "Type",
+    [AST_LAYOUT_BLOCK] = "LayoutBlock",
+    [AST_LAYOUT_ELEMENT] = "LayoutElement",
+    [AST_LAYOUT_ATTR] = "LayoutAttribute",
+    [AST_LAYOUT_COMPONENT] = "LayoutComponent",
 };
 
 const char *ast_kind_name(ast_kind_t kind)
@@ -78,17 +105,36 @@ ast_node_t *ast_clone(arena_t *a, const ast_node_t *n)
     c->b = ast_clone(a, n->b);
     c->c = ast_clone(a, n->c);
     c->d = ast_clone(a, n->d);
-    { size_t i = 0; for (; i < n->list.len; i++)
-        vec_push(a, &c->list, ast_clone(a, (const ast_node_t *)n->list.data[i])); }
-    { size_t i = 0; for (; i < n->dims.len; i++)
-        vec_push(a, &c->dims, ast_clone(a, (const ast_node_t *)n->dims.data[i])); }
-    { size_t i = 0; for (; i < n->typarams.len; i++)
-        vec_push(a, &c->typarams, n->typarams.data[i]); }   
-    { size_t i = 0; for (; i < n->typaram_bounds.len; i++)
-        vec_push(a, &c->typaram_bounds, n->typaram_bounds.data[i]); } 
-    { size_t i = 0; for (; i < n->aliases.len; i++)
-        vec_push(a, &c->aliases, n->aliases.data[i]); }     
-    { size_t i = 0; for (; i < n->captures.len; i++)
-        vec_push(a, &c->captures, ast_clone(a, (const ast_node_t *)n->captures.data[i])); }
+    {
+        size_t i = 0;
+        for (; i < n->list.len; i++)
+            vec_push(a, &c->list, ast_clone(a, (const ast_node_t *)n->list.data[i]));
+    }
+    {
+        size_t i = 0;
+        for (; i < n->dims.len; i++)
+            vec_push(a, &c->dims, ast_clone(a, (const ast_node_t *)n->dims.data[i]));
+    }
+    {
+        size_t i = 0;
+        for (; i < n->typarams.len; i++)
+            vec_push(a, &c->typarams, n->typarams.data[i]);
+    }
+    {
+        size_t i = 0;
+        for (; i < n->typaram_bounds.len; i++)
+            vec_push(a, &c->typaram_bounds, n->typaram_bounds.data[i]);
+    }
+    {
+        size_t i = 0;
+        for (; i < n->aliases.len; i++)
+            vec_push(a, &c->aliases, n->aliases.data[i]);
+    }
+    {
+        size_t i = 0;
+        for (; i < n->captures.len; i++)
+            vec_push(a, &c->captures,
+                     ast_clone(a, (const ast_node_t *)n->captures.data[i]));
+    }
     return c;
 }

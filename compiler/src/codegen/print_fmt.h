@@ -33,7 +33,7 @@ typedef enum {
 } pf_kind_t;
 
 typedef struct {
-    pf_kind_t   kind;
+    pf_kind_t kind;
     const char *text;
     ast_node_t *expr;
 } pf_seg_t;

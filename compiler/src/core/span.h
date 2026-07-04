@@ -26,7 +26,7 @@ typedef struct {
 typedef struct {
     src_pos_t begin;
     src_pos_t end;
-    uint32_t  length;
+    uint32_t length;
 } src_span_t;
 
 #endif /* SALAM_CORE_SPAN_H */

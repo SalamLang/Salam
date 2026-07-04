@@ -29,25 +29,31 @@ diag_engine_t *diag_new(arena_t *a, logger_t *log, phase_t phase)
     return e;
 }
 
-void diag_report(diag_engine_t *e, severity_t sev, int code,
-                 const char *file, const src_span_t *span, const char *fmt, ...)
+void diag_report(diag_engine_t *e, severity_t sev, int code, const char *file,
+                 const src_span_t *span, const char *fmt, ...)
 {
     char body[512];
     va_list ap;
     va_start(ap, fmt);
-    sal_vsnprintf(body, sizeof(body), i18n_tr(fmt), ap);   
+    sal_vsnprintf(body, sizeof(body), i18n_tr(fmt), ap);
     va_end(ap);
     char full[640];
-    sal_snprintf(full, sizeof(full), "%c%03d: %s", sev == SEV_ERROR ? 'E' : 'W', code, body);
+    sal_snprintf(full, sizeof(full), "%c%03d: %s", sev == SEV_ERROR ? 'E' : 'W', code,
+                 body);
     diag_t *d = (diag_t *)arena_alloc(e->a, sizeof(*d));
     d->sev = sev;
     d->code = code;
     d->file = file;
-    if (span) d->span = *span;
-    else      memset(&d->span, 0, sizeof(d->span));
+    if (span)
+        d->span = *span;
+    else
+        memset(&d->span, 0, sizeof(d->span));
     d->message = arena_strdup(e->a, full);
     vec_push(e->a, &e->items, d);
-    if (sev == SEV_ERROR) e->errors++; else e->warnings++;
+    if (sev == SEV_ERROR)
+        e->errors++;
+    else
+        e->warnings++;
     logger_log(e->log, e->phase, sev == SEV_ERROR ? LOG_ERROR : LOG_WARN,
                span ? file : NULL, span, "%s", full);
 }

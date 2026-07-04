@@ -97,13 +97,13 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent, co
             else sb_puts(&after, lfmt(cx,"%s: %s; ", hyphenate(cx,rest), v));
             continue;
         }
-        if (nm[0]=='o' && nm[1]=='n') { sb_puts(&attrs, lfmt(cx," %s=\"%s\"", nm, v)); continue; }
+        if (nm[0]=='o' && nm[1]=='n') { sb_puts(&attrs, lfmt(cx," %s=\"%s\"", nm, html_escape(cx, v))); continue; }
         const layout_attr_def_t *ad = layout_attr_lookup(nm);
         layout_attr_dest_t dest = ad ? ad->dest : LA_CSS;
         switch (dest) {
             case LA_CONTENT: content = v; break;
             case LA_CLASS:   userclass = v; break;
-            case LA_STYLE:   sb_puts(&attrs, lfmt(cx," style=\"%s\"", v)); break;
+            case LA_STYLE:   sb_puts(&attrs, lfmt(cx," style=\"%s\"", html_escape(cx, v))); break;
             case LA_DIR:  sb_puts(&attrs, lfmt(cx," dir=\"%s\"",  layout_attr_value_map(ad, v))); break;
             case LA_LANG: sb_puts(&attrs, lfmt(cx," lang=\"%s\"", layout_attr_value_map(ad, v))); break;
             case LA_SOURCE:  source = v; break;
@@ -113,7 +113,7 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent, co
                 else if (!strcmp(nm,"condition")) condition = v;
                 else if (is_bool_attr(nm) && !strcmp(v,"true")) sb_puts(&attrs, lfmt(cx," %s", ad->out));
                 
-                else sb_puts(&attrs, lfmt(cx," %s=\"%s\"", ad->out, layout_attr_value_map(ad, v)));
+                else sb_puts(&attrs, lfmt(cx," %s=\"%s\"", ad->out, html_escape(cx, layout_attr_value_map(ad, v))));
                 break;
             case LA_CSS: {
                 
@@ -148,7 +148,7 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent, co
         goto done;
     }
     if (!strcmp(el->name, "script")) {
-        if (src) html_line(cx, "<script src=\"%s\"></script>", src);
+        if (src) html_line(cx, "<script src=\"%s\"></script>", html_escape(cx, src));
         else if (content) { sb_puts(cx->js, content); sb_putc(cx->js, '\n'); }
         goto done;
     }
@@ -164,11 +164,11 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent, co
     const char *esc = content ? html_escape(cx, content) : "";
     
     if (!strcmp(el->name, "link")) {
-        html_line(cx, "<a href=\"%s\"%s%s>%s</a>", source ? source : "#", classattr, A, esc);
+        html_line(cx, "<a href=\"%s\"%s%s>%s</a>", source ? html_escape(cx, source) : "#", classattr, A, esc);
         goto done;
     }
     if (!strcmp(el->name, "image")) {
-        html_line(cx, "<img src=\"%s\"%s%s alt=\"%s\" />", source ? source : "", classattr, A, esc);
+        html_line(cx, "<img src=\"%s\"%s%s alt=\"%s\" />", source ? html_escape(cx, source) : "", classattr, A, esc);
         goto done;
     }
     if (!strcmp(el->name, "input")) {

@@ -14,6 +14,7 @@
 
 #include "core/sal_format.h"
 #include "core/numstr.h"
+#include <stddef.h>  /* ptrdiff_t */
 
 typedef struct { char *buf; size_t cap; size_t len; } fbuf_t;
 
@@ -29,24 +30,51 @@ static void fb_str(fbuf_t *fb, const char *s, size_t n)
     for (i = 0; i < n; i++) fb_ch(fb, s[i]);
 }
 
-static void emit_u64(fbuf_t *fb, uint64_t v, int base, int upper)
+/*
+ * Emit an integer honoring width, precision, and the -, 0, +, space and #
+ * flags, for the %zu / %lld family that we format ourselves (rather than
+ * delegating to libc, whose z/ll support is not portable). `mag` is the
+ * magnitude, `neg` its sign.
+ */
+static void emit_int_padded(fbuf_t *fb, uint64_t mag, int neg, int base, int upper,
+                            int width, int prec,
+                            int fl_minus, int fl_zero, int fl_plus, int fl_space, int fl_hash)
 {
-    char tmp[24];
-    const char *dig = upper ? "0123456789ABCDEF" : "0123456789abcdef";
-    int i = 0, j;
-    if (v == 0) tmp[i++] = '0';
-    else while (v != 0) { tmp[i++] = dig[(int)(v % (unsigned)base)]; v /= (unsigned)base; }
-    for (j = i; j > 0; j--) fb_ch(fb, tmp[j - 1]);
-}
+    char dig[24];
+    const char *tbl = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    const char *hashpfx = "";
+    int ndig = 0, zprec = 0, zwidth = 0, pad = 0, content, hashlen = 0, i;
+    char sign = 0;
 
-static void emit_i64(fbuf_t *fb, int64_t v)
-{
-    if (v < 0) {
-        fb_ch(fb, '-');
-        emit_u64(fb, (uint64_t)(-(v + 1)) + 1u, 10, 0);
+    if (mag == 0) {
+        if (prec != 0) dig[ndig++] = '0';   /* precision 0 with value 0 -> no digits */
     } else {
-        emit_u64(fb, (uint64_t)v, 10, 0);
+        uint64_t v = mag;
+        while (v != 0) { dig[ndig++] = tbl[(int)(v % (unsigned)base)]; v /= (unsigned)base; }
     }
+    if (prec > ndig) zprec = prec - ndig;
+
+    if (neg)           sign = '-';
+    else if (fl_plus)  sign = '+';
+    else if (fl_space) sign = ' ';
+
+    if (fl_hash && mag != 0) {
+        if (base == 16)     { hashpfx = upper ? "0X" : "0x"; hashlen = 2; }
+        else if (base == 8) { hashpfx = "0"; hashlen = 1; }
+    }
+
+    content = (sign ? 1 : 0) + hashlen + zprec + ndig;
+    if (width > content) pad = width - content;
+    /* the '0' flag is ignored when left-justifying or when a precision is given */
+    if (fl_zero && !fl_minus && prec < 0) { zwidth = pad; pad = 0; }
+
+    if (!fl_minus) { for (i = 0; i < pad; i++) fb_ch(fb, ' '); }
+    if (sign) fb_ch(fb, sign);
+    fb_str(fb, hashpfx, (size_t)hashlen);
+    for (i = 0; i < zwidth; i++) fb_ch(fb, '0');
+    for (i = 0; i < zprec;  i++) fb_ch(fb, '0');
+    for (i = ndig; i > 0; i--) fb_ch(fb, dig[i - 1]);
+    if (fl_minus) { for (i = 0; i < pad; i++) fb_ch(fb, ' '); }
 }
 
 static void deleg_buf(fbuf_t *fb, const char *s, int n)
@@ -144,15 +172,24 @@ int sal_vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
 
         if ((len == LEN_LL || len == LEN_Z) &&
             (conv=='d'||conv=='i'||conv=='u'||conv=='x'||conv=='X'||conv=='o')) {
+            uint64_t mag; int neg = 0, base, upper = 0;
             if (conv == 'd' || conv == 'i') {
-                if (len == LEN_Z) { size_t u = va_arg(ap, size_t); emit_i64(&fb, (int64_t)u); }
-                else              { long long v = va_arg(ap, long long); emit_i64(&fb, (int64_t)v); }
+                /* For %zd the argument is signed (ptrdiff_t/ssize_t). Read it
+                   through a signed type so negatives sign-extend to int64_t;
+                   reading via size_t would zero-extend on 32-bit (-1 -> 4G-1). */
+                int64_t v = (len == LEN_Z) ? (int64_t)va_arg(ap, ptrdiff_t)
+                                           : (int64_t)va_arg(ap, long long);
+                neg = v < 0;
+                mag = neg ? (uint64_t)(-(v + 1)) + 1u : (uint64_t)v;
+                base = 10;
             } else {
-                uint64_t v = (len == LEN_Z) ? (uint64_t)va_arg(ap, size_t)
-                                            : (uint64_t)va_arg(ap, unsigned long long);
-                int base = (conv == 'o') ? 8 : (conv == 'd' || conv == 'i' || conv == 'u') ? 10 : 16;
-                emit_u64(&fb, v, base, conv == 'X');
+                mag = (len == LEN_Z) ? (uint64_t)va_arg(ap, size_t)
+                                     : (uint64_t)va_arg(ap, unsigned long long);
+                base  = (conv == 'o') ? 8 : (conv == 'u') ? 10 : 16;
+                upper = (conv == 'X');
             }
+            emit_int_padded(&fb, mag, neg, base, upper, width, prec,
+                            flag_minus, flag_zero, flag_plus, flag_space, flag_hash);
             continue;
         }
 

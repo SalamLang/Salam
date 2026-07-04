@@ -34,6 +34,7 @@ static bool ts_is_float(const char *ts) { return ts && (!strcmp(ts,"f32") || !st
 static pf_kind_t pf_kind_of(const char *ts)
 {
     if (!ts || !strcmp(ts, "str")) return ts ? PF_STR : PF_I32;
+    if (!strcmp(ts, "uchar")) return PF_STR;
     if (!strcmp(ts, "bool")) return PF_BOOL;
     if (!strcmp(ts, "char")) return PF_CHAR;
     if (ts_is_float(ts))     return PF_F64;

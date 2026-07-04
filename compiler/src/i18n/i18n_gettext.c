@@ -86,6 +86,8 @@ static const i18n_pair_t k_msg_fa[] = {
     { " (method)",                                           " (متد)" },
     
     { "unknown type '%s'",                                   "نوع ناشناخته '%s'" },
+    { "type name '%s' must be Persian in a Persian file",    "نام نوع '%s' در یک فایل فارسی باید فارسی باشد" },
+    { "type name '%s' must be English in an English file",   "نام نوع '%s' در یک فایل انگلیسی باید انگلیسی باشد" },
     { "unknown struct '%s'",                                 "ساختار ناشناخته '%s'" },
     { "unknown identifier '%s'",                             "شناسه‌ی ناشناخته '%s'" },
     { "type '%s' used as a value",                           "نوع '%s' به‌جای مقدار استفاده شده است" },
@@ -414,6 +416,54 @@ static const i18n_pair_t k_msg_fa[] = {
     { "argument %zu: cannot pass '%s' to '%s'",             "آرگومان %zu: نمی‌توان '%s' را به '%s' پاس داد" },
     { "lang() takes no arguments",                          "()lang هیچ آرگومانی نمی‌گیرد" },
     { "interface '%s' has no method '%s'",                  "واسط '%s' متدی به نام '%s' ندارد" },
+
+    /* FFI / extern block diagnostics */
+    { "expected a library-name string after 'link'",        "پس از 'link' یک رشته‌ی نام کتابخانه لازم است" },
+    { "'(' after @link",                                     "'(' پس از @link" },
+    { "'=' after 'kind'",                                    "'=' پس از 'kind'" },
+    { "link kind must be \"static\", \"dynamic\", or \"framework\"",
+      "نوع پیوند باید \"static\"، \"dynamic\" یا \"framework\" باشد" },
+    { "expected a kind string after 'kind='",                "پس از 'kind=' یک رشته‌ی نوع لازم است" },
+    { "unsupported extern ABI (only \"C\" is supported)",    "واسط باینری خارجی پشتیبانی‌نشده (فقط \"C\" پشتیبانی می‌شود)" },
+    { "':' to open extern block",                            "':' برای بازکردن بلوک extern" },
+    { "'end' to close extern block",                         "'end' برای بستن بلوک extern" },
+    { "expected 'func' or a variable in extern block",       "در بلوک extern یک 'func' یا یک متغیر لازم است" },
+    { "expected external function name",                     "نام تابع خارجی لازم است" },
+    { "expected external variable name",                     "نام متغیر خارجی لازم است" },
+    { "'(' after external function name",                    "'(' پس از نام تابع خارجی" },
+
+    /* interface / impl block diagnostics */
+    { "expected a definition after 'pub'",                   "پس از 'pub' یک تعریف لازم است" },
+    { "'pub' cannot be applied to a component",              "'pub' را نمی‌توان بر یک مؤلفه اعمال کرد" },
+    { "'pub' cannot be applied to a layout block",           "'pub' را نمی‌توان بر یک بلوک چیدمان اعمال کرد" },
+    { "':' after interface name",                            "':' پس از نام واسط" },
+    { "'end' to close interface",                            "'end' برای بستن واسط" },
+    { "expected a method signature ('func ...') in interface",
+      "در واسط یک امضای متد ('func ...') لازم است" },
+    { "expected interface name after 'impl'",                "پس از 'impl' نام واسط لازم است" },
+    { "'for' after interface name in impl block",            "'for' پس از نام واسط در بلوک impl" },
+    { "':' after impl target type",                          "':' پس از نوع هدف impl" },
+    { "'end' to close impl block",                           "'end' برای بستن بلوک impl" },
+    { "expected a method ('func ...') in impl block",        "در بلوک impl یک متد ('func ...') لازم است" },
+
+    /* lambda / sizeof diagnostics */
+    { "'(' to open lambda parameters",                       "'(' برای بازکردن پارامترهای لامبدا" },
+    { "')' after lambda parameters",                         "')' پس از پارامترهای لامبدا" },
+    { "'=>' in lambda",                                      "'=>' در لامبدا" },
+    { "')' after sizeof type",                               "')' پس از نوع sizeof" },
+
+    /* interpreter runtime errors */
+    { "call stack too deep (possible infinite recursion)",   "پشته‌ی فراخوانی بسیار عمیق است (احتمال بازگشت بی‌نهایت)" },
+    { "repeat count must be a number",                       "شمار تکرار باید یک عدد باشد" },
+    { "repeat range start must be a number",                 "شروع بازه‌ی تکرار باید یک عدد باشد" },
+    { "repeat range bound must be a number",                 "کران بازه‌ی تکرار باید یک عدد باشد" },
+    { "repeat step must be a number",                        "گام تکرار باید یک عدد باشد" },
+    { "repeat step must be positive",                        "گام تکرار باید مثبت باشد" },
+
+    /* semantic diagnostics */
+    { "operator '+' on a string requires the other operand to be a string, number, bool, or char (got '%s' and '%s')",
+      "عملگر '+' روی رشته نیازمند آن است که عملوند دیگر رشته، عدد، منطقی یا نویسه باشد (دریافت '%s' و '%s')" },
+    { "cannot infer the struct type of this literal",        "نمی‌توان نوع ساختار این مقدار را استنتاج کرد" },
 
     { NULL, NULL }
 };

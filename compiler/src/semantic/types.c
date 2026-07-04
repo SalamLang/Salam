@@ -136,24 +136,47 @@ type_t *type_func(type_ctx_t *tc, type_t *ret, const vec_t *params)
     return t;
 }
 
-int type_prim_kind_from_name(const char *name)
+int type_prim_kind_from_name(const char *name, const char *lang)
 {
-    struct { const char *n; type_kind_t k; } tab[] = {
-        {"void",TY_VOID},{"bool",TY_BOOL},{"char",TY_CHAR},{"str",TY_STR},
-        {"i8",TY_I8},{"i16",TY_I16},{"i32",TY_I32},{"int",TY_I32},{"i64",TY_I64},
-        {"u8",TY_U8},{"u16",TY_U16},{"u32",TY_U32},{"uint",TY_U32},{"u64",TY_U64},
-        {"f32",TY_F32},{"float",TY_F32},{"f64",TY_F64},
-        
-        {"تهی",TY_VOID},{"منطقی",TY_BOOL},{"نویسه",TY_CHAR},{"رشته",TY_STR},
-        {"صحیح۸",TY_I8},{"صحیح۱۶",TY_I16},{"صحیح۳۲",TY_I32},{"صحیح",TY_I32},{"صحیح۶۴",TY_I64},
-        {"صحیح8",TY_I8},{"صحیح16",TY_I16},{"صحیح32",TY_I32},{"صحیح64",TY_I64},
-        {"طبیعی۸",TY_U8},{"طبیعی۱۶",TY_U16},{"طبیعی۳۲",TY_U32},{"طبیعی",TY_U32},{"طبیعی۶۴",TY_U64},
-        {"طبیعی8",TY_U8},{"طبیعی16",TY_U16},{"طبیعی32",TY_U32},{"طبیعی64",TY_U64},
-        {"اعشاری۳۲",TY_F32},{"اعشاری",TY_F32},{"اعشاری۶۴",TY_F64},
-        {"اعشاری32",TY_F32},{"اعشاری64",TY_F64},
+    enum { L_EN = 1, L_FA = 2 };
+    struct { const char *n; type_kind_t k; int lg; } tab[] = {
+        {"void",TY_VOID,L_EN},
+        {"bool",TY_BOOL,L_EN},
+        {"char",TY_CHAR,L_EN},
+        {"str",TY_STR,L_EN},
+        {"uchar",TY_UCHAR,L_EN},
+
+        {"i8",TY_I8,L_EN},{"i16",TY_I16,L_EN},{"i32",TY_I32,L_EN},{"int",TY_I32,L_EN},{"i64",TY_I64,L_EN},
+        {"u8",TY_U8,L_EN},{"u16",TY_U16,L_EN},{"u32",TY_U32,L_EN},{"uint",TY_U32,L_EN},{"u64",TY_U64,L_EN},
+        {"f32",TY_F32,L_EN},{"float",TY_F32,L_EN},{"f64",TY_F64,L_EN},
+
+        {"تهی",TY_VOID,L_FA},
+        {"منطقی",TY_BOOL,L_FA},
+        {"نویسه",TY_CHAR,L_FA},
+        {"رشته",TY_STR,L_FA},
+        {"یونیکد",TY_UCHAR,L_FA},
+
+        {"صحیح۸",TY_I8,L_FA},{"صحیح۱۶",TY_I16,L_FA},{"صحیح۳۲",TY_I32,L_FA},{"صحیح",TY_I32,L_FA},{"صحیح۶۴",TY_I64,L_FA},
+        {"صحیح8",TY_I8,L_FA},{"صحیح16",TY_I16,L_FA},{"صحیح32",TY_I32,L_FA},{"صحیح64",TY_I64,L_FA},
+
+        {"طبیعی۸",TY_U8,L_FA},{"طبیعی۱۶",TY_U16,L_FA},{"طبیعی۳۲",TY_U32,L_FA},{"طبیعی",TY_U32,L_FA},{"طبیعی۶۴",TY_U64,L_FA},
+        {"طبیعی8",TY_U8,L_FA},{"طبیعی16",TY_U16,L_FA},{"طبیعی32",TY_U32,L_FA},{"طبیعی64",TY_U64,L_FA},
+
+        {"اعشار۳۲",TY_F32,L_FA},{"اعشار",TY_F32,L_FA},{"اعشار۶۴",TY_F64,L_FA},
+        {"اعشار32",TY_F32,L_FA},{"اعشار64",TY_F64,L_FA},
     };
+    /* When a language is given, a name spelled in the *other* language is not a
+     * valid primitive type there: a Persian file must use Persian type names and
+     * an English file English ones. lang == NULL keeps the permissive behaviour
+     * used for compiler-internal (always-English) type strings. */
+    int want = 0;
+    if (lang && lang[0] == 'f' && lang[1] == 'a')      want = L_FA;
+    else if (lang && lang[0] == 'e' && lang[1] == 'n') want = L_EN;
     { size_t i = 0; for (; i < sizeof(tab)/sizeof(tab[0]); i++)
-        if (strcmp(name, tab[i].n) == 0) return (int)tab[i].k; }
+        if (strcmp(name, tab[i].n) == 0) {
+            if (want && tab[i].lg != want) return -1;
+            return (int)tab[i].k;
+        } }
     return -1;
 }
 
@@ -213,6 +236,8 @@ static bool type_implicit(const type_t *src, const type_t *dst)
     if (!src || !dst) return false;
     if (src->kind == TY_NULL && dst->kind == TY_PTR) return true;
     if (src->kind == TY_ENUM && dst->kind == TY_I32) return true;
+
+    if (src->kind == TY_UCHAR && dst->kind == TY_STR) return true;
     
     if (dst->kind == TY_DYN && src->kind == TY_STRUCT) return true;
     if (type_is_signed(src) && type_is_signed(dst))
@@ -240,7 +265,10 @@ bool type_castable(const type_t *dst, const type_t *src)
     
     if ((dst->kind == TY_STR && src->kind == TY_PTR) ||
         (dst->kind == TY_PTR && src->kind == TY_STR)) return true;
-    
+
+    if ((dst->kind == TY_STR && src->kind == TY_UCHAR) ||
+        (dst->kind == TY_UCHAR && src->kind == TY_STR)) return true;
+
     if ((dst->kind == TY_PTR && type_is_integer(src)) ||
         (src->kind == TY_PTR && type_is_integer(dst))) return true;
     bool sn = type_is_numeric(src) || src->kind == TY_BOOL || src->kind == TY_CHAR || src->kind == TY_ENUM;
@@ -269,6 +297,7 @@ const char *type_to_string(type_ctx_t *tc, const type_t *t)
         case TY_BOOL:  return "bool";
         case TY_CHAR:  return "char";
         case TY_STR:   return "str";
+        case TY_UCHAR: return "uchar";
         case TY_NULL:  return "null";
         case TY_I8:return "i8"; case TY_I16:return "i16"; case TY_I32:return "i32"; case TY_I64:return "i64";
         case TY_U8:return "u8"; case TY_U16:return "u16"; case TY_U32:return "u32"; case TY_U64:return "u64";

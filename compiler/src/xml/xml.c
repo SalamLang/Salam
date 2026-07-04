@@ -39,7 +39,11 @@ void xml_free(xml_writer_t *w)
 
 static void xml_indent(xml_writer_t *w, int depth)
 {
-    { int i = 0; for (; i < depth; i++) sb_puts(w->out, "  "); }
+    {
+        int i = 0;
+        for (; i < depth; i++)
+            sb_puts(w->out, "  ");
+    }
 }
 
 void xml_decl(xml_writer_t *w)
@@ -59,10 +63,10 @@ void xml_open(xml_writer_t *w, const char *tag)
     xml_indent(w, w->depth);
     sb_putc(w->out, '<');
     sb_puts(w->out, tag);
-    if (w->depth >= w->cap) {            
+    if (w->depth >= w->cap) {
         w->cap *= 2;
-        w->stack = (xml_frame_t *)realloc(w->stack,
-                       salam_size_mul((size_t)w->cap, sizeof(xml_frame_t)));
+        w->stack = (xml_frame_t *)realloc(
+            w->stack, salam_size_mul((size_t)w->cap, sizeof(xml_frame_t)));
         if (!w->stack) abort();
     }
     xml_frame_t *f = &w->stack[w->depth++];

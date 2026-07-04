@@ -51,13 +51,19 @@ const token_t *p_prev(const parser_t *p)
     return token_stream_at(p->toks, i);
 }
 
-bool p_at(const parser_t *p, token_kind_t k) { return p_peek(p)->kind == k; }
+bool p_at(const parser_t *p, token_kind_t k)
+{
+    return p_peek(p)->kind == k;
+}
 
-bool p_at_eof(const parser_t *p)             { return p_peek(p)->kind == TK_EOF; }
+bool p_at_eof(const parser_t *p)
+{
+    return p_peek(p)->kind == TK_EOF;
+}
 
 const token_t *p_advance(parser_t *p)
 {
-    p->pos = skip_comments_from(p, p->pos);   
+    p->pos = skip_comments_from(p, p->pos);
     const token_t *t = token_stream_at(p->toks, p->pos);
     if (p->pos < p->count - 1) {
         p->pos++;
@@ -68,29 +74,36 @@ const token_t *p_advance(parser_t *p)
 
 bool p_match(parser_t *p, token_kind_t k)
 {
-    if (p_at(p, k)) { p_advance(p); return true; }
+    if (p_at(p, k)) {
+        p_advance(p);
+        return true;
+    }
     return false;
 }
 
 void p_skip_terminators(parser_t *p)
 {
-    while (p_at(p, TK_STMT_END)) p_advance(p);
+    while (p_at(p, TK_STMT_END))
+        p_advance(p);
 }
 
 void p_error(parser_t *p, const char *msg)
 {
-    if (p->panic) return;                 
+    if (p->panic) return;
     const token_t *t = p_peek(p);
-    
-    LOG_E_AT(p->log, PH_PARSER, p->file, t->span,
-             i18n_tr("%s (near '%s')"), i18n_tr(msg), t->lexeme ? t->lexeme : "<eof>");
+
+    LOG_E_AT(p->log, PH_PARSER, p->file, t->span, i18n_tr("%s (near '%s')"), i18n_tr(msg),
+             t->lexeme ? t->lexeme : "<eof>");
     p->had_error = true;
     p->panic = true;
 }
 
 bool p_expect(parser_t *p, token_kind_t k, const char *what)
 {
-    if (p_at(p, k)) { p_advance(p); return true; }
+    if (p_at(p, k)) {
+        p_advance(p);
+        return true;
+    }
     char buf[128];
     sal_snprintf(buf, sizeof(buf), i18n_tr("expected %s"), i18n_tr(what));
     p_error(p, buf);
@@ -102,14 +115,27 @@ void p_sync(parser_t *p)
     p->panic = false;
     while (!p_at_eof(p)) {
         token_kind_t k = p_peek(p)->kind;
-        if (k == TK_STMT_END) { p_advance(p); return; }
+        if (k == TK_STMT_END) {
+            p_advance(p);
+            return;
+        }
         switch (k) {
-            case TK_KW_FUNC: case TK_KW_STRUCT: case TK_KW_ENUM: case TK_KW_TYPE:
-            case TK_KW_CONST: case TK_KW_IMPORT: case TK_KW_LAYOUT:
-            case TK_KW_IF: case TK_KW_WHILE: case TK_KW_FOR: case TK_KW_RET:
-            case TK_RBRACE: case TK_KW_END:
-                return;
-            default: break;
+        case TK_KW_FUNC:
+        case TK_KW_STRUCT:
+        case TK_KW_ENUM:
+        case TK_KW_TYPE:
+        case TK_KW_CONST:
+        case TK_KW_IMPORT:
+        case TK_KW_LAYOUT:
+        case TK_KW_IF:
+        case TK_KW_WHILE:
+        case TK_KW_FOR:
+        case TK_KW_RET:
+        case TK_RBRACE:
+        case TK_KW_END:
+            return;
+        default:
+            break;
         }
         p_advance(p);
     }
@@ -126,7 +152,7 @@ void p_fin(parser_t *p, ast_node_t *n)
     n->span.end = p_prev(p)->span.end;
 }
 
-void p_term(parser_t *p)                  
+void p_term(parser_t *p)
 {
     if (p_at(p, TK_STMT_END)) p_advance(p);
 }
@@ -182,9 +208,15 @@ ast_node_t *p_error_node(parser_t *p)
 const token_t *p_peekn(const parser_t *p, size_t k)
 {
     size_t i = skip_comments_from(p, p->pos);
-    { size_t c = 0; for (; c < k; c++) {
-        if (i < p->count - 1) { i++; i = skip_comments_from(p, i); }
-    } }
+    {
+        size_t c = 0;
+        for (; c < k; c++) {
+            if (i < p->count - 1) {
+                i++;
+                i = skip_comments_from(p, i);
+            }
+        }
+    }
     if (i >= p->count) i = p->count - 1;
     return token_stream_at(p->toks, i);
 }
@@ -192,14 +224,16 @@ const token_t *p_peekn(const parser_t *p, size_t k)
 size_t p_ident_run_len(const parser_t *p)
 {
     size_t m = 0;
-    while (p_peekn(p, m)->kind == TK_IDENT) m++;
+    while (p_peekn(p, m)->kind == TK_IDENT)
+        m++;
     return m;
 }
 
 const char *p_munch_name(parser_t *p)
 {
     if (!p_at(p, TK_IDENT)) return p_name(p, "expected name");
-    sb_t b; sb_init(&b);
+    sb_t b;
+    sb_init(&b);
     bool first = true;
     while (p_at(p, TK_IDENT)) {
         if (!first) sb_putc(&b, ' ');
@@ -215,30 +249,40 @@ const char *p_munch_name(parser_t *p)
 const char *parse_decl_name(parser_t *p)
 {
     if (!p_at(p, TK_IDENT)) return p_name(p, "expected name");
-    size_t m = p_ident_run_len(p);                  
-    
+    size_t m = p_ident_run_len(p);
+
     long dynidx = -1;
-    { size_t i = 0; for (; i + 1 < m; i++) {
-        const token_t *t = p_peekn(p, i);
-        if (t->kind == TK_IDENT && strcmp(t->lexeme, "dyn") == 0) { dynidx = (long)i; break; }
-    } }
+    {
+        size_t i = 0;
+        for (; i + 1 < m; i++) {
+            const token_t *t = p_peekn(p, i);
+            if (t->kind == TK_IDENT && strcmp(t->lexeme, "dyn") == 0) {
+                dynidx = (long)i;
+                break;
+            }
+        }
+    }
     token_kind_t after = p_peekn(p, m)->kind;
     size_t name_words;
-    if (dynidx >= 1)                                   
+    if (dynidx >= 1)
         name_words = (size_t)dynidx;
     else if (after == TK_COLON || after == TK_KW_FUNC || after == TK_AMP)
-        name_words = m;                                
+        name_words = m;
     else if (m >= 2)
-        name_words = m - 1;                            
+        name_words = m - 1;
     else
-        name_words = 1;                                
+        name_words = 1;
     if (name_words < 1) name_words = 1;
-    sb_t b; sb_init(&b);
-    { size_t i = 0; for (; i < name_words; i++) {
-        if (i) sb_putc(&b, ' ');
-        sb_puts(&b, p_peek(p)->lexeme);
-        p_advance(p);
-    } }
+    sb_t b;
+    sb_init(&b);
+    {
+        size_t i = 0;
+        for (; i < name_words; i++) {
+            if (i) sb_putc(&b, ' ');
+            sb_puts(&b, p_peek(p)->lexeme);
+            p_advance(p);
+        }
+    }
     const char *r = arena_strdup(p->a, sb_cstr(&b));
     sb_free(&b);
     return r;
@@ -247,7 +291,10 @@ const char *parse_decl_name(parser_t *p)
 #define P_MAX_DEPTH 128
 bool p_recurse_enter(parser_t *p, const char *what)
 {
-    if (p->depth >= P_MAX_DEPTH) { p_error(p, what); return false; }
+    if (p->depth >= P_MAX_DEPTH) {
+        p_error(p, what);
+        return false;
+    }
     p->depth++;
     return true;
 }
@@ -259,7 +306,7 @@ void p_recurse_leave(parser_t *p)
 
 void p_comma_list(parser_t *p, ast_node_t *parent, token_kind_t close, p_elem_fn elem)
 {
-    if (p_at(p, close)) return;                  
+    if (p_at(p, close)) return;
     do {
         ast_add(p->a, parent, elem(p));
     } while (p_match(p, TK_COMMA));

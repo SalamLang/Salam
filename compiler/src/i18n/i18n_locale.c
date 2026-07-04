@@ -19,10 +19,20 @@
 static const char *g_lang = "en";
 void i18n_set_lang(const char *code)
 {
-    if (code && strcmp(code, "fa") == 0) g_lang = "fa";
-    else                                 g_lang = "en";
+    if (code && strcmp(code, "fa") == 0)
+        g_lang = "fa";
+    else if (code && strcmp(code, "ar") == 0)
+        g_lang = "ar";
+    else
+        g_lang = "en";
 }
 
-const char *i18n_lang(void) { return g_lang; }
+const char *i18n_lang(void)
+{
+    return g_lang;
+}
 
-const char *i18n_active_lang(void) { return g_lang; }
+const char *i18n_active_lang(void)
+{
+    return g_lang;
+}

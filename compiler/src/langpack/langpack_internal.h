@@ -19,18 +19,23 @@
 #include "langpack/langpack.h"
 #include "token/token.h"
 
-typedef struct { const char *canon; const char *spelling; } ctx_entry_t;
+typedef struct {
+    const char *canon;
+    const char *spelling;
+} ctx_entry_t;
 
 struct langpack {
-    const char       *code;
+    const char *code;
     const kw_entry_t *keywords;
-    const char       *entry;
+    const char *entry;
     const ctx_entry_t *contextual;
 };
 
 extern struct langpack g_lang_en;
 
 extern struct langpack g_lang_fa;
+
+extern struct langpack g_lang_ar;
 
 extern const kw_entry_t k_lang_en[];
 

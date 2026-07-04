@@ -20,15 +20,15 @@
 
 typedef struct {
     char *name;
-    bool  printed_gt;
-    bool  inlined;
+    bool printed_gt;
+    bool inlined;
 } xml_frame_t;
 
 struct xml_writer {
-    sb_t        *out;
+    sb_t *out;
     xml_frame_t *stack;
-    int          depth;
-    int          cap;
+    int depth;
+    int cap;
 };
 
 #endif /* SALAM_XML_INTERNAL_H */

@@ -22,7 +22,6 @@
 #include "langpack/langpack.h"
 #include "token/token.h"
 
-/* Match the ASCII tag at [p,le) case-insensitively; return its length or 0. */
 static size_t det_match_ci(const char *text, size_t p, size_t le,
                            const char *tag, size_t n)
 {
@@ -36,7 +35,6 @@ static size_t det_match_ci(const char *text, size_t p, size_t le,
     return n;
 }
 
-/* Match a raw byte sequence at [p,le); return its length or 0. */
 static size_t det_match_bytes(const char *text, size_t p, size_t le,
                               const char *tag, size_t n)
 {
@@ -46,19 +44,11 @@ static size_t det_match_bytes(const char *text, size_t p, size_t le,
     return n;
 }
 
-/*
- * Read the language marker in the first few comment lines and return its code
- * ("fa"/"en") or NULL. A Persian file marks itself fully in Persian
- * (`// زبان: فارسی`), an English file fully in English (`// lang: en` /
- * `// language: english`). Mismatched spellings such as `// LANG: fa` or
- * `// زبان: fa` are intentionally rejected so each file stays in one language.
- */
 const char *langpack_marker_code(const char *text, size_t len)
 {
     static const char en_tag1[] = "lang";          /* 4 bytes */
     static const char en_tag2[] = "language";      /* 8 bytes */
     static const char en_word[] = "english";       /* 7 bytes */
-    /* Persian words as raw UTF-8 so this source stays ASCII-only. */
     static const char fa_tag[] = "\xd8\xb2\xd8\xa8\xd8\xa7\xd9\x86";              /* زبان    (8) */
     static const char fa_val[] = "\xd9\x81\xd8\xa7\xd8\xb1\xd8\xb3\xdb\x8c";      /* فارسی   (10) */
     static const char en_val[] = "\xd8\xa7\xd9\x86\xda\xaf\xd9\x84\xdb\x8c"
@@ -84,12 +74,10 @@ const char *langpack_marker_code(const char *text, size_t len)
                 q++;
                 while (q < le && (text[q] == ' ' || text[q] == '\t')) q++;
                 if (fa_tagged) {
-                    /* Persian tag accepts only Persian value words. */
                     if (det_match_bytes(text, q, le, fa_val, 10)) return "fa";
                     if (det_match_bytes(text, q, le, en_val, 14)) return "en";
                     return NULL;
                 }
-                /* English tag accepts only English values. */
                 if (det_match_ci(text, q, le, en_word, 7)) return "en";
                 {
                     size_t cs = q;

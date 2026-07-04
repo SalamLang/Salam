@@ -30,7 +30,7 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
     return -1;
 }
 
-#else /* SALAM_HAVE_LLVM */
+#else
 
 #include <llvm-c/Core.h>
 #include <llvm-c/IRReader.h>
@@ -347,4 +347,4 @@ cleanup:
     return rc;
 }
 
-#endif /* SALAM_HAVE_LLVM */
+#endif

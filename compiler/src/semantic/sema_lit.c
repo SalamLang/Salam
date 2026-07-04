@@ -28,7 +28,7 @@ type_t *check_struct_lit(sema_t *s, ast_node_t *n)
     if (exp && exp->kind == TY_STRUCT && n->name &&
         (generic_template(s, n->name, SYM_STRUCT) || !scope_lookup(s->global, n->name)))
         n->name = exp->name;
-    if (!n->name) {   /* an unnamed struct literal with no inferable type */
+    if (!n->name) {
         SERR(s, 1, &n->span, "cannot infer the struct type of this literal");
         return decorate(s, n, err_ty(s));
     }

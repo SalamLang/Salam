@@ -82,9 +82,6 @@ static void emit_link(sb_t *cmd, logger_t *log, const char *spec, const char *ki
 #endif
         return;
     }
-    /* A raw flag (-lfoo, -Lpath) or an explicit path (./lib.a): pass it as a
-       single shell-quoted argument so metacharacters cannot escape into the
-       command executed by system(). */
     if (spec[0] == '-' || strpbrk(spec, "/\\.") != NULL) {
         sb_putc(cmd, ' '); sb_put_shell_arg(cmd, spec);
         return;
@@ -174,8 +171,6 @@ int driver_build(options_t *opt)
         source_file_t *src = source_load(arena, path);
         if (!src) { LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"), path); all_ok = false; continue; }
         src = preproc_source(arena, log, src, defs, ndefs);
-        /* Each module is lexed and checked in its own language: the stdlib stays
-         * English while a Persian program stays Persian. */
         const langpack_t *modpack = langpack_detect(arena, src, pack);
         const char *modentry = langpack_entry(modpack);
 

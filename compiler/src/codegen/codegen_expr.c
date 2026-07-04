@@ -29,8 +29,6 @@ const char *cg_op(token_kind_t k)
     }
 }
 
-/* uchar is a one-codepoint value backed by a UTF-8 C string, so in the string
-   operator paths (concatenation, comparison, stringification) it behaves like str. */
 static bool cg_is_str_ts(const char *ts)
 {
     return ts && (!strcmp(ts, "str") || !strcmp(ts, "uchar"));

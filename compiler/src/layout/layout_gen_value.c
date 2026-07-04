@@ -56,10 +56,6 @@ const char *hyphenate(layout_ctx_t *cx, const char *s)
     return r;
 }
 
-/* Escape a string for safe inclusion in HTML text or a double-quoted
-   attribute value. Covers the five characters that can break out of either
-   context, preventing markup/JS injection in generated pages (and XSS in the
-   web playground, which renders this HTML). */
 void sb_put_html_escaped(sb_t *b, const char *s)
 {
     const char *p = s;

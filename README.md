@@ -254,13 +254,17 @@ docker run --rm -it -v "$PWD/compiler":/app salam:dev                           
 
 ### 🚀 1. Quickstart Execution Guide
 
-To kick off your entire localized monorepo environment simultaneously, run the following steps from your root directory:
+To kick off your entire localized monorepo environment simultaneously, run the following steps from your root directory.
+
+- Install workspace links and cached instances:
 
 ```bash
-# 1. Install workspace links and cached instances
 bun install
+```
 
-# 2. Boot up all servers concurrently on high ports
+- Boot up all servers concurrently on high ports:
+
+```bash
 bun run dev:all
 ```
 

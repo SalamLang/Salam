@@ -40,12 +40,12 @@ typedef enum {
 } llvm_output_mode_t;
 
 typedef struct {
-    llvm_opt_level_t   opt_level;
-    bool               debug_info;
-    bool               verify_module;
+    llvm_opt_level_t opt_level;
+    bool debug_info;
+    bool verify_module;
     llvm_output_mode_t output_mode;
-    const char        *output_file;
-    const char        *target_triple;
+    const char *output_file;
+    const char *target_triple;
 } codegen_llvm_options_t;
 
 void codegen_llvm_options_default(codegen_llvm_options_t *o);
@@ -53,7 +53,7 @@ void codegen_llvm_options_default(codegen_llvm_options_t *o);
 typedef struct {
     const char *module;
     const char *ll_src;
-    bool        ok;
+    bool ok;
     const char *error;
 } llvm_output_t;
 

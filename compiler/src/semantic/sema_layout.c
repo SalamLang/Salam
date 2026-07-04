@@ -42,20 +42,26 @@ static const char *attr_string(ast_node_t *attr)
 
 static ast_node_t *elem_attr(ast_node_t *el, const char *name)
 {
-    { size_t i = 0; for (; i < el->list.len; i++) {
-        ast_node_t *c = (ast_node_t *)el->list.data[i];
-        if (c->kind == AST_LAYOUT_ATTR && c->name && !strcmp(c->name, name)) return c;
-    } }
+    {
+        size_t i = 0;
+        for (; i < el->list.len; i++) {
+            ast_node_t *c = (ast_node_t *)el->list.data[i];
+            if (c->kind == AST_LAYOUT_ATTR && c->name && !strcmp(c->name, name)) return c;
+        }
+    }
     return NULL;
 }
 
 static bool subtree_has_id(ast_node_t *el)
 {
-    { size_t i = 0; for (; i < el->list.len; i++) {
-        ast_node_t *c = (ast_node_t *)el->list.data[i];
-        if (c->kind != AST_LAYOUT_ELEMENT) continue;
-        if (elem_attr(c, "id") || subtree_has_id(c)) return true;
-    } }
+    {
+        size_t i = 0;
+        for (; i < el->list.len; i++) {
+            ast_node_t *c = (ast_node_t *)el->list.data[i];
+            if (c->kind != AST_LAYOUT_ELEMENT) continue;
+            if (elem_attr(c, "id") || subtree_has_id(c)) return true;
+        }
+    }
     return false;
 }
 
@@ -63,8 +69,8 @@ static void check_repeat(sema_t *s, ast_node_t *element)
 {
     if (!elem_attr(element, "repeat")) return;
     if (elem_attr(element, "id"))
-        SERR(s, 19, &element->span,
-             "element '%s' cannot use 'repeat' together with 'id'", element->name);
+        SERR(s, 19, &element->span, "element '%s' cannot use 'repeat' together with 'id'",
+             element->name);
     else if (subtree_has_id(element))
         SERR(s, 19, &element->span,
              "element '%s' has 'repeat' but a nested element has an 'id'", element->name);
@@ -75,12 +81,12 @@ static void check_attr(sema_t *s, ast_node_t *attr)
     const char *name = attr->name;
     if (!name) return;
     const layout_attr_def_t *ad = layout_attr_lookup(name);
-    if (!ad) return;                       
+    if (!ad) return;
     const char *v = attr_string(attr);
-    if (!v) return;                        
+    if (!v) return;
     if (!layout_attr_value_ok(ad, v))
-        SERR(s, 18, &attr->span, "invalid value for '%s': '%s' is not %s",
-             name, v, layout_value_type_name(ad->vtype));
+        SERR(s, 18, &attr->span, "invalid value for '%s': '%s' is not %s", name, v,
+             layout_value_type_name(ad->vtype));
 }
 
 static void check_required(sema_t *s, ast_node_t *element, const layout_elem_def_t *reg)
@@ -92,14 +98,21 @@ static void check_required(sema_t *s, ast_node_t *element, const layout_elem_def
         const char *comma = strchr(p, ',');
         size_t len = comma ? (size_t)(comma - p) : strlen(p);
         bool found = false;
-        { size_t i = 0; for (; i < element->list.len; i++) {
-            ast_node_t *c = (ast_node_t *)element->list.data[i];
-            if (c->kind == AST_LAYOUT_ATTR && c->name &&
-                strlen(c->name) == len && strncmp(c->name, p, len) == 0) { found = true; break; }
-        } }
+        {
+            size_t i = 0;
+            for (; i < element->list.len; i++) {
+                ast_node_t *c = (ast_node_t *)element->list.data[i];
+                if (c->kind == AST_LAYOUT_ATTR && c->name && strlen(c->name) == len &&
+                    strncmp(c->name, p, len) == 0) {
+                    found = true;
+                    break;
+                }
+            }
+        }
         if (!found)
-            SERR(s, 5, &element->span, "element '%s' is missing required attribute '%.*s'",
-                 element->name, (int)len, p);
+            SERR(s, 5, &element->span,
+                 "element '%s' is missing required attribute '%.*s'", element->name,
+                 (int)len, p);
         if (!comma) break;
         p = comma + 1;
     }
@@ -108,23 +121,29 @@ static void check_required(sema_t *s, ast_node_t *element, const layout_elem_def
 void sema_check_layout(sema_t *s, ast_node_t *node, const char *parent)
 {
     if (node->kind == AST_LAYOUT_BLOCK) {
-        layout_localize_names(node);   
+        layout_localize_names(node);
         LOG_D(s->log, PH_SEMANTIC, "validating layout block");
-        
+
         if (elem_attr(node, "repeat") && subtree_has_id(node))
             SERR(s, 19, &node->span,
                  "layout uses 'repeat' but a nested element has an 'id'");
-        { size_t i = 0; for (; i < node->list.len; i++) {
-            ast_node_t *c = (ast_node_t *)node->list.data[i];
-            if (c->kind == AST_LAYOUT_ELEMENT) sema_check_layout(s, c, "layout");
-            else if (c->kind == AST_LAYOUT_ATTR) check_attr(s, c);
-        } }
+        {
+            size_t i = 0;
+            for (; i < node->list.len; i++) {
+                ast_node_t *c = (ast_node_t *)node->list.data[i];
+                if (c->kind == AST_LAYOUT_ELEMENT)
+                    sema_check_layout(s, c, "layout");
+                else if (c->kind == AST_LAYOUT_ATTR)
+                    check_attr(s, c);
+            }
+        }
         return;
     }
     if (node->kind == AST_LAYOUT_ELEMENT) {
         const layout_elem_def_t *reg = layout_elem_lookup(node->name);
         if (!reg) {
-            SWARN(s, 2, &node->span, "unrecognized layout element '%s' (ignored)", node->name);
+            SWARN(s, 2, &node->span, "unrecognized layout element '%s' (ignored)",
+                  node->name);
         } else {
             if (reg->parents && !csv_contains(reg->parents, parent ? parent : ""))
                 SERR(s, 4, &node->span, "element '%s' cannot be placed inside '%s'",
@@ -132,11 +151,16 @@ void sema_check_layout(sema_t *s, ast_node_t *node, const char *parent)
             check_required(s, node, reg);
         }
         check_repeat(s, node);
-        { size_t i = 0; for (; i < node->list.len; i++) {
-            ast_node_t *c = (ast_node_t *)node->list.data[i];
-            if (c->kind == AST_LAYOUT_ELEMENT) sema_check_layout(s, c, node->name);
-            else if (c->kind == AST_LAYOUT_ATTR) check_attr(s, c);
-        } }
+        {
+            size_t i = 0;
+            for (; i < node->list.len; i++) {
+                ast_node_t *c = (ast_node_t *)node->list.data[i];
+                if (c->kind == AST_LAYOUT_ELEMENT)
+                    sema_check_layout(s, c, node->name);
+                else if (c->kind == AST_LAYOUT_ATTR)
+                    check_attr(s, c);
+            }
+        }
         return;
     }
 }

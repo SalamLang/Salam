@@ -17,7 +17,10 @@
 
 #include "core/prelude.h"
 
-typedef struct { const char *key; const char *val; } i18n_pair_t;
+typedef struct {
+    const char *key;
+    const char *val;
+} i18n_pair_t;
 
 const char *i18n_active_lang(void);
 

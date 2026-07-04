@@ -18,41 +18,48 @@
 #include "lexer/lexer.h"
 
 #define FMT_MAX_BRACKET 256
-#define FMT_MAX_BLOCK   256
+#define FMT_MAX_BLOCK 256
 
 typedef struct {
     const fmt_style_t *st;
     sb_t *out;
-    int  indent;
-    int  bracket;
-    int  angle;
-    int  bracket_indent;
+    int indent;
+    int bracket;
+    int angle;
+    int bracket_indent;
     bool ml_stack[FMT_MAX_BRACKET];
-    int  ml_top;
+    int ml_top;
     uint32_t block_line[FMT_MAX_BLOCK];
-    int  block_top;
+    int block_top;
     bool line_has_content;
     bool force_break;
     bool no_space_next;
     bool prev_gt_generic;
     uint32_t open_colon_line;
     const token_t *prev;
-    bool     prev_unary;
+    bool prev_unary;
     uint32_t prev_end_line;
 } fmt_ctx_t;
 
 fmt_style_t fmt_style_default(void)
 {
-    fmt_style_t s; s.tabs = false; s.width = FMT_INDENT_WIDTH; return s;
+    fmt_style_t s;
+    s.tabs = false;
+    s.width = FMT_INDENT_WIDTH;
+    return s;
 }
 
 static void fmt_emit_indent(sb_t *out, const fmt_style_t *st, int indent)
 {
     if (indent < 0) indent = 0;
     if (st->tabs) {
-        int s = 0; for (; s < indent; s++) sb_putc(out, '\t');
+        int s = 0;
+        for (; s < indent; s++)
+            sb_putc(out, '\t');
     } else {
-        int s = 0; for (; s < indent * st->width; s++) sb_putc(out, ' ');
+        int s = 0;
+        for (; s < indent * st->width; s++)
+            sb_putc(out, ' ');
     }
 }
 
@@ -65,10 +72,10 @@ static bool fmt_bracket_multiline(const token_stream_t *toks, size_t open_idx)
     for (; i < n; i++) {
         const token_t *t = token_stream_at(toks, i);
         if (t->kind == TK_EOF) break;
-        if (fmt_is_open(t->kind)) depth++;
+        if (fmt_is_open(t->kind))
+            depth++;
         else if (fmt_is_close(t->kind)) {
-            if (--depth == 0)
-                return t->span.end.line > o->span.begin.line;
+            if (--depth == 0) return t->span.end.line > o->span.begin.line;
         }
     }
     return false;
@@ -86,22 +93,28 @@ static bool fmt_bracket_multiline(const token_stream_t *toks, size_t open_idx)
 static bool fmt_angle_is_generic(const token_stream_t *toks, size_t lt_idx)
 {
     size_t n = token_stream_count(toks);
-    int    depth = 0;
-    int    steps = 0;
+    int depth = 0;
+    int steps = 0;
     size_t i = lt_idx;
     for (; i < n && steps < 256; i++, steps++) {
         token_kind_t k = token_stream_at(toks, i)->kind;
         switch (k) {
-            case TK_LT: depth++; break;
-            case TK_GT:
-                if (--depth == 0) return true;
-                break;
-            case TK_IDENT: case TK_COMMA: case TK_DOT:
-            case TK_STAR:  case TK_AMP:
-            case TK_LBRACKET: case TK_RBRACKET:
-                break;
-            default:
-                return false;
+        case TK_LT:
+            depth++;
+            break;
+        case TK_GT:
+            if (--depth == 0) return true;
+            break;
+        case TK_IDENT:
+        case TK_COMMA:
+        case TK_DOT:
+        case TK_STAR:
+        case TK_AMP:
+        case TK_LBRACKET:
+        case TK_RBRACKET:
+            break;
+        default:
+            return false;
         }
     }
     return false;
@@ -116,10 +129,14 @@ static void fmt_step_stmt_end(fmt_ctx_t *c, const token_t *t, bool cur_ml)
     if (c->line_has_content && t->lexeme && t->lexeme[0] == ';') {
         sb_puts(c->out, "; ");
         c->no_space_next = true;
-        c->prev = t; c->prev_end_line = t->span.end.line;
+        c->prev = t;
+        c->prev_end_line = t->span.end.line;
         return;
     }
-    if (c->line_has_content) { sb_putc(c->out, '\n'); c->line_has_content = false; }
+    if (c->line_has_content) {
+        sb_putc(c->out, '\n');
+        c->line_has_content = false;
+    }
     c->force_break = false;
     c->open_colon_line = 0;
 }
@@ -129,7 +146,10 @@ static void fmt_step_break_before(fmt_ctx_t *c, const token_t *t, token_kind_t k
 {
     if (c->bracket > 0 && fmt_is_close(k) && cur_ml) {
         if (c->bracket_indent > 0) c->bracket_indent--;
-        if (c->line_has_content) { sb_putc(c->out, '\n'); c->line_has_content = false; }
+        if (c->line_has_content) {
+            sb_putc(c->out, '\n');
+            c->line_has_content = false;
+        }
         c->force_break = false;
     }
     if (c->force_break && c->line_has_content) {
@@ -147,10 +167,8 @@ static void fmt_step_break_before(fmt_ctx_t *c, const token_t *t, token_kind_t k
 
 static void fmt_step_dedent(fmt_ctx_t *c, const token_t *t, token_kind_t k)
 {
-    if (c->bracket == 0 && c->angle == 0 &&
-        (k == TK_KW_END || k == TK_KW_ELSE)) {
-        if (c->block_top > 0 && c->block_top <= FMT_MAX_BLOCK &&
-            c->line_has_content &&
+    if (c->bracket == 0 && c->angle == 0 && (k == TK_KW_END || k == TK_KW_ELSE)) {
+        if (c->block_top > 0 && c->block_top <= FMT_MAX_BLOCK && c->line_has_content &&
             t->span.begin.line > c->block_line[c->block_top - 1]) {
             sb_putc(c->out, '\n');
             c->line_has_content = false;
@@ -170,8 +188,7 @@ static void fmt_step_leading(fmt_ctx_t *c, const token_t *t, token_kind_t k)
         fmt_emit_indent(c->out, c->st, c->indent + c->bracket_indent);
     } else if (!c->no_space_next) {
         bool need = fmt_need_space(c->prev, t, c->prev_unary);
-        if (c->prev_gt_generic && (k == TK_LPAREN || k == TK_LBRACKET))
-            need = false;
+        if (c->prev_gt_generic && (k == TK_LPAREN || k == TK_LBRACKET)) need = false;
         if (need) sb_putc(c->out, ' ');
     }
     c->no_space_next = false;
@@ -203,7 +220,10 @@ static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
         if (c->ml_top < FMT_MAX_BRACKET) c->ml_stack[c->ml_top] = ml;
         c->ml_top++;
         c->bracket++;
-        if (ml) { c->bracket_indent++; c->force_break = true; }
+        if (ml) {
+            c->bracket_indent++;
+            c->force_break = true;
+        }
     } else if (fmt_is_close(k)) {
         if (c->ml_top > 0) c->ml_top--;
         if (c->bracket > 0) c->bracket--;
@@ -226,11 +246,14 @@ void fmt_tokens(const token_stream_t *toks, const fmt_style_t *style, sb_t *out)
 
     for (; i < n; i++) {
         const token_t *t = token_stream_at(toks, i);
-        token_kind_t   k = t->kind;
-        bool cur_ml = c.ml_top > 0 && c.ml_top <= FMT_MAX_BRACKET &&
-                      c.ml_stack[c.ml_top - 1];
+        token_kind_t k = t->kind;
+        bool cur_ml =
+            c.ml_top > 0 && c.ml_top <= FMT_MAX_BRACKET && c.ml_stack[c.ml_top - 1];
         if (k == TK_EOF) break;
-        if (k == TK_STMT_END) { fmt_step_stmt_end(&c, t, cur_ml); continue; }
+        if (k == TK_STMT_END) {
+            fmt_step_stmt_end(&c, t, cur_ml);
+            continue;
+        }
 
         fmt_step_break_before(&c, t, k, cur_ml);
         fmt_step_dedent(&c, t, k);

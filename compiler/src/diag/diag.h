@@ -24,26 +24,26 @@
 typedef enum { SEV_ERROR = 0, SEV_WARNING } severity_t;
 
 typedef struct {
-    severity_t  sev;
-    int         code;
-    src_span_t  span;
+    severity_t sev;
+    int code;
+    src_span_t span;
     const char *file;
     const char *message;
 } diag_t;
 
 typedef struct {
-    vec_t      items;
-    size_t     errors;
-    size_t     warnings;
-    arena_t   *a;
-    logger_t  *log;
-    phase_t    phase;
+    vec_t items;
+    size_t errors;
+    size_t warnings;
+    arena_t *a;
+    logger_t *log;
+    phase_t phase;
 } diag_engine_t;
 
 diag_engine_t *diag_new(arena_t *a, logger_t *log, phase_t phase);
 
-void diag_report(diag_engine_t *e, severity_t sev, int code,
-                 const char *file, const src_span_t *span, const char *fmt, ...);
+void diag_report(diag_engine_t *e, severity_t sev, int code, const char *file,
+                 const src_span_t *span, const char *fmt, ...);
 
 bool diag_has_errors(const diag_engine_t *e);
 

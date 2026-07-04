@@ -77,31 +77,46 @@ void sb_put_shell_arg(sb_t *s, const char *arg)
 {
 #if defined(_WIN32) || defined(__CYGWIN__)
     sb_putc(s, '"');
-    { const char *p = arg;
-      while (*p) {
-        size_t nbs = 0;
-        while (*p == '\\') { nbs++; p++; }
-        if (*p == '\0') {
-            size_t i; for (i = 0; i < nbs * 2; i++) sb_putc(s, '\\');
-            break;
-        } else if (*p == '"') {
-            size_t i; for (i = 0; i < nbs * 2 + 1; i++) sb_putc(s, '\\');
-            sb_putc(s, '"');
-            p++;
-        } else {
-            size_t i; for (i = 0; i < nbs; i++) sb_putc(s, '\\');
-            sb_putc(s, *p);
-            p++;
+    {
+        const char *p = arg;
+        while (*p) {
+            size_t nbs = 0;
+            while (*p == '\\') {
+                nbs++;
+                p++;
+            }
+            if (*p == '\0') {
+                size_t i;
+                for (i = 0; i < nbs * 2; i++)
+                    sb_putc(s, '\\');
+                break;
+            } else if (*p == '"') {
+                size_t i;
+                for (i = 0; i < nbs * 2 + 1; i++)
+                    sb_putc(s, '\\');
+                sb_putc(s, '"');
+                p++;
+            } else {
+                size_t i;
+                for (i = 0; i < nbs; i++)
+                    sb_putc(s, '\\');
+                sb_putc(s, *p);
+                p++;
+            }
         }
-      }
     }
     sb_putc(s, '"');
 #else
     sb_putc(s, '\'');
-    { const char *p = arg; for (; *p; p++) {
-        if (*p == '\'') sb_puts(s, "'\\''");
-        else sb_putc(s, *p);
-    } }
+    {
+        const char *p = arg;
+        for (; *p; p++) {
+            if (*p == '\'')
+                sb_puts(s, "'\\''");
+            else
+                sb_putc(s, *p);
+        }
+    }
     sb_putc(s, '\'');
 #endif
 }

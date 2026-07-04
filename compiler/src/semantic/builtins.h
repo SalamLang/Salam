@@ -20,7 +20,7 @@
 typedef struct {
     const char *name;
     const char *runtime;
-    int         nargs;
+    int nargs;
     const char *ret;
     const char *arg;
 } salam_builtin_t;

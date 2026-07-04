@@ -18,12 +18,12 @@
 #include "core/prelude.h"
 #include <stdarg.h>
 
-int  sal_vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap);
+int sal_vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap);
 
-int  sal_snprintf (char *buf, size_t cap, const char *fmt, ...);
+int sal_snprintf(char *buf, size_t cap, const char *fmt, ...);
 
-size_t sal_catf (char *buf, size_t cap, size_t off, const char *fmt, ...);
+size_t sal_catf(char *buf, size_t cap, size_t off, const char *fmt, ...);
 
-void sal_vfprintf (FILE *f, const char *fmt, va_list ap);
+void sal_vfprintf(FILE *f, const char *fmt, va_list ap);
 
 #endif /* SALAM_CORE_SAL_FORMAT_H */

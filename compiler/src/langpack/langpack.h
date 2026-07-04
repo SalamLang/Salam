@@ -20,14 +20,14 @@
 
 typedef struct {
     token_kind_t kind;
-    const char  *spelling;
+    const char *spelling;
 } kw_entry_t;
 
 typedef struct langpack langpack_t;
 
 langpack_t *langpack_load(const char *code);
 
-void        langpack_free(langpack_t *p);
+void langpack_free(langpack_t *p);
 
 const char *langpack_code(const langpack_t *p);
 

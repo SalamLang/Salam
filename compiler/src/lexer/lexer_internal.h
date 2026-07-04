@@ -24,55 +24,55 @@
 typedef enum { LX_SUB_NAME, LX_SUB_VALUE } lx_layout_sub_t;
 
 typedef struct {
-    const char       *s;
-    size_t            n;
-    size_t            pos;
-    uint32_t          line;
-    uint32_t          col;
-    const char       *file;
-    int               group_depth;
+    const char *s;
+    size_t n;
+    size_t pos;
+    uint32_t line;
+    uint32_t col;
+    const char *file;
+    int group_depth;
 
-    token_kind_t      last;
-    bool              has_last;
-    bool              had_error;
-    bool              keep_comments;
+    token_kind_t last;
+    bool has_last;
+    bool had_error;
+    bool keep_comments;
 
-    bool              layout_mode;
-    int               layout_depth;
-    lx_layout_sub_t   layout_sub;
-    bool              comp_header;
+    bool layout_mode;
+    int layout_depth;
+    lx_layout_sub_t layout_sub;
+    bool comp_header;
 
-    arena_t          *a;
-    logger_t         *log;
+    arena_t *a;
+    logger_t *log;
     const langpack_t *pack;
-    token_stream_t   *out;
+    token_stream_t *out;
 } lx_t;
 
-#define LX_POS(L) ((src_pos_t){ (L)->line, (L)->col, (uint32_t)(L)->pos })
+#define LX_POS(L) ((src_pos_t){(L)->line, (L)->col, (uint32_t)(L)->pos})
 
-char        lx_peek(lx_t *L);
+char lx_peek(lx_t *L);
 
-char        lx_peek2(lx_t *L, size_t k);
+char lx_peek2(lx_t *L, size_t k);
 
-bool        lx_end(lx_t *L);
+bool lx_end(lx_t *L);
 
-char        lx_adv(lx_t *L);
+char lx_adv(lx_t *L);
 
 const char *lx_slice(lx_t *L, size_t start);
 
-bool   lx_match(lx_t *L, char c);
+bool lx_match(lx_t *L, char c);
 
-void   lx_skip_ident(lx_t *L);
+void lx_skip_ident(lx_t *L);
 
-void   lx_skip_to_eol(lx_t *L);
+void lx_skip_to_eol(lx_t *L);
 
 size_t lx_consume_hex(lx_t *L, int max);
 
-int    lx_at_digit(lx_t *L, size_t k);
+int lx_at_digit(lx_t *L, size_t k);
 
-int    lx_take_digit(lx_t *L);
+int lx_take_digit(lx_t *L);
 
-bool   lx_expect(lx_t *L, char close, const src_pos_t *begin, const char *errmsg);
+bool lx_expect(lx_t *L, char close, const src_pos_t *begin, const char *errmsg);
 
 size_t lx_trim_ws_end(const char *s, size_t start, size_t end);
 
@@ -84,23 +84,23 @@ void lx_emit_val(lx_t *L, token_kind_t kind, const src_pos_t *begin,
 
 void lx_error(lx_t *L, const src_pos_t *at, const char *msg);
 
-bool     lx_is_digit(char c);
+bool lx_is_digit(char c);
 
-bool     lx_is_alpha(char c);
+bool lx_is_alpha(char c);
 
-bool     lx_is_ident_start(char c);
+bool lx_is_ident_start(char c);
 
-bool     lx_is_ident_cont(char c);
+bool lx_is_ident_cont(char c);
 
-int      lx_hex(char c);
+int lx_hex(char c);
 
-size_t   lx_utf8_encode(uint32_t cp, char *out);
+size_t lx_utf8_encode(uint32_t cp, char *out);
 
-int      lx_utf8_seq_len(const char *s, size_t n);
+int lx_utf8_seq_len(const char *s, size_t n);
 
-bool     lx_is_base_digit(char c, char base);
+bool lx_is_base_digit(char c, char base);
 
-int      lx_decimal_digit(const char *s, size_t n, int *val);
+int lx_decimal_digit(const char *s, size_t n, int *val);
 
 uint64_t lx_parse_uint(const char *d, int base, bool *overflow);
 
@@ -114,7 +114,7 @@ bool lx_try_line_comment(lx_t *L);
 
 const char *lx_decode_string(lx_t *L, const char *lex, bool triple);
 
-uint64_t    lx_decode_char(const char *lex);
+uint64_t lx_decode_char(const char *lex);
 
 void lx_scan_number(lx_t *L);
 

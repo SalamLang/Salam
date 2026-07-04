@@ -1,5 +1,5 @@
 export default {
-  async fetch(request): Promise<Response> {
+  async fetch(_request): Promise<Response> {
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>

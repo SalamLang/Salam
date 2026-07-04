@@ -18,10 +18,6 @@
 
 token_kind_t langpack_lookup_keyword(const langpack_t *p, const char *ident)
 {
-    /* Only this pack's own keywords are recognised: a Persian file must be
-     * written in Persian and an English one in English. Each source file is
-     * lexed in its own detected language (see langpack_detect), so the stdlib
-     * (English) and a Persian program each get the right keyword set. */
     { const kw_entry_t *e = p->keywords; for (; e->spelling != NULL; e++) {
         if (strcmp(e->spelling, ident) == 0) return e->kind;
     } }

@@ -207,6 +207,7 @@ static const i18n_pair_t k_msg_fa[] = {
     { "a value",               "یک مقدار" },
     
     { "%s (near '%s')",                                      "%s (نزدیک '%s')" },
+    { "%s (reserved word cannot be used as a name)",         "%s (کلمه‌ی رزرو شده را نمی‌توان به عنوان نام به کار برد)" },
     { "expected %s",                                         "%s انتظار می‌رفت" },
     { "expected an expression",                              "یک عبارت انتظار می‌رفت" },
     { "expected a top-level definition",                     "یک تعریف سطح‌بالا انتظار می‌رفت" },
@@ -417,7 +418,6 @@ static const i18n_pair_t k_msg_fa[] = {
     { "lang() takes no arguments",                          "()lang هیچ آرگومانی نمی‌گیرد" },
     { "interface '%s' has no method '%s'",                  "واسط '%s' متدی به نام '%s' ندارد" },
 
-    /* FFI / extern block diagnostics */
     { "expected a library-name string after 'link'",        "پس از 'link' یک رشته‌ی نام کتابخانه لازم است" },
     { "'(' after @link",                                     "'(' پس از @link" },
     { "'=' after 'kind'",                                    "'=' پس از 'kind'" },
@@ -432,7 +432,6 @@ static const i18n_pair_t k_msg_fa[] = {
     { "expected external variable name",                     "نام متغیر خارجی لازم است" },
     { "'(' after external function name",                    "'(' پس از نام تابع خارجی" },
 
-    /* interface / impl block diagnostics */
     { "expected a definition after 'pub'",                   "پس از 'pub' یک تعریف لازم است" },
     { "'pub' cannot be applied to a component",              "'pub' را نمی‌توان بر یک مؤلفه اعمال کرد" },
     { "'pub' cannot be applied to a layout block",           "'pub' را نمی‌توان بر یک بلوک چیدمان اعمال کرد" },
@@ -446,13 +445,11 @@ static const i18n_pair_t k_msg_fa[] = {
     { "'end' to close impl block",                           "'end' برای بستن بلوک impl" },
     { "expected a method ('func ...') in impl block",        "در بلوک impl یک متد ('func ...') لازم است" },
 
-    /* lambda / sizeof diagnostics */
     { "'(' to open lambda parameters",                       "'(' برای بازکردن پارامترهای لامبدا" },
     { "')' after lambda parameters",                         "')' پس از پارامترهای لامبدا" },
     { "'=>' in lambda",                                      "'=>' در لامبدا" },
     { "')' after sizeof type",                               "')' پس از نوع sizeof" },
 
-    /* interpreter runtime errors */
     { "call stack too deep (possible infinite recursion)",   "پشته‌ی فراخوانی بسیار عمیق است (احتمال بازگشت بی‌نهایت)" },
     { "repeat count must be a number",                       "شمار تکرار باید یک عدد باشد" },
     { "repeat range start must be a number",                 "شروع بازه‌ی تکرار باید یک عدد باشد" },
@@ -460,7 +457,6 @@ static const i18n_pair_t k_msg_fa[] = {
     { "repeat step must be a number",                        "گام تکرار باید یک عدد باشد" },
     { "repeat step must be positive",                        "گام تکرار باید مثبت باشد" },
 
-    /* semantic diagnostics */
     { "operator '+' on a string requires the other operand to be a string, number, bool, or char (got '%s' and '%s')",
       "عملگر '+' روی رشته نیازمند آن است که عملوند دیگر رشته، عدد، منطقی یا نویسه باشد (دریافت '%s' و '%s')" },
     { "cannot infer the struct type of this literal",        "نمی‌توان نوع ساختار این مقدار را استنتاج کرد" },

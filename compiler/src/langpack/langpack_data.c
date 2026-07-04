@@ -97,6 +97,8 @@ static const kw_entry_t k_lang_fa[] = {
     { TK_KW_IMPL,     "پیاده‌سازی" },
     { TK_KW_TO,       "تا"        },
     { TK_KW_STEP,     "هر"        },
+    { TK_AND,         "و"         },
+    { TK_OR,          "یا"        },
     { TK_EOF,         NULL        },
 };
 static const ctx_entry_t k_ctx_fa[] = {

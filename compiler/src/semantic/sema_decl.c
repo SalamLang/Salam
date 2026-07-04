@@ -421,8 +421,6 @@ static void lint_lang_types(sema_t *s, ast_node_t *n)
                 : i18n_tr("type name '%s' must be English in an English file"),
              n->name);
     }
-    /* Note: typaram_bounds holds interface-name strings (not nodes), so it is
-     * not traversed here. */
     lint_lang_types(s, n->type);
     lint_lang_types(s, n->a); lint_lang_types(s, n->b);
     lint_lang_types(s, n->c); lint_lang_types(s, n->d);

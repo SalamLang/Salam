@@ -165,10 +165,6 @@ int type_prim_kind_from_name(const char *name, const char *lang)
         {"اعشار۳۲",TY_F32,L_FA},{"اعشار",TY_F32,L_FA},{"اعشار۶۴",TY_F64,L_FA},
         {"اعشار32",TY_F32,L_FA},{"اعشار64",TY_F64,L_FA},
     };
-    /* When a language is given, a name spelled in the *other* language is not a
-     * valid primitive type there: a Persian file must use Persian type names and
-     * an English file English ones. lang == NULL keeps the permissive behaviour
-     * used for compiler-internal (always-English) type strings. */
     int want = 0;
     if (lang && lang[0] == 'f' && lang[1] == 'a')      want = L_FA;
     else if (lang && lang[0] == 'e' && lang[1] == 'n') want = L_EN;

@@ -15,6 +15,24 @@
 #include "core/prelude.h"
 #include "lexer/lexer_internal.h"
 
+bool lx_scan_unicode_op(lx_t *L)
+{
+    const unsigned char *s = (const unsigned char *)(L->s + L->pos);
+    size_t rem = L->n - L->pos;
+    token_kind_t k;
+    if (rem >= 3 && s[0] == 0xEF && s[1] == 0xBC && (s[2] == 0x8B || s[2] == 0x8D))
+        k = (s[2] == 0x8B) ? TK_PLUS : TK_MINUS;
+    else if (rem >= 3 && s[0] == 0xE2 && s[1] == 0x88 && s[2] == 0x92)
+        k = TK_MINUS;
+    else
+        return false;
+    src_pos_t b = LX_POS(L);
+    size_t start = L->pos;
+    lx_adv(L); lx_adv(L); lx_adv(L);
+    lx_emit(L, k, &b, lx_slice(L, start));
+    return true;
+}
+
 void lx_scan_op(lx_t *L)
 {
     token_kind_t prev = L->last;

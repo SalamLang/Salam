@@ -14,7 +14,7 @@
 
 #include "core/sal_format.h"
 #include "core/numstr.h"
-#include <stddef.h>  /* ptrdiff_t */
+#include <stddef.h>
 
 typedef struct { char *buf; size_t cap; size_t len; } fbuf_t;
 
@@ -47,7 +47,7 @@ static void emit_int_padded(fbuf_t *fb, uint64_t mag, int neg, int base, int upp
     char sign = 0;
 
     if (mag == 0) {
-        if (prec != 0) dig[ndig++] = '0';   /* precision 0 with value 0 -> no digits */
+        if (prec != 0) dig[ndig++] = '0';
     } else {
         uint64_t v = mag;
         while (v != 0) { dig[ndig++] = tbl[(int)(v % (unsigned)base)]; v /= (unsigned)base; }
@@ -65,7 +65,6 @@ static void emit_int_padded(fbuf_t *fb, uint64_t mag, int neg, int base, int upp
 
     content = (sign ? 1 : 0) + hashlen + zprec + ndig;
     if (width > content) pad = width - content;
-    /* the '0' flag is ignored when left-justifying or when a precision is given */
     if (fl_zero && !fl_minus && prec < 0) { zwidth = pad; pad = 0; }
 
     if (!fl_minus) { for (i = 0; i < pad; i++) fb_ch(fb, ' '); }
@@ -174,9 +173,6 @@ int sal_vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
             (conv=='d'||conv=='i'||conv=='u'||conv=='x'||conv=='X'||conv=='o')) {
             uint64_t mag; int neg = 0, base, upper = 0;
             if (conv == 'd' || conv == 'i') {
-                /* For %zd the argument is signed (ptrdiff_t/ssize_t). Read it
-                   through a signed type so negatives sign-extend to int64_t;
-                   reading via size_t would zero-extend on 32-bit (-1 -> 4G-1). */
                 int64_t v = (len == LEN_Z) ? (int64_t)va_arg(ap, ptrdiff_t)
                                            : (int64_t)va_arg(ap, long long);
                 neg = v < 0;

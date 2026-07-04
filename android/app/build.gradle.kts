@@ -36,8 +36,6 @@ android {
     }
 
     lint {
-        // باگ ابزار lint در AGP 9.0.1 (آرتیفکت kotlin-compiler منتشر نشده) را دور می‌زند
-        // تا گرفتن خروجی release بلاک نشود
         checkReleaseBuilds = false
         abortOnError = false
     }

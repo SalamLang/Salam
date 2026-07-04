@@ -251,9 +251,6 @@ static symbol_t *g_instantiate_func(sema_t *s, ast_node_t *tmpl, vec_t *targ_nod
     inst->typarams.len = 0;
     vec_push(s->a, &s->program->list, inst);
     symbol_t *fsym = get_or_make_func(s, s->global, iname, SYM_FUNC);
-    /* Remember the template's package so the instance body can resolve sibling
-     * and self calls (other free functions of the same package) when it is
-     * checked later in the importer's scope. Mirrors g_instantiate_struct. */
     if (!fsym->home) fsym->home = s->gen_pkg;
     vec_push(s->a, &fsym->overloads, build_sig(s, inst, NULL));
     vec_push(s->a, &s->pending, inst);
@@ -306,10 +303,6 @@ symbol_t *g_infer_call(sema_t *s, symbol_t *tsym, vec_t *argtypes,
             type_t *u = g_unify(p->type, (type_t *)argtypes->data[pi], T);
             if (u) { bound = u; break; }
         } }
-        /* When a type parameter cannot be inferred from the arguments (e.g. a
-         * nullary constructor like None<T>()), fall back to unifying the
-         * function's declared return type against the expected type supplied
-         * by the call context (assignment target or enclosing return). */
         if (!bound && expected && tmpl->type)
             bound = g_unify(tmpl->type, expected, T);
         if (!bound) {

@@ -134,6 +134,8 @@ void lx_scan_meta(lx_t *L);
 
 void lx_scan_op(lx_t *L);
 
+bool lx_scan_unicode_op(lx_t *L);
+
 void lx_layout_step(lx_t *L);
 
 #endif /* SALAM_LEXER_INTERNAL_H */

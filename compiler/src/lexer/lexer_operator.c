@@ -15,6 +15,31 @@
 #include "core/prelude.h"
 #include "lexer/lexer_internal.h"
 
+/* Full-width / mathematical Unicode spellings of the +/- operators, so they can
+ * be typed directly on a Persian or CJK keyboard. ASCII '+' and '-' remain the
+ * canonical forms; these are accepted aliases that lex to the same tokens.
+ *   U+FF0B  '＋'  fullwidth plus         -> +
+ *   U+FF0D  '－'  fullwidth hyphen-minus -> -
+ *   U+2212  '−'  minus sign             -> -
+ * Returns true (and emits a token) when the cursor sits on one of them. */
+bool lx_scan_unicode_op(lx_t *L)
+{
+    const unsigned char *s = (const unsigned char *)(L->s + L->pos);
+    size_t rem = L->n - L->pos;
+    token_kind_t k;
+    if (rem >= 3 && s[0] == 0xEF && s[1] == 0xBC && (s[2] == 0x8B || s[2] == 0x8D))
+        k = (s[2] == 0x8B) ? TK_PLUS : TK_MINUS;
+    else if (rem >= 3 && s[0] == 0xE2 && s[1] == 0x88 && s[2] == 0x92)
+        k = TK_MINUS;
+    else
+        return false;
+    src_pos_t b = LX_POS(L);
+    size_t start = L->pos;
+    lx_adv(L); lx_adv(L); lx_adv(L);
+    lx_emit(L, k, &b, lx_slice(L, start));
+    return true;
+}
+
 void lx_scan_op(lx_t *L)
 {
     token_kind_t prev = L->last;

@@ -207,6 +207,7 @@ static const i18n_pair_t k_msg_fa[] = {
     { "a value",               "یک مقدار" },
     
     { "%s (near '%s')",                                      "%s (نزدیک '%s')" },
+    { "%s (reserved word cannot be used as a name)",         "%s (کلمه‌ی رزرو شده را نمی‌توان به عنوان نام به کار برد)" },
     { "expected %s",                                         "%s انتظار می‌رفت" },
     { "expected an expression",                              "یک عبارت انتظار می‌رفت" },
     { "expected a top-level definition",                     "یک تعریف سطح‌بالا انتظار می‌رفت" },

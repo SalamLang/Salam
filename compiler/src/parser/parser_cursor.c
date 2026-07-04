@@ -131,6 +131,18 @@ void p_term(parser_t *p)
     if (p_at(p, TK_STMT_END)) p_advance(p);
 }
 
+/* True when the next token is a reserved word a user likely tried to use as a
+ * declared name: any keyword, or the Persian word operators و / یا (which lex to
+ * TK_AND / TK_OR rather than to their '&&' / '||' spelling). */
+static bool p_at_reserved_word(parser_t *p)
+{
+    const token_t *t = p_peek(p);
+    if (tk_is_keyword(t->kind)) return true;
+    if (t->kind == TK_AND || t->kind == TK_OR)
+        return t->lexeme && (unsigned char)t->lexeme[0] >= 0x80;
+    return false;
+}
+
 const char *p_name(parser_t *p, const char *what)
 {
     if (p_at(p, TK_IDENT)) {
@@ -138,8 +150,16 @@ const char *p_name(parser_t *p, const char *what)
         p_advance(p);
         return s;
     }
+    if (p_at_reserved_word(p)) {
+        char buf[160];
+        sal_snprintf(buf, sizeof(buf),
+                     i18n_tr("%s (reserved word cannot be used as a name)"),
+                     i18n_tr(what));
+        p_error(p, buf);
+        return "<error>";
+    }
     p_error(p, what);
-    return NULL;
+    return "<error>";
 }
 
 const char *p_member_name(parser_t *p, const char *what)

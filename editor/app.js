@@ -79,6 +79,9 @@
   function esc(s) {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
+  function escAttr(s) {
+    return esc(s).replace(/"/g, "&quot;");
+  }
   var TOK =
     /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|`[^`]*`|'(?:[^'\\]|\\.)*')|(\d+\.\d+|\d+)|([A-Za-z_؀-ۿ‌][\w؀-ۿ‌]*)|([=!<>+\-*/%&|:^~?]+)/g;
   function highlight(src) {
@@ -86,8 +89,8 @@
       last = 0,
       m;
     TOK.lastIndex = 0;
-    // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
-    while ((m = TOK.exec(src)) !== null) {
+    m = TOK.exec(src);
+    while (m !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
       const tok = m[0];
       let cls = null;
@@ -99,6 +102,7 @@
       else if (m[5]) cls = "o";
       out += cls ? `<span class="${cls}">${esc(tok)}</span>` : esc(tok);
       last = TOK.lastIndex;
+      m = TOK.exec(src);
     }
     out += esc(src.slice(last));
     return `${out}\n`;
@@ -123,8 +127,8 @@
       last = 0,
       m;
     XML_TOK.lastIndex = 0;
-    // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
-    while ((m = XML_TOK.exec(src)) !== null) {
+    m = XML_TOK.exec(src);
+    while (m !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
       const tag = m[0];
       if (tag.slice(0, 4) === "<!--") {
@@ -150,6 +154,7 @@
         }
       }
       last = XML_TOK.lastIndex;
+      m = XML_TOK.exec(src);
     }
     out += esc(src.slice(last));
     return out;
@@ -331,8 +336,8 @@
       last = 0,
       m;
     IR_TOK.lastIndex = 0;
-    // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
-    while ((m = IR_TOK.exec(src)) !== null) {
+    m = IR_TOK.exec(src);
+    while (m !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
       let tok = m[0];
       let cls = null;
@@ -356,6 +361,7 @@
       } else if (m[8]) cls = "io";
       out += cls ? `<span class="${cls}">${esc(tok)}</span>` : esc(tok);
       last = IR_TOK.lastIndex;
+      m = IR_TOK.exec(src);
     }
     out += esc(src.slice(last));
     return out;
@@ -454,11 +460,12 @@
       out = "",
       last = 0,
       m;
-    // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
-    while ((m = re.exec(s)) !== null) {
+    m = re.exec(s);
+    while (m !== null) {
       if (m.index > last) out += esc(s.slice(last, m.index));
       out += `<span class="cs">${esc(m[0])}</span>`;
       last = re.lastIndex;
+      m = re.exec(s);
     }
     out += esc(s.slice(last));
     return `<span class="cpp">${out}</span>`;
@@ -607,6 +614,145 @@
     saveTimer = null;
   var wasm = { ready: false, runApp: null, buildLayout: null, emit: null };
   var $ = (id) => document.getElementById(id);
+  var LANG_DIR = { en: "ltr", fa: "rtl" };
+  function dirOf(l) {
+    return LANG_DIR[l] || "ltr";
+  }
+  var edWrap = null,
+    lnInner = null,
+    taEl = null;
+  var lnCount = 1,
+    lnDigits = 0,
+    lnLH = 22.4,
+    lnPadTop = 14,
+    lnFirst = -1,
+    lnLast = -1;
+  var errLines = new Map(),
+    errStamp = 0,
+    lnErrStamp = -1,
+    lnActive = 1,
+    lnCaretRAF = 0;
+  function countLines(s) {
+    var n = 1;
+    var i = s.indexOf("\n");
+    while (i >= 0) {
+      n++;
+      i = s.indexOf("\n", i + 1);
+    }
+    return n;
+  }
+  function lnMeasure() {
+    if (!taEl) return;
+    var cs = getComputedStyle(taEl);
+    var lh = parseFloat(cs.lineHeight);
+    if (!Number.isFinite(lh)) lh = (parseFloat(cs.fontSize) || 14) * 1.6;
+    lnLH = lh;
+    lnPadTop = parseFloat(cs.paddingTop) || 0;
+    lnFirst = -1;
+    lnRender();
+  }
+  function lnRender() {
+    if (!lnInner) return;
+    var st = taEl.scrollTop;
+    var first = Math.floor((st - lnPadTop) / lnLH);
+    if (first < 0) first = 0;
+    var last = first + Math.ceil(taEl.clientHeight / lnLH) + 1;
+    if (last > lnCount - 1) last = lnCount - 1;
+    if (first !== lnFirst || last !== lnLast || lnErrStamp !== errStamp) {
+      lnFirst = first;
+      lnLast = last;
+      lnErrStamp = errStamp;
+      let html = "";
+      for (let i = first; i <= last; i++) {
+        const num = i + 1;
+        const msg = errLines.get(num);
+        const cur = num === lnActive ? " cur" : "";
+        html +=
+          msg === undefined
+            ? `<div class="ln-row${cur}">${num}</div>`
+            : `<div class="ln-row${cur} err" title="${escAttr(msg)}">${num}</div>`;
+      }
+      lnInner.innerHTML = html;
+    }
+    lnInner.style.transform = `translateY(${lnPadTop + first * lnLH - st}px)`;
+  }
+  function lnUpdate(src) {
+    if (!edWrap) return;
+    var n = countLines(src);
+    if (n !== lnCount) {
+      lnCount = n;
+      const d = Math.max(2, String(n).length);
+      if (d !== lnDigits) {
+        lnDigits = d;
+        edWrap.style.setProperty("--ln-d", d);
+      }
+      lnFirst = -1;
+    }
+    lnRender();
+  }
+  function lnCaretSync() {
+    if (!taEl || lnCaretRAF) return;
+    lnCaretRAF = requestAnimationFrame(() => {
+      lnCaretRAF = 0;
+      var v = taEl.value,
+        pos = taEl.selectionStart,
+        n = 1;
+      var i = v.indexOf("\n");
+      while (i >= 0 && i < pos) {
+        n++;
+        i = v.indexOf("\n", i + 1);
+      }
+      if (n !== lnActive) {
+        lnActive = n;
+        lnFirst = -1;
+        lnRender();
+      }
+    });
+  }
+  function setErrLines(map) {
+    errLines = map || new Map();
+    errStamp++;
+    lnRender();
+  }
+  function normDigits(s) {
+    return s.replace(/[۰-۹٠-٩]/g, (c) => {
+      const v = c.charCodeAt(0);
+      const base = v >= 0x06f0 ? 0x06f0 : 0x0660;
+      return String.fromCharCode(48 + (v - base));
+    });
+  }
+  const ERR_LINE_RES = [
+    /-->\s*\S*:(\d+):\d+/,
+    /(?:at line|در خط)\s*(\d+)/,
+    /\(line\s+(\d+)\)/,
+  ];
+  function parseErrLines(txt) {
+    const map = new Map();
+    if (!txt) return map;
+
+    const raw = String(txt).split("\n");
+    let prev = "";
+
+    for (const line of raw) {
+      const norm = normDigits(line);
+
+      for (let r = 0; r < ERR_LINE_RES.length; r++) {
+        const m = ERR_LINE_RES[r].exec(norm);
+        if (!m) continue;
+
+        const n = Number.parseInt(m[1], 10);
+
+        if (n >= 1 && n <= lnCount && !map.has(n)) {
+          map.set(n, (r === 0 ? prev : line.trim()) || line.trim());
+        }
+      }
+
+      const trimmed = line.trim();
+      if (trimmed) prev = trimmed;
+    }
+
+    return map;
+  }
   function findExample(id) {
     for (let i = 0; i < EXAMPLES.length; i++)
       if (EXAMPLES[i].id === id) return EXAMPLES[i];
@@ -619,6 +765,7 @@
     hl.dir = ta.dir;
     hl.scrollTop = ta.scrollTop;
     hl.scrollLeft = ta.scrollLeft;
+    lnUpdate(ta.value);
   }
   function saveState() {
     clearTimeout(saveTimer);
@@ -748,11 +895,11 @@
   function applyLang(next) {
     var keepExample = exampleId;
     lang = next;
-    var rtl = lang === "fa";
+    var dir = dirOf(lang);
     var dict = I18N[lang];
     document.title = dict.title;
     document.documentElement.lang = lang;
-    document.documentElement.dir = rtl ? "rtl" : "ltr";
+    document.documentElement.dir = dir;
     document.querySelectorAll("[data-i18n]").forEach((el) => {
       var k = el.getAttribute("data-i18n");
       if (dict[k]) el.textContent = dict[k];
@@ -761,7 +908,8 @@
       b.classList.toggle("active", b.getAttribute("data-lang") === lang);
     });
     if (editor) {
-      $("code").dir = rtl ? "rtl" : "ltr";
+      $("code").dir = dir;
+      if (edWrap) edWrap.dir = dir;
       if (keepExample !== "custom") {
         const ex = findExample(keepExample);
         if (ex) editor.setValue(ex.code[lang] || editor.getValue());
@@ -772,7 +920,7 @@
       }
       renderHL();
     }
-    $("output").setAttribute("dir", rtl ? "rtl" : "ltr");
+    $("output").setAttribute("dir", dir);
     applyTheme();
     rebuildDropdown();
     syncCopyChrome();
@@ -855,6 +1003,7 @@
       (isIR ? " ir" : "") +
       (isC || isCss || isJs ? " clang" : "");
     pre.setAttribute("dir", "ltr");
+    setErrLines(isErr ? parseErrLines(txt) : null);
     setStatus(isErr ? "error" : "done", isErr ? "err" : "ok");
   }
   function run() {
@@ -871,9 +1020,10 @@
           const res = wasm.buildLayout(src, lang);
           if (/^\s*</.test(res)) {
             $("preview").srcdoc = res;
+            setErrLines(null);
             setStatus("done", "ok");
           } else {
-            const dir = lang === "fa" ? "rtl" : "ltr";
+            const dir = dirOf(lang);
             $("preview").srcdoc =
               '<!doctype html><meta charset="utf-8">' +
               '<div dir="' +
@@ -882,6 +1032,7 @@
               'color:#c0392b;padding:16px 20px;white-space:pre-wrap;line-height:1.8">' +
               esc(res) +
               "</div>";
+            setErrLines(parseErrLines(res));
             setStatus("error", "err");
           }
         } else {
@@ -892,7 +1043,8 @@
           );
           pre.textContent = out || "(no output)";
           pre.className = `output${isErr ? " error" : ""}`;
-          pre.setAttribute("dir", lang === "fa" ? "rtl" : "ltr");
+          pre.setAttribute("dir", dirOf(lang));
+          setErrLines(isErr ? parseErrLines(out) : null);
           setStatus(isErr ? "error" : "done", isErr ? "err" : "ok");
         }
       } catch (e) {
@@ -1034,6 +1186,9 @@
   }
   function setupEditor() {
     var ta = $("code");
+    taEl = ta;
+    edWrap = $("edwrap");
+    lnInner = $("ln-inner");
     editor = {
       el: ta,
       getValue: () => ta.value,
@@ -1048,6 +1203,12 @@
       var hl = $("hl");
       hl.scrollTop = ta.scrollTop;
       hl.scrollLeft = ta.scrollLeft;
+      lnRender();
+    });
+    ta.addEventListener("click", lnCaretSync);
+    ta.addEventListener("keyup", lnCaretSync);
+    document.addEventListener("selectionchange", () => {
+      if (document.activeElement === ta) lnCaretSync();
     });
     var INDENT = "    ";
     function setRange(start, end, text, selS, selE) {
@@ -1181,16 +1342,17 @@
     else ta.value = ex.code[lang];
     applyLangChrome();
     rebuildDropdown();
+    lnMeasure();
     renderHL();
     bootWasm();
   }
   function applyLangChrome() {
     if (!I18N[lang]) lang = "en";
-    var rtl = lang === "fa",
+    var dir = dirOf(lang),
       dict = I18N[lang];
     document.title = dict.title;
     document.documentElement.lang = lang;
-    document.documentElement.dir = rtl ? "rtl" : "ltr";
+    document.documentElement.dir = dir;
     document.querySelectorAll("[data-i18n]").forEach((el) => {
       var k = el.getAttribute("data-i18n");
       if (dict[k]) el.textContent = dict[k];
@@ -1198,8 +1360,9 @@
     document.querySelectorAll("#lang-seg .seg-btn").forEach((b) => {
       b.classList.toggle("active", b.getAttribute("data-lang") === lang);
     });
-    $("code").dir = rtl ? "rtl" : "ltr";
-    $("output").setAttribute("dir", rtl ? "rtl" : "ltr");
+    $("code").dir = dir;
+    if (edWrap) edWrap.dir = dir;
+    $("output").setAttribute("dir", dir);
     applyTheme();
     syncCopyChrome();
   }
@@ -1262,6 +1425,7 @@
   });
   window.addEventListener("resize", () => {
     if (window.innerWidth > 1024 && menuOpen()) setMenu(false);
+    lnMeasure();
   });
   setInterval(() => {
     if (themePref === "auto") applyTheme();

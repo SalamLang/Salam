@@ -61,9 +61,6 @@ func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,
         SERR(s, 12, span, "ambiguous call to '%s' (%zu candidates)", what, nmatch);
         return NULL;
     }
-    /* Single, non-overloaded function: report the precise reason the call is
-     * invalid (wrong argument count, or the first ill-typed argument) instead
-     * of the generic "no matching overload". */
     if (fsym->overloads.len == 1) {
         func_sig_t *sig = (func_sig_t *)fsym->overloads.data[0];
         if (argtypes->len < sig->required ||
@@ -108,10 +105,6 @@ static type_t *try_impl_call(sema_t *s, ast_node_t *n, ast_node_t *callee,
 type_t *check_call(sema_t *s, ast_node_t *n)
 {
     ast_node_t *callee = n->a;
-    /* Capture the expected type for this call (set by the assignment target or
-     * an enclosing return) before argument checking consumes s->expected. It
-     * lets a generic call infer type parameters that don't appear in the
-     * arguments, e.g. option.None() assigned to an Option<i32>. */
     type_t *call_expected = s->expected;
     s->expected = NULL;
 

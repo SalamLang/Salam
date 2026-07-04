@@ -513,7 +513,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     s->global = pkgscope; s->cur = pkgscope;
     s->dir = dir_of(s->a, path);
     s->pkg = prog->name ? prog->name : "main";
-    s->lang = langpack_code(pack);   /* this package is checked in its own language */
+    s->lang = langpack_code(pack);
     s->program = prog;
     vec_init(&s->pending);
     vec_push(s->a, &s->loading, CONST_CAST(path));
@@ -587,10 +587,6 @@ sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program,
 {
     sema_t s;
     memset(&s, 0, sizeof(s));
-    /* Invalidate the package-alias cache: its entries hold pointers into a
-     * previous run's arena. Resetting here forces a rebuild bound to this
-     * run's arena, avoiding a use-after-free when several files are compiled
-     * in one process (e.g. the web playground / batch driver). */
     g_pkg_alias_n = -1;
     s.a = a;
     s.log = log;

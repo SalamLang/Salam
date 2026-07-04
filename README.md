@@ -487,7 +487,7 @@ bunx vite --port 55002 --host 127.0.0.1
 
 ### 📚 7. MyST Documentation
 
-The repository ships a [MyST (Markedly Structured Text)](https://mystmd.org/) docs site powered by [`mystmd`](https://mystmd.org/guide). Source content lives in `docs/`.
+The repository ships a [MyST (Markedly Structured Text)](https://mystmd.org/) docs site powered by [`mystmd`](https://mystmd.org/guide). Source content comes from `books/` (TeX book files) and `.md` files across the repository.
 
 #### Configuration Files
 
@@ -508,7 +508,7 @@ bun run docs:myst
 bun run build:myst
 ```
 
-The dev server (`myst start`) watches `docs/` and rebuilds on changes. Read the Docs uses `.readthedocs.yaml` to build MyST HTML and publish the `_build/html/` output.
+The dev server (`myst start`) watches `books/` and `.md` files across the repository and rebuilds on changes. Read the Docs uses `.readthedocs.yaml` to autobuild and deploy the site.
 
 ## 🤝 Contributing
 

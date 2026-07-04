@@ -1174,6 +1174,10 @@
   }
   function onEdit() {
     renderHL();
+    // last run's error markers are stale once the text changes (line numbers
+    // shift); clear them until the next run re-reports.
+    if (errLines.size) setErrLines(null);
+    lnCaretSync();
     if (exampleId !== "custom") {
       const ex = findExample(exampleId);
       if (!ex || editor.getValue() !== ex.code[lang]) {

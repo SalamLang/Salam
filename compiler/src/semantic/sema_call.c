@@ -108,7 +108,13 @@ static type_t *try_impl_call(sema_t *s, ast_node_t *n, ast_node_t *callee,
 type_t *check_call(sema_t *s, ast_node_t *n)
 {
     ast_node_t *callee = n->a;
-    
+    /* Capture the expected type for this call (set by the assignment target or
+     * an enclosing return) before argument checking consumes s->expected. It
+     * lets a generic call infer type parameters that don't appear in the
+     * arguments, e.g. option.None() assigned to an Option<i32>. */
+    type_t *call_expected = s->expected;
+    s->expected = NULL;
+
     if (callee && callee->kind == AST_IDENTIFIER && strcmp(callee->name, "spawn") == 0) {
         if (n->list.len != 1 || ((ast_node_t *)n->list.data[0])->kind != AST_IDENTIFIER) {
             SERR(s, 12, &n->span, "spawn(func) takes a single function name");
@@ -273,21 +279,21 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                          nm, b->nargs, argtypes.len);
                 
                 if (strcmp(b->arg, "*") != 0) {
-                    int ak = type_prim_kind_from_name(b->arg);
+                    int ak = type_prim_kind_from_name(b->arg, NULL);
                     { size_t i = 0; for (; i < argtypes.len; i++)
                         if (!type_assignable(ty(s, (type_kind_t)ak), (type_t *)argtypes.data[i]))
                             SERR(s, 2, &n->span, "builtin '%s' expects '%s', got '%s'",
                                  nm, b->arg, type_to_string(s->tc, (type_t *)argtypes.data[i])); }
                 }
                 decorate(s, callee, ty(s, TY_VOID));
-                return decorate(s, n, ty(s, (type_kind_t)type_prim_kind_from_name(b->ret)));
+                return decorate(s, n, ty(s, (type_kind_t)type_prim_kind_from_name(b->ret, NULL)));
             }
             SERR(s, 12, &n->span, "call to undefined function '%s'", nm);
             return decorate(s, n, err_ty(s));
         }
         
         if (sym->kind == SYM_FUNC && sym->decl && sym->decl->typarams.len > 0) {
-            symbol_t *inst = g_infer_call(s, sym, &argtypes, &n->span);
+            symbol_t *inst = g_infer_call(s, sym, &argtypes, &n->span, call_expected);
             if (!inst) return decorate(s, n, err_ty(s));
             sym = inst;
             callee->name = inst->name;   
@@ -318,7 +324,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
 
                 scope_t *save_cur = s->cur; scope_t *save_gp = s->gen_pkg;
                 s->cur = pk->members; s->gen_pkg = pk->members;
-                symbol_t *inst = g_infer_call(s, fn, &argtypes, &n->span);
+                symbol_t *inst = g_infer_call(s, fn, &argtypes, &n->span, call_expected);
                 s->cur = save_cur; s->gen_pkg = save_gp;
                 if (!inst) return decorate(s, n, err_ty(s));
                 callee->kind = AST_IDENTIFIER;       

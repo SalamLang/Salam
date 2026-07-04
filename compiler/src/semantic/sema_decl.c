@@ -402,14 +402,49 @@ static void check_toplevel(sema_t *s, ast_node_t *d)
     }
 }
 
+/*
+ * Enforce that every primitive type name a file writes matches that file's own
+ * language: a Persian source uses Persian type names (صحیح۳۲, رشته, ...) and an
+ * English source uses English ones. Only the module's own authored annotations
+ * are visited (synthetic generic instances and imported packages are checked in
+ * their own language elsewhere), so interop with the English stdlib is fine.
+ */
+static void lint_lang_types(sema_t *s, ast_node_t *n)
+{
+    if (!n) return;
+    if (n->kind == AST_TYPE && n->name &&
+        type_prim_kind_from_name(n->name, NULL) >= 0 &&
+        type_prim_kind_from_name(n->name, s->lang) < 0) {
+        bool fa = s->lang && s->lang[0] == 'f';
+        SERR(s, 1, &n->span,
+             fa ? i18n_tr("type name '%s' must be Persian in a Persian file")
+                : i18n_tr("type name '%s' must be English in an English file"),
+             n->name);
+    }
+    /* Note: typaram_bounds holds interface-name strings (not nodes), so it is
+     * not traversed here. */
+    lint_lang_types(s, n->type);
+    lint_lang_types(s, n->a); lint_lang_types(s, n->b);
+    lint_lang_types(s, n->c); lint_lang_types(s, n->d);
+    { size_t i = 0; for (; i < n->list.len; i++)
+        lint_lang_types(s, (ast_node_t *)n->list.data[i]); }
+    { size_t i = 0; for (; i < n->dims.len; i++)
+        lint_lang_types(s, (ast_node_t *)n->dims.data[i]); }
+}
+
 void sema_check_pass(sema_t *s, ast_node_t *program)
 {
     { size_t i = 0; for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
-        if (d->synthetic || d->typarams.len > 0) continue;  
+        if (d->synthetic) continue;
+        lint_lang_types(s, d);
+    } }
+    { size_t i = 0; for (; i < program->list.len; i++) {
+        ast_node_t *d = (ast_node_t *)program->list.data[i];
+        if (d->synthetic || d->typarams.len > 0) continue;
         check_toplevel(s, d);
     } }
-    
+
     { size_t i = 0; for (; i < s->pending.len; i++)
         check_toplevel(s, (ast_node_t *)s->pending.data[i]); }
 }

@@ -73,7 +73,7 @@ static const char *type_code(arena_t *a, const type_t *t)
     if (!t) return "v";
     switch (t->kind) {
         case TY_VOID:return "v"; case TY_BOOL:return "b"; case TY_CHAR:return "c";
-        case TY_STR:return "s"; case TY_NULL:return "n";
+        case TY_STR:return "s"; case TY_UCHAR:return "uc"; case TY_NULL:return "n";
         case TY_I8:return "i8"; case TY_I16:return "i16"; case TY_I32:return "i32"; case TY_I64:return "i64";
         case TY_U8:return "u8"; case TY_U16:return "u16"; case TY_U32:return "u32"; case TY_U64:return "u64";
         case TY_F32:return "f32"; case TY_F64:return "f64";

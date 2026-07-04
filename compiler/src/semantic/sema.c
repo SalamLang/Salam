@@ -485,8 +485,9 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     if (!src) { SERR(s, 8, &imp->span, "import not found: '%s'", path); return NULL; }
     src = preproc_source(s->a, s->log, src, NULL, 0);
 
-    langpack_t *pack = langpack_load(i18n_lang());
-    if (!pack) pack = langpack_load("en");
+    const langpack_t *fb = langpack_load(i18n_lang());
+    if (!fb) fb = langpack_load("en");
+    const langpack_t *pack = langpack_detect(s->a, src, fb);
     token_stream_t *toks = NULL; lexer_run(s->a, s->log, pack, src, &toks);
     ast_node_t *prog = NULL;     parser_run(s->a, s->log, toks, &prog);
 
@@ -503,21 +504,25 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     
     scope_t *pkgscope = scope_new(s->a, SCOPE_GLOBAL, NULL);
     pkgscope->label = prog->name;
+    pkgscope->lang = langpack_code(pack);
     scope_t *save_global = s->global, *save_cur = s->cur;
     const char *save_dir = s->dir, *save_pkg = s->pkg;
+    const char *save_lang = s->lang;
     ast_node_t *save_prog = s->program;
     vec_t save_pending = s->pending;
     s->global = pkgscope; s->cur = pkgscope;
     s->dir = dir_of(s->a, path);
     s->pkg = prog->name ? prog->name : "main";
-    s->program = prog;                       
+    s->lang = langpack_code(pack);   /* this package is checked in its own language */
+    s->program = prog;
     vec_init(&s->pending);
     vec_push(s->a, &s->loading, CONST_CAST(path));
-    load_imports(s, prog);       
+    load_imports(s, prog);
     sema_collect(s, prog);
     sema_check_pass(s, prog);
-    s->loading.len--;            
+    s->loading.len--;
     s->global = save_global; s->cur = save_cur; s->dir = save_dir; s->pkg = save_pkg;
+    s->lang = save_lang;
     s->program = save_prog; s->pending = save_pending;
     symbol_t *pk = symbol_new(s->a, SYM_PACKAGE, prog->name);
     pk->members = pkgscope;
@@ -577,16 +582,24 @@ void sema_load_prelude(sema_t *s)
     if (pk) s->prelude = pk->members;
 }
 
-sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const char *file)
+sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program,
+                        const char *file, const char *lang)
 {
     sema_t s;
     memset(&s, 0, sizeof(s));
+    /* Invalidate the package-alias cache: its entries hold pointers into a
+     * previous run's arena. Resetting here forces a rebuild bound to this
+     * run's arena, avoiding a use-after-free when several files are compiled
+     * in one process (e.g. the web playground / batch driver). */
+    g_pkg_alias_n = -1;
     s.a = a;
     s.log = log;
     s.file = file;
+    s.lang = (lang && *lang) ? lang : "en";
     s.tc = type_ctx_new(a);
     s.diag = diag_new(a, log, PH_SEMANTIC);
     s.global = scope_new(a, SCOPE_GLOBAL, NULL);
+    s.global->lang = s.lang;
     s.cur = s.global;
     s.dir = dir_of(a, file);
     s.pkg = program->name ? program->name : "main";

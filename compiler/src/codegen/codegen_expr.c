@@ -29,9 +29,16 @@ const char *cg_op(token_kind_t k)
     }
 }
 
+/* uchar is a one-codepoint value backed by a UTF-8 C string, so in the string
+   operator paths (concatenation, comparison, stringification) it behaves like str. */
+static bool cg_is_str_ts(const char *ts)
+{
+    return ts && (!strcmp(ts, "str") || !strcmp(ts, "uchar"));
+}
+
 const char *cg_str_operand(cg_t *cg, ast_node_t *n)
 {
-    if (n->type_str && !strcmp(n->type_str, "str"))
+    if (cg_is_str_ts(n->type_str))
         return cg_expr(cg, n);
     return cg_fmt(cg, "salam_tostr_%s(%s)", prim_suffix(print_tag(n->type_str)), cg_expr(cg, n));
 }
@@ -219,13 +226,11 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                               cg_expr(cg, n->a), cg_expr(cg, n->b));
             
             if (n->op == TK_PLUS &&
-                ((n->a->type_str && !strcmp(n->a->type_str,"str")) ||
-                 (n->b->type_str && !strcmp(n->b->type_str,"str"))))
+                (cg_is_str_ts(n->a->type_str) || cg_is_str_ts(n->b->type_str)))
                 return cg_fmt(cg, "salam_strcat(%s, %s)",
                               cg_str_operand(cg, n->a), cg_str_operand(cg, n->b));
-            
-            if (n->a->type_str && !strcmp(n->a->type_str, "str") &&
-                n->b->type_str && !strcmp(n->b->type_str, "str")) {
+
+            if (cg_is_str_ts(n->a->type_str) && cg_is_str_ts(n->b->type_str)) {
                 const char *op = NULL;
                 switch (n->op) {
                     case TK_EQ: op = "=="; break;

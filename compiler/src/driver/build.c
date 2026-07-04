@@ -82,8 +82,11 @@ static void emit_link(sb_t *cmd, logger_t *log, const char *spec, const char *ki
 #endif
         return;
     }
-    if (spec[0] == '-' || strpbrk(spec, "/\\.") != NULL) {   
-        sb_putc(cmd, ' '); sb_puts(cmd, spec);
+    /* A raw flag (-lfoo, -Lpath) or an explicit path (./lib.a): pass it as a
+       single shell-quoted argument so metacharacters cannot escape into the
+       command executed by system(). */
+    if (spec[0] == '-' || strpbrk(spec, "/\\.") != NULL) {
+        sb_putc(cmd, ' '); sb_put_shell_arg(cmd, spec);
         return;
     }
     if (is_static && !use_tcc) {
@@ -91,13 +94,13 @@ static void emit_link(sb_t *cmd, logger_t *log, const char *spec, const char *ki
         LOG_W(log, PH_DRIVER,
               "static link of bare name '%s' is unsupported by the macOS linker; "
               "pass an explicit .a path. Linking it normally.", spec);
-        sb_puts(cmd, " -l"); sb_puts(cmd, spec);
+        sb_puts(cmd, " -l"); sb_put_shell_arg(cmd, spec);
 #else
-        sb_puts(cmd, " -Wl,-Bstatic -l"); sb_puts(cmd, spec); sb_puts(cmd, " -Wl,-Bdynamic");
+        sb_puts(cmd, " -Wl,-Bstatic -l"); sb_put_shell_arg(cmd, spec); sb_puts(cmd, " -Wl,-Bdynamic");
 #endif
         return;
     }
-    sb_puts(cmd, " -l"); sb_puts(cmd, spec);
+    sb_puts(cmd, " -l"); sb_put_shell_arg(cmd, spec);
 }
 
 int driver_build(options_t *opt)
@@ -171,14 +174,18 @@ int driver_build(options_t *opt)
         source_file_t *src = source_load(arena, path);
         if (!src) { LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"), path); all_ok = false; continue; }
         src = preproc_source(arena, log, src, defs, ndefs);
-        
+        /* Each module is lexed and checked in its own language: the stdlib stays
+         * English while a Persian program stays Persian. */
+        const langpack_t *modpack = langpack_detect(arena, src, pack);
+        const char *modentry = langpack_entry(modpack);
+
         logger_set_diag_source(log, src->text, src->len,
                                opt->diag_style, opt->diag_format);
         const char *module = module_of(arena, path);
         if (!first_module) first_module = module;
         LOG_I(log, PH_DRIVER, "compiling %s -> %s.c", path, module);
         token_stream_t *toks = NULL;
-        bool lok = lexer_run(arena, log, pack, src, &toks);
+        bool lok = lexer_run(arena, log, modpack, src, &toks);
         ast_node_t *program = NULL;
         bool pok = parser_run(arena, log, toks, &program);
 
@@ -189,17 +196,17 @@ int driver_build(options_t *opt)
             if (!psrc) { LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"), pfiles[pi]); all_ok = false; continue; }
             psrc = preproc_source(arena, log, psrc, defs, ndefs);
             token_stream_t *ptoks = NULL;
-            if (!lexer_run(arena, log, pack, psrc, &ptoks)) lok = false;
+            if (!lexer_run(arena, log, modpack, psrc, &ptoks)) lok = false;
             ast_node_t *pprog = NULL;
             if (!parser_run(arena, log, ptoks, &pprog)) pok = false;
             salam_merge_program(arena, program, pprog);
         } }
 
-        sema_result_t *sr = sema_run(arena, log, program, src->path);
+        sema_result_t *sr = sema_run(arena, log, program, src->path, langpack_code(modpack));
         if (!lok || !pok || !sr->ok) { all_ok = false; continue; }
         { size_t k = 0; for (; k < program->list.len; k++) {
             ast_node_t *d = (ast_node_t *)program->list.data[k];
-            if (d->kind == AST_FUNC_DEF && d->name && strcmp(d->name, entry) == 0) { has_entry = true; break; }
+            if (d->kind == AST_FUNC_DEF && d->name && strcmp(d->name, modentry) == 0) { has_entry = true; break; }
         } }
         
         const char *idir = dir_of(arena, path);
@@ -242,7 +249,7 @@ int driver_build(options_t *opt)
             if (!known) work[nwork++] = ipath;
         } }
         codegen_output_t *out = codegen_run(arena, log, program, sr, module, opt->safe,
-                                            opt->debug_info, src->path, langpack_entry(pack));
+                                            opt->debug_info, src->path, modentry);
         size_t pfxlen = strlen(SALAM_MOD_PREFIX);
         size_t pathcap = pfxlen + strlen(module) + 3;
         char *cpath = (char *)arena_alloc(arena, pathcap);

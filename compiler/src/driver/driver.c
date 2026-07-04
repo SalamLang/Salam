@@ -345,11 +345,12 @@ static int driver_interp(options_t *opt)
                 arena_free(arena); logger_free(log); return 2; }
     src = preproc_source(arena, log, src, opt->defines, opt->ndefines);
     logger_set_diag_source(log, src->text, src->len, opt->diag_style, opt->diag_format);
+    const langpack_t *modpack = langpack_detect(arena, src, pack);
     token_stream_t *toks = NULL;
-    bool lok = lexer_run(arena, log, pack, src, &toks);
+    bool lok = lexer_run(arena, log, modpack, src, &toks);
     ast_node_t *program = NULL;
     bool pok = parser_run(arena, log, toks, &program);
-    sema_result_t *sr = sema_run(arena, log, program, src->path);
+    sema_result_t *sr = sema_run(arena, log, program, src->path, langpack_code(modpack));
     if (!lok || !pok || !sr->ok) {
         LOG_E(log, PH_DRIVER, i18n_tr("build aborted: errors in source"));
         arena_free(arena); logger_free(log); return 1;
@@ -388,81 +389,6 @@ static bool path_is_dir(const char *p)
 #endif
 }
 
-static const char *fmt_marker_lang(const char *text, size_t len)
-{
-    static const char tag[] = "lang:";
-    size_t i = 0; int line = 0;
-    while (i < len && line < 8) {
-        size_t ls = i;
-        while (ls < len && (text[ls] == ' ' || text[ls] == '\t')) ls++;
-        size_t le = ls;
-        while (le < len && text[le] != '\n') le++;
-        if (ls + 1 < len && text[ls] == '/' && text[ls + 1] == '/') {
-            size_t p = ls;
-            for (; p + 5 <= le; p++) {
-                int hit = 1, k = 0;
-                for (; k < 5; k++) {
-                    char ch = text[p + k];
-                    if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
-                    if (ch != tag[k]) { hit = 0; break; }
-                }
-                if (!hit) continue;
-                size_t q = p + 5;
-                while (q < le && (text[q] == ' ' || text[q] == '\t')) q++;
-                size_t cs = q;
-                while (q < le && ((text[q] >= 'a' && text[q] <= 'z') ||
-                                  (text[q] >= 'A' && text[q] <= 'Z'))) q++;
-                size_t clen = q - cs;
-                if (clen == 2 && (text[cs] == 'f' || text[cs] == 'F') &&
-                    (text[cs + 1] == 'a' || text[cs + 1] == 'A')) return "fa";
-                if (clen == 2 && (text[cs] == 'e' || text[cs] == 'E') &&
-                    (text[cs + 1] == 'n' || text[cs + 1] == 'N')) return "en";
-                return NULL;
-            }
-        }
-        i = (le < len) ? le + 1 : le;
-        line++;
-    }
-    return NULL;
-}
-
-static int fmt_count_keywords(arena_t *a, logger_t *quiet,
-                              const langpack_t *pack, const source_file_t *src)
-{
-    token_stream_t *toks = NULL;
-    lexer_run(a, quiet, pack, src, &toks);
-    if (!toks) return 0;
-    int count = 0;
-    size_t n = token_stream_count(toks);
-    { size_t i = 0; for (; i < n; i++) {
-        const token_t *t = token_stream_at(toks, i);
-        if (t->kind == TK_EOF) break;
-        if (tk_is_keyword(t->kind)) count++;
-    } }
-    return count;
-}
-
-static const langpack_t *fmt_detect_lang(arena_t *a, const source_file_t *src,
-                                         const langpack_t *fallback)
-{
-    const char *marked = fmt_marker_lang(src->text, src->len);
-    if (marked) {
-        const langpack_t *p = langpack_load(marked);
-        if (p) return p;
-    }
-    static const char *codes[] = { "en", "fa" };
-    logger_t *quiet = logger_new(stderr, LOG_OFF, false);
-    const langpack_t *best = fallback; int best_kw = 0;
-    { size_t i = 0; for (; i < sizeof codes / sizeof codes[0]; i++) {
-        const langpack_t *p = langpack_load(codes[i]);
-        if (!p) continue;
-        int kw = fmt_count_keywords(a, quiet, p, src);
-        if (kw > best_kw) { best_kw = kw; best = p; }
-    } }
-    logger_free(quiet);
-    return best;
-}
-
 static void fmt_one_file(fmt_ctx_t *c, const char *path)
 {
     arena_t *a = arena_new(1 << 18);
@@ -472,7 +398,7 @@ static void fmt_one_file(fmt_ctx_t *c, const char *path)
         c->errors++; arena_free(a); return;
     }
     c->total++;
-    const langpack_t *pack = fmt_detect_lang(a, src, c->pack);
+    const langpack_t *pack = langpack_detect(a, src, c->pack);
     sb_t sb; sb_init(&sb);
     if (!fmt_source(a, c->log, pack, src, &c->style, &sb)) {
         LOG_E(c->log, PH_DRIVER,
@@ -661,8 +587,9 @@ int driver_main(int argc, char **argv)
                            opt.diag_style, opt.diag_format);
     LOG_I(log, PH_DRIVER, "compiling %s (lang=%s, %zu bytes)",
           src->path, opt.lang, src->len);
+    const langpack_t *modpack = langpack_detect(arena, src, pack);
     token_stream_t *toks = NULL;
-    bool ok = lexer_run(arena, log, pack, src, &toks);
+    bool ok = lexer_run(arena, log, modpack, src, &toks);
     LOG_I(log, PH_LEXER, "produced %zu tokens%s",
           token_stream_count(toks), ok ? "" : i18n_tr(" (with errors)"));
     if (opt.emit_tokens_xml) {
@@ -672,7 +599,7 @@ int driver_main(int argc, char **argv)
     if (opt.emit_ast_xml || opt.emit_symbol_xml) {
         ast_node_t *program = NULL;
         bool pok = parser_run(arena, log, toks, &program);
-        sema_result_t *sr = sema_run(arena, log, program, src->path);  
+        sema_result_t *sr = sema_run(arena, log, program, src->path, langpack_code(modpack));
         if (opt.emit_ast_xml) {
             int xrc = emit_ast_xml(log, program, opt.xml_out);
             if (xrc != 0) rc = xrc;

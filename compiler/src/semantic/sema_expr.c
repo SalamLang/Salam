@@ -25,7 +25,7 @@ static bool tk_is_arith(token_kind_t k)
 { return k==TK_PLUS||k==TK_MINUS||k==TK_STAR||k==TK_SLASH||k==TK_PERCENT; }
 
 bool sema_type_is_stringable(type_t *t)
-{ return t->kind==TY_STR || t->kind==TY_BOOL || t->kind==TY_CHAR || type_is_numeric(t); }
+{ return t->kind==TY_STR || t->kind==TY_UCHAR || t->kind==TY_BOOL || t->kind==TY_CHAR || type_is_numeric(t); }
 
 static bool tk_is_cmp(token_kind_t k)
 { return k==TK_LT||k==TK_GT||k==TK_LE||k==TK_GE; }
@@ -114,7 +114,8 @@ static type_t *check_binary(sema_t *s, ast_node_t *n)
     }
     if (tk_is_arith(op)) {
         
-        if (op == TK_PLUS && (l->kind == TY_STR || r->kind == TY_STR)) {
+        if (op == TK_PLUS && (l->kind == TY_STR || r->kind == TY_STR ||
+                              l->kind == TY_UCHAR || r->kind == TY_UCHAR)) {
             if (sema_type_is_stringable(l) && sema_type_is_stringable(r))
                 return decorate(s, n, ty(s, TY_STR));
             SERR(s, 21, &n->span,
@@ -213,7 +214,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
                 case TK_TRIPLE_STRING:
                 case TK_RAW_STRING:    t = ty(s, TY_STR);  break;
                 case TK_CHAR:          t = ty(s, TY_CHAR); break;
-                case TK_UTF8_CHAR:     t = ty(s, TY_STR);  break;
+                case TK_UTF8_CHAR:     t = ty(s, TY_UCHAR); break;
                 case TK_KW_TRUE:
                 case TK_KW_FALSE:      t = ty(s, TY_BOOL); break;
                 case TK_KW_NULL:       t = ty(s, TY_NULL); break;

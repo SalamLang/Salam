@@ -92,28 +92,51 @@ void lx_scan_raw_string(lx_t *L)
     lx_emit_val(L, TK_RAW_STRING, &b, text, &v);
 }
 
+/* A `uchar` literal holds exactly one Unicode codepoint. Two spellings:
+     u"..."  double-quoted, supports escapes (\n \t \r \\ \" \x.. \u.... \U........)
+     u'...'  single-quoted, raw bytes, no escapes (kept for compatibility)
+   The decoded value must be exactly one UTF-8 codepoint, else it is an error. */
 void lx_scan_utf8_char(lx_t *L)
 {
     size_t start = L->pos;
     src_pos_t b = LX_POS(L);
-    lx_adv(L);  
-    lx_adv(L);  
-    size_t content_start = L->pos;
-    
-    while (!lx_end(L) && lx_peek(L) != '\'' && lx_peek(L) != '\n') lx_adv(L);
-    size_t content_end = L->pos;
-    lx_expect(L, '\'', &b, "unterminated UTF-8 char literal");
-    const char *text = lx_slice(L, start);
-    size_t content_len = content_end - content_start;
-    if (content_len == 0) {
-        lx_error(L, &b, "empty UTF-8 char literal");
-    } else {
-        
-        int seq = lx_utf8_seq_len(L->s + content_start, content_len);
-        if (seq == 0 || (size_t)seq != content_len)
-            lx_error(L, &b, "UTF-8 char literal must contain exactly one codepoint");
+    char quote;
+    const char *bytes;
+    size_t nbytes;
+    const char *text;
+    lx_adv(L);                 /* consume 'u' */
+    quote = lx_peek(L);        /* '"' or '\'' */
+    lx_adv(L);                 /* consume opening quote */
+    { size_t content_start = L->pos;
+      if (quote == '"') {
+          while (!lx_end(L) && lx_peek(L) != '"') {
+              if (lx_peek(L) == '\\') { lx_adv(L); if (!lx_end(L)) lx_adv(L); }
+              else if (lx_peek(L) == '\n') break;
+              else lx_adv(L);
+          }
+      } else {
+          while (!lx_end(L) && lx_peek(L) != '\'' && lx_peek(L) != '\n') lx_adv(L);
+      }
+      { size_t content_len = L->pos - content_start;
+        lx_expect(L, quote, &b, "unterminated unicode char literal");
+        text = lx_slice(L, start);
+        if (quote == '"') {
+            /* skip the leading 'u' so lx_decode_string sees a plain "..." lexeme */
+            const char *decoded = lx_decode_string(L, text + 1, false);
+            bytes = decoded; nbytes = strlen(decoded);
+        } else {
+            bytes = arena_strndup(L->a, L->s + content_start, content_len);
+            nbytes = content_len;
+        }
+      }
     }
-    char *s = arena_strndup(L->a, L->s + content_start, content_len);
-    token_value_t v; v.kind = TV_STRING; v.as.s = s;
-    lx_emit_val(L, TK_UTF8_CHAR, &b, text, &v);
+    if (nbytes == 0) {
+        lx_error(L, &b, "empty unicode char literal");
+    } else {
+        int seq = lx_utf8_seq_len(bytes, nbytes);
+        if (seq == 0 || (size_t)seq != nbytes)
+            lx_error(L, &b, "unicode char literal must contain exactly one codepoint");
+    }
+    { token_value_t v; v.kind = TV_STRING; v.as.s = (char *)CONST_CAST(bytes);
+      lx_emit_val(L, TK_UTF8_CHAR, &b, text, &v); }
 }

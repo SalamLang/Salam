@@ -184,10 +184,12 @@ static void load_attr_file(arena_t *a, logger_t *log, langpack_t *pack,
     if (!prog) return;
     { size_t i = 0; for (; i < prog->list.len && *n < SCHEMA_MAX_ELEMS; i++) {
         ast_node_t *d = (ast_node_t *)prog->list.data[i];
+        fprintf(stderr, "DBGL kind=%d aliases=%zu name=%s\n", (int)d->kind, d->aliases.len, d->name?d->name:"(null)");
         if (d->kind != AST_CONST_DECL || !d->a || d->a->kind != AST_STRUCT_LIT) continue;
         const ast_node_t *lit = d->a;
         const char *name = field_atom(lit, "name");
         if (!name || !name[0]) name = alias_of(d, "en");
+        fprintf(stderr, "DBGL   -> resolved name=%s dest_field=%s\n", name?name:"(null)", field_atom(lit,"destination")?field_atom(lit,"destination"):"(null)");
         if (!name || !name[0]) continue;
         layout_attr_def_t *e = &defs[(*n)++];
         e->name    = name;

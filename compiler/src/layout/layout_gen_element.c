@@ -100,6 +100,7 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent, co
         if (nm[0]=='o' && nm[1]=='n') { sb_puts(&attrs, lfmt(cx," %s=\"%s\"", nm, html_escape(cx, v))); continue; }
         const layout_attr_def_t *ad = layout_attr_lookup(nm);
         layout_attr_dest_t dest = ad ? ad->dest : LA_CSS;
+        fprintf(stderr, "DBG attr nm='%s' ad=%p dest=%d\n", nm, (void*)ad, (int)dest);
         switch (dest) {
             case LA_CONTENT: content = v; break;
             case LA_CLASS:   userclass = v; break;

@@ -39,7 +39,7 @@ extern int sqlite3_exec(sqlite3 *, const char *, void *, void *, char **);
 
 typedef struct {
     sqlite3 *db;
-    sqlite3_stmt *pending;   /* a prepared SELECT awaiting store_result */
+    sqlite3_stmt *pending;
     int pending_ncols;
     long long changes;
     long long insert_id;

@@ -211,11 +211,6 @@ llv_t ll_binary(ll_t *ll, ast_node_t *n)
     if (ll_binary_string(ll, n, op, &handled)) return handled;
     
     if (op == TK_AND || op == TK_OR) {
-        /* Short-circuit like the C backend and interpreter: for `a && b` the
-         * right side is only evaluated when a is true; for `a || b` only when
-         * a is false. A phi merges the constant short-circuit result with the
-         * evaluated right side. The empty `sc`/`join` blocks give the phi
-         * predecessors known labels without tracking the current block. */
         bool is_and = (op == TK_AND);
         const char *rhsL  = ll_new_lbl(ll, "sc_rhs");
         const char *scL   = ll_new_lbl(ll, "sc_short");

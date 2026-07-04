@@ -205,8 +205,6 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
-    // ---------- لوکیشن ----------
-
     private fun hasLocationPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED ||
@@ -223,8 +221,6 @@ class MainActivity : AppCompatActivity() {
             )
         }
     }
-
-    // ---------- اسپلش / خطا ----------
 
     private fun hideSplash() {
         if (splashHidden) return
@@ -265,8 +261,6 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) { }
     }
 
-    // ---------- چرخه‌ی عمر وب‌ویو ----------
-
     override fun onPause() {
         webView.onPause()
         super.onPause()
@@ -289,8 +283,6 @@ class MainActivity : AppCompatActivity() {
         webView.destroy()
         super.onDestroy()
     }
-
-    // ---------- WebViewClient ----------
 
     private inner class SalamWebViewClient : WebViewClient() {
         override fun shouldOverrideUrlLoading(
@@ -348,8 +340,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-
-    // ---------- WebChromeClient ----------
 
     private inner class SalamWebChromeClient : WebChromeClient() {
         override fun onProgressChanged(view: WebView, newProgress: Int) {

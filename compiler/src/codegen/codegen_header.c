@@ -197,8 +197,6 @@ static void vec_emit(cg_t *cg, sb_t *h, const char *ts)
 static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
 {
     sb_puts(h, "#pragma once\n");
-    /* Sanitize the module name: file stems may contain '-', '.', or non-ASCII
-       (Persian) characters that are illegal in a C macro identifier. */
     { const char *guard = cg_cident(cg, cg->module);
       sb_puts(h, cg_fmt(cg, "#ifndef SALAM_MODULE_%s_H\n#define SALAM_MODULE_%s_H\n", guard, guard)); }
     

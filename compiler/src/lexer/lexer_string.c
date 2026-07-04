@@ -92,10 +92,6 @@ void lx_scan_raw_string(lx_t *L)
     lx_emit_val(L, TK_RAW_STRING, &b, text, &v);
 }
 
-/* A `uchar` literal holds exactly one Unicode codepoint. Two spellings:
-     u"..."  double-quoted, supports escapes (\n \t \r \\ \" \x.. \u.... \U........)
-     u'...'  single-quoted, raw bytes, no escapes (kept for compatibility)
-   The decoded value must be exactly one UTF-8 codepoint, else it is an error. */
 void lx_scan_utf8_char(lx_t *L)
 {
     size_t start = L->pos;
@@ -104,9 +100,9 @@ void lx_scan_utf8_char(lx_t *L)
     const char *bytes;
     size_t nbytes;
     const char *text;
-    lx_adv(L);                 /* consume 'u' */
-    quote = lx_peek(L);        /* '"' or '\'' */
-    lx_adv(L);                 /* consume opening quote */
+    lx_adv(L);
+    quote = lx_peek(L);
+    lx_adv(L);
     { size_t content_start = L->pos;
       if (quote == '"') {
           while (!lx_end(L) && lx_peek(L) != '"') {
@@ -121,7 +117,6 @@ void lx_scan_utf8_char(lx_t *L)
         lx_expect(L, quote, &b, "unterminated unicode char literal");
         text = lx_slice(L, start);
         if (quote == '"') {
-            /* skip the leading 'u' so lx_decode_string sees a plain "..." lexeme */
             const char *decoded = lx_decode_string(L, text + 1, false);
             bytes = decoded; nbytes = strlen(decoded);
         } else {

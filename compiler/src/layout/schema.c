@@ -142,6 +142,8 @@ static void register_name_spellings(const ast_node_t *d, const char *canon)
     alias_foreach(d, "en", register_word, &en);
     word_reg_t fa = {canon, "fa"};
     alias_foreach(d, "fa", register_word, &fa);
+    word_reg_t ar = {canon, "ar"};
+    alias_foreach(d, "ar", register_word, &ar);
 }
 
 static layout_attr_dest_t dest_of(const char *d)
@@ -270,6 +272,8 @@ static void load_value_file(arena_t *a, logger_t *log, langpack_t *pack, const c
             alias_foreach(d, "en", register_value_spelling, &en);
             value_reg_t fa = {group, gen, "fa"};
             alias_foreach(d, "fa", register_value_spelling, &fa);
+            value_reg_t ar = {group, gen, "ar"};
+            alias_foreach(d, "ar", register_value_spelling, &ar);
         }
     }
 }

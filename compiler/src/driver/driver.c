@@ -195,6 +195,8 @@ static int driver_new(options_t *opt)
     if (fa)
         printf("  (\xD8\xB2\xD8\xA8\xD8\xA7\xD9\x86 "
                "\xD9\x81\xD8\xA7\xD8\xB1\xD8\xB3\xDB\x8C)\n");
+    else if (ar)
+        printf("  (اللغة العربية)\n");
     return 0;
 }
 

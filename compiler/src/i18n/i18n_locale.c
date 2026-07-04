@@ -21,6 +21,8 @@ void i18n_set_lang(const char *code)
 {
     if (code && strcmp(code, "fa") == 0)
         g_lang = "fa";
+    else if (code && strcmp(code, "ar") == 0)
+        g_lang = "ar";
     else
         g_lang = "en";
 }

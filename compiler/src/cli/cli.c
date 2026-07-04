@@ -24,8 +24,8 @@ static void cli_set_defaults(options_t *out)
     out->emit_ast_xml = false;
     out->emit_symbol_xml = false;
     out->xml_out = NULL;
-    out->color       = -1;
-    out->diag_style  = DIAG_STYLE_RUST;
+    out->color = -1;
+    out->diag_style = DIAG_STYLE_RUST;
     out->diag_format = DIAG_FORMAT_HUMAN;
     out->command = CMD_INSPECT;
     out->new_name = NULL;

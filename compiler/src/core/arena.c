@@ -21,12 +21,12 @@ typedef struct arena_block {
     struct arena_block *next;
     size_t used;
     size_t cap;
-    char  *data;
+    char *data;
 } arena_block;
 
 struct arena {
-    arena_block *head;     
-    size_t       block_size;
+    arena_block *head;
+    size_t block_size;
 };
 
 static size_t align_up(size_t n)

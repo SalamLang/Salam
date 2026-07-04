@@ -19,12 +19,15 @@
 
 static ast_node_t *parse_program(parser_t *p);
 static ast_node_t *parse_import_entry(parser_t *p);
-static void        parse_imports_into(parser_t *p, ast_node_t *prog);
+static void parse_imports_into(parser_t *p, ast_node_t *prog);
 
 static void attach_pending(parser_t *p, ast_node_t *target, vec_t *pending)
 {
-    { size_t i = 0; for (; i < pending->len; i++)
-        vec_push(p->a, &target->aliases, pending->data[i]); }
+    {
+        size_t i = 0;
+        for (; i < pending->len; i++)
+            vec_push(p->a, &target->aliases, pending->data[i]);
+    }
     pending->len = 0;
 }
 
@@ -34,7 +37,7 @@ void parse_metas(parser_t *p, vec_t *out)
     while (p_at(p, TK_META)) {
         const char *lang = p_peek(p)->lexeme;
         p_advance(p);
-        if (p_at(p, TK_LBRACKET)) {                 
+        if (p_at(p, TK_LBRACKET)) {
             p_advance(p);
             while (!p_at(p, TK_RBRACKET) && !p_at_eof(p)) {
                 if (p_at(p, TK_STRING)) {
@@ -42,11 +45,12 @@ void parse_metas(parser_t *p, vec_t *out)
                     vec_push(p->a, out, CONST_CAST(p_peek(p)->value.as.s));
                     p_advance(p);
                 } else if (p_at(p, TK_COMMA) || p_at(p, TK_STMT_END)) {
-                    p_advance(p);                   
-                } else break;
+                    p_advance(p);
+                } else
+                    break;
             }
             p_expect(p, TK_RBRACKET, "']' to close annotation list");
-        } else if (p_at(p, TK_STRING)) {            
+        } else if (p_at(p, TK_STRING)) {
             vec_push(p->a, out, CONST_CAST(lang));
             vec_push(p->a, out, CONST_CAST(p_peek(p)->value.as.s));
             p_advance(p);
@@ -61,9 +65,12 @@ static bool parse_package(parser_t *p, ast_node_t *prog, vec_t *pending)
 {
     if (!p_at(p, TK_KW_PACKAGE)) return false;
     p_advance(p);
-    if (p_at(p, TK_IDENT) || p_at(p, TK_KW_LAYOUT)) { prog->name = p_peek(p)->lexeme; p_advance(p); }
-    else p_error(p, "expected package name after 'package'");
-    attach_pending(p, prog, pending);               
+    if (p_at(p, TK_IDENT) || p_at(p, TK_KW_LAYOUT)) {
+        prog->name = p_peek(p)->lexeme;
+        p_advance(p);
+    } else
+        p_error(p, "expected package name after 'package'");
+    attach_pending(p, prog, pending);
     p_term(p);
     return true;
 }
@@ -72,21 +79,35 @@ static ast_node_t *parse_program(parser_t *p)
 {
     P_RULE(p, "program");
     ast_node_t *prog = p_mk(p, AST_PROGRAM);
-    prog->name = "main";                                
-    
-    vec_t pending; vec_init(&pending);
+    prog->name = "main";
+
+    vec_t pending;
+    vec_init(&pending);
     p_skip_terminators(p);
-    while (try_link_attr(p, prog)) {}  
+    while (try_link_attr(p, prog)) {
+    }
     parse_metas(p, &pending);
     parse_package(p, prog, &pending);
     while (!p_at_eof(p)) {
         p_skip_terminators(p);
-        while (try_link_attr(p, prog)) {}  
-        parse_metas(p, &pending);          
+        while (try_link_attr(p, prog)) {
+        }
+        parse_metas(p, &pending);
         if (p_at_eof(p)) break;
-        if (p_at(p, TK_KW_IMPORT))      { pending.len = 0; parse_imports_into(p, prog); continue; }
-        if (p_at(p, TK_KW_EXTERN))      { pending.len = 0; parse_extern_into(p, prog); continue; }
-        if (try_link_directive(p, prog)) { pending.len = 0; continue; }
+        if (p_at(p, TK_KW_IMPORT)) {
+            pending.len = 0;
+            parse_imports_into(p, prog);
+            continue;
+        }
+        if (p_at(p, TK_KW_EXTERN)) {
+            pending.len = 0;
+            parse_extern_into(p, prog);
+            continue;
+        }
+        if (try_link_directive(p, prog)) {
+            pending.len = 0;
+            continue;
+        }
         ast_node_t *def = parse_top_level(p);
         if (def) {
             attach_pending(p, def, &pending);
@@ -103,16 +124,17 @@ static ast_node_t *parse_import_entry(parser_t *p)
 {
     ast_node_t *n = p_mk(p, AST_IMPORT);
     const char *alias = NULL;
-    if (p_at(p, TK_IDENT) && p_peek2(p)->kind == TK_STRING) {   
-        alias = p_peek(p)->lexeme; p_advance(p);
+    if (p_at(p, TK_IDENT) && p_peek2(p)->kind == TK_STRING) {
+        alias = p_peek(p)->lexeme;
+        p_advance(p);
     }
     const token_t *t = p_peek(p);
     if (t->kind == TK_STRING) {
-        n->name = alias;                 
-        n->value = t->value;             
+        n->name = alias;
+        n->value = t->value;
         p_advance(p);
     } else if (t->kind == TK_IDENT) {
-        n->name = t->lexeme;             
+        n->name = t->lexeme;
         p_advance(p);
     } else {
         p_error(p, "expected import path string");
@@ -123,7 +145,7 @@ static ast_node_t *parse_import_entry(parser_t *p)
 
 static void parse_imports_into(parser_t *p, ast_node_t *prog)
 {
-    p_advance(p);                                       
+    p_advance(p);
     if (p_match(p, TK_LPAREN)) {
         p_skip_terminators(p);
         while (!p_at(p, TK_RPAREN) && !p_at_eof(p)) {
@@ -153,7 +175,7 @@ bool parser_run(arena_t *a, logger_t *log, const token_stream_t *toks,
     LOG_I(log, PH_PARSER, "parsing %zu tokens", p.count);
     ast_node_t *prog = parse_program(&p);
     *out_program = prog;
-    LOG_I(log, PH_PARSER, "parse complete: %zu top-level defs%s",
-          prog->list.len, p.had_error ? i18n_tr(" (with errors)") : "");
+    LOG_I(log, PH_PARSER, "parse complete: %zu top-level defs%s", prog->list.len,
+          p.had_error ? i18n_tr(" (with errors)") : "");
     return !p.had_error;
 }

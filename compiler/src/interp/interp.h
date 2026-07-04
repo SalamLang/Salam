@@ -22,15 +22,14 @@
 #include "semantic/sema.h"
 
 typedef struct {
-    FILE       *out;
-    FILE       *err;
+    FILE *out;
+    FILE *err;
     const char *input_data;
     const char *lang;
-    int         timeout_ms;
+    int timeout_ms;
 } interp_options_t;
 
-int interp_run(arena_t *a, logger_t *log, ast_node_t *program,
-               sema_result_t *sem, const char *entry,
-               const interp_options_t *opts);
+int interp_run(arena_t *a, logger_t *log, ast_node_t *program, sema_result_t *sem,
+               const char *entry, const interp_options_t *opts);
 
 #endif /* SALAM_INTERP_INTERP_H */

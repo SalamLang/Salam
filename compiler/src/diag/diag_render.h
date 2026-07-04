@@ -19,7 +19,7 @@
 #include "core/span.h"
 
 typedef enum {
-    DIAG_STYLE_RUST  = 0,
+    DIAG_STYLE_RUST = 0,
     DIAG_STYLE_GCC,
     DIAG_STYLE_CLANG,
 } diag_style_t;
@@ -34,18 +34,9 @@ bool diag_style_from_string(const char *s, diag_style_t *out);
 
 bool diag_format_from_string(const char *s, diag_format_t *out);
 
-void diag_render(FILE *sink,
-                 const char *level,
-                 int         code,
-                 bool        is_error,
-                 const char *file,
-                 const src_span_t *span,
-                 const char *src_text,
-                 size_t      src_len,
-                 const char *msg,
-                 const char *help,
-                 diag_style_t  style,
-                 diag_format_t format,
-                 bool          color);
+void diag_render(FILE *sink, const char *level, int code, bool is_error, const char *file,
+                 const src_span_t *span, const char *src_text, size_t src_len,
+                 const char *msg, const char *help, diag_style_t style,
+                 diag_format_t format, bool color);
 
 #endif /* SALAM_DIAG_DIAG_RENDER_H */

@@ -25,7 +25,7 @@
 
 typedef struct {
     bool tabs;
-    int  width;
+    int width;
 } fmt_style_t;
 
 fmt_style_t fmt_style_default(void);

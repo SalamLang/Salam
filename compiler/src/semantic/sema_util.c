@@ -16,9 +16,15 @@
 #include "semantic/sema_internal.h"
 #include "i18n/i18n.h"
 
-type_t *sema_ty(sema_t *s, type_kind_t k) { return type_prim(s->tc, k); }
+type_t *sema_ty(sema_t *s, type_kind_t k)
+{
+    return type_prim(s->tc, k);
+}
 
-type_t *sema_err_ty(sema_t *s)            { return type_prim(s->tc, TY_ERROR); }
+type_t *sema_err_ty(sema_t *s)
+{
+    return type_prim(s->tc, TY_ERROR);
+}
 
 type_t *sema_decorate(sema_t *s, ast_node_t *n, type_t *t)
 {
@@ -47,50 +53,79 @@ symbol_t *struct_sym_of(type_t *t)
 
 const char *intrinsic_type_canon(const char *name)
 {
-    static const struct { const char *fa, *en; } tab[] = {
-        { "وکتور",          "Vector"  },
-        { "نگاشت",          "HashMap" },
-        { "پیمایشگر_نگاشت", "MapIter" },
-        { "پرونده",         "File"    },
+    static const struct {
+        const char *fa, *en;
+    } tab[] = {
+        {"وکتور", "Vector"},
+        {"نگاشت", "HashMap"},
+        {"پیمایشگر_نگاشت", "MapIter"},
+        {"پرونده", "File"},
     };
     if (!name) return name;
-    { size_t i = 0; for (; i < sizeof(tab)/sizeof(tab[0]); i++)
-        if (strcmp(name, tab[i].fa) == 0) return tab[i].en; }
+    {
+        size_t i = 0;
+        for (; i < sizeof(tab) / sizeof(tab[0]); i++)
+            if (strcmp(name, tab[i].fa) == 0) return tab[i].en;
+    }
     return name;
 }
 
 const char *intrinsic_method_canon(const char *name)
 {
-    static const struct { const char *fa, *en; } tab[] = {
-        
-        { "بیفزا",   "push" }, { "دربیاور", "pop"  }, { "بگیر",  "get" },
-        { "بنشان",   "set"  }, { "طول",     "len"  }, { "ظرفیت", "cap" },
-        { "آزادکن",  "free" },
-        
-        { "درج",     "put"  }, { "دارد",    "has"  }, { "حذف", "remove" },
-        { "اندازه",  "size" }, { "پیمایش",  "iter" },
-        
-        { "دارد_بعدی", "has_next" }, { "کلید", "key" }, { "مقدار", "value" },
-        { "بعدی",      "next"     },
-        
-        { "خواندن",     "read"  }, { "خواندن_خط", "readline" }, { "نوشتن", "write" },
-        { "جابجایی",    "seek"  }, { "ببند",       "close"    },
-        
-        { "پیوست",   "concat"  }, { "زیررشته", "substr" }, { "بیاب", "find"  },
-        { "بشکاف",   "split"   }, { "پیراست",  "trim"   }, { "به_صحیح", "to_int" },
-        { "به_اعشار","to_float" },
+    static const struct {
+        const char *fa, *en;
+    } tab[] = {
+
+        {"بیفزا", "push"},
+        {"دربیاور", "pop"},
+        {"بگیر", "get"},
+        {"بنشان", "set"},
+        {"طول", "len"},
+        {"ظرفیت", "cap"},
+        {"آزادکن", "free"},
+
+        {"درج", "put"},
+        {"دارد", "has"},
+        {"حذف", "remove"},
+        {"اندازه", "size"},
+        {"پیمایش", "iter"},
+
+        {"دارد_بعدی", "has_next"},
+        {"کلید", "key"},
+        {"مقدار", "value"},
+        {"بعدی", "next"},
+
+        {"خواندن", "read"},
+        {"خواندن_خط", "readline"},
+        {"نوشتن", "write"},
+        {"جابجایی", "seek"},
+        {"ببند", "close"},
+
+        {"پیوست", "concat"},
+        {"زیررشته", "substr"},
+        {"بیاب", "find"},
+        {"بشکاف", "split"},
+        {"پیراست", "trim"},
+        {"به_صحیح", "to_int"},
+        {"به_اعشار", "to_float"},
     };
     if (!name) return name;
-    { size_t i = 0; for (; i < sizeof(tab)/sizeof(tab[0]); i++)
-        if (strcmp(name, tab[i].fa) == 0) return tab[i].en; }
+    {
+        size_t i = 0;
+        for (; i < sizeof(tab) / sizeof(tab[0]); i++)
+            if (strcmp(name, tab[i].fa) == 0) return tab[i].en;
+    }
     return name;
 }
 
 const char *alias_for_lang(const vec_t *aliases, const char *lang)
 {
-    { size_t i = 0; for (; i + 1 < aliases->len; i += 2)
-        if (strcmp((const char *)aliases->data[i], lang) == 0)
-            return (const char *)aliases->data[i + 1]; }
+    {
+        size_t i = 0;
+        for (; i + 1 < aliases->len; i += 2)
+            if (strcmp((const char *)aliases->data[i], lang) == 0)
+                return (const char *)aliases->data[i + 1];
+    }
     return NULL;
 }
 
@@ -98,12 +133,15 @@ const char *scope_member_canon(scope_t *members, const char *name)
 {
     const char *lang = i18n_lang();
     if (!name || strcmp(lang, "en") == 0 || !members) return name;
-    { size_t i = 0; for (; i < members->symbols.len; i++) {
-        symbol_t *m = (symbol_t *)members->symbols.data[i];
-        if (!m->decl) continue;
-        const char *a = alias_for_lang(&m->decl->aliases, lang);
-        if (a && strcmp(a, name) == 0) return m->name;   
-    } }
+    {
+        size_t i = 0;
+        for (; i < members->symbols.len; i++) {
+            symbol_t *m = (symbol_t *)members->symbols.data[i];
+            if (!m->decl) continue;
+            const char *a = alias_for_lang(&m->decl->aliases, lang);
+            if (a && strcmp(a, name) == 0) return m->name;
+        }
+    }
     return name;
 }
 

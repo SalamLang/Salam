@@ -19,7 +19,7 @@
 
 typedef struct xml_writer xml_writer_t;
 xml_writer_t *xml_new(sb_t *out);
-void          xml_free(xml_writer_t *w);
+void xml_free(xml_writer_t *w);
 void xml_decl(xml_writer_t *w);
 void xml_open(xml_writer_t *w, const char *tag);
 void xml_attr(xml_writer_t *w, const char *key, const char *value);

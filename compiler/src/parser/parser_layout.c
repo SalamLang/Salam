@@ -38,10 +38,10 @@ static ast_node_t *layout_element(parser_t *p)
 {
     P_RULE(p, "layout_element");
     ast_node_t *n = ast_new(p->a, AST_LAYOUT_ELEMENT, &p_peek(p)->span);
-    
+
     if (!p_recurse_enter(p, "layout nested too deeply")) return n;
     n->name = p_peek(p)->lexeme;
-    p_advance(p);                                   
+    p_advance(p);
     p_expect(p, TK_COLON, "':' after layout element name");
     p_skip_terminators(p);
     layout_body(p, n);
@@ -57,9 +57,9 @@ static ast_node_t *layout_attribute(parser_t *p)
     P_RULE(p, "layout_attribute");
     ast_node_t *n = ast_new(p->a, AST_LAYOUT_ATTR, &p_peek(p)->span);
     n->name = p_peek(p)->lexeme;
-    p_advance(p);                                   
+    p_advance(p);
     p_expect(p, TK_ASSIGN, "'=' after layout attribute name");
-    n->a = parse_expr(p);                           
+    n->a = parse_expr(p);
     n->span.end = p_prev(p)->span.end;
     p_skip_terminators(p);
     return n;
@@ -69,7 +69,7 @@ ast_node_t *parse_layout_block(parser_t *p)
 {
     P_RULE(p, "layout_block");
     ast_node_t *n = ast_new(p->a, AST_LAYOUT_BLOCK, &p_peek(p)->span);
-    p_advance(p);                                   
+    p_advance(p);
     p_expect(p, TK_COLON, "':' after 'layout'");
     p_skip_terminators(p);
     layout_body(p, n);
@@ -82,15 +82,14 @@ ast_node_t *parse_component(parser_t *p)
 {
     P_RULE(p, "component");
     ast_node_t *n = ast_new(p->a, AST_LAYOUT_COMPONENT, &p_peek(p)->span);
-    p_advance(p);                                   
+    p_advance(p);
     n->name = p_name(p, "expected component name");
-    if (p_match(p, TK_LPAREN)) {                     
+    if (p_match(p, TK_LPAREN)) {
         if (!p_at(p, TK_RPAREN)) {
             do {
                 ast_node_t *param = p_mk(p, AST_PARAM);
                 param->name = p_name(p, "expected component parameter name");
-                if (param->name && p_match(p, TK_ASSIGN))
-                    param->a = parse_expr(p);        
+                if (param->name && p_match(p, TK_ASSIGN)) param->a = parse_expr(p);
                 p_fin(p, param);
                 if (param->name) ast_add(p->a, n, param);
             } while (p_match(p, TK_COMMA));

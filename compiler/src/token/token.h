@@ -31,11 +31,32 @@ typedef enum token_kind_t {
     TK_RAW_STRING,
     TK_CHAR,
     TK_UTF8_CHAR,
-    TK_KW_FUNC, TK_KW_RET, TK_KW_IF, TK_KW_ELSE, TK_KW_WHILE, TK_KW_FOR,
-    TK_KW_MUT, TK_KW_CONST, TK_KW_TYPE, TK_KW_STRUCT, TK_KW_ENUM,
-    TK_KW_END, TK_KW_IMPORT, TK_KW_AS, TK_KW_TRUE, TK_KW_FALSE, TK_KW_NULL,
-    TK_KW_THIS, TK_KW_BREAK, TK_KW_CONTINUE, TK_KW_LAYOUT, TK_KW_PACKAGE,
-    TK_KW_PRINT, TK_KW_PRINTLN, TK_KW_PRINTERR, TK_KW_PRINTERRLN,
+    TK_KW_FUNC,
+    TK_KW_RET,
+    TK_KW_IF,
+    TK_KW_ELSE,
+    TK_KW_WHILE,
+    TK_KW_FOR,
+    TK_KW_MUT,
+    TK_KW_CONST,
+    TK_KW_TYPE,
+    TK_KW_STRUCT,
+    TK_KW_ENUM,
+    TK_KW_END,
+    TK_KW_IMPORT,
+    TK_KW_AS,
+    TK_KW_TRUE,
+    TK_KW_FALSE,
+    TK_KW_NULL,
+    TK_KW_THIS,
+    TK_KW_BREAK,
+    TK_KW_CONTINUE,
+    TK_KW_LAYOUT,
+    TK_KW_PACKAGE,
+    TK_KW_PRINT,
+    TK_KW_PRINTLN,
+    TK_KW_PRINTERR,
+    TK_KW_PRINTERRLN,
     TK_KW_INPUT,
     TK_KW_DEFER,
     TK_KW_OPERATOR,
@@ -47,12 +68,38 @@ typedef enum token_kind_t {
     TK_KW_IMPL,
     TK_KW_TO,
     TK_KW_STEP,
-    TK_PLUS, TK_MINUS, TK_STAR, TK_SLASH, TK_PERCENT, TK_POWER,
-    TK_EQ, TK_NE, TK_LT, TK_GT, TK_LE, TK_GE, TK_AND, TK_OR, TK_NOT,
+    TK_PLUS,
+    TK_MINUS,
+    TK_STAR,
+    TK_SLASH,
+    TK_PERCENT,
+    TK_POWER,
+    TK_EQ,
+    TK_NE,
+    TK_LT,
+    TK_GT,
+    TK_LE,
+    TK_GE,
+    TK_AND,
+    TK_OR,
+    TK_NOT,
     TK_AMP,
-    TK_ASSIGN, TK_PLUS_EQ, TK_MINUS_EQ, TK_STAR_EQ, TK_SLASH_EQ, TK_PERCENT_EQ,
-    TK_LPAREN, TK_RPAREN, TK_LBRACE, TK_RBRACE, TK_LBRACKET, TK_RBRACKET,
-    TK_COLON, TK_COMMA, TK_DOT, TK_SEMICOLON,
+    TK_ASSIGN,
+    TK_PLUS_EQ,
+    TK_MINUS_EQ,
+    TK_STAR_EQ,
+    TK_SLASH_EQ,
+    TK_PERCENT_EQ,
+    TK_LPAREN,
+    TK_RPAREN,
+    TK_LBRACE,
+    TK_RBRACE,
+    TK_LBRACKET,
+    TK_RBRACKET,
+    TK_COLON,
+    TK_COMMA,
+    TK_DOT,
+    TK_SEMICOLON,
     TK_FAT_ARROW,
     TK_ELLIPSIS,
     TK_LAYOUT_ELEMENT,
@@ -63,30 +110,36 @@ typedef enum token_kind_t {
     TK__COUNT
 } token_kind_t;
 
-SAL_INLINE bool tk_is_keyword(token_kind_t k) {
+SAL_INLINE bool tk_is_keyword(token_kind_t k)
+{
     return k >= TK_KW_FUNC && k <= TK_KW_STEP;
 }
 
 typedef enum {
-    TV_NONE = 0, TV_INT, TV_FLOAT, TV_STRING, TV_CHAR, TV_BOOL
+    TV_NONE = 0,
+    TV_INT,
+    TV_FLOAT,
+    TV_STRING,
+    TV_CHAR,
+    TV_BOOL
 } token_value_kind_t;
 
 typedef struct {
     token_value_kind_t kind;
     union {
-        uint64_t    i;
-        double      f;
+        uint64_t i;
+        double f;
         const char *s;
-        bool        b;
+        bool b;
     } as;
 } token_value_t;
 
 typedef struct {
-    token_kind_t  kind;
-    const char   *lexeme;
-    src_span_t    span;
+    token_kind_t kind;
+    const char *lexeme;
+    src_span_t span;
     token_value_t value;
-    bool          layout_mode;
+    bool layout_mode;
 } token_t;
 
 const char *token_kind_name(token_kind_t kind);
@@ -95,13 +148,13 @@ typedef struct token_stream token_stream_t;
 
 token_stream_t *token_stream_new(arena_t *a, const char *file);
 
-void            token_stream_push(arena_t *a, token_stream_t *ts, const token_t *tok);
+void token_stream_push(arena_t *a, token_stream_t *ts, const token_t *tok);
 
-size_t          token_stream_count(const token_stream_t *ts);
+size_t token_stream_count(const token_stream_t *ts);
 
-const token_t  *token_stream_at(const token_stream_t *ts, size_t i);
+const token_t *token_stream_at(const token_stream_t *ts, size_t i);
 
-const char     *token_stream_file(const token_stream_t *ts);
+const char *token_stream_file(const token_stream_t *ts);
 
 void tokens_to_xml(xml_writer_t *w, const token_stream_t *ts);
 

@@ -21,11 +21,30 @@
 
 typedef enum {
     TY_ERROR = 0,
-    TY_VOID, TY_BOOL, TY_CHAR, TY_STR, TY_UCHAR, TY_NULL,
-    TY_I8, TY_I16, TY_I32, TY_I64,
-    TY_U8, TY_U16, TY_U32, TY_U64,
-    TY_F32, TY_F64,
-    TY_ARRAY, TY_PTR, TY_STRUCT, TY_ENUM, TY_MAP, TY_MAP_ITER, TY_VEC, TY_FILE,
+    TY_VOID,
+    TY_BOOL,
+    TY_CHAR,
+    TY_STR,
+    TY_UCHAR,
+    TY_NULL,
+    TY_I8,
+    TY_I16,
+    TY_I32,
+    TY_I64,
+    TY_U8,
+    TY_U16,
+    TY_U32,
+    TY_U64,
+    TY_F32,
+    TY_F64,
+    TY_ARRAY,
+    TY_PTR,
+    TY_STRUCT,
+    TY_ENUM,
+    TY_MAP,
+    TY_MAP_ITER,
+    TY_VEC,
+    TY_FILE,
     TY_FUNC,
     TY_DYN,
     TY_SLICE
@@ -35,20 +54,20 @@ typedef struct type_t type_t;
 
 struct type_t {
     type_kind_t kind;
-    type_t     *elem;
-    size_t      length;
-    type_t     *pointee;
-    type_t     *key;
-    void       *decl;
+    type_t *elem;
+    size_t length;
+    type_t *pointee;
+    type_t *key;
+    void *decl;
     const char *name;
-    vec_t       params;
+    vec_t params;
 };
 
 typedef struct {
     arena_t *a;
-    type_t  *prims[TY_F64 + 1];
-    vec_t    arrays;
-    vec_t    ptrs;
+    type_t *prims[TY_F64 + 1];
+    vec_t arrays;
+    vec_t ptrs;
 } type_ctx_t;
 
 type_ctx_t *type_ctx_new(arena_t *a);
@@ -89,11 +108,11 @@ bool type_is_numeric(const type_t *t);
 
 bool type_is_signed(const type_t *t);
 
-bool    type_equiv(const type_t *a, const type_t *b);
+bool type_equiv(const type_t *a, const type_t *b);
 
-bool    type_assignable(const type_t *dst, const type_t *src);
+bool type_assignable(const type_t *dst, const type_t *src);
 
-bool    type_castable(const type_t *dst, const type_t *src);
+bool type_castable(const type_t *dst, const type_t *src);
 
 type_t *type_common_arith(type_ctx_t *tc, type_t *a, type_t *b);
 

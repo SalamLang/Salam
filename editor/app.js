@@ -70,6 +70,40 @@
       copy: "کپی",
       copied: "کپی شد",
     },
+    ar: {
+      title: "ساحة سلام",
+      mode_app: "برنامج",
+      mode_layout: "تخطيط",
+      run: "تشغيل",
+      autorun: "تشغيل تلقائي",
+      editor: "المحرر",
+      output: "الإخراج",
+      preview: "معاينة",
+      ready: "جاهز",
+      running: "قيد التشغيل…",
+      done: "تم",
+      error: "خطأ",
+      loading: "تحميل المترجم…",
+      custom: "مخصص",
+      examples: "أمثلة",
+      g_console: "برامج طرفية",
+      g_web: "صفحات وب",
+      badge_web: "وب",
+      theme_auto: "تلقائي",
+      theme_light: "فاتح",
+      theme_dark: "داكن",
+      view_run: "تشغيل",
+      view_tokens: "الرموز",
+      view_ast: "الشجرة",
+      view_symbols: "الرموز البرمجية",
+      view_html: "HTML",
+      view_css: "CSS",
+      view_js: "JS",
+      view_c: "كود C",
+      view_llvm: "LLVM IR",
+      copy: "نسخ",
+      copied: "تم النسخ",
+    },
   };
   var THEME_ICON = { auto: "◐", light: "☀", dark: "☾" };
   var LEX = window.SALAM_LEX || { kw: [], ty: [], el: [] };
@@ -614,7 +648,17 @@
     saveTimer = null;
   var wasm = { ready: false, runApp: null, buildLayout: null, emit: null };
   var $ = (id) => document.getElementById(id);
-  var LANG_DIR = { en: "ltr", fa: "rtl" };
+  var LANG_DIR = { en: "ltr", fa: "rtl", ar: "rtl" };
+  // Digit systems per UI language: Persian (U+06F0) and Arabic-Indic (U+0660)
+  // render distinct glyphs (e.g. ۴/٤, ۵/٥, ۶/٦), so line numbers must localize.
+  var LANG_DIGIT_BASE = { fa: 0x06f0, ar: 0x0660 };
+  function localizeDigits(s) {
+    var base = LANG_DIGIT_BASE[lang];
+    if (!base) return String(s);
+    return String(s).replace(/[0-9]/g, (d) =>
+      String.fromCharCode(base + (d.charCodeAt(0) - 48)),
+    );
+  }
   function dirOf(l) {
     return LANG_DIR[l] || "ltr";
   }
@@ -665,12 +709,15 @@
       let html = "";
       for (let i = first; i <= last; i++) {
         const num = i + 1;
-        const msg = errLines.get(num);
+        const label = localizeDigits(num);
+        const d = errLines.get(num);
         const cur = num === lnActive ? " cur" : "";
-        html +=
-          msg === undefined
-            ? `<div class="ln-row${cur}">${num}</div>`
-            : `<div class="ln-row${cur} err" title="${escAttr(msg)}">${num}</div>`;
+        if (d === undefined) {
+          html += `<div class="ln-row${cur}">${label}</div>`;
+        } else {
+          const sevCls = d.sev === "warning" ? "warn" : "err";
+          html += `<div class="ln-row${cur} ${sevCls}" title="${escAttr(d.msg)}">${label}</div>`;
+        }
       }
       lnInner.innerHTML = html;
     }
@@ -726,6 +773,9 @@
     /(?:at line|در خط)\s*(\d+)/,
     /\(line\s+(\d+)\)/,
   ];
+  // Parse human-readable diagnostic text (runtime/compile output shown in the
+  // Run view). Everything here is an error; warnings surface via the structured
+  // <diagnostic> XML path below. Returns Map<line, {sev, msg}>.
   function parseErrLines(txt) {
     const map = new Map();
     if (!txt) return map;
@@ -743,7 +793,8 @@
         const n = Number.parseInt(m[1], 10);
 
         if (n >= 1 && n <= lnCount && !map.has(n)) {
-          map.set(n, (r === 0 ? prev : line.trim()) || line.trim());
+          const msg = (r === 0 ? prev : line.trim()) || line.trim();
+          map.set(n, { sev: "error", msg });
         }
       }
 
@@ -753,10 +804,60 @@
 
     return map;
   }
+  function unescXml(s) {
+    return s
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&amp;/g, "&");
+  }
+  const DIAG_TAG_RE = /<diagnostic\b[^>]*?\/?>/g;
+  const DIAG_ATTR_RE = /(\w+)="([^"]*)"/g;
+  // Parse the structured <diagnostic .../> nodes emitted inside the Symbols XML.
+  // These carry severity + line + message, so both errors and warnings can be
+  // pinned to the exact source line. Returns Map<line, {sev, msg}>.
+  function parseDiagXml(txt) {
+    const map = new Map();
+    if (!txt || txt.indexOf("<diagnostic") < 0) return map;
+    DIAG_TAG_RE.lastIndex = 0;
+    let tag = DIAG_TAG_RE.exec(txt);
+    while (tag !== null) {
+      const a = {};
+      DIAG_ATTR_RE.lastIndex = 0;
+      let at = DIAG_ATTR_RE.exec(tag[0]);
+      while (at !== null) {
+        a[at[1]] = at[2];
+        at = DIAG_ATTR_RE.exec(tag[0]);
+      }
+      const n = Number.parseInt(a.line, 10);
+      if (n >= 1 && n <= lnCount) {
+        const sev = a.severity === "warning" ? "warning" : "error";
+        const code = a.code
+          ? `${sev === "warning" ? "W" : "E"}${String(a.code).padStart(3, "0")}: `
+          : "";
+        const msg = code + unescXml(a.message || "");
+        // an error on a line wins over a warning on the same line
+        const cur = map.get(n);
+        if (!cur || (cur.sev === "warning" && sev === "error"))
+          map.set(n, { sev, msg });
+      }
+      tag = DIAG_TAG_RE.exec(txt);
+    }
+    return map;
+  }
   function findExample(id) {
     for (let i = 0; i < EXAMPLES.length; i++)
       if (EXAMPLES[i].id === id) return EXAMPLES[i];
     return null;
+  }
+  // Examples ship with en/fa sources; a UI language without its own source
+  // (e.g. ar) falls back to English so the playground still works.
+  function exTitle(ex) {
+    return (ex && (ex.title[lang] || ex.title.en)) || "";
+  }
+  function exCode(ex) {
+    return (ex && (ex.code[lang] || ex.code.en)) || "";
   }
   function renderHL() {
     var hl = $("hl"),
@@ -827,7 +928,7 @@
   function dropdownLabel() {
     if (exampleId === "custom") return I18N[lang].custom;
     var ex = findExample(exampleId);
-    return ex ? ex.title[lang] : I18N[lang].examples;
+    return ex ? exTitle(ex) : I18N[lang].examples;
   }
   function rebuildDropdown() {
     var list = $("dd-list");
@@ -849,7 +950,7 @@
         li.innerHTML =
           modeIcon(ex.mode) +
           '<span class="dd-text">' +
-          esc(ex.title[lang]) +
+          esc(exTitle(ex)) +
           "</span>" +
           (ex.mode === "layout"
             ? `<span class="dd-badge">${esc(I18N[lang].badge_web)}</span>`
@@ -887,7 +988,7 @@
     if (!ex) return;
     exampleId = id;
     if (ex.mode !== mode) applyMode(ex.mode);
-    editor.setValue(ex.code[lang] || "");
+    editor.setValue(exCode(ex));
     rebuildDropdown();
     saveState();
     scheduleRun();
@@ -912,12 +1013,14 @@
       if (edWrap) edWrap.dir = dir;
       if (keepExample !== "custom") {
         const ex = findExample(keepExample);
-        if (ex) editor.setValue(ex.code[lang] || editor.getValue());
+        if (ex) editor.setValue(exCode(ex) || editor.getValue());
       } else {
         exampleId = defaultExampleFor(mode);
         const dex = findExample(exampleId);
-        editor.setValue(dex ? dex.code[lang] || "" : "");
+        editor.setValue(dex ? exCode(dex) : "");
       }
+      // digits localize per language; force the line gutter to redraw
+      lnFirst = -1;
       renderHL();
     }
     $("output").setAttribute("dir", dir);
@@ -977,21 +1080,26 @@
     var txt =
       (wasm.emit ? wasm.emit(src, lang, view) : "(inspector unavailable)") ||
       "(empty)";
+    // Structured diagnostics (emitted inside the Symbols XML) drive both the
+    // line markers and the status, so a message that happens to contain the
+    // word "error"/"خطا" no longer trips the plain-text error detection.
+    var diags = parseDiagXml(txt);
+    var xmlView =
+      view === "tokens" ||
+      view === "ast" ||
+      view === "symbols" ||
+      view === "html";
+    var isXmlOut = xmlView && /^\s*<\?xml|^\s*</.test(txt);
     var isErr =
+      !isXmlOut &&
       /error\[|runtime error|خطا|compilation failed|layout build failed|no layout block/i.test(
         txt,
       );
-    var isXml =
-      !isErr &&
-      (view === "tokens" ||
-        view === "ast" ||
-        view === "symbols" ||
-        view === "html");
-    var isIR = !isErr && view === "llvm";
-    var isC = !isErr && view === "c";
-    var isCss = !isErr && view === "css";
-    var isJs = !isErr && view === "js";
-    if (isXml) pre.innerHTML = highlightXML(txt);
+    var isIR = !isErr && !isXmlOut && view === "llvm";
+    var isC = !isErr && !isXmlOut && view === "c";
+    var isCss = !isErr && !isXmlOut && view === "css";
+    var isJs = !isErr && !isXmlOut && view === "js";
+    if (isXmlOut) pre.innerHTML = highlightXML(txt);
     else if (isIR) pre.innerHTML = highlightIR(txt);
     else if (isC) pre.innerHTML = highlightC(txt);
     else if (isCss) pre.innerHTML = highlightCSS(txt);
@@ -999,12 +1107,23 @@
     else pre.textContent = txt;
     pre.className =
       "output codeview" +
-      (isXml ? " xml" : "") +
+      (isXmlOut ? " xml" : "") +
       (isIR ? " ir" : "") +
       (isC || isCss || isJs ? " clang" : "");
     pre.setAttribute("dir", "ltr");
-    setErrLines(isErr ? parseErrLines(txt) : null);
-    setStatus(isErr ? "error" : "done", isErr ? "err" : "ok");
+    // markers: prefer structured diagnostics, else fall back to scanning error text
+    setErrLines(diags.size ? diags : isErr ? parseErrLines(txt) : null);
+    var hasError = isErr;
+    if (diags.size) {
+      hasError = false;
+      for (const d of diags.values()) {
+        if (d.sev === "error") {
+          hasError = true;
+          break;
+        }
+      }
+    }
+    setStatus(hasError ? "error" : "done", hasError ? "err" : "ok");
   }
   function run() {
     if (!wasm.ready || !editor) return;
@@ -1180,7 +1299,7 @@
     lnCaretSync();
     if (exampleId !== "custom") {
       const ex = findExample(exampleId);
-      if (!ex || editor.getValue() !== ex.code[lang]) {
+      if (!ex || editor.getValue() !== exCode(ex)) {
         exampleId = "custom";
         rebuildDropdown();
       }
@@ -1343,7 +1462,7 @@
     applyMode(mode);
     setAutorun(autorun);
     if (exampleId === "custom") ta.value = saved.code != null ? saved.code : "";
-    else ta.value = ex.code[lang];
+    else ta.value = exCode(ex);
     applyLangChrome();
     rebuildDropdown();
     lnMeasure();

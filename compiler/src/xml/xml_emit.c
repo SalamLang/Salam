@@ -17,16 +17,31 @@
 
 static void xml_escaped(xml_writer_t *w, const char *s)
 {
-    { const char *p = s; for (; *p; p++) {
-        switch (*p) {
-            case '&':  sb_puts(w->out, "&amp;");  break;
-            case '<':  sb_puts(w->out, "&lt;");   break;
-            case '>':  sb_puts(w->out, "&gt;");   break;
-            case '"':  sb_puts(w->out, "&quot;"); break;
-            case '\'': sb_puts(w->out, "&apos;"); break;
-            default:   sb_putc(w->out, *p);       break;
+    {
+        const char *p = s;
+        for (; *p; p++) {
+            switch (*p) {
+            case '&':
+                sb_puts(w->out, "&amp;");
+                break;
+            case '<':
+                sb_puts(w->out, "&lt;");
+                break;
+            case '>':
+                sb_puts(w->out, "&gt;");
+                break;
+            case '"':
+                sb_puts(w->out, "&quot;");
+                break;
+            case '\'':
+                sb_puts(w->out, "&apos;");
+                break;
+            default:
+                sb_putc(w->out, *p);
+                break;
+            }
         }
-    } }
+    }
 }
 
 void xml_attr(xml_writer_t *w, const char *key, const char *value)
@@ -47,7 +62,7 @@ void xml_attr_int(xml_writer_t *w, const char *key, long long value)
 
 void xml_text(xml_writer_t *w, const char *text)
 {
-    if (w->depth <= 0) return;   
+    if (w->depth <= 0) return;
     xml_frame_t *f = &w->stack[w->depth - 1];
     if (!f->printed_gt) {
         sb_putc(w->out, '>');

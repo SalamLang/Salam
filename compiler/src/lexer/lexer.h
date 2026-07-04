@@ -26,8 +26,7 @@ bool lexer_run(arena_t *a, logger_t *log, const langpack_t *pack,
                const source_file_t *src, token_stream_t **out);
 
 bool lexer_run_ex(arena_t *a, logger_t *log, const langpack_t *pack,
-                  const source_file_t *src, bool keep_comments,
-                  token_stream_t **out);
+                  const source_file_t *src, bool keep_comments, token_stream_t **out);
 
 /*
  * Per-file language detection. Returns the langpack matching a source file's

@@ -20,12 +20,13 @@ langpack_t *langpack_load(const char *code)
 {
     if (code && strcmp(code, "en") == 0) return &g_lang_en;
     if (code && strcmp(code, "fa") == 0) return &g_lang_fa;
+    if (code && strcmp(code, "ar") == 0) return &g_lang_ar;
     return NULL;
 }
 
 void langpack_free(langpack_t *p)
 {
-    (void)p; 
+    (void)p;
 }
 
 const char *langpack_code(const langpack_t *p)
@@ -46,7 +47,10 @@ const char *langpack_entry_for(const char *code)
 
 const char *langpack_end_spelling(const langpack_t *p)
 {
-    { const kw_entry_t *e = p->keywords; for (; e->spelling != NULL; e++)
-        if (e->kind == TK_KW_END) return e->spelling; }
+    {
+        const kw_entry_t *e = p->keywords;
+        for (; e->spelling != NULL; e++)
+            if (e->kind == TK_KW_END) return e->spelling;
+    }
     return "end";
 }

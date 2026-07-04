@@ -25,111 +25,139 @@
 #include "semantic/types.h"
 #include "llvm/codegen_llvm.h"
 
-typedef struct { const char *ref; const char *ts; } llv_t;
-
-
-typedef struct { const char *ptr; const char *ts; } ll_addr_t;
-
-typedef struct { const char *name; const char *ptr; const char *ts; } lvar_t;
-
-typedef struct { const char *bytes; size_t len; const char *gref; } lstr_t;
+typedef struct {
+    const char *ref;
+    const char *ts;
+} llv_t;
 
 typedef struct {
-    arena_t       *a;
-    logger_t      *log;
+    const char *ptr;
+    const char *ts;
+} ll_addr_t;
+
+typedef struct {
+    const char *name;
+    const char *ptr;
+    const char *ts;
+} lvar_t;
+
+typedef struct {
+    const char *bytes;
+    size_t len;
+    const char *gref;
+} lstr_t;
+
+typedef struct {
+    arena_t *a;
+    logger_t *log;
     sema_result_t *sem;
-    const char    *module;
-    const char    *entry;
-    sb_t          *g;
-    sb_t          *b;
-    sb_t          *allocas;
-    int            tmp;
-    int            lbl;
-    bool           term;
-    vec_t          locals;
-    vec_t          strings;
-    const char    *ret_ts;
-    bool           is_main;
-    const char    *brk[64];
-    const char    *cont[64];
-    int            nloop;
-    vec_t          defers;
-    const char    *self_ts;
-    const char    *this_ref;
-    bool           self_byval;
-    vec_t          globals;
-    vec_t          gdefer;
-    vec_t          extern_names;
-    scope_t       *pkg_scope;
-    vec_t          emitted;
-    ast_node_t    *cur_lambda;
-    const char    *env_ref;
-    const char    *env_ty;
-    int            lam_n;
-    bool           ok;
-    const char    *first_error;
-    bool           debug;
-    sb_t          *meta;
-    int            meta_n;
-    const char    *di_file;
-    const char    *di_cu;
-    const char    *di_subty;
-    const char    *cur_sp;
-    const char    *cur_dbg;
-    const char    *di_flag_dwarf;
-    const char    *di_flag_debug;
-    const char    *src_file;
-    const char    *src_dir;
-    const char    *triple;
-    const char    *usize;
-    int            ptr_bits;
+    const char *module;
+    const char *entry;
+    sb_t *g;
+    sb_t *b;
+    sb_t *allocas;
+    int tmp;
+    int lbl;
+    bool term;
+    vec_t locals;
+    vec_t strings;
+    const char *ret_ts;
+    bool is_main;
+    const char *brk[64];
+    const char *cont[64];
+    int nloop;
+    vec_t defers;
+    const char *self_ts;
+    const char *this_ref;
+    bool self_byval;
+    vec_t globals;
+    vec_t gdefer;
+    vec_t extern_names;
+    scope_t *pkg_scope;
+    vec_t emitted;
+    ast_node_t *cur_lambda;
+    const char *env_ref;
+    const char *env_ty;
+    int lam_n;
+    bool ok;
+    const char *first_error;
+    bool debug;
+    sb_t *meta;
+    int meta_n;
+    const char *di_file;
+    const char *di_cu;
+    const char *di_subty;
+    const char *cur_sp;
+    const char *cur_dbg;
+    const char *di_flag_dwarf;
+    const char *di_flag_debug;
+    const char *src_file;
+    const char *src_dir;
+    const char *triple;
+    const char *usize;
+    int ptr_bits;
 } ll_t;
 
 /* uchar is a one-codepoint value backed by a UTF-8 string pointer, so it lowers
    and behaves exactly like str in the LLVM backend (ptr type, concat, compare). */
-SAL_INLINE bool ll_is_str(const char *ts)    { return ts && (!strcmp(ts, "str") || !strcmp(ts, "uchar")); }
+SAL_INLINE bool ll_is_str(const char *ts)
+{
+    return ts && (!strcmp(ts, "str") || !strcmp(ts, "uchar"));
+}
 
-SAL_INLINE bool ll_is_bool(const char *ts)   { return ts && !strcmp(ts, "bool"); }
+SAL_INLINE bool ll_is_bool(const char *ts)
+{
+    return ts && !strcmp(ts, "bool");
+}
 
-SAL_INLINE bool ll_is_float(const char *ts)  { return ts && (!strcmp(ts,"f32") || !strcmp(ts,"f64")); }
+SAL_INLINE bool ll_is_float(const char *ts)
+{
+    return ts && (!strcmp(ts, "f32") || !strcmp(ts, "f64"));
+}
 
-SAL_INLINE bool ll_is_ptr_ts(const char *ts) { return ts && *ts && ts[strlen(ts)-1] == '*'; }
+SAL_INLINE bool ll_is_ptr_ts(const char *ts)
+{
+    return ts && *ts && ts[strlen(ts) - 1] == '*';
+}
 
-SAL_INLINE llv_t ll_poison(const char *ts) { return (llv_t){ "0", ts ? ts : "i32" }; }
+SAL_INLINE llv_t ll_poison(const char *ts)
+{
+    return (llv_t){"0", ts ? ts : "i32"};
+}
 
 const char *ll_fmt(ll_t *ll, const char *fmt, ...);
 
-void        ll_emit(ll_t *ll, const char *fmt, ...);
+void ll_emit(ll_t *ll, const char *fmt, ...);
 
-void        ll_emit_alloca(ll_t *ll, const char *fmt, ...);
+void ll_emit_alloca(ll_t *ll, const char *fmt, ...);
 
-void        ll_emit_label(ll_t *ll, const char *label);
+void ll_emit_label(ll_t *ll, const char *label);
 
-void        ll_emit_term(ll_t *ll, const char *fmt, ...);
+void ll_emit_term(ll_t *ll, const char *fmt, ...);
 
 const char *ll_new_tmp(ll_t *ll);
 
 const char *ll_new_lbl(ll_t *ll, const char *tag);
 
-void        ll_error(ll_t *ll, const ast_node_t *n, const char *fmt, ...);
+void ll_error(ll_t *ll, const ast_node_t *n, const char *fmt, ...);
 
 const char *ll_strconst(ll_t *ll, const char *s);
 
-void        ll_local_add(ll_t *ll, const char *name, const char *ptr, const char *ts);
+void ll_local_add(ll_t *ll, const char *name, const char *ptr, const char *ts);
 
-lvar_t     *ll_local_find(ll_t *ll, const char *name);
+lvar_t *ll_local_find(ll_t *ll, const char *name);
 
-lvar_t     *ll_global_find(ll_t *ll, const char *name);
+lvar_t *ll_global_find(ll_t *ll, const char *name);
 
-int         ll_int_bits(const char *ts);
+int ll_int_bits(const char *ts);
 
-int         ll_target_ptr_bits(const char *triple);
+int ll_target_ptr_bits(const char *triple);
 
 const char *ll_usize_to_i32(ll_t *ll, const char *ref);
 
-bool        ll_is_int(const char *ts);
+bool ll_is_int(const char *ts);
 
-bool        ll_is_signed(const char *ts);
+bool ll_is_signed(const char *ts);
 
 const char *ll_ty(ll_t *ll, const char *ts);
 
@@ -139,29 +167,29 @@ const char *ll_common(const char *a, const char *b);
 
 const char *ll_as_i1(ll_t *ll, llv_t v);
 
-long        ll_array_dim(const char *ts);
+long ll_array_dim(const char *ts);
 
 const char *ll_array_elem(ll_t *ll, const char *ts);
 
-bool        ll_is_slice_ts(const char *ts);
+bool ll_is_slice_ts(const char *ts);
 
 const char *ll_slice_elem(ll_t *ll, const char *ts);
 
 const char *ll_struct_ltype(ll_t *ll, const char *name);
 
-symbol_t   *ll_sym(ll_t *ll, const char *name);
+symbol_t *ll_sym(ll_t *ll, const char *name);
 
-symbol_t   *ll_struct_sym(ll_t *ll, const char *name);
+symbol_t *ll_struct_sym(ll_t *ll, const char *name);
 
-symbol_t   *ll_enum_sym(ll_t *ll, const char *name);
+symbol_t *ll_enum_sym(ll_t *ll, const char *name);
 
-int         ll_field_index(symbol_t *ssym, const char *field, symbol_t **out_field);
+int ll_field_index(symbol_t *ssym, const char *field, symbol_t **out_field);
 
 const char *ll_zero(const char *ts);
 
 const char *ll_func_ret(ll_t *ll, const char *ts);
 
-void        ll_func_params(ll_t *ll, const char *ts, vec_t *out);
+void ll_func_params(ll_t *ll, const char *ts, vec_t *out);
 
 llv_t ll_expr(ll_t *ll, ast_node_t *n);
 
@@ -181,36 +209,36 @@ const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *s
 
 func_sig_t *ll_pick_overload(ll_t *ll, symbol_t *sym, ast_node_t *call);
 
-void        ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner);
+void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner);
 
-void        ll_emit_lambda(ll_t *ll, ast_node_t *n);
+void ll_emit_lambda(ll_t *ll, ast_node_t *n);
 
-void        ll_emit_struct_types(ll_t *ll, ast_node_t *program);
+void ll_emit_struct_types(ll_t *ll, ast_node_t *program);
 
-void        ll_emit_globals(ll_t *ll, ast_node_t *program);
+void ll_emit_globals(ll_t *ll, ast_node_t *program);
 
-void        ll_emit_externs(ll_t *ll);
+void ll_emit_externs(ll_t *ll);
 
-void        ll_emit_impls(ll_t *ll);
+void ll_emit_impls(ll_t *ll);
 
-void        ll_emit_packages(ll_t *ll);
+void ll_emit_packages(ll_t *ll);
 
-void        ll_ensure_fn(ll_t *ll, ast_node_t *fn, symbol_t *owner, scope_t *pscope);
+void ll_ensure_fn(ll_t *ll, ast_node_t *fn, symbol_t *owner, scope_t *pscope);
 
 const char *ll_box_dyn(ll_t *ll, llv_t v, const char *iface);
 
 const char *ll_mangle_ti(ll_t *ll, const char *typestr, const char *fn, func_sig_t *sig);
 
-void        ll_emit_global_inits(ll_t *ll);
+void ll_emit_global_inits(ll_t *ll);
 
 const char *ll_meta_add(ll_t *ll, const char *text);
 
-void        ll_debug_init(ll_t *ll, const char *src_path);
+void ll_debug_init(ll_t *ll, const char *src_path);
 
 const char *ll_debug_subprogram(ll_t *ll, const char *name, unsigned line);
 
 const char *ll_debug_location(ll_t *ll, unsigned line, unsigned col);
 
-void        ll_debug_finalize(ll_t *ll);
+void ll_debug_finalize(ll_t *ll);
 
 #endif /* SALAM_LLVM_CODEGEN_LLVM_INTERNAL_H */

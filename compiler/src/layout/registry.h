@@ -25,11 +25,11 @@ typedef enum {
 } layout_elem_type_t;
 
 typedef struct {
-    const char        *name;
-    const char        *tag;
+    const char *name;
+    const char *tag;
     layout_elem_type_t type;
-    const char        *parents;
-    const char        *required;
+    const char *parents;
+    const char *required;
 } layout_elem_def_t;
 
 const layout_elem_def_t *layout_elem_lookup(const char *name);
@@ -62,18 +62,19 @@ typedef enum {
 } layout_value_type_t;
 
 typedef struct {
-    const char         *name;
-    const char         *out;
-    layout_attr_dest_t  dest;
+    const char *name;
+    const char *out;
+    layout_attr_dest_t dest;
     layout_value_type_t vtype;
-    const char         *allowed;
+    const char *allowed;
 } layout_attr_def_t;
 
 const layout_attr_def_t *layout_attr_lookup(const char *name);
 
 void layout_registry_set_attributes(const layout_attr_def_t *defs, size_t n);
 
-void layout_registry_add_value(const char *group, const char *spelling, const char *canonical);
+void layout_registry_add_value(const char *group, const char *spelling,
+                               const char *canonical);
 
 bool layout_attr_value_ok(const layout_attr_def_t *ad, const char *value);
 

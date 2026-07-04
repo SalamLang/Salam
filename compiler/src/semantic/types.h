@@ -21,7 +21,7 @@
 
 typedef enum {
     TY_ERROR = 0,
-    TY_VOID, TY_BOOL, TY_CHAR, TY_STR, TY_NULL,
+    TY_VOID, TY_BOOL, TY_CHAR, TY_STR, TY_UCHAR, TY_NULL,
     TY_I8, TY_I16, TY_I32, TY_I64,
     TY_U8, TY_U16, TY_U32, TY_U64,
     TY_F32, TY_F64,
@@ -77,7 +77,7 @@ type_t *type_file(type_ctx_t *tc);
 
 type_t *type_func(type_ctx_t *tc, type_t *ret, const vec_t *params);
 
-int type_prim_kind_from_name(const char *name);
+int type_prim_kind_from_name(const char *name, const char *lang);
 
 bool type_is_error(const type_t *t);
 

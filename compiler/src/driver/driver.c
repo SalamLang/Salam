@@ -388,118 +388,6 @@ static bool path_is_dir(const char *p)
 #endif
 }
 
-/* Match the ASCII tag at [p,le) case-insensitively; return its length or 0. */
-static size_t fmt_match_tag_ci(const char *text, size_t p, size_t le,
-                               const char *tag, size_t n)
-{
-    size_t k = 0;
-    if (p + n > le) return 0;
-    for (; k < n; k++) {
-        char ch = text[p + k];
-        if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
-        if (ch != tag[k]) return 0;
-    }
-    return n;
-}
-
-/* Match a raw byte sequence at [p,le); return its length or 0. */
-static size_t fmt_match_bytes(const char *text, size_t p, size_t le,
-                              const char *tag, size_t n)
-{
-    size_t k = 0;
-    if (p + n > le) return 0;
-    for (; k < n; k++) if (text[p + k] != tag[k]) return 0;
-    return n;
-}
-
-/*
- * Detect a language marker in the first few comment lines. Both the English
- * `// lang: <code>` and the Persian `// زبان: <code>` forms are accepted, and
- * the value may be an ASCII code (fa/en) or its Persian name (فارسی/انگلیسی),
- * so `// LANG: fa` and `// زبان: فارسی` are equivalent.
- */
-static const char *fmt_marker_lang(const char *text, size_t len)
-{
-    static const char en_tag[] = "lang";
-    /* Persian words encoded as raw UTF-8 bytes so the source stays ASCII-only. */
-    static const char fa_tag[] = "\xd8\xb2\xd8\xa8\xd8\xa7\xd9\x86";              /* زبان    */
-    static const char fa_val[] = "\xd9\x81\xd8\xa7\xd8\xb1\xd8\xb3\xdb\x8c";      /* فارسی   */
-    static const char en_val[] = "\xd8\xa7\xd9\x86\xda\xaf\xd9\x84\xdb\x8c"
-                                 "\xd8\xb3\xdb\x8c";                             /* انگلیسی */
-    size_t i = 0; int line = 0;
-    while (i < len && line < 8) {
-        size_t ls = i;
-        while (ls < len && (text[ls] == ' ' || text[ls] == '\t')) ls++;
-        size_t le = ls;
-        while (le < len && text[le] != '\n') le++;
-        if (ls + 1 < len && text[ls] == '/' && text[ls + 1] == '/') {
-            size_t p = ls + 2;
-            for (; p < le; p++) {
-                size_t tlen = fmt_match_tag_ci(text, p, le, en_tag, 4);
-                if (!tlen) tlen = fmt_match_bytes(text, p, le, fa_tag, 8);
-                if (!tlen) continue;
-                size_t q = p + tlen;
-                while (q < le && (text[q] == ' ' || text[q] == '\t')) q++;
-                if (q >= le || text[q] != ':') continue;
-                q++;
-                while (q < le && (text[q] == ' ' || text[q] == '\t')) q++;
-                /* Persian names (multi-byte) take priority over ASCII codes. */
-                if (fmt_match_bytes(text, q, le, fa_val, 10)) return "fa";
-                if (fmt_match_bytes(text, q, le, en_val, 14)) return "en";
-                size_t cs = q;
-                while (q < le && ((text[q] >= 'a' && text[q] <= 'z') ||
-                                  (text[q] >= 'A' && text[q] <= 'Z'))) q++;
-                size_t clen = q - cs;
-                if (clen == 2 && (text[cs] == 'f' || text[cs] == 'F') &&
-                    (text[cs + 1] == 'a' || text[cs + 1] == 'A')) return "fa";
-                if (clen == 2 && (text[cs] == 'e' || text[cs] == 'E') &&
-                    (text[cs + 1] == 'n' || text[cs + 1] == 'N')) return "en";
-                return NULL;
-            }
-        }
-        i = (le < len) ? le + 1 : le;
-        line++;
-    }
-    return NULL;
-}
-
-static int fmt_count_keywords(arena_t *a, logger_t *quiet,
-                              const langpack_t *pack, const source_file_t *src)
-{
-    token_stream_t *toks = NULL;
-    lexer_run(a, quiet, pack, src, &toks);
-    if (!toks) return 0;
-    int count = 0;
-    size_t n = token_stream_count(toks);
-    { size_t i = 0; for (; i < n; i++) {
-        const token_t *t = token_stream_at(toks, i);
-        if (t->kind == TK_EOF) break;
-        if (tk_is_keyword(t->kind)) count++;
-    } }
-    return count;
-}
-
-static const langpack_t *fmt_detect_lang(arena_t *a, const source_file_t *src,
-                                         const langpack_t *fallback)
-{
-    const char *marked = fmt_marker_lang(src->text, src->len);
-    if (marked) {
-        const langpack_t *p = langpack_load(marked);
-        if (p) return p;
-    }
-    static const char *codes[] = { "en", "fa" };
-    logger_t *quiet = logger_new(stderr, LOG_OFF, false);
-    const langpack_t *best = fallback; int best_kw = 0;
-    { size_t i = 0; for (; i < sizeof codes / sizeof codes[0]; i++) {
-        const langpack_t *p = langpack_load(codes[i]);
-        if (!p) continue;
-        int kw = fmt_count_keywords(a, quiet, p, src);
-        if (kw > best_kw) { best_kw = kw; best = p; }
-    } }
-    logger_free(quiet);
-    return best;
-}
-
 static void fmt_one_file(fmt_ctx_t *c, const char *path)
 {
     arena_t *a = arena_new(1 << 18);
@@ -509,7 +397,7 @@ static void fmt_one_file(fmt_ctx_t *c, const char *path)
         c->errors++; arena_free(a); return;
     }
     c->total++;
-    const langpack_t *pack = fmt_detect_lang(a, src, c->pack);
+    const langpack_t *pack = langpack_detect(a, src, c->pack);
     sb_t sb; sb_init(&sb);
     if (!fmt_source(a, c->log, pack, src, &c->style, &sb)) {
         LOG_E(c->log, PH_DRIVER,

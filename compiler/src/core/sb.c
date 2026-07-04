@@ -76,13 +76,32 @@ void sb_printf(sb_t *s, const char *fmt, ...)
 void sb_put_shell_arg(sb_t *s, const char *arg)
 {
 #if defined(_WIN32) || defined(__CYGWIN__)
-    /* cmd.exe: wrap in double quotes; a double quote is escaped as "". The
-       compilers we invoke (gcc/clang/tcc) strip the surrounding quotes. */
+    /* Wrap in double quotes and escape per the CommandLineToArgvW / MSVCRT
+       rules the invoked compilers (gcc/clang/tcc) use to split argv:
+       backslashes are literal EXCEPT when they run up against a double quote
+       (including the closing quote), where each backslash must be doubled and
+       a quote must be preceded by a backslash. Without this a path ending in a
+       backslash, e.g. C:\dir\, would turn its closing quote into a literal. */
     sb_putc(s, '"');
-    { const char *p = arg; for (; *p; p++) {
-        if (*p == '"') sb_putc(s, '"');
-        sb_putc(s, *p);
-    } }
+    { const char *p = arg;
+      while (*p) {
+        size_t nbs = 0;
+        while (*p == '\\') { nbs++; p++; }
+        if (*p == '\0') {
+            /* trailing backslashes: double them so they don't escape the quote */
+            size_t i; for (i = 0; i < nbs * 2; i++) sb_putc(s, '\\');
+            break;
+        } else if (*p == '"') {
+            size_t i; for (i = 0; i < nbs * 2 + 1; i++) sb_putc(s, '\\');
+            sb_putc(s, '"');
+            p++;
+        } else {
+            size_t i; for (i = 0; i < nbs; i++) sb_putc(s, '\\');
+            sb_putc(s, *p);
+            p++;
+        }
+      }
+    }
     sb_putc(s, '"');
 #else
     /* POSIX sh: single quotes neutralize everything ($, `, \, ; etc.). A

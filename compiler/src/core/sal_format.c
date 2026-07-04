@@ -14,6 +14,7 @@
 
 #include "core/sal_format.h"
 #include "core/numstr.h"
+#include <stddef.h>  /* ptrdiff_t */
 
 typedef struct { char *buf; size_t cap; size_t len; } fbuf_t;
 
@@ -173,7 +174,10 @@ int sal_vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
             (conv=='d'||conv=='i'||conv=='u'||conv=='x'||conv=='X'||conv=='o')) {
             uint64_t mag; int neg = 0, base, upper = 0;
             if (conv == 'd' || conv == 'i') {
-                int64_t v = (len == LEN_Z) ? (int64_t)va_arg(ap, size_t)
+                /* For %zd the argument is signed (ptrdiff_t/ssize_t). Read it
+                   through a signed type so negatives sign-extend to int64_t;
+                   reading via size_t would zero-extend on 32-bit (-1 -> 4G-1). */
+                int64_t v = (len == LEN_Z) ? (int64_t)va_arg(ap, ptrdiff_t)
                                            : (int64_t)va_arg(ap, long long);
                 neg = v < 0;
                 mag = neg ? (uint64_t)(-(v + 1)) + 1u : (uint64_t)v;

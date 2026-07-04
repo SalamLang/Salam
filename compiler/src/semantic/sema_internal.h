@@ -33,6 +33,7 @@ typedef struct {
     logger_t      *log;
     diag_engine_t *diag;
     const char    *file;
+    const char    *lang;   /* language of the module being checked ("fa"/"en") */
     type_ctx_t    *tc;
     scope_t       *global;
     scope_t       *cur;

@@ -41,7 +41,7 @@ static void lx_scan_one(lx_t *L)
     if (lx_at_digit(L, 0))                                       lx_scan_number(L);
 
     else if (c == '.' && lx_at_digit(L, 1))                      lx_scan_number(L);
-    else if (c == 'u' && lx_peek2(L, 1) == '\'')                  lx_scan_utf8_char(L);
+    else if (c == 'u' && (lx_peek2(L, 1) == '"' || lx_peek2(L, 1) == '\'')) lx_scan_utf8_char(L);
     else if (lx_is_ident_start(c))                               lx_scan_ident(L);
     else if (c == '"') {
         if (lx_peek2(L,1) == '"' && lx_peek2(L,2) == '"')       lx_scan_triple(L);

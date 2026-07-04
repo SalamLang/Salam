@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AppMode, Language, AppTheme } from "../App";
+import type { AppMode, AppTheme, Language } from "../App";
 
 interface HeaderProps {
   mode: AppMode;
@@ -77,14 +77,18 @@ export default function Header({
     <header
       className="flex flex-col md:flex-row items-center justify-between px-4 py-3 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-xs relative z-50 select-none transition-colors duration-200"
       style={{
-        backgroundColor: theme === "random" ? "var(--custom-header-bg)" : undefined,
+        backgroundColor:
+          theme === "random" ? "var(--custom-header-bg)" : undefined,
         borderColor: theme === "random" ? "var(--custom-border)" : undefined,
       }}
     >
       {/* Brand Header */}
       <div className="w-full md:w-auto flex items-center justify-between">
         <a href="?" className="flex items-center gap-2 group">
-          <span className="w-5 h-5 rounded-full bg-brand shadow-sm group-hover:scale-105 transition-transform" aria-hidden="true" />
+          <span
+            className="w-5 h-5 rounded-full bg-brand shadow-sm group-hover:scale-105 transition-transform"
+            aria-hidden="true"
+          />
           <span className="font-bold text-lg tracking-tight text-slate-800 dark:text-white">
             {t.title}
           </span>
@@ -98,19 +102,29 @@ export default function Header({
           aria-label="Menu"
           aria-expanded={menuOpen}
         >
-          <span className={`h-0.5 w-5 bg-current transform transition-transform ${menuOpen ? "rotate-45 translate-y-1.5" : ""}`} />
-          <span className={`h-0.5 w-5 bg-current transition-opacity ${menuOpen ? "opacity-0" : ""}`} />
-          <span className={`h-0.5 w-5 bg-current transform transition-transform ${menuOpen ? "-rotate-45 -translate-y-1.5" : ""}`} />
+          <span
+            className={`h-0.5 w-5 bg-current transform transition-transform ${menuOpen ? "rotate-45 translate-y-1.5" : ""}`}
+          />
+          <span
+            className={`h-0.5 w-5 bg-current transition-opacity ${menuOpen ? "opacity-0" : ""}`}
+          />
+          <span
+            className={`h-0.5 w-5 bg-current transform transition-transform ${menuOpen ? "-rotate-45 -translate-y-1.5" : ""}`}
+          />
         </button>
       </div>
 
       {/* Control Actions Panel */}
-      <div className={`${menuOpen ? "flex" : "hidden"} md:flex flex-col md:flex-row w-full md:w-auto items-stretch md:items-center gap-3 mt-4 md:mt-0`}>
-
+      <div
+        className={`${menuOpen ? "flex" : "hidden"} md:flex flex-col md:flex-row w-full md:w-auto items-stretch md:items-center gap-3 mt-4 md:mt-0`}
+      >
         {/* Mode Segments */}
         <div
           className="inline-flex bg-slate-100 dark:bg-slate-800 p-0.5 rounded-md border border-slate-200 dark:border-slate-700"
-          style={{ borderColor: theme === "random" ? "var(--custom-border)" : undefined }}
+          style={{
+            borderColor:
+              theme === "random" ? "var(--custom-border)" : undefined,
+          }}
         >
           <button
             type="button"
@@ -131,7 +145,10 @@ export default function Header({
         {/* Language Segments */}
         <div
           className="inline-flex bg-slate-100 dark:bg-slate-800 p-0.5 rounded-md border border-slate-200 dark:border-slate-700"
-          style={{ borderColor: theme === "random" ? "var(--custom-border)" : undefined }}
+          style={{
+            borderColor:
+              theme === "random" ? "var(--custom-border)" : undefined,
+          }}
         >
           <button
             type="button"
@@ -152,20 +169,30 @@ export default function Header({
         {/* Custom Examples Dropdown Wrapper */}
         <div className="relative">
           <select
-            onChange={() => { /* example loading not yet implemented */ }}
+            onChange={() => {
+              /* example loading not yet implemented */
+            }}
             className="w-full md:w-auto appearance-none bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm px-3 py-1.5 pe-8 rounded-md focus:outline-hidden focus:border-brand"
             defaultValue=""
             style={{
-              borderColor: theme === "random" ? "var(--custom-border)" : undefined,
-              backgroundColor: theme === "random" ? "var(--custom-header-bg)" : undefined,
+              borderColor:
+                theme === "random" ? "var(--custom-border)" : undefined,
+              backgroundColor:
+                theme === "random" ? "var(--custom-header-bg)" : undefined,
               color: theme === "random" ? "var(--custom-text)" : undefined,
             }}
           >
-            <option value="" disabled hidden>{t.examples}</option>
+            <option value="" disabled hidden>
+              {t.examples}
+            </option>
             <option value="hello">Hello World</option>
             <option value="fibonacci">Fibonacci</option>
           </select>
-          <span className={`absolute top-1/2 -translate-y-1/2 pointer-events-none text-xs text-slate-400 ${lang === 'fa' ? 'left-2.5' : 'right-2.5'}`}>▼</span>
+          <span
+            className={`absolute top-1/2 -translate-y-1/2 pointer-events-none text-xs text-slate-400 ${lang === "fa" ? "left-2.5" : "right-2.5"}`}
+          >
+            ▼
+          </span>
         </div>
 
         {/* Theme Toggle Button */}
@@ -174,12 +201,19 @@ export default function Header({
           onClick={cycleTheme}
           className="flex items-center justify-center gap-1.5 px-3 py-1.5 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-md text-sm text-slate-600 dark:text-slate-300 cursor-pointer select-none transition-colors"
           style={{
-            borderColor: theme === "random" ? "var(--custom-border)" : undefined,
+            borderColor:
+              theme === "random" ? "var(--custom-border)" : undefined,
             color: theme === "random" ? "var(--custom-text)" : undefined,
           }}
         >
           <span>
-            {theme === "auto" ? t.themeAuto : theme === "light" ? t.themeLight : theme === "dark" ? t.themeDark : t.themeRandom}
+            {theme === "auto"
+              ? t.themeAuto
+              : theme === "light"
+                ? t.themeLight
+                : theme === "dark"
+                  ? t.themeDark
+                  : t.themeRandom}
           </span>
         </button>
 
@@ -193,11 +227,15 @@ export default function Header({
               : "border-slate-200 dark:border-slate-700 text-slate-500"
           }`}
           style={{
-            borderColor: theme === "random" ? "var(--custom-border)" : undefined,
-            color: (theme === "random" && !autoRun) ? "var(--custom-text)" : undefined,
+            borderColor:
+              theme === "random" ? "var(--custom-border)" : undefined,
+            color:
+              theme === "random" && !autoRun ? "var(--custom-text)" : undefined,
           }}
         >
-          <span className={`w-2 h-2 rounded-full ${autoRun ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`} />
+          <span
+            className={`w-2 h-2 rounded-full ${autoRun ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`}
+          />
           <span>{t.autoRun}</span>
         </button>
 

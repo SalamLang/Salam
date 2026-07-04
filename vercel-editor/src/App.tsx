@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import Header from "./components/Header";
 
 export type AppMode = "app" | "layout";
@@ -32,7 +32,9 @@ export default function App() {
   const [lang, setLang] = useState<Language>("en");
   const [theme, setTheme] = useState<AppTheme>("auto");
   const [autoRun, setAutoRun] = useState<boolean>(true);
-  const [randomPalette, setRandomPalette] = useState<RandomPalette>(generateRandomPalette);
+  const [randomPalette, setRandomPalette] = useState<RandomPalette>(
+    generateRandomPalette,
+  );
 
   // Re-generate palette whenever switching to the random theme
   useEffect(() => {
@@ -75,7 +77,8 @@ export default function App() {
       }
 
       const isDarkSystem = mediaQuery.matches;
-      const shouldBeDark = theme === "dark" || (theme === "auto" && isDarkSystem);
+      const shouldBeDark =
+        theme === "dark" || (theme === "auto" && isDarkSystem);
 
       if (shouldBeDark) {
         root.classList.add("dark");

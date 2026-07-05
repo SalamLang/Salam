@@ -1,5 +1,4 @@
-# Salam books - one common XeLaTeX image that builds BOTH the English and the
-# Persian tutorial book.
+# Salam books - one common XeLaTeX image that builds BOTH the English and the Persian tutorial book.
 
 FROM texlive/texlive:latest
 

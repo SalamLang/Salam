@@ -11,8 +11,6 @@
 #   build-books fa     # Persian only  (heavier: xepersian, right-to-left)
 set -eu
 
-# Root of the bind-mounted books/ tree; override with BOOKS_ROOT if mounted
-# somewhere else.
 BOOKS_ROOT="${BOOKS_ROOT:-/books}"
 
 build_one() {
@@ -24,8 +22,6 @@ build_one() {
     fi
     echo "==> Building '$lang' book: $dir/book.tex"
     cd "$dir"
-    # latexmk runs XeLaTeX as many times as needed (table of contents, refs,
-    # bookmarks). -halt-on-error + -file-line-error make failures obvious.
     latexmk -xelatex -interaction=nonstopmode -halt-on-error -file-line-error book.tex
     echo "==> Done: $dir/book.pdf"
 }

@@ -8,7 +8,7 @@ WORK=tests/.work
 mkdir -p "$WORK"
 pass=0
 fail=0
-LANGS="${LANGS:-en fa}"
+LANGS="${LANGS:-en fa ar}"
 check_out() {
     if [ "$3" = "$(tr -d '\r' <"$2")" ]; then
         echo "PASS $1"

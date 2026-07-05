@@ -84,11 +84,6 @@ LLVM_CXXLIB     ?= -lstdc++
 LLVM_ZSTD_LIB   ?= -l:libzstd.a
 ifeq ($(WITH_LLVM),1)
   ifeq ($(WITH_LLD),1)
-    # lld pulls in many LLVM components (LTO, LibDriver, WindowsManifest, PDB,
-    # ...). Link against all of them: with static archives the linker only pulls
-    # the objects actually referenced, so this stays correct without hand-listing
-    # lld's full, version-dependent dependency set. (Dynamic builds resolve to
-    # the monolithic -lLLVM regardless.)
     LLVM_COMPONENTS := all
   else
     LLVM_COMPONENTS := core irreader bitwriter analysis orcjit \
@@ -124,11 +119,6 @@ CXXOBJS   := $(LLD_SRCS:src/%.cc=$(BUILD_DIR)/%.o)
 MAIN_OBJ  := $(MAIN_SRC:src/%.c=$(BUILD_DIR)/%.o)
 DEPS      := $(OBJS:.o=.d) $(MAIN_OBJ:.o=.d)
 
-# Embedded cross-compilation sysroots: point SALAM_EMBED_<T>_DIR at a directory
-# holding the target's link inputs (crt objects + libc/import .a's). It is
-# tar'd and baked into the salam binary via .incbin, then extracted to a user
-# cache at first use (see embed_sysroot.c) so a single salam needs no sysroot
-# files on disk. Symbols: salam_embed_<t> / salam_embed_<t>_end.
 EMBED_OBJS :=
 SALAM_EMBED_MUSL_DIR ?=
 ifneq ($(SALAM_EMBED_MUSL_DIR),)
@@ -141,21 +131,22 @@ ifneq ($(SALAM_EMBED_MINGW_DIR),)
   EMBED_OBJS += $(BUILD_DIR)/embed/mingw.o
 endif
 
-.PHONY: all test dist clean debug install uninstall
+.PHONY: all test dist clean debug install uninstall stage-sysroots self-contained
 
 all: $(OUTBIN)
 
 $(OUTBIN): $(OBJS) $(CXXOBJS) $(EMBED_OBJS) $(MAIN_OBJ)
 	$(CC) $(LDFLAGS) $(EXTRA_LDFLAGS) -o $@ $^ $(LDLIBS) $(EXTRA_LDLIBS)
 
-# Bake a sysroot directory into an object via a generated .incbin stub.
-$(BUILD_DIR)/embed/musl.o: $(SALAM_EMBED_MUSL_DIR)
+$(BUILD_DIR)/embed/musl.o:
+	@test -d "$(SALAM_EMBED_MUSL_DIR)" || { echo "SALAM_EMBED_MUSL_DIR='$(SALAM_EMBED_MUSL_DIR)' is not a directory (try 'make stage-sysroots')"; exit 1; }
 	@mkdir -p $(BUILD_DIR)/embed
 	tar cf $(BUILD_DIR)/embed/musl.tar -C "$(SALAM_EMBED_MUSL_DIR)" .
 	printf '.section .rodata\n.global salam_embed_musl\nsalam_embed_musl:\n.incbin "%s"\n.global salam_embed_musl_end\nsalam_embed_musl_end:\n' "$(BUILD_DIR)/embed/musl.tar" > $(BUILD_DIR)/embed/musl.S
 	$(CC) -c $(BUILD_DIR)/embed/musl.S -o $@
 
-$(BUILD_DIR)/embed/mingw.o: $(SALAM_EMBED_MINGW_DIR)
+$(BUILD_DIR)/embed/mingw.o:
+	@test -d "$(SALAM_EMBED_MINGW_DIR)" || { echo "SALAM_EMBED_MINGW_DIR='$(SALAM_EMBED_MINGW_DIR)' is not a directory (try 'make stage-sysroots')"; exit 1; }
 	@mkdir -p $(BUILD_DIR)/embed
 	tar cf $(BUILD_DIR)/embed/mingw.tar -C "$(SALAM_EMBED_MINGW_DIR)" .
 	printf '.section .rodata\n.global salam_embed_mingw\nsalam_embed_mingw:\n.incbin "%s"\n.global salam_embed_mingw_end\nsalam_embed_mingw_end:\n' "$(BUILD_DIR)/embed/mingw.tar" > $(BUILD_DIR)/embed/mingw.S
@@ -177,15 +168,6 @@ test: $(OUTBIN)
 dist: all
 	sh tools/bash/build-release.sh
 
-# ---------------------------------------------------------------------------
-# Self-contained cross-compiling salam (static LLVM + lld, embedded sysroots).
-#
-#   make stage-sysroots   # copy target link inputs from installed packages
-#   make self-contained   # stage + build a single salam that cross-compiles
-#                         # Windows + Linux with no tools/files beside it
-#
-# Prereqs on the BUILD machine: llvm-<v>-dev liblld-<v>-dev mingw-w64 musl-dev.
-# ---------------------------------------------------------------------------
 STAGE_DIR  ?= $(BUILD_DIR)/sysroots
 MUSL_ARCH  ?= x86_64
 MINGW_ARCH ?= x86_64

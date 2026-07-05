@@ -352,6 +352,20 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
             LOG_I(log, PH_DRIVER, "using embedded musl sysroot: %s", sr);
         }
 #    endif
+        /* $SALAM_SYSROOTS/<arch>-linux-musl (parallel to the mingw lookup). */
+        if (!got) {
+            const char *env = getenv("SALAM_SYSROOTS");
+            if (env && env[0]) {
+                char probe[1200];
+                sal_snprintf(sr, sizeof sr, "%s/%s-linux-musl", env, arch);
+                sal_snprintf(probe, sizeof probe, "%s/crt1.o", sr);
+                f = fopen(probe, "rb");
+                if (f) {
+                    fclose(f);
+                    got = 1;
+                }
+            }
+        }
         if (!got) sal_snprintf(sr, sizeof sr, "/usr/lib/%s-linux-musl", arch);
     }
 
@@ -408,8 +422,9 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
     argv[n++] = "--end-group";
     argv[n++] = crtn;
 
-    LOG_I(log, PH_DRIVER, "in-process lld: linking %s -> %s (%s, static musl)", obj, out,
-          t);
+    LOG_I(log, PH_DRIVER,
+          "in-process lld: linking %s -> %s (%s, static musl, sysroot %s)", obj, out, t,
+          sr);
     rc = salam_lld_link(SALAM_LLD_ELF, n, argv);
     if (rc != 0) LOG_E(log, PH_DRIVER, i18n_tr("in-process lld link failed (%d)"), rc);
     return rc == 0 ? 0 : 1;
@@ -463,11 +478,14 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
     }
     fclose(f);
     /* crtbegin/end + libgcc: from the sysroot's lib dir if bundled (flattened,
-     * self-contained), else the system gcc-mingw runtime dir. */
+     * self-contained), else the system gcc-mingw runtime dir. Probe libgcc.a,
+     * not crtbegin.o: Debian ships crtbegin.o in <sysroot>/lib but keeps
+     * libgcc.a in the separate gcc dir, so crtbegin.o alone would wrongly mark
+     * the sysroot self-contained and drop the gcc -L (breaking -lgcc). */
     sal_snprintf(gccdir, sizeof gccdir, "%s/lib", sr);
     {
         char probe[1200];
-        sal_snprintf(probe, sizeof probe, "%s/crtbegin.o", gccdir);
+        sal_snprintf(probe, sizeof probe, "%s/libgcc.a", gccdir);
         f = fopen(probe, "rb");
         if (f) {
             fclose(f);
@@ -510,10 +528,11 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
         LOG_W(log, PH_DRIVER,
               i18n_tr("too many link libraries (%d); only the first 16 were linked"),
               opts->nlink);
-    for (i = 0; i < (int)(sizeof group / sizeof group[0]) && n < 84; i++)
+    /* default mingw libs, wrapped in a group to resolve their circular deps */
+    argv[n++] = "--start-group";
+    for (i = 0; i < (int)(sizeof group / sizeof group[0]) && n < 88; i++)
         argv[n++] = group[i];
-    for (i = 0; i < (int)(sizeof group / sizeof group[0]) && n < 90; i++)
-        argv[n++] = group[i];
+    argv[n++] = "--end-group";
     if (have_gcc) {
         sal_snprintf(crtend, sizeof crtend, "%s/crtend.o", gccdir);
         argv[n++] = crtend;

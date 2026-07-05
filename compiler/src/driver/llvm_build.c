@@ -316,9 +316,10 @@ int driver_llvm_build(options_t *opt)
     int rc = driver_llvm(opt);
     if (rc != 0) {
         fprintf(stderr,
-                i18n_tr("salam: cross-compilation for target '%s' failed. It needs the "
-                        "LLVM toolchain (clang/llc), plus lld for Windows targets "
-                        "(e.g. 'apt install clang lld' or an LLVM release build).\n"),
+                i18n_tr("salam: cross-compilation for target '%s' failed; see the "
+                        "diagnostics above. If they point to a missing toolchain, "
+                        "install the LLVM tools (clang/llc), plus lld and a sysroot for "
+                        "Windows targets.\n"),
                 opt->llvm_target ? opt->llvm_target : "");
     }
     return rc;

@@ -433,10 +433,23 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
     arch = mingw_arch(t);
     emul = mingw_emul(t);
 
-    if (opts->sysroot && opts->sysroot[0])
+    if (opts->sysroot && opts->sysroot[0]) {
         sal_snprintf(sr, sizeof sr, "%s", opts->sysroot);
-    else if (!salam_find_sysroot(t, sr, sizeof sr))
-        sal_snprintf(sr, sizeof sr, "/usr/%s-w64-mingw32", arch);
+    } else {
+        int got = 0;
+#    ifdef SALAM_HAVE_EMBED_MINGW
+        /* Prefer the sysroot baked into the binary: fully self-contained. */
+        if (strcmp(arch, "x86_64") == 0 &&
+            salam_materialize_sysroot("x86_64-w64-mingw32", salam_embed_mingw,
+                                      (size_t)(salam_embed_mingw_end - salam_embed_mingw),
+                                      sr, sizeof sr)) {
+            got = 1;
+            LOG_I(log, PH_DRIVER, "using embedded mingw sysroot: %s", sr);
+        }
+#    endif
+        if (!got && !salam_find_sysroot(t, sr, sizeof sr))
+            sal_snprintf(sr, sizeof sr, "/usr/%s-w64-mingw32", arch);
+    }
 
     sal_snprintf(crt2, sizeof crt2, "%s/lib/crt2.o", sr);
     f = fopen(crt2, "rb");
@@ -448,7 +461,20 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
         return 1;
     }
     fclose(f);
-    have_gcc = find_mingw_gccdir(arch, gccdir, sizeof gccdir);
+    /* crtbegin/end + libgcc: from the sysroot's lib dir if bundled (flattened,
+     * self-contained), else the system gcc-mingw runtime dir. */
+    sal_snprintf(gccdir, sizeof gccdir, "%s/lib", sr);
+    {
+        char probe[1200];
+        sal_snprintf(probe, sizeof probe, "%s/crtbegin.o", gccdir);
+        f = fopen(probe, "rb");
+        if (f) {
+            fclose(f);
+            have_gcc = 1;
+        } else {
+            have_gcc = find_mingw_gccdir(arch, gccdir, sizeof gccdir);
+        }
+    }
 
     argv[n++] = "ld.lld";
     argv[n++] = "-m";

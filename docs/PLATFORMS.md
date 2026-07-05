@@ -81,7 +81,7 @@ is correct (64-bit math just runs via the helper routines on 32-bit).
 > `std/*` does not hard-code `u64` for sizes. Until then, prefer the C backend
 > for production 32-bit builds. The C backend already handles this correctly.
 
-## Release matrix (GitHub Actions: `.github/workflows/build-release.yml`)
+## Release matrix (GitHub Actions: `.github/workflows/compiler-release.yml`)
 
 | Job                  | OS / Arch             | Word size | Backend in the shipped binary                                         |
 | -------------------- | --------------------- | --------- | --------------------------------------------------------------------- |

@@ -79,6 +79,16 @@ static void to_tool_path(const char *host, char *out, size_t cap)
 #endif
 }
 
+static bool triple_is_windows(const char *t)
+{
+    return t && (strstr(t, "windows") || strstr(t, "mingw") || strstr(t, "win32"));
+}
+
+static bool triple_is_wasm(const char *t)
+{
+    return t && strstr(t, "wasm");
+}
+
 static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
 {
     const char *O = opt_flag(opts->opt_level);
@@ -117,7 +127,16 @@ static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
             sb_puts(s, triple);
         }
         if (opts->debug_info) sb_puts(s, " -g");
-        sb_puts(s, " \"$IN\" -lm -o \"$OUT\"\n");
+        if (triple_is_windows(triple)) {
+            /* Windows targets: clang selects the MSVCRT/MinGW CRT (which carries
+             * libm) for the triple; drive the LLVM cross-linker (lld). */
+            sb_puts(s, " -fuse-ld=lld \"$IN\" -o \"$OUT\"\n");
+        } else if (triple_is_wasm(triple)) {
+            /* wasm libc bundles the math routines; no separate -lm. */
+            sb_puts(s, " \"$IN\" -o \"$OUT\"\n");
+        } else {
+            sb_puts(s, " \"$IN\" -lm -o \"$OUT\"\n");
+        }
         break;
     case LLVM_OUT_JIT:
         if (opts->opt_level != LLVM_OPT_O0) {

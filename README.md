@@ -47,6 +47,7 @@ Salam is a general-purpose and systems programming language designed for efficie
 - [🛠️ The Compiler (`salam`)](#-the-compiler-salam)
   - [Build](#build)
   - [Usage](#usage)
+  - [Cross-compilation](#cross-compilation)
 - [🐳 Docker & Docker Compose](#-docker--docker-compose)
   - [Development (live reload)](#development-live-reload)
   - [Production (copy & build)](#production-copy--build)
@@ -191,6 +192,44 @@ func main {
     println("Hello, World!")
 }
 ```
+
+### Cross-compilation
+
+Salam can produce executables and object files for other operating systems and
+architectures using the **LLVM backend**. Pass a full LLVM target triple with
+`--target=<triple>` to `build` or `obj`; when it is present the compiler routes
+through LLVM (`clang`/`llc`) instead of the default C backend, so `--cc` and
+`--keep-c` no longer apply. The output name follows the target's conventions
+(`.exe` for Windows, `.obj` for MSVC objects, none for ELF), and `--output`
+overrides it as usual.
+
+```sh
+# Windows executable from Linux
+salam build main.salam --target=x86_64-pc-windows-msvc --output=app.exe
+
+# WebAssembly (WASI)
+salam build main.salam --target=wasm32-wasi --output=app.wasm
+
+# a target-specific object file
+salam obj main.salam --target=x86_64-pc-windows-msvc      # -> main.obj
+```
+
+**Prerequisites.** Cross-compilation drives the LLVM toolchain, so you need a
+recent `clang`/`llc` (v22 is what the toolchain script invokes), and for Windows
+targets the LLVM linker `lld`. On Debian/Ubuntu:
+
+```sh
+sudo apt install clang lld llvm        # or install an official LLVM release
+```
+
+For Windows targets you also need the target CRT/headers that `clang` links
+against (MinGW-w64 or the MSVC SDK, depending on the `-gnu`/`-msvc` triple).
+Missing tools produce a clear error naming what to install.
+
+> The LLVM backend supports a growing subset of the language; cross-compilation
+> works for programs within that subset. Host-native builds without `--target`
+> continue to use the fast C backend (tcc/gcc/clang) and the full standard
+> library.
 
 ## 🐳 [Docker](https://www.docker.com/) & [Docker Compose](https://docs.docker.com/compose/)
 

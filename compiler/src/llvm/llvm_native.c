@@ -305,6 +305,19 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
 
     if (opts->output_mode == LLVM_OUT_JIT) return jit_run_file(log, ll_path);
 
+    /* Cross-target executables must be linked by the clang driver, which knows
+     * the right CRT/linker for the target OS. The native emit-then-link path
+     * links with the *host* cc, so defer to the toolchain script when the
+     * requested triple is not the host. Object/asm/bitcode emission stays here:
+     * the TargetMachine already honours the triple and needs no linker. */
+    if (opts->output_mode == LLVM_OUT_EXEC && opts->target_triple &&
+        opts->target_triple[0]) {
+        char *ht = LLVMGetDefaultTargetTriple();
+        int cross = !ht || strcmp(ht, opts->target_triple) != 0;
+        if (ht) LLVMDisposeMessage(ht);
+        if (cross) return -1;
+    }
+
     LLVMContextRef ctx = NULL;
     LLVMModuleRef mod = NULL;
     if (parse_ir(log, ll_path, &ctx, &mod) != 0) return 2;

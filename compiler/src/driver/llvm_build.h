@@ -19,4 +19,9 @@
 
 int driver_llvm(options_t *opt);
 
+/* Cross-compilation path for `build`/`obj` when --target is given: compiles the
+ * input through the LLVM backend to a target executable (build) or object (obj)
+ * instead of using the C backend. */
+int driver_llvm_build(options_t *opt);
+
 #endif /* SALAM_DRIVER_LLVM_BUILD_H */

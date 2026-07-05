@@ -39,21 +39,30 @@ static const char *module_of(arena_t *a, const char *path)
     return arena_strndup(a, base, len);
 }
 
-static const char *default_output(arena_t *a, const char *module, llvm_output_mode_t m)
+static bool triple_is_windows(const char *t)
 {
+    return t && (strstr(t, "windows") || strstr(t, "mingw") || strstr(t, "win32"));
+}
+
+static const char *default_output(arena_t *a, const char *module, llvm_output_mode_t m,
+                                  const char *triple)
+{
+    bool win = triple_is_windows(triple);
+    /* MSVC-flavoured targets use the .obj object extension, MinGW/others .o. */
+    bool msvc = triple && strstr(triple, "msvc");
     const char *ext = ".ll";
     switch (m) {
     case LLVM_OUT_ASM:
         ext = ".s";
         break;
     case LLVM_OUT_OBJ:
-        ext = ".o";
+        ext = msvc ? ".obj" : ".o";
         break;
     case LLVM_OUT_BITCODE:
         ext = ".bc";
         break;
     case LLVM_OUT_EXEC:
-        ext = "";
+        ext = win ? ".exe" : "";
         break;
     default:
         ext = ".ll";
@@ -160,7 +169,8 @@ int driver_llvm(options_t *opt)
         if (!opt->keep_c) remove(llpath);
     } else {
         o.output_file =
-            opt->output ? opt->output : default_output(arena, module, o.output_mode);
+            opt->output ? opt->output
+                        : default_output(arena, module, o.output_mode, opt->llvm_target);
         rc = salam_llvm_toolchain(log, llpath, &o);
         if (!opt->keep_c) remove(llpath);
         if (rc == 0) {
@@ -171,5 +181,26 @@ int driver_llvm(options_t *opt)
     }
     logger_free(log);
     arena_free(arena);
+    return rc;
+}
+
+int driver_llvm_build(options_t *opt)
+{
+    /*
+     * Cross-compilation entry point. `salam build/obj --target=<triple>` routes
+     * here (see driver_build) and drives the LLVM backend instead of the C
+     * backend: `build` links a native executable for the target, `obj` stops at
+     * a target-specific object file. --keep-c / --cc are irrelevant on this
+     * path (no C is generated).
+     */
+    opt->llvm_emit = (opt->command == CMD_OBJ) ? (int)LLVM_OUT_OBJ : (int)LLVM_OUT_EXEC;
+    int rc = driver_llvm(opt);
+    if (rc != 0) {
+        fprintf(stderr,
+                i18n_tr("salam: cross-compilation for target '%s' failed. It needs the "
+                        "LLVM toolchain (clang/llc), plus lld for Windows targets "
+                        "(e.g. 'apt install clang lld' or an LLVM release build).\n"),
+                opt->llvm_target ? opt->llvm_target : "");
+    }
     return rc;
 }

@@ -30,11 +30,11 @@
 
 ## ✅ Prerequisites
 
-| Requirement | Notes |
-|---|---|
-| A C compiler | [**tcc**](https://bellard.org/tcc/) (bundled, fast), [gcc](https://gcc.gnu.org/), or [clang](https://clang.llvm.org/) |
-| [CMake](https://cmake.org/) ≥ 3.15 | Optional — needed for the CMake build and test suite |
-| [Git](https://git-scm.com/) | To clone the repository |
+| Requirement                        | Notes                                                                                                                 |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| A C compiler                       | [**tcc**](https://bellard.org/tcc/) (bundled, fast), [gcc](https://gcc.gnu.org/), or [clang](https://clang.llvm.org/) |
+| [CMake](https://cmake.org/) ≥ 3.15 | Optional — needed for the CMake build and test suite                                                                  |
+| [Git](https://git-scm.com/)        | To clone the repository                                                                                               |
 
 No other runtime or library is required. `salam build` inlines a small C runtime into every generated file, so programs link only `-lm`.
 
@@ -157,14 +157,14 @@ salam layout   # layout DSL REPL
 
 ## 📚 Where to go next
 
-| Resource | Description |
-|---|---|
-| [Web Playground](https://salamlang.github.io/Salam/) | Try Salam in your browser — no install needed |
-| [Examples](../examples/en/) | Ready-to-run programs covering basics, types, stdlib, and more |
-| [Editor README](../editor/README.md) | How the WebAssembly playground is built and served |
-| [Platform & word-size support](PLATFORMS.md) | 32-bit vs 64-bit, C backend vs LLVM backend, release matrix |
-| [Contributing Guide](../CONTRIBUTING.md) | How to fork, branch, build, and open a pull request |
-| [Code of Conduct](../CODE_OF_CONDUCT.md) | Community standards |
-| [VS Code extension](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language) | Syntax highlighting and language support for VS Code |
-| [Discord](https://discord.gg/HfY3QHDPdv) | Real-time community chat |
-| [Telegram](https://t.me/SalamProgrammingLanguage) | Community on Telegram |
+| Resource                                                                                                          | Description                                                    |
+| ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| [Web Playground](https://salamlang.github.io/Salam/)                                                              | Try Salam in your browser — no install needed                  |
+| [Examples](../examples/en/)                                                                                       | Ready-to-run programs covering basics, types, stdlib, and more |
+| [Editor README](../editor/README.md)                                                                              | How the WebAssembly playground is built and served             |
+| [Platform & word-size support](PLATFORMS.md)                                                                      | 32-bit vs 64-bit, C backend vs LLVM backend, release matrix    |
+| [Contributing Guide](../CONTRIBUTING.md)                                                                          | How to fork, branch, build, and open a pull request            |
+| [Code of Conduct](../CODE_OF_CONDUCT.md)                                                                          | Community standards                                            |
+| [VS Code extension](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language) | Syntax highlighting and language support for VS Code           |
+| [Discord](https://discord.gg/HfY3QHDPdv)                                                                          | Real-time community chat                                       |
+| [Telegram](https://t.me/SalamProgrammingLanguage)                                                                 | Community on Telegram                                          |

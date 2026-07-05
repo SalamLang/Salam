@@ -35,12 +35,6 @@ static void fb_str(fbuf_t *fb, const char *s, size_t n)
         fb_ch(fb, s[i]);
 }
 
-/*
- * Emit an integer honoring width, precision, and the -, 0, +, space and #
- * flags, for the %zu / %lld family that we format ourselves (rather than
- * delegating to libc, whose z/ll support is not portable). `mag` is the
- * magnitude, `neg` its sign.
- */
 static void emit_int_padded(fbuf_t *fb, uint64_t mag, int neg, int base, int upper,
                             int width, int prec, int fl_minus, int fl_zero, int fl_plus,
                             int fl_space, int fl_hash)

@@ -149,6 +149,77 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/std")
         DESTINATION "${CMAKE_INSTALL_DATADIR}/salam")
 endif()
 
+option(SALAM_BUNDLE_MINGW
+    "Stage a mingw-w64 sysroot into share/salam/sysroots for Windows cross-compilation" OFF)
+set(SALAM_MINGW_ARCH "x86_64" CACHE STRING
+    "Architecture of the bundled mingw sysroot (x86_64|i686|aarch64|armv7)")
+set(SALAM_MINGW_SYSROOT "" CACHE PATH
+    "Path to an existing mingw-w64 sysroot to copy (skips downloading)")
+set(SALAM_MINGW_URL "" CACHE STRING
+    "URL of a mingw-w64 / llvm-mingw archive to download and extract")
+set(SALAM_MINGW_SHA256 "" CACHE STRING
+    "Expected SHA256 of SALAM_MINGW_URL (optional but recommended)")
+
+if(SALAM_BUNDLE_MINGW)
+    set(_mingw_sub "${SALAM_MINGW_ARCH}-w64-mingw32")
+    set(_mingw_src "")
+
+    if(SALAM_MINGW_SYSROOT)
+        if(NOT EXISTS "${SALAM_MINGW_SYSROOT}/include/windows.h")
+            message(FATAL_ERROR
+                "SALAM_MINGW_SYSROOT='${SALAM_MINGW_SYSROOT}' is not a mingw sysroot "
+                "(no include/windows.h)")
+        endif()
+        set(_mingw_src "${SALAM_MINGW_SYSROOT}")
+    elseif(SALAM_MINGW_URL)
+        set(_dl "${CMAKE_BINARY_DIR}/_mingw_dl.archive")
+        if(NOT EXISTS "${_dl}")
+            message(STATUS "Salam: downloading mingw sysroot from ${SALAM_MINGW_URL}")
+            if(SALAM_MINGW_SHA256)
+                file(DOWNLOAD "${SALAM_MINGW_URL}" "${_dl}" SHOW_PROGRESS
+                    EXPECTED_HASH SHA256=${SALAM_MINGW_SHA256} STATUS _dlst)
+            else()
+                message(WARNING "Salam: SALAM_MINGW_SHA256 unset - download is unverified")
+                file(DOWNLOAD "${SALAM_MINGW_URL}" "${_dl}" SHOW_PROGRESS STATUS _dlst)
+            endif()
+            list(GET _dlst 0 _dlcode)
+            if(NOT _dlcode EQUAL 0)
+                file(REMOVE "${_dl}")
+                message(FATAL_ERROR "Salam: mingw sysroot download failed: ${_dlst}")
+            endif()
+        endif()
+        set(_ex "${CMAKE_BINARY_DIR}/_mingw_extract")
+        file(REMOVE_RECURSE "${_ex}")
+        file(MAKE_DIRECTORY "${_ex}")
+        execute_process(
+            COMMAND "${CMAKE_COMMAND}" -E tar xf "${_dl}"
+            WORKING_DIRECTORY "${_ex}" RESULT_VARIABLE _exok)
+        if(NOT _exok EQUAL 0)
+            message(FATAL_ERROR "Salam: failed to extract '${_dl}'")
+        endif()
+        file(GLOB_RECURSE _cand "${_ex}/*/${_mingw_sub}/include/windows.h")
+        if(NOT _cand)
+            file(GLOB_RECURSE _cand "${_ex}/${_mingw_sub}/include/windows.h")
+        endif()
+        if(NOT _cand)
+            message(FATAL_ERROR
+                "Salam: '${_mingw_sub}/include/windows.h' not found in the archive")
+        endif()
+        list(GET _cand 0 _hdr)
+        get_filename_component(_incdir "${_hdr}" DIRECTORY)
+        get_filename_component(_mingw_src "${_incdir}" DIRECTORY)
+    else()
+        message(FATAL_ERROR
+            "SALAM_BUNDLE_MINGW=ON requires SALAM_MINGW_SYSROOT=<dir> or "
+            "SALAM_MINGW_URL=<archive url>")
+    endif()
+
+    install(DIRECTORY "${_mingw_src}/"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/salam/sysroots/${_mingw_sub}"
+        USE_SOURCE_PERMISSIONS)
+    message(STATUS "Salam: bundling mingw sysroot '${_mingw_sub}' from ${_mingw_src}")
+endif()
+
 find_program(SALAM_SH NAMES sh bash)
 
 if(SALAM_BUILD_TESTS AND SALAM_SH)

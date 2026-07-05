@@ -208,10 +208,81 @@ const char *salam_get_stdlib_root(void)
     return g_stdlib_root ? g_stdlib_root : "";
 }
 
+static const char *mingw_sysroot_subdir(const char *triple)
+{
+    if (!triple) return NULL;
+    bool win = strstr(triple, "windows") != NULL || strstr(triple, "mingw") != NULL ||
+               strstr(triple, "win32") != NULL;
+    bool gnu = strstr(triple, "gnu") != NULL || strstr(triple, "mingw") != NULL;
+    if (!win || !gnu) return NULL;
+    if (strstr(triple, "x86_64") || strstr(triple, "amd64")) return "x86_64-w64-mingw32";
+    if (strstr(triple, "aarch64") || strstr(triple, "arm64"))
+        return "aarch64-w64-mingw32";
+    if (strstr(triple, "i686") || strstr(triple, "i386") || strstr(triple, "i586") ||
+        strstr(triple, "x86"))
+        return "i686-w64-mingw32";
+    if (strstr(triple, "armv7") || strstr(triple, "arm")) return "armv7-w64-mingw32";
+    return NULL;
+}
+
+static bool sysroot_looks_valid(const char *dir)
+{
+    char p[1400];
+    FILE *f;
+    sal_snprintf(p, sizeof p, "%s/include/windows.h", dir);
+    f = fopen(p, "rb");
+    if (f) {
+        fclose(f);
+        return true;
+    }
+    return false;
+}
+
+bool salam_find_sysroot(const char *triple, char *out, size_t n)
+{
+    const char *sub = mingw_sysroot_subdir(triple);
+    if (!sub) return false;
+
+    {
+        const char *env = getenv("SALAM_SYSROOTS");
+        if (env && env[0]) {
+            sal_snprintf(out, n, "%s/%s", env, sub);
+            if (sysroot_looks_valid(out)) return true;
+        }
+    }
+    {
+        const char *root = salam_get_stdlib_root();
+        if (root && root[0]) {
+            sal_snprintf(out, n, "%s/sysroots/%s", root, sub);
+            if (sysroot_looks_valid(out)) return true;
+        }
+    }
+    {
+        char exedir[1024];
+        if (get_exe_dir(exedir, sizeof exedir)) {
+            static const char *rel[] = {"sysroots", "../share/salam/sysroots",
+                                        "../lib/salam/sysroots"};
+            size_t i = 0;
+            for (; i < sizeof rel / sizeof rel[0]; i++) {
+                sal_snprintf(out, n, "%s/%s/%s", exedir, rel[i], sub);
+                if (sysroot_looks_valid(out)) return true;
+            }
+        }
+    }
+    return false;
+}
+
 bool salam_find_bundled_tool(const char *name, char *out, size_t n)
 {
     char exedir[1024];
-    static const char *rel[] = {"", "bin", "mingw64/bin", "llvm/bin", "tcc"};
+    static const char *rel[] = {"",
+                                "bin",
+                                "toolchain/bin",
+                                "../toolchain/bin",
+                                "../lib/salam/toolchain/bin",
+                                "mingw64/bin",
+                                "llvm/bin",
+                                "tcc"};
 #if defined(_WIN32)
     static const char *suffix = ".exe";
 #else

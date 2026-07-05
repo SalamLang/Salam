@@ -2,56 +2,69 @@
  * Salam Programming Language - VS Code extension entry point.
  */
 
-const vscode = require("vscode");
-const cp = require("node:child_process");
-const os = require("node:os");
-const fs = require("node:fs");
-const path = require("node:path");
+import * as cp from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import * as vscode from "vscode";
 
 const LANG_ID = "salam";
 const OUTPUT_NAME = "Salam";
 
-/** @type {vscode.OutputChannel} */
-let output;
-/** @type {vscode.Terminal | undefined} */
-let terminal;
+/** Result of running the compiler and capturing its output. */
+interface CaptureResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+  spawnError: ExecError | null;
+}
 
-function cfg() {
+/**
+ * child_process errors carry `code` as a numeric exit code OR a string errno
+ * (e.g. "ENOENT"). The stock @types/node signatures disagree, so we widen it.
+ */
+type ExecError = Error & { code?: number | string };
+
+let output!: vscode.OutputChannel;
+let terminal: vscode.Terminal | undefined;
+
+function cfg(): vscode.WorkspaceConfiguration {
   return vscode.workspace.getConfiguration("salam");
 }
 
-function compilerPath() {
-  return cfg().get("compilerPath", "salamc") || "salamc";
+function compilerPath(): string {
+  return cfg().get<string>("compilerPath", "salam") || "salam";
 }
 
-function shellQuote(arg) {
+function shellQuote(arg: string): string {
   if (arg === "") return '""';
   if (/^[A-Za-z0-9_\-./:\\]+$/.test(arg)) return arg;
   return `"${String(arg).replace(/(["\\$`])/g, "\\$1")}"`;
 }
 
-function detectLang(document) {
-  const choice = cfg().get("languagePack", "auto");
-  if (choice === "en" || choice === "fa") return choice;
+function detectLang(document: vscode.TextDocument): string {
+  const choice = cfg().get<string>("languagePack", "auto");
+  if (choice === "en" || choice === "fa" || choice === "ar") return choice;
 
   const text = document.getText();
   const head = text.slice(0, 4000);
 
-  const m = head.match(/(?:LANG|lang)\s*:\s*([A-Za-z]{2})/);
+  const m = head.match(/(?:LANG|lang|زبان)\s*:\s*([A-Za-z]{2})/);
   if (m) return m[1].toLowerCase();
 
-  const persian = (text.match(/[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]/g) || []).length;
-  return persian >= 3 ? "fa" : "en";
+  if (/[پچژگکی۰-۹]/.test(head)) return "fa";
+  const arabic = (head.match(/[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]/g) || []).length;
+  return arabic >= 3 ? "ar" : "en";
 }
 
-function getTerminal() {
+function getTerminal(): vscode.Terminal {
   if (!terminal || terminal.exitStatus !== undefined) {
     terminal = vscode.window.createTerminal(OUTPUT_NAME);
   }
   return terminal;
 }
 
-async function activeSalamDoc() {
+async function activeSalamDoc(): Promise<vscode.TextDocument | undefined> {
   const editor = vscode.window.activeTextEditor;
   if (!editor || editor.document.languageId !== LANG_ID) {
     vscode.window.showWarningMessage("Salam: open a .salam file first.");
@@ -63,14 +76,14 @@ async function activeSalamDoc() {
   return editor.document;
 }
 
-function commonArgs(document) {
+function commonArgs(document: vscode.TextDocument): string[] {
   const args = [`--lang=${detectLang(document)}`];
-  const stdlib = cfg().get("stdlibPath", "");
+  const stdlib = cfg().get<string>("stdlibPath", "");
   if (stdlib) args.push(`--stdlib-path=${stdlib}`);
   return args;
 }
 
-function runInTerminal(args, cwd) {
+function runInTerminal(args: string[], cwd?: string): void {
   const term = getTerminal();
   term.show(true);
   const cmd = [compilerPath(), ...args].map(shellQuote).join(" ");
@@ -78,49 +91,49 @@ function runInTerminal(args, cwd) {
   term.sendText(cmd);
 }
 
-async function cmdRunWith(subcommand) {
+async function cmdRunWith(subcommand: string): Promise<void> {
   const doc = await activeSalamDoc();
   if (!doc) return;
   const file = doc.uri.fsPath;
   runInTerminal([subcommand, file, ...commonArgs(doc)], path.dirname(file));
 }
 
-async function cmdBuild() {
+async function cmdBuild(): Promise<void> {
   const doc = await activeSalamDoc();
   if (!doc) return;
   const file = doc.uri.fsPath;
-  const out = file.replace(
-    /\.salam$/i,
-    process.platform === "win32" ? ".exe" : "",
-  );
-  runInTerminal(
-    ["build", file, `--output=${out}`, ...commonArgs(doc)],
-    path.dirname(file),
-  );
+  const target = String(cfg().get("build.target", "")).trim();
+  const wantsExe =
+    process.platform === "win32" || /windows|mingw|win32/.test(target);
+  const out = file.replace(/\.salam$/i, wantsExe ? ".exe" : "");
+  const args = ["build", file, `--output=${out}`];
+  if (target) args.push(`--target=${target}`);
+  runInTerminal([...args, ...commonArgs(doc)], path.dirname(file));
 }
 
-function execCapture(args, cwd) {
+function execCapture(args: string[], cwd?: string): Promise<CaptureResult> {
   return new Promise((resolve) => {
     cp.execFile(
       compilerPath(),
       args,
       { cwd, maxBuffer: 32 * 1024 * 1024 },
       (err, stdout, stderr) => {
+        const e = err as ExecError | null;
         resolve({
-          code: err && typeof err.code === "number" ? err.code : err ? 1 : 0,
+          code: e && typeof e.code === "number" ? e.code : e ? 1 : 0,
           stdout: stdout || "",
           stderr: stderr || "",
-          spawnError: err && err.code === "ENOENT" ? err : null,
+          spawnError: e && e.code === "ENOENT" ? e : null,
         });
       },
     );
   });
 }
 
-function reportCompilerMissing() {
+function reportCompilerMissing(): void {
   vscode.window
     .showErrorMessage(
-      `Salam: could not run '${compilerPath()}'. Set "salam.compilerPath" to the salamc executable.`,
+      `Salam: could not run '${compilerPath()}'. Set "salam.compilerPath" to the salam executable.`,
       "Open Settings",
     )
     .then((pick) => {
@@ -133,7 +146,7 @@ function reportCompilerMissing() {
     });
 }
 
-async function cmdEmitXml(flag, languageTitle) {
+async function cmdEmitXml(flag: string, languageTitle: string): Promise<void> {
   const doc = await activeSalamDoc();
   if (!doc) return;
   const file = doc.uri.fsPath;
@@ -155,7 +168,7 @@ async function cmdEmitXml(flag, languageTitle) {
   }
 }
 
-async function formatText(text, lang) {
+async function formatText(text: string, lang: string): Promise<string | null> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "salam-fmt-"));
   const tmpFile = path.join(tmpDir, "document.salam");
   try {
@@ -180,22 +193,24 @@ async function formatText(text, lang) {
     }
     return fs.readFileSync(tmpFile, "utf8");
   } catch (e) {
-    output.appendLine(`[fmt] ${e?.message ? e.message : String(e)}`);
+    const err = e as Error;
+    output.appendLine(`[fmt] ${err?.message ? err.message : String(e)}`);
     return null;
   } finally {
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
-    } catch (_) {}
+    } catch {
+      /* best-effort cleanup */
+    }
   }
 }
 
-function wholeDocumentRange(document) {
+function wholeDocumentRange(document: vscode.TextDocument): vscode.Range {
   const last = document.lineCount - 1;
   return new vscode.Range(0, 0, last, document.lineAt(last).text.length);
 }
 
-/** @type {vscode.DocumentFormattingEditProvider} */
-const formattingProvider = {
+const formattingProvider: vscode.DocumentFormattingEditProvider = {
   async provideDocumentFormattingEdits(document) {
     if (!cfg().get("format.enable", true)) return [];
     const formatted = await formatText(
@@ -207,7 +222,7 @@ const formattingProvider = {
   },
 };
 
-async function cmdFormat() {
+async function cmdFormat(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor || editor.document.languageId !== LANG_ID) {
     vscode.window.showWarningMessage("Salam: open a .salam file first.");
@@ -216,7 +231,11 @@ async function cmdFormat() {
   await vscode.commands.executeCommand("editor.action.formatDocument");
 }
 
-async function cmdNewProject() {
+interface LangPickItem extends vscode.QuickPickItem {
+  value: string;
+}
+
+async function cmdNewProject(): Promise<void> {
   const name = await vscode.window.showInputBox({
     prompt: "Project name",
     placeHolder: "my-salam-app",
@@ -227,10 +246,11 @@ async function cmdNewProject() {
   });
   if (!name) return;
 
-  const langPick = await vscode.window.showQuickPick(
+  const langPick = await vscode.window.showQuickPick<LangPickItem>(
     [
       { label: "English (en)", value: "en" },
       { label: "فارسی (fa)", value: "fa" },
+      { label: "العربية (ar)", value: "ar" },
     ],
     { placeHolder: "Keyword language pack for the new project" },
   );
@@ -241,13 +261,13 @@ async function cmdNewProject() {
   runInTerminal(["new", name, `--lang=${langPick.value}`], cwd);
 }
 
-function activate(context) {
+export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel(OUTPUT_NAME);
   context.subscriptions.push(output);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("salam.run", () =>
-      cmdRunWith(cfg().get("run.command", "exec")),
+      cmdRunWith(cfg().get<string>("run.command", "exec")),
     ),
     vscode.commands.registerCommand("salam.exec", () => cmdRunWith("exec")),
     vscode.commands.registerCommand("salam.build", cmdBuild),
@@ -269,8 +289,6 @@ function activate(context) {
   );
 }
 
-function deactivate() {
+export function deactivate(): void {
   if (terminal) terminal.dispose();
 }
-
-module.exports = { activate, deactivate };

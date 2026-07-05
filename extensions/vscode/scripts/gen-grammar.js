@@ -482,4 +482,4 @@ const grammar = {
   },
 };
 
-process.stdout.write(`${JSON.stringify(grammar, null, "\t")}\n`);
+process.stdout.write(`${JSON.stringify(grammar, null, 2)}\n`);

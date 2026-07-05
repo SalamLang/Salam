@@ -46,6 +46,10 @@ typedef struct {
     llvm_output_mode_t output_mode;
     const char *output_file;
     const char *target_triple;
+    const char *const *link_libs;
+    const char *const *link_kinds;
+    int nlink;
+    const char *sysroot;
 } codegen_llvm_options_t;
 
 void codegen_llvm_options_default(codegen_llvm_options_t *o);

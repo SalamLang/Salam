@@ -107,8 +107,13 @@ static int untar(const unsigned char *tar, size_t len, const char *dest)
         size = tar_oct(h + 124, 12);
         type = (char)h[156];
         off += 512;
+        /* The payload must fit in the remaining buffer. Check this BEFORE the
+         * ceil-to-block math so a malformed huge size can't overflow size+511
+         * (wrapping to a small `blocks` that would bypass the bound check and
+         * over-read). off <= len here, so len - off does not underflow. */
+        if (size > len - off) break;
         blocks = (size_t)((size + 511) / 512);
-        if (size > len || off + blocks * 512 > len) break;
+        if (off + blocks * 512 > len) break;
 
         if (type == 'L') {
             size_t cp = size < sizeof longname ? (size_t)size : sizeof longname - 1;

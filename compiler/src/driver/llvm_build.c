@@ -113,10 +113,13 @@ static void ll_scan_links(ast_node_t *prog, const char **libs, const char **kind
     }
 }
 
-static void ll_enqueue_imports(arena_t *a, ast_node_t *prog, const char *dir,
-                               const char **work, int *nwork, int cap)
+/* Returns the number of fresh imports that could NOT be enqueued because the
+ * worklist is at capacity (so the caller can warn instead of silently dropping). */
+static int ll_enqueue_imports(arena_t *a, ast_node_t *prog, const char *dir,
+                              const char **work, int *nwork, int cap)
 {
-    if (!prog) return;
+    int dropped = 0;
+    if (!prog) return 0;
     {
         size_t k = 0;
         for (; k < prog->list.len; k++) {
@@ -136,9 +139,14 @@ static void ll_enqueue_imports(arena_t *a, ast_node_t *prog, const char *dir,
                         break;
                     }
             }
-            if (!seen && *nwork < cap) work[(*nwork)++] = ip;
+            if (seen) continue;
+            if (*nwork < cap)
+                work[(*nwork)++] = ip;
+            else
+                dropped++;
         }
     }
+    return dropped;
 }
 
 static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
@@ -148,10 +156,10 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
 {
     int n = 0;
     const char *work[256];
-    int nwork = 0, wi = 0;
+    int nwork = 0, wi = 0, dropped = 0;
 
     ll_scan_links(main_prog, libs, kinds, &n, cap);
-    ll_enqueue_imports(a, main_prog, dir_of(a, main_path), work, &nwork, 256);
+    dropped += ll_enqueue_imports(a, main_prog, dir_of(a, main_path), work, &nwork, 256);
 
     for (; wi < nwork; wi++) {
         const char *path = work[wi];
@@ -179,8 +187,14 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
             }
         }
         ll_scan_links(prog, libs, kinds, &n, cap);
-        ll_enqueue_imports(a, prog, dir_of(a, path), work, &nwork, 256);
+        dropped += ll_enqueue_imports(a, prog, dir_of(a, path), work, &nwork, 256);
     }
+    if (dropped > 0)
+        LOG_W(log, PH_DRIVER,
+              i18n_tr("import graph exceeds the %d-file scan limit; %d import(s) were "
+                      "skipped when collecting link directives, so some libraries may "
+                      "be missing at link time"),
+              (int)(sizeof work / sizeof work[0]), dropped);
     return n;
 }
 

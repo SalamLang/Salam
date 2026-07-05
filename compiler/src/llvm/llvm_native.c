@@ -194,12 +194,15 @@ static int link_executable(logger_t *log, const char *obj, const char *out,
         for (; i < opts->nlink; i++) {
             const char *spec = opts->link_libs[i];
             if (!spec) continue;
+            /* Shell-escape: `spec` comes from a `link "..."` directive and this
+             * command is run via system(); an unescaped name would allow shell
+             * injection (e.g. link "x; rm -rf /"). */
             if (spec[0] == '-' || strpbrk(spec, "/\\.") != NULL) {
                 sb_puts(&cmd, " ");
-                sb_puts(&cmd, spec);
+                sb_put_shell_arg(&cmd, spec);
             } else {
                 sb_puts(&cmd, " -l");
-                sb_puts(&cmd, spec);
+                sb_put_shell_arg(&cmd, spec);
             }
         }
     }

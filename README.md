@@ -243,13 +243,19 @@ cmake -B build -DSALAM_BUNDLE_MINGW=ON \
 cmake --build build && cmake --install build
 ```
 
-Point `$SALAM_SYSROOTS` at a directory of `<triple>/` sysroots to override or
-add targets without rebuilding.
+Point `$SALAM_SYSROOTS` at a directory holding per-target sysroot subdirectories
+to override or add targets without rebuilding. Automatic discovery names them by
+toolchain, not by the raw triple: `<arch>-w64-mingw32/` for `*-windows-gnu`
+(e.g. `x86_64-w64-mingw32/`) and `<arch>-linux-musl/` for `*-linux-musl`
+(e.g. `x86_64-linux-musl/`).
 
-> **MSVC / macOS targets.** Microsoft's and Apple's SDKs are not redistributable,
-> so `*-windows-msvc` and `*-apple-darwin` sysroots can't be bundled; supply them
-> yourself (e.g. [`xwin`](https://github.com/Jake-Shadle/xwin) for MSVC) and expose
-> them via `$SALAM_SYSROOTS`. Prefer the `-windows-gnu` (MinGW) triple on Linux.
+> **MSVC / macOS targets.** Automatic sysroot discovery currently handles only
+> MinGW (`*-windows-gnu`) and musl (`*-linux-musl`). Microsoft's and Apple's SDKs
+> are not redistributable and aren't auto-discovered, so for `*-windows-msvc` and
+> `*-apple-darwin` you must supply a toolchain/sysroot yourself (e.g.
+> [`xwin`](https://github.com/Jake-Shadle/xwin) for MSVC) and drive `clang`
+> manually via `salam llvm` until first-class selection for those targets lands.
+> On Linux, prefer the `-windows-gnu` (MinGW) triple.
 >
 > The LLVM backend supports a growing subset of the language; cross-compilation
 > works for self-contained programs and their imports within that subset.

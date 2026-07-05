@@ -54,9 +54,9 @@ const char *langpack_marker_code(const char *text, size_t len)
     static const char fa_val[] = "\xd9\x81\xd8\xa7\xd8\xb1\xd8\xb3\xdb\x8c";
     static const char en_val[] = "\xd8\xa7\xd9\x86\xda\xaf\xd9\x84\xdb\x8c"
                                  "\xd8\xb3\xdb\x8c";
-    static const char ar_tag[] = "\xd9\x84\xd8\xba\xd8\xa9"; /* لغة (6) */
+    static const char ar_tag[] = "\xd9\x84\xd8\xba\xd8\xa9";
     static const char ar_val[] = "\xd8\xa7\xd9\x84\xd8\xb9\xd8\xb1\xd8\xa8\xd9\x8a"
-                                 "\xd8\xa9"; /* العربية (14) */
+                                 "\xd8\xa9";
     size_t i = 0;
     int line = 0;
     while (i < len && line < 8) {

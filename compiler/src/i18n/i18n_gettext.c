@@ -533,9 +533,9 @@ static const i18n_pair_t k_msg_fa[] = {
     {"value is not index-assignable", "این مقدار قابل انتساب با اندیس نیست"},
     {"cannot slice a non-array value",
      "نمی‌توان از مقداری که آرایه نیست برش گرفت"},
-    {"invalid assignment target", "هدفِ انتساب نامعتبر است"},
+    {"invalid assignment target", "هدف انتساب نامعتبر است"},
     {"cannot assign to member of non-struct",
-     "نمی‌توان به عضوِ چیزی که ساختار نیست "
+     "نمی‌توان به عضو چیزی که ساختار نیست "
      "مقدار داد"},
     {"cannot access member '%s'", "دسترسی به عضو '%s' ممکن نیست"},
     {"cannot evaluate %s", "ارزیابی %s ممکن نیست"},
@@ -543,13 +543,13 @@ static const i18n_pair_t k_msg_fa[] = {
     {"division by zero", "تقسیم بر صفر"},
     {"modulo by zero", "باقیمانده بر صفر"},
     {"unsupported arithmetic operator",
-     "عملگر حسابیِ پشتیبانی‌نشده"},
+     "عملگر حسابی پشتیبانی‌نشده"},
     {"index %lld out of range (len %zu)", "اندیس %lld خارج از محدوده است (طول %zu)"},
     {"index out of range in assignment", "اندیس در انتساب خارج از محدوده است"},
     {"string index out of range", "اندیس رشته خارج از محدوده است"},
     {"vector index %lld out of range (len %zu)",
      "اندیس وکتور %lld خارج از محدوده است (طول %zu)"},
-    {"pop from empty vector", "برداشتن از وکتورِ خالی"},
+    {"pop from empty vector", "برداشتن از وکتور خالی"},
     {"len() expects an array, string, or map",
      "‹len()› یک آرایه، رشته یا نگاشت می‌خواهد"},
     {"method '%s' is not available on this value",
@@ -559,7 +559,7 @@ static const i18n_pair_t k_msg_fa[] = {
     {"struct '%s' has no field '%s'", "ساختار '%s' فیلدی به نام '%s' ندارد"},
     {"struct '%s' has no method '%s'", "ساختار '%s' متدی به نام '%s' ندارد"},
 
-    {"unknown language pack", "بسته‌ی زبانیِ ناشناخته"},
+    {"unknown language pack", "بسته‌ی زبانی ناشناخته"},
     {"compilation failed", "کامپایل ناموفق بود"},
     {"layout build failed", "ساخت چیدمان ناموفق بود"},
     {"this program has no layout block; use a `layout:` block to build an HTML page",
@@ -680,6 +680,7 @@ static const i18n_pair_t k_msg_fa[] = {
      "استنتاج کرد"},
 
     {NULL, NULL}};
+
 const char *i18n_tr(const char *msgid)
 {
     if (!msgid) return msgid;

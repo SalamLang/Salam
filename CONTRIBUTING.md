@@ -54,8 +54,8 @@ Before opening an issue, search the [existing issues](https://github.com/SalamLa
 
 We provide two issue templates to keep reports clear and actionable:
 
-- **Bug report** — use this when something is broken or behaves unexpectedly. Include steps to reproduce the problem, what you expected to happen, and details about your environment (OS, compiler version, etc.).
-- **Feature request** — use this to propose a new capability or improvement. Describe the problem you are trying to solve and why it would benefit others.
+- **Bug report** - use this when something is broken or behaves unexpectedly. Include steps to reproduce the problem, what you expected to happen, and details about your environment (OS, compiler version, etc.).
+- **Feature request** - use this to propose a new capability or improvement. Describe the problem you are trying to solve and why it would benefit others.
 
 Both templates are available when you click **New issue** on GitHub. Fill in all the relevant sections so maintainers can triage your report quickly.
 
@@ -91,7 +91,7 @@ Both templates are available when you click **New issue** on GitHub. Fill in all
    git checkout -b feature/my-new-feature
    ```
 
-   > **Important**: Always use a fresh branch per PR. Never reuse a branch that was already merged or submitted as a PR — start from a clean, up-to-date `main` each time.
+   > **Important**: Always use a fresh branch per PR. Never reuse a branch that was already merged or submitted as a PR; start from a clean, up-to-date `main` each time.
 
 6. **Make Changes**: Implement your changes to the code, documentation, or tests as necessary.
 
@@ -128,7 +128,7 @@ Or with CMake:
 cmake -B build && cmake --build build
 ```
 
-**Hello, World** — save the following as `hello.salam`:
+**Hello, World** - save the following as `hello.salam`:
 
 ```salam
 func main {
@@ -143,7 +143,7 @@ salam build hello.salam --output=hello
 ./hello
 ```
 
-**Layout DSL** — compile a `.salam` layout page to HTML/CSS/JS:
+**Layout DSL** - compile a `.salam` layout page to HTML/CSS/JS:
 
 ```bash
 salam layout build page.salam --inline
@@ -214,7 +214,7 @@ On GitHub, navigate to your fork and click **Compare & pull request**. Fill in t
 
 ### 8. Address review feedback
 
-Make the requested changes locally, commit them, and push to the same branch — the PR updates automatically:
+Make the requested changes locally, commit them, and push to the same branch; the PR updates automatically:
 
 ```bash
 git add .
@@ -275,7 +275,7 @@ Because rebase rewrites history, you need to force-push after rebasing a branch 
 git push --force-with-lease origin fix/describe-the-fix
 ```
 
-Use `--force-with-lease` rather than `--force` — it refuses to overwrite if someone else has pushed to the branch since your last fetch, protecting against accidental data loss.
+Use `--force-with-lease` rather than `--force`; it refuses to overwrite if someone else has pushed to the branch since your last fetch, protecting against accidental data loss.
 
 ## 📝 Code Style and Guidelines
 
@@ -455,7 +455,7 @@ All checks must pass before a pull request can be merged. If a check fails:
 
 1. Open the **Checks** tab on your PR and click the failing workflow name.
 2. Expand the failing step to read the log output.
-3. Fix the issue locally, commit, and push — the checks re-run automatically.
+3. Fix the issue locally, commit, and push; the checks re-run automatically.
 
 If you are unsure why a check failed, leave a comment on the PR and a maintainer will help you.
 

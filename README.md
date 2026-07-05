@@ -18,17 +18,18 @@ Salam is a general-purpose and systems programming language designed for efficie
 
 </div>
 
-[![Basic Checks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/test-git-clone.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/test-git-clone.yml)
-[![Dependabot Updates Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates)
-[![GitHub Pages Build Deployment Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment)
-[![Pull Request Labeler Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml)
-[![Prek Standard Hooks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/prek.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/prek.yml)
-[![Prek Manual Hooks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/prek-manual.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/prek-manual.yml)
-[![Prek Audit Hooks Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/prek-audit.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/prek-audit.yml)
-[![Docker Build & Test Alpine + LLVM 22 Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/make-run.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/make-run.yml)
-[![Build and Release Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/build-release.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/build-release.yml)
-[![Super-Linter Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/super-linter.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/super-linter.yml)
-[![WebAssembly Workflow Status](https://github.com/SalamLang/Salam/actions/workflows/web-assembly-build-deploy.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/web-assembly-build-deploy.yml)
+[![Compiler - Build & Test](https://github.com/SalamLang/Salam/actions/workflows/compiler-build-test.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/compiler-build-test.yml)
+[![Compiler - Clone & Build](https://github.com/SalamLang/Salam/actions/workflows/compiler-clone-build.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/compiler-clone-build.yml)
+[![Compiler - Build & Release](https://github.com/SalamLang/Salam/actions/workflows/compiler-release.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/compiler-release.yml)
+[![Editor - Playground (WebAssembly)](https://github.com/SalamLang/Salam/actions/workflows/editor-playground-deploy.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/editor-playground-deploy.yml)
+[![Books - Build & Validate PDFs](https://github.com/SalamLang/Salam/actions/workflows/books-build-pdf.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/books-build-pdf.yml)
+[![Lint - Super-Linter](https://github.com/SalamLang/Salam/actions/workflows/lint-super-linter.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/lint-super-linter.yml)
+[![Lint - Prek Standard Hooks](https://github.com/SalamLang/Salam/actions/workflows/lint-prek.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/lint-prek.yml)
+[![Lint - Prek Manual Hooks](https://github.com/SalamLang/Salam/actions/workflows/lint-prek-manual.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/lint-prek-manual.yml)
+[![Lint - Prek Audit Hooks](https://github.com/SalamLang/Salam/actions/workflows/lint-prek-audit.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/lint-prek-audit.yml)
+[![PR - Pull Request Labeler](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pr-labeler.yml)
+[![Dependabot Updates](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/dependabot/dependabot-updates)
+[![GitHub Pages Build Deployment](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/pages/pages-build-deployment)
 [![VS Code Marketplace Version](https://vsmarketplacebadges.dev/version/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 [![VS Code Marketplace Installs](https://vsmarketplacebadges.dev/installs/salamlanguage.salam-programming-language.svg)](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language)
 
@@ -50,6 +51,7 @@ Salam is a general-purpose and systems programming language designed for efficie
   - [Development (live reload)](#development-live-reload)
   - [Production (copy & build)](#production-copy--build)
   - [Plain Docker (without Compose)](#plain-docker-without-compose)
+  - [Books (XeLaTeX)](#books-xelatex)
 - [🚀 Bun Workspaces: Multi-App Development & Static Site Guide](#-bun-workspaces-multi-app-development--static-site-guide)
   - [🚀 1. Quickstart Execution Guide](#-1-quickstart-execution-guide)
   - [📁 2. Monorepo Architecture & Core Setup](#-2-monorepo-architecture--core-setup)
@@ -249,6 +251,31 @@ docker run --rm -it -v "$PWD/compiler":/app salam:dev                           
 > (`--build-arg LLVM_VERSION=22`, `--build-arg ALPINE_VERSION=edge`). LLVM 22
 > currently lives in Alpine's `edge` repositories, which is why `edge` is the
 > default base.
+
+### Books (XeLaTeX)
+
+The tutorial books have their own image under
+[`books/docker/`](books/docker/) so you can typeset them without installing a
+local TeX distribution. One **common** [XeLaTeX](https://tug.org/xetex/) image
+builds **both** languages: it is based on the full
+[TeX Live](https://tug.org/texlive/) scheme, which already bundles
+[`xepersian`](https://ctan.org/pkg/xepersian) (for the heavier right-to-left
+Persian book), `polyglossia` + `tcolorbox` (for the lighter English book) and
+Latin Modern. The `books/` tree is bind-mounted, so the generated PDFs are
+written back to the host at `books/<lang>/intro-programming/book.pdf`:
+
+```sh
+docker compose -f books/docker/docker-compose.yml run --rm books        # both
+docker compose -f books/docker/docker-compose.yml run --rm books en     # English only
+docker compose -f books/docker/docker-compose.yml run --rm books fa     # Persian only
+```
+
+Or with plain Docker (build once, then run against the mounted `books/` tree):
+
+```sh
+docker build -t salam-books books/docker
+docker run --rm -v "$PWD/books":/books salam-books all
+```
 
 ## 🚀 [Bun](https://bun.sh/) Workspaces: Multi-App Development & Static Site Guide
 
@@ -495,9 +522,9 @@ The repository ships a [MyST (Markedly Structured Text)](https://mystmd.org/) do
 
 #### Configuration Files
 
-- **[`myst.yml`](myst.yml)** — MyST project config (site template, repository link, and custom style file).
-- **[`.readthedocs.yaml`](.readthedocs.yaml)** — [Read the Docs](https://readthedocs.org/) build config used to host the generated documentation.
-- **`_build/`** — generated static output directory from `myst build --html` (including `_build/html/`), ignored by git in [`.gitignore`](.gitignore).
+- **[`myst.yml`](myst.yml)** - MyST project config (site template, repository link, and custom style file).
+- **[`.readthedocs.yaml`](.readthedocs.yaml)** - [Read the Docs](https://readthedocs.org/) build config used to host the generated documentation.
+- **`_build/`** - generated static output directory from `myst build --html` (including `_build/html/`), ignored by git in [`.gitignore`](.gitignore).
 
 #### Running the Documentation Locally
 
@@ -527,9 +554,9 @@ Together, let’s make coding accessible to all.
 
 ## 🔍 Joining Code Reviews
 
-**Everyone is welcome — and encouraged — to participate in code reviews.** You do not need to be a core maintainer to review a pull request. In fact, reviewing PRs is one of the most impactful ways to contribute to Salam, and we want to make it as approachable as possible.
+**Everyone is welcome, and encouraged, to participate in code reviews.** You do not need to be a core maintainer to review a pull request. In fact, reviewing PRs is one of the most impactful ways to contribute to Salam, and we want to make it as approachable as possible.
 
-> 💡 **Code review is harder than writing code.** Reading someone else's work, understanding their intent, spotting edge cases, and communicating feedback kindly and clearly takes real skill. If you are doing it, thank you — it matters enormously.
+> 💡 **Code review is harder than writing code.** Reading someone else's work, understanding their intent, spotting edge cases, and communicating feedback kindly and clearly takes real skill. If you are doing it, thank you; it matters enormously.
 
 ### How a GitHub PR Review Works
 
@@ -537,7 +564,7 @@ Open any pull request, then click the **Files changed** tab to see a diff of eve
 
 #### Leaving an inline comment
 
-1. Hover over any line number in the diff — a blue **`+`** button appears.
+1. Hover over any line number in the diff; a blue **`+`** button appears.
 2. Click it to open a comment box for that specific line or block.
 3. Write your thought, then click **Start a review** (not "Add single comment") so all your notes are batched together.
 
@@ -551,7 +578,7 @@ your replacement code here
 ```
 ````
 
-The author can accept your suggestion with a single click — no manual editing required.
+The author can accept your suggestion with a single click, no manual editing required.
 
 #### Submitting the review
 
@@ -560,9 +587,9 @@ When you have finished reading all the files:
 1. Click the green **Review changes** button (top right of the diff).
 2. Write an overall summary comment.
 3. Choose one of three outcomes:
-   - 💬 **Comment** — share thoughts without formally approving or blocking. Great for questions, first-timer feedback, or discussion starters.
-   - ✅ **Approve** — you are satisfied with the changes. This is the **green tick** that moves a PR toward merging. Only approve if you have read the changes carefully.
-   - 🚫 **Request changes** — something needs to be fixed before the PR can merge. Be specific and constructive.
+   - 💬 **Comment** - share thoughts without formally approving or blocking. Great for questions, first-timer feedback, or discussion starters.
+   - ✅ **Approve** - you are satisfied with the changes. This is the **green tick** that moves a PR toward merging. Only approve if you have read the changes carefully.
+   - 🚫 **Request changes** - something needs to be fixed before the PR can merge. Be specific and constructive.
 4. Click **Submit review**.
 
 #### Tips for great reviews
@@ -577,9 +604,9 @@ When you have finished reading all the files:
 
 Consistent reviewers and contributors are noticed. Active participation in reviews, issues, and discussions is how community members become trusted collaborators. Over time, standout contributors may be invited to join the **Salam core team** and take on additional responsibilities:
 
-- 🏷️ **Triage role** — help label, categorise, and prioritise incoming issues and pull requests.
-- 🛡️ **Discord / Telegram moderator** — help keep real-time channels welcoming and on-topic.
-- 🔑 **Maintainer access** — merge PRs, manage releases, and help shape the roadmap.
+- 🏷️ **Triage role** - help label, categorise, and prioritise incoming issues and pull requests.
+- 🛡️ **Discord / Telegram moderator** - help keep real-time channels welcoming and on-topic.
+- 🔑 **Maintainer access** - merge PRs, manage releases, and help shape the roadmap.
 
 ### 💬 Real-Time Community
 
@@ -590,7 +617,7 @@ The Salam core team lives in our real-time channels. Join us to ask questions, s
 | **Discord** | [discord.gg/HfY3QHDPdv](https://discord.gg/HfY3QHDPdv) |
 | **Telegram** | [t.me/SalamProgrammingLanguage](https://t.me/SalamProgrammingLanguage) |
 
-These spaces are open to everyone — from curious newcomers to experienced systems programmers. The more voices the better.
+These spaces are open to everyone, from curious newcomers to experienced systems programmers. The more voices the better.
 
 ---
 
@@ -604,7 +631,7 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[AST (Abstract Syntax Tree)](https://en.wikipedia.org/wiki/Abstract_syntax_tree)** | Tree representation of parsed source code. Each node represents a construct (expression, statement, declaration). The Salam compiler builds an AST before semantic analysis and code generation. |
 | **[Biome](https://biomejs.dev/)** | Fast JavaScript/TypeScript linter and formatter. Run as a prek hook (`biome-check`). |
 | **[Bun](https://bun.sh/)** | JavaScript runtime, package manager, and bundler. Used in the Salam monorepo to manage workspaces and run dev servers. |
-| **[C ABI](https://en.wikipedia.org/wiki/Application_binary_interface)** | C Application Binary Interface — the low-level contract for how functions are called and data is laid out in memory. Salam's FFI and `extern "C"` declarations rely on the C ABI. |
+| **[C ABI](https://en.wikipedia.org/wiki/Application_binary_interface)** | C Application Binary Interface, the low-level contract for how functions are called and data is laid out in memory. Salam's FFI and `extern "C"` declarations rely on the C ABI. |
 | **[CI (Continuous Integration)](https://en.wikipedia.org/wiki/Continuous_integration)** | Automated pipeline that builds, tests, and lints every pull request. Salam uses GitHub Actions for CI. |
 | **[Clang](https://clang.llvm.org/)** | LLVM-based C compiler. One of the supported backends for building the Salam compiler. |
 | **[Cloudflare Workers](https://workers.cloudflare.com/)** | Serverless compute platform that runs JavaScript/TypeScript at the edge. The `runner/` workspace deploys to Cloudflare Workers via Wrangler. |
@@ -626,7 +653,7 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[GitHub Actions](https://docs.github.com/en/actions)** | Salam's CI/CD platform. Workflows are defined in `.github/workflows/`. |
 | **Layout DSL** | Salam's built-in sublanguage for describing UIs. `layout:` blocks, or `.salam` files processed with `salam layout build`, compile to HTML, CSS, and JavaScript. |
 | **[Lexer](https://en.wikipedia.org/wiki/Lexical_analysis)** | First stage of the compiler pipeline: reads source text and produces a stream of tokens. |
-| **[LLVM](https://llvm.org/)** | Low Level Virtual Machine — a compiler infrastructure project. Used as an optional backend (`clang-22`, `llc-22`, `opt-22`, `lli-22` are included in the Docker image). |
+| **[LLVM](https://llvm.org/)** | Low Level Virtual Machine, a compiler infrastructure project. Used as an optional backend (`clang-22`, `llc-22`, `opt-22`, `lli-22` are included in the Docker image). |
 | **[Makefile](https://www.gnu.org/software/make/)** | GNU Make build script (`compiler/Makefile`). Running `make` from `compiler/` produces a release build of the `salam` binary at the repository root. |
 | **[Markdownlint](https://github.com/igorshubovych/markdownlint-cli)** | Linter for Markdown files. Enforces consistent style in `README.md`, `CONTRIBUTING.md`, and other docs. |
 | **[musl](https://musl.libc.org/)** | A C standard library used by Alpine Linux. Salam's Docker images are based on Alpine + musl for a minimal footprint. |
@@ -639,7 +666,7 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[Prettier](https://prettier.io/)** | Opinionated code formatter for JavaScript, TypeScript, CSS, and JSON. Run as a prek hook. |
 | **[React](https://react.dev/)** | JavaScript library for building user interfaces with a component model. Used in the `vercel-editor/` workspace. |
 | **[Read the Docs](https://readthedocs.org/)** | Free documentation hosting platform. Salam's MyST docs are automatically built and published there via `.readthedocs.yaml`. |
-| **[REPL](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop)** | Read-Eval-Print Loop — an interactive session where you type expressions and see results immediately. `salam cli` starts a general REPL; `salam layout` starts a layout REPL. |
+| **[REPL](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop)** | Read-Eval-Print Loop, an interactive session where you type expressions and see results immediately. `salam cli` starts a general REPL; `salam layout` starts a layout REPL. |
 | **[RTL (Right-to-Left)](https://en.wikipedia.org/wiki/Right-to-left_script)** | Text direction used by Arabic and Persian scripts. The Salam web playground supports RTL and switches direction when the Persian language is selected. |
 | **[Semantic Analyzer](https://en.wikipedia.org/wiki/Semantic_analysis_(compilers))** | Third stage of the compiler pipeline: resolves names, checks types, and validates the AST before code generation. |
 | **[SemVer (Semantic Versioning)](https://semver.org/)** | Version numbering scheme (`MAJOR.MINOR.PATCH`). Used by Bun's interactive update tooling and GitHub releases. |

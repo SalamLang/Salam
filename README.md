@@ -50,6 +50,7 @@ Salam is a general-purpose and systems programming language designed for efficie
   - [Development (live reload)](#development-live-reload)
   - [Production (copy & build)](#production-copy--build)
   - [Plain Docker (without Compose)](#plain-docker-without-compose)
+  - [Books (XeLaTeX)](#books-xelatex)
 - [🚀 Bun Workspaces: Multi-App Development & Static Site Guide](#-bun-workspaces-multi-app-development--static-site-guide)
   - [🚀 1. Quickstart Execution Guide](#-1-quickstart-execution-guide)
   - [📁 2. Monorepo Architecture & Core Setup](#-2-monorepo-architecture--core-setup)
@@ -249,6 +250,31 @@ docker run --rm -it -v "$PWD/compiler":/app salam:dev                           
 > (`--build-arg LLVM_VERSION=22`, `--build-arg ALPINE_VERSION=edge`). LLVM 22
 > currently lives in Alpine's `edge` repositories, which is why `edge` is the
 > default base.
+
+### Books (XeLaTeX)
+
+The tutorial books have their own image under
+[`books/docker/`](books/docker/) so you can typeset them without installing a
+local TeX distribution. One **common** [XeLaTeX](https://tug.org/xetex/) image
+builds **both** languages: it is based on the full
+[TeX Live](https://tug.org/texlive/) scheme, which already bundles
+[`xepersian`](https://ctan.org/pkg/xepersian) (for the heavier right-to-left
+Persian book), `polyglossia` + `tcolorbox` (for the lighter English book) and
+Latin Modern. The `books/` tree is bind-mounted, so the generated PDFs are
+written back to the host at `books/<lang>/intro-programming/book.pdf`:
+
+```sh
+docker compose -f books/docker/docker-compose.yml run --rm books        # both
+docker compose -f books/docker/docker-compose.yml run --rm books en     # English only
+docker compose -f books/docker/docker-compose.yml run --rm books fa     # Persian only
+```
+
+Or with plain Docker (build once, then run against the mounted `books/` tree):
+
+```sh
+docker build -t salam-books books/docker
+docker run --rm -v "$PWD/books":/books salam-books all
+```
 
 ## 🚀 [Bun](https://bun.sh/) Workspaces: Multi-App Development & Static Site Guide
 

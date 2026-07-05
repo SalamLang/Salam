@@ -20,6 +20,24 @@
 #include "i18n/i18n.h"
 #include <stdlib.h>
 
+#ifdef SALAM_HAVE_LLD
+#  include "llvm/lld_link.h"
+#  if !defined(_WIN32)
+#    include <dirent.h>
+#  endif
+#endif
+
+#ifdef SALAM_HAVE_EMBED_MUSL
+#  include "driver/embed_sysroot.h"
+extern const unsigned char salam_embed_musl[];
+extern const unsigned char salam_embed_musl_end[];
+#endif
+#ifdef SALAM_HAVE_EMBED_MINGW
+#  include "driver/embed_sysroot.h"
+extern const unsigned char salam_embed_mingw[];
+extern const unsigned char salam_embed_mingw_end[];
+#endif
+
 #ifndef SALAM_HAVE_LLVM
 int salam_llvm_native_available(void)
 {
@@ -156,7 +174,8 @@ static const char *resolve_linker(char *buf, size_t cap)
 #  endif
 }
 
-static int link_executable(logger_t *log, const char *obj, const char *out)
+static int link_executable(logger_t *log, const char *obj, const char *out,
+                           const codegen_llvm_options_t *opts)
 {
     char cc[1200];
     const char *linker = resolve_linker(cc, sizeof cc);
@@ -170,6 +189,20 @@ static int link_executable(logger_t *log, const char *obj, const char *out)
     sb_puts(&cmd, "\" -o \"");
     sb_puts(&cmd, out);
     sb_puts(&cmd, "\"");
+    {
+        int i = 0;
+        for (; i < opts->nlink; i++) {
+            const char *spec = opts->link_libs[i];
+            if (!spec) continue;
+            if (spec[0] == '-' || strpbrk(spec, "/\\.") != NULL) {
+                sb_puts(&cmd, " ");
+                sb_puts(&cmd, spec);
+            } else {
+                sb_puts(&cmd, " -l");
+                sb_puts(&cmd, spec);
+            }
+        }
+    }
 #  if defined(_WIN32)
     sb_puts(&cmd, is_tcc ? " -lmsvcrt" : " -lm");
 #  else
@@ -181,6 +214,311 @@ static int link_executable(logger_t *log, const char *obj, const char *out)
     sb_free(&cmd);
     return rc == 0 ? 0 : 1;
 }
+
+/* Can salam link this cross target's executable in-process (via lld), so no
+ * external linker/clang is needed? Extended per target as support lands. */
+static int lld_can_link(const char *t)
+{
+#  ifdef SALAM_HAVE_LLD
+    if (!t) return 0;
+    {
+        int win = (strstr(t, "windows") || strstr(t, "mingw") || strstr(t, "win32")) != 0;
+        int gnu = (strstr(t, "gnu") || strstr(t, "mingw")) != 0;
+        int musl = (strstr(t, "linux") && strstr(t, "musl")) != 0;
+        /* MinGW (Windows) and static-musl (Linux) link in-process today. */
+        return (win && gnu) || musl;
+    }
+#  else
+    (void)t;
+    return 0;
+#  endif
+}
+
+#  ifdef SALAM_HAVE_LLD
+static const char *mingw_arch(const char *t)
+{
+    if (strstr(t, "aarch64") || strstr(t, "arm64")) return "aarch64";
+    if (strstr(t, "i686") || strstr(t, "i386") || strstr(t, "i586")) return "i686";
+    return "x86_64";
+}
+
+static const char *mingw_emul(const char *t)
+{
+    if (strstr(t, "aarch64") || strstr(t, "arm64")) return "arm64pe";
+    if (strstr(t, "i686") || strstr(t, "i386") || strstr(t, "i586")) return "i386pe";
+    return "i386pep";
+}
+
+/* Locate the GCC-mingw runtime dir (crtbegin/crtend + libgcc) for a Debian-style
+ * mingw sysroot. llvm-mingw sysroots don't need this (compiler-rt). */
+static int find_mingw_gccdir(const char *arch, char *out, size_t n)
+{
+#    if defined(_WIN32)
+    (void)arch;
+    (void)out;
+    (void)n;
+    return 0;
+#    else
+    char base[256];
+    DIR *d;
+    struct dirent *e;
+    int found = 0;
+    sal_snprintf(base, sizeof base, "/usr/lib/gcc/%s-w64-mingw32", arch);
+    d = opendir(base);
+    if (!d) return 0;
+    while ((e = readdir(d)) != NULL) {
+        char p[600];
+        FILE *f;
+        if (e->d_name[0] == '.') continue;
+        sal_snprintf(p, sizeof p, "%s/%s/crtbegin.o", base, e->d_name);
+        f = fopen(p, "rb");
+        if (f) {
+            fclose(f);
+            sal_snprintf(out, n, "%s/%s", base, e->d_name);
+            found = 1;
+            if (strstr(e->d_name, "win32"))
+                break; /* prefer the win32 threading variant */
+        }
+    }
+    closedir(d);
+    return found;
+#    endif
+}
+
+/* Locate clang's compiler-rt builtins archive for `rtarch` (x86_64/aarch64/i386),
+ * needed by some programs for low-level helpers. Optional; returns 0 if absent. */
+static int find_compiler_rt(const char *rtarch, char *out, size_t n)
+{
+#    if defined(_WIN32)
+    (void)rtarch;
+    (void)out;
+    (void)n;
+    return 0;
+#    else
+    static const char *bases[] = {"/usr/lib/llvm-22/lib/clang", "/usr/lib/llvm/lib/clang",
+                                  "/usr/lib/clang"};
+    size_t bi = 0;
+    for (; bi < sizeof bases / sizeof bases[0]; bi++) {
+        DIR *d = opendir(bases[bi]);
+        struct dirent *e;
+        if (!d) continue;
+        while ((e = readdir(d)) != NULL) {
+            char p[700];
+            FILE *f;
+            if (e->d_name[0] == '.') continue;
+            sal_snprintf(p, sizeof p, "%s/%s/lib/linux/libclang_rt.builtins-%s.a",
+                         bases[bi], e->d_name, rtarch);
+            f = fopen(p, "rb");
+            if (f) {
+                fclose(f);
+                sal_snprintf(out, n, "%s", p);
+                closedir(d);
+                return 1;
+            }
+        }
+        closedir(d);
+    }
+    return 0;
+#    endif
+}
+
+/*
+ * Link a fully-static Linux executable in-process against musl: object -> ELF
+ * via the lld ELF driver + musl CRT/libc.a (-static). No external clang/ld.lld.
+ * Returns 0 on success, 1 on failure, -1 if not handled here.
+ */
+static int native_link_elf(logger_t *log, const char *obj, const char *out,
+                           const codegen_llvm_options_t *opts)
+{
+    const char *t = opts->target_triple;
+    const char *arch, *emul, *rtarch;
+    char sr[1024], crt1[1200], crti[1200], crtn[1200], Lsr[1100], rt[1200];
+    char userlibs[16][160];
+    const char *argv[64];
+    int n = 0, i, rc, have_rt;
+    FILE *f;
+
+    if (strstr(t, "aarch64") || strstr(t, "arm64")) {
+        arch = "aarch64";
+        emul = "aarch64linux";
+        rtarch = "aarch64";
+    } else if (strstr(t, "i686") || strstr(t, "i386") || strstr(t, "i586")) {
+        arch = "i386";
+        emul = "elf_i386";
+        rtarch = "i386";
+    } else {
+        arch = "x86_64";
+        emul = "elf_x86_64";
+        rtarch = "x86_64";
+    }
+
+    if (opts->sysroot && opts->sysroot[0]) {
+        sal_snprintf(sr, sizeof sr, "%s", opts->sysroot);
+    } else {
+        int got = 0;
+#    ifdef SALAM_HAVE_EMBED_MUSL
+        /* Prefer the sysroot baked into the binary: fully self-contained. */
+        if (strcmp(arch, "x86_64") == 0 &&
+            salam_materialize_sysroot("x86_64-linux-musl", salam_embed_musl,
+                                      (size_t)(salam_embed_musl_end - salam_embed_musl),
+                                      sr, sizeof sr)) {
+            got = 1;
+            LOG_I(log, PH_DRIVER, "using embedded musl sysroot: %s", sr);
+        }
+#    endif
+        if (!got) sal_snprintf(sr, sizeof sr, "/usr/lib/%s-linux-musl", arch);
+    }
+
+    sal_snprintf(crt1, sizeof crt1, "%s/crt1.o", sr);
+    f = fopen(crt1, "rb");
+    if (!f) {
+        LOG_E(log, PH_DRIVER,
+              i18n_tr("no musl sysroot for '%s' (looked in %s): install musl-dev or "
+                      "bundle a sysroot ($SALAM_SYSROOTS)"),
+              t, sr);
+        return 1;
+    }
+    fclose(f);
+    sal_snprintf(crti, sizeof crti, "%s/crti.o", sr);
+    sal_snprintf(crtn, sizeof crtn, "%s/crtn.o", sr);
+    have_rt = find_compiler_rt(rtarch, rt, sizeof rt);
+
+    argv[n++] = "ld.lld";
+    argv[n++] = "-m";
+    argv[n++] = emul;
+    argv[n++] = "-static";
+    argv[n++] = "-o";
+    argv[n++] = out;
+    argv[n++] = crt1;
+    argv[n++] = crti;
+    sal_snprintf(Lsr, sizeof Lsr, "-L%s", sr);
+    argv[n++] = Lsr;
+    argv[n++] = obj;
+    for (i = 0; i < opts->nlink && i < 16 && n < 50; i++) {
+        const char *s = opts->link_libs[i];
+        if (!s) continue;
+        if (s[0] == '-' || strpbrk(s, "/\\.") != NULL) {
+            argv[n++] = s;
+        } else {
+            sal_snprintf(userlibs[i], sizeof userlibs[i], "-l%s", s);
+            argv[n++] = userlibs[i];
+        }
+    }
+    argv[n++] = "--start-group";
+    argv[n++] = "-lc";
+    if (have_rt) argv[n++] = rt;
+    argv[n++] = "--end-group";
+    argv[n++] = crtn;
+
+    LOG_I(log, PH_DRIVER, "in-process lld: linking %s -> %s (%s, static musl)", obj, out,
+          t);
+    rc = salam_lld_link(SALAM_LLD_ELF, n, argv);
+    if (rc != 0) LOG_E(log, PH_DRIVER, i18n_tr("in-process lld link failed (%d)"), rc);
+    return rc == 0 ? 0 : 1;
+}
+
+/*
+ * Link a Windows (MinGW) executable entirely in-process: object -> PE via the
+ * lld MinGW driver, using the mingw-w64 sysroot's CRT/import libs. No external
+ * clang/ld.lld. Returns 0 on success, 1 on failure, -1 if this target isn't
+ * handled in-process (caller falls back).
+ */
+static int native_link_mingw(logger_t *log, const char *obj, const char *out,
+                             const codegen_llvm_options_t *opts)
+{
+    const char *t = opts->target_triple;
+    const char *arch, *emul;
+    char sr[1024], crt2[1200], crtbegin[1200], crtend[1200];
+    char Lgcc[1100], Lsr[1100], Lsrmingw[1100], gccdir[1024];
+    char userlibs[16][160];
+    const char *argv[96];
+    int n = 0, have_gcc, i, rc;
+    FILE *f;
+    static const char *group[] = {"-lmingw32", "-lgcc",     "-lgcc_eh",   "-lmoldname",
+                                  "-lmingwex", "-lmsvcrt",  "-ladvapi32", "-lshell32",
+                                  "-luser32",  "-lkernel32"};
+
+    if (!lld_can_link(t)) return -1;
+    arch = mingw_arch(t);
+    emul = mingw_emul(t);
+
+    if (opts->sysroot && opts->sysroot[0])
+        sal_snprintf(sr, sizeof sr, "%s", opts->sysroot);
+    else if (!salam_find_sysroot(t, sr, sizeof sr))
+        sal_snprintf(sr, sizeof sr, "/usr/%s-w64-mingw32", arch);
+
+    sal_snprintf(crt2, sizeof crt2, "%s/lib/crt2.o", sr);
+    f = fopen(crt2, "rb");
+    if (!f) {
+        LOG_E(log, PH_DRIVER,
+              i18n_tr("no mingw sysroot for '%s' (looked in %s): install mingw-w64 or "
+                      "bundle a sysroot ($SALAM_SYSROOTS)"),
+              t, sr);
+        return 1;
+    }
+    fclose(f);
+    have_gcc = find_mingw_gccdir(arch, gccdir, sizeof gccdir);
+
+    argv[n++] = "ld.lld";
+    argv[n++] = "-m";
+    argv[n++] = emul;
+    argv[n++] = "-Bdynamic";
+    argv[n++] = "-o";
+    argv[n++] = out;
+    argv[n++] = crt2;
+    if (have_gcc) {
+        sal_snprintf(crtbegin, sizeof crtbegin, "%s/crtbegin.o", gccdir);
+        argv[n++] = crtbegin;
+        sal_snprintf(Lgcc, sizeof Lgcc, "-L%s", gccdir);
+        argv[n++] = Lgcc;
+    }
+    sal_snprintf(Lsr, sizeof Lsr, "-L%s/lib", sr);
+    argv[n++] = Lsr;
+    sal_snprintf(Lsrmingw, sizeof Lsrmingw, "-L%s/mingw/lib", sr);
+    argv[n++] = Lsrmingw;
+    argv[n++] = obj;
+    /* libraries from `link "..."` directives */
+    for (i = 0; i < opts->nlink && i < 16 && n < 70; i++) {
+        const char *s = opts->link_libs[i];
+        if (!s) continue;
+        if (s[0] == '-' || strpbrk(s, "/\\.") != NULL) {
+            argv[n++] = s;
+        } else {
+            sal_snprintf(userlibs[i], sizeof userlibs[i], "-l%s", s);
+            argv[n++] = userlibs[i];
+        }
+    }
+    /* default mingw group, listed twice to satisfy circular archive deps */
+    for (i = 0; i < (int)(sizeof group / sizeof group[0]) && n < 84; i++)
+        argv[n++] = group[i];
+    for (i = 0; i < (int)(sizeof group / sizeof group[0]) && n < 90; i++)
+        argv[n++] = group[i];
+    if (have_gcc) {
+        sal_snprintf(crtend, sizeof crtend, "%s/crtend.o", gccdir);
+        argv[n++] = crtend;
+    }
+
+    LOG_I(log, PH_DRIVER, "in-process lld: linking %s -> %s (%s)", obj, out, t);
+    rc = salam_lld_link(SALAM_LLD_MINGW, n, argv);
+    if (rc != 0) LOG_E(log, PH_DRIVER, i18n_tr("in-process lld link failed (%d)"), rc);
+    return rc == 0 ? 0 : 1;
+}
+
+/* Dispatch an in-process link by target. Returns 0/1 when handled, -1 to defer
+ * to the external toolchain. */
+static int native_link_lld(logger_t *log, const char *obj, const char *out,
+                           const codegen_llvm_options_t *opts)
+{
+    const char *t = opts->target_triple;
+    if (!t) return -1;
+    if ((strstr(t, "windows") || strstr(t, "mingw") || strstr(t, "win32")) &&
+        (strstr(t, "gnu") || strstr(t, "mingw")))
+        return native_link_mingw(log, obj, out, opts);
+    if (strstr(t, "linux") && strstr(t, "musl"))
+        return native_link_elf(log, obj, out, opts);
+    return -1;
+}
+#  endif /* SALAM_HAVE_LLD */
 
 static int orc_fail(logger_t *log, const char *what, LLVMErrorRef e)
 {
@@ -305,17 +643,14 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
 
     if (opts->output_mode == LLVM_OUT_JIT) return jit_run_file(log, ll_path);
 
-    /* Cross-target executables must be linked by the clang driver, which knows
-     * the right CRT/linker for the target OS. The native emit-then-link path
-     * links with the *host* cc, so defer to the toolchain script when the
-     * requested triple is not the host. Object/asm/bitcode emission stays here:
-     * the TargetMachine already honours the triple and needs no linker. */
     if (opts->output_mode == LLVM_OUT_EXEC && opts->target_triple &&
         opts->target_triple[0]) {
         char *ht = LLVMGetDefaultTargetTriple();
         int cross = !ht || strcmp(ht, opts->target_triple) != 0;
         if (ht) LLVMDisposeMessage(ht);
-        if (cross) return -1;
+        /* Cross EXEC: handle it in-process when lld can link this target;
+         * otherwise defer to the external clang/lld toolchain path. */
+        if (cross && !lld_can_link(opts->target_triple)) return -1;
     }
 
     LLVMContextRef ctx = NULL;
@@ -390,7 +725,12 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
                 if (eerr) LLVMDisposeMessage(eerr);
                 rc = 2;
             } else {
-                rc = link_executable(log, objpath, opts->output_file);
+                rc = -1;
+#  ifdef SALAM_HAVE_LLD
+                if (opts->target_triple && opts->target_triple[0])
+                    rc = native_link_lld(log, objpath, opts->output_file, opts);
+#  endif
+                if (rc < 0) rc = link_executable(log, objpath, opts->output_file, opts);
                 remove(objpath);
             }
         }

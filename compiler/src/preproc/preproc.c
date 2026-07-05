@@ -88,17 +88,122 @@ static int count_os_defs(void)
     return s_nos;
 }
 
+/*
+ * Cross-compilation: when a target triple is active the OS/arch predefined
+ * macros must describe the TARGET, not the host the compiler was built on, so
+ * that `@if SALAM_OS_WINDOWS` etc. select the right code path. NULL => host.
+ */
+static const char *s_target_triple = NULL;
+
+void preproc_set_target(const char *triple)
+{
+    s_target_triple = (triple && triple[0]) ? triple : NULL;
+}
+
+static bool trip_has(const char *hay, const char *needle)
+{
+    return strstr(hay, needle) != NULL;
+}
+
+/* Derive the SALAM_OS_ and SALAM_ARCH_ defines for an LLVM target triple.
+ * Mirrors the host table in s_os_defs. Returns the number written. */
+static int target_os_defs(const char *t, const char **o, int cap)
+{
+    int n = 0;
+    bool bits64 = false;
+#define PP_PUSH(s)                                                                       \
+    do {                                                                                 \
+        if (n < cap) o[n++] = (s);                                                       \
+    } while (0)
+    if (trip_has(t, "x86_64") || trip_has(t, "amd64")) {
+        bits64 = true;
+        PP_PUSH("SALAM_ARCH_X64");
+        PP_PUSH("SALAM_ARCH=x64");
+    } else if (trip_has(t, "aarch64") || trip_has(t, "arm64")) {
+        bits64 = true;
+        PP_PUSH("SALAM_ARCH_ARM64");
+        PP_PUSH("SALAM_ARCH=arm64");
+    } else if (trip_has(t, "i386") || trip_has(t, "i486") || trip_has(t, "i586") ||
+               trip_has(t, "i686") || trip_has(t, "x86")) {
+        PP_PUSH("SALAM_ARCH_X86");
+        PP_PUSH("SALAM_ARCH=x86");
+    } else if (trip_has(t, "wasm64")) {
+        bits64 = true;
+        PP_PUSH("SALAM_ARCH_WASM");
+        PP_PUSH("SALAM_ARCH=wasm");
+    } else if (trip_has(t, "wasm") || trip_has(t, "wasm32")) {
+        PP_PUSH("SALAM_ARCH_WASM");
+        PP_PUSH("SALAM_ARCH=wasm");
+    } else if (trip_has(t, "arm")) {
+        PP_PUSH("SALAM_ARCH_ARM");
+        PP_PUSH("SALAM_ARCH=arm");
+    }
+    if (trip_has(t, "windows") || trip_has(t, "mingw") || trip_has(t, "win32")) {
+        PP_PUSH("SALAM_OS_WINDOWS");
+        PP_PUSH("SALAM_OS=windows");
+        PP_PUSH(bits64 ? "SALAM_OS_WIN64" : "SALAM_OS_WIN32");
+    } else if (trip_has(t, "darwin") || trip_has(t, "macos") || trip_has(t, "macosx") ||
+               trip_has(t, "apple") || trip_has(t, "ios")) {
+        PP_PUSH("SALAM_OS_MAC");
+        PP_PUSH("SALAM_OS_BSD");
+        PP_PUSH("SALAM_OS_UNIX");
+        PP_PUSH("SALAM_OS=mac");
+    } else if (trip_has(t, "android")) {
+        PP_PUSH("SALAM_OS_ANDROID");
+        PP_PUSH("SALAM_OS_LINUX");
+        PP_PUSH("SALAM_OS_UNIX");
+        PP_PUSH("SALAM_OS=android");
+    } else if (trip_has(t, "linux")) {
+        PP_PUSH("SALAM_OS_LINUX");
+        PP_PUSH("SALAM_OS_UNIX");
+        PP_PUSH("SALAM_OS=linux");
+    } else if (trip_has(t, "freebsd")) {
+        PP_PUSH("SALAM_OS_FREEBSD");
+        PP_PUSH("SALAM_OS_BSD");
+        PP_PUSH("SALAM_OS_UNIX");
+        PP_PUSH("SALAM_OS=freebsd");
+    } else if (trip_has(t, "openbsd")) {
+        PP_PUSH("SALAM_OS_OPENBSD");
+        PP_PUSH("SALAM_OS_BSD");
+        PP_PUSH("SALAM_OS_UNIX");
+        PP_PUSH("SALAM_OS=openbsd");
+    } else if (trip_has(t, "netbsd")) {
+        PP_PUSH("SALAM_OS_NETBSD");
+        PP_PUSH("SALAM_OS_BSD");
+        PP_PUSH("SALAM_OS_UNIX");
+        PP_PUSH("SALAM_OS=netbsd");
+    } else if (trip_has(t, "wasi") || trip_has(t, "emscripten") || trip_has(t, "wasm")) {
+        PP_PUSH("SALAM_OS_WASM");
+        PP_PUSH("SALAM_OS_UNIX");
+        PP_PUSH("SALAM_OS=wasm");
+    } else {
+        PP_PUSH("SALAM_OS=unknown");
+    }
+#undef PP_PUSH
+    return n;
+}
+
 char *preproc_run(arena_t *a, logger_t *log, const char *text, const char *const *defines,
                   int ndefines)
 {
-    int nos = count_os_defs();
+    const char *tgt_defs[32];
+    const char *const *os_defs;
+    int nos;
+    if (s_target_triple) {
+        nos = target_os_defs(s_target_triple, tgt_defs,
+                             (int)(sizeof tgt_defs / sizeof tgt_defs[0]));
+        os_defs = tgt_defs;
+    } else {
+        nos = count_os_defs();
+        os_defs = s_os_defs;
+    }
     int total = nos + ndefines;
     const char **all =
         (const char **)arena_alloc(a, (size_t)(total + 1) * sizeof(char *));
     {
         int i = 0;
         for (; i < nos; i++)
-            all[i] = s_os_defs[i];
+            all[i] = os_defs[i];
     }
     {
         int i = 0;

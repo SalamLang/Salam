@@ -130,6 +130,8 @@ int driver_build(options_t *opt)
         return 2;
     }
     salam_set_stdlib_root(opt->stdlib_path);
+    /* The C backend targets the host; use host OS/arch predefined macros. */
+    preproc_set_target(NULL);
 
     if (opt->cc && strcmp(opt->cc, "tcc") == 0) {
         static char bundled_cc[1200];

@@ -39,6 +39,16 @@ static const char *module_of(arena_t *a, const char *path)
     return arena_strndup(a, base, len);
 }
 
+static const char *dir_of(arena_t *a, const char *path)
+{
+    const char *slash = strrchr(path, '/');
+    const char *bs = strrchr(path, '\\');
+    const char *cut = slash;
+    if (bs && (!slash || bs > slash)) cut = bs;
+    if (!cut) return "";
+    return arena_strndup(a, path, (size_t)(cut - path));
+}
+
 static bool triple_is_windows(const char *t)
 {
     return t && (strstr(t, "windows") || strstr(t, "mingw") || strstr(t, "win32"));
@@ -48,7 +58,6 @@ static const char *default_output(arena_t *a, const char *module, llvm_output_mo
                                   const char *triple)
 {
     bool win = triple_is_windows(triple);
-    /* MSVC-flavoured targets use the .obj object extension, MinGW/others .o. */
     bool msvc = triple && strstr(triple, "msvc");
     const char *ext = ".ll";
     switch (m) {
@@ -74,6 +83,107 @@ static const char *default_output(arena_t *a, const char *module, llvm_output_mo
     return o;
 }
 
+static void ll_add_link(const char **libs, const char **kinds, int *n, int cap,
+                        const char *lib, const char *kind)
+{
+    if (!lib || *n >= cap) return;
+    {
+        int i = 0;
+        for (; i < *n; i++)
+            if (strcmp(libs[i], lib) == 0) return;
+    }
+    libs[*n] = lib;
+    kinds[*n] = kind;
+    (*n)++;
+}
+
+static void ll_scan_links(ast_node_t *prog, const char **libs, const char **kinds, int *n,
+                          int cap)
+{
+    if (!prog) return;
+    {
+        size_t k = 0;
+        for (; k < prog->list.len; k++) {
+            ast_node_t *d = (ast_node_t *)prog->list.data[k];
+            if (d->kind != AST_LINK) continue;
+            const char *lib =
+                (d->value.kind == TV_STRING && d->value.as.s) ? d->value.as.s : NULL;
+            ll_add_link(libs, kinds, n, cap, lib, d->name);
+        }
+    }
+}
+
+static void ll_enqueue_imports(arena_t *a, ast_node_t *prog, const char *dir,
+                               const char **work, int *nwork, int cap)
+{
+    if (!prog) return;
+    {
+        size_t k = 0;
+        for (; k < prog->list.len; k++) {
+            ast_node_t *d = (ast_node_t *)prog->list.data[k];
+            if (d->kind != AST_IMPORT) continue;
+            const char *spec =
+                (d->value.kind == TV_STRING && d->value.as.s) ? d->value.as.s : d->name;
+            if (!spec) continue;
+            const char *ip = salam_resolve_import(a, dir, spec);
+            if (!ip) continue;
+            bool seen = false;
+            {
+                int i = 0;
+                for (; i < *nwork; i++)
+                    if (strcmp(work[i], ip) == 0) {
+                        seen = true;
+                        break;
+                    }
+            }
+            if (!seen && *nwork < cap) work[(*nwork)++] = ip;
+        }
+    }
+}
+
+static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
+                           const char *main_path, ast_node_t *main_prog,
+                           const char *const *defs, int ndefs, const char **libs,
+                           const char **kinds, int cap)
+{
+    int n = 0;
+    const char *work[256];
+    int nwork = 0, wi = 0;
+
+    ll_scan_links(main_prog, libs, kinds, &n, cap);
+    ll_enqueue_imports(a, main_prog, dir_of(a, main_path), work, &nwork, 256);
+
+    for (; wi < nwork; wi++) {
+        const char *path = work[wi];
+        source_file_t *src = source_load(a, path);
+        if (!src) continue;
+        src = preproc_source(a, log, src, defs, ndefs);
+        const langpack_t *mp = langpack_detect(a, src, pack);
+        token_stream_t *toks = NULL;
+        lexer_run(a, log, mp, src, &toks);
+        ast_node_t *prog = NULL;
+        parser_run(a, log, toks, &prog);
+        {
+            const char *pf[256];
+            int npf = salam_package_files(a, path, pf, 256);
+            int pi = 1;
+            for (; pi < npf; pi++) {
+                source_file_t *ps = source_load(a, pf[pi]);
+                if (!ps) continue;
+                ps = preproc_source(a, log, ps, defs, ndefs);
+                token_stream_t *pt = NULL;
+                lexer_run(a, log, mp, ps, &pt);
+                ast_node_t *pp = NULL;
+                parser_run(a, log, pt, &pp);
+                salam_merge_program(a, prog, pp);
+            }
+        }
+        ll_scan_links(prog, libs, kinds, &n, cap);
+        ll_enqueue_imports(a, prog, dir_of(a, path), work, &nwork, 256);
+    }
+    return n;
+}
+
 int driver_llvm(options_t *opt)
 {
     logger_t *log = logger_new(stderr, opt->log_level, opt->color == 1);
@@ -88,6 +198,7 @@ int driver_llvm(options_t *opt)
     }
     const char *entry = langpack_entry(pack);
     salam_set_stdlib_root(opt->stdlib_path);
+    preproc_set_target(opt->llvm_target);
     if (!opt->input) {
         LOG_E(log, PH_DRIVER, i18n_tr("salam: no input file"));
         logger_free(log);
@@ -124,6 +235,21 @@ int driver_llvm(options_t *opt)
     o.debug_info = opt->debug_info;
     o.verify_module = opt->llvm_verify;
     o.target_triple = opt->llvm_target;
+
+    const char *link_libs[SALAM_MAX_INPUTS];
+    const char *link_kinds[SALAM_MAX_INPUTS];
+    char sysroot_buf[1024];
+    if (o.output_mode == LLVM_OUT_EXEC) {
+        o.nlink = ll_gather_links(arena, log, pack, opt->input, program, opt->defines,
+                                  opt->ndefines, link_libs, link_kinds, SALAM_MAX_INPUTS);
+        o.link_libs = link_libs;
+        o.link_kinds = link_kinds;
+        if (opt->llvm_target &&
+            salam_find_sysroot(opt->llvm_target, sysroot_buf, sizeof sysroot_buf)) {
+            o.sysroot = sysroot_buf;
+            LOG_I(log, PH_DRIVER, "using bundled sysroot: %s", o.sysroot);
+        }
+    }
     llvm_output_t *out =
         codegen_llvm_run_opts(arena, log, program, sr, module, entry, &o, src->path);
 
@@ -186,13 +312,6 @@ int driver_llvm(options_t *opt)
 
 int driver_llvm_build(options_t *opt)
 {
-    /*
-     * Cross-compilation entry point. `salam build/obj --target=<triple>` routes
-     * here (see driver_build) and drives the LLVM backend instead of the C
-     * backend: `build` links a native executable for the target, `obj` stops at
-     * a target-specific object file. --keep-c / --cc are irrelevant on this
-     * path (no C is generated).
-     */
     opt->llvm_emit = (opt->command == CMD_OBJ) ? (int)LLVM_OUT_OBJ : (int)LLVM_OUT_EXEC;
     int rc = driver_llvm(opt);
     if (rc != 0) {

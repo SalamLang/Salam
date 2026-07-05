@@ -26,4 +26,6 @@ char *preproc_run(arena_t *a, logger_t *log, const char *text, const char *const
 source_file_t *preproc_source(arena_t *a, logger_t *log, const source_file_t *src,
                               const char *const *defines, int ndefines);
 
+void preproc_set_target(const char *triple);
+
 #endif /* SALAM_PREPROC_PREPROC_H */

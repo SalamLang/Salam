@@ -132,14 +132,71 @@
     }
     return out;
   }
-  function emitGap(text, atStart) {
+  function blankGuideStr(cols) {
+    var out = "",
+      c;
+    for (c = 0; c < cols; c++)
+      out += c % 4 === 0 ? '<span class="ind">|</span>' : " ";
+    return out;
+  }
+  function indentCols(line) {
+    var col = 0,
+      i,
+      ch;
+    for (i = 0; i < line.length; i++) {
+      ch = line.charCodeAt(i);
+      if (ch === 32) col++;
+      else if (ch === 9) col += 4 - (col % 4);
+      else return col;
+    }
+    return -1;
+  }
+  function computeBlankGuides(src) {
+    var lines = src.split("\n"),
+      n = lines.length,
+      ind = new Array(n),
+      map = new Map(),
+      i,
+      a,
+      start,
+      prev,
+      next,
+      g,
+      k;
+    for (i = 0; i < n; i++) ind[i] = indentCols(lines[i]);
+    a = 0;
+    while (a < n) {
+      if (ind[a] !== -1) {
+        a++;
+        continue;
+      }
+      start = a;
+      while (a < n && ind[a] === -1) a++;
+      prev = start - 1 >= 0 ? ind[start - 1] : -1;
+      next = a < n ? ind[a] : -1;
+      g = prev < 0 || next < 0 ? 0 : Math.min(prev, next);
+      if (g > 0) for (k = start; k < a; k++) map.set(k + 1, g);
+    }
+    return map;
+  }
+  function countNL(s) {
+    var n = 0,
+      i = s.indexOf("\n");
+    while (i >= 0) {
+      n++;
+      i = s.indexOf("\n", i + 1);
+    }
+    return n;
+  }
+  function emitGap(text, atStart, lineNo, blank) {
     var out = "",
       i = 0,
       n = text.length,
       lineStart = atStart,
       j,
       c,
-      nl;
+      nl,
+      g;
     while (i < n) {
       if (lineStart) {
         j = i;
@@ -148,7 +205,12 @@
           if (c !== 32 && c !== 9) break;
           j++;
         }
-        if (j > i) out += indentGuides(text.slice(i, j));
+        if (j < n && text.charCodeAt(j) === 10) {
+          g = blank ? blank.get(lineNo) || 0 : 0;
+          if (g) out += blankGuideStr(g);
+        } else if (j > i) {
+          out += indentGuides(text.slice(i, j));
+        }
         i = j;
         lineStart = false;
         if (i >= n) break;
@@ -160,22 +222,31 @@
       }
       out += esc(text.slice(i, nl + 1));
       i = nl + 1;
+      lineNo++;
       lineStart = true;
     }
     return out;
   }
   function highlight(src) {
-    var out = "",
+    var blank = computeBlankGuides(src),
+      out = "",
       last = 0,
+      lineNo = 1,
+      gap,
       m;
     TOK.lastIndex = 0;
     m = TOK.exec(src);
     while (m !== null) {
-      if (m.index > last)
+      if (m.index > last) {
+        gap = src.slice(last, m.index);
         out += emitGap(
-          src.slice(last, m.index),
+          gap,
           last === 0 || src.charCodeAt(last - 1) === 10,
+          lineNo,
+          blank,
         );
+        lineNo += countNL(gap);
+      }
       const tok = m[0];
       let cls = null;
       if (m[1]) cls = "c";
@@ -185,12 +256,16 @@
         cls = KW.has(tok) || EL.has(tok) ? "k" : TY.has(tok) ? "t" : null;
       else if (m[5]) cls = "o";
       out += cls ? `<span class="${cls}">${esc(tok)}</span>` : esc(tok);
+      if (cls === "c" || cls === "s") lineNo += countNL(tok);
       last = TOK.lastIndex;
       m = TOK.exec(src);
     }
+    gap = src.slice(last);
     out += emitGap(
-      src.slice(last),
+      gap,
       last === 0 || src.charCodeAt(last - 1) === 10,
+      lineNo,
+      blank,
     );
     return `${out}\n`;
   }

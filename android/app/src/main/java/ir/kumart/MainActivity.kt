@@ -1,3 +1,6 @@
+/**
+ * Hosts the Android app WebView experience and manages related UI integrations.
+ */
 package ir.salamlang.editor
 
 import android.Manifest
@@ -38,6 +41,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.net.toUri
 
+/**
+ * Main launcher activity for the Salam Android application.
+ */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var contentArea: FrameLayout

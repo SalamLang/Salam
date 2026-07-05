@@ -42,16 +42,15 @@ build_one() {
     fi
 
     log "Building '$lang' book: $dir/book.tex"
-    cd "$dir"
-
-    run_latexmk
-
-    if [ ! -f "book.pdf" ]; then
-        error "build failed for $lang (no PDF generated)"
-        return 1
-    fi
-
-    log "Done: $dir/book.pdf"
+    (
+        cd "$dir"
+        run_latexmk
+        if [ ! -f "book.pdf" ]; then
+            error "build failed for $lang (no PDF generated)"
+            exit 1
+        fi
+        log "Done: $dir/book.pdf"
+    ) || return 1
 }
 
 clean_one() {
@@ -60,8 +59,10 @@ clean_one() {
 
     if [ -d "$dir" ]; then
         log "Cleaning $lang build artifacts"
-        cd "$dir"
-        latexmk -C || true
+        (
+            cd "$dir"
+            latexmk -C || true
+        )
     fi
 }
 

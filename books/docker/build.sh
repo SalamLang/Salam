@@ -67,21 +67,21 @@ clean_one() {
 
 case "${1:-all}" in
 en)
-build_one en
-;;
+    build_one en
+    ;;
 fa)
-build_one fa
-;;
+    build_one fa
+    ;;
 all)
-build_one en
-build_one fa
-;;
+    build_one en
+    build_one fa
+    ;;
 clean)
-clean_one en
-clean_one fa
-;;
-help|-h|--help)
-cat <<EOF
+    clean_one en
+    clean_one fa
+    ;;
+help | -h | --help)
+    cat <<EOF
 usage: build-books [en|fa|all|clean]
 
 Targets:
@@ -100,9 +100,9 @@ build-books
 build-books en
 USE_GLOSSARY=1 build-books fa
 EOF
-;;
+    ;;
 *)
-error "unknown target '$1' (expected: en, fa, all, clean)"
-exit 2
-;;
+    error "unknown target '$1' (expected: en, fa, all, clean)"
+    exit 2
+    ;;
 esac

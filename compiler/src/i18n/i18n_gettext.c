@@ -680,6 +680,7 @@ static const i18n_pair_t k_msg_fa[] = {
      "استنتاج کرد"},
 
     {NULL, NULL}};
+
 const char *i18n_tr(const char *msgid)
 {
     if (!msgid) return msgid;

@@ -381,7 +381,16 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
     fclose(f);
     sal_snprintf(crti, sizeof crti, "%s/crti.o", sr);
     sal_snprintf(crtn, sizeof crtn, "%s/crtn.o", sr);
-    have_rt = find_compiler_rt(rtarch, rt, sizeof rt);
+    /* compiler-rt builtins: from the sysroot itself (self-contained) if present,
+     * else the system clang install. */
+    sal_snprintf(rt, sizeof rt, "%s/libclang_rt.builtins-%s.a", sr, rtarch);
+    f = fopen(rt, "rb");
+    if (f) {
+        fclose(f);
+        have_rt = 1;
+    } else {
+        have_rt = find_compiler_rt(rtarch, rt, sizeof rt);
+    }
 
     argv[n++] = "ld.lld";
     argv[n++] = "-m";

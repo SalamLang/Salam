@@ -45,7 +45,24 @@ const CONTROL = [
   "هر",
   "تعلیق",
   "پایان",
+  // Arabic
+  "إذا",
+  "وإلا",
+  "بينما",
+  "لكل",
+  "أرجع",
+  "اكسر",
+  "واصل",
+  "كرر",
+  "إلى",
+  "كل",
+  "أجل",
+  "نهاية",
 ];
+
+// Logical operators expressed as words: و / یا (Persian) and أو (Arabic),
+// the localized forms of && / ||. Highlighted as operators, not control words.
+const LOGICAL = ["و", "یا", "أو"];
 
 const STORAGE = [
   "func",
@@ -80,6 +97,21 @@ const STORAGE = [
   "صفحه",
   "عملگر",
   "خارجی",
+  // Arabic (نوع/ثابت shared with Persian above)
+  "دالة",
+  "متغير",
+  "بنية",
+  "تعداد",
+  "واجهة",
+  "تنفيذ",
+  "حزمة",
+  "استيراد",
+  "بوصفه",
+  "عام",
+  "مكون",
+  "صفحة",
+  "عامل",
+  "خارجي",
 ];
 
 const IO = [
@@ -93,11 +125,27 @@ const IO = [
   "چاپ",
   "بنویس",
   "بخوان",
+  // Arabic
+  "اطبع_خطأ",
+  "اكتب_خطأ",
+  "اطبع",
+  "اكتب",
+  "اقرأ",
 ];
 
-const CONSTS = ["true", "false", "null", "درست", "نادرست", "پوچ"];
-const THIS = ["this", "این"];
-const AUTO = ["auto", "خودکار"];
+const CONSTS = [
+  "true",
+  "false",
+  "null",
+  "درست",
+  "نادرست",
+  "پوچ",
+  "صواب",
+  "خطأ",
+  "عدم",
+];
+const THIS = ["this", "این", "هذا"];
+const AUTO = ["auto", "خودکار", "تلقائي"];
 const CONTEXTUAL = [
   "link",
   "static",
@@ -110,6 +158,12 @@ const CONTEXTUAL = [
   "پویا",
   "چارچوب",
   "گونه",
+  // Arabic
+  "رابط",
+  "ساكن",
+  "ديناميكي",
+  "إطار",
+  "صنف",
 ];
 
 const TYPES = [
@@ -139,9 +193,28 @@ const TYPES = [
   "منطقی",
   "بایت",
   "کاراکتر",
+  // Arabic (Arabic-Indic digit suffixes ٨/١٦/٣٢/٦٤)
+  "صحيح٨",
+  "صحيح١٦",
+  "صحيح٣٢",
+  "صحيح٦٤",
+  "صحيح",
+  "طبيعي٨",
+  "طبيعي١٦",
+  "طبيعي٣٢",
+  "طبيعي٦٤",
+  "طبيعي",
+  "عشري٣٢",
+  "عشري٦٤",
+  "عشري",
+  "نص",
+  "منطقي",
+  "حرف",
+  "فراغ",
+  "يونيكود",
 ];
 
-const FUNC_DEF_KW = ["func", "تابع"];
+const FUNC_DEF_KW = ["func", "تابع", "دالة"];
 const TYPE_DEF_KW = [
   "type",
   "struct",
@@ -155,6 +228,12 @@ const TYPE_DEF_KW = [
   "واسط",
   "مولفه",
   "بسته",
+  // Arabic (نوع shared with Persian above)
+  "بنية",
+  "تعداد",
+  "واجهة",
+  "مكون",
+  "حزمة",
 ];
 
 const grammar = {
@@ -331,6 +410,7 @@ const grammar = {
     keywords: {
       patterns: [
         { name: "keyword.control.salam", match: kw(CONTROL) },
+        { name: "keyword.operator.logical.salam", match: kw(LOGICAL) },
         { name: "storage.type.salam", match: kw(STORAGE) },
         { name: "support.function.builtin.salam", match: kw(IO) },
         {

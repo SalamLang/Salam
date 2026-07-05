@@ -149,8 +149,8 @@ static const kw_entry_t k_lang_ar[] = {
     {TK_EOF, NULL},
 };
 static const ctx_entry_t k_ctx_ar[] = {
-    {"link", "رابط"},       {"static", "ساكن"},  {"dynamic", "ديناميكي"},
-    {"framework", "إطار"},  {"kind", "صنف"},     {NULL, NULL},
+    {"link", "رابط"},      {"static", "ساكن"}, {"dynamic", "ديناميكي"},
+    {"framework", "إطار"}, {"kind", "صنف"},    {NULL, NULL},
 };
 static const char k_entry_ar[] = "الرئيسية";
 struct langpack g_lang_en = {"en", k_lang_en, "main", NULL};

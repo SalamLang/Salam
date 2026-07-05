@@ -118,6 +118,52 @@
   }
   var TOK =
     /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|`[^`]*`|'(?:[^'\\]|\\.)*')|(\d+\.\d+|\d+)|([A-Za-z_؀-ۿ‌][\w؀-ۿ‌]*)|([=!<>+\-*/%&|:^~?]+)/g;
+  function indentGuides(ws) {
+    var out = "",
+      col = 0,
+      i,
+      w,
+      k;
+    for (i = 0; i < ws.length; i++) {
+      w = ws.charCodeAt(i) === 9 ? 4 - (col % 4) : 1;
+      out += col % 4 === 0 ? '<span class="ind">|</span>' : " ";
+      for (k = 1; k < w; k++) out += " ";
+      col += w;
+    }
+    return out;
+  }
+  function emitGap(text, atStart) {
+    var out = "",
+      i = 0,
+      n = text.length,
+      lineStart = atStart,
+      j,
+      c,
+      nl;
+    while (i < n) {
+      if (lineStart) {
+        j = i;
+        while (j < n) {
+          c = text.charCodeAt(j);
+          if (c !== 32 && c !== 9) break;
+          j++;
+        }
+        if (j > i) out += indentGuides(text.slice(i, j));
+        i = j;
+        lineStart = false;
+        if (i >= n) break;
+      }
+      nl = text.indexOf("\n", i);
+      if (nl < 0) {
+        out += esc(text.slice(i));
+        break;
+      }
+      out += esc(text.slice(i, nl + 1));
+      i = nl + 1;
+      lineStart = true;
+    }
+    return out;
+  }
   function highlight(src) {
     var out = "",
       last = 0,
@@ -125,7 +171,11 @@
     TOK.lastIndex = 0;
     m = TOK.exec(src);
     while (m !== null) {
-      if (m.index > last) out += esc(src.slice(last, m.index));
+      if (m.index > last)
+        out += emitGap(
+          src.slice(last, m.index),
+          last === 0 || src.charCodeAt(last - 1) === 10,
+        );
       const tok = m[0];
       let cls = null;
       if (m[1]) cls = "c";
@@ -138,7 +188,10 @@
       last = TOK.lastIndex;
       m = TOK.exec(src);
     }
-    out += esc(src.slice(last));
+    out += emitGap(
+      src.slice(last),
+      last === 0 || src.charCodeAt(last - 1) === 10,
+    );
     return `${out}\n`;
   }
   function highlightAttrs(s) {
@@ -511,8 +564,8 @@
       last = 0,
       m;
     C_TOK.lastIndex = 0;
-    // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
-    while ((m = C_TOK.exec(src)) !== null) {
+    m = C_TOK.exec(src);
+    while (m !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
       const tok = m[0];
       let cls = null;
@@ -520,6 +573,7 @@
       else if (m[2]) {
         out += highlightPre(tok);
         last = C_TOK.lastIndex;
+        m = C_TOK.exec(src);
         continue;
       } else if (m[3]) cls = "cs";
       else if (m[4]) cls = "cl";
@@ -531,6 +585,7 @@
       } else if (m[7]) cls = "co";
       out += cls ? `<span class="${cls}">${esc(tok)}</span>` : esc(tok);
       last = C_TOK.lastIndex;
+      m = C_TOK.exec(src);
     }
     out += esc(src.slice(last));
     return out;
@@ -542,8 +597,8 @@
       last = 0,
       m;
     CSS_TOK.lastIndex = 0;
-    // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
-    while ((m = CSS_TOK.exec(src)) !== null) {
+    m = CSS_TOK.exec(src);
+    while (m !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
       const tok = m[0];
       let cls = null;
@@ -560,6 +615,7 @@
       } else if (m[8]) cls = "co";
       out += cls ? `<span class="${cls}">${esc(tok)}</span>` : esc(tok);
       last = CSS_TOK.lastIndex;
+      m = CSS_TOK.exec(src);
     }
     out += esc(src.slice(last));
     return out;
@@ -619,8 +675,8 @@
       last = 0,
       m;
     JS_TOK.lastIndex = 0;
-    // biome-ignore lint/suspicious/noAssignInExpressions: regex .exec() loop - canonical assignment-in-condition idiom
-    while ((m = JS_TOK.exec(src)) !== null) {
+    m = JS_TOK.exec(src);
+    while (m !== null) {
       if (m.index > last) out += esc(src.slice(last, m.index));
       const tok = m[0];
       let cls = null;
@@ -633,6 +689,7 @@
       } else if (m[5]) cls = "co";
       out += cls ? `<span class="${cls}">${esc(tok)}</span>` : esc(tok);
       last = JS_TOK.lastIndex;
+      m = JS_TOK.exec(src);
     }
     out += esc(src.slice(last));
     return out;
@@ -649,8 +706,6 @@
   var wasm = { ready: false, runApp: null, buildLayout: null, emit: null };
   var $ = (id) => document.getElementById(id);
   var LANG_DIR = { en: "ltr", fa: "rtl", ar: "rtl" };
-  // Digit systems per UI language: Persian (U+06F0) and Arabic-Indic (U+0660)
-  // render distinct glyphs (e.g. ۴/٤, ۵/٥, ۶/٦), so line numbers must localize.
   var LANG_DIGIT_BASE = { fa: 0x06f0, ar: 0x0660 };
   function localizeDigits(s) {
     var base = LANG_DIGIT_BASE[lang];
@@ -773,9 +828,6 @@
     /(?:at line|در خط)\s*(\d+)/,
     /\(line\s+(\d+)\)/,
   ];
-  // Parse human-readable diagnostic text (runtime/compile output shown in the
-  // Run view). Everything here is an error; warnings surface via the structured
-  // <diagnostic> XML path below. Returns Map<line, {sev, msg}>.
   function parseErrLines(txt) {
     const map = new Map();
     if (!txt) return map;
@@ -814,9 +866,6 @@
   }
   const DIAG_TAG_RE = /<diagnostic\b[^>]*?\/?>/g;
   const DIAG_ATTR_RE = /(\w+)="([^"]*)"/g;
-  // Parse the structured <diagnostic .../> nodes emitted inside the Symbols XML.
-  // These carry severity + line + message, so both errors and warnings can be
-  // pinned to the exact source line. Returns Map<line, {sev, msg}>.
   function parseDiagXml(txt) {
     const map = new Map();
     if (!txt || txt.indexOf("<diagnostic") < 0) return map;
@@ -837,7 +886,6 @@
           ? `${sev === "warning" ? "W" : "E"}${String(a.code).padStart(3, "0")}: `
           : "";
         const msg = code + unescXml(a.message || "");
-        // an error on a line wins over a warning on the same line
         const cur = map.get(n);
         if (!cur || (cur.sev === "warning" && sev === "error"))
           map.set(n, { sev, msg });
@@ -851,8 +899,6 @@
       if (EXAMPLES[i].id === id) return EXAMPLES[i];
     return null;
   }
-  // Examples ship with en/fa sources; a UI language without its own source
-  // (e.g. ar) falls back to English so the playground still works.
   function exTitle(ex) {
     return (ex && (ex.title[lang] || ex.title.en)) || "";
   }
@@ -1019,7 +1065,6 @@
         const dex = findExample(exampleId);
         editor.setValue(dex ? exCode(dex) : "");
       }
-      // digits localize per language; force the line gutter to redraw
       lnFirst = -1;
       renderHL();
     }
@@ -1080,9 +1125,6 @@
     var txt =
       (wasm.emit ? wasm.emit(src, lang, view) : "(inspector unavailable)") ||
       "(empty)";
-    // Structured diagnostics (emitted inside the Symbols XML) drive both the
-    // line markers and the status, so a message that happens to contain the
-    // word "error"/"خطا" no longer trips the plain-text error detection.
     var diags = parseDiagXml(txt);
     var xmlView =
       view === "tokens" ||
@@ -1105,13 +1147,13 @@
     else if (isCss) pre.innerHTML = highlightCSS(txt);
     else if (isJs) pre.innerHTML = highlightJS(txt);
     else pre.textContent = txt;
-    pre.className =
-      "output codeview" +
-      (isXmlOut ? " xml" : "") +
-      (isIR ? " ir" : "") +
-      (isC || isCss || isJs ? " clang" : "");
-    pre.setAttribute("dir", "ltr");
-    // markers: prefer structured diagnostics, else fall back to scanning error text
+    pre.className = isErr
+      ? "output error"
+      : "output codeview" +
+        (isXmlOut ? " xml" : "") +
+        (isIR ? " ir" : "") +
+        (isC || isCss || isJs ? " clang" : "");
+    pre.setAttribute("dir", isErr ? dirOf(lang) : "ltr");
     setErrLines(diags.size ? diags : isErr ? parseErrLines(txt) : null);
     var hasError = isErr;
     if (diags.size) {
@@ -1293,8 +1335,6 @@
   }
   function onEdit() {
     renderHL();
-    // last run's error markers are stale once the text changes (line numbers
-    // shift); clear them until the next run re-reports.
     if (errLines.size) setErrLines(null);
     lnCaretSync();
     if (exampleId !== "custom") {

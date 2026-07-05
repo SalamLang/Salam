@@ -1,3 +1,6 @@
+/**
+ * Local JVM unit tests for Android module behavior.
+ */
 package ir.salamlang.editor
 
 import org.junit.Test

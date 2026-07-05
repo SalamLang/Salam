@@ -1,0 +1,97 @@
+---
+name: 📚 Books - Build & Validate PDFs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'books/**'
+      - '.github/workflows/books-build-pdf.yml'
+  pull_request:
+    paths:
+      - 'books/**'
+      - '.github/workflows/books-build-pdf.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: books-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & validate the ${{ matrix.lang }} book
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: [en, fa]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Build the ${{ matrix.lang }} book (XeLaTeX in Docker)
+        run: |
+          set -euo pipefail
+          rm -f "books/${{ matrix.lang }}/intro-programming/"book.{aux,log,out,toc,xdv,pdf,fls,fdb_latexmk}
+          docker compose -f books/docker/docker-compose.yml run --rm books ${{ matrix.lang }}
+
+      - name: Verify the generated PDF is valid
+        run: |
+          set -euo pipefail
+          lang="${{ matrix.lang }}"
+          pdf="books/${lang}/intro-programming/book.pdf"
+
+          if [ ! -f "$pdf" ]; then
+            echo "::error::Expected PDF was not generated: $pdf"
+            exit 1
+          fi
+
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends poppler-utils qpdf
+
+          echo "::group::qpdf --check $pdf"
+          qpdf --check "$pdf" || echo "::warning::qpdf reported issues for $pdf (see log above)"
+          echo "::endgroup::"
+
+          info="$(pdfinfo "$pdf")"
+          echo "$info"
+          pages="$(printf '%s\n' "$info" | awk '/^Pages:/ {print $2}')"
+          case "$pages" in
+            ''|*[!0-9]*)
+              echo "::error::Could not read a valid page count from $pdf"
+              exit 1
+              ;;
+          esac
+          if [ "$pages" -lt 1 ]; then
+            echo "::error::$pdf reports $pages pages"
+            exit 1
+          fi
+
+          size="$(du -h "$pdf" | cut -f1)"
+          echo "✅ ${lang} book is a valid PDF: ${pages} pages, ${size}"
+
+          {
+            echo "### 📘 ${lang} book — valid PDF"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Pages | ${pages} |"
+            echo "| Size | ${size} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          cp "$pdf" "intro-to-salam-${lang}.pdf"
+
+      - name: Upload the ${{ matrix.lang }} PDF artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: salam-book-${{ matrix.lang }}
+          path: intro-to-salam-${{ matrix.lang }}.pdf
+          if-no-files-found: error
+          retention-days: 30

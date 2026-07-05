@@ -1,3 +1,6 @@
+/**
+ * Instrumented Android tests for application runtime behavior.
+ */
 package ir.salamlang.editor
 
 import androidx.test.platform.app.InstrumentationRegistry

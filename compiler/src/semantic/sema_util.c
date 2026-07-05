@@ -54,18 +54,19 @@ symbol_t *struct_sym_of(type_t *t)
 const char *intrinsic_type_canon(const char *name)
 {
     static const struct {
-        const char *fa, *en;
+        const char *fa, *ar, *en;
     } tab[] = {
-        {"وکتور", "Vector"},
-        {"نگاشت", "HashMap"},
-        {"پیمایشگر_نگاشت", "MapIter"},
-        {"پرونده", "File"},
+        {"وکتور", "متجه", "Vector"},
+        {"نگاشت", "خريطة", "HashMap"},
+        {"پیمایشگر_نگاشت", "مكرر_خريطة", "MapIter"},
+        {"پرونده", "ملف", "File"},
     };
     if (!name) return name;
     {
         size_t i = 0;
         for (; i < sizeof(tab) / sizeof(tab[0]); i++)
-            if (strcmp(name, tab[i].fa) == 0) return tab[i].en;
+            if (strcmp(name, tab[i].fa) == 0 || strcmp(name, tab[i].ar) == 0)
+                return tab[i].en;
     }
     return name;
 }
@@ -73,47 +74,48 @@ const char *intrinsic_type_canon(const char *name)
 const char *intrinsic_method_canon(const char *name)
 {
     static const struct {
-        const char *fa, *en;
+        const char *fa, *ar, *en;
     } tab[] = {
 
-        {"بیفزا", "push"},
-        {"دربیاور", "pop"},
-        {"بگیر", "get"},
-        {"بنشان", "set"},
-        {"طول", "len"},
-        {"ظرفیت", "cap"},
-        {"آزادکن", "free"},
+        {"بیفزا", "أضف", "push"},
+        {"دربیاور", "أخرج", "pop"},
+        {"بگیر", "احصل", "get"},
+        {"بنشان", "عين", "set"},
+        {"طول", "طول", "len"},
+        {"ظرفیت", "سعة", "cap"},
+        {"آزادکن", "حرر", "free"},
 
-        {"درج", "put"},
-        {"دارد", "has"},
-        {"حذف", "remove"},
-        {"اندازه", "size"},
-        {"پیمایش", "iter"},
+        {"درج", "ضع", "put"},
+        {"دارد", "يحوي", "has"},
+        {"حذف", "احذف", "remove"},
+        {"اندازه", "حجم", "size"},
+        {"پیمایش", "تكرار", "iter"},
 
-        {"دارد_بعدی", "has_next"},
-        {"کلید", "key"},
-        {"مقدار", "value"},
-        {"بعدی", "next"},
+        {"دارد_بعدی", "لديه_التالي", "has_next"},
+        {"کلید", "مفتاح", "key"},
+        {"مقدار", "قيمة", "value"},
+        {"بعدی", "التالي", "next"},
 
-        {"خواندن", "read"},
-        {"خواندن_خط", "readline"},
-        {"نوشتن", "write"},
-        {"جابجایی", "seek"},
-        {"ببند", "close"},
+        {"خواندن", "قراءة", "read"},
+        {"خواندن_خط", "قراءة_سطر", "readline"},
+        {"نوشتن", "كتابة", "write"},
+        {"جابجایی", "انتقال", "seek"},
+        {"ببند", "أغلق", "close"},
 
-        {"پیوست", "concat"},
-        {"زیررشته", "substr"},
-        {"بیاب", "find"},
-        {"بشکاف", "split"},
-        {"پیراست", "trim"},
-        {"به_صحیح", "to_int"},
-        {"به_اعشار", "to_float"},
+        {"پیوست", "دمج", "concat"},
+        {"زیررشته", "مقطع", "substr"},
+        {"بیاب", "ابحث", "find"},
+        {"بشکاف", "قسم", "split"},
+        {"پیراست", "شذب", "trim"},
+        {"به_صحیح", "إلى_صحيح", "to_int"},
+        {"به_اعشار", "إلى_عشري", "to_float"},
     };
     if (!name) return name;
     {
         size_t i = 0;
         for (; i < sizeof(tab) / sizeof(tab[0]); i++)
-            if (strcmp(name, tab[i].fa) == 0) return tab[i].en;
+            if (strcmp(name, tab[i].fa) == 0 || strcmp(name, tab[i].ar) == 0)
+                return tab[i].en;
     }
     return name;
 }

@@ -169,47 +169,48 @@ type_t *type_func(type_ctx_t *tc, type_t *ret, const vec_t *params)
 
 int type_prim_kind_from_name(const char *name, const char *lang)
 {
+    if (!name) return -1;
     enum { L_EN = 1, L_FA = 2, L_AR = 3 };
     struct {
         const char *n;
         type_kind_t k;
         int lg;
     } tab[] = {
-        {"void", TY_VOID, L_EN},   {"bool", TY_BOOL, L_EN},    {"char", TY_CHAR, L_EN},
+        {"void", TY_VOID, L_EN},   {"bool", TY_BOOL, L_EN},     {"char", TY_CHAR, L_EN},
         {"str", TY_STR, L_EN},     {"uchar", TY_UCHAR, L_EN},
 
-        {"i8", TY_I8, L_EN},       {"i16", TY_I16, L_EN},      {"i32", TY_I32, L_EN},
-        {"int", TY_I32, L_EN},     {"i64", TY_I64, L_EN},      {"u8", TY_U8, L_EN},
-        {"u16", TY_U16, L_EN},     {"u32", TY_U32, L_EN},      {"uint", TY_U32, L_EN},
-        {"u64", TY_U64, L_EN},     {"f32", TY_F32, L_EN},      {"float", TY_F32, L_EN},
+        {"i8", TY_I8, L_EN},       {"i16", TY_I16, L_EN},       {"i32", TY_I32, L_EN},
+        {"int", TY_I32, L_EN},     {"i64", TY_I64, L_EN},       {"u8", TY_U8, L_EN},
+        {"u16", TY_U16, L_EN},     {"u32", TY_U32, L_EN},       {"uint", TY_U32, L_EN},
+        {"u64", TY_U64, L_EN},     {"f32", TY_F32, L_EN},       {"float", TY_F32, L_EN},
         {"f64", TY_F64, L_EN},
 
-        {"تهی", TY_VOID, L_FA},    {"منطقی", TY_BOOL, L_FA},   {"نویسه", TY_CHAR, L_FA},
+        {"تهی", TY_VOID, L_FA},    {"منطقی", TY_BOOL, L_FA},    {"نویسه", TY_CHAR, L_FA},
         {"رشته", TY_STR, L_FA},    {"یونیکد", TY_UCHAR, L_FA},
 
-        {"صحیح۸", TY_I8, L_FA},    {"صحیح۱۶", TY_I16, L_FA},   {"صحیح۳۲", TY_I32, L_FA},
-        {"صحیح", TY_I32, L_FA},    {"صحیح۶۴", TY_I64, L_FA},   {"صحیح8", TY_I8, L_FA},
-        {"صحیح16", TY_I16, L_FA},  {"صحیح32", TY_I32, L_FA},   {"صحیح64", TY_I64, L_FA},
+        {"صحیح۸", TY_I8, L_FA},    {"صحیح۱۶", TY_I16, L_FA},    {"صحیح۳۲", TY_I32, L_FA},
+        {"صحیح", TY_I32, L_FA},    {"صحیح۶۴", TY_I64, L_FA},    {"صحیح8", TY_I8, L_FA},
+        {"صحیح16", TY_I16, L_FA},  {"صحیح32", TY_I32, L_FA},    {"صحیح64", TY_I64, L_FA},
 
-        {"طبیعی۸", TY_U8, L_FA},   {"طبیعی۱۶", TY_U16, L_FA},  {"طبیعی۳۲", TY_U32, L_FA},
-        {"طبیعی", TY_U32, L_FA},   {"طبیعی۶۴", TY_U64, L_FA},  {"طبیعی8", TY_U8, L_FA},
-        {"طبیعی16", TY_U16, L_FA}, {"طبیعی32", TY_U32, L_FA},  {"طبیعی64", TY_U64, L_FA},
+        {"طبیعی۸", TY_U8, L_FA},   {"طبیعی۱۶", TY_U16, L_FA},   {"طبیعی۳۲", TY_U32, L_FA},
+        {"طبیعی", TY_U32, L_FA},   {"طبیعی۶۴", TY_U64, L_FA},   {"طبیعی8", TY_U8, L_FA},
+        {"طبیعی16", TY_U16, L_FA}, {"طبیعی32", TY_U32, L_FA},   {"طبیعی64", TY_U64, L_FA},
 
-        {"اعشار۳۲", TY_F32, L_FA}, {"اعشار", TY_F32, L_FA},    {"اعشار۶۴", TY_F64, L_FA},
+        {"اعشار۳۲", TY_F32, L_FA}, {"اعشار", TY_F32, L_FA},     {"اعشار۶۴", TY_F64, L_FA},
         {"اعشار32", TY_F32, L_FA}, {"اعشار64", TY_F64, L_FA},
 
-        {"فراغ", TY_VOID, L_AR},   {"منطقي", TY_BOOL, L_AR},   {"حرف", TY_CHAR, L_AR},
+        {"فراغ", TY_VOID, L_AR},   {"منطقي", TY_BOOL, L_AR},    {"حرف", TY_CHAR, L_AR},
         {"نص", TY_STR, L_AR},      {"يونيكود", TY_UCHAR, L_AR},
 
-        {"صحيح٨", TY_I8, L_AR},    {"صحيح١٦", TY_I16, L_AR},   {"صحيح٣٢", TY_I32, L_AR},
-        {"صحيح", TY_I32, L_AR},    {"صحيح٦٤", TY_I64, L_AR},   {"صحيح8", TY_I8, L_AR},
-        {"صحيح16", TY_I16, L_AR},  {"صحيح32", TY_I32, L_AR},   {"صحيح64", TY_I64, L_AR},
+        {"صحيح٨", TY_I8, L_AR},    {"صحيح١٦", TY_I16, L_AR},    {"صحيح٣٢", TY_I32, L_AR},
+        {"صحيح", TY_I32, L_AR},    {"صحيح٦٤", TY_I64, L_AR},    {"صحيح8", TY_I8, L_AR},
+        {"صحيح16", TY_I16, L_AR},  {"صحيح32", TY_I32, L_AR},    {"صحيح64", TY_I64, L_AR},
 
-        {"طبيعي٨", TY_U8, L_AR},   {"طبيعي١٦", TY_U16, L_AR},  {"طبيعي٣٢", TY_U32, L_AR},
-        {"طبيعي", TY_U32, L_AR},   {"طبيعي٦٤", TY_U64, L_AR},  {"طبيعي8", TY_U8, L_AR},
-        {"طبيعي16", TY_U16, L_AR}, {"طبيعي32", TY_U32, L_AR},  {"طبيعي64", TY_U64, L_AR},
+        {"طبيعي٨", TY_U8, L_AR},   {"طبيعي١٦", TY_U16, L_AR},   {"طبيعي٣٢", TY_U32, L_AR},
+        {"طبيعي", TY_U32, L_AR},   {"طبيعي٦٤", TY_U64, L_AR},   {"طبيعي8", TY_U8, L_AR},
+        {"طبيعي16", TY_U16, L_AR}, {"طبيعي32", TY_U32, L_AR},   {"طبيعي64", TY_U64, L_AR},
 
-        {"عشري٣٢", TY_F32, L_AR},  {"عشري", TY_F32, L_AR},     {"عشري٦٤", TY_F64, L_AR},
+        {"عشري٣٢", TY_F32, L_AR},  {"عشري", TY_F32, L_AR},      {"عشري٦٤", TY_F64, L_AR},
         {"عشري32", TY_F32, L_AR},  {"عشري64", TY_F64, L_AR},
     };
     int want = 0;

@@ -23,6 +23,7 @@ Welcome to Salam! We're glad you're interested in contributing to our open-sourc
   - [Rebase your branch onto upstream](#rebase-your-branch-onto-upstream)
   - [Force-push after rebasing](#force-push-after-rebasing)
 - [📝 Code Style and Guidelines](#-code-style-and-guidelines)
+  - [🎨 C Code Formatting (clang-format)](#-c-code-formatting-clang-format)
   - [🪝 Commit Hooks](#-commit-hooks)
     - [Install `prek`](#install-prek)
     - [Set up and run hooks](#set-up-and-run-hooks)
@@ -284,6 +285,35 @@ To maintain consistency and readability, please follow these coding conventions 
 - Write meaningful commit messages that explain the purpose of each commit.
 - Keep your changes focused and atomic. Avoid mixing unrelated changes in the same pull request.
 - Test your code thoroughly to ensure its functionality and prevent regressions.
+
+### 🎨 C Code Formatting (clang-format)
+
+All C code under `compiler/` is formatted with [`clang-format`](https://clang.llvm.org/docs/ClangFormat.html) using the style defined in the repo-root [`.clang-format`](.clang-format). CI enforces this through Super-Linter (which builds clang-format from **LLVM 21**), so please format your C changes before pushing.
+
+Use **clang-format 21** to match CI exactly (any `21.1.x` is fine; `clang-format --version` should print `21`). If you do not have it, install a pinned copy with pip:
+
+```bash
+python3 -m venv .venv-cf && .venv-cf/bin/pip install "clang-format==21.1.2"
+# then use .venv-cf/bin/clang-format below
+```
+
+Format **all** C code at once:
+
+```bash
+# via prek (recommended: uses the pinned hook version, see below)
+prek run clang-format --all-files
+
+# or directly, over every tracked C/H file
+git ls-files 'compiler/*.c' 'compiler/*.h' | xargs clang-format -i
+```
+
+Check formatting **without** modifying files (this is what CI runs):
+
+```bash
+git ls-files 'compiler/*.c' 'compiler/*.h' | xargs clang-format --dry-run --Werror
+```
+
+The formatter runs automatically on staged C files via the `clang-format` prek hook (see below), so a normal `git commit` keeps your changes formatted. A few style choices are intentional and must not be dropped from `.clang-format`: include order is never reordered (`SortIncludes: Never`), string literals are not auto-split (`BreakStringLiterals: false`, needed for the Persian/RTL messages), and the `IN1F`/`IN2F` math X-macros are declared as `StatementMacros`.
 
 ### 🪝 Commit Hooks
 

@@ -88,11 +88,6 @@ static int count_os_defs(void)
     return s_nos;
 }
 
-/*
- * Cross-compilation: when a target triple is active the OS/arch predefined
- * macros must describe the TARGET, not the host the compiler was built on, so
- * that `@if SALAM_OS_WINDOWS` etc. select the right code path. NULL => host.
- */
 static const char *s_target_triple = NULL;
 
 void preproc_set_target(const char *triple)
@@ -105,8 +100,6 @@ static bool trip_has(const char *hay, const char *needle)
     return strstr(hay, needle) != NULL;
 }
 
-/* Derive the SALAM_OS_ and SALAM_ARCH_ defines for an LLVM target triple.
- * Mirrors the host table in s_os_defs. Returns the number written. */
 static int target_os_defs(const char *t, const char **o, int cap)
 {
     int n = 0;

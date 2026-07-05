@@ -115,8 +115,6 @@ static void emit_link(sb_t *cmd, logger_t *log, const char *spec, const char *ki
 
 int driver_build(options_t *opt)
 {
-    /* Cross-compilation: when a target triple is requested, hand off to the
-     * LLVM backend (which honours --target) instead of the C backend + --cc. */
     if (opt->llvm_target && opt->llvm_target[0]) return driver_llvm_build(opt);
 
     logger_t *log = logger_new(stderr, opt->log_level, opt->color == 1);
@@ -130,7 +128,6 @@ int driver_build(options_t *opt)
         return 2;
     }
     salam_set_stdlib_root(opt->stdlib_path);
-    /* The C backend targets the host; use host OS/arch predefined macros. */
     preproc_set_target(NULL);
 
     if (opt->cc && strcmp(opt->cc, "tcc") == 0) {

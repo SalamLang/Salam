@@ -20,11 +20,11 @@ extern "C" {
 #endif
 
 typedef enum {
-    SALAM_LLD_ELF = 0,   /* Linux/BSD ELF (GNU driver)          */
-    SALAM_LLD_MINGW = 1, /* Windows via the GNU-style MinGW driver */
-    SALAM_LLD_COFF = 2,  /* Windows via the MSVC link.exe driver   */
-    SALAM_LLD_MACHO = 3, /* macOS Mach-O                        */
-    SALAM_LLD_WASM = 4   /* WebAssembly                         */
+    SALAM_LLD_ELF = 0,
+    SALAM_LLD_MINGW = 1,
+    SALAM_LLD_COFF = 2,
+    SALAM_LLD_MACHO = 3,
+    SALAM_LLD_WASM = 4
 } salam_lld_flavor_t;
 
 int salam_lld_available(void);

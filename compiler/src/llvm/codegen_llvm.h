@@ -46,13 +46,9 @@ typedef struct {
     llvm_output_mode_t output_mode;
     const char *output_file;
     const char *target_triple;
-    /* Libraries from `link "..."` directives, honored when linking an
-     * executable. link_kinds[i] mirrors the AST_LINK node kind (e.g. "static",
-     * "framework") or NULL for a plain dynamic library. */
     const char *const *link_libs;
     const char *const *link_kinds;
     int nlink;
-    /* Optional cross-compilation sysroot (mingw-w64 etc.) passed to clang. */
     const char *sysroot;
 } codegen_llvm_options_t;
 

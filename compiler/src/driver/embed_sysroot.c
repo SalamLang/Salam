@@ -32,7 +32,6 @@ static int path_exists(const char *p)
     return stat(p, &st) == 0;
 }
 
-/* Create `path` and any missing parents (like mkdir -p). */
 static int mkdir_p(const char *path)
 {
     char buf[1024];
@@ -52,7 +51,6 @@ static int mkdir_p(const char *path)
     return 0;
 }
 
-/* Create the parent directory of a file path. */
 static int mkdir_parent(const char *file)
 {
     char buf[1024];
@@ -79,7 +77,6 @@ static unsigned long tar_oct(const unsigned char *p, int n)
     return v;
 }
 
-/* Extract a ustar archive into `dest` (already created). */
 static int untar(const unsigned char *tar, size_t len, const char *dest)
 {
     size_t off = 0;
@@ -91,7 +88,7 @@ static int untar(const unsigned char *tar, size_t len, const char *dest)
         unsigned long size;
         char type;
         size_t blocks;
-        if (h[0] == '\0') break; /* two zero blocks mark end */
+        if (h[0] == '\0') break;
         if (have_long) {
             sal_snprintf(name, sizeof name, "%s", longname);
             have_long = 0;
@@ -110,9 +107,9 @@ static int untar(const unsigned char *tar, size_t len, const char *dest)
         type = (char)h[156];
         off += 512;
         blocks = (size_t)((size + 511) / 512);
-        if (off + blocks * 512 > len + 512) break; /* corrupt/truncated */
+        if (off + blocks * 512 > len + 512) break;
 
-        if (type == 'L') { /* GNU long-name entry: payload is the next name */
+        if (type == 'L') {
             size_t cp = size < sizeof longname ? (size_t)size : sizeof longname - 1;
             memcpy(longname, tar + off, cp);
             longname[cp] = '\0';
@@ -120,7 +117,7 @@ static int untar(const unsigned char *tar, size_t len, const char *dest)
             off += blocks * 512;
             continue;
         }
-        if (name[0] == '\0' || strstr(name, "..")) { /* skip empty / path escapes */
+        if (name[0] == '\0' || strstr(name, "..")) {
             off += blocks * 512;
             continue;
         }
@@ -165,11 +162,10 @@ int salam_materialize_sysroot(const char *name, const unsigned char *tar, size_t
 {
     char marker[1200];
     if (!tar || tar_len < 512) return 0;
-    /* Version by byte length: a changed embedded sysroot re-extracts to a new dir. */
     sal_snprintf(out, out_n, "%s/salam/sysroots/%s_%lu", cache_root(), name,
                  (unsigned long)tar_len);
     sal_snprintf(marker, sizeof marker, "%s/.salam-ok", out);
-    if (path_exists(marker)) return 1; /* already extracted */
+    if (path_exists(marker)) return 1;
     if (mkdir_p(out) != 0) return 0;
     if (untar(tar, tar_len, out) != 0) return 0;
     {

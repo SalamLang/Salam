@@ -52,12 +52,14 @@ Welcome to Salam! We're glad you're interested in contributing to our open-sourc
 
 Before opening an issue, search the [existing issues](https://github.com/SalamLang/Salam/issues) to avoid duplicates.
 
-We provide two issue templates to keep reports clear and actionable:
+We provide three issue templates to keep reports clear and actionable:
 
 - **Bug report** - use this when something is broken or behaves unexpectedly. Include steps to reproduce the problem, what you expected to happen, and details about your environment (OS, compiler version, etc.).
 - **Feature request** - use this to propose a new capability or improvement. Describe the problem you are trying to solve and why it would benefit others.
+- **Custom issue template** - use this when your topic does not fit the standard bug-report or feature-request flow.
 
-Both templates are available when you click **New issue** on GitHub. Fill in all the relevant sections so maintainers can triage your report quickly.
+All three templates are available when you click **New issue** on GitHub. Fill
+in all the relevant sections so maintainers can triage your report quickly.
 
 ## 🚀 Getting Started
 
@@ -95,7 +97,7 @@ Both templates are available when you click **New issue** on GitHub. Fill in all
 
 6. **Make Changes**: Implement your changes to the code, documentation, or tests as necessary.
 
-7. **Test Your Changes**: Ensure your changes work as expected by testing them thoroughly.
+7. **Test Your Changes**: Ensure your changes work as expected by testing them thoroughly. For documentation work, install the workspace dependencies with `bun install`, preview the docs locally with `bun run docs:myst`, and build the static site with `bun run build:myst`.
 
 8. **Commit Your Changes**: Commit your changes with a clear and descriptive message.
 
@@ -109,7 +111,7 @@ Both templates are available when you click **New issue** on GitHub. Fill in all
    git push origin feature/my-new-feature
    ```
 
-10. **Submit a Pull Request**: On GitHub, open a pull request from your feature branch to `SalamLang/Salam:main`, providing a clear description of your changes and their purpose.
+10. **Submit a Pull Request**: On GitHub, open a pull request from your feature branch to `SalamLang/Salam:main`, follow the pull-request template, link any related issues, and explain how you validated the change.
 
 ## 🏁 Basic Usage
 
@@ -210,7 +212,7 @@ git push origin fix/describe-the-fix
 
 ### 7. Open a Pull Request
 
-On GitHub, navigate to your fork and click **Compare & pull request**. Fill in the title and description, then submit. A maintainer will review your PR and may request changes.
+On GitHub, navigate to your fork and click **Compare & pull request**. Fill in the pull-request template, link any related issues, mark the checklist items you completed, and then submit. A maintainer will review your PR and may request changes.
 
 ### 8. Address review feedback
 
@@ -441,15 +443,18 @@ Because the `manual` stage and `prek-audit.toml` run separately, only hooks in t
 
 Every pull request triggers a suite of automated checks. Understanding what runs helps you resolve failures quickly.
 
-| Workflow                | What it checks                                                                                                                                              |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Prek Standard Hooks** | Runs `prek run --all-files` on Ubuntu, macOS, and Windows to verify formatting, spelling, linting, and security checks defined in `prek.toml`.              |
-| **Prek Manual Hooks**   | Runs the `manual`-stage hooks (e.g. `shfmt`, `chmod`) across the same platform matrix.                                                                      |
-| **Prek Audit Hooks**    | Runs `prek run --all-files --config prek-audit.toml` across the same platform matrix to perform security-focused audit checks defined in `prek-audit.toml`. |
-| **Super-Linter**        | Runs a broad set of language-specific linters across the repository.                                                                                        |
-| **Docker Build & Test** | Builds the compiler inside an Alpine + LLVM Docker image and runs the test suite.                                                                           |
-| **Build and Release**   | Compiles release binaries for all supported targets.                                                                                                        |
-| **WebAssembly**         | Builds the playground WebAssembly module and publishes it to GitHub Pages.                                                                                  |
+| Workflow                         | What it checks                                                                                                                                              |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compiler - Build & Test**      | Builds the compiler inside an Alpine + LLVM Docker image and runs the test suite.                                                                           |
+| **Compiler - Clone & Build**     | Verifies that a fresh clone can build on Windows, macOS, and Linux.                                                                                         |
+| **Compiler - Build & Release**   | Compiles release binaries for the supported distribution targets.                                                                                            |
+| **Editor - Build Playground**    | Builds the WebAssembly playground bundle on pull requests to catch editor or compiler integration regressions before merge.                                  |
+| **Books - Build & Validate PDFs** | Builds the language books and verifies the generated PDFs.                                                                                                  |
+| **Prek Standard Hooks**          | Runs `prek run --all-files` on Ubuntu, macOS, and Windows to verify formatting, spelling, linting, and security checks defined in `prek.toml`.             |
+| **Prek Manual Hooks**            | Runs the `manual`-stage hooks (e.g. `shfmt`, `chmod`) across the same platform matrix.                                                                      |
+| **Prek Audit Hooks**             | Runs `prek run --all-files --config prek-audit.toml` across the same platform matrix to perform security-focused audit checks defined in `prek-audit.toml`. |
+| **Super-Linter**                 | Runs a broad set of language-specific linters across the repository.                                                                                        |
+| **PR - Auto-Labeler**            | Applies labels automatically based on the files changed in the pull request.                                                                                 |
 
 All checks must pass before a pull request can be merged. If a check fails:
 
@@ -464,5 +469,8 @@ We are currently triaging issues with the **Super-Linter** workflow and the team
 ## 💬 Feedback and Support
 
 If you have any questions or need assistance, feel free to reach out to the project maintainers or the community. We're here to support each other in making Salam the best it can be.
+
+- **Discord**: <https://discord.gg/HfY3QHDPdv>
+- **Telegram**: <https://t.me/SalamProgrammingLanguage>
 
 Thank you for your interest in contributing to Salam! We appreciate your help in making this project a success. Happy coding!

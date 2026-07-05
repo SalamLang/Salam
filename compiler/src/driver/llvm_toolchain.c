@@ -16,6 +16,7 @@
 #include "core/sal_format.h"
 #include "driver/llvm_toolchain.h"
 #include "llvm/llvm_native.h"
+#include "semantic/sema.h"
 #include "core/sb.h"
 #include "i18n/i18n.h"
 #include <stdlib.h>
@@ -79,15 +80,76 @@ static void to_tool_path(const char *host, char *out, size_t cap)
 #endif
 }
 
+static bool triple_is_windows(const char *t)
+{
+    return t && (strstr(t, "windows") || strstr(t, "mingw") || strstr(t, "win32"));
+}
+
+static bool triple_is_wasm(const char *t)
+{
+    return t && strstr(t, "wasm");
+}
+
+static void emit_llvm_link(sb_t *s, const char *spec, const char *kind, bool windows)
+{
+    bool framework = kind && strcmp(kind, "framework") == 0;
+    bool is_static = kind && strcmp(kind, "static") == 0;
+    if (framework) {
+        sb_puts(s, " -framework ");
+        sb_put_shell_arg(s, spec);
+        return;
+    }
+    if (spec[0] == '-' || strpbrk(spec, "/\\.") != NULL) {
+        sb_putc(s, ' ');
+        sb_put_shell_arg(s, spec);
+        return;
+    }
+    if (is_static && !windows) {
+        sb_puts(s, " -Wl,-Bstatic -l");
+        sb_put_shell_arg(s, spec);
+        sb_puts(s, " -Wl,-Bdynamic");
+        return;
+    }
+    sb_puts(s, " -l");
+    sb_put_shell_arg(s, spec);
+}
+
+static const char *resolve_tool(const char *bundled, const char *fallback, char *buf,
+                                size_t cap)
+{
+    char raw[SALAM_PATH_MAX];
+    if (salam_find_bundled_tool(bundled, raw, sizeof raw)) {
+        to_tool_path(raw, buf, cap);
+        return buf;
+    }
+    return fallback;
+}
+
+static void emit_tool(sb_t *s, const char *tool)
+{
+    sb_putc(s, '"');
+    sb_puts(s, tool);
+    sb_putc(s, '"');
+}
+
 static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
 {
     const char *O = opt_flag(opts->opt_level);
     const char *triple = opts->target_triple;
-    if (opts->verify_module)
-        sb_puts(s, LLVM_OPT " -passes=verify -disable-output \"$IN\"\n");
+    static char cbuf[SALAM_PATH_MAX], lbuf[SALAM_PATH_MAX], obuf[SALAM_PATH_MAX],
+        ibuf[SALAM_PATH_MAX];
+    const char *CLANG = resolve_tool("clang", LLVM_CLANG, cbuf, sizeof cbuf);
+    const char *LLC = resolve_tool("llc", LLVM_LLC, lbuf, sizeof lbuf);
+    const char *OPTT = resolve_tool("opt", LLVM_OPT, obuf, sizeof obuf);
+    const char *LLI = resolve_tool("lli", LLVM_LLI, ibuf, sizeof ibuf);
+    if (opts->verify_module) {
+        emit_tool(s, OPTT);
+        sb_puts(s, " -passes=verify -disable-output \"$IN\"\n");
+    }
     switch (opts->output_mode) {
     case LLVM_OUT_ASM:
-        sb_puts(s, LLVM_LLC " ");
+        emit_tool(s, LLC);
+        sb_putc(s, ' ');
         sb_puts(s, O);
         if (triple) {
             sb_puts(s, " -mtriple=");
@@ -96,7 +158,8 @@ static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
         sb_puts(s, " -filetype=asm \"$IN\" -o \"$OUT\"\n");
         break;
     case LLVM_OUT_OBJ:
-        sb_puts(s, LLVM_LLC " ");
+        emit_tool(s, LLC);
+        sb_putc(s, ' ');
         sb_puts(s, O);
         if (triple) {
             sb_puts(s, " -mtriple=");
@@ -105,27 +168,46 @@ static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
         sb_puts(s, " -filetype=obj \"$IN\" -o \"$OUT\"\n");
         break;
     case LLVM_OUT_BITCODE:
-        sb_puts(s, LLVM_OPT " ");
+        emit_tool(s, OPTT);
+        sb_putc(s, ' ');
         sb_puts(s, O);
         sb_puts(s, " \"$IN\" -o \"$OUT\"\n");
         break;
-    case LLVM_OUT_EXEC:
-        sb_puts(s, LLVM_CLANG " ");
+    case LLVM_OUT_EXEC: {
+        bool win = triple_is_windows(triple);
+        bool wasm = triple_is_wasm(triple);
+        emit_tool(s, CLANG);
+        sb_putc(s, ' ');
         sb_puts(s, O);
         if (triple) {
             sb_puts(s, " --target=");
             sb_puts(s, triple);
         }
         if (opts->debug_info) sb_puts(s, " -g");
-        sb_puts(s, " \"$IN\" -lm -o \"$OUT\"\n");
+        if (opts->sysroot && opts->sysroot[0]) sb_puts(s, " --sysroot=\"$SYSROOT\"");
+        if (win) sb_puts(s, " -fuse-ld=lld");
+        sb_puts(s, " \"$IN\"");
+        {
+            int i = 0;
+            for (; i < opts->nlink; i++)
+                emit_llvm_link(s, opts->link_libs[i],
+                               opts->link_kinds ? opts->link_kinds[i] : NULL, win);
+        }
+        if (!win && !wasm) sb_puts(s, " -lm");
+        sb_puts(s, " -o \"$OUT\"\n");
         break;
+    }
     case LLVM_OUT_JIT:
         if (opts->opt_level != LLVM_OPT_O0) {
-            sb_puts(s, LLVM_OPT " ");
+            emit_tool(s, OPTT);
+            sb_putc(s, ' ');
             sb_puts(s, O);
-            sb_puts(s, " \"$IN\" -o - | " LLVM_LLI " -\n");
+            sb_puts(s, " \"$IN\" -o - | ");
+            emit_tool(s, LLI);
+            sb_puts(s, " -\n");
         } else {
-            sb_puts(s, LLVM_LLI " \"$IN\"\n");
+            emit_tool(s, LLI);
+            sb_puts(s, " \"$IN\"\n");
         }
         break;
     case LLVM_OUT_IR:
@@ -154,13 +236,20 @@ int salam_llvm_toolchain(logger_t *log, const char *ll_path,
     sb_t script;
     sb_init(&script);
     sb_puts(&script, "set -e\n");
-    sb_puts(&script, "IN='");
-    sb_puts(&script, in_tp);
-    sb_puts(&script, "'\n");
+    sb_puts(&script, "IN=");
+    sb_put_shell_arg(&script, in_tp);
+    sb_putc(&script, '\n');
     if (out_tp[0]) {
-        sb_puts(&script, "OUT='");
-        sb_puts(&script, out_tp);
-        sb_puts(&script, "'\n");
+        sb_puts(&script, "OUT=");
+        sb_put_shell_arg(&script, out_tp);
+        sb_putc(&script, '\n');
+    }
+    if (opts->sysroot && opts->sysroot[0]) {
+        char sr_tp[SALAM_PATH_MAX];
+        to_tool_path(opts->sysroot, sr_tp, sizeof sr_tp);
+        sb_puts(&script, "SYSROOT=");
+        sb_put_shell_arg(&script, sr_tp);
+        sb_putc(&script, '\n');
     }
     emit_tool_cmd(&script, opts);
 

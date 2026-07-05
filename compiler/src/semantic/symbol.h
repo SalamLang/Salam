@@ -82,7 +82,7 @@ struct scope_t {
     func_sig_t *func;
     const char *label;
     scope_t *aux;
-    const char *lang; /* language of the package that owns this scope ("fa"/"en") */
+    const char *lang;
 };
 
 scope_t *scope_new(arena_t *a, scope_kind_t kind, scope_t *parent);

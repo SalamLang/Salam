@@ -47,6 +47,7 @@ Salam is a general-purpose and systems programming language designed for efficie
 - [🛠️ The Compiler (`salam`)](#-the-compiler-salam)
   - [Build](#build)
   - [Usage](#usage)
+  - [Cross-compilation](#cross-compilation)
 - [🐳 Docker & Docker Compose](#-docker--docker-compose)
   - [Development (live reload)](#development-live-reload)
   - [Production (copy & build)](#production-copy--build)
@@ -191,6 +192,69 @@ func main {
     println("Hello, World!")
 }
 ```
+
+### Cross-compilation
+
+Salam can produce executables and object files for other operating systems and
+architectures using the **LLVM backend**. Pass a full LLVM target triple with
+`--target=<triple>` to `build` or `obj`; when it is present the compiler routes
+through LLVM (`clang`/`llc`) instead of the default C backend, so `--cc` and
+`--keep-c` no longer apply. The output name follows the target's conventions
+(`.exe` for Windows, `.obj` for MSVC objects, none for ELF), and `--output`
+overrides it as usual.
+
+```sh
+# Windows executable from Linux (MinGW target)
+salam build main.salam --target=x86_64-w64-windows-gnu --output=app.exe
+
+# WebAssembly (WASI)
+salam build main.salam --target=wasm32-wasi --output=app.wasm
+
+# a target-specific object file
+salam obj main.salam --target=x86_64-pc-windows-msvc      # -> main.obj
+```
+
+The target is fully wired through the pipeline: the OS/arch predefined macros
+(`SALAM_OS_WINDOWS`, `SALAM_ARCH_X64`, …) describe the **target**, so
+`@if SALAM_OS_WINDOWS` selects the right branch, and `link "..."` directives are
+passed to the cross-linker (e.g. `link "user32"` → `-luser32`).
+
+**Prerequisites.** Cross-compilation drives the LLVM toolchain, so you need a
+recent `clang`/`llc` (v22 is what the toolchain invokes) plus, for Windows
+targets, the LLVM linker `lld` and a **sysroot** (the target's CRT, system
+import libraries, and headers):
+
+```sh
+sudo apt install clang lld llvm        # toolchain (or an official LLVM release)
+```
+
+**Bundled sysroot (zero-setup for your users).** Build the compiler with
+`-DSALAM_BUNDLE_MINGW=ON` and a MinGW-w64 sysroot is staged into
+`<prefix>/share/salam/sysroots/<arch>-w64-mingw32/`; `salam build --target=…-windows-gnu`
+then discovers and passes it automatically, so end users need nothing extra:
+
+```sh
+# copy an existing sysroot (e.g. from the mingw-w64 package)
+cmake -B build -DSALAM_BUNDLE_MINGW=ON \
+      -DSALAM_MINGW_SYSROOT=/usr/x86_64-w64-mingw32
+# or download one (pin the hash for reproducibility)
+cmake -B build -DSALAM_BUNDLE_MINGW=ON \
+      -DSALAM_MINGW_URL=<llvm-mingw archive> -DSALAM_MINGW_SHA256=<hash>
+cmake --build build && cmake --install build
+```
+
+Point `$SALAM_SYSROOTS` at a directory of `<triple>/` sysroots to override or
+add targets without rebuilding.
+
+> **MSVC / macOS targets.** Microsoft's and Apple's SDKs are not redistributable,
+> so `*-windows-msvc` and `*-apple-darwin` sysroots can't be bundled; supply them
+> yourself (e.g. [`xwin`](https://github.com/Jake-Shadle/xwin) for MSVC) and expose
+> them via `$SALAM_SYSROOTS`. Prefer the `-windows-gnu` (MinGW) triple on Linux.
+>
+> The LLVM backend supports a growing subset of the language; cross-compilation
+> works for self-contained programs and their imports within that subset.
+> Host-native builds without `--target` continue to use the fast C backend
+> (tcc/gcc/clang) and the full standard library.
 
 ## 🐳 [Docker](https://www.docker.com/) & [Docker Compose](https://docs.docker.com/compose/)
 

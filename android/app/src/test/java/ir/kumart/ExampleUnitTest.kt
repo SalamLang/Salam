@@ -1,8 +1,10 @@
+/**
+ * Local JVM unit tests for Android module behavior.
+ */
 package ir.salamlang.editor
 
-import org.junit.Test
-
 import org.junit.Assert.*
+import org.junit.Test
 
 /**
  * Example local unit test, which will execute on the development machine (host).

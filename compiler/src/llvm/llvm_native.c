@@ -397,6 +397,10 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
             argv[n++] = userlibs[i];
         }
     }
+    if (opts->nlink > 16)
+        LOG_W(log, PH_DRIVER,
+              i18n_tr("too many link libraries (%d); only the first 16 were linked"),
+              opts->nlink);
     argv[n++] = "--start-group";
     argv[n++] = "-lc";
     if (have_rt) argv[n++] = rt;
@@ -474,6 +478,10 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
             argv[n++] = userlibs[i];
         }
     }
+    if (opts->nlink > 16)
+        LOG_W(log, PH_DRIVER,
+              i18n_tr("too many link libraries (%d); only the first 16 were linked"),
+              opts->nlink);
     for (i = 0; i < (int)(sizeof group / sizeof group[0]) && n < 84; i++)
         argv[n++] = group[i];
     for (i = 0; i < (int)(sizeof group / sizeof group[0]) && n < 90; i++)

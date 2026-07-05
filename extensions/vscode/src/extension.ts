@@ -52,8 +52,8 @@ function detectLang(document: vscode.TextDocument): string {
   const m = head.match(/(?:LANG|lang|زبان)\s*:\s*([A-Za-z]{2})/);
   if (m) return m[1].toLowerCase();
 
-  if (/[پچژگکی۰-۹]/.test(text)) return "fa";
-  const arabic = (text.match(/[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]/g) || []).length;
+  if (/[پچژگکی۰-۹]/.test(head)) return "fa";
+  const arabic = (head.match(/[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]/g) || []).length;
   return arabic >= 3 ? "ar" : "en";
 }
 

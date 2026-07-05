@@ -42,7 +42,8 @@ static int mkdir_p(const char *path)
         if (buf[i] == '/' || buf[i] == '\\') {
             char sep = buf[i];
             buf[i] = '\0';
-            if (buf[0] && !path_exists(buf) && salam_mkdir(buf) != 0 && errno != EEXIST)
+            if (buf[0] && buf[i - 1] != ':' && !path_exists(buf) &&
+                salam_mkdir(buf) != 0 && errno != EEXIST)
                 return -1;
             buf[i] = sep;
         }
@@ -107,7 +108,7 @@ static int untar(const unsigned char *tar, size_t len, const char *dest)
         type = (char)h[156];
         off += 512;
         blocks = (size_t)((size + 511) / 512);
-        if (off + blocks * 512 > len + 512) break;
+        if (size > len || off + blocks * 512 > len) break;
 
         if (type == 'L') {
             size_t cp = size < sizeof longname ? (size_t)size : sizeof longname - 1;
@@ -117,7 +118,7 @@ static int untar(const unsigned char *tar, size_t len, const char *dest)
             off += blocks * 512;
             continue;
         }
-        if (name[0] == '\0' || strstr(name, "..")) {
+        if (name[0] == '\0' || name[0] == '/' || name[0] == '\\' || strstr(name, "..")) {
             off += blocks * 512;
             continue;
         }

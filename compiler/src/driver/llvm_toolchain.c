@@ -236,20 +236,20 @@ int salam_llvm_toolchain(logger_t *log, const char *ll_path,
     sb_t script;
     sb_init(&script);
     sb_puts(&script, "set -e\n");
-    sb_puts(&script, "IN='");
-    sb_puts(&script, in_tp);
-    sb_puts(&script, "'\n");
+    sb_puts(&script, "IN=");
+    sb_put_shell_arg(&script, in_tp);
+    sb_putc(&script, '\n');
     if (out_tp[0]) {
-        sb_puts(&script, "OUT='");
-        sb_puts(&script, out_tp);
-        sb_puts(&script, "'\n");
+        sb_puts(&script, "OUT=");
+        sb_put_shell_arg(&script, out_tp);
+        sb_putc(&script, '\n');
     }
     if (opts->sysroot && opts->sysroot[0]) {
         char sr_tp[SALAM_PATH_MAX];
         to_tool_path(opts->sysroot, sr_tp, sizeof sr_tp);
-        sb_puts(&script, "SYSROOT='");
-        sb_puts(&script, sr_tp);
-        sb_puts(&script, "'\n");
+        sb_puts(&script, "SYSROOT=");
+        sb_put_shell_arg(&script, sr_tp);
+        sb_putc(&script, '\n');
     }
     emit_tool_cmd(&script, opts);
 

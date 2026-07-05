@@ -177,6 +177,50 @@ test: $(OUTBIN)
 dist: all
 	sh tools/bash/build-release.sh
 
+# ---------------------------------------------------------------------------
+# Self-contained cross-compiling salam (static LLVM + lld, embedded sysroots).
+#
+#   make stage-sysroots   # copy target link inputs from installed packages
+#   make self-contained   # stage + build a single salam that cross-compiles
+#                         # Windows + Linux with no tools/files beside it
+#
+# Prereqs on the BUILD machine: llvm-<v>-dev liblld-<v>-dev mingw-w64 musl-dev.
+# ---------------------------------------------------------------------------
+STAGE_DIR  ?= $(BUILD_DIR)/sysroots
+MUSL_ARCH  ?= x86_64
+MINGW_ARCH ?= x86_64
+MUSL_SR    := $(STAGE_DIR)/$(MUSL_ARCH)-linux-musl
+MINGW_SR   := $(STAGE_DIR)/$(MINGW_ARCH)-w64-mingw32
+
+stage-sysroots:
+	@echo "Staging sysroots into $(STAGE_DIR) ..."
+	@mkdir -p "$(MUSL_SR)" "$(MINGW_SR)/lib"
+	@cp /usr/lib/$(MUSL_ARCH)-linux-musl/crt1.o /usr/lib/$(MUSL_ARCH)-linux-musl/crti.o \
+	    /usr/lib/$(MUSL_ARCH)-linux-musl/crtn.o /usr/lib/$(MUSL_ARCH)-linux-musl/libc.a \
+	    "$(MUSL_SR)/" || { echo "  ! musl not found - 'apt install musl-dev'"; exit 1; }
+	@cp $$(ls /usr/lib/llvm-*/lib/clang/*/lib/linux/libclang_rt.builtins-$(MUSL_ARCH).a 2>/dev/null | head -1) \
+	    "$(MUSL_SR)/" 2>/dev/null || echo "  (compiler-rt builtins not bundled; optional)"
+	@for x in crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a libmsvcrt.a \
+	          libadvapi32.a libshell32.a libuser32.a libkernel32.a; do \
+	    cp /usr/$(MINGW_ARCH)-w64-mingw32/lib/$$x "$(MINGW_SR)/lib/" 2>/dev/null \
+	      || { echo "  ! mingw not found - 'apt install mingw-w64'"; exit 1; }; \
+	  done
+	@G=$$(ls -d /usr/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*win32 2>/dev/null | head -1); \
+	  test -n "$$G" && cp "$$G/crtbegin.o" "$$G/crtend.o" "$$G/libgcc.a" "$$G/libgcc_eh.a" \
+	     "$(MINGW_SR)/lib/" || { echo "  ! gcc-mingw runtime not found"; exit 1; }
+	@echo "Staged:"
+	@echo "  musl  -> $(MUSL_SR)"
+	@echo "  mingw -> $(MINGW_SR)"
+
+self-contained: stage-sysroots
+	$(MAKE) WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 \
+	        SALAM_EMBED_MUSL_DIR="$(MUSL_SR)" SALAM_EMBED_MINGW_DIR="$(MINGW_SR)" \
+	        LLVM_CONFIG=$(LLVM_CONFIG) CXX=$(CXX)
+	@echo "Built self-contained salam -> $(OUTBIN)"
+	@echo "  cross-compile with e.g.:"
+	@echo "    $(OUTBIN) build app.salam --target=x86_64-linux-musl      -o app"
+	@echo "    $(OUTBIN) build app.salam --target=x86_64-w64-windows-gnu -o app.exe"
+
 debug: BUILD = debug
 debug: clean all
 

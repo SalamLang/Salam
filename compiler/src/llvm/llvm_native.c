@@ -380,6 +380,7 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
     argv[n++] = "-m";
     argv[n++] = emul;
     argv[n++] = "-static";
+    if (!opts->debug_info) argv[n++] = "-s"; /* strip symbols unless -g */
     argv[n++] = "-o";
     argv[n++] = out;
     argv[n++] = crt1;
@@ -480,6 +481,7 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
     argv[n++] = "-m";
     argv[n++] = emul;
     argv[n++] = "-Bdynamic";
+    if (!opts->debug_info) argv[n++] = "-s"; /* strip symbols unless -g */
     argv[n++] = "-o";
     argv[n++] = out;
     argv[n++] = crt2;

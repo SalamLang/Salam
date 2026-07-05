@@ -443,18 +443,18 @@ Because the `manual` stage and `prek-audit.toml` run separately, only hooks in t
 
 Every pull request triggers a suite of automated checks. Understanding what runs helps you resolve failures quickly.
 
-| Workflow                         | What it checks                                                                                                                                              |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Compiler - Build & Test**      | Builds the compiler inside an Alpine + LLVM Docker image and runs the test suite.                                                                           |
-| **Compiler - Clone & Build**     | Verifies that a fresh clone can build on Windows, macOS, and Linux.                                                                                         |
-| **Compiler - Build & Release**   | Compiles release binaries for the supported distribution targets.                                                                                            |
-| **Editor - Build Playground**    | Builds the WebAssembly playground bundle on pull requests to catch editor or compiler integration regressions before merge.                                  |
+| Workflow                          | What it checks                                                                                                                                              |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compiler - Build & Test**       | Builds the compiler inside an Alpine + LLVM Docker image and runs the test suite.                                                                           |
+| **Compiler - Clone & Build**      | Verifies that a fresh clone can build on Windows, macOS, and Linux.                                                                                         |
+| **Compiler - Build & Release**    | Compiles release binaries for the supported distribution targets.                                                                                           |
+| **Editor - Build Playground**     | Builds the WebAssembly playground bundle on pull requests to catch editor or compiler integration regressions before merge.                                 |
 | **Books - Build & Validate PDFs** | Builds the language books and verifies the generated PDFs.                                                                                                  |
-| **Prek Standard Hooks**          | Runs `prek run --all-files` on Ubuntu, macOS, and Windows to verify formatting, spelling, linting, and security checks defined in `prek.toml`.             |
-| **Prek Manual Hooks**            | Runs the `manual`-stage hooks (e.g. `shfmt`, `chmod`) across the same platform matrix.                                                                      |
-| **Prek Audit Hooks**             | Runs `prek run --all-files --config prek-audit.toml` across the same platform matrix to perform security-focused audit checks defined in `prek-audit.toml`. |
-| **Super-Linter**                 | Runs a broad set of language-specific linters across the repository.                                                                                        |
-| **PR - Auto-Labeler**            | Applies labels automatically based on the files changed in the pull request.                                                                                 |
+| **Prek Standard Hooks**           | Runs `prek run --all-files` on Ubuntu, macOS, and Windows to verify formatting, spelling, linting, and security checks defined in `prek.toml`.              |
+| **Prek Manual Hooks**             | Runs the `manual`-stage hooks (e.g. `shfmt`, `chmod`) across the same platform matrix.                                                                      |
+| **Prek Audit Hooks**              | Runs `prek run --all-files --config prek-audit.toml` across the same platform matrix to perform security-focused audit checks defined in `prek-audit.toml`. |
+| **Super-Linter**                  | Runs a broad set of language-specific linters across the repository.                                                                                        |
+| **PR - Auto-Labeler**             | Applies labels automatically based on the files changed in the pull request.                                                                                |
 
 All checks must pass before a pull request can be merged. If a check fails:
 

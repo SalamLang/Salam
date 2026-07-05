@@ -84,11 +84,6 @@ LLVM_CXXLIB     ?= -lstdc++
 LLVM_ZSTD_LIB   ?= -l:libzstd.a
 ifeq ($(WITH_LLVM),1)
   ifeq ($(WITH_LLD),1)
-    # lld pulls in many LLVM components (LTO, LibDriver, WindowsManifest, PDB,
-    # ...). Link against all of them: with static archives the linker only pulls
-    # the objects actually referenced, so this stays correct without hand-listing
-    # lld's full, version-dependent dependency set. (Dynamic builds resolve to
-    # the monolithic -lLLVM regardless.)
     LLVM_COMPONENTS := all
   else
     LLVM_COMPONENTS := core irreader bitwriter analysis orcjit \
@@ -124,11 +119,6 @@ CXXOBJS   := $(LLD_SRCS:src/%.cc=$(BUILD_DIR)/%.o)
 MAIN_OBJ  := $(MAIN_SRC:src/%.c=$(BUILD_DIR)/%.o)
 DEPS      := $(OBJS:.o=.d) $(MAIN_OBJ:.o=.d)
 
-# Embedded cross-compilation sysroots: point SALAM_EMBED_<T>_DIR at a directory
-# holding the target's link inputs (crt objects + libc/import .a's). It is
-# tar'd and baked into the salam binary via .incbin, then extracted to a user
-# cache at first use (see embed_sysroot.c) so a single salam needs no sysroot
-# files on disk. Symbols: salam_embed_<t> / salam_embed_<t>_end.
 EMBED_OBJS :=
 SALAM_EMBED_MUSL_DIR ?=
 ifneq ($(SALAM_EMBED_MUSL_DIR),)
@@ -141,21 +131,22 @@ ifneq ($(SALAM_EMBED_MINGW_DIR),)
   EMBED_OBJS += $(BUILD_DIR)/embed/mingw.o
 endif
 
-.PHONY: all test dist clean debug install uninstall
+.PHONY: all test dist clean debug install uninstall stage-sysroots self-contained
 
 all: $(OUTBIN)
 
 $(OUTBIN): $(OBJS) $(CXXOBJS) $(EMBED_OBJS) $(MAIN_OBJ)
 	$(CC) $(LDFLAGS) $(EXTRA_LDFLAGS) -o $@ $^ $(LDLIBS) $(EXTRA_LDLIBS)
 
-# Bake a sysroot directory into an object via a generated .incbin stub.
-$(BUILD_DIR)/embed/musl.o: $(SALAM_EMBED_MUSL_DIR)
+$(BUILD_DIR)/embed/musl.o:
+	@test -d "$(SALAM_EMBED_MUSL_DIR)" || { echo "SALAM_EMBED_MUSL_DIR='$(SALAM_EMBED_MUSL_DIR)' is not a directory (try 'make stage-sysroots')"; exit 1; }
 	@mkdir -p $(BUILD_DIR)/embed
 	tar cf $(BUILD_DIR)/embed/musl.tar -C "$(SALAM_EMBED_MUSL_DIR)" .
 	printf '.section .rodata\n.global salam_embed_musl\nsalam_embed_musl:\n.incbin "%s"\n.global salam_embed_musl_end\nsalam_embed_musl_end:\n' "$(BUILD_DIR)/embed/musl.tar" > $(BUILD_DIR)/embed/musl.S
 	$(CC) -c $(BUILD_DIR)/embed/musl.S -o $@
 
-$(BUILD_DIR)/embed/mingw.o: $(SALAM_EMBED_MINGW_DIR)
+$(BUILD_DIR)/embed/mingw.o:
+	@test -d "$(SALAM_EMBED_MINGW_DIR)" || { echo "SALAM_EMBED_MINGW_DIR='$(SALAM_EMBED_MINGW_DIR)' is not a directory (try 'make stage-sysroots')"; exit 1; }
 	@mkdir -p $(BUILD_DIR)/embed
 	tar cf $(BUILD_DIR)/embed/mingw.tar -C "$(SALAM_EMBED_MINGW_DIR)" .
 	printf '.section .rodata\n.global salam_embed_mingw\nsalam_embed_mingw:\n.incbin "%s"\n.global salam_embed_mingw_end\nsalam_embed_mingw_end:\n' "$(BUILD_DIR)/embed/mingw.tar" > $(BUILD_DIR)/embed/mingw.S
@@ -176,6 +167,41 @@ test: $(OUTBIN)
 
 dist: all
 	sh tools/bash/build-release.sh
+
+STAGE_DIR  ?= $(BUILD_DIR)/sysroots
+MUSL_ARCH  ?= x86_64
+MINGW_ARCH ?= x86_64
+MUSL_SR    := $(STAGE_DIR)/$(MUSL_ARCH)-linux-musl
+MINGW_SR   := $(STAGE_DIR)/$(MINGW_ARCH)-w64-mingw32
+
+stage-sysroots:
+	@echo "Staging sysroots into $(STAGE_DIR) ..."
+	@mkdir -p "$(MUSL_SR)" "$(MINGW_SR)/lib"
+	@cp /usr/lib/$(MUSL_ARCH)-linux-musl/crt1.o /usr/lib/$(MUSL_ARCH)-linux-musl/crti.o \
+	    /usr/lib/$(MUSL_ARCH)-linux-musl/crtn.o /usr/lib/$(MUSL_ARCH)-linux-musl/libc.a \
+	    "$(MUSL_SR)/" || { echo "  ! musl not found - 'apt install musl-dev'"; exit 1; }
+	@cp $$(ls /usr/lib/llvm-*/lib/clang/*/lib/linux/libclang_rt.builtins-$(MUSL_ARCH).a 2>/dev/null | head -1) \
+	    "$(MUSL_SR)/" 2>/dev/null || echo "  (compiler-rt builtins not bundled; optional)"
+	@for x in crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a libmsvcrt.a \
+	          libadvapi32.a libshell32.a libuser32.a libkernel32.a; do \
+	    cp /usr/$(MINGW_ARCH)-w64-mingw32/lib/$$x "$(MINGW_SR)/lib/" 2>/dev/null \
+	      || { echo "  ! mingw not found - 'apt install mingw-w64'"; exit 1; }; \
+	  done
+	@G=$$(ls -d /usr/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*win32 2>/dev/null | head -1); \
+	  test -n "$$G" && cp "$$G/crtbegin.o" "$$G/crtend.o" "$$G/libgcc.a" "$$G/libgcc_eh.a" \
+	     "$(MINGW_SR)/lib/" || { echo "  ! gcc-mingw runtime not found"; exit 1; }
+	@echo "Staged:"
+	@echo "  musl  -> $(MUSL_SR)"
+	@echo "  mingw -> $(MINGW_SR)"
+
+self-contained: stage-sysroots
+	$(MAKE) WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 \
+	        SALAM_EMBED_MUSL_DIR="$(MUSL_SR)" SALAM_EMBED_MINGW_DIR="$(MINGW_SR)" \
+	        LLVM_CONFIG=$(LLVM_CONFIG) CXX=$(CXX)
+	@echo "Built self-contained salam -> $(OUTBIN)"
+	@echo "  cross-compile with e.g.:"
+	@echo "    $(OUTBIN) build app.salam --target=x86_64-linux-musl      -o app"
+	@echo "    $(OUTBIN) build app.salam --target=x86_64-w64-windows-gnu -o app.exe"
 
 debug: BUILD = debug
 debug: clean all

@@ -14,8 +14,8 @@ android {
         applicationId = "ir.salamlang.editor"
         minSdk = 24
         targetSdk = 36
-        versionCode = (project.findProperty("appVersionCode") as String?)?.toInt() ?: 1
-        versionName = (project.findProperty("appVersionName") as String?) ?: "1.0"
+        versionCode = project.findProperty("appVersionCode")?.toString()?.toIntOrNull() ?: 1
+        versionName = project.findProperty("appVersionName")?.toString() ?: "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

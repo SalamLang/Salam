@@ -113,8 +113,6 @@ static void ll_scan_links(ast_node_t *prog, const char **libs, const char **kind
     }
 }
 
-/* Returns the number of fresh imports that could NOT be enqueued because the
- * worklist is at capacity (so the caller can warn instead of silently dropping). */
 static int ll_enqueue_imports(arena_t *a, ast_node_t *prog, const char *dir,
                               const char **work, int *nwork, int cap)
 {

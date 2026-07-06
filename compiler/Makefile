@@ -106,6 +106,10 @@ ifeq ($(WITH_LLVM),1)
   else
     LLVM_SYSTEM_LIBS := $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --system-libs)
   endif
+  # NOTE: `--libs all` (WITH_LLD) lists -lPolly/-lPollyISL, and LLVM's own
+  # libLLVMLTO.a references getPollyPluginInfo(), so Polly's static libs must be
+  # INSTALLED (do not filter them). LLVM 22 ships them; on LLVM 18 install the
+  # `libpolly-18-dev` apt package alongside llvm-18-dev / liblld-18-dev.
   LDLIBS   += $(LLD_LIBS) \
               $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --libs $(LLVM_COMPONENTS)) \
               $(LLVM_SYSTEM_LIBS) $(LLVM_CXXLIB)
@@ -131,7 +135,32 @@ ifneq ($(SALAM_EMBED_MINGW_DIR),)
   EMBED_OBJS += $(BUILD_DIR)/embed/mingw.o
 endif
 
+# Per-arch embedded musl sysroots (opt-in via SALAM_EMBED_MUSL_<ARCH>_DIR). Each
+# arch is a distinct tar with its own symbol so ONE flagship salam can cross-link
+# static musl ELF for several targets. musl.o above stays the x86_64 host case.
+# $(call embed_musl_arch,<stem>,<ARCHUPPER>)
+define embed_musl_arch
+SALAM_EMBED_MUSL_$(2)_DIR ?=
+ifneq ($$(SALAM_EMBED_MUSL_$(2)_DIR),)
+  CPPFLAGS   += -DSALAM_HAVE_EMBED_MUSL_$(2)
+  EMBED_OBJS += $$(BUILD_DIR)/embed/musl_$(1).o
+endif
+$$(BUILD_DIR)/embed/musl_$(1).o:
+	@test -d "$$(SALAM_EMBED_MUSL_$(2)_DIR)" || { echo "SALAM_EMBED_MUSL_$(2)_DIR='$$(SALAM_EMBED_MUSL_$(2)_DIR)' is not a directory"; exit 1; }
+	@mkdir -p $$(BUILD_DIR)/embed
+	tar cf $$(BUILD_DIR)/embed/musl_$(1).tar -C "$$(SALAM_EMBED_MUSL_$(2)_DIR)" .
+	printf '.section .rodata\n.global salam_embed_musl_$(1)\nsalam_embed_musl_$(1):\n.incbin "%s"\n.global salam_embed_musl_$(1)_end\nsalam_embed_musl_$(1)_end:\n.section .note.GNU-stack,"",@progbits\n' "$$(BUILD_DIR)/embed/musl_$(1).tar" > $$(BUILD_DIR)/embed/musl_$(1).S
+	$$(CC) -c $$(BUILD_DIR)/embed/musl_$(1).S -o $$@
+endef
+$(eval $(call embed_musl_arch,aarch64,AARCH64))
+$(eval $(call embed_musl_arch,i686,I686))
+$(eval $(call embed_musl_arch,arm,ARM))
+
 .PHONY: all test dist clean debug install uninstall stage-sysroots self-contained
+
+# The per-arch embed rules above are defined via $(eval) before `all`, which would
+# otherwise make the first of them the default goal. Pin `all` as the default.
+.DEFAULT_GOAL := all
 
 all: $(OUTBIN)
 
@@ -142,14 +171,14 @@ $(BUILD_DIR)/embed/musl.o:
 	@test -d "$(SALAM_EMBED_MUSL_DIR)" || { echo "SALAM_EMBED_MUSL_DIR='$(SALAM_EMBED_MUSL_DIR)' is not a directory (try 'make stage-sysroots')"; exit 1; }
 	@mkdir -p $(BUILD_DIR)/embed
 	tar cf $(BUILD_DIR)/embed/musl.tar -C "$(SALAM_EMBED_MUSL_DIR)" .
-	printf '.section .rodata\n.global salam_embed_musl\nsalam_embed_musl:\n.incbin "%s"\n.global salam_embed_musl_end\nsalam_embed_musl_end:\n' "$(BUILD_DIR)/embed/musl.tar" > $(BUILD_DIR)/embed/musl.S
+	printf '.section .rodata\n.global salam_embed_musl\nsalam_embed_musl:\n.incbin "%s"\n.global salam_embed_musl_end\nsalam_embed_musl_end:\n.section .note.GNU-stack,"",@progbits\n' "$(BUILD_DIR)/embed/musl.tar" > $(BUILD_DIR)/embed/musl.S
 	$(CC) -c $(BUILD_DIR)/embed/musl.S -o $@
 
 $(BUILD_DIR)/embed/mingw.o:
 	@test -d "$(SALAM_EMBED_MINGW_DIR)" || { echo "SALAM_EMBED_MINGW_DIR='$(SALAM_EMBED_MINGW_DIR)' is not a directory (try 'make stage-sysroots')"; exit 1; }
 	@mkdir -p $(BUILD_DIR)/embed
 	tar cf $(BUILD_DIR)/embed/mingw.tar -C "$(SALAM_EMBED_MINGW_DIR)" .
-	printf '.section .rodata\n.global salam_embed_mingw\nsalam_embed_mingw:\n.incbin "%s"\n.global salam_embed_mingw_end\nsalam_embed_mingw_end:\n' "$(BUILD_DIR)/embed/mingw.tar" > $(BUILD_DIR)/embed/mingw.S
+	printf '.section .rodata\n.global salam_embed_mingw\nsalam_embed_mingw:\n.incbin "%s"\n.global salam_embed_mingw_end\nsalam_embed_mingw_end:\n.section .note.GNU-stack,"",@progbits\n' "$(BUILD_DIR)/embed/mingw.tar" > $(BUILD_DIR)/embed/mingw.S
 	$(CC) -c $(BUILD_DIR)/embed/mingw.S -o $@
 
 $(BUILD_DIR)/%.o: src/%.c

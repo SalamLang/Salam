@@ -13,13 +13,44 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Install dependencies (static LLVM + system deps)
+      - name: Install dependencies (static LLVM + LLD + cross sysroot inputs)
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential ccache \
-            llvm-18-dev libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev
+            llvm-18-dev liblld-18-dev libpolly-18-dev libclang-rt-18-dev \
+            libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev \
+            musl-dev musl-tools mingw-w64 qemu-user-static
           gcc --version | head -1
           llvm-config-18 --version
+      - name: Fetch cross musl sysroots (aarch64 + i686) for embedding
+        run: |
+          # Prebuilt musl.cc toolchains (MIT). We embed each arch's static link
+          # inputs (crt*.o + libc.a + libgcc.a; libgcc supplies the soft-float
+          # long-double builtins musl's printf needs) so the x86_64 flagship can
+          # cross-link static-musl ELF for aarch64/i686 with nothing installed.
+          # Best-effort per arch: if musl.cc is unreachable, that arch is simply
+          # not embedded and the flagship still targets x86_64 + Windows.
+          fetch() {
+            for a in 1 2 3 4 5; do
+              curl -fL --connect-timeout 20 --retry 3 --retry-delay 5 -o "$2" "$1" && return 0
+              sleep $((a * 5))
+            done
+            return 1
+          }
+          mkdir -p /tmp/muslcc && cd /tmp/muslcc
+          for arch in aarch64 i686; do
+            if fetch "https://musl.cc/${arch}-linux-musl-cross.tgz" "${arch}.tgz" \
+                 && tar xzf "${arch}.tgz"; then
+              SR="/tmp/muslcc/sr-${arch}"; mkdir -p "$SR"
+              cp "${arch}-linux-musl-cross/${arch}-linux-musl/lib/"{crt1.o,crti.o,crtn.o,libc.a} "$SR/"
+              cp "$(ls ${arch}-linux-musl-cross/lib/gcc/${arch}-linux-musl/*/libgcc.a | head -1)" "$SR/libgcc.a"
+              U=$(echo "$arch" | tr '[:lower:]' '[:upper:]')
+              echo "SALAM_EMBED_MUSL_${U}_DIR=$SR" >> "$GITHUB_ENV"
+              echo "staged $arch musl sysroot -> $SR"; ls "$SR"
+            else
+              echo "::warning::could not fetch musl.cc $arch toolchain; not embedding $arch."
+            fi
+          done
       - name: Cache ccache (Linux)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -27,21 +58,60 @@ jobs:
           key: ccache-linux-${{ github.run_id }}
           restore-keys: |
             ccache-linux-
-      - name: Build salam for Linux (embedded static LLVM)
+      - name: Build the flagship self-contained salam (LLVM + LLD + sysroots)
         run: |
-          export CCACHE_DIR="$HOME/.ccache"; ccache --max-size=500M >/dev/null 2>&1 || true
-          make -C compiler -j"$(nproc)" \
-            WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config-18 CC="ccache gcc" \
-            EXTRA_LDFLAGS="-static-libgcc -static-libstdc++"
+          export CCACHE_DIR="$HOME/.ccache"; ccache --max-size=800M >/dev/null 2>&1 || true
+          # Per-arch musl sysroots (may be empty if musl.cc was unreachable; an
+          # empty *_DIR just means that arch is not embedded).
+          if make -C compiler self-contained -j"$(nproc)" \
+               CC="ccache gcc" CXX="ccache g++" LLVM_CONFIG=llvm-config-18 \
+               SALAM_EMBED_MUSL_AARCH64_DIR="${SALAM_EMBED_MUSL_AARCH64_DIR:-}" \
+               SALAM_EMBED_MUSL_I686_DIR="${SALAM_EMBED_MUSL_I686_DIR:-}"; then
+            echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
+            echo "Built flagship self-contained salam."
+          else
+            echo "::warning::self-contained (LLD) build failed; falling back to embedded-LLVM-only."
+            make -C compiler clean
+            make -C compiler -j"$(nproc)" \
+              WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config-18 CC="ccache gcc" \
+              EXTRA_LDFLAGS="-static-libgcc -static-libstdc++"
+            echo "SELF_CONTAINED=0" >> "$GITHUB_ENV"
+          fi
           ccache --show-stats 2>/dev/null | head -5 || true
           ./salam version
-      - name: Smoke-test the embedded LLVM backend
+      - name: Smoke-test the backend (and cross-compile with a scrubbed PATH)
         run: |
+          export SALAM_STD="$PWD/compiler/std"
           printf 'func main:\n    __ "ok-llvm"\nend\n' > smoke.salam
+          echo "[native] embedded LLVM backend"
           ./salam llvm smoke.salam --jit --log-level=warn
           ./salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
           ./salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
-          rm -f smoke.salam smoke_exe smoke.o salam_mod_*.c salam_mod_*.h
+          if [ "${SELF_CONTAINED:-0}" = "1" ]; then
+            echo "[cross] x86_64-linux-musl, PATH=/nonexistent (in-process LLD + embedded musl)"
+            env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+              ./salam build smoke.salam --target=x86_64-linux-musl -o smoke_musl
+            ./smoke_musl; file smoke_musl
+            echo "[cross] x86_64-w64-windows-gnu, PATH=/nonexistent (embedded mingw sysroot)"
+            env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+              ./salam build smoke.salam --target=x86_64-w64-windows-gnu -o smoke.exe
+            file smoke.exe
+            if [ -n "${SALAM_EMBED_MUSL_AARCH64_DIR:-}" ]; then
+              echo "[cross] aarch64-linux-musl, PATH=/nonexistent (embedded aarch64 musl)"
+              env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+                ./salam build smoke.salam --target=aarch64-linux-musl -o smoke_a64
+              file smoke_a64
+              qemu-aarch64-static ./smoke_a64
+            fi
+            if [ -n "${SALAM_EMBED_MUSL_I686_DIR:-}" ]; then
+              echo "[cross] i686-linux-musl, PATH=/nonexistent (embedded i686 musl)"
+              env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+                ./salam build smoke.salam --target=i686-linux-musl -o smoke_i686
+              file smoke_i686
+              ./smoke_i686
+            fi
+          fi
+          rm -f smoke.salam smoke_exe smoke_musl smoke.exe smoke_a64 smoke_i686 smoke.o salam_mod_*.c salam_mod_*.h
       - name: Validate full test suite (release gate)
         if: startsWith(github.event.head_commit.message, 'release:')
         run: |
@@ -59,6 +129,34 @@ jobs:
           cp salam "$DIST/salam"
           cp -r compiler/std "$DIST/std"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          {
+            echo "Salam for Linux (x86_64) - flagship self-contained toolchain."
+            echo ""
+            echo "No installation needed. From this folder:"
+            echo ""
+            echo "  ./salam version"
+            echo "  ./salam exec  app.salam                               (interpreter)"
+            echo "  ./salam llvm  app.salam --jit                         (run via built-in LLVM)"
+            echo "  ./salam build app.salam -o app                        (native binary)"
+            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
+              echo ""
+              echo "Cross-compile with ZERO tools installed (LLVM + LLD + sysroots are"
+              echo "compiled into salam itself):"
+              echo ""
+              echo "  ./salam build app.salam --target=x86_64-linux-musl      -o app"
+              echo "  ./salam build app.salam --target=x86_64-w64-windows-gnu -o app.exe"
+              if [ -n "${SALAM_EMBED_MUSL_AARCH64_DIR:-}" ]; then
+                echo "  ./salam build app.salam --target=aarch64-linux-musl     -o app"
+              fi
+              if [ -n "${SALAM_EMBED_MUSL_I686_DIR:-}" ]; then
+                echo "  ./salam build app.salam --target=i686-linux-musl        -o app"
+              fi
+              echo ""
+              echo "Embedded targets depend on which sysroots this build bundled (see"
+              echo "above). Other targets link against a system or \$SALAM_SYSROOTS"
+              echo "sysroot. macOS targets are not supported (Apple SDK restrictions)."
+            fi
+          } > "$DIST/RUN-ME.txt"
           zip -r "salam-${VERSION}-linux.zip" "$DIST" >/dev/null
           ls -la "salam-${VERSION}-linux.zip"
       - name: Upload versioned archive
@@ -132,6 +230,19 @@ jobs:
           cp salam "$DIST/salam"
           cp -r compiler/std "$DIST/std"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          {
+            echo "Salam for macOS - embedded LLVM toolchain."
+            echo ""
+            echo "  ./salam exec  app.salam            (interpreter)"
+            echo "  ./salam llvm  app.salam --jit      (run via built-in LLVM)"
+            echo "  ./salam build app.salam -o app     (native binary; uses the system"
+            echo "                                      clang/ld that ship with Xcode CLT)"
+            echo ""
+            echo "Note: macOS cannot be a fully-static, self-contained cross-compiler."
+            echo "Apple does not permit statically linking libSystem and the macOS SDK"
+            echo "is not redistributable, so linking uses Apple's toolchain. Cross-"
+            echo "compiling FROM Linux/Windows TO macOS is likewise not supported."
+          } > "$DIST/RUN-ME.txt"
           zip -r "salam-${VERSION}-mac.zip" "$DIST" >/dev/null
           ls -la "salam-${VERSION}-mac.zip"
       - name: Upload versioned archive
@@ -159,7 +270,7 @@ jobs:
           restore-keys: |
             msys2-mingw64-pkgs-
 
-      - name: Install MINGW64 toolchain + static LLVM
+      - name: Install MINGW64 toolchain + static LLVM + LLD
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW64
@@ -168,6 +279,7 @@ jobs:
           pacman -Sy --noconfirm --needed \
             mingw-w64-x86_64-gcc \
             mingw-w64-x86_64-llvm \
+            mingw-w64-x86_64-lld \
             make ccache
           gcc --version | head -1
           llvm-config --version
@@ -180,7 +292,7 @@ jobs:
           restore-keys: |
             ccache-win64-
 
-      - name: Build salam.exe with embedded LLVM (static)
+      - name: Build salam.exe (embedded LLVM; best-effort LLD + mingw sysroot)
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW64
@@ -188,9 +300,44 @@ jobs:
           CCACHE_DIR: 'C:/ccache-win64'
         run: |
           ccache --max-size=500M >/dev/null 2>&1 || true
-          make -C compiler -j2 \
-            WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config CC="ccache gcc" \
-            EXTRA_LDFLAGS="-static -static-libgcc -static-libstdc++"
+          # Assemble a mingw sysroot to embed so a cross-build to
+          # x86_64-w64-windows-gnu needs no files beside salam.exe. Best-effort:
+          # if the in-process LLD link fails, fall back to embedded-LLVM + tcc.
+          SR=/tmp/mingw-sr/lib; mkdir -p "$SR"
+          MR=/mingw64/x86_64-w64-mingw32/lib
+          GR=$(ls -d /mingw64/lib/gcc/x86_64-w64-mingw32/* 2>/dev/null | head -1)
+          embed_ok=1
+          for x in crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a \
+                   libmsvcrt.a libadvapi32.a libshell32.a libuser32.a libkernel32.a; do
+            cp "$MR/$x" "$SR/" 2>/dev/null || embed_ok=0
+          done
+          for x in crtbegin.o crtend.o libgcc.a libgcc_eh.a; do
+            cp "$GR/$x" "$SR/" 2>/dev/null || embed_ok=0
+          done
+          built=0
+          if [ "$embed_ok" = 1 ]; then
+            echo "Attempting flagship build (embedded LLVM + in-process LLD + mingw sysroot)."
+            if make -C compiler -j2 \
+                 WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config \
+                 CC="ccache gcc" CXX="ccache g++" \
+                 SALAM_EMBED_MINGW_DIR=/tmp/mingw-sr \
+                 EXTRA_LDFLAGS="-static -static-libgcc -static-libstdc++"; then
+              built=1
+              echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
+              echo "Flagship self-contained salam.exe built."
+            else
+              echo "::warning::LLD/embedded-sysroot build failed; falling back to embedded-LLVM-only."
+              make -C compiler clean
+            fi
+          else
+            echo "::warning::could not assemble mingw sysroot; building embedded-LLVM-only."
+          fi
+          if [ "$built" != 1 ]; then
+            make -C compiler -j2 \
+              WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config CC="ccache gcc" \
+              EXTRA_LDFLAGS="-static -static-libgcc -static-libstdc++"
+            echo "SELF_CONTAINED=0" >> "$GITHUB_ENV"
+          fi
           ccache --show-stats 2>/dev/null | head -5 || true
           test -f salam.exe || mv salam salam.exe
           ./salam.exe version
@@ -252,6 +399,13 @@ jobs:
             echo "  salam.exe build myprogram.salam              (C backend via bundled tcc)"
             echo "  salam.exe llvm  myprogram.salam --jit        (run via the built-in LLVM)"
             echo "  salam.exe llvm  myprogram.salam --exec       (native exe via built-in LLVM)"
+            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
+              echo ""
+              echo "Cross-compile a native Windows exe with ZERO tools installed"
+              echo "(LLVM + LLD + a mingw sysroot are compiled into salam.exe):"
+              echo ""
+              echo "  salam.exe build myprogram.salam --target=x86_64-w64-windows-gnu -o app.exe"
+            fi
             echo ""
             echo "LLVM is compiled into salam.exe itself - no clang/llc/lli needed."
             echo "salam.exe finds its std/ library and the bundled tcc/ automatically;"
@@ -314,17 +468,9 @@ jobs:
           path: salam.exe
 
   build-windows-i686:
-    name: Build Salam for Windows (32-bit / i686)
+    name: Build Salam for Windows (32-bit / i686, minimal)
     runs-on: windows-latest
     continue-on-error: true
-    timeout-minutes: 330
-    env:
-      LLVM_VER: '18.1.8'
-      LLVM_PREFIX: 'C:/llvm-i686'
-      CACHE_REV: 'v1'
-      CCACHE_DIR: 'C:/ccache-i686'
-      CCACHE_MAXSIZE: '2G'
-      CCACHE_COMPRESS: '1'
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -337,152 +483,39 @@ jobs:
           restore-keys: |
             msys2-mingw32-pkgs-
 
-      - name: Cache MSYS2 mingw32 toolchain tree
-        id: toolcache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: C:\msys64\mingw32
-          key: msys2-mingw32-tree-${{ env.CACHE_REV }}
-
-      - name: Install toolchain (only what the cache is missing)
+      - name: Install MINGW32 toolchain
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW32
           CHERE_INVOKING: '1'
         run: |
-          pacman -Sy --noconfirm --needed make tar xz ccache \
-            || pacman -Sy --noconfirm --needed make tar xz || true
-          if ! command -v gcc >/dev/null 2>&1; then
-            echo "mingw32 toolchain cache miss - installing gcc + build tools"
-            pacman -S --noconfirm --needed \
-              mingw-w64-i686-gcc mingw-w64-i686-cmake \
-              mingw-w64-i686-ninja mingw-w64-i686-python \
-              || pacman -S --noconfirm --needed mingw-w64-i686-gcc cmake ninja python || true
-          else
-            echo "mingw32 toolchain restored from cache - skipping pacman install"
-          fi
+          pacman -Sy --noconfirm --needed mingw-w64-i686-gcc make ccache
           gcc --version | head -1
           gcc -dumpmachine
-          cmake --version | head -1 || true
-          ninja --version || true
-          ccache --version | head -1 || true
 
-      - name: Restore prebuilt i686 LLVM
-        id: llvmcache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: C:\llvm-i686
-          key: llvm-i686-${{ env.LLVM_VER }}-x86-minsizerel-${{ env.CACHE_REV }}
-
-      - name: Restore ccache (i686 LLVM objects)
-        id: ccacherestore
-        if: steps.llvmcache.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Cache ccache (Windows i686)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\ccache-i686
-          key: ccache-i686-llvm-${{ env.LLVM_VER }}-${{ env.CACHE_REV }}-${{ github.run_id }}
+          key: ccache-win-i686-${{ github.run_id }}
           restore-keys: |
-            ccache-i686-llvm-${{ env.LLVM_VER }}-${{ env.CACHE_REV }}-
-            ccache-i686-llvm-${{ env.LLVM_VER }}-
+            ccache-win-i686-
 
-      - name: Build LLVM ${{ env.LLVM_VER }} from source for i686 (X86 only)
-        id: llvmbuild
-        if: steps.llvmcache.outputs.cache-hit != 'true'
-        continue-on-error: true
+      - name: Build 32-bit salam.exe (C backend, no LLVM by design)
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW32
           CHERE_INVOKING: '1'
+          CCACHE_DIR: 'C:/ccache-i686'
         run: |
-          set -e
-          command -v cmake >/dev/null && command -v ninja >/dev/null || {
-            echo "cmake/ninja unavailable for i686; skipping LLVM build."; exit 1; }
-          CCACHE_FLAGS=""
-          if command -v ccache >/dev/null; then
-            ccache --max-size="${CCACHE_MAXSIZE}" >/dev/null 2>&1 || true
-            ccache --zero-stats >/dev/null 2>&1 || true
-            CCACHE_FLAGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
-          fi
-          src="llvm-project-${LLVM_VER}.src"
-          curl -fsSL -o llvm.tar.xz \
-            "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VER}/${src}.tar.xz"
-          tar -xf llvm.tar.xz
-          cmake -S "${src}/llvm" -B llvm-build -G Ninja \
-            $CCACHE_FLAGS \
-            -DCMAKE_BUILD_TYPE=MinSizeRel \
-            -DCMAKE_INSTALL_PREFIX="${LLVM_PREFIX}" \
-            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
-            -DLLVM_TARGETS_TO_BUILD=X86 \
-            -DLLVM_ENABLE_PROJECTS='' -DLLVM_ENABLE_RUNTIMES='' \
-            -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF \
-            -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_TERMINFO=OFF \
-            -DLLVM_ENABLE_LIBEDIT=OFF -DLLVM_ENABLE_Z3_SOLVER=OFF \
-            -DLLVM_ENABLE_LIBPFM=OFF -DLLVM_ENABLE_PLUGINS=OFF \
-            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF \
-            -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_DOCS=OFF \
-            -DLLVM_BUILD_TOOLS=OFF -DLLVM_BUILD_UTILS=OFF \
-            -DLLVM_BUILD_RUNTIME=OFF -DLLVM_OPTIMIZED_TABLEGEN=ON \
-            -DLLVM_PARALLEL_LINK_JOBS=1
-          ninja -C llvm-build
-          ninja -C llvm-build llvm-config
-          ninja -C llvm-build install
-          mkdir -p "${LLVM_PREFIX}/bin"
-          ninja -C llvm-build install-llvm-config 2>/dev/null \
-            || cp -f llvm-build/bin/llvm-config.exe "${LLVM_PREFIX}/bin/" 2>/dev/null || true
-          "${LLVM_PREFIX}/bin/llvm-config" --version
-          "${LLVM_PREFIX}/bin/llvm-config" --libdir
-          command -v ccache >/dev/null && ccache --show-stats || true
-          libdir="$("${LLVM_PREFIX}/bin/llvm-config" --libdir)"
-          nlibs=$(ls "$libdir"/libLLVM*.a 2>/dev/null | wc -l)
-          echo "Installed $nlibs LLVM static libraries in $libdir"
-          [ "$nlibs" -ge 1 ] || { echo "ERROR: no LLVM static libs installed"; exit 1; }
-          rm -rf llvm-build "llvm-project-${LLVM_VER}.src" llvm.tar.xz || true
-          df -h / 2>/dev/null | tail -1 || true
-          echo "llvm_built=1" >> "$GITHUB_OUTPUT"
-
-      - name: Save ccache (i686 LLVM objects)
-        if: steps.llvmcache.outputs.cache-hit != 'true' && steps.llvmbuild.outcome == 'success'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: C:\ccache-i686
-          key: ccache-i686-llvm-${{ env.LLVM_VER }}-${{ env.CACHE_REV }}-${{ github.run_id }}
-
-      - name: Save prebuilt i686 LLVM
-        if: steps.llvmcache.outputs.cache-hit != 'true' && steps.llvmbuild.outputs.llvm_built == '1'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: C:\llvm-i686
-          key: llvm-i686-${{ env.LLVM_VER }}-x86-minsizerel-${{ env.CACHE_REV }}
-
-      - name: Build 32-bit salam.exe (embedded LLVM if available, else C backend)
-        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
-        env:
-          MSYSTEM: MINGW32
-          CHERE_INVOKING: '1'
-        run: |
-          LC="${LLVM_PREFIX}/bin/llvm-config"
-          built=0
-          if [ -x "$LC" ] || [ -x "$LC.exe" ]; then
-            echo "Found i686 llvm-config; attempting embedded static LLVM link."
-            if make -C compiler -j2 \
-                 WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG="$LC" CC=gcc \
-                 LLVM_ZSTD_LIB= \
-                 EXTRA_LDFLAGS="-static -static-libgcc -static-libstdc++ -Wl,--no-keep-memory -Wl,--reduce-memory-overheads"; then
-              built=1
-              echo "HAS_LLVM=1" >> "$GITHUB_ENV"
-              echo "Embedded LLVM build succeeded."
-            else
-              echo "32-bit static LLVM link failed (likely address-space limit); using C backend."
-              make -C compiler clean
-            fi
-          else
-            echo "No i686 LLVM available; building C backend only."
-          fi
-          if [ "$built" != "1" ]; then
-            make -C compiler -j2 WITH_LLVM=0 CC=gcc \
-              EXTRA_LDFLAGS="-static -static-libgcc"
-            echo "HAS_LLVM=0" >> "$GITHUB_ENV"
-          fi
+          ccache --max-size=300M >/dev/null 2>&1 || true
+          # The 32-bit build intentionally ships the interpreter + C backend
+          # (bundled tcc) only. A static 32-bit LLVM does not fit in a MinGW32
+          # link's ~3 GB address space, so 'salam llvm' is a 64-bit-only feature.
+          # This is a deliberate, labelled downgrade - NOT a silent fallback.
+          make -C compiler -j2 WITH_LLVM=0 CC="ccache gcc" \
+            EXTRA_LDFLAGS="-static -static-libgcc"
+          ccache --show-stats 2>/dev/null | head -5 || true
           test -f salam.exe || mv salam salam.exe
           ./salam.exe version
           file salam.exe || true
@@ -505,7 +538,7 @@ jobs:
           fi
           echo "OK: salam.exe imports only Windows system DLLs."
 
-      - name: Stage self-contained 32-bit bundle
+      - name: Stage minimal 32-bit bundle
         shell: bash
         run: |
           set -eu
@@ -535,61 +568,47 @@ jobs:
           7z x tcc.zip -o"$DIST" >/dev/null
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           {
-            echo "Salam for Windows (32-bit / i686) - self-contained."
+            echo "Salam for Windows (32-bit / i686) - MINIMAL build."
             echo ""
-            echo "Runs on 32-bit and 64-bit Windows. From this folder:"
+            echo "Runs on 32-bit and 64-bit Windows. Ships the interpreter and the"
+            echo "C backend (bundled 32-bit tcc) only - there is NO embedded LLVM and"
+            echo "NO cross-compilation in this build (see below)."
             echo ""
             echo "  salam.exe version"
-            echo "  salam.exe exec  myprogram.salam              (tree-walking interpreter)"
-            echo "  salam.exe build myprogram.salam              (C backend via bundled 32-bit tcc)"
-            if [ "${HAS_LLVM:-0}" = "1" ]; then
-              echo "  salam.exe llvm  myprogram.salam --jit        (run via the built-in LLVM)"
-              echo ""
-              echo "LLVM is compiled into salam.exe itself - no clang/llc/lli needed."
-            else
-              echo ""
-              echo "Note: this 32-bit build ships the interpreter and the C backend"
-              echo "(bundled tcc) only - the embedded LLVM backend could not be built"
-              echo "for 32-bit. Use the 64-bit Windows build if you need 'salam llvm'."
-            fi
+            echo "  salam.exe exec  myprogram.salam    (tree-walking interpreter)"
+            echo "  salam.exe build myprogram.salam    (native exe via bundled 32-bit tcc)"
+            echo ""
+            echo "Need 'salam llvm' or 'salam build --target=...'? Use the 64-bit"
+            echo "Windows build (salam-<ver>-windows.zip)."
           } > "$DIST/RUN-ME.txt"
           echo "bundle contents:"; ls -la "$DIST"
 
-      - name: Smoke-test the 32-bit build
+      - name: Smoke-test the minimal 32-bit build
         shell: bash
         run: |
           set -e
           cd salam-windows-i686
           printf 'func main:\n    __ "ok-win32"\nend\n' > smoke.salam
-          if [ "${HAS_LLVM:-0}" = "1" ]; then
-            echo "[1] LLVM JIT (in-process, 32-bit)"
-            ./salam.exe llvm smoke.salam --jit --log-level=warn
-            echo "[2] LLVM emit-obj (32-bit object)"
-            ./salam.exe llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
-            file smoke.o || true
-          else
-            echo "note: this 32-bit build ships the C backend only (no embedded LLVM)."
-          fi
-          echo "[3] C backend via bundled 32-bit tcc"
+          echo "[1] C backend via bundled 32-bit tcc"
           ./salam.exe build smoke.salam --output=smoke_tcc.exe --log-level=warn
           ./smoke_tcc.exe
-          echo "[4] interpreter"
+          echo "[2] interpreter"
           ./salam.exe exec smoke.salam --log-level=warn
-          rm -f smoke.salam smoke*.exe smoke.o salam_mod_*.c salam_mod_*.h
+          rm -f smoke.salam smoke*.exe salam_mod_*.c salam_mod_*.h
           cd ..
 
-      - name: Zip the 32-bit bundle
+      - name: Zip the minimal 32-bit bundle
         shell: bash
         run: |
           VERSION=$(tr -d ' \t\r\n' < VERSION)
-          7z a -tzip "salam-${VERSION}-windows-i686.zip" salam-windows-i686 >/dev/null
-          ls -la "salam-${VERSION}-windows-i686.zip"
+          7z a -tzip "salam-${VERSION}-windows-i686-minimal.zip" salam-windows-i686 >/dev/null
+          ls -la "salam-${VERSION}-windows-i686-minimal.zip"
 
-      - name: Upload 32-bit Windows bundle
+      - name: Upload minimal 32-bit Windows bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: salam-windows-i686-bundle
-          path: salam-*-windows-i686.zip
+          path: salam-*-windows-i686-minimal.zip
 
       - name: Upload 32-bit salam.exe
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -598,7 +617,7 @@ jobs:
           path: salam.exe
 
   build-linux-i686:
-    name: Build Salam for Linux (32-bit / i686)
+    name: Build Salam for Linux (32-bit / i686, minimal)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -639,13 +658,28 @@ jobs:
           cp salam "$DIST/salam"
           cp -r compiler/std "$DIST/std"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
-          zip -r "salam-${VERSION}-linux-i686.zip" "$DIST" >/dev/null
-          ls -la "salam-${VERSION}-linux-i686.zip"
+          {
+            echo "Salam for Linux (32-bit / i686) - MINIMAL build."
+            echo ""
+            echo "This build ships the salam frontend only: the interpreter works"
+            echo "standalone, but 'salam build' emits C and needs a system C compiler"
+            echo "(gcc/clang/tcc) to be installed. There is NO embedded LLVM/LLD and"
+            echo "NO bundled compiler."
+            echo ""
+            echo "  ./salam version"
+            echo "  ./salam exec  app.salam            (interpreter - works standalone)"
+            echo "  ./salam build app.salam -o app     (needs a system C compiler)"
+            echo ""
+            echo "For a zero-install experience, cross-compile from the 64-bit Linux"
+            echo "flagship (salam-<ver>-linux.zip) instead of using this build."
+          } > "$DIST/RUN-ME.txt"
+          zip -r "salam-${VERSION}-linux-i686-minimal.zip" "$DIST" >/dev/null
+          ls -la "salam-${VERSION}-linux-i686-minimal.zip"
       - name: Upload versioned archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: salam-linux-i686-zip
-          path: salam-*-linux-i686.zip
+          path: salam-*-linux-i686-minimal.zip
       - name: Upload binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -653,7 +687,7 @@ jobs:
           path: salam
 
   build-linux-arm:
-    name: Build Salam for Linux ARM (${{ matrix.arch }})
+    name: Build Salam for Linux ARM (${{ matrix.arch }}, minimal)
     runs-on: ubuntu-latest
     continue-on-error: true
     strategy:
@@ -703,13 +737,28 @@ jobs:
           cp salam "$DIST/salam"
           cp -r compiler/std "$DIST/std"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
-          zip -r "salam-${VERSION}-linux-${{ matrix.arch }}.zip" "$DIST" >/dev/null
-          ls -la "salam-${VERSION}-linux-${{ matrix.arch }}.zip"
+          {
+            echo "Salam for Linux ${{ matrix.arch }} - MINIMAL build."
+            echo ""
+            echo "This build ships the salam frontend only: the interpreter works"
+            echo "standalone, but 'salam build' emits C and needs a system C compiler"
+            echo "(gcc/clang/tcc) to be installed. There is NO embedded LLVM/LLD and"
+            echo "NO bundled compiler for this architecture."
+            echo ""
+            echo "  ./salam version"
+            echo "  ./salam exec  app.salam            (interpreter - works standalone)"
+            echo "  ./salam build app.salam -o app     (needs a system C compiler)"
+            echo ""
+            echo "For a zero-install experience, cross-compile from the 64-bit Linux"
+            echo "flagship (salam-<ver>-linux.zip) instead of using this build."
+          } > "$DIST/RUN-ME.txt"
+          zip -r "salam-${VERSION}-linux-${{ matrix.arch }}-minimal.zip" "$DIST" >/dev/null
+          ls -la "salam-${VERSION}-linux-${{ matrix.arch }}-minimal.zip"
       - name: Upload versioned archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: salam-linux-${{ matrix.arch }}-zip
-          path: salam-*-linux-${{ matrix.arch }}.zip
+          path: salam-*-linux-${{ matrix.arch }}-minimal.zip
       - name: Upload binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

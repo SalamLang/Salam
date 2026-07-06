@@ -73,7 +73,7 @@
     ar: {
       title: "ملعب سلام",//I prefered the term 'Malaab' which tells more on the playground term
       mode_app: "التطبيق",//I better translation of the term App.
-      mode_layout: "المخطط",//
+      mode_layout: "المخطط",
       run: "تشغيل",
       autorun: "تشغيل تلقائي",
       editor: "المحرر",

@@ -71,9 +71,9 @@
       copied: "کپی شد",
     },
     ar: {
-      title: "ساحة سلام",
-      mode_app: "برنامج",
-      mode_layout: "تخطيط",
+      title: "ملعب سلام",//I prefered the term 'Malaab' which tells more on the playground term
+      mode_app: "التطبيق",//I better translation of the term App.
+      mode_layout: "المخطط",//
       run: "تشغيل",
       autorun: "تشغيل تلقائي",
       editor: "المحرر",
@@ -86,16 +86,16 @@
       loading: "تحميل المترجم…",
       custom: "مخصص",
       examples: "أمثلة",
-      g_console: "برامج طرفية",
-      g_web: "صفحات وب",
-      badge_web: "وب",
+      g_console: "لوحة تحكم البرنامج",
+      g_web: "صفحات الويب",
+      badge_web: "الويب",//Adding the preposition AL
       theme_auto: "تلقائي",
       theme_light: "فاتح",
       theme_dark: "داكن",
       view_run: "تشغيل",
-      view_tokens: "الرموز",
-      view_ast: "الشجرة",
-      view_symbols: "الرموز البرمجية",
+      view_tokens: "علامات",
+      view_ast: "شجرة نحوية مجردة",// Source: wikipedia -
+      view_symbols: "رموز", //symbols
       view_html: "HTML",
       view_css: "CSS",
       view_js: "JS",

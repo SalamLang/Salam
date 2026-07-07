@@ -88,7 +88,7 @@
       examples: "أمثلة",
       g_console: "لوحة تحكم البرنامج",
       g_web: "صفحات الويب",
-      badge_web: "الويب",//Adding the preposition AL
+      badge_web: "الويب",
       theme_auto: "تلقائي",
       theme_light: "فاتح",
       theme_dark: "داكن",

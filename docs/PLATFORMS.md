@@ -1,3 +1,18 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+- [Salam platform & word-size support](#salam-platform--word-size-support)
+  - [TL;DR](#tldr)
+  - [Can a 32-bit machine use `i64` and `f64`? - Yes.](#can-a-32-bit-machine-use-i64-and-f64---yes)
+  - [How each backend handles word size](#how-each-backend-handles-word-size)
+    - [C backend (`salam build`) - portable by construction](#c-backend-salam-build---portable-by-construction)
+    - [LLVM backend (`salam llvm`) - now width-aware](#llvm-backend-salam-llvm---now-width-aware)
+  - [Release matrix (GitHub Actions: `.github/workflows/compiler-release.yml`)](#release-matrix-github-actions-githubworkflowscompiler-releaseyml)
+    - [Why not embedded LLVM everywhere on 32-bit?](#why-not-embedded-llvm-everywhere-on-32-bit)
+  - [Recommendation](#recommendation)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # Salam platform & word-size support
 
 This document explains which CPU word sizes (32-bit / 64-bit) and operating

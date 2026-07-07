@@ -1,3 +1,15 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+- [Salam Web Playground](#salam-web-playground)
+  - [How it works](#how-it-works)
+  - [Building the Wasm module](#building-the-wasm-module)
+  - [Running it](#running-it)
+  - [Trying the interpreter without the browser](#trying-the-interpreter-without-the-browser)
+  - [Scope](#scope)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # Salam Web Playground
 
 Run Salam entirely in the browser. Edit code, run it, and preview layout pages -

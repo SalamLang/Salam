@@ -1,3 +1,6 @@
+/**
+ * Gradle build configuration for the Android application module.
+ */
 plugins {
     alias(libs.plugins.android.application)
 }

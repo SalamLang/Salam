@@ -71,8 +71,8 @@
       copied: "کپی شد",
     },
     ar: {
-      title: "ملعب سلام",//I prefered the term 'Malaab' which tells more on the playground term
-      mode_app: "التطبيق",//I better translation of the term App.
+      title: "ملعب سلام",
+      mode_app: "التطبيق",
       mode_layout: "المخطط",
       run: "تشغيل",
       autorun: "تشغيل تلقائي",

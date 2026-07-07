@@ -94,8 +94,8 @@
       theme_dark: "داكن",
       view_run: "تشغيل",
       view_tokens: "علامات",
-      view_ast: "شجرة نحوية مجردة",// Source: wikipedia -
-      view_symbols: "رموز", //symbols
+      view_ast: "شجرة نحوية مجردة",
+      view_symbols: "رموز",
       view_html: "HTML",
       view_css: "CSS",
       view_js: "JS",

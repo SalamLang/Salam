@@ -1,6 +1,3 @@
-/**
- * Hosts the Android app WebView experience and manages related UI integrations.
- */
 package ir.salamlang.editor
 
 import android.Manifest
@@ -67,7 +64,7 @@ class MainActivity : AppCompatActivity() {
     private val locationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
             val granted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+                    result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
             geolocationCallback?.invoke(geolocationOrigin.orEmpty(), granted, false)
             geolocationCallback = null
             geolocationOrigin = null
@@ -95,9 +92,8 @@ class MainActivity : AppCompatActivity() {
         setupBackNavigation()
         retryButton.setOnClickListener { reload() }
 
-        ensureLocationPermission()
-
-        val restored = savedInstanceState != null && webView.restoreState(savedInstanceState) != null
+        val restored =
+            savedInstanceState != null && webView.restoreState(savedInstanceState) != null
         if (!restored) {
             webView.loadUrl(HOME_URL)
         }
@@ -119,6 +115,7 @@ class MainActivity : AppCompatActivity() {
         controller.isAppearanceLightStatusBars = false
         controller.isAppearanceLightNavigationBars = false
     }
+
     private fun setupInsets() {
         ViewCompat.setOnApplyWindowInsetsListener(contentArea) { v, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -140,9 +137,11 @@ class MainActivity : AppCompatActivity() {
             useWideViewPort = true
             cacheMode = WebSettings.LOAD_DEFAULT
             mediaPlaybackRequiresUserGesture = false
-            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-            allowFileAccess = true
-            allowContentAccess = true
+
+            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            allowFileAccess = false
+            allowContentAccess = false
+
             setSupportZoom(true)
             builtInZoomControls = false
             displayZoomControls = false
@@ -168,6 +167,7 @@ class MainActivity : AppCompatActivity() {
             openExternally(url.toUri())
         }
     }
+
     private fun openPopupWebView(): WebView {
         closePopup()
         val popup = WebView(this)
@@ -213,20 +213,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun hasLocationPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED
-
-    private fun ensureLocationPermission() {
-        if (!hasLocationPermission()) {
-            locationPermissionLauncher.launch(
-                arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
+                PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(
+                    this,
                     Manifest.permission.ACCESS_COARSE_LOCATION
-                )
-            )
-        }
-    }
+                ) ==
+                PackageManager.PERMISSION_GRANTED
 
     private fun hideSplash() {
         if (splashHidden) return
@@ -250,21 +242,51 @@ class MainActivity : AppCompatActivity() {
         if (webView.url == null) webView.loadUrl(HOME_URL) else webView.reload()
     }
 
-    private val trustedGatewayHosts = listOf("zarinpal.com", "zibal.ir", "shaparak.ir")
-
-    private fun isTrustedGatewayHost(host: String): Boolean =
-        trustedGatewayHosts.any { host == it || host.endsWith(".$it") }
-
+    @SuppressLint("QueryPermissionsNeeded")
     private fun openExternally(uri: Uri) {
         try {
-            val intent = if (uri.scheme == "intent") {
-                Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
+            val intent = if (uri.scheme?.lowercase() == "intent") {
+                val rawIntent = Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
+
+                rawIntent.action = Intent.ACTION_VIEW
+                rawIntent.addCategory(Intent.CATEGORY_BROWSABLE)
+                rawIntent.component = null
+                rawIntent.selector = null
+                rawIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+
+                val packageManager = packageManager
+                val activities = packageManager.queryIntentActivities(
+                    rawIntent,
+                    PackageManager.MATCH_DEFAULT_ONLY
+                )
+                if (activities.isEmpty()) {
+                    Log.w(TAG, "No activity found for intent, ignoring")
+                    return
+                }
+
+                val data = rawIntent.data
+                if (data != null) {
+                    val scheme = data.scheme?.lowercase()
+                    if (scheme != "http" && scheme != "https" && scheme != "tel" && scheme != "mailto") {
+                        Log.w(TAG, "Unsupported scheme: $scheme, ignoring")
+                        return
+                    }
+                }
+
+                rawIntent
             } else {
-                Intent(Intent.ACTION_VIEW, uri)
+                Intent(Intent.ACTION_VIEW, uri).apply {
+                    addCategory(Intent.CATEGORY_BROWSABLE)
+                    component = null
+                    selector = null
+                }
             }
+
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(intent)
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to open external URI: ${uri.toString()}", e)
+        }
     }
 
     override fun onPause() {
@@ -316,7 +338,10 @@ class MainActivity : AppCompatActivity() {
             request: WebResourceRequest,
             error: WebResourceError
         ) {
-            Log.w(TAG, "onReceivedError: ${request.url} code=${error.errorCode} '${error.description}' mainFrame=${request.isForMainFrame}")
+            Log.w(
+                TAG,
+                "onReceivedError: ${request.url} code=${error.errorCode} '${error.description}' mainFrame=${request.isForMainFrame}"
+            )
             if (request.isForMainFrame && view === webView) {
                 showError()
             }
@@ -329,22 +354,6 @@ class MainActivity : AppCompatActivity() {
         ) {
             Log.w(TAG, "onReceivedHttpError: ${request.url} status=${errorResponse.statusCode}")
         }
-
-        @SuppressLint("WebViewClientOnReceivedSslError")
-        override fun onReceivedSslError(
-            view: WebView,
-            handler: android.webkit.SslErrorHandler,
-            error: android.net.http.SslError
-        ) {
-            val host = error.url.toUri().host.orEmpty()
-            if (isTrustedGatewayHost(host)) {
-                Log.w(TAG, "SSL bypass (trusted gateway) host=$host primaryError=${error.primaryError}")
-                handler.proceed()
-            } else {
-                Log.w(TAG, "SSL error canceled host=$host primaryError=${error.primaryError}")
-                handler.cancel()
-            }
-        }
     }
 
     private inner class SalamWebChromeClient : WebChromeClient() {
@@ -355,7 +364,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onConsoleMessage(message: ConsoleMessage): Boolean {
-            Log.d(TAG, "console[${message.messageLevel()}]: ${message.message()} (${message.sourceId()}:${message.lineNumber()})")
+            Log.d(
+                TAG,
+                "console[${message.messageLevel()}]: ${message.message()} (${message.sourceId()}:${message.lineNumber()})"
+            )
             return true
         }
 
@@ -414,7 +426,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "SalamWV"
-        private const val HOME_URL = "https://salamlang.ir/"
+        private const val HOME_URL = "https://salamlang.github.io/Salam"
         private const val SPLASH_TIMEOUT_MS = 12_000L
     }
 }

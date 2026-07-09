@@ -477,6 +477,8 @@ static const char *call_member(cg_t *cg, ast_node_t *n, ast_node_t *callee)
 
         if ((!pk || pk->kind != SYM_PACKAGE) && cg->cur_struct && cg->cur_struct->home)
             pk = scope_lookup(cg->cur_struct->home, obj->name);
+        if ((!pk || pk->kind != SYM_PACKAGE) && cg->cur_fn_home)
+            pk = scope_lookup(cg->cur_fn_home, obj->name);
         if (pk && pk->kind == SYM_PACKAGE) return call_pkg(cg, n, pk, callee);
     }
     const char *objts = obj->type_str ? obj->type_str : "";

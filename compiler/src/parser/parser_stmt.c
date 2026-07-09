@@ -26,7 +26,8 @@ static ast_node_t *parse_repeat(parser_t *p);
 static ast_node_t *parse_for_clause(parser_t *p);
 static ast_node_t *parse_return(parser_t *p);
 static ast_node_t *parse_defer(parser_t *p);
-static ast_node_t *parse_cond_expr(parser_t *p)
+
+ast_node_t *parse_cond_expr(parser_t *p)
 {
     bool saved = p->no_struct_lit;
     p->no_struct_lit = true;

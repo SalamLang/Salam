@@ -124,6 +124,7 @@ void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
     bool is_main = (!owner && strcmp(fn->name, cg->entry) == 0);
     LOG_T(cg->log, PH_CODEGEN, "emit function %s%s", owner ? owner->name : "", fn->name);
     cg->cur_struct = owner;
+    cg->cur_fn_home = fsym ? fsym->home : NULL;
     cg->cur_sret = sig_is_sret(sig, is_main);
     cg->locals.len = 0;
     if (owner) local_add(cg, "this");
@@ -152,6 +153,7 @@ void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
     cg_line(cg, "}");
     sb_putc(cg->c, '\n');
     cg->cur_struct = NULL;
+    cg->cur_fn_home = NULL;
     cg->cur_sret = false;
     cg->fn_defers = saved_defers;
 }

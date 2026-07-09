@@ -22,7 +22,7 @@
 #include "parser/parser.h"
 #include "langpack/langpack.h"
 #include "i18n/i18n.h"
-#include "preproc/preproc.h"
+#include "condcomp/condcomp.h"
 #if defined(_WIN32)
 #  include <io.h>
 #  include <windows.h>
@@ -635,8 +635,6 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
         SERR(s, 8, &imp->span, "import not found: '%s'", path);
         return NULL;
     }
-    src = preproc_source(s->a, s->log, src, NULL, 0);
-
     const langpack_t *fb = langpack_load(i18n_lang());
     if (!fb) fb = langpack_load("en");
     const langpack_t *pack = langpack_detect(s->a, src, fb);
@@ -644,6 +642,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     lexer_run(s->a, s->log, pack, src, &toks);
     ast_node_t *prog = NULL;
     parser_run(s->a, s->log, toks, &prog);
+    cc_prune_program(s->a, s->log, path, s->cc, prog);
 
     {
         const char *files[256];
@@ -652,11 +651,11 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
         for (; fi < nf; fi++) {
             source_file_t *fsrc = source_load(s->a, files[fi]);
             if (!fsrc) continue;
-            fsrc = preproc_source(s->a, s->log, fsrc, NULL, 0);
             token_stream_t *ftoks = NULL;
             lexer_run(s->a, s->log, pack, fsrc, &ftoks);
             ast_node_t *fprog = NULL;
             parser_run(s->a, s->log, ftoks, &fprog);
+            cc_prune_program(s->a, s->log, files[fi], s->cc, fprog);
             salam_merge_program(s->a, prog, fprog);
         }
     }
@@ -754,7 +753,7 @@ void sema_load_prelude(sema_t *s)
 }
 
 sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const char *file,
-                        const char *lang)
+                        const char *lang, const cc_table_t *cc)
 {
     sema_t s;
     memset(&s, 0, sizeof(s));
@@ -763,6 +762,7 @@ sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const ch
     s.log = log;
     s.file = file;
     s.lang = (lang && *lang) ? lang : "en";
+    s.cc = cc;
     s.tc = type_ctx_new(a);
     s.diag = diag_new(a, log, PH_SEMANTIC);
     s.global = scope_new(a, SCOPE_GLOBAL, NULL);

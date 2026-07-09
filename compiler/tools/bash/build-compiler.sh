@@ -21,7 +21,7 @@ esac
     src/core/arena.c src/core/vec.c src/core/sb.c src/core/numstr.c src/core/sal_format.c \
     src/source/source.c src/logger/logger.c src/logger/logger_emit.c src/logger/logger_level.c \
     src/xml/xml.c src/xml/xml_emit.c \
-    src/preproc/preproc.c src/preproc/preproc_cond.c \
+    src/condcomp/condcomp_table.c src/condcomp/condcomp_fold.c \
     src/token/token.c src/token/token_xml.c \
     src/langpack/langpack.c src/langpack/langpack_data.c src/langpack/langpack_lookup.c \
     src/i18n/i18n.c src/i18n/i18n_locale.c src/i18n/i18n_gettext.c src/i18n/i18n_load.c \

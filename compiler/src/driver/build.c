@@ -25,7 +25,7 @@
 #include "parser/parser.h"
 #include "semantic/sema.h"
 #include "codegen/codegen.h"
-#include "preproc/preproc.h"
+#include "condcomp/condcomp.h"
 #include "i18n/i18n.h"
 #if defined(_WIN32)
 #  include <io.h>
@@ -128,7 +128,6 @@ int driver_build(options_t *opt)
         return 2;
     }
     salam_set_stdlib_root(opt->stdlib_path);
-    preproc_set_target(NULL);
 
     if (opt->cc && strcmp(opt->cc, "tcc") == 0) {
         static char bundled_cc[1200];
@@ -221,7 +220,7 @@ int driver_build(options_t *opt)
                 all_ok = false;
                 continue;
             }
-            src = preproc_source(arena, log, src, defs, ndefs);
+            cc_table_t *cc = cc_table_build(arena, NULL, defs, ndefs);
             const langpack_t *modpack = langpack_detect(arena, src, pack);
             const char *modentry = langpack_entry(modpack);
 
@@ -234,6 +233,7 @@ int driver_build(options_t *opt)
             bool lok = lexer_run(arena, log, modpack, src, &toks);
             ast_node_t *program = NULL;
             bool pok = parser_run(arena, log, toks, &program);
+            if (!cc_prune_program(arena, log, path, cc, program)) pok = false;
 
             {
                 const char *pfiles[SALAM_MAX_INPUTS];
@@ -246,17 +246,17 @@ int driver_build(options_t *opt)
                         all_ok = false;
                         continue;
                     }
-                    psrc = preproc_source(arena, log, psrc, defs, ndefs);
                     token_stream_t *ptoks = NULL;
                     if (!lexer_run(arena, log, modpack, psrc, &ptoks)) lok = false;
                     ast_node_t *pprog = NULL;
                     if (!parser_run(arena, log, ptoks, &pprog)) pok = false;
+                    if (!cc_prune_program(arena, log, pfiles[pi], cc, pprog)) pok = false;
                     salam_merge_program(arena, program, pprog);
                 }
             }
 
             sema_result_t *sr =
-                sema_run(arena, log, program, src->path, langpack_code(modpack));
+                sema_run(arena, log, program, src->path, langpack_code(modpack), cc);
             if (!lok || !pok || !sr->ok) {
                 all_ok = false;
                 continue;

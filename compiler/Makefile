@@ -26,7 +26,7 @@ DESTDIR  ?=
 BINDIR   := $(PREFIX)/bin
 DATADIR  := $(PREFIX)/share/salam
 
-SRCDIRS := core source preproc logger xml diag i18n langpack         \
+SRCDIRS := core source condcomp logger xml diag i18n langpack        \
            token lexer ast parser semantic codegen llvm interp       \
            layout fmt cli driver
 

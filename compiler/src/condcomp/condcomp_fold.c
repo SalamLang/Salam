@@ -46,7 +46,7 @@ static cc_bres_t cc_fold_defined_call(const cc_table_t *tbl, const ast_node_t *n
     if (n->list.len != 1) return fail;
     {
         const ast_node_t *arg = (const ast_node_t *)n->list.data[0];
-        if (arg->kind != AST_IDENTIFIER || !arg->name) return fail;
+        if (!arg || arg->kind != AST_IDENTIFIER || !arg->name) return fail;
         {
             cc_bres_t r;
             r.ok = true;
@@ -91,7 +91,8 @@ static cc_scalar_t cc_fold_scalar(const cc_table_t *tbl, const ast_node_t *n,
         }
     }
     if ((n->kind == AST_UNARY && n->op == TK_NOT) ||
-        (n->kind == AST_BINARY && (n->op == TK_AND || n->op == TK_OR)) ||
+        (n->kind == AST_BINARY &&
+         (n->op == TK_AND || n->op == TK_OR || n->op == TK_EQ || n->op == TK_NE)) ||
         n->kind == AST_CALL) {
         cc_bres_t r = cc_fold_bool(tbl, n, lenient);
         if (!r.ok) return fail;
@@ -117,6 +118,16 @@ static cc_bres_t cc_fold_bool(const cc_table_t *tbl, const ast_node_t *n, bool l
     }
     if (n->kind == AST_BINARY && (n->op == TK_AND || n->op == TK_OR)) {
         cc_bres_t l = cc_fold_bool(tbl, n->a, lenient);
+        if (l.ok) {
+            if (n->op == TK_AND && !l.bval) {
+                cc_bres_t out = {true, false};
+                return out;
+            }
+            if (n->op == TK_OR && l.bval) {
+                cc_bres_t out = {true, true};
+                return out;
+            }
+        }
         if (!l.ok) return fail;
         {
             cc_bres_t r = cc_fold_bool(tbl, n->b, lenient);

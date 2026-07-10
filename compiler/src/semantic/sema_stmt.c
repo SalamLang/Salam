@@ -90,7 +90,7 @@ type_t *sema_check_var_decl(sema_t *s, ast_node_t *n)
     if (declared && declared->kind == TY_ARRAY && declared->elem &&
         declared->elem->kind == TY_DYN && n->a && n->a->kind == AST_ARRAY_LIT)
         s->expected = declared;
-    else if (declared && n->a && n->a->kind == AST_CALL)
+    else if (declared && n->a && (n->a->kind == AST_CALL || n->a->kind == AST_LITERAL))
         s->expected = declared;
     type_t *initt = n->a ? sema_check_expr(s, n->a) : NULL;
     type_t *t;
@@ -141,6 +141,7 @@ static void check_stmt(sema_t *s, ast_node_t *n)
     }
     case AST_ASSIGN: {
         type_t *tt = sema_check_expr(s, n->a);
+        if (tt && n->b && n->b->kind == AST_LITERAL) s->expected = tt;
         type_t *vt = sema_check_expr(s, n->b);
         bool is_lvalue;
         bool mut = lvalue_mutable(s, n->a, &is_lvalue);

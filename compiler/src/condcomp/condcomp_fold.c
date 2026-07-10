@@ -35,13 +35,6 @@ typedef struct {
     const char *sval;
 } cc_scalar_t;
 
-/* `lenient`: when true, a bare identifier that is not in the compile-time
- * table folds to false instead of failing to fold. Safe ONLY for top-level
- * if conditions, which can never reference a real runtime symbol (top-level
- * code isn't statements), so there is no risk of masking a typo'd variable.
- * Function-body ifs are never lenient: an unresolvable identifier there must
- * be left unfolded so ordinary semantic analysis reports a real undefined-
- * symbol error instead of silently pruning a branch. */
 static cc_bres_t cc_fold_bool(const cc_table_t *tbl, const ast_node_t *n, bool lenient);
 
 static cc_bres_t cc_fold_defined_call(const cc_table_t *tbl, const ast_node_t *n)

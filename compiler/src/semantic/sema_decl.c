@@ -355,6 +355,8 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
                                                       : sema_resolve_type(s, param->type);
             if (param->a->kind == AST_STRUCT_LIT && pt && pt->kind == TY_STRUCT)
                 s->expected = pt;
+            else if (param->a->kind == AST_LITERAL && pt)
+                s->expected = pt;
             type_t *dt = sema_check_expr(s, param->a);
             if (pt && dt && !type_assignable(pt, dt))
                 SERR(s, 2, &param->span,
@@ -442,6 +444,8 @@ static void check_toplevel(sema_t *s, ast_node_t *d)
                     } else {
                         if (f && m->a->kind == AST_STRUCT_LIT && f->type &&
                             f->type->kind == TY_STRUCT)
+                            s->expected = f->type;
+                        else if (f && m->a->kind == AST_LITERAL)
                             s->expected = f->type;
                         vt = sema_check_expr(s, m->a);
                     }

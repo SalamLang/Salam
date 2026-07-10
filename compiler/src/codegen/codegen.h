@@ -23,6 +23,15 @@
 
 #define SALAM_MOD_PREFIX "salam_mod_"
 
+/* mem package's std/mem/mem.salam is always linked (see driver/build.c), so
+ * runtime-support codegen (Vector growth, dyn boxing, closure envs) calls its
+ * mangled pub functions directly instead of a separate salam_alloc/salam_free
+ * C shim. These names track Allocate/Reallocate/Free's mangled signatures
+ * (cg_mangle_in with pkg "mem") and must be updated if those signatures change. */
+#define SALAM_MEM_ALLOC "_Salam_mem_Allocate_u64"
+#define SALAM_MEM_REALLOC "_Salam_mem_Reallocate_void_ptr_u64"
+#define SALAM_MEM_FREE "_Salam_mem_Free_void_ptr"
+
 typedef struct {
     const char *module;
     const char *h_src;

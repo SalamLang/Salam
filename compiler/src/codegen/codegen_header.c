@@ -280,8 +280,8 @@ static void vec_emit(cg_t *cg, sb_t *h, const char *ts)
     sb_puts(h, cg_fmt(cg,
                       "static void %s_grow(%s* v, int32_t need){ if(need<=v->cap) "
                       "return; int32_t c=v->cap?v->cap:4; while(c<need) c*=2; "
-                      "v->data=(%s*)salam_realloc(v->data,(unsigned long "
-                      "long)c*sizeof(%s)); v->cap=c; }\n",
+                      "v->data=(%s*)" SALAM_MEM_REALLOC "(v->data,(uint64_t)"
+                      "c*sizeof(%s)); v->cap=c; }\n",
                       cn, cn, E, E));
     sb_puts(h, cg_fmt(cg,
                       "static void %s_push(%s* v, %s x){ %s_grow(v, v->len+1); "
@@ -300,7 +300,8 @@ static void vec_emit(cg_t *cg, sb_t *h, const char *ts)
     sb_puts(h, cg_fmt(cg, "static int32_t %s_len(%s* v){ return v->len; }\n", cn, cn));
     sb_puts(h, cg_fmt(cg, "static int32_t %s_cap(%s* v){ return v->cap; }\n", cn, cn));
     sb_puts(h, cg_fmt(cg,
-                      "static void %s_free(%s* v){ salam_free(v->data); v->data=(%s*)0; "
+                      "static void %s_free(%s* v){ " SALAM_MEM_FREE
+                      "(v->data); v->data=(%s*)0; "
                       "v->len=0; v->cap=0; }\n",
                       cn, cn, E));
     sb_puts(h, "#endif\n");
@@ -336,10 +337,7 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "esz, int sf)"
                "{ return (void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n"
                "typedef void (*salam_thread_fn)(void);\n"
-
-               "extern void* salam_alloc(uint64_t size);\n"
-               "extern void* salam_realloc(void* ptr, uint64_t size);\n"
-               "extern void salam_free(void* ptr);\n#endif\n");
+               "#endif\n");
     if (strcmp(cg->module, "core") != 0)
         sb_puts(h, cg_fmt(cg, "#include \"%score.h\"\n", SALAM_MOD_PREFIX));
 

@@ -31,20 +31,11 @@ typedef struct {
 
 typedef struct cc_table_t cc_table_t;
 
-/* Builds the compile-time-constant table for one compile: host-or-target
- * OS/arch flags, then each entry of `defines` (bare "NAME" -> CC_BOOL true,
- * "NAME=value" -> CC_STR). target_triple may be NULL to use the host
- * compiler's predefined macros (non-cross-compile). */
 cc_table_t *cc_table_build(arena_t *a, const char *target_triple,
                            const char *const *defines, int ndefines);
 
 const cc_const_t *cc_table_lookup(const cc_table_t *tbl, const char *name);
 
-/* Walks `program` in place, folding any `if`/`else`/`end` whose condition is
- * compile-time-constant and splicing the taken branch's contents over the
- * node, so the untaken branch never reaches semantic analysis. A top-level
- * if (one appearing outside a function body) whose condition cannot be
- * folded is a hard error. Returns false iff such an error occurred. */
 bool cc_prune_program(arena_t *a, logger_t *log, const char *file, const cc_table_t *tbl,
                       ast_node_t *program);
 

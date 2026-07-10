@@ -17,7 +17,7 @@
 #include "core/vec.h"
 
 struct cc_table_t {
-    vec_t entries; /* cc_const_t* */
+    vec_t entries;
 };
 
 static void cc_push_bool(arena_t *a, cc_table_t *t, const char *name, bool val)
@@ -184,12 +184,11 @@ static void cc_push_target_defs(arena_t *a, cc_table_t *t, const char *trip)
 }
 
 static const char *const s_all_bool_flags[] = {
-    "SALAM_OS_WINDOWS", "SALAM_OS_WIN64",   "SALAM_OS_WIN32",
-    "SALAM_OS_WASM",    "SALAM_OS_ANDROID", "SALAM_OS_LINUX",
-    "SALAM_OS_MAC",     "SALAM_OS_BSD",     "SALAM_OS_FREEBSD",
-    "SALAM_OS_OPENBSD", "SALAM_OS_NETBSD",  "SALAM_OS_UNIX",
-    "SALAM_ARCH_X64",   "SALAM_ARCH_X86",   "SALAM_ARCH_ARM64",
-    "SALAM_ARCH_ARM",   "SALAM_ARCH_WASM",  NULL};
+    "SALAM_OS_WINDOWS", "SALAM_OS_WIN64",   "SALAM_OS_WIN32",   "SALAM_OS_WASM",
+    "SALAM_OS_ANDROID", "SALAM_OS_LINUX",   "SALAM_OS_MAC",     "SALAM_OS_BSD",
+    "SALAM_OS_FREEBSD", "SALAM_OS_OPENBSD", "SALAM_OS_NETBSD",  "SALAM_OS_UNIX",
+    "SALAM_ARCH_X64",   "SALAM_ARCH_X86",   "SALAM_ARCH_ARM64", "SALAM_ARCH_ARM",
+    "SALAM_ARCH_WASM",  "SALAM_MEM_DEBUG",  "SALAM_ASAN",       NULL};
 
 /* Any OS/arch flag not already pushed as true by cc_push_host_defs/
  * cc_push_target_defs is explicitly false, so a bare `if SALAM_OS_WINDOWS:`

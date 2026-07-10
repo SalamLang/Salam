@@ -355,8 +355,8 @@ static const char *call_dyn(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t
     int t = ++cg->tmpn;
     const char *dynct = cg_ctype(cg, objts);
     if (!strcmp(callee->name, "free"))
-        return cg_fmt(cg, "({ %s __dv%d = (%s); salam_free(__dv%d%sdata); })", dynct, t,
-                      recv, t, acc);
+        return cg_fmt(cg, "({ %s __dv%d = (%s); " SALAM_MEM_FREE "(__dv%d%sdata); })",
+                      dynct, t, recv, t, acc);
     const char *as = call_args_lead(cg, n, NULL);
     return cg_fmt(cg, "({ %s __dv%d = (%s); __dv%d%svtable->%s(__dv%d%sdata%s); })",
                   dynct, t, recv, t, acc, cg_cident(cg, callee->name), t, acc, as);

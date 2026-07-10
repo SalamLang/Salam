@@ -1,176 +1,258 @@
 @en "mem"
 @fa "حافظه"
 package mem
-if SALAM_MEM_DEBUG:
-    mut _md_allocs i64 = 0
-    mut _md_frees i64 = 0
-    mut _md_live i64 = 0
-    mut _md_peak i64 = 0
-    extern "C":
-        func malloc(size u64) void*
-        func realloc(ptr void*, size u64) void*
-        func free(ptr void*)
-        func salam_alloc(size u64) void*:
-            p void* = malloc(size + (8 as u64))
-            if p == null: ret null end
-            mut hdr i64* = p as i64*
-            hdr[0] = size as i64
-            _md_allocs = _md_allocs + 1
-            _md_live = _md_live + (size as i64)
-            if _md_live > _md_peak: _md_peak = _md_live end
-            ret ((p as i64) + 8) as void*
-        end
-        func salam_realloc(ptr void*, size u64) void*:
-            if ptr == null: ret salam_alloc(size) end
-            orig void* = ((ptr as i64) - 8) as void*
-            ohdr i64* = orig as i64*
-            old_sz i64 = ohdr[0]
-            p void* = realloc(orig, size + (8 as u64))
-            if p == null: ret null end
-            mut hdr i64* = p as i64*
-            hdr[0] = size as i64
-            if _md_live > old_sz:
-                _md_live = _md_live - old_sz + (size as i64)
-            else:
-                _md_live = size as i64
-            end
-            if _md_live > _md_peak: _md_peak = _md_live end
-            ret ((p as i64) + 8) as void*
-        end
-        func salam_free(ptr void*):
-            if ptr == null: ret end
-            orig void* = ((ptr as i64) - 8) as void*
-            hdr i64* = orig as i64*
-            sz i64 = hdr[0]
-            if _md_live >= sz: _md_live = _md_live - sz end
-            _md_frees = _md_frees + 1
-            free(orig)
-        end
-    end
 
-    @en "AllocCount"
-    @fa "تعداد_تخصیص"
-    pub func AllocCount() i64: ret _md_allocs end
-
-    @en "FreeCount"
-    @fa "تعداد_آزادسازی"
-    pub func FreeCount() i64: ret _md_frees end
-
-    @en "LiveBytes"
-    @fa "بایت‌های_زنده"
-    pub func LiveBytes() i64: ret _md_live end
-
-    @en "PeakBytes"
-    @fa "بیشینه_بایت"
-    pub func PeakBytes() i64: ret _md_peak end
-
-    @en "IsMemDebug"
-    @fa "در_حالت_اشکال‌زدایی_حافظه"
-    pub func IsMemDebug() bool: ret true end
-else:
-    extern "C":
-        func malloc(size u64) void*
-        func realloc(ptr void*, size u64) void*
-        func free(ptr void*)
-        func salam_alloc(size u64) void*:
-            ret malloc(size)
-        end
-        func salam_realloc(ptr void*, size u64) void*:
-            ret realloc(ptr, size)
-        end
-        func salam_free(ptr void*):
-            free(ptr)
-        end
-    end
-
-    @en "AllocCount"
-    @fa "تعداد_تخصیص"
-    pub func AllocCount() i64: ret 0 end
-
-    @en "FreeCount"
-    @fa "تعداد_آزادسازی"
-    pub func FreeCount() i64: ret 0 end
-
-    @en "LiveBytes"
-    @fa "بایت‌های_زنده"
-    pub func LiveBytes() i64: ret 0 end
-
-    @en "PeakBytes"
-    @fa "بیشینه_بایت"
-    pub func PeakBytes() i64: ret 0 end
-
-    @en "IsMemDebug"
-    @fa "در_حالت_اشکال‌زدایی_حافظه"
-    pub func IsMemDebug() bool: ret false end
-
-end
-if SALAM_ASAN:
-    @en "IsAsanActive"
-    @fa "ازن_فعال_است"
-    pub func IsAsanActive() bool: ret true end
-else:
-    @en "IsAsanActive"
-    @fa "ازن_فعال_است"
-    pub func IsAsanActive() bool: ret false end
-
-end
 extern "C":
-    func memset(ptr void*, value i32, n u64) void*
-    func memcpy(dst void*, src void*, n u64) void*
+    func malloc(size u64) void*
+    func realloc(ptr void*, size u64) void*
+    func free(ptr void*)
 end
+
+const HDR_SIZE u64 = 8
+
+mut _md_allocs i64 = 0
+mut _md_frees i64 = 0
+mut _md_live i64 = 0
+mut _md_peak i64 = 0
 
 @en "Allocate"
 @fa "تخصیص"
-pub func Allocate(size u64) void*: ret salam_alloc(size) end
+pub func Allocate(size u64) void*:
+    if SALAM_MEM_DEBUG:
+        total u64 = size + HDR_SIZE
+        if total < size: ret null end
+        p void* = malloc(total)
+        if p == null: ret null end
+
+        mut hdr i64* = p as i64*
+        hdr[0] = size as i64
+
+        _md_allocs = _md_allocs + 1
+        _md_live = _md_live + (size as i64)
+
+        if _md_live > _md_peak:
+            _md_peak = _md_live
+        end
+
+        ret ((p as u64) + HDR_SIZE) as void*
+    else:
+        ret malloc(size)
+    end
+end
 
 @en "Reallocate"
 @fa "بازتخصیص"
-pub func Reallocate(ptr void*, size u64) void*: ret salam_realloc(ptr, size) end
+pub func Reallocate(ptr void*, size u64) void*:
+    if SALAM_MEM_DEBUG:
+        if ptr == null:
+            ret Allocate(size)
+        end
+
+        orig void* = ((ptr as u64) - HDR_SIZE) as void*
+        old_hdr i64* = orig as i64*
+        old_size i64 = old_hdr[0]
+
+        total u64 = size + HDR_SIZE
+        if total < size: ret null end
+
+        p void* = realloc(orig, total)
+        if p == null: ret null end
+
+        mut hdr i64* = p as i64*
+        hdr[0] = size as i64
+
+        _md_live = _md_live - old_size + (size as i64)
+
+        if _md_live > _md_peak:
+            _md_peak = _md_live
+        end
+
+        ret ((p as u64) + HDR_SIZE) as void*
+    else:
+        ret realloc(ptr, size)
+    end
+end
 
 @en "Free"
 @fa "آزادسازی"
-pub func Free(ptr void*): salam_free(ptr) end
+pub func Free(ptr void*):
+    if ptr == null:
+        ret
+    end
+
+    if SALAM_MEM_DEBUG:
+        orig void* = ((ptr as u64) - HDR_SIZE) as void*
+        hdr i64* = orig as i64*
+        size i64 = hdr[0]
+
+        if _md_live >= size:
+            _md_live = _md_live - size
+        else:
+            _md_live = 0
+        end
+
+        _md_frees = _md_frees + 1
+        free(orig)
+    else:
+        free(ptr)
+    end
+end
 
 @en "Set"
 @fa "تنظیم"
 pub func Set(ptr void*, value i32, n u64):
-    memset(ptr, value, n)
+    if ptr == null || n == 0:
+        ret
+    end
+
+    mut p i8* = ptr as i8*
+    mut i u64 = 0
+
+    while i < n:
+        p[i] = value as i8
+        i = i + 1
+    end
 end
 
 @en "Copy"
 @fa "کپی"
 pub func Copy(dst void*, src void*, n u64):
-    memcpy(dst, src, n)
+    if dst == src || n == 0:
+        ret
+    end
+
+    mut d i8* = dst as i8*
+    s i8* = src as i8*
+    mut i u64 = 0
+
+    while i < n:
+        d[i] = s[i]
+        i = i + 1
+    end
+end
+
+@en "MemMove"
+@fa "جابجایی_حافظه"
+pub func MemMove(dst void*, src void*, n u64) void*:
+    if dst == src || n == 0:
+        ret dst
+    end
+
+    mut d i8* = dst as i8*
+    s i8* = src as i8*
+
+    if (dst as u64) < (src as u64):
+        mut i u64 = 0
+
+        while i < n:
+            d[i] = s[i]
+            i = i + 1
+        end
+    else:
+        mut i i64 = (n as i64) - 1
+
+        while i >= 0:
+            d[i as u64] = s[i as u64]
+            i = i - 1
+        end
+    end
+
+    ret dst
 end
 
 @en "AllocateZeroed"
 @fa "تخصیص_صفرشده"
 pub func AllocateZeroed(size u64) void*:
-    mut p void* = salam_alloc(size)
-    memset(p, 0, size)
+    p void* = Allocate(size)
+    if p != null:
+        Set(p, 0, size)
+    end
+
     ret p
 end
 
 @en "AllocateArray"
 @fa "تخصیص_آرایه"
 pub func AllocateArray(count u64, size u64) void*:
-    ret AllocateZeroed(count * size)
+    if count == 0 || size == 0:
+        ret null
+    end
+
+    total u64 = count * size
+
+    if total / count != size:
+        ret null
+    end
+
+    ret AllocateZeroed(total)
 end
 
-@en "MemDebugActive"
-@fa "اشکال‌زدایی_حافظه_فعال"
+pub func AllocCount() i64:
+    if SALAM_MEM_DEBUG:
+        ret _md_allocs
+    else:
+        ret 0
+    end
+end
+
+pub func FreeCount() i64:
+    if SALAM_MEM_DEBUG:
+        ret _md_frees
+    else:
+        ret 0
+    end
+end
+
+pub func LiveBytes() i64:
+    if SALAM_MEM_DEBUG:
+        ret _md_live
+    else:
+        ret 0
+    end
+end
+
+pub func PeakBytes() i64:
+    if SALAM_MEM_DEBUG:
+        ret _md_peak
+    else:
+        ret 0
+    end
+end
+
+pub func IsMemDebug() bool:
+    if SALAM_MEM_DEBUG:
+        ret true
+    else:
+        ret false
+    end
+end
+
+pub func IsAsanActive() bool:
+    if SALAM_ASAN:
+        ret true
+    else:
+        ret false
+    end
+end
+
 pub func MemDebugActive() bool:
     ret IsMemDebug() || IsAsanActive()
 end
 
+// TODO: later we will remove this function and will use Salam package
 func _itos(n i64) str:
-    if n == 0: ret "0" end
+    if n == 0:
+        ret "0"
+    end
+
     mut v i64 = n
     mut r str = ""
+
     while v > 0:
         r = char_from_code((v % 10) as i32 + 48).concat(r)
         v = v / 10
     end
+
     ret r
 end
 
@@ -178,57 +260,20 @@ end
 @fa "بررسی_نشتی"
 pub func CheckLeaks():
     if IsAsanActive():
-        !__ "[salam memcheck] ASAN is active - leak report will appear at process exit."
+        !__ "[salam memcheck] ASAN active - report at exit"
     else IsMemDebug():
-        a i64 = AllocCount()
-        f i64 = FreeCount()
-        lb i64 = LiveBytes()
-        pb i64 = PeakBytes()
         !_ "[salam memcheck] allocs="
-        !_ _itos(a)
-        !_ "  frees="
-        !_ _itos(f)
-        !_ "  live_bytes="
-        !_ _itos(lb)
-        !_ "  peak_bytes="
-        !__ _itos(pb)
-        if lb > 0:
-            !_ "[salam memcheck] WARNING: "
-            !_ _itos(lb)
-            !__ " bytes still allocated (possible leak)"
-        end
-    end
-end
+        !_ _itos(AllocCount())
+        !_ " frees="
+        !_ _itos(FreeCount())
+        !_ " live="
+        !_ _itos(LiveBytes())
+        !_ " peak="
+        !__ _itos(PeakBytes())
 
-extern "C":
-    func salam_memcpy(dst void*, src void*, n u64) void*:
-        mut d i8* = dst as i8*
-        s i8* = src as i8*
-        ni i32 = n as i32
-        mut i i32 = 0
-        while i < ni:
-            d[i] = s[i]
-            i = i + 1
+        if LiveBytes() > 0:
+            !_ "[WARNING] leak bytes="
+            !__ _itos(LiveBytes())
         end
-        ret dst
-    end
-    func salam_memmove(dst void*, src void*, n u64) void*:
-        mut d i8* = dst as i8*
-        s i8* = src as i8*
-        ni i32 = n as i32
-        if (dst as i64) < (src as i64):
-            mut i i32 = 0
-            while i < ni:
-                d[i] = s[i]
-                i = i + 1
-            end
-        else:
-            mut i i32 = ni - 1
-            while i >= 0:
-                d[i] = s[i]
-                i = i - 1
-            end
-        end
-        ret dst
     end
 end

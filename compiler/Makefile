@@ -108,8 +108,8 @@ ifeq ($(WITH_LLVM),1)
   endif
   # NOTE: `--libs all` (WITH_LLD) lists -lPolly/-lPollyISL, and LLVM's own
   # libLLVMLTO.a references getPollyPluginInfo(), so Polly's static libs must be
-  # INSTALLED (do not filter them). LLVM 22 ships them; on LLVM 18 install the
-  # `libpolly-18-dev` apt package alongside llvm-18-dev / liblld-18-dev.
+  # INSTALLED (do not filter them). LLVM 22 ships them; on older LLVM (<22)
+  # install the matching `libpolly-N-dev` alongside llvm-N-dev / liblld-N-dev.
   LDLIBS   += $(LLD_LIBS) \
               $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --libs $(LLVM_COMPONENTS)) \
               $(LLVM_SYSTEM_LIBS) $(LLVM_CXXLIB)

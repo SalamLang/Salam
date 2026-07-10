@@ -18,6 +18,7 @@ ARG LLVM_VERSION=22
 
 FROM alpine:${ALPINE_VERSION} AS toolchain
 ARG LLVM_VERSION
+SHELL ["/bin/ash", "-o", "pipefail", "-c"]
 
 RUN for i in 1 2 3 4 5; do \
         apk add --no-cache \
@@ -59,7 +60,9 @@ WORKDIR /app
 
 FROM toolchain AS dev
 RUN apk add --no-cache entr
-RUN chown -R salam:salam /app
+RUN chown -R salam:salam /app \
+    && mkdir -p /app/build \
+    && chmod 1777 /app/build
 ENV HOME=/tmp
 USER salam
 ENTRYPOINT ["sh", "tools/bash/docker-dev.sh"]

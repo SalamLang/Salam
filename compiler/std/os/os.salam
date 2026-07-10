@@ -2,9 +2,10 @@
 @fa "سیستم‌عامل"
 package os
 import "mem"
+import "str"
+import "io"
 extern "C":
     func salam_open(path str, mode str) File*
-    func strdup(s str) str
     func getenv(name str) void*
     func exit(code i32)
     func abort()
@@ -34,7 +35,7 @@ if SALAM_OS_WINDOWS:
         buf void* = mem.Allocate(2048 as u64)
         n i32 = GetCurrentDirectoryA(2048, buf)
         mut s str = ""
-        if n > 0 && n < 2048: s = strdup(buf as str) end
+        if n > 0 && n < 2048: s = str.Clone(buf as str) end
         mem.Free(buf)
         ret s
     end
@@ -69,7 +70,7 @@ else:
         buf void* = mem.Allocate(2048 as u64)
         r void* = getcwd(buf, 2048)
         mut s str = ""
-        if r != null: s = strdup(r as str) end
+        if r != null: s = str.Clone(r as str) end
         mem.Free(buf)
         ret s
     end
@@ -107,7 +108,7 @@ pub func Args() Vector<str>: ret args() end
 pub func Env(name str) str:
     v void* = getenv(name)
     if v == null: ret "" end
-    ret strdup(v as str)
+    ret str.Clone(v as str)
 end
 
 @en "Remove"
@@ -135,11 +136,7 @@ pub func Copy(src str, dst str) i32:
         fin.close()
         ret 0 - 1
     end
-    mut chunk str = fin.read(8192)
-    while chunk.len() > 0:
-        fout.write(chunk)
-        chunk = fin.read(8192)
-    end
+    io.Copy(fout, fin)
     fin.close()
     fout.close()
     ret 0
@@ -214,27 +211,25 @@ end
 
 @en "ReadFile"
 @fa "خواندن_پرونده"
-pub func ReadFile(path str) str:
-    f File* = salam_open(path, "rb")
-    if f == null: ret "" end
-    mut out str = ""
-    mut chunk str = f.read(4096)
-    while chunk.len() > 0:
-        out = out.concat(chunk)
-        chunk = f.read(4096)
-    end
-    f.close()
-    ret out
-end
+pub func ReadFile(path str) str: ret io.ReadFile(path) end
 
 @en "WriteFile"
 @fa "نوشتن_پرونده"
-pub func WriteFile(path str, data str) i32:
-    f File* = salam_open(path, "w")
-    if f == null: ret 0 - 1 end
-    n i32 = f.write(data)
-    f.close()
-    ret n
+pub func WriteFile(path str, data str) i32: ret io.WriteFile(path, data) end
+
+@en "AppendFile"
+@fa "افزودن_به_پرونده"
+pub func AppendFile(path str, data str) i32: ret io.AppendFile(path, data) end
+
+@en "FileSize"
+@fa "اندازه_پرونده"
+pub func FileSize(path str) i64:
+    fp void* = fopen(path, "rb")
+    if fp == null: ret 0 - 1 end
+    fseek(fp, 0, 2)
+    n i32 = ftell(fp)
+    fclose(fp)
+    ret n as i64
 end
 
 @en "FileInfo"
@@ -254,12 +249,8 @@ pub func Stat(path str) FileInfo:
     dir bool = _os_is_dir(path)
     mut sz i64 = 0
     if dir == false:
-        fp void* = fopen(path, "rb")
-        if fp != null:
-            fseek(fp, 0, 2)
-            sz = ftell(fp) as i64
-            fclose(fp)
-        end
+        sz = FileSize(path)
+        if sz < 0: sz = 0 end
     end
     ret FileInfo { size = sz, is_dir = dir, exists = true }
 end

@@ -20,11 +20,11 @@ static const char *ll_arith_op(token_kind_t k, bool isflt, bool issigned)
 {
     switch (k) {
     case TK_PLUS:
-        return isflt ? "fadd" : "add";
+        return isflt ? "fadd" : (issigned ? "add nsw" : "add");
     case TK_MINUS:
-        return isflt ? "fsub" : "sub";
+        return isflt ? "fsub" : (issigned ? "sub nsw" : "sub");
     case TK_STAR:
-        return isflt ? "fmul" : "mul";
+        return isflt ? "fmul" : (issigned ? "mul nsw" : "mul");
     case TK_SLASH:
         return isflt ? "fdiv" : (issigned ? "sdiv" : "udiv");
     case TK_PERCENT:
@@ -344,7 +344,8 @@ static llv_t ll_unary(ll_t *ll, ast_node_t *n)
         if (ll_is_float(rt))
             ll_emit(ll, "%s = fneg %s %s", r, ll_ty(ll, rt), cv);
         else
-            ll_emit(ll, "%s = sub %s 0, %s", r, ll_ty(ll, rt), cv);
+            ll_emit(ll, "%s = sub%s %s 0, %s", r, ll_is_signed(rt) ? " nsw" : "",
+                    ll_ty(ll, rt), cv);
         return (llv_t){r, rt};
     }
     ll_error(ll, n, "unary operator");
@@ -673,7 +674,7 @@ static llv_t ll_call_dyn(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *i
                *fn = ll_new_tmp(ll);
     ll_emit(ll, "%s = extractvalue %%dyn %s, 0", data, dv.ref);
     ll_emit(ll, "%s = extractvalue %%dyn %s, 1", vt, dv.ref);
-    ll_emit(ll, "%s = getelementptr ptr, ptr %s, i64 %d", sl, vt, slot);
+    ll_emit(ll, "%s = getelementptr inbounds ptr, ptr %s, i64 %d", sl, vt, slot);
     ll_emit(ll, "%s = load ptr, ptr %s", fn, sl);
 
     sb_t ab;
@@ -876,8 +877,9 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
                     ast_node_t *c = (ast_node_t *)caps->data[i];
                     if (!strcmp(c->name, n->name)) {
                         const char *r = ll_new_tmp(ll);
-                        ll_emit(ll, "%s = getelementptr %s, ptr %s, i32 0, i32 %zu", r,
-                                ll->env_ty, ll->env_ref, i + 1);
+                        ll_emit(ll,
+                                "%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %zu",
+                                r, ll->env_ty, ll->env_ref, i + 1);
                         return (ll_addr_t){r, c->type_str};
                     }
                 }
@@ -1092,7 +1094,7 @@ static llv_t ll_lambda_value(ll_t *ll, ast_node_t *n)
     ll_emit(ll, "%s = ptrtoint ptr %s to i64", sz, szp);
     ll_emit(ll, "%s = call ptr @malloc(i64 %s)", env, sz);
     const char *f0 = ll_new_tmp(ll);
-    ll_emit(ll, "%s = getelementptr %s, ptr %s, i32 0, i32 0", f0, envty, env);
+    ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i32 0, i32 0", f0, envty, env);
     ll_emit(ll, "store ptr @%s, ptr %s", name, f0);
     {
         size_t i = 0;
@@ -1100,8 +1102,8 @@ static llv_t ll_lambda_value(ll_t *ll, ast_node_t *n)
             ast_node_t *c = (ast_node_t *)n->captures.data[i];
             llv_t cv = ll_expr(ll, c);
             const char *fp = ll_new_tmp(ll);
-            ll_emit(ll, "%s = getelementptr %s, ptr %s, i32 0, i32 %zu", fp, envty, env,
-                    i + 1);
+            ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %zu", fp,
+                    envty, env, i + 1);
             ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, c->type_str),
                     ll_conv(ll, cv, c->type_str), fp);
         }

@@ -76,6 +76,8 @@ void cli_print_usage(FILE *out)
         "  --target=TRIPLE           Cross-compile target (e.g. wasm32-wasi)\n"
         "  -g                        Emit DWARF debug info into the IR\n"
         "  --verify-ir               Run the LLVM verifier before emitting\n"
+        "  --native-cpu              Tune generated code for this machine's CPU\n"
+        "                            (host-only artifacts; ignored with --target)\n"
         "  -o FILE                   Output path (default: derived from module)\n"
         "\n"
         "Format options:\n"

@@ -382,6 +382,10 @@ int driver_build(options_t *opt)
         return 1;
     }
     int crc = 0;
+    const char *opt_flag = (!opt->debug_info && !opt->asan && !strstr(opt->cc, "tcc") &&
+                            !strstr(opt->cc, "-O"))
+                               ? " -O2"
+                               : "";
     if (opt->command == CMD_OBJ) {
         const char *dbg_flag = (opt->debug_info && !strstr(opt->cc, "tcc")) ? " -g" : "";
         {
@@ -394,6 +398,7 @@ int driver_build(options_t *opt)
                 sb_init(&cmd);
                 sb_puts(&cmd, opt->cc);
                 sb_puts(&cmd, " -c -I.");
+                sb_puts(&cmd, opt_flag);
                 sb_puts(&cmd, dbg_flag);
                 sb_putc(&cmd, ' ');
                 sb_put_shell_arg(&cmd, cfiles[i]);
@@ -427,6 +432,7 @@ int driver_build(options_t *opt)
         sb_t cmd;
         sb_init(&cmd);
         sb_puts(&cmd, opt->cc);
+        sb_puts(&cmd, opt_flag);
         sb_puts(&cmd, " -I. -o ");
         sb_put_shell_arg(&cmd, output);
         if (opt->debug_info) {

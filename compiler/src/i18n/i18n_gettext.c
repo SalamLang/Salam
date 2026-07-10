@@ -682,6 +682,30 @@ static const i18n_pair_t k_msg_fa[] = {
      "نمی‌توان نوع ساختار این مقدار را "
      "استنتاج کرد"},
 
+    {"call to deprecated function '%s'", "فراخوانی تابع منسوخ '%s'"},
+    {"'noret' function '%s' cannot declare a return type: it never returns",
+     "تابع بی‌بازگشت '%s' نمی‌تواند نوع بازگشتی داشته باشد: این تابع هرگز "
+     "بازنمی‌گردد"},
+    {"'%s' cannot be both 'pure' and 'noret': a pure function must return",
+     "'%s' نمی‌تواند هم‌زمان خالص و بی‌بازگشت باشد: تابع خالص باید بازگردد"},
+    {"'pure' function '%s' must return a value: a pure function without a result has "
+     "no effect",
+     "تابع خالص '%s' باید مقداری بازگرداند: تابع خالص بدون نتیجه اثری ندارد"},
+    {"'pure' function '%s' cannot take reference parameter '%s': writing through it "
+     "would be a side effect",
+     "تابع خالص '%s' نمی‌تواند پارامتر ارجاعی '%s' بگیرد: نوشتن در آن اثر جانبی "
+     "است"},
+    {"function modifiers must appear in this order: 'pub deprecated inline|noinline "
+     "pure|noret func'",
+     "ترتیب توصیف‌گرهای تابع باید چنین باشد: 'عمومی منسوخ درون‌خطی|غیردرون‌خطی "
+     "خالص|بی‌بازگشت تابع'"},
+    {"function modifiers ('deprecated', 'inline', 'noinline', 'pure', 'noret') are "
+     "only allowed on a function definition",
+     "توصیف‌گرهای تابع ('منسوخ'، 'درون‌خطی'، 'غیردرون‌خطی'، 'خالص'، 'بی‌بازگشت') تنها "
+     "روی تعریف تابع مجازند"},
+    {"'inline' is only allowed on a function definition",
+     "'درون‌خطی' تنها روی تعریف تابع مجاز است"},
+
     {NULL, NULL}};
 
 const char *i18n_tr(const char *msgid)

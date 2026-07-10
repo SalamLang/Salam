@@ -106,10 +106,6 @@ ifeq ($(WITH_LLVM),1)
   else
     LLVM_SYSTEM_LIBS := $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --system-libs)
   endif
-  # NOTE: `--libs all` (WITH_LLD) lists -lPolly/-lPollyISL, and LLVM's own
-  # libLLVMLTO.a references getPollyPluginInfo(), so Polly's static libs must be
-  # INSTALLED (do not filter them). LLVM 22 ships them; on older LLVM (<22)
-  # install the matching `libpolly-N-dev` alongside llvm-N-dev / liblld-N-dev.
   LDLIBS   += $(LLD_LIBS) \
               $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --libs $(LLVM_COMPONENTS)) \
               $(LLVM_SYSTEM_LIBS) $(LLVM_CXXLIB)
@@ -135,10 +131,6 @@ ifneq ($(SALAM_EMBED_MINGW_DIR),)
   EMBED_OBJS += $(BUILD_DIR)/embed/mingw.o
 endif
 
-# Per-arch embedded musl sysroots (opt-in via SALAM_EMBED_MUSL_<ARCH>_DIR). Each
-# arch is a distinct tar with its own symbol so ONE flagship salam can cross-link
-# static musl ELF for several targets. musl.o above stays the x86_64 host case.
-# $(call embed_musl_arch,<stem>,<ARCHUPPER>)
 define embed_musl_arch
 SALAM_EMBED_MUSL_$(2)_DIR ?=
 ifneq ($$(SALAM_EMBED_MUSL_$(2)_DIR),)
@@ -158,8 +150,6 @@ $(eval $(call embed_musl_arch,arm,ARM))
 
 .PHONY: all test dist clean debug install uninstall stage-sysroots self-contained
 
-# The per-arch embed rules above are defined via $(eval) before `all`, which would
-# otherwise make the first of them the default goal. Pin `all` as the default.
 .DEFAULT_GOAL := all
 
 all: $(OUTBIN)

@@ -20,10 +20,12 @@ SALAM_STD = os.environ.get("SALAM_STD", os.path.join(REPO, "compiler", "std"))
 RUNS = int(os.environ.get("BENCH_RUNS", "10"))
 TIMEOUT = 180
 
-LANG_ORDER = ["c", "cpp", "salam_llvm", "salam_gcc", "salam_tcc", "php", "python"]
+LANG_ORDER = ["c", "cpp", "rust", "go", "salam_llvm", "salam_gcc", "salam_tcc", "php", "python"]
 LANG_LABEL = {
     "c": "C (gcc -O3)",
     "cpp": "C++ (g++ -O3)",
+    "rust": "Rust (rustc -O3)",
+    "go": "Go (go build)",
     "salam_llvm": "Salam (llvm -O3)",
     "salam_gcc": "Salam (C backend, gcc -O3)",
     "salam_tcc": "Salam (tcc, default)",
@@ -61,6 +63,20 @@ def build_program(name):
     else:
         errors["cpp"] = r.stderr[-2000:]
 
+    rust_bin = os.path.join(BUILD_DIR, name + "_rust")
+    r = sh(["rustc", "-C", "opt-level=3", "-o", rust_bin, os.path.join(src_dir, "prog.rs")])
+    if r.returncode == 0 and os.path.exists(rust_bin):
+        built["rust"] = [rust_bin]
+    else:
+        errors["rust"] = (r.stdout + r.stderr)[-2000:]
+
+    go_bin = os.path.join(BUILD_DIR, name + "_go")
+    r = sh(["go", "build", "-o", go_bin, os.path.join(src_dir, "prog.go")], cwd=src_dir)
+    if r.returncode == 0 and os.path.exists(go_bin):
+        built["go"] = [go_bin]
+    else:
+        errors["go"] = (r.stdout + r.stderr)[-2000:]
+
     salam_src = os.path.join(src_dir, "prog.salam")
 
     tcc_bin = os.path.join(BUILD_DIR, name + "_salam_tcc")
@@ -71,9 +87,8 @@ def build_program(name):
         errors["salam_tcc"] = (r.stdout + r.stderr)[-2000:]
 
     gcc_bin = os.path.join(BUILD_DIR, name + "_salam_gcc")
-    predecl = os.path.join(WORK, "salam_predecl.h")
-    r = sh([SALAM_BIN, "build", salam_src, "--cc=gcc -O3 -include " + predecl,
-            "--output=" + gcc_bin], cwd=BUILD_DIR, env=salam_env())
+    r = sh([SALAM_BIN, "build", salam_src, "--cc=gcc -O3", "--output=" + gcc_bin],
+           cwd=BUILD_DIR, env=salam_env())
     if r.returncode == 0 and os.path.exists(gcc_bin):
         built["salam_gcc"] = [gcc_bin]
     else:
@@ -137,6 +152,8 @@ def tool_versions():
     probes = {
         "gcc": ["gcc", "--version"],
         "g++": ["g++", "--version"],
+        "rustc": ["rustc", "--version"],
+        "go": ["go", "version"],
         "python": ["python3", "--version"],
         "php": ["php", "--version"],
         "tcc": ["tcc", "-v"],
@@ -178,21 +195,20 @@ def geomean(values):
 def write_report(results, env_info, started_epoch, finished_epoch):
     lines = []
     lines.append("# Salam Benchmark Suite Results\n")
-    lines.append("Ten CPU-bound programs implemented identically in C, Python, PHP, and Salam.")
+    lines.append("Ten CPU-bound programs implemented identically in C, C++, Rust, Go, Python, PHP, and Salam.")
     lines.append("Each variant is run once as warm-up, then %d timed runs; times are wall-clock" % RUNS)
     lines.append("per full process (start/end captured as Unix-epoch nanoseconds).\n")
     lines.append("- Started (epoch ns): %d" % started_epoch)
     lines.append("- Finished (epoch ns): %d" % finished_epoch)
     lines.append("")
     lines.append("## Environment\n")
-    for k in ["cpu", "gcc", "g++", "tcc", "clang", "python", "php", "salam"]:
+    for k in ["cpu", "gcc", "g++", "rustc", "go", "tcc", "clang", "python", "php", "salam"]:
         if k in env_info:
             lines.append("- **%s**: %s" % (k, env_info[k]))
     lines.append("")
     lines.append("Salam is measured three ways: the LLVM backend at -O3, the C backend")
-    lines.append("compiled by gcc -O3 (with `salam_predecl.h` forward declarations to work")
-    lines.append("around the generated-header ordering issue), and the default tcc toolchain")
-    lines.append("(no optimizer) as the out-of-the-box reference. C and C++ run at -O3 too.\n")
+    lines.append("compiled by gcc -O3, and the default tcc toolchain (no optimizer) as the")
+    lines.append("out-of-the-box reference. C and C++ run at -O3 too.\n")
 
     lines.append("## Per-program results (milliseconds, %d runs)\n" % RUNS)
     for name in sorted(results):
@@ -201,9 +217,9 @@ def write_report(results, env_info, started_epoch, finished_epoch):
         if prog.get("mismatched"):
             lines.append("Output mismatches vs C reference: `%s`\n" % json.dumps(prog["mismatched"]))
         lines.append("Reference output: `%s`\n" % prog["reference_output"].replace("\n", " / "))
-        lines.append("| Language | Min | Avg | Max | Median | Stdev | vs C (avg) |")
+        lines.append("| Language | Min | Avg | Max | Median | Stdev | vs C (median) |")
         lines.append("|---|---|---|---|---|---|---|")
-        c_avg = prog["langs"].get("c", {}).get("stats", {}).get("avg_ms")
+        c_med = prog["langs"].get("c", {}).get("stats", {}).get("median_ms")
         for lang in LANG_ORDER:
             entry = prog["langs"].get(lang)
             if not entry or not entry.get("stats"):
@@ -211,13 +227,13 @@ def write_report(results, env_info, started_epoch, finished_epoch):
                 lines.append("| %s | failed | | | | | %s |" % (LANG_LABEL[lang], reason.splitlines()[-1][:80] if reason else ""))
                 continue
             st = entry["stats"]
-            ratio = "%.2fx" % (st["avg_ms"] / c_avg) if c_avg else "-"
+            ratio = "%.2fx" % (st["median_ms"] / c_med) if c_med else "-"
             lines.append("| %s | %s | %s | %s | %s | %s | %s |" % (
                 LANG_LABEL[lang], fmt_ms(st["min_ms"]), fmt_ms(st["avg_ms"]), fmt_ms(st["max_ms"]),
                 fmt_ms(st["median_ms"]), fmt_ms(st["stdev_ms"]), ratio))
         lines.append("")
 
-    lines.append("## Summary (average ms per program)\n")
+    lines.append("## Summary (median ms per program)\n")
     header = "| Program | " + " | ".join(LANG_LABEL[l] for l in LANG_ORDER) + " |"
     lines.append(header)
     lines.append("|---" * (len(LANG_ORDER) + 1) + "|")
@@ -225,24 +241,25 @@ def write_report(results, env_info, started_epoch, finished_epoch):
         row = ["| " + name]
         for lang in LANG_ORDER:
             st = results[name]["langs"].get(lang, {}).get("stats")
-            row.append(fmt_ms(st["avg_ms"]) if st else "failed")
+            row.append(fmt_ms(st["median_ms"]) if st else "failed")
         lines.append(" | ".join(row) + " |")
     lines.append("")
 
-    lines.append("## Overall comparison (geometric mean of per-program avg ratio vs C)\n")
+    lines.append("## Overall comparison (geometric mean of per-program median ratio vs C)\n")
     lines.append("| Language | Slowdown vs C (%s) |" % LANG_LABEL["c"])
     lines.append("|---|---|")
     for lang in LANG_ORDER:
         ratios = []
         for name in results:
-            c_avg = results[name]["langs"].get("c", {}).get("stats", {}).get("avg_ms")
+            c_med = results[name]["langs"].get("c", {}).get("stats", {}).get("median_ms")
             st = results[name]["langs"].get(lang, {}).get("stats")
-            if c_avg and st:
-                ratios.append(st["avg_ms"] / c_avg)
+            if c_med and st:
+                ratios.append(st["median_ms"] / c_med)
         g = geomean(ratios)
         lines.append("| %s | %s |" % (LANG_LABEL[lang], "%.2fx" % g if g else "-"))
     lines.append("")
     lines.append("Notes:")
+    lines.append("- Summary and ratio tables use per-program medians; medians are robust to scheduler noise that skews averages on short-lived processes.")
     lines.append("- All timings include interpreter/process start-up, identical for every run.")
     lines.append("- Every program prints a deterministic result; all variants are checked against the C output before timing.")
     lines.append("- Raw per-run epoch timestamps are in `results/results.csv` and `results/results.json`.")
@@ -256,7 +273,6 @@ def main():
     only = sys.argv[1:] or None
     shutil.rmtree(WORK, ignore_errors=True)
     shutil.copytree(PROGRAMS_DIR, WORK_PROGRAMS)
-    shutil.copy(os.path.join(ROOT, "salam_predecl.h"), WORK)
     os.makedirs(BUILD_DIR, exist_ok=True)
     os.makedirs(RESULTS_DIR, exist_ok=True)
     names = sorted(d for d in os.listdir(PROGRAMS_DIR) if os.path.isdir(os.path.join(PROGRAMS_DIR, d)))

@@ -795,13 +795,32 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
             rc = 2;
             goto cleanup;
         }
-        LLVMTargetMachineRef tm =
-            LLVMCreateTargetMachine(target, triple, "", "", map_cg_level(opts->opt_level),
-                                    LLVMRelocPIC, LLVMCodeModelDefault);
+        char *host_cpu = NULL;
+        char *host_features = NULL;
+        int is_host_target =
+            !opts->target_triple || !opts->target_triple[0] ||
+            (host_triple && strcmp(opts->target_triple, host_triple) == 0);
+        if (opts->native_cpu && is_host_target) {
+            host_cpu = LLVMGetHostCPUName();
+            host_features = LLVMGetHostCPUFeatures();
+            LOG_I(log, PH_DRIVER, "tuning for host CPU: %s",
+                  host_cpu ? host_cpu : "(unknown)");
+        }
+        LLVMTargetMachineRef tm = LLVMCreateTargetMachine(
+            target, triple, host_cpu ? host_cpu : "", host_features ? host_features : "",
+            map_cg_level(opts->opt_level), LLVMRelocPIC, LLVMCodeModelDefault);
+        if (host_cpu) LLVMDisposeMessage(host_cpu);
+        if (host_features) LLVMDisposeMessage(host_features);
         if (!tm) {
             LOG_E(log, PH_DRIVER, "could not create LLVM target machine for %s", triple);
             rc = 2;
             goto cleanup;
+        }
+
+        {
+            LLVMTargetDataRef td = LLVMCreateTargetDataLayout(tm);
+            LLVMSetModuleDataLayout(mod, td);
+            LLVMDisposeTargetData(td);
         }
 
         run_opt(log, mod, tm, opts->opt_level);

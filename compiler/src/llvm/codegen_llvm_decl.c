@@ -178,6 +178,13 @@ static const char *ll_fn_header(ll_t *ll, ast_node_t *fn, func_sig_t *sig,
         }
     }
     sb_puts(&hdr, ")");
+    if (!ll->is_main) {
+        if (fn->is_inline) sb_puts(&hdr, " alwaysinline");
+        if (fn->is_noinline) sb_puts(&hdr, " noinline");
+        if (fn->is_pure) sb_puts(&hdr, " memory(read)");
+        if (fn->is_noret) sb_puts(&hdr, " noreturn");
+    }
+    sb_puts(&hdr, " nounwind");
     if (ll->debug && ll->cur_sp) sb_puts(&hdr, ll_fmt(ll, " !dbg %s", ll->cur_sp));
     sb_puts(&hdr, " {\n");
     const char *r = arena_strdup(ll->a, sb_cstr(&hdr));
@@ -512,7 +519,7 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
                               : ll_fmt(ll, ", %s %%arg%zu", ll_ty(ll, p->type_str), i));
         }
     }
-    sb_puts(&hdr, ") {\n");
+    sb_puts(&hdr, ") nounwind {\n");
     const char *header = arena_strdup(ll->a, sb_cstr(&hdr));
     sb_free(&hdr);
 

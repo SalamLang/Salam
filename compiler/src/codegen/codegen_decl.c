@@ -40,12 +40,19 @@ const char *func_signature(cg_t *cg, ast_node_t *fn, symbol_t *owner, func_sig_t
             : cg_mangle(cg, owner ? owner->name : NULL, fn->name, &sig->params);
     if (is_main) return "int main(int argc, char** argv)";
     bool exported = (owner != NULL || fn->is_extern || fn->is_pub) && !is_instance;
+    bool inl = fn->is_inline && !fn->is_extern && owner == NULL;
     sb_t b;
     sb_init(&b);
-    if (is_instance)
+    if (is_instance || inl)
         sb_puts(&b, "static inline ");
     else if (!exported)
         sb_puts(&b, "static ");
+    if (!fn->is_extern) {
+        if (fn->is_noinline) sb_puts(&b, "SALAM_NOINLINE ");
+        if (fn->is_pure) sb_puts(&b, "SALAM_PURE ");
+        if (fn->is_noret) sb_puts(&b, "SALAM_NORET ");
+        if (fn->is_deprecated) sb_puts(&b, "SALAM_DEPRECATED ");
+    }
     sb_puts(&b, cg_fmt(cg, "%s %s(", ret, name));
     bool first = true;
     if (owner) {

@@ -325,6 +325,10 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "typedef struct salam_map_iter salam_map_iter;\n"
                "typedef struct { void* data; int64_t len; } salam_slice;\n"
                "extern int64_t salam_idx(int64_t, int64_t);\n"
+               "extern void salam_panic(const char* msg);\n"
+               "void* " SALAM_MEM_ALLOC "(uint64_t size);\n"
+               "void* " SALAM_MEM_REALLOC "(void* ptr, uint64_t size);\n"
+               "void " SALAM_MEM_FREE "(void* ptr);\n"
                "static inline salam_slice salam_slice_new(void* b, int64_t lo, int64_t "
                "hi, int64_t esz)"
                "{ salam_slice s; s.data=(void*)((char*)b+(lo)*(esz)); s.len=(hi)-(lo); "
@@ -337,6 +341,19 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "esz, int sf)"
                "{ return (void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n"
                "typedef void (*salam_thread_fn)(void);\n"
+               "#endif\n");
+    sb_puts(h, "#ifndef SALAM_FN_ATTRS_DEFINED\n#define SALAM_FN_ATTRS_DEFINED\n"
+               "#if defined(__GNUC__) || defined(__clang__)\n"
+               "#define SALAM_NOINLINE __attribute__((noinline))\n"
+               "#define SALAM_PURE __attribute__((pure))\n"
+               "#define SALAM_NORET __attribute__((noreturn))\n"
+               "#define SALAM_DEPRECATED __attribute__((deprecated))\n"
+               "#else\n"
+               "#define SALAM_NOINLINE\n"
+               "#define SALAM_PURE\n"
+               "#define SALAM_NORET\n"
+               "#define SALAM_DEPRECATED\n"
+               "#endif\n"
                "#endif\n");
     if (strcmp(cg->module, "core") != 0)
         sb_puts(h, cg_fmt(cg, "#include \"%score.h\"\n", SALAM_MOD_PREFIX));
@@ -541,6 +558,28 @@ static void hdr_externs(cg_t *cg, ast_node_t *program, sb_t *h)
     sb_puts(h, "\n");
 }
 
+static void hdr_globals(cg_t *cg, ast_node_t *program, sb_t *h)
+{
+    {
+        size_t i = 0;
+        for (; i < program->list.len; i++) {
+            ast_node_t *d = (ast_node_t *)program->list.data[i];
+            if (d->kind != AST_CONST_DECL && d->kind != AST_VAR_DECL) continue;
+            if (d->is_extern || !d->is_pub) continue;
+            const char *ts = d->type_str ? d->type_str : "int32_t";
+            const char *decl = cg_decl(cg, ts, d->name);
+            bool is_array = ts && strchr(ts, '[');
+            bool can_defer =
+                d->kind == AST_VAR_DECL && d->a && d->a->kind != AST_LITERAL && !is_array;
+            bool want_const = !can_defer && (d->kind == AST_CONST_DECL || !d->is_mut);
+            bool gct_const = want_const && (strncmp(cg_ctype(cg, ts), "const ", 6) == 0);
+            const char *pfx = (want_const && !gct_const) ? "const " : "";
+            sb_puts(h, cg_fmt(cg, "extern %s%s;\n", pfx, decl));
+        }
+    }
+    sb_puts(h, "\n");
+}
+
 static void hdr_prototypes(cg_t *cg, ast_node_t *program, sb_t *h)
 {
     {
@@ -605,5 +644,6 @@ void cg_header(cg_t *cg, ast_node_t *program)
     }
     sb_puts(h, "\n");
     hdr_externs(cg, program, h);
+    hdr_globals(cg, program, h);
     hdr_prototypes(cg, program, h);
 }

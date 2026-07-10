@@ -41,24 +41,31 @@ static void ll_emit_prologue(ll_t *ll)
     sb_puts(g, ";   clang prog.ll -o prog            (native host)\n");
     sb_puts(g, ";   clang -m32 / --target=i686-... prog.ll   (32-bit)\n");
 
-    sb_puts(g, "declare i32 @printf(ptr, ...)\n");
-    sb_puts(g, "declare i32 @dprintf(i32, ptr, ...)\n");
-    sb_puts(g, ll_fmt(ll, "declare %s @strlen(ptr)\n", U));
-    sb_puts(g, "declare i32 @strcmp(ptr, ptr)\n");
-    sb_puts(g, ll_fmt(ll, "declare ptr @malloc(%s)\n", U));
-    sb_puts(g, ll_fmt(ll, "declare ptr @realloc(ptr, %s)\n", U));
-    sb_puts(g, "declare void @free(ptr)\n");
-    sb_puts(g, ll_fmt(ll, "declare ptr @memcpy(ptr, ptr, %s)\n", U));
-    sb_puts(g, ll_fmt(ll, "declare ptr @memmove(ptr, ptr, %s)\n", U));
-    sb_puts(g, "declare void @abort()\n");
-    sb_puts(g, "declare void @exit(i32)\n");
-    sb_puts(g, ll_fmt(ll, "declare i32 @snprintf(ptr, %s, ptr, ...)\n", U));
-    sb_puts(g, "declare i64 @strtol(ptr, ptr, i32)\n");
-    sb_puts(g, "declare double @strtod(ptr, ptr)\n");
-    sb_puts(g, "declare ptr @strstr(ptr, ptr)\n");
+    sb_puts(g, "declare i32 @printf(ptr, ...) nounwind\n");
+    sb_puts(g, "declare i32 @dprintf(i32, ptr, ...) nounwind\n");
+    sb_puts(g,
+            ll_fmt(ll,
+                   "declare %s @strlen(ptr) nounwind willreturn memory(argmem: read)\n",
+                   U));
+    sb_puts(g,
+            "declare i32 @strcmp(ptr, ptr) nounwind willreturn memory(argmem: read)\n");
+    sb_puts(g, ll_fmt(ll, "declare noalias ptr @malloc(%s) nounwind allocsize(0)\n", U));
+    sb_puts(g, ll_fmt(ll, "declare noalias ptr @realloc(ptr, %s) nounwind allocsize(1)\n",
+                      U));
+    sb_puts(g, "declare void @free(ptr) nounwind\n");
+    sb_puts(g, ll_fmt(ll, "declare ptr @memcpy(ptr, ptr, %s) nounwind\n", U));
+    sb_puts(g, ll_fmt(ll, "declare ptr @memmove(ptr, ptr, %s) nounwind\n", U));
+    sb_puts(g, "declare void @abort() noreturn nounwind cold\n");
+    sb_puts(g, "declare void @exit(i32) noreturn nounwind\n");
+    sb_puts(g, ll_fmt(ll, "declare i32 @snprintf(ptr, %s, ptr, ...) nounwind\n", U));
+    sb_puts(g, "declare i64 @strtol(ptr, ptr, i32) nounwind\n");
+    sb_puts(g, "declare double @strtod(ptr, ptr) nounwind\n");
+    sb_puts(g,
+            "declare ptr @strstr(ptr, ptr) nounwind willreturn memory(argmem: read)\n");
     sb_puts(g, "declare double @llvm.pow.f64(double, double)\n\n");
 
-    sb_puts(g, "define ptr @salam_ll_substr(ptr %s, i32 %start, i32 %len) {\nentry:\n");
+    sb_puts(g, "define internal noalias ptr @salam_ll_substr(ptr %s, i32 %start, i32 "
+               "%len) nounwind {\nentry:\n");
     const char *L = pl_widen(ll, g, "%len", "%l");
     const char *SO = pl_widen(ll, g, "%start", "%so");
     sb_puts(g, ll_fmt(ll, "  %%t = add %s %s, 1\n", U, L));
@@ -77,7 +84,8 @@ static void ll_emit_prologue(ll_t *ll)
         "; `dyn Iface` fat pointer: { data, vtable } (vtable = [N x ptr] of methods)\n");
     sb_puts(g, "%dyn = type { ptr, ptr }\n\n");
 
-    sb_puts(g, "define i64 @salam_ll_strhash(ptr %s) {\n"
+    sb_puts(g, "define internal i64 @salam_ll_strhash(ptr %s) nounwind willreturn "
+               "memory(argmem: read) {\n"
                "entry:\n  br label %loop\n"
                "loop:\n"
                "  %j = phi i64 [ 0, %entry ], [ %jn, %body ]\n"
@@ -93,7 +101,8 @@ static void ll_emit_prologue(ll_t *ll)
                "  %jn = add i64 %j, 1\n"
                "  br label %loop\n"
                "done:\n  ret i64 %h\n}\n"
-               "define i64 @salam_ll_inthash(i64 %x) {\n"
+               "define internal i64 @salam_ll_inthash(i64 %x) nounwind willreturn "
+               "memory(none) {\n"
                "entry:\n"
                "  %h0 = add i64 %x, 14695981039346656037\n"
                "  %h1 = mul i64 %h0, 1099511628211\n"
@@ -106,7 +115,7 @@ static void ll_emit_prologue(ll_t *ll)
     sb_puts(g, "@.sfmt.g   = private unnamed_addr constant [3 x i8] c\"%g\\00\"\n\n");
 
     sb_puts(g, ll_fmt(ll,
-                      "define ptr @salam_ll_i64str(i64 %%v) {\n"
+                      "define internal noalias ptr @salam_ll_i64str(i64 %%v) nounwind {\n"
                       "entry:\n"
                       "  %%b = call ptr @malloc(%s 32)\n"
                       "  %%r = call i32 (ptr, %s, ptr, ...) @snprintf(ptr %%b, %s 32, "
@@ -114,7 +123,7 @@ static void ll_emit_prologue(ll_t *ll)
                       "  ret ptr %%b\n}\n",
                       U, U, U));
     sb_puts(g, ll_fmt(ll,
-                      "define ptr @salam_ll_u64str(i64 %%v) {\n"
+                      "define internal noalias ptr @salam_ll_u64str(i64 %%v) nounwind {\n"
                       "entry:\n"
                       "  %%b = call ptr @malloc(%s 32)\n"
                       "  %%r = call i32 (ptr, %s, ptr, ...) @snprintf(ptr %%b, %s 32, "
@@ -122,7 +131,8 @@ static void ll_emit_prologue(ll_t *ll)
                       "  ret ptr %%b\n}\n",
                       U, U, U));
     sb_puts(g, ll_fmt(ll,
-                      "define ptr @salam_ll_f64str(double %%v) {\n"
+                      "define internal noalias ptr @salam_ll_f64str(double %%v) nounwind "
+                      "{\n"
                       "entry:\n"
                       "  %%b = call ptr @malloc(%s 32)\n"
                       "  %%r = call i32 (ptr, %s, ptr, ...) @snprintf(ptr %%b, %s 32, "
@@ -130,7 +140,8 @@ static void ll_emit_prologue(ll_t *ll)
                       "  ret ptr %%b\n}\n",
                       U, U, U));
     sb_puts(g, ll_fmt(ll,
-                      "define ptr @salam_ll_charstr(i32 %%c) {\n"
+                      "define internal noalias ptr @salam_ll_charstr(i32 %%c) nounwind "
+                      "{\n"
                       "entry:\n"
                       "  %%b = call ptr @malloc(%s 2)\n"
                       "  %%t = trunc i32 %%c to i8\n"
@@ -141,7 +152,8 @@ static void ll_emit_prologue(ll_t *ll)
                       U));
 
     sb_puts(g, ll_fmt(ll,
-                      "define ptr @salam_ll_strcat(ptr %%a, ptr %%b) {\n"
+                      "define internal noalias ptr @salam_ll_strcat(ptr %%a, ptr %%b) "
+                      "nounwind {\n"
                       "entry:\n"
                       "  %%la = call %s @strlen(ptr %%a)\n"
                       "  %%lb = call %s @strlen(ptr %%b)\n"

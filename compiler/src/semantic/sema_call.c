@@ -31,6 +31,14 @@ static type_t *decorate(sema_t *s, ast_node_t *n, type_t *t)
     return sema_decorate(s, n, t);
 }
 
+static func_sig_t *ro_found(sema_t *s, func_sig_t *sig, const src_span_t *span,
+                            const char *what)
+{
+    if (sig && sig->decl && sig->decl->is_deprecated)
+        SWARN(s, 13, span, "call to deprecated function '%s'", what);
+    return sig;
+}
+
 func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,
                              const src_span_t *span, const char *what)
 {
@@ -62,7 +70,7 @@ func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,
             }
         }
     }
-    if (nmatch == 1) return match;
+    if (nmatch == 1) return ro_found(s, match, span, what);
     if (nmatch > 1) {
         SERR(s, 12, span, "ambiguous call to '%s' (%zu candidates)", what, nmatch);
         return NULL;
@@ -93,7 +101,7 @@ func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,
             }
         }
     }
-    if (nmatch == 1) return match;
+    if (nmatch == 1) return ro_found(s, match, span, what);
     if (nmatch > 1) {
         SERR(s, 12, span, "ambiguous call to '%s' (%zu candidates)", what, nmatch);
         return NULL;

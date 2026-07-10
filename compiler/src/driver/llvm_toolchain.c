@@ -154,6 +154,8 @@ static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
         if (triple) {
             sb_puts(s, " -mtriple=");
             sb_puts(s, triple);
+        } else if (opts->native_cpu) {
+            sb_puts(s, " -mcpu=native");
         }
         sb_puts(s, " -filetype=asm \"$IN\" -o \"$OUT\"\n");
         break;
@@ -164,6 +166,8 @@ static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
         if (triple) {
             sb_puts(s, " -mtriple=");
             sb_puts(s, triple);
+        } else if (opts->native_cpu) {
+            sb_puts(s, " -mcpu=native");
         }
         sb_puts(s, " -filetype=obj \"$IN\" -o \"$OUT\"\n");
         break;
@@ -182,6 +186,8 @@ static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
         if (triple) {
             sb_puts(s, " --target=");
             sb_puts(s, triple);
+        } else if (opts->native_cpu) {
+            sb_puts(s, " -march=native");
         }
         if (opts->debug_info) sb_puts(s, " -g");
         if (opts->sysroot && opts->sysroot[0]) sb_puts(s, " --sysroot=\"$SYSROOT\"");

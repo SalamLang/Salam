@@ -37,6 +37,61 @@ ast_node_t *parse_top_level(parser_t *p)
         is_pub = true;
         p_advance(p);
     }
+    bool is_deprecated = false;
+    if (p_at(p, TK_KW_DEPRECATED)) {
+        is_deprecated = true;
+        p_advance(p);
+    }
+    bool is_inline = false, is_noinline = false;
+    if (p_at(p, TK_KW_INLINE)) {
+        is_inline = true;
+        p_advance(p);
+    } else if (p_at(p, TK_KW_NOINLINE)) {
+        is_noinline = true;
+        p_advance(p);
+    }
+    bool is_pure = false, is_noret = false;
+    if (p_at(p, TK_KW_PURE)) {
+        is_pure = true;
+        p_advance(p);
+    } else if (p_at(p, TK_KW_NORET)) {
+        is_noret = true;
+        p_advance(p);
+    }
+    bool any_mod = is_deprecated || is_inline || is_noinline || is_pure || is_noret;
+    if (p_at(p, TK_KW_PUB) || p_at(p, TK_KW_DEPRECATED) || p_at(p, TK_KW_INLINE) ||
+        p_at(p, TK_KW_NOINLINE) || p_at(p, TK_KW_PURE) || p_at(p, TK_KW_NORET)) {
+        p_error(p, "function modifiers must appear in this order: "
+                   "'pub deprecated inline|noinline pure|noret func'");
+        while (p_at(p, TK_KW_PUB) || p_at(p, TK_KW_DEPRECATED) || p_at(p, TK_KW_INLINE) ||
+               p_at(p, TK_KW_NOINLINE) || p_at(p, TK_KW_PURE) || p_at(p, TK_KW_NORET)) {
+            switch (p_peek(p)->kind) {
+            case TK_KW_PUB:
+                is_pub = true;
+                break;
+            case TK_KW_DEPRECATED:
+                is_deprecated = true;
+                break;
+            case TK_KW_INLINE:
+                is_inline = true;
+                break;
+            case TK_KW_NOINLINE:
+                is_noinline = true;
+                break;
+            case TK_KW_PURE:
+                is_pure = true;
+                break;
+            default:
+                is_noret = true;
+                break;
+            }
+            p_advance(p);
+        }
+        any_mod = true;
+    }
+    if (any_mod && !p_at(p, TK_KW_FUNC))
+        p_error(p, "function modifiers ('deprecated', 'inline', 'noinline', 'pure', "
+                   "'noret') are only allowed on a function definition");
     ast_node_t *n = NULL;
     switch (p_peek(p)->kind) {
     case TK_KW_TYPE:
@@ -80,7 +135,16 @@ ast_node_t *parse_top_level(parser_t *p)
         if (!p_at_eof(p)) p_advance(p);
         return NULL;
     }
-    if (n) n->is_pub = is_pub;
+    if (n) {
+        n->is_pub = is_pub;
+        if (n->kind == AST_FUNC_DEF) {
+            n->is_inline = is_inline;
+            n->is_noinline = is_noinline;
+            n->is_pure = is_pure;
+            n->is_noret = is_noret;
+            n->is_deprecated = is_deprecated;
+        }
+    }
     return n;
 }
 

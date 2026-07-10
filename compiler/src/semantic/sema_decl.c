@@ -275,6 +275,8 @@ void sema_collect(sema_t *s, ast_node_t *program)
             case AST_FUNC_DEF: {
                 symbol_t *fsym = get_or_make_func(s, s->global, d->name, SYM_FUNC);
                 if (!fsym->decl) fsym->decl = d;
+                if (!fsym->pkgname) fsym->pkgname = s->pkg;
+                if (!fsym->home) fsym->home = s->global;
                 if (d->is_pub) fsym->is_pub = true;
                 if (d->typarams.len > 0) break;
                 vec_push(s->a, &fsym->overloads, build_sig(s, d, NULL));

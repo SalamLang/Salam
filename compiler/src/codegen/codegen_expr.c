@@ -386,7 +386,7 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
     case AST_CALL:
         return cg_call(cg, n);
     case AST_MEMBER: {
-        if (n->a && n->a->kind == AST_IDENTIFIER) {
+        if (n->a && n->a->kind == AST_IDENTIFIER && !local_known(cg, n->a->name)) {
             symbol_t *e = scope_lookup(cg->sem->global, n->a->name);
             if (e && e->kind == SYM_ENUM)
                 return cg_fmt(cg, "%s_%s", cg_cident(cg, e->name),

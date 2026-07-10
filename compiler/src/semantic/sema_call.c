@@ -36,6 +36,14 @@ static func_sig_t *ro_found(sema_t *s, func_sig_t *sig, const src_span_t *span,
 {
     if (sig && sig->decl && sig->decl->is_deprecated)
         SWARN(s, 13, span, "call to deprecated function '%s'", what);
+    {
+        ast_node_t *pf = sema_pure_fn(s);
+        if (pf && sig && sig->decl && !sig->decl->is_pure)
+            SERR(s, 12, span,
+                 "'pure' function '%s' cannot call '%s': only 'pure' functions may be "
+                 "called from a pure function",
+                 pf->name, what);
+    }
     return sig;
 }
 
@@ -153,11 +161,42 @@ static type_t *try_impl_call(sema_t *s, ast_node_t *n, ast_node_t *callee, type_
     return decorate(s, n, sig ? sig->ret : err_ty(s));
 }
 
+static void check_pure_recv_mut(sema_t *s, ast_node_t *n, const char *m)
+{
+    ast_node_t *pf = sema_pure_fn(s);
+    if (pf)
+        SERR(s, 12, &n->span,
+             "'pure' function '%s' cannot call '%s': it modifies its receiver", pf->name,
+             m);
+}
+
+static void check_pure_builtin(sema_t *s, ast_node_t *n, const char *nm)
+{
+    static const char *impure[] = {
+        "print", "_",          "println", "__",    "printerr",    "input", "open",
+        "args",  "printerrln", "listdir", "spawn", "callhandler", "join",  NULL};
+    ast_node_t *pf = sema_pure_fn(s);
+    if (!pf || !nm) return;
+    {
+        size_t i = 0;
+        for (; impure[i]; i++) {
+            if (strcmp(nm, impure[i]) == 0) {
+                SERR(s, 12, &n->span,
+                     "'pure' function '%s' cannot call '%s': it has side effects",
+                     pf->name, nm);
+                return;
+            }
+        }
+    }
+}
+
 type_t *check_call(sema_t *s, ast_node_t *n)
 {
     ast_node_t *callee = n->a;
     type_t *call_expected = s->expected;
     s->expected = NULL;
+
+    if (callee && callee->kind == AST_IDENTIFIER) check_pure_builtin(s, n, callee->name);
 
     if (callee && callee->kind == AST_IDENTIFIER && strcmp(callee->name, "spawn") == 0) {
         if (n->list.len != 1 || ((ast_node_t *)n->list.data[0])->kind != AST_IDENTIFIER) {
@@ -252,6 +291,14 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         }
         if (ft) {
             decorate(s, callee, ft);
+            {
+                ast_node_t *pf = sema_pure_fn(s);
+                if (pf)
+                    SERR(s, 12, &n->span,
+                         "'pure' function '%s' cannot call a function value: its "
+                         "purity cannot be verified",
+                         pf->name);
+            }
             if (argtypes.len != ft->params.len)
                 SERR(s, 12, &n->span, "function value takes %zu argument(s), got %zu",
                      ft->params.len, argtypes.len);
@@ -430,6 +477,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             type_t *K = objt->key, *V = objt->elem;
             decorate(s, callee, objt);
             if (!strcmp(m, "put")) {
+                check_pure_recv_mut(s, n, m);
                 if (argtypes.len != 2)
                     SERR(s, 12, &n->span, "put(key,value) takes 2 args");
                 return decorate(s, n, ty(s, TY_VOID));
@@ -443,6 +491,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                 return decorate(s, n, ty(s, TY_BOOL));
             }
             if (!strcmp(m, "remove")) {
+                check_pure_recv_mut(s, n, m);
                 if (argtypes.len != 1) SERR(s, 12, &n->span, "remove(key) takes 1 arg");
                 return decorate(s, n, ty(s, TY_BOOL));
             }
@@ -474,22 +523,30 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                                                      (type_t *)argtypes.data[vi]);
             }
             if (!strcmp(m, "push")) {
+                check_pure_recv_mut(s, n, m);
                 if (argtypes.len != 1) SERR(s, 12, &n->span, "push(value) takes 1 arg");
                 return decorate(s, n, ty(s, TY_VOID));
             }
-            if (!strcmp(m, "pop")) return decorate(s, n, E);
+            if (!strcmp(m, "pop")) {
+                check_pure_recv_mut(s, n, m);
+                return decorate(s, n, E);
+            }
             if (!strcmp(m, "get")) {
                 if (argtypes.len != 1) SERR(s, 12, &n->span, "get(index) takes 1 arg");
                 return decorate(s, n, type_ptr(s->tc, E));
             }
             if (!strcmp(m, "set")) {
+                check_pure_recv_mut(s, n, m);
                 if (argtypes.len != 2)
                     SERR(s, 12, &n->span, "set(index,value) takes 2 args");
                 return decorate(s, n, ty(s, TY_VOID));
             }
             if (!strcmp(m, "len")) return decorate(s, n, ty(s, TY_I32));
             if (!strcmp(m, "cap")) return decorate(s, n, ty(s, TY_I32));
-            if (!strcmp(m, "free")) return decorate(s, n, ty(s, TY_VOID));
+            if (!strcmp(m, "free")) {
+                check_pure_recv_mut(s, n, m);
+                return decorate(s, n, ty(s, TY_VOID));
+            }
             SERR(s, 17, &n->span, "Vector has no method '%s'", m);
             return decorate(s, n, err_ty(s));
         }
@@ -497,6 +554,13 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         if (objt->kind == TY_PTR && objt->pointee && objt->pointee->kind == TY_FILE) {
             const char *m = callee->name;
             decorate(s, callee, objt);
+            {
+                ast_node_t *pf = sema_pure_fn(s);
+                if (pf)
+                    SERR(s, 12, &n->span,
+                         "'pure' function '%s' cannot call '%s': it has side effects",
+                         pf->name, m);
+            }
             if (!strcmp(m, "read")) {
                 if (argtypes.len != 1) SERR(s, 12, &n->span, "read(size) takes 1 arg");
                 return decorate(s, n, ty(s, TY_STR));
@@ -591,6 +655,14 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         if (m && m->kind == SYM_FIELD && m->type && m->type->kind == TY_FUNC) {
             type_t *ft = m->type;
             decorate(s, callee, ft);
+            {
+                ast_node_t *pf = sema_pure_fn(s);
+                if (pf)
+                    SERR(s, 12, &n->span,
+                         "'pure' function '%s' cannot call a function value: its "
+                         "purity cannot be verified",
+                         pf->name);
+            }
             if (argtypes.len != ft->params.len)
                 SERR(s, 12, &n->span, "function value takes %zu argument(s), got %zu",
                      ft->params.len, argtypes.len);

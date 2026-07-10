@@ -66,6 +66,8 @@ void sema_load_prelude(sema_t *s);
 
 type_t *sema_ty(sema_t *s, type_kind_t k);
 
+ast_node_t *sema_pure_fn(sema_t *s);
+
 type_t *sema_err_ty(sema_t *s);
 
 type_t *sema_decorate(sema_t *s, ast_node_t *n, type_t *t);

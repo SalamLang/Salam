@@ -26,9 +26,21 @@ void ll_emit_struct_types(ll_t *ll, ast_node_t *program)
             if (!ssym || !ssym->members) continue;
             const char *sname =
                 ssym->type ? type_to_string(ll->sem->tc, ssym->type) : d->name;
+            const char *ltname = ll_struct_ltype(ll, sname);
+            {
+                bool seen = false;
+                size_t k = 0;
+                for (; k < ll->emitted.len; k++)
+                    if (!strcmp(ltname, (const char *)ll->emitted.data[k])) {
+                        seen = true;
+                        break;
+                    }
+                if (seen) continue;
+                vec_push(ll->a, &ll->emitted, CONST_CAST(ltname));
+            }
             sb_t b;
             sb_init(&b);
-            sb_puts(&b, ll_fmt(ll, "%s = type { ", ll_struct_ltype(ll, sname)));
+            sb_puts(&b, ll_fmt(ll, "%s = type { ", ltname));
             int nf = 0;
             {
                 size_t j = 0;
@@ -647,7 +659,10 @@ static void ll_emit_externs_in(ll_t *ll, scope_t *g)
                 }
             }
             if (sig->variadic) sb_puts(&b, sig->params.len ? ", ..." : "...");
-            sb_puts(&b, ")\n");
+            sb_puts(&b, ")");
+            if (sig->decl->is_pure) sb_puts(&b, " nounwind willreturn memory(read)");
+            if (sig->decl->is_noret) sb_puts(&b, " noreturn");
+            sb_puts(&b, "\n");
             sb_puts(ll->g, sb_cstr(&b));
             sb_free(&b);
         }

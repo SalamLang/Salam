@@ -564,8 +564,9 @@ static void hdr_globals(cg_t *cg, ast_node_t *program, sb_t *h)
         size_t i = 0;
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
+            bool pkgmod = cg->pkg && strcmp(cg->pkg, "main") != 0;
             if (d->kind != AST_CONST_DECL && d->kind != AST_VAR_DECL) continue;
-            if (d->is_extern || !d->is_pub) continue;
+            if (d->is_extern || (!d->is_pub && !pkgmod)) continue;
             const char *ts = d->type_str ? d->type_str : "int32_t";
             const char *decl = cg_decl(cg, ts, d->name);
             bool is_array = ts && strchr(ts, '[');
@@ -586,10 +587,12 @@ static void hdr_prototypes(cg_t *cg, ast_node_t *program, sb_t *h)
         size_t i = 0;
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
+            bool pkgmod = cg->pkg && strcmp(cg->pkg, "main") != 0;
             if (d->typarams.len > 0) continue;
             if (d->is_extern) continue;
             if (d->synthetic) continue;
-            if (d->kind == AST_FUNC_DEF && strcmp(d->name, cg->entry) != 0 && d->is_pub) {
+            if (d->kind == AST_FUNC_DEF && strcmp(d->name, cg->entry) != 0 &&
+                (d->is_pub || pkgmod)) {
                 symbol_t *fsym = scope_lookup_local(cg->sem->global, d->name);
                 func_sig_t *sig = sig_of_decl(fsym, d);
                 if (sig)

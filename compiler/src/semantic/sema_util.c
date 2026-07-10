@@ -156,3 +156,10 @@ const char *local_canon(sema_t *s, const char *name)
 {
     return scope_member_canon(s->global, name);
 }
+
+ast_node_t *sema_pure_fn(sema_t *s)
+{
+    if (s->cur_func && s->cur_func->decl && s->cur_func->decl->is_pure)
+        return s->cur_func->decl;
+    return NULL;
+}

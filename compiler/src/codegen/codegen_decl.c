@@ -39,8 +39,11 @@ const char *func_signature(cg_t *cg, ast_node_t *fn, symbol_t *owner, func_sig_t
             ? cg_mangle_in(cg, "g", owner ? owner->name : NULL, fn->name, &sig->params)
             : cg_mangle(cg, owner ? owner->name : NULL, fn->name, &sig->params);
     if (is_main) return "int main(int argc, char** argv)";
-    bool exported = (owner != NULL || fn->is_extern || fn->is_pub) && !is_instance;
-    bool inl = fn->is_inline && !fn->is_extern && owner == NULL;
+    bool pkgmod = cg->pkg && strcmp(cg->pkg, "main") != 0;
+    bool exported =
+        (owner != NULL || fn->is_extern || fn->is_pub || pkgmod) && !is_instance;
+    bool inl =
+        fn->is_inline && !fn->is_extern && owner == NULL && (fn->is_pub || !pkgmod);
     sb_t b;
     sb_init(&b);
     if (is_instance || inl)
@@ -94,7 +97,10 @@ const char *cg_extern_proto(cg_t *cg, ast_node_t *fn, func_sig_t *sig)
     const char *ret = cg_ctype(cg, type_to_string(cg->sem->tc, sig->ret));
     sb_t b;
     sb_init(&b);
-    sb_puts(&b, cg_fmt(cg, "extern %s %s(", ret, fn->name));
+    sb_puts(&b, "extern ");
+    if (fn->is_pure) sb_puts(&b, "SALAM_PURE ");
+    if (fn->is_noret) sb_puts(&b, "SALAM_NORET ");
+    sb_puts(&b, cg_fmt(cg, "%s %s(", ret, fn->name));
     bool first = true;
     {
         size_t i = 0;

@@ -190,9 +190,6 @@ static const char *const s_all_bool_flags[] = {
     "SALAM_ARCH_X64",   "SALAM_ARCH_X86",   "SALAM_ARCH_ARM64", "SALAM_ARCH_ARM",
     "SALAM_ARCH_WASM",  "SALAM_MEM_DEBUG",  "SALAM_ASAN",       NULL};
 
-/* Any OS/arch flag not already pushed as true by cc_push_host_defs/
- * cc_push_target_defs is explicitly false, so a bare `if SALAM_OS_WINDOWS:`
- * on a non-Windows build folds to false instead of being unresolvable. */
 static void cc_push_missing_bool_defaults(arena_t *a, cc_table_t *t)
 {
     int i = 0;

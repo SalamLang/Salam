@@ -67,7 +67,7 @@ ENTRYPOINT ["sh", "tools/bash/docker-dev.sh"]
 FROM toolchain AS builder
 COPY . .
 RUN make OUTDIR=. -j"$(nproc)" && make OUTDIR=. install PREFIX=/usr/local
-RUN salam --version || true
+RUN salam version
 
 FROM toolchain AS prod
 COPY --from=builder /usr/local/bin/salam /usr/local/bin/salam
@@ -79,7 +79,7 @@ WORKDIR /work
 USER salam
 
 HEALTHCHECK --interval=5m --timeout=10s --start-period=5s --retries=3 \
-    CMD salam --version || exit 1
+    CMD salam version || exit 1
 
 ENTRYPOINT ["salam"]
-CMD ["--help"]
+CMD ["help"]

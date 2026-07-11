@@ -43,6 +43,8 @@ bool to_bool(value_t v)
         return false;
     case VAL_STR:
         return v.as.s && v.as.s[0] != '\0';
+    case VAL_PTR:
+        return v.as.ptr.addr != NULL;
     default:
         return true;
     }
@@ -73,6 +75,8 @@ int64_t to_int(value_t v)
         return (int64_t)v.as.f;
     case VAL_BOOL:
         return v.as.b ? 1 : 0;
+    case VAL_PTR:
+        return (int64_t)(intptr_t)v.as.ptr.addr;
     default:
         return 0;
     }
@@ -175,6 +179,8 @@ const char *to_str(interp_t *I, value_t v)
         return "<func>";
     case VAL_MODULE:
         return v.as.mod ? afmt(I, "<module %s>", v.as.mod->name) : "<module>";
+    case VAL_PTR:
+        return v.as.ptr.addr ? afmt(I, "<ptr %p>", v.as.ptr.addr) : "null";
     }
     return "";
 }
@@ -329,6 +335,97 @@ void base_typename(const char *ts, char *out, size_t cap)
     out[i] = 0;
 }
 
+ptr_elem_t ptr_elem_from_typestr(const char *ts)
+{
+    char base[96];
+    base_typename(ts, base, sizeof base);
+    if (!strcmp(base, "i8")) return PTR_I8;
+    if (!strcmp(base, "u8") || !strcmp(base, "byte")) return PTR_U8;
+    if (!strcmp(base, "i16")) return PTR_I16;
+    if (!strcmp(base, "u16")) return PTR_U16;
+    if (!strcmp(base, "i32")) return PTR_I32;
+    if (!strcmp(base, "u32")) return PTR_U32;
+    if (!strcmp(base, "i64") || !strcmp(base, "isize")) return PTR_I64;
+    if (!strcmp(base, "u64") || !strcmp(base, "usize")) return PTR_U64;
+    if (!strcmp(base, "f32")) return PTR_F32;
+    if (!strcmp(base, "f64")) return PTR_F64;
+    if (!strcmp(base, "str")) return PTR_STR;
+    return PTR_OPAQUE;
+}
+
+value_t ptr_load(sptr_t p, int64_t idx)
+{
+    switch (p.elem) {
+    case PTR_I8:
+        return val_int(((int8_t *)p.addr)[idx]);
+    case PTR_U8:
+        return val_int(((uint8_t *)p.addr)[idx]);
+    case PTR_I16:
+        return val_int(((int16_t *)p.addr)[idx]);
+    case PTR_U16:
+        return val_int(((uint16_t *)p.addr)[idx]);
+    case PTR_I32:
+        return val_int(((int32_t *)p.addr)[idx]);
+    case PTR_U32:
+        return val_int(((uint32_t *)p.addr)[idx]);
+    case PTR_I64:
+        return val_int(((int64_t *)p.addr)[idx]);
+    case PTR_U64:
+        return val_int((int64_t)((uint64_t *)p.addr)[idx]);
+    case PTR_F32:
+        return val_float((double)((float *)p.addr)[idx]);
+    case PTR_F64:
+        return val_float(((double *)p.addr)[idx]);
+    case PTR_STR:
+        return val_str(((const char **)p.addr)[idx]);
+    default:
+        return val_ptr(((void **)p.addr)[idx], PTR_OPAQUE);
+    }
+}
+
+void ptr_store(sptr_t p, int64_t idx, value_t v)
+{
+    switch (p.elem) {
+    case PTR_I8:
+        ((int8_t *)p.addr)[idx] = (int8_t)to_int(v);
+        break;
+    case PTR_U8:
+        ((uint8_t *)p.addr)[idx] = (uint8_t)to_int(v);
+        break;
+    case PTR_I16:
+        ((int16_t *)p.addr)[idx] = (int16_t)to_int(v);
+        break;
+    case PTR_U16:
+        ((uint16_t *)p.addr)[idx] = (uint16_t)to_int(v);
+        break;
+    case PTR_I32:
+        ((int32_t *)p.addr)[idx] = (int32_t)to_int(v);
+        break;
+    case PTR_U32:
+        ((uint32_t *)p.addr)[idx] = (uint32_t)to_int(v);
+        break;
+    case PTR_I64:
+        ((int64_t *)p.addr)[idx] = to_int(v);
+        break;
+    case PTR_U64:
+        ((uint64_t *)p.addr)[idx] = (uint64_t)to_int(v);
+        break;
+    case PTR_F32:
+        ((float *)p.addr)[idx] = (float)to_float(v);
+        break;
+    case PTR_F64:
+        ((double *)p.addr)[idx] = to_float(v);
+        break;
+    case PTR_STR:
+        ((const char **)p.addr)[idx] = v.kind == VAL_STR ? v.as.s : "";
+        break;
+    default:
+        ((void **)p.addr)[idx] =
+            v.kind == VAL_PTR ? v.as.ptr.addr : (void *)(intptr_t)to_int(v);
+        break;
+    }
+}
+
 bool is_int_typename(const char *b)
 {
     static const char *ints[] = {"i8",  "i16", "i32",  "i64",  "u8",    "u16",   "u32",
@@ -440,14 +537,19 @@ value_t try_struct_op(interp_t *I, token_kind_t op, value_t a, value_t b, bool h
     if (!m && op == TK_NE) {
         ast_node_t *eq = struct_method_arity(a.as.st->def, "operator_eq", 1);
         if (eq) {
+            env_t *denv = find_def_env(I, eq);
             *found = true;
-            value_t r = call_func(I, eq, I->globals, &a, &b, 1);
+            value_t r = call_func(I, eq, denv ? denv : I->globals, &a, &b, 1);
             return val_bool(!to_bool(r));
         }
     }
     if (!m) return val_null();
     *found = true;
-    return call_func(I, m, I->globals, &a, has_b ? &b : NULL, has_b ? 1 : 0);
+    {
+        env_t *denv = find_def_env(I, m);
+        return call_func(I, m, denv ? denv : I->globals, &a, has_b ? &b : NULL,
+                         has_b ? 1 : 0);
+    }
 }
 
 value_t arith(interp_t *I, ast_node_t *n, token_kind_t op, value_t a, value_t b)
@@ -517,6 +619,9 @@ bool value_eq(interp_t *I, value_t a, value_t b)
 {
     (void)I;
     if (a.kind == VAL_STR && b.kind == VAL_STR) return strcmp(a.as.s, b.as.s) == 0;
+    if (a.kind == VAL_PTR && b.kind == VAL_PTR) return a.as.ptr.addr == b.as.ptr.addr;
+    if (a.kind == VAL_PTR && b.kind == VAL_NULL) return a.as.ptr.addr == NULL;
+    if (a.kind == VAL_NULL && b.kind == VAL_PTR) return b.as.ptr.addr == NULL;
     if (a.kind == VAL_NULL || b.kind == VAL_NULL) return a.kind == b.kind;
     if (a.kind == VAL_BOOL || b.kind == VAL_BOOL) return to_bool(a) == to_bool(b);
     if (is_number(a) && is_number(b)) return to_float(a) == to_float(b);

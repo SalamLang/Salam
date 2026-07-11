@@ -777,6 +777,14 @@ sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const ch
     vec_init(&s.pending);
     LOG_I(log, PH_SEMANTIC, "analyzing %zu top-level definitions", program->list.len);
     load_imports(&s, program);
+    if (!s.pkg || strcmp(s.pkg, "core") != 0) {
+        const char *corep = salam_resolve_import(a, "", "core");
+        if (corep) {
+            ast_node_t imp;
+            memset(&imp, 0, sizeof(imp));
+            load_package(&s, corep, &imp);
+        }
+    }
     sema_collect(&s, program);
     sema_check_pass(&s, program);
     LOG_I(log, PH_SEMANTIC, "analysis complete: %zu error(s), %zu warning(s)",

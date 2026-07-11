@@ -327,6 +327,32 @@ value_t call_builtin_method(interp_t *I, ast_node_t *call, value_t recv,
         }
         break;
     }
+    case VAL_PTR: {
+        static const struct {
+            const char *method;
+            const char *fn;
+        } FILE_METHODS[] = {
+            {"read", "salam_file_read"},   {"readline", "salam_file_readline"},
+            {"write", "salam_file_write"}, {"seek", "salam_file_seek"},
+            {"close", "salam_file_close"},
+        };
+        size_t i = 0;
+        for (; i < sizeof FILE_METHODS / sizeof FILE_METHODS[0]; i++) {
+            if (strcmp(method, FILE_METHODS[i].method) != 0) continue;
+            value_t *ef = find_extern_fn(I, FILE_METHODS[i].fn);
+            if (!ef) break;
+            value_t *allargs =
+                (value_t *)arena_alloc(I->a, salam_size_mul(nargs + 1, sizeof(value_t)));
+            allargs[0] = recv;
+            {
+                size_t j = 0;
+                for (; j < nargs; j++)
+                    allargs[j + 1] = args[j];
+            }
+            return call_func(I, ef->as.fn->fn, ef->as.fn->env, NULL, allargs, nargs + 1);
+        }
+        break;
+    }
     case VAL_MAPITER: {
         smapiter_t *it = recv.as.iter;
         if (!strcmp(method, "has_next")) {

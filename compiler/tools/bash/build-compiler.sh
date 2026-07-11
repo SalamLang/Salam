@@ -50,7 +50,7 @@ esac
     src/llvm/codegen_llvm_expr.c src/llvm/codegen_llvm_stmt.c src/llvm/codegen_llvm_decl.c \
     src/llvm/codegen_llvm_debug.c src/llvm/llvm_native.c \
     src/interp/interp.c src/interp/interp_builtin.c src/interp/interp_value.c \
-    src/interp/interp_expr.c src/interp/interp_stmt.c \
+    src/interp/interp_expr.c src/interp/interp_stmt.c src/interp/interp_ffi.c \
     src/layout/registry.c src/layout/layout_gen.c src/layout/layout_gen_element.c \
     src/layout/layout_gen_value.c src/layout/schema.c src/layout/layout_expand.c \
     src/fmt/fmt.c src/fmt/fmt_rules.c \

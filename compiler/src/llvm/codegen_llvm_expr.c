@@ -78,17 +78,22 @@ static const char *ll_str_operand(ll_t *ll, ast_node_t *n)
         const char *t = ll_strconst(ll, "true"), *f = ll_strconst(ll, "false");
         ll_emit(ll, "%s = select i1 %s, ptr %s, ptr %s", r, v.ref, t, f);
     } else if (ts && !strcmp(ts, "char")) {
+        ll_need(ll, LL_H_CHARSTR);
         ll_emit(ll, "%s = call ptr @salam_ll_charstr(i32 %s)", r, ll_conv(ll, v, "i32"));
     } else if (ll_is_float(ts)) {
+        ll_need(ll, LL_H_F64STR);
         ll_emit(ll, "%s = call ptr @salam_ll_f64str(double %s)", r,
                 ll_conv(ll, v, "f64"));
     } else if (ll_is_int(ts)) {
-        if (ll_is_signed(ts))
+        if (ll_is_signed(ts)) {
+            ll_need(ll, LL_H_I64STR);
             ll_emit(ll, "%s = call ptr @salam_ll_i64str(i64 %s)", r,
                     ll_conv(ll, v, "i64"));
-        else
+        } else {
+            ll_need(ll, LL_H_U64STR);
             ll_emit(ll, "%s = call ptr @salam_ll_u64str(i64 %s)", r,
                     ll_conv(ll, v, "u64"));
+        }
     } else {
         ll_error(ll, n, "string concatenation with an unsupported operand type '%s'",
                  ts ? ts : "?");
@@ -104,6 +109,7 @@ static bool ll_binary_string(ll_t *ll, ast_node_t *n, token_kind_t op, llv_t *ou
     if (op == TK_PLUS && (as || bs)) {
         const char *L = ll_str_operand(ll, n->a), *R = ll_str_operand(ll, n->b);
         const char *r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_STRCAT);
         ll_emit(ll, "%s = call ptr @salam_ll_strcat(ptr %s, ptr %s)", r, L, R);
         *out = (llv_t){r, "str"};
         return true;
@@ -588,6 +594,7 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
     if (!strcmp(m, "concat") && na == 1) {
         const char *a = ll_expr(ll, (ast_node_t *)n->list.data[0]).ref;
         r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_STRCAT);
         ll_emit(ll, "%s = call ptr @salam_ll_strcat(ptr %s, ptr %s)", r, recv, a);
         *out = (llv_t){r, "str"};
         return true;
@@ -596,6 +603,7 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
         const char *s = ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[0]), "i32");
         const char *l = ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[1]), "i32");
         r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_SUBSTR);
         ll_emit(ll, "%s = call ptr @salam_ll_substr(ptr %s, i32 %s, i32 %s)", r, recv, s,
                 l);
         *out = (llv_t){r, "str"};
@@ -603,6 +611,7 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
     }
     if (!strcmp(m, "trim")) {
         r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_TRIM);
         ll_emit(ll, "%s = call ptr @salam_ll_trim(ptr %s)", r, recv);
         *out = (llv_t){r, "str"};
         return true;
@@ -801,17 +810,21 @@ static bool ll_call_intrinsic(ll_t *ll, ast_node_t *n, const char *nm, llv_t *ou
     const char *r;
     if (!strcmp(nm, "hash") && na == 1) {
         r = ll_new_tmp(ll);
-        if (ll_is_str(a0->type_str))
+        if (ll_is_str(a0->type_str)) {
+            ll_need(ll, LL_H_STRHASH);
             ll_emit(ll, "%s = call i64 @salam_ll_strhash(ptr %s)", r,
                     ll_expr(ll, a0).ref);
-        else
+        } else {
+            ll_need(ll, LL_H_INTHASH);
             ll_emit(ll, "%s = call i64 @salam_ll_inthash(i64 %s)", r,
                     ll_conv(ll, ll_expr(ll, a0), "u64"));
+        }
         *out = (llv_t){r, "u64"};
         return true;
     }
     if (!strcmp(nm, "char_from_code") && na == 1) {
         r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_CHARSTR);
         ll_emit(ll, "%s = call ptr @salam_ll_charstr(i32 %s)", r,
                 ll_conv(ll, ll_expr(ll, a0), "i32"));
         *out = (llv_t){r, "str"};

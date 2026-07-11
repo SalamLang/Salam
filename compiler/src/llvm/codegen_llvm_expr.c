@@ -601,6 +601,12 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
         *out = (llv_t){r, "str"};
         return true;
     }
+    if (!strcmp(m, "trim")) {
+        r = ll_new_tmp(ll);
+        ll_emit(ll, "%s = call ptr @salam_ll_trim(ptr %s)", r, recv);
+        *out = (llv_t){r, "str"};
+        return true;
+    }
     if (!strcmp(m, "to_int")) {
         const char *x = ll_new_tmp(ll);
         r = ll_new_tmp(ll);

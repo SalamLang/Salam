@@ -1,0 +1,297 @@
+@en "flag"
+@fa "پرچم"
+package flag
+import "str"
+import "conv"
+import "collections"
+
+@en "KindBool"
+@fa "نوع_منطقی"
+pub const KindBool = 0
+
+@en "KindStr"
+@fa "نوع_رشته"
+pub const KindStr = 1
+
+@en "KindInt"
+@fa "نوع_صحیح"
+pub const KindInt = 2
+
+@en "KindFloat"
+@fa "نوع_اعشاری"
+pub const KindFloat = 3
+
+@en "FlagSet"
+@fa "مجموعه_پرچم"
+pub struct FlagSet:
+    prog str = ""
+    desc str = ""
+    names Vector<str> = Vector {}
+    shorts Vector<str> = Vector {}
+    kinds Vector<i32> = Vector {}
+    vals Vector<str> = Vector {}
+    defs Vector<str> = Vector {}
+    helps Vector<str> = Vector {}
+    was_set Vector<bool> = Vector {}
+    pos Vector<str> = Vector {}
+    err str = ""
+    help_wanted bool = false
+end
+
+@en "New"
+@fa "جدید"
+pub func New(prog_name str, description str) FlagSet:
+    mut fs FlagSet = FlagSet {}
+    fs.prog = prog_name
+    fs.desc = description
+    ret fs
+end
+
+func _register(fs &FlagSet, name str, short str, kind i32, def str, help str):
+    fs.names.push(name)
+    fs.shorts.push(short)
+    fs.kinds.push(kind)
+    fs.defs.push(def)
+    fs.vals.push(def)
+    fs.helps.push(help)
+    fs.was_set.push(false)
+end
+
+@en "AddBool"
+@fa "افزودن_منطقی"
+pub func AddBool(fs &FlagSet, name str, short str, def bool, help str):
+    _register(fs, name, short, 0, conv.FormatBool(def), help)
+end
+
+@en "AddStr"
+@fa "افزودن_رشته"
+pub func AddStr(fs &FlagSet, name str, short str, def str, help str):
+    _register(fs, name, short, 1, def, help)
+end
+
+@en "AddInt"
+@fa "افزودن_صحیح"
+pub func AddInt(fs &FlagSet, name str, short str, def i64, help str):
+    _register(fs, name, short, 2, conv.FormatInt(def), help)
+end
+
+@en "AddFloat"
+@fa "افزودن_اعشاری"
+pub func AddFloat(fs &FlagSet, name str, short str, def f64, help str):
+    _register(fs, name, short, 3, conv.FormatFloat(def), help)
+end
+
+func _find(fs &FlagSet, name str) i32:
+    for mut i = 0; i < fs.names.len(); i = i + 1:
+        if fs.names.get(i)[0] == name: ret i end
+    end
+    ret 0 - 1
+end
+
+func _find_short(fs &FlagSet, short str) i32:
+    for mut i = 0; i < fs.shorts.len(); i = i + 1:
+        s str = fs.shorts.get(i)[0]
+        if s.len() > 0 && s == short: ret i end
+    end
+    ret 0 - 1
+end
+
+func _assign(fs &FlagSet, idx i32, val str):
+    fs.vals.set(idx, val)
+    fs.was_set.set(idx, true)
+end
+
+@en "Parse"
+@fa "تجزیه"
+pub func Parse(fs &FlagSet, arglist Vector<str>) bool:
+    fs.err = ""
+    mut i i32 = 0
+    mut only_pos bool = false
+    while i < arglist.len():
+        arg str = arglist.get(i)[0]
+        if only_pos:
+            fs.pos.push(arg)
+            i = i + 1
+        else:
+            if arg == "--":
+                only_pos = true
+                i = i + 1
+            else:
+                if str.StartsWith(arg, "--") || (str.StartsWith(arg, "-") && arg.len() > 1):
+                    mut body str = arg.substr(1, arg.len() - 1)
+                    mut long bool = false
+                    if str.StartsWith(arg, "--"):
+                        body = arg.substr(2, arg.len() - 2)
+                        long = true
+                    end
+                    mut name str = body
+                    mut inline_val str = ""
+                    mut has_inline bool = false
+                    eq i32 = body.find("=")
+                    if eq >= 0:
+                        name = body.substr(0, eq)
+                        inline_val = body.substr(eq + 1, body.len() - eq - 1)
+                        has_inline = true
+                    end
+                    if name == "help" || name == "h":
+                        fs.help_wanted = true
+                        i = i + 1
+                    else:
+                        mut idx i32 = 0 - 1
+                        if long:
+                            idx = _find(fs, name)
+                        else:
+                            idx = _find_short(fs, name)
+                            if idx < 0: idx = _find(fs, name) end
+                        end
+                        if idx < 0:
+                            fs.err = "unknown flag: ".concat(arg)
+                            ret false
+                        end
+                        if fs.kinds.get(idx)[0] == 0:
+                            if has_inline:
+                                _assign(fs, idx, inline_val)
+                            else:
+                                _assign(fs, idx, "true")
+                            end
+                            i = i + 1
+                        else:
+                            if has_inline:
+                                _assign(fs, idx, inline_val)
+                                i = i + 1
+                            else:
+                                if i + 1 >= arglist.len():
+                                    fs.err = "missing value for flag: ".concat(arg)
+                                    ret false
+                                end
+                                _assign(fs, idx, arglist.get(i + 1)[0])
+                                i = i + 2
+                            end
+                        end
+                    end
+                else:
+                    fs.pos.push(arg)
+                    i = i + 1
+                end
+            end
+        end
+    end
+    ret true
+end
+
+@en "GetStr"
+@fa "دریافت_رشته"
+pub func GetStr(fs &FlagSet, name str) str:
+    idx i32 = _find(fs, name)
+    if idx < 0: ret "" end
+    ret fs.vals.get(idx)[0]
+end
+
+@en "GetInt"
+@fa "دریافت_صحیح"
+pub func GetInt(fs &FlagSet, name str) i64:
+    idx i32 = _find(fs, name)
+    if idx < 0: ret 0 end
+    ret conv.ParseInt(fs.vals.get(idx)[0])
+end
+
+@en "GetFloat"
+@fa "دریافت_اعشاری"
+pub func GetFloat(fs &FlagSet, name str) f64:
+    idx i32 = _find(fs, name)
+    if idx < 0: ret 0.0 end
+    ret conv.ParseFloat(fs.vals.get(idx)[0])
+end
+
+@en "GetBool"
+@fa "دریافت_منطقی"
+pub func GetBool(fs &FlagSet, name str) bool:
+    idx i32 = _find(fs, name)
+    if idx < 0: ret false end
+    ret conv.ParseBool(fs.vals.get(idx)[0])
+end
+
+@en "WasSet"
+@fa "تنظیم_شده"
+pub func WasSet(fs &FlagSet, name str) bool:
+    idx i32 = _find(fs, name)
+    if idx < 0: ret false end
+    ret fs.was_set.get(idx)[0]
+end
+
+@en "Positional"
+@fa "موقعیتی"
+pub func Positional(fs &FlagSet) Vector<str>:
+    ret collections.clone(fs.pos)
+end
+
+@en "HelpWanted"
+@fa "راهنما_خواسته"
+pub func HelpWanted(fs &FlagSet) bool: ret fs.help_wanted end
+
+@en "Error"
+@fa "خطا"
+pub func Error(fs &FlagSet) str: ret fs.err end
+
+func _kind_hint(kind i32) str:
+    if kind == 1: ret " <string>" end
+    if kind == 2: ret " <int>" end
+    if kind == 3: ret " <float>" end
+    ret ""
+end
+
+@en "Usage"
+@fa "راهنما"
+pub func Usage(fs &FlagSet) str:
+    mut b str.StringBuilder = str.NewBuilder()
+    str.BufAppend(b, "Usage: ")
+    str.BufAppend(b, fs.prog)
+    str.BufAppend(b, " [options] [args]\n")
+    if fs.desc.len() > 0:
+        str.BufAppend(b, "  ")
+        str.BufAppend(b, fs.desc)
+        str.BufAppend(b, "\n")
+    end
+    str.BufAppend(b, "Options:\n")
+    for mut i = 0; i < fs.names.len(); i = i + 1:
+        str.BufAppend(b, "  ")
+        short str = fs.shorts.get(i)[0]
+        if short.len() > 0:
+            str.BufAppend(b, "-")
+            str.BufAppend(b, short)
+            str.BufAppend(b, ", ")
+        end
+        str.BufAppend(b, "--")
+        str.BufAppend(b, fs.names.get(i)[0])
+        str.BufAppend(b, _kind_hint(fs.kinds.get(i)[0]))
+        help str = fs.helps.get(i)[0]
+        if help.len() > 0:
+            str.BufAppend(b, "  ")
+            str.BufAppend(b, help)
+        end
+        def str = fs.defs.get(i)[0]
+        if fs.kinds.get(i)[0] != 0 && def.len() > 0:
+            str.BufAppend(b, " (default: ")
+            str.BufAppend(b, def)
+            str.BufAppend(b, ")")
+        end
+        str.BufAppend(b, "\n")
+    end
+    str.BufAppend(b, "  -h, --help  show this help\n")
+    out str = str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+@en "Free"
+@fa "آزادسازی"
+pub func Free(fs &FlagSet):
+    fs.names.free()
+    fs.shorts.free()
+    fs.kinds.free()
+    fs.vals.free()
+    fs.defs.free()
+    fs.helps.free()
+    fs.was_set.free()
+    fs.pos.free()
+end

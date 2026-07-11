@@ -1,8 +1,17 @@
 @en "encoding"
 @fa "کدگذاری"
 package encoding
-func b64val(c str) i32:
-    code i32 = char_code(c)
+import "str"
+
+inline pure func _bp(s str) i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp i8*, i i32) i32:
+    mut v i32 = bp[i] as i32
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+pure func _b64val(code i32) i32:
     if code >= 65 && code <= 90: ret code - 65 end
     if code >= 97 && code <= 122: ret code - 71 end
     if code >= 48 && code <= 57: ret code + 4 end
@@ -11,53 +20,72 @@ func b64val(c str) i32:
     ret 0 - 1
 end
 
+pure func _hexval(code i32) i32:
+    if code >= 48 && code <= 57: ret code - 48 end
+    if code >= 97 && code <= 102: ret code - 87 end
+    if code >= 65 && code <= 70: ret code - 55 end
+    ret 0 - 1
+end
+
+pure func _url_safe(code i32) bool:
+    if code >= 65 && code <= 90: ret true end
+    if code >= 97 && code <= 122: ret true end
+    if code >= 48 && code <= 57: ret true end
+    if code == 45 || code == 95 || code == 46 || code == 126: ret true end
+    ret false
+end
+
 @en "Base64Encode"
 @fa "کدگذاری_شصت_و_چهار"
 pub func Base64Encode(data str) str:
     alpha str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    ap i8* = _bp(alpha)
+    dp i8* = _bp(data)
     n i32 = data.len()
-    mut result str = ""
+    mut sb str.StringBuilder = str.NewBuilder()
+    defer str.BufFree(sb)
     mut i i32 = 0
     while i < n:
-        b0 i32 = char_code(data.substr(i, 1))
+        b0 i32 = _ub(dp, i)
         mut b1 i32 = 0
         mut b2 i32 = 0
-        if i + 1 < n: b1 = char_code(data.substr(i + 1, 1)) end
-        if i + 2 < n: b2 = char_code(data.substr(i + 2, 1)) end
-        result = result.concat(alpha.substr(b0 / 4, 1))
-        result = result.concat(alpha.substr((b0 % 4) * 16 + b1 / 16, 1))
+        if i + 1 < n: b1 = _ub(dp, i + 1) end
+        if i + 2 < n: b2 = _ub(dp, i + 2) end
+        str.BufAppendChar(sb, _ub(ap, b0 / 4))
+        str.BufAppendChar(sb, _ub(ap, (b0 % 4) * 16 + b1 / 16))
         if i + 1 < n:
-            result = result.concat(alpha.substr((b1 % 16) * 4 + b2 / 64, 1))
+            str.BufAppendChar(sb, _ub(ap, (b1 % 16) * 4 + b2 / 64))
         else:
-            result = result.concat("=")
+            str.BufAppendChar(sb, 61)
         end
         if i + 2 < n:
-            result = result.concat(alpha.substr(b2 % 64, 1))
+            str.BufAppendChar(sb, _ub(ap, b2 % 64))
         else:
-            result = result.concat("=")
+            str.BufAppendChar(sb, 61)
         end
         i = i + 3
     end
-    ret result
+    out str = str.BufStr(sb)
+    ret out
 end
 
 @en "Base64Decode"
 @fa "کدگشایی_شصت_و_چهار"
 pub func Base64Decode(s str) str:
     n i32 = s.len()
-    mut result str = ""
+    bp i8* = _bp(s)
+    mut sb str.StringBuilder = str.NewBuilder()
+    defer str.BufFree(sb)
     mut qi i32 = 0
     mut q0 i32 = 0
     mut q1 i32 = 0
     mut q2 i32 = 0
-    mut q3 i32 = 0
     mut i i32 = 0
     while i < n:
-        c str = s.substr(i, 1)
-        code i32 = char_code(c)
+        code i32 = _ub(bp, i)
         i = i + 1
         if code != 32 && code != 9 && code != 10 && code != 13:
-            v i32 = b64val(c)
+            v i32 = _b64val(code)
             if v >= 0:
                 if qi == 0:
                     q0 = v
@@ -69,126 +97,124 @@ pub func Base64Decode(s str) str:
                     q2 = v
                     qi = 3
                 else:
-                    q3 = v
-                    result = result.concat(char_from_code(q0 * 4 + q1 / 16))
-                    result = result.concat(char_from_code((q1 % 16) * 16 + q2 / 4))
-                    result = result.concat(char_from_code((q2 % 4) * 64 + q3))
+                    str.BufAppendChar(sb, q0 * 4 + q1 / 16)
+                    str.BufAppendChar(sb, (q1 % 16) * 16 + q2 / 4)
+                    str.BufAppendChar(sb, (q2 % 4) * 64 + v)
                     qi = 0
                 end
             end
         end
     end
     if qi >= 2:
-        result = result.concat(char_from_code(q0 * 4 + q1 / 16))
+        str.BufAppendChar(sb, q0 * 4 + q1 / 16)
     end
     if qi >= 3:
-        result = result.concat(char_from_code((q1 % 16) * 16 + q2 / 4))
+        str.BufAppendChar(sb, (q1 % 16) * 16 + q2 / 4)
     end
-    ret result
+    out str = str.BufStr(sb)
+    ret out
 end
 
 @en "HexEncode"
 @fa "کدگذاری_شانزده"
 pub func HexEncode(data str) str:
     digits str = "0123456789abcdef"
-    l i32 = data.len()
-    mut result str = ""
+    hp i8* = _bp(digits)
+    dp i8* = _bp(data)
+    n i32 = data.len()
+    mut sb str.StringBuilder = str.NewBuilder()
+    defer str.BufFree(sb)
     mut i i32 = 0
-    while i < l:
-        b i32 = char_code(data.substr(i, 1))
-        result = result.concat(digits.substr(b / 16, 1))
-        result = result.concat(digits.substr(b % 16, 1))
+    while i < n:
+        b i32 = _ub(dp, i)
+        str.BufAppendChar(sb, _ub(hp, b / 16))
+        str.BufAppendChar(sb, _ub(hp, b % 16))
         i = i + 1
     end
-    ret result
-end
-
-func hexval(c str) i32:
-    code i32 = char_code(c)
-    if code >= 48 && code <= 57: ret code - 48 end
-    if code >= 97 && code <= 102: ret code - 87 end
-    if code >= 65 && code <= 70: ret code - 55 end
-    ret 0 - 1
+    out str = str.BufStr(sb)
+    ret out
 end
 
 @en "HexVal"
 @fa "مقدار_شانزده"
-pub func HexVal(c str) i32: ret hexval(c) end
+pub inline pure func HexVal(c str) i32: ret _hexval(char_code(c)) end
 
 @en "HexDecode"
 @fa "کدگشایی_شانزده"
 pub func HexDecode(s str) str:
-    l i32 = s.len()
-    mut result str = ""
+    n i32 = s.len()
+    bp i8* = _bp(s)
+    mut sb str.StringBuilder = str.NewBuilder()
+    defer str.BufFree(sb)
     mut i i32 = 0
-    while i + 1 < l:
-        hi i32 = hexval(s.substr(i, 1))
-        lo i32 = hexval(s.substr(i + 1, 1))
+    while i + 1 < n:
+        hi i32 = _hexval(_ub(bp, i))
+        lo i32 = _hexval(_ub(bp, i + 1))
         if hi < 0 || lo < 0:
-            ret result
+            out0 str = str.BufStr(sb)
+            ret out0
         end
-        result = result.concat(char_from_code(hi * 16 + lo))
+        str.BufAppendChar(sb, hi * 16 + lo)
         i = i + 2
     end
-    ret result
-end
-
-func _url_safe(code i32) bool:
-    if code >= 65 && code <= 90: ret true end
-    if code >= 97 && code <= 122: ret true end
-    if code >= 48 && code <= 57: ret true end
-    if code == 45 || code == 95 || code == 46 || code == 126: ret true end
-    ret false
+    out str = str.BufStr(sb)
+    ret out
 end
 
 @en "URLEncode"
 @fa "کدگذاری_نشانی"
 pub func URLEncode(s str) str:
     digits str = "0123456789ABCDEF"
+    hp i8* = _bp(digits)
+    bp i8* = _bp(s)
     n i32 = s.len()
-    mut result str = ""
+    mut sb str.StringBuilder = str.NewBuilder()
+    defer str.BufFree(sb)
     mut i i32 = 0
     while i < n:
-        mut code i32 = char_code(s.substr(i, 1))
-        if code < 0: code = code + 256 end
+        code i32 = _ub(bp, i)
         if _url_safe(code):
-            result = result.concat(s.substr(i, 1))
+            str.BufAppendChar(sb, code)
         else:
-            result = result.concat("%")
-            result = result.concat(digits.substr(code / 16, 1))
-            result = result.concat(digits.substr(code % 16, 1))
+            str.BufAppendChar(sb, 37)
+            str.BufAppendChar(sb, _ub(hp, code / 16))
+            str.BufAppendChar(sb, _ub(hp, code % 16))
         end
         i = i + 1
     end
-    ret result
+    out str = str.BufStr(sb)
+    ret out
 end
 
 @en "URLDecode"
 @fa "کدگشایی_نشانی"
 pub func URLDecode(s str) str:
     n i32 = s.len()
-    mut result str = ""
+    bp i8* = _bp(s)
+    mut sb str.StringBuilder = str.NewBuilder()
+    defer str.BufFree(sb)
     mut i i32 = 0
     while i < n:
-        c str = s.substr(i, 1)
-        if c == "%" && i + 2 < n:
-            hi i32 = hexval(s.substr(i + 1, 1))
-            lo i32 = hexval(s.substr(i + 2, 1))
+        code i32 = _ub(bp, i)
+        if code == 37 && i + 2 < n:
+            hi i32 = _hexval(_ub(bp, i + 1))
+            lo i32 = _hexval(_ub(bp, i + 2))
             if hi >= 0 && lo >= 0:
-                result = result.concat(char_from_code(hi * 16 + lo))
+                str.BufAppendChar(sb, hi * 16 + lo)
                 i = i + 3
             else:
-                result = result.concat(c)
+                str.BufAppendChar(sb, code)
                 i = i + 1
             end
         else:
-            if c == "+":
-                result = result.concat(" ")
+            if code == 43:
+                str.BufAppendChar(sb, 32)
             else:
-                result = result.concat(c)
+                str.BufAppendChar(sb, code)
             end
             i = i + 1
         end
     end
-    ret result
+    out str = str.BufStr(sb)
+    ret out
 end

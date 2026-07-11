@@ -342,6 +342,20 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "{ return (void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n"
                "typedef void (*salam_thread_fn)(void);\n"
                "#endif\n");
+    sb_puts(h, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n"
+               "extern uint64_t strlen(const char* s);\n"
+               "extern int32_t strcmp(const char* a, const char* b);\n"
+               "extern const char* strstr(const char* haystack, const char* needle);\n"
+               "extern int64_t strtol(const char* s, void* endptr, int32_t base);\n"
+               "extern double strtod(const char* s, void* endptr);\n"
+               "extern const char* salam_strcat(const char* a, const char* b);\n"
+               "extern const char* salam_char_from_code(int32_t c);\n"
+               "extern const char* salam_str_substr(const char* s, int32_t start, "
+               "int32_t n);\n"
+               "extern const char* salam_str_trim(const char* s);\n"
+               "extern void* salam_str_split(const char* s, const char* delim, void* "
+               "out_count);\n"
+               "#endif\n");
     sb_puts(h, "#ifndef SALAM_FN_ATTRS_DEFINED\n#define SALAM_FN_ATTRS_DEFINED\n"
                "#if defined(__GNUC__) || defined(__clang__)\n"
                "#define SALAM_NOINLINE __attribute__((noinline))\n"
@@ -427,6 +441,30 @@ static void hdr_struct_fwd(cg_t *cg, ast_node_t *program, sb_t *h)
                                        : d->name;
                 const char *cn = cg_cident(cg, raw2);
 
+                sb_puts(h, cg_fmt(cg,
+                                  "#ifndef SALAM_FWD_%s\n#define SALAM_FWD_%s\n"
+                                  "typedef struct %s %s;\n#endif\n",
+                                  cn, cn, cn, cn));
+            }
+        }
+    }
+}
+
+static void hdr_struct_fwd_imports(cg_t *cg, sb_t *h)
+{
+    {
+        size_t p = 0;
+        for (; p < cg->sem->packages.len; p++) {
+            symbol_t *pk = (symbol_t *)cg->sem->packages.data[p];
+            size_t i;
+            if (!pk || pk->kind != SYM_PACKAGE || !pk->members) continue;
+            i = 0;
+            for (; i < pk->members->symbols.len; i++) {
+                symbol_t *s = (symbol_t *)pk->members->symbols.data[i];
+                const char *cn;
+                if (!s || s->kind != SYM_STRUCT || !s->type || !s->type->name) continue;
+                if (s->decl && s->decl->typarams.len > 0) continue;
+                cn = cg_cident(cg, s->type->name);
                 sb_puts(h, cg_fmt(cg,
                                   "#ifndef SALAM_FWD_%s\n#define SALAM_FWD_%s\n"
                                   "typedef struct %s %s;\n#endif\n",
@@ -624,6 +662,7 @@ void cg_header(cg_t *cg, ast_node_t *program)
     hdr_prelude(cg, program, h);
     hdr_enums(cg, program, h);
     hdr_struct_fwd(cg, program, h);
+    hdr_struct_fwd_imports(cg, h);
 
     dyn_collect(cg, program);
     cg_emit_dyn_types(cg, h);

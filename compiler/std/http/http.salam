@@ -90,13 +90,14 @@ if SALAM_OS_WINDOWS:
         sess void* = WinHttpOpen(wagent, 0, null, null, 0)
         mem.Free(wagent)
         if sess == null: ret "" end
+        defer WinHttpCloseHandle(sess)
         whost void* = _str_to_wide(host_only)
         conn void* = WinHttpConnect(sess, whost, wport, 0)
         mem.Free(whost)
         if conn == null:
-            WinHttpCloseHandle(sess)
             ret ""
         end
+        defer WinHttpCloseHandle(conn)
         mut req_flags i32 = 0
         if secure == 1: req_flags = 8388608 end
         wverb void* = _str_to_wide(method)
@@ -105,10 +106,9 @@ if SALAM_OS_WINDOWS:
         mem.Free(wverb)
         mem.Free(wpath)
         if req == null:
-            WinHttpCloseHandle(conn)
-            WinHttpCloseHandle(sess)
             ret ""
         end
+        defer WinHttpCloseHandle(req)
         if headers.len() > 0:
             wh void* = _str_to_wide(headers)
             WinHttpAddRequestHeaders(req, wh, 0 - 1, 805306368)
@@ -117,19 +117,14 @@ if SALAM_OS_WINDOWS:
         blen i32 = body.len()
         sent i32 = WinHttpSendRequest(req, null, 0, body, blen, blen, 0)
         if sent == 0:
-            WinHttpCloseHandle(req)
-            WinHttpCloseHandle(conn)
-            WinHttpCloseHandle(sess)
             ret ""
         end
         recv_ok i32 = WinHttpReceiveResponse(req, null)
         if recv_ok == 0:
-            WinHttpCloseHandle(req)
-            WinHttpCloseHandle(conn)
-            WinHttpCloseHandle(sess)
             ret ""
         end
         mut hlen i64* = mem.Allocate(8 as u64) as i64*
+        defer mem.Free(hlen as void*)
         hlen[0] = 0
         WinHttpQueryHeaders(req, 22, null, null, hlen as void*, null)
         hsize i32 = hlen[0] as i32
@@ -142,13 +137,14 @@ if SALAM_OS_WINDOWS:
             end
             mem.Free(wh)
         end
-        mem.Free(hlen as void*)
         hend i32 = hdr_str.len() - 4
         if hend < 0 || hdr_str.substr(hend, 4) != "\r\n\r\n":
             hdr_str = hdr_str.concat("\r\n\r\n")
         end
         buf void* = mem.Allocate(2050 as u64)
+        defer mem.Free(buf)
         mut got i64* = mem.Allocate(8 as u64) as i64*
+        defer mem.Free(got as void*)
         mut body_str str = ""
         mut reading bool = true
         while reading:
@@ -161,12 +157,8 @@ if SALAM_OS_WINDOWS:
                 body_str = body_str.concat(chunk)
             end
         end
-        mem.Free(buf)
-        mem.Free(got as void*)
-        WinHttpCloseHandle(req)
-        WinHttpCloseHandle(conn)
-        WinHttpCloseHandle(sess)
-        ret hdr_str.concat(body_str)
+        result str = hdr_str.concat(body_str)
+        ret result
     end
 else:
     if SALAM_LINK_CURL:
@@ -199,6 +191,14 @@ else:
             ret d as str
         end
 
+        func _cbuf_free(b void*):
+            p i64* = b as i64*
+            if p[0] != 0:
+                mem.Free(p[0] as void*)
+            end
+            mem.Free(b)
+        end
+
         func _curl_write(ptr void*, size u64, nmemb u64, ud void*) u64:
             n i64 = (size * nmemb) as i64
             mut b i64* = ud as i64*
@@ -226,8 +226,11 @@ else:
         func _fetch_https(method str, url str, headers str, body str) str:
             h void* = curl_easy_init()
             if h == null: ret "" end
+            defer curl_easy_cleanup(h)
             buf void* = _cbuf()
+            defer _cbuf_free(buf)
             hbuf void* = _cbuf()
+            defer _cbuf_free(hbuf)
             wcb i64 = funcptr(_curl_write)
             curl_easy_setopt(h, _CURLOPT_URL, url)
             curl_easy_setopt(h, _CURLOPT_WRITEFUNCTION, wcb)
@@ -261,14 +264,7 @@ else:
             if slist != null:
                 curl_slist_free_all(slist)
             end
-            curl_easy_cleanup(h)
-            mut result str = _cbuf_str(hbuf).concat(_cbuf_str(buf))
-            hp i64* = hbuf as i64*
-            bp i64* = buf as i64*
-            if hp[0] != 0: mem.Free(hp[0] as void*) end
-            if bp[0] != 0: mem.Free(bp[0] as void*) end
-            mem.Free(hbuf)
-            mem.Free(buf)
+            result str = _cbuf_str(hbuf).concat(_cbuf_str(buf))
             ret result
         end
     else:

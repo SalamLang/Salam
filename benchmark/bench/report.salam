@@ -1,0 +1,146 @@
+package bench
+
+import (
+    "str" "conv" "fmt" "stats" "io" "filepath"
+)
+
+func report_row(s &Store, name str, lang str, c_med f64) str:
+    k str = kkey(name, lang)
+    st str = sget(s.status, k)
+    if st == "ok":
+        med f64 = fget(s.m_med, k)
+        mut ratio str = "-"
+        if c_med > 0.0: ratio = fmt.FloatPrec(med / c_med, 2).concat("x") end
+        mut row str = "| ".concat(lang_label(lang))
+        row = row.concat(" | ").concat(fmt1(fget(s.m_min, k)))
+        row = row.concat(" | ").concat(fmt1(fget(s.m_avg, k)))
+        row = row.concat(" | ").concat(fmt1(fget(s.m_max, k)))
+        row = row.concat(" | ").concat(fmt1(med))
+        row = row.concat(" | ").concat(fmt1(fget(s.m_sd, k)))
+        row = row.concat(" | ").concat(ratio).concat(" |")
+        ret row
+    end
+    mut reason str = "run failed"
+    if st == "build_failed": reason = head_chars(last_line(sget(s.berr, k)), 80) end
+    ret "| ".concat(lang_label(lang)).concat(" | failed | | | | | ").concat(reason).concat(" |")
+end
+
+pub func WriteReport(cfg &Config, s &Store, names Vector<str>, ekeys Vector<str>, evals Vector<str>, started i64, finished i64):
+    order Vector<str> = lang_order()
+    mut lines Vector<str> = Vector {}
+    lines.push("# Salam Benchmark Suite Results")
+    lines.push("")
+    lines.push("Ten CPU-bound programs implemented identically in C, C++, Rust, Go, Python, PHP, and Salam.")
+    lines.push("Each variant is run once as warm-up, then ".concat(conv.FormatInt(cfg.runs as i64)).concat(" timed runs; times are wall-clock"))
+    lines.push("per full process (start/end captured as Unix-epoch nanoseconds).")
+    lines.push("")
+    lines.push("- Started (epoch ns): ".concat(conv.FormatInt(started)))
+    lines.push("- Finished (epoch ns): ".concat(conv.FormatInt(finished)))
+    lines.push("")
+    lines.push("## Environment")
+    lines.push("")
+    mut envorder Vector<str> = Vector {}
+    envorder.push("cpu")
+    envorder.push("gcc")
+    envorder.push("g++")
+    envorder.push("rustc")
+    envorder.push("go")
+    envorder.push("tcc")
+    envorder.push("clang")
+    envorder.push("python")
+    envorder.push("php")
+    envorder.push("salam")
+    for mut ei = 0; ei < envorder.len(); ei = ei + 1:
+        ek str = envorder.get(ei)[0]
+        ev str = env_get(ekeys, evals, ek)
+        if ev.len() > 0:
+            lines.push("- **".concat(ek).concat("**: ").concat(ev))
+        end
+    end
+    envorder.free()
+    lines.push("")
+    lines.push("Salam is measured three ways: the LLVM backend at -O3, the C backend")
+    lines.push("compiled by gcc -O3, and the default tcc toolchain (no optimizer) as the")
+    lines.push("out-of-the-box reference. C and C++ run at -O3 too.")
+    lines.push("")
+    lines.push("## Per-program results (milliseconds, ".concat(conv.FormatInt(cfg.runs as i64)).concat(" runs)"))
+    lines.push("")
+    for mut ni = 0; ni < names.len(); ni = ni + 1:
+        name str = names.get(ni)[0]
+        lines.push("### ".concat(name))
+        lines.push("")
+        mj str = mismatch_json(name, s)
+        if mj.len() > 0:
+            lines.push("Output mismatches vs C reference: `".concat(mj).concat("`"))
+            lines.push("")
+        end
+        lines.push("Reference output: `".concat(str.Replace(sget(s.refout, name), "\n", " / ")).concat("`"))
+        lines.push("")
+        lines.push("| Language | Min | Avg | Max | Median | Stdev | vs C (median) |")
+        lines.push("|---|---|---|---|---|---|---|")
+        c_med f64 = fget(s.m_med, kkey(name, "c"))
+        for mut li = 0; li < order.len(); li = li + 1:
+            lang str = order.get(li)[0]
+            k str = kkey(name, lang)
+            st str = sget(s.status, k)
+            if st != "":
+                lines.push(report_row(s, name, lang, c_med))
+            end
+        end
+        lines.push("")
+    end
+    lines.push("## Summary (median ms per program)")
+    lines.push("")
+    mut hdr str = "| Program |"
+    for mut lh = 0; lh < order.len(); lh = lh + 1:
+        hdr = hdr.concat(" ").concat(lang_label(order.get(lh)[0])).concat(" |")
+    end
+    lines.push(hdr)
+    lines.push(str.Repeat("|---", order.len() + 1).concat("|"))
+    for mut n2 = 0; n2 < names.len(); n2 = n2 + 1:
+        name str = names.get(n2)[0]
+        mut row str = "| ".concat(name)
+        for mut l2 = 0; l2 < order.len(); l2 = l2 + 1:
+            k str = kkey(name, order.get(l2)[0])
+            if sget(s.status, k) == "ok":
+                row = row.concat(" | ").concat(fmt1(fget(s.m_med, k)))
+            else:
+                row = row.concat(" | failed")
+            end
+        end
+        lines.push(row.concat(" |"))
+    end
+    lines.push("")
+    lines.push("## Overall comparison (geometric mean of per-program median ratio vs C)")
+    lines.push("")
+    lines.push("| Language | Slowdown vs C (".concat(lang_label("c")).concat(") |"))
+    lines.push("|---|---|")
+    for mut l3 = 0; l3 < order.len(); l3 = l3 + 1:
+        lang str = order.get(l3)[0]
+        mut ratios Vector<f64> = Vector {}
+        for mut n3 = 0; n3 < names.len(); n3 = n3 + 1:
+            name str = names.get(n3)[0]
+            c_med f64 = fget(s.m_med, kkey(name, "c"))
+            k str = kkey(name, lang)
+            if c_med > 0.0 && sget(s.status, k) == "ok":
+                ratios.push(fget(s.m_med, k) / c_med)
+            end
+        end
+        mut cell str = "-"
+        if ratios.len() > 0:
+            cell = fmt.FloatPrec(stats.Geomean(ratios), 2).concat("x")
+        end
+        ratios.free()
+        lines.push("| ".concat(lang_label(lang)).concat(" | ").concat(cell).concat(" |"))
+    end
+    lines.push("")
+    lines.push("Notes:")
+    lines.push("- Summary and ratio tables use per-program medians; medians are robust to scheduler noise that skews averages on short-lived processes.")
+    lines.push("- All timings include interpreter/process start-up, identical for every run.")
+    lines.push("- Processes are launched through /bin/sh (popen); the shell start-up overhead is identical for every language and run.")
+    lines.push("- Every program prints a deterministic result; all variants are checked against the C output before timing.")
+    lines.push("- Raw per-run epoch timestamps are in `results/results.csv` and `results/results.json`.")
+    io.WriteLines(filepath.Join(cfg.root, "RESULTS.md"), lines)
+    lines.free()
+    order.free()
+end

@@ -173,6 +173,7 @@ static layout_value_type_t vtype_of(const char *t)
     if (!strcmp(t, "dir")) return VT_DIR;
     if (!strcmp(t, "lang")) return VT_LANG;
     if (!strcmp(t, "enum")) return VT_ENUM;
+    if (!strcmp(t, "length")) return VT_LENGTH;
     return VT_STRING;
 }
 

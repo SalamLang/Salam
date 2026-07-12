@@ -311,6 +311,7 @@ static const i18n_pair_t k_msg_fa[] = {
     {"a text direction", "یک جهت متن"},
     {"a language", "یک زبان"},
     {"one of the allowed values", "یکی از مقادیر مجاز"},
+    {"a length", "یک اندازه (طول)"},
     {"a value", "یک مقدار"},
 
     {"%s (near '%s')", "%s (نزدیک '%s')"},

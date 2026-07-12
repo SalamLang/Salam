@@ -313,6 +313,14 @@ static int list_schema_files(arena_t *a, const char *dir, const char **out, int 
     return n;
 }
 
+static arena_t *g_schema_arena = NULL;
+
+static void schema_arena_shutdown(void)
+{
+    arena_free(g_schema_arena);
+    g_schema_arena = NULL;
+}
+
 void layout_schema_init(const char *root)
 {
     char base[480];
@@ -321,6 +329,8 @@ void layout_schema_init(const char *root)
     else
         sal_snprintf(base, sizeof base, "std/layout");
     arena_t *arena = arena_new(1 << 19);
+    if (!g_schema_arena) atexit(schema_arena_shutdown);
+    g_schema_arena = arena;
     logger_t *log = logger_new(stderr, LOG_OFF, false);
     langpack_t *pack = langpack_load("en");
     const char *files[SCHEMA_MAX_ELEMS];

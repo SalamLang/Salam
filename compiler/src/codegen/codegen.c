@@ -442,6 +442,8 @@ codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
     out->c_src = cg_tidy(a, sb_cstr(&c));
     sb_free(&h);
     sb_free(&c);
+    sb_free(&lamd);
+    sb_free(&lamf);
     LOG_I(log, PH_CODEGEN, "generated %zu bytes of C", strlen(out->c_src));
     return out;
 }

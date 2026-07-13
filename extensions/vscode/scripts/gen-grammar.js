@@ -486,7 +486,6 @@ const grammar = {
     },
     punctuation: {
       patterns: [
-        { name: "punctuation.terminator.statement.salam", match: ";" },
         { name: "punctuation.separator.salam", match: "[,:]" },
         { name: "punctuation.accessor.salam", match: "\\." },
         { name: "meta.brace.round.salam", match: "[()]" },

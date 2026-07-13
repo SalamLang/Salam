@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "parser/parser_internal.h"
+#include "parser/parser_migrate_dump.h"
 
 static ast_node_t *parse_extern_func(parser_t *p);
 static ast_node_t *parse_extern_var(parser_t *p);
@@ -124,7 +125,10 @@ static ast_node_t *parse_extern_func(parser_t *p)
         } while (p_match(p, TK_COMMA));
     }
     p_expect(p, TK_RPAREN, "')' after parameters");
-    if (p_at(p, TK_IDENT) || p_at(p, TK_KW_FUNC)) n->type = parse_type(p);
+    if (p_at(p, TK_IDENT) || p_at(p, TK_KW_FUNC)) {
+        migrate_dump_colon(p);
+        n->type = parse_type(p);
+    }
 
     if (p_at(p, TK_COLON))
         n->a = parse_block(p);

@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "parser/parser_internal.h"
+#include "parser/parser_migrate_dump.h"
 
 static void fill_block_body(parser_t *p, ast_node_t *n);
 static ast_node_t *parse_print_stmt(parser_t *p);
@@ -292,15 +293,25 @@ static ast_node_t *parse_for_clause(parser_t *p)
     return parse_expr(p);
 }
 
+/* TEMPORARY (migration): accept the old ';' separator alongside the new ','
+ * one so the corpus can be migrated incrementally; removed once every
+ * for-loop in the tree uses ','. */
+static void p_expect_for_sep(parser_t *p, const char *what)
+{
+    if (p_match(p, TK_COMMA)) return;
+    migrate_dump_comma(p);
+    p_expect(p, TK_STMT_END, what);
+}
+
 static ast_node_t *parse_for(parser_t *p)
 {
     P_RULE(p, "for_stmt");
     ast_node_t *n = p_mk(p, AST_FOR);
     p_advance(p);
-    if (!p_at(p, TK_STMT_END)) n->a = parse_for_clause(p);
-    p_expect(p, TK_STMT_END, "';' after for-init");
-    if (!p_at(p, TK_STMT_END)) n->b = parse_cond_expr(p);
-    p_expect(p, TK_STMT_END, "';' after for-condition");
+    if (!p_at(p, TK_STMT_END) && !p_at(p, TK_COMMA)) n->a = parse_for_clause(p);
+    p_expect_for_sep(p, "',' after for-init");
+    if (!p_at(p, TK_STMT_END) && !p_at(p, TK_COMMA)) n->b = parse_cond_expr(p);
+    p_expect_for_sep(p, "',' after for-condition");
     if (!p_at(p, TK_COLON)) n->c = parse_for_clause(p);
     n->d = parse_block(p);
     p_fin(p, n);

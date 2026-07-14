@@ -4,7 +4,12 @@
 set -u
 . "$(dirname "$0")/lib.sh"
 salam_ensure_compiler --quiet
-WORK=tests/.work
+# Scratch/build output goes on the native filesystem, not the Windows-mounted
+# drive this repo lives on: DrvFS I/O latency (and contention under parallel
+# load) dominates wall-clock time otherwise. Override WORK to opt back into
+# the old in-tree location if needed.
+WORK="${WORK:-${TMPDIR:-/tmp}/salam-run-tests-work}"
+rm -rf "$WORK"
 mkdir -p "$WORK"
 pass=0
 fail=0

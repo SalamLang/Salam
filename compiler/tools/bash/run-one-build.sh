@@ -15,6 +15,12 @@ exp="$6"
 shift 6
 if [ "$#" -eq 1 ] && [ "$1" = "-" ]; then shift; fi
 
+# Resolve to absolute paths up front so the cd below (needed to isolate each
+# job's generated salam_mod_*.c/.h in its own dir) can't turn an
+# already-absolute path into a bogus nested one via naive concatenation.
+case "$f" in /*) : ;; *) f="$(pwd)/$f" ;; esac
+case "$WORK" in /*) : ;; *) WORK="$(pwd)/$WORK" ;; esac
+
 jobid=$(echo "$label" | tr '/ ' '__')
 jobdir="$WORK/job_${jobid}_$$"
 mkdir -p "$jobdir"
@@ -22,7 +28,7 @@ exe="$WORK/exe_$jobid.exe"
 rm -f "$exe"
 
 build_once() {
-    (cd "$jobdir" && "$SALAM_BIN" build "$OLDPWD/$f" --output="$OLDPWD/$exe" \
+    (cd "$jobdir" && "$SALAM_BIN" build "$f" --output="$exe" \
         --no-color --log-level=error --lang="$lang" "$@") >/dev/null 2>&1
 }
 

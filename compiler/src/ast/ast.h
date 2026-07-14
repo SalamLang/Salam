@@ -86,6 +86,11 @@ struct ast_node {
     bool is_dyn;
     bool is_ref;
     bool is_pub;
+    bool is_inline;
+    bool is_noinline;
+    bool is_pure;
+    bool is_noret;
+    bool is_deprecated;
     bool is_slice;
     ast_node_t *type;
     ast_node_t *a, *b, *c, *d;

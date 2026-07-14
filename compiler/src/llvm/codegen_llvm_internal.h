@@ -47,6 +47,20 @@ typedef struct {
     const char *gref;
 } lstr_t;
 
+typedef enum {
+    LL_H_SUBSTR,
+    LL_H_STRCAT,
+    LL_H_ISWS,
+    LL_H_TRIM,
+    LL_H_STRHASH,
+    LL_H_INTHASH,
+    LL_H_I64STR,
+    LL_H_U64STR,
+    LL_H_F64STR,
+    LL_H_CHARSTR,
+    LL_H_COUNT
+} ll_helper_t;
+
 typedef struct {
     arena_t *a;
     logger_t *log;
@@ -96,6 +110,8 @@ typedef struct {
     const char *triple;
     const char *usize;
     int ptr_bits;
+    sb_t *hg;
+    bool hneed[LL_H_COUNT];
 } ll_t;
 
 SAL_INLINE bool ll_is_str(const char *ts)
@@ -238,5 +254,7 @@ const char *ll_debug_subprogram(ll_t *ll, const char *name, unsigned line);
 const char *ll_debug_location(ll_t *ll, unsigned line, unsigned col);
 
 void ll_debug_finalize(ll_t *ll);
+
+void ll_need(ll_t *ll, ll_helper_t which);
 
 #endif /* SALAM_LLVM_CODEGEN_LLVM_INTERNAL_H */

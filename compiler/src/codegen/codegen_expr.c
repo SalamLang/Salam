@@ -138,7 +138,8 @@ static const char *cg_dyn_box(cg_t *cg, ast_node_t *n)
     const char *cC = cg_cident(cg, concrete);
     int t = ++cg->tmpn;
     return cg_fmt(cg,
-                  "({ %s* __dp%d = (%s*)salam_alloc(sizeof(%s)); *__dp%d = (%s); "
+                  "({ %s* __dp%d = (%s*)" SALAM_MEM_ALLOC "((uint64_t)sizeof(%s)); "
+                  "*__dp%d = (%s); "
                   "(_Salam_dyn_%s){ (void*)__dp%d, &_Salam_vtbl_%s_%s }; })",
                   cC, t, cC, cC, t, cg_expr(cg, n->a), cI, t, cI, cC);
 }
@@ -385,7 +386,7 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
     case AST_CALL:
         return cg_call(cg, n);
     case AST_MEMBER: {
-        if (n->a && n->a->kind == AST_IDENTIFIER) {
+        if (n->a && n->a->kind == AST_IDENTIFIER && !local_known(cg, n->a->name)) {
             symbol_t *e = scope_lookup(cg->sem->global, n->a->name);
             if (e && e->kind == SYM_ENUM)
                 return cg_fmt(cg, "%s_%s", cg_cident(cg, e->name),

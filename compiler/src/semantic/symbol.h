@@ -95,6 +95,8 @@ symbol_t *scope_lookup_local(scope_t *s, const char *name);
 
 symbol_t *scope_lookup(scope_t *s, const char *name);
 
+symbol_t *scope_lookup_where(scope_t *s, const char *name, scope_t **where);
+
 const char *mangle_func(arena_t *a, const char *struct_name, const char *fn,
                         const vec_t *param_types);
 

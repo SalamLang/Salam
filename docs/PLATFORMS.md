@@ -113,8 +113,8 @@ can never block the release of the core 64-bit platforms.
 
 ### Why not embedded LLVM everywhere on 32-bit?
 
-- **Linux i686 / ARM**: distro packages ship `llvm-18-dev` for the host
-  (64-bit) only; there is no ready 32-bit/cross static LLVM-18 to embed in CI.
+- **Linux i686 / ARM**: distro packages ship `llvm-22-dev` for the host
+  (64-bit) only; there is no ready 32-bit/cross static LLVM-22 to embed in CI.
   The C backend covers these fully.
 - **Windows i686**: MSYS2 _does_ package `mingw-w64-i686-llvm`, so the job
   attempts an embedded-LLVM static build. Linking the **full static LLVM** can

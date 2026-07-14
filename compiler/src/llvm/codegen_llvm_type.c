@@ -147,9 +147,8 @@ const char *ll_struct_ltype(ll_t *ll, const char *name)
     return r;
 }
 
-symbol_t *ll_sym(ll_t *ll, const char *name)
+static symbol_t *ll_sym_plain(ll_t *ll, const char *name)
 {
-    if (!name) return NULL;
     symbol_t *s = scope_lookup(ll->sem->global, name);
     if (!s && ll->pkg_scope) s = scope_lookup_local(ll->pkg_scope, name);
 
@@ -160,6 +159,27 @@ symbol_t *ll_sym(ll_t *ll, const char *name)
             if (pk && pk->members) s = scope_lookup_local(pk->members, name);
         }
     }
+    return s;
+}
+
+static symbol_t *ll_sym_qualified(ll_t *ll, const char *name)
+{
+    const char *us = strchr(name, '_');
+    for (; us; us = strchr(us + 1, '_')) {
+        symbol_t *s = ll_sym_plain(ll, us + 1);
+        if (s && s->type) {
+            const char *ts = type_to_string(ll->sem->tc, s->type);
+            if (ts && !strcmp(ts, name)) return s;
+        }
+    }
+    return NULL;
+}
+
+symbol_t *ll_sym(ll_t *ll, const char *name)
+{
+    if (!name) return NULL;
+    symbol_t *s = ll_sym_plain(ll, name);
+    if (!s && strchr(name, '_')) s = ll_sym_qualified(ll, name);
     return s;
 }
 

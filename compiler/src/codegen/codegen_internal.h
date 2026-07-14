@@ -31,6 +31,7 @@ typedef struct {
     int indent;
     vec_t locals;
     symbol_t *cur_struct;
+    scope_t *cur_fn_home;
     bool safe;
     bool debug_info;
     const char *src_path;

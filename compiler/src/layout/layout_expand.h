@@ -20,8 +20,9 @@
 #include "logger/logger.h"
 #include "langpack/langpack.h"
 #include "ast/ast.h"
+#include "condcomp/condcomp.h"
 
 size_t layout_expand(arena_t *a, logger_t *log, const langpack_t *pack,
-                     ast_node_t *program, const char *base_dir);
+                     ast_node_t *program, const char *base_dir, const cc_table_t *cc);
 
 #endif /* SALAM_DRIVER_LAYOUT_EXPAND_H */

@@ -128,6 +128,30 @@ module_t *find_module(interp_t *I, const char *name)
     return NULL;
 }
 
+value_t *find_extern_fn(interp_t *I, const char *name)
+{
+    {
+        size_t i = 0;
+        for (; i < I->extern_fns.len; i++) {
+            value_t *v = (value_t *)I->extern_fns.data[i];
+            if (v->as.fn->fn->name && strcmp(v->as.fn->fn->name, name) == 0) return v;
+        }
+    }
+    return NULL;
+}
+
+ast_node_t *find_extern_decl(interp_t *I, const char *name)
+{
+    {
+        size_t i = 0;
+        for (; i < I->extern_decls.len; i++) {
+            ast_node_t *f = (ast_node_t *)I->extern_decls.data[i];
+            if (f->name && strcmp(f->name, name) == 0) return f;
+        }
+    }
+    return NULL;
+}
+
 ast_node_t *find_impl_method(interp_t *I, const char *typestr, const char *method,
                              size_t nargs)
 {
@@ -173,6 +197,53 @@ ast_node_t *struct_method_arity(ast_node_t *sdef, const char *name, size_t npara
     return NULL;
 }
 
+typedef struct {
+    ast_node_t *def;
+    env_t *env;
+} def_env_entry_t;
+
+static void register_def_env_one(interp_t *I, ast_node_t *def, env_t *env)
+{
+    def_env_entry_t *e = (def_env_entry_t *)arena_alloc(I->a, sizeof *e);
+    e->def = def;
+    e->env = env;
+    vec_push(I->a, &I->def_envs, e);
+}
+
+void register_method_envs(interp_t *I, ast_node_t *def, env_t *env)
+{
+    register_def_env_one(I, def, env);
+    size_t i = 0;
+    for (; i < def->list.len; i++) {
+        ast_node_t *m = (ast_node_t *)def->list.data[i];
+        if (m->kind != AST_FUNC_DEF) continue;
+        register_def_env_one(I, m, env);
+    }
+}
+
+env_t *find_def_env(interp_t *I, ast_node_t *def)
+{
+    size_t i = 0;
+    for (; i < I->def_envs.len; i++) {
+        def_env_entry_t *e = (def_env_entry_t *)I->def_envs.data[i];
+        if (e->def == def) return e->env;
+    }
+    return NULL;
+}
+
+static void register_extern_decl(interp_t *I, env_t *env, ast_node_t *d)
+{
+    if (d->a) {
+        value_t cl = mk_closure(I, d, env);
+        value_t *box = (value_t *)arena_alloc(I->a, sizeof *box);
+        *box = cl;
+        vec_push(I->a, &I->extern_fns, box);
+        if (d->name && !env_find_local(env, d->name)) env_define(I, env, d->name, cl);
+    } else {
+        vec_push(I->a, &I->extern_decls, d);
+    }
+}
+
 static void collect_decls(interp_t *I, ast_node_t *program)
 {
     {
@@ -181,17 +252,22 @@ static void collect_decls(interp_t *I, ast_node_t *program)
             ast_node_t *d = (ast_node_t *)program->list.data[i];
             switch (d->kind) {
             case AST_FUNC_DEF:
-                if (d->is_extern) break;
+                if (d->is_extern) {
+                    register_extern_decl(I, I->globals, d);
+                    break;
+                }
                 vec_push(I->a, &I->funcs, d);
                 break;
             case AST_STRUCT_DEF:
                 vec_push(I->a, &I->structs, d);
+                if (!d->synthetic) register_method_envs(I, d, I->globals);
                 break;
             case AST_ENUM_DEF:
                 vec_push(I->a, &I->enums, d);
                 break;
             case AST_IMPL_DEF:
                 vec_push(I->a, &I->impls, d);
+                if (!d->synthetic) register_method_envs(I, d, I->globals);
                 break;
 
             case AST_CONST_DECL:
@@ -224,19 +300,26 @@ static void collect_module_funcs(interp_t *I, module_t *mod, ast_node_t *prog)
             ast_node_t *d = (ast_node_t *)prog->list.data[i];
             switch (d->kind) {
             case AST_FUNC_DEF:
-                if (d->is_extern) break;
+                if (d->is_extern) {
+                    register_extern_decl(I, mod->env, d);
+                    break;
+                }
                 if (d->name && !env_find_local(mod->env, d->name))
                     env_define(I, mod->env, d->name, mk_closure(I, d, mod->env));
                 break;
 
             case AST_STRUCT_DEF:
-                if (!find_struct(I, d->name)) vec_push(I->a, &I->structs, d);
+                if (!find_struct(I, d->name)) {
+                    vec_push(I->a, &I->structs, d);
+                    if (!d->synthetic) register_method_envs(I, d, mod->env);
+                }
                 break;
             case AST_ENUM_DEF:
                 if (!find_enum(I, d->name)) vec_push(I->a, &I->enums, d);
                 break;
             case AST_IMPL_DEF:
                 vec_push(I->a, &I->impls, d);
+                if (!d->synthetic) register_method_envs(I, d, mod->env);
                 break;
             default:
                 break;
@@ -318,6 +401,40 @@ void build_modules(interp_t *I, ast_node_t *program)
     }
 }
 
+/*
+ * Generic struct/impl instantiations (e.g. HashMap<str,str>) are deep-cloned
+ * by sema (g_instantiate_struct) into whichever file's AST happened to be
+ * under analysis at instantiation time, which is not necessarily the file
+ * that defines the generic template (e.g. std/collections). Their methods
+ * still reference that template's own package-level imports, so they must
+ * run with the TEMPLATE's env, not the instantiating file's env.
+ */
+static void fixup_generic_envs_in(interp_t *I, vec_t *defs)
+{
+    size_t i = 0;
+    for (; i < defs->len; i++) {
+        ast_node_t *d = (ast_node_t *)defs->data[i];
+        if (!d->synthetic || !d->name || find_def_env(I, d)) continue;
+        symbol_t *sym = I->sem ? scope_lookup(I->sem->global, d->name) : NULL;
+        if (!sym || !sym->generic_base) continue;
+        size_t j = 0;
+        for (; j < defs->len; j++) {
+            ast_node_t *bd = (ast_node_t *)defs->data[j];
+            if (bd == d || bd->synthetic || !bd->name) continue;
+            if (strcmp(bd->name, sym->generic_base) != 0) continue;
+            env_t *base_env = find_def_env(I, bd);
+            if (base_env) register_method_envs(I, d, base_env);
+            break;
+        }
+    }
+}
+
+static void fixup_generic_envs(interp_t *I)
+{
+    fixup_generic_envs_in(I, &I->structs);
+    fixup_generic_envs_in(I, &I->impls);
+}
+
 int interp_run(arena_t *a, logger_t *log, ast_node_t *program, sema_result_t *sem,
                const char *entry, const interp_options_t *opts)
 {
@@ -341,6 +458,9 @@ int interp_run(arena_t *a, logger_t *log, ast_node_t *program, sema_result_t *se
     vec_init(&I.structs);
     vec_init(&I.enums);
     vec_init(&I.modules);
+    vec_init(&I.extern_fns);
+    vec_init(&I.extern_decls);
+    vec_init(&I.def_envs);
     if (setjmp(I.on_error)) {
         if (I.have_errspan)
             LOG_E(log, PH_DRIVER, i18n_tr("runtime error at line %u: %s"),
@@ -352,6 +472,7 @@ int interp_run(arena_t *a, logger_t *log, ast_node_t *program, sema_result_t *se
     }
     collect_decls(&I, program);
     build_modules(&I, program);
+    fixup_generic_envs(&I);
     ast_node_t *main_fn = find_func(&I, entry, (size_t)-1);
     if (!main_fn) {
         LOG_E(log, PH_DRIVER, i18n_tr("no entry point: define a '%s' function"), entry);

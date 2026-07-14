@@ -90,6 +90,8 @@ void p_comma_list(parser_t *p, ast_node_t *parent, token_kind_t close, p_elem_fn
 
 ast_node_t *parse_expr(parser_t *p);
 
+ast_node_t *parse_cond_expr(parser_t *p);
+
 ast_node_t *parse_primary(parser_t *p);
 
 ast_node_t *parse_type(parser_t *p);

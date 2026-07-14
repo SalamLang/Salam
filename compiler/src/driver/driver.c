@@ -33,7 +33,7 @@
 #include "ast/ast.h"
 #include "semantic/sema.h"
 #include "interp/interp.h"
-#include "preproc/preproc.h"
+#include "condcomp/condcomp.h"
 #include "xml/xml.h"
 #include "i18n/i18n.h"
 #include "layout/schema.h"
@@ -232,12 +232,13 @@ static bool file_has_entry(arena_t *a, langpack_t *pack, const char *entry,
     source_file_t *src = source_load(a, path);
     bool found = false;
     if (src) {
-        src = preproc_source(a, quiet, src, NULL, 0);
         token_stream_t *toks = NULL;
         lexer_run(a, quiet, pack, src, &toks);
         ast_node_t *program = NULL;
         parser_run(a, quiet, toks, &program);
         if (program) {
+            cc_table_t *cc = cc_table_build(a, NULL, NULL, 0);
+            cc_prune_program(a, quiet, path, cc, program);
             {
                 size_t i = 0;
                 for (; i < program->list.len; i++) {
@@ -410,14 +411,16 @@ static int driver_interp(options_t *opt)
         logger_free(log);
         return 2;
     }
-    src = preproc_source(arena, log, src, opt->defines, opt->ndefines);
     logger_set_diag_source(log, src->text, src->len, opt->diag_style, opt->diag_format);
     const langpack_t *modpack = langpack_detect(arena, src, pack);
     token_stream_t *toks = NULL;
     bool lok = lexer_run(arena, log, modpack, src, &toks);
     ast_node_t *program = NULL;
     bool pok = parser_run(arena, log, toks, &program);
-    sema_result_t *sr = sema_run(arena, log, program, src->path, langpack_code(modpack));
+    cc_table_t *cc = cc_table_build(arena, NULL, opt->defines, opt->ndefines);
+    if (!cc_prune_program(arena, log, src->path, cc, program)) pok = false;
+    sema_result_t *sr =
+        sema_run(arena, log, program, src->path, langpack_code(modpack), cc);
     if (!lok || !pok || !sr->ok) {
         LOG_E(log, PH_DRIVER, i18n_tr("build aborted: errors in source"));
         arena_free(arena);
@@ -674,8 +677,6 @@ int driver_main(int argc, char **argv)
         rc = 2;
         goto cleanup;
     }
-    src = preproc_source(arena, log, src, opt.defines, opt.ndefines);
-
     logger_set_diag_source(log, src->text, src->len, opt.diag_style, opt.diag_format);
     LOG_I(log, PH_DRIVER, "compiling %s (lang=%s, %zu bytes)", src->path, opt.lang,
           src->len);
@@ -691,8 +692,10 @@ int driver_main(int argc, char **argv)
     if (opt.emit_ast_xml || opt.emit_symbol_xml) {
         ast_node_t *program = NULL;
         bool pok = parser_run(arena, log, toks, &program);
+        cc_table_t *cc = cc_table_build(arena, NULL, opt.defines, opt.ndefines);
+        if (!cc_prune_program(arena, log, src->path, cc, program)) pok = false;
         sema_result_t *sr =
-            sema_run(arena, log, program, src->path, langpack_code(modpack));
+            sema_run(arena, log, program, src->path, langpack_code(modpack), cc);
         if (opt.emit_ast_xml) {
             int xrc = emit_ast_xml(log, program, opt.xml_out);
             if (xrc != 0) rc = xrc;

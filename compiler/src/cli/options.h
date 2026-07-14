@@ -73,6 +73,7 @@ typedef struct {
     int llvm_emit;
     bool llvm_verify;
     const char *llvm_target;
+    bool llvm_native_cpu;
 } options_t;
 
 bool cli_parse(int argc, char **argv, options_t *out);

@@ -39,13 +39,23 @@ const char *func_signature(cg_t *cg, ast_node_t *fn, symbol_t *owner, func_sig_t
             ? cg_mangle_in(cg, "g", owner ? owner->name : NULL, fn->name, &sig->params)
             : cg_mangle(cg, owner ? owner->name : NULL, fn->name, &sig->params);
     if (is_main) return "int main(int argc, char** argv)";
-    bool exported = (owner != NULL || fn->is_extern || fn->is_pub) && !is_instance;
+    bool pkgmod = cg->pkg && strcmp(cg->pkg, "main") != 0;
+    bool exported =
+        (owner != NULL || fn->is_extern || fn->is_pub || pkgmod) && !is_instance;
+    bool inl =
+        fn->is_inline && !fn->is_extern && owner == NULL && (fn->is_pub || !pkgmod);
     sb_t b;
     sb_init(&b);
-    if (is_instance)
+    if (is_instance || inl)
         sb_puts(&b, "static inline ");
     else if (!exported)
         sb_puts(&b, "static ");
+    if (!fn->is_extern) {
+        if (fn->is_noinline) sb_puts(&b, "SALAM_NOINLINE ");
+        if (fn->is_pure) sb_puts(&b, "SALAM_PURE ");
+        if (fn->is_noret) sb_puts(&b, "SALAM_NORET ");
+        if (fn->is_deprecated) sb_puts(&b, "SALAM_DEPRECATED ");
+    }
     sb_puts(&b, cg_fmt(cg, "%s %s(", ret, name));
     bool first = true;
     if (owner) {
@@ -87,7 +97,10 @@ const char *cg_extern_proto(cg_t *cg, ast_node_t *fn, func_sig_t *sig)
     const char *ret = cg_ctype(cg, type_to_string(cg->sem->tc, sig->ret));
     sb_t b;
     sb_init(&b);
-    sb_puts(&b, cg_fmt(cg, "extern %s %s(", ret, fn->name));
+    sb_puts(&b, "extern ");
+    if (fn->is_pure) sb_puts(&b, "SALAM_PURE ");
+    if (fn->is_noret) sb_puts(&b, "SALAM_NORET ");
+    sb_puts(&b, cg_fmt(cg, "%s %s(", ret, fn->name));
     bool first = true;
     {
         size_t i = 0;
@@ -124,6 +137,7 @@ void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
     bool is_main = (!owner && strcmp(fn->name, cg->entry) == 0);
     LOG_T(cg->log, PH_CODEGEN, "emit function %s%s", owner ? owner->name : "", fn->name);
     cg->cur_struct = owner;
+    cg->cur_fn_home = fsym ? fsym->home : NULL;
     cg->cur_sret = sig_is_sret(sig, is_main);
     cg->locals.len = 0;
     if (owner) local_add(cg, "this");
@@ -152,6 +166,7 @@ void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
     cg_line(cg, "}");
     sb_putc(cg->c, '\n');
     cg->cur_struct = NULL;
+    cg->cur_fn_home = NULL;
     cg->cur_sret = false;
     cg->fn_defers = saved_defers;
 }

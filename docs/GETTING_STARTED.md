@@ -103,7 +103,7 @@ salam build app.salam --keep-c
 # compile to an object file only
 salam obj app.salam
 
-# pass a preprocessor define
+# pass a compile-time flag (for conditional compilation)
 salam build app.salam -DDEBUG
 ```
 

@@ -20,6 +20,9 @@
 static ast_node_t *parse_program(parser_t *p);
 static ast_node_t *parse_import_entry(parser_t *p);
 static void parse_imports_into(parser_t *p, ast_node_t *prog);
+static void parse_top_level_item_into(parser_t *p, ast_node_t *dest, vec_t *pending);
+static ast_node_t *parse_toplevel_if(parser_t *p);
+static ast_node_t *parse_toplevel_if_tail(parser_t *p);
 
 static void attach_pending(parser_t *p, ast_node_t *target, vec_t *pending)
 {
@@ -75,6 +78,90 @@ static bool parse_package(parser_t *p, ast_node_t *prog, vec_t *pending)
     return true;
 }
 
+static void parse_top_level_item_into(parser_t *p, ast_node_t *dest, vec_t *pending)
+{
+    p_skip_terminators(p);
+    while (try_link_attr(p, dest)) {
+    }
+    parse_metas(p, pending);
+    if (p_at_eof(p)) return;
+    if (p_at(p, TK_KW_IMPORT)) {
+        pending->len = 0;
+        parse_imports_into(p, dest);
+        return;
+    }
+    if (p_at(p, TK_KW_EXTERN)) {
+        pending->len = 0;
+        parse_extern_into(p, dest);
+        return;
+    }
+    if (try_link_directive(p, dest)) {
+        pending->len = 0;
+        return;
+    }
+    if (p_at(p, TK_KW_IF)) {
+        pending->len = 0;
+        ast_add(p->a, dest, parse_toplevel_if(p));
+        return;
+    }
+    ast_node_t *def = parse_top_level(p);
+    if (def) {
+        attach_pending(p, def, pending);
+        ast_add(p->a, dest, def);
+    }
+    pending->len = 0;
+    if (p->panic) p_sync(p);
+}
+
+static void fill_toplevel_block_body(parser_t *p, ast_node_t *n)
+{
+    vec_t pending;
+    vec_init(&pending);
+    p_skip_terminators(p);
+    while (!p_at(p, TK_KW_END) && !p_at(p, TK_KW_ELSE) && !p_at_eof(p)) {
+        p_skip_terminators(p);
+        if (p_at(p, TK_KW_END) || p_at(p, TK_KW_ELSE) || p_at_eof(p)) break;
+        parse_top_level_item_into(p, n, &pending);
+        if (p->panic) p_sync(p);
+    }
+}
+
+static ast_node_t *parse_toplevel_if_tail(parser_t *p)
+{
+    if (!p_recurse_enter(p, "if/else chain nested too deeply")) return p_mk(p, AST_IF);
+    ast_node_t *n = p_mk(p, AST_IF);
+    n->a = parse_cond_expr(p);
+    n->b = p_mk(p, AST_BLOCK);
+    p_expect(p, TK_COLON, "':' after if condition");
+    fill_toplevel_block_body(p, n->b);
+    p_fin(p, n->b);
+    p_skip_terminators(p);
+    if (p_match(p, TK_KW_ELSE)) {
+        p_match(p, TK_KW_IF);
+        if (!p_at(p, TK_COLON)) {
+            n->c = parse_toplevel_if_tail(p);
+        } else {
+            n->c = p_mk(p, AST_BLOCK);
+            p_expect(p, TK_COLON, "':' after else");
+            fill_toplevel_block_body(p, n->c);
+            p_expect(p, TK_KW_END, "'end' to close if");
+            p_fin(p, n->c);
+        }
+    } else {
+        p_expect(p, TK_KW_END, "'end' to close if");
+    }
+    p_fin(p, n);
+    p_recurse_leave(p);
+    return n;
+}
+
+static ast_node_t *parse_toplevel_if(parser_t *p)
+{
+    P_RULE(p, "toplevel_if_stmt");
+    p_advance(p);
+    return parse_toplevel_if_tail(p);
+}
+
 static ast_node_t *parse_program(parser_t *p)
 {
     P_RULE(p, "program");
@@ -88,34 +175,8 @@ static ast_node_t *parse_program(parser_t *p)
     }
     parse_metas(p, &pending);
     parse_package(p, prog, &pending);
-    while (!p_at_eof(p)) {
-        p_skip_terminators(p);
-        while (try_link_attr(p, prog)) {
-        }
-        parse_metas(p, &pending);
-        if (p_at_eof(p)) break;
-        if (p_at(p, TK_KW_IMPORT)) {
-            pending.len = 0;
-            parse_imports_into(p, prog);
-            continue;
-        }
-        if (p_at(p, TK_KW_EXTERN)) {
-            pending.len = 0;
-            parse_extern_into(p, prog);
-            continue;
-        }
-        if (try_link_directive(p, prog)) {
-            pending.len = 0;
-            continue;
-        }
-        ast_node_t *def = parse_top_level(p);
-        if (def) {
-            attach_pending(p, def, &pending);
-            ast_add(p->a, prog, def);
-        }
-        pending.len = 0;
-        if (p->panic) p_sync(p);
-    }
+    while (!p_at_eof(p))
+        parse_top_level_item_into(p, prog, &pending);
     p_fin(p, prog);
     return prog;
 }

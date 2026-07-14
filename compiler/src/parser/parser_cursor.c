@@ -278,28 +278,6 @@ void p_comma_list(parser_t *p, ast_node_t *parent, token_kind_t close, p_elem_fn
     } while (p_match(p, TK_COMMA));
 }
 
-/*
- * A function signature's optional return type and its block-open (or, for
- * extern declarations, the end of the declaration) both start with ':', so
- * seeing one ':' right after ')' is ambiguous:
- *   func f(): i32:      <- ':' then a return type, then the block-open ':'
- *   func f():           <- ':' is already the block-open (no return type)
- *       x: i32 = 5
- * Note a newline right after ':' does NOT produce TK_STMT_END (the lexer
- * suppresses it there so an ordinary block-open ':' can be followed by its
- * body on the next line), so that token can't be used to detect "no return
- * type" the way it can elsewhere. Instead: a return type, when present, is
- * always written on the same source line as the ':' that introduces it (as
- * in every example above); the block body's first statement, when there is
- * no return type, starts on the *next* line. So if the token right after
- * ':' is already on a later line, this ':' must be the block-opener.
- * Otherwise, tentatively parse a type and accept it as the return type only
- * if a block-open ':', a statement terminator, or EOF follows (covering
- * both a normal function body and a block-less extern declaration);
- * anything else means the parse went off the rails (e.g. the body's first
- * statement happens to start with a bare `name: type` on the very same
- * line), so roll back and treat the first ':' as the block-opener instead.
- */
 bool p_try_return_type(parser_t *p, ast_node_t **out_type)
 {
     if (!p_at(p, TK_COLON)) return false;

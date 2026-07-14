@@ -5,6 +5,8 @@
 # the same format run-tests.sh expects.
 #
 # args: <abs-salam-bin> <work-dir> <label> <salam-file> <lang> <expected-out> [extra salam-build args...]
+#
+
 set -u
 SALAM_BIN="$1"
 WORK="$2"
@@ -15,9 +17,6 @@ exp="$6"
 shift 6
 if [ "$#" -eq 1 ] && [ "$1" = "-" ]; then shift; fi
 
-# Resolve to absolute paths up front so the cd below (needed to isolate each
-# job's generated salam_mod_*.c/.h in its own dir) can't turn an
-# already-absolute path into a bogus nested one via naive concatenation.
 case "$f" in /*) : ;; *) f="$(pwd)/$f" ;; esac
 case "$WORK" in /*) : ;; *) WORK="$(pwd)/$WORK" ;; esac
 
@@ -43,14 +42,15 @@ if [ ! -x "$exe" ]; then
     exit 0
 fi
 
+want=$(tr -d '\r' <"$exp")
 got=""
 _try=1
 while [ "$_try" -le 4 ]; do
     got=$("$exe" 2>&1 | tr -d '\r')
+    if [ "$got" = "$want" ]; then break; fi
     case "$got" in *"Permission denied"* | "") sleep 1 ;; *) break ;; esac
     _try=$((_try + 1))
 done
-want=$(tr -d '\r' <"$exp")
 if [ "$got" = "$want" ]; then
     echo "PASS $label"
 else

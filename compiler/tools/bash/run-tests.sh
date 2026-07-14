@@ -4,10 +4,6 @@
 set -u
 . "$(dirname "$0")/lib.sh"
 salam_ensure_compiler --quiet
-# Scratch/build output goes on the native filesystem, not the Windows-mounted
-# drive this repo lives on: DrvFS I/O latency (and contention under parallel
-# load) dominates wall-clock time otherwise. Override WORK to opt back into
-# the old in-tree location if needed.
 WORK="${WORK:-${TMPDIR:-/tmp}/salam-run-tests-work}"
 rm -rf "$WORK"
 mkdir -p "$WORK"
@@ -21,10 +17,6 @@ case "$SALAM" in
 *) SALAM_ABS="$(pwd)/$SALAM" ;;
 esac
 
-# Run a batch of "<label>\t<file>\t<lang>\t<expected-out>\t<extra-args>" job
-# lines (one per line, tab-separated) through run-one-build.sh in parallel,
-# each in its own scratch directory, and fold the PASS/FAIL lines into the
-# running counters.
 run_batch() {
     jobs="$1"
     [ -s "$jobs" ] || return 0
@@ -33,6 +25,7 @@ run_batch() {
         IFS="	"
         set -- {}
         label="$1"; f="$2"; lang="$3"; exp="$4"; extra="$5"
+        unset IFS
         sh "'"$RUN_ONE"'" "'"$SALAM_ABS"'" "'"$WORK"'" "$label" "$f" "$lang" "$exp" $extra
     ' >"$results" 2>&1
     cat "$results"

@@ -21,7 +21,7 @@ esac
     src/core/arena.c src/core/vec.c src/core/sb.c src/core/numstr.c src/core/sal_format.c \
     src/source/source.c src/logger/logger.c src/logger/logger_emit.c src/logger/logger_level.c \
     src/xml/xml.c src/xml/xml_emit.c \
-    src/preproc/preproc.c src/preproc/preproc_cond.c \
+    src/condcomp/condcomp_table.c src/condcomp/condcomp_fold.c \
     src/token/token.c src/token/token_xml.c \
     src/langpack/langpack.c src/langpack/langpack_data.c src/langpack/langpack_lookup.c \
     src/i18n/i18n.c src/i18n/i18n_locale.c src/i18n/i18n_gettext.c src/i18n/i18n_load.c \
@@ -31,6 +31,7 @@ esac
     src/lexer/lexer_layout.c src/lexer/lexer_detect.c \
     src/ast/ast.c src/ast/ast_xml.c \
     src/parser/parser.c src/parser/parser_cursor.c \
+    src/parser/parser_migrate_dump.c \
     src/parser/parser_ffi.c src/parser/parser_type.c \
     src/parser/parser_decl.c src/parser/parser_decl_var.c \
     src/parser/parser_stmt.c \
@@ -50,7 +51,7 @@ esac
     src/llvm/codegen_llvm_expr.c src/llvm/codegen_llvm_stmt.c src/llvm/codegen_llvm_decl.c \
     src/llvm/codegen_llvm_debug.c src/llvm/llvm_native.c \
     src/interp/interp.c src/interp/interp_builtin.c src/interp/interp_value.c \
-    src/interp/interp_expr.c src/interp/interp_stmt.c \
+    src/interp/interp_expr.c src/interp/interp_stmt.c src/interp/interp_ffi.c \
     src/layout/registry.c src/layout/layout_gen.c src/layout/layout_gen_element.c \
     src/layout/layout_gen_value.c src/layout/schema.c src/layout/layout_expand.c \
     src/fmt/fmt.c src/fmt/fmt_rules.c \

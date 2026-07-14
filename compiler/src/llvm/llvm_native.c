@@ -27,13 +27,28 @@
 #  endif
 #endif
 
-#ifdef SALAM_HAVE_EMBED_MUSL
+#if defined(SALAM_HAVE_EMBED_MUSL) || defined(SALAM_HAVE_EMBED_MUSL_AARCH64) ||          \
+    defined(SALAM_HAVE_EMBED_MUSL_I686) || defined(SALAM_HAVE_EMBED_MUSL_ARM) ||         \
+    defined(SALAM_HAVE_EMBED_MINGW)
 #  include "driver/embed_sysroot.h"
+#endif
+#ifdef SALAM_HAVE_EMBED_MUSL /* x86_64 host musl (kept name for compatibility) */
 extern const unsigned char salam_embed_musl[];
 extern const unsigned char salam_embed_musl_end[];
 #endif
+#ifdef SALAM_HAVE_EMBED_MUSL_AARCH64
+extern const unsigned char salam_embed_musl_aarch64[];
+extern const unsigned char salam_embed_musl_aarch64_end[];
+#endif
+#ifdef SALAM_HAVE_EMBED_MUSL_I686
+extern const unsigned char salam_embed_musl_i686[];
+extern const unsigned char salam_embed_musl_i686_end[];
+#endif
+#ifdef SALAM_HAVE_EMBED_MUSL_ARM
+extern const unsigned char salam_embed_musl_arm[];
+extern const unsigned char salam_embed_musl_arm_end[];
+#endif
 #ifdef SALAM_HAVE_EMBED_MINGW
-#  include "driver/embed_sysroot.h"
 extern const unsigned char salam_embed_mingw[];
 extern const unsigned char salam_embed_mingw_end[];
 #endif
@@ -317,6 +332,58 @@ static int find_compiler_rt(const char *rtarch, char *out, size_t n)
 #    endif
 }
 
+/*
+ * Materialize the embedded musl sysroot for `arch` (x86_64/aarch64/i386/arm), if
+ * one was compiled into this salam. Each arch is a separate embedded tar with its
+ * own symbol; only the ones staged at build time are present. Returns 1 and fills
+ * `sr` on success, 0 otherwise. `arch` matches native_link_elf's naming, while the
+ * cache name uses the canonical musl toolchain triple.
+ */
+static int salam_try_embed_musl(logger_t *log, const char *arch, char *sr, size_t srn)
+{
+    (void)log;
+    (void)arch;
+    (void)sr;
+    (void)srn;
+#    ifdef SALAM_HAVE_EMBED_MUSL
+    if (strcmp(arch, "x86_64") == 0 &&
+        salam_materialize_sysroot("x86_64-linux-musl", salam_embed_musl,
+                                  (size_t)(salam_embed_musl_end - salam_embed_musl), sr,
+                                  srn)) {
+        LOG_I(log, PH_DRIVER, "using embedded musl sysroot: %s", sr);
+        return 1;
+    }
+#    endif
+#    ifdef SALAM_HAVE_EMBED_MUSL_AARCH64
+    if (strcmp(arch, "aarch64") == 0 &&
+        salam_materialize_sysroot(
+            "aarch64-linux-musl", salam_embed_musl_aarch64,
+            (size_t)(salam_embed_musl_aarch64_end - salam_embed_musl_aarch64), sr, srn)) {
+        LOG_I(log, PH_DRIVER, "using embedded musl sysroot: %s", sr);
+        return 1;
+    }
+#    endif
+#    ifdef SALAM_HAVE_EMBED_MUSL_I686
+    if (strcmp(arch, "i386") == 0 &&
+        salam_materialize_sysroot(
+            "i686-linux-musl", salam_embed_musl_i686,
+            (size_t)(salam_embed_musl_i686_end - salam_embed_musl_i686), sr, srn)) {
+        LOG_I(log, PH_DRIVER, "using embedded musl sysroot: %s", sr);
+        return 1;
+    }
+#    endif
+#    ifdef SALAM_HAVE_EMBED_MUSL_ARM
+    if (strcmp(arch, "arm") == 0 &&
+        salam_materialize_sysroot(
+            "arm-linux-musleabihf", salam_embed_musl_arm,
+            (size_t)(salam_embed_musl_arm_end - salam_embed_musl_arm), sr, srn)) {
+        LOG_I(log, PH_DRIVER, "using embedded musl sysroot: %s", sr);
+        return 1;
+    }
+#    endif
+    return 0;
+}
+
 static int native_link_elf(logger_t *log, const char *obj, const char *out,
                            const codegen_llvm_options_t *opts)
 {
@@ -325,7 +392,7 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
     char sr[1024], crt1[1200], crti[1200], crtn[1200], Lsr[1100], rt[1200];
     char userlibs[16][160];
     const char *argv[64];
-    int n = 0, i, rc, have_rt;
+    int n = 0, i, rc, have_rt, have_gcc = 0;
     FILE *f;
 
     if (strstr(t, "aarch64") || strstr(t, "arm64")) {
@@ -336,6 +403,10 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
         arch = "i386";
         emul = "elf_i386";
         rtarch = "i386";
+    } else if (strstr(t, "arm")) { /* 32-bit arm (armhf / armv7, eabi) */
+        arch = "arm";
+        emul = "armelf_linux_eabi";
+        rtarch = "arm";
     } else {
         arch = "x86_64";
         emul = "elf_x86_64";
@@ -345,17 +416,7 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
     if (opts->sysroot && opts->sysroot[0]) {
         sal_snprintf(sr, sizeof sr, "%s", opts->sysroot);
     } else {
-        int got = 0;
-#    ifdef SALAM_HAVE_EMBED_MUSL
-        if (strcmp(arch, "x86_64") == 0 &&
-            salam_materialize_sysroot("x86_64-linux-musl", salam_embed_musl,
-                                      (size_t)(salam_embed_musl_end - salam_embed_musl),
-                                      sr, sizeof sr)) {
-            got = 1;
-            LOG_I(log, PH_DRIVER, "using embedded musl sysroot: %s", sr);
-        }
-#    endif
-        /* $SALAM_SYSROOTS/<arch>-linux-musl (parallel to the mingw lookup). */
+        int got = salam_try_embed_musl(log, arch, sr, sizeof sr);
         if (!got) {
             const char *env = getenv("SALAM_SYSROOTS");
             if (env && env[0]) {
@@ -392,6 +453,15 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
     } else {
         have_rt = find_compiler_rt(rtarch, rt, sizeof rt);
     }
+    {
+        char gcc[1200];
+        sal_snprintf(gcc, sizeof gcc, "%s/libgcc.a", sr);
+        f = fopen(gcc, "rb");
+        if (f) {
+            fclose(f);
+            have_gcc = 1;
+        }
+    }
 
     argv[n++] = "ld.lld";
     argv[n++] = "-m";
@@ -422,6 +492,7 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
     argv[n++] = "--start-group";
     argv[n++] = "-lc";
     if (have_rt) argv[n++] = rt;
+    if (have_gcc) argv[n++] = "-lgcc";
     argv[n++] = "--end-group";
     argv[n++] = crtn;
 
@@ -480,11 +551,6 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
         return 1;
     }
     fclose(f);
-    /* crtbegin/end + libgcc: from the sysroot's lib dir if bundled (flattened,
-     * self-contained), else the system gcc-mingw runtime dir. Probe libgcc.a,
-     * not crtbegin.o: Debian ships crtbegin.o in <sysroot>/lib but keeps
-     * libgcc.a in the separate gcc dir, so crtbegin.o alone would wrongly mark
-     * the sysroot self-contained and drop the gcc -L (breaking -lgcc). */
     sal_snprintf(gccdir, sizeof gccdir, "%s/lib", sr);
     {
         char probe[1200];
@@ -729,13 +795,32 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
             rc = 2;
             goto cleanup;
         }
-        LLVMTargetMachineRef tm =
-            LLVMCreateTargetMachine(target, triple, "", "", map_cg_level(opts->opt_level),
-                                    LLVMRelocPIC, LLVMCodeModelDefault);
+        char *host_cpu = NULL;
+        char *host_features = NULL;
+        int is_host_target =
+            !opts->target_triple || !opts->target_triple[0] ||
+            (host_triple && strcmp(opts->target_triple, host_triple) == 0);
+        if (opts->native_cpu && is_host_target) {
+            host_cpu = LLVMGetHostCPUName();
+            host_features = LLVMGetHostCPUFeatures();
+            LOG_I(log, PH_DRIVER, "tuning for host CPU: %s",
+                  host_cpu ? host_cpu : "(unknown)");
+        }
+        LLVMTargetMachineRef tm = LLVMCreateTargetMachine(
+            target, triple, host_cpu ? host_cpu : "", host_features ? host_features : "",
+            map_cg_level(opts->opt_level), LLVMRelocPIC, LLVMCodeModelDefault);
+        if (host_cpu) LLVMDisposeMessage(host_cpu);
+        if (host_features) LLVMDisposeMessage(host_features);
         if (!tm) {
             LOG_E(log, PH_DRIVER, "could not create LLVM target machine for %s", triple);
             rc = 2;
             goto cleanup;
+        }
+
+        {
+            LLVMTargetDataRef td = LLVMCreateTargetDataLayout(tm);
+            LLVMSetModuleDataLayout(mod, td);
+            LLVMDisposeTargetData(td);
         }
 
         run_opt(log, mod, tm, opts->opt_level);

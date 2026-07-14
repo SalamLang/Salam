@@ -318,13 +318,29 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
         return r;
     }
     symbol_t *fsym = scope_lookup(cg->sem->global, nm);
+    const char *home_pkg = NULL;
+    if (!fsym && cg->cur_fn_home) {
+        symbol_t *hs = scope_lookup(cg->cur_fn_home, nm);
+        if (hs && hs->kind == SYM_FUNC) {
+            fsym = hs;
+            home_pkg = hs->pkgname;
+        }
+    }
+    if (!fsym && cg->cur_struct && cg->cur_struct->home) {
+        symbol_t *hs = scope_lookup(cg->cur_struct->home, nm);
+        if (hs && hs->kind == SYM_FUNC) {
+            fsym = hs;
+            home_pkg = hs->pkgname;
+        }
+    }
     func_sig_t *sig = fsym ? pick_overload(cg, fsym, n) : NULL;
     bool is_extern_call = sig && sig->decl && sig->decl->is_extern;
     bool inst_fn = sig && sig->decl && sig->decl->synthetic;
-    const char *mangled = is_extern_call ? nm
-                          : inst_fn      ? cg_mangle_in(cg, "g", NULL, nm, &sig->params)
-                          : sig          ? cg_mangle(cg, NULL, nm, &sig->params)
-                                         : nm;
+    const char *mangled =
+        is_extern_call ? nm
+        : inst_fn      ? cg_mangle_in(cg, "g", NULL, nm, &sig->params)
+        : sig ? cg_mangle_in(cg, home_pkg ? home_pkg : cg->pkg, NULL, nm, &sig->params)
+              : nm;
     const char *args = call_args(cg, n, sig);
     if (sig && type_is_byval_agg(sig->ret)) return call_sret(cg, sig->ret, mangled, args);
     return cg_fmt(cg, "%s(%s)", mangled, args);
@@ -355,8 +371,8 @@ static const char *call_dyn(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t
     int t = ++cg->tmpn;
     const char *dynct = cg_ctype(cg, objts);
     if (!strcmp(callee->name, "free"))
-        return cg_fmt(cg, "({ %s __dv%d = (%s); salam_free(__dv%d%sdata); })", dynct, t,
-                      recv, t, acc);
+        return cg_fmt(cg, "({ %s __dv%d = (%s); " SALAM_MEM_FREE "(__dv%d%sdata); })",
+                      dynct, t, recv, t, acc);
     const char *as = call_args_lead(cg, n, NULL);
     return cg_fmt(cg, "({ %s __dv%d = (%s); __dv%d%svtable->%s(__dv%d%sdata%s); })",
                   dynct, t, recv, t, acc, cg_cident(cg, callee->name), t, acc, as);
@@ -472,11 +488,13 @@ static const char *call_impl(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_
 static const char *call_member(cg_t *cg, ast_node_t *n, ast_node_t *callee)
 {
     ast_node_t *obj = callee->a;
-    if (obj && obj->kind == AST_IDENTIFIER) {
+    if (obj && obj->kind == AST_IDENTIFIER && !local_known(cg, obj->name)) {
         symbol_t *pk = scope_lookup(cg->sem->global, obj->name);
 
         if ((!pk || pk->kind != SYM_PACKAGE) && cg->cur_struct && cg->cur_struct->home)
             pk = scope_lookup(cg->cur_struct->home, obj->name);
+        if ((!pk || pk->kind != SYM_PACKAGE) && cg->cur_fn_home)
+            pk = scope_lookup(cg->cur_fn_home, obj->name);
         if (pk && pk->kind == SYM_PACKAGE) return call_pkg(cg, n, pk, callee);
     }
     const char *objts = obj->type_str ? obj->type_str : "";

@@ -22,7 +22,7 @@
 #include "lexer/lexer.h"
 #include "parser/parser.h"
 #include "semantic/sema.h"
-#include "preproc/preproc.h"
+#include "condcomp/condcomp.h"
 #include "llvm/codegen_llvm.h"
 #include "driver/llvm_toolchain.h"
 #include "i18n/i18n.h"
@@ -113,8 +113,6 @@ static void ll_scan_links(ast_node_t *prog, const char **libs, const char **kind
     }
 }
 
-/* Returns the number of fresh imports that could NOT be enqueued because the
- * worklist is at capacity (so the caller can warn instead of silently dropping). */
 static int ll_enqueue_imports(arena_t *a, ast_node_t *prog, const char *dir,
                               const char **work, int *nwork, int cap)
 {
@@ -151,8 +149,8 @@ static int ll_enqueue_imports(arena_t *a, ast_node_t *prog, const char *dir,
 
 static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
                            const char *main_path, ast_node_t *main_prog,
-                           const char *const *defs, int ndefs, const char **libs,
-                           const char **kinds, int cap)
+                           const cc_table_t *cc, const char **libs, const char **kinds,
+                           int cap)
 {
     int n = 0;
     const char *work[256];
@@ -165,12 +163,12 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
         const char *path = work[wi];
         source_file_t *src = source_load(a, path);
         if (!src) continue;
-        src = preproc_source(a, log, src, defs, ndefs);
         const langpack_t *mp = langpack_detect(a, src, pack);
         token_stream_t *toks = NULL;
         lexer_run(a, log, mp, src, &toks);
         ast_node_t *prog = NULL;
         parser_run(a, log, toks, &prog);
+        cc_prune_program(a, log, path, cc, prog);
         {
             const char *pf[256];
             int npf = salam_package_files(a, path, pf, 256);
@@ -178,11 +176,11 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
             for (; pi < npf; pi++) {
                 source_file_t *ps = source_load(a, pf[pi]);
                 if (!ps) continue;
-                ps = preproc_source(a, log, ps, defs, ndefs);
                 token_stream_t *pt = NULL;
                 lexer_run(a, log, mp, ps, &pt);
                 ast_node_t *pp = NULL;
                 parser_run(a, log, pt, &pp);
+                cc_prune_program(a, log, pf[pi], cc, pp);
                 salam_merge_program(a, prog, pp);
             }
         }
@@ -212,7 +210,6 @@ int driver_llvm(options_t *opt)
     }
     const char *entry = langpack_entry(pack);
     salam_set_stdlib_root(opt->stdlib_path);
-    preproc_set_target(opt->llvm_target);
     if (!opt->input) {
         LOG_E(log, PH_DRIVER, i18n_tr("salam: no input file"));
         logger_free(log);
@@ -226,7 +223,6 @@ int driver_llvm(options_t *opt)
         arena_free(arena);
         return 2;
     }
-    src = preproc_source(arena, log, src, opt->defines, opt->ndefines);
     logger_set_diag_source(log, src->text, src->len, opt->diag_style, opt->diag_format);
     const char *module = module_of(arena, opt->input);
     const langpack_t *modpack = langpack_detect(arena, src, pack);
@@ -234,7 +230,10 @@ int driver_llvm(options_t *opt)
     bool lok = lexer_run(arena, log, modpack, src, &toks);
     ast_node_t *program = NULL;
     bool pok = parser_run(arena, log, toks, &program);
-    sema_result_t *sr = sema_run(arena, log, program, src->path, langpack_code(modpack));
+    cc_table_t *cc = cc_table_build(arena, opt->llvm_target, opt->defines, opt->ndefines);
+    if (!cc_prune_program(arena, log, src->path, cc, program)) pok = false;
+    sema_result_t *sr =
+        sema_run(arena, log, program, src->path, langpack_code(modpack), cc);
     if (!lok || !pok || !sr->ok) {
         LOG_E(log, PH_DRIVER, i18n_tr("build aborted: errors in source"));
         logger_free(log);
@@ -249,13 +248,14 @@ int driver_llvm(options_t *opt)
     o.debug_info = opt->debug_info;
     o.verify_module = opt->llvm_verify;
     o.target_triple = opt->llvm_target;
+    o.native_cpu = opt->llvm_native_cpu && !(opt->llvm_target && opt->llvm_target[0]);
 
     const char *link_libs[SALAM_MAX_INPUTS];
     const char *link_kinds[SALAM_MAX_INPUTS];
     char sysroot_buf[1024];
     if (o.output_mode == LLVM_OUT_EXEC) {
-        o.nlink = ll_gather_links(arena, log, pack, opt->input, program, opt->defines,
-                                  opt->ndefines, link_libs, link_kinds, SALAM_MAX_INPUTS);
+        o.nlink = ll_gather_links(arena, log, pack, opt->input, program, cc, link_libs,
+                                  link_kinds, SALAM_MAX_INPUTS);
         o.link_libs = link_libs;
         o.link_kinds = link_kinds;
         if (opt->llvm_target &&

@@ -275,6 +275,8 @@ void sema_collect(sema_t *s, ast_node_t *program)
             case AST_FUNC_DEF: {
                 symbol_t *fsym = get_or_make_func(s, s->global, d->name, SYM_FUNC);
                 if (!fsym->decl) fsym->decl = d;
+                if (!fsym->pkgname) fsym->pkgname = s->pkg;
+                if (!fsym->home) fsym->home = s->global;
                 if (d->is_pub) fsym->is_pub = true;
                 if (d->typarams.len > 0) break;
                 vec_push(s->a, &fsym->overloads, build_sig(s, d, NULL));
@@ -318,6 +320,32 @@ static func_sig_t *find_sig(symbol_t *fsym, ast_node_t *decl)
 
 static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_t *sig)
 {
+    if (fn->is_noret && sig && !sig->infer_ret && sig->ret && sig->ret->kind != TY_VOID)
+        SERR(s, 12, &fn->span,
+             "'noret' function '%s' cannot declare a return type: it never returns",
+             fn->name);
+    if (fn->is_noret && fn->is_pure)
+        SERR(s, 12, &fn->span,
+             "'%s' cannot be both 'pure' and 'noret': a pure function must return",
+             fn->name);
+    if (fn->is_pure && sig && !sig->infer_ret && sig->ret && sig->ret->kind == TY_VOID)
+        SERR(s, 12, &fn->span,
+             "'pure' function '%s' must return a value: a pure function without a "
+             "result has no effect",
+             fn->name);
+    if (fn->is_pure) {
+        size_t pi = 0;
+        for (; pi < fn->list.len; pi++) {
+            ast_node_t *prm = (ast_node_t *)fn->list.data[pi];
+            if (prm->kind == AST_PARAM && prm->is_ref) {
+                SERR(s, 12, &fn->span,
+                     "'pure' function '%s' cannot take reference parameter '%s': "
+                     "writing through it would be a side effect",
+                     fn->name, prm->name);
+                break;
+            }
+        }
+    }
     scope_t *home = NULL;
     if (!owner) {
         symbol_t *fs = scope_lookup_local(s->global, fn->name);
@@ -354,6 +382,8 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
             type_t *pt = (sig && i < sig->params.len) ? (type_t *)sig->params.data[i]
                                                       : sema_resolve_type(s, param->type);
             if (param->a->kind == AST_STRUCT_LIT && pt && pt->kind == TY_STRUCT)
+                s->expected = pt;
+            else if (param->a->kind == AST_LITERAL && pt)
                 s->expected = pt;
             type_t *dt = sema_check_expr(s, param->a);
             if (pt && dt && !type_assignable(pt, dt))
@@ -442,6 +472,8 @@ static void check_toplevel(sema_t *s, ast_node_t *d)
                     } else {
                         if (f && m->a->kind == AST_STRUCT_LIT && f->type &&
                             f->type->kind == TY_STRUCT)
+                            s->expected = f->type;
+                        else if (f && m->a->kind == AST_LITERAL)
                             s->expected = f->type;
                         vt = sema_check_expr(s, m->a);
                     }

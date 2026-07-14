@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "parser/parser_internal.h"
+#include "parser/parser_migrate_dump.h"
 
 static ast_node_t *parse_extern_func(parser_t *p);
 static ast_node_t *parse_extern_var(parser_t *p);
@@ -124,7 +125,10 @@ static ast_node_t *parse_extern_func(parser_t *p)
         } while (p_match(p, TK_COMMA));
     }
     p_expect(p, TK_RPAREN, "')' after parameters");
-    if (p_at(p, TK_IDENT) || p_at(p, TK_KW_FUNC)) n->type = parse_type(p);
+    if (p_at(p, TK_IDENT) || p_at(p, TK_KW_FUNC)) {
+        migrate_dump_colon(p);
+        n->type = parse_type(p);
+    }
 
     if (p_at(p, TK_COLON))
         n->a = parse_block(p);
@@ -169,9 +173,32 @@ void parse_extern_into(parser_t *p, ast_node_t *prog)
         p_skip_terminators(p);
         if (p_at(p, TK_KW_END) || p_at_eof(p)) break;
         ast_node_t *d = NULL;
-        if (p_at(p, TK_KW_FUNC))
+        bool m_deprecated = false, m_pure = false, m_noret = false;
+        if (p_at(p, TK_KW_DEPRECATED)) {
+            m_deprecated = true;
+            p_advance(p);
+        }
+        if (p_at(p, TK_KW_PURE)) {
+            m_pure = true;
+            p_advance(p);
+        } else if (p_at(p, TK_KW_NORET)) {
+            m_noret = true;
+            p_advance(p);
+        }
+        if ((m_deprecated || m_pure || m_noret) && !p_at(p, TK_KW_FUNC))
+            p_error(p, "extern function modifiers ('deprecated', 'pure', 'noret') must "
+                       "appear in this order: 'deprecated pure|noret func'");
+        if (p_at(p, TK_KW_PUB) || p_at(p, TK_KW_INLINE) || p_at(p, TK_KW_NOINLINE))
+            p_error(p, "only 'deprecated', 'pure', or 'noret' may modify an extern "
+                       "function");
+        if (p_at(p, TK_KW_FUNC)) {
             d = parse_extern_func(p);
-        else if (p_at(p, TK_KW_MUT) || p_at(p, TK_IDENT))
+            if (d) {
+                d->is_deprecated = m_deprecated;
+                d->is_pure = m_pure;
+                d->is_noret = m_noret;
+            }
+        } else if (p_at(p, TK_KW_MUT) || p_at(p, TK_IDENT))
             d = parse_extern_var(p);
         else {
             p_error(p, "expected 'func' or a variable in extern block");

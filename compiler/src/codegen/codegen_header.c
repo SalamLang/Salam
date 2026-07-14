@@ -280,8 +280,8 @@ static void vec_emit(cg_t *cg, sb_t *h, const char *ts)
     sb_puts(h, cg_fmt(cg,
                       "static void %s_grow(%s* v, int32_t need){ if(need<=v->cap) "
                       "return; int32_t c=v->cap?v->cap:4; while(c<need) c*=2; "
-                      "v->data=(%s*)salam_realloc(v->data,(unsigned long "
-                      "long)c*sizeof(%s)); v->cap=c; }\n",
+                      "v->data=(%s*)" SALAM_MEM_REALLOC "(v->data,(uint64_t)"
+                      "c*sizeof(%s)); v->cap=c; }\n",
                       cn, cn, E, E));
     sb_puts(h, cg_fmt(cg,
                       "static void %s_push(%s* v, %s x){ %s_grow(v, v->len+1); "
@@ -300,7 +300,8 @@ static void vec_emit(cg_t *cg, sb_t *h, const char *ts)
     sb_puts(h, cg_fmt(cg, "static int32_t %s_len(%s* v){ return v->len; }\n", cn, cn));
     sb_puts(h, cg_fmt(cg, "static int32_t %s_cap(%s* v){ return v->cap; }\n", cn, cn));
     sb_puts(h, cg_fmt(cg,
-                      "static void %s_free(%s* v){ salam_free(v->data); v->data=(%s*)0; "
+                      "static void %s_free(%s* v){ " SALAM_MEM_FREE
+                      "(v->data); v->data=(%s*)0; "
                       "v->len=0; v->cap=0; }\n",
                       cn, cn, E));
     sb_puts(h, "#endif\n");
@@ -324,6 +325,10 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "typedef struct salam_map_iter salam_map_iter;\n"
                "typedef struct { void* data; int64_t len; } salam_slice;\n"
                "extern int64_t salam_idx(int64_t, int64_t);\n"
+               "extern void salam_panic(const char* msg);\n"
+               "void* " SALAM_MEM_ALLOC "(uint64_t size);\n"
+               "void* " SALAM_MEM_REALLOC "(void* ptr, uint64_t size);\n"
+               "void " SALAM_MEM_FREE "(void* ptr);\n"
                "static inline salam_slice salam_slice_new(void* b, int64_t lo, int64_t "
                "hi, int64_t esz)"
                "{ salam_slice s; s.data=(void*)((char*)b+(lo)*(esz)); s.len=(hi)-(lo); "
@@ -336,10 +341,34 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "esz, int sf)"
                "{ return (void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n"
                "typedef void (*salam_thread_fn)(void);\n"
-
-               "extern void* salam_alloc(uint64_t size);\n"
-               "extern void* salam_realloc(void* ptr, uint64_t size);\n"
-               "extern void salam_free(void* ptr);\n#endif\n");
+               "#endif\n");
+    sb_puts(h, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n"
+               "extern uint64_t strlen(const char* s);\n"
+               "extern int32_t strcmp(const char* a, const char* b);\n"
+               "extern const char* strstr(const char* haystack, const char* needle);\n"
+               "extern int64_t strtol(const char* s, void* endptr, int32_t base);\n"
+               "extern double strtod(const char* s, void* endptr);\n"
+               "extern const char* salam_strcat(const char* a, const char* b);\n"
+               "extern const char* salam_char_from_code(int32_t c);\n"
+               "extern const char* salam_str_substr(const char* s, int32_t start, "
+               "int32_t n);\n"
+               "extern const char* salam_str_trim(const char* s);\n"
+               "extern void* salam_str_split(const char* s, const char* delim, void* "
+               "out_count);\n"
+               "#endif\n");
+    sb_puts(h, "#ifndef SALAM_FN_ATTRS_DEFINED\n#define SALAM_FN_ATTRS_DEFINED\n"
+               "#if defined(__GNUC__) || defined(__clang__)\n"
+               "#define SALAM_NOINLINE __attribute__((noinline))\n"
+               "#define SALAM_PURE __attribute__((pure))\n"
+               "#define SALAM_NORET __attribute__((noreturn))\n"
+               "#define SALAM_DEPRECATED __attribute__((deprecated))\n"
+               "#else\n"
+               "#define SALAM_NOINLINE\n"
+               "#define SALAM_PURE\n"
+               "#define SALAM_NORET\n"
+               "#define SALAM_DEPRECATED\n"
+               "#endif\n"
+               "#endif\n");
     if (strcmp(cg->module, "core") != 0)
         sb_puts(h, cg_fmt(cg, "#include \"%score.h\"\n", SALAM_MOD_PREFIX));
 
@@ -412,6 +441,30 @@ static void hdr_struct_fwd(cg_t *cg, ast_node_t *program, sb_t *h)
                                        : d->name;
                 const char *cn = cg_cident(cg, raw2);
 
+                sb_puts(h, cg_fmt(cg,
+                                  "#ifndef SALAM_FWD_%s\n#define SALAM_FWD_%s\n"
+                                  "typedef struct %s %s;\n#endif\n",
+                                  cn, cn, cn, cn));
+            }
+        }
+    }
+}
+
+static void hdr_struct_fwd_imports(cg_t *cg, sb_t *h)
+{
+    {
+        size_t p = 0;
+        for (; p < cg->sem->packages.len; p++) {
+            symbol_t *pk = (symbol_t *)cg->sem->packages.data[p];
+            size_t i;
+            if (!pk || pk->kind != SYM_PACKAGE || !pk->members) continue;
+            i = 0;
+            for (; i < pk->members->symbols.len; i++) {
+                symbol_t *s = (symbol_t *)pk->members->symbols.data[i];
+                const char *cn;
+                if (!s || s->kind != SYM_STRUCT || !s->type || !s->type->name) continue;
+                if (s->decl && s->decl->typarams.len > 0) continue;
+                cn = cg_cident(cg, s->type->name);
                 sb_puts(h, cg_fmt(cg,
                                   "#ifndef SALAM_FWD_%s\n#define SALAM_FWD_%s\n"
                                   "typedef struct %s %s;\n#endif\n",
@@ -543,16 +596,41 @@ static void hdr_externs(cg_t *cg, ast_node_t *program, sb_t *h)
     sb_puts(h, "\n");
 }
 
+static void hdr_globals(cg_t *cg, ast_node_t *program, sb_t *h)
+{
+    {
+        size_t i = 0;
+        for (; i < program->list.len; i++) {
+            ast_node_t *d = (ast_node_t *)program->list.data[i];
+            bool pkgmod = cg->pkg && strcmp(cg->pkg, "main") != 0;
+            if (d->kind != AST_CONST_DECL && d->kind != AST_VAR_DECL) continue;
+            if (d->is_extern || (!d->is_pub && !pkgmod)) continue;
+            const char *ts = d->type_str ? d->type_str : "int32_t";
+            const char *decl = cg_decl(cg, ts, d->name);
+            bool is_array = ts && strchr(ts, '[');
+            bool can_defer =
+                d->kind == AST_VAR_DECL && d->a && d->a->kind != AST_LITERAL && !is_array;
+            bool want_const = !can_defer && (d->kind == AST_CONST_DECL || !d->is_mut);
+            bool gct_const = want_const && (strncmp(cg_ctype(cg, ts), "const ", 6) == 0);
+            const char *pfx = (want_const && !gct_const) ? "const " : "";
+            sb_puts(h, cg_fmt(cg, "extern %s%s;\n", pfx, decl));
+        }
+    }
+    sb_puts(h, "\n");
+}
+
 static void hdr_prototypes(cg_t *cg, ast_node_t *program, sb_t *h)
 {
     {
         size_t i = 0;
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
+            bool pkgmod = cg->pkg && strcmp(cg->pkg, "main") != 0;
             if (d->typarams.len > 0) continue;
             if (d->is_extern) continue;
             if (d->synthetic) continue;
-            if (d->kind == AST_FUNC_DEF && strcmp(d->name, cg->entry) != 0 && d->is_pub) {
+            if (d->kind == AST_FUNC_DEF && strcmp(d->name, cg->entry) != 0 &&
+                (d->is_pub || pkgmod)) {
                 symbol_t *fsym = scope_lookup_local(cg->sem->global, d->name);
                 func_sig_t *sig = sig_of_decl(fsym, d);
                 if (sig)
@@ -584,6 +662,7 @@ void cg_header(cg_t *cg, ast_node_t *program)
     hdr_prelude(cg, program, h);
     hdr_enums(cg, program, h);
     hdr_struct_fwd(cg, program, h);
+    hdr_struct_fwd_imports(cg, h);
 
     dyn_collect(cg, program);
     cg_emit_dyn_types(cg, h);
@@ -607,5 +686,6 @@ void cg_header(cg_t *cg, ast_node_t *program)
     }
     sb_puts(h, "\n");
     hdr_externs(cg, program, h);
+    hdr_globals(cg, program, h);
     hdr_prototypes(cg, program, h);
 }

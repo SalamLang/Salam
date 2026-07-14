@@ -19,7 +19,7 @@
 #include "core/vec.h"
 #include "core/sb.h"
 #include "source/source.h"
-#include "preproc/preproc.h"
+#include "condcomp/condcomp.h"
 #include "lexer/lexer.h"
 #include "parser/parser.h"
 #include "semantic/sema.h"
@@ -40,6 +40,7 @@ typedef struct {
     arena_t *a;
     logger_t *log;
     const langpack_t *pack;
+    const cc_table_t *cc;
     vec_t comps;
     vec_t loaded;
     size_t errors;
@@ -308,11 +309,11 @@ static loaded_t *load_include(expand_t *ex, const char *path)
         EXERR(ex, "cannot read included layout '%s'", path);
         return NULL;
     }
-    src = preproc_source(ex->a, ex->log, src, NULL, 0);
     token_stream_t *toks = NULL;
     lexer_run(ex->a, ex->log, ex->pack, src, &toks);
     ast_node_t *prog = NULL;
     parser_run(ex->a, ex->log, toks, &prog);
+    if (prog) cc_prune_program(ex->a, ex->log, path, ex->cc, prog);
     if (!prog) {
         EXERR(ex, "cannot parse included layout '%s'", path);
         return NULL;
@@ -499,13 +500,14 @@ static void expand_items(expand_t *ex, vec_t *out, ast_node_t *container, frame_
 }
 
 size_t layout_expand(arena_t *a, logger_t *log, const langpack_t *pack,
-                     ast_node_t *program, const char *base_dir)
+                     ast_node_t *program, const char *base_dir, const cc_table_t *cc)
 {
     expand_t ex;
     memset(&ex, 0, sizeof(ex));
     ex.a = a;
     ex.log = log;
     ex.pack = pack;
+    ex.cc = cc;
     vec_init(&ex.comps);
     vec_init(&ex.loaded);
     ast_node_t *lb = find_layout_block(program);

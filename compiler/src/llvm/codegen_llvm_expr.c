@@ -20,11 +20,11 @@ static const char *ll_arith_op(token_kind_t k, bool isflt, bool issigned)
 {
     switch (k) {
     case TK_PLUS:
-        return isflt ? "fadd" : "add";
+        return isflt ? "fadd" : (issigned ? "add nsw" : "add");
     case TK_MINUS:
-        return isflt ? "fsub" : "sub";
+        return isflt ? "fsub" : (issigned ? "sub nsw" : "sub");
     case TK_STAR:
-        return isflt ? "fmul" : "mul";
+        return isflt ? "fmul" : (issigned ? "mul nsw" : "mul");
     case TK_SLASH:
         return isflt ? "fdiv" : (issigned ? "sdiv" : "udiv");
     case TK_PERCENT:
@@ -78,17 +78,22 @@ static const char *ll_str_operand(ll_t *ll, ast_node_t *n)
         const char *t = ll_strconst(ll, "true"), *f = ll_strconst(ll, "false");
         ll_emit(ll, "%s = select i1 %s, ptr %s, ptr %s", r, v.ref, t, f);
     } else if (ts && !strcmp(ts, "char")) {
+        ll_need(ll, LL_H_CHARSTR);
         ll_emit(ll, "%s = call ptr @salam_ll_charstr(i32 %s)", r, ll_conv(ll, v, "i32"));
     } else if (ll_is_float(ts)) {
+        ll_need(ll, LL_H_F64STR);
         ll_emit(ll, "%s = call ptr @salam_ll_f64str(double %s)", r,
                 ll_conv(ll, v, "f64"));
     } else if (ll_is_int(ts)) {
-        if (ll_is_signed(ts))
+        if (ll_is_signed(ts)) {
+            ll_need(ll, LL_H_I64STR);
             ll_emit(ll, "%s = call ptr @salam_ll_i64str(i64 %s)", r,
                     ll_conv(ll, v, "i64"));
-        else
+        } else {
+            ll_need(ll, LL_H_U64STR);
             ll_emit(ll, "%s = call ptr @salam_ll_u64str(i64 %s)", r,
                     ll_conv(ll, v, "u64"));
+        }
     } else {
         ll_error(ll, n, "string concatenation with an unsupported operand type '%s'",
                  ts ? ts : "?");
@@ -104,6 +109,7 @@ static bool ll_binary_string(ll_t *ll, ast_node_t *n, token_kind_t op, llv_t *ou
     if (op == TK_PLUS && (as || bs)) {
         const char *L = ll_str_operand(ll, n->a), *R = ll_str_operand(ll, n->b);
         const char *r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_STRCAT);
         ll_emit(ll, "%s = call ptr @salam_ll_strcat(ptr %s, ptr %s)", r, L, R);
         *out = (llv_t){r, "str"};
         return true;
@@ -344,7 +350,8 @@ static llv_t ll_unary(ll_t *ll, ast_node_t *n)
         if (ll_is_float(rt))
             ll_emit(ll, "%s = fneg %s %s", r, ll_ty(ll, rt), cv);
         else
-            ll_emit(ll, "%s = sub %s 0, %s", r, ll_ty(ll, rt), cv);
+            ll_emit(ll, "%s = sub%s %s 0, %s", r, ll_is_signed(rt) ? " nsw" : "",
+                    ll_ty(ll, rt), cv);
         return (llv_t){r, rt};
     }
     ll_error(ll, n, "unary operator");
@@ -587,6 +594,7 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
     if (!strcmp(m, "concat") && na == 1) {
         const char *a = ll_expr(ll, (ast_node_t *)n->list.data[0]).ref;
         r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_STRCAT);
         ll_emit(ll, "%s = call ptr @salam_ll_strcat(ptr %s, ptr %s)", r, recv, a);
         *out = (llv_t){r, "str"};
         return true;
@@ -595,8 +603,16 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
         const char *s = ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[0]), "i32");
         const char *l = ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[1]), "i32");
         r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_SUBSTR);
         ll_emit(ll, "%s = call ptr @salam_ll_substr(ptr %s, i32 %s, i32 %s)", r, recv, s,
                 l);
+        *out = (llv_t){r, "str"};
+        return true;
+    }
+    if (!strcmp(m, "trim")) {
+        r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_TRIM);
+        ll_emit(ll, "%s = call ptr @salam_ll_trim(ptr %s)", r, recv);
         *out = (llv_t){r, "str"};
         return true;
     }
@@ -673,7 +689,7 @@ static llv_t ll_call_dyn(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *i
                *fn = ll_new_tmp(ll);
     ll_emit(ll, "%s = extractvalue %%dyn %s, 0", data, dv.ref);
     ll_emit(ll, "%s = extractvalue %%dyn %s, 1", vt, dv.ref);
-    ll_emit(ll, "%s = getelementptr ptr, ptr %s, i64 %d", sl, vt, slot);
+    ll_emit(ll, "%s = getelementptr inbounds ptr, ptr %s, i64 %d", sl, vt, slot);
     ll_emit(ll, "%s = load ptr, ptr %s", fn, sl);
 
     sb_t ab;
@@ -794,17 +810,21 @@ static bool ll_call_intrinsic(ll_t *ll, ast_node_t *n, const char *nm, llv_t *ou
     const char *r;
     if (!strcmp(nm, "hash") && na == 1) {
         r = ll_new_tmp(ll);
-        if (ll_is_str(a0->type_str))
+        if (ll_is_str(a0->type_str)) {
+            ll_need(ll, LL_H_STRHASH);
             ll_emit(ll, "%s = call i64 @salam_ll_strhash(ptr %s)", r,
                     ll_expr(ll, a0).ref);
-        else
+        } else {
+            ll_need(ll, LL_H_INTHASH);
             ll_emit(ll, "%s = call i64 @salam_ll_inthash(i64 %s)", r,
                     ll_conv(ll, ll_expr(ll, a0), "u64"));
+        }
         *out = (llv_t){r, "u64"};
         return true;
     }
     if (!strcmp(nm, "char_from_code") && na == 1) {
         r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_CHARSTR);
         ll_emit(ll, "%s = call ptr @salam_ll_charstr(i32 %s)", r,
                 ll_conv(ll, ll_expr(ll, a0), "i32"));
         *out = (llv_t){r, "str"};
@@ -876,8 +896,9 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
                     ast_node_t *c = (ast_node_t *)caps->data[i];
                     if (!strcmp(c->name, n->name)) {
                         const char *r = ll_new_tmp(ll);
-                        ll_emit(ll, "%s = getelementptr %s, ptr %s, i32 0, i32 %zu", r,
-                                ll->env_ty, ll->env_ref, i + 1);
+                        ll_emit(ll,
+                                "%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %zu",
+                                r, ll->env_ty, ll->env_ref, i + 1);
                         return (ll_addr_t){r, c->type_str};
                     }
                 }
@@ -1092,7 +1113,7 @@ static llv_t ll_lambda_value(ll_t *ll, ast_node_t *n)
     ll_emit(ll, "%s = ptrtoint ptr %s to i64", sz, szp);
     ll_emit(ll, "%s = call ptr @malloc(i64 %s)", env, sz);
     const char *f0 = ll_new_tmp(ll);
-    ll_emit(ll, "%s = getelementptr %s, ptr %s, i32 0, i32 0", f0, envty, env);
+    ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i32 0, i32 0", f0, envty, env);
     ll_emit(ll, "store ptr @%s, ptr %s", name, f0);
     {
         size_t i = 0;
@@ -1100,8 +1121,8 @@ static llv_t ll_lambda_value(ll_t *ll, ast_node_t *n)
             ast_node_t *c = (ast_node_t *)n->captures.data[i];
             llv_t cv = ll_expr(ll, c);
             const char *fp = ll_new_tmp(ll);
-            ll_emit(ll, "%s = getelementptr %s, ptr %s, i32 0, i32 %zu", fp, envty, env,
-                    i + 1);
+            ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %zu", fp,
+                    envty, env, i + 1);
             ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, c->type_str),
                     ll_conv(ll, cv, c->type_str), fp);
         }

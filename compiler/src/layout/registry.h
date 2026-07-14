@@ -16,6 +16,7 @@
 #define SALAM_LAYOUT_REGISTRY_H
 
 #include "core/prelude.h"
+#include "core/arena.h"
 
 typedef enum {
     LE_SINGLE,
@@ -58,7 +59,8 @@ typedef enum {
     VT_COLOR,
     VT_DIR,
     VT_LANG,
-    VT_ENUM
+    VT_ENUM,
+    VT_LENGTH
 } layout_value_type_t;
 
 typedef struct {
@@ -78,7 +80,8 @@ void layout_registry_add_value(const char *group, const char *spelling,
 
 bool layout_attr_value_ok(const layout_attr_def_t *ad, const char *value);
 
-const char *layout_attr_value_map(const layout_attr_def_t *ad, const char *value);
+const char *layout_attr_value_map(arena_t *a, const layout_attr_def_t *ad,
+                                  const char *value);
 
 const char *layout_value_type_name(layout_value_type_t vt);
 
@@ -87,5 +90,9 @@ const char *layout_map_dir(const char *value);
 const char *layout_map_lang(const char *value);
 
 const char *layout_map_color(const char *value);
+
+const char *layout_map_unit(const char *value);
+
+const char *layout_map_length(arena_t *a, const char *value);
 
 #endif /* SALAM_LAYOUT_REGISTRY_H */

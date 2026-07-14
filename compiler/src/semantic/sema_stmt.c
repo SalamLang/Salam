@@ -49,6 +49,48 @@ static bool lvalue_mutable(sema_t *s, ast_node_t *n, bool *is_lvalue)
     return false;
 }
 
+static bool pure_param_escapes(type_t *t)
+{
+    if (!t) return false;
+    return t->kind == TY_PTR || t->kind == TY_VEC || t->kind == TY_MAP ||
+           t->kind == TY_SLICE;
+}
+
+static void check_pure_assign(sema_t *s, ast_node_t *target, const src_span_t *span)
+{
+    ast_node_t *fn = sema_pure_fn(s);
+    if (!fn) return;
+    ast_node_t *root = target;
+    ast_node_t *below = NULL;
+    while (root && (root->kind == AST_MEMBER || root->kind == AST_INDEX)) {
+        below = root;
+        root = root->a;
+    }
+    if (!root || root->kind != AST_IDENTIFIER || !root->name) return;
+    scope_t *where = NULL;
+    symbol_t *sym = scope_lookup_where(s->cur, root->name, &where);
+    if (!sym) return;
+    if (sym->kind == SYM_PACKAGE && below && below->kind == AST_MEMBER) {
+        SERR(s, 13, span,
+             "'pure' function '%s' cannot assign to global '%s': writing a global "
+             "variable is a side effect",
+             fn->name, below->name ? below->name : root->name);
+        return;
+    }
+    if (sym->kind == SYM_VAR && where && where->kind == SCOPE_GLOBAL) {
+        SERR(s, 13, span,
+             "'pure' function '%s' cannot assign to global '%s': writing a global "
+             "variable is a side effect",
+             fn->name, root->name);
+        return;
+    }
+    if (sym->kind == SYM_PARAM && target != root && pure_param_escapes(sym->type))
+        SERR(s, 13, span,
+             "'pure' function '%s' cannot write through parameter '%s': the write is "
+             "visible to the caller",
+             fn->name, root->name);
+}
+
 static void define_local(sema_t *s, ast_node_t *decl, sym_kind_t kind, type_t *t)
 {
     symbol_t *sym = symbol_new(s->a, kind, decl->name);
@@ -90,7 +132,7 @@ type_t *sema_check_var_decl(sema_t *s, ast_node_t *n)
     if (declared && declared->kind == TY_ARRAY && declared->elem &&
         declared->elem->kind == TY_DYN && n->a && n->a->kind == AST_ARRAY_LIT)
         s->expected = declared;
-    else if (declared && n->a && n->a->kind == AST_CALL)
+    else if (declared && n->a && (n->a->kind == AST_CALL || n->a->kind == AST_LITERAL))
         s->expected = declared;
     type_t *initt = n->a ? sema_check_expr(s, n->a) : NULL;
     type_t *t;
@@ -141,6 +183,7 @@ static void check_stmt(sema_t *s, ast_node_t *n)
     }
     case AST_ASSIGN: {
         type_t *tt = sema_check_expr(s, n->a);
+        if (tt && n->b && n->b->kind == AST_LITERAL) s->expected = tt;
         type_t *vt = sema_check_expr(s, n->b);
         bool is_lvalue;
         bool mut = lvalue_mutable(s, n->a, &is_lvalue);
@@ -148,6 +191,8 @@ static void check_stmt(sema_t *s, ast_node_t *n)
             SERR(s, 13, &n->span, "assignment target is not assignable");
         else if (!mut)
             SERR(s, 13, &n->span, "cannot assign to immutable target");
+        else
+            check_pure_assign(s, n->a, &n->span);
 
         if (n->op == TK_ASSIGN && n->a && n->a->kind == AST_INDEX && n->a->a &&
             n->a->a->type_str) {
@@ -259,6 +304,11 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         break;
     }
     case AST_RETURN: {
+        if (s->cur_func && s->cur_func->decl && s->cur_func->decl->is_noret &&
+            s->cur_func->decl->name)
+            SERR(s, 12, &n->span,
+                 "'noret' function '%s' cannot contain 'ret': it never returns",
+                 s->cur_func->decl->name);
         if (s->cur_func && s->cur_func->infer_ret) {
             type_t *vt = n->a ? sema_check_expr(s, n->a) : ty(s, TY_VOID);
             s->cur_func->ret = vt;

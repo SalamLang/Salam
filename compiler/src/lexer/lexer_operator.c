@@ -87,7 +87,7 @@ void lx_scan_op(lx_t *L)
         break;
     case '*':
         if (lx_match(L, '*'))
-            k = TK_POWER;
+            k = lx_match(L, '=') ? TK_POWER_EQ : TK_POWER;
         else if (lx_match(L, '='))
             k = TK_STAR_EQ;
         else

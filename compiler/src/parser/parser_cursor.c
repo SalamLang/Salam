@@ -248,9 +248,6 @@ const char *p_munch_name(parser_t *p)
 
 const char *parse_decl_name(parser_t *p)
 {
-    /* A type, when present, is always introduced by a mandatory ':', so the
-     * whole leading run of identifiers belongs to the (possibly multi-word)
-     * name; no heuristic split is needed. */
     return p_munch_name(p);
 }
 

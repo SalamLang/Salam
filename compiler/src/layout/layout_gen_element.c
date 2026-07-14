@@ -158,10 +158,12 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
                 sb_puts(&attrs, lfmt(cx, " style=\"%s\"", html_escape(cx, v)));
                 break;
             case LA_DIR:
-                sb_puts(&attrs, lfmt(cx, " dir=\"%s\"", layout_attr_value_map(ad, v)));
+                sb_puts(&attrs,
+                        lfmt(cx, " dir=\"%s\"", layout_attr_value_map(cx->a, ad, v)));
                 break;
             case LA_LANG:
-                sb_puts(&attrs, lfmt(cx, " lang=\"%s\"", layout_attr_value_map(ad, v)));
+                sb_puts(&attrs,
+                        lfmt(cx, " lang=\"%s\"", layout_attr_value_map(cx->a, ad, v)));
                 break;
             case LA_SOURCE:
                 source = v;
@@ -170,20 +172,22 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
                 if (!strcmp(nm, "src"))
                     src = v;
                 else if (!strcmp(nm, "type"))
-                    type_val = layout_attr_value_map(ad, v);
+                    type_val = layout_attr_value_map(cx->a, ad, v);
                 else if (!strcmp(nm, "condition"))
                     condition = v;
                 else if (is_bool_attr(nm) && !strcmp(v, "true"))
                     sb_puts(&attrs, lfmt(cx, " %s", ad->out));
 
                 else
-                    sb_puts(&attrs, lfmt(cx, " %s=\"%s\"", ad->out,
-                                         html_escape(cx, layout_attr_value_map(ad, v))));
+                    sb_puts(&attrs,
+                            lfmt(cx, " %s=\"%s\"", ad->out,
+                                 html_escape(cx, layout_attr_value_map(cx->a, ad, v))));
                 break;
             case LA_CSS: {
                 const char *prop = (ad && ad->out) ? ad->out : hyphenate(cx, nm);
 
-                sb_puts(&css, lfmt(cx, "%s: %s; ", prop, layout_attr_value_map(ad, v)));
+                sb_puts(&css,
+                        lfmt(cx, "%s: %s; ", prop, layout_attr_value_map(cx->a, ad, v)));
                 break;
             }
             case LA_META:

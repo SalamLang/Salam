@@ -21,6 +21,7 @@
 #include "ast/ast.h"
 #include "semantic/types.h"
 #include "semantic/symbol.h"
+#include "condcomp/condcomp.h"
 
 typedef struct lambda_ctx_t {
     scope_t *boundary;
@@ -52,6 +53,7 @@ typedef struct {
     scope_t *gen_pkg;
     scope_t *prelude;
     bool prelude_tried;
+    const cc_table_t *cc;
 } sema_t;
 
 void sema_load_prelude(sema_t *s);
@@ -63,6 +65,8 @@ void sema_load_prelude(sema_t *s);
     diag_report((s)->diag, SEV_WARNING, (code), (s)->file, (span), __VA_ARGS__)
 
 type_t *sema_ty(sema_t *s, type_kind_t k);
+
+ast_node_t *sema_pure_fn(sema_t *s);
 
 type_t *sema_err_ty(sema_t *s);
 

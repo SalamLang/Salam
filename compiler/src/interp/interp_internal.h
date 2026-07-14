@@ -68,6 +68,9 @@ typedef struct {
     vec_t enums;
     vec_t impls;
     vec_t modules;
+    vec_t extern_fns;
+    vec_t extern_decls;
+    vec_t def_envs;
     const char *in_data;
     size_t in_pos;
     jmp_buf on_error;
@@ -106,6 +109,17 @@ ast_node_t *find_enum(interp_t *I, const char *name);
 ast_node_t *find_func(interp_t *I, const char *name, size_t nargs);
 
 module_t *find_module(interp_t *I, const char *name);
+
+value_t *find_extern_fn(interp_t *I, const char *name);
+
+ast_node_t *find_extern_decl(interp_t *I, const char *name);
+
+void register_method_envs(interp_t *I, ast_node_t *def, env_t *env);
+
+env_t *find_def_env(interp_t *I, ast_node_t *def);
+
+value_t call_native_extern(interp_t *I, ast_node_t *call, ast_node_t *decl, value_t *args,
+                           size_t nargs);
 
 ast_node_t *struct_method(ast_node_t *sdef, const char *name);
 
@@ -149,6 +163,12 @@ bool is_int_typename(const char *b);
 bool is_float_typename(const char *b);
 
 void base_typename(const char *ts, char *out, size_t cap);
+
+ptr_elem_t ptr_elem_from_typestr(const char *ts);
+
+value_t ptr_load(sptr_t p, int64_t idx);
+
+void ptr_store(sptr_t p, int64_t idx, value_t v);
 
 value_t default_for_type(interp_t *I, const char *ts);
 

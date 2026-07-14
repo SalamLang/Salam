@@ -45,7 +45,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 option(SALAM_BUILD_TESTS "Enable the `test` target (runs tools/bash/run-tests.sh)" ON)
 
 set(SALAM_SRC_DIRS
-    core source preproc logger xml diag i18n langpack
+    core source condcomp logger xml diag i18n langpack
     token lexer ast parser semantic codegen llvm interp
     layout fmt cli driver)
 

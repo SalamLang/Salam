@@ -103,6 +103,9 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                 out->llvm_emit = 5;
             } else if (strcmp(arg, "--verify-ir") == 0) {
                 out->llvm_verify = true;
+            } else if (strcmp(arg, "--native-cpu") == 0 ||
+                       strcmp(arg, "-march=native") == 0) {
+                out->llvm_native_cpu = true;
             } else if ((val = cli_opt_value(arg, "--target")) != NULL) {
                 out->llvm_target = val;
             } else if (strcmp(arg, "--safe") == 0) {

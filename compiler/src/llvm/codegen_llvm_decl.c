@@ -26,9 +26,21 @@ void ll_emit_struct_types(ll_t *ll, ast_node_t *program)
             if (!ssym || !ssym->members) continue;
             const char *sname =
                 ssym->type ? type_to_string(ll->sem->tc, ssym->type) : d->name;
+            const char *ltname = ll_struct_ltype(ll, sname);
+            {
+                bool seen = false;
+                size_t k = 0;
+                for (; k < ll->emitted.len; k++)
+                    if (!strcmp(ltname, (const char *)ll->emitted.data[k])) {
+                        seen = true;
+                        break;
+                    }
+                if (seen) continue;
+                vec_push(ll->a, &ll->emitted, CONST_CAST(ltname));
+            }
             sb_t b;
             sb_init(&b);
-            sb_puts(&b, ll_fmt(ll, "%s = type { ", ll_struct_ltype(ll, sname)));
+            sb_puts(&b, ll_fmt(ll, "%s = type { ", ltname));
             int nf = 0;
             {
                 size_t j = 0;
@@ -178,6 +190,13 @@ static const char *ll_fn_header(ll_t *ll, ast_node_t *fn, func_sig_t *sig,
         }
     }
     sb_puts(&hdr, ")");
+    if (!ll->is_main) {
+        if (fn->is_inline) sb_puts(&hdr, " alwaysinline");
+        if (fn->is_noinline) sb_puts(&hdr, " noinline");
+        if (fn->is_pure) sb_puts(&hdr, " memory(read)");
+        if (fn->is_noret) sb_puts(&hdr, " noreturn");
+    }
+    sb_puts(&hdr, " nounwind");
     if (ll->debug && ll->cur_sp) sb_puts(&hdr, ll_fmt(ll, " !dbg %s", ll->cur_sp));
     sb_puts(&hdr, " {\n");
     const char *r = arena_strdup(ll->a, sb_cstr(&hdr));
@@ -512,7 +531,7 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
                               : ll_fmt(ll, ", %s %%arg%zu", ll_ty(ll, p->type_str), i));
         }
     }
-    sb_puts(&hdr, ") {\n");
+    sb_puts(&hdr, ") nounwind {\n");
     const char *header = arena_strdup(ll->a, sb_cstr(&hdr));
     sb_free(&hdr);
 
@@ -640,7 +659,10 @@ static void ll_emit_externs_in(ll_t *ll, scope_t *g)
                 }
             }
             if (sig->variadic) sb_puts(&b, sig->params.len ? ", ..." : "...");
-            sb_puts(&b, ")\n");
+            sb_puts(&b, ")");
+            if (sig->decl->is_pure) sb_puts(&b, " nounwind willreturn memory(read)");
+            if (sig->decl->is_noret) sb_puts(&b, " noreturn");
+            sb_puts(&b, "\n");
             sb_puts(ll->g, sb_cstr(&b));
             sb_free(&b);
         }

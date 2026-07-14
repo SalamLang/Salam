@@ -311,6 +311,7 @@ static const i18n_pair_t k_msg_fa[] = {
     {"a text direction", "یک جهت متن"},
     {"a language", "یک زبان"},
     {"one of the allowed values", "یکی از مقادیر مجاز"},
+    {"a length", "یک اندازه (طول)"},
     {"a value", "یک مقدار"},
 
     {"%s (near '%s')", "%s (نزدیک '%s')"},
@@ -681,6 +682,57 @@ static const i18n_pair_t k_msg_fa[] = {
     {"cannot infer the struct type of this literal",
      "نمی‌توان نوع ساختار این مقدار را "
      "استنتاج کرد"},
+
+    {"call to deprecated function '%s'", "فراخوانی تابع منسوخ '%s'"},
+    {"'noret' function '%s' cannot declare a return type: it never returns",
+     "تابع بی‌بازگشت '%s' نمی‌تواند نوع بازگشتی داشته باشد: این تابع هرگز "
+     "بازنمی‌گردد"},
+    {"'%s' cannot be both 'pure' and 'noret': a pure function must return",
+     "'%s' نمی‌تواند هم‌زمان خالص و بی‌بازگشت باشد: تابع خالص باید بازگردد"},
+    {"'pure' function '%s' must return a value: a pure function without a result has "
+     "no effect",
+     "تابع خالص '%s' باید مقداری بازگرداند: تابع خالص بدون نتیجه اثری ندارد"},
+    {"'pure' function '%s' cannot take reference parameter '%s': writing through it "
+     "would be a side effect",
+     "تابع خالص '%s' نمی‌تواند پارامتر ارجاعی '%s' بگیرد: نوشتن در آن اثر جانبی "
+     "است"},
+    {"function modifiers must appear in this order: 'pub deprecated inline|noinline "
+     "pure|noret func'",
+     "ترتیب توصیف‌گرهای تابع باید چنین باشد: 'عمومی منسوخ درون‌خطی|غیردرون‌خطی "
+     "خالص|بی‌بازگشت تابع'"},
+    {"function modifiers ('deprecated', 'inline', 'noinline', 'pure', 'noret') are "
+     "only allowed on a function definition",
+     "توصیف‌گرهای تابع ('منسوخ'، 'درون‌خطی'، 'غیردرون‌خطی'، 'خالص'، 'بی‌بازگشت') تنها "
+     "روی تعریف تابع مجازند"},
+    {"'inline' is only allowed on a function definition",
+     "'درون‌خطی' تنها روی تعریف تابع مجاز است"},
+    {"'pure' function '%s' cannot assign to global '%s': writing a global variable is "
+     "a side effect",
+     "تابع خالص '%s' نمی‌تواند به سراسری '%s' مقدار بدهد: نوشتن در متغیر سراسری اثر "
+     "جانبی است"},
+    {"'pure' function '%s' cannot write through parameter '%s': the write is visible "
+     "to the caller",
+     "تابع خالص '%s' نمی‌تواند از طریق پارامتر '%s' بنویسد: این نوشتن برای فراخواننده "
+     "دیده می‌شود"},
+    {"'pure' function '%s' cannot call '%s': only 'pure' functions may be called from "
+     "a pure function",
+     "تابع خالص '%s' نمی‌تواند '%s' را فراخوانی کند: از تابع خالص تنها توابع خالص "
+     "قابل فراخوانی‌اند"},
+    {"'pure' function '%s' cannot call '%s': it has side effects",
+     "تابع خالص '%s' نمی‌تواند '%s' را فراخوانی کند: این فراخوانی اثر جانبی دارد"},
+    {"'pure' function '%s' cannot call '%s': it modifies its receiver",
+     "تابع خالص '%s' نمی‌تواند '%s' را فراخوانی کند: گیرندهٔ خود را تغییر می‌دهد"},
+    {"'pure' function '%s' cannot call a function value: its purity cannot be "
+     "verified",
+     "تابع خالص '%s' نمی‌تواند مقدار تابعی را فراخوانی کند: خالص بودن آن قابل بررسی "
+     "نیست"},
+    {"'noret' function '%s' cannot contain 'ret': it never returns",
+     "تابع بی‌بازگشت '%s' نمی‌تواند 'بازگشت' داشته باشد: این تابع هرگز بازنمی‌گردد"},
+    {"extern function modifiers ('deprecated', 'pure', 'noret') must appear in this "
+     "order: 'deprecated pure|noret func'",
+     "ترتیب توصیف‌گرهای تابع خارجی باید چنین باشد: 'منسوخ خالص|بی‌بازگشت تابع'"},
+    {"only 'deprecated', 'pure', or 'noret' may modify an extern function",
+     "تنها 'منسوخ'، 'خالص' یا 'بی‌بازگشت' می‌توانند تابع خارجی را توصیف کنند"},
 
     {NULL, NULL}};
 

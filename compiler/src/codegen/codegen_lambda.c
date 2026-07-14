@@ -108,8 +108,9 @@ void cg_emit_lambda(cg_t *cg, ast_node_t *n)
         sb_free(&mp);
         cg_line(cg, "static void *%s_make(%s) {", name, mps);
         cg->indent++;
-        cg_line(cg, "%s_env *e = (%s_env *)salam_alloc(sizeof(%s_env));", name, name,
-                name);
+        cg_line(cg,
+                "%s_env *e = (%s_env *)" SALAM_MEM_ALLOC "((uint64_t)sizeof(%s_env));",
+                name, name, name);
         cg_line(cg, "e->fn = (void*)&%s;", name);
         {
             size_t i = 0;

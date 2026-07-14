@@ -47,7 +47,7 @@ command -v "$EMCC" >/dev/null 2>&1 || [ -e "$EMCC" ] || {
 OUT_DIR="../editor"
 mkdir -p "$OUT_DIR"
 "$SALAM" run tools/salam/gen-editor-keywords.salam || echo "warning: keyword generation failed; using existing ../editor/keywords.js" >&2
-SRC_DIRS="core source logger xml preproc token langpack i18n lexer ast parser
+SRC_DIRS="core source logger xml condcomp token langpack i18n lexer ast parser
         diag semantic interp layout codegen llvm web"
 SRCS=""
 for d in $SRC_DIRS; do SRCS="$SRCS src/$d/*.c"; done

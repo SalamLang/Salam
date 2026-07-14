@@ -13,6 +13,8 @@
  */
 
 #include "core/prelude.h"
+#include "core/arena.h"
+#include "core/sb.h"
 #include "layout/registry.h"
 #include "i18n/i18n.h"
 
@@ -77,6 +79,186 @@ static const char *dyn_value(const char *group, const char *v)
     return NULL;
 }
 
+const char *layout_map_unit(const char *v)
+{
+    return v ? dyn_value("unit", v) : NULL;
+}
+
+static bool is_ws(char c)
+{
+    return c == ' ' || c == '\t';
+}
+
+static bool scan_number(const char *v, const char **out_end)
+{
+    const char *p = v;
+    if (*p == '+' || *p == '-') p++;
+    bool dig = false;
+    while (*p >= '0' && *p <= '9') {
+        p++;
+        dig = true;
+    }
+    if (*p == '.') {
+        const char *q = p + 1;
+        while (*q >= '0' && *q <= '9')
+            q++;
+        if (q > p + 1) p = q;
+    }
+    if (!dig) return false;
+    *out_end = p;
+    return true;
+}
+
+/* Lowercases ASCII and collapses ZWNJ (U+200C, used to join Persian
+ * compound words like "سانتی‌متر") and runs of plain whitespace into a
+ * single space, so "سانتی متر" and "سانتی‌متر" normalize identically.
+ */
+static size_t normalize_unit_phrase(const char *s, size_t len, char *out, size_t cap)
+{
+    const char *q = s;
+    const char *qend = s + len;
+    size_t oi = 0;
+    bool prev_space = false;
+    while (q < qend && oi < cap - 1) {
+        if ((qend - q) >= 3 && (unsigned char)q[0] == 0xE2 &&
+            (unsigned char)q[1] == 0x80 && (unsigned char)q[2] == 0x8C) {
+            if (!prev_space) {
+                out[oi++] = ' ';
+                prev_space = true;
+            }
+            q += 3;
+            continue;
+        }
+        if (is_ws(*q)) {
+            if (!prev_space) {
+                out[oi++] = ' ';
+                prev_space = true;
+            }
+            q++;
+            continue;
+        }
+        char c = *q;
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        out[oi++] = c;
+        prev_space = false;
+        q++;
+    }
+    out[oi] = '\0';
+    return oi;
+}
+
+typedef struct {
+    const char *p;
+    size_t len;
+} len_tok_t;
+
+#define LAYOUT_LEN_MAX_TOKENS 24
+
+static size_t tokenize_ws(const char *v, len_tok_t *toks, size_t maxtoks)
+{
+    size_t n = 0;
+    const char *p = v;
+    while (*p && n < maxtoks) {
+        while (is_ws(*p))
+            p++;
+        if (!*p) break;
+        const char *start = p;
+        while (*p && !is_ws(*p))
+            p++;
+        toks[n].p = start;
+        toks[n].len = (size_t)(p - start);
+        n++;
+    }
+    while (is_ws(*p))
+        p++;
+    if (n == maxtoks && *p)
+        return 0; /* too many words: bail out, caller passes through */
+    return n;
+}
+
+static const char *lookup_unit_span(const char *s, size_t len)
+{
+    char norm[128];
+    normalize_unit_phrase(s, len, norm, sizeof norm);
+    return layout_map_unit(norm);
+}
+
+/* Normalizes a CSS length value: each whitespace-separated group (so 2/3/4
+ * value shorthand like "10 20" for padding/margin works too) gets a bare
+ * number turned into pixels, and unit suffixes (attached or space-separated,
+ * ASCII or spelled out in fa/ar/en) canonicalized via the "unit" value
+ * group. Non-numeric groups (auto, calc(...), inherit, ...) pass through
+ * untouched. */
+const char *layout_map_length(arena_t *a, const char *v)
+{
+    if (!v || !*v) return v;
+    len_tok_t toks[LAYOUT_LEN_MAX_TOKENS];
+    size_t ntok = tokenize_ws(v, toks, LAYOUT_LEN_MAX_TOKENS);
+    if (ntok == 0) return v;
+
+    sb_t out;
+    sb_init(&out);
+    size_t i = 0;
+    while (i < ntok) {
+        const char *tp = toks[i].p;
+        const char *tend = tp + toks[i].len;
+        const char *numend;
+        if (out.len) sb_putc(&out, ' ');
+        if (!scan_number(tp, &numend) || numend > tend) {
+            size_t k = 0;
+            for (; k < toks[i].len; k++)
+                sb_putc(&out, tp[k]);
+            i++;
+            continue;
+        }
+        size_t attached_len = (size_t)(tend - numend);
+        const char *canon = NULL;
+        size_t consumed = 1;
+        if (attached_len > 0) {
+            canon = lookup_unit_span(numend, attached_len);
+        } else if (i + 2 < ntok) {
+            char joined[128];
+            size_t l1 = toks[i + 1].len, l2 = toks[i + 2].len;
+            if (l1 + 1 + l2 < sizeof joined) {
+                memcpy(joined, toks[i + 1].p, l1);
+                joined[l1] = ' ';
+                memcpy(joined + l1 + 1, toks[i + 2].p, l2);
+                joined[l1 + 1 + l2] = '\0';
+                canon = lookup_unit_span(joined, l1 + 1 + l2);
+                if (canon) consumed = 3;
+            }
+        }
+        if (!canon && attached_len == 0 && i + 1 < ntok) {
+            canon = lookup_unit_span(toks[i + 1].p, toks[i + 1].len);
+            if (canon) consumed = 2;
+        }
+        if (!canon && attached_len == 0) {
+            canon = "px";
+            consumed = 1;
+        }
+        if (!canon) {
+            /* attached suffix present but not a recognized unit: leave the
+             * whole token untouched rather than guessing */
+            size_t k = 0;
+            for (; k < toks[i].len; k++)
+                sb_putc(&out, tp[k]);
+            i++;
+            continue;
+        }
+        {
+            size_t k = 0;
+            for (; k < (size_t)(numend - tp); k++)
+                sb_putc(&out, tp[k]);
+        }
+        sb_puts(&out, canon);
+        i += consumed;
+    }
+
+    const char *r = arena_strdup(a, sb_cstr(&out));
+    sb_free(&out);
+    return r;
+}
+
 static bool csv_has(const char *csv, const char *v)
 {
     if (!csv || !v) return false;
@@ -137,7 +319,8 @@ static bool is_url(const char *v)
            strncmp(v, "mailto:", 7) == 0 || v[0] == '/' || v[0] == '#' || v[0] == '.';
 }
 
-const char *layout_attr_value_map(const layout_attr_def_t *ad, const char *value)
+const char *layout_attr_value_map(arena_t *a, const layout_attr_def_t *ad,
+                                  const char *value)
 {
     if (!ad || !value) return value;
     const char *v = i18n_layout_value(value);
@@ -158,6 +341,8 @@ const char *layout_attr_value_map(const layout_attr_def_t *ad, const char *value
         const char *c = dyn_value(ad->allowed, v);
         return c ? c : v;
     }
+    case VT_LENGTH:
+        return layout_map_length(a, v);
     default:
         return value;
     }
@@ -186,6 +371,8 @@ const char *layout_value_type_name(layout_value_type_t vt)
         return i18n_tr("a language");
     case VT_ENUM:
         return i18n_tr("one of the allowed values");
+    case VT_LENGTH:
+        return i18n_tr("a length");
     }
     return i18n_tr("a value");
 }
@@ -216,6 +403,8 @@ bool layout_attr_value_ok(const layout_attr_def_t *ad, const char *value)
 
     case VT_ENUM:
         return csv_has(ad->allowed, v) || dyn_value(ad->allowed, v) != NULL;
+    case VT_LENGTH:
+        return true;
     }
     return true;
 }

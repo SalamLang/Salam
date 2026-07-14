@@ -81,7 +81,7 @@ arrays, [`Vector`](https://en.wikipedia.org/wiki/Dynamic_array), [`HashMap`](htt
 [`defer`](<https://en.wikipedia.org/wiki/Defer_(programming_idiom)>), `char`/strings, control flow) in both English and Persian, and matches
 the C backend's output across the example suite. It intentionally does **not**
 support things that need a real OS or the [C ABI](https://en.wikipedia.org/wiki/Application_binary_interface) (file/socket/thread/HTTP/SQLite
-APIs, [FFI](https://en.wikipedia.org/wiki/Foreign_function_interface)/`extern "C"`, and manual memory (`salam_alloc`)), none
+APIs, [FFI](https://en.wikipedia.org/wiki/Foreign_function_interface)/`extern "C"`, and manual memory (`mem.Allocate`)), none
 of which apply in a browser sandbox. The `&ref` scalar parameters, multi-file
 user imports, and the fully Persian-localized std API (`ریاضی.جذر`) are current
 limitations of the interpreter, not the language.

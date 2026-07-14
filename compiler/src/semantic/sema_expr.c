@@ -36,6 +36,30 @@ static bool tk_is_arith(token_kind_t k)
            k == TK_PERCENT;
 }
 
+static bool int_lit_fits(uint64_t u, type_kind_t k)
+{
+    switch (k) {
+    case TY_I8:
+        return u <= 127ULL;
+    case TY_I16:
+        return u <= 32767ULL;
+    case TY_I32:
+        return u <= 2147483647ULL;
+    case TY_I64:
+        return u <= 9223372036854775807ULL;
+    case TY_U8:
+        return u <= 255ULL;
+    case TY_U16:
+        return u <= 65535ULL;
+    case TY_U32:
+        return u <= 4294967295ULL;
+    case TY_U64:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool sema_type_is_stringable(type_t *t)
 {
     return t->kind == TY_STR || t->kind == TY_UCHAR || t->kind == TY_BOOL ||
@@ -114,10 +138,27 @@ type_t *sema_try_op_overload(sema_t *s, ast_node_t *n, symbol_t *ssym, const cha
     return sig ? sig->ret : NULL;
 }
 
+static bool is_int_lit(const ast_node_t *n)
+{
+    return n && n->kind == AST_LITERAL && n->op == TK_INT;
+}
+
 static type_t *check_binary(sema_t *s, ast_node_t *n)
 {
-    type_t *l = sema_check_expr(s, n->a);
-    type_t *r = sema_check_expr(s, n->b);
+    bool l_lit = is_int_lit(n->a), r_lit = is_int_lit(n->b);
+    type_t *l, *r;
+    if (r_lit && !l_lit) {
+        l = sema_check_expr(s, n->a);
+        if (l && type_is_integer(l)) s->expected = l;
+        r = sema_check_expr(s, n->b);
+    } else if (l_lit && !r_lit) {
+        r = sema_check_expr(s, n->b);
+        if (r && type_is_integer(r)) s->expected = r;
+        l = sema_check_expr(s, n->a);
+    } else {
+        l = sema_check_expr(s, n->a);
+        r = sema_check_expr(s, n->b);
+    }
     token_kind_t op = n->op;
     if (type_is_error(l) || type_is_error(r)) return decorate(s, n, err_ty(s));
 
@@ -251,12 +292,21 @@ static type_t *check_member(sema_t *s, ast_node_t *n)
 type_t *sema_check_expr(sema_t *s, ast_node_t *n)
 {
     if (!n) return ty(s, TY_VOID);
+    if (n->kind != AST_LITERAL && n->kind != AST_STRUCT_LIT && n->kind != AST_ARRAY_LIT &&
+        n->kind != AST_CALL)
+        s->expected = NULL;
     switch (n->kind) {
     case AST_LITERAL: {
         type_t *t;
+        type_t *exp = s->expected;
+        s->expected = NULL;
         switch (n->op) {
         case TK_INT: {
             uint64_t u = n->value.as.i;
+            if (exp && type_is_integer(exp) && int_lit_fits(u, exp->kind)) {
+                t = exp;
+                break;
+            }
             if (u <= 2147483647ULL)
                 t = ty(s, TY_I32);
             else if (u <= 9223372036854775807ULL)

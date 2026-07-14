@@ -54,14 +54,22 @@ symbol_t *scope_lookup_local(scope_t *s, const char *name)
 
 symbol_t *scope_lookup(scope_t *s, const char *name)
 {
+    return scope_lookup_where(s, name, NULL);
+}
+
+symbol_t *scope_lookup_where(scope_t *s, const char *name, scope_t **where)
+{
     {
         scope_t *cur = s;
         for (; cur; cur = cur->parent) {
             symbol_t *sym = scope_lookup_local(cur, name);
-            if (sym) return sym;
+            if (sym) {
+                if (where) *where = cur;
+                return sym;
+            }
 
             if (cur->aux) {
-                sym = scope_lookup(cur->aux, name);
+                sym = scope_lookup_where(cur->aux, name, where);
                 if (sym) return sym;
             }
         }

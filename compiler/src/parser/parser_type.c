@@ -15,6 +15,7 @@
 #include "core/prelude.h"
 #include "core/sal_format.h"
 #include "parser/parser_internal.h"
+#include "parser/parser_migrate_dump.h"
 
 static void parse_array_dims(parser_t *p, ast_node_t *n)
 {
@@ -113,6 +114,9 @@ ast_node_t *parse_type(parser_t *p)
 
 ast_node_t *parse_type_anno(parser_t *p)
 {
-    if (p_at(p, TK_COLON)) p_advance(p);
+    if (p_at(p, TK_COLON))
+        p_advance(p);
+    else
+        migrate_dump_colon(p);
     return parse_type(p);
 }

@@ -49,6 +49,7 @@ static void cli_set_defaults(options_t *out)
     out->llvm_emit = 0;
     out->llvm_verify = false;
     out->llvm_target = NULL;
+    out->llvm_native_cpu = false;
 }
 
 bool cli_parse(int argc, char **argv, options_t *out)

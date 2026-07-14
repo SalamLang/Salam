@@ -57,7 +57,8 @@ static void assign_to(interp_t *I, env_t *env, ast_node_t *target, value_t v)
             if (m) {
                 value_t idx = eval(I, env, target->b);
                 value_t args[2] = {idx, v};
-                call_func(I, m, I->globals, &a, args, 2);
+                env_t *denv = find_def_env(I, m);
+                call_func(I, m, denv ? denv : I->globals, &a, args, 2);
                 return;
             }
         }
@@ -66,6 +67,12 @@ static void assign_to(interp_t *I, env_t *env, ast_node_t *target, value_t v)
             if (i < 0 || (size_t)i >= a.as.arr->len)
                 rt_error(I, target, "index out of range in assignment");
             a.as.arr->data[i] = v;
+            return;
+        }
+        if (a.kind == VAL_PTR) {
+            if (!a.as.ptr.addr) rt_error(I, target, "write through a null pointer");
+            int64_t i = to_int(eval(I, env, target->b));
+            ptr_store(a.as.ptr, i, v);
             return;
         }
         rt_error(I, target, "value is not index-assignable");

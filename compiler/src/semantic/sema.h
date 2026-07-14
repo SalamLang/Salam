@@ -22,6 +22,7 @@
 #include "xml/xml.h"
 #include "semantic/types.h"
 #include "semantic/symbol.h"
+#include "condcomp/condcomp.h"
 
 typedef struct {
     scope_t *global;
@@ -34,7 +35,7 @@ typedef struct {
 } sema_result_t;
 
 sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const char *file,
-                        const char *lang);
+                        const char *lang, const cc_table_t *cc);
 
 void symbols_to_xml(xml_writer_t *w, const sema_result_t *r);
 

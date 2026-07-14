@@ -248,44 +248,10 @@ const char *p_munch_name(parser_t *p)
 
 const char *parse_decl_name(parser_t *p)
 {
-    if (!p_at(p, TK_IDENT)) return p_name(p, "expected name");
-    size_t m = p_ident_run_len(p);
-
-    long dynidx = -1;
-    {
-        size_t i = 0;
-        for (; i + 1 < m; i++) {
-            const token_t *t = p_peekn(p, i);
-            if (t->kind == TK_IDENT && strcmp(t->lexeme, "dyn") == 0) {
-                dynidx = (long)i;
-                break;
-            }
-        }
-    }
-    token_kind_t after = p_peekn(p, m)->kind;
-    size_t name_words;
-    if (dynidx >= 1)
-        name_words = (size_t)dynidx;
-    else if (after == TK_COLON || after == TK_KW_FUNC || after == TK_AMP)
-        name_words = m;
-    else if (m >= 2)
-        name_words = m - 1;
-    else
-        name_words = 1;
-    if (name_words < 1) name_words = 1;
-    sb_t b;
-    sb_init(&b);
-    {
-        size_t i = 0;
-        for (; i < name_words; i++) {
-            if (i) sb_putc(&b, ' ');
-            sb_puts(&b, p_peek(p)->lexeme);
-            p_advance(p);
-        }
-    }
-    const char *r = arena_strdup(p->a, sb_cstr(&b));
-    sb_free(&b);
-    return r;
+    /* A type, when present, is always introduced by a mandatory ':', so the
+     * whole leading run of identifiers belongs to the (possibly multi-word)
+     * name; no heuristic split is needed. */
+    return p_munch_name(p);
 }
 
 #define P_MAX_DEPTH 128
@@ -310,4 +276,52 @@ void p_comma_list(parser_t *p, ast_node_t *parent, token_kind_t close, p_elem_fn
     do {
         ast_add(p->a, parent, elem(p));
     } while (p_match(p, TK_COMMA));
+}
+
+/*
+ * A function signature's optional return type and its block-open (or, for
+ * extern declarations, the end of the declaration) both start with ':', so
+ * seeing one ':' right after ')' is ambiguous:
+ *   func f(): i32:      <- ':' then a return type, then the block-open ':'
+ *   func f():           <- ':' is already the block-open (no return type)
+ *       x: i32 = 5
+ * Note a newline right after ':' does NOT produce TK_STMT_END (the lexer
+ * suppresses it there so an ordinary block-open ':' can be followed by its
+ * body on the next line), so that token can't be used to detect "no return
+ * type" the way it can elsewhere. Instead: a return type, when present, is
+ * always written on the same source line as the ':' that introduces it (as
+ * in every example above); the block body's first statement, when there is
+ * no return type, starts on the *next* line. So if the token right after
+ * ':' is already on a later line, this ':' must be the block-opener.
+ * Otherwise, tentatively parse a type and accept it as the return type only
+ * if a block-open ':', a statement terminator, or EOF follows (covering
+ * both a normal function body and a block-less extern declaration);
+ * anything else means the parse went off the rails (e.g. the body's first
+ * statement happens to start with a bare `name: type` on the very same
+ * line), so roll back and treat the first ':' as the block-opener instead.
+ */
+bool p_try_return_type(parser_t *p, ast_node_t **out_type)
+{
+    if (!p_at(p, TK_COLON)) return false;
+    size_t save_pos = p->pos;
+    uint32_t colon_line = p_peek(p)->span.begin.line;
+    p_advance(p);
+    if (p_peek(p)->span.begin.line != colon_line) {
+        p->pos = save_pos;
+        return false;
+    }
+    bool save_panic = p->panic;
+    bool save_had_error = p->had_error;
+    p->panic = true;
+    ast_node_t *t = parse_type(p);
+    bool valid_name = t->name && strcmp(t->name, "<error>") != 0;
+    if (valid_name && (p_at(p, TK_COLON) || p_at(p, TK_STMT_END) || p_at_eof(p))) {
+        p->panic = save_panic;
+        *out_type = t;
+        return true;
+    }
+    p->pos = save_pos;
+    p->panic = save_panic;
+    p->had_error = save_had_error;
+    return false;
 }

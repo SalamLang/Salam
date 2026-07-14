@@ -70,9 +70,6 @@ void lx_scan_op(lx_t *L)
     case ':':
         k = TK_COLON;
         break;
-    case ';':
-        k = TK_STMT_END;
-        break;
     case '.':
 
         if (lx_peek(L) == '.' && lx_peek2(L, 1) == '.') {
@@ -142,6 +139,11 @@ void lx_scan_op(lx_t *L)
             return;
         }
         break;
+    case ';':
+        lx_error(
+            L, &b,
+            "unexpected ';' (statements end at a newline; 'for' uses ',' between clauses)");
+        return;
     default:
         lx_error(L, &b, "unexpected character");
         return;

@@ -4,11 +4,37 @@
 set -u
 . "$(dirname "$0")/lib.sh"
 salam_ensure_compiler --quiet
-WORK=tests/.work
+WORK="${WORK:-${TMPDIR:-/tmp}/salam-run-tests-work.$$}"
 mkdir -p "$WORK"
+trap 'rm -rf "$WORK"' EXIT
 pass=0
 fail=0
 LANGS="${LANGS:-en fa ar}"
+NPROC="${NPROC:-$(command -v nproc >/dev/null 2>&1 && nproc || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
+RUN_ONE="$(dirname "$0")/run-one-build.sh"
+case "$SALAM" in
+/*) SALAM_ABS="$SALAM" ;;
+*) SALAM_ABS="$(pwd)/$SALAM" ;;
+esac
+
+run_batch() {
+    jobs="$1"
+    [ -s "$jobs" ] || return 0
+    results="$WORK/.batch-results.$$"
+    xargs -P "$NPROC" -a "$jobs" -d '\n' -I{} sh -c '
+        IFS="	"
+        set -- {}
+        label="$1"; f="$2"; lang="$3"; exp="$4"; extra="$5"
+        unset IFS
+        sh "'"$RUN_ONE"'" "'"$SALAM_ABS"'" "'"$WORK"'" "$label" "$f" "$lang" "$exp" $extra
+    ' >"$results" 2>&1
+    cat "$results"
+    p=$(grep -c '^PASS' "$results")
+    fcount=$(grep -c '^FAIL' "$results")
+    pass=$((pass + p))
+    fail=$((fail + fcount))
+    rm -f "$results" "$jobs"
+}
 check_out() {
     if [ "$3" = "$(tr -d '\r' <"$2")" ]; then
         echo "PASS $1"
@@ -33,6 +59,8 @@ want() {
 }
 
 if want general; then
+    jobs="$WORK/.jobs-general.$$"
+    : >"$jobs"
     for lang in $LANGS; do
         for f in tests/$lang/general/*.salam; do
             [ -e "$f" ] || continue
@@ -40,22 +68,11 @@ if want general; then
             case "$name" in _*) continue ;; esac
             exp="tests/$lang/general/$name.out"
             [ -f "$exp" ] || continue
-            def=$(grep -o 'DEFINE: [A-Za-z0-9_]*' "$f" | sed 's/DEFINE: /-D/')
-            rm -f "$WORK/$name.exe"
-            "$SALAM" build "$f" --output="$WORK/$name.exe" --no-color --log-level=error --lang=$lang $def >/dev/null 2>&1
-            if [ ! -x "$WORK/$name.exe" ]; then
-                sleep 1
-                "$SALAM" build "$f" --output="$WORK/$name.exe" --no-color --log-level=error --lang=$lang $def >/dev/null 2>&1
-            fi
-            if [ ! -x "$WORK/$name.exe" ]; then
-                echo "FAIL general/$lang/$name (build failed)"
-                fail=$((fail + 1))
-                continue
-            fi
-            got=$("$WORK/$name.exe" 2>&1 | tr -d '\r')
-            check_out "general/$lang/$name" "$exp" "$got"
+            def=$(grep -o 'DEFINE: [A-Za-z0-9_]*' "$f" | sed 's/DEFINE: /-D/' | tr '\n' ' ')
+            printf 'general/%s/%s\t%s\t%s\t%s\t%s\n' "$lang" "$name" "$f" "$lang" "$exp" "${def:--}" >>"$jobs"
         done
     done
+    run_batch "$jobs"
 fi
 if want exec; then
     for lang in $LANGS; do
@@ -165,38 +182,25 @@ if want db; then
         }; done
         dbok=0
         if [ -n "$DBCC" ] && command -v ar >/dev/null 2>&1; then
-            if "$DBCC" -c "tests/$lang/db/mysql_mock.c" -o "$WORK/mysql_mock.o" >/dev/null 2>&1 &&
-                ar rcs "$WORK/libsalammock.a" "$WORK/mysql_mock.o" >/dev/null 2>&1; then
+            mkdir -p "$WORK/dbwork/.work"
+            if "$DBCC" -c "tests/$lang/db/mysql_mock.c" -o "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1 &&
+                ar rcs "$WORK/dbwork/.work/libsalammock.a" "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1; then
                 dbok=1
             fi
         fi
         if [ "$dbok" = "1" ]; then
+            jobs="$WORK/.jobs-db-$lang.$$"
+            : >"$jobs"
             for f in tests/$lang/db/*.salam; do
                 [ -e "$f" ] || continue
                 name=$(basename "$f" .salam)
                 case "$name" in _*) continue ;; esac
                 exp="tests/$lang/db/$name.out"
                 [ -f "$exp" ] || continue
-                exe="$WORK/db_${name}_$$.exe"
-                rm -f "$exe"
-                "$SALAM" build "$f" --output="$exe" --cc="$DBCC" --no-color --log-level=error --lang=$lang -DSALAM_DB_MOCK >/dev/null 2>&1
-                if [ ! -x "$exe" ]; then
-                    sleep 1
-                    "$SALAM" build "$f" --output="$exe" --cc="$DBCC" --no-color --log-level=error --lang=$lang -DSALAM_DB_MOCK >/dev/null 2>&1
-                fi
-                if [ ! -x "$exe" ]; then
-                    echo "FAIL db/$lang/$name (build failed)"
-                    fail=$((fail + 1))
-                    continue
-                fi
-                got=""
-                for _try in 1 2 3 4; do
-                    got=$("$exe" 2>&1 | tr -d '\r')
-                    case "$got" in *"Permission denied"* | "") sleep 1 ;; *) break ;; esac
-                done
-                rm -f "$exe"
-                check_out "db/$lang/$name" "$exp" "$got"
+                printf 'db/%s/%s\t%s\t%s\t%s\t%s\n' "$lang" "$name" "$f" "$lang" "$exp" \
+                    "--cc=$DBCC -DSALAM_DB_MOCK" >>"$jobs"
             done
+            run_batch "$jobs"
         else
             echo "SKIP db/$lang/* (no C compiler/ar to build the mysql mock)"
         fi

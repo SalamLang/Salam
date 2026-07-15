@@ -43,8 +43,12 @@ static const char *cg_vardecl_inline(cg_t *cg, ast_node_t *n)
 static const char *cg_simple_inline(cg_t *cg, ast_node_t *n)
 {
     if (n->kind == AST_VAR_DECL) return cg_vardecl_inline(cg, n);
-    if (n->kind == AST_ASSIGN)
+    if (n->kind == AST_ASSIGN) {
+        if (n->op == TK_POWER_EQ)
+            return cg_fmt(cg, "%s = pow((double)(%s), (double)(%s))", cg_expr(cg, n->a),
+                          cg_expr(cg, n->a), cg_expr(cg, n->b));
         return cg_fmt(cg, "%s %s %s", cg_expr(cg, n->a), cg_op(n->op), cg_expr(cg, n->b));
+    }
     if (n->kind == AST_EXPR_STMT) return cg_expr(cg, n->a);
     return cg_expr(cg, n);
 }
@@ -140,6 +144,11 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         if (n->op == TK_PLUS_EQ && n->a->type_str && !strcmp(n->a->type_str, "str")) {
             cg_line(cg, "%s = salam_strcat(%s, %s);", cg_expr(cg, n->a),
                     cg_expr(cg, n->a), cg_str_operand(cg, n->b));
+            break;
+        }
+        if (n->op == TK_POWER_EQ) {
+            cg_line(cg, "%s = pow((double)(%s), (double)(%s));", cg_expr(cg, n->a),
+                    cg_expr(cg, n->a), cg_expr(cg, n->b));
             break;
         }
         cg_line(cg, "%s %s %s;", cg_expr(cg, n->a), cg_op(n->op), cg_expr(cg, n->b));

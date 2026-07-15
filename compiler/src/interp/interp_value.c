@@ -520,6 +520,8 @@ token_kind_t compound_base(token_kind_t op)
         return TK_SLASH;
     case TK_PERCENT_EQ:
         return TK_PERCENT;
+    case TK_POWER_EQ:
+        return TK_POWER;
     default:
         return TK_EOF;
     }

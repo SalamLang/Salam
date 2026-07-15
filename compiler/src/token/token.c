@@ -91,6 +91,7 @@ static const char *const k_token_names[TK__COUNT] = {
     [TK_STAR_EQ] = "STAR_ASSIGN",
     [TK_SLASH_EQ] = "SLASH_ASSIGN",
     [TK_PERCENT_EQ] = "PERCENT_ASSIGN",
+    [TK_POWER_EQ] = "POWER_ASSIGN",
     [TK_LPAREN] = "LPAREN",
     [TK_RPAREN] = "RPAREN",
     [TK_LBRACE] = "LBRACE",

@@ -27,7 +27,7 @@ static void demote_auto_type(ast_node_t *n)
 
 static bool at_type_anno(const parser_t *p)
 {
-    return p_at(p, TK_COLON) || p_at(p, TK_IDENT) || p_at(p, TK_KW_FUNC);
+    return p_at(p, TK_COLON);
 }
 
 ast_node_t *parse_var_decl(parser_t *p)

@@ -30,6 +30,7 @@ static unsigned bp_of(token_kind_t k)
     case TK_STAR_EQ:
     case TK_SLASH_EQ:
     case TK_PERCENT_EQ:
+    case TK_POWER_EQ:
         return BP(10, 10);
 
     case TK_OR:
@@ -197,6 +198,7 @@ static ast_node_t *parse_led(parser_t *p, ast_node_t *lhs, token_kind_t op, unsi
     case TK_STAR_EQ:
     case TK_SLASH_EQ:
     case TK_PERCENT_EQ:
+    case TK_POWER_EQ:
         return led_assign(p, lhs, op, bp);
     default: {
         p_advance(p);

@@ -38,6 +38,7 @@ static bool token_continues(token_kind_t k)
     case TK_STAR_EQ:
     case TK_SLASH_EQ:
     case TK_PERCENT_EQ:
+    case TK_POWER_EQ:
     case TK_COMMA:
     case TK_DOT:
     case TK_COLON:

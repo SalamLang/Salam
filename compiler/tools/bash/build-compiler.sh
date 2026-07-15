@@ -31,7 +31,6 @@ esac
     src/lexer/lexer_layout.c src/lexer/lexer_detect.c \
     src/ast/ast.c src/ast/ast_xml.c \
     src/parser/parser.c src/parser/parser_cursor.c \
-    src/parser/parser_migrate_dump.c \
     src/parser/parser_ffi.c src/parser/parser_type.c \
     src/parser/parser_decl.c src/parser/parser_decl_var.c \
     src/parser/parser_stmt.c \

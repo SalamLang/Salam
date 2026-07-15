@@ -80,6 +80,8 @@ bool p_recurse_enter(parser_t *p, const char *what);
 
 void p_recurse_leave(parser_t *p);
 
+bool p_try_return_type(parser_t *p, ast_node_t **out_type);
+
 typedef ast_node_t *(*p_elem_fn)(parser_t *p);
 
 void p_comma_list(parser_t *p, ast_node_t *parent, token_kind_t close, p_elem_fn elem);

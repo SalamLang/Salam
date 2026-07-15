@@ -654,6 +654,10 @@ type_t *check_call(sema_t *s, ast_node_t *n)
 
         if (m && m->kind == SYM_FIELD && m->type && m->type->kind == TY_FUNC) {
             type_t *ft = m->type;
+            if (!m->is_pub && struct_sym_of(s->self_type) != ssym)
+                SERR(s, 17, &n->span,
+                     "field '%s' is private in struct '%s' (mark it 'pub')", callee->name,
+                     ssym->name);
             decorate(s, callee, ft);
             {
                 ast_node_t *pf = sema_pure_fn(s);
@@ -682,6 +686,9 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                  ssym->name);
             return decorate(s, n, err_ty(s));
         }
+        if (!m->is_pub && struct_sym_of(s->self_type) != ssym)
+            SERR(s, 17, &n->span, "method '%s' is private in struct '%s' (mark it 'pub')",
+                 callee->name, ssym->name);
         func_sig_t *sig = resolve_overload(s, m, &argtypes, &n->span, callee->name);
         coerce_args_to_dyn(s, n, &argtypes, sig);
         decorate(s, callee, m->type);

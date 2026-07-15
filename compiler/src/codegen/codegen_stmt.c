@@ -147,8 +147,14 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             break;
         }
         if (n->op == TK_POWER_EQ) {
-            cg_line(cg, "%s = pow((double)(%s), (double)(%s));", cg_expr(cg, n->a),
-                    cg_expr(cg, n->a), cg_expr(cg, n->b));
+            const char *ct = cg_ctype(cg, n->a->type_str ? n->a->type_str : "double");
+            int t = ++cg->tmpn;
+            const char *lhs = cg_expr(cg, n->a);
+            const char *rhs = cg_expr(cg, n->b);
+            cg_line(cg,
+                    "{ %s *__pw%d = &(%s); *__pw%d = (%s)pow((double)(*__pw%d), "
+                    "(double)(%s)); }",
+                    ct, t, lhs, t, ct, t, rhs);
             break;
         }
         cg_line(cg, "%s %s %s;", cg_expr(cg, n->a), cg_op(n->op), cg_expr(cg, n->b));

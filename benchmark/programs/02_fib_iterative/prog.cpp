@@ -1,6 +1,7 @@
 #include <iostream>
 
-int main() {
+int main()
+{
     long long a = 0;
     long long b = 1;
     for (long long i = 0; i < 5000000; i++) {

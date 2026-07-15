@@ -1,6 +1,7 @@
 #include <stdio.h>
 
-int main(void) {
+int main(void)
+{
     long long count = 0;
     long long total = 0;
     long long n;
@@ -11,8 +12,7 @@ int main(void) {
             if (n % j == 0) {
                 s += j;
                 long long q = n / j;
-                if (q != j)
-                    s += q;
+                if (q != j) s += q;
             }
         }
         if (s == n) {

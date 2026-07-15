@@ -1,6 +1,7 @@
 #include <stdio.h>
 
-int main(void) {
+int main(void)
+{
     long long a = 0;
     long long b = 1;
     long long i;

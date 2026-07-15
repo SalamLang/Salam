@@ -1,6 +1,7 @@
 #include <stdio.h>
 
-int main(void) {
+int main(void)
+{
     double sum = 0.0;
     double sign = 1.0;
     double den = 1.0;

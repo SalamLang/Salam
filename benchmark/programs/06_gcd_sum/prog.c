@@ -1,6 +1,7 @@
 #include <stdio.h>
 
-long long gcd(long long a, long long b) {
+long long gcd(long long a, long long b)
+{
     long long x = a;
     long long y = b;
     while (y != 0) {
@@ -11,7 +12,8 @@ long long gcd(long long a, long long b) {
     return x;
 }
 
-int main(void) {
+int main(void)
+{
     long long s = 0;
     long long i;
     for (i = 1; i <= 300000; i++) {

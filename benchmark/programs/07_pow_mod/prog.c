@@ -1,6 +1,7 @@
 #include <stdio.h>
 
-long long powmod(long long base, long long e, long long m) {
+long long powmod(long long base, long long e, long long m)
+{
     long long result = 1;
     long long b = base % m;
     long long ex = e;
@@ -14,7 +15,8 @@ long long powmod(long long base, long long e, long long m) {
     return result;
 }
 
-int main(void) {
+int main(void)
+{
     long long s = 0;
     long long i;
     for (i = 1; i <= 30000; i++) {

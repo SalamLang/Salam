@@ -1,6 +1,7 @@
 #include <iostream>
 
-int main() {
+int main()
+{
     long long count = 1;
     for (long long i = 3; i < 100000; i += 2) {
         long long is_p = 1;

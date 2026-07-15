@@ -182,8 +182,9 @@ if want db; then
         }; done
         dbok=0
         if [ -n "$DBCC" ] && command -v ar >/dev/null 2>&1; then
-            if "$DBCC" -c "tests/$lang/db/mysql_mock.c" -o "$WORK/mysql_mock.o" >/dev/null 2>&1 &&
-                ar rcs "$WORK/libsalammock.a" "$WORK/mysql_mock.o" >/dev/null 2>&1; then
+            mkdir -p "$WORK/dbwork/.work"
+            if "$DBCC" -c "tests/$lang/db/mysql_mock.c" -o "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1 &&
+                ar rcs "$WORK/dbwork/.work/libsalammock.a" "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1; then
                 dbok=1
             fi
         fi

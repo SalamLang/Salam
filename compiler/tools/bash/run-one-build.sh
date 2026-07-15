@@ -23,6 +23,7 @@ case "$WORK" in /*) : ;; *) WORK="$(pwd)/$WORK" ;; esac
 jobid=$(echo "$label" | tr '/ ' '__')
 jobdir="$WORK/job_${jobid}_$$"
 mkdir -p "$jobdir"
+[ -d "$WORK/dbwork" ] && ln -s "$WORK/dbwork" "$jobdir/tests" 2>/dev/null
 exe="$WORK/exe_$jobid.exe"
 rm -f "$exe"
 

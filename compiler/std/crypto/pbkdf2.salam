@@ -1,5 +1,11 @@
 package crypto
 
+// Deliberately far below OWASP's 600,000: Salam has no native bitwise ops, so
+// PBKDF2-HMAC-SHA256 here runs ~0.3ms/iter on an optimized build and several
+// times slower under tcc; 600,000 would take tens of seconds to minutes per
+// hash. 1000 keeps HashPassword within a fraction of a second on the slowest
+// supported backend. Callers wanting a stronger tradeoff should call
+// Pbkdf2HmacSha256Hex directly with an explicit iteration count.
 const PBKDF2_DEFAULT_ITERATIONS : int = 1000
 
 func _pbkdf2_hmac_sha256_core(password : void*, plen : int, salt : void*, slen : int, iterations : int, outp : void*, dklen : int):
@@ -8,6 +14,11 @@ func _pbkdf2_hmac_sha256_core(password : void*, plen : int, salt : void*, slen :
     mut opad : void* = mem.Allocate(64 as u64)
     defer mem.Free(opad)
     _hmac_sha256_prep(password, plen, ipad, opad)
+    mid_ipad : Sha256State = _sha256_compress_block(_sha256_iv(), ipad)
+    mid_opad : Sha256State = _sha256_compress_block(_sha256_iv(), opad)
+    mut blk2 : void* = mem.Allocate(64 as u64)
+    defer mem.Free(blk2)
+    _hmac_fixed96_block2_init(blk2)
     mut block_salt : void* = mem.Allocate((slen + 4) as u64)
     defer mem.Free(block_salt)
     mem.Copy(block_salt, salt, slen as u64)
@@ -30,7 +41,7 @@ func _pbkdf2_hmac_sha256_core(password : void*, plen : int, salt : void*, slen :
         end
         mut iter : int = 1
         while iter < iterations:
-            _hmac_sha256_apply(ipad, opad, u, 32, u)
+            _hmac_sha256_apply32_fast(mid_ipad, mid_opad, blk2, u, u)
             mut cj : int = 0
             while cj < 32:
                 _bput(acc, cj, _xor8(_bget(acc, cj), _bget(u, cj)))

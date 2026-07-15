@@ -1,6 +1,7 @@
 #include <iostream>
 
-int main() {
+int main()
+{
     double sum = 0.0;
     double sign = 1.0;
     double den = 1.0;

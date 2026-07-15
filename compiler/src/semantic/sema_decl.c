@@ -176,6 +176,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
                             symbol_t *f = symbol_new(s->a, SYM_FIELD, m->name);
                             f->type = sema_resolve_type(s, m->type);
                             f->decl = m;
+                            f->is_pub = m->is_pub;
                             if (f->type && f->type->kind == TY_DYN)
                                 SERR(s, 2, &m->span,
                                      "field '%s': a `dyn` value cannot yet be a struct "
@@ -192,6 +193,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
                             symbol_t *mm =
                                 get_or_make_func(s, sym->members, m->name, SYM_METHOD);
                             if (!mm->decl) mm->decl = m;
+                            if (m->is_pub) mm->is_pub = true;
                             vec_push(s->a, &mm->overloads, build_sig(s, m, sym));
                             mm->type = sym->type;
                         }

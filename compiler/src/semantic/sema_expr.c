@@ -288,6 +288,9 @@ static type_t *check_member(sema_t *s, ast_node_t *n)
         SERR(s, 17, &n->span, "method '%s' used as a value (call it)", n->name);
         return decorate(s, n, err_ty(s));
     }
+    if (!f->is_pub && struct_sym_of(s->self_type) != ssym)
+        SERR(s, 17, &n->span, "field '%s' is private in struct '%s' (mark it 'pub')",
+             n->name, ssym->name);
     return decorate(s, n, f->type);
 }
 

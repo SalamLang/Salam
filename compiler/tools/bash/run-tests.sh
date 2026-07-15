@@ -4,9 +4,9 @@
 set -u
 . "$(dirname "$0")/lib.sh"
 salam_ensure_compiler --quiet
-WORK="${WORK:-${TMPDIR:-/tmp}/salam-run-tests-work}"
-rm -rf "$WORK"
+WORK="${WORK:-${TMPDIR:-/tmp}/salam-run-tests-work.$$}"
 mkdir -p "$WORK"
+trap 'rm -rf "$WORK"' EXIT
 pass=0
 fail=0
 LANGS="${LANGS:-en fa ar}"

@@ -307,8 +307,14 @@ static ast_node_t *parse_struct(parser_t *p)
         p_skip_terminators(p);
         parse_metas(p, &mpend);
         if (p_at(p, TK_KW_END) || p_at_eof(p)) break;
+        bool m_pub = false;
+        if (p_at(p, TK_KW_PUB)) {
+            m_pub = true;
+            p_advance(p);
+        }
         ast_node_t *member = p_at(p, TK_KW_FUNC) ? parse_function(p) : parse_field(p);
         if (member) {
+            member->is_pub = m_pub;
             {
                 size_t i = 0;
                 for (; i < mpend.len; i++)

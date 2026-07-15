@@ -197,6 +197,10 @@ static const i18n_pair_t k_msg_fa[] = {
     {"struct literal '%s' requires field '%s'",
      "مقدار ساختاری '%s' به فیلد '%s' نیاز دارد"},
     {"no method '%s' for type '%s'", "متدی به نام '%s' برای نوع '%s' وجود ندارد"},
+    {"field '%s' is private in struct '%s' (mark it 'pub')",
+     "فیلد '%s' در ساختار '%s' خصوصی است (آن را 'عمومی' کنید)"},
+    {"method '%s' is private in struct '%s' (mark it 'pub')",
+     "متد '%s' در ساختار '%s' خصوصی است (آن را 'عمومی' کنید)"},
     {"method '%s' used as a value (call it)",
      "متد '%s' به‌جای مقدار استفاده شده است "
      "(آن را فراخوانی کنید)"},

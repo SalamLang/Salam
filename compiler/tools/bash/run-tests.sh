@@ -17,17 +17,22 @@ case "$SALAM" in
 *) SALAM_ABS="$(pwd)/$SALAM" ;;
 esac
 
+if [ -z "${SALAM_STD:-}" ] && [ -d "$(pwd)/std" ]; then
+    SALAM_STD="$(pwd)/std"
+    export SALAM_STD
+fi
+
 run_batch() {
     jobs="$1"
     [ -s "$jobs" ] || return 0
     results="$WORK/.batch-results.$$"
-    xargs -P "$NPROC" -a "$jobs" -d '\n' -I{} sh -c '
+    tr '\n' '\0' <"$jobs" | xargs -0 -n1 -P "$NPROC" sh -c '
         IFS="	"
-        set -- {}
+        set -- $1
         label="$1"; f="$2"; lang="$3"; exp="$4"; extra="$5"
         unset IFS
         sh "'"$RUN_ONE"'" "'"$SALAM_ABS"'" "'"$WORK"'" "$label" "$f" "$lang" "$exp" $extra
-    ' >"$results" 2>&1
+    ' _ >"$results" 2>&1
     cat "$results"
     p=$(grep -c '^PASS' "$results")
     fcount=$(grep -c '^FAIL' "$results")
@@ -93,7 +98,7 @@ if want errors; then
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            code=$(grep -oE '(EXPECT|انتظار): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار): //' | tr -d '\r')
+            code=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
             out=$("$SALAM" "$f" --emit-symbol-xml --no-color --log-level=error --lang=$lang 2>&1 >/dev/null)
             if [ -n "$code" ] && echo "$out" | grep -qF "$code"; then
                 echo "PASS errors/$lang/$name ($code)"
@@ -112,7 +117,7 @@ if want layout; then
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            expect=$(grep -oE '(EXPECT|انتظار): .*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار): //' | tr -d '\r')
+            expect=$(grep -oE '(EXPECT|انتظار|توقع): .*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
             "$SALAM" layout build "$f" --inline --output="$WORK/$name.html" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
             if [ -f "$WORK/$name.html" ] && grep -qF "$expect" "$WORK/$name.html"; then
                 echo "PASS layout/$lang/$name (has '$expect')"

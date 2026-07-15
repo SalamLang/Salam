@@ -521,23 +521,17 @@ static void check_toplevel(sema_t *s, ast_node_t *d)
     }
 }
 
-/*
- * Enforce that every primitive type name a file writes matches that file's own
- * language: a Persian source uses Persian type names (صحیح۳۲, رشته, ...) and an
- * English source uses English ones. Only the module's own authored annotations
- * are visited (synthetic generic instances and imported packages are checked in
- * their own language elsewhere), so interop with the English stdlib is fine.
- */
 static void lint_lang_types(sema_t *s, ast_node_t *n)
 {
     if (!n) return;
     if (n->kind == AST_TYPE && n->name && type_prim_kind_from_name(n->name, NULL) >= 0 &&
         type_prim_kind_from_name(n->name, s->lang) < 0) {
         bool fa = s->lang && s->lang[0] == 'f';
-        SERR(s, 1, &n->span,
-             fa ? i18n_tr("type name '%s' must be Persian in a Persian file")
-                : i18n_tr("type name '%s' must be English in an English file"),
-             n->name);
+        bool ar = s->lang && s->lang[0] == 'a';
+        const char *msg = fa   ? "type name '%s' must be Persian in a Persian file"
+                          : ar ? "type name '%s' must be Arabic in an Arabic file"
+                               : "type name '%s' must be English in an English file";
+        SERR(s, 1, &n->span, i18n_tr(msg), n->name);
     }
     lint_lang_types(s, n->type);
     lint_lang_types(s, n->a);

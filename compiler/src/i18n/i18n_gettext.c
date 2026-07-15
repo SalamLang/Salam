@@ -741,15 +741,651 @@ static const i18n_pair_t k_msg_fa[] = {
 
     {NULL, NULL}};
 
+static const i18n_pair_t k_msg_ar[] = {
+    {"error", "خطأ"},
+    {"warning", "تحذير"},
+    {"note", "ملاحظة"},
+    {"help", "مساعدة"},
+
+    {"DRIVER", "المشغّل"},
+    {"CLI", "سطر الأوامر"},
+    {"LEXER", "المحلّل اللفظي"},
+    {"PARSER", "المحلّل النحوي"},
+    {"SEMANTIC", "المحلّل الدلالي"},
+    {"IR", "الوسيط"},
+    {"CODEGEN", "توليد الكود"},
+
+    {"TRACE", "تتبّع"},
+    {"DEBUG", "تنقيح"},
+    {"INFO", "معلومة"},
+    {"WARN", "تحذير"},
+    {"ERROR", "خطأ"},
+    {"OFF", "إيقاف"},
+
+    {"parsing %zu tokens", "تحليل %zu رمز"},
+    {"parse complete: %zu top-level defs%s",
+     "اكتمل التحليل: %zu تعريف على المستوى الأعلى%s"},
+    {"analyzing %zu top-level definitions", "تدقيق %zu تعريف على المستوى الأعلى"},
+    {"analysis complete: %zu error(s), %zu warning(s)",
+     "اكتمل التدقيق: %zu خطأ، %zu تحذير"},
+    {"compiling %s -> %s.c", "ترجمة %s إلى %s.c"},
+    {"compiling %s (lang=%s, %zu bytes)", "ترجمة %s (اللغة=%s، %zu بايت)"},
+    {"produced %zu tokens%s", "أُنتج %zu رمز%s"},
+    {"lexing %s (%zu bytes, lang=%s)", "تحليل لفظي %s (%zu بايت، اللغة=%s)"},
+    {"lexing complete: %zu tokens%s", "اكتمل التحليل اللفظي: %zu رمز%s"},
+    {"unclosed layout block at end of file", "كتلة تخطيط غير مغلقة في نهاية الملف"},
+    {"generating C for module '%s'", "توليد C للوحدة '%s'"},
+    {"generated %zu bytes of C", "تولّد %zu بايت من C"},
+    {"generating layout output", "توليد مُخرَج التخطيط"},
+    {"layout: %zu bytes HTML, %zu bytes CSS, %zu bytes JS",
+     "التخطيط: %zu بايت HTML، %zu بايت CSS، %zu بايت JS"},
+    {"assembling: %s", "تجميع: %s"},
+    {"produced object files (.o)", "أُنتجت ملفات الكائن (.o)"},
+    {"linking: %s", "ربط: %s"},
+    {"built executable: %s", "بُني الملف التنفيذي: %s"},
+    {"kept generated C files", "احتُفظ بملفات C المولَّدة"},
+    {"wrote %s", "كُتب %s"},
+    {"layout build %s", "بناء التخطيط %s"},
+    {"layout build complete (%zu error(s), %zu warning(s))",
+     "اكتمل بناء التخطيط (%zu خطأ، %zu تحذير)"},
+    {"%s XML written to %s", "كُتب XML الخاص بـ %s إلى %s"},
+    {"ignoring framework link '%s' (frameworks are macOS-only)",
+     "تجاهل رابط إطار العمل '%s' (أطر العمل خاصة بـ macOS "
+     "فقط)"},
+    {"duplicate component '%s' ignored", "تم تجاهل المكوّن المكرّر '%s'"},
+    {"included layout %s", "تخطيط مُضمَّن %s"},
+    {"included file '%s' has no layout block",
+     "الملف المُضمَّن '%s' لا يحتوي على كتلة تخطيط"},
+    {"layout expand: %zu component(s), %zu included file(s)",
+     "توسيع التخطيط: %zu مكوّن، %zu ملف مُضمَّن"},
+    {"generating LLVM IR for module '%s'%s", "توليد LLVM IR للوحدة '%s'%s"},
+    {"generated %zu bytes of LLVM IR%s", "تولّد %zu بايت من LLVM IR%s"},
+    {"llvm toolchain: %s", "سلسلة أدوات llvm: %s"},
+    {"LLVM IR written to %s", "كُتب LLVM IR إلى %s"},
+
+    {"enter function '%s'%s", "الدخول إلى الدالة '%s'%s"},
+    {"exit function '%s'", "الخروج من الدالة '%s'"},
+    {"resolving package %s", "حلّ الحزمة %s"},
+    {"enter block scope (%zu stmts)", "الدخول إلى نطاق الكتلة (%zu عبارة)"},
+    {"exit block scope", "الخروج من نطاق الكتلة"},
+    {"validating layout block", "التحقق من كتلة التخطيط"},
+    {"entering layout mode", "الدخول إلى وضع التخطيط"},
+    {"exiting layout mode", "الخروج من وضع التخطيط"},
+    {"registered component '%s' (%s)", "سُجّل المكوّن '%s' (%s)"},
+
+    {" (with errors)", " (مع أخطاء)"},
+    {" (+debug info)", " (+معلومات التنقيح)"},
+    {" (with unsupported constructs)", " (مع تراكيب غير مدعومة)"},
+    {" (method)", " (طريقة)"},
+
+    {"unknown type '%s'", "نوع غير معروف '%s'"},
+    {"type name '%s' must be Persian in a Persian file",
+     "اسم النوع '%s' يجب أن يكون فارسيًا في ملف فارسي"},
+    {"type name '%s' must be English in an English file",
+     "اسم النوع '%s' يجب أن يكون إنجليزيًا في ملف إنجليزي"},
+    {"type name '%s' must be Arabic in an Arabic file",
+     "اسم النوع '%s' يجب أن يكون عربيًا في ملف عربي"},
+    {"unknown struct '%s'", "بنية غير معروفة '%s'"},
+    {"unknown identifier '%s'", "معرّف غير معروف '%s'"},
+    {"type '%s' used as a value", "استُخدم النوع '%s' كقيمة"},
+    {"function '%s' used as a value", "استُخدمت الدالة '%s' كقيمة"},
+    {"redefinition of '%s'", "إعادة تعريف '%s'"},
+    {"redefinition of global '%s'", "إعادة تعريف المتغيّر العام '%s'"},
+    {"duplicate field '%s' in struct '%s'", "حقل مكرّر '%s' في البنية '%s'"},
+    {"duplicate parameter '%s'", "معامل مكرّر '%s'"},
+    {"duplicate enum member '%s'", "عضو تعداد مكرّر '%s'"},
+    {"cannot infer type of '%s' (no type or initializer)",
+     "تعذّر استنتاج نوع '%s' (لا نوع محدّد ولا قيمة "
+     "ابتدائية)"},
+    {"empty struct '%s' (declare at least one field or method)",
+     "بنية فارغة '%s' (عرّف حقلًا أو طريقة واحدة على الأقل)"},
+    {"empty interface '%s' (declare at least one method)",
+     "واجهة فارغة '%s' (عرّف طريقة واحدة على الأقل)"},
+    {"empty enum '%s' (declare at least one member)",
+     "تعداد فارغ '%s' (عرّف عضوًا واحدًا على الأقل)"},
+    {"unused variable '%s' (prefix with '_' if intentional)",
+     "متغيّر غير مستخدم '%s' (ابدأه بـ '_' إن كان "
+     "مقصودًا)"},
+    {"unused parameter '%s' (prefix with '_' if intentional)",
+     "معامل غير مستخدم '%s' (ابدأه بـ '_' إن كان "
+     "مقصودًا)"},
+    {"empty function '%s' (its body must contain at least one statement)",
+     "دالة فارغة '%s' (يجب أن يحتوي جسمها على عبارة واحدة على "
+     "الأقل)"},
+    {"empty 'if' branch (it must contain at least one statement)",
+     "فرع 'إذا' فارغ (يجب أن يحتوي على عبارة واحدة على الأقل)"},
+    {"empty 'else' branch (it must contain at least one statement)",
+     "فرع 'وإلا' فارغ (يجب أن يحتوي على عبارة واحدة على الأقل)"},
+
+    {"cannot assign '%s' to '%s'", "تعذّر إسناد '%s' إلى '%s'"},
+    {"cannot assign '%s' to '%s' in declaration of '%s'",
+     "تعذّر إسناد '%s' إلى '%s' في تعريف '%s'"},
+    {"assignment target is not assignable", "هدف الإسناد غير قابل للإسناد"},
+    {"cannot assign to immutable target", "تعذّر الإسناد إلى هدف غير قابل للتغيير"},
+    {"default for field '%s': cannot assign '%s' to '%s'",
+     "القيمة الافتراضية للحقل '%s': تعذّر إسناد '%s' إلى "
+     "'%s'"},
+    {"default for parameter '%s': cannot assign '%s' to '%s'",
+     "القيمة الافتراضية للمعامل '%s': تعذّر إسناد '%s' إلى "
+     "'%s'"},
+    {"parameter '%s' without a default value cannot follow a parameter with one",
+     "المعامل '%s' بدون قيمة افتراضية لا يمكن أن يأتي بعد معامل له قيمة "
+     "افتراضية"},
+    {"extern parameter '%s' cannot have a default value",
+     "المعامل الخارجي '%s' لا يمكن أن تكون له قيمة "
+     "افتراضية"},
+    {"field '%s': cannot assign '%s' to '%s'", "الحقل '%s': تعذّر إسناد '%s' إلى '%s'"},
+
+    {"operator cannot be applied to '%s' and '%s'",
+     "لا يمكن تطبيق هذا العامل على '%s' و '%s'"},
+    {"cannot compare '%s' and '%s'", "تعذّرت مقارنة '%s' و '%s'"},
+    {"cannot cast '%s' to '%s'", "تعذّر تحويل '%s' إلى '%s'"},
+    {"operator '!' requires a bool operand", "العامل '!' يتطلّب معاملًا منطقيًا"},
+    {"operator '%%' requires integer operands", "العامل '%%' يتطلّب معاملات صحيحة"},
+    {"operator '**' requires numeric operands", "العامل '**' يتطلّب معاملات عددية"},
+    {"logical operator requires bool operands", "العامل المنطقي يتطلّب معاملات منطقية"},
+    {"unary '-' requires a numeric operand", "العامل الأحادي '-' يتطلّب معاملًا عدديًا"},
+    {"expression is not callable", "هذا التعبير غير قابل للاستدعاء"},
+    {"empty array literal needs a context type", "المصفوفة الفارغة تحتاج إلى نوع سياقي"},
+    {"array elements have incompatible types", "عناصر المصفوفة ذات أنواع غير متوافقة"},
+
+    {"cannot index non-array type '%s'", "تعذّرت الفهرسة على النوع غير المصفوفي "
+                                         "'%s'"},
+    {"array index must be an integer, got '%s'",
+     "فهرس المصفوفة يجب أن يكون عددًا صحيحًا، لكن ورد '%s'"},
+    {"cannot slice non-array type '%s'", "تعذّر أخذ شريحة من النوع غير المصفوفي '%s'"},
+    {"slice bound must be an integer, got '%s'", "حدّ الشريحة يجب أن يكون عددًا صحيحًا، لكن "
+                                                 "ورد '%s'"},
+    {"member access on non-struct type '%s'", "الوصول إلى عضو على نوع غير بنيوي '%s'"},
+    {"method call on non-struct type '%s'", "استدعاء طريقة على نوع غير بنيوي '%s'"},
+    {"no field '%s' in struct '%s'", "لا يوجد حقل '%s' في البنية '%s'"},
+    {"struct '%s' has no field '%s'", "البنية '%s' لا تملك حقلًا باسم '%s'"},
+    {"struct literal '%s' requires field '%s'", "قيمة البنية '%s' تتطلّب الحقل '%s'"},
+    {"no method '%s' for type '%s'", "لا توجد طريقة باسم '%s' للنوع '%s'"},
+    {"field '%s' is private in struct '%s' (mark it 'pub')",
+     "الحقل '%s' خاص في البنية '%s' (اجعله 'عام')"},
+    {"method '%s' is private in struct '%s' (mark it 'pub')",
+     "الطريقة '%s' خاصة في البنية '%s' (اجعلها 'عام')"},
+    {"method '%s' used as a value (call it)", "استُخدمت الطريقة '%s' كقيمة "
+                                              "(استدعِها)"},
+    {"enum '%s' has no member '%s'", "التعداد '%s' لا يملك عضوًا باسم '%s'"},
+
+    {"call to undefined function '%s'", "استدعاء دالة غير معرّفة '%s'"},
+    {"no matching overload for '%s' with %zu argument(s)",
+     "لا يوجد تحميل زائد مطابق لـ '%s' بـ %zu "
+     "وسيط"},
+    {"'%s' expects %zu argument(s), got %zu", "'%s' يتوقّع %zu وسيطًا، لكن ورد %zu"},
+    {"'%s' expects at least %zu argument(s), got %zu",
+     "'%s' يتوقّع %zu وسيطًا على الأقل، لكن ورد %zu"},
+    {"'%s' expects %zu to %zu argument(s), got %zu",
+     "'%s' يتوقّع من %zu إلى %zu وسيط، لكن ورد %zu"},
+    {"ambiguous call to '%s' (%zu candidates)", "استدعاء غامض لـ '%s' (%zu مرشّح)"},
+    {"builtin '%s' takes %d argument(s), got %zu", "الدالة المضمّنة '%s' تأخذ %d "
+                                                   "وسيطًا، لكن ورد %zu"},
+    {"builtin '%s' expects '%s', got '%s'", "الدالة المضمّنة '%s' تتوقّع '%s'، "
+                                            "لكن ورد '%s'"},
+
+    {"return type mismatch: expected '%s', got '%s'",
+     "عدم تطابق نوع الإرجاع: توقُّع '%s'، لكن ورد "
+     "'%s'"},
+    {"cannot return a value from a void function", "تعذّر إرجاع قيمة من دالة "
+                                                   "بلا قيمة إرجاع"},
+    {"missing return value; function returns '%s'", "قيمة الإرجاع مفقودة؛ الدالة تُرجع "
+                                                    "'%s'"},
+    {"'this' used outside a method", "استُخدم 'هذا' خارج طريقة"},
+
+    {"if condition must be bool, got '%s'", "شرط 'إذا' يجب أن يكون منطقيًا، لكن ورد '%s'"},
+    {"while condition must be bool, got '%s'",
+     "شرط 'بينما' يجب أن يكون منطقيًا، لكن ورد '%s'"},
+    {"for condition must be bool, got '%s'",
+     "شرط 'لكل' يجب أن يكون منطقيًا، لكن ورد '%s'"},
+    {"'%s' outside of a loop", "'%s' خارج حلقة"},
+
+    {"array size must be a constant integer",
+     "حجم المصفوفة يجب أن يكون عددًا صحيحًا ثابتًا"},
+    {"generic type '%s' requires type arguments", "النوع العام '%s' يتطلّب وسائط نوع"},
+    {"generic '%s' expects %zu type argument(s), got %zu",
+     "العام '%s' يتوقّع %zu وسيط نوع، لكن ورد %zu"},
+    {"cannot infer type parameter '%s' of generic function '%s'",
+     "تعذّر استنتاج معامل النوع '%s' للدالة العامة '%s'"},
+
+    {"import not found: '%s'", "الاستيراد غير موجود: '%s'"},
+    {"duplicate import name '%s'", "اسم استيراد مكرّر '%s'"},
+    {"circular import detected: '%s'", "اكتُشف استيراد دائري: '%s'"},
+    {"unknown package '%s' in type '%s'", "حزمة غير معروفة '%s' في النوع '%s'"},
+    {"package '%s' has no exported type '%s'", "الحزمة '%s' لا تصدّر نوعًا باسم '%s'"},
+    {"package '%s' has no exported function '%s'", "الحزمة '%s' لا تصدّر دالة باسم '%s'"},
+    {"package '%s' has no exported member '%s'", "الحزمة '%s' لا تصدّر عضوًا باسم '%s'"},
+    {"'%s' is not exported by package '%s'", "'%s' غير مُصدَّر من الحزمة '%s'"},
+    {"'%s' is not exported by package '%s' (mark it 'pub')",
+     "'%s' غير مُصدَّر من الحزمة '%s' (اجعله "
+     "'عام')"},
+    {"function '%s.%s' used as a value (call it)", "استُخدمت الدالة '%s.%s' كقيمة "
+                                                   "(استدعِها)"},
+
+    {"spawn(func) takes a single function name", "spawn(func) يأخذ اسم دالة واحدًا فقط"},
+    {"spawn argument '%s' is not a function", "وسيط spawn وهو '%s' ليس دالة"},
+    {"spawn requires a function taking no arguments and returning nothing",
+     "spawn يتطلّب دالة بلا وسائط وبلا قيمة إرجاع"},
+    {"funcptr(func) takes a single function name",
+     "funcptr(func) يأخذ اسم دالة واحدًا فقط"},
+    {"funcptr argument '%s' is not a function", "وسيط funcptr وهو '%s' ليس دالة"},
+
+    {"element '%s' cannot be placed inside '%s'", "العنصر '%s' لا يمكن وضعه داخل '%s'"},
+    {"element '%s' is missing required attribute '%.*s'",
+     "العنصر '%s' يفتقد السمة المطلوبة '%.*s'"},
+    {"unrecognized layout element '%s' (ignored)",
+     "عنصر تخطيط غير معروف '%s' (تم تجاهله)"},
+    {"invalid value for '%s': '%s' is not a valid color",
+     "قيمة غير صالحة لـ '%s': '%s' ليس لونًا صالحًا"},
+    {"invalid value for 'dir': '%s' is not a valid direction",
+     "قيمة غير صالحة لـ 'dir': '%s' ليس اتجاهًا صالحًا"},
+    {"invalid value for 'lang': '%s' is not a valid language",
+     "قيمة غير صالحة لـ 'lang': '%s' ليست لغة صالحة"},
+    {"invalid value for '%s': '%s' is not %s", "قيمة غير صالحة لـ '%s': '%s' ليس %s"},
+    {"unrecognized layout element '%s' (rendered as <div>)",
+     "عنصر تخطيط غير معروف '%s' (صُيّر كـ "
+     "<div>)"},
+    {"element '%s' cannot use 'repeat' together with 'id'",
+     "العنصر '%s' لا يمكنه استخدام 'كرر' مع 'id' "
+     "معًا"},
+    {"element '%s' has 'repeat' but a nested element has an 'id'",
+     "العنصر '%s' يحوي 'كرر' لكن عنصرًا متداخلًا يحوي 'id'"},
+
+    {"a string", "سلسلة نصية"},
+    {"an integer", "عددًا صحيحًا"},
+    {"a number", "عددًا"},
+    {"'true' or 'false'", "'صواب' أو 'خطأ'"},
+    {"an email address", "عنوان بريد إلكتروني"},
+    {"a URL", "عنوان URL"},
+    {"a color", "لونًا"},
+    {"a text direction", "اتجاه نص"},
+    {"a language", "لغة"},
+    {"one of the allowed values", "إحدى القيم المسموح بها"},
+    {"a length", "طولًا"},
+    {"a value", "قيمة"},
+
+    {"%s (near '%s')", "%s (قرب '%s')"},
+    {"%s (reserved word cannot be used as a name)", "%s (لا يمكن استخدام كلمة محجوزة "
+                                                    "كاسم)"},
+    {"expected %s", "توقُّع %s"},
+    {"expected an expression", "توقُّع تعبير"},
+    {"expected a top-level definition", "توقُّع تعريف على المستوى الأعلى"},
+    {"expected variable name", "توقُّع اسم متغيّر"},
+    {"expected function name or 'operator <op>'", "توقُّع اسم دالة أو 'عامل <op>'"},
+    {"expected parameter name", "توقُّع اسم معامل"},
+    {"expected type name", "توقُّع اسم نوع"},
+    {"expected type parameter name", "توقُّع اسم معامل نوع"},
+    {"expected struct name", "توقُّع اسم بنية"},
+    {"expected field name", "توقُّع اسم حقل"},
+    {"expected enum name", "توقُّع اسم تعداد"},
+    {"expected enum member name", "توقُّع اسم عضو تعداد"},
+    {"expected alias name", "توقُّع اسم مرادف"},
+    {"expected constant name", "توقُّع اسم ثابت"},
+    {"expected import path string", "توقُّع سلسلة مسار استيراد"},
+    {"expected member name after '.'", "توقُّع اسم عضو بعد '.'"},
+    {"expected package name after 'package'", "توقُّع اسم حزمة بعد 'حزمة'"},
+    {"expected field name in struct literal", "توقُّع اسم حقل في قيمة البنية"},
+    {"unexpected token inside layout block", "رمز غير متوقَّع داخل كتلة التخطيط"},
+    {"']' in operator[]", "']' في العامل[]"},
+    {"unsupported operator for overloading; allowed: + - * / % ** == != < > <= >= ! []",
+     "عامل غير قابل للتحميل الزائد؛ المسموح: + - * / % ** == != < > <= >= ! []"},
+
+    {"unexpected character", "محرف غير متوقَّع"},
+    {"unexpected '&' (use '&&')", "'&' غير متوقَّع (استخدم '&&')"},
+    {"unexpected '|' (use '||')", "'|' غير متوقَّع (استخدم '||')"},
+    {"unterminated string literal", "سلسلة نصية غير منتهية"},
+    {"unterminated triple-quoted string", "سلسلة ثلاثية الاقتباس غير منتهية"},
+    {"unterminated raw string literal", "سلسلة نصية خام غير منتهية"},
+    {"unterminated block comment", "تعليق كتلة غير منتهٍ"},
+    {"unterminated char literal", "محرف غير منتهٍ"},
+    {"unterminated UTF-8 char literal", "محرف يونيكود غير منتهٍ"},
+    {"empty UTF-8 char literal", "محرف يونيكود فارغ"},
+    {"UTF-8 char literal must contain exactly one codepoint",
+     "محرف يونيكود يجب أن يحتوي على نقطة ترميز واحدة "
+     "بالضبط"},
+    {"invalid digit in numeric literal", "رقم غير صالح في العدد"},
+    {"misplaced '_' separator in numeric literal", "فاصل '_' في موضع خاطئ داخل العدد"},
+    {"numeric literal has no digits after its base prefix",
+     "العدد لا يحوي أرقامًا بعد بادئة الأساس"},
+    {"numeric literal has no exponent digits", "العدد لا يحوي أرقام أُس"},
+    {"integer literal is too large for a 64-bit value",
+     "العدد الصحيح أكبر من أن يُمثَّل بقيمة 64-بت"},
+    {"'end' keyword must be lowercase",
+     "الكلمة المفتاحية 'نهاية' يجب أن تكون بأحرف صغيرة"},
+    {"layout attribute requires a value", "سمة التخطيط تتطلّب قيمة"},
+    {"expected ':' or '=' after layout name", "توقُّع ':' أو '=' بعد اسم التخطيط"},
+    {"unterminated function value in layout", "قيمة دالة غير منتهية في التخطيط"},
+
+    {"Vector has no method '%s'", "Vector لا يملك طريقة باسم '%s'"},
+    {"HashMap has no method '%s'", "HashMap لا يملك طريقة باسم '%s'"},
+    {"MapIter has no method '%s'", "MapIter لا يملك طريقة باسم '%s'"},
+    {"File has no method '%s'", "File لا يملك طريقة باسم '%s'"},
+    {"str has no method '%s'", "str لا يملك طريقة باسم '%s'"},
+
+    {"%s takes 1 argument", "%s يأخذ وسيطًا واحدًا"},
+    {"args() takes no arguments", "args() لا يأخذ أي وسيط"},
+    {"open(path, mode) takes 2 args", "open(path, mode) يأخذ وسيطين"},
+    {"exit(code) takes 1 arg", "exit(code) يأخذ وسيطًا واحدًا"},
+    {"env(name) takes 1 arg", "env(name) يأخذ وسيطًا واحدًا"},
+    {"put(key,value) takes 2 args", "put(key,value) يأخذ وسيطين"},
+    {"get(key) takes 1 arg", "get(key) يأخذ وسيطًا واحدًا"},
+    {"has(key) takes 1 arg", "has(key) يأخذ وسيطًا واحدًا"},
+    {"remove(key) takes 1 arg", "remove(key) يأخذ وسيطًا واحدًا"},
+    {"push(value) takes 1 arg", "push(value) يأخذ وسيطًا واحدًا"},
+    {"get(index) takes 1 arg", "get(index) يأخذ وسيطًا واحدًا"},
+    {"set(index,value) takes 2 args", "set(index,value) يأخذ وسيطين"},
+    {"read(size) takes 1 arg", "read(size) يأخذ وسيطًا واحدًا"},
+    {"write(data) takes 1 arg", "write(data) يأخذ وسيطًا واحدًا"},
+    {"seek(offset,whence) takes 2 args", "seek(offset,whence) يأخذ وسيطين"},
+    {"concat(other) takes 1 arg", "concat(other) يأخذ وسيطًا واحدًا"},
+    {"substr(start,len) takes 2 args", "substr(start,len) يأخذ وسيطين"},
+    {"find(sub) takes 1 arg", "find(sub) يأخذ وسيطًا واحدًا"},
+    {"split(delim) takes 1 arg", "split(delim) يأخذ وسيطًا واحدًا"},
+    {"rand_shuffle_int takes 1 argument", "rand_shuffle_int يأخذ وسيطًا واحدًا"},
+    {"rand_shuffle_str takes 1 argument", "rand_shuffle_str يأخذ وسيطًا واحدًا"},
+
+    {"')' to close arguments", "')' لإغلاق الوسائط"},
+    {"')' after arguments", "')' بعد الوسائط"},
+    {"')' after parameters", "')' بعد المعاملات"},
+    {"')' to close import group", "')' لإغلاق مجموعة الاستيراد"},
+    {"'>' to close type arguments", "'>' لإغلاق وسائط النوع"},
+    {"'>' to close type parameters", "'>' لإغلاق معاملات النوع"},
+    {"']' after index", "']' بعد الفهرس"},
+    {"']' in array type", "']' في نوع المصفوفة"},
+    {"']' to close array literal", "']' لإغلاق المصفوفة"},
+    {"']' to close slice range 'a[lo:hi]'", "']' لإغلاق مدى الشريحة 'a[lo:hi]'"},
+    {"']' to close slice type 'T[:]'", "']' لإغلاق نوع الشريحة 'T[:]'"},
+    {"'{' in struct literal", "'{' في قيمة البنية"},
+    {"'}' to close struct literal", "'}' لإغلاق قيمة البنية"},
+    {"':' to open block", "':' لفتح الكتلة"},
+    {"':' after if condition", "':' بعد شرط إذا"},
+    {"':' after else", "':' بعد وإلا"},
+    {"':' after struct name", "':' بعد اسم البنية"},
+    {"':' after enum name", "':' بعد اسم التعداد"},
+    {"':' after 'layout'", "':' بعد 'صفحة'"},
+    {"':' after layout element name", "':' بعد اسم عنصر التخطيط"},
+    {"':' before type", "':' قبل النوع"},
+    {"',' after for-init", "',' بعد تهيئة الحلقة"},
+    {"',' after for-condition", "',' بعد شرط الحلقة"},
+    {"'=' in const declaration", "'=' في تعريف الثابت"},
+    {"'=' in field initializer", "'=' في تهيئة الحقل"},
+    {"'=' in type alias", "'=' في مرادف النوع"},
+    {"'=' after layout attribute name", "'=' بعد اسم سمة التخطيط"},
+    {"'end' to close block", "'نهاية' لإغلاق الكتلة"},
+    {"'end' to close if", "'نهاية' لإغلاق إذا"},
+    {"'end' to close struct", "'نهاية' لإغلاق البنية"},
+    {"'end' to close enum", "'نهاية' لإغلاق التعداد"},
+    {"'end' to close layout block", "'نهاية' لإغلاق كتلة التخطيط"},
+    {"'end' to close layout element", "'نهاية' لإغلاق عنصر التخطيط"},
+
+    {"cannot read '%s'", "تعذّرت قراءة '%s'"},
+    {"cannot write '%s'", "تعذّرت كتابة '%s'"},
+    {"cannot open '%s' for writing", "تعذّر فتح '%s' للكتابة"},
+    {"C compiler '%s' failed (exit %d)", "فشل مترجم C وهو '%s' (رمز الخروج %d)"},
+    {"%s has no layout block", "%s لا يحتوي على كتلة تخطيط"},
+    {"no .salam files found in the current directory",
+     "لم يُعثر على ملفات .salam في المجلد الحالي"},
+    {"no entry point: none of the %d .salam file(s) here defines a '%s' function",
+     "لا نقطة دخول: لا يعرّف أيٌّ من ملفات .salam الـ %d هنا دالة "
+     "'%s'"},
+    {"ambiguous entry point: %d files define '%s':",
+     "نقطة دخول غامضة: %d ملف يعرّف '%s':"},
+    {"no entry point: define a '%s' function", "لا نقطة دخول: عرّف دالة "
+                                               "'%s'"},
+    {"entry point: %s", "نقطة الدخول: %s"},
+    {"unknown language pack '%s'", "حزمة لغة غير معروفة '%s'"},
+    {"cannot read source file '%s'", "تعذّرت قراءة الملف المصدري '%s'"},
+    {"build aborted: errors in source", "أُجهض البناء: أخطاء في المصدر"},
+
+    {"salam: no input file\n\n", "salam: لم يُعطَ ملف إدخال\n\n"},
+    {"salam: '%s' requires at least one input file\n",
+     "salam: '%s' يتطلّب ملف إدخال واحدًا على الأقل\n"},
+    {"salam: 'layout build' requires at least one input file\n",
+     "salam: 'layout build' يتطلّب ملف إدخال واحدًا على "
+     "الأقل\n"},
+    {"salam: no project name provided\n", "salam: لم يُعطَ اسم مشروع\n"},
+    {"salam: project name cannot be empty\n",
+     "salam: اسم المشروع لا يمكن أن يكون فارغًا\n"},
+    {"salam: project name must not contain path separators ('%s')\n",
+     "salam: اسم المشروع يجب ألا يحتوي على فواصل مسار "
+     "('%s')\n"},
+    {"salam: '%s' already exists\n", "salam: '%s' موجود مسبقًا\n"},
+    {"salam: cannot create directory '%s': %s\n", "salam: تعذّر إنشاء المجلد '%s': %s\n"},
+    {"salam: cannot write '%s': %s\n", "salam: تعذّرت كتابة '%s': %s\n"},
+    {"salam: 'new' takes a single project name ('%s' after '%s')\n",
+     "salam: 'new' يأخذ اسم مشروع واحدًا فقط ('%s' بعد "
+     "'%s')\n"},
+    {"salam: too many input files\n", "salam: ملفات الإدخال كثيرة جدًا\n"},
+    {"salam: multiple input files require the 'build' command ('%s' after '%s')\n",
+     "salam: تعدّد ملفات الإدخال يتطلّب الأمر 'build' ('%s' بعد '%s')\n"},
+    {"salam: too many macro definitions\n", "salam: تعريفات الماكرو كثيرة جدًا\n"},
+    {"salam: invalid --indent value '%s' (use 'tab' or a width 1-16)\n",
+     "salam: قيمة --indent غير صالحة '%s' (استخدم 'tab' أو عرضًا من 1 إلى 16)\n"},
+    {"salam: -o requires a file argument\n", "salam: -o يتطلّب وسيط ملف\n"},
+    {"salam: invalid error style '%s' (rust|gcc|clang)\n",
+     "salam: نمط خطأ غير صالح '%s' (rust|gcc|clang)\n"},
+    {"salam: invalid error format '%s' (human|json|xml)\n",
+     "salam: تنسيق خطأ غير صالح '%s' (human|json|xml)\n"},
+    {"salam: invalid log level '%s'\n", "salam: مستوى تسجيل غير صالح '%s'\n"},
+    {"salam: unknown option '%s'\n", "salam: خيار غير معروف '%s'\n"},
+
+    {"cannot format '%s': fix the lexical errors first",
+     "تعذّر تنسيق '%s': صحّح الأخطاء اللفظية "
+     "أولًا"},
+    {"formatted %s\n", "نُسّق %s\n"},
+    {"done: %d formatted, %d unchanged\n", "تم: %d مُنسَّق، %d دون تغيير\n"},
+    {"all %d file(s) already formatted\n", "جميع الملفات الـ %d منسَّقة مسبقًا\n"},
+    {"%d of %d file(s) need formatting\n", "%d من %d ملف بحاجة إلى تنسيق\n"},
+
+    {"runtime error: %s", "خطأ وقت التشغيل: %s"},
+    {"runtime error at line %u: %s", "خطأ وقت التشغيل في السطر %u: %s"},
+    {"execution timed out (possible infinite loop)", "انتهت مهلة التنفيذ (حلقة لا "
+                                                     "نهائية محتملة)"},
+    {"undefined variable '%s'", "متغيّر غير معرّف '%s'"},
+    {"assignment to undeclared variable '%s'", "إسناد إلى متغيّر غير معلَن '%s'"},
+    {"call to undefined function '%s'", "استدعاء دالة غير معرّفة '%s'"},
+    {"value is not callable", "هذه القيمة غير قابلة للاستدعاء"},
+    {"value is not indexable", "هذه القيمة غير قابلة للفهرسة"},
+    {"value is not index-assignable", "هذه القيمة غير قابلة للإسناد بالفهرس"},
+    {"cannot slice a non-array value", "تعذّر أخذ شريحة من قيمة ليست مصفوفة"},
+    {"invalid assignment target", "هدف إسناد غير صالح"},
+    {"cannot assign to member of non-struct", "تعذّر الإسناد إلى عضو شيء "
+                                              "ليس بنية"},
+    {"cannot access member '%s'", "تعذّر الوصول إلى العضو '%s'"},
+    {"cannot evaluate %s", "تعذّر تقييم %s"},
+    {"'this' used outside a method", "استُخدم ‹هذا› خارج طريقة"},
+    {"division by zero", "قسمة على صفر"},
+    {"modulo by zero", "باقي القسمة على صفر"},
+    {"unsupported arithmetic operator", "عامل حسابي غير مدعوم"},
+    {"index %lld out of range (len %zu)", "الفهرس %lld خارج المدى (الطول %zu)"},
+    {"index out of range in assignment", "الفهرس خارج المدى في الإسناد"},
+    {"string index out of range", "فهرس السلسلة خارج المدى"},
+    {"vector index %lld out of range (len %zu)",
+     "فهرس المتجه %lld خارج المدى (الطول %zu)"},
+    {"pop from empty vector", "إخراج من متجه فارغ"},
+    {"len() expects an array, string, or map", "‹len()› يتوقّع مصفوفة أو سلسلة أو خريطة"},
+    {"method '%s' is not available on this value",
+     "الطريقة '%s' غير متوفّرة على هذه القيمة"},
+    {"'%s.%s' is not available in the interpreter", "‹%s.%s› غير متوفّر في المفسّر"},
+    {"enum '%s' has no member '%s'", "التعداد '%s' لا يملك عضوًا باسم '%s'"},
+    {"struct '%s' has no field '%s'", "البنية '%s' لا تملك حقلًا باسم '%s'"},
+    {"struct '%s' has no method '%s'", "البنية '%s' لا تملك طريقة باسم '%s'"},
+
+    {"unknown language pack", "حزمة لغة غير معروفة"},
+    {"compilation failed", "فشلت الترجمة"},
+    {"layout build failed", "فشل بناء التخطيط"},
+    {"this program has no layout block; use a `layout:` block to build an HTML page",
+     "هذا البرنامج لا يحتوي على كتلة تخطيط؛ استخدم كتلة ‹layout:› لبناء صفحة "
+     "HTML"},
+
+    {"'%s' is not an interface (required after 'dyn')",
+     "'%s' ليس واجهة (مطلوبة بعد 'dyn')"},
+    {"repeat count must be a number, got '%s'",
+     "عدد التكرار يجب أن يكون عددًا، لكن ورد '%s'"},
+    {"repeat range bound must be a number, got '%s'", "حدّ مدى التكرار يجب أن يكون عددًا، "
+                                                      "لكن ورد '%s'"},
+    {"repeat step must be a number, got '%s'",
+     "خطوة التكرار يجب أن تكون عددًا، لكن ورد '%s'"},
+    {"layout uses 'repeat' but a nested element has an 'id'",
+     "التخطيط يستخدم 'كرر' لكن عنصرًا متداخلًا يحوي 'id'"},
+    {"field '%s': a `dyn` value cannot yet be a struct field; make '%s' generic (`<T: "
+     "%s>`) or store the data another way",
+     "الحقل '%s': قيمة `dyn` لا يمكن أن تكون حقل بنية بعد؛ اجعل '%s' عامًا "
+     "(`<T: %s>`) أو خزّن البيانات بطريقة "
+     "أخرى"},
+
+    {"link directive needs a library name or path",
+     "توجيه الربط يحتاج إلى اسم مكتبة أو مسار"},
+    {"linked library not found: '%s' (resolved to '%s')", "المكتبة المربوطة غير "
+                                                          "موجودة: '%s' (حُلّت إلى '%s')"},
+    {"linked library not found: '%s'", "المكتبة المربوطة غير موجودة: '%s'"},
+    {"'%s' in `impl ... for ...` is not an interface",
+     "'%s' في `تنفيذ ... لكل ...` ليس واجهة"},
+
+    {"bound '%s' on type parameter '%s' is not an interface",
+     "الحدّ '%s' على معامل النوع '%s' ليس واجهة"},
+    {"'%s' does not satisfy '%s': no struct definition or `impl` block provides its "
+     "methods",
+     "'%s' لا يحقّق '%s': لا يوجد تعريف بنية ولا كتلة `تنفيذ` توفّر "
+     "طرائقه"},
+    {"'%s' does not implement interface '%s': missing method '%s'",
+     "'%s' لا يُنفّذ الواجهة '%s': الطريقة '%s' "
+     "مفقودة"},
+    {"'%s' implements method '%s' with a signature that does not match interface '%s'",
+     "'%s' يُنفّذ الطريقة '%s' بتوقيع لا يطابق الواجهة "
+     "'%s'"},
+
+    {"callhandler(fn, arg) takes a function pointer and an i64 argument",
+     "callhandler(fn, arg) يأخذ مؤشّر دالة ووسيطًا من نوع "
+     "i64"},
+    {"sizeof(Type) takes a single type operand", "sizeof(Type) يأخذ معامل نوع واحدًا فقط"},
+    {"function value takes %zu argument(s), got %zu",
+     "قيمة الدالة تأخذ %zu وسيطًا، لكن ورد "
+     "%zu"},
+    {"argument %zu: cannot pass '%s' to '%s'", "الوسيط %zu: تعذّر تمرير '%s' إلى '%s'"},
+    {"lang() takes no arguments", "lang() لا يأخذ أي وسيط"},
+    {"interface '%s' has no method '%s'", "الواجهة '%s' لا تملك طريقة باسم '%s'"},
+
+    {"expected a library-name string after 'link'", "توقُّع سلسلة اسم مكتبة بعد 'رابط'"},
+    {"'(' after @link", "'(' بعد @رابط"},
+    {"'=' after 'kind'", "'=' بعد 'صنف'"},
+    {"link kind must be \"static\", \"dynamic\", or \"framework\"",
+     "نوع الربط يجب أن يكون \"ساكن\" أو \"ديناميكي\" أو \"إطار\""},
+    {"expected a kind string after 'kind='", "توقُّع سلسلة نوع بعد 'صنف='"},
+    {"unsupported extern ABI (only \"C\" is supported)",
+     "واجهة ثنائية خارجية غير مدعومة (المدعوم فقط "
+     "\"C\")"},
+    {"':' to open extern block", "':' لفتح الكتلة الخارجية"},
+    {"'end' to close extern block", "'نهاية' لإغلاق الكتلة الخارجية"},
+    {"expected 'func' or a variable in extern block",
+     "توقُّع 'دالة' أو متغيّر في الكتلة الخارجية"},
+    {"expected external function name", "توقُّع اسم دالة خارجية"},
+    {"expected external variable name", "توقُّع اسم متغيّر خارجي"},
+    {"'(' after external function name", "'(' بعد اسم الدالة الخارجية"},
+
+    {"expected a definition after 'pub'", "توقُّع تعريف بعد 'عام'"},
+    {"'pub' cannot be applied to a component", "'عام' لا يمكن تطبيقه على مكوّن"},
+    {"'pub' cannot be applied to a layout block", "'عام' لا يمكن تطبيقه على كتلة تخطيط"},
+    {"':' after interface name", "':' بعد اسم الواجهة"},
+    {"'end' to close interface", "'نهاية' لإغلاق الواجهة"},
+    {"expected a method signature ('func ...') in interface",
+     "توقُّع توقيع طريقة ('دالة ...') في الواجهة"},
+    {"expected interface name after 'impl'", "توقُّع اسم واجهة بعد 'تنفيذ'"},
+    {"'for' after interface name in impl block", "'لكل' بعد اسم الواجهة في كتلة التنفيذ"},
+    {"':' after impl target type", "':' بعد نوع هدف التنفيذ"},
+    {"'end' to close impl block", "'نهاية' لإغلاق كتلة التنفيذ"},
+    {"expected a method ('func ...') in impl block",
+     "توقُّع طريقة ('دالة ...') في كتلة التنفيذ"},
+
+    {"'(' to open lambda parameters", "'(' لفتح معاملات لامدا"},
+    {"')' after lambda parameters", "')' بعد معاملات لامدا"},
+    {"'=>' in lambda", "'=>' في لامدا"},
+    {"')' after sizeof type", "')' بعد نوع sizeof"},
+
+    {"call stack too deep (possible infinite recursion)",
+     "مكدّس الاستدعاء عميق جدًا (تعاود لا "
+     "نهائي محتمل)"},
+    {"repeat count must be a number", "عدد التكرار يجب أن يكون عددًا"},
+    {"repeat range start must be a number", "بداية مدى التكرار يجب أن تكون عددًا"},
+    {"repeat range bound must be a number", "حدّ مدى التكرار يجب أن يكون عددًا"},
+    {"repeat step must be a number", "خطوة التكرار يجب أن تكون عددًا"},
+    {"repeat step must be positive", "خطوة التكرار يجب أن تكون موجبة"},
+
+    {"operator '+' on a string requires the other operand to be a string, number, bool, "
+     "or char (got '%s' and '%s')",
+     "العامل '+' على سلسلة يتطلّب أن يكون المعامل الآخر سلسلة أو عددًا أو منطقيًا أو "
+     "محرفًا (ورد '%s' و '%s')"},
+    {"cannot infer the struct type of this literal", "تعذّر استنتاج نوع بنية هذه "
+                                                     "القيمة"},
+
+    {"call to deprecated function '%s'", "استدعاء دالة مهجورة '%s'"},
+    {"'noret' function '%s' cannot declare a return type: it never returns",
+     "الدالة 'لايرجع' '%s' لا يمكنها إعلان نوع إرجاع: فهي لا ترجع "
+     "أبدًا"},
+    {"'%s' cannot be both 'pure' and 'noret': a pure function must return",
+     "'%s' لا يمكن أن تكون 'نقي' و 'لايرجع' معًا: الدالة النقية يجب أن ترجع"},
+    {"'pure' function '%s' must return a value: a pure function without a result has "
+     "no effect",
+     "الدالة النقية '%s' يجب أن ترجع قيمة: الدالة النقية بلا نتيجة لا أثر لها"},
+    {"'pure' function '%s' cannot take reference parameter '%s': writing through it "
+     "would be a side effect",
+     "الدالة النقية '%s' لا يمكنها أخذ المعامل المرجعي '%s': الكتابة من خلاله أثر "
+     "جانبي"},
+    {"function modifiers must appear in this order: 'pub deprecated inline|noinline "
+     "pure|noret func'",
+     "مُعدِّلات الدالة يجب أن تظهر بهذا الترتيب: 'عام مهجور مضمن|غيرمضمن "
+     "نقي|لايرجع دالة'"},
+    {"function modifiers ('deprecated', 'inline', 'noinline', 'pure', 'noret') are "
+     "only allowed on a function definition",
+     "مُعدِّلات الدالة ('مهجور'، 'مضمن'، 'غيرمضمن'، 'نقي'، 'لايرجع') مسموحة فقط "
+     "على تعريف دالة"},
+    {"'inline' is only allowed on a function definition",
+     "'مضمن' مسموح فقط على تعريف دالة"},
+    {"'pure' function '%s' cannot assign to global '%s': writing a global variable is "
+     "a side effect",
+     "الدالة النقية '%s' لا يمكنها الإسناد إلى المتغيّر العام '%s': كتابة متغيّر عام أثر "
+     "جانبي"},
+    {"'pure' function '%s' cannot write through parameter '%s': the write is visible "
+     "to the caller",
+     "الدالة النقية '%s' لا يمكنها الكتابة عبر المعامل '%s': الكتابة مرئية "
+     "للمستدعي"},
+    {"'pure' function '%s' cannot call '%s': only 'pure' functions may be called from "
+     "a pure function",
+     "الدالة النقية '%s' لا يمكنها استدعاء '%s': لا يُستدعى من دالة نقية إلا الدوال "
+     "النقية"},
+    {"'pure' function '%s' cannot call '%s': it has side effects",
+     "الدالة النقية '%s' لا يمكنها استدعاء '%s': له آثار جانبية"},
+    {"'pure' function '%s' cannot call '%s': it modifies its receiver",
+     "الدالة النقية '%s' لا يمكنها استدعاء '%s': يعدّل مستقبِله"},
+    {"'pure' function '%s' cannot call a function value: its purity cannot be "
+     "verified",
+     "الدالة النقية '%s' لا يمكنها استدعاء قيمة دالة: لا يمكن التحقّق من "
+     "نقاوتها"},
+    {"'noret' function '%s' cannot contain 'ret': it never returns",
+     "الدالة 'لايرجع' '%s' لا يمكن أن تحتوي على 'أرجع': فهي لا ترجع أبدًا"},
+    {"extern function modifiers ('deprecated', 'pure', 'noret') must appear in this "
+     "order: 'deprecated pure|noret func'",
+     "مُعدِّلات الدالة الخارجية ('مهجور'، 'نقي'، 'لايرجع') يجب أن تظهر بهذا الترتيب: "
+     "'مهجور نقي|لايرجع دالة'"},
+    {"only 'deprecated', 'pure', or 'noret' may modify an extern function",
+     "لا يجوز أن يعدّل الدالة الخارجية إلا 'مهجور' أو 'نقي' أو 'لايرجع'"},
+
+    {NULL, NULL}};
+
 const char *i18n_tr(const char *msgid)
 {
+    const char *lang;
+    const i18n_pair_t *p = NULL;
     if (!msgid) return msgid;
-    if (strcmp(i18n_active_lang(), "fa") == 0) {
-        {
-            const i18n_pair_t *p = k_msg_fa;
-            for (; p->key; p++)
-                if (strcmp(p->key, msgid) == 0) return p->val;
-        }
+    lang = i18n_active_lang();
+    if (strcmp(lang, "fa") == 0)
+        p = k_msg_fa;
+    else if (strcmp(lang, "ar") == 0)
+        p = k_msg_ar;
+    if (p) {
+        for (; p->key; p++)
+            if (strcmp(p->key, msgid) == 0) return p->val;
     }
     return msgid;
 }

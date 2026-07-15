@@ -15,7 +15,6 @@
 #include "core/prelude.h"
 #include "core/sb.h"
 #include "parser/parser_internal.h"
-#include "parser/parser_migrate_dump.h"
 
 static ast_node_t *parse_type_alias(parser_t *p);
 static ast_node_t *parse_enum(parser_t *p);
@@ -230,8 +229,8 @@ static ast_node_t *parse_interface_method(parser_t *p)
         parse_params(p, n);
         p_expect(p, TK_RPAREN, "')' after parameters");
     }
-    if (p_at(p, TK_IDENT) || p_at(p, TK_KW_FUNC)) {
-        migrate_dump_colon(p);
+    if (p_at(p, TK_COLON)) {
+        p_advance(p);
         n->type = parse_type(p);
     }
     p_term(p);
@@ -308,8 +307,14 @@ static ast_node_t *parse_struct(parser_t *p)
         p_skip_terminators(p);
         parse_metas(p, &mpend);
         if (p_at(p, TK_KW_END) || p_at_eof(p)) break;
+        bool m_pub = false;
+        if (p_at(p, TK_KW_PUB)) {
+            m_pub = true;
+            p_advance(p);
+        }
         ast_node_t *member = p_at(p, TK_KW_FUNC) ? parse_function(p) : parse_field(p);
         if (member) {
+            member->is_pub = m_pub;
             {
                 size_t i = 0;
                 for (; i < mpend.len; i++)
@@ -435,10 +440,7 @@ static ast_node_t *parse_function(parser_t *p)
         parse_params(p, n);
         p_expect(p, TK_RPAREN, "')' after parameters");
     }
-    if (!p_at(p, TK_COLON)) {
-        migrate_dump_colon(p);
-        n->type = parse_type(p);
-    }
+    p_try_return_type(p, &n->type);
     n->a = parse_block(p);
     p_fin(p, n);
     return n;

@@ -231,7 +231,29 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         if (n->op == TK_PLUS_EQ && tt && tt->kind == TY_STR &&
             sema_type_is_stringable(vt))
             break;
-        if (!type_assignable(tt, vt))
+
+        bool op_valid = true;
+        if (n->op != TK_ASSIGN && tt && !type_is_error(tt) && !type_is_error(vt)) {
+            token_kind_t base_op = sema_compound_base(n->op);
+            if (base_op == TK_POWER) {
+                if (!type_is_numeric(tt) || !type_is_numeric(vt)) {
+                    SERR(s, 21, &n->span, "operator '**' requires numeric operands");
+                    op_valid = false;
+                }
+            } else if (base_op != TK_EOF) {
+                type_t *c =
+                    (tt->kind == TY_STRUCT) ? NULL : type_common_arith(s->tc, tt, vt);
+                if (!c) {
+                    SERR(s, 21, &n->span, "operator cannot be applied to '%s' and '%s'",
+                         type_to_string(s->tc, tt), type_to_string(s->tc, vt));
+                    op_valid = false;
+                } else if (base_op == TK_PERCENT && !type_is_integer(c)) {
+                    SERR(s, 21, &n->span, "operator '%%' requires integer operands");
+                    op_valid = false;
+                }
+            }
+        }
+        if (op_valid && !type_assignable(tt, vt))
             SERR(s, 2, &n->span, "cannot assign '%s' to '%s'", type_to_string(s->tc, vt),
                  type_to_string(s->tc, tt));
         break;

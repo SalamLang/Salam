@@ -305,9 +305,11 @@ symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes,
                 symbol_t *f = symbol_new(s->a, SYM_FIELD, m->name);
                 f->type = sema_resolve_type(s, m->type);
                 f->decl = m;
+                f->is_pub = m->is_pub;
                 scope_define(s->a, sym->members, f);
             } else if (m->kind == AST_FUNC_DEF) {
                 symbol_t *mm = get_or_make_func(s, sym->members, m->name, SYM_METHOD);
+                if (m->is_pub) mm->is_pub = true;
                 vec_push(s->a, &mm->overloads, build_sig(s, m, sym));
                 mm->type = sym->type;
             }

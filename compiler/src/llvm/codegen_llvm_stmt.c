@@ -66,6 +66,8 @@ static token_kind_t ll_compound_base(token_kind_t k)
         return TK_SLASH;
     case TK_PERCENT_EQ:
         return TK_PERCENT;
+    case TK_POWER_EQ:
+        return TK_POWER;
     default:
         return TK_EOF;
     }

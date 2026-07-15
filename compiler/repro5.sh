@@ -1,5 +1,6 @@
 #!/bin/bash
-cd /mnt/c/Users/Ali/Projects/SalamLang/Salam/compiler || exit
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit
 export SALAM_STD="$PWD/std"
 echo "=== tcc version ==="; tcc -v 2>&1 | head -1
 echo "=== force --cc=tcc, hello.salam, keep C, verbose ==="

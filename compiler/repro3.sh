@@ -1,5 +1,7 @@
 #!/bin/bash
-cd /mnt/c/Users/Ali/Projects/SalamLang/Salam || exit
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO" || exit
 echo "=== baked std in WSL? ==="
 find /usr/local/share/salam -maxdepth 1 -name std 2>&1 | head
 echo "=== CI-style: SALAM_STD=compiler/std, cwd=repo root ==="
@@ -11,6 +13,6 @@ echo "exit=$?"
 ls -la /tmp/smoke.exe 2>&1
 echo "=== now WITHOUT any baked std interference: unset, run from /tmp ==="
 cd /tmp || exit
-env -u SALAM_STD /mnt/c/Users/Ali/Projects/SalamLang/Salam/compiler/salam build /tmp/smoke.salam --output=/tmp/smoke2.exe --no-color --log-level=error --lang=en 2>&1 | head -20
+env -u SALAM_STD "$SCRIPT_DIR/salam" build /tmp/smoke.salam --output=/tmp/smoke2.exe --no-color --log-level=error --lang=en 2>&1 | head -20
 echo "exit=$?"
 ls -la /tmp/smoke2.exe 2>&1

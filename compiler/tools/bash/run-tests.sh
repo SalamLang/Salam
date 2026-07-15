@@ -93,7 +93,7 @@ if want errors; then
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            code=$(grep -oE '(EXPECT|انتظار): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار): //' | tr -d '\r')
+            code=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
             out=$("$SALAM" "$f" --emit-symbol-xml --no-color --log-level=error --lang=$lang 2>&1 >/dev/null)
             if [ -n "$code" ] && echo "$out" | grep -qF "$code"; then
                 echo "PASS errors/$lang/$name ($code)"
@@ -112,7 +112,7 @@ if want layout; then
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            expect=$(grep -oE '(EXPECT|انتظار): .*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار): //' | tr -d '\r')
+            expect=$(grep -oE '(EXPECT|انتظار|توقع): .*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
             "$SALAM" layout build "$f" --inline --output="$WORK/$name.html" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
             if [ -f "$WORK/$name.html" ] && grep -qF "$expect" "$WORK/$name.html"; then
                 echo "PASS layout/$lang/$name (has '$expect')"

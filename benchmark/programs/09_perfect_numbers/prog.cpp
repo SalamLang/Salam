@@ -1,6 +1,7 @@
 #include <iostream>
 
-int main() {
+int main()
+{
     long long count = 0;
     long long total = 0;
     for (long long n = 2; n <= 30000; n++) {
@@ -9,8 +10,7 @@ int main() {
             if (n % j == 0) {
                 s += j;
                 long long q = n / j;
-                if (q != j)
-                    s += q;
+                if (q != j) s += q;
             }
         }
         if (s == n) {

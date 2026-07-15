@@ -1,6 +1,7 @@
 #include <iostream>
 
-int main() {
+int main()
+{
     long long s = 0;
     for (long long i = 1; i <= 3000000; i++) {
         s = (s + i * i) % 1000000007;

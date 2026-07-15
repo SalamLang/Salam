@@ -1,6 +1,7 @@
 #include <stdio.h>
 
-int main(void) {
+int main(void)
+{
     long long best_steps = 0;
     long long best_n = 1;
     long long n;

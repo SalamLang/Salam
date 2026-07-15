@@ -1,6 +1,7 @@
 #include <iostream>
 
-int main() {
+int main()
+{
     long long best_steps = 0;
     long long best_n = 1;
     for (long long n = 1; n <= 30000; n++) {

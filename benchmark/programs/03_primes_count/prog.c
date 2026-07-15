@@ -1,6 +1,7 @@
 #include <stdio.h>
 
-int main(void) {
+int main(void)
+{
     long long count = 1;
     long long i;
     for (i = 3; i < 100000; i += 2) {

@@ -17,6 +17,11 @@ case "$SALAM" in
 *) SALAM_ABS="$(pwd)/$SALAM" ;;
 esac
 
+if [ -z "${SALAM_STD:-}" ] && [ -d "$(pwd)/std" ]; then
+    SALAM_STD="$(pwd)/std"
+    export SALAM_STD
+fi
+
 run_batch() {
     jobs="$1"
     [ -s "$jobs" ] || return 0

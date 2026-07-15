@@ -21,13 +21,13 @@ run_batch() {
     jobs="$1"
     [ -s "$jobs" ] || return 0
     results="$WORK/.batch-results.$$"
-    xargs -P "$NPROC" -a "$jobs" -d '\n' -I{} sh -c '
+    tr '\n' '\0' <"$jobs" | xargs -0 -n1 -P "$NPROC" sh -c '
         IFS="	"
-        set -- {}
+        set -- $1
         label="$1"; f="$2"; lang="$3"; exp="$4"; extra="$5"
         unset IFS
         sh "'"$RUN_ONE"'" "'"$SALAM_ABS"'" "'"$WORK"'" "$label" "$f" "$lang" "$exp" $extra
-    ' >"$results" 2>&1
+    ' _ >"$results" 2>&1
     cat "$results"
     p=$(grep -c '^PASS' "$results")
     fcount=$(grep -c '^FAIL' "$results")

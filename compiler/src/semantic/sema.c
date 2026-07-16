@@ -161,7 +161,7 @@ static const char *resolve_stdlib_root(const char *explicit_path)
         const char *env = getenv("SALAM_STD");
         if (env && env[0]) {
             derive_root(env, buf, N);
-            return buf;
+            if (root_has_std(buf)) return buf;
         }
     }
     {

@@ -13,7 +13,7 @@ LANGS="${LANGS:-en fa ar}"
 NPROC="${NPROC:-$(command -v nproc >/dev/null 2>&1 && nproc || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 RUN_ONE="$(dirname "$0")/run-one-build.sh"
 case "$SALAM" in
-/*) SALAM_ABS="$SALAM" ;;
+/* | [A-Za-z]:*) SALAM_ABS="$SALAM" ;;
 *) SALAM_ABS="$(pwd)/$SALAM" ;;
 esac
 

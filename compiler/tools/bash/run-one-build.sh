@@ -17,8 +17,10 @@ exp="$6"
 shift 6
 if [ "$#" -eq 1 ] && [ "$1" = "-" ]; then shift; fi
 
-case "$f" in /*) : ;; *) f="$(pwd)/$f" ;; esac
-case "$WORK" in /*) : ;; *) WORK="$(pwd)/$WORK" ;; esac
+# /* and C:\ or C:/ are already absolute; only prefix genuinely relative paths.
+# (On Git Bash/MSYS runners TMPDIR is a Windows path, so prefixing it breaks it.)
+case "$f" in /* | [A-Za-z]:*) : ;; *) f="$(pwd)/$f" ;; esac
+case "$WORK" in /* | [A-Za-z]:*) : ;; *) WORK="$(pwd)/$WORK" ;; esac
 
 jobid=$(echo "$label" | tr '/ ' '__')
 jobdir="$WORK/job_${jobid}_$$"

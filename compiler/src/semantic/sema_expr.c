@@ -410,6 +410,32 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
             SERR(s, 21, &n->span, "unary '-' requires a numeric operand");
         return decorate(s, n, o);
     }
+    case AST_INCDEC: {
+        type_t *o = sema_check_expr(s, n->a);
+        const char *opname = (n->op == TK_PLUS_PLUS) ? "'++'" : "'--'";
+        symbol_t *wroot = NULL;
+        switch (sema_classify_write(s, n->a, &wroot)) {
+        case LV_NOT_LVALUE:
+            SERR(s, 13, &n->span, "operator %s requires an assignable operand", opname);
+            break;
+        case LV_CONST:
+            SERR(s, 13, &n->span,
+                 "cannot apply %s to '%s': a 'const' binding is fully immutable", opname,
+                 wroot ? wroot->name : "target");
+            break;
+        case LV_IMMUTABLE:
+            SERR(s, 13, &n->span,
+                 "cannot apply %s to immutable variable '%s'; declare it 'mut'", opname,
+                 wroot ? wroot->name : "target");
+            break;
+        case LV_OK:
+            sema_check_pure_write(s, n->a, &n->span);
+            break;
+        }
+        if (!type_is_numeric(o) && !type_is_error(o))
+            SERR(s, 21, &n->span, "operator %s requires a numeric operand", opname);
+        return decorate(s, n, o);
+    }
     case AST_CAST: {
         type_t *o = sema_check_expr(s, n->a);
         type_t *target = sema_resolve_type(s, n->type);

@@ -92,7 +92,8 @@ static void ast_child_list(xml_writer_t *w, const char *role, const vec_t *list)
 
 static bool ast_kind_has_op(ast_kind_t k)
 {
-    return k == AST_BINARY || k == AST_UNARY || k == AST_ASSIGN || k == AST_LITERAL;
+    return k == AST_BINARY || k == AST_UNARY || k == AST_INCDEC || k == AST_ASSIGN ||
+           k == AST_LITERAL;
 }
 
 void ast_to_xml(xml_writer_t *w, const ast_node_t *n)
@@ -103,6 +104,7 @@ void ast_to_xml(xml_writer_t *w, const ast_node_t *n)
     if (n->name) xml_attr(w, "name", n->name);
     if (n->type_str) xml_attr(w, "type", n->type_str);
     if (ast_kind_has_op(n->kind)) xml_attr(w, "op", token_kind_name(n->op));
+    if (n->kind == AST_INCDEC) xml_attr(w, "fixity", n->is_prefix ? "prefix" : "postfix");
     if (n->kind == AST_VAR_DECL) xml_attr(w, "mut", n->is_mut ? "true" : "false");
     if (n->kind == AST_TYPE && n->is_pointer) xml_attr(w, "pointer", "true");
     if (n->is_extern) xml_attr(w, "extern", "true");
@@ -192,6 +194,9 @@ void ast_to_xml(xml_writer_t *w, const ast_node_t *n)
         ast_child(w, "right", n->b);
         break;
     case AST_UNARY:
+        ast_child(w, "operand", n->a);
+        break;
+    case AST_INCDEC:
         ast_child(w, "operand", n->a);
         break;
     case AST_CAST:

@@ -50,6 +50,7 @@ typedef enum {
     AST_EXPR_STMT,
     AST_BINARY,
     AST_UNARY,
+    AST_INCDEC,
     AST_CAST,
     AST_LITERAL,
     AST_IDENTIFIER,
@@ -92,6 +93,7 @@ struct ast_node {
     bool is_noret;
     bool is_deprecated;
     bool is_slice;
+    bool is_prefix;
     ast_node_t *type;
     ast_node_t *a, *b, *c, *d;
     vec_t list;

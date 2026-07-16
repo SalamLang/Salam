@@ -389,6 +389,13 @@ value_t eval(interp_t *I, env_t *env, ast_node_t *n)
         if (n->op == TK_NOT) return val_bool(!to_bool(a));
         return a;
     }
+    case AST_INCDEC: {
+        value_t cur = eval(I, env, n->a);
+        token_kind_t base = (n->op == TK_PLUS_PLUS) ? TK_PLUS : TK_MINUS;
+        value_t updated = arith(I, n, base, cur, val_int(1));
+        interp_assign_to(I, env, n->a, updated);
+        return n->is_prefix ? updated : cur;
+    }
     case AST_CAST: {
         value_t a = eval(I, env, n->a);
         const char *ts = n->type ? n->type->type_str : NULL;

@@ -362,6 +362,12 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         }
         return cg_fmt(cg, "(%s%s)", cg_op(n->op), cg_expr(cg, n->a));
     }
+    case AST_INCDEC: {
+        const char *opc = (n->op == TK_PLUS_PLUS) ? "++" : "--";
+        const char *operand = cg_expr(cg, n->a);
+        if (n->is_prefix) return cg_fmt(cg, "(%s%s)", opc, operand);
+        return cg_fmt(cg, "(%s%s)", operand, opc);
+    }
     case AST_CAST: {
         if (n->type_str && !strncmp(n->type_str, "dyn ", 4) &&
             n->type_str[strlen(n->type_str) - 1] != '*')

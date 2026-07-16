@@ -25,28 +25,51 @@ static type_t *err_ty(sema_t *s)
     return sema_err_ty(s);
 }
 
-static bool lvalue_mutable(sema_t *s, ast_node_t *n, bool *is_lvalue)
+typedef struct {
+    bool is_lvalue;
+    bool is_projection;
+    symbol_t *root;
+} lvalue_info_t;
+
+static void analyze_lvalue(sema_t *s, ast_node_t *n, lvalue_info_t *out)
 {
-    *is_lvalue = false;
-    if (!n) return false;
+    if (!n) return;
     if (n->kind == AST_IDENTIFIER) {
         symbol_t *sym = scope_lookup(s->cur, n->name);
-        *is_lvalue = (sym != NULL);
-        if (!sym) return false;
-        if (sym->is_ref) return true;
-        return sym->is_mut;
+        if (!sym) return;
+        out->is_lvalue = true;
+        out->root = sym;
+        return;
     }
     if (n->kind == AST_THIS) {
-        *is_lvalue = true;
-        return true;
+        out->is_lvalue = true;
+        return;
     }
     if (n->kind == AST_MEMBER || n->kind == AST_INDEX) {
-        bool inner_lv;
-        bool m = lvalue_mutable(s, n->a, &inner_lv);
-        *is_lvalue = inner_lv;
-        return m;
+        analyze_lvalue(s, n->a, out);
+        if (out->is_lvalue) out->is_projection = true;
     }
-    return false;
+}
+
+lvalue_verdict_t sema_classify_write(sema_t *s, ast_node_t *n, symbol_t **root_out)
+{
+    lvalue_info_t lv = {0};
+    analyze_lvalue(s, n, &lv);
+    if (root_out) *root_out = lv.root;
+    if (!lv.is_lvalue) return LV_NOT_LVALUE;
+    if (lv.root && lv.root->kind == SYM_CONST) return LV_CONST;
+    if (lv.is_projection) return LV_OK;
+    if (!lv.root) return LV_OK;
+    if (lv.root->is_mut || lv.root->is_ref) return LV_OK;
+    return LV_IMMUTABLE;
+}
+
+bool sema_lvalue_mutable(sema_t *s, ast_node_t *n, bool *is_lvalue)
+{
+    symbol_t *root = NULL;
+    lvalue_verdict_t v = sema_classify_write(s, n, &root);
+    *is_lvalue = (v != LV_NOT_LVALUE);
+    return v == LV_OK;
 }
 
 static bool pure_param_escapes(type_t *t)
@@ -56,7 +79,7 @@ static bool pure_param_escapes(type_t *t)
            t->kind == TY_SLICE;
 }
 
-static void check_pure_assign(sema_t *s, ast_node_t *target, const src_span_t *span)
+void sema_check_pure_write(sema_t *s, ast_node_t *target, const src_span_t *span)
 {
     ast_node_t *fn = sema_pure_fn(s);
     if (!fn) return;
@@ -185,14 +208,27 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         type_t *tt = sema_check_expr(s, n->a);
         if (tt && n->b && n->b->kind == AST_LITERAL) s->expected = tt;
         type_t *vt = sema_check_expr(s, n->b);
-        bool is_lvalue;
-        bool mut = lvalue_mutable(s, n->a, &is_lvalue);
-        if (!is_lvalue)
+        symbol_t *wroot = NULL;
+        switch (sema_classify_write(s, n->a, &wroot)) {
+        case LV_NOT_LVALUE:
             SERR(s, 13, &n->span, "assignment target is not assignable");
-        else if (!mut)
-            SERR(s, 13, &n->span, "cannot assign to immutable target");
-        else
-            check_pure_assign(s, n->a, &n->span);
+            break;
+        case LV_CONST:
+            SERR(s, 13, &n->span,
+                 "cannot assign to '%s': a 'const' binding is fully immutable, "
+                 "including its elements and fields",
+                 wroot ? wroot->name : "target");
+            break;
+        case LV_IMMUTABLE:
+            SERR(s, 13, &n->span,
+                 "cannot reassign immutable variable '%s'; declare it 'mut' to "
+                 "reassign it, or assign to its elements or fields instead",
+                 wroot ? wroot->name : "target");
+            break;
+        case LV_OK:
+            sema_check_pure_write(s, n->a, &n->span);
+            break;
+        }
 
         if (n->op == TK_ASSIGN && n->a && n->a->kind == AST_INDEX && n->a->a &&
             n->a->a->type_str) {
@@ -371,6 +407,9 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         break;
     case AST_EXPR_STMT:
         sema_check_expr(s, n->a);
+        break;
+    case AST_INCDEC:
+        sema_check_expr(s, n);
         break;
     default:
         break;

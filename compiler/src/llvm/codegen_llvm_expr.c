@@ -358,6 +358,28 @@ static llv_t ll_unary(ll_t *ll, ast_node_t *n)
     return ll_poison(n->type_str);
 }
 
+static llv_t ll_incdec(ll_t *ll, ast_node_t *n)
+{
+    ast_node_t *tgt = n->a;
+    if (!tgt || (tgt->kind != AST_IDENTIFIER && tgt->kind != AST_MEMBER &&
+                 tgt->kind != AST_INDEX)) {
+        ll_error(ll, n, "operand of '++'/'--' is not assignable");
+        return ll_poison(n->type_str);
+    }
+    ll_addr_t a = ll_addr_of(ll, tgt);
+    const char *ts = a.ts;
+    const char *oldv = ll_new_tmp(ll);
+    ll_emit(ll, "%s = load %s, ptr %s", oldv, ll_ty(ll, ts), a.ptr);
+    bool flt = ll_is_float(ts);
+    const char *step = flt ? "1.0" : "1";
+    const char *op =
+        ll_arith_op(n->op == TK_PLUS_PLUS ? TK_PLUS : TK_MINUS, flt, ll_is_signed(ts));
+    const char *newv = ll_new_tmp(ll);
+    ll_emit(ll, "%s = %s %s %s, %s", newv, op, ll_ty(ll, ts), oldv, step);
+    ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, ts), newv, a.ptr);
+    return (llv_t){n->is_prefix ? newv : oldv, ts};
+}
+
 static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
 {
     vec_t segs;
@@ -1190,6 +1212,8 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
         return ll_binary(ll, n);
     case AST_UNARY:
         return ll_unary(ll, n);
+    case AST_INCDEC:
+        return ll_incdec(ll, n);
     case AST_CAST: {
         llv_t v = ll_expr(ll, n->a);
         const char *to = n->type && n->type->type_str

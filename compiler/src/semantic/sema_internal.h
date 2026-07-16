@@ -115,6 +115,14 @@ type_t *sema_try_op_overload(sema_t *s, ast_node_t *n, symbol_t *ssym, const cha
 
 bool sema_type_is_stringable(type_t *t);
 
+typedef enum { LV_OK, LV_NOT_LVALUE, LV_CONST, LV_IMMUTABLE } lvalue_verdict_t;
+
+lvalue_verdict_t sema_classify_write(sema_t *s, ast_node_t *n, symbol_t **root_out);
+
+bool sema_lvalue_mutable(sema_t *s, ast_node_t *n, bool *is_lvalue);
+
+void sema_check_pure_write(sema_t *s, ast_node_t *target, const src_span_t *span);
+
 type_t *check_call(sema_t *s, ast_node_t *n);
 
 func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,

@@ -43,6 +43,7 @@ static const char *const k_ast_names[AST__COUNT] = {
     [AST_EXPR_STMT] = "ExprStmt",
     [AST_BINARY] = "BinaryExpr",
     [AST_UNARY] = "UnaryExpr",
+    [AST_INCDEC] = "IncDecExpr",
     [AST_CAST] = "Cast",
     [AST_LITERAL] = "Literal",
     [AST_IDENTIFIER] = "Identifier",

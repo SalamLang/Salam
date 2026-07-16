@@ -185,6 +185,8 @@ value_t try_struct_op(interp_t *I, token_kind_t op, value_t a, value_t b, bool h
 
 value_t eval(interp_t *I, env_t *env, ast_node_t *n);
 
+void interp_assign_to(interp_t *I, env_t *env, ast_node_t *target, value_t v);
+
 value_t call_func(interp_t *I, ast_node_t *fn, env_t *defenv, value_t *thisv,
                   value_t *args, size_t nargs);
 

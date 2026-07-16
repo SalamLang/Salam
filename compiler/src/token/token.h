@@ -96,6 +96,8 @@ typedef enum token_kind_t {
     TK_SLASH_EQ,
     TK_PERCENT_EQ,
     TK_POWER_EQ,
+    TK_PLUS_PLUS,
+    TK_MINUS_MINUS,
     TK_LPAREN,
     TK_RPAREN,
     TK_LBRACE,

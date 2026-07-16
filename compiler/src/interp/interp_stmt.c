@@ -14,7 +14,7 @@
 
 #include "interp/interp_internal.h"
 
-static void assign_to(interp_t *I, env_t *env, ast_node_t *target, value_t v)
+void interp_assign_to(interp_t *I, env_t *env, ast_node_t *target, value_t v)
 {
     if (target->kind == AST_IDENTIFIER) {
         binding_t *b = env_find(env, target->name);
@@ -125,7 +125,7 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
             value_t sr = try_struct_op(I, base, cur, r, true, &found);
             rhs = found ? sr : arith(I, n, base, cur, r);
         }
-        assign_to(I, env, n->a, rhs);
+        interp_assign_to(I, env, n->a, rhs);
         return FLOW_NORMAL;
     }
     case AST_IF: {

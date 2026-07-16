@@ -268,6 +268,9 @@ void ll_stmt(ll_t *ll, ast_node_t *n)
     case AST_EXPR_STMT:
         ll_expr(ll, n->a);
         break;
+    case AST_INCDEC:
+        ll_expr(ll, n);
+        break;
     case AST_RETURN:
         ll_emit_return(ll, n->a);
         break;

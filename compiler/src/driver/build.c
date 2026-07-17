@@ -324,11 +324,11 @@ int driver_build(options_t *opt)
                         continue;
                     }
                     if (d->kind != AST_IMPORT) continue;
-                    const char *spec = (d->value.kind == TV_STRING && d->value.as.s)
-                                           ? d->value.as.s
-                                           : d->name;
-                    if (!spec) continue;
-                    const char *ipath = salam_resolve_import(arena, idir, spec);
+                    const char *ipath =
+                        d->type_str ? d->type_str
+                                    : salam_resolve_import_node(arena, idir, d,
+                                                                langpack_code(modpack));
+                    if (!ipath) continue;
                     bool known = false;
                     {
                         int j = 0;

@@ -463,17 +463,24 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         const char *ec = cg_ctype(cg, elem);
         const char *base = cg_expr(cg, n->a);
         const char *lo = n->b ? cg_expr(cg, n->b) : "0";
+        int t = ++cg->tmpn;
         if (cg_is_slice_ts(n->a->type_str)) {
             if (n->c)
-                return cg_fmt(cg, "salam_slice_sub(%s, %s, %s, 1, (int64_t)sizeof(%s))",
-                              base, lo, cg_expr(cg, n->c), ec);
-            return cg_fmt(cg, "salam_slice_sub(%s, %s, 0, 0, (int64_t)sizeof(%s))", base,
-                          lo, ec);
+                return cg_fmt(cg,
+                              "({ salam_slice __sl%d; salam_slice_sub(&__sl%d, %s, %s, "
+                              "%s, 1, (int64_t)sizeof(%s)); __sl%d; })",
+                              t, t, base, lo, cg_expr(cg, n->c), ec, t);
+            return cg_fmt(cg,
+                          "({ salam_slice __sl%d; salam_slice_sub(&__sl%d, %s, %s, 0, 0, "
+                          "(int64_t)sizeof(%s)); __sl%d; })",
+                          t, t, base, lo, ec, t);
         }
         const char *hi =
             n->c ? cg_expr(cg, n->c) : cg_fmt(cg, "%ld", array_size_of(n->a->type_str));
-        return cg_fmt(cg, "salam_slice_new((void*)(%s), %s, %s, (int64_t)sizeof(%s))",
-                      base, lo, hi, ec);
+        return cg_fmt(cg,
+                      "({ salam_slice __sl%d; salam_slice_new(&__sl%d, (void*)(%s), %s, "
+                      "%s, (int64_t)sizeof(%s)); __sl%d; })",
+                      t, t, base, lo, hi, ec, t);
     }
     case AST_LAMBDA:
         return cg_lambda_value(cg, n);

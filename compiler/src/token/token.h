@@ -145,6 +145,7 @@ typedef struct {
         const char *s;
         bool b;
     } as;
+    size_t slen;
 } token_value_t;
 
 typedef struct {

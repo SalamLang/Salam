@@ -13,14 +13,35 @@
  */
 
 #include "core/prelude.h"
+#include "core/sb.h"
 #include "lexer/lexer_internal.h"
+
+static const char *lx_norm_ident(lx_t *L, const char *text)
+{
+    if (!strstr(text, "\xE2\x80\x8C")) return text;
+    sb_t b;
+    sb_init(&b);
+    const char *p = text;
+    while (*p) {
+        if ((unsigned char)p[0] == 0xE2 && (unsigned char)p[1] == 0x80 &&
+            (unsigned char)p[2] == 0x8C) {
+            sb_putc(&b, ' ');
+            p += 3;
+        } else {
+            sb_putc(&b, *p++);
+        }
+    }
+    const char *r = arena_strdup(L->a, sb_cstr(&b));
+    sb_free(&b);
+    return r;
+}
 
 void lx_scan_ident(lx_t *L)
 {
     size_t start = L->pos;
     src_pos_t b = LX_POS(L);
     lx_skip_ident(L);
-    const char *text = lx_slice(L, start);
+    const char *text = lx_norm_ident(L, lx_slice(L, start));
     token_kind_t k = langpack_lookup_keyword(L->pack, text);
 
     if (k == TK_IDENT && !L->keep_comments) {
@@ -31,6 +52,7 @@ void lx_scan_ident(lx_t *L)
         token_value_t v;
         v.kind = TV_BOOL;
         v.as.b = (k == TK_KW_TRUE);
+        v.slen = 0;
         lx_emit_val(L, k, &b, text, &v);
     } else {
         lx_emit(L, k, &b, text);

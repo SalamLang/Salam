@@ -71,6 +71,16 @@ const char *ast_kind_name(ast_kind_t kind)
     return k_ast_names[kind];
 }
 
+long ast_str_lit_len(const ast_node_t *n)
+{
+    if (!n || n->kind != AST_LITERAL) return -1;
+    if (n->op != TK_STRING && n->op != TK_TRIPLE_STRING && n->op != TK_RAW_STRING)
+        return -1;
+    if (n->value.kind != TV_STRING || !n->value.as.s) return -1;
+    if (n->value.slen) return (long)n->value.slen;
+    return (long)strlen(n->value.as.s);
+}
+
 ast_node_t *ast_new(arena_t *a, ast_kind_t kind, const src_span_t *span)
 {
     ast_node_t *n = (ast_node_t *)arena_alloc(a, sizeof(*n));

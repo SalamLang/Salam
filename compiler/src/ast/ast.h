@@ -113,6 +113,8 @@ void ast_add(arena_t *a, ast_node_t *parent, ast_node_t *child);
 
 const char *ast_kind_name(ast_kind_t kind);
 
+long ast_str_lit_len(const ast_node_t *n);
+
 ast_node_t *ast_clone(arena_t *a, const ast_node_t *n);
 
 void ast_to_xml(xml_writer_t *w, const ast_node_t *node);

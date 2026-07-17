@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "core/sal_format.h"
+#include "core/sb.h"
 #include "core/numstr.h"
 #include "semantic/sema.h"
 #include "semantic/sema_internal.h"
@@ -358,16 +359,37 @@ static int list_entries(arena_t *a, const char *dir, const char **out, int max)
     return n;
 }
 
+static const char *norm_zwnj(arena_t *a, const char *s)
+{
+    if (!s || !strstr(s, "\xE2\x80\x8C")) return s;
+    size_t len = strlen(s);
+    char *out = (char *)arena_alloc(a, len + 1);
+    size_t j = 0;
+    const char *p = s;
+    while (*p) {
+        if ((unsigned char)p[0] == 0xE2 && (unsigned char)p[1] == 0x80 &&
+            (unsigned char)p[2] == 0x8C) {
+            out[j++] = ' ';
+            p += 3;
+        } else {
+            out[j++] = *p++;
+        }
+    }
+    out[j] = 0;
+    return out;
+}
+
 typedef struct {
+    const char *lang;
     const char *alias;
-    const char *path;
-} pkg_alias_t;
+    const char *canon;
+} seg_alias_t;
 
-static pkg_alias_t g_pkg_aliases[128];
+static seg_alias_t g_seg_aliases[512];
 
-static int g_pkg_alias_n = -1;
+static int g_seg_alias_n = -1;
 
-static void index_pkg_file(arena_t *a, const char *path)
+static void index_pkg_file(arena_t *a, const char *path, const char *canon)
 {
     source_file_t *src = source_load(a, path);
     if (!src) return;
@@ -376,15 +398,19 @@ static void index_pkg_file(arena_t *a, const char *path)
     size_t limit = pkg ? (size_t)(pkg - txt) : src->len;
     {
         size_t i = 0;
-        for (; i + 4 < limit && g_pkg_alias_n < 128; i++) {
+        for (; i + 4 < limit && g_seg_alias_n < 512; i++) {
             if (txt[i] != '@') continue;
-            bool en = txt[i + 1] == 'e' && txt[i + 2] == 'n';
-            bool fa = txt[i + 1] == 'f' && txt[i + 2] == 'a';
-            bool ar = txt[i + 1] == 'a' && txt[i + 2] == 'r';
-            if (!en && !fa && !ar) continue;
+            const char *lang = NULL;
+            if (txt[i + 1] == 'e' && txt[i + 2] == 'n')
+                lang = "en";
+            else if (txt[i + 1] == 'f' && txt[i + 2] == 'a')
+                lang = "fa";
+            else if (txt[i + 1] == 'a' && txt[i + 2] == 'r')
+                lang = "ar";
+            if (!lang) continue;
             {
                 const char *cur = txt + i + 3;
-                for (; g_pkg_alias_n < 128;) {
+                for (; g_seg_alias_n < 512;) {
                     const char *q = cur;
                     while (*q == ' ' || *q == '\t')
                         q++;
@@ -392,10 +418,11 @@ static void index_pkg_file(arena_t *a, const char *path)
                     {
                         const char *e = strchr(q + 1, '"');
                         if (!e) break;
-                        g_pkg_aliases[g_pkg_alias_n].alias =
-                            arena_strndup(a, q + 1, (size_t)(e - q - 1));
-                        g_pkg_aliases[g_pkg_alias_n].path = path;
-                        g_pkg_alias_n++;
+                        g_seg_aliases[g_seg_alias_n].lang = lang;
+                        g_seg_aliases[g_seg_alias_n].alias =
+                            norm_zwnj(a, arena_strndup(a, q + 1, (size_t)(e - q - 1)));
+                        g_seg_aliases[g_seg_alias_n].canon = canon;
+                        g_seg_alias_n++;
                         cur = e + 1;
                     }
                 }
@@ -405,36 +432,97 @@ static void index_pkg_file(arena_t *a, const char *path)
     }
 }
 
-static void build_pkg_alias_index(arena_t *a, const char *root)
+static void scan_std_dir(arena_t *a, const char *base, int depth)
 {
-    g_pkg_alias_n = 0;
+    const char *entries[256];
+    int ne = list_entries(a, base, entries, 256);
+    int i = 0;
+    for (; i < ne; i++) {
+        size_t need = strlen(base) + 2 * strlen(entries[i]) + sizeof("//.salam");
+        char *pf = (char *)arena_alloc(a, need);
+        sal_snprintf(pf, need, "%s/%s/%s.salam", base, entries[i], entries[i]);
+        if (file_exists(pf)) index_pkg_file(a, pf, entries[i]);
+        if (depth > 0) {
+            char *sub = (char *)arena_alloc(a, strlen(base) + strlen(entries[i]) + 2);
+            sal_snprintf(sub, strlen(base) + strlen(entries[i]) + 2, "%s/%s", base,
+                         entries[i]);
+            scan_std_dir(a, sub, depth - 1);
+        }
+    }
+}
+
+static void build_seg_index(arena_t *a, const char *root)
+{
+    g_seg_alias_n = 0;
     char base[512];
     if (root && root[0])
         sal_snprintf(base, sizeof base, "%s/std", root);
     else
         sal_snprintf(base, sizeof base, "std");
-    const char *entries[256];
-    int ne = list_entries(a, base, entries, 256);
-    {
-        int i = 0;
-        for (; i < ne; i++) {
-            size_t need = strlen(base) + 2 * strlen(entries[i]) + sizeof("//.salam");
-            char *pf = (char *)arena_alloc(a, need);
-            sal_snprintf(pf, need, "%s/%s/%s.salam", base, entries[i], entries[i]);
-            if (file_exists(pf)) index_pkg_file(a, pf);
-        }
-    }
+    scan_std_dir(a, base, 2);
 }
 
-static const char *resolve_pkg_alias(arena_t *a, const char *root, const char *spec)
+static const char *seg_to_canon(arena_t *a, const char *root, const char *seg,
+                                const char *lang)
 {
-    if (g_pkg_alias_n < 0) build_pkg_alias_index(a, root);
+    if (g_seg_alias_n < 0) build_seg_index(a, root);
+    const char *ns = norm_zwnj(a, seg);
     {
         int i = 0;
-        for (; i < g_pkg_alias_n; i++)
-            if (strcmp(g_pkg_aliases[i].alias, spec) == 0) return g_pkg_aliases[i].path;
+        for (; i < g_seg_alias_n; i++)
+            if (strcmp(g_seg_aliases[i].lang, lang) == 0 &&
+                strcmp(g_seg_aliases[i].alias, ns) == 0)
+                return g_seg_aliases[i].canon;
     }
     return NULL;
+}
+
+static const char *resolve_ident_import(arena_t *a, const char *root, const char *dotted,
+                                        const char *lang)
+{
+    sb_t spec;
+    sb_init(&spec);
+    const char *last = NULL;
+    const char *p = dotted;
+    while (*p) {
+        const char *dot = strchr(p, '.');
+        size_t seglen = dot ? (size_t)(dot - p) : strlen(p);
+        const char *seg = arena_strndup(a, p, seglen);
+        const char *canon = seg_to_canon(a, root, seg, lang);
+        if (!canon) {
+            sb_free(&spec);
+            return NULL;
+        }
+        if (spec.len) sb_putc(&spec, '/');
+        sb_puts(&spec, canon);
+        last = canon;
+        if (!dot) break;
+        p = dot + 1;
+    }
+    if (!last) {
+        sb_free(&spec);
+        return NULL;
+    }
+    size_t n = strlen(root) + spec.len + strlen(last) + 24;
+    char *out = (char *)arena_alloc(a, n);
+    if (root && root[0])
+        sal_snprintf(out, n, "%s/std/%s/%s.salam", root, sb_cstr(&spec), last);
+    else
+        sal_snprintf(out, n, "std/%s/%s.salam", sb_cstr(&spec), last);
+    sb_free(&spec);
+    return out;
+}
+
+static const char *resolve_user_string(arena_t *a, const char *dir, const char *spec)
+{
+    bool has_ext = strstr(spec, ".salam") != NULL;
+    size_t n = strlen(dir) + strlen(spec) + 16;
+    char *p = (char *)arena_alloc(a, n);
+    if (dir && dir[0])
+        sal_snprintf(p, n, "%s/%s%s", dir, spec, has_ext ? "" : ".salam");
+    else
+        sal_snprintf(p, n, "%s%s", spec, has_ext ? "" : ".salam");
+    return path_normalize(p);
 }
 
 const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec)
@@ -460,14 +548,30 @@ const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec)
         sal_snprintf(p, n, "std/%s/%s.salam", spec, last);
 
     if (!file_exists(p)) {
-        const char *aliased = resolve_pkg_alias(a, root, spec);
-        if (aliased) return aliased;
+        const char *loc = resolve_ident_import(a, root, spec, i18n_lang());
+        if (loc) return loc;
     }
     return p;
 }
 
+const char *salam_resolve_import_node(arena_t *a, const char *dir, const ast_node_t *imp,
+                                      const char *lang)
+{
+    if (imp->value.kind == TV_STRING && imp->value.as.s)
+        return resolve_user_string(a, dir, imp->value.as.s);
+    if (imp->name)
+        return resolve_ident_import(a, salam_get_stdlib_root(), imp->name,
+                                    (lang && *lang) ? lang : "en");
+    return NULL;
+}
+
 static const char *import_local_name(arena_t *a, ast_node_t *imp, const char *spec)
 {
+    if (imp->value.kind != TV_STRING) {
+        const char *nm = imp->name ? imp->name : spec;
+        const char *dot = strrchr(nm, '.');
+        return dot ? arena_strdup(a, dot + 1) : nm;
+    }
     if (imp->name) return imp->name;
     const char *slash = strrchr(spec, '/');
     const char *seg = slash ? slash + 1 : spec;
@@ -717,11 +821,16 @@ static void load_import_file(sema_t *s, ast_node_t *imp)
         (imp->value.kind == TV_STRING && imp->value.as.s) ? imp->value.as.s : imp->name;
     if (!spec) return;
 
-    const char *path = salam_resolve_import(s->a, s->dir, spec);
+    const char *path = salam_resolve_import_node(s->a, s->dir, imp, s->lang);
+    if (!path) {
+        SERR(s, 8, &imp->span, "standard library package '%s' not found", spec);
+        return;
+    }
+    imp->type_str = path;
     symbol_t *pk = load_package(s, path, imp);
     if (!pk) return;
 
-    const char *local = import_local_name(s->a, imp, spec);
+    const char *local = norm_zwnj(s->a, import_local_name(s->a, imp, spec));
     symbol_t *bind = symbol_new(s->a, SYM_PACKAGE, local);
     bind->members = pk->members;
     bind->pkgname = pk->pkgname;
@@ -731,13 +840,22 @@ static void load_import_file(sema_t *s, ast_node_t *imp)
     else
         scope_define(s->a, s->cur, bind);
 
+    if (pk->pkgname && strcmp(pk->pkgname, local) != 0 &&
+        !scope_lookup_local(s->cur, pk->pkgname)) {
+        symbol_t *cb = symbol_new(s->a, SYM_PACKAGE, pk->pkgname);
+        cb->members = pk->members;
+        cb->pkgname = pk->pkgname;
+        cb->decl = pk->decl;
+        scope_define(s->a, s->cur, cb);
+    }
+
     if (pk->decl) {
         vec_t *al = &pk->decl->aliases;
         size_t i = 0;
         for (; i + 1 < al->len; i += 2) {
-            if (strcmp((const char *)al->data[i], i18n_lang()) != 0) continue;
+            if (strcmp((const char *)al->data[i], s->lang) != 0) continue;
             {
-                const char *alias = (const char *)al->data[i + 1];
+                const char *alias = norm_zwnj(s->a, (const char *)al->data[i + 1]);
                 if (!alias || strcmp(alias, local) == 0) continue;
                 if (scope_lookup_local(s->cur, alias)) continue;
                 {
@@ -781,7 +899,7 @@ sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const ch
 {
     sema_t s;
     memset(&s, 0, sizeof(s));
-    g_pkg_alias_n = -1;
+    g_seg_alias_n = -1;
     s.a = a;
     s.log = log;
     s.file = file;

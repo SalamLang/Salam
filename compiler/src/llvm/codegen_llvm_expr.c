@@ -554,6 +554,10 @@ static llv_t ll_call_len(ll_t *ll, ast_node_t *n)
         ll_error(ll, n, "len() of an unsupported type");
         return ll_poison("i32");
     }
+    {
+        long klen = ast_str_lit_len(arg);
+        if (klen >= 0) return (llv_t){ll_fmt(ll, "%ld", klen), "i32"};
+    }
     llv_t v = ll_expr(ll, arg);
     const char *l = ll_new_tmp(ll);
     ll_emit(ll, "%s = call %s @strlen(ptr %s)", l, ll->usize, v.ref);
@@ -605,6 +609,13 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
                         llv_t *out)
 {
     size_t na = n->list.len;
+    if ((!strcmp(m, "len") || !strcmp(m, "length")) && na == 0) {
+        long klen = ast_str_lit_len(obj);
+        if (klen >= 0) {
+            *out = (llv_t){ll_fmt(ll, "%ld", klen), "i32"};
+            return true;
+        }
+    }
     const char *recv = ll_expr(ll, obj).ref;
     const char *r;
     if (!strcmp(m, "len") || !strcmp(m, "length")) {

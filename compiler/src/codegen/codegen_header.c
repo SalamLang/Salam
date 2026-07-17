@@ -329,14 +329,13 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "void* " SALAM_MEM_ALLOC "(uint64_t size);\n"
                "void* " SALAM_MEM_REALLOC "(void* ptr, uint64_t size);\n"
                "void " SALAM_MEM_FREE "(void* ptr);\n"
-               "static inline salam_slice salam_slice_new(void* b, int64_t lo, int64_t "
-               "hi, int64_t esz)"
-               "{ salam_slice s; s.data=(void*)((char*)b+(lo)*(esz)); s.len=(hi)-(lo); "
-               "return s; }\n"
-               "static inline salam_slice salam_slice_sub(salam_slice b, int64_t lo, "
-               "int64_t hi, int has_hi, int64_t esz)"
-               "{ salam_slice s; if(!has_hi) hi=b.len; "
-               "s.data=(void*)((char*)b.data+(lo)*(esz)); s.len=(hi)-(lo); return s; }\n"
+               "static inline void salam_slice_new(salam_slice* out, void* b, int64_t "
+               "lo, int64_t hi, int64_t esz)"
+               "{ out->data=(void*)((char*)b+(lo)*(esz)); out->len=(hi)-(lo); }\n"
+               "static inline void salam_slice_sub(salam_slice* out, salam_slice b, "
+               "int64_t lo, int64_t hi, int has_hi, int64_t esz)"
+               "{ if(!has_hi) hi=b.len; "
+               "out->data=(void*)((char*)b.data+(lo)*(esz)); out->len=(hi)-(lo); }\n"
                "static inline void* salam_slice_at(salam_slice s, int64_t i, int64_t "
                "esz, int sf)"
                "{ return (void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n"
@@ -381,7 +380,8 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                                     ? d->value.as.s
                                     : d->name;
                 if (!p) continue;
-                const char *resolved = salam_resolve_import(cg->a, "", p);
+                const char *resolved =
+                    d->type_str ? d->type_str : salam_resolve_import(cg->a, "", p);
                 const char *slash = strrchr(resolved, '/');
                 const char *bs = strrchr(resolved, '\\');
                 const char *stem = slash ? slash + 1 : resolved;

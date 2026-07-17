@@ -14,12 +14,14 @@
 
 #include "core/prelude.h"
 #include "core/sal_format.h"
+#include "core/sb.h"
 #include "parser/parser.h"
 #include "parser/parser_internal.h"
 #include "i18n/i18n.h"
 
 static ast_node_t *parse_program(parser_t *p);
-static ast_node_t *parse_import_entry(parser_t *p);
+static ast_node_t *parse_string_import_entry(parser_t *p);
+static ast_node_t *parse_ident_import_entry(parser_t *p);
 static void parse_imports_into(parser_t *p, ast_node_t *prog);
 static void parse_top_level_item_into(parser_t *p, ast_node_t *dest, vec_t *pending);
 static ast_node_t *parse_toplevel_if(parser_t *p);
@@ -200,7 +202,12 @@ static ast_node_t *parse_program(parser_t *p)
     return prog;
 }
 
-static ast_node_t *parse_import_entry(parser_t *p)
+static bool p_at_string_import(parser_t *p)
+{
+    return p_at(p, TK_STRING) || (p_at(p, TK_IDENT) && p_peek2(p)->kind == TK_STRING);
+}
+
+static ast_node_t *parse_string_import_entry(parser_t *p)
 {
     ast_node_t *n = p_mk(p, AST_IMPORT);
     const char *alias = NULL;
@@ -208,17 +215,31 @@ static ast_node_t *parse_import_entry(parser_t *p)
         alias = p_peek(p)->lexeme;
         p_advance(p);
     }
-    const token_t *t = p_peek(p);
-    if (t->kind == TK_STRING) {
+    if (p_at(p, TK_STRING)) {
         n->name = alias;
-        n->value = t->value;
-        p_advance(p);
-    } else if (t->kind == TK_IDENT) {
-        n->name = t->lexeme;
+        n->value = p_peek(p)->value;
         p_advance(p);
     } else {
         p_error(p, "expected import path string");
     }
+    p_fin(p, n);
+    return n;
+}
+
+static ast_node_t *parse_ident_import_entry(parser_t *p)
+{
+    ast_node_t *n = p_mk(p, AST_IMPORT);
+    sb_t b;
+    sb_init(&b);
+    sb_puts(&b, p_munch_name(p));
+    while (p_at(p, TK_DOT)) {
+        p_advance(p);
+        sb_putc(&b, '.');
+        sb_puts(&b, p_munch_name(p));
+    }
+    n->name = arena_strdup(p->a, sb_cstr(&b));
+    sb_free(&b);
+    n->value.kind = TV_NONE;
     p_fin(p, n);
     return n;
 }
@@ -234,9 +255,15 @@ static void parse_imports_into(parser_t *p, ast_node_t *prog)
         p_term(p);
         return;
     }
-    ast_add(p->a, prog, parse_import_entry(p));
-    while (p_at(p, TK_STRING) || (p_at(p, TK_IDENT) && p_peek2(p)->kind == TK_STRING))
-        ast_add(p->a, prog, parse_import_entry(p));
+    if (p_at_string_import(p)) {
+        ast_add(p->a, prog, parse_string_import_entry(p));
+        while (p_at_string_import(p))
+            ast_add(p->a, prog, parse_string_import_entry(p));
+    } else if (p_at(p, TK_IDENT)) {
+        ast_add(p->a, prog, parse_ident_import_entry(p));
+    } else {
+        p_error(p, "expected import path string");
+    }
     p_term(p);
 }
 

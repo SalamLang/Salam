@@ -15,6 +15,57 @@
 #include "llvm/codegen_llvm_internal.h"
 #include "i18n/i18n.h"
 
+static const char *ll_datalayout(const char *triple)
+{
+    static const char *dl_x64_elf = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-"
+                                    "i128:128-f80:128-n8:16:32:64-S128";
+    static const char *dl_x64_win = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-"
+                                    "i128:128-f80:128-n8:16:32:64-S128";
+    static const char *dl_x64_mac = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-"
+                                    "i128:128-f80:128-n8:16:32:64-S128";
+    static const char *dl_x86_elf = "e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-"
+                                    "i128:128-f64:32:64-f80:32-n8:16:32-S128";
+    static const char *dl_a64_elf = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128";
+    static const char *dl_a64_mac = "e-m:o-i64:64-i128:128-n32:64-S128";
+    static const char *dl_rv64 = "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128";
+    if (!triple || !triple[0]) {
+#if defined(__x86_64__) || defined(_M_X64)
+#  if defined(_WIN32)
+        return dl_x64_win;
+#  elif defined(__APPLE__)
+        return dl_x64_mac;
+#  else
+        return dl_x64_elf;
+#  endif
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#  if defined(__APPLE__)
+        return dl_a64_mac;
+#  else
+        return dl_a64_elf;
+#  endif
+#elif defined(__i386__) || defined(_M_IX86)
+        return dl_x86_elf;
+#else
+        return NULL;
+#endif
+    }
+    {
+        bool win = strstr(triple, "windows") != NULL;
+        bool mac = strstr(triple, "apple") || strstr(triple, "darwin") ||
+                   strstr(triple, "macos");
+        if (strstr(triple, "x86_64") || strstr(triple, "amd64"))
+            return win ? dl_x64_win : (mac ? dl_x64_mac : dl_x64_elf);
+        if (strstr(triple, "aarch64") || strstr(triple, "arm64"))
+            return mac ? dl_a64_mac : dl_a64_elf;
+        if (!win && !mac &&
+            (strstr(triple, "i686") || strstr(triple, "i586") || strstr(triple, "i486") ||
+             strstr(triple, "i386")))
+            return dl_x86_elf;
+        if (strstr(triple, "riscv64")) return dl_rv64;
+    }
+    return NULL;
+}
+
 static const char *pl_widen(ll_t *ll, sb_t *g, const char *src, const char *dst)
 {
     if (ll->ptr_bits <= 32) return src;
@@ -82,7 +133,7 @@ static void ll_emit_substr(ll_t *ll)
     sb_t *g = ll->hg;
     const char *U = ll->usize;
     sb_puts(g, "define internal noalias ptr @salam_ll_substr(ptr %s, i32 %start, i32 "
-               "%len) nounwind {\nentry:\n");
+               "%len) nounwind willreturn nofree {\nentry:\n");
     const char *L = pl_widen(ll, g, "%len", "%l");
     const char *SO = pl_widen(ll, g, "%start", "%so");
     sb_puts(g, ll_fmt(ll, "  %%t = add %s %s, 1\n", U, L));
@@ -100,7 +151,7 @@ static void ll_emit_strcat(ll_t *ll)
     sb_puts(ll->hg,
             ll_fmt(ll,
                    "define internal noalias ptr @salam_ll_strcat(ptr %%a, ptr %%b) "
-                   "nounwind {\n"
+                   "nounwind willreturn nofree {\n"
                    "entry:\n"
                    "  %%la = call %s @strlen(ptr %%a)\n"
                    "  %%lb = call %s @strlen(ptr %%b)\n"
@@ -134,49 +185,49 @@ static void ll_emit_trim(ll_t *ll)
 {
     ll_need(ll, LL_H_ISWS);
     const char *U = ll->usize;
-    sb_puts(ll->hg,
-            ll_fmt(ll,
-                   "define internal noalias ptr @salam_ll_trim(ptr %%s) nounwind {\n"
-                   "entry:\n"
-                   "  %%n = call %s @strlen(ptr %%s)\n"
-                   "  br label %%f\n"
-                   "f:\n"
-                   "  %%a = phi %s [ 0, %%entry ], [ %%an, %%fbody ]\n"
-                   "  %%c1 = icmp ult %s %%a, %%n\n"
-                   "  br i1 %%c1, label %%fchk, label %%b\n"
-                   "fchk:\n"
-                   "  %%p1 = getelementptr i8, ptr %%s, %s %%a\n"
-                   "  %%ch1 = load i8, ptr %%p1\n"
-                   "  %%w1 = call i1 @salam_ll_isws(i8 %%ch1)\n"
-                   "  br i1 %%w1, label %%fbody, label %%b\n"
-                   "fbody:\n"
-                   "  %%an = add %s %%a, 1\n"
-                   "  br label %%f\n"
-                   "b:\n"
-                   "  br label %%r\n"
-                   "r:\n"
-                   "  %%e = phi %s [ %%n, %%b ], [ %%en, %%rbody ]\n"
-                   "  %%c2 = icmp ugt %s %%e, %%a\n"
-                   "  br i1 %%c2, label %%rchk, label %%done\n"
-                   "rchk:\n"
-                   "  %%em1 = sub %s %%e, 1\n"
-                   "  %%p2 = getelementptr i8, ptr %%s, %s %%em1\n"
-                   "  %%ch2 = load i8, ptr %%p2\n"
-                   "  %%w2 = call i1 @salam_ll_isws(i8 %%ch2)\n"
-                   "  br i1 %%w2, label %%rbody, label %%done\n"
-                   "rbody:\n"
-                   "  %%en = sub %s %%e, 1\n"
-                   "  br label %%r\n"
-                   "done:\n"
-                   "  %%len = sub %s %%e, %%a\n"
-                   "  %%tot = add %s %%len, 1\n"
-                   "  %%buf = call ptr @malloc(%s %%tot)\n"
-                   "  %%src = getelementptr i8, ptr %%s, %s %%a\n"
-                   "  %%cp = call ptr @memcpy(ptr %%buf, ptr %%src, %s %%len)\n"
-                   "  %%endp = getelementptr i8, ptr %%buf, %s %%len\n"
-                   "  store i8 0, ptr %%endp\n"
-                   "  ret ptr %%buf\n}\n\n",
-                   U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U));
+    sb_puts(ll->hg, ll_fmt(ll,
+                           "define internal noalias ptr @salam_ll_trim(ptr %%s) nounwind "
+                           "willreturn nofree {\n"
+                           "entry:\n"
+                           "  %%n = call %s @strlen(ptr %%s)\n"
+                           "  br label %%f\n"
+                           "f:\n"
+                           "  %%a = phi %s [ 0, %%entry ], [ %%an, %%fbody ]\n"
+                           "  %%c1 = icmp ult %s %%a, %%n\n"
+                           "  br i1 %%c1, label %%fchk, label %%b\n"
+                           "fchk:\n"
+                           "  %%p1 = getelementptr i8, ptr %%s, %s %%a\n"
+                           "  %%ch1 = load i8, ptr %%p1\n"
+                           "  %%w1 = call i1 @salam_ll_isws(i8 %%ch1)\n"
+                           "  br i1 %%w1, label %%fbody, label %%b\n"
+                           "fbody:\n"
+                           "  %%an = add %s %%a, 1\n"
+                           "  br label %%f\n"
+                           "b:\n"
+                           "  br label %%r\n"
+                           "r:\n"
+                           "  %%e = phi %s [ %%n, %%b ], [ %%en, %%rbody ]\n"
+                           "  %%c2 = icmp ugt %s %%e, %%a\n"
+                           "  br i1 %%c2, label %%rchk, label %%done\n"
+                           "rchk:\n"
+                           "  %%em1 = sub %s %%e, 1\n"
+                           "  %%p2 = getelementptr i8, ptr %%s, %s %%em1\n"
+                           "  %%ch2 = load i8, ptr %%p2\n"
+                           "  %%w2 = call i1 @salam_ll_isws(i8 %%ch2)\n"
+                           "  br i1 %%w2, label %%rbody, label %%done\n"
+                           "rbody:\n"
+                           "  %%en = sub %s %%e, 1\n"
+                           "  br label %%r\n"
+                           "done:\n"
+                           "  %%len = sub %s %%e, %%a\n"
+                           "  %%tot = add %s %%len, 1\n"
+                           "  %%buf = call ptr @malloc(%s %%tot)\n"
+                           "  %%src = getelementptr i8, ptr %%s, %s %%a\n"
+                           "  %%cp = call ptr @memcpy(ptr %%buf, ptr %%src, %s %%len)\n"
+                           "  %%endp = getelementptr i8, ptr %%buf, %s %%len\n"
+                           "  store i8 0, ptr %%endp\n"
+                           "  ret ptr %%buf\n}\n\n",
+                           U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U));
 }
 
 static void ll_emit_strhash(ll_t *ll)
@@ -219,7 +270,8 @@ static void ll_emit_i64str(ll_t *ll)
             "@.sfmt.lld = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n");
     sb_puts(ll->hg,
             ll_fmt(ll,
-                   "define internal noalias ptr @salam_ll_i64str(i64 %%v) nounwind {\n"
+                   "define internal noalias ptr @salam_ll_i64str(i64 %%v) nounwind "
+                   "willreturn nofree {\n"
                    "entry:\n"
                    "  %%b = call ptr @malloc(%s 32)\n"
                    "  %%r = call i32 (ptr, %s, ptr, ...) @snprintf(ptr %%b, %s 32, "
@@ -235,7 +287,8 @@ static void ll_emit_u64str(ll_t *ll)
             "@.sfmt.llu = private unnamed_addr constant [5 x i8] c\"%llu\\00\"\n");
     sb_puts(ll->hg,
             ll_fmt(ll,
-                   "define internal noalias ptr @salam_ll_u64str(i64 %%v) nounwind {\n"
+                   "define internal noalias ptr @salam_ll_u64str(i64 %%v) nounwind "
+                   "willreturn nofree {\n"
                    "entry:\n"
                    "  %%b = call ptr @malloc(%s 32)\n"
                    "  %%r = call i32 (ptr, %s, ptr, ...) @snprintf(ptr %%b, %s 32, "
@@ -250,7 +303,8 @@ static void ll_emit_f64str(ll_t *ll)
     sb_puts(ll->hg, "@.sfmt.g = private unnamed_addr constant [3 x i8] c\"%g\\00\"\n");
     sb_puts(ll->hg,
             ll_fmt(ll,
-                   "define internal noalias ptr @salam_ll_f64str(double %%v) nounwind {\n"
+                   "define internal noalias ptr @salam_ll_f64str(double %%v) nounwind "
+                   "willreturn nofree {\n"
                    "entry:\n"
                    "  %%b = call ptr @malloc(%s 32)\n"
                    "  %%r = call i32 (ptr, %s, ptr, ...) @snprintf(ptr %%b, %s 32, "
@@ -263,7 +317,8 @@ static void ll_emit_charstr(ll_t *ll)
 {
     sb_puts(ll->hg,
             ll_fmt(ll,
-                   "define internal noalias ptr @salam_ll_charstr(i32 %%c) nounwind {\n"
+                   "define internal noalias ptr @salam_ll_charstr(i32 %%c) nounwind "
+                   "willreturn nofree {\n"
                    "entry:\n"
                    "  %%b = call ptr @malloc(%s 2)\n"
                    "  %%t = trunc i32 %%c to i8\n"
@@ -351,6 +406,9 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
                     : NULL;
     ll.ptr_bits = ll_target_ptr_bits(ll.triple);
     ll.usize = ll.ptr_bits == 32 ? "i32" : "i64";
+    ll.optsize =
+        opts && (opts->opt_level == LLVM_OPT_OS || opts->opt_level == LLVM_OPT_OZ);
+    ll.minsize = opts && opts->opt_level == LLVM_OPT_OZ;
     vec_init(&ll.locals);
     vec_init(&ll.strings);
     vec_init(&ll.defers);
@@ -368,7 +426,12 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     ll.hg = &hg;
     sb_puts(&g, ll_fmt(&ll, "; ModuleID = '%s'\n", module));
     sb_puts(&g, ll_fmt(&ll, "source_filename = \"%s.salam\"\n\n", module));
-    if (ll.triple) sb_puts(&g, ll_fmt(&ll, "target triple = \"%s\"\n\n", ll.triple));
+    if (ll.triple) sb_puts(&g, ll_fmt(&ll, "target triple = \"%s\"\n", ll.triple));
+    {
+        const char *dl = ll_datalayout(ll.triple);
+        if (dl) sb_puts(&g, ll_fmt(&ll, "target datalayout = \"%s\"\n", dl));
+    }
+    sb_puts(&g, "\n");
     ll_emit_prologue(&ll);
     ll_emit_struct_types(&ll, program);
     ll_emit_externs(&ll);

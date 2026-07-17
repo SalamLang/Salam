@@ -15,15 +15,35 @@
 #include "llvm/codegen_llvm_internal.h"
 #include "core/sal_format.h"
 
+static void ll_emit_to(ll_t *ll, sb_t *dst, const char *fmt, va_list ap)
+{
+    char tmp[512];
+    va_list ap2;
+    SAL_VA_COPY(ap2, ap);
+    int n = sal_vsnprintf(tmp, sizeof tmp, fmt, ap);
+    if (n >= 0 && (size_t)n < sizeof tmp) {
+        sb_puts(dst, tmp);
+    } else {
+        char *buf = (char *)arena_alloc(ll->a, (size_t)n + 1);
+        sal_vsnprintf(buf, (size_t)n + 1, fmt, ap2);
+        sb_puts(dst, buf);
+    }
+    va_end(ap2);
+}
+
 const char *ll_fmt(ll_t *ll, const char *fmt, ...)
 {
+    char tmp[512];
     va_list ap, ap2;
     va_start(ap, fmt);
     SAL_VA_COPY(ap2, ap);
-    int n = sal_vsnprintf(NULL, 0, fmt, ap);
+    int n = sal_vsnprintf(tmp, sizeof tmp, fmt, ap);
     va_end(ap);
     char *buf = (char *)arena_alloc(ll->a, (size_t)n + 1);
-    sal_vsnprintf(buf, (size_t)n + 1, fmt, ap2);
+    if (n >= 0 && (size_t)n < sizeof tmp)
+        memcpy(buf, tmp, (size_t)n + 1);
+    else
+        sal_vsnprintf(buf, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
     return buf;
 }
@@ -40,15 +60,10 @@ void ll_emit(ll_t *ll, const char *fmt, ...)
 {
     if (ll->term) return;
     sb_puts(ll->b, "  ");
-    va_list ap, ap2;
+    va_list ap;
     va_start(ap, fmt);
-    SAL_VA_COPY(ap2, ap);
-    int n = sal_vsnprintf(NULL, 0, fmt, ap);
+    ll_emit_to(ll, ll->b, fmt, ap);
     va_end(ap);
-    char *buf = (char *)arena_alloc(ll->a, (size_t)n + 1);
-    sal_vsnprintf(buf, (size_t)n + 1, fmt, ap2);
-    va_end(ap2);
-    sb_puts(ll->b, buf);
     ll_attach_dbg(ll);
     sb_putc(ll->b, '\n');
 }
@@ -57,15 +72,10 @@ void ll_emit_alloca(ll_t *ll, const char *fmt, ...)
 {
     sb_t *dst = ll->allocas ? ll->allocas : ll->b;
     sb_puts(dst, "  ");
-    va_list ap, ap2;
+    va_list ap;
     va_start(ap, fmt);
-    SAL_VA_COPY(ap2, ap);
-    int n = sal_vsnprintf(NULL, 0, fmt, ap);
+    ll_emit_to(ll, dst, fmt, ap);
     va_end(ap);
-    char *buf = (char *)arena_alloc(ll->a, (size_t)n + 1);
-    sal_vsnprintf(buf, (size_t)n + 1, fmt, ap2);
-    va_end(ap2);
-    sb_puts(dst, buf);
     sb_putc(dst, '\n');
 }
 
@@ -80,15 +90,10 @@ void ll_emit_term(ll_t *ll, const char *fmt, ...)
 {
     if (ll->term) return;
     sb_puts(ll->b, "  ");
-    va_list ap, ap2;
+    va_list ap;
     va_start(ap, fmt);
-    SAL_VA_COPY(ap2, ap);
-    int n = sal_vsnprintf(NULL, 0, fmt, ap);
+    ll_emit_to(ll, ll->b, fmt, ap);
     va_end(ap);
-    char *buf = (char *)arena_alloc(ll->a, (size_t)n + 1);
-    sal_vsnprintf(buf, (size_t)n + 1, fmt, ap2);
-    va_end(ap2);
-    sb_puts(ll->b, buf);
     ll_attach_dbg(ll);
     sb_putc(ll->b, '\n');
     ll->term = true;
@@ -143,14 +148,27 @@ static const char *ll_escape(ll_t *ll, const char *s, size_t len, size_t *arr_le
     return r;
 }
 
+static size_t ll_str_hash(const char *s, size_t len)
+{
+    size_t h = 1469598103934665603u;
+    size_t i = 0;
+    for (; i < len; i++) {
+        h ^= (unsigned char)s[i];
+        h *= 1099511628211u;
+    }
+    return h;
+}
+
 const char *ll_strconst(ll_t *ll, const char *s)
 {
     size_t len = strlen(s);
+    size_t hash = ll_str_hash(s, len);
     {
         size_t i = 0;
         for (; i < ll->strings.len; i++) {
             lstr_t *e = (lstr_t *)ll->strings.data[i];
-            if (e->len == len && memcmp(e->bytes, s, len) == 0) return e->gref;
+            if (e->hash == hash && e->len == len && memcmp(e->bytes, s, len) == 0)
+                return e->gref;
         }
     }
     size_t arr;
@@ -161,6 +179,7 @@ const char *ll_strconst(ll_t *ll, const char *s)
     lstr_t *e = (lstr_t *)arena_alloc(ll->a, sizeof *e);
     e->bytes = arena_strndup(ll->a, s, len);
     e->len = len;
+    e->hash = hash;
     e->gref = gref;
     vec_push(ll->a, &ll->strings, e);
     return gref;

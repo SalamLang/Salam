@@ -380,16 +380,27 @@ static void index_pkg_file(arena_t *a, const char *path)
             if (txt[i] != '@') continue;
             bool en = txt[i + 1] == 'e' && txt[i + 2] == 'n';
             bool fa = txt[i + 1] == 'f' && txt[i + 2] == 'a';
-            if (!en && !fa) continue;
-            const char *q = strchr(txt + i + 3, '"');
-            if (!q || (size_t)(q - txt) >= limit) continue;
-            const char *e = strchr(q + 1, '"');
-            if (!e) continue;
-            g_pkg_aliases[g_pkg_alias_n].alias =
-                arena_strndup(a, q + 1, (size_t)(e - q - 1));
-            g_pkg_aliases[g_pkg_alias_n].path = path;
-            g_pkg_alias_n++;
-            i = (size_t)(e - txt);
+            bool ar = txt[i + 1] == 'a' && txt[i + 2] == 'r';
+            if (!en && !fa && !ar) continue;
+            {
+                const char *cur = txt + i + 3;
+                for (; g_pkg_alias_n < 128;) {
+                    const char *q = cur;
+                    while (*q == ' ' || *q == '\t')
+                        q++;
+                    if (*q != '"' || (size_t)(q - txt) >= limit) break;
+                    {
+                        const char *e = strchr(q + 1, '"');
+                        if (!e) break;
+                        g_pkg_aliases[g_pkg_alias_n].alias =
+                            arena_strndup(a, q + 1, (size_t)(e - q - 1));
+                        g_pkg_aliases[g_pkg_alias_n].path = path;
+                        g_pkg_alias_n++;
+                        cur = e + 1;
+                    }
+                }
+                if (cur > txt + i + 3) i = (size_t)(cur - txt) - 1;
+            }
         }
     }
 }
@@ -720,14 +731,24 @@ static void load_import_file(sema_t *s, ast_node_t *imp)
     else
         scope_define(s->a, s->cur, bind);
 
-    const char *alias =
-        (pk->decl) ? alias_for_lang(&pk->decl->aliases, i18n_lang()) : NULL;
-    if (alias && strcmp(alias, local) != 0 && !scope_lookup_local(s->cur, alias)) {
-        symbol_t *b2 = symbol_new(s->a, SYM_PACKAGE, alias);
-        b2->members = pk->members;
-        b2->pkgname = pk->pkgname;
-        b2->decl = pk->decl;
-        scope_define(s->a, s->cur, b2);
+    if (pk->decl) {
+        vec_t *al = &pk->decl->aliases;
+        size_t i = 0;
+        for (; i + 1 < al->len; i += 2) {
+            if (strcmp((const char *)al->data[i], i18n_lang()) != 0) continue;
+            {
+                const char *alias = (const char *)al->data[i + 1];
+                if (!alias || strcmp(alias, local) == 0) continue;
+                if (scope_lookup_local(s->cur, alias)) continue;
+                {
+                    symbol_t *b2 = symbol_new(s->a, SYM_PACKAGE, alias);
+                    b2->members = pk->members;
+                    b2->pkgname = pk->pkgname;
+                    b2->decl = pk->decl;
+                    scope_define(s->a, s->cur, b2);
+                }
+            }
+        }
     }
 }
 

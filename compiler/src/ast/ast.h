@@ -60,6 +60,7 @@ typedef enum {
     AST_MEMBER,
     AST_INDEX,
     AST_SLICE,
+    AST_TERNARY,
     AST_LAMBDA,
     AST_ARRAY_LIT,
     AST_STRUCT_LIT,

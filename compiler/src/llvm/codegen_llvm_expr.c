@@ -861,11 +861,11 @@ static llv_t ll_call(ll_t *ll, ast_node_t *n)
     if (callee && callee->kind == AST_MEMBER) return ll_call_method(ll, n, callee);
     if (callee && callee->kind == AST_IDENTIFIER) {
         const char *nm = callee->name;
-        if (!strcmp(nm, "print") || !strcmp(nm, "_")) {
+        if (!strcmp(nm, "print")) {
             ll_lower_print(ll, n, false, 0);
             return (llv_t){"0", "void"};
         }
-        if (!strcmp(nm, "println") || !strcmp(nm, "__")) {
+        if (!strcmp(nm, "println")) {
             ll_lower_print(ll, n, true, 0);
             return (llv_t){"0", "void"};
         }
@@ -1210,6 +1210,31 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
     }
     case AST_BINARY:
         return ll_binary(ll, n);
+    case AST_TERNARY: {
+        const char *rt = n->type_str ? n->type_str : "i32";
+        const char *cond = ll_as_i1(ll, ll_expr(ll, n->a));
+        const char *thenL = ll_new_lbl(ll, "tern_then");
+        const char *elseL = ll_new_lbl(ll, "tern_else");
+        const char *tjoinL = ll_new_lbl(ll, "tern_tjoin");
+        const char *fjoinL = ll_new_lbl(ll, "tern_fjoin");
+        const char *endL = ll_new_lbl(ll, "tern_end");
+        ll_emit_term(ll, "br i1 %s, label %%%s, label %%%s", cond, thenL, elseL);
+        ll_emit_label(ll, thenL);
+        const char *tv = ll_conv(ll, ll_expr(ll, n->b), rt);
+        ll_emit_term(ll, "br label %%%s", tjoinL);
+        ll_emit_label(ll, tjoinL);
+        ll_emit_term(ll, "br label %%%s", endL);
+        ll_emit_label(ll, elseL);
+        const char *fv = ll_conv(ll, ll_expr(ll, n->c), rt);
+        ll_emit_term(ll, "br label %%%s", fjoinL);
+        ll_emit_label(ll, fjoinL);
+        ll_emit_term(ll, "br label %%%s", endL);
+        ll_emit_label(ll, endL);
+        const char *r = ll_new_tmp(ll);
+        ll_emit(ll, "%s = phi %s [ %s, %%%s ], [ %s, %%%s ]", r, ll_ty(ll, rt), tv,
+                tjoinL, fv, fjoinL);
+        return (llv_t){r, rt};
+    }
     case AST_UNARY:
         return ll_unary(ll, n);
     case AST_INCDEC:

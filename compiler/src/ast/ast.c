@@ -53,6 +53,7 @@ static const char *const k_ast_names[AST__COUNT] = {
     [AST_MEMBER] = "MemberAccess",
     [AST_INDEX] = "ArrayAccess",
     [AST_SLICE] = "SliceExpr",
+    [AST_TERNARY] = "TernaryExpr",
     [AST_ARRAY_LIT] = "ArrayLiteral",
     [AST_LAMBDA] = "Lambda",
     [AST_STRUCT_LIT] = "StructLiteral",

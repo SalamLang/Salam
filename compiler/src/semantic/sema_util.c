@@ -58,7 +58,7 @@ const char *intrinsic_type_canon(const char *name)
     } tab[] = {
         {"وکتور", "متجه", "Vector"},
         {"نگاشت", "خريطة", "HashMap"},
-        {"پیمایشگر_نگاشت", "مكرر_خريطة", "MapIter"},
+        {"پیمایشگرنگاشت", "مكررخريطة", "MapIter"},
         {"پرونده", "ملف", "File"},
     };
     if (!name) return name;
@@ -91,13 +91,13 @@ const char *intrinsic_method_canon(const char *name)
         {"اندازه", "حجم", "size"},
         {"پیمایش", "تكرار", "iter"},
 
-        {"دارد_بعدی", "لديه_التالي", "has_next"},
+        {"داردبعدی", "يوجدتالي", "has_next"},
         {"کلید", "مفتاح", "key"},
         {"مقدار", "قيمة", "value"},
         {"بعدی", "التالي", "next"},
 
         {"خواندن", "قراءة", "read"},
-        {"خواندن_خط", "قراءة_سطر", "readline"},
+        {"خواندن‌خط", "قراءةسطر", "readline"},
         {"نوشتن", "كتابة", "write"},
         {"جابجایی", "انتقال", "seek"},
         {"ببند", "أغلق", "close"},
@@ -107,8 +107,8 @@ const char *intrinsic_method_canon(const char *name)
         {"بیاب", "ابحث", "find"},
         {"بشکاف", "قسم", "split"},
         {"پیراست", "شذب", "trim"},
-        {"به_صحیح", "إلى_صحيح", "to_int"},
-        {"به_اعشار", "إلى_عشري", "to_float"},
+        {"به‌صحیح", "إلىصحيح", "to_int"},
+        {"به‌اعشار", "إلىعشري", "to_float"},
     };
     if (!name) return name;
     {
@@ -131,6 +131,16 @@ const char *alias_for_lang(const vec_t *aliases, const char *lang)
     return NULL;
 }
 
+static bool aliases_have(const vec_t *aliases, const char *lang, const char *name)
+{
+    size_t i = 0;
+    for (; i + 1 < aliases->len; i += 2)
+        if (strcmp((const char *)aliases->data[i], lang) == 0 &&
+            strcmp((const char *)aliases->data[i + 1], name) == 0)
+            return true;
+    return false;
+}
+
 const char *scope_member_canon(scope_t *members, const char *name)
 {
     const char *lang = i18n_lang();
@@ -140,8 +150,7 @@ const char *scope_member_canon(scope_t *members, const char *name)
         for (; i < members->symbols.len; i++) {
             symbol_t *m = (symbol_t *)members->symbols.data[i];
             if (!m->decl) continue;
-            const char *a = alias_for_lang(&m->decl->aliases, lang);
-            if (a && strcmp(a, name) == 0) return m->name;
+            if (aliases_have(&m->decl->aliases, lang, name)) return m->name;
         }
     }
     return name;

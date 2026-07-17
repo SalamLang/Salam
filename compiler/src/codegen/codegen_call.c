@@ -241,8 +241,8 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
         const char *arg = cg_expr(cg, (ast_node_t *)n->list.data[1]);
         return cg_fmt(cg, "((void(*)(int64_t))(intptr_t)(%s))((int64_t)(%s))", fnp, arg);
     }
-    bool is_print = (!strcmp(nm, "print") || !strcmp(nm, "_"));
-    bool is_println = (!strcmp(nm, "println") || !strcmp(nm, "__"));
+    bool is_print = !strcmp(nm, "print");
+    bool is_println = !strcmp(nm, "println");
     bool is_printerr = !strcmp(nm, "printerr");
     bool is_printerrln = !strcmp(nm, "printerrln");
     if (is_print || is_println || is_printerr || is_printerrln) {

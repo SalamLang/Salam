@@ -236,10 +236,19 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         switch (n->op) {
         case TK_INT: {
             unsigned long long u = (unsigned long long)n->value.as.i;
-            const char *suf = u > 9223372036854775807ULL ? "ULL"
-                              : u > 2147483647ULL        ? "LL"
-                                                         : "";
-            return cg_fmt(cg, "%llu%s", u, suf);
+            bool uns = n->type_str && n->type_str[0] == 'u';
+            if (!uns && u > 9223372036854775807ULL) {
+                long long v = (long long)u;
+                return v == (-9223372036854775807LL - 1LL)
+                           ? "(-9223372036854775807LL - 1LL)"
+                           : cg_fmt(cg, "(%lldLL)", v);
+            }
+            {
+                const char *suf = u > 9223372036854775807ULL ? "ULL"
+                                  : u > 2147483647ULL        ? "LL"
+                                                             : "";
+                return cg_fmt(cg, "%llu%s", u, suf);
+            }
         }
         case TK_FLOAT: {
             char buf[64];
@@ -342,6 +351,9 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         return cg_fmt(cg, "(%s %s %s)", cg_expr(cg, n->a), cg_op(n->op),
                       cg_expr(cg, n->b));
     }
+    case AST_TERNARY:
+        return cg_fmt(cg, "((%s) ? (%s) : (%s))", cg_expr(cg, n->a), cg_expr(cg, n->b),
+                      cg_expr(cg, n->c));
     case AST_UNARY: {
         if (n->a && n->a->type_str) {
             char sname[96];

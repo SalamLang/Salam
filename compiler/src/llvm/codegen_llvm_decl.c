@@ -168,11 +168,12 @@ static func_sig_t *ll_sig_of(ll_t *ll, ast_node_t *fn, symbol_t *owner)
 
 static const char *ll_fn_header(ll_t *ll, ast_node_t *fn, func_sig_t *sig,
                                 const char *ret_lty, const char *fname,
-                                const char *recv_param)
+                                const char *recv_param, bool exported)
 {
     sb_t hdr;
     sb_init(&hdr);
-    sb_puts(&hdr, ll_fmt(ll, "define %s @%s(", ret_lty, fname));
+    sb_puts(&hdr,
+            ll_fmt(ll, "define %s%s @%s(", exported ? "" : "internal ", ret_lty, fname));
     bool first = true;
     if (recv_param) {
         sb_puts(&hdr, recv_param);
@@ -184,7 +185,7 @@ static const char *ll_fn_header(ll_t *ll, ast_node_t *fn, func_sig_t *sig,
             ast_node_t *p = (ast_node_t *)fn->list.data[i];
             const char *pts = type_to_string(ll->sem->tc, (type_t *)sig->params.data[i]);
             if (!first) sb_puts(&hdr, ", ");
-            sb_puts(&hdr, p->is_ref ? ll_fmt(ll, "ptr %%arg%zu", i)
+            sb_puts(&hdr, p->is_ref ? ll_fmt(ll, "ptr noundef nonnull %%arg%zu", i)
                                     : ll_fmt(ll, "%s %%arg%zu", ll_ty(ll, pts), i));
             first = false;
         }
@@ -193,9 +194,11 @@ static const char *ll_fn_header(ll_t *ll, ast_node_t *fn, func_sig_t *sig,
     if (!ll->is_main) {
         if (fn->is_inline) sb_puts(&hdr, " alwaysinline");
         if (fn->is_noinline) sb_puts(&hdr, " noinline");
-        if (fn->is_pure) sb_puts(&hdr, " memory(read)");
+        if (fn->is_pure) sb_puts(&hdr, " memory(read) willreturn nofree nosync");
         if (fn->is_noret) sb_puts(&hdr, " noreturn");
     }
+    if (ll->optsize) sb_puts(&hdr, " optsize");
+    if (ll->minsize) sb_puts(&hdr, " minsize");
     sb_puts(&hdr, " nounwind");
     if (ll->debug && ll->cur_sp) sb_puts(&hdr, ll_fmt(ll, " !dbg %s", ll->cur_sp));
     sb_puts(&hdr, " {\n");
@@ -243,7 +246,8 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
                             : ll_mangle(ll, owner ? owner->name : NULL, fn->name, sig);
     const char *recv_param = !owner    ? NULL
                              : is_impl ? ll_fmt(ll, "%s %%this", ll_ty(ll, recv_ts))
-                                       : "ptr %this";
+                                       : "ptr noundef %this";
+    bool exported = is_main || (!owner && fn->is_extern);
 
     {
         size_t i = 0;
@@ -279,7 +283,7 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
         ll_debug_subprogram(ll, fn->name, fn->span.begin.line);
         ll->cur_dbg = ll_debug_location(ll, fn->span.begin.line, fn->span.begin.col);
     }
-    const char *header = ll_fn_header(ll, fn, sig, ret_lty, fname, recv_param);
+    const char *header = ll_fn_header(ll, fn, sig, ret_lty, fname, recv_param, exported);
     if (is_impl) {
         ll_emit_alloca(ll, "%%p.this = alloca %s", ll_ty(ll, recv_ts));
         ll_emit(ll, "store %s %%this, ptr %%p.this", ll_ty(ll, recv_ts));
@@ -382,8 +386,8 @@ static void ll_ensure_vtbl(ll_t *ll, const char *iface, const char *concrete)
             n++;
         }
     }
-    sb_puts(ll->g,
-            ll_fmt(ll, "%s = constant [%d x ptr] [%s]\n", name, n, sb_cstr(&slots)));
+    sb_puts(ll->g, ll_fmt(ll, "%s = private unnamed_addr constant [%d x ptr] [%s]\n",
+                          name, n, sb_cstr(&slots)));
     sb_free(&slots);
 }
 
@@ -486,8 +490,8 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     sb_puts(ll->g, sb_cstr(&et));
     sb_free(&et);
     if (ncap == 0)
-        sb_puts(ll->g,
-                ll_fmt(ll, "@%s.env = global %s { ptr @%s }\n", name, envty, name));
+        sb_puts(ll->g, ll_fmt(ll, "@%s.env = internal global %s { ptr @%s }\n", name,
+                              envty, name));
 
     sb_t body;
     sb_init(&body);
@@ -521,7 +525,8 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
 
     sb_t hdr;
     sb_init(&hdr);
-    sb_puts(&hdr, ll_fmt(ll, "define %s @%s(ptr %%env", ll_ty(ll, rts), name));
+    sb_puts(&hdr,
+            ll_fmt(ll, "define internal %s @%s(ptr noundef %%env", ll_ty(ll, rts), name));
     {
         size_t i = 0;
         for (; i < n->list.len; i++) {
@@ -604,7 +609,7 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
                 init = ll_zero(ts);
                 if (d->a) vec_push(ll->a, &ll->gdefer, d);
             }
-            sb_puts(ll->g, ll_fmt(ll, "%s = global %s %s\n", gref, lty, init));
+            sb_puts(ll->g, ll_fmt(ll, "%s = internal global %s %s\n", gref, lty, init));
             lvar_t *gv = (lvar_t *)arena_alloc(ll->a, sizeof *gv);
             gv->name = d->name;
             gv->ptr = gref;
@@ -660,7 +665,8 @@ static void ll_emit_externs_in(ll_t *ll, scope_t *g)
             }
             if (sig->variadic) sb_puts(&b, sig->params.len ? ", ..." : "...");
             sb_puts(&b, ")");
-            if (sig->decl->is_pure) sb_puts(&b, " nounwind willreturn memory(read)");
+            if (sig->decl->is_pure)
+                sb_puts(&b, " nounwind willreturn nofree nosync memory(read)");
             if (sig->decl->is_noret) sb_puts(&b, " noreturn");
             sb_puts(&b, "\n");
             sb_puts(ll->g, sb_cstr(&b));

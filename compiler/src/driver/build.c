@@ -429,10 +429,19 @@ int driver_build(options_t *opt)
 
         const char *lm = " -lm";
 #endif
+        const char *lto_flag = "";
+        if (opt_flag[0] && !use_tcc) {
+#ifdef _WIN32
+            if (!strstr(opt->cc, "clang")) lto_flag = " -flto";
+#else
+            lto_flag = " -flto";
+#endif
+        }
         sb_t cmd;
         sb_init(&cmd);
         sb_puts(&cmd, opt->cc);
         sb_puts(&cmd, opt_flag);
+        sb_puts(&cmd, lto_flag);
         sb_puts(&cmd, " -I. -o ");
         sb_put_shell_arg(&cmd, output);
         if (opt->debug_info) {

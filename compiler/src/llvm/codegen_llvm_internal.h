@@ -44,6 +44,7 @@ typedef struct {
 typedef struct {
     const char *bytes;
     size_t len;
+    size_t hash;
     const char *gref;
 } lstr_t;
 
@@ -110,6 +111,8 @@ typedef struct {
     const char *triple;
     const char *usize;
     int ptr_bits;
+    bool optsize;
+    bool minsize;
     sb_t *hg;
     bool hneed[LL_H_COUNT];
 } ll_t;

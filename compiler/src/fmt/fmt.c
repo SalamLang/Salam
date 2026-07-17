@@ -35,6 +35,8 @@ typedef struct {
     bool force_break;
     bool no_space_next;
     bool prev_gt_generic;
+    int q_open[FMT_MAX_BRACKET + 1];
+    token_kind_t stmt_head;
     uint32_t open_colon_line;
     const token_t *prev;
     bool prev_unary;
@@ -112,10 +114,69 @@ static bool fmt_angle_is_generic(const token_stream_t *toks, size_t lt_idx)
         case TK_AMP:
         case TK_LBRACKET:
         case TK_RBRACKET:
+        case TK_COLON:
             break;
         default:
             return false;
         }
+    }
+    return false;
+}
+
+static bool fmt_head_modifier(token_kind_t k)
+{
+    return k == TK_KW_PUB || k == TK_KW_INLINE || k == TK_KW_NOINLINE ||
+           k == TK_KW_PURE || k == TK_KW_NORET || k == TK_KW_DEPRECATED;
+}
+
+static bool fmt_head_annotates(token_kind_t k)
+{
+    return k == TK_IDENT || k == TK_KW_MUT || k == TK_KW_CONST || k == TK_KW_THIS;
+}
+
+static bool fmt_type_token(token_kind_t k)
+{
+    switch (k) {
+    case TK_IDENT:
+    case TK_DOT:
+    case TK_STAR:
+    case TK_AMP:
+    case TK_LT:
+    case TK_GT:
+    case TK_LBRACKET:
+    case TK_RBRACKET:
+    case TK_LPAREN:
+    case TK_RPAREN:
+    case TK_COMMA:
+    case TK_INT:
+    case TK_KW_FUNC:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/*
+ * A top-level colon either opens an end-terminated block (`func main:`,
+ * `if x:`) or annotates a type (`) : i32:`, `func size() : i32` in an
+ * interface, `<T: Ord>` with a spaced generic). Only a block-opening colon
+ * may indent. An annotation colon is followed by a type-like token run that
+ * ends at another colon (the real opener) or at the end of the statement.
+ */
+static bool fmt_colon_is_annotation(const token_stream_t *toks, size_t colon_idx)
+{
+    size_t n = token_stream_count(toks);
+    uint32_t line = token_stream_at(toks, colon_idx)->span.end.line;
+    bool saw_type = false;
+    int steps = 0;
+    size_t j = colon_idx + 1;
+    for (; j < n && steps < 64; j++, steps++) {
+        const token_t *t = token_stream_at(toks, j);
+        if (t->span.begin.line > line) return saw_type;
+        if (t->kind == TK_COLON || t->kind == TK_STMT_END || t->kind == TK_EOF)
+            return saw_type;
+        if (!fmt_type_token(t->kind)) return false;
+        saw_type = true;
     }
     return false;
 }
@@ -131,6 +192,7 @@ static void fmt_step_stmt_end(fmt_ctx_t *c, const token_t *t, bool cur_ml)
         c->no_space_next = true;
         c->prev = t;
         c->prev_end_line = t->span.end.line;
+        c->stmt_head = TK_EOF;
         return;
     }
     if (c->line_has_content) {
@@ -139,6 +201,8 @@ static void fmt_step_stmt_end(fmt_ctx_t *c, const token_t *t, bool cur_ml)
     }
     c->force_break = false;
     c->open_colon_line = 0;
+    c->q_open[0] = 0;
+    c->stmt_head = TK_EOF;
 }
 
 static void fmt_step_break_before(fmt_ctx_t *c, const token_t *t, token_kind_t k,
@@ -189,6 +253,8 @@ static void fmt_step_leading(fmt_ctx_t *c, const token_t *t, token_kind_t k)
     } else if (!c->no_space_next) {
         bool need = fmt_need_space(c->prev, t, c->prev_unary);
         if (c->prev_gt_generic && (k == TK_LPAREN || k == TK_LBRACKET)) need = false;
+        if (k == TK_COLON && c->bracket <= FMT_MAX_BRACKET && c->q_open[c->bracket] > 0)
+            need = true;
         if (need) sb_putc(c->out, ' ');
     }
     c->no_space_next = false;
@@ -198,13 +264,31 @@ static void fmt_step_leading(fmt_ctx_t *c, const token_t *t, token_kind_t k)
 static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
                                  const token_stream_t *toks, size_t i)
 {
-    if (c->bracket == 0 && c->angle == 0 && k == TK_COLON) {
-        c->indent++;
-        c->open_colon_line = t->span.end.line;
-        if (c->block_top < FMT_MAX_BLOCK)
-            c->block_line[c->block_top] = t->span.begin.line;
-        c->block_top++;
-        if (c->prev != NULL && c->prev->kind == TK_KW_ELSE) c->force_break = true;
+    if (c->bracket == 0 && (k == TK_KW_END || k == TK_KW_ELSE)) c->stmt_head = TK_EOF;
+    if (c->stmt_head == TK_EOF && c->bracket == 0 && k != TK_KW_END && k != TK_COLON &&
+        k != TK_COMMENT_LINE && k != TK_COMMENT_BLOCK && !fmt_head_modifier(k))
+        c->stmt_head = k;
+
+    if (k == TK_QUESTION && c->bracket <= FMT_MAX_BRACKET) c->q_open[c->bracket]++;
+    if (k == TK_COLON && c->bracket <= FMT_MAX_BRACKET && c->q_open[c->bracket] > 0) {
+        c->q_open[c->bracket]--;
+    } else if (c->bracket == 0 && c->angle == 0 && k == TK_COLON) {
+        bool opener;
+        if (c->prev != NULL && c->prev->kind == TK_FAT_ARROW)
+            opener = true;
+        else if (fmt_head_annotates(c->stmt_head))
+            opener = false;
+        else
+            opener = !fmt_colon_is_annotation(toks, i);
+        if (opener) {
+            c->indent++;
+            c->open_colon_line = t->span.end.line;
+            if (c->block_top < FMT_MAX_BLOCK)
+                c->block_line[c->block_top] = t->span.begin.line;
+            c->block_top++;
+            if (c->prev != NULL && c->prev->kind == TK_KW_ELSE) c->force_break = true;
+            c->stmt_head = TK_EOF;
+        }
     }
 
     if (k == TK_LT && c->prev != NULL && fmt_is_value_end(c->prev->kind) &&
@@ -220,13 +304,17 @@ static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
         if (c->ml_top < FMT_MAX_BRACKET) c->ml_stack[c->ml_top] = ml;
         c->ml_top++;
         c->bracket++;
+        if (c->bracket <= FMT_MAX_BRACKET) c->q_open[c->bracket] = 0;
         if (ml) {
             c->bracket_indent++;
             c->force_break = true;
         }
     } else if (fmt_is_close(k)) {
         if (c->ml_top > 0) c->ml_top--;
-        if (c->bracket > 0) c->bracket--;
+        if (c->bracket > 0) {
+            if (c->bracket <= FMT_MAX_BRACKET) c->q_open[c->bracket] = 0;
+            c->bracket--;
+        }
     }
 
     c->prev_unary = fmt_is_prefix(k, c->prev);

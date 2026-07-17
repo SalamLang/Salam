@@ -164,7 +164,7 @@ void ast_to_xml(xml_writer_t *w, const ast_node_t *n)
         ast_child(w, "then", n->b);
         ast_child(w, "else", n->c);
         break;
-    case AST_WHILE:
+    case AST_UNTIL:
         ast_child(w, "condition", n->a);
         ast_child(w, "body", n->b);
         break;
@@ -179,6 +179,11 @@ void ast_to_xml(xml_writer_t *w, const ast_node_t *n)
         ast_child(w, "condition", n->b);
         ast_child(w, "post", n->c);
         ast_child(w, "body", n->d);
+        break;
+    case AST_EACH:
+        ast_child(w, "key", n->c);
+        ast_child(w, "iterable", n->a);
+        ast_child(w, "body", n->b);
         break;
     case AST_RETURN:
         ast_child(w, "value", n->a);

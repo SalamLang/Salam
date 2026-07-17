@@ -437,8 +437,15 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         return decorate(s, n, o);
     }
     case AST_CAST: {
+        type_t *target = n->type ? sema_resolve_type(s, n->type) : NULL;
+        if (target && n->a &&
+            (n->a->kind == AST_ARRAY_LIT || n->a->kind == AST_STRUCT_LIT ||
+             n->a->kind == AST_LITERAL || n->a->kind == AST_CALL))
+            s->expected = target;
         type_t *o = sema_check_expr(s, n->a);
-        type_t *target = sema_resolve_type(s, n->type);
+        s->expected = NULL;
+        if (!target) return decorate(s, n, o);
+        if (type_assignable(target, o)) return decorate(s, n, target);
         if (!type_castable(target, o))
             SERR(s, 23, &n->span, "cannot cast '%s' to '%s'", type_to_string(s->tc, o),
                  type_to_string(s->tc, target));

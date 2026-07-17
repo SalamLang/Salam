@@ -68,7 +68,7 @@ void lx_scan_op(lx_t *L)
         k = TK_COMMA;
         break;
     case ':':
-        k = TK_COLON;
+        k = lx_match(L, '=') ? TK_COLON_ASSIGN : TK_COLON;
         break;
     case '.':
 

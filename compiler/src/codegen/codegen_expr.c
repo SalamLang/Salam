@@ -372,6 +372,11 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         if (n->type_str && !strncmp(n->type_str, "dyn ", 4) &&
             n->type_str[strlen(n->type_str) - 1] != '*')
             return cg_dyn_box(cg, n);
+        if (n->a && (n->a->kind == AST_ARRAY_LIT || n->a->kind == AST_STRUCT_LIT))
+            return cg_expr(cg, n->a);
+        if (n->a && n->a->type_str && n->type && n->type->type_str &&
+            strcmp(n->a->type_str, n->type->type_str) == 0)
+            return cg_expr(cg, n->a);
 
         {
             const char *dts = n->type && n->type->type_str ? n->type->type_str : "";

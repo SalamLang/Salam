@@ -227,13 +227,15 @@ static void fold_binary_flt(ast_node_t *n, double a, double b)
 
 static void fold_binary_str(sema_t *s, ast_node_t *n)
 {
-    const char *a = n->a->value.as.s, *b = n->b->value.as.s;
-    size_t la = strlen(a), lb = strlen(b);
+    size_t la = n->a->value.slen ? n->a->value.slen : strlen(n->a->value.as.s);
+    size_t lb = n->b->value.slen ? n->b->value.slen : strlen(n->b->value.as.s);
     char *buf = (char *)arena_alloc(s->a, la + lb + 1);
-    memcpy(buf, a, la);
-    memcpy(buf + la, b, lb + 1);
+    memcpy(buf, n->a->value.as.s, la);
+    memcpy(buf + la, n->b->value.as.s, lb);
+    buf[la + lb] = '\0';
     n->value.kind = TV_STRING;
     n->value.as.s = buf;
+    n->value.slen = la + lb;
     fold_done(n, TK_STRING);
 }
 

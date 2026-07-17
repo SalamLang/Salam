@@ -41,12 +41,13 @@ void lx_scan_ident(lx_t *L)
     size_t start = L->pos;
     src_pos_t b = LX_POS(L);
     lx_skip_ident(L);
-    const char *text = lx_norm_ident(L, lx_slice(L, start));
-    token_kind_t k = langpack_lookup_keyword(L->pack, text);
+    const char *raw = lx_slice(L, start);
+    token_kind_t k = langpack_lookup_keyword(L->pack, raw);
+    const char *text = raw;
 
-    if (k == TK_IDENT && !L->keep_comments) {
-        const char *canon = langpack_canon_word(L->pack, text);
-        if (canon) text = canon;
+    if (k == TK_IDENT) {
+        const char *canon = L->keep_comments ? NULL : langpack_canon_word(L->pack, raw);
+        text = canon ? canon : lx_norm_ident(L, raw);
     }
     if (k == TK_KW_TRUE || k == TK_KW_FALSE) {
         token_value_t v;

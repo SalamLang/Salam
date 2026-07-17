@@ -97,7 +97,7 @@ const char *intrinsic_method_canon(const char *name)
         {"بعدی", "التالي", "next"},
 
         {"خواندن", "قراءة", "read"},
-        {"خواندن‌خط", "قراءةسطر", "readline"},
+        {"خواندن خط", "قراءةسطر", "readline"},
         {"نوشتن", "كتابة", "write"},
         {"جابجایی", "انتقال", "seek"},
         {"ببند", "أغلق", "close"},
@@ -107,8 +107,8 @@ const char *intrinsic_method_canon(const char *name)
         {"بیاب", "ابحث", "find"},
         {"بشکاف", "قسم", "split"},
         {"پیراست", "شذب", "trim"},
-        {"به‌صحیح", "إلىصحيح", "to_int"},
-        {"به‌اعشار", "إلىعشري", "to_float"},
+        {"به صحیح", "إلىصحيح", "to_int"},
+        {"به اعشار", "إلىعشري", "to_float"},
     };
     if (!name) return name;
     {

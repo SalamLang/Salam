@@ -55,9 +55,26 @@ type_t *check_struct_lit(sema_t *s, ast_node_t *n)
             }
         }
         if (tmpl) {
+            char targs[128];
+            size_t o = 0;
+            {
+                size_t i = 0;
+                for (; i < tmpl->decl->typarams.len && o + 1 < sizeof(targs); i++) {
+                    if (i > 0 && o + 2 < sizeof(targs)) {
+                        targs[o++] = ',';
+                        targs[o++] = ' ';
+                    }
+                    const char *pn = (const char *)tmpl->decl->typarams.data[i];
+                    size_t pl = strlen(pn);
+                    if (o + pl >= sizeof(targs)) pl = sizeof(targs) - o - 1;
+                    memcpy(targs + o, pn, pl);
+                    o += pl;
+                }
+            }
+            targs[o] = 0;
             SERR(s, 71, &n->span,
-                 "cannot infer the type arguments of '%s'; write '%s {} as %s<Type>'",
-                 n->name, n->name, n->name);
+                 "cannot infer the type arguments of '%s'; write '%s {} as %s<%s>'",
+                 n->name, n->name, n->name, targs);
             return decorate(s, n, err_ty(s));
         }
     }

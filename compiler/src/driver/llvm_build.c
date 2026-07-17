@@ -297,7 +297,8 @@ int driver_llvm(options_t *opt)
         return 1;
     }
     if (ir_mode) {
-        if (o.verify_module) rc = salam_llvm_toolchain(log, llpath, &o);
+        if (o.verify_module || o.opt_level != LLVM_OPT_O0)
+            rc = salam_llvm_toolchain(log, llpath, &o);
         if (rc == 0) {
             LOG_I(log, PH_DRIVER, "LLVM IR written to %s", llpath);
             LOG_I(log, PH_DRIVER,

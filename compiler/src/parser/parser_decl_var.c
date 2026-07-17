@@ -25,9 +25,32 @@ static void demote_auto_type(ast_node_t *n)
         n->type = NULL;
 }
 
-static bool at_type_anno(const parser_t *p)
+static void parse_decl_tail(parser_t *p, ast_node_t *n)
 {
-    return p_at(p, TK_COLON);
+    if (p_match(p, TK_COLON_ASSIGN)) {
+        n->a = parse_expr(p);
+        return;
+    }
+    if (p_at(p, TK_COLON)) {
+        n->type = parse_type_anno(p);
+        demote_auto_type(n);
+        if (p_at(p, TK_ASSIGN)) {
+            p_error(p, "declarations with a type annotation were removed; use "
+                       "'name := value' (or 'name := value as Type')");
+            p_advance(p);
+            n->a = parse_expr(p);
+        }
+        return;
+    }
+    if (p_at(p, TK_ASSIGN)) {
+        p_error(p, "use ':=' to declare a new variable ('name := value'); "
+                   "'=' only assigns to an existing one");
+        p_advance(p);
+        n->a = parse_expr(p);
+        return;
+    }
+    p_error(p, "expected ':=' and an initializer, or ': Type' for an "
+               "uninitialized declaration");
 }
 
 ast_node_t *parse_var_decl(parser_t *p)
@@ -37,9 +60,7 @@ ast_node_t *parse_var_decl(parser_t *p)
     n->is_mut = p_match(p, TK_KW_MUT);
     n->name = parse_decl_name(p);
     if (!n->name) n->name = "<error>";
-    if (at_type_anno(p)) n->type = parse_type_anno(p);
-    demote_auto_type(n);
-    if (p_match(p, TK_ASSIGN)) n->a = parse_expr(p);
+    parse_decl_tail(p, n);
     p_fin(p, n);
     return n;
 }
@@ -50,9 +71,8 @@ ast_node_t *parse_bare_var_decl(parser_t *p)
     ast_node_t *n = p_mk(p, AST_VAR_DECL);
     n->is_mut = false;
     n->name = parse_decl_name(p);
-    n->type = parse_type_anno(p);
-    demote_auto_type(n);
-    if (p_match(p, TK_ASSIGN)) n->a = parse_expr(p);
+    if (!n->name) n->name = "<error>";
+    parse_decl_tail(p, n);
     p_fin(p, n);
     return n;
 }

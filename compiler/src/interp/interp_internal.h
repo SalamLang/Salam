@@ -82,6 +82,28 @@ typedef struct {
     unsigned depth;
 } interp_t;
 
+typedef enum {
+    ILOC_VAR,
+    ILOC_FIELD,
+    ILOC_ARR,
+    ILOC_PTR,
+    ILOC_OPIDX,
+} iloc_kind_t;
+
+typedef struct {
+    iloc_kind_t kind;
+    ast_node_t *target;
+    binding_t *b;      /* ILOC_VAR */
+    value_t obj;       /* ILOC_FIELD / ILOC_OPIDX: the struct value */
+    size_t field_idx;  /* ILOC_FIELD */
+    sarray_t *arr;     /* ILOC_ARR */
+    int64_t idx;       /* ILOC_ARR / ILOC_PTR */
+    sptr_t ptr;        /* ILOC_PTR */
+    value_t key;       /* ILOC_OPIDX */
+    ast_node_t *get_m; /* ILOC_OPIDX */
+    ast_node_t *set_m; /* ILOC_OPIDX */
+} iloc_t;
+
 #define INTERP_MAX_DEPTH 1000
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -184,6 +206,14 @@ value_t try_struct_op(interp_t *I, token_kind_t op, value_t a, value_t b, bool h
                       bool *found);
 
 value_t eval(interp_t *I, env_t *env, ast_node_t *n);
+
+void interp_assign_to(interp_t *I, env_t *env, ast_node_t *target, value_t v);
+
+iloc_t interp_resolve_loc(interp_t *I, env_t *env, ast_node_t *target);
+
+value_t interp_loc_get(interp_t *I, iloc_t *loc);
+
+void interp_loc_set(interp_t *I, iloc_t *loc, value_t v);
 
 value_t call_func(interp_t *I, ast_node_t *fn, env_t *defenv, value_t *thisv,
                   value_t *args, size_t nargs);

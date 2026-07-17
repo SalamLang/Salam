@@ -15,11 +15,29 @@
 #include "core/prelude.h"
 #include "core/sal_format.h"
 #include "semantic/sema_internal.h"
+#include "langpack/langpack.h"
 #include "i18n/i18n.h"
 
 static type_t *ty(sema_t *s, type_kind_t k)
 {
     return sema_ty(s, k);
+}
+
+static bool block_has_valued_ret(const ast_node_t *n)
+{
+    if (!n) return false;
+    if (n->kind == AST_LAMBDA) return false;
+    if (n->kind == AST_RETURN && n->a) return true;
+    if (block_has_valued_ret(n->a)) return true;
+    if (block_has_valued_ret(n->b)) return true;
+    if (block_has_valued_ret(n->c)) return true;
+    if (block_has_valued_ret(n->d)) return true;
+    {
+        size_t i = 0;
+        for (; i < n->list.len; i++)
+            if (block_has_valued_ret((const ast_node_t *)n->list.data[i])) return true;
+    }
+    return false;
 }
 
 func_sig_t *build_sig(sema_t *s, ast_node_t *fn, symbol_t *owner)
@@ -31,6 +49,9 @@ func_sig_t *build_sig(sema_t *s, ast_node_t *fn, symbol_t *owner)
     sig->decl = fn;
     sig->owner = owner;
     sig->variadic = fn->is_variadic;
+    if (!fn->type && !fn->is_extern && !fn->is_noret && fn->a &&
+        block_has_valued_ret(fn->a))
+        sig->infer_ret = true;
     size_t required = 0;
     bool seen_default = false;
     {
@@ -322,6 +343,11 @@ static func_sig_t *find_sig(symbol_t *fsym, ast_node_t *decl)
 
 static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_t *sig)
 {
+    if (sig) {
+        if (sig->checked) return;
+        sig->checked = true;
+        sig->in_check = true;
+    }
     if (fn->is_noret && sig && !sig->infer_ret && sig->ret && sig->ret->kind != TY_VOID)
         SERR(s, 12, &fn->span,
              "'noret' function '%s' cannot declare a return type: it never returns",
@@ -361,6 +387,8 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
     type_t *saved_self = s->self_type;
     func_sig_t *saved_func = s->cur_func;
     scope_t *saved_gp = s->gen_pkg;
+    int saved_loop = s->loop_depth;
+    s->loop_depth = 0;
     s->cur = sc;
     s->cur_func = sig;
     if (home) s->gen_pkg = home;
@@ -446,6 +474,47 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
     s->self_type = saved_self;
     s->cur_func = saved_func;
     s->gen_pkg = saved_gp;
+    s->loop_depth = saved_loop;
+    if (sig) {
+        sig->in_check = false;
+        sig->infer_ret = false;
+    }
+}
+
+void sema_check_function_now(sema_t *s, func_sig_t *sig)
+{
+    if (!sig || !sig->decl) return;
+    check_function(s, sig->decl, sig->owner, sig);
+}
+
+void sema_check_unused_funcs(sema_t *s)
+{
+    const char *entry = langpack_entry_for(s->lang);
+    bool has_entry = false;
+    {
+        size_t i = 0;
+        for (; i < s->global->symbols.len; i++) {
+            symbol_t *f = (symbol_t *)s->global->symbols.data[i];
+            if (f->kind == SYM_FUNC && f->name &&
+                (strcmp(f->name, "main") == 0 || strcmp(f->name, entry) == 0)) {
+                has_entry = true;
+                break;
+            }
+        }
+    }
+    if (!has_entry) return;
+    size_t i = 0;
+    for (; i < s->global->symbols.len; i++) {
+        symbol_t *f = (symbol_t *)s->global->symbols.data[i];
+        if (f->kind != SYM_FUNC || f->used || f->is_pub) continue;
+        if (!f->decl || f->decl->synthetic || f->decl->is_extern) continue;
+        if (!f->name || f->name[0] == '_') continue;
+        if (strcmp(f->name, "main") == 0 || strcmp(f->name, entry) == 0) continue;
+        SERR(s, 66, &f->decl->span,
+             "unused function '%s' (call it, mark it 'pub', or prefix its name with "
+             "'_')",
+             f->name);
+    }
 }
 
 static void check_toplevel(sema_t *s, ast_node_t *d)

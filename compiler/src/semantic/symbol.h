@@ -50,6 +50,8 @@ typedef struct {
     const char *mangled;
     bool variadic;
     bool infer_ret;
+    bool checked;
+    bool in_check;
 } func_sig_t;
 
 struct symbol_t {

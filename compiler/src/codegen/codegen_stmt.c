@@ -235,7 +235,7 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             cg_line(cg, "}");
         }
         break;
-    case AST_WHILE:
+    case AST_UNTIL:
         cg_line(cg, "while (%s) {", cg_expr(cg, n->a));
         cg->indent++;
         {
@@ -258,9 +258,11 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             const char *step = n->d ? cg_expr(cg, n->d) : "1";
             cg_line(cg,
                     "for (int64_t __rep%d = (int64_t)(%s), __repe%d = (int64_t)(%s), "
-                    "__reps%d = (int64_t)(%s);"
-                    " __rep%d <= __repe%d; __rep%d += __reps%d) {",
-                    t, from, t, to, t, step, t, t, t, t);
+                    "__repa%d = (int64_t)(%s), "
+                    "__reps%d = (__rep%d <= __repe%d) ? __repa%d : -__repa%d;"
+                    " (__reps%d > 0) ? (__rep%d <= __repe%d) : (__rep%d >= __repe%d); "
+                    "__rep%d += __reps%d) {",
+                    t, from, t, to, t, step, t, t, t, t, t, t, t, t, t, t, t, t);
         } else {
             cg_line(cg,
                     "for (int64_t __rep%d = 0, __repn%d = (int64_t)(%s); __rep%d < "
@@ -270,6 +272,11 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         cg->indent++;
         {
             size_t m = cg->locals.len;
+            if (n->name) {
+                cg_line(cg, "const int32_t %s = (int32_t)__rep%d;",
+                        cg_cident(cg, n->name), t);
+                local_add(cg, n->name);
+            }
             {
                 size_t i = 0;
                 for (; i < n->b->list.len; i++)

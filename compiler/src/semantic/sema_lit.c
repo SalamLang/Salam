@@ -103,7 +103,8 @@ type_t *check_array_lit(sema_t *s, ast_node_t *n)
     type_t *exp_elem = (exp && exp->kind == TY_ARRAY) ? exp->elem : NULL;
     if (n->list.len == 0) {
         if (exp_elem) return decorate(s, n, type_array(s->tc, exp_elem, 0));
-        SERR(s, 52, &n->span, "empty array literal needs a context type");
+        SERR(s, 52, &n->span,
+             "cannot infer the type of an empty array; write 'items := [] as Type[]'");
         return decorate(s, n, err_ty(s));
     }
 

@@ -43,6 +43,24 @@ type_t *check_struct_lit(sema_t *s, ast_node_t *n)
         return decorate(s, n, err_ty(s));
     }
     symbol_t *ssym = scope_lookup(s->global, n->name);
+    if ((!ssym || ssym->kind != SYM_STRUCT) && n->list.len == 0) {
+        symbol_t *tmpl = generic_template(s, n->name, SYM_STRUCT);
+        if (!tmpl) {
+            sema_load_prelude(s);
+            if (s->prelude) {
+                symbol_t *psym = scope_lookup_local(s->prelude, n->name);
+                if (psym && psym->kind == SYM_STRUCT && psym->decl &&
+                    psym->decl->typarams.len > 0)
+                    tmpl = psym;
+            }
+        }
+        if (tmpl) {
+            SERR(s, 71, &n->span,
+                 "cannot infer the type arguments of '%s'; write '%s {} as %s<Type>'",
+                 n->name, n->name, n->name);
+            return decorate(s, n, err_ty(s));
+        }
+    }
     if (!ssym || ssym->kind != SYM_STRUCT) {
         SERR(s, 1, &n->span, "unknown struct '%s'", n->name);
         return decorate(s, n, err_ty(s));

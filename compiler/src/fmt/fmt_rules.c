@@ -63,6 +63,8 @@ bool fmt_need_space(const token_t *pt, const token_t *ct, bool prev_unary)
     if (c == TK_COMMA || c == TK_COLON || c == TK_SEMICOLON) return false;
     if (c == TK_RPAREN || c == TK_RBRACKET) return false;
 
+    if ((c == TK_PLUS_PLUS || c == TK_MINUS_MINUS) && fmt_is_value_end(p)) return false;
+
     if (p == TK_LPAREN || p == TK_LBRACKET) return false;
 
     if (p == TK_LBRACE && c == TK_RBRACE) return false;
@@ -83,6 +85,8 @@ bool fmt_is_prefix(token_kind_t k, const token_t *prev)
 {
     if (k == TK_NOT) return true;
     if (k == TK_MINUS || k == TK_STAR || k == TK_AMP)
+        return prev == NULL || !fmt_is_value_end(prev->kind);
+    if (k == TK_PLUS_PLUS || k == TK_MINUS_MINUS)
         return prev == NULL || !fmt_is_value_end(prev->kind);
     return false;
 }

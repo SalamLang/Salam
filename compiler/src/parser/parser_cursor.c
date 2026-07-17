@@ -128,8 +128,10 @@ void p_sync(parser_t *p)
         case TK_KW_IMPORT:
         case TK_KW_LAYOUT:
         case TK_KW_IF:
-        case TK_KW_WHILE:
+        case TK_KW_UNTIL:
         case TK_KW_FOR:
+        case TK_KW_EACH:
+        case TK_KW_REPEAT:
         case TK_KW_RET:
         case TK_RBRACE:
         case TK_KW_END:

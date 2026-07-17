@@ -54,7 +54,7 @@ static void emit_globals(cg_t *cg, ast_node_t *program)
                          CONST_CAST(cg_fmt(cg, "%s = %s;", cg_cident(cg, d->name),
                                            cg_expr(cg, d->a))));
             } else {
-                bool want_const = (d->kind == AST_CONST_DECL || !d->is_mut);
+                bool want_const = (d->kind == AST_CONST_DECL);
                 bool gct_const =
                     want_const && (strncmp(cg_ctype(cg, ts), "const ", 6) == 0);
                 const char *pfx = (want_const && !gct_const) ? "const " : "";

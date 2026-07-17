@@ -669,6 +669,8 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     const char *save_lang = s->lang;
     ast_node_t *save_prog = s->program;
     vec_t save_pending = s->pending;
+    bool save_in_pkg = s->in_pkg;
+    s->in_pkg = true;
     s->global = pkgscope;
     s->cur = pkgscope;
     s->dir = dir_of(s->a, path);
@@ -681,6 +683,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     sema_collect(s, prog);
     sema_check_pass(s, prog);
     s->loading.len--;
+    s->in_pkg = save_in_pkg;
     s->global = save_global;
     s->cur = save_cur;
     s->dir = save_dir;
@@ -787,6 +790,7 @@ sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const ch
     }
     sema_collect(&s, program);
     sema_check_pass(&s, program);
+    if (!s.in_pkg && !s.relax_unused) sema_check_unused_funcs(&s);
     LOG_I(log, PH_SEMANTIC, "analysis complete: %zu error(s), %zu warning(s)",
           s.diag->errors, s.diag->warnings);
     sema_result_t *r = (sema_result_t *)arena_alloc(a, sizeof(*r));

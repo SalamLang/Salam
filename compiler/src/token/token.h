@@ -35,7 +35,7 @@ typedef enum token_kind_t {
     TK_KW_RET,
     TK_KW_IF,
     TK_KW_ELSE,
-    TK_KW_WHILE,
+    TK_KW_UNTIL,
     TK_KW_FOR,
     TK_KW_MUT,
     TK_KW_CONST,
@@ -73,6 +73,9 @@ typedef enum token_kind_t {
     TK_KW_IMPL,
     TK_KW_TO,
     TK_KW_STEP,
+    TK_KW_EACH,
+    TK_KW_IN,
+    TK_KW_WITH,
     TK_PLUS,
     TK_MINUS,
     TK_STAR,
@@ -90,12 +93,15 @@ typedef enum token_kind_t {
     TK_NOT,
     TK_AMP,
     TK_ASSIGN,
+    TK_COLON_ASSIGN,
     TK_PLUS_EQ,
     TK_MINUS_EQ,
     TK_STAR_EQ,
     TK_SLASH_EQ,
     TK_PERCENT_EQ,
     TK_POWER_EQ,
+    TK_PLUS_PLUS,
+    TK_MINUS_MINUS,
     TK_LPAREN,
     TK_RPAREN,
     TK_LBRACE,
@@ -118,7 +124,7 @@ typedef enum token_kind_t {
 
 SAL_INLINE bool tk_is_keyword(token_kind_t k)
 {
-    return k >= TK_KW_FUNC && k <= TK_KW_STEP;
+    return k >= TK_KW_FUNC && k <= TK_KW_WITH;
 }
 
 typedef enum {

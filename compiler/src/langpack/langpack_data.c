@@ -174,7 +174,8 @@ static const ctx_entry_t k_ctx_ar[] = {
     {"link", "رابط"},      {"static", "ساكن"}, {"dynamic", "ديناميكي"},
     {"framework", "إطار"}, {"kind", "صنف"},    {NULL, NULL},
 };
-static const char k_entry_ar[] = "الرئيسية";
+static const char k_entry_ar[] =
+    "\xD8\xA7\xD9\x84\xD8\xB1\xD8\xA6\xDB\x8C\xD8\xB3\xDB\x8C\xD8\xA9";
 struct langpack g_lang_en = {"en", k_lang_en, "main", NULL};
 struct langpack g_lang_fa = {"fa", k_lang_fa, k_entry_fa, k_ctx_fa};
 struct langpack g_lang_ar = {"ar", k_lang_ar, k_entry_ar, k_ctx_ar};

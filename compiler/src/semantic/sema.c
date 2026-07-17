@@ -359,18 +359,42 @@ static int list_entries(arena_t *a, const char *dir, const char **out, int max)
     return n;
 }
 
-static const char *norm_zwnj(arena_t *a, const char *s)
+static const char *norm_ident(arena_t *a, const char *s)
 {
-    if (!s || !strstr(s, "\xE2\x80\x8C")) return s;
-    size_t len = strlen(s);
-    char *out = (char *)arena_alloc(a, len + 1);
+    char *out;
     size_t j = 0;
-    const char *p = s;
+    const char *p;
+    bool need = false;
+    if (!s) return s;
+    {
+        const unsigned char *q = (const unsigned char *)s;
+        for (; *q; q++) {
+            if (q[0] == 0xE2 && q[1] == 0x80 && q[2] == 0x8C) {
+                need = true;
+                break;
+            }
+            if (q[0] == 0xD9 && (q[1] == 0x8A || q[1] == 0x83)) {
+                need = true;
+                break;
+            }
+        }
+    }
+    if (!need) return s;
+    out = (char *)arena_alloc(a, strlen(s) + 1);
+    p = s;
     while (*p) {
-        if ((unsigned char)p[0] == 0xE2 && (unsigned char)p[1] == 0x80 &&
-            (unsigned char)p[2] == 0x8C) {
+        unsigned char c0 = (unsigned char)p[0], c1 = (unsigned char)p[1];
+        if (c0 == 0xE2 && c1 == 0x80 && (unsigned char)p[2] == 0x8C) {
             out[j++] = ' ';
             p += 3;
+        } else if (c0 == 0xD9 && c1 == 0x8A) {
+            out[j++] = (char)0xDB;
+            out[j++] = (char)0x8C;
+            p += 2;
+        } else if (c0 == 0xD9 && c1 == 0x83) {
+            out[j++] = (char)0xDA;
+            out[j++] = (char)0xA9;
+            p += 2;
         } else {
             out[j++] = *p++;
         }
@@ -420,7 +444,7 @@ static void index_pkg_file(arena_t *a, const char *path, const char *canon)
                         if (!e) break;
                         g_seg_aliases[g_seg_alias_n].lang = lang;
                         g_seg_aliases[g_seg_alias_n].alias =
-                            norm_zwnj(a, arena_strndup(a, q + 1, (size_t)(e - q - 1)));
+                            norm_ident(a, arena_strndup(a, q + 1, (size_t)(e - q - 1)));
                         g_seg_aliases[g_seg_alias_n].canon = canon;
                         g_seg_alias_n++;
                         cur = e + 1;
@@ -466,7 +490,7 @@ static const char *seg_to_canon(arena_t *a, const char *root, const char *seg,
                                 const char *lang)
 {
     if (g_seg_alias_n < 0) build_seg_index(a, root);
-    const char *ns = norm_zwnj(a, seg);
+    const char *ns = norm_ident(a, seg);
     {
         int i = 0;
         for (; i < g_seg_alias_n; i++)
@@ -830,7 +854,7 @@ static void load_import_file(sema_t *s, ast_node_t *imp)
     symbol_t *pk = load_package(s, path, imp);
     if (!pk) return;
 
-    const char *local = norm_zwnj(s->a, import_local_name(s->a, imp, spec));
+    const char *local = norm_ident(s->a, import_local_name(s->a, imp, spec));
     symbol_t *bind = symbol_new(s->a, SYM_PACKAGE, local);
     bind->members = pk->members;
     bind->pkgname = pk->pkgname;
@@ -855,7 +879,7 @@ static void load_import_file(sema_t *s, ast_node_t *imp)
         for (; i + 1 < al->len; i += 2) {
             if (strcmp((const char *)al->data[i], s->lang) != 0) continue;
             {
-                const char *alias = norm_zwnj(s->a, (const char *)al->data[i + 1]);
+                const char *alias = norm_ident(s->a, (const char *)al->data[i + 1]);
                 if (!alias || strcmp(alias, local) == 0) continue;
                 if (scope_lookup_local(s->cur, alias)) continue;
                 {

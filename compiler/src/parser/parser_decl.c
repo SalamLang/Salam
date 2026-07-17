@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "core/sb.h"
+#include "core/sal_format.h"
 #include "parser/parser_internal.h"
 
 static ast_node_t *parse_type_alias(parser_t *p);
@@ -22,9 +23,10 @@ static ast_node_t *parse_struct(parser_t *p);
 static ast_node_t *parse_interface(parser_t *p);
 static ast_node_t *parse_impl(parser_t *p);
 static ast_node_t *parse_field(parser_t *p);
-static ast_node_t *parse_function(parser_t *p);
+static ast_node_t *parse_function(parser_t *p, bool allow_untyped);
 static void parse_params(parser_t *p, ast_node_t *fn);
 static void parse_typarams(parser_t *p, ast_node_t *n);
+static void finish_untyped_params(parser_t *p, ast_node_t *fn, bool allow_untyped);
 static ast_node_t *parse_interface_method(parser_t *p);
 static const char *parse_op_method_name(parser_t *p);
 
@@ -113,7 +115,7 @@ ast_node_t *parse_top_level(parser_t *p)
         n = parse_impl(p);
         break;
     case TK_KW_FUNC:
-        n = parse_function(p);
+        n = parse_function(p, true);
         break;
     case TK_KW_LAYOUT:
         if (is_pub) p_error(p, "'pub' cannot be applied to a layout block");
@@ -167,9 +169,22 @@ ast_node_t *parse_const(parser_t *p)
     ast_node_t *n = p_mk(p, AST_CONST_DECL);
     p_advance(p);
     n->name = p_name(p, "expected constant name");
-    if (p_at(p, TK_COLON) || p_at(p, TK_IDENT) || p_at(p, TK_KW_FUNC))
+    if (p_at(p, TK_COLON)) {
+        p_error(p, "constants with a type annotation were removed; use "
+                   "'const NAME := value' (or 'const NAME := value as Type')");
         n->type = parse_type_anno(p);
-    p_expect(p, TK_ASSIGN, "'=' in const declaration");
+        p_match(p, TK_ASSIGN);
+        n->a = parse_expr(p);
+        p_term(p);
+        p_fin(p, n);
+        return n;
+    }
+    if (p_at(p, TK_ASSIGN)) {
+        p_error(p, "constants are declared with ':=' ('const NAME := value')");
+        p_advance(p);
+    } else {
+        p_expect(p, TK_COLON_ASSIGN, "':=' in const declaration");
+    }
     n->a = parse_expr(p);
     p_term(p);
     p_fin(p, n);
@@ -229,6 +244,7 @@ static ast_node_t *parse_interface_method(parser_t *p)
         parse_params(p, n);
         p_expect(p, TK_RPAREN, "')' after parameters");
     }
+    finish_untyped_params(p, n, false);
     if (p_at(p, TK_COLON)) {
         p_advance(p);
         n->type = parse_type(p);
@@ -278,7 +294,7 @@ static ast_node_t *parse_impl(parser_t *p)
         p_skip_terminators(p);
         if (p_at(p, TK_KW_END) || p_at_eof(p)) break;
         if (p_at(p, TK_KW_FUNC)) {
-            ast_node_t *m = parse_function(p);
+            ast_node_t *m = parse_function(p, false);
             if (m) ast_add(p->a, n, m);
         } else {
             p_error(p, "expected a method ('func ...') in impl block");
@@ -312,7 +328,8 @@ static ast_node_t *parse_struct(parser_t *p)
             m_pub = true;
             p_advance(p);
         }
-        ast_node_t *member = p_at(p, TK_KW_FUNC) ? parse_function(p) : parse_field(p);
+        ast_node_t *member =
+            p_at(p, TK_KW_FUNC) ? parse_function(p, false) : parse_field(p);
         if (member) {
             member->is_pub = m_pub;
             {
@@ -405,7 +422,7 @@ static const char *parse_op_method_name(parser_t *p)
     }
 }
 
-static ast_node_t *parse_function(parser_t *p)
+static ast_node_t *parse_function(parser_t *p, bool allow_untyped)
 {
     P_RULE(p, "function_def");
     ast_node_t *n = p_mk(p, AST_FUNC_DEF);
@@ -440,6 +457,7 @@ static ast_node_t *parse_function(parser_t *p)
         parse_params(p, n);
         p_expect(p, TK_RPAREN, "')' after parameters");
     }
+    finish_untyped_params(p, n, allow_untyped);
     p_try_return_type(p, &n->type);
     n->a = parse_block(p);
     p_fin(p, n);
@@ -454,9 +472,33 @@ static void parse_params(parser_t *p, ast_node_t *fn)
         param->name = parse_decl_name(p);
         if (!param->name) return;
         if (p_match(p, TK_AMP)) param->is_ref = true;
-        param->type = parse_type_anno(p);
+        if (p_at(p, TK_COLON)) param->type = parse_type_anno(p);
         if (p_match(p, TK_ASSIGN)) param->a = parse_expr(p);
         p_fin(p, param);
         ast_add(p->a, fn, param);
     } while (p_match(p, TK_COMMA));
+}
+
+static void finish_untyped_params(parser_t *p, ast_node_t *fn, bool allow_untyped)
+{
+    size_t next = 0;
+    size_t i = 0;
+    for (; i < fn->list.len; i++) {
+        ast_node_t *param = (ast_node_t *)fn->list.data[i];
+        if (param->kind != AST_PARAM || param->type) continue;
+        if (!allow_untyped) {
+            p_error(p, "method and interface parameters must have explicit types");
+            return;
+        }
+        {
+            char buf[24];
+            sal_snprintf(buf, sizeof buf, "__T%zu", next++);
+            const char *tn = arena_strdup(p->a, buf);
+            ast_node_t *t = ast_new(p->a, AST_TYPE, &param->span);
+            t->name = tn;
+            param->type = t;
+            vec_push(p->a, &fn->typarams, CONST_CAST(tn));
+            vec_push(p->a, &fn->typaram_bounds, NULL);
+        }
+    }
 }

@@ -13,7 +13,10 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "semantic/sema_internal.h"
+
+static void check_each(sema_t *s, ast_node_t *n);
 
 static type_t *ty(sema_t *s, type_kind_t k)
 {
@@ -25,28 +28,51 @@ static type_t *err_ty(sema_t *s)
     return sema_err_ty(s);
 }
 
-static bool lvalue_mutable(sema_t *s, ast_node_t *n, bool *is_lvalue)
+typedef struct {
+    bool is_lvalue;
+    bool is_projection;
+    symbol_t *root;
+} lvalue_info_t;
+
+static void analyze_lvalue(sema_t *s, ast_node_t *n, lvalue_info_t *out)
 {
-    *is_lvalue = false;
-    if (!n) return false;
+    if (!n) return;
     if (n->kind == AST_IDENTIFIER) {
         symbol_t *sym = scope_lookup(s->cur, n->name);
-        *is_lvalue = (sym != NULL);
-        if (!sym) return false;
-        if (sym->is_ref) return true;
-        return sym->is_mut;
+        if (!sym) return;
+        out->is_lvalue = true;
+        out->root = sym;
+        return;
     }
     if (n->kind == AST_THIS) {
-        *is_lvalue = true;
-        return true;
+        out->is_lvalue = true;
+        return;
     }
     if (n->kind == AST_MEMBER || n->kind == AST_INDEX) {
-        bool inner_lv;
-        bool m = lvalue_mutable(s, n->a, &inner_lv);
-        *is_lvalue = inner_lv;
-        return m;
+        analyze_lvalue(s, n->a, out);
+        if (out->is_lvalue) out->is_projection = true;
     }
-    return false;
+}
+
+lvalue_verdict_t sema_classify_write(sema_t *s, ast_node_t *n, symbol_t **root_out)
+{
+    lvalue_info_t lv = {0};
+    analyze_lvalue(s, n, &lv);
+    if (root_out) *root_out = lv.root;
+    if (!lv.is_lvalue) return LV_NOT_LVALUE;
+    if (lv.root && lv.root->kind == SYM_CONST) return LV_CONST;
+    if (lv.is_projection) return LV_OK;
+    if (!lv.root) return LV_OK;
+    if (lv.root->is_mut || lv.root->is_ref) return LV_OK;
+    return LV_IMMUTABLE;
+}
+
+bool sema_lvalue_mutable(sema_t *s, ast_node_t *n, bool *is_lvalue)
+{
+    symbol_t *root = NULL;
+    lvalue_verdict_t v = sema_classify_write(s, n, &root);
+    *is_lvalue = (v != LV_NOT_LVALUE);
+    return v == LV_OK;
 }
 
 static bool pure_param_escapes(type_t *t)
@@ -56,7 +82,7 @@ static bool pure_param_escapes(type_t *t)
            t->kind == TY_SLICE;
 }
 
-static void check_pure_assign(sema_t *s, ast_node_t *target, const src_span_t *span)
+void sema_check_pure_write(sema_t *s, ast_node_t *target, const src_span_t *span)
 {
     ast_node_t *fn = sema_pure_fn(s);
     if (!fn) return;
@@ -103,6 +129,12 @@ static void define_local(sema_t *s, ast_node_t *decl, sym_kind_t kind, type_t *t
 
 type_t *sema_check_var_decl(sema_t *s, ast_node_t *n)
 {
+    if (!n->type && n->a && n->a->kind == AST_CAST && n->a->type &&
+        (n->a->a->kind == AST_ARRAY_LIT || n->a->a->kind == AST_STRUCT_LIT ||
+         n->a->a->kind == AST_LITERAL)) {
+        n->type = n->a->type;
+        n->a = n->a->a;
+    }
     type_t *declared = n->type ? sema_resolve_type(s, n->type) : NULL;
 
     if (n->a && n->a->kind == AST_STRUCT_LIT && n->a->name)
@@ -129,10 +161,9 @@ type_t *sema_check_var_decl(sema_t *s, ast_node_t *n)
         n->a->name = declared->name;
     }
 
-    if (declared && declared->kind == TY_ARRAY && declared->elem &&
-        declared->elem->kind == TY_DYN && n->a && n->a->kind == AST_ARRAY_LIT)
-        s->expected = declared;
-    else if (declared && n->a && (n->a->kind == AST_CALL || n->a->kind == AST_LITERAL))
+    if (declared && n->a &&
+        (n->a->kind == AST_CALL || n->a->kind == AST_LITERAL ||
+         n->a->kind == AST_ARRAY_LIT))
         s->expected = declared;
     type_t *initt = n->a ? sema_check_expr(s, n->a) : NULL;
     type_t *t;
@@ -153,6 +184,223 @@ type_t *sema_check_var_decl(sema_t *s, ast_node_t *n)
     }
     n->type_str = type_to_string(s->tc, t);
     return t;
+}
+
+static ast_node_t *ea_node(sema_t *s, ast_kind_t k, const src_span_t *sp)
+{
+    ast_node_t *n = ast_new(s->a, k, sp);
+    n->synthetic = true;
+    return n;
+}
+
+static ast_node_t *ea_ident(sema_t *s, const char *name, const src_span_t *sp)
+{
+    ast_node_t *n = ea_node(s, AST_IDENTIFIER, sp);
+    n->name = name;
+    return n;
+}
+
+static ast_node_t *ea_int(sema_t *s, uint64_t v, const src_span_t *sp)
+{
+    ast_node_t *n = ea_node(s, AST_LITERAL, sp);
+    n->op = TK_INT;
+    n->value.kind = TV_INT;
+    n->value.as.i = v;
+    return n;
+}
+
+static ast_node_t *ea_decl(sema_t *s, const char *name, ast_node_t *init, bool is_mut,
+                           const src_span_t *sp)
+{
+    ast_node_t *n = ea_node(s, AST_VAR_DECL, sp);
+    n->name = name;
+    n->a = init;
+    n->is_mut = is_mut;
+    return n;
+}
+
+static ast_node_t *ea_mcall(sema_t *s, const char *recv, const char *method,
+                            ast_node_t *arg, const src_span_t *sp)
+{
+    ast_node_t *mem = ea_node(s, AST_MEMBER, sp);
+    mem->a = ea_ident(s, recv, sp);
+    mem->name = method;
+    {
+        ast_node_t *call = ea_node(s, AST_CALL, sp);
+        call->a = mem;
+        if (arg) ast_add(s->a, call, arg);
+        return call;
+    }
+}
+
+static ast_node_t *ea_index(sema_t *s, ast_node_t *base, ast_node_t *idx,
+                            const src_span_t *sp)
+{
+    ast_node_t *n = ea_node(s, AST_INDEX, sp);
+    n->a = base;
+    n->b = idx;
+    return n;
+}
+
+static ast_node_t *ea_binary(sema_t *s, token_kind_t op, ast_node_t *l, ast_node_t *r,
+                             const src_span_t *sp)
+{
+    ast_node_t *n = ea_node(s, AST_BINARY, sp);
+    n->op = op;
+    n->a = l;
+    n->b = r;
+    return n;
+}
+
+static const char *ea_name(sema_t *s, const char *prefix, int id)
+{
+    char buf[32];
+    sal_snprintf(buf, sizeof buf, "%s%d", prefix, id);
+    return arena_strdup(s->a, buf);
+}
+
+static void each_finish(sema_t *s, ast_node_t *n, ast_node_t *seq_decl, ast_node_t *fr)
+{
+    n->kind = AST_BLOCK;
+    n->name = NULL;
+    n->a = NULL;
+    n->b = NULL;
+    n->c = NULL;
+    n->d = NULL;
+    n->synthetic = true;
+    vec_init(&n->list);
+    if (seq_decl) vec_push(s->a, &n->list, seq_decl);
+    vec_push(s->a, &n->list, fr);
+    sema_check_block(s, n);
+}
+
+static void check_each(sema_t *s, ast_node_t *n)
+{
+    src_span_t sp = n->span;
+    type_t *it = sema_check_expr(s, n->a);
+    if (type_is_error(it)) return;
+    {
+        const char *keyname = n->c ? n->c->name : NULL;
+        const char *valname = n->name;
+        ast_node_t *body = n->b;
+        int id = ++s->each_n;
+        const char *seq;
+        ast_node_t *seq_decl = NULL;
+        bool vec_like = it->kind == TY_VEC;
+        bool map_like = it->kind == TY_MAP;
+
+        if (it->kind == TY_STRUCT && it->decl) {
+            symbol_t *isym = (symbol_t *)it->decl;
+            if (isym->generic_base && strcmp(isym->generic_base, "Vector") == 0)
+                vec_like = true;
+            if (isym->generic_base && strcmp(isym->generic_base, "HashMap") == 0)
+                map_like = true;
+        }
+
+        if (!vec_like && !map_like && it->kind != TY_ARRAY && it->kind != TY_SLICE) {
+            SERR(s, 65, &n->a->span, "each cannot iterate a value of type '%s'",
+                 type_to_string(s->tc, it));
+            return;
+        }
+        if (map_like && !keyname) {
+            SERR(s, 65, &sp,
+                 "iterating a HashMap needs two bindings: each (key, value) in map");
+            return;
+        }
+        if ((it->kind == TY_ARRAY || it->kind == TY_SLICE) && it->elem &&
+            it->elem->kind == TY_ARRAY) {
+            SERR(s, 65, &sp,
+                 "each over a multi-dimensional array is not supported; use repeat "
+                 "with an index");
+            return;
+        }
+
+        if (n->a->kind == AST_IDENTIFIER) {
+            seq = n->a->name;
+        } else {
+            seq = ea_name(s, "__ea", id);
+            seq_decl = ea_decl(s, seq, n->a, false, &sp);
+        }
+
+        if (map_like) {
+            const char *itn = ea_name(s, "__ei", id);
+            ast_node_t *fr = ea_node(s, AST_FOR, &sp);
+            fr->a = ea_decl(s, itn, ea_mcall(s, seq, "iter", NULL, &sp), true, &sp);
+            fr->b = ea_mcall(s, itn, "has_next", NULL, &sp);
+            {
+                ast_node_t *post = ea_node(s, AST_EXPR_STMT, &sp);
+                post->a = ea_mcall(s, itn, "next", NULL, &sp);
+                fr->c = post;
+            }
+            {
+                ast_node_t *blk = ea_node(s, AST_BLOCK, &sp);
+                ast_add(s->a, blk,
+                        ea_decl(s, keyname, ea_mcall(s, itn, "key", NULL, &sp), false,
+                                n->c ? &n->c->span : &sp));
+                ast_add(s->a, blk,
+                        ea_decl(s, valname, ea_mcall(s, itn, "value", NULL, &sp), false,
+                                &sp));
+                {
+                    size_t i = 0;
+                    for (; i < body->list.len; i++)
+                        ast_add(s->a, blk, (ast_node_t *)body->list.data[i]);
+                }
+                fr->d = blk;
+            }
+            each_finish(s, n, seq_decl, fr);
+            return;
+        }
+
+        {
+            const char *idx = ea_name(s, "__ei", id);
+            ast_node_t *fr = ea_node(s, AST_FOR, &sp);
+            fr->a = ea_decl(s, idx, ea_int(s, 0, &sp), true, &sp);
+            {
+                ast_node_t *lenx;
+                if (vec_like) {
+                    lenx = ea_mcall(s, seq, "len", NULL, &sp);
+                } else {
+                    lenx = ea_node(s, AST_CALL, &sp);
+                    lenx->a = ea_ident(s, "len", &sp);
+                    ast_add(s->a, lenx, ea_ident(s, seq, &sp));
+                }
+                fr->b = ea_binary(s, TK_LT, ea_ident(s, idx, &sp), lenx, &sp);
+            }
+            {
+                ast_node_t *asn = ea_node(s, AST_ASSIGN, &sp);
+                asn->op = TK_ASSIGN;
+                asn->a = ea_ident(s, idx, &sp);
+                asn->b =
+                    ea_binary(s, TK_PLUS, ea_ident(s, idx, &sp), ea_int(s, 1, &sp), &sp);
+                fr->c = asn;
+            }
+            {
+                ast_node_t *blk = ea_node(s, AST_BLOCK, &sp);
+                if (keyname)
+                    ast_add(s->a, blk,
+                            ea_decl(s, keyname, ea_ident(s, idx, &sp), false,
+                                    n->c ? &n->c->span : &sp));
+                {
+                    ast_node_t *elem;
+                    if (vec_like)
+                        elem = ea_index(
+                            s, ea_mcall(s, seq, "get", ea_ident(s, idx, &sp), &sp),
+                            ea_int(s, 0, &sp), &sp);
+                    else
+                        elem = ea_index(s, ea_ident(s, seq, &sp), ea_ident(s, idx, &sp),
+                                        &sp);
+                    ast_add(s->a, blk, ea_decl(s, valname, elem, false, &sp));
+                }
+                {
+                    size_t i = 0;
+                    for (; i < body->list.len; i++)
+                        ast_add(s->a, blk, (ast_node_t *)body->list.data[i]);
+                }
+                fr->d = blk;
+            }
+            each_finish(s, n, seq_decl, fr);
+        }
+    }
 }
 
 static void check_stmt(sema_t *s, ast_node_t *n)
@@ -185,14 +433,27 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         type_t *tt = sema_check_expr(s, n->a);
         if (tt && n->b && n->b->kind == AST_LITERAL) s->expected = tt;
         type_t *vt = sema_check_expr(s, n->b);
-        bool is_lvalue;
-        bool mut = lvalue_mutable(s, n->a, &is_lvalue);
-        if (!is_lvalue)
+        symbol_t *wroot = NULL;
+        switch (sema_classify_write(s, n->a, &wroot)) {
+        case LV_NOT_LVALUE:
             SERR(s, 13, &n->span, "assignment target is not assignable");
-        else if (!mut)
-            SERR(s, 13, &n->span, "cannot assign to immutable target");
-        else
-            check_pure_assign(s, n->a, &n->span);
+            break;
+        case LV_CONST:
+            SERR(s, 13, &n->span,
+                 "cannot assign to '%s': a 'const' binding is fully immutable, "
+                 "including its elements and fields",
+                 wroot ? wroot->name : "target");
+            break;
+        case LV_IMMUTABLE:
+            SERR(s, 13, &n->span,
+                 "cannot reassign immutable variable '%s'; declare it 'mut' to "
+                 "reassign it, or assign to its elements or fields instead",
+                 wroot ? wroot->name : "target");
+            break;
+        case LV_OK:
+            sema_check_pure_write(s, n->a, &n->span);
+            break;
+        }
 
         if (n->op == TK_ASSIGN && n->a && n->a->kind == AST_INDEX && n->a->a &&
             n->a->a->type_str) {
@@ -280,10 +541,10 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         }
         break;
     }
-    case AST_WHILE: {
+    case AST_UNTIL: {
         type_t *c = sema_check_expr(s, n->a);
         if (c->kind != TY_BOOL && !type_is_error(c))
-            SERR(s, 21, &n->a->span, "while condition must be bool, got '%s'",
+            SERR(s, 21, &n->a->span, "until condition must be bool, got '%s'",
                  type_to_string(s->tc, c));
         s->loop_depth++;
         check_stmt(s, n->b);
@@ -306,12 +567,35 @@ static void check_stmt(sema_t *s, ast_node_t *n)
             if (!type_is_numeric(st) && !type_is_error(st))
                 SERR(s, 63, &n->d->span, "repeat step must be a number, got '%s'",
                      type_to_string(s->tc, st));
+            if (n->d->kind == AST_LITERAL && n->d->value.kind == TV_INT &&
+                n->d->value.as.i == 0)
+                SERR(s, 63, &n->d->span,
+                     "repeat step must be a positive number (the direction comes from "
+                     "the bounds)");
+            if (n->d->kind == AST_UNARY && n->d->op == TK_MINUS)
+                SERR(s, 63, &n->d->span,
+                     "repeat step must be a positive number (the direction comes from "
+                     "the bounds)");
+        }
+        scope_t *saved = s->cur;
+        if (n->name) {
+            scope_t *sc = scope_new(s->a, SCOPE_BLOCK, s->cur);
+            symbol_t *iv = symbol_new(s->a, SYM_VAR, n->name);
+            iv->type = ty(s, TY_I32);
+            iv->is_mut = false;
+            iv->decl = n;
+            scope_define(s->a, sc, iv);
+            s->cur = sc;
         }
         s->loop_depth++;
         check_stmt(s, n->b);
         s->loop_depth--;
+        s->cur = saved;
         break;
     }
+    case AST_EACH:
+        check_each(s, n);
+        break;
     case AST_FOR: {
         scope_t *sc = scope_new(s->a, SCOPE_BLOCK, s->cur);
         scope_t *saved = s->cur;
@@ -371,6 +655,9 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         break;
     case AST_EXPR_STMT:
         sema_check_expr(s, n->a);
+        break;
+    case AST_INCDEC:
+        sema_check_expr(s, n);
         break;
     default:
         break;

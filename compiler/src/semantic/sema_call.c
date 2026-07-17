@@ -36,6 +36,15 @@ static func_sig_t *ro_found(sema_t *s, func_sig_t *sig, const src_span_t *span,
 {
     if (sig && sig->decl && sig->decl->is_deprecated)
         SWARN(s, 13, span, "call to deprecated function '%s'", what);
+    if (sig && sig->infer_ret) {
+        if (sig->in_check)
+            SERR(s, 12, span,
+                 "cannot infer the return type of recursive function '%s'; annotate "
+                 "its return type",
+                 what);
+        else
+            sema_check_function_now(s, sig);
+    }
     {
         ast_node_t *pf = sema_pure_fn(s);
         if (pf && sig && sig->decl && !sig->decl->is_pure)
@@ -209,6 +218,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             SERR(s, 12, &n->span, "spawn argument '%s' is not a function", fn->name);
             return decorate(s, n, ty(s, TY_I64));
         }
+        fsym->used = true;
         bool ok = false;
         {
             size_t i = 0;
@@ -238,6 +248,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             SERR(s, 12, &n->span, "funcptr argument '%s' is not a function", fn->name);
             return decorate(s, n, ty(s, TY_I64));
         }
+        fsym->used = true;
         decorate(s, fn, ty(s, TY_VOID));
         decorate(s, callee, ty(s, TY_VOID));
         return decorate(s, n, ty(s, TY_I64));
@@ -409,6 +420,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             return decorate(s, n, err_ty(s));
         }
 
+        sym->used = true;
         if (sym->kind == SYM_FUNC && sym->decl && sym->decl->typarams.len > 0) {
             symbol_t *inst = g_infer_call(s, sym, &argtypes, &n->span, call_expected);
             if (!inst) return decorate(s, n, err_ty(s));
@@ -418,7 +430,8 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         func_sig_t *sig = resolve_overload(s, sym, &argtypes, &n->span, nm);
         coerce_args_to_dyn(s, n, &argtypes, sig);
         decorate(s, callee, sym->type);
-        return decorate(s, n, sig ? sig->ret : err_ty(s));
+        return decorate(s, n,
+                        sig ? g_localize_instance(s, sig->ret, &n->span) : err_ty(s));
     }
 
     if (callee && callee->kind == AST_MEMBER && callee->a &&
@@ -439,6 +452,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                      pk->name);
                 return decorate(s, n, err_ty(s));
             }
+            fn->used = true;
 
             if (fn->decl && fn->decl->typarams.len > 0) {
                 scope_t *save_cur = s->cur;
@@ -453,12 +467,14 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                 callee->name = inst->name;
                 func_sig_t *sig = resolve_overload(s, inst, &argtypes, &n->span, fname);
                 decorate(s, callee, inst->type);
-                return decorate(s, n, sig ? sig->ret : err_ty(s));
+                return decorate(
+                    s, n, sig ? g_localize_instance(s, sig->ret, &n->span) : err_ty(s));
             }
             func_sig_t *sig = resolve_overload(s, fn, &argtypes, &n->span, fname);
             decorate(s, callee->a, pk->type);
             decorate(s, callee, fn->type);
-            return decorate(s, n, sig ? sig->ret : err_ty(s));
+            return decorate(s, n,
+                            sig ? g_localize_instance(s, sig->ret, &n->span) : err_ty(s));
         }
     }
 
@@ -692,7 +708,8 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         func_sig_t *sig = resolve_overload(s, m, &argtypes, &n->span, callee->name);
         coerce_args_to_dyn(s, n, &argtypes, sig);
         decorate(s, callee, m->type);
-        return decorate(s, n, sig ? sig->ret : err_ty(s));
+        return decorate(s, n,
+                        sig ? g_localize_instance(s, sig->ret, &n->span) : err_ty(s));
     }
     sema_check_expr(s, callee);
     SERR(s, 12, &n->span, "expression is not callable");

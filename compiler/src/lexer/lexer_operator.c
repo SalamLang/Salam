@@ -68,7 +68,7 @@ void lx_scan_op(lx_t *L)
         k = TK_COMMA;
         break;
     case ':':
-        k = TK_COLON;
+        k = lx_match(L, '=') ? TK_COLON_ASSIGN : TK_COLON;
         break;
     case '.':
 
@@ -80,10 +80,16 @@ void lx_scan_op(lx_t *L)
             k = TK_DOT;
         break;
     case '+':
-        k = lx_match(L, '=') ? TK_PLUS_EQ : TK_PLUS;
+        if (lx_match(L, '+'))
+            k = TK_PLUS_PLUS;
+        else
+            k = lx_match(L, '=') ? TK_PLUS_EQ : TK_PLUS;
         break;
     case '-':
-        k = lx_match(L, '=') ? TK_MINUS_EQ : TK_MINUS;
+        if (lx_match(L, '-'))
+            k = TK_MINUS_MINUS;
+        else
+            k = lx_match(L, '=') ? TK_MINUS_EQ : TK_MINUS;
         break;
     case '*':
         if (lx_match(L, '*'))

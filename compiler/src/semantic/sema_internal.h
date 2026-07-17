@@ -53,6 +53,9 @@ typedef struct {
     scope_t *gen_pkg;
     scope_t *prelude;
     bool prelude_tried;
+    bool in_pkg;
+    bool relax_unused;
+    int each_n;
     const cc_table_t *cc;
 } sema_t;
 
@@ -96,6 +99,8 @@ symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes,
 symbol_t *g_infer_call(sema_t *s, symbol_t *tsym, vec_t *argtypes, const src_span_t *span,
                        type_t *expected);
 
+type_t *g_localize_instance(sema_t *s, type_t *t, const src_span_t *span);
+
 ast_node_t *coerce_to_dyn(sema_t *s, type_t *expected, ast_node_t *expr, type_t *etype);
 
 void coerce_args_to_dyn(sema_t *s, ast_node_t *call, vec_t *argtypes, func_sig_t *sig);
@@ -114,6 +119,14 @@ type_t *sema_try_op_overload(sema_t *s, ast_node_t *n, symbol_t *ssym, const cha
                              type_t *rhs_type);
 
 bool sema_type_is_stringable(type_t *t);
+
+typedef enum { LV_OK, LV_NOT_LVALUE, LV_CONST, LV_IMMUTABLE } lvalue_verdict_t;
+
+lvalue_verdict_t sema_classify_write(sema_t *s, ast_node_t *n, symbol_t **root_out);
+
+bool sema_lvalue_mutable(sema_t *s, ast_node_t *n, bool *is_lvalue);
+
+void sema_check_pure_write(sema_t *s, ast_node_t *target, const src_span_t *span);
 
 type_t *check_call(sema_t *s, ast_node_t *n);
 
@@ -137,6 +150,10 @@ void sema_check_block(sema_t *s, ast_node_t *block);
 type_t *sema_check_var_decl(sema_t *s, ast_node_t *n);
 
 func_sig_t *build_sig(sema_t *s, ast_node_t *fn, symbol_t *owner);
+
+void sema_check_function_now(sema_t *s, func_sig_t *sig);
+
+void sema_check_unused_funcs(sema_t *s);
 
 symbol_t *get_or_make_func(sema_t *s, scope_t *sc, const char *name, sym_kind_t kind);
 

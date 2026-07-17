@@ -20,10 +20,9 @@ static ast_node_t *parse_print_stmt(parser_t *p);
 static ast_node_t *parse_statement(parser_t *p);
 static ast_node_t *parse_if(parser_t *p);
 static ast_node_t *parse_if_tail(parser_t *p);
-static ast_node_t *parse_while(parser_t *p);
-static ast_node_t *parse_for(parser_t *p);
+static ast_node_t *parse_until(parser_t *p);
 static ast_node_t *parse_repeat(parser_t *p);
-static ast_node_t *parse_for_clause(parser_t *p);
+static ast_node_t *parse_each(parser_t *p);
 static ast_node_t *parse_return(parser_t *p);
 static ast_node_t *parse_defer(parser_t *p);
 
@@ -79,10 +78,14 @@ static ast_node_t *parse_statement(parser_t *p)
         return parse_const(p);
     case TK_KW_IF:
         return parse_if(p);
-    case TK_KW_WHILE:
-        return parse_while(p);
+    case TK_KW_UNTIL:
+        return parse_until(p);
+    case TK_KW_EACH:
+        return parse_each(p);
     case TK_KW_FOR:
-        return parse_for(p);
+        p_error(p, "'for' loops were removed; use 'repeat', 'each', or 'until'");
+        p_advance(p);
+        return NULL;
     case TK_KW_REPEAT:
         return parse_repeat(p);
     case TK_KW_RET:
@@ -106,37 +109,7 @@ static ast_node_t *parse_statement(parser_t *p)
     case TK_IDENT: {
         size_t m = p_ident_run_len(p);
         token_kind_t after = p_peekn(p, m)->kind;
-        bool is_decl;
-        if (m == 1) {
-            is_decl = (after == TK_COLON || after == TK_KW_FUNC);
-        } else {
-            switch (after) {
-            case TK_ASSIGN:
-            case TK_STMT_END:
-            case TK_EOF:
-            case TK_COLON:
-            case TK_KW_FUNC:
-            case TK_AMP:
-            case TK_STAR:
-            case TK_LBRACKET:
-            case TK_LT:
-            case TK_DOT:
-                is_decl = true;
-                break;
-            default:
-                is_decl = false;
-                break;
-            }
-            {
-                size_t i = 0;
-                for (; i + 1 < m; i++)
-                    if (p_peekn(p, i)->kind == TK_IDENT &&
-                        strcmp(p_peekn(p, i)->lexeme, "dyn") == 0) {
-                        is_decl = true;
-                        break;
-                    }
-            }
-        }
+        bool is_decl = (after == TK_COLON || after == TK_COLON_ASSIGN);
         if (is_decl) {
             ast_node_t *n = parse_bare_var_decl(p);
             p_term(p);
@@ -253,10 +226,10 @@ static ast_node_t *parse_if(parser_t *p)
     return parse_if_tail(p);
 }
 
-static ast_node_t *parse_while(parser_t *p)
+static ast_node_t *parse_until(parser_t *p)
 {
-    P_RULE(p, "while_stmt");
-    ast_node_t *n = p_mk(p, AST_WHILE);
+    P_RULE(p, "until_stmt");
+    ast_node_t *n = p_mk(p, AST_UNTIL);
     p_advance(p);
     n->a = parse_cond_expr(p);
     n->b = parse_block(p);
@@ -273,36 +246,38 @@ static ast_node_t *parse_repeat(parser_t *p)
     if (p_at(p, TK_KW_TO)) {
         p_advance(p);
         n->c = parse_cond_expr(p);
-        if (p_at(p, TK_KW_STEP)) {
-            p_advance(p);
-            n->d = parse_cond_expr(p);
-        }
     }
+    if (p_at(p, TK_KW_STEP)) {
+        p_advance(p);
+        if (!n->c) p_error(p, "'by' in a repeat loop needs a 'to' bound before it");
+        n->d = parse_cond_expr(p);
+    }
+    if (p_match(p, TK_KW_WITH))
+        n->name = p_name(p, "expected an index variable name after 'with'");
     n->b = parse_block(p);
     p_fin(p, n);
     return n;
 }
 
-static ast_node_t *parse_for_clause(parser_t *p)
+static ast_node_t *parse_each(parser_t *p)
 {
-    if (p_at(p, TK_KW_MUT)) return parse_var_decl(p);
-    if (p_at(p, TK_IDENT) &&
-        (p_peek2(p)->kind == TK_IDENT || p_peek2(p)->kind == TK_COLON))
-        return parse_bare_var_decl(p);
-    return parse_expr(p);
-}
-
-static ast_node_t *parse_for(parser_t *p)
-{
-    P_RULE(p, "for_stmt");
-    ast_node_t *n = p_mk(p, AST_FOR);
+    P_RULE(p, "each_stmt");
+    ast_node_t *n = p_mk(p, AST_EACH);
     p_advance(p);
-    if (!p_at(p, TK_COMMA)) n->a = parse_for_clause(p);
-    p_expect(p, TK_COMMA, "',' after for-init");
-    if (!p_at(p, TK_COMMA)) n->b = parse_cond_expr(p);
-    p_expect(p, TK_COMMA, "',' after for-condition");
-    if (!p_at(p, TK_COLON)) n->c = parse_for_clause(p);
-    n->d = parse_block(p);
+    if (p_match(p, TK_LPAREN)) {
+        ast_node_t *k = p_mk(p, AST_IDENTIFIER);
+        k->name = p_name(p, "expected a binding name in 'each (key, value)'");
+        p_fin(p, k);
+        n->c = k;
+        p_expect(p, TK_COMMA, "',' between the two 'each' binding names");
+        n->name = p_name(p, "expected the value binding name in 'each (key, value)'");
+        p_expect(p, TK_RPAREN, "')' after the 'each' binding names");
+    } else {
+        n->name = p_name(p, "expected a binding name after 'each'");
+    }
+    p_expect(p, TK_KW_IN, "'in' before the collection in an 'each' loop");
+    n->a = parse_cond_expr(p);
+    n->b = parse_block(p);
     p_fin(p, n);
     return n;
 }

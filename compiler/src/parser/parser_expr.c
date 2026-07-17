@@ -64,6 +64,10 @@ static unsigned bp_of(token_kind_t k)
     case TK_POWER:
         return BP(100, 100);
 
+    case TK_PLUS_PLUS:
+    case TK_MINUS_MINUS:
+        return BP(105, 105);
+
     case TK_LPAREN:
     case TK_LBRACKET:
     case TK_DOT:
@@ -71,6 +75,17 @@ static unsigned bp_of(token_kind_t k)
     default:
         return 0;
     }
+}
+
+static ast_node_t *make_incdec(parser_t *p, token_kind_t op, ast_node_t *operand,
+                               bool prefix)
+{
+    const src_span_t *sp = operand ? &operand->span : &p_peek(p)->span;
+    ast_node_t *n = ast_new(p->a, AST_INCDEC, sp);
+    n->op = op;
+    n->a = operand;
+    n->is_prefix = prefix;
+    return n;
 }
 
 static ast_node_t *make_binary(parser_t *p, token_kind_t op, ast_node_t *l, ast_node_t *r)
@@ -92,6 +107,14 @@ static ast_node_t *parse_nud(parser_t *p)
         n->op = p_advance(p)->kind;
         n->a = parse_expr_bp(p, 90);
         p_fin(p, n);
+        return n;
+    }
+    if (k == TK_PLUS_PLUS || k == TK_MINUS_MINUS) {
+        src_span_t start = p_peek(p)->span;
+        token_kind_t op = p_advance(p)->kind;
+        ast_node_t *operand = parse_expr_bp(p, 105);
+        ast_node_t *n = make_incdec(p, op, operand, true);
+        n->span.begin = start.begin;
         return n;
     }
     return parse_primary(p);
@@ -200,6 +223,13 @@ static ast_node_t *parse_led(parser_t *p, ast_node_t *lhs, token_kind_t op, unsi
     case TK_PERCENT_EQ:
     case TK_POWER_EQ:
         return led_assign(p, lhs, op, bp);
+    case TK_PLUS_PLUS:
+    case TK_MINUS_MINUS: {
+        ast_node_t *n = make_incdec(p, op, lhs, false);
+        n->span.end = p_peek(p)->span.end;
+        p_advance(p);
+        return n;
+    }
     default: {
         p_advance(p);
         ast_node_t *rhs = parse_expr_bp(p, BP_RIGHT(bp));

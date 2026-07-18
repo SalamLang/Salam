@@ -62,10 +62,6 @@ symbol_t *struct_by_name(cg_t *cg, const char *name)
 {
     symbol_t *s = scope_lookup(cg->sem->global, name);
     if (s && s->kind == SYM_STRUCT) return s;
-    /* `name` may be the mangled C type name (e.g. "os_CmdResult") rather than
-       the bare Salam name the struct is keyed under in scope (structs from
-       non-main packages get a package-prefixed C type name); fall back to
-       scanning for a struct whose resolved type name matches. */
     {
         size_t i = 0;
         for (; i < cg->sem->global->symbols.len; i++) {

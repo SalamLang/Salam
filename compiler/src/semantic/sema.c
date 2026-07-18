@@ -557,14 +557,6 @@ static const char *resolve_ident_import(arena_t *a, const char *root, const char
     return out;
 }
 
-/* Cheap non-localized guess for an identifier-form import ("import mem",
- * "import web.canvas"): treat each dotted segment as already canonical and
- * probe the literal std/ path directly, without touching the alias index
- * (which requires an expensive full std/ directory walk on first use). Most
- * imports (including the entire stdlib's own internal imports) use plain
- * English segment names that match their directory 1:1, so this avoids ever
- * triggering that walk for them; genuinely localized/aliased imports simply
- * fail this probe and fall back to resolve_ident_import(). */
 static const char *resolve_ident_direct(arena_t *a, const char *root, const char *dotted)
 {
     sb_t spec;

@@ -145,12 +145,6 @@ static const char *cg_print_legacy(cg_t *cg, ast_node_t *n, bool nl, int err)
     return r;
 }
 
-/*
- * In a single-threaded module all stdout goes through the salam_ob buffer, so a
- * printf/salam_emit-based print must first flush that buffer and then push its
- * own output out immediately, keeping the two in program order. Pure-literal
- * prints skip this and write the buffer directly (the fast path).
- */
 static const char *cg_order_stdout(cg_t *cg, const char *printf_expr)
 {
     if (!cg->single_threaded) return printf_expr;

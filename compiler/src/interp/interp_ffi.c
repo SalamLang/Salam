@@ -34,12 +34,6 @@ typedef struct {
     void *fnptr;
 } native_sym_t;
 
-/*
- * Every entry here is a real C function pointer taken at compile time (not
- * dlsym/GetProcAddress) - portable across static/dynamic builds and mirrors
- * how the compiled backends already resolve these same extern "C" symbols
- * (via #include + the system linker).
- */
 static const native_sym_t NATIVE_SYMS[] = {
     {"getenv", (void *)&getenv},
     {"malloc", (void *)&malloc},

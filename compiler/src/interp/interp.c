@@ -522,14 +522,6 @@ void build_modules(interp_t *I, ast_node_t *program)
     }
 }
 
-/*
- * Generic struct/impl instantiations (e.g. HashMap<str,str>) are deep-cloned
- * by sema (g_instantiate_struct) into whichever file's AST happened to be
- * under analysis at instantiation time, which is not necessarily the file
- * that defines the generic template (e.g. std/collections). Their methods
- * still reference that template's own package-level imports, so they must
- * run with the TEMPLATE's env, not the instantiating file's env.
- */
 static void fixup_generic_envs_in(interp_t *I, vec_t *defs)
 {
     size_t i = 0;

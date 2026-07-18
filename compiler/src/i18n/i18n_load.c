@@ -48,12 +48,17 @@ const char *i18n_layout_word(const char *name)
 {
     if (!name) return name;
     const char *lang = i18n_active_lang();
+    fprintf(stderr, "[DBG i18n_layout_word] active_lang=%s name=%s n_dyn=%d\n", lang,
+            name, g_dyn_words_n);
     {
         int i = 0;
         for (; i < g_dyn_words_n; i++)
             if (strcmp(g_dyn_words[i].lang, lang) == 0 &&
-                strcmp(g_dyn_words[i].alias, name) == 0)
+                strcmp(g_dyn_words[i].alias, name) == 0) {
+                fprintf(stderr, "[DBG i18n_layout_word] MATCH -> %s\n",
+                        g_dyn_words[i].canon);
                 return g_dyn_words[i].canon;
+            }
     }
     if (strcmp(lang, "fa") == 0) {
         {

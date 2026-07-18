@@ -46,6 +46,7 @@
 #  include <io.h>
 #  include <direct.h>
 #  include <process.h>
+#  include <windows.h>
 #  define salam_isatty(fd) _isatty(fd)
 #  define salam_fileno(f) _fileno(f)
 #  define salam_mkdir(p) _mkdir(p)
@@ -607,6 +608,11 @@ static void driver_print_version(void)
 
 int driver_main(int argc, char **argv)
 {
+#if defined(_WIN32)
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
+
     options_t opt;
     if (!cli_parse(argc, argv, &opt)) {
         return 2;

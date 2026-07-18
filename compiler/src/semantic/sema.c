@@ -78,6 +78,15 @@ static void derive_root(const char *path, char *out, size_t n)
     sal_snprintf(out, n, "%s", path);
 }
 
+static bool path_is_absolute(const char *p)
+{
+    if (!p || !p[0]) return false;
+    if (p[0] == '/' || p[0] == '\\') return true;
+    if (((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':')
+        return true;
+    return false;
+}
+
 static bool get_exe_dir(char *out, size_t n)
 {
     char buf[1024];
@@ -171,11 +180,17 @@ static const char *resolve_stdlib_root(const char *explicit_path)
             char cfg[1100], val[1024];
             sal_snprintf(cfg, sizeof cfg, "%s/salam.cfg", exedir);
             if (read_cfg_stdlib(cfg, val, sizeof val)) {
-                derive_root(val, buf, N);
+                char abs_val[1200];
+                if (path_is_absolute(val))
+                    sal_snprintf(abs_val, sizeof abs_val, "%s", val);
+                else
+                    sal_snprintf(abs_val, sizeof abs_val, "%s/%s", exedir, val);
+                derive_root(abs_val, buf, N);
                 if (root_has_std(buf)) return buf;
             }
             {
-                static const char *rel[] = {".", "../share/salam", "../lib/salam", ".."};
+                static const char *rel[] = {".", "compiler", "../share/salam",
+                                            "../lib/salam", ".."};
                 size_t i = 0;
                 for (; i < sizeof rel / sizeof rel[0]; i++) {
                     char cand[1200];

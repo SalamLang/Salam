@@ -609,54 +609,6 @@ static const char *resolve_user_string(arena_t *a, const char *dir, const char *
     return path_normalize(p);
 }
 
-static const char *resolve_ident_import(arena_t *a, const char *root, const char *dotted,
-                                        const char *lang)
-{
-    sb_t spec;
-    sb_init(&spec);
-    const char *last = NULL;
-    const char *p = dotted;
-    while (*p) {
-        const char *dot = strchr(p, '.');
-        size_t seglen = dot ? (size_t)(dot - p) : strlen(p);
-        const char *seg = arena_strndup(a, p, seglen);
-        const char *canon = seg_to_canon(a, root, seg, lang);
-        if (!canon) {
-            sb_free(&spec);
-            return NULL;
-        }
-        if (spec.len) sb_putc(&spec, '/');
-        sb_puts(&spec, canon);
-        last = canon;
-        if (!dot) break;
-        p = dot + 1;
-    }
-    if (!last) {
-        sb_free(&spec);
-        return NULL;
-    }
-    size_t n = strlen(root) + spec.len + strlen(last) + 24;
-    char *out = (char *)arena_alloc(a, n);
-    if (root && root[0])
-        sal_snprintf(out, n, "%s/std/%s/%s.salam", root, sb_cstr(&spec), last);
-    else
-        sal_snprintf(out, n, "std/%s/%s.salam", sb_cstr(&spec), last);
-    sb_free(&spec);
-    return out;
-}
-
-static const char *resolve_user_string(arena_t *a, const char *dir, const char *spec)
-{
-    bool has_ext = strstr(spec, ".salam") != NULL;
-    size_t n = strlen(dir) + strlen(spec) + 16;
-    char *p = (char *)arena_alloc(a, n);
-    if (dir && dir[0])
-        sal_snprintf(p, n, "%s/%s%s", dir, spec, has_ext ? "" : ".salam");
-    else
-        sal_snprintf(p, n, "%s%s", spec, has_ext ? "" : ".salam");
-    return path_normalize(p);
-}
-
 const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec)
 {
     const char *root = salam_get_stdlib_root();

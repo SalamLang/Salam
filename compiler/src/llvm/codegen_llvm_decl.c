@@ -623,9 +623,10 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
 
 static bool ll_extern_seen(ll_t *ll, const char *name)
 {
-    static const char *prologue[] = {
-        "printf",  "dprintf", "strlen", "strcmp",   "malloc", "memcpy", "realloc", "free",
-        "memmove", "abort",   "exit",   "snprintf", "strtol", "strtod", "strstr",  NULL};
+    static const char *prologue[] = {"printf", "dprintf",  "strlen", "strcmp",  "malloc",
+                                     "memcpy", "realloc",  "free",   "memmove", "abort",
+                                     "exit",   "snprintf", "strtol", "strtod",  "strstr",
+                                     "write",  NULL};
     {
         int p = 0;
         for (; prologue[p]; p++)

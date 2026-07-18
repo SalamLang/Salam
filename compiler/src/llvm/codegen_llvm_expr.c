@@ -386,6 +386,38 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
     vec_init(&segs);
     pf_build(ll->a, n, nl, &segs);
     if (segs.len == 0) return;
+
+    bool buffered = ll->single_threaded && !err;
+
+    if (buffered) {
+        bool all_lit = true;
+        {
+            size_t i = 0;
+            for (; i < segs.len; i++)
+                if (((pf_seg_t *)segs.data[i])->kind != PF_LIT) {
+                    all_lit = false;
+                    break;
+                }
+        }
+        if (all_lit) {
+            sb_t raw;
+            sb_init(&raw);
+            {
+                size_t i = 0;
+                for (; i < segs.len; i++)
+                    sb_puts(&raw, ((pf_seg_t *)segs.data[i])->text);
+            }
+            size_t rawlen = raw.len;
+            const char *lit = ll_strconst(ll, sb_cstr(&raw));
+            sb_free(&raw);
+            if (rawlen) {
+                ll_need(ll, LL_H_OUTBUF);
+                ll_emit(ll, "call void @salam_out_write(ptr %s, i64 %zu)", lit, rawlen);
+            }
+            return;
+        }
+    }
+
     sb_t fmt;
     sb_init(&fmt);
     sb_t args;
@@ -441,12 +473,23 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
         }
     }
     const char *f = ll_strconst(ll, sb_cstr(&fmt));
+    if (ll->single_threaded) {
+        ll_need(ll, LL_H_OUTBUF);
+        ll_emit(ll, "call void @salam_out_flush()");
+    }
     const char *t = ll_new_tmp(ll);
-    if (err)
+    if (err) {
         ll_emit(ll, "%s = call i32 (i32, ptr, ...) @dprintf(i32 2, ptr %s%s)", t, f,
                 sb_cstr(&args));
-    else
+    } else {
         ll_emit(ll, "%s = call i32 (ptr, ...) @printf(ptr %s%s)", t, f, sb_cstr(&args));
+        if (buffered) {
+            const char *sp = ll_new_tmp(ll);
+            ll_emit(ll, "%s = load ptr, ptr @stdout", sp);
+            const char *t2 = ll_new_tmp(ll);
+            ll_emit(ll, "%s = call i32 @fflush(ptr %s)", t2, sp);
+        }
+    }
     sb_free(&fmt);
     sb_free(&args);
 }
@@ -609,7 +652,7 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
                         llv_t *out)
 {
     size_t na = n->list.len;
-    if ((!strcmp(m, "len") || !strcmp(m, "length")) && na == 0) {
+    if (!strcmp(m, "len") && na == 0) {
         long klen = ast_str_lit_len(obj);
         if (klen >= 0) {
             *out = (llv_t){ll_fmt(ll, "%ld", klen), "i32"};
@@ -618,7 +661,7 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
     }
     const char *recv = ll_expr(ll, obj).ref;
     const char *r;
-    if (!strcmp(m, "len") || !strcmp(m, "length")) {
+    if (!strcmp(m, "len")) {
         const char *l = ll_new_tmp(ll);
         ll_emit(ll, "%s = call %s @strlen(ptr %s)", l, ll->usize, recv);
         *out = (llv_t){ll_usize_to_i32(ll, l), "i32"};

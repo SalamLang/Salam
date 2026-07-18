@@ -321,8 +321,21 @@ static bool is_email(const char *v)
 
 static bool is_url(const char *v)
 {
-    return strncmp(v, "http://", 7) == 0 || strncmp(v, "https://", 8) == 0 ||
-           strncmp(v, "mailto:", 7) == 0 || v[0] == '/' || v[0] == '#' || v[0] == '.';
+    if (strncmp(v, "http://", 7) == 0 || strncmp(v, "https://", 8) == 0 ||
+        strncmp(v, "mailto:", 7) == 0 || v[0] == '/' || v[0] == '#' || v[0] == '.')
+        return true;
+    if (!v[0]) return false;
+    {
+        bool has_sep = false;
+        const char *p = v;
+        for (; *p; p++) {
+            if (*p == ' ' || *p == '\t' || *p == '"' || *p == '\'' || *p == '<' ||
+                *p == '>')
+                return false;
+            if (*p == '.' || *p == '/') has_sep = true;
+        }
+        return has_sep;
+    }
 }
 
 const char *layout_attr_value_map(arena_t *a, const layout_attr_def_t *ad,

@@ -37,4 +37,6 @@ codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
                               sema_result_t *sem, const char *module, bool safe,
                               bool debug_info, const char *src_path, const char *entry);
 
+bool salam_module_single_threaded(ast_node_t *program);
+
 #endif /* SALAM_CODEGEN_CODEGEN_H */

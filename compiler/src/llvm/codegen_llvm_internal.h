@@ -59,6 +59,7 @@ typedef enum {
     LL_H_U64STR,
     LL_H_F64STR,
     LL_H_CHARSTR,
+    LL_H_OUTBUF,
     LL_H_COUNT
 } ll_helper_t;
 
@@ -113,6 +114,7 @@ typedef struct {
     int ptr_bits;
     bool optsize;
     bool minsize;
+    bool single_threaded;
     sb_t *hg;
     bool hneed[LL_H_COUNT];
 } ll_t;

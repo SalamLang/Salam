@@ -524,6 +524,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         if (arr->kind == TY_ARRAY) return decorate(s, n, arr->elem);
         if (arr->kind == TY_SLICE) return decorate(s, n, arr->elem);
         if (arr->kind == TY_PTR) return decorate(s, n, arr->pointee);
+        if (arr->kind == TY_STR) return decorate(s, n, ty(s, TY_CHAR));
         if (!type_is_error(arr))
             SERR(s, 21, &n->span, "cannot index non-array type '%s'",
                  type_to_string(s->tc, arr));

@@ -225,8 +225,18 @@ const token_t *p_peekn(const parser_t *p, size_t k)
 size_t p_ident_run_len(const parser_t *p)
 {
     size_t m = 0;
-    while (p_peekn(p, m)->kind == TK_IDENT)
+    uint32_t line = 0;
+    bool have = false;
+    while (p_peekn(p, m)->kind == TK_IDENT) {
+        uint32_t l = p_peekn(p, m)->span.begin.line;
+        if (!have) {
+            line = l;
+            have = true;
+        } else if (l != line) {
+            break;
+        }
         m++;
+    }
     return m;
 }
 
@@ -236,7 +246,8 @@ const char *p_munch_name(parser_t *p)
     sb_t b;
     sb_init(&b);
     bool first = true;
-    while (p_at(p, TK_IDENT)) {
+    uint32_t line = p_peek(p)->span.begin.line;
+    while (p_at(p, TK_IDENT) && p_peek(p)->span.begin.line == line) {
         if (!first) sb_putc(&b, ' ');
         sb_puts(&b, p_peek(p)->lexeme);
         first = false;

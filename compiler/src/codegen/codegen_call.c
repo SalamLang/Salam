@@ -145,9 +145,25 @@ static const char *cg_print_legacy(cg_t *cg, ast_node_t *n, bool nl, int err)
     return r;
 }
 
+/*
+ * In a single-threaded module all stdout goes through the salam_ob buffer, so a
+ * printf/salam_emit-based print must first flush that buffer and then push its
+ * own output out immediately, keeping the two in program order. Pure-literal
+ * prints skip this and write the buffer directly (the fast path).
+ */
+static const char *cg_order_stdout(cg_t *cg, const char *printf_expr)
+{
+    if (!cg->single_threaded) return printf_expr;
+    return cg_fmt(cg, "({ salam_out_flush(); %s; fflush(stdout); })", printf_expr);
+}
+
 static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
 {
-    if (err) return cg_print_legacy(cg, n, nl, err);
+    if (err) {
+        const char *e = cg_print_legacy(cg, n, nl, err);
+        if (cg->single_threaded) return cg_fmt(cg, "({ salam_out_flush(); %s; })", e);
+        return e;
+    }
     vec_t segs;
     vec_init(&segs);
     pf_build(cg->a, n, nl, &segs);
@@ -156,7 +172,30 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
         size_t i = 0;
         for (; i < segs.len; i++)
             if (((pf_seg_t *)segs.data[i])->kind == PF_CHAR)
-                return cg_print_legacy(cg, n, nl, err);
+                return cg_order_stdout(cg, cg_print_legacy(cg, n, nl, err));
+    }
+    if (cg->single_threaded) {
+        bool all_lit = true;
+        sb_t raw;
+        sb_init(&raw);
+        {
+            size_t i = 0;
+            for (; i < segs.len; i++) {
+                pf_seg_t *s = (pf_seg_t *)segs.data[i];
+                if (s->kind != PF_LIT) {
+                    all_lit = false;
+                    break;
+                }
+                sb_puts(&raw, s->text);
+            }
+        }
+        if (all_lit) {
+            size_t rawlen = raw.len;
+            const char *lit = cg_cescape(cg, sb_cstr(&raw));
+            sb_free(&raw);
+            return cg_fmt(cg, "SALAM_OUT_LIT(%s, %zu)", lit, rawlen);
+        }
+        sb_free(&raw);
     }
     sb_t fmt;
     sb_init(&fmt);
@@ -210,7 +249,7 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
     const char *al = arena_strdup(cg->a, sb_cstr(&args));
     sb_free(&fmt);
     sb_free(&args);
-    return cg_fmt(cg, "printf(%s%s)", cfmt, al);
+    return cg_order_stdout(cg, cg_fmt(cg, "printf(%s%s)", cfmt, al));
 }
 
 static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)

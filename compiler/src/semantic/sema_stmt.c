@@ -443,6 +443,10 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         if (tt && n->b && n->b->kind == AST_LITERAL) s->expected = tt;
         type_t *vt = sema_check_expr(s, n->b);
         symbol_t *wroot = NULL;
+        if (n->a && n->a->kind == AST_INDEX && n->a->a && n->a->a->type_str &&
+            !strcmp(n->a->a->type_str, "str"))
+            SERR(s, 13, &n->span,
+                 "strings are immutable: cannot assign to an index of a 'str'");
         switch (sema_classify_write(s, n->a, &wroot)) {
         case LV_NOT_LVALUE:
             SERR(s, 13, &n->span, "assignment target is not assignable");

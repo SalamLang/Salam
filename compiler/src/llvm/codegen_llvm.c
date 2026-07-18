@@ -13,6 +13,7 @@
  */
 
 #include "llvm/codegen_llvm_internal.h"
+#include "codegen/codegen.h"
 #include "i18n/i18n.h"
 
 static const char *ll_datalayout(const char *triple)
@@ -66,6 +67,18 @@ static const char *ll_datalayout(const char *triple)
     return NULL;
 }
 
+static bool ll_target_is_windows(const char *triple)
+{
+    if (triple && triple[0])
+        return strstr(triple, "windows") != NULL || strstr(triple, "mingw") != NULL ||
+               strstr(triple, "win32") != NULL;
+#if defined(_WIN32)
+    return true;
+#else
+    return false;
+#endif
+}
+
 static const char *pl_widen(ll_t *ll, sb_t *g, const char *src, const char *dst)
 {
     if (ll->ptr_bits <= 32) return src;
@@ -94,6 +107,7 @@ static void ll_emit_prologue(ll_t *ll)
 
     sb_puts(g, "declare i32 @printf(ptr, ...) nounwind\n");
     sb_puts(g, "declare i32 @dprintf(i32, ptr, ...) nounwind\n");
+    sb_puts(g, "declare i64 @write(i32, ptr, i64) nounwind\n");
     sb_puts(g,
             ll_fmt(ll,
                    "declare %s @strlen(ptr) nounwind willreturn memory(argmem: read)\n",
@@ -121,13 +135,6 @@ static void ll_emit_prologue(ll_t *ll)
     sb_puts(g, "%dyn = type { ptr, ptr }\n\n");
 }
 
-/*
- * salam_ll_* runtime helpers are only emitted into ll->hg (appended to the
- * module after codegen finishes) the first time a program actually needs
- * them, so a program that never uses e.g. substr/hash doesn't carry their
- * definitions in its IR. Each emitter below writes exactly one helper's
- * IR; ll_need() (at the bottom) handles the dedup + dispatch generically.
- */
 static void ll_emit_substr(ll_t *ll)
 {
     sb_t *g = ll->hg;
@@ -329,10 +336,58 @@ static void ll_emit_charstr(ll_t *ll)
                    ll->usize));
 }
 
-/* indexed by ll_helper_t; order must match the enum in codegen_llvm_internal.h */
+static void ll_emit_outbuf(ll_t *ll)
+{
+    sb_puts(ll->hg,
+            "@salam_ob = internal global [65536 x i8] zeroinitializer\n"
+            "@salam_obn = internal global i64 0\n"
+            "@stdout = external global ptr\n"
+            "declare i32 @fflush(ptr) nounwind\n"
+            "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n"
+            "define internal void @salam_out_flush() nounwind {\n"
+            "entry:\n"
+            "  %n = load i64, ptr @salam_obn\n"
+            "  %z = icmp eq i64 %n, 0\n"
+            "  br i1 %z, label %done, label %do\n"
+            "do:\n"
+            "  %r = call i64 @write(i32 1, ptr @salam_ob, i64 %n)\n"
+            "  store i64 0, ptr @salam_obn\n"
+            "  br label %done\n"
+            "done:\n"
+            "  ret void\n"
+            "}\n"
+            "define internal void @salam_out_write(ptr %s, i64 %n) nounwind {\n"
+            "entry:\n"
+            "  %obn = load i64, ptr @salam_obn\n"
+            "  %sum = add i64 %obn, %n\n"
+            "  %over = icmp ugt i64 %sum, 65536\n"
+            "  br i1 %over, label %flush, label %chk\n"
+            "flush:\n"
+            "  call void @salam_out_flush()\n"
+            "  br label %chk\n"
+            "chk:\n"
+            "  %big = icmp uge i64 %n, 65536\n"
+            "  br i1 %big, label %direct, label %copy\n"
+            "direct:\n"
+            "  %rd = call i64 @write(i32 1, ptr %s, i64 %n)\n"
+            "  ret void\n"
+            "copy:\n"
+            "  %obn2 = load i64, ptr @salam_obn\n"
+            "  %dst = getelementptr inbounds [65536 x i8], ptr @salam_ob, i64 0, i64 "
+            "%obn2\n"
+            "  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %s, i64 %n, i1 false)\n"
+            "  %newn = add i64 %obn2, %n\n"
+            "  store i64 %newn, ptr @salam_obn\n"
+            "  ret void\n"
+            "}\n"
+            "@llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] "
+            "[{ i32, ptr, ptr } { i32 65535, ptr @salam_out_flush, ptr null }]\n\n");
+}
+
 static void (*const LL_HELPER_EMIT[LL_H_COUNT])(ll_t *) = {
-    ll_emit_substr,  ll_emit_strcat, ll_emit_isws,   ll_emit_trim,   ll_emit_strhash,
-    ll_emit_inthash, ll_emit_i64str, ll_emit_u64str, ll_emit_f64str, ll_emit_charstr,
+    ll_emit_substr,  ll_emit_strcat,  ll_emit_isws,   ll_emit_trim,
+    ll_emit_strhash, ll_emit_inthash, ll_emit_i64str, ll_emit_u64str,
+    ll_emit_f64str,  ll_emit_charstr, ll_emit_outbuf,
 };
 
 void ll_need(ll_t *ll, ll_helper_t which)
@@ -409,6 +464,8 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     ll.optsize =
         opts && (opts->opt_level == LLVM_OPT_OS || opts->opt_level == LLVM_OPT_OZ);
     ll.minsize = opts && opts->opt_level == LLVM_OPT_OZ;
+    ll.single_threaded =
+        salam_module_single_threaded(program) && !ll_target_is_windows(ll.triple);
     vec_init(&ll.locals);
     vec_init(&ll.strings);
     vec_init(&ll.defers);

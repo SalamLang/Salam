@@ -49,6 +49,8 @@ esac
     src/llvm/codegen_llvm.c src/llvm/codegen_llvm_emit.c src/llvm/codegen_llvm_type.c \
     src/llvm/codegen_llvm_expr.c src/llvm/codegen_llvm_stmt.c src/llvm/codegen_llvm_decl.c \
     src/llvm/codegen_llvm_debug.c src/llvm/llvm_native.c \
+    src/jsgen/jsgen.c src/jsgen/jsgen_expr.c src/jsgen/jsgen_stmt.c \
+    src/jsgen/jsgen_host.c \
     src/interp/interp.c src/interp/interp_builtin.c src/interp/interp_value.c \
     src/interp/interp_expr.c src/interp/interp_stmt.c src/interp/interp_ffi.c \
     src/layout/registry.c src/layout/layout_gen.c src/layout/layout_gen_element.c \
@@ -56,7 +58,8 @@ esac
     src/fmt/fmt.c src/fmt/fmt_rules.c \
     src/cli/cli.c src/cli/cli_help.c src/cli/cli_options.c src/cli/cli_subcmd.c \
     src/driver/driver.c src/driver/build.c src/driver/llvm_build.c \
-    src/driver/llvm_toolchain.c \
+    src/driver/llvm_toolchain.c src/driver/js_build.c src/driver/web_build.c \
+    src/driver/embed_sysroot.c \
     src/driver/layout_build.c src/driver/debug_cmd.c src/driver/repl.c \
     $LDLIBS
 echo "built ./salam with $CC"

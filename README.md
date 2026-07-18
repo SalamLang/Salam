@@ -701,7 +701,7 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[AST (Abstract Syntax Tree)](https://en.wikipedia.org/wiki/Abstract_syntax_tree)** | Tree representation of parsed source code. Each node represents a construct (expression, statement, declaration). The Salam compiler builds an AST before semantic analysis and code generation. |
 | **[Biome](https://biomejs.dev/)** | Fast JavaScript/TypeScript linter and formatter. Run as a prek hook (`biome-check`). |
 | **[Bun](https://bun.sh/)** | JavaScript runtime, package manager, and bundler. Used in the Salam monorepo to manage workspaces and run dev servers. |
-| **[C ABI](https://en.wikipedia.org/wiki/Application_binary_interface)** | C Application Binary Interface, the low-level contract for how functions are called and data is laid out in memory. Salam's FFI and `extern "C"` declarations rely on the C ABI. |
+| **[C ABI](https://en.wikipedia.org/wiki/Application_binary_interface)** | C Application Binary Interface, the low-level contract for how functions are called and data is laid out in memory. Salam's FFI and `extern` declarations rely on the C ABI. |
 | **[CI (Continuous Integration)](https://en.wikipedia.org/wiki/Continuous_integration)** | Automated pipeline that builds, tests, and lints every pull request. Salam uses GitHub Actions for CI. |
 | **[Clang](https://clang.llvm.org/)** | LLVM-based C compiler. One of the supported backends for building the Salam compiler. |
 | **[Cloudflare Workers](https://workers.cloudflare.com/)** | Serverless compute platform that runs JavaScript/TypeScript at the edge. The `runner/` workspace deploys to Cloudflare Workers via Wrangler. |
@@ -716,7 +716,7 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[DSL (Domain-Specific Language)](https://en.wikipedia.org/wiki/Domain-specific_language)** | A language tailored to a specific problem domain. Salam includes a built-in layout DSL that compiles `.salam` files to HTML, CSS, and JavaScript. |
 | **[Emscripten](https://emscripten.org/)** | LLVM-based toolchain that compiles C/C++ to WebAssembly. Used to build `salam-wa.wasm` and `salam-wa.js` for the web playground. |
 | **[entr](https://eradman.com/entrproject/)** | Utility that re-runs a command whenever watched files change. Used in Salam's Docker dev mode to rebuild the compiler on source edits. |
-| **[FFI (Foreign Function Interface)](https://en.wikipedia.org/wiki/Foreign_function_interface)** | Mechanism for calling functions written in another language (typically C). Salam supports FFI via `extern "C"` declarations. |
+| **[FFI (Foreign Function Interface)](https://en.wikipedia.org/wiki/Foreign_function_interface)** | Mechanism for calling functions written in another language (typically C). Salam supports FFI via `extern` declarations. |
 | **[Fork](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo)** | A personal copy of a repository on GitHub. Contributors fork `SalamLang/Salam`, work in their fork, then open a pull request back to the original. |
 | **[GCC](https://gcc.gnu.org/)** | GNU Compiler Collection. A C compiler supported by the Salam build tool. |
 | **[Gitleaks](https://github.com/gitleaks/gitleaks)** | Secret-detection tool run as a prek audit hook to prevent accidental commits of API keys or credentials. |

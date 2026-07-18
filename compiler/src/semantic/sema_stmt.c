@@ -61,9 +61,15 @@ lvalue_verdict_t sema_classify_write(sema_t *s, ast_node_t *n, symbol_t **root_o
     if (root_out) *root_out = lv.root;
     if (!lv.is_lvalue) return LV_NOT_LVALUE;
     if (lv.root && lv.root->kind == SYM_CONST) return LV_CONST;
-    if (lv.is_projection) return LV_OK;
+    if (lv.is_projection) {
+        if (lv.root && (lv.root->is_mut || lv.root->is_ref)) lv.root->mutated = true;
+        return LV_OK;
+    }
     if (!lv.root) return LV_OK;
-    if (lv.root->is_mut || lv.root->is_ref) return LV_OK;
+    if (lv.root->is_mut || lv.root->is_ref) {
+        lv.root->mutated = true;
+        return LV_OK;
+    }
     return LV_IMMUTABLE;
 }
 
@@ -163,7 +169,7 @@ type_t *sema_check_var_decl(sema_t *s, ast_node_t *n)
 
     if (declared && n->a &&
         (n->a->kind == AST_CALL || n->a->kind == AST_LITERAL ||
-         n->a->kind == AST_ARRAY_LIT))
+         n->a->kind == AST_ARRAY_LIT || n->a->kind == AST_TERNARY))
         s->expected = declared;
     type_t *initt = n->a ? sema_check_expr(s, n->a) : NULL;
     type_t *t;
@@ -278,6 +284,9 @@ static void check_each(sema_t *s, ast_node_t *n)
 {
     src_span_t sp = n->span;
     type_t *it = sema_check_expr(s, n->a);
+    if (n->a->kind == AST_ARRAY_LIT && n->a->list.len == 0)
+        SERR(s, 68, &n->a->span,
+             "'each' over an empty array literal: the loop body can never run");
     if (type_is_error(it)) return;
     {
         const char *keyname = n->c ? n->c->name : NULL;
@@ -434,6 +443,10 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         if (tt && n->b && n->b->kind == AST_LITERAL) s->expected = tt;
         type_t *vt = sema_check_expr(s, n->b);
         symbol_t *wroot = NULL;
+        if (n->a && n->a->kind == AST_INDEX && n->a->a && n->a->a->type_str &&
+            !strcmp(n->a->a->type_str, "str"))
+            SERR(s, 13, &n->span,
+                 "strings are immutable: cannot assign to an index of a 'str'");
         switch (sema_classify_write(s, n->a, &wroot)) {
         case LV_NOT_LVALUE:
             SERR(s, 13, &n->span, "assignment target is not assignable");
@@ -529,6 +542,17 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         if (c->kind != TY_BOOL && !type_is_error(c))
             SERR(s, 21, &n->a->span, "if condition must be bool, got '%s'",
                  type_to_string(s->tc, c));
+        if (n->a->kind == AST_LITERAL && n->a->op == TK_KW_FALSE)
+            SERR(s, 68, &n->a->span,
+                 "'if' condition is always false: its body can never run");
+        else if (n->a->kind == AST_LITERAL && n->a->op == TK_KW_TRUE) {
+            if (n->c)
+                SERR(s, 68, &n->a->span,
+                     "'if' condition is always true: the 'else' branch can never run");
+            else
+                SERR(s, 68, &n->a->span,
+                     "'if' condition is always true: remove the redundant 'if'");
+        }
         if (n->b && n->b->kind == AST_BLOCK && n->b->list.len == 0)
             SERR(s, 60, &n->b->span,
                  "empty 'if' branch (it must contain at least one statement)");
@@ -546,6 +570,9 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         if (c->kind != TY_BOOL && !type_is_error(c))
             SERR(s, 21, &n->a->span, "until condition must be bool, got '%s'",
                  type_to_string(s->tc, c));
+        if (n->a->kind == AST_LITERAL && n->a->op == TK_KW_FALSE)
+            SERR(s, 68, &n->a->span,
+                 "'until' condition is always false: the loop body can never run");
         s->loop_depth++;
         check_stmt(s, n->b);
         s->loop_depth--;
@@ -556,6 +583,21 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         if (!type_is_numeric(c) && !type_is_error(c))
             SERR(s, 63, &n->a->span, "repeat count must be a number, got '%s'",
                  type_to_string(s->tc, c));
+        if (!n->c) {
+            if (n->a->kind == AST_LITERAL &&
+                ((n->a->value.kind == TV_INT && n->a->value.as.i == 0) ||
+                 (n->a->value.kind == TV_FLOAT && n->a->value.as.f == 0)))
+                SERR(s, 68, &n->a->span,
+                     "'repeat' count is the constant 0: the loop body can never run");
+            else if ((n->a->kind == AST_UNARY && n->a->op == TK_MINUS && n->a->a &&
+                      n->a->a->kind == AST_LITERAL) ||
+                     (n->a->kind == AST_LITERAL && n->a->value.kind == TV_INT &&
+                      n->a->type_str && n->a->type_str[0] != 'u' &&
+                      (long long)n->a->value.as.i < 0))
+                SERR(s, 68, &n->a->span,
+                     "'repeat' count is a negative constant: the loop body can never "
+                     "run");
+        }
         if (n->c) {
             type_t *e = sema_check_expr(s, n->c);
             if (!type_is_numeric(e) && !type_is_error(e))
@@ -623,6 +665,9 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         if (s->cur_func && s->cur_func->infer_ret) {
             type_t *vt = n->a ? sema_check_expr(s, n->a) : ty(s, TY_VOID);
             s->cur_func->ret = vt;
+            s->cur_func->ret_span = n->span;
+            s->cur_func->ret_weak =
+                n->a && n->a->kind == AST_LITERAL && n->a->op == TK_INT;
             s->cur_func->infer_ret = false;
             break;
         }
@@ -631,12 +676,36 @@ static void check_stmt(sema_t *s, ast_node_t *n)
             s->expected = ret;
             type_t *vt = sema_check_expr(s, n->a);
             s->expected = NULL;
+            if (s->cur_func && type_is_float(ret)) {
+                if (type_is_integer(vt)) {
+                    if (!s->cur_func->ret_int_seen) s->cur_func->ret_int_span = n->span;
+                    s->cur_func->ret_int_seen = true;
+                } else if (type_is_float(vt))
+                    s->cur_func->ret_float_seen = true;
+            }
             if (ret->kind == TY_VOID)
                 SERR(s, 49, &n->span, "cannot return a value from a void function");
-            else if (!type_assignable(ret, vt))
-                SERR(s, 2, &n->span, "return type mismatch: expected '%s', got '%s'",
-                     type_to_string(s->tc, ret), type_to_string(s->tc, vt));
-            else if (ret->kind == TY_DYN)
+            else if (!type_assignable(ret, vt)) {
+                bool inferred =
+                    s->cur_func && s->cur_func->decl && !s->cur_func->decl->type;
+                if (inferred && !s->lam && s->cur_func->ret_weak &&
+                    type_is_numeric(ret) && type_is_numeric(vt)) {
+                    s->cur_func->ret = vt;
+                    s->cur_func->ret_span = n->span;
+                    s->cur_func->ret_weak =
+                        n->a->kind == AST_LITERAL && n->a->op == TK_INT;
+                    s->cur_func->ret_widened = true;
+                } else if (inferred)
+                    SERR(s, 2, &n->span,
+                         "conflicting inferred return types for '%s': an earlier "
+                         "'ret' (line %u) produces '%s', this one produces '%s'; "
+                         "annotate the function's return type explicitly",
+                         s->cur_func->decl->name, s->cur_func->ret_span.begin.line,
+                         type_to_string(s->tc, ret), type_to_string(s->tc, vt));
+                else
+                    SERR(s, 2, &n->span, "return type mismatch: expected '%s', got '%s'",
+                         type_to_string(s->tc, ret), type_to_string(s->tc, vt));
+            } else if (ret->kind == TY_DYN)
                 n->a = coerce_to_dyn(s, ret, n->a, vt);
         } else if (ret->kind != TY_VOID) {
             SERR(s, 48, &n->span, "missing return value; function returns '%s'",
@@ -664,6 +733,60 @@ static void check_stmt(sema_t *s, ast_node_t *n)
     }
 }
 
+static bool loopless_break(ast_node_t *n)
+{
+    if (!n) return false;
+    switch (n->kind) {
+    case AST_BREAK:
+        return true;
+    case AST_BLOCK: {
+        size_t i = 0;
+        for (; i < n->list.len; i++)
+            if (loopless_break((ast_node_t *)n->list.data[i])) return true;
+        return false;
+    }
+    case AST_IF:
+        return loopless_break(n->b) || loopless_break(n->c);
+    default:
+        return false;
+    }
+}
+
+bool sema_stmt_terminates(sema_t *s, ast_node_t *n)
+{
+    if (!n) return false;
+    switch (n->kind) {
+    case AST_RETURN:
+    case AST_BREAK:
+    case AST_CONTINUE:
+        return true;
+    case AST_BLOCK: {
+        size_t i = 0;
+        for (; i < n->list.len; i++)
+            if (sema_stmt_terminates(s, (ast_node_t *)n->list.data[i])) return true;
+        return false;
+    }
+    case AST_IF:
+        return n->c && sema_stmt_terminates(s, n->b) && sema_stmt_terminates(s, n->c);
+    case AST_UNTIL:
+        return n->a && n->a->kind == AST_LITERAL && n->a->op == TK_KW_TRUE &&
+               !loopless_break(n->b);
+    case AST_EXPR_STMT: {
+        ast_node_t *c = n->a;
+        if (c && c->kind == AST_CALL && c->a && c->a->kind == AST_IDENTIFIER) {
+            symbol_t *sym = scope_lookup(s->cur, c->a->name);
+            if (sym && sym->kind == SYM_FUNC && sym->overloads.len == 1) {
+                func_sig_t *sig = (func_sig_t *)sym->overloads.data[0];
+                if (sig->decl && sig->decl->is_noret) return true;
+            }
+        }
+        return false;
+    }
+    default:
+        return false;
+    }
+}
+
 void sema_check_block(sema_t *s, ast_node_t *block)
 {
     scope_t *sc = scope_new(s->a, SCOPE_BLOCK, s->cur);
@@ -675,6 +798,18 @@ void sema_check_block(sema_t *s, ast_node_t *block)
         for (; i < block->list.len; i++)
             check_stmt(s, (ast_node_t *)block->list.data[i]);
     }
+    if (!s->requal) {
+        size_t i = 0;
+        for (; i + 1 < block->list.len; i++) {
+            if (sema_stmt_terminates(s, (ast_node_t *)block->list.data[i])) {
+                ast_node_t *dead = (ast_node_t *)block->list.data[i + 1];
+                SERR(s, 70, &dead->span,
+                     "unreachable code: the previous statement always exits this "
+                     "block");
+                break;
+            }
+        }
+    }
 
     {
         size_t i = 0;
@@ -683,6 +818,12 @@ void sema_check_block(sema_t *s, ast_node_t *block)
             if (v->kind == SYM_VAR && !v->used && v->decl && v->name && v->name[0] != '_')
                 SERR(s, 59, &v->decl->span,
                      "unused variable '%s' (prefix with '_' if intentional)", v->name);
+            else if (v->kind == SYM_VAR && v->is_mut && !v->mutated && v->decl &&
+                     !v->decl->synthetic && v->name && v->name[0] != '_')
+                SERR(s, 69, &v->decl->span,
+                     "variable '%s' is declared 'mut' but never mutated; remove 'mut' "
+                     "or declare it 'const'",
+                     v->name);
         }
     }
     s->cur = saved;

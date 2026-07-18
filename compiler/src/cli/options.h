@@ -26,8 +26,10 @@ typedef enum {
     CMD_BUILD,
     CMD_OBJ,
     CMD_LLVM,
+    CMD_JS,
     CMD_RUN,
     CMD_LAYOUT_BUILD,
+    CMD_WEB,
     CMD_DEBUG,
     CMD_MEMCHECK,
     CMD_NEW,
@@ -52,6 +54,7 @@ typedef struct {
     diag_format_t diag_format;
     const char *new_name;
     bool inline_mode;
+    bool split;
     const char *inputs[SALAM_MAX_INPUTS];
     int input_count;
     const char *output;

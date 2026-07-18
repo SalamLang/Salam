@@ -781,7 +781,13 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
         if (verr) LLVMDisposeMessage(verr);
     }
 
-    if (opts->output_mode == LLVM_OUT_IR) {
+    /*
+     * IR output at -O0 is the raw front-end IR, emitted as-is. At -O1+ we run
+     * the middle-end pipeline and rewrite the .ll so `--emit-llvm -O3` shows
+     * the IR that actually runs (matching `clang -O3 -emit-llvm`), not the
+     * unoptimized front-end dump.
+     */
+    if (opts->output_mode == LLVM_OUT_IR && opts->opt_level == LLVM_OPT_O0) {
         goto cleanup;
     }
 
@@ -824,6 +830,18 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
         }
 
         run_opt(log, mod, tm, opts->opt_level);
+
+        if (opts->output_mode == LLVM_OUT_IR) {
+            char *emit_err = NULL;
+            if (LLVMPrintModuleToFile(mod, ll_path, &emit_err)) {
+                LOG_E(log, PH_DRIVER, "LLVM IR write failed: %s",
+                      emit_err ? emit_err : "(unknown)");
+                if (emit_err) LLVMDisposeMessage(emit_err);
+                rc = 2;
+            }
+            LLVMDisposeTargetMachine(tm);
+            goto cleanup;
+        }
 
         if (opts->output_mode == LLVM_OUT_BITCODE) {
             if (LLVMWriteBitcodeToFile(mod, opts->output_file) != 0) {

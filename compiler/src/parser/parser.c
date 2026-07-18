@@ -13,12 +13,15 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
+#include "core/sb.h"
 #include "parser/parser.h"
 #include "parser/parser_internal.h"
 #include "i18n/i18n.h"
 
 static ast_node_t *parse_program(parser_t *p);
-static ast_node_t *parse_import_entry(parser_t *p);
+static ast_node_t *parse_string_import_entry(parser_t *p);
+static ast_node_t *parse_ident_import_entry(parser_t *p);
 static void parse_imports_into(parser_t *p, ast_node_t *prog);
 static void parse_top_level_item_into(parser_t *p, ast_node_t *dest, vec_t *pending);
 static ast_node_t *parse_toplevel_if(parser_t *p);
@@ -34,11 +37,27 @@ static void attach_pending(parser_t *p, ast_node_t *target, vec_t *pending)
     pending->len = 0;
 }
 
+static bool metas_have_lang(const vec_t *out, const char *lang)
+{
+    size_t i = 0;
+    for (; i + 1 < out->len; i += 2)
+        if (strcmp((const char *)out->data[i], lang) == 0) return true;
+    return false;
+}
+
 void parse_metas(parser_t *p, vec_t *out)
 {
     p_skip_terminators(p);
     while (p_at(p, TK_META)) {
         const char *lang = p_peek(p)->lexeme;
+        if (metas_have_lang(out, lang)) {
+            char buf[192];
+            sal_snprintf(buf, sizeof buf,
+                         i18n_tr("duplicate '@%s' marker on one definition; give one "
+                                 "marker several values instead: @%s \"a\" \"b\""),
+                         lang, lang);
+            p_error(p, buf);
+        }
         p_advance(p);
         if (p_at(p, TK_LBRACKET)) {
             p_advance(p);
@@ -54,9 +73,11 @@ void parse_metas(parser_t *p, vec_t *out)
             }
             p_expect(p, TK_RBRACKET, "']' to close annotation list");
         } else if (p_at(p, TK_STRING)) {
-            vec_push(p->a, out, CONST_CAST(lang));
-            vec_push(p->a, out, CONST_CAST(p_peek(p)->value.as.s));
-            p_advance(p);
+            while (p_at(p, TK_STRING)) {
+                vec_push(p->a, out, CONST_CAST(lang));
+                vec_push(p->a, out, CONST_CAST(p_peek(p)->value.as.s));
+                p_advance(p);
+            }
         } else {
             p_error(p, "expected a string after '@' annotation");
         }
@@ -181,7 +202,12 @@ static ast_node_t *parse_program(parser_t *p)
     return prog;
 }
 
-static ast_node_t *parse_import_entry(parser_t *p)
+static bool p_at_string_import(parser_t *p)
+{
+    return p_at(p, TK_STRING) || (p_at(p, TK_IDENT) && p_peek2(p)->kind == TK_STRING);
+}
+
+static ast_node_t *parse_string_import_entry(parser_t *p)
 {
     ast_node_t *n = p_mk(p, AST_IMPORT);
     const char *alias = NULL;
@@ -189,13 +215,9 @@ static ast_node_t *parse_import_entry(parser_t *p)
         alias = p_peek(p)->lexeme;
         p_advance(p);
     }
-    const token_t *t = p_peek(p);
-    if (t->kind == TK_STRING) {
+    if (p_at(p, TK_STRING)) {
         n->name = alias;
-        n->value = t->value;
-        p_advance(p);
-    } else if (t->kind == TK_IDENT) {
-        n->name = t->lexeme;
+        n->value = p_peek(p)->value;
         p_advance(p);
     } else {
         p_error(p, "expected import path string");
@@ -204,20 +226,43 @@ static ast_node_t *parse_import_entry(parser_t *p)
     return n;
 }
 
+static ast_node_t *parse_ident_import_entry(parser_t *p)
+{
+    ast_node_t *n = p_mk(p, AST_IMPORT);
+    sb_t b;
+    sb_init(&b);
+    sb_puts(&b, p_munch_name(p));
+    while (p_at(p, TK_DOT)) {
+        p_advance(p);
+        sb_putc(&b, '.');
+        sb_puts(&b, p_munch_name(p));
+    }
+    n->name = arena_strdup(p->a, sb_cstr(&b));
+    sb_free(&b);
+    n->value.kind = TV_NONE;
+    p_fin(p, n);
+    return n;
+}
+
 static void parse_imports_into(parser_t *p, ast_node_t *prog)
 {
     p_advance(p);
-    if (p_match(p, TK_LPAREN)) {
-        p_skip_terminators(p);
-        while (!p_at(p, TK_RPAREN) && !p_at_eof(p)) {
-            size_t before = p->pos;
-            ast_add(p->a, prog, parse_import_entry(p));
-            p_skip_terminators(p);
-            if (p->pos == before) p_advance(p);
-        }
-        p_expect(p, TK_RPAREN, "')' to close import group");
+    if (p_at(p, TK_LPAREN)) {
+        p_error(p, "grouped imports are not supported; write import \"a\" \"b\"");
+        while (!p_at(p, TK_RPAREN) && !p_at_eof(p))
+            p_advance(p);
+        p_match(p, TK_RPAREN);
+        p_term(p);
+        return;
+    }
+    if (p_at_string_import(p)) {
+        ast_add(p->a, prog, parse_string_import_entry(p));
+        while (p_at_string_import(p))
+            ast_add(p->a, prog, parse_string_import_entry(p));
+    } else if (p_at(p, TK_IDENT)) {
+        ast_add(p->a, prog, parse_ident_import_entry(p));
     } else {
-        ast_add(p->a, prog, parse_import_entry(p));
+        p_error(p, "expected import path string");
     }
     p_term(p);
 }

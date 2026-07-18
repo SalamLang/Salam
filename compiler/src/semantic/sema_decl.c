@@ -257,7 +257,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
                 }
                 symbol_t *iface = scope_lookup(s->global, d->name);
                 if (!iface || iface->kind != SYM_INTERFACE)
-                    SERR(s, 1, &d->span, "'%s' in `impl ... for ...` is not an interface",
+                    SERR(s, 1, &d->span, "'%s' in `impl ... on ...` is not an interface",
                          d->name);
                 {
                     size_t j = 0;
@@ -454,7 +454,40 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
         SERR(s, 61, &fn->span,
              "empty function '%s' (its body must contain at least one statement)",
              fn->name);
-    if (fn->a) sema_check_block(s, fn->a);
+    {
+        size_t errs0 = s->diag ? s->diag->errors : 0;
+        if (fn->a) sema_check_block(s, fn->a);
+        if (fn->a && sig && sig->ret_widened) {
+            if (s->diag && s->diag->errors == errs0) {
+                bool saved_rq = s->requal;
+                int rounds = 0;
+                s->requal = true;
+                while (sig->ret_widened && rounds < 3) {
+                    sig->ret_widened = false;
+                    rounds++;
+                    LOG_D(s->log, PH_SEMANTIC,
+                          "re-check '%s' with widened return type '%s'", fn->name,
+                          type_to_string(s->tc, sig->ret));
+                    sema_check_block(s, fn->a);
+                }
+                s->requal = saved_rq;
+            } else
+                sig->ret_widened = false;
+        }
+    }
+    if (fn->a && sig && fn->type && type_is_float(sig->ret) && sig->ret_int_seen &&
+        !sig->ret_float_seen)
+        SERR(s, 67, &sig->ret_int_span,
+             "function '%s' declares return type '%s' but every 'ret' returns an "
+             "integer; return a '%s' value or declare an integer return type",
+             fn->name, type_to_string(s->tc, sig->ret), type_to_string(s->tc, sig->ret));
+    if (fn->a && sig && sig->ret && sig->ret->kind != TY_VOID &&
+        !type_is_error(sig->ret) && !fn->is_noret && !fn->is_extern &&
+        !sema_stmt_terminates(s, fn->a))
+        SWARN(s, 71, &fn->span,
+              "function '%s' can fall off its end without returning a '%s' value; "
+              "add a final 'ret'",
+              fn->name, type_to_string(s->tc, sig->ret));
     LOG_D(s->log, PH_SEMANTIC, "exit function '%s'", fn->name);
 
     if (fn->a) {

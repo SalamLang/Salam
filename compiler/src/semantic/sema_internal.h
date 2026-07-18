@@ -55,6 +55,7 @@ typedef struct {
     bool prelude_tried;
     bool in_pkg;
     bool relax_unused;
+    bool requal;
     int each_n;
     const cc_table_t *cc;
 } sema_t;
@@ -65,7 +66,10 @@ void sema_load_prelude(sema_t *s);
     diag_report((s)->diag, SEV_ERROR, (code), (s)->file, (span), __VA_ARGS__)
 
 #define SWARN(s, code, span, ...)                                                        \
-    diag_report((s)->diag, SEV_WARNING, (code), (s)->file, (span), __VA_ARGS__)
+    do {                                                                                 \
+        if (!(s)->requal)                                                                \
+            diag_report((s)->diag, SEV_WARNING, (code), (s)->file, (span), __VA_ARGS__); \
+    } while (0)
 
 type_t *sema_ty(sema_t *s, type_kind_t k);
 
@@ -109,6 +113,8 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode);
 
 type_t *sema_check_expr(sema_t *s, ast_node_t *node);
 
+void sema_fold_expr(sema_t *s, ast_node_t *node);
+
 void sema_check_layout(sema_t *s, ast_node_t *layout, const char *parent);
 
 const char *sema_op_method(token_kind_t k);
@@ -146,6 +152,8 @@ bool defined_within(scope_t *start, scope_t *boundary, const char *name);
 void record_capture(sema_t *s, ast_node_t *id, type_t *t);
 
 void sema_check_block(sema_t *s, ast_node_t *block);
+
+bool sema_stmt_terminates(sema_t *s, ast_node_t *node);
 
 type_t *sema_check_var_decl(sema_t *s, ast_node_t *n);
 

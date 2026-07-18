@@ -27,7 +27,7 @@ BINDIR   := $(PREFIX)/bin
 DATADIR  := $(PREFIX)/share/salam
 
 SRCDIRS := core source condcomp logger xml diag i18n langpack        \
-           token lexer ast parser semantic codegen llvm interp       \
+           token lexer ast parser semantic codegen jsgen llvm interp \
            layout fmt cli driver
 
 SRCS     := $(filter-out src/salam.c, $(wildcard $(addsuffix /*.c, $(addprefix src/,$(SRCDIRS)))))

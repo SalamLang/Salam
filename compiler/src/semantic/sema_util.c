@@ -51,6 +51,43 @@ symbol_t *struct_sym_of(type_t *t)
     return NULL;
 }
 
+static bool su_zwnj(const char *s)
+{
+    return (unsigned char)s[0] == 0xE2 && (unsigned char)s[1] == 0x80 &&
+           (unsigned char)s[2] == 0x8C;
+}
+
+static int su_fold(const char **p)
+{
+    const unsigned char *s = (const unsigned char *)*p;
+    if (s[0] == 0) return 0;
+    if ((s[0] == 0xD9 && s[1] == 0x8A) || (s[0] == 0xDB && s[1] == 0x8C)) {
+        *p += 2;
+        return 0x101;
+    }
+    if ((s[0] == 0xD9 && s[1] == 0x83) || (s[0] == 0xDA && s[1] == 0xA9)) {
+        *p += 2;
+        return 0x102;
+    }
+    *p += 1;
+    return s[0];
+}
+
+static bool su_ident_eq(const char *a, const char *b)
+{
+    for (;;) {
+        int ka, kb;
+        while (su_zwnj(a) || *a == ' ')
+            a += (*a == ' ') ? 1 : 3;
+        while (su_zwnj(b) || *b == ' ')
+            b += (*b == ' ') ? 1 : 3;
+        ka = su_fold(&a);
+        kb = su_fold(&b);
+        if (ka != kb) return false;
+        if (ka == 0) return true;
+    }
+}
+
 const char *intrinsic_type_canon(const char *name)
 {
     static const struct {
@@ -58,14 +95,14 @@ const char *intrinsic_type_canon(const char *name)
     } tab[] = {
         {"وکتور", "متجه", "Vector"},
         {"نگاشت", "خريطة", "HashMap"},
-        {"پیمایشگر_نگاشت", "مكرر_خريطة", "MapIter"},
+        {"پیمایشگرنگاشت", "مكررخريطة", "MapIter"},
         {"پرونده", "ملف", "File"},
     };
     if (!name) return name;
     {
         size_t i = 0;
         for (; i < sizeof(tab) / sizeof(tab[0]); i++)
-            if (strcmp(name, tab[i].fa) == 0 || strcmp(name, tab[i].ar) == 0)
+            if (su_ident_eq(name, tab[i].fa) || su_ident_eq(name, tab[i].ar))
                 return tab[i].en;
     }
     return name;
@@ -91,13 +128,13 @@ const char *intrinsic_method_canon(const char *name)
         {"اندازه", "حجم", "size"},
         {"پیمایش", "تكرار", "iter"},
 
-        {"دارد_بعدی", "لديه_التالي", "has_next"},
+        {"داردبعدی", "يوجدتالي", "has_next"},
         {"کلید", "مفتاح", "key"},
         {"مقدار", "قيمة", "value"},
         {"بعدی", "التالي", "next"},
 
         {"خواندن", "قراءة", "read"},
-        {"خواندن_خط", "قراءة_سطر", "readline"},
+        {"خواندن خط", "قراءةسطر", "readline"},
         {"نوشتن", "كتابة", "write"},
         {"جابجایی", "انتقال", "seek"},
         {"ببند", "أغلق", "close"},
@@ -107,14 +144,14 @@ const char *intrinsic_method_canon(const char *name)
         {"بیاب", "ابحث", "find"},
         {"بشکاف", "قسم", "split"},
         {"پیراست", "شذب", "trim"},
-        {"به_صحیح", "إلى_صحيح", "to_int"},
-        {"به_اعشار", "إلى_عشري", "to_float"},
+        {"به صحیح", "إلىصحيح", "to_int"},
+        {"به اعشار", "إلىعشري", "to_float"},
     };
     if (!name) return name;
     {
         size_t i = 0;
         for (; i < sizeof(tab) / sizeof(tab[0]); i++)
-            if (strcmp(name, tab[i].fa) == 0 || strcmp(name, tab[i].ar) == 0)
+            if (su_ident_eq(name, tab[i].fa) || su_ident_eq(name, tab[i].ar))
                 return tab[i].en;
     }
     return name;
@@ -131,6 +168,16 @@ const char *alias_for_lang(const vec_t *aliases, const char *lang)
     return NULL;
 }
 
+static bool aliases_have(const vec_t *aliases, const char *lang, const char *name)
+{
+    size_t i = 0;
+    for (; i + 1 < aliases->len; i += 2)
+        if (strcmp((const char *)aliases->data[i], lang) == 0 &&
+            su_ident_eq((const char *)aliases->data[i + 1], name))
+            return true;
+    return false;
+}
+
 const char *scope_member_canon(scope_t *members, const char *name)
 {
     const char *lang = i18n_lang();
@@ -140,8 +187,7 @@ const char *scope_member_canon(scope_t *members, const char *name)
         for (; i < members->symbols.len; i++) {
             symbol_t *m = (symbol_t *)members->symbols.data[i];
             if (!m->decl) continue;
-            const char *a = alias_for_lang(&m->decl->aliases, lang);
-            if (a && strcmp(a, name) == 0) return m->name;
+            if (aliases_have(&m->decl->aliases, lang, name)) return m->name;
         }
     }
     return name;

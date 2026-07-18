@@ -6,7 +6,6 @@
   - [Building the Wasm module](#building-the-wasm-module)
   - [Running it](#running-it)
   - [Trying the interpreter without the browser](#trying-the-interpreter-without-the-browser)
-  - [Scope](#scope)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -73,15 +72,3 @@ The same interpreter runs natively:
 salam exec examples/fa/types/07_struct.salam --lang=fa
 salam run  --interp examples/en/apps/brainfuck.salam
 ```
-
-## Scope
-
-The interpreter targets pure-compute programs (functions, structs, enums,
-arrays, [`Vector`](https://en.wikipedia.org/wiki/Dynamic_array), [`HashMap`](https://en.wikipedia.org/wiki/Hash_table), [lambdas](https://en.wikipedia.org/wiki/Anonymous_function)/[closures](<https://en.wikipedia.org/wiki/Closure_(computer_programming)>), [operator overloading](https://en.wikipedia.org/wiki/Operator_overloading), [generics](https://en.wikipedia.org/wiki/Generic_programming),
-[`defer`](<https://en.wikipedia.org/wiki/Defer_(programming_idiom)>), `char`/strings, control flow) in both English and Persian, and matches
-the C backend's output across the example suite. It intentionally does **not**
-support things that need a real OS or the [C ABI](https://en.wikipedia.org/wiki/Application_binary_interface) (file/socket/thread/HTTP/SQLite
-APIs, [FFI](https://en.wikipedia.org/wiki/Foreign_function_interface)/`extern "C"`, and manual memory (`mem.Allocate`)), none
-of which apply in a browser sandbox. The `&ref` scalar parameters, multi-file
-user imports, and the fully Persian-localized std API (`ریاضی.جذر`) are current
-limitations of the interpreter, not the language.

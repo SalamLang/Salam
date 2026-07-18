@@ -34,6 +34,7 @@ typedef struct {
     scope_t *cur_fn_home;
     bool safe;
     bool debug_info;
+    bool single_threaded;
     const char *src_path;
     int tmpn;
     bool cur_sret;

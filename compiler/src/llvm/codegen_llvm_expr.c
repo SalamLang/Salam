@@ -386,6 +386,38 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
     vec_init(&segs);
     pf_build(ll->a, n, nl, &segs);
     if (segs.len == 0) return;
+
+    bool buffered = ll->single_threaded && !err;
+
+    if (buffered) {
+        bool all_lit = true;
+        {
+            size_t i = 0;
+            for (; i < segs.len; i++)
+                if (((pf_seg_t *)segs.data[i])->kind != PF_LIT) {
+                    all_lit = false;
+                    break;
+                }
+        }
+        if (all_lit) {
+            sb_t raw;
+            sb_init(&raw);
+            {
+                size_t i = 0;
+                for (; i < segs.len; i++)
+                    sb_puts(&raw, ((pf_seg_t *)segs.data[i])->text);
+            }
+            size_t rawlen = raw.len;
+            const char *lit = ll_strconst(ll, sb_cstr(&raw));
+            sb_free(&raw);
+            if (rawlen) {
+                ll_need(ll, LL_H_OUTBUF);
+                ll_emit(ll, "call void @salam_out_write(ptr %s, i64 %zu)", lit, rawlen);
+            }
+            return;
+        }
+    }
+
     sb_t fmt;
     sb_init(&fmt);
     sb_t args;
@@ -441,12 +473,23 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
         }
     }
     const char *f = ll_strconst(ll, sb_cstr(&fmt));
+    if (ll->single_threaded) {
+        ll_need(ll, LL_H_OUTBUF);
+        ll_emit(ll, "call void @salam_out_flush()");
+    }
     const char *t = ll_new_tmp(ll);
-    if (err)
+    if (err) {
         ll_emit(ll, "%s = call i32 (i32, ptr, ...) @dprintf(i32 2, ptr %s%s)", t, f,
                 sb_cstr(&args));
-    else
+    } else {
         ll_emit(ll, "%s = call i32 (ptr, ...) @printf(ptr %s%s)", t, f, sb_cstr(&args));
+        if (buffered) {
+            const char *sp = ll_new_tmp(ll);
+            ll_emit(ll, "%s = load ptr, ptr @stdout", sp);
+            const char *t2 = ll_new_tmp(ll);
+            ll_emit(ll, "%s = call i32 @fflush(ptr %s)", t2, sp);
+        }
+    }
     sb_free(&fmt);
     sb_free(&args);
 }
@@ -554,6 +597,10 @@ static llv_t ll_call_len(ll_t *ll, ast_node_t *n)
         ll_error(ll, n, "len() of an unsupported type");
         return ll_poison("i32");
     }
+    {
+        long klen = ast_str_lit_len(arg);
+        if (klen >= 0) return (llv_t){ll_fmt(ll, "%ld", klen), "i32"};
+    }
     llv_t v = ll_expr(ll, arg);
     const char *l = ll_new_tmp(ll);
     ll_emit(ll, "%s = call %s @strlen(ptr %s)", l, ll->usize, v.ref);
@@ -605,9 +652,16 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
                         llv_t *out)
 {
     size_t na = n->list.len;
+    if (!strcmp(m, "len") && na == 0) {
+        long klen = ast_str_lit_len(obj);
+        if (klen >= 0) {
+            *out = (llv_t){ll_fmt(ll, "%ld", klen), "i32"};
+            return true;
+        }
+    }
     const char *recv = ll_expr(ll, obj).ref;
     const char *r;
-    if (!strcmp(m, "len") || !strcmp(m, "length")) {
+    if (!strcmp(m, "len")) {
         const char *l = ll_new_tmp(ll);
         ll_emit(ll, "%s = call %s @strlen(ptr %s)", l, ll->usize, recv);
         *out = (llv_t){ll_usize_to_i32(ll, l), "i32"};
@@ -861,11 +915,11 @@ static llv_t ll_call(ll_t *ll, ast_node_t *n)
     if (callee && callee->kind == AST_MEMBER) return ll_call_method(ll, n, callee);
     if (callee && callee->kind == AST_IDENTIFIER) {
         const char *nm = callee->name;
-        if (!strcmp(nm, "print") || !strcmp(nm, "_")) {
+        if (!strcmp(nm, "print")) {
             ll_lower_print(ll, n, false, 0);
             return (llv_t){"0", "void"};
         }
-        if (!strcmp(nm, "println") || !strcmp(nm, "__")) {
+        if (!strcmp(nm, "println")) {
             ll_lower_print(ll, n, true, 0);
             return (llv_t){"0", "void"};
         }
@@ -1210,6 +1264,31 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
     }
     case AST_BINARY:
         return ll_binary(ll, n);
+    case AST_TERNARY: {
+        const char *rt = n->type_str ? n->type_str : "i32";
+        const char *cond = ll_as_i1(ll, ll_expr(ll, n->a));
+        const char *thenL = ll_new_lbl(ll, "tern_then");
+        const char *elseL = ll_new_lbl(ll, "tern_else");
+        const char *tjoinL = ll_new_lbl(ll, "tern_tjoin");
+        const char *fjoinL = ll_new_lbl(ll, "tern_fjoin");
+        const char *endL = ll_new_lbl(ll, "tern_end");
+        ll_emit_term(ll, "br i1 %s, label %%%s, label %%%s", cond, thenL, elseL);
+        ll_emit_label(ll, thenL);
+        const char *tv = ll_conv(ll, ll_expr(ll, n->b), rt);
+        ll_emit_term(ll, "br label %%%s", tjoinL);
+        ll_emit_label(ll, tjoinL);
+        ll_emit_term(ll, "br label %%%s", endL);
+        ll_emit_label(ll, elseL);
+        const char *fv = ll_conv(ll, ll_expr(ll, n->c), rt);
+        ll_emit_term(ll, "br label %%%s", fjoinL);
+        ll_emit_label(ll, fjoinL);
+        ll_emit_term(ll, "br label %%%s", endL);
+        ll_emit_label(ll, endL);
+        const char *r = ll_new_tmp(ll);
+        ll_emit(ll, "%s = phi %s [ %s, %%%s ], [ %s, %%%s ]", r, ll_ty(ll, rt), tv,
+                tjoinL, fv, fjoinL);
+        return (llv_t){r, rt};
+    }
     case AST_UNARY:
         return ll_unary(ll, n);
     case AST_INCDEC:

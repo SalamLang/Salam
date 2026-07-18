@@ -34,6 +34,7 @@ void lx_scan_string(lx_t *L)
     token_value_t v;
     v.kind = TV_STRING;
     v.as.s = lx_decode_string(L, text, false);
+    v.slen = strlen(v.as.s);
     lx_emit_val(L, TK_STRING, &b, text, &v);
 }
 
@@ -60,6 +61,7 @@ void lx_scan_triple(lx_t *L)
     token_value_t v;
     v.kind = TV_STRING;
     v.as.s = lx_decode_string(L, text, true);
+    v.slen = strlen(v.as.s);
     lx_emit_val(L, TK_TRIPLE_STRING, &b, text, &v);
 }
 
@@ -88,6 +90,7 @@ void lx_scan_char(lx_t *L)
     token_value_t v;
     v.kind = TV_CHAR;
     v.as.i = lx_decode_char(text);
+    v.slen = 0;
     lx_emit_val(L, TK_CHAR, &b, text, &v);
 }
 
@@ -109,6 +112,7 @@ void lx_scan_raw_string(lx_t *L)
     token_value_t v;
     v.kind = TV_STRING;
     v.as.s = s;
+    v.slen = inner;
     lx_emit_val(L, TK_RAW_STRING, &b, text, &v);
 }
 
@@ -164,6 +168,7 @@ void lx_scan_utf8_char(lx_t *L)
         token_value_t v;
         v.kind = TV_STRING;
         v.as.s = (char *)CONST_CAST(bytes);
+        v.slen = nbytes;
         lx_emit_val(L, TK_UTF8_CHAR, &b, text, &v);
     }
 }

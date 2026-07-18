@@ -45,11 +45,17 @@ typedef struct {
     vec_t params;
     size_t required;
     type_t *ret;
+    src_span_t ret_span;
+    src_span_t ret_int_span;
+    bool ret_int_seen;
+    bool ret_float_seen;
     ast_node_t *decl;
     symbol_t *owner;
     const char *mangled;
     bool variadic;
     bool infer_ret;
+    bool ret_weak;
+    bool ret_widened;
     bool checked;
     bool in_check;
 } func_sig_t;
@@ -62,6 +68,7 @@ struct symbol_t {
     bool is_ref;
     bool is_pub;
     bool used;
+    bool mutated;
     ast_node_t *decl;
     vec_t overloads;
     scope_t *members;
@@ -85,6 +92,8 @@ struct scope_t {
     const char *label;
     scope_t *aux;
     const char *lang;
+    void **hindex;
+    size_t hcap;
 };
 
 scope_t *scope_new(arena_t *a, scope_kind_t kind, scope_t *parent);

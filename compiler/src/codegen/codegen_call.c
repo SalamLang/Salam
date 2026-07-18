@@ -145,9 +145,25 @@ static const char *cg_print_legacy(cg_t *cg, ast_node_t *n, bool nl, int err)
     return r;
 }
 
+/*
+ * In a single-threaded module all stdout goes through the salam_ob buffer, so a
+ * printf/salam_emit-based print must first flush that buffer and then push its
+ * own output out immediately, keeping the two in program order. Pure-literal
+ * prints skip this and write the buffer directly (the fast path).
+ */
+static const char *cg_order_stdout(cg_t *cg, const char *printf_expr)
+{
+    if (!cg->single_threaded) return printf_expr;
+    return cg_fmt(cg, "({ salam_out_flush(); %s; fflush(stdout); })", printf_expr);
+}
+
 static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
 {
-    if (err) return cg_print_legacy(cg, n, nl, err);
+    if (err) {
+        const char *e = cg_print_legacy(cg, n, nl, err);
+        if (cg->single_threaded) return cg_fmt(cg, "({ salam_out_flush(); %s; })", e);
+        return e;
+    }
     vec_t segs;
     vec_init(&segs);
     pf_build(cg->a, n, nl, &segs);
@@ -156,7 +172,30 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
         size_t i = 0;
         for (; i < segs.len; i++)
             if (((pf_seg_t *)segs.data[i])->kind == PF_CHAR)
-                return cg_print_legacy(cg, n, nl, err);
+                return cg_order_stdout(cg, cg_print_legacy(cg, n, nl, err));
+    }
+    if (cg->single_threaded) {
+        bool all_lit = true;
+        sb_t raw;
+        sb_init(&raw);
+        {
+            size_t i = 0;
+            for (; i < segs.len; i++) {
+                pf_seg_t *s = (pf_seg_t *)segs.data[i];
+                if (s->kind != PF_LIT) {
+                    all_lit = false;
+                    break;
+                }
+                sb_puts(&raw, s->text);
+            }
+        }
+        if (all_lit) {
+            size_t rawlen = raw.len;
+            const char *lit = cg_cescape(cg, sb_cstr(&raw));
+            sb_free(&raw);
+            return cg_fmt(cg, "SALAM_OUT_LIT(%s, %zu)", lit, rawlen);
+        }
+        sb_free(&raw);
     }
     sb_t fmt;
     sb_init(&fmt);
@@ -210,7 +249,7 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
     const char *al = arena_strdup(cg->a, sb_cstr(&args));
     sb_free(&fmt);
     sb_free(&args);
-    return cg_fmt(cg, "printf(%s%s)", cfmt, al);
+    return cg_order_stdout(cg, cg_fmt(cg, "printf(%s%s)", cfmt, al));
 }
 
 static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
@@ -241,8 +280,8 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
         const char *arg = cg_expr(cg, (ast_node_t *)n->list.data[1]);
         return cg_fmt(cg, "((void(*)(int64_t))(intptr_t)(%s))((int64_t)(%s))", fnp, arg);
     }
-    bool is_print = (!strcmp(nm, "print") || !strcmp(nm, "_"));
-    bool is_println = (!strcmp(nm, "println") || !strcmp(nm, "__"));
+    bool is_print = !strcmp(nm, "print");
+    bool is_println = !strcmp(nm, "println");
     bool is_printerr = !strcmp(nm, "printerr");
     bool is_printerrln = !strcmp(nm, "printerrln");
     if (is_print || is_println || is_printerr || is_printerrln) {
@@ -286,12 +325,15 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
     }
     if (!strcmp(nm, "len") && n->list.len == 1) {
         ast_node_t *arg = (ast_node_t *)n->list.data[0];
+        long klen;
         if (cg_is_slice_ts(arg->type_str))
             return cg_fmt(cg, "(int32_t)(%s).len", cg_expr(cg, arg));
         if (arg->type_str && strchr(arg->type_str, '[')) {
             long sz = array_size_of(arg->type_str);
             return cg_fmt(cg, "%ld", sz);
         }
+        klen = ast_str_lit_len(arg);
+        if (klen >= 0) return cg_fmt(cg, "%ld", klen);
         return cg_fmt(cg, "(int32_t)strlen(%s)", cg_expr(cg, arg));
     }
     if (!strcmp(nm, "char_code") && n->list.len == 1) {
@@ -396,8 +438,12 @@ static const char *call_file(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_
 
 static const char *call_str(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t *callee)
 {
-    const char *recv = cg_expr(cg, obj);
     const char *m = callee->name;
+    if (!strcmp(m, "len")) {
+        long klen = ast_str_lit_len(obj);
+        if (klen >= 0) return cg_fmt(cg, "%ld", klen);
+    }
+    const char *recv = cg_expr(cg, obj);
     const char *a0 = arg_at(cg, n, 0);
     const char *a1 = arg_at(cg, n, 1);
     if (!strcmp(m, "len")) return cg_fmt(cg, "(int32_t)strlen(%s)", recv);

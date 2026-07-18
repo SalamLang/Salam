@@ -33,6 +33,9 @@ static unsigned bp_of(token_kind_t k)
     case TK_POWER_EQ:
         return BP(10, 10);
 
+    case TK_QUESTION:
+        return BP(15, 14);
+
     case TK_OR:
         return BP(20, 21);
 
@@ -193,6 +196,18 @@ static ast_node_t *led_cast(parser_t *p, ast_node_t *lhs)
     return cast;
 }
 
+static ast_node_t *led_ternary(parser_t *p, ast_node_t *lhs, unsigned bp)
+{
+    p_advance(p);
+    ast_node_t *n = ast_new(p->a, AST_TERNARY, lhs ? &lhs->span : &p_peek(p)->span);
+    n->a = lhs;
+    n->b = parse_expr_bp(p, 0);
+    p_expect(p, TK_COLON, "':' in conditional expression 'cond ? a : b'");
+    n->c = parse_expr_bp(p, BP_RIGHT(bp));
+    p_fin(p, n);
+    return n;
+}
+
 static ast_node_t *led_assign(parser_t *p, ast_node_t *lhs, token_kind_t op, unsigned bp)
 {
     p_advance(p);
@@ -215,6 +230,8 @@ static ast_node_t *parse_led(parser_t *p, ast_node_t *lhs, token_kind_t op, unsi
         return led_member(p, lhs);
     case TK_KW_AS:
         return led_cast(p, lhs);
+    case TK_QUESTION:
+        return led_ternary(p, lhs, bp);
     case TK_ASSIGN:
     case TK_PLUS_EQ:
     case TK_MINUS_EQ:

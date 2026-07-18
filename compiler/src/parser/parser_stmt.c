@@ -82,10 +82,6 @@ static ast_node_t *parse_statement(parser_t *p)
         return parse_until(p);
     case TK_KW_EACH:
         return parse_each(p);
-    case TK_KW_FOR:
-        p_error(p, "'for' loops were removed; use 'repeat', 'each', or 'until'");
-        p_advance(p);
-        return NULL;
     case TK_KW_REPEAT:
         return parse_repeat(p);
     case TK_KW_RET:

@@ -236,10 +236,19 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         switch (n->op) {
         case TK_INT: {
             unsigned long long u = (unsigned long long)n->value.as.i;
-            const char *suf = u > 9223372036854775807ULL ? "ULL"
-                              : u > 2147483647ULL        ? "LL"
-                                                         : "";
-            return cg_fmt(cg, "%llu%s", u, suf);
+            bool uns = n->type_str && n->type_str[0] == 'u';
+            if (!uns && u > 9223372036854775807ULL) {
+                long long v = (long long)u;
+                return v == (-9223372036854775807LL - 1LL)
+                           ? "(-9223372036854775807LL - 1LL)"
+                           : cg_fmt(cg, "(%lldLL)", v);
+            }
+            {
+                const char *suf = u > 9223372036854775807ULL ? "ULL"
+                                  : u > 2147483647ULL        ? "LL"
+                                                             : "";
+                return cg_fmt(cg, "%llu%s", u, suf);
+            }
         }
         case TK_FLOAT: {
             char buf[64];
@@ -342,6 +351,9 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         return cg_fmt(cg, "(%s %s %s)", cg_expr(cg, n->a), cg_op(n->op),
                       cg_expr(cg, n->b));
     }
+    case AST_TERNARY:
+        return cg_fmt(cg, "((%s) ? (%s) : (%s))", cg_expr(cg, n->a), cg_expr(cg, n->b),
+                      cg_expr(cg, n->c));
     case AST_UNARY: {
         if (n->a && n->a->type_str) {
             char sname[96];
@@ -451,17 +463,24 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         const char *ec = cg_ctype(cg, elem);
         const char *base = cg_expr(cg, n->a);
         const char *lo = n->b ? cg_expr(cg, n->b) : "0";
+        int t = ++cg->tmpn;
         if (cg_is_slice_ts(n->a->type_str)) {
             if (n->c)
-                return cg_fmt(cg, "salam_slice_sub(%s, %s, %s, 1, (int64_t)sizeof(%s))",
-                              base, lo, cg_expr(cg, n->c), ec);
-            return cg_fmt(cg, "salam_slice_sub(%s, %s, 0, 0, (int64_t)sizeof(%s))", base,
-                          lo, ec);
+                return cg_fmt(cg,
+                              "({ salam_slice __sl%d; salam_slice_sub(&__sl%d, %s, %s, "
+                              "%s, 1, (int64_t)sizeof(%s)); __sl%d; })",
+                              t, t, base, lo, cg_expr(cg, n->c), ec, t);
+            return cg_fmt(cg,
+                          "({ salam_slice __sl%d; salam_slice_sub(&__sl%d, %s, %s, 0, 0, "
+                          "(int64_t)sizeof(%s)); __sl%d; })",
+                          t, t, base, lo, ec, t);
         }
         const char *hi =
             n->c ? cg_expr(cg, n->c) : cg_fmt(cg, "%ld", array_size_of(n->a->type_str));
-        return cg_fmt(cg, "salam_slice_new((void*)(%s), %s, %s, (int64_t)sizeof(%s))",
-                      base, lo, hi, ec);
+        return cg_fmt(cg,
+                      "({ salam_slice __sl%d; salam_slice_new(&__sl%d, (void*)(%s), %s, "
+                      "%s, (int64_t)sizeof(%s)); __sl%d; })",
+                      t, t, base, lo, hi, ec, t);
     }
     case AST_LAMBDA:
         return cg_lambda_value(cg, n);

@@ -20,6 +20,16 @@
 
 static const layout_elem_def_t *g_elems = NULL;
 static size_t g_elems_n = 0;
+static const layout_attr_def_t *g_attrs = NULL;
+static size_t g_attrs_n = 0;
+static int g_vals_n = 0;
+
+#define LAYOUT_DYN_VAL_MAX 512
+
+static struct {
+    const char *group, *spelling, *canon;
+} g_vals[LAYOUT_DYN_VAL_MAX];
+
 void layout_registry_set_elements(const layout_elem_def_t *defs, size_t n)
 {
     g_elems = defs;
@@ -36,8 +46,6 @@ const layout_elem_def_t *layout_elem_lookup(const char *name)
     return NULL;
 }
 
-static const layout_attr_def_t *g_attrs = NULL;
-static size_t g_attrs_n = 0;
 void layout_registry_set_attributes(const layout_attr_def_t *defs, size_t n)
 {
     g_attrs = defs;
@@ -53,11 +61,7 @@ const layout_attr_def_t *layout_attr_lookup(const char *name)
     }
     return NULL;
 }
-#define LAYOUT_DYN_VAL_MAX 512
-static struct {
-    const char *group, *spelling, *canon;
-} g_vals[LAYOUT_DYN_VAL_MAX];
-static int g_vals_n = 0;
+
 void layout_registry_add_value(const char *group, const char *spelling,
                                const char *canonical)
 {
@@ -109,10 +113,6 @@ static bool scan_number(const char *v, const char **out_end)
     return true;
 }
 
-/* Lowercases ASCII and collapses ZWNJ (U+200C, used to join Persian
- * compound words like "سانتی‌متر") and runs of plain whitespace into a
- * single space, so "سانتی متر" and "سانتی‌متر" normalize identically.
- */
 static size_t normalize_unit_phrase(const char *s, size_t len, char *out, size_t cap)
 {
     const char *q = s;
@@ -127,6 +127,20 @@ static size_t normalize_unit_phrase(const char *s, size_t len, char *out, size_t
                 prev_space = true;
             }
             q += 3;
+            continue;
+        }
+        if ((qend - q) >= 2 && (unsigned char)q[0] == 0xD9 &&
+            ((unsigned char)q[1] == 0x8A || (unsigned char)q[1] == 0x83)) {
+            if (oi + 2 >= cap - 1) break;
+            if ((unsigned char)q[1] == 0x8A) {
+                out[oi++] = (char)0xDB;
+                out[oi++] = (char)0x8C;
+            } else {
+                out[oi++] = (char)0xDA;
+                out[oi++] = (char)0xA9;
+            }
+            prev_space = false;
+            q += 2;
             continue;
         }
         if (is_ws(*q)) {
@@ -183,12 +197,6 @@ static const char *lookup_unit_span(const char *s, size_t len)
     return layout_map_unit(norm);
 }
 
-/* Normalizes a CSS length value: each whitespace-separated group (so 2/3/4
- * value shorthand like "10 20" for padding/margin works too) gets a bare
- * number turned into pixels, and unit suffixes (attached or space-separated,
- * ASCII or spelled out in fa/ar/en) canonicalized via the "unit" value
- * group. Non-numeric groups (auto, calc(...), inherit, ...) pass through
- * untouched. */
 const char *layout_map_length(arena_t *a, const char *v)
 {
     if (!v || !*v) return v;
@@ -237,8 +245,6 @@ const char *layout_map_length(arena_t *a, const char *v)
             consumed = 1;
         }
         if (!canon) {
-            /* attached suffix present but not a recognized unit: leave the
-             * whole token untouched rather than guessing */
             size_t k = 0;
             for (; k < toks[i].len; k++)
                 sb_putc(&out, tp[k]);
@@ -315,8 +321,21 @@ static bool is_email(const char *v)
 
 static bool is_url(const char *v)
 {
-    return strncmp(v, "http://", 7) == 0 || strncmp(v, "https://", 8) == 0 ||
-           strncmp(v, "mailto:", 7) == 0 || v[0] == '/' || v[0] == '#' || v[0] == '.';
+    if (strncmp(v, "http://", 7) == 0 || strncmp(v, "https://", 8) == 0 ||
+        strncmp(v, "mailto:", 7) == 0 || v[0] == '/' || v[0] == '#' || v[0] == '.')
+        return true;
+    if (!v[0]) return false;
+    {
+        bool has_sep = false;
+        const char *p = v;
+        for (; *p; p++) {
+            if (*p == ' ' || *p == '\t' || *p == '"' || *p == '\'' || *p == '<' ||
+                *p == '>')
+                return false;
+            if (*p == '.' || *p == '/') has_sep = true;
+        }
+        return has_sep;
+    }
 }
 
 const char *layout_attr_value_map(arena_t *a, const layout_attr_def_t *ad,

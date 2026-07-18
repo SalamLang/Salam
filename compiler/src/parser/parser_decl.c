@@ -286,7 +286,7 @@ static ast_node_t *parse_impl(parser_t *p)
     ast_node_t *n = p_mk(p, AST_IMPL_DEF);
     p_advance(p);
     n->name = p_name(p, "expected interface name after 'impl'");
-    p_expect(p, TK_KW_FOR, "'for' after interface name in impl block");
+    p_expect(p, TK_KW_ON, "'on' after interface name in impl block");
     n->type = parse_type(p);
     p_expect(p, TK_COLON, "':' after impl target type");
     p_skip_terminators(p);

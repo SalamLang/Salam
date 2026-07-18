@@ -43,6 +43,41 @@ type_t *check_struct_lit(sema_t *s, ast_node_t *n)
         return decorate(s, n, err_ty(s));
     }
     symbol_t *ssym = scope_lookup(s->global, n->name);
+    if ((!ssym || ssym->kind != SYM_STRUCT) && n->list.len == 0) {
+        symbol_t *tmpl = generic_template(s, n->name, SYM_STRUCT);
+        if (!tmpl) {
+            sema_load_prelude(s);
+            if (s->prelude) {
+                symbol_t *psym = scope_lookup_local(s->prelude, n->name);
+                if (psym && psym->kind == SYM_STRUCT && psym->decl &&
+                    psym->decl->typarams.len > 0)
+                    tmpl = psym;
+            }
+        }
+        if (tmpl) {
+            char targs[128];
+            size_t o = 0;
+            {
+                size_t i = 0;
+                for (; i < tmpl->decl->typarams.len && o + 1 < sizeof(targs); i++) {
+                    if (i > 0 && o + 2 < sizeof(targs)) {
+                        targs[o++] = ',';
+                        targs[o++] = ' ';
+                    }
+                    const char *pn = (const char *)tmpl->decl->typarams.data[i];
+                    size_t pl = strlen(pn);
+                    if (o + pl >= sizeof(targs)) pl = sizeof(targs) - o - 1;
+                    memcpy(targs + o, pn, pl);
+                    o += pl;
+                }
+            }
+            targs[o] = 0;
+            SERR(s, 71, &n->span,
+                 "cannot infer the type arguments of '%s'; write '%s {} as %s<%s>'",
+                 n->name, n->name, n->name, targs);
+            return decorate(s, n, err_ty(s));
+        }
+    }
     if (!ssym || ssym->kind != SYM_STRUCT) {
         SERR(s, 1, &n->span, "unknown struct '%s'", n->name);
         return decorate(s, n, err_ty(s));

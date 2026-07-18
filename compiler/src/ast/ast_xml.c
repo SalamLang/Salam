@@ -219,6 +219,11 @@ void ast_to_xml(xml_writer_t *w, const ast_node_t *n)
         ast_child(w, "object", n->a);
         ast_child(w, "index", n->b);
         break;
+    case AST_TERNARY:
+        ast_child(w, "condition", n->a);
+        ast_child(w, "then", n->b);
+        ast_child(w, "else", n->c);
+        break;
     case AST_ARRAY_LIT:
         ast_child_list(w, "elements", &n->list);
         break;

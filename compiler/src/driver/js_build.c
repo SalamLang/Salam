@@ -214,7 +214,7 @@ static bool js_refs(const char *text, const char *name)
 
 const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                             const char **entries, int nentries, const char **module_out,
-                            int *rc_out)
+                            int *rc_out, vec_t *pkg_cache)
 {
     langpack_t *pack = langpack_load(opt->lang);
     *rc_out = 0;
@@ -302,8 +302,9 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                         }
                     }
                     {
-                        sema_result_t *sr = sema_run(arena, log, program, src->path,
-                                                     langpack_code(modpack), cc);
+                        sema_result_t *sr =
+                            sema_run_cached(arena, log, program, src->path,
+                                            langpack_code(modpack), cc, pkg_cache);
                         if (!lok || !pok || !sr->ok) {
                             all_ok = false;
                             continue;
@@ -470,8 +471,10 @@ int driver_js(options_t *opt)
     arena_t *arena = arena_new(1 << 20);
     int rc = 0;
     const char *module = NULL;
-    const char *js =
-        js_build_bundle(arena, log, opt, opt->inputs, opt->input_count, &module, &rc);
+    vec_t pkg_cache;
+    vec_init(&pkg_cache);
+    const char *js = js_build_bundle(arena, log, opt, opt->inputs, opt->input_count,
+                                     &module, &rc, &pkg_cache);
     if (!js) {
         logger_free(log);
         arena_free(arena);

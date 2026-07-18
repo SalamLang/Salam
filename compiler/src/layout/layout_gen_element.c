@@ -102,6 +102,7 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
     sb_init(&after);
     const char *content = NULL, *userclass = NULL, *source = NULL;
     const char *src = NULL, *type_val = NULL, *condition = NULL;
+    const char *selector = NULL;
     {
         size_t i = 0;
         for (; i < el->list.len; i++) {
@@ -111,6 +112,10 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
             const char *v = val_str(cx, attr->a);
             if (!strcmp(nm, "condition")) {
                 condition = v;
+                continue;
+            }
+            if (!strcmp(nm, "selector")) {
+                selector = v;
                 continue;
             }
             if (starts_with(nm, "hover_")) {
@@ -233,6 +238,10 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
             sb_puts(cx->css, content);
             sb_putc(cx->css, '\n');
         }
+        goto done;
+    }
+    if (!strcmp(el->name, "global")) {
+        emit_rule(cx, lfmt(cx, "%s { %s }", selector ? selector : "*", sb_cstr(&css)));
         goto done;
     }
     if (!strcmp(el->name, "script")) {

@@ -37,6 +37,15 @@ typedef struct {
 sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const char *file,
                         const char *lang, const cc_table_t *cc);
 
+/* Same as sema_run(), but reuses/populates a caller-owned package cache
+ * (path -> symbol_t* pairs) across multiple calls instead of reloading and
+ * re-analyzing shared stdlib imports from scratch each time. All calls that
+ * share a cache must use the same arena `a` for the lifetime of that cache.
+ * Pass NULL for the same behavior as sema_run(). */
+sema_result_t *sema_run_cached(arena_t *a, logger_t *log, ast_node_t *program,
+                               const char *file, const char *lang, const cc_table_t *cc,
+                               vec_t *shared_pkg_cache);
+
 void symbols_to_xml(xml_writer_t *w, const sema_result_t *r);
 
 const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec);

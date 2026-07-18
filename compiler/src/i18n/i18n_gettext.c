@@ -1108,6 +1108,111 @@ static const i18n_msg_t k_msgs[] =
      {"only 'deprecated', 'pure', or 'noret' may modify an extern function",
       "تنها 'منسوخ'، 'خالص' یا 'بی‌بازگشت' می‌توانند تابع خارجی را توصیف کنند",
       "لا يجوز أن يعدّل الدالة الخارجية إلا 'مهجور' أو 'نقي' أو 'لايرجع'"},
+
+     {"salam: 'llvm' requires an input file\n",
+      "salam: 'llvm' به یک فایل ورودی نیاز دارد\n", "salam: 'llvm' يتطلّب ملف إدخال\n"},
+     {"salam: 'js' requires at least one input file\n",
+      "salam: 'js' به دست‌کم یک فایل ورودی نیاز دارد\n",
+      "salam: 'js' يتطلّب ملف إدخال واحدًا على الأقل\n"},
+     {"salam: 'web' requires an input file\n",
+      "salam: 'web' به یک فایل ورودی نیاز دارد\n", "salam: 'web' يتطلّب ملف إدخال\n"},
+     {"salam: no input file", "salam: فایل ورودی داده نشده است",
+      "salam: لم يُعطَ ملف إدخال"},
+     {"import graph exceeds the %d-file scan limit; %d import(s) were "
+      "skipped when collecting link directives, so some libraries may "
+      "be missing at link time",
+      "گراف واردکردن از حد پویش %d فایلی فراتر رفت؛ %d واردکردن هنگام "
+      "جمع‌آوری دستورهای پیوند نادیده گرفته شد، بنابراین ممکن است برخی "
+      "کتابخانه‌ها هنگام پیوند موجود نباشند",
+      "تجاوز رسم الاستيراد حدّ مسح %d ملف؛ تم تجاهل %d استيراد أثناء جمع "
+      "توجيهات الربط، لذا قد تكون بعض المكتبات مفقودة عند الربط"},
+     {"salam: cross-compilation for target '%s' failed; see the "
+      "diagnostics above. If they point to a missing toolchain, "
+      "install the LLVM tools (clang/llc), plus lld and a sysroot for "
+      "Windows targets.\n",
+      "salam: کامپایل متقاطع برای هدف '%s' شکست خورد؛ به تشخیص‌های بالا "
+      "نگاه کنید. اگر به زنجیره‌ابزار گمشده اشاره دارند، ابزارهای LLVM "
+      "(clang/llc) به‌همراه lld و یک سیستم‌ریشه برای هدف‌های ویندوز نصب "
+      "کنید.\n",
+      "salam: فشلت الترجمة المتقاطعة للهدف '%s'؛ راجع التشخيصات أعلاه. "
+      "إذا أشارت إلى سلسلة أدوات مفقودة، ثبِّت أدوات LLVM (clang/llc) مع "
+      "lld وجذر نظام لأهداف ويندوز.\n"},
+     {"LLVM toolchain step failed (exit %d)",
+      "مرحله‌ی زنجیره‌ابزار LLVM شکست خورد (کد خروج %d)",
+      "فشلت خطوة سلسلة أدوات LLVM (رمز الخروج %d)"},
+     {"no musl sysroot for '%s' (looked in %s): install musl-dev or "
+      "bundle a sysroot ($SALAM_SYSROOTS)",
+      "سیستم‌ریشه‌ی musl برای '%s' یافت نشد (در %s جست‌وجو شد): "
+      "musl-dev را نصب کنید یا یک سیستم‌ریشه بسته‌بندی کنید "
+      "($SALAM_SYSROOTS)",
+      "لا يوجد جذر نظام musl لـ '%s' (تم البحث في %s): ثبِّت musl-dev "
+      "أو أرفِق جذر نظام ($SALAM_SYSROOTS)"},
+     {"too many link libraries (%d); only the first 16 were linked",
+      "کتابخانه‌های پیوند بیش از حد زیادند (%d)؛ تنها ۱۶ تای نخست پیوند "
+      "داده شدند",
+      "عدد مكتبات الربط كبير جدًا (%d)؛ تم ربط أول 16 فقط"},
+     {"in-process lld link failed (%d)",
+      "پیوند درون‌فرآیندی lld شکست خورد (%d)",
+      "فشل ربط lld داخل العملية (%d)"},
+     {"no mingw sysroot for '%s' (looked in %s): install mingw-w64 or "
+      "bundle a sysroot ($SALAM_SYSROOTS)",
+      "سیستم‌ریشه‌ی mingw برای '%s' یافت نشد (در %s جست‌وجو شد): "
+      "mingw-w64 را نصب کنید یا یک سیستم‌ریشه بسته‌بندی کنید "
+      "($SALAM_SYSROOTS)",
+      "لا يوجد جذر نظام mingw لـ '%s' (تم البحث في %s): ثبِّت mingw-w64 "
+      "أو أرفِق جذر نظام ($SALAM_SYSROOTS)"},
+     {"no 'main' function to run", "تابع 'main' برای اجرا وجود ندارد",
+      "لا توجد دالة 'main' لتشغيلها"},
+
+     {"function '%s' can fall off its end without returning a '%s' "
+      "value; add a final 'ret'",
+      "تابع '%s' ممکن است بدون بازگرداندن مقداری از نوع '%s' به پایان "
+      "بدنه‌ی خود برسد؛ یک 'بازگشت' نهایی اضافه کنید",
+      "قد تصل الدالة '%s' إلى نهاية جسمها دون إرجاع قيمة من النوع "
+      "'%s'؛ أضِف 'أرجع' نهائيًا"},
+     {"operator %s requires an assignable operand",
+      "عملگر %s به عملوندی قابل مقداردهی نیاز دارد",
+      "العامل %s يتطلّب معاملًا قابلًا للإسناد"},
+     {"cannot apply %s to '%s': a 'const' binding is fully immutable",
+      "نمی‌توان %s را روی '%s' اعمال کرد: مقدار 'ثابت' کاملاً "
+      "تغییرناپذیر است",
+      "تعذّر تطبيق %s على '%s': القيمة 'ثابت' غير قابلة للتغيير كليًا"},
+     {"cannot apply %s to immutable variable '%s'; declare it 'mut'",
+      "نمی‌توان %s را روی متغیر تغییرناپذیر '%s' اعمال کرد؛ آن را "
+      "'متغیر' تعریف کنید",
+      "تعذّر تطبيق %s على المتغيّر غير القابل للتغيير '%s'؛ أعلنه "
+      "'متغير'"},
+     {"operator %s requires a numeric operand", "عملگر %s به عملوندی عددی نیاز دارد",
+      "العامل %s يتطلّب معاملًا عدديًا"},
+     {"division by zero in constant expression", "تقسیم بر صفر در عبارت ثابت",
+      "قسمة على صفر في تعبير ثابت"},
+     {"cannot infer the type arguments of '%s'; write '%s {} as %s<%s>'",
+      "آرگومان‌های نوع '%s' قابل استنتاج نیستند؛ بنویسید '%s {} بعنوان "
+      "%s<%s>'",
+      "تعذّر استنتاج وسائط نوع '%s'؛ اكتب '%s {} بوصفه %s<%s>'"},
+     {"strings are immutable: cannot assign to an index of a 'str'",
+      "رشته‌ها تغییرناپذیرند: نمی‌توان به اندیسی از نوع 'رشته' مقدار "
+      "داد",
+      "السلاسل النصية غير قابلة للتغيير: تعذّر الإسناد إلى فهرس من نوع "
+      "'نص'"},
+     {"cannot assign to '%s': a 'const' binding is fully immutable, "
+      "including its elements and fields",
+      "نمی‌توان به '%s' مقدار داد: مقدار 'ثابت' کاملاً تغییرناپذیر "
+      "است، شامل عناصر و فیلدهای آن",
+      "تعذّر الإسناد إلى '%s': القيمة 'ثابت' غير قابلة للتغيير كليًا، "
+      "بما في ذلك عناصرها وحقولها"},
+     {"cannot reassign immutable variable '%s'; declare it 'mut' to "
+      "reassign it, or assign to its elements or fields instead",
+      "نمی‌توان متغیر تغییرناپذیر '%s' را دوباره مقداردهی کرد؛ برای "
+      "این کار آن را 'متغیر' تعریف کنید، یا به‌جای آن به عناصر یا "
+      "فیلدهایش مقدار دهید",
+      "تعذّرت إعادة إسناد المتغيّر غير القابل للتغيير '%s'؛ أعلنه "
+      "'متغير' لإعادة إسناده، أو أسنِد إلى عناصره أو حقوله بدلًا من "
+      "ذلك"},
+     {"unreachable code: the previous statement always exits this "
+      "block",
+      "کد دست‌نیافتنی: دستور پیشین همیشه از این بلوک خارج می‌شود",
+      "كود غير قابل للوصول: العبارة السابقة تخرج دائمًا من هذه الكتلة"},
      {NULL, NULL, NULL}};
 
 const char *i18n_tr(const char *msgid)

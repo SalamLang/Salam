@@ -216,73 +216,84 @@ int driver_web(options_t *opt)
             return driver_js(opt);
         }
         if (layout_expand(arena, log, modpack, program, base_dir, cc)) rc = 1;
-        sema_run(arena, log, program, src->path, langpack_code(modpack), cc);
-        layout_localize_names(lb);
         {
-            script_list_t scripts;
-            sb_t bundles;
-            layout_result_t *r = NULL;
-            scripts.n = 0;
-            collect_scripts(lb, &scripts);
-            sb_init(&bundles);
+            vec_t pkg_cache;
+            vec_init(&pkg_cache);
+            sema_run_cached(arena, log, program, src->path, langpack_code(modpack), cc,
+                            &pkg_cache);
+            layout_localize_names(lb);
             {
-                int i = 0;
-                for (; i < scripts.n && rc == 0; i++) {
-                    const char *sp = join_path(arena, base_dir, scripts.paths[i]);
-                    const char *entry1[1];
-                    const char *bundle;
-                    int brc = 0;
-                    entry1[0] = sp;
-                    LOG_I(log, PH_DRIVER, "compiling page script %s", sp);
-                    bundle = js_build_bundle(arena, log, opt, entry1, 1, NULL, &brc);
-                    if (!bundle) {
-                        rc = brc ? brc : 1;
-                        break;
+                script_list_t scripts;
+                sb_t bundles;
+                layout_result_t *r = NULL;
+                scripts.n = 0;
+                collect_scripts(lb, &scripts);
+                sb_init(&bundles);
+                {
+                    int i = 0;
+                    for (; i < scripts.n && rc == 0; i++) {
+                        const char *sp = join_path(arena, base_dir, scripts.paths[i]);
+                        const char *entry1[1];
+                        const char *bundle;
+                        int brc = 0;
+                        entry1[0] = sp;
+                        LOG_I(log, PH_DRIVER, "compiling page script %s", sp);
+                        bundle = js_build_bundle(arena, log, opt, entry1, 1, NULL, &brc,
+                                                 &pkg_cache);
+                        if (!bundle) {
+                            rc = brc ? brc : 1;
+                            break;
+                        }
+                        sb_puts(&bundles, bundle);
+                        sb_putc(&bundles, '\n');
                     }
-                    sb_puts(&bundles, bundle);
-                    sb_putc(&bundles, '\n');
                 }
-            }
-            if (rc == 0) {
-                r = layout_generate(arena, log, diag, src->path, lb);
-                if (diag->errors) rc = 1;
-            }
-            if (rc == 0 && bundles.len) {
-                if (r->js && r->js[0]) {
-                    size_t need = strlen(r->js) + bundles.len + 2;
-                    char *m = (char *)arena_alloc(arena, need);
-                    sal_snprintf(m, need, "%s\n%s", r->js, sb_cstr(&bundles));
-                    r->js = m;
-                } else {
-                    r->js = arena_strdup(arena, sb_cstr(&bundles));
+                if (rc == 0) {
+                    r = layout_generate(arena, log, diag, src->path, lb);
+                    if (diag->errors) rc = 1;
                 }
-            }
-            if (rc == 0) {
-                const char *mod = module_of(arena, path);
-                const char *html_path =
-                    opt->output ? opt->output : path_ext(arena, mod, "html");
-                if (opt->split) {
-                    const char *stem = strip_ext(arena, html_path);
-                    const char *css_path = path_ext(arena, stem, "css");
-                    const char *js_path = path_ext(arena, stem, "js");
-                    const char *css_href =
-                        (r->css && r->css[0]) ? base_name(css_path) : NULL;
-                    const char *js_href = (r->js && r->js[0]) ? base_name(js_path) : NULL;
-                    if (!write_file(log, html_path,
-                                    layout_document(arena, r, false, css_href, js_href)))
-                        rc = 2;
-                    if (rc == 0 && css_href && !write_file(log, css_path, r->css)) rc = 2;
-                    if (rc == 0 && js_href && !write_file(log, js_path, r->js)) rc = 2;
-                } else {
-                    if (!write_file(log, html_path,
-                                    layout_document(arena, r, true, NULL, NULL)))
-                        rc = 2;
+                if (rc == 0 && bundles.len) {
+                    if (r->js && r->js[0]) {
+                        size_t need = strlen(r->js) + bundles.len + 2;
+                        char *m = (char *)arena_alloc(arena, need);
+                        sal_snprintf(m, need, "%s\n%s", r->js, sb_cstr(&bundles));
+                        r->js = m;
+                    } else {
+                        r->js = arena_strdup(arena, sb_cstr(&bundles));
+                    }
                 }
-                if (rc == 0)
-                    LOG_I(log, PH_DRIVER, "web build complete: %s (%d page script(s))",
-                          html_path, scripts.n);
+                if (rc == 0) {
+                    const char *mod = module_of(arena, path);
+                    const char *html_path =
+                        opt->output ? opt->output : path_ext(arena, mod, "html");
+                    if (opt->split) {
+                        const char *stem = strip_ext(arena, html_path);
+                        const char *css_path = path_ext(arena, stem, "css");
+                        const char *js_path = path_ext(arena, stem, "js");
+                        const char *css_href =
+                            (r->css && r->css[0]) ? base_name(css_path) : NULL;
+                        const char *js_href =
+                            (r->js && r->js[0]) ? base_name(js_path) : NULL;
+                        if (!write_file(
+                                log, html_path,
+                                layout_document(arena, r, false, css_href, js_href)))
+                            rc = 2;
+                        if (rc == 0 && css_href && !write_file(log, css_path, r->css))
+                            rc = 2;
+                        if (rc == 0 && js_href && !write_file(log, js_path, r->js))
+                            rc = 2;
+                    } else {
+                        if (!write_file(log, html_path,
+                                        layout_document(arena, r, true, NULL, NULL)))
+                            rc = 2;
+                    }
+                    if (rc == 0)
+                        LOG_I(log, PH_DRIVER,
+                              "web build complete: %s (%d page script(s))", html_path,
+                              scripts.n);
+                }
+                sb_free(&bundles);
             }
-            sb_free(&bundles);
         }
     }
     logger_free(log);

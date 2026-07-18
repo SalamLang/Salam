@@ -126,36 +126,40 @@ const char *jsg_ident(jg_t *g, const char *name)
     }
 }
 
-const char *jsg_minify_name(jg_t *g, size_t index)
+const char *jsg_minify_next(jg_t *g)
 {
-    char buf[64];
-    if (index < 26) {
-        buf[0] = 'a' + (char)index;
-        buf[1] = '\0';
-        return arena_strdup(g->cg.a, buf);
+    const char *prev = g->minify_last;
+    char buf[256];
+    if (!prev) {
+        g->minify_last = arena_strdup(g->cg.a, "a");
+        return g->minify_last;
     }
-
-    index -= 26;
-    char *p = buf;
-    do {
-        *p++ = 'a' + (char)(index % 26);
-        index /= 26;
-        if (index == 0) break;
-        index--;
-    } while (1);
-    *p = '\0';
-
-    size_t len = (size_t)(p - buf);
     {
-        size_t i = 0;
-        for (; i < len / 2; i++) {
-            char tmp = buf[i];
-            buf[i] = buf[len - 1 - i];
-            buf[len - 1 - i] = tmp;
+        size_t len = strlen(prev);
+        memcpy(buf, prev, len + 1);
+        if (buf[len - 1] != 'z') {
+            buf[len - 1]++;
+        } else {
+            buf[len] = 'a';
+            buf[len + 1] = '\0';
         }
     }
+    g->minify_last = arena_strdup(g->cg.a, buf);
+    return g->minify_last;
+}
 
-    return arena_strdup(g->cg.a, buf);
+const char *jsg_minify_cached(jg_t *g, const char *key)
+{
+    size_t i = 0;
+    for (; i < g->minify_keys.len; i++)
+        if (!strcmp((const char *)g->minify_keys.data[i], key))
+            return (const char *)g->minify_vals.data[i];
+    {
+        const char *name = jsg_minify_next(g);
+        vec_push(g->cg.a, &g->minify_keys, CONST_CAST(key));
+        vec_push(g->cg.a, &g->minify_vals, CONST_CAST(name));
+        return name;
+    }
 }
 
 static bool name_in_vec(vec_t *v, const char *name)
@@ -192,7 +196,7 @@ const char *jsg_local(jg_t *g, const char *name, bool is_mut)
     if (name && name[0] == '_' && name[1] == '_' && strcmp(name, "__self") != 0)
         emitted = jsg_fresh_syn(g);
     else if (g->enable_minify)
-        emitted = jsg_minify_name(g, g->minify_counter++);
+        emitted = jsg_minify_next(g);
     else
         emitted = jsg_ident(g, name);
     local_add(&g->cg, name);
@@ -250,7 +254,9 @@ const char *jsg_fn_name(jg_t *g, const char *pkg, const char *sname, const char 
         return cg_mangle_in(cg, p, sname, fname, &sig->params);
     if (!strcmp(p, "main") && !sname && jsg_taken(g, fname) && sig)
         return cg_mangle_in(cg, p, sname, fname, &sig->params);
-    if (g->enable_minify) return jsg_minify_name(g, g->minify_counter++);
+    if (g->enable_minify)
+        return jsg_minify_cached(g,
+                                 cg_fmt(cg, "F:%s:%s:%s", p, sname ? sname : "", fname));
     {
         const char *base;
         if (sname)
@@ -266,7 +272,7 @@ const char *jsg_global_ref(jg_t *g, const char *pkg, const char *name)
 {
     cg_t *cg = &g->cg;
     const char *p = pkg ? pkg : "main";
-    if (g->enable_minify) return jsg_minify_name(g, g->minify_counter++);
+    if (g->enable_minify) return jsg_minify_cached(g, cg_fmt(cg, "G:%s:%s", p, name));
     if (!strcmp(p, "main")) {
         if (jsg_taken(g, name))
             return cg_fmt(cg, "_SalamG_%s_%s", cg_cident(cg, p), cg_cident(cg, name));

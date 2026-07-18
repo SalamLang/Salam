@@ -71,6 +71,21 @@ symbol_t *struct_by_name(cg_t *cg, const char *name)
                 return sym;
         }
     }
+    {
+        size_t i = 0;
+        for (; i < cg->sem->global->symbols.len; i++) {
+            symbol_t *pk = (symbol_t *)cg->sem->global->symbols.data[i];
+            if (pk->kind != SYM_PACKAGE || !pk->members) continue;
+            size_t j = 0;
+            for (; j < pk->members->symbols.len; j++) {
+                symbol_t *sym = (symbol_t *)pk->members->symbols.data[j];
+                if (sym->kind != SYM_STRUCT) continue;
+                if (strcmp(sym->name, name) == 0) return sym;
+                if (sym->type && sym->type->name && strcmp(sym->type->name, name) == 0)
+                    return sym;
+            }
+        }
+    }
     return NULL;
 }
 

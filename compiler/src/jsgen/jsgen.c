@@ -137,7 +137,7 @@ static void jsg_emit_impls(jg_t *g, jsgen_output_t *out)
 
 jsgen_output_t *jsgen_run(arena_t *a, logger_t *log, ast_node_t *program,
                           sema_result_t *sem, const char *module, const char *entry,
-                          bool enable_minify)
+                          bool enable_minify, const char **minify_last)
 {
     jg_t g;
     sb_t globals;
@@ -150,7 +150,7 @@ jsgen_output_t *jsgen_run(arena_t *a, logger_t *log, ast_node_t *program,
     g.cg.pkg = program->name ? program->name : "main";
     g.cg.entry = (entry && entry[0]) ? entry : "main";
     g.enable_minify = enable_minify;
-    g.minify_counter = 0;
+    g.minify_last = minify_last ? *minify_last : NULL;
     vec_init(&g.cg.locals);
     vec_init(&g.cg.vec_types);
     vec_init(&g.cg.dyn_ifaces);
@@ -161,6 +161,8 @@ jsgen_output_t *jsgen_run(arena_t *a, logger_t *log, ast_node_t *program,
     vec_init(&g.local_emit);
     vec_init(&g.taken);
     vec_init(&g.fn_used_names);
+    vec_init(&g.minify_keys);
+    vec_init(&g.minify_vals);
     memset(out, 0, sizeof(*out));
     out->module = module;
     vec_init(&out->fn_names);
@@ -175,6 +177,7 @@ jsgen_output_t *jsgen_run(arena_t *a, logger_t *log, ast_node_t *program,
     out->globals_src = arena_strdup(a, sb_cstr(&globals));
     out->entry_mangled = g.entry_mangled;
     sb_free(&globals);
+    if (minify_last) *minify_last = g.minify_last;
     LOG_I(log, PH_CODEGEN, i18n_tr("generated %zu function(s) for '%s'"),
           out->fn_names.len, module);
     return out;

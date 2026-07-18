@@ -101,6 +101,10 @@ const char *cg_mangle_ti(cg_t *cg, const char *typestr, const char *fn, vec_t *p
 
 const char *func_ret_of(const char *ts);
 
+const char *raw_ret_of(const char *ts);
+
+const char *raw_cast_params(cg_t *cg, const char *ts);
+
 const char *func_cast_params_env(cg_t *cg, const char *ts);
 
 bool type_is_byval_agg(const type_t *t);

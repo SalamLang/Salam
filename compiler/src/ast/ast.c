@@ -48,6 +48,7 @@ static const char *const k_ast_names[AST__COUNT] = {
     [AST_CAST] = "Cast",
     [AST_LITERAL] = "Literal",
     [AST_IDENTIFIER] = "Identifier",
+    [AST_FUNC_ADDR] = "FuncAddr",
     [AST_THIS] = "This",
     [AST_CALL] = "Call",
     [AST_MEMBER] = "MemberAccess",

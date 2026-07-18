@@ -62,7 +62,8 @@ const char *func_signature(cg_t *cg, ast_node_t *fn, symbol_t *owner, func_sig_t
         if (ti)
             sb_puts(&b, cg_fmt(cg, "%s this", cg_ctype(cg, ti_ts)));
         else
-            sb_puts(&b, cg_fmt(cg, "%s* this", cg_cident(cg, owner->name)));
+            sb_puts(&b, cg_fmt(cg, "%s* this",
+                               cg_ctype(cg, type_to_string(cg->sem->tc, owner->type))));
         first = false;
     }
     {

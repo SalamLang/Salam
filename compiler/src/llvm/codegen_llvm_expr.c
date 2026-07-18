@@ -1250,6 +1250,18 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
         ll_emit(ll, "%s = load %s, ptr %s", r, ll_ty(ll, a.ts), a.ptr);
         return (llv_t){r, a.ts};
     }
+    case AST_FUNC_ADDR: {
+        symbol_t *fsym = ll_sym(ll, n->name);
+        if (!fsym || fsym->kind != SYM_FUNC || fsym->overloads.len != 1) {
+            ll_error(ll, n, "cannot take the address of '%s'", n->name);
+            return ll_poison(n->type_str ? n->type_str : "ptr");
+        }
+        func_sig_t *sig = (func_sig_t *)fsym->overloads.data[0];
+        bool is_ext = sig->decl && sig->decl->is_extern;
+        if (!is_ext) ll_ensure_fn(ll, sig->decl, NULL, ll->pkg_scope);
+        const char *fname = is_ext ? n->name : ll_mangle(ll, NULL, n->name, sig);
+        return (llv_t){ll_fmt(ll, "@%s", fname), "void*"};
+    }
     case AST_THIS: {
         if (!ll->this_ref) {
             ll_error(ll, n, "'this' outside a method");

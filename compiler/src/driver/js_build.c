@@ -241,6 +241,7 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
         const char *first_module = NULL;
         const char *entry_name = NULL;
         bool all_ok = true;
+        const char *minify_last = NULL;
         {
             int i = 0;
             for (; i < opt->ndefines && ndefs < SALAM_MAX_INPUTS - 1; i++)
@@ -341,7 +342,7 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                         {
                             jsgen_output_t *out =
                                 jsgen_run(arena, log, program, sr, module, modentry,
-                                          !opt->no_js_minify_names);
+                                          !opt->no_js_minify_names, &minify_last);
                             outputs[nout++] = out;
                             if (!entry_name && wi < nentries && out->entry_mangled)
                                 entry_name = out->entry_mangled;

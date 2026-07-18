@@ -64,6 +64,12 @@ static bool has_child_elements(ast_node_t *el)
     return false;
 }
 
+static const char *quote_css_value_if_needed(layout_ctx_t *cx, const char *value)
+{
+    if (!value || !strchr(value, ' ')) return value;
+    return lfmt(cx, "\"%s\"", value);
+}
+
 static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
                         const char *parent_class)
 {
@@ -195,9 +201,9 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
                 break;
             case LA_CSS: {
                 const char *prop = (ad && ad->out) ? ad->out : hyphenate(cx, nm);
-
-                sb_puts(&css,
-                        lfmt(cx, "%s: %s; ", prop, layout_attr_value_map(cx->a, ad, v)));
+                const char *mapped = layout_attr_value_map(cx->a, ad, v);
+                const char *css_val = quote_css_value_if_needed(cx, mapped);
+                sb_puts(&css, lfmt(cx, "%s: %s; ", prop, css_val));
                 break;
             }
             case LA_META:

@@ -126,6 +126,38 @@ const char *jsg_ident(jg_t *g, const char *name)
     }
 }
 
+const char *jsg_minify_name(jg_t *g, size_t index)
+{
+    char buf[64];
+    if (index < 26) {
+        buf[0] = 'a' + (char)index;
+        buf[1] = '\0';
+        return arena_strdup(g->cg.a, buf);
+    }
+
+    index -= 26;
+    char *p = buf;
+    do {
+        *p++ = 'a' + (char)(index % 26);
+        index /= 26;
+        if (index == 0) break;
+        index--;
+    } while (1);
+    *p = '\0';
+
+    size_t len = (size_t)(p - buf);
+    {
+        size_t i = 0;
+        for (; i < len / 2; i++) {
+            char tmp = buf[i];
+            buf[i] = buf[len - 1 - i];
+            buf[len - 1 - i] = tmp;
+        }
+    }
+
+    return arena_strdup(g->cg.a, buf);
+}
+
 static bool name_in_vec(vec_t *v, const char *name)
 {
     size_t i = 0;
@@ -159,6 +191,8 @@ const char *jsg_local(jg_t *g, const char *name, bool is_mut)
     const char *emitted;
     if (name && name[0] == '_' && name[1] == '_' && strcmp(name, "__self") != 0)
         emitted = jsg_fresh_syn(g);
+    else if (g->enable_minify)
+        emitted = jsg_minify_name(g, g->minify_counter++);
     else
         emitted = jsg_ident(g, name);
     local_add(&g->cg, name);
@@ -216,6 +250,7 @@ const char *jsg_fn_name(jg_t *g, const char *pkg, const char *sname, const char 
         return cg_mangle_in(cg, p, sname, fname, &sig->params);
     if (!strcmp(p, "main") && !sname && jsg_taken(g, fname) && sig)
         return cg_mangle_in(cg, p, sname, fname, &sig->params);
+    if (g->enable_minify) return jsg_minify_name(g, g->minify_counter++);
     {
         const char *base;
         if (sname)
@@ -231,6 +266,7 @@ const char *jsg_global_ref(jg_t *g, const char *pkg, const char *name)
 {
     cg_t *cg = &g->cg;
     const char *p = pkg ? pkg : "main";
+    if (g->enable_minify) return jsg_minify_name(g, g->minify_counter++);
     if (!strcmp(p, "main")) {
         if (jsg_taken(g, name))
             return cg_fmt(cg, "_SalamG_%s_%s", cg_cident(cg, p), cg_cident(cg, name));

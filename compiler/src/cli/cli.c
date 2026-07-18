@@ -50,6 +50,7 @@ static void cli_set_defaults(options_t *out)
     out->llvm_verify = false;
     out->llvm_target = NULL;
     out->llvm_native_cpu = false;
+    out->no_js_minify_names = OPTIONS_INIT_NO_JS_MINIFY_NAMES;
 }
 
 bool cli_parse(int argc, char **argv, options_t *out)

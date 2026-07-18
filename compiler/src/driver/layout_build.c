@@ -60,7 +60,7 @@ static bool write_file(logger_t *log, const char *path, const char *content)
     }
     fputs(content, f);
     fclose(f);
-    LOG_I(log, PH_DRIVER, "wrote %s", path);
+    LOG_I(log, PH_DRIVER, i18n_tr("wrote %s"), path);
     return true;
 }
 

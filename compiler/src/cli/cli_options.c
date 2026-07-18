@@ -146,6 +146,8 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                 out->inline_mode = true;
             } else if (strcmp(arg, "--split") == 0) {
                 out->split = true;
+            } else if (strcmp(arg, "--no-js-minify-names") == 0) {
+                out->no_js_minify_names = true;
             } else if ((val = cli_opt_value(arg, "--output")) != NULL) {
                 out->output = val;
             } else if (strcmp(arg, "-o") == 0) {

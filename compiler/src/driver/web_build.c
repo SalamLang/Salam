@@ -120,7 +120,7 @@ static bool write_file(logger_t *log, const char *path, const char *content)
         LOG_E(log, PH_DRIVER, i18n_tr("failed to write '%s'"), path);
         return false;
     }
-    LOG_I(log, PH_DRIVER, "wrote %s", path);
+    LOG_I(log, PH_DRIVER, i18n_tr("wrote %s"), path);
     return true;
 }
 
@@ -244,7 +244,7 @@ int driver_web(options_t *opt)
                         const char *bundle;
                         int brc = 0;
                         entry1[0] = sp;
-                        LOG_I(log, PH_DRIVER, "compiling page script %s", sp);
+                        LOG_I(log, PH_DRIVER, i18n_tr("compiling page script %s"), sp);
                         bundle = js_build_bundle(arena, log, opt, entry1, 1, NULL, &brc,
                                                  &pkg_cache);
                         if (!bundle) {

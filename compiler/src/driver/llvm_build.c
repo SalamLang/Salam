@@ -316,7 +316,7 @@ int driver_llvm(options_t *opt)
         rc = salam_llvm_toolchain(log, llpath, &o);
         if (!opt->keep_c) remove(llpath);
         if (rc == 0) {
-            LOG_I(log, PH_DRIVER, "wrote %s", o.output_file);
+            LOG_I(log, PH_DRIVER, i18n_tr("wrote %s"), o.output_file);
             if (opt->exe_path[0] == '\0' && o.output_mode == LLVM_OUT_EXEC)
                 sal_snprintf(opt->exe_path, sizeof(opt->exe_path), "%s", o.output_file);
         }

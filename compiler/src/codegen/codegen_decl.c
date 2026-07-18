@@ -149,10 +149,32 @@ void cg_function(cg_t *cg, ast_node_t *fn, symbol_t *owner)
     vec_t saved_defers = cg->fn_defers;
     vec_init(&cg->fn_defers);
     cg_source_line(cg, &fn->span);
-    cg_line(cg, "%s {", func_signature(cg, fn, owner, sig, is_main));
+
+    if (is_main && cg->is_gui_mode) {
+        sb_puts(cg->c, "#ifdef _WIN32\n");
+        cg_line(
+            cg,
+            "int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR lpCmdLine, int nCmdShow) {");
+        sb_puts(cg->c,
+                "    (void)hInst; (void)hPrevInst; (void)lpCmdLine; (void)nCmdShow;\n");
+        sb_puts(cg->c, "#else\n");
+        cg_line(cg, "int main(int argc, char** argv) {");
+        sb_puts(cg->c, "#endif\n");
+    } else {
+        cg_line(cg, "%s {", func_signature(cg, fn, owner, sig, is_main));
+    }
+
     cg->indent++;
     if (is_main) {
-        cg_line(cg, "salam_set_args(argc, argv);");
+        if (!cg->is_gui_mode) {
+            cg_line(cg, "salam_set_args(argc, argv);");
+        } else {
+            cg_line(cg, "#ifdef _WIN32");
+            cg_line(cg, "(void)0;");
+            cg_line(cg, "#else");
+            cg_line(cg, "salam_set_args(argc, argv);");
+            cg_line(cg, "#endif");
+        }
         {
             size_t i = 0;
             for (; i < cg->deferred.len; i++)

@@ -186,7 +186,7 @@ static bool write_file(logger_t *log, const char *path, const char *content)
         LOG_E(log, PH_DRIVER, i18n_tr("failed to write '%s'"), path);
         return false;
     }
-    LOG_I(log, PH_DRIVER, "wrote %s", path);
+    LOG_I(log, PH_DRIVER, i18n_tr("wrote %s"), path);
     return true;
 }
 
@@ -281,7 +281,7 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                     logger_set_diag_source(log, src->text, src->len, opt->diag_style,
                                            opt->diag_format);
                     if (!first_module) first_module = module;
-                    LOG_I(log, PH_DRIVER, "compiling %s -> js", path);
+                    LOG_I(log, PH_DRIVER, i18n_tr("compiling %s -> js"), path);
                     lok = lexer_run(arena, log, modpack, src, &toks);
                     pok = parser_run(arena, log, toks, &program);
                     if (!cc_prune_program(arena, log, path, cc, program)) pok = false;
@@ -340,7 +340,8 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                         }
                         {
                             jsgen_output_t *out =
-                                jsgen_run(arena, log, program, sr, module, modentry);
+                                jsgen_run(arena, log, program, sr, module, modentry,
+                                          !opt->no_js_minify_names);
                             outputs[nout++] = out;
                             if (!entry_name && wi < nentries && out->entry_mangled)
                                 entry_name = out->entry_mangled;
@@ -509,10 +510,11 @@ int driver_js(options_t *opt)
             sb_puts(&page, "</script>\n</body>\n</html>\n");
             if (!write_file(log, output, sb_cstr(&page))) rc = 2;
             sb_free(&page);
-            if (rc == 0) LOG_I(log, PH_DRIVER, "built self-contained page: %s", output);
+            if (rc == 0)
+                LOG_I(log, PH_DRIVER, i18n_tr("built self-contained page: %s"), output);
         } else {
             if (!write_file(log, output, js)) rc = 2;
-            if (rc == 0) LOG_I(log, PH_DRIVER, "built JavaScript: %s", output);
+            if (rc == 0) LOG_I(log, PH_DRIVER, i18n_tr("built JavaScript: %s"), output);
         }
     }
     logger_free(log);

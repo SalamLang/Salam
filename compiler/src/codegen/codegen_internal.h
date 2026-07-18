@@ -50,6 +50,8 @@ typedef struct {
     int lam_n;
     int clos_n;
     ast_node_t *cur_lambda;
+    bool is_gui_mode;
+    const char *target_triple;
 } cg_t;
 
 const char *cg_fmt(cg_t *cg, const char *fmt, ...);

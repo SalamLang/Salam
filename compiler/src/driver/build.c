@@ -340,7 +340,7 @@ int driver_build(options_t *opt)
             }
             codegen_output_t *out =
                 codegen_run(arena, log, program, sr, module, opt->safe, opt->debug_info,
-                            src->path, modentry);
+                            src->path, modentry, opt->llvm_target);
             size_t pfxlen = strlen(SALAM_MOD_PREFIX);
             size_t pathcap = pfxlen + strlen(module) + 3;
             char *cpath = (char *)arena_alloc(arena, pathcap);

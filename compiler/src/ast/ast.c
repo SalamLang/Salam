@@ -53,6 +53,7 @@ static const char *const k_ast_names[AST__COUNT] = {
     [AST_MEMBER] = "MemberAccess",
     [AST_INDEX] = "ArrayAccess",
     [AST_SLICE] = "SliceExpr",
+    [AST_TERNARY] = "TernaryExpr",
     [AST_ARRAY_LIT] = "ArrayLiteral",
     [AST_LAMBDA] = "Lambda",
     [AST_STRUCT_LIT] = "StructLiteral",
@@ -68,6 +69,16 @@ const char *ast_kind_name(ast_kind_t kind)
 {
     if (kind < 0 || kind >= AST__COUNT || !k_ast_names[kind]) return "Unknown";
     return k_ast_names[kind];
+}
+
+long ast_str_lit_len(const ast_node_t *n)
+{
+    if (!n || n->kind != AST_LITERAL) return -1;
+    if (n->op != TK_STRING && n->op != TK_TRIPLE_STRING && n->op != TK_RAW_STRING)
+        return -1;
+    if (n->value.kind != TV_STRING || !n->value.as.s) return -1;
+    if (n->value.slen) return (long)n->value.slen;
+    return (long)strlen(n->value.as.s);
 }
 
 ast_node_t *ast_new(arena_t *a, ast_kind_t kind, const src_span_t *span)

@@ -145,6 +145,11 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
                 sb_puts(&attrs, lfmt(cx, " %s=\"%s\"", nm, html_escape(cx, v)));
                 continue;
             }
+            if (!strcmp(el->name, "canvas") &&
+                (!strcmp(nm, "width") || !strcmp(nm, "height"))) {
+                sb_puts(&attrs, lfmt(cx, " %s=\"%s\"", nm, html_escape(cx, v)));
+                continue;
+            }
             const layout_attr_def_t *ad = layout_attr_lookup(nm);
             layout_attr_dest_t dest = ad ? ad->dest : LA_CSS;
             switch (dest) {
@@ -270,6 +275,10 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
         goto done;
     }
 
+    if (!strcmp(el->name, "canvas")) {
+        html_line(cx, "<canvas%s%s></canvas>", classattr, A);
+        goto done;
+    }
     if (type == LE_SINGLE) {
         html_line(cx, "<%s%s%s />", tag, classattr, A);
         goto done;

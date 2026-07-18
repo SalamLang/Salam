@@ -30,6 +30,9 @@ int cli_dispatch_command(int argc, char **argv, options_t *out)
     } else if (strcmp(cmd, "llvm") == 0 || strcmp(cmd, "emit-llvm") == 0) {
         out->command = CMD_LLVM;
         start = 2;
+    } else if (strcmp(cmd, "js") == 0 || strcmp(cmd, "emit-js") == 0) {
+        out->command = CMD_JS;
+        start = 2;
     } else if (strcmp(cmd, "run") == 0) {
         out->command = CMD_RUN;
         start = 2;
@@ -57,6 +60,9 @@ int cli_dispatch_command(int argc, char **argv, options_t *out)
         start = 2;
     } else if (strcmp(cmd, "version") == 0) {
         out->command = CMD_VERSION;
+        start = 2;
+    } else if (strcmp(cmd, "web") == 0) {
+        out->command = CMD_WEB;
         start = 2;
     } else if (strcmp(cmd, "layout") == 0) {
         if (argc > 2 && strcmp(argv[2], "build") == 0) {

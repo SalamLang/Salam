@@ -319,6 +319,43 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
     sb_puts(h, "#include <stdint.h>\n#include <stdbool.h>\n#include <math.h>\n#include "
                "<stddef.h>\n");
 
+    sb_puts(
+        h,
+        "#ifndef SALAM_OUT_DEFINED\n#define SALAM_OUT_DEFINED\n"
+        "#define SALAM_OB_SZ 65536\n"
+        "extern void *stdout;\n"
+        "extern int fflush(void *);\n"
+        "#if defined(_WIN32)\n"
+        "extern int _write(int, void *, unsigned);\n"
+        "#define SALAM_RAW_WRITE(fd, buf, n) _write((fd), (void *)(buf), (unsigned)(n))\n"
+        "#else\n"
+        "extern int64_t write(int32_t, void *, uint64_t);\n"
+        "#define SALAM_RAW_WRITE(fd, buf, n) write((fd), (void *)(buf), (uint64_t)(n))\n"
+        "#endif\n"
+        "#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)\n"
+        "__attribute__((weak)) char salam_ob[SALAM_OB_SZ];\n"
+        "__attribute__((weak)) uint64_t salam_obn;\n"
+        "__attribute__((weak)) void salam_out_flush(void) {\n"
+        "    if (salam_obn) { int64_t r = (int64_t)SALAM_RAW_WRITE(1, salam_ob, "
+        "salam_obn); (void)r; salam_obn = 0; }\n"
+        "}\n"
+        "__attribute__((weak, destructor)) void salam_out_fini(void) { salam_out_flush(); "
+        "}\n"
+        "static inline void salam_out_write_(const void *s, uint64_t n) {\n"
+        "    if (salam_obn + n > SALAM_OB_SZ) salam_out_flush();\n"
+        "    if (n >= SALAM_OB_SZ) { int64_t r = (int64_t)SALAM_RAW_WRITE(1, s, n); "
+        "(void)r; return; }\n"
+        "    __builtin_memcpy(salam_ob + salam_obn, s, (size_t)n); salam_obn += n;\n"
+        "}\n"
+        "#else\n"
+        "static void salam_out_flush(void) { fflush(stdout); }\n"
+        "static void salam_out_write_(const void *s, uint64_t n) {\n"
+        "    int64_t r = (int64_t)SALAM_RAW_WRITE(1, s, n); (void)r;\n"
+        "}\n"
+        "#endif\n"
+        "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), (uint64_t)(n))\n"
+        "#endif\n");
+
     sb_puts(h, "#ifndef SALAM_RT_TYPES_DEFINED\n#define SALAM_RT_TYPES_DEFINED\n"
                "typedef struct salam_file salam_file;\n"
                "typedef struct salam_map salam_map;\n"
@@ -329,14 +366,13 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "void* " SALAM_MEM_ALLOC "(uint64_t size);\n"
                "void* " SALAM_MEM_REALLOC "(void* ptr, uint64_t size);\n"
                "void " SALAM_MEM_FREE "(void* ptr);\n"
-               "static inline salam_slice salam_slice_new(void* b, int64_t lo, int64_t "
-               "hi, int64_t esz)"
-               "{ salam_slice s; s.data=(void*)((char*)b+(lo)*(esz)); s.len=(hi)-(lo); "
-               "return s; }\n"
-               "static inline salam_slice salam_slice_sub(salam_slice b, int64_t lo, "
-               "int64_t hi, int has_hi, int64_t esz)"
-               "{ salam_slice s; if(!has_hi) hi=b.len; "
-               "s.data=(void*)((char*)b.data+(lo)*(esz)); s.len=(hi)-(lo); return s; }\n"
+               "static inline void salam_slice_new(salam_slice* out, void* b, int64_t "
+               "lo, int64_t hi, int64_t esz)"
+               "{ out->data=(void*)((char*)b+(lo)*(esz)); out->len=(hi)-(lo); }\n"
+               "static inline void salam_slice_sub(salam_slice* out, salam_slice b, "
+               "int64_t lo, int64_t hi, int has_hi, int64_t esz)"
+               "{ if(!has_hi) hi=b.len; "
+               "out->data=(void*)((char*)b.data+(lo)*(esz)); out->len=(hi)-(lo); }\n"
                "static inline void* salam_slice_at(salam_slice s, int64_t i, int64_t "
                "esz, int sf)"
                "{ return (void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n"
@@ -381,7 +417,8 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                                     ? d->value.as.s
                                     : d->name;
                 if (!p) continue;
-                const char *resolved = salam_resolve_import(cg->a, "", p);
+                const char *resolved =
+                    d->type_str ? d->type_str : salam_resolve_import(cg->a, "", p);
                 const char *slash = strrchr(resolved, '/');
                 const char *bs = strrchr(resolved, '\\');
                 const char *stem = slash ? slash + 1 : resolved;

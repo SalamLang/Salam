@@ -380,6 +380,38 @@ static const char *cg_tidy(arena_t *a, const char *src)
     return r;
 }
 
+static bool node_uses_spawn(ast_node_t *n)
+{
+    if (!n) return false;
+    if (n->kind == AST_CALL && n->a && n->a->kind == AST_IDENTIFIER && n->a->name &&
+        strcmp(n->a->name, "spawn") == 0)
+        return true;
+    if (node_uses_spawn(n->a) || node_uses_spawn(n->b) || node_uses_spawn(n->c) ||
+        node_uses_spawn(n->d))
+        return true;
+    {
+        size_t i = 0;
+        for (; i < n->list.len; i++)
+            if (node_uses_spawn((ast_node_t *)n->list.data[i])) return true;
+    }
+    return false;
+}
+
+bool salam_module_single_threaded(ast_node_t *program)
+{
+    size_t i = 0;
+    for (; i < program->list.len; i++) {
+        ast_node_t *d = (ast_node_t *)program->list.data[i];
+        if (d->kind == AST_IMPORT) {
+            const char *p =
+                (d->value.kind == TV_STRING && d->value.as.s) ? d->value.as.s : d->name;
+            if (p && strstr(p, "thread")) return false;
+        }
+        if (node_uses_spawn(d)) return false;
+    }
+    return true;
+}
+
 codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
                               sema_result_t *sem, const char *module, bool safe,
                               bool debug_info, const char *src_path, const char *entry)
@@ -392,6 +424,7 @@ codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
     cg.module = module;
     cg.safe = safe;
     cg.debug_info = debug_info;
+    cg.single_threaded = salam_module_single_threaded(program);
     cg.src_path = src_path ? src_path : "";
     cg.pkg = program->name ? program->name : "main";
     cg.entry = (entry && entry[0]) ? entry : "main";

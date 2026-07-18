@@ -33,9 +33,24 @@ typedef struct {
     value_t val;
 } binding_t;
 
+typedef struct {
+    const char **keys;
+    void **vals;
+    size_t cap;
+    size_t count;
+} itab_t;
+
+typedef struct {
+    const void **keys;
+    void **vals;
+    size_t cap;
+    size_t count;
+} ptab_t;
+
 typedef struct env {
     struct env *parent;
     vec_t bindings;
+    itab_t *index;
 } env_t;
 
 typedef struct module {
@@ -71,6 +86,13 @@ typedef struct {
     vec_t extern_fns;
     vec_t extern_decls;
     vec_t def_envs;
+    itab_t tab_funcs;
+    itab_t tab_structs;
+    itab_t tab_enums;
+    itab_t tab_modules;
+    itab_t tab_extern_fns;
+    itab_t tab_extern_decls;
+    ptab_t tab_def_envs;
     const char *in_data;
     size_t in_pos;
     jmp_buf on_error;
@@ -173,6 +195,8 @@ smap_t *map_new(interp_t *I);
 void map_put(interp_t *I, smap_t *m, value_t k, value_t val);
 
 smap_entry_t *map_find(smap_t *m, value_t k);
+
+bool map_remove(smap_t *m, value_t k);
 
 value_t mk_map(smap_t *m);
 

@@ -478,7 +478,8 @@ const char *func_cast_params_env(cg_t *cg, const char *ts)
 
 bool type_is_byval_agg(const type_t *t)
 {
-    return t && (t->kind == TY_STRUCT || t->kind == TY_VEC || t->kind == TY_DYN);
+    return t && (t->kind == TY_STRUCT || t->kind == TY_VEC || t->kind == TY_DYN ||
+                 t->kind == TY_SLICE);
 }
 
 long array_size_of(const char *ts)

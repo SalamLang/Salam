@@ -157,6 +157,21 @@ func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,
     return NULL;
 }
 
+static void mark_ref_args(sema_t *s, ast_node_t *call, func_sig_t *sig)
+{
+    if (!sig || !sig->decl) return;
+    size_t i = 0;
+    for (; i < call->list.len && i < sig->decl->list.len; i++) {
+        ast_node_t *p = (ast_node_t *)sig->decl->list.data[i];
+        ast_node_t *arg = (ast_node_t *)call->list.data[i];
+        if (p->kind != AST_PARAM || !p->is_ref) continue;
+        if (arg && arg->kind == AST_IDENTIFIER && arg->name) {
+            symbol_t *sym = scope_lookup(s->cur, arg->name);
+            if (sym) sym->mutated = true;
+        }
+    }
+}
+
 static type_t *try_impl_call(sema_t *s, ast_node_t *n, ast_node_t *callee, type_t *objt,
                              vec_t *argtypes)
 {
@@ -166,6 +181,7 @@ static type_t *try_impl_call(sema_t *s, ast_node_t *n, ast_node_t *callee, type_
     symbol_t *m = scope_lookup_local(owner->members, callee->name);
     if (!m || m->kind != SYM_METHOD) return NULL;
     func_sig_t *sig = resolve_overload(s, m, argtypes, &n->span, callee->name);
+    mark_ref_args(s, n, sig);
     decorate(s, callee, m->type);
     return decorate(s, n, sig ? sig->ret : err_ty(s));
 }
@@ -181,9 +197,9 @@ static void check_pure_recv_mut(sema_t *s, ast_node_t *n, const char *m)
 
 static void check_pure_builtin(sema_t *s, ast_node_t *n, const char *nm)
 {
-    static const char *impure[] = {
-        "print", "_",          "println", "__",    "printerr",    "input", "open",
-        "args",  "printerrln", "listdir", "spawn", "callhandler", "join",  NULL};
+    static const char *impure[] = {"print", "println",     "printerr", "printerrln",
+                                   "input", "open",        "args",     "listdir",
+                                   "spawn", "callhandler", "join",     NULL};
     ast_node_t *pf = sema_pure_fn(s);
     if (!pf || !nm) return;
     {
@@ -328,8 +344,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
 
     if (callee && callee->kind == AST_IDENTIFIER) {
         const char *nm = callee->name;
-        if (strcmp(nm, "print") == 0 || strcmp(nm, "_") == 0 ||
-            strcmp(nm, "println") == 0 || strcmp(nm, "__") == 0 ||
+        if (strcmp(nm, "print") == 0 || strcmp(nm, "println") == 0 ||
             strcmp(nm, "printerr") == 0 || strcmp(nm, "printerrln") == 0) {
             decorate(s, callee, ty(s, TY_VOID));
             return decorate(s, n, ty(s, TY_VOID));
@@ -428,6 +443,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             callee->name = inst->name;
         }
         func_sig_t *sig = resolve_overload(s, sym, &argtypes, &n->span, nm);
+        mark_ref_args(s, n, sig);
         coerce_args_to_dyn(s, n, &argtypes, sig);
         decorate(s, callee, sym->type);
         return decorate(s, n,
@@ -466,11 +482,13 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                 callee->kind = AST_IDENTIFIER;
                 callee->name = inst->name;
                 func_sig_t *sig = resolve_overload(s, inst, &argtypes, &n->span, fname);
+                mark_ref_args(s, n, sig);
                 decorate(s, callee, inst->type);
                 return decorate(
                     s, n, sig ? g_localize_instance(s, sig->ret, &n->span) : err_ty(s));
             }
             func_sig_t *sig = resolve_overload(s, fn, &argtypes, &n->span, fname);
+            mark_ref_args(s, n, sig);
             decorate(s, callee->a, pk->type);
             decorate(s, callee, fn->type);
             return decorate(s, n,
@@ -481,6 +499,15 @@ type_t *check_call(sema_t *s, ast_node_t *n)
     if (callee && callee->kind == AST_MEMBER) {
         type_t *objt = sema_check_expr(s, callee->a);
         if (type_is_error(objt)) return decorate(s, n, err_ty(s));
+        {
+            ast_node_t *root = callee->a;
+            while (root && (root->kind == AST_MEMBER || root->kind == AST_INDEX))
+                root = root->a;
+            if (root && root->kind == AST_IDENTIFIER && root->name) {
+                symbol_t *rsym = scope_lookup(s->cur, root->name);
+                if (rsym) rsym->mutated = true;
+            }
+        }
 
         if (callee->name &&
             (objt->kind == TY_MAP || objt->kind == TY_MAP_ITER || objt->kind == TY_VEC ||
@@ -647,6 +674,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                 }
                 func_sig_t *sig =
                     resolve_overload(s, m, &argtypes, &n->span, callee->name);
+                mark_ref_args(s, n, sig);
                 coerce_args_to_dyn(s, n, &argtypes, sig);
                 return decorate(s, n, sig ? sig->ret : err_ty(s));
             }
@@ -706,6 +734,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             SERR(s, 17, &n->span, "method '%s' is private in struct '%s' (mark it 'pub')",
                  callee->name, ssym->name);
         func_sig_t *sig = resolve_overload(s, m, &argtypes, &n->span, callee->name);
+        mark_ref_args(s, n, sig);
         coerce_args_to_dyn(s, n, &argtypes, sig);
         decorate(s, callee, m->type);
         return decorate(s, n,

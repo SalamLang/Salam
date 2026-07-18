@@ -232,6 +232,46 @@ static type_t *check_binary(sema_t *s, ast_node_t *n)
     return decorate(s, n, err_ty(s));
 }
 
+static type_t *check_ternary(sema_t *s, ast_node_t *n)
+{
+    type_t *exp = s->expected;
+    s->expected = NULL;
+    type_t *c = sema_check_expr(s, n->a);
+    if (c->kind != TY_BOOL && !type_is_error(c))
+        SERR(s, 21, &n->a->span, "'?:' condition must be bool, got '%s'",
+             type_to_string(s->tc, c));
+    bool t_lit = is_int_lit(n->b), f_lit = is_int_lit(n->c);
+    type_t *tt, *tf;
+    if (f_lit && !t_lit) {
+        s->expected = exp;
+        tt = sema_check_expr(s, n->b);
+        s->expected = (tt && type_is_integer(tt)) ? tt : exp;
+        tf = sema_check_expr(s, n->c);
+    } else if (t_lit && !f_lit) {
+        s->expected = exp;
+        tf = sema_check_expr(s, n->c);
+        s->expected = (tf && type_is_integer(tf)) ? tf : exp;
+        tt = sema_check_expr(s, n->b);
+    } else {
+        s->expected = exp;
+        tt = sema_check_expr(s, n->b);
+        s->expected = exp;
+        tf = sema_check_expr(s, n->c);
+    }
+    s->expected = NULL;
+    if (type_is_error(tt) || type_is_error(tf)) return decorate(s, n, err_ty(s));
+    if (type_equiv(tt, tf)) return decorate(s, n, tt);
+    if (type_is_numeric(tt) && type_is_numeric(tf)) {
+        type_t *common = type_common_arith(s->tc, tt, tf);
+        if (common) return decorate(s, n, common);
+    }
+    if (tt->kind == TY_NULL && tf->kind == TY_PTR) return decorate(s, n, tf);
+    if (tf->kind == TY_NULL && tt->kind == TY_PTR) return decorate(s, n, tt);
+    SERR(s, 21, &n->span, "'?:' branches have mismatched types '%s' and '%s'",
+         type_to_string(s->tc, tt), type_to_string(s->tc, tf));
+    return decorate(s, n, err_ty(s));
+}
+
 static type_t *check_member(sema_t *s, ast_node_t *n)
 {
     if (n->a && n->a->kind == AST_IDENTIFIER) {
@@ -298,7 +338,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
 {
     if (!n) return ty(s, TY_VOID);
     if (n->kind != AST_LITERAL && n->kind != AST_STRUCT_LIT && n->kind != AST_ARRAY_LIT &&
-        n->kind != AST_CALL)
+        n->kind != AST_CALL && n->kind != AST_TERNARY)
         s->expected = NULL;
     switch (n->kind) {
     case AST_LITERAL: {
@@ -321,7 +361,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
             break;
         }
         case TK_FLOAT:
-            t = ty(s, TY_F64);
+            t = (exp && type_is_float(exp)) ? exp : ty(s, TY_F64);
             break;
         case TK_STRING:
         case TK_TRIPLE_STRING:
@@ -384,8 +424,13 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         }
         return decorate(s, n, s->self_type);
     }
-    case AST_BINARY:
-        return check_binary(s, n);
+    case AST_BINARY: {
+        type_t *bt = check_binary(s, n);
+        sema_fold_expr(s, n);
+        return bt;
+    }
+    case AST_TERNARY:
+        return check_ternary(s, n);
     case AST_UNARY: {
         type_t *o = sema_check_expr(s, n->a);
 
@@ -402,13 +447,20 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
             }
         }
         if (n->op == TK_NOT) {
+            type_t *bt;
             if (o->kind != TY_BOOL && !type_is_error(o))
                 SERR(s, 21, &n->span, "operator '!' requires a bool operand");
-            return decorate(s, n, ty(s, TY_BOOL));
+            bt = decorate(s, n, ty(s, TY_BOOL));
+            sema_fold_expr(s, n);
+            return bt;
         }
         if (!type_is_numeric(o) && !type_is_error(o))
             SERR(s, 21, &n->span, "unary '-' requires a numeric operand");
-        return decorate(s, n, o);
+        {
+            type_t *ut = decorate(s, n, o);
+            sema_fold_expr(s, n);
+            return ut;
+        }
     }
     case AST_INCDEC: {
         type_t *o = sema_check_expr(s, n->a);
@@ -472,6 +524,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         if (arr->kind == TY_ARRAY) return decorate(s, n, arr->elem);
         if (arr->kind == TY_SLICE) return decorate(s, n, arr->elem);
         if (arr->kind == TY_PTR) return decorate(s, n, arr->pointee);
+        if (arr->kind == TY_STR) return decorate(s, n, ty(s, TY_CHAR));
         if (!type_is_error(arr))
             SERR(s, 21, &n->span, "cannot index non-array type '%s'",
                  type_to_string(s->tc, arr));

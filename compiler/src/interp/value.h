@@ -105,6 +105,10 @@ struct smap {
     smap_entry_t *entries;
     size_t count;
     size_t cap;
+    uint32_t *index;
+    size_t index_cap;
+    size_t index_used;
+    size_t free_hint;
 };
 
 struct smapiter {

@@ -149,6 +149,7 @@ void lx_scan_number(lx_t *L)
     token_value_t v;
     bool overflow;
     decode_number(clean, is_float, &v, &overflow);
+    v.slen = 0;
     if (overflow) lx_error(L, &b, "integer literal is too large for a 64-bit value");
     lx_emit_val(L, is_float ? TK_FLOAT : TK_INT, &b, text, &v);
 }

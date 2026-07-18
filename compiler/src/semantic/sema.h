@@ -41,6 +41,9 @@ void symbols_to_xml(xml_writer_t *w, const sema_result_t *r);
 
 const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec);
 
+const char *salam_resolve_import_node(arena_t *a, const char *dir, const ast_node_t *imp,
+                                      const char *lang);
+
 int salam_package_files(arena_t *a, const char *main_path, const char **out, int max);
 
 void salam_merge_program(arena_t *a, ast_node_t *dst, ast_node_t *src);

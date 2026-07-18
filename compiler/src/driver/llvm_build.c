@@ -114,7 +114,7 @@ static void ll_scan_links(ast_node_t *prog, const char **libs, const char **kind
 }
 
 static int ll_enqueue_imports(arena_t *a, ast_node_t *prog, const char *dir,
-                              const char **work, int *nwork, int cap)
+                              const char *lang, const char **work, int *nwork, int cap)
 {
     int dropped = 0;
     if (!prog) return 0;
@@ -123,10 +123,8 @@ static int ll_enqueue_imports(arena_t *a, ast_node_t *prog, const char *dir,
         for (; k < prog->list.len; k++) {
             ast_node_t *d = (ast_node_t *)prog->list.data[k];
             if (d->kind != AST_IMPORT) continue;
-            const char *spec =
-                (d->value.kind == TV_STRING && d->value.as.s) ? d->value.as.s : d->name;
-            if (!spec) continue;
-            const char *ip = salam_resolve_import(a, dir, spec);
+            const char *ip =
+                d->type_str ? d->type_str : salam_resolve_import_node(a, dir, d, lang);
             if (!ip) continue;
             bool seen = false;
             {
@@ -149,15 +147,16 @@ static int ll_enqueue_imports(arena_t *a, ast_node_t *prog, const char *dir,
 
 static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
                            const char *main_path, ast_node_t *main_prog,
-                           const cc_table_t *cc, const char **libs, const char **kinds,
-                           int cap)
+                           const char *main_lang, const cc_table_t *cc, const char **libs,
+                           const char **kinds, int cap)
 {
     int n = 0;
     const char *work[256];
     int nwork = 0, wi = 0, dropped = 0;
 
     ll_scan_links(main_prog, libs, kinds, &n, cap);
-    dropped += ll_enqueue_imports(a, main_prog, dir_of(a, main_path), work, &nwork, 256);
+    dropped += ll_enqueue_imports(a, main_prog, dir_of(a, main_path), main_lang, work,
+                                  &nwork, 256);
 
     for (; wi < nwork; wi++) {
         const char *path = work[wi];
@@ -185,7 +184,8 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
             }
         }
         ll_scan_links(prog, libs, kinds, &n, cap);
-        dropped += ll_enqueue_imports(a, prog, dir_of(a, path), work, &nwork, 256);
+        dropped += ll_enqueue_imports(a, prog, dir_of(a, path), langpack_code(mp), work,
+                                      &nwork, 256);
     }
     if (dropped > 0)
         LOG_W(log, PH_DRIVER,
@@ -254,8 +254,9 @@ int driver_llvm(options_t *opt)
     const char *link_kinds[SALAM_MAX_INPUTS];
     char sysroot_buf[1024];
     if (o.output_mode == LLVM_OUT_EXEC) {
-        o.nlink = ll_gather_links(arena, log, pack, opt->input, program, cc, link_libs,
-                                  link_kinds, SALAM_MAX_INPUTS);
+        o.nlink =
+            ll_gather_links(arena, log, pack, opt->input, program, langpack_code(modpack),
+                            cc, link_libs, link_kinds, SALAM_MAX_INPUTS);
         o.link_libs = link_libs;
         o.link_kinds = link_kinds;
         if (opt->llvm_target &&
@@ -297,7 +298,8 @@ int driver_llvm(options_t *opt)
         return 1;
     }
     if (ir_mode) {
-        if (o.verify_module) rc = salam_llvm_toolchain(log, llpath, &o);
+        if (o.verify_module || o.opt_level != LLVM_OPT_O0)
+            rc = salam_llvm_toolchain(log, llpath, &o);
         if (rc == 0) {
             LOG_I(log, PH_DRIVER, "LLVM IR written to %s", llpath);
             LOG_I(log, PH_DRIVER,

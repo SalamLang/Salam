@@ -41,7 +41,7 @@ esac
     src/semantic/sema.c src/semantic/sema_layout.c src/semantic/sema_generic.c \
     src/semantic/sema_util.c src/semantic/sema_type.c \
     src/semantic/sema_decl.c src/semantic/sema_expr.c src/semantic/sema_stmt.c \
-    src/semantic/sema_lit.c src/semantic/sema_call.c \
+    src/semantic/sema_lit.c src/semantic/sema_call.c src/semantic/sema_fold.c \
     src/codegen/codegen.c src/codegen/codegen_emit.c src/codegen/codegen_type.c \
     src/codegen/codegen_overload.c src/codegen/codegen_expr.c src/codegen/codegen_call.c \
     src/codegen/codegen_stmt.c src/codegen/codegen_lambda.c \
@@ -49,6 +49,8 @@ esac
     src/llvm/codegen_llvm.c src/llvm/codegen_llvm_emit.c src/llvm/codegen_llvm_type.c \
     src/llvm/codegen_llvm_expr.c src/llvm/codegen_llvm_stmt.c src/llvm/codegen_llvm_decl.c \
     src/llvm/codegen_llvm_debug.c src/llvm/llvm_native.c \
+    src/jsgen/jsgen.c src/jsgen/jsgen_expr.c src/jsgen/jsgen_stmt.c \
+    src/jsgen/jsgen_host.c \
     src/interp/interp.c src/interp/interp_builtin.c src/interp/interp_value.c \
     src/interp/interp_expr.c src/interp/interp_stmt.c src/interp/interp_ffi.c \
     src/layout/registry.c src/layout/layout_gen.c src/layout/layout_gen_element.c \
@@ -56,7 +58,8 @@ esac
     src/fmt/fmt.c src/fmt/fmt_rules.c \
     src/cli/cli.c src/cli/cli_help.c src/cli/cli_options.c src/cli/cli_subcmd.c \
     src/driver/driver.c src/driver/build.c src/driver/llvm_build.c \
-    src/driver/llvm_toolchain.c \
+    src/driver/llvm_toolchain.c src/driver/js_build.c src/driver/web_build.c \
+    src/driver/embed_sysroot.c \
     src/driver/layout_build.c src/driver/debug_cmd.c src/driver/repl.c \
     $LDLIBS
 echo "built ./salam with $CC"

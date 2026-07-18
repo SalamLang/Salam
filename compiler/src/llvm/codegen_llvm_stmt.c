@@ -196,14 +196,41 @@ static void ll_for(ll_t *ll, ast_node_t *n)
     ll->locals.len = mark;
 }
 
+static bool ll_const_i64(ast_node_t *n, long long *out)
+{
+    if (!n || n->kind != AST_LITERAL || n->op != TK_INT) return false;
+    *out = (long long)n->value.as.i;
+    return true;
+}
+
 static void ll_repeat(ll_t *ll, ast_node_t *n)
 {
     const char *initv, *boundv, *stepv;
     const char *dir = NULL;
+    bool static_dir = false, static_up = false;
     if (n->c) {
-        initv = ll_conv(ll, ll_expr(ll, n->a), "i64");
-        boundv = ll_conv(ll, ll_expr(ll, n->c), "i64");
-        {
+        long long ci = 0, cb = 0, cs = 0;
+        if (ll_const_i64(n->a, &ci) && ll_const_i64(n->c, &cb)) {
+            static_dir = true;
+            static_up = ci <= cb;
+            initv = ll_fmt(ll, "%lld", ci);
+            boundv = ll_fmt(ll, "%lld", cb);
+            if (!n->d) {
+                stepv = static_up ? "1" : "-1";
+            } else if (ll_const_i64(n->d, &cs)) {
+                stepv = ll_fmt(ll, "%lld", static_up ? cs : -cs);
+            } else {
+                const char *raw = ll_conv(ll, ll_expr(ll, n->d), "i64");
+                if (static_up) {
+                    stepv = raw;
+                } else {
+                    stepv = ll_new_tmp(ll);
+                    ll_emit(ll, "%s = sub i64 0, %s", stepv, raw);
+                }
+            }
+        } else {
+            initv = ll_conv(ll, ll_expr(ll, n->a), "i64");
+            boundv = ll_conv(ll, ll_expr(ll, n->c), "i64");
             const char *raw = n->d ? ll_conv(ll, ll_expr(ll, n->d), "i64") : "1";
             const char *neg = ll_new_tmp(ll);
             dir = ll_new_tmp(ll);
@@ -236,7 +263,11 @@ static void ll_repeat(ll_t *ll, ast_node_t *n)
     const char *cv = ll_new_tmp(ll);
     ll_emit(ll, "%s = load i64, ptr %s", cv, ctr);
     const char *cmp;
-    if (n->c) {
+    if (n->c && static_dir) {
+        cmp = ll_new_tmp(ll);
+        ll_emit(ll, "%s = icmp %s i64 %s, %s", cmp, static_up ? "sle" : "sge", cv,
+                boundv);
+    } else if (n->c) {
         const char *le = ll_new_tmp(ll);
         const char *ge = ll_new_tmp(ll);
         ll_emit(ll, "%s = icmp sle i64 %s, %s", le, cv, boundv);

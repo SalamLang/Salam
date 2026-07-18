@@ -41,8 +41,10 @@ static bool cli_positional(const char *arg, options_t *out)
     case CMD_BUILD:
     case CMD_OBJ:
     case CMD_LLVM:
+    case CMD_JS:
     case CMD_RUN:
     case CMD_LAYOUT_BUILD:
+    case CMD_WEB:
     case CMD_DEBUG:
     case CMD_MEMCHECK:
     case CMD_FMT:
@@ -142,6 +144,8 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                 out->interp = true;
             } else if (strcmp(arg, "--inline") == 0) {
                 out->inline_mode = true;
+            } else if (strcmp(arg, "--split") == 0) {
+                out->split = true;
             } else if ((val = cli_opt_value(arg, "--output")) != NULL) {
                 out->output = val;
             } else if (strcmp(arg, "-o") == 0) {

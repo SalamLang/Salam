@@ -148,28 +148,34 @@ static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
     }
     switch (opts->output_mode) {
     case LLVM_OUT_ASM:
-        emit_tool(s, LLC);
+        /*
+         * Use clang, not `llc`, so the middle-end optimizer runs. `llc -On`
+         * only sets the *codegen* level; it lowers whatever IR it is given
+         * without inlining, mem2reg, global-DCE, etc. Routing through clang
+         * runs the full `-On` pipeline (opt + codegen), matching EXEC output.
+         */
+        emit_tool(s, CLANG);
         sb_putc(s, ' ');
         sb_puts(s, O);
         if (triple) {
-            sb_puts(s, " -mtriple=");
+            sb_puts(s, " --target=");
             sb_puts(s, triple);
         } else if (opts->native_cpu) {
-            sb_puts(s, " -mcpu=native");
+            sb_puts(s, " -march=native");
         }
-        sb_puts(s, " -filetype=asm \"$IN\" -o \"$OUT\"\n");
+        sb_puts(s, " -S \"$IN\" -o \"$OUT\"\n");
         break;
     case LLVM_OUT_OBJ:
-        emit_tool(s, LLC);
+        emit_tool(s, CLANG);
         sb_putc(s, ' ');
         sb_puts(s, O);
         if (triple) {
-            sb_puts(s, " -mtriple=");
+            sb_puts(s, " --target=");
             sb_puts(s, triple);
         } else if (opts->native_cpu) {
-            sb_puts(s, " -mcpu=native");
+            sb_puts(s, " -march=native");
         }
-        sb_puts(s, " -filetype=obj \"$IN\" -o \"$OUT\"\n");
+        sb_puts(s, " -c \"$IN\" -o \"$OUT\"\n");
         break;
     case LLVM_OUT_BITCODE:
         emit_tool(s, OPTT);
@@ -217,7 +223,14 @@ static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
         }
         break;
     case LLVM_OUT_IR:
-        if (!opts->verify_module) sb_puts(s, "true\n");
+        if (opts->opt_level != LLVM_OPT_O0) {
+            emit_tool(s, OPTT);
+            sb_putc(s, ' ');
+            sb_puts(s, O);
+            sb_puts(s, " -S \"$IN\" -o \"$IN\"\n");
+        } else if (!opts->verify_module) {
+            sb_puts(s, "true\n");
+        }
         break;
     }
 }

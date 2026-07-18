@@ -224,17 +224,6 @@ value_t mk_array(interp_t *I, sarray_t *a)
     return v;
 }
 
-smap_t *map_new(interp_t *I)
-{
-    smap_t *m = (smap_t *)arena_alloc(I->a, sizeof *m);
-    m->count = 0;
-    m->cap = 8;
-    m->entries =
-        (smap_entry_t *)arena_alloc(I->a, salam_size_mul(m->cap, sizeof(smap_entry_t)));
-    memset(m->entries, 0, salam_size_mul(m->cap, sizeof(smap_entry_t)));
-    return m;
-}
-
 static bool key_eq(value_t a, value_t b)
 {
     if (a.kind != b.kind) return false;
@@ -246,15 +235,109 @@ static bool key_eq(value_t a, value_t b)
     return false;
 }
 
-void map_put(interp_t *I, smap_t *m, value_t k, value_t val)
+static size_t key_hash(value_t k)
 {
+    if (k.kind == VAL_STR) {
+        size_t h = 1469598103934665603u;
+        const unsigned char *p = (const unsigned char *)k.as.s;
+        for (; *p; p++) {
+            h ^= *p;
+            h *= 1099511628211u;
+        }
+        return h;
+    }
+    if (k.kind == VAL_INT || k.kind == VAL_CHAR) {
+        uint64_t x = (uint64_t)k.as.i;
+        x ^= x >> 33;
+        x *= 0xff51afd7ed558ccdULL;
+        x ^= x >> 33;
+        return (size_t)x;
+    }
+    if (k.kind == VAL_BOOL) return k.as.b ? 2u : 1u;
+    if (k.kind == VAL_FLOAT) {
+        double d = k.as.f == 0.0 ? 0.0 : k.as.f;
+        uint64_t bits = 0;
+        memcpy(&bits, &d, sizeof bits);
+        bits ^= bits >> 33;
+        bits *= 0xff51afd7ed558ccdULL;
+        bits ^= bits >> 33;
+        return (size_t)bits;
+    }
+    return 0;
+}
+
+#define MAP_SLOT_EMPTY 0u
+#define MAP_SLOT_TOMB 1u
+
+static void map_index_insert(smap_t *m, size_t hash, size_t entry_idx)
+{
+    size_t mask = m->index_cap - 1;
+    size_t i = hash & mask;
+    for (;; i = (i + 1) & mask) {
+        uint32_t s = m->index[i];
+        if (s == MAP_SLOT_EMPTY || s == MAP_SLOT_TOMB) {
+            if (s == MAP_SLOT_EMPTY) m->index_used++;
+            m->index[i] = (uint32_t)(entry_idx + 2);
+            return;
+        }
+    }
+}
+
+static void map_index_rebuild(interp_t *I, smap_t *m, size_t want)
+{
+    size_t nc = 16;
+    while (nc < want * 2)
+        nc *= 2;
+    m->index = (uint32_t *)arena_alloc(I->a, salam_size_mul(nc, sizeof(uint32_t)));
+    memset(m->index, 0, salam_size_mul(nc, sizeof(uint32_t)));
+    m->index_cap = nc;
+    m->index_used = 0;
     {
         size_t i = 0;
         for (; i < m->cap; i++)
-            if (m->entries[i].used && key_eq(m->entries[i].key, k)) {
-                m->entries[i].val = val;
-                return;
-            }
+            if (m->entries[i].used) map_index_insert(m, key_hash(m->entries[i].key), i);
+    }
+}
+
+smap_t *map_new(interp_t *I)
+{
+    smap_t *m = (smap_t *)arena_alloc(I->a, sizeof *m);
+    m->count = 0;
+    m->cap = 8;
+    m->entries =
+        (smap_entry_t *)arena_alloc(I->a, salam_size_mul(m->cap, sizeof(smap_entry_t)));
+    memset(m->entries, 0, salam_size_mul(m->cap, sizeof(smap_entry_t)));
+    m->free_hint = 0;
+    map_index_rebuild(I, m, m->cap);
+    return m;
+}
+
+static uint32_t *map_index_slot(smap_t *m, value_t k)
+{
+    size_t mask = m->index_cap - 1;
+    size_t i = key_hash(k) & mask;
+    for (;; i = (i + 1) & mask) {
+        uint32_t s = m->index[i];
+        if (s == MAP_SLOT_EMPTY) return NULL;
+        if (s != MAP_SLOT_TOMB) {
+            smap_entry_t *e = &m->entries[s - 2];
+            if (e->used && key_eq(e->key, k)) return &m->index[i];
+        }
+    }
+}
+
+smap_entry_t *map_find(smap_t *m, value_t k)
+{
+    uint32_t *slot = map_index_slot(m, k);
+    return slot ? &m->entries[*slot - 2] : NULL;
+}
+
+void map_put(interp_t *I, smap_t *m, value_t k, value_t val)
+{
+    smap_entry_t *e = map_find(m, k);
+    if (e) {
+        e->val = val;
+        return;
     }
     if (m->count + 1 > m->cap) {
         size_t nc = salam_grow_cap(m->cap, m->count + 1, 8);
@@ -266,26 +349,34 @@ void map_put(interp_t *I, smap_t *m, value_t k, value_t val)
         m->cap = nc;
     }
     {
-        size_t i = 0;
-        for (; i < m->cap; i++)
-            if (!m->entries[i].used) {
-                m->entries[i].key = k;
-                m->entries[i].val = val;
-                m->entries[i].used = true;
-                m->count++;
-                return;
-            }
+        size_t i = m->free_hint;
+        while (i < m->cap && m->entries[i].used)
+            i++;
+        m->entries[i].key = k;
+        m->entries[i].val = val;
+        m->entries[i].used = true;
+        m->count++;
+        m->free_hint = i + 1;
+        if ((m->index_used + 1) * 4 >= m->index_cap * 3)
+            map_index_rebuild(I, m, m->count);
+        else
+            map_index_insert(m, key_hash(k), i);
     }
 }
 
-smap_entry_t *map_find(smap_t *m, value_t k)
+bool map_remove(smap_t *m, value_t k)
 {
-    {
-        size_t i = 0;
-        for (; i < m->cap; i++)
-            if (m->entries[i].used && key_eq(m->entries[i].key, k)) return &m->entries[i];
-    }
-    return NULL;
+    uint32_t *slot = map_index_slot(m, k);
+    smap_entry_t *e;
+    size_t idx;
+    if (!slot) return false;
+    e = &m->entries[*slot - 2];
+    idx = (size_t)(*slot - 2);
+    e->used = false;
+    m->count--;
+    if (idx < m->free_hint) m->free_hint = idx;
+    *slot = MAP_SLOT_TOMB;
+    return true;
 }
 
 value_t mk_map(smap_t *m)

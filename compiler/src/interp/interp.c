@@ -35,16 +35,141 @@ void tick(interp_t *I)
         rt_error(I, NULL, "execution timed out (possible infinite loop)");
 }
 
+static size_t itab_hash(const char *s)
+{
+    size_t h = 1469598103934665603u;
+    const unsigned char *p = (const unsigned char *)s;
+    for (; *p; p++) {
+        h ^= *p;
+        h *= 1099511628211u;
+    }
+    return h;
+}
+
+static size_t ptab_hash(const void *p)
+{
+    uint64_t x = (uint64_t)(uintptr_t)p;
+    x ^= x >> 33;
+    x *= 0xff51afd7ed558ccdULL;
+    x ^= x >> 33;
+    return (size_t)x;
+}
+
+static void itab_grow(interp_t *I, itab_t *t, size_t want)
+{
+    const char **ok = t->keys;
+    void **ov = t->vals;
+    size_t oc = t->cap;
+    size_t nc = 16;
+    while (nc < want * 2)
+        nc *= 2;
+    t->keys = (const char **)arena_alloc(I->a, salam_size_mul(nc, sizeof(char *)));
+    t->vals = (void **)arena_alloc(I->a, salam_size_mul(nc, sizeof(void *)));
+    memset(t->keys, 0, salam_size_mul(nc, sizeof(char *)));
+    t->cap = nc;
+    {
+        size_t i = 0;
+        for (; i < oc; i++) {
+            if (!ok[i]) continue;
+            {
+                size_t mask = nc - 1;
+                size_t j = itab_hash(ok[i]) & mask;
+                while (t->keys[j])
+                    j = (j + 1) & mask;
+                t->keys[j] = ok[i];
+                t->vals[j] = ov[i];
+            }
+        }
+    }
+}
+
+static void *itab_get(itab_t *t, const char *key)
+{
+    size_t mask, i;
+    if (!t->cap) return NULL;
+    mask = t->cap - 1;
+    i = itab_hash(key) & mask;
+    for (; t->keys[i]; i = (i + 1) & mask)
+        if (strcmp(t->keys[i], key) == 0) return t->vals[i];
+    return NULL;
+}
+
+static void itab_put(interp_t *I, itab_t *t, const char *key, void *val)
+{
+    size_t mask, i;
+    if ((t->count + 1) * 4 >= t->cap * 3) itab_grow(I, t, t->count + 1);
+    mask = t->cap - 1;
+    i = itab_hash(key) & mask;
+    for (; t->keys[i]; i = (i + 1) & mask)
+        if (strcmp(t->keys[i], key) == 0) return;
+    t->keys[i] = key;
+    t->vals[i] = val;
+    t->count++;
+}
+
+static void *ptab_get(ptab_t *t, const void *key)
+{
+    size_t mask, i;
+    if (!t->cap) return NULL;
+    mask = t->cap - 1;
+    i = ptab_hash(key) & mask;
+    for (; t->keys[i]; i = (i + 1) & mask)
+        if (t->keys[i] == key) return t->vals[i];
+    return NULL;
+}
+
+static void ptab_put(interp_t *I, ptab_t *t, const void *key, void *val)
+{
+    size_t mask, i;
+    if ((t->count + 1) * 4 >= t->cap * 3) {
+        const void **ok = t->keys;
+        void **ov = t->vals;
+        size_t oc = t->cap;
+        size_t nc = 16;
+        while (nc < (t->count + 1) * 2)
+            nc *= 2;
+        t->keys = (const void **)arena_alloc(I->a, salam_size_mul(nc, sizeof(void *)));
+        t->vals = (void **)arena_alloc(I->a, salam_size_mul(nc, sizeof(void *)));
+        memset(t->keys, 0, salam_size_mul(nc, sizeof(void *)));
+        t->cap = nc;
+        {
+            size_t k = 0;
+            for (; k < oc; k++) {
+                if (!ok[k]) continue;
+                {
+                    size_t m2 = nc - 1;
+                    size_t j = ptab_hash(ok[k]) & m2;
+                    while (t->keys[j])
+                        j = (j + 1) & m2;
+                    t->keys[j] = ok[k];
+                    t->vals[j] = ov[k];
+                }
+            }
+        }
+    }
+    mask = t->cap - 1;
+    i = ptab_hash(key) & mask;
+    for (; t->keys[i]; i = (i + 1) & mask)
+        if (t->keys[i] == key) return;
+    t->keys[i] = key;
+    t->vals[i] = val;
+    t->count++;
+}
+
+#define ENV_INDEX_THRESHOLD 12
+
 env_t *env_new(interp_t *I, env_t *parent)
 {
     env_t *e = (env_t *)arena_alloc(I->a, sizeof *e);
     e->parent = parent;
     vec_init(&e->bindings);
+    e->index = NULL;
     return e;
 }
 
 binding_t *env_find_local(env_t *e, const char *name)
 {
+    if (e->index) return (binding_t *)itab_get(e->index, name);
     {
         size_t i = 0;
         for (; i < e->bindings.len; i++) {
@@ -75,81 +200,72 @@ void env_define(interp_t *I, env_t *e, const char *name, value_t v)
     b->name = name;
     b->val = v;
     vec_push(I->a, &e->bindings, b);
+    if (e->index) {
+        itab_put(I, e->index, name, b);
+    } else if (e->bindings.len >= ENV_INDEX_THRESHOLD) {
+        e->index = (itab_t *)arena_alloc(I->a, sizeof *e->index);
+        memset(e->index, 0, sizeof *e->index);
+        {
+            size_t i = 0;
+            for (; i < e->bindings.len; i++) {
+                binding_t *bi = (binding_t *)e->bindings.data[i];
+                itab_put(I, e->index, bi->name, bi);
+            }
+        }
+    }
 }
 
 ast_node_t *find_struct(interp_t *I, const char *name)
 {
-    {
-        size_t i = 0;
-        for (; i < I->structs.len; i++) {
-            ast_node_t *s = (ast_node_t *)I->structs.data[i];
-            if (s->name && strcmp(s->name, name) == 0) return s;
-        }
-    }
-    return NULL;
+    return (ast_node_t *)itab_get(&I->tab_structs, name);
 }
 
 ast_node_t *find_enum(interp_t *I, const char *name)
 {
-    {
-        size_t i = 0;
-        for (; i < I->enums.len; i++) {
-            ast_node_t *e = (ast_node_t *)I->enums.data[i];
-            if (e->name && strcmp(e->name, name) == 0) return e;
-        }
+    return (ast_node_t *)itab_get(&I->tab_enums, name);
+}
+
+static void register_func(interp_t *I, ast_node_t *f)
+{
+    vec_t *l;
+    vec_push(I->a, &I->funcs, f);
+    if (!f->name) return;
+    l = (vec_t *)itab_get(&I->tab_funcs, f->name);
+    if (!l) {
+        l = (vec_t *)arena_alloc(I->a, sizeof *l);
+        vec_init(l);
+        itab_put(I, &I->tab_funcs, f->name, l);
     }
-    return NULL;
+    vec_push(I->a, l, f);
 }
 
 ast_node_t *find_func(interp_t *I, const char *name, size_t nargs)
 {
-    ast_node_t *by_name = NULL;
+    vec_t *l = (vec_t *)itab_get(&I->tab_funcs, name);
+    if (!l || !l->len) return NULL;
     {
         size_t i = 0;
-        for (; i < I->funcs.len; i++) {
-            ast_node_t *f = (ast_node_t *)I->funcs.data[i];
-            if (!f->name || strcmp(f->name, name) != 0) continue;
+        for (; i < l->len; i++) {
+            ast_node_t *f = (ast_node_t *)l->data[i];
             if (f->list.len == nargs) return f;
-            if (!by_name) by_name = f;
         }
     }
-    return by_name;
+    return (ast_node_t *)l->data[0];
 }
 
 module_t *find_module(interp_t *I, const char *name)
 {
-    {
-        size_t i = 0;
-        for (; i < I->modules.len; i++) {
-            module_t *m = (module_t *)I->modules.data[i];
-            if (strcmp(m->name, name) == 0) return m;
-        }
-    }
-    return NULL;
+    return (module_t *)itab_get(&I->tab_modules, name);
 }
 
 value_t *find_extern_fn(interp_t *I, const char *name)
 {
-    {
-        size_t i = 0;
-        for (; i < I->extern_fns.len; i++) {
-            value_t *v = (value_t *)I->extern_fns.data[i];
-            if (v->as.fn->fn->name && strcmp(v->as.fn->fn->name, name) == 0) return v;
-        }
-    }
-    return NULL;
+    return (value_t *)itab_get(&I->tab_extern_fns, name);
 }
 
 ast_node_t *find_extern_decl(interp_t *I, const char *name)
 {
-    {
-        size_t i = 0;
-        for (; i < I->extern_decls.len; i++) {
-            ast_node_t *f = (ast_node_t *)I->extern_decls.data[i];
-            if (f->name && strcmp(f->name, name) == 0) return f;
-        }
-    }
-    return NULL;
+    return (ast_node_t *)itab_get(&I->tab_extern_decls, name);
 }
 
 ast_node_t *find_impl_method(interp_t *I, const char *typestr, const char *method,
@@ -208,6 +324,7 @@ static void register_def_env_one(interp_t *I, ast_node_t *def, env_t *env)
     e->def = def;
     e->env = env;
     vec_push(I->a, &I->def_envs, e);
+    ptab_put(I, &I->tab_def_envs, def, env);
 }
 
 void register_method_envs(interp_t *I, ast_node_t *def, env_t *env)
@@ -223,12 +340,7 @@ void register_method_envs(interp_t *I, ast_node_t *def, env_t *env)
 
 env_t *find_def_env(interp_t *I, ast_node_t *def)
 {
-    size_t i = 0;
-    for (; i < I->def_envs.len; i++) {
-        def_env_entry_t *e = (def_env_entry_t *)I->def_envs.data[i];
-        if (e->def == def) return e->env;
-    }
-    return NULL;
+    return (env_t *)ptab_get(&I->tab_def_envs, def);
 }
 
 static void register_extern_decl(interp_t *I, env_t *env, ast_node_t *d)
@@ -238,9 +350,11 @@ static void register_extern_decl(interp_t *I, env_t *env, ast_node_t *d)
         value_t *box = (value_t *)arena_alloc(I->a, sizeof *box);
         *box = cl;
         vec_push(I->a, &I->extern_fns, box);
+        if (d->name) itab_put(I, &I->tab_extern_fns, d->name, box);
         if (d->name && !env_find_local(env, d->name)) env_define(I, env, d->name, cl);
     } else {
         vec_push(I->a, &I->extern_decls, d);
+        if (d->name) itab_put(I, &I->tab_extern_decls, d->name, d);
     }
 }
 
@@ -256,14 +370,16 @@ static void collect_decls(interp_t *I, ast_node_t *program)
                     register_extern_decl(I, I->globals, d);
                     break;
                 }
-                vec_push(I->a, &I->funcs, d);
+                register_func(I, d);
                 break;
             case AST_STRUCT_DEF:
                 vec_push(I->a, &I->structs, d);
+                if (d->name) itab_put(I, &I->tab_structs, d->name, d);
                 if (!d->synthetic) register_method_envs(I, d, I->globals);
                 break;
             case AST_ENUM_DEF:
                 vec_push(I->a, &I->enums, d);
+                if (d->name) itab_put(I, &I->tab_enums, d->name, d);
                 break;
             case AST_IMPL_DEF:
                 vec_push(I->a, &I->impls, d);
@@ -311,11 +427,15 @@ static void collect_module_funcs(interp_t *I, module_t *mod, ast_node_t *prog)
             case AST_STRUCT_DEF:
                 if (!find_struct(I, d->name)) {
                     vec_push(I->a, &I->structs, d);
+                    if (d->name) itab_put(I, &I->tab_structs, d->name, d);
                     if (!d->synthetic) register_method_envs(I, d, mod->env);
                 }
                 break;
             case AST_ENUM_DEF:
-                if (!find_enum(I, d->name)) vec_push(I->a, &I->enums, d);
+                if (!find_enum(I, d->name)) {
+                    vec_push(I->a, &I->enums, d);
+                    if (d->name) itab_put(I, &I->tab_enums, d->name, d);
+                }
                 break;
             case AST_IMPL_DEF:
                 vec_push(I->a, &I->impls, d);
@@ -373,6 +493,7 @@ void build_modules(interp_t *I, ast_node_t *program)
             mod->name = name;
             mod->env = env_new(I, NULL);
             vec_push(I->a, &I->modules, mod);
+            itab_put(I, &I->tab_modules, name, mod);
             collect_module_funcs(I, mod, pk->decl);
         }
     }

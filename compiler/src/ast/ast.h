@@ -60,6 +60,7 @@ typedef enum {
     AST_MEMBER,
     AST_INDEX,
     AST_SLICE,
+    AST_TERNARY,
     AST_LAMBDA,
     AST_ARRAY_LIT,
     AST_STRUCT_LIT,
@@ -111,6 +112,8 @@ ast_node_t *ast_new(arena_t *a, ast_kind_t kind, const src_span_t *span);
 void ast_add(arena_t *a, ast_node_t *parent, ast_node_t *child);
 
 const char *ast_kind_name(ast_kind_t kind);
+
+long ast_str_lit_len(const ast_node_t *n);
 
 ast_node_t *ast_clone(arena_t *a, const ast_node_t *n);
 

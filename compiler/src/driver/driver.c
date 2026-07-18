@@ -18,7 +18,9 @@
 #include "driver/driver.h"
 #include "driver/build.h"
 #include "driver/llvm_build.h"
+#include "driver/js_build.h"
 #include "driver/layout_build.h"
+#include "driver/web_build.h"
 #include "driver/debug_cmd.h"
 #include "driver/repl.h"
 #include "core/arena.h"
@@ -44,6 +46,7 @@
 #  include <io.h>
 #  include <direct.h>
 #  include <process.h>
+#  include <windows.h>
 #  define salam_isatty(fd) _isatty(fd)
 #  define salam_fileno(f) _fileno(f)
 #  define salam_mkdir(p) _mkdir(p)
@@ -605,6 +608,11 @@ static void driver_print_version(void)
 
 int driver_main(int argc, char **argv)
 {
+#if defined(_WIN32)
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
+
     options_t opt;
     if (!cli_parse(argc, argv, &opt)) {
         return 2;
@@ -647,6 +655,13 @@ int driver_main(int argc, char **argv)
             return 2;
         }
         return driver_llvm(&opt);
+    case CMD_JS:
+        if (opt.input_count == 0) {
+            fprintf(stderr, "%s",
+                    i18n_tr("salam: 'js' requires at least one input file\n"));
+            return 2;
+        }
+        return driver_js(&opt);
     case CMD_LAYOUT_BUILD:
         if (opt.input_count == 0) {
             fprintf(stderr, "%s",
@@ -654,6 +669,12 @@ int driver_main(int argc, char **argv)
             return 2;
         }
         return driver_layout_build(&opt);
+    case CMD_WEB:
+        if (opt.input_count == 0) {
+            fprintf(stderr, "%s", i18n_tr("salam: 'web' requires an input file\n"));
+            return 2;
+        }
+        return driver_web(&opt);
     case CMD_INSPECT:
         break;
     }

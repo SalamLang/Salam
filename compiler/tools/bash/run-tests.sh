@@ -12,6 +12,7 @@ fail=0
 LANGS="${LANGS:-en fa ar}"
 NPROC="${NPROC:-$(command -v nproc >/dev/null 2>&1 && nproc || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 RUN_ONE="$(dirname "$0")/run-one-build.sh"
+RUN_ONE_JS="$(dirname "$0")/run-one-js.sh"
 case "$SALAM" in
 /* | [A-Za-z]:*) SALAM_ABS="$SALAM" ;;
 *) SALAM_ABS="$(pwd)/$SALAM" ;;
@@ -24,6 +25,7 @@ fi
 
 run_batch() {
     jobs="$1"
+    runner="${2:-$RUN_ONE}"
     [ -s "$jobs" ] || return 0
     results="$WORK/.batch-results.$$"
     tr '\n' '\0' <"$jobs" | xargs -0 -n1 -P "$NPROC" sh -c '
@@ -31,7 +33,7 @@ run_batch() {
         set -- $1
         label="$1"; f="$2"; lang="$3"; exp="$4"; extra="$5"
         unset IFS
-        sh "'"$RUN_ONE"'" "'"$SALAM_ABS"'" "'"$WORK"'" "$label" "$f" "$lang" "$exp" $extra
+        sh "'"$runner"'" "'"$SALAM_ABS"'" "'"$WORK"'" "$label" "$f" "$lang" "$exp" $extra
     ' _ >"$results" 2>&1
     cat "$results"
     p=$(grep -c '^PASS' "$results")
@@ -91,6 +93,21 @@ if want exec; then
             check_out "exec/$lang/$name" "$exp" "$got"
         done
     done
+fi
+if want js; then
+    jobs="$WORK/.jobs-js.$$"
+    : >"$jobs"
+    for lang in $LANGS; do
+        for f in tests/$lang/js/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            case "$name" in _*) continue ;; esac
+            exp="tests/$lang/js/$name.out"
+            [ -f "$exp" ] || continue
+            printf 'js/%s/%s\t%s\t%s\t%s\t-\n' "$lang" "$name" "$f" "$lang" "$exp" >>"$jobs"
+        done
+    done
+    run_batch "$jobs" "$RUN_ONE_JS"
 fi
 if want errors; then
     for lang in $LANGS; do

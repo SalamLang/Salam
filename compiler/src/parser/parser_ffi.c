@@ -155,14 +155,6 @@ static ast_node_t *parse_extern_var(parser_t *p)
 void parse_extern_into(parser_t *p, ast_node_t *prog)
 {
     p_advance(p);
-    if (p_at(p, TK_STRING)) {
-        const char *abi = p_peek(p)->value.as.s;
-        if (abi && strcmp(abi, "C") != 0)
-            p_error(p, "unsupported extern ABI (only \"C\" is supported)");
-        p_advance(p);
-    } else {
-        p_error(p, "expected an ABI string after 'extern' (e.g. extern \"C\")");
-    }
     p_expect(p, TK_COLON, "':' to open extern block");
     p_skip_terminators(p);
     while (!p_at(p, TK_KW_END) && !p_at_eof(p)) {

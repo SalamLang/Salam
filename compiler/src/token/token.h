@@ -36,7 +36,7 @@ typedef enum token_kind_t {
     TK_KW_IF,
     TK_KW_ELSE,
     TK_KW_UNTIL,
-    TK_KW_FOR,
+    TK_KW_ON,
     TK_KW_MUT,
     TK_KW_CONST,
     TK_KW_TYPE,
@@ -109,6 +109,7 @@ typedef enum token_kind_t {
     TK_LBRACKET,
     TK_RBRACKET,
     TK_COLON,
+    TK_QUESTION,
     TK_COMMA,
     TK_DOT,
     TK_SEMICOLON,
@@ -144,6 +145,7 @@ typedef struct {
         const char *s;
         bool b;
     } as;
+    size_t slen;
 } token_value_t;
 
 typedef struct {

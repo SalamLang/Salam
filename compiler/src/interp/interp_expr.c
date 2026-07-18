@@ -375,6 +375,8 @@ value_t eval(interp_t *I, env_t *env, ast_node_t *n)
             return arith(I, n, op, a, b);
         }
     }
+    case AST_TERNARY:
+        return to_bool(eval(I, env, n->a)) ? eval(I, env, n->b) : eval(I, env, n->c);
     case AST_UNARY: {
         value_t a = eval(I, env, n->a);
         if (a.kind == VAL_STRUCT) {

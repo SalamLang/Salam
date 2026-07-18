@@ -22,11 +22,6 @@
 
 int driver_js(options_t *opt);
 
-/* pkg_cache is an optional caller-owned, vec_init()'d cache (path ->
- * symbol_t* pairs) that lets this bundle's per-module sema passes reuse
- * already-loaded stdlib packages instead of re-parsing them; pass NULL to
- * always load fresh. If non-NULL, it must live in `arena` alongside any
- * other sema_run_cached() calls sharing it (e.g. a prior page-level pass). */
 const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                             const char **entries, int nentries, const char **module_out,
                             int *rc_out, vec_t *pkg_cache);

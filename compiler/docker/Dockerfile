@@ -2,16 +2,6 @@
 #
 # Salam compiler - multi-stage image (Alpine / musl, smallest practical base).
 #
-# Stages:
-#   toolchain  - base image with everything needed to BUILD and RUN salam
-#                (C compilers + LLVM 22 + make). Shared by every other stage.
-#   dev        - live development: source is bind-mounted, salam is recompiled
-#                on every change (see tools/bash/docker-dev.sh).
-#   builder    - production build: COPY . then `make && make install`.
-#   prod       - slim runtime: only the installed `salam` + std/ from `builder`,
-#                on top of the same toolchain (salam shells out to cc/llvm at
-#                run time, so the toolchain must be present to compile programs).
-#
 
 ARG ALPINE_VERSION=edge
 ARG LLVM_VERSION=22
@@ -34,9 +24,13 @@ RUN for i in 1 2 3 4 5; do \
             sqlite-dev \
             sqlite-static \
             mariadb-connector-c-dev \
+            nodejs \
+            npm \
         && break; \
         echo "apk add attempt $i failed; retrying in 5s..." >&2; sleep 5; \
     done
+
+RUN node -v && npm -v
 
 RUN set -eux; \
     LLVM_BIN="/usr/lib/llvm${LLVM_VERSION}/bin"; \
@@ -55,7 +49,6 @@ ARG SALAM_GID=1000
 RUN addgroup -g "${SALAM_GID}" salam \
     && adduser -D -u "${SALAM_UID}" -G salam salam
 
-ENV CC=gcc
 WORKDIR /app
 
 FROM toolchain AS dev

@@ -177,8 +177,15 @@ static bool write_file(logger_t *log, const char *path, const char *content)
         LOG_E(log, PH_DRIVER, i18n_tr("cannot write '%s'"), path);
         return false;
     }
-    fputs(content, f);
-    fclose(f);
+    if (fputs(content, f) == EOF) {
+        LOG_E(log, PH_DRIVER, i18n_tr("failed to write '%s'"), path);
+        fclose(f);
+        return false;
+    }
+    if (fclose(f) != 0) {
+        LOG_E(log, PH_DRIVER, i18n_tr("failed to write '%s'"), path);
+        return false;
+    }
     LOG_I(log, PH_DRIVER, "wrote %s", path);
     return true;
 }

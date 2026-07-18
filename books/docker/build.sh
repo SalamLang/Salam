@@ -25,6 +25,7 @@ error() {
 }
 
 run_latexmk() {
+    # shellcheck disable=SC2086 # LATEXMK_OPTS holds multiple flags; must word-split.
     if [ "$USE_GLOSSARY" -eq 1 ]; then
         latexmk $LATEXMK_OPTS -use-makeglossaries book.tex
     else

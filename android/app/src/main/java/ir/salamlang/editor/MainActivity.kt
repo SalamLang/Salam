@@ -38,9 +38,6 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 
-/**
- * Main launcher activity for the Salam Android application.
- */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var contentArea: FrameLayout

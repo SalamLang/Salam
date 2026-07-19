@@ -10,11 +10,6 @@
  *
  * Repository: https://github.com/SalamLang/Salam
  *
- * Per-file language detection. Every source file is lexed and type-checked in
- * its own language: the stdlib (English keywords) stays English while a Persian
- * program stays Persian. The language is taken from an explicit marker comment
- * when present, otherwise inferred by counting how many keywords each candidate
- * language recognises.
  */
 
 #include "core/prelude.h"

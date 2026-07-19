@@ -288,7 +288,7 @@ const char *cg_ctype(cg_t *cg, const char *ts)
         iface[il] = 0;
         return cg_fmt(cg, "_Salam_dyn_%s%s", cg_cident(cg, iface), suf ? "*" : "");
     }
-    if (!strncmp(ts, "func(", 5)) return "void*";
+    if (!strncmp(ts, "func(", 5) || !strncmp(ts, "externfunc(", 11)) return "void*";
     char base[96];
     bool ptr;
     vec_t dims;
@@ -316,7 +316,8 @@ const char *cg_decl(cg_t *cg, const char *ts, const char *name)
         return cg_fmt(cg, "_Salam_dyn_%s%s %s%s", cg_cident(cg, iface), star,
                       cg_cident(cg, name), dims);
     }
-    if (!strncmp(ts, "func(", 5)) return cg_fmt(cg, "void* %s", cg_cident(cg, name));
+    if (!strncmp(ts, "func(", 5) || !strncmp(ts, "externfunc(", 11))
+        return cg_fmt(cg, "void* %s", cg_cident(cg, name));
     char base[96];
     bool ptr;
     vec_t dims;
@@ -391,9 +392,13 @@ const char *cg_mangle_method(cg_t *cg, const char *sname, symbol_t *owner, const
                              vec_t *params)
 {
     bool inst = (owner && owner->generic_base) || (owner == NULL && sname);
-    const char *sn = sname ? sname : (owner ? owner->name : NULL);
-    if (inst) return cg_mangle_in(cg, "g", sn, fn, params);
-    return cg_mangle_in(cg, cg->pkg, sn, fn, params);
+    if (inst) {
+        const char *sn = sname ? sname : (owner ? owner->name : NULL);
+        return cg_mangle_in(cg, "g", sn, fn, params);
+    }
+    const char *sn = owner ? owner->name : sname;
+    const char *pkg = (owner && owner->pkgname) ? owner->pkgname : cg->pkg;
+    return cg_mangle_in(cg, pkg, sn, fn, params);
 }
 
 const char *cg_mangle_ti(cg_t *cg, const char *typestr, const char *fn, vec_t *params)
@@ -419,6 +424,76 @@ const char *func_ret_of(const char *ts)
     while (*p == ' ')
         p++;
     return *p ? p : "void";
+}
+
+/* 'externfunc(...)' counterparts of func_ret_of/func_cast_params, for raw C
+ * function-pointer types (see AST_TYPE.is_extern in sema_type.c). */
+const char *raw_ret_of(const char *ts)
+{
+    if (!ts || strncmp(ts, "externfunc(", 11) != 0) return "void";
+    const char *p = ts + 10;
+    int d = 0;
+    for (; *p; p++) {
+        if (*p == '(')
+            d++;
+        else if (*p == ')') {
+            if (--d == 0) {
+                p++;
+                break;
+            }
+        }
+    }
+    while (*p == ' ')
+        p++;
+    return *p ? p : "void";
+}
+
+const char *raw_cast_params(cg_t *cg, const char *ts)
+{
+    if (!ts || strncmp(ts, "externfunc(", 11) != 0) return "(void)";
+    const char *s = ts + 11;
+    sb_t out;
+    sb_init(&out);
+    sb_putc(&out, '(');
+    int depth = 0;
+    const char *start = s;
+    bool any = false;
+    {
+        const char *p = s;
+        for (;; p++) {
+            if (*p == '<' || *p == '(')
+                depth++;
+            else if (*p == '>')
+                depth--;
+            else if (*p == ')' && depth > 0)
+                depth--;
+            if ((*p == ',' && depth == 0) || (*p == ')' && depth == 0) || *p == '\0') {
+                size_t len = (size_t)(p - start);
+                while (len && start[0] == ' ') {
+                    start++;
+                    len--;
+                }
+                while (len && start[len - 1] == ' ')
+                    len--;
+                if (len) {
+                    char buf[128];
+                    if (len >= sizeof buf) len = sizeof buf - 1;
+                    memcpy(buf, start, len);
+                    buf[len] = 0;
+                    if (any) sb_puts(&out, ", ");
+                    sb_puts(&out, cg_ctype(cg, buf));
+                    any = true;
+                }
+                if (*p == ')' || *p == '\0') break;
+                start = p + 1;
+            }
+        }
+    }
+    if (!any) sb_puts(&out, "void");
+    sb_putc(&out, ')');
+    const char *r = arena_strdup(cg->a, sb_cstr(&out));
+    sb_free(&out);
+    return r;
 }
 
 static const char *func_cast_params(cg_t *cg, const char *ts)

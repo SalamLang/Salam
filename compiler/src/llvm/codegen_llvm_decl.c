@@ -584,9 +584,142 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     ll->defers = saved_defers;
 }
 
-static bool ll_const_init(const ast_node_t *init)
+static bool ll_text_is_int(const char *s)
 {
-    return init && init->kind == AST_LITERAL;
+    if (!s || !*s) return false;
+    size_t i = (s[0] == '-') ? 1 : 0;
+    if (!s[i]) return false;
+    for (; s[i]; i++)
+        if (s[i] < '0' || s[i] > '9') return false;
+    return true;
+}
+
+static const char *ll_const_fpfix(ll_t *ll, const char *lety, const char *v)
+{
+    if ((!strcmp(lety, "double") || !strcmp(lety, "float")) && ll_text_is_int(v))
+        return ll_fmt(ll, "%s.0", v);
+    return v;
+}
+
+static bool ll_const_agg(ll_t *ll, ast_node_t *n, const char **out);
+
+/* True (with *out set to the LLVM constant-expr text) when `n` folds to a
+ * value the LLVM verifier accepts directly as a global initializer, so
+ * codegen can skip the zero-init + runtime-store fallback in main(). */
+static bool ll_const_value(ll_t *ll, ast_node_t *n, const char **out)
+{
+    if (!n) return false;
+    if (n->kind == AST_CAST) return ll_const_value(ll, n->a, out);
+    if (n->kind == AST_LITERAL) {
+        switch (n->op) {
+        case TK_INT:
+        case TK_FLOAT:
+        case TK_STRING:
+        case TK_TRIPLE_STRING:
+        case TK_RAW_STRING:
+        case TK_UTF8_CHAR:
+        case TK_CHAR:
+        case TK_KW_TRUE:
+        case TK_KW_FALSE:
+        case TK_KW_NULL:
+            *out = ll_expr(ll, n).ref;
+            return true;
+        default:
+            return false;
+        }
+    }
+    if (n->kind == AST_ARRAY_LIT || n->kind == AST_STRUCT_LIT)
+        return ll_const_agg(ll, n, out);
+    return false;
+}
+
+static bool ll_const_agg(ll_t *ll, ast_node_t *n, const char **out)
+{
+    if (n->kind == AST_ARRAY_LIT) {
+        const char *ats = n->type_str;
+        if (!ats || !strchr(ats, '[')) return false;
+        const char *ety = ll_array_elem(ll, ats);
+        const char *lety = ll_ty(ll, ety);
+        if (n->list.len == 0) {
+            *out = "zeroinitializer";
+            return true;
+        }
+        sb_t b;
+        sb_init(&b);
+        sb_puts(&b, "[");
+        {
+            size_t i = 0;
+            for (; i < n->list.len; i++) {
+                ast_node_t *el = (ast_node_t *)n->list.data[i];
+                const char *v;
+                if (!ll_const_value(ll, el, &v)) {
+                    sb_free(&b);
+                    return false;
+                }
+                if (i) sb_puts(&b, ", ");
+                sb_puts(&b, ll_fmt(ll, "%s %s", lety, ll_const_fpfix(ll, lety, v)));
+            }
+        }
+        sb_puts(&b, "]");
+        *out = arena_strdup(ll->a, sb_cstr(&b));
+        sb_free(&b);
+        return true;
+    }
+    if (n->kind == AST_STRUCT_LIT) {
+        symbol_t *ss = ll_struct_sym(ll, n->type_str ? n->type_str : n->name);
+        if (!ss) return false;
+        sb_t b;
+        sb_init(&b);
+        sb_puts(&b, "{ ");
+        int idx = 0;
+        {
+            size_t i = 0;
+            for (; i < ss->members->symbols.len; i++) {
+                symbol_t *f = (symbol_t *)ss->members->symbols.data[i];
+                if (f->kind != SYM_FIELD) continue;
+                const char *fts = type_to_string(ll->sem->tc, f->type);
+                ast_node_t *prov = NULL;
+                {
+                    size_t j = 0;
+                    for (; j < n->list.len; j++) {
+                        ast_node_t *fi = (ast_node_t *)n->list.data[j];
+                        if (fi->name && !strcmp(fi->name, f->name)) {
+                            prov = fi;
+                            break;
+                        }
+                    }
+                }
+                const char *v;
+                if (prov) {
+                    if (!ll_const_value(ll, prov->a, &v)) {
+                        sb_free(&b);
+                        return false;
+                    }
+                } else if (f->decl && f->decl->a) {
+                    if (!ll_const_value(ll, f->decl->a, &v)) {
+                        sb_free(&b);
+                        return false;
+                    }
+                } else {
+                    v = ll_zero(fts);
+                }
+                const char *flety = ll_ty(ll, fts);
+                if (idx) sb_puts(&b, ", ");
+                sb_puts(&b, ll_fmt(ll, "%s %s", flety, ll_const_fpfix(ll, flety, v)));
+                idx++;
+            }
+        }
+        if (!idx) {
+            sb_free(&b);
+            *out = "zeroinitializer";
+            return true;
+        }
+        sb_puts(&b, " }");
+        *out = arena_strdup(ll->a, sb_cstr(&b));
+        sb_free(&b);
+        return true;
+    }
+    return false;
 }
 
 void ll_emit_globals(ll_t *ll, ast_node_t *program)
@@ -603,8 +736,9 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
                 ll_fmt(ll, "@g.%s", ll_struct_ltype(ll, d->name) + strlen("%struct."));
             const char *lty = ll_ty(ll, ts);
             const char *init;
-            if (ll_const_init(d->a)) {
-                init = ll_expr(ll, d->a).ref;
+            const char *cv;
+            if (d->a && ll_const_value(ll, d->a, &cv)) {
+                init = cv;
             } else {
                 init = ll_zero(ts);
                 if (d->a) vec_push(ll->a, &ll->gdefer, d);

@@ -27,6 +27,10 @@ typedef struct {
     vec_t local_emit;
     vec_t taken;
     vec_t fn_used_names;
+    vec_t minify_keys;
+    vec_t minify_vals;
+    bool enable_minify;
+    const char *minify_last;
 } jg_t;
 
 #define JSP_PRIMARY 20
@@ -44,6 +48,10 @@ typedef struct {
 const js_host_t *js_host_lookup(const char *name);
 
 const char *jsg_ident(jg_t *g, const char *name);
+
+const char *jsg_minify_next(jg_t *g);
+
+const char *jsg_minify_cached(jg_t *g, const char *key);
 
 const char *jsg_escape(jg_t *g, const char *s);
 

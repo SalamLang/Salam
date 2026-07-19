@@ -307,10 +307,7 @@ value_t call_builtin_method(interp_t *I, ast_node_t *call, value_t recv,
             return e ? e->val : val_null();
         }
         if (!strcmp(method, "has")) return val_bool(map_find(m, a0) != NULL);
-        if (!strcmp(method, "remove")) {
-            map_remove(m, a0);
-            return val_null();
-        }
+        if (!strcmp(method, "remove")) return val_bool(map_remove(m, a0));
         if (!strcmp(method, "size")) return val_int((int64_t)m->count);
         if (!strcmp(method, "iter")) {
             smapiter_t *it = (smapiter_t *)arena_alloc(I->a, sizeof *it);

@@ -417,6 +417,45 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         if (sym->kind == SYM_PARAM && sym->is_ref) n->is_ref = true;
         return decorate(s, n, sym->type);
     }
+    case AST_FUNC_ADDR: {
+        symbol_t *sym = scope_lookup(s->cur, n->name);
+        if (!sym) {
+            const char *c = local_canon(s, n->name);
+            if (c != n->name) {
+                n->name = c;
+                sym = scope_lookup(s->cur, n->name);
+            }
+        }
+        if (!sym) {
+            SERR(s, 1, &n->span, "unknown identifier '%s'", n->name);
+            return decorate(s, n, err_ty(s));
+        }
+        if (sym->kind == SYM_METHOD) {
+            SERR(s, 72, &n->span,
+                 "'%s' is a method, not a free function; '&' cannot address it", n->name);
+            return decorate(s, n, err_ty(s));
+        }
+        if (sym->kind != SYM_FUNC) {
+            SERR(s, 72, &n->span, "'&%s' requires a function, '%s' is not one", n->name,
+                 n->name);
+            return decorate(s, n, err_ty(s));
+        }
+        if (sym->overloads.len == 0 ||
+            (sym->overloads.len == 1 && ((func_sig_t *)sym->overloads.data[0])->decl &&
+             ((func_sig_t *)sym->overloads.data[0])->decl->typarams.len > 0)) {
+            SERR(s, 73, &n->span, "cannot take the address of generic function '%s'",
+                 n->name);
+            return decorate(s, n, err_ty(s));
+        }
+        if (sym->overloads.len > 1) {
+            SERR(s, 74, &n->span,
+                 "function '%s' is ambiguous for '&' (%zu overloads exist)", n->name,
+                 sym->overloads.len);
+            return decorate(s, n, err_ty(s));
+        }
+        sym->used = true;
+        return decorate(s, n, type_ptr(s->tc, ty(s, TY_VOID)));
+    }
     case AST_THIS: {
         if (!s->self_type) {
             SERR(s, 14, &n->span, "'this' used outside a method");

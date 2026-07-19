@@ -501,8 +501,8 @@ static bool repl_compile_pkg(arena_t *a, logger_t *lg, langpack_t *pack, options
     if (!cc_prune_program(a, lg, src->path, cc, prog)) return false;
     sema_result_t *sr = sema_run(a, lg, prog, src->path, langpack_code(pack), cc);
     if (!sr || !sr->ok) return false;
-    codegen_output_t *out =
-        codegen_run(a, lg, prog, sr, pkg, false, false, src->path, langpack_entry(pack));
+    codegen_output_t *out = codegen_run(a, lg, prog, sr, pkg, false, false, src->path,
+                                        langpack_entry(pack), NULL);
     char cpath[64], hpath[64];
     sal_snprintf(cpath, sizeof cpath, "salam_mod_%s.c", pkg);
     sal_snprintf(hpath, sizeof hpath, "salam_mod_%s.h", pkg);
@@ -543,7 +543,7 @@ static bool repl_exec(const char *full_src, const char *cc, langpack_t *pack,
         return false;
     }
     codegen_output_t *out = codegen_run(a, lg, prog, sr, "_repl_", false, false, sf.path,
-                                        langpack_entry(pack));
+                                        langpack_entry(pack), NULL);
     FILE *f;
     if ((f = fopen("salam_mod__repl_.c", "wb"))) {
         fputs(out->c_src, f);

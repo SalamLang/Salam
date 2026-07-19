@@ -83,15 +83,6 @@ static bool fmt_bracket_multiline(const token_stream_t *toks, size_t open_idx)
     return false;
 }
 
-/*
- * Decide whether a `<` at `lt_idx` opens a generic argument list (e.g.
- * `Vector<str>`, `HashMap<K, V>`) rather than being a less-than comparison
- * (`i < 2`). A generic closes with a matching `>` over type-like tokens only;
- * a comparison contains literals/operators or never closes before the
- * expression ends. Without this, an unspaced comparison such as `i<2` would be
- * mistaken for an open generic, leaving `angle` stuck > 0 and disabling block
- * indentation for the rest of the file.
- */
 static bool fmt_angle_is_generic(const token_stream_t *toks, size_t lt_idx)
 {
     size_t n = token_stream_count(toks);
@@ -156,13 +147,6 @@ static bool fmt_type_token(token_kind_t k)
     }
 }
 
-/*
- * A top-level colon either opens an end-terminated block (`func main:`,
- * `if x:`) or annotates a type (`) : i32:`, `func size() : i32` in an
- * interface, `<T: Ord>` with a spaced generic). Only a block-opening colon
- * may indent. An annotation colon is followed by a type-like token run that
- * ends at another colon (the real opener) or at the end of the statement.
- */
 static bool fmt_colon_is_annotation(const token_stream_t *toks, size_t colon_idx)
 {
     size_t n = token_stream_count(toks);

@@ -316,6 +316,9 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                           guard, guard));
     }
 
+    if (cg->is_gui_mode) {
+        sb_puts(h, "#ifdef _WIN32\n#include <windows.h>\n#endif\n");
+    }
     sb_puts(h, "#include <stdint.h>\n#include <stdbool.h>\n#include <math.h>\n#include "
                "<stddef.h>\n");
 

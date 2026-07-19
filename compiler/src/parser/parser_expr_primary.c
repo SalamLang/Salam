@@ -105,6 +105,13 @@ ast_node_t *parse_primary(parser_t *p)
         }
     case TK_LBRACKET:
         return parse_array_lit(p);
+    case TK_AMP: {
+        ast_node_t *n = p_mk(p, AST_FUNC_ADDR);
+        p_advance(p);
+        n->name = p_name(p, "expected a function name after '&'");
+        p_fin(p, n);
+        return n;
+    }
     case TK_IDENT: {
         if (p_peek2(p)->kind == TK_LBRACE && !p->no_struct_lit)
             return parse_struct_lit(p);

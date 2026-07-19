@@ -382,6 +382,10 @@ bool type_castable(const type_t *dst, const type_t *src)
     if ((dst->kind == TY_PTR && type_is_integer(src)) ||
         (src->kind == TY_PTR && type_is_integer(dst)))
         return true;
+
+    if ((dst->kind == TY_FUNC && src->kind == TY_PTR) ||
+        (dst->kind == TY_PTR && src->kind == TY_FUNC))
+        return true;
     bool sn = type_is_numeric(src) || src->kind == TY_BOOL || src->kind == TY_CHAR ||
               src->kind == TY_ENUM;
     bool dn = type_is_numeric(dst) || dst->kind == TY_BOOL || dst->kind == TY_CHAR ||
@@ -491,7 +495,7 @@ const char *type_to_string(type_ctx_t *tc, const type_t *t)
     case TY_FUNC: {
         char buf[256];
         size_t o = 0;
-        o = sal_catf(buf, sizeof(buf), o, "func(");
+        o = sal_catf(buf, sizeof(buf), o, t->length ? "externfunc(" : "func(");
         {
             size_t i = 0;
             for (; i < t->params.len && o < sizeof(buf) - 32; i++)

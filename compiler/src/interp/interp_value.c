@@ -238,13 +238,13 @@ static bool key_eq(value_t a, value_t b)
 static size_t key_hash(value_t k)
 {
     if (k.kind == VAL_STR) {
-        size_t h = 1469598103934665603u;
+        uint64_t h = 1469598103934665603ULL;
         const unsigned char *p = (const unsigned char *)k.as.s;
         for (; *p; p++) {
             h ^= *p;
-            h *= 1099511628211u;
+            h *= 1099511628211ULL;
         }
-        return h;
+        return (size_t)h;
     }
     if (k.kind == VAL_INT || k.kind == VAL_CHAR) {
         uint64_t x = (uint64_t)k.as.i;

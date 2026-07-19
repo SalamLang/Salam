@@ -64,6 +64,17 @@ static bool has_child_elements(ast_node_t *el)
     return false;
 }
 
+static const char *quote_css_value_if_needed(layout_ctx_t *cx, const char *value)
+{
+    if (!value || !strchr(value, ' ')) return value;
+    {
+        const char *p = value;
+        for (; *p; p++)
+            if (*p >= '0' && *p <= '9') return value;
+    }
+    return lfmt(cx, "\"%s\"", value);
+}
+
 static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
                         const char *parent_class)
 {
@@ -102,6 +113,7 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
     sb_init(&after);
     const char *content = NULL, *userclass = NULL, *source = NULL;
     const char *src = NULL, *type_val = NULL, *condition = NULL;
+    const char *selector = NULL;
     {
         size_t i = 0;
         for (; i < el->list.len; i++) {
@@ -111,6 +123,10 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
             const char *v = val_str(cx, attr->a);
             if (!strcmp(nm, "condition")) {
                 condition = v;
+                continue;
+            }
+            if (!strcmp(nm, "selector")) {
+                selector = v;
                 continue;
             }
             if (starts_with(nm, "hover_")) {
@@ -190,9 +206,9 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
                 break;
             case LA_CSS: {
                 const char *prop = (ad && ad->out) ? ad->out : hyphenate(cx, nm);
-
-                sb_puts(&css,
-                        lfmt(cx, "%s: %s; ", prop, layout_attr_value_map(cx->a, ad, v)));
+                const char *mapped = layout_attr_value_map(cx->a, ad, v);
+                const char *css_val = quote_css_value_if_needed(cx, mapped);
+                sb_puts(&css, lfmt(cx, "%s: %s; ", prop, css_val));
                 break;
             }
             case LA_META:
@@ -233,6 +249,10 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
             sb_puts(cx->css, content);
             sb_putc(cx->css, '\n');
         }
+        goto done;
+    }
+    if (!strcmp(el->name, "global")) {
+        emit_rule(cx, lfmt(cx, "%s { %s }", selector ? selector : "*", sb_cstr(&css)));
         goto done;
     }
     if (!strcmp(el->name, "script")) {

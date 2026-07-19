@@ -80,6 +80,19 @@ symbol_t *get_or_make_func(sema_t *s, scope_t *sc, const char *name, sym_kind_t 
     return sym;
 }
 
+static bool link_spec_is_path(const char *spec)
+{
+    if (strpbrk(spec, "/\\")) return true;
+    static const char *const exts[] = {".a", ".so", ".dll", ".lib", ".dylib"};
+    size_t n = strlen(spec);
+    size_t i = 0;
+    for (; i < sizeof(exts) / sizeof(exts[0]); i++) {
+        size_t el = strlen(exts[i]);
+        if (n > el && !strcmp(spec + n - el, exts[i])) return true;
+    }
+    return false;
+}
+
 static void check_link(sema_t *s, ast_node_t *d)
 {
     const char *spec =
@@ -91,7 +104,7 @@ static void check_link(sema_t *s, ast_node_t *d)
     const char *kind = d->name;
     if (kind && !strcmp(kind, "framework")) return;
     if (spec[0] == '-') return;
-    if (!strpbrk(spec, "/\\.")) return;
+    if (!link_spec_is_path(spec)) return;
     bool absolute = spec[0] == '/' || spec[0] == '\\' ||
                     (isalpha((unsigned char)spec[0]) && spec[1] == ':');
     const char *full = spec;
@@ -124,6 +137,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
                 symbol_t *sym = symbol_new(s->a, SYM_STRUCT, d->name);
                 sym->decl = d;
                 sym->is_pub = d->is_pub;
+                sym->pkgname = s->pkg;
 
                 const char *c_type_name = d->name;
                 if (s->pkg && s->pkg[0] && strcmp(s->pkg, "main") != 0) {

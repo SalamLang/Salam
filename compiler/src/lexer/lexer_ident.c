@@ -16,9 +16,6 @@
 #include "core/sb.h"
 #include "lexer/lexer_internal.h"
 
-/* Canonicalize an identifier: ZWNJ (U+200C) -> space, Arabic yeh (U+064A) ->
- * Persian yeh (U+06CC), Arabic kaf (U+0643) -> Persian keheh (U+06A9), so the
- * same word typed with either spelling normalizes identically. */
 static const char *lx_norm_ident(lx_t *L, const char *text)
 {
     const char *p;

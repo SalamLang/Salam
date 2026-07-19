@@ -12,6 +12,8 @@ RUN mkdir -p /books && chown -R texlive:texlive /books
 
 ENV HOME=/tmp
 
+HEALTHCHECK NONE
+
 WORKDIR /books
 USER texlive
 ENTRYPOINT ["build-books"]

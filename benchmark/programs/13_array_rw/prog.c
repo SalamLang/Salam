@@ -4,7 +4,7 @@
 int main(void)
 {
     long long N = 1000000;
-    long long *arr = malloc((size_t) N * sizeof(long long));
+    long long *arr = malloc((size_t)N * sizeof(long long));
     long long i;
     for (i = 0; i < N; i++) {
         arr[i] = (i * i + 3 * i + 7) % 1000000007;

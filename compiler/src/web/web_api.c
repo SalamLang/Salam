@@ -314,7 +314,7 @@ const char *salam_web_emit(const char *source, const char *lang, const char *pha
     }
     if (!strcmp(phase, "c")) {
         codegen_output_t *cg = codegen_run(arena, log, program, sema, "main", false,
-                                           false, "main.salam", entry);
+                                           false, "main.salam", entry, NULL);
         sb_t b;
         sb_init(&b);
         if (cg && cg->h_src) {

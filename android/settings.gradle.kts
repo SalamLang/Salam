@@ -1,6 +1,3 @@
-/**
- * Gradle settings for Android project plugin and repository management.
- */
 pluginManagement {
     repositories {
         google {

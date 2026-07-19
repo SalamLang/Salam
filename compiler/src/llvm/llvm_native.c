@@ -209,9 +209,6 @@ static int link_executable(logger_t *log, const char *obj, const char *out,
         for (; i < opts->nlink; i++) {
             const char *spec = opts->link_libs[i];
             if (!spec) continue;
-            /* Shell-escape: `spec` comes from a `link "..."` directive and this
-             * command is run via system(); an unescaped name would allow shell
-             * injection (e.g. link "x; rm -rf /"). */
             if (spec[0] == '-' || strpbrk(spec, "/\\.") != NULL) {
                 sb_puts(&cmd, " ");
                 sb_put_shell_arg(&cmd, spec);
@@ -332,13 +329,6 @@ static int find_compiler_rt(const char *rtarch, char *out, size_t n)
 #    endif
 }
 
-/*
- * Materialize the embedded musl sysroot for `arch` (x86_64/aarch64/i386/arm), if
- * one was compiled into this salam. Each arch is a separate embedded tar with its
- * own symbol; only the ones staged at build time are present. Returns 1 and fills
- * `sr` on success, 0 otherwise. `arch` matches native_link_elf's naming, while the
- * cache name uses the canonical musl toolchain triple.
- */
 static int salam_try_embed_musl(logger_t *log, const char *arch, char *sr, size_t srn)
 {
     (void)log;
@@ -528,7 +518,6 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
     } else {
         int got = 0;
 #    ifdef SALAM_HAVE_EMBED_MINGW
-        /* Prefer the sysroot baked into the binary: fully self-contained. */
         if (strcmp(arch, "x86_64") == 0 &&
             salam_materialize_sysroot("x86_64-w64-mingw32", salam_embed_mingw,
                                       (size_t)(salam_embed_mingw_end - salam_embed_mingw),
@@ -597,7 +586,6 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
         LOG_W(log, PH_DRIVER,
               i18n_tr("too many link libraries (%d); only the first 16 were linked"),
               opts->nlink);
-    /* default mingw libs, wrapped in a group to resolve their circular deps */
     argv[n++] = "--start-group";
     for (i = 0; i < (int)(sizeof group / sizeof group[0]) && n < 88; i++)
         argv[n++] = group[i];

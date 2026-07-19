@@ -11,7 +11,6 @@ import * as vscode from "vscode";
 const LANG_ID = "salam";
 const OUTPUT_NAME = "Salam";
 
-/** Result of running the compiler and capturing its output. */
 interface CaptureResult {
   code: number;
   stdout: string;
@@ -19,10 +18,6 @@ interface CaptureResult {
   spawnError: ExecError | null;
 }
 
-/**
- * child_process errors carry `code` as a numeric exit code OR a string errno
- * (e.g. "ENOENT"). The stock @types/node signatures disagree, so we widen it.
- */
 type ExecError = Error & { code?: number | string };
 
 let output!: vscode.OutputChannel;

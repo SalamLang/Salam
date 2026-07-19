@@ -44,13 +44,13 @@ symbol_t *symbol_new(arena_t *a, sym_kind_t kind, const char *name)
 
 static size_t scope_hash(const char *s)
 {
-    size_t h = 1469598103934665603u;
+    uint64_t h = 1469598103934665603ULL;
     const unsigned char *p = (const unsigned char *)s;
     for (; *p; p++) {
         h ^= *p;
-        h *= 1099511628211u;
+        h *= 1099511628211ULL;
     }
-    return h;
+    return (size_t)h;
 }
 
 static void scope_index_insert(scope_t *sc, symbol_t *sym)

@@ -67,6 +67,11 @@ static bool has_child_elements(ast_node_t *el)
 static const char *quote_css_value_if_needed(layout_ctx_t *cx, const char *value)
 {
     if (!value || !strchr(value, ' ')) return value;
+    {
+        const char *p = value;
+        for (; *p; p++)
+            if (*p >= '0' && *p <= '9') return value;
+    }
     return lfmt(cx, "\"%s\"", value);
 }
 

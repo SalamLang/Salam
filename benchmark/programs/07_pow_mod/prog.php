@@ -1,5 +1,7 @@
 <?php
-function powmod(int $base, int $e, int $m): int {
+
+function powmod(int $base, int $e, int $m): int
+{
     $result = 1;
     $b = $base % $m;
     $ex = $e;

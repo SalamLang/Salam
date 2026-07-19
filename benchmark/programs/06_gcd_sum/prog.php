@@ -1,5 +1,7 @@
 <?php
-function gcd(int $a, int $b): int {
+
+function gcd(int $a, int $b): int
+{
     $x = $a;
     $y = $b;
     while ($y != 0) {

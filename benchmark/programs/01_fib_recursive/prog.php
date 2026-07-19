@@ -1,5 +1,7 @@
 <?php
-function fib(int $n): int {
+
+function fib(int $n): int
+{
     if ($n < 2) {
         return $n;
     }

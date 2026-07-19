@@ -159,7 +159,7 @@ static const char *cg_print_legacy(cg_t *cg, ast_node_t *n, bool nl, int err)
 static const char *cg_order_stdout(cg_t *cg, const char *printf_expr)
 {
     if (!cg->single_threaded) return printf_expr;
-    return cg_fmt(cg, "({ salam_out_flush(); %s; fflush(stdout); })", printf_expr);
+    return cg_fmt(cg, "({ salam_out_flush(); %s; fflush(0); })", printf_expr);
 }
 
 static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)

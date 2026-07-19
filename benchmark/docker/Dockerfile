@@ -2,20 +2,6 @@
 #
 # Salam benchmark suite - reproducible cross-language toolchain image.
 #
-# benchmark/bench/build.salam shells out to gcc, g++, rustc, go, tcc,
-# clang/llc (via the Salam LLVM backend), python3 and php. Run straight on a
-# host, whichever version happens to be installed silently changes the
-# numbers between runs. This image pins all of them to whatever Alpine edge
-# resolves at build time, plus the Salam compiler built from this same
-# checkout, so re-running the *same built image* always exercises identical
-# toolchain versions.
-#
-# "Latest" and "reproducible" both fall out of this: `apk add` always
-# installs each package's current version, so a fresh build tracks upstream
-# closely; once built, the image is the frozen point of reference. Rebuild
-# deliberately (`docker compose build --no-cache`) to pick up newer
-# releases -- don't rebuild on every run.
-#
 
 ARG ALPINE_VERSION=edge
 ARG LLVM_VERSION=22
@@ -48,9 +34,6 @@ RUN for i in 1 2 3 4 5; do \
         echo "apk add attempt $i failed; retrying in 5s..." >&2; sleep 5; \
     done
 
-# Alpine renames PHP's apk package on every default-version bump
-# (php83-cli, php84-cli, ...). Try the generic alias first, then fall back
-# to whichever versioned -cli package is newest.
 RUN set -eux; \
     ok=0; \
     for i in 1 2 3 4 5; do \
@@ -72,7 +55,6 @@ RUN set -eux; \
         ln -sf "$src" "/usr/local/bin/$t-${LLVM_VERSION}"; \
     done
 
-# Record what actually landed in this image, for the results report.
 RUN { gcc --version; g++ --version; rustc --version; go version; \
       python3 --version; php --version; tcc -v || true; \
       clang-${LLVM_VERSION} --version; } | tee /etc/bench-toolchain-versions.txt
@@ -85,18 +67,11 @@ RUN addgroup -g "${SALAM_GID}" salam \
 ENV GOCACHE=/tmp/go-cache GOPATH=/tmp/go CARGO_HOME=/tmp/cargo
 WORKDIR /repo
 
-# ---------------------------------------------------------------------------
-# Build the Salam compiler itself from this checkout (default OUTDIR=..
-# drops the binary at /repo/salam, matching the repo's own layout).
 FROM toolchain AS salam-builder
 COPY compiler /repo/compiler
 RUN cd /repo/compiler && make -j"$(nproc)"
 RUN /repo/salam version
 
-# ---------------------------------------------------------------------------
-# Frozen image: toolchain + built Salam compiler + benchmark sources +
-# the runner pre-built to a fixed path, so `docker run` does no compiling
-# of its own beyond what each benchmarked program needs.
 FROM toolchain AS bench
 COPY --from=salam-builder /repo/salam /repo/salam
 COPY --from=salam-builder /repo/compiler/std /repo/compiler/std
@@ -106,16 +81,19 @@ ENV SALAM_BIN=/repo/salam \
     SALAM_STD=/repo/compiler/std \
     BENCH_WORK=/tmp/salam_bench_work
 
-RUN cd /repo/benchmark \
-    && SALAM_STD=/repo/compiler/std /repo/salam build runner.salam --output=/repo/bench_runner \
-    && chown -R salam:salam /repo/benchmark /repo/bench_runner
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -e' \
+    'cd /repo/benchmark' \
+    '"$SALAM_BIN" build runner.salam --output=/tmp/bench_runner' \
+    'exec /tmp/bench_runner "$@"' \
+    > /repo/entrypoint.sh \
+    && chmod +x /repo/entrypoint.sh \
+    && chown -R salam:salam /repo/benchmark
 
 USER salam
 WORKDIR /repo/benchmark
-ENTRYPOINT ["/repo/bench_runner"]
+ENTRYPOINT ["/repo/entrypoint.sh"]
 
-# ---------------------------------------------------------------------------
-# Ad hoc debugging: full toolchain, whole repo bind-mounted live (see
-# docker-compose.yml's `shell` service).
 FROM toolchain AS shell
 ENTRYPOINT ["bash"]

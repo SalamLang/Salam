@@ -15,6 +15,7 @@
 #include "core/prelude.h"
 #include "semantic/sema_internal.h"
 #include "semantic/builtins.h"
+#include "semantic/dce.h"
 
 static type_t *ty(sema_t *s, type_kind_t k)
 {
@@ -215,6 +216,26 @@ static void check_pure_builtin(sema_t *s, ast_node_t *n, const char *nm)
     }
 }
 
+static bool dce_caller_rooted(sema_t *s)
+{
+    if (!s->cur_func) return true;
+    if (s->cur_func->owner) return true;
+    if (!s->cur_func->decl) return true;
+    if (s->cur_func->decl->typarams.len > 0) return true;
+    if (s->cur_func->decl->is_extern) return true;
+    return false;
+}
+
+static void dce_note(sema_t *s, const char *callee_pkg, const char *callee_fn)
+{
+    if (!dce_enabled()) return;
+    if (dce_caller_rooted(s)) {
+        dce_mark_root(callee_pkg, callee_fn);
+        return;
+    }
+    dce_note_call(s->pkg, s->cur_func->decl->name, callee_pkg, callee_fn);
+}
+
 type_t *check_call(sema_t *s, ast_node_t *n)
 {
     ast_node_t *callee = n->a;
@@ -235,6 +256,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             return decorate(s, n, ty(s, TY_I64));
         }
         fsym->used = true;
+        dce_mark_root(s->pkg, fn->name);
         bool ok = false;
         {
             size_t i = 0;
@@ -265,6 +287,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             return decorate(s, n, ty(s, TY_I64));
         }
         fsym->used = true;
+        dce_mark_root(s->pkg, fn->name);
         decorate(s, fn, ty(s, TY_VOID));
         decorate(s, callee, ty(s, TY_VOID));
         return decorate(s, n, ty(s, TY_I64));
@@ -436,6 +459,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         }
 
         sym->used = true;
+        dce_note(s, s->pkg, nm);
         if (sym->kind == SYM_FUNC && sym->decl && sym->decl->typarams.len > 0) {
             symbol_t *inst = g_infer_call(s, sym, &argtypes, &n->span, call_expected);
             if (!inst) return decorate(s, n, err_ty(s));
@@ -469,6 +493,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                 return decorate(s, n, err_ty(s));
             }
             fn->used = true;
+            dce_note(s, pk->pkgname, fname);
 
             if (fn->decl && fn->decl->typarams.len > 0) {
                 scope_t *save_cur = s->cur;

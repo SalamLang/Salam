@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "semantic/sema_internal.h"
+#include "semantic/dce.h"
 
 static type_t *ty(sema_t *s, type_kind_t k)
 {
@@ -454,6 +455,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
             return decorate(s, n, err_ty(s));
         }
         sym->used = true;
+        dce_mark_root(s->pkg, sym->name);
         return decorate(s, n, type_ptr(s->tc, ty(s, TY_VOID)));
     }
     case AST_THIS: {

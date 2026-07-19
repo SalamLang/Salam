@@ -59,20 +59,7 @@ void parse_metas(parser_t *p, vec_t *out)
             p_error(p, buf);
         }
         p_advance(p);
-        if (p_at(p, TK_LBRACKET)) {
-            p_advance(p);
-            while (!p_at(p, TK_RBRACKET) && !p_at_eof(p)) {
-                if (p_at(p, TK_STRING)) {
-                    vec_push(p->a, out, CONST_CAST(lang));
-                    vec_push(p->a, out, CONST_CAST(p_peek(p)->value.as.s));
-                    p_advance(p);
-                } else if (p_at(p, TK_COMMA) || p_at(p, TK_STMT_END)) {
-                    p_advance(p);
-                } else
-                    break;
-            }
-            p_expect(p, TK_RBRACKET, "']' to close annotation list");
-        } else if (p_at(p, TK_STRING)) {
+        if (p_at(p, TK_STRING)) {
             while (p_at(p, TK_STRING)) {
                 vec_push(p->a, out, CONST_CAST(lang));
                 vec_push(p->a, out, CONST_CAST(p_peek(p)->value.as.s));

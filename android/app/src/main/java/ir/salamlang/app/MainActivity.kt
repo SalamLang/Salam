@@ -336,6 +336,7 @@ class MainActivity : AppCompatActivity() {
                 "http", "https" -> {
                     false
                 }
+
                 else -> {
                     openExternally(url)
                     true

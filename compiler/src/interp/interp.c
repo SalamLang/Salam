@@ -37,13 +37,13 @@ void tick(interp_t *I)
 
 static size_t itab_hash(const char *s)
 {
-    size_t h = 1469598103934665603u;
+    uint64_t h = 1469598103934665603ULL;
     const unsigned char *p = (const unsigned char *)s;
     for (; *p; p++) {
         h ^= *p;
-        h *= 1099511628211u;
+        h *= 1099511628211ULL;
     }
-    return h;
+    return (size_t)h;
 }
 
 static size_t ptab_hash(const void *p)
@@ -522,14 +522,6 @@ void build_modules(interp_t *I, ast_node_t *program)
     }
 }
 
-/*
- * Generic struct/impl instantiations (e.g. HashMap<str,str>) are deep-cloned
- * by sema (g_instantiate_struct) into whichever file's AST happened to be
- * under analysis at instantiation time, which is not necessarily the file
- * that defines the generic template (e.g. std/collections). Their methods
- * still reference that template's own package-level imports, so they must
- * run with the TEMPLATE's env, not the instantiating file's env.
- */
 static void fixup_generic_envs_in(interp_t *I, vec_t *defs)
 {
     size_t i = 0;

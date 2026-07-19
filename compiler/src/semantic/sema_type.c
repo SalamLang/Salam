@@ -130,6 +130,10 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
         }
         type_t *ret = tnode->type ? sema_resolve_type(s, tnode->type) : ty(s, TY_VOID);
         base = type_func(s->tc, ret, &ptypes);
+        /* 'extern func(...)' is a raw C-ABI function pointer (no closure env),
+         * distinguished from an ordinary Salam closure func type by this marker
+         * (type_t has no spare flag field; length is unused for TY_FUNC). */
+        if (tnode->is_extern) base->length = 1;
         if (tnode->is_pointer) base = type_ptr(s->tc, base);
         decorate(s, tnode, base);
         return base;

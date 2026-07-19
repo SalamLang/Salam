@@ -44,7 +44,8 @@ typedef struct {
     const char *dir;
     vec_t imported;
     const char *pkg;
-    vec_t pkg_cache;
+    vec_t *pkg_cache; /* path -> symbol_t* pairs; may be shared across sema_run_cached()
+                         calls */
     vec_t loading;
     ast_node_t *program;
     vec_t pending;

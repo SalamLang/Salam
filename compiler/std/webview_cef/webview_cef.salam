@@ -1,0 +1,233 @@
+@en "webview-cef"
+@fa "نمایش وب CEF"
+@ar "عرض الويب CEF"
+package webview_cef
+
+import mem
+import str
+import core
+
+# Bundled CEF libraries (static linking)
+link "cef"
+link "cef_dll_wrapper"
+
+# Platform-specific system libraries
+if SALAM_OS_WINDOWS:
+    link "user32"
+    link "gdi32"
+    link "ole32"
+    link "shell32"
+    link "advapi32"
+end
+
+if SALAM_OS_LINUX:
+    link "pthread"
+    link "dl"
+    link "m"
+    link "X11"
+end
+
+if SALAM_OS_DARWIN:
+    link "cocoa"
+    link "coreservices"
+    link "corefoundation"
+    link "iokit"
+end
+
+@en "HintNone"
+@fa "بدون اشاره"
+@ar "لا تلميح"
+pub const HINT_NONE := 0
+
+@en "HintFixed"
+@fa "اشاره ثابت"
+@ar "تلميح ثابت"
+pub const HINT_FIXED := 1
+
+@en "Settings"
+@fa "تنظیمات"
+@ar "إعدادات"
+pub struct Settings:
+    pub debug : bool = false
+    pub cache_path : str = ""
+    pub user_agent : str = ""
+    pub log_level : int = 0
+end
+
+@en "WebView"
+@fa "نمایش وب"
+@ar "عرض الويب"
+pub struct WebView:
+    pub handle : void* = null
+    pub closed : bool = false
+    pub width : int = 800
+    pub height : int = 600
+end
+
+extern:
+    func cef_initialize(settings : void*) : int
+    func cef_create_browser_window(url : str, width : int, height : int, title : str) : void*
+    func cef_message_loop_run()
+    func cef_shutdown()
+    func cef_browser_close_browser(browser : void*, force : int)
+    func cef_browser_set_title(browser : void*, title : str)
+    func cef_browser_execute_function(browser : void*, js : str) : int
+    func cef_browser_load_url(browser : void*, url : str)
+    func cef_browser_load_string(browser : void*, html : str)
+    func cef_browser_reload(browser : void*)
+    func cef_browser_get_focused(browser : void*) : int
+end
+
+mut _g cef initialized := false
+
+@en "Create"
+@fa "ایجاد"
+@ar "إنشاء"
+pub func Create(settings : Settings = Settings{}) : WebView:
+    if !_g_cef_initialized:
+        _initialize_cef(settings)
+        _g_cef_initialized = true
+    end
+
+    ret WebView{null, false, 800, 600}
+end
+
+@en "CreateWindow"
+@fa "ایجاد پنجره"
+@ar "إنشاء نافذة"
+pub func (w &WebView) CreateWindow(url : str, title : str):
+    handle := cef_create_browser_window(url, w.width, w.height, title)
+    if handle != null:
+        w.handle = handle
+    end
+end
+
+@en "Close"
+@fa "بسته کردن"
+@ar "إغلاق"
+pub func (w &WebView) Close():
+    if w.handle != null && !w.closed:
+        cef_browser_close_browser(w.handle, 1)
+        w.handle = null
+        w.closed = true
+    end
+end
+
+@en "Destroy"
+@fa "نابود کردن"
+@ar "تدمير"
+pub func (w &WebView) Destroy():
+    w.Close()
+end
+
+@en "SetTitle"
+@fa "تنظیم عنوان"
+@ar "تعيين العنوان"
+pub func (w &WebView) SetTitle(title : str):
+    if w.handle != null && !w.closed:
+        cef_browser_set_title(w.handle, title)
+    end
+end
+
+@en "SetSize"
+@fa "تنظیم اندازه"
+@ar "تعيين الحجم"
+pub func (w &WebView) SetSize(width : int, height : int):
+    w.width = width
+    w.height = height
+end
+
+@en "SetHTML"
+@fa "تنظیم HTML"
+@ar "تعيين HTML"
+pub func (w &WebView) SetHTML(html : str):
+    if w.handle != null && !w.closed:
+        cef_browser_load_string(w.handle, html)
+    end
+end
+
+@en "Navigate"
+@fa "پیمایش"
+@ar "التنقل"
+pub func (w &WebView) Navigate(url : str):
+    if w.handle != null && !w.closed:
+        cef_browser_load_url(w.handle, url)
+    end
+end
+
+@en "Eval"
+@fa "ارزیابی"
+@ar "تقييم"
+pub func (w &WebView) Eval(js : str) : bool:
+    if w.handle != null && !w.closed:
+        result := cef_browser_execute_function(w.handle, js)
+        ret result == 1
+    end
+    ret false
+end
+
+@en "Reload"
+@fa "بارگذاری مجدد"
+@ar "إعادة التحميل"
+pub func (w &WebView) Reload():
+    if w.handle != null && !w.closed:
+        cef_browser_reload(w.handle)
+    end
+end
+
+@en "IsFocused"
+@fa "متمرکز است"
+@ar "مركزة"
+pub func (w &WebView) IsFocused() : bool:
+    if w.handle != null && !w.closed:
+        result := cef_browser_get_focused(w.handle)
+        ret result == 1
+    end
+    ret false
+end
+
+@en "Run"
+@fa "اجرا"
+@ar "تشغيل"
+pub func Run():
+    cef_message_loop_run()
+end
+
+@en "Shutdown"
+@fa "خاموشی"
+@ar "الإيقاف"
+pub func Shutdown():
+    cef_shutdown()
+end
+
+@en "IsClosed"
+@fa "بسته شده است"
+@ar "مغلق"
+pub func (w &WebView) IsClosed() : bool:
+    ret w.closed
+end
+
+func _initialize_cef(settings : Settings):
+    settings_ptr := mem.Allocate(512 as u64)
+    if settings_ptr == null:
+        ret
+    end
+
+    # Zero-initialize
+    mem.Set(settings_ptr, 0, 512 as u64)
+
+    # Set cache path if provided
+    if settings.cache_path.len() > 0:
+        # Memory layout would be set here in production
+        # For now, just initialize
+    end
+
+    # Call CEF initialization
+    result := cef_initialize(settings_ptr)
+
+    mem.Free(settings_ptr)
+
+    if result != 1:
+        console.PrintLn("Failed to initialize CEF")
+    end
+end

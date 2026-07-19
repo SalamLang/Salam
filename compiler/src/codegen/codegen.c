@@ -14,6 +14,34 @@
 
 #include "codegen/codegen_internal.h"
 
+static bool detect_gui_imports(ast_node_t *program)
+{
+    size_t i = 0;
+    for (; i < program->list.len; i++) {
+        ast_node_t *d = (ast_node_t *)program->list.data[i];
+        if (d->kind != AST_IMPORT) continue;
+        const char *import_name = d->name;
+        if (!import_name) continue;
+        if (strcmp(import_name, "webview") == 0 || strcmp(import_name, "layout") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool is_windows_target(const char *triple)
+{
+    if (!triple || !triple[0]) {
+#if defined(_WIN32)
+        return true;
+#else
+        return false;
+#endif
+    }
+    return strstr(triple, "windows") != NULL || strstr(triple, "win32") != NULL ||
+           strstr(triple, "w64") != NULL || strstr(triple, "msvc") != NULL;
+}
+
 static void emit_private_protos(cg_t *cg, ast_node_t *program)
 {
     {
@@ -414,7 +442,8 @@ bool salam_module_single_threaded(ast_node_t *program)
 
 codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
                               sema_result_t *sem, const char *module, bool safe,
-                              bool debug_info, const char *src_path, const char *entry)
+                              bool debug_info, const char *src_path, const char *entry,
+                              const char *target_triple)
 {
     cg_t cg;
     memset(&cg, 0, sizeof(cg));
@@ -428,6 +457,8 @@ codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
     cg.src_path = src_path ? src_path : "";
     cg.pkg = program->name ? program->name : "main";
     cg.entry = (entry && entry[0]) ? entry : "main";
+    cg.target_triple = target_triple;
+    cg.is_gui_mode = detect_gui_imports(program);
     vec_init(&cg.locals);
     vec_init(&cg.vec_types);
     vec_init(&cg.dyn_ifaces);

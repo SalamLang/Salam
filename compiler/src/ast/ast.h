@@ -55,6 +55,7 @@ typedef enum {
     AST_CAST,
     AST_LITERAL,
     AST_IDENTIFIER,
+    AST_FUNC_ADDR,
     AST_THIS,
     AST_CALL,
     AST_MEMBER,

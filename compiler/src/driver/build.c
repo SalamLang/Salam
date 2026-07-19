@@ -75,6 +75,19 @@ static bool write_file(logger_t *log, const char *path, const char *content)
     return true;
 }
 
+static bool link_spec_is_path(const char *spec)
+{
+    if (strpbrk(spec, "/\\")) return true;
+    static const char *const exts[] = {".a", ".so", ".dll", ".lib", ".dylib"};
+    size_t n = strlen(spec);
+    size_t i = 0;
+    for (; i < sizeof(exts) / sizeof(exts[0]); i++) {
+        size_t el = strlen(exts[i]);
+        if (n > el && !strcmp(spec + n - el, exts[i])) return true;
+    }
+    return false;
+}
+
 static void emit_link(sb_t *cmd, logger_t *log, const char *spec, const char *kind,
                       bool use_tcc)
 {
@@ -90,7 +103,7 @@ static void emit_link(sb_t *cmd, logger_t *log, const char *spec, const char *ki
 #endif
         return;
     }
-    if (spec[0] == '-' || strpbrk(spec, "/\\.") != NULL) {
+    if (spec[0] == '-' || link_spec_is_path(spec)) {
         sb_putc(cmd, ' ');
         sb_put_shell_arg(cmd, spec);
         return;
@@ -340,7 +353,7 @@ int driver_build(options_t *opt)
             }
             codegen_output_t *out =
                 codegen_run(arena, log, program, sr, module, opt->safe, opt->debug_info,
-                            src->path, modentry);
+                            src->path, modentry, opt->llvm_target);
             size_t pfxlen = strlen(SALAM_MOD_PREFIX);
             size_t pathcap = pfxlen + strlen(module) + 3;
             char *cpath = (char *)arena_alloc(arena, pathcap);

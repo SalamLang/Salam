@@ -427,6 +427,8 @@ typedef struct {
 static seg_alias_t g_seg_aliases[512];
 
 static int g_seg_alias_n = -1;
+static char g_seg_alias_root[512] = "";
+static arena_t *g_seg_alias_arena = NULL;
 
 static void index_pkg_file(arena_t *a, const char *path, const char *canon)
 {
@@ -490,21 +492,24 @@ static void scan_std_dir(arena_t *a, const char *base, int depth)
     }
 }
 
-static void build_seg_index(arena_t *a, const char *root)
+static void build_seg_index(const char *root)
 {
+    if (!g_seg_alias_arena) g_seg_alias_arena = arena_new(1 << 16);
     g_seg_alias_n = 0;
     char base[512];
     if (root && root[0])
         sal_snprintf(base, sizeof base, "%s/std", root);
     else
         sal_snprintf(base, sizeof base, "std");
-    scan_std_dir(a, base, 2);
+    scan_std_dir(g_seg_alias_arena, base, 2);
+    sal_snprintf(g_seg_alias_root, sizeof g_seg_alias_root, "%s", root ? root : "");
 }
 
 static const char *seg_to_canon(arena_t *a, const char *root, const char *seg,
                                 const char *lang)
 {
-    if (g_seg_alias_n < 0) build_seg_index(a, root);
+    if (g_seg_alias_n < 0 || strcmp(g_seg_alias_root, root ? root : "") != 0)
+        build_seg_index(root);
     const char *ns = norm_ident(a, seg);
     {
         int i = 0;
@@ -550,6 +555,38 @@ static const char *resolve_ident_import(arena_t *a, const char *root, const char
         sal_snprintf(out, n, "std/%s/%s.salam", sb_cstr(&spec), last);
     sb_free(&spec);
     return out;
+}
+
+static const char *resolve_ident_direct(arena_t *a, const char *root, const char *dotted)
+{
+    sb_t spec;
+    sb_init(&spec);
+    const char *last = NULL;
+    const char *p = dotted;
+    while (*p) {
+        const char *dot = strchr(p, '.');
+        size_t seglen = dot ? (size_t)(dot - p) : strlen(p);
+        const char *seg = arena_strndup(a, p, seglen);
+        if (spec.len) sb_putc(&spec, '/');
+        sb_puts(&spec, seg);
+        last = seg;
+        if (!dot) break;
+        p = dot + 1;
+    }
+    if (!last) {
+        sb_free(&spec);
+        return NULL;
+    }
+    {
+        size_t n = strlen(root) + spec.len + strlen(last) + 24;
+        char *out = (char *)arena_alloc(a, n);
+        if (root && root[0])
+            sal_snprintf(out, n, "%s/std/%s/%s.salam", root, sb_cstr(&spec), last);
+        else
+            sal_snprintf(out, n, "std/%s/%s.salam", sb_cstr(&spec), last);
+        sb_free(&spec);
+        return file_exists(out) ? out : NULL;
+    }
 }
 
 static const char *resolve_user_string(arena_t *a, const char *dir, const char *spec)
@@ -598,9 +635,12 @@ const char *salam_resolve_import_node(arena_t *a, const char *dir, const ast_nod
 {
     if (imp->value.kind == TV_STRING && imp->value.as.s)
         return resolve_user_string(a, dir, imp->value.as.s);
-    if (imp->name)
-        return resolve_ident_import(a, salam_get_stdlib_root(), imp->name,
-                                    (lang && *lang) ? lang : "en");
+    if (imp->name) {
+        const char *root = salam_get_stdlib_root();
+        const char *direct = resolve_ident_direct(a, root, imp->name);
+        if (direct) return direct;
+        return resolve_ident_import(a, root, imp->name, (lang && *lang) ? lang : "en");
+    }
     return NULL;
 }
 
@@ -765,9 +805,9 @@ static symbol_t *pkg_cache_get(sema_t *s, const char *path)
 {
     {
         size_t i = 0;
-        for (; i + 1 < s->pkg_cache.len; i += 2)
-            if (strcmp((const char *)s->pkg_cache.data[i], path) == 0)
-                return (symbol_t *)s->pkg_cache.data[i + 1];
+        for (; i + 1 < s->pkg_cache->len; i += 2)
+            if (strcmp((const char *)s->pkg_cache->data[i], path) == 0)
+                return (symbol_t *)s->pkg_cache->data[i + 1];
     }
     return NULL;
 }
@@ -849,8 +889,8 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     pk->members = pkgscope;
     pk->pkgname = prog->name ? prog->name : "main";
     pk->decl = prog;
-    vec_push(s->a, &s->pkg_cache, CONST_CAST(path));
-    vec_push(s->a, &s->pkg_cache, (void *)pk);
+    vec_push(s->a, s->pkg_cache, CONST_CAST(path));
+    vec_push(s->a, s->pkg_cache, (void *)pk);
     return pk;
 }
 
@@ -933,12 +973,13 @@ void sema_load_prelude(sema_t *s)
     if (pk) s->prelude = pk->members;
 }
 
-sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const char *file,
-                        const char *lang, const cc_table_t *cc)
+sema_result_t *sema_run_cached(arena_t *a, logger_t *log, ast_node_t *program,
+                               const char *file, const char *lang, const cc_table_t *cc,
+                               vec_t *shared_pkg_cache)
 {
     sema_t s;
+    vec_t local_pkg_cache;
     memset(&s, 0, sizeof(s));
-    g_seg_alias_n = -1;
     s.a = a;
     s.log = log;
     s.file = file;
@@ -953,7 +994,12 @@ sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const ch
     s.pkg = program->name ? program->name : "main";
     s.program = program;
     vec_init(&s.imported);
-    vec_init(&s.pkg_cache);
+    if (shared_pkg_cache) {
+        s.pkg_cache = shared_pkg_cache;
+    } else {
+        vec_init(&local_pkg_cache);
+        s.pkg_cache = &local_pkg_cache;
+    }
     vec_init(&s.loading);
     vec_init(&s.pending);
     LOG_I(log, PH_SEMANTIC, "analyzing %zu top-level definitions", program->list.len);
@@ -982,10 +1028,16 @@ sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const ch
     vec_init(&r->packages);
     {
         size_t i = 1;
-        for (; i < s.pkg_cache.len; i += 2)
-            vec_push(a, &r->packages, s.pkg_cache.data[i]);
+        for (; i < s.pkg_cache->len; i += 2)
+            vec_push(a, &r->packages, s.pkg_cache->data[i]);
     }
     return r;
+}
+
+sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const char *file,
+                        const char *lang, const cc_table_t *cc)
+{
+    return sema_run_cached(a, log, program, file, lang, cc, NULL);
 }
 
 static const char *sym_kind_name(sym_kind_t k)

@@ -105,6 +105,17 @@ static const char *call_value(cg_t *cg, ast_node_t *n, ast_node_t *callee)
                   tmp, cg_expr(cg, callee), cret, cps, tmp, tmp, args);
 }
 
+/* 'extern func(...)' values are raw C-ABI function pointers (no closure env
+ * word) - call the address directly instead of the lambda deref-and-prepend
+ * convention call_value() uses. See AST_TYPE.is_extern in sema_type.c. */
+static const char *call_raw_ptr(cg_t *cg, ast_node_t *n, ast_node_t *callee)
+{
+    const char *cret = cg_ctype(cg, raw_ret_of(callee->type_str));
+    const char *cps = raw_cast_params(cg, callee->type_str);
+    const char *args = call_args(cg, n, NULL);
+    return cg_fmt(cg, "((%s(*)%s)(%s))(%s)", cret, cps, cg_expr(cg, callee), args);
+}
+
 static const char *cg_print_legacy(cg_t *cg, ast_node_t *n, bool nl, int err)
 {
     sb_t b;
@@ -145,12 +156,6 @@ static const char *cg_print_legacy(cg_t *cg, ast_node_t *n, bool nl, int err)
     return r;
 }
 
-/*
- * In a single-threaded module all stdout goes through the salam_ob buffer, so a
- * printf/salam_emit-based print must first flush that buffer and then push its
- * own output out immediately, keeping the two in program order. Pure-literal
- * prints skip this and write the buffer directly (the fast path).
- */
 static const char *cg_order_stdout(cg_t *cg, const char *printf_expr)
 {
     if (!cg->single_threaded) return printf_expr;
@@ -384,7 +389,8 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
         : sig ? cg_mangle_in(cg, home_pkg ? home_pkg : cg->pkg, NULL, nm, &sig->params)
               : nm;
     const char *args = call_args(cg, n, sig);
-    if (sig && type_is_byval_agg(sig->ret)) return call_sret(cg, sig->ret, mangled, args);
+    if (sig && type_is_byval_agg(sig->ret) && !is_extern_call)
+        return call_sret(cg, sig->ret, mangled, args);
     return cg_fmt(cg, "%s(%s)", mangled, args);
 }
 
@@ -392,15 +398,18 @@ static const char *call_pkg(cg_t *cg, ast_node_t *n, symbol_t *pk, ast_node_t *c
 {
     symbol_t *fn = scope_lookup_local(pk->members, callee->name);
     func_sig_t *sig = fn ? pick_overload(cg, fn, n) : NULL;
+    bool is_extern_call = sig && sig->decl && sig->decl->is_extern;
     vec_t empty;
     vec_init(&empty);
 
-    const char *mangled = (sig && sig->decl && sig->decl->synthetic)
+    const char *mangled = is_extern_call ? callee->name
+                          : (sig && sig->decl && sig->decl->synthetic)
                               ? cg_mangle_in(cg, "g", NULL, callee->name, &sig->params)
                               : cg_mangle_in(cg, pk->pkgname, NULL, callee->name,
                                              sig ? &sig->params : &empty);
     const char *args = call_args(cg, n, sig);
-    if (sig && type_is_byval_agg(sig->ret)) return call_sret(cg, sig->ret, mangled, args);
+    if (sig && type_is_byval_agg(sig->ret) && !is_extern_call)
+        return call_sret(cg, sig->ret, mangled, args);
     return cg_fmt(cg, "%s(%s)", mangled, args);
 }
 
@@ -560,6 +569,8 @@ static const char *call_member(cg_t *cg, ast_node_t *n, ast_node_t *callee)
 const char *cg_call(cg_t *cg, ast_node_t *n)
 {
     ast_node_t *callee = n->a;
+    if (callee && callee->type_str && !strncmp(callee->type_str, "externfunc(", 11))
+        return call_raw_ptr(cg, n, callee);
     if (callee && callee->type_str && !strncmp(callee->type_str, "func(", 5))
         return call_value(cg, n, callee);
     if (callee && callee->kind == AST_IDENTIFIER) return call_ident(cg, n, callee);

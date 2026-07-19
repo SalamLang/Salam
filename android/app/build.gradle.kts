@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace = "ir.salamlang.editor"
+    namespace = "ir.salamlang.app"
     compileSdk {
         version =
             release(36) {
@@ -12,7 +12,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "ir.salamlang.editor"
+        applicationId = "ir.salamlang.app"
         minSdk = 24
         targetSdk = 36
         versionCode = project.findProperty("appVersionCode")?.toString()?.toIntOrNull() ?: 1

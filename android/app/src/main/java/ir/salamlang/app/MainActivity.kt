@@ -1,4 +1,4 @@
-package ir.salamlang.editor
+package ir.salamlang.app
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -199,9 +199,18 @@ class MainActivity : AppCompatActivity() {
                 override fun handleOnBackPressed() {
                     val popup = popupWebView
                     when {
-                        popup != null && popup.canGoBack() -> popup.goBack()
-                        popup != null -> closePopup()
-                        errorView.visibility != View.VISIBLE && webView.canGoBack() -> webView.goBack()
+                        popup != null && popup.canGoBack() -> {
+                            popup.goBack()
+                        }
+
+                        popup != null -> {
+                            closePopup()
+                        }
+
+                        errorView.visibility != View.VISIBLE && webView.canGoBack() -> {
+                            webView.goBack()
+                        }
+
                         else -> {
                             isEnabled = false
                             onBackPressedDispatcher.onBackPressed()
@@ -324,7 +333,9 @@ class MainActivity : AppCompatActivity() {
             val url = request.url
             Log.d(TAG, "shouldOverride: $url (mainFrame=${request.isForMainFrame})")
             return when (url.scheme?.lowercase()) {
-                "http", "https" -> false
+                "http", "https" -> {
+                    false
+                }
                 else -> {
                     openExternally(url)
                     true

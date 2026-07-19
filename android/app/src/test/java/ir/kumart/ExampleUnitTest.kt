@@ -1,4 +1,4 @@
-package ir.salamlang.editor
+package ir.salamlang.app
 
 import org.junit.Assert.assertEquals
 import org.junit.Test

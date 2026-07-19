@@ -1,4 +1,4 @@
-package ir.salamlang.editor
+package ir.salamlang.app
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -11,6 +11,6 @@ class ExampleInstrumentedTest {
     @Test
     fun useAppContext() {
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
-        assertEquals("ir.salamlang.editor", appContext.packageName)
+        assertEquals("ir.salamlang.app", appContext.packageName)
     }
 }

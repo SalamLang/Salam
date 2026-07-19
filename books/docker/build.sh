@@ -26,8 +26,10 @@ error() {
 
 run_latexmk() {
     if [ "$USE_GLOSSARY" -eq 1 ]; then
+        # shellcheck disable=SC2086 # LATEXMK_OPTS is a list of options; word splitting is intentional
         latexmk $LATEXMK_OPTS -use-makeglossaries book.tex
     else
+        # shellcheck disable=SC2086 # LATEXMK_OPTS is a list of options; word splitting is intentional
         latexmk $LATEXMK_OPTS book.tex
     fi
 }

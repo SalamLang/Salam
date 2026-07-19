@@ -418,6 +418,32 @@ symbol_t *g_infer_call(sema_t *s, symbol_t *tsym, vec_t *argtypes, const src_spa
                        type_t *expected)
 {
     ast_node_t *tmpl = tsym->decl;
+    {
+        size_t required = 0, total = 0;
+        bool seen_default = false;
+        size_t i = 0;
+        for (; i < tmpl->list.len; i++) {
+            ast_node_t *param = (ast_node_t *)tmpl->list.data[i];
+            if (param->kind != AST_PARAM) continue;
+            total++;
+            if (param->a)
+                seen_default = true;
+            else if (!seen_default)
+                required++;
+        }
+        if (argtypes->len < required || (!tmpl->is_variadic && argtypes->len > total)) {
+            if (tmpl->is_variadic)
+                SERR(s, 12, span, "'%s' expects at least %zu argument(s), got %zu",
+                     tsym->name, required, argtypes->len);
+            else if (required == total)
+                SERR(s, 12, span, "'%s' expects %zu argument(s), got %zu", tsym->name,
+                     total, argtypes->len);
+            else
+                SERR(s, 12, span, "'%s' expects %zu to %zu argument(s), got %zu",
+                     tsym->name, required, total, argtypes->len);
+            return NULL;
+        }
+    }
     vec_t targ_nodes;
     vec_init(&targ_nodes);
     {
@@ -439,6 +465,17 @@ symbol_t *g_infer_call(sema_t *s, symbol_t *tsym, vec_t *argtypes, const src_spa
             }
             if (!bound && expected && tmpl->type)
                 bound = g_unify(tmpl->type, expected, T);
+            if (!bound) {
+                size_t pi = argtypes->len;
+                for (; pi < tmpl->list.len; pi++) {
+                    ast_node_t *p = (ast_node_t *)tmpl->list.data[pi];
+                    if (p->kind != AST_PARAM || !p->a) continue;
+                    if (!p->type || !p->type->name || strcmp(p->type->name, T) != 0)
+                        continue;
+                    bound = sema_check_expr(s, p->a);
+                    if (bound) break;
+                }
+            }
             if (!bound) {
                 SERR(s, 1, span,
                      "cannot infer type parameter '%s' of generic function '%s'", T,

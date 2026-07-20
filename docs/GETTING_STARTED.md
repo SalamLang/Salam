@@ -165,6 +165,6 @@ salam layout   # layout DSL REPL
 | [Platform & word-size support](PLATFORMS.md)                                                                      | 32-bit vs 64-bit, C backend vs LLVM backend, release matrix    |
 | [Contributing Guide](../CONTRIBUTING.md)                                                                          | How to fork, branch, build, and open a pull request            |
 | [Code of Conduct](../CODE_OF_CONDUCT.md)                                                                          | Community standards                                            |
-| [VS Code extension](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language) | Syntax highlighting and language support for VS Code           |
+| [Visual Studio Code extension](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language) | Syntax highlighting and language support for Visual Studio Code           |
 | [Discord](https://discord.gg/HfY3QHDPdv)                                                                          | Real-time community chat                                       |
 | [Telegram](https://t.me/SalamProgrammingLanguage)                                                                 | Community on Telegram                                          |

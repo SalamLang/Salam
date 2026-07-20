@@ -76,6 +76,7 @@ typedef enum token_kind_t {
     TK_KW_EACH,
     TK_KW_IN,
     TK_KW_WITH,
+    TK_KW_MATCH,
     TK_PLUS,
     TK_MINUS,
     TK_STAR,
@@ -125,7 +126,7 @@ typedef enum token_kind_t {
 
 SAL_INLINE bool tk_is_keyword(token_kind_t k)
 {
-    return k >= TK_KW_FUNC && k <= TK_KW_WITH;
+    return k >= TK_KW_FUNC && k <= TK_KW_MATCH;
 }
 
 typedef enum {

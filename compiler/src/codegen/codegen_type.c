@@ -279,6 +279,7 @@ const char *cg_ctype(cg_t *cg, const char *ts)
 {
     if (!ts) return "void";
     if (cg_is_slice_ts(ts)) return "salam_slice";
+    if (!strncmp(ts, "Variant<", 8)) return "_Salam_variant";
     if (!strncmp(ts, "dyn ", 4)) {
         const char *suf = strpbrk(ts + 4, "[*");
         char iface[96];
@@ -304,6 +305,8 @@ const char *cg_ctype(cg_t *cg, const char *ts)
 const char *cg_decl(cg_t *cg, const char *ts, const char *name)
 {
     if (cg_is_slice_ts(ts)) return cg_fmt(cg, "salam_slice %s", cg_cident(cg, name));
+    if (!strncmp(ts, "Variant<", 8))
+        return cg_fmt(cg, "_Salam_variant %s", cg_cident(cg, name));
     if (!strncmp(ts, "dyn ", 4)) {
         const char *suf = strpbrk(ts + 4, "[*");
         char iface[96];

@@ -1,0 +1,79 @@
+package layoutfx
+
+// Turns the block tree into screen coordinates. Blocks snap into a single
+// vertical spine per container (see the design doc's "puzzle-piece
+// snapping" decision, chosen over freehand wiring because precise
+// freehand pointer targeting is genuinely hard for 5-6 year old fine
+// motor control) -- so layout is a simple top-to-bottom walk, not a
+// general 2D graph layout problem. Containers (Check / Repeat / Keep
+// Going Until) nest their one body list one indent level to the right.
+import "model.salam"
+
+pub const ROW_H := 64.0
+pub const INDENT := 30.0
+pub const BASE_X := 16.0
+pub const BASE_Y := 16.0
+pub const FOOTER_H := 18.0
+
+// Flattened, top-to-bottom visitation order of every currently reachable
+// block, rebuilt on every computeLayout() call. Drag/drop and wire
+// drawing both walk this instead of re-deriving the tree themselves.
+pub order: int[300] // must match model.MAX_BLOCKS -- array sizes have to be literals, not cross-package consts
+pub mut orderCount := 0
+pub mut totalHeight := 0.0
+
+func layoutBlock(id: int, depth: int, y: f64): f64:
+    model.blocks[id].depth = depth
+    model.blocks[id].x = BASE_X + (depth as f64) * INDENT
+    model.blocks[id].y = y
+    order[orderCount] = id
+    orderCount += 1
+    mut yy := y + ROW_H
+    if model.isContainer(model.blocks[id].kind):
+        yy = layoutList(model.blocks[id].child, depth + 1, yy)
+        yy = yy + FOOTER_H
+    end
+    ret yy
+end
+
+func layoutList(headId: int, depth: int, y: f64): f64:
+    mut cur := headId
+    mut yy := y
+    until cur != -1:
+        yy = layoutBlock(cur, depth, yy)
+        cur = model.blocks[cur].next
+    end
+    ret yy
+end
+
+pub func computeLayout():
+    orderCount = 0
+    totalHeight = layoutList(model.startId, 0, BASE_Y) + BASE_Y
+end
+
+// Finds the block in the flattened order whose row is closest to y,
+// among blocks at or below the given depth band (depth is used by the
+// drag code to decide "drop inside this container" vs "drop on the main
+// spine"). Returns -1 if the program is empty (should never happen,
+// Start/End always exist).
+pub func nearestAt(y: f64): int:
+    if orderCount == 0: ret -1 end
+    mut best := order[0]
+    mut bestDist := absF(model.blocks[best].y - y)
+    mut i := 1
+    until i < orderCount:
+        id := order[i]
+        d := absF(model.blocks[id].y - y)
+        if d < bestDist:
+            bestDist = d
+            best = id
+        end
+        i += 1
+    end
+    ret best
+end
+
+func absF(v: f64): f64:
+    if v < 0.0: ret 0.0 - v end
+    ret v
+end

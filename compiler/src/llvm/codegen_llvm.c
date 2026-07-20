@@ -133,6 +133,9 @@ static void ll_emit_prologue(ll_t *ll)
         g,
         "; `dyn Iface` fat pointer: { data, vtable } (vtable = [N x ptr] of methods)\n");
     sb_puts(g, "%dyn = type { ptr, ptr }\n\n");
+
+    sb_puts(g, "; compiler-synthesized match Variant: { tag, heap-boxed payload }\n");
+    sb_puts(g, "%variant = type { i32, ptr }\n\n");
 }
 
 static void ll_emit_substr(ll_t *ll)

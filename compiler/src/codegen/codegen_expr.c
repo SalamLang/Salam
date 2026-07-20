@@ -130,6 +130,107 @@ const char *cg_cescape(cg_t *cg, const char *s)
     return r;
 }
 
+const char *cg_match_arm_cond(cg_t *cg, ast_node_t *arm, const char *subj_var,
+                              const char *subj_ts)
+{
+    bool is_variant = subj_ts && !strncmp(subj_ts, "Variant<", 8);
+    sb_t b;
+    const char *r;
+    sb_init(&b);
+    if (arm->op == TK_KW_ELSE) {
+        sb_puts(&b, "1");
+    } else {
+        size_t i = 0;
+        for (; i < arm->list.len; i++) {
+            ast_node_t *pat = (ast_node_t *)arm->list.data[i];
+            if (i) sb_puts(&b, " || ");
+            if (is_variant)
+                sb_puts(&b,
+                        cg_fmt(cg, "((%s).tag == %d)", subj_var, (int)pat->value.as.i));
+            else if (cg_is_str_ts(subj_ts))
+                sb_puts(&b, cg_fmt(cg, "(strcmp(%s, %s) == 0)", subj_var,
+                                   cg_expr(cg, pat->a)));
+            else
+                sb_puts(&b, cg_fmt(cg, "((%s) == (%s))", subj_var, cg_expr(cg, pat->a)));
+        }
+    }
+    r = cg_fmt(cg, "%s", sb_cstr(&b));
+    sb_free(&b);
+    return r;
+}
+
+static const char *cg_variant_box(cg_t *cg, ast_node_t *n)
+{
+    const char *cC = cg_ctype(cg, n->a->type_str ? n->a->type_str : "int32_t");
+    int t = ++cg->tmpn;
+    return cg_fmt(cg,
+                  "({ %s* __vp%d = (%s*)" SALAM_MEM_ALLOC "((uint64_t)sizeof(%s)); "
+                  "*__vp%d = (%s); "
+                  "(_Salam_variant){ %d, (void*)__vp%d }; })",
+                  cC, t, cC, cC, t, cg_expr(cg, n->a), (int)n->value.as.i, t);
+}
+
+static const char *cg_variant_unwrap(cg_t *cg, ast_node_t *n)
+{
+    const char *cC = cg_ctype(cg, n->type_str ? n->type_str : "int32_t");
+    return cg_fmt(cg, "(*(%s*)(%s).payload)", cC, cg_expr(cg, n->a));
+}
+
+static const char *cg_match_expr(cg_t *cg, ast_node_t *n)
+{
+    int t = ++cg->tmpn;
+    const char *rty = cg_ctype(cg, n->type_str ? n->type_str : "int32_t");
+    const char *sty = cg_ctype(cg, n->a->type_str ? n->a->type_str : "int32_t");
+    const char *subj_var = cg_fmt(cg, "__msubj%d", t);
+    const char *res_var = cg_fmt(cg, "__mres%d", t);
+    const char *end_lbl = cg_fmt(cg, "__mend%d", t);
+    const char *saved_tmp = cg->match_result_tmp;
+    const char *saved_lbl = cg->match_end_label;
+    bool has_wildcard = false;
+    sb_t b;
+    const char *r;
+    sb_init(&b);
+    sb_puts(&b, cg_fmt(cg, "({ %s %s; %s %s = (%s);\n", rty, res_var, sty, subj_var,
+                       cg_expr(cg, n->a)));
+    cg->match_result_tmp = res_var;
+    cg->match_end_label = end_lbl;
+    {
+        size_t i = 0;
+        for (; i < n->list.len; i++) {
+            ast_node_t *arm = (ast_node_t *)n->list.data[i];
+            const char *cond = cg_match_arm_cond(cg, arm, subj_var, n->a->type_str);
+            if (arm->op == TK_KW_ELSE) has_wildcard = true;
+            sb_puts(&b, cg_fmt(cg, "%s if (%s) {\n", i ? "else" : "", cond));
+            {
+                sb_t *saved_out = cg->c;
+                sb_t inner;
+                int saved_indent = cg->indent;
+                size_t mark = cg->locals.len;
+                size_t j = 0;
+                sb_init(&inner);
+                cg->c = &inner;
+                cg->indent = 0;
+                for (; j < arm->b->list.len; j++)
+                    cg_stmt(cg, (ast_node_t *)arm->b->list.data[j]);
+                cg->c = saved_out;
+                cg->indent = saved_indent;
+                cg->locals.len = mark;
+                sb_puts(&b, sb_cstr(&inner));
+                sb_free(&inner);
+            }
+            sb_puts(&b, "}\n");
+        }
+    }
+    if (!has_wildcard)
+        sb_puts(&b, cg_fmt(cg, "else { salam_panic(\"no match arm matched\"); }\n"));
+    sb_puts(&b, cg_fmt(cg, "%s: %s; })", end_lbl, res_var));
+    cg->match_result_tmp = saved_tmp;
+    cg->match_end_label = saved_lbl;
+    r = arena_strdup(cg->a, sb_cstr(&b));
+    sb_free(&b);
+    return r;
+}
+
 static const char *cg_dyn_box(cg_t *cg, ast_node_t *n)
 {
     const char *iface = n->type_str + 4;
@@ -511,6 +612,12 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                       "%s, (int64_t)sizeof(%s)); __sl%d; })",
                       t, t, base, lo, hi, ec, t);
     }
+    case AST_MATCH:
+        return cg_match_expr(cg, n);
+    case AST_VARIANT_BOX:
+        return cg_variant_box(cg, n);
+    case AST_VARIANT_UNWRAP:
+        return cg_variant_unwrap(cg, n);
     case AST_LAMBDA:
         return cg_lambda_value(cg, n);
     case AST_STRUCT_LIT:

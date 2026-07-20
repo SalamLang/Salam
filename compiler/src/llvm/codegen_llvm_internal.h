@@ -117,6 +117,9 @@ typedef struct {
     bool single_threaded;
     sb_t *hg;
     bool hneed[LL_H_COUNT];
+    const char *match_result_ptr;
+    const char *match_result_ts;
+    const char *match_merge_block;
 } ll_t;
 
 SAL_INLINE bool ll_is_str(const char *ts)
@@ -220,6 +223,8 @@ void ll_func_params(ll_t *ll, const char *ts, vec_t *out);
 
 llv_t ll_expr(ll_t *ll, ast_node_t *n);
 
+const char *ll_match_arm_cond(ll_t *ll, ast_node_t *arm, llv_t subj, bool is_variant);
+
 llv_t ll_binary(ll_t *ll, ast_node_t *n);
 
 ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n);
@@ -253,6 +258,10 @@ void ll_emit_packages(ll_t *ll);
 void ll_ensure_fn(ll_t *ll, ast_node_t *fn, symbol_t *owner, scope_t *pscope);
 
 const char *ll_box_dyn(ll_t *ll, llv_t v, const char *iface);
+
+const char *ll_box_variant(ll_t *ll, llv_t v, int tag);
+
+llv_t ll_unwrap_variant(ll_t *ll, llv_t v, const char *member_ts);
 
 const char *ll_mangle_ti(ll_t *ll, const char *typestr, const char *fn, func_sig_t *sig);
 

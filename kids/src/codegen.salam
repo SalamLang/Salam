@@ -1,0 +1,148 @@
+package codegen
+
+// Walks the same block tree the interpreter runs and turns it into real,
+// readable English Salam source text for the "Peek at the code" panel.
+//
+// One deliberate implementation choice, called out because it's easy to
+// get backwards (the design doc's own §5 flags this exact trap): Salam's
+// `until <cond>: ... end` keeps looping WHILE <cond> is true -- it is a
+// plain continue-while loop, not a run-until-true loop, despite the
+// English word "until". The "Keep Going Until" block is configured by
+// the child as a *stop* condition ("keep going until the box says bye"),
+// so generating a literal `until <that condition>:` would loop while the
+// stop condition holds -- the opposite of what the child built. The fix
+// is to negate it: `until !(<stop condition>):`.
+import "model.salam"
+
+mut out := ""
+
+// Tracks which box names have already been introduced with `mut ... :=`
+// in the generated program, so a second Ask/Make-a-Box into the same box
+// emits a plain reassignment instead of illegally (well, confusingly --
+// Salam would just shadow it) redeclaring the variable.
+declaredNames: str[64]
+mut declaredCount := 0
+
+func wasDeclared(name: str): bool:
+    mut i := 0
+    until i < declaredCount:
+        if declaredNames[i] == name: ret true end
+        i += 1
+    end
+    ret false
+end
+
+func markDeclared(name: str):
+    if declaredCount < 64:
+        declaredNames[declaredCount] = name
+        declaredCount += 1
+    end
+end
+
+func indent(depth: int): str:
+    mut s := ""
+    mut i := 0
+    until i < depth:
+        s = s.concat("    ")
+        i += 1
+    end
+    ret s
+end
+
+func emit(depth: int, line: str):
+    out = out.concat(indent(depth)).concat(line).concat("\n")
+end
+
+// Every box is generated as a plain `str` variable (that's what Ask and
+// Make-a-Box both naturally produce), so a "more than" / "less than"
+// check has to convert it at the comparison site -- exactly the invisible
+// type conversion the design doc describes for the live interpreter,
+// just spelled out in the generated source instead of hidden in a VM.
+func condExpr(textA: str, textB: str, op: int): str:
+    if op == model.OP_EQ:
+        ret textA.concat(" == \"").concat(textB).concat("\"")
+    else op == model.OP_GT:
+        ret "str.ToFloat(".concat(textA).concat(") > ").concat(model.formatNumber(model.parseNumber(textB)))
+    else:
+        ret "str.ToFloat(".concat(textA).concat(") < ").concat(model.formatNumber(model.parseNumber(textB)))
+    end
+end
+
+func emitList(headId: int, depth: int):
+    mut cur := headId
+    until cur != -1:
+        emitBlock(cur, depth)
+        cur = model.blocks[cur].next
+    end
+end
+
+func emitBlock(id: int, depth: int):
+    b := model.blocks[id]
+    kind := b.kind
+    if kind == model.KIND_SAY:
+        if b.textB == "":
+            emit(depth, "println \"".concat(b.textA).concat("\""))
+        else:
+            emit(depth, "println \"".concat(b.textA).concat("\".concat(").concat(b.textB).concat(")"))
+        end
+    else kind == model.KIND_ASK:
+        promptExpr := "dom.Prompt(\"".concat(b.textA).concat("\")")
+        if wasDeclared(b.textB):
+            emit(depth, b.textB.concat(" = ").concat(promptExpr))
+        else:
+            emit(depth, "mut ".concat(b.textB).concat(" := ").concat(promptExpr))
+            markDeclared(b.textB)
+        end
+    else kind == model.KIND_MAKE_BOX:
+        valExpr := "\"".concat(b.textB).concat("\"")
+        if wasDeclared(b.textA):
+            emit(depth, b.textA.concat(" = ").concat(valExpr))
+        else:
+            emit(depth, "mut ".concat(b.textA).concat(" := ").concat(valExpr))
+            markDeclared(b.textA)
+        end
+    else kind == model.KIND_ADD_TO_BOX:
+        if model.isNumeric(b.textB):
+            expr := "str.FromFloat(str.ToFloat(".concat(b.textA).concat(") + ").concat(model.formatNumber(model.parseNumber(b.textB))).concat(")")
+            emit(depth, b.textA.concat(" = ").concat(expr))
+        else:
+            emit(depth, b.textA.concat(" = ").concat(b.textA).concat(".concat(\"").concat(b.textB).concat("\")"))
+        end
+    else kind == model.KIND_SUBTRACT_FROM_BOX:
+        expr := "str.FromFloat(str.ToFloat(".concat(b.textA).concat(") - ").concat(model.formatNumber(model.parseNumber(b.textB))).concat(")")
+        emit(depth, b.textA.concat(" = ").concat(expr))
+    else kind == model.KIND_IF:
+        emit(depth, "if ".concat(condExpr(b.textA, b.textB, b.op)).concat(":"))
+        emitList(b.child, depth + 1)
+        emit(depth, "end")
+    else kind == model.KIND_REPEAT_N:
+        emit(depth, "repeat ".concat(model.formatNumber(b.numA)).concat(":"))
+        emitList(b.child, depth + 1)
+        emit(depth, "end")
+    else kind == model.KIND_REPEAT_UNTIL:
+        emit(depth, "until !(".concat(condExpr(b.textA, b.textB, b.op)).concat("):"))
+        emitList(b.child, depth + 1)
+        emit(depth, "end")
+    else kind == model.KIND_MOVE:
+        emit(depth, "turtle.forward(".concat(model.formatNumber(b.numA)).concat(")"))
+    else kind == model.KIND_TURN:
+        emit(depth, "turtle.turn(".concat(model.formatNumber(b.numA)).concat(")"))
+    else kind == model.KIND_PEN_UP:
+        emit(depth, "turtle.lift()")
+    else kind == model.KIND_PEN_DOWN:
+        emit(depth, "turtle.lower()")
+    end
+end
+
+pub func generate(mode: int): str:
+    out = ""
+    declaredCount = 0
+    emit(0, "import dom")
+    emit(0, "import str")
+    if mode == model.MODE_DRAW: emit(0, "import \"turtle.salam\"") end
+    emit(0, "")
+    emit(0, "func main:")
+    emitList(model.blocks[model.startId].next, 1)
+    emit(0, "end")
+    ret out
+end

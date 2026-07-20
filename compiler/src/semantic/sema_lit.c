@@ -218,10 +218,16 @@ type_t *check_lambda(sema_t *s, ast_node_t *n)
     scope_t *saved = s->cur;
     func_sig_t *saved_func = s->cur_func;
     type_t *saved_self = s->self_type;
+    int saved_mad = s->match_arm_depth;
+    type_t *saved_myexp = s->match_yield_expected;
+    vec_t *saved_mycol = s->match_yield_collect;
     lambda_ctx_t lctx = {sc, n, s->lam};
     s->cur = sc;
     s->self_type = NULL;
     s->lam = &lctx;
+    s->match_arm_depth = 0;
+    s->match_yield_expected = NULL;
+    s->match_yield_collect = NULL;
     n->captures.len = 0;
     vec_t ptypes;
     vec_init(&ptypes);
@@ -252,5 +258,8 @@ type_t *check_lambda(sema_t *s, ast_node_t *n)
     s->cur_func = saved_func;
     s->self_type = saved_self;
     s->lam = lctx.prev;
+    s->match_arm_depth = saved_mad;
+    s->match_yield_expected = saved_myexp;
+    s->match_yield_collect = saved_mycol;
     return decorate(s, n, type_func(s->tc, ret, &ptypes));
 }

@@ -137,7 +137,8 @@ static void jsg_emit_impls(jg_t *g, jsgen_output_t *out)
 
 jsgen_output_t *jsgen_run(arena_t *a, logger_t *log, ast_node_t *program,
                           sema_result_t *sem, const char *module, const char *entry,
-                          bool enable_minify, const char **minify_last)
+                          bool enable_minify, const char **minify_last,
+                          vec_t *minify_keys, vec_t *minify_vals)
 {
     jg_t g;
     sb_t globals;
@@ -161,8 +162,19 @@ jsgen_output_t *jsgen_run(arena_t *a, logger_t *log, ast_node_t *program,
     vec_init(&g.local_emit);
     vec_init(&g.taken);
     vec_init(&g.fn_used_names);
-    vec_init(&g.minify_keys);
-    vec_init(&g.minify_vals);
+    /* The key->name cache must survive across modules, not just the
+     * counter: otherwise the same cross-module symbol (e.g. a call site
+     * in one module vs. its declaration in another) independently mints
+     * two different names from the shared counter and the emitted call
+     * references a name that was never declared. */
+    if (minify_keys)
+        g.minify_keys = *minify_keys;
+    else
+        vec_init(&g.minify_keys);
+    if (minify_vals)
+        g.minify_vals = *minify_vals;
+    else
+        vec_init(&g.minify_vals);
     memset(out, 0, sizeof(*out));
     out->module = module;
     vec_init(&out->fn_names);
@@ -178,6 +190,8 @@ jsgen_output_t *jsgen_run(arena_t *a, logger_t *log, ast_node_t *program,
     out->entry_mangled = g.entry_mangled;
     sb_free(&globals);
     if (minify_last) *minify_last = g.minify_last;
+    if (minify_keys) *minify_keys = g.minify_keys;
+    if (minify_vals) *minify_vals = g.minify_vals;
     LOG_I(log, PH_CODEGEN, i18n_tr("generated %zu function(s) for '%s'"),
           out->fn_names.len, module);
     return out;

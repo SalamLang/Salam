@@ -415,6 +415,31 @@ const char *ll_box_dyn(ll_t *ll, llv_t v, const char *iface)
     return t1;
 }
 
+const char *ll_box_variant(ll_t *ll, llv_t v, int tag)
+{
+    const char *cty = ll_ty(ll, v.ts);
+    const char *szp = ll_new_tmp(ll), *sz = ll_new_tmp(ll), *data = ll_new_tmp(ll);
+    ll_emit(ll, "%s = getelementptr %s, ptr null, i32 1", szp, cty);
+    ll_emit(ll, "%s = ptrtoint ptr %s to %s", sz, szp, ll->usize);
+    ll_emit(ll, "%s = call ptr @malloc(%s %s)", data, ll->usize, sz);
+    ll_emit(ll, "store %s %s, ptr %s", cty, v.ref, data);
+    {
+        const char *t0 = ll_new_tmp(ll), *t1 = ll_new_tmp(ll);
+        ll_emit(ll, "%s = insertvalue %%variant undef, i32 %d, 0", t0, tag);
+        ll_emit(ll, "%s = insertvalue %%variant %s, ptr %s, 1", t1, t0, data);
+        return t1;
+    }
+}
+
+llv_t ll_unwrap_variant(ll_t *ll, llv_t v, const char *member_ts)
+{
+    const char *p = ll_new_tmp(ll);
+    const char *r = ll_new_tmp(ll);
+    ll_emit(ll, "%s = extractvalue %%variant %s, 1", p, v.ref);
+    ll_emit(ll, "%s = load %s, ptr %s", r, ll_ty(ll, member_ts), p);
+    return (llv_t){r, member_ts};
+}
+
 const char *ll_mangle_ti(ll_t *ll, const char *typestr, const char *fn, func_sig_t *sig)
 {
     sb_t b;

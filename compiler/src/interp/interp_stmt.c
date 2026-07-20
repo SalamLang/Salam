@@ -14,6 +14,34 @@
 
 #include "interp/interp_internal.h"
 
+bool interp_match_arm(interp_t *I, env_t *env, ast_node_t *arm, value_t subj)
+{
+    size_t pi = 0;
+    if (arm->op == TK_KW_ELSE) return true;
+    for (; pi < arm->list.len; pi++) {
+        ast_node_t *pat = (ast_node_t *)arm->list.data[pi];
+        if (subj.kind == VAL_VARIANT) {
+            if (subj.as.variant &&
+                (int64_t)pat->value.as.i == (int64_t)subj.as.variant->tag)
+                return true;
+        } else {
+            value_t pv = eval(I, env, pat->a);
+            if (value_eq(I, pv, subj)) return true;
+        }
+    }
+    return false;
+}
+
+ast_node_t *interp_find_match_arm(interp_t *I, env_t *env, ast_node_t *n, value_t subj)
+{
+    size_t i = 0;
+    for (; i < n->list.len; i++) {
+        ast_node_t *arm = (ast_node_t *)n->list.data[i];
+        if (interp_match_arm(I, env, arm, subj)) return arm;
+    }
+    return NULL;
+}
+
 iloc_t interp_resolve_loc(interp_t *I, env_t *env, ast_node_t *target)
 {
     iloc_t loc;
@@ -279,9 +307,18 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
         }
         return FLOW_NORMAL;
     }
+    case AST_MATCH: {
+        value_t subj = eval(I, env, n->a);
+        ast_node_t *arm = interp_find_match_arm(I, env, n, subj);
+        if (!arm) return FLOW_NORMAL;
+        {
+            env_t *c = env_new(I, env);
+            return exec_list(I, c, fr, &arm->b->list, ret);
+        }
+    }
     case AST_RETURN:
         *ret = n->a ? eval(I, env, n->a) : val_null();
-        return FLOW_RETURN;
+        return I->match_expr_depth > 0 ? FLOW_MATCH_RET : FLOW_RETURN;
     case AST_BREAK:
         return FLOW_BREAK;
     case AST_CONTINUE:

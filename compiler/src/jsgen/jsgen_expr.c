@@ -22,11 +22,15 @@ static const char *jsg_lambda(jg_t *g, ast_node_t *n);
 static bool jsg_reserved(const char *s)
 {
     static const char *const kw[] = {
-        "arguments", "await",  "case",       "catch", "class",   "debugger",
-        "delete",    "eval",   "export",     "false", "finally", "function",
-        "import",    "in",     "instanceof", "let",   "new",     "null",
-        "of",        "static", "super",      "this",  "throw",   "true",
-        "try",       "typeof", "undefined",  "var",   "with",    "yield",
+        "arguments", "await",      "break",     "case",      "catch",      "class",
+        "const",     "continue",   "debugger",  "default",   "delete",     "do",
+        "else",      "enum",       "eval",      "export",    "extends",    "false",
+        "finally",   "for",        "function",  "if",        "implements", "import",
+        "in",        "instanceof", "interface", "let",       "new",        "null",
+        "of",        "package",    "private",   "protected", "public",     "return",
+        "static",    "super",      "switch",    "this",      "throw",      "true",
+        "try",       "typeof",     "undefined", "var",       "void",       "while",
+        "with",      "yield",
     };
     static const char *const host[] = {
         "document",
@@ -126,7 +130,7 @@ const char *jsg_ident(jg_t *g, const char *name)
     }
 }
 
-const char *jsg_minify_next(jg_t *g)
+static const char *jsg_minify_advance(jg_t *g)
 {
     const char *prev = g->minify_last;
     char buf[256];
@@ -136,16 +140,31 @@ const char *jsg_minify_next(jg_t *g)
     }
     {
         size_t len = strlen(prev);
+        long i = (long)len - 1;
         memcpy(buf, prev, len + 1);
-        if (buf[len - 1] != 'z') {
-            buf[len - 1]++;
-        } else {
-            buf[len] = 'a';
-            buf[len + 1] = '\0';
+        for (; i >= 0; i--) {
+            if (buf[i] != 'z') {
+                buf[i]++;
+                break;
+            }
+            buf[i] = 'a';
+        }
+        if (i < 0) {
+            memmove(buf + 1, buf, len + 1);
+            buf[0] = 'a';
         }
     }
     g->minify_last = arena_strdup(g->cg.a, buf);
     return g->minify_last;
+}
+
+const char *jsg_minify_next(jg_t *g)
+{
+    const char *cand;
+    do {
+        cand = jsg_minify_advance(g);
+    } while (jsg_reserved(cand));
+    return cand;
 }
 
 const char *jsg_minify_cached(jg_t *g, const char *key)
@@ -1180,6 +1199,67 @@ const char *jsg_expr(jg_t *g, ast_node_t *n)
     return jsg_expr_p(g, n, 0);
 }
 
+const char *jsg_match_arm_cond(jg_t *g, ast_node_t *arm, const char *subj_var,
+                               const char *subj_ts)
+{
+    cg_t *cg = &g->cg;
+    bool is_variant = subj_ts && !strncmp(subj_ts, "Variant<", 8);
+    sb_t b;
+    const char *r;
+    sb_init(&b);
+    if (arm->op == TK_KW_ELSE) {
+        sb_puts(&b, "true");
+    } else {
+        size_t i = 0;
+        for (; i < arm->list.len; i++) {
+            ast_node_t *pat = (ast_node_t *)arm->list.data[i];
+            if (i) sb_puts(&b, " || ");
+            if (is_variant)
+                sb_puts(&b,
+                        cg_fmt(cg, "(%s.tag === %d)", subj_var, (int)pat->value.as.i));
+            else
+                sb_puts(&b, cg_fmt(cg, "(%s === %s)", subj_var, jsg_expr(g, pat->a)));
+        }
+    }
+    r = cg_fmt(cg, "%s", sb_cstr(&b));
+    sb_free(&b);
+    return r;
+}
+
+static const char *jsg_match_expr(jg_t *g, ast_node_t *n)
+{
+    cg_t *cg = &g->cg;
+    int t = ++cg->tmpn;
+    const char *subj_var = cg_fmt(cg, "__msubj%d", t);
+    sb_t *saved_out = cg->c;
+    sb_t inner;
+    int saved_indent = cg->indent;
+    size_t mark = cg->locals.len;
+    const char *body;
+    sb_init(&inner);
+    cg->c = &inner;
+    cg->indent = 0;
+    cg_line(cg, "const %s = %s;", subj_var, jsg_expr(g, n->a));
+    {
+        size_t i = 0;
+        for (; i < n->list.len; i++) {
+            ast_node_t *arm = (ast_node_t *)n->list.data[i];
+            const char *cond = jsg_match_arm_cond(g, arm, subj_var, n->a->type_str);
+            cg_line(cg, "%sif (%s) {", i ? "} else " : "", cond);
+            cg->indent++;
+            jsg_block(g, arm->b);
+            cg->indent--;
+        }
+    }
+    if (n->list.len) cg_line(cg, "}");
+    cg->c = saved_out;
+    cg->indent = saved_indent;
+    cg->locals.len = mark;
+    body = cg_fmt(cg, "%s", sb_cstr(&inner));
+    sb_free(&inner);
+    return cg_fmt(cg, "(() => {\n%s})()", body);
+}
+
 const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
 {
     cg_t *cg = &g->cg;
@@ -1374,6 +1454,13 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
         if (n->c) return cg_fmt(cg, "%s.slice(%s, %s)", base, lo, jsg_expr_p(g, n->c, 0));
         return cg_fmt(cg, "%s.slice(%s)", base, lo);
     }
+    case AST_MATCH:
+        return jsg_match_expr(g, n);
+    case AST_VARIANT_BOX:
+        return cg_fmt(cg, "({ tag: %d, value: %s })", (int)n->value.as.i,
+                      jsg_expr(g, n->a));
+    case AST_VARIANT_UNWRAP:
+        return cg_fmt(cg, "(%s).value", jsg_expr(g, n->a));
     case AST_LAMBDA: {
         const char *s = jsg_lambda(g, n);
         return jsg_wrap(g, s, JSP_LAMBDA, minprec);

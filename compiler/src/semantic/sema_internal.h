@@ -34,7 +34,7 @@ typedef struct {
     logger_t *log;
     diag_engine_t *diag;
     const char *file;
-    const char *lang; /* language of the module being checked ("fa"/"en") */
+    const char *lang;
     type_ctx_t *tc;
     scope_t *global;
     scope_t *cur;
@@ -44,8 +44,7 @@ typedef struct {
     const char *dir;
     vec_t imported;
     const char *pkg;
-    vec_t *pkg_cache; /* path -> symbol_t* pairs; may be shared across sema_run_cached()
-                         calls */
+    vec_t *pkg_cache;
     vec_t loading;
     ast_node_t *program;
     vec_t pending;
@@ -59,7 +58,15 @@ typedef struct {
     bool requal;
     int each_n;
     const cc_table_t *cc;
+    int match_arm_depth;
+    type_t *match_yield_expected;
+    vec_t *match_yield_collect;
 } sema_t;
+
+typedef struct {
+    ast_node_t *ret;
+    type_t *type;
+} match_yield_t;
 
 void sema_load_prelude(sema_t *s);
 
@@ -115,6 +122,8 @@ type_t *g_localize_instance(sema_t *s, type_t *t, const src_span_t *span);
 
 ast_node_t *coerce_to_dyn(sema_t *s, type_t *expected, ast_node_t *expr, type_t *etype);
 
+ast_node_t *coerce_to_variant(sema_t *s, type_t *variant, ast_node_t *expr, int tag);
+
 void coerce_args_to_dyn(sema_t *s, ast_node_t *call, vec_t *argtypes, func_sig_t *sig);
 
 type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode);
@@ -124,6 +133,8 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *node);
 void sema_fold_expr(sema_t *s, ast_node_t *node);
 
 void sema_check_layout(sema_t *s, ast_node_t *layout, const char *parent);
+
+type_t *sema_check_match(sema_t *s, ast_node_t *n, bool is_expr, type_t *expected);
 
 const char *sema_op_method(token_kind_t k);
 

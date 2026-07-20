@@ -37,6 +37,7 @@ typedef struct {
     bool prev_gt_generic;
     int q_open[FMT_MAX_BRACKET + 1];
     token_kind_t stmt_head;
+    bool match_pending;
     uint32_t open_colon_line;
     const token_t *prev;
     bool prev_unary;
@@ -187,6 +188,7 @@ static void fmt_step_stmt_end(fmt_ctx_t *c, const token_t *t, bool cur_ml)
     c->open_colon_line = 0;
     c->q_open[0] = 0;
     c->stmt_head = TK_EOF;
+    c->match_pending = false;
 }
 
 static void fmt_step_break_before(fmt_ctx_t *c, const token_t *t, token_kind_t k,
@@ -213,8 +215,16 @@ static void fmt_step_break_before(fmt_ctx_t *c, const token_t *t, token_kind_t k
     c->open_colon_line = 0;
 }
 
-static void fmt_step_dedent(fmt_ctx_t *c, const token_t *t, token_kind_t k)
+static bool fmt_else_is_match_arm(const token_stream_t *toks, size_t else_idx)
 {
+    size_t n = token_stream_count(toks);
+    return else_idx + 1 < n && token_stream_at(toks, else_idx + 1)->kind == TK_FAT_ARROW;
+}
+
+static void fmt_step_dedent(fmt_ctx_t *c, const token_t *t, token_kind_t k,
+                            const token_stream_t *toks, size_t i)
+{
+    if (k == TK_KW_ELSE && fmt_else_is_match_arm(toks, i)) return;
     if (c->bracket == 0 && c->angle == 0 && (k == TK_KW_END || k == TK_KW_ELSE)) {
         if (c->block_top > 0 && c->block_top <= FMT_MAX_BLOCK && c->line_has_content &&
             t->span.begin.line > c->block_line[c->block_top - 1]) {
@@ -253,12 +263,16 @@ static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
         k != TK_COMMENT_LINE && k != TK_COMMENT_BLOCK && !fmt_head_modifier(k))
         c->stmt_head = k;
 
+    if (k == TK_KW_MATCH && c->bracket == 0) c->match_pending = true;
+
     if (k == TK_QUESTION && c->bracket <= FMT_MAX_BRACKET) c->q_open[c->bracket]++;
     if (k == TK_COLON && c->bracket <= FMT_MAX_BRACKET && c->q_open[c->bracket] > 0) {
         c->q_open[c->bracket]--;
     } else if (c->bracket == 0 && c->angle == 0 && k == TK_COLON) {
         bool opener;
         if (c->prev != NULL && c->prev->kind == TK_FAT_ARROW)
+            opener = true;
+        else if (c->match_pending)
             opener = true;
         else if (fmt_head_annotates(c->stmt_head))
             opener = false;
@@ -272,6 +286,7 @@ static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
             c->block_top++;
             if (c->prev != NULL && c->prev->kind == TK_KW_ELSE) c->force_break = true;
             c->stmt_head = TK_EOF;
+            c->match_pending = false;
         }
     }
 
@@ -328,7 +343,7 @@ void fmt_tokens(const token_stream_t *toks, const fmt_style_t *style, sb_t *out)
         }
 
         fmt_step_break_before(&c, t, k, cur_ml);
-        fmt_step_dedent(&c, t, k);
+        fmt_step_dedent(&c, t, k, toks, i);
         fmt_step_leading(&c, t, k);
 
         if (k == TK_META) sb_putc(out, '@');

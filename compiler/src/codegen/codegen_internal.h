@@ -52,6 +52,8 @@ typedef struct {
     ast_node_t *cur_lambda;
     bool is_gui_mode;
     const char *target_triple;
+    const char *match_result_tmp;
+    const char *match_end_label;
 } cg_t;
 
 const char *cg_fmt(cg_t *cg, const char *fmt, ...);
@@ -143,6 +145,9 @@ const char *cg_emit_op_call(cg_t *cg, ast_node_t *lhs_node, symbol_t *ssym,
 const char *cg_call(cg_t *cg, ast_node_t *n);
 
 const char *cg_expr(cg_t *cg, ast_node_t *n);
+
+const char *cg_match_arm_cond(cg_t *cg, ast_node_t *arm, const char *subj_var,
+                              const char *subj_ts);
 
 void cg_emit_defers(cg_t *cg);
 

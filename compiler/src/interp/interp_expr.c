@@ -277,9 +277,12 @@ value_t call_func(interp_t *I, ast_node_t *fn, env_t *defenv, value_t *thisv,
         }
     }
     frame_t fr;
+    int saved_med = I->match_expr_depth;
     vec_init(&fr.defers);
     value_t ret = val_null();
+    I->match_expr_depth = 0;
     if (fn->a) exec_list(I, env, &fr, &fn->a->list, &ret);
+    I->match_expr_depth = saved_med;
     {
         size_t i = fr.defers.len;
         for (; i > 0; i--) {
@@ -292,6 +295,34 @@ value_t call_func(interp_t *I, ast_node_t *fn, env_t *defenv, value_t *thisv,
     }
     I->depth--;
     return ret;
+}
+
+static value_t eval_match(interp_t *I, env_t *env, ast_node_t *n)
+{
+    value_t subj = eval(I, env, n->a);
+    ast_node_t *arm = interp_find_match_arm(I, env, n, subj);
+    if (!arm) return val_null();
+    {
+        env_t *c = env_new(I, env);
+        frame_t fr;
+        value_t val = val_null();
+        int saved_depth = I->match_expr_depth;
+        vec_init(&fr.defers);
+        I->match_expr_depth = saved_depth + 1;
+        exec_list(I, c, &fr, &arm->b->list, &val);
+        I->match_expr_depth = saved_depth;
+        {
+            size_t i = fr.defers.len;
+            for (; i > 0; i--) {
+                defer_t *d = (defer_t *)fr.defers.data[i - 1];
+                value_t dummy = val_null();
+                frame_t inner;
+                vec_init(&inner.defers);
+                exec_stmt(I, d->env, &inner, d->stmt, &dummy);
+            }
+        }
+        return val;
+    }
 }
 
 value_t eval(interp_t *I, env_t *env, ast_node_t *n)
@@ -377,6 +408,23 @@ value_t eval(interp_t *I, env_t *env, ast_node_t *n)
     }
     case AST_TERNARY:
         return to_bool(eval(I, env, n->a)) ? eval(I, env, n->b) : eval(I, env, n->c);
+    case AST_MATCH:
+        return eval_match(I, env, n);
+    case AST_VARIANT_BOX: {
+        value_t inner = eval(I, env, n->a);
+        svariant_t *sv = (svariant_t *)arena_alloc(I->a, sizeof(*sv));
+        value_t *boxed = (value_t *)arena_alloc(I->a, sizeof(*boxed));
+        *boxed = inner;
+        sv->tag = (int32_t)n->value.as.i;
+        sv->boxed = boxed;
+        return val_variant(sv);
+    }
+    case AST_VARIANT_UNWRAP: {
+        value_t v = eval(I, env, n->a);
+        if (v.kind != VAL_VARIANT || !v.as.variant || !v.as.variant->boxed)
+            rt_error(I, n, "invalid Variant unwrap");
+        return *v.as.variant->boxed;
+    }
     case AST_UNARY: {
         value_t a = eval(I, env, n->a);
         if (a.kind == VAL_STRUCT) {

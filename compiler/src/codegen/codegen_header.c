@@ -380,6 +380,7 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "esz, int sf)"
                "{ return (void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n"
                "typedef void (*salam_thread_fn)(void);\n"
+               "typedef struct { int32_t tag; void* payload; } _Salam_variant;\n"
                "#endif\n");
     sb_puts(h, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n"
                "extern uint64_t strlen(const char* s);\n"

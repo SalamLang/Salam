@@ -58,7 +58,13 @@ typedef struct module {
     env_t *env;
 } module_t;
 
-typedef enum { FLOW_NORMAL = 0, FLOW_RETURN, FLOW_BREAK, FLOW_CONTINUE } flow_t;
+typedef enum {
+    FLOW_NORMAL = 0,
+    FLOW_RETURN,
+    FLOW_BREAK,
+    FLOW_CONTINUE,
+    FLOW_MATCH_RET
+} flow_t;
 
 typedef struct {
     ast_node_t *stmt;
@@ -102,6 +108,7 @@ typedef struct {
     unsigned long long steps;
     clock_t deadline;
     unsigned depth;
+    int match_expr_depth;
 } interp_t;
 
 typedef enum {
@@ -245,6 +252,10 @@ value_t call_func(interp_t *I, ast_node_t *fn, env_t *defenv, value_t *thisv,
 flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *ret);
 
 flow_t exec_list(interp_t *I, env_t *env, frame_t *fr, vec_t *list, value_t *ret);
+
+bool interp_match_arm(interp_t *I, env_t *env, ast_node_t *arm, value_t subj);
+
+ast_node_t *interp_find_match_arm(interp_t *I, env_t *env, ast_node_t *n, value_t subj);
 
 void do_print(interp_t *I, env_t *env, ast_node_t *call, bool newline, bool to_err);
 

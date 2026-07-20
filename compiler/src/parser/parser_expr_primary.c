@@ -105,6 +105,8 @@ ast_node_t *parse_primary(parser_t *p)
         }
     case TK_LBRACKET:
         return parse_array_lit(p);
+    case TK_KW_MATCH:
+        return parse_match(p);
     case TK_AMP: {
         ast_node_t *n = p_mk(p, AST_FUNC_ADDR);
         p_advance(p);
@@ -117,7 +119,7 @@ ast_node_t *parse_primary(parser_t *p)
             return parse_struct_lit(p);
 
         ast_node_t *n = p_mk(p, AST_IDENTIFIER);
-        n->name = p_munch_name(p);
+        n->name = p_munch_value_name(p);
         p_fin(p, n);
         return n;
     }

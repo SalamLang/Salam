@@ -172,7 +172,8 @@ type_t *sema_check_var_decl(sema_t *s, ast_node_t *n)
 
     if (declared && n->a &&
         (n->a->kind == AST_CALL || n->a->kind == AST_LITERAL ||
-         n->a->kind == AST_ARRAY_LIT || n->a->kind == AST_TERNARY))
+         n->a->kind == AST_ARRAY_LIT || n->a->kind == AST_TERNARY ||
+         n->a->kind == AST_MATCH))
         s->expected = declared;
     type_t *initt = n->a ? sema_check_expr(s, n->a) : NULL;
     type_t *t;
@@ -422,6 +423,9 @@ static void check_stmt(sema_t *s, ast_node_t *n)
     case AST_BLOCK:
         sema_check_block(s, n);
         break;
+    case AST_MATCH:
+        sema_check_match(s, n, false, NULL);
+        break;
     case AST_VAR_DECL: {
         type_t *t = sema_check_var_decl(s, n);
         define_local(s, n, n->is_mut ? SYM_VAR : SYM_VAR, t);
@@ -660,6 +664,19 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         break;
     }
     case AST_RETURN: {
+        if (s->match_arm_depth > 0 && s->match_yield_collect) {
+            type_t *saved_exp = s->expected;
+            type_t *vt;
+            match_yield_t *y;
+            s->expected = s->match_yield_expected;
+            vt = n->a ? sema_check_expr(s, n->a) : ty(s, TY_VOID);
+            s->expected = saved_exp;
+            y = (match_yield_t *)arena_alloc(s->a, sizeof(*y));
+            y->ret = n;
+            y->type = vt;
+            vec_push(s->a, s->match_yield_collect, y);
+            break;
+        }
         if (s->cur_func && s->cur_func->decl && s->cur_func->decl->is_noret &&
             s->cur_func->decl->name)
             SERR(s, 12, &n->span,
@@ -750,6 +767,14 @@ static bool loopless_break(ast_node_t *n)
     }
     case AST_IF:
         return loopless_break(n->b) || loopless_break(n->c);
+    case AST_MATCH: {
+        size_t i = 0;
+        for (; i < n->list.len; i++) {
+            ast_node_t *arm = (ast_node_t *)n->list.data[i];
+            if (loopless_break(arm->b)) return true;
+        }
+        return false;
+    }
     default:
         return false;
     }
@@ -774,6 +799,17 @@ bool sema_stmt_terminates(sema_t *s, ast_node_t *n)
     case AST_UNTIL:
         return n->a && n->a->kind == AST_LITERAL && n->a->op == TK_KW_TRUE &&
                !loopless_break(n->b);
+    case AST_MATCH: {
+        bool has_else = false;
+        size_t i = 0;
+        if (n->list.len == 0) return false;
+        for (; i < n->list.len; i++) {
+            ast_node_t *arm = (ast_node_t *)n->list.data[i];
+            if (arm->op == TK_KW_ELSE) has_else = true;
+            if (!sema_stmt_terminates(s, arm->b)) return false;
+        }
+        return has_else;
+    }
     case AST_EXPR_STMT: {
         ast_node_t *c = n->a;
         if (c && c->kind == AST_CALL && c->a && c->a->kind == AST_IDENTIFIER) {

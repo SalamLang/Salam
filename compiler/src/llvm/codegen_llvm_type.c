@@ -277,6 +277,7 @@ const char *ll_ty(ll_t *ll, const char *ts)
 {
     if (!ts || !strcmp(ts, "void")) return "void";
     if (!strncmp(ts, "dyn ", 4) && !strchr(ts, '[')) return "%dyn";
+    if (!strncmp(ts, "Variant<", 8)) return "%variant";
     if (ll_is_str(ts)) return "ptr";
     if (ll_is_ptr_ts(ts)) return "ptr";
     if (ll_is_slice_ts(ts)) return "{ ptr, i64 }";

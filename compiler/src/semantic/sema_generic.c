@@ -241,6 +241,17 @@ ast_node_t *coerce_to_dyn(sema_t *s, type_t *expected, ast_node_t *expr, type_t 
     return box;
 }
 
+ast_node_t *coerce_to_variant(sema_t *s, type_t *variant, ast_node_t *expr, int tag)
+{
+    ast_node_t *box = ast_new(s->a, AST_VARIANT_BOX, &expr->span);
+    box->a = expr;
+    box->synthetic = true;
+    box->type_str = type_to_string(s->tc, variant);
+    box->value.kind = TV_INT;
+    box->value.as.i = (uint64_t)tag;
+    return box;
+}
+
 void coerce_args_to_dyn(sema_t *s, ast_node_t *call, vec_t *argtypes, func_sig_t *sig)
 {
     if (!sig) return;

@@ -161,7 +161,7 @@ salam layout   # layout DSL REPL
 | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | [Web Playground](https://salamlang.github.io/Salam/)                                                                         | Try Salam in your browser — no install needed                   |
 | [Examples](../examples/en/)                                                                                                  | Ready-to-run programs covering basics, types, stdlib, and more  |
-| [Editor readme](../editor/README.md)                                                                                         | How the WebAssembly playground is built and served              |
+| [Editor README](../editor/README.md)                                                                                         | How the WebAssembly playground is built and served              |
 | [Platform & word-size support](PLATFORMS.md)                                                                                 | 32-bit vs 64-bit, C backend vs LLVM backend, release matrix     |
 | [Contributing Guide](../CONTRIBUTING.md)                                                                                     | How to fork, branch, build, and open a pull request             |
 | [Code of Conduct](../CODE_OF_CONDUCT.md)                                                                                     | Community standards                                             |

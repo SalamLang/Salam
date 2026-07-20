@@ -594,7 +594,7 @@ The repository ships a [MyST (Markedly Structured Text)](https://mystmd.org/) do
 
 - **[`myst.yml`](myst.yml)** - MyST project config (site template, repository link, and custom style file).
 - **[`.readthedocs.yaml`](.readthedocs.yaml)** - [Read the Docs](https://readthedocs.org/) build config used to host the generated documentation.
-- **`_build/`** - generated static output directory from `myst build --html` (including `_build/html/`), ignored by git in [`.gitignore`](.gitignore).
+- **`_build/`** - generated static output directory from `myst build --html` (including `_build/html/`), ignored by Git in [`.gitignore`](.gitignore).
 
 #### Running the Documentation Locally
 

@@ -135,7 +135,8 @@ static const intrinsic_name_t k_intrinsic_methods[] = {
     {"به اعشار", "إلىعشري", "to_float"},
 };
 
-static const char *intrinsic_canon(const intrinsic_name_t *tab, size_t n, const char *name)
+static const char *intrinsic_canon(const intrinsic_name_t *tab, size_t n,
+                                   const char *name)
 {
     if (!name) return name;
     {
@@ -148,7 +149,7 @@ static const char *intrinsic_canon(const intrinsic_name_t *tab, size_t n, const 
 }
 
 static const char *intrinsic_lang_form(const intrinsic_name_t *tab, size_t n,
-                                        const char *en_name, const char *lang)
+                                       const char *en_name, const char *lang)
 {
     if (!lang || lang[0] == 'e') return NULL;
     {
@@ -161,27 +162,29 @@ static const char *intrinsic_lang_form(const intrinsic_name_t *tab, size_t n,
 }
 
 static void check_lang_form(sema_t *s, const char *want, const char *used,
-                             const src_span_t *span)
+                            const src_span_t *span)
 {
     if (!want || su_ident_eq(used, want)) return;
     {
         bool fa = s->lang && s->lang[0] == 'f';
         const char *msg = fa ? "identifier '%s' must be Persian in a Persian file"
-                              : "identifier '%s' must be Arabic in an Arabic file";
+                             : "identifier '%s' must be Arabic in an Arabic file";
         SERR(s, 1, span, i18n_tr(msg), used);
     }
 }
 
 const char *intrinsic_type_canon(const char *name)
 {
-    return intrinsic_canon(k_intrinsic_types, sizeof(k_intrinsic_types) / sizeof(k_intrinsic_types[0]),
-                            name);
+    return intrinsic_canon(k_intrinsic_types,
+                           sizeof(k_intrinsic_types) / sizeof(k_intrinsic_types[0]),
+                           name);
 }
 
 const char *intrinsic_method_canon(const char *name)
 {
     return intrinsic_canon(k_intrinsic_methods,
-                            sizeof(k_intrinsic_methods) / sizeof(k_intrinsic_methods[0]), name);
+                           sizeof(k_intrinsic_methods) / sizeof(k_intrinsic_methods[0]),
+                           name);
 }
 
 void sema_check_intrinsic_type_lang(sema_t *s, const char *used, const src_span_t *span)
@@ -189,22 +192,23 @@ void sema_check_intrinsic_type_lang(sema_t *s, const char *used, const src_span_
     if (!s->lang || s->lang[0] == 'e' || !used) return;
     {
         const char *canon = intrinsic_canon(
-            k_intrinsic_types, sizeof(k_intrinsic_types) / sizeof(k_intrinsic_types[0]), used);
+            k_intrinsic_types, sizeof(k_intrinsic_types) / sizeof(k_intrinsic_types[0]),
+            used);
         const char *want = intrinsic_lang_form(
-            k_intrinsic_types, sizeof(k_intrinsic_types) / sizeof(k_intrinsic_types[0]), canon,
-            s->lang);
+            k_intrinsic_types, sizeof(k_intrinsic_types) / sizeof(k_intrinsic_types[0]),
+            canon, s->lang);
         check_lang_form(s, want, used, span);
     }
 }
 
 void sema_check_intrinsic_method_lang(sema_t *s, const char *used, const char *canon,
-                                       const src_span_t *span)
+                                      const src_span_t *span)
 {
     if (!s->lang || s->lang[0] == 'e' || !used || !canon) return;
     {
         const char *want = intrinsic_lang_form(
-            k_intrinsic_methods, sizeof(k_intrinsic_methods) / sizeof(k_intrinsic_methods[0]),
-            canon, s->lang);
+            k_intrinsic_methods,
+            sizeof(k_intrinsic_methods) / sizeof(k_intrinsic_methods[0]), canon, s->lang);
         check_lang_form(s, want, used, span);
     }
 }
@@ -231,7 +235,7 @@ static bool aliases_have(const vec_t *aliases, const char *lang, const char *nam
 }
 
 const char *scope_member_canon(sema_t *s, scope_t *members, const char *name,
-                                const src_span_t *span)
+                               const src_span_t *span)
 {
     const char *lang = i18n_lang();
     if (!name || !members) return name;
@@ -246,12 +250,14 @@ const char *scope_member_canon(sema_t *s, scope_t *members, const char *name,
     if (s->lang && s->lang[0] != 'e') {
         symbol_t *direct = scope_lookup_local(members, name);
         if (direct && direct->decl)
-            check_lang_form(s, alias_for_lang(&direct->decl->aliases, s->lang), name, span);
+            check_lang_form(s, alias_for_lang(&direct->decl->aliases, s->lang), name,
+                            span);
     }
     return name;
 }
 
-const char *pkg_member_canon(sema_t *s, symbol_t *pk, const char *name, const src_span_t *span)
+const char *pkg_member_canon(sema_t *s, symbol_t *pk, const char *name,
+                             const src_span_t *span)
 {
     return scope_member_canon(s, pk->members, name, span);
 }

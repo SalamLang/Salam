@@ -694,7 +694,8 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                 symbol_t *iface = (symbol_t *)dynt->decl;
                 decorate(s, callee, objt);
                 if (!strcmp(callee->name, "free")) return decorate(s, n, ty(s, TY_VOID));
-                callee->name = scope_member_canon(s, iface->members, callee->name, &callee->span);
+                callee->name =
+                    scope_member_canon(s, iface->members, callee->name, &callee->span);
                 symbol_t *m = scope_lookup_local(iface->members, callee->name);
                 if (!m || m->kind != SYM_METHOD) {
                     SERR(s, 17, &n->span, "interface '%s' has no method '%s'",
@@ -718,7 +719,8 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         }
         {
             const char *orig_method_name = callee->name;
-            callee->name = scope_member_canon(s, ssym->members, callee->name, &callee->span);
+            callee->name =
+                scope_member_canon(s, ssym->members, callee->name, &callee->span);
 
             if (!scope_lookup_local(ssym->members, callee->name)) {
                 const char *intr = intrinsic_method_canon(callee->name);
@@ -727,7 +729,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             }
             if (scope_lookup_local(ssym->members, callee->name))
                 sema_check_intrinsic_method_lang(s, orig_method_name, callee->name,
-                                                  &callee->span);
+                                                 &callee->span);
         }
         symbol_t *m = scope_lookup_local(ssym->members, callee->name);
 

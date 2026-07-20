@@ -14,27 +14,33 @@
 
 #include "interp/interp_internal.h"
 
-static void assign_to(interp_t *I, env_t *env, ast_node_t *target, value_t v)
+iloc_t interp_resolve_loc(interp_t *I, env_t *env, ast_node_t *target)
 {
+    iloc_t loc;
+    memset(&loc, 0, sizeof(loc));
+    loc.target = target;
+
     if (target->kind == AST_IDENTIFIER) {
         binding_t *b = env_find(env, target->name);
         if (b) {
-            b->val = v;
-            return;
+            loc.kind = ILOC_VAR;
+            loc.b = b;
+            return loc;
         }
         binding_t *self = env_find(env, "this");
         if (self && self->val.kind == VAL_STRUCT) {
-            {
-                size_t i = 0;
-                for (; i < self->val.as.st->nfields; i++)
-                    if (strcmp(self->val.as.st->fields[i].name, target->name) == 0) {
-                        self->val.as.st->fields[i].val = v;
-                        return;
-                    }
-            }
+            size_t i = 0;
+            for (; i < self->val.as.st->nfields; i++)
+                if (strcmp(self->val.as.st->fields[i].name, target->name) == 0) {
+                    loc.kind = ILOC_FIELD;
+                    loc.obj = self->val;
+                    loc.field_idx = i;
+                    return loc;
+                }
         }
         rt_error(I, target, "assignment to undeclared variable '%s'", target->name);
     }
+
     if (target->kind == AST_MEMBER) {
         value_t obj = eval(I, env, target->a);
         if (obj.kind != VAL_STRUCT)
@@ -43,34 +49,105 @@ static void assign_to(interp_t *I, env_t *env, ast_node_t *target, value_t v)
             size_t i = 0;
             for (; i < obj.as.st->nfields; i++)
                 if (strcmp(obj.as.st->fields[i].name, target->name) == 0) {
-                    obj.as.st->fields[i].val = v;
-                    return;
+                    loc.kind = ILOC_FIELD;
+                    loc.obj = obj;
+                    loc.field_idx = i;
+                    return loc;
                 }
         }
         rt_error(I, target, "struct '%s' has no field '%s'", obj.as.st->type_name,
                  target->name);
     }
+
     if (target->kind == AST_INDEX) {
         value_t a = eval(I, env, target->a);
         if (a.kind == VAL_STRUCT) {
-            ast_node_t *m = struct_method(a.as.st->def, "operator_index_set");
-            if (m) {
-                value_t idx = eval(I, env, target->b);
-                value_t args[2] = {idx, v};
-                call_func(I, m, I->globals, &a, args, 2);
-                return;
+            ast_node_t *set_m = struct_method(a.as.st->def, "operator_index_set");
+            if (set_m) {
+                loc.kind = ILOC_OPIDX;
+                loc.obj = a;
+                loc.key = eval(I, env, target->b);
+                loc.set_m = set_m;
+                loc.get_m = struct_method(a.as.st->def, "operator_index");
+                return loc;
             }
+            rt_error(I, target, "value is not index-assignable");
         }
         if (a.kind == VAL_ARRAY) {
             int64_t i = to_int(eval(I, env, target->b));
             if (i < 0 || (size_t)i >= a.as.arr->len)
                 rt_error(I, target, "index out of range in assignment");
-            a.as.arr->data[i] = v;
-            return;
+            loc.kind = ILOC_ARR;
+            loc.arr = a.as.arr;
+            loc.idx = i;
+            return loc;
+        }
+        if (a.kind == VAL_PTR) {
+            if (!a.as.ptr.addr) rt_error(I, target, "write through a null pointer");
+            loc.kind = ILOC_PTR;
+            loc.ptr = a.as.ptr;
+            loc.idx = to_int(eval(I, env, target->b));
+            return loc;
         }
         rt_error(I, target, "value is not index-assignable");
     }
+
     rt_error(I, target, "invalid assignment target");
+    return loc;
+}
+
+value_t interp_loc_get(interp_t *I, iloc_t *loc)
+{
+    switch (loc->kind) {
+    case ILOC_VAR:
+        return loc->b->val;
+    case ILOC_FIELD:
+        return loc->obj.as.st->fields[loc->field_idx].val;
+    case ILOC_ARR:
+        return loc->arr->data[loc->idx];
+    case ILOC_PTR:
+        return ptr_load(loc->ptr, loc->idx);
+    case ILOC_OPIDX:
+        if (loc->get_m) {
+            env_t *denv = find_def_env(I, loc->get_m);
+            return call_func(I, loc->get_m, denv ? denv : I->globals, &loc->obj,
+                             &loc->key, 1);
+        }
+        rt_error(I, loc->target, "value is not index-readable");
+    }
+    return val_null();
+}
+
+void interp_loc_set(interp_t *I, iloc_t *loc, value_t v)
+{
+    switch (loc->kind) {
+    case ILOC_VAR:
+        loc->b->val = v;
+        return;
+    case ILOC_FIELD:
+        loc->obj.as.st->fields[loc->field_idx].val = v;
+        return;
+    case ILOC_ARR:
+        loc->arr->data[loc->idx] = v;
+        return;
+    case ILOC_PTR:
+        ptr_store(loc->ptr, loc->idx, v);
+        return;
+    case ILOC_OPIDX: {
+        value_t args[2];
+        args[0] = loc->key;
+        args[1] = v;
+        env_t *denv = find_def_env(I, loc->set_m);
+        call_func(I, loc->set_m, denv ? denv : I->globals, &loc->obj, args, 2);
+        return;
+    }
+    }
+}
+
+void interp_assign_to(interp_t *I, env_t *env, ast_node_t *target, value_t v)
+{
+    iloc_t loc = interp_resolve_loc(I, env, target);
+    interp_loc_set(I, &loc, v);
 }
 
 flow_t exec_list(interp_t *I, env_t *env, frame_t *fr, vec_t *list, value_t *ret)
@@ -107,18 +184,21 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
         eval(I, env, n->a);
         return FLOW_NORMAL;
     case AST_ASSIGN: {
-        value_t rhs;
         if (n->op == TK_ASSIGN) {
-            rhs = eval(I, env, n->b);
-        } else {
+            value_t rhs = eval(I, env, n->b);
+            interp_assign_to(I, env, n->a, rhs);
+            return FLOW_NORMAL;
+        }
+        {
             token_kind_t base = compound_base(n->op);
-            value_t cur = eval(I, env, n->a);
+            iloc_t loc = interp_resolve_loc(I, env, n->a);
+            value_t cur = interp_loc_get(I, &loc);
             value_t r = eval(I, env, n->b);
             bool found;
             value_t sr = try_struct_op(I, base, cur, r, true, &found);
-            rhs = found ? sr : arith(I, n, base, cur, r);
+            value_t rhs = found ? sr : arith(I, n, base, cur, r);
+            interp_loc_set(I, &loc, rhs);
         }
-        assign_to(I, env, n->a, rhs);
         return FLOW_NORMAL;
     }
     case AST_IF: {
@@ -133,7 +213,7 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
         }
         return FLOW_NORMAL;
     }
-    case AST_WHILE:
+    case AST_UNTIL:
         while (tick(I), to_bool(eval(I, env, n->a))) {
             env_t *c = env_new(I, env);
             flow_t f = exec_list(I, c, fr, &n->b->list, ret);
@@ -166,6 +246,7 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
                 rt_error(I, n->d ? n->d : n, "repeat step must be positive");
                 return FLOW_NORMAL;
             }
+            if (start > end) step = -step;
         } else {
             REP_NUM(n->a, end, "count");
             start = 0;
@@ -175,9 +256,10 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
 #undef REP_NUM
         {
             int64_t k = start;
-            for (; k <= end; k += step) {
+            for (; (step > 0) ? (k <= end) : (k >= end); k += step) {
                 tick(I);
                 env_t *c = env_new(I, env);
+                if (n->name) env_define(I, c, n->name, val_int(k));
                 flow_t f = exec_list(I, c, fr, &n->b->list, ret);
                 if (f == FLOW_RETURN) return f;
                 if (f == FLOW_BREAK) break;

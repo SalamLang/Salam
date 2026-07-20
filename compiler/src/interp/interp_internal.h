@@ -33,9 +33,24 @@ typedef struct {
     value_t val;
 } binding_t;
 
+typedef struct {
+    const char **keys;
+    void **vals;
+    size_t cap;
+    size_t count;
+} itab_t;
+
+typedef struct {
+    const void **keys;
+    void **vals;
+    size_t cap;
+    size_t count;
+} ptab_t;
+
 typedef struct env {
     struct env *parent;
     vec_t bindings;
+    itab_t *index;
 } env_t;
 
 typedef struct module {
@@ -68,6 +83,16 @@ typedef struct {
     vec_t enums;
     vec_t impls;
     vec_t modules;
+    vec_t extern_fns;
+    vec_t extern_decls;
+    vec_t def_envs;
+    itab_t tab_funcs;
+    itab_t tab_structs;
+    itab_t tab_enums;
+    itab_t tab_modules;
+    itab_t tab_extern_fns;
+    itab_t tab_extern_decls;
+    ptab_t tab_def_envs;
     const char *in_data;
     size_t in_pos;
     jmp_buf on_error;
@@ -78,6 +103,28 @@ typedef struct {
     clock_t deadline;
     unsigned depth;
 } interp_t;
+
+typedef enum {
+    ILOC_VAR,
+    ILOC_FIELD,
+    ILOC_ARR,
+    ILOC_PTR,
+    ILOC_OPIDX,
+} iloc_kind_t;
+
+typedef struct {
+    iloc_kind_t kind;
+    ast_node_t *target;
+    binding_t *b;      /* ILOC_VAR */
+    value_t obj;       /* ILOC_FIELD / ILOC_OPIDX: the struct value */
+    size_t field_idx;  /* ILOC_FIELD */
+    sarray_t *arr;     /* ILOC_ARR */
+    int64_t idx;       /* ILOC_ARR / ILOC_PTR */
+    sptr_t ptr;        /* ILOC_PTR */
+    value_t key;       /* ILOC_OPIDX */
+    ast_node_t *get_m; /* ILOC_OPIDX */
+    ast_node_t *set_m; /* ILOC_OPIDX */
+} iloc_t;
 
 #define INTERP_MAX_DEPTH 1000
 
@@ -106,6 +153,17 @@ ast_node_t *find_enum(interp_t *I, const char *name);
 ast_node_t *find_func(interp_t *I, const char *name, size_t nargs);
 
 module_t *find_module(interp_t *I, const char *name);
+
+value_t *find_extern_fn(interp_t *I, const char *name);
+
+ast_node_t *find_extern_decl(interp_t *I, const char *name);
+
+void register_method_envs(interp_t *I, ast_node_t *def, env_t *env);
+
+env_t *find_def_env(interp_t *I, ast_node_t *def);
+
+value_t call_native_extern(interp_t *I, ast_node_t *call, ast_node_t *decl, value_t *args,
+                           size_t nargs);
 
 ast_node_t *struct_method(ast_node_t *sdef, const char *name);
 
@@ -138,6 +196,8 @@ void map_put(interp_t *I, smap_t *m, value_t k, value_t val);
 
 smap_entry_t *map_find(smap_t *m, value_t k);
 
+bool map_remove(smap_t *m, value_t k);
+
 value_t mk_map(smap_t *m);
 
 value_t mk_struct(interp_t *I, const char *name, ast_node_t *def, size_t nfields);
@@ -149,6 +209,12 @@ bool is_int_typename(const char *b);
 bool is_float_typename(const char *b);
 
 void base_typename(const char *ts, char *out, size_t cap);
+
+ptr_elem_t ptr_elem_from_typestr(const char *ts);
+
+value_t ptr_load(sptr_t p, int64_t idx);
+
+void ptr_store(sptr_t p, int64_t idx, value_t v);
 
 value_t default_for_type(interp_t *I, const char *ts);
 
@@ -164,6 +230,14 @@ value_t try_struct_op(interp_t *I, token_kind_t op, value_t a, value_t b, bool h
                       bool *found);
 
 value_t eval(interp_t *I, env_t *env, ast_node_t *n);
+
+void interp_assign_to(interp_t *I, env_t *env, ast_node_t *target, value_t v);
+
+iloc_t interp_resolve_loc(interp_t *I, env_t *env, ast_node_t *target);
+
+value_t interp_loc_get(interp_t *I, iloc_t *loc);
+
+void interp_loc_set(interp_t *I, iloc_t *loc, value_t v);
 
 value_t call_func(interp_t *I, ast_node_t *fn, env_t *defenv, value_t *thisv,
                   value_t *args, size_t nargs);

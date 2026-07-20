@@ -31,6 +31,31 @@ static type_t *decorate(sema_t *s, ast_node_t *n, type_t *t)
     return sema_decorate(s, n, t);
 }
 
+static func_sig_t *ro_found(sema_t *s, func_sig_t *sig, const src_span_t *span,
+                            const char *what)
+{
+    if (sig && sig->decl && sig->decl->is_deprecated)
+        SWARN(s, 13, span, "call to deprecated function '%s'", what);
+    if (sig && sig->infer_ret) {
+        if (sig->in_check)
+            SERR(s, 12, span,
+                 "cannot infer the return type of recursive function '%s'; annotate "
+                 "its return type",
+                 what);
+        else
+            sema_check_function_now(s, sig);
+    }
+    {
+        ast_node_t *pf = sema_pure_fn(s);
+        if (pf && sig && sig->decl && !sig->decl->is_pure)
+            SERR(s, 12, span,
+                 "'pure' function '%s' cannot call '%s': only 'pure' functions may be "
+                 "called from a pure function",
+                 pf->name, what);
+    }
+    return sig;
+}
+
 func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,
                              const src_span_t *span, const char *what)
 {
@@ -62,7 +87,7 @@ func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,
             }
         }
     }
-    if (nmatch == 1) return match;
+    if (nmatch == 1) return ro_found(s, match, span, what);
     if (nmatch > 1) {
         SERR(s, 12, span, "ambiguous call to '%s' (%zu candidates)", what, nmatch);
         return NULL;
@@ -93,7 +118,7 @@ func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,
             }
         }
     }
-    if (nmatch == 1) return match;
+    if (nmatch == 1) return ro_found(s, match, span, what);
     if (nmatch > 1) {
         SERR(s, 12, span, "ambiguous call to '%s' (%zu candidates)", what, nmatch);
         return NULL;
@@ -132,6 +157,21 @@ func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,
     return NULL;
 }
 
+static void mark_ref_args(sema_t *s, ast_node_t *call, func_sig_t *sig)
+{
+    if (!sig || !sig->decl) return;
+    size_t i = 0;
+    for (; i < call->list.len && i < sig->decl->list.len; i++) {
+        ast_node_t *p = (ast_node_t *)sig->decl->list.data[i];
+        ast_node_t *arg = (ast_node_t *)call->list.data[i];
+        if (p->kind != AST_PARAM || !p->is_ref) continue;
+        if (arg && arg->kind == AST_IDENTIFIER && arg->name) {
+            symbol_t *sym = scope_lookup(s->cur, arg->name);
+            if (sym) sym->mutated = true;
+        }
+    }
+}
+
 static type_t *try_impl_call(sema_t *s, ast_node_t *n, ast_node_t *callee, type_t *objt,
                              vec_t *argtypes)
 {
@@ -141,8 +181,38 @@ static type_t *try_impl_call(sema_t *s, ast_node_t *n, ast_node_t *callee, type_
     symbol_t *m = scope_lookup_local(owner->members, callee->name);
     if (!m || m->kind != SYM_METHOD) return NULL;
     func_sig_t *sig = resolve_overload(s, m, argtypes, &n->span, callee->name);
+    mark_ref_args(s, n, sig);
     decorate(s, callee, m->type);
     return decorate(s, n, sig ? sig->ret : err_ty(s));
+}
+
+static void check_pure_recv_mut(sema_t *s, ast_node_t *n, const char *m)
+{
+    ast_node_t *pf = sema_pure_fn(s);
+    if (pf)
+        SERR(s, 12, &n->span,
+             "'pure' function '%s' cannot call '%s': it modifies its receiver", pf->name,
+             m);
+}
+
+static void check_pure_builtin(sema_t *s, ast_node_t *n, const char *nm)
+{
+    static const char *impure[] = {"print", "println",     "printerr", "printerrln",
+                                   "input", "open",        "args",     "listdir",
+                                   "spawn", "callhandler", "join",     NULL};
+    ast_node_t *pf = sema_pure_fn(s);
+    if (!pf || !nm) return;
+    {
+        size_t i = 0;
+        for (; impure[i]; i++) {
+            if (strcmp(nm, impure[i]) == 0) {
+                SERR(s, 12, &n->span,
+                     "'pure' function '%s' cannot call '%s': it has side effects",
+                     pf->name, nm);
+                return;
+            }
+        }
+    }
 }
 
 type_t *check_call(sema_t *s, ast_node_t *n)
@@ -150,6 +220,8 @@ type_t *check_call(sema_t *s, ast_node_t *n)
     ast_node_t *callee = n->a;
     type_t *call_expected = s->expected;
     s->expected = NULL;
+
+    if (callee && callee->kind == AST_IDENTIFIER) check_pure_builtin(s, n, callee->name);
 
     if (callee && callee->kind == AST_IDENTIFIER && strcmp(callee->name, "spawn") == 0) {
         if (n->list.len != 1 || ((ast_node_t *)n->list.data[0])->kind != AST_IDENTIFIER) {
@@ -162,6 +234,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             SERR(s, 12, &n->span, "spawn argument '%s' is not a function", fn->name);
             return decorate(s, n, ty(s, TY_I64));
         }
+        fsym->used = true;
         bool ok = false;
         {
             size_t i = 0;
@@ -191,6 +264,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             SERR(s, 12, &n->span, "funcptr argument '%s' is not a function", fn->name);
             return decorate(s, n, ty(s, TY_I64));
         }
+        fsym->used = true;
         decorate(s, fn, ty(s, TY_VOID));
         decorate(s, callee, ty(s, TY_VOID));
         return decorate(s, n, ty(s, TY_I64));
@@ -244,6 +318,14 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         }
         if (ft) {
             decorate(s, callee, ft);
+            {
+                ast_node_t *pf = sema_pure_fn(s);
+                if (pf)
+                    SERR(s, 12, &n->span,
+                         "'pure' function '%s' cannot call a function value: its "
+                         "purity cannot be verified",
+                         pf->name);
+            }
             if (argtypes.len != ft->params.len)
                 SERR(s, 12, &n->span, "function value takes %zu argument(s), got %zu",
                      ft->params.len, argtypes.len);
@@ -262,8 +344,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
 
     if (callee && callee->kind == AST_IDENTIFIER) {
         const char *nm = callee->name;
-        if (strcmp(nm, "print") == 0 || strcmp(nm, "_") == 0 ||
-            strcmp(nm, "println") == 0 || strcmp(nm, "__") == 0 ||
+        if (strcmp(nm, "print") == 0 || strcmp(nm, "println") == 0 ||
             strcmp(nm, "printerr") == 0 || strcmp(nm, "printerrln") == 0) {
             decorate(s, callee, ty(s, TY_VOID));
             return decorate(s, n, ty(s, TY_VOID));
@@ -354,6 +435,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             return decorate(s, n, err_ty(s));
         }
 
+        sym->used = true;
         if (sym->kind == SYM_FUNC && sym->decl && sym->decl->typarams.len > 0) {
             symbol_t *inst = g_infer_call(s, sym, &argtypes, &n->span, call_expected);
             if (!inst) return decorate(s, n, err_ty(s));
@@ -361,9 +443,11 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             callee->name = inst->name;
         }
         func_sig_t *sig = resolve_overload(s, sym, &argtypes, &n->span, nm);
+        mark_ref_args(s, n, sig);
         coerce_args_to_dyn(s, n, &argtypes, sig);
         decorate(s, callee, sym->type);
-        return decorate(s, n, sig ? sig->ret : err_ty(s));
+        return decorate(s, n,
+                        sig ? g_localize_instance(s, sig->ret, &n->span) : err_ty(s));
     }
 
     if (callee && callee->kind == AST_MEMBER && callee->a &&
@@ -384,6 +468,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                      pk->name);
                 return decorate(s, n, err_ty(s));
             }
+            fn->used = true;
 
             if (fn->decl && fn->decl->typarams.len > 0) {
                 scope_t *save_cur = s->cur;
@@ -397,19 +482,32 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                 callee->kind = AST_IDENTIFIER;
                 callee->name = inst->name;
                 func_sig_t *sig = resolve_overload(s, inst, &argtypes, &n->span, fname);
+                mark_ref_args(s, n, sig);
                 decorate(s, callee, inst->type);
-                return decorate(s, n, sig ? sig->ret : err_ty(s));
+                return decorate(
+                    s, n, sig ? g_localize_instance(s, sig->ret, &n->span) : err_ty(s));
             }
             func_sig_t *sig = resolve_overload(s, fn, &argtypes, &n->span, fname);
+            mark_ref_args(s, n, sig);
             decorate(s, callee->a, pk->type);
             decorate(s, callee, fn->type);
-            return decorate(s, n, sig ? sig->ret : err_ty(s));
+            return decorate(s, n,
+                            sig ? g_localize_instance(s, sig->ret, &n->span) : err_ty(s));
         }
     }
 
     if (callee && callee->kind == AST_MEMBER) {
         type_t *objt = sema_check_expr(s, callee->a);
         if (type_is_error(objt)) return decorate(s, n, err_ty(s));
+        {
+            ast_node_t *root = callee->a;
+            while (root && (root->kind == AST_MEMBER || root->kind == AST_INDEX))
+                root = root->a;
+            if (root && root->kind == AST_IDENTIFIER && root->name) {
+                symbol_t *rsym = scope_lookup(s->cur, root->name);
+                if (rsym) rsym->mutated = true;
+            }
+        }
 
         if (callee->name &&
             (objt->kind == TY_MAP || objt->kind == TY_MAP_ITER || objt->kind == TY_VEC ||
@@ -422,6 +520,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             type_t *K = objt->key, *V = objt->elem;
             decorate(s, callee, objt);
             if (!strcmp(m, "put")) {
+                check_pure_recv_mut(s, n, m);
                 if (argtypes.len != 2)
                     SERR(s, 12, &n->span, "put(key,value) takes 2 args");
                 return decorate(s, n, ty(s, TY_VOID));
@@ -435,6 +534,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                 return decorate(s, n, ty(s, TY_BOOL));
             }
             if (!strcmp(m, "remove")) {
+                check_pure_recv_mut(s, n, m);
                 if (argtypes.len != 1) SERR(s, 12, &n->span, "remove(key) takes 1 arg");
                 return decorate(s, n, ty(s, TY_BOOL));
             }
@@ -466,22 +566,30 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                                                      (type_t *)argtypes.data[vi]);
             }
             if (!strcmp(m, "push")) {
+                check_pure_recv_mut(s, n, m);
                 if (argtypes.len != 1) SERR(s, 12, &n->span, "push(value) takes 1 arg");
                 return decorate(s, n, ty(s, TY_VOID));
             }
-            if (!strcmp(m, "pop")) return decorate(s, n, E);
+            if (!strcmp(m, "pop")) {
+                check_pure_recv_mut(s, n, m);
+                return decorate(s, n, E);
+            }
             if (!strcmp(m, "get")) {
                 if (argtypes.len != 1) SERR(s, 12, &n->span, "get(index) takes 1 arg");
                 return decorate(s, n, type_ptr(s->tc, E));
             }
             if (!strcmp(m, "set")) {
+                check_pure_recv_mut(s, n, m);
                 if (argtypes.len != 2)
                     SERR(s, 12, &n->span, "set(index,value) takes 2 args");
                 return decorate(s, n, ty(s, TY_VOID));
             }
             if (!strcmp(m, "len")) return decorate(s, n, ty(s, TY_I32));
             if (!strcmp(m, "cap")) return decorate(s, n, ty(s, TY_I32));
-            if (!strcmp(m, "free")) return decorate(s, n, ty(s, TY_VOID));
+            if (!strcmp(m, "free")) {
+                check_pure_recv_mut(s, n, m);
+                return decorate(s, n, ty(s, TY_VOID));
+            }
             SERR(s, 17, &n->span, "Vector has no method '%s'", m);
             return decorate(s, n, err_ty(s));
         }
@@ -489,6 +597,13 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         if (objt->kind == TY_PTR && objt->pointee && objt->pointee->kind == TY_FILE) {
             const char *m = callee->name;
             decorate(s, callee, objt);
+            {
+                ast_node_t *pf = sema_pure_fn(s);
+                if (pf)
+                    SERR(s, 12, &n->span,
+                         "'pure' function '%s' cannot call '%s': it has side effects",
+                         pf->name, m);
+            }
             if (!strcmp(m, "read")) {
                 if (argtypes.len != 1) SERR(s, 12, &n->span, "read(size) takes 1 arg");
                 return decorate(s, n, ty(s, TY_STR));
@@ -559,6 +674,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                 }
                 func_sig_t *sig =
                     resolve_overload(s, m, &argtypes, &n->span, callee->name);
+                mark_ref_args(s, n, sig);
                 coerce_args_to_dyn(s, n, &argtypes, sig);
                 return decorate(s, n, sig ? sig->ret : err_ty(s));
             }
@@ -582,7 +698,19 @@ type_t *check_call(sema_t *s, ast_node_t *n)
 
         if (m && m->kind == SYM_FIELD && m->type && m->type->kind == TY_FUNC) {
             type_t *ft = m->type;
+            if (!m->is_pub && struct_sym_of(s->self_type) != ssym)
+                SERR(s, 17, &n->span,
+                     "field '%s' is private in struct '%s' (mark it 'pub')", callee->name,
+                     ssym->name);
             decorate(s, callee, ft);
+            {
+                ast_node_t *pf = sema_pure_fn(s);
+                if (pf)
+                    SERR(s, 12, &n->span,
+                         "'pure' function '%s' cannot call a function value: its "
+                         "purity cannot be verified",
+                         pf->name);
+            }
             if (argtypes.len != ft->params.len)
                 SERR(s, 12, &n->span, "function value takes %zu argument(s), got %zu",
                      ft->params.len, argtypes.len);
@@ -602,10 +730,15 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                  ssym->name);
             return decorate(s, n, err_ty(s));
         }
+        if (!m->is_pub && struct_sym_of(s->self_type) != ssym)
+            SERR(s, 17, &n->span, "method '%s' is private in struct '%s' (mark it 'pub')",
+                 callee->name, ssym->name);
         func_sig_t *sig = resolve_overload(s, m, &argtypes, &n->span, callee->name);
+        mark_ref_args(s, n, sig);
         coerce_args_to_dyn(s, n, &argtypes, sig);
         decorate(s, callee, m->type);
-        return decorate(s, n, sig ? sig->ret : err_ty(s));
+        return decorate(s, n,
+                        sig ? g_localize_instance(s, sig->ret, &n->span) : err_ty(s));
     }
     sema_check_expr(s, callee);
     SERR(s, 12, &n->span, "expression is not callable");

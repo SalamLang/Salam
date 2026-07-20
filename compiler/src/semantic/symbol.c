@@ -16,6 +16,8 @@
 #include "semantic/symbol.h"
 #include "core/sal_format.h"
 
+#define SCOPE_INDEX_THRESHOLD 16
+
 scope_t *scope_new(arena_t *a, scope_kind_t kind, scope_t *parent)
 {
     scope_t *s = (scope_t *)arena_alloc(a, sizeof(*s));
@@ -40,8 +42,52 @@ symbol_t *symbol_new(arena_t *a, sym_kind_t kind, const char *name)
     return sym;
 }
 
+static size_t scope_hash(const char *s)
+{
+    uint64_t h = 1469598103934665603ULL;
+    const unsigned char *p = (const unsigned char *)s;
+    for (; *p; p++) {
+        h ^= *p;
+        h *= 1099511628211ULL;
+    }
+    return (size_t)h;
+}
+
+static void scope_index_insert(scope_t *sc, symbol_t *sym)
+{
+    size_t mask = sc->hcap - 1;
+    size_t i = scope_hash(sym->name) & mask;
+    while (sc->hindex[i])
+        i = (i + 1) & mask;
+    sc->hindex[i] = sym;
+}
+
+static void scope_index_build(arena_t *a, scope_t *sc, size_t want)
+{
+    size_t nc = 32;
+    while (nc < want * 2)
+        nc *= 2;
+    sc->hindex = (void **)arena_alloc(a, salam_size_mul(nc, sizeof(void *)));
+    memset(sc->hindex, 0, salam_size_mul(nc, sizeof(void *)));
+    sc->hcap = nc;
+    {
+        size_t i = 0;
+        for (; i < sc->symbols.len; i++)
+            scope_index_insert(sc, (symbol_t *)sc->symbols.data[i]);
+    }
+}
+
 symbol_t *scope_lookup_local(scope_t *s, const char *name)
 {
+    if (s->hindex) {
+        size_t mask = s->hcap - 1;
+        size_t i = scope_hash(name) & mask;
+        for (; s->hindex[i]; i = (i + 1) & mask) {
+            symbol_t *sym = (symbol_t *)s->hindex[i];
+            if (strcmp(sym->name, name) == 0) return sym;
+        }
+        return NULL;
+    }
     {
         size_t i = 0;
         for (; i < s->symbols.len; i++) {
@@ -54,14 +100,22 @@ symbol_t *scope_lookup_local(scope_t *s, const char *name)
 
 symbol_t *scope_lookup(scope_t *s, const char *name)
 {
+    return scope_lookup_where(s, name, NULL);
+}
+
+symbol_t *scope_lookup_where(scope_t *s, const char *name, scope_t **where)
+{
     {
         scope_t *cur = s;
         for (; cur; cur = cur->parent) {
             symbol_t *sym = scope_lookup_local(cur, name);
-            if (sym) return sym;
+            if (sym) {
+                if (where) *where = cur;
+                return sym;
+            }
 
             if (cur->aux) {
-                sym = scope_lookup(cur->aux, name);
+                sym = scope_lookup_where(cur->aux, name, where);
                 if (sym) return sym;
             }
         }
@@ -74,6 +128,14 @@ symbol_t *scope_define(arena_t *a, scope_t *s, symbol_t *sym)
     symbol_t *existing = scope_lookup_local(s, sym->name);
     if (existing) return existing;
     vec_push(a, &s->symbols, sym);
+    if (s->hindex) {
+        if (s->symbols.len * 4 >= s->hcap * 3)
+            scope_index_build(a, s, s->symbols.len);
+        else
+            scope_index_insert(s, sym);
+    } else if (s->symbols.len >= SCOPE_INDEX_THRESHOLD) {
+        scope_index_build(a, s, s->symbols.len);
+    }
     return NULL;
 }
 

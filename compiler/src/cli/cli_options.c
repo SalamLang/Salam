@@ -41,8 +41,10 @@ static bool cli_positional(const char *arg, options_t *out)
     case CMD_BUILD:
     case CMD_OBJ:
     case CMD_LLVM:
+    case CMD_JS:
     case CMD_RUN:
     case CMD_LAYOUT_BUILD:
+    case CMD_WEB:
     case CMD_DEBUG:
     case CMD_MEMCHECK:
     case CMD_FMT:
@@ -103,6 +105,9 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                 out->llvm_emit = 5;
             } else if (strcmp(arg, "--verify-ir") == 0) {
                 out->llvm_verify = true;
+            } else if (strcmp(arg, "--native-cpu") == 0 ||
+                       strcmp(arg, "-march=native") == 0) {
+                out->llvm_native_cpu = true;
             } else if ((val = cli_opt_value(arg, "--target")) != NULL) {
                 out->llvm_target = val;
             } else if (strcmp(arg, "--safe") == 0) {
@@ -139,6 +144,10 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                 out->interp = true;
             } else if (strcmp(arg, "--inline") == 0) {
                 out->inline_mode = true;
+            } else if (strcmp(arg, "--split") == 0) {
+                out->split = true;
+            } else if (strcmp(arg, "--no-js-minify-names") == 0) {
+                out->no_js_minify_names = true;
             } else if ((val = cli_opt_value(arg, "--output")) != NULL) {
                 out->output = val;
             } else if (strcmp(arg, "-o") == 0) {

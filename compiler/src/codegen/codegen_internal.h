@@ -31,8 +31,10 @@ typedef struct {
     int indent;
     vec_t locals;
     symbol_t *cur_struct;
+    scope_t *cur_fn_home;
     bool safe;
     bool debug_info;
+    bool single_threaded;
     const char *src_path;
     int tmpn;
     bool cur_sret;
@@ -48,6 +50,8 @@ typedef struct {
     int lam_n;
     int clos_n;
     ast_node_t *cur_lambda;
+    bool is_gui_mode;
+    const char *target_triple;
 } cg_t;
 
 const char *cg_fmt(cg_t *cg, const char *fmt, ...);
@@ -96,6 +100,10 @@ const char *cg_mangle_method(cg_t *cg, const char *sname, symbol_t *owner, const
 const char *cg_mangle_ti(cg_t *cg, const char *typestr, const char *fn, vec_t *params);
 
 const char *func_ret_of(const char *ts);
+
+const char *raw_ret_of(const char *ts);
+
+const char *raw_cast_params(cg_t *cg, const char *ts);
 
 const char *func_cast_params_env(cg_t *cg, const char *ts);
 

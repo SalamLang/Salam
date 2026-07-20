@@ -1,290 +1,291 @@
 @en "http"
-@fa "اچ_تی_تی_پی"
+@fa "اچ تی تی پی"
+@ar "اتش تی تی بی"
 package http
-import "mem"
-@if SALAM_OS_WINDOWS
-link "winhttp"
-@end
+
+import mem
+import str
+
+if SALAM_OS_WINDOWS:
+    link "winhttp"
+end
 
 @en "Response"
 @fa "پاسخ"
+@ar "استجابة"
 pub struct Response:
-    status i32 = 0
-    body str = ""
-    head str = ""
+    pub status : int = 0
+    pub body : str = ""
+    pub head : str = ""
 end
-mut _g_http_status i32 = 0
-mut _g_http_headers str = ""
-@if SALAM_OS_WINDOWS
-extern "C":
-    func MultiByteToWideChar(codepage i32, flags i32, src str, srclen i32, dst void*, dstlen i32) i32
-    func WideCharToMultiByte(codepage i32, flags i32, src void*, srclen i32, dst void*, dstlen i32, def void*, used void*) i32
-    func WinHttpOpen(agent void*, access_type i32, proxy void*, bypass void*, flags i32) void*
-    func WinHttpConnect(session void*, host void*, port i32, flags i32) void*
-    func WinHttpOpenRequest(conn void*, verb void*, path void*, ver void*, ref void*, types void*, flags i32) void*
-    func WinHttpSendRequest(req void*, headers void*, hlen i32, body str, blen i32, total i32, ctx i64) i32
-    func WinHttpReceiveResponse(req void*, reserved void*) i32
-    func WinHttpQueryHeaders(req void*, info i32, name void*, buf void*, buflen void*, index void*) i32
-    func WinHttpReadData(req void*, buf void*, toread i32, read void*) i32
-    func WinHttpAddRequestHeaders(req void*, headers void*, hlen i32, modifiers i32) i32
-    func WinHttpCloseHandle(handle void*) i32
-end
-
-func _make_str(buf void*, len i32) str:
-    if buf == null || len <= 0:
-        ret ""
+mut _g_http_status := 0
+mut _g_http_headers := ""
+if SALAM_OS_WINDOWS:
+    extern:
+        func MultiByteToWideChar(codepage : int, flags : int, src : str, srclen : int, dst : void*, dstlen : int) : int
+        func WideCharToMultiByte(codepage : int, flags : int, src : void*, srclen : int, dst : void*, dstlen : int, def : void*, used : void*) : int
+        func WinHttpOpen(agent : void*, access_type : int, proxy : void*, bypass : void*, flags : int) : void*
+        func WinHttpConnect(session : void*, host : void*, port : int, flags : int) : void*
+        func WinHttpOpenRequest(conn : void*, verb : void*, path : void*, ver : void*, ref : void*, types : void*, flags : int) : void*
+        func WinHttpSendRequest(req : void*, headers : void*, hlen : int, body : str, blen : int, total : int, ctx : i64) : int
+        func WinHttpReceiveResponse(req : void*, reserved : void*) : int
+        func WinHttpQueryHeaders(req : void*, info : int, name : void*, buf : void*, buflen : void*, index : void*) : int
+        func WinHttpReadData(req : void*, buf : void*, toread : int, read : void*) : int
+        func WinHttpAddRequestHeaders(req : void*, headers : void*, hlen : int, modifiers : int) : int
+        func WinHttpCloseHandle(handle : void*) : int
     end
-    dst void* = mem.Allocate((len + 1) as u64)
-    mem.Set(dst, 0, (len + 1) as u64)
-    mem.Copy(dst, buf, len as u64)
-    ret dst as str
-end
 
-func _str_to_wide(s str) void*:
-    n i32 = MultiByteToWideChar(65001, 0, s, 0 - 1, null, 0)
-    if n <= 0:
-        ret mem.Allocate(2 as u64)
-    end
-    w void* = mem.Allocate((n * 2) as u64)
-    MultiByteToWideChar(65001, 0, s, 0 - 1, w, n)
-    ret w
-end
-
-func _wide_to_str(w void*) str:
-    if w == null: ret "" end
-    n i32 = WideCharToMultiByte(65001, 0, w, 0 - 1, null, 0, null, null)
-    if n <= 0: ret "" end
-    buf void* = mem.Allocate(n as u64)
-    WideCharToMultiByte(65001, 0, w, 0 - 1, buf, n, null, null)
-    ret _make_str(buf, n - 1)
-end
-
-func _fetch_https(method str, url str, headers str, body str) str:
-    mut p str = url
-    mut secure i32 = 1
-    mut wport i32 = 443
-    if url.substr(0, 8) == "https://":
-        p = url.substr(8, url.len() - 8)
-    else:
-        if url.substr(0, 7) == "http://":
-            secure = 0
-            wport = 80
-            p = url.substr(7, url.len() - 7)
+    func _make_str(buf : void*, len : int) : str:
+        if buf == null || len <= 0:
+            ret ""
         end
+        dst := mem.Allocate((len + 1) as u64)
+        mem.Set(dst, 0, (len + 1) as u64)
+        mem.Copy(dst, buf, len as u64)
+        ret dst as str
     end
-    slash_pos i32 = p.find("/")
-    mut host_part str = p
-    mut path_part str = "/"
-    if slash_pos >= 0:
-        host_part = p.substr(0, slash_pos)
-        path_part = p.substr(slash_pos, p.len() - slash_pos)
-    end
-    colon_pos i32 = host_part.find(":")
-    mut host_only str = host_part
-    if colon_pos >= 0:
-        host_only = host_part.substr(0, colon_pos)
-        wport = host_part.substr(colon_pos + 1, host_part.len() - colon_pos - 1).to_int()
-    end
-    wagent void* = _str_to_wide("Salam/1.0")
-    sess void* = WinHttpOpen(wagent, 0, null, null, 0)
-    mem.Free(wagent)
-    if sess == null: ret "" end
-    whost void* = _str_to_wide(host_only)
-    conn void* = WinHttpConnect(sess, whost, wport, 0)
-    mem.Free(whost)
-    if conn == null:
-        WinHttpCloseHandle(sess)
-        ret ""
-    end
-    mut req_flags i32 = 0
-    if secure == 1: req_flags = 8388608 end
-    wverb void* = _str_to_wide(method)
-    wpath void* = _str_to_wide(path_part)
-    req void* = WinHttpOpenRequest(conn, wverb, wpath, null, null, null, req_flags)
-    mem.Free(wverb)
-    mem.Free(wpath)
-    if req == null:
-        WinHttpCloseHandle(conn)
-        WinHttpCloseHandle(sess)
-        ret ""
-    end
-    if headers.len() > 0:
-        wh void* = _str_to_wide(headers)
-        WinHttpAddRequestHeaders(req, wh, 0 - 1, 805306368)
-        mem.Free(wh)
-    end
-    blen i32 = body.len()
-    sent i32 = WinHttpSendRequest(req, null, 0, body, blen, blen, 0)
-    if sent == 0:
-        WinHttpCloseHandle(req)
-        WinHttpCloseHandle(conn)
-        WinHttpCloseHandle(sess)
-        ret ""
-    end
-    recv_ok i32 = WinHttpReceiveResponse(req, null)
-    if recv_ok == 0:
-        WinHttpCloseHandle(req)
-        WinHttpCloseHandle(conn)
-        WinHttpCloseHandle(sess)
-        ret ""
-    end
-    mut hlen i64* = mem.Allocate(8 as u64) as i64*
-    hlen[0] = 0
-    WinHttpQueryHeaders(req, 22, null, null, hlen as void*, null)
-    hsize i32 = hlen[0] as i32
-    mut hdr_str str = "HTTP/1.1 0 \r\n\r\n"
-    if hsize > 0:
-        wh void* = mem.Allocate((hsize + 4) as u64)
-        q2 i32 = WinHttpQueryHeaders(req, 22, null, wh, hlen as void*, null)
-        if q2 != 0:
-            hdr_str = _wide_to_str(wh)
+
+    func _str_to_wide(s : str) : void*:
+        n := MultiByteToWideChar(65001, 0, s, 0 - 1, null, 0)
+        if n <= 0:
+            ret mem.Allocate(2 as u64)
         end
-        mem.Free(wh)
+        w := mem.Allocate((n * 2) as u64)
+        MultiByteToWideChar(65001, 0, s, 0 - 1, w, n)
+        ret w
     end
-    mem.Free(hlen as void*)
-    hend i32 = hdr_str.len() - 4
-    if hend < 0 || hdr_str.substr(hend, 4) != "\r\n\r\n":
-        hdr_str = hdr_str.concat("\r\n\r\n")
+
+    func _wide_to_str(w : void*) : str:
+        if w == null: ret "" end
+        n := WideCharToMultiByte(65001, 0, w, 0 - 1, null, 0, null, null)
+        if n <= 0: ret "" end
+        buf := mem.Allocate(n as u64)
+        WideCharToMultiByte(65001, 0, w, 0 - 1, buf, n, null, null)
+        ret _make_str(buf, n - 1)
     end
-    buf void* = mem.Allocate(2050 as u64)
-    mut got i64* = mem.Allocate(8 as u64) as i64*
-    mut body_str str = ""
-    mut reading bool = true
-    while reading:
-        got[0] = 0
-        rd_ok i32 = WinHttpReadData(req, buf, 2048, got as void*)
-        if rd_ok == 0 || got[0] == 0:
-            reading = false
+
+    func _fetch_https(method : str, url : str, headers : str, body : str) : str:
+        mut p := url
+        mut secure := 1
+        mut wport := 443
+        if url.substr(0, 8) == "https://":
+            p = url.substr(8, url.len() - 8)
         else:
-            chunk str = _make_str(buf, got[0] as i32)
-            body_str = body_str.concat(chunk)
-        end
-    end
-    mem.Free(buf)
-    mem.Free(got as void*)
-    WinHttpCloseHandle(req)
-    WinHttpCloseHandle(conn)
-    WinHttpCloseHandle(sess)
-    ret hdr_str.concat(body_str)
-end
-@else
-@if SALAM_LINK_CURL
-extern "C":
-    func curl_easy_init() void*
-    func curl_easy_setopt(h void*, opt i32, ...) i64
-    func curl_easy_perform(h void*) i64
-    func curl_easy_cleanup(h void*)
-    func curl_slist_append(list void*, s str) void*
-    func curl_slist_free_all(list void*)
-end
-const _CURLOPT_URL = 10002
-const _CURLOPT_WRITEDATA = 10001
-const _CURLOPT_WRITEFUNCTION = 20011
-const _CURLOPT_POSTFIELDS = 10015
-const _CURLOPT_HTTPHEADER = 10023
-const _CURLOPT_CUSTOMREQUEST = 10036
-const _CURLOPT_USERAGENT = 10018
-const _CURLOPT_HEADERFUNCTION = 20079
-const _CURLOPT_HEADERDATA = 10029
-const _CURLOPT_FOLLOWLOCATION = 52
-func _cbuf() void*:
-    ret mem.AllocateZeroed(24 as u64)
-end
-
-func _cbuf_str(b void*) str:
-    p i64* = b as i64*
-    if p[0] == 0: ret "" end
-    d void* = p[0] as void*
-    ret d as str
-end
-
-func _curl_write(ptr void*, size u64, nmemb u64, ud void*) u64:
-    n i64 = (size * nmemb) as i64
-    mut b i64* = ud as i64*
-    mut len i64 = b[1]
-    mut cap i64 = b[2]
-    if (len + n + 1) > cap:
-        while (len + n + 1) > cap:
-            if cap == 0: cap = 4096 else:
-                cap = cap * 2
+            if url.substr(0, 7) == "http://":
+                secure = 0
+                wport = 80
+                p = url.substr(7, url.len() - 7)
             end
         end
-        nd void* = mem.Reallocate(b[0] as void*, cap as u64)
-        b[0] = nd as i64
-        b[2] = cap
-    end
-    dst void* = (b[0] + len) as void*
-    mem.Copy(dst, ptr, n as u64)
-    len = len + n
-    b[1] = len
-    term void* = (b[0] + len) as void*
-    mem.Set(term, 0, 1 as u64)
-    ret n as u64
-end
-
-func _fetch_https(method str, url str, headers str, body str) str:
-    h void* = curl_easy_init()
-    if h == null: ret "" end
-    buf void* = _cbuf()
-    hbuf void* = _cbuf()
-    wcb i64 = funcptr(_curl_write)
-    curl_easy_setopt(h, _CURLOPT_URL, url)
-    curl_easy_setopt(h, _CURLOPT_WRITEFUNCTION, wcb)
-    curl_easy_setopt(h, _CURLOPT_WRITEDATA, buf)
-    curl_easy_setopt(h, _CURLOPT_HEADERFUNCTION, wcb)
-    curl_easy_setopt(h, _CURLOPT_HEADERDATA, hbuf)
-    curl_easy_setopt(h, _CURLOPT_FOLLOWLOCATION, 1 as i64)
-    curl_easy_setopt(h, _CURLOPT_USERAGENT, "Salam/1.0")
-    if method != "GET":
-        curl_easy_setopt(h, _CURLOPT_CUSTOMREQUEST, method)
-    end
-    if body.len() > 0:
-        curl_easy_setopt(h, _CURLOPT_POSTFIELDS, body)
-    end
-    mut slist void* = null
-    if headers.len() > 0:
-        lines Vector<str> = headers.split("\r\n")
-        mut i i32 = 0
-        while i < lines.len():
-            line str = lines.get(i)[0]
-            if line.len() > 0:
-                slist = curl_slist_append(slist, line)
+        slash_pos := p.find("/")
+        mut host_part := p
+        mut path_part := "/"
+        if slash_pos >= 0:
+            host_part = p.substr(0, slash_pos)
+            path_part = p.substr(slash_pos, p.len() - slash_pos)
+        end
+        colon_pos := host_part.find(":")
+        mut host_only := host_part
+        if colon_pos >= 0:
+            host_only = host_part.substr(0, colon_pos)
+            wport = host_part.substr(colon_pos + 1, host_part.len() - colon_pos - 1).to_int()
+        end
+        wagent := _str_to_wide("Salam/1.0")
+        sess := WinHttpOpen(wagent, 0, null, null, 0)
+        mem.Free(wagent)
+        if sess == null: ret "" end
+        defer WinHttpCloseHandle(sess)
+        whost := _str_to_wide(host_only)
+        conn := WinHttpConnect(sess, whost, wport, 0)
+        mem.Free(whost)
+        if conn == null:
+            ret ""
+        end
+        defer WinHttpCloseHandle(conn)
+        mut req_flags := 0
+        if secure == 1: req_flags = 8388608 end
+        wverb := _str_to_wide(method)
+        wpath := _str_to_wide(path_part)
+        req := WinHttpOpenRequest(conn, wverb, wpath, null, null, null, req_flags)
+        mem.Free(wverb)
+        mem.Free(wpath)
+        if req == null:
+            ret ""
+        end
+        defer WinHttpCloseHandle(req)
+        if headers.len() > 0:
+            wh := _str_to_wide(headers)
+            WinHttpAddRequestHeaders(req, wh, 0 - 1, 805306368)
+            mem.Free(wh)
+        end
+        blen := body.len()
+        sent := WinHttpSendRequest(req, null, 0, body, blen, blen, 0)
+        if sent == 0:
+            ret ""
+        end
+        recv_ok := WinHttpReceiveResponse(req, null)
+        if recv_ok == 0:
+            ret ""
+        end
+        mut hlen := mem.Allocate(8 as u64) as i64*
+        defer mem.Free(hlen as void*)
+        hlen[0] = 0
+        WinHttpQueryHeaders(req, 22, null, null, hlen as void*, null)
+        hsize := hlen[0] as int
+        mut hdr_str := "HTTP/1.1 0 \r\n\r\n"
+        if hsize > 0:
+            wh := mem.Allocate((hsize + 4) as u64)
+            q2 := WinHttpQueryHeaders(req, 22, null, wh, hlen as void*, null)
+            if q2 != 0:
+                hdr_str = _wide_to_str(wh)
             end
-            i = i + 1
+            mem.Free(wh)
+        end
+        hend := hdr_str.len() - 4
+        if hend < 0 || hdr_str.substr(hend, 4) != "\r\n\r\n":
+            hdr_str = hdr_str.concat("\r\n\r\n")
+        end
+        buf := mem.Allocate(2050 as u64)
+        defer mem.Free(buf)
+        mut got := mem.Allocate(8 as u64) as i64*
+        defer mem.Free(got as void*)
+        mut body_str := ""
+        mut reading := true
+        until reading:
+            got[0] = 0
+            rd_ok := WinHttpReadData(req, buf, 2048, got as void*)
+            if rd_ok == 0 || got[0] == 0:
+                reading = false
+            else:
+                chunk := _make_str(buf, got[0] as int)
+                body_str = body_str.concat(chunk)
+            end
+        end
+        result := hdr_str.concat(body_str)
+        ret result
+    end
+else:
+    if SALAM_LINK_CURL:
+        extern:
+            func curl_easy_init() : void*
+            func curl_easy_setopt(h : void*, opt : int, ...) : i64
+            func curl_easy_perform(h : void*) : i64
+            func curl_easy_cleanup(h : void*)
+            func curl_slist_append(list : void*, s : str) : void*
+            func curl_slist_free_all(list : void*)
+        end
+        const _CURLOPT_URL := 10002
+        const _CURLOPT_WRITEDATA := 10001
+        const _CURLOPT_WRITEFUNCTION := 20011
+        const _CURLOPT_POSTFIELDS := 10015
+        const _CURLOPT_HTTPHEADER := 10023
+        const _CURLOPT_CUSTOMREQUEST := 10036
+        const _CURLOPT_USERAGENT := 10018
+        const _CURLOPT_HEADERFUNCTION := 20079
+        const _CURLOPT_HEADERDATA := 10029
+        const _CURLOPT_FOLLOWLOCATION := 52
+        func _cbuf() : void*:
+            ret mem.AllocateZeroed(24 as u64)
+        end
+
+        func _cbuf_str(b : void*) : str:
+            p := b as i64*
+            if p[0] == 0: ret "" end
+            d := p[0] as void*
+            ret d as str
+        end
+
+        func _cbuf_free(b : void*):
+            p := b as i64*
+            if p[0] != 0:
+                mem.Free(p[0] as void*)
+            end
+            mem.Free(b)
+        end
+
+        func _curl_write(ptr : void*, size : u64, nmemb : u64, ud : void*) : u64:
+            n := (size * nmemb) as i64
+            mut b := ud as i64*
+            mut len := b[1]
+            mut cap := b[2]
+            if (len + n + 1) > cap:
+                until (len + n + 1) > cap:
+                    if cap == 0: cap = 4096 else:
+                        cap *= 2
+                    end
+                end
+                nd := mem.Reallocate(b[0] as void*, cap as u64)
+                b[0] = nd as i64
+                b[2] = cap
+            end
+            dst := (b[0] + len) as void*
+            mem.Copy(dst, ptr, n as u64)
+            len += n
+            b[1] = len
+            term := (b[0] + len) as void*
+            mem.Set(term, 0, 1 as u64)
+            ret n as u64
+        end
+
+        func _fetch_https(method : str, url : str, headers : str, body : str) : str:
+            h := curl_easy_init()
+            if h == null: ret "" end
+            defer curl_easy_cleanup(h)
+            buf := _cbuf()
+            defer _cbuf_free(buf)
+            hbuf := _cbuf()
+            defer _cbuf_free(hbuf)
+            wcb := funcptr(_curl_write)
+            curl_easy_setopt(h, _CURLOPT_URL, url)
+            curl_easy_setopt(h, _CURLOPT_WRITEFUNCTION, wcb)
+            curl_easy_setopt(h, _CURLOPT_WRITEDATA, buf)
+            curl_easy_setopt(h, _CURLOPT_HEADERFUNCTION, wcb)
+            curl_easy_setopt(h, _CURLOPT_HEADERDATA, hbuf)
+            curl_easy_setopt(h, _CURLOPT_FOLLOWLOCATION, 1 as i64)
+            curl_easy_setopt(h, _CURLOPT_USERAGENT, "Salam/1.0")
+            if method != "GET":
+                curl_easy_setopt(h, _CURLOPT_CUSTOMREQUEST, method)
+            end
+            if body.len() > 0:
+                curl_easy_setopt(h, _CURLOPT_POSTFIELDS, body)
+            end
+            mut slist := null as void*
+            if headers.len() > 0:
+                lines := headers.split("\r\n")
+                mut i := 0
+                until i < lines.len():
+                    line := lines.get(i)[0]
+                    if line.len() > 0:
+                        slist = curl_slist_append(slist, line)
+                    end
+                    i += 1
+                end
+            end
+            if slist != null:
+                curl_easy_setopt(h, _CURLOPT_HTTPHEADER, slist)
+            end
+            curl_easy_perform(h)
+            if slist != null:
+                curl_slist_free_all(slist)
+            end
+            result := _cbuf_str(hbuf).concat(_cbuf_str(buf))
+            ret result
+        end
+    else:
+        func _fetch_https(_method : str, _url : str, _headers : str, _body : str) : str:
+            ret ""
         end
     end
-    if slist != null:
-        curl_easy_setopt(h, _CURLOPT_HTTPHEADER, slist)
-    end
-    curl_easy_perform(h)
-    if slist != null:
-        curl_slist_free_all(slist)
-    end
-    curl_easy_cleanup(h)
-    mut result str = _cbuf_str(hbuf).concat(_cbuf_str(buf))
-    hp i64* = hbuf as i64*
-    bp i64* = buf as i64*
-    if hp[0] != 0: mem.Free(hp[0] as void*) end
-    if bp[0] != 0: mem.Free(bp[0] as void*) end
-    mem.Free(hbuf)
-    mem.Free(buf)
-    ret result
 end
-@else
-func _fetch_https(_method str, _url str, _headers str, _body str) str:
-    ret ""
-end
-@end
-@end
 
-func _parse_response(req str) Response:
-    sp i32 = req.find(" ")
+func _parse_response(req : str) : Response:
+    sp := req.find(" ")
     if sp >= 0:
         _g_http_status = req.substr(sp + 1, 3).to_int()
     else:
         _g_http_status = 0
     end
-    sep_pos i32 = req.find("\r\n\r\n")
+    sep_pos := req.find("\r\n\r\n")
     if sep_pos >= 0:
         _g_http_headers = req.substr(0, sep_pos + 4)
         ret Response { status = _g_http_status, body = req.substr(sep_pos + 4, req.len() - sep_pos - 4), head = _g_http_headers }
@@ -294,133 +295,134 @@ func _parse_response(req str) Response:
 end
 
 @en "NewHeaders"
-@fa "سرصفحه_جدید"
-pub func NewHeaders() HashMap<str, str>:
-    m HashMap<str, str> = HashMap {}
+@fa "سرصفحه جدید"
+@ar "ترویسات جدیدة"
+pub func NewHeaders() : HashMap<str, str>:
+    m := HashMap {} as HashMap<str, str>
     ret m
 end
 
-func serialize(headers HashMap<str, str>) str:
-    mut out str = ""
-    it MapIter<str, str> = headers.iter()
-    while it.has_next():
+func serialize(headers : HashMap<str, str>) : str:
+    mut out := ""
+    it := headers.iter()
+    until it.has_next():
         out = out.concat(it.key()).concat(": ").concat(it.value()).concat("\r\n")
         it.next()
     end
     ret out
 end
 
-func send(method str, url str, header_block str, body str) Response:
+func send(method : str, url : str, header_block : str, body : str) : Response:
     _g_http_status = 0
     _g_http_headers = ""
-    mut effective_headers str = header_block
+    mut effective_headers := header_block
     if body.len() > 0:
         if header_block.find("Content-Type") < 0:
             effective_headers = header_block.concat("Content-Type: application/x-www-form-urlencoded\r\n")
         end
     end
-    req str = _fetch_https(method, url, effective_headers, body)
+    req := _fetch_https(method, url, effective_headers, body)
     ret _parse_response(req)
 end
 
 @en "Get"
 @fa "دریافت"
-pub func Get(url str) Response: ret send("GET", url, "", "") end
+@ar "جلب"
+pub func Get(url : str) : Response: ret send("GET", url, "", "") end
 
 @en "Post"
 @fa "ارسال"
-pub func Post(url str, body str) Response: ret send("POST", url, "", body) end
+@ar "إرسال"
+pub func Post(url : str, body : str) : Response: ret send("POST", url, "", body) end
 
 @en "GetWith"
-@fa "دریافت_با"
-pub func GetWith(url str, headers HashMap<str, str>) Response:
+@fa "دریافت با"
+@ar "جلب مع"
+pub func GetWith(url : str, headers : HashMap<str, str>) : Response:
     ret send("GET", url, serialize(headers), "")
 end
 
 @en "PostWith"
-@fa "ارسال_با"
-pub func PostWith(url str, body str, headers HashMap<str, str>) Response:
+@fa "ارسال با"
+@ar "إرسال مع"
+pub func PostWith(url : str, body : str, headers : HashMap<str, str>) : Response:
     ret send("POST", url, serialize(headers), body)
 end
 
 @en "Request"
 @fa "درخواست"
-pub func Request(method str, url str, headers HashMap<str, str>, body str) Response:
+@ar "طلب"
+pub func Request(method : str, url : str, headers : HashMap<str, str>, body : str) : Response:
     ret send(method, url, serialize(headers), body)
 end
 
 @en "RequestRaw"
-@fa "درخواست_خام"
-pub func RequestRaw(method str, url str, header_block str, body str) Response:
+@fa "درخواست خام"
+@ar "طلب خام"
+pub func RequestRaw(method : str, url : str, header_block : str, body : str) : Response:
     ret send(method, url, header_block, body)
 end
 
 @en "Ok"
 @fa "موفق"
-pub func Ok(r Response) bool:
+@ar "ناجح"
+pub func Ok(r : Response) : bool:
     ret r.status >= 200 && r.status < 300
 end
 
 @en "Status"
 @fa "وضعیت"
-pub func Status(r Response) i32:
+@ar "حالة"
+pub func Status(r : Response) : int:
     ret r.status
 end
 
 @en "Body"
 @fa "بدنه"
-pub func Body(r Response) str:
+@ar "متن"
+pub func Body(r : Response) : str:
     ret r.body
 end
 
 @en "Headers"
 @fa "سرصفحه‌ها"
-pub func Headers(r Response) HashMap<str, str>:
-    m HashMap<str, str> = HashMap {}
-    lines Vector<str> = r.head.split("\r\n")
-    mut i = 0
-    while i < lines.len():
-        line str = lines.get(i)[0]
-        c i32 = line.find(":")
+@ar "ترویسات"
+pub func Headers(r : Response) : HashMap<str, str>:
+    m := HashMap {} as HashMap<str, str>
+    lines := r.head.split("\r\n")
+    defer lines.free()
+    mut i := 0
+    until i < lines.len():
+        line := lines.get(i)[0]
+        c := line.find(":")
         if c > 0:
-            key str = line.substr(0, c)
-            val str = line.substr(c + 1, line.len() - c - 1)
+            key := line.substr(0, c)
+            val := line.substr(c + 1, line.len() - c - 1)
             m.put(key, val.trim())
         end
-        i = i + 1
+        i += 1
     end
-    lines.free()
     ret m
 end
 
-func _hdr_lower(s str) str:
-    l i32 = s.len()
-    mut out str = ""
-    mut i i32 = 0
-    while i < l:
-        code i32 = char_code(s.substr(i, 1))
-        if code >= 65 && code <= 90:
-            out = out.concat(char_from_code(code + 32))
-        else:
-            out = out.concat(s.substr(i, 1))
-        end
-        i = i + 1
-    end
-    ret out
+func _hdr_lower(s : str) : str:
+    ret str.Lower(s)
 end
 
 @en "GetHeader"
-@fa "دریافت_سرصفحه"
-pub func GetHeader(r Response, name str) str:
-    target str = _hdr_lower(name)
-    lines Vector<str> = r.head.split("\r\n")
-    mut result str = ""
-    mut found bool = false
-    mut i = 0
-    while i < lines.len():
+@fa "دریافت سرصفحه"
+@ar "جلب ترویسة"
+pub func GetHeader(r : Response, name : str) : str:
+    target := _hdr_lower(name)
+    lines := r.head.split("\r\n")
+    defer lines.free()
+    mut result := ""
+    mut found := false
+    mut i := 0
+    until i < lines.len():
         if found == false:
-            line str = lines.get(i)[0]
-            c i32 = line.find(":")
+            line := lines.get(i)[0]
+            c := line.find(":")
             if c > 0:
                 if _hdr_lower(line.substr(0, c)) == target:
                     result = line.substr(c + 1, line.len() - c - 1).trim()
@@ -428,20 +430,21 @@ pub func GetHeader(r Response, name str) str:
                 end
             end
         end
-        i = i + 1
+        i += 1
     end
-    lines.free()
     ret result
 end
 
 @en "Raw"
 @fa "خام"
-pub func Raw(r Response) str:
+@ar "خام"
+pub func Raw(r : Response) : str:
     ret r.head.concat(r.body)
 end
 
 @en "RawHeaders"
-@fa "سرصفحه‌های_خام"
-pub func RawHeaders(r Response) str:
+@fa "سرصفحه‌های خام"
+@ar "ترویسات خام"
+pub func RawHeaders(r : Response) : str:
     ret r.head
 end

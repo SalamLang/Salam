@@ -1,174 +1,179 @@
 @en "fs"
-@fa "سیستم_پرونده"
+@fa "سیستم پرونده"
+@ar "نظام الملفات"
 package fs
-import "mem"
-func _strptr(s str) i64:
-    v void* = s as void*
+
+import mem
+import str
+
+func _strptr(s : str) : i64:
+    v := s as void*
     ret v as i64
 end
-extern "C":
-    func fopen(path str, mode str) void*
-    func fclose(fp void*) i32
-    func fread(ptr void*, size u64, nmemb u64, stream void*) u64
-    func fwrite(ptr void*, size u64, nmemb u64, stream void*) u64
-    func fgetc(stream void*) i32
-    func fseek(fp void*, off i32, whence i32) i32
-    func salam_open(path str, mode str) File*:
-        fp void* = fopen(path, mode)
+
+extern:
+    func fopen(path : str, mode : str) : void*
+    func fclose(fp : void*) : int
+    func fread(ptr : void*, size : u64, nmemb : u64, stream : void*) : u64
+    func fwrite(ptr : void*, size : u64, nmemb : u64, stream : void*) : u64
+    func fgetc(stream : void*) : int
+    func fseek(fp : void*, off : int, whence : int) : int
+    func salam_open(path : str, mode : str) : File*:
+        fp := fopen(path, mode)
         if fp == null: ret null end
         ret fp as File*
     end
-    func salam_file_read(f File*, size u64) str:
+    func salam_file_read(f : File*, size : u64) : str:
         if f == null: ret "" end
-        fp void* = f as void*
-        buf void* = mem.AllocateZeroed(size + (1 as u64))
+        fp := f as void*
+        buf := mem.AllocateZeroed(size + (1 as u64))
         fread(buf, 1 as u64, size, fp)
         ret buf as str
     end
-    func salam_file_readline(f File*) str:
+    func salam_file_readline(f : File*) : str:
         if f == null: ret "" end
-        fp void* = f as void*
-        mut out str = ""
-        mut c i32 = fgetc(fp)
-        while c != -1:
-            if c == 10: ret out end
-            out = out.concat(char_from_code(c))
+        fp := f as void*
+        mut sb := str.NewBuilder()
+        defer str.BufFree(sb)
+        mut c := fgetc(fp)
+        until c != -1 && c != 10:
+            str.BufAppendChar(sb, c)
             c = fgetc(fp)
         end
+        out := str.BufStr(sb)
         ret out
     end
-    func salam_file_write(f File*, data str) i32:
+    func salam_file_write(f : File*, data : str) : int:
         if f == null: ret 0 - 1 end
-        fp void* = f as void*
-        n u64 = data.len() as u64
-        w u64 = fwrite(data as void*, 1 as u64, n, fp)
-        ret w as i32
+        fp := f as void*
+        n := data.len() as u64
+        w := fwrite(data as void*, 1 as u64, n, fp)
+        ret w as int
     end
-    func salam_file_close(f File*):
+    func salam_file_close(f : File*):
         if f == null: ret end
         fclose(f as void*)
     end
-    func salam_file_seek(f File*, off i64, whence i32) i32:
+    func salam_file_seek(f : File*, off : i64, whence : int) : int:
         if f == null: ret 0 - 1 end
-        fp void* = f as void*
-        mut w i32 = 0
+        fp := f as void*
+        mut w := 0
 
-        if whence == 1: w = 1 end
-
-        if whence == 2: w = 2 end
+        if whence == 1: w = 1
+        else whence == 2: w = 2
+        end
 
         if _fs_seek64(fp, off, w) == 0: ret 0 end
         ret 0 - 1
     end
 end
 
-@if SALAM_OS_WINDOWS
-extern "C":
-    func _fseeki64(fp void*, off i64, whence i32) i32
+if SALAM_OS_WINDOWS:
+    extern:
+        func _fseeki64(fp : void*, off : i64, whence : int) : int
+    end
+
+    func _fs_seek64(fp : void*, off : i64, w : int) : int: ret _fseeki64(fp, off, w) end
+else:
+    extern:
+        func fseeko(fp : void*, off : i64, whence : int) : int
+    end
+
+    func _fs_seek64(fp : void*, off : i64, w : int) : int: ret fseeko(fp, off, w) end
 end
 
-func _fs_seek64(fp void*, off i64, w i32) i32: ret _fseeki64(fp, off, w) end
-@else
-extern "C":
-    func fseeko(fp void*, off i64, whence i32) i32
-end
-
-func _fs_seek64(fp void*, off i64, w i32) i32: ret fseeko(fp, off, w) end
-@end
-
-func _ld_push(arr void*, n i32, cap_box void*, name str) void*:
-    mut cap i32* = cap_box as i32*
-    mut a void* = arr
+func _ld_push(arr : void*, n : int, cap_box : void*, name : str) : void*:
+    cap := cap_box as int*
+    mut a := arr
     if n >= cap[0]:
         if cap[0] == 0: cap[0] = 8 else:
             cap[0] = cap[0] * 2
         end
         a = mem.Reallocate(a, (cap[0] * 8) as u64)
     end
-    mut a64 i64* = a as i64*
+    a64 := a as i64*
     a64[n] = _strptr(name.substr(0, name.len()))
     ret a
 end
 
-func _ld_skip(name str) bool:
-    if name == ".": ret true end
-    if name == "..": ret true end
-    ret false
-end
-@if SALAM_OS_WINDOWS
-extern "C":
-    func FindFirstFileA(pat str, data void*) void*
-    func FindNextFileA(h void*, data void*) i32
-    func FindClose(h void*) i32
-end
-extern "C":
-    func salam_os_listdir(path str, out_count void*) void*:
-        mut oc i32* = out_count as i32*
-        fd void* = mem.Allocate(320 as u64)
-        h void* = FindFirstFileA(path.concat("/*"), fd)
-        mut arr void* = null
-        mut n i32 = 0
-        cap_box void* = mem.AllocateZeroed(4 as u64)
-        if (h as i64) != (0 - 1):
-            mut more i32 = 1
-            while more != 0:
-                np void* = ((fd as i64) + 44) as void*
-                nm str = np as str
-                if _ld_skip(nm) == false:
-                    arr = _ld_push(arr, n, cap_box, nm)
-                    n = n + 1
-                end
-                more = FindNextFileA(h, fd)
-            end
-            FindClose(h)
-        end
-        mem.Free(fd)
-        mem.Free(cap_box)
-        if arr == null: arr = mem.Allocate(8 as u64) end
-        oc[0] = n
-        ret arr
+func _ld_skip(name : str) : bool:
+    if name == ".": ret true
+    else name == "..": ret true
+    else: ret false
     end
 end
-@else
-extern "C":
-    func opendir(path str) void*
-    func readdir(d void*) void*
-    func closedir(d void*) i32
-end
-@if SALAM_OS_MAC
-func _dname_off() i64: ret 21 end
-@elif SALAM_OS_BSD
-func _dname_off() i64: ret 24 end
-@else
-func _dname_off() i64: ret 19 end
-
-@end
-extern "C":
-    func salam_os_listdir(path str, out_count void*) void*:
-        mut oc i32* = out_count as i32*
-        mut arr void* = null
-        mut n i32 = 0
-        cap_box void* = mem.AllocateZeroed(4 as u64)
-        off i64 = _dname_off()
-        d void* = opendir(path)
-        if d != null:
-            mut e void* = readdir(d)
-            while e != null:
-                np void* = ((e as i64) + off) as void*
-                nm str = np as str
-                if _ld_skip(nm) == false:
-                    arr = _ld_push(arr, n, cap_box, nm)
-                    n = n + 1
+if SALAM_OS_WINDOWS:
+    extern:
+        func FindFirstFileA(pat : str, data : void*) : void*
+        func FindNextFileA(h : void*, data : void*) : int
+        func FindClose(h : void*) : int
+    end
+    extern:
+        func salam_os_listdir(path : str, out_count : void*) : void*:
+            mut oc := out_count as int*
+            fd := mem.Allocate(320 as u64)
+            h := FindFirstFileA(path.concat("/*"), fd)
+            mut arr := null as void*
+            mut n := 0
+            cap_box := mem.AllocateZeroed(4 as u64)
+            if (h as i64) != (0 - 1):
+                mut more := 1
+                until more != 0:
+                    np := ((fd as i64) + 44) as void*
+                    nm := np as str
+                    if _ld_skip(nm) == false:
+                        arr = _ld_push(arr, n, cap_box, nm)
+                        n += 1
+                    end
+                    more = FindNextFileA(h, fd)
                 end
-                e = readdir(d)
+                FindClose(h)
             end
-            closedir(d)
+            mem.Free(fd)
+            mem.Free(cap_box)
+            if arr == null: arr = mem.Allocate(8 as u64) end
+            oc[0] = n
+            ret arr
         end
-        mem.Free(cap_box)
-        if arr == null: arr = mem.Allocate(8 as u64) end
-        oc[0] = n
-        ret arr
+    end
+else:
+    extern:
+        func opendir(path : str) : void*
+        func readdir(d : void*) : void*
+        func closedir(d : void*) : int
+    end
+    if SALAM_OS_MAC:
+        func _dname_off() : i64: ret 21 end
+    else SALAM_OS_BSD:
+        func _dname_off() : i64: ret 24 end
+    else:
+        func _dname_off() : i64: ret 19 end
+    end
+    extern:
+        func salam_os_listdir(path : str, out_count : void*) : void*:
+            oc := out_count as int*
+            mut arr := null as void*
+            mut n := 0
+            cap_box := mem.AllocateZeroed(4 as u64)
+            off := _dname_off()
+            d := opendir(path)
+            if d != null:
+                mut e := readdir(d)
+                until e != null:
+                    np := ((e as i64) + off) as void*
+                    nm := np as str
+                    if _ld_skip(nm) == false:
+                        arr = _ld_push(arr, n, cap_box, nm)
+                        n += 1
+                    end
+                    e = readdir(d)
+                end
+                closedir(d)
+            end
+            mem.Free(cap_box)
+            if arr == null: arr = mem.Allocate(8 as u64) end
+            oc[0] = n
+            ret arr
+        end
     end
 end
-
-@end

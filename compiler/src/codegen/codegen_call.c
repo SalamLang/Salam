@@ -105,6 +105,17 @@ static const char *call_value(cg_t *cg, ast_node_t *n, ast_node_t *callee)
                   tmp, cg_expr(cg, callee), cret, cps, tmp, tmp, args);
 }
 
+/* 'extern func(...)' values are raw C-ABI function pointers (no closure env
+ * word) - call the address directly instead of the lambda deref-and-prepend
+ * convention call_value() uses. See AST_TYPE.is_extern in sema_type.c. */
+static const char *call_raw_ptr(cg_t *cg, ast_node_t *n, ast_node_t *callee)
+{
+    const char *cret = cg_ctype(cg, raw_ret_of(callee->type_str));
+    const char *cps = raw_cast_params(cg, callee->type_str);
+    const char *args = call_args(cg, n, NULL);
+    return cg_fmt(cg, "((%s(*)%s)(%s))(%s)", cret, cps, cg_expr(cg, callee), args);
+}
+
 static const char *cg_print_legacy(cg_t *cg, ast_node_t *n, bool nl, int err)
 {
     sb_t b;
@@ -145,9 +156,19 @@ static const char *cg_print_legacy(cg_t *cg, ast_node_t *n, bool nl, int err)
     return r;
 }
 
+static const char *cg_order_stdout(cg_t *cg, const char *printf_expr)
+{
+    if (!cg->single_threaded) return printf_expr;
+    return cg_fmt(cg, "({ salam_out_flush(); %s; fflush(stdout); })", printf_expr);
+}
+
 static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
 {
-    if (err) return cg_print_legacy(cg, n, nl, err);
+    if (err) {
+        const char *e = cg_print_legacy(cg, n, nl, err);
+        if (cg->single_threaded) return cg_fmt(cg, "({ salam_out_flush(); %s; })", e);
+        return e;
+    }
     vec_t segs;
     vec_init(&segs);
     pf_build(cg->a, n, nl, &segs);
@@ -156,7 +177,30 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
         size_t i = 0;
         for (; i < segs.len; i++)
             if (((pf_seg_t *)segs.data[i])->kind == PF_CHAR)
-                return cg_print_legacy(cg, n, nl, err);
+                return cg_order_stdout(cg, cg_print_legacy(cg, n, nl, err));
+    }
+    if (cg->single_threaded) {
+        bool all_lit = true;
+        sb_t raw;
+        sb_init(&raw);
+        {
+            size_t i = 0;
+            for (; i < segs.len; i++) {
+                pf_seg_t *s = (pf_seg_t *)segs.data[i];
+                if (s->kind != PF_LIT) {
+                    all_lit = false;
+                    break;
+                }
+                sb_puts(&raw, s->text);
+            }
+        }
+        if (all_lit) {
+            size_t rawlen = raw.len;
+            const char *lit = cg_cescape(cg, sb_cstr(&raw));
+            sb_free(&raw);
+            return cg_fmt(cg, "SALAM_OUT_LIT(%s, %zu)", lit, rawlen);
+        }
+        sb_free(&raw);
     }
     sb_t fmt;
     sb_init(&fmt);
@@ -210,7 +254,7 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
     const char *al = arena_strdup(cg->a, sb_cstr(&args));
     sb_free(&fmt);
     sb_free(&args);
-    return cg_fmt(cg, "printf(%s%s)", cfmt, al);
+    return cg_order_stdout(cg, cg_fmt(cg, "printf(%s%s)", cfmt, al));
 }
 
 static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
@@ -241,8 +285,8 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
         const char *arg = cg_expr(cg, (ast_node_t *)n->list.data[1]);
         return cg_fmt(cg, "((void(*)(int64_t))(intptr_t)(%s))((int64_t)(%s))", fnp, arg);
     }
-    bool is_print = (!strcmp(nm, "print") || !strcmp(nm, "_"));
-    bool is_println = (!strcmp(nm, "println") || !strcmp(nm, "__"));
+    bool is_print = !strcmp(nm, "print");
+    bool is_println = !strcmp(nm, "println");
     bool is_printerr = !strcmp(nm, "printerr");
     bool is_printerrln = !strcmp(nm, "printerrln");
     if (is_print || is_println || is_printerr || is_printerrln) {
@@ -286,12 +330,15 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
     }
     if (!strcmp(nm, "len") && n->list.len == 1) {
         ast_node_t *arg = (ast_node_t *)n->list.data[0];
+        long klen;
         if (cg_is_slice_ts(arg->type_str))
             return cg_fmt(cg, "(int32_t)(%s).len", cg_expr(cg, arg));
         if (arg->type_str && strchr(arg->type_str, '[')) {
             long sz = array_size_of(arg->type_str);
             return cg_fmt(cg, "%ld", sz);
         }
+        klen = ast_str_lit_len(arg);
+        if (klen >= 0) return cg_fmt(cg, "%ld", klen);
         return cg_fmt(cg, "(int32_t)strlen(%s)", cg_expr(cg, arg));
     }
     if (!strcmp(nm, "char_code") && n->list.len == 1) {
@@ -318,15 +365,32 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
         return r;
     }
     symbol_t *fsym = scope_lookup(cg->sem->global, nm);
+    const char *home_pkg = NULL;
+    if (!fsym && cg->cur_fn_home) {
+        symbol_t *hs = scope_lookup(cg->cur_fn_home, nm);
+        if (hs && hs->kind == SYM_FUNC) {
+            fsym = hs;
+            home_pkg = hs->pkgname;
+        }
+    }
+    if (!fsym && cg->cur_struct && cg->cur_struct->home) {
+        symbol_t *hs = scope_lookup(cg->cur_struct->home, nm);
+        if (hs && hs->kind == SYM_FUNC) {
+            fsym = hs;
+            home_pkg = hs->pkgname;
+        }
+    }
     func_sig_t *sig = fsym ? pick_overload(cg, fsym, n) : NULL;
     bool is_extern_call = sig && sig->decl && sig->decl->is_extern;
     bool inst_fn = sig && sig->decl && sig->decl->synthetic;
-    const char *mangled = is_extern_call ? nm
-                          : inst_fn      ? cg_mangle_in(cg, "g", NULL, nm, &sig->params)
-                          : sig          ? cg_mangle(cg, NULL, nm, &sig->params)
-                                         : nm;
+    const char *mangled =
+        is_extern_call ? nm
+        : inst_fn      ? cg_mangle_in(cg, "g", NULL, nm, &sig->params)
+        : sig ? cg_mangle_in(cg, home_pkg ? home_pkg : cg->pkg, NULL, nm, &sig->params)
+              : nm;
     const char *args = call_args(cg, n, sig);
-    if (sig && type_is_byval_agg(sig->ret)) return call_sret(cg, sig->ret, mangled, args);
+    if (sig && type_is_byval_agg(sig->ret) && !is_extern_call)
+        return call_sret(cg, sig->ret, mangled, args);
     return cg_fmt(cg, "%s(%s)", mangled, args);
 }
 
@@ -334,15 +398,18 @@ static const char *call_pkg(cg_t *cg, ast_node_t *n, symbol_t *pk, ast_node_t *c
 {
     symbol_t *fn = scope_lookup_local(pk->members, callee->name);
     func_sig_t *sig = fn ? pick_overload(cg, fn, n) : NULL;
+    bool is_extern_call = sig && sig->decl && sig->decl->is_extern;
     vec_t empty;
     vec_init(&empty);
 
-    const char *mangled = (sig && sig->decl && sig->decl->synthetic)
+    const char *mangled = is_extern_call ? callee->name
+                          : (sig && sig->decl && sig->decl->synthetic)
                               ? cg_mangle_in(cg, "g", NULL, callee->name, &sig->params)
                               : cg_mangle_in(cg, pk->pkgname, NULL, callee->name,
                                              sig ? &sig->params : &empty);
     const char *args = call_args(cg, n, sig);
-    if (sig && type_is_byval_agg(sig->ret)) return call_sret(cg, sig->ret, mangled, args);
+    if (sig && type_is_byval_agg(sig->ret) && !is_extern_call)
+        return call_sret(cg, sig->ret, mangled, args);
     return cg_fmt(cg, "%s(%s)", mangled, args);
 }
 
@@ -355,8 +422,8 @@ static const char *call_dyn(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t
     int t = ++cg->tmpn;
     const char *dynct = cg_ctype(cg, objts);
     if (!strcmp(callee->name, "free"))
-        return cg_fmt(cg, "({ %s __dv%d = (%s); salam_free(__dv%d%sdata); })", dynct, t,
-                      recv, t, acc);
+        return cg_fmt(cg, "({ %s __dv%d = (%s); " SALAM_MEM_FREE "(__dv%d%sdata); })",
+                      dynct, t, recv, t, acc);
     const char *as = call_args_lead(cg, n, NULL);
     return cg_fmt(cg, "({ %s __dv%d = (%s); __dv%d%svtable->%s(__dv%d%sdata%s); })",
                   dynct, t, recv, t, acc, cg_cident(cg, callee->name), t, acc, as);
@@ -380,8 +447,12 @@ static const char *call_file(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_
 
 static const char *call_str(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t *callee)
 {
-    const char *recv = cg_expr(cg, obj);
     const char *m = callee->name;
+    if (!strcmp(m, "len")) {
+        long klen = ast_str_lit_len(obj);
+        if (klen >= 0) return cg_fmt(cg, "%ld", klen);
+    }
+    const char *recv = cg_expr(cg, obj);
     const char *a0 = arg_at(cg, n, 0);
     const char *a1 = arg_at(cg, n, 1);
     if (!strcmp(m, "len")) return cg_fmt(cg, "(int32_t)strlen(%s)", recv);
@@ -472,11 +543,13 @@ static const char *call_impl(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_
 static const char *call_member(cg_t *cg, ast_node_t *n, ast_node_t *callee)
 {
     ast_node_t *obj = callee->a;
-    if (obj && obj->kind == AST_IDENTIFIER) {
+    if (obj && obj->kind == AST_IDENTIFIER && !local_known(cg, obj->name)) {
         symbol_t *pk = scope_lookup(cg->sem->global, obj->name);
 
         if ((!pk || pk->kind != SYM_PACKAGE) && cg->cur_struct && cg->cur_struct->home)
             pk = scope_lookup(cg->cur_struct->home, obj->name);
+        if ((!pk || pk->kind != SYM_PACKAGE) && cg->cur_fn_home)
+            pk = scope_lookup(cg->cur_fn_home, obj->name);
         if (pk && pk->kind == SYM_PACKAGE) return call_pkg(cg, n, pk, callee);
     }
     const char *objts = obj->type_str ? obj->type_str : "";
@@ -496,6 +569,8 @@ static const char *call_member(cg_t *cg, ast_node_t *n, ast_node_t *callee)
 const char *cg_call(cg_t *cg, ast_node_t *n)
 {
     ast_node_t *callee = n->a;
+    if (callee && callee->type_str && !strncmp(callee->type_str, "externfunc(", 11))
+        return call_raw_ptr(cg, n, callee);
     if (callee && callee->type_str && !strncmp(callee->type_str, "func(", 5))
         return call_value(cg, n, callee);
     if (callee && callee->kind == AST_IDENTIFIER) return call_ident(cg, n, callee);

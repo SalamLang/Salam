@@ -40,9 +40,10 @@ typedef enum {
     AST_VAR_DECL,
     AST_ASSIGN,
     AST_IF,
-    AST_WHILE,
+    AST_UNTIL,
     AST_FOR,
     AST_REPEAT,
+    AST_EACH,
     AST_RETURN,
     AST_BREAK,
     AST_CONTINUE,
@@ -50,14 +51,17 @@ typedef enum {
     AST_EXPR_STMT,
     AST_BINARY,
     AST_UNARY,
+    AST_INCDEC,
     AST_CAST,
     AST_LITERAL,
     AST_IDENTIFIER,
+    AST_FUNC_ADDR,
     AST_THIS,
     AST_CALL,
     AST_MEMBER,
     AST_INDEX,
     AST_SLICE,
+    AST_TERNARY,
     AST_LAMBDA,
     AST_ARRAY_LIT,
     AST_STRUCT_LIT,
@@ -86,7 +90,13 @@ struct ast_node {
     bool is_dyn;
     bool is_ref;
     bool is_pub;
+    bool is_inline;
+    bool is_noinline;
+    bool is_pure;
+    bool is_noret;
+    bool is_deprecated;
     bool is_slice;
+    bool is_prefix;
     ast_node_t *type;
     ast_node_t *a, *b, *c, *d;
     vec_t list;
@@ -103,6 +113,8 @@ ast_node_t *ast_new(arena_t *a, ast_kind_t kind, const src_span_t *span);
 void ast_add(arena_t *a, ast_node_t *parent, ast_node_t *child);
 
 const char *ast_kind_name(ast_kind_t kind);
+
+long ast_str_lit_len(const ast_node_t *n);
 
 ast_node_t *ast_clone(arena_t *a, const ast_node_t *n);
 

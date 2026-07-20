@@ -15,11 +15,29 @@
 #include "core/prelude.h"
 #include "core/sal_format.h"
 #include "semantic/sema_internal.h"
+#include "langpack/langpack.h"
 #include "i18n/i18n.h"
 
 static type_t *ty(sema_t *s, type_kind_t k)
 {
     return sema_ty(s, k);
+}
+
+static bool block_has_valued_ret(const ast_node_t *n)
+{
+    if (!n) return false;
+    if (n->kind == AST_LAMBDA) return false;
+    if (n->kind == AST_RETURN && n->a) return true;
+    if (block_has_valued_ret(n->a)) return true;
+    if (block_has_valued_ret(n->b)) return true;
+    if (block_has_valued_ret(n->c)) return true;
+    if (block_has_valued_ret(n->d)) return true;
+    {
+        size_t i = 0;
+        for (; i < n->list.len; i++)
+            if (block_has_valued_ret((const ast_node_t *)n->list.data[i])) return true;
+    }
+    return false;
 }
 
 func_sig_t *build_sig(sema_t *s, ast_node_t *fn, symbol_t *owner)
@@ -31,6 +49,9 @@ func_sig_t *build_sig(sema_t *s, ast_node_t *fn, symbol_t *owner)
     sig->decl = fn;
     sig->owner = owner;
     sig->variadic = fn->is_variadic;
+    if (!fn->type && !fn->is_extern && !fn->is_noret && fn->a &&
+        block_has_valued_ret(fn->a))
+        sig->infer_ret = true;
     size_t required = 0;
     bool seen_default = false;
     {
@@ -59,6 +80,19 @@ symbol_t *get_or_make_func(sema_t *s, scope_t *sc, const char *name, sym_kind_t 
     return sym;
 }
 
+static bool link_spec_is_path(const char *spec)
+{
+    if (strpbrk(spec, "/\\")) return true;
+    static const char *const exts[] = {".a", ".so", ".dll", ".lib", ".dylib"};
+    size_t n = strlen(spec);
+    size_t i = 0;
+    for (; i < sizeof(exts) / sizeof(exts[0]); i++) {
+        size_t el = strlen(exts[i]);
+        if (n > el && !strcmp(spec + n - el, exts[i])) return true;
+    }
+    return false;
+}
+
 static void check_link(sema_t *s, ast_node_t *d)
 {
     const char *spec =
@@ -70,7 +104,7 @@ static void check_link(sema_t *s, ast_node_t *d)
     const char *kind = d->name;
     if (kind && !strcmp(kind, "framework")) return;
     if (spec[0] == '-') return;
-    if (!strpbrk(spec, "/\\.")) return;
+    if (!link_spec_is_path(spec)) return;
     bool absolute = spec[0] == '/' || spec[0] == '\\' ||
                     (isalpha((unsigned char)spec[0]) && spec[1] == ':');
     const char *full = spec;
@@ -103,6 +137,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
                 symbol_t *sym = symbol_new(s->a, SYM_STRUCT, d->name);
                 sym->decl = d;
                 sym->is_pub = d->is_pub;
+                sym->pkgname = s->pkg;
 
                 const char *c_type_name = d->name;
                 if (s->pkg && s->pkg[0] && strcmp(s->pkg, "main") != 0) {
@@ -176,6 +211,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
                             symbol_t *f = symbol_new(s->a, SYM_FIELD, m->name);
                             f->type = sema_resolve_type(s, m->type);
                             f->decl = m;
+                            f->is_pub = m->is_pub;
                             if (f->type && f->type->kind == TY_DYN)
                                 SERR(s, 2, &m->span,
                                      "field '%s': a `dyn` value cannot yet be a struct "
@@ -192,6 +228,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
                             symbol_t *mm =
                                 get_or_make_func(s, sym->members, m->name, SYM_METHOD);
                             if (!mm->decl) mm->decl = m;
+                            if (m->is_pub) mm->is_pub = true;
                             vec_push(s->a, &mm->overloads, build_sig(s, m, sym));
                             mm->type = sym->type;
                         }
@@ -234,7 +271,7 @@ void sema_collect(sema_t *s, ast_node_t *program)
                 }
                 symbol_t *iface = scope_lookup(s->global, d->name);
                 if (!iface || iface->kind != SYM_INTERFACE)
-                    SERR(s, 1, &d->span, "'%s' in `impl ... for ...` is not an interface",
+                    SERR(s, 1, &d->span, "'%s' in `impl ... on ...` is not an interface",
                          d->name);
                 {
                     size_t j = 0;
@@ -275,6 +312,8 @@ void sema_collect(sema_t *s, ast_node_t *program)
             case AST_FUNC_DEF: {
                 symbol_t *fsym = get_or_make_func(s, s->global, d->name, SYM_FUNC);
                 if (!fsym->decl) fsym->decl = d;
+                if (!fsym->pkgname) fsym->pkgname = s->pkg;
+                if (!fsym->home) fsym->home = s->global;
                 if (d->is_pub) fsym->is_pub = true;
                 if (d->typarams.len > 0) break;
                 vec_push(s->a, &fsym->overloads, build_sig(s, d, NULL));
@@ -318,6 +357,37 @@ static func_sig_t *find_sig(symbol_t *fsym, ast_node_t *decl)
 
 static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_t *sig)
 {
+    if (sig) {
+        if (sig->checked) return;
+        sig->checked = true;
+        sig->in_check = true;
+    }
+    if (fn->is_noret && sig && !sig->infer_ret && sig->ret && sig->ret->kind != TY_VOID)
+        SERR(s, 12, &fn->span,
+             "'noret' function '%s' cannot declare a return type: it never returns",
+             fn->name);
+    if (fn->is_noret && fn->is_pure)
+        SERR(s, 12, &fn->span,
+             "'%s' cannot be both 'pure' and 'noret': a pure function must return",
+             fn->name);
+    if (fn->is_pure && sig && !sig->infer_ret && sig->ret && sig->ret->kind == TY_VOID)
+        SERR(s, 12, &fn->span,
+             "'pure' function '%s' must return a value: a pure function without a "
+             "result has no effect",
+             fn->name);
+    if (fn->is_pure) {
+        size_t pi = 0;
+        for (; pi < fn->list.len; pi++) {
+            ast_node_t *prm = (ast_node_t *)fn->list.data[pi];
+            if (prm->kind == AST_PARAM && prm->is_ref) {
+                SERR(s, 12, &fn->span,
+                     "'pure' function '%s' cannot take reference parameter '%s': "
+                     "writing through it would be a side effect",
+                     fn->name, prm->name);
+                break;
+            }
+        }
+    }
     scope_t *home = NULL;
     if (!owner) {
         symbol_t *fs = scope_lookup_local(s->global, fn->name);
@@ -331,6 +401,8 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
     type_t *saved_self = s->self_type;
     func_sig_t *saved_func = s->cur_func;
     scope_t *saved_gp = s->gen_pkg;
+    int saved_loop = s->loop_depth;
+    s->loop_depth = 0;
     s->cur = sc;
     s->cur_func = sig;
     if (home) s->gen_pkg = home;
@@ -354,6 +426,8 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
             type_t *pt = (sig && i < sig->params.len) ? (type_t *)sig->params.data[i]
                                                       : sema_resolve_type(s, param->type);
             if (param->a->kind == AST_STRUCT_LIT && pt && pt->kind == TY_STRUCT)
+                s->expected = pt;
+            else if (param->a->kind == AST_LITERAL && pt)
                 s->expected = pt;
             type_t *dt = sema_check_expr(s, param->a);
             if (pt && dt && !type_assignable(pt, dt))
@@ -394,7 +468,40 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
         SERR(s, 61, &fn->span,
              "empty function '%s' (its body must contain at least one statement)",
              fn->name);
-    if (fn->a) sema_check_block(s, fn->a);
+    {
+        size_t errs0 = s->diag ? s->diag->errors : 0;
+        if (fn->a) sema_check_block(s, fn->a);
+        if (fn->a && sig && sig->ret_widened) {
+            if (s->diag && s->diag->errors == errs0) {
+                bool saved_rq = s->requal;
+                int rounds = 0;
+                s->requal = true;
+                while (sig->ret_widened && rounds < 3) {
+                    sig->ret_widened = false;
+                    rounds++;
+                    LOG_D(s->log, PH_SEMANTIC,
+                          "re-check '%s' with widened return type '%s'", fn->name,
+                          type_to_string(s->tc, sig->ret));
+                    sema_check_block(s, fn->a);
+                }
+                s->requal = saved_rq;
+            } else
+                sig->ret_widened = false;
+        }
+    }
+    if (fn->a && sig && fn->type && type_is_float(sig->ret) && sig->ret_int_seen &&
+        !sig->ret_float_seen)
+        SERR(s, 67, &sig->ret_int_span,
+             "function '%s' declares return type '%s' but every 'ret' returns an "
+             "integer; return a '%s' value or declare an integer return type",
+             fn->name, type_to_string(s->tc, sig->ret), type_to_string(s->tc, sig->ret));
+    if (fn->a && sig && sig->ret && sig->ret->kind != TY_VOID &&
+        !type_is_error(sig->ret) && !fn->is_noret && !fn->is_extern &&
+        !sema_stmt_terminates(s, fn->a))
+        SWARN(s, 71, &fn->span,
+              "function '%s' can fall off its end without returning a '%s' value; "
+              "add a final 'ret'",
+              fn->name, type_to_string(s->tc, sig->ret));
     LOG_D(s->log, PH_SEMANTIC, "exit function '%s'", fn->name);
 
     if (fn->a) {
@@ -414,6 +521,47 @@ static void check_function(sema_t *s, ast_node_t *fn, symbol_t *owner, func_sig_
     s->self_type = saved_self;
     s->cur_func = saved_func;
     s->gen_pkg = saved_gp;
+    s->loop_depth = saved_loop;
+    if (sig) {
+        sig->in_check = false;
+        sig->infer_ret = false;
+    }
+}
+
+void sema_check_function_now(sema_t *s, func_sig_t *sig)
+{
+    if (!sig || !sig->decl) return;
+    check_function(s, sig->decl, sig->owner, sig);
+}
+
+void sema_check_unused_funcs(sema_t *s)
+{
+    const char *entry = langpack_entry_for(s->lang);
+    bool has_entry = false;
+    {
+        size_t i = 0;
+        for (; i < s->global->symbols.len; i++) {
+            symbol_t *f = (symbol_t *)s->global->symbols.data[i];
+            if (f->kind == SYM_FUNC && f->name &&
+                (strcmp(f->name, "main") == 0 || strcmp(f->name, entry) == 0)) {
+                has_entry = true;
+                break;
+            }
+        }
+    }
+    if (!has_entry) return;
+    size_t i = 0;
+    for (; i < s->global->symbols.len; i++) {
+        symbol_t *f = (symbol_t *)s->global->symbols.data[i];
+        if (f->kind != SYM_FUNC || f->used || f->is_pub) continue;
+        if (!f->decl || f->decl->synthetic || f->decl->is_extern) continue;
+        if (!f->name || f->name[0] == '_') continue;
+        if (strcmp(f->name, "main") == 0 || strcmp(f->name, entry) == 0) continue;
+        SERR(s, 66, &f->decl->span,
+             "unused function '%s' (call it, mark it 'pub', or prefix its name with "
+             "'_')",
+             f->name);
+    }
 }
 
 static void check_toplevel(sema_t *s, ast_node_t *d)
@@ -442,6 +590,8 @@ static void check_toplevel(sema_t *s, ast_node_t *d)
                     } else {
                         if (f && m->a->kind == AST_STRUCT_LIT && f->type &&
                             f->type->kind == TY_STRUCT)
+                            s->expected = f->type;
+                        else if (f && m->a->kind == AST_LITERAL)
                             s->expected = f->type;
                         vt = sema_check_expr(s, m->a);
                     }
@@ -487,23 +637,17 @@ static void check_toplevel(sema_t *s, ast_node_t *d)
     }
 }
 
-/*
- * Enforce that every primitive type name a file writes matches that file's own
- * language: a Persian source uses Persian type names (صحیح۳۲, رشته, ...) and an
- * English source uses English ones. Only the module's own authored annotations
- * are visited (synthetic generic instances and imported packages are checked in
- * their own language elsewhere), so interop with the English stdlib is fine.
- */
 static void lint_lang_types(sema_t *s, ast_node_t *n)
 {
     if (!n) return;
     if (n->kind == AST_TYPE && n->name && type_prim_kind_from_name(n->name, NULL) >= 0 &&
         type_prim_kind_from_name(n->name, s->lang) < 0) {
         bool fa = s->lang && s->lang[0] == 'f';
-        SERR(s, 1, &n->span,
-             fa ? i18n_tr("type name '%s' must be Persian in a Persian file")
-                : i18n_tr("type name '%s' must be English in an English file"),
-             n->name);
+        bool ar = s->lang && s->lang[0] == 'a';
+        const char *msg = fa   ? "type name '%s' must be Persian in a Persian file"
+                          : ar ? "type name '%s' must be Arabic in an Arabic file"
+                               : "type name '%s' must be English in an English file";
+        SERR(s, 1, &n->span, i18n_tr(msg), n->name);
     }
     lint_lang_types(s, n->type);
     lint_lang_types(s, n->a);

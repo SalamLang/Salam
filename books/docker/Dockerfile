@@ -8,6 +8,13 @@ LABEL org.opencontainers.image.description="XeLaTeX + xepersian toolchain that b
 COPY build.sh /usr/local/bin/build-books
 RUN chmod +x /usr/local/bin/build-books
 
+RUN mkdir -p /books && chown -R texlive:texlive /books
+
+ENV HOME=/tmp
+
+HEALTHCHECK NONE
+
 WORKDIR /books
+USER texlive
 ENTRYPOINT ["build-books"]
 CMD ["all"]

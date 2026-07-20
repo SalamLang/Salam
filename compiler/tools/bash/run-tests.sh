@@ -4,11 +4,45 @@
 set -u
 . "$(dirname "$0")/lib.sh"
 salam_ensure_compiler --quiet
-WORK=tests/.work
+WORK="${WORK:-${TMPDIR:-/tmp}/salam-run-tests-work.$$}"
 mkdir -p "$WORK"
+trap 'rm -rf "$WORK"' EXIT
 pass=0
 fail=0
 LANGS="${LANGS:-en fa ar}"
+NPROC="${NPROC:-$(command -v nproc >/dev/null 2>&1 && nproc || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
+RUN_ONE="$(dirname "$0")/run-one-build.sh"
+RUN_ONE_JS="$(dirname "$0")/run-one-js.sh"
+case "$SALAM" in
+/* | [A-Za-z]:*) SALAM_ABS="$SALAM" ;;
+*) SALAM_ABS="$(pwd)/$SALAM" ;;
+esac
+
+if [ -z "${SALAM_STD:-}" ] && [ -d "$(pwd)/std" ]; then
+    SALAM_STD="$(pwd)/std"
+    export SALAM_STD
+fi
+
+run_batch() {
+    jobs="$1"
+    runner="${2:-$RUN_ONE}"
+    [ -s "$jobs" ] || return 0
+    results="$WORK/.batch-results.$$"
+    # shellcheck disable=SC2016 # inner variables are expanded by the spawned sh, not here
+    tr '\n' '\0' <"$jobs" | xargs -0 -n1 -P "$NPROC" sh -c '
+        IFS="	"
+        set -- $1
+        label="$1"; f="$2"; lang="$3"; exp="$4"; extra="$5"
+        unset IFS
+        sh "'"$runner"'" "'"$SALAM_ABS"'" "'"$WORK"'" "$label" "$f" "$lang" "$exp" $extra
+    ' _ >"$results" 2>&1
+    cat "$results"
+    p=$(grep -c '^PASS' "$results")
+    fcount=$(grep -c '^FAIL' "$results")
+    pass=$((pass + p))
+    fail=$((fail + fcount))
+    rm -f "$results" "$jobs"
+}
 check_out() {
     if [ "$3" = "$(tr -d '\r' <"$2")" ]; then
         echo "PASS $1"
@@ -33,51 +67,57 @@ want() {
 }
 
 if want general; then
+    jobs="$WORK/.jobs-general.$$"
+    : >"$jobs"
     for lang in $LANGS; do
-        for f in tests/$lang/general/*.salam; do
+        for f in tests/"$lang"/general/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
             exp="tests/$lang/general/$name.out"
             [ -f "$exp" ] || continue
-            def=$(grep -o 'DEFINE: [A-Za-z0-9_]*' "$f" | sed 's/DEFINE: /-D/')
-            rm -f "$WORK/$name.exe"
-            "$SALAM" build "$f" --output="$WORK/$name.exe" --no-color --log-level=error --lang=$lang $def >/dev/null 2>&1
-            if [ ! -x "$WORK/$name.exe" ]; then
-                sleep 1
-                "$SALAM" build "$f" --output="$WORK/$name.exe" --no-color --log-level=error --lang=$lang $def >/dev/null 2>&1
-            fi
-            if [ ! -x "$WORK/$name.exe" ]; then
-                echo "FAIL general/$lang/$name (build failed)"
-                fail=$((fail + 1))
-                continue
-            fi
-            got=$("$WORK/$name.exe" 2>&1 | tr -d '\r')
-            check_out "general/$lang/$name" "$exp" "$got"
+            def=$(grep -o 'DEFINE: [A-Za-z0-9_]*' "$f" | sed 's/DEFINE: /-D/' | tr '\n' ' ')
+            printf 'general/%s/%s\t%s\t%s\t%s\t%s\n' "$lang" "$name" "$f" "$lang" "$exp" "${def:--}" >>"$jobs"
         done
     done
+    run_batch "$jobs"
 fi
 if want exec; then
     for lang in $LANGS; do
-        for f in tests/$lang/exec/*.salam; do
+        for f in tests/"$lang"/exec/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
             exp="tests/$lang/exec/$name.out"
             [ -f "$exp" ] || continue
-            got=$("$SALAM" exec "$f" --no-color --log-level=error --lang=$lang 2>&1 | tr -d '\r')
+            got=$("$SALAM" exec "$f" --no-color --log-level=error --lang="$lang" 2>&1 | tr -d '\r')
             check_out "exec/$lang/$name" "$exp" "$got"
         done
     done
 fi
-if want errors; then
+if want js; then
+    jobs="$WORK/.jobs-js.$$"
+    : >"$jobs"
     for lang in $LANGS; do
-        for f in tests/$lang/errors/*.salam; do
+        for f in tests/"$lang"/js/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            code=$(grep -oE '(EXPECT|انتظار): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار): //' | tr -d '\r')
-            out=$("$SALAM" "$f" --emit-symbol-xml --no-color --log-level=error --lang=$lang 2>&1 >/dev/null)
+            exp="tests/$lang/js/$name.out"
+            [ -f "$exp" ] || continue
+            printf 'js/%s/%s\t%s\t%s\t%s\t-\n' "$lang" "$name" "$f" "$lang" "$exp" >>"$jobs"
+        done
+    done
+    run_batch "$jobs" "$RUN_ONE_JS"
+fi
+if want errors; then
+    for lang in $LANGS; do
+        for f in tests/"$lang"/errors/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            case "$name" in _*) continue ;; esac
+            code=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
+            out=$("$SALAM" "$f" --emit-symbol-xml --no-color --log-level=error --lang="$lang" 2>&1 >/dev/null)
             if [ -n "$code" ] && echo "$out" | grep -qF "$code"; then
                 echo "PASS errors/$lang/$name ($code)"
                 pass=$((pass + 1))
@@ -91,12 +131,12 @@ if want errors; then
 fi
 if want layout; then
     for lang in $LANGS; do
-        for f in tests/$lang/layout/*.salam; do
+        for f in tests/"$lang"/layout/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            expect=$(grep -oE '(EXPECT|انتظار): .*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار): //' | tr -d '\r')
-            "$SALAM" layout build "$f" --inline --output="$WORK/$name.html" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
+            expect=$(grep -oE '(EXPECT|انتظار|توقع): .*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
+            "$SALAM" layout build "$f" --inline --output="$WORK/$name.html" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1
             if [ -f "$WORK/$name.html" ] && grep -qF "$expect" "$WORK/$name.html"; then
                 echo "PASS layout/$lang/$name (has '$expect')"
                 pass=$((pass + 1))
@@ -110,35 +150,35 @@ if want layout; then
 fi
 if want fmt; then
     for lang in $LANGS; do
-        for f in tests/$lang/fmt/*.salam; do
+        for f in tests/"$lang"/fmt/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             exp="tests/$lang/fmt/$name.out"
             [ -f "$exp" ] || continue
             cp "$f" "$WORK/$name.salam"
-            "$SALAM" fmt "$WORK/$name.salam" --lang=$lang --no-color --log-level=error >/dev/null 2>&1
-            "$SALAM" fmt "$WORK/$name.salam" --check --lang=$lang --no-color --log-level=error >/dev/null 2>&1
+            "$SALAM" fmt "$WORK/$name.salam" --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
+            "$SALAM" fmt "$WORK/$name.salam" --check --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
             idem=$?
             rm -f "$WORK/$name.exe"
-            "$SALAM" build "$WORK/$name.salam" --output="$WORK/$name.exe" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
+            "$SALAM" build "$WORK/$name.salam" --output="$WORK/$name.exe" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1
             if [ ! -x "$WORK/$name.exe" ]; then
                 sleep 1
-                "$SALAM" build "$WORK/$name.salam" --output="$WORK/$name.exe" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
+                "$SALAM" build "$WORK/$name.salam" --output="$WORK/$name.exe" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1
             fi
             got=$([ -x "$WORK/$name.exe" ] && "$WORK/$name.exe" 2>&1 | tr -d '\r')
 
             TAB=$(printf '\t')
             cp "$f" "$WORK/${name}_tab.salam"
-            "$SALAM" fmt "$WORK/${name}_tab.salam" --tabs --lang=$lang --no-color --log-level=error >/dev/null 2>&1
-            "$SALAM" fmt "$WORK/${name}_tab.salam" --tabs --check --lang=$lang --no-color --log-level=error >/dev/null 2>&1
+            "$SALAM" fmt "$WORK/${name}_tab.salam" --tabs --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
+            "$SALAM" fmt "$WORK/${name}_tab.salam" --tabs --check --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
             tabidem=$?
             hastab=1
             grep -q "$TAB" "$WORK/${name}_tab.salam" && hastab=0
             rm -f "$WORK/${name}_tab.exe"
-            "$SALAM" build "$WORK/${name}_tab.salam" --output="$WORK/${name}_tab.exe" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
+            "$SALAM" build "$WORK/${name}_tab.salam" --output="$WORK/${name}_tab.exe" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1
             if [ ! -x "$WORK/${name}_tab.exe" ]; then
                 sleep 1
-                "$SALAM" build "$WORK/${name}_tab.salam" --output="$WORK/${name}_tab.exe" --no-color --log-level=error --lang=$lang >/dev/null 2>&1
+                "$SALAM" build "$WORK/${name}_tab.salam" --output="$WORK/${name}_tab.exe" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1
             fi
             gottab=$([ -x "$WORK/${name}_tab.exe" ] && "$WORK/${name}_tab.exe" 2>&1 | tr -d '\r')
 
@@ -165,38 +205,25 @@ if want db; then
         }; done
         dbok=0
         if [ -n "$DBCC" ] && command -v ar >/dev/null 2>&1; then
-            if "$DBCC" -c "tests/$lang/db/mysql_mock.c" -o "$WORK/mysql_mock.o" >/dev/null 2>&1 &&
-                ar rcs "$WORK/libsalammock.a" "$WORK/mysql_mock.o" >/dev/null 2>&1; then
+            mkdir -p "$WORK/dbwork/.work"
+            if "$DBCC" -c "tests/$lang/db/mysql_mock.c" -o "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1 &&
+                ar rcs "$WORK/dbwork/.work/libsalammock.a" "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1; then
                 dbok=1
             fi
         fi
         if [ "$dbok" = "1" ]; then
-            for f in tests/$lang/db/*.salam; do
+            jobs="$WORK/.jobs-db-$lang.$$"
+            : >"$jobs"
+            for f in tests/"$lang"/db/*.salam; do
                 [ -e "$f" ] || continue
                 name=$(basename "$f" .salam)
                 case "$name" in _*) continue ;; esac
                 exp="tests/$lang/db/$name.out"
                 [ -f "$exp" ] || continue
-                exe="$WORK/db_${name}_$$.exe"
-                rm -f "$exe"
-                "$SALAM" build "$f" --output="$exe" --cc="$DBCC" --no-color --log-level=error --lang=$lang -DSALAM_DB_MOCK >/dev/null 2>&1
-                if [ ! -x "$exe" ]; then
-                    sleep 1
-                    "$SALAM" build "$f" --output="$exe" --cc="$DBCC" --no-color --log-level=error --lang=$lang -DSALAM_DB_MOCK >/dev/null 2>&1
-                fi
-                if [ ! -x "$exe" ]; then
-                    echo "FAIL db/$lang/$name (build failed)"
-                    fail=$((fail + 1))
-                    continue
-                fi
-                got=""
-                for _try in 1 2 3 4; do
-                    got=$("$exe" 2>&1 | tr -d '\r')
-                    case "$got" in *"Permission denied"* | "") sleep 1 ;; *) break ;; esac
-                done
-                rm -f "$exe"
-                check_out "db/$lang/$name" "$exp" "$got"
+                printf 'db/%s/%s\t%s\t%s\t%s\t%s\n' "$lang" "$name" "$f" "$lang" "$exp" \
+                    "--cc=$DBCC -DSALAM_DB_MOCK" >>"$jobs"
             done
+            run_batch "$jobs"
         else
             echo "SKIP db/$lang/* (no C compiler/ar to build the mysql mock)"
         fi
@@ -210,7 +237,7 @@ if want llvm; then
         probe=$(printf '%s' "$probe_raw" | tr -d '\r')
         rm -f _probe.ll _probe.ll.run.sh 2>/dev/null
         if [ "$probe" = "OK" ]; then
-            for f in tests/$lang/llvm/*.salam; do
+            for f in tests/"$lang"/llvm/*.salam; do
                 [ -e "$f" ] || continue
                 name=$(basename "$f" .salam)
                 case "$name" in _*) continue ;; esac

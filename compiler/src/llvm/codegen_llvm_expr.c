@@ -20,11 +20,11 @@ static const char *ll_arith_op(token_kind_t k, bool isflt, bool issigned)
 {
     switch (k) {
     case TK_PLUS:
-        return isflt ? "fadd" : "add";
+        return isflt ? "fadd" : (issigned ? "add nsw" : "add");
     case TK_MINUS:
-        return isflt ? "fsub" : "sub";
+        return isflt ? "fsub" : (issigned ? "sub nsw" : "sub");
     case TK_STAR:
-        return isflt ? "fmul" : "mul";
+        return isflt ? "fmul" : (issigned ? "mul nsw" : "mul");
     case TK_SLASH:
         return isflt ? "fdiv" : (issigned ? "sdiv" : "udiv");
     case TK_PERCENT:
@@ -78,17 +78,22 @@ static const char *ll_str_operand(ll_t *ll, ast_node_t *n)
         const char *t = ll_strconst(ll, "true"), *f = ll_strconst(ll, "false");
         ll_emit(ll, "%s = select i1 %s, ptr %s, ptr %s", r, v.ref, t, f);
     } else if (ts && !strcmp(ts, "char")) {
+        ll_need(ll, LL_H_CHARSTR);
         ll_emit(ll, "%s = call ptr @salam_ll_charstr(i32 %s)", r, ll_conv(ll, v, "i32"));
     } else if (ll_is_float(ts)) {
+        ll_need(ll, LL_H_F64STR);
         ll_emit(ll, "%s = call ptr @salam_ll_f64str(double %s)", r,
                 ll_conv(ll, v, "f64"));
     } else if (ll_is_int(ts)) {
-        if (ll_is_signed(ts))
+        if (ll_is_signed(ts)) {
+            ll_need(ll, LL_H_I64STR);
             ll_emit(ll, "%s = call ptr @salam_ll_i64str(i64 %s)", r,
                     ll_conv(ll, v, "i64"));
-        else
+        } else {
+            ll_need(ll, LL_H_U64STR);
             ll_emit(ll, "%s = call ptr @salam_ll_u64str(i64 %s)", r,
                     ll_conv(ll, v, "u64"));
+        }
     } else {
         ll_error(ll, n, "string concatenation with an unsupported operand type '%s'",
                  ts ? ts : "?");
@@ -104,6 +109,7 @@ static bool ll_binary_string(ll_t *ll, ast_node_t *n, token_kind_t op, llv_t *ou
     if (op == TK_PLUS && (as || bs)) {
         const char *L = ll_str_operand(ll, n->a), *R = ll_str_operand(ll, n->b);
         const char *r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_STRCAT);
         ll_emit(ll, "%s = call ptr @salam_ll_strcat(ptr %s, ptr %s)", r, L, R);
         *out = (llv_t){r, "str"};
         return true;
@@ -344,11 +350,34 @@ static llv_t ll_unary(ll_t *ll, ast_node_t *n)
         if (ll_is_float(rt))
             ll_emit(ll, "%s = fneg %s %s", r, ll_ty(ll, rt), cv);
         else
-            ll_emit(ll, "%s = sub %s 0, %s", r, ll_ty(ll, rt), cv);
+            ll_emit(ll, "%s = sub%s %s 0, %s", r, ll_is_signed(rt) ? " nsw" : "",
+                    ll_ty(ll, rt), cv);
         return (llv_t){r, rt};
     }
     ll_error(ll, n, "unary operator");
     return ll_poison(n->type_str);
+}
+
+static llv_t ll_incdec(ll_t *ll, ast_node_t *n)
+{
+    ast_node_t *tgt = n->a;
+    if (!tgt || (tgt->kind != AST_IDENTIFIER && tgt->kind != AST_MEMBER &&
+                 tgt->kind != AST_INDEX)) {
+        ll_error(ll, n, "operand of '++'/'--' is not assignable");
+        return ll_poison(n->type_str);
+    }
+    ll_addr_t a = ll_addr_of(ll, tgt);
+    const char *ts = a.ts;
+    const char *oldv = ll_new_tmp(ll);
+    ll_emit(ll, "%s = load %s, ptr %s", oldv, ll_ty(ll, ts), a.ptr);
+    bool flt = ll_is_float(ts);
+    const char *step = flt ? "1.0" : "1";
+    const char *op =
+        ll_arith_op(n->op == TK_PLUS_PLUS ? TK_PLUS : TK_MINUS, flt, ll_is_signed(ts));
+    const char *newv = ll_new_tmp(ll);
+    ll_emit(ll, "%s = %s %s %s, %s", newv, op, ll_ty(ll, ts), oldv, step);
+    ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, ts), newv, a.ptr);
+    return (llv_t){n->is_prefix ? newv : oldv, ts};
 }
 
 static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
@@ -357,6 +386,38 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
     vec_init(&segs);
     pf_build(ll->a, n, nl, &segs);
     if (segs.len == 0) return;
+
+    bool buffered = ll->single_threaded && !err;
+
+    if (buffered) {
+        bool all_lit = true;
+        {
+            size_t i = 0;
+            for (; i < segs.len; i++)
+                if (((pf_seg_t *)segs.data[i])->kind != PF_LIT) {
+                    all_lit = false;
+                    break;
+                }
+        }
+        if (all_lit) {
+            sb_t raw;
+            sb_init(&raw);
+            {
+                size_t i = 0;
+                for (; i < segs.len; i++)
+                    sb_puts(&raw, ((pf_seg_t *)segs.data[i])->text);
+            }
+            size_t rawlen = raw.len;
+            const char *lit = ll_strconst(ll, sb_cstr(&raw));
+            sb_free(&raw);
+            if (rawlen) {
+                ll_need(ll, LL_H_OUTBUF);
+                ll_emit(ll, "call void @salam_out_write(ptr %s, i64 %zu)", lit, rawlen);
+            }
+            return;
+        }
+    }
+
     sb_t fmt;
     sb_init(&fmt);
     sb_t args;
@@ -412,12 +473,23 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
         }
     }
     const char *f = ll_strconst(ll, sb_cstr(&fmt));
+    if (ll->single_threaded) {
+        ll_need(ll, LL_H_OUTBUF);
+        ll_emit(ll, "call void @salam_out_flush()");
+    }
     const char *t = ll_new_tmp(ll);
-    if (err)
+    if (err) {
         ll_emit(ll, "%s = call i32 (i32, ptr, ...) @dprintf(i32 2, ptr %s%s)", t, f,
                 sb_cstr(&args));
-    else
+    } else {
         ll_emit(ll, "%s = call i32 (ptr, ...) @printf(ptr %s%s)", t, f, sb_cstr(&args));
+        if (buffered) {
+            const char *sp = ll_new_tmp(ll);
+            ll_emit(ll, "%s = load ptr, ptr @stdout", sp);
+            const char *t2 = ll_new_tmp(ll);
+            ll_emit(ll, "%s = call i32 @fflush(ptr %s)", t2, sp);
+        }
+    }
     sb_free(&fmt);
     sb_free(&args);
 }
@@ -525,6 +597,10 @@ static llv_t ll_call_len(ll_t *ll, ast_node_t *n)
         ll_error(ll, n, "len() of an unsupported type");
         return ll_poison("i32");
     }
+    {
+        long klen = ast_str_lit_len(arg);
+        if (klen >= 0) return (llv_t){ll_fmt(ll, "%ld", klen), "i32"};
+    }
     llv_t v = ll_expr(ll, arg);
     const char *l = ll_new_tmp(ll);
     ll_emit(ll, "%s = call %s @strlen(ptr %s)", l, ll->usize, v.ref);
@@ -576,9 +652,16 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
                         llv_t *out)
 {
     size_t na = n->list.len;
+    if (!strcmp(m, "len") && na == 0) {
+        long klen = ast_str_lit_len(obj);
+        if (klen >= 0) {
+            *out = (llv_t){ll_fmt(ll, "%ld", klen), "i32"};
+            return true;
+        }
+    }
     const char *recv = ll_expr(ll, obj).ref;
     const char *r;
-    if (!strcmp(m, "len") || !strcmp(m, "length")) {
+    if (!strcmp(m, "len")) {
         const char *l = ll_new_tmp(ll);
         ll_emit(ll, "%s = call %s @strlen(ptr %s)", l, ll->usize, recv);
         *out = (llv_t){ll_usize_to_i32(ll, l), "i32"};
@@ -587,6 +670,7 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
     if (!strcmp(m, "concat") && na == 1) {
         const char *a = ll_expr(ll, (ast_node_t *)n->list.data[0]).ref;
         r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_STRCAT);
         ll_emit(ll, "%s = call ptr @salam_ll_strcat(ptr %s, ptr %s)", r, recv, a);
         *out = (llv_t){r, "str"};
         return true;
@@ -595,8 +679,16 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
         const char *s = ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[0]), "i32");
         const char *l = ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[1]), "i32");
         r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_SUBSTR);
         ll_emit(ll, "%s = call ptr @salam_ll_substr(ptr %s, i32 %s, i32 %s)", r, recv, s,
                 l);
+        *out = (llv_t){r, "str"};
+        return true;
+    }
+    if (!strcmp(m, "trim")) {
+        r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_TRIM);
+        ll_emit(ll, "%s = call ptr @salam_ll_trim(ptr %s)", r, recv);
         *out = (llv_t){r, "str"};
         return true;
     }
@@ -673,7 +765,7 @@ static llv_t ll_call_dyn(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *i
                *fn = ll_new_tmp(ll);
     ll_emit(ll, "%s = extractvalue %%dyn %s, 0", data, dv.ref);
     ll_emit(ll, "%s = extractvalue %%dyn %s, 1", vt, dv.ref);
-    ll_emit(ll, "%s = getelementptr ptr, ptr %s, i64 %d", sl, vt, slot);
+    ll_emit(ll, "%s = getelementptr inbounds ptr, ptr %s, i64 %d", sl, vt, slot);
     ll_emit(ll, "%s = load ptr, ptr %s", fn, sl);
 
     sb_t ab;
@@ -794,17 +886,21 @@ static bool ll_call_intrinsic(ll_t *ll, ast_node_t *n, const char *nm, llv_t *ou
     const char *r;
     if (!strcmp(nm, "hash") && na == 1) {
         r = ll_new_tmp(ll);
-        if (ll_is_str(a0->type_str))
+        if (ll_is_str(a0->type_str)) {
+            ll_need(ll, LL_H_STRHASH);
             ll_emit(ll, "%s = call i64 @salam_ll_strhash(ptr %s)", r,
                     ll_expr(ll, a0).ref);
-        else
+        } else {
+            ll_need(ll, LL_H_INTHASH);
             ll_emit(ll, "%s = call i64 @salam_ll_inthash(i64 %s)", r,
                     ll_conv(ll, ll_expr(ll, a0), "u64"));
+        }
         *out = (llv_t){r, "u64"};
         return true;
     }
     if (!strcmp(nm, "char_from_code") && na == 1) {
         r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_CHARSTR);
         ll_emit(ll, "%s = call ptr @salam_ll_charstr(i32 %s)", r,
                 ll_conv(ll, ll_expr(ll, a0), "i32"));
         *out = (llv_t){r, "str"};
@@ -819,11 +915,11 @@ static llv_t ll_call(ll_t *ll, ast_node_t *n)
     if (callee && callee->kind == AST_MEMBER) return ll_call_method(ll, n, callee);
     if (callee && callee->kind == AST_IDENTIFIER) {
         const char *nm = callee->name;
-        if (!strcmp(nm, "print") || !strcmp(nm, "_")) {
+        if (!strcmp(nm, "print")) {
             ll_lower_print(ll, n, false, 0);
             return (llv_t){"0", "void"};
         }
-        if (!strcmp(nm, "println") || !strcmp(nm, "__")) {
+        if (!strcmp(nm, "println")) {
             ll_lower_print(ll, n, true, 0);
             return (llv_t){"0", "void"};
         }
@@ -876,8 +972,9 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
                     ast_node_t *c = (ast_node_t *)caps->data[i];
                     if (!strcmp(c->name, n->name)) {
                         const char *r = ll_new_tmp(ll);
-                        ll_emit(ll, "%s = getelementptr %s, ptr %s, i32 0, i32 %zu", r,
-                                ll->env_ty, ll->env_ref, i + 1);
+                        ll_emit(ll,
+                                "%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %zu",
+                                r, ll->env_ty, ll->env_ref, i + 1);
                         return (ll_addr_t){r, c->type_str};
                     }
                 }
@@ -1092,7 +1189,7 @@ static llv_t ll_lambda_value(ll_t *ll, ast_node_t *n)
     ll_emit(ll, "%s = ptrtoint ptr %s to i64", sz, szp);
     ll_emit(ll, "%s = call ptr @malloc(i64 %s)", env, sz);
     const char *f0 = ll_new_tmp(ll);
-    ll_emit(ll, "%s = getelementptr %s, ptr %s, i32 0, i32 0", f0, envty, env);
+    ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i32 0, i32 0", f0, envty, env);
     ll_emit(ll, "store ptr @%s, ptr %s", name, f0);
     {
         size_t i = 0;
@@ -1100,8 +1197,8 @@ static llv_t ll_lambda_value(ll_t *ll, ast_node_t *n)
             ast_node_t *c = (ast_node_t *)n->captures.data[i];
             llv_t cv = ll_expr(ll, c);
             const char *fp = ll_new_tmp(ll);
-            ll_emit(ll, "%s = getelementptr %s, ptr %s, i32 0, i32 %zu", fp, envty, env,
-                    i + 1);
+            ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %zu", fp,
+                    envty, env, i + 1);
             ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, c->type_str),
                     ll_conv(ll, cv, c->type_str), fp);
         }
@@ -1153,6 +1250,18 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
         ll_emit(ll, "%s = load %s, ptr %s", r, ll_ty(ll, a.ts), a.ptr);
         return (llv_t){r, a.ts};
     }
+    case AST_FUNC_ADDR: {
+        symbol_t *fsym = ll_sym(ll, n->name);
+        if (!fsym || fsym->kind != SYM_FUNC || fsym->overloads.len != 1) {
+            ll_error(ll, n, "cannot take the address of '%s'", n->name);
+            return ll_poison(n->type_str ? n->type_str : "ptr");
+        }
+        func_sig_t *sig = (func_sig_t *)fsym->overloads.data[0];
+        bool is_ext = sig->decl && sig->decl->is_extern;
+        if (!is_ext) ll_ensure_fn(ll, sig->decl, NULL, ll->pkg_scope);
+        const char *fname = is_ext ? n->name : ll_mangle(ll, NULL, n->name, sig);
+        return (llv_t){ll_fmt(ll, "@%s", fname), "void*"};
+    }
     case AST_THIS: {
         if (!ll->this_ref) {
             ll_error(ll, n, "'this' outside a method");
@@ -1167,8 +1276,35 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
     }
     case AST_BINARY:
         return ll_binary(ll, n);
+    case AST_TERNARY: {
+        const char *rt = n->type_str ? n->type_str : "i32";
+        const char *cond = ll_as_i1(ll, ll_expr(ll, n->a));
+        const char *thenL = ll_new_lbl(ll, "tern_then");
+        const char *elseL = ll_new_lbl(ll, "tern_else");
+        const char *tjoinL = ll_new_lbl(ll, "tern_tjoin");
+        const char *fjoinL = ll_new_lbl(ll, "tern_fjoin");
+        const char *endL = ll_new_lbl(ll, "tern_end");
+        ll_emit_term(ll, "br i1 %s, label %%%s, label %%%s", cond, thenL, elseL);
+        ll_emit_label(ll, thenL);
+        const char *tv = ll_conv(ll, ll_expr(ll, n->b), rt);
+        ll_emit_term(ll, "br label %%%s", tjoinL);
+        ll_emit_label(ll, tjoinL);
+        ll_emit_term(ll, "br label %%%s", endL);
+        ll_emit_label(ll, elseL);
+        const char *fv = ll_conv(ll, ll_expr(ll, n->c), rt);
+        ll_emit_term(ll, "br label %%%s", fjoinL);
+        ll_emit_label(ll, fjoinL);
+        ll_emit_term(ll, "br label %%%s", endL);
+        ll_emit_label(ll, endL);
+        const char *r = ll_new_tmp(ll);
+        ll_emit(ll, "%s = phi %s [ %s, %%%s ], [ %s, %%%s ]", r, ll_ty(ll, rt), tv,
+                tjoinL, fv, fjoinL);
+        return (llv_t){r, rt};
+    }
     case AST_UNARY:
         return ll_unary(ll, n);
+    case AST_INCDEC:
+        return ll_incdec(ll, n);
     case AST_CAST: {
         llv_t v = ll_expr(ll, n->a);
         const char *to = n->type && n->type->type_str

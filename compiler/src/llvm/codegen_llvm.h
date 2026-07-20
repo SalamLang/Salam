@@ -43,6 +43,7 @@ typedef struct {
     llvm_opt_level_t opt_level;
     bool debug_info;
     bool verify_module;
+    bool native_cpu;
     llvm_output_mode_t output_mode;
     const char *output_file;
     const char *target_triple;

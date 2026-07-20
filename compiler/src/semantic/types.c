@@ -167,6 +167,31 @@ type_t *type_func(type_ctx_t *tc, type_t *ret, const vec_t *params)
     return t;
 }
 
+static int prim_fold(const char **p)
+{
+    const unsigned char *s = (const unsigned char *)*p;
+    if (s[0] == 0) return 0;
+    if ((s[0] == 0xD9 && s[1] == 0x8A) || (s[0] == 0xDB && s[1] == 0x8C)) {
+        *p += 2;
+        return 0x101;
+    }
+    if ((s[0] == 0xD9 && s[1] == 0x83) || (s[0] == 0xDA && s[1] == 0xA9)) {
+        *p += 2;
+        return 0x102;
+    }
+    *p += 1;
+    return s[0];
+}
+
+static bool prim_name_eq(const char *a, const char *b)
+{
+    for (;;) {
+        int ka = prim_fold(&a), kb = prim_fold(&b);
+        if (ka != kb) return false;
+        if (ka == 0) return true;
+    }
+}
+
 int type_prim_kind_from_name(const char *name, const char *lang)
 {
     if (!name) return -1;
@@ -223,9 +248,8 @@ int type_prim_kind_from_name(const char *name, const char *lang)
     {
         size_t i = 0;
         for (; i < sizeof(tab) / sizeof(tab[0]); i++)
-            if (strcmp(name, tab[i].n) == 0) {
-                if (want && tab[i].lg != want) return -1;
-                return (int)tab[i].k;
+            if (prim_name_eq(name, tab[i].n)) {
+                if (!want || tab[i].lg == want) return (int)tab[i].k;
             }
     }
     return -1;
@@ -358,6 +382,10 @@ bool type_castable(const type_t *dst, const type_t *src)
     if ((dst->kind == TY_PTR && type_is_integer(src)) ||
         (src->kind == TY_PTR && type_is_integer(dst)))
         return true;
+
+    if ((dst->kind == TY_FUNC && src->kind == TY_PTR) ||
+        (dst->kind == TY_PTR && src->kind == TY_FUNC))
+        return true;
     bool sn = type_is_numeric(src) || src->kind == TY_BOOL || src->kind == TY_CHAR ||
               src->kind == TY_ENUM;
     bool dn = type_is_numeric(dst) || dst->kind == TY_BOOL || dst->kind == TY_CHAR ||
@@ -467,7 +495,7 @@ const char *type_to_string(type_ctx_t *tc, const type_t *t)
     case TY_FUNC: {
         char buf[256];
         size_t o = 0;
-        o = sal_catf(buf, sizeof(buf), o, "func(");
+        o = sal_catf(buf, sizeof(buf), o, t->length ? "externfunc(" : "func(");
         {
             size_t i = 0;
             for (; i < t->params.len && o < sizeof(buf) - 32; i++)

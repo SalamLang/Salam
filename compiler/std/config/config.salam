@@ -1,0 +1,328 @@
+@en "config"
+@fa "پیکربندی"
+@ar "إعداد"
+package config
+
+import str
+import conv
+import io
+import collections
+
+@en "Config"
+@fa "پیکربندی"
+@ar "إعداد"
+pub struct Config:
+    pub keys : Vector<str> = Vector {}
+    pub vals : Vector<str> = Vector {}
+end
+
+@en "New"
+@fa "جدید"
+@ar "جدید"
+pub func New() : Config:
+    ret Config {}
+end
+
+func _find(c &: Config, key : str) : int:
+    repeat c.keys.len() with i:
+        if c.keys.get(i)[0] == key: ret i end
+    end
+    ret 0 - 1
+end
+
+@en "Len"
+@fa "طول"
+@ar "طول"
+pub func Len(c &: Config) : int: ret c.keys.len() end
+
+@en "Has"
+@fa "دارد"
+@ar "یملک"
+pub func Has(c &: Config, key : str) : bool: ret _find(c, key) >= 0 end
+
+@en "Set"
+@fa "تنظیم"
+@ar "تعیین"
+pub func Set(c &: Config, key : str, val : str):
+    idx := _find(c, key)
+    if idx >= 0:
+        c.vals.set(idx, val)
+    else:
+        c.keys.push(key)
+        c.vals.push(val)
+    end
+end
+
+@en "Get"
+@fa "دریافت"
+@ar "جلب"
+pub func Get(c &: Config, key : str) : str:
+    idx := _find(c, key)
+    if idx < 0: ret "" end
+    ret c.vals.get(idx)[0]
+end
+
+@en "GetOr"
+@fa "دریافت یا"
+@ar "جلب أو"
+pub func GetOr(c &: Config, key : str, def : str) : str:
+    idx := _find(c, key)
+    if idx < 0: ret def end
+    ret c.vals.get(idx)[0]
+end
+
+@en "GetInt"
+@fa "دریافت صحیح"
+@ar "جلب صحیح"
+pub func GetInt(c &: Config, key : str, def : i64) : i64:
+    idx := _find(c, key)
+    if idx < 0: ret def end
+    ret conv.ParseInt(c.vals.get(idx)[0])
+end
+
+@en "GetFloat"
+@fa "دریافت اعشاری"
+@ar "جلب عشری"
+pub func GetFloat(c &: Config, key : str, def : f64) : f64:
+    idx := _find(c, key)
+    if idx < 0: ret def end
+    ret conv.ParseFloat(c.vals.get(idx)[0])
+end
+
+@en "GetBool"
+@fa "دریافت منطقی"
+@ar "جلب منطقی"
+pub func GetBool(c &: Config, key : str, def : bool) : bool:
+    idx := _find(c, key)
+    if idx < 0: ret def end
+    ret conv.ParseBool(c.vals.get(idx)[0])
+end
+
+@en "Remove"
+@fa "حذف"
+@ar "إزالة"
+pub func Remove(c &: Config, key : str) : bool:
+    idx := _find(c, key)
+    if idx < 0: ret false end
+    c.keys.remove_at(idx)
+    c.vals.remove_at(idx)
+    ret true
+end
+
+@en "Keys"
+@fa "کلیدها"
+@ar "المفاتیح"
+pub func Keys(c &: Config) : Vector<str>:
+    ret collections.clone(c.keys)
+end
+
+@en "Section"
+@fa "بخش"
+@ar "قسم"
+pub func Section(c &: Config, name : str) : Config:
+    out := Config {}
+    prefix := name.concat(".")
+    repeat c.keys.len() with i:
+        k := c.keys.get(i)[0]
+        if str.StartsWith(k, prefix):
+            out.keys.push(k.substr(prefix.len(), k.len() - prefix.len()))
+            out.vals.push(c.vals.get(i)[0])
+        end
+    end
+    ret out
+end
+
+@en "Free"
+@fa "آزادسازی"
+@ar "تحریر"
+pub func Free(c &: Config):
+    c.keys.free()
+    c.vals.free()
+end
+
+func _unquote(v : str) : str:
+    n := v.len()
+    if n >= 2:
+        first := v.substr(0, 1)
+        last := v.substr(n - 1, 1)
+        if (first == "\"" && last == "\"") || (first == "'" && last == "'"):
+            ret v.substr(1, n - 2)
+        end
+    end
+    ret v
+end
+
+func _is_quoted(v : str) : bool:
+    n := v.len()
+    if n < 2: ret false end
+    first := v.substr(0, 1)
+    ret first == "\"" || first == "'"
+end
+
+func _strip_inline_comment(v : str) : str:
+    n := v.len()
+    repeat n with i:
+        if i == 0: continue end
+        ch := v.substr(i, 1)
+        if (ch == "#" || ch == ";") && v.substr(i - 1, 1) == " ":
+            ret str.TrimRight(v.substr(0, i))
+        end
+    end
+    ret v
+end
+
+func _parse_value(raw : str) : str:
+    t := str.Trim(raw)
+    if _is_quoted(t):
+        q := t.substr(0, 1)
+        closing := str.IndexFrom(t, q, 1)
+        if closing > 0: ret t.substr(1, closing - 1) end
+        ret t
+    end
+    ret _unquote(_strip_inline_comment(t))
+end
+
+@en "ParseINI"
+@fa "تجزیه آی‌ان‌آی"
+@ar "تحلیل إعداد"
+pub func ParseINI(text : str) : Config:
+    mut out := Config {}
+    mut section := ""
+    lines := text.split("\n")
+    defer lines.free()
+    repeat lines.len() with i:
+        line := str.Trim(lines.get(i)[0])
+        mut head := ""
+        if line.len() > 0: head = line.substr(0, 1) end
+        if head != "" && head != "#" && head != ";":
+            if head == "[" && str.EndsWith(line, "]"):
+                section = str.Trim(line.substr(1, line.len() - 2))
+            else:
+                eq := line.find("=")
+                if eq > 0:
+                    mut key := str.Trim(line.substr(0, eq))
+                    val := _parse_value(line.substr(eq + 1, line.len() - eq - 1))
+                    if section.len() > 0:
+                        key = section.concat(".").concat(key)
+                    end
+                    Set(out, key, val)
+                end
+            end
+        end
+    end
+    ret out
+end
+
+@en "ParseEnv"
+@fa "تجزیه محیط"
+@ar "تحلیل بیئة"
+pub func ParseEnv(text : str) : Config:
+    mut out := Config {}
+    lines := text.split("\n")
+    defer lines.free()
+    repeat lines.len() with i:
+        mut line := str.Trim(lines.get(i)[0])
+        if line.len() > 0 && str.StartsWith(line, "#") == false:
+            line = str.TrimPrefix(line, "export ")
+            eq := line.find("=")
+            if eq > 0:
+                key := str.Trim(line.substr(0, eq))
+                val := _parse_value(line.substr(eq + 1, line.len() - eq - 1))
+                Set(out, key, val)
+            end
+        end
+    end
+    ret out
+end
+
+@en "LoadINI"
+@fa "بارگذاری آی‌ان‌آی"
+@ar "تحمیل إعداد"
+pub func LoadINI(path : str) : Config:
+    ret ParseINI(io.ReadFile(path))
+end
+
+@en "LoadEnv"
+@fa "بارگذاری محیط"
+@ar "تحمیل بیئة"
+pub func LoadEnv(path : str) : Config:
+    ret ParseEnv(io.ReadFile(path))
+end
+
+func _section_of(key : str) : str:
+    dot := key.find(".")
+    if dot < 0: ret "" end
+    ret key.substr(0, dot)
+end
+
+func _name_of(key : str) : str:
+    dot := key.find(".")
+    if dot < 0: ret key end
+    ret key.substr(dot + 1, key.len() - dot - 1)
+end
+
+func _needs_quotes(v : str) : bool:
+    if v.len() == 0: ret false end
+    if str.Trim(v) != v: ret true end
+    ret str.Contains(v, " ") || str.Contains(v, "#") || str.Contains(v, ";")
+end
+
+func _format_value(v : str) : str:
+    if _needs_quotes(v): ret "\"".concat(v).concat("\"") end
+    ret v
+end
+
+@en "FormatINI"
+@fa "قالب آی‌ان‌آی"
+@ar "تنسیق إعداد"
+pub func FormatINI(c &: Config) : str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    repeat c.keys.len() with i:
+        k := c.keys.get(i)[0]
+        if _section_of(k) == "":
+            str.BufAppend(b, k)
+            str.BufAppend(b, " = ")
+            str.BufAppend(b, _format_value(c.vals.get(i)[0]))
+            str.BufAppend(b, "\n")
+        end
+    end
+    done := Vector {} as Vector<str>
+    defer done.free()
+    repeat c.keys.len() with i:
+        sec := _section_of(c.keys.get(i)[0])
+        if sec != "" && collections.contains(done, sec) == false:
+            done.push(sec)
+            str.BufAppend(b, "[")
+            str.BufAppend(b, sec)
+            str.BufAppend(b, "]\n")
+            repeat c.keys.len() with j:
+                kj := c.keys.get(j)[0]
+                if _section_of(kj) == sec:
+                    str.BufAppend(b, _name_of(kj))
+                    str.BufAppend(b, " = ")
+                    str.BufAppend(b, _format_value(c.vals.get(j)[0]))
+                    str.BufAppend(b, "\n")
+                end
+            end
+        end
+    end
+    out := str.BufStr(b)
+    ret out
+end
+
+@en "FormatEnv"
+@fa "قالب محیط"
+@ar "تنسیق بیئة"
+pub func FormatEnv(c &: Config) : str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    repeat c.keys.len() with i:
+        str.BufAppend(b, c.keys.get(i)[0])
+        str.BufAppend(b, "=")
+        str.BufAppend(b, _format_value(c.vals.get(i)[0]))
+        str.BufAppend(b, "\n")
+    end
+    out := str.BufStr(b)
+    ret out
+end

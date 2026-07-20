@@ -43,8 +43,12 @@ static const char *cg_vardecl_inline(cg_t *cg, ast_node_t *n)
 static const char *cg_simple_inline(cg_t *cg, ast_node_t *n)
 {
     if (n->kind == AST_VAR_DECL) return cg_vardecl_inline(cg, n);
-    if (n->kind == AST_ASSIGN)
+    if (n->kind == AST_ASSIGN) {
+        if (n->op == TK_POWER_EQ)
+            return cg_fmt(cg, "%s = pow((double)(%s), (double)(%s))", cg_expr(cg, n->a),
+                          cg_expr(cg, n->a), cg_expr(cg, n->b));
         return cg_fmt(cg, "%s %s %s", cg_expr(cg, n->a), cg_op(n->op), cg_expr(cg, n->b));
+    }
     if (n->kind == AST_EXPR_STMT) return cg_expr(cg, n->a);
     return cg_expr(cg, n);
 }
@@ -142,6 +146,17 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
                     cg_expr(cg, n->a), cg_str_operand(cg, n->b));
             break;
         }
+        if (n->op == TK_POWER_EQ) {
+            const char *ct = cg_ctype(cg, n->a->type_str ? n->a->type_str : "double");
+            int t = ++cg->tmpn;
+            const char *lhs = cg_expr(cg, n->a);
+            const char *rhs = cg_expr(cg, n->b);
+            cg_line(cg,
+                    "{ %s *__pw%d = &(%s); *__pw%d = (%s)pow((double)(*__pw%d), "
+                    "(double)(%s)); }",
+                    ct, t, lhs, t, ct, t, rhs);
+            break;
+        }
         cg_line(cg, "%s %s %s;", cg_expr(cg, n->a), cg_op(n->op), cg_expr(cg, n->b));
         break;
     }
@@ -220,7 +235,7 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             cg_line(cg, "}");
         }
         break;
-    case AST_WHILE:
+    case AST_UNTIL:
         cg_line(cg, "while (%s) {", cg_expr(cg, n->a));
         cg->indent++;
         {
@@ -243,9 +258,11 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             const char *step = n->d ? cg_expr(cg, n->d) : "1";
             cg_line(cg,
                     "for (int64_t __rep%d = (int64_t)(%s), __repe%d = (int64_t)(%s), "
-                    "__reps%d = (int64_t)(%s);"
-                    " __rep%d <= __repe%d; __rep%d += __reps%d) {",
-                    t, from, t, to, t, step, t, t, t, t);
+                    "__repa%d = (int64_t)(%s), "
+                    "__reps%d = (__rep%d <= __repe%d) ? __repa%d : -__repa%d;"
+                    " (__reps%d > 0) ? (__rep%d <= __repe%d) : (__rep%d >= __repe%d); "
+                    "__rep%d += __reps%d) {",
+                    t, from, t, to, t, step, t, t, t, t, t, t, t, t, t, t, t, t);
         } else {
             cg_line(cg,
                     "for (int64_t __rep%d = 0, __repn%d = (int64_t)(%s); __rep%d < "
@@ -255,6 +272,11 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         cg->indent++;
         {
             size_t m = cg->locals.len;
+            if (n->name) {
+                cg_line(cg, "const int32_t %s = (int32_t)__rep%d;",
+                        cg_cident(cg, n->name), t);
+                local_add(cg, n->name);
+            }
             {
                 size_t i = 0;
                 for (; i < n->b->list.len; i++)

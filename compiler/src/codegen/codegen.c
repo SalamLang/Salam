@@ -14,6 +14,34 @@
 
 #include "codegen/codegen_internal.h"
 
+static bool detect_gui_imports(ast_node_t *program)
+{
+    size_t i = 0;
+    for (; i < program->list.len; i++) {
+        ast_node_t *d = (ast_node_t *)program->list.data[i];
+        if (d->kind != AST_IMPORT) continue;
+        const char *import_name = d->name;
+        if (!import_name) continue;
+        if (strcmp(import_name, "webview") == 0 || strcmp(import_name, "layout") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool is_windows_target(const char *triple)
+{
+    if (!triple || !triple[0]) {
+#if defined(_WIN32)
+        return true;
+#else
+        return false;
+#endif
+    }
+    return strstr(triple, "windows") != NULL || strstr(triple, "win32") != NULL ||
+           strstr(triple, "w64") != NULL || strstr(triple, "msvc") != NULL;
+}
+
 static void emit_private_protos(cg_t *cg, ast_node_t *program)
 {
     {
@@ -54,7 +82,7 @@ static void emit_globals(cg_t *cg, ast_node_t *program)
                          CONST_CAST(cg_fmt(cg, "%s = %s;", cg_cident(cg, d->name),
                                            cg_expr(cg, d->a))));
             } else {
-                bool want_const = (d->kind == AST_CONST_DECL || !d->is_mut);
+                bool want_const = (d->kind == AST_CONST_DECL);
                 bool gct_const =
                     want_const && (strncmp(cg_ctype(cg, ts), "const ", 6) == 0);
                 const char *pfx = (want_const && !gct_const) ? "const " : "";
@@ -122,6 +150,108 @@ static void emit_impl_bodies(cg_t *cg)
     }
 }
 
+static bool inl_name_in(vec_t *names, const char *name)
+{
+    size_t i = 0;
+    for (; i < names->len; i++)
+        if (strcmp((const char *)names->data[i], name) == 0) return true;
+    return false;
+}
+
+static void inl_collect_locals(cg_t *cg, vec_t *names, ast_node_t *n)
+{
+    if (!n) return;
+    if (n->name && (n->kind == AST_PARAM || n->kind == AST_VAR_DECL ||
+                    n->kind == AST_FOR || n->kind == AST_REPEAT))
+        vec_push(cg->a, names, CONST_CAST(n->name));
+    inl_collect_locals(cg, names, n->a);
+    inl_collect_locals(cg, names, n->b);
+    inl_collect_locals(cg, names, n->c);
+    inl_collect_locals(cg, names, n->d);
+    {
+        size_t i = 0;
+        for (; i < n->list.len; i++)
+            inl_collect_locals(cg, names, (ast_node_t *)n->list.data[i]);
+    }
+}
+
+static ast_node_t *inl_sym_decl(symbol_t *s)
+{
+    if (s->decl) return s->decl;
+    if (s->overloads.len) {
+        func_sig_t *sig = (func_sig_t *)s->overloads.data[0];
+        if (sig) return sig->decl;
+    }
+    return NULL;
+}
+
+static bool inl_body_exportable(cg_t *cg, vec_t *names, ast_node_t *n)
+{
+    if (!n) return true;
+    if (n->kind == AST_LAMBDA) return false;
+    if (n->kind == AST_IDENTIFIER && n->name && !inl_name_in(names, n->name)) {
+        symbol_t *s = scope_lookup_local(cg->sem->global, n->name);
+        if (s && (s->kind == SYM_FUNC || s->kind == SYM_VAR || s->kind == SYM_CONST)) {
+            ast_node_t *decl = inl_sym_decl(s);
+            if (decl && !decl->is_pub && !decl->is_extern) return false;
+        }
+    }
+    if (!inl_body_exportable(cg, names, n->a)) return false;
+    if (!inl_body_exportable(cg, names, n->b)) return false;
+    if (!inl_body_exportable(cg, names, n->c)) return false;
+    if (!inl_body_exportable(cg, names, n->d)) return false;
+    {
+        size_t i = 0;
+        for (; i < n->list.len; i++)
+            if (!inl_body_exportable(cg, names, (ast_node_t *)n->list.data[i]))
+                return false;
+    }
+    return true;
+}
+
+static void demote_nonexportable_inlines(cg_t *cg, ast_node_t *program)
+{
+    size_t i = 0;
+    for (; i < program->list.len; i++) {
+        ast_node_t *d = (ast_node_t *)program->list.data[i];
+        if (d->kind != AST_FUNC_DEF || !d->is_inline) continue;
+        if (d->typarams.len > 0 || d->synthetic || d->is_extern) continue;
+        if (strcmp(d->name, cg->entry) == 0) {
+            d->is_inline = false;
+            continue;
+        }
+        if (!d->is_pub) continue;
+        {
+            vec_t names;
+            vec_init(&names);
+            inl_collect_locals(cg, &names, d);
+            if (!inl_body_exportable(cg, &names, d->a)) {
+                d->is_inline = false;
+                LOG_I(cg->log, PH_CODEGEN,
+                      "inline '%s' uses module-private symbols; emitting it as a "
+                      "regular function",
+                      d->name);
+            }
+        }
+    }
+}
+
+static void emit_inline_header(cg_t *cg, ast_node_t *program)
+{
+    sb_t *savec = cg->c;
+    cg->c = cg->h;
+    {
+        size_t i = 0;
+        for (; i < program->list.len; i++) {
+            ast_node_t *d = (ast_node_t *)program->list.data[i];
+            if (d->kind != AST_FUNC_DEF || !d->is_inline || !d->is_pub) continue;
+            if (d->typarams.len > 0 || d->synthetic || d->is_extern || !d->a) continue;
+            cg_function(cg, d, NULL);
+        }
+    }
+    cg->c = savec;
+}
+
 static void emit_function_bodies(cg_t *cg, ast_node_t *program)
 {
     {
@@ -132,6 +262,7 @@ static void emit_function_bodies(cg_t *cg, ast_node_t *program)
             if (d->synthetic) continue;
             if (d->kind == AST_FUNC_DEF) {
                 if (d->is_extern && !d->a) continue;
+                if (d->is_inline && d->is_pub) continue;
                 cg_function(cg, d, NULL);
             } else if (d->kind == AST_STRUCT_DEF) {
                 symbol_t *ssym = scope_lookup_local(cg->sem->global, d->name);
@@ -277,9 +408,42 @@ static const char *cg_tidy(arena_t *a, const char *src)
     return r;
 }
 
+static bool node_uses_spawn(ast_node_t *n)
+{
+    if (!n) return false;
+    if (n->kind == AST_CALL && n->a && n->a->kind == AST_IDENTIFIER && n->a->name &&
+        strcmp(n->a->name, "spawn") == 0)
+        return true;
+    if (node_uses_spawn(n->a) || node_uses_spawn(n->b) || node_uses_spawn(n->c) ||
+        node_uses_spawn(n->d))
+        return true;
+    {
+        size_t i = 0;
+        for (; i < n->list.len; i++)
+            if (node_uses_spawn((ast_node_t *)n->list.data[i])) return true;
+    }
+    return false;
+}
+
+bool salam_module_single_threaded(ast_node_t *program)
+{
+    size_t i = 0;
+    for (; i < program->list.len; i++) {
+        ast_node_t *d = (ast_node_t *)program->list.data[i];
+        if (d->kind == AST_IMPORT) {
+            const char *p =
+                (d->value.kind == TV_STRING && d->value.as.s) ? d->value.as.s : d->name;
+            if (p && strstr(p, "thread")) return false;
+        }
+        if (node_uses_spawn(d)) return false;
+    }
+    return true;
+}
+
 codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
                               sema_result_t *sem, const char *module, bool safe,
-                              bool debug_info, const char *src_path, const char *entry)
+                              bool debug_info, const char *src_path, const char *entry,
+                              const char *target_triple)
 {
     cg_t cg;
     memset(&cg, 0, sizeof(cg));
@@ -289,9 +453,12 @@ codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
     cg.module = module;
     cg.safe = safe;
     cg.debug_info = debug_info;
+    cg.single_threaded = salam_module_single_threaded(program);
     cg.src_path = src_path ? src_path : "";
     cg.pkg = program->name ? program->name : "main";
     cg.entry = (entry && entry[0]) ? entry : "main";
+    cg.target_triple = target_triple;
+    cg.is_gui_mode = detect_gui_imports(program);
     vec_init(&cg.locals);
     vec_init(&cg.vec_types);
     vec_init(&cg.dyn_ifaces);
@@ -309,8 +476,10 @@ codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
     cg.lam_defs = &lamf;
     cg.lam_n = 0;
     LOG_I(log, PH_CODEGEN, "generating C for module '%s'", module);
+    demote_nonexportable_inlines(&cg, program);
     cg_header(&cg, program);
     emit_instances_header(&cg, program);
+    emit_inline_header(&cg, program);
     sb_puts(&h, "\n#endif\n");
     sb_puts(&c, cg_fmt(&cg, "#include \"%s%s.h\"\n\n", SALAM_MOD_PREFIX, module));
 
@@ -337,6 +506,8 @@ codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
     out->c_src = cg_tidy(a, sb_cstr(&c));
     sb_free(&h);
     sb_free(&c);
+    sb_free(&lamd);
+    sb_free(&lamf);
     LOG_I(log, PH_CODEGEN, "generated %zu bytes of C", strlen(out->c_src));
     return out;
 }

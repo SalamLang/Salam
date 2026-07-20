@@ -30,6 +30,23 @@ static value_t *eval_args(interp_t *I, env_t *env, ast_node_t *call, size_t *out
 
 static int64_t interp_sizeof_typename(interp_t *I, const char *ts);
 
+static value_t do_listdir(interp_t *I, ast_node_t *call, value_t patharg)
+{
+    value_t *ef = find_extern_fn(I, "salam_os_listdir");
+    if (!ef) rt_error(I, call, "'listdir' is not supported by the interpreter");
+    int32_t cnt = 0;
+    value_t cargs[2] = {patharg, val_ptr(&cnt, PTR_I32)};
+    value_t r = call_func(I, ef->as.fn->fn, ef->as.fn->env, NULL, cargs, 2);
+    sarray_t *out = array_new(I, cnt > 0 ? (size_t)cnt : 4);
+    if (r.kind == VAL_PTR && r.as.ptr.addr && cnt > 0) {
+        char **arr = (char **)r.as.ptr.addr;
+        int32_t i = 0;
+        for (; i < cnt; i++)
+            array_push(I, out, val_str(arena_strdup(I->a, arr[i] ? arr[i] : "")));
+    }
+    return mk_array(I, out);
+}
+
 static int64_t interp_alignof_typename(interp_t *I, const char *ts)
 {
     if (!ts || !*ts) return 8;
@@ -120,6 +137,7 @@ static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
         }
         if (!strcmp(nm, "input")) return do_input(I);
         if (!strcmp(nm, "lang")) return val_str(I->lang);
+        if (!strcmp(nm, "args") && n->list.len == 0) return mk_array(I, array_new(I, 0));
 
         if (!strcmp(nm, "sizeof") && n->list.len == 1) {
             ast_node_t *op = (ast_node_t *)n->list.data[0];
@@ -143,6 +161,24 @@ static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
         if (!strcmp(nm, "strcmp") && na == 2)
             return val_int(strcmp(to_str(I, args[0]), to_str(I, args[1])));
         if (!strcmp(nm, "funcptr") && na == 1) return args[0];
+        if (!strcmp(nm, "listdir") && na == 1) return do_listdir(I, n, args[0]);
+        if (!strcmp(nm, "hash") && na == 1) {
+            const char *fname =
+                args[0].kind == VAL_STR ? "salam_str_hash" : "salam_hash_int";
+            value_t *ef = find_extern_fn(I, fname);
+            if (!ef) rt_error(I, n, "'hash' is not supported by the interpreter");
+            value_t harg = args[0].kind == VAL_STR ? args[0] : val_int(to_int(args[0]));
+            value_t hr = call_func(I, ef->as.fn->fn, ef->as.fn->env, NULL, &harg, 1);
+            /*
+             * The interpreter has no unsigned-int representation (VAL_INT is
+             * always a signed int64_t), so a raw u64 hash with bit 63 set
+             * would read back negative, making `hash(k) % cap`-style modulo
+             * (used throughout std's hash tables) return a negative index
+             * via C's sign-follows-dividend `%`. Clear the sign bit instead
+             * of trying to model u64 generally.
+             */
+            return val_int(to_int(hr) & 0x7FFFFFFFFFFFFFFFLL);
+        }
 
         binding_t *b = env_find(env, nm);
         if (b && b->val.kind == VAL_FUNC)
@@ -150,9 +186,16 @@ static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
         ast_node_t *fn = find_func(I, nm, na);
         if (fn) return call_func(I, fn, I->globals, NULL, args, na);
 
+        value_t *ef = find_extern_fn(I, nm);
+        if (ef) return call_func(I, ef->as.fn->fn, ef->as.fn->env, NULL, args, na);
+
         bool handled;
         value_t ir = call_intrinsic(I, n, nm, args, na, &handled);
         if (handled) return ir;
+
+        ast_node_t *decl = find_extern_decl(I, nm);
+        if (decl) return call_native_extern(I, n, decl, args, na);
+
         rt_error(I, n, "call to undefined function '%s'", nm);
     }
 
@@ -176,7 +219,10 @@ static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
         if (recv.kind == VAL_STRUCT) {
             ast_node_t *m = struct_method_arity(recv.as.st->def, method, na);
             if (!m) m = struct_method(recv.as.st->def, method);
-            if (m) return call_func(I, m, I->globals, &recv, args, na);
+            if (m) {
+                env_t *denv = find_def_env(I, m);
+                return call_func(I, m, denv ? denv : I->globals, &recv, args, na);
+            }
 
             {
                 size_t i = 0;
@@ -193,7 +239,10 @@ static value_t eval_call(interp_t *I, env_t *env, ast_node_t *n)
 
         {
             ast_node_t *im = find_impl_method(I, obj->type_str, method, na);
-            if (im) return call_func(I, im, I->globals, &recv, args, na);
+            if (im) {
+                env_t *denv = find_def_env(I, im);
+                return call_func(I, im, denv ? denv : I->globals, &recv, args, na);
+            }
         }
         return call_builtin_method(I, n, recv, method, args, na);
     }
@@ -326,6 +375,8 @@ value_t eval(interp_t *I, env_t *env, ast_node_t *n)
             return arith(I, n, op, a, b);
         }
     }
+    case AST_TERNARY:
+        return to_bool(eval(I, env, n->a)) ? eval(I, env, n->b) : eval(I, env, n->c);
     case AST_UNARY: {
         value_t a = eval(I, env, n->a);
         if (a.kind == VAL_STRUCT) {
@@ -340,15 +391,32 @@ value_t eval(interp_t *I, env_t *env, ast_node_t *n)
         if (n->op == TK_NOT) return val_bool(!to_bool(a));
         return a;
     }
+    case AST_INCDEC: {
+        iloc_t loc = interp_resolve_loc(I, env, n->a);
+        value_t cur = interp_loc_get(I, &loc);
+        token_kind_t base = (n->op == TK_PLUS_PLUS) ? TK_PLUS : TK_MINUS;
+        value_t updated = arith(I, n, base, cur, val_int(1));
+        interp_loc_set(I, &loc, updated);
+        return n->is_prefix ? updated : cur;
+    }
     case AST_CAST: {
         value_t a = eval(I, env, n->a);
+        const char *ts = n->type ? n->type->type_str : NULL;
+        bool tptr = ts && *ts && ts[strlen(ts) - 1] == '*';
+        if (tptr) {
+            void *addr = a.kind == VAL_STR ? (void *)a.as.s : (void *)(intptr_t)to_int(a);
+            return val_ptr(addr, ptr_elem_from_typestr(ts));
+        }
         char base[96];
-        base_typename(n->type ? n->type->type_str : NULL, base, sizeof base);
+        base_typename(ts, base, sizeof base);
         if (!strcmp(base, "char")) return val_char(to_int(a));
         if (is_int_typename(base)) return val_int(to_int(a));
         if (is_float_typename(base)) return val_float(to_float(a));
         if (!strcmp(base, "bool")) return val_bool(to_bool(a));
-        if (!strcmp(base, "str")) return val_str(to_str(I, a));
+        if (!strcmp(base, "str")) {
+            if (a.kind == VAL_PTR) return val_str((const char *)a.as.ptr.addr);
+            return val_str(to_str(I, a));
+        }
         return a;
     }
     case AST_CALL:
@@ -394,7 +462,8 @@ value_t eval(interp_t *I, env_t *env, ast_node_t *n)
             ast_node_t *m = struct_method(a.as.st->def, "operator_index");
             if (m) {
                 value_t idx = eval(I, env, n->b);
-                return call_func(I, m, I->globals, &a, &idx, 1);
+                env_t *denv = find_def_env(I, m);
+                return call_func(I, m, denv ? denv : I->globals, &a, &idx, 1);
             }
         }
         value_t idx = eval(I, env, n->b);
@@ -410,6 +479,10 @@ value_t eval(interp_t *I, env_t *env, ast_node_t *n)
             size_t len = strlen(a.as.s);
             if (i < 0 || (size_t)i >= len) rt_error(I, n, "string index out of range");
             return val_char((int64_t)(unsigned char)a.as.s[i]);
+        }
+        if (a.kind == VAL_PTR) {
+            if (!a.as.ptr.addr) rt_error(I, n, "dereference of a null pointer");
+            return ptr_load(a.as.ptr, to_int(idx));
         }
 
         if (to_int(idx) == 0) return a;

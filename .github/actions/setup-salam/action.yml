@@ -1,0 +1,208 @@
+---
+name: 'Setup Salam'
+description: 'Download, cache, and add the Salam compiler to PATH. Re-downloads only when a newer release is published.'
+author: 'SalamLang'
+
+branding:
+  icon: 'download'
+  color: 'green'
+
+inputs:
+  version:
+    description: 'Salam release to install: a version like "0.2.4" / "v0.2.4", or "latest" to always track the newest published release.'
+    required: false
+    default: 'latest'
+  add-to-path:
+    description: 'Add the extracted Salam directory to PATH so "salam ..." works in later steps.'
+    required: false
+    default: 'true'
+  github-token:
+    description: 'Token used for the GitHub Releases API lookup (raises the anonymous rate limit). Defaults to the workflow token.'
+    required: false
+    default: ${{ github.token }}
+  repository:
+    description: 'Source repository in "owner/name" form to fetch releases from.'
+    required: false
+    default: 'SalamLang/Salam'
+
+outputs:
+  version:
+    description: 'The concrete version that was installed (e.g. 0.2.4).'
+    value: ${{ steps.resolve.outputs.version }}
+  tag:
+    description: 'The release tag that was installed (e.g. v0.2.4).'
+    value: ${{ steps.resolve.outputs.tag }}
+  bin-dir:
+    description: 'Directory containing the salam binary (and its sibling std/).'
+    value: ${{ steps.install.outputs.bin-dir }}
+  salam:
+    description: 'Full path to the salam executable.'
+    value: ${{ steps.install.outputs.salam }}
+  cache-hit:
+    description: 'Whether the cached download was reused ("true") or a fresh download happened ("false").'
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve version and platform
+      id: resolve
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_REPO: ${{ inputs.repository }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+
+        repo="$INPUT_REPO"
+        want="$INPUT_VERSION"
+
+        if [ "$want" = "latest" ] || [ -z "$want" ]; then
+          api="https://api.github.com/repos/${repo}/releases/latest"
+          auth=()
+          [ -n "${GH_TOKEN:-}" ] && auth=(-H "Authorization: Bearer ${GH_TOKEN}")
+          tag=$(curl -fsSL "${auth[@]}" -H "Accept: application/vnd.github+json" "$api" \
+                | grep -m1 '"tag_name"' \
+                | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+          if [ -z "$tag" ]; then
+            echo "::error::Could not resolve the latest Salam release from ${api}" >&2
+            exit 1
+          fi
+        else
+          tag="$want"
+        fi
+
+        case "$tag" in
+          v*) version="${tag#v}" ;;
+          *)  version="$tag"; tag="v${tag}" ;;
+        esac
+
+        os="$RUNNER_OS"
+        arch="$RUNNER_ARCH"
+
+        case "${os}-${arch}" in
+          Linux-X64)     asset="salam-${version}-linux.zip";                    dist="salam-linux";        bin="salam" ;;
+          Linux-ARM64)   asset="salam-${version}-linux-aarch64-minimal.zip";    dist="salam-linux-aarch64"; bin="salam" ;;
+          Linux-ARM)     asset="salam-${version}-linux-armhf-minimal.zip";      dist="salam-linux-armhf";   bin="salam" ;;
+          Linux-X86)     asset="salam-${version}-linux-i686-minimal.zip";       dist="salam-linux-i686";    bin="salam" ;;
+          macOS-*)       asset="salam-${version}-mac.zip";                      dist="salam-mac";           bin="salam" ;;
+          Windows-X64)   asset="salam-${version}-windows.zip";                  dist="salam-windows";       bin="salam.exe" ;;
+          Windows-X86)   asset="salam-${version}-windows-i686-minimal.zip";     dist="salam-windows-i686";  bin="salam.exe" ;;
+          *)
+            echo "::error::Unsupported runner platform ${os}-${arch}. Salam releases cover Linux (x64/arm64/armhf/i686), macOS, and Windows (x64/i686)." >&2
+            exit 1
+            ;;
+        esac
+
+        url="https://github.com/${repo}/releases/download/${tag}/${asset}"
+
+        raw="${RUNNER_TOOL_CACHE:-$HOME}/salam/${version}/${arch}"
+        if command -v cygpath >/dev/null 2>&1; then
+          dir_bash=$(cygpath -u "$raw")
+          dir_native=$(cygpath -w "$raw")
+        else
+          dir_bash="$raw"
+          dir_native="$raw"
+        fi
+
+        {
+          echo "tag=${tag}"
+          echo "version=${version}"
+          echo "asset=${asset}"
+          echo "dist=${dist}"
+          echo "bin=${bin}"
+          echo "url=${url}"
+          echo "dir-bash=${dir_bash}"
+          echo "dir-native=${dir_native}"
+          echo "cache-key=salam-${os}-${arch}-${version}"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "Salam ${version} (${tag}) for ${os}-${arch}"
+        echo "  asset : ${asset}"
+        echo "  url   : ${url}"
+
+    - name: Restore cached Salam
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.resolve.outputs.dir-native }}
+        key: ${{ steps.resolve.outputs.cache-key }}
+
+    - name: Download and extract Salam
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        SALAM_URL: ${{ steps.resolve.outputs.url }}
+        SALAM_DIR: ${{ steps.resolve.outputs.dir-bash }}
+        SALAM_DIR_NATIVE: ${{ steps.resolve.outputs.dir-native }}
+        SALAM_ASSET: ${{ steps.resolve.outputs.asset }}
+      run: |
+        set -euo pipefail
+
+        rm -rf "$SALAM_DIR"
+        mkdir -p "$SALAM_DIR"
+
+        tmp="$(mktemp -d)"
+        zip="${tmp}/${SALAM_ASSET}"
+
+        echo "Downloading ${SALAM_URL}"
+        curl -fSL --retry 3 --retry-delay 2 -o "$zip" "$SALAM_URL"
+
+        echo "Extracting into ${SALAM_DIR}"
+        if command -v unzip >/dev/null 2>&1; then
+          unzip -q -o "$zip" -d "$SALAM_DIR"
+        elif [ "$RUNNER_OS" = "Windows" ]; then
+          powershell -NoProfile -NonInteractive -Command \
+            "Expand-Archive -Path '${zip}' -DestinationPath '${SALAM_DIR_NATIVE}' -Force"
+        elif command -v 7z >/dev/null 2>&1; then
+          7z x -y -o"$SALAM_DIR" "$zip" >/dev/null
+        else
+          echo "::error::No unzip tool available (need unzip, PowerShell, or 7z)." >&2
+          exit 1
+        fi
+
+        rm -rf "$tmp"
+
+    - name: Add Salam to PATH and expose outputs
+      id: install
+      shell: bash
+      env:
+        SALAM_DIR: ${{ steps.resolve.outputs.dir-bash }}
+        SALAM_DIST: ${{ steps.resolve.outputs.dist }}
+        SALAM_BIN: ${{ steps.resolve.outputs.bin }}
+        ADD_TO_PATH: ${{ inputs.add-to-path }}
+      run: |
+        set -euo pipefail
+
+        bindir="${SALAM_DIR}/${SALAM_DIST}"
+        salam="${bindir}/${SALAM_BIN}"
+
+        if [ ! -f "$salam" ]; then
+          echo "::error::Expected Salam binary not found at ${salam} after extraction." >&2
+          ls -la "$SALAM_DIR" || true
+          exit 1
+        fi
+
+        [ "$RUNNER_OS" != "Windows" ] && chmod +x "$salam"
+
+        if command -v cygpath >/dev/null 2>&1; then
+          bindir_native=$(cygpath -w "$bindir")
+          salam_native=$(cygpath -w "$salam")
+        else
+          bindir_native="$bindir"
+          salam_native="$salam"
+        fi
+
+        {
+          echo "bin-dir=${bindir_native}"
+          echo "salam=${salam_native}"
+        } >> "$GITHUB_OUTPUT"
+
+        if [ "${ADD_TO_PATH}" = "true" ]; then
+          echo "$bindir_native" >> "$GITHUB_PATH"
+          echo "Added ${bindir_native} to PATH"
+        fi
+
+        echo "Installed:"
+        "$salam" version

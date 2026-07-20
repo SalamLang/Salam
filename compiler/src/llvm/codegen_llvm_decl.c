@@ -26,9 +26,21 @@ void ll_emit_struct_types(ll_t *ll, ast_node_t *program)
             if (!ssym || !ssym->members) continue;
             const char *sname =
                 ssym->type ? type_to_string(ll->sem->tc, ssym->type) : d->name;
+            const char *ltname = ll_struct_ltype(ll, sname);
+            {
+                bool seen = false;
+                size_t k = 0;
+                for (; k < ll->emitted.len; k++)
+                    if (!strcmp(ltname, (const char *)ll->emitted.data[k])) {
+                        seen = true;
+                        break;
+                    }
+                if (seen) continue;
+                vec_push(ll->a, &ll->emitted, CONST_CAST(ltname));
+            }
             sb_t b;
             sb_init(&b);
-            sb_puts(&b, ll_fmt(ll, "%s = type { ", ll_struct_ltype(ll, sname)));
+            sb_puts(&b, ll_fmt(ll, "%s = type { ", ltname));
             int nf = 0;
             {
                 size_t j = 0;
@@ -156,11 +168,12 @@ static func_sig_t *ll_sig_of(ll_t *ll, ast_node_t *fn, symbol_t *owner)
 
 static const char *ll_fn_header(ll_t *ll, ast_node_t *fn, func_sig_t *sig,
                                 const char *ret_lty, const char *fname,
-                                const char *recv_param)
+                                const char *recv_param, bool exported)
 {
     sb_t hdr;
     sb_init(&hdr);
-    sb_puts(&hdr, ll_fmt(ll, "define %s @%s(", ret_lty, fname));
+    sb_puts(&hdr,
+            ll_fmt(ll, "define %s%s @%s(", exported ? "" : "internal ", ret_lty, fname));
     bool first = true;
     if (recv_param) {
         sb_puts(&hdr, recv_param);
@@ -172,12 +185,21 @@ static const char *ll_fn_header(ll_t *ll, ast_node_t *fn, func_sig_t *sig,
             ast_node_t *p = (ast_node_t *)fn->list.data[i];
             const char *pts = type_to_string(ll->sem->tc, (type_t *)sig->params.data[i]);
             if (!first) sb_puts(&hdr, ", ");
-            sb_puts(&hdr, p->is_ref ? ll_fmt(ll, "ptr %%arg%zu", i)
+            sb_puts(&hdr, p->is_ref ? ll_fmt(ll, "ptr noundef nonnull %%arg%zu", i)
                                     : ll_fmt(ll, "%s %%arg%zu", ll_ty(ll, pts), i));
             first = false;
         }
     }
     sb_puts(&hdr, ")");
+    if (!ll->is_main) {
+        if (fn->is_inline) sb_puts(&hdr, " alwaysinline");
+        if (fn->is_noinline) sb_puts(&hdr, " noinline");
+        if (fn->is_pure) sb_puts(&hdr, " memory(read) willreturn nofree nosync");
+        if (fn->is_noret) sb_puts(&hdr, " noreturn");
+    }
+    if (ll->optsize) sb_puts(&hdr, " optsize");
+    if (ll->minsize) sb_puts(&hdr, " minsize");
+    sb_puts(&hdr, " nounwind");
     if (ll->debug && ll->cur_sp) sb_puts(&hdr, ll_fmt(ll, " !dbg %s", ll->cur_sp));
     sb_puts(&hdr, " {\n");
     const char *r = arena_strdup(ll->a, sb_cstr(&hdr));
@@ -224,7 +246,8 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
                             : ll_mangle(ll, owner ? owner->name : NULL, fn->name, sig);
     const char *recv_param = !owner    ? NULL
                              : is_impl ? ll_fmt(ll, "%s %%this", ll_ty(ll, recv_ts))
-                                       : "ptr %this";
+                                       : "ptr noundef %this";
+    bool exported = is_main || (!owner && fn->is_extern);
 
     {
         size_t i = 0;
@@ -260,7 +283,7 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
         ll_debug_subprogram(ll, fn->name, fn->span.begin.line);
         ll->cur_dbg = ll_debug_location(ll, fn->span.begin.line, fn->span.begin.col);
     }
-    const char *header = ll_fn_header(ll, fn, sig, ret_lty, fname, recv_param);
+    const char *header = ll_fn_header(ll, fn, sig, ret_lty, fname, recv_param, exported);
     if (is_impl) {
         ll_emit_alloca(ll, "%%p.this = alloca %s", ll_ty(ll, recv_ts));
         ll_emit(ll, "store %s %%this, ptr %%p.this", ll_ty(ll, recv_ts));
@@ -363,8 +386,8 @@ static void ll_ensure_vtbl(ll_t *ll, const char *iface, const char *concrete)
             n++;
         }
     }
-    sb_puts(ll->g,
-            ll_fmt(ll, "%s = constant [%d x ptr] [%s]\n", name, n, sb_cstr(&slots)));
+    sb_puts(ll->g, ll_fmt(ll, "%s = private unnamed_addr constant [%d x ptr] [%s]\n",
+                          name, n, sb_cstr(&slots)));
     sb_free(&slots);
 }
 
@@ -467,8 +490,8 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     sb_puts(ll->g, sb_cstr(&et));
     sb_free(&et);
     if (ncap == 0)
-        sb_puts(ll->g,
-                ll_fmt(ll, "@%s.env = global %s { ptr @%s }\n", name, envty, name));
+        sb_puts(ll->g, ll_fmt(ll, "@%s.env = internal global %s { ptr @%s }\n", name,
+                              envty, name));
 
     sb_t body;
     sb_init(&body);
@@ -502,7 +525,8 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
 
     sb_t hdr;
     sb_init(&hdr);
-    sb_puts(&hdr, ll_fmt(ll, "define %s @%s(ptr %%env", ll_ty(ll, rts), name));
+    sb_puts(&hdr,
+            ll_fmt(ll, "define internal %s @%s(ptr noundef %%env", ll_ty(ll, rts), name));
     {
         size_t i = 0;
         for (; i < n->list.len; i++) {
@@ -512,7 +536,7 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
                               : ll_fmt(ll, ", %s %%arg%zu", ll_ty(ll, p->type_str), i));
         }
     }
-    sb_puts(&hdr, ") {\n");
+    sb_puts(&hdr, ") nounwind {\n");
     const char *header = arena_strdup(ll->a, sb_cstr(&hdr));
     sb_free(&hdr);
 
@@ -560,9 +584,142 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     ll->defers = saved_defers;
 }
 
-static bool ll_const_init(const ast_node_t *init)
+static bool ll_text_is_int(const char *s)
 {
-    return init && init->kind == AST_LITERAL;
+    if (!s || !*s) return false;
+    size_t i = (s[0] == '-') ? 1 : 0;
+    if (!s[i]) return false;
+    for (; s[i]; i++)
+        if (s[i] < '0' || s[i] > '9') return false;
+    return true;
+}
+
+static const char *ll_const_fpfix(ll_t *ll, const char *lety, const char *v)
+{
+    if ((!strcmp(lety, "double") || !strcmp(lety, "float")) && ll_text_is_int(v))
+        return ll_fmt(ll, "%s.0", v);
+    return v;
+}
+
+static bool ll_const_agg(ll_t *ll, ast_node_t *n, const char **out);
+
+/* True (with *out set to the LLVM constant-expr text) when `n` folds to a
+ * value the LLVM verifier accepts directly as a global initializer, so
+ * codegen can skip the zero-init + runtime-store fallback in main(). */
+static bool ll_const_value(ll_t *ll, ast_node_t *n, const char **out)
+{
+    if (!n) return false;
+    if (n->kind == AST_CAST) return ll_const_value(ll, n->a, out);
+    if (n->kind == AST_LITERAL) {
+        switch (n->op) {
+        case TK_INT:
+        case TK_FLOAT:
+        case TK_STRING:
+        case TK_TRIPLE_STRING:
+        case TK_RAW_STRING:
+        case TK_UTF8_CHAR:
+        case TK_CHAR:
+        case TK_KW_TRUE:
+        case TK_KW_FALSE:
+        case TK_KW_NULL:
+            *out = ll_expr(ll, n).ref;
+            return true;
+        default:
+            return false;
+        }
+    }
+    if (n->kind == AST_ARRAY_LIT || n->kind == AST_STRUCT_LIT)
+        return ll_const_agg(ll, n, out);
+    return false;
+}
+
+static bool ll_const_agg(ll_t *ll, ast_node_t *n, const char **out)
+{
+    if (n->kind == AST_ARRAY_LIT) {
+        const char *ats = n->type_str;
+        if (!ats || !strchr(ats, '[')) return false;
+        const char *ety = ll_array_elem(ll, ats);
+        const char *lety = ll_ty(ll, ety);
+        if (n->list.len == 0) {
+            *out = "zeroinitializer";
+            return true;
+        }
+        sb_t b;
+        sb_init(&b);
+        sb_puts(&b, "[");
+        {
+            size_t i = 0;
+            for (; i < n->list.len; i++) {
+                ast_node_t *el = (ast_node_t *)n->list.data[i];
+                const char *v;
+                if (!ll_const_value(ll, el, &v)) {
+                    sb_free(&b);
+                    return false;
+                }
+                if (i) sb_puts(&b, ", ");
+                sb_puts(&b, ll_fmt(ll, "%s %s", lety, ll_const_fpfix(ll, lety, v)));
+            }
+        }
+        sb_puts(&b, "]");
+        *out = arena_strdup(ll->a, sb_cstr(&b));
+        sb_free(&b);
+        return true;
+    }
+    if (n->kind == AST_STRUCT_LIT) {
+        symbol_t *ss = ll_struct_sym(ll, n->type_str ? n->type_str : n->name);
+        if (!ss) return false;
+        sb_t b;
+        sb_init(&b);
+        sb_puts(&b, "{ ");
+        int idx = 0;
+        {
+            size_t i = 0;
+            for (; i < ss->members->symbols.len; i++) {
+                symbol_t *f = (symbol_t *)ss->members->symbols.data[i];
+                if (f->kind != SYM_FIELD) continue;
+                const char *fts = type_to_string(ll->sem->tc, f->type);
+                ast_node_t *prov = NULL;
+                {
+                    size_t j = 0;
+                    for (; j < n->list.len; j++) {
+                        ast_node_t *fi = (ast_node_t *)n->list.data[j];
+                        if (fi->name && !strcmp(fi->name, f->name)) {
+                            prov = fi;
+                            break;
+                        }
+                    }
+                }
+                const char *v;
+                if (prov) {
+                    if (!ll_const_value(ll, prov->a, &v)) {
+                        sb_free(&b);
+                        return false;
+                    }
+                } else if (f->decl && f->decl->a) {
+                    if (!ll_const_value(ll, f->decl->a, &v)) {
+                        sb_free(&b);
+                        return false;
+                    }
+                } else {
+                    v = ll_zero(fts);
+                }
+                const char *flety = ll_ty(ll, fts);
+                if (idx) sb_puts(&b, ", ");
+                sb_puts(&b, ll_fmt(ll, "%s %s", flety, ll_const_fpfix(ll, flety, v)));
+                idx++;
+            }
+        }
+        if (!idx) {
+            sb_free(&b);
+            *out = "zeroinitializer";
+            return true;
+        }
+        sb_puts(&b, " }");
+        *out = arena_strdup(ll->a, sb_cstr(&b));
+        sb_free(&b);
+        return true;
+    }
+    return false;
 }
 
 void ll_emit_globals(ll_t *ll, ast_node_t *program)
@@ -579,13 +736,14 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
                 ll_fmt(ll, "@g.%s", ll_struct_ltype(ll, d->name) + strlen("%struct."));
             const char *lty = ll_ty(ll, ts);
             const char *init;
-            if (ll_const_init(d->a)) {
-                init = ll_expr(ll, d->a).ref;
+            const char *cv;
+            if (d->a && ll_const_value(ll, d->a, &cv)) {
+                init = cv;
             } else {
                 init = ll_zero(ts);
                 if (d->a) vec_push(ll->a, &ll->gdefer, d);
             }
-            sb_puts(ll->g, ll_fmt(ll, "%s = global %s %s\n", gref, lty, init));
+            sb_puts(ll->g, ll_fmt(ll, "%s = internal global %s %s\n", gref, lty, init));
             lvar_t *gv = (lvar_t *)arena_alloc(ll->a, sizeof *gv);
             gv->name = d->name;
             gv->ptr = gref;
@@ -599,9 +757,10 @@ void ll_emit_globals(ll_t *ll, ast_node_t *program)
 
 static bool ll_extern_seen(ll_t *ll, const char *name)
 {
-    static const char *prologue[] = {
-        "printf",  "dprintf", "strlen", "strcmp",   "malloc", "memcpy", "realloc", "free",
-        "memmove", "abort",   "exit",   "snprintf", "strtol", "strtod", "strstr",  NULL};
+    static const char *prologue[] = {"printf", "dprintf",  "strlen", "strcmp",  "malloc",
+                                     "memcpy", "realloc",  "free",   "memmove", "abort",
+                                     "exit",   "snprintf", "strtol", "strtod",  "strstr",
+                                     "write",  NULL};
     {
         int p = 0;
         for (; prologue[p]; p++)
@@ -640,7 +799,11 @@ static void ll_emit_externs_in(ll_t *ll, scope_t *g)
                 }
             }
             if (sig->variadic) sb_puts(&b, sig->params.len ? ", ..." : "...");
-            sb_puts(&b, ")\n");
+            sb_puts(&b, ")");
+            if (sig->decl->is_pure)
+                sb_puts(&b, " nounwind willreturn nofree nosync memory(read)");
+            if (sig->decl->is_noret) sb_puts(&b, " noreturn");
+            sb_puts(&b, "\n");
             sb_puts(ll->g, sb_cstr(&b));
             sb_free(&b);
         }

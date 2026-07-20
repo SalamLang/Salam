@@ -32,8 +32,24 @@ typedef enum {
     VAL_MAPITER,
     VAL_STRUCT,
     VAL_FUNC,
-    VAL_MODULE
+    VAL_MODULE,
+    VAL_PTR
 } val_kind_t;
+
+typedef enum {
+    PTR_I8,
+    PTR_U8,
+    PTR_I16,
+    PTR_U16,
+    PTR_I32,
+    PTR_U32,
+    PTR_I64,
+    PTR_U64,
+    PTR_F32,
+    PTR_F64,
+    PTR_STR,
+    PTR_OPAQUE
+} ptr_elem_t;
 
 typedef struct value value_t;
 
@@ -51,6 +67,11 @@ struct env;
 
 struct module;
 
+typedef struct {
+    void *addr;
+    ptr_elem_t elem;
+} sptr_t;
+
 struct value {
     val_kind_t kind;
     union {
@@ -64,6 +85,7 @@ struct value {
         sstruct_t *st;
         sclosure_t *fn;
         struct module *mod;
+        sptr_t ptr;
     } as;
 };
 
@@ -83,6 +105,10 @@ struct smap {
     smap_entry_t *entries;
     size_t count;
     size_t cap;
+    uint32_t *index;
+    size_t index_cap;
+    size_t index_used;
+    size_t free_hint;
 };
 
 struct smapiter {
@@ -160,6 +186,33 @@ SAL_INLINE value_t val_module(struct module *m)
     v.kind = VAL_MODULE;
     v.as.mod = m;
     return v;
+}
+
+SAL_INLINE value_t val_ptr(void *addr, ptr_elem_t elem)
+{
+    value_t v;
+    v.kind = VAL_PTR;
+    v.as.ptr.addr = addr;
+    v.as.ptr.elem = elem;
+    return v;
+}
+
+SAL_INLINE size_t ptr_elem_size(ptr_elem_t elem)
+{
+    switch (elem) {
+    case PTR_I8:
+    case PTR_U8:
+        return 1;
+    case PTR_I16:
+    case PTR_U16:
+        return 2;
+    case PTR_I32:
+    case PTR_U32:
+    case PTR_F32:
+        return 4;
+    default:
+        return 8;
+    }
 }
 
 #endif /* SALAM_INTERP_VALUE_H */

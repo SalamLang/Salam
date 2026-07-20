@@ -20,17 +20,22 @@ bool lx_scan_unicode_op(lx_t *L)
     const unsigned char *s = (const unsigned char *)(L->s + L->pos);
     size_t rem = L->n - L->pos;
     token_kind_t k;
-    if (rem >= 3 && s[0] == 0xEF && s[1] == 0xBC && (s[2] == 0x8B || s[2] == 0x8D))
+    size_t len;
+    if (rem >= 3 && s[0] == 0xEF && s[1] == 0xBC && (s[2] == 0x8B || s[2] == 0x8D)) {
         k = (s[2] == 0x8B) ? TK_PLUS : TK_MINUS;
-    else if (rem >= 3 && s[0] == 0xE2 && s[1] == 0x88 && s[2] == 0x92)
+        len = 3;
+    } else if (rem >= 3 && s[0] == 0xE2 && s[1] == 0x88 && s[2] == 0x92) {
         k = TK_MINUS;
-    else
+        len = 3;
+    } else if (rem >= 2 && s[0] == 0xD8 && s[1] == 0x9F) {
+        k = TK_QUESTION;
+        len = 2;
+    } else
         return false;
     src_pos_t b = LX_POS(L);
     size_t start = L->pos;
-    lx_adv(L);
-    lx_adv(L);
-    lx_adv(L);
+    while (len--)
+        lx_adv(L);
     lx_emit(L, k, &b, lx_slice(L, start));
     return true;
 }
@@ -68,10 +73,10 @@ void lx_scan_op(lx_t *L)
         k = TK_COMMA;
         break;
     case ':':
-        k = TK_COLON;
+        k = lx_match(L, '=') ? TK_COLON_ASSIGN : TK_COLON;
         break;
-    case ';':
-        k = TK_STMT_END;
+    case '?':
+        k = TK_QUESTION;
         break;
     case '.':
 
@@ -83,14 +88,20 @@ void lx_scan_op(lx_t *L)
             k = TK_DOT;
         break;
     case '+':
-        k = lx_match(L, '=') ? TK_PLUS_EQ : TK_PLUS;
+        if (lx_match(L, '+'))
+            k = TK_PLUS_PLUS;
+        else
+            k = lx_match(L, '=') ? TK_PLUS_EQ : TK_PLUS;
         break;
     case '-':
-        k = lx_match(L, '=') ? TK_MINUS_EQ : TK_MINUS;
+        if (lx_match(L, '-'))
+            k = TK_MINUS_MINUS;
+        else
+            k = lx_match(L, '=') ? TK_MINUS_EQ : TK_MINUS;
         break;
     case '*':
         if (lx_match(L, '*'))
-            k = TK_POWER;
+            k = lx_match(L, '=') ? TK_POWER_EQ : TK_POWER;
         else if (lx_match(L, '='))
             k = TK_STAR_EQ;
         else
@@ -111,19 +122,7 @@ void lx_scan_op(lx_t *L)
             k = TK_ASSIGN;
         break;
     case '!':
-        if (lx_match(L, '='))
-            k = TK_NE;
-
-        else if (lx_peek(L) == '_' && lx_peek2(L, 1) == '_' &&
-                 !lx_is_ident_cont(lx_peek2(L, 2))) {
-            lx_adv(L);
-            lx_adv(L);
-            k = TK_KW_PRINTERRLN;
-        } else if (lx_peek(L) == '_' && !lx_is_ident_cont(lx_peek2(L, 1))) {
-            lx_adv(L);
-            k = TK_KW_PRINTERR;
-        } else
-            k = TK_NOT;
+        k = lx_match(L, '=') ? TK_NE : TK_NOT;
         break;
     case '<':
         k = lx_match(L, '=') ? TK_LE : TK_LT;
@@ -142,6 +141,11 @@ void lx_scan_op(lx_t *L)
             return;
         }
         break;
+    case ';':
+        lx_error(
+            L, &b,
+            "unexpected ';' (statements end at a newline; 'for' uses ',' between clauses)");
+        return;
     default:
         lx_error(L, &b, "unexpected character");
         return;

@@ -1,0 +1,470 @@
+import dom
+import web.canvas
+import web.keys
+import "board.salam"
+import "ui.salam"
+import "audio.salam"
+
+TILE := 24.0
+W := 456.0
+H := 360.0
+PI := 3.141592653589793
+TAU := 6.283185307179586
+HELP := "Move with arrows or swipe. Pause with P or the pad. Eat every dot; grab a corner pellet to hunt the ghosts!"
+
+dxs := [1, 0, -1, 0] as int[4]
+dys := [0, 1, 0, -1] as int[4]
+gcolors := ["#ff4f4f", "#ff9ff0", "#6ee7f5", "#ffb35c"] as str[4]
+
+gx : f64[4]
+gy : f64[4]
+gdir : int[4]
+glx : int[4]
+gly : int[4]
+gwait : f64[4]
+ghome : bool[4]
+
+mut ctx := 0 as i64
+mut px := 0.0
+mut py := 0.0
+mut pdir := 2
+mut pwant := 2
+mut score := 0
+mut high := 0
+mut lives := 3
+mut level := 1
+mut phase := 0
+mut tick := 0
+mut fright := 0.0
+mut freeze := 0.0
+mut combo := 200
+
+func absf(v : f64) : f64:
+    ret v < 0.0 ? 0.0 - v : v
+end
+
+func iabs(v : int) : int:
+    ret v < 0 ? 0 - v : v
+end
+
+func speed mul() : f64:
+    ret 1.0 + 0.07 * ((level - 1) as f64)
+end
+
+func show hud():
+    ui.ShowHud(score, high, level, lives)
+end
+
+func bump score(points : int):
+    score = score + points
+    if score > high:
+        high = score
+        dom.StoreSetInt("salam_pacman_high", high as i64)
+    end
+    show hud()
+end
+
+func place actors():
+    px = board.SpawnX()
+    py = board.SpawnY()
+    pdir = 2
+    pwant = 2
+    repeat 4 with i:
+        gx[i] = board.Center(9)
+        gy[i] = board.Center(7)
+        gdir[i] = (i % 2 == 0) ? 0 : 2
+        glx[i] = -1
+        gly[i] = -1
+        gwait[i] = (i as f64) * 1500.0
+        ghome[i] = false
+    end
+    fright = 0.0
+    combo = 200
+    freeze = 900.0
+end
+
+func new game():
+    score = 0
+    lives = 3
+    level = 1
+    board.Load()
+    place actors()
+    phase = 0
+    show hud()
+    ui.Say(HELP)
+end
+
+func next level():
+    level = level + 1
+    board.Load()
+    place actors()
+    phase = 0
+    show hud()
+    ui.Say("Level " + level + "! Faster now.")
+end
+
+func move_pac(dt : f64):
+    sp := 100.0 * speed mul() * dt / 1000.0
+    cx := (px / TILE) as int
+    cy := (py / TILE) as int
+    ccx := board.Center(cx)
+    ccy := board.Center(cy)
+    if pwant != pdir:
+        if (pwant + 2) % 4 == pdir:
+            pdir = pwant
+        else:
+            near := absf(px - ccx) < 6.0 && absf(py - ccy) < 6.0
+            if near && board.Open(cx + dxs[pwant], cy + dys[pwant]):
+                px = ccx
+                py = ccy
+                pdir = pwant
+            end
+        end
+    end
+    if pdir == 0 || pdir == 2:
+        py = ccy
+        mut nx := px + ((pdir == 0) ? sp : 0.0 - sp)
+        if !board.Open(cx + dxs[pdir], cy):
+            if pdir == 0 && nx > ccx: nx = ccx end
+            if pdir == 2 && nx < ccx: nx = ccx end
+        end
+        if nx < 0.0: nx = nx + W end
+        if nx >= W: nx = nx - W end
+        px = nx
+    else:
+        px = ccx
+        mut ny := py + ((pdir == 1) ? sp : 0.0 - sp)
+        if !board.Open(cx, cy + dys[pdir]):
+            if pdir == 1 && ny > ccy: ny = ccy end
+            if pdir == 3 && ny < ccy: ny = ccy end
+        end
+        py = ny
+    end
+end
+
+func eat():
+    cx := (px / TILE) as int
+    cy := (py / TILE) as int
+    t := board.Take(cx, cy)
+    if t == 2 || t == 3:
+        if t == 2:
+            bump score(10)
+            audio.Dot()
+        else:
+            bump score(50)
+            fright = 6000.0
+            combo = 200
+            audio.Pellet()
+            repeat 4 with i:
+                if gwait[i] <= 0.0:
+                    gdir[i] = (gdir[i] + 2) % 4
+                    glx[i] = -1
+                    gly[i] = -1
+                end
+            end
+        end
+        if board.DotsLeft() == 0:
+            phase = 1
+            ui.Say("Level clear! Press Enter for level " + (level + 1))
+            audio.LevelClear()
+        end
+    end
+end
+
+func pick_dir(i : int, cx : int, cy : int) : int:
+    back := (gdir[i] + 2) % 4
+    pcx := (px / TILE) as int
+    pcy := (py / TILE) as int
+    mut ttx := pcx
+    mut tty := pcy
+    if i == 1:
+        ttx = pcx + dxs[pdir] * 4
+        tty = pcy + dys[pdir] * 4
+    end
+    if i == 2 && iabs(pcx - cx) + iabs(pcy - cy) < 6:
+        ttx = 1
+        tty = 13
+    end
+    rnd := fright > 0.0 || i == 3 || dom.RandomInt(10) == 0
+    mut best := -1
+    mut bestd := 1000000
+    mut seen := 0
+    repeat 4 with d:
+        if d != back && board.Open(cx + dxs[d], cy + dys[d]):
+            if rnd:
+                seen = seen + 1
+                if dom.RandomInt(seen) == 0: best = d end
+            else:
+                dist := iabs(cx + dxs[d] - ttx) + iabs(cy + dys[d] - tty)
+                if dist < bestd:
+                    bestd = dist
+                    best = d
+                end
+            end
+        end
+    end
+    ret best == -1 ? back : best
+end
+
+func move_ghost(i : int, dt : f64):
+    base := fright > 0.0 ? 48.0 : (66.0 + (i as f64) * 5.0)
+    sp := base * speed mul() * dt / 1000.0
+    cx := (gx[i] / TILE) as int
+    cy := (gy[i] / TILE) as int
+    ccx := board.Center(cx)
+    ccy := board.Center(cy)
+    at_center := absf(gx[i] - ccx) < 2.0 && absf(gy[i] - ccy) < 2.0
+    if at_center && (cx != glx[i] || cy != gly[i]):
+        gx[i] = ccx
+        gy[i] = ccy
+        gdir[i] = pick_dir(i, cx, cy)
+        glx[i] = cx
+        gly[i] = cy
+    end
+    d := gdir[i]
+    if d == 0 || d == 2:
+        gy[i] = ccy
+        mut nx := gx[i] + ((d == 0) ? sp : 0.0 - sp)
+        if !board.Open(cx + dxs[d], cy):
+            if d == 0 && nx > ccx: nx = ccx end
+            if d == 2 && nx < ccx: nx = ccx end
+        end
+        if nx < 0.0: nx = nx + W end
+        if nx >= W: nx = nx - W end
+        gx[i] = nx
+    else:
+        gx[i] = ccx
+        mut ny := gy[i] + ((d == 1) ? sp : 0.0 - sp)
+        if !board.Open(cx, cy + dys[d]):
+            if d == 1 && ny > ccy: ny = ccy end
+            if d == 3 && ny < ccy: ny = ccy end
+        end
+        gy[i] = ny
+    end
+end
+
+func lose_life():
+    lives = lives - 1
+    audio.Death()
+    if lives <= 0:
+        phase = 2
+        ui.Say("Game over! Press Enter for a new game.")
+    else:
+        place actors()
+        ui.Say("Caught! Lives left: " + lives)
+    end
+    show hud()
+end
+
+func check_catch():
+    repeat 4 with i:
+        if gwait[i] <= 0.0 && phase == 0:
+            ddx := px - gx[i]
+            ddy := py - gy[i]
+            if ddx * ddx + ddy * ddy < 190.0:
+                if fright > 0.0:
+                    bump score(combo)
+                    combo = combo * 2
+                    ghome[i] = true
+                    gwait[i] = 2500.0
+                    gx[i] = board.Center(9)
+                    gy[i] = board.Center(7)
+                    audio.GhostDown()
+                else:
+                    lose_life()
+                end
+            end
+        end
+    end
+end
+
+func draw_ghost(i : int):
+    if ghome[i]: ret end
+    x := gx[i]
+    y := gy[i]
+    mut body := gcolors[i]
+    if fright > 0.0:
+        body = "#3a5bff"
+        if fright < 1600.0 && (tick / 6) % 2 == 0: body = "#dfe6ff" end
+    end
+    canvas.FillStyle(ctx, body)
+    canvas.BeginPath(ctx)
+    canvas.Arc(ctx, x, y - 1.0, 9.0, PI, TAU)
+    canvas.LineTo(ctx, x + 9.0, y + 8.0)
+    canvas.LineTo(ctx, x + 6.0, y + 5.0)
+    canvas.LineTo(ctx, x + 3.0, y + 8.0)
+    canvas.LineTo(ctx, x, y + 5.0)
+    canvas.LineTo(ctx, x - 3.0, y + 8.0)
+    canvas.LineTo(ctx, x - 6.0, y + 5.0)
+    canvas.LineTo(ctx, x - 9.0, y + 8.0)
+    canvas.ClosePath(ctx)
+    canvas.Fill(ctx)
+    look := px > x ? 1.2 : 0.0 - 1.2
+    canvas.FillStyle(ctx, "#ffffff")
+    canvas.BeginPath(ctx)
+    canvas.Arc(ctx, x - 3.5, y - 3.0, 2.6, 0.0, TAU)
+    canvas.Fill(ctx)
+    canvas.BeginPath(ctx)
+    canvas.Arc(ctx, x + 3.5, y - 3.0, 2.6, 0.0, TAU)
+    canvas.Fill(ctx)
+    if fright <= 0.0:
+        canvas.FillStyle(ctx, "#182a70")
+        canvas.BeginPath(ctx)
+        canvas.Arc(ctx, x - 3.5 + look, y - 3.0, 1.2, 0.0, TAU)
+        canvas.Fill(ctx)
+        canvas.BeginPath(ctx)
+        canvas.Arc(ctx, x + 3.5 + look, y - 3.0, 1.2, 0.0, TAU)
+        canvas.Fill(ctx)
+    end
+end
+
+func draw_board():
+    rows := board.Rows()
+    cols := board.Cols()
+    repeat rows with y:
+        repeat cols with x:
+            t := board.Tile(x, y)
+            x0 := (x as f64) * TILE
+            y0 := (y as f64) * TILE
+            if t == 1:
+                canvas.FillStyle(ctx, "#1c2f7a")
+                canvas.BeginPath(ctx)
+                canvas.RoundRect(ctx, x0 + 2.0, y0 + 2.0, TILE - 4.0, TILE - 4.0, 5.0)
+                canvas.Fill(ctx)
+            end
+            if t == 2:
+                canvas.FillStyle(ctx, "#ffd9a8")
+                canvas.BeginPath(ctx)
+                canvas.Arc(ctx, x0 + TILE * 0.5, y0 + TILE * 0.5, 2.6, 0.0, TAU)
+                canvas.Fill(ctx)
+            end
+            if t == 3:
+                pr := (tick / 8) % 2 == 0 ? 5.2 : 3.8
+                canvas.FillStyle(ctx, "#ffe9c8")
+                canvas.BeginPath(ctx)
+                canvas.Arc(ctx, x0 + TILE * 0.5, y0 + TILE * 0.5, pr, 0.0, TAU)
+                canvas.Fill(ctx)
+            end
+        end
+    end
+end
+
+func draw_pac():
+    mouth := (tick / 8) % 2 == 0 ? 0.55 : 0.12
+    canvas.Save(ctx)
+    canvas.Translate(ctx, px, py)
+    canvas.Rotate(ctx, (pdir as f64) * PI * 0.5)
+    canvas.FillStyle(ctx, "#ffd21f")
+    canvas.BeginPath(ctx)
+    canvas.MoveTo(ctx, 0.0, 0.0)
+    canvas.Arc(ctx, 0.0, 0.0, 10.0, mouth, TAU - mouth)
+    canvas.ClosePath(ctx)
+    canvas.Fill(ctx)
+    canvas.Restore(ctx)
+end
+
+func draw_overlay():
+    mut headline := "PAUSED"
+    mut hue := "#e8e8ff"
+    if phase == 1:
+        headline = "LEVEL CLEAR!"
+        hue = "#7cf7a0"
+    end
+    if phase == 2:
+        headline = "GAME OVER"
+        hue = "#ff6b6b"
+    end
+    canvas.FillStyle(ctx, "rgba(4,4,22,0.68)")
+    canvas.FillRect(ctx, 0.0, 0.0, W, H)
+    canvas.TextAlign(ctx, "center")
+    canvas.Font(ctx, "bold 36px 'Courier New', monospace")
+    canvas.FillStyle(ctx, hue)
+    canvas.FillText(ctx, headline, W * 0.5, H * 0.5 - 12.0)
+    canvas.Font(ctx, "16px 'Courier New', monospace")
+    canvas.FillStyle(ctx, "#e8e8ff")
+    canvas.FillText(ctx,
+                    phase == 3 ? "P or pause pad to resume" : "Enter or tap to continue",
+                    W * 0.5, H * 0.5 + 22.0)
+end
+
+func draw():
+    canvas.FillStyle(ctx, "#050514")
+    canvas.FillRect(ctx, 0.0, 0.0, W, H)
+    draw_board()
+    draw_pac()
+    repeat 4 with i:
+        draw_ghost(i)
+    end
+    if phase != 0: draw_overlay() end
+end
+
+func toggle_pause():
+    if phase == 0:
+        phase = 3
+        ui.Say("Paused. Press P or the pause pad to resume.")
+    else:
+        if phase == 3:
+            phase = 0
+            ui.Say(HELP)
+        end
+    end
+end
+
+func do_action():
+    if phase == 1: next level() end
+    if phase == 2: new game() end
+    if phase == 3: toggle_pause() end
+end
+
+func frame(dt : f64):
+    tick = tick + 1
+    if keys.Pressed("p") || keys.Pressed("P"): toggle_pause() end
+    if phase == 0:
+        if fright > 0.0:
+            fright = fright - dt
+            if fright < 0.0: fright = 0.0 end
+        end
+        if freeze > 0.0:
+            freeze = freeze - dt
+        else:
+            if keys.Down("ArrowLeft"): pwant = 2 end
+            if keys.Down("ArrowRight"): pwant = 0 end
+            if keys.Down("ArrowUp"): pwant = 3 end
+            if keys.Down("ArrowDown"): pwant = 1 end
+            move_pac(dt)
+            eat()
+            repeat 4 with i:
+                if gwait[i] > 0.0:
+                    gwait[i] = gwait[i] - dt
+                    if gwait[i] <= 0.0: ghome[i] = false end
+                else:
+                    move_ghost(i, dt)
+                end
+            end
+            check_catch()
+        end
+    else:
+        if keys.Pressed("Enter"): do_action() end
+    end
+    draw()
+end
+
+func main:
+    ui.Init()
+    ctx = ui.Ctx()
+    keys.Init()
+    keys.Track("p")
+    keys.Track("P")
+    ui.BindControls((d : int) =>:
+        pwant = d
+    end, () =>:
+        do_action()
+    end, () =>:
+        toggle_pause()
+    end)
+    high = dom.StoreGetInt("salam_pacman_high") as int
+    new game()
+    dom.EveryFrame((dt : f64) =>:
+        frame(dt)
+    end)
+end

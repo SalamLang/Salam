@@ -1,0 +1,149 @@
+package bench
+
+import io
+import filepath
+import csv
+import conv
+import json
+
+func mismatch json(name : str, s &: Store) : str:
+    order := lang order()
+    defer order.free()
+    mut mism := Vector {} as Vector<str>
+    defer mism.free()
+    mut i := 0
+    until i < order.len():
+        lang := order.get(i)[0]
+        k := kkey(name, lang)
+        if sget(s.status, k) == "mismatch":
+            mism.push(json.Member(lang, sget(s.note, k)))
+        end
+        i = i + 1
+    end
+    mut res := ""
+    if mism.len() > 0: res = json.Object(mism) end
+    ret res
+end
+
+pub func WriteCsv(cfg &: Config, s &: Store):
+    mut lines := Vector {} as Vector<str>
+    defer lines.free()
+    mut hdr := Vector {} as Vector<str>
+    defer hdr.free()
+    hdr.push("program")
+    hdr.push("language")
+    hdr.push("run")
+    hdr.push("epoch_start_ns")
+    hdr.push("epoch_end_ns")
+    hdr.push("duration_ms")
+    lines.push(csv.WriteLine(hdr))
+    mut i := 0
+    until i < s.sp.len():
+        mut row := Vector {} as Vector<str>
+        row.push(s.sp.get(i)[0])
+        row.push(s.sl.get(i)[0])
+        row.push(conv.FormatInt(s.sr.get(i)[0] as i64))
+        row.push(conv.FormatInt(s.st0.get(i)[0]))
+        row.push(conv.FormatInt(s.st1.get(i)[0]))
+        row.push(fmt3(s.sms.get(i)[0]))
+        lines.push(csv.WriteLine(row))
+        row.free()
+        i = i + 1
+    end
+    io.WriteLines(filepath.Join(cfg.results, "results.csv"), lines)
+end
+
+func stats json(s &: Store, k : str) : str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("min_ms", fmt3(fget(s.m min, k))))
+    m.push(json.MemberRaw("max_ms", fmt3(fget(s.m max, k))))
+    m.push(json.MemberRaw("avg_ms", fmt3(fget(s.m avg, k))))
+    m.push(json.MemberRaw("median_ms", fmt3(fget(s.m med, k))))
+    m.push(json.MemberRaw("stdev_ms", fmt3(fget(s.m sd, k))))
+    m.push(json.MemberInt("runs", iget(s.m runs, k) as i64))
+    out := json.Object(m)
+    ret out
+end
+
+func samples json(s &: Store, name : str, lang : str) : str:
+    mut items := Vector {} as Vector<str>
+    defer items.free()
+    mut i := 0
+    until i < s.sp.len():
+        if s.sp.get(i)[0] == name && s.sl.get(i)[0] == lang:
+            mut m := Vector {} as Vector<str>
+            m.push(json.MemberInt("epoch_start_ns", s.st0.get(i)[0]))
+            m.push(json.MemberInt("epoch_end_ns", s.st1.get(i)[0]))
+            m.push(json.MemberRaw("ms", fmt3(s.sms.get(i)[0])))
+            items.push(json.Object(m))
+            m.free()
+        end
+        i = i + 1
+    end
+    out := json.Array(items)
+    ret out
+end
+
+pub func WriteJson(cfg &: Config, s &: Store, names : Vector<str>, ekeys : Vector<str>, evals : Vector<str>, started : i64, finished : i64):
+    mut progs := Vector {} as Vector<str>
+    defer progs.free()
+    order := lang order()
+    defer order.free()
+    mut ni := 0
+    until ni < names.len():
+        name := names.get(ni)[0]
+        mut pm := Vector {} as Vector<str>
+        pm.push(json.Member("reference_output", sget(s.refout, name)))
+        mut mm := Vector {} as Vector<str>
+        mut em := Vector {} as Vector<str>
+        mut lm := Vector {} as Vector<str>
+        mut li := 0
+        until li < order.len():
+            lang := order.get(li)[0]
+            k := kkey(name, lang)
+            st := sget(s.status, k)
+            if st == "mismatch": mm.push(json.Member(lang, sget(s.note, k))) end
+            if st == "build_failed": em.push(json.Member(lang, sget(s.berr, k))) end
+            if st == "ok":
+                mut e := Vector {} as Vector<str>
+                e.push(json.MemberRaw("stats", stats json(s, k)))
+                e.push(json.MemberRaw("samples", samples json(s, name, lang)))
+                lm.push(json.MemberRaw(lang, json.Object(e)))
+                e.free()
+            end
+            if st == "mismatch" || st == "run_failed":
+                mut e := Vector {} as Vector<str>
+                e.push(json.MemberRaw("stats", "null"))
+                e.push(json.MemberRaw("samples", "[]"))
+                if st == "mismatch": e.push(json.Member("note", "output mismatch")) end
+                lm.push(json.MemberRaw(lang, json.Object(e)))
+                e.free()
+            end
+            li = li + 1
+        end
+        pm.push(json.MemberRaw("mismatched", json.Object(mm)))
+        pm.push(json.MemberRaw("errors", json.Object(em)))
+        pm.push(json.MemberRaw("langs", json.Object(lm)))
+        progs.push(json.MemberRaw(name, json.Object(pm)))
+        mm.free()
+        em.free()
+        lm.free()
+        pm.free()
+        ni = ni + 1
+    end
+    mut env members := Vector {} as Vector<str>
+    defer env members.free()
+    mut ei := 0
+    until ei < ekeys.len():
+        env members.push(json.Member(ekeys.get(ei)[0], evals.get(ei)[0]))
+        ei = ei + 1
+    end
+    mut top := Vector {} as Vector<str>
+    defer top.free()
+    top.push(json.MemberInt("started_epoch_ns", started))
+    top.push(json.MemberInt("finished_epoch_ns", finished))
+    top.push(json.MemberRaw("environment", json.Object(env members)))
+    top.push(json.MemberInt("runs", cfg.runs as i64))
+    top.push(json.MemberRaw("results", json.Object(progs)))
+    io.WriteFile(filepath.Join(cfg.results, "results.json"), json.Object(top).concat("\n"))
+end

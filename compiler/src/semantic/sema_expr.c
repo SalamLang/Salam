@@ -36,6 +36,30 @@ static bool tk_is_arith(token_kind_t k)
            k == TK_PERCENT;
 }
 
+static bool int_lit_fits(uint64_t u, type_kind_t k)
+{
+    switch (k) {
+    case TY_I8:
+        return u <= 127ULL;
+    case TY_I16:
+        return u <= 32767ULL;
+    case TY_I32:
+        return u <= 2147483647ULL;
+    case TY_I64:
+        return u <= 9223372036854775807ULL;
+    case TY_U8:
+        return u <= 255ULL;
+    case TY_U16:
+        return u <= 65535ULL;
+    case TY_U32:
+        return u <= 4294967295ULL;
+    case TY_U64:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool sema_type_is_stringable(type_t *t)
 {
     return t->kind == TY_STR || t->kind == TY_UCHAR || t->kind == TY_BOOL ||
@@ -97,6 +121,8 @@ token_kind_t sema_compound_base(token_kind_t k)
         return TK_SLASH;
     case TK_PERCENT_EQ:
         return TK_PERCENT;
+    case TK_POWER_EQ:
+        return TK_POWER;
     default:
         return TK_EOF;
     }
@@ -114,10 +140,27 @@ type_t *sema_try_op_overload(sema_t *s, ast_node_t *n, symbol_t *ssym, const cha
     return sig ? sig->ret : NULL;
 }
 
+static bool is_int_lit(const ast_node_t *n)
+{
+    return n && n->kind == AST_LITERAL && n->op == TK_INT;
+}
+
 static type_t *check_binary(sema_t *s, ast_node_t *n)
 {
-    type_t *l = sema_check_expr(s, n->a);
-    type_t *r = sema_check_expr(s, n->b);
+    bool l_lit = is_int_lit(n->a), r_lit = is_int_lit(n->b);
+    type_t *l, *r;
+    if (r_lit && !l_lit) {
+        l = sema_check_expr(s, n->a);
+        if (l && type_is_integer(l)) s->expected = l;
+        r = sema_check_expr(s, n->b);
+    } else if (l_lit && !r_lit) {
+        r = sema_check_expr(s, n->b);
+        if (r && type_is_integer(r)) s->expected = r;
+        l = sema_check_expr(s, n->a);
+    } else {
+        l = sema_check_expr(s, n->a);
+        r = sema_check_expr(s, n->b);
+    }
     token_kind_t op = n->op;
     if (type_is_error(l) || type_is_error(r)) return decorate(s, n, err_ty(s));
 
@@ -189,6 +232,46 @@ static type_t *check_binary(sema_t *s, ast_node_t *n)
     return decorate(s, n, err_ty(s));
 }
 
+static type_t *check_ternary(sema_t *s, ast_node_t *n)
+{
+    type_t *exp = s->expected;
+    s->expected = NULL;
+    type_t *c = sema_check_expr(s, n->a);
+    if (c->kind != TY_BOOL && !type_is_error(c))
+        SERR(s, 21, &n->a->span, "'?:' condition must be bool, got '%s'",
+             type_to_string(s->tc, c));
+    bool t_lit = is_int_lit(n->b), f_lit = is_int_lit(n->c);
+    type_t *tt, *tf;
+    if (f_lit && !t_lit) {
+        s->expected = exp;
+        tt = sema_check_expr(s, n->b);
+        s->expected = (tt && type_is_integer(tt)) ? tt : exp;
+        tf = sema_check_expr(s, n->c);
+    } else if (t_lit && !f_lit) {
+        s->expected = exp;
+        tf = sema_check_expr(s, n->c);
+        s->expected = (tf && type_is_integer(tf)) ? tf : exp;
+        tt = sema_check_expr(s, n->b);
+    } else {
+        s->expected = exp;
+        tt = sema_check_expr(s, n->b);
+        s->expected = exp;
+        tf = sema_check_expr(s, n->c);
+    }
+    s->expected = NULL;
+    if (type_is_error(tt) || type_is_error(tf)) return decorate(s, n, err_ty(s));
+    if (type_equiv(tt, tf)) return decorate(s, n, tt);
+    if (type_is_numeric(tt) && type_is_numeric(tf)) {
+        type_t *common = type_common_arith(s->tc, tt, tf);
+        if (common) return decorate(s, n, common);
+    }
+    if (tt->kind == TY_NULL && tf->kind == TY_PTR) return decorate(s, n, tf);
+    if (tf->kind == TY_NULL && tt->kind == TY_PTR) return decorate(s, n, tt);
+    SERR(s, 21, &n->span, "'?:' branches have mismatched types '%s' and '%s'",
+         type_to_string(s->tc, tt), type_to_string(s->tc, tf));
+    return decorate(s, n, err_ty(s));
+}
+
 static type_t *check_member(sema_t *s, ast_node_t *n)
 {
     if (n->a && n->a->kind == AST_IDENTIFIER) {
@@ -245,18 +328,30 @@ static type_t *check_member(sema_t *s, ast_node_t *n)
         SERR(s, 17, &n->span, "method '%s' used as a value (call it)", n->name);
         return decorate(s, n, err_ty(s));
     }
+    if (!f->is_pub && struct_sym_of(s->self_type) != ssym)
+        SERR(s, 17, &n->span, "field '%s' is private in struct '%s' (mark it 'pub')",
+             n->name, ssym->name);
     return decorate(s, n, f->type);
 }
 
 type_t *sema_check_expr(sema_t *s, ast_node_t *n)
 {
     if (!n) return ty(s, TY_VOID);
+    if (n->kind != AST_LITERAL && n->kind != AST_STRUCT_LIT && n->kind != AST_ARRAY_LIT &&
+        n->kind != AST_CALL && n->kind != AST_TERNARY)
+        s->expected = NULL;
     switch (n->kind) {
     case AST_LITERAL: {
         type_t *t;
+        type_t *exp = s->expected;
+        s->expected = NULL;
         switch (n->op) {
         case TK_INT: {
             uint64_t u = n->value.as.i;
+            if (exp && type_is_integer(exp) && int_lit_fits(u, exp->kind)) {
+                t = exp;
+                break;
+            }
             if (u <= 2147483647ULL)
                 t = ty(s, TY_I32);
             else if (u <= 9223372036854775807ULL)
@@ -266,7 +361,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
             break;
         }
         case TK_FLOAT:
-            t = ty(s, TY_F64);
+            t = (exp && type_is_float(exp)) ? exp : ty(s, TY_F64);
             break;
         case TK_STRING:
         case TK_TRIPLE_STRING:
@@ -322,6 +417,45 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         if (sym->kind == SYM_PARAM && sym->is_ref) n->is_ref = true;
         return decorate(s, n, sym->type);
     }
+    case AST_FUNC_ADDR: {
+        symbol_t *sym = scope_lookup(s->cur, n->name);
+        if (!sym) {
+            const char *c = local_canon(s, n->name);
+            if (c != n->name) {
+                n->name = c;
+                sym = scope_lookup(s->cur, n->name);
+            }
+        }
+        if (!sym) {
+            SERR(s, 1, &n->span, "unknown identifier '%s'", n->name);
+            return decorate(s, n, err_ty(s));
+        }
+        if (sym->kind == SYM_METHOD) {
+            SERR(s, 72, &n->span,
+                 "'%s' is a method, not a free function; '&' cannot address it", n->name);
+            return decorate(s, n, err_ty(s));
+        }
+        if (sym->kind != SYM_FUNC) {
+            SERR(s, 72, &n->span, "'&%s' requires a function, '%s' is not one", n->name,
+                 n->name);
+            return decorate(s, n, err_ty(s));
+        }
+        if (sym->overloads.len == 0 ||
+            (sym->overloads.len == 1 && ((func_sig_t *)sym->overloads.data[0])->decl &&
+             ((func_sig_t *)sym->overloads.data[0])->decl->typarams.len > 0)) {
+            SERR(s, 73, &n->span, "cannot take the address of generic function '%s'",
+                 n->name);
+            return decorate(s, n, err_ty(s));
+        }
+        if (sym->overloads.len > 1) {
+            SERR(s, 74, &n->span,
+                 "function '%s' is ambiguous for '&' (%zu overloads exist)", n->name,
+                 sym->overloads.len);
+            return decorate(s, n, err_ty(s));
+        }
+        sym->used = true;
+        return decorate(s, n, type_ptr(s->tc, ty(s, TY_VOID)));
+    }
     case AST_THIS: {
         if (!s->self_type) {
             SERR(s, 14, &n->span, "'this' used outside a method");
@@ -329,8 +463,13 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         }
         return decorate(s, n, s->self_type);
     }
-    case AST_BINARY:
-        return check_binary(s, n);
+    case AST_BINARY: {
+        type_t *bt = check_binary(s, n);
+        sema_fold_expr(s, n);
+        return bt;
+    }
+    case AST_TERNARY:
+        return check_ternary(s, n);
     case AST_UNARY: {
         type_t *o = sema_check_expr(s, n->a);
 
@@ -347,17 +486,57 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
             }
         }
         if (n->op == TK_NOT) {
+            type_t *bt;
             if (o->kind != TY_BOOL && !type_is_error(o))
                 SERR(s, 21, &n->span, "operator '!' requires a bool operand");
-            return decorate(s, n, ty(s, TY_BOOL));
+            bt = decorate(s, n, ty(s, TY_BOOL));
+            sema_fold_expr(s, n);
+            return bt;
         }
         if (!type_is_numeric(o) && !type_is_error(o))
             SERR(s, 21, &n->span, "unary '-' requires a numeric operand");
+        {
+            type_t *ut = decorate(s, n, o);
+            sema_fold_expr(s, n);
+            return ut;
+        }
+    }
+    case AST_INCDEC: {
+        type_t *o = sema_check_expr(s, n->a);
+        const char *opname = (n->op == TK_PLUS_PLUS) ? "'++'" : "'--'";
+        symbol_t *wroot = NULL;
+        switch (sema_classify_write(s, n->a, &wroot)) {
+        case LV_NOT_LVALUE:
+            SERR(s, 13, &n->span, "operator %s requires an assignable operand", opname);
+            break;
+        case LV_CONST:
+            SERR(s, 13, &n->span,
+                 "cannot apply %s to '%s': a 'const' binding is fully immutable", opname,
+                 wroot ? wroot->name : "target");
+            break;
+        case LV_IMMUTABLE:
+            SERR(s, 13, &n->span,
+                 "cannot apply %s to immutable variable '%s'; declare it 'mut'", opname,
+                 wroot ? wroot->name : "target");
+            break;
+        case LV_OK:
+            sema_check_pure_write(s, n->a, &n->span);
+            break;
+        }
+        if (!type_is_numeric(o) && !type_is_error(o))
+            SERR(s, 21, &n->span, "operator %s requires a numeric operand", opname);
         return decorate(s, n, o);
     }
     case AST_CAST: {
+        type_t *target = n->type ? sema_resolve_type(s, n->type) : NULL;
+        if (target && n->a &&
+            (n->a->kind == AST_ARRAY_LIT || n->a->kind == AST_STRUCT_LIT ||
+             n->a->kind == AST_LITERAL || n->a->kind == AST_CALL))
+            s->expected = target;
         type_t *o = sema_check_expr(s, n->a);
-        type_t *target = sema_resolve_type(s, n->type);
+        s->expected = NULL;
+        if (!target) return decorate(s, n, o);
+        if (type_assignable(target, o)) return decorate(s, n, target);
         if (!type_castable(target, o))
             SERR(s, 23, &n->span, "cannot cast '%s' to '%s'", type_to_string(s->tc, o),
                  type_to_string(s->tc, target));
@@ -384,6 +563,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         if (arr->kind == TY_ARRAY) return decorate(s, n, arr->elem);
         if (arr->kind == TY_SLICE) return decorate(s, n, arr->elem);
         if (arr->kind == TY_PTR) return decorate(s, n, arr->pointee);
+        if (arr->kind == TY_STR) return decorate(s, n, ty(s, TY_CHAR));
         if (!type_is_error(arr))
             SERR(s, 21, &n->span, "cannot index non-array type '%s'",
                  type_to_string(s->tc, arr));

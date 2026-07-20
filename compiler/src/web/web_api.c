@@ -18,7 +18,7 @@
 #include "logger/logger.h"
 #include "langpack/langpack.h"
 #include "source/source.h"
-#include "preproc/preproc.h"
+#include "condcomp/condcomp.h"
 #include "lexer/lexer.h"
 #include "parser/parser.h"
 #include "semantic/sema.h"
@@ -104,16 +104,17 @@ static bool front_end(arena_t *arena, logger_t *log, FILE *diagf, const char *la
     }
     *out_entry = langpack_entry(pack);
     source_file_t *src = src_from_string(arena, source);
-    src = preproc_source(arena, log, src, NULL, 0);
     logger_set_diag_source(log, src->text, src->len, DIAG_STYLE_RUST, DIAG_FORMAT_HUMAN);
     const langpack_t *modpack = langpack_detect(arena, src, pack);
     token_stream_t *toks = NULL;
     bool lok = lexer_run(arena, log, modpack, src, &toks);
     *program = NULL;
     bool pok = parser_run(arena, log, toks, program);
+    cc_table_t *cc = cc_table_build(arena, NULL, NULL, 0);
+    if (!cc_prune_program(arena, log, src->path, cc, *program)) pok = false;
 
-    layout_expand(arena, log, modpack, *program, "");
-    *sema = sema_run(arena, log, *program, src->path, langpack_code(modpack));
+    layout_expand(arena, log, modpack, *program, "", cc);
+    *sema = sema_run(arena, log, *program, src->path, langpack_code(modpack), cc);
     if (!lok || !pok || !(*sema)->ok) {
         char *d = slurp(diagf);
         *out_diag = (d && d[0]) ? d : strdup(i18n_tr("compilation failed"));
@@ -257,7 +258,6 @@ const char *salam_web_emit(const char *source, const char *lang, const char *pha
     }
     const char *entry = langpack_entry(pack);
     source_file_t *src = src_from_string(arena, source);
-    src = preproc_source(arena, log, src, NULL, 0);
     logger_set_diag_source(log, src->text, src->len, DIAG_STYLE_RUST, DIAG_FORMAT_HUMAN);
     const langpack_t *modpack = langpack_detect(arena, src, pack);
     token_stream_t *toks = NULL;
@@ -267,13 +267,15 @@ const char *salam_web_emit(const char *source, const char *lang, const char *pha
         goto done;
     }
     bool pok = parser_run(arena, log, toks, &program);
+    cc_table_t *cc = cc_table_build(arena, NULL, NULL, 0);
+    if (!cc_prune_program(arena, log, src->path, cc, program)) pok = false;
     if (!strcmp(phase, "ast")) {
         r = emit_xml_result(ser_ast, program);
         goto done;
     }
     ensure_schema();
-    layout_expand(arena, log, modpack, program, "");
-    sema = sema_run(arena, log, program, src->path, langpack_code(modpack));
+    layout_expand(arena, log, modpack, program, "", cc);
+    sema = sema_run(arena, log, program, src->path, langpack_code(modpack), cc);
     if (!strcmp(phase, "symbols")) {
         r = emit_xml_result(ser_symbols, sema);
         goto done;
@@ -312,7 +314,7 @@ const char *salam_web_emit(const char *source, const char *lang, const char *pha
     }
     if (!strcmp(phase, "c")) {
         codegen_output_t *cg = codegen_run(arena, log, program, sema, "main", false,
-                                           false, "main.salam", entry);
+                                           false, "main.salam", entry, NULL);
         sb_t b;
         sb_init(&b);
         if (cg && cg->h_src) {

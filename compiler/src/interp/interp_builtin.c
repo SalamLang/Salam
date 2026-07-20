@@ -307,14 +307,7 @@ value_t call_builtin_method(interp_t *I, ast_node_t *call, value_t recv,
             return e ? e->val : val_null();
         }
         if (!strcmp(method, "has")) return val_bool(map_find(m, a0) != NULL);
-        if (!strcmp(method, "remove")) {
-            smap_entry_t *e = map_find(m, a0);
-            if (e) {
-                e->used = false;
-                m->count--;
-            }
-            return val_null();
-        }
+        if (!strcmp(method, "remove")) return val_bool(map_remove(m, a0));
         if (!strcmp(method, "size")) return val_int((int64_t)m->count);
         if (!strcmp(method, "iter")) {
             smapiter_t *it = (smapiter_t *)arena_alloc(I->a, sizeof *it);
@@ -324,6 +317,32 @@ value_t call_builtin_method(interp_t *I, ast_node_t *call, value_t recv,
             v.kind = VAL_MAPITER;
             v.as.iter = it;
             return v;
+        }
+        break;
+    }
+    case VAL_PTR: {
+        static const struct {
+            const char *method;
+            const char *fn;
+        } FILE_METHODS[] = {
+            {"read", "salam_file_read"},   {"readline", "salam_file_readline"},
+            {"write", "salam_file_write"}, {"seek", "salam_file_seek"},
+            {"close", "salam_file_close"},
+        };
+        size_t i = 0;
+        for (; i < sizeof FILE_METHODS / sizeof FILE_METHODS[0]; i++) {
+            if (strcmp(method, FILE_METHODS[i].method) != 0) continue;
+            value_t *ef = find_extern_fn(I, FILE_METHODS[i].fn);
+            if (!ef) break;
+            value_t *allargs =
+                (value_t *)arena_alloc(I->a, salam_size_mul(nargs + 1, sizeof(value_t)));
+            allargs[0] = recv;
+            {
+                size_t j = 0;
+                for (; j < nargs; j++)
+                    allargs[j + 1] = args[j];
+            }
+            return call_func(I, ef->as.fn->fn, ef->as.fn->env, NULL, allargs, nargs + 1);
         }
         break;
     }

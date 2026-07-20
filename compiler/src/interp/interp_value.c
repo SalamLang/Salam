@@ -43,6 +43,8 @@ bool to_bool(value_t v)
         return false;
     case VAL_STR:
         return v.as.s && v.as.s[0] != '\0';
+    case VAL_PTR:
+        return v.as.ptr.addr != NULL;
     default:
         return true;
     }
@@ -73,6 +75,8 @@ int64_t to_int(value_t v)
         return (int64_t)v.as.f;
     case VAL_BOOL:
         return v.as.b ? 1 : 0;
+    case VAL_PTR:
+        return (int64_t)(intptr_t)v.as.ptr.addr;
     default:
         return 0;
     }
@@ -175,6 +179,8 @@ const char *to_str(interp_t *I, value_t v)
         return "<func>";
     case VAL_MODULE:
         return v.as.mod ? afmt(I, "<module %s>", v.as.mod->name) : "<module>";
+    case VAL_PTR:
+        return v.as.ptr.addr ? afmt(I, "<ptr %p>", v.as.ptr.addr) : "null";
     }
     return "";
 }
@@ -218,17 +224,6 @@ value_t mk_array(interp_t *I, sarray_t *a)
     return v;
 }
 
-smap_t *map_new(interp_t *I)
-{
-    smap_t *m = (smap_t *)arena_alloc(I->a, sizeof *m);
-    m->count = 0;
-    m->cap = 8;
-    m->entries =
-        (smap_entry_t *)arena_alloc(I->a, salam_size_mul(m->cap, sizeof(smap_entry_t)));
-    memset(m->entries, 0, salam_size_mul(m->cap, sizeof(smap_entry_t)));
-    return m;
-}
-
 static bool key_eq(value_t a, value_t b)
 {
     if (a.kind != b.kind) return false;
@@ -240,15 +235,109 @@ static bool key_eq(value_t a, value_t b)
     return false;
 }
 
-void map_put(interp_t *I, smap_t *m, value_t k, value_t val)
+static size_t key_hash(value_t k)
 {
+    if (k.kind == VAL_STR) {
+        uint64_t h = 1469598103934665603ULL;
+        const unsigned char *p = (const unsigned char *)k.as.s;
+        for (; *p; p++) {
+            h ^= *p;
+            h *= 1099511628211ULL;
+        }
+        return (size_t)h;
+    }
+    if (k.kind == VAL_INT || k.kind == VAL_CHAR) {
+        uint64_t x = (uint64_t)k.as.i;
+        x ^= x >> 33;
+        x *= 0xff51afd7ed558ccdULL;
+        x ^= x >> 33;
+        return (size_t)x;
+    }
+    if (k.kind == VAL_BOOL) return k.as.b ? 2u : 1u;
+    if (k.kind == VAL_FLOAT) {
+        double d = k.as.f == 0.0 ? 0.0 : k.as.f;
+        uint64_t bits = 0;
+        memcpy(&bits, &d, sizeof bits);
+        bits ^= bits >> 33;
+        bits *= 0xff51afd7ed558ccdULL;
+        bits ^= bits >> 33;
+        return (size_t)bits;
+    }
+    return 0;
+}
+
+#define MAP_SLOT_EMPTY 0u
+#define MAP_SLOT_TOMB 1u
+
+static void map_index_insert(smap_t *m, size_t hash, size_t entry_idx)
+{
+    size_t mask = m->index_cap - 1;
+    size_t i = hash & mask;
+    for (;; i = (i + 1) & mask) {
+        uint32_t s = m->index[i];
+        if (s == MAP_SLOT_EMPTY || s == MAP_SLOT_TOMB) {
+            if (s == MAP_SLOT_EMPTY) m->index_used++;
+            m->index[i] = (uint32_t)(entry_idx + 2);
+            return;
+        }
+    }
+}
+
+static void map_index_rebuild(interp_t *I, smap_t *m, size_t want)
+{
+    size_t nc = 16;
+    while (nc < want * 2)
+        nc *= 2;
+    m->index = (uint32_t *)arena_alloc(I->a, salam_size_mul(nc, sizeof(uint32_t)));
+    memset(m->index, 0, salam_size_mul(nc, sizeof(uint32_t)));
+    m->index_cap = nc;
+    m->index_used = 0;
     {
         size_t i = 0;
         for (; i < m->cap; i++)
-            if (m->entries[i].used && key_eq(m->entries[i].key, k)) {
-                m->entries[i].val = val;
-                return;
-            }
+            if (m->entries[i].used) map_index_insert(m, key_hash(m->entries[i].key), i);
+    }
+}
+
+smap_t *map_new(interp_t *I)
+{
+    smap_t *m = (smap_t *)arena_alloc(I->a, sizeof *m);
+    m->count = 0;
+    m->cap = 8;
+    m->entries =
+        (smap_entry_t *)arena_alloc(I->a, salam_size_mul(m->cap, sizeof(smap_entry_t)));
+    memset(m->entries, 0, salam_size_mul(m->cap, sizeof(smap_entry_t)));
+    m->free_hint = 0;
+    map_index_rebuild(I, m, m->cap);
+    return m;
+}
+
+static uint32_t *map_index_slot(smap_t *m, value_t k)
+{
+    size_t mask = m->index_cap - 1;
+    size_t i = key_hash(k) & mask;
+    for (;; i = (i + 1) & mask) {
+        uint32_t s = m->index[i];
+        if (s == MAP_SLOT_EMPTY) return NULL;
+        if (s != MAP_SLOT_TOMB) {
+            smap_entry_t *e = &m->entries[s - 2];
+            if (e->used && key_eq(e->key, k)) return &m->index[i];
+        }
+    }
+}
+
+smap_entry_t *map_find(smap_t *m, value_t k)
+{
+    uint32_t *slot = map_index_slot(m, k);
+    return slot ? &m->entries[*slot - 2] : NULL;
+}
+
+void map_put(interp_t *I, smap_t *m, value_t k, value_t val)
+{
+    smap_entry_t *e = map_find(m, k);
+    if (e) {
+        e->val = val;
+        return;
     }
     if (m->count + 1 > m->cap) {
         size_t nc = salam_grow_cap(m->cap, m->count + 1, 8);
@@ -260,26 +349,34 @@ void map_put(interp_t *I, smap_t *m, value_t k, value_t val)
         m->cap = nc;
     }
     {
-        size_t i = 0;
-        for (; i < m->cap; i++)
-            if (!m->entries[i].used) {
-                m->entries[i].key = k;
-                m->entries[i].val = val;
-                m->entries[i].used = true;
-                m->count++;
-                return;
-            }
+        size_t i = m->free_hint;
+        while (i < m->cap && m->entries[i].used)
+            i++;
+        m->entries[i].key = k;
+        m->entries[i].val = val;
+        m->entries[i].used = true;
+        m->count++;
+        m->free_hint = i + 1;
+        if ((m->index_used + 1) * 4 >= m->index_cap * 3)
+            map_index_rebuild(I, m, m->count);
+        else
+            map_index_insert(m, key_hash(k), i);
     }
 }
 
-smap_entry_t *map_find(smap_t *m, value_t k)
+bool map_remove(smap_t *m, value_t k)
 {
-    {
-        size_t i = 0;
-        for (; i < m->cap; i++)
-            if (m->entries[i].used && key_eq(m->entries[i].key, k)) return &m->entries[i];
-    }
-    return NULL;
+    uint32_t *slot = map_index_slot(m, k);
+    smap_entry_t *e;
+    size_t idx;
+    if (!slot) return false;
+    e = &m->entries[*slot - 2];
+    idx = (size_t)(*slot - 2);
+    e->used = false;
+    m->count--;
+    if (idx < m->free_hint) m->free_hint = idx;
+    *slot = MAP_SLOT_TOMB;
+    return true;
 }
 
 value_t mk_map(smap_t *m)
@@ -327,6 +424,97 @@ void base_typename(const char *ts, char *out, size_t cap)
         out[i] = c;
     }
     out[i] = 0;
+}
+
+ptr_elem_t ptr_elem_from_typestr(const char *ts)
+{
+    char base[96];
+    base_typename(ts, base, sizeof base);
+    if (!strcmp(base, "i8")) return PTR_I8;
+    if (!strcmp(base, "u8") || !strcmp(base, "byte")) return PTR_U8;
+    if (!strcmp(base, "i16")) return PTR_I16;
+    if (!strcmp(base, "u16")) return PTR_U16;
+    if (!strcmp(base, "i32")) return PTR_I32;
+    if (!strcmp(base, "u32")) return PTR_U32;
+    if (!strcmp(base, "i64") || !strcmp(base, "isize")) return PTR_I64;
+    if (!strcmp(base, "u64") || !strcmp(base, "usize")) return PTR_U64;
+    if (!strcmp(base, "f32")) return PTR_F32;
+    if (!strcmp(base, "f64")) return PTR_F64;
+    if (!strcmp(base, "str")) return PTR_STR;
+    return PTR_OPAQUE;
+}
+
+value_t ptr_load(sptr_t p, int64_t idx)
+{
+    switch (p.elem) {
+    case PTR_I8:
+        return val_int(((int8_t *)p.addr)[idx]);
+    case PTR_U8:
+        return val_int(((uint8_t *)p.addr)[idx]);
+    case PTR_I16:
+        return val_int(((int16_t *)p.addr)[idx]);
+    case PTR_U16:
+        return val_int(((uint16_t *)p.addr)[idx]);
+    case PTR_I32:
+        return val_int(((int32_t *)p.addr)[idx]);
+    case PTR_U32:
+        return val_int(((uint32_t *)p.addr)[idx]);
+    case PTR_I64:
+        return val_int(((int64_t *)p.addr)[idx]);
+    case PTR_U64:
+        return val_int((int64_t)((uint64_t *)p.addr)[idx]);
+    case PTR_F32:
+        return val_float((double)((float *)p.addr)[idx]);
+    case PTR_F64:
+        return val_float(((double *)p.addr)[idx]);
+    case PTR_STR:
+        return val_str(((const char **)p.addr)[idx]);
+    default:
+        return val_ptr(((void **)p.addr)[idx], PTR_OPAQUE);
+    }
+}
+
+void ptr_store(sptr_t p, int64_t idx, value_t v)
+{
+    switch (p.elem) {
+    case PTR_I8:
+        ((int8_t *)p.addr)[idx] = (int8_t)to_int(v);
+        break;
+    case PTR_U8:
+        ((uint8_t *)p.addr)[idx] = (uint8_t)to_int(v);
+        break;
+    case PTR_I16:
+        ((int16_t *)p.addr)[idx] = (int16_t)to_int(v);
+        break;
+    case PTR_U16:
+        ((uint16_t *)p.addr)[idx] = (uint16_t)to_int(v);
+        break;
+    case PTR_I32:
+        ((int32_t *)p.addr)[idx] = (int32_t)to_int(v);
+        break;
+    case PTR_U32:
+        ((uint32_t *)p.addr)[idx] = (uint32_t)to_int(v);
+        break;
+    case PTR_I64:
+        ((int64_t *)p.addr)[idx] = to_int(v);
+        break;
+    case PTR_U64:
+        ((uint64_t *)p.addr)[idx] = (uint64_t)to_int(v);
+        break;
+    case PTR_F32:
+        ((float *)p.addr)[idx] = (float)to_float(v);
+        break;
+    case PTR_F64:
+        ((double *)p.addr)[idx] = to_float(v);
+        break;
+    case PTR_STR:
+        ((const char **)p.addr)[idx] = v.kind == VAL_STR ? v.as.s : "";
+        break;
+    default:
+        ((void **)p.addr)[idx] =
+            v.kind == VAL_PTR ? v.as.ptr.addr : (void *)(intptr_t)to_int(v);
+        break;
+    }
 }
 
 bool is_int_typename(const char *b)
@@ -423,6 +611,8 @@ token_kind_t compound_base(token_kind_t op)
         return TK_SLASH;
     case TK_PERCENT_EQ:
         return TK_PERCENT;
+    case TK_POWER_EQ:
+        return TK_POWER;
     default:
         return TK_EOF;
     }
@@ -440,14 +630,19 @@ value_t try_struct_op(interp_t *I, token_kind_t op, value_t a, value_t b, bool h
     if (!m && op == TK_NE) {
         ast_node_t *eq = struct_method_arity(a.as.st->def, "operator_eq", 1);
         if (eq) {
+            env_t *denv = find_def_env(I, eq);
             *found = true;
-            value_t r = call_func(I, eq, I->globals, &a, &b, 1);
+            value_t r = call_func(I, eq, denv ? denv : I->globals, &a, &b, 1);
             return val_bool(!to_bool(r));
         }
     }
     if (!m) return val_null();
     *found = true;
-    return call_func(I, m, I->globals, &a, has_b ? &b : NULL, has_b ? 1 : 0);
+    {
+        env_t *denv = find_def_env(I, m);
+        return call_func(I, m, denv ? denv : I->globals, &a, has_b ? &b : NULL,
+                         has_b ? 1 : 0);
+    }
 }
 
 value_t arith(interp_t *I, ast_node_t *n, token_kind_t op, value_t a, value_t b)
@@ -517,6 +712,9 @@ bool value_eq(interp_t *I, value_t a, value_t b)
 {
     (void)I;
     if (a.kind == VAL_STR && b.kind == VAL_STR) return strcmp(a.as.s, b.as.s) == 0;
+    if (a.kind == VAL_PTR && b.kind == VAL_PTR) return a.as.ptr.addr == b.as.ptr.addr;
+    if (a.kind == VAL_PTR && b.kind == VAL_NULL) return a.as.ptr.addr == NULL;
+    if (a.kind == VAL_NULL && b.kind == VAL_PTR) return b.as.ptr.addr == NULL;
     if (a.kind == VAL_NULL || b.kind == VAL_NULL) return a.kind == b.kind;
     if (a.kind == VAL_BOOL || b.kind == VAL_BOOL) return to_bool(a) == to_bool(b);
     if (is_number(a) && is_number(b)) return to_float(a) == to_float(b);

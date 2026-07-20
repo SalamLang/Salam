@@ -138,7 +138,8 @@ static const char *cg_dyn_box(cg_t *cg, ast_node_t *n)
     const char *cC = cg_cident(cg, concrete);
     int t = ++cg->tmpn;
     return cg_fmt(cg,
-                  "({ %s* __dp%d = (%s*)salam_alloc(sizeof(%s)); *__dp%d = (%s); "
+                  "({ %s* __dp%d = (%s*)" SALAM_MEM_ALLOC "((uint64_t)sizeof(%s)); "
+                  "*__dp%d = (%s); "
                   "(_Salam_dyn_%s){ (void*)__dp%d, &_Salam_vtbl_%s_%s }; })",
                   cC, t, cC, cC, t, cg_expr(cg, n->a), cI, t, cI, cC);
 }
@@ -235,10 +236,19 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         switch (n->op) {
         case TK_INT: {
             unsigned long long u = (unsigned long long)n->value.as.i;
-            const char *suf = u > 9223372036854775807ULL ? "ULL"
-                              : u > 2147483647ULL        ? "LL"
-                                                         : "";
-            return cg_fmt(cg, "%llu%s", u, suf);
+            bool uns = n->type_str && n->type_str[0] == 'u';
+            if (!uns && u > 9223372036854775807ULL) {
+                long long v = (long long)u;
+                return v == (-9223372036854775807LL - 1LL)
+                           ? "(-9223372036854775807LL - 1LL)"
+                           : cg_fmt(cg, "(%lldLL)", v);
+            }
+            {
+                const char *suf = u > 9223372036854775807ULL ? "ULL"
+                                  : u > 2147483647ULL        ? "LL"
+                                                             : "";
+                return cg_fmt(cg, "%llu%s", u, suf);
+            }
         }
         case TK_FLOAT: {
             char buf[64];
@@ -285,6 +295,35 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                 return cg_fmt(cg, "this->%s", cg_cident(cg, n->name));
         }
         return cg_cident(cg, n->name);
+    case AST_FUNC_ADDR: {
+        symbol_t *fsym = scope_lookup(cg->sem->global, n->name);
+        const char *home_pkg = NULL;
+        if (!fsym && cg->cur_fn_home) {
+            symbol_t *hs = scope_lookup(cg->cur_fn_home, n->name);
+            if (hs && hs->kind == SYM_FUNC) {
+                fsym = hs;
+                home_pkg = hs->pkgname;
+            }
+        }
+        if (!fsym && cg->cur_struct && cg->cur_struct->home) {
+            symbol_t *hs = scope_lookup(cg->cur_struct->home, n->name);
+            if (hs && hs->kind == SYM_FUNC) {
+                fsym = hs;
+                home_pkg = hs->pkgname;
+            }
+        }
+        func_sig_t *sig = (fsym && fsym->overloads.len == 1)
+                              ? (func_sig_t *)fsym->overloads.data[0]
+                              : NULL;
+        bool is_extern_fn = sig && sig->decl && sig->decl->is_extern;
+        vec_t empty;
+        vec_init(&empty);
+        const char *raw = is_extern_fn
+                              ? n->name
+                              : cg_mangle_in(cg, home_pkg ? home_pkg : cg->pkg, NULL,
+                                             n->name, sig ? &sig->params : &empty);
+        return cg_fmt(cg, "((void*)(&%s))", raw);
+    }
     case AST_THIS:
         return "this";
     case AST_BINARY: {
@@ -341,6 +380,9 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         return cg_fmt(cg, "(%s %s %s)", cg_expr(cg, n->a), cg_op(n->op),
                       cg_expr(cg, n->b));
     }
+    case AST_TERNARY:
+        return cg_fmt(cg, "((%s) ? (%s) : (%s))", cg_expr(cg, n->a), cg_expr(cg, n->b),
+                      cg_expr(cg, n->c));
     case AST_UNARY: {
         if (n->a && n->a->type_str) {
             char sname[96];
@@ -361,10 +403,21 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         }
         return cg_fmt(cg, "(%s%s)", cg_op(n->op), cg_expr(cg, n->a));
     }
+    case AST_INCDEC: {
+        const char *opc = (n->op == TK_PLUS_PLUS) ? "++" : "--";
+        const char *operand = cg_expr(cg, n->a);
+        if (n->is_prefix) return cg_fmt(cg, "(%s%s)", opc, operand);
+        return cg_fmt(cg, "(%s%s)", operand, opc);
+    }
     case AST_CAST: {
         if (n->type_str && !strncmp(n->type_str, "dyn ", 4) &&
             n->type_str[strlen(n->type_str) - 1] != '*')
             return cg_dyn_box(cg, n);
+        if (n->a && (n->a->kind == AST_ARRAY_LIT || n->a->kind == AST_STRUCT_LIT))
+            return cg_expr(cg, n->a);
+        if (n->a && n->a->type_str && n->type && n->type->type_str &&
+            strcmp(n->a->type_str, n->type->type_str) == 0)
+            return cg_expr(cg, n->a);
 
         {
             const char *dts = n->type && n->type->type_str ? n->type->type_str : "";
@@ -385,7 +438,7 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
     case AST_CALL:
         return cg_call(cg, n);
     case AST_MEMBER: {
-        if (n->a && n->a->kind == AST_IDENTIFIER) {
+        if (n->a && n->a->kind == AST_IDENTIFIER && !local_known(cg, n->a->name)) {
             symbol_t *e = scope_lookup(cg->sem->global, n->a->name);
             if (e && e->kind == SYM_ENUM)
                 return cg_fmt(cg, "%s_%s", cg_cident(cg, e->name),
@@ -439,17 +492,24 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         const char *ec = cg_ctype(cg, elem);
         const char *base = cg_expr(cg, n->a);
         const char *lo = n->b ? cg_expr(cg, n->b) : "0";
+        int t = ++cg->tmpn;
         if (cg_is_slice_ts(n->a->type_str)) {
             if (n->c)
-                return cg_fmt(cg, "salam_slice_sub(%s, %s, %s, 1, (int64_t)sizeof(%s))",
-                              base, lo, cg_expr(cg, n->c), ec);
-            return cg_fmt(cg, "salam_slice_sub(%s, %s, 0, 0, (int64_t)sizeof(%s))", base,
-                          lo, ec);
+                return cg_fmt(cg,
+                              "({ salam_slice __sl%d; salam_slice_sub(&__sl%d, %s, %s, "
+                              "%s, 1, (int64_t)sizeof(%s)); __sl%d; })",
+                              t, t, base, lo, cg_expr(cg, n->c), ec, t);
+            return cg_fmt(cg,
+                          "({ salam_slice __sl%d; salam_slice_sub(&__sl%d, %s, %s, 0, 0, "
+                          "(int64_t)sizeof(%s)); __sl%d; })",
+                          t, t, base, lo, ec, t);
         }
         const char *hi =
             n->c ? cg_expr(cg, n->c) : cg_fmt(cg, "%ld", array_size_of(n->a->type_str));
-        return cg_fmt(cg, "salam_slice_new((void*)(%s), %s, %s, (int64_t)sizeof(%s))",
-                      base, lo, hi, ec);
+        return cg_fmt(cg,
+                      "({ salam_slice __sl%d; salam_slice_new(&__sl%d, (void*)(%s), %s, "
+                      "%s, (int64_t)sizeof(%s)); __sl%d; })",
+                      t, t, base, lo, hi, ec, t);
     }
     case AST_LAMBDA:
         return cg_lambda_value(cg, n);

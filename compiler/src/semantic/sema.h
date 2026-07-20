@@ -22,6 +22,7 @@
 #include "xml/xml.h"
 #include "semantic/types.h"
 #include "semantic/symbol.h"
+#include "condcomp/condcomp.h"
 
 typedef struct {
     scope_t *global;
@@ -34,11 +35,18 @@ typedef struct {
 } sema_result_t;
 
 sema_result_t *sema_run(arena_t *a, logger_t *log, ast_node_t *program, const char *file,
-                        const char *lang);
+                        const char *lang, const cc_table_t *cc);
+
+sema_result_t *sema_run_cached(arena_t *a, logger_t *log, ast_node_t *program,
+                               const char *file, const char *lang, const cc_table_t *cc,
+                               vec_t *shared_pkg_cache);
 
 void symbols_to_xml(xml_writer_t *w, const sema_result_t *r);
 
 const char *salam_resolve_import(arena_t *a, const char *dir, const char *spec);
+
+const char *salam_resolve_import_node(arena_t *a, const char *dir, const ast_node_t *imp,
+                                      const char *lang);
 
 int salam_package_files(arena_t *a, const char *main_path, const char **out, int max);
 

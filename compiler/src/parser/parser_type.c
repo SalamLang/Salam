@@ -100,8 +100,12 @@ ast_node_t *parse_type(parser_t *p)
 
     if (!p_recurse_enter(p, "type nested too deeply")) return p_mk(p, AST_TYPE);
     ast_node_t *n = p_mk(p, AST_TYPE);
-    if (p_at(p, TK_IDENT) && strcmp(p_peek(p)->lexeme, "dyn") == 0 &&
-        p_peek2(p)->kind == TK_IDENT)
+    if (p_at(p, TK_KW_EXTERN) && p_peek2(p)->kind == TK_KW_FUNC) {
+        p_advance(p);
+        n = parse_type_func(p, n);
+        n->is_extern = true;
+    } else if (p_at(p, TK_IDENT) && strcmp(p_peek(p)->lexeme, "dyn") == 0 &&
+               p_peek2(p)->kind == TK_IDENT)
         n = parse_type_dyn(p, n);
     else if (p_at(p, TK_KW_FUNC))
         n = parse_type_func(p, n);
@@ -113,6 +117,6 @@ ast_node_t *parse_type(parser_t *p)
 
 ast_node_t *parse_type_anno(parser_t *p)
 {
-    if (p_at(p, TK_COLON)) p_advance(p);
+    p_expect(p, TK_COLON, "':' before type");
     return parse_type(p);
 }

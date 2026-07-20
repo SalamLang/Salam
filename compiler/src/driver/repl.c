@@ -23,7 +23,7 @@
 #include "lexer/lexer.h"
 #include "logger/logger.h"
 #include "source/source.h"
-#include "preproc/preproc.h"
+#include "condcomp/condcomp.h"
 #include "parser/parser.h"
 #include "semantic/sema.h"
 #include "codegen/codegen.h"
@@ -493,15 +493,16 @@ static bool repl_compile_pkg(arena_t *a, logger_t *lg, langpack_t *pack, options
     const char *path = salam_resolve_import(a, "", pkg);
     source_file_t *src = path ? source_load(a, path) : NULL;
     if (!src) return false;
-    src = preproc_source(a, lg, src, NULL, 0);
     token_stream_t *toks = NULL;
     if (!lexer_run(a, lg, pack, src, &toks)) return false;
     ast_node_t *prog = NULL;
     if (!parser_run(a, lg, toks, &prog)) return false;
-    sema_result_t *sr = sema_run(a, lg, prog, src->path, langpack_code(pack));
+    cc_table_t *cc = cc_table_build(a, NULL, NULL, 0);
+    if (!cc_prune_program(a, lg, src->path, cc, prog)) return false;
+    sema_result_t *sr = sema_run(a, lg, prog, src->path, langpack_code(pack), cc);
     if (!sr || !sr->ok) return false;
-    codegen_output_t *out =
-        codegen_run(a, lg, prog, sr, pkg, false, false, src->path, langpack_entry(pack));
+    codegen_output_t *out = codegen_run(a, lg, prog, sr, pkg, false, false, src->path,
+                                        langpack_entry(pack), NULL);
     char cpath[64], hpath[64];
     sal_snprintf(cpath, sizeof cpath, "salam_mod_%s.c", pkg);
     sal_snprintf(hpath, sizeof hpath, "salam_mod_%s.h", pkg);
@@ -531,7 +532,10 @@ static bool repl_exec(const char *full_src, const char *cc, langpack_t *pack,
     bool ok = lexer_run(a, lg, pack, &sf, &toks);
     ast_node_t *prog = NULL;
     ok = ok && parser_run(a, lg, toks, &prog);
-    sema_result_t *sr = ok ? sema_run(a, lg, prog, sf.path, langpack_code(pack)) : NULL;
+    cc_table_t *repl_cc = cc_table_build(a, NULL, opt->defines, opt->ndefines);
+    if (ok) ok = cc_prune_program(a, lg, sf.path, repl_cc, prog);
+    sema_result_t *sr =
+        ok ? sema_run(a, lg, prog, sf.path, langpack_code(pack), repl_cc) : NULL;
     ok = sr && sr->ok;
     if (!ok) {
         logger_free(lg);
@@ -539,7 +543,7 @@ static bool repl_exec(const char *full_src, const char *cc, langpack_t *pack,
         return false;
     }
     codegen_output_t *out = codegen_run(a, lg, prog, sr, "_repl_", false, false, sf.path,
-                                        langpack_entry(pack));
+                                        langpack_entry(pack), NULL);
     FILE *f;
     if ((f = fopen("salam_mod__repl_.c", "wb"))) {
         fputs(out->c_src, f);
@@ -638,7 +642,11 @@ static void repl_layout_exec(const char *src_text, const langpack_t *pack, optio
     bool ok = lexer_run(arena, log, pack, &sf, &toks);
     ast_node_t *prog = NULL;
     ok = ok && parser_run(arena, log, toks, &prog);
-    if (ok) sema_run(arena, log, prog, sf.path, langpack_code(pack));
+    if (ok) {
+        cc_table_t *repl_cc = cc_table_build(arena, NULL, opt->defines, opt->ndefines);
+        ok = cc_prune_program(arena, log, sf.path, repl_cc, prog);
+        if (ok) sema_run(arena, log, prog, sf.path, langpack_code(pack), repl_cc);
+    }
     if (ok) {
         ast_node_t *lb = repl_find_layout(prog);
         if (lb) {
@@ -799,8 +807,10 @@ int driver_repl(options_t *opt)
             bool ok = lexer_run(va, vl, pack, &sf, &toks);
             ast_node_t *prog = NULL;
             ok = ok && parser_run(va, vl, toks, &prog);
+            cc_table_t *repl_cc = cc_table_build(va, NULL, opt->defines, opt->ndefines);
+            if (ok) ok = cc_prune_program(va, vl, sf.path, repl_cc, prog);
             sema_result_t *sr =
-                ok ? sema_run(va, vl, prog, sf.path, langpack_code(pack)) : NULL;
+                ok ? sema_run(va, vl, prog, sf.path, langpack_code(pack), repl_cc) : NULL;
             ok = sr && sr->ok;
             arena_free(va);
             logger_free(vl);

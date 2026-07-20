@@ -23,6 +23,10 @@
 
 #define SALAM_MOD_PREFIX "salam_mod_"
 
+#define SALAM_MEM_ALLOC "_Salam_mem_Allocate_u64"
+#define SALAM_MEM_REALLOC "_Salam_mem_Reallocate_void_ptr_u64"
+#define SALAM_MEM_FREE "_Salam_mem_Free_void_ptr"
+
 typedef struct {
     const char *module;
     const char *h_src;
@@ -31,6 +35,9 @@ typedef struct {
 
 codegen_output_t *codegen_run(arena_t *a, logger_t *log, ast_node_t *program,
                               sema_result_t *sem, const char *module, bool safe,
-                              bool debug_info, const char *src_path, const char *entry);
+                              bool debug_info, const char *src_path, const char *entry,
+                              const char *target_triple);
+
+bool salam_module_single_threaded(ast_node_t *program);
 
 #endif /* SALAM_CODEGEN_CODEGEN_H */

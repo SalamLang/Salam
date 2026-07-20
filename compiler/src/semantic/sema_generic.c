@@ -305,9 +305,11 @@ symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes,
                 symbol_t *f = symbol_new(s->a, SYM_FIELD, m->name);
                 f->type = sema_resolve_type(s, m->type);
                 f->decl = m;
+                f->is_pub = m->is_pub;
                 scope_define(s->a, sym->members, f);
             } else if (m->kind == AST_FUNC_DEF) {
                 symbol_t *mm = get_or_make_func(s, sym->members, m->name, SYM_METHOD);
+                if (m->is_pub) mm->is_pub = true;
                 vec_push(s->a, &mm->overloads, build_sig(s, m, sym));
                 mm->type = sym->type;
             }
@@ -384,6 +386,32 @@ static type_t *g_unify(ast_node_t *pty, type_t *at, const char *T)
         }
     }
     return NULL;
+}
+
+type_t *g_localize_instance(sema_t *s, type_t *t, const src_span_t *span)
+{
+    if (!t || t->kind != TY_STRUCT || !t->decl) return t;
+    {
+        symbol_t *isym = (symbol_t *)t->decl;
+        if (!isym->generic_base || !isym->name) return t;
+        if (scope_lookup_local(s->global, isym->name)) return t;
+        {
+            ast_node_t *tn = ast_new(s->a, AST_TYPE, span);
+            tn->name = isym->generic_base;
+            tn->synthetic = true;
+            {
+                size_t i = 0;
+                for (; i < isym->generic_args.len; i++)
+                    ast_add(s->a, tn,
+                            g_type_to_ast(s, (type_t *)isym->generic_args.data[i], span));
+            }
+            {
+                type_t *lt = sema_resolve_type(s, tn);
+                if (lt && lt->kind == TY_STRUCT) return lt;
+            }
+        }
+    }
+    return t;
 }
 
 symbol_t *g_infer_call(sema_t *s, symbol_t *tsym, vec_t *argtypes, const src_span_t *span,

@@ -25,8 +25,9 @@
 #include "parser/parser.h"
 #include "semantic/sema.h"
 #include "codegen/codegen.h"
-#include "preproc/preproc.h"
+#include "condcomp/condcomp.h"
 #include "i18n/i18n.h"
+
 #if defined(_WIN32)
 #  include <io.h>
 #else
@@ -74,6 +75,19 @@ static bool write_file(logger_t *log, const char *path, const char *content)
     return true;
 }
 
+static bool link_spec_is_path(const char *spec)
+{
+    if (strpbrk(spec, "/\\")) return true;
+    static const char *const exts[] = {".a", ".so", ".dll", ".lib", ".dylib"};
+    size_t n = strlen(spec);
+    size_t i = 0;
+    for (; i < sizeof(exts) / sizeof(exts[0]); i++) {
+        size_t el = strlen(exts[i]);
+        if (n > el && !strcmp(spec + n - el, exts[i])) return true;
+    }
+    return false;
+}
+
 static void emit_link(sb_t *cmd, logger_t *log, const char *spec, const char *kind,
                       bool use_tcc)
 {
@@ -89,7 +103,7 @@ static void emit_link(sb_t *cmd, logger_t *log, const char *spec, const char *ki
 #endif
         return;
     }
-    if (spec[0] == '-' || strpbrk(spec, "/\\.") != NULL) {
+    if (spec[0] == '-' || link_spec_is_path(spec)) {
         sb_putc(cmd, ' ');
         sb_put_shell_arg(cmd, spec);
         return;
@@ -128,7 +142,6 @@ int driver_build(options_t *opt)
         return 2;
     }
     salam_set_stdlib_root(opt->stdlib_path);
-    preproc_set_target(NULL);
 
     if (opt->cc && strcmp(opt->cc, "tcc") == 0) {
         static char bundled_cc[1200];
@@ -221,7 +234,7 @@ int driver_build(options_t *opt)
                 all_ok = false;
                 continue;
             }
-            src = preproc_source(arena, log, src, defs, ndefs);
+            cc_table_t *cc = cc_table_build(arena, NULL, defs, ndefs);
             const langpack_t *modpack = langpack_detect(arena, src, pack);
             const char *modentry = langpack_entry(modpack);
 
@@ -234,6 +247,7 @@ int driver_build(options_t *opt)
             bool lok = lexer_run(arena, log, modpack, src, &toks);
             ast_node_t *program = NULL;
             bool pok = parser_run(arena, log, toks, &program);
+            if (!cc_prune_program(arena, log, path, cc, program)) pok = false;
 
             {
                 const char *pfiles[SALAM_MAX_INPUTS];
@@ -246,17 +260,17 @@ int driver_build(options_t *opt)
                         all_ok = false;
                         continue;
                     }
-                    psrc = preproc_source(arena, log, psrc, defs, ndefs);
                     token_stream_t *ptoks = NULL;
                     if (!lexer_run(arena, log, modpack, psrc, &ptoks)) lok = false;
                     ast_node_t *pprog = NULL;
                     if (!parser_run(arena, log, ptoks, &pprog)) pok = false;
+                    if (!cc_prune_program(arena, log, pfiles[pi], cc, pprog)) pok = false;
                     salam_merge_program(arena, program, pprog);
                 }
             }
 
             sema_result_t *sr =
-                sema_run(arena, log, program, src->path, langpack_code(modpack));
+                sema_run(arena, log, program, src->path, langpack_code(modpack), cc);
             if (!lok || !pok || !sr->ok) {
                 all_ok = false;
                 continue;
@@ -323,11 +337,11 @@ int driver_build(options_t *opt)
                         continue;
                     }
                     if (d->kind != AST_IMPORT) continue;
-                    const char *spec = (d->value.kind == TV_STRING && d->value.as.s)
-                                           ? d->value.as.s
-                                           : d->name;
-                    if (!spec) continue;
-                    const char *ipath = salam_resolve_import(arena, idir, spec);
+                    const char *ipath =
+                        d->type_str ? d->type_str
+                                    : salam_resolve_import_node(arena, idir, d,
+                                                                langpack_code(modpack));
+                    if (!ipath) continue;
                     bool known = false;
                     {
                         int j = 0;
@@ -339,7 +353,7 @@ int driver_build(options_t *opt)
             }
             codegen_output_t *out =
                 codegen_run(arena, log, program, sr, module, opt->safe, opt->debug_info,
-                            src->path, modentry);
+                            src->path, modentry, opt->llvm_target);
             size_t pfxlen = strlen(SALAM_MOD_PREFIX);
             size_t pathcap = pfxlen + strlen(module) + 3;
             char *cpath = (char *)arena_alloc(arena, pathcap);
@@ -381,6 +395,10 @@ int driver_build(options_t *opt)
         return 1;
     }
     int crc = 0;
+    const char *opt_flag = (!opt->debug_info && !opt->asan && !strstr(opt->cc, "tcc") &&
+                            !strstr(opt->cc, "-O"))
+                               ? " -O2"
+                               : "";
     if (opt->command == CMD_OBJ) {
         const char *dbg_flag = (opt->debug_info && !strstr(opt->cc, "tcc")) ? " -g" : "";
         {
@@ -393,6 +411,7 @@ int driver_build(options_t *opt)
                 sb_init(&cmd);
                 sb_puts(&cmd, opt->cc);
                 sb_puts(&cmd, " -c -I.");
+                sb_puts(&cmd, opt_flag);
                 sb_puts(&cmd, dbg_flag);
                 sb_putc(&cmd, ' ');
                 sb_put_shell_arg(&cmd, cfiles[i]);
@@ -423,9 +442,19 @@ int driver_build(options_t *opt)
 
         const char *lm = " -lm";
 #endif
+        const char *lto_flag = "";
+        if (opt_flag[0] && !use_tcc) {
+#ifdef _WIN32
+            if (!strstr(opt->cc, "clang")) lto_flag = " -flto";
+#else
+            lto_flag = " -flto";
+#endif
+        }
         sb_t cmd;
         sb_init(&cmd);
         sb_puts(&cmd, opt->cc);
+        sb_puts(&cmd, opt_flag);
+        sb_puts(&cmd, lto_flag);
         sb_puts(&cmd, " -I. -o ");
         sb_put_shell_arg(&cmd, output);
         if (opt->debug_info) {

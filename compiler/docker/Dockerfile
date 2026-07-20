@@ -2,22 +2,13 @@
 #
 # Salam compiler - multi-stage image (Alpine / musl, smallest practical base).
 #
-# Stages:
-#   toolchain  - base image with everything needed to BUILD and RUN salam
-#                (C compilers + LLVM 22 + make). Shared by every other stage.
-#   dev        - live development: source is bind-mounted, salam is recompiled
-#                on every change (see tools/bash/docker-dev.sh).
-#   builder    - production build: COPY . then `make && make install`.
-#   prod       - slim runtime: only the installed `salam` + std/ from `builder`,
-#                on top of the same toolchain (salam shells out to cc/llvm at
-#                run time, so the toolchain must be present to compile programs).
-#
 
 ARG ALPINE_VERSION=edge
 ARG LLVM_VERSION=22
 
 FROM alpine:${ALPINE_VERSION} AS toolchain
 ARG LLVM_VERSION
+SHELL ["/bin/ash", "-o", "pipefail", "-c"]
 
 RUN for i in 1 2 3 4 5; do \
         apk add --no-cache \
@@ -33,9 +24,13 @@ RUN for i in 1 2 3 4 5; do \
             sqlite-dev \
             sqlite-static \
             mariadb-connector-c-dev \
+            nodejs \
+            npm \
         && break; \
         echo "apk add attempt $i failed; retrying in 5s..." >&2; sleep 5; \
     done
+
+RUN node -v && npm -v
 
 RUN set -eux; \
     LLVM_BIN="/usr/lib/llvm${LLVM_VERSION}/bin"; \
@@ -49,33 +44,38 @@ RUN set -eux; \
     clang-${LLVM_VERSION} --version; \
     llc-${LLVM_VERSION} --version | head -1
 
-ENV CC=gcc
+ARG SALAM_UID=1000
+ARG SALAM_GID=1000
+RUN addgroup -g "${SALAM_GID}" salam \
+    && adduser -D -u "${SALAM_UID}" -G salam salam
+
 WORKDIR /app
 
 FROM toolchain AS dev
 RUN apk add --no-cache entr
+RUN chown -R salam:salam /app \
+    && mkdir -p /app/build \
+    && chmod 1777 /app/build
+ENV HOME=/tmp
+USER salam
 ENTRYPOINT ["sh", "tools/bash/docker-dev.sh"]
 
 FROM toolchain AS builder
 COPY . .
 RUN make OUTDIR=. -j"$(nproc)" && make OUTDIR=. install PREFIX=/usr/local
-RUN salam --version || true
+RUN salam version
 
 FROM toolchain AS prod
 COPY --from=builder /usr/local/bin/salam /usr/local/bin/salam
 COPY --from=builder /usr/local/share/salam /usr/local/share/salam
 
-ARG SALAM_UID=1000
-ARG SALAM_GID=1000
-RUN addgroup -g "${SALAM_GID}" salam \
-    && adduser -D -u "${SALAM_UID}" -G salam salam \
-    && mkdir -p /work \
-    && chown -R salam:salam /work
+RUN mkdir -p /work && chown -R salam:salam /work
+ENV HOME=/tmp
 WORKDIR /work
 USER salam
 
 HEALTHCHECK --interval=5m --timeout=10s --start-period=5s --retries=3 \
-    CMD salam --version || exit 1
+    CMD salam version || exit 1
 
 ENTRYPOINT ["salam"]
-CMD ["--help"]
+CMD ["help"]

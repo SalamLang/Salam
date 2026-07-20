@@ -128,8 +128,9 @@ void p_sync(parser_t *p)
         case TK_KW_IMPORT:
         case TK_KW_LAYOUT:
         case TK_KW_IF:
-        case TK_KW_WHILE:
-        case TK_KW_FOR:
+        case TK_KW_UNTIL:
+        case TK_KW_EACH:
+        case TK_KW_REPEAT:
         case TK_KW_RET:
         case TK_RBRACE:
         case TK_KW_END:
@@ -224,8 +225,18 @@ const token_t *p_peekn(const parser_t *p, size_t k)
 size_t p_ident_run_len(const parser_t *p)
 {
     size_t m = 0;
-    while (p_peekn(p, m)->kind == TK_IDENT)
+    uint32_t line = 0;
+    bool have = false;
+    while (p_peekn(p, m)->kind == TK_IDENT) {
+        uint32_t l = p_peekn(p, m)->span.begin.line;
+        if (!have) {
+            line = l;
+            have = true;
+        } else if (l != line) {
+            break;
+        }
         m++;
+    }
     return m;
 }
 
@@ -235,7 +246,8 @@ const char *p_munch_name(parser_t *p)
     sb_t b;
     sb_init(&b);
     bool first = true;
-    while (p_at(p, TK_IDENT)) {
+    uint32_t line = p_peek(p)->span.begin.line;
+    while (p_at(p, TK_IDENT) && p_peek(p)->span.begin.line == line) {
         if (!first) sb_putc(&b, ' ');
         sb_puts(&b, p_peek(p)->lexeme);
         first = false;
@@ -248,44 +260,7 @@ const char *p_munch_name(parser_t *p)
 
 const char *parse_decl_name(parser_t *p)
 {
-    if (!p_at(p, TK_IDENT)) return p_name(p, "expected name");
-    size_t m = p_ident_run_len(p);
-
-    long dynidx = -1;
-    {
-        size_t i = 0;
-        for (; i + 1 < m; i++) {
-            const token_t *t = p_peekn(p, i);
-            if (t->kind == TK_IDENT && strcmp(t->lexeme, "dyn") == 0) {
-                dynidx = (long)i;
-                break;
-            }
-        }
-    }
-    token_kind_t after = p_peekn(p, m)->kind;
-    size_t name_words;
-    if (dynidx >= 1)
-        name_words = (size_t)dynidx;
-    else if (after == TK_COLON || after == TK_KW_FUNC || after == TK_AMP)
-        name_words = m;
-    else if (m >= 2)
-        name_words = m - 1;
-    else
-        name_words = 1;
-    if (name_words < 1) name_words = 1;
-    sb_t b;
-    sb_init(&b);
-    {
-        size_t i = 0;
-        for (; i < name_words; i++) {
-            if (i) sb_putc(&b, ' ');
-            sb_puts(&b, p_peek(p)->lexeme);
-            p_advance(p);
-        }
-    }
-    const char *r = arena_strdup(p->a, sb_cstr(&b));
-    sb_free(&b);
-    return r;
+    return p_munch_name(p);
 }
 
 #define P_MAX_DEPTH 128
@@ -310,4 +285,30 @@ void p_comma_list(parser_t *p, ast_node_t *parent, token_kind_t close, p_elem_fn
     do {
         ast_add(p->a, parent, elem(p));
     } while (p_match(p, TK_COMMA));
+}
+
+bool p_try_return_type(parser_t *p, ast_node_t **out_type)
+{
+    if (!p_at(p, TK_COLON)) return false;
+    size_t save_pos = p->pos;
+    uint32_t colon_line = p_peek(p)->span.begin.line;
+    p_advance(p);
+    if (p_peek(p)->span.begin.line != colon_line) {
+        p->pos = save_pos;
+        return false;
+    }
+    bool save_panic = p->panic;
+    bool save_had_error = p->had_error;
+    p->panic = true;
+    ast_node_t *t = parse_type(p);
+    bool valid_name = t->name && strcmp(t->name, "<error>") != 0;
+    if (valid_name && (p_at(p, TK_COLON) || p_at(p, TK_STMT_END) || p_at_eof(p))) {
+        p->panic = save_panic;
+        *out_type = t;
+        return true;
+    }
+    p->pos = save_pos;
+    p->panic = save_panic;
+    p->had_error = save_had_error;
+    return false;
 }

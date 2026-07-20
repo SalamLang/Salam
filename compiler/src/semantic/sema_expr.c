@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "semantic/sema_internal.h"
+#include "semantic/dce.h"
 
 static type_t *ty(sema_t *s, type_kind_t k)
 {
@@ -277,7 +278,7 @@ static type_t *check_member(sema_t *s, ast_node_t *n)
     if (n->a && n->a->kind == AST_IDENTIFIER) {
         symbol_t *pk = scope_lookup(s->cur, n->a->name);
         if (pk && pk->kind == SYM_PACKAGE) {
-            n->name = pkg_member_canon(pk, n->name);
+            n->name = pkg_member_canon(s, pk, n->name, &n->span);
             symbol_t *m = scope_lookup_local(pk->members, n->name);
             if (!m) {
                 SERR(s, 16, &n->span, "package '%s' has no exported member '%s'",
@@ -318,7 +319,7 @@ static type_t *check_member(sema_t *s, ast_node_t *n)
              type_to_string(s->tc, objt));
         return decorate(s, n, err_ty(s));
     }
-    n->name = scope_member_canon(ssym->members, n->name);
+    n->name = scope_member_canon(s, ssym->members, n->name, &n->span);
     symbol_t *f = scope_lookup_local(ssym->members, n->name);
     if (!f) {
         SERR(s, 16, &n->span, "no field '%s' in struct '%s'", n->name, ssym->name);
@@ -390,7 +391,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
     case AST_IDENTIFIER: {
         symbol_t *sym = scope_lookup(s->cur, n->name);
         if (!sym) {
-            const char *c = local_canon(s, n->name);
+            const char *c = local_canon(s, n->name, &n->span);
             if (c != n->name) {
                 n->name = c;
                 sym = scope_lookup(s->cur, n->name);
@@ -420,7 +421,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
     case AST_FUNC_ADDR: {
         symbol_t *sym = scope_lookup(s->cur, n->name);
         if (!sym) {
-            const char *c = local_canon(s, n->name);
+            const char *c = local_canon(s, n->name, &n->span);
             if (c != n->name) {
                 n->name = c;
                 sym = scope_lookup(s->cur, n->name);
@@ -454,6 +455,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
             return decorate(s, n, err_ty(s));
         }
         sym->used = true;
+        dce_mark_root(s->pkg, sym->name);
         return decorate(s, n, type_ptr(s->tc, ty(s, TY_VOID)));
     }
     case AST_THIS: {

@@ -106,6 +106,7 @@ struct ast_node {
     vec_t aliases;
     vec_t captures;
     const char *type_str;
+    const char *origin_lang;
 };
 
 ast_node_t *ast_new(arena_t *a, ast_kind_t kind, const src_span_t *span);

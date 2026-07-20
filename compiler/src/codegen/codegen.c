@@ -29,19 +29,6 @@ static bool detect_gui_imports(ast_node_t *program)
     return false;
 }
 
-static bool is_windows_target(const char *triple)
-{
-    if (!triple || !triple[0]) {
-#if defined(_WIN32)
-        return true;
-#else
-        return false;
-#endif
-    }
-    return strstr(triple, "windows") != NULL || strstr(triple, "win32") != NULL ||
-           strstr(triple, "w64") != NULL || strstr(triple, "msvc") != NULL;
-}
-
 static void emit_private_protos(cg_t *cg, ast_node_t *program)
 {
     {

@@ -146,6 +146,14 @@ SAL_INLINE llv_t ll_poison(const char *ts)
 
 const char *ll_fmt(ll_t *ll, const char *fmt, ...);
 
+/* Salam identifiers may contain characters (spaces, in particular - e.g.
+ * "mut is p := ...") that are not valid in an unquoted LLVM IR local/global
+ * identifier ([a-zA-Z$._][a-zA-Z$._0-9]*). Call this on any raw Salam name
+ * before splicing it into a %-prefixed IR identifier fragment; a trailing
+ * uniqueness counter appended by the caller keeps the result collision-free
+ * even if two distinct names happen to sanitize to the same string. */
+const char *ll_safe_name(ll_t *ll, const char *raw);
+
 void ll_emit(ll_t *ll, const char *fmt, ...);
 
 void ll_emit_alloca(ll_t *ll, const char *fmt, ...);

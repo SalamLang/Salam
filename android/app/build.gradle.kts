@@ -3,15 +3,16 @@ plugins {
 }
 
 android {
-    namespace = "ir.salamlang.editor"
+    namespace = "ir.salamlang.app"
     compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
+        version =
+            release(36) {
+                minorApiLevel = 1
+            }
     }
 
     defaultConfig {
-        applicationId = "ir.salamlang.editor"
+        applicationId = "ir.salamlang.app"
         minSdk = 24
         targetSdk = 36
         versionCode = project.findProperty("appVersionCode")?.toString()?.toIntOrNull() ?: 1
@@ -37,13 +38,14 @@ android {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
+                "proguard-rules.pro",
             )
-            signingConfig = if (System.getenv("ANDROID_KEYSTORE_FILE").isNullOrBlank()) {
-                signingConfigs.getByName("debug")
-            } else {
-                signingConfigs.getByName("release")
-            }
+            signingConfig =
+                if (System.getenv("ANDROID_KEYSTORE_FILE").isNullOrBlank()) {
+                    signingConfigs.getByName("debug")
+                } else {
+                    signingConfigs.getByName("release")
+                }
         }
     }
     compileOptions {

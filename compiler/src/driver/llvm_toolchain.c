@@ -30,7 +30,6 @@
 #endif
 
 #define LLVM_CLANG "clang-22"
-#define LLVM_LLC "llc-22"
 #define LLVM_OPT "opt-22"
 #define LLVM_LLI "lli-22"
 
@@ -136,10 +135,8 @@ static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
 {
     const char *O = opt_flag(opts->opt_level);
     const char *triple = opts->target_triple;
-    static char cbuf[SALAM_PATH_MAX], lbuf[SALAM_PATH_MAX], obuf[SALAM_PATH_MAX],
-        ibuf[SALAM_PATH_MAX];
+    static char cbuf[SALAM_PATH_MAX], obuf[SALAM_PATH_MAX], ibuf[SALAM_PATH_MAX];
     const char *CLANG = resolve_tool("clang", LLVM_CLANG, cbuf, sizeof cbuf);
-    const char *LLC = resolve_tool("llc", LLVM_LLC, lbuf, sizeof lbuf);
     const char *OPTT = resolve_tool("opt", LLVM_OPT, obuf, sizeof obuf);
     const char *LLI = resolve_tool("lli", LLVM_LLI, ibuf, sizeof ibuf);
     if (opts->verify_module) {

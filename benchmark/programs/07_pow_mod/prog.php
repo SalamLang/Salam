@@ -1,5 +1,9 @@
 <?php
-function powmod(int $base, int $e, int $m): int {
+
+// phpcs:disable PSR1.Files.SideEffects -- benchmark script intentionally declares and runs
+
+function powmod(int $base, int $e, int $m): int
+{
     $result = 1;
     $b = $base % $m;
     $ex = $e;

@@ -1,4 +1,5 @@
 <?php
+
 $count = 0;
 $total = 0;
 for ($n = 2; $n <= 30000; $n++) {

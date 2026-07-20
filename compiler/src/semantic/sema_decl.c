@@ -672,6 +672,7 @@ void sema_check_pass(sema_t *s, ast_node_t *program)
         size_t i = 0;
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
+            d->origin_lang = s->lang;
             if (d->synthetic) continue;
             lint_lang_types(s, d);
         }
@@ -687,7 +688,12 @@ void sema_check_pass(sema_t *s, ast_node_t *program)
 
     {
         size_t i = 0;
-        for (; i < s->pending.len; i++)
-            check_toplevel(s, (ast_node_t *)s->pending.data[i]);
+        for (; i < s->pending.len; i++) {
+            ast_node_t *d = (ast_node_t *)s->pending.data[i];
+            const char *save_lang = s->lang;
+            if (d->origin_lang) s->lang = d->origin_lang;
+            check_toplevel(s, d);
+            s->lang = save_lang;
+        }
     }
 }

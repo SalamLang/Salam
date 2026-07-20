@@ -143,8 +143,11 @@ type_t *sema_check_var_decl(sema_t *s, ast_node_t *n)
     }
     type_t *declared = n->type ? sema_resolve_type(s, n->type) : NULL;
 
-    if (n->a && n->a->kind == AST_STRUCT_LIT && n->a->name)
+    if (n->a && n->a->kind == AST_STRUCT_LIT && n->a->name) {
+        const char *orig = n->a->name;
         n->a->name = intrinsic_type_canon(n->a->name);
+        sema_check_intrinsic_type_lang(s, orig, &n->a->span);
+    }
 
     if (declared && declared->kind == TY_MAP && n->a && n->a->kind == AST_STRUCT_LIT &&
         n->a->name && strcmp(n->a->name, "HashMap") == 0) {

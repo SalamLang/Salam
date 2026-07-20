@@ -1,4 +1,4 @@
-package ir.salamlang.editor
+package ir.salamlang.app
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -39,7 +39,6 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 
 class MainActivity : AppCompatActivity() {
-
     private lateinit var contentArea: FrameLayout
     private lateinit var webView: WebView
     private lateinit var topProgress: ProgressBar
@@ -60,7 +59,8 @@ class MainActivity : AppCompatActivity() {
 
     private val locationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-            val granted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            val granted =
+                result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                     result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
             geolocationCallback?.invoke(geolocationOrigin.orEmpty(), granted, false)
             geolocationCallback = null
@@ -71,7 +71,7 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             val callback = filePathCallback ?: return@registerForActivityResult
             callback.onReceiveValue(
-                WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+                WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data),
             )
             filePathCallback = null
         }
@@ -172,10 +172,11 @@ class MainActivity : AppCompatActivity() {
         CookieManager.getInstance().setAcceptThirdPartyCookies(popup, true)
         popup.webViewClient = SalamWebViewClient()
         popup.webChromeClient = SalamWebChromeClient()
-        popup.layoutParams = FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
-        )
+        popup.layoutParams =
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
         popup.setBackgroundColor(android.graphics.Color.WHITE)
         contentArea.addView(popup)
         popupWebView = popup
@@ -192,36 +193,49 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupBackNavigation() {
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                val popup = popupWebView
-                when {
-                    popup != null && popup.canGoBack() -> popup.goBack()
-                    popup != null -> closePopup()
-                    errorView.visibility != View.VISIBLE && webView.canGoBack() -> webView.goBack()
-                    else -> {
-                        isEnabled = false
-                        onBackPressedDispatcher.onBackPressed()
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    val popup = popupWebView
+                    when {
+                        popup != null && popup.canGoBack() -> {
+                            popup.goBack()
+                        }
+
+                        popup != null -> {
+                            closePopup()
+                        }
+
+                        errorView.visibility != View.VISIBLE && webView.canGoBack() -> {
+                            webView.goBack()
+                        }
+
+                        else -> {
+                            isEnabled = false
+                            onBackPressedDispatcher.onBackPressed()
+                        }
                     }
                 }
-            }
-        })
+            },
+        )
     }
 
     private fun hasLocationPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
-                PackageManager.PERMISSION_GRANTED ||
-                ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
-                ) ==
-                PackageManager.PERMISSION_GRANTED
+            PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+            ) ==
+            PackageManager.PERMISSION_GRANTED
 
     private fun hideSplash() {
         if (splashHidden) return
         splashHidden = true
         mainHandler.removeCallbacks(splashTimeoutRunnable)
-        splashOverlay.animate()
+        splashOverlay
+            .animate()
             .alpha(0f)
             .setDuration(350L)
             .withEndAction { splashOverlay.visibility = View.GONE }
@@ -242,47 +256,49 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("QueryPermissionsNeeded")
     private fun openExternally(uri: Uri) {
         try {
-            val intent = if (uri.scheme?.lowercase() == "intent") {
-                val rawIntent = Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
+            val intent =
+                if (uri.scheme?.lowercase() == "intent") {
+                    val rawIntent = Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
 
-                rawIntent.action = Intent.ACTION_VIEW
-                rawIntent.addCategory(Intent.CATEGORY_BROWSABLE)
-                rawIntent.component = null
-                rawIntent.selector = null
-                rawIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    rawIntent.action = Intent.ACTION_VIEW
+                    rawIntent.addCategory(Intent.CATEGORY_BROWSABLE)
+                    rawIntent.component = null
+                    rawIntent.selector = null
+                    rawIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
 
-                val packageManager = packageManager
-                val activities = packageManager.queryIntentActivities(
-                    rawIntent,
-                    PackageManager.MATCH_DEFAULT_ONLY
-                )
-                if (activities.isEmpty()) {
-                    Log.w(TAG, "No activity found for intent, ignoring")
-                    return
-                }
-
-                val data = rawIntent.data
-                if (data != null) {
-                    val scheme = data.scheme?.lowercase()
-                    if (scheme != "http" && scheme != "https" && scheme != "tel" && scheme != "mailto") {
-                        Log.w(TAG, "Unsupported scheme: $scheme, ignoring")
+                    val packageManager = packageManager
+                    val activities =
+                        packageManager.queryIntentActivities(
+                            rawIntent,
+                            PackageManager.MATCH_DEFAULT_ONLY,
+                        )
+                    if (activities.isEmpty()) {
+                        Log.w(TAG, "No activity found for intent, ignoring")
                         return
                     }
-                }
 
-                rawIntent
-            } else {
-                Intent(Intent.ACTION_VIEW, uri).apply {
-                    addCategory(Intent.CATEGORY_BROWSABLE)
-                    component = null
-                    selector = null
+                    val data = rawIntent.data
+                    if (data != null) {
+                        val scheme = data.scheme?.lowercase()
+                        if (scheme != "http" && scheme != "https" && scheme != "tel" && scheme != "mailto") {
+                            Log.w(TAG, "Unsupported scheme: $scheme, ignoring")
+                            return
+                        }
+                    }
+
+                    rawIntent
+                } else {
+                    Intent(Intent.ACTION_VIEW, uri).apply {
+                        addCategory(Intent.CATEGORY_BROWSABLE)
+                        component = null
+                        selector = null
+                    }
                 }
-            }
 
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(intent)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to open external URI: ${uri.toString()}", e)
+            Log.e(TAG, "Failed to open external URI: $uri", e)
         }
     }
 
@@ -312,12 +328,15 @@ class MainActivity : AppCompatActivity() {
     private inner class SalamWebViewClient : WebViewClient() {
         override fun shouldOverrideUrlLoading(
             view: WebView,
-            request: WebResourceRequest
+            request: WebResourceRequest,
         ): Boolean {
             val url = request.url
             Log.d(TAG, "shouldOverride: $url (mainFrame=${request.isForMainFrame})")
             return when (url.scheme?.lowercase()) {
-                "http", "https" -> false
+                "http", "https" -> {
+                    false
+                }
+
                 else -> {
                     openExternally(url)
                     true
@@ -325,7 +344,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        override fun onPageFinished(view: WebView, url: String) {
+        override fun onPageFinished(
+            view: WebView,
+            url: String,
+        ) {
             Log.d(TAG, "onPageFinished: $url")
             hideSplash()
         }
@@ -333,11 +355,11 @@ class MainActivity : AppCompatActivity() {
         override fun onReceivedError(
             view: WebView,
             request: WebResourceRequest,
-            error: WebResourceError
+            error: WebResourceError,
         ) {
             Log.w(
                 TAG,
-                "onReceivedError: ${request.url} code=${error.errorCode} '${error.description}' mainFrame=${request.isForMainFrame}"
+                "onReceivedError: ${request.url} code=${error.errorCode} '${error.description}' mainFrame=${request.isForMainFrame}",
             )
             if (request.isForMainFrame && view === webView) {
                 showError()
@@ -347,14 +369,17 @@ class MainActivity : AppCompatActivity() {
         override fun onReceivedHttpError(
             view: WebView,
             request: WebResourceRequest,
-            errorResponse: android.webkit.WebResourceResponse
+            errorResponse: android.webkit.WebResourceResponse,
         ) {
             Log.w(TAG, "onReceivedHttpError: ${request.url} status=${errorResponse.statusCode}")
         }
     }
 
     private inner class SalamWebChromeClient : WebChromeClient() {
-        override fun onProgressChanged(view: WebView, newProgress: Int) {
+        override fun onProgressChanged(
+            view: WebView,
+            newProgress: Int,
+        ) {
             topProgress.progress = newProgress
             topProgress.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
             if (newProgress == 100) hideSplash()
@@ -363,14 +388,14 @@ class MainActivity : AppCompatActivity() {
         override fun onConsoleMessage(message: ConsoleMessage): Boolean {
             Log.d(
                 TAG,
-                "console[${message.messageLevel()}]: ${message.message()} (${message.sourceId()}:${message.lineNumber()})"
+                "console[${message.messageLevel()}]: ${message.message()} (${message.sourceId()}:${message.lineNumber()})",
             )
             return true
         }
 
         override fun onGeolocationPermissionsShowPrompt(
             origin: String,
-            callback: GeolocationPermissions.Callback
+            callback: GeolocationPermissions.Callback,
         ) {
             if (hasLocationPermission()) {
                 callback.invoke(origin, true, false)
@@ -380,8 +405,8 @@ class MainActivity : AppCompatActivity() {
                 locationPermissionLauncher.launch(
                     arrayOf(
                         Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION
-                    )
+                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                    ),
                 )
             }
         }
@@ -389,7 +414,7 @@ class MainActivity : AppCompatActivity() {
         override fun onShowFileChooser(
             webView: WebView,
             callback: ValueCallback<Array<Uri>>,
-            params: FileChooserParams
+            params: FileChooserParams,
         ): Boolean {
             filePathCallback?.onReceiveValue(null)
             filePathCallback = callback
@@ -406,7 +431,7 @@ class MainActivity : AppCompatActivity() {
             view: WebView,
             isDialog: Boolean,
             isUserGesture: Boolean,
-            resultMsg: Message
+            resultMsg: Message,
         ): Boolean {
             Log.d(TAG, "onCreateWindow: isUserGesture=$isUserGesture isDialog=$isDialog")
             val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false

@@ -44,7 +44,7 @@ void ll_emit_return(ll_t *ll, ast_node_t *value)
 static void ll_vardecl(ll_t *ll, ast_node_t *n)
 {
     const char *ts = n->type_str ? n->type_str : "i32";
-    const char *ptr = ll_fmt(ll, "%%v.%s.%d", n->name, ll->tmp++);
+    const char *ptr = ll_fmt(ll, "%%v.%s.%d", ll_safe_name(ll, n->name), ll->tmp++);
     ll_emit_alloca(ll, "%s = alloca %s", ptr, ll_ty(ll, ts));
     ll_local_add(ll, n->name, ptr, ts);
     if (n->a) {
@@ -250,7 +250,7 @@ static void ll_repeat(ll_t *ll, ast_node_t *n)
     size_t mark = ll->locals.len;
     const char *bindp = NULL;
     if (n->name) {
-        bindp = ll_fmt(ll, "%%v.%s.%d", n->name, ll->tmp++);
+        bindp = ll_fmt(ll, "%%v.%s.%d", ll_safe_name(ll, n->name), ll->tmp++);
         ll_emit_alloca(ll, "%s = alloca i32", bindp);
         ll_local_add(ll, n->name, bindp, "i32");
     }

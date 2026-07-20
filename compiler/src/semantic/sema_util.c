@@ -36,8 +36,10 @@ type_t *sema_vec_str(sema_t *s, const src_span_t *span)
 {
     ast_node_t *tn = ast_new(s->a, AST_TYPE, span);
     tn->name = "Vector";
+    tn->synthetic = true;
     ast_node_t *e = ast_new(s->a, AST_TYPE, span);
     e->name = "str";
+    e->synthetic = true;
     ast_add(s->a, tn, e);
     return sema_resolve_type(s, tn);
 }
@@ -88,73 +90,129 @@ static bool su_ident_eq(const char *a, const char *b)
     }
 }
 
-const char *intrinsic_type_canon(const char *name)
+typedef struct {
+    const char *fa, *ar, *en;
+} intrinsic_name_t;
+
+static const intrinsic_name_t k_intrinsic_types[] = {
+    {"وکتور", "متجه", "Vector"},
+    {"نگاشت", "خريطة", "HashMap"},
+    {"پیمایشگرنگاشت", "مكررخريطة", "MapIter"},
+    {"پرونده", "ملف", "File"},
+};
+
+static const intrinsic_name_t k_intrinsic_methods[] = {
+
+    {"بیفزا", "أضف", "push"},
+    {"دربیاور", "أخرج", "pop"},
+    {"بگیر", "احصل", "get"},
+    {"بنشان", "عين", "set"},
+    {"طول", "طول", "len"},
+    {"ظرفیت", "سعة", "cap"},
+    {"آزادکن", "حرر", "free"},
+
+    {"درج", "ضع", "put"},
+    {"دارد", "يحوي", "has"},
+    {"حذف", "احذف", "remove"},
+    {"اندازه", "حجم", "size"},
+    {"پیمایش", "تكرار", "iter"},
+
+    {"داردبعدی", "يوجدتالي", "has_next"},
+    {"کلید", "مفتاح", "key"},
+    {"مقدار", "قيمة", "value"},
+    {"بعدی", "التالي", "next"},
+
+    {"خواندن", "قراءة", "read"},
+    {"خواندن خط", "قراءةسطر", "readline"},
+    {"نوشتن", "كتابة", "write"},
+    {"جابجایی", "انتقال", "seek"},
+    {"ببند", "أغلق", "close"},
+
+    {"پیوست", "دمج", "concat"},
+    {"زیررشته", "مقطع", "substr"},
+    {"بیاب", "ابحث", "find"},
+    {"بشکاف", "قسم", "split"},
+    {"پیراست", "شذب", "trim"},
+    {"به صحیح", "إلىصحيح", "to_int"},
+    {"به اعشار", "إلىعشري", "to_float"},
+};
+
+static const char *intrinsic_canon(const intrinsic_name_t *tab, size_t n,
+                                   const char *name)
 {
-    static const struct {
-        const char *fa, *ar, *en;
-    } tab[] = {
-        {"وکتور", "متجه", "Vector"},
-        {"نگاشت", "خريطة", "HashMap"},
-        {"پیمایشگرنگاشت", "مكررخريطة", "MapIter"},
-        {"پرونده", "ملف", "File"},
-    };
     if (!name) return name;
     {
         size_t i = 0;
-        for (; i < sizeof(tab) / sizeof(tab[0]); i++)
+        for (; i < n; i++)
             if (su_ident_eq(name, tab[i].fa) || su_ident_eq(name, tab[i].ar))
                 return tab[i].en;
     }
     return name;
 }
 
-const char *intrinsic_method_canon(const char *name)
+static const char *intrinsic_lang_form(const intrinsic_name_t *tab, size_t n,
+                                       const char *en_name, const char *lang)
 {
-    static const struct {
-        const char *fa, *ar, *en;
-    } tab[] = {
-
-        {"بیفزا", "أضف", "push"},
-        {"دربیاور", "أخرج", "pop"},
-        {"بگیر", "احصل", "get"},
-        {"بنشان", "عين", "set"},
-        {"طول", "طول", "len"},
-        {"ظرفیت", "سعة", "cap"},
-        {"آزادکن", "حرر", "free"},
-
-        {"درج", "ضع", "put"},
-        {"دارد", "يحوي", "has"},
-        {"حذف", "احذف", "remove"},
-        {"اندازه", "حجم", "size"},
-        {"پیمایش", "تكرار", "iter"},
-
-        {"داردبعدی", "يوجدتالي", "has_next"},
-        {"کلید", "مفتاح", "key"},
-        {"مقدار", "قيمة", "value"},
-        {"بعدی", "التالي", "next"},
-
-        {"خواندن", "قراءة", "read"},
-        {"خواندن خط", "قراءةسطر", "readline"},
-        {"نوشتن", "كتابة", "write"},
-        {"جابجایی", "انتقال", "seek"},
-        {"ببند", "أغلق", "close"},
-
-        {"پیوست", "دمج", "concat"},
-        {"زیررشته", "مقطع", "substr"},
-        {"بیاب", "ابحث", "find"},
-        {"بشکاف", "قسم", "split"},
-        {"پیراست", "شذب", "trim"},
-        {"به صحیح", "إلىصحيح", "to_int"},
-        {"به اعشار", "إلىعشري", "to_float"},
-    };
-    if (!name) return name;
+    if (!lang || lang[0] == 'e') return NULL;
     {
         size_t i = 0;
-        for (; i < sizeof(tab) / sizeof(tab[0]); i++)
-            if (su_ident_eq(name, tab[i].fa) || su_ident_eq(name, tab[i].ar))
-                return tab[i].en;
+        for (; i < n; i++)
+            if (strcmp(tab[i].en, en_name) == 0)
+                return lang[0] == 'f' ? tab[i].fa : tab[i].ar;
     }
-    return name;
+    return NULL;
+}
+
+static void check_lang_form(sema_t *s, const char *want, const char *used,
+                            const src_span_t *span)
+{
+    if (!want || su_ident_eq(used, want)) return;
+    {
+        bool fa = s->lang && s->lang[0] == 'f';
+        const char *msg = fa ? "identifier '%s' must be Persian in a Persian file"
+                             : "identifier '%s' must be Arabic in an Arabic file";
+        SERR(s, 1, span, i18n_tr(msg), used);
+    }
+}
+
+const char *intrinsic_type_canon(const char *name)
+{
+    return intrinsic_canon(k_intrinsic_types,
+                           sizeof(k_intrinsic_types) / sizeof(k_intrinsic_types[0]),
+                           name);
+}
+
+const char *intrinsic_method_canon(const char *name)
+{
+    return intrinsic_canon(k_intrinsic_methods,
+                           sizeof(k_intrinsic_methods) / sizeof(k_intrinsic_methods[0]),
+                           name);
+}
+
+void sema_check_intrinsic_type_lang(sema_t *s, const char *used, const src_span_t *span)
+{
+    if (!s->lang || s->lang[0] == 'e' || !used) return;
+    {
+        const char *canon = intrinsic_canon(
+            k_intrinsic_types, sizeof(k_intrinsic_types) / sizeof(k_intrinsic_types[0]),
+            used);
+        const char *want = intrinsic_lang_form(
+            k_intrinsic_types, sizeof(k_intrinsic_types) / sizeof(k_intrinsic_types[0]),
+            canon, s->lang);
+        check_lang_form(s, want, used, span);
+    }
+}
+
+void sema_check_intrinsic_method_lang(sema_t *s, const char *used, const char *canon,
+                                      const src_span_t *span)
+{
+    if (!s->lang || s->lang[0] == 'e' || !used || !canon) return;
+    {
+        const char *want = intrinsic_lang_form(
+            k_intrinsic_methods,
+            sizeof(k_intrinsic_methods) / sizeof(k_intrinsic_methods[0]), canon, s->lang);
+        check_lang_form(s, want, used, span);
+    }
 }
 
 const char *alias_for_lang(const vec_t *aliases, const char *lang)
@@ -178,11 +236,12 @@ static bool aliases_have(const vec_t *aliases, const char *lang, const char *nam
     return false;
 }
 
-const char *scope_member_canon(scope_t *members, const char *name)
+const char *scope_member_canon(sema_t *s, scope_t *members, const char *name,
+                               const src_span_t *span)
 {
     const char *lang = i18n_lang();
-    if (!name || strcmp(lang, "en") == 0 || !members) return name;
-    {
+    if (!name || !members) return name;
+    if (strcmp(lang, "en") != 0) {
         size_t i = 0;
         for (; i < members->symbols.len; i++) {
             symbol_t *m = (symbol_t *)members->symbols.data[i];
@@ -190,17 +249,24 @@ const char *scope_member_canon(scope_t *members, const char *name)
             if (aliases_have(&m->decl->aliases, lang, name)) return m->name;
         }
     }
+    if (s->lang && s->lang[0] != 'e') {
+        symbol_t *direct = scope_lookup_local(members, name);
+        if (direct && direct->decl && !direct->decl->synthetic)
+            check_lang_form(s, alias_for_lang(&direct->decl->aliases, s->lang), name,
+                            span);
+    }
     return name;
 }
 
-const char *pkg_member_canon(symbol_t *pk, const char *name)
+const char *pkg_member_canon(sema_t *s, symbol_t *pk, const char *name,
+                             const src_span_t *span)
 {
-    return scope_member_canon(pk->members, name);
+    return scope_member_canon(s, pk->members, name, span);
 }
 
-const char *local_canon(sema_t *s, const char *name)
+const char *local_canon(sema_t *s, const char *name, const src_span_t *span)
 {
-    return scope_member_canon(s->global, name);
+    return scope_member_canon(s, s->global, name, span);
 }
 
 ast_node_t *sema_pure_fn(sema_t *s)

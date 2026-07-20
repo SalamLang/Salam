@@ -1,7 +1,6 @@
 const N: usize = 300000;
 
-fn mergesort(arr: &mut [i64], aux: &mut [i64], lo: i64, hi: i64)
-{
+fn mergesort(arr: &mut [i64], aux: &mut [i64], lo: i64, hi: i64) {
     if lo >= hi {
         return;
     }
@@ -38,8 +37,7 @@ fn mergesort(arr: &mut [i64], aux: &mut [i64], lo: i64, hi: i64)
     }
 }
 
-fn main()
-{
+fn main() {
     let mut x: i64 = 2;
     let mut arr: Vec<i64> = vec![0; N];
     let mut aux: Vec<i64> = vec![0; N];
@@ -53,7 +51,8 @@ fn main()
 
     let mut checksum: i64 = 0;
     for i in 0..N {
-        checksum = (checksum + (arr[i] % 1000000007) * (((i + 1) as i64) % 1000000007)) % 1000000007;
+        checksum =
+            (checksum + (arr[i] % 1000000007) * (((i + 1) as i64) % 1000000007)) % 1000000007;
     }
 
     println!("{}", arr[0]);

@@ -25,7 +25,8 @@ fn main() {
     let mut checksum: i64 = 0;
     i = 0;
     while i < n {
-        checksum = (checksum + (arr[i as usize] % 1000000007) * ((i as i64 + 1) % 1000000007)) % 1000000007;
+        checksum = (checksum + (arr[i as usize] % 1000000007) * ((i as i64 + 1) % 1000000007))
+            % 1000000007;
         i = i + 1;
     }
     println!("{}", arr[0]);

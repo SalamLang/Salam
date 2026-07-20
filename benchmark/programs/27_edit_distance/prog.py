@@ -28,10 +28,8 @@ for i in range(1, LEN1 + 1):
         ins_cost = cur[j - 1] + 1
         sub_cost = prev[j - 1] + cost
         m = del_cost
-        if ins_cost < m:
-            m = ins_cost
-        if sub_cost < m:
-            m = sub_cost
+        m = min(m, ins_cost)
+        m = min(m, sub_cost)
         cur[j] = m
     for j in range(LEN2 + 1):
         prev[j] = cur[j]

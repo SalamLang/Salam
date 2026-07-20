@@ -34,7 +34,8 @@ fn main() {
     quicksort(&mut arr, 0, (N - 1) as i64);
     let mut checksum: i64 = 0;
     for i in 0..N {
-        checksum = (checksum + (arr[i] % 1000000007) * (((i + 1) as i64) % 1000000007)) % 1000000007;
+        checksum =
+            (checksum + (arr[i] % 1000000007) * (((i + 1) as i64) % 1000000007)) % 1000000007;
     }
     println!("{}", arr[0]);
     println!("{}", arr[N - 1]);

@@ -21,11 +21,11 @@ for gen in range(GENERATIONS):
                         continue
                     nr = r + dr
                     nc = c + dc
-                    if nr >= 0 and nr < H and nc >= 0 and nc < W:
+                    if 0 <= nr < H and 0 <= nc < W:
                         count = count + grid[nr * W + nc]
             alive = grid[r * W + c]
             if alive == 1:
-                next_grid[r * W + c] = 1 if (count == 2 or count == 3) else 0
+                next_grid[r * W + c] = 1 if count in (2, 3) else 0
             else:
                 next_grid[r * W + c] = 1 if (count == 3) else 0
     grid, next_grid = next_grid, grid

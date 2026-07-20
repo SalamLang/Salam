@@ -79,6 +79,8 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
             if (strcmp(arg, "--keep-c") == 0) {
                 out->keep_c = true;
 
+            } else if (strcmp(arg, "--short") == 0 && out->command == CMD_VERSION) {
+                out->version_short = true;
             } else if (strcmp(arg, "-O0") == 0) {
                 out->llvm_opt_level = 0;
             } else if (strcmp(arg, "-O1") == 0) {

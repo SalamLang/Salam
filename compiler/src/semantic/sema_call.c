@@ -15,6 +15,7 @@
 #include "core/prelude.h"
 #include "semantic/sema_internal.h"
 #include "semantic/builtins.h"
+#include "semantic/dce.h"
 
 static type_t *ty(sema_t *s, type_kind_t k)
 {
@@ -215,6 +216,27 @@ static void check_pure_builtin(sema_t *s, ast_node_t *n, const char *nm)
     }
 }
 
+static bool dce_caller_rooted(sema_t *s)
+{
+    if (!s->cur_func) return true;
+    if (s->cur_func->owner) return true;
+    if (!s->cur_func->decl) return true;
+    if (s->cur_func->decl->typarams.len > 0) return true;
+    if (s->cur_func->decl->is_extern) return true;
+    if (s->cur_func->decl->synthetic) return true;
+    return false;
+}
+
+static void dce_note(sema_t *s, const char *callee_pkg, const char *callee_fn)
+{
+    if (!dce_enabled()) return;
+    if (dce_caller_rooted(s)) {
+        dce_mark_root(callee_pkg, callee_fn);
+        return;
+    }
+    dce_note_call(s->pkg, s->cur_func->decl->name, callee_pkg, callee_fn);
+}
+
 type_t *check_call(sema_t *s, ast_node_t *n)
 {
     ast_node_t *callee = n->a;
@@ -235,6 +257,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             return decorate(s, n, ty(s, TY_I64));
         }
         fsym->used = true;
+        dce_mark_root(s->pkg, fn->name);
         bool ok = false;
         {
             size_t i = 0;
@@ -265,6 +288,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             return decorate(s, n, ty(s, TY_I64));
         }
         fsym->used = true;
+        dce_mark_root(s->pkg, fn->name);
         decorate(s, fn, ty(s, TY_VOID));
         decorate(s, callee, ty(s, TY_VOID));
         return decorate(s, n, ty(s, TY_I64));
@@ -388,7 +412,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         }
         symbol_t *sym = scope_lookup(s->cur, nm);
         if (!sym) {
-            const char *c = local_canon(s, nm);
+            const char *c = local_canon(s, nm, &n->span);
             if (c != nm) {
                 nm = c;
                 callee->name = c;
@@ -436,6 +460,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         }
 
         sym->used = true;
+        dce_note(s, sym->pkgname ? sym->pkgname : s->pkg, nm);
         if (sym->kind == SYM_FUNC && sym->decl && sym->decl->typarams.len > 0) {
             symbol_t *inst = g_infer_call(s, sym, &argtypes, &n->span, call_expected);
             if (!inst) return decorate(s, n, err_ty(s));
@@ -454,7 +479,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         callee->a->kind == AST_IDENTIFIER) {
         symbol_t *pk = scope_lookup(s->cur, callee->a->name);
         if (pk && pk->kind == SYM_PACKAGE) {
-            callee->name = pkg_member_canon(pk, callee->name);
+            callee->name = pkg_member_canon(s, pk, callee->name, &callee->span);
             const char *fname = callee->name;
             symbol_t *fn = scope_lookup_local(pk->members, fname);
             if (!fn || fn->kind != SYM_FUNC) {
@@ -469,6 +494,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                 return decorate(s, n, err_ty(s));
             }
             fn->used = true;
+            dce_note(s, pk->pkgname, fname);
 
             if (fn->decl && fn->decl->typarams.len > 0) {
                 scope_t *save_cur = s->cur;
@@ -512,8 +538,11 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         if (callee->name &&
             (objt->kind == TY_MAP || objt->kind == TY_MAP_ITER || objt->kind == TY_VEC ||
              objt->kind == TY_STR ||
-             (objt->kind == TY_PTR && objt->pointee && objt->pointee->kind == TY_FILE)))
+             (objt->kind == TY_PTR && objt->pointee && objt->pointee->kind == TY_FILE))) {
+            const char *orig = callee->name;
             callee->name = intrinsic_method_canon(callee->name);
+            sema_check_intrinsic_method_lang(s, orig, callee->name, &callee->span);
+        }
 
         if (objt->kind == TY_MAP) {
             const char *m = callee->name;
@@ -665,7 +694,8 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                 symbol_t *iface = (symbol_t *)dynt->decl;
                 decorate(s, callee, objt);
                 if (!strcmp(callee->name, "free")) return decorate(s, n, ty(s, TY_VOID));
-                callee->name = scope_member_canon(iface->members, callee->name);
+                callee->name =
+                    scope_member_canon(s, iface->members, callee->name, &callee->span);
                 symbol_t *m = scope_lookup_local(iface->members, callee->name);
                 if (!m || m->kind != SYM_METHOD) {
                     SERR(s, 17, &n->span, "interface '%s' has no method '%s'",
@@ -687,12 +717,19 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                  type_to_string(s->tc, objt));
             return decorate(s, n, err_ty(s));
         }
-        callee->name = scope_member_canon(ssym->members, callee->name);
+        {
+            const char *orig_method_name = callee->name;
+            callee->name =
+                scope_member_canon(s, ssym->members, callee->name, &callee->span);
 
-        if (!scope_lookup_local(ssym->members, callee->name)) {
-            const char *intr = intrinsic_method_canon(callee->name);
-            if (intr != callee->name && scope_lookup_local(ssym->members, intr))
-                callee->name = intr;
+            if (!scope_lookup_local(ssym->members, callee->name)) {
+                const char *intr = intrinsic_method_canon(callee->name);
+                if (intr != callee->name && scope_lookup_local(ssym->members, intr))
+                    callee->name = intr;
+            }
+            if (scope_lookup_local(ssym->members, callee->name))
+                sema_check_intrinsic_method_lang(s, orig_method_name, callee->name,
+                                                 &callee->span);
         }
         symbol_t *m = scope_lookup_local(ssym->members, callee->name);
 
@@ -748,7 +785,11 @@ type_t *check_call(sema_t *s, ast_node_t *n)
 bool stamp_empty_intrinsic(sema_t *s, ast_node_t *val, type_t *target)
 {
     if (!val || !target || val->kind != AST_STRUCT_LIT || !val->name) return false;
-    val->name = intrinsic_type_canon(val->name);
+    {
+        const char *orig = val->name;
+        val->name = intrinsic_type_canon(val->name);
+        sema_check_intrinsic_type_lang(s, orig, &val->span);
+    }
     if ((target->kind == TY_VEC && strcmp(val->name, "Vector") == 0) ||
         (target->kind == TY_MAP && strcmp(val->name, "HashMap") == 0)) {
         val->type_str = type_to_string(s->tc, target);

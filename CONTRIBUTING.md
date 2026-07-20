@@ -290,12 +290,12 @@ To maintain consistency and readability, please follow these coding conventions 
 
 ### 🎨 C Code Formatting (clang-format)
 
-All C code under `compiler/` is formatted with [`clang-format`](https://clang.llvm.org/docs/ClangFormat.html) using the style defined in the repo-root [`.clang-format`](.clang-format). CI enforces this through Super-Linter (which builds clang-format from **LLVM 21**), so please format your C changes before pushing.
+All C code under `compiler/` is formatted with [`clang-format`](https://clang.llvm.org/docs/ClangFormat.html) using the style defined in the repo-root [`.clang-format`](.clang-format). CI enforces this through the `clang-format` prek hook (which pins clang-format from **LLVM 22**), so please format your C changes before pushing.
 
-Use **clang-format 21** to match CI exactly (any `21.1.x` is fine; `clang-format --version` should print `21`). If you do not have it, install a pinned copy with pip:
+Use **clang-format 22** to match CI exactly (any `22.1.x` is fine; `clang-format --version` should print `22`). If you do not have it, install a pinned copy with pip:
 
 ```bash
-python3 -m venv .venv-cf && .venv-cf/bin/pip install "clang-format==21.1.2"
+python3 -m venv .venv-cf && .venv-cf/bin/pip install "clang-format==22.1.5"
 # then use .venv-cf/bin/clang-format below
 ```
 

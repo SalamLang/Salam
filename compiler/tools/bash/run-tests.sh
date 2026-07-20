@@ -156,8 +156,8 @@ if want fmt; then
             exp="tests/$lang/fmt/$name.out"
             [ -f "$exp" ] || continue
             cp "$f" "$WORK/$name.salam"
-            "$SALAM" fmt "$WORK/$name.salam" --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
-            "$SALAM" fmt "$WORK/$name.salam" --check --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
+            "$SALAM" format "$WORK/$name.salam" --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
+            "$SALAM" format "$WORK/$name.salam" --check --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
             idem=$?
             rm -f "$WORK/$name.exe"
             "$SALAM" build "$WORK/$name.salam" --output="$WORK/$name.exe" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1
@@ -169,8 +169,8 @@ if want fmt; then
 
             TAB=$(printf '\t')
             cp "$f" "$WORK/${name}_tab.salam"
-            "$SALAM" fmt "$WORK/${name}_tab.salam" --tabs --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
-            "$SALAM" fmt "$WORK/${name}_tab.salam" --tabs --check --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
+            "$SALAM" format "$WORK/${name}_tab.salam" --tabs --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
+            "$SALAM" format "$WORK/${name}_tab.salam" --tabs --check --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
             tabidem=$?
             hastab=1
             grep -q "$TAB" "$WORK/${name}_tab.salam" && hastab=0

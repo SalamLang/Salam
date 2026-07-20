@@ -218,7 +218,7 @@ static void ll_spill_params(ll_t *ll, ast_node_t *fn, func_sig_t *sig)
                 ll_local_add(ll, p->name, ll_fmt(ll, "%%arg%zu", i), pts);
                 continue;
             }
-            const char *ptr = ll_fmt(ll, "%%p.%s", p->name);
+            const char *ptr = ll_fmt(ll, "%%p.%s", ll_safe_name(ll, p->name));
             ll_emit_alloca(ll, "%s = alloca %s", ptr, ll_ty(ll, pts));
             ll_emit(ll, "store %s %%arg%zu, ptr %s", ll_ty(ll, pts), i, ptr);
             ll_local_add(ll, p->name, ptr, pts);
@@ -548,7 +548,7 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
                 ll_local_add(ll, p->name, ll_fmt(ll, "%%arg%zu", i), p->type_str);
                 continue;
             }
-            const char *ptr = ll_fmt(ll, "%%p.%s", p->name);
+            const char *ptr = ll_fmt(ll, "%%p.%s", ll_safe_name(ll, p->name));
             ll_emit_alloca(ll, "%s = alloca %s", ptr, ll_ty(ll, p->type_str));
             ll_emit(ll, "store %s %%arg%zu, ptr %s", ll_ty(ll, p->type_str), i, ptr);
             ll_local_add(ll, p->name, ptr, p->type_str);
@@ -784,6 +784,16 @@ static void ll_emit_externs_in(ll_t *ll, scope_t *g)
             func_sig_t *sig = (func_sig_t *)s->overloads.data[0];
             if (!sig->decl || !sig->decl->is_extern || sig->decl->a) continue;
             if (ll_extern_seen(ll, s->name)) continue;
+            {
+                bool already_defined = false;
+                size_t k = 0;
+                for (; k < ll->emitted.len; k++)
+                    if (!strcmp(s->name, (const char *)ll->emitted.data[k])) {
+                        already_defined = true;
+                        break;
+                    }
+                if (already_defined) continue;
+            }
             vec_push(ll->a, &ll->extern_names, CONST_CAST(s->name));
             sb_t b;
             sb_init(&b);

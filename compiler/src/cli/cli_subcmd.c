@@ -52,7 +52,7 @@ int cli_dispatch_command(int argc, char **argv, options_t *out)
     } else if (strcmp(cmd, "new") == 0) {
         out->command = CMD_NEW;
         start = 2;
-    } else if (strcmp(cmd, "fmt") == 0 || strcmp(cmd, "format") == 0) {
+    } else if (strcmp(cmd, "format") == 0) {
         out->command = CMD_FMT;
         start = 2;
     } else if (strcmp(cmd, "help") == 0) {

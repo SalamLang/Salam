@@ -1,4 +1,8 @@
+"""Modular exponentiation benchmark."""
+
+
 def powmod(base, e, m):
+    """Return base**e mod m using square-and-multiply."""
     result = 1
     b = base % m
     ex = e

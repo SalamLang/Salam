@@ -1,3 +1,5 @@
+"""Iterative Fibonacci benchmark."""
+
 a = 0
 b = 1
 for i in range(5000000):

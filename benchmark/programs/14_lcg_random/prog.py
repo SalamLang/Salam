@@ -1,3 +1,5 @@
+"""Linear congruential generator benchmark."""
+
 x = 1
 s = 0
 for _ in range(5000000):

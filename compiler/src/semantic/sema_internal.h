@@ -86,15 +86,22 @@ type_t *sema_vec_str(sema_t *s, const src_span_t *span);
 
 const char *alias_for_lang(const vec_t *aliases, const char *lang);
 
-const char *scope_member_canon(scope_t *members, const char *name);
+const char *scope_member_canon(sema_t *s, scope_t *members, const char *name,
+                               const src_span_t *span);
 
-const char *pkg_member_canon(symbol_t *pk, const char *name);
+const char *pkg_member_canon(sema_t *s, symbol_t *pk, const char *name,
+                             const src_span_t *span);
 
-const char *local_canon(sema_t *s, const char *name);
+const char *local_canon(sema_t *s, const char *name, const src_span_t *span);
 
 const char *intrinsic_type_canon(const char *name);
 
 const char *intrinsic_method_canon(const char *name);
+
+void sema_check_intrinsic_type_lang(sema_t *s, const char *used, const src_span_t *span);
+
+void sema_check_intrinsic_method_lang(sema_t *s, const char *used, const char *canon,
+                                      const src_span_t *span);
 
 symbol_t *generic_template(sema_t *s, const char *name, sym_kind_t kind);
 

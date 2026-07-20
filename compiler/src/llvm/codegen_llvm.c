@@ -491,6 +491,39 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     sb_puts(&g, "\n");
     ll_emit_prologue(&ll);
     ll_emit_struct_types(&ll, program);
+    /* Some packages (e.g. collections, whose generic Vector<T>.get/.set do
+     * their own bounds checking) declare salam_panic/salam_idx as a local,
+     * bodyless `extern:` stub instead of importing core - that stub resolves
+     * fine for the C backend (real symbols are found at link time across
+     * separately-compiled translation units) but leaves LLVM, which compiles
+     * one function body per resolved declaration on demand, with only a
+     * `declare` and no `define` when nothing else pulls in core's real
+     * implementation. Force-compile core's actual definitions - before any
+     * package's own bodyless stub can be seen and turned into a competing
+     * bare `declare` - so every program that can panic on an out-of-bounds
+     * access links cleanly. */
+    {
+        static const char *const rt_essentials[] = {"salam_panic", "salam_idx", NULL};
+        symbol_t *core_pk = NULL;
+        size_t p = 0;
+        for (; p < ll.sem->packages.len; p++) {
+            symbol_t *pk = (symbol_t *)ll.sem->packages.data[p];
+            if (pk && pk->kind == SYM_PACKAGE && pk->name && !strcmp(pk->name, "core")) {
+                core_pk = pk;
+                break;
+            }
+        }
+        if (core_pk && core_pk->members) {
+            size_t i = 0;
+            for (; rt_essentials[i]; i++) {
+                symbol_t *fs = scope_lookup_local(core_pk->members, rt_essentials[i]);
+                if (!fs || fs->kind != SYM_FUNC || fs->overloads.len == 0) continue;
+                func_sig_t *sig = (func_sig_t *)fs->overloads.data[0];
+                if (sig->decl && sig->decl->is_extern && !sig->decl->a) continue;
+                ll_ensure_fn(&ll, sig->decl, NULL, core_pk->members);
+            }
+        }
+    }
     ll_emit_externs(&ll);
     ll_emit_globals(&ll, program);
     if (ll.debug) ll_debug_init(&ll, src_path);

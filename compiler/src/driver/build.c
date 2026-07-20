@@ -24,6 +24,7 @@
 #include "lexer/lexer.h"
 #include "parser/parser.h"
 #include "semantic/sema.h"
+#include "semantic/dce.h"
 #include "codegen/codegen.h"
 #include "condcomp/condcomp.h"
 #include "i18n/i18n.h"
@@ -209,14 +210,17 @@ int driver_build(options_t *opt)
         }
     }
 
-    {
-        const char *cryp = salam_resolve_import(arena, "", "crypto");
-        FILE *yf = cryp ? fopen(cryp, "rb") : NULL;
-        if (yf) {
-            fclose(yf);
-            if (nwork < SALAM_MAX_INPUTS) work[nwork++] = cryp;
-        }
-    }
+    ast_node_t *b_programs[SALAM_MAX_INPUTS] = {0};
+    sema_result_t *b_sr[SALAM_MAX_INPUTS] = {0};
+    const char *b_module[SALAM_MAX_INPUTS] = {0};
+    const char *b_modentry[SALAM_MAX_INPUTS] = {0};
+    const char *b_pkg[SALAM_MAX_INPUTS] = {0};
+    const char *b_srcpath[SALAM_MAX_INPUTS] = {0};
+    int nb = 0;
+
+    dce_reset(arena);
+    dce_enable();
+
     {
         int wi = 0;
         for (; wi < nwork; wi++) {
@@ -275,6 +279,7 @@ int driver_build(options_t *opt)
                 all_ok = false;
                 continue;
             }
+            const char *modpkg = program->name ? program->name : "main";
             {
                 size_t k = 0;
                 for (; k < program->list.len; k++) {
@@ -282,6 +287,7 @@ int driver_build(options_t *opt)
                     if (d->kind == AST_FUNC_DEF && d->name &&
                         strcmp(d->name, modentry) == 0) {
                         has_entry = true;
+                        dce_mark_root(modpkg, modentry);
                         break;
                     }
                 }
@@ -351,9 +357,47 @@ int driver_build(options_t *opt)
                     if (!known) work[nwork++] = ipath;
                 }
             }
+            b_programs[wi] = program;
+            b_sr[wi] = sr;
+            b_module[wi] = module;
+            b_modentry[wi] = modentry;
+            b_pkg[wi] = modpkg;
+            b_srcpath[wi] = src->path;
+            if (wi + 1 > nb) nb = wi + 1;
+        }
+    }
+
+    dce_finish();
+
+    {
+        int wi = 0;
+        for (; wi < nb; wi++) {
+            if (!b_programs[wi]) continue;
+            ast_node_t *program = b_programs[wi];
+            sema_result_t *sr = b_sr[wi];
+            const char *module = b_module[wi];
+            const char *modentry = b_modentry[wi];
+            const char *modpkg = b_pkg[wi];
+
+            {
+                vec_t kept;
+                vec_init(&kept);
+                size_t k = 0;
+                for (; k < program->list.len; k++) {
+                    ast_node_t *d = (ast_node_t *)program->list.data[k];
+                    bool keep = true;
+                    if (d->kind == AST_FUNC_DEF && !d->is_extern && !d->synthetic &&
+                        d->typarams.len == 0 &&
+                        !(d->name && strcmp(d->name, modentry) == 0))
+                        keep = dce_reachable(modpkg, d->name);
+                    if (keep) vec_push(arena, &kept, d);
+                }
+                program->list = kept;
+            }
+
             codegen_output_t *out =
                 codegen_run(arena, log, program, sr, module, opt->safe, opt->debug_info,
-                            src->path, modentry, opt->llvm_target);
+                            b_srcpath[wi], modentry, opt->llvm_target);
             size_t pfxlen = strlen(SALAM_MOD_PREFIX);
             size_t pathcap = pfxlen + strlen(module) + 3;
             char *cpath = (char *)arena_alloc(arena, pathcap);

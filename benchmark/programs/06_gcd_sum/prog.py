@@ -1,4 +1,8 @@
+"""GCD-sum benchmark."""
+
+
 def gcd(a, b):
+    """Return the greatest common divisor of a and b."""
     x = a
     y = b
     while y != 0:

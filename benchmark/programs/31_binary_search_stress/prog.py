@@ -1,4 +1,5 @@
 """binary_search_stress benchmark"""
+
 n = 2000000
 arr = [i * 2 for i in range(n)]
 

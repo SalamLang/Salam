@@ -1,4 +1,5 @@
 """Matrix multiplication checksum benchmark."""
+
 a = [[0] * 200 for _ in range(200)]
 b = [[0] * 200 for _ in range(200)]
 for i in range(200):

@@ -1,5 +1,7 @@
 <?php
-function heapify(&$arr, $n, $i) {
+
+function heapify(array &$arr, int $n, int $i): void
+{
     $largest = $i;
     $l = 2 * $i + 1;
     $r = 2 * $i + 2;

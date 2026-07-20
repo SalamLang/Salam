@@ -1,6 +1,7 @@
 <?php
 
-function quicksort(&$a, $lo, $hi) {
+function quicksort(array &$a, int $lo, int $hi): void
+{
     if ($lo >= $hi) {
         return;
     }

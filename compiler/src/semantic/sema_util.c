@@ -36,8 +36,10 @@ type_t *sema_vec_str(sema_t *s, const src_span_t *span)
 {
     ast_node_t *tn = ast_new(s->a, AST_TYPE, span);
     tn->name = "Vector";
+    tn->synthetic = true;
     ast_node_t *e = ast_new(s->a, AST_TYPE, span);
     e->name = "str";
+    e->synthetic = true;
     ast_add(s->a, tn, e);
     return sema_resolve_type(s, tn);
 }
@@ -249,7 +251,7 @@ const char *scope_member_canon(sema_t *s, scope_t *members, const char *name,
     }
     if (s->lang && s->lang[0] != 'e') {
         symbol_t *direct = scope_lookup_local(members, name);
-        if (direct && direct->decl)
+        if (direct && direct->decl && !direct->decl->synthetic)
             check_lang_form(s, alias_for_lang(&direct->decl->aliases, s->lang), name,
                             span);
     }

@@ -1,6 +1,6 @@
 <?php
 
-function reverse_range(&$arr, $lo, $hi)
+function reverse_range(array &$arr, int $lo, int $hi): void
 {
     while ($lo < $hi) {
         $tmp = $arr[$lo];
@@ -11,7 +11,7 @@ function reverse_range(&$arr, $lo, $hi)
     }
 }
 
-function main()
+function main(): void
 {
     $n = 4000000;
     $k = 1234567 % $n;

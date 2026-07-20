@@ -1,11 +1,13 @@
 <?php
+
 $N = 12;
 $cols = array_fill(0, $N, 0);
 $diag1 = array_fill(0, 2 * $N - 1, 0);
 $diag2 = array_fill(0, 2 * $N - 1, 0);
 $solutions = 0;
 
-function solve($row) {
+function solve(int $row): void
+{
     global $N, $cols, $diag1, $diag2, $solutions;
     if ($row == $N) {
         $solutions = $solutions + 1;
@@ -14,6 +16,7 @@ function solve($row) {
     for ($col = 0; $col < $N; $col++) {
         $d1 = $row + $col;
         $d2 = $row - $col + $N - 1;
+        /** @psalm-suppress PossiblyInvalidArrayOffset $col is bounded to [0, N) by the loop condition. */
         if ($cols[$col] == 0 && $diag1[$d1] == 0 && $diag2[$d2] == 0) {
             $cols[$col] = 1;
             $diag1[$d1] = 1;

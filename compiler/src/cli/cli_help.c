@@ -48,7 +48,7 @@ void cli_print_usage(FILE *out)
         "interpreter (no C toolchain)\n"
         "  new      [name] [--lang=en|fa|ar]             Scaffold a new project "
         "directory\n"
-        "  fmt      [files/dirs...] [--check] [-r] [--tabs]  Format .salam source in "
+        "  format   [files/dirs...] [--check] [-r] [--tabs]  Format .salam source in "
         "place (recursive)\n"
         "  layout   build <files...> [--inline]          Build the layout DSL to "
         "HTML/CSS/JS\n"

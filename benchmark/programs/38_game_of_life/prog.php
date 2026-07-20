@@ -1,4 +1,5 @@
 <?php
+
 $W = 150;
 $H = 150;
 $GENERATIONS = 150;

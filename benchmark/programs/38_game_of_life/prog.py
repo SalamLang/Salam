@@ -1,4 +1,5 @@
 """Conway's Game of Life benchmark."""
+
 W = 150
 H = 150
 GENERATIONS = 150

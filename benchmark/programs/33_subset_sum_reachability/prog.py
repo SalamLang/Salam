@@ -1,4 +1,5 @@
 """0/1 subset-sum reachability via boolean DP array."""
+
 NITEMS = 1000
 TARGET = 30000
 weight = [0] * NITEMS

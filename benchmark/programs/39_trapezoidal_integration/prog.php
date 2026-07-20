@@ -1,6 +1,6 @@
 <?php
 
-function f($x)
+function f(float $x): float
 {
     return $x * $x * $x - 2.0 * $x * $x + 1.0;
 }

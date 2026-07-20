@@ -1,14 +1,17 @@
 <?php
+
 $N = 2000000;
 $BLOCK = 1414;
 
-function update(&$arr, &$blocksum, $i, $delta, $BLOCK) {
+function update(array &$arr, array &$blocksum, int $i, int $delta, int $BLOCK): void
+{
     $arr[$i] = $arr[$i] + $delta;
     $b = intdiv($i, $BLOCK);
     $blocksum[$b] = $blocksum[$b] + $delta;
 }
 
-function prefix_sum(&$arr, &$blocksum, $i, $BLOCK) {
+function prefix_sum(array &$arr, array &$blocksum, int $i, int $BLOCK): int
+{
     $b = intdiv($i, $BLOCK);
     $total = 0;
     $k = 0;

@@ -1,4 +1,5 @@
 """dot_product benchmark: streaming multiply-accumulate reduction."""
+
 n = 10000000
 dot = 0
 i = 0

@@ -1,4 +1,5 @@
 """0/1 knapsack via 1D rolling DP array."""
+
 NITEMS = 500
 CAPACITY = 12500
 weight = [0] * NITEMS

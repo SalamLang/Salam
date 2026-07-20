@@ -1,4 +1,5 @@
 """sqrt decomposition point-update / prefix-sum benchmark"""
+
 N = 2000000
 BLOCK = 1414
 

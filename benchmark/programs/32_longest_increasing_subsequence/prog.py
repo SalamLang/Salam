@@ -1,4 +1,5 @@
 """Longest increasing subsequence via classic O(n^2) DP."""
+
 N = 6000
 seq = [0] * N
 dp = [0] * N

@@ -70,7 +70,9 @@ WORKDIR /repo
 
 FROM toolchain AS salam-builder
 COPY compiler /repo/compiler
-RUN cd /repo/compiler && make -j"$(nproc)"
+WORKDIR /repo/compiler
+RUN make -j"$(nproc)"
+WORKDIR /repo
 RUN /repo/salam version
 
 FROM toolchain AS bench
@@ -82,6 +84,9 @@ ENV SALAM_BIN=/repo/salam \
     SALAM_STD=/repo/compiler/std \
     BENCH_WORK=/tmp/salam_bench_work
 
+HEALTHCHECK NONE
+
+# hadolint ignore=SC2016
 RUN printf '%s\n' \
     '#!/bin/sh' \
     'set -e' \

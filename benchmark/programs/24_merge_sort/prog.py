@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import sys
+
 sys.setrecursionlimit(10000)
 
 N = 300000
@@ -47,7 +48,9 @@ def main():
 
     checksum = 0
     for i in range(N):
-        checksum = (checksum + (arr[i] % 1000000007) * ((i + 1) % 1000000007)) % 1000000007
+        checksum = (
+            checksum + (arr[i] % 1000000007) * ((i + 1) % 1000000007)
+        ) % 1000000007
 
     print(arr[0])
     print(arr[N - 1])

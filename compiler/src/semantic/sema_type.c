@@ -119,7 +119,7 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
     if (tnode->name && type_prim_kind_from_name(tnode->name, NULL) < 0) {
         const char *orig = tnode->name;
         tnode->name = intrinsic_type_canon(local_canon(s, tnode->name, &tnode->span));
-        sema_check_intrinsic_type_lang(s, orig, &tnode->span);
+        if (!tnode->synthetic) sema_check_intrinsic_type_lang(s, orig, &tnode->span);
     }
 
     if (tnode->name && strcmp(tnode->name, "func") == 0) {

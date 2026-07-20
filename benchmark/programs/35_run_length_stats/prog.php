@@ -1,4 +1,5 @@
 <?php
+
 $n = 5000000;
 $total_runs = 0;
 $sumsq = 0;

@@ -1,4 +1,5 @@
 <?php
+
 $a = array_fill(0, 200, array_fill(0, 200, 0));
 $b = array_fill(0, 200, array_fill(0, 200, 0));
 for ($i = 0; $i < 200; $i++) {

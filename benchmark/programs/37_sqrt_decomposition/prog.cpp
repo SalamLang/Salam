@@ -4,13 +4,16 @@
 static const int N = 2000000;
 static const int BLOCK = 1414;
 
-void update(std::vector<long long> &arr, std::vector<long long> &blocksum, int i, long long delta) {
+void update(std::vector<long long> &arr, std::vector<long long> &blocksum, int i,
+            long long delta)
+{
     arr[i] = arr[i] + delta;
     int b = i / BLOCK;
     blocksum[b] = blocksum[b] + delta;
 }
 
-long long prefix_sum(std::vector<long long> &arr, std::vector<long long> &blocksum, int i) {
+long long prefix_sum(std::vector<long long> &arr, std::vector<long long> &blocksum, int i)
+{
     int b = i / BLOCK;
     long long total = 0;
     int k = 0;
@@ -26,7 +29,8 @@ long long prefix_sum(std::vector<long long> &arr, std::vector<long long> &blocks
     return total;
 }
 
-int main() {
+int main()
+{
     int nblocks = (N + BLOCK - 1) / BLOCK;
     std::vector<long long> arr(N, 0);
     std::vector<long long> blocksum(nblocks, 0);

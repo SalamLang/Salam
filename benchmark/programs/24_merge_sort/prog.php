@@ -2,7 +2,7 @@
 
 const N = 300000;
 
-function mergesort_arr(&$arr, &$aux, $lo, $hi)
+function mergesort_arr(array &$arr, array &$aux, int $lo, int $hi): void
 {
     if ($lo >= $hi) {
         return;
@@ -38,7 +38,7 @@ function mergesort_arr(&$arr, &$aux, $lo, $hi)
     }
 }
 
-function main()
+function main(): void
 {
     $x = 2;
     $arr = array_fill(0, N, 0);

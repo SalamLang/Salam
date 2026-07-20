@@ -1,4 +1,5 @@
 <?php
+
 $nitems = 500;
 $capacity = 12500;
 $weight = array_fill(0, $nitems, 0);
@@ -15,7 +16,9 @@ for ($i = 0; $i < $nitems; $i++) {
     $wi = $weight[$i];
     $vi = $value[$i];
     for ($w = $capacity; $w >= $wi; $w--) {
+        /** @psalm-suppress InvalidArrayOffset $w is bounded to [$wi, $capacity] by the loop condition. */
         $cand = $dp[$w - $wi] + $vi;
+        /** @psalm-suppress InvalidArrayOffset $w is bounded to [$wi, $capacity] by the loop condition. */
         if ($cand > $dp[$w]) {
             $dp[$w] = $cand;
         }

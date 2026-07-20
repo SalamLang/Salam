@@ -1,4 +1,5 @@
 <?php
+
 $n = 6000;
 $seq = array_fill(0, $n, 0);
 $dp = array_fill(0, $n, 0);

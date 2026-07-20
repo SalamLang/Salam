@@ -2,6 +2,7 @@
 #
 # Salam benchmark suite - reproducible cross-language toolchain image.
 #
+# checkov:skip=CKV_DOCKER_2:One-shot CLI benchmark runner, not a long-running service; no process to healthcheck.
 
 ARG ALPINE_VERSION=edge
 ARG LLVM_VERSION=22

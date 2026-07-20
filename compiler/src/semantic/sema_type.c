@@ -79,7 +79,7 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
                  tnode->name);
             return err_ty(s);
         }
-        tname = pkg_member_canon(pk2, tname);
+        tname = pkg_member_canon(s, pk2, tname, &tnode->span);
         symbol_t *tsym = scope_lookup_local(pk2->members, tname);
         if (!tsym || (tsym->kind != SYM_STRUCT && tsym->kind != SYM_ENUM &&
                       tsym->kind != SYM_ALIAS)) {
@@ -116,8 +116,11 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
         return base;
     }
 
-    if (tnode->name && type_prim_kind_from_name(tnode->name, NULL) < 0)
-        tnode->name = intrinsic_type_canon(local_canon(s, tnode->name));
+    if (tnode->name && type_prim_kind_from_name(tnode->name, NULL) < 0) {
+        const char *orig = tnode->name;
+        tnode->name = intrinsic_type_canon(local_canon(s, tnode->name, &tnode->span));
+        sema_check_intrinsic_type_lang(s, orig, &tnode->span);
+    }
 
     if (tnode->name && strcmp(tnode->name, "func") == 0) {
         vec_t ptypes;

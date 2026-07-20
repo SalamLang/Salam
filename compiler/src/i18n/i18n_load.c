@@ -41,13 +41,13 @@ static bool i18n_zwnj_at(const char *s)
            (unsigned char)s[2] == 0x8C;
 }
 
-/* Persian compound words are spelled with a ZWNJ or a plain space
- * interchangeably (e.g. "پس‌زمینه" vs "پس زمینه"); treat them as equal. */
 static bool i18n_words_equal_loose(const char *a, const char *b)
 {
     for (;;) {
-        while (*a == ' ' || i18n_zwnj_at(a)) a += (*a == ' ') ? 1 : 3;
-        while (*b == ' ' || i18n_zwnj_at(b)) b += (*b == ' ') ? 1 : 3;
+        while (*a == ' ' || i18n_zwnj_at(a))
+            a += (*a == ' ') ? 1 : 3;
+        while (*b == ' ' || i18n_zwnj_at(b))
+            b += (*b == ' ') ? 1 : 3;
         if (*a == 0 || *b == 0) return *a == *b;
         if (*a != *b) return false;
         a++;

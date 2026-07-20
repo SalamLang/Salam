@@ -1,11 +1,6 @@
 // Minimal, deterministic DOM/BOM stub for running `salam js` bundles under
 // plain Node (no browser, no jsdom). Just enough of document/window/storage
 // for the tests/{en,fa,ar}/js/*.salam suite to exercise std/dom for real.
-//
-// Every generated bundle unconditionally checks `document.readyState` before
-// invoking its entry point, so this stub is required even for programs that
-// never touch the DOM. Setting readyState to "complete" makes the entry point
-// run synchronously and deterministically, with no timers involved.
 
 const allElements = [];
 
@@ -192,7 +187,7 @@ const window = {
     if (i >= 0) l.splice(i, 1);
   },
   alert(msg) {
-    console.log("[alert] " + String(msg));
+    console.log(`[alert] ${String(msg)}`);
   },
   confirm(_msg) {
     return true;
@@ -227,13 +222,6 @@ global.getComputedStyle = (el) => ({
 });
 global.Image = class {};
 
-// Test convention: any element carrying `data-autofire="<type>"` receives one
-// synthetic event of that type after the bundle's entry point has run, so
-// click/input/keydown handlers registered via dom.OnEvent/OnEventE can be
-// exercised deterministically without real timers or a real browser. Optional
-// `data-autofire-key`, `data-autofire-x`, `data-autofire-y` seed the event's
-// key/clientX/clientY. If any `resize` listener was registered on `window`,
-// one resize event fires too.
 function fireAutoEvents() {
   for (const el of allElements) {
     const type = el.getAttribute("data-autofire");

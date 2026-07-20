@@ -35,6 +35,26 @@ static struct {
     const char *lang, *alias, *canon;
 } g_dyn_words[I18N_DYN_MAX];
 
+static bool i18n_zwnj_at(const char *s)
+{
+    return (unsigned char)s[0] == 0xE2 && (unsigned char)s[1] == 0x80 &&
+           (unsigned char)s[2] == 0x8C;
+}
+
+/* Persian compound words are spelled with a ZWNJ or a plain space
+ * interchangeably (e.g. "پس‌زمینه" vs "پس زمینه"); treat them as equal. */
+static bool i18n_words_equal_loose(const char *a, const char *b)
+{
+    for (;;) {
+        while (*a == ' ' || i18n_zwnj_at(a)) a += (*a == ' ') ? 1 : 3;
+        while (*b == ' ' || i18n_zwnj_at(b)) b += (*b == ' ') ? 1 : 3;
+        if (*a == 0 || *b == 0) return *a == *b;
+        if (*a != *b) return false;
+        a++;
+        b++;
+    }
+}
+
 void i18n_register_layout_word(const char *lang, const char *alias, const char *canonical)
 {
     if (!lang || !alias || !canonical || g_dyn_words_n >= I18N_DYN_MAX) return;
@@ -53,6 +73,13 @@ const char *i18n_layout_word(const char *name)
         for (; i < g_dyn_words_n; i++)
             if (strcmp(g_dyn_words[i].lang, lang) == 0 &&
                 strcmp(g_dyn_words[i].alias, name) == 0)
+                return g_dyn_words[i].canon;
+    }
+    {
+        int i = 0;
+        for (; i < g_dyn_words_n; i++)
+            if (strcmp(g_dyn_words[i].lang, lang) == 0 &&
+                i18n_words_equal_loose(g_dyn_words[i].alias, name))
                 return g_dyn_words[i].canon;
     }
     if (strcmp(lang, "fa") == 0) {

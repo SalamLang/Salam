@@ -223,6 +223,7 @@ static bool dce_caller_rooted(sema_t *s)
     if (!s->cur_func->decl) return true;
     if (s->cur_func->decl->typarams.len > 0) return true;
     if (s->cur_func->decl->is_extern) return true;
+    if (s->cur_func->decl->synthetic) return true;
     return false;
 }
 
@@ -459,7 +460,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         }
 
         sym->used = true;
-        dce_note(s, s->pkg, nm);
+        dce_note(s, sym->pkgname ? sym->pkgname : s->pkg, nm);
         if (sym->kind == SYM_FUNC && sym->decl && sym->decl->typarams.len > 0) {
             symbol_t *inst = g_infer_call(s, sym, &argtypes, &n->span, call_expected);
             if (!inst) return decorate(s, n, err_ty(s));

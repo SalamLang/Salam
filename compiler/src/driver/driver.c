@@ -598,8 +598,12 @@ static int driver_fmt(options_t *opt)
     return rc;
 }
 
-static void driver_print_version(void)
+static void driver_print_version(bool short_form)
 {
+    if (short_form) {
+        printf("%s\n", SALAM_VERSION);
+        return;
+    }
     printf("salam %s\n", SALAM_VERSION);
     printf("commit:  %s%s\n", SALAM_GIT_COMMIT, SALAM_GIT_DIRTY);
     printf("date:    %s\n", SALAM_GIT_DATE);
@@ -626,7 +630,7 @@ int driver_main(int argc, char **argv)
         cli_print_usage(stdout);
         return 0;
     case CMD_VERSION:
-        driver_print_version();
+        driver_print_version(opt.version_short);
         return 0;
     case CMD_NEW:
         return driver_new(&opt);

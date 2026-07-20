@@ -116,70 +116,19 @@ static const char *call_raw_ptr(cg_t *cg, ast_node_t *n, ast_node_t *callee)
     return cg_fmt(cg, "((%s(*)%s)(%s))(%s)", cret, cps, cg_expr(cg, callee), args);
 }
 
-static const char *cg_print_legacy(cg_t *cg, ast_node_t *n, bool nl, int err)
-{
-    sb_t b;
-    sb_init(&b);
-    sb_puts(&b, "({ ");
-    {
-        size_t i = 0;
-        for (; i < n->list.len; i++) {
-            ast_node_t *arg = (ast_node_t *)n->list.data[i];
-            char piece[40];
-            if (i) {
-                sal_snprintf(piece, sizeof piece, "salam_emit(\" \", %d); ", err);
-                sb_puts(&b, piece);
-            }
-            if (arg->type_str && !strcmp(arg->type_str, "str")) {
-                sb_puts(&b, "salam_emit(");
-                sb_puts(&b, cg_expr(cg, arg));
-                sal_snprintf(piece, sizeof piece, ", %d); ", err);
-                sb_puts(&b, piece);
-            } else {
-                sal_snprintf(piece, sizeof piece, "salam_emit_owned(salam_tostr_%s(",
-                             prim_suffix(print_tag(arg->type_str)));
-                sb_puts(&b, piece);
-                sb_puts(&b, cg_expr(cg, arg));
-                sal_snprintf(piece, sizeof piece, "), %d); ", err);
-                sb_puts(&b, piece);
-            }
-        }
-    }
-    if (nl) {
-        char z[40];
-        sal_snprintf(z, sizeof z, "salam_emit(\"\\n\", %d); ", err);
-        sb_puts(&b, z);
-    }
-    sb_puts(&b, "})");
-    const char *r = arena_strdup(cg->a, sb_cstr(&b));
-    sb_free(&b);
-    return r;
-}
-
 static const char *cg_order_stdout(cg_t *cg, const char *printf_expr)
 {
     if (!cg->single_threaded) return printf_expr;
-    return cg_fmt(cg, "({ salam_out_flush(); %s; fflush(stdout); })", printf_expr);
+    return cg_fmt(cg, "({ salam_out_flush(); %s; fflush(0); })", printf_expr);
 }
 
 static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
 {
-    if (err) {
-        const char *e = cg_print_legacy(cg, n, nl, err);
-        if (cg->single_threaded) return cg_fmt(cg, "({ salam_out_flush(); %s; })", e);
-        return e;
-    }
     vec_t segs;
     vec_init(&segs);
     pf_build(cg->a, n, nl, &segs);
     if (segs.len == 0) return "(void)0";
-    {
-        size_t i = 0;
-        for (; i < segs.len; i++)
-            if (((pf_seg_t *)segs.data[i])->kind == PF_CHAR)
-                return cg_order_stdout(cg, cg_print_legacy(cg, n, nl, err));
-    }
-    if (cg->single_threaded) {
+    if (!err && cg->single_threaded) {
         bool all_lit = true;
         sb_t raw;
         sb_init(&raw);
@@ -220,29 +169,39 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
                 }
                 continue;
             }
-            sb_puts(&fmt, pf_spec(s->kind));
             const char *e = cg_expr(cg, s->expr);
             const char *a;
             switch (s->kind) {
+            case PF_CHAR:
+                sb_puts(&fmt, "%s");
+                a = cg_fmt(cg, "salam_char_from_code(%s)", e);
+                break;
             case PF_BOOL:
+                sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "((%s) ? \"true\" : \"false\")", e);
                 break;
             case PF_F64:
+                sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "(double)(%s)", e);
                 break;
             case PF_U32:
+                sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "(unsigned)(%s)", e);
                 break;
             case PF_I64:
+                sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "(long long)(%s)", e);
                 break;
             case PF_U64:
+                sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "(unsigned long long)(%s)", e);
                 break;
             case PF_I32:
+                sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "(int)(%s)", e);
                 break;
             default:
+                sb_puts(&fmt, pf_spec(s->kind));
                 a = e;
                 break;
             }
@@ -254,6 +213,18 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
     const char *al = arena_strdup(cg->a, sb_cstr(&args));
     sb_free(&fmt);
     sb_free(&args);
+    if (err) {
+        return cg_order_stdout(
+            cg,
+            cg_fmt(cg,
+                   "({ int32_t __ern = snprintf((void*)0, (uint64_t)0, %s%s); "
+                   "char *__erb = __ern > 0 ? (char*)" SALAM_MEM_ALLOC
+                   "((uint64_t)__ern + 1) : (char*)0; "
+                   "if (__erb) snprintf(__erb, (uint64_t)__ern + 1, %s%s); "
+                   "if (__erb) { int64_t __err_r = (int64_t)SALAM_RAW_WRITE(2, __erb, "
+                   "__ern); (void)__err_r; } })",
+                   cfmt, al, cfmt, al));
+    }
     return cg_order_stdout(cg, cg_fmt(cg, "printf(%s%s)", cfmt, al));
 }
 

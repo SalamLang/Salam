@@ -326,8 +326,8 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
         h,
         "#ifndef SALAM_OUT_DEFINED\n#define SALAM_OUT_DEFINED\n"
         "#define SALAM_OB_SZ 65536\n"
-        "extern void *stdout;\n"
         "extern int fflush(void *);\n"
+        "extern int snprintf(char *buf, uint64_t size, const char *fmt, ...);\n"
         "#if defined(_WIN32)\n"
         "extern int _write(int, void *, unsigned);\n"
         "#define SALAM_RAW_WRITE(fd, buf, n) _write((fd), (void *)(buf), (unsigned)(n))\n"
@@ -351,7 +351,7 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
         "    __builtin_memcpy(salam_ob + salam_obn, s, (size_t)n); salam_obn += n;\n"
         "}\n"
         "#else\n"
-        "static void salam_out_flush(void) { fflush(stdout); }\n"
+        "static void salam_out_flush(void) { fflush(0); }\n"
         "static void salam_out_write_(const void *s, uint64_t n) {\n"
         "    int64_t r = (int64_t)SALAM_RAW_WRITE(1, s, n); (void)r;\n"
         "}\n"

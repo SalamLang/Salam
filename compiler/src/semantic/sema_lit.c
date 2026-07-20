@@ -32,7 +32,11 @@ static type_t *decorate(sema_t *s, ast_node_t *n, type_t *t)
 
 type_t *check_struct_lit(sema_t *s, ast_node_t *n)
 {
-    if (n->name) n->name = intrinsic_type_canon(local_canon(s, n->name));
+    if (n->name) {
+        const char *orig = n->name;
+        n->name = intrinsic_type_canon(local_canon(s, n->name, &n->span));
+        sema_check_intrinsic_type_lang(s, orig, &n->span);
+    }
     type_t *exp = s->expected;
     s->expected = NULL;
     if (exp && exp->kind == TY_STRUCT && n->name &&
@@ -87,7 +91,7 @@ type_t *check_struct_lit(sema_t *s, ast_node_t *n)
         size_t i = 0;
         for (; i < n->list.len; i++) {
             ast_node_t *fi = (ast_node_t *)n->list.data[i];
-            fi->name = scope_member_canon(ssym->members, fi->name);
+            fi->name = scope_member_canon(s, ssym->members, fi->name, &fi->span);
             symbol_t *f = scope_lookup_local(ssym->members, fi->name);
             type_t *vt =
                 (f && f->kind == SYM_FIELD && stamp_empty_intrinsic(s, fi->a, f->type))

@@ -129,6 +129,30 @@ static ast_node_t *parse_statement(parser_t *p)
     }
 }
 
+/* True when a '(' right after the print keyword closes only once the whole
+ * statement ends, e.g. `print (a, b)` or `print (2)` -- the call-style wrap
+ * this statement must reject in favor of the bare `print a, b` form. A '('
+ * that is part of a larger expression, e.g. `print (a + b) / 2`, is fine. */
+static bool print_args_fully_parenthesized(parser_t *p)
+{
+    if (!p_at(p, TK_LPAREN)) return false;
+    size_t depth = 0, idx = 0;
+    for (;;) {
+        token_kind_t k = p_peekn(p, idx)->kind;
+        if (k == TK_EOF) return false;
+        if (k == TK_LPAREN) {
+            depth++;
+        } else if (k == TK_RPAREN) {
+            depth--;
+            if (depth == 0) break;
+        }
+        idx++;
+    }
+    token_kind_t after = p_peekn(p, idx + 1)->kind;
+    return after == TK_STMT_END || after == TK_KW_END || after == TK_RBRACE ||
+           after == TK_EOF;
+}
+
 static ast_node_t *parse_print_stmt(parser_t *p)
 {
     token_kind_t k = p_peek(p)->kind;
@@ -141,14 +165,10 @@ static ast_node_t *parse_print_stmt(parser_t *p)
     call->a = callee;
     p_advance(p);
     p_fin(p, callee);
-    if (p_at(p, TK_LPAREN)) {
-        p_advance(p);
-        if (!p_at(p, TK_RPAREN)) do {
-                ast_add(p->a, call, parse_expr(p));
-            } while (p_match(p, TK_COMMA));
-        p_expect(p, TK_RPAREN, "')' to close arguments");
-    } else if (!p_at(p, TK_STMT_END) && !p_at(p, TK_KW_END) && !p_at(p, TK_RBRACE) &&
-               !p_at_eof(p)) {
+    if (print_args_fully_parenthesized(p))
+        p_error(p, "print arguments must not be wrapped in parentheses; remove them");
+    if (!p_at(p, TK_STMT_END) && !p_at(p, TK_KW_END) && !p_at(p, TK_RBRACE) &&
+        !p_at_eof(p)) {
         do {
             ast_add(p->a, call, parse_expr(p));
         } while (p_match(p, TK_COMMA));

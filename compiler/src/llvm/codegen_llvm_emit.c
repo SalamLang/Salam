@@ -48,6 +48,37 @@ const char *ll_fmt(ll_t *ll, const char *fmt, ...)
     return buf;
 }
 
+const char *ll_safe_name(ll_t *ll, const char *raw)
+{
+    if (!raw || !*raw) return "_";
+    bool needs_fix = false;
+    {
+        const char *p = raw;
+        for (; *p; p++) {
+            bool ok = (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+                      (*p >= '0' && *p <= '9') || *p == '_' || *p == '.' || *p == '$';
+            if (!ok) {
+                needs_fix = true;
+                break;
+            }
+        }
+    }
+    if (!needs_fix) return raw;
+    {
+        size_t len = strlen(raw);
+        char *out = (char *)arena_alloc(ll->a, len + 1);
+        size_t i = 0;
+        for (; i < len; i++) {
+            char c = raw[i];
+            bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                      (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '$';
+            out[i] = ok ? c : '_';
+        }
+        out[len] = 0;
+        return out;
+    }
+}
+
 static void ll_attach_dbg(ll_t *ll)
 {
     if (ll->debug && ll->cur_dbg) {

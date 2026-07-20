@@ -172,13 +172,13 @@ salam app.salam --log-level=trace
 salam build app.salam -DDEBUG                  # preprocessor define
 
 # format source in place (auto-detects nothing - pass --lang=fa for Persian files)
-salam fmt app.salam                            # reformat one file
-salam fmt                                      # reformat every .salam under the cwd, recursively
-salam fmt compiler/src/ examples/              # reformat given files and/or directories
-salam fmt --check                              # report files that need formatting (exit 1 if any)
-salam fmt app.salam --tabs                     # indent with tabs (convert spaces to tabs)
-salam fmt compiler/src/ --indent=2             # indent with 2 spaces per level
-salam fmt page.salam --lang=fa                 # Persian source
+salam format app.salam                         # reformat one file
+salam format                                   # reformat every .salam under the cwd, recursively
+salam format compiler/src/ examples/           # reformat given files and/or directories
+salam format --check                           # report files that need formatting (exit 1 if any)
+salam format app.salam --tabs                  # indent with tabs (convert spaces to tabs)
+salam format compiler/src/ --indent=2          # indent with 2 spaces per level
+salam format page.salam --lang=fa              # Persian source
 
 # REPLs
 salam cli       # general

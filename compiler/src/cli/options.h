@@ -78,6 +78,7 @@ typedef struct {
     const char *llvm_target;
     bool llvm_native_cpu;
     bool no_js_minify_names;
+    bool version_short;
 } options_t;
 
 #define OPTIONS_INIT_NO_JS_MINIFY_NAMES 0

@@ -1,5 +1,6 @@
 ---
-name: 📱 Editor - Build & Release Android APK
+name: 📱 Application - Build & Release Android APK
+# checkov:skip=CKV_GHA_7:inputs are only ever read via env: indirection, never interpolated into a run: script
 on:
   workflow_dispatch:
     inputs:
@@ -19,7 +20,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: editor-android-release
+  group: application-android-release
   cancel-in-progress: false
 jobs:
   build-release:
@@ -30,6 +31,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Validate signing secrets are configured
         env:
@@ -75,7 +78,7 @@ jobs:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           set -eu
-          ks="$RUNNER_TEMP/salam-editor-release.keystore"
+          ks="$RUNNER_TEMP/salam-application-release.keystore"
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$ks"
           echo "path=$ks" >> "$GITHUB_OUTPUT"
 
@@ -106,9 +109,9 @@ jobs:
           vname=$(jq -r '.elements[0].versionName' "$meta")
           vcode=$(jq -r '.elements[0].versionCode' "$meta")
           apk_src="$apk_dir/$(jq -r '.elements[0].outputFile' "$meta")"
-          aab_src=$(ls "$aab_dir"/*.aab | head -1)
-          apk_name="salam-editor-v${vname}-${vcode}.apk"
-          aab_name="salam-editor-v${vname}-${vcode}.aab"
+          aab_src=$(find "$aab_dir" -maxdepth 1 -name '*.aab' | head -1)
+          apk_name="salam-application-v${vname}-${vcode}.apk"
+          aab_name="salam-application-v${vname}-${vcode}.aab"
           mkdir -p dist
           cp "$apk_src" "dist/$apk_name"
           cp "$aab_src" "dist/$aab_name"
@@ -117,10 +120,10 @@ jobs:
             echo "apk_path=dist/$apk_name"
             echo "aab_name=$aab_name"
             echo "aab_path=dist/$aab_name"
-            echo "artifact=salam-editor-android-v${vname}-${vcode}"
+            echo "artifact=salam-application-android-v${vname}-${vcode}"
             echo "vname=$vname"
             echo "vcode=$vcode"
-            echo "tag=editor-android-v${vname}-${vcode}"
+            echo "tag=application-android-v${vname}-${vcode}"
           } >> "$GITHUB_OUTPUT"
           ls -la dist/
 
@@ -129,7 +132,7 @@ jobs:
           APK_PATH: ${{ steps.apk.outputs.apk_path }}
         run: |
           set -eu
-          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null \
+          apksigner=$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -name apksigner 2>/dev/null \
             | sort -V | tail -1 || true)
           if [ -n "$apksigner" ]; then
             "$apksigner" verify --verbose --print-certs "$APK_PATH"
@@ -161,10 +164,10 @@ jobs:
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null \
             && echo "Deleted existing release $TAG." \
             || echo "No existing release $TAG."
-          git push origin ":refs/tags/$TAG" 2>/dev/null || true
+          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" >/dev/null 2>&1 || true
           args=("$TAG"
                 "--target" "$GITHUB_SHA"
-                "--title" "Salam Editor (Android) v${VNAME} (build ${VCODE})"
+                "--title" "Salam Application (Android) v${VNAME} (build ${VCODE})"
                 "--generate-notes")
           [ "$PRERELEASE" = "true" ] && args+=("--prerelease")
           gh release create "${args[@]}" "$APK_PATH" "$AAB_PATH"

@@ -114,6 +114,7 @@ static const char *g_instance_name(sema_t *s, const char *base, vec_t *argtypes)
 static ast_node_t *g_type_to_ast(sema_t *s, type_t *t, const src_span_t *span)
 {
     ast_node_t *n = ast_new(s->a, AST_TYPE, span);
+    n->synthetic = true;
     if (!t) {
         n->name = "void";
         return n;
@@ -273,50 +274,55 @@ symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes,
     const char *iname = g_instance_name(s, tmpl->name, &argtypes);
     symbol_t *existing = scope_lookup_local(s->global, iname);
     if (existing) return existing;
-    g_check_bounds(s, tmpl, &argtypes, span);
-    ast_node_t *inst = ast_clone(s->a, tmpl);
-    inst->name = iname;
-    inst->synthetic = true;
-    g_subst(s->a, inst, &tmpl->typarams, targ_nodes);
-    inst->typarams.len = 0;
-    vec_push(s->a, &s->program->list, inst);
-    symbol_t *sym = symbol_new(s->a, SYM_STRUCT, iname);
-    sym->decl = inst;
-    sym->type = type_struct(s->tc, sym, iname);
-
-    sym->members = scope_new(s->a, SCOPE_STRUCT, s->global);
-    sym->members->label = iname;
-
-    sym->members->aux = s->gen_pkg;
-    sym->home = s->gen_pkg;
-    sym->generic_base = tmpl->name;
-    vec_init(&sym->generic_args);
     {
-        size_t i = 0;
-        for (; i < argtypes.len; i++)
-            vec_push(s->a, &sym->generic_args, argtypes.data[i]);
-    }
-    scope_define(s->a, s->global, sym);
-    {
-        size_t j = 0;
-        for (; j < inst->list.len; j++) {
-            ast_node_t *m = (ast_node_t *)inst->list.data[j];
-            if (m->kind == AST_FIELD) {
-                symbol_t *f = symbol_new(s->a, SYM_FIELD, m->name);
-                f->type = sema_resolve_type(s, m->type);
-                f->decl = m;
-                f->is_pub = m->is_pub;
-                scope_define(s->a, sym->members, f);
-            } else if (m->kind == AST_FUNC_DEF) {
-                symbol_t *mm = get_or_make_func(s, sym->members, m->name, SYM_METHOD);
-                if (m->is_pub) mm->is_pub = true;
-                vec_push(s->a, &mm->overloads, build_sig(s, m, sym));
-                mm->type = sym->type;
+        const char *save_lang = s->lang;
+        if (tmpl->origin_lang) s->lang = tmpl->origin_lang;
+        g_check_bounds(s, tmpl, &argtypes, span);
+        ast_node_t *inst = ast_clone(s->a, tmpl);
+        inst->name = iname;
+        inst->synthetic = true;
+        g_subst(s->a, inst, &tmpl->typarams, targ_nodes);
+        inst->typarams.len = 0;
+        vec_push(s->a, &s->program->list, inst);
+        symbol_t *sym = symbol_new(s->a, SYM_STRUCT, iname);
+        sym->decl = inst;
+        sym->type = type_struct(s->tc, sym, iname);
+
+        sym->members = scope_new(s->a, SCOPE_STRUCT, s->global);
+        sym->members->label = iname;
+
+        sym->members->aux = s->gen_pkg;
+        sym->home = s->gen_pkg;
+        sym->generic_base = tmpl->name;
+        vec_init(&sym->generic_args);
+        {
+            size_t i = 0;
+            for (; i < argtypes.len; i++)
+                vec_push(s->a, &sym->generic_args, argtypes.data[i]);
+        }
+        scope_define(s->a, s->global, sym);
+        {
+            size_t j = 0;
+            for (; j < inst->list.len; j++) {
+                ast_node_t *m = (ast_node_t *)inst->list.data[j];
+                if (m->kind == AST_FIELD) {
+                    symbol_t *f = symbol_new(s->a, SYM_FIELD, m->name);
+                    f->type = sema_resolve_type(s, m->type);
+                    f->decl = m;
+                    f->is_pub = m->is_pub;
+                    scope_define(s->a, sym->members, f);
+                } else if (m->kind == AST_FUNC_DEF) {
+                    symbol_t *mm = get_or_make_func(s, sym->members, m->name, SYM_METHOD);
+                    if (m->is_pub) mm->is_pub = true;
+                    vec_push(s->a, &mm->overloads, build_sig(s, m, sym));
+                    mm->type = sym->type;
+                }
             }
         }
+        vec_push(s->a, &s->pending, inst);
+        s->lang = save_lang;
+        return sym;
     }
-    vec_push(s->a, &s->pending, inst);
-    return sym;
 }
 
 static symbol_t *g_instantiate_func(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes,
@@ -338,18 +344,23 @@ static symbol_t *g_instantiate_func(sema_t *s, ast_node_t *tmpl, vec_t *targ_nod
     const char *iname = g_instance_name(s, tmpl->name, &argtypes);
     symbol_t *existing = scope_lookup_local(s->global, iname);
     if (existing) return existing;
-    g_check_bounds(s, tmpl, &argtypes, span);
-    ast_node_t *inst = ast_clone(s->a, tmpl);
-    inst->name = iname;
-    inst->synthetic = true;
-    g_subst(s->a, inst, &tmpl->typarams, targ_nodes);
-    inst->typarams.len = 0;
-    vec_push(s->a, &s->program->list, inst);
-    symbol_t *fsym = get_or_make_func(s, s->global, iname, SYM_FUNC);
-    if (!fsym->home) fsym->home = s->gen_pkg;
-    vec_push(s->a, &fsym->overloads, build_sig(s, inst, NULL));
-    vec_push(s->a, &s->pending, inst);
-    return fsym;
+    {
+        const char *save_lang = s->lang;
+        if (tmpl->origin_lang) s->lang = tmpl->origin_lang;
+        g_check_bounds(s, tmpl, &argtypes, span);
+        ast_node_t *inst = ast_clone(s->a, tmpl);
+        inst->name = iname;
+        inst->synthetic = true;
+        g_subst(s->a, inst, &tmpl->typarams, targ_nodes);
+        inst->typarams.len = 0;
+        vec_push(s->a, &s->program->list, inst);
+        symbol_t *fsym = get_or_make_func(s, s->global, iname, SYM_FUNC);
+        if (!fsym->home) fsym->home = s->gen_pkg;
+        vec_push(s->a, &fsym->overloads, build_sig(s, inst, NULL));
+        vec_push(s->a, &s->pending, inst);
+        s->lang = save_lang;
+        return fsym;
+    }
 }
 
 static type_t *g_unify(ast_node_t *pty, type_t *at, const char *T)
@@ -418,6 +429,32 @@ symbol_t *g_infer_call(sema_t *s, symbol_t *tsym, vec_t *argtypes, const src_spa
                        type_t *expected)
 {
     ast_node_t *tmpl = tsym->decl;
+    {
+        size_t required = 0, total = 0;
+        bool seen_default = false;
+        size_t i = 0;
+        for (; i < tmpl->list.len; i++) {
+            ast_node_t *param = (ast_node_t *)tmpl->list.data[i];
+            if (param->kind != AST_PARAM) continue;
+            total++;
+            if (param->a)
+                seen_default = true;
+            else if (!seen_default)
+                required++;
+        }
+        if (argtypes->len < required || (!tmpl->is_variadic && argtypes->len > total)) {
+            if (tmpl->is_variadic)
+                SERR(s, 12, span, "'%s' expects at least %zu argument(s), got %zu",
+                     tsym->name, required, argtypes->len);
+            else if (required == total)
+                SERR(s, 12, span, "'%s' expects %zu argument(s), got %zu", tsym->name,
+                     total, argtypes->len);
+            else
+                SERR(s, 12, span, "'%s' expects %zu to %zu argument(s), got %zu",
+                     tsym->name, required, total, argtypes->len);
+            return NULL;
+        }
+    }
     vec_t targ_nodes;
     vec_init(&targ_nodes);
     {
@@ -439,6 +476,17 @@ symbol_t *g_infer_call(sema_t *s, symbol_t *tsym, vec_t *argtypes, const src_spa
             }
             if (!bound && expected && tmpl->type)
                 bound = g_unify(tmpl->type, expected, T);
+            if (!bound) {
+                size_t pi = argtypes->len;
+                for (; pi < tmpl->list.len; pi++) {
+                    ast_node_t *p = (ast_node_t *)tmpl->list.data[pi];
+                    if (p->kind != AST_PARAM || !p->a) continue;
+                    if (!p->type || !p->type->name || strcmp(p->type->name, T) != 0)
+                        continue;
+                    bound = sema_check_expr(s, p->a);
+                    if (bound) break;
+                }
+            }
             if (!bound) {
                 SERR(s, 1, span,
                      "cannot infer type parameter '%s' of generic function '%s'", T,

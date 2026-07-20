@@ -10,7 +10,7 @@
     - [Makefile build](#makefile-build)
   - [👋 Hello, World!](#-hello-world)
   - [🏗️ Compiling a program with `salam build`](#-compiling-a-program-with-salam-build)
-  - [🎨 Formatting with `salam fmt`](#-formatting-with-salam-fmt)
+  - [🎨 Formatting with `salam format`](#-formatting-with-salam-format)
   - [🌐 Layout DSL — compile to HTML/CSS/JS](#-layout-dsl--compile-to-htmlcssjs)
   - [🖥️ Interactive REPLs](#-interactive-repls)
   - [📚 Where to go next](#-where-to-go-next)
@@ -109,28 +109,28 @@ salam build app.salam -DDEBUG
 
 More examples live in [`examples/en/`](../examples/en/).
 
-## 🎨 Formatting with `salam fmt`
+## 🎨 Formatting with `salam format`
 
-`salam fmt` rewrites source files in place to canonical style.
+`salam format` rewrites source files in place to canonical style.
 
 ```sh
 # format a single file
-salam fmt app.salam
+salam format app.salam
 
 # format every .salam file under the current directory, recursively
-salam fmt
+salam format
 
 # check formatting without modifying files (exits 1 if any file needs changes)
-salam fmt --check
+salam format --check
 
 # format with 2-space indentation
-salam fmt app.salam --indent=2
+salam format app.salam --indent=2
 
 # format with tabs
-salam fmt app.salam --tabs
+salam format app.salam --tabs
 
 # format a Persian-language source file
-salam fmt app.salam --lang=fa
+salam format app.salam --lang=fa
 ```
 
 ## 🌐 Layout DSL — compile to HTML/CSS/JS
@@ -161,7 +161,7 @@ salam layout   # layout DSL REPL
 | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | [Web Playground](https://salamlang.github.io/Salam/)                                                                         | Try Salam in your browser — no install needed                   |
 | [Examples](../examples/en/)                                                                                                  | Ready-to-run programs covering basics, types, stdlib, and more  |
-| [Editor README](../editor/README.md)                                                                                         | How the WebAssembly playground is built and served              |
+| [Editor readme](../editor/README.md)                                                                                         | How the WebAssembly playground is built and served              |
 | [Platform & word-size support](PLATFORMS.md)                                                                                 | 32-bit vs 64-bit, C backend vs LLVM backend, release matrix     |
 | [Contributing Guide](../CONTRIBUTING.md)                                                                                     | How to fork, branch, build, and open a pull request             |
 | [Code of Conduct](../CODE_OF_CONDUCT.md)                                                                                     | Community standards                                             |

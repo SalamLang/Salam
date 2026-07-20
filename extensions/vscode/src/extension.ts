@@ -168,7 +168,7 @@ async function formatText(text: string, lang: string): Promise<string | null> {
   const tmpFile = path.join(tmpDir, "document.salam");
   try {
     fs.writeFileSync(tmpFile, text, "utf8");
-    const args = ["fmt", tmpFile, `--lang=${lang}`];
+    const args = ["format", tmpFile, `--lang=${lang}`];
     const indent = String(cfg().get("format.indent", "4")).trim();
     if (indent === "tab" || indent === "tabs") args.push("--tabs");
     else if (/^\d+$/.test(indent)) args.push(`--indent=${indent}`);

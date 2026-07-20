@@ -1,3 +1,5 @@
+"""Prime-counting benchmark using trial division."""
+
 count = 1
 for i in range(3, 100000, 2):
     is_p = 1

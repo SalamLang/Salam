@@ -1,5 +1,9 @@
 <?php
-function gcd(int $a, int $b): int {
+
+// phpcs:disable PSR1.Files.SideEffects -- benchmark script intentionally declares and runs
+
+function gcd(int $a, int $b): int
+{
     $x = $a;
     $y = $b;
     while ($y != 0) {

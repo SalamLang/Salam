@@ -683,15 +683,23 @@ static int jit_run_file(logger_t *log, const char *ll_path)
         return 2;
     }
 
-    LLVMOrcThreadSafeModuleRef tsm = LLVMOrcCreateNewThreadSafeModule(mod, tsctx);
-    LLVMOrcDisposeThreadSafeContext(tsctx);
-
     LLVMOrcLLJITRef jit = NULL;
     LLVMErrorRef e = LLVMOrcCreateLLJIT(&jit, NULL);
     if (e) {
-        LLVMOrcDisposeThreadSafeModule(tsm);
+        LLVMDisposeModule(mod);
+        LLVMOrcDisposeThreadSafeContext(tsctx);
         return orc_fail(log, "JIT init failed", e);
     }
+
+    const char *jit_dl_str = LLVMOrcLLJITGetDataLayoutStr(jit);
+    if (jit_dl_str && jit_dl_str[0]) {
+        LLVMTargetDataRef jit_dl = LLVMCreateTargetData(jit_dl_str);
+        LLVMSetModuleDataLayout(mod, jit_dl);
+        LLVMDisposeTargetData(jit_dl);
+    }
+
+    LLVMOrcThreadSafeModuleRef tsm = LLVMOrcCreateNewThreadSafeModule(mod, tsctx);
+    LLVMOrcDisposeThreadSafeContext(tsctx);
 
     LLVMOrcJITDylibRef jd = LLVMOrcLLJITGetMainJITDylib(jit);
 
@@ -769,12 +777,6 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
         if (verr) LLVMDisposeMessage(verr);
     }
 
-    /*
-     * IR output at -O0 is the raw front-end IR, emitted as-is. At -O1+ we run
-     * the middle-end pipeline and rewrite the .ll so `--emit-llvm -O3` shows
-     * the IR that actually runs (matching `clang -O3 -emit-llvm`), not the
-     * unoptimized front-end dump.
-     */
     if (opts->output_mode == LLVM_OUT_IR && opts->opt_level == LLVM_OPT_O0) {
         goto cleanup;
     }

@@ -3,7 +3,8 @@
 #define AMOUNT 100000
 #define MOD 1000000007LL
 
-int main(void) {
+int main(void)
+{
     long long coins[6] = {1, 5, 10, 25, 50, 100};
     static long long ways[AMOUNT + 1];
     int i;

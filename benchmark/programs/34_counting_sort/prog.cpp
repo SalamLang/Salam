@@ -1,7 +1,8 @@
 #include <iostream>
 #include <vector>
 
-int main() {
+int main()
+{
     long long N = 5000000;
     long long RANGE = 100000;
     long long x = 6;

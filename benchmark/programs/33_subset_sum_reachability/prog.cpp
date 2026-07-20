@@ -1,7 +1,8 @@
 #include <iostream>
 #include <vector>
 
-int main() {
+int main()
+{
     const int NITEMS = 1000;
     const int TARGET = 30000;
     std::vector<int> weight(NITEMS);

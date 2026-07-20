@@ -6,13 +6,15 @@
 static long long arr[N];
 static long long blocksum[(N + BLOCK - 1) / BLOCK];
 
-void update(int i, long long delta) {
+void update(int i, long long delta)
+{
     arr[i] = arr[i] + delta;
     int b = i / BLOCK;
     blocksum[b] = blocksum[b] + delta;
 }
 
-long long prefix_sum(int i) {
+long long prefix_sum(int i)
+{
     int b = i / BLOCK;
     long long total = 0;
     int k = 0;
@@ -28,7 +30,8 @@ long long prefix_sum(int i) {
     return total;
 }
 
-int main(void) {
+int main(void)
+{
     int nblocks = (N + BLOCK - 1) / BLOCK;
     (void)nblocks;
 

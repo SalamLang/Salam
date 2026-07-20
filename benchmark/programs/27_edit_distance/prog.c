@@ -1,7 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-int main(void) {
+int main(void)
+{
     long long LEN1 = 2000;
     long long LEN2 = 2000;
     long long i, j;

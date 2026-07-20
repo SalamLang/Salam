@@ -1,7 +1,8 @@
 #include <iostream>
 #include <vector>
 
-int main() {
+int main()
+{
     const long long AMOUNT = 100000;
     const long long MOD = 1000000007LL;
     long long coins[6] = {1, 5, 10, 25, 50, 100};

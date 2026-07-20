@@ -1,7 +1,8 @@
 #include <iostream>
 #include <vector>
 
-int main() {
+int main()
+{
     long long LEN1 = 2000;
     long long LEN2 = 2000;
     long long i, j;

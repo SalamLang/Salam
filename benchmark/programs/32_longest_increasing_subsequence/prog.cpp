@@ -1,7 +1,8 @@
 #include <iostream>
 #include <vector>
 
-int main() {
+int main()
+{
     const int N = 6000;
     std::vector<long long> seq(N);
     std::vector<long long> dp(N);

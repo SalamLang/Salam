@@ -3,7 +3,8 @@
 #define NITEMS 1000
 #define TARGET 30000
 
-int main(void) {
+int main(void)
+{
     int weight[NITEMS];
     static int reachable[TARGET + 1];
     int i;

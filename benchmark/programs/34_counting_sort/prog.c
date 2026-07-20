@@ -1,7 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-int main(void) {
+int main(void)
+{
     long long N = 5000000;
     long long RANGE = 100000;
     long long x = 6;

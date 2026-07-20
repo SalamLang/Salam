@@ -3,7 +3,8 @@
 #define NITEMS 500
 #define CAPACITY 12500
 
-int main(void) {
+int main(void)
+{
     long long weight[NITEMS];
     long long value[NITEMS];
     static long long dp[CAPACITY + 1];

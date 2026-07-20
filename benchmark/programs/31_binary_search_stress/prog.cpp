@@ -1,7 +1,8 @@
 #include <iostream>
 #include <vector>
 
-int main() {
+int main()
+{
     int n = 2000000;
     std::vector<long long> arr(n);
     for (int i = 0; i < n; i++) {

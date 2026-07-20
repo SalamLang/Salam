@@ -55,7 +55,8 @@ int main(void)
     mergesort(0, N - 1);
 
     for (i = 0; i < N; i++) {
-        checksum = (checksum + (arr[i] % 1000000007) * ((i + 1) % 1000000007)) % 1000000007;
+        checksum =
+            (checksum + (arr[i] % 1000000007) * ((i + 1) % 1000000007)) % 1000000007;
     }
 
     printf("%lld\n", arr[0]);

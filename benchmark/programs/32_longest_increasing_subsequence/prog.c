@@ -2,7 +2,8 @@
 
 #define N 6000
 
-int main(void) {
+int main(void)
+{
     static long long seq[N];
     static long long dp[N];
     int i;

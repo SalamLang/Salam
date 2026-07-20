@@ -2,7 +2,8 @@
 
 long long arr[300000];
 
-void heapify(long long *arr, long long n, long long i) {
+void heapify(long long *arr, long long n, long long i)
+{
     long long largest = i;
     long long l = 2 * i + 1;
     long long r = 2 * i + 2;
@@ -20,7 +21,8 @@ void heapify(long long *arr, long long n, long long i) {
     }
 }
 
-int main(void) {
+int main(void)
+{
     long long n = 300000;
     long long x = 3;
     long long i;
@@ -39,7 +41,8 @@ int main(void) {
     }
     long long checksum = 0;
     for (i = 0; i < n; i++) {
-        checksum = (checksum + (arr[i] % 1000000007) * ((i + 1) % 1000000007)) % 1000000007;
+        checksum =
+            (checksum + (arr[i] % 1000000007) * ((i + 1) % 1000000007)) % 1000000007;
     }
     printf("%lld\n", arr[0]);
     printf("%lld\n", arr[n - 1]);

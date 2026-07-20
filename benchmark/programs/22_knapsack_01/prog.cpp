@@ -1,7 +1,8 @@
 #include <iostream>
 #include <vector>
 
-int main() {
+int main()
+{
     const long long NITEMS = 500;
     const long long CAPACITY = 12500;
     std::vector<long long> weight(NITEMS);

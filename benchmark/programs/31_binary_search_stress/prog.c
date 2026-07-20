@@ -1,7 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-int main(void) {
+int main(void)
+{
     int n = 2000000;
     long long *arr = (long long *)malloc((size_t)n * sizeof(long long));
     int i;

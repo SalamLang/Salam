@@ -51,6 +51,7 @@ static void cli_set_defaults(options_t *out)
     out->llvm_target = NULL;
     out->llvm_native_cpu = false;
     out->no_js_minify_names = OPTIONS_INIT_NO_JS_MINIFY_NAMES;
+    out->no_minify = OPTIONS_INIT_NO_MINIFY;
     out->version_short = false;
 }
 

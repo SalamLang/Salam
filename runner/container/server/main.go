@@ -1,12 +1,25 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"net/http"
+	"os"
 	"time"
 )
 
 func main() {
+	healthcheck := flag.Bool("healthcheck", false, "check that a local server instance is responding, then exit")
+	flag.Parse()
+
+	if *healthcheck {
+		os.Exit(runHealthcheck())
+	}
+
+	if err := os.MkdirAll(workRoot, 0o755); err != nil {
+		log.Fatalf("could not create work root %q: %v", workRoot, err)
+	}
+
 	initJobSlots()
 
 	mux := http.NewServeMux()

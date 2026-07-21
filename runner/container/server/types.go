@@ -1,5 +1,10 @@
 package main
 
+const (
+	reqTypeLayout = "layout"
+	engineLLVM    = "llvm"
+)
+
 type runRequest struct {
 	Code      string `json:"code"`
 	Type      string `json:"type"`     // "program" | "layout"

@@ -27,7 +27,7 @@ RUN set -eu; \
 FROM golang:1.23-bookworm AS build
 WORKDIR /src
 COPY server/go.mod ./
-COPY server/main.go ./
+COPY server/*.go ./
 COPY --from=fetch /opt/salam/VERSION /tmp/salam-version
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.salamVersion=$(cat /tmp/salam-version)" \
       -o /out/sandbox-server .

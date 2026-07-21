@@ -16,7 +16,9 @@ func requestID(r *http.Request) string {
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("write json error=%q", err)
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, reqID, errCode, message string) {

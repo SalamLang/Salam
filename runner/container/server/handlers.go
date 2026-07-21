@@ -7,7 +7,9 @@ import (
 
 func handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	if _, err := w.Write([]byte("ok")); err != nil {
+		log.Printf("healthz write error=%q", err)
+	}
 }
 
 func handleVersion(w http.ResponseWriter, _ *http.Request) {

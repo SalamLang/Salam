@@ -259,9 +259,6 @@ const char *p_munch_name(parser_t *p)
     return r;
 }
 
-/* "با"/"بسته" ("with"/"package") double as ordinary words inside registered
- * multi-word @fa aliases (e.g. "با شناسه", "نام بسته"); accept them as
- * continuation/leading words when munching a multi-word name. */
 static bool p_is_alias_word_keyword(token_kind_t k)
 {
     return k == TK_KW_WITH || k == TK_KW_PACKAGE;
@@ -271,6 +268,12 @@ static bool p_at_mergeable_word(const parser_t *p)
 {
     token_kind_t k = p_peek(p)->kind;
     return k == TK_IDENT || p_is_alias_word_keyword(k);
+}
+
+static bool p_at_mergeable_value_word(const parser_t *p)
+{
+    token_kind_t k = p_peek(p)->kind;
+    return k == TK_IDENT || k == TK_KW_PACKAGE;
 }
 
 static bool tk_is_assign_family(token_kind_t k)
@@ -298,7 +301,7 @@ const char *p_munch_value_name(parser_t *p)
     uint32_t line = p_peek(p)->span.begin.line;
     sb_puts(&b, p_peek(p)->lexeme);
     p_advance(p);
-    while (p_at_mergeable_word(p) && p_peek(p)->span.begin.line == line &&
+    while (p_at_mergeable_value_word(p) && p_peek(p)->span.begin.line == line &&
            !tk_is_assign_family(p_peek2(p)->kind)) {
         sb_putc(&b, ' ');
         sb_puts(&b, p_peek(p)->lexeme);

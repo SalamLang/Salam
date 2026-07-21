@@ -478,7 +478,9 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
         ll_emit(ll, "call void @salam_out_flush()");
     }
     const char *t = ll_new_tmp(ll);
-    if (err) {
+    if (err && ll_target_is_windows(ll->triple)) {
+        ll_emit(ll, "%s = call i32 (ptr, ...) @printf(ptr %s%s)", t, f, sb_cstr(&args));
+    } else if (err) {
         ll_emit(ll, "%s = call i32 (i32, ptr, ...) @dprintf(i32 2, ptr %s%s)", t, f,
                 sb_cstr(&args));
     } else {

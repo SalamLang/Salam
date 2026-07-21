@@ -67,7 +67,7 @@ static const char *ll_datalayout(const char *triple)
     return NULL;
 }
 
-static bool ll_target_is_windows(const char *triple)
+bool ll_target_is_windows(const char *triple)
 {
     if (triple && triple[0])
         return strstr(triple, "windows") != NULL || strstr(triple, "mingw") != NULL ||

@@ -183,6 +183,8 @@ int ll_int_bits(const char *ts);
 
 int ll_target_ptr_bits(const char *triple);
 
+bool ll_target_is_windows(const char *triple);
+
 const char *ll_usize_to_i32(ll_t *ll, const char *ref);
 
 bool ll_is_int(const char *ts);

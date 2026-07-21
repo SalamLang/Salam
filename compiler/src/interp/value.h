@@ -33,7 +33,8 @@ typedef enum {
     VAL_STRUCT,
     VAL_FUNC,
     VAL_MODULE,
-    VAL_PTR
+    VAL_PTR,
+    VAL_VARIANT
 } val_kind_t;
 
 typedef enum {
@@ -63,6 +64,8 @@ typedef struct sstruct sstruct_t;
 
 typedef struct sclosure sclosure_t;
 
+typedef struct svariant svariant_t;
+
 struct env;
 
 struct module;
@@ -86,7 +89,13 @@ struct value {
         sclosure_t *fn;
         struct module *mod;
         sptr_t ptr;
+        svariant_t *variant;
     } as;
+};
+
+struct svariant {
+    int32_t tag;
+    value_t *boxed;
 };
 
 struct sarray {
@@ -194,6 +203,14 @@ SAL_INLINE value_t val_ptr(void *addr, ptr_elem_t elem)
     v.kind = VAL_PTR;
     v.as.ptr.addr = addr;
     v.as.ptr.elem = elem;
+    return v;
+}
+
+SAL_INLINE value_t val_variant(svariant_t *variant)
+{
+    value_t v;
+    v.kind = VAL_VARIANT;
+    v.as.variant = variant;
     return v;
 }
 

@@ -147,6 +147,214 @@ const char *ll_struct_ltype(ll_t *ll, const char *name)
     return r;
 }
 
+static void ll_variant_push_trimmed(const char *start, const char *end,
+                                    char members[][160], size_t *n, size_t max_members)
+{
+    while (start < end && *start == ' ')
+        start++;
+    while (end > start && end[-1] == ' ')
+        end--;
+    if (*n >= max_members) return;
+    {
+        size_t l = (size_t)(end - start);
+        if (l >= 160) l = 159;
+        memcpy(members[*n], start, l);
+        members[*n][l] = 0;
+        (*n)++;
+    }
+}
+
+size_t ll_variant_members(const char *ts, char members[][160], size_t max_members)
+{
+    size_t n = 0;
+    const char *lt = strchr(ts, '<');
+    const char *gt = strrchr(ts, '>');
+    int depth;
+    const char *p, *start;
+    if (!lt || !gt || gt <= lt) return 0;
+    start = lt + 1;
+    depth = 0;
+    for (p = start; p < gt; p++) {
+        if (*p == '<')
+            depth++;
+        else if (*p == '>')
+            depth--;
+        else if (*p == ',' && depth == 0) {
+            ll_variant_push_trimmed(start, p, members, &n, max_members);
+            start = p + 1;
+        }
+    }
+    ll_variant_push_trimmed(start, gt, members, &n, max_members);
+    return n;
+}
+
+int ll_variant_tag_of(const char *variant_ts, const char *member_ts)
+{
+    char members[64][160];
+    size_t n = ll_variant_members(variant_ts, members, 64);
+    size_t i = 0;
+    for (; i < n; i++)
+        if (!strcmp(members[i], member_ts)) return (int)i;
+    return -1;
+}
+
+static void ll_ident_byte(sb_t *b, unsigned char c)
+{
+    if (isalnum(c))
+        sb_putc(b, (char)c);
+    else if (c == '_')
+        sb_puts(b, "__");
+    else {
+        char h[5];
+        sal_snprintf(h, sizeof h, "_%02x", c);
+        sb_puts(b, h);
+    }
+}
+
+static void ll_encode_ts(sb_t *b, const char *ts)
+{
+    const unsigned char *p = (const unsigned char *)ts;
+    for (; *p; p++) {
+        if (*p == '*')
+            sb_puts(b, "_ptr");
+        else if (*p == '[')
+            sb_puts(b, "_arr");
+        else if (*p == ']' || *p == ' ') {
+        } else
+            ll_ident_byte(b, *p);
+    }
+}
+
+const char *ll_variant_cname(ll_t *ll, const char *ts)
+{
+    char members[64][160];
+    size_t n = ll_variant_members(ts, members, 64);
+    sb_t b;
+    sb_init(&b);
+    sb_puts(&b, "%_Salam_variant");
+    {
+        size_t i = 0;
+        for (; i < n; i++) {
+            sb_putc(&b, '_');
+            ll_encode_ts(&b, members[i]);
+        }
+    }
+    {
+        const char *r = arena_strdup(ll->a, sb_cstr(&b));
+        sb_free(&b);
+        return r;
+    }
+}
+
+static void ll_struct_layout(ll_t *ll, const char *ts, size_t *out_size,
+                             size_t *out_align)
+{
+    symbol_t *ssym = ll_struct_sym(ll, ts);
+    size_t off = 0, maxalign = 1;
+    if (!ssym) {
+        size_t p = (size_t)(ll->ptr_bits / 8);
+        *out_size = p;
+        *out_align = p;
+        return;
+    }
+    {
+        size_t j = 0;
+        for (; j < ssym->members->symbols.len; j++) {
+            symbol_t *f = (symbol_t *)ssym->members->symbols.data[j];
+            size_t fsz, fal;
+            if (f->kind != SYM_FIELD) continue;
+            ll_type_layout(ll, type_to_string(ll->sem->tc, f->type), &fsz, &fal);
+            if (fal < 1) fal = 1;
+            if (fal > maxalign) maxalign = fal;
+            off = (off + fal - 1) / fal * fal;
+            off += fsz;
+        }
+    }
+    off = (off + maxalign - 1) / maxalign * maxalign;
+    if (off == 0) off = 1;
+    *out_size = off;
+    *out_align = maxalign;
+}
+
+static void ll_variant_layout_size(ll_t *ll, const char *ts, size_t *out_size,
+                                   size_t *out_align)
+{
+    char members[64][160];
+    size_t n = ll_variant_members(ts, members, 64);
+    size_t maxsz = 1, maxal = 1, i = 0;
+    for (; i < n; i++) {
+        size_t sz, al;
+        ll_type_layout(ll, members[i], &sz, &al);
+        if (sz > maxsz) maxsz = sz;
+        if (al > maxal) maxal = al;
+    }
+    *out_size = maxsz;
+    *out_align = maxal;
+}
+
+void ll_type_layout(ll_t *ll, const char *ts, size_t *out_size, size_t *out_align)
+{
+    size_t p = (size_t)(ll->ptr_bits / 8);
+    if (!ts || !strcmp(ts, "void")) {
+        *out_size = 0;
+        *out_align = 1;
+    } else if (!strncmp(ts, "dyn ", 4) && !strchr(ts, '[')) {
+        *out_size = 2 * p;
+        *out_align = p;
+    } else if (!strncmp(ts, "Variant<", 8)) {
+        ll_variant_layout_size(ll, ts, out_size, out_align);
+    } else if (ll_is_str(ts) || ll_is_ptr_ts(ts)) {
+        *out_size = p;
+        *out_align = p;
+    } else if (ll_is_slice_ts(ts)) {
+        *out_size = p + 8;
+        *out_align = p > 8 ? p : 8;
+    } else if (strchr(ts, '[')) {
+        long dim = ll_array_dim(ts);
+        size_t esz, eal;
+        ll_type_layout(ll, ll_array_elem(ll, ts), &esz, &eal);
+        *out_size = esz * (size_t)(dim > 0 ? dim : 0);
+        *out_align = eal;
+    } else if (!strcmp(ts, "f32")) {
+        *out_size = 4;
+        *out_align = 4;
+    } else if (!strcmp(ts, "f64")) {
+        *out_size = 8;
+        *out_align = 8;
+    } else if (!strcmp(ts, "bool") || !strcmp(ts, "char")) {
+        *out_size = 1;
+        *out_align = 1;
+    } else if (ll_is_int(ts)) {
+        size_t bytes = (size_t)((ll_int_bits(ts) + 7) / 8);
+        *out_size = bytes;
+        *out_align = bytes;
+    } else if (ll_struct_sym(ll, ts)) {
+        ll_struct_layout(ll, ts, out_size, out_align);
+    } else if (ll_enum_sym(ll, ts)) {
+        *out_size = 4;
+        *out_align = 4;
+    } else {
+        *out_size = p;
+        *out_align = p;
+    }
+}
+
+void ll_ensure_variant_type(ll_t *ll, const char *ts)
+{
+    const char *cn = ll_variant_cname(ll, ts);
+    size_t sz, al, k;
+    {
+        size_t i = 0;
+        for (; i < ll->emitted.len; i++)
+            if (!strcmp(cn, (const char *)ll->emitted.data[i])) return;
+    }
+    vec_push(ll->a, &ll->emitted, CONST_CAST(cn));
+    ll_variant_layout_size(ll, ts, &sz, &al);
+    k = (sz + 7) / 8;
+    if (k < 1) k = 1;
+    sb_puts(ll->g, ll_fmt(ll, "%s = type { i32, [%zu x i64] }\n", cn, k));
+}
+
 static symbol_t *ll_sym_plain(ll_t *ll, const char *name)
 {
     symbol_t *s = scope_lookup(ll->sem->global, name);
@@ -277,6 +485,10 @@ const char *ll_ty(ll_t *ll, const char *ts)
 {
     if (!ts || !strcmp(ts, "void")) return "void";
     if (!strncmp(ts, "dyn ", 4) && !strchr(ts, '[')) return "%dyn";
+    if (!strncmp(ts, "Variant<", 8)) {
+        ll_ensure_variant_type(ll, ts);
+        return ll_variant_cname(ll, ts);
+    }
     if (ll_is_str(ts)) return "ptr";
     if (ll_is_ptr_ts(ts)) return "ptr";
     if (ll_is_slice_ts(ts)) return "{ ptr, i64 }";

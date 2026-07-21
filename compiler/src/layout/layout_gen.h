@@ -25,6 +25,7 @@ typedef struct {
     const char *html;
     const char *css;
     const char *js;
+    const char *head;
     const char *title;
     const char *lang;
     const char *dir;

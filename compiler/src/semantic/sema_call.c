@@ -470,6 +470,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         func_sig_t *sig = resolve_overload(s, sym, &argtypes, &n->span, nm);
         mark_ref_args(s, n, sig);
         coerce_args_to_dyn(s, n, &argtypes, sig);
+        coerce_args_to_variant(s, n, &argtypes, sig);
         decorate(s, callee, sym->type);
         return decorate(s, n,
                         sig ? g_localize_instance(s, sig->ret, &n->span) : err_ty(s));
@@ -537,7 +538,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
 
         if (callee->name &&
             (objt->kind == TY_MAP || objt->kind == TY_MAP_ITER || objt->kind == TY_VEC ||
-             objt->kind == TY_STR ||
+             objt->kind == TY_STR || objt->kind == TY_ARRAY || objt->kind == TY_SLICE ||
              (objt->kind == TY_PTR && objt->pointee && objt->pointee->kind == TY_FILE))) {
             const char *orig = callee->name;
             callee->name = intrinsic_method_canon(callee->name);
@@ -684,6 +685,18 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             return decorate(s, n, err_ty(s));
         }
 
+        if (objt->kind == TY_ARRAY || objt->kind == TY_SLICE) {
+            const char *m = callee->name;
+            decorate(s, callee, objt);
+            if (!strcmp(m, "len")) return decorate(s, n, ty(s, TY_I32));
+            {
+                type_t *r = try_impl_call(s, n, callee, objt, &argtypes);
+                if (r) return r;
+            }
+            SERR(s, 17, &n->span, "array has no method '%s'", m);
+            return decorate(s, n, err_ty(s));
+        }
+
         {
             type_t *dynt =
                 objt->kind == TY_DYN ? objt
@@ -706,6 +719,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                     resolve_overload(s, m, &argtypes, &n->span, callee->name);
                 mark_ref_args(s, n, sig);
                 coerce_args_to_dyn(s, n, &argtypes, sig);
+                coerce_args_to_variant(s, n, &argtypes, sig);
                 return decorate(s, n, sig ? sig->ret : err_ty(s));
             }
         }
@@ -773,6 +787,7 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         func_sig_t *sig = resolve_overload(s, m, &argtypes, &n->span, callee->name);
         mark_ref_args(s, n, sig);
         coerce_args_to_dyn(s, n, &argtypes, sig);
+        coerce_args_to_variant(s, n, &argtypes, sig);
         decorate(s, callee, m->type);
         return decorate(s, n,
                         sig ? g_localize_instance(s, sig->ret, &n->span) : err_ty(s));

@@ -36,7 +36,6 @@ export default function App() {
     generateRandomPalette,
   );
 
-  // Re-generate palette whenever switching to the random theme
   useEffect(() => {
     if (theme === "random") {
       setRandomPalette(generateRandomPalette());
@@ -52,7 +51,6 @@ export default function App() {
     const root = document.documentElement;
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
-    // Remove only the custom properties set by the random theme when leaving it
     if (theme !== "random") {
       root.style.removeProperty("--custom-bg");
       root.style.removeProperty("--custom-bg-darker");

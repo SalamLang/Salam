@@ -71,6 +71,11 @@ typedef enum {
     AST_LAYOUT_ELEMENT,
     AST_LAYOUT_ATTR,
     AST_LAYOUT_COMPONENT,
+    AST_MATCH,
+    AST_MATCH_ARM,
+    AST_MATCH_PATTERN,
+    AST_VARIANT_BOX,
+    AST_VARIANT_UNWRAP,
     AST__COUNT
 } ast_kind_t;
 
@@ -97,6 +102,7 @@ struct ast_node {
     bool is_deprecated;
     bool is_slice;
     bool is_prefix;
+    bool match_is_expr;
     ast_node_t *type;
     ast_node_t *a, *b, *c, *d;
     vec_t list;

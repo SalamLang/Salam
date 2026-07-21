@@ -47,7 +47,8 @@ typedef enum {
     TY_FILE,
     TY_FUNC,
     TY_DYN,
-    TY_SLICE
+    TY_SLICE,
+    TY_VARIANT
 } type_kind_t;
 
 typedef struct type_t type_t;
@@ -95,6 +96,10 @@ type_t *type_vec(type_ctx_t *tc, type_t *elem);
 type_t *type_file(type_ctx_t *tc);
 
 type_t *type_func(type_ctx_t *tc, type_t *ret, const vec_t *params);
+
+type_t *type_variant(type_ctx_t *tc, type_t **members, size_t n);
+
+int type_variant_tag(const type_t *variant, const type_t *member);
 
 int type_prim_kind_from_name(const char *name, const char *lang);
 

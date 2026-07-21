@@ -31,6 +31,7 @@ typedef struct {
     sb_t *html;
     sb_t *css;
     sb_t *js;
+    sb_t *head;
     const char *title;
     const char *lang;
     const char *dir;

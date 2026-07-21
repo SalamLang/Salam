@@ -72,6 +72,7 @@ static const char *const k_token_names[TK__COUNT] = {
     [TK_KW_EACH] = "KEYWORD_EACH",
     [TK_KW_IN] = "KEYWORD_IN",
     [TK_KW_WITH] = "KEYWORD_WITH",
+    [TK_KW_MATCH] = "KEYWORD_MATCH",
     [TK_PLUS] = "PLUS",
     [TK_MINUS] = "MINUS",
     [TK_STAR] = "STAR",

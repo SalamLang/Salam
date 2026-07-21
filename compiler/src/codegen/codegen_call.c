@@ -416,6 +416,19 @@ static const char *call_file(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_
     return "0";
 }
 
+static const char *call_array(cg_t *cg, ast_node_t *n, ast_node_t *obj,
+                              ast_node_t *callee)
+{
+    const char *m = callee->name;
+    if (!strcmp(m, "len")) {
+        if (cg_is_slice_ts(obj->type_str))
+            return cg_fmt(cg, "(int32_t)(%s).len", cg_expr(cg, obj));
+        return cg_fmt(cg, "%ld", array_size_of(obj->type_str));
+    }
+    (void)n;
+    return "0";
+}
+
 static const char *call_str(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t *callee)
 {
     const char *m = callee->name;
@@ -534,6 +547,8 @@ static const char *call_member(cg_t *cg, ast_node_t *n, ast_node_t *callee)
     if (!strncmp(objts, "dyn ", 4)) return call_dyn(cg, n, obj, callee, objts);
     if (!strcmp(objts, "File*")) return call_file(cg, n, obj, callee);
     if (!strcmp(objts, "str")) return call_str(cg, n, obj, callee);
+    if (cg_is_slice_ts(objts) || (objts && strchr(objts, '[')))
+        return call_array(cg, n, obj, callee);
     return call_method(cg, n, obj, callee, objts);
 }
 

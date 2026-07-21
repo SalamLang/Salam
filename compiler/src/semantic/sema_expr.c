@@ -339,7 +339,7 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
 {
     if (!n) return ty(s, TY_VOID);
     if (n->kind != AST_LITERAL && n->kind != AST_STRUCT_LIT && n->kind != AST_ARRAY_LIT &&
-        n->kind != AST_CALL && n->kind != AST_TERNARY)
+        n->kind != AST_CALL && n->kind != AST_TERNARY && n->kind != AST_MATCH)
         s->expected = NULL;
     switch (n->kind) {
     case AST_LITERAL: {
@@ -472,6 +472,8 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
     }
     case AST_TERNARY:
         return check_ternary(s, n);
+    case AST_MATCH:
+        return sema_check_match(s, n, true, s->expected);
     case AST_UNARY: {
         type_t *o = sema_check_expr(s, n->a);
 
@@ -598,6 +600,11 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
         return check_struct_lit(s, n);
     case AST_LAMBDA:
         return check_lambda(s, n);
+    case AST_VARIANT_UNWRAP: {
+        type_t *mt = n->type ? sema_resolve_type(s, n->type) : err_ty(s);
+        sema_check_expr(s, n->a);
+        return decorate(s, n, mt);
+    }
     default:
         return decorate(s, n, err_ty(s));
     }

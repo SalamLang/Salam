@@ -78,6 +78,9 @@ const char *jsg_expr(jg_t *g, ast_node_t *n);
 
 const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec);
 
+const char *jsg_match_arm_cond(jg_t *g, ast_node_t *arm, const char *subj_var,
+                               const char *subj_ts);
+
 const char *jsg_call(jg_t *g, ast_node_t *n);
 
 const char *jsg_emit_op_call(jg_t *g, ast_node_t *lhs, symbol_t *ssym, const char *sname,

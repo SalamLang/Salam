@@ -165,16 +165,16 @@ static int driver_new(options_t *opt)
     bool ar = opt->lang && strcmp(opt->lang, "ar") == 0;
 
     const char *en_content = "func main:\n"
-                             "    println(\"Hello, World!\")\n"
+                             "    println \"Hello, World!\"\n"
                              "end\n";
 
     const char *fa_content =
         "\xD8\xAA\xD8\xA7\xD8\xA8\xD8\xB9 main:\n"
-        "    \xDA\x86\xD8\xA7\xD9\xBE(\"\xD8\xB3\xD9\x84\xD8\xA7\xD9\x85\xD8\x8C "
-        "\xD8\xAF\xD9\x86\xDB\x8C\xD8\xA7!\")\n"
+        "    \xDA\x86\xD8\xA7\xD9\xBE \"\xD8\xB3\xD9\x84\xD8\xA7\xD9\x85\xD8\x8C "
+        "\xD8\xAF\xD9\x86\xDB\x8C\xD8\xA7!\"\n"
         "\xD9\xBE\xD8\xA7\xDB\x8C\xD8\xA7\xD9\x86\n";
     const char *ar_content = "دالة الرئيسية:\n"
-                             "    اطبع(\"مرحبا بالعالم!\")\n"
+                             "    اطبع \"مرحبا بالعالم!\"\n"
                              "نهاية\n";
     const char *content = fa ? fa_content : ar ? ar_content : en_content;
     char path[512];

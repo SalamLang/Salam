@@ -18,6 +18,7 @@ static const js_host_t k_js_host[] = {
     {"salam_js_query", "document.querySelector(%0)"},
     {"salam_js_query_all", "Array.from(document.querySelectorAll(%0))"},
     {"salam_js_by_id", "document.getElementById(%0)"},
+    {"salam_js_id_exists", "(document.getElementById(%0) !== null)"},
     {"salam_js_create", "document.createElement(%0)"},
     {"salam_js_body", "document.body"},
     {"salam_js_document", "document"},

@@ -63,6 +63,7 @@ const kw_entry_t k_lang_en[] = {
     {TK_KW_EACH, "each"},
     {TK_KW_IN, "in"},
     {TK_KW_WITH, "with"},
+    {TK_KW_MATCH, "match"},
     {TK_EOF, NULL},
 };
 static const kw_entry_t k_lang_fa[] = {
@@ -111,6 +112,7 @@ static const kw_entry_t k_lang_fa[] = {
     {TK_KW_EACH, "هر"},
     {TK_KW_IN, "در"},
     {TK_KW_WITH, "با"},
+    {TK_KW_MATCH, "تطبیق"},
     {TK_AND, "و"},
     {TK_OR, "یا"},
     {TK_EOF, NULL},
@@ -166,6 +168,7 @@ static const kw_entry_t k_lang_ar[] = {
     {TK_KW_EACH, "كل"},
     {TK_KW_IN, "في"},
     {TK_KW_WITH, "مع"},
+    {TK_KW_MATCH, "طابق"},
     {TK_AND, "و"},
     {TK_OR, "أو"},
     {TK_EOF, NULL},

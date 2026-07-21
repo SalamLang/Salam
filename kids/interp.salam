@@ -1,0 +1,244 @@
+package interp
+
+// A step-at-a-time interpreter that walks the block tree live, so the
+// "currently running block glows" requirement is a real animation and not
+// a single synchronous blur. It's an *explicit* stack machine (a small
+// fixed array of Frame records) rather than plain recursive Salam
+// function calls, because recursive calls would run to completion
+// synchronously on one JS call stack with no way to pause between two
+// non-blocking blocks (dom.Prompt is the only thing that naturally
+// pauses JS) -- an explicit stack lets a `dom.SetTimeout` tick execute
+// exactly one block and then yield back to the browser.
+import dom
+import "model.salam"
+import "ui.salam"
+import "turtle.salam"
+import "mascot.salam"
+import "labels.salam"
+
+pub const FRAME_SEQ := 0
+pub const FRAME_REPEAT_N := 1
+pub const FRAME_REPEAT_UNTIL := 2
+
+pub struct Frame:
+    pub kind: int = FRAME_SEQ
+    pub pc: int = -1
+    pub owner: int = -1
+    pub counter: int = 0
+end
+
+stack: Frame[32]
+mut sp := -1
+
+pub mut running := false
+pub mut finished := false
+mut stepCount := 0
+const MAX_STEPS := 4000
+const STEP_MS := 550 as i64
+
+mut drawW := 0.0
+mut drawH := 0.0
+
+pub func setDrawSize(w: f64, h: f64):
+    drawW = w
+    drawH = h
+end
+
+// -- pre-flight check --------------------------------------------------
+pub func hasEmptySlot(): bool: ret chainHasEmpty(model.startId) end
+
+func chainHasEmpty(headId: int): bool:
+    mut cur := headId
+    until cur != -1:
+        if model.isContainer(model.blocks[cur].kind):
+            if model.blocks[cur].child == -1: ret true end
+            if chainHasEmpty(model.blocks[cur].child): ret true end
+        end
+        cur = model.blocks[cur].next
+    end
+    ret false
+end
+
+// -- condition evaluation ------------------------------------------------
+func evalCond(id: int): bool:
+    b := model.blocks[id]
+    vid := model.findVar(b.textA)
+    if vid < 0: ret false end
+    if b.op == model.OP_EQ: ret model.varDisplay(vid) == b.textB end
+    n := model.vars[vid].numVal
+    target := model.parseNumber(b.textB)
+    if b.op == model.OP_GT: ret n > target end
+    ret n < target
+end
+
+// -- stack helpers ---------------------------------------------------------
+func pushFrame(kind: int, pc: int, owner: int):
+    sp += 1
+    stack[sp] = Frame {}
+    stack[sp].kind = kind
+    stack[sp].pc = pc
+    stack[sp].owner = owner
+    stack[sp].counter = 0
+end
+
+func resetStack():
+    sp = 0
+    stack[0] = Frame {}
+    stack[0].kind = FRAME_SEQ
+    stack[0].owner = -1
+    stack[0].pc = model.blocks[model.startId].next
+end
+
+// -- effects ---------------------------------------------------------------
+func runSimple(id: int):
+    ui.highlightId = id
+    b := model.blocks[id]
+    kind := b.kind
+    if kind == model.KIND_SAY:
+        mut msg := b.textA
+        if b.textB != "":
+            vid := model.findVar(b.textB)
+            msg = msg.concat(model.varDisplay(vid))
+        end
+        ui.addNotebookLine(msg)
+        mascot.say(msg)
+    else kind == model.KIND_ASK:
+        answer := dom.Prompt(b.textA)
+        model.setVarText(b.textB, answer)
+    else kind == model.KIND_MAKE_BOX:
+        model.setVarText(b.textA, b.textB)
+    else kind == model.KIND_ADD_TO_BOX:
+        model.addToVar(b.textA, b.textB)
+    else kind == model.KIND_SUBTRACT_FROM_BOX:
+        model.subtractFromVar(b.textA, b.textB)
+    else kind == model.KIND_MOVE:
+        turtle.forward(b.numA)
+        turtle.refreshSprite(drawW, drawH)
+    else kind == model.KIND_TURN:
+        turtle.turn(b.numA)
+        turtle.refreshSprite(drawW, drawH)
+    else kind == model.KIND_PEN_UP:
+        turtle.lift()
+    else kind == model.KIND_PEN_DOWN:
+        turtle.lower()
+    end
+end
+
+func enterContainer(id: int):
+    ui.highlightId = id
+    kind := model.blocks[id].kind
+    stack[sp].pc = model.blocks[id].next
+    if kind == model.KIND_IF:
+        if evalCond(id) && model.blocks[id].child != -1:
+            pushFrame(FRAME_SEQ, model.blocks[id].child, -1)
+        end
+    else kind == model.KIND_REPEAT_N:
+        pushFrame(FRAME_REPEAT_N, model.blocks[id].child, id)
+    else:
+        pushFrame(FRAME_REPEAT_UNTIL, model.blocks[id].child, id)
+    end
+end
+
+func popOrLoop():
+    kind := stack[sp].kind
+    if kind == FRAME_SEQ:
+        sp -= 1
+    else kind == FRAME_REPEAT_N:
+        owner := stack[sp].owner
+        stack[sp].counter += 1
+        if stack[sp].counter >= (model.blocks[owner].numA as int):
+            sp -= 1
+        else:
+            stack[sp].pc = model.blocks[owner].child
+        end
+    else:
+        owner := stack[sp].owner
+        if evalCond(owner):
+            sp -= 1
+        else:
+            stack[sp].pc = model.blocks[owner].child
+        end
+    end
+end
+
+func finish():
+    running = false
+    finished = true
+    ui.highlightId = -1
+end
+
+pub func step():
+    if !running: ret end
+    if sp < 0:
+        finish()
+        ret
+    end
+    cur := stack[sp].pc
+    if cur == -1:
+        popOrLoop()
+        if sp < 0: finish() end
+        ret
+    end
+    kind := model.blocks[cur].kind
+    if kind == model.KIND_END:
+        finish()
+        ret
+    end
+    if model.isContainer(kind):
+        enterContainer(cur)
+    else:
+        runSimple(cur)
+        stack[sp].pc = model.blocks[cur].next
+    end
+end
+
+// -- driver ------------------------------------------------------------
+func tick():
+    if !running: ret end
+    stepCount += 1
+    if stepCount > MAX_STEPS:
+        mascot.oops("This is taking a really long time -- let's stop and check the blocks!")
+        finish()
+        ui.render()
+        ret
+    end
+    step()
+    ui.render()
+    if running:
+        dom.SetTimeout((): tick() end, STEP_MS)
+    else:
+        onStopped()
+    end
+end
+
+func onStopped():
+    ui.render()
+    if finished:
+        mascot.celebrate(labels.FINISHED_HINT)
+    end
+end
+
+pub func start():
+    if hasEmptySlot():
+        mascot.oops(labels.EMPTY_SLOT_HINT)
+        ret
+    end
+    model.varCount = 0
+    resetStack()
+    running = true
+    finished = false
+    stepCount = 0
+    if model.mode == model.MODE_DRAW:
+        turtle.home()
+        turtle.clear(drawW, drawH)
+        turtle.refreshSprite(drawW, drawH)
+    end
+    ui.clearNotebook()
+    tick()
+end
+
+pub func stop():
+    running = false
+    ui.highlightId = -1
+    ui.render()
+end

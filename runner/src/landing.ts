@@ -65,7 +65,7 @@ SALAM</pre>
 
                 <div class="bg-slate-900/40 border border-slate-800/80 rounded-xl p-6 backdrop-blur-sm">
                     <div class="flex items-center justify-between pb-3 mb-3 border-b border-slate-800/60">
-                        <span class="font-bold text-xs text-slate-200 tracking-wider">GET /v1/version</span>
+                        <span class="font-bold text-xs text-slate-200 tracking-wider">GET /version</span>
                     </div>
                     <p class="text-xs text-slate-400 leading-relaxed">Returns the pinned Salam version baked into the current sandbox image.</p>
                 </div>
@@ -88,7 +88,7 @@ SALAM</pre>
             <div class="flex items-center gap-4">
                 <a href="https://github.com/SalamLang/Salam" class="hover:text-slate-400 transition-colors">SOURCE</a>
                 <span>&bull;</span>
-                <a href="/v1/version" class="hover:text-slate-400 transition-colors">VERSION</a>
+                <a href="/version" class="hover:text-slate-400 transition-colors">VERSION</a>
             </div>
         </footer>
 

@@ -216,7 +216,7 @@ stage-sysroots:
 self-contained: stage-sysroots
 	$(MAKE) WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 \
 	        SALAM_EMBED_MUSL_DIR="$(MUSL_SR)" SALAM_EMBED_MINGW_DIR="$(MINGW_SR)" \
-	        LLVM_CONFIG=$(LLVM_CONFIG) CXX=$(CXX)
+	        LLVM_CONFIG="$(LLVM_CONFIG)" CXX="$(CXX)" CC="$(CC)"
 	@echo "Built self-contained salam -> $(OUTBIN)"
 	@echo "  cross-compile with e.g.:"
 	@echo "    $(OUTBIN) build app.salam --target=x86_64-linux-musl      -o app"

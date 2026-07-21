@@ -276,23 +276,6 @@ static bool p_at_mergeable_value_word(const parser_t *p)
     return k == TK_IDENT || k == TK_KW_PACKAGE;
 }
 
-static bool tk_is_assign_family(token_kind_t k)
-{
-    switch (k) {
-    case TK_ASSIGN:
-    case TK_COLON_ASSIGN:
-    case TK_PLUS_EQ:
-    case TK_MINUS_EQ:
-    case TK_STAR_EQ:
-    case TK_SLASH_EQ:
-    case TK_PERCENT_EQ:
-    case TK_POWER_EQ:
-        return true;
-    default:
-        return false;
-    }
-}
-
 const char *p_munch_value_name(parser_t *p)
 {
     if (!p_at(p, TK_IDENT)) return p_name(p, "expected name");
@@ -301,8 +284,7 @@ const char *p_munch_value_name(parser_t *p)
     uint32_t line = p_peek(p)->span.begin.line;
     sb_puts(&b, p_peek(p)->lexeme);
     p_advance(p);
-    while (p_at_mergeable_value_word(p) && p_peek(p)->span.begin.line == line &&
-           !tk_is_assign_family(p_peek2(p)->kind)) {
+    while (p_at_mergeable_value_word(p) && p_peek(p)->span.begin.line == line) {
         sb_putc(&b, ' ');
         sb_puts(&b, p_peek(p)->lexeme);
         p_advance(p);

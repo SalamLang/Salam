@@ -20,7 +20,7 @@ export function landingPage(): Response {
         <header class="flex flex-col md:flex-row md:items-center md:justify-between border-b border-slate-800/60 pb-8 mb-12">
             <div>
                 <div class="flex items-center gap-3 mb-2">
-                    <span class="text-xs font-bold tracking-widest text-teal-400 bg-teal-950/50 border border-teal-800/50 px-2.5 py-1 rounded">V4 ACTIVE</span>
+                    <span class="text-xs font-bold tracking-widest text-teal-400 bg-teal-950/50 border border-teal-800/50 px-2.5 py-1 rounded">ACTIVE</span>
                     <span class="text-xs font-bold tracking-widest text-slate-400 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded">EDGE COMPILER</span>
                 </div>
                 <h1 class="text-3xl font-extrabold tracking-tight text-white md:text-4xl bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
@@ -45,10 +45,10 @@ export function landingPage(): Response {
 
                 <div class="bg-slate-900/40 border border-slate-800/80 rounded-xl p-6 backdrop-blur-sm">
                     <div class="flex items-center justify-between pb-3 mb-3 border-b border-slate-800/60">
-                        <span class="font-bold text-xs text-slate-200 tracking-wider">POST /v1/run</span>
+                        <span class="font-bold text-xs text-slate-200 tracking-wider">POST /run</span>
                         <span class="text-[10px] font-bold text-teal-400 bg-teal-950/60 px-2 py-0.5 rounded border border-teal-900/40">PLAIN TEXT</span>
                     </div>
-                    <pre class="bg-[#070a0f] text-cyan-300 p-3.5 rounded-lg text-xs leading-5 border border-slate-950 overflow-x-auto text-left">curl -X POST "https://runner.salamlang.workers.dev/v1/run?type=program&engine=interp&language=en" \\
+                    <pre class="bg-[#070a0f] text-cyan-300 p-3.5 rounded-lg text-xs leading-5 border border-slate-950 overflow-x-auto text-left">curl -X POST "https://runner.salamlang.workers.dev/run?type=program&engine=interp&language=en" \\
   -H "Content-Type: text/plain" \\
   --data-binary @- <<'SALAM'
 func main:

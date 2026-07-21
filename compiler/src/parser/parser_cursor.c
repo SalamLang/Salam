@@ -276,6 +276,17 @@ static bool p_at_mergeable_value_word(const parser_t *p)
     return k == TK_IDENT || k == TK_KW_PACKAGE;
 }
 
+/* Only ':=' introduces a brand-new binding; plain '=' and the compound
+ * assign operators always target an already-declared name, so they must
+ * not stop a multi-word merge (e.g. 'thread result = 99', 'up seq = ...').
+ * ':=' does stop it, since a bare identifier immediately followed by ':='
+ * is starting its own declaration, not continuing the identifier before
+ * it (e.g. '... - base\ny := ...' on one line). */
+static bool tk_is_new_binding(token_kind_t k)
+{
+    return k == TK_COLON_ASSIGN;
+}
+
 const char *p_munch_value_name(parser_t *p)
 {
     if (!p_at(p, TK_IDENT)) return p_name(p, "expected name");
@@ -284,7 +295,8 @@ const char *p_munch_value_name(parser_t *p)
     uint32_t line = p_peek(p)->span.begin.line;
     sb_puts(&b, p_peek(p)->lexeme);
     p_advance(p);
-    while (p_at_mergeable_value_word(p) && p_peek(p)->span.begin.line == line) {
+    while (p_at_mergeable_value_word(p) && p_peek(p)->span.begin.line == line &&
+           !tk_is_new_binding(p_peek2(p)->kind)) {
         sb_putc(&b, ' ');
         sb_puts(&b, p_peek(p)->lexeme);
         p_advance(p);

@@ -122,30 +122,33 @@ static const js_seg_t k_prelude[] = {
                     "    if (c.roundRect) c.roundRect(x, y, w, h, r);\n"
                     "    else c.rect(x, y, w, h);\n"
                     "}\n"},
-    {"__sal_lsget_i", "function __sal_lsget_i(k) {\n"
-                      "    try {\n"
-                      "        return Math.trunc(Number(localStorage.getItem(k) || "
-                      "0)) || 0;\n"
-                      "    } catch (e) {\n"
-                      "        console.warn(\"__sal_lsget_i: localStorage read failed\", e);\n"
-                      "        return 0;\n"
-                      "    }\n"
-                      "}\n"},
-    {"__sal_lsget_s", "function __sal_lsget_s(k) {\n"
-                      "    try {\n"
-                      "        return String(localStorage.getItem(k) || \"\");\n"
-                      "    } catch (e) {\n"
-                      "        console.warn(\"__sal_lsget_s: localStorage read failed\", e);\n"
-                      "        return \"\";\n"
-                      "    }\n"
-                      "}\n"},
-    {"__sal_lsset", "function __sal_lsset(k, v) {\n"
-                    "    try {\n"
-                    "        localStorage.setItem(k, String(v));\n"
-                    "    } catch (e) {\n"
-                    "        console.warn(\"__sal_lsset: localStorage write failed\", e);\n"
-                    "    }\n"
-                    "}\n"},
+    {"__sal_lsget_i",
+     "function __sal_lsget_i(k) {\n"
+     "    try {\n"
+     "        return Math.trunc(Number(localStorage.getItem(k) || "
+     "0)) || 0;\n"
+     "    } catch (e) {\n"
+     "        console.warn(\"__sal_lsget_i: localStorage read failed\", e);\n"
+     "        return 0;\n"
+     "    }\n"
+     "}\n"},
+    {"__sal_lsget_s",
+     "function __sal_lsget_s(k) {\n"
+     "    try {\n"
+     "        return String(localStorage.getItem(k) || \"\");\n"
+     "    } catch (e) {\n"
+     "        console.warn(\"__sal_lsget_s: localStorage read failed\", e);\n"
+     "        return \"\";\n"
+     "    }\n"
+     "}\n"},
+    {"__sal_lsset",
+     "function __sal_lsset(k, v) {\n"
+     "    try {\n"
+     "        localStorage.setItem(k, String(v));\n"
+     "    } catch (e) {\n"
+     "        console.warn(\"__sal_lsset: localStorage write failed\", e);\n"
+     "    }\n"
+     "}\n"},
     {"__sal_touch", "function __sal_touch(ev, axis) {\n"
                     "    const t = (ev.changedTouches && ev.changedTouches[0]) || ev;\n"
                     "    return Number((axis ? t.clientY : t.clientX) || 0);\n"

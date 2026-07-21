@@ -30,17 +30,29 @@ export interface ValidationError {
   message: string;
 }
 
-function validateEnum(label: string, value: string, allowed: ReadonlySet<string>): string | undefined {
+function validateEnum(
+  label: string,
+  value: string,
+  allowed: ReadonlySet<string>,
+): string | undefined {
   if (allowed.has(value)) return undefined;
   return `'${label}' query param must be one of: ${[...allowed].join(", ")}`;
 }
 
 export function validateRunInput(input: RunInput): ValidationError | undefined {
   if (!input.code) {
-    return { status: 400, error: "invalid_request", message: "request body must contain Salam source code" };
+    return {
+      status: 400,
+      error: "invalid_request",
+      message: "request body must contain Salam source code",
+    };
   }
   if (input.code.length > MAX_CODE_BYTES) {
-    return { status: 413, error: "payload_too_large", message: `code must be under ${MAX_CODE_BYTES} bytes` };
+    return {
+      status: 413,
+      error: "payload_too_large",
+      message: `code must be under ${MAX_CODE_BYTES} bytes`,
+    };
   }
 
   const enumError =

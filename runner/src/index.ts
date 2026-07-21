@@ -38,7 +38,12 @@ export default {
         error: errMessage(err),
         stack: err instanceof Error ? err.stack : undefined,
       });
-      return errorResponse(500, "internal_error", "unexpected server error", requestId);
+      return errorResponse(
+        500,
+        "internal_error",
+        "unexpected server error",
+        requestId,
+      );
     }
   },
 } satisfies ExportedHandler<Env>;

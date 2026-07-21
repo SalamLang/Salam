@@ -3,7 +3,9 @@ import type { Env } from "./env";
 import { errMessage, log } from "./log";
 import { errorResponse } from "./responses";
 
-export type SandboxResult = { ok: true; response: Response } | { ok: false; errorResponse: Response };
+export type SandboxResult =
+  | { ok: true; response: Response }
+  | { ok: false; errorResponse: Response };
 
 export async function fetchSandbox(
   env: Env,
@@ -17,7 +19,11 @@ export async function fetchSandbox(
     const response = await sandbox.fetch(`http://sandbox${path}`, init);
     return { ok: true, response };
   } catch (err) {
-    log("error", "sandbox_fetch_error", { requestId, path, error: errMessage(err) });
+    log("error", "sandbox_fetch_error", {
+      requestId,
+      path,
+      error: errMessage(err),
+    });
     return {
       ok: false,
       errorResponse: errorResponse(

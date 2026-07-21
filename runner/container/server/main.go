@@ -1,12 +1,21 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"net/http"
+	"os"
 	"time"
 )
 
 func main() {
+	healthcheck := flag.Bool("healthcheck", false, "check that a local server instance is responding, then exit")
+	flag.Parse()
+
+	if *healthcheck {
+		os.Exit(runHealthcheck())
+	}
+
 	initJobSlots()
 
 	mux := http.NewServeMux()

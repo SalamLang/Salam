@@ -44,8 +44,8 @@ func resolveTimeout(requestedMs int) time.Duration {
 }
 
 var (
-	allowedTypes     = map[string]bool{"program": true, "layout": true}
-	allowedEngines   = map[string]bool{"interp": true, "llvm": true}
+	allowedTypes     = map[string]bool{"program": true, reqTypeLayout: true}
+	allowedEngines   = map[string]bool{"interp": true, engineLLVM: true}
 	allowedLanguages = map[string]bool{"en": true, "fa": true, "ar": true}
 )
 

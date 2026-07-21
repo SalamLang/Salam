@@ -109,7 +109,9 @@ static const js_seg_t k_prelude[] = {
      "        gain.connect(__sal_audio.destination);\n"
      "        osc.start(t);\n"
      "        osc.stop(t + ms / 1000);\n"
-     "    } catch (e) {}\n"
+     "    } catch (e) {\n"
+     "        console.warn(\"__sal_tone: audio playback failed\", e);\n"
+     "    }\n"
      "}\n"},
     {"__sal_img", "function __sal_img(src) {\n"
                   "    const img = new Image();\n"
@@ -125,6 +127,7 @@ static const js_seg_t k_prelude[] = {
                       "        return Math.trunc(Number(localStorage.getItem(k) || "
                       "0)) || 0;\n"
                       "    } catch (e) {\n"
+                      "        console.warn(\"__sal_lsget_i: localStorage read failed\", e);\n"
                       "        return 0;\n"
                       "    }\n"
                       "}\n"},
@@ -132,13 +135,16 @@ static const js_seg_t k_prelude[] = {
                       "    try {\n"
                       "        return String(localStorage.getItem(k) || \"\");\n"
                       "    } catch (e) {\n"
+                      "        console.warn(\"__sal_lsget_s: localStorage read failed\", e);\n"
                       "        return \"\";\n"
                       "    }\n"
                       "}\n"},
     {"__sal_lsset", "function __sal_lsset(k, v) {\n"
                     "    try {\n"
                     "        localStorage.setItem(k, String(v));\n"
-                    "    } catch (e) {}\n"
+                    "    } catch (e) {\n"
+                    "        console.warn(\"__sal_lsset: localStorage write failed\", e);\n"
+                    "    }\n"
                     "}\n"},
     {"__sal_touch", "function __sal_touch(ev, axis) {\n"
                     "    const t = (ev.changedTouches && ev.changedTouches[0]) || ev;\n"

@@ -13,8 +13,8 @@
 
 set -euxo pipefail
 
-info()  { printf "[info] %s\n" "$*"; }
-warn()  { printf "[warn] %s\n" "$*" >&2; }
+info() { printf "[info] %s\n" "$*"; }
+warn() { printf "[warn] %s\n" "$*" >&2; }
 # error MESSAGE [EXIT_CODE] — default exit code is 1
 error() {
     local msg="$1"
@@ -30,7 +30,7 @@ usage() {
     echo -e "-n=code_name\t\tSpecifies the distro codename, for example bionic" 1>&2
     echo -e "-h\t\t\tPrints this help." 1>&2
     echo -e "-m=repo_base_url\tSpecifies the base URL from which to download." 1>&2
-    exit 1;
+    exit 1
 }
 
 CURRENT_LLVM_STABLE=22
@@ -101,34 +101,34 @@ for binary in "${needed_binaries[@]}"; do
     fi
 done
 
-if [[ ${#missing_binaries[@]} -gt 0 ]] ; then
+if [[ ${#missing_binaries[@]} -gt 0 ]]; then
     error "Missing required tools: ${missing_binaries[*]}
 (hint: apt install lsb-release wget software-properties-common gnupg)
 curl is also supported as an alternative to wget" 4
 fi
 
 case ${DISTRO} in
-    debian)
-        # Debian Forky has a workaround because of
-        # https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1038383
-        if [[ "${VERSION}" == "unstable" ]] || [[ "${VERSION}" == "testing" ]] || [[ "${VERSION_CODENAME}" == "forky" ]]; then
-            CODENAME=unstable
-            LINKNAME=
-        else
-            # "stable" Debian release
-            CODENAME=${VERSION_CODENAME}
+debian)
+    # Debian Forky has a workaround because of
+    # https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1038383
+    if [[ "${VERSION}" == "unstable" ]] || [[ "${VERSION}" == "testing" ]] || [[ "${VERSION_CODENAME}" == "forky" ]]; then
+        CODENAME=unstable
+        LINKNAME=
+    else
+        # "stable" Debian release
+        CODENAME=${VERSION_CODENAME}
+        LINKNAME=-${CODENAME}
+    fi
+    ;;
+*)
+    # ubuntu and its derivatives
+    if [[ -n "${UBUNTU_CODENAME}" ]]; then
+        CODENAME=${UBUNTU_CODENAME}
+        if [[ -n "${CODENAME}" ]]; then
             LINKNAME=-${CODENAME}
         fi
-        ;;
-    *)
-        # ubuntu and its derivatives
-        if [[ -n "${UBUNTU_CODENAME}" ]]; then
-            CODENAME=${UBUNTU_CODENAME}
-            if [[ -n "${CODENAME}" ]]; then
-                LINKNAME=-${CODENAME}
-            fi
-        fi
-        ;;
+    fi
+    ;;
 esac
 
 # read optional command line arguments
@@ -141,11 +141,11 @@ if [ "$#" -ge 1 ] && [ "${1::1}" != "-" ]; then
     fi
     OPTIND=2
     if [ "$#" -ge 2 ]; then
-      if [ "$2" == "all" ]; then
-          # Install all packages
-          ALL=1
-          OPTIND=3
-      fi
+        if [ "$2" == "all" ]; then
+            # Install all packages
+            ALL=1
+            OPTIND=3
+        fi
     fi
 fi
 
@@ -210,7 +210,6 @@ if [[ -n "${CODENAME}" ]]; then
     fi
 fi
 
-
 # install everything
 
 if [[ ! -f /etc/apt/trusted.gpg.d/apt.llvm.org.asc ]]; then
@@ -221,11 +220,10 @@ if [[ ! -f /etc/apt/trusted.gpg.d/apt.llvm.org.asc ]]; then
     download_key "$GPG_KEY_URL" | tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
 fi
 
-if [[ -z "`apt-key list 2> /dev/null | grep -i llvm`" ]]; then
+if [[ -z "$(apt-key list 2>/dev/null | grep -i llvm)" ]]; then
     # Delete the key in the old format
     apt-key del AF4F7421 || true
 fi
-
 
 # Add repository based on distribution
 if [[ "${VERSION_CODENAME}" == "bookworm" ]]; then
@@ -242,7 +240,7 @@ Signed-By: /etc/apt/trusted.gpg.d/apt.llvm.org.asc
 URIs: ${BASE_URL}/${CODENAME}/
 Suites: llvm-toolchain${LINKNAME}${LLVM_VERSION_STRING}
 Components: main"
-    echo "$TEXT_TO_ADD" | tee -a "$SOURCES_FILE" > /dev/null
+    echo "$TEXT_TO_ADD" | tee -a "$SOURCES_FILE" >/dev/null
 else
     add-apt-repository -y "${REPO_NAME}"
 fi

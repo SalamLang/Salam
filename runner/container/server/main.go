@@ -16,6 +16,10 @@ func main() {
 		os.Exit(runHealthcheck())
 	}
 
+	if err := os.MkdirAll(workRoot, 0o755); err != nil {
+		log.Fatalf("could not create work root %q: %v", workRoot, err)
+	}
+
 	initJobSlots()
 
 	mux := http.NewServeMux()

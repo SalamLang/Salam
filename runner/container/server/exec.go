@@ -60,11 +60,7 @@ func runSalam(ctx context.Context, req runRequest, timeout time.Duration, reqID 
 func buildSalamCmd(runCtx context.Context, req runRequest, srcPath, jobDir string) (*exec.Cmd, *capBuffer, *capBuffer) {
 	cmd := exec.CommandContext(runCtx, salamBin, buildArgs(req, srcPath)...)
 	cmd.Dir = jobDir
-	cmd.Env = []string{
-		"SALAM_STD=/opt/salam/std",
-		"HOME=" + jobDir,
-		"TMPDIR=" + jobDir,
-	}
+	cmd.Env = childEnv(jobDir)
 	setProcessGroup(cmd)
 
 	stdoutBuf := &capBuffer{limit: maxOutputBytes}
@@ -109,6 +105,14 @@ func buildArgs(req runRequest, srcPath string) []string {
 		return []string{engineLLVM, srcPath, "--jit", lang, "--log-level=warn"}
 	}
 	return []string{"exec", srcPath, lang, "--log-level=warn"}
+}
+
+func childEnv(jobDir string) []string {
+	env := []string{"HOME=" + jobDir}
+	if salamStdDir != "" {
+		env = append(env, "SALAM_STD="+salamStdDir)
+	}
+	return append(env, platformEnv(jobDir)...)
 }
 
 func collectLayoutArtifacts(jobDir string) map[string]string {

@@ -161,19 +161,20 @@ const char *cg_match_arm_cond(cg_t *cg, ast_node_t *arm, const char *subj_var,
 
 static const char *cg_variant_box(cg_t *cg, ast_node_t *n)
 {
-    const char *cC = cg_ctype(cg, n->a->type_str ? n->a->type_str : "int32_t");
-    int t = ++cg->tmpn;
-    return cg_fmt(cg,
-                  "({ %s* __vp%d = (%s*)" SALAM_MEM_ALLOC "((uint64_t)sizeof(%s)); "
-                  "*__vp%d = (%s); "
-                  "(_Salam_variant){ %d, (void*)__vp%d }; })",
-                  cC, t, cC, cC, t, cg_expr(cg, n->a), (int)n->value.as.i, t);
+    const char *VC =
+        cg_variant_cname(cg, n->type_str ? n->type_str : "Variant<i32, i32>");
+    int tag = (int)n->value.as.i;
+    return cg_fmt(cg, "(%s){ .tag = %d, .payload = { .v%d = (%s) } }", VC, tag, tag,
+                  cg_expr(cg, n->a));
 }
 
 static const char *cg_variant_unwrap(cg_t *cg, ast_node_t *n)
 {
-    const char *cC = cg_ctype(cg, n->type_str ? n->type_str : "int32_t");
-    return cg_fmt(cg, "(*(%s*)(%s).payload)", cC, cg_expr(cg, n->a));
+    const char *member_ts = n->type_str ? n->type_str : "i32";
+    const char *variant_ts = n->a->type_str ? n->a->type_str : "";
+    int tag = cg_variant_tag_of(variant_ts, member_ts);
+    if (tag < 0) tag = 0;
+    return cg_fmt(cg, "(%s).payload.v%d", cg_expr(cg, n->a), tag);
 }
 
 static const char *cg_match_expr(cg_t *cg, ast_node_t *n)

@@ -582,9 +582,8 @@ static llv_t ll_call_user(ll_t *ll, ast_node_t *n, const char *nm)
     return (llv_t){r, rts};
 }
 
-static llv_t ll_call_len(ll_t *ll, ast_node_t *n)
+static llv_t ll_len_of(ll_t *ll, ast_node_t *n, ast_node_t *arg)
 {
-    ast_node_t *arg = (ast_node_t *)n->list.data[0];
     const char *ts = arg->type_str;
     if (ll_is_slice_ts(ts)) {
         llv_t v = ll_expr(ll, arg);
@@ -605,6 +604,11 @@ static llv_t ll_call_len(ll_t *ll, ast_node_t *n)
     const char *l = ll_new_tmp(ll);
     ll_emit(ll, "%s = call %s @strlen(ptr %s)", l, ll->usize, v.ref);
     return (llv_t){ll_usize_to_i32(ll, l), "i32"};
+}
+
+static llv_t ll_call_len(ll_t *ll, ast_node_t *n)
+{
+    return ll_len_of(ll, n, (ast_node_t *)n->list.data[0]);
 }
 
 static llv_t ll_emit_call(ll_t *ll, ast_node_t *n, func_sig_t *sig, const char *lead,
@@ -806,6 +810,9 @@ static llv_t ll_call_method(ll_t *ll, ast_node_t *n, ast_node_t *callee)
         llv_t o;
         if (ll_call_str(ll, n, obj, mname, &o)) return o;
     }
+
+    if (!strcmp(mname, "len") && (ll_is_slice_ts(ots) || (ots && strchr(ots, '['))))
+        return ll_len_of(ll, n, obj);
 
     if (obj->kind == AST_IDENTIFIER) {
         symbol_t *pk = ll_sym(ll, obj->name);
@@ -1263,7 +1270,7 @@ static const char *ll_match_variant_tag_cond(ll_t *ll, llv_t subj, int tag)
 {
     const char *t = ll_new_tmp(ll);
     const char *r = ll_new_tmp(ll);
-    ll_emit(ll, "%s = extractvalue %%variant %s, 0", t, subj.ref);
+    ll_emit(ll, "%s = extractvalue %s %s, 0", t, ll_ty(ll, subj.ts), subj.ref);
     ll_emit(ll, "%s = icmp eq i32 %s, %d", r, t, tag);
     return r;
 }
@@ -1384,7 +1391,8 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
         return ll_match_expr(ll, n);
     case AST_VARIANT_BOX: {
         llv_t v = ll_expr(ll, n->a);
-        return (llv_t){ll_box_variant(ll, v, (int)n->value.as.i), n->type_str};
+        return (llv_t){ll_box_variant(ll, v, (int)n->value.as.i, n->type_str),
+                       n->type_str};
     }
     case AST_VARIANT_UNWRAP: {
         llv_t v = ll_expr(ll, n->a);

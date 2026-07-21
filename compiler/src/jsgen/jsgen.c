@@ -162,11 +162,6 @@ jsgen_output_t *jsgen_run(arena_t *a, logger_t *log, ast_node_t *program,
     vec_init(&g.local_emit);
     vec_init(&g.taken);
     vec_init(&g.fn_used_names);
-    /* The key->name cache must survive across modules, not just the
-     * counter: otherwise the same cross-module symbol (e.g. a call site
-     * in one module vs. its declaration in another) independently mints
-     * two different names from the shared counter and the emitted call
-     * references a name that was never declared. */
     if (minify_keys)
         g.minify_keys = *minify_keys;
     else

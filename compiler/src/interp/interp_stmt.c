@@ -178,6 +178,14 @@ void interp_assign_to(interp_t *I, env_t *env, ast_node_t *target, value_t v)
     interp_loc_set(I, &loc, v);
 }
 
+static bool take_pending_flow(interp_t *I, flow_t *out)
+{
+    if (I->pending_flow == FLOW_NORMAL) return false;
+    *out = I->pending_flow;
+    I->pending_flow = FLOW_NORMAL;
+    return true;
+}
+
 flow_t exec_list(interp_t *I, env_t *env, frame_t *fr, vec_t *list, value_t *ret)
 {
     {
@@ -201,19 +209,26 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
     case AST_VAR_DECL:
     case AST_CONST_DECL: {
         value_t v;
-        if (n->a)
+        if (n->a) {
+            flow_t pf;
             v = eval(I, env, n->a);
-        else
+            if (take_pending_flow(I, &pf)) return pf;
+        } else
             v = default_for_type(I, n->type_str);
         env_define(I, env, n->name, v);
         return FLOW_NORMAL;
     }
-    case AST_EXPR_STMT:
+    case AST_EXPR_STMT: {
+        flow_t pf;
         eval(I, env, n->a);
+        if (take_pending_flow(I, &pf)) return pf;
         return FLOW_NORMAL;
+    }
     case AST_ASSIGN: {
+        flow_t pf;
         if (n->op == TK_ASSIGN) {
             value_t rhs = eval(I, env, n->b);
+            if (take_pending_flow(I, &pf)) return pf;
             interp_assign_to(I, env, n->a, rhs);
             return FLOW_NORMAL;
         }
@@ -223,14 +238,19 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
             value_t cur = interp_loc_get(I, &loc);
             value_t r = eval(I, env, n->b);
             bool found;
-            value_t sr = try_struct_op(I, base, cur, r, true, &found);
-            value_t rhs = found ? sr : arith(I, n, base, cur, r);
+            value_t sr, rhs;
+            if (take_pending_flow(I, &pf)) return pf;
+            sr = try_struct_op(I, base, cur, r, true, &found);
+            rhs = found ? sr : arith(I, n, base, cur, r);
             interp_loc_set(I, &loc, rhs);
         }
         return FLOW_NORMAL;
     }
     case AST_IF: {
-        if (to_bool(eval(I, env, n->a))) {
+        flow_t pf;
+        bool cond = to_bool(eval(I, env, n->a));
+        if (take_pending_flow(I, &pf)) return pf;
+        if (cond) {
             env_t *c = env_new(I, env);
             return exec_list(I, c, fr, &n->b->list, ret);
         }
@@ -242,11 +262,19 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
         return FLOW_NORMAL;
     }
     case AST_UNTIL:
-        while (tick(I), to_bool(eval(I, env, n->a))) {
-            env_t *c = env_new(I, env);
-            flow_t f = exec_list(I, c, fr, &n->b->list, ret);
-            if (f == FLOW_RETURN) return f;
-            if (f == FLOW_BREAK) break;
+        for (;;) {
+            flow_t pf;
+            bool cond;
+            tick(I);
+            cond = to_bool(eval(I, env, n->a));
+            if (take_pending_flow(I, &pf)) return pf;
+            if (!cond) break;
+            {
+                env_t *c = env_new(I, env);
+                flow_t f = exec_list(I, c, fr, &n->b->list, ret);
+                if (f == FLOW_RETURN) return f;
+                if (f == FLOW_BREAK) break;
+            }
         }
         return FLOW_NORMAL;
     case AST_REPEAT: {
@@ -298,11 +326,19 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
     case AST_FOR: {
         env_t *loop = env_new(I, env);
         if (n->a) exec_stmt(I, loop, fr, n->a, ret);
-        while (tick(I), !n->b || to_bool(eval(I, loop, n->b))) {
-            env_t *c = env_new(I, loop);
-            flow_t f = exec_list(I, c, fr, &n->d->list, ret);
-            if (f == FLOW_RETURN) return f;
-            if (f == FLOW_BREAK) break;
+        for (;;) {
+            flow_t pf;
+            bool cond;
+            tick(I);
+            cond = !n->b || to_bool(eval(I, loop, n->b));
+            if (take_pending_flow(I, &pf)) return pf;
+            if (!cond) break;
+            {
+                env_t *c = env_new(I, loop);
+                flow_t f = exec_list(I, c, fr, &n->d->list, ret);
+                if (f == FLOW_RETURN) return f;
+                if (f == FLOW_BREAK) break;
+            }
             if (n->c) exec_stmt(I, loop, fr, n->c, ret);
         }
         return FLOW_NORMAL;

@@ -104,7 +104,8 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
     }
     LOG_T(cx->log, PH_CODEGEN, "layout <%s> -> <%s>", el->name, tag);
     if (!strcmp(el->name, "meta")) {
-        const char *nmattr = NULL, *prop = NULL, *cont = NULL, *charset = NULL;
+        const char *nmattr = NULL, *prop = NULL, *cont = NULL, *charset = NULL,
+                   *http_equiv = NULL;
         size_t i = 0;
         for (; i < el->list.len; i++) {
             ast_node_t *attr = (ast_node_t *)el->list.data[i];
@@ -118,12 +119,17 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
                 cont = v;
             else if (!strcmp(attr->name, "charset"))
                 charset = v;
+            else if (!strcmp(attr->name, "http_equiv"))
+                http_equiv = v;
         }
         sb_puts(cx->head, "  <meta");
         if (charset)
             sb_puts(cx->head, lfmt(cx, " charset=\"%s\"", html_escape(cx, charset)));
         if (nmattr) sb_puts(cx->head, lfmt(cx, " name=\"%s\"", html_escape(cx, nmattr)));
         if (prop) sb_puts(cx->head, lfmt(cx, " property=\"%s\"", html_escape(cx, prop)));
+        if (http_equiv)
+            sb_puts(cx->head,
+                    lfmt(cx, " http-equiv=\"%s\"", html_escape(cx, http_equiv)));
         if (cont) sb_puts(cx->head, lfmt(cx, " content=\"%s\"", html_escape(cx, cont)));
         sb_puts(cx->head, ">\n");
         return;

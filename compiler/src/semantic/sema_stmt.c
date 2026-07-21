@@ -182,6 +182,10 @@ type_t *sema_check_var_decl(sema_t *s, ast_node_t *n)
             SERR(s, 2, &n->span, "cannot assign '%s' to '%s' in declaration of '%s'",
                  type_to_string(s->tc, initt), type_to_string(s->tc, declared), n->name);
         if (declared->kind == TY_DYN) n->a = coerce_to_dyn(s, declared, n->a, initt);
+        if (declared->kind == TY_VARIANT && initt->kind != TY_VARIANT) {
+            int tag = type_variant_tag(declared, initt);
+            if (tag >= 0) n->a = coerce_to_variant(s, declared, n->a, tag);
+        }
         t = declared;
     } else if (declared) {
         t = declared;
@@ -542,6 +546,11 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         if (op_valid && !type_assignable(tt, vt))
             SERR(s, 2, &n->span, "cannot assign '%s' to '%s'", type_to_string(s->tc, vt),
                  type_to_string(s->tc, tt));
+        else if (op_valid && n->op == TK_ASSIGN && tt && tt->kind == TY_VARIANT && vt &&
+                 vt->kind != TY_VARIANT) {
+            int tag = type_variant_tag(tt, vt);
+            if (tag >= 0) n->b = coerce_to_variant(s, tt, n->b, tag);
+        }
         break;
     }
     case AST_IF: {
@@ -727,6 +736,10 @@ static void check_stmt(sema_t *s, ast_node_t *n)
                          type_to_string(s->tc, ret), type_to_string(s->tc, vt));
             } else if (ret->kind == TY_DYN)
                 n->a = coerce_to_dyn(s, ret, n->a, vt);
+            else if (ret->kind == TY_VARIANT && vt->kind != TY_VARIANT) {
+                int tag = type_variant_tag(ret, vt);
+                if (tag >= 0) n->a = coerce_to_variant(s, ret, n->a, tag);
+            }
         } else if (ret->kind != TY_VOID) {
             SERR(s, 48, &n->span, "missing return value; function returns '%s'",
                  type_to_string(s->tc, ret));

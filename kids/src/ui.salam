@@ -7,7 +7,6 @@ import "layoutfx.salam"
 import "palette.salam"
 import "labels.salam"
 
-// -- cached element handles ------------------------------------------------
 mut toolboxEl := 0 as i64
 mut blockLayerEl := 0 as i64
 mut canvasWrapEl := 0 as i64
@@ -19,24 +18,10 @@ mut codePeekEl := 0 as i64
 mut boxesEl := 0 as i64
 
 pub mut selectedId := -1
-// Set/cleared by interp.salam (never read by it -- the dependency only
-// goes one way, interp -> ui, so ui.salam never imports interp.salam).
 pub mut highlightId := -1
 
-// drag.salam needs to attach a pointerdown handler to every block/tile
-// element exactly once, at creation time (re-attaching on every render()
-// would pile up duplicate listeners, since there's no cheap way to
-// unregister a freshly-made lambda). Rather than have ui.salam import
-// drag.salam -- which would make a cycle, since drag.salam already needs
-// to import ui.salam for render()/selectBlock() -- app.salam plugs these
-// two callbacks in once at startup. This keeps the dependency one-way.
-// Named functions can't be assigned as bare values in Salam (only
-// lambdas can) -- confirmed by the compiler rejecting `= someNamedFunc`
-// with "used as a value (call it)" -- so the defaults are inline no-op
-// lambdas, and app.salam plugs in real ones the same way:
-// `ui.onBlockCreated = (id: int) =>: drag.wireBlock(id) end`.
-pub mut onBlockCreated := (id: int) =>: ret end
-pub mut onTileCreated := (id: int) =>: ret end
+pub mut onBlockCreated := (id: int): ret end
+pub mut onTileCreated := (id: int): ret end
 
 pub func Init():
     toolboxEl = dom.ById("toolbox")
@@ -54,7 +39,6 @@ pub func trashHandle(): i64: ret trashEl end
 pub func canvasWrapHandle(): i64: ret canvasWrapEl end
 pub func blockLayerHandle(): i64: ret blockLayerEl end
 
-// -- toolbox ---------------------------------------------------------------
 pub func renderToolbox(mode: int):
     dom.SetHtml(toolboxEl, "")
     n := palette.toolboxCount(mode)
@@ -78,7 +62,6 @@ pub func tileId(kind: int): str:
     ret "tile_".concat(model.formatInt(kind as i64))
 end
 
-// -- notebook ---------------------------------------------------------------
 pub func clearNotebook(): dom.SetHtml(notebookEl, "") end
 
 pub func addNotebookLine(text: str):
@@ -89,7 +72,6 @@ pub func addNotebookLine(text: str):
     dom.SetProp(notebookEl, "scrollTop", dom.GetProp(notebookEl, "scrollHeight"))
 end
 
-// -- code peek ---------------------------------------------------------------
 pub func setCode(text: str): dom.SetText(codeTextEl, text) end
 
 pub func toggleCodePeek():
@@ -99,7 +81,6 @@ pub func toggleCodePeek():
     end
 end
 
-// -- block rendering ---------------------------------------------------------
 func blockContent(id: int): str:
     kind := model.blocks[id].kind
     icon := labels.icon(kind)
@@ -137,11 +118,6 @@ end
 
 func quoteText(s: str): str: ret "\"".concat(escapeHtml(s)).concat("\"") end
 
-// Child-typed text (Say messages, box names, comparison literals, ...)
-// goes into the DOM via SetHtml, not SetText, so it can sit inline next
-// to icons/labels -- which means it has to be escaped by hand here, or
-// a stray "<" typed into a Say block would be parsed as a tag instead of
-// shown as a character.
 func escapeHtml(s: str): str:
     mut r := str.Replace(s, "&", "&amp;")
     r = str.Replace(r, "<", "&lt;")
@@ -172,9 +148,6 @@ pub func refreshBlockContent(id: int):
     end
 end
 
-// Rebuilds screen positions for every block currently in the tree and
-// makes sure each has a DOM element with up to date text. Cheap enough to
-// call after every structural change (add/move/delete/edit).
 pub func render():
     model.rescanDeclaredNames()
     layoutfx.computeLayout()
@@ -202,16 +175,6 @@ pub func render():
     renderBoxes()
 end
 
-// A live, always-visible legend of every box the program mentions and
-// what's in it right now -- this is the "fetch and use a variable" story
-// made visible: a child doesn't have to remember box contents or peek at
-// generated code to know what's inside "score" or "name". Listed against
-// model.declaredNames (every box name found anywhere in the block tree,
-// see model.rescanDeclaredNames) rather than model.vars (only boxes the
-// interpreter has actually created so far), so a box shows up here the
-// moment it's configured on a Make a Box / Ask block -- not only after
-// Play has run far enough to create it -- with a "not made yet" dash
-// until it has a real value.
 pub func renderBoxes():
     if model.declaredCount == 0:
         dom.SetHtml(boxesEl, "<div class='boxesEmpty'>".concat(labels.NO_BOXES_YET).concat("</div>"))
@@ -230,11 +193,6 @@ pub func renderBoxes():
     dom.SetHtml(boxesEl, html)
 end
 
-// Recursively detaches and removes the DOM for a block and everything
-// nested/following it -- used by drag.salam right before a subtree is
-// dropped in the trash. Detached-but-kept blocks (e.g. a block lifted out
-// mid-drag to be reinserted elsewhere) must NOT go through this, only
-// true deletes.
 pub func removeSubtree(id: int):
     if id < 0: ret end
     if model.isContainer(model.blocks[id].kind):
@@ -256,7 +214,6 @@ func removeChain(headId: int):
     end
 end
 
-// -- selection / inspector ---------------------------------------------------
 pub func selectBlock(id: int):
     selectedId = id
     renderInspector()
@@ -341,15 +298,6 @@ func chipId(fieldId: str, i: int): str:
     ret "chip_".concat(fieldId).concat("_").concat(model.formatInt(i as i64))
 end
 
-// A tappable row of every box name that appears anywhere in the program
-// so far (model.declaredNames -- a static scan of the block tree, not
-// the interpreter's runtime `vars`, so a box shows up here as soon as
-// it's typed into a Make a Box / Ask block, before the child has ever
-// pressed Play), shown under any field that *refers to* a box as opposed
-// to naming a brand new one. This is the "fetch and use a variable name"
-// answer: instead of having to remember and correctly retype a box's
-// exact name, the child just taps it. Renders nothing if there are no
-// boxes yet.
 func chipsHtml(fieldId: str): str:
     if model.declaredCount == 0: ret "" end
     mut html := "<div class='chipsRow'>"
@@ -367,7 +315,7 @@ func wireChips(fieldId: str):
     until i < model.declaredCount:
         el := dom.ById(chipId(fieldId, i))
         name := model.declaredNames[i]
-        dom.OnEvent(el, "click", () =>:
+        dom.OnEvent(el, "click", ():
             dom.SetValue(dom.ById(fieldId), name)
             if fieldId == "f_textA": model.blocks[selectedId].textA = name end
             if fieldId == "f_textB": model.blocks[selectedId].textB = name end
@@ -377,12 +325,6 @@ func wireChips(fieldId: str):
     end
 end
 
-// Only wires the fields renderInspector() actually put in the DOM for
-// this kind -- dom.ById returns JS `null` for a missing id, and `null`
-// is not `== 0` once compiled, so the `if el == 0: ret end` guards in
-// wireTextField/wireNumberField/wireOpButton never caught it. Wiring
-// unconditionally crashed the moment a kind without a number field (Say,
-// for instance) tried to addEventListener on that null.
 func wireInspectorInputs(kind: int):
     if kind == model.KIND_SAY:
         wireTextField("f_textA")
@@ -413,9 +355,9 @@ func wireInspectorInputs(kind: int):
 end
 
 func wireTextField(id: str):
+    if !dom.Exists(id): ret end
     el := dom.ById(id)
-    if el == 0: ret end
-    dom.OnEvent(el, "input", () =>:
+    dom.OnEvent(el, "input", ():
         v := dom.GetValue(el)
         if id == "f_textA": model.blocks[selectedId].textA = v end
         if id == "f_textB": model.blocks[selectedId].textB = v end
@@ -424,9 +366,9 @@ func wireTextField(id: str):
 end
 
 func wireNumberField(id: str):
+    if !dom.Exists(id): ret end
     el := dom.ById(id)
-    if el == 0: ret end
-    dom.OnEvent(el, "input", () =>:
+    dom.OnEvent(el, "input", ():
         v := dom.GetValue(el)
         model.blocks[selectedId].numA = model.parseNumber(v)
         render()
@@ -434,9 +376,10 @@ func wireNumberField(id: str):
 end
 
 func wireOpButton(op: int):
-    el := dom.ById("op_".concat(model.formatInt(op as i64)))
-    if el == 0: ret end
-    dom.OnEvent(el, "click", () =>:
+    id := "op_".concat(model.formatInt(op as i64))
+    if !dom.Exists(id): ret end
+    el := dom.ById(id)
+    dom.OnEvent(el, "click", ():
         model.blocks[selectedId].op = op
         renderInspector()
         render()

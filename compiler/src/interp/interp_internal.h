@@ -109,6 +109,7 @@ typedef struct {
     clock_t deadline;
     unsigned depth;
     int match_expr_depth;
+    flow_t pending_flow;
 } interp_t;
 
 typedef enum {

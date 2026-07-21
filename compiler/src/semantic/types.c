@@ -391,6 +391,9 @@ static bool type_implicit(const type_t *src, const type_t *dst)
     if (src->kind == TY_UCHAR && dst->kind == TY_STR) return true;
 
     if (dst->kind == TY_DYN && src->kind == TY_STRUCT) return true;
+    if (dst->kind == TY_VARIANT && src->kind != TY_VARIANT &&
+        type_variant_tag(dst, src) >= 0)
+        return true;
     if (type_is_signed(src) && type_is_signed(dst))
         return int_rank(src->kind) <= int_rank(dst->kind);
     if (type_is_integer(src) && !type_is_signed(src) && type_is_integer(dst) &&

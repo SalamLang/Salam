@@ -305,11 +305,11 @@ static ast_node_t *parse_match_arm(parser_t *p)
             ast_add(p->a, arm, parse_match_pattern(p));
         } while (p_match(p, TK_COMMA));
     }
-    p_expect(p, TK_FAT_ARROW, "'=>' in match arm");
     is_block = p_at(p, TK_COLON);
     if (is_block) {
         arm->b = parse_block(p);
     } else {
+        p_expect(p, TK_FAT_ARROW, "'=>' in match arm");
         ast_node_t *e = parse_expr(p);
         ast_node_t *blk = ast_new(p->a, AST_BLOCK, e ? &e->span : &p_peek(p)->span);
         ast_node_t *es = ast_new(p->a, AST_EXPR_STMT, e ? &e->span : &p_peek(p)->span);

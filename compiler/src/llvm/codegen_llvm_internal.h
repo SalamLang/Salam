@@ -207,6 +207,16 @@ const char *ll_slice_elem(ll_t *ll, const char *ts);
 
 const char *ll_struct_ltype(ll_t *ll, const char *name);
 
+size_t ll_variant_members(const char *ts, char members[][160], size_t max_members);
+
+const char *ll_variant_cname(ll_t *ll, const char *ts);
+
+void ll_ensure_variant_type(ll_t *ll, const char *ts);
+
+void ll_type_layout(ll_t *ll, const char *ts, size_t *out_size, size_t *out_align);
+
+int ll_variant_tag_of(const char *variant_ts, const char *member_ts);
+
 symbol_t *ll_sym(ll_t *ll, const char *name);
 
 symbol_t *ll_struct_sym(ll_t *ll, const char *name);
@@ -259,7 +269,7 @@ void ll_ensure_fn(ll_t *ll, ast_node_t *fn, symbol_t *owner, scope_t *pscope);
 
 const char *ll_box_dyn(ll_t *ll, llv_t v, const char *iface);
 
-const char *ll_box_variant(ll_t *ll, llv_t v, int tag);
+const char *ll_box_variant(ll_t *ll, llv_t v, int tag, const char *variant_ts);
 
 llv_t ll_unwrap_variant(ll_t *ll, llv_t v, const char *member_ts);
 

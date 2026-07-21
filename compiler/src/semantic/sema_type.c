@@ -145,6 +145,27 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
 
     if (tnode->name && strcmp(tnode->name, "File") == 0) {
         base = type_file(s->tc);
+    } else if (tnode->name && strcmp(tnode->name, "Variant") == 0) {
+        if (tnode->list.len < 2) {
+            SERR(s, 1, &tnode->span,
+                 "'Variant' requires at least 2 type arguments (got %zu)",
+                 tnode->list.len);
+            base = err_ty(s);
+        } else {
+            type_t *members[64];
+            size_t n = tnode->list.len;
+            if (n > 64) n = 64;
+            {
+                size_t i = 0;
+                for (; i < n; i++) {
+                    members[i] = sema_resolve_type(s, (ast_node_t *)tnode->list.data[i]);
+                    if (members[i] && members[i]->kind == TY_VARIANT)
+                        SERR(s, 1, &tnode->span,
+                             "'Variant' cannot contain another 'Variant' as a member");
+                }
+            }
+            base = type_variant(s->tc, members, n);
+        }
     } else if (pk >= 0) {
         base = ty(s, (type_kind_t)pk);
     } else if (generic_template(s, tnode->name, SYM_STRUCT)) {

@@ -309,6 +309,7 @@ type_t *sema_check_match(sema_t *s, ast_node_t *n, bool is_expr, type_t *expecte
                 if (!covered)
                     o = sal_catf(buf, sizeof(buf), o, "%s%s", o ? ", " : "", m->name);
             }
+            if (mi < sy->members->symbols.len) o = sal_catf(buf, sizeof(buf), o, ", ...");
             SWARN(s, 80, &n->span,
                   "non-exhaustive match on enum '%s': missing member(s) %s", sy->name,
                   buf);
@@ -332,6 +333,7 @@ type_t *sema_check_match(sema_t *s, ast_node_t *n, bool is_expr, type_t *expecte
                     o = sal_catf(buf, sizeof(buf), o, "%s%s", o ? ", " : "",
                                  type_to_string(s->tc, (type_t *)subj->params.data[ti]));
             }
+            if (ti < total) o = sal_catf(buf, sizeof(buf), o, ", ...");
             SERR(s, 79, &n->span,
                  "non-exhaustive match on Variant '%s': missing case(s) for %s",
                  type_to_string(s->tc, subj), buf);
@@ -387,7 +389,7 @@ type_t *sema_check_match(sema_t *s, ast_node_t *n, bool is_expr, type_t *expecte
                 type_t *members[64];
                 size_t nmem = 0;
                 k = 0;
-                for (; k < arm_types.len && nmem < 64; k++) {
+                for (; k < arm_types.len; k++) {
                     type_t *t = (type_t *)arm_types.data[k];
                     size_t j;
                     bool dup = false;
@@ -397,7 +399,13 @@ type_t *sema_check_match(sema_t *s, ast_node_t *n, bool is_expr, type_t *expecte
                             dup = true;
                             break;
                         }
-                    if (!dup) members[nmem++] = t;
+                    if (dup) continue;
+                    if (nmem >= 64) {
+                        SERR(s, 1, &n->span,
+                             "match expression has too many distinct arm types (max 64)");
+                        break;
+                    }
+                    members[nmem++] = t;
                 }
                 unified = type_variant(s->tc, members, nmem);
             }

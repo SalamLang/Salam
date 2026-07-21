@@ -99,6 +99,7 @@ static const intrinsic_name_t k_intrinsic_types[] = {
     {"نگاشت", "خريطة", "HashMap"},
     {"پیمایشگرنگاشت", "مكررخريطة", "MapIter"},
     {"پرونده", "ملف", "File"},
+    {"گوناگون", "متنوع", "Variant"},
 };
 
 static const intrinsic_name_t k_intrinsic_methods[] = {

@@ -307,10 +307,12 @@ static value_t eval_match(interp_t *I, env_t *env, ast_node_t *n)
         frame_t fr;
         value_t val = val_null();
         int saved_depth = I->match_expr_depth;
+        flow_t f;
         vec_init(&fr.defers);
         I->match_expr_depth = saved_depth + 1;
-        exec_list(I, c, &fr, &arm->b->list, &val);
+        f = exec_list(I, c, &fr, &arm->b->list, &val);
         I->match_expr_depth = saved_depth;
+        if (f == FLOW_BREAK || f == FLOW_CONTINUE) I->pending_flow = f;
         {
             size_t i = fr.defers.len;
             for (; i > 0; i--) {

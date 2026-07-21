@@ -105,6 +105,10 @@ type_t *check_struct_lit(sema_t *s, ast_node_t *n)
                      type_to_string(s->tc, vt), type_to_string(s->tc, f->type));
             } else if (f->type && f->type->kind == TY_DYN) {
                 fi->a = coerce_to_dyn(s, f->type, fi->a, vt);
+            } else if (f->type && f->type->kind == TY_VARIANT && vt &&
+                       vt->kind != TY_VARIANT) {
+                int tag = type_variant_tag(f->type, vt);
+                if (tag >= 0) fi->a = coerce_to_variant(s, f->type, fi->a, tag);
             }
             if (f) decorate(s, fi, f->type);
         }

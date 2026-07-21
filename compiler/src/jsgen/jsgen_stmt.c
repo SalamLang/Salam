@@ -306,6 +306,14 @@ void jsg_stmt(jg_t *g, ast_node_t *n)
         vec_push(cg->a, &cg->fn_defers, n->a);
         break;
     case AST_RETURN:
+        if (cg->match_result_tmp) {
+            if (n->a)
+                cg_line(cg, "%s = %s; break %s;", cg->match_result_tmp, jsg_expr(g, n->a),
+                        cg->match_end_label);
+            else
+                cg_line(cg, "break %s;", cg->match_end_label);
+            break;
+        }
         jsg_emit_defers(g);
         if (n->a)
             cg_line(cg, "return %s;", jsg_expr(g, n->a));

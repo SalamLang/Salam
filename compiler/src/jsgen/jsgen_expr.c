@@ -917,6 +917,16 @@ static const char *jsg_call_pkg(jg_t *g, ast_node_t *n, symbol_t *pk, ast_node_t
     }
 }
 
+static const char *jsg_call_array(jg_t *g, ast_node_t *n, ast_node_t *obj,
+                                  ast_node_t *callee)
+{
+    cg_t *cg = &g->cg;
+    (void)n;
+    if (!strcmp(callee->name, "len"))
+        return cg_fmt(cg, "%s.length", jsg_expr_p(g, obj, JSP_MEMBER));
+    return "0";
+}
+
 static const char *jsg_call_str(jg_t *g, ast_node_t *n, ast_node_t *obj,
                                 ast_node_t *callee)
 {
@@ -1000,6 +1010,8 @@ static const char *jsg_call_member(jg_t *g, ast_node_t *n, ast_node_t *callee)
         if (!strncmp(objts, "dyn ", 4)) return jsg_unsupported(g, "dyn interface call");
         if (!strcmp(objts, "File*")) return jsg_unsupported(g, "File");
         if (!strcmp(objts, "str")) return jsg_call_str(g, n, obj, callee);
+        if (cg_is_slice_ts(objts) || (objts && strchr(objts, '[')))
+            return jsg_call_array(g, n, obj, callee);
         return jsg_call_method(g, n, obj, callee, objts);
     }
 }
@@ -1100,15 +1112,21 @@ static const char *jsg_lambda(jg_t *g, ast_node_t *n)
             } else {
                 sb_t *saved = cg->c;
                 sb_t body;
+                const char *saved_mres = cg->match_result_tmp;
+                const char *saved_mlbl = cg->match_end_label;
                 sb_init(&body);
                 cg->c = &body;
                 cg->indent++;
+                cg->match_result_tmp = NULL;
+                cg->match_end_label = NULL;
                 if (n->a && n->a->kind == AST_BLOCK) {
                     jsg_block(g, n->a);
                     jsg_emit_defers(g);
                 } else if (n->a) {
                     cg_line(cg, "return %s;", jsg_expr_p(g, n->a, 0));
                 }
+                cg->match_result_tmp = saved_mres;
+                cg->match_end_label = saved_mlbl;
                 cg->indent--;
                 cg->c = saved;
                 {
@@ -1226,38 +1244,123 @@ const char *jsg_match_arm_cond(jg_t *g, ast_node_t *arm, const char *subj_var,
     return r;
 }
 
+static bool jsg_list_has_break_continue(ast_node_t *block);
+
+static bool jsg_stmt_has_break_continue(ast_node_t *n)
+{
+    if (!n) return false;
+    switch (n->kind) {
+    case AST_BREAK:
+    case AST_CONTINUE:
+        return true;
+    case AST_BLOCK:
+        return jsg_list_has_break_continue(n);
+    case AST_IF:
+        if (jsg_list_has_break_continue(n->b)) return true;
+        if (n->c)
+            return n->c->kind == AST_IF ? jsg_stmt_has_break_continue(n->c)
+                                        : jsg_list_has_break_continue(n->c);
+        return false;
+    case AST_MATCH: {
+        size_t i = 0;
+        for (; i < n->list.len; i++) {
+            ast_node_t *arm = (ast_node_t *)n->list.data[i];
+            if (jsg_list_has_break_continue(arm->b)) return true;
+        }
+        return false;
+    }
+    /* break/continue inside a nested loop targets that loop, not any
+     * match expression enclosing it, so don't recurse into loop bodies. */
+    case AST_UNTIL:
+    case AST_REPEAT:
+    case AST_EACH:
+    case AST_FOR:
+        return false;
+    default:
+        return false;
+    }
+}
+
+static bool jsg_list_has_break_continue(ast_node_t *block)
+{
+    if (!block) return false;
+    size_t i = 0;
+    for (; i < block->list.len; i++)
+        if (jsg_stmt_has_break_continue((ast_node_t *)block->list.data[i])) return true;
+    return false;
+}
+
 static const char *jsg_match_expr(jg_t *g, ast_node_t *n)
 {
     cg_t *cg = &g->cg;
     int t = ++cg->tmpn;
     const char *subj_var = cg_fmt(cg, "__msubj%d", t);
-    sb_t *saved_out = cg->c;
-    sb_t inner;
-    int saved_indent = cg->indent;
-    size_t mark = cg->locals.len;
-    const char *body;
-    sb_init(&inner);
-    cg->c = &inner;
-    cg->indent = 0;
-    cg_line(cg, "const %s = %s;", subj_var, jsg_expr(g, n->a));
-    {
-        size_t i = 0;
-        for (; i < n->list.len; i++) {
-            ast_node_t *arm = (ast_node_t *)n->list.data[i];
-            const char *cond = jsg_match_arm_cond(g, arm, subj_var, n->a->type_str);
-            cg_line(cg, "%sif (%s) {", i ? "} else " : "", cond);
-            cg->indent++;
-            jsg_block(g, arm->b);
-            cg->indent--;
+    bool hoist = jsg_stmt_has_break_continue(n);
+
+    if (hoist) {
+        /* An arm contains break/continue meant for a loop enclosing this
+         * match expression. Wrapping arms in an IIFE (the usual path below)
+         * would make those statements target the arrow function instead,
+         * which is invalid JS. Emit the arms as plain statements hoisted
+         * in place, using a labeled block + break for the arm's value
+         * instead of an arrow-function return. */
+        const char *res_var = cg_fmt(cg, "__mres%d", t);
+        const char *lbl = cg_fmt(cg, "__mlbl%d", t);
+        const char *saved_tmp = cg->match_result_tmp;
+        const char *saved_lbl = cg->match_end_label;
+        cg_line(cg, "let %s;", res_var);
+        cg_line(cg, "%s: {", lbl);
+        cg->indent++;
+        cg_line(cg, "const %s = %s;", subj_var, jsg_expr(g, n->a));
+        cg->match_result_tmp = res_var;
+        cg->match_end_label = lbl;
+        {
+            size_t i = 0;
+            for (; i < n->list.len; i++) {
+                ast_node_t *arm = (ast_node_t *)n->list.data[i];
+                const char *cond = jsg_match_arm_cond(g, arm, subj_var, n->a->type_str);
+                cg_line(cg, "%sif (%s) {", i ? "} else " : "", cond);
+                cg->indent++;
+                jsg_block(g, arm->b);
+                cg->indent--;
+            }
         }
+        if (n->list.len) cg_line(cg, "}");
+        cg->match_result_tmp = saved_tmp;
+        cg->match_end_label = saved_lbl;
+        cg->indent--;
+        cg_line(cg, "}");
+        return res_var;
     }
-    if (n->list.len) cg_line(cg, "}");
-    cg->c = saved_out;
-    cg->indent = saved_indent;
-    cg->locals.len = mark;
-    body = cg_fmt(cg, "%s", sb_cstr(&inner));
-    sb_free(&inner);
-    return cg_fmt(cg, "(() => {\n%s})()", body);
+    {
+        sb_t *saved_out = cg->c;
+        sb_t inner;
+        int saved_indent = cg->indent;
+        size_t mark = cg->locals.len;
+        const char *body;
+        sb_init(&inner);
+        cg->c = &inner;
+        cg->indent = 0;
+        cg_line(cg, "const %s = %s;", subj_var, jsg_expr(g, n->a));
+        {
+            size_t i = 0;
+            for (; i < n->list.len; i++) {
+                ast_node_t *arm = (ast_node_t *)n->list.data[i];
+                const char *cond = jsg_match_arm_cond(g, arm, subj_var, n->a->type_str);
+                cg_line(cg, "%sif (%s) {", i ? "} else " : "", cond);
+                cg->indent++;
+                jsg_block(g, arm->b);
+                cg->indent--;
+            }
+        }
+        if (n->list.len) cg_line(cg, "}");
+        cg->c = saved_out;
+        cg->indent = saved_indent;
+        cg->locals.len = mark;
+        body = cg_fmt(cg, "%s", sb_cstr(&inner));
+        sb_free(&inner);
+        return cg_fmt(cg, "(() => {\n%s})()", body);
+    }
 }
 
 const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)

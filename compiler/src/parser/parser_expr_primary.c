@@ -18,24 +18,45 @@
 static ast_node_t *parse_lambda(parser_t *p);
 static ast_node_t *parse_array_lit(parser_t *p);
 static ast_node_t *parse_struct_lit(parser_t *p);
-static bool lambda_ahead(const parser_t *p)
+
+/* Every lambda parameter is mandatorily typed ('name: Type'), so a
+ * parenthesized group can only be a lambda header if it fully matches that
+ * shape. This tells '(' ... '):' apart from a grouped expression that
+ * simply happens to precede a ':' (e.g. an 'if (a) || (b):' condition) by
+ * speculatively parsing it and rolling back on any mismatch. */
+static bool lambda_ahead(parser_t *p)
 {
     if (!p_at(p, TK_LPAREN)) return false;
-    size_t i = p->pos;
-    int depth = 0;
-    for (; i < p->count; i++) {
-        token_kind_t k = token_stream_at(p->toks, i)->kind;
-        if (k == TK_LPAREN)
-            depth++;
-        else if (k == TK_RPAREN) {
-            if (--depth == 0) {
-                i++;
+    size_t save_pos = p->pos;
+    bool save_panic = p->panic;
+    bool save_had_error = p->had_error;
+    p->panic = true;
+
+    p_advance(p);
+    bool ok = true;
+    if (!p_at(p, TK_RPAREN)) {
+        do {
+            if (!p_at(p, TK_IDENT)) {
+                ok = false;
                 break;
             }
-        } else if (k == TK_EOF)
-            return false;
+            p_advance(p);
+            if (!p_at(p, TK_COLON)) {
+                ok = false;
+                break;
+            }
+            parse_type_anno(p);
+        } while (p_match(p, TK_COMMA));
     }
-    return i < p->count && token_stream_at(p->toks, i)->kind == TK_FAT_ARROW;
+    if (ok) ok = p_at(p, TK_RPAREN);
+    if (ok) p_advance(p);
+    token_kind_t next = ok ? p_peek(p)->kind : TK_EOF;
+    bool is_lambda = ok && (next == TK_FAT_ARROW || next == TK_COLON);
+
+    p->pos = save_pos;
+    p->panic = save_panic;
+    p->had_error = save_had_error;
+    return is_lambda;
 }
 
 static const char *builtin_callable_name(token_kind_t k)
@@ -149,10 +170,10 @@ static ast_node_t *parse_lambda(parser_t *p)
         } while (p_match(p, TK_COMMA));
     }
     p_expect(p, TK_RPAREN, "')' after lambda parameters");
-    p_expect(p, TK_FAT_ARROW, "'=>' in lambda");
     if (p_at(p, TK_COLON)) {
         n->a = parse_block(p);
     } else {
+        p_expect(p, TK_FAT_ARROW, "'=>' in lambda");
         ast_node_t *e = parse_expr(p);
         ast_node_t *blk = ast_new(p->a, AST_BLOCK, e ? &e->span : &p_peek(p)->span);
         ast_node_t *ret = ast_new(p->a, AST_RETURN, e ? &e->span : &p_peek(p)->span);

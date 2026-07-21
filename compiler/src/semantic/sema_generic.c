@@ -266,6 +266,24 @@ void coerce_args_to_dyn(sema_t *s, ast_node_t *call, vec_t *argtypes, func_sig_t
     }
 }
 
+void coerce_args_to_variant(sema_t *s, ast_node_t *call, vec_t *argtypes, func_sig_t *sig)
+{
+    if (!sig) return;
+    {
+        size_t i = 0;
+        for (; i < call->list.len && i < sig->params.len && i < argtypes->len; i++) {
+            type_t *pt = (type_t *)sig->params.data[i];
+            type_t *at = (type_t *)argtypes->data[i];
+            if (pt && pt->kind == TY_VARIANT && at && at->kind != TY_VARIANT) {
+                int tag = type_variant_tag(pt, at);
+                if (tag >= 0)
+                    call->list.data[i] =
+                        coerce_to_variant(s, pt, (ast_node_t *)call->list.data[i], tag);
+            }
+        }
+    }
+}
+
 symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes,
                                const src_span_t *span)
 {

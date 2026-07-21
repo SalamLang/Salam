@@ -415,28 +415,32 @@ const char *ll_box_dyn(ll_t *ll, llv_t v, const char *iface)
     return t1;
 }
 
-const char *ll_box_variant(ll_t *ll, llv_t v, int tag)
+const char *ll_box_variant(ll_t *ll, llv_t v, int tag, const char *variant_ts)
 {
-    const char *cty = ll_ty(ll, v.ts);
-    const char *szp = ll_new_tmp(ll), *sz = ll_new_tmp(ll), *data = ll_new_tmp(ll);
-    ll_emit(ll, "%s = getelementptr %s, ptr null, i32 1", szp, cty);
-    ll_emit(ll, "%s = ptrtoint ptr %s to %s", sz, szp, ll->usize);
-    ll_emit(ll, "%s = call ptr @malloc(%s %s)", data, ll->usize, sz);
-    ll_emit(ll, "store %s %s, ptr %s", cty, v.ref, data);
-    {
-        const char *t0 = ll_new_tmp(ll), *t1 = ll_new_tmp(ll);
-        ll_emit(ll, "%s = insertvalue %%variant undef, i32 %d, 0", t0, tag);
-        ll_emit(ll, "%s = insertvalue %%variant %s, ptr %s, 1", t1, t0, data);
-        return t1;
-    }
+    const char *VT = ll_ty(ll, variant_ts);
+    const char *slot = ll_new_tmp(ll);
+    const char *tagp = ll_new_tmp(ll);
+    const char *payp = ll_new_tmp(ll);
+    const char *result = ll_new_tmp(ll);
+    ll_emit_alloca(ll, "%s = alloca %s", slot, VT);
+    ll_emit(ll, "%s = getelementptr %s, ptr %s, i32 0, i32 0", tagp, VT, slot);
+    ll_emit(ll, "store i32 %d, ptr %s", tag, tagp);
+    ll_emit(ll, "%s = getelementptr %s, ptr %s, i32 0, i32 1", payp, VT, slot);
+    ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, v.ts), v.ref, payp);
+    ll_emit(ll, "%s = load %s, ptr %s", result, VT, slot);
+    return result;
 }
 
 llv_t ll_unwrap_variant(ll_t *ll, llv_t v, const char *member_ts)
 {
-    const char *p = ll_new_tmp(ll);
+    const char *VT = ll_ty(ll, v.ts);
+    const char *slot = ll_new_tmp(ll);
+    const char *payp = ll_new_tmp(ll);
     const char *r = ll_new_tmp(ll);
-    ll_emit(ll, "%s = extractvalue %%variant %s, 1", p, v.ref);
-    ll_emit(ll, "%s = load %s, ptr %s", r, ll_ty(ll, member_ts), p);
+    ll_emit_alloca(ll, "%s = alloca %s", slot, VT);
+    ll_emit(ll, "store %s %s, ptr %s", VT, v.ref, slot);
+    ll_emit(ll, "%s = getelementptr %s, ptr %s, i32 0, i32 1", payp, VT, slot);
+    ll_emit(ll, "%s = load %s, ptr %s", r, ll_ty(ll, member_ts), payp);
     return (llv_t){r, member_ts};
 }
 
@@ -531,6 +535,8 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     ast_node_t *saved_lam = ll->cur_lambda;
     const char *saved_env = ll->env_ref, *saved_envty = ll->env_ty;
     vec_t saved_locals = ll->locals, saved_defers = ll->defers;
+    const char *saved_mres = ll->match_result_ptr, *saved_mts = ll->match_result_ts,
+               *saved_mmerge = ll->match_merge_block;
 
     ll->b = &body;
     ll->allocas = &allocs;
@@ -545,6 +551,9 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     ll->cur_lambda = n;
     ll->env_ref = "%env";
     ll->env_ty = envty;
+    ll->match_result_ptr = NULL;
+    ll->match_result_ts = NULL;
+    ll->match_merge_block = NULL;
     vec_init(&ll->locals);
     vec_init(&ll->defers);
 
@@ -607,6 +616,9 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     ll->env_ty = saved_envty;
     ll->locals = saved_locals;
     ll->defers = saved_defers;
+    ll->match_result_ptr = saved_mres;
+    ll->match_result_ts = saved_mts;
+    ll->match_merge_block = saved_mmerge;
 }
 
 static bool ll_text_is_int(const char *s)

@@ -126,6 +126,9 @@ ast_node_t *coerce_to_variant(sema_t *s, type_t *variant, ast_node_t *expr, int 
 
 void coerce_args_to_dyn(sema_t *s, ast_node_t *call, vec_t *argtypes, func_sig_t *sig);
 
+void coerce_args_to_variant(sema_t *s, ast_node_t *call, vec_t *argtypes,
+                            func_sig_t *sig);
+
 type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode);
 
 type_t *sema_check_expr(sema_t *s, ast_node_t *node);

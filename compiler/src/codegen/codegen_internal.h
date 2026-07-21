@@ -39,6 +39,7 @@ typedef struct {
     int tmpn;
     bool cur_sret;
     vec_t vec_types;
+    vec_t variant_types;
     vec_t dyn_ifaces;
     vec_t dyn_impls;
     const char *pkg;
@@ -82,6 +83,12 @@ bool cg_is_int_typestr(const char *ts);
 void cg_vec_elem(const char *ts, char *ebuf, size_t cap);
 
 const char *cg_vec_cname(cg_t *cg, const char *ts);
+
+size_t cg_variant_members(const char *ts, char members[][160], size_t max_members);
+
+const char *cg_variant_cname(cg_t *cg, const char *ts);
+
+int cg_variant_tag_of(const char *variant_ts, const char *member_ts);
 
 bool cg_is_slice_ts(const char *ts);
 

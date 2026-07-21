@@ -47,7 +47,7 @@ option(SALAM_BUILD_TESTS "Enable the `test` target (runs tools/bash/run-tests.sh
 set(SALAM_SRC_DIRS
     core source condcomp logger xml diag i18n langpack
     token lexer ast parser semantic codegen jsgen llvm interp
-    layout fmt cli driver)
+    layout fmt cli driver minify)
 
 set(SALAM_SOURCES "")
 foreach(_dir IN LISTS SALAM_SRC_DIRS)

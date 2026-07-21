@@ -21,11 +21,11 @@ export default {
         return landingPage();
       }
 
-      if (url.pathname === "/v1/run" && request.method === "POST") {
+      if (url.pathname === "/run" && request.method === "POST") {
         return await handleRun(request, env, url, requestId);
       }
 
-      if (url.pathname === "/v1/version" && request.method === "GET") {
+      if (url.pathname === "/version" && request.method === "GET") {
         return await handleVersion(env, requestId);
       }
 

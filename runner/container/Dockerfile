@@ -22,7 +22,7 @@ RUN set -eu; \
     && mv salam-linux /opt/salam \
     && rm -f /opt/salam/RUN-ME.txt salam.zip \
     && chmod +x /opt/salam/salam \
-    && echo -n "${VERSION}" > /opt/salam/VERSION
+    && printf '%s' "${VERSION}" > /opt/salam/VERSION
 
 FROM golang:1.23-bookworm AS build
 WORKDIR /src
@@ -49,4 +49,6 @@ ENV SALAM_STD=/opt/salam/std
 USER sandbox
 WORKDIR /work
 EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["/opt/salam/sandbox-server", "-healthcheck"]
 ENTRYPOINT ["/opt/salam/sandbox-server"]

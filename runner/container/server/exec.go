@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -44,11 +43,7 @@ func runSalam(ctx context.Context, req runRequest, timeout time.Duration, reqID 
 
 	timedOut := runCtx.Err() == context.DeadlineExceeded
 	if timedOut && cmd.Process != nil {
-		// Belt-and-suspenders: kill the whole process group in case salam
-		// forked children directly. With the shell removed from the image,
-		// system()/popen() already fail outright rather than spawning
-		// anything, so this mainly guards future FFI additions.
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		if err := killProcessTree(cmd.Process.Pid); err != nil {
 			log.Printf("run warning id=%s stage=kill_process_group error=%q", reqID, err)
 		}
 	}
@@ -62,9 +57,6 @@ func runSalam(ctx context.Context, req runRequest, timeout time.Duration, reqID 
 	return resp, http.StatusOK
 }
 
-// buildSalamCmd wires up the salam invocation: isolated env, its own
-// process group (so a timeout can kill any children too), and byte-capped
-// stdout/stderr capture.
 func buildSalamCmd(runCtx context.Context, req runRequest, srcPath, jobDir string) (*exec.Cmd, *capBuffer, *capBuffer) {
 	cmd := exec.CommandContext(runCtx, salamBin, buildArgs(req, srcPath)...)
 	cmd.Dir = jobDir
@@ -73,7 +65,7 @@ func buildSalamCmd(runCtx context.Context, req runRequest, srcPath, jobDir strin
 		"HOME=" + jobDir,
 		"TMPDIR=" + jobDir,
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcessGroup(cmd)
 
 	stdoutBuf := &capBuffer{limit: maxOutputBytes}
 	stderrBuf := &capBuffer{limit: maxOutputBytes}
@@ -111,8 +103,6 @@ func buildRunResponse(waitErr error, stdoutBuf, stderrBuf *capBuffer, duration t
 func buildArgs(req runRequest, srcPath string) []string {
 	lang := "--lang=" + req.Language
 	if req.Type == reqTypeLayout {
-		// --inline folds generated CSS/JS into a single self-contained HTML
-		// document, so the sandbox only has to read one artifact back.
 		return []string{reqTypeLayout, "build", srcPath, "--inline", lang}
 	}
 	if req.Engine == engineLLVM {

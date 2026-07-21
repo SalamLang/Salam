@@ -26,3 +26,16 @@ func writeError(w http.ResponseWriter, status int, reqID, errCode, message strin
 	log.Printf("reject id=%s status=%d error=%s message=%q", reqID, status, errCode, message)
 	writeJSON(w, status, runResponse{OK: false, Error: errCode, Message: message, RequestID: reqID})
 }
+
+func runHealthcheck() int {
+	client := http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://127.0.0.1:8080/healthz")
+	if err != nil {
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 1
+	}
+	return 0
+}

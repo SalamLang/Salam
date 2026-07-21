@@ -167,6 +167,39 @@ type_t *type_func(type_ctx_t *tc, type_t *ret, const vec_t *params)
     return t;
 }
 
+type_t *type_variant(type_ctx_t *tc, type_t **members, size_t n)
+{
+    type_t *t = (type_t *)arena_alloc(tc->a, sizeof(*t));
+    memset(t, 0, sizeof(*t));
+    t->kind = TY_VARIANT;
+    vec_init(&t->params);
+    {
+        size_t i = 0;
+        for (; i < n; i++) {
+            bool dup = false;
+            size_t j = 0;
+            for (; j < t->params.len; j++)
+                if (type_equiv((type_t *)t->params.data[j], members[i])) {
+                    dup = true;
+                    break;
+                }
+            if (!dup) vec_push(tc->a, &t->params, members[i]);
+        }
+    }
+    return t;
+}
+
+int type_variant_tag(const type_t *variant, const type_t *member)
+{
+    if (!variant || variant->kind != TY_VARIANT) return -1;
+    {
+        size_t i = 0;
+        for (; i < variant->params.len; i++)
+            if (type_equiv((type_t *)variant->params.data[i], member)) return (int)i;
+    }
+    return -1;
+}
+
 static int prim_fold(const char **p)
 {
     const unsigned char *s = (const unsigned char *)*p;
@@ -334,6 +367,16 @@ bool type_equiv(const type_t *a, const type_t *b)
         }
         return true;
     }
+    case TY_VARIANT: {
+        if (a->params.len != b->params.len) return false;
+        {
+            size_t i = 0;
+            for (; i < a->params.len; i++)
+                if (!type_equiv((type_t *)a->params.data[i], (type_t *)b->params.data[i]))
+                    return false;
+        }
+        return true;
+    }
     default:
         return true;
     }
@@ -348,6 +391,9 @@ static bool type_implicit(const type_t *src, const type_t *dst)
     if (src->kind == TY_UCHAR && dst->kind == TY_STR) return true;
 
     if (dst->kind == TY_DYN && src->kind == TY_STRUCT) return true;
+    if (dst->kind == TY_VARIANT && src->kind != TY_VARIANT &&
+        type_variant_tag(dst, src) >= 0)
+        return true;
     if (type_is_signed(src) && type_is_signed(dst))
         return int_rank(src->kind) <= int_rank(dst->kind);
     if (type_is_integer(src) && !type_is_signed(src) && type_is_integer(dst) &&
@@ -503,6 +549,18 @@ const char *type_to_string(type_ctx_t *tc, const type_t *t)
                              type_to_string(tc, (type_t *)t->params.data[i]));
         }
         o = sal_catf(buf, sizeof(buf), o, ") %s", type_to_string(tc, t->elem));
+        return arena_strdup(tc->a, buf);
+    }
+    case TY_VARIANT: {
+        char buf[256];
+        size_t o = sal_catf(buf, sizeof(buf), 0, "Variant<");
+        {
+            size_t i = 0;
+            for (; i < t->params.len && o < sizeof(buf) - 32; i++)
+                o = sal_catf(buf, sizeof(buf), o, "%s%s", i ? ", " : "",
+                             type_to_string(tc, (type_t *)t->params.data[i]));
+        }
+        o = sal_catf(buf, sizeof(buf), o, ">");
         return arena_strdup(tc->a, buf);
     }
     }

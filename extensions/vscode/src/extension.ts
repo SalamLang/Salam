@@ -194,8 +194,10 @@ async function formatText(text: string, lang: string): Promise<string | null> {
   } finally {
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
-    } catch {
-      /* best-effort cleanup */
+    } catch (e) {
+      output.appendLine(
+        `[fmt] warning: failed to clean up temp dir ${tmpDir}: ${(e as Error)?.message ?? String(e)}`,
+      );
     }
   }
 }

@@ -167,6 +167,14 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         vec_push(cg->a, &cg->fn_defers, n->a);
         break;
     case AST_RETURN:
+        if (cg->match_result_tmp) {
+            if (n->a)
+                cg_line(cg, "%s = (%s); goto %s;", cg->match_result_tmp,
+                        cg_expr(cg, n->a), cg->match_end_label);
+            else
+                cg_line(cg, "goto %s;", cg->match_end_label);
+            break;
+        }
         cg_emit_defers(cg);
         if (n->a && cg->cur_sret)
             cg_line(cg, "*__ret = (%s); return;", cg_expr(cg, n->a));
@@ -175,6 +183,36 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         else
             cg_line(cg, "return;");
         break;
+    case AST_MATCH: {
+        const char *subj_ts = n->a->type_str;
+        int t = ++cg->tmpn;
+        const char *subj_var = cg_fmt(cg, "__msubj%d", t);
+        cg_line(cg, "{");
+        cg->indent++;
+        cg_line(cg, "%s %s = (%s);", cg_ctype(cg, subj_ts ? subj_ts : "int32_t"),
+                subj_var, cg_expr(cg, n->a));
+        {
+            size_t i = 0;
+            for (; i < n->list.len; i++) {
+                ast_node_t *arm = (ast_node_t *)n->list.data[i];
+                const char *cond = cg_match_arm_cond(cg, arm, subj_var, subj_ts);
+                cg_line(cg, "%sif (%s) {", i ? "} else " : "", cond);
+                cg->indent++;
+                {
+                    size_t mark = cg->locals.len;
+                    size_t j = 0;
+                    for (; j < arm->b->list.len; j++)
+                        cg_stmt(cg, (ast_node_t *)arm->b->list.data[j]);
+                    cg->locals.len = mark;
+                }
+                cg->indent--;
+            }
+        }
+        if (n->list.len) cg_line(cg, "}");
+        cg->indent--;
+        cg_line(cg, "}");
+        break;
+    }
     case AST_BREAK:
         cg_line(cg, "break;");
         break;

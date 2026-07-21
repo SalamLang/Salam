@@ -131,6 +131,7 @@ void p_sync(parser_t *p)
         case TK_KW_UNTIL:
         case TK_KW_EACH:
         case TK_KW_REPEAT:
+        case TK_KW_MATCH:
         case TK_KW_RET:
         case TK_RBRACE:
         case TK_KW_END:
@@ -251,6 +252,71 @@ const char *p_munch_name(parser_t *p)
         if (!first) sb_putc(&b, ' ');
         sb_puts(&b, p_peek(p)->lexeme);
         first = false;
+        p_advance(p);
+    }
+    const char *r = arena_strdup(p->a, sb_cstr(&b));
+    sb_free(&b);
+    return r;
+}
+
+static bool p_is_alias_word_keyword(token_kind_t k)
+{
+    return k == TK_KW_WITH || k == TK_KW_PACKAGE;
+}
+
+static bool p_at_mergeable_word(const parser_t *p)
+{
+    token_kind_t k = p_peek(p)->kind;
+    return k == TK_IDENT || p_is_alias_word_keyword(k);
+}
+
+static bool p_at_mergeable_value_word(const parser_t *p)
+{
+    token_kind_t k = p_peek(p)->kind;
+    return k == TK_IDENT || k == TK_KW_PACKAGE;
+}
+
+/* Only ':=' introduces a brand-new binding; plain '=' and the compound
+ * assign operators always target an already-declared name, so they must
+ * not stop a multi-word merge (e.g. 'thread result = 99', 'up seq = ...').
+ * ':=' does stop it, since a bare identifier immediately followed by ':='
+ * is starting its own declaration, not continuing the identifier before
+ * it (e.g. '... - base\ny := ...' on one line). */
+static bool tk_is_new_binding(token_kind_t k)
+{
+    return k == TK_COLON_ASSIGN;
+}
+
+const char *p_munch_value_name(parser_t *p)
+{
+    if (!p_at(p, TK_IDENT)) return p_name(p, "expected name");
+    sb_t b;
+    sb_init(&b);
+    uint32_t line = p_peek(p)->span.begin.line;
+    sb_puts(&b, p_peek(p)->lexeme);
+    p_advance(p);
+    while (p_at_mergeable_value_word(p) && p_peek(p)->span.begin.line == line &&
+           !tk_is_new_binding(p_peek2(p)->kind)) {
+        sb_putc(&b, ' ');
+        sb_puts(&b, p_peek(p)->lexeme);
+        p_advance(p);
+    }
+    const char *r = arena_strdup(p->a, sb_cstr(&b));
+    sb_free(&b);
+    return r;
+}
+
+const char *p_munch_member_name(parser_t *p, const char *what)
+{
+    if (!p_at_mergeable_word(p)) return p_member_name(p, what);
+    sb_t b;
+    sb_init(&b);
+    uint32_t line = p_peek(p)->span.begin.line;
+    sb_puts(&b, p_peek(p)->lexeme);
+    p_advance(p);
+    while (p_at_mergeable_word(p) && p_peek(p)->span.begin.line == line) {
+        sb_putc(&b, ' ');
+        sb_puts(&b, p_peek(p)->lexeme);
         p_advance(p);
     }
     const char *r = arena_strdup(p->a, sb_cstr(&b));

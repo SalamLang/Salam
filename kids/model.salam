@@ -1,0 +1,290 @@
+package model
+
+import str
+
+pub const MAX_BLOCKS := 300
+pub const MAX_VARS := 40
+pub const MAX_STACK := 32
+
+pub const KIND_START := 0
+pub const KIND_END := 1
+pub const KIND_SAY := 2
+pub const KIND_ASK := 3
+pub const KIND_IF := 4
+pub const KIND_REPEAT_N := 5
+pub const KIND_REPEAT_UNTIL := 6
+pub const KIND_MOVE := 7
+pub const KIND_TURN := 8
+pub const KIND_PEN_UP := 9
+pub const KIND_PEN_DOWN := 10
+pub const KIND_MAKE_BOX := 11
+pub const KIND_ADD_TO_BOX := 12
+pub const KIND_SUBTRACT_FROM_BOX := 13
+pub const KIND_COUNT := 14
+
+pub const OP_EQ := 0
+pub const OP_GT := 1
+pub const OP_LT := 2
+
+pub func isContainer(kind: int): bool:
+    ret kind == KIND_IF || kind == KIND_REPEAT_N || kind == KIND_REPEAT_UNTIL
+end
+
+pub func isPenToggle(kind: int): bool:
+    ret kind == KIND_PEN_UP || kind == KIND_PEN_DOWN
+end
+
+pub struct Block:
+    pub kind: int = -1
+    pub used: bool = false
+    pub next: int = -1
+    pub child: int = -1
+    pub child2: int = -1
+    pub parent: int = -1
+    pub x: f64 = 0.0
+    pub y: f64 = 0.0
+    pub depth: int = 0
+    pub textA: str = ""
+    pub textB: str = ""
+    pub numA: f64 = 0.0
+    pub op: int = OP_EQ
+    pub el: i64 = 0
+end
+
+pub struct Var:
+    pub used: bool = false
+    pub name: str = ""
+    pub isNum: bool = false
+    pub numVal: f64 = 0.0
+    pub strVal: str = ""
+end
+
+pub blocks: Block[MAX_BLOCKS]
+pub mut blockCount := 0
+pub mut startId := -1
+pub mut endId := -1
+
+pub vars: Var[MAX_VARS]
+pub mut varCount := 0
+
+// mode = 0 -> talk & print, mode = 1 -> draw & move
+pub mut mode := 0
+pub const MODE_TALK := 0
+pub const MODE_DRAW := 1
+
+pub func resetProgram:
+    mut i := 0
+    until i < MAX_BLOCKS:
+        blocks[i] = Block {}
+        i += 1
+    end
+    mut j := 0
+    until j < MAX_VARS:
+        vars[j] = Var {}
+        j += 1
+    end
+    blockCount = 0
+    varCount = 0
+    startId = newBlock(KIND_START, -1)
+    endId = newBlock(KIND_END, -1)
+    blocks[startId].next = endId
+end
+
+pub func newBlock(kind: int, parent: int): int:
+    id := blockCount
+    blockCount += 1
+    blocks[id].kind = kind
+    blocks[id].used = true
+    blocks[id].next = -1
+    blocks[id].child = -1
+    blocks[id].child2 = -1
+    blocks[id].parent = parent
+    blocks[id].textA = ""
+    blocks[id].textB = ""
+    blocks[id].numA = 0.0
+    blocks[id].op = OP_EQ
+    blocks[id].el = 0
+    ret id
+end
+
+pub func findVar(name: str): int:
+    mut i := 0
+    until i < varCount:
+        if vars[i].used && vars[i].name == name: ret i end
+        i += 1
+    end
+    ret -1
+end
+
+pub func ensureVar(name: str): int:
+    id := findVar(name)
+    if id >= 0: ret id end
+    id2 := varCount
+    varCount += 1
+    vars[id2] = Var {}
+    vars[id2].used = true
+    vars[id2].name = name
+    ret id2
+end
+
+pub declaredNames: str[64]
+pub mut declaredCount := 0
+
+func rememberDeclaredName(name: str):
+    if name == "": ret end
+    mut i := 0
+    until i < declaredCount:
+        if declaredNames[i] == name: ret end
+        i += 1
+    end
+    if declaredCount < 64:
+        declaredNames[declaredCount] = name
+        declaredCount += 1
+    end
+end
+
+func scanNamesInList(headId: int):
+    mut cur := headId
+    until cur != -1:
+        k := blocks[cur].kind
+        if k == KIND_MAKE_BOX || k == KIND_ADD_TO_BOX || k == KIND_SUBTRACT_FROM_BOX:
+            rememberDeclaredName(blocks[cur].textA)
+        else k == KIND_ASK:
+            rememberDeclaredName(blocks[cur].textB)
+        end
+        if isContainer(k) && blocks[cur].child != -1:
+            scanNamesInList(blocks[cur].child)
+        end
+        cur = blocks[cur].next
+    end
+end
+
+pub func rescanDeclaredNames():
+    declaredCount = 0
+    scanNamesInList(startId)
+end
+
+pub func setVarText(name: str, raw: str):
+    id := ensureVar(name)
+    n := parseNumber(raw)
+    if isNumeric(raw):
+        vars[id].isNum = true
+        vars[id].numVal = n
+    else:
+        vars[id].isNum = false
+        vars[id].strVal = raw
+    end
+end
+
+pub func addToVar(name: str, amount: str):
+    existed := findVar(name) >= 0
+    id := ensureVar(name)
+    amountIsNum := isNumeric(amount)
+    mut canAddNumeric := amountIsNum
+    if existed && !vars[id].isNum: canAddNumeric = false end
+    if canAddNumeric:
+        vars[id].isNum = true
+        vars[id].numVal = vars[id].numVal + parseNumber(amount)
+    else:
+        mut cur := ""
+        if existed: cur = varDisplay(id) end
+        vars[id].isNum = false
+        vars[id].strVal = cur.concat(amount)
+    end
+end
+
+pub func subtractFromVar(name: str, amount: str):
+    id := ensureVar(name)
+    mut base := 0.0
+    if vars[id].isNum: base = vars[id].numVal
+    else: base = parseNumber(varDisplay(id))
+    end
+    vars[id].isNum = true
+    vars[id].numVal = base - parseNumber(amount)
+end
+
+pub func varDisplay(id: int): str:
+    if id < 0: ret "" end
+    if vars[id].isNum: ret formatNumber(vars[id].numVal) end
+    ret vars[id].strVal
+end
+
+pub func isDigitChar(c: str): bool:
+    ret c == "0" || c == "1" || c == "2" || c == "3" || c == "4" ||
+        c == "5" || c == "6" || c == "7" || c == "8" || c == "9"
+end
+
+pub func isNumeric(s: str): bool:
+    n := str.Len(s)
+    if n == 0: ret false end
+    mut i := 0
+    mut sawDigit := false
+    mut sawDot := false
+    until i < n:
+        c := str.CharAt(s, i)
+        if c == "-" && i == 0:
+            i += 1
+        else c == ".":
+            if sawDot: ret false end
+            sawDot = true
+            i += 1
+        else isDigitChar(c):
+            sawDigit = true
+            i += 1
+        else:
+            ret false
+        end
+    end
+    ret sawDigit
+end
+
+pub func parseNumber(s: str): f64:
+    if isNumeric(s): ret str.ToFloat(s) end
+    ret 0.0
+end
+
+pub const DIGITS := ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"] as str[10]
+
+pub func formatInt(n: i64): str:
+    if n == 0: ret "0" end
+    mut neg := false
+    mut v := n
+    if v < 0:
+        neg = true
+        v = 0 - v
+    end
+    mut digits := ""
+    until v != 0:
+        d := v % 10
+        digits = DIGITS[d as int].concat(digits)
+        v = v / 10
+    end
+    if neg: ret "-".concat(digits) end
+    ret digits
+end
+
+pub func formatFloat2(n: f64): str:
+    mut neg := false
+    mut v := n
+    if v < 0.0:
+        neg = true
+        v = 0.0 - v
+    end
+    scaled := ((v * 100.0) + 0.5) as i64
+    whole := scaled / 100
+    frac := scaled % 100
+    mut out := formatInt(whole)
+    if frac != 0:
+        mut fracStr := formatInt(frac)
+        if frac < 10: fracStr = "0".concat(fracStr) end
+        if frac % 10 == 0: fracStr = fracStr.substr(0, 1) end
+        out = out.concat(".").concat(fracStr)
+    end
+    if neg: ret "-".concat(out) end
+    ret out
+end
+
+pub func formatNumber(n: f64): str:
+    if n == (n as int) as f64: ret formatInt(n as i64) end
+    ret formatFloat2(n)
+end

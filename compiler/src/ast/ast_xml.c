@@ -249,6 +249,21 @@ void ast_to_xml(xml_writer_t *w, const ast_node_t *n)
         ast_child_list(w, "params", &n->list);
         ast_child(w, "body", n->a);
         break;
+    case AST_MATCH:
+        ast_child(w, "subject", n->a);
+        ast_child_list(w, "arms", &n->list);
+        break;
+    case AST_MATCH_ARM:
+        ast_child_list(w, "patterns", &n->list);
+        ast_child(w, "body", n->b);
+        break;
+    case AST_MATCH_PATTERN:
+        ast_child(w, "head", n->a);
+        break;
+    case AST_VARIANT_BOX:
+    case AST_VARIANT_UNWRAP:
+        ast_child(w, "operand", n->a);
+        break;
     default:
         break;
     }

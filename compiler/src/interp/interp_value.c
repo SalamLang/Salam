@@ -181,6 +181,8 @@ const char *to_str(interp_t *I, value_t v)
         return v.as.mod ? afmt(I, "<module %s>", v.as.mod->name) : "<module>";
     case VAL_PTR:
         return v.as.ptr.addr ? afmt(I, "<ptr %p>", v.as.ptr.addr) : "null";
+    case VAL_VARIANT:
+        return v.as.variant && v.as.variant->boxed ? to_str(I, *v.as.variant->boxed) : "";
     }
     return "";
 }

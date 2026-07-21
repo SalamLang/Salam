@@ -28,8 +28,11 @@ typedef struct {
     int angle;
     int bracket_indent;
     bool ml_stack[FMT_MAX_BRACKET];
+    bool paren_is_lambda[FMT_MAX_BRACKET];
+    bool prev_close_was_lambda;
     int ml_top;
     uint32_t block_line[FMT_MAX_BLOCK];
+    bool in_match_arms[FMT_MAX_BLOCK];
     int block_top;
     bool line_has_content;
     bool force_break;
@@ -37,6 +40,7 @@ typedef struct {
     bool prev_gt_generic;
     int q_open[FMT_MAX_BRACKET + 1];
     token_kind_t stmt_head;
+    bool match_pending;
     uint32_t open_colon_line;
     const token_t *prev;
     bool prev_unary;
@@ -114,6 +118,44 @@ static bool fmt_angle_is_generic(const token_stream_t *toks, size_t lt_idx)
     return false;
 }
 
+/* Every lambda parameter is mandatorily typed ('name: Type'), so a '('
+ * only opens a lambda header if its contents fully match that shape. Used
+ * to tell a lambda's parameter list apart from an unrelated grouped
+ * expression that simply happens to sit in front of a ':' (e.g. an
+ * 'if (a) || (b):' condition). */
+static bool fmt_lambda_header_at(const token_stream_t *toks, size_t open_idx)
+{
+    size_t n = token_stream_count(toks);
+    size_t i = open_idx + 1;
+    if (i < n && token_stream_at(toks, i)->kind == TK_RPAREN) return true;
+    for (;;) {
+        if (i >= n || token_stream_at(toks, i)->kind != TK_IDENT) return false;
+        i++;
+        if (i >= n || token_stream_at(toks, i)->kind != TK_COLON) return false;
+        i++;
+        int depth = 0;
+        for (;;) {
+            if (i >= n) return false;
+            token_kind_t k = token_stream_at(toks, i)->kind;
+            if (k == TK_EOF) return false;
+            if (k == TK_LT && fmt_angle_is_generic(toks, i)) {
+                depth++;
+            } else if (k == TK_GT && depth > 0) {
+                depth--;
+            } else if (fmt_is_open(k)) {
+                depth++;
+            } else if (fmt_is_close(k)) {
+                if (depth == 0) return k == TK_RPAREN;
+                depth--;
+            } else if (k == TK_COMMA && depth == 0) {
+                i++;
+                break;
+            }
+            i++;
+        }
+    }
+}
+
 static bool fmt_head_modifier(token_kind_t k)
 {
     return k == TK_KW_PUB || k == TK_KW_INLINE || k == TK_KW_NOINLINE ||
@@ -187,6 +229,7 @@ static void fmt_step_stmt_end(fmt_ctx_t *c, const token_t *t, bool cur_ml)
     c->open_colon_line = 0;
     c->q_open[0] = 0;
     c->stmt_head = TK_EOF;
+    c->match_pending = false;
 }
 
 static void fmt_step_break_before(fmt_ctx_t *c, const token_t *t, token_kind_t k,
@@ -213,8 +256,18 @@ static void fmt_step_break_before(fmt_ctx_t *c, const token_t *t, token_kind_t k
     c->open_colon_line = 0;
 }
 
-static void fmt_step_dedent(fmt_ctx_t *c, const token_t *t, token_kind_t k)
+static bool fmt_in_match_arms(const fmt_ctx_t *c)
 {
+    return c->block_top > 0 && c->block_top <= FMT_MAX_BLOCK &&
+           c->in_match_arms[c->block_top - 1];
+}
+
+static void fmt_step_dedent(fmt_ctx_t *c, const token_t *t, token_kind_t k,
+                            const token_stream_t *toks, size_t i)
+{
+    (void)toks;
+    (void)i;
+    if (k == TK_KW_ELSE && fmt_in_match_arms(c)) return;
     if (c->bracket == 0 && c->angle == 0 && (k == TK_KW_END || k == TK_KW_ELSE)) {
         if (c->block_top > 0 && c->block_top <= FMT_MAX_BLOCK && c->line_has_content &&
             t->span.begin.line > c->block_line[c->block_top - 1]) {
@@ -253,12 +306,20 @@ static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
         k != TK_COMMENT_LINE && k != TK_COMMENT_BLOCK && !fmt_head_modifier(k))
         c->stmt_head = k;
 
+    if (k == TK_KW_MATCH && c->bracket == 0) c->match_pending = true;
+
     if (k == TK_QUESTION && c->bracket <= FMT_MAX_BRACKET) c->q_open[c->bracket]++;
     if (k == TK_COLON && c->bracket <= FMT_MAX_BRACKET && c->q_open[c->bracket] > 0) {
         c->q_open[c->bracket]--;
     } else if (c->bracket == 0 && c->angle == 0 && k == TK_COLON) {
         bool opener;
-        if (c->prev != NULL && c->prev->kind == TK_FAT_ARROW)
+        bool was_match_subject = c->match_pending;
+        bool was_in_match_arms = fmt_in_match_arms(c);
+        if (c->prev != NULL && c->prev->kind == TK_RPAREN && c->prev_close_was_lambda)
+            opener = true;
+        else if (was_match_subject)
+            opener = true;
+        else if (was_in_match_arms)
             opener = true;
         else if (fmt_head_annotates(c->stmt_head))
             opener = false;
@@ -267,11 +328,15 @@ static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
         if (opener) {
             c->indent++;
             c->open_colon_line = t->span.end.line;
-            if (c->block_top < FMT_MAX_BLOCK)
+            if (c->block_top < FMT_MAX_BLOCK) {
                 c->block_line[c->block_top] = t->span.begin.line;
+                c->in_match_arms[c->block_top] = was_match_subject;
+            }
             c->block_top++;
-            if (c->prev != NULL && c->prev->kind == TK_KW_ELSE) c->force_break = true;
+            if (c->prev != NULL && c->prev->kind == TK_KW_ELSE && !was_in_match_arms)
+                c->force_break = true;
             c->stmt_head = TK_EOF;
+            c->match_pending = false;
         }
     }
 
@@ -285,7 +350,13 @@ static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
 
     if (fmt_is_open(k)) {
         bool ml = fmt_bracket_multiline(toks, i);
-        if (c->ml_top < FMT_MAX_BRACKET) c->ml_stack[c->ml_top] = ml;
+        bool prev_is_value = c->prev != NULL && fmt_is_value_end(c->prev->kind);
+        bool is_lambda =
+            k == TK_LPAREN && !prev_is_value && fmt_lambda_header_at(toks, i);
+        if (c->ml_top < FMT_MAX_BRACKET) {
+            c->ml_stack[c->ml_top] = ml;
+            c->paren_is_lambda[c->ml_top] = is_lambda;
+        }
         c->ml_top++;
         c->bracket++;
         if (c->bracket <= FMT_MAX_BRACKET) c->q_open[c->bracket] = 0;
@@ -294,6 +365,9 @@ static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
             c->force_break = true;
         }
     } else if (fmt_is_close(k)) {
+        c->prev_close_was_lambda = k == TK_RPAREN && c->ml_top > 0 &&
+                                   c->ml_top <= FMT_MAX_BRACKET &&
+                                   c->paren_is_lambda[c->ml_top - 1];
         if (c->ml_top > 0) c->ml_top--;
         if (c->bracket > 0) {
             if (c->bracket <= FMT_MAX_BRACKET) c->q_open[c->bracket] = 0;
@@ -328,7 +402,7 @@ void fmt_tokens(const token_stream_t *toks, const fmt_style_t *style, sb_t *out)
         }
 
         fmt_step_break_before(&c, t, k, cur_ml);
-        fmt_step_dedent(&c, t, k);
+        fmt_step_dedent(&c, t, k, toks, i);
         fmt_step_leading(&c, t, k);
 
         if (k == TK_META) sb_putc(out, '@');

@@ -105,7 +105,7 @@ static bool front_end(arena_t *arena, logger_t *log, FILE *diagf, const char *la
     *out_entry = langpack_entry(pack);
     source_file_t *src = src_from_string(arena, source);
     logger_set_diag_source(log, src->text, src->len, DIAG_STYLE_RUST, DIAG_FORMAT_HUMAN);
-    const langpack_t *modpack = langpack_detect(arena, src, pack);
+    const langpack_t *modpack = pack;
     token_stream_t *toks = NULL;
     bool lok = lexer_run(arena, log, modpack, src, &toks);
     *program = NULL;
@@ -259,7 +259,7 @@ const char *salam_web_emit(const char *source, const char *lang, const char *pha
     const char *entry = langpack_entry(pack);
     source_file_t *src = src_from_string(arena, source);
     logger_set_diag_source(log, src->text, src->len, DIAG_STYLE_RUST, DIAG_FORMAT_HUMAN);
-    const langpack_t *modpack = langpack_detect(arena, src, pack);
+    const langpack_t *modpack = pack;
     token_stream_t *toks = NULL;
     bool lok = lexer_run(arena, log, modpack, src, &toks);
     if (!strcmp(phase, "tokens")) {

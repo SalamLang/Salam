@@ -1,0 +1,375 @@
+package drag
+
+// Interaction model, matching the design doc's §2/§8 decision: freehand
+// wire-drawing is genuinely hard for 5-6 year old fine motor control, so
+// the *primary* way to add a block is a tap on a toolbox tile (always
+// works, zero geometry risk -- appends to the end of the program and
+// opens the inspector immediately). Dragging is layered on top of that
+// for placing a block at a specific spot and for reordering/deleting
+// existing blocks, using a floating "ghost" and a forgiving nearest-row
+// drop search rather than pixel-precise wire endpoints.
+//
+// Window-level pointermove/pointerup handlers are registered exactly
+// once (Init(), called from app.salam at startup) and are no-ops unless
+// a drag is `active` -- there is no dom.OffWindow, so the alternative of
+// adding/removing a listener per drag risked accumulating duplicate
+// global listeners over a play session.
+import dom
+import "model.salam"
+import "layoutfx.salam"
+import "labels.salam"
+import "ui.salam"
+import "wires.salam"
+import "mascot.salam"
+
+const THRESHOLD := 6.0
+const DROP_AFTER := 0
+const DROP_EMPTY := 1
+
+mut active := false
+mut fromToolbox := false
+mut toolboxKind := -1
+mut draggedId := -1
+mut ghostEl := 0 as i64
+mut downX := 0.0
+mut downY := 0.0
+mut lastX := 0.0
+mut lastY := 0.0
+mut movedFar := false
+
+mut dropKind := DROP_AFTER
+mut dropTarget := -1
+
+pub mut onChanged := (): ret end
+
+// -- geometry --------------------------------------------------------------
+mut rl := 0.0
+mut rt := 0.0
+mut rw := 0.0
+mut rh := 0.0
+
+func measureRect(el: i64):
+    r := dom.Call0(el, "getBoundingClientRect")
+    rl = dom.GetNum(r, "left")
+    rt = dom.GetNum(r, "top")
+    rw = dom.GetNum(r, "width")
+    rh = dom.GetNum(r, "height")
+end
+
+func within(px: f64, py: f64, el: i64): bool:
+    measureRect(el)
+    ret px >= rl && px <= rl + rw && py >= rt && py <= rt + rh
+end
+
+mut localX := 0.0
+mut localY := 0.0
+
+func toLocal(px: f64, py: f64):
+    measureRect(ui.blockLayerHandle())
+    localX = px - rl
+    localY = py - rt
+end
+
+func absF(v: f64): f64:
+    if v < 0.0: ret 0.0 - v end
+    ret v
+end
+
+// -- chain helpers -----------------------------------------------------
+func chainTailOf(headId: int): int:
+    mut cur := headId
+    until model.blocks[cur].next != -1:
+        cur = model.blocks[cur].next
+    end
+    ret cur
+end
+
+func subtreeContains(headId: int, targetId: int): bool:
+    mut cur := headId
+    until cur != -1:
+        if cur == targetId: ret true end
+        if model.isContainer(model.blocks[cur].kind) && model.blocks[cur].child != -1:
+            if subtreeContains(model.blocks[cur].child, targetId): ret true end
+        end
+        cur = model.blocks[cur].next
+    end
+    ret false
+end
+
+func detach(id: int):
+    mut i := 0
+    until i < model.blockCount:
+        if model.blocks[i].used:
+            if model.blocks[i].next == id:
+                model.blocks[i].next = -1
+                ret
+            end
+            if model.isContainer(model.blocks[i].kind) && model.blocks[i].child == id:
+                model.blocks[i].child = -1
+                ret
+            end
+        end
+        i += 1
+    end
+end
+
+func attachAfter(targetId: int, chainHead: int):
+    oldNext := model.blocks[targetId].next
+    model.blocks[targetId].next = chainHead
+    tail := chainTailOf(chainHead)
+    model.blocks[tail].next = oldNext
+end
+
+func attachIntoEmpty(containerId: int, chainHead: int):
+    model.blocks[containerId].child = chainHead
+end
+
+func placeChain(headId: int):
+    if dropKind == DROP_EMPTY:
+        attachIntoEmpty(dropTarget, headId)
+    else:
+        attachAfter(dropTarget, headId)
+    end
+end
+
+func setChainClass(headId: int, cls: str, enable: bool):
+    mut cur := headId
+    until cur != -1:
+        el := model.blocks[cur].el
+        if el != 0:
+            if enable: dom.AddClass(el, cls) else: dom.RemoveClass(el, cls) end
+        end
+        cur = model.blocks[cur].next
+    end
+end
+
+// Finds whichever block's `.next` currently points at `id` -- used to
+// redirect an "insert after End" drop to "insert right before End"
+// instead, since End must always stay the last block in the program.
+func predecessorOf(id: int): int:
+    mut i := 0
+    until i < model.blockCount:
+        if model.blocks[i].used && model.blocks[i].next == id: ret i end
+        i += 1
+    end
+    ret model.startId
+end
+
+func findDropTarget(px: f64, py: f64):
+    toLocal(px, py)
+    mut i := 0
+    until i < model.blockCount:
+        if model.blocks[i].used && model.isContainer(model.blocks[i].kind) && model.blocks[i].child == -1:
+            phY := model.blocks[i].y + layoutfx.ROW_H
+            if localY >= phY - 14.0 && localY <= phY + layoutfx.ROW_H + 14.0:
+                dropKind = DROP_EMPTY
+                dropTarget = i
+                ret
+            end
+        end
+        i += 1
+    end
+    dropKind = DROP_AFTER
+    nearest := layoutfx.nearestAt(localY)
+    if nearest == model.endId:
+        dropTarget = predecessorOf(model.endId)
+    else:
+        dropTarget = nearest
+    end
+end
+
+func applyDefaults(id: int, kind: int):
+    if kind == model.KIND_SAY:
+        model.blocks[id].textA = labels.DEFAULT_SAY
+    else kind == model.KIND_ASK:
+        model.blocks[id].textA = labels.DEFAULT_ASK
+        model.blocks[id].textB = labels.DEFAULT_BOX
+    else kind == model.KIND_MAKE_BOX:
+        model.blocks[id].textA = labels.DEFAULT_BOX
+        model.blocks[id].textB = labels.DEFAULT_VALUE
+    else kind == model.KIND_ADD_TO_BOX || kind == model.KIND_SUBTRACT_FROM_BOX:
+        model.blocks[id].textA = labels.DEFAULT_BOX
+        model.blocks[id].textB = labels.DEFAULT_AMOUNT
+    else kind == model.KIND_IF || kind == model.KIND_REPEAT_UNTIL:
+        model.blocks[id].textA = labels.DEFAULT_BOX
+        model.blocks[id].textB = labels.DEFAULT_VALUE
+        model.blocks[id].op = model.OP_EQ
+    else kind == model.KIND_REPEAT_N:
+        model.blocks[id].numA = 3.0
+    else kind == model.KIND_MOVE:
+        model.blocks[id].numA = 50.0
+    else kind == model.KIND_TURN:
+        model.blocks[id].numA = 90.0
+    end
+end
+
+func refreshAll():
+    ui.render()
+    wires.resize(layoutfx.totalHeight + 40.0)
+    wires.drawAll()
+    onChanged()
+end
+
+// -- ghost -----------------------------------------------------------------
+func beginVisualDrag():
+    ghostEl = dom.Create("div")
+    dom.AddClass(ghostEl, "ghost")
+    mut html := ""
+    if fromToolbox:
+        html = "<span class='bIcon'>".concat(labels.icon(toolboxKind)).concat("</span><span class='bCap'>").concat(labels.caption(toolboxKind)).concat("</span>")
+    else:
+        kind := model.blocks[draggedId].kind
+        html = "<span class='bIcon'>".concat(labels.icon(kind)).concat("</span><span class='bCap'>").concat(labels.caption(kind)).concat("</span>")
+        setChainClass(draggedId, "dragHidden", true)
+    end
+    dom.SetHtml(ghostEl, html)
+    dom.Append(dom.Body(), ghostEl)
+    updateGhostPosition(lastX, lastY)
+    mascot.pop()
+end
+
+func updateGhostPosition(px: f64, py: f64):
+    dom.SetStyle(ghostEl, "left", model.formatNumber(px - 20.0).concat("px"))
+    dom.SetStyle(ghostEl, "top", model.formatNumber(py - 20.0).concat("px"))
+end
+
+func cleanupGhost():
+    if ghostEl != 0:
+        dom.Remove(ghostEl)
+        ghostEl = 0
+    end
+    if !fromToolbox && draggedId != -1:
+        setChainClass(draggedId, "dragHidden", false)
+    end
+    movedFar = false
+    fromToolbox = false
+    draggedId = -1
+    toolboxKind = -1
+end
+
+// -- tap / drop resolution ------------------------------------------------
+func addAtEnd(kind: int):
+    newId := model.newBlock(kind, -1)
+    applyDefaults(newId, kind)
+    mut cur := model.startId
+    until model.blocks[cur].next != model.endId:
+        cur = model.blocks[cur].next
+    end
+    model.blocks[newId].next = model.endId
+    model.blocks[cur].next = newId
+    ui.selectBlock(newId)
+    mascot.pop()
+    refreshAll()
+end
+
+func handleTap():
+    if fromToolbox:
+        addAtEnd(toolboxKind)
+    else:
+        if draggedId >= 0:
+            ui.selectBlock(draggedId)
+            mascot.hint(labels.hint(model.blocks[draggedId].kind))
+        end
+    end
+end
+
+func finishDrag(px: f64, py: f64):
+    if within(px, py, ui.trashHandle()):
+        if !fromToolbox:
+            ui.removeSubtree(draggedId)
+            if ui.selectedId == draggedId: ui.clearSelection() end
+            mascot.say(labels.DELETE_HINT)
+            refreshAll()
+        end
+        ret
+    end
+    if !within(px, py, ui.canvasWrapHandle()):
+        refreshAll()
+        ret
+    end
+    findDropTarget(px, py)
+    if fromToolbox:
+        newId := model.newBlock(toolboxKind, -1)
+        applyDefaults(newId, toolboxKind)
+        placeChain(newId)
+        ui.selectBlock(newId)
+        mascot.pop()
+        refreshAll()
+    else:
+        if subtreeContains(draggedId, dropTarget):
+            refreshAll()
+            ret
+        end
+        detach(draggedId)
+        placeChain(draggedId)
+        mascot.pop()
+        refreshAll()
+    end
+end
+
+// -- pointer handlers --------------------------------------------------
+func onMove(ev: i64):
+    if !active: ret end
+    px := dom.EventX(ev)
+    py := dom.EventY(ev)
+    lastX = px
+    lastY = py
+    dx := absF(px - downX)
+    dy := absF(py - downY)
+    if (dx + dy) > THRESHOLD && !movedFar:
+        movedFar = true
+        beginVisualDrag()
+    end
+    if movedFar: updateGhostPosition(px, py) end
+end
+
+func onUp(ev: i64):
+    if !active: ret end
+    px := dom.EventX(ev)
+    py := dom.EventY(ev)
+    active = false
+    if !movedFar:
+        handleTap()
+        cleanupGhost()
+        ret
+    end
+    finishDrag(px, py)
+    cleanupGhost()
+end
+
+pub func Init():
+    dom.OnWindowE("pointermove", (ev: i64): onMove(ev) end)
+    dom.OnWindowE("pointerup", (ev: i64): onUp(ev) end)
+end
+
+pub func wireBlock(id: int):
+    el := model.blocks[id].el
+    dom.OnEventE(el, "pointerdown", (ev: i64):
+        if id != model.startId && id != model.endId:
+            dom.PreventDefault(ev)
+            active = true
+            fromToolbox = false
+            draggedId = id
+            downX = dom.EventX(ev)
+            downY = dom.EventY(ev)
+            lastX = downX
+            lastY = downY
+            movedFar = false
+        end
+    end)
+end
+
+pub func wireTile(kind: int):
+    el := dom.ById(ui.tileId(kind))
+    dom.OnEventE(el, "pointerdown", (ev: i64):
+        dom.PreventDefault(ev)
+        active = true
+        fromToolbox = true
+        toolboxKind = kind
+        downX = dom.EventX(ev)
+        downY = dom.EventY(ev)
+        lastX = downX
+        lastY = downY
+        movedFar = false
+    end)
+end

@@ -306,6 +306,14 @@ void jsg_stmt(jg_t *g, ast_node_t *n)
         vec_push(cg->a, &cg->fn_defers, n->a);
         break;
     case AST_RETURN:
+        if (cg->match_result_tmp) {
+            if (n->a)
+                cg_line(cg, "%s = %s; break %s;", cg->match_result_tmp, jsg_expr(g, n->a),
+                        cg->match_end_label);
+            else
+                cg_line(cg, "break %s;", cg->match_end_label);
+            break;
+        }
         jsg_emit_defers(g);
         if (n->a)
             cg_line(cg, "return %s;", jsg_expr(g, n->a));
@@ -318,6 +326,28 @@ void jsg_stmt(jg_t *g, ast_node_t *n)
     case AST_CONTINUE:
         cg_line(cg, "continue;");
         break;
+    case AST_MATCH: {
+        int t = ++cg->tmpn;
+        const char *subj_var = cg_fmt(cg, "__msubj%d", t);
+        cg_line(cg, "{");
+        cg->indent++;
+        cg_line(cg, "const %s = %s;", subj_var, jsg_expr(g, n->a));
+        {
+            size_t i = 0;
+            for (; i < n->list.len; i++) {
+                ast_node_t *arm = (ast_node_t *)n->list.data[i];
+                const char *cond = jsg_match_arm_cond(g, arm, subj_var, n->a->type_str);
+                cg_line(cg, "%sif (%s) {", i ? "} else " : "", cond);
+                cg->indent++;
+                jsg_stmt_list(g, arm->b);
+                cg->indent--;
+            }
+        }
+        if (n->list.len) cg_line(cg, "}");
+        cg->indent--;
+        cg_line(cg, "}");
+        break;
+    }
     case AST_IF:
         cg_line(cg, "if (%s) {", jsg_expr(g, n->a));
         cg->indent++;

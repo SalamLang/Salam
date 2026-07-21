@@ -189,7 +189,7 @@ Hello, World:
 
 ```salam
 func main {
-    println("Hello, World!")
+    println "Hello, World!"
 }
 ```
 

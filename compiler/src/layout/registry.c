@@ -438,9 +438,23 @@ const char *layout_map_lang(const char *v)
     return v ? dyn_value("lang", v) : NULL;
 }
 
+static bool color_is_css_function(const char *v)
+{
+    static const char *fns[] = {"var(", "rgb(", "rgba(",  "hsl(",   "hsla(",     "hwb(",
+                                "lab(", "lch(", "oklab(", "oklch(", "color-mix("};
+    size_t i = 0;
+    for (; i < sizeof(fns) / sizeof(fns[0]); i++) {
+        size_t L = strlen(fns[i]);
+        if (strncmp(v, fns[i], L) == 0) return true;
+    }
+    return false;
+}
+
 const char *layout_map_color(const char *v)
 {
     if (!v) return NULL;
     if (v[0] == '#') return v;
+    if (color_is_css_function(v)) return v;
+    if (!strcmp(v, "currentColor") || !strcmp(v, "currentcolor")) return "currentColor";
     return dyn_value("color", v);
 }

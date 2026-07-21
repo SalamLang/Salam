@@ -74,7 +74,7 @@ Save the following to `hello.salam`:
 
 ```salam
 func main {
-    println("Hello, World!")
+    println "Hello, World!"
 }
 ```
 

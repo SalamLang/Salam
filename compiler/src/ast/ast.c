@@ -64,6 +64,11 @@ static const char *const k_ast_names[AST__COUNT] = {
     [AST_LAYOUT_ELEMENT] = "LayoutElement",
     [AST_LAYOUT_ATTR] = "LayoutAttribute",
     [AST_LAYOUT_COMPONENT] = "LayoutComponent",
+    [AST_MATCH] = "MatchExpr",
+    [AST_MATCH_ARM] = "MatchArm",
+    [AST_MATCH_PATTERN] = "MatchPattern",
+    [AST_VARIANT_BOX] = "VariantBox",
+    [AST_VARIANT_UNWRAP] = "VariantUnwrap",
 };
 
 const char *ast_kind_name(ast_kind_t kind)

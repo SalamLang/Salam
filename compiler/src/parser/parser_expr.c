@@ -180,8 +180,7 @@ static ast_node_t *led_member(parser_t *p, ast_node_t *lhs)
     m->a = lhs;
     p_advance(p);
 
-    m->name = p_at(p, TK_IDENT) ? p_munch_name(p)
-                                : p_member_name(p, "expected member name after '.'");
+    m->name = p_munch_member_name(p, "expected member name after '.'");
     p_fin(p, m);
     return m;
 }

@@ -103,6 +103,72 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
         tag = lfmt(cx, "h%ld", sz);
     }
     LOG_T(cx->log, PH_CODEGEN, "layout <%s> -> <%s>", el->name, tag);
+    if (!strcmp(el->name, "meta")) {
+        const char *nmattr = NULL, *prop = NULL, *cont = NULL, *charset = NULL,
+                   *http_equiv = NULL;
+        size_t i = 0;
+        for (; i < el->list.len; i++) {
+            ast_node_t *attr = (ast_node_t *)el->list.data[i];
+            if (attr->kind != AST_LAYOUT_ATTR) continue;
+            const char *v = val_str(cx, attr->a);
+            if (!strcmp(attr->name, "name"))
+                nmattr = v;
+            else if (!strcmp(attr->name, "property"))
+                prop = v;
+            else if (!strcmp(attr->name, "content"))
+                cont = v;
+            else if (!strcmp(attr->name, "charset"))
+                charset = v;
+            else if (!strcmp(attr->name, "http_equiv"))
+                http_equiv = v;
+        }
+        sb_puts(cx->head, "  <meta");
+        if (charset)
+            sb_puts(cx->head, lfmt(cx, " charset=\"%s\"", html_escape(cx, charset)));
+        if (nmattr) sb_puts(cx->head, lfmt(cx, " name=\"%s\"", html_escape(cx, nmattr)));
+        if (prop) sb_puts(cx->head, lfmt(cx, " property=\"%s\"", html_escape(cx, prop)));
+        if (http_equiv)
+            sb_puts(cx->head,
+                    lfmt(cx, " http-equiv=\"%s\"", html_escape(cx, http_equiv)));
+        if (cont) sb_puts(cx->head, lfmt(cx, " content=\"%s\"", html_escape(cx, cont)));
+        sb_puts(cx->head, ">\n");
+        return;
+    }
+    if (!strcmp(el->name, "head_link")) {
+        const char *rel = NULL, *href = NULL, *type_ = NULL, *cross = NULL;
+        const char *sizes = NULL, *as_ = NULL, *media_ = NULL;
+        size_t i = 0;
+        for (; i < el->list.len; i++) {
+            ast_node_t *attr = (ast_node_t *)el->list.data[i];
+            if (attr->kind != AST_LAYOUT_ATTR) continue;
+            const char *v = val_str(cx, attr->a);
+            if (!strcmp(attr->name, "rel"))
+                rel = v;
+            else if (!strcmp(attr->name, "href"))
+                href = v;
+            else if (!strcmp(attr->name, "type"))
+                type_ = v;
+            else if (!strcmp(attr->name, "crossorigin"))
+                cross = v;
+            else if (!strcmp(attr->name, "sizes"))
+                sizes = v;
+            else if (!strcmp(attr->name, "as"))
+                as_ = v;
+            else if (!strcmp(attr->name, "media"))
+                media_ = v;
+        }
+        sb_puts(cx->head, "  <link");
+        if (rel) sb_puts(cx->head, lfmt(cx, " rel=\"%s\"", html_escape(cx, rel)));
+        if (href) sb_puts(cx->head, lfmt(cx, " href=\"%s\"", html_escape(cx, href)));
+        if (type_) sb_puts(cx->head, lfmt(cx, " type=\"%s\"", html_escape(cx, type_)));
+        if (as_) sb_puts(cx->head, lfmt(cx, " as=\"%s\"", html_escape(cx, as_)));
+        if (sizes) sb_puts(cx->head, lfmt(cx, " sizes=\"%s\"", html_escape(cx, sizes)));
+        if (media_) sb_puts(cx->head, lfmt(cx, " media=\"%s\"", html_escape(cx, media_)));
+        if (cross)
+            sb_puts(cx->head, lfmt(cx, " crossorigin=\"%s\"", html_escape(cx, cross)));
+        sb_puts(cx->head, ">\n");
+        return;
+    }
     sb_t attrs, css, hover, focus, active, before, after;
     sb_init(&attrs);
     sb_init(&css);
@@ -277,8 +343,17 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
     const char *esc = content ? html_escape(cx, content) : "";
 
     if (!strcmp(el->name, "link")) {
-        html_line(cx, "<a href=\"%s\"%s%s>%s</a>", source ? html_escape(cx, source) : "#",
-                  classattr, A, esc);
+        const char *href = source ? html_escape(cx, source) : "#";
+        if (has_child_elements(el)) {
+            html_line(cx, "<a href=\"%s\"%s%s>", href, classattr, A);
+            cx->indent++;
+            if (content) html_line(cx, "%s", esc);
+            gen_children(cx, el, klass);
+            cx->indent--;
+            html_line(cx, "</a>");
+        } else {
+            html_line(cx, "<a href=\"%s\"%s%s>%s</a>", href, classattr, A, esc);
+        }
         goto done;
     }
     if (!strcmp(el->name, "image")) {
@@ -297,6 +372,11 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
 
     if (!strcmp(el->name, "canvas")) {
         html_line(cx, "<canvas%s%s></canvas>", classattr, A);
+        goto done;
+    }
+    if (!strcmp(el->name, "iframe")) {
+        html_line(cx, "<iframe%s%s%s></iframe>", classattr, A,
+                  src ? lfmt(cx, " src=\"%s\"", html_escape(cx, src)) : "");
         goto done;
     }
     if (type == LE_SINGLE) {

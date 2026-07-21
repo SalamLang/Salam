@@ -29,18 +29,22 @@ mkdir -p "$jobdir"
 exe="$WORK/exe_$jobid.exe"
 rm -f "$exe"
 
+buildlog="$jobdir/build.log"
 build_once() {
     (cd "$jobdir" && "$SALAM_BIN" build "$f" --output="$exe" \
-        --no-color --log-level=error --lang="$lang" "$@") >/dev/null 2>&1
+        --no-color --log-level=error --lang="$lang" "$@") >"$buildlog" 2>&1
 }
 
 build_once "$@"
-if [ ! -x "$exe" ]; then
-    sleep 1
+_btry=1
+while [ ! -x "$exe" ] && [ "$_btry" -le 3 ]; do
+    sleep "$_btry"
     build_once "$@"
-fi
+    _btry=$((_btry + 1))
+done
 if [ ! -x "$exe" ]; then
     echo "FAIL $label (build failed)"
+    sed 's/^/  /' "$buildlog" 2>/dev/null | head -20
     rm -rf "$jobdir"
     exit 0
 fi

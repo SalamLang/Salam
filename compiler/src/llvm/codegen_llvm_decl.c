@@ -291,7 +291,7 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
     }
     ll_spill_params(ll, fn, sig);
     if (is_main) ll_emit_global_inits(ll);
-    if (fn->a) ll_block(ll, fn->a);
+    if (fn->a) ll_block_top(ll, fn->a);
     if (!ll->term) ll_emit_return(ll, NULL);
     sb_puts(ll->g, header);
     sb_puts(ll->g, "entry:\n");
@@ -588,7 +588,7 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
             ll_local_add(ll, p->name, ptr, p->type_str);
         }
     }
-    if (n->a) ll_block(ll, n->a);
+    if (n->a) ll_block_top(ll, n->a);
     if (!ll->term) ll_emit_return(ll, NULL);
 
     sb_puts(ll->g, header);

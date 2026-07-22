@@ -211,6 +211,18 @@ bool cg_is_int_typestr(const char *ts)
     return false;
 }
 
+bool cg_is_unsigned_typestr(const char *ts)
+{
+    static const char *const uns[] = {"u8", "u16", "u32", "u64", "size", NULL};
+    if (!ts) return false;
+    {
+        int i = 0;
+        for (; uns[i]; i++)
+            if (!strcmp(ts, uns[i])) return true;
+    }
+    return false;
+}
+
 void cg_vec_elem(const char *ts, char *ebuf, size_t cap)
 {
     ebuf[0] = 0;

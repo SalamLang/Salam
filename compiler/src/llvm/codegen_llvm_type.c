@@ -73,8 +73,7 @@ bool ll_is_int(const char *ts)
 bool ll_is_signed(const char *ts)
 {
     if (!ts) return true;
-    if (ts[0] == 'u') return false;
-    if (!strcmp(ts, "size")) return false;
+    if (cg_is_unsigned_typestr(ts)) return false;
     if (!strcmp(ts, "bool")) return false;
     if (!strcmp(ts, "char")) return false;
     return true;

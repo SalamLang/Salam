@@ -30,6 +30,7 @@ const char *cg_fmt(cg_t *cg, const char *fmt, ...)
 
 void cg_indent(cg_t *cg)
 {
+    if (cg->compact) return;
     {
         int i = 0;
         for (; i < cg->indent; i++)
@@ -66,7 +67,7 @@ void cg_line(cg_t *cg, const char *fmt, ...)
     sal_vsnprintf(buf, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
     sb_puts(cg->c, buf);
-    sb_putc(cg->c, '\n');
+    sb_putc(cg->c, cg->compact ? ' ' : '\n');
 }
 
 bool local_known(cg_t *cg, const char *name)

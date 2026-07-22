@@ -57,6 +57,7 @@ esac
     src/interp/interp_expr.c src/interp/interp_stmt.c src/interp/interp_ffi.c \
     src/layout/registry.c src/layout/layout_gen.c src/layout/layout_gen_element.c \
     src/layout/layout_gen_value.c src/layout/schema.c src/layout/layout_expand.c \
+    src/minify/minify.c \
     src/fmt/fmt.c src/fmt/fmt_rules.c \
     src/cli/cli.c src/cli/cli_help.c src/cli/cli_options.c src/cli/cli_subcmd.c \
     src/driver/driver.c src/driver/build.c src/driver/llvm_build.c \

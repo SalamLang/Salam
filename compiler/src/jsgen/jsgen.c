@@ -137,7 +137,7 @@ static void jsg_emit_impls(jg_t *g, jsgen_output_t *out)
 
 jsgen_output_t *jsgen_run(arena_t *a, logger_t *log, ast_node_t *program,
                           sema_result_t *sem, const char *module, const char *entry,
-                          bool enable_minify, const char **minify_last,
+                          bool enable_minify, bool compact, const char **minify_last,
                           vec_t *minify_keys, vec_t *minify_vals)
 {
     jg_t g;
@@ -150,6 +150,7 @@ jsgen_output_t *jsgen_run(arena_t *a, logger_t *log, ast_node_t *program,
     g.cg.module = module;
     g.cg.pkg = program->name ? program->name : "main";
     g.cg.entry = (entry && entry[0]) ? entry : "main";
+    g.cg.compact = compact;
     g.enable_minify = enable_minify;
     g.minify_last = minify_last ? *minify_last : NULL;
     vec_init(&g.cg.locals);

@@ -635,9 +635,14 @@ jobs:
           path: salam.exe
 
   build-linux-i686:
-    name: Build Salam for Linux (32-bit / i686, minimal)
+    name: Build Salam for Linux (32-bit / i686)
     runs-on: ubuntu-latest
     continue-on-error: true
+    env:
+      MUSL_TRIPLE: i686-linux-musl
+      TCC_CPU: i386
+      TCC_CONFIGURE_EXTRA: ''
+      TINYCC_REF: d9d02c56401e43be43760b63f7d82f771a7ed1f6
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -663,11 +668,22 @@ jobs:
           ccache --show-stats 2>/dev/null | head -5 || true
           file salam
           ./salam version
-      - name: Smoke-test the 32-bit binary
+      - name: Cache bundled musl-tcc (i686)
+        id: cache-musl-tcc
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/tcc-bundle
+          key: musl-tcc-i686-${{ env.TINYCC_REF }}-v1
+      - name: Build bundled musl-tcc (i686)
+        if: steps.cache-musl-tcc.outputs.cache-hit != 'true'
+        run: bash compiler/tools/ci/build-musl-tcc.sh
+      - name: Smoke-test the 32-bit binary (interpreter + bundled musl-tcc)
         run: |
           export SALAM_STD="$PWD/compiler/std"
+          cp -r /tmp/tcc-bundle/tcc .
           printf 'func main:\n    println "ok-linux-32"\nend\n' > smoke.salam
-          ./salam build smoke.salam --output=smoke --log-level=warn && ./smoke
+          ./salam build smoke.salam --cc=tcc --output=smoke --log-level=info && ./smoke
+          file smoke
           ./salam exec smoke.salam --log-level=warn || true
           rm -f smoke smoke.salam salam_mod_*.c salam_mod_*.h
       - name: Stage versioned archive
@@ -678,21 +694,21 @@ jobs:
           mkdir -p "$DIST"
           cp salam "$DIST/salam"
           cp -r compiler/std "$DIST/std"
+          cp -r /tmp/tcc-bundle/tcc "$DIST/tcc"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           {
-            echo "Salam for Linux (32-bit / i686) - MINIMAL build."
+            echo "Salam for Linux (32-bit / i686) - self-contained."
             echo ""
-            echo "This build ships the salam frontend only: the interpreter works"
-            echo "standalone, but 'salam build' emits C and needs a system C compiler"
-            echo "(gcc/clang/tcc) to be installed. There is NO embedded LLVM/LLD and"
-            echo "NO bundled compiler."
+            echo "No installation needed. From this folder:"
             echo ""
             echo "  ./salam version"
-            echo "  ./salam exec  app.salam            (interpreter - works standalone)"
-            echo "  ./salam build app.salam -o app     (needs a system C compiler)"
+            echo "  ./salam exec  app.salam            (interpreter)"
+            echo "  ./salam build app.salam -o app     (native binary via the bundled,"
+            echo "                                      musl-statically-linked tcc - no"
+            echo "                                      system C compiler needed)"
             echo ""
-            echo "For a zero-install experience, cross-compile from the 64-bit Linux"
-            echo "flagship (salam-<ver>-linux.zip) instead of using this build."
+            echo "There is no embedded LLVM for i686 (none exists for this target; see"
+            echo "the 64-bit Linux flagship for 'salam llvm' and cross-compilation)."
           } > "$DIST/RUN-ME.txt"
           zip -r "salam-${VERSION}-linux-i686-minimal.zip" "$DIST" >/dev/null
           ls -la "salam-${VERSION}-linux-i686-minimal.zip"
@@ -708,9 +724,11 @@ jobs:
           path: salam
 
   build-linux-arm:
-    name: Build Salam for Linux ARM (${{ matrix.arch }}, minimal)
+    name: Build Salam for Linux ARM (${{ matrix.arch }})
     runs-on: ubuntu-latest
     continue-on-error: true
+    env:
+      TINYCC_REF: d9d02c56401e43be43760b63f7d82f771a7ed1f6
     strategy:
       fail-fast: false
       matrix:
@@ -720,11 +738,17 @@ jobs:
             pkg: gcc-aarch64-linux-gnu
             qemu: qemu-aarch64-static
             sysroot: /usr/aarch64-linux-gnu
+            musl_triple: aarch64-linux-musl
+            tcc_cpu: aarch64
+            tcc_configure_extra: ''
           - arch: armhf
             cc: arm-linux-gnueabihf-gcc
             pkg: gcc-arm-linux-gnueabihf
             qemu: qemu-arm-static
             sysroot: /usr/arm-linux-gnueabihf
+            musl_triple: arm-linux-musleabihf
+            tcc_cpu: armv7l
+            tcc_configure_extra: '--triplet=arm-linux-musleabihf'
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -751,6 +775,28 @@ jobs:
       - name: Smoke-test under qemu
         run: |
           ${{ matrix.qemu }} -L ${{ matrix.sysroot }} ./salam version
+      - name: Cache bundled musl-tcc (${{ matrix.arch }})
+        id: cache-musl-tcc
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/tcc-bundle
+          key: musl-tcc-${{ matrix.arch }}-${{ env.TINYCC_REF }}-v1
+      - name: Build bundled musl-tcc (${{ matrix.arch }})
+        if: steps.cache-musl-tcc.outputs.cache-hit != 'true'
+        env:
+          MUSL_TRIPLE: ${{ matrix.musl_triple }}
+          TCC_CPU: ${{ matrix.tcc_cpu }}
+          TCC_CONFIGURE_EXTRA: ${{ matrix.tcc_configure_extra }}
+        run: bash compiler/tools/ci/build-musl-tcc.sh
+      - name: Smoke-test bundled musl-tcc under qemu
+        run: |
+          cp -r /tmp/tcc-bundle/tcc .
+          printf 'func main:\n    println "ok-%s"\nend\n' "${{ matrix.arch }}" > smoke.salam
+          SALAM_STD="$PWD/compiler/std" ${{ matrix.qemu }} -L ${{ matrix.sysroot }} \
+            ./salam build smoke.salam --cc=tcc --output=smoke --log-level=info
+          file smoke
+          ${{ matrix.qemu }} ./smoke
+          rm -f smoke smoke.salam salam_mod_*.c salam_mod_*.h
       - name: Stage versioned archive
         run: |
           set -eu
@@ -759,21 +805,21 @@ jobs:
           mkdir -p "$DIST"
           cp salam "$DIST/salam"
           cp -r compiler/std "$DIST/std"
+          cp -r /tmp/tcc-bundle/tcc "$DIST/tcc"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           {
-            echo "Salam for Linux ${{ matrix.arch }} - MINIMAL build."
+            echo "Salam for Linux ${{ matrix.arch }} - self-contained."
             echo ""
-            echo "This build ships the salam frontend only: the interpreter works"
-            echo "standalone, but 'salam build' emits C and needs a system C compiler"
-            echo "(gcc/clang/tcc) to be installed. There is NO embedded LLVM/LLD and"
-            echo "NO bundled compiler for this architecture."
+            echo "No installation needed. From this folder:"
             echo ""
             echo "  ./salam version"
-            echo "  ./salam exec  app.salam            (interpreter - works standalone)"
-            echo "  ./salam build app.salam -o app     (needs a system C compiler)"
+            echo "  ./salam exec  app.salam            (interpreter)"
+            echo "  ./salam build app.salam -o app     (native binary via the bundled,"
+            echo "                                      musl-statically-linked tcc - no"
+            echo "                                      system C compiler needed)"
             echo ""
-            echo "For a zero-install experience, cross-compile from the 64-bit Linux"
-            echo "flagship (salam-<ver>-linux.zip) instead of using this build."
+            echo "There is no embedded LLVM for this architecture (see the 64-bit Linux"
+            echo "flagship for 'salam llvm' and cross-compilation)."
           } > "$DIST/RUN-ME.txt"
           zip -r "salam-${VERSION}-linux-${{ matrix.arch }}-minimal.zip" "$DIST" >/dev/null
           ls -la "salam-${VERSION}-linux-${{ matrix.arch }}-minimal.zip"

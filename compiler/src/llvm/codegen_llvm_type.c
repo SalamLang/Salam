@@ -365,6 +365,7 @@ static symbol_t *ll_sym_plain(ll_t *ll, const char *name)
         for (; i < ll->sem->packages.len && !s; i++) {
             symbol_t *pk = (symbol_t *)ll->sem->packages.data[i];
             if (pk && pk->members) s = scope_lookup_local(pk->members, name);
+            if (s) ll_touch_pkg(ll, pk);
         }
     }
     return s;

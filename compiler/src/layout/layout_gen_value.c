@@ -32,7 +32,7 @@ const char *lfmt(layout_ctx_t *cx, const char *fmt, ...)
 
 void html_line(layout_ctx_t *cx, const char *fmt, ...)
 {
-    {
+    if (!cx->compact) {
         int i = 0;
         for (; i < cx->indent; i++)
             sb_puts(cx->html, "  ");
@@ -46,7 +46,7 @@ void html_line(layout_ctx_t *cx, const char *fmt, ...)
     sal_vsnprintf(b, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
     sb_puts(cx->html, b);
-    sb_putc(cx->html, '\n');
+    if (!cx->compact) sb_putc(cx->html, '\n');
 }
 
 unsigned djb2(const char *s)
@@ -207,7 +207,25 @@ void emit_rule(layout_ctx_t *cx, const char *rule)
     }
     vec_push(cx->a, &cx->css_seen, CONST_CAST(rule));
     sb_puts(cx->css, rule);
-    sb_putc(cx->css, '\n');
+    if (!cx->compact) sb_putc(cx->css, '\n');
+}
+
+const char *css_decl(layout_ctx_t *cx, const char *prop, const char *val)
+{
+    if (cx->compact) return lfmt(cx, "%s:%s;", prop, val);
+    return lfmt(cx, "%s: %s; ", prop, val);
+}
+
+const char *css_rule(layout_ctx_t *cx, const char *sel, const char *body)
+{
+    if (cx->compact) {
+        size_t n = strlen(body);
+        while (n > 0 && body[n - 1] == ' ')
+            n--;
+        if (n > 0 && body[n - 1] == ';') n--;
+        return lfmt(cx, "%s{%s}", sel, arena_strndup(cx->a, body, n));
+    }
+    return lfmt(cx, "%s { %s }", sel, body);
 }
 
 bool is_bool_attr(const char *n)

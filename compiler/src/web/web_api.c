@@ -196,8 +196,8 @@ const char *salam_web_build_layout(const char *source, const char *lang)
         return r;
     }
     diag_engine_t *diag_e = diag_new(arena, log, PH_CODEGEN);
-    layout_result_t *res = layout_generate(arena, log, diag_e, "main.salam", lb);
-    const char *html = layout_document(arena, res, true, NULL, NULL);
+    layout_result_t *res = layout_generate(arena, log, diag_e, "main.salam", lb, false);
+    const char *html = layout_document(arena, res, true, NULL, NULL, false);
     const char *r;
     if (diag_e->errors) {
         char *d = slurp(diagf);
@@ -296,7 +296,8 @@ const char *salam_web_emit(const char *source, const char *lang, const char *pha
             goto done;
         }
         diag_engine_t *diag_e = diag_new(arena, log, PH_CODEGEN);
-        layout_result_t *res = layout_generate(arena, log, diag_e, "main.salam", lb);
+        layout_result_t *res =
+            layout_generate(arena, log, diag_e, "main.salam", lb, false);
         if (diag_e->errors) {
             char *d = slurp(diagf);
             r = set_result((d && d[0]) ? d : i18n_tr("layout build failed"));
@@ -305,10 +306,11 @@ const char *salam_web_emit(const char *source, const char *lang, const char *pha
         }
         const char *css_href = (res->css && res->css[0]) ? "style.css" : NULL;
         const char *js_href = (res->js && res->js[0]) ? "script.js" : NULL;
-        const char *part = !strcmp(phase, "html")
-                               ? layout_document(arena, res, false, css_href, js_href)
-                           : !strcmp(phase, "css") ? res->css
-                                                   : res->js;
+        const char *part =
+            !strcmp(phase, "html")
+                ? layout_document(arena, res, false, css_href, js_href, false)
+            : !strcmp(phase, "css") ? res->css
+                                    : res->js;
         r = set_result(part ? part : "");
         goto done;
     }

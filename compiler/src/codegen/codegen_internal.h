@@ -55,6 +55,7 @@ typedef struct {
     const char *target_triple;
     const char *match_result_tmp;
     const char *match_end_label;
+    bool compact;
 } cg_t;
 
 const char *cg_fmt(cg_t *cg, const char *fmt, ...);

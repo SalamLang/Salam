@@ -57,6 +57,8 @@ typedef struct {
     bool split;
     const char *inputs[SALAM_MAX_INPUTS];
     int input_count;
+    const char *run_args[SALAM_MAX_INPUTS];
+    int run_args_count;
     const char *output;
     const char *cc;
     bool keep_c;
@@ -78,10 +80,12 @@ typedef struct {
     const char *llvm_target;
     bool llvm_native_cpu;
     bool no_js_minify_names;
+    bool no_minify;
     bool version_short;
 } options_t;
 
 #define OPTIONS_INIT_NO_JS_MINIFY_NAMES 0
+#define OPTIONS_INIT_NO_MINIFY 0
 
 bool cli_parse(int argc, char **argv, options_t *out);
 

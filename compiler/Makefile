@@ -28,7 +28,7 @@ DATADIR  := $(PREFIX)/share/salam
 
 SRCDIRS := core source condcomp logger xml diag i18n langpack        \
            token lexer ast parser semantic codegen jsgen llvm interp \
-           layout fmt cli driver
+           layout fmt cli driver minify
 
 SRCS     := $(filter-out src/salam.c, $(wildcard $(addsuffix /*.c, $(addprefix src/,$(SRCDIRS)))))
 MAIN_SRC := src/salam.c

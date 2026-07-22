@@ -16,6 +16,7 @@
 #include "core/sal_format.h"
 #include "core/sb.h"
 #include "core/numstr.h"
+#include <sys/stat.h>
 #include "semantic/sema.h"
 #include "semantic/sema_internal.h"
 #include "source/source.h"
@@ -311,14 +312,12 @@ bool salam_find_bundled_tool(const char *name, char *out, size_t n)
 
     for (i = 0; i < sizeof rel / sizeof rel[0]; i++) {
         char cand[1200];
-        FILE *f;
+        struct stat st;
         if (rel[i][0])
             sal_snprintf(cand, sizeof cand, "%s/%s/%s%s", exedir, rel[i], name, suffix);
         else
             sal_snprintf(cand, sizeof cand, "%s/%s%s", exedir, name, suffix);
-        f = fopen(cand, "rb");
-        if (f) {
-            fclose(f);
+        if (stat(cand, &st) == 0 && S_ISREG(st.st_mode)) {
             sal_snprintf(out, n, "%s", cand);
             return true;
         }

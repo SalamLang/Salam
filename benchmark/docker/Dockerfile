@@ -95,7 +95,8 @@ RUN printf '%s\n' \
     'exec /tmp/bench_runner "$@"' \
     > /repo/entrypoint.sh \
     && chmod +x /repo/entrypoint.sh \
-    && chown -R salam:salam /repo/benchmark
+    && chown -R salam:salam /repo/benchmark \
+    && chmod -R a+rwX /repo/benchmark
 
 USER salam
 WORKDIR /repo/benchmark

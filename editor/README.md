@@ -19,7 +19,7 @@ true [right-to-left](https://en.wikipedia.org/wiki/Right-to-left_script); Englis
   via CSS `mask-image` so they can be recolored per theme without any raw HTML.
 
 `build.sh` combines `page.salam` + `app.salam` into the single `index.html` that
-ships to users (CSS and JS inlined, no separate asset requests beyond the WASM
+ships to users (CSS and JS inlined, no separate asset requests beyond the Wasm
 bundle).
 
 ## How it works

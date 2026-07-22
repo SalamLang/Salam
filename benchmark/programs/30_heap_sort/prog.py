@@ -26,9 +26,7 @@ def main():
         heapify(arr, end, 0)
     checksum = 0
     for i in range(n):
-        checksum = (
-            checksum + (arr[i] % 1000000007) * ((i + 1) % 1000000007)
-        ) % 1000000007
+        checksum = (checksum + (arr[i] % 1000000007) * ((i + 1) % 1000000007)) % 1000000007
     print(arr[0])
     print(arr[n - 1])
     print(checksum)

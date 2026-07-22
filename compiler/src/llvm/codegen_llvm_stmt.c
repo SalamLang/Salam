@@ -288,8 +288,8 @@ static void ll_repeat(ll_t *ll, ast_node_t *n)
     const char *bindp = NULL;
     if (n->name) {
         bindp = ll_fmt(ll, "%%v.%s.%d", ll_safe_name(ll, n->name), ll->tmp++);
-        ll_emit_alloca(ll, "%s = alloca %s", bindp, ll->usize);
-        ll_local_add(ll, n->name, bindp, "size");
+        ll_emit_alloca(ll, "%s = alloca i32", bindp);
+        ll_local_add(ll, n->name, bindp, "i32");
     }
     const char *condL = ll_new_lbl(ll, "rcond");
     const char *bodyL = ll_new_lbl(ll, "rbody");
@@ -318,12 +318,9 @@ static void ll_repeat(ll_t *ll, ast_node_t *n)
     ll_emit_term(ll, "br i1 %s, label %%%s, label %%%s", cmp, bodyL, endL);
     ll_emit_label(ll, bodyL);
     if (bindp) {
-        const char *cvt = cv;
-        if (ll->ptr_bits < 64) {
-            cvt = ll_new_tmp(ll);
-            ll_emit(ll, "%s = trunc i64 %s to %s", cvt, cv, ll->usize);
-        }
-        ll_emit(ll, "store %s %s, ptr %s", ll->usize, cvt, bindp);
+        const char *cvt = ll_new_tmp(ll);
+        ll_emit(ll, "%s = trunc i64 %s to i32", cvt, cv);
+        ll_emit(ll, "store i32 %s, ptr %s", cvt, bindp);
     }
     if (ll->nloop >= 64) {
         ll_error(ll, n, "loop nesting too deep");

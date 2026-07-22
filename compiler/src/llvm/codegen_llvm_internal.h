@@ -242,6 +242,8 @@ void ll_stmt(ll_t *ll, ast_node_t *n);
 
 void ll_block(ll_t *ll, ast_node_t *block);
 
+void ll_block_top(ll_t *ll, ast_node_t *block);
+
 void ll_emit_return(ll_t *ll, ast_node_t *value);
 
 const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *sig);

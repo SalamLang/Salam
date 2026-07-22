@@ -406,3 +406,10 @@ void ll_block(ll_t *ll, ast_node_t *block)
 {
     ll_stmts_scoped(ll, block);
 }
+
+void ll_block_top(ll_t *ll, ast_node_t *block)
+{
+    size_t i = 0;
+    for (; i < block->list.len; i++)
+        ll_stmt(ll, (ast_node_t *)block->list.data[i]);
+}

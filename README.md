@@ -35,57 +35,6 @@ Salam is a general-purpose and systems programming language designed for efficie
 
 ---
 
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-
-- [✨ Introducing Salam](#-introducing-salam)
-  - [Supported Languages](#supported-languages)
-  - [Why Choose Salam?](#why-choose-salam)
-  - [Key Features](#key-features)
-- [🧩 Editor Support](#-editor-support)
-  - [Visual Studio Code](#visual-studio-code)
-- [🛠️ The Compiler (`salam`)](#-the-compiler-salam)
-  - [Build](#build)
-  - [Usage](#usage)
-  - [Cross-compilation](#cross-compilation)
-- [🐳 Docker & Docker Compose](#-docker--docker-compose)
-  - [Development (live reload)](#development-live-reload)
-  - [Production (copy & build)](#production-copy--build)
-  - [Plain Docker (without Compose)](#plain-docker-without-compose)
-  - [Books (XeLaTeX)](#books-xelatex)
-- [🚀 Bun Workspaces: Multi-App Development & Static Site Guide](#-bun-workspaces-multi-app-development--static-site-guide)
-  - [🚀 1. Quickstart Execution Guide](#-1-quickstart-execution-guide)
-  - [📁 2. Monorepo Architecture & Core Setup](#-2-monorepo-architecture--core-setup)
-    - [Root Configuration Files](#root-configuration-files)
-      - [`package.json` (Workspace Root)](#packagejson-workspace-root)
-      - [`bunfig.toml` (Workspace Root)](#bunfigtoml-workspace-root)
-  - [🛠️ 3. Static Site Package Implementation](#-3-static-site-package-implementation)
-    - [Static Site Configuration](#static-site-configuration)
-  - [⚡ 4. The Serve Methods Evaluated](#-4-the-serve-methods-evaluated)
-    - [Method A: Bun Native Dev Engine (`bun run --watch index.html`)](#method-a-bun-native-dev-engine-bun-run---watch-indexhtml)
-    - [Method B: The Local Isolation Method (`bunx vite`)](#method-b-the-local-isolation-method-bunx-vite)
-  - [🔄 5. Global Monorepo Package Updates](#-5-global-monorepo-package-updates)
-    - [Explaining the Flags Behind the Script (`bun update -i -r`)](#explaining-the-flags-behind-the-script-bun-update--i--r)
-  - [🔒 6. Security Breakdown & Best Practices](#-6-security-breakdown--best-practices)
-    - [The Port Selection Architecture](#the-port-selection-architecture)
-    - [Network Address Binding (`0.0.0.0` vs `127.0.0.1`)](#network-address-binding-0000-vs-127001)
-    - [Safe Command Formula](#safe-command-formula)
-  - [📚 7. MyST Documentation](#-7-myst-documentation)
-    - [Configuration Files](#configuration-files)
-    - [Running the Documentation Locally](#running-the-documentation-locally)
-- [🤝 Contributing](#-contributing)
-- [🔍 Joining Code Reviews](#-joining-code-reviews)
-  - [How a GitHub PR Review Works](#how-a-github-pr-review-works)
-    - [Leaving an inline comment](#leaving-an-inline-comment)
-    - [Suggesting a code change](#suggesting-a-code-change)
-    - [Submitting the review](#submitting-the-review)
-    - [Tips for great reviews](#tips-for-great-reviews)
-  - [Growing with the Community](#growing-with-the-community)
-  - [💬 Real-Time Community](#-real-time-community)
-- [📖 Glossary](#-glossary)
-
-<!-- END doctoc -->
-
 <div align="center">
 
 ## ✨ Introducing Salam

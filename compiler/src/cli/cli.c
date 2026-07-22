@@ -30,6 +30,7 @@ static void cli_set_defaults(options_t *out)
     out->command = CMD_INSPECT;
     out->new_name = NULL;
     out->inline_mode = false;
+    out->split = false;
     out->input_count = 0;
     out->output = NULL;
     out->cc = "tcc";

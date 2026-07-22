@@ -98,6 +98,7 @@ int driver_layout_build(options_t *opt)
         return 2;
     }
     bool multi = (opt->input_count > 1);
+    bool minify_ws = !opt->no_minify;
     const char *modules[SALAM_MAX_INPUTS];
     layout_result_t *results[SALAM_MAX_INPUTS];
     int n = 0;
@@ -129,7 +130,7 @@ int driver_layout_build(options_t *opt)
                 continue;
             }
             modules[n] = module_of(arena, path);
-            results[n] = layout_generate(arena, log, diag, src->path, lb);
+            results[n] = layout_generate(arena, log, diag, src->path, lb, minify_ws);
             n++;
         }
     }
@@ -146,17 +147,20 @@ int driver_layout_build(options_t *opt)
             const char *html_path =
                 (opt->output && !multi) ? opt->output : path_ext(arena, mod, "html");
             if (opt->inline_mode) {
-                write_file(log, html_path, layout_document(arena, r, true, NULL, NULL));
+                write_file(log, html_path,
+                           layout_document(arena, r, true, NULL, NULL, minify_ws));
             } else if (multi) {
                 write_file(log, html_path,
-                           layout_document(arena, r, false, "style.css", "script.js"));
+                           layout_document(arena, r, false, "style.css", "script.js",
+                                           minify_ws));
                 if (r->css[0]) sb_puts(&mcss, r->css);
                 if (r->js[0]) sb_puts(&mjs, r->js);
             } else {
                 const char *css_href = r->css[0] ? path_ext(arena, mod, "css") : NULL;
                 const char *js_href = r->js[0] ? path_ext(arena, mod, "js") : NULL;
-                write_file(log, html_path,
-                           layout_document(arena, r, false, css_href, js_href));
+                write_file(
+                    log, html_path,
+                    layout_document(arena, r, false, css_href, js_href, minify_ws));
                 if (css_href) write_file(log, css_href, r->css);
                 if (js_href) write_file(log, js_href, r->js);
             }

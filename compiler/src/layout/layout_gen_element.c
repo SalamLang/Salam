@@ -15,6 +15,7 @@
 #include "core/prelude.h"
 #include "layout/layout_internal.h"
 #include "layout/registry.h"
+#include "minify/minify.h"
 
 static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
                         const char *parent_class);
@@ -122,7 +123,7 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
             else if (!strcmp(attr->name, "http_equiv"))
                 http_equiv = v;
         }
-        sb_puts(cx->head, "  <meta");
+        sb_puts(cx->head, cx->compact ? "<meta" : "  <meta");
         if (charset)
             sb_puts(cx->head, lfmt(cx, " charset=\"%s\"", html_escape(cx, charset)));
         if (nmattr) sb_puts(cx->head, lfmt(cx, " name=\"%s\"", html_escape(cx, nmattr)));
@@ -131,7 +132,7 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
             sb_puts(cx->head,
                     lfmt(cx, " http-equiv=\"%s\"", html_escape(cx, http_equiv)));
         if (cont) sb_puts(cx->head, lfmt(cx, " content=\"%s\"", html_escape(cx, cont)));
-        sb_puts(cx->head, ">\n");
+        sb_puts(cx->head, cx->compact ? ">" : ">\n");
         return;
     }
     if (!strcmp(el->name, "head_link")) {
@@ -157,7 +158,7 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
             else if (!strcmp(attr->name, "media"))
                 media_ = v;
         }
-        sb_puts(cx->head, "  <link");
+        sb_puts(cx->head, cx->compact ? "<link" : "  <link");
         if (rel) sb_puts(cx->head, lfmt(cx, " rel=\"%s\"", html_escape(cx, rel)));
         if (href) sb_puts(cx->head, lfmt(cx, " href=\"%s\"", html_escape(cx, href)));
         if (type_) sb_puts(cx->head, lfmt(cx, " type=\"%s\"", html_escape(cx, type_)));
@@ -166,7 +167,7 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
         if (media_) sb_puts(cx->head, lfmt(cx, " media=\"%s\"", html_escape(cx, media_)));
         if (cross)
             sb_puts(cx->head, lfmt(cx, " crossorigin=\"%s\"", html_escape(cx, cross)));
-        sb_puts(cx->head, ">\n");
+        sb_puts(cx->head, cx->compact ? ">" : ">\n");
         return;
     }
     sb_t attrs, css, hover, focus, active, before, after;
@@ -196,31 +197,31 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
                 continue;
             }
             if (starts_with(nm, "hover_")) {
-                sb_puts(&hover, lfmt(cx, "%s: %s; ", hyphenate(cx, nm + 6), v));
+                sb_puts(&hover, css_decl(cx, hyphenate(cx, nm + 6), v));
                 continue;
             }
             if (starts_with(nm, "focus_")) {
-                sb_puts(&focus, lfmt(cx, "%s: %s; ", hyphenate(cx, nm + 6), v));
+                sb_puts(&focus, css_decl(cx, hyphenate(cx, nm + 6), v));
                 continue;
             }
             if (starts_with(nm, "active_")) {
-                sb_puts(&active, lfmt(cx, "%s: %s; ", hyphenate(cx, nm + 7), v));
+                sb_puts(&active, css_decl(cx, hyphenate(cx, nm + 7), v));
                 continue;
             }
             if (starts_with(nm, "before_")) {
                 const char *rest = nm + 7;
                 if (!strcmp(rest, "content"))
-                    sb_puts(&before, lfmt(cx, "content: \"%s\"; ", v));
+                    sb_puts(&before, css_decl(cx, "content", lfmt(cx, "\"%s\"", v)));
                 else
-                    sb_puts(&before, lfmt(cx, "%s: %s; ", hyphenate(cx, rest), v));
+                    sb_puts(&before, css_decl(cx, hyphenate(cx, rest), v));
                 continue;
             }
             if (starts_with(nm, "after_")) {
                 const char *rest = nm + 6;
                 if (!strcmp(rest, "content"))
-                    sb_puts(&after, lfmt(cx, "content: \"%s\"; ", v));
+                    sb_puts(&after, css_decl(cx, "content", lfmt(cx, "\"%s\"", v)));
                 else
-                    sb_puts(&after, lfmt(cx, "%s: %s; ", hyphenate(cx, rest), v));
+                    sb_puts(&after, css_decl(cx, hyphenate(cx, rest), v));
                 continue;
             }
             if (nm[0] == 'o' && nm[1] == 'n') {
@@ -274,7 +275,7 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
                 const char *prop = (ad && ad->out) ? ad->out : hyphenate(cx, nm);
                 const char *mapped = layout_attr_value_map(cx->a, ad, v);
                 const char *css_val = quote_css_value_if_needed(cx, mapped);
-                sb_puts(&css, lfmt(cx, "%s: %s; ", prop, css_val));
+                sb_puts(&css, css_decl(cx, prop, css_val));
                 break;
             }
             case LA_META:
@@ -307,37 +308,43 @@ static void gen_element(layout_ctx_t *cx, ast_node_t *el, const char *parent,
     if (!strcmp(el->name, "media")) {
         const char *sel = parent_class ? parent_class : "body";
         const char *cond = condition ? condition : "all";
-        emit_rule(cx, lfmt(cx, "@media %s { .%s { %s } }", cond, sel, sb_cstr(&css)));
+        const char *inner = css_rule(cx, lfmt(cx, ".%s", sel), sb_cstr(&css));
+        emit_rule(cx, cx->compact ? lfmt(cx, "@media %s{%s}", cond, inner)
+                                  : lfmt(cx, "@media %s { %s }", cond, inner));
         goto done;
     }
     if (!strcmp(el->name, "style")) {
         if (content) {
-            sb_puts(cx->css, content);
-            sb_putc(cx->css, '\n');
+            sb_puts(cx->css, cx->compact ? minify_css(cx->a, content) : content);
+            if (!cx->compact) sb_putc(cx->css, '\n');
         }
         goto done;
     }
     if (!strcmp(el->name, "global")) {
-        emit_rule(cx, lfmt(cx, "%s { %s }", selector ? selector : "*", sb_cstr(&css)));
+        emit_rule(cx, css_rule(cx, selector ? selector : "*", sb_cstr(&css)));
         goto done;
     }
     if (!strcmp(el->name, "script")) {
         if (src)
             html_line(cx, "<script src=\"%s\"></script>", html_escape(cx, src));
         else if (content) {
-            sb_puts(cx->js, content);
-            sb_putc(cx->js, '\n');
+            sb_puts(cx->js, cx->compact ? minify_js(cx->a, content) : content);
+            sb_putc(cx->js, cx->compact ? ' ' : '\n');
         }
         goto done;
     }
 
-    if (has_css) emit_rule(cx, lfmt(cx, ".%s { %s }", klass, sb_cstr(&css)));
-    if (hover.len) emit_rule(cx, lfmt(cx, ".%s:hover { %s }", klass, sb_cstr(&hover)));
-    if (focus.len) emit_rule(cx, lfmt(cx, ".%s:focus { %s }", klass, sb_cstr(&focus)));
-    if (active.len) emit_rule(cx, lfmt(cx, ".%s:active { %s }", klass, sb_cstr(&active)));
+    if (has_css) emit_rule(cx, css_rule(cx, lfmt(cx, ".%s", klass), sb_cstr(&css)));
+    if (hover.len)
+        emit_rule(cx, css_rule(cx, lfmt(cx, ".%s:hover", klass), sb_cstr(&hover)));
+    if (focus.len)
+        emit_rule(cx, css_rule(cx, lfmt(cx, ".%s:focus", klass), sb_cstr(&focus)));
+    if (active.len)
+        emit_rule(cx, css_rule(cx, lfmt(cx, ".%s:active", klass), sb_cstr(&active)));
     if (before.len)
-        emit_rule(cx, lfmt(cx, ".%s::before { %s }", klass, sb_cstr(&before)));
-    if (after.len) emit_rule(cx, lfmt(cx, ".%s::after { %s }", klass, sb_cstr(&after)));
+        emit_rule(cx, css_rule(cx, lfmt(cx, ".%s::before", klass), sb_cstr(&before)));
+    if (after.len)
+        emit_rule(cx, css_rule(cx, lfmt(cx, ".%s::after", klass), sb_cstr(&after)));
     const char *classattr = klass ? lfmt(cx, " class=\"%s\"", klass) : "";
     const char *A = sb_cstr(&attrs);
     const char *esc = content ? html_escape(cx, content) : "";

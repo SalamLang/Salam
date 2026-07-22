@@ -642,6 +642,7 @@ static llv_t ll_emit_call(ll_t *ll, ast_node_t *n, func_sig_t *sig, const char *
 
 static llv_t ll_call_pkg(ll_t *ll, ast_node_t *n, symbol_t *pk, const char *fname_)
 {
+    ll_touch_pkg_named(ll, pk->pkgname);
     symbol_t *fs = scope_lookup_local(pk->members, fname_);
     if (!fs || fs->kind != SYM_FUNC || fs->overloads.len == 0) {
         ll_error(ll, n, "package function '%s' not found", fname_);

@@ -27,6 +27,7 @@
 #include "jsgen/jsgen.h"
 #include "condcomp/condcomp.h"
 #include "i18n/i18n.h"
+#include "minify/minify.h"
 
 typedef struct {
     const char *name;
@@ -250,6 +251,8 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
         const char *first_module = NULL;
         const char *entry_name = NULL;
         bool all_ok = true;
+        bool minify_ws = !opt->no_minify;
+        bool minify_names = minify_ws && !opt->no_js_minify_names;
         const char *minify_last = NULL;
         vec_t minify_keys, minify_vals;
         vec_init(&minify_keys);
@@ -352,10 +355,9 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                             }
                         }
                         {
-                            jsgen_output_t *out =
-                                jsgen_run(arena, log, program, sr, module, modentry,
-                                          !opt->no_js_minify_names, &minify_last,
-                                          &minify_keys, &minify_vals);
+                            jsgen_output_t *out = jsgen_run(
+                                arena, log, program, sr, module, modentry, minify_names,
+                                minify_ws, &minify_last, &minify_keys, &minify_vals);
                             outputs[nout++] = out;
                             if (!entry_name && wi < nentries && out->entry_mangled)
                                 entry_name = out->entry_mangled;
@@ -385,8 +387,10 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
             {
                 size_t i = 0;
                 for (; i < sizeof(k_prelude) / sizeof(k_prelude[0]); i++) {
+                    const char *ptext = minify_ws ? minify_js(arena, k_prelude[i].text)
+                                                  : k_prelude[i].text;
                     vec_push(arena, &seg_names, CONST_CAST(k_prelude[i].name));
-                    vec_push(arena, &seg_texts, CONST_CAST(k_prelude[i].text));
+                    vec_push(arena, &seg_texts, CONST_CAST(ptext));
                     vec_push(arena, &seg_used, NULL);
                 }
             }
@@ -446,7 +450,8 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                 bool have_globals = false;
                 const char *text;
                 sb_init(&js);
-                sb_puts(&js, "(function () {\n\"use strict\";\n\n");
+                sb_puts(&js, minify_ws ? "(function(){\"use strict\";"
+                                       : "(function () {\n\"use strict\";\n\n");
                 {
                     int m = nout - 1;
                     for (; m >= 0; m--)
@@ -456,25 +461,31 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                     int m = nout - 1;
                     for (; m >= 0; m--)
                         sb_puts(&js, outputs[m]->globals_src);
-                    sb_putc(&js, '\n');
+                    sb_putc(&js, minify_ws ? ' ' : '\n');
                 }
                 {
                     size_t s = 0;
                     for (; s < seg_names.len; s++) {
                         if (!seg_used.data[s]) continue;
                         sb_puts(&js, (const char *)seg_texts.data[s]);
-                        sb_putc(&js, '\n');
+                        sb_putc(&js, minify_ws ? ' ' : '\n');
                     }
                 }
-                sb_puts(&js, "// Run the program once the DOM is ready.\n");
+                if (!minify_ws)
+                    sb_puts(&js, "// Run the program once the DOM is ready.\n");
                 sb_printf(&js,
-                          "if (document.readyState === \"loading\") {\n"
-                          "    document.addEventListener(\"DOMContentLoaded\", %s);\n"
-                          "} else {\n"
-                          "    %s();\n"
-                          "}\n",
+                          minify_ws
+                              ? "if(document.readyState===\"loading\"){document."
+                                "addEventListener(\"DOMContentLoaded\",%s);}else{%"
+                                "s();}"
+                              : "if (document.readyState === \"loading\") {\n"
+                                "    document.addEventListener(\"DOMContentLoaded\", "
+                                "%s);\n"
+                                "} else {\n"
+                                "    %s();\n"
+                                "}\n",
                           boot, boot);
-                sb_puts(&js, "})();\n");
+                sb_puts(&js, minify_ws ? "})();" : "})();\n");
                 text = arena_strdup(arena, sb_cstr(&js));
                 sb_free(&js);
                 sb_free(&roots);
@@ -512,16 +523,28 @@ int driver_js(options_t *opt)
         }
         if (has_suffix_ci(output, ".html") || has_suffix_ci(output, ".htm")) {
             sb_t page;
+            bool minify_ws = !opt->no_minify;
             sb_init(&page);
-            sb_puts(&page, "<!doctype html>\n<html lang=\"en\">\n<head>\n");
-            sb_puts(&page, "<meta charset=\"utf-8\">\n");
-            sb_puts(&page, "<meta name=\"viewport\" "
-                           "content=\"width=device-width, "
-                           "initial-scale=1\">\n");
-            sb_printf(&page, "<title>%s</title>\n", module);
-            sb_puts(&page, "</head>\n<body>\n<script>\n");
-            sb_puts(&page, js);
-            sb_puts(&page, "</script>\n</body>\n</html>\n");
+            if (minify_ws) {
+                sb_puts(&page, "<!doctype html><html lang=\"en\"><head>");
+                sb_puts(&page, "<meta charset=\"utf-8\">");
+                sb_puts(&page, "<meta name=\"viewport\" content=\"width=device-width, "
+                               "initial-scale=1\">");
+                sb_printf(&page, "<title>%s</title>", module);
+                sb_puts(&page, "</head><body><script>");
+                sb_puts(&page, js);
+                sb_puts(&page, "</script></body></html>");
+            } else {
+                sb_puts(&page, "<!doctype html>\n<html lang=\"en\">\n<head>\n");
+                sb_puts(&page, "<meta charset=\"utf-8\">\n");
+                sb_puts(&page, "<meta name=\"viewport\" "
+                               "content=\"width=device-width, "
+                               "initial-scale=1\">\n");
+                sb_printf(&page, "<title>%s</title>\n", module);
+                sb_puts(&page, "</head>\n<body>\n<script>\n");
+                sb_puts(&page, js);
+                sb_puts(&page, "</script>\n</body>\n</html>\n");
+            }
             if (!write_file(log, output, sb_cstr(&page))) rc = 2;
             sb_free(&page);
             if (rc == 0)

@@ -233,6 +233,7 @@ int driver_web(options_t *opt)
                 script_list_t scripts;
                 sb_t bundles;
                 layout_result_t *r = NULL;
+                bool minify_ws = !opt->no_minify;
                 scripts.n = 0;
                 collect_scripts(lb, &scripts);
                 sb_init(&bundles);
@@ -252,18 +253,19 @@ int driver_web(options_t *opt)
                             break;
                         }
                         sb_puts(&bundles, bundle);
-                        sb_putc(&bundles, '\n');
+                        sb_putc(&bundles, minify_ws ? ' ' : '\n');
                     }
                 }
                 if (rc == 0) {
-                    r = layout_generate(arena, log, diag, src->path, lb);
+                    r = layout_generate(arena, log, diag, src->path, lb, minify_ws);
                     if (diag->errors) rc = 1;
                 }
                 if (rc == 0 && bundles.len) {
                     if (r->js && r->js[0]) {
                         size_t need = strlen(r->js) + bundles.len + 2;
                         char *m = (char *)arena_alloc(arena, need);
-                        sal_snprintf(m, need, "%s\n%s", r->js, sb_cstr(&bundles));
+                        sal_snprintf(m, need, minify_ws ? "%s %s" : "%s\n%s", r->js,
+                                     sb_cstr(&bundles));
                         r->js = m;
                     } else {
                         r->js = arena_strdup(arena, sb_cstr(&bundles));
@@ -281,17 +283,18 @@ int driver_web(options_t *opt)
                             (r->css && r->css[0]) ? base_name(css_path) : NULL;
                         const char *js_href =
                             (r->js && r->js[0]) ? base_name(js_path) : NULL;
-                        if (!write_file(
-                                log, html_path,
-                                layout_document(arena, r, false, css_href, js_href)))
+                        if (!write_file(log, html_path,
+                                        layout_document(arena, r, false, css_href,
+                                                        js_href, minify_ws)))
                             rc = 2;
                         if (rc == 0 && css_href && !write_file(log, css_path, r->css))
                             rc = 2;
                         if (rc == 0 && js_href && !write_file(log, js_path, r->js))
                             rc = 2;
                     } else {
-                        if (!write_file(log, html_path,
-                                        layout_document(arena, r, true, NULL, NULL)))
+                        if (!write_file(
+                                log, html_path,
+                                layout_document(arena, r, true, NULL, NULL, minify_ws)))
                             rc = 2;
                     }
                     if (rc == 0)

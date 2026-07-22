@@ -651,9 +651,9 @@ static void repl_layout_exec(const char *src_text, const langpack_t *pack, optio
         ast_node_t *lb = repl_find_layout(prog);
         if (lb) {
             diag_engine_t *diag = diag_new(arena, log, PH_CODEGEN);
-            layout_result_t *r = layout_generate(arena, log, diag, sf.path, lb);
+            layout_result_t *r = layout_generate(arena, log, diag, sf.path, lb, false);
             if (r && diag->errors == 0) {
-                printf("%s", layout_document(arena, r, true, NULL, NULL));
+                printf("%s", layout_document(arena, r, true, NULL, NULL, false));
             }
         } else {
             fprintf(stderr, "error: no layout block found\n");

@@ -44,7 +44,7 @@ func runSalam(ctx context.Context, req runRequest, timeout time.Duration, reqID 
 	timedOut := runCtx.Err() == context.DeadlineExceeded
 	if timedOut && cmd.Process != nil {
 		if err := killProcessTree(cmd.Process.Pid); err != nil {
-			log.Printf("run warning id=%s stage=kill_process_group error=%q", reqID, err)
+			log.Printf("run warning id=%s stage=kill_process_group error=%q", reqID, err) // #nosec G706 -- see mkdir_temp above
 		}
 	}
 

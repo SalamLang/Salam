@@ -101,9 +101,7 @@ static void ll_emit_prologue(ll_t *ll)
     sb_puts(g, U);
     sb_puts(g, " (");
     sb_puts(g, ll->ptr_bits == 32 ? "32" : "64");
-    sb_puts(g, "-bit target). Compile with a matching toolchain:\n");
-    sb_puts(g, ";   clang prog.ll -o prog            (native host)\n");
-    sb_puts(g, ";   clang -m32 / --target=i686-... prog.ll   (32-bit)\n");
+    sb_puts(g, "-bit target).\n");
 
     sb_puts(g, "declare i32 @printf(ptr, ...) nounwind\n");
     sb_puts(g, "declare i32 @dprintf(i32, ptr, ...) nounwind\n");
@@ -492,17 +490,6 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     sb_puts(&g, "\n");
     ll_emit_prologue(&ll);
     ll_emit_struct_types(&ll, program);
-    /* Some packages (e.g. collections, whose generic Vector<T>.get/.set do
-     * their own bounds checking) declare salam_panic/salam_idx as a local,
-     * bodyless `extern:` stub instead of importing core - that stub resolves
-     * fine for the C backend (real symbols are found at link time across
-     * separately-compiled translation units) but leaves LLVM, which compiles
-     * one function body per resolved declaration on demand, with only a
-     * `declare` and no `define` when nothing else pulls in core's real
-     * implementation. Force-compile core's actual definitions - before any
-     * package's own bodyless stub can be seen and turned into a competing
-     * bare `declare` - so every program that can panic on an out-of-bounds
-     * access links cleanly. */
     {
         static const char *const rt_essentials[] = {"salam_panic", "salam_idx", NULL};
         symbol_t *core_pk = NULL;

@@ -16,6 +16,7 @@
 #include "core/sal_format.h"
 #include "driver/web_build.h"
 #include "driver/js_build.h"
+#include "driver/driver.h"
 #include "core/arena.h"
 #include "core/sb.h"
 #include "logger/logger.h"
@@ -168,7 +169,7 @@ static void collect_scripts(ast_node_t *node, script_list_t *out)
 
 int driver_web(options_t *opt)
 {
-    logger_t *log = logger_new(stderr, opt->log_level, opt->color == 1);
+    logger_t *log = logger_new(stderr, opt->log_level, resolve_color(opt->color));
     arena_t *arena = arena_new(1 << 20);
     diag_engine_t *diag = diag_new(arena, log, PH_CODEGEN);
     int rc = 0;
@@ -184,7 +185,7 @@ int driver_web(options_t *opt)
     salam_set_stdlib_root(opt->stdlib_path);
     src = source_load(arena, path);
     if (!src) {
-        LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"), path);
+        LOG_E(log, PH_DRIVER, i18n_tr("cannot read source file '%s'"), path);
         logger_free(log);
         arena_free(arena);
         return 2;

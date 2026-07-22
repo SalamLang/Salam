@@ -15,6 +15,7 @@
 #include "core/prelude.h"
 #include "core/sal_format.h"
 #include "driver/build.h"
+#include "driver/driver.h"
 #include "driver/llvm_build.h"
 #include "core/arena.h"
 #include "core/sb.h"
@@ -132,7 +133,7 @@ int driver_build(options_t *opt)
 {
     if (opt->llvm_target && opt->llvm_target[0]) return driver_llvm_build(opt);
 
-    logger_t *log = logger_new(stderr, opt->log_level, opt->color == 1);
+    logger_t *log = logger_new(stderr, opt->log_level, resolve_color(opt->color));
     arena_t *arena = arena_new(1 << 20);
     int rc = 0;
     langpack_t *pack = langpack_load(opt->lang);
@@ -234,7 +235,7 @@ int driver_build(options_t *opt)
             if (dup) continue;
             source_file_t *src = source_load(arena, path);
             if (!src) {
-                LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"), path);
+                LOG_E(log, PH_DRIVER, i18n_tr("cannot read source file '%s'"), path);
                 all_ok = false;
                 continue;
             }
@@ -260,7 +261,8 @@ int driver_build(options_t *opt)
                 for (; pi < npf; pi++) {
                     source_file_t *psrc = source_load(arena, pfiles[pi]);
                     if (!psrc) {
-                        LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"), pfiles[pi]);
+                        LOG_E(log, PH_DRIVER, i18n_tr("cannot read source file '%s'"),
+                              pfiles[pi]);
                         all_ok = false;
                         continue;
                     }

@@ -72,8 +72,13 @@ bool ll_is_int(const char *ts)
 
 bool ll_is_signed(const char *ts)
 {
+    static const char *const uns[] = {"u8", "u16", "u32", "u64", "size", NULL};
     if (!ts) return true;
-    if (cg_is_unsigned_typestr(ts)) return false;
+    {
+        int i = 0;
+        for (; uns[i]; i++)
+            if (!strcmp(ts, uns[i])) return false;
+    }
     if (!strcmp(ts, "bool")) return false;
     if (!strcmp(ts, "char")) return false;
     return true;

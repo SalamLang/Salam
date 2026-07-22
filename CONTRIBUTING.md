@@ -2,38 +2,6 @@
 
 Welcome to Salam! We're glad you're interested in contributing to our open-source project. This guide will help you understand the contribution process and ensure your contributions are valuable and well-received.
 
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-
-- [🌟 Ways to Contribute](#-ways-to-contribute)
-- [📋 Opening Issues](#-opening-issues)
-- [🚀 Getting Started](#-getting-started)
-- [🏁 Basic Usage](#-basic-usage)
-- [🔄 Git Daily Workflow](#-git-daily-workflow)
-  - [1. Sync your fork](#1-sync-your-fork)
-  - [2. Create a fresh feature branch](#2-create-a-fresh-feature-branch)
-  - [3. Make your changes](#3-make-your-changes)
-  - [4. Stage and commit](#4-stage-and-commit)
-  - [5. Keep your branch up to date (optional but recommended)](#5-keep-your-branch-up-to-date-optional-but-recommended)
-  - [6. Push your branch](#6-push-your-branch)
-  - [7. Open a Pull Request](#7-open-a-pull-request)
-  - [8. Address review feedback](#8-address-review-feedback)
-  - [9. After the PR is merged](#9-after-the-pr-is-merged)
-- [↩️ Keeping Your Branch Up to Date with Rebase (Alternative)](#-keeping-your-branch-up-to-date-with-rebase-alternative)
-  - [Rebase your branch onto upstream](#rebase-your-branch-onto-upstream)
-  - [Force-push after rebasing](#force-push-after-rebasing)
-- [📝 Code Style and Guidelines](#-code-style-and-guidelines)
-  - [🎨 C Code Formatting (clang-format)](#-c-code-formatting-clang-format)
-  - [🪝 Commit Hooks](#-commit-hooks)
-    - [Install `prek`](#install-prek)
-    - [Set up and run hooks](#set-up-and-run-hooks)
-    - [Useful hook commands](#useful-hook-commands)
-    - [Hook priority in this repository](#hook-priority-in-this-repository)
-- [⚙️ Continuous Integration](#-continuous-integration)
-- [💬 Feedback and Support](#-feedback-and-support)
-
-<!-- END doctoc -->
-
 ## 🌟 Ways to Contribute
 
 1. **Code Contributions**: Fix bugs, add new features, or improve existing code. Please follow our coding conventions and guidelines when submitting code contributions.

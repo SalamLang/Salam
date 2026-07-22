@@ -18,12 +18,24 @@
 #define FOLD_I64_MAX 9223372036854775807LL
 #define FOLD_I64_MIN (-FOLD_I64_MAX - 1LL)
 
+static bool ts_is_unsigned(const char *ts)
+{
+    static const char *const uns[] = {"u8", "u16", "u32", "u64", "size", NULL};
+    if (!ts) return false;
+    {
+        int i = 0;
+        for (; uns[i]; i++)
+            if (!strcmp(ts, uns[i])) return true;
+    }
+    return false;
+}
+
 static bool lit_int(const ast_node_t *n, long long *out)
 {
     if (!n || n->kind != AST_LITERAL || n->op != TK_INT) return false;
     {
         uint64_t u = n->value.as.i;
-        bool uns = n->type_str && (n->type_str[0] == 'u' || !strcmp(n->type_str, "size"));
+        bool uns = ts_is_unsigned(n->type_str);
         if (uns && u > (uint64_t)FOLD_I64_MAX) return false;
         *out = (long long)u;
     }

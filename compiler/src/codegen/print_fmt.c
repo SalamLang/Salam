@@ -13,6 +13,7 @@
  */
 
 #include "codegen/print_fmt.h"
+#include "codegen/codegen_internal.h"
 #include "core/sal_format.h"
 #include "core/numstr.h"
 #include "core/sb.h"
@@ -20,7 +21,7 @@
 
 static bool ts_is_unsigned(const char *ts)
 {
-    return ts && (ts[0] == 'u' || !strcmp(ts, "size"));
+    return ts && cg_is_unsigned_typestr(ts);
 }
 
 static bool ts_is_int(const char *ts)

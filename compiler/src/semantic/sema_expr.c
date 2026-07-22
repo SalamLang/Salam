@@ -15,6 +15,7 @@
 #include "core/prelude.h"
 #include "semantic/sema_internal.h"
 #include "semantic/dce.h"
+#include "semantic/builtins.h"
 
 static type_t *ty(sema_t *s, type_kind_t k)
 {
@@ -396,6 +397,11 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
                 n->name = c;
                 sym = scope_lookup(s->cur, n->name);
             }
+        }
+        if (!sym) {
+            bool is_str;
+            if (salam_builtin_global_const(n->name, n, &is_str))
+                return decorate(s, n, is_str ? ty(s, TY_STR) : ty(s, TY_I32));
         }
         if (!sym) {
             SERR(s, 1, &n->span, "unknown identifier '%s'", n->name);

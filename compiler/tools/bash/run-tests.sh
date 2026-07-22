@@ -136,7 +136,7 @@ if want layout; then
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
             expect=$(grep -oE '(EXPECT|انتظار|توقع): .*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
-            "$SALAM" layout build "$f" --inline --output="$WORK/$name.html" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1
+            "$SALAM" layout build "$f" --inline --no-minify --output="$WORK/$name.html" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1
             if [ -f "$WORK/$name.html" ] && grep -qF "$expect" "$WORK/$name.html"; then
                 echo "PASS layout/$lang/$name (has '$expect')"
                 pass=$((pass + 1))

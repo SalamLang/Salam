@@ -30,7 +30,9 @@ static void cli_set_defaults(options_t *out)
     out->command = CMD_INSPECT;
     out->new_name = NULL;
     out->inline_mode = false;
+    out->split = false;
     out->input_count = 0;
+    out->run_args_count = 0;
     out->output = NULL;
     out->cc = "tcc";
     out->keep_c = false;
@@ -51,6 +53,7 @@ static void cli_set_defaults(options_t *out)
     out->llvm_target = NULL;
     out->llvm_native_cpu = false;
     out->no_js_minify_names = OPTIONS_INIT_NO_JS_MINIFY_NAMES;
+    out->no_minify = OPTIONS_INIT_NO_MINIFY;
     out->version_short = false;
 }
 

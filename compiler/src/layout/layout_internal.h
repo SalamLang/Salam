@@ -40,6 +40,7 @@ typedef struct {
     vec_t cls_names;
     unsigned cls_next;
     int indent;
+    bool compact;
 } layout_ctx_t;
 
 #define LWARN(cx, code, span, ...)                                                       \
@@ -64,6 +65,10 @@ void sb_put_html_escaped(sb_t *b, const char *s);
 const char *val_str(layout_ctx_t *cx, ast_node_t *v);
 
 void emit_rule(layout_ctx_t *cx, const char *rule);
+
+const char *css_decl(layout_ctx_t *cx, const char *prop, const char *val);
+
+const char *css_rule(layout_ctx_t *cx, const char *sel, const char *body);
 
 bool is_bool_attr(const char *n);
 

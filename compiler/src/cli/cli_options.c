@@ -38,11 +38,26 @@ static bool cli_positional(const char *arg, options_t *out)
         }
         out->new_name = arg;
         break;
+    case CMD_RUN:
+        if (out->input == NULL) {
+            if (out->input_count >= SALAM_MAX_INPUTS) {
+                fprintf(stderr, "%s", i18n_tr("salam: too many input files\n"));
+                return false;
+            }
+            out->inputs[out->input_count++] = arg;
+            out->input = arg;
+        } else {
+            if (out->run_args_count >= SALAM_MAX_INPUTS) {
+                fprintf(stderr, "%s", i18n_tr("salam: too many program arguments\n"));
+                return false;
+            }
+            out->run_args[out->run_args_count++] = arg;
+        }
+        break;
     case CMD_BUILD:
     case CMD_OBJ:
     case CMD_LLVM:
     case CMD_JS:
-    case CMD_RUN:
     case CMD_LAYOUT_BUILD:
     case CMD_WEB:
     case CMD_DEBUG:
@@ -150,6 +165,8 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                 out->split = true;
             } else if (strcmp(arg, "--no-js-minify-names") == 0) {
                 out->no_js_minify_names = true;
+            } else if (strcmp(arg, "--no-minify") == 0) {
+                out->no_minify = true;
             } else if ((val = cli_opt_value(arg, "--output")) != NULL) {
                 out->output = val;
             } else if (strcmp(arg, "-o") == 0) {

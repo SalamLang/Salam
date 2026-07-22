@@ -473,6 +473,7 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     vec_init(&ll.gdefer);
     vec_init(&ll.extern_names);
     vec_init(&ll.emitted);
+    vec_init(&ll.pkg_touched);
     sb_t g, meta, hg;
     sb_init(&g);
     sb_init(&meta);
@@ -528,7 +529,6 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
     ll_emit_globals(&ll, program);
     if (ll.debug) ll_debug_init(&ll, src_path);
     ll_emit_impls(&ll);
-    ll_emit_packages(&ll);
     LOG_I(log, PH_CODEGEN, "generating LLVM IR for module '%s'%s", module,
           ll.debug ? i18n_tr(" (+debug info)") : "");
     {

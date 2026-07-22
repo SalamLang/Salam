@@ -33,7 +33,7 @@ void layout_localize_names(ast_node_t *node)
 }
 
 layout_result_t *layout_generate(arena_t *a, logger_t *log, diag_engine_t *diag,
-                                 const char *file, ast_node_t *layout_block)
+                                 const char *file, ast_node_t *layout_block, bool compact)
 {
     layout_ctx_t cx;
     memset(&cx, 0, sizeof(cx));
@@ -44,6 +44,7 @@ layout_result_t *layout_generate(arena_t *a, logger_t *log, diag_engine_t *diag,
     cx.title = "Salam Page";
     cx.lang = "en";
     cx.dir = "ltr";
+    cx.compact = compact;
     vec_init(&cx.css_seen);
     vec_init(&cx.cls_keys);
     vec_init(&cx.cls_names);
@@ -81,7 +82,9 @@ layout_result_t *layout_generate(arena_t *a, logger_t *log, diag_engine_t *diag,
                     body_repeat =
                         (long)item->a->value.as.i < 1 ? 1 : (long)item->a->value.as.i;
             } else if (!strcmp(item->name, "favicon")) {
-                sb_puts(&head, lfmt(&cx, "  <link rel=\"icon\" href=\"%s\">\n",
+                sb_puts(&head, lfmt(&cx,
+                                    compact ? "<link rel=\"icon\" href=\"%s\">"
+                                            : "  <link rel=\"icon\" href=\"%s\">\n",
                                     html_escape(&cx, v)));
             }
         }
@@ -129,51 +132,91 @@ layout_result_t *layout_generate(arena_t *a, logger_t *log, diag_engine_t *diag,
 }
 
 const char *layout_document(arena_t *a, const layout_result_t *r, bool inl,
-                            const char *css_href, const char *js_href)
+                            const char *css_href, const char *js_href, bool compact)
 {
     sb_t d;
     sb_init(&d);
-    sb_puts(&d, "<!doctype html>\n");
-    sb_puts(&d, "<html lang=\"");
-    sb_puts(&d, r->lang);
-    sb_puts(&d, "\" dir=\"");
-    sb_puts(&d, r->dir);
-    sb_puts(&d, "\">\n");
-    sb_puts(&d, "<head>\n");
-    sb_puts(&d, "  <meta charset=\"utf-8\">\n");
-    sb_puts(
-        &d,
-        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
-    sb_puts(&d, "  <title>");
-    sb_put_html_escaped(&d, r->title);
-    sb_puts(&d, "</title>\n");
-    if (r->head && r->head[0]) sb_puts(&d, r->head);
-    if (inl) {
-        if (r->css && r->css[0]) {
-            sb_puts(&d, "  <style>\n");
-            sb_puts(&d, r->css);
-            sb_puts(&d, "  </style>\n");
+    if (compact) {
+        sb_puts(&d, "<!doctype html><html lang=\"");
+        sb_puts(&d, r->lang);
+        sb_puts(&d, "\" dir=\"");
+        sb_puts(&d, r->dir);
+        sb_puts(&d, "\"><head><meta charset=\"utf-8\">");
+        sb_puts(&d, "<meta name=\"viewport\" content=\"width=device-width, "
+                    "initial-scale=1\">");
+        sb_puts(&d, "<title>");
+        sb_put_html_escaped(&d, r->title);
+        sb_puts(&d, "</title>");
+        if (r->head && r->head[0]) sb_puts(&d, r->head);
+        if (inl) {
+            if (r->css && r->css[0]) {
+                sb_puts(&d, "<style>");
+                sb_puts(&d, r->css);
+                sb_puts(&d, "</style>");
+            }
+        } else if (css_href) {
+            sb_puts(&d, "<link rel=\"stylesheet\" href=\"");
+            sb_puts(&d, css_href);
+            sb_puts(&d, "\">");
         }
-    } else if (css_href) {
-        sb_puts(&d, "  <link rel=\"stylesheet\" href=\"");
-        sb_puts(&d, css_href);
+        sb_puts(&d, "</head><body>");
+        sb_puts(&d, r->html);
+        if (inl) {
+            if (r->js && r->js[0]) {
+                sb_puts(&d, "<script>");
+                sb_puts(&d, r->js);
+                sb_puts(&d, "</script>");
+            }
+        } else if (js_href) {
+            sb_puts(&d, "<script src=\"");
+            sb_puts(&d, js_href);
+            sb_puts(&d, "\"></script>");
+        }
+        sb_puts(&d, "</body></html>");
+    } else {
+        sb_puts(&d, "<!doctype html>\n");
+        sb_puts(&d, "<html lang=\"");
+        sb_puts(&d, r->lang);
+        sb_puts(&d, "\" dir=\"");
+        sb_puts(&d, r->dir);
         sb_puts(&d, "\">\n");
-    }
-    sb_puts(&d, "</head>\n<body>\n");
-    sb_puts(&d, r->html);
-    if (inl) {
-        if (r->js && r->js[0]) {
-            sb_puts(&d, "  <script>\n");
-            sb_puts(&d, r->js);
-            sb_puts(&d, "  </script>\n");
+        sb_puts(&d, "<head>\n");
+        sb_puts(&d, "  <meta charset=\"utf-8\">\n");
+        sb_puts(&d, "  <meta name=\"viewport\" content=\"width=device-width, "
+                    "initial-scale=1\">\n");
+        sb_puts(&d, "  <title>");
+        sb_put_html_escaped(&d, r->title);
+        sb_puts(&d, "</title>\n");
+        if (r->head && r->head[0]) sb_puts(&d, r->head);
+        if (inl) {
+            if (r->css && r->css[0]) {
+                sb_puts(&d, "  <style>\n");
+                sb_puts(&d, r->css);
+                sb_puts(&d, "  </style>\n");
+            }
+        } else if (css_href) {
+            sb_puts(&d, "  <link rel=\"stylesheet\" href=\"");
+            sb_puts(&d, css_href);
+            sb_puts(&d, "\">\n");
         }
-    } else if (js_href) {
-        sb_puts(&d, "  <script src=\"");
-        sb_puts(&d, js_href);
-        sb_puts(&d, "\"></script>\n");
+        sb_puts(&d, "</head>\n<body>\n");
+        sb_puts(&d, r->html);
+        if (inl) {
+            if (r->js && r->js[0]) {
+                sb_puts(&d, "  <script>\n");
+                sb_puts(&d, r->js);
+                sb_puts(&d, "  </script>\n");
+            }
+        } else if (js_href) {
+            sb_puts(&d, "  <script src=\"");
+            sb_puts(&d, js_href);
+            sb_puts(&d, "\"></script>\n");
+        }
+        sb_puts(&d, "</body>\n</html>\n");
     }
-    sb_puts(&d, "</body>\n</html>\n");
-    const char *out = arena_strdup(a, sb_cstr(&d));
-    sb_free(&d);
-    return out;
+    {
+        const char *out = arena_strdup(a, sb_cstr(&d));
+        sb_free(&d);
+        return out;
+    }
 }

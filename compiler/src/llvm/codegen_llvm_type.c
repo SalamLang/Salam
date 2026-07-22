@@ -15,7 +15,7 @@
 #include "llvm/codegen_llvm_internal.h"
 #include "core/sal_format.h"
 
-int ll_int_bits(const char *ts)
+int ll_int_bits(ll_t *ll, const char *ts)
 {
     if (!ts) return 32;
     if (!strcmp(ts, "bool")) return 1;
@@ -23,6 +23,7 @@ int ll_int_bits(const char *ts)
     if (!strcmp(ts, "i16") || !strcmp(ts, "u16")) return 16;
     if (!strcmp(ts, "i32") || !strcmp(ts, "u32")) return 32;
     if (!strcmp(ts, "i64") || !strcmp(ts, "u64")) return 64;
+    if (!strcmp(ts, "size")) return ll->ptr_bits;
     return 32;
 }
 
@@ -59,8 +60,8 @@ const char *ll_usize_to_i32(ll_t *ll, const char *ref)
 bool ll_is_int(const char *ts)
 {
     if (!ts) return false;
-    static const char *ints[] = {"bool", "char", "i8",  "i16", "i32", "i64",
-                                 "u8",   "u16",  "u32", "u64", NULL};
+    static const char *ints[] = {"bool", "char", "i8",  "i16", "i32",  "i64",
+                                 "u8",   "u16",  "u32", "u64", "size", NULL};
     {
         int i = 0;
         for (; ints[i]; i++)
@@ -73,6 +74,7 @@ bool ll_is_signed(const char *ts)
 {
     if (!ts) return true;
     if (ts[0] == 'u') return false;
+    if (!strcmp(ts, "size")) return false;
     if (!strcmp(ts, "bool")) return false;
     if (!strcmp(ts, "char")) return false;
     return true;
@@ -325,7 +327,7 @@ void ll_type_layout(ll_t *ll, const char *ts, size_t *out_size, size_t *out_alig
         *out_size = 1;
         *out_align = 1;
     } else if (ll_is_int(ts)) {
-        size_t bytes = (size_t)((ll_int_bits(ts) + 7) / 8);
+        size_t bytes = (size_t)((ll_int_bits(ll, ts) + 7) / 8);
         *out_size = bytes;
         *out_align = bytes;
     } else if (ll_struct_sym(ll, ts)) {
@@ -498,7 +500,7 @@ const char *ll_ty(ll_t *ll, const char *ts)
                       ll_ty(ll, ll_array_elem(ll, ts)));
     if (!strcmp(ts, "f32")) return "float";
     if (!strcmp(ts, "f64")) return "double";
-    if (ll_is_int(ts)) return ll_fmt(ll, "i%d", ll_int_bits(ts));
+    if (ll_is_int(ts)) return ll_fmt(ll, "i%d", ll_int_bits(ll, ts));
     if (ll_struct_sym(ll, ts)) return ll_struct_ltype(ll, ts);
     if (ll_enum_sym(ll, ts)) return "i32";
 
@@ -519,7 +521,7 @@ const char *ll_conv(ll_t *ll, llv_t v, const char *to_ts)
     const char *lf = ll_ty(ll, from), *lt = ll_ty(ll, to_ts);
     const char *r = ll_new_tmp(ll);
     if (fi && ti) {
-        int bf = ll_int_bits(from), bt = ll_int_bits(to_ts);
+        int bf = ll_int_bits(ll, from), bt = ll_int_bits(ll, to_ts);
         if (bt == bf) return v.ref;
         if (bt < bf)
             ll_emit(ll, "%s = trunc %s %s to %s", r, lf, v.ref, lt);
@@ -558,13 +560,13 @@ const char *ll_conv(ll_t *ll, llv_t v, const char *to_ts)
     return v.ref;
 }
 
-const char *ll_common(const char *a, const char *b)
+const char *ll_common(ll_t *ll, const char *a, const char *b)
 {
     if (ll_is_float(a) || ll_is_float(b)) {
         if (!strcmp(a, "f64") || !strcmp(b, "f64")) return "f64";
         return "f32";
     }
-    int ba = ll_int_bits(a), bb = ll_int_bits(b);
+    int ba = ll_int_bits(ll, a), bb = ll_int_bits(ll, b);
     int bits = ba > bb ? ba : bb;
     bool sgn = ll_is_signed(a) && ll_is_signed(b);
     if (bits <= 8) return sgn ? "i8" : "u8";

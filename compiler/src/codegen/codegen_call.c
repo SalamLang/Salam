@@ -196,6 +196,10 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
                 sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "(unsigned long long)(%s)", e);
                 break;
+            case PF_SIZE:
+                sb_puts(&fmt, pf_spec(s->kind));
+                a = cg_fmt(cg, "(size_t)(%s)", e);
+                break;
             case PF_I32:
                 sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "(int)(%s)", e);
@@ -286,7 +290,7 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
     }
     if (!strcmp(nm, "sizeof") && n->list.len == 1) {
         ast_node_t *op = (ast_node_t *)n->list.data[0];
-        return cg_fmt(cg, "(uint64_t)sizeof(%s)", cg_ctype(cg, op->type_str));
+        return cg_fmt(cg, "(size_t)sizeof(%s)", cg_ctype(cg, op->type_str));
     }
 
     if (!scope_lookup(cg->sem->global, nm)) {

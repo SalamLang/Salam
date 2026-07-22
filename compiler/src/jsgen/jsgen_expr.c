@@ -1375,7 +1375,8 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
         switch (n->op) {
         case TK_INT: {
             unsigned long long u = (unsigned long long)n->value.as.i;
-            bool uns = n->type_str && n->type_str[0] == 'u';
+            bool uns =
+                n->type_str && (n->type_str[0] == 'u' || !strcmp(n->type_str, "size"));
             if (!uns && u > 9223372036854775807ULL)
                 return cg_fmt(cg, "(%lld)", (long long)u);
             return cg_fmt(cg, "%llu", u);

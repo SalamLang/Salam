@@ -171,6 +171,8 @@ static const char *type_code(arena_t *a, const type_t *t)
         return "u32";
     case TY_U64:
         return "u64";
+    case TY_SIZE:
+        return "size";
     case TY_F32:
         return "f32";
     case TY_F64:

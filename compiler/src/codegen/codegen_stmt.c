@@ -311,8 +311,8 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         {
             size_t m = cg->locals.len;
             if (n->name) {
-                cg_line(cg, "const int32_t %s = (int32_t)__rep%d;",
-                        cg_cident(cg, n->name), t);
+                cg_line(cg, "const size_t %s = (size_t)__rep%d;", cg_cident(cg, n->name),
+                        t);
                 local_add(cg, n->name);
             }
             {

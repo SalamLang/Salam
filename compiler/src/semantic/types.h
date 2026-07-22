@@ -35,6 +35,7 @@ typedef enum {
     TY_U16,
     TY_U32,
     TY_U64,
+    TY_SIZE,
     TY_F32,
     TY_F64,
     TY_ARRAY,

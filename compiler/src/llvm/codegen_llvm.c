@@ -125,12 +125,8 @@ static void ll_emit_prologue(ll_t *ll)
     sb_puts(g, "declare double @strtod(ptr, ptr) nounwind\n");
     sb_puts(g,
             "declare ptr @strstr(ptr, ptr) nounwind willreturn memory(argmem: read)\n");
-    sb_puts(g, "declare double @llvm.pow.f64(double, double)\n\n");
-
-    sb_puts(
-        g,
-        "; `dyn Iface` fat pointer: { data, vtable } (vtable = [N x ptr] of methods)\n");
-    sb_puts(g, "%dyn = type { ptr, ptr }\n\n");
+    sb_puts(g, "declare double @llvm.pow.f64(double, double)\n");
+    sb_puts(g, "%dyn = type { ptr, ptr }\n");
 }
 
 static void ll_emit_substr(ll_t *ll)

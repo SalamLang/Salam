@@ -338,7 +338,8 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         switch (n->op) {
         case TK_INT: {
             unsigned long long u = (unsigned long long)n->value.as.i;
-            bool uns = n->type_str && n->type_str[0] == 'u';
+            bool uns =
+                n->type_str && (n->type_str[0] == 'u' || !strcmp(n->type_str, "size"));
             if (!uns && u > 9223372036854775807ULL) {
                 long long v = (long long)u;
                 return v == (-9223372036854775807LL - 1LL)

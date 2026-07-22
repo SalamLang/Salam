@@ -23,7 +23,7 @@ static bool lit_int(const ast_node_t *n, long long *out)
     if (!n || n->kind != AST_LITERAL || n->op != TK_INT) return false;
     {
         uint64_t u = n->value.as.i;
-        bool uns = n->type_str && n->type_str[0] == 'u';
+        bool uns = n->type_str && (n->type_str[0] == 'u' || !strcmp(n->type_str, "size"));
         if (uns && u > (uint64_t)FOLD_I64_MAX) return false;
         *out = (long long)u;
     }

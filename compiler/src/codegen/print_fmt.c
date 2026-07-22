@@ -20,14 +20,14 @@
 
 static bool ts_is_unsigned(const char *ts)
 {
-    return ts && ts[0] == 'u';
+    return ts && (ts[0] == 'u' || !strcmp(ts, "size"));
 }
 
 static bool ts_is_int(const char *ts)
 {
     if (!ts) return true;
-    static const char *k[] = {"i8",  "i16", "i32", "i64",  "int", "u8",
-                              "u16", "u32", "u64", "uint", 0};
+    static const char *k[] = {"i8",  "i16", "i32", "i64",  "int",  "u8",
+                              "u16", "u32", "u64", "uint", "size", 0};
     {
         int i = 0;
         for (; k[i]; i++)
@@ -50,6 +50,7 @@ static pf_kind_t pf_kind_of(const char *ts)
     if (ts_is_float(ts)) return PF_F64;
     if (!strcmp(ts, "i64")) return PF_I64;
     if (!strcmp(ts, "u64")) return PF_U64;
+    if (!strcmp(ts, "size")) return PF_SIZE;
     if (ts_is_unsigned(ts)) return PF_U32;
     return PF_I32;
 }
@@ -67,6 +68,8 @@ const char *pf_spec(pf_kind_t k)
         return "%lld";
     case PF_U64:
         return "%llu";
+    case PF_SIZE:
+        return "%zu";
     case PF_F64:
         return "%g";
     case PF_BOOL:

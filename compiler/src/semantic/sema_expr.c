@@ -56,6 +56,7 @@ static bool int_lit_fits(uint64_t u, type_kind_t k)
     case TY_U32:
         return u <= 4294967295ULL;
     case TY_U64:
+    case TY_SIZE:
         return true;
     default:
         return false;

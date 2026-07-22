@@ -303,7 +303,7 @@ llv_t ll_binary(ll_t *ll, ast_node_t *n)
                     rc);
             return (llv_t){r, "bool"};
         }
-        const char *common = ll_common(L.ts, R.ts);
+        const char *common = ll_common(ll, L.ts, R.ts);
         const char *lc = ll_conv(ll, L, common), *rc = ll_conv(ll, R, common);
         bool flt = ll_is_float(common);
         const char *r = ll_new_tmp(ll);
@@ -312,7 +312,7 @@ llv_t ll_binary(ll_t *ll, ast_node_t *n)
         return (llv_t){r, "bool"};
     }
 
-    const char *rt = n->type_str ? n->type_str : ll_common(L.ts, R.ts);
+    const char *rt = n->type_str ? n->type_str : ll_common(ll, L.ts, R.ts);
     const char *lc = ll_conv(ll, L, rt), *rc = ll_conv(ll, R, rt);
     bool flt = ll_is_float(rt);
     const char *o = ll_arith_op(op, flt, ll_is_signed(rt));
@@ -466,6 +466,9 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
                 break;
             case PF_U64:
                 sb_puts(&args, ll_fmt(ll, ", i64 %s", v.ref));
+                break;
+            case PF_SIZE:
+                sb_puts(&args, ll_fmt(ll, ", %s %s", ll->usize, ll_conv(ll, v, "size")));
                 break;
             default:
                 break;
@@ -947,8 +950,8 @@ static llv_t ll_call(ll_t *ll, ast_node_t *n)
             const char *szp = ll_new_tmp(ll), *sz = ll_new_tmp(ll);
             ll_emit(ll, "%s = getelementptr %s, ptr null, i32 1", szp,
                     ll_ty(ll, t ? t : "i32"));
-            ll_emit(ll, "%s = ptrtoint ptr %s to i64", sz, szp);
-            return (llv_t){sz, "u64"};
+            ll_emit(ll, "%s = ptrtoint ptr %s to %s", sz, szp, ll->usize);
+            return (llv_t){sz, "size"};
         }
         symbol_t *fsym = ll_sym(ll, nm);
         if (fsym && fsym->kind == SYM_FUNC) return ll_call_user(ll, n, nm);

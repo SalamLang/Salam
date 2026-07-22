@@ -438,8 +438,8 @@ ptr_elem_t ptr_elem_from_typestr(const char *ts)
     if (!strcmp(base, "u16")) return PTR_U16;
     if (!strcmp(base, "i32")) return PTR_I32;
     if (!strcmp(base, "u32")) return PTR_U32;
-    if (!strcmp(base, "i64") || !strcmp(base, "isize")) return PTR_I64;
-    if (!strcmp(base, "u64") || !strcmp(base, "usize")) return PTR_U64;
+    if (!strcmp(base, "i64")) return PTR_I64;
+    if (!strcmp(base, "u64") || !strcmp(base, "size")) return PTR_U64;
     if (!strcmp(base, "f32")) return PTR_F32;
     if (!strcmp(base, "f64")) return PTR_F64;
     if (!strcmp(base, "str")) return PTR_STR;
@@ -521,8 +521,8 @@ void ptr_store(sptr_t p, int64_t idx, value_t v)
 
 bool is_int_typename(const char *b)
 {
-    static const char *ints[] = {"i8",  "i16", "i32",  "i64",  "u8",    "u16",   "u32",
-                                 "u64", "int", "byte", "char", "isize", "usize", NULL};
+    static const char *ints[] = {"i8",  "i16", "i32",  "i64",  "u8",   "u16", "u32",
+                                 "u64", "int", "byte", "char", "size", NULL};
     {
         int i = 0;
         for (; ints[i]; i++)

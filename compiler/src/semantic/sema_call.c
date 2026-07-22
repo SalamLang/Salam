@@ -310,13 +310,13 @@ type_t *check_call(sema_t *s, ast_node_t *n)
     if (callee && callee->kind == AST_IDENTIFIER && strcmp(callee->name, "sizeof") == 0) {
         if (n->list.len != 1 || ((ast_node_t *)n->list.data[0])->kind != AST_TYPE) {
             SERR(s, 12, &n->span, "sizeof(Type) takes a single type operand");
-            return decorate(s, n, ty(s, TY_U64));
+            return decorate(s, n, ty(s, TY_SIZE));
         }
         ast_node_t *op = (ast_node_t *)n->list.data[0];
         type_t *ot = sema_resolve_type(s, op);
         decorate(s, op, ot);
         decorate(s, callee, ty(s, TY_VOID));
-        return decorate(s, n, ty(s, TY_U64));
+        return decorate(s, n, ty(s, TY_SIZE));
     }
 
     vec_t argtypes;

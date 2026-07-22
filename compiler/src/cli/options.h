@@ -57,6 +57,8 @@ typedef struct {
     bool split;
     const char *inputs[SALAM_MAX_INPUTS];
     int input_count;
+    const char *run_args[SALAM_MAX_INPUTS];
+    int run_args_count;
     const char *output;
     const char *cc;
     bool keep_c;

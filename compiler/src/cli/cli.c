@@ -32,6 +32,7 @@ static void cli_set_defaults(options_t *out)
     out->inline_mode = false;
     out->split = false;
     out->input_count = 0;
+    out->run_args_count = 0;
     out->output = NULL;
     out->cc = "tcc";
     out->keep_c = false;

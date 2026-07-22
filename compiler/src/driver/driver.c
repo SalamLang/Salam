@@ -350,7 +350,7 @@ static int driver_run(options_t *opt)
     }
 
     const char *exe = opt->exe_path[0] ? opt->exe_path : opt->output;
-    char cmd[700];
+    char cmd[4096];
 #if defined(_WIN32)
     sal_snprintf(cmd, sizeof cmd, "\"%s\"", exe);
 #else
@@ -359,6 +359,13 @@ static int driver_run(options_t *opt)
     else
         sal_snprintf(cmd, sizeof cmd, "\"./%s\"", exe);
 #endif
+    {
+        int i = 0;
+        for (; i < opt->run_args_count; i++) {
+            size_t len = strlen(cmd);
+            sal_snprintf(cmd + len, sizeof(cmd) - len, " \"%s\"", opt->run_args[i]);
+        }
+    }
     int run_rc = system(cmd);
     if (temp_exe) remove(exe);
 #if defined(_WIN32)

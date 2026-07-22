@@ -639,7 +639,7 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         if (n->name) {
             scope_t *sc = scope_new(s->a, SCOPE_BLOCK, s->cur);
             symbol_t *iv = symbol_new(s->a, SYM_VAR, n->name);
-            iv->type = ty(s, TY_SIZE);
+            iv->type = ty(s, TY_I32);
             iv->is_mut = false;
             iv->decl = n;
             scope_define(s->a, sc, iv);

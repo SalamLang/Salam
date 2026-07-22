@@ -421,7 +421,8 @@ class MainActivity : AppCompatActivity() {
             return try {
                 fileChooserLauncher.launch(params.createIntent())
                 true
-            } catch (_: ActivityNotFoundException) {
+            } catch (e: ActivityNotFoundException) {
+                Log.w(TAG, "No activity found to handle file chooser intent", e)
                 filePathCallback = null
                 false
             }

@@ -25,6 +25,15 @@ static void ll_emit_defers(ll_t *ll)
 
 void ll_emit_return(ll_t *ll, ast_node_t *value)
 {
+    if (ll->match_result_ptr) {
+        if (value) {
+            const char *v = ll_conv(ll, ll_expr(ll, value), ll->match_result_ts);
+            ll_emit(ll, "store %s %s, ptr %s", ll_ty(ll, ll->match_result_ts), v,
+                    ll->match_result_ptr);
+        }
+        ll_emit_term(ll, "br label %%%s", ll->match_merge_block);
+        return;
+    }
     ll_emit_defers(ll);
     if (ll->is_main) {
         if (value)
@@ -137,6 +146,34 @@ static void ll_if(ll_t *ll, ast_node_t *n)
         ll_emit_term(ll, "br label %%%s", endL);
     }
     ll_emit_label(ll, endL);
+}
+
+static void ll_match_stmt(ll_t *ll, ast_node_t *n)
+{
+    llv_t subj;
+    bool is_variant;
+    const char *endL;
+    if (n->list.len == 0) {
+        ll_expr(ll, n->a);
+        return;
+    }
+    subj = ll_expr(ll, n->a);
+    is_variant = subj.ts && !strncmp(subj.ts, "Variant<", 8);
+    endL = ll_new_lbl(ll, "mend");
+    {
+        size_t i = 0;
+        for (; i < n->list.len; i++) {
+            ast_node_t *arm = (ast_node_t *)n->list.data[i];
+            const char *cond = ll_match_arm_cond(ll, arm, subj, is_variant);
+            const char *bodyL = ll_new_lbl(ll, "marm");
+            const char *nextL = (i + 1 < n->list.len) ? ll_new_lbl(ll, "mnext") : endL;
+            ll_emit_term(ll, "br i1 %s, label %%%s, label %%%s", cond, bodyL, nextL);
+            ll_emit_label(ll, bodyL);
+            ll_stmts_scoped(ll, arm->b);
+            ll_emit_term(ll, "br label %%%s", endL);
+            ll_emit_label(ll, nextL);
+        }
+    }
 }
 
 static void ll_while(ll_t *ll, ast_node_t *n)
@@ -337,6 +374,9 @@ void ll_stmt(ll_t *ll, ast_node_t *n)
         break;
     case AST_IF:
         ll_if(ll, n);
+        break;
+    case AST_MATCH:
+        ll_match_stmt(ll, n);
         break;
     case AST_UNTIL:
         ll_while(ll, n);

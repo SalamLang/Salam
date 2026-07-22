@@ -25,6 +25,8 @@ static ast_node_t *parse_repeat(parser_t *p);
 static ast_node_t *parse_each(parser_t *p);
 static ast_node_t *parse_return(parser_t *p);
 static ast_node_t *parse_defer(parser_t *p);
+static ast_node_t *parse_match_arm(parser_t *p);
+static ast_node_t *parse_match_pattern(parser_t *p);
 
 ast_node_t *parse_cond_expr(parser_t *p)
 {
@@ -84,6 +86,8 @@ static ast_node_t *parse_statement(parser_t *p)
         return parse_each(p);
     case TK_KW_REPEAT:
         return parse_repeat(p);
+    case TK_KW_MATCH:
+        return parse_match(p);
     case TK_KW_RET:
         return parse_return(p);
     case TK_KW_DEFER:
@@ -129,10 +133,6 @@ static ast_node_t *parse_statement(parser_t *p)
     }
 }
 
-/* True when a '(' right after the print keyword closes only once the whole
- * statement ends, e.g. `print (a, b)` or `print (2)` -- the call-style wrap
- * this statement must reject in favor of the bare `print a, b` form. A '('
- * that is part of a larger expression, e.g. `print (a + b) / 2`, is fine. */
 static bool print_args_fully_parenthesized(parser_t *p)
 {
     if (!p_at(p, TK_LPAREN)) return false;
@@ -240,6 +240,107 @@ static ast_node_t *parse_if(parser_t *p)
     P_RULE(p, "if_stmt");
     p_advance(p);
     return parse_if_tail(p);
+}
+
+static bool tk_is_pattern_literal(token_kind_t k)
+{
+    switch (k) {
+    case TK_INT:
+    case TK_FLOAT:
+    case TK_STRING:
+    case TK_TRIPLE_STRING:
+    case TK_RAW_STRING:
+    case TK_CHAR:
+    case TK_UTF8_CHAR:
+    case TK_KW_TRUE:
+    case TK_KW_FALSE:
+    case TK_KW_NULL:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static ast_node_t *parse_match_pattern(parser_t *p)
+{
+    ast_node_t *pat = p_mk(p, AST_MATCH_PATTERN);
+    if (tk_is_pattern_literal(p_peek(p)->kind)) {
+        const token_t *t = p_peek(p);
+        ast_node_t *lit = p_mk(p, AST_LITERAL);
+        lit->op = t->kind;
+        lit->value = t->value;
+        lit->name = t->lexeme;
+        p_advance(p);
+        p_fin(p, lit);
+        pat->a = lit;
+    } else if (p_at(p, TK_IDENT)) {
+        uint32_t line = p_peek(p)->span.begin.line;
+        ast_node_t *id = p_mk(p, AST_IDENTIFIER);
+        id->name = p_peek(p)->lexeme;
+        p_advance(p);
+        p_fin(p, id);
+        pat->a = id;
+        if (p_at(p, TK_IDENT) && p_peek(p)->span.begin.line == line) {
+            pat->name = p_peek(p)->lexeme;
+            p_advance(p);
+        }
+    } else {
+        p_error(p, "expected a pattern (literal, identifier, or type name) in match arm");
+        pat->a = p_error_node(p);
+    }
+    p_fin(p, pat);
+    return pat;
+}
+
+static ast_node_t *parse_match_arm(parser_t *p)
+{
+    bool is_block;
+    ast_node_t *arm;
+    if (!p_recurse_enter(p, "match arm nested too deeply")) return p_mk(p, AST_MATCH_ARM);
+    arm = p_mk(p, AST_MATCH_ARM);
+    if (p_match(p, TK_KW_ELSE)) {
+        arm->op = TK_KW_ELSE;
+    } else {
+        do {
+            ast_add(p->a, arm, parse_match_pattern(p));
+        } while (p_match(p, TK_COMMA));
+    }
+    is_block = p_at(p, TK_COLON);
+    if (is_block) {
+        arm->b = parse_block(p);
+    } else {
+        p_expect(p, TK_FAT_ARROW, "'=>' in match arm");
+        ast_node_t *e = parse_expr(p);
+        ast_node_t *blk = ast_new(p->a, AST_BLOCK, e ? &e->span : &p_peek(p)->span);
+        ast_node_t *es = ast_new(p->a, AST_EXPR_STMT, e ? &e->span : &p_peek(p)->span);
+        es->a = e;
+        ast_add(p->a, blk, es);
+        arm->b = blk;
+    }
+    p_fin(p, arm);
+    if (!is_block) p_term(p);
+    p_recurse_leave(p);
+    return arm;
+}
+
+ast_node_t *parse_match(parser_t *p)
+{
+    P_RULE(p, "match_expr");
+    if (!p_recurse_enter(p, "match nested too deeply")) return p_mk(p, AST_MATCH);
+    ast_node_t *n = p_mk(p, AST_MATCH);
+    p_advance(p);
+    n->a = parse_cond_expr(p);
+    p_expect(p, TK_COLON, "':' after match subject");
+    p_skip_terminators(p);
+    while (!p_at(p, TK_KW_END) && !p_at_eof(p)) {
+        ast_add(p->a, n, parse_match_arm(p));
+        p_skip_terminators(p);
+        if (p->panic) p_sync(p);
+    }
+    p_expect(p, TK_KW_END, "'end' to close match");
+    p_fin(p, n);
+    p_recurse_leave(p);
+    return n;
 }
 
 static ast_node_t *parse_until(parser_t *p)

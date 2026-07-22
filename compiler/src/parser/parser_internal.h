@@ -72,6 +72,10 @@ size_t p_ident_run_len(const parser_t *p);
 
 const char *p_munch_name(parser_t *p);
 
+const char *p_munch_value_name(parser_t *p);
+
+const char *p_munch_member_name(parser_t *p, const char *what);
+
 const char *parse_decl_name(parser_t *p);
 
 ast_node_t *p_error_node(parser_t *p);
@@ -95,6 +99,8 @@ ast_node_t *parse_expr(parser_t *p);
 ast_node_t *parse_cond_expr(parser_t *p);
 
 ast_node_t *parse_primary(parser_t *p);
+
+ast_node_t *parse_match(parser_t *p);
 
 ast_node_t *parse_type(parser_t *p);
 

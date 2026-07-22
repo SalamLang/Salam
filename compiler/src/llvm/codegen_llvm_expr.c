@@ -478,7 +478,9 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
         ll_emit(ll, "call void @salam_out_flush()");
     }
     const char *t = ll_new_tmp(ll);
-    if (err) {
+    if (err && ll_target_is_windows(ll->triple)) {
+        ll_emit(ll, "%s = call i32 (ptr, ...) @printf(ptr %s%s)", t, f, sb_cstr(&args));
+    } else if (err) {
         ll_emit(ll, "%s = call i32 (i32, ptr, ...) @dprintf(i32 2, ptr %s%s)", t, f,
                 sb_cstr(&args));
     } else {
@@ -582,9 +584,8 @@ static llv_t ll_call_user(ll_t *ll, ast_node_t *n, const char *nm)
     return (llv_t){r, rts};
 }
 
-static llv_t ll_call_len(ll_t *ll, ast_node_t *n)
+static llv_t ll_len_of(ll_t *ll, ast_node_t *n, ast_node_t *arg)
 {
-    ast_node_t *arg = (ast_node_t *)n->list.data[0];
     const char *ts = arg->type_str;
     if (ll_is_slice_ts(ts)) {
         llv_t v = ll_expr(ll, arg);
@@ -605,6 +606,11 @@ static llv_t ll_call_len(ll_t *ll, ast_node_t *n)
     const char *l = ll_new_tmp(ll);
     ll_emit(ll, "%s = call %s @strlen(ptr %s)", l, ll->usize, v.ref);
     return (llv_t){ll_usize_to_i32(ll, l), "i32"};
+}
+
+static llv_t ll_call_len(ll_t *ll, ast_node_t *n)
+{
+    return ll_len_of(ll, n, (ast_node_t *)n->list.data[0]);
 }
 
 static llv_t ll_emit_call(ll_t *ll, ast_node_t *n, func_sig_t *sig, const char *lead,
@@ -806,6 +812,9 @@ static llv_t ll_call_method(ll_t *ll, ast_node_t *n, ast_node_t *callee)
         llv_t o;
         if (ll_call_str(ll, n, obj, mname, &o)) return o;
     }
+
+    if (!strcmp(mname, "len") && (ll_is_slice_ts(ots) || (ots && strchr(ots, '['))))
+        return ll_len_of(ll, n, obj);
 
     if (obj->kind == AST_IDENTIFIER) {
         symbol_t *pk = ll_sym(ll, obj->name);
@@ -1238,6 +1247,110 @@ static llv_t ll_literal(ll_t *ll, ast_node_t *n)
     }
 }
 
+static const char *ll_match_pat_eq(ll_t *ll, llv_t subj, ast_node_t *pat_head)
+{
+    llv_t pv = ll_expr(ll, pat_head);
+    if (ll_is_str(subj.ts)) {
+        const char *c = ll_new_tmp(ll);
+        const char *r = ll_new_tmp(ll);
+        ll_emit(ll, "%s = call i32 @strcmp(ptr %s, ptr %s)", c, subj.ref, pv.ref);
+        ll_emit(ll, "%s = icmp eq i32 %s, 0", r, c);
+        return r;
+    }
+    {
+        const char *conv = ll_conv(ll, pv, subj.ts);
+        const char *r = ll_new_tmp(ll);
+        if (ll_is_float(subj.ts))
+            ll_emit(ll, "%s = fcmp oeq %s %s, %s", r, ll_ty(ll, subj.ts), subj.ref, conv);
+        else
+            ll_emit(ll, "%s = icmp eq %s %s, %s", r, ll_ty(ll, subj.ts), subj.ref, conv);
+        return r;
+    }
+}
+
+static const char *ll_match_variant_tag_cond(ll_t *ll, llv_t subj, int tag)
+{
+    const char *t = ll_new_tmp(ll);
+    const char *r = ll_new_tmp(ll);
+    ll_emit(ll, "%s = extractvalue %s %s, 0", t, ll_ty(ll, subj.ts), subj.ref);
+    ll_emit(ll, "%s = icmp eq i32 %s, %d", r, t, tag);
+    return r;
+}
+
+const char *ll_match_arm_cond(ll_t *ll, ast_node_t *arm, llv_t subj, bool is_variant)
+{
+    if (arm->op == TK_KW_ELSE) return "true";
+    {
+        const char *acc = NULL;
+        size_t i = 0;
+        for (; i < arm->list.len; i++) {
+            ast_node_t *pat = (ast_node_t *)arm->list.data[i];
+            const char *c =
+                is_variant ? ll_match_variant_tag_cond(ll, subj, (int)pat->value.as.i)
+                           : ll_match_pat_eq(ll, subj, pat->a);
+            if (!acc) {
+                acc = c;
+                continue;
+            }
+            {
+                const char *r = ll_new_tmp(ll);
+                ll_emit(ll, "%s = or i1 %s, %s", r, acc, c);
+                acc = r;
+            }
+        }
+        return acc ? acc : "false";
+    }
+}
+
+static llv_t ll_match_expr(ll_t *ll, ast_node_t *n)
+{
+    llv_t subj = ll_expr(ll, n->a);
+    bool is_variant = subj.ts && !strncmp(subj.ts, "Variant<", 8);
+    const char *rts = n->type_str ? n->type_str : "i32";
+    const char *resptr = ll_fmt(ll, "%%mres.%d", ll->tmp++);
+    const char *endL = ll_new_lbl(ll, "mend");
+    const char *fallbackL = ll_new_lbl(ll, "mtrap");
+    const char *saved_ptr = ll->match_result_ptr;
+    const char *saved_ts = ll->match_result_ts;
+    const char *saved_merge = ll->match_merge_block;
+    llv_t out;
+    ll_emit_alloca(ll, "%s = alloca %s", resptr, ll_ty(ll, rts));
+    ll->match_result_ptr = resptr;
+    ll->match_result_ts = rts;
+    ll->match_merge_block = endL;
+    {
+        size_t i = 0;
+        for (; i < n->list.len; i++) {
+            ast_node_t *arm = (ast_node_t *)n->list.data[i];
+            const char *cond = ll_match_arm_cond(ll, arm, subj, is_variant);
+            const char *bodyL = ll_new_lbl(ll, "marm");
+            const char *nextL =
+                (i + 1 < n->list.len) ? ll_new_lbl(ll, "mnext") : fallbackL;
+            ll_emit_term(ll, "br i1 %s, label %%%s, label %%%s", cond, bodyL, nextL);
+            ll_emit_label(ll, bodyL);
+            ll_stmt(ll, arm->b);
+            ll_emit_term(ll, "br label %%%s", endL);
+            ll_emit_label(ll, nextL);
+        }
+    }
+    if (n->list.len == 0) {
+        ll_emit_term(ll, "br label %%%s", fallbackL);
+        ll_emit_label(ll, fallbackL);
+    }
+    ll_emit(ll, "call void @llvm.trap()");
+    ll_emit_term(ll, "unreachable");
+    ll_emit_label(ll, endL);
+    ll->match_result_ptr = saved_ptr;
+    ll->match_result_ts = saved_ts;
+    ll->match_merge_block = saved_merge;
+    {
+        const char *r = ll_new_tmp(ll);
+        ll_emit(ll, "%s = load %s, ptr %s", r, ll_ty(ll, rts), resptr);
+        out = (llv_t){r, rts};
+    }
+    return out;
+}
+
 llv_t ll_expr(ll_t *ll, ast_node_t *n)
 {
     if (!n) return (llv_t){"0", "i32"};
@@ -1276,6 +1389,17 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
     }
     case AST_BINARY:
         return ll_binary(ll, n);
+    case AST_MATCH:
+        return ll_match_expr(ll, n);
+    case AST_VARIANT_BOX: {
+        llv_t v = ll_expr(ll, n->a);
+        return (llv_t){ll_box_variant(ll, v, (int)n->value.as.i, n->type_str),
+                       n->type_str};
+    }
+    case AST_VARIANT_UNWRAP: {
+        llv_t v = ll_expr(ll, n->a);
+        return ll_unwrap_variant(ll, v, n->type_str ? n->type_str : "i32");
+    }
     case AST_TERNARY: {
         const char *rt = n->type_str ? n->type_str : "i32";
         const char *cond = ll_as_i1(ll, ll_expr(ll, n->a));

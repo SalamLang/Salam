@@ -261,6 +261,78 @@ const char *cg_vec_cname(cg_t *cg, const char *ts)
     return cg_fmt(cg, "Vector_%s", cg_vec_code_str(cg, elem));
 }
 
+static void cg_variant_push_trimmed(const char *start, const char *end,
+                                    char members[][160], size_t *n, size_t max_members)
+{
+    while (start < end && *start == ' ')
+        start++;
+    while (end > start && end[-1] == ' ')
+        end--;
+    if (*n >= max_members) return;
+    {
+        size_t l = (size_t)(end - start);
+        if (l >= 160) l = 159;
+        memcpy(members[*n], start, l);
+        members[*n][l] = 0;
+        (*n)++;
+    }
+}
+
+size_t cg_variant_members(const char *ts, char members[][160], size_t max_members)
+{
+    size_t n = 0;
+    const char *lt = strchr(ts, '<');
+    const char *gt = strrchr(ts, '>');
+    int depth;
+    const char *p, *start;
+    if (!lt || !gt || gt <= lt) return 0;
+    start = lt + 1;
+    depth = 0;
+    for (p = start; p < gt; p++) {
+        if (*p == '<')
+            depth++;
+        else if (*p == '>')
+            depth--;
+        else if (*p == ',' && depth == 0) {
+            cg_variant_push_trimmed(start, p, members, &n, max_members);
+            start = p + 1;
+        }
+    }
+    cg_variant_push_trimmed(start, gt, members, &n, max_members);
+    return n;
+}
+
+const char *cg_variant_cname(cg_t *cg, const char *ts)
+{
+    char members[64][160];
+    size_t n = cg_variant_members(ts, members, 64);
+    sb_t b;
+    sb_init(&b);
+    sb_puts(&b, "_Salam_variant");
+    {
+        size_t i = 0;
+        for (; i < n; i++) {
+            sb_putc(&b, '_');
+            sb_puts(&b, cg_vec_code_str(cg, members[i]));
+        }
+    }
+    {
+        const char *r = arena_strdup(cg->a, sb_cstr(&b));
+        sb_free(&b);
+        return r;
+    }
+}
+
+int cg_variant_tag_of(const char *variant_ts, const char *member_ts)
+{
+    char members[64][160];
+    size_t n = cg_variant_members(variant_ts, members, 64);
+    size_t i = 0;
+    for (; i < n; i++)
+        if (!strcmp(members[i], member_ts)) return (int)i;
+    return -1;
+}
+
 bool cg_is_slice_ts(const char *ts)
 {
     return ts && !strncmp(ts, "slice<", 6);
@@ -279,6 +351,7 @@ const char *cg_ctype(cg_t *cg, const char *ts)
 {
     if (!ts) return "void";
     if (cg_is_slice_ts(ts)) return "salam_slice";
+    if (!strncmp(ts, "Variant<", 8)) return cg_variant_cname(cg, ts);
     if (!strncmp(ts, "dyn ", 4)) {
         const char *suf = strpbrk(ts + 4, "[*");
         char iface[96];
@@ -304,6 +377,8 @@ const char *cg_ctype(cg_t *cg, const char *ts)
 const char *cg_decl(cg_t *cg, const char *ts, const char *name)
 {
     if (cg_is_slice_ts(ts)) return cg_fmt(cg, "salam_slice %s", cg_cident(cg, name));
+    if (!strncmp(ts, "Variant<", 8))
+        return cg_fmt(cg, "%s %s", cg_variant_cname(cg, ts), cg_cident(cg, name));
     if (!strncmp(ts, "dyn ", 4)) {
         const char *suf = strpbrk(ts + 4, "[*");
         char iface[96];
@@ -554,7 +629,7 @@ const char *func_cast_params_env(cg_t *cg, const char *ts)
 bool type_is_byval_agg(const type_t *t)
 {
     return t && (t->kind == TY_STRUCT || t->kind == TY_VEC || t->kind == TY_DYN ||
-                 t->kind == TY_SLICE);
+                 t->kind == TY_SLICE || t->kind == TY_VARIANT);
 }
 
 long array_size_of(const char *ts)

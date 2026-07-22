@@ -18,13 +18,18 @@
 
 static void vec_collect_one(cg_t *cg, const char *ts)
 {
-    if (!ts || strncmp(ts, "Vector<", 7) != 0) return;
-    {
+    if (!ts) return;
+    if (!strncmp(ts, "Vector<", 7)) {
         size_t i = 0;
         for (; i < cg->vec_types.len; i++)
             if (!strcmp((const char *)cg->vec_types.data[i], ts)) return;
+        vec_push(cg->a, &cg->vec_types, (void *)arena_strdup(cg->a, ts));
+    } else if (!strncmp(ts, "Variant<", 8)) {
+        size_t i = 0;
+        for (; i < cg->variant_types.len; i++)
+            if (!strcmp((const char *)cg->variant_types.data[i], ts)) return;
+        vec_push(cg->a, &cg->variant_types, (void *)arena_strdup(cg->a, ts));
     }
-    vec_push(cg->a, &cg->vec_types, (void *)arena_strdup(cg->a, ts));
 }
 
 static void vec_collect(cg_t *cg, ast_node_t *n)
@@ -265,6 +270,24 @@ static void vec_emit_typedef(cg_t *cg, sb_t *h, const char *ts)
             cg_fmt(cg, "#ifndef SALAM_%s_TYPEDEF\n#define SALAM_%s_TYPEDEF\n", cn, cn));
     sb_puts(h, cg_fmt(cg, "typedef struct { %s* data; int32_t len; int32_t cap; } %s;\n",
                       E, cn));
+    sb_puts(h, "#endif\n");
+}
+
+static void variant_emit_typedef(cg_t *cg, sb_t *h, const char *ts)
+{
+    char members[64][160];
+    size_t n = cg_variant_members(ts, members, 64);
+    const char *cn = cg_variant_cname(cg, ts);
+    sb_puts(h,
+            cg_fmt(cg, "#ifndef SALAM_%s_TYPEDEF\n#define SALAM_%s_TYPEDEF\n", cn, cn));
+    sb_puts(h, cg_fmt(cg, "typedef struct { int32_t tag; union {"));
+    {
+        size_t i = 0;
+        for (; i < n; i++)
+            sb_puts(h,
+                    cg_fmt(cg, " %s;", cg_decl(cg, members[i], cg_fmt(cg, "v%zu", i))));
+    }
+    sb_puts(h, cg_fmt(cg, " } payload; } %s;\n", cn));
     sb_puts(h, "#endif\n");
 }
 
@@ -545,6 +568,32 @@ static const char *struct_dep_cname(cg_t *cg, type_t *t)
 }
 
 static void hdr_struct_visit(cg_t *cg, sb_t *h, size_t i, symbol_t **syms,
+                             const char **gcns, size_t n, char *state);
+
+static void hdr_struct_visit_dep(cg_t *cg, sb_t *h, const char *dep, size_t self,
+                                 symbol_t **syms, const char **gcns, size_t n,
+                                 char *state)
+{
+    size_t k = 0;
+    for (; k < n; k++)
+        if (k != self && !strcmp(dep, gcns[k]))
+            hdr_struct_visit(cg, h, k, syms, gcns, n, state);
+}
+
+static void hdr_variant_field_deps(cg_t *cg, sb_t *h, type_t *vt, size_t self,
+                                   symbol_t **syms, const char **gcns, size_t n,
+                                   char *state)
+{
+    size_t m = 0;
+    for (; m < vt->params.len; m++) {
+        type_t *mt = (type_t *)vt->params.data[m];
+        const char *dep = struct_dep_cname(cg, mt);
+        if (dep) hdr_struct_visit_dep(cg, h, dep, self, syms, gcns, n, state);
+    }
+    variant_emit_typedef(cg, h, type_to_string(cg->sem->tc, vt));
+}
+
+static void hdr_struct_visit(cg_t *cg, sb_t *h, size_t i, symbol_t **syms,
                              const char **gcns, size_t n, char *state)
 {
     if (state[i]) return;
@@ -555,13 +604,13 @@ static void hdr_struct_visit(cg_t *cg, sb_t *h, size_t i, symbol_t **syms,
         for (; j < ssym->members->symbols.len; j++) {
             symbol_t *f = (symbol_t *)ssym->members->symbols.data[j];
             if (f->kind != SYM_FIELD) continue;
-            const char *dep = struct_dep_cname(cg, f->type);
-            if (!dep) continue;
+            if (f->type && f->type->kind == TY_VARIANT) {
+                hdr_variant_field_deps(cg, h, f->type, i, syms, gcns, n, state);
+                continue;
+            }
             {
-                size_t k = 0;
-                for (; k < n; k++)
-                    if (k != i && !strcmp(dep, gcns[k]))
-                        hdr_struct_visit(cg, h, k, syms, gcns, n, state);
+                const char *dep = struct_dep_cname(cg, f->type);
+                if (dep) hdr_struct_visit_dep(cg, h, dep, i, syms, gcns, n, state);
             }
         }
     }
@@ -718,6 +767,13 @@ void cg_header(cg_t *cg, ast_node_t *program)
     sb_puts(h, "\n");
     hdr_structs(cg, program, h);
     hdr_aliases(cg, program, h);
+
+    {
+        size_t i = 0;
+        for (; i < cg->variant_types.len; i++)
+            variant_emit_typedef(cg, h, (const char *)cg->variant_types.data[i]);
+    }
+    sb_puts(h, "\n");
 
     {
         size_t i = 0;

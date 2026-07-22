@@ -30,6 +30,46 @@ static type_t *decorate(sema_t *s, ast_node_t *n, type_t *t)
     return sema_decorate(s, n, t);
 }
 
+static size_t resolve_array_dim(sema_t *s, ast_node_t *dim)
+{
+    if (!dim) return 0;
+
+    if (dim->kind == AST_LITERAL && dim->value.kind == TV_INT)
+        return (size_t)dim->value.as.i;
+
+    if (dim->kind == AST_IDENTIFIER) {
+        symbol_t *cs = scope_lookup(s->cur, dim->name);
+        if (cs && cs->kind == SYM_CONST && cs->has_ival) return (size_t)cs->ival;
+        SERR(s, 11, &dim->span, "array size must be a constant integer");
+        return 0;
+    }
+
+    if (dim->kind == AST_MEMBER && dim->a && dim->a->kind == AST_IDENTIFIER) {
+        symbol_t *pk = scope_lookup(s->cur, dim->a->name);
+        if (pk && pk->kind == SYM_PACKAGE) {
+            const char *mname = pkg_member_canon(s, pk, dim->name, &dim->span);
+            symbol_t *cs = scope_lookup_local(pk->members, mname);
+            if (!cs) {
+                SERR(s, 16, &dim->span, "package '%s' has no exported member '%s'",
+                     pk->name, mname);
+                return 0;
+            }
+            if (!cs->is_pub) {
+                SERR(s, 17, &dim->span,
+                     "'%s' is not exported by package '%s' (mark it 'pub')", mname,
+                     pk->name);
+                return 0;
+            }
+            if (cs->kind == SYM_CONST && cs->has_ival) return (size_t)cs->ival;
+        }
+        SERR(s, 11, &dim->span, "array size must be a constant integer");
+        return 0;
+    }
+
+    SERR(s, 11, &dim->span, "array size must be a constant integer");
+    return 0;
+}
+
 type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
 {
     if (!tnode) return ty(s, TY_VOID);
@@ -47,18 +87,7 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
             size_t i = tnode->dims.len;
             for (; i-- > 0;) {
                 ast_node_t *dim = (ast_node_t *)tnode->dims.data[i];
-                size_t len = 0;
-                if (dim && dim->kind == AST_LITERAL && dim->value.kind == TV_INT)
-                    len = (size_t)dim->value.as.i;
-                else if (dim && dim->kind == AST_IDENTIFIER) {
-                    symbol_t *cs = scope_lookup(s->cur, dim->name);
-                    if (cs && cs->kind == SYM_CONST && cs->has_ival)
-                        len = (size_t)cs->ival;
-                    else
-                        SERR(s, 11, &dim->span, "array size must be a constant integer");
-                } else if (dim)
-                    SERR(s, 11, &dim->span, "array size must be a constant integer");
-                dt = type_array(s->tc, dt, len);
+                dt = type_array(s->tc, dt, resolve_array_dim(s, dim));
             }
         }
         if (tnode->is_pointer) dt = type_ptr(s->tc, dt);
@@ -133,9 +162,6 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
         }
         type_t *ret = tnode->type ? sema_resolve_type(s, tnode->type) : ty(s, TY_VOID);
         base = type_func(s->tc, ret, &ptypes);
-        /* 'extern func(...)' is a raw C-ABI function pointer (no closure env),
-         * distinguished from an ordinary Salam closure func type by this marker
-         * (type_t has no spare flag field; length is unused for TY_FUNC). */
         if (tnode->is_extern) base->length = 1;
         if (tnode->is_pointer) base = type_ptr(s->tc, base);
         decorate(s, tnode, base);
@@ -145,6 +171,27 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
 
     if (tnode->name && strcmp(tnode->name, "File") == 0) {
         base = type_file(s->tc);
+    } else if (tnode->name && strcmp(tnode->name, "Variant") == 0) {
+        if (tnode->list.len < 2) {
+            SERR(s, 1, &tnode->span,
+                 "'Variant' requires at least 2 type arguments (got %zu)",
+                 tnode->list.len);
+            base = err_ty(s);
+        } else {
+            type_t *members[64];
+            size_t n = tnode->list.len;
+            if (n > 64) n = 64;
+            {
+                size_t i = 0;
+                for (; i < n; i++) {
+                    members[i] = sema_resolve_type(s, (ast_node_t *)tnode->list.data[i]);
+                    if (members[i] && members[i]->kind == TY_VARIANT)
+                        SERR(s, 1, &tnode->span,
+                             "'Variant' cannot contain another 'Variant' as a member");
+                }
+            }
+            base = type_variant(s->tc, members, n);
+        }
     } else if (pk >= 0) {
         base = ty(s, (type_kind_t)pk);
     } else if (generic_template(s, tnode->name, SYM_STRUCT)) {
@@ -193,19 +240,7 @@ type_t *sema_resolve_type(sema_t *s, ast_node_t *tnode)
         size_t i = tnode->dims.len;
         for (; i-- > 0;) {
             ast_node_t *dim = (ast_node_t *)tnode->dims.data[i];
-            size_t len = 0;
-            if (dim && dim->kind == AST_LITERAL && dim->value.kind == TV_INT) {
-                len = (size_t)dim->value.as.i;
-            } else if (dim && dim->kind == AST_IDENTIFIER) {
-                symbol_t *cs = scope_lookup(s->cur, dim->name);
-                if (cs && cs->kind == SYM_CONST && cs->has_ival)
-                    len = (size_t)cs->ival;
-                else
-                    SERR(s, 11, &dim->span, "array size must be a constant integer");
-            } else if (dim) {
-                SERR(s, 11, &dim->span, "array size must be a constant integer");
-            }
-            base = type_array(s->tc, base, len);
+            base = type_array(s->tc, base, resolve_array_dim(s, dim));
         }
     }
     if (tnode->is_slice) base = type_slice(s->tc, base);

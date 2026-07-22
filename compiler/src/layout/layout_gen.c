@@ -47,13 +47,15 @@ layout_result_t *layout_generate(arena_t *a, logger_t *log, diag_engine_t *diag,
     vec_init(&cx.css_seen);
     vec_init(&cx.cls_keys);
     vec_init(&cx.cls_names);
-    sb_t html, css, js;
+    sb_t html, css, js, head;
     sb_init(&html);
     sb_init(&css);
     sb_init(&js);
+    sb_init(&head);
     cx.html = &html;
     cx.css = &css;
     cx.js = &js;
+    cx.head = &head;
     cx.indent = 0;
     layout_localize_names(layout_block);
     LOG_I(log, PH_CODEGEN, "generating layout output");
@@ -78,6 +80,9 @@ layout_result_t *layout_generate(arena_t *a, logger_t *log, diag_engine_t *diag,
                     item->a->value.kind == TV_INT)
                     body_repeat =
                         (long)item->a->value.as.i < 1 ? 1 : (long)item->a->value.as.i;
+            } else if (!strcmp(item->name, "favicon")) {
+                sb_puts(&head, lfmt(&cx, "  <link rel=\"icon\" href=\"%s\">\n",
+                                    html_escape(&cx, v)));
             }
         }
     }
@@ -95,7 +100,8 @@ layout_result_t *layout_generate(arena_t *a, logger_t *log, diag_engine_t *diag,
                         else if (strcmp(item->name, "title") &&
                                  strcmp(item->name, "lang") &&
                                  strcmp(item->name, "dir") &&
-                                 strcmp(item->name, "repeat"))
+                                 strcmp(item->name, "repeat") &&
+                                 strcmp(item->name, "favicon"))
                             LOG_T(log, PH_CODEGEN, "ignoring document attribute '%s'",
                                   item->name);
                     } else if (item->kind == AST_LAYOUT_ELEMENT) {
@@ -109,12 +115,14 @@ layout_result_t *layout_generate(arena_t *a, logger_t *log, diag_engine_t *diag,
     r->html = arena_strdup(a, sb_cstr(&html));
     r->css = arena_strdup(a, sb_cstr(&css));
     r->js = arena_strdup(a, sb_cstr(&js));
+    r->head = arena_strdup(a, sb_cstr(&head));
     r->title = cx.title;
     r->lang = cx.lang;
     r->dir = cx.dir;
     sb_free(&html);
     sb_free(&css);
     sb_free(&js);
+    sb_free(&head);
     LOG_I(log, PH_CODEGEN, "layout: %zu bytes HTML, %zu bytes CSS, %zu bytes JS",
           strlen(r->html), strlen(r->css), strlen(r->js));
     return r;
@@ -139,6 +147,7 @@ const char *layout_document(arena_t *a, const layout_result_t *r, bool inl,
     sb_puts(&d, "  <title>");
     sb_put_html_escaped(&d, r->title);
     sb_puts(&d, "</title>\n");
+    if (r->head && r->head[0]) sb_puts(&d, r->head);
     if (inl) {
         if (r->css && r->css[0]) {
             sb_puts(&d, "  <style>\n");

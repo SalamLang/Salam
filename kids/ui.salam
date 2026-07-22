@@ -1,0 +1,389 @@
+package ui
+
+import dom
+import str
+import "model.salam"
+import "layoutfx.salam"
+import "palette.salam"
+import "labels.salam"
+
+mut toolboxEl := 0 as i64
+mut blockLayerEl := 0 as i64
+mut canvasWrapEl := 0 as i64
+mut trashEl := 0 as i64
+mut notebookEl := 0 as i64
+mut inspectorEl := 0 as i64
+mut codeTextEl := 0 as i64
+mut codePeekEl := 0 as i64
+mut boxesEl := 0 as i64
+
+pub mut selectedId := -1
+pub mut highlightId := -1
+
+pub mut onBlockCreated := (id: int): ret end
+pub mut onTileCreated := (id: int): ret end
+
+pub func Init():
+    toolboxEl = dom.ById("toolbox")
+    blockLayerEl = dom.ById("blockLayer")
+    canvasWrapEl = dom.ById("canvasWrap")
+    trashEl = dom.ById("trash")
+    notebookEl = dom.ById("notebook")
+    inspectorEl = dom.ById("inspector")
+    codeTextEl = dom.ById("codeText")
+    codePeekEl = dom.ById("codePeek")
+    boxesEl = dom.ById("boxesPanel")
+end
+
+pub func trashHandle(): i64: ret trashEl end
+pub func canvasWrapHandle(): i64: ret canvasWrapEl end
+pub func blockLayerHandle(): i64: ret blockLayerEl end
+
+pub func renderToolbox(mode: int):
+    dom.SetText(toolboxEl, "")
+    n := palette.toolboxCount(mode)
+    mut i := 0
+    until i < n:
+        kind := palette.toolboxKind(mode, i)
+        tile := dom.Create("div")
+        dom.AddClass(tile, "tile")
+        dom.SetAttr(tile, "data-kind", labels.caption(kind))
+        dom.SetStyle(tile, "background", palette.color(kind))
+        dom.SetAttr(tile, "id", tileId(kind))
+        tileHtml := "<div class='tileIcon'>".concat(labels.icon(kind)).concat("</div><div class='tileLabel'>").concat(labels.caption(kind)).concat("</div>")
+        dom.SetHtml(tile, tileHtml)
+        dom.Append(toolboxEl, tile)
+        onTileCreated(kind)
+        i += 1
+    end
+end
+
+pub func tileId(kind: int): str:
+    ret "tile_".concat(model.formatInt(kind as i64))
+end
+
+pub func clearNotebook(): dom.SetText(notebookEl, "") end
+
+pub func addNotebookLine(text: str):
+    line := dom.Create("p")
+    dom.AddClass(line, "notebookLine")
+    dom.SetText(line, text)
+    dom.Append(notebookEl, line)
+    dom.SetProp(notebookEl, "scrollTop", dom.GetProp(notebookEl, "scrollHeight"))
+end
+
+pub func setCode(text: str): dom.SetText(codeTextEl, text) end
+
+pub func toggleCodePeek():
+    cur := dom.GetStyle(codePeekEl, "display")
+    if cur == "none": dom.SetStyle(codePeekEl, "display", "flex")
+    else: dom.SetStyle(codePeekEl, "display", "none")
+    end
+end
+
+func blockContent(id: int): str:
+    kind := model.blocks[id].kind
+    icon := labels.icon(kind)
+    cap := labels.caption(kind)
+    detail := blockDetail(id)
+    ret "<span class='bIcon'>".concat(icon).concat("</span><span class='bCap'>").concat(cap).concat("</span><span class='bDetail'>").concat(detail).concat("</span>")
+end
+
+func blockDetail(id: int): str:
+    kind := model.blocks[id].kind
+    b := model.blocks[id]
+    if kind == model.KIND_SAY:
+        if b.textB == "": ret quoteText(b.textA) end
+        ret quoteText(b.textA).concat(" + [").concat(escapeHtml(b.textB)).concat("]")
+    else kind == model.KIND_ASK:
+        ret quoteText(b.textA).concat(" -> [").concat(escapeHtml(b.textB)).concat("]")
+    else kind == model.KIND_IF || kind == model.KIND_REPEAT_UNTIL:
+        ret "[".concat(escapeHtml(b.textA)).concat("] ").concat(labels.opLabel(b.op)).concat(" ").concat(quoteText(b.textB))
+    else kind == model.KIND_REPEAT_N:
+        ret model.formatNumber(b.numA).concat(" times")
+    else kind == model.KIND_MOVE:
+        ret model.formatNumber(b.numA).concat(" steps")
+    else kind == model.KIND_TURN:
+        ret model.formatNumber(b.numA).concat(" degrees")
+    else kind == model.KIND_MAKE_BOX:
+        ret "[".concat(escapeHtml(b.textA)).concat("] = ").concat(quoteText(b.textB))
+    else kind == model.KIND_ADD_TO_BOX:
+        ret "[".concat(escapeHtml(b.textA)).concat("] + ").concat(quoteText(b.textB))
+    else kind == model.KIND_SUBTRACT_FROM_BOX:
+        ret "[".concat(escapeHtml(b.textA)).concat("] - ").concat(quoteText(b.textB))
+    else:
+        ret ""
+    end
+end
+
+func quoteText(s: str): str: ret "\"".concat(escapeHtml(s)).concat("\"") end
+
+func escapeHtml(s: str): str:
+    mut r := str.Replace(s, "&", "&amp;")
+    r = str.Replace(r, "<", "&lt;")
+    r = str.Replace(r, ">", "&gt;")
+    r = str.Replace(r, "\"", "&quot;")
+    r = str.Replace(r, "'", "&#39;")
+    ret r
+end
+
+func ensureBlockEl(id: int): i64:
+    if model.blocks[id].el != 0: ret model.blocks[id].el end
+    el := dom.Create("div")
+    dom.AddClass(el, "block")
+    dom.SetAttr(el, "id", "blk_".concat(model.formatInt(id as i64)))
+    dom.Append(blockLayerEl, el)
+    model.blocks[id].el = el
+    onBlockCreated(id)
+    ret el
+end
+
+pub func refreshBlockContent(id: int):
+    el := ensureBlockEl(id)
+    kind := model.blocks[id].kind
+    dom.SetStyle(el, "background", palette.color(kind))
+    dom.SetHtml(el, blockContent(id))
+    if model.isContainer(kind):
+        dom.AddClass(el, "container")
+    else:
+        dom.RemoveClass(el, "container")
+    end
+end
+
+pub func render():
+    model.rescanDeclaredNames()
+    layoutfx.computeLayout()
+    mut i := 0
+    until i < layoutfx.orderCount:
+        id := layoutfx.order[i]
+        el := ensureBlockEl(id)
+        refreshBlockContent(id)
+        dom.SetStyle(el, "left", model.formatNumber(model.blocks[id].x).concat("px"))
+        dom.SetStyle(el, "top", model.formatNumber(model.blocks[id].y).concat("px"))
+        if id == selectedId:
+            dom.AddClass(el, "selected")
+        else:
+            dom.RemoveClass(el, "selected")
+        end
+        if id == highlightId:
+            dom.AddClass(el, "running")
+        else:
+            dom.RemoveClass(el, "running")
+        end
+        i += 1
+    end
+    h := layoutfx.totalHeight + 40.0
+    dom.SetStyle(blockLayerEl, "height", model.formatNumber(h).concat("px"))
+    renderBoxes()
+end
+
+pub func renderBoxes():
+    if model.declaredCount == 0:
+        dom.SetHtml(boxesEl, "<div class='boxesEmpty'>".concat(labels.NO_BOXES_YET).concat("</div>"))
+        ret
+    end
+    mut html := ""
+    mut i := 0
+    until i < model.declaredCount:
+        name := model.declaredNames[i]
+        vid := model.findVar(name)
+        mut val := "—"
+        if vid >= 0: val = model.varDisplay(vid) end
+        html = html.concat("<div class='boxCard'><span class='boxName'>📦 ").concat(escapeHtml(name)).concat("</span><span class='boxVal'>").concat(escapeHtml(val)).concat("</span></div>")
+        i += 1
+    end
+    dom.SetHtml(boxesEl, html)
+end
+
+pub func removeSubtree(id: int):
+    if id < 0: ret end
+    if model.isContainer(model.blocks[id].kind):
+        removeChain(model.blocks[id].child)
+    end
+    if model.blocks[id].el != 0:
+        dom.Remove(model.blocks[id].el)
+        model.blocks[id].el = 0
+    end
+    model.blocks[id].used = false
+end
+
+func removeChain(headId: int):
+    mut cur := headId
+    until cur != -1:
+        nxt := model.blocks[cur].next
+        removeSubtree(cur)
+        cur = nxt
+    end
+end
+
+pub func selectBlock(id: int):
+    selectedId = id
+    renderInspector()
+    render()
+end
+
+pub func clearSelection():
+    selectedId = -1
+    renderInspector()
+    render()
+end
+
+func inputRow(labelText: str, value: str, kind: str, onId: str): str:
+    ret "<label class='fieldLabel'>".concat(labelText).concat("</label><input class='field' type='").concat(kind).concat("' id='").concat(onId).concat("' value='").concat(escapeAttr(value)).concat("'>")
+end
+
+func escapeAttr(s: str): str:
+    ret str.Replace(s, "'", "&#39;")
+end
+
+pub func renderInspector():
+    if selectedId < 0:
+        dom.SetStyle(inspectorEl, "display", "none")
+        dom.SetText(inspectorEl, "")
+        ret
+    end
+    kind := model.blocks[selectedId].kind
+    if kind == model.KIND_START || kind == model.KIND_END:
+        dom.SetStyle(inspectorEl, "display", "none")
+        ret
+    end
+    dom.SetStyle(inspectorEl, "display", "flex")
+    b := model.blocks[selectedId]
+    mut html := "<div class='inspTitle'>".concat(labels.icon(kind)).concat(" ").concat(labels.caption(kind)).concat("</div><div class='inspHint'>").concat(labels.hint(kind)).concat("</div><div class='inspFields'>")
+
+    if kind == model.KIND_SAY:
+        html = html.concat(inputRow("Say this:", b.textA, "text", "f_textA"))
+        html = html.concat(inputRow("...then show box (leave empty for none):", b.textB, "text", "f_textB"))
+        html = html.concat(chipsHtml("f_textB"))
+    else kind == model.KIND_ASK:
+        html = html.concat(inputRow("Ask this question:", b.textA, "text", "f_textA"))
+        html = html.concat(inputRow("...remember the answer in box:", b.textB, "text", "f_textB"))
+        html = html.concat(chipsHtml("f_textB"))
+    else kind == model.KIND_IF || kind == model.KIND_REPEAT_UNTIL:
+        html = html.concat(inputRow("Look at box:", b.textA, "text", "f_textA"))
+        html = html.concat(chipsHtml("f_textA"))
+        opsHtml := "<div class='opRow'>".concat(opButton(model.OP_EQ, b.op)).concat(opButton(model.OP_GT, b.op)).concat(opButton(model.OP_LT, b.op)).concat("</div>")
+        html = html.concat(opsHtml)
+        html = html.concat(inputRow("...compared to:", b.textB, "text", "f_textB"))
+    else kind == model.KIND_REPEAT_N:
+        html = html.concat(inputRow("How many times?", model.formatNumber(b.numA), "text", "f_numA"))
+    else kind == model.KIND_MOVE:
+        html = html.concat(inputRow("How many steps?", model.formatNumber(b.numA), "text", "f_numA"))
+    else kind == model.KIND_TURN:
+        html = html.concat(inputRow("How many degrees?", model.formatNumber(b.numA), "text", "f_numA"))
+    else kind == model.KIND_MAKE_BOX:
+        html = html.concat(inputRow("Box name:", b.textA, "text", "f_textA"))
+        html = html.concat(chipsHtml("f_textA"))
+        html = html.concat(inputRow("Starting value:", b.textB, "text", "f_textB"))
+    else kind == model.KIND_ADD_TO_BOX:
+        html = html.concat(inputRow("Add to box:", b.textA, "text", "f_textA"))
+        html = html.concat(chipsHtml("f_textA"))
+        html = html.concat(inputRow("Add this (a number, or some words):", b.textB, "text", "f_textB"))
+    else kind == model.KIND_SUBTRACT_FROM_BOX:
+        html = html.concat(inputRow("Take away from box:", b.textA, "text", "f_textA"))
+        html = html.concat(chipsHtml("f_textA"))
+        html = html.concat(inputRow("How much?", b.textB, "text", "f_textB"))
+    end
+
+    html = html.concat("</div>")
+    dom.SetHtml(inspectorEl, html)
+    wireInspectorInputs(kind)
+end
+
+func opButton(op: int, current: int): str:
+    mut cls := "opBtn"
+    if op == current: cls = "opBtn opBtnOn" end
+    ret "<button type='button' class='".concat(cls).concat("' id='op_").concat(model.formatInt(op as i64)).concat("'>").concat(labels.opLabel(op)).concat("</button>")
+end
+
+func chipId(fieldId: str, i: int): str:
+    ret "chip_".concat(fieldId).concat("_").concat(model.formatInt(i as i64))
+end
+
+func chipsHtml(fieldId: str): str:
+    if model.declaredCount == 0: ret "" end
+    mut html := "<div class='chipsRow'>"
+    mut i := 0
+    until i < model.declaredCount:
+        html = html.concat("<button type='button' class='chip' id='").concat(chipId(fieldId, i)).concat("'>📦 ").concat(escapeHtml(model.declaredNames[i])).concat("</button>")
+        i += 1
+    end
+    html = html.concat("</div>")
+    ret html
+end
+
+func wireChips(fieldId: str):
+    mut i := 0
+    until i < model.declaredCount:
+        el := dom.ById(chipId(fieldId, i))
+        name := model.declaredNames[i]
+        dom.OnEvent(el, "click", ():
+            dom.SetValue(dom.ById(fieldId), name)
+            if fieldId == "f_textA": model.blocks[selectedId].textA = name end
+            if fieldId == "f_textB": model.blocks[selectedId].textB = name end
+            render()
+        end)
+        i += 1
+    end
+end
+
+func wireInspectorInputs(kind: int):
+    if kind == model.KIND_SAY:
+        wireTextField("f_textA")
+        wireTextField("f_textB")
+        wireChips("f_textB")
+    else kind == model.KIND_ASK:
+        wireTextField("f_textA")
+        wireTextField("f_textB")
+        wireChips("f_textB")
+    else kind == model.KIND_MAKE_BOX:
+        wireTextField("f_textA")
+        wireTextField("f_textB")
+        wireChips("f_textA")
+    else kind == model.KIND_ADD_TO_BOX || kind == model.KIND_SUBTRACT_FROM_BOX:
+        wireTextField("f_textA")
+        wireTextField("f_textB")
+        wireChips("f_textA")
+    else kind == model.KIND_IF || kind == model.KIND_REPEAT_UNTIL:
+        wireTextField("f_textA")
+        wireTextField("f_textB")
+        wireChips("f_textA")
+        wireOpButton(model.OP_EQ)
+        wireOpButton(model.OP_GT)
+        wireOpButton(model.OP_LT)
+    else kind == model.KIND_REPEAT_N || kind == model.KIND_MOVE || kind == model.KIND_TURN:
+        wireNumberField("f_numA")
+    end
+end
+
+func wireTextField(id: str):
+    if !dom.Exists(id): ret end
+    el := dom.ById(id)
+    dom.OnEvent(el, "input", ():
+        v := dom.GetValue(el)
+        if id == "f_textA": model.blocks[selectedId].textA = v end
+        if id == "f_textB": model.blocks[selectedId].textB = v end
+        render()
+    end)
+end
+
+func wireNumberField(id: str):
+    if !dom.Exists(id): ret end
+    el := dom.ById(id)
+    dom.OnEvent(el, "input", ():
+        v := dom.GetValue(el)
+        model.blocks[selectedId].numA = model.parseNumber(v)
+        render()
+    end)
+end
+
+func wireOpButton(op: int):
+    id := "op_".concat(model.formatInt(op as i64))
+    if !dom.Exists(id): ret end
+    el := dom.ById(id)
+    dom.OnEvent(el, "click", ():
+        model.blocks[selectedId].op = op
+        renderInspector()
+        render()
+    end)
+end

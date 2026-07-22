@@ -46,7 +46,6 @@ command -v "$EMCC" >/dev/null 2>&1 || [ -e "$EMCC" ] || {
 
 OUT_DIR="../editor"
 mkdir -p "$OUT_DIR"
-"$SALAM" run tools/salam/gen-editor-keywords.salam || echo "warning: keyword generation failed; using existing ../editor/keywords.js" >&2
 SRC_DIRS="core source logger xml condcomp token langpack i18n lexer ast parser
         diag semantic interp layout codegen llvm web"
 SRCS=""
@@ -66,3 +65,5 @@ for d in $SRC_DIRS; do SRCS="$SRCS src/$d/*.c"; done
     -s EXPORTED_FUNCTIONS="['_salam_web_run_app','_salam_web_build_layout','_salam_web_emit','_salam_web_version','_malloc','_free']" \
     -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']"
 echo "built $OUT_DIR/salam-wa.js (+ .wasm, .data)"
+"$SALAM" web "$OUT_DIR/src/page.salam" --output="$OUT_DIR/index.html"
+echo "built $OUT_DIR/index.html"

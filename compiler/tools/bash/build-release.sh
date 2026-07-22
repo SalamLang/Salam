@@ -4,7 +4,7 @@
 set -e
 . "$(dirname "$0")/lib.sh"
 CC="${CC:-tcc}"
-VERSION="$(cat ../VERSION 2>/dev/null || echo 0.2.4)"
+VERSION="$(cat ../VERSION 2>/dev/null || echo 0.2.5)"
 OS="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' | sed 's/mingw.*/windows/;s/msys.*/windows/')"
 DIST="dist/salam-$VERSION-$OS"
 echo ">> building compiler ($CC)"

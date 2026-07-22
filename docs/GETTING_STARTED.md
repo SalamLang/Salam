@@ -1,22 +1,3 @@
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-
-- [🚀 Getting Started with Salam](#-getting-started-with-salam)
-  - [What is Salam?](#what-is-salam)
-  - [✅ Prerequisites](#-prerequisites)
-  - [🔨 Build the compiler](#-build-the-compiler)
-    - [Quick build (tcc)](#quick-build-tcc)
-    - [CMake build (with tests)](#cmake-build-with-tests)
-    - [Makefile build](#makefile-build)
-  - [👋 Hello, World!](#-hello-world)
-  - [🏗️ Compiling a program with `salam build`](#-compiling-a-program-with-salam-build)
-  - [🎨 Formatting with `salam format`](#-formatting-with-salam-format)
-  - [🌐 Layout DSL — compile to HTML/CSS/JS](#-layout-dsl--compile-to-htmlcssjs)
-  - [🖥️ Interactive REPLs](#-interactive-repls)
-  - [📚 Where to go next](#-where-to-go-next)
-
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
-
 # 🚀 Getting Started with Salam
 
 ## What is Salam?

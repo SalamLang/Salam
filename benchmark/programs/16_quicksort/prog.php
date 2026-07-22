@@ -1,5 +1,7 @@
 <?php
 
+// phpcs:disable PSR1.Files.SideEffects -- benchmark script intentionally declares and runs
+
 function quicksort(array &$a, int $lo, int $hi): void
 {
     if ($lo >= $hi) {

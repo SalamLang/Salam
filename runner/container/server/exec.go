@@ -58,7 +58,11 @@ func runSalam(ctx context.Context, req runRequest, timeout time.Duration, reqID 
 }
 
 func buildSalamCmd(runCtx context.Context, req runRequest, srcPath, jobDir string) (*exec.Cmd, *capBuffer, *capBuffer) {
-	cmd := exec.CommandContext(runCtx, salamBin, buildArgs(req, srcPath)...)
+	// req.Type, req.Engine, and req.Language are checked against fixed
+	// allowlists in validateRunRequest before runSalam is ever reached, and
+	// srcPath is a server-generated temp path, so buildArgs never forwards
+	// unvalidated client input to the child process.
+	cmd := exec.CommandContext(runCtx, salamBin, buildArgs(req, srcPath)...) // #nosec G204 -- args are allowlist-validated, see above
 	cmd.Dir = jobDir
 	cmd.Env = childEnv(jobDir)
 	setProcessGroup(cmd)

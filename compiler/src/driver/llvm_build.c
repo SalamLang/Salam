@@ -15,6 +15,7 @@
 #include "core/prelude.h"
 #include "core/sal_format.h"
 #include "driver/llvm_build.h"
+#include "driver/driver.h"
 #include "core/arena.h"
 #include "logger/logger.h"
 #include "langpack/langpack.h"
@@ -198,7 +199,7 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
 
 int driver_llvm(options_t *opt)
 {
-    logger_t *log = logger_new(stderr, opt->log_level, opt->color == 1);
+    logger_t *log = logger_new(stderr, opt->log_level, resolve_color(opt->color));
     arena_t *arena = arena_new(1 << 20);
     int rc = 0;
     langpack_t *pack = langpack_load(opt->lang);

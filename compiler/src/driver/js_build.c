@@ -15,6 +15,7 @@
 #include "core/prelude.h"
 #include "core/sal_format.h"
 #include "driver/js_build.h"
+#include "driver/driver.h"
 #include "core/arena.h"
 #include "core/sb.h"
 #include "core/vec.h"
@@ -282,7 +283,7 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                 if (dup) continue;
                 src = source_load(arena, path);
                 if (!src) {
-                    LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"), path);
+                    LOG_E(log, PH_DRIVER, i18n_tr("cannot read source file '%s'"), path);
                     all_ok = false;
                     continue;
                 }
@@ -311,7 +312,8 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                             token_stream_t *ptoks = NULL;
                             ast_node_t *pprog = NULL;
                             if (!psrc) {
-                                LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"),
+                                LOG_E(log, PH_DRIVER,
+                                      i18n_tr("cannot read source file '%s'"),
                                       pfiles[pi]);
                                 all_ok = false;
                                 continue;
@@ -500,7 +502,7 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
 
 int driver_js(options_t *opt)
 {
-    logger_t *log = logger_new(stderr, opt->log_level, opt->color == 1);
+    logger_t *log = logger_new(stderr, opt->log_level, resolve_color(opt->color));
     arena_t *arena = arena_new(1 << 20);
     int rc = 0;
     const char *module = NULL;

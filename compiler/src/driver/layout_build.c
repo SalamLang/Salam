@@ -15,6 +15,7 @@
 #include "core/prelude.h"
 #include "core/sal_format.h"
 #include "driver/layout_build.h"
+#include "driver/driver.h"
 #include "core/arena.h"
 #include "core/sb.h"
 #include "logger/logger.h"
@@ -86,7 +87,7 @@ static ast_node_t *find_layout(ast_node_t *program)
 
 int driver_layout_build(options_t *opt)
 {
-    logger_t *log = logger_new(stderr, opt->log_level, opt->color == 1);
+    logger_t *log = logger_new(stderr, opt->log_level, resolve_color(opt->color));
     arena_t *arena = arena_new(1 << 20);
     diag_engine_t *diag = diag_new(arena, log, PH_CODEGEN);
     int rc = 0;
@@ -108,7 +109,7 @@ int driver_layout_build(options_t *opt)
             const char *path = opt->inputs[i];
             source_file_t *src = source_load(arena, path);
             if (!src) {
-                LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"), path);
+                LOG_E(log, PH_DRIVER, i18n_tr("cannot read source file '%s'"), path);
                 rc = 2;
                 continue;
             }

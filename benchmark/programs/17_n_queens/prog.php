@@ -1,5 +1,7 @@
 <?php
 
+// phpcs:disable PSR1.Files.SideEffects -- benchmark script intentionally declares and runs
+
 $N = 12;
 $cols = array_fill(0, $N, 0);
 $diag1 = array_fill(0, 2 * $N - 1, 0);

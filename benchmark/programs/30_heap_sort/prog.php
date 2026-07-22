@@ -1,5 +1,7 @@
 <?php
 
+// phpcs:disable PSR1.Files.SideEffects -- benchmark script intentionally declares and runs
+
 function heapify(array &$arr, int $n, int $i): void
 {
     $largest = $i;

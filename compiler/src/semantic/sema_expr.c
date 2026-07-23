@@ -208,6 +208,16 @@ static type_t *check_binary(sema_t *s, ast_node_t *n)
                  type_to_string(s->tc, l), type_to_string(s->tc, r));
             return decorate(s, n, err_ty(s));
         }
+        if (op == TK_STAR && (l->kind == TY_STR || r->kind == TY_STR)) {
+            if ((l->kind == TY_STR && type_is_integer(r)) ||
+                (r->kind == TY_STR && type_is_integer(l)))
+                return decorate(s, n, ty(s, TY_STR));
+            SERR(s, 21, &n->span,
+                 "operator '*' on a string requires the other operand to be an integer "
+                 "(got '%s' and '%s')",
+                 type_to_string(s->tc, l), type_to_string(s->tc, r));
+            return decorate(s, n, err_ty(s));
+        }
         type_t *c = type_common_arith(s->tc, l, r);
         if (!c) {
             SERR(s, 21, &n->span, "operator cannot be applied to '%s' and '%s'",

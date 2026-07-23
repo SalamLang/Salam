@@ -430,6 +430,9 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "extern const char* salam_str_trim(const char* s);\n"
                "extern void* salam_str_split(const char* s, const char* delim, void* "
                "out_count);\n"
+               "extern const char* salam_str_repeat(const char* s, int32_t n);\n"
+               "extern const char* salam_str_upper(const char* s);\n"
+               "extern const char* salam_str_lower(const char* s);\n"
                "#endif\n");
     if (strcmp(cg->module, "core") != 0)
         sb_puts(h, cg_fmt(cg, "#include \"%score.h\"\n", SALAM_MOD_PREFIX));

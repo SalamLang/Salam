@@ -195,6 +195,22 @@ if want fmt; then
         done
     done
 fi
+if want ssl; then
+    jobs="$WORK/.jobs-ssl.$$"
+    : >"$jobs"
+    for lang in $LANGS; do
+        [ -d "tests/$lang/ssl" ] || continue
+        for f in tests/"$lang"/ssl/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            case "$name" in _*) continue ;; esac
+            exp="tests/$lang/ssl/$name.out"
+            [ -f "$exp" ] || continue
+            printf 'ssl/%s/%s\t%s\t%s\t%s\t-\n' "$lang" "$name" "$f" "$lang" "$exp" >>"$jobs"
+        done
+    done
+    run_batch "$jobs"
+fi
 if want db; then
     for lang in $LANGS; do
         [ -d "tests/$lang/db" ] || continue

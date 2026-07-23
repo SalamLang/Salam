@@ -959,6 +959,38 @@ static void load_imports(sema_t *s, ast_node_t *program)
     }
 }
 
+void sema_check_unused_imports(sema_t *s)
+{
+    const char *entry = langpack_entry_for(s->lang);
+    bool has_entry = false;
+    {
+        size_t i = 0;
+        for (; i < s->global->symbols.len; i++) {
+            symbol_t *f = (symbol_t *)s->global->symbols.data[i];
+            if (f->kind == SYM_FUNC && f->name &&
+                (strcmp(f->name, "main") == 0 || strcmp(f->name, entry) == 0)) {
+                has_entry = true;
+                break;
+            }
+        }
+    }
+    if (!has_entry) return;
+    size_t i = 0;
+    for (; i < s->program->list.len; i++) {
+        ast_node_t *imp = (ast_node_t *)s->program->list.data[i];
+        if (imp->kind != AST_IMPORT) continue;
+        const char *spec = import_spec_of(imp);
+        if (!spec) continue;
+        const char *local = norm_ident(s->a, import_local_name(s->a, imp, spec));
+        if (!local || local[0] == '_') continue;
+        symbol_t *bind = scope_lookup_local(s->global, local);
+        if (!bind || bind->kind != SYM_PACKAGE || bind->used) continue;
+        SERR(s, 82, &imp->span,
+             "unused import '%s' (use one of its members, or prefix the name with '_')",
+             local);
+    }
+}
+
 void sema_load_prelude(sema_t *s)
 {
     if (s->prelude || s->prelude_tried) return;
@@ -1013,7 +1045,10 @@ sema_result_t *sema_run_cached(arena_t *a, logger_t *log, ast_node_t *program,
     }
     sema_collect(&s, program);
     sema_check_pass(&s, program);
-    if (!s.in_pkg && !s.relax_unused) sema_check_unused_funcs(&s);
+    if (!s.in_pkg && !s.relax_unused) {
+        sema_check_unused_funcs(&s);
+        sema_check_unused_imports(&s);
+    }
     LOG_I(log, PH_SEMANTIC, "analysis complete: %zu error(s), %zu warning(s)",
           s.diag->errors, s.diag->warnings);
     sema_result_t *r = (sema_result_t *)arena_alloc(a, sizeof(*r));

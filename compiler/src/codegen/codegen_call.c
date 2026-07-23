@@ -447,7 +447,7 @@ static const char *call_str(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t
     if (!strcmp(m, "concat")) return cg_fmt(cg, "salam_strcat(%s, %s)", recv, a0);
     if (!strcmp(m, "substr"))
         return cg_fmt(cg, "salam_str_substr(%s, %s, %s)", recv, a0, a1);
-    if (!strcmp(m, "find")) {
+    if (!strcmp(m, "find") || !strcmp(m, "search") || !strcmp(m, "indexOf")) {
         int tf = ++cg->tmpn;
         return cg_fmt(cg,
                       "({ const char *__fh%d=(%s); const char *__fn%d=(%s); const char "
@@ -459,6 +459,9 @@ static const char *call_str(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t
     if (!strcmp(m, "to_int"))
         return cg_fmt(cg, "(int32_t)strtol(%s, ((void*)0), 10)", recv);
     if (!strcmp(m, "to_float")) return cg_fmt(cg, "strtod(%s, ((void*)0))", recv);
+    if (!strcmp(m, "lower")) return cg_fmt(cg, "salam_str_lower(%s)", recv);
+    if (!strcmp(m, "upper")) return cg_fmt(cg, "salam_str_upper(%s)", recv);
+    if (!strcmp(m, "repeat")) return cg_fmt(cg, "salam_str_repeat(%s, %s)", recv, a0);
     if (!strcmp(m, "split")) {
         const char *cn = cg_ctype(cg, n->type_str ? n->type_str : "Vector_str");
         int t = ++cg->tmpn;

@@ -945,11 +945,16 @@ static const char *jsg_call_str(jg_t *g, ast_node_t *n, ast_node_t *obj,
         if (!strcmp(m, "len")) return cg_fmt(cg, "%s.length", recv);
         if (!strcmp(m, "concat")) return cg_fmt(cg, "%s + %s", recv, a0);
         if (!strcmp(m, "substr")) return cg_fmt(cg, "%s.substr(%s, %s)", recv, a0, a1);
-        if (!strcmp(m, "find")) return cg_fmt(cg, "%s.indexOf(%s)", recv, a0);
+        if (!strcmp(m, "find") || !strcmp(m, "search") || !strcmp(m, "indexOf"))
+            return cg_fmt(cg, "%s.indexOf(%s)", recv, a0);
         if (!strcmp(m, "trim")) return cg_fmt(cg, "%s.trim()", recv);
         if (!strcmp(m, "to_int")) return cg_fmt(cg, "(parseInt(%s, 10) || 0)", recv);
         if (!strcmp(m, "to_float")) return cg_fmt(cg, "(parseFloat(%s) || 0)", recv);
         if (!strcmp(m, "split")) return cg_fmt(cg, "%s.split(%s)", recv, a0);
+        if (!strcmp(m, "lower")) return cg_fmt(cg, "%s.toLowerCase()", recv);
+        if (!strcmp(m, "upper")) return cg_fmt(cg, "%s.toUpperCase()", recv);
+        if (!strcmp(m, "repeat"))
+            return cg_fmt(cg, "%s.repeat(Math.max(0, %s))", recv, a0);
         return "0";
     }
 }
@@ -1447,6 +1452,13 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
         if (n->op == TK_PLUS && n->type_str && !strcmp(n->type_str, "str")) {
             const char *t = jsg_template_concat(g, n);
             if (t) return t;
+        }
+        if (n->op == TK_STAR && n->type_str && !strcmp(n->type_str, "str")) {
+            bool a_str = n->a->type_str && !strcmp(n->a->type_str, "str");
+            ast_node_t *sop = a_str ? n->a : n->b;
+            ast_node_t *nop = a_str ? n->b : n->a;
+            return cg_fmt(cg, "%s.repeat(Math.max(0, %s))",
+                          jsg_expr_p(g, sop, JSP_MEMBER), jsg_expr_p(g, nop, 0));
         }
         {
             int own = jsg_binprec(n->op);

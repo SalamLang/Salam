@@ -76,6 +76,6 @@ Or serve it directly: `cd editor && python -m http.server 8080`.
 The same interpreter runs natively:
 
 ```sh
-salam exec examples/fa/types/07_struct.salam --lang=fa
+salam exec examples/fa/types/struct.salam --lang=fa
 salam run  --interp examples/en/apps/brainfuck.salam
 ```

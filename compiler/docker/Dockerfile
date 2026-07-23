@@ -25,6 +25,7 @@ RUN for i in 1 2 3 4 5; do \
             sqlite-static \
             mariadb-connector-c-dev \
             hiredis-dev \
+            openssl-dev \
             nodejs \
             npm \
         && break; \

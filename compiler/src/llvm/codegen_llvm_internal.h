@@ -60,6 +60,9 @@ typedef enum {
     LL_H_F64STR,
     LL_H_CHARSTR,
     LL_H_OUTBUF,
+    LL_H_REPEAT,
+    LL_H_UPPER,
+    LL_H_LOWER,
     LL_H_COUNT
 } ll_helper_t;
 

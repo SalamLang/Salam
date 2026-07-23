@@ -614,11 +614,13 @@ static void check_stmt(sema_t *s, ast_node_t *n)
                      "'repeat' count is a negative constant: the loop body can never "
                      "run");
         }
+        bool iv_need64 = c->kind == TY_I64 || c->kind == TY_U64;
         if (n->c) {
             type_t *e = sema_check_expr(s, n->c);
             if (!type_is_numeric(e) && !type_is_error(e))
                 SERR(s, 63, &n->c->span, "repeat range bound must be a number, got '%s'",
                      type_to_string(s->tc, e));
+            if (e->kind == TY_I64 || e->kind == TY_U64) iv_need64 = true;
         }
         if (n->d) {
             type_t *st = sema_check_expr(s, n->d);
@@ -634,12 +636,15 @@ static void check_stmt(sema_t *s, ast_node_t *n)
                 SERR(s, 63, &n->d->span,
                      "repeat step must be a positive number (the direction comes from "
                      "the bounds)");
+            if (st->kind == TY_I64 || st->kind == TY_U64) iv_need64 = true;
         }
+        type_t *ivty = ty(s, iv_need64 ? TY_I64 : TY_I32);
+        sema_decorate(s, n, ivty);
         scope_t *saved = s->cur;
         if (n->name) {
             scope_t *sc = scope_new(s->a, SCOPE_BLOCK, s->cur);
             symbol_t *iv = symbol_new(s->a, SYM_VAR, n->name);
-            iv->type = ty(s, TY_I32);
+            iv->type = ivty;
             iv->is_mut = false;
             iv->decl = n;
             scope_define(s->a, sc, iv);

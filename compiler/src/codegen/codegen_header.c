@@ -382,13 +382,26 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
         "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), (uint64_t)(n))\n"
         "#endif\n");
 
+    sb_puts(h, "#ifndef SALAM_FN_ATTRS_DEFINED\n#define SALAM_FN_ATTRS_DEFINED\n"
+               "#if defined(__GNUC__) || defined(__clang__)\n"
+               "#define SALAM_NOINLINE __attribute__((noinline))\n"
+               "#define SALAM_PURE __attribute__((pure))\n"
+               "#define SALAM_NORET __attribute__((noreturn))\n"
+               "#define SALAM_DEPRECATED __attribute__((deprecated))\n"
+               "#else\n"
+               "#define SALAM_NOINLINE\n"
+               "#define SALAM_PURE\n"
+               "#define SALAM_NORET\n"
+               "#define SALAM_DEPRECATED\n"
+               "#endif\n"
+               "#endif\n");
     sb_puts(h, "#ifndef SALAM_RT_TYPES_DEFINED\n#define SALAM_RT_TYPES_DEFINED\n"
                "typedef struct salam_file salam_file;\n"
                "typedef struct salam_map salam_map;\n"
                "typedef struct salam_map_iter salam_map_iter;\n"
                "typedef struct { void* data; int64_t len; } salam_slice;\n"
                "extern int64_t salam_idx(int64_t, int64_t);\n"
-               "extern void salam_panic(const char* msg);\n"
+               "extern SALAM_NORET void salam_panic(const char* msg);\n"
                "void* " SALAM_MEM_ALLOC "(uint64_t size);\n"
                "void* " SALAM_MEM_REALLOC "(void* ptr, uint64_t size);\n"
                "void " SALAM_MEM_FREE "(void* ptr);\n"
@@ -417,19 +430,6 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "extern const char* salam_str_trim(const char* s);\n"
                "extern void* salam_str_split(const char* s, const char* delim, void* "
                "out_count);\n"
-               "#endif\n");
-    sb_puts(h, "#ifndef SALAM_FN_ATTRS_DEFINED\n#define SALAM_FN_ATTRS_DEFINED\n"
-               "#if defined(__GNUC__) || defined(__clang__)\n"
-               "#define SALAM_NOINLINE __attribute__((noinline))\n"
-               "#define SALAM_PURE __attribute__((pure))\n"
-               "#define SALAM_NORET __attribute__((noreturn))\n"
-               "#define SALAM_DEPRECATED __attribute__((deprecated))\n"
-               "#else\n"
-               "#define SALAM_NOINLINE\n"
-               "#define SALAM_PURE\n"
-               "#define SALAM_NORET\n"
-               "#define SALAM_DEPRECATED\n"
-               "#endif\n"
                "#endif\n");
     if (strcmp(cg->module, "core") != 0)
         sb_puts(h, cg_fmt(cg, "#include \"%score.h\"\n", SALAM_MOD_PREFIX));

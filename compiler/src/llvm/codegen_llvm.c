@@ -231,6 +231,93 @@ static void ll_emit_trim(ll_t *ll)
                            U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U));
 }
 
+static void ll_emit_repeat(ll_t *ll)
+{
+    sb_t *g = ll->hg;
+    const char *U = ll->usize;
+    sb_puts(g, "define internal noalias ptr @salam_ll_repeat(ptr %s, i32 %n) nounwind "
+               "willreturn nofree {\nentry:\n");
+    sb_puts(g, ll_fmt(ll, "  %%slen = call %s @strlen(ptr %%s)\n", U));
+    const char *NW = pl_widen(ll, g, "%n", "%nw");
+    sb_puts(g, "  %nle0 = icmp sle i32 %n, 0\n");
+    sb_puts(g, ll_fmt(ll, "  %%slen0 = icmp eq %s %%slen, 0\n", U));
+    sb_puts(g, "  %skip = or i1 %nle0, %slen0\n");
+    sb_puts(g, "  br i1 %skip, label %empty, label %compute\n");
+    sb_puts(g, "empty:\n");
+    sb_puts(g, ll_fmt(ll, "  %%eb = call ptr @malloc(%s 1)\n", U));
+    sb_puts(g, "  store i8 0, ptr %eb\n  ret ptr %eb\n");
+    sb_puts(g, "compute:\n");
+    sb_puts(g, ll_fmt(ll, "  %%total = mul %s %%slen, %s\n", U, NW));
+    sb_puts(g, ll_fmt(ll, "  %%tot1 = add %s %%total, 1\n", U));
+    sb_puts(g, ll_fmt(ll, "  %%buf = call ptr @malloc(%s %%tot1)\n", U));
+    sb_puts(g,
+            ll_fmt(ll, "  %%c0 = call ptr @memcpy(ptr %%buf, ptr %%s, %s %%slen)\n", U));
+    sb_puts(g, "  br label %loop\n");
+    sb_puts(g, "loop:\n");
+    sb_puts(g, ll_fmt(ll,
+                      "  %%filled = phi %s [ %%slen, %%compute ], [ %%newfilled, "
+                      "%%body ]\n",
+                      U));
+    sb_puts(g, ll_fmt(ll, "  %%done = icmp uge %s %%filled, %%total\n", U));
+    sb_puts(g, "  br i1 %done, label %finish, label %body\n");
+    sb_puts(g, "body:\n");
+    sb_puts(g, ll_fmt(ll, "  %%remain = sub %s %%total, %%filled\n", U));
+    sb_puts(g, ll_fmt(ll, "  %%lt = icmp ult %s %%filled, %%remain\n", U));
+    sb_puts(g,
+            ll_fmt(ll, "  %%chunk = select i1 %%lt, %s %%filled, %s %%remain\n", U, U));
+    sb_puts(g, ll_fmt(ll, "  %%dst = getelementptr i8, ptr %%buf, %s %%filled\n", U));
+    sb_puts(g, ll_fmt(ll, "  %%cc = call ptr @memcpy(ptr %%dst, ptr %%buf, %s %%chunk)\n",
+                      U));
+    sb_puts(g, ll_fmt(ll, "  %%newfilled = add %s %%filled, %%chunk\n", U));
+    sb_puts(g, "  br label %loop\n");
+    sb_puts(g, "finish:\n");
+    sb_puts(g, ll_fmt(ll, "  %%endp = getelementptr i8, ptr %%buf, %s %%total\n", U));
+    sb_puts(g, "  store i8 0, ptr %endp\n  ret ptr %buf\n}\n\n");
+}
+
+static void ll_emit_case(ll_t *ll, const char *fname, int lo, int hi, int delta)
+{
+    sb_t *g = ll->hg;
+    const char *U = ll->usize;
+    sb_puts(g, ll_fmt(ll,
+                      "define internal noalias ptr @%s(ptr %%s) nounwind willreturn "
+                      "nofree {\nentry:\n",
+                      fname));
+    sb_puts(g, ll_fmt(ll, "  %%n = call %s @strlen(ptr %%s)\n", U));
+    sb_puts(g, ll_fmt(ll, "  %%tot = add %s %%n, 1\n", U));
+    sb_puts(g, ll_fmt(ll, "  %%buf = call ptr @malloc(%s %%tot)\n", U));
+    sb_puts(g, "  br label %loop\n");
+    sb_puts(g, "loop:\n");
+    sb_puts(g, ll_fmt(ll, "  %%i = phi %s [ 0, %%entry ], [ %%ni, %%body ]\n", U));
+    sb_puts(g, ll_fmt(ll, "  %%cont = icmp ult %s %%i, %%n\n", U));
+    sb_puts(g, "  br i1 %cont, label %body, label %done\n");
+    sb_puts(g, "body:\n");
+    sb_puts(g, ll_fmt(ll, "  %%sp = getelementptr i8, ptr %%s, %s %%i\n", U));
+    sb_puts(g, "  %c = load i8, ptr %sp\n");
+    sb_puts(g, ll_fmt(ll, "  %%ge = icmp sge i8 %%c, %d\n", lo));
+    sb_puts(g, ll_fmt(ll, "  %%le = icmp sle i8 %%c, %d\n", hi));
+    sb_puts(g, "  %inrange = and i1 %ge, %le\n");
+    sb_puts(g, ll_fmt(ll, "  %%c2 = add i8 %%c, %d\n", delta));
+    sb_puts(g, "  %oc = select i1 %inrange, i8 %c2, i8 %c\n");
+    sb_puts(g, ll_fmt(ll, "  %%dp = getelementptr i8, ptr %%buf, %s %%i\n", U));
+    sb_puts(g, "  store i8 %oc, ptr %dp\n");
+    sb_puts(g, ll_fmt(ll, "  %%ni = add %s %%i, 1\n", U));
+    sb_puts(g, "  br label %loop\n");
+    sb_puts(g, "done:\n");
+    sb_puts(g, ll_fmt(ll, "  %%ep = getelementptr i8, ptr %%buf, %s %%n\n", U));
+    sb_puts(g, "  store i8 0, ptr %ep\n  ret ptr %buf\n}\n\n");
+}
+
+static void ll_emit_upper(ll_t *ll)
+{
+    ll_emit_case(ll, "salam_ll_upper", 97, 122, -32);
+}
+
+static void ll_emit_lower(ll_t *ll)
+{
+    ll_emit_case(ll, "salam_ll_lower", 65, 90, 32);
+}
+
 static void ll_emit_strhash(ll_t *ll)
 {
     sb_puts(ll->hg, "define internal i64 @salam_ll_strhash(ptr %s) nounwind willreturn "
@@ -379,9 +466,9 @@ static void ll_emit_outbuf(ll_t *ll)
 }
 
 static void (*const LL_HELPER_EMIT[LL_H_COUNT])(ll_t *) = {
-    ll_emit_substr,  ll_emit_strcat,  ll_emit_isws,   ll_emit_trim,
-    ll_emit_strhash, ll_emit_inthash, ll_emit_i64str, ll_emit_u64str,
-    ll_emit_f64str,  ll_emit_charstr, ll_emit_outbuf,
+    ll_emit_substr,  ll_emit_strcat, ll_emit_isws,   ll_emit_trim,   ll_emit_strhash,
+    ll_emit_inthash, ll_emit_i64str, ll_emit_u64str, ll_emit_f64str, ll_emit_charstr,
+    ll_emit_outbuf,  ll_emit_repeat, ll_emit_upper,  ll_emit_lower,
 };
 
 void ll_need(ll_t *ll, ll_helper_t which)

@@ -16,6 +16,23 @@
 #include "core/sal_format.h"
 #include <math.h>
 
+const char *str_repeat(interp_t *I, const char *s, int64_t n)
+{
+    size_t slen = strlen(s);
+    if (n <= 1 || slen == 0) return n == 1 ? s : "";
+    size_t total = slen * (size_t)n;
+    char *buf = (char *)arena_alloc(I->a, total + 1);
+    memcpy(buf, s, slen);
+    size_t filled = slen;
+    while (filled < total) {
+        size_t chunk = filled < total - filled ? filled : total - filled;
+        memcpy(buf + filled, buf, chunk);
+        filled += chunk;
+    }
+    buf[total] = '\0';
+    return buf;
+}
+
 const char *afmt(interp_t *I, const char *fmt, ...)
 {
     va_list ap, ap2;
@@ -651,6 +668,12 @@ value_t arith(interp_t *I, ast_node_t *n, token_kind_t op, value_t a, value_t b)
 {
     if (op == TK_PLUS && (a.kind == VAL_STR || b.kind == VAL_STR))
         return val_str(afmt(I, "%s%s", to_str(I, a), to_str(I, b)));
+    if (op == TK_STAR && (a.kind == VAL_STR || b.kind == VAL_STR)) {
+        bool a_str = a.kind == VAL_STR;
+        value_t sv = a_str ? a : b;
+        value_t nv = a_str ? b : a;
+        return val_str(str_repeat(I, sv.as.s, to_int(nv)));
+    }
     if (op == TK_POWER) {
         double r = pow(to_float(a), to_float(b));
         if (a.kind == VAL_INT && b.kind == VAL_INT && r == floor(r) && fabs(r) < 9.2e18)

@@ -114,6 +114,17 @@ static bool ll_binary_string(ll_t *ll, ast_node_t *n, token_kind_t op, llv_t *ou
         *out = (llv_t){r, "str"};
         return true;
     }
+    if (op == TK_STAR && (as || bs)) {
+        ast_node_t *sop = as ? n->a : n->b;
+        ast_node_t *nop = as ? n->b : n->a;
+        const char *S = ll_expr(ll, sop).ref;
+        const char *N = ll_conv(ll, ll_expr(ll, nop), "i32");
+        const char *r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_REPEAT);
+        ll_emit(ll, "%s = call ptr @salam_ll_repeat(ptr %s, i32 %s)", r, S, N);
+        *out = (llv_t){r, "str"};
+        return true;
+    }
     if (ll_is_cmp(op) && as && bs) {
         llv_t L = ll_expr(ll, n->a), R = ll_expr(ll, n->b);
         const char *c = ll_new_tmp(ll), *r = ll_new_tmp(ll);
@@ -716,7 +727,8 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
         *out = (llv_t){r, "f64"};
         return true;
     }
-    if (!strcmp(m, "find") && na == 1) {
+    if ((!strcmp(m, "find") || !strcmp(m, "search") || !strcmp(m, "indexOf")) &&
+        na == 1) {
         const char *a = ll_expr(ll, (ast_node_t *)n->list.data[0]).ref;
         const char *p = ll_new_tmp(ll), *pi = ll_new_tmp(ll), *ri = ll_new_tmp(ll);
         const char *d = ll_new_tmp(ll), *o = ll_new_tmp(ll), *nz = ll_new_tmp(ll);
@@ -729,6 +741,28 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
         r = ll_new_tmp(ll);
         ll_emit(ll, "%s = select i1 %s, i32 -1, i32 %s", r, nz, o);
         *out = (llv_t){r, "i32"};
+        return true;
+    }
+    if (!strcmp(m, "lower")) {
+        r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_LOWER);
+        ll_emit(ll, "%s = call ptr @salam_ll_lower(ptr %s)", r, recv);
+        *out = (llv_t){r, "str"};
+        return true;
+    }
+    if (!strcmp(m, "upper")) {
+        r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_UPPER);
+        ll_emit(ll, "%s = call ptr @salam_ll_upper(ptr %s)", r, recv);
+        *out = (llv_t){r, "str"};
+        return true;
+    }
+    if (!strcmp(m, "repeat") && na == 1) {
+        const char *cnt = ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[0]), "i32");
+        r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_REPEAT);
+        ll_emit(ll, "%s = call ptr @salam_ll_repeat(ptr %s, i32 %s)", r, recv, cnt);
+        *out = (llv_t){r, "str"};
         return true;
     }
     return false;

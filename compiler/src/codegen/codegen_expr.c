@@ -452,6 +452,15 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
             return cg_fmt(cg, "salam_strcat(%s, %s)", cg_str_operand(cg, n->a),
                           cg_str_operand(cg, n->b));
 
+        if (n->op == TK_STAR &&
+            (cg_is_str_ts(n->a->type_str) || cg_is_str_ts(n->b->type_str))) {
+            bool a_str = cg_is_str_ts(n->a->type_str);
+            ast_node_t *sop = a_str ? n->a : n->b;
+            ast_node_t *nop = a_str ? n->b : n->a;
+            return cg_fmt(cg, "salam_str_repeat(%s, (int32_t)(%s))", cg_expr(cg, sop),
+                          cg_expr(cg, nop));
+        }
+
         if (cg_is_str_ts(n->a->type_str) && cg_is_str_ts(n->b->type_str)) {
             const char *op = NULL;
             switch (n->op) {

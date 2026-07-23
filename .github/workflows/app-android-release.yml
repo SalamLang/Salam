@@ -1,5 +1,5 @@
 ---
-name: 📱 Application - Build & Release Android APK
+name: 📱 Application - Build Android APK + AAB
 # checkov:skip=CKV_GHA_7:inputs are only ever read via env: indirection, never interpolated into a run: script
 on:
   workflow_dispatch:
@@ -12,162 +12,23 @@ on:
         description: 'App versionCode (integer). Blank keeps the build.gradle.kts default.'
         required: false
         type: string
-      prerelease:
-        description: 'Mark the GitHub Release as a pre-release'
-        required: false
-        type: boolean
-        default: false
+  push:
+    branches:
+      - main
+    paths:
+      - 'android/**'
+      - '.github/workflows/app-android-release.yml'
+      - '.github/workflows/_reusable-android-build.yml'
 permissions:
   contents: read
 concurrency:
   group: application-android-release
   cancel-in-progress: false
 jobs:
-  build-release:
-    name: Build & release signed APK
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Validate signing secrets are configured
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          set -eu
-          missing=0
-          for v in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD \
-                   ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
-            eval "val=\${$v:-}"
-            if [ -z "$val" ]; then
-              echo "::error::missing required repository secret: $v"
-              missing=1
-            fi
-          done
-          if [ "$missing" -ne 0 ]; then
-            echo "::error::Configure the release keystore secrets before running this workflow."
-            exit 1
-          fi
-
-      - name: Set up JDK 21 (Temurin) + Gradle cache
-        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
-        with:
-          distribution: temurin
-          java-version: '21'
-          cache: gradle
-          cache-dependency-path: |
-            android/gradle/wrapper/gradle-wrapper.properties
-            android/gradle/libs.versions.toml
-            android/**/*.gradle.kts
-
-      - name: Accept Android SDK licenses
-        run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses \
-            >/dev/null 2>&1 || true
-
-      - name: Decode release keystore
-        id: keystore
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: |
-          set -eu
-          ks="$RUNNER_TEMP/salam-application-release.keystore"
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$ks"
-          echo "path=$ks" >> "$GITHUB_OUTPUT"
-
-      - name: Build signed release APK
-        working-directory: android
-        env:
-          ANDROID_KEYSTORE_FILE: ${{ steps.keystore.outputs.path }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          VERSION_NAME: ${{ inputs.version_name }}
-          VERSION_CODE: ${{ inputs.version_code }}
-        run: |
-          set -eu
-          chmod +x ./gradlew
-          args=(":app:assembleRelease" ":app:bundleRelease" "--no-daemon" "--stacktrace")
-          [ -n "$VERSION_NAME" ] && args+=("-PappVersionName=$VERSION_NAME")
-          [ -n "$VERSION_CODE" ] && args+=("-PappVersionCode=$VERSION_CODE")
-          ./gradlew "${args[@]}"
-
-      - name: Collect & rename the APK + AAB
-        id: apk
-        run: |
-          set -eu
-          meta="android/app/build/outputs/apk/release/output-metadata.json"
-          apk_dir="android/app/build/outputs/apk/release"
-          aab_dir="android/app/build/outputs/bundle/release"
-          vname=$(jq -r '.elements[0].versionName' "$meta")
-          vcode=$(jq -r '.elements[0].versionCode' "$meta")
-          apk_src="$apk_dir/$(jq -r '.elements[0].outputFile' "$meta")"
-          aab_src=$(find "$aab_dir" -maxdepth 1 -name '*.aab' | head -1)
-          apk_name="salam-application-v${vname}-${vcode}.apk"
-          aab_name="salam-application-v${vname}-${vcode}.aab"
-          mkdir -p dist
-          cp "$apk_src" "dist/$apk_name"
-          cp "$aab_src" "dist/$aab_name"
-          {
-            echo "apk_name=$apk_name"
-            echo "apk_path=dist/$apk_name"
-            echo "aab_name=$aab_name"
-            echo "aab_path=dist/$aab_name"
-            echo "artifact=salam-application-android-v${vname}-${vcode}"
-            echo "vname=$vname"
-            echo "vcode=$vcode"
-            echo "tag=application-android-v${vname}-${vcode}"
-          } >> "$GITHUB_OUTPUT"
-          ls -la dist/
-
-      - name: Verify APK signature
-        env:
-          APK_PATH: ${{ steps.apk.outputs.apk_path }}
-        run: |
-          set -eu
-          apksigner=$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -name apksigner 2>/dev/null \
-            | sort -V | tail -1 || true)
-          if [ -n "$apksigner" ]; then
-            "$apksigner" verify --verbose --print-certs "$APK_PATH"
-          else
-            echo "::warning::apksigner not found; skipping signature verification"
-          fi
-
-      - name: Upload APK + AAB artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ steps.apk.outputs.artifact }}
-          path: |
-            ${{ steps.apk.outputs.apk_path }}
-            ${{ steps.apk.outputs.aab_path }}
-          if-no-files-found: error
-
-      - name: Create GitHub Release with the APK + AAB
-        if: github.repository == 'SalamLang/Salam'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.apk.outputs.tag }}
-          APK_PATH: ${{ steps.apk.outputs.apk_path }}
-          AAB_PATH: ${{ steps.apk.outputs.aab_path }}
-          VNAME: ${{ steps.apk.outputs.vname }}
-          VCODE: ${{ steps.apk.outputs.vcode }}
-          PRERELEASE: ${{ inputs.prerelease }}
-        run: |
-          set -eu
-          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null \
-            && echo "Deleted existing release $TAG." \
-            || echo "No existing release $TAG."
-          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" >/dev/null 2>&1 || true
-          args=("$TAG"
-                "--target" "$GITHUB_SHA"
-                "--title" "Salam Application (Android) v${VNAME} (build ${VCODE})"
-                "--generate-notes")
-          [ "$PRERELEASE" = "true" ] && args+=("--prerelease")
-          gh release create "${args[@]}" "$APK_PATH" "$AAB_PATH"
+  build:
+    name: Build & sign AAB + universal APK + per-ABI APKs
+    uses: ./.github/workflows/_reusable-android-build.yml
+    secrets: inherit
+    with:
+      version_name: ${{ inputs.version_name || '' }}
+      version_code: ${{ inputs.version_code || '' }}

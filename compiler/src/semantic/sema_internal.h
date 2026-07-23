@@ -185,6 +185,8 @@ void sema_check_function_now(sema_t *s, func_sig_t *sig);
 
 void sema_check_unused_funcs(sema_t *s);
 
+void sema_check_unused_imports(sema_t *s);
+
 symbol_t *get_or_make_func(sema_t *s, scope_t *sc, const char *name, sym_kind_t kind);
 
 void sema_collect(sema_t *s, ast_node_t *program);

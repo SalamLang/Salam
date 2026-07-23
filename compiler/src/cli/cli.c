@@ -36,7 +36,7 @@ static void cli_set_defaults(options_t *out)
     out->output = NULL;
     out->cc = "tcc";
     out->keep_c = false;
-    out->safe = false;
+    out->safe = true;
     out->fmt_check = false;
     out->fmt_recursive = false;
     out->fmt_tabs = false;
@@ -61,5 +61,8 @@ bool cli_parse(int argc, char **argv, options_t *out)
 {
     cli_set_defaults(out);
     int start = cli_dispatch_command(argc, argv, out);
-    return cli_parse_options(argc, argv, start, out);
+    if (!cli_parse_options(argc, argv, start, out)) return false;
+    if (out->safe && out->ndefines < SALAM_MAX_INPUTS)
+        out->defines[out->ndefines++] = "SALAM_SAFE";
+    return true;
 }

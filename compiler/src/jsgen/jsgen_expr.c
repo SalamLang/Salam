@@ -1129,7 +1129,10 @@ static const char *jsg_lambda(jg_t *g, ast_node_t *n)
                 cg->match_end_label = saved_mlbl;
                 cg->indent--;
                 cg->c = saved;
-                {
+                if (cg->compact) {
+                    core = cg_fmt(cg, "(%s) => {%s}", sb_cstr(&params), sb_cstr(&body));
+                    sb_free(&body);
+                } else {
                     sb_t pad;
                     sb_init(&pad);
                     {
@@ -1359,7 +1362,7 @@ static const char *jsg_match_expr(jg_t *g, ast_node_t *n)
         cg->locals.len = mark;
         body = cg_fmt(cg, "%s", sb_cstr(&inner));
         sb_free(&inner);
-        return cg_fmt(cg, "(() => {\n%s})()", body);
+        return cg_fmt(cg, cg->compact ? "(() => {%s})()" : "(() => {\n%s})()", body);
     }
 }
 

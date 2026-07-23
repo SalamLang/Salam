@@ -47,7 +47,7 @@ command -v "$EMCC" >/dev/null 2>&1 || [ -e "$EMCC" ] || {
 OUT_DIR="../editor"
 mkdir -p "$OUT_DIR"
 SRC_DIRS="core source logger xml condcomp token langpack i18n lexer ast parser
-        diag semantic interp layout codegen llvm web"
+        diag semantic interp layout minify codegen llvm web"
 SRCS=""
 for d in $SRC_DIRS; do SRCS="$SRCS src/$d/*.c"; done
 # shellcheck disable=SC2086

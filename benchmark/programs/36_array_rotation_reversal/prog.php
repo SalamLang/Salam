@@ -1,5 +1,7 @@
 <?php
 
+// phpcs:disable PSR1.Files.SideEffects -- benchmark script intentionally declares and runs
+
 function reverse_range(array &$arr, int $lo, int $hi): void
 {
     while ($lo < $hi) {

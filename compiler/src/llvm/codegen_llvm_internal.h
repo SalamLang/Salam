@@ -91,6 +91,7 @@ typedef struct {
     vec_t extern_names;
     scope_t *pkg_scope;
     vec_t emitted;
+    vec_t pkg_touched;
     ast_node_t *cur_lambda;
     const char *env_ref;
     const char *env_ty;
@@ -149,12 +150,6 @@ SAL_INLINE llv_t ll_poison(const char *ts)
 
 const char *ll_fmt(ll_t *ll, const char *fmt, ...);
 
-/* Salam identifiers may contain characters (spaces, in particular - e.g.
- * "mut is p := ...") that are not valid in an unquoted LLVM IR local/global
- * identifier ([a-zA-Z$._][a-zA-Z$._0-9]*). Call this on any raw Salam name
- * before splicing it into a %-prefixed IR identifier fragment; a trailing
- * uniqueness counter appended by the caller keeps the result collision-free
- * even if two distinct names happen to sanitize to the same string. */
 const char *ll_safe_name(ll_t *ll, const char *raw);
 
 void ll_emit(ll_t *ll, const char *fmt, ...);
@@ -247,6 +242,8 @@ void ll_stmt(ll_t *ll, ast_node_t *n);
 
 void ll_block(ll_t *ll, ast_node_t *block);
 
+void ll_block_top(ll_t *ll, ast_node_t *block);
+
 void ll_emit_return(ll_t *ll, ast_node_t *value);
 
 const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *sig);
@@ -265,7 +262,9 @@ void ll_emit_externs(ll_t *ll);
 
 void ll_emit_impls(ll_t *ll);
 
-void ll_emit_packages(ll_t *ll);
+void ll_touch_pkg(ll_t *ll, symbol_t *pk);
+
+void ll_touch_pkg_named(ll_t *ll, const char *pkgname);
 
 void ll_ensure_fn(ll_t *ll, ast_node_t *fn, symbol_t *owner, scope_t *pscope);
 

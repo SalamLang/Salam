@@ -1,0 +1,58 @@
+package web
+
+func _net_listen(port: int): i64:
+    ret net.Listen(port).fd
+end
+
+func _net_accept(lfd: i64): i64:
+    ret net.Accept(net.SocketFromFd(lfd)).fd
+end
+
+func _net_recv_req(fd: i64): str:
+    ret net.Recv(net.SocketFromFd(fd), 32768)
+end
+
+func _net_send_all(fd: i64, data: str):
+    s := net.SocketFromFd(fd)
+    total := data.len()
+    mut sent := 0
+    until sent < total:
+        n := net.Send(s, data.substr(sent, total - sent))
+        if n <= 0:
+            ret
+        end
+        sent += n
+    end
+end
+
+func _net_close(fd: i64):
+    net.Close(net.SocketFromFd(fd))
+end
+
+func _send_file(fd: i64, path: str, ct: str, server_hdr: str): int:
+    f := fopen(path, "rb")
+    if f == null:
+        ret 0
+    end
+    defer fclose(f)
+    fseek(f, 0, 2)
+    sz := ftell(f)
+    fseek(f, 0, 0)
+    if sz <= 0 || sz > 16777216:
+        ret 0
+    end
+    buf := mem.Allocate(sz as u64)
+    defer mem.Free(buf)
+    got := fread(buf, 1 as u64, sz as u64, f)
+    mut hdr := "HTTP/1.1 200 OK\r\nContent-Length: "
+    hdr = hdr.concat(conv.FormatInt(sz))
+    hdr = hdr.concat("\r\nContent-Type: ")
+    hdr = hdr.concat(ct)
+    hdr = hdr.concat("\r\nConnection: close\r\nServer: ")
+    hdr = hdr.concat(server_hdr)
+    hdr = hdr.concat("\r\n\r\n")
+    _net_send_all(fd, hdr)
+    net.SendBytes(net.SocketFromFd(fd), buf, got as int)
+    mem.Free(buf)
+    ret 1
+end

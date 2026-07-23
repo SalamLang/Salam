@@ -636,9 +636,14 @@ const char *salam_resolve_import_node(arena_t *a, const char *dir, const ast_nod
         return resolve_user_string(a, dir, imp->value.as.s);
     if (imp->name) {
         const char *root = salam_get_stdlib_root();
-        const char *direct = resolve_ident_direct(a, root, imp->name);
-        if (direct) return direct;
-        return resolve_ident_import(a, root, imp->name, (lang && *lang) ? lang : "en");
+        const char *use_lang = (lang && *lang) ? lang : "en";
+        const char *aliased = resolve_ident_import(a, root, imp->name, use_lang);
+        if (aliased) return aliased;
+        if (strcmp(use_lang, "en") == 0) {
+            const char *direct = resolve_ident_direct(a, root, imp->name);
+            if (direct) return direct;
+        }
+        return NULL;
     }
     return NULL;
 }
@@ -920,11 +925,18 @@ static void load_import_file(sema_t *s, ast_node_t *imp)
 
     if (pk->pkgname && strcmp(pk->pkgname, local) != 0 &&
         !scope_lookup_local(s->cur, pk->pkgname)) {
-        symbol_t *cb = symbol_new(s->a, SYM_PACKAGE, pk->pkgname);
-        cb->members = pk->members;
-        cb->pkgname = pk->pkgname;
-        cb->decl = pk->decl;
-        scope_define(s->a, s->cur, cb);
+        bool pkgname_ok = !s->lang || s->lang[0] == 'e';
+        if (!pkgname_ok && pk->decl) {
+            const char *want = alias_for_lang(&pk->decl->aliases, s->lang);
+            pkgname_ok = !want || strcmp(want, pk->pkgname) == 0;
+        }
+        if (pkgname_ok) {
+            symbol_t *cb = symbol_new(s->a, SYM_PACKAGE, pk->pkgname);
+            cb->members = pk->members;
+            cb->pkgname = pk->pkgname;
+            cb->decl = pk->decl;
+            scope_define(s->a, s->cur, cb);
+        }
     }
 
     if (pk->decl) {

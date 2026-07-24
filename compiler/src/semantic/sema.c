@@ -759,6 +759,7 @@ static const char *import_spec_of(ast_node_t *d)
 
 void salam_merge_program(arena_t *a, ast_node_t *dst, ast_node_t *src)
 {
+    bool marked = false;
     size_t i = 0;
     for (; i < src->list.len; i++) {
         ast_node_t *d = (ast_node_t *)src->list.data[i];
@@ -799,6 +800,10 @@ void salam_merge_program(arena_t *a, ast_node_t *dst, ast_node_t *src)
                 }
             }
             if (dup) continue;
+        }
+        if (!marked) {
+            d->file_boundary = true;
+            marked = true;
         }
         ast_add(a, dst, d);
     }

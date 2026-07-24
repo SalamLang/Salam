@@ -632,6 +632,16 @@ token_kind_t compound_base(token_kind_t op)
         return TK_PERCENT;
     case TK_POWER_EQ:
         return TK_POWER;
+    case TK_AMP_EQ:
+        return TK_AMP;
+    case TK_PIPE_EQ:
+        return TK_PIPE;
+    case TK_CARET_EQ:
+        return TK_CARET;
+    case TK_SHL_EQ:
+        return TK_SHL;
+    case TK_SHR_EQ:
+        return TK_SHR;
     default:
         return TK_EOF;
     }
@@ -697,6 +707,16 @@ value_t arith(interp_t *I, ast_node_t *n, token_kind_t op, value_t a, value_t b)
         case TK_PERCENT:
             if (y == 0) rt_error(I, n, "modulo by zero");
             return val_int((x == INT64_MIN && y == -1) ? 0 : x % y);
+        case TK_AMP:
+            return val_int((int64_t)((uint64_t)x & (uint64_t)y));
+        case TK_PIPE:
+            return val_int((int64_t)((uint64_t)x | (uint64_t)y));
+        case TK_CARET:
+            return val_int((int64_t)((uint64_t)x ^ (uint64_t)y));
+        case TK_SHL:
+            return val_int((int64_t)((uint64_t)x << ((uint64_t)y & 63)));
+        case TK_SHR:
+            return val_int(x >> ((uint64_t)y & 63));
         default:
             break;
         }

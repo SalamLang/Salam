@@ -103,6 +103,11 @@ static bool fmt_angle_is_generic(const token_stream_t *toks, size_t lt_idx)
         case TK_GT:
             if (--depth == 0) return true;
             break;
+        case TK_SHR:
+            /* '>>' closes two generic levels at once (e.g. 'A<B<C>>'). */
+            depth -= 2;
+            if (depth <= 0) return true;
+            break;
         case TK_IDENT:
         case TK_COMMA:
         case TK_DOT:
@@ -143,6 +148,9 @@ static bool fmt_lambda_header_at(const token_stream_t *toks, size_t open_idx)
                 depth++;
             } else if (k == TK_GT && depth > 0) {
                 depth--;
+            } else if (k == TK_SHR && depth > 0) {
+                depth -= 2;
+                if (depth < 0) depth = 0;
             } else if (fmt_is_open(k)) {
                 depth++;
             } else if (fmt_is_close(k)) {
@@ -163,6 +171,28 @@ static bool fmt_head_modifier(token_kind_t k)
            k == TK_KW_PURE || k == TK_KW_NORET || k == TK_KW_DEPRECATED;
 }
 
+static bool fmt_is_overload_symbol(token_kind_t k)
+{
+    switch (k) {
+    case TK_GT:
+    case TK_PLUS:
+    case TK_MINUS:
+    case TK_STAR:
+    case TK_SLASH:
+    case TK_PERCENT:
+    case TK_POWER:
+    case TK_EQ:
+    case TK_NE:
+    case TK_LT:
+    case TK_LE:
+    case TK_GE:
+    case TK_NOT:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool fmt_head_annotates(token_kind_t k)
 {
     return k == TK_IDENT || k == TK_KW_MUT || k == TK_KW_CONST || k == TK_KW_THIS;
@@ -177,6 +207,7 @@ static bool fmt_type_token(token_kind_t k)
     case TK_AMP:
     case TK_LT:
     case TK_GT:
+    case TK_SHR:
     case TK_LBRACKET:
     case TK_RBRACKET:
     case TK_LPAREN:
@@ -376,14 +407,9 @@ static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
 
     if (fmt_is_open(k)) {
         bool ml = fmt_bracket_multiline(toks, i);
-        /* A '>' closing a generic parameter list (e.g. 'name<T>(...)') isn't
-         * in fmt_is_value_end's set, so without this a following '(' looks
-         * like it has no preceding value and gets misread as a lambda
-         * header instead of a normal, generic function's parameter list -
-         * which then corrupts every colon/indent decision for the rest of
-         * the signature. */
-        bool prev_is_value = c->prev != NULL &&
-                             (fmt_is_value_end(c->prev->kind) || c->prev->kind == TK_GT);
+        bool prev_is_value =
+            c->prev != NULL &&
+            (fmt_is_value_end(c->prev->kind) || fmt_is_overload_symbol(c->prev->kind));
         bool is_lambda =
             k == TK_LPAREN && !prev_is_value && fmt_lambda_header_at(toks, i);
         if (c->ml_top < FMT_MAX_BRACKET) {

@@ -176,6 +176,22 @@ static void fold_binary_int(sema_t *s, ast_node_t *n, long long a, long long b)
     case TK_GE:
         fold_bool(n, a >= b);
         return;
+    case TK_AMP:
+        if (fold_result_is_int(n)) fold_int(n, (long long)((uint64_t)a & (uint64_t)b));
+        return;
+    case TK_PIPE:
+        if (fold_result_is_int(n)) fold_int(n, (long long)((uint64_t)a | (uint64_t)b));
+        return;
+    case TK_CARET:
+        if (fold_result_is_int(n)) fold_int(n, (long long)((uint64_t)a ^ (uint64_t)b));
+        return;
+    case TK_SHL:
+        if (fold_result_is_int(n) && b >= 0 && b < 64)
+            fold_int(n, (long long)((uint64_t)a << b));
+        return;
+    case TK_SHR:
+        if (fold_result_is_int(n) && b >= 0 && b < 64) fold_int(n, a >> b);
+        return;
     default:
         return;
     }
@@ -315,6 +331,8 @@ static void fold_unary(ast_node_t *n)
         return;
     }
     if (n->op == TK_NOT && lit_bool(n->a, &bv)) fold_bool(n, !bv);
+    if (n->op == TK_TILDE && lit_int(n->a, &iv) && fold_result_is_int(n))
+        fold_int(n, (long long)(~(uint64_t)iv));
 }
 
 void sema_fold_expr(sema_t *s, ast_node_t *n)

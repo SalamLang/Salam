@@ -70,6 +70,13 @@ static bool is_movable(const ast_node_t *d, const char *entry)
      * the file's public API surface) - matches sema_check_toplevel_order's
      * check_pub_order exemption exactly, so never relocate it either. */
     if (is_entry_point(d, entry)) return false;
+    /* An AST_IMPORT/AST_LINK node's span never covers its own leading
+     * 'import'/'link' keyword (the parser consumes it before creating the
+     * node), and a single 'import "a" "b" "c"' statement produces several
+     * AST_IMPORT siblings that all share that one keyword occurrence.
+     * There is no reliable per-node span here to relocate safely - moving
+     * one would either drop the keyword or duplicate/orphan it. */
+    if (d->kind == AST_IMPORT || d->kind == AST_LINK) return false;
     return ast_toplevel_order_phase(d) != AST_ORDER_NONE;
 }
 
@@ -359,6 +366,7 @@ bool fmt_reorder_toplevel(arena_t *a, logger_t *log, const langpack_t *pack,
             s.log = log;
             s.diag = diag_new(a, log, PH_SEMANTIC);
             s.file = file;
+            s.lang = langpack_code(pack);
             sema_check_toplevel_order(&s, fprogram);
             append_notes_from_diag(a, s.diag, notes);
         }

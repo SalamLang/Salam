@@ -74,7 +74,8 @@ bool fmt_need_space(const token_t *pt, const token_t *ct, bool prev_unary)
     if (c == TK_LPAREN) return !fmt_is_value_end(p);
     if (c == TK_LBRACKET) return !fmt_is_value_end(p);
 
-    if (p == TK_LT || p == TK_GT || c == TK_LT || c == TK_GT)
+    if (p == TK_LT || p == TK_GT || c == TK_LT || c == TK_GT || p == TK_SHL ||
+        p == TK_SHR || c == TK_SHL || c == TK_SHR)
         return fmt_gap_in_source(pt, ct);
 
     if (p == TK_STAR || c == TK_STAR) return fmt_gap_in_source(pt, ct);
@@ -83,7 +84,7 @@ bool fmt_need_space(const token_t *pt, const token_t *ct, bool prev_unary)
 
 bool fmt_is_prefix(token_kind_t k, const token_t *prev)
 {
-    if (k == TK_NOT) return true;
+    if (k == TK_NOT || k == TK_TILDE) return true;
     if (k == TK_MINUS || k == TK_STAR || k == TK_AMP)
         return prev == NULL || !fmt_is_value_end(prev->kind);
     if (k == TK_PLUS_PLUS || k == TK_MINUS_MINUS)

@@ -80,6 +80,16 @@ static token_kind_t ll_compound_base(token_kind_t k)
         return TK_PERCENT;
     case TK_POWER_EQ:
         return TK_POWER;
+    case TK_AMP_EQ:
+        return TK_AMP;
+    case TK_PIPE_EQ:
+        return TK_PIPE;
+    case TK_CARET_EQ:
+        return TK_CARET;
+    case TK_SHL_EQ:
+        return TK_SHL;
+    case TK_SHR_EQ:
+        return TK_SHR;
     default:
         return TK_EOF;
     }

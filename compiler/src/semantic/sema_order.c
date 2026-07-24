@@ -50,8 +50,8 @@ static void check_pub_order(sema_t *s, vec_t *list)
         /* The program's entry point is conventionally placed last regardless
          * of visibility and isn't part of the file's public API surface, so
          * it's exempt from the pub-ordering rule. */
-        if (d->name && (strcmp(d->name, "main") == 0 ||
-                        (entry && strcmp(d->name, entry) == 0)))
+        if (d->name &&
+            (strcmp(d->name, "main") == 0 || (entry && strcmp(d->name, entry) == 0)))
             continue;
         if (d->is_pub) {
             if (!first_pub) first_pub = d;

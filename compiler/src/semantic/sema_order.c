@@ -32,13 +32,8 @@ typedef enum {
 
 static order_phase_t order_phase_of(const ast_node_t *d)
 {
-    /*
-     * 'extern' declarations (FFI prototypes) are metadata describing symbols
-     * that live outside this file, just like an import - they belong with
-     * the imports, not with this file's own consts/vars/functions.
-     */
-    if (d->is_extern && (d->kind == AST_FUNC_DEF || d->kind == AST_VAR_DECL))
-        return ORDER_IMPORT;
+    if (d->is_extern && d->kind == AST_VAR_DECL) return ORDER_IMPORT;
+    if (d->is_extern && d->kind == AST_FUNC_DEF && !d->a) return ORDER_IMPORT;
     switch (d->kind) {
     case AST_IMPORT:
     case AST_LINK:
@@ -71,7 +66,8 @@ static void check_pub_order(sema_t *s, vec_t *list)
     size_t i = 0;
     for (; i < list->len; i++) {
         ast_node_t *d = (ast_node_t *)list->data[i];
-        if (!d || d->synthetic || d->kind != AST_FUNC_DEF || d->is_extern) continue;
+        if (!d || d->synthetic || d->kind != AST_FUNC_DEF) continue;
+        if (d->is_extern && !d->a) continue; /* body-less prototype, not a real def */
         if (d->is_pub) {
             if (!first_pub) first_pub = d;
         } else if (first_pub) {
@@ -168,4 +164,12 @@ void sema_check_toplevel_order(sema_t *s, ast_node_t *program)
                 check_pub_order(s, &d->list);
         }
     }
+}
+
+void sema_check_toplevel_order_in_file(sema_t *s, ast_node_t *program, const char *file)
+{
+    const char *save_file = s->file;
+    s->file = file;
+    sema_check_toplevel_order(s, program);
+    s->file = save_file;
 }

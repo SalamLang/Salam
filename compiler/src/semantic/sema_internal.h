@@ -195,4 +195,6 @@ void sema_check_pass(sema_t *s, ast_node_t *program);
 
 void sema_check_toplevel_order(sema_t *s, ast_node_t *program);
 
+void sema_check_toplevel_order_in_file(sema_t *s, ast_node_t *program, const char *file);
+
 #endif /* SALAM_SEMANTIC_SEMA_INTERNAL_H */

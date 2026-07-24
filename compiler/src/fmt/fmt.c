@@ -195,6 +195,7 @@ static bool fmt_colon_is_annotation(const token_stream_t *toks, size_t colon_idx
     size_t n = token_stream_count(toks);
     uint32_t line = token_stream_at(toks, colon_idx)->span.end.line;
     bool saw_type = false;
+    bool is_func_type = false;
     int steps = 0;
     size_t j = colon_idx + 1;
     for (; j < n && steps < 64; j++, steps++) {
@@ -202,6 +203,13 @@ static bool fmt_colon_is_annotation(const token_stream_t *toks, size_t colon_idx
         if (t->span.begin.line > line) return saw_type;
         if (t->kind == TK_COLON || t->kind == TK_STMT_END || t->kind == TK_EOF)
             return saw_type;
+        if (t->kind == TK_KW_FUNC && !saw_type) is_func_type = true;
+        /* salam's type grammar has no use for '(' except a function-pointer
+         * type's own parameter list ('func(int): bool'); anywhere else a
+         * '(' means this is actually a call expression (e.g. 'f(a)' or
+         * 'x.f(a)', like a same-line if-branch body: 'if x: f(a, b)') and
+         * this colon isn't a type annotation at all. */
+        if (t->kind == TK_LPAREN && !is_func_type) return false;
         if (!fmt_type_token(t->kind)) return false;
         saw_type = true;
     }

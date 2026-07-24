@@ -44,6 +44,7 @@ typedef struct {
     uint32_t open_colon_line;
     const token_t *prev;
     bool prev_unary;
+    bool prev_after_dot;
     uint32_t prev_end_line;
 } fmt_ctx_t;
 
@@ -254,6 +255,15 @@ static void fmt_step_break_before(fmt_ctx_t *c, const token_t *t, token_kind_t k
         c->line_has_content = false;
     }
     c->open_colon_line = 0;
+    if (c->bracket == 0 && c->prev_gt_generic && c->line_has_content &&
+        t->span.begin.line > c->prev_end_line) {
+        sb_putc(c->out, '\n');
+        c->line_has_content = false;
+        c->force_break = false;
+        c->q_open[0] = 0;
+        c->stmt_head = TK_EOF;
+        c->match_pending = false;
+    }
 }
 
 static bool fmt_in_match_arms(const fmt_ctx_t *c)
@@ -290,6 +300,11 @@ static void fmt_step_leading(fmt_ctx_t *c, const token_t *t, token_kind_t k)
     } else if (!c->no_space_next) {
         bool need = fmt_need_space(c->prev, t, c->prev_unary);
         if (c->prev_gt_generic && (k == TK_LPAREN || k == TK_LBRACKET)) need = false;
+        /* A name right after '.' is always a member/method reference, even
+         * if it happens to collide with a statement keyword (e.g. the
+         * 'repeat' loop keyword doubling as a method name in 's.repeat(n)')
+         * - it should never get keyword-style spacing before '('. */
+        if (k == TK_LPAREN && c->prev_after_dot) need = false;
         if (k == TK_COLON && c->bracket <= FMT_MAX_BRACKET && c->q_open[c->bracket] > 0)
             need = true;
         if (need) sb_putc(c->out, ' ');
@@ -301,7 +316,10 @@ static void fmt_step_leading(fmt_ctx_t *c, const token_t *t, token_kind_t k)
 static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
                                  const token_stream_t *toks, size_t i)
 {
-    if (c->bracket == 0 && (k == TK_KW_END || k == TK_KW_ELSE)) c->stmt_head = TK_EOF;
+    if (c->bracket == 0 && k == TK_KW_END)
+        c->stmt_head = TK_EOF;
+    else if (c->bracket == 0 && k == TK_KW_ELSE)
+        c->stmt_head = TK_KW_ELSE;
     if (c->stmt_head == TK_EOF && c->bracket == 0 && k != TK_KW_END && k != TK_COLON &&
         k != TK_COMMENT_LINE && k != TK_COMMENT_BLOCK && !fmt_head_modifier(k))
         c->stmt_head = k;
@@ -350,7 +368,14 @@ static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
 
     if (fmt_is_open(k)) {
         bool ml = fmt_bracket_multiline(toks, i);
-        bool prev_is_value = c->prev != NULL && fmt_is_value_end(c->prev->kind);
+        /* A '>' closing a generic parameter list (e.g. 'name<T>(...)') isn't
+         * in fmt_is_value_end's set, so without this a following '(' looks
+         * like it has no preceding value and gets misread as a lambda
+         * header instead of a normal, generic function's parameter list -
+         * which then corrupts every colon/indent decision for the rest of
+         * the signature. */
+        bool prev_is_value = c->prev != NULL &&
+                             (fmt_is_value_end(c->prev->kind) || c->prev->kind == TK_GT);
         bool is_lambda =
             k == TK_LPAREN && !prev_is_value && fmt_lambda_header_at(toks, i);
         if (c->ml_top < FMT_MAX_BRACKET) {
@@ -410,6 +435,7 @@ void fmt_tokens(const token_stream_t *toks, const fmt_style_t *style, sb_t *out)
         c.line_has_content = true;
 
         fmt_step_state_after(&c, t, k, toks, i);
+        c.prev_after_dot = c.prev != NULL && c.prev->kind == TK_DOT;
         c.prev = t;
         c.prev_end_line = t->span.end.line;
     }

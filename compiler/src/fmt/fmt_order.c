@@ -62,8 +62,9 @@ static bool is_entry_point(const ast_node_t *d, const char *entry)
 static bool is_movable(const ast_node_t *d, const char *entry)
 {
     if (!d || d->synthetic) return false;
-    if (d->is_extern) return false; /* member of an 'extern: end' block; no wrapper
-                                       span exists to safely relocate it out of */
+    if (d->is_extern)
+        return false; /* member of an 'extern: end' block; no wrapper
+                         span exists to safely relocate it out of */
     /* The program's entry point is conventionally placed last regardless of
      * visibility and is exempt from the pub-ordering rule (it isn't part of
      * the file's public API surface) - matches sema_check_toplevel_order's
@@ -84,7 +85,8 @@ static bool line_is_blank(const char *text, size_t a, size_t b)
  * line. Sets *maybe_block if the line looks like it could be part of a
  * block comment (either opens or closes one) - the caller should treat
  * that as "don't know, don't touch" rather than guess. */
-static bool line_is_comment_or_meta(const char *text, size_t a, size_t b, bool *maybe_block)
+static bool line_is_comment_or_meta(const char *text, size_t a, size_t b,
+                                    bool *maybe_block)
 {
     size_t i = a;
     while (i < b && (text[i] == ' ' || text[i] == '\t'))
@@ -303,8 +305,7 @@ bool fmt_reorder_toplevel(arena_t *a, logger_t *log, const langpack_t *pack,
             run_end++;
         size_t run_len = run_end - run_start + 1;
 
-        ord_item_t *sorted =
-            (ord_item_t *)arena_alloc(a, sizeof(ord_item_t) * run_len);
+        ord_item_t *sorted = (ord_item_t *)arena_alloc(a, sizeof(ord_item_t) * run_len);
         memcpy(sorted, &items[run_start], sizeof(ord_item_t) * run_len);
         stable_sort_items(sorted, run_len);
 

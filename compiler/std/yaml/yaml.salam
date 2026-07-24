@@ -360,6 +360,756 @@ func _parse_document(text: str): _YR:
     ret r
 end
 
+func _json_unescape(inner: str): str:
+    n := inner.len()
+    bp := _bp(inner)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < n:
+        c := _ub(bp, i)
+        if c == 92 && i + 1 < n:
+            e := _ub(bp, i + 1)
+            if e == 34: str.BufAppendChar(sb, 34)
+            else e == 92: str.BufAppendChar(sb, 92)
+            else e == 110: str.BufAppendChar(sb, 10)
+            else e == 116: str.BufAppendChar(sb, 9)
+            else e == 114: str.BufAppendChar(sb, 13)
+            else: str.BufAppendChar(sb, e)
+            end
+            i = i + 2
+        else:
+            str.BufAppendChar(sb, c)
+            i = i + 1
+        end
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _bool_or_null_token(v: str): str:
+    if v == "~" || v == "null" || v == "Null" || v == "NULL" || v == "": ret "null" end
+    if v == "true" || v == "True" || v == "TRUE": ret "true" end
+    if v == "false" || v == "False" || v == "FALSE": ret "false" end
+    ret "NOMATCH"
+end
+
+func _looks_numeric(v: str): bool:
+    n := v.len()
+    if n == 0: ret false end
+    bp := _bp(v)
+    mut i := 0
+    if _ub(bp, 0) == 45 || _ub(bp, 0) == 43: i = 1 end
+    if i >= n: ret false end
+    if _ub(bp, i) == 48 && i + 1 < n && _ub(bp, i + 1) >= 48 && _ub(bp, i + 1) <= 57:
+        ret false
+    end
+    mut has_digit := false
+    until i < n && _ub(bp, i) >= 48 && _ub(bp, i) <= 57:
+        has_digit = true
+        i = i + 1
+    end
+    if has_digit == false: ret false end
+    if i < n && _ub(bp, i) == 46:
+        i = i + 1
+        until i < n && _ub(bp, i) >= 48 && _ub(bp, i) <= 57:
+            i = i + 1
+        end
+    end
+    if i < n && (_ub(bp, i) == 101 || _ub(bp, i) == 69):
+        i = i + 1
+        if i < n && (_ub(bp, i) == 45 || _ub(bp, i) == 43): i = i + 1 end
+        mut edig := false
+        until i < n && _ub(bp, i) >= 48 && _ub(bp, i) <= 57:
+            edig = true
+            i = i + 1
+        end
+        if edig == false: ret false end
+    end
+    ret i == n
+end
+
+func _needs_quote(v: str): bool:
+    n := v.len()
+    if n == 0: ret true end
+    tok := _bool_or_null_token(v)
+    if tok != "NOMATCH": ret true end
+    if _looks_numeric(v): ret true end
+    bp := _bp(v)
+    c0 := _ub(bp, 0)
+    if c0 == 45 || c0 == 63 || c0 == 58 || c0 == 44 || c0 == 91 || c0 == 93 || c0 == 123 || c0 == 125 || c0 == 35 || c0 == 38 || c0 == 42 || c0 == 33 || c0 == 124 || c0 == 62 || c0 == 39 || c0 == 34 || c0 == 37 || c0 == 64 || c0 == 96 || c0 == 32:
+        ret true
+    end
+    last := _ub(bp, n - 1)
+    if last == 32 || last == 58: ret true end
+    mut i := 0
+    until i < n:
+        c := _ub(bp, i)
+        if c == 10 || c == 13 || c == 9: ret true end
+        if c == 58 && i + 1 < n && _ub(bp, i + 1) == 32: ret true end
+        if c == 35 && i > 0 && _ub(bp, i - 1) == 32: ret true end
+        i = i + 1
+    end
+    ret false
+end
+
+func _json_str_literal(raw: str): str:
+    ret "\"".concat(Escape(raw)).concat("\"")
+end
+
+func _cws(s: str, i: int): int:
+    n := s.len()
+    bp := _bp(s)
+    mut p := i
+    until p < n && (_ub(bp, p) == 32 || _ub(bp, p) == 10 || _ub(bp, p) == 9 || _ub(bp, p) == 13):
+        p = p + 1
+    end
+    ret p
+end
+
+func _cstr_end(s: str, i: int): int:
+    n := s.len()
+    bp := _bp(s)
+    mut p := i + 1
+    until p < n:
+        c := _ub(bp, p)
+        if c == 92 && p + 1 < n:
+            p = p + 2
+            continue
+        end
+        if c == 34: ret p + 1 end
+        p = p + 1
+    end
+    ret p
+end
+
+func _cval_end(s: str, i0: int): int:
+    i := _cws(s, i0)
+    n := s.len()
+    bp := _bp(s)
+    if i >= n: ret i end
+    c := _ub(bp, i)
+    if c == 34: ret _cstr_end(s, i) end
+    if c == 123:
+        mut p := _cws(s, i + 1)
+        if p < n && _ub(bp, p) == 125: ret p + 1 end
+        until p < n:
+            p = _cws(s, p)
+            ke := _cstr_end(s, p)
+            p = _cws(s, ke)
+            if p < n && _ub(bp, p) == 58: p = p + 1 end
+            p = _cval_end(s, p)
+            p = _cws(s, p)
+            if p < n && _ub(bp, p) == 44:
+                p = p + 1
+                continue
+            end
+            if p < n && _ub(bp, p) == 125: ret p + 1 end
+            break
+        end
+        ret p
+    end
+    if c == 91:
+        mut p := _cws(s, i + 1)
+        if p < n && _ub(bp, p) == 93: ret p + 1 end
+        until p < n:
+            p = _cval_end(s, p)
+            p = _cws(s, p)
+            if p < n && _ub(bp, p) == 44:
+                p = p + 1
+                continue
+            end
+            if p < n && _ub(bp, p) == 93: ret p + 1 end
+            break
+        end
+        ret p
+    end
+    mut p := i
+    until p < n:
+        cc := _ub(bp, p)
+        if cc == 44 || cc == 93 || cc == 125 || cc == 32 || cc == 10 || cc == 9 || cc == 13: break end
+        p = p + 1
+    end
+    ret p
+end
+
+func _obj_get(s: str, key: str): _YR:
+    n := s.len()
+    bp := _bp(s)
+    mut p := _cws(s, 0)
+    if p >= n || _ub(bp, p) != 123: ret _YR { value = "", ok = false } end
+    p = _cws(s, p + 1)
+    if p < n && _ub(bp, p) == 125: ret _YR { value = "", ok = false } end
+    until p < n:
+        p = _cws(s, p)
+        ks := p
+        ke := _cstr_end(s, p)
+        rawkey := _json_unescape(s.substr(ks + 1, ke - ks - 2))
+        p = _cws(s, ke)
+        if p < n && _ub(bp, p) == 58: p = p + 1 end
+        vs := _cws(s, p)
+        ve := _cval_end(s, vs)
+        if rawkey == key: ret _YR { value = s.substr(vs, ve - vs), ok = true } end
+        p = _cws(s, ve)
+        if p < n && _ub(bp, p) == 44:
+            p = p + 1
+            continue
+        end
+        break
+    end
+    ret _YR { value = "", ok = false }
+end
+
+func _arr_get(s: str, idx: int): _YR:
+    if idx < 0: ret _YR { value = "", ok = false } end
+    n := s.len()
+    bp := _bp(s)
+    mut p := _cws(s, 0)
+    if p >= n || _ub(bp, p) != 91: ret _YR { value = "", ok = false } end
+    p = _cws(s, p + 1)
+    if p < n && _ub(bp, p) == 93: ret _YR { value = "", ok = false } end
+    mut i := 0
+    until p < n:
+        vs := _cws(s, p)
+        ve := _cval_end(s, vs)
+        if i == idx: ret _YR { value = s.substr(vs, ve - vs), ok = true } end
+        i = i + 1
+        p = _cws(s, ve)
+        if p < n && _ub(bp, p) == 44:
+            p = p + 1
+            continue
+        end
+        break
+    end
+    ret _YR { value = "", ok = false }
+end
+
+func _resolve_path(compact: str, path: str): _YR:
+    if path == "": ret _YR { value = compact, ok = true } end
+    mut cur := compact
+    n := path.len()
+    bp := _bp(path)
+    mut i := 0
+    mut ok := true
+    until i < n && ok:
+        mut keyend := i
+        until keyend < n:
+            c := _ub(bp, keyend)
+            if c == 46 || c == 91: break end
+            keyend = keyend + 1
+        end
+        if keyend > i:
+            key := path.substr(i, keyend - i)
+            r := _obj_get(cur, key)
+            if r.ok == false:
+                ok = false
+            else:
+                cur = r.value
+            end
+            i = keyend
+        end
+        until i < n && ok && _ub(bp, i) == 91:
+            mut j := i + 1
+            numstart := j
+            until j < n && _ub(bp, j) >= 48 && _ub(bp, j) <= 57:
+                j = j + 1
+            end
+            if j < n && _ub(bp, j) == 93 && j > numstart:
+                idx := conv.Atoi(path.substr(numstart, j - numstart))
+                r := _arr_get(cur, idx)
+                if r.ok == false:
+                    ok = false
+                else:
+                    cur = r.value
+                end
+                i = j + 1
+            else:
+                ok = false
+            end
+        end
+        if i < n && ok && _ub(bp, i) == 46: i = i + 1 end
+    end
+    if ok == false: ret _YR { value = "", ok = false } end
+    ret _YR { value = cur, ok = true }
+end
+
+func _count_elems(s: str, is_obj: bool): int:
+    n := s.len()
+    bp := _bp(s)
+    mut p := _cws(s, 1)
+    mut closec := 93
+    if is_obj: closec = 125 end
+    if p < n && _ub(bp, p) == closec: ret 0 end
+    mut count := 0
+    until p < n:
+        if is_obj:
+            ke := _cstr_end(s, p)
+            p = _cws(s, ke)
+            if p < n && _ub(bp, p) == 58: p = p + 1 end
+        end
+        vs := _cws(s, p)
+        ve := _cval_end(s, vs)
+        count = count + 1
+        p = _cws(s, ve)
+        if p < n && _ub(bp, p) == 44:
+            p = p + 1
+            continue
+        end
+        break
+    end
+    ret count
+end
+
+func _unescape_dq(s: str, i0: int): _YR:
+    n := s.len()
+    bp := _bp(s)
+    mut i := i0 + 1
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut closed := false
+    until i < n:
+        c := _ub(bp, i)
+        if c == 34:
+            i = i + 1
+            closed = true
+            break
+        end
+        if c == 92 && i + 1 < n:
+            e := _ub(bp, i + 1)
+            if e == 34: str.BufAppendChar(sb, 34)
+            else e == 92: str.BufAppendChar(sb, 92)
+            else e == 110: str.BufAppendChar(sb, 10)
+            else e == 116: str.BufAppendChar(sb, 9)
+            else e == 114: str.BufAppendChar(sb, 13)
+            else e == 48: str.BufAppendChar(sb, 0)
+            else e == 47: str.BufAppendChar(sb, 47)
+            else: str.BufAppendChar(sb, e)
+            end
+            i = i + 2
+        else:
+            str.BufAppendChar(sb, c)
+            i = i + 1
+        end
+    end
+    out := str.BufStr(sb)
+    ret _YR { value = out, next = i, ok = closed }
+end
+
+func _unescape_sq(s: str, i0: int): _YR:
+    n := s.len()
+    bp := _bp(s)
+    mut i := i0 + 1
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut closed := false
+    until i < n:
+        c := _ub(bp, i)
+        if c == 39:
+            if i + 1 < n && _ub(bp, i + 1) == 39:
+                str.BufAppendChar(sb, 39)
+                i = i + 2
+                continue
+            end
+            i = i + 1
+            closed = true
+            break
+        end
+        str.BufAppendChar(sb, c)
+        i = i + 1
+    end
+    out := str.BufStr(sb)
+    ret _YR { value = out, next = i, ok = closed }
+end
+
+func _flow_depth_delta(s: str, i0: int): int:
+    n := s.len()
+    bp := _bp(s)
+    mut i := i0
+    mut depth := 0
+    mut inq := 0
+    until i < n:
+        c := _ub(bp, i)
+        if inq == 1:
+            if c == 92 && i + 1 < n:
+                i = i + 1
+            else c == 34:
+                inq = 0
+            end
+        else inq == 2:
+            if c == 39:
+                if i + 1 < n && _ub(bp, i + 1) == 39:
+                    i = i + 1
+                else:
+                    inq = 0
+                end
+            end
+        else:
+            if c == 34:
+                inq = 1
+            else c == 39:
+                inq = 2
+            else c == 91 || c == 123:
+                depth = depth + 1
+            else c == 93 || c == 125:
+                depth = depth - 1
+            end
+        end
+        i = i + 1
+    end
+    ret depth
+end
+
+func _gather_flow_text(lines: Vector<str>, li: int, first_text: str): _YR:
+    mut buf := first_text
+    mut depth := _flow_depth_delta(first_text, 0)
+    mut cur := li
+    n := lines.len()
+    until depth > 0:
+        cur = cur + 1
+        if cur >= n: break end
+        piece := str.TrimLeft(_content(lines.get(cur)[0]))
+        buf = buf.concat(" ").concat(piece)
+        depth = depth + _flow_depth_delta(piece, 0)
+    end
+    ret _YR { value = buf, next = cur + 1 }
+end
+
+func _flow_ws(s: str, i: int): int:
+    n := s.len()
+    bp := _bp(s)
+    mut p := i
+    until p < n && _ub(bp, p) == 32:
+        p = p + 1
+    end
+    ret p
+end
+
+func _flow_bare_end(s: str, i: int): int:
+    n := s.len()
+    bp := _bp(s)
+    mut p := i
+    until p < n:
+        c := _ub(bp, p)
+        if c == 44 || c == 93 || c == 125: break end
+        if c == 58:
+            mut stop := false
+            if p + 1 >= n: stop = true end
+            if p + 1 < n && _ub(bp, p + 1) == 32: stop = true end
+            if p + 1 < n && _ub(bp, p + 1) == 44: stop = true end
+            if p + 1 < n && _ub(bp, p + 1) == 93: stop = true end
+            if p + 1 < n && _ub(bp, p + 1) == 125: stop = true end
+            if stop: break end
+        end
+        p = p + 1
+    end
+    ret p
+end
+
+func _flow_key(s: str, i: int): _YR:
+    n := s.len()
+    bp := _bp(s)
+    if i < n && _ub(bp, i) == 34: ret _unescape_dq(s, i) end
+    if i < n && _ub(bp, i) == 39: ret _unescape_sq(s, i) end
+    e := _flow_bare_end(s, i)
+    ret _YR { value = str.Trim(s.substr(i, e - i)), next = e }
+end
+
+func _flow_scalar(s: str, i: int): _YR:
+    n := s.len()
+    bp := _bp(s)
+    if i < n && _ub(bp, i) == 34:
+        r := _unescape_dq(s, i)
+        ret _YR { value = _json_str_literal(r.value), next = r.next, ok = r.ok }
+    end
+    if i < n && _ub(bp, i) == 39:
+        r := _unescape_sq(s, i)
+        ret _YR { value = _json_str_literal(r.value), next = r.next, ok = r.ok }
+    end
+    e := _flow_bare_end(s, i)
+    raw := str.Trim(s.substr(i, e - i))
+    tok := _bool_or_null_token(raw)
+    if tok != "NOMATCH": ret _YR { value = tok, next = e } end
+    if _looks_numeric(raw):
+        mut nt := raw
+        if nt.substr(0, 1) == "+": nt = nt.substr(1, nt.len() - 1) end
+        ret _YR { value = nt, next = e }
+    end
+    ret _YR { value = _json_str_literal(raw), next = e }
+end
+
+func _flow_value(s: str, i: int): _YR:
+    p := _flow_ws(s, i)
+    n := s.len()
+    bp := _bp(s)
+    if p < n && _ub(bp, p) == 123: ret _flow_object(s, p) end
+    if p < n && _ub(bp, p) == 91: ret _flow_array(s, p) end
+    ret _flow_scalar(s, p)
+end
+
+func _flow_object(s: str, i: int): _YR:
+    n := s.len()
+    bp := _bp(s)
+    members := Vector {} as Vector<str>
+    mut p := _flow_ws(s, i + 1)
+    if p < n && _ub(bp, p) == 125:
+        members.free()
+        ret _YR { value = "{}", next = p + 1 }
+    end
+    mut closed := false
+    mut all_ok := true
+    until p < n:
+        p = _flow_ws(s, p)
+        k := _flow_key(s, p)
+        if k.ok == false: all_ok = false end
+        p = _flow_ws(s, k.next)
+        if p < n && _ub(bp, p) == 58: p = p + 1 end
+        p = _flow_ws(s, p)
+        v := _flow_value(s, p)
+        if v.ok == false: all_ok = false end
+        members.push(_json_str_literal(k.value).concat(": ").concat(v.value))
+        p = _flow_ws(s, v.next)
+        if p < n && _ub(bp, p) == 44:
+            p = p + 1
+            continue
+        end
+        if p < n && _ub(bp, p) == 125:
+            p = p + 1
+            closed = true
+        end
+        break
+    end
+    out := Object(members)
+    members.free()
+    ret _YR { value = out, next = p, ok = closed && all_ok }
+end
+
+func _flow_array(s: str, i: int): _YR:
+    n := s.len()
+    bp := _bp(s)
+    items := Vector {} as Vector<str>
+    mut p := _flow_ws(s, i + 1)
+    if p < n && _ub(bp, p) == 93:
+        items.free()
+        ret _YR { value = "[]", next = p + 1 }
+    end
+    mut closed := false
+    mut all_ok := true
+    until p < n:
+        v := _flow_value(s, p)
+        if v.ok == false: all_ok = false end
+        items.push(v.value)
+        p = _flow_ws(s, v.next)
+        if p < n && _ub(bp, p) == 44:
+            p = p + 1
+            continue
+        end
+        if p < n && _ub(bp, p) == 93:
+            p = p + 1
+            closed = true
+        end
+        break
+    end
+    out := Array(items)
+    items.free()
+    ret _YR { value = out, next = p, ok = closed && all_ok }
+end
+
+func _parse_block_scalar(lines: Vector<str>, li: int, indicator: str): _YR:
+    mut folded := false
+    if indicator.substr(0, 1) == ">": folded = true end
+    mut chomp := 0
+    k := 1
+    ilen := indicator.len()
+    if k < ilen:
+        ch := indicator.substr(k, 1)
+        if ch == "-":
+            chomp = 1
+        else ch == "+":
+            chomp = 2
+        end
+    end
+    n := lines.len()
+    mut bi := li + 1
+    mut base := 0 - 1
+    until bi < n && base < 0:
+        raw := lines.get(bi)[0]
+        if str.Trim(raw) != "":
+            base = _raw_indent(raw)
+        else:
+            bi = bi + 1
+        end
+    end
+    if base < 0:
+        ret _YR { value = _json_str_literal(""), next = li + 1 }
+    end
+    body_lines := Vector {} as Vector<str>
+    mut cur := li + 1
+    until cur < n:
+        raw := lines.get(cur)[0]
+        if str.Trim(raw) == "":
+            body_lines.push("")
+            cur = cur + 1
+        else:
+            ind := _raw_indent(raw)
+            if ind < base: break end
+            mut piece := ""
+            if raw.len() >= base: piece = raw.substr(base, raw.len() - base) end
+            body_lines.push(str.TrimRight(piece))
+            cur = cur + 1
+        end
+    end
+    mut endi := body_lines.len()
+    until endi > 0 && body_lines.get(endi - 1)[0] == "":
+        endi = endi - 1
+    end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut prev_blank := false
+    repeat endi with idx:
+        line := body_lines.get(idx)[0]
+        if idx > 0:
+            if folded:
+                if line == "" || prev_blank:
+                    str.BufAppendChar(sb, 10)
+                else:
+                    str.BufAppendChar(sb, 32)
+                end
+            else:
+                str.BufAppendChar(sb, 10)
+            end
+        end
+        str.BufAppend(sb, line)
+        prev_blank = line == ""
+    end
+    mut result := str.BufStr(sb)
+    if chomp == 2:
+        trailing := body_lines.len() - endi
+        mut t := 0
+        until t < trailing + 1:
+            result = result.concat("\n")
+            t = t + 1
+        end
+    else chomp == 0:
+        if endi > 0: result = result.concat("\n") end
+    end
+    body_lines.free()
+    ret _YR { value = _json_str_literal(result), next = cur }
+end
+
+func _dump_indent(sb &: str.StringBuilder, unit: str, depth: int):
+    repeat depth with i:
+        str.BufAppend(sb, unit)
+    end
+end
+
+func _dump_scalar(s: str, i: int, sb &: str.StringBuilder): int:
+    n := s.len()
+    bp := _bp(s)
+    if i < n && _ub(bp, i) == 34:
+        e := _cstr_end(s, i)
+        raw := _json_unescape(s.substr(i + 1, e - i - 2))
+        if _needs_quote(raw):
+            str.BufAppend(sb, _json_str_literal(raw))
+        else:
+            str.BufAppend(sb, raw)
+        end
+        ret e
+    end
+    e := _cval_end(s, i)
+    str.BufAppend(sb, s.substr(i, e - i))
+    ret e
+end
+
+func _dump_collection_or_scalar(s: str, vs: int, sb &: str.StringBuilder, unit: str, depth: int): int:
+    n := s.len()
+    bp := _bp(s)
+    vc := _ub(bp, vs)
+    if vc == 123 || vc == 91:
+        mut closec := 125
+        if vc == 91: closec = 93 end
+        inner := _cws(s, vs + 1)
+        if inner < n && _ub(bp, inner) == closec:
+            str.BufAppendChar(sb, 32)
+            if vc == 123: str.BufAppend(sb, "{}") else: str.BufAppend(sb, "[]") end
+            ret inner + 1
+        end
+        str.BufAppendChar(sb, 10)
+        ret _dump_block(s, vs, sb, unit, depth + 1)
+    end
+    str.BufAppendChar(sb, 32)
+    ret _dump_scalar(s, vs, sb)
+end
+
+func _dump_block(s: str, i0: int, sb &: str.StringBuilder, unit: str, depth: int): int:
+    i := _cws(s, i0)
+    n := s.len()
+    bp := _bp(s)
+    if i >= n:
+        str.BufAppend(sb, "null")
+        ret i
+    end
+    c := _ub(bp, i)
+    if c == 123:
+        mut p := _cws(s, i + 1)
+        if p < n && _ub(bp, p) == 125:
+            str.BufAppend(sb, "{}")
+            ret p + 1
+        end
+        mut first := true
+        until p < n:
+            p = _cws(s, p)
+            ke := _cstr_end(s, p)
+            keyraw := _json_unescape(s.substr(p + 1, ke - p - 2))
+            if first == false: str.BufAppendChar(sb, 10) end
+            first = false
+            _dump_indent(sb, unit, depth)
+            if _needs_quote(keyraw):
+                str.BufAppend(sb, _json_str_literal(keyraw))
+            else:
+                str.BufAppend(sb, keyraw)
+            end
+            str.BufAppendChar(sb, 58)
+            p = _cws(s, ke)
+            if p < n && _ub(bp, p) == 58: p = p + 1 end
+            vs := _cws(s, p)
+            p = _dump_collection_or_scalar(s, vs, sb, unit, depth)
+            p = _cws(s, p)
+            if p < n && _ub(bp, p) == 44:
+                p = p + 1
+                continue
+            end
+            if p < n && _ub(bp, p) == 125: p = p + 1 end
+            break
+        end
+        ret p
+    end
+    if c == 91:
+        mut p := _cws(s, i + 1)
+        if p < n && _ub(bp, p) == 93:
+            str.BufAppend(sb, "[]")
+            ret p + 1
+        end
+        mut first := true
+        until p < n:
+            if first == false: str.BufAppendChar(sb, 10) end
+            first = false
+            _dump_indent(sb, unit, depth)
+            str.BufAppendChar(sb, 45)
+            vs := _cws(s, p)
+            p = _dump_collection_or_scalar(s, vs, sb, unit, depth)
+            p = _cws(s, p)
+            if p < n && _ub(bp, p) == 44:
+                p = p + 1
+                continue
+            end
+            if p < n && _ub(bp, p) == 93: p = p + 1 end
+            break
+        end
+        ret p
+    end
+    ret _dump_scalar(s, i, sb)
+end
+
 @en "Parse"
 @fa "تجزیه"
 @ar "تحليل"
@@ -370,7 +1120,7 @@ end
 
 @en "ToJSON"
 @fa "به جیسون"
-@ar "إلى جيسون"
+@ar "لجيسون"
 pub func ToJSON(text: str): str:
     ret Parse(text)
 end

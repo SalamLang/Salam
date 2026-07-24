@@ -511,8 +511,7 @@ static void fmt_one_file(fmt_ctx_t *c, const char *path)
             fmt_input = rsrc;
         }
         if (notes.len > 0) {
-            printf(i18n_tr("%s: some ordering problems need manual attention:\n"),
-                  path);
+            printf(i18n_tr("%s: some ordering problems need manual attention:\n"), path);
             fmt_print_order_notes(&notes);
         }
     }

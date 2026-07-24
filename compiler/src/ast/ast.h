@@ -121,6 +121,17 @@ void ast_add(arena_t *a, ast_node_t *parent, ast_node_t *child);
 
 const char *ast_kind_name(ast_kind_t kind);
 
+typedef enum {
+    AST_ORDER_IMPORT = 0,
+    AST_ORDER_CONST = 1,
+    AST_ORDER_VAR = 2,
+    AST_ORDER_TYPEDEF = 3,
+    AST_ORDER_FUNC = 4,
+    AST_ORDER_NONE = -1
+} ast_order_phase_t;
+
+ast_order_phase_t ast_toplevel_order_phase(const ast_node_t *d);
+
 long ast_str_lit_len(const ast_node_t *n);
 
 ast_node_t *ast_clone(arena_t *a, const ast_node_t *n);

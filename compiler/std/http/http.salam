@@ -14,16 +14,6 @@ if SALAM_OS_WINDOWS:
     link "winhttp"
 end
 
-@en "Response"
-@fa "پاسخ"
-@ar "استجابة"
-pub struct Response:
-    pub status: int = 0
-    pub body: str = ""
-    pub head: str = ""
-end
-mut _g_http_status := 0
-mut _g_http_headers := ""
 if SALAM_OS_WINDOWS:
     extern:
         func MultiByteToWideChar(codepage: int, flags: int, src: str, srclen: int, dst: void*, dstlen: int): int
@@ -38,7 +28,150 @@ if SALAM_OS_WINDOWS:
         func WinHttpAddRequestHeaders(req: void*, headers: void*, hlen: int, modifiers: int): int
         func WinHttpCloseHandle(handle: void*): int
     end
+else:
+    if SALAM_LINK_CURL:
+        extern:
+            func curl_easy_init(): void*
+            func curl_easy_setopt(h: void*, opt: int, ...): i64
+            func curl_easy_perform(h: void*): i64
+            func curl_easy_cleanup(h: void*)
+            func curl_slist_append(list: void*, s: str): void*
+            func curl_slist_free_all(list: void*)
+        end
+        const _CURLOPT_URL := 10002
+        const _CURLOPT_WRITEDATA := 10001
+        const _CURLOPT_WRITEFUNCTION := 20011
+        const _CURLOPT_POSTFIELDS := 10015
+        const _CURLOPT_HTTPHEADER := 10023
+        const _CURLOPT_CUSTOMREQUEST := 10036
+        const _CURLOPT_USERAGENT := 10018
+        const _CURLOPT_HEADERFUNCTION := 20079
+        const _CURLOPT_HEADERDATA := 10029
+        const _CURLOPT_FOLLOWLOCATION := 52
+    end
+end
 
+mut _g_http_status := 0
+mut _g_http_headers := ""
+if !SALAM_OS_WINDOWS:
+    if !SALAM_LINK_CURL:
+        mut _g_tmp_ctr := 0
+    end
+end
+
+@en "Response"
+@fa "پاسخ"
+@ar "استجابة"
+pub struct Response:
+    pub status: int = 0
+    pub body: str = ""
+    pub head: str = ""
+end
+
+@en "Client"
+@fa "کارخواه"
+@ar "عمیل"
+pub struct Client:
+    pub cookies: HashMap<str, str> = HashMap {} as HashMap<str, str>
+    pub headers: HashMap<str, str> = HashMap {} as HashMap<str, str>
+
+    @en "SetHeader"
+    @fa "تنظیم سرصفحه"
+    @ar "ضبط الترویسة"
+    pub func SetHeader(name: str, value: str):
+        this.headers.put(name, value)
+    end
+
+    @en "SetCookie"
+    @fa "تنظیم کوکی"
+    @ar "ضبط الكوكي"
+    pub func SetCookie(name: str, value: str):
+        this.cookies.put(name, value)
+    end
+
+    @en "ClearCookies"
+    @fa "پاک کردن کوکی ها"
+    @ar "مسح الكوكیز"
+    pub func ClearCookies():
+        this.cookies = HashMap {} as HashMap<str, str>
+    end
+
+    func _merged_headers(extra: str): str:
+        mut out := serialize(this.headers)
+        ck := CookieHeader(this.cookies)
+        if ck.len() > 0:
+            out = out.concat("Cookie: ").concat(ck).concat("\r\n")
+        end
+        if extra.len() > 0:
+            out = out.concat(extra)
+        end
+        ret out
+    end
+
+    func _absorb(r: Response):
+        cs := CookieMap(r)
+        it := cs.iter()
+        until it.has_next():
+            this.cookies.put(it.key(), it.value())
+            it.next()
+        end
+    end
+
+    @en "Request"
+    @fa "درخواست"
+    @ar "طلب"
+    pub func Request(method: str, url: str, body: str): Response:
+        r := send(method, url, this._merged_headers(""), body)
+        this._absorb(r)
+        ret r
+    end
+
+    @en "RequestWith"
+    @fa "درخواست با"
+    @ar "طلب مع"
+    pub func RequestWith(method: str, url: str, body: str, extra: HashMap<str, str>): Response:
+        r := send(method, url, this._merged_headers(serialize(extra)), body)
+        this._absorb(r)
+        ret r
+    end
+
+    @en "Get"
+    @fa "دریافت"
+    @ar "جلب"
+    pub func Get(url: str): Response: ret this.Request("GET", url, "") end
+
+    @en "Post"
+    @fa "ارسال"
+    @ar "إرسال"
+    pub func Post(url: str, body: str): Response: ret this.Request("POST", url, body) end
+
+    @en "Put"
+    @fa "قرار دادن"
+    @ar "وضع"
+    pub func Put(url: str, body: str): Response: ret this.Request("PUT", url, body) end
+
+    @en "Delete"
+    @fa "حذف"
+    @ar "حذف"
+    pub func Delete(url: str): Response: ret this.Request("DELETE", url, "") end
+
+    @en "Patch"
+    @fa "وصله"
+    @ar "ترقیع"
+    pub func Patch(url: str, body: str): Response: ret this.Request("PATCH", url, body) end
+
+    @en "Options"
+    @fa "گزینه ها"
+    @ar "خیارات"
+    pub func Options(url: str): Response: ret this.Request("OPTIONS", url, "") end
+
+    @en "Head"
+    @fa "سرصفحه"
+    @ar "ترویسة"
+    pub func Head(url: str): Response: ret this.Request("HEAD", url, "") end
+end
+
+if SALAM_OS_WINDOWS:
     func _make_str(buf: void*, len: int): str:
         if buf == null || len <= 0:
             ret ""
@@ -170,24 +303,6 @@ if SALAM_OS_WINDOWS:
     end
 else:
     if SALAM_LINK_CURL:
-        extern:
-            func curl_easy_init(): void*
-            func curl_easy_setopt(h: void*, opt: int, ...): i64
-            func curl_easy_perform(h: void*): i64
-            func curl_easy_cleanup(h: void*)
-            func curl_slist_append(list: void*, s: str): void*
-            func curl_slist_free_all(list: void*)
-        end
-        const _CURLOPT_URL := 10002
-        const _CURLOPT_WRITEDATA := 10001
-        const _CURLOPT_WRITEFUNCTION := 20011
-        const _CURLOPT_POSTFIELDS := 10015
-        const _CURLOPT_HTTPHEADER := 10023
-        const _CURLOPT_CUSTOMREQUEST := 10036
-        const _CURLOPT_USERAGENT := 10018
-        const _CURLOPT_HEADERFUNCTION := 20079
-        const _CURLOPT_HEADERDATA := 10029
-        const _CURLOPT_FOLLOWLOCATION := 52
         func _cbuf(): void*:
             ret mem.AllocateZeroed(24 as u64)
         end
@@ -274,8 +389,6 @@ else:
             ret result
         end
     else:
-        mut _g_tmp_ctr := 0
-
         func _shq(s: str): str:
             mut sb := str.NewBuilder()
             defer str.BufFree(sb)
@@ -382,13 +495,6 @@ func _parse_response(req: str): Response:
     ret Response { status = _g_http_status, body = req, head = "" }
 end
 
-@en "NewHeaders"
-@fa "سرصفحه جدید"
-@ar "ترویسات جدیدة"
-pub func NewHeaders(): HashMap<str, str>:
-    m := HashMap {} as HashMap<str, str> ret m
-end
-
 func serialize(headers: HashMap<str, str>): str:
     mut out := ""
     it := headers.iter()
@@ -410,6 +516,17 @@ func send(method: str, url: str, header_block: str, body: str): Response:
     end
     req := _fetch_https(method, url, effective_headers, body)
     ret _parse_response(req)
+end
+
+func _hdr_lower(s: str): str:
+    ret str.Lower(s)
+end
+
+@en "NewHeaders"
+@fa "سرصفحه جدید"
+@ar "ترویسات جدیدة"
+pub func NewHeaders(): HashMap<str, str>:
+    m := HashMap {} as HashMap<str, str> ret m
 end
 
 @en "Get"
@@ -487,10 +604,6 @@ pub func Headers(r: Response): HashMap<str, str>:
         end
     end
     ret m
-end
-
-func _hdr_lower(s: str): str:
-    ret str.Lower(s)
 end
 
 @en "GetHeader"
@@ -686,109 +799,6 @@ pub func CookieHeader(cookies: HashMap<str, str>): str:
         it.next()
     end
     ret out
-end
-
-@en "Client"
-@fa "کارخواه"
-@ar "عمیل"
-pub struct Client:
-    pub cookies: HashMap<str, str> = HashMap {} as HashMap<str, str>
-    pub headers: HashMap<str, str> = HashMap {} as HashMap<str, str>
-
-    @en "SetHeader"
-    @fa "تنظیم سرصفحه"
-    @ar "ضبط الترویسة"
-    pub func SetHeader(name: str, value: str):
-        this.headers.put(name, value)
-    end
-
-    @en "SetCookie"
-    @fa "تنظیم کوکی"
-    @ar "ضبط الكوكي"
-    pub func SetCookie(name: str, value: str):
-        this.cookies.put(name, value)
-    end
-
-    @en "ClearCookies"
-    @fa "پاک کردن کوکی ها"
-    @ar "مسح الكوكیز"
-    pub func ClearCookies():
-        this.cookies = HashMap {} as HashMap<str, str>
-    end
-
-    func _merged_headers(extra: str): str:
-        mut out := serialize(this.headers)
-        ck := CookieHeader(this.cookies)
-        if ck.len() > 0:
-            out = out.concat("Cookie: ").concat(ck).concat("\r\n")
-        end
-        if extra.len() > 0:
-            out = out.concat(extra)
-        end
-        ret out
-    end
-
-    func _absorb(r: Response):
-        cs := CookieMap(r)
-        it := cs.iter()
-        until it.has_next():
-            this.cookies.put(it.key(), it.value())
-            it.next()
-        end
-    end
-
-    @en "Request"
-    @fa "درخواست"
-    @ar "طلب"
-    pub func Request(method: str, url: str, body: str): Response:
-        r := send(method, url, this._merged_headers(""), body)
-        this._absorb(r)
-        ret r
-    end
-
-    @en "RequestWith"
-    @fa "درخواست با"
-    @ar "طلب مع"
-    pub func RequestWith(method: str, url: str, body: str, extra: HashMap<str, str>): Response:
-        r := send(method, url, this._merged_headers(serialize(extra)), body)
-        this._absorb(r)
-        ret r
-    end
-
-    @en "Get"
-    @fa "دریافت"
-    @ar "جلب"
-    pub func Get(url: str): Response: ret this.Request("GET", url, "") end
-
-    @en "Post"
-    @fa "ارسال"
-    @ar "إرسال"
-    pub func Post(url: str, body: str): Response: ret this.Request("POST", url, body) end
-
-    @en "Put"
-    @fa "قرار دادن"
-    @ar "وضع"
-    pub func Put(url: str, body: str): Response: ret this.Request("PUT", url, body) end
-
-    @en "Delete"
-    @fa "حذف"
-    @ar "حذف"
-    pub func Delete(url: str): Response: ret this.Request("DELETE", url, "") end
-
-    @en "Patch"
-    @fa "وصله"
-    @ar "ترقیع"
-    pub func Patch(url: str, body: str): Response: ret this.Request("PATCH", url, body) end
-
-    @en "Options"
-    @fa "گزینه ها"
-    @ar "خیارات"
-    pub func Options(url: str): Response: ret this.Request("OPTIONS", url, "") end
-
-    @en "Head"
-    @fa "سرصفحه"
-    @ar "ترویسة"
-    pub func Head(url: str): Response: ret this.Request("HEAD", url, "") end
 end
 
 @en "NewClient"

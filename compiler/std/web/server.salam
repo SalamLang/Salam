@@ -1,5 +1,8 @@
 package web
 
+mut _current_router := NewRouter()
+mut _hide_tokens := false
+
 @en "Server"
 @fa "سرور"
 @ar "خادم"
@@ -7,6 +10,45 @@ pub struct Server:
     pub port: int = 0
     pub router: Router = Router {}
     pub hide_tokens: bool = false
+end
+
+func _web_conn_handler(fd: i64):
+    req := _net_recv_req(fd)
+    if req.len() == 0:
+        _net_close(fd)
+        ret
+    end
+    ctx := salam_ctx_new(fd)
+    _parse_http(ctx, req)
+    r := _current_router
+    hide := _hide_tokens
+    shdr := _server_header(hide)
+    if r.has_static:
+        prefix := r.static_prefix
+        path := salam_ctx_get(ctx, 1)
+        if path.len() >= prefix.len() && path.substr(0, prefix.len()) == prefix:
+            dir := r.static_dir
+            rel := path.substr(prefix.len(), path.len() - prefix.len())
+            full := dir.concat(rel)
+            if _send_file(fd, full, MimeType(full), shdr) == 1:
+                _ctx_mark_sent(ctx)
+            end
+        end
+    end
+    if salam_ctx_is_sent(ctx) == 0:
+        dispatched := _dispatch(r, ctx)
+        if dispatched == false:
+            salam_ctx_set_status(ctx, 404)
+            salam_ctx_set(ctx, 4, "text/plain; charset=utf-8")
+            salam_ctx_set(ctx, 5, "404 Not Found")
+        end
+    end
+    if salam_ctx_is_sent(ctx) == 0:
+        resp := _build_response(ctx, hide)
+        _net_send_all(fd, resp)
+    end
+    _net_close(fd)
+    salam_ctx_free(ctx)
 end
 
 @en "NewServer"
@@ -48,45 +90,4 @@ pub func Run(s: Server):
             salam_spawn_fn_i64(funcptr(_web_conn_handler), cfd)
         end
     end
-end
-mut _current_router := NewRouter()
-mut _hide_tokens := false
-
-func _web_conn_handler(fd: i64):
-    req := _net_recv_req(fd)
-    if req.len() == 0:
-        _net_close(fd)
-        ret
-    end
-    ctx := salam_ctx_new(fd)
-    _parse_http(ctx, req)
-    r := _current_router
-    hide := _hide_tokens
-    shdr := _server_header(hide)
-    if r.has_static:
-        prefix := r.static_prefix
-        path := salam_ctx_get(ctx, 1)
-        if path.len() >= prefix.len() && path.substr(0, prefix.len()) == prefix:
-            dir := r.static_dir
-            rel := path.substr(prefix.len(), path.len() - prefix.len())
-            full := dir.concat(rel)
-            if _send_file(fd, full, MimeType(full), shdr) == 1:
-                _ctx_mark_sent(ctx)
-            end
-        end
-    end
-    if salam_ctx_is_sent(ctx) == 0:
-        dispatched := _dispatch(r, ctx)
-        if dispatched == false:
-            salam_ctx_set_status(ctx, 404)
-            salam_ctx_set(ctx, 4, "text/plain; charset=utf-8")
-            salam_ctx_set(ctx, 5, "404 Not Found")
-        end
-    end
-    if salam_ctx_is_sent(ctx) == 0:
-        resp := _build_response(ctx, hide)
-        _net_send_all(fd, resp)
-    end
-    _net_close(fd)
-    salam_ctx_free(ctx)
 end

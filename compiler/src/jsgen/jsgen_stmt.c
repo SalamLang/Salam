@@ -315,8 +315,6 @@ void jsg_stmt(jg_t *g, ast_node_t *n)
             break;
         }
         if (n->a && cg->fn_defers.len > 0) {
-            /* Evaluate before running defers: a defer may free/mutate a
-             * variable the return expression reads. */
             const char *expr = jsg_expr(g, n->a);
             int t = ++cg->tmpn;
             const char *tmp = cg_fmt(cg, "__retv%d", t);

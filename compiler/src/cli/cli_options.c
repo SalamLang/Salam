@@ -131,6 +131,8 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                 out->safe = false;
             } else if (strcmp(arg, "--check") == 0) {
                 out->fmt_check = true;
+            } else if (strcmp(arg, "--fix-order") == 0) {
+                out->fmt_fix_order = true;
             } else if (strcmp(arg, "-r") == 0 || strcmp(arg, "--recursive") == 0) {
                 out->fmt_recursive = true;
             } else if (strcmp(arg, "--tabs") == 0) {

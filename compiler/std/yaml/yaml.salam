@@ -1,0 +1,424 @@
+@en "yaml"
+@fa "یامل"
+@ar "يامل"
+package yaml
+
+import str
+import conv
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+struct _YR:
+    pub value: str = ""
+    pub next: int = 0
+    pub ok: bool = true
+end
+
+func _raw_indent(raw: str): int:
+    n := raw.len()
+    bp := _bp(raw)
+    mut i := 0
+    until i < n && _ub(bp, i) == 32:
+        i = i + 1
+    end
+    ret i
+end
+
+func _content(raw: str): str:
+    n := raw.len()
+    bp := _bp(raw)
+    mut i := 0
+    mut inq := 0
+    mut cut := n
+    until i < n:
+        c := _ub(bp, i)
+        if inq == 1:
+            if c == 92 && i + 1 < n:
+                i = i + 1
+            else c == 34:
+                inq = 0
+            end
+        else inq == 2:
+            if c == 39:
+                if i + 1 < n && _ub(bp, i + 1) == 39:
+                    i = i + 1
+                else:
+                    inq = 0
+                end
+            end
+        else:
+            if c == 34:
+                inq = 1
+            else c == 39:
+                inq = 2
+            else c == 35:
+                if i == 0 || _ub(bp, i - 1) == 32 || _ub(bp, i - 1) == 9:
+                    cut = i
+                    break
+                end
+            end
+        end
+        i = i + 1
+    end
+    ret str.TrimRight(raw.substr(0, cut))
+end
+
+func _indent_of(content: str): int:
+    n := content.len()
+    bp := _bp(content)
+    mut i := 0
+    until i < n && _ub(bp, i) == 32:
+        i = i + 1
+    end
+    ret i
+end
+
+func _skip_noise(lines: Vector<str>, li: int): int:
+    n := lines.len()
+    mut i := li
+    until i < n:
+        c := _content(lines.get(i)[0])
+        if str.Trim(c) == "":
+            i = i + 1
+        else:
+            break
+        end
+    end
+    ret i
+end
+
+func _is_seq_item(t: str): bool:
+    if t == "-": ret true end
+    if t.len() >= 2 && t.substr(0, 2) == "- ": ret true end
+    ret false
+end
+
+func _key_colon_pos(t: str): int:
+    n := t.len()
+    bp := _bp(t)
+    mut i := 0
+    mut depth := 0
+    mut inq := 0
+    until i < n:
+        c := _ub(bp, i)
+        if inq == 1:
+            if c == 92 && i + 1 < n:
+                i = i + 1
+            else c == 34:
+                inq = 0
+            end
+        else inq == 2:
+            if c == 39:
+                if i + 1 < n && _ub(bp, i + 1) == 39:
+                    i = i + 1
+                else:
+                    inq = 0
+                end
+            end
+        else:
+            if c == 34:
+                inq = 1
+            else c == 39:
+                inq = 2
+            else c == 91 || c == 123:
+                depth = depth + 1
+            else c == 93 || c == 125:
+                depth = depth - 1
+            else c == 58 && depth == 0:
+                if i + 1 >= n || _ub(bp, i + 1) == 32:
+                    ret i
+                end
+            end
+        end
+        i = i + 1
+    end
+    ret 0 - 1
+end
+
+func _key_to_json_string(raw: str): str:
+    k := str.Trim(raw)
+    if k.len() >= 1 && k.substr(0, 1) == "\"":
+        r := _unescape_dq(k, 0)
+        ret _json_str_literal(r.value)
+    end
+    if k.len() >= 1 && k.substr(0, 1) == "'":
+        r := _unescape_sq(k, 0)
+        ret _json_str_literal(r.value)
+    end
+    ret _json_str_literal(k)
+end
+
+func _parse_node(lines: Vector<str>, li0: int, min_indent: int): _YR:
+    n := lines.len()
+    li := _skip_noise(lines, li0)
+    if li >= n: ret _YR { value = "null", next = li } end
+    content := _content(lines.get(li)[0])
+    ind := _indent_of(content)
+    if ind < min_indent: ret _YR { value = "null", next = li0 } end
+    t := str.TrimLeft(content)
+    if _is_seq_item(t): ret _parse_seq(lines, li, ind) end
+    if _key_colon_pos(t) >= 0: ret _parse_map(lines, li, ind) end
+    ret _parse_leaf(lines, li, t)
+end
+
+func _parse_map_entry_text(lines: Vector<str>, li: int, keyval_text: str, ind: int): _YR:
+    kc := _key_colon_pos(keyval_text)
+    keypart := str.TrimRight(keyval_text.substr(0, kc))
+    key_json := _key_to_json_string(keypart)
+    mut rest := ""
+    if kc + 1 < keyval_text.len():
+        rest = str.TrimLeft(keyval_text.substr(kc + 1, keyval_text.len() - kc - 1))
+    end
+    n := lines.len()
+    if rest == "":
+        nxt := _skip_noise(lines, li + 1)
+        if nxt < n:
+            ncontent := _content(lines.get(nxt)[0])
+            nind := _indent_of(ncontent)
+            nt := str.TrimLeft(ncontent)
+            mut allow := false
+            if nind > ind: allow = true end
+            if nind == ind && _is_seq_item(nt): allow = true end
+            if allow:
+                child := _parse_node(lines, li + 1, nind)
+                ret _YR { value = key_json.concat(": ").concat(child.value), next = child.next, ok = child.ok }
+            end
+        end
+        ret _YR { value = key_json.concat(": null"), next = li + 1 }
+    end
+    leaf := _parse_leaf(lines, li, rest)
+    ret _YR { value = key_json.concat(": ").concat(leaf.value), next = leaf.next, ok = leaf.ok }
+end
+
+func _parse_map(lines: Vector<str>, li: int, ind: int): _YR:
+    n := lines.len()
+    members := Vector {} as Vector<str>
+    mut cur := li
+    mut ok := true
+    until cur < n:
+        cur = _skip_noise(lines, cur)
+        if cur >= n: break end
+        content := _content(lines.get(cur)[0])
+        ci := _indent_of(content)
+        if ci != ind: break end
+        t := str.TrimLeft(content)
+        if _key_colon_pos(t) < 0: break end
+        e := _parse_map_entry_text(lines, cur, t, ind)
+        members.push(e.value)
+        if e.ok == false: ok = false end
+        cur = e.next
+    end
+    out := Object(members)
+    members.free()
+    ret _YR { value = out, next = cur, ok = ok }
+end
+
+func _parse_map_inline(lines: Vector<str>, li: int, first_rest: str, ind: int): _YR:
+    members := Vector {} as Vector<str>
+    e0 := _parse_map_entry_text(lines, li, first_rest, ind)
+    members.push(e0.value)
+    mut ok := e0.ok
+    n := lines.len()
+    mut cur := e0.next
+    until cur < n:
+        cur = _skip_noise(lines, cur)
+        if cur >= n: break end
+        content := _content(lines.get(cur)[0])
+        ci := _indent_of(content)
+        if ci != ind: break end
+        t := str.TrimLeft(content)
+        if _key_colon_pos(t) < 0: break end
+        e := _parse_map_entry_text(lines, cur, t, ind)
+        members.push(e.value)
+        if e.ok == false: ok = false end
+        cur = e.next
+    end
+    out := Object(members)
+    members.free()
+    ret _YR { value = out, next = cur, ok = ok }
+end
+
+func _parse_seq(lines: Vector<str>, li: int, ind: int): _YR:
+    n := lines.len()
+    items := Vector {} as Vector<str>
+    mut cur := li
+    mut ok := true
+    until cur < n:
+        cur = _skip_noise(lines, cur)
+        if cur >= n: break end
+        content := _content(lines.get(cur)[0])
+        ci := _indent_of(content)
+        if ci != ind: break end
+        t := str.TrimLeft(content)
+        if _is_seq_item(t) == false: break end
+        mut rest := ""
+        if t.len() > 2: rest = str.TrimLeft(t.substr(2, t.len() - 2)) end
+        if rest == "":
+            nxt := _skip_noise(lines, cur + 1)
+            mut consumed := false
+            if nxt < n:
+                ncontent := _content(lines.get(nxt)[0])
+                nind := _indent_of(ncontent)
+                if nind > ind:
+                    child := _parse_node(lines, cur + 1, nind)
+                    items.push(child.value)
+                    if child.ok == false: ok = false end
+                    cur = child.next
+                    consumed = true
+                end
+            end
+            if consumed == false:
+                items.push("null")
+                cur = cur + 1
+            end
+        else:
+            kc := _key_colon_pos(rest)
+            if kc >= 0:
+                mp := _parse_map_inline(lines, cur, rest, ind + 2)
+                items.push(mp.value)
+                if mp.ok == false: ok = false end
+                cur = mp.next
+            else:
+                leaf := _parse_leaf(lines, cur, rest)
+                items.push(leaf.value)
+                if leaf.ok == false: ok = false end
+                cur = leaf.next
+            end
+        end
+    end
+    out := Array(items)
+    items.free()
+    ret _YR { value = out, next = cur, ok = ok }
+end
+
+func _parse_leaf(lines: Vector<str>, li: int, text: str): _YR:
+    n0 := text.len()
+    if n0 == 0: ret _YR { value = "null", next = li + 1 } end
+    c0 := text.substr(0, 1)
+    if c0 == "|" || c0 == ">":
+        ret _parse_block_scalar(lines, li, text)
+    end
+    if c0 == "\"":
+        r := _unescape_dq(text, 0)
+        ret _YR { value = _json_str_literal(r.value), next = li + 1, ok = r.ok }
+    end
+    if c0 == "'":
+        r := _unescape_sq(text, 0)
+        ret _YR { value = _json_str_literal(r.value), next = li + 1, ok = r.ok }
+    end
+    if c0 == "[" || c0 == "{":
+        g := _gather_flow_text(lines, li, text)
+        fv := _flow_value(g.value, 0)
+        ret _YR { value = fv.value, next = g.next, ok = fv.ok }
+    end
+    tok := _bool_or_null_token(text)
+    if tok != "NOMATCH": ret _YR { value = tok, next = li + 1 } end
+    if _looks_numeric(text):
+        mut nt := text
+        if nt.substr(0, 1) == "+": nt = nt.substr(1, nt.len() - 1) end
+        ret _YR { value = nt, next = li + 1 }
+    end
+    ret _YR { value = _json_str_literal(text), next = li + 1 }
+end
+
+func _truncate_to_first_doc(text: str): str:
+    lines := text.split("\n")
+    defer lines.free()
+    out_lines := Vector {} as Vector<str>
+    mut started := false
+    n := lines.len()
+    mut i := 0
+    until i < n:
+        raw := lines.get(i)[0]
+        t := str.Trim(raw)
+        if t == "---":
+            if started: break end
+        else t == "...":
+            break
+        else:
+            if t != "": started = true end
+            out_lines.push(raw)
+        end
+        i = i + 1
+    end
+    out := str.Join(out_lines, "\n")
+    out_lines.free()
+    ret out
+end
+
+func _parse_document(text: str): _YR:
+    t := _truncate_to_first_doc(text)
+    lines := t.split("\n")
+    r := _parse_node(lines, 0, 0)
+    lines.free()
+    ret r
+end
+
+@en "Parse"
+@fa "تجزیه"
+@ar "تحليل"
+pub func Parse(text: str): str:
+    r := _parse_document(text)
+    ret r.value
+end
+
+@en "ToJSON"
+@fa "به جیسون"
+@ar "إلى جيسون"
+pub func ToJSON(text: str): str:
+    ret Parse(text)
+end
+
+@en "Valid"
+@fa "معتبر"
+@ar "صالح"
+pub func Valid(text: str): bool:
+    r := _parse_document(text)
+    if r.ok == false: ret false end
+    t := _truncate_to_first_doc(text)
+    lines := t.split("\n")
+    tail := _skip_noise(lines, r.next)
+    total := lines.len()
+    lines.free()
+    ret tail >= total
+end
+
+@en "SplitDocuments"
+@fa "جدا کردن اسناد"
+@ar "تقسیم المستندات"
+pub func SplitDocuments(text: str): Vector<str>:
+    lines := text.split("\n")
+    defer lines.free()
+    out := Vector {} as Vector<str>
+    mut cur := str.NewBuilder()
+    mut any := false
+    n := lines.len()
+    mut i := 0
+    until i < n:
+        raw := lines.get(i)[0]
+        t := str.Trim(raw)
+        if t == "---":
+            if any: out.push(str.BufStr(cur)) end
+            str.BufReset(cur)
+            any = true
+        else t == "...":
+            if any: out.push(str.BufStr(cur)) end
+            str.BufReset(cur)
+            any = false
+        else:
+            if str.BufIsEmpty(cur) == false: str.BufAppendChar(cur, 10) end
+            str.BufAppend(cur, raw)
+            any = true
+        end
+        i = i + 1
+    end
+    if any: out.push(str.BufStr(cur)) end
+    str.BufFree(cur)
+    ret out
+end

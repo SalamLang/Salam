@@ -193,4 +193,6 @@ void sema_collect(sema_t *s, ast_node_t *program);
 
 void sema_check_pass(sema_t *s, ast_node_t *program);
 
+void sema_check_toplevel_order(sema_t *s, ast_node_t *program);
+
 #endif /* SALAM_SEMANTIC_SEMA_INTERNAL_H */

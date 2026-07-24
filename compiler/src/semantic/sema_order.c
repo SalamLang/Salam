@@ -1,0 +1,171 @@
+/*
+ * Salam Programming Language (2024–2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+#include "core/prelude.h"
+#include "semantic/sema_internal.h"
+
+/*
+ * Top-level statement ordering:
+ *   import/link  ->  const  ->  var  ->  type/struct/enum/interface/impl  ->  func
+ * Sections may be empty, but once a later section starts, nothing from an
+ * earlier section may appear again.
+ */
+typedef enum {
+    ORDER_IMPORT = 0,
+    ORDER_CONST = 1,
+    ORDER_VAR = 2,
+    ORDER_TYPEDEF = 3,
+    ORDER_FUNC = 4,
+    ORDER_NONE = -1
+} order_phase_t;
+
+static order_phase_t order_phase_of(const ast_node_t *d)
+{
+    /*
+     * 'extern' declarations (FFI prototypes) are metadata describing symbols
+     * that live outside this file, just like an import - they belong with
+     * the imports, not with this file's own consts/vars/functions.
+     */
+    if (d->is_extern && (d->kind == AST_FUNC_DEF || d->kind == AST_VAR_DECL))
+        return ORDER_IMPORT;
+    switch (d->kind) {
+    case AST_IMPORT:
+    case AST_LINK:
+        return ORDER_IMPORT;
+    case AST_CONST_DECL:
+        return ORDER_CONST;
+    case AST_VAR_DECL:
+        return ORDER_VAR;
+    case AST_TYPE_ALIAS:
+    case AST_STRUCT_DEF:
+    case AST_ENUM_DEF:
+    case AST_INTERFACE_DEF:
+    case AST_IMPL_DEF:
+        return ORDER_TYPEDEF;
+    case AST_FUNC_DEF:
+        return ORDER_FUNC;
+    default:
+        return ORDER_NONE;
+    }
+}
+
+static const char *safe_name(const ast_node_t *d)
+{
+    return (d && d->name) ? d->name : "?";
+}
+
+static void check_pub_order(sema_t *s, vec_t *list)
+{
+    ast_node_t *first_pub = NULL;
+    size_t i = 0;
+    for (; i < list->len; i++) {
+        ast_node_t *d = (ast_node_t *)list->data[i];
+        if (!d || d->synthetic || d->kind != AST_FUNC_DEF || d->is_extern) continue;
+        if (d->is_pub) {
+            if (!first_pub) first_pub = d;
+        } else if (first_pub) {
+            SERR(s, 88, &d->span,
+                 "function '%s' must appear before 'pub' function '%s' (line %u): "
+                 "once a 'pub' function starts the public section, only other 'pub' "
+                 "functions may follow it, so callers can scan the end of the file "
+                 "for the public API",
+                 safe_name(d), safe_name(first_pub), first_pub->span.begin.line);
+        }
+    }
+}
+
+void sema_check_toplevel_order(sema_t *s, ast_node_t *program)
+{
+    order_phase_t max_phase = ORDER_IMPORT;
+    ast_node_t *first_of[5];
+    bool have_first[5];
+    memset(first_of, 0, sizeof(first_of));
+    memset(have_first, 0, sizeof(have_first));
+
+    size_t i = 0;
+    for (; i < program->list.len; i++) {
+        ast_node_t *d = (ast_node_t *)program->list.data[i];
+        if (!d || d->synthetic) continue;
+        order_phase_t p = order_phase_of(d);
+        if (p == ORDER_NONE) continue;
+
+        if (!have_first[p]) {
+            have_first[p] = true;
+            first_of[p] = d;
+        }
+
+        if (p < max_phase) {
+            ast_node_t *blocker = NULL;
+            int k = (int)p + 1;
+            for (; k <= (int)max_phase; k++) {
+                if (have_first[k]) {
+                    blocker = first_of[k];
+                    break;
+                }
+            }
+            if (!blocker) blocker = d;
+
+            switch (p) {
+            case ORDER_IMPORT:
+                SERR(s, 83, &d->span,
+                     "'import' must appear before any other top-level statement, "
+                     "right after the package declaration; '%s' (line %u) already "
+                     "starts the rest of the file",
+                     safe_name(blocker), blocker->span.begin.line);
+                break;
+            case ORDER_CONST:
+                if (max_phase >= ORDER_TYPEDEF)
+                    SERR(s, 84, &d->span,
+                         "constant '%s' must be declared before any function or "
+                         "type definition; move it up near the top of the file "
+                         "with the other constants, above '%s' (line %u)",
+                         safe_name(d), safe_name(blocker), blocker->span.begin.line);
+                else
+                    SERR(s, 86, &d->span,
+                         "constant '%s' must be declared before global variables; "
+                         "move it above the variable section, before '%s' (line %u)",
+                         safe_name(d), safe_name(blocker), blocker->span.begin.line);
+                break;
+            case ORDER_VAR:
+                SERR(s, 85, &d->span,
+                     "global variable '%s' must be declared before any function or "
+                     "type definition; move it up near the top of the file, above "
+                     "'%s' (line %u)",
+                     safe_name(d), safe_name(blocker), blocker->span.begin.line);
+                break;
+            case ORDER_TYPEDEF:
+                SERR(s, 87, &d->span,
+                     "'%s' must be declared before any function definition; keep "
+                     "type, struct, enum, interface and impl declarations grouped "
+                     "above the functions, above '%s' (line %u)",
+                     safe_name(d), safe_name(blocker), blocker->span.begin.line);
+                break;
+            default:
+                break;
+            }
+        } else if (p > max_phase) {
+            max_phase = p;
+        }
+    }
+
+    check_pub_order(s, &program->list);
+    {
+        size_t j = 0;
+        for (; j < program->list.len; j++) {
+            ast_node_t *d = (ast_node_t *)program->list.data[j];
+            if (d && !d->synthetic && d->kind == AST_IMPL_DEF)
+                check_pub_order(s, &d->list);
+        }
+    }
+}

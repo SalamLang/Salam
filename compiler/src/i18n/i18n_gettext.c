@@ -1292,6 +1292,59 @@ static const i18n_msg_t k_msgs[] =
      {"non-exhaustive match on enum '%s': missing member(s) %s",
       "تطبیق ناقص روی شمارش '%s': عضو(های) %s پوشش داده نشده است",
       "مطابقة غير شاملة على التعداد '%s': العضو/الأعضاء %s غير مغطاة"},
+
+     {"'package' can be declared only once, and only as the very first "
+      "statement in the file",
+      "«بسته» را فقط یک‌بار می‌توان اعلام کرد، و تنها به‌عنوان نخستین دستور "
+      "فایل",
+      "لا يمكن إعلان 'الحزمة' إلا مرة واحدة، وفقط كأول عبارة في الملف"},
+     {"'import' must appear before any other top-level statement, right "
+      "after the package declaration; '%s' (line %u) already starts the "
+      "rest of the file",
+      "«واردکردن» باید پیش از هر دستور سطح‌بالای دیگری، درست پس از اعلان "
+      "بسته بیاید؛ «%s» (خط %u) از پیش آغازگر بقیه‌ی فایل است",
+      "يجب أن يأتي 'الاستيراد' قبل أي عبارة أخرى على المستوى الأعلى، "
+      "مباشرة بعد إعلان الحزمة؛ '%s' (السطر %u) يبدأ بالفعل بقية الملف"},
+     {"constant '%s' must be declared before any function or type "
+      "definition; move it up near the top of the file with the other "
+      "constants, above '%s' (line %u)",
+      "ثابت «%s» باید پیش از هر تعریف تابع یا نوع اعلام شود؛ آن را همراه "
+      "دیگر ثابت‌ها به نزدیک ابتدای فایل، پیش از «%s» (خط %u) منتقل کنید",
+      "يجب إعلان الثابت '%s' قبل أي تعريف دالة أو نوع؛ انقله إلى أعلى "
+      "الملف مع بقية الثوابت، قبل '%s' (السطر %u)"},
+     {"global variable '%s' must be declared before any function or type "
+      "definition; move it up near the top of the file, above '%s' "
+      "(line %u)",
+      "متغیر سراسری «%s» باید پیش از هر تعریف تابع یا نوع اعلام شود؛ آن "
+      "را به نزدیک ابتدای فایل، پیش از «%s» (خط %u) منتقل کنید",
+      "يجب إعلان المتغيّر العام '%s' قبل أي تعريف دالة أو نوع؛ انقله إلى "
+      "أعلى الملف، قبل '%s' (السطر %u)"},
+     {"constant '%s' must be declared before global variables; move it "
+      "above the variable section, before '%s' (line %u)",
+      "ثابت «%s» باید پیش از متغیرهای سراسری اعلام شود؛ آن را پیش از "
+      "بخش متغیرها، پیش از «%s» (خط %u) قرار دهید",
+      "يجب إعلان الثابت '%s' قبل المتغيّرات العامة؛ ضعه قبل قسم "
+      "المتغيّرات، قبل '%s' (السطر %u)"},
+     {"'%s' must be declared before any function definition; keep type, "
+      "struct, enum, interface and impl declarations grouped above the "
+      "functions, above '%s' (line %u)",
+      "«%s» باید پیش از هر تعریف تابعی اعلام شود؛ تعریف‌های نوع، ساختار، "
+      "شمارش، واسط و پیاده‌سازی را همگی بالای توابع، پیش از «%s» (خط %u) "
+      "نگه دارید",
+      "يجب إعلان '%s' قبل أي تعريف دالة؛ اجعل تعريفات النوع والبنية "
+      "والتعداد والواجهة والتنفيذ مجمّعة فوق الدوال، قبل '%s' (السطر %u)"},
+     {"function '%s' must appear before 'pub' function '%s' (line %u): "
+      "once a 'pub' function starts the public section, only other 'pub' "
+      "functions may follow it, so callers can scan the end of the file "
+      "for the public API",
+      "تابع «%s» باید پیش از تابع عمومی «%s» (خط %u) بیاید: از جایی که "
+      "یک تابع عمومی بخش عمومی را آغاز می‌کند، تنها توابع عمومی دیگر "
+      "می‌توانند پس از آن بیایند، تا استفاده‌کنندگان بتوانند رابط عمومی "
+      "را از انتهای فایل پیدا کنند",
+      "يجب أن تأتي الدالة '%s' قبل الدالة العامة '%s' (السطر %u): "
+      "فبمجرد أن تبدأ دالة عامة القسم العام، لا يجوز أن يتبعها إلا دوال "
+      "عامة أخرى، لكي يتمكّن المستخدمون من العثور على الواجهة العامة في "
+      "نهاية الملف"},
      {NULL, NULL, NULL}};
 
 const char *i18n_tr(const char *msgid)

@@ -2,6 +2,16 @@ package bench
 
 import os
 import fmt
+import filepath
+import str
+import io
+import conv
+import stats
+import collections
+import csv
+import json
+import time
+import sort
 
 pub struct Config:
     pub root: str = ""
@@ -35,6 +45,8 @@ pub struct Store:
     pub sms: Vector<f64> = Vector {}
 end
 
+// --- small value helpers ---
+
 func env or(name: str, def: str): str:
     v := os.Env(name)
     if v.len() > 0: ret v end
@@ -63,6 +75,442 @@ func fmt0(x: f64): str: ret fmt.FloatPrec(x, 0) end
 func fmt1(x: f64): str: ret fmt.FloatPrec(x, 1) end
 
 func fmt3(x: f64): str: ret fmt.FloatPrec(x, 3) end
+
+// --- shell + text helpers ---
+
+func sh cap(cmd: str): os.CmdResult:
+    ret os.RunCapture("timeout 600 sh -c '".concat(cmd).concat("' 2>&1"))
+end
+
+func sh bench(cmd: str): os.CmdResult:
+    ret os.RunCapture("timeout 600 ".concat(cmd).concat(" >/dev/null 2>&1"))
+end
+
+func head chars(s: str, n: int): str:
+    if s.len() <= n: ret s end
+    ret s.substr(0, n)
+end
+
+func tail chars(s: str, n: int): str:
+    if s.len() <= n: ret s end
+    ret s.substr(s.len() - n, n)
+end
+
+func last line(s: str): str:
+    mut lines := str.Trim(s).split("\n")
+    defer lines.free()
+    mut out := ""
+    if lines.len() > 0: out = str.Trim(lines.get(lines.len() - 1)[0]) end
+    ret out
+end
+
+// --- language tables ---
+
+func lang order(): Vector<str>:
+    mut v := Vector {} as Vector<str> v.push("c")
+    v.push("cpp")
+    v.push("rust")
+    v.push("go")
+    v.push("salam_llvm")
+    v.push("salam_gcc")
+    v.push("salam_tcc")
+    v.push("php")
+    v.push("python")
+    ret v
+end
+
+func lang label(l: str): str:
+    if l == "c": ret "C"
+    else l == "cpp": ret "C++"
+    else l == "rust": ret "Rust"
+    else l == "go": ret "Go"
+    else l == "salam_llvm": ret "Salam-l"
+    else l == "salam_gcc": ret "Salam-g"
+    else l == "salam_tcc": ret "Salam-t"
+    else l == "php": ret "PHP"
+    else l == "python": ret "Python"
+    else:
+        ret l
+    end
+end
+
+func is salam(l: str): bool:
+    ret l == "salam_llvm" || l == "salam_gcc" || l == "salam_tcc"
+end
+
+// --- build ---
+
+func mark build fail(s &: Store, name: str, lang: str, msg: str):
+    k := kkey(name, lang)
+    s.status.put(k, "build_failed")
+    s.berr.put(k, tail chars(msg, 2000))
+end
+
+func build program(name: str, cfg &: Config, s &: Store): HashMap<str, str>:
+    src := filepath.Join(cfg.work programs, name)
+    mut cmds := HashMap {} as HashMap<str, str> c bin := filepath.Join(cfg.build, name.concat("_c"))
+    mut r := sh cap("gcc -O3 -o ".concat(c bin).concat(" ").concat(filepath.Join(src, "prog.c")).concat(" -lm"))
+    if r.code == 0:
+        cmds.put("c", c bin)
+    else:
+        mark build fail(s, name, "c", r.out)
+    end
+
+    cpp bin := filepath.Join(cfg.build, name.concat("_cpp"))
+    r = sh cap("g++ -O3 -o ".concat(cpp bin).concat(" ").concat(filepath.Join(src, "prog.cpp")))
+    if r.code == 0:
+        cmds.put("cpp", cpp bin)
+    else:
+        mark build fail(s, name, "cpp", r.out)
+    end
+
+    rust bin := filepath.Join(cfg.build, name.concat("_rust"))
+    r = sh cap("rustc -C opt-level=3 -o ".concat(rust bin).concat(" ").concat(filepath.Join(src, "prog.rs")))
+    if r.code == 0 && os.Exists(rust bin):
+        cmds.put("rust", rust bin)
+    else:
+        mark build fail(s, name, "rust", r.out)
+    end
+
+    go bin := filepath.Join(cfg.build, name.concat("_go"))
+    r = sh cap("cd ".concat(src).concat(" && go build -o ").concat(go bin).concat(" prog.go"))
+    if r.code == 0 && os.Exists(go bin):
+        cmds.put("go", go bin)
+    else:
+        mark build fail(s, name, "go", r.out)
+    end
+
+    salam src := filepath.Join(src, "prog.salam")
+    salam pre := "cd ".concat(cfg.build).concat(" && SALAM_STD=").concat(cfg.std dir).concat(" ").concat(cfg.salam)
+
+    tcc bin := filepath.Join(cfg.build, name.concat("_salam_tcc"))
+    r = sh cap(salam pre.concat(" build ").concat(salam src).concat(" --release --output=").concat(tcc bin))
+    if r.code == 0 && os.Exists(tcc bin):
+        cmds.put("salam_tcc", tcc bin)
+    else:
+        mark build fail(s, name, "salam_tcc", r.out)
+    end
+
+    gcc bin := filepath.Join(cfg.build, name.concat("_salam_gcc"))
+    r = sh cap(salam pre.concat(" build ").concat(salam src).concat(" --release --cc=\"gcc -O3\" --output=").concat(gcc bin))
+    if r.code == 0 && os.Exists(gcc bin):
+        cmds.put("salam_gcc", gcc bin)
+    else:
+        mark build fail(s, name, "salam_gcc", r.out)
+    end
+
+    llvm bin := filepath.Join(cfg.build, name.concat("_salam_llvm"))
+    r = sh cap(salam pre.concat(" llvm ").concat(salam src).concat(" --release -O3 --exec -o ").concat(llvm bin))
+    if r.code == 0 && os.Exists(llvm bin):
+        cmds.put("salam_llvm", llvm bin)
+    else:
+        mark build fail(s, name, "salam_llvm", r.out)
+    end
+
+    cmds.put("python", "python3 ".concat(filepath.Join(src, "prog.py")))
+    cmds.put("php", "php -n ".concat(filepath.Join(src, "prog.php")))
+    ret cmds
+end
+
+// --- verification ---
+
+func verify prog(name: str, cmds: HashMap<str, str>, s &: Store): str:
+    order := lang order()
+    defer order.free()
+    mut outs := HashMap {} as HashMap<str, str> defer outs.free()
+    repeat order.len() with i:
+        lang := order.get(i)[0]
+        if cmds.has(lang):
+            r := sh cap(cmds.get(lang))
+            mut o := str.Trim(r.out)
+            if r.code != 0:
+                o = "<exit ".concat(conv.FormatInt(r.code as i64)).concat(": ").concat(head chars(o, 200)).concat(">")
+            end
+            outs.put(lang, o)
+        end
+    end
+    mut ref := ""
+    if outs.has("c"): ref = outs.get("c") end
+    s.refout.put(name, ref)
+    mut mism := Vector {} as Vector<str> defer mism.free()
+    repeat order.len() with j:
+        lang := order.get(j)[0]
+        if outs.has(lang) && outs.get(lang) != ref:
+            k := kkey(name, lang)
+            s.status.put(k, "mismatch")
+            s.note.put(k, outs.get(lang))
+            mism.push(json.Member(lang, outs.get(lang)))
+        end
+    end
+    mut res := ""
+    if mism.len() > 0: res = json.Object(mism) end
+    ret res
+end
+
+// --- timing ---
+
+func bench lang(name: str, lang: str, cmd: str, cfg &: Config, s &: Store): bool:
+    k := kkey(name, lang)
+    sh bench(cmd)
+    mut msv := Vector {} as Vector<f64> defer msv.free()
+    mut t0v := Vector {} as Vector<i64> defer t0v.free()
+    mut t1v := Vector {} as Vector<i64> defer t1v.free()
+    mut ok := true
+    mut run := 1
+    until run <= cfg.runs && ok:
+        t0 := time.NowNanos()
+        r := sh bench(cmd)
+        t1 := time.NowNanos()
+        if r.code != 0:
+            ok = false
+        else:
+            msv.push(time.ElapsedMs(t0, t1))
+            t0v.push(t0)
+            t1v.push(t1)
+        end
+        run = run + 1
+    end
+    if ok:
+        repeat msv.len() with i:
+            s.sp.push(name)
+            s.sl.push(lang)
+            s.sr.push(i + 1)
+            s.st0.push(t0v.get(i)[0])
+            s.st1.push(t1v.get(i)[0])
+            s.sms.push(msv.get(i)[0])
+        end
+        s.m min.put(k, stats.Min(msv))
+        s.m avg.put(k, stats.Mean(msv))
+        s.m max.put(k, stats.Max(msv))
+        s.m med.put(k, stats.Median(msv))
+        s.m sd.put(k, stats.Stdev(msv))
+        s.m runs.put(k, msv.len())
+        s.status.put(k, "ok")
+    else:
+        s.status.put(k, "run_failed")
+    end
+    ret ok
+end
+
+// --- tool probing ---
+
+func add probe(keys &: Vector<str>, vals &: Vector<str>, name: str, cmd: str):
+    r := sh cap(cmd)
+    t := str.Trim(r.out)
+    mut v := "unavailable"
+    if r.code == 0 && t.len() > 0:
+        idx := t.find("\n")
+        if idx >= 0:
+            v = str.Trim(t.substr(0, idx))
+        else:
+            v = t
+        end
+    end
+    keys.push(name)
+    vals.push(v)
+end
+
+func env get(keys: Vector<str>, vals: Vector<str>, name: str): str:
+    repeat keys.len() with i:
+        if keys.get(i)[0] == name: ret vals.get(i)[0] end
+    end
+    ret ""
+end
+
+// --- JSON / results helpers ---
+
+func mismatch json(name: str, s &: Store): str:
+    order := lang order()
+    defer order.free()
+    mut mism := Vector {} as Vector<str> defer mism.free()
+    repeat order.len() with i:
+        lang := order.get(i)[0]
+        k := kkey(name, lang)
+        if sget(s.status, k) == "mismatch":
+            mism.push(json.Member(lang, sget(s.note, k)))
+        end
+    end
+    mut res := ""
+    if mism.len() > 0: res = json.Object(mism) end
+    ret res
+end
+
+func stats json(s &: Store, k: str): str:
+    mut m := Vector {} as Vector<str> m.push(json.MemberRaw("min_ms", fmt3(fget(s.m min, k))))
+    m.push(json.MemberRaw("max_ms", fmt3(fget(s.m max, k))))
+    m.push(json.MemberRaw("avg_ms", fmt3(fget(s.m avg, k))))
+    m.push(json.MemberRaw("median_ms", fmt3(fget(s.m med, k))))
+    m.push(json.MemberRaw("stdev_ms", fmt3(fget(s.m sd, k))))
+    m.push(json.MemberInt("runs", iget(s.m runs, k) as i64))
+    out := json.Object(m)
+    ret out
+end
+
+func samples json(s &: Store, name: str, lang: str): str:
+    mut items := Vector {} as Vector<str> defer items.free()
+    repeat s.sp.len() with i:
+        if s.sp.get(i)[0] == name && s.sl.get(i)[0] == lang:
+            mut m := Vector {} as Vector<str> m.push(json.MemberInt("epoch_start_ns", s.st0.get(i)[0]))
+            m.push(json.MemberInt("epoch_end_ns", s.st1.get(i)[0]))
+            m.push(json.MemberRaw("ms", fmt3(s.sms.get(i)[0])))
+            items.push(json.Object(m))
+            m.free()
+        end
+    end
+    out := json.Array(items)
+    ret out
+end
+
+// --- report helpers ---
+
+func round0(x: f64): f64: ret ((x + 0.5) as i64) as f64 end
+
+func xstr(r: f64): str: ret fmt.FloatPrec(r, 2).concat("x") end
+
+func names contains(names: Vector<str>, target: str): bool:
+    repeat names.len() with i:
+        if names.get(i)[0] == target: ret true end
+    end
+    ret false
+end
+
+func lang min geomean(s &: Store, names: Vector<str>, lang: str): f64:
+    mut vals := Vector {} as Vector<f64> defer vals.free()
+    repeat names.len() with i:
+        name := names.get(i)[0]
+        k := kkey(name, lang)
+        if sget(s.status, k) == "ok": vals.push(fget(s.m min, k)) end
+    end
+    ret stats.Geomean(vals)
+end
+
+func program best(s &: Store, name: str, order: Vector<str>): f64:
+    mut best := -1.0
+    repeat order.len() with j:
+        k := kkey(name, order.get(j)[0])
+        if sget(s.status, k) == "ok":
+            v := round0(fget(s.m min, k))
+            if best < 0.0 || v < best: best = v end
+        end
+    end
+    ret best
+end
+
+func program winners(s &: Store, name: str, order: Vector<str>): Vector<str>:
+    best := program best(s, name, order)
+    mut winners := Vector {} as Vector<str> mut j := 0
+    until j < order.len():
+        lg := order.get(j)[0]
+        k := kkey(name, lg)
+        if sget(s.status, k) == "ok":
+            v := round0(fget(s.m min, k))
+            if best >= 0.0 && v == best: winners.push(lg) end
+        end
+        j = j + 1
+    end
+    ret winners
+end
+
+func compute wins(s &: Store, names: Vector<str>, order: Vector<str>): Vector<int>:
+    mut wins := Vector {} as Vector<int> mut oi := 0
+    until oi < order.len():
+        wins.push(0)
+        oi = oi + 1
+    end
+    repeat names.len() with i:
+        name := names.get(i)[0]
+        winners := program winners(s, name, order)
+        repeat winners.len() with j:
+            idx := collections.index_of(order, winners.get(j)[0])
+            if idx >= 0: wins.set(idx, wins.get(idx)[0] + 1) end
+        end
+        winners.free()
+    end
+    ret wins
+end
+
+func fastest cell(s &: Store, name: str, order: Vector<str>): str:
+    winners := program winners(s, name, order)
+    defer winners.free()
+    best := program best(s, name, order)
+    mut salam count := 0
+    repeat winners.len() with j:
+        if is salam(winners.get(j)[0]): salam count = salam count + 1 end
+    end
+    mut labels := Vector {} as Vector<str> defer labels.free()
+    mut added salam := false
+    repeat winners.len() with j2:
+        lg := winners.get(j2)[0]
+        if is salam(lg):
+            if salam count >= 2:
+                if !added salam:
+                    labels.push("Salam")
+                    added salam = true
+                end
+            else:
+                labels.push(lang label(lg))
+            end
+        else:
+            labels.push(lang label(lg))
+        end
+    end
+    joined := str.Join(labels, " / ")
+    mut cell := joined.concat(" (").concat(fmt0(best)).concat(")")
+    if salam count > 0: cell = "**".concat(cell).concat("**") end
+    ret cell
+end
+
+func min cell(s &: Store, name: str, lang: str): str:
+    k := kkey(name, lang)
+    if sget(s.status, k) == "ok": ret fmt0(fget(s.m min, k)) end
+    ret "-"
+end
+
+func program class(s &: Store, name: str, order: Vector<str>): int:
+    winners := program winners(s, name, order)
+    defer winners.free()
+    mut has salam := false
+    mut has other := false
+    repeat winners.len() with j:
+        if is salam(winners.get(j)[0]): has salam = true
+        else:
+            has other = true
+        end
+    end
+    if has salam && !has other: ret 2 end
+    if has salam && has other: ret 1 end
+    ret 0
+end
+
+func lang vs salam ratios(s &: Store, names: Vector<str>, lang: str): Vector<f64>:
+    mut vals := Vector {} as Vector<f64>
+    repeat names.len() with i:
+        name := names.get(i)[0]
+        k := kkey(name, lang)
+        sbest := salam best min(s, name)
+        if sget(s.status, k) == "ok" && sbest > 0.0:
+            other := fget(s.m min, k)
+            if other > 0.0: vals.push(other / sbest) end
+        end
+    end
+    ret vals
+end
+
+func salam best min(s &: Store, name: str): f64:
+    mut best := -1.0
+    mut lgs := Vector {} as Vector<str> defer lgs.free()
+    lgs.push("salam_llvm")
+    lgs.push("salam_gcc")
+    lgs.push("salam_tcc")
+    repeat lgs.len() with i:
+        k := kkey(name, lgs.get(i)[0])
+        if sget(s.status, k) == "ok":
+            v := round0(fget(s.m min, k))
+            if best < 0.0 || v < best: best = v end
+        end
+    end
+    ret best
+end
 
 pub func NewStore(): Store:
     ret Store {}

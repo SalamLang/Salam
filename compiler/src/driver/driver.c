@@ -40,6 +40,8 @@
 #include "i18n/i18n.h"
 #include "layout/schema.h"
 #include "fmt/fmt.h"
+#include "fmt/fmt_order.h"
+#include "core/vec.h"
 #include <errno.h>
 #include <sys/stat.h>
 #if defined(_WIN32)
@@ -448,12 +450,22 @@ typedef struct {
     const langpack_t *pack;
     logger_t *log;
     bool check;
+    bool fix_order;
     fmt_style_t style;
     int changed;
     int ok;
     int errors;
     int total;
 } fmt_ctx_t;
+
+static void fmt_print_order_notes(const vec_t *notes)
+{
+    size_t i = 0;
+    for (; i < notes->len; i++) {
+        const char *msg = (const char *)notes->data[i];
+        if (msg) printf(i18n_tr("  note: %s\n"), msg);
+    }
+}
 
 static bool has_salam_ext(const char *name)
 {
@@ -484,9 +496,30 @@ static void fmt_one_file(fmt_ctx_t *c, const char *path)
     }
     c->total++;
     const langpack_t *pack = langpack_detect(a, src, c->pack);
+
+    const source_file_t *fmt_input = src;
+    if (c->fix_order) {
+        sb_t reordered;
+        sb_init(&reordered);
+        vec_t notes;
+        vec_init(&notes);
+        if (fmt_reorder_toplevel(a, c->log, pack, src, path, &reordered, &notes)) {
+            source_file_t *rsrc = (source_file_t *)arena_alloc(a, sizeof(source_file_t));
+            rsrc->path = src->path;
+            rsrc->text = reordered.data;
+            rsrc->len = reordered.len;
+            fmt_input = rsrc;
+        }
+        if (notes.len > 0) {
+            printf(i18n_tr("%s: some ordering problems need manual attention:\n"),
+                  path);
+            fmt_print_order_notes(&notes);
+        }
+    }
+
     sb_t sb;
     sb_init(&sb);
-    if (!fmt_source(a, c->log, pack, src, &c->style, &sb)) {
+    if (!fmt_source(a, c->log, pack, fmt_input, &c->style, &sb)) {
         LOG_E(c->log, PH_DRIVER,
               i18n_tr("cannot format '%s': fix the lexical errors first"), path);
         c->errors++;
@@ -570,6 +603,7 @@ static int driver_fmt(options_t *opt)
     c.pack = pack;
     c.log = log;
     c.check = opt->fmt_check;
+    c.fix_order = opt->fmt_fix_order;
     c.style.tabs = opt->fmt_tabs;
     c.style.width = opt->fmt_indent_width;
     if (opt->input_count == 0) {

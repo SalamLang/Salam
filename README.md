@@ -123,7 +123,7 @@ salam build app.salam -DDEBUG                  # preprocessor define
 # format source in place (auto-detects nothing - pass --lang=fa for Persian files)
 salam format app.salam                         # reformat one file
 salam format                                   # reformat every .salam under the cwd, recursively
-salam format compiler/src/ examples/           # reformat given files and/or directories
+salam format compiler/src/ compiler/tests/     # reformat given files and/or directories
 salam format --check                           # report files that need formatting (exit 1 if any)
 salam format app.salam --tabs                  # indent with tabs (convert spaces to tabs)
 salam format compiler/src/ --indent=2          # indent with 2 spaces per level
@@ -244,11 +244,11 @@ docker compose -f compiler/docker/docker-compose.yml run --rm dev sh
 
 The production stage runs `COPY .` then `make && make install`, baking a fully
 built, self-contained compiler into the image. `salam` is the entrypoint, and the
-repository root is mounted at `/work` so shared `examples/` are reachable:
+repository root is mounted at `/work` so the example programs are reachable:
 
 ```sh
 docker compose -f compiler/docker/docker-compose.yml build prod
-docker compose -f compiler/docker/docker-compose.yml run --rm prod build examples/en/basics/hello.salam --output=hello
+docker compose -f compiler/docker/docker-compose.yml run --rm prod build compiler/tests/en/examples/basics/hello.salam --output=hello
 docker compose -f compiler/docker/docker-compose.yml run --rm prod layout build page.salam --inline
 docker compose -f compiler/docker/docker-compose.yml run --rm prod --help
 ```

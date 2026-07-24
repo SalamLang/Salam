@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "semantic/sema_internal.h"
+#include "langpack/langpack.h"
 
 /*
  * Top-level statement ordering:
@@ -39,12 +40,19 @@ static const char *safe_name(const ast_node_t *d)
 
 static void check_pub_order(sema_t *s, vec_t *list)
 {
+    const char *entry = langpack_entry_for(s->lang);
     ast_node_t *first_pub = NULL;
     size_t i = 0;
     for (; i < list->len; i++) {
         ast_node_t *d = (ast_node_t *)list->data[i];
         if (!d || d->synthetic || d->kind != AST_FUNC_DEF) continue;
         if (d->is_extern && !d->a) continue; /* body-less prototype, not a real def */
+        /* The program's entry point is conventionally placed last regardless
+         * of visibility and isn't part of the file's public API surface, so
+         * it's exempt from the pub-ordering rule. */
+        if (d->name && (strcmp(d->name, "main") == 0 ||
+                        (entry && strcmp(d->name, entry) == 0)))
+            continue;
         if (d->is_pub) {
             if (!first_pub) first_pub = d;
         } else if (first_pub) {

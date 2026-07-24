@@ -41,6 +41,7 @@ static void cli_set_defaults(options_t *out)
     out->fmt_recursive = false;
     out->fmt_tabs = false;
     out->fmt_indent_width = 4;
+    out->fmt_fix_order = false;
     out->debug_info = false;
     out->asan = false;
     out->interp = false;

@@ -1,0 +1,337 @@
+package yaml
+
+func _cws(s: str, i: int): int:
+    n := s.len()
+    bp := _bp(s)
+    mut p := i
+    until p < n && (_ub(bp, p) == 32 || _ub(bp, p) == 10 || _ub(bp, p) == 9 || _ub(bp, p) == 13):
+        p = p + 1
+    end
+    ret p
+end
+
+func _cstr_end(s: str, i: int): int:
+    n := s.len()
+    bp := _bp(s)
+    mut p := i + 1
+    until p < n:
+        c := _ub(bp, p)
+        if c == 92 && p + 1 < n:
+            p = p + 2
+            continue
+        end
+        if c == 34: ret p + 1 end
+        p = p + 1
+    end
+    ret p
+end
+
+func _cval_end(s: str, i0: int): int:
+    i := _cws(s, i0)
+    n := s.len()
+    bp := _bp(s)
+    if i >= n: ret i end
+    c := _ub(bp, i)
+    if c == 34: ret _cstr_end(s, i) end
+    if c == 123:
+        mut p := _cws(s, i + 1)
+        if p < n && _ub(bp, p) == 125: ret p + 1 end
+        until p < n:
+            p = _cws(s, p)
+            ke := _cstr_end(s, p)
+            p = _cws(s, ke)
+            if p < n && _ub(bp, p) == 58: p = p + 1 end
+            p = _cval_end(s, p)
+            p = _cws(s, p)
+            if p < n && _ub(bp, p) == 44:
+                p = p + 1
+                continue
+            end
+            if p < n && _ub(bp, p) == 125: ret p + 1 end
+            break
+        end
+        ret p
+    end
+    if c == 91:
+        mut p := _cws(s, i + 1)
+        if p < n && _ub(bp, p) == 93: ret p + 1 end
+        until p < n:
+            p = _cval_end(s, p)
+            p = _cws(s, p)
+            if p < n && _ub(bp, p) == 44:
+                p = p + 1
+                continue
+            end
+            if p < n && _ub(bp, p) == 93: ret p + 1 end
+            break
+        end
+        ret p
+    end
+    mut p := i
+    until p < n:
+        cc := _ub(bp, p)
+        if cc == 44 || cc == 93 || cc == 125 || cc == 32 || cc == 10 || cc == 9 || cc == 13: break end
+        p = p + 1
+    end
+    ret p
+end
+
+func _obj_get(s: str, key: str): _YR:
+    n := s.len()
+    bp := _bp(s)
+    mut p := _cws(s, 0)
+    if p >= n || _ub(bp, p) != 123: ret _YR { value = "", ok = false } end
+    p = _cws(s, p + 1)
+    if p < n && _ub(bp, p) == 125: ret _YR { value = "", ok = false } end
+    until p < n:
+        p = _cws(s, p)
+        ks := p
+        ke := _cstr_end(s, p)
+        rawkey := _json_unescape(s.substr(ks + 1, ke - ks - 2))
+        p = _cws(s, ke)
+        if p < n && _ub(bp, p) == 58: p = p + 1 end
+        vs := _cws(s, p)
+        ve := _cval_end(s, vs)
+        if rawkey == key: ret _YR { value = s.substr(vs, ve - vs), ok = true } end
+        p = _cws(s, ve)
+        if p < n && _ub(bp, p) == 44:
+            p = p + 1
+            continue
+        end
+        break
+    end
+    ret _YR { value = "", ok = false }
+end
+
+func _arr_get(s: str, idx: int): _YR:
+    if idx < 0: ret _YR { value = "", ok = false } end
+    n := s.len()
+    bp := _bp(s)
+    mut p := _cws(s, 0)
+    if p >= n || _ub(bp, p) != 91: ret _YR { value = "", ok = false } end
+    p = _cws(s, p + 1)
+    if p < n && _ub(bp, p) == 93: ret _YR { value = "", ok = false } end
+    mut i := 0
+    until p < n:
+        vs := _cws(s, p)
+        ve := _cval_end(s, vs)
+        if i == idx: ret _YR { value = s.substr(vs, ve - vs), ok = true } end
+        i = i + 1
+        p = _cws(s, ve)
+        if p < n && _ub(bp, p) == 44:
+            p = p + 1
+            continue
+        end
+        break
+    end
+    ret _YR { value = "", ok = false }
+end
+
+func _resolve_path(compact: str, path: str): _YR:
+    if path == "": ret _YR { value = compact, ok = true } end
+    mut cur := compact
+    n := path.len()
+    bp := _bp(path)
+    mut i := 0
+    mut ok := true
+    until i < n && ok:
+        mut keyend := i
+        until keyend < n:
+            c := _ub(bp, keyend)
+            if c == 46 || c == 91: break end
+            keyend = keyend + 1
+        end
+        if keyend > i:
+            key := path.substr(i, keyend - i)
+            r := _obj_get(cur, key)
+            if r.ok == false:
+                ok = false
+            else:
+                cur = r.value
+            end
+            i = keyend
+        end
+        until i < n && ok && _ub(bp, i) == 91:
+            mut j := i + 1
+            numstart := j
+            until j < n && _ub(bp, j) >= 48 && _ub(bp, j) <= 57:
+                j = j + 1
+            end
+            if j < n && _ub(bp, j) == 93 && j > numstart:
+                idx := conv.Atoi(path.substr(numstart, j - numstart))
+                r := _arr_get(cur, idx)
+                if r.ok == false:
+                    ok = false
+                else:
+                    cur = r.value
+                end
+                i = j + 1
+            else:
+                ok = false
+            end
+        end
+        if i < n && ok && _ub(bp, i) == 46: i = i + 1 end
+    end
+    if ok == false: ret _YR { value = "", ok = false } end
+    ret _YR { value = cur, ok = true }
+end
+
+func _count_elems(s: str, is_obj: bool): int:
+    n := s.len()
+    bp := _bp(s)
+    mut p := _cws(s, 1)
+    mut closec := 93
+    if is_obj: closec = 125 end
+    if p < n && _ub(bp, p) == closec: ret 0 end
+    mut count := 0
+    until p < n:
+        if is_obj:
+            ke := _cstr_end(s, p)
+            p = _cws(s, ke)
+            if p < n && _ub(bp, p) == 58: p = p + 1 end
+        end
+        vs := _cws(s, p)
+        ve := _cval_end(s, vs)
+        count = count + 1
+        p = _cws(s, ve)
+        if p < n && _ub(bp, p) == 44:
+            p = p + 1
+            continue
+        end
+        break
+    end
+    ret count
+end
+
+@en "Get"
+@fa "دریافت"
+@ar "جلب"
+pub func Get(text: str, path: str): str:
+    c := Parse(text)
+    r := _resolve_path(c, path)
+    if r.ok == false: ret "" end
+    v := r.value
+    if v.len() >= 2 && v.substr(0, 1) == "\"":
+        ret _json_unescape(v.substr(1, v.len() - 2))
+    end
+    if v == "null": ret "" end
+    ret v
+end
+
+@en "Has"
+@fa "دارد"
+@ar "یملک"
+pub func Has(text: str, path: str): bool:
+    c := Parse(text)
+    r := _resolve_path(c, path)
+    ret r.ok
+end
+
+@en "GetInt"
+@fa "دریافت عدد"
+@ar "جلب عدد صحیح"
+pub func GetInt(text: str, path: str): int:
+    ret conv.Atoi(Get(text, path))
+end
+
+@en "GetFloat"
+@fa "دریافت اعشار"
+@ar "جلب عدد عشری"
+pub func GetFloat(text: str, path: str): f64:
+    ret conv.ParseFloat(Get(text, path))
+end
+
+@en "GetBool"
+@fa "دریافت منطقی"
+@ar "جلب منطقی"
+pub func GetBool(text: str, path: str): bool:
+    ret Get(text, path) == "true"
+end
+
+@en "TypeOf"
+@fa "نوع"
+@ar "نوع"
+pub func TypeOf(text: str, path: str): str:
+    c := Parse(text)
+    r := _resolve_path(c, path)
+    if r.ok == false: ret "none" end
+    v := r.value
+    if v.len() == 0: ret "none" end
+    c0 := v.substr(0, 1)
+    if c0 == "\"": ret "string" end
+    if c0 == "{": ret "map" end
+    if c0 == "[": ret "list" end
+    if v == "true" || v == "false": ret "bool" end
+    if v == "null": ret "null" end
+    if _looks_numeric(v):
+        if v.find(".") >= 0 || v.find("e") >= 0 || v.find("E") >= 0: ret "float" end
+        ret "int"
+    end
+    ret "string"
+end
+
+@en "Len"
+@fa "طول"
+@ar "طول"
+pub func Len(text: str, path: str): int:
+    c := Parse(text)
+    r := _resolve_path(c, path)
+    if r.ok == false: ret 0 - 1 end
+    v := r.value
+    if v.len() == 0: ret 0 - 1 end
+    c0 := v.substr(0, 1)
+    if c0 == "[": ret _count_elems(v, false) end
+    if c0 == "{": ret _count_elems(v, true) end
+    ret 0 - 1
+end
+
+@en "Keys"
+@fa "کلیدها"
+@ar "المفاتیح"
+pub func Keys(text: str, path: str): Vector<str>:
+    out := Vector {} as Vector<str>
+    c := Parse(text)
+    r := _resolve_path(c, path)
+    if r.ok == false: ret out end
+    v := r.value
+    if v.len() == 0 || v.substr(0, 1) != "{": ret out end
+    n := v.len()
+    bp := _bp(v)
+    mut p := _cws(v, 1)
+    if p < n && _ub(bp, p) == 125: ret out end
+    until p < n:
+        p = _cws(v, p)
+        ks := p
+        ke := _cstr_end(v, p)
+        out.push(_json_unescape(v.substr(ks + 1, ke - ks - 2)))
+        p = _cws(v, ke)
+        if p < n && _ub(bp, p) == 58: p = p + 1 end
+        vs := _cws(v, p)
+        ve := _cval_end(v, vs)
+        p = _cws(v, ve)
+        if p < n && _ub(bp, p) == 44:
+            p = p + 1
+            continue
+        end
+        break
+    end
+    ret out
+end
+
+@en "HasKeys"
+@fa "دارد کلیدها"
+@ar "یملک مفاتیح"
+pub func HasKeys(text: str, required: Vector<str>): bool:
+    ks := Keys(text, "")
+    mut all_ok := true
+    repeat required.len() with i:
+        want := required.get(i)[0]
+        mut found := false
+        repeat ks.len() with j:
+            if ks.get(j)[0] == want: found = true end
+        end
+        if found == false: all_ok = false end
+    end
+    ks.free()
+    ret all_ok
+end

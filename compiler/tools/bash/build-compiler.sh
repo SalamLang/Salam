@@ -42,7 +42,7 @@ esac
     src/semantic/sema_util.c src/semantic/sema_type.c \
     src/semantic/sema_decl.c src/semantic/sema_expr.c src/semantic/sema_stmt.c \
     src/semantic/sema_lit.c src/semantic/sema_call.c src/semantic/sema_fold.c \
-    src/semantic/sema_match.c \
+    src/semantic/sema_match.c src/semantic/sema_order.c \
     src/semantic/dce.c \
     src/codegen/codegen.c src/codegen/codegen_emit.c src/codegen/codegen_type.c \
     src/codegen/codegen_overload.c src/codegen/codegen_expr.c src/codegen/codegen_call.c \

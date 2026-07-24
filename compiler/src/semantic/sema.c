@@ -865,6 +865,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     scope_t *save_global = s->global, *save_cur = s->cur;
     const char *save_dir = s->dir, *save_pkg = s->pkg;
     const char *save_lang = s->lang;
+    const char *save_file = s->file;
     ast_node_t *save_prog = s->program;
     vec_t save_pending = s->pending;
     bool save_in_pkg = s->in_pkg;
@@ -874,11 +875,13 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     s->dir = dir_of(s->a, path);
     s->pkg = prog->name ? prog->name : "main";
     s->lang = langpack_code(pack);
+    s->file = path;
     s->program = prog;
     vec_init(&s->pending);
     vec_push(s->a, &s->loading, CONST_CAST(path));
     load_imports(s, prog);
     sema_collect(s, prog);
+    sema_check_toplevel_order(s, prog);
     sema_check_pass(s, prog);
     s->loading.len--;
     s->in_pkg = save_in_pkg;
@@ -887,6 +890,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     s->dir = save_dir;
     s->pkg = save_pkg;
     s->lang = save_lang;
+    s->file = save_file;
     s->program = save_prog;
     s->pending = save_pending;
     symbol_t *pk = symbol_new(s->a, SYM_PACKAGE, prog->name);
@@ -1056,6 +1060,7 @@ sema_result_t *sema_run_cached(arena_t *a, logger_t *log, ast_node_t *program,
         }
     }
     sema_collect(&s, program);
+    sema_check_toplevel_order(&s, program);
     sema_check_pass(&s, program);
     if (!s.in_pkg && !s.relax_unused) {
         sema_check_unused_funcs(&s);

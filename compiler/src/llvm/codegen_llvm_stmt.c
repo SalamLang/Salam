@@ -25,6 +25,11 @@ static void ll_emit_defers(ll_t *ll)
 
 void ll_emit_return(ll_t *ll, ast_node_t *value)
 {
+    /* The return expression must be fully evaluated (SSA value materialized)
+     * before deferred statements run, since a defer may free/mutate a
+     * variable the return expression reads (e.g. `defer v.free() ... ret
+     * f(v)`). Emitting defers first would run that cleanup before the
+     * value is even computed. */
     if (ll->match_result_ptr) {
         if (value) {
             const char *v = ll_conv(ll, ll_expr(ll, value), ll->match_result_ts);
@@ -34,19 +39,22 @@ void ll_emit_return(ll_t *ll, ast_node_t *value)
         ll_emit_term(ll, "br label %%%s", ll->match_merge_block);
         return;
     }
-    ll_emit_defers(ll);
     if (ll->is_main) {
+        const char *v = value ? ll_conv(ll, ll_expr(ll, value), "i32") : NULL;
+        ll_emit_defers(ll);
         if (value)
-            ll_emit_term(ll, "ret i32 %s", ll_conv(ll, ll_expr(ll, value), "i32"));
+            ll_emit_term(ll, "ret i32 %s", v);
         else
             ll_emit_term(ll, "ret i32 0");
         return;
     }
     if (!ll->ret_ts || !strcmp(ll->ret_ts, "void")) {
+        ll_emit_defers(ll);
         ll_emit_term(ll, "ret void");
         return;
     }
     const char *v = ll_conv(ll, ll_expr(ll, value), ll->ret_ts);
+    ll_emit_defers(ll);
     ll_emit_term(ll, "ret %s %s", ll_ty(ll, ll->ret_ts), v);
 }
 

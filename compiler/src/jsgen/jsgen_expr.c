@@ -468,6 +468,15 @@ static int jsg_binprec(token_kind_t k)
     case TK_EQ:
     case TK_NE:
         return 9;
+    case TK_SHL:
+    case TK_SHR:
+        return 11;
+    case TK_AMP:
+        return 8;
+    case TK_CARET:
+        return 7;
+    case TK_PIPE:
+        return 6;
     case TK_AND:
         return 5;
     case TK_OR:

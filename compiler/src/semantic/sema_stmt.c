@@ -540,6 +540,10 @@ static void check_stmt(sema_t *s, ast_node_t *n)
                 } else if (base_op == TK_PERCENT && !type_is_integer(c)) {
                     SERR(s, 21, &n->span, "operator '%%' requires integer operands");
                     op_valid = false;
+                } else if (sema_tk_is_bitwise(base_op) &&
+                           (!type_is_integer(tt) || !type_is_integer(vt))) {
+                    SERR(s, 21, &n->span, "bitwise operator requires integer operands");
+                    op_valid = false;
                 }
             }
         }

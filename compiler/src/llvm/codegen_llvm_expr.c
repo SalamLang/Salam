@@ -29,6 +29,16 @@ static const char *ll_arith_op(token_kind_t k, bool isflt, bool issigned)
         return isflt ? "fdiv" : (issigned ? "sdiv" : "udiv");
     case TK_PERCENT:
         return isflt ? "frem" : (issigned ? "srem" : "urem");
+    case TK_AMP:
+        return "and";
+    case TK_PIPE:
+        return "or";
+    case TK_CARET:
+        return "xor";
+    case TK_SHL:
+        return "shl";
+    case TK_SHR:
+        return issigned ? "ashr" : "lshr";
     default:
         return NULL;
     }
@@ -363,6 +373,14 @@ static llv_t ll_unary(ll_t *ll, ast_node_t *n)
         else
             ll_emit(ll, "%s = sub%s %s 0, %s", r, ll_is_signed(rt) ? " nsw" : "",
                     ll_ty(ll, rt), cv);
+        return (llv_t){r, rt};
+    }
+    if (n->op == TK_TILDE) {
+        llv_t v = ll_expr(ll, n->a);
+        const char *rt = n->type_str ? n->type_str : v.ts;
+        const char *cv = ll_conv(ll, v, rt);
+        const char *r = ll_new_tmp(ll);
+        ll_emit(ll, "%s = xor %s %s, -1", r, ll_ty(ll, rt), cv);
         return (llv_t){r, rt};
     }
     ll_error(ll, n, "unary operator");

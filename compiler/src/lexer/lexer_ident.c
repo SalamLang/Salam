@@ -70,8 +70,12 @@ void lx_scan_ident(lx_t *L)
     const char *text = raw;
 
     if (k == TK_IDENT) {
-        const char *canon = L->keep_comments ? NULL : langpack_canon_word(L->pack, raw);
-        text = canon ? canon : lx_norm_ident(L, raw);
+        if (L->keep_comments) {
+            text = raw;
+        } else {
+            const char *canon = langpack_canon_word(L->pack, raw);
+            text = canon ? canon : lx_norm_ident(L, raw);
+        }
     }
     if (k == TK_KW_TRUE || k == TK_KW_FALSE) {
         token_value_t v;

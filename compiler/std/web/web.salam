@@ -37,6 +37,470 @@ end
 @ar "إصدار الخادم"
 pub const SERVER_VERSION := "0.2.6"
 
+mut _reqctx_size := 0 as i64
+mut _current_router := NewRouter()
+mut _hide_tokens := false
+
+@en "Context"
+@fa "زمینه"
+@ar "سیاق"
+pub struct Context:
+    pub h: i64
+end
+
+struct _KV:
+    pub k: str = ""
+    pub v: str = ""
+end
+
+struct _ReqCtx:
+    pub fd: i64 = 0
+    pub status: int = 200
+    pub is_sent: bool = false
+    pub method: str = ""
+    pub path: str = ""
+    pub query: str = ""
+    pub body: str = ""
+    pub resp_ct: str = ""
+    pub resp_body: str = ""
+    pub req_hdrs: Vector<_KV> = Vector {}
+    pub path_params: Vector<_KV> = Vector {}
+    pub resp_hdrs: Vector<_KV> = Vector {}
+end
+
+@en "Route"
+@fa "مسیر مسیریابی"
+@ar "مسار توجیه"
+pub struct Route:
+    pub method: str = ""
+    pub pattern: str = ""
+    pub fn: i64 = 0
+end
+
+@en "Router"
+@fa "مسیریاب"
+@ar "موجه"
+pub struct Router:
+    pub routes: Vector<Route> = Vector {}
+    pub static_prefix: str = ""
+    pub static_dir: str = ""
+    pub has_static: bool = false
+end
+
+@en "Server"
+@fa "سرور"
+@ar "خادم"
+pub struct Server:
+    pub port: int = 0
+    pub router: Router = Router {}
+    pub hide_tokens: bool = false
+end
+
+func _reqctx_sizeof(): i64:
+    if _reqctx_size == 0:
+        v := Vector {} as Vector<_ReqCtx> v.push(_ReqCtx {})
+        v.push(_ReqCtx {})
+        _reqctx_size = (v.get(1) as i64) - (v.get(0) as i64)
+    end
+    ret _reqctx_size
+end
+
+func _rc(h: i64): _ReqCtx *:
+    ret h as _ReqCtx *
+end
+
+func salam_ctx_new(fd: i64): i64:
+    p := mem.Allocate(_reqctx_sizeof() as u64)
+    c := p as _ReqCtx * c[0] = _ReqCtx { fd = fd }
+    ret p as i64
+end
+
+func salam_ctx_free(h: i64):
+    mem.Free(h as void *)
+end
+
+func salam_ctx_fd(h: i64): i64:
+    ret _rc(h).fd
+end
+
+func salam_ctx_get(h: i64, idx: int): str:
+    c := _rc(h)
+    if idx == 0: ret c.method
+    else idx == 1: ret c.path
+    else idx == 2: ret c.query
+    else idx == 3: ret c.body
+    else idx == 4: ret c.resp_ct
+    else idx == 5: ret c.resp_body
+    else:
+        ret ""
+    end
+end
+
+func salam_ctx_set(h: i64, idx: int, val: str):
+    c := _rc(h)
+    if idx == 0: c.method = val
+    else idx == 1: c.path = val
+    else idx == 2: c.query = val
+    else idx == 3: c.body = val
+    else idx == 4: c.resp_ct = val
+    else idx == 5: c.resp_body = val end
+end
+
+func salam_ctx_get_status(h: i64): int:
+    ret _rc(h).status
+end
+
+func salam_ctx_set_status(h: i64, status: int):
+    c := _rc(h)
+    c.status = status
+end
+
+func salam_ctx_is_sent(h: i64): int:
+    if _rc(h).is_sent: ret 1 end
+    ret 0
+end
+
+func _ctx_mark_sent(h: i64):
+    c := _rc(h)
+    c.is_sent = true
+end
+
+func _kvl_get(l &: Vector<_KV>, key: str): str:
+    repeat l.len() with i:
+        kv := l.get(i)[0]
+        if kv.k == key: ret kv.v end
+    end
+    ret ""
+end
+
+func _kvl_set(l &: Vector<_KV>, key: str, val: str):
+    repeat l.len() with i:
+        if l.get(i)[0].k == key:
+            l.set(i, _KV { k = key, v = val })
+            ret
+        end
+    end
+    l.push(_KV { k = key, v = val })
+end
+
+func _kvl_clear(l &: Vector<_KV>):
+    until l.len() > 0:
+        l.pop()
+    end
+end
+
+func salam_ctx_kv_get(h: i64, list: int, key: str): str:
+    c := _rc(h)
+    if list == 0: ret _kvl_get(c.req_hdrs, key)
+    else list == 1: ret _kvl_get(c.path_params, key)
+    else:
+        ret _kvl_get(c.resp_hdrs, key)
+    end
+end
+
+func salam_ctx_kv_add(h: i64, list: int, key: str, val: str):
+    c := _rc(h)
+    if list == 0: _kvl_set(c.req_hdrs, key, val)
+    else list == 1: _kvl_set(c.path_params, key, val)
+    else:
+        _kvl_set(c.resp_hdrs, key, val)
+    end
+end
+
+func salam_ctx_kv_clear(h: i64, list: int):
+    c := _rc(h)
+    if list == 0: _kvl_clear(c.req_hdrs)
+    else list == 1: _kvl_clear(c.path_params)
+    else:
+        _kvl_clear(c.resp_hdrs)
+    end
+end
+
+func salam_ctx_kv_n(h: i64, list: int): int:
+    c := _rc(h)
+    if list == 0: ret c.req_hdrs.len()
+    else list == 1: ret c.path_params.len()
+    else:
+        ret c.resp_hdrs.len()
+    end
+end
+
+func salam_ctx_kv_key(h: i64, list: int, idx: int): str:
+    c := _rc(h)
+    if list == 0: ret c.req_hdrs.get(idx)[0].k
+    else list == 1: ret c.path_params.get(idx)[0].k
+    else:
+        ret c.resp_hdrs.get(idx)[0].k
+    end
+end
+
+func salam_ctx_kv_val(h: i64, list: int, idx: int): str:
+    c := _rc(h)
+    if list == 0: ret c.req_hdrs.get(idx)[0].v
+    else list == 1: ret c.path_params.get(idx)[0].v
+    else:
+        ret c.resp_hdrs.get(idx)[0].v
+    end
+end
+
+func _query_parse(req: str, key: str): str:
+    if req.len() == 0: ret "" end
+    decoded := UrlDecode(req)
+    mut rest := decoded
+    until rest.len() > 0:
+        amp := rest.find("&")
+        mut pair := ""
+        if amp >= 0:
+            pair = rest.substr(0, amp)
+            rest = rest.substr(amp + 1, rest.len() - amp - 1)
+        else:
+            pair = rest
+            rest = ""
+        end
+        eq := pair.find("=")
+        if eq >= 0:
+            if pair.substr(0, eq) == key:
+                ret pair.substr(eq + 1, pair.len() - eq - 1)
+            end
+        end
+    end
+    ret ""
+end
+
+func _parse_http(ctx: i64, req: str):
+    sp1 := req.find(" ")
+    if sp1 < 0: ret end
+    salam_ctx_set(ctx, 0, req.substr(0, sp1))
+    after_method := req.substr(sp1 + 1, req.len() - sp1 - 1)
+    sp2 := after_method.find(" ")
+    if sp2 < 0: ret end
+    pathquery := after_method.substr(0, sp2)
+    qmark := pathquery.find("?")
+    if qmark >= 0:
+        salam_ctx_set(ctx, 1, pathquery.substr(0, qmark))
+        salam_ctx_set(ctx, 2, pathquery.substr(qmark + 1, pathquery.len() - qmark - 1))
+    else:
+        salam_ctx_set(ctx, 1, pathquery)
+        salam_ctx_set(ctx, 2, "")
+    end
+    first_crlf := req.find("\r\n")
+    if first_crlf < 0: ret end
+    mut pos := first_crlf + 2
+    until pos < req.len():
+        if pos + 1 < req.len() && req.substr(pos, 2) == "\r\n":
+            pos += 2
+            break
+        end
+        line_end := str.IndexFrom(req, "\r\n", pos)
+        if line_end < 0:
+            pos = req.len()
+            break
+        end
+        line := req.substr(pos, line_end - pos)
+        colon := line.find(":")
+        if colon >= 0:
+            hk := line.substr(0, colon)
+            hv := str.TrimLeft(line.substr(colon + 1, line.len() - colon - 1))
+            salam_ctx_kv_add(ctx, 0, hk, hv)
+        end
+        pos = line_end + 2
+    end
+    body_sep := str.IndexFrom(req, "\r\n\r\n", 0)
+    if body_sep >= 0:
+        body_start := body_sep + 4
+        if body_start < req.len():
+            salam_ctx_set(ctx, 3, req.substr(body_start, req.len() - body_start))
+        end
+    end
+end
+
+func _match_path(pattern: str, path: str, ctx: i64): bool:
+    mut pi := 0
+    mut pp := 0
+    plen := pattern.len()
+    pathlen := path.len()
+    until pi < plen || pp < pathlen:
+        if pi < plen && pattern.substr(pi, 1) == "*":
+            ret true
+        end
+        if pi < plen && pattern.substr(pi, 1) == ":":
+            mut ne := pi + 1
+            until ne < plen && pattern.substr(ne, 1) != "/":
+                ne += 1
+            end
+            pname := pattern.substr(pi + 1, ne - pi - 1)
+            mut ve := pp
+            until ve < pathlen && path.substr(ve, 1) != "/":
+                ve += 1
+            end
+            pval := path.substr(pp, ve - pp)
+            salam_ctx_kv_add(ctx, 1, pname, pval)
+            pi = ne
+            pp = ve
+        else:
+            if pi >= plen || pp >= pathlen:
+                break
+            end
+            if pattern.substr(pi, 1) != path.substr(pp, 1):
+                ret false
+            end
+            pi += 1
+            pp += 1
+        end
+    end
+    until pi < plen && pattern.substr(pi, 1) == "/": pi = pi + 1 end
+    until pp < pathlen && path.substr(pp, 1) == "/": pp = pp + 1 end
+    ret pi == plen && pp == pathlen
+end
+
+func _server_header(hide: bool): str:
+    if hide: ret "Salam" end
+    ret "Salam/".concat(SERVER_VERSION)
+end
+
+func _build_response(ctx: i64, hide: bool): str:
+    status := salam_ctx_get_status(ctx)
+    ct := salam_ctx_get(ctx, 4)
+    body := salam_ctx_get(ctx, 5)
+    mut resp := "HTTP/1.1 "
+    resp = resp.concat(conv.FormatInt(status as i64))
+    resp = resp.concat(" ")
+    resp = resp.concat(StatusText(status))
+    resp = resp.concat("\r\nContent-Length: ")
+    resp = resp.concat(conv.FormatInt(body.len() as i64))
+    resp = resp.concat("\r\nConnection: close\r\nServer: ")
+    resp = resp.concat(_server_header(hide))
+    resp = resp.concat("\r\n")
+    if ct.len() > 0:
+        resp = resp.concat("Content-Type: ")
+        resp = resp.concat(ct)
+        resp = resp.concat("\r\n")
+    end
+    nhdr := salam_ctx_kv_n(ctx, 2)
+    repeat nhdr with i:
+        resp = resp.concat(salam_ctx_kv_key(ctx, 2, i))
+        resp = resp.concat(": ")
+        resp = resp.concat(salam_ctx_kv_val(ctx, 2, i))
+        resp = resp.concat("\r\n")
+    end
+    resp = resp.concat("\r\n")
+    resp = resp.concat(body)
+    ret resp
+end
+
+func _dispatch(r: Router, ctx: i64): bool:
+    method := salam_ctx_get(ctx, 0)
+    path := salam_ctx_get(ctx, 1)
+    n := r.routes.len()
+    repeat n with i:
+        route := r.routes.get(i)[0]
+        if route.method == method:
+            salam_ctx_kv_clear(ctx, 1)
+            if _match_path(route.pattern, path, ctx):
+                callhandler(route.fn, ctx)
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+func _net_listen(port: int): i64:
+    ret net.Listen(port).fd
+end
+
+func _net_accept(lfd: i64): i64:
+    ret net.Accept(net.SocketFromFd(lfd)).fd
+end
+
+func _net_recv_req(fd: i64): str:
+    ret net.Recv(net.SocketFromFd(fd), 32768)
+end
+
+func _net_send_all(fd: i64, data: str):
+    s := net.SocketFromFd(fd)
+    total := data.len()
+    mut sent := 0
+    until sent < total:
+        n := net.Send(s, data.substr(sent, total - sent))
+        if n <= 0:
+            ret
+        end
+        sent += n
+    end
+end
+
+func _net_close(fd: i64):
+    net.Close(net.SocketFromFd(fd))
+end
+
+func _send_file(fd: i64, path: str, ct: str, server_hdr: str): int:
+    f := fopen(path, "rb")
+    if f == null:
+        ret 0
+    end
+    defer fclose(f)
+    fseek(f, 0, 2)
+    sz := ftell(f)
+    fseek(f, 0, 0)
+    if sz <= 0 || sz > 16777216:
+        ret 0
+    end
+    buf := mem.Allocate(sz as u64)
+    defer mem.Free(buf)
+    got := fread(buf, 1 as u64, sz as u64, f)
+    mut hdr := "HTTP/1.1 200 OK\r\nContent-Length: "
+    hdr = hdr.concat(conv.FormatInt(sz))
+    hdr = hdr.concat("\r\nContent-Type: ")
+    hdr = hdr.concat(ct)
+    hdr = hdr.concat("\r\nConnection: close\r\nServer: ")
+    hdr = hdr.concat(server_hdr)
+    hdr = hdr.concat("\r\n\r\n")
+    _net_send_all(fd, hdr)
+    net.SendBytes(net.SocketFromFd(fd), buf, got as int)
+    mem.Free(buf)
+    ret 1
+end
+
+func _web_conn_handler(fd: i64):
+    req := _net_recv_req(fd)
+    if req.len() == 0:
+        _net_close(fd)
+        ret
+    end
+    ctx := salam_ctx_new(fd)
+    _parse_http(ctx, req)
+    r := _current_router
+    hide := _hide_tokens
+    shdr := _server_header(hide)
+    if r.has_static:
+        prefix := r.static_prefix
+        path := salam_ctx_get(ctx, 1)
+        if path.len() >= prefix.len() && path.substr(0, prefix.len()) == prefix:
+            dir := r.static_dir
+            rel := path.substr(prefix.len(), path.len() - prefix.len())
+            full := dir.concat(rel)
+            if _send_file(fd, full, MimeType(full), shdr) == 1:
+                _ctx_mark_sent(ctx)
+            end
+        end
+    end
+    if salam_ctx_is_sent(ctx) == 0:
+        dispatched := _dispatch(r, ctx)
+        if dispatched == false:
+            salam_ctx_set_status(ctx, 404)
+            salam_ctx_set(ctx, 4, "text/plain; charset=utf-8")
+            salam_ctx_set(ctx, 5, "404 Not Found")
+        end
+    end
+    if salam_ctx_is_sent(ctx) == 0:
+        resp := _build_response(ctx, hide)
+        _net_send_all(fd, resp)
+    end
+    _net_close(fd)
+    salam_ctx_free(ctx)
+end
+
 if SALAM_OS_WINDOWS:
     extern:
         func salam_spawn_fn_i64(fn: i64, arg: i64):

@@ -314,11 +314,20 @@ void jsg_stmt(jg_t *g, ast_node_t *n)
                 cg_line(cg, "break %s;", cg->match_end_label);
             break;
         }
-        jsg_emit_defers(g);
-        if (n->a)
-            cg_line(cg, "return %s;", jsg_expr(g, n->a));
-        else
-            cg_line(cg, "return;");
+        if (n->a && cg->fn_defers.len > 0) {
+            const char *expr = jsg_expr(g, n->a);
+            int t = ++cg->tmpn;
+            const char *tmp = cg_fmt(cg, "__retv%d", t);
+            cg_line(cg, "const %s = %s;", tmp, expr);
+            jsg_emit_defers(g);
+            cg_line(cg, "return %s;", tmp);
+        } else {
+            jsg_emit_defers(g);
+            if (n->a)
+                cg_line(cg, "return %s;", jsg_expr(g, n->a));
+            else
+                cg_line(cg, "return;");
+        }
         break;
     case AST_BREAK:
         cg_line(cg, "break;");

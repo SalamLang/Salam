@@ -67,6 +67,7 @@ typedef struct {
     bool fmt_recursive;
     bool fmt_tabs;
     int fmt_indent_width;
+    bool fmt_fix_order;
     bool debug_info;
     bool asan;
     bool interp;

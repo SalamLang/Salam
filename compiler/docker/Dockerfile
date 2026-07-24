@@ -24,6 +24,10 @@ RUN for i in 1 2 3 4 5; do \
             sqlite-dev \
             sqlite-static \
             mariadb-connector-c-dev \
+            hiredis-dev \
+            openssl-dev \
+            gtk+3.0-dev \
+            webkit2gtk-4.1-dev \
             nodejs \
             npm \
         && break; \

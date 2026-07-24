@@ -60,6 +60,9 @@ typedef enum {
     LL_H_F64STR,
     LL_H_CHARSTR,
     LL_H_OUTBUF,
+    LL_H_REPEAT,
+    LL_H_UPPER,
+    LL_H_LOWER,
     LL_H_COUNT
 } ll_helper_t;
 
@@ -174,7 +177,7 @@ lvar_t *ll_local_find(ll_t *ll, const char *name);
 
 lvar_t *ll_global_find(ll_t *ll, const char *name);
 
-int ll_int_bits(const char *ts);
+int ll_int_bits(ll_t *ll, const char *ts);
 
 int ll_target_ptr_bits(const char *triple);
 
@@ -190,7 +193,7 @@ const char *ll_ty(ll_t *ll, const char *ts);
 
 const char *ll_conv(ll_t *ll, llv_t v, const char *to_ts);
 
-const char *ll_common(const char *a, const char *b);
+const char *ll_common(ll_t *ll, const char *a, const char *b);
 
 const char *ll_as_i1(ll_t *ll, llv_t v);
 

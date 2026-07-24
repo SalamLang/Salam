@@ -46,6 +46,18 @@ const char *cg_op(token_kind_t k)
         return "||";
     case TK_NOT:
         return "!";
+    case TK_AMP:
+        return "&";
+    case TK_PIPE:
+        return "|";
+    case TK_CARET:
+        return "^";
+    case TK_TILDE:
+        return "~";
+    case TK_SHL:
+        return "<<";
+    case TK_SHR:
+        return ">>";
     case TK_ASSIGN:
         return "=";
     case TK_PLUS_EQ:
@@ -58,6 +70,16 @@ const char *cg_op(token_kind_t k)
         return "/=";
     case TK_PERCENT_EQ:
         return "%=";
+    case TK_AMP_EQ:
+        return "&=";
+    case TK_PIPE_EQ:
+        return "|=";
+    case TK_CARET_EQ:
+        return "^=";
+    case TK_SHL_EQ:
+        return "<<=";
+    case TK_SHR_EQ:
+        return ">>=";
     default:
         return "?";
     }
@@ -338,7 +360,8 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
         switch (n->op) {
         case TK_INT: {
             unsigned long long u = (unsigned long long)n->value.as.i;
-            bool uns = n->type_str && n->type_str[0] == 'u';
+            bool uns =
+                n->type_str && (n->type_str[0] == 'u' || !strcmp(n->type_str, "size"));
             if (!uns && u > 9223372036854775807ULL) {
                 long long v = (long long)u;
                 return v == (-9223372036854775807LL - 1LL)
@@ -450,6 +473,15 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
             (cg_is_str_ts(n->a->type_str) || cg_is_str_ts(n->b->type_str)))
             return cg_fmt(cg, "salam_strcat(%s, %s)", cg_str_operand(cg, n->a),
                           cg_str_operand(cg, n->b));
+
+        if (n->op == TK_STAR &&
+            (cg_is_str_ts(n->a->type_str) || cg_is_str_ts(n->b->type_str))) {
+            bool a_str = cg_is_str_ts(n->a->type_str);
+            ast_node_t *sop = a_str ? n->a : n->b;
+            ast_node_t *nop = a_str ? n->b : n->a;
+            return cg_fmt(cg, "salam_str_repeat(%s, (int32_t)(%s))", cg_expr(cg, sop),
+                          cg_expr(cg, nop));
+        }
 
         if (cg_is_str_ts(n->a->type_str) && cg_is_str_ts(n->b->type_str)) {
             const char *op = NULL;

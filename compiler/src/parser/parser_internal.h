@@ -32,6 +32,7 @@ typedef struct {
     bool panic;
     bool no_struct_lit;
     int depth;
+    int angle_pending;
 } parser_t;
 
 const token_t *p_peek(const parser_t *p);
@@ -49,6 +50,8 @@ const token_t *p_advance(parser_t *p);
 bool p_match(parser_t *p, token_kind_t k);
 
 bool p_expect(parser_t *p, token_kind_t k, const char *what);
+
+bool p_close_angle(parser_t *p, const char *what);
 
 void p_skip_terminators(parser_t *p);
 

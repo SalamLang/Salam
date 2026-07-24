@@ -1,0 +1,112 @@
+---
+name: 📊 Benchmark - PR Report
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: benchmark-pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  benchmark:
+    name: Run full benchmark suite
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build benchmark toolchain image (cached)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: benchmark/docker/Dockerfile
+          target: bench
+          tags: salam-bench:ci
+          load: true
+          build-args: |
+            ALPINE_VERSION=edge
+            LLVM_VERSION=22
+          cache-from: type=gha,scope=bench
+          cache-to: type=gha,mode=max,scope=bench
+
+      - name: Run full benchmark suite
+        env:
+          # BENCH_RUNS: '10'
+          BENCH_RUNS: '1'
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark/results
+          touch benchmark/RESULTS.md
+          docker run --rm \
+            --user "$(id -u)":"$(id -g)" \
+            -e BENCH_RUNS="${BENCH_RUNS}" \
+            -v "${{ github.workspace }}/benchmark/RESULTS.md":/repo/benchmark/RESULTS.md \
+            -v "${{ github.workspace }}/benchmark/results":/repo/benchmark/results \
+            salam-bench:ci
+
+      - name: Publish full report to job summary
+        run: cat benchmark/RESULTS.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload raw results artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: benchmark-results-${{ github.event.pull_request.number || github.run_id }}
+          path: |
+            benchmark/RESULTS.md
+            benchmark/results/
+          retention-days: 30
+
+      - name: Build PR comment body
+        if: github.event_name == 'pull_request'
+        env:
+          SHORT_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ARTIFACT_NAME: benchmark-results-${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${SHORT_SHA:0:7}" \
+            benchmark/ci/build_pr_comment.sh benchmark/RESULTS.md > /tmp/benchmark_comment.md
+
+      - name: Post or update sticky PR comment
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('/tmp/benchmark_comment.md', 'utf8');
+            const marker = '<!-- salam-benchmark-report -->';
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

@@ -310,13 +310,13 @@ type_t *check_call(sema_t *s, ast_node_t *n)
     if (callee && callee->kind == AST_IDENTIFIER && strcmp(callee->name, "sizeof") == 0) {
         if (n->list.len != 1 || ((ast_node_t *)n->list.data[0])->kind != AST_TYPE) {
             SERR(s, 12, &n->span, "sizeof(Type) takes a single type operand");
-            return decorate(s, n, ty(s, TY_U64));
+            return decorate(s, n, ty(s, TY_SIZE));
         }
         ast_node_t *op = (ast_node_t *)n->list.data[0];
         type_t *ot = sema_resolve_type(s, op);
         decorate(s, op, ot);
         decorate(s, callee, ty(s, TY_VOID));
-        return decorate(s, n, ty(s, TY_U64));
+        return decorate(s, n, ty(s, TY_SIZE));
     }
 
     vec_t argtypes;
@@ -666,8 +666,8 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                     SERR(s, 12, &n->span, "substr(start,len) takes 2 args");
                 return decorate(s, n, ty(s, TY_STR));
             }
-            if (!strcmp(m, "find")) {
-                if (argtypes.len != 1) SERR(s, 12, &n->span, "find(sub) takes 1 arg");
+            if (!strcmp(m, "find") || !strcmp(m, "search") || !strcmp(m, "indexOf")) {
+                if (argtypes.len != 1) SERR(s, 12, &n->span, "%s(sub) takes 1 arg", m);
                 return decorate(s, n, ty(s, TY_I32));
             }
             if (!strcmp(m, "split")) {
@@ -677,6 +677,14 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             if (!strcmp(m, "trim")) return decorate(s, n, ty(s, TY_STR));
             if (!strcmp(m, "to_int")) return decorate(s, n, ty(s, TY_I32));
             if (!strcmp(m, "to_float")) return decorate(s, n, ty(s, TY_F64));
+            if (!strcmp(m, "lower") || !strcmp(m, "upper")) {
+                if (argtypes.len != 0) SERR(s, 12, &n->span, "%s() takes no args", m);
+                return decorate(s, n, ty(s, TY_STR));
+            }
+            if (!strcmp(m, "repeat")) {
+                if (argtypes.len != 1) SERR(s, 12, &n->span, "repeat(n) takes 1 arg");
+                return decorate(s, n, ty(s, TY_STR));
+            }
             {
                 type_t *r = try_impl_call(s, n, callee, objt, &argtypes);
                 if (r) return r;

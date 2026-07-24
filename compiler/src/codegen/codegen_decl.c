@@ -53,9 +53,9 @@ const char *func_signature(cg_t *cg, ast_node_t *fn, symbol_t *owner, func_sig_t
     if (!fn->is_extern) {
         if (fn->is_noinline) sb_puts(&b, "SALAM_NOINLINE ");
         if (fn->is_pure) sb_puts(&b, "SALAM_PURE ");
-        if (fn->is_noret) sb_puts(&b, "SALAM_NORET ");
         if (fn->is_deprecated) sb_puts(&b, "SALAM_DEPRECATED ");
     }
+    if (fn->is_noret) sb_puts(&b, "SALAM_NORET ");
     sb_puts(&b, cg_fmt(cg, "%s %s(", ret, name));
     bool first = true;
     if (owner) {

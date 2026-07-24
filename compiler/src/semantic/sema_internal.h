@@ -143,6 +143,8 @@ const char *sema_op_method(token_kind_t k);
 
 token_kind_t sema_compound_base(token_kind_t k);
 
+bool sema_tk_is_bitwise(token_kind_t k);
+
 type_t *sema_try_op_overload(sema_t *s, ast_node_t *n, symbol_t *ssym, const char *mname,
                              type_t *rhs_type);
 
@@ -185,10 +187,16 @@ void sema_check_function_now(sema_t *s, func_sig_t *sig);
 
 void sema_check_unused_funcs(sema_t *s);
 
+void sema_check_unused_imports(sema_t *s);
+
 symbol_t *get_or_make_func(sema_t *s, scope_t *sc, const char *name, sym_kind_t kind);
 
 void sema_collect(sema_t *s, ast_node_t *program);
 
 void sema_check_pass(sema_t *s, ast_node_t *program);
+
+void sema_check_toplevel_order(sema_t *s, ast_node_t *program);
+
+void sema_check_toplevel_order_in_file(sema_t *s, ast_node_t *program, const char *file);
 
 #endif /* SALAM_SEMANTIC_SEMA_INTERNAL_H */

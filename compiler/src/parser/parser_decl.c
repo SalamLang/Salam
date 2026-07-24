@@ -131,6 +131,11 @@ ast_node_t *parse_top_level(parser_t *p)
         n = parse_bare_var_decl(p);
         p_term(p);
         break;
+    case TK_KW_PACKAGE:
+        p_error(p, "'package' can be declared only once, and only as the very "
+                   "first statement in the file");
+        if (!p_at_eof(p)) p_advance(p);
+        return NULL;
     default:
         p_error(p, is_pub ? "expected a definition after 'pub'"
                           : "expected a top-level definition");
@@ -232,7 +237,7 @@ static void parse_typarams(parser_t *p, ast_node_t *n)
                 p_name(p, "expected an interface name after ':' in type parameter bound");
         vec_push(p->a, &n->typaram_bounds, CONST_CAST(bound));
     } while (p_match(p, TK_COMMA));
-    p_expect(p, TK_GT, "'>' to close type parameters");
+    p_close_angle(p, "'>' to close type parameters");
 }
 
 static ast_node_t *parse_interface_method(parser_t *p)

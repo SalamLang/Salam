@@ -152,8 +152,8 @@ static const char *base_ctype(const char *base)
         {"str", "const char*"}, {"uchar", "const char*"}, {"i8", "int8_t"},
         {"i16", "int16_t"},     {"i32", "int32_t"},       {"i64", "int64_t"},
         {"u8", "uint8_t"},      {"u16", "uint16_t"},      {"u32", "uint32_t"},
-        {"u64", "uint64_t"},    {"f32", "float"},         {"f64", "double"},
-        {"File", "salam_file"},
+        {"u64", "uint64_t"},    {"size", "size_t"},       {"f32", "float"},
+        {"f64", "double"},      {"File", "salam_file"},
     };
     {
         size_t i = 0;
@@ -201,12 +201,24 @@ void parse_typestr(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dim
 
 bool cg_is_int_typestr(const char *ts)
 {
-    static const char *const ints[] = {"i8",  "i16", "i32", "i64", "u8",
-                                       "u16", "u32", "u64", NULL};
+    static const char *const ints[] = {"i8",  "i16", "i32", "i64",  "u8",
+                                       "u16", "u32", "u64", "size", NULL};
     {
         int i = 0;
         for (; ints[i]; i++)
             if (!strcmp(ts, ints[i])) return true;
+    }
+    return false;
+}
+
+bool cg_is_unsigned_typestr(const char *ts)
+{
+    static const char *const uns[] = {"u8", "u16", "u32", "u64", "size", NULL};
+    if (!ts) return false;
+    {
+        int i = 0;
+        for (; uns[i]; i++)
+            if (!strcmp(ts, uns[i])) return true;
     }
     return false;
 }
@@ -657,6 +669,7 @@ int print_tag(const char *ts)
     if (!strcmp(ts, "i64")) return 1;
     if (!strcmp(ts, "u32")) return 2;
     if (!strcmp(ts, "u64")) return 3;
+    if (!strcmp(ts, "size")) return 3;
     return 0;
 }
 

@@ -182,6 +182,8 @@ ast_node_t *find_impl_method(interp_t *I, const char *typestr, const char *metho
 
 const char *afmt(interp_t *I, const char *fmt, ...);
 
+const char *str_repeat(interp_t *I, const char *s, int64_t n);
+
 bool to_bool(value_t v);
 
 double to_float(value_t v);

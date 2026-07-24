@@ -29,6 +29,16 @@ static const char *ll_arith_op(token_kind_t k, bool isflt, bool issigned)
         return isflt ? "fdiv" : (issigned ? "sdiv" : "udiv");
     case TK_PERCENT:
         return isflt ? "frem" : (issigned ? "srem" : "urem");
+    case TK_AMP:
+        return "and";
+    case TK_PIPE:
+        return "or";
+    case TK_CARET:
+        return "xor";
+    case TK_SHL:
+        return "shl";
+    case TK_SHR:
+        return issigned ? "ashr" : "lshr";
     default:
         return NULL;
     }
@@ -111,6 +121,17 @@ static bool ll_binary_string(ll_t *ll, ast_node_t *n, token_kind_t op, llv_t *ou
         const char *r = ll_new_tmp(ll);
         ll_need(ll, LL_H_STRCAT);
         ll_emit(ll, "%s = call ptr @salam_ll_strcat(ptr %s, ptr %s)", r, L, R);
+        *out = (llv_t){r, "str"};
+        return true;
+    }
+    if (op == TK_STAR && (as || bs)) {
+        ast_node_t *sop = as ? n->a : n->b;
+        ast_node_t *nop = as ? n->b : n->a;
+        const char *S = ll_expr(ll, sop).ref;
+        const char *N = ll_conv(ll, ll_expr(ll, nop), "i32");
+        const char *r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_REPEAT);
+        ll_emit(ll, "%s = call ptr @salam_ll_repeat(ptr %s, i32 %s)", r, S, N);
         *out = (llv_t){r, "str"};
         return true;
     }
@@ -303,7 +324,7 @@ llv_t ll_binary(ll_t *ll, ast_node_t *n)
                     rc);
             return (llv_t){r, "bool"};
         }
-        const char *common = ll_common(L.ts, R.ts);
+        const char *common = ll_common(ll, L.ts, R.ts);
         const char *lc = ll_conv(ll, L, common), *rc = ll_conv(ll, R, common);
         bool flt = ll_is_float(common);
         const char *r = ll_new_tmp(ll);
@@ -312,7 +333,7 @@ llv_t ll_binary(ll_t *ll, ast_node_t *n)
         return (llv_t){r, "bool"};
     }
 
-    const char *rt = n->type_str ? n->type_str : ll_common(L.ts, R.ts);
+    const char *rt = n->type_str ? n->type_str : ll_common(ll, L.ts, R.ts);
     const char *lc = ll_conv(ll, L, rt), *rc = ll_conv(ll, R, rt);
     bool flt = ll_is_float(rt);
     const char *o = ll_arith_op(op, flt, ll_is_signed(rt));
@@ -352,6 +373,14 @@ static llv_t ll_unary(ll_t *ll, ast_node_t *n)
         else
             ll_emit(ll, "%s = sub%s %s 0, %s", r, ll_is_signed(rt) ? " nsw" : "",
                     ll_ty(ll, rt), cv);
+        return (llv_t){r, rt};
+    }
+    if (n->op == TK_TILDE) {
+        llv_t v = ll_expr(ll, n->a);
+        const char *rt = n->type_str ? n->type_str : v.ts;
+        const char *cv = ll_conv(ll, v, rt);
+        const char *r = ll_new_tmp(ll);
+        ll_emit(ll, "%s = xor %s %s, -1", r, ll_ty(ll, rt), cv);
         return (llv_t){r, rt};
     }
     ll_error(ll, n, "unary operator");
@@ -466,6 +495,9 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
                 break;
             case PF_U64:
                 sb_puts(&args, ll_fmt(ll, ", i64 %s", v.ref));
+                break;
+            case PF_SIZE:
+                sb_puts(&args, ll_fmt(ll, ", %s %s", ll->usize, ll_conv(ll, v, "size")));
                 break;
             default:
                 break;
@@ -713,7 +745,8 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
         *out = (llv_t){r, "f64"};
         return true;
     }
-    if (!strcmp(m, "find") && na == 1) {
+    if ((!strcmp(m, "find") || !strcmp(m, "search") || !strcmp(m, "indexOf")) &&
+        na == 1) {
         const char *a = ll_expr(ll, (ast_node_t *)n->list.data[0]).ref;
         const char *p = ll_new_tmp(ll), *pi = ll_new_tmp(ll), *ri = ll_new_tmp(ll);
         const char *d = ll_new_tmp(ll), *o = ll_new_tmp(ll), *nz = ll_new_tmp(ll);
@@ -726,6 +759,28 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
         r = ll_new_tmp(ll);
         ll_emit(ll, "%s = select i1 %s, i32 -1, i32 %s", r, nz, o);
         *out = (llv_t){r, "i32"};
+        return true;
+    }
+    if (!strcmp(m, "lower")) {
+        r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_LOWER);
+        ll_emit(ll, "%s = call ptr @salam_ll_lower(ptr %s)", r, recv);
+        *out = (llv_t){r, "str"};
+        return true;
+    }
+    if (!strcmp(m, "upper")) {
+        r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_UPPER);
+        ll_emit(ll, "%s = call ptr @salam_ll_upper(ptr %s)", r, recv);
+        *out = (llv_t){r, "str"};
+        return true;
+    }
+    if (!strcmp(m, "repeat") && na == 1) {
+        const char *cnt = ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[0]), "i32");
+        r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_REPEAT);
+        ll_emit(ll, "%s = call ptr @salam_ll_repeat(ptr %s, i32 %s)", r, recv, cnt);
+        *out = (llv_t){r, "str"};
         return true;
     }
     return false;
@@ -947,8 +1002,8 @@ static llv_t ll_call(ll_t *ll, ast_node_t *n)
             const char *szp = ll_new_tmp(ll), *sz = ll_new_tmp(ll);
             ll_emit(ll, "%s = getelementptr %s, ptr null, i32 1", szp,
                     ll_ty(ll, t ? t : "i32"));
-            ll_emit(ll, "%s = ptrtoint ptr %s to i64", sz, szp);
-            return (llv_t){sz, "u64"};
+            ll_emit(ll, "%s = ptrtoint ptr %s to %s", sz, szp, ll->usize);
+            return (llv_t){sz, "size"};
         }
         symbol_t *fsym = ll_sym(ll, nm);
         if (fsym && fsym->kind == SYM_FUNC) return ll_call_user(ll, n, nm);

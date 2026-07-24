@@ -1,68 +1,5 @@
 package crypto
 
-// Deliberately far below OWASP's 600,000: Salam has no native bitwise ops, so
-// PBKDF2-HMAC-SHA256 here runs ~0.3ms/iter on an optimized build and several
-// times slower under tcc; 600,000 would take tens of seconds to minutes per
-// hash. 1000 keeps HashPassword within a fraction of a second on the slowest
-// supported backend. Callers wanting a stronger tradeoff should call
-// Pbkdf2HmacSha256Hex directly with an explicit iteration count.
-const PBKDF2_DEFAULT_ITERATIONS := 1000
-
-func _pbkdf2_hmac_sha256_core(password: void*, plen: int, salt: void*, slen: int, iterations: int, outp: void*, dklen: int):
-    ipad := mem.Allocate(64 as u64)
-    defer mem.Free(ipad)
-    opad := mem.Allocate(64 as u64)
-    defer mem.Free(opad)
-    _hmac_sha256_prep(password, plen, ipad, opad)
-    mid_ipad := _sha256_compress_block(_sha256_iv(), ipad)
-    mid_opad := _sha256_compress_block(_sha256_iv(), opad)
-    blk2 := mem.Allocate(64 as u64)
-    defer mem.Free(blk2)
-    _hmac_fixed96_block2_init(blk2)
-    block_salt := mem.Allocate((slen + 4) as u64)
-    defer mem.Free(block_salt)
-    mem.Copy(block_salt, salt, slen as u64)
-    u := mem.Allocate(32 as u64)
-    defer mem.Free(u)
-    acc := mem.Allocate(32 as u64)
-    defer mem.Free(acc)
-    mut produced := 0
-    mut blocknum := 1
-    until produced < dklen:
-        _bput(block_salt, slen, (blocknum / 16777216) % 256)
-        _bput(block_salt, slen + 1, (blocknum / 65536) % 256)
-        _bput(block_salt, slen + 2, (blocknum / 256) % 256)
-        _bput(block_salt, slen + 3, blocknum % 256)
-        _hmac_sha256_apply(ipad, opad, block_salt, slen + 4, u)
-        mut ci := 0
-        until ci < 32:
-            _bput(acc, ci, _bget(u, ci))
-            ci += 1
-        end
-        mut iter := 1
-        until iter < iterations:
-            _hmac_sha256_apply32_fast(mid_ipad, mid_opad, blk2, u, u)
-            mut cj := 0
-            until cj < 32:
-                _bput(acc, cj, _xor8(_bget(acc, cj), _bget(u, cj)))
-                cj += 1
-            end
-            iter += 1
-        end
-        mut take := 32
-        if dklen - produced < 32:
-            take = dklen - produced
-        end
-        mut ck := 0
-        until ck < take:
-            _bput(outp, produced + ck, _bget(acc, ck))
-            ck += 1
-        end
-        produced += take
-        blocknum += 1
-    end
-end
-
 @en "Pbkdf2HmacSha256Hex"
 @fa "پی بی کِی دی اف۲ شانزدهی"
 @ar "بی بی کی دی اف٢ سداسی"
@@ -73,28 +10,10 @@ pub func Pbkdf2HmacSha256Hex(password: str, salt: str, iterations: int, keylen: 
     defer mem.Free(outp)
     _pbkdf2_hmac_sha256_core(password as void*, plen, salt as void*, slen, iterations, outp, keylen)
     mut result := ""
-    mut i := 0
-    until i < keylen:
+    repeat keylen with i:
         result = result.concat(_hex_byte(_bget(outp, i)))
-        i += 1
     end
     ret result
-end
-
-func _consttime_eq(a: str, b: str): bool:
-    if a.len() != b.len():
-        ret false
-    end
-    n := a.len()
-    ap := a as void*
-    bp := b as void*
-    mut diff := 0
-    mut i := 0
-    until i < n:
-        diff += _xor8(_bget(ap, i), _bget(bp, i))
-        i += 1
-    end
-    ret diff == 0
 end
 
 @en "HashPassword"

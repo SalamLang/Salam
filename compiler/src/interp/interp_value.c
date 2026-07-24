@@ -16,6 +16,23 @@
 #include "core/sal_format.h"
 #include <math.h>
 
+const char *str_repeat(interp_t *I, const char *s, int64_t n)
+{
+    size_t slen = strlen(s);
+    if (n <= 1 || slen == 0) return n == 1 ? s : "";
+    size_t total = slen * (size_t)n;
+    char *buf = (char *)arena_alloc(I->a, total + 1);
+    memcpy(buf, s, slen);
+    size_t filled = slen;
+    while (filled < total) {
+        size_t chunk = filled < total - filled ? filled : total - filled;
+        memcpy(buf + filled, buf, chunk);
+        filled += chunk;
+    }
+    buf[total] = '\0';
+    return buf;
+}
+
 const char *afmt(interp_t *I, const char *fmt, ...)
 {
     va_list ap, ap2;
@@ -438,8 +455,8 @@ ptr_elem_t ptr_elem_from_typestr(const char *ts)
     if (!strcmp(base, "u16")) return PTR_U16;
     if (!strcmp(base, "i32")) return PTR_I32;
     if (!strcmp(base, "u32")) return PTR_U32;
-    if (!strcmp(base, "i64") || !strcmp(base, "isize")) return PTR_I64;
-    if (!strcmp(base, "u64") || !strcmp(base, "usize")) return PTR_U64;
+    if (!strcmp(base, "i64")) return PTR_I64;
+    if (!strcmp(base, "u64") || !strcmp(base, "size")) return PTR_U64;
     if (!strcmp(base, "f32")) return PTR_F32;
     if (!strcmp(base, "f64")) return PTR_F64;
     if (!strcmp(base, "str")) return PTR_STR;
@@ -521,8 +538,8 @@ void ptr_store(sptr_t p, int64_t idx, value_t v)
 
 bool is_int_typename(const char *b)
 {
-    static const char *ints[] = {"i8",  "i16", "i32",  "i64",  "u8",    "u16",   "u32",
-                                 "u64", "int", "byte", "char", "isize", "usize", NULL};
+    static const char *ints[] = {"i8",  "i16", "i32",  "i64",  "u8",   "u16", "u32",
+                                 "u64", "int", "byte", "char", "size", NULL};
     {
         int i = 0;
         for (; ints[i]; i++)
@@ -615,6 +632,16 @@ token_kind_t compound_base(token_kind_t op)
         return TK_PERCENT;
     case TK_POWER_EQ:
         return TK_POWER;
+    case TK_AMP_EQ:
+        return TK_AMP;
+    case TK_PIPE_EQ:
+        return TK_PIPE;
+    case TK_CARET_EQ:
+        return TK_CARET;
+    case TK_SHL_EQ:
+        return TK_SHL;
+    case TK_SHR_EQ:
+        return TK_SHR;
     default:
         return TK_EOF;
     }
@@ -651,6 +678,12 @@ value_t arith(interp_t *I, ast_node_t *n, token_kind_t op, value_t a, value_t b)
 {
     if (op == TK_PLUS && (a.kind == VAL_STR || b.kind == VAL_STR))
         return val_str(afmt(I, "%s%s", to_str(I, a), to_str(I, b)));
+    if (op == TK_STAR && (a.kind == VAL_STR || b.kind == VAL_STR)) {
+        bool a_str = a.kind == VAL_STR;
+        value_t sv = a_str ? a : b;
+        value_t nv = a_str ? b : a;
+        return val_str(str_repeat(I, sv.as.s, to_int(nv)));
+    }
     if (op == TK_POWER) {
         double r = pow(to_float(a), to_float(b));
         if (a.kind == VAL_INT && b.kind == VAL_INT && r == floor(r) && fabs(r) < 9.2e18)
@@ -674,6 +707,16 @@ value_t arith(interp_t *I, ast_node_t *n, token_kind_t op, value_t a, value_t b)
         case TK_PERCENT:
             if (y == 0) rt_error(I, n, "modulo by zero");
             return val_int((x == INT64_MIN && y == -1) ? 0 : x % y);
+        case TK_AMP:
+            return val_int((int64_t)((uint64_t)x & (uint64_t)y));
+        case TK_PIPE:
+            return val_int((int64_t)((uint64_t)x | (uint64_t)y));
+        case TK_CARET:
+            return val_int((int64_t)((uint64_t)x ^ (uint64_t)y));
+        case TK_SHL:
+            return val_int((int64_t)((uint64_t)x << ((uint64_t)y & 63)));
+        case TK_SHR:
+            return val_int(x >> ((uint64_t)y & 63));
         default:
             break;
         }

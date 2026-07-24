@@ -195,6 +195,22 @@ if want fmt; then
         done
     done
 fi
+if want ssl; then
+    jobs="$WORK/.jobs-ssl.$$"
+    : >"$jobs"
+    for lang in $LANGS; do
+        [ -d "tests/$lang/ssl" ] || continue
+        for f in tests/"$lang"/ssl/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            case "$name" in _*) continue ;; esac
+            exp="tests/$lang/ssl/$name.out"
+            [ -f "$exp" ] || continue
+            printf 'ssl/%s/%s\t%s\t%s\t%s\t-\n' "$lang" "$name" "$f" "$lang" "$exp" >>"$jobs"
+        done
+    done
+    run_batch "$jobs"
+fi
 if want db; then
     for lang in $LANGS; do
         [ -d "tests/$lang/db" ] || continue
@@ -253,6 +269,98 @@ if want llvm; then
         else
             echo "SKIP llvm/$lang/* (LLVM toolchain unavailable: 'salam llvm --jit' probe failed)"
         fi
+    done
+fi
+if want examples; then
+    jobs="$WORK/.jobs-examples.$$"
+    : >"$jobs"
+    for lang in $LANGS; do
+        [ -d "tests/$lang/examples" ] || continue
+        while IFS= read -r f; do
+            case "$(basename "$f")" in _*) continue ;; esac
+            rel="${f#tests/"$lang"/examples/}"
+            name="${rel%.salam}"
+            exp="tests/$lang/examples/$name.out"
+            [ -f "$exp" ] || continue
+            printf 'examples/%s/%s\t%s\t%s\t%s\t-\n' "$lang" "$name" "$f" "$lang" "$exp" >>"$jobs"
+        done <<EOF
+$(find "tests/$lang/examples" -name '*.salam' | sort)
+EOF
+    done
+    run_batch "$jobs"
+
+    for lang in $LANGS; do
+        [ -d "tests/$lang/examples" ] || continue
+        while IFS= read -r f; do
+            case "$(basename "$f")" in _*) continue ;; esac
+            rel="${f#tests/"$lang"/examples/}"
+            name="${rel%.salam}"
+            base="tests/$lang/examples/$name"
+            expf="$base.expect"
+            [ -f "$expf" ] || continue
+            id=$(echo "$name" | tr '/ ' '__')
+            jobdir="$WORK/exjob_${id}"
+            mkdir -p "$jobdir"
+            fabs="$(pwd)/$f"
+            exe="$jobdir/a.exe"
+            (cd "$jobdir" && "$SALAM" build "$fabs" --output="$exe" --no-color --log-level=error --lang="$lang") >/dev/null 2>&1
+            if [ -x "$exe" ]; then
+                got=$(timeout 20 "$exe" </dev/null 2>&1 | tr -d '\r')
+            else
+                html="$jobdir/a.html"
+                (cd "$jobdir" && "$SALAM" web "$fabs" --output="$html" --no-color --log-level=error --lang="$lang") >/dev/null 2>&1
+                got=$([ -f "$html" ] && tr -d '\r' <"$html")
+            fi
+            rm -rf "$jobdir"
+            ok=1
+            missing=""
+            while IFS= read -r line || [ -n "$line" ]; do
+                [ -z "$line" ] && continue
+                case "$got" in
+                *"$line"*) ;;
+                *)
+                    ok=0
+                    missing="$line"
+                    ;;
+                esac
+            done <"$expf"
+            if [ "$ok" -eq 1 ]; then
+                echo "PASS examples/$lang/$name"
+                pass=$((pass + 1))
+            else
+                echo "FAIL examples/$lang/$name (missing expected: $missing)"
+                fail=$((fail + 1))
+            fi
+        done <<EOF
+$(find "tests/$lang/examples" -name '*.salam' | sort)
+EOF
+    done
+
+    for lang in $LANGS; do
+        [ -d "tests/$lang/examples" ] || continue
+        while IFS= read -r f; do
+            case "$(basename "$f")" in _*) continue ;; esac
+            rel="${f#tests/"$lang"/examples/}"
+            name="${rel%.salam}"
+            base="tests/$lang/examples/$name"
+            [ -f "$base.buildonly" ] || continue
+            id=$(echo "$name" | tr '/ ' '__')
+            jobdir="$WORK/exjob_${id}"
+            mkdir -p "$jobdir"
+            fabs="$(pwd)/$f"
+            exe="$jobdir/a.exe"
+            (cd "$jobdir" && "$SALAM" build "$fabs" --output="$exe" --no-color --log-level=error --lang="$lang") >/dev/null 2>&1
+            if [ -x "$exe" ]; then
+                echo "PASS examples/$lang/$name (build)"
+                pass=$((pass + 1))
+            else
+                echo "FAIL examples/$lang/$name (build failed)"
+                fail=$((fail + 1))
+            fi
+            rm -rf "$jobdir"
+        done <<EOF
+$(find "tests/$lang/examples" -name '*.salam' | sort)
+EOF
     done
 fi
 echo "----------------------------------------"

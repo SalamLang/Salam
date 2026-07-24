@@ -27,6 +27,7 @@ typedef enum {
     PF_U32,
     PF_I64,
     PF_U64,
+    PF_SIZE,
     PF_F64,
     PF_BOOL,
     PF_CHAR

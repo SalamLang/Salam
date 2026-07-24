@@ -90,6 +90,8 @@ struct ast_node {
     bool is_mut;
     bool is_pointer;
     bool synthetic;
+    bool file_boundary; /* first top-level node merged in from a package file;
+                         * resets per-file top-level ordering checks */
     bool is_extern;
     bool is_variadic;
     bool is_dyn;

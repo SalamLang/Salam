@@ -45,6 +45,9 @@ static void check_pub_order(sema_t *s, vec_t *list)
     size_t i = 0;
     for (; i < list->len; i++) {
         ast_node_t *d = (ast_node_t *)list->data[i];
+        /* Each merged package file has its own public section, so the "private
+         * functions before the first pub function" rule restarts here. */
+        if (d && d->file_boundary) first_pub = NULL;
         if (!d || d->synthetic || d->kind != AST_FUNC_DEF) continue;
         if (d->is_extern && !d->a) continue; /* body-less prototype, not a real def */
         /* The program's entry point is conventionally placed last regardless
@@ -77,6 +80,14 @@ void sema_check_toplevel_order(sema_t *s, ast_node_t *program)
     size_t i = 0;
     for (; i < program->list.len; i++) {
         ast_node_t *d = (ast_node_t *)program->list.data[i];
+        /* A merged package file starts its own import/const/var/type/func
+         * sections; restart the phase tracking so each file is validated as if
+         * it were compiled on its own. */
+        if (d && d->file_boundary) {
+            max_phase = ORDER_IMPORT;
+            memset(first_of, 0, sizeof(first_of));
+            memset(have_first, 0, sizeof(have_first));
+        }
         if (!d || d->synthetic) continue;
         order_phase_t p = order_phase_of(d);
         if (p == ORDER_NONE) continue;

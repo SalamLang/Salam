@@ -176,10 +176,6 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
             break;
         }
         if (n->a && cg->fn_defers.len > 0) {
-            /* The return expression may read a variable that a deferred
-             * statement frees/mutates (e.g. `defer v.free() ... ret f(v)`),
-             * so it must be fully evaluated into a temporary before defers
-             * run, not after. */
             const char *expr = cg_expr(cg, n->a);
             const char *ts = n->a->type_str;
             int t = ++cg->tmpn;

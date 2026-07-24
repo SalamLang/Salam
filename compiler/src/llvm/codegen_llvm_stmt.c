@@ -25,11 +25,6 @@ static void ll_emit_defers(ll_t *ll)
 
 void ll_emit_return(ll_t *ll, ast_node_t *value)
 {
-    /* The return expression must be fully evaluated (SSA value materialized)
-     * before deferred statements run, since a defer may free/mutate a
-     * variable the return expression reads (e.g. `defer v.free() ... ret
-     * f(v)`). Emitting defers first would run that cleanup before the
-     * value is even computed. */
     if (ll->match_result_ptr) {
         if (value) {
             const char *v = ll_conv(ll, ll_expr(ll, value), ll->match_result_ts);

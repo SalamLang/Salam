@@ -15,7 +15,10 @@ mkdir -p "$DIST/bin" "$DIST/doc" "$DIST/examples"
 cp salam "$DIST/bin/" 2>/dev/null || cp salam.exe "$DIST/bin/"
 cp ../README.md "$DIST/" 2>/dev/null || true
 cp doc/*.md "$DIST/doc/" 2>/dev/null || true
-cp -r ../examples/en ../examples/fa "$DIST/examples/" 2>/dev/null || true
+for lang in en fa; do
+    cp -r "tests/$lang/examples" "$DIST/examples/$lang" 2>/dev/null || true
+done
+find "$DIST/examples" \( -name '*.out' -o -name '*.expect' -o -name '*.buildonly' \) -delete 2>/dev/null || true
 echo ">> packaging"
 (cd dist && tar -czf "salam-$VERSION-$OS.tar.gz" "salam-$VERSION-$OS") 2>/dev/null &&
     echo "   dist/salam-$VERSION-$OS.tar.gz" ||

@@ -19,41 +19,18 @@
  * Top-level statement ordering:
  *   import/link  ->  const  ->  var  ->  type/struct/enum/interface/impl  ->  func
  * Sections may be empty, but once a later section starts, nothing from an
- * earlier section may appear again.
+ * earlier section may appear again. Phase classification lives in
+ * ast_toplevel_order_phase() (ast/ast.c) so the formatter's order-fixing
+ * pass can reuse the exact same rules.
  */
-typedef enum {
-    ORDER_IMPORT = 0,
-    ORDER_CONST = 1,
-    ORDER_VAR = 2,
-    ORDER_TYPEDEF = 3,
-    ORDER_FUNC = 4,
-    ORDER_NONE = -1
-} order_phase_t;
-
-static order_phase_t order_phase_of(const ast_node_t *d)
-{
-    if (d->is_extern && d->kind == AST_VAR_DECL) return ORDER_IMPORT;
-    if (d->is_extern && d->kind == AST_FUNC_DEF && !d->a) return ORDER_IMPORT;
-    switch (d->kind) {
-    case AST_IMPORT:
-    case AST_LINK:
-        return ORDER_IMPORT;
-    case AST_CONST_DECL:
-        return ORDER_CONST;
-    case AST_VAR_DECL:
-        return ORDER_VAR;
-    case AST_TYPE_ALIAS:
-    case AST_STRUCT_DEF:
-    case AST_ENUM_DEF:
-    case AST_INTERFACE_DEF:
-    case AST_IMPL_DEF:
-        return ORDER_TYPEDEF;
-    case AST_FUNC_DEF:
-        return ORDER_FUNC;
-    default:
-        return ORDER_NONE;
-    }
-}
+typedef ast_order_phase_t order_phase_t;
+#define ORDER_IMPORT AST_ORDER_IMPORT
+#define ORDER_CONST AST_ORDER_CONST
+#define ORDER_VAR AST_ORDER_VAR
+#define ORDER_TYPEDEF AST_ORDER_TYPEDEF
+#define ORDER_FUNC AST_ORDER_FUNC
+#define ORDER_NONE AST_ORDER_NONE
+#define order_phase_of ast_toplevel_order_phase
 
 static const char *safe_name(const ast_node_t *d)
 {

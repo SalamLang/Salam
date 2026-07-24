@@ -841,6 +841,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     ast_node_t *prog = NULL;
     parser_run(s->a, s->log, toks, &prog);
     cc_prune_program(s->a, s->log, path, s->cc, prog);
+    sema_check_toplevel_order_in_file(s, prog, path);
 
     {
         const char *files[256];
@@ -854,6 +855,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
             ast_node_t *fprog = NULL;
             parser_run(s->a, s->log, ftoks, &fprog);
             cc_prune_program(s->a, s->log, files[fi], s->cc, fprog);
+            sema_check_toplevel_order_in_file(s, fprog, files[fi]);
             salam_merge_program(s->a, prog, fprog);
         }
     }
@@ -881,7 +883,6 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     vec_push(s->a, &s->loading, CONST_CAST(path));
     load_imports(s, prog);
     sema_collect(s, prog);
-    sema_check_toplevel_order(s, prog);
     sema_check_pass(s, prog);
     s->loading.len--;
     s->in_pkg = save_in_pkg;

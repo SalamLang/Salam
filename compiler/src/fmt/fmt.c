@@ -407,9 +407,8 @@ static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
 
     if (fmt_is_open(k)) {
         bool ml = fmt_bracket_multiline(toks, i);
-        bool prev_is_value =
-            c->prev != NULL &&
-            (fmt_is_value_end(c->prev->kind) || fmt_is_overload_symbol(c->prev->kind));
+        bool prev_is_value = c->prev != NULL && (fmt_is_value_end(c->prev->kind) ||
+                                                 fmt_is_overload_symbol(c->prev->kind));
         bool is_lambda =
             k == TK_LPAREN && !prev_is_value && fmt_lambda_header_at(toks, i);
         if (c->ml_top < FMT_MAX_BRACKET) {

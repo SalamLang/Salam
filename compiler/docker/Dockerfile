@@ -21,6 +21,7 @@ RUN for i in 1 2 3 4 5; do \
             llvm${LLVM_VERSION} \
             bash \
             git \
+            curl \
             sqlite-dev \
             sqlite-static \
             mariadb-connector-c-dev \

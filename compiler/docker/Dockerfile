@@ -33,6 +33,10 @@ RUN for i in 1 2 3 4 5; do \
             npm \
         && break; \
         echo "apk add attempt $i failed; retrying in 5s..." >&2; sleep 5; \
+        if [ "$i" = 5 ]; then \
+            echo "apk add failed after 5 attempts; aborting build." >&2; \
+            exit 1; \
+        fi; \
     done
 
 RUN node -v && npm -v

@@ -287,44 +287,66 @@ if want llvm; then
         fi
     done
 fi
-if want examples; then
-    jobs="$WORK/.jobs-examples.$$"
+# Categories that hold example projects (possibly nested, e.g. apps/webview/*
+# or games/pacman/src/*): discovered recursively and matched by sibling
+# .out/.expect/.buildonly files, unlike the flat sections above.
+EXAMPLE_DIRS="apps basics data editor-selected features games interop stdlib types webframework"
+
+want_example() {
+    want "$1" && return 0
+    for s in $SECTIONS; do [ "$s" = examples ] && return 0; done
+    return 1
+}
+
+run_example_dir() {
+    dir="$1"
+    jobs="$WORK/.jobs-$dir.$$"
     : >"$jobs"
     for lang in $LANGS; do
-        [ -d "tests/$lang/examples" ] || continue
+        [ -d "tests/$lang/$dir" ] || continue
         while IFS= read -r f; do
             case "$(basename "$f")" in _*) continue ;; esac
-            rel="${f#tests/"$lang"/examples/}"
+            rel="${f#tests/"$lang"/"$dir"/}"
             name="${rel%.salam}"
-            exp="tests/$lang/examples/$name.out"
+            exp="tests/$lang/$dir/$name.out"
             [ -f "$exp" ] || continue
-            printf 'examples/%s/%s\t%s\t%s\t%s\t-\n' "$lang" "$name" "$f" "$lang" "$exp" >>"$jobs"
+            printf '%s/%s/%s\t%s\t%s\t%s\t-\n' "$dir" "$lang" "$name" "$f" "$lang" "$exp" >>"$jobs"
         done <<EOF
-$(find "tests/$lang/examples" -name '*.salam' | sort)
+$(find "tests/$lang/$dir" -name '*.salam' | sort)
 EOF
     done
     run_batch "$jobs"
 
     for lang in $LANGS; do
-        [ -d "tests/$lang/examples" ] || continue
+        [ -d "tests/$lang/$dir" ] || continue
         while IFS= read -r f; do
             case "$(basename "$f")" in _*) continue ;; esac
-            rel="${f#tests/"$lang"/examples/}"
+            rel="${f#tests/"$lang"/"$dir"/}"
             name="${rel%.salam}"
-            base="tests/$lang/examples/$name"
+            base="tests/$lang/$dir/$name"
             expf="$base.expect"
             [ -f "$expf" ] || continue
             id=$(echo "$name" | tr '/ ' '__')
-            jobdir="$WORK/exjob_${id}"
+            jobdir="$WORK/exjob_${dir}_${id}"
             mkdir -p "$jobdir"
             fabs="$(pwd)/$f"
             exe="$jobdir/a.exe"
-            (cd "$jobdir" && "$SALAM" build "$fabs" --output="$exe" --no-color --log-level=error --lang="$lang") >/dev/null 2>&1
+            btry=1
+            while [ ! -x "$exe" ] && [ "$btry" -le 3 ]; do
+                [ "$btry" -gt 1 ] && sleep "$btry"
+                (cd "$jobdir" && "$SALAM_ABS" build "$fabs" --output="$exe" --no-color --log-level=error --lang="$lang") >/dev/null 2>&1
+                btry=$((btry + 1))
+            done
             if [ -x "$exe" ]; then
                 got=$(timeout 20 "$exe" </dev/null 2>&1 | tr -d '\r')
             else
                 html="$jobdir/a.html"
-                (cd "$jobdir" && "$SALAM" web "$fabs" --output="$html" --no-color --log-level=error --lang="$lang") >/dev/null 2>&1
+                wtry=1
+                while [ ! -f "$html" ] && [ "$wtry" -le 3 ]; do
+                    [ "$wtry" -gt 1 ] && sleep "$wtry"
+                    (cd "$jobdir" && "$SALAM_ABS" web "$fabs" --output="$html" --no-color --log-level=error --lang="$lang") >/dev/null 2>&1
+                    wtry=$((wtry + 1))
+                done
                 got=$([ -f "$html" ] && tr -d '\r' <"$html")
             fi
             rm -rf "$jobdir"
@@ -341,44 +363,56 @@ EOF
                 esac
             done <"$expf"
             if [ "$ok" -eq 1 ]; then
-                echo "PASS examples/$lang/$name"
+                echo "PASS $dir/$lang/$name"
                 pass=$((pass + 1))
             else
-                echo "FAIL examples/$lang/$name (missing expected: $missing)"
+                echo "FAIL $dir/$lang/$name (missing expected: $missing)"
                 fail=$((fail + 1))
             fi
         done <<EOF
-$(find "tests/$lang/examples" -name '*.salam' | sort)
+$(find "tests/$lang/$dir" -name '*.salam' | sort)
 EOF
     done
 
     for lang in $LANGS; do
-        [ -d "tests/$lang/examples" ] || continue
+        [ -d "tests/$lang/$dir" ] || continue
         while IFS= read -r f; do
             case "$(basename "$f")" in _*) continue ;; esac
-            rel="${f#tests/"$lang"/examples/}"
+            rel="${f#tests/"$lang"/"$dir"/}"
             name="${rel%.salam}"
-            base="tests/$lang/examples/$name"
+            base="tests/$lang/$dir/$name"
             [ -f "$base.buildonly" ] || continue
             id=$(echo "$name" | tr '/ ' '__')
-            jobdir="$WORK/exjob_${id}"
+            jobdir="$WORK/exjob_${dir}_${id}"
             mkdir -p "$jobdir"
             fabs="$(pwd)/$f"
             exe="$jobdir/a.exe"
-            (cd "$jobdir" && "$SALAM" build "$fabs" --output="$exe" --no-color --log-level=error --lang="$lang") >/dev/null 2>&1
+            buildlog="$jobdir/build.log"
+            btry=1
+            while [ ! -x "$exe" ] && [ "$btry" -le 3 ]; do
+                [ "$btry" -gt 1 ] && sleep "$btry"
+                (cd "$jobdir" && "$SALAM_ABS" build "$fabs" --output="$exe" --no-color --log-level=error --lang="$lang") >"$buildlog" 2>&1
+                btry=$((btry + 1))
+            done
             if [ -x "$exe" ]; then
-                echo "PASS examples/$lang/$name (build)"
+                echo "PASS $dir/$lang/$name (build)"
                 pass=$((pass + 1))
             else
-                echo "FAIL examples/$lang/$name (build failed)"
+                msg="FAIL $dir/$lang/$name (build failed)
+$(sed 's/^/  /' "$buildlog" 2>/dev/null | head -20)"
+                printf '%s\n' "$msg"
                 fail=$((fail + 1))
             fi
             rm -rf "$jobdir"
         done <<EOF
-$(find "tests/$lang/examples" -name '*.salam' | sort)
+$(find "tests/$lang/$dir" -name '*.salam' | sort)
 EOF
     done
-fi
+}
+
+for dir in $EXAMPLE_DIRS; do
+    want_example "$dir" && run_example_dir "$dir"
+done
 echo "----------------------------------------"
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

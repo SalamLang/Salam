@@ -248,7 +248,7 @@ repository root is mounted at `/work` so the example programs are reachable:
 
 ```sh
 docker compose -f compiler/docker/docker-compose.yml build prod
-docker compose -f compiler/docker/docker-compose.yml run --rm prod build compiler/tests/en/examples/basics/hello.salam --output=hello
+docker compose -f compiler/docker/docker-compose.yml run --rm prod build compiler/tests/en/basics/hello.salam --output=hello
 docker compose -f compiler/docker/docker-compose.yml run --rm prod layout build page.salam --inline
 docker compose -f compiler/docker/docker-compose.yml run --rm prod --help
 ```

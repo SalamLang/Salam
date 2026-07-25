@@ -327,11 +327,6 @@ $ bun run --filter='*' --parallel dev
 @workspace/editor:dev        |   VITE v8.1.3  ready in 65 ms
 @workspace/editor:dev        |
 @workspace/editor:dev        |   ➜  Local:   http://127.0.0.1:55001/
-@workspace/vercel-editor:dev |
-@workspace/vercel-editor:dev |   VITE v8.1.3  ready in 91 ms
-@workspace/vercel-editor:dev |
-@workspace/vercel-editor:dev |   ➜  Local:   http://localhost:5173/
-@workspace/vercel-editor:dev |   ➜  Network: use --host to expose
 @workspace/runner:dev        |
 @workspace/runner:dev        |  ⛅️ wrangler 4.107.0
 @workspace/runner:dev        | ────────────────────
@@ -354,8 +349,7 @@ salam-monorepo/
 ├── extensions/
 │   └── vscode/
 ├── pages/
-├── runner/
-└── vercel-editor/
+└── runner/
 ```
 
 #### Root Configuration Files
@@ -377,8 +371,7 @@ dependency updates.
       "editor",
       "extensions/vscode",
       "pages",
-      "runner",
-      "vercel-editor"
+      "runner"
     ],
     "catalog": {
       "react": "^19.2.7",
@@ -401,10 +394,8 @@ dependency updates.
     "docs:myst": "bun run myst start",
     "dev:pages": "bun run --filter='@workspace/pages' dev",
     "dev:runner": "bun run --filter='@workspace/runner' dev",
-    "dev:vercel": "bun run --filter='@workspace/vercel-editor' dev",
     "build:all": "bun run --filter='*' --if-present build",
     "build:myst": "bun run myst build --html",
-    "build:vercel": "bun run --filter='@workspace/vercel-editor' build",
     "update:deps": "bun update -i -r",
     "clean": "rm -rf node_modules **/node_modules .bun-cache",
     "generate": "bun run --filter='@workspace/runner' generate",
@@ -422,10 +413,9 @@ dependency updates.
 Useful root commands:
 
 - `bun run dev:all`: start every workspace that exposes a `dev` script
-- `bun run dev:editor`, `bun run dev:pages`, `bun run dev:runner`, and
-  `bun run dev:vercel`: start one workspace at a time
+- `bun run dev:editor`, `bun run dev:pages`, and `bun run dev:runner`:
+  start one workspace at a time
 - `bun run build:all`: run every workspace `build` script that exists
-- `bun run build:vercel`: build the React/Vite app in `vercel-editor/`
 - `bun run docs:myst`: start the [MyST](https://mystmd.org/) documentation dev server
 - `bun run build:myst`: build the MyST documentation to static HTML (`_build/html/`)
 - `bun run generate`: refresh Cloudflare Wrangler types for `runner/`
@@ -683,7 +673,6 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[prek](https://prek.j178.dev/)** | Git hook manager used by Salam. Hooks are defined in `prek.toml` (standard and manual stages) and `prek-audit.toml` (security-focused audit checks). |
 | **prek-audit.toml** | prek configuration file for security-focused audit hooks. Run separately with `prek run --all-files --config prek-audit.toml`. |
 | **[Prettier](https://prettier.io/)** | Opinionated code formatter for JavaScript, TypeScript, CSS, and JSON. Run as a prek hook. |
-| **[React](https://react.dev/)** | JavaScript library for building user interfaces with a component model. Used in the `vercel-editor/` workspace. |
 | **[Read the Docs](https://readthedocs.org/)** | Free documentation hosting platform. Salam's MyST docs are automatically built and published there via `.readthedocs.yaml`. |
 | **[REPL](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop)** | Read-Eval-Print Loop, an interactive session where you type expressions and see results immediately. `salam cli` starts a general REPL; `salam layout` starts a layout REPL. |
 | **[RTL (Right-to-Left)](https://en.wikipedia.org/wiki/Right-to-left_script)** | Text direction used by Arabic and Persian scripts. The Salam web playground supports RTL and switches direction when the Persian language is selected. |

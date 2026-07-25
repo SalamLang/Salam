@@ -38,7 +38,11 @@ run_batch() {
         (
             IFS="	"
             set -- $line
-            label="$1"; f="$2"; lang="$3"; exp="$4"; extra="$5"
+            label="$1"
+            f="$2"
+            lang="$3"
+            exp="$4"
+            extra="$5"
             unset IFS
             sh "$runner" "$SALAM_ABS" "$WORK" "$label" "$f" "$lang" "$exp" $extra
         ) >"$out" 2>&1 &

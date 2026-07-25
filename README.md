@@ -374,18 +374,10 @@ dependency updates.
       "runner"
     ],
     "catalog": {
-      "react": "^19.2.7",
-      "react-dom": "^19.2.7",
-      "tailwindcss": "^4.3.2",
-      "@tailwindcss/vite": "^4.3.2",
-      "@vitejs/plugin-react": "^6.0.3",
-      "vite": "^8.1.3",
       "typescript": "^6.0.3",
       "wrangler": "^4.107.0",
       "@types/bun": "latest",
-      "@types/node": "^26.1.0",
-      "@types/react": "^19.2.17",
-      "@types/react-dom": "^19.2.3"
+      "@types/node": "^26.1.0"
     }
   },
   "scripts": {
@@ -402,10 +394,8 @@ dependency updates.
     "typecheck": "bun run --filter='@workspace/runner' typecheck"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "catalog:",
-    "@vitejs/plugin-react": "catalog:",
-    "mystmd": "^1.10.1",
-    "vite": "catalog:"
+    "@biomejs/biome": "^2.5.4",
+    "mystmd": "^1.10.1"
   }
 }
 ```
@@ -680,11 +670,10 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[SemVer (Semantic Versioning)](https://semver.org/)** | Version numbering scheme (`MAJOR.MINOR.PATCH`). Used by Bun's interactive update tooling and GitHub releases. |
 | **[shfmt](https://github.com/mvdan/sh)** | Shell script formatter. Run as a prek manual-stage hook to normalise indentation and style in `.sh` files. |
 | **[Super-Linter](https://github.com/super-linter/super-linter)** | GitHub Actions workflow that runs a broad set of language-specific linters across the repository in CI. |
-| **[Tailwind CSS](https://tailwindcss.com/)** | Utility-first CSS framework. Used in the Salam monorepo workspaces; integrated via the `@tailwindcss/vite` plugin. |
 | **[TCC (Tiny C Compiler)](https://bellard.org/tcc/)** | Lightweight, fast C compiler. The default backend used by Salam's quick-build script. |
 | **[Tree-walking interpreter](https://en.wikipedia.org/wiki/Interpreter_(computing))** | An interpreter that evaluates the AST directly without first compiling to native code. Used by the web playground and via `salam exec` / `salam run --interp` for pure-compute programs. |
 | **[TUI (Terminal User Interface)](https://en.wikipedia.org/wiki/Text-based_user_interface)** | Interactive, keyboard-driven interface rendered in the terminal. Bun's `bun update -i` flag opens a TUI for selecting which packages to upgrade. |
-| **[TypeScript](https://www.typescriptlang.org/)** | Typed superset of JavaScript that compiles to plain JavaScript. Used in the `runner/` and `vercel-editor/` workspaces. |
+| **[TypeScript](https://www.typescriptlang.org/)** | Typed superset of JavaScript that compiles to plain JavaScript. Used in the `runner/` and `extensions/vscode/` workspaces. |
 | **[Upstream](https://en.wikipedia.org/wiki/Upstream_(software_development))** | The original `SalamLang/Salam` repository. Contributors add it as a Git remote (`git remote add upstream …`) to keep their fork in sync. |
 | **[Virtual filesystem](https://en.wikipedia.org/wiki/Virtual_file_system)** | Emscripten's in-browser filesystem layer. `build-wasm.sh` preloads the `std/` directory into it so import resolution and the layout schema work when running Salam in the browser. |
 | **[Vite](https://vite.dev/)** | Frontend build tool and dev server. Used in the Salam monorepo to serve the editor and pages workspaces. |

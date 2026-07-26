@@ -1,0 +1,1716 @@
+// Smoke test for the semantic port, stages 5a + 5b:
+// 5a — type interning/equality, type_to_string, scope push/pop + shadowing,
+// overload-set storage, builtin registry, AST type-node resolution.
+// 5b — the real pipeline front (source -> lexer -> parser -> condcomp ->
+// Run with 5c/5d body-check stubs): decl collection, top-level ordering
+// errors (E083..E088), local/std/dotted imports through SALAM_STD, package
+// directory merge, E008 circular/missing imports, SymbolsToXml.
+// Expectations mirror compiler/src/semantic/*.c behavior exactly.
+package main
+
+import os
+import str
+import testing
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import dg "../diag.salam"
+import src "../source.salam"
+import lx "../lexer.salam"
+import ps "../parser.salam"
+import cc "../condcomp.salam"
+import lp "../langpack.salam"
+import x "../xml.salam"
+import sm "../semantic.salam"
+
+// Builds a bare AST_TYPE node with a name.
+func type_node(a &: at.Ast, name: str): int:
+    id := at.NewNode(a, at.AST_TYPE)
+    at.SetName(a, id, name)
+    ret id
+end
+
+// Adds an integer-literal dimension to a type node.
+func add_dim_lit(a &: at.Ast, tnode: int, n: int):
+    dim := at.NewNode(a, at.AST_LITERAL)
+    at.SetTokenValue(a, dim, tok.ValueInt(n as u64))
+    at.AddDim(a, tnode, dim)
+end
+
+// ---------------------------------------------------------------------------
+// 5b helpers — the real pipeline front on a file on disk.
+// ---------------------------------------------------------------------------
+
+// src.Load -> lx.Detect/Run -> ps.Run -> cc.PruneProgram -> sm.Run.
+// `s` must come from sm.New(lgr, path, "en"); a condcomp table for the host
+// target is installed here (SetCc). Returns sm.Run's ok; prog_out receives
+// the program NodeId (5c tests navigate the decorated AST).
+func run_sema_prog(path: str, a &: at.Ast, s &: sm.Sema, prog_out &: int): bool:
+    mut sf := src.New()
+    if !src.Load(path, sf):
+        ret false
+    end
+    pack := lx.Detect(sf, lp.Load("en"))
+    mut toks := tok.StreamNew(path)
+    _l := lx.Run(s.log, pack, sf, toks)
+    mut prog := 0
+    _p := ps.Run(s.log, toks, a, prog)
+    tok.StreamFree(toks)
+    sm.SetCc(s, cc.TableBuild("", Vector {} as Vector<str>))
+    _c := cc.PruneProgram(a, s.log, path, s.cctab, prog)
+    prog_out = prog
+    ret sm.Run(s, a, prog)
+end
+
+func run_sema_file(path: str, a &: at.Ast, s &: sm.Sema): bool:
+    mut prog := 0
+    ret run_sema_prog(path, a, s, prog)
+end
+
+// First collected diagnostic body with the given code ("" = none).
+func find_diag_body(s &: sm.Sema, code: int): str:
+    repeat dg.Count(s.diag) with i:
+        d := dg.ItemAt(s.diag, i)
+        if d.code == code:
+            ret d.body
+        end
+    end
+    ret ""
+end
+
+// A diagnostic with this exact code AND body exists.
+func has_diag(s &: sm.Sema, code: int, body: str): bool:
+    repeat dg.Count(s.diag) with i:
+        d := dg.ItemAt(s.diag, i)
+        if d.code == code && str.Equals(d.body, body):
+            ret true
+        end
+    end
+    ret false
+end
+
+// First child of `parent` whose node name matches (0 = none).
+func find_child_named(a &: at.Ast, parent: int, name: str): int:
+    repeat at.ChildCount(a, parent) with i:
+        cid := at.Child(a, parent, i)
+        if str.Equals(at.Get(a, cid).name, name):
+            ret cid
+        end
+    end
+    ret 0
+end
+
+// ---------------------------------------------------------------------------
+// 5b tests
+// ---------------------------------------------------------------------------
+
+func test_5b():
+    tmp := "compiler/tests_port/tmp_sema"
+    _m1 := os.Mkdir(tmp)
+    _m2 := os.Mkdir(tmp + "/pkgd")
+    lgr := lg.New(lg.LOG_OFF, false)
+
+    // ----- stdlib root resolution ($SALAM_STD) + path_normalize quirks -----
+    root := sm.GetStdlibRoot()
+    testing.AssertTrue(str.Len(root) > 0)
+    testing.AssertTrue(os.Exists(root + "/std/str/str.salam"))
+    testing.AssertEqStr(sm.ResolveImport("", "str"), root + "/std/str/str.salam")
+    testing.AssertEqStr(sm.ResolveImport("", "collections"),
+                        root + "/std/collections/collections.salam")
+    // ".." is NOT collapsed; "./" and "/./" are (C path_normalize quirks).
+    testing.AssertEqStr(sm.ResolveImport("a/b", "../c.salam"), "a/b/../c.salam")
+    testing.AssertEqStr(sm.ResolveImport("dir", "./x.salam"), "dir/x.salam")
+    testing.AssertEqStr(sm.ResolveImport("", "./x.salam"), "x.salam")
+
+    // ----- (a) declaration collection -----
+    decl_src := "package demo\n\n" +
+        "const ANSWER := 42\n\n" +
+        "mut counter := 0\n\n" +
+        "type Id = int\n\n" +
+        "struct Point:\n" +
+        "    pub x: int = 0\n" +
+        "    pub y: i64 = 0\n" +
+        "    pub func sum(): int:\n" +
+        "        ret this.x\n" +
+        "    end\n" +
+        "end\n\n" +
+        "enum Color:\n" +
+        "    Red, Green = 5, Blue\n" +
+        "end\n\n" +
+        "interface Shape:\n" +
+        "    func area(): f64\n" +
+        "end\n\n" +
+        "impl Shape on int:\n" +
+        "    func area(): f64:\n" +
+        "        ret 0.0\n" +
+        "    end\n" +
+        "end\n\n" +
+        "func vuse(_v: Vector<int>): int:\n" + // _v: E062 is live since 5d
+        "    ret 0\n" +
+        "end\n\n" +
+        "func add(p: int, q: int): int:\n" +
+        "    ret p + q\n" +
+        "end\n\n" +
+        "func add(p: f64, q: f64): f64:\n" +
+        "    ret p + q\n" +
+        "end\n\n" +
+        "pub func Twice(v: int): int:\n" +
+        "    ret v * 2\n" +
+        "end\n"
+    _w1 := os.WriteFile(tmp + "/decl.salam", decl_src)
+    mut a1 := at.NewAst()
+    mut s1 := sm.New(lgr, tmp + "/decl.salam", "en")
+    ok1 := run_sema_file(tmp + "/decl.salam", a1, s1)
+    testing.AssertTrue(ok1)
+    testing.AssertEqInt(dg.ErrorCount(s1.diag), 0)
+    testing.AssertEqStr(s1.pkg, "demo")
+
+    // struct + fields + method sig (non-main package -> C name demo_Point)
+    pt := sm.LookupLocal(s1, s1.global, "Point")
+    testing.AssertTrue(pt != 0)
+    ptv := sm.SymAt(s1, pt)
+    testing.AssertEqInt(ptv.kind, sm.SYM_STRUCT)
+    testing.AssertEqStr(sm.ToString(s1, ptv.ty), "demo_Point")
+    fxv := sm.SymAt(s1, sm.LookupLocal(s1, ptv.members, "x"))
+    testing.AssertEqInt(fxv.kind, sm.SYM_FIELD)
+    testing.AssertEqInt(fxv.ty, sm.TY_I32)
+    testing.AssertTrue(fxv.is_pub)
+    fyv := sm.SymAt(s1, sm.LookupLocal(s1, ptv.members, "y"))
+    testing.AssertEqInt(fyv.ty, sm.TY_I64)
+    msv := sm.SymAt(s1, sm.LookupLocal(s1, ptv.members, "sum"))
+    testing.AssertEqInt(msv.kind, sm.SYM_METHOD)
+    testing.AssertEqInt(msv.overloads.len(), 1)
+    sg1 := sm.SigAt(s1, msv.overloads.get(0)[0])
+    testing.AssertEqInt(sg1.ret_type, sm.TY_I32)
+    testing.AssertEqStr(sg1.mangled, "S_Point_sum__void")
+    testing.AssertEqInt(sg1.owner, pt)
+    testing.AssertEqInt(msv.ty, ptv.ty)
+
+    // enum members: Red=0, Green=5, Blue=6
+    cev := sm.SymAt(s1, sm.LookupLocal(s1, s1.global, "Color"))
+    testing.AssertEqInt(cev.kind, sm.SYM_ENUM)
+    testing.AssertEqInt(
+        sm.SymAt(s1, sm.LookupLocal(s1, cev.members, "Red")).enum_value as int, 0)
+    testing.AssertEqInt(
+        sm.SymAt(s1, sm.LookupLocal(s1, cev.members, "Green")).enum_value as int, 5)
+    testing.AssertEqInt(
+        sm.SymAt(s1, sm.LookupLocal(s1, cev.members, "Blue")).enum_value as int, 6)
+
+    // alias / const / global var
+    idv := sm.SymAt(s1, sm.LookupLocal(s1, s1.global, "Id"))
+    testing.AssertEqInt(idv.kind, sm.SYM_ALIAS)
+    testing.AssertEqInt(idv.ty, sm.TY_I32)
+    anv := sm.SymAt(s1, sm.LookupLocal(s1, s1.global, "ANSWER"))
+    testing.AssertEqInt(anv.kind, sm.SYM_CONST)
+    testing.AssertTrue(anv.has_ival)
+    testing.AssertEqInt(anv.ival as int, 42)
+    cnv := sm.SymAt(s1, sm.LookupLocal(s1, s1.global, "counter"))
+    testing.AssertEqInt(cnv.kind, sm.SYM_VAR)
+    testing.AssertTrue(cnv.is_mut)
+
+    // overloads + mangling + required count; pub flag
+    adv := sm.SymAt(s1, sm.LookupLocal(s1, s1.global, "add"))
+    testing.AssertEqInt(adv.kind, sm.SYM_FUNC)
+    testing.AssertEqInt(adv.overloads.len(), 2)
+    testing.AssertEqStr(sm.SigAt(s1, adv.overloads.get(0)[0]).mangled,
+                        "add__i32_i32")
+    testing.AssertEqStr(sm.SigAt(s1, adv.overloads.get(1)[0]).mangled,
+                        "add__f64_f64")
+    testing.AssertEqInt(sm.SigAt(s1, adv.overloads.get(0)[0]).required, 2)
+    testing.AssertTrue(sm.SymAt(s1, sm.LookupLocal(s1, s1.global, "Twice")).is_pub)
+
+    // interface + impl-on-primitive (impl@i32 owner symbol)
+    shv := sm.SymAt(s1, sm.LookupLocal(s1, s1.global, "Shape"))
+    testing.AssertEqInt(shv.kind, sm.SYM_INTERFACE)
+    arm := sm.SymAt(s1, sm.LookupLocal(s1, shv.members, "area"))
+    testing.AssertEqInt(arm.kind, sm.SYM_METHOD)
+    testing.AssertEqInt(sm.SigAt(s1, arm.overloads.get(0)[0]).ret_type, sm.TY_F64)
+    imo := sm.LookupLocal(s1, s1.global, sm.ImplOwnerKey("i32"))
+    testing.AssertTrue(imo != 0)
+    imv := sm.SymAt(s1, imo)
+    testing.AssertEqInt(imv.kind, sm.SYM_TYPEIMPL)
+    testing.AssertEqInt(imv.ty, sm.TY_I32)
+    testing.AssertTrue(sm.LookupLocal(s1, imv.members, "area") != 0)
+
+    // prelude (collections) got loaded by the Vector<int> parameter; std
+    // core was loaded implicitly by Run.
+    testing.AssertTrue(s1.prelude != 0)
+    testing.AssertTrue(sm.LookupLocal(s1, s1.prelude, "Vector") != 0)
+    testing.AssertTrue(sm.PackageCount(s1) > 0)
+
+    // symbol XML dump
+    mut w := x.New()
+    sm.SymbolsToXml(w, s1)
+    xml1 := x.Str(w)
+    testing.AssertContains(xml1, "<symbols errors=\"0\"")
+    testing.AssertContains(xml1, "kind=\"struct\" name=\"Point\"")
+    testing.AssertContains(xml1, "name=\"Green\" type=\"demo_Color\" value=\"5\"")
+    testing.AssertContains(xml1, "mangled=\"add__i32_i32\"")
+    x.Free(w)
+    sm.Free(s1)
+    at.FreeAst(a1)
+
+    // ----- (b) top-level ordering errors -----
+    // E083: import after a function
+    _w2 := os.WriteFile(tmp + "/ord1.salam",
+        "package ord1\n\nfunc f:\n    ret\nend\n\nimport str\n")
+    mut a2 := at.NewAst()
+    mut s2 := sm.New(lgr, tmp + "/ord1.salam", "en")
+    ok2 := run_sema_file(tmp + "/ord1.salam", a2, s2)
+    testing.AssertFalse(ok2)
+    testing.AssertEqInt(dg.ErrorCount(s2.diag), 1)
+    testing.AssertEqStr(find_diag_body(s2, 83),
+        "'import' must appear before any other top-level statement, right after the package declaration; 'f' (line 3) already starts the rest of the file")
+    sm.Free(s2)
+    at.FreeAst(a2)
+
+    // E085: global variable after a type definition
+    _w3 := os.WriteFile(tmp + "/ord2.salam",
+        "package ord2\n\nstruct S:\n    pub v: int = 0\nend\n\nmut g := 1\n")
+    mut a3 := at.NewAst()
+    mut s3 := sm.New(lgr, tmp + "/ord2.salam", "en")
+    _ok3 := run_sema_file(tmp + "/ord2.salam", a3, s3)
+    testing.AssertEqInt(dg.ErrorCount(s3.diag), 1)
+    testing.AssertEqStr(find_diag_body(s3, 85),
+        "global variable 'g' must be declared before any function or type definition; move it up near the top of the file, above 'S' (line 3)")
+    sm.Free(s3)
+    at.FreeAst(a3)
+
+    // E086: constant after a global variable
+    _w4 := os.WriteFile(tmp + "/ord3.salam",
+        "package ord3\n\nmut g := 1\n\nconst C := 2\n")
+    mut a4 := at.NewAst()
+    mut s4 := sm.New(lgr, tmp + "/ord3.salam", "en")
+    _ok4 := run_sema_file(tmp + "/ord3.salam", a4, s4)
+    testing.AssertEqInt(dg.ErrorCount(s4.diag), 1)
+    testing.AssertEqStr(find_diag_body(s4, 86),
+        "constant 'C' must be declared before global variables; move it above the variable section, before 'g' (line 3)")
+    sm.Free(s4)
+    at.FreeAst(a4)
+
+    // E084: constant after a type definition
+    _w5 := os.WriteFile(tmp + "/ord4.salam",
+        "package ord4\n\nstruct S:\n    pub v: int = 0\nend\n\nconst C := 2\n")
+    mut a5 := at.NewAst()
+    mut s5 := sm.New(lgr, tmp + "/ord4.salam", "en")
+    _ok5 := run_sema_file(tmp + "/ord4.salam", a5, s5)
+    testing.AssertEqInt(dg.ErrorCount(s5.diag), 1)
+    testing.AssertEqStr(find_diag_body(s5, 84),
+        "constant 'C' must be declared before any function or type definition; move it up near the top of the file with the other constants, above 'S' (line 3)")
+    sm.Free(s5)
+    at.FreeAst(a5)
+
+    // E087: struct after a function
+    _w6 := os.WriteFile(tmp + "/ord5.salam",
+        "package ord5\n\nfunc f:\n    ret\nend\n\nstruct S:\n    pub v: int = 0\nend\n")
+    mut a6 := at.NewAst()
+    mut s6 := sm.New(lgr, tmp + "/ord5.salam", "en")
+    _ok6 := run_sema_file(tmp + "/ord5.salam", a6, s6)
+    testing.AssertEqInt(dg.ErrorCount(s6.diag), 1)
+    testing.AssertEqStr(find_diag_body(s6, 87),
+        "'S' must be declared before any function definition; keep type, struct, enum, interface and impl declarations grouped above the functions, above 'f' (line 3)")
+    sm.Free(s6)
+    at.FreeAst(a6)
+
+    // E088: private function after the first pub function
+    _w7 := os.WriteFile(tmp + "/ord6.salam",
+        "package ord6\n\npub func A(v: int): int:\n    ret v\nend\n\nfunc b(v: int): int:\n    ret v\nend\n")
+    mut a7 := at.NewAst()
+    mut s7 := sm.New(lgr, tmp + "/ord6.salam", "en")
+    _ok7 := run_sema_file(tmp + "/ord6.salam", a7, s7)
+    testing.AssertEqInt(dg.ErrorCount(s7.diag), 1)
+    testing.AssertEqStr(find_diag_body(s7, 88),
+        "function 'b' must appear before 'pub' function 'A' (line 3): once a 'pub' function starts the public section, only other 'pub' functions may follow it, so callers can scan the end of the file for the public API")
+    sm.Free(s7)
+    at.FreeAst(a7)
+
+    // ----- (c) imports: local file with alias, std, dotted std -----
+    _w8 := os.WriteFile(tmp + "/util.salam",
+        "package util\n\npub func Twice(v: int): int:\n    ret v * 2\nend\n")
+    _w9 := os.WriteFile(tmp + "/imp.salam",
+        "package main\n\nimport u \"util.salam\"\n")
+    mut a8 := at.NewAst()
+    mut s8 := sm.New(lgr, tmp + "/imp.salam", "en")
+    ok8 := run_sema_file(tmp + "/imp.salam", a8, s8)
+    testing.AssertTrue(ok8)
+    ub := sm.LookupLocal(s8, s8.global, "u")
+    testing.AssertTrue(ub != 0)
+    ubv := sm.SymAt(s8, ub)
+    testing.AssertEqInt(ubv.kind, sm.SYM_PACKAGE)
+    testing.AssertEqStr(ubv.pkgname, "util")
+    utw := sm.LookupLocal(s8, ubv.members, "Twice")
+    testing.AssertTrue(utw != 0)
+    testing.AssertTrue(sm.SymAt(s8, utw).is_pub)
+    // the canonical package name is bound too (English file)
+    testing.AssertTrue(sm.LookupLocal(s8, s8.global, "util") != 0)
+    sm.Free(s8)
+    at.FreeAst(a8)
+
+    // std import through SALAM_STD; str's siblings (case.salam etc.) are
+    // pulled in by the directory auto-merge (salam_package_files).
+    _wa := os.WriteFile(tmp + "/impstd.salam", "package main\n\nimport str\n")
+    mut a9 := at.NewAst()
+    mut s9 := sm.New(lgr, tmp + "/impstd.salam", "en")
+    ok9 := run_sema_file(tmp + "/impstd.salam", a9, s9)
+    testing.AssertTrue(ok9)
+    sb := sm.LookupLocal(s9, s9.global, "str")
+    testing.AssertTrue(sb != 0)
+    sbv := sm.SymAt(s9, sb)
+    testing.AssertEqInt(sbv.kind, sm.SYM_PACKAGE)
+    testing.AssertTrue(sm.LookupLocal(s9, sbv.members, "StringBuilder") != 0)
+    testing.AssertTrue(sm.LookupLocal(s9, sbv.members, "Upper") != 0)
+    sm.Free(s9)
+    at.FreeAst(a9)
+
+    // dotted std package name (import db.sqlite -> std/db/sqlite, local
+    // binding name is the segment after the last dot)
+    _wb := os.WriteFile(tmp + "/impdb.salam", "package main\n\nimport db.sqlite\n")
+    mut a10 := at.NewAst()
+    mut s10 := sm.New(lgr, tmp + "/impdb.salam", "en")
+    ok10 := run_sema_file(tmp + "/impdb.salam", a10, s10)
+    testing.AssertTrue(ok10)
+    qb := sm.LookupLocal(s10, s10.global, "sqlite")
+    testing.AssertTrue(qb != 0)
+    testing.AssertTrue(sm.LookupLocal(s10, sm.SymAt(s10, qb).members, "Open") != 0)
+    sm.Free(s10)
+    at.FreeAst(a10)
+
+    // ----- package directory merge (salam_package_files) -----
+    _wc := os.WriteFile(tmp + "/pkgd/pkgd.salam",
+        "package pkgd\n\npub func One(): int:\n    ret 1\nend\n")
+    _wd := os.WriteFile(tmp + "/pkgd/extra.salam",
+        "package pkgd\n\npub func TwoX(): int:\n    ret 2\nend\n")
+    pf := sm.PackageFiles(tmp + "/pkgd/pkgd.salam")
+    testing.AssertEqInt(pf.len(), 2)
+    testing.AssertEqStr(pf.get(0)[0], tmp + "/pkgd/pkgd.salam")
+    testing.AssertEqStr(pf.get(1)[0], tmp + "/pkgd/extra.salam")
+    pf.free()
+    // no merge when the file stem does not match its directory name
+    pf2 := sm.PackageFiles(tmp + "/decl.salam")
+    testing.AssertEqInt(pf2.len(), 1)
+    pf2.free()
+    _we := os.WriteFile(tmp + "/pmain.salam",
+        "package main\n\nimport pd \"pkgd/pkgd.salam\"\n")
+    mut a11 := at.NewAst()
+    mut s11 := sm.New(lgr, tmp + "/pmain.salam", "en")
+    ok11 := run_sema_file(tmp + "/pmain.salam", a11, s11)
+    testing.AssertTrue(ok11)
+    pdb := sm.LookupLocal(s11, s11.global, "pd")
+    testing.AssertTrue(pdb != 0)
+    pdv := sm.SymAt(s11, pdb)
+    testing.AssertTrue(sm.LookupLocal(s11, pdv.members, "One") != 0)
+    testing.AssertTrue(sm.LookupLocal(s11, pdv.members, "TwoX") != 0)
+    sm.Free(s11)
+    at.FreeAst(a11)
+
+    // ----- (d) E008: circular import + import not found -----
+    _wf := os.WriteFile(tmp + "/ca.salam",
+        "package ca\n\nimport cb \"cb.salam\"\n")
+    _wg := os.WriteFile(tmp + "/cb.salam",
+        "package cb\n\nimport ca \"ca.salam\"\n")
+    _wh := os.WriteFile(tmp + "/cmain.salam",
+        "package main\n\nimport ca \"ca.salam\"\n")
+    mut a12 := at.NewAst()
+    mut s12 := sm.New(lgr, tmp + "/cmain.salam", "en")
+    ok12 := run_sema_file(tmp + "/cmain.salam", a12, s12)
+    testing.AssertFalse(ok12)
+    testing.AssertEqInt(dg.ErrorCount(s12.diag), 1)
+    testing.AssertEqStr(find_diag_body(s12, 8),
+        "circular import detected: 'compiler/tests_port/tmp_sema/ca.salam'")
+    sm.Free(s12)
+    at.FreeAst(a12)
+
+    _wi := os.WriteFile(tmp + "/nf.salam",
+        "package main\n\nimport mz \"missing.salam\"\n")
+    mut a13 := at.NewAst()
+    mut s13 := sm.New(lgr, tmp + "/nf.salam", "en")
+    ok13 := run_sema_file(tmp + "/nf.salam", a13, s13)
+    testing.AssertFalse(ok13)
+    testing.AssertEqInt(dg.ErrorCount(s13.diag), 1)
+    testing.AssertEqStr(find_diag_body(s13, 8),
+        "import not found: 'compiler/tests_port/tmp_sema/missing.salam'")
+    sm.Free(s13)
+    at.FreeAst(a13)
+
+    // ----- cleanup -----
+    _r1 := os.Remove(tmp + "/decl.salam")
+    _r2 := os.Remove(tmp + "/ord1.salam")
+    _r3 := os.Remove(tmp + "/ord2.salam")
+    _r4 := os.Remove(tmp + "/ord3.salam")
+    _r5 := os.Remove(tmp + "/ord4.salam")
+    _r6 := os.Remove(tmp + "/ord5.salam")
+    _r7 := os.Remove(tmp + "/ord6.salam")
+    _r8 := os.Remove(tmp + "/util.salam")
+    _r9 := os.Remove(tmp + "/imp.salam")
+    _ra := os.Remove(tmp + "/impstd.salam")
+    _rb := os.Remove(tmp + "/impdb.salam")
+    _rc := os.Remove(tmp + "/pkgd/pkgd.salam")
+    _rd := os.Remove(tmp + "/pkgd/extra.salam")
+    _re := os.Remove(tmp + "/pmain.salam")
+    _rf := os.Remove(tmp + "/ca.salam")
+    _rg := os.Remove(tmp + "/cb.salam")
+    _rh := os.Remove(tmp + "/cmain.salam")
+    _ri := os.Remove(tmp + "/nf.salam")
+    _rj := os.Rmdir(tmp + "/pkgd")
+    _rk := os.Rmdir(tmp)
+end
+
+// ---------------------------------------------------------------------------
+// 5c tests — expression/call/literal/generic/fold checking on temp programs.
+// Bodies are still 5d-stubbed, so everything is exercised through struct
+// field defaults, function parameter defaults and type resolution — the
+// paths the C checks without entering statement blocks. Every diagnostic
+// body below was cross-checked against HEAD bin/salam on the same file.
+// ---------------------------------------------------------------------------
+
+func test_5c():
+    tmp := "compiler/tests_port/tmp_sema"
+    _m1 := os.Mkdir(tmp)
+    lgr := lg.New(lg.LOG_OFF, false)
+
+    // ----- (a) a fully valid program: folds, overloads, generics -----
+    expr_src := "package demo5c\n\n" +
+        "enum Color:\n" +
+        "    Red, Green = 5, Blue\n" +
+        "end\n\n" +
+        "struct Point:\n" +
+        "    pub x: int = 0\n" +
+        "    pub y: int = 0\n" +
+        "    pub func sum(): int:\n" +
+        "        ret this.x + this.y\n" +
+        "    end\n" +
+        "end\n\n" +
+        "struct Wrap:\n" +
+        "    pub n: int = 2 * 3\n" +
+        "    pub f: f64 = 1 + 2.5\n" +
+        "    pub s2: str = \"x\" * 3\n" +
+        "    pub b: bool = 1 < 2\n" +
+        "    pub c: char = \"abc\"[1]\n" +
+        "    pub t: int = true ? 10 : 20\n" +
+        "    pub m: i64 = (5 as i64) << 3\n" +
+        "    pub e: int = Color.Green as int\n" +
+        "    pub w: u8 = 250 as u8\n" +
+        "    pub k: i64 = ~(1 as i64)\n" +
+        "    pub o4: f64 = add(1.5, 2.5)\n" +
+        "    pub o5: int = add(3, 4)\n" +
+        "    pub o6: int = 5 << 3\n" +
+        "end\n\n" +
+        "struct Req:\n" +
+        "    pub q1: int\n" +
+        "    pub q2: int = 5\n" +
+        "end\n\n" +
+        "struct Holder:\n" +
+        "    pub r2: Req = Req { q1 = 1 }\n" +
+        "    pub v: Vector<i32> = Vector {}\n" +
+        "    pub h: HashMap<str, i32> = HashMap {}\n" +
+        "end\n\n" +
+        "struct VHold:\n" +
+        "    pub val: Variant<i32, str>\n" +
+        "end\n\n" +
+        "struct VUse:\n" +
+        "    pub w2: VHold = VHold { val = \"boxed\" }\n" +
+        "end\n\n" +
+        "func vuse(_v: Vector<i32>): int:\n" +
+        "    ret 0\n" +
+        "end\n\n" +
+        "func add(p: int, q: int): int:\n" +
+        "    ret p + q\n" +
+        "end\n\n" +
+        "func add(p: f64, q: f64): f64:\n" +
+        "    ret p + q\n" +
+        "end\n\n" +
+        "func pick(v: int = add(1, 2)): int:\n" +
+        "    ret v\n" +
+        "end\n\n" +
+        "func identity<T>(v2: T): T:\n" +
+        "    ret v2\n" +
+        "end\n\n" +
+        "func useid(x: int = identity(42)): int:\n" +
+        "    ret x\n" +
+        "end\n\n" +
+        "func pick2(w2: int = pick()): int:\n" +
+        "    ret w2\n" +
+        "end\n"
+    _w20 := os.WriteFile(tmp + "/c_expr.salam", expr_src)
+    mut a20 := at.NewAst()
+    mut s20 := sm.New(lgr, tmp + "/c_expr.salam", "en")
+    mut prog20 := 0
+    ok20 := run_sema_prog(tmp + "/c_expr.salam", a20, s20, prog20)
+    testing.AssertTrue(ok20)
+    testing.AssertEqInt(dg.ErrorCount(s20.diag), 0)
+    testing.AssertEqInt(dg.WarningCount(s20.diag), 0)
+
+    // generic struct instantiation: Vector<i32> materialized Vector_i32
+    vi := sm.LookupLocal(s20, s20.global, "Vector_i32")
+    testing.AssertTrue(vi != 0)
+    viv := sm.SymAt(s20, vi)
+    testing.AssertEqInt(viv.kind, sm.SYM_STRUCT)
+    testing.AssertEqStr(sm.ToString(s20, viv.ty), "Vector_i32")
+    testing.AssertEqStr(viv.generic_base, "Vector")
+    testing.AssertEqInt(viv.generic_args.len(), 1)
+    testing.AssertEqInt(viv.generic_args.get(0)[0], sm.TY_I32)
+    // instance member types (cross-checked against C --emit-symbol-xml)
+    pushm := sm.SymAt(s20, sm.LookupLocal(s20, viv.members, "push"))
+    psig := sm.SigAt(s20, pushm.overloads.get(0)[0])
+    testing.AssertEqStr(psig.mangled, "S_Vector_i32_push__i32")
+    testing.AssertEqInt(psig.ret_type, sm.TY_VOID)
+    testing.AssertEqInt(psig.params.get(0)[0], sm.TY_I32)
+    popm := sm.SymAt(s20, sm.LookupLocal(s20, viv.members, "pop"))
+    popsig := sm.SigAt(s20, popm.overloads.get(0)[0])
+    testing.AssertEqStr(popsig.mangled, "S_Vector_i32_pop__void")
+    testing.AssertEqInt(popsig.ret_type, sm.TY_I32)
+    getm := sm.SymAt(s20, sm.LookupLocal(s20, viv.members, "get"))
+    getsig := sm.SigAt(s20, getm.overloads.get(0)[0])
+    testing.AssertEqStr(sm.ToString(s20, getsig.ret_type), "i32*")
+    lenm := sm.SymAt(s20, sm.LookupLocal(s20, viv.members, "len"))
+    testing.AssertEqInt(
+        sm.SigAt(s20, lenm.overloads.get(0)[0]).ret_type, sm.TY_I32)
+    fldm := sm.SymAt(s20, sm.LookupLocal(s20, viv.members, "data"))
+    testing.AssertEqInt(fldm.kind, sm.SYM_FIELD)
+    testing.AssertEqStr(sm.ToString(s20, fldm.ty), "i32*")
+
+    // HashMap<str, i32> instance
+    hi := sm.LookupLocal(s20, s20.global, "HashMap_str_i32")
+    testing.AssertTrue(hi != 0)
+    hiv := sm.SymAt(s20, hi)
+    putm := sm.SymAt(s20, sm.LookupLocal(s20, hiv.members, "put"))
+    putsig := sm.SigAt(s20, putm.overloads.get(0)[0])
+    testing.AssertEqStr(putsig.mangled, "S_HashMap_str_i32_put__s_i32")
+    testing.AssertEqInt(putsig.params.get(0)[0], sm.TY_STR)
+    testing.AssertEqInt(putsig.params.get(1)[0], sm.TY_I32)
+    testing.AssertEqInt(putsig.ret_type, sm.TY_VOID)
+
+    // parameter mangling now names the instance (the 5b report's
+    // vuse__Vector_i32 note)
+    vum := sm.SymAt(s20, sm.LookupLocal(s20, s20.global, "vuse"))
+    testing.AssertEqStr(sm.SigAt(s20, vum.overloads.get(0)[0]).mangled,
+                        "vuse__Vector_i32")
+
+    // generic FUNCTION instantiation via a call site (default argument)
+    idt := sm.SymAt(s20, sm.LookupLocal(s20, s20.global, "identity"))
+    testing.AssertEqInt(idt.overloads.len(), 0) // template keeps no sigs
+    idi := sm.LookupLocal(s20, s20.global, "identity_i32")
+    testing.AssertTrue(idi != 0)
+    idv := sm.SymAt(s20, idi)
+    testing.AssertEqInt(idv.kind, sm.SYM_FUNC)
+    idsig := sm.SigAt(s20, idv.overloads.get(0)[0])
+    testing.AssertEqStr(idsig.mangled, "identity_i32__i32")
+    testing.AssertEqInt(idsig.ret_type, sm.TY_I32)
+
+    // ----- constant folding (AST rewritten in place) -----
+    wrap := find_child_named(a20, prog20, "Wrap")
+    testing.AssertTrue(wrap != 0)
+    nd := at.Get(a20, at.Get(a20, find_child_named(a20, wrap, "n")).a)
+    testing.AssertEqInt(nd.kind, at.AST_LITERAL)
+    testing.AssertEqInt(nd.op, tok.TK_INT)
+    testing.AssertEqInt(nd.value_int as int, 6)
+    testing.AssertEqStr(nd.type_str, "i32")
+    fd := at.Get(a20, at.Get(a20, find_child_named(a20, wrap, "f")).a)
+    testing.AssertEqInt(fd.kind, at.AST_LITERAL)
+    testing.AssertEqInt(fd.op, tok.TK_FLOAT)
+    testing.AssertEqFloat(fd.value_float, 3.5, 0.000001)
+    sd := at.Get(a20, at.Get(a20, find_child_named(a20, wrap, "s2")).a)
+    testing.AssertEqInt(sd.kind, at.AST_LITERAL)
+    testing.AssertEqInt(sd.op, tok.TK_STRING)
+    testing.AssertEqStr(sd.value_str, "xxx")
+    bd := at.Get(a20, at.Get(a20, find_child_named(a20, wrap, "b")).a)
+    testing.AssertEqInt(bd.op, tok.TK_KW_TRUE)
+    testing.AssertEqBool(bd.value_bool, true)
+    o6d := at.Get(a20, at.Get(a20, find_child_named(a20, wrap, "o6")).a)
+    testing.AssertEqInt(o6d.op, tok.TK_INT)
+    testing.AssertEqInt(o6d.value_int as int, 40) // 5 << 3 folded
+    // typing without folding: index/ternary/shift-with-cast/member/cast
+    cd := at.Get(a20, at.Get(a20, find_child_named(a20, wrap, "c")).a)
+    testing.AssertEqInt(cd.kind, at.AST_INDEX)
+    testing.AssertEqStr(cd.type_str, "char")
+    td := at.Get(a20, at.Get(a20, find_child_named(a20, wrap, "t")).a)
+    testing.AssertEqStr(td.type_str, "i32")
+    md := at.Get(a20, at.Get(a20, find_child_named(a20, wrap, "m")).a)
+    testing.AssertEqInt(md.kind, at.AST_BINARY)
+    testing.AssertEqStr(md.type_str, "i64")
+    ed := at.Get(a20, at.Get(a20, find_child_named(a20, wrap, "e")).a)
+    testing.AssertEqStr(ed.type_str, "i32")
+    kd := at.Get(a20, at.Get(a20, find_child_named(a20, wrap, "k")).a)
+    testing.AssertEqStr(kd.type_str, "i64")
+    // overload resolution picked the right signature per argument types
+    o4d := at.Get(a20, at.Get(a20, find_child_named(a20, wrap, "o4")).a)
+    testing.AssertEqStr(o4d.type_str, "f64")
+    o5d := at.Get(a20, at.Get(a20, find_child_named(a20, wrap, "o5")).a)
+    testing.AssertEqStr(o5d.type_str, "i32")
+
+    // empty intrinsic literal renamed/stamped to the instance type
+    holder := find_child_named(a20, prog20, "Holder")
+    vd := at.Get(a20, at.Get(a20, find_child_named(a20, holder, "v")).a)
+    testing.AssertEqStr(vd.name, "Vector_i32")
+    testing.AssertEqStr(vd.type_str, "Vector_i32")
+
+    // Variant member boxing inside a struct literal
+    vuse2 := find_child_named(a20, prog20, "VUse")
+    w2lit := at.Get(a20, find_child_named(a20, vuse2, "w2")).a
+    vinit := at.Get(a20, at.Child(a20, w2lit, 0))
+    box := at.Get(a20, vinit.a)
+    testing.AssertEqInt(box.kind, at.AST_VARIANT_BOX)
+    testing.AssertEqInt(box.value_int as int, 1) // tag of str member
+    testing.AssertEqStr(box.type_str, "Variant<i32, str>")
+
+    // generic call in a default argument rewrote the callee name
+    useid := find_child_named(a20, prog20, "useid")
+    xcall := at.Get(a20, find_child_named(a20, useid, "x")).a
+    testing.AssertEqStr(at.Get(a20, xcall).type_str, "i32")
+    testing.AssertEqStr(at.Get(a20, at.Get(a20, xcall).a).name, "identity_i32")
+    // default-arg call arity: pick() with 0 args resolves (v has a default)
+    pick2n := find_child_named(a20, prog20, "pick2")
+    w2call := at.Get(a20, find_child_named(a20, pick2n, "w2")).a
+    testing.AssertEqStr(at.Get(a20, w2call).type_str, "i32")
+    sm.Free(s20)
+    at.FreeAst(a20)
+
+    // ----- (b) error programs: exact E-codes/bodies, checked against C ----
+    // E021: mixed signedness arithmetic
+    _e1 := os.WriteFile(tmp + "/c_err1.salam",
+        "package demo5e\n\nstruct E1:\n    pub a3: int = (1 as i32) + (1 as u32)\nend\n")
+    mut a21 := at.NewAst()
+    mut s21 := sm.New(lgr, tmp + "/c_err1.salam", "en")
+    _ok21 := run_sema_file(tmp + "/c_err1.salam", a21, s21)
+    testing.AssertEqInt(dg.ErrorCount(s21.diag), 1)
+    testing.AssertTrue(has_diag(s21, 21,
+        "operator cannot be applied to 'i32' and 'u32'"))
+    sm.Free(s21)
+    at.FreeAst(a21)
+
+    // E021: bitwise on float
+    _e2 := os.WriteFile(tmp + "/c_err2.salam",
+        "package demo5e\n\nstruct E2:\n    pub b3: int = 1.5 & 2\nend\n")
+    mut a22 := at.NewAst()
+    mut s22 := sm.New(lgr, tmp + "/c_err2.salam", "en")
+    _ok22 := run_sema_file(tmp + "/c_err2.salam", a22, s22)
+    testing.AssertEqInt(dg.ErrorCount(s22.diag), 1)
+    testing.AssertTrue(has_diag(s22, 21,
+        "bitwise operator requires integer operands (got 'f64' and 'i32')"))
+    sm.Free(s22)
+    at.FreeAst(a22)
+
+    // E021: ternary branch mismatch
+    _e3 := os.WriteFile(tmp + "/c_err3.salam",
+        "package demo5e\n\nstruct E3:\n    pub c3: int = true ? 1 : \"x\"\nend\n")
+    mut a23 := at.NewAst()
+    mut s23 := sm.New(lgr, tmp + "/c_err3.salam", "en")
+    _ok23 := run_sema_file(tmp + "/c_err3.salam", a23, s23)
+    testing.AssertEqInt(dg.ErrorCount(s23.diag), 1)
+    testing.AssertTrue(has_diag(s23, 21,
+        "'?:' branches have mismatched types 'i32' and 'str'"))
+    sm.Free(s23)
+    at.FreeAst(a23)
+
+    // E023: illegal cast
+    _e4 := os.WriteFile(tmp + "/c_err4.salam",
+        "package demo5e\n\nstruct E4:\n    pub d3: int = \"x\" as i32\nend\n")
+    mut a24 := at.NewAst()
+    mut s24 := sm.New(lgr, tmp + "/c_err4.salam", "en")
+    _ok24 := run_sema_file(tmp + "/c_err4.salam", a24, s24)
+    testing.AssertEqInt(dg.ErrorCount(s24.diag), 1)
+    testing.AssertTrue(has_diag(s24, 23, "cannot cast 'str' to 'i32'"))
+    sm.Free(s24)
+    at.FreeAst(a24)
+
+    // E012: call arity + undefined function
+    _e5 := os.WriteFile(tmp + "/c_err5.salam",
+        "package demo5e\n\nstruct E5:\n    pub e3: int = one_arg(1, 2)\n" +
+        "    pub f3: int = nosuch(1)\nend\n\nfunc one_arg(v: int): int:\n    ret v\nend\n")
+    mut a25 := at.NewAst()
+    mut s25 := sm.New(lgr, tmp + "/c_err5.salam", "en")
+    _ok25 := run_sema_file(tmp + "/c_err5.salam", a25, s25)
+    testing.AssertEqInt(dg.ErrorCount(s25.diag), 2)
+    testing.AssertTrue(has_diag(s25, 12, "'one_arg' expects 1 argument(s), got 2"))
+    testing.AssertTrue(has_diag(s25, 12, "call to undefined function 'nosuch'"))
+    sm.Free(s25)
+    at.FreeAst(a25)
+
+    // E016 + E028: unknown / missing struct-literal fields
+    _e6 := os.WriteFile(tmp + "/c_err6.salam",
+        "package demo5e\n\nstruct Req:\n    pub q1: int\n    pub q2: int = 5\nend\n\n" +
+        "struct E6:\n    pub r3: Req = Req { q3 = 1 }\nend\n")
+    mut a26 := at.NewAst()
+    mut s26 := sm.New(lgr, tmp + "/c_err6.salam", "en")
+    _ok26 := run_sema_file(tmp + "/c_err6.salam", a26, s26)
+    testing.AssertEqInt(dg.ErrorCount(s26.diag), 2)
+    testing.AssertTrue(has_diag(s26, 16, "struct 'Req' has no field 'q3'"))
+    testing.AssertTrue(has_diag(s26, 28, "struct literal 'Req' requires field 'q1'"))
+    sm.Free(s26)
+    at.FreeAst(a26)
+
+    // E016 + E029: enum member / member access on non-struct
+    _e7 := os.WriteFile(tmp + "/c_err7.salam",
+        "package demo5e\n\nenum Color:\n    Red, Green = 5, Blue\nend\n\n" +
+        "struct E7:\n    pub g3: int = Color.Nope as int\n    pub h3: int = \"s\".x\nend\n")
+    mut a27 := at.NewAst()
+    mut s27 := sm.New(lgr, tmp + "/c_err7.salam", "en")
+    _ok27 := run_sema_file(tmp + "/c_err7.salam", a27, s27)
+    testing.AssertEqInt(dg.ErrorCount(s27.diag), 2)
+    testing.AssertTrue(has_diag(s27, 16, "enum 'Color' has no member 'Nope'"))
+    testing.AssertTrue(has_diag(s27, 29, "member access on non-struct type 'str'"))
+    sm.Free(s27)
+    at.FreeAst(a27)
+
+    // E002 + E021: array-literal length mismatch, '%' on floats
+    _e8 := os.WriteFile(tmp + "/c_err8.salam",
+        "package demo5e\n\nstruct E8:\n    pub xs: int[3] = [1, 2]\n" +
+        "    pub i3: f64 = 5.0 % 2.0\nend\n")
+    mut a28 := at.NewAst()
+    mut s28 := sm.New(lgr, tmp + "/c_err8.salam", "en")
+    _ok28 := run_sema_file(tmp + "/c_err8.salam", a28, s28)
+    testing.AssertEqInt(dg.ErrorCount(s28.diag), 2)
+    testing.AssertTrue(has_diag(s28, 2,
+        "default for field 'xs': cannot assign 'i32[2]' to 'i32[3]'"))
+    testing.AssertTrue(has_diag(s28, 21, "operator '%' requires integer operands"))
+    sm.Free(s28)
+    at.FreeAst(a28)
+
+    // E071: bare generic literal without inferable type arguments
+    _e9 := os.WriteFile(tmp + "/c_err9.salam",
+        "package demo5e\n\nfunc gf(v2: int = Vector {}): int:\n    ret v2\nend\n")
+    mut a29 := at.NewAst()
+    mut s29 := sm.New(lgr, tmp + "/c_err9.salam", "en")
+    _ok29 := run_sema_file(tmp + "/c_err9.salam", a29, s29)
+    testing.AssertEqInt(dg.ErrorCount(s29.diag), 1)
+    testing.AssertTrue(has_diag(s29, 71,
+        "cannot infer the type arguments of 'Vector'; write 'Vector {} as Vector<T>'"))
+    sm.Free(s29)
+    at.FreeAst(a29)
+
+    // E002: generic bound not satisfied
+    _ea := os.WriteFile(tmp + "/c_err10.salam",
+        "package demo5e\n\ninterface Shape2:\n    func area2(): f64\nend\n\n" +
+        "struct GS<T: Shape2>:\n    pub item: T\nend\n\n" +
+        "struct UseBad:\n    pub g4: GS<i32>\nend\n")
+    mut a30 := at.NewAst()
+    mut s30 := sm.New(lgr, tmp + "/c_err10.salam", "en")
+    _ok30 := run_sema_file(tmp + "/c_err10.salam", a30, s30)
+    testing.AssertEqInt(dg.ErrorCount(s30.diag), 1)
+    testing.AssertTrue(has_diag(s30, 2,
+        "'i32' does not satisfy 'Shape2': no struct definition or `impl` block provides its methods"))
+    sm.Free(s30)
+    at.FreeAst(a30)
+
+    // E002: value is not a Variant member
+    _eb := os.WriteFile(tmp + "/c_err11.salam",
+        "package demo5e\n\nstruct VHold:\n    pub val: Variant<i32, str>\nend\n\n" +
+        "struct E11:\n    pub w3: VHold = VHold { val = 1.5 }\nend\n")
+    mut a31 := at.NewAst()
+    mut s31 := sm.New(lgr, tmp + "/c_err11.salam", "en")
+    _ok31 := run_sema_file(tmp + "/c_err11.salam", a31, s31)
+    testing.AssertEqInt(dg.ErrorCount(s31.diag), 1)
+    testing.AssertTrue(has_diag(s31, 2,
+        "field 'val': cannot assign 'f64' to 'Variant<i32, str>'"))
+    sm.Free(s31)
+    at.FreeAst(a31)
+
+    // E021: division by zero caught by the constant folder
+    _ec := os.WriteFile(tmp + "/c_err12.salam",
+        "package demo5e\n\nstruct E12:\n    pub z3: int = 1 / 0\nend\n")
+    mut a32 := at.NewAst()
+    mut s32 := sm.New(lgr, tmp + "/c_err12.salam", "en")
+    _ok32 := run_sema_file(tmp + "/c_err12.salam", a32, s32)
+    testing.AssertEqInt(dg.ErrorCount(s32.diag), 1)
+    testing.AssertTrue(has_diag(s32, 21,
+        "division by zero in constant expression"))
+    sm.Free(s32)
+    at.FreeAst(a32)
+
+    // ----- const-as-array-dim parity -----
+    // A LITERAL-initialized global const works as a dim (ival stamped at
+    // collect time); a computed one does not — the C resolves struct field
+    // types before its initializer is folded (local consts fold in 5d).
+    _ed := os.WriteFile(tmp + "/c_err13.salam",
+        "package demo5e\n\nconst N := 2 * 3\n\nstruct S:\n    pub xs: int[N]\nend\n")
+    mut a33 := at.NewAst()
+    mut s33 := sm.New(lgr, tmp + "/c_err13.salam", "en")
+    _ok33 := run_sema_file(tmp + "/c_err13.salam", a33, s33)
+    testing.AssertEqInt(dg.ErrorCount(s33.diag), 1)
+    testing.AssertTrue(has_diag(s33, 11, "array size must be a constant integer"))
+    sm.Free(s33)
+    at.FreeAst(a33)
+
+    _ee := os.WriteFile(tmp + "/c_ok14.salam",
+        "package demo5e\n\nconst M := 4\n\nstruct S2:\n    pub xs: int[M] = [1, 2, 3, 4]\nend\n")
+    mut a34 := at.NewAst()
+    mut s34 := sm.New(lgr, tmp + "/c_ok14.salam", "en")
+    ok34 := run_sema_file(tmp + "/c_ok14.salam", a34, s34)
+    testing.AssertTrue(ok34)
+    testing.AssertEqInt(dg.ErrorCount(s34.diag), 0)
+    s2sym := sm.SymAt(s34, sm.LookupLocal(s34, s34.global, "S2"))
+    xsv := sm.SymAt(s34, sm.LookupLocal(s34, s2sym.members, "xs"))
+    testing.AssertEqStr(sm.ToString(s34, xsv.ty), "i32[4]")
+    sm.Free(s34)
+    at.FreeAst(a34)
+
+    // ----- cleanup -----
+    _r20 := os.Remove(tmp + "/c_expr.salam")
+    _r21 := os.Remove(tmp + "/c_err1.salam")
+    _r22 := os.Remove(tmp + "/c_err2.salam")
+    _r23 := os.Remove(tmp + "/c_err3.salam")
+    _r24 := os.Remove(tmp + "/c_err4.salam")
+    _r25 := os.Remove(tmp + "/c_err5.salam")
+    _r26 := os.Remove(tmp + "/c_err6.salam")
+    _r27 := os.Remove(tmp + "/c_err7.salam")
+    _r28 := os.Remove(tmp + "/c_err8.salam")
+    _r29 := os.Remove(tmp + "/c_err9.salam")
+    _r30 := os.Remove(tmp + "/c_err10.salam")
+    _r31 := os.Remove(tmp + "/c_err11.salam")
+    _r32 := os.Remove(tmp + "/c_err12.salam")
+    _r33 := os.Remove(tmp + "/c_err13.salam")
+    _r34 := os.Remove(tmp + "/c_ok14.salam")
+    _r35 := os.Rmdir(tmp)
+end
+
+// ---------------------------------------------------------------------------
+// 5d tests — statements/blocks, match, layout, unused params, dce.
+// Every diagnostic body mirrors the C format strings byte-for-byte (the
+// corpus gate cross-checks the same codes against HEAD bin/salam).
+// ---------------------------------------------------------------------------
+
+func test_5d():
+    tmp := "compiler/tests_port/tmp_sema"
+    _m1 := os.Mkdir(tmp)
+    lgr := lg.New(lg.LOG_OFF, false)
+
+    // ----- (a) statement checks: E059/E069/E037/E070/E068 in one file -----
+    stmt_src := "func f1():\n" +
+        "    x := 5\n" +
+        "end\n\n" +
+        "func f2():\n" +
+        "    mut y := 1\n" +
+        "    println y\n" +
+        "end\n\n" +
+        "func f3():\n" +
+        "    break\n" +
+        "end\n\n" +
+        "func f4(): int:\n" +
+        "    ret 1\n" +
+        "    println 2\n" +
+        "end\n\n" +
+        "func f5():\n" +
+        "    if false:\n" +
+        "        println 1\n" +
+        "    end\n" +
+        "end\n"
+    _w40 := os.WriteFile(tmp + "/d_stmt.salam", stmt_src)
+    mut a40 := at.NewAst()
+    mut s40 := sm.New(lgr, tmp + "/d_stmt.salam", "en")
+    ok40 := run_sema_file(tmp + "/d_stmt.salam", a40, s40)
+    testing.AssertFalse(ok40)
+    testing.AssertTrue(has_diag(s40, 59,
+        "unused variable 'x' (prefix with '_' if intentional)"))
+    testing.AssertTrue(has_diag(s40, 69,
+        "variable 'y' is declared 'mut' but never mutated; remove 'mut' or declare it 'const'"))
+    testing.AssertTrue(has_diag(s40, 37, "'break' outside of a loop"))
+    testing.AssertTrue(has_diag(s40, 70,
+        "unreachable code: the previous statement always exits this block"))
+    testing.AssertTrue(has_diag(s40, 68,
+        "'if' condition is always false: its body can never run"))
+    sm.Free(s40)
+    at.FreeAst(a40)
+
+    // ----- (b) W071 fall-off warning + `until true` termination -----
+    w71_src := "func g(): int:\n" +
+        "    mut n := 0\n" +
+        "    until n < 3:\n" +
+        "        n += 1\n" +
+        "    end\n" +
+        "end\n\n" +
+        "func t1(): int:\n" +
+        "    until true:\n" +
+        "        ret 1\n" +
+        "    end\n" +
+        "end\n"
+    _w41 := os.WriteFile(tmp + "/d_w71.salam", w71_src)
+    mut a41 := at.NewAst()
+    mut s41 := sm.New(lgr, tmp + "/d_w71.salam", "en")
+    ok41 := run_sema_file(tmp + "/d_w71.salam", a41, s41)
+    testing.AssertTrue(ok41) // warnings only
+    testing.AssertEqInt(dg.WarningCount(s41.diag), 1)
+    testing.AssertTrue(has_diag(s41, 71,
+        "function 'g' can fall off its end without returning a 'i32' value; add a final 'ret'"))
+    sm.Free(s41)
+    at.FreeAst(a41)
+
+    // ----- (c) match as an expression: yield typing + AST decoration -----
+    m_src := "func pick(n: int): str:\n" +
+        "    grade := match n:\n" +
+        "        1, 2 => \"lo\"\n" +
+        "        else => \"hi\"\n" +
+        "    end\n" +
+        "    ret grade\n" +
+        "end\n\n" +
+        "func widen(n: int): f64:\n" +
+        "    ret match n:\n" +
+        "        1 => 1\n" +
+        "        else => 2.5\n" +
+        "    end\n" +
+        "end\n"
+    _w42 := os.WriteFile(tmp + "/d_match.salam", m_src)
+    mut a42 := at.NewAst()
+    mut s42 := sm.New(lgr, tmp + "/d_match.salam", "en")
+    mut prog42 := 0
+    ok42 := run_sema_prog(tmp + "/d_match.salam", a42, s42, prog42)
+    testing.AssertTrue(ok42)
+    pickfn := find_child_named(a42, prog42, "pick")
+    gdecl := at.Child(a42, at.Get(a42, pickfn).a, 0)
+    testing.AssertEqInt(at.KindOf(a42, gdecl), at.AST_VAR_DECL)
+    mnode := at.Get(a42, gdecl).a
+    testing.AssertEqInt(at.KindOf(a42, mnode), at.AST_MATCH)
+    testing.AssertTrue(at.Get(a42, mnode).match_is_expr)
+    testing.AssertEqStr(at.Get(a42, mnode).type_str, "str")
+    widenfn := find_child_named(a42, prog42, "widen")
+    wret := at.Child(a42, at.Get(a42, widenfn).a, 0)
+    wmatch := at.Get(a42, wret).a
+    testing.AssertEqStr(at.Get(a42, wmatch).type_str, "f64") // 1 + 2.5 unify
+    sm.Free(s42)
+    at.FreeAst(a42)
+
+    // ----- (d) variant match: binding unwrap insertion + E079 -----
+    mv_src := "func v1(v: Variant<i32, str>): int:\n" +
+        "    ret match v:\n" +
+        "        i32 n => n\n" +
+        "        str s2 => len(s2)\n" +
+        "    end\n" +
+        "end\n"
+    _w43 := os.WriteFile(tmp + "/d_variant.salam", mv_src)
+    mut a43 := at.NewAst()
+    mut s43 := sm.New(lgr, tmp + "/d_variant.salam", "en")
+    mut prog43 := 0
+    ok43 := run_sema_prog(tmp + "/d_variant.salam", a43, s43, prog43)
+    testing.AssertTrue(ok43)
+    v1fn := find_child_named(a43, prog43, "v1")
+    v1ret := at.Child(a43, at.Get(a43, v1fn).a, 0)
+    v1match := at.Get(a43, v1ret).a
+    arm0 := at.Child(a43, v1match, 0)
+    pat0 := at.Child(a43, arm0, 0)
+    testing.AssertEqStr(at.Get(a43, pat0).type_str, "i32")
+    testing.AssertEqInt(at.Get(a43, pat0).value_int as int, 0) // tag 0
+    // the binding became a synthetic `n := <unwrap>` prepended to the arm
+    arm0b := at.Get(a43, arm0).b
+    bind0 := at.Child(a43, arm0b, 0)
+    testing.AssertEqInt(at.KindOf(a43, bind0), at.AST_VAR_DECL)
+    testing.AssertTrue(at.Get(a43, bind0).synthetic)
+    testing.AssertEqStr(at.Get(a43, bind0).name, "n")
+    testing.AssertEqInt(at.KindOf(a43, at.Get(a43, bind0).a),
+                        at.AST_VARIANT_UNWRAP)
+    sm.Free(s43)
+    at.FreeAst(a43)
+
+    mv2_src := "func v2(v: Variant<i32, str>): int:\n" +
+        "    match v:\n" +
+        "        i32 n => println n\n" +
+        "    end\n" +
+        "    ret 0\n" +
+        "end\n"
+    _w44 := os.WriteFile(tmp + "/d_variant2.salam", mv2_src)
+    mut a44 := at.NewAst()
+    mut s44 := sm.New(lgr, tmp + "/d_variant2.salam", "en")
+    ok44 := run_sema_file(tmp + "/d_variant2.salam", a44, s44)
+    testing.AssertFalse(ok44)
+    testing.AssertTrue(has_diag(s44, 79,
+        "non-exhaustive match on Variant 'Variant<i32, str>': missing case(s) for str"))
+    sm.Free(s44)
+    at.FreeAst(a44)
+
+    // ----- (e) enum match: W080 non-exhaustive + E078 duplicate -----
+    me_src := "enum Col:\n" +
+        "    R, G, B\n" +
+        "end\n\n" +
+        "func h(c2: Col): int:\n" +
+        "    match c2:\n" +
+        "        R => println 1\n" +
+        "        G => println 2\n" +
+        "        R => println 3\n" +
+        "    end\n" +
+        "    ret 0\n" +
+        "end\n"
+    _w45 := os.WriteFile(tmp + "/d_enum.salam", me_src)
+    mut a45 := at.NewAst()
+    mut s45 := sm.New(lgr, tmp + "/d_enum.salam", "en")
+    ok45 := run_sema_file(tmp + "/d_enum.salam", a45, s45)
+    testing.AssertFalse(ok45)
+    testing.AssertTrue(has_diag(s45, 78, "duplicate match arm pattern 'R'"))
+    // `println` inside single-expression arms mis-parses (HEAD does the
+    // same), so only R registers as seen: G and B are reported missing —
+    // body cross-checked byte-for-byte against HEAD bin/salam.
+    testing.AssertTrue(has_diag(s45, 80,
+        "non-exhaustive match on enum 'Col': missing member(s) G, B"))
+    sm.Free(s45)
+    at.FreeAst(a45)
+
+    // ----- (f) each: desugar shape + E065 -----
+    e_src := "func e1():\n" +
+        "    xs := [1, 2, 3]\n" +
+        "    each x2 in xs:\n" +
+        "        println x2\n" +
+        "    end\n" +
+        "end\n"
+    _w46 := os.WriteFile(tmp + "/d_each.salam", e_src)
+    mut a46 := at.NewAst()
+    mut s46 := sm.New(lgr, tmp + "/d_each.salam", "en")
+    mut prog46 := 0
+    ok46 := run_sema_prog(tmp + "/d_each.salam", a46, s46, prog46)
+    testing.AssertTrue(ok46)
+    e1fn := find_child_named(a46, prog46, "e1")
+    e1blk := at.Get(a46, e1fn).a
+    lowered := at.Child(a46, e1blk, 1) // was the AST_EACH node
+    testing.AssertEqInt(at.KindOf(a46, lowered), at.AST_BLOCK)
+    testing.AssertTrue(at.Get(a46, lowered).synthetic)
+    testing.AssertEqInt(at.ChildCount(a46, lowered), 1) // ident iterable
+    testing.AssertEqInt(at.KindOf(a46, at.Child(a46, lowered, 0)), at.AST_FOR)
+    sm.Free(s46)
+    at.FreeAst(a46)
+
+    e2_src := "func e2(n: int):\n" +
+        "    each x2 in n:\n" +
+        "        println x2\n" +
+        "    end\n" +
+        "end\n"
+    _w47 := os.WriteFile(tmp + "/d_each2.salam", e2_src)
+    mut a47 := at.NewAst()
+    mut s47 := sm.New(lgr, tmp + "/d_each2.salam", "en")
+    ok47 := run_sema_file(tmp + "/d_each2.salam", a47, s47)
+    testing.AssertFalse(ok47)
+    testing.AssertTrue(has_diag(s47, 65,
+        "each cannot iterate a value of type 'i32'"))
+    sm.Free(s47)
+    at.FreeAst(a47)
+
+    // ----- (g) layout: schema registry + E018/E019 -----
+    sm.LayoutSchemaInit(sm.GetStdlibRoot())
+    lay_src := "layout:\n" +
+        "    dir = \"diagonal\"\n" +
+        "end\n"
+    _w48 := os.WriteFile(tmp + "/d_layout.salam", lay_src)
+    mut a48 := at.NewAst()
+    mut s48 := sm.New(lgr, tmp + "/d_layout.salam", "en")
+    ok48 := run_sema_file(tmp + "/d_layout.salam", a48, s48)
+    testing.AssertFalse(ok48)
+    testing.AssertTrue(has_diag(s48, 18,
+        "invalid value for 'dir': 'diagonal' is not a text direction"))
+    sm.Free(s48)
+    at.FreeAst(a48)
+
+    lay2_src := "layout:\n" +
+        "    box:\n" +
+        "        repeat = \"3\"\n" +
+        "        id = \"b\"\n" +
+        "    end\n" +
+        "end\n"
+    _w49 := os.WriteFile(tmp + "/d_layout2.salam", lay2_src)
+    mut a49 := at.NewAst()
+    mut s49 := sm.New(lgr, tmp + "/d_layout2.salam", "en")
+    ok49 := run_sema_file(tmp + "/d_layout2.salam", a49, s49)
+    testing.AssertFalse(ok49)
+    testing.AssertTrue(has_diag(s49, 19,
+        "element 'box' cannot use 'repeat' together with 'id'"))
+    sm.Free(s49)
+    at.FreeAst(a49)
+
+    // ----- (h) E062 unused parameter (live since 5d) -----
+    up_src := "func u1(p2: int): int:\n" +
+        "    ret 1\n" +
+        "end\n\n" +
+        "func u2(_p: int): int:\n" +
+        "    ret 2\n" +
+        "end\n"
+    _w50 := os.WriteFile(tmp + "/d_param.salam", up_src)
+    mut a50 := at.NewAst()
+    mut s50 := sm.New(lgr, tmp + "/d_param.salam", "en")
+    ok50 := run_sema_file(tmp + "/d_param.salam", a50, s50)
+    testing.AssertFalse(ok50)
+    testing.AssertEqInt(dg.ErrorCount(s50.diag), 1) // _p is exempt
+    testing.AssertTrue(has_diag(s50, 62,
+        "unused parameter 'p2' (prefix with '_' if intentional)"))
+    sm.Free(s50)
+    at.FreeAst(a50)
+
+    // ----- (i) dce.c: roots + edges -> reachability closure -----
+    sm.DceReset()
+    sm.DceEnable()
+    testing.AssertTrue(sm.DceEnabled())
+    sm.DceMarkRoot("main", "main")
+    sm.DceNoteCall("main", "main", "main", "helper")
+    sm.DceNoteCall("main", "helper", "pkg", "used")
+    sm.DceNoteCall("main", "dead", "pkg", "never")
+    sm.DceNoteCall("main", "", "pkg", "rooted") // NULL caller -> root
+    sm.DceFinish()
+    testing.AssertTrue(sm.DceReachable("main", "main"))
+    testing.AssertTrue(sm.DceReachable("main", "helper"))
+    testing.AssertTrue(sm.DceReachable("pkg", "used"))
+    testing.AssertTrue(sm.DceReachable("pkg", "rooted"))
+    testing.AssertFalse(sm.DceReachable("main", "dead"))
+    testing.AssertFalse(sm.DceReachable("pkg", "never"))
+    sm.DceDisable()
+    testing.AssertFalse(sm.DceEnabled())
+
+    // ----- cleanup -----
+    _r40 := os.Remove(tmp + "/d_stmt.salam")
+    _r41 := os.Remove(tmp + "/d_w71.salam")
+    _r42 := os.Remove(tmp + "/d_match.salam")
+    _r43 := os.Remove(tmp + "/d_variant.salam")
+    _r44 := os.Remove(tmp + "/d_variant2.salam")
+    _r45 := os.Remove(tmp + "/d_enum.salam")
+    _r46 := os.Remove(tmp + "/d_each.salam")
+    _r47 := os.Remove(tmp + "/d_each2.salam")
+    _r48 := os.Remove(tmp + "/d_layout.salam")
+    _r49 := os.Remove(tmp + "/d_layout2.salam")
+    _r50 := os.Remove(tmp + "/d_param.salam")
+    _r51 := os.Rmdir(tmp)
+end
+
+func main:
+    lgr := lg.New(lg.LOG_OFF, false)
+    mut s := sm.New(lgr, "dir/sub/test.salam", "en")
+    mut a := at.NewAst()
+
+    // ----- construction basics -----
+    testing.AssertEqStr(s.lang, "en")
+    testing.AssertEqStr(s.dir, "dir/sub")
+    testing.AssertTrue(s.global != 0)
+    testing.AssertEqInt(s.cur, s.global)
+
+    // ----- primitives: ids equal their TY_* kind values -----
+    testing.AssertEqInt(sm.Prim(s, sm.TY_I32), sm.TY_I32)
+    testing.AssertEqInt(sm.Prim(s, sm.TY_VOID), sm.TY_VOID)
+    testing.AssertEqInt(sm.Prim(s, sm.TY_F64), sm.TY_F64)
+    testing.AssertEqInt(sm.Prim(s, 99), sm.TY_ERROR)
+    testing.AssertEqInt(sm.Prim(s, 0 - 3), sm.TY_ERROR)
+    testing.AssertEqInt(sm.Ty(s, sm.TY_STR), sm.TY_STR)
+    testing.AssertEqInt(sm.ErrTy(s), sm.TY_ERROR)
+
+    // ----- type_to_string: primitives and specials -----
+    testing.AssertEqStr(sm.ToString(s, sm.TYPE_NONE), "<null>")
+    testing.AssertEqStr(sm.ToString(s, sm.TY_ERROR), "<error>")
+    testing.AssertEqStr(sm.ToString(s, sm.TY_VOID), "void")
+    testing.AssertEqStr(sm.ToString(s, sm.TY_BOOL), "bool")
+    testing.AssertEqStr(sm.ToString(s, sm.TY_CHAR), "char")
+    testing.AssertEqStr(sm.ToString(s, sm.TY_STR), "str")
+    testing.AssertEqStr(sm.ToString(s, sm.TY_UCHAR), "uchar")
+    testing.AssertEqStr(sm.ToString(s, sm.TY_NULL), "null")
+    testing.AssertEqStr(sm.ToString(s, sm.TY_I8), "i8")
+    testing.AssertEqStr(sm.ToString(s, sm.TY_I64), "i64")
+    testing.AssertEqStr(sm.ToString(s, sm.TY_U16), "u16")
+    testing.AssertEqStr(sm.ToString(s, sm.TY_SIZE), "size")
+    testing.AssertEqStr(sm.ToString(s, sm.TY_F32), "f32")
+
+    // ----- pointer interning -----
+    p1 := sm.PtrTo(s, sm.TY_I32)
+    p2 := sm.PtrTo(s, sm.TY_I32)
+    testing.AssertEqInt(p1, p2)
+    testing.AssertEqStr(sm.ToString(s, p1), "i32*")
+    pp := sm.PtrTo(s, p1)
+    testing.AssertEqStr(sm.ToString(s, pp), "i32**")
+    testing.AssertTrue(pp != p1)
+    p3 := sm.PtrTo(s, sm.TY_STR)
+    testing.AssertTrue(p3 != p1)
+    testing.AssertEqStr(sm.ToString(s, p3), "str*")
+
+    // ----- array interning + formatting -----
+    ar1 := sm.ArrayOf(s, sm.TY_I32, 3 as i64)
+    ar2 := sm.ArrayOf(s, sm.TY_I32, 3 as i64)
+    testing.AssertEqInt(ar1, ar2)
+    testing.AssertEqStr(sm.ToString(s, ar1), "i32[3]")
+    ar4 := sm.ArrayOf(s, sm.TY_I32, 4 as i64)
+    testing.AssertTrue(ar4 != ar1)
+    ar2d := sm.ArrayOf(s, ar1, 2 as i64)
+    testing.AssertEqStr(sm.ToString(s, ar2d), "i32[2][3]")
+    ar0 := sm.ArrayOf(s, sm.TY_STR, 0 as i64)
+    testing.AssertEqStr(sm.ToString(s, ar0), "str[]")
+
+    // ----- slice: not interned, but equivalent -----
+    sl1 := sm.SliceOf(s, sm.TY_I32)
+    sl2 := sm.SliceOf(s, sm.TY_I32)
+    testing.AssertTrue(sl1 != sl2)
+    testing.AssertTrue(sm.Equiv(s, sl1, sl2))
+    testing.AssertEqStr(sm.ToString(s, sl1), "slice<i32>")
+
+    // ----- vec / map / map_iter / file -----
+    vs := sm.VecOf(s, sm.TY_STR)
+    testing.AssertEqStr(sm.ToString(s, vs), "Vector<str>")
+    mp := sm.MapOf(s, sm.TY_STR, sm.TY_I32)
+    testing.AssertEqStr(sm.ToString(s, mp), "HashMap<str, i32>")
+    mi := sm.MapIterOf(s, sm.TY_STR, sm.TY_I32)
+    testing.AssertEqStr(sm.ToString(s, mi), "MapIter<str, i32>")
+    fl := sm.FileType(s)
+    testing.AssertEqStr(sm.ToString(s, fl), "File")
+    testing.AssertTrue(sm.Equiv(s, mp, sm.MapOf(s, sm.TY_STR, sm.TY_I32)))
+    testing.AssertFalse(sm.Equiv(s, mp, sm.MapOf(s, sm.TY_I32, sm.TY_I32)))
+    testing.AssertFalse(sm.Equiv(s, mp, mi))
+
+    // ----- function types -----
+    mut fparams := Vector {} as Vector<int>
+    fparams.push(sm.TY_I32)
+    fparams.push(sm.TY_STR)
+    ft := sm.FuncType(s, sm.TY_BOOL, fparams)
+    testing.AssertEqStr(sm.ToString(s, ft), "func(i32, str) bool")
+    ft2 := sm.FuncType(s, sm.TY_BOOL, fparams)
+    testing.AssertTrue(ft != ft2)
+    testing.AssertTrue(sm.Equiv(s, ft, ft2))
+    fparams.free()
+    mut noparams := Vector {} as Vector<int>
+    ft0 := sm.FuncType(s, sm.TY_VOID, noparams)
+    testing.AssertEqStr(sm.ToString(s, ft0), "func() void")
+    testing.AssertFalse(sm.Equiv(s, ft, ft0))
+    noparams.free()
+
+    // ----- variant types (member dedup + tags) -----
+    mut vmem := Vector {} as Vector<int>
+    vmem.push(sm.TY_I32)
+    vmem.push(sm.TY_F64)
+    vmem.push(sm.TY_STR)
+    vmem.push(sm.TY_I32) // duplicate — dropped like the C
+    vt := sm.VariantOf(s, vmem)
+    testing.AssertEqStr(sm.ToString(s, vt), "Variant<i32, f64, str>")
+    testing.AssertEqInt(sm.VariantTag(s, vt, sm.TY_I32), 0)
+    testing.AssertEqInt(sm.VariantTag(s, vt, sm.TY_F64), 1)
+    testing.AssertEqInt(sm.VariantTag(s, vt, sm.TY_STR), 2)
+    testing.AssertEqInt(sm.VariantTag(s, vt, sm.TY_U8), 0 - 1)
+    testing.AssertEqInt(sm.VariantTag(s, sm.TY_I32, sm.TY_I32), 0 - 1)
+    vt2 := sm.VariantOf(s, vmem)
+    testing.AssertTrue(sm.Equiv(s, vt, vt2))
+    vmem.free()
+
+    // ----- struct / enum / dyn -----
+    sy1 := sm.NewSymbol(s, sm.SYM_STRUCT, "Point")
+    sy2 := sm.NewSymbol(s, sm.SYM_STRUCT, "Other")
+    st1 := sm.StructType(s, sy1, "Point")
+    st1b := sm.StructType(s, sy1, "Point")
+    st2 := sm.StructType(s, sy2, "Other")
+    testing.AssertEqStr(sm.ToString(s, st1), "Point")
+    testing.AssertTrue(sm.Equiv(s, st1, st1b)) // same decl
+    testing.AssertFalse(sm.Equiv(s, st1, st2)) // different decl + name
+    en1 := sm.EnumType(s, 0, "Color")
+    testing.AssertEqStr(sm.ToString(s, en1), "Color")
+    testing.AssertFalse(sm.Equiv(s, st1, en1)) // kind differs
+    dy1 := sm.DynType(s, 0, "Shape")
+    testing.AssertEqStr(sm.ToString(s, dy1), "dyn Shape")
+
+    // ----- predicates -----
+    testing.AssertTrue(sm.IsError(s, sm.TYPE_NONE))
+    testing.AssertTrue(sm.IsError(s, sm.TY_ERROR))
+    testing.AssertFalse(sm.IsError(s, sm.TY_I32))
+    testing.AssertTrue(sm.IsInteger(s, sm.TY_U64))
+    testing.AssertTrue(sm.IsInteger(s, sm.TY_SIZE))
+    testing.AssertFalse(sm.IsInteger(s, sm.TY_F32))
+    testing.AssertFalse(sm.IsInteger(s, sm.TY_BOOL))
+    testing.AssertTrue(sm.IsFloat(s, sm.TY_F64))
+    testing.AssertFalse(sm.IsFloat(s, sm.TY_I8))
+    testing.AssertTrue(sm.IsNumeric(s, sm.TY_I16))
+    testing.AssertFalse(sm.IsNumeric(s, sm.TY_STR))
+    testing.AssertTrue(sm.IsSigned(s, sm.TY_I64))
+    testing.AssertFalse(sm.IsSigned(s, sm.TY_U8))
+    testing.AssertFalse(sm.IsSigned(s, sm.TY_SIZE))
+
+    // ----- assignability -----
+    testing.AssertTrue(sm.Assignable(s, sm.TY_I32, sm.TY_I8))
+    testing.AssertFalse(sm.Assignable(s, sm.TY_I8, sm.TY_I32))
+    testing.AssertTrue(sm.Assignable(s, sm.TY_U32, sm.TY_U8))
+    testing.AssertFalse(sm.Assignable(s, sm.TY_I32, sm.TY_U8)) // sign mix
+    testing.AssertTrue(sm.Assignable(s, sm.TY_F64, sm.TY_I32))
+    testing.AssertTrue(sm.Assignable(s, sm.TY_F64, sm.TY_F32))
+    testing.AssertFalse(sm.Assignable(s, sm.TY_F32, sm.TY_F64))
+    testing.AssertTrue(sm.Assignable(s, p1, sm.TY_NULL))
+    testing.AssertTrue(sm.Assignable(s, sm.TY_I32, en1))
+    testing.AssertTrue(sm.Assignable(s, sm.TY_STR, sm.TY_UCHAR))
+    testing.AssertTrue(sm.Assignable(s, dy1, st1))
+    testing.AssertTrue(sm.Assignable(s, vt, sm.TY_I32))
+    testing.AssertFalse(sm.Assignable(s, vt, sm.TY_U8))
+    testing.AssertFalse(sm.Assignable(s, sm.TY_I32, sm.TY_BOOL))
+    testing.AssertTrue(sm.Assignable(s, sm.TY_ERROR, sm.TY_STR))
+    testing.AssertTrue(sm.Assignable(s, sm.TY_STR, sm.TYPE_NONE))
+
+    // ----- castability -----
+    testing.AssertTrue(sm.Castable(s, p1, p3))
+    testing.AssertTrue(sm.Castable(s, sm.TY_I64, p1))
+    testing.AssertTrue(sm.Castable(s, p1, sm.TY_I64))
+    testing.AssertTrue(sm.Castable(s, sm.TY_STR, p1))
+    testing.AssertTrue(sm.Castable(s, p1, sm.TY_STR))
+    testing.AssertTrue(sm.Castable(s, sm.TY_UCHAR, sm.TY_STR))
+    testing.AssertTrue(sm.Castable(s, ft, p1))
+    testing.AssertTrue(sm.Castable(s, sm.TY_I32, sm.TY_BOOL))
+    testing.AssertTrue(sm.Castable(s, sm.TY_CHAR, sm.TY_I32))
+    testing.AssertTrue(sm.Castable(s, en1, sm.TY_I32))
+    testing.AssertFalse(sm.Castable(s, sm.TY_STR, sm.TY_I32))
+    testing.AssertFalse(sm.Castable(s, vs, sm.TY_I32))
+
+    // ----- common arithmetic type -----
+    testing.AssertEqInt(sm.CommonArith(s, sm.TY_I32, sm.TY_I64), sm.TY_I64)
+    testing.AssertEqInt(sm.CommonArith(s, sm.TY_U8, sm.TY_U16), sm.TY_U16)
+    testing.AssertEqInt(sm.CommonArith(s, sm.TY_I32, sm.TY_U32), sm.TYPE_NONE)
+    testing.AssertEqInt(sm.CommonArith(s, sm.TY_I32, sm.TY_F32), sm.TY_F32)
+    testing.AssertEqInt(sm.CommonArith(s, sm.TY_F32, sm.TY_F64), sm.TY_F64)
+    testing.AssertEqInt(sm.CommonArith(s, sm.TY_STR, sm.TY_I32), sm.TYPE_NONE)
+    testing.AssertEqInt(sm.CommonArith(s, sm.TY_I8, sm.TY_I8), sm.TY_I8)
+
+    // ----- primitive name lookup (multi-language + folding) -----
+    testing.AssertEqInt(sm.PrimKindFromName("int", ""), sm.TY_I32)
+    testing.AssertEqInt(sm.PrimKindFromName("i64", ""), sm.TY_I64)
+    testing.AssertEqInt(sm.PrimKindFromName("uint", ""), sm.TY_U32)
+    testing.AssertEqInt(sm.PrimKindFromName("float", ""), sm.TY_F32)
+    testing.AssertEqInt(sm.PrimKindFromName("size", ""), sm.TY_SIZE)
+    testing.AssertEqInt(sm.PrimKindFromName("nope", ""), 0 - 1)
+    testing.AssertEqInt(sm.PrimKindFromName("int", "en"), sm.TY_I32)
+    testing.AssertEqInt(sm.PrimKindFromName("صحیح", "fa"), sm.TY_I32)
+    testing.AssertEqInt(sm.PrimKindFromName("صحيح", "ar"), sm.TY_I32)
+    // yeh folding: the Persian spelling also matches the Arabic row
+    testing.AssertEqInt(sm.PrimKindFromName("صحیح", "ar"), sm.TY_I32)
+    testing.AssertEqInt(sm.PrimKindFromName("bool", "fa"), 0 - 1)
+    testing.AssertEqInt(sm.PrimKindFromName("رشته", ""), sm.TY_STR)
+    testing.AssertEqInt(sm.PrimKindFromName("یونیکد", ""), sm.TY_UCHAR)
+    testing.AssertEqInt(sm.PrimKindFromName("عشري", ""), sm.TY_F32)
+    testing.AssertEqInt(sm.PrimKindFromName("اندازه", "fa"), sm.TY_SIZE)
+    testing.AssertEqInt(sm.PrimKindFromName("حجم", "ar"), sm.TY_SIZE)
+
+    // ----- intrinsic canonicalization -----
+    testing.AssertEqStr(sm.IntrinsicTypeCanon("وکتور"), "Vector")
+    testing.AssertEqStr(sm.IntrinsicTypeCanon("متجه"), "Vector")
+    testing.AssertEqStr(sm.IntrinsicTypeCanon("نگاشت"), "HashMap")
+    testing.AssertEqStr(sm.IntrinsicTypeCanon("گوناگون"), "Variant")
+    testing.AssertEqStr(sm.IntrinsicTypeCanon("Vector"), "Vector")
+    testing.AssertEqStr(sm.IntrinsicTypeCanon("Widget"), "Widget")
+    testing.AssertEqStr(sm.IntrinsicMethodCanon("بیفزا"), "push")
+    testing.AssertEqStr(sm.IntrinsicMethodCanon("أضف"), "push")
+    testing.AssertEqStr(sm.IntrinsicMethodCanon("به صحیح"), "to_int")
+    testing.AssertEqStr(sm.IntrinsicMethodCanon("خواندن خط"), "readline")
+    testing.AssertEqStr(sm.IntrinsicMethodCanon("push"), "push")
+
+    // ----- alias helpers -----
+    mut aliases := Vector {} as Vector<str>
+    aliases.push("fa")
+    aliases.push("تابع")
+    aliases.push("ar")
+    aliases.push("دالة")
+    testing.AssertEqStr(sm.AliasForLang(aliases, "fa"), "تابع")
+    testing.AssertEqStr(sm.AliasForLang(aliases, "ar"), "دالة")
+    testing.AssertEqStr(sm.AliasForLang(aliases, "en"), "")
+    aliases.free()
+
+    // ----- scopes: define / lookup / shadowing / aux -----
+    child := sm.NewScope(s, sm.SCOPE_BLOCK, s.global)
+    v1 := sm.NewSymbol(s, sm.SYM_VAR, "x")
+    d1 := sm.Define(s, s.global, v1)
+    testing.AssertEqInt(d1, 0)
+    dupsym := sm.NewSymbol(s, sm.SYM_VAR, "x")
+    d2 := sm.Define(s, s.global, dupsym)
+    testing.AssertEqInt(d2, v1) // duplicate returns the existing symbol
+    testing.AssertEqInt(sm.LookupLocal(s, s.global, "x"), v1)
+    testing.AssertEqInt(sm.LookupLocal(s, child, "x"), 0)
+    testing.AssertEqInt(sm.Lookup(s, child, "x"), v1) // via parent chain
+    v2 := sm.NewSymbol(s, sm.SYM_VAR, "x")
+    d3 := sm.Define(s, child, v2)
+    testing.AssertEqInt(d3, 0)
+    testing.AssertEqInt(sm.Lookup(s, child, "x"), v2)     // shadowed
+    testing.AssertEqInt(sm.Lookup(s, s.global, "x"), v1)  // outer unchanged
+    testing.AssertEqInt(sm.Lookup(s, child, "nothere"), 0)
+    mut wh := 0
+    f1 := sm.LookupWhere(s, child, "x", wh)
+    testing.AssertEqInt(f1, v2)
+    testing.AssertEqInt(wh, child)
+    wh = 0
+    f2 := sm.LookupWhere(s, s.global, "x", wh)
+    testing.AssertEqInt(f2, v1)
+    testing.AssertEqInt(wh, s.global)
+    // aux scope chain (interface/impl method scopes use this)
+    auxsc := sm.NewScope(s, sm.SCOPE_STRUCT, 0)
+    vy := sm.NewSymbol(s, sm.SYM_FIELD, "y")
+    dy := sm.Define(s, auxsc, vy)
+    testing.AssertEqInt(dy, 0)
+    mut chv := sm.ScopeAt(s, child)
+    chv.aux = auxsc
+    sm.ScopePut(s, child, chv)
+    testing.AssertEqInt(sm.Lookup(s, child, "y"), vy)
+    testing.AssertEqInt(sm.Lookup(s, s.global, "y"), 0)
+    // scope kind inheritance: child of a func scope keeps self_type/fn
+    fnsc := sm.NewScope(s, sm.SCOPE_FUNC, s.global)
+    mut fnv := sm.ScopeAt(s, fnsc)
+    fnv.self_type = st1
+    fnv.fn = 0
+    sm.ScopePut(s, fnsc, fnv)
+    blocksc := sm.NewScope(s, sm.SCOPE_BLOCK, fnsc)
+    testing.AssertEqInt(sm.ScopeAt(s, blocksc).self_type, st1)
+
+    // ----- overload sets -----
+    fsym := sm.NewSymbol(s, sm.SYM_FUNC, "add")
+    dfs := sm.Define(s, s.global, fsym)
+    testing.AssertEqInt(dfs, 0)
+    sg1 := sm.NewSig(s)
+    mut sg1v := sm.SigAt(s, sg1)
+    sg1v.ret_type = sm.TY_I32
+    sg1v.params.push(sm.TY_I32)
+    sg1v.params.push(sm.TY_I32)
+    sg1v.required = 2
+    sm.SigPut(s, sg1, sg1v)
+    sg2 := sm.NewSig(s)
+    mut sg2v := sm.SigAt(s, sg2)
+    sg2v.ret_type = sm.TY_F64
+    sg2v.params.push(sm.TY_F64)
+    sg2v.params.push(sm.TY_F64)
+    sg2v.required = 2
+    sm.SigPut(s, sg2, sg2v)
+    sm.AddOverload(s, fsym, sg1)
+    sm.AddOverload(s, fsym, sg2)
+    fsv := sm.SymAt(s, fsym)
+    testing.AssertEqInt(fsv.overloads.len(), 2)
+    testing.AssertEqInt(fsv.overloads.get(0)[0], sg1)
+    testing.AssertEqInt(fsv.overloads.get(1)[0], sg2)
+    back := sm.SigAt(s, sg1)
+    testing.AssertEqInt(back.params.len(), 2)
+    testing.AssertEqInt(back.params.get(1)[0], sm.TY_I32)
+    testing.AssertEqInt(back.ret_type, sm.TY_I32)
+    back2 := sm.SigAt(s, sg2)
+    testing.AssertEqInt(back2.ret_type, sm.TY_F64)
+
+    // ----- mangling -----
+    mut mts := Vector {} as Vector<int>
+    mts.push(sm.TY_I32)
+    mts.push(sm.TY_I32)
+    testing.AssertEqStr(sm.MangleFunc(s, "", "add", mts), "add__i32_i32")
+    mts.free()
+    mut mnone := Vector {} as Vector<int>
+    testing.AssertEqStr(sm.MangleFunc(s, "", "main", mnone), "main__void")
+    testing.AssertEqStr(sm.MangleFunc(s, "Vec", "push", mnone), "S_Vec_push__void")
+    mnone.free()
+    mut mmix := Vector {} as Vector<int>
+    mmix.push(p1)      // i32*  -> Pi32
+    mmix.push(ar1)     // i32[3] -> A3i32
+    mmix.push(sm.TY_STR)
+    mmix.push(st1)     // struct Point -> Point
+    testing.AssertEqStr(sm.MangleFunc(s, "", "f", mmix), "f__Pi32_A3i32_s_Point")
+    mmix.free()
+    testing.AssertEqStr(sm.ImplOwnerKey("i32"), "impl@i32")
+
+    // ----- builtin registry -----
+    testing.AssertEqInt(sm.BuiltinCount(), 3)
+    testing.AssertEqInt(sm.BuiltinLookup("char_from_code"), 0)
+    testing.AssertEqInt(sm.BuiltinLookup("strcmp"), 1)
+    testing.AssertEqInt(sm.BuiltinLookup("join"), 2)
+    testing.AssertEqInt(sm.BuiltinLookup("printf"), 0 - 1)
+    b0 := sm.BuiltinAt(0)
+    testing.AssertEqStr(b0.name, "char_from_code")
+    testing.AssertEqStr(b0.runtime, "salam_char_from_code")
+    testing.AssertEqInt(b0.nargs, 1)
+    testing.AssertEqStr(b0.ret_type, "str")
+    testing.AssertEqStr(b0.arg, "i32")
+    b1 := sm.BuiltinAt(1)
+    testing.AssertEqStr(b1.runtime, "strcmp")
+    testing.AssertEqInt(b1.nargs, 2)
+    testing.AssertEqStr(b1.ret_type, "i32")
+    testing.AssertEqStr(b1.arg, "str")
+    b2 := sm.BuiltinAt(2)
+    testing.AssertEqStr(b2.runtime, "salam_thread_join")
+    testing.AssertEqStr(b2.ret_type, "void")
+    testing.AssertEqStr(b2.arg, "i64")
+
+    // salam_builtin_global_const
+    n1 := at.NewNode(a, at.AST_IDENTIFIER)
+    mut isstr := false
+    ok1 := sm.BuiltinGlobalConst(a, n1, "SALAM_VERSION", isstr)
+    testing.AssertTrue(ok1)
+    testing.AssertTrue(isstr)
+    n1v := at.Get(a, n1)
+    testing.AssertEqInt(n1v.kind, at.AST_LITERAL)
+    testing.AssertEqInt(n1v.op, tok.TK_STRING)
+    testing.AssertEqInt(n1v.value_kind, tok.TV_STRING)
+    testing.AssertEqStr(n1v.value_str, co.VERSION)
+    n2 := at.NewNode(a, at.AST_IDENTIFIER)
+    ok2 := sm.BuiltinGlobalConst(a, n2, "SALAM_VERSION_CODE", isstr)
+    testing.AssertTrue(ok2)
+    testing.AssertFalse(isstr)
+    n2v := at.Get(a, n2)
+    testing.AssertEqInt(n2v.kind, at.AST_LITERAL)
+    testing.AssertEqInt(n2v.op, tok.TK_INT)
+    testing.AssertEqInt(n2v.value_kind, tok.TV_INT)
+    testing.AssertEqInt(n2v.value_int as int, 206) // "0.2.6" -> 206
+    n3 := at.NewNode(a, at.AST_IDENTIFIER)
+    ok3 := sm.BuiltinGlobalConst(a, n3, "SOMETHING_ELSE", isstr)
+    testing.AssertFalse(ok3)
+    testing.AssertEqInt(at.Get(a, n3).kind, at.AST_IDENTIFIER)
+
+    // ----- AST type-node resolution -----
+    // NULL type node -> void (function without return type)
+    testing.AssertEqInt(sm.ResolveType(s, a, 0), sm.TY_VOID)
+    // primitive
+    t1 := type_node(a, "i32")
+    testing.AssertEqInt(sm.ResolveType(s, a, t1), sm.TY_I32)
+    testing.AssertEqStr(at.Get(a, t1).type_str, "i32") // decorated
+    // pointer
+    t2 := type_node(a, "str")
+    mut t2v := at.Get(a, t2)
+    t2v.is_pointer = true
+    at.Put(a, t2, t2v)
+    r2 := sm.ResolveType(s, a, t2)
+    testing.AssertEqInt(r2, p3) // interned: same id as PtrTo(str)
+    testing.AssertEqStr(sm.ToString(s, r2), "str*")
+    // fixed array via literal dims — interned with ArrayOf
+    t3 := type_node(a, "i32")
+    add_dim_lit(a, t3, 3)
+    r3 := sm.ResolveType(s, a, t3)
+    testing.AssertEqInt(r3, ar1)
+    testing.AssertEqStr(at.Get(a, t3).type_str, "i32[3]")
+    // 2-D array: dims [2, 3] -> i32[2][3]
+    t4 := type_node(a, "i32")
+    add_dim_lit(a, t4, 2)
+    add_dim_lit(a, t4, 3)
+    r4 := sm.ResolveType(s, a, t4)
+    testing.AssertEqInt(r4, ar2d)
+    testing.AssertEqStr(sm.ToString(s, r4), "i32[2][3]")
+    // slice
+    t5 := type_node(a, "i32")
+    mut t5v := at.Get(a, t5)
+    t5v.is_slice = true
+    at.Put(a, t5, t5v)
+    r5 := sm.ResolveType(s, a, t5)
+    testing.AssertEqStr(sm.ToString(s, r5), "slice<i32>")
+    // function type node: func(i32) bool
+    t6 := type_node(a, "func")
+    at.AddChild(a, t6, type_node(a, "i32"))
+    at.SetTypeNode(a, t6, type_node(a, "bool"))
+    r6 := sm.ResolveType(s, a, t6)
+    testing.AssertEqStr(sm.ToString(s, r6), "func(i32) bool")
+    testing.AssertEqStr(at.Get(a, t6).type_str, "func(i32) bool")
+    // extern function type node -> externfunc(...)
+    t7 := type_node(a, "func")
+    mut t7v := at.Get(a, t7)
+    t7v.is_extern = true
+    at.Put(a, t7, t7v)
+    at.AddChild(a, t7, type_node(a, "str"))
+    r7 := sm.ResolveType(s, a, t7)
+    testing.AssertEqStr(sm.ToString(s, r7), "externfunc(str) void")
+    // File
+    t8 := type_node(a, "File")
+    r8 := sm.ResolveType(s, a, t8)
+    testing.AssertEqStr(sm.ToString(s, r8), "File")
+    // Variant<i32, str>
+    t9 := type_node(a, "Variant")
+    at.AddChild(a, t9, type_node(a, "i32"))
+    at.AddChild(a, t9, type_node(a, "str"))
+    r9 := sm.ResolveType(s, a, t9)
+    testing.AssertEqStr(sm.ToString(s, r9), "Variant<i32, str>")
+    // named struct type via symbol table
+    psym := sm.NewSymbol(s, sm.SYM_STRUCT, "Point")
+    mut psv := sm.SymAt(s, psym)
+    psv.ty = st1
+    psv.is_pub = true
+    sm.SymPut(s, psym, psv)
+    dps := sm.Define(s, s.global, psym)
+    testing.AssertEqInt(dps, 0)
+    t10 := type_node(a, "Point")
+    r10 := sm.ResolveType(s, a, t10)
+    testing.AssertEqInt(r10, st1)
+    testing.AssertEqStr(at.Get(a, t10).type_str, "Point")
+    // array dimension from a const symbol
+    csym := sm.NewSymbol(s, sm.SYM_CONST, "N")
+    mut csv := sm.SymAt(s, csym)
+    csv.has_ival = true
+    csv.ival = 4 as i64
+    sm.SymPut(s, csym, csv)
+    dcs := sm.Define(s, s.global, csym)
+    testing.AssertEqInt(dcs, 0)
+    t11 := type_node(a, "i32")
+    dim11 := at.NewNode(a, at.AST_IDENTIFIER)
+    at.SetName(a, dim11, "N")
+    at.AddDim(a, t11, dim11)
+    r11 := sm.ResolveType(s, a, t11)
+    testing.AssertEqInt(r11, ar4) // i32[4], interned
+    // dyn on a defined interface
+    ifsym := sm.NewSymbol(s, sm.SYM_INTERFACE, "Shape")
+    difs := sm.Define(s, s.global, ifsym)
+    testing.AssertEqInt(difs, 0)
+    t12 := type_node(a, "Shape")
+    mut t12v := at.Get(a, t12)
+    t12v.is_dyn = true
+    at.Put(a, t12, t12v)
+    r12 := sm.ResolveType(s, a, t12)
+    testing.AssertEqStr(sm.ToString(s, r12), "dyn Shape")
+    testing.AssertEqInt(sm.StructSymOf(s, st1), sy1)
+    testing.AssertEqInt(sm.StructSymOf(s, sm.PtrTo(s, st1)), sy1)
+    testing.AssertEqInt(sm.StructSymOf(s, sm.TY_I32), 0)
+
+    // ----- error paths (exact C codes) -----
+    e0 := dg.ErrorCount(s.diag)
+    // unknown type -> E001
+    tbad := type_node(a, "NoSuchType")
+    rbad := sm.ResolveType(s, a, tbad)
+    testing.AssertEqInt(rbad, sm.TY_ERROR)
+    testing.AssertEqInt(dg.ErrorCount(s.diag), e0 + 1)
+    dlast := dg.ItemAt(s.diag, dg.Count(s.diag) - 1)
+    testing.AssertEqInt(dlast.code, 1)
+    testing.AssertEqStr(dlast.body, "unknown type 'NoSuchType'")
+    // Variant arity -> E001
+    tv1 := type_node(a, "Variant")
+    at.AddChild(a, tv1, type_node(a, "i32"))
+    rv1 := sm.ResolveType(s, a, tv1)
+    testing.AssertEqInt(rv1, sm.TY_ERROR)
+    testing.AssertEqInt(dg.ErrorCount(s.diag), e0 + 2)
+    dvar := dg.ItemAt(s.diag, dg.Count(s.diag) - 1)
+    testing.AssertEqStr(dvar.body,
+                        "'Variant' requires at least 2 type arguments (got 1)")
+    // dyn on a non-interface -> E001
+    tdb := type_node(a, "Point")
+    mut tdbv := at.Get(a, tdb)
+    tdbv.is_dyn = true
+    at.Put(a, tdb, tdbv)
+    rdb := sm.ResolveType(s, a, tdb)
+    testing.AssertEqInt(rdb, sm.TY_ERROR)
+    testing.AssertEqInt(dg.ErrorCount(s.diag), e0 + 3)
+    // bad array dim -> E011
+    tad := type_node(a, "i32")
+    dimbad := at.NewNode(a, at.AST_IDENTIFIER)
+    at.SetName(a, dimbad, "unknown_const")
+    at.AddDim(a, tad, dimbad)
+    rad := sm.ResolveType(s, a, tad)
+    testing.AssertEqStr(sm.ToString(s, rad), "i32[]") // dim resolved to 0
+    dbad := dg.ItemAt(s.diag, dg.Count(s.diag) - 1)
+    testing.AssertEqInt(dbad.code, 11)
+    testing.AssertEqStr(dbad.body, "array size must be a constant integer")
+
+    // ----- Err / Warn helpers + requal suppression -----
+    w0 := dg.WarningCount(s.diag)
+    sm.Warn(s, 31, dg.NoSpan(), "test warning")
+    testing.AssertEqInt(dg.WarningCount(s.diag), w0 + 1)
+    s.requal = true
+    sm.Warn(s, 31, dg.NoSpan(), "suppressed warning")
+    testing.AssertEqInt(dg.WarningCount(s.diag), w0 + 1)
+    s.requal = false
+    eb := dg.ErrorCount(s.diag)
+    sm.Err(s, 42, dg.NoSpan(), "test error")
+    testing.AssertEqInt(dg.ErrorCount(s.diag), eb + 1)
+
+    // ----- Decorate + PureFn -----
+    dn := at.NewNode(a, at.AST_IDENTIFIER)
+    rdec := sm.Decorate(s, a, dn, sm.TY_STR)
+    testing.AssertEqInt(rdec, sm.TY_STR)
+    testing.AssertEqStr(at.Get(a, dn).type_str, "str")
+    fdn := at.NewNode(a, at.AST_FUNC_DEF)
+    mut fdnv := at.Get(a, fdn)
+    fdnv.is_pure = true
+    at.Put(a, fdn, fdnv)
+    sgp := sm.NewSig(s)
+    mut sgpv := sm.SigAt(s, sgp)
+    sgpv.decl = fdn
+    sm.SigPut(s, sgp, sgpv)
+    s.cur_func = sgp
+    testing.AssertEqInt(sm.PureFn(s, a), fdn)
+    s.cur_func = 0
+    testing.AssertEqInt(sm.PureFn(s, a), 0)
+
+    // ----- cleanup -----
+    sm.Free(s)
+    at.FreeAst(a)
+
+    // ----- 5b: pipeline front, decl collection, ordering, imports -----
+    test_5b()
+
+    // ----- 5c: expressions, calls, literals, generics, folding -----
+    test_5c()
+
+    // ----- 5d: statements, match, layout, unused params, dce -----
+    test_5d()
+
+    os.Exit(testing.Summary())
+end

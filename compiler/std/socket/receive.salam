@@ -1,0 +1,113 @@
+package socket
+
+@en "Receive"
+@fa "دریافت پیام"
+@ar "استقبال رسالة"
+pub func Receive(c &: Conn): Message:
+    mut msg := Message { kind = 0, text = "" }
+    if !c.open:
+        ret msg
+    end
+    mut acc := ""
+    mut acc_kind := 1
+    mut going := true
+    until going:
+        fsize := _frame_size(c)
+        if fsize < 0:
+            Close(c)
+            going = false
+        else fsize == 0:
+            n := _fill(c)
+            if n <= 0:
+                _shutdown(c)
+                going = false
+            end
+        else:
+            b0 := _bget(c.buf, 0)
+            b1 := _bget(c.buf, 1)
+            fin := b0 / 128
+            opcode := b0 % 16
+            masked := (b1 / 128) == 1
+            mut plen := b1 % 128
+            mut hlen := 2
+            if plen == 126:
+                plen = _bget(c.buf, 2) * 256 + _bget(c.buf, 3)
+                hlen = 4
+            else plen == 127:
+                mut v := 0 as i64
+                repeat 8 with k:
+                    v = v * 256 + (_bget(c.buf, 2 + k) as i64)
+                end
+                plen = v as int
+                hlen = 10
+            end
+            mut moff := 0
+            if masked:
+                moff = hlen
+                hlen += 4
+            end
+            payload := _payload_str(c, hlen, plen, masked, moff)
+            _consume(c, fsize)
+            if opcode == 9:
+                _send_frame(c, 10, payload)
+            else opcode == 10:
+                msg = Message { kind = 10, text = payload }
+                going = false
+            else opcode == 8:
+                _send_frame(c, 8, "")
+                _shutdown(c)
+                msg = Message { kind = 8, text = "" }
+                going = false
+            else:
+                if opcode == 1 || opcode == 2:
+                    acc_kind = opcode
+                end
+                acc += payload
+                if fin == 1:
+                    msg = Message { kind = acc_kind, text = acc }
+                    going = false
+                end
+            end
+        end
+    end
+    ret msg
+end
+
+@en "ReceiveText"
+@fa "دریافت متن"
+@ar "استقبال نص"
+pub func ReceiveText(c &: Conn): str:
+    m := Receive(c)
+    if m.kind == 1:
+        ret m.text
+    end
+    ret ""
+end
+
+@en "IsText"
+@fa "متن است"
+@ar "هو نص"
+pub func IsText(m: Message): bool:
+    ret m.kind == 1
+end
+
+@en "IsBinary"
+@fa "دودویی است"
+@ar "هو ثنائی"
+pub func IsBinary(m: Message): bool:
+    ret m.kind == 2
+end
+
+@en "IsClose"
+@fa "بسته است"
+@ar "هو إغلاق"
+pub func IsClose(m: Message): bool:
+    ret m.kind == 8
+end
+
+@en "IsPong"
+@fa "پونگ است"
+@ar "هو بونغ"
+pub func IsPong(m: Message): bool:
+    ret m.kind == 10
+end

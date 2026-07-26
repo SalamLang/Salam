@@ -8,6 +8,7 @@ import mem
 import str
 import rand
 import encoding
+import crypto
 
 const WS_GUID := "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -71,64 +72,8 @@ end
 
 func _pow2(n: int): i64:
     mut r := 1 as i64
-    mut i := 0
-    until i < n:
+    repeat n with i:
         r *= 2
-        i += 1
-    end
-    ret r
-end
-
-func _xor32(a0: i64, b0: i64): i64:
-    mut a := a0
-    mut b := b0
-    mut r := 0 as i64
-    mut p := 1 as i64
-    mut i := 0
-    until i < 32:
-        if a % 2 != b % 2:
-            r += p
-        end
-        a /= 2
-        b /= 2
-        p *= 2
-        i += 1
-    end
-    ret r
-end
-
-func _and32(a0: i64, b0: i64): i64:
-    mut a := a0
-    mut b := b0
-    mut r := 0 as i64
-    mut p := 1 as i64
-    mut i := 0
-    until i < 32:
-        if a % 2 == 1 && b % 2 == 1:
-            r += p
-        end
-        a /= 2
-        b /= 2
-        p *= 2
-        i += 1
-    end
-    ret r
-end
-
-func _or32(a0: i64, b0: i64): i64:
-    mut a := a0
-    mut b := b0
-    mut r := 0 as i64
-    mut p := 1 as i64
-    mut i := 0
-    until i < 32:
-        if a % 2 == 1 || b % 2 == 1:
-            r += p
-        end
-        a /= 2
-        b /= 2
-        p *= 2
-        i += 1
     end
     ret r
 end
@@ -138,27 +83,15 @@ func _xor8(a0: int, b0: int): int:
     mut b := b0
     mut r := 0
     mut p := 1
-    mut i := 0
-    until i < 8:
+    repeat 8 with i:
         if a % 2 != b % 2:
             r += p
         end
         a /= 2
         b /= 2
         p *= 2
-        i += 1
     end
     ret r
-end
-
-func _rotl32(x0: i64, n: int): i64:
-    x := x0 % 4294967296
-    if n == 0:
-        ret x
-    end
-    hi := x / _pow2(32 - n)
-    lo := (x * _pow2(n)) % 4294967296
-    ret lo + hi
 end
 
 func _bget(p: void*, i: int): int:
@@ -181,215 +114,6 @@ func _byte_at(s: str, i: int): int:
         v += 256
     end
     ret v
-end
-
-func _msg_byte(s: str, slen: int, total: int, i: int): int:
-    if i < slen:
-        ret _byte_at(s, i)
-    end
-    if i == slen:
-        ret 128
-    end
-    if i >= total - 8:
-        ml := (slen as i64) * 8
-        shift := total - 1 - i
-        mut d := ml
-        mut j := 0
-        until j < shift:
-            d /= 256
-            j += 1
-        end
-        ret (d % 256) as int
-    end
-    ret 0
-end
-
-func _sha1_core(data: str, outp: void*):
-    slen := data.len()
-    total := ((slen + 8) / 64 + 1) * 64
-    mut h0 := 1732584193 as i64
-    mut h1 := 4023233417 as i64
-    mut h2 := 2562383102 as i64
-    mut h3 := 271733878 as i64
-    mut h4 := 3285377520 as i64
-    w := mem.Allocate(640 as u64) as i64*
-    defer mem.Free(w as void*)
-    mut blk := 0
-    until blk < total:
-        mut t := 0
-        until t < 16:
-            base := blk + t * 4
-            b0 := _msg_byte(data, slen, total, base) as i64
-            b1 := _msg_byte(data, slen, total, base + 1) as i64
-            b2 := _msg_byte(data, slen, total, base + 2) as i64
-            b3 := _msg_byte(data, slen, total, base + 3) as i64
-            w[t] = b0 * 16777216 + b1 * 65536 + b2 * 256 + b3
-            t += 1
-        end
-        until t < 80:
-            mixed := _xor32(_xor32(w[t - 3], w[t - 8]), _xor32(w[t - 14], w[t - 16]))
-            w[t] = _rotl32(mixed, 1)
-            t += 1
-        end
-        mut a := h0
-        mut b := h1
-        mut c := h2
-        mut d := h3
-        mut e := h4
-        t = 0
-        until t < 80:
-            mut f := 0 as i64
-            mut k := 0 as i64
-            if t < 20:
-                f = _or32(_and32(b, c), _and32(4294967295 - b, d))
-                k = 1518500249
-            else t < 40:
-                f = _xor32(_xor32(b, c), d)
-                k = 1859775393
-            else t < 60:
-                f = _or32(_or32(_and32(b, c), _and32(b, d)), _and32(c, d))
-                k = 2400959708
-            else:
-                f = _xor32(_xor32(b, c), d)
-                k = 3395469782
-            end
-            temp := (_rotl32(a, 5) + f + e + k + w[t]) % 4294967296
-            e = d
-            d = c
-            c = _rotl32(b, 30)
-            b = a
-            a = temp
-            t += 1
-        end
-        h0 = (h0 + a) % 4294967296
-        h1 = (h1 + b) % 4294967296
-        h2 = (h2 + c) % 4294967296
-        h3 = (h3 + d) % 4294967296
-        h4 = (h4 + e) % 4294967296
-        blk += 64
-    end
-    out := outp as i64*
-    out[0] = h0
-    out[1] = h1
-    out[2] = h2
-    out[3] = h3
-    out[4] = h4
-end
-
-func _b64_bytes(p: void*, n: int): str:
-    alpha := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-    mut result := ""
-    mut i := 0
-    until i < n:
-        b0 := _bget(p, i)
-        mut b1 := 0
-        mut b2 := 0
-        if i + 1 < n: b1 = _bget(p, i + 1) end
-        if i + 2 < n: b2 = _bget(p, i + 2) end
-        result = result.concat(alpha.substr(b0 / 4, 1))
-        result = result.concat(alpha.substr((b0 % 4) * 16 + b1 / 16, 1))
-        if i + 1 < n:
-            result = result.concat(alpha.substr((b1 % 16) * 4 + b2 / 64, 1))
-        else:
-            result = result.concat("=")
-        end
-        if i + 2 < n:
-            result = result.concat(alpha.substr(b2 % 64, 1))
-        else:
-            result = result.concat("=")
-        end
-        i += 3
-    end
-    ret result
-end
-
-@en "Sha1Hex"
-@fa "شا یک شانزدهی"
-@ar "شا١ ست عشری"
-pub func Sha1Hex(data: str): str:
-    out := mem.Allocate(40 as u64)
-    defer mem.Free(out)
-    _sha1_core(data, out)
-    words := out as i64*
-    digits := "0123456789abcdef"
-    mut result := ""
-    mut i := 0
-    until i < 5:
-        word := words[i]
-        mut k := 0
-        until k < 8:
-            d := (word / _pow2(4 * (7 - k))) % 16
-            result = result.concat(digits.substr(d as int, 1))
-            k += 1
-        end
-        i += 1
-    end
-    ret result
-end
-
-@en "Sha1Base64"
-@fa "شا یک شصت و چهار"
-@ar "شا١ أساس ٦٤"
-pub func Sha1Base64(data: str): str:
-    out := mem.Allocate(40 as u64)
-    defer mem.Free(out)
-    _sha1_core(data, out)
-    words := out as i64*
-    bytes := mem.Allocate(20 as u64)
-    defer mem.Free(bytes)
-    mut i := 0
-    until i < 5:
-        word := words[i]
-        _bput(bytes, i * 4, ((word / 16777216) % 256) as int)
-        _bput(bytes, i * 4 + 1, ((word / 65536) % 256) as int)
-        _bput(bytes, i * 4 + 2, ((word / 256) % 256) as int)
-        _bput(bytes, i * 4 + 3, (word % 256) as int)
-        i += 1
-    end
-    result := _b64_bytes(bytes, 20)
-    ret result
-end
-
-@en "AcceptKey"
-@fa "کلید پذیرش"
-@ar "مفتاح قبول"
-pub func AcceptKey(key: str): str:
-    ret Sha1Base64(key + WS_GUID)
-end
-
-func _header_value(headers: str, name_lower: str): str:
-    lower := str.Lower(headers)
-    idx := str.Find(lower, name_lower)
-    if idx < 0:
-        ret ""
-    end
-    ci := str.IndexFrom(headers, ":", idx)
-    if ci < 0:
-        ret ""
-    end
-    mut e := str.IndexFrom(headers, "\r", ci)
-    if e < 0:
-        e = headers.len()
-    end
-    ret str.Trim(headers.substr(ci + 1, e - ci - 1))
-end
-
-@en "HandshakeResponse"
-@fa "پاسخ دست دادن"
-@ar "استجابة مصافحة"
-pub func HandshakeResponse(request: str): str:
-    key := _header_value(request, "sec-websocket-key")
-    if key == "":
-        ret ""
-    end
-    ret "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + AcceptKey(key) + "\r\n\r\n"
-end
-
-@en "HandshakeRequest"
-@fa "درخواست دست دادن"
-@ar "طلب مصافحة"
-pub func HandshakeRequest(host: str, path: str, key: str): str:
-    ret "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n\r\n"
 end
 
 func _new_conn(fd: i64, client: bool): Conn:
@@ -457,15 +181,13 @@ end
 func _payload_str(c &: Conn, off: int, plen: int, masked: bool, moff: int): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
-    mut i := 0
-    until i < plen:
+    repeat plen with i:
         mut b := _bget(c.buf, off + i)
         if masked:
             mk := _bget(c.buf, moff + (i % 4))
             b = _xor8(b, mk)
         end
         str.BufAppendChar(sb, b)
-        i += 1
     end
     result := str.BufStr(sb)
     ret result
@@ -524,10 +246,8 @@ func _frame_size(c &: Conn): int:
             ret 0
         end
         mut v := 0 as i64
-        mut k := 0
-        until k < 8:
+        repeat 8 with k:
             v = v * 256 + (_bget(c.buf, 2 + k) as i64)
-            k += 1
         end
         if v > 104857600:
             ret 0 - 1
@@ -581,10 +301,8 @@ func _send_frame(c &: Conn, opcode: int, payload: str): int:
     else:
         _bput(buf, 1, maskbit + 127)
         p64 := plen as i64
-        mut k := 0
-        until k < 8:
+        repeat 8 with k:
             _bput(buf, 2 + k, ((p64 / _pow2(8 * (7 - k))) % 256) as int)
-            k += 1
         end
     end
     if c.client:
@@ -596,21 +314,17 @@ func _send_frame(c &: Conn, opcode: int, payload: str): int:
         _bput(buf, hlen + 1, m1)
         _bput(buf, hlen + 2, m2)
         _bput(buf, hlen + 3, m3)
-        mut i := 0
-        until i < plen:
+        repeat plen with i:
             mi := i % 4
             mut mk := m0
             if mi == 1: mk = m1 end
             if mi == 2: mk = m2 end
             if mi == 3: mk = m3 end
             _bput(buf, hlen + 4 + i, _xor8(_byte_at(payload, i), mk))
-            i += 1
         end
     else:
-        mut i := 0
-        until i < plen:
+        repeat plen with i:
             _bput(buf, hlen + i, _byte_at(payload, i))
-            i += 1
         end
     end
     sent := net.SendBytes(net.SocketFromFd(c.fd), buf, total)
@@ -621,230 +335,19 @@ func _send_frame(c &: Conn, opcode: int, payload: str): int:
     ret 0
 end
 
-@en "Listen"
-@fa "شنود"
-@ar "استماع"
-pub func Listen(port: int): Server:
-    ret Server { fd = net.Listen(port).fd, port = port }
-end
-
-@en "Ok"
-@fa "معتبر"
-@ar "صالح"
-pub func Ok(srv: Server): bool:
-    ret srv.fd >= 0
-end
-
-@en "CloseServer"
-@fa "بستن سرور"
-@ar "إغلاق الخادم"
-pub func CloseServer(srv: Server):
-    if srv.fd >= 0:
-        net.Close(net.SocketFromFd(srv.fd))
+func _header_value(headers: str, name_lower: str): str:
+    lower := str.Lower(headers)
+    idx := str.Find(lower, name_lower)
+    if idx < 0:
+        ret ""
     end
-end
-
-@en "Accept"
-@fa "پذیرش"
-@ar "قبول"
-pub func Accept(srv: Server): Conn:
-    t := net.Accept(net.SocketFromFd(srv.fd))
-    mut c := _new_conn(t.fd, false)
-    if t.fd < 0:
-        ret c
+    ci := str.IndexFrom(headers, ":", idx)
+    if ci < 0:
+        ret ""
     end
-    hdr := _read_headers(c)
-    resp := HandshakeResponse(hdr)
-    if resp == "":
-        _shutdown(c)
-        ret c
+    mut e := str.IndexFrom(headers, "\r", ci)
+    if e < 0:
+        e = headers.len()
     end
-    n := net.Send(net.SocketFromFd(c.fd), resp)
-    if n <= 0:
-        _shutdown(c)
-        ret c
-    end
-    c.open = true
-    ret c
-end
-
-@en "Dial"
-@fa "شماره گیری"
-@ar "اتصال هاتفی"
-pub func Dial(host: str, port: int, path: str): Conn:
-    s := net.Connect(host, port)
-    mut c := _new_conn(s.fd, true)
-    if s.fd < 0:
-        ret c
-    end
-    key := encoding.Base64Encode(rand.Alnum(16))
-    req := HandshakeRequest(host, path, key)
-    n := net.Send(s, req)
-    if n <= 0:
-        _shutdown(c)
-        ret c
-    end
-    hdr := _read_headers(c)
-    if !str.Contains(hdr, " 101 "):
-        _shutdown(c)
-        ret c
-    end
-    if !str.Contains(hdr, AcceptKey(key)):
-        _shutdown(c)
-        ret c
-    end
-    c.open = true
-    ret c
-end
-
-@en "IsOpen"
-@fa "باز است"
-@ar "مفتوح"
-pub func IsOpen(c &: Conn): bool:
-    ret c.open
-end
-
-@en "SendText"
-@fa "ارسال متن"
-@ar "إرسال نص"
-pub func SendText(c &: Conn, msg: str): int:
-    ret _send_frame(c, 1, msg)
-end
-
-@en "SendBinary"
-@fa "ارسال دودویی"
-@ar "إرسال ثنائی"
-pub func SendBinary(c &: Conn, data: str): int:
-    ret _send_frame(c, 2, data)
-end
-
-@en "Ping"
-@fa "پینگ فرست"
-@ar "إرسال بینغ"
-pub func Ping(c &: Conn, data: str): int:
-    ret _send_frame(c, 9, data)
-end
-
-@en "Close"
-@fa "بستن"
-@ar "إغلاق"
-pub func Close(c &: Conn):
-    if c.open:
-        _send_frame(c, 8, "")
-    end
-    _shutdown(c)
-end
-
-@en "Receive"
-@fa "دریافت پیام"
-@ar "استقبال رسالة"
-pub func Receive(c &: Conn): Message:
-    mut msg := Message { kind = 0, text = "" }
-    if !c.open:
-        ret msg
-    end
-    mut acc := ""
-    mut acc_kind := 1
-    mut going := true
-    until going:
-        fsize := _frame_size(c)
-        if fsize < 0:
-            Close(c)
-            going = false
-        else fsize == 0:
-            n := _fill(c)
-            if n <= 0:
-                _shutdown(c)
-                going = false
-            end
-        else:
-            b0 := _bget(c.buf, 0)
-            b1 := _bget(c.buf, 1)
-            fin := b0 / 128
-            opcode := b0 % 16
-            masked := (b1 / 128) == 1
-            mut plen := b1 % 128
-            mut hlen := 2
-            if plen == 126:
-                plen = _bget(c.buf, 2) * 256 + _bget(c.buf, 3)
-                hlen = 4
-            else plen == 127:
-                mut v := 0 as i64
-                mut k := 0
-                until k < 8:
-                    v = v * 256 + (_bget(c.buf, 2 + k) as i64)
-                    k += 1
-                end
-                plen = v as int
-                hlen = 10
-            end
-            mut moff := 0
-            if masked:
-                moff = hlen
-                hlen += 4
-            end
-            payload := _payload_str(c, hlen, plen, masked, moff)
-            _consume(c, fsize)
-            if opcode == 9:
-                _send_frame(c, 10, payload)
-            else opcode == 10:
-                msg = Message { kind = 10, text = payload }
-                going = false
-            else opcode == 8:
-                _send_frame(c, 8, "")
-                _shutdown(c)
-                msg = Message { kind = 8, text = "" }
-                going = false
-            else:
-                if opcode == 1 || opcode == 2:
-                    acc_kind = opcode
-                end
-                acc += payload
-                if fin == 1:
-                    msg = Message { kind = acc_kind, text = acc }
-                    going = false
-                end
-            end
-        end
-    end
-    ret msg
-end
-
-@en "ReceiveText"
-@fa "دریافت متن"
-@ar "استقبال نص"
-pub func ReceiveText(c &: Conn): str:
-    m := Receive(c)
-    if m.kind == 1:
-        ret m.text
-    end
-    ret ""
-end
-
-@en "IsText"
-@fa "متن است"
-@ar "هو نص"
-pub func IsText(m: Message): bool:
-    ret m.kind == 1
-end
-
-@en "IsBinary"
-@fa "دودویی است"
-@ar "هو ثنائی"
-pub func IsBinary(m: Message): bool:
-    ret m.kind == 2
-end
-
-@en "IsClose"
-@fa "بسته است"
-@ar "هو إغلاق"
-pub func IsClose(m: Message): bool:
-    ret m.kind == 8
-end
-
-@en "IsPong"
-@fa "پونگ است"
-@ar "هو بونغ"
-pub func IsPong(m: Message): bool:
-    ret m.kind == 10
+    ret str.Trim(headers.substr(ci + 1, e - ci - 1))
 end

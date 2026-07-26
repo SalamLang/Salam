@@ -86,7 +86,7 @@ static ast_node_t *parse_type_named(parser_t *p, ast_node_t *n)
         ast_add(p->a, n, parse_type(p));
         while (p_match(p, TK_COMMA))
             ast_add(p->a, n, parse_type(p));
-        p_expect(p, TK_GT, "'>' to close type arguments");
+        p_close_angle(p, "'>' to close type arguments");
     }
     parse_array_dims(p, n);
     parse_ptr_suffix(p, n);

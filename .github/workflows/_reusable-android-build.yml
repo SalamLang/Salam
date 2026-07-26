@@ -1,0 +1,169 @@
+---
+name: (internal) Build & sign Android app
+# checkov:skip=CKV_GHA_7:inputs are only ever read via env: indirection, never interpolated into a run: script
+on:
+  workflow_call:
+    inputs:
+      version_name:
+        description: 'App versionName (e.g. 1.0). Blank keeps the build.gradle.kts default.'
+        required: false
+        type: string
+        default: ''
+      version_code:
+        description: 'App versionCode (integer). Blank keeps the build.gradle.kts default.'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: true
+      ANDROID_KEYSTORE_PASSWORD:
+        required: true
+      ANDROID_KEY_ALIAS:
+        required: true
+      ANDROID_KEY_PASSWORD:
+        required: true
+    outputs:
+      version_name:
+        description: Resolved app versionName
+        value: ${{ jobs.build.outputs.version_name }}
+      version_code:
+        description: Resolved app versionCode
+        value: ${{ jobs.build.outputs.version_code }}
+      artifact_name:
+        description: Name of the uploaded artifact bundling the AAB + universal APK + per-ABI APKs
+        value: ${{ jobs.build.outputs.artifact_name }}
+permissions:
+  contents: read
+jobs:
+  build:
+    name: Build & sign AAB + universal APK + per-ABI APKs
+    runs-on: ubuntu-latest
+    outputs:
+      version_name: ${{ steps.collect.outputs.vname }}
+      version_code: ${{ steps.collect.outputs.vcode }}
+      artifact_name: ${{ steps.collect.outputs.artifact }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Validate signing secrets are configured
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -eu
+          missing=0
+          for v in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD \
+                   ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            eval "val=\${$v:-}"
+            if [ -z "$val" ]; then
+              echo "::error::missing required repository secret: $v"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Configure the release keystore secrets before running this workflow."
+            exit 1
+          fi
+
+      - name: Set up JDK 21 (Temurin) + Gradle cache
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+          cache-dependency-path: |
+            android/gradle/wrapper/gradle-wrapper.properties
+            android/gradle/libs.versions.toml
+            android/**/*.gradle.kts
+
+      - name: Accept Android SDK licenses
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses \
+            >/dev/null 2>&1 || true
+
+      - name: Decode release keystore
+        id: keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -eu
+          ks="$RUNNER_TEMP/salam-application-release.keystore"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$ks"
+          echo "path=$ks" >> "$GITHUB_OUTPUT"
+
+      - name: Build signed release APKs (universal + per-ABI) and AAB
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ steps.keystore.outputs.path }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION_NAME: ${{ inputs.version_name }}
+          VERSION_CODE: ${{ inputs.version_code }}
+        run: |
+          set -eu
+          chmod +x ./gradlew
+          args=(":app:assembleRelease" ":app:bundleRelease" "--no-daemon" "--stacktrace")
+          [ -n "$VERSION_NAME" ] && args+=("-PappVersionName=$VERSION_NAME")
+          [ -n "$VERSION_CODE" ] && args+=("-PappVersionCode=$VERSION_CODE")
+          ./gradlew "${args[@]}"
+
+      - name: Collect & rename the AAB + universal APK + per-ABI APKs
+        id: collect
+        run: |
+          set -eu
+          meta="android/app/build/outputs/apk/release/output-metadata.json"
+          apk_dir="android/app/build/outputs/apk/release"
+          aab_dir="android/app/build/outputs/bundle/release"
+          mkdir -p dist
+
+          vname=$(jq -r '.elements[0].versionName' "$meta")
+          vcode=$(jq -r '.elements[0].versionCode' "$meta")
+
+          count=0
+          while IFS=$'\t' read -r out_file abi; do
+            cp "$apk_dir/$out_file" "dist/salam-application-v${vname}-${vcode}-${abi}.apk"
+            count=$((count + 1))
+          done < <(jq -r '.elements[] | [.outputFile, ((.filters[]? | select(.filterType=="ABI") | .value) // "universal")] | @tsv' "$meta")
+          if [ "$count" -eq 0 ]; then
+            echo "::error::no APK outputs found in $meta"
+            exit 1
+          fi
+
+          aab_src=$(find "$aab_dir" -maxdepth 1 -name '*.aab' | head -1)
+          [ -n "$aab_src" ] || { echo "::error::no .aab found in $aab_dir"; exit 1; }
+          cp "$aab_src" "dist/salam-application-v${vname}-${vcode}.aab"
+
+          {
+            echo "vname=$vname"
+            echo "vcode=$vcode"
+            echo "artifact=salam-android-release"
+          } >> "$GITHUB_OUTPUT"
+          ls -la dist/
+
+      - name: Verify APK signatures
+        run: |
+          set -eu
+          apksigner=$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -name apksigner 2>/dev/null \
+            | sort -V | tail -1 || true)
+          if [ -z "$apksigner" ]; then
+            echo "::warning::apksigner not found; skipping signature verification"
+            exit 0
+          fi
+          for apk in dist/*.apk; do
+            echo "== $apk =="
+            "$apksigner" verify --verbose --print-certs "$apk"
+          done
+
+      - name: Upload AAB + APKs artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: salam-android-release
+          path: dist/*
+          if-no-files-found: error

@@ -44,6 +44,7 @@ typedef struct {
     uint32_t open_colon_line;
     const token_t *prev;
     bool prev_unary;
+    bool prev_after_dot;
     uint32_t prev_end_line;
 } fmt_ctx_t;
 
@@ -102,6 +103,11 @@ static bool fmt_angle_is_generic(const token_stream_t *toks, size_t lt_idx)
         case TK_GT:
             if (--depth == 0) return true;
             break;
+        case TK_SHR:
+            /* '>>' closes two generic levels at once (e.g. 'A<B<C>>'). */
+            depth -= 2;
+            if (depth <= 0) return true;
+            break;
         case TK_IDENT:
         case TK_COMMA:
         case TK_DOT:
@@ -142,6 +148,9 @@ static bool fmt_lambda_header_at(const token_stream_t *toks, size_t open_idx)
                 depth++;
             } else if (k == TK_GT && depth > 0) {
                 depth--;
+            } else if (k == TK_SHR && depth > 0) {
+                depth -= 2;
+                if (depth < 0) depth = 0;
             } else if (fmt_is_open(k)) {
                 depth++;
             } else if (fmt_is_close(k)) {
@@ -162,6 +171,28 @@ static bool fmt_head_modifier(token_kind_t k)
            k == TK_KW_PURE || k == TK_KW_NORET || k == TK_KW_DEPRECATED;
 }
 
+static bool fmt_is_overload_symbol(token_kind_t k)
+{
+    switch (k) {
+    case TK_GT:
+    case TK_PLUS:
+    case TK_MINUS:
+    case TK_STAR:
+    case TK_SLASH:
+    case TK_PERCENT:
+    case TK_POWER:
+    case TK_EQ:
+    case TK_NE:
+    case TK_LT:
+    case TK_LE:
+    case TK_GE:
+    case TK_NOT:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool fmt_head_annotates(token_kind_t k)
 {
     return k == TK_IDENT || k == TK_KW_MUT || k == TK_KW_CONST || k == TK_KW_THIS;
@@ -176,6 +207,7 @@ static bool fmt_type_token(token_kind_t k)
     case TK_AMP:
     case TK_LT:
     case TK_GT:
+    case TK_SHR:
     case TK_LBRACKET:
     case TK_RBRACKET:
     case TK_LPAREN:
@@ -194,6 +226,7 @@ static bool fmt_colon_is_annotation(const token_stream_t *toks, size_t colon_idx
     size_t n = token_stream_count(toks);
     uint32_t line = token_stream_at(toks, colon_idx)->span.end.line;
     bool saw_type = false;
+    bool is_func_type = false;
     int steps = 0;
     size_t j = colon_idx + 1;
     for (; j < n && steps < 64; j++, steps++) {
@@ -201,6 +234,13 @@ static bool fmt_colon_is_annotation(const token_stream_t *toks, size_t colon_idx
         if (t->span.begin.line > line) return saw_type;
         if (t->kind == TK_COLON || t->kind == TK_STMT_END || t->kind == TK_EOF)
             return saw_type;
+        if (t->kind == TK_KW_FUNC && !saw_type) is_func_type = true;
+        /* salam's type grammar has no use for '(' except a function-pointer
+         * type's own parameter list ('func(int): bool'); anywhere else a
+         * '(' means this is actually a call expression (e.g. 'f(a)' or
+         * 'x.f(a)', like a same-line if-branch body: 'if x: f(a, b)') and
+         * this colon isn't a type annotation at all. */
+        if (t->kind == TK_LPAREN && !is_func_type) return false;
         if (!fmt_type_token(t->kind)) return false;
         saw_type = true;
     }
@@ -254,6 +294,15 @@ static void fmt_step_break_before(fmt_ctx_t *c, const token_t *t, token_kind_t k
         c->line_has_content = false;
     }
     c->open_colon_line = 0;
+    if (c->bracket == 0 && c->prev_gt_generic && c->line_has_content &&
+        t->span.begin.line > c->prev_end_line) {
+        sb_putc(c->out, '\n');
+        c->line_has_content = false;
+        c->force_break = false;
+        c->q_open[0] = 0;
+        c->stmt_head = TK_EOF;
+        c->match_pending = false;
+    }
 }
 
 static bool fmt_in_match_arms(const fmt_ctx_t *c)
@@ -290,6 +339,11 @@ static void fmt_step_leading(fmt_ctx_t *c, const token_t *t, token_kind_t k)
     } else if (!c->no_space_next) {
         bool need = fmt_need_space(c->prev, t, c->prev_unary);
         if (c->prev_gt_generic && (k == TK_LPAREN || k == TK_LBRACKET)) need = false;
+        /* A name right after '.' is always a member/method reference, even
+         * if it happens to collide with a statement keyword (e.g. the
+         * 'repeat' loop keyword doubling as a method name in 's.repeat(n)')
+         * - it should never get keyword-style spacing before '('. */
+        if (k == TK_LPAREN && c->prev_after_dot) need = false;
         if (k == TK_COLON && c->bracket <= FMT_MAX_BRACKET && c->q_open[c->bracket] > 0)
             need = true;
         if (need) sb_putc(c->out, ' ');
@@ -301,7 +355,10 @@ static void fmt_step_leading(fmt_ctx_t *c, const token_t *t, token_kind_t k)
 static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
                                  const token_stream_t *toks, size_t i)
 {
-    if (c->bracket == 0 && (k == TK_KW_END || k == TK_KW_ELSE)) c->stmt_head = TK_EOF;
+    if (c->bracket == 0 && k == TK_KW_END)
+        c->stmt_head = TK_EOF;
+    else if (c->bracket == 0 && k == TK_KW_ELSE)
+        c->stmt_head = TK_KW_ELSE;
     if (c->stmt_head == TK_EOF && c->bracket == 0 && k != TK_KW_END && k != TK_COLON &&
         k != TK_COMMENT_LINE && k != TK_COMMENT_BLOCK && !fmt_head_modifier(k))
         c->stmt_head = k;
@@ -350,7 +407,8 @@ static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
 
     if (fmt_is_open(k)) {
         bool ml = fmt_bracket_multiline(toks, i);
-        bool prev_is_value = c->prev != NULL && fmt_is_value_end(c->prev->kind);
+        bool prev_is_value = c->prev != NULL && (fmt_is_value_end(c->prev->kind) ||
+                                                 fmt_is_overload_symbol(c->prev->kind));
         bool is_lambda =
             k == TK_LPAREN && !prev_is_value && fmt_lambda_header_at(toks, i);
         if (c->ml_top < FMT_MAX_BRACKET) {
@@ -410,6 +468,7 @@ void fmt_tokens(const token_stream_t *toks, const fmt_style_t *style, sb_t *out)
         c.line_has_content = true;
 
         fmt_step_state_after(&c, t, k, toks, i);
+        c.prev_after_dot = c.prev != NULL && c.prev->kind == TK_DOT;
         c.prev = t;
         c.prev_end_line = t->span.end.line;
     }

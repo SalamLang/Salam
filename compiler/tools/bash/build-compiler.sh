@@ -42,7 +42,7 @@ esac
     src/semantic/sema_util.c src/semantic/sema_type.c \
     src/semantic/sema_decl.c src/semantic/sema_expr.c src/semantic/sema_stmt.c \
     src/semantic/sema_lit.c src/semantic/sema_call.c src/semantic/sema_fold.c \
-    src/semantic/sema_match.c \
+    src/semantic/sema_match.c src/semantic/sema_order.c \
     src/semantic/dce.c \
     src/codegen/codegen.c src/codegen/codegen_emit.c src/codegen/codegen_type.c \
     src/codegen/codegen_overload.c src/codegen/codegen_expr.c src/codegen/codegen_call.c \
@@ -58,7 +58,7 @@ esac
     src/layout/registry.c src/layout/layout_gen.c src/layout/layout_gen_element.c \
     src/layout/layout_gen_value.c src/layout/schema.c src/layout/layout_expand.c \
     src/minify/minify.c \
-    src/fmt/fmt.c src/fmt/fmt_rules.c \
+    src/fmt/fmt.c src/fmt/fmt_rules.c src/fmt/fmt_order.c \
     src/cli/cli.c src/cli/cli_help.c src/cli/cli_options.c src/cli/cli_subcmd.c \
     src/driver/driver.c src/driver/build.c src/driver/llvm_build.c \
     src/driver/llvm_toolchain.c src/driver/js_build.c src/driver/web_build.c \

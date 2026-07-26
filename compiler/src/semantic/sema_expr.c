@@ -38,6 +38,11 @@ static bool tk_is_arith(token_kind_t k)
            k == TK_PERCENT;
 }
 
+bool sema_tk_is_bitwise(token_kind_t k)
+{
+    return k == TK_AMP || k == TK_PIPE || k == TK_CARET || k == TK_SHL || k == TK_SHR;
+}
+
 static bool int_lit_fits(uint64_t u, type_kind_t k)
 {
     switch (k) {
@@ -56,6 +61,7 @@ static bool int_lit_fits(uint64_t u, type_kind_t k)
     case TY_U32:
         return u <= 4294967295ULL;
     case TY_U64:
+    case TY_SIZE:
         return true;
     default:
         return false;
@@ -125,6 +131,16 @@ token_kind_t sema_compound_base(token_kind_t k)
         return TK_PERCENT;
     case TK_POWER_EQ:
         return TK_POWER;
+    case TK_AMP_EQ:
+        return TK_AMP;
+    case TK_PIPE_EQ:
+        return TK_PIPE;
+    case TK_CARET_EQ:
+        return TK_CARET;
+    case TK_SHL_EQ:
+        return TK_SHL;
+    case TK_SHR_EQ:
+        return TK_SHR;
     default:
         return TK_EOF;
     }
@@ -207,6 +223,16 @@ static type_t *check_binary(sema_t *s, ast_node_t *n)
                  type_to_string(s->tc, l), type_to_string(s->tc, r));
             return decorate(s, n, err_ty(s));
         }
+        if (op == TK_STAR && (l->kind == TY_STR || r->kind == TY_STR)) {
+            if ((l->kind == TY_STR && type_is_integer(r)) ||
+                (r->kind == TY_STR && type_is_integer(l)))
+                return decorate(s, n, ty(s, TY_STR));
+            SERR(s, 21, &n->span,
+                 "operator '*' on a string requires the other operand to be an integer "
+                 "(got '%s' and '%s')",
+                 type_to_string(s->tc, l), type_to_string(s->tc, r));
+            return decorate(s, n, err_ty(s));
+        }
         type_t *c = type_common_arith(s->tc, l, r);
         if (!c) {
             SERR(s, 21, &n->span, "operator cannot be applied to '%s' and '%s'",
@@ -215,6 +241,27 @@ static type_t *check_binary(sema_t *s, ast_node_t *n)
         }
         if (op == TK_PERCENT && !type_is_integer(c))
             SERR(s, 21, &n->span, "operator '%%' requires integer operands");
+        return decorate(s, n, c);
+    }
+    if (sema_tk_is_bitwise(op)) {
+        if (!type_is_integer(l) || !type_is_integer(r)) {
+            SERR(s, 21, &n->span,
+                 "bitwise operator requires integer operands (got '%s' and '%s')",
+                 type_to_string(s->tc, l), type_to_string(s->tc, r));
+            return decorate(s, n, err_ty(s));
+        }
+        /* Shifts keep the left operand's (promoted) type; the other bitwise
+         * operators take the common integer type of both operands. */
+        if (op == TK_SHL || op == TK_SHR) {
+            type_t *lt = type_common_arith(s->tc, l, l);
+            return decorate(s, n, lt ? lt : l);
+        }
+        type_t *c = type_common_arith(s->tc, l, r);
+        if (!c || !type_is_integer(c)) {
+            SERR(s, 21, &n->span, "bitwise operator cannot be applied to '%s' and '%s'",
+                 type_to_string(s->tc, l), type_to_string(s->tc, r));
+            return decorate(s, n, err_ty(s));
+        }
         return decorate(s, n, c);
     }
     if (tk_is_cmp(op) || tk_is_eq(op)) {
@@ -502,6 +549,15 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
             bt = decorate(s, n, ty(s, TY_BOOL));
             sema_fold_expr(s, n);
             return bt;
+        }
+        if (n->op == TK_TILDE) {
+            if (!type_is_integer(o) && !type_is_error(o))
+                SERR(s, 21, &n->span, "operator '~' requires an integer operand");
+            {
+                type_t *ut = decorate(s, n, o);
+                sema_fold_expr(s, n);
+                return ut;
+            }
         }
         if (!type_is_numeric(o) && !type_is_error(o))
             SERR(s, 21, &n->span, "unary '-' requires a numeric operand");

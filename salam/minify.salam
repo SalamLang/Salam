@@ -1,0 +1,466 @@
+// Flat port of compiler/src/minify (see salam/PORTING.md "Layout — FLAT"):
+// minify.c + minify.h — one package `minify`, one file. Import alias for
+// consumers: `mn`.
+//
+// C differences (per salam/PORTING.md):
+// - minify_js / minify_css -> Js / Css. The arena_t* parameter is gone
+//   (Salam str owns its bytes); the result is an owned str copy
+//   (co.Strdup of the builder), the sb_t is freed before returning —
+//   exactly the arena_strdup(sb_cstr) + sb_free sequence in the C.
+// - The C sb_t is str.StringBuilder; sb->len-- truncation and
+//   sb->data[i] peeks go through the pub `_len`/`data` fields
+//   (sb_drop/sb_byte helpers below), byte-for-byte like the C.
+// - isspace/isalpha/isdigit/isalnum are the C-locale ASCII sets
+//   (is_space matches ' ' \t \n \v \f \r), so bytes >= 0x80 are never
+//   space/word chars — same as the unsigned-char ctype calls in the C.
+// - strstr(src + i + 2, "*/") -> comment_end() scan; NULL -> n.
+// - The static kw[] / pairs[] tables: kw[] is a local str[16] array in
+//   js_regex_allowed; pairs[] is the package global g_mn_pairs, the 20
+//   two-char operator pairs concatenated (scanned with stride 2).
+//   strchr("{}:;,>+~(", c) sets -> g_mn_css_drop_prev/next + in_set()
+//   (the C never calls strchr with c == 0: the !prevc/!nextc checks
+//   short-circuit first, and in_set never matches the terminator).
+// - All scanning is on byte codes 0..255 (int), like the lexer port.
+package minify
+
+import str
+import co "sal_core.salam"
+
+// ===== minify.c =====
+// static const char *const pairs[] = {"++","--","+=","-=","*=","/=","%=",
+//   "==","!=","<=",">=","&&","||","**","=>","<<",">>","??","?.","..",NULL}
+// (two-char pairs concatenated; scanned with stride 2)
+g_mn_pairs := "++--+=-=*=/=%===!=<=>=&&||**=><<>>???..."
+// strchr sets used by minify_css whitespace dropping
+g_mn_css_drop_prev := "{}:;,>+~("
+g_mn_css_drop_next := "{}:;,>+~)"
+
+// ---------------------------------------------------------------------------
+// Byte access (Salam str is NUL-terminated, like the C buffer).
+// ---------------------------------------------------------------------------
+func byte_at(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+// C-locale ctype on unsigned bytes.
+func is_space(c: int): bool:
+    ret c == 32 || c == 9 || c == 10 || c == 11 || c == 12 || c == 13
+end
+
+func is_digit(c: int): bool:
+    ret c >= 48 && c <= 57
+end
+
+func is_alpha(c: int): bool:
+    ret (c >= 97 && c <= 122) || (c >= 65 && c <= 90)
+end
+
+func is_alnum(c: int): bool:
+    ret is_alpha(c) || is_digit(c)
+end
+
+// static bool js_word_char(int c)
+func js_word_char(c: int): bool:
+    ret is_alnum(c) || c == 95 || c == 36  // '_' '$'
+end
+
+// ---------------------------------------------------------------------------
+// sb_t peeks/truncation (out->data[i], out->len--) on str.StringBuilder.
+// ---------------------------------------------------------------------------
+func sb_len(out &: str.StringBuilder): int:
+    ret str.BufLen(out) as int
+end
+
+func sb_byte(out &: str.StringBuilder, i: int): int:
+    p := out.data as i8*
+    mut v := p[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+// out.len ? out.data[out.len - 1] : 0
+func sb_last(out &: str.StringBuilder): int:
+    n := sb_len(out)
+    if n == 0:
+        ret 0
+    end
+    ret sb_byte(out, n - 1)
+end
+
+// out.len--
+func sb_drop(out &: str.StringBuilder):
+    if out._len > 0:
+        out._len = out._len - 1
+    end
+end
+
+// while (out.len && isspace(out.data[out.len - 1])) out.len--;
+func sb_trim_ws(out &: str.StringBuilder):
+    until sb_len(out) > 0 && is_space(sb_last(out)):
+        sb_drop(out)
+    end
+end
+
+// strchr(set, c) != NULL for the css punctuation sets (c is never 0 here).
+func in_set(set: str, c: int): bool:
+    m := set.len()
+    mut k := 0
+    until k < m:
+        if byte_at(set, k) == c:
+            ret true
+        end
+        k += 1
+    end
+    ret false
+end
+
+// strstr(src + from, "*/"): index just past the closing "*/", or n.
+func comment_end(s: str, from: int, n: int): int:
+    mut j := from
+    until j + 1 < n:
+        if byte_at(s, j) == 42 && byte_at(s, j + 1) == 47:  // "*/"
+            ret j + 2
+        end
+        j += 1
+    end
+    ret n
+end
+
+// static size_t js_copy_string(sb_t *out, const char *src, size_t i, size_t n)
+// (minify_css inlines the identical loop for its quoted strings; reused here)
+func js_copy_string(out &: str.StringBuilder, s: str, i0: int, n: int): int:
+    mut i := i0
+    q := byte_at(s, i)
+    co.SbPutc(out, q)
+    i += 1
+    until i < n:
+        c := byte_at(s, i)
+        if c == 92 && i + 1 < n:  // '\\'
+            co.SbPutc(out, c)
+            co.SbPutc(out, byte_at(s, i + 1))
+            i += 2
+            continue
+        end
+        co.SbPutc(out, c)
+        i += 1
+        if c == q:
+            break
+        end
+    end
+    ret i
+end
+
+// static size_t js_copy_expr_hole(...) — ${ ... } inside a template literal,
+// copied verbatim (mutually recursive with js_copy_template).
+func js_copy_expr_hole(out &: str.StringBuilder, s: str, i0: int, n: int): int:
+    mut i := i0
+    mut depth := 1
+    co.SbPutc(out, byte_at(s, i))
+    co.SbPutc(out, byte_at(s, i + 1))
+    i += 2
+    until i < n && depth > 0:
+        c := byte_at(s, i)
+        if c == 123:  // '{'
+            depth += 1
+            co.SbPutc(out, c)
+            i += 1
+            continue
+        end
+        if c == 125:  // '}'
+            depth -= 1
+            co.SbPutc(out, c)
+            i += 1
+            continue
+        end
+        if c == 34 || c == 39:  // '"' '\''
+            i = js_copy_string(out, s, i, n)
+            continue
+        end
+        if c == 96:  // '`'
+            i = js_copy_template(out, s, i, n)
+            continue
+        end
+        co.SbPutc(out, c)
+        i += 1
+    end
+    ret i
+end
+
+// static size_t js_copy_template(sb_t *out, const char *src, size_t i, size_t n)
+func js_copy_template(out &: str.StringBuilder, s: str, i0: int, n: int): int:
+    mut i := i0
+    co.SbPutc(out, byte_at(s, i))
+    i += 1
+    until i < n:
+        c := byte_at(s, i)
+        if c == 92 && i + 1 < n:  // '\\'
+            co.SbPutc(out, c)
+            co.SbPutc(out, byte_at(s, i + 1))
+            i += 2
+            continue
+        end
+        if c == 96:  // '`'
+            co.SbPutc(out, c)
+            i += 1
+            break
+        end
+        if c == 36 && i + 1 < n && byte_at(s, i + 1) == 123:  // "${"
+            i = js_copy_expr_hole(out, s, i, n)
+            continue
+        end
+        co.SbPutc(out, c)
+        i += 1
+    end
+    ret i
+end
+
+// static size_t js_copy_regex(sb_t *out, const char *src, size_t i, size_t n)
+func js_copy_regex(out &: str.StringBuilder, s: str, i0: int, n: int): int:
+    start := i0
+    mut in_class := false
+    mut i := i0 + 1
+    until i < n:
+        c := byte_at(s, i)
+        if c == 92 && i + 1 < n:  // '\\'
+            i += 2
+            continue
+        end
+        if c == 91:  // '['
+            in_class = true
+            i += 1
+            continue
+        end
+        if c == 93:  // ']'
+            in_class = false
+            i += 1
+            continue
+        end
+        if c == 47 && !in_class:  // '/'
+            i += 1
+            break
+        end
+        if c == 10:  // '\n'
+            break
+        end
+        i += 1
+    end
+    until i < n && is_alpha(byte_at(s, i)):  // regex flags
+        i += 1
+    end
+    mut k := start
+    until k < i:
+        co.SbPutc(out, byte_at(s, k))
+        k += 1
+    end
+    ret i
+end
+
+// static bool js_ends_with_word(const char *s, size_t len, const char *word)
+// (s/len are the out buffer's data/prefix length)
+func js_ends_with_word(out &: str.StringBuilder, jlen: int, word: str): bool:
+    wl := word.len()
+    if jlen < wl:
+        ret false
+    end
+    mut t := 0
+    until t < wl:
+        if sb_byte(out, jlen - wl + t) != byte_at(word, t):
+            ret false
+        end
+        t += 1
+    end
+    if jlen > wl:
+        before := sb_byte(out, jlen - wl - 1)
+        if js_word_char(before):
+            ret false
+        end
+    end
+    ret true
+end
+
+// static bool js_regex_allowed(sb_t *out)
+func js_regex_allowed(out &: str.StringBuilder): bool:
+    mut j := sb_len(out)
+    until j > 0 && is_space(sb_byte(out, j - 1)):
+        j -= 1
+    end
+    if j == 0:
+        ret true
+    end
+    c := sb_byte(out, j - 1)
+    if js_word_char(c):
+        // static const char *const kw[] = { ... }
+        kw := ["return", "typeof", "instanceof", "in", "of", "new",
+               "delete", "void", "throw", "case", "do", "else",
+               "yield", "await", "if", "while"] as str[16]
+        each w in kw:
+            if js_ends_with_word(out, j, w):
+                ret true
+            end
+        end
+        ret false
+    end
+    if c == 41 || c == 93:  // ')' ']'
+        ret false
+    end
+    ret true
+end
+
+// static bool js_needs_space(char prevc, char nextc)
+func js_needs_space(prevc: int, nextc: int): bool:
+    if prevc == 0 || nextc == 0:
+        ret false
+    end
+    if js_word_char(prevc) && js_word_char(nextc):
+        ret true
+    end
+    if is_digit(prevc) && nextc == 46:  // '.'
+        ret true
+    end
+    if prevc == 46 && is_digit(nextc):  // '.'
+        ret true
+    end
+    m := g_mn_pairs.len()
+    mut k := 0
+    until k < m:
+        if byte_at(g_mn_pairs, k) == prevc && byte_at(g_mn_pairs, k + 1) == nextc:
+            ret true
+        end
+        k += 2
+    end
+    if prevc == 47 && (nextc == 47 || nextc == 42):  // '/' + "//" or "/*"
+        ret true
+    end
+    if prevc == 42 && nextc == 47:  // "*/"
+        ret true
+    end
+    ret false
+end
+
+// ---------------------------------------------------------------------------
+// Public API (rule E088: pub section last).
+// ---------------------------------------------------------------------------
+
+// const char *minify_js(arena_t *arena, const char *src)
+pub func Js(src: str): str:
+    mut out := co.SbNew()
+    n := src.len()
+    mut i := 0
+    until i < n:
+        c := byte_at(src, i)
+        if c == 47 && i + 1 < n && byte_at(src, i + 1) == 47:  // "//"
+            i += 2
+            until i < n && byte_at(src, i) != 10:
+                i += 1
+            end
+            continue
+        end
+        if c == 47 && i + 1 < n && byte_at(src, i + 1) == 42:  // "/*"
+            i = comment_end(src, i + 2, n)
+            continue
+        end
+        if c == 34 || c == 39:  // '"' '\''
+            i = js_copy_string(out, src, i, n)
+            continue
+        end
+        if c == 96:  // '`'
+            i = js_copy_template(out, src, i, n)
+            continue
+        end
+        if c == 47 && js_regex_allowed(out):  // '/'
+            i = js_copy_regex(out, src, i, n)
+            continue
+        end
+        if is_space(c):
+            mut j := i
+            until j < n && is_space(byte_at(src, j)):
+                j += 1
+            end
+            prevc := sb_last(out)
+            nextc := j < n ? byte_at(src, j) : 0
+            if js_needs_space(prevc, nextc):
+                co.SbPutc(out, 32)
+            end
+            i = j
+            continue
+        end
+        co.SbPutc(out, c)
+        i += 1
+    end
+    sb_trim_ws(out)
+    res := co.Strdup(co.SbCstr(out))
+    co.SbFree(out)
+    ret res
+end
+
+// const char *minify_css(arena_t *arena, const char *src)
+pub func Css(src: str): str:
+    mut out := co.SbNew()
+    n := src.len()
+    mut i := 0
+    mut paren_depth := 0
+    until i < n:
+        c := byte_at(src, i)
+        if c == 47 && i + 1 < n && byte_at(src, i + 1) == 42:  // "/*"
+            i = comment_end(src, i + 2, n)
+            continue
+        end
+        if c == 39 || c == 34:  // '\'' '"' — inline loop in the C, identical
+            i = js_copy_string(out, src, i, n)
+            continue
+        end
+        if c == 40:  // '('
+            paren_depth += 1
+        end
+        if c == 41 && paren_depth > 0:  // ')'
+            paren_depth -= 1
+        end
+        if is_space(c):
+            mut j := i
+            until j < n && is_space(byte_at(src, j)):
+                j += 1
+            end
+            prevc := sb_last(out)
+            nextc := j < n ? byte_at(src, j) : 0
+            mut drop := false
+            if paren_depth > 0:
+                drop = prevc == 0 || prevc == 40 || nextc == 41
+            else:
+                drop = prevc == 0 || nextc == 0 ||
+                       in_set(g_mn_css_drop_prev, prevc) ||
+                       in_set(g_mn_css_drop_next, nextc)
+            end
+            if !drop:
+                co.SbPutc(out, 32)
+            end
+            i = j
+            continue
+        end
+        if c == 125:  // '}': drop one trailing ';', then one trailing ' '
+            if sb_last(out) == 59:
+                sb_drop(out)
+            end
+            if sb_last(out) == 32:
+                sb_drop(out)
+            end
+        else (c == 123 || c == 58 || c == 59 || c == 44 || c == 62 ||
+              c == 43 || c == 126) && paren_depth == 0:  // "{:;,>+~"
+            if sb_last(out) == 32:
+                sb_drop(out)
+            end
+        end
+        co.SbPutc(out, c)
+        i += 1
+    end
+    sb_trim_ws(out)
+    res := co.Strdup(co.SbCstr(out))
+    co.SbFree(out)
+    ret res
+end

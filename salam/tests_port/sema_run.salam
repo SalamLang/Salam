@@ -1,0 +1,88 @@
+// End-to-end equivalence runner for the semantic port (stage 5d gate):
+// mirrors the C driver's `salam <file> --emit-symbol-xml` pipeline —
+// source -> langpack detect -> lex -> parse -> condcomp prune -> sema Run —
+// then prints the symbol XML (xml decl + symbols_to_xml) on stdout and the
+// rust-style rendered SEMANTIC diagnostics on stderr, and exits with the
+// driver's return code (0 ok, 1 lex/parse/sema errors, 2 unreadable).
+//
+// Byte-comparable against HEAD `bin/salam <file> --emit-symbol-xml` after
+// stripping (a) the timestamped logger lines and (b) the code-less
+// lexer/parser-phase rendered blocks from the C stderr (the logger port's
+// rich diag path is not wired; those phases have their own byte-exact
+// harnesses). stdout XML and the exit code are compared with NO
+// normalization.
+//
+// Usage: sema_run <file.salam>
+package main
+
+import os
+import io
+import str
+import x "../xml.salam"
+import tok "../token.salam"
+import src "../source.salam"
+import lg "../logger.salam"
+import dg "../diag.salam"
+import i18 "../i18n.salam"
+import lp "../langpack.salam"
+import lx "../lexer.salam"
+import at "../ast.salam"
+import ps "../parser.salam"
+import cc "../condcomp.salam"
+import sm "../semantic.salam"
+
+func main:
+    args := os.Args()
+    defer args.free()
+    if args.len() < 2:
+        io.EPrintln("usage: sema_run <file.salam>")
+        os.Exit(2)
+    end
+    path := args[1]
+
+    // driver.c: i18n_set_lang(opt.lang) (default "en"), stdlib root from
+    // $SALAM_STD / salam.cfg / exe dir, then layout_schema_init(root).
+    i18.SetLang("en")
+    sm.LayoutSchemaInit(sm.GetStdlibRoot())
+
+    mut sf := src.New()
+    if !src.Load(path, sf):
+        os.Exit(2)
+    end
+    quiet := lg.New(lg.LOG_OFF, false)
+    pack := lx.Detect(sf, lp.Load("en"))
+
+    mut toks := tok.StreamNew(path)
+    lok := lx.Run(quiet, pack, sf, toks)
+    mut a := at.NewAst()
+    defer at.FreeAst(a)
+    mut prog := 0
+    mut pok := ps.Run(quiet, toks, a, prog)
+    tok.StreamFree(toks)
+
+    mut s := sm.New(quiet, path, lp.Code(pack))
+    sm.SetCc(s, cc.TableBuild("", Vector {} as Vector<str>))
+    if !cc.PruneProgram(a, quiet, path, s.cctab, prog):
+        pok = false
+    end
+    sok := sm.Run(s, a, prog)
+
+    mut w := x.New()
+    x.Decl(w)
+    sm.SymbolsToXml(w, s)
+    print x.Str(w)
+    x.Free(w)
+
+    // The C diag engine rendered each diagnostic to stderr as reported
+    // (rust style, human format, no color, main-file source echo).
+    rendered := dg.RenderAll(s.diag, sf.text, sf.len, dg.DIAG_STYLE_RUST,
+                             dg.DIAG_FORMAT_HUMAN, false)
+    if str.Len(rendered) > 0:
+        io.EPrint(rendered)
+    end
+
+    sm.Free(s)
+    if !lok || !pok || !sok:
+        os.Exit(1)
+    end
+end

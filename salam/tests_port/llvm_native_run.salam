@@ -1,0 +1,82 @@
+// Stage-C corpus gate driver: single-file source -> lex -> parse -> condcomp
+// -> sema -> lv.RunOpts (IR) -> lv.NativeRun (real link, via the port's own
+// native-toolchain glue) -> execute the produced binary, forwarding its
+// stdout/stderr so the caller can diff it against a compiler/tests/en/llvm/
+// *.out fixture. Mirrors llvm_run.salam's pipeline (already proven
+// byte-exact against HEAD `bin/salam llvm`) plus the link+execute step that
+// module now supports.
+//
+// Usage: llvm_native_run <file.salam> <module> <tmp_ll> <tmp_exe>
+package main
+
+import os
+import io
+import tok "../token.salam"
+import src "../source.salam"
+import lg "../logger.salam"
+import lp "../langpack.salam"
+import lx "../lexer.salam"
+import at "../ast.salam"
+import ps "../parser.salam"
+import cc "../condcomp.salam"
+import sm "../semantic.salam"
+import lv "../llvm.salam"
+
+func main:
+    args := os.Args()
+    defer args.free()
+    if args.len() < 5:
+        io.EPrintln("usage: llvm_native_run <file.salam> <module> <tmp_ll> <tmp_exe>")
+        os.Exit(2)
+    end
+    path := args[1]
+    module := args[2]
+    ll_path := args[3]
+    exe_path := args[4]
+
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut sf := src.New()
+    if !src.Load(path, sf):
+        io.EPrintln("cannot read " + path)
+        os.Exit(2)
+    end
+    pack := lx.Detect(sf, lp.Load("en"))
+    mut toks := tok.StreamNew(path)
+    _lok := lx.Run(quiet, pack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    _pok := ps.Run(quiet, toks, a, prog)
+    tok.StreamFree(toks)
+    mut s := sm.New(quiet, path, lp.Code(pack))
+    sm.SetCc(s, cc.TableBuild("", Vector {} as Vector<str>))
+    _ck := cc.PruneProgram(a, quiet, path, s.cctab, prog)
+    sok := sm.Run(s, a, prog)
+    if !sok:
+        io.EPrintln("sema failed for " + path)
+        os.Exit(1)
+    end
+
+    o := lv.RunOpts(quiet, s, a, prog, module, lp.Entry(pack), lv.OptionsDefault(),
+                    path)
+    if !o.ok:
+        io.EPrintln("LLVM backend: " + o.error)
+        os.Exit(1)
+    end
+    _w := os.WriteFile(ll_path, o.ll_src)
+
+    mut nopts := lv.OptionsDefault()
+    nopts.output_mode = lv.LV_OUT_EXEC
+    nopts.output_file = exe_path
+    rc := lv.NativeRun(quiet, ll_path, nopts)
+    if rc != 0:
+        io.EPrintln("native link failed, rc=" + rc)
+        os.Exit(3)
+    end
+    if !os.Exists(exe_path):
+        io.EPrintln("native link reported success but no binary at " + exe_path)
+        os.Exit(3)
+    end
+
+    run_rc := os.Run("\"" + exe_path + "\"")
+    os.Exit(run_rc)
+end

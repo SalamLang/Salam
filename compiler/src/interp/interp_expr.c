@@ -439,6 +439,7 @@ value_t eval(interp_t *I, env_t *env, ast_node_t *n)
             return a.kind == VAL_FLOAT ? val_float(-a.as.f)
                                        : val_int((int64_t)(0 - (uint64_t)to_int(a)));
         if (n->op == TK_NOT) return val_bool(!to_bool(a));
+        if (n->op == TK_TILDE) return val_int((int64_t)(~(uint64_t)to_int(a)));
         return a;
     }
     case AST_INCDEC: {

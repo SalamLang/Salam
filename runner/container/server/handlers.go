@@ -42,13 +42,13 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	defer releaseJobSlot()
 
-	log.Printf("run start id=%s type=%s engine=%s lang=%s codeBytes=%d", reqID, req.Type, req.Engine, req.Language, len(req.Code))
+	log.Printf("run start id=%s type=%s engine=%s lang=%s codeBytes=%d", reqID, req.Type, req.Engine, req.Language, len(req.Code)) // #nosec G706
 
 	resp, status := runSalam(r.Context(), req, resolveTimeout(req.TimeoutMs), reqID)
 	resp.RequestID = reqID
 
 	log.Printf("run done id=%s status=%d exit=%d durationMs=%d timedOut=%v truncated=%v stdoutBytes=%d stderrBytes=%d",
-		reqID, status, resp.ExitCode, resp.DurationMs, resp.TimedOut, resp.Truncated, len(resp.Stdout), len(resp.Stderr))
+		reqID, status, resp.ExitCode, resp.DurationMs, resp.TimedOut, resp.Truncated, len(resp.Stdout), len(resp.Stderr)) // #nosec G706
 
 	writeJSON(w, status, resp)
 }

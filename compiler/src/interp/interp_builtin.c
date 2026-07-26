@@ -43,6 +43,28 @@ static const char *str_substr(interp_t *I, const char *s, int64_t start, int64_t
     return arena_strndup(I->a, s + start, (size_t)len);
 }
 
+static const char *str_upper(interp_t *I, const char *s)
+{
+    size_t n = strlen(s);
+    char *buf = (char *)arena_alloc(I->a, n + 1);
+    size_t i = 0;
+    for (; i < n; i++)
+        buf[i] = (s[i] >= 'a' && s[i] <= 'z') ? (char)(s[i] - 32) : s[i];
+    buf[n] = '\0';
+    return buf;
+}
+
+static const char *str_lower(interp_t *I, const char *s)
+{
+    size_t n = strlen(s);
+    char *buf = (char *)arena_alloc(I->a, n + 1);
+    size_t i = 0;
+    for (; i < n; i++)
+        buf[i] = (s[i] >= 'A' && s[i] <= 'Z') ? (char)(s[i] + 32) : s[i];
+    buf[n] = '\0';
+    return buf;
+}
+
 static value_t str_split(interp_t *I, const char *s, const char *sep)
 {
     sarray_t *out = array_new(I, 8);
@@ -253,7 +275,8 @@ value_t call_builtin_method(interp_t *I, ast_node_t *call, value_t recv,
         if (!strcmp(method, "concat")) return val_str(afmt(I, "%s%s", s, to_str(I, a0)));
         if (!strcmp(method, "substr"))
             return val_str(str_substr(I, s, to_int(a0), to_int(a1)));
-        if (!strcmp(method, "find")) {
+        if (!strcmp(method, "find") || !strcmp(method, "search") ||
+            !strcmp(method, "indexOf")) {
             const char *h = strstr(s, to_str(I, a0));
             return val_int(h ? (int64_t)(h - s) : -1);
         }
@@ -261,6 +284,9 @@ value_t call_builtin_method(interp_t *I, ast_node_t *call, value_t recv,
         if (!strcmp(method, "to_int")) return val_int((int64_t)strtol(s, NULL, 10));
         if (!strcmp(method, "to_float")) return val_float(strtod(s, NULL));
         if (!strcmp(method, "split")) return str_split(I, s, to_str(I, a0));
+        if (!strcmp(method, "lower")) return val_str(str_lower(I, s));
+        if (!strcmp(method, "upper")) return val_str(str_upper(I, s));
+        if (!strcmp(method, "repeat")) return val_str(str_repeat(I, s, to_int(a0)));
         break;
     }
     case VAL_ARRAY: {

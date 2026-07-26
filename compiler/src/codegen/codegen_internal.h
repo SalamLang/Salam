@@ -81,6 +81,8 @@ void parse_typestr(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dim
 
 bool cg_is_int_typestr(const char *ts);
 
+bool cg_is_unsigned_typestr(const char *ts);
+
 void cg_vec_elem(const char *ts, char *ebuf, size_t cap);
 
 const char *cg_vec_cname(cg_t *cg, const char *ts);

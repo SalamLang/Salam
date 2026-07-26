@@ -27,15 +27,35 @@ run_batch() {
     jobs="$1"
     runner="${2:-$RUN_ONE}"
     [ -s "$jobs" ] || return 0
+    outdir="$WORK/.batch-out.$$"
+    mkdir -p "$outdir"
+    n=0
+    running=0
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        n=$((n + 1))
+        out="$outdir/$(printf '%06d' "$n")"
+        (
+            IFS="	"
+            set -- $line
+            label="$1"
+            f="$2"
+            lang="$3"
+            exp="$4"
+            extra="$5"
+            unset IFS
+            sh "$runner" "$SALAM_ABS" "$WORK" "$label" "$f" "$lang" "$exp" $extra
+        ) >"$out" 2>&1 &
+        running=$((running + 1))
+        if [ "$running" -ge "$NPROC" ]; then
+            wait
+            running=0
+        fi
+    done <"$jobs"
+    wait
     results="$WORK/.batch-results.$$"
-    # shellcheck disable=SC2016 # inner variables are expanded by the spawned sh, not here
-    tr '\n' '\0' <"$jobs" | xargs -0 -n1 -P "$NPROC" sh -c '
-        IFS="	"
-        set -- $1
-        label="$1"; f="$2"; lang="$3"; exp="$4"; extra="$5"
-        unset IFS
-        sh "'"$runner"'" "'"$SALAM_ABS"'" "'"$WORK"'" "$label" "$f" "$lang" "$exp" $extra
-    ' _ >"$results" 2>&1
+    cat "$outdir"/* >"$results" 2>/dev/null
+    rm -rf "$outdir"
     cat "$results"
     p=$(grep -c '^PASS' "$results")
     fcount=$(grep -c '^FAIL' "$results")
@@ -195,6 +215,22 @@ if want fmt; then
         done
     done
 fi
+if want ssl; then
+    jobs="$WORK/.jobs-ssl.$$"
+    : >"$jobs"
+    for lang in $LANGS; do
+        [ -d "tests/$lang/ssl" ] || continue
+        for f in tests/"$lang"/ssl/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            case "$name" in _*) continue ;; esac
+            exp="tests/$lang/ssl/$name.out"
+            [ -f "$exp" ] || continue
+            printf 'ssl/%s/%s\t%s\t%s\t%s\t-\n' "$lang" "$name" "$f" "$lang" "$exp" >>"$jobs"
+        done
+    done
+    run_batch "$jobs"
+fi
 if want db; then
     for lang in $LANGS; do
         [ -d "tests/$lang/db" ] || continue
@@ -255,6 +291,132 @@ if want llvm; then
         fi
     done
 fi
+# Categories that hold example projects (possibly nested, e.g. apps/webview/*
+# or games/pacman/src/*): discovered recursively and matched by sibling
+# .out/.expect/.buildonly files, unlike the flat sections above.
+EXAMPLE_DIRS="apps basics data editor-selected features games interop stdlib types webframework"
+
+want_example() {
+    want "$1" && return 0
+    for s in $SECTIONS; do [ "$s" = examples ] && return 0; done
+    return 1
+}
+
+run_example_dir() {
+    dir="$1"
+    jobs="$WORK/.jobs-$dir.$$"
+    : >"$jobs"
+    for lang in $LANGS; do
+        [ -d "tests/$lang/$dir" ] || continue
+        while IFS= read -r f; do
+            case "$(basename "$f")" in _*) continue ;; esac
+            rel="${f#tests/"$lang"/"$dir"/}"
+            name="${rel%.salam}"
+            exp="tests/$lang/$dir/$name.out"
+            [ -f "$exp" ] || continue
+            printf '%s/%s/%s\t%s\t%s\t%s\t-\n' "$dir" "$lang" "$name" "$f" "$lang" "$exp" >>"$jobs"
+        done <<EOF
+$(find "tests/$lang/$dir" -name '*.salam' | sort)
+EOF
+    done
+    run_batch "$jobs"
+
+    for lang in $LANGS; do
+        [ -d "tests/$lang/$dir" ] || continue
+        while IFS= read -r f; do
+            case "$(basename "$f")" in _*) continue ;; esac
+            rel="${f#tests/"$lang"/"$dir"/}"
+            name="${rel%.salam}"
+            base="tests/$lang/$dir/$name"
+            expf="$base.expect"
+            [ -f "$expf" ] || continue
+            id=$(echo "$name" | tr '/ ' '__')
+            jobdir="$WORK/exjob_${dir}_${id}"
+            mkdir -p "$jobdir"
+            fabs="$(pwd)/$f"
+            exe="$jobdir/a.exe"
+            btry=1
+            while [ ! -x "$exe" ] && [ "$btry" -le 3 ]; do
+                [ "$btry" -gt 1 ] && sleep "$btry"
+                (cd "$jobdir" && "$SALAM_ABS" build "$fabs" --output="$exe" --no-color --log-level=error --lang="$lang") >/dev/null 2>&1
+                btry=$((btry + 1))
+            done
+            if [ -x "$exe" ]; then
+                got=$(timeout 20 "$exe" </dev/null 2>&1 | tr -d '\r')
+            else
+                html="$jobdir/a.html"
+                wtry=1
+                while [ ! -f "$html" ] && [ "$wtry" -le 3 ]; do
+                    [ "$wtry" -gt 1 ] && sleep "$wtry"
+                    (cd "$jobdir" && "$SALAM_ABS" web "$fabs" --output="$html" --no-color --log-level=error --lang="$lang") >/dev/null 2>&1
+                    wtry=$((wtry + 1))
+                done
+                got=$([ -f "$html" ] && tr -d '\r' <"$html")
+            fi
+            rm -rf "$jobdir"
+            ok=1
+            missing=""
+            while IFS= read -r line || [ -n "$line" ]; do
+                [ -z "$line" ] && continue
+                case "$got" in
+                *"$line"*) ;;
+                *)
+                    ok=0
+                    missing="$line"
+                    ;;
+                esac
+            done <"$expf"
+            if [ "$ok" -eq 1 ]; then
+                echo "PASS $dir/$lang/$name"
+                pass=$((pass + 1))
+            else
+                echo "FAIL $dir/$lang/$name (missing expected: $missing)"
+                fail=$((fail + 1))
+            fi
+        done <<EOF
+$(find "tests/$lang/$dir" -name '*.salam' | sort)
+EOF
+    done
+
+    for lang in $LANGS; do
+        [ -d "tests/$lang/$dir" ] || continue
+        while IFS= read -r f; do
+            case "$(basename "$f")" in _*) continue ;; esac
+            rel="${f#tests/"$lang"/"$dir"/}"
+            name="${rel%.salam}"
+            base="tests/$lang/$dir/$name"
+            [ -f "$base.buildonly" ] || continue
+            id=$(echo "$name" | tr '/ ' '__')
+            jobdir="$WORK/exjob_${dir}_${id}"
+            mkdir -p "$jobdir"
+            fabs="$(pwd)/$f"
+            exe="$jobdir/a.exe"
+            buildlog="$jobdir/build.log"
+            btry=1
+            while [ ! -x "$exe" ] && [ "$btry" -le 3 ]; do
+                [ "$btry" -gt 1 ] && sleep "$btry"
+                (cd "$jobdir" && "$SALAM_ABS" build "$fabs" --output="$exe" --no-color --log-level=error --lang="$lang") >"$buildlog" 2>&1
+                btry=$((btry + 1))
+            done
+            if [ -x "$exe" ]; then
+                echo "PASS $dir/$lang/$name (build)"
+                pass=$((pass + 1))
+            else
+                msg="FAIL $dir/$lang/$name (build failed)
+$(sed 's/^/  /' "$buildlog" 2>/dev/null | head -20)"
+                printf '%s\n' "$msg"
+                fail=$((fail + 1))
+            fi
+            rm -rf "$jobdir"
+        done <<EOF
+$(find "tests/$lang/$dir" -name '*.salam' | sort)
+EOF
+    done
+}
+
+for dir in $EXAMPLE_DIRS; do
+    want_example "$dir" && run_example_dir "$dir"
+done
 echo "----------------------------------------"
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

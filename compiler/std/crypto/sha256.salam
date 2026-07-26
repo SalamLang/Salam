@@ -1,152 +1,5 @@
 package crypto
 
-const SHA256_K := [
-    1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221
-    3624381080, 310598401, 607225278, 1426881987, 1925078388, 2162078206, 2614888103, 3248222580
-    3835390401, 4022224774, 264347078, 604807628, 770255983, 1249150122, 1555081692, 1996064986
-    2554220882, 2821834349, 2952996808, 3210313671, 3336571891, 3584528711, 113926993, 338241895
-    666307205, 773529912, 1294757372, 1396182291, 1695183700, 1986661051, 2177026350, 2456956037
-    2730485921, 2820302411, 3259730800, 3345764771, 3516065817, 3600352804, 4094571909, 275423344
-    430227734, 506948616, 659060556, 883997877, 958139571, 1322822218, 1537002063, 1747873779
-    1955562222, 2024104815, 2227730452, 2361852424, 2428436474, 2756734187, 3204031479, 3329325298
-] as i64[64]
-
-func _sha256_pad_byte(data: void*, dlen: int, total: int, i: int): int:
-    if i < dlen:
-        ret _bget(data, i)
-    end
-    if i == dlen:
-        ret 128
-    end
-    if i >= total - 8:
-        ml := (dlen as i64) * 8
-        shift := total - 1 - i
-        mut d := ml
-        mut j := 0
-        until j < shift:
-            d /= 256
-            j += 1
-        end
-        ret (d % 256) as int
-    end
-    ret 0
-end
-
-struct Sha256State:
-    pub h0: i64 = 0
-    pub h1: i64 = 0
-    pub h2: i64 = 0
-    pub h3: i64 = 0
-    pub h4: i64 = 0
-    pub h5: i64 = 0
-    pub h6: i64 = 0
-    pub h7: i64 = 0
-end
-
-func _sha256_iv(): Sha256State:
-    ret Sha256State {
-        h0 = 1779033703, h1 = 3144134277, h2 = 1013904242, h3 = 2773480762
-        h4 = 1359893119, h5 = 2600822924, h6 = 528734635, h7 = 1541459225
-    }
-end
-
-func _sha256_write_state(st: Sha256State, outp: void*):
-    _put_word32(outp, 0, st.h0)
-    _put_word32(outp, 4, st.h1)
-    _put_word32(outp, 8, st.h2)
-    _put_word32(outp, 12, st.h3)
-    _put_word32(outp, 16, st.h4)
-    _put_word32(outp, 20, st.h5)
-    _put_word32(outp, 24, st.h6)
-    _put_word32(outp, 28, st.h7)
-end
-
-func _sha256_compress(st &: Sha256State, w: i64*):
-    mut a := st.h0
-    mut b := st.h1
-    mut c := st.h2
-    mut d := st.h3
-    mut e := st.h4
-    mut f := st.h5
-    mut g := st.h6
-    mut h := st.h7
-    mut t := 0
-    until t < 64:
-        s1cap := _xor32(_xor32(_rotr32_6(e), _rotr32_11(e)), _rotr32_25(e))
-        ch := _xor32(_and32(e, f), _and32(_not32(e), g))
-        temp1 := (h + s1cap + ch + SHA256_K[t] + w[t]) % 4294967296
-        s0cap := _xor32(_xor32(_rotr32_2(a), _rotr32_13(a)), _rotr32_22(a))
-        maj := _xor32(_xor32(_and32(a, b), _and32(a, c)), _and32(b, c))
-        temp2 := (s0cap + maj) % 4294967296
-        h = g
-        g = f
-        f = e
-        e = (d + temp1) % 4294967296
-        d = c
-        c = b
-        b = a
-        a = (temp1 + temp2) % 4294967296
-        t += 1
-    end
-    st.h0 = (st.h0 + a) % 4294967296
-    st.h1 = (st.h1 + b) % 4294967296
-    st.h2 = (st.h2 + c) % 4294967296
-    st.h3 = (st.h3 + d) % 4294967296
-    st.h4 = (st.h4 + e) % 4294967296
-    st.h5 = (st.h5 + f) % 4294967296
-    st.h6 = (st.h6 + g) % 4294967296
-    st.h7 = (st.h7 + h) % 4294967296
-end
-
-func _sha256_compress_block(st: Sha256State, block: void*): Sha256State:
-    w := mem.Allocate(64 * 8 as u64) as i64*
-    defer mem.Free(w as void*)
-    mut t := 0
-    until t < 16:
-        base := t * 4
-        w[t] = (_bget(block, base) as i64) * 16777216 + (_bget(block, base + 1) as i64) * 65536 + (_bget(block, base + 2) as i64) * 256 + (_bget(block, base + 3) as i64)
-        t += 1
-    end
-    until t < 64:
-        s0 := _xor32(_xor32(_rotr32_7(w[t - 15]), _rotr32_18(w[t - 15])), _shr32_3(w[t - 15]))
-        s1 := _xor32(_xor32(_rotr32_17(w[t - 2]), _rotr32_19(w[t - 2])), _shr32_10(w[t - 2]))
-        w[t] = (w[t - 16] + s0 + w[t - 7] + s1) % 4294967296
-        t += 1
-    end
-    mut next := st
-    _sha256_compress(next, w)
-    ret next
-end
-
-func _sha256_core(data: void*, dlen: int, outp: void*):
-    total := ((dlen + 8) / 64 + 1) * 64
-    mut st := _sha256_iv()
-    w := mem.Allocate(64 * 8 as u64) as i64*
-    defer mem.Free(w as void*)
-    mut blk := 0
-    until blk < total:
-        mut t := 0
-        until t < 16:
-            base := blk + t * 4
-            b0 := _sha256_pad_byte(data, dlen, total, base) as i64
-            b1 := _sha256_pad_byte(data, dlen, total, base + 1) as i64
-            b2 := _sha256_pad_byte(data, dlen, total, base + 2) as i64
-            b3 := _sha256_pad_byte(data, dlen, total, base + 3) as i64
-            w[t] = b0 * 16777216 + b1 * 65536 + b2 * 256 + b3
-            t += 1
-        end
-        until t < 64:
-            s0 := _xor32(_xor32(_rotr32_7(w[t - 15]), _rotr32_18(w[t - 15])), _shr32_3(w[t - 15]))
-            s1 := _xor32(_xor32(_rotr32_17(w[t - 2]), _rotr32_19(w[t - 2])), _shr32_10(w[t - 2]))
-            w[t] = (w[t - 16] + s0 + w[t - 7] + s1) % 4294967296
-            t += 1
-        end
-        _sha256_compress(st, w)
-        blk += 64
-    end
-    _sha256_write_state(st, outp)
-end
-
 @en "Sha256Hex"
 @fa "شا۲۵۶ شانزدهی"
 @ar "شا٢٥٦ سداسی"
@@ -156,12 +9,10 @@ pub func Sha256Hex(data: str): str:
     defer mem.Free(out)
     _sha256_core(data as void*, dlen, out)
     mut result := ""
-    mut i := 0
-    until i < 8:
+    repeat 8 with i:
         base := i * 4
         w := (_bget(out, base) as i64) * 16777216 + (_bget(out, base + 1) as i64) * 65536 + (_bget(out, base + 2) as i64) * 256 + (_bget(out, base + 3) as i64)
         result = result.concat(_hex32(w))
-        i += 1
     end
     ret result
 end

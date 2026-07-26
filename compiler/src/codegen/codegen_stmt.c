@@ -175,13 +175,27 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
                 cg_line(cg, "goto %s;", cg->match_end_label);
             break;
         }
-        cg_emit_defers(cg);
-        if (n->a && cg->cur_sret)
+        if (n->a && cg->fn_defers.len > 0) {
+            const char *expr = cg_expr(cg, n->a);
+            const char *ts = n->a->type_str;
+            int t = ++cg->tmpn;
+            const char *tmp = cg_fmt(cg, "__retv%d", t);
+            cg_line(cg, "%s %s = (%s);", cg_ctype(cg, ts ? ts : "int32_t"), tmp, expr);
+            cg_emit_defers(cg);
+            if (cg->cur_sret)
+                cg_line(cg, "*__ret = %s; return;", tmp);
+            else
+                cg_line(cg, "return %s;", tmp);
+        } else if (n->a && cg->cur_sret) {
+            cg_emit_defers(cg);
             cg_line(cg, "*__ret = (%s); return;", cg_expr(cg, n->a));
-        else if (n->a)
+        } else if (n->a) {
+            cg_emit_defers(cg);
             cg_line(cg, "return %s;", cg_expr(cg, n->a));
-        else
+        } else {
+            cg_emit_defers(cg);
             cg_line(cg, "return;");
+        }
         break;
     case AST_MATCH: {
         const char *subj_ts = n->a->type_str;
@@ -311,8 +325,9 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
         {
             size_t m = cg->locals.len;
             if (n->name) {
-                cg_line(cg, "const int32_t %s = (int32_t)__rep%d;",
-                        cg_cident(cg, n->name), t);
+                const char *ivct = cg_ctype(cg, n->type_str ? n->type_str : "i32");
+                cg_line(cg, "const %s %s = (%s)__rep%d;", ivct, cg_cident(cg, n->name),
+                        ivct, t);
                 local_add(cg, n->name);
             }
             {

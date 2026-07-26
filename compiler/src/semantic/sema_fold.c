@@ -23,7 +23,7 @@ static bool lit_int(const ast_node_t *n, long long *out)
     if (!n || n->kind != AST_LITERAL || n->op != TK_INT) return false;
     {
         uint64_t u = n->value.as.i;
-        bool uns = n->type_str && n->type_str[0] == 'u';
+        bool uns = n->type_str && (n->type_str[0] == 'u' || !strcmp(n->type_str, "size"));
         if (uns && u > (uint64_t)FOLD_I64_MAX) return false;
         *out = (long long)u;
     }
@@ -176,6 +176,22 @@ static void fold_binary_int(sema_t *s, ast_node_t *n, long long a, long long b)
     case TK_GE:
         fold_bool(n, a >= b);
         return;
+    case TK_AMP:
+        if (fold_result_is_int(n)) fold_int(n, (long long)((uint64_t)a & (uint64_t)b));
+        return;
+    case TK_PIPE:
+        if (fold_result_is_int(n)) fold_int(n, (long long)((uint64_t)a | (uint64_t)b));
+        return;
+    case TK_CARET:
+        if (fold_result_is_int(n)) fold_int(n, (long long)((uint64_t)a ^ (uint64_t)b));
+        return;
+    case TK_SHL:
+        if (fold_result_is_int(n) && b >= 0 && b < 64)
+            fold_int(n, (long long)((uint64_t)a << b));
+        return;
+    case TK_SHR:
+        if (fold_result_is_int(n) && b >= 0 && b < 64) fold_int(n, a >> b);
+        return;
     default:
         return;
     }
@@ -225,6 +241,26 @@ static void fold_binary_flt(ast_node_t *n, double a, double b)
     fold_flt(n, r);
 }
 
+#define FOLD_STR_REPEAT_MAX_BYTES (1u << 20)
+
+static void fold_binary_str_repeat(sema_t *s, ast_node_t *n, const ast_node_t *str_n,
+                                   long long count)
+{
+    size_t sl = str_n->value.slen ? str_n->value.slen : strlen(str_n->value.as.s);
+    if (count < 0) count = 0;
+    uint64_t total = (uint64_t)sl * (uint64_t)count;
+    if (total > FOLD_STR_REPEAT_MAX_BYTES) return;
+    char *buf = (char *)arena_alloc(s->a, (size_t)total + 1);
+    size_t i = 0;
+    for (; i < (size_t)count; i++)
+        memcpy(buf + i * sl, str_n->value.as.s, sl);
+    buf[total] = '\0';
+    n->value.kind = TV_STRING;
+    n->value.as.s = buf;
+    n->value.slen = (size_t)total;
+    fold_done(n, TK_STRING);
+}
+
 static void fold_binary_str(sema_t *s, ast_node_t *n)
 {
     size_t la = n->a->value.slen ? n->a->value.slen : strlen(n->a->value.as.s);
@@ -266,8 +302,16 @@ static void fold_binary(sema_t *s, ast_node_t *n)
         return;
     }
     if (n->op == TK_PLUS && lit_str(n->a) && lit_str(n->b) && n->type_str &&
-        !strcmp(n->type_str, "str"))
+        !strcmp(n->type_str, "str")) {
         fold_binary_str(s, n);
+        return;
+    }
+    if (n->op == TK_STAR && n->type_str && !strcmp(n->type_str, "str")) {
+        if (lit_str(n->a) && lit_int(n->b, &ia))
+            fold_binary_str_repeat(s, n, n->a, ia);
+        else if (lit_str(n->b) && lit_int(n->a, &ia))
+            fold_binary_str_repeat(s, n, n->b, ia);
+    }
 }
 
 static void fold_unary(ast_node_t *n)
@@ -287,6 +331,8 @@ static void fold_unary(ast_node_t *n)
         return;
     }
     if (n->op == TK_NOT && lit_bool(n->a, &bv)) fold_bool(n, !bv);
+    if (n->op == TK_TILDE && lit_int(n->a, &iv) && fold_result_is_int(n))
+        fold_int(n, (long long)(~(uint64_t)iv));
 }
 
 void sema_fold_expr(sema_t *s, ast_node_t *n)

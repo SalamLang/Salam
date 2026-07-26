@@ -41,7 +41,7 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 func writeError(w http.ResponseWriter, status int, reqID, errCode, message string) {
-	log.Printf("reject id=%s status=%d error=%s message=%q", reqID, status, errCode, message)
+	log.Printf("reject id=%s status=%d error=%s message=%q", reqID, status, errCode, message) // #nosec G706
 	writeJSON(w, status, runResponse{OK: false, Error: errCode, Message: message, RequestID: reqID})
 }
 

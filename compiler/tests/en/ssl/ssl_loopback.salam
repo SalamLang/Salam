@@ -1,0 +1,55 @@
+import ssl
+import tcp
+import sync
+
+mut srv wg := sync.NewWaitGroup()
+
+func tls server():
+    srv := tcp.Bind(19301)
+    sync.Done(srv wg)
+    if !tcp.Ok(srv):
+        ret
+    end
+    ctx := ssl.NewServerContext("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    if ssl.CtxOk(ctx):
+        c := tcp.Accept(srv)
+        if tcp.ConnOk(c):
+            conn := ssl.Wrap(ctx, c.fd)
+            if ssl.ConnOk(conn):
+                if ssl.Accept(conn):
+                    msg := ssl.Read(conn, 1024)
+                    ssl.Write(conn, "echo:" + msg)
+                end
+                ssl.Close(conn)
+            end
+        end
+        ssl.CloseContext(ctx)
+    end
+    tcp.CloseServer(srv)
+end
+
+func main:
+    sync.Add(srv wg, 1 as i64)
+    t := spawn(tls server)
+    sync.Wait(srv wg)
+
+    ctx := ssl.NewClientContext()
+    ssl.LoadVerifyLocationsFile(ctx, "tests/fixtures/ssl/server.crt")
+
+    c := tcp.Dial("127.0.0.1", 19301)
+    println tcp.ConnOk(c)
+
+    conn := ssl.Wrap(ctx, c.fd)
+    ssl.SetHostname(conn, "localhost")
+    println ssl.Connect(conn)
+    println ssl.PeerVerified(conn)
+
+    ssl.Write(conn, "hello")
+    resp := ssl.Read(conn, 1024)
+    println resp
+
+    ssl.Close(conn)
+    tcp.Close(c)
+    ssl.CloseContext(ctx)
+    join(t)
+end

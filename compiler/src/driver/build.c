@@ -483,6 +483,8 @@ int driver_build(options_t *opt)
                             !strstr(opt->cc, "-O"))
                                ? " -O2"
                                : "";
+    bool optimizing_build = !opt->debug_info && !opt->asan && !strstr(opt->cc, "tcc") &&
+                            !strstr(opt->cc, "-O0");
     if (opt->command == CMD_OBJ) {
         const char *dbg_flag = (opt->debug_info && !strstr(opt->cc, "tcc")) ? " -g" : "";
         {
@@ -538,7 +540,7 @@ int driver_build(options_t *opt)
         const char *lm = " -lm";
 #endif
         const char *lto_flag = "";
-        if (opt_flag[0] && !use_tcc) {
+        if (optimizing_build && !use_tcc) {
 #ifdef _WIN32
             if (!strstr(opt->cc, "clang")) lto_flag = " -flto";
 #else

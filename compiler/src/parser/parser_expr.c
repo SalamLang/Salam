@@ -31,6 +31,11 @@ static unsigned bp_of(token_kind_t k)
     case TK_SLASH_EQ:
     case TK_PERCENT_EQ:
     case TK_POWER_EQ:
+    case TK_AMP_EQ:
+    case TK_PIPE_EQ:
+    case TK_CARET_EQ:
+    case TK_SHL_EQ:
+    case TK_SHR_EQ:
         return BP(10, 10);
 
     case TK_QUESTION:
@@ -42,6 +47,17 @@ static unsigned bp_of(token_kind_t k)
     case TK_AND:
         return BP(30, 31);
 
+    /* Bitwise, C precedence: '|' looser than '^' looser than '&', all looser
+     * than equality and tighter than logical '&&'. */
+    case TK_PIPE:
+        return BP(32, 33);
+
+    case TK_CARET:
+        return BP(34, 35);
+
+    case TK_AMP:
+        return BP(36, 37);
+
     case TK_EQ:
     case TK_NE:
         return BP(40, 41);
@@ -51,6 +67,11 @@ static unsigned bp_of(token_kind_t k)
     case TK_LE:
     case TK_GE:
         return BP(50, 51);
+
+    /* Shifts: tighter than comparison, looser than '+'/'-' (C precedence). */
+    case TK_SHL:
+    case TK_SHR:
+        return BP(56, 57);
 
     case TK_PLUS:
     case TK_MINUS:
@@ -105,7 +126,7 @@ static ast_node_t *parse_nud(parser_t *p)
 {
     token_kind_t k = p_peek(p)->kind;
 
-    if (k == TK_NOT || k == TK_MINUS) {
+    if (k == TK_NOT || k == TK_MINUS || k == TK_TILDE) {
         ast_node_t *n = p_mk(p, AST_UNARY);
         n->op = p_advance(p)->kind;
         n->a = parse_expr_bp(p, 90);
@@ -238,6 +259,11 @@ static ast_node_t *parse_led(parser_t *p, ast_node_t *lhs, token_kind_t op, unsi
     case TK_SLASH_EQ:
     case TK_PERCENT_EQ:
     case TK_POWER_EQ:
+    case TK_AMP_EQ:
+    case TK_PIPE_EQ:
+    case TK_CARET_EQ:
+    case TK_SHL_EQ:
+    case TK_SHR_EQ:
         return led_assign(p, lhs, op, bp);
     case TK_PLUS_PLUS:
     case TK_MINUS_MINUS: {

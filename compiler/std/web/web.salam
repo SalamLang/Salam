@@ -12,11 +12,6 @@ import conv
 import encoding
 import filepath
 
-@en "SERVER_VERSION"
-@fa "نسخه سرور"
-@ar "إصدار الخادم"
-pub const SERVER_VERSION := "0.2.6"
-
 extern:
     func fopen(path: str, mode: str): void *
     func fread(ptr: void *, size: u64, nmemb: u64, stream: void *): u64
@@ -30,139 +25,27 @@ if SALAM_OS_WINDOWS:
         func _beginthreadex(sec: void *, stack: u32, start: void *, arg: void *, flags: u32, thrdaddr: void *): u64
         func CloseHandle(h: void *): int
     end
-    extern:
-        func salam_spawn_fn_i64(fn: i64, arg: i64):
-            h := _beginthreadex(null, 0 as u32, fn as void *, arg as void *, 0 as u32, null)
-            if h != (0 as u64): CloseHandle(h as void *) end
-        end
-    end
 else:
     extern:
         func pthread_create(thread: void *, attr: void *, start: void *, arg: void *): int
         func pthread_detach(thread: u64): int
     end
-    extern:
-        func salam_spawn_fn_i64(fn: i64, arg: i64):
-            t := mem.Allocate(8 as u64)
-            if pthread_create(t, null, fn as void *, arg as void *) == 0:
-                tp := t as i64 *
-                pthread_detach(tp[0] as u64)
-            end
-            mem.Free(t)
-        end
-    end
 end
+
+@en "SERVER_VERSION"
+@fa "نسخه سرور"
+@ar "إصدار الخادم"
+pub const SERVER_VERSION := "0.2.6"
+
+mut _reqctx_size := 0 as i64
+mut _current_router := NewRouter()
+mut _hide_tokens := false
 
 @en "Context"
 @fa "زمینه"
 @ar "سیاق"
 pub struct Context:
     pub h: i64
-end
-
-@en "Ctx"
-@fa "زمینه جدید"
-@ar "سیاق جدید"
-pub func Ctx(h: i64): Context:
-    ret Context { h = h }
-end
-
-@en "Method"
-@fa "روش"
-@ar "طریقة"
-pub func Method(ctx: Context): str: ret salam_ctx_get(ctx.h, 0) end
-
-@en "Path"
-@fa "مسیر"
-@ar "مسار"
-pub func Path(ctx: Context): str: ret salam_ctx_get(ctx.h, 1) end
-
-@en "Body"
-@fa "بدنه"
-@ar "متن"
-pub func Body(ctx: Context): str: ret salam_ctx_get(ctx.h, 3) end
-
-@en "Query"
-@fa "پرسمان"
-@ar "استعلام"
-pub func Query(ctx: Context, key: str): str:
-    ret _query_parse(salam_ctx_get(ctx.h, 2), key)
-end
-
-@en "Header"
-@fa "سرصفحه"
-@ar "ترویسة"
-pub func Header(ctx: Context, name: str): str:
-    ret salam_ctx_kv_get(ctx.h, 0, name)
-end
-
-@en "Param"
-@fa "پارامتر"
-@ar "معامل"
-pub func Param(ctx: Context, name: str): str:
-    ret salam_ctx_kv_get(ctx.h, 1, name)
-end
-
-@en "Form"
-@fa "فرم"
-@ar "استمارة"
-pub func Form(ctx: Context, field: str): str:
-    ret _query_parse(salam_ctx_get(ctx.h, 3), field)
-end
-
-@en "SetStatus"
-@fa "تنظیم وضعیت"
-@ar "تعیین الحالة"
-pub func SetStatus(ctx: Context, code: int):
-    salam_ctx_set_status(ctx.h, code)
-end
-
-@en "SetHeader"
-@fa "تنظیم سرصفحه"
-@ar "تعیین الترویسة"
-pub func SetHeader(ctx: Context, k: str, v: str):
-    salam_ctx_kv_add(ctx.h, 2, k, v)
-end
-
-@en "Html"
-@fa "اچ تی ام ال"
-@ar "إتش تی إم إل"
-pub func Html(ctx: Context, html: str):
-    salam_ctx_set(ctx.h, 4, "text/html; charset=utf-8")
-    salam_ctx_set(ctx.h, 5, html)
-end
-
-@en "Json"
-@fa "جیسون"
-@ar "جیسون"
-pub func Json(ctx: Context, json: str):
-    salam_ctx_set(ctx.h, 4, "application/json")
-    salam_ctx_set(ctx.h, 5, json)
-end
-
-@en "Text"
-@fa "متن"
-@ar "نص"
-pub func Text(ctx: Context, text: str):
-    salam_ctx_set(ctx.h, 4, "text/plain; charset=utf-8")
-    salam_ctx_set(ctx.h, 5, text)
-end
-
-@en "Redirect"
-@fa "تغییرمسیر"
-@ar "إعادة توجیه"
-pub func Redirect(ctx: Context, url: str):
-    salam_ctx_set_status(ctx.h, 302)
-    salam_ctx_kv_add(ctx.h, 2, "Location", url)
-    salam_ctx_set(ctx.h, 4, "")
-    salam_ctx_set(ctx.h, 5, "")
-end
-
-@en "ConnOf"
-@fa "اتصال مربوط به"
-@ar "اتصال السیاق"
-pub func ConnOf(ctx: Context): tcp.Conn:
-    ret tcp.ConnFromFd(salam_ctx_fd(ctx.h))
 end
 
 struct _KV:
@@ -184,7 +67,35 @@ struct _ReqCtx:
     pub path_params: Vector<_KV> = Vector {}
     pub resp_hdrs: Vector<_KV> = Vector {}
 end
-mut _reqctx_size := 0 as i64
+
+@en "Route"
+@fa "مسیر مسیریابی"
+@ar "مسار توجیه"
+pub struct Route:
+    pub method: str = ""
+    pub pattern: str = ""
+    pub fn: i64 = 0
+end
+
+@en "Router"
+@fa "مسیریاب"
+@ar "موجه"
+pub struct Router:
+    pub routes: Vector<Route> = Vector {}
+    pub static_prefix: str = ""
+    pub static_dir: str = ""
+    pub has_static: bool = false
+end
+
+@en "Server"
+@fa "سرور"
+@ar "خادم"
+pub struct Server:
+    pub port: int = 0
+    pub router: Router = Router {}
+    pub hide_tokens: bool = false
+end
+
 func _reqctx_sizeof(): i64:
     if _reqctx_size == 0:
         v := Vector {} as Vector<_ReqCtx> v.push(_ReqCtx {})
@@ -255,23 +166,19 @@ func _ctx_mark_sent(h: i64):
 end
 
 func _kvl_get(l &: Vector<_KV>, key: str): str:
-    mut i := 0
-    until i < l.len():
+    repeat l.len() with i:
         kv := l.get(i)[0]
         if kv.k == key: ret kv.v end
-        i += 1
     end
     ret ""
 end
 
 func _kvl_set(l &: Vector<_KV>, key: str, val: str):
-    mut i := 0
-    until i < l.len():
+    repeat l.len() with i:
         if l.get(i)[0].k == key:
             l.set(i, _KV { k = key, v = val })
             ret
         end
-        i += 1
     end
     l.push(_KV { k = key, v = val })
 end
@@ -294,19 +201,19 @@ end
 func salam_ctx_kv_add(h: i64, list: int, key: str, val: str):
     c := _rc(h)
     if list == 0: _kvl_set(c.req_hdrs, key, val)
-else list == 1: _kvl_set(c.path_params, key, val)
-else:
-    _kvl_set(c.resp_hdrs, key, val)
-end
+    else list == 1: _kvl_set(c.path_params, key, val)
+    else:
+        _kvl_set(c.resp_hdrs, key, val)
+    end
 end
 
 func salam_ctx_kv_clear(h: i64, list: int):
     c := _rc(h)
     if list == 0: _kvl_clear(c.req_hdrs)
-else list == 1: _kvl_clear(c.path_params)
-else:
-    _kvl_clear(c.resp_hdrs)
-end
+    else list == 1: _kvl_clear(c.path_params)
+    else:
+        _kvl_clear(c.resp_hdrs)
+    end
 end
 
 func salam_ctx_kv_n(h: i64, list: int): int:
@@ -336,325 +243,6 @@ func salam_ctx_kv_val(h: i64, list: int, idx: int): str:
     end
 end
 
-@en "Route"
-@fa "مسیر مسیریابی"
-@ar "مسار توجیه"
-pub struct Route:
-    pub method: str = ""
-    pub pattern: str = ""
-    pub fn: i64 = 0
-end
-
-@en "Router"
-@fa "مسیریاب"
-@ar "موجه"
-pub struct Router:
-    pub routes: Vector<Route> = Vector {}
-    pub static_prefix: str = ""
-    pub static_dir: str = ""
-    pub has_static: bool = false
-end
-
-@en "NewRouter"
-@fa "مسیریاب جدید"
-@ar "موجه جدید"
-pub func NewRouter(): Router:
-    ret Router {}
-end
-
-@en "Get"
-@fa "دریافت"
-@ar "جلب"
-pub func Get(r &: Router, path: str, fn: i64): r.routes.push(Route { method = "GET", pattern = path, fn = fn }) end
-
-@en "Post"
-@fa "ارسال"
-@ar "إرسال"
-pub func Post(r &: Router, path: str, fn: i64): r.routes.push(Route { method = "POST", pattern = path, fn = fn }) end
-
-@en "Put"
-@fa "قراردادن"
-@ar "وضع"
-pub func Put(r &: Router, path: str, fn: i64): r.routes.push(Route { method = "PUT", pattern = path, fn = fn }) end
-
-@en "Delete"
-@fa "حذف"
-@ar "حذف"
-pub func Delete(r &: Router, path: str, fn: i64): r.routes.push(Route { method = "DELETE", pattern = path, fn = fn }) end
-
-@en "Route"
-@fa "مسیر مسیریابی"
-@ar "مسار توجیه"
-pub func Route(r &: Router, method: str, path: str, fn: i64):
-    r.routes.push(Route { method = method, pattern = path, fn = fn })
-end
-
-@en "Static"
-@fa "ایستا"
-@ar "ثابت"
-pub func Static(r &: Router, prefix: str, dir: str):
-    r.static_prefix = prefix
-    r.static_dir = dir
-    r.has_static = true
-end
-
-@en "FreeRouter"
-@fa "آزادسازی مسیریاب"
-@ar "تحریر الموجه"
-pub func FreeRouter(_r: Router): ret end
-
-@en "Server"
-@fa "سرور"
-@ar "خادم"
-pub struct Server:
-    pub port: int = 0
-    pub router: Router = Router {}
-    pub hide_tokens: bool = false
-end
-
-@en "NewServer"
-@fa "سرور جدید"
-@ar "خادم جدید"
-pub func NewServer(port: int): Server:
-    ret Server { port = port }
-end
-
-@en "Use"
-@fa "استفاده"
-@ar "استخدام"
-pub func Use(s &: Server, r: Router):
-    s.router = r
-end
-
-@en "HideTokens"
-@fa "پنهان سازی توکن"
-@ar "إخفاء الرموز"
-pub func HideTokens(s &: Server):
-    s.hide_tokens = true
-end
-
-func _net_listen(port: int): i64:
-    ret net.Listen(port).fd
-end
-
-func _net_accept(lfd: i64): i64:
-    ret net.Accept(net.SocketFromFd(lfd)).fd
-end
-
-func _net_recv_req(fd: i64): str:
-    ret net.Recv(net.SocketFromFd(fd), 32768)
-end
-
-func _net_send_all(fd: i64, data: str):
-    s := net.SocketFromFd(fd)
-    total := data.len()
-    mut sent := 0
-    until sent < total:
-        n := net.Send(s, data.substr(sent, total - sent))
-        if n <= 0:
-            ret
-        end
-        sent += n
-    end
-end
-
-func _net_close(fd: i64):
-    net.Close(net.SocketFromFd(fd))
-end
-
-func _send_file(fd: i64, path: str, ct: str, server_hdr: str): int:
-    f := fopen(path, "rb")
-    if f == null:
-        ret 0
-    end
-    defer fclose(f)
-    fseek(f, 0, 2)
-    sz := ftell(f)
-    fseek(f, 0, 0)
-    if sz <= 0 || sz > 16777216:
-        ret 0
-    end
-    buf := mem.Allocate(sz as u64)
-    defer mem.Free(buf)
-    got := fread(buf, 1 as u64, sz as u64, f)
-    mut hdr := "HTTP/1.1 200 OK\r\nContent-Length: "
-    hdr = hdr.concat(conv.FormatInt(sz))
-    hdr = hdr.concat("\r\nContent-Type: ")
-    hdr = hdr.concat(ct)
-    hdr = hdr.concat("\r\nConnection: close\r\nServer: ")
-    hdr = hdr.concat(server_hdr)
-    hdr = hdr.concat("\r\n\r\n")
-    _net_send_all(fd, hdr)
-    net.SendBytes(net.SocketFromFd(fd), buf, got as int)
-    mem.Free(buf)
-    ret 1
-end
-
-@en "Run"
-@fa "اجرا"
-@ar "تشغیل"
-pub func Run(s: Server):
-    _reqctx_sizeof()
-    _current_router = s.router
-    _hide_tokens = s.hide_tokens
-    port := s.port
-    lfd := _net_listen(port)
-    if lfd < 0:
-        ret
-    end
-    until 1 == 1:
-        cfd := _net_accept(lfd)
-        if cfd >= 0:
-            salam_spawn_fn_i64(funcptr(_web_conn_handler), cfd)
-        end
-    end
-end
-mut _current_router := NewRouter()
-mut _hide_tokens := false
-@en "Ctx_method"
-@fa "روش زمینه"
-@ar "طریقة السیاق"
-pub func Ctx_method(h: i64): str: ret salam_ctx_get(h, 0) end
-
-@en "Ctx_path"
-@fa "مسیر زمینه"
-@ar "مسار السیاق"
-pub func Ctx_path(h: i64): str: ret salam_ctx_get(h, 1) end
-
-@en "Ctx_body"
-@fa "بدنه زمینه"
-@ar "متن السیاق"
-pub func Ctx_body(h: i64): str: ret salam_ctx_get(h, 3) end
-
-@en "Ctx_query"
-@fa "پرسمان زمینه"
-@ar "استعلام السیاق"
-pub func Ctx_query(h: i64, key: str): str: ret _query_parse(salam_ctx_get(h, 2), key) end
-
-@en "Ctx_header"
-@fa "سرصفحه زمینه"
-@ar "ترویسة السیاق"
-pub func Ctx_header(h: i64, name: str): str: ret salam_ctx_kv_get(h, 0, name) end
-
-@en "Ctx_param"
-@fa "پارامتر زمینه"
-@ar "معامل السیاق"
-pub func Ctx_param(h: i64, name: str): str: ret salam_ctx_kv_get(h, 1, name) end
-
-@en "Ctx_form"
-@fa "فرم زمینه"
-@ar "استمارة السیاق"
-pub func Ctx_form(h: i64, field: str): str: ret _query_parse(salam_ctx_get(h, 3), field) end
-
-@en "Ctx_status"
-@fa "وضعیت زمینه"
-@ar "حالة السیاق"
-pub func Ctx_status(h: i64, code: int): salam_ctx_set_status(h, code) end
-
-@en "Ctx_set_header"
-@fa "تنظیم سرصفحه زمینه"
-@ar "تعیین ترویسة السیاق"
-pub func Ctx_set_header(h: i64, k: str, v: str): salam_ctx_kv_add(h, 2, k, v) end
-
-@en "Ctx_html"
-@fa "اچ تی ام ال زمینه"
-@ar "إتش تی إم إل السیاق"
-pub func Ctx_html(h: i64, html: str):
-    salam_ctx_set(h, 4, "text/html; charset=utf-8")
-    salam_ctx_set(h, 5, html)
-end
-
-@en "Ctx_json"
-@fa "جیسون زمینه"
-@ar "جیسون السیاق"
-pub func Ctx_json(h: i64, json: str):
-    salam_ctx_set(h, 4, "application/json")
-    salam_ctx_set(h, 5, json)
-end
-
-@en "Ctx_text"
-@fa "متن زمینه"
-@ar "نص السیاق"
-pub func Ctx_text(h: i64, text: str):
-    salam_ctx_set(h, 4, "text/plain; charset=utf-8")
-    salam_ctx_set(h, 5, text)
-end
-
-@en "Ctx_redirect"
-@fa "تغییرمسیر زمینه"
-@ar "إعادة توجیه السیاق"
-pub func Ctx_redirect(h: i64, loc: str):
-    salam_ctx_set_status(h, 302)
-    salam_ctx_kv_add(h, 2, "Location", loc)
-    salam_ctx_set(h, 4, "")
-    salam_ctx_set(h, 5, "")
-end
-
-@en "MimeExt"
-@fa "پسوند مایم"
-@ar "امتداد المایم"
-pub func MimeExt(ext: str): str:
-    if ext == "html" || ext == "htm": ret "text/html; charset=utf-8"
-    else ext == "css": ret "text/css"
-    else ext == "js": ret "application/javascript"
-    else ext == "json": ret "application/json"
-    else ext == "png": ret "image/png"
-    else ext == "jpg" || ext == "jpeg": ret "image/jpeg"
-    else ext == "gif": ret "image/gif"
-    else ext == "svg": ret "image/svg+xml"
-    else ext == "ico": ret "image/x-icon"
-    else ext == "txt": ret "text/plain; charset=utf-8"
-    else ext == "pdf": ret "application/pdf"
-    else ext == "xml": ret "application/xml"
-    else ext == "woff": ret "font/woff"
-    else ext == "woff2": ret "font/woff2"
-    else:
-        ret "application/octet-stream"
-    end
-end
-
-@en "MimeType"
-@fa "رده مایم"
-@ar "فئة المایم"
-pub func MimeType(p: str): str:
-    e := filepath.Ext(p)
-    if e.len() == 0: ret "application/octet-stream" end
-    ret MimeExt(e.substr(1, e.len() - 1))
-end
-
-@en "StatusText"
-@fa "متن وضعیت"
-@ar "نص الحالة"
-pub func StatusText(code: int): str:
-    if code == 200: ret "OK"
-    else code == 201: ret "Created"
-    else code == 204: ret "No Content"
-    else code == 301: ret "Moved Permanently"
-    else code == 302: ret "Found"
-    else code == 304: ret "Not Modified"
-    else code == 400: ret "Bad Request"
-    else code == 401: ret "Unauthorized"
-    else code == 403: ret "Forbidden"
-    else code == 404: ret "Not Found"
-    else code == 405: ret "Method Not Allowed"
-    else code == 409: ret "Conflict"
-    else code == 422: ret "Unprocessable Entity"
-    else code == 429: ret "Too Many Requests"
-    else code == 500: ret "Internal Server Error"
-    else code == 502: ret "Bad Gateway"
-    else code == 503: ret "Service Unavailable"
-    else:
-        ret "Unknown"
-    end
-end
-
-@en "UrlDecode"
-@fa "رمزگشایی نشانی"
-@ar "فک ترمیز العنوان"
-pub func UrlDecode(s: str): str:
-    ret encoding.URLDecode(s)
-end
-
 func _query_parse(req: str, key: str): str:
     if req.len() == 0: ret "" end
     decoded := UrlDecode(req)
@@ -677,11 +265,6 @@ func _query_parse(req: str, key: str): str:
         end
     end
     ret ""
-end
-
-func _server_header(hide: bool): str:
-    if hide: ret "Salam" end
-    ret "Salam/".concat(SERVER_VERSION)
 end
 
 func _parse_http(ctx: i64, req: str):
@@ -770,6 +353,11 @@ func _match_path(pattern: str, path: str, ctx: i64): bool:
     ret pi == plen && pp == pathlen
 end
 
+func _server_header(hide: bool): str:
+    if hide: ret "Salam" end
+    ret "Salam/".concat(SERVER_VERSION)
+end
+
 func _build_response(ctx: i64, hide: bool): str:
     status := salam_ctx_get_status(ctx)
     ct := salam_ctx_get(ctx, 4)
@@ -789,13 +377,11 @@ func _build_response(ctx: i64, hide: bool): str:
         resp = resp.concat("\r\n")
     end
     nhdr := salam_ctx_kv_n(ctx, 2)
-    mut i := 0
-    until i < nhdr:
+    repeat nhdr with i:
         resp = resp.concat(salam_ctx_kv_key(ctx, 2, i))
         resp = resp.concat(": ")
         resp = resp.concat(salam_ctx_kv_val(ctx, 2, i))
         resp = resp.concat("\r\n")
-        i += 1
     end
     resp = resp.concat("\r\n")
     resp = resp.concat(body)
@@ -806,8 +392,7 @@ func _dispatch(r: Router, ctx: i64): bool:
     method := salam_ctx_get(ctx, 0)
     path := salam_ctx_get(ctx, 1)
     n := r.routes.len()
-    mut i := 0
-    until i < n:
+    repeat n with i:
         route := r.routes.get(i)[0]
         if route.method == method:
             salam_ctx_kv_clear(ctx, 1)
@@ -816,9 +401,65 @@ func _dispatch(r: Router, ctx: i64): bool:
                 ret true
             end
         end
-        i += 1
     end
     ret false
+end
+
+func _net_listen(port: int): i64:
+    ret net.Listen(port).fd
+end
+
+func _net_accept(lfd: i64): i64:
+    ret net.Accept(net.SocketFromFd(lfd)).fd
+end
+
+func _net_recv_req(fd: i64): str:
+    ret net.Recv(net.SocketFromFd(fd), 32768)
+end
+
+func _net_send_all(fd: i64, data: str):
+    s := net.SocketFromFd(fd)
+    total := data.len()
+    mut sent := 0
+    until sent < total:
+        n := net.Send(s, data.substr(sent, total - sent))
+        if n <= 0:
+            ret
+        end
+        sent += n
+    end
+end
+
+func _net_close(fd: i64):
+    net.Close(net.SocketFromFd(fd))
+end
+
+func _send_file(fd: i64, path: str, ct: str, server_hdr: str): int:
+    f := fopen(path, "rb")
+    if f == null:
+        ret 0
+    end
+    defer fclose(f)
+    fseek(f, 0, 2)
+    sz := ftell(f)
+    fseek(f, 0, 0)
+    if sz <= 0 || sz > 16777216:
+        ret 0
+    end
+    buf := mem.Allocate(sz as u64)
+    defer mem.Free(buf)
+    got := fread(buf, 1 as u64, sz as u64, f)
+    mut hdr := "HTTP/1.1 200 OK\r\nContent-Length: "
+    hdr = hdr.concat(conv.FormatInt(sz))
+    hdr = hdr.concat("\r\nContent-Type: ")
+    hdr = hdr.concat(ct)
+    hdr = hdr.concat("\r\nConnection: close\r\nServer: ")
+    hdr = hdr.concat(server_hdr)
+    hdr = hdr.concat("\r\n\r\n")
+    _net_send_all(fd, hdr)
+    net.SendBytes(net.SocketFromFd(fd), buf, got as int)
+    mem.Free(buf)
+    ret 1
 end
 
 func _web_conn_handler(fd: i64):
@@ -858,4 +499,24 @@ func _web_conn_handler(fd: i64):
     end
     _net_close(fd)
     salam_ctx_free(ctx)
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func salam_spawn_fn_i64(fn: i64, arg: i64):
+            h := _beginthreadex(null, 0 as u32, fn as void *, arg as void *, 0 as u32, null)
+            if h != (0 as u64): CloseHandle(h as void *) end
+        end
+    end
+else:
+    extern:
+        func salam_spawn_fn_i64(fn: i64, arg: i64):
+            t := mem.Allocate(8 as u64)
+            if pthread_create(t, null, fn as void *, arg as void *) == 0:
+                tp := t as i64 *
+                pthread_detach(tp[0] as u64)
+            end
+            mem.Free(t)
+        end
+    end
 end

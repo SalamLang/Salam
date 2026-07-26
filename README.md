@@ -123,7 +123,7 @@ salam build app.salam -DDEBUG                  # preprocessor define
 # format source in place (auto-detects nothing - pass --lang=fa for Persian files)
 salam format app.salam                         # reformat one file
 salam format                                   # reformat every .salam under the cwd, recursively
-salam format compiler/src/ examples/           # reformat given files and/or directories
+salam format compiler/src/ compiler/tests/     # reformat given files and/or directories
 salam format --check                           # report files that need formatting (exit 1 if any)
 salam format app.salam --tabs                  # indent with tabs (convert spaces to tabs)
 salam format compiler/src/ --indent=2          # indent with 2 spaces per level
@@ -244,11 +244,11 @@ docker compose -f compiler/docker/docker-compose.yml run --rm dev sh
 
 The production stage runs `COPY .` then `make && make install`, baking a fully
 built, self-contained compiler into the image. `salam` is the entrypoint, and the
-repository root is mounted at `/work` so shared `examples/` are reachable:
+repository root is mounted at `/work` so the example programs are reachable:
 
 ```sh
 docker compose -f compiler/docker/docker-compose.yml build prod
-docker compose -f compiler/docker/docker-compose.yml run --rm prod build examples/en/basics/hello.salam --output=hello
+docker compose -f compiler/docker/docker-compose.yml run --rm prod build compiler/tests/en/basics/hello.salam --output=hello
 docker compose -f compiler/docker/docker-compose.yml run --rm prod layout build page.salam --inline
 docker compose -f compiler/docker/docker-compose.yml run --rm prod --help
 ```
@@ -327,11 +327,6 @@ $ bun run --filter='*' --parallel dev
 @workspace/editor:dev        |   VITE v8.1.3  ready in 65 ms
 @workspace/editor:dev        |
 @workspace/editor:dev        |   ➜  Local:   http://127.0.0.1:55001/
-@workspace/vercel-editor:dev |
-@workspace/vercel-editor:dev |   VITE v8.1.3  ready in 91 ms
-@workspace/vercel-editor:dev |
-@workspace/vercel-editor:dev |   ➜  Local:   http://localhost:5173/
-@workspace/vercel-editor:dev |   ➜  Network: use --host to expose
 @workspace/runner:dev        |
 @workspace/runner:dev        |  ⛅️ wrangler 4.107.0
 @workspace/runner:dev        | ────────────────────
@@ -354,8 +349,7 @@ salam-monorepo/
 ├── extensions/
 │   └── vscode/
 ├── pages/
-├── runner/
-└── vercel-editor/
+└── runner/
 ```
 
 #### Root Configuration Files
@@ -377,22 +371,13 @@ dependency updates.
       "editor",
       "extensions/vscode",
       "pages",
-      "runner",
-      "vercel-editor"
+      "runner"
     ],
     "catalog": {
-      "react": "^19.2.7",
-      "react-dom": "^19.2.7",
-      "tailwindcss": "^4.3.2",
-      "@tailwindcss/vite": "^4.3.2",
-      "@vitejs/plugin-react": "^6.0.3",
-      "vite": "^8.1.3",
       "typescript": "^6.0.3",
       "wrangler": "^4.107.0",
       "@types/bun": "latest",
-      "@types/node": "^26.1.0",
-      "@types/react": "^19.2.17",
-      "@types/react-dom": "^19.2.3"
+      "@types/node": "^26.1.0"
     }
   },
   "scripts": {
@@ -401,20 +386,16 @@ dependency updates.
     "docs:myst": "bun run myst start",
     "dev:pages": "bun run --filter='@workspace/pages' dev",
     "dev:runner": "bun run --filter='@workspace/runner' dev",
-    "dev:vercel": "bun run --filter='@workspace/vercel-editor' dev",
     "build:all": "bun run --filter='*' --if-present build",
     "build:myst": "bun run myst build --html",
-    "build:vercel": "bun run --filter='@workspace/vercel-editor' build",
     "update:deps": "bun update -i -r",
     "clean": "rm -rf node_modules **/node_modules .bun-cache",
     "generate": "bun run --filter='@workspace/runner' generate",
     "typecheck": "bun run --filter='@workspace/runner' typecheck"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "catalog:",
-    "@vitejs/plugin-react": "catalog:",
-    "mystmd": "^1.10.1",
-    "vite": "catalog:"
+    "@biomejs/biome": "^2.5.4",
+    "mystmd": "^1.10.1"
   }
 }
 ```
@@ -422,10 +403,9 @@ dependency updates.
 Useful root commands:
 
 - `bun run dev:all`: start every workspace that exposes a `dev` script
-- `bun run dev:editor`, `bun run dev:pages`, `bun run dev:runner`, and
-  `bun run dev:vercel`: start one workspace at a time
+- `bun run dev:editor`, `bun run dev:pages`, and `bun run dev:runner`:
+  start one workspace at a time
 - `bun run build:all`: run every workspace `build` script that exists
-- `bun run build:vercel`: build the React/Vite app in `vercel-editor/`
 - `bun run docs:myst`: start the [MyST](https://mystmd.org/) documentation dev server
 - `bun run build:myst`: build the MyST documentation to static HTML (`_build/html/`)
 - `bun run generate`: refresh Cloudflare Wrangler types for `runner/`
@@ -683,7 +663,6 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[prek](https://prek.j178.dev/)** | Git hook manager used by Salam. Hooks are defined in `prek.toml` (standard and manual stages) and `prek-audit.toml` (security-focused audit checks). |
 | **prek-audit.toml** | prek configuration file for security-focused audit hooks. Run separately with `prek run --all-files --config prek-audit.toml`. |
 | **[Prettier](https://prettier.io/)** | Opinionated code formatter for JavaScript, TypeScript, CSS, and JSON. Run as a prek hook. |
-| **[React](https://react.dev/)** | JavaScript library for building user interfaces with a component model. Used in the `vercel-editor/` workspace. |
 | **[Read the Docs](https://readthedocs.org/)** | Free documentation hosting platform. Salam's MyST docs are automatically built and published there via `.readthedocs.yaml`. |
 | **[REPL](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop)** | Read-Eval-Print Loop, an interactive session where you type expressions and see results immediately. `salam cli` starts a general REPL; `salam layout` starts a layout REPL. |
 | **[RTL (Right-to-Left)](https://en.wikipedia.org/wiki/Right-to-left_script)** | Text direction used by Arabic and Persian scripts. The Salam web playground supports RTL and switches direction when the Persian language is selected. |
@@ -691,11 +670,10 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[SemVer (Semantic Versioning)](https://semver.org/)** | Version numbering scheme (`MAJOR.MINOR.PATCH`). Used by Bun's interactive update tooling and GitHub releases. |
 | **[shfmt](https://github.com/mvdan/sh)** | Shell script formatter. Run as a prek manual-stage hook to normalise indentation and style in `.sh` files. |
 | **[Super-Linter](https://github.com/super-linter/super-linter)** | GitHub Actions workflow that runs a broad set of language-specific linters across the repository in CI. |
-| **[Tailwind CSS](https://tailwindcss.com/)** | Utility-first CSS framework. Used in the Salam monorepo workspaces; integrated via the `@tailwindcss/vite` plugin. |
 | **[TCC (Tiny C Compiler)](https://bellard.org/tcc/)** | Lightweight, fast C compiler. The default backend used by Salam's quick-build script. |
 | **[Tree-walking interpreter](https://en.wikipedia.org/wiki/Interpreter_(computing))** | An interpreter that evaluates the AST directly without first compiling to native code. Used by the web playground and via `salam exec` / `salam run --interp` for pure-compute programs. |
 | **[TUI (Terminal User Interface)](https://en.wikipedia.org/wiki/Text-based_user_interface)** | Interactive, keyboard-driven interface rendered in the terminal. Bun's `bun update -i` flag opens a TUI for selecting which packages to upgrade. |
-| **[TypeScript](https://www.typescriptlang.org/)** | Typed superset of JavaScript that compiles to plain JavaScript. Used in the `runner/` and `vercel-editor/` workspaces. |
+| **[TypeScript](https://www.typescriptlang.org/)** | Typed superset of JavaScript that compiles to plain JavaScript. Used in the `runner/` and `extensions/vscode/` workspaces. |
 | **[Upstream](https://en.wikipedia.org/wiki/Upstream_(software_development))** | The original `SalamLang/Salam` repository. Contributors add it as a Git remote (`git remote add upstream …`) to keep their fork in sync. |
 | **[Virtual filesystem](https://en.wikipedia.org/wiki/Virtual_file_system)** | Emscripten's in-browser filesystem layer. `build-wasm.sh` preloads the `std/` directory into it so import resolution and the layout schema work when running Salam in the browser. |
 | **[Vite](https://vite.dev/)** | Frontend build tool and dev server. Used in the Salam monorepo to serve the editor and pages workspaces. |

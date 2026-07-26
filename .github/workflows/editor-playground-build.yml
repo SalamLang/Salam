@@ -13,6 +13,9 @@ jobs:
   build-deploy:
     name: Build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -84,3 +87,57 @@ jobs:
           [ "$missing" -eq 0 ] || exit 1
           echo "==> Editor directory to be published:"
           ls -l editor/
+
+      - name: Deploy preview to Vercel
+        id: vercel_deploy
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VERCEL_TOKEN:-}" ] || [ -z "${VERCEL_ORG_ID:-}" ] || [ -z "${VERCEL_PROJECT_ID:-}" ]; then
+            echo "VERCEL_TOKEN/VERCEL_ORG_ID/VERCEL_PROJECT_ID are not configured; skipping preview deploy."
+            exit 0
+          fi
+          # editor/ is a plain static bundle (HTML/JS/Wasm), so it is deployed
+          # as-is: no framework build runs inside Vercel's container.
+          url=$(npx --yes vercel@latest deploy ./editor --token="$VERCEL_TOKEN" --yes)
+          echo "preview_url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Post or update sticky PR comment with preview URL
+        if: steps.vercel_deploy.outputs.preview_url != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PREVIEW_URL: ${{ steps.vercel_deploy.outputs.preview_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const marker = '<!-- salam-editor-preview -->';
+            const url = process.env.PREVIEW_URL;
+            const headSha = process.env.HEAD_SHA;
+            const body = `${marker}\n🕹️ **Editor playground preview:** ${url}\n\nBuilt from ${headSha.substring(0, 7)}.`;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

@@ -127,10 +127,12 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                 out->llvm_native_cpu = true;
             } else if ((val = cli_opt_value(arg, "--target")) != NULL) {
                 out->llvm_target = val;
-            } else if (strcmp(arg, "--safe") == 0) {
-                out->safe = true;
+            } else if (strcmp(arg, "--release") == 0) {
+                out->safe = false;
             } else if (strcmp(arg, "--check") == 0) {
                 out->fmt_check = true;
+            } else if (strcmp(arg, "--fix-order") == 0) {
+                out->fmt_fix_order = true;
             } else if (strcmp(arg, "-r") == 0 || strcmp(arg, "--recursive") == 0) {
                 out->fmt_recursive = true;
             } else if (strcmp(arg, "--tabs") == 0) {

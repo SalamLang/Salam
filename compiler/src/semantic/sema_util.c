@@ -240,7 +240,7 @@ static bool aliases_have(const vec_t *aliases, const char *lang, const char *nam
 const char *scope_member_canon(sema_t *s, scope_t *members, const char *name,
                                const src_span_t *span)
 {
-    const char *lang = i18n_lang();
+    const char *lang = (s->lang && *s->lang) ? s->lang : i18n_lang();
     if (!name || !members) return name;
     if (strcmp(lang, "en") != 0) {
         size_t i = 0;
@@ -262,6 +262,7 @@ const char *scope_member_canon(sema_t *s, scope_t *members, const char *name,
 const char *pkg_member_canon(sema_t *s, symbol_t *pk, const char *name,
                              const src_span_t *span)
 {
+    pk->used = true;
     return scope_member_canon(s, pk->members, name, span);
 }
 

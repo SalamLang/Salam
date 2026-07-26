@@ -42,8 +42,9 @@ while [ ! -s "$bundle" ] && [ "$_btry" -le 3 ]; do
     _btry=$((_btry + 1))
 done
 if [ ! -s "$bundle" ]; then
-    echo "FAIL $label (build failed)"
-    sed 's/^/  /' "$buildlog" 2>/dev/null | head -20
+    msg="FAIL $label (build failed)
+$(sed 's/^/  /' "$buildlog" 2>/dev/null | head -20)"
+    printf '%s\n' "$msg"
     rm -rf "$jobdir"
     exit 0
 fi
@@ -51,10 +52,11 @@ fi
 want=$(tr -d '\r' <"$exp")
 got=$(node "$RUNNER" "$bundle" 2>&1 | tr -d '\r')
 if [ "$got" = "$want" ]; then
-    echo "PASS $label"
+    printf '%s\n' "PASS $label"
 else
-    echo "FAIL $label"
-    echo "  expected: $(echo "$want" | tr '\n' '|')"
-    echo "  got:      $(echo "$got" | tr '\n' '|')"
+    msg="FAIL $label
+    expected: $(echo "$want" | tr '\n' '|')
+    got:      $(echo "$got" | tr '\n' '|')"
+    printf '%s\n' "$msg"
 fi
 rm -rf "$jobdir"

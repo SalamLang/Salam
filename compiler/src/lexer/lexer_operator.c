@@ -125,21 +125,34 @@ void lx_scan_op(lx_t *L)
         k = lx_match(L, '=') ? TK_NE : TK_NOT;
         break;
     case '<':
-        k = lx_match(L, '=') ? TK_LE : TK_LT;
+        if (lx_match(L, '<'))
+            k = lx_match(L, '=') ? TK_SHL_EQ : TK_SHL;
+        else
+            k = lx_match(L, '=') ? TK_LE : TK_LT;
         break;
     case '>':
-        k = lx_match(L, '=') ? TK_GE : TK_GT;
+        if (lx_match(L, '>'))
+            k = lx_match(L, '=') ? TK_SHR_EQ : TK_SHR;
+        else
+            k = lx_match(L, '=') ? TK_GE : TK_GT;
         break;
     case '&':
-        k = lx_match(L, '&') ? TK_AND : TK_AMP;
+        if (lx_match(L, '&'))
+            k = TK_AND;
+        else
+            k = lx_match(L, '=') ? TK_AMP_EQ : TK_AMP;
         break;
     case '|':
         if (lx_match(L, '|'))
             k = TK_OR;
-        else {
-            lx_error(L, &b, "unexpected '|' (use '||')");
-            return;
-        }
+        else
+            k = lx_match(L, '=') ? TK_PIPE_EQ : TK_PIPE;
+        break;
+    case '^':
+        k = lx_match(L, '=') ? TK_CARET_EQ : TK_CARET;
+        break;
+    case '~':
+        k = TK_TILDE;
         break;
     case ';':
         lx_error(

@@ -77,6 +77,31 @@ const char *ast_kind_name(ast_kind_t kind)
     return k_ast_names[kind];
 }
 
+ast_order_phase_t ast_toplevel_order_phase(const ast_node_t *d)
+{
+    if (d->is_extern && d->kind == AST_VAR_DECL) return AST_ORDER_IMPORT;
+    if (d->is_extern && d->kind == AST_FUNC_DEF && !d->a) return AST_ORDER_IMPORT;
+    switch (d->kind) {
+    case AST_IMPORT:
+    case AST_LINK:
+        return AST_ORDER_IMPORT;
+    case AST_CONST_DECL:
+        return AST_ORDER_CONST;
+    case AST_VAR_DECL:
+        return AST_ORDER_VAR;
+    case AST_TYPE_ALIAS:
+    case AST_STRUCT_DEF:
+    case AST_ENUM_DEF:
+    case AST_INTERFACE_DEF:
+    case AST_IMPL_DEF:
+        return AST_ORDER_TYPEDEF;
+    case AST_FUNC_DEF:
+        return AST_ORDER_FUNC;
+    default:
+        return AST_ORDER_NONE;
+    }
+}
+
 long ast_str_lit_len(const ast_node_t *n)
 {
     if (!n || n->kind != AST_LITERAL) return -1;

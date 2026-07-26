@@ -41,6 +41,11 @@ int driver_debug(options_t *opt)
     }
 
     opt->debug_info = true;
+    if (!opt->safe) {
+        opt->safe = true;
+        if (opt->ndefines < SALAM_MAX_INPUTS)
+            opt->defines[opt->ndefines++] = "SALAM_SAFE";
+    }
     opt->command = CMD_BUILD;
 
     char exe[512];
@@ -145,6 +150,11 @@ int driver_memcheck(options_t *opt)
     }
     opt->debug_info = true;
     opt->asan = true;
+    if (!opt->safe) {
+        opt->safe = true;
+        if (opt->ndefines < SALAM_MAX_INPUTS)
+            opt->defines[opt->ndefines++] = "SALAM_SAFE";
+    }
     opt->command = CMD_BUILD;
     char exe[512];
     exe[0] = '\0';

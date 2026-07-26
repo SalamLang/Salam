@@ -1,0 +1,293 @@
+package webview
+
+if SALAM_OS_WINDOWS:
+    link "user32"
+    link "kernel32"
+    link "WebView2Loader"
+
+    @en "HintNone"
+    @fa "بدون اشاره"
+    @ar "لا تلميح"
+    pub const HINT_NONE := 0
+
+    @en "HintFixed"
+    @fa "اشاره ثابت"
+    @ar "تلميح ثابت"
+    pub const HINT_FIXED := 1
+
+    @en "WebView"
+    @fa "نمایش وب"
+    @ar "عرض الويب"
+    pub struct WebView:
+        pub hwnd: void* = null
+        pub controller: void* = null
+        pub webview: void* = null
+        pub closed: bool = false
+
+        @en "destroy"
+        @fa "نابود کردن"
+        @ar "تدمير"
+        pub func Destroy():
+            if this.hwnd != null && !this.closed:
+                if this.controller != null:
+                    close_fn := (com_vtbl_slot(this.controller, 24)) as extern func (void*) i32
+                    close_fn(this.controller)
+                end
+                DestroyWindow(this.hwnd)
+                this.hwnd = null
+                this.controller = null
+                this.webview = null
+                this.closed = true
+            end
+        end
+
+        @en "run"
+        @fa "اجرا"
+        @ar "تشغيل"
+        pub func Run():
+            if this.hwnd == null || this.closed:
+                ret
+            end
+            msg := mem.Allocate(48 as u64)
+            until this.closed:
+                got := PeekMessageA(msg, null, 0 as u32, 0 as u32, 1 as u32)
+                if got != 0:
+                    TranslateMessage(msg)
+                    DispatchMessageA(msg)
+                end
+                if IsWindow(this.hwnd) == 0:
+                    this.closed = true
+                end
+            end
+        end
+
+        @en "terminate"
+        @fa "پایان دادن"
+        @ar "إنهاء"
+        pub func Terminate():
+            this.closed = true
+        end
+
+        @en "SetTitle"
+        @fa "تنظیم عنوان"
+        @ar "تعيين العنوان"
+        pub func SetTitle(title: str):
+            if this.hwnd != null && !this.closed:
+                SetWindowTextA(this.hwnd, title)
+            end
+        end
+
+        @en "SetSize"
+        @fa "تنظیم اندازه"
+        @ar "تعيين الحجم"
+        pub func SetSize(width: int, height: int, _hints: int = HINT_NONE):
+            if this.hwnd != null && !this.closed:
+                SetWindowPos(this.hwnd, null, 0, 0, width, height, 2 as u32)
+                if this.controller != null:
+                    put_bounds_fn := (com_vtbl_slot(this.controller, 6)) as extern func (void*, WvRect) i32
+                    put_bounds_fn(this.controller, WvRect { left = 0, top = 0, right = width, bottom = height })
+                end
+            end
+        end
+
+        @en "SetHTML"
+        @fa "تنظیم HTML"
+        @ar "تعيين HTML"
+        pub func SetHTML(html: str):
+            if this.webview != null && !this.closed:
+                wide := to_wide(html)
+                nav_fn := (com_vtbl_slot(this.webview, 6)) as extern func (void*, void*) i32
+                nav_fn(this.webview, wide)
+                mem.Free(wide)
+            end
+        end
+
+        @en "Navigate"
+        @fa "پیمایش"
+        @ar "التنقل"
+        pub func Navigate(url: str):
+            if this.webview != null && !this.closed:
+                wide := to_wide(url)
+                nav_fn := (com_vtbl_slot(this.webview, 5)) as extern func (void*, void*) i32
+                nav_fn(this.webview, wide)
+                mem.Free(wide)
+            end
+        end
+
+        @en "Eval"
+        @fa "ارزیابی"
+        @ar "تقييم"
+        pub func Eval(js: str):
+            if this.webview != null && !this.closed:
+                wide := to_wide(js)
+                exec_handler := make_com_obj(&salam_com_qi, &salam_com_addref, &salam_com_release, &salam_exec_completed)
+                exec_fn := (com_vtbl_slot(this.webview, 29)) as extern func (void*, void*, void*) i32
+                exec_fn(this.webview, wide, exec_handler)
+                mem.Free(wide)
+            end
+        end
+
+        @en "Init"
+        @fa "اولیه سازی"
+        @ar "تهيئة"
+        pub func Init(js: str):
+            this.Eval(js)
+        end
+
+        @en "IsClosed"
+        @fa "بسته شده است"
+        @ar "مغلق"
+        pub func IsClosed(): bool:
+            ret this.closed
+        end
+    end
+
+    struct Slot:
+        pub v: void* = null
+    end
+
+    struct WvRect:
+        pub left: i32 = 0
+        pub top: i32 = 0
+        pub right: i32 = 0
+        pub bottom: i32 = 0
+    end
+
+    extern:
+        func CreateWindowExA(
+            ex_style: u32, class_name: str, window_name: str, style: u32, x: int, y: int, width: int, height: int, parent: void*, menu: void*, instance: void*, param: void*
+        ): void*
+        func DestroyWindow(hwnd: void*): int
+        func IsWindow(hwnd: void*): int
+        func PeekMessageA(
+            msg: void*, hwnd: void*, filter_min: u32, filter_max: u32, remove: u32
+        ): int
+        func TranslateMessage(msg: void*): int
+        func DispatchMessageA(msg: void*): i64
+        func SetWindowTextA(hwnd: void*, text: str): int
+        func SetWindowPos(
+            hwnd: void*, insert_after: void*, x: int, y: int, width: int, height: int, flags: u32
+        ): int
+        func MultiByteToWideChar(
+            code_page: u32, flags: u32, mb_str: str, mb_len: i32, wide_buf: void*, wide_len: i32
+        ): i32
+        func CreateCoreWebView2EnvironmentWithOptions(
+            browser_exe_folder: void*, user_data_folder: void*, environment_options: void*, handler: void*
+        ): i32
+    end
+
+    mut _wv2_env := null as void*
+    mut _wv2_ctrl := null as void*
+
+    extern:
+        func salam_com_qi(_this: void*, _riid: void*, ppv: void*): i32:
+            if ppv != null:
+                slot := ppv as Slot*
+                slot[0].v = _this
+            end
+            ret 0
+        end
+        func salam_com_addref(_this: void*): u32:
+            ret 1 as u32
+        end
+        func salam_com_release(_this: void*): u32:
+            ret 1 as u32
+        end
+        func salam_env_completed(_this: void*, _error_code: i32, environment: void*): i32:
+            _wv2_env = environment
+            ret 0
+        end
+        func salam_ctrl_completed(_this: void*, _error_code: i32, controller: void*): i32:
+            _wv2_ctrl = controller
+            ret 0
+        end
+        func salam_exec_completed(_this: void*, _error_code: i32, _result_json: void*): i32:
+            ret 0
+        end
+    end
+
+    func make_com_obj(qi: void*, addref: void*, release: void*, invoke: void*): void*:
+        vtbl := (mem.Allocate(32 as u64)) as Slot*
+        vtbl[0].v = qi
+        vtbl[1].v = addref
+        vtbl[2].v = release
+        vtbl[3].v = invoke
+        obj := (mem.Allocate(8 as u64)) as Slot*
+        obj[0].v = vtbl as void*
+        ret obj as void*
+    end
+
+    func com_vtbl_slot(obj: void*, slot: int): void*:
+        vtbl := (obj as Slot*)[0].v
+        ret (vtbl as Slot*)[slot].v
+    end
+
+    func to_wide(s: str): void*:
+        needed := MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, null, 0)
+        buf := mem.Allocate(((needed + 1) as u64) * (2 as u64))
+        MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, buf, needed + 1)
+        ret buf
+    end
+
+    @en "create"
+    @fa "ایجاد"
+    @ar "إنشاء"
+    pub func Create(_debug: bool = false): WebView:
+        hwnd := CreateWindowExA(
+            0 as u32, "STATIC", "", 282001408 as u32, 100, 100, 800, 600, null, null, null, null
+        )
+        if hwnd == null:
+            ret WebView { hwnd = null, controller = null, webview = null, closed = true }
+        end
+
+        _wv2_env = null as void*
+        _wv2_ctrl = null as void*
+
+        env_handler := make_com_obj(
+            &salam_com_qi, &salam_com_addref, &salam_com_release, &salam_env_completed
+        )
+        CreateCoreWebView2EnvironmentWithOptions(null, null, null, env_handler)
+
+        msg := mem.Allocate(48 as u64)
+        mut spins := 0
+        until _wv2_env != null || spins > 200000:
+            PeekMessageA(msg, null, 0 as u32, 0 as u32, 1 as u32)
+            TranslateMessage(msg)
+            DispatchMessageA(msg)
+            spins += 1
+        end
+        if _wv2_env == null:
+            DestroyWindow(hwnd)
+            ret WebView { hwnd = null, controller = null, webview = null, closed = true }
+        end
+
+        ctrl_handler := make_com_obj(
+            &salam_com_qi, &salam_com_addref, &salam_com_release, &salam_ctrl_completed
+        )
+        create_ctrl_fn := (com_vtbl_slot(_wv2_env, 3)) as extern func (void*, void*, void*) i32
+        create_ctrl_fn(_wv2_env, hwnd, ctrl_handler)
+
+        spins = 0
+        until _wv2_ctrl != null || spins > 200000:
+            PeekMessageA(msg, null, 0 as u32, 0 as u32, 1 as u32)
+            TranslateMessage(msg)
+            DispatchMessageA(msg)
+            spins += 1
+        end
+        if _wv2_ctrl == null:
+            DestroyWindow(hwnd)
+            ret WebView { hwnd = null, controller = null, webview = null, closed = true }
+        end
+
+        put_bounds_fn := (com_vtbl_slot(_wv2_ctrl, 6)) as extern func (void*, WvRect) i32
+        put_bounds_fn(_wv2_ctrl, WvRect { left = 0, top = 0, right = 800, bottom = 600 })
+
+        webview_slot := (mem.Allocate(8 as u64)) as Slot*
+        get_wv_fn := (com_vtbl_slot(_wv2_ctrl, 25)) as extern func (void*, void*) i32
+        get_wv_fn(_wv2_ctrl, webview_slot as void*)
+
+        ret WebView {
+            hwnd = hwnd, controller = _wv2_ctrl, webview = webview_slot[0].v, closed = false
+        }
+    end
+end

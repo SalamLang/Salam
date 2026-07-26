@@ -34,19 +34,22 @@ void ll_emit_return(ll_t *ll, ast_node_t *value)
         ll_emit_term(ll, "br label %%%s", ll->match_merge_block);
         return;
     }
-    ll_emit_defers(ll);
     if (ll->is_main) {
+        const char *v = value ? ll_conv(ll, ll_expr(ll, value), "i32") : NULL;
+        ll_emit_defers(ll);
         if (value)
-            ll_emit_term(ll, "ret i32 %s", ll_conv(ll, ll_expr(ll, value), "i32"));
+            ll_emit_term(ll, "ret i32 %s", v);
         else
             ll_emit_term(ll, "ret i32 0");
         return;
     }
     if (!ll->ret_ts || !strcmp(ll->ret_ts, "void")) {
+        ll_emit_defers(ll);
         ll_emit_term(ll, "ret void");
         return;
     }
     const char *v = ll_conv(ll, ll_expr(ll, value), ll->ret_ts);
+    ll_emit_defers(ll);
     ll_emit_term(ll, "ret %s %s", ll_ty(ll, ll->ret_ts), v);
 }
 
@@ -77,6 +80,16 @@ static token_kind_t ll_compound_base(token_kind_t k)
         return TK_PERCENT;
     case TK_POWER_EQ:
         return TK_POWER;
+    case TK_AMP_EQ:
+        return TK_AMP;
+    case TK_PIPE_EQ:
+        return TK_PIPE;
+    case TK_CARET_EQ:
+        return TK_CARET;
+    case TK_SHL_EQ:
+        return TK_SHL;
+    case TK_SHR_EQ:
+        return TK_SHR;
     default:
         return TK_EOF;
     }
@@ -286,10 +299,12 @@ static void ll_repeat(ll_t *ll, ast_node_t *n)
     ll_emit(ll, "store i64 %s, ptr %s", initv, ctr);
     size_t mark = ll->locals.len;
     const char *bindp = NULL;
+    bool iv_is64 = n->type_str && !strcmp(n->type_str, "i64");
+    const char *ivty = iv_is64 ? "i64" : "i32";
     if (n->name) {
         bindp = ll_fmt(ll, "%%v.%s.%d", ll_safe_name(ll, n->name), ll->tmp++);
-        ll_emit_alloca(ll, "%s = alloca i32", bindp);
-        ll_local_add(ll, n->name, bindp, "i32");
+        ll_emit_alloca(ll, "%s = alloca %s", bindp, ivty);
+        ll_local_add(ll, n->name, bindp, ivty);
     }
     const char *condL = ll_new_lbl(ll, "rcond");
     const char *bodyL = ll_new_lbl(ll, "rbody");
@@ -318,9 +333,13 @@ static void ll_repeat(ll_t *ll, ast_node_t *n)
     ll_emit_term(ll, "br i1 %s, label %%%s, label %%%s", cmp, bodyL, endL);
     ll_emit_label(ll, bodyL);
     if (bindp) {
-        const char *cvt = ll_new_tmp(ll);
-        ll_emit(ll, "%s = trunc i64 %s to i32", cvt, cv);
-        ll_emit(ll, "store i32 %s, ptr %s", cvt, bindp);
+        if (iv_is64) {
+            ll_emit(ll, "store i64 %s, ptr %s", cv, bindp);
+        } else {
+            const char *cvt = ll_new_tmp(ll);
+            ll_emit(ll, "%s = trunc i64 %s to i32", cvt, cv);
+            ll_emit(ll, "store i32 %s, ptr %s", cvt, bindp);
+        }
     }
     if (ll->nloop >= 64) {
         ll_error(ll, n, "loop nesting too deep");

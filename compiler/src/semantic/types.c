@@ -240,8 +240,8 @@ int type_prim_kind_from_name(const char *name, const char *lang)
         {"i8", TY_I8, L_EN},       {"i16", TY_I16, L_EN},       {"i32", TY_I32, L_EN},
         {"int", TY_I32, L_EN},     {"i64", TY_I64, L_EN},       {"u8", TY_U8, L_EN},
         {"u16", TY_U16, L_EN},     {"u32", TY_U32, L_EN},       {"uint", TY_U32, L_EN},
-        {"u64", TY_U64, L_EN},     {"f32", TY_F32, L_EN},       {"float", TY_F32, L_EN},
-        {"f64", TY_F64, L_EN},
+        {"u64", TY_U64, L_EN},     {"size", TY_SIZE, L_EN},     {"f32", TY_F32, L_EN},
+        {"float", TY_F32, L_EN},   {"f64", TY_F64, L_EN},
 
         {"تهی", TY_VOID, L_FA},    {"منطقی", TY_BOOL, L_FA},    {"نویسه", TY_CHAR, L_FA},
         {"رشته", TY_STR, L_FA},    {"یونیکد", TY_UCHAR, L_FA},
@@ -253,6 +253,7 @@ int type_prim_kind_from_name(const char *name, const char *lang)
         {"طبیعی۸", TY_U8, L_FA},   {"طبیعی۱۶", TY_U16, L_FA},   {"طبیعی۳۲", TY_U32, L_FA},
         {"طبیعی", TY_U32, L_FA},   {"طبیعی۶۴", TY_U64, L_FA},   {"طبیعی8", TY_U8, L_FA},
         {"طبیعی16", TY_U16, L_FA}, {"طبیعی32", TY_U32, L_FA},   {"طبیعی64", TY_U64, L_FA},
+        {"اندازه", TY_SIZE, L_FA},
 
         {"اعشار۳۲", TY_F32, L_FA}, {"اعشار", TY_F32, L_FA},     {"اعشار۶۴", TY_F64, L_FA},
         {"اعشار32", TY_F32, L_FA}, {"اعشار64", TY_F64, L_FA},
@@ -267,6 +268,7 @@ int type_prim_kind_from_name(const char *name, const char *lang)
         {"طبيعي٨", TY_U8, L_AR},   {"طبيعي١٦", TY_U16, L_AR},   {"طبيعي٣٢", TY_U32, L_AR},
         {"طبيعي", TY_U32, L_AR},   {"طبيعي٦٤", TY_U64, L_AR},   {"طبيعي8", TY_U8, L_AR},
         {"طبيعي16", TY_U16, L_AR}, {"طبيعي32", TY_U32, L_AR},   {"طبيعي64", TY_U64, L_AR},
+        {"حجم", TY_SIZE, L_AR},
 
         {"عشري٣٢", TY_F32, L_AR},  {"عشري", TY_F32, L_AR},      {"عشري٦٤", TY_F64, L_AR},
         {"عشري32", TY_F32, L_AR},  {"عشري64", TY_F64, L_AR},
@@ -295,7 +297,7 @@ bool type_is_error(const type_t *t)
 
 bool type_is_integer(const type_t *t)
 {
-    return t && t->kind >= TY_I8 && t->kind <= TY_U64;
+    return t && t->kind >= TY_I8 && t->kind <= TY_SIZE;
 }
 
 bool type_is_float(const type_t *t)
@@ -327,6 +329,7 @@ static int int_rank(type_kind_t k)
         return 3;
     case TY_I64:
     case TY_U64:
+    case TY_SIZE:
         return 4;
     default:
         return 0;
@@ -485,6 +488,8 @@ const char *type_to_string(type_ctx_t *tc, const type_t *t)
         return "u32";
     case TY_U64:
         return "u64";
+    case TY_SIZE:
+        return "size";
     case TY_F32:
         return "f32";
     case TY_F64:

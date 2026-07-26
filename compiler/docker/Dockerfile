@@ -21,13 +21,22 @@ RUN for i in 1 2 3 4 5; do \
             llvm${LLVM_VERSION} \
             bash \
             git \
+            curl \
             sqlite-dev \
             sqlite-static \
             mariadb-connector-c-dev \
+            hiredis-dev \
+            openssl-dev \
+            gtk+3.0-dev \
+            webkit2gtk-4.1-dev \
             nodejs \
             npm \
         && break; \
         echo "apk add attempt $i failed; retrying in 5s..." >&2; sleep 5; \
+        if [ "$i" = 5 ]; then \
+            echo "apk add failed after 5 attempts; aborting build." >&2; \
+            exit 1; \
+        fi; \
     done
 
 RUN node -v && npm -v

@@ -7,7 +7,7 @@ CC       ?= cc
 BUILD    ?= release
 TARGET   := salam
 
-OUTDIR   ?= ..
+OUTDIR   ?= ../bin
 OUTBIN   := $(OUTDIR)/$(TARGET)
 
 UNAME_S := $(shell uname -s 2>/dev/null)
@@ -155,6 +155,7 @@ $(eval $(call embed_musl_arch,arm,ARM))
 all: $(OUTBIN)
 
 $(OUTBIN): $(OBJS) $(CXXOBJS) $(EMBED_OBJS) $(MAIN_OBJ)
+	@mkdir -p $(OUTDIR)
 	$(CC) $(LDFLAGS) $(EXTRA_LDFLAGS) -o $@ $^ $(LDLIBS) $(EXTRA_LDLIBS)
 
 $(BUILD_DIR)/embed/musl.o:

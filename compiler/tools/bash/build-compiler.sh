@@ -16,7 +16,8 @@ case "$CC" in
 *tcc*) LDLIBS="" ;;
 *) LDLIBS="-lm" ;;
 esac
-"$CC" -Wall -Isrc -o salam \
+mkdir -p ../bin
+"$CC" -Wall -Isrc -o ../bin/salam \
     src/salam.c \
     src/core/arena.c src/core/vec.c src/core/sb.c src/core/numstr.c src/core/sal_format.c \
     src/source/source.c src/logger/logger.c src/logger/logger_emit.c src/logger/logger_level.c \
@@ -65,4 +66,4 @@ esac
     src/driver/embed_sysroot.c \
     src/driver/layout_build.c src/driver/debug_cmd.c src/driver/repl.c \
     $LDLIBS
-echo "built ./salam with $CC"
+echo "built ../bin/salam with $CC"

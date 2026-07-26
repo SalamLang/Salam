@@ -12,7 +12,7 @@ sh tools/bash/build-compiler.sh
 echo ">> staging $DIST"
 rm -rf "$DIST"
 mkdir -p "$DIST/bin" "$DIST/doc" "$DIST/examples"
-cp salam "$DIST/bin/" 2>/dev/null || cp salam.exe "$DIST/bin/"
+cp ../bin/salam "$DIST/bin/" 2>/dev/null || cp ../bin/salam.exe "$DIST/bin/"
 cp ../README.md "$DIST/" 2>/dev/null || true
 cp doc/*.md "$DIST/doc/" 2>/dev/null || true
 EXAMPLE_DIRS="apps basics data editor-selected features games interop stdlib types webframework"

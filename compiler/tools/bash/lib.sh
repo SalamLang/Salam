@@ -12,7 +12,7 @@ salam_python() {
 }
 
 salam_ensure_compiler() {
-    : "${SALAM:=./salam}"
+    : "${SALAM:=../bin/salam}"
     [ -x "$SALAM" ] && return 0
     echo "building salam..." >&2
     if [ "${1:-}" = "--quiet" ]; then
@@ -20,5 +20,5 @@ salam_ensure_compiler() {
     else
         sh tools/bash/build-compiler.sh
     fi
-    SALAM=./salam
+    SALAM=../bin/salam
 }

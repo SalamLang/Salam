@@ -1,0 +1,668 @@
+// Flat single-file module (see salam/PORTING.md "Layout — FLAT").
+// File stem is sal_fmt (NOT fmt) because a file named fmt.salam would
+// collide with the stdlib fmt module in the driver's salam_mod_<stem>.c
+// naming — the package is still `fmt`.
+//
+// ===== port of compiler/src/fmt/ =====
+// fmt_rules.c + fmt.c — the token-based reformatter behind `salam format`
+// (indentation, spacing, comment preservation; the lexer runs with
+// keep_comments=true, see lexer.RunEx).
+//
+// fmt_order.c (fmt_reorder_toplevel — the opt-in `--fix-order` pass) is NOT
+// ported yet: it needs parser_run and sema_check_toplevel_order, and neither
+// the parser nor the semantic module has been ported. Port it here once
+// salam/parser.salam and salam/semantic.salam land.
+//
+// C differences:
+// - fmt_ctx_t's fixed C arrays (ml_stack, paren_is_lambda, block_line,
+//   in_match_arms, q_open) are pre-sized Vectors owned by Tokens() and freed
+//   there; bool arrays hold int 0/1. Capacities and bound checks match the C
+//   FMT_MAX_BRACKET/FMT_MAX_BLOCK limits exactly.
+// - `const token_t *prev` (NULL until the first token) is has_prev +
+//   prev_kind/prev_end_index copies — those are the only fields the C reads.
+// - sb_t -> str.StringBuilder through core's Sb* wrappers.
+// - fmt_source's arena/logger plumbing: the arena is gone; the token stream
+//   is freed before returning.
+// - fmt_style_t consumers can't build cross-package struct literals, so
+//   StyleDefault()/NewStyle() are the constructors.
+// - All span line/index fields (u32 in C) are compared as int (casts at the
+//   token boundary); values are far below 2^31 so semantics are identical.
+package fmt
+
+import str
+import co "sal_core.salam"
+import src "source.salam"
+import tok "token.salam"
+import lg "logger.salam"
+import lx "lexer.salam"
+
+// fmt_internal.h / fmt.c
+pub const FMT_INDENT_WIDTH := 4
+const FMT_MAX_BRACKET := 256
+const FMT_MAX_BLOCK := 256
+
+// fmt_style_t
+pub struct FmtStyle:
+    pub tabs: bool = false
+    pub width: int = 0
+end
+
+// fmt_ctx_t (st is carried alongside; the vectors are the C fixed arrays)
+struct FmtCtx:
+    pub st: FmtStyle = FmtStyle {}
+    pub indent: int = 0
+    pub bracket: int = 0
+    pub angle: int = 0
+    pub bracket_indent: int = 0
+    pub ml_stack: Vector<int> = Vector {}        // bool[FMT_MAX_BRACKET]
+    pub paren_is_lambda: Vector<int> = Vector {} // bool[FMT_MAX_BRACKET]
+    pub prev_close_was_lambda: bool = false
+    pub ml_top: int = 0
+    pub block_line: Vector<int> = Vector {}      // uint32_t[FMT_MAX_BLOCK]
+    pub in_match_arms: Vector<int> = Vector {}   // bool[FMT_MAX_BLOCK]
+    pub block_top: int = 0
+    pub line_has_content: bool = false
+    pub force_break: bool = false
+    pub no_space_next: bool = false
+    pub prev_gt_generic: bool = false
+    pub q_open: Vector<int> = Vector {}          // int[FMT_MAX_BRACKET + 1]
+    pub stmt_head: int = 0                       // token kind; TK_EOF = unset
+    pub match_pending: bool = false
+    pub open_colon_line: int = 0
+    pub has_prev: bool = false                   // C: prev != NULL
+    pub prev_kind: int = 0
+    pub prev_end_index: int = 0
+    pub prev_unary: bool = false
+    pub prev_after_dot: bool = false
+    pub prev_end_line: int = 0
+end
+
+// ===== fmt_rules.c =====
+// fmt_is_value_end
+func is_value_end(k: int): bool:
+    ret k == tok.TK_IDENT || k == tok.TK_INT || k == tok.TK_FLOAT ||
+        k == tok.TK_STRING || k == tok.TK_TRIPLE_STRING || k == tok.TK_RAW_STRING ||
+        k == tok.TK_CHAR || k == tok.TK_UTF8_CHAR || k == tok.TK_RPAREN ||
+        k == tok.TK_RBRACKET || k == tok.TK_RBRACE || k == tok.TK_KW_TRUE ||
+        k == tok.TK_KW_FALSE || k == tok.TK_KW_NULL || k == tok.TK_KW_THIS
+end
+
+// fmt_is_open
+func is_open(k: int): bool:
+    ret k == tok.TK_LPAREN || k == tok.TK_LBRACKET || k == tok.TK_LBRACE
+end
+
+// fmt_is_close
+func is_close(k: int): bool:
+    ret k == tok.TK_RPAREN || k == tok.TK_RBRACKET || k == tok.TK_RBRACE
+end
+
+// fmt_gap_in_source (a's span.end.index / b's span.begin.index)
+func gap_in_source(a_end_index: int, b_begin_index: int): bool:
+    ret b_begin_index > a_end_index
+end
+
+// fmt_need_space — pk/p_end come from the previous token, ck/c_begin from
+// the current one (the only token_t fields the C function reads).
+func need_space(pk: int, p_end: int, ck: int, c_begin: int, prev_unary: bool): bool:
+    if pk == tok.TK_DOT || ck == tok.TK_DOT:
+        ret false
+    end
+    if ck == tok.TK_COMMA || ck == tok.TK_COLON || ck == tok.TK_SEMICOLON:
+        ret false
+    end
+    if ck == tok.TK_RPAREN || ck == tok.TK_RBRACKET:
+        ret false
+    end
+    if (ck == tok.TK_PLUS_PLUS || ck == tok.TK_MINUS_MINUS) && is_value_end(pk):
+        ret false
+    end
+    if pk == tok.TK_LPAREN || pk == tok.TK_LBRACKET:
+        ret false
+    end
+    if pk == tok.TK_LBRACE && ck == tok.TK_RBRACE:
+        ret false
+    end
+    if prev_unary:
+        ret false
+    end
+    if ck == tok.TK_LPAREN:
+        ret !is_value_end(pk)
+    end
+    if ck == tok.TK_LBRACKET:
+        ret !is_value_end(pk)
+    end
+    if pk == tok.TK_LT || pk == tok.TK_GT || ck == tok.TK_LT || ck == tok.TK_GT ||
+        pk == tok.TK_SHL || pk == tok.TK_SHR || ck == tok.TK_SHL || ck == tok.TK_SHR:
+        ret gap_in_source(p_end, c_begin)
+    end
+    if pk == tok.TK_STAR || ck == tok.TK_STAR:
+        ret gap_in_source(p_end, c_begin)
+    end
+    ret true
+end
+
+// fmt_is_prefix
+func is_prefix(k: int, has_prev: bool, prev_kind: int): bool:
+    if k == tok.TK_NOT || k == tok.TK_TILDE:
+        ret true
+    end
+    if k == tok.TK_MINUS || k == tok.TK_STAR || k == tok.TK_AMP:
+        ret !has_prev || !is_value_end(prev_kind)
+    end
+    if k == tok.TK_PLUS_PLUS || k == tok.TK_MINUS_MINUS:
+        ret !has_prev || !is_value_end(prev_kind)
+    end
+    ret false
+end
+
+// ===== fmt.c =====
+// fmt_emit_indent
+func emit_indent(out &: str.StringBuilder, style: FmtStyle, indent0: int):
+    mut indent := indent0
+    if indent < 0:
+        indent = 0
+    end
+    if style.tabs:
+        mut s := 0
+        until s < indent:
+            co.SbPutc(out, 9) // '\t'
+            s += 1
+        end
+    else:
+        mut s := 0
+        until s < indent * style.width:
+            co.SbPutc(out, 32) // ' '
+            s += 1
+        end
+    end
+end
+
+// fmt_bracket_multiline
+func bracket_multiline(ts: tok.TokenStream, open_idx: int): bool:
+    o := tok.StreamAt(ts, open_idx)
+    n := tok.StreamCount(ts)
+    mut depth := 0
+    mut i := open_idx
+    until i < n:
+        t := tok.StreamAt(ts, i)
+        if t.kind == tok.TK_EOF:
+            break
+        end
+        if is_open(t.kind):
+            depth += 1
+        else is_close(t.kind):
+            depth -= 1
+            if depth == 0:
+                ret (t.end_line as int) > (o.begin_line as int)
+            end
+        end
+        i += 1
+    end
+    ret false
+end
+
+// fmt_angle_is_generic
+func angle_is_generic(ts: tok.TokenStream, lt_idx: int): bool:
+    n := tok.StreamCount(ts)
+    mut depth := 0
+    mut steps := 0
+    mut i := lt_idx
+    until i < n && steps < 256:
+        k := tok.StreamAt(ts, i).kind
+        if k == tok.TK_LT:
+            depth += 1
+        else k == tok.TK_GT:
+            depth -= 1
+            if depth == 0:
+                ret true
+            end
+        else k == tok.TK_SHR:
+            // '>>' closes two generic levels at once (e.g. 'A<B<C>>').
+            depth -= 2
+            if depth <= 0:
+                ret true
+            end
+        else k != tok.TK_IDENT && k != tok.TK_COMMA && k != tok.TK_DOT &&
+            k != tok.TK_STAR && k != tok.TK_AMP && k != tok.TK_LBRACKET &&
+            k != tok.TK_RBRACKET && k != tok.TK_COLON:
+            ret false
+        end
+        i += 1
+        steps += 1
+    end
+    ret false
+end
+
+// fmt_lambda_header_at — every lambda parameter is mandatorily typed
+// ('name: Type'), so a '(' only opens a lambda header if its contents fully
+// match that shape. Used to tell a lambda's parameter list apart from an
+// unrelated grouped expression that simply happens to sit in front of a ':'
+// (e.g. an 'if (a) || (b):' condition).
+func lambda_header_at(ts: tok.TokenStream, open_idx: int): bool:
+    n := tok.StreamCount(ts)
+    mut i := open_idx + 1
+    if i < n && tok.StreamAt(ts, i).kind == tok.TK_RPAREN:
+        ret true
+    end
+    until true:
+        if i >= n || tok.StreamAt(ts, i).kind != tok.TK_IDENT:
+            ret false
+        end
+        i += 1
+        if i >= n || tok.StreamAt(ts, i).kind != tok.TK_COLON:
+            ret false
+        end
+        i += 1
+        mut depth := 0
+        until true:
+            if i >= n:
+                ret false
+            end
+            k := tok.StreamAt(ts, i).kind
+            if k == tok.TK_EOF:
+                ret false
+            end
+            if k == tok.TK_LT && angle_is_generic(ts, i):
+                depth += 1
+            else k == tok.TK_GT && depth > 0:
+                depth -= 1
+            else k == tok.TK_SHR && depth > 0:
+                depth -= 2
+                if depth < 0:
+                    depth = 0
+                end
+            else is_open(k):
+                depth += 1
+            else is_close(k):
+                if depth == 0:
+                    ret k == tok.TK_RPAREN
+                end
+                depth -= 1
+            else k == tok.TK_COMMA && depth == 0:
+                i += 1
+                break
+            end
+            i += 1
+        end
+    end
+end
+
+// fmt_head_modifier
+func head_modifier(k: int): bool:
+    ret k == tok.TK_KW_PUB || k == tok.TK_KW_INLINE || k == tok.TK_KW_NOINLINE ||
+        k == tok.TK_KW_PURE || k == tok.TK_KW_NORET || k == tok.TK_KW_DEPRECATED
+end
+
+// fmt_is_overload_symbol
+func is_overload_symbol(k: int): bool:
+    ret k == tok.TK_GT || k == tok.TK_PLUS || k == tok.TK_MINUS || k == tok.TK_STAR ||
+        k == tok.TK_SLASH || k == tok.TK_PERCENT || k == tok.TK_POWER ||
+        k == tok.TK_EQ || k == tok.TK_NE || k == tok.TK_LT || k == tok.TK_LE ||
+        k == tok.TK_GE || k == tok.TK_NOT
+end
+
+// fmt_head_annotates
+func head_annotates(k: int): bool:
+    ret k == tok.TK_IDENT || k == tok.TK_KW_MUT || k == tok.TK_KW_CONST ||
+        k == tok.TK_KW_THIS
+end
+
+// fmt_type_token
+func type_token(k: int): bool:
+    ret k == tok.TK_IDENT || k == tok.TK_DOT || k == tok.TK_STAR || k == tok.TK_AMP ||
+        k == tok.TK_LT || k == tok.TK_GT || k == tok.TK_SHR || k == tok.TK_LBRACKET ||
+        k == tok.TK_RBRACKET || k == tok.TK_LPAREN || k == tok.TK_RPAREN ||
+        k == tok.TK_COMMA || k == tok.TK_INT || k == tok.TK_KW_FUNC
+end
+
+// fmt_colon_is_annotation
+func colon_is_annotation(ts: tok.TokenStream, colon_idx: int): bool:
+    n := tok.StreamCount(ts)
+    line := tok.StreamAt(ts, colon_idx).end_line as int
+    mut saw_type := false
+    mut is_func_type := false
+    mut steps := 0
+    mut j := colon_idx + 1
+    until j < n && steps < 64:
+        t := tok.StreamAt(ts, j)
+        if (t.begin_line as int) > line:
+            ret saw_type
+        end
+        if t.kind == tok.TK_COLON || t.kind == tok.TK_STMT_END || t.kind == tok.TK_EOF:
+            ret saw_type
+        end
+        if t.kind == tok.TK_KW_FUNC && !saw_type:
+            is_func_type = true
+        end
+        // salam's type grammar has no use for '(' except a function-pointer
+        // type's own parameter list ('func(int): bool'); anywhere else a
+        // '(' means this is actually a call expression (e.g. 'f(a)' or
+        // 'x.f(a)', like a same-line if-branch body: 'if x: f(a, b)') and
+        // this colon isn't a type annotation at all.
+        if t.kind == tok.TK_LPAREN && !is_func_type:
+            ret false
+        end
+        if !type_token(t.kind):
+            ret false
+        end
+        saw_type = true
+        j += 1
+        steps += 1
+    end
+    ret false
+end
+
+// fmt_step_stmt_end
+func step_stmt_end(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, cur_ml: bool):
+    if c.bracket > 0:
+        if cur_ml:
+            c.force_break = true
+        end
+        ret
+    end
+    if c.line_has_content && str.StartsWith(t.lexeme, ";"):
+        co.SbPuts(out, "; ")
+        c.no_space_next = true
+        c.has_prev = true
+        c.prev_kind = t.kind
+        c.prev_end_index = t.end_index as int
+        c.prev_end_line = t.end_line as int
+        c.stmt_head = tok.TK_EOF
+        ret
+    end
+    if c.line_has_content:
+        co.SbPutc(out, 10) // '\n'
+        c.line_has_content = false
+    end
+    c.force_break = false
+    c.open_colon_line = 0
+    c.q_open[0] = 0
+    c.stmt_head = tok.TK_EOF
+    c.match_pending = false
+end
+
+// fmt_step_break_before
+func step_break_before(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int,
+                       cur_ml: bool):
+    if c.bracket > 0 && is_close(k) && cur_ml:
+        if c.bracket_indent > 0:
+            c.bracket_indent -= 1
+        end
+        if c.line_has_content:
+            co.SbPutc(out, 10)
+            c.line_has_content = false
+        end
+        c.force_break = false
+    end
+    if c.force_break && c.line_has_content:
+        co.SbPutc(out, 10)
+        c.line_has_content = false
+        c.force_break = false
+    end
+    if c.open_colon_line != 0 && c.line_has_content &&
+        (t.begin_line as int) > c.open_colon_line:
+        co.SbPutc(out, 10)
+        c.line_has_content = false
+    end
+    c.open_colon_line = 0
+    if c.bracket == 0 && c.prev_gt_generic && c.line_has_content &&
+        (t.begin_line as int) > c.prev_end_line:
+        co.SbPutc(out, 10)
+        c.line_has_content = false
+        c.force_break = false
+        c.q_open[0] = 0
+        c.stmt_head = tok.TK_EOF
+        c.match_pending = false
+    end
+end
+
+// fmt_in_match_arms
+func in_match_arms_now(c &: FmtCtx): bool:
+    ret c.block_top > 0 && c.block_top <= FMT_MAX_BLOCK &&
+        c.in_match_arms[c.block_top - 1] != 0
+end
+
+// fmt_step_dedent
+func step_dedent(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int):
+    if k == tok.TK_KW_ELSE && in_match_arms_now(c):
+        ret
+    end
+    if c.bracket == 0 && c.angle == 0 && (k == tok.TK_KW_END || k == tok.TK_KW_ELSE):
+        if c.block_top > 0 && c.block_top <= FMT_MAX_BLOCK && c.line_has_content &&
+            (t.begin_line as int) > c.block_line[c.block_top - 1]:
+            co.SbPutc(out, 10)
+            c.line_has_content = false
+            c.force_break = false
+        end
+        if c.block_top > 0:
+            c.block_top -= 1
+        end
+        if c.indent > 0:
+            c.indent -= 1
+        end
+    end
+end
+
+// fmt_step_leading
+func step_leading(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int):
+    if !c.line_has_content:
+        if c.bracket == 0 && c.has_prev &&
+            (t.begin_line as int) > c.prev_end_line + 1:
+            co.SbPutc(out, 10)
+        end
+        emit_indent(out, c.st, c.indent + c.bracket_indent)
+    else !c.no_space_next:
+        mut need := need_space(c.prev_kind, c.prev_end_index, k, t.begin_index as int,
+                               c.prev_unary)
+        if c.prev_gt_generic && (k == tok.TK_LPAREN || k == tok.TK_LBRACKET):
+            need = false
+        end
+        // A name right after '.' is always a member/method reference, even
+        // if it happens to collide with a statement keyword (e.g. the
+        // 'repeat' loop keyword doubling as a method name in 's.repeat(n)')
+        // - it should never get keyword-style spacing before '('.
+        if k == tok.TK_LPAREN && c.prev_after_dot:
+            need = false
+        end
+        if k == tok.TK_COLON && c.bracket <= FMT_MAX_BRACKET && c.q_open[c.bracket] > 0:
+            need = true
+        end
+        if need:
+            co.SbPutc(out, 32)
+        end
+    end
+    c.no_space_next = false
+    c.prev_gt_generic = false
+end
+
+// fmt_step_state_after
+func step_state_after(c &: FmtCtx, t: tok.Token, k: int, ts: tok.TokenStream, i: int):
+    if c.bracket == 0 && k == tok.TK_KW_END:
+        c.stmt_head = tok.TK_EOF
+    else c.bracket == 0 && k == tok.TK_KW_ELSE:
+        c.stmt_head = tok.TK_KW_ELSE
+    end
+    if c.stmt_head == tok.TK_EOF && c.bracket == 0 && k != tok.TK_KW_END &&
+        k != tok.TK_COLON && k != tok.TK_COMMENT_LINE && k != tok.TK_COMMENT_BLOCK &&
+        !head_modifier(k):
+        c.stmt_head = k
+    end
+
+    if k == tok.TK_KW_MATCH && c.bracket == 0:
+        c.match_pending = true
+    end
+
+    if k == tok.TK_QUESTION && c.bracket <= FMT_MAX_BRACKET:
+        c.q_open[c.bracket] = c.q_open[c.bracket] + 1
+    end
+    if k == tok.TK_COLON && c.bracket <= FMT_MAX_BRACKET && c.q_open[c.bracket] > 0:
+        c.q_open[c.bracket] = c.q_open[c.bracket] - 1
+    else c.bracket == 0 && c.angle == 0 && k == tok.TK_COLON:
+        mut opener := false
+        was_match_subject := c.match_pending
+        was_in_match_arms := in_match_arms_now(c)
+        if c.has_prev && c.prev_kind == tok.TK_RPAREN && c.prev_close_was_lambda:
+            opener = true
+        else was_match_subject:
+            opener = true
+        else was_in_match_arms:
+            opener = true
+        else head_annotates(c.stmt_head):
+            opener = false
+        else:
+            opener = !colon_is_annotation(ts, i)
+        end
+        if opener:
+            c.indent += 1
+            c.open_colon_line = t.end_line as int
+            if c.block_top < FMT_MAX_BLOCK:
+                c.block_line[c.block_top] = t.begin_line as int
+                c.in_match_arms[c.block_top] = was_match_subject ? 1 : 0
+            end
+            c.block_top += 1
+            if c.has_prev && c.prev_kind == tok.TK_KW_ELSE && !was_in_match_arms:
+                c.force_break = true
+            end
+            c.stmt_head = tok.TK_EOF
+            c.match_pending = false
+        end
+    end
+
+    if k == tok.TK_LT && c.has_prev && is_value_end(c.prev_kind) &&
+        !gap_in_source(c.prev_end_index, t.begin_index as int) &&
+        angle_is_generic(ts, i):
+        c.angle += 1
+    else k == tok.TK_GT && c.angle > 0:
+        c.angle -= 1
+        c.prev_gt_generic = true
+    end
+
+    if is_open(k):
+        ml := bracket_multiline(ts, i)
+        prev_is_value := c.has_prev &&
+            (is_value_end(c.prev_kind) || is_overload_symbol(c.prev_kind))
+        is_lambda := k == tok.TK_LPAREN && !prev_is_value && lambda_header_at(ts, i)
+        if c.ml_top < FMT_MAX_BRACKET:
+            c.ml_stack[c.ml_top] = ml ? 1 : 0
+            c.paren_is_lambda[c.ml_top] = is_lambda ? 1 : 0
+        end
+        c.ml_top += 1
+        c.bracket += 1
+        if c.bracket <= FMT_MAX_BRACKET:
+            c.q_open[c.bracket] = 0
+        end
+        if ml:
+            c.bracket_indent += 1
+            c.force_break = true
+        end
+    else is_close(k):
+        c.prev_close_was_lambda = k == tok.TK_RPAREN && c.ml_top > 0 &&
+            c.ml_top <= FMT_MAX_BRACKET && c.paren_is_lambda[c.ml_top - 1] != 0
+        if c.ml_top > 0:
+            c.ml_top -= 1
+        end
+        if c.bracket > 0:
+            if c.bracket <= FMT_MAX_BRACKET:
+                c.q_open[c.bracket] = 0
+            end
+            c.bracket -= 1
+        end
+    end
+
+    c.prev_unary = is_prefix(k, c.has_prev, c.prev_kind)
+    if k == tok.TK_COMMENT_LINE:
+        c.force_break = true
+    end
+end
+
+// ---------------------------------------------------------------------------
+// Public API (E088: pub section last)
+// ---------------------------------------------------------------------------
+
+// fmt_style_default
+pub func StyleDefault(): FmtStyle:
+    ret FmtStyle { tabs = false, width = FMT_INDENT_WIDTH }
+end
+
+// Constructor for non-default styles (cross-package struct literals are not
+// supported); mirrors the driver's `style.tabs = opt->fmt_tabs; style.width =
+// opt->fmt_indent_width` assignments.
+pub func NewStyle(tabs: bool, width: int): FmtStyle:
+    ret FmtStyle { tabs = tabs, width = width }
+end
+
+// fmt_tokens
+pub func Tokens(ts: tok.TokenStream, style: FmtStyle, out &: str.StringBuilder):
+    mut c := FmtCtx {}
+    c.st = style
+    defer c.ml_stack.free()
+    defer c.paren_is_lambda.free()
+    defer c.block_line.free()
+    defer c.in_match_arms.free()
+    defer c.q_open.free()
+    mut z := 0
+    until z < FMT_MAX_BRACKET:
+        c.ml_stack.push(0)
+        c.paren_is_lambda.push(0)
+        c.block_line.push(0)
+        c.in_match_arms.push(0)
+        c.q_open.push(0)
+        z += 1
+    end
+    c.q_open.push(0) // q_open has FMT_MAX_BRACKET + 1 slots
+
+    n := tok.StreamCount(ts)
+    mut i := 0
+    until i < n:
+        t := tok.StreamAt(ts, i)
+        k := t.kind
+        cur_ml := c.ml_top > 0 && c.ml_top <= FMT_MAX_BRACKET &&
+            c.ml_stack[c.ml_top - 1] != 0
+        if k == tok.TK_EOF:
+            break
+        end
+        if k == tok.TK_STMT_END:
+            step_stmt_end(c, out, t, cur_ml)
+            i += 1
+            continue
+        end
+
+        step_break_before(c, out, t, k, cur_ml)
+        step_dedent(c, out, t, k)
+        step_leading(c, out, t, k)
+
+        if k == tok.TK_META:
+            co.SbPutc(out, 64) // '@'
+        end
+        co.SbPuts(out, t.lexeme)
+        c.line_has_content = true
+
+        step_state_after(c, t, k, ts, i)
+        c.prev_after_dot = c.has_prev && c.prev_kind == tok.TK_DOT
+        c.has_prev = true
+        c.prev_kind = k
+        c.prev_end_index = t.end_index as int
+        c.prev_end_line = t.end_line as int
+        i += 1
+    end
+    if c.line_has_content:
+        co.SbPutc(out, 10)
+    end
+end
+
+// fmt_source — lexes with keep_comments=true (the formatter's lexing mode)
+// and formats the token stream. Returns false when the lexer reported errors
+// (out is left untouched, like the C version).
+pub func Source(lgr: lg.Logger, pack: int, sfile: src.SourceFile, style: FmtStyle,
+                out &: str.StringBuilder): bool:
+    mut toks := tok.StreamNew(sfile.path)
+    ok := lx.RunEx(lgr, pack, sfile, true, toks)
+    if !ok:
+        tok.StreamFree(toks)
+        ret false
+    end
+    Tokens(toks, style, out)
+    tok.StreamFree(toks)
+    ret true
+end

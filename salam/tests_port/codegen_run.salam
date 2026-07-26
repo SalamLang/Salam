@@ -1,0 +1,308 @@
+// Equivalence runner for the codegen port (stage 6 gate): mirrors the C
+// driver's build pipeline — source -> langpack detect -> lex -> parse ->
+// condcomp prune -> package dir-merge -> sema Run (DCE enabled, entry
+// roots) -> DCE filter -> cg.Run — and writes the generated module sources
+// to <out_prefix>.h / <out_prefix>.c for a byte-diff against HEAD
+// `bin/salam build --keep-c` output (salam_mod_<module>.{h,c}).
+//
+// Driver parity notes:
+// - the CLI defaults add the SALAM_SAFE define and pass safe=true into
+//   codegen (compiler/src/cli/cli.c), replicated here;
+// - the driver enables DCE across the whole work list and filters each
+//   module's top-level funcs by reachability before codegen_run
+//   (compiler/src/driver/build.c), replicated here;
+// - `link "x"` decls append SALAM_LINK_<X> defines for later work items.
+//
+// Usage: codegen_run <file.salam> <module> <out_prefix> [--all]
+//   --all also processes the input's transitive file imports and writes
+//   every extra module to <out_prefix>__<module>.{h,c} (the driver's
+//   multi-module emission; needed to compare imported package modules).
+package main
+
+import os
+import io
+import str
+import tok "../token.salam"
+import src "../source.salam"
+import lg "../logger.salam"
+import lp "../langpack.salam"
+import lx "../lexer.salam"
+import at "../ast.salam"
+import ps "../parser.salam"
+import cc "../condcomp.salam"
+import sm "../semantic.salam"
+import cg "../codegen.salam"
+
+// Unsigned byte read from a str (same idiom as the other ports).
+func byte_at(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+// driver/build.c module_of
+func module_of(path: str): str:
+    slash := str.LastIndex(path, "/")
+    bs := str.LastIndex(path, "\\")
+    mut base := 0
+    if slash >= 0:
+        base = slash + 1
+    end
+    if bs >= 0 && bs + 1 > base:
+        base = bs + 1
+    end
+    stem := str.Substr(path, base, str.Len(path) - base)
+    dot := str.LastIndex(stem, ".")
+    if dot >= 0:
+        ret str.Substr(stem, 0, dot)
+    end
+    ret stem
+end
+
+// driver/build.c dir_of
+func dir_of(path: str): str:
+    slash := str.LastIndex(path, "/")
+    bs := str.LastIndex(path, "\\")
+    mut cut := slash
+    if bs >= 0 && (slash < 0 || bs > slash):
+        cut = bs
+    end
+    if cut < 0:
+        ret ""
+    end
+    ret str.Substr(path, 0, cut)
+end
+
+// cli.c link-define sanitizer: SALAM_LINK_<LIB> (A-Z/0-9 kept, rest '_').
+func link_define(lib: str): str:
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "SALAM_LINK_")
+    n := str.Len(lib)
+    repeat n with i:
+        code := byte_at(lib, i)
+        mut c := code
+        if c >= 97 && c <= 122:
+            c = c - 32
+        else (c >= 65 && c <= 90) || (c >= 48 && c <= 57):
+            c = c
+        else:
+            c = 95
+        end
+        str.BufAppendChar(b, c)
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func in_list(v: Vector<str>, x: str): bool:
+    repeat v.len() with i:
+        if str.Equals(v.get(i)[0], x):
+            ret true
+        end
+    end
+    ret false
+end
+
+func main:
+    args := os.Args()
+    defer args.free()
+    if args.len() < 4:
+        io.EPrintln("usage: codegen_run <file.salam> <module> <out_prefix> " +
+                    "[--all]")
+        os.Exit(2)
+    end
+    path := args[1]
+    in_module := args[2]
+    prefix := args[3]
+    emit_all := args.len() > 4 && str.Equals(args[4], "--all")
+
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut defines := Vector {} as Vector<str>
+    defer defines.free()
+    defines.push("SALAM_SAFE")
+
+    mut work := Vector {} as Vector<str>
+    defer work.free()
+    work.push(path)
+    // driver/build.c auto-adds mem and core to EVERY build (see
+    // PORTING.md); only matters with --all, which follows real imports.
+    if emit_all:
+        memp := sm.ResolveImport("", "mem")
+        if str.Len(memp) > 0 && os.Exists(memp) && !in_list(work, memp):
+            work.push(memp)
+        end
+        corep := sm.ResolveImport("", "core")
+        if str.Len(corep) > 0 && os.Exists(corep) && !in_list(work, corep):
+            work.push(corep)
+        end
+    end
+
+    // per processed work item (parallel vectors)
+    mut w_ast := Vector {} as Vector<at.Ast>
+    mut w_sema := Vector {} as Vector<sm.Sema>
+    mut w_prog := Vector {} as Vector<int>
+    mut w_module := Vector {} as Vector<str>
+    mut w_entry := Vector {} as Vector<str>
+    mut w_pkg := Vector {} as Vector<str>
+    mut w_path := Vector {} as Vector<str>
+    defer w_ast.free()
+    defer w_sema.free()
+    defer w_prog.free()
+    defer w_module.free()
+    defer w_entry.free()
+    defer w_pkg.free()
+    defer w_path.free()
+
+    sm.DceReset()
+    sm.DceEnable()
+
+    mut all_ok := true
+    mut wi := 0
+    until wi < work.len():
+        wpath := work.get(wi)[0]
+        mut sf := src.New()
+        if !src.Load(wpath, sf):
+            io.EPrintln("cannot read " + wpath)
+            os.Exit(2)
+        end
+        pack := lx.Detect(sf, lp.Load("en"))
+        modentry := lp.Entry(pack)
+        module := wi == 0 ? in_module : module_of(wpath)
+        table := cc.TableBuild("", defines)
+        mut toks := tok.StreamNew(wpath)
+        _lok := lx.Run(quiet, pack, sf, toks)
+        mut a := at.NewAst()
+        mut prog := 0
+        _pok := ps.Run(quiet, toks, a, prog)
+        tok.StreamFree(toks)
+        _ck := cc.PruneProgram(a, quiet, wpath, table, prog)
+        // package dir auto-merge (driver: salam_package_files loop)
+        mut pfiles := sm.PackageFiles(wpath)
+        mut pi := 1
+        until pi < pfiles.len():
+            mut psf := src.New()
+            if src.Load(pfiles.get(pi)[0], psf):
+                mut ptoks := tok.StreamNew(pfiles.get(pi)[0])
+                _plok := lx.Run(quiet, pack, psf, ptoks)
+                mut pprog := 0
+                _ppok := ps.Run(quiet, ptoks, a, pprog)
+                tok.StreamFree(ptoks)
+                _pck := cc.PruneProgram(a, quiet, pfiles.get(pi)[0], table,
+                                        pprog)
+                sm.MergeProgram(a, prog, pprog)
+            end
+            pi += 1
+        end
+        pfiles.free()
+        mut s := sm.New(quiet, wpath, lp.Code(pack))
+        sm.SetCc(s, table)
+        sok := sm.Run(s, a, prog)
+        if !sok:
+            io.EPrintln("sema failed for " + wpath)
+            all_ok = false
+            sm.Free(s)
+            wi += 1
+            continue
+        end
+        prog_n := at.Get(a, prog)
+        modpkg := str.Len(prog_n.name) > 0 ? prog_n.name : "main"
+        repeat prog_n.list.len() with di:
+            d := at.Get(a, prog_n.list.get(di)[0])
+            if d.kind == at.AST_FUNC_DEF && str.Equals(d.name, modentry):
+                sm.DceMarkRoot(modpkg, modentry)
+                break
+            end
+        end
+        // link defines + import discovery (driver scans after sema)
+        idir := dir_of(wpath)
+        repeat prog_n.list.len() with di2:
+            did := prog_n.list.get(di2)[0]
+            d2 := at.Get(a, did)
+            if d2.kind == at.AST_LINK:
+                if d2.value_kind == tok.TV_STRING && str.Len(d2.value_str) > 0:
+                    def := link_define(d2.value_str)
+                    if !in_list(defines, def):
+                        defines.push(def)
+                    end
+                end
+                continue
+            end
+            if d2.kind != at.AST_IMPORT:
+                continue
+            end
+            if !emit_all:
+                continue
+            end
+            mut ipath := d2.type_str
+            if str.Len(ipath) == 0:
+                ipath = sm.ResolveImportNode(a, idir, did, lp.Code(pack))
+            end
+            if str.Len(ipath) == 0:
+                continue
+            end
+            if !in_list(work, ipath):
+                work.push(ipath)
+            end
+        end
+        w_ast.push(a)
+        w_sema.push(s)
+        w_prog.push(prog)
+        w_module.push(module)
+        w_entry.push(modentry)
+        w_pkg.push(modpkg)
+        w_path.push(wpath)
+        wi += 1
+    end
+
+    if !all_ok:
+        os.Exit(1)
+    end
+
+    sm.DceFinish()
+
+    mut total := 0
+    repeat w_prog.len() with bi:
+        mut a2 := w_ast.get(bi)[0]
+        mut s2 := w_sema.get(bi)[0]
+        prog2 := w_prog.get(bi)[0]
+        module2 := w_module.get(bi)[0]
+        // driver DCE filter over the module's top-level funcs
+        mut kept := Vector {} as Vector<int>
+        pn := at.Get(a2, prog2)
+        repeat pn.list.len() with ki:
+            did2 := pn.list.get(ki)[0]
+            d3 := at.Get(a2, did2)
+            mut keep := true
+            if d3.kind == at.AST_FUNC_DEF && !d3.is_extern && !d3.synthetic &&
+               d3.typarams.len() == 0 &&
+               !str.Equals(d3.name, w_entry.get(bi)[0]):
+                keep = sm.DceReachable(w_pkg.get(bi)[0], d3.name)
+            end
+            if keep:
+                kept.push(did2)
+            end
+        end
+        mut pw := at.Get(a2, prog2)
+        mut old_list := pw.list
+        pw.list = kept
+        at.Put(a2, prog2, pw)
+        old_list.free()
+
+        o := cg.Run(quiet, s2, a2, prog2, module2, true, false,
+                    w_path.get(bi)[0], w_entry.get(bi)[0], "")
+        mut opfx := prefix
+        if bi > 0:
+            opfx = prefix + "__" + module2
+        end
+        _w1 := os.WriteFile(opfx + ".h", o.h_src)
+        _w2 := os.WriteFile(opfx + ".c", o.c_src)
+        total += str.Len(o.h_src) + str.Len(o.c_src)
+        sm.Free(s2)
+        at.FreeAst(a2)
+    end
+    println "wrote " + w_prog.len() + " module(s), " + total + " bytes"
+end

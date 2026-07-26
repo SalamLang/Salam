@@ -1,0 +1,643 @@
+// Port of compiler/src/langpack/ (langpack.c, langpack.h,
+// langpack_internal.h, langpack_data.c). Flat single-file module
+// (see salam/PORTING.md "Layout — FLAT"): langpack_lookup.c merged below
+// with a `// ===== <file>.c =====` marker.
+//
+// This file carries the package's globals (the keyword/contextual tables of
+// langpack_data.c) and every private helper so the file satisfies
+// E083/E085/E088; langpack_data.c therefore has
+// no separate sibling file — its tables live here.
+//
+// C -> Salam decisions for this module:
+// - langpack_t* handle -> `pub type Langpack = int` with LP_NONE/LP_EN/
+//   LP_FA/LP_AR constants. langpack_load() returns LP_NONE where the C
+//   returns NULL; accessors answer "" / 0-length for LP_NONE instead of
+//   dereferencing NULL.
+// - kw_entry_t[] tables -> parallel arrays k_kw_kind_* (int, the TK_*
+//   values from salam/token.salam, identical to the C enum) and
+//   k_kw_spell_* (str, byte-for-byte the C spellings; generated
+//   mechanically from langpack_data.c).
+// - ctx_entry_t[] tables -> parallel arrays k_ctx_canon_* / k_ctx_spell_*.
+// - k_entry_fa / k_entry_ar keep the exact C byte sequences (note the ar
+//   entry point intentionally contains U+06CC Farsi Yeh, as in the C hex).
+// - langpack_free() is a no-op in C (static packs) and here too.
+// - The byte-level kw_fold()/kw_ident_equal() loose matcher is re-expressed
+//   over UTF-8 codepoints via str.Chars — equivalent for valid UTF-8:
+//   spaces and ZWNJ are skipped, U+064A Arabic Yeh and U+06CC Farsi Yeh
+//   fold together, U+0643 Arabic Kaf and U+06A9 Keheh fold together.
+package langpack
+
+import str
+import tok "token.salam"
+
+// langpack_t handles (C: &g_lang_en / &g_lang_fa / &g_lang_ar, NULL)
+pub const LP_NONE := 0
+pub const LP_EN := 1
+pub const LP_FA := 2
+pub const LP_AR := 3
+
+// ZWNJ (U+200C) and the folded letter pairs of kw_fold() (langpack_lookup.c)
+k_lp_zwnj := "\xE2\x80\x8C"
+k_lp_yeh_ar := "\xD9\x8A"  // U+064A ARABIC LETTER YEH
+k_lp_yeh_fa := "\xDB\x8C"  // U+06CC ARABIC LETTER FARSI YEH
+k_lp_kaf_ar := "\xD9\x83"  // U+0643 ARABIC LETTER KAF
+k_lp_keheh := "\xDA\xA9"   // U+06A9 ARABIC LETTER KEHEH
+
+// ---------------------------------------------------------------------------
+// Tables from langpack_data.c.
+// GENERATED from compiler/src/langpack/langpack_data.c — do not edit by
+// hand; row i of k_kw_kind_XX / k_kw_spell_XX is C row i of k_lang_XX
+// (terminator {TK_EOF, NULL} rows dropped).
+// ---------------------------------------------------------------------------
+// NOTE: the k_kw_kind_* int arrays are declared `mut` only to work around
+// a C-backend bug: immutable global int arrays in a non-main package are
+// declared `extern const` in the generated header but defined non-const,
+// which C compilers reject. Nothing ever mutates them.
+mut k_kw_kind_en := [
+    10, // TK_KW_FUNC "func"
+    11, // TK_KW_RET "ret"
+    12, // TK_KW_IF "if"
+    13, // TK_KW_ELSE "else"
+    14, // TK_KW_UNTIL "until"
+    15, // TK_KW_ON "on"
+    16, // TK_KW_MUT "mut"
+    17, // TK_KW_CONST "const"
+    18, // TK_KW_TYPE "type"
+    19, // TK_KW_STRUCT "struct"
+    20, // TK_KW_ENUM "enum"
+    21, // TK_KW_END "end"
+    22, // TK_KW_IMPORT "import"
+    23, // TK_KW_AS "as"
+    24, // TK_KW_TRUE "true"
+    25, // TK_KW_FALSE "false"
+    26, // TK_KW_NULL "null"
+    27, // TK_KW_THIS "this"
+    28, // TK_KW_BREAK "break"
+    29, // TK_KW_CONTINUE "continue"
+    30, // TK_KW_LAYOUT "layout"
+    31, // TK_KW_PACKAGE "package"
+    32, // TK_KW_PRINT "print"
+    33, // TK_KW_PRINTLN "println"
+    34, // TK_KW_PRINTERR "printerr"
+    35, // TK_KW_PRINTERRLN "printerrln"
+    36, // TK_KW_INPUT "input"
+    37, // TK_KW_DEFER "defer"
+    38, // TK_KW_OPERATOR "operator"
+    39, // TK_KW_EXTERN "extern"
+    40, // TK_KW_INTERFACE "interface"
+    41, // TK_KW_PUB "pub"
+    42, // TK_KW_INLINE "inline"
+    43, // TK_KW_NOINLINE "noinline"
+    44, // TK_KW_PURE "pure"
+    45, // TK_KW_NORET "noret"
+    46, // TK_KW_DEPRECATED "deprecated"
+    47, // TK_KW_COMPONENT "component"
+    48, // TK_KW_REPEAT "repeat"
+    49, // TK_KW_IMPL "impl"
+    50, // TK_KW_TO "to"
+    51, // TK_KW_STEP "by"
+    52, // TK_KW_EACH "each"
+    53, // TK_KW_IN "in"
+    54, // TK_KW_WITH "with"
+    55 // TK_KW_MATCH "match"
+] as int[46]
+
+k_kw_spell_en := [
+    "func",
+    "ret",
+    "if",
+    "else",
+    "until",
+    "on",
+    "mut",
+    "const",
+    "type",
+    "struct",
+    "enum",
+    "end",
+    "import",
+    "as",
+    "true",
+    "false",
+    "null",
+    "this",
+    "break",
+    "continue",
+    "layout",
+    "package",
+    "print",
+    "println",
+    "printerr",
+    "printerrln",
+    "input",
+    "defer",
+    "operator",
+    "extern",
+    "interface",
+    "pub",
+    "inline",
+    "noinline",
+    "pure",
+    "noret",
+    "deprecated",
+    "component",
+    "repeat",
+    "impl",
+    "to",
+    "by",
+    "each",
+    "in",
+    "with",
+    "match"
+] as str[46]
+
+mut k_kw_kind_fa := [
+    10, // TK_KW_FUNC "تابع"
+    11, // TK_KW_RET "بازگشت"
+    12, // TK_KW_IF "اگر"
+    13, // TK_KW_ELSE "وگرنه"
+    14, // TK_KW_UNTIL "تاوقتی"
+    15, // TK_KW_ON "بر"
+    16, // TK_KW_MUT "متغیر"
+    17, // TK_KW_CONST "ثابت"
+    18, // TK_KW_TYPE "نوع"
+    19, // TK_KW_STRUCT "ساختار"
+    20, // TK_KW_ENUM "شمارش"
+    21, // TK_KW_END "تمام"
+    22, // TK_KW_IMPORT "واردکردن"
+    23, // TK_KW_AS "بعنوان"
+    24, // TK_KW_TRUE "درست"
+    25, // TK_KW_FALSE "نادرست"
+    26, // TK_KW_NULL "پوچ"
+    27, // TK_KW_THIS "این"
+    28, // TK_KW_BREAK "بشکن"
+    29, // TK_KW_CONTINUE "ادامه"
+    30, // TK_KW_LAYOUT "صفحه"
+    31, // TK_KW_PACKAGE "بسته"
+    32, // TK_KW_PRINT "بنویس"
+    33, // TK_KW_PRINTLN "چاپ"
+    34, // TK_KW_PRINTERR "خطابنویس"
+    35, // TK_KW_PRINTERRLN "خطاچاپ"
+    36, // TK_KW_INPUT "بخوان"
+    37, // TK_KW_DEFER "تعلیق"
+    38, // TK_KW_OPERATOR "عملگر"
+    39, // TK_KW_EXTERN "خارجی"
+    40, // TK_KW_INTERFACE "واسط"
+    41, // TK_KW_PUB "عمومی"
+    42, // TK_KW_INLINE "درون‌خطی"
+    43, // TK_KW_NOINLINE "غیردرون‌خطی"
+    44, // TK_KW_PURE "خالص"
+    45, // TK_KW_NORET "بی‌بازگشت"
+    46, // TK_KW_DEPRECATED "منسوخ"
+    47, // TK_KW_COMPONENT "مولفه"
+    48, // TK_KW_REPEAT "تکرار"
+    49, // TK_KW_IMPL "پیاده‌سازی"
+    50, // TK_KW_TO "تا"
+    51, // TK_KW_STEP "گام"
+    52, // TK_KW_EACH "هر"
+    53, // TK_KW_IN "در"
+    54, // TK_KW_WITH "با"
+    55, // TK_KW_MATCH "تطبیق"
+    68, // TK_AND "و"
+    69 // TK_OR "یا"
+] as int[48]
+
+k_kw_spell_fa := [
+    "تابع",
+    "بازگشت",
+    "اگر",
+    "وگرنه",
+    "تاوقتی",
+    "بر",
+    "متغیر",
+    "ثابت",
+    "نوع",
+    "ساختار",
+    "شمارش",
+    "تمام",
+    "واردکردن",
+    "بعنوان",
+    "درست",
+    "نادرست",
+    "پوچ",
+    "این",
+    "بشکن",
+    "ادامه",
+    "صفحه",
+    "بسته",
+    "بنویس",
+    "چاپ",
+    "خطابنویس",
+    "خطاچاپ",
+    "بخوان",
+    "تعلیق",
+    "عملگر",
+    "خارجی",
+    "واسط",
+    "عمومی",
+    "درون‌خطی",
+    "غیردرون‌خطی",
+    "خالص",
+    "بی‌بازگشت",
+    "منسوخ",
+    "مولفه",
+    "تکرار",
+    "پیاده‌سازی",
+    "تا",
+    "گام",
+    "هر",
+    "در",
+    "با",
+    "تطبیق",
+    "و",
+    "یا"
+] as str[48]
+
+mut k_kw_kind_ar := [
+    10, // TK_KW_FUNC "دالة"
+    11, // TK_KW_RET "أرجع"
+    12, // TK_KW_IF "إذا"
+    13, // TK_KW_ELSE "وإلا"
+    14, // TK_KW_UNTIL "بينما"
+    15, // TK_KW_ON "على"
+    16, // TK_KW_MUT "متغير"
+    17, // TK_KW_CONST "ثابت"
+    18, // TK_KW_TYPE "نوع"
+    19, // TK_KW_STRUCT "بنية"
+    20, // TK_KW_ENUM "تعداد"
+    21, // TK_KW_END "نهاية"
+    22, // TK_KW_IMPORT "استيراد"
+    23, // TK_KW_AS "بوصفه"
+    24, // TK_KW_TRUE "صواب"
+    25, // TK_KW_FALSE "خطأ"
+    26, // TK_KW_NULL "عدم"
+    27, // TK_KW_THIS "هذا"
+    28, // TK_KW_BREAK "اكسر"
+    29, // TK_KW_CONTINUE "واصل"
+    30, // TK_KW_LAYOUT "صفحة"
+    31, // TK_KW_PACKAGE "حزمة"
+    32, // TK_KW_PRINT "اكتب"
+    33, // TK_KW_PRINTLN "اطبع"
+    34, // TK_KW_PRINTERR "اكتبخطأ"
+    35, // TK_KW_PRINTERRLN "اطبعخطأ"
+    36, // TK_KW_INPUT "اقرأ"
+    37, // TK_KW_DEFER "أجل"
+    38, // TK_KW_OPERATOR "عامل"
+    39, // TK_KW_EXTERN "خارجي"
+    40, // TK_KW_INTERFACE "واجهة"
+    41, // TK_KW_PUB "عام"
+    42, // TK_KW_INLINE "مضمن"
+    43, // TK_KW_NOINLINE "غيرمضمن"
+    44, // TK_KW_PURE "نقي"
+    45, // TK_KW_NORET "لايرجع"
+    46, // TK_KW_DEPRECATED "مهجور"
+    47, // TK_KW_COMPONENT "مكون"
+    48, // TK_KW_REPEAT "كرر"
+    49, // TK_KW_IMPL "تنفيذ"
+    50, // TK_KW_TO "إلى"
+    51, // TK_KW_STEP "خطوة"
+    52, // TK_KW_EACH "كل"
+    53, // TK_KW_IN "في"
+    54, // TK_KW_WITH "مع"
+    55, // TK_KW_MATCH "طابق"
+    68, // TK_AND "و"
+    69 // TK_OR "أو"
+] as int[48]
+
+k_kw_spell_ar := [
+    "دالة",
+    "أرجع",
+    "إذا",
+    "وإلا",
+    "بينما",
+    "على",
+    "متغير",
+    "ثابت",
+    "نوع",
+    "بنية",
+    "تعداد",
+    "نهاية",
+    "استيراد",
+    "بوصفه",
+    "صواب",
+    "خطأ",
+    "عدم",
+    "هذا",
+    "اكسر",
+    "واصل",
+    "صفحة",
+    "حزمة",
+    "اكتب",
+    "اطبع",
+    "اكتبخطأ",
+    "اطبعخطأ",
+    "اقرأ",
+    "أجل",
+    "عامل",
+    "خارجي",
+    "واجهة",
+    "عام",
+    "مضمن",
+    "غيرمضمن",
+    "نقي",
+    "لايرجع",
+    "مهجور",
+    "مكون",
+    "كرر",
+    "تنفيذ",
+    "إلى",
+    "خطوة",
+    "كل",
+    "في",
+    "مع",
+    "طابق",
+    "و",
+    "أو"
+] as str[48]
+
+k_ctx_canon_fa := [
+    "link",
+    "static",
+    "dynamic",
+    "framework",
+    "kind"
+] as str[5]
+
+k_ctx_spell_fa := [
+    "پیوند",
+    "ایستا",
+    "پویا",
+    "چارچوب",
+    "گونه"
+] as str[5]
+
+k_ctx_canon_ar := [
+    "link",
+    "static",
+    "dynamic",
+    "framework",
+    "kind"
+] as str[5]
+
+k_ctx_spell_ar := [
+    "رابط",
+    "ساكن",
+    "ديناميكي",
+    "إطار",
+    "صنف"
+] as str[5]
+
+// k_entry_fa / k_entry_ar (langpack_data.c) — exact C byte sequences
+k_entry_fa := "اصلی"
+k_entry_ar := "الرئیسیة"
+
+// langpack_t / Langpack handle type (see file header)
+pub type Langpack = int
+
+// ---------------------------------------------------------------------------
+// Private helpers (must precede the first pub function of the merged
+// package — rule E088).
+// ---------------------------------------------------------------------------
+
+// struct langpack .keywords length for a handle
+func kw_count(p: int): int:
+    if p == LP_EN:
+        ret len(k_kw_kind_en)
+    end
+    if p == LP_FA:
+        ret len(k_kw_kind_fa)
+    end
+    if p == LP_AR:
+        ret len(k_kw_kind_ar)
+    end
+    ret 0
+end
+
+// keywords[i].kind for a handle
+func kw_kind_at(p: int, i: int): int:
+    if p == LP_EN:
+        ret k_kw_kind_en[i]
+    end
+    if p == LP_FA:
+        ret k_kw_kind_fa[i]
+    end
+    ret k_kw_kind_ar[i]
+end
+
+// keywords[i].spelling for a handle
+func kw_spell_at(p: int, i: int): str:
+    if p == LP_EN:
+        ret k_kw_spell_en[i]
+    end
+    if p == LP_FA:
+        ret k_kw_spell_fa[i]
+    end
+    ret k_kw_spell_ar[i]
+end
+
+// struct langpack .contextual length (NULL for en -> 0)
+func ctx_count(p: int): int:
+    if p == LP_FA:
+        ret len(k_ctx_canon_fa)
+    end
+    if p == LP_AR:
+        ret len(k_ctx_canon_ar)
+    end
+    ret 0
+end
+
+// contextual[i].canon for a handle
+func ctx_canon_at(p: int, i: int): str:
+    if p == LP_FA:
+        ret k_ctx_canon_fa[i]
+    end
+    ret k_ctx_canon_ar[i]
+end
+
+// contextual[i].spelling for a handle
+func ctx_spell_at(p: int, i: int): str:
+    if p == LP_FA:
+        ret k_ctx_spell_fa[i]
+    end
+    ret k_ctx_spell_ar[i]
+end
+
+// The skip set of kw_ident_equal(): spaces and ZWNJ are ignored.
+func kw_is_skip(c: str): bool:
+    ret str.Equals(c, " ") || str.Equals(c, k_lp_zwnj)
+end
+
+// kw_fold (langpack_lookup.c): fold the two Yeh forms together (C code
+// 0x101) and the two Kaf forms together (C code 0x102); anything else
+// represents itself. \x01/\x02 cannot appear in identifiers, so they are
+// safe stand-ins for the C fold codes.
+func kw_fold_char(c: str): str:
+    if str.Equals(c, k_lp_yeh_ar) || str.Equals(c, k_lp_yeh_fa):
+        ret "\x01"
+    end
+    if str.Equals(c, k_lp_kaf_ar) || str.Equals(c, k_lp_keheh):
+        ret "\x02"
+    end
+    ret c
+end
+
+// Normalized spelling: skip set removed, fold classes applied. Comparing
+// two normalized spellings is exactly the C kw_ident_equal() loop.
+func kw_normalize(s: str): str:
+    cs := str.Chars(s)
+    defer cs.free()
+    mut out := ""
+    each c in cs:
+        if !kw_is_skip(c):
+            out = out + kw_fold_char(c)
+        end
+    end
+    ret out
+end
+
+// kw_ident_equal (langpack_lookup.c)
+func kw_ident_equal(a: str, b: str): bool:
+    ret str.Equals(kw_normalize(a), kw_normalize(b))
+end
+
+// The has_join scan of langpack_lookup_keyword(): true when ident contains
+// a space, ZWNJ, or one of the foldable Yeh/Kaf letters — only then is the
+// loose pass worth running.
+func has_join_char(ident: str): bool:
+    cs := str.Chars(ident)
+    defer cs.free()
+    mut found := false
+    each c in cs:
+        if kw_is_skip(c) || str.Equals(c, k_lp_yeh_ar) || str.Equals(c, k_lp_yeh_fa) || str.Equals(c, k_lp_kaf_ar) || str.Equals(c, k_lp_keheh):
+            found = true
+        end
+    end
+    ret found
+end
+
+// ---------------------------------------------------------------------------
+// Public API of langpack.c
+// ---------------------------------------------------------------------------
+
+// langpack_load — LP_NONE where the C returns NULL.
+pub func Load(code: str): Langpack:
+    if str.Equals(code, "en"):
+        ret LP_EN
+    end
+    if str.Equals(code, "fa"):
+        ret LP_FA
+    end
+    if str.Equals(code, "ar"):
+        ret LP_AR
+    end
+    ret LP_NONE
+end
+
+// langpack_free — packs are static, nothing to release.
+pub func Free(_p: Langpack):
+    ret
+end
+
+// langpack_code
+pub func Code(p: Langpack): str:
+    if p == LP_EN:
+        ret "en"
+    end
+    if p == LP_FA:
+        ret "fa"
+    end
+    if p == LP_AR:
+        ret "ar"
+    end
+    ret ""
+end
+
+// langpack_entry — the localized entry-point function name.
+pub func Entry(p: Langpack): str:
+    if p == LP_EN:
+        ret "main"
+    end
+    if p == LP_FA:
+        ret k_entry_fa
+    end
+    if p == LP_AR:
+        ret k_entry_ar
+    end
+    ret ""
+end
+
+// langpack_entry_for — "main" for unknown codes, like the C ternary.
+pub func EntryFor(code: str): str:
+    p := Load(code)
+    if p == LP_NONE:
+        ret "main"
+    end
+    ret Entry(p)
+end
+
+// langpack_end_spelling — the localized spelling of the 'end' keyword.
+pub func EndSpelling(p: Langpack): str:
+    n := kw_count(p)
+    mut i := 0
+    until i < n:
+        if kw_kind_at(p, i) == tok.TK_KW_END:
+            ret kw_spell_at(p, i)
+        end
+        i += 1
+    end
+    ret "end"
+end
+
+// ===== langpack_lookup.c =====
+// Port of compiler/src/langpack/langpack_lookup.c (the two pub lookups;
+// the private helpers kw_fold/kw_ident_equal/has_join live in
+// langpack.salam so the merged package satisfies E088).
+// Merged into this flat file: tables and helpers are referenced
+// unqualified.
+//
+// Notes vs the C version:
+// - langpack_canon_word() returns NULL when there is no contextual table
+//   (en) or no match; this port returns "" (canonical words are never
+//   empty, so "" is an unambiguous "no translation" sentinel).
+// - Called with LP_NONE, both lookups scan zero entries and fall through
+//   to their miss result (the C would dereference NULL).
+
+
+// langpack_lookup_keyword — token kind for a keyword spelling, TK_IDENT
+// when ident is not a keyword of this pack. Pass 1 is an exact match;
+// pass 2 (only when ident contains a space/ZWNJ/foldable letter) ignores
+// spaces and ZWNJ and folds the Yeh and Kaf letter pairs.
+pub func LookupKeyword(p: Langpack, ident: str): int:
+    n := kw_count(p)
+    mut i := 0
+    until i < n:
+        if str.Equals(kw_spell_at(p, i), ident):
+            ret kw_kind_at(p, i)
+        end
+        i += 1
+    end
+    if has_join_char(ident):
+        i = 0
+        until i < n:
+            if kw_ident_equal(kw_spell_at(p, i), ident):
+                ret kw_kind_at(p, i)
+            end
+            i += 1
+        end
+    end
+    ret tok.TK_IDENT
+end
+
+// langpack_canon_word — canonical English form of a contextual (soft)
+// keyword, "" when ident has no mapping in this pack.
+pub func CanonWord(p: Langpack, ident: str): str:
+    n := ctx_count(p)
+    mut i := 0
+    until i < n:
+        if str.Equals(ctx_spell_at(p, i), ident):
+            ret ctx_canon_at(p, i)
+        end
+        i += 1
+    end
+    ret ""
+end

@@ -1,0 +1,754 @@
+// Flat merge of the salam/core port (see salam/PORTING.md "Layout — FLAT"):
+// prelude.h, sal_types.h, numstr.c, arena.c, build_info.h, sb.c, span.h,
+// status.h, vec.c, sal_format.c — one package `core`, one file.
+// Section comments mark which original .c/.h each part came from; within the
+// file the tiers follow the hard ordering rules (E083/E085/E088):
+// package -> imports -> consts/globals -> types -> private funcs -> pub funcs.
+package core
+
+import io
+import mem
+import os
+import str
+
+// ===== sal_format.c =====
+extern:
+    // Must match the declaration in Salam's generated C prelude exactly:
+    // extern int snprintf(char *buf, uint64_t size, const char *fmt, ...);
+    func snprintf(buf: char*, cap: u64, fmt: str, ...): int
+end
+
+// ===== numstr.c =====
+pub const SAL_NUMSTR_MAX := 21
+
+// ===== build_info.h =====
+// The C header took SALAM_VERSION / SALAM_GIT_* from -D defines at build time
+// and SALAM_BUILD_DATE from __DATE__/__TIME__. Salam has no __DATE__; the
+// build system should stamp these constants (or pass -D defines once the
+// driver port wires them through). Defaults mirror the C fallbacks.
+pub const VERSION := "0.2.6"
+pub const GIT_COMMIT := "unknown"
+pub const GIT_DATE := "unknown"
+pub const GIT_DIRTY := ""
+pub const BUILD_DATE := "unknown"
+
+// ===== status.h =====
+// C: typedef enum { ST_OK = 0, ST_ERROR, ST_FATAL } status_t;
+// Downstream ports use the int constants (cross-package enum members are not
+// reachable); values match the C enum exactly.
+pub const ST_OK := 0
+pub const ST_ERROR := 1
+pub const ST_FATAL := 2
+
+// ===== sal_format.c =====
+// Argument tags (plain int consts: the C code had no tag at all — va_arg
+// knew the type from the conversion — and an enum-typed struct field would
+// not survive the current cross-package codegen).
+pub const ARG_INT := 0
+pub const ARG_UINT := 1
+pub const ARG_FLOAT := 2
+pub const ARG_STR := 3
+pub const ARG_CHAR := 4
+pub const ARG_PTR := 5
+
+// ===== arena.c =====
+// Bump allocator for AST/token memory. Thin layer: the C block-chaining/
+// 16-byte-alignment scheme is replaced by one mem.Allocate per request,
+// tracked in a Vector and released together by ArenaFree. Strings are Salam
+// values, so arena_strdup/arena_strndup return owned str copies (the arena
+// argument is kept for call-site compatibility).
+pub struct Arena:
+    pub blocks: Vector<i64> = Vector {}
+    pub block_size: u64 = 0 as u64
+end
+
+// ===== span.h =====
+// Faithful field-for-field port of src_pos_t / src_span_t.
+// NOTE: the C field `end` is renamed `finish` (`end` is a Salam keyword).
+pub struct SrcPos:
+    pub line: u32 = 0 as u32
+    pub col: u32 = 0 as u32
+    pub index: u32 = 0 as u32
+end
+
+pub struct SrcSpan:
+    pub begin: SrcPos = SrcPos {}
+    pub finish: SrcPos = SrcPos {}
+    pub length: u32 = 0 as u32
+end
+
+// ===== status.h =====
+// The faithful enum (module-internal use only; consumers use ST_*).
+pub enum Status:
+    Ok = 0
+    Error
+    Fatal
+end
+
+// ===== sal_format.c =====
+pub struct FmtArg:
+    pub kind: int = 0
+    pub i: i64 = 0
+    pub u: u64 = 0 as u64
+    pub f: f64 = 0.0
+    pub s: str = ""
+end
+
+// ===== prelude.h =====
+func size_max_u64(): u64:
+    ret (0 as u64) - (1 as u64)
+end
+
+func overflow_abort(what: str):
+    io.EPrintln("salam: fatal: size overflow in " + what)
+    os.Exit(1)
+end
+
+// ===== sal_format.c =====
+inline func fmt_bp(s: str): i8*:
+    ret (s as void*) as i8*
+end
+
+func fmt_ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+func arg_i64(a: FmtArg): i64:
+    if a.kind == ARG_UINT || a.kind == ARG_PTR:
+        ret a.u as i64
+    end
+    if a.kind == ARG_FLOAT:
+        ret a.f as i64
+    end
+    ret a.i
+end
+
+func arg_u64(a: FmtArg): u64:
+    if a.kind == ARG_INT || a.kind == ARG_CHAR:
+        ret a.i as u64
+    end
+    if a.kind == ARG_FLOAT:
+        ret (a.f as i64) as u64
+    end
+    ret a.u
+end
+
+func arg_f64(a: FmtArg): f64:
+    if a.kind == ARG_INT || a.kind == ARG_CHAR:
+        ret a.i as f64
+    end
+    if a.kind == ARG_UINT || a.kind == ARG_PTR:
+        ret a.u as f64
+    end
+    ret a.f
+end
+
+func arg_str(a: FmtArg): str:
+    if a.kind == ARG_STR:
+        ret a.s
+    end
+    ret ""
+end
+
+func u64_hex(v: u64): str:
+    if v == (0 as u64):
+        ret "0"
+    end
+    tbl := "0123456789abcdef"
+    mut out := ""
+    mut t := v
+    until t != (0 as u64):
+        out = tbl.substr((t % (16 as u64)) as int, 1).concat(out)
+        t /= (16 as u64)
+    end
+    ret out
+end
+
+// Faithful port of emit_int_padded from sal_format.c.
+func emit_int(out &: str.StringBuilder, mag: u64, neg: bool, base: u64, upper: bool,
+              width: int, prec: int, fminus: bool, fzero: bool, fplus: bool,
+              fspace: bool, fhash: bool):
+    tbl := upper ? "0123456789ABCDEF" : "0123456789abcdef"
+    mut digs := ""
+    if mag == (0 as u64):
+        if prec != 0:
+            digs = "0"
+        end
+    else:
+        mut v := mag
+        until v != (0 as u64):
+            digs = tbl.substr((v % base) as int, 1).concat(digs)
+            v /= base
+        end
+    end
+    ndig := digs.len()
+    mut zprec := 0
+    if prec > ndig:
+        zprec = prec - ndig
+    end
+    mut sign := ""
+    if neg:
+        sign = "-"
+    else fplus:
+        sign = "+"
+    else fspace:
+        sign = " "
+    end
+    mut hashpfx := ""
+    if fhash && mag != (0 as u64):
+        if base == (16 as u64):
+            hashpfx = upper ? "0X" : "0x"
+        else base == (8 as u64):
+            hashpfx = "0"
+        end
+    end
+    content := sign.len() + hashpfx.len() + zprec + ndig
+    mut pad := 0
+    if width > content:
+        pad = width - content
+    end
+    mut zwidth := 0
+    if fzero && !fminus && prec < 0:
+        zwidth = pad
+        pad = 0
+    end
+    if !fminus && pad > 0:
+        str.BufAppend(out, " ".repeat(pad))
+    end
+    if sign.len() > 0:
+        str.BufAppend(out, sign)
+    end
+    if hashpfx.len() > 0:
+        str.BufAppend(out, hashpfx)
+    end
+    if zwidth > 0:
+        str.BufAppend(out, "0".repeat(zwidth))
+    end
+    if zprec > 0:
+        str.BufAppend(out, "0".repeat(zprec))
+    end
+    str.BufAppend(out, digs)
+    if fminus && pad > 0:
+        str.BufAppend(out, " ".repeat(pad))
+    end
+end
+
+// Append sv padded to `width` with spaces ('-' flag = left-justify).
+func pad_append(out &: str.StringBuilder, sv: str, width: int, fminus: bool):
+    padn := width - sv.len()
+    if !fminus && padn > 0:
+        str.BufAppend(out, " ".repeat(padn))
+    end
+    str.BufAppend(out, sv)
+    if fminus && padn > 0:
+        str.BufAppend(out, " ".repeat(padn))
+    end
+end
+
+// Rebuild a "%[flags][width][.prec]<conv>" spec and delegate to libc
+// snprintf — the same thing the C deleg_dbl path does.
+func c_format_f64(fminus: bool, fplus: bool, fspace: bool, fzero: bool,
+                  fhash: bool, width: int, prec: int, cv: int, v: f64): str:
+    mut sp := "%"
+    if fminus: sp = sp.concat("-") end
+    if fplus: sp = sp.concat("+") end
+    if fspace: sp = sp.concat(" ") end
+    if fzero: sp = sp.concat("0") end
+    if fhash: sp = sp.concat("#") end
+    if width >= 0:
+        sp = sp.concat(str.FromInt(width as i64))
+    end
+    if prec >= 0:
+        sp = sp.concat(".").concat(str.FromInt(prec as i64))
+    end
+    sp = sp.concat(char_from_code(cv))
+    cap := 352 as u64
+    buf := mem.Allocate(cap)
+    n := snprintf(buf as char*, cap, sp, v)
+    mut out := ""
+    if n > 0:
+        out = str.Clone(buf as str)
+    end
+    mem.Free(buf)
+    ret out
+end
+
+// ===== prelude.h =====
+// sal_strdup: strings are values in Salam; return an owned copy.
+pub func Strdup(s: str): str:
+    ret str.Clone(s)
+end
+
+// salam_size_add: checked a + b (aborts on overflow, like the C).
+pub func SizeAdd(a: u64, b: u64): u64:
+    if a > size_max_u64() - b:
+        overflow_abort("size_add")
+    end
+    ret a + b
+end
+
+// salam_size_mul: checked a * b (aborts on overflow, like the C).
+pub func SizeMul(a: u64, b: u64): u64:
+    if b != (0 as u64) && a > size_max_u64() / b:
+        overflow_abort("size_mul")
+    end
+    ret a * b
+end
+
+// salam_grow_cap: doubling growth policy shared by dynamic buffers.
+pub func GrowCap(cap: u64, need: u64, seed: u64): u64:
+    mut ncap := cap
+    if ncap == (0 as u64):
+        ncap = seed
+        if ncap == (0 as u64):
+            ncap = 1 as u64
+        end
+    end
+    until ncap < need:
+        if ncap > size_max_u64() / (2 as u64):
+            ret need
+        end
+        ncap *= (2 as u64)
+    end
+    ret ncap
+end
+
+// ===== sal_types.h =====
+// SIZE_MAX for the size type (u64): 18446744073709551615.
+pub func SizeMax(): u64:
+    ret (0 as u64) - (1 as u64)
+end
+
+// ===== numstr.c =====
+// C wrote into a caller buffer (char buf[SAL_NUMSTR_MAX]); Salam returns str.
+pub func U64Toa(v: u64): str:
+    if v == (0 as u64):
+        ret "0"
+    end
+    mut out := ""
+    mut t := v
+    until t != (0 as u64):
+        out = char_from_code((t % (10 as u64)) as int + 48).concat(out)
+        t /= (10 as u64)
+    end
+    ret out
+end
+
+pub func I64Toa(v: i64): str:
+    if v < 0:
+        // Same trick as the C: negate via unsigned wraparound (INT64_MIN safe).
+        mag := (0 as u64) - (v as u64)
+        ret "-".concat(U64Toa(mag))
+    end
+    ret U64Toa(v as u64)
+end
+
+// ===== arena.c =====
+pub func ArenaNew(block_size: u64): Arena:
+    mut bs := block_size
+    if bs == (0 as u64):
+        bs = 65536 as u64
+    end
+    ret Arena { block_size = bs }
+end
+
+pub func ArenaAlloc(a &: Arena, n: u64): void*:
+    mut nn := n
+    if nn == (0 as u64):
+        nn = 1 as u64
+    end
+    p := mem.Allocate(nn)
+    a.blocks.push(p as i64)
+    ret p
+end
+
+// Copy of the first n bytes of s (n is clamped to len(s); the C version
+// trusted the caller).
+pub func ArenaStrndup(_a &: Arena, s: str, n: int): str:
+    mut k := n
+    if k > s.len():
+        k = s.len()
+    end
+    ret s.substr(0, k)
+end
+
+pub func ArenaStrdup(_a &: Arena, s: str): str:
+    ret str.Clone(s)
+end
+
+pub func ArenaFree(a &: Arena):
+    each p in a.blocks:
+        mem.Free(p as void*)
+    end
+    a.blocks.free()
+end
+
+// ===== sb.c =====
+// The C sb_t is replaced by the stdlib str.StringBuilder; these wrappers keep
+// the C entry points so later module ports read like the C code.
+pub func SbNew(): str.StringBuilder:
+    ret str.NewBuilder()
+end
+
+pub func SbFree(s &: str.StringBuilder):
+    str.BufFree(s)
+end
+
+pub func SbPutc(s &: str.StringBuilder, code: int):
+    str.BufAppendChar(s, code)
+end
+
+pub func SbPuts(s &: str.StringBuilder, t: str):
+    str.BufAppend(s, t)
+end
+
+pub func SbPrintf(s &: str.StringBuilder, fmt: str, args: Vector<FmtArg>):
+    str.BufAppend(s, Format(fmt, args))
+end
+
+// Quote `arg` for the platform shell (cmd.exe on Windows, sh elsewhere).
+// Faithful port of sb_put_shell_arg, with the #ifdef _WIN32 branch mapped to
+// the compile-time SALAM_OS_WINDOWS conditional.
+pub func SbPutShellArg(s &: str.StringBuilder, arg: str):
+    if SALAM_OS_WINDOWS:
+        str.BufAppendChar(s, 34)
+        bp := (arg as void*) as i8*
+        n := arg.len()
+        mut i := 0
+        until i < n:
+            mut nbs := 0
+            until i < n && bp[i] == (92 as i8):
+                nbs += 1
+                i += 1
+            end
+            if i >= n:
+                repeat nbs * 2:
+                    str.BufAppendChar(s, 92)
+                end
+                break
+            else bp[i] == (34 as i8):
+                repeat nbs * 2 + 1:
+                    str.BufAppendChar(s, 92)
+                end
+                str.BufAppendChar(s, 34)
+                i += 1
+            else:
+                repeat nbs:
+                    str.BufAppendChar(s, 92)
+                end
+                str.BufAppendChar(s, bp[i] as int)
+                i += 1
+            end
+        end
+        str.BufAppendChar(s, 34)
+    else:
+        str.BufAppendChar(s, 39)
+        bp := (arg as void*) as i8*
+        n := arg.len()
+        mut i := 0
+        until i < n:
+            if bp[i] == (39 as i8):
+                str.BufAppend(s, "'\\''")
+            else:
+                str.BufAppendChar(s, bp[i] as int)
+            end
+            i += 1
+        end
+        str.BufAppendChar(s, 39)
+    end
+end
+
+pub func SbCstr(s &: str.StringBuilder): str:
+    ret str.BufStr(s)
+end
+
+pub func SbLen(s &: str.StringBuilder): i64:
+    ret str.BufLen(s)
+end
+
+// ===== span.h =====
+pub func MakePos(line: u32, col: u32, index: u32): SrcPos:
+    ret SrcPos { line = line, col = col, index = index }
+end
+
+// Zero-value constructors (qualified struct literals like `co.SrcPos {}` are
+// not supported across packages — use these from other modules).
+pub func EmptyPos(): SrcPos:
+    ret SrcPos {}
+end
+
+pub func EmptySpan(): SrcSpan:
+    ret SrcSpan {}
+end
+
+pub func MakeSpan(begin: SrcPos, finish: SrcPos, length: u32): SrcSpan:
+    ret SrcSpan { begin = begin, finish = finish, length = length }
+end
+
+// ===== vec.c =====
+// The C vec_t (an arena-backed void** list) is NOT reimplemented: ports use
+// the builtin Vector<T> directly (see salam/PORTING.md). These helpers mirror
+// the C entry points for call sites that want the same shape.
+pub func VecPush<T>(v &: Vector<T>, item: T):
+    v.push(item)
+end
+
+pub func VecAt<T>(v: Vector<T>, i: int): T:
+    ret v.get(i)[0]
+end
+
+pub func VecLen<T>(v: Vector<T>): int:
+    ret v.len()
+end
+
+// ===== sal_format.c =====
+// Port of sal_vsnprintf: format `fmt` with `args`, returning the result.
+// Does not free `args` — the caller owns the vector.
+pub func Format(fmt: str, args: Vector<FmtArg>): str:
+    mut out := str.NewBuilder()
+    bp := fmt_bp(fmt)
+    n := fmt.len()
+    mut i := 0
+    mut argi := 0
+    until i < n:
+        c0 := fmt_ub(bp, i)
+        if c0 != 37:
+            str.BufAppendChar(out, c0)
+            i += 1
+            continue
+        end
+        start := i
+        i += 1
+        mut fminus := false
+        mut fplus := false
+        mut fspace := false
+        mut fzero := false
+        mut fhash := false
+        until i < n:
+            fc := fmt_ub(bp, i)
+            if fc == 45:
+                fminus = true
+            else fc == 43:
+                fplus = true
+            else fc == 32:
+                fspace = true
+            else fc == 48:
+                fzero = true
+            else fc == 35:
+                fhash = true
+            else:
+                break
+            end
+            i += 1
+        end
+        mut width := 0 - 1
+        if i < n && fmt_ub(bp, i) == 42:
+            width = 0
+            if argi < args.len():
+                width = arg_i64(args.get(argi)[0]) as int
+                argi += 1
+            end
+            i += 1
+            if width < 0:
+                fminus = true
+                width = 0 - width
+            end
+        else i < n && fmt_ub(bp, i) >= 48 && fmt_ub(bp, i) <= 57:
+            width = 0
+            until i < n && fmt_ub(bp, i) >= 48 && fmt_ub(bp, i) <= 57:
+                width = width * 10 + (fmt_ub(bp, i) - 48)
+                i += 1
+            end
+        end
+        mut prec := 0 - 1
+        if i < n && fmt_ub(bp, i) == 46:
+            i += 1
+            if i < n && fmt_ub(bp, i) == 42:
+                prec = 0
+                if argi < args.len():
+                    prec = arg_i64(args.get(argi)[0]) as int
+                    argi += 1
+                end
+                i += 1
+            else:
+                prec = 0
+                until i < n && fmt_ub(bp, i) >= 48 && fmt_ub(bp, i) <= 57:
+                    prec = prec * 10 + (fmt_ub(bp, i) - 48)
+                    i += 1
+                end
+            end
+            if prec < 0:
+                prec = 0 - 1
+            end
+        end
+        // Length modifiers: parsed and ignored (all args are 64-bit).
+        if i < n && fmt_ub(bp, i) == 108:
+            i += 1
+            if i < n && fmt_ub(bp, i) == 108:
+                i += 1
+            end
+        else i < n && fmt_ub(bp, i) == 122:
+            i += 1
+        else i < n && fmt_ub(bp, i) == 104:
+            i += 1
+            if i < n && fmt_ub(bp, i) == 104:
+                i += 1
+            end
+        else i < n && (fmt_ub(bp, i) == 106 || fmt_ub(bp, i) == 116 || fmt_ub(bp, i) == 76):
+            i += 1
+        end
+        if i >= n:
+            // Format string ended inside a spec: copy it verbatim (like C).
+            str.BufAppend(out, fmt.substr(start, i - start))
+            break
+        end
+        cv := fmt_ub(bp, i)
+        i += 1
+        known := cv == 100 || cv == 105 || cv == 117 || cv == 111 || cv == 120 ||
+                 cv == 88 || cv == 99 || cv == 115 || cv == 112 || cv == 101 ||
+                 cv == 69 || cv == 102 || cv == 70 || cv == 103 || cv == 71 ||
+                 cv == 97 || cv == 65
+        if !known:
+            if cv == 37:
+                str.BufAppendChar(out, 37)
+            else:
+                str.BufAppend(out, fmt.substr(start, i - start))
+            end
+            continue
+        end
+        mut a := FmtArg {}
+        if argi < args.len():
+            a = args.get(argi)[0]
+            argi += 1
+        end
+        if cv == 100 || cv == 105:
+            v := arg_i64(a)
+            mut neg := false
+            mut mag := v as u64
+            if v < 0:
+                neg = true
+                mag = (0 as u64) - (v as u64)
+            end
+            emit_int(out, mag, neg, 10 as u64, false, width, prec, fminus, fzero,
+                     fplus, fspace, fhash)
+        else cv == 117:
+            emit_int(out, arg_u64(a), false, 10 as u64, false, width, prec,
+                     fminus, fzero, fplus, fspace, fhash)
+        else cv == 111:
+            emit_int(out, arg_u64(a), false, 8 as u64, false, width, prec,
+                     fminus, fzero, fplus, fspace, fhash)
+        else cv == 120:
+            emit_int(out, arg_u64(a), false, 16 as u64, false, width, prec,
+                     fminus, fzero, fplus, fspace, fhash)
+        else cv == 88:
+            emit_int(out, arg_u64(a), false, 16 as u64, true, width, prec,
+                     fminus, fzero, fplus, fspace, fhash)
+        else cv == 99:
+            pad_append(out, char_from_code(arg_i64(a) as int), width, fminus)
+        else cv == 115:
+            mut sv := arg_str(a)
+            if prec >= 0 && prec < sv.len():
+                sv = sv.substr(0, prec)
+            end
+            pad_append(out, sv, width, fminus)
+        else cv == 112:
+            pv := arg_u64(a)
+            mut ps := "(nil)"
+            if pv != (0 as u64):
+                ps = "0x".concat(u64_hex(pv))
+            end
+            pad_append(out, ps, width, fminus)
+        else:
+            // e E f F g G a A
+            str.BufAppend(out, c_format_f64(fminus, fplus, fspace, fzero, fhash,
+                                            width, prec, cv, arg_f64(a)))
+        end
+    end
+    res := str.BufStr(out)
+    str.BufFree(out)
+    ret res
+end
+
+pub func ArgInt(v: i64): FmtArg:
+    ret FmtArg { kind = ARG_INT, i = v }
+end
+
+pub func ArgUint(v: u64): FmtArg:
+    ret FmtArg { kind = ARG_UINT, u = v }
+end
+
+pub func ArgFloat(v: f64): FmtArg:
+    ret FmtArg { kind = ARG_FLOAT, f = v }
+end
+
+pub func ArgStr(v: str): FmtArg:
+    ret FmtArg { kind = ARG_STR, s = v }
+end
+
+pub func ArgChar(code: int): FmtArg:
+    ret FmtArg { kind = ARG_CHAR, i = code as i64 }
+end
+
+pub func ArgPtr(v: u64): FmtArg:
+    ret FmtArg { kind = ARG_PTR, u = v }
+end
+
+// Conveniences replacing variadic sal_snprintf call sites.
+pub func Format0(fmt: str): str:
+    mut v := Vector {} as Vector<FmtArg>
+    r := Format(fmt, v)
+    v.free()
+    ret r
+end
+
+pub func Format1(fmt: str, a: FmtArg): str:
+    mut v := Vector {} as Vector<FmtArg>
+    v.push(a)
+    r := Format(fmt, v)
+    v.free()
+    ret r
+end
+
+pub func Format2(fmt: str, a: FmtArg, b: FmtArg): str:
+    mut v := Vector {} as Vector<FmtArg>
+    v.push(a)
+    v.push(b)
+    r := Format(fmt, v)
+    v.free()
+    ret r
+end
+
+pub func Format3(fmt: str, a: FmtArg, b: FmtArg, c: FmtArg): str:
+    mut v := Vector {} as Vector<FmtArg>
+    v.push(a)
+    v.push(b)
+    v.push(c)
+    r := Format(fmt, v)
+    v.free()
+    ret r
+end
+
+pub func Format4(fmt: str, a: FmtArg, b: FmtArg, c: FmtArg, d: FmtArg): str:
+    mut v := Vector {} as Vector<FmtArg>
+    v.push(a)
+    v.push(b)
+    v.push(c)
+    v.push(d)
+    r := Format(fmt, v)
+    v.free()
+    ret r
+end
+
+// Port of sal_catf: append formatted text to an existing string.
+pub func Catf(prefix: str, fmt: str, args: Vector<FmtArg>): str:
+    ret prefix.concat(Format(fmt, args))
+end
+
+// Port of sal_vfprintf(stderr, ...): format and write to stderr.
+pub func EPrintf(fmt: str, args: Vector<FmtArg>):
+    io.EPrint(Format(fmt, args))
+end

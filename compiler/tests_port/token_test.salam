@@ -1,0 +1,121 @@
+// Smoke test for the wave-0 ports: salam/source and salam/token.
+// Run from the repo root:
+//   SALAM_STD=$PWD/compiler ./bin/salam run salam/tests_port/token_test.salam
+import testing
+import os
+import io
+import src "../source.salam"
+import tok "../token.salam"
+
+func main:
+    // --- TokenKind ordering (must match token_kind_t in C exactly) ---
+    testing.AssertEqInt(tok.TK_EOF, 0)
+    testing.AssertEqInt(tok.TK_STMT_END, 1)
+    testing.AssertEqInt(tok.TK_IDENT, 2)
+    testing.AssertEqInt(tok.TK_UTF8_CHAR, 9)
+    testing.AssertEqInt(tok.TK_KW_FUNC, 10)
+    testing.AssertEqInt(tok.TK_KW_MATCH, 55)
+    testing.AssertEqInt(tok.TK_PLUS, 56)
+    testing.AssertEqInt(tok.TK_SEMICOLON, 102)
+    testing.AssertEqInt(tok.TK_COMMENT_BLOCK, 109)
+    testing.AssertEqInt(tok.TK_COUNT, 110)
+
+    // --- KindName round-trips (strings from compiler/src/token/token.c) ---
+    testing.AssertEqStr(tok.KindName(tok.TK_EOF), "EOF")
+    testing.AssertEqStr(tok.KindName(tok.TK_STMT_END), "STMT_END")
+    testing.AssertEqStr(tok.KindName(tok.TK_IDENT), "IDENTIFIER")
+    testing.AssertEqStr(tok.KindName(tok.TK_INT), "INT_LITERAL")
+    testing.AssertEqStr(tok.KindName(tok.TK_FLOAT), "FLOAT_LITERAL")
+    testing.AssertEqStr(tok.KindName(tok.TK_TRIPLE_STRING), "TRIPLE_STRING_LITERAL")
+    testing.AssertEqStr(tok.KindName(tok.TK_UTF8_CHAR), "UTF8_CHAR_LITERAL")
+    testing.AssertEqStr(tok.KindName(tok.TK_KW_FUNC), "KEYWORD_FUNC")
+    testing.AssertEqStr(tok.KindName(tok.TK_KW_PRINTERRLN), "KEYWORD_PRINTERRLN")
+    testing.AssertEqStr(tok.KindName(tok.TK_KW_MATCH), "KEYWORD_MATCH")
+    testing.AssertEqStr(tok.KindName(tok.TK_POWER), "POWER")
+    testing.AssertEqStr(tok.KindName(tok.TK_COLON_ASSIGN), "COLON_ASSIGN")
+    testing.AssertEqStr(tok.KindName(tok.TK_PLUS_EQ), "PLUS_ASSIGN")
+    testing.AssertEqStr(tok.KindName(tok.TK_SHR_EQ), "SHR_ASSIGN")
+    testing.AssertEqStr(tok.KindName(tok.TK_FAT_ARROW), "FAT_ARROW")
+    testing.AssertEqStr(tok.KindName(tok.TK_ELLIPSIS), "ELLIPSIS")
+    testing.AssertEqStr(tok.KindName(tok.TK_LAYOUT_ELEMENT), "LAYOUT_ELEMENT")
+    testing.AssertEqStr(tok.KindName(tok.TK_LAYOUT_ATTR_NAME), "LAYOUT_ATTR_NAME")
+    testing.AssertEqStr(tok.KindName(tok.TK_META), "META")
+    testing.AssertEqStr(tok.KindName(tok.TK_COMMENT_BLOCK), "COMMENT_BLOCK")
+    testing.AssertEqStr(tok.KindName(tok.TK_COUNT), "UNKNOWN")
+    testing.AssertEqStr(tok.KindName(0 - 1), "UNKNOWN")
+
+    // --- IsKeyword (tk_is_keyword) ---
+    testing.AssertTrue(tok.IsKeyword(tok.TK_KW_FUNC))
+    testing.AssertTrue(tok.IsKeyword(tok.TK_KW_MATCH))
+    testing.AssertFalse(tok.IsKeyword(tok.TK_UTF8_CHAR))
+    testing.AssertFalse(tok.IsKeyword(tok.TK_PLUS))
+    testing.AssertFalse(tok.IsKeyword(tok.TK_EOF))
+
+    // --- Token construction + value payloads ---
+    mut t := tok.New(tok.TK_INT, "42")
+    t.begin_line = 1 as u32
+    t.begin_col = 5 as u32
+    t.begin_index = 4 as u32
+    t.end_line = 1 as u32
+    t.end_col = 7 as u32
+    t.end_index = 6 as u32
+    t.length = 2 as u32
+    t.value = tok.ValueInt(42 as u64)
+    testing.AssertEqInt(t.kind, tok.TK_INT)
+    testing.AssertEqStr(tok.KindName(t.kind), "INT_LITERAL")
+    testing.AssertEqStr(t.lexeme, "42")
+    testing.AssertEqInt(t.begin_line as int, 1)
+    testing.AssertEqInt(t.end_col as int, 7)
+    testing.AssertEqInt(t.length as int, 2)
+    testing.AssertEqInt(t.value.kind, tok.TV_INT)
+    testing.AssertEqInt(t.value.ival as int, 42)
+    testing.AssertFalse(t.layout_mode)
+
+    fv := tok.ValueFloat(2.5)
+    testing.AssertEqInt(fv.kind, tok.TV_FLOAT)
+    testing.AssertEqFloat(fv.fval, 2.5, 0.000001)
+
+    sv := tok.ValueStr("hello")
+    testing.AssertEqInt(sv.kind, tok.TV_STRING)
+    testing.AssertEqStr(sv.sval, "hello")
+
+    cv := tok.ValueChar(1605 as u64) // U+0645 'م'
+    testing.AssertEqInt(cv.kind, tok.TV_CHAR)
+    testing.AssertEqInt(cv.ival as int, 1605)
+
+    bv := tok.ValueBool(true)
+    testing.AssertEqInt(bv.kind, tok.TV_BOOL)
+    testing.AssertTrue(bv.bval)
+
+    nv := tok.ValueNone()
+    testing.AssertEqInt(nv.kind, tok.TV_NONE)
+
+    // --- TokenStream ---
+    mut ts := tok.StreamNew("demo.salam")
+    testing.AssertEqInt(tok.StreamCount(ts), 0)
+    tok.StreamPush(ts, t)
+    tok.StreamPush(ts, tok.New(tok.TK_EOF, ""))
+    testing.AssertEqInt(tok.StreamCount(ts), 2)
+    first := tok.StreamAt(ts, 0)
+    testing.AssertEqStr(first.lexeme, "42")
+    testing.AssertEqInt(first.value.ival as int, 42)
+    last := tok.StreamAt(ts, 1)
+    testing.AssertEqStr(tok.KindName(last.kind), "EOF")
+    testing.AssertEqStr(tok.StreamFile(ts), "demo.salam")
+    tok.StreamFree(ts)
+
+    // --- SourceFile / Load ---
+    tmp := "compiler/tests_port/_tmp_source_test.txt"
+    _wrote := io.WriteFile(tmp, "hello salam\n")
+    mut sf := src.New()
+    testing.AssertTrue(src.Load(tmp, sf))
+    testing.AssertEqStr(sf.path, tmp)
+    testing.AssertEqStr(sf.text, "hello salam\n")
+    testing.AssertEqInt(sf.len, 12)
+    _removed := os.Remove(tmp)
+
+    mut missing := src.New()
+    testing.AssertFalse(src.Load("compiler/tests_port/_no_such_file.txt", missing))
+
+    os.Exit(testing.Summary())
+end

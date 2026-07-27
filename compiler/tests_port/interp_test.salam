@@ -1,0 +1,976 @@
+// Unit tests for the stage-A slice of salam/interp.salam (see its header):
+// value construction/printing, conversions, environments, arrays/maps/
+// structs/variants, arithmetic, comparisons, intrinsic dispatch, builtin
+// methods, typed pointers, and the call_func plumbing.
+//
+// Printing expectations were verified against the WORKING-TREE C reference
+// binary (compiler/src/interp built fresh in WSL /tmp — bin/salam at HEAD
+// predates the working tree's str repeat/upper/lower + bitwise-arith
+// additions): see tmp_ip/ref1.salam.
+//
+// NOTE: `HashMap {}` / `Vector {}` literals reaching the interp are usually
+// rewritten by sema into std/collections generic instantiations (observed:
+// struct_lit name=HashMap_str_i32), so the C smap/sarray builtin paths are
+// exercised end-to-end only for raw literals/arrays. The map/array asserts
+// here are therefore unit-level against the C source semantics (entry order,
+// free_hint slot reuse, index tombstones). Anything needing eval/exec_stmt
+// (do_print argument evaluation, module calls) stays minimal until stage B.
+package main
+
+import testing
+import os
+import io
+import str
+import mem
+import tok "../token.salam"
+import src "../source.salam"
+import lp "../langpack.salam"
+import lx "../lexer.salam"
+import ps "../parser.salam"
+import cc "../condcomp.salam"
+import sm "../semantic.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import ip "../interp.salam"
+
+// ===========================================================================
+// Stage-B harness: runs a whole program through the real pipeline (lex ->
+// parse -> condcomp prune -> sema -> ip.Run), the same one the driver uses,
+// so eval/exec_stmt/match/defer/ffi get exercised exactly like `salam exec`.
+// Returns false only when the harness itself couldn't reach interpretation
+// (lex/parse/sema failure) — that's always a bug in the fixture, not
+// something under test here.
+// ===========================================================================
+func run_src(path: str, code: str, out_text &: str, err_text &: str, rc &: int,
+             failed &: bool, errmsg &: str): bool:
+    _wr := io.WriteFile(path, code)
+    mut sf := src.New()
+    if !src.Load(path, sf):
+        ret false
+    end
+    quiet := lg.New(lg.LOG_OFF, false)
+    pack := lx.Detect(sf, lp.Load("en"))
+    mut toks := tok.StreamNew(path)
+    _lok := lx.Run(quiet, pack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    _pok := ps.Run(quiet, toks, a, prog)
+    tok.StreamFree(toks)
+    mut s := sm.New(quiet, path, lp.Code(pack))
+    sm.SetCc(s, cc.TableBuild("", Vector {} as Vector<str>))
+    _ck := cc.PruneProgram(a, quiet, path, s.cctab, prog)
+    sok := sm.Run(s, a, prog)
+    if !sok:
+        sm.Free(s)
+        at.FreeAst(a)
+        ret false
+    end
+    mut opts := ip.NewOptions()
+    opts.capture = true
+    mut vm := ip.New(quiet, "main", opts)
+    rc = ip.Run(vm, a, s, prog)
+    out_text = vm.out_text
+    err_text = vm.err_text
+    failed = vm.failed
+    errmsg = vm.errmsg
+    ip.Free(vm)
+    sm.Free(s)
+    at.FreeAst(a)
+    ret true
+end
+
+func reset_err(vm &: ip.Interp):
+    vm.failed = false
+    vm.errmsg = ""
+    vm.have_errspan = false
+end
+
+func main:
+    lgr := lg.New(2, false)
+    mut opts := ip.NewOptions()
+    opts.capture = true
+    mut vm := ip.New(lgr, "main", opts)
+    mut tree := at.NewAst()
+    nid := at.NewNode(tree, at.AST_BINARY)
+
+    // ===== value construction + printing (C to_str formats) =====
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValInt(42 as i64)), "42")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValInt((0 - 7) as i64)), "-7")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValFloat(2.5)), "2.5")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValFloat(1.0)), "1")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValFloat(0.1 + 0.2)), "0.3")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValFloat(1.0 / 3.0)), "0.333333333333333")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValFloat(1000000000000000000000.0)), "1e+21")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValFloat(0.000001)), "1e-06")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValFloat(3.14159)), "3.14159")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValFloat(0.0 - 9.0)), "-9")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValFloat(1.4142135623730951)), "1.4142135623731")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValBool(true)), "true")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValBool(false)), "false")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValNull()), "null")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValStr("hi")), "hi")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValChar(65 as i64)), "A")
+    mim := ip.ToStr(vm, ip.ValChar(1605 as i64)) // U+0645 ARABIC LETTER MEEM
+    testing.AssertEqInt(str.Len(mim), 2)
+    testing.AssertEqStr(mim, "م")
+    emo := ip.ToStr(vm, ip.ValChar(128512 as i64)) // U+1F600
+    testing.AssertEqInt(str.Len(emo), 4)
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValPtr(0 as i64, ip.PTR_OPAQUE)), "null")
+    testing.AssertEqStr(ip.ToStr(vm, ip.MkClosure(vm, 0, 0)), "<func>")
+    testing.AssertEqStr(ip.ToStr(vm, ip.ValModule(0)), "<module>")
+
+    // ===== conversions =====
+    testing.AssertEqInt64(ip.ToInt(ip.ValFloat(3.9)), 3 as i64)
+    testing.AssertEqInt64(ip.ToInt(ip.ValFloat(0.0 - 2.9)), (0 - 2) as i64)
+    testing.AssertEqInt64(ip.ToInt(ip.ValBool(true)), 1 as i64)
+    testing.AssertEqInt64(ip.ToInt(ip.ValStr("9")), 0 as i64)
+    testing.AssertTrue(ip.ToFloat(ip.ValInt(2 as i64)) == 2.0)
+    testing.AssertTrue(ip.ToFloat(ip.ValBool(true)) == 1.0)
+    testing.AssertFalse(ip.ToBool(ip.ValStr("")))
+    testing.AssertTrue(ip.ToBool(ip.ValStr("x")))
+    testing.AssertFalse(ip.ToBool(ip.ValInt(0 as i64)))
+    testing.AssertTrue(ip.ToBool(ip.ValInt(2 as i64)))
+    testing.AssertFalse(ip.ToBool(ip.ValFloat(0.0)))
+    testing.AssertFalse(ip.ToBool(ip.ValNull()))
+    testing.AssertFalse(ip.ToBool(ip.ValPtr(0 as i64, ip.PTR_OPAQUE)))
+    testing.AssertTrue(ip.ToBool(ip.ValPtr(8 as i64, ip.PTR_OPAQUE)))
+
+    // ===== environments (define / lookup / shadowing / overwrite) =====
+    g := vm.globals
+    ip.EnvDefine(vm, g, "x", ip.ValInt(1 as i64))
+    mut ov := ip.ValNull()
+    testing.AssertTrue(ip.EnvLookup(vm, g, "x", ov))
+    testing.AssertEqInt64(ov.i, 1 as i64)
+    child := ip.EnvNew(vm, g)
+    testing.AssertTrue(ip.EnvLookup(vm, child, "x", ov)) // parent chain
+    testing.AssertEqInt64(ov.i, 1 as i64)
+    testing.AssertFalse(ip.EnvLookupLocal(vm, child, "x", ov))
+    ip.EnvDefine(vm, child, "x", ip.ValInt(2 as i64)) // shadow
+    testing.AssertTrue(ip.EnvLookup(vm, child, "x", ov))
+    testing.AssertEqInt64(ov.i, 2 as i64)
+    testing.AssertTrue(ip.EnvLookup(vm, g, "x", ov)) // parent untouched
+    testing.AssertEqInt64(ov.i, 1 as i64)
+    ip.EnvDefine(vm, child, "x", ip.ValInt(3 as i64)) // overwrite in place
+    testing.AssertTrue(ip.EnvLookupLocal(vm, child, "x", ov))
+    testing.AssertEqInt64(ov.i, 3 as i64)
+    testing.AssertFalse(ip.EnvLookup(vm, child, "nope", ov))
+    // 20 bindings (crosses the C's dropped index threshold of 12)
+    repeat 20 with bi:
+        ip.EnvDefine(vm, child, "n" + bi, ip.ValInt(bi as i64))
+    end
+    testing.AssertTrue(ip.EnvLookup(vm, child, "n13", ov))
+    testing.AssertEqInt64(ov.i, 13 as i64)
+
+    // ===== arithmetic (ints) =====
+    r := ip.Arith(vm, tree, nid, tok.TK_PLUS, ip.ValInt(2 as i64), ip.ValInt(3 as i64))
+    testing.AssertEqInt(r.kind, ip.VAL_INT)
+    testing.AssertEqInt64(r.i, 5 as i64)
+    r2 := ip.Arith(vm, tree, nid, tok.TK_MINUS, ip.ValInt(2 as i64), ip.ValInt(5 as i64))
+    testing.AssertEqInt64(r2.i, (0 - 3) as i64)
+    r3 := ip.Arith(vm, tree, nid, tok.TK_STAR, ip.ValInt(6 as i64), ip.ValInt(7 as i64))
+    testing.AssertEqInt64(r3.i, 42 as i64)
+    r4 := ip.Arith(vm, tree, nid, tok.TK_SLASH, ip.ValInt(7 as i64), ip.ValInt(2 as i64))
+    testing.AssertEqInt64(r4.i, 3 as i64)
+    r5 := ip.Arith(vm, tree, nid, tok.TK_PERCENT, ip.ValInt(7 as i64), ip.ValInt(2 as i64))
+    testing.AssertEqInt64(r5.i, 1 as i64)
+    r6 := ip.Arith(vm, tree, nid, tok.TK_SHL, ip.ValInt(5 as i64), ip.ValInt(3 as i64))
+    testing.AssertEqInt64(r6.i, 40 as i64)
+    r7 := ip.Arith(vm, tree, nid, tok.TK_SHR, ip.ValInt((0 - 16) as i64), ip.ValInt(2 as i64))
+    testing.AssertEqInt64(r7.i, (0 - 4) as i64) // arithmetic shift
+    r8 := ip.Arith(vm, tree, nid, tok.TK_AMP, ip.ValInt(6 as i64), ip.ValInt(3 as i64))
+    testing.AssertEqInt64(r8.i, 2 as i64)
+    r9 := ip.Arith(vm, tree, nid, tok.TK_PIPE, ip.ValInt(6 as i64), ip.ValInt(3 as i64))
+    testing.AssertEqInt64(r9.i, 7 as i64)
+    r10 := ip.Arith(vm, tree, nid, tok.TK_CARET, ip.ValInt(6 as i64), ip.ValInt(3 as i64))
+    testing.AssertEqInt64(r10.i, 5 as i64)
+    // ** with integral result stays int, otherwise float (C pow fold)
+    r11 := ip.Arith(vm, tree, nid, tok.TK_POWER, ip.ValInt(2 as i64), ip.ValInt(10 as i64))
+    testing.AssertEqInt(r11.kind, ip.VAL_INT)
+    testing.AssertEqInt64(r11.i, 1024 as i64)
+    r12 := ip.Arith(vm, tree, nid, tok.TK_POWER, ip.ValInt(2 as i64),
+                    ip.ValInt((0 - 1) as i64))
+    testing.AssertEqInt(r12.kind, ip.VAL_FLOAT)
+    testing.AssertTrue(r12.f == 0.5)
+    // char is int-like
+    r13 := ip.Arith(vm, tree, nid, tok.TK_PLUS, ip.ValChar(65 as i64), ip.ValInt(1 as i64))
+    testing.AssertEqInt(r13.kind, ip.VAL_INT)
+    testing.AssertEqInt64(r13.i, 66 as i64)
+    // wrap-around semantics: 1<<63 = INT64_MIN; MIN/-1 = MIN; MIN%-1 = 0
+    rmin := ip.Arith(vm, tree, nid, tok.TK_SHL, ip.ValInt(1 as i64), ip.ValInt(63 as i64))
+    testing.AssertTrue(rmin.i < (0 as i64))
+    rdiv := ip.Arith(vm, tree, nid, tok.TK_SLASH, rmin, ip.ValInt((0 - 1) as i64))
+    testing.AssertTrue(rdiv.i == rmin.i)
+    rmod := ip.Arith(vm, tree, nid, tok.TK_PERCENT, rmin, ip.ValInt((0 - 1) as i64))
+    testing.AssertEqInt64(rmod.i, 0 as i64)
+
+    // ===== arithmetic (strings / floats) =====
+    rs := ip.Arith(vm, tree, nid, tok.TK_PLUS, ip.ValStr("n="), ip.ValInt(3 as i64))
+    testing.AssertEqStr(rs.s, "n=3")
+    rs2 := ip.Arith(vm, tree, nid, tok.TK_PLUS, ip.ValInt(3 as i64), ip.ValStr("x"))
+    testing.AssertEqStr(rs2.s, "3x")
+    rs3 := ip.Arith(vm, tree, nid, tok.TK_STAR, ip.ValStr("ab"), ip.ValInt(3 as i64))
+    testing.AssertEqStr(rs3.s, "ababab")
+    rs4 := ip.Arith(vm, tree, nid, tok.TK_STAR, ip.ValInt(3 as i64), ip.ValStr("ab"))
+    testing.AssertEqStr(rs4.s, "ababab")
+    rf := ip.Arith(vm, tree, nid, tok.TK_SLASH, ip.ValFloat(5.0), ip.ValFloat(2.0))
+    testing.AssertEqInt(rf.kind, ip.VAL_FLOAT)
+    testing.AssertTrue(rf.f == 2.5)
+    rf2 := ip.Arith(vm, tree, nid, tok.TK_PLUS, ip.ValInt(1 as i64), ip.ValFloat(2.5))
+    testing.AssertEqInt(rf2.kind, ip.VAL_FLOAT)
+    testing.AssertTrue(rf2.f == 3.5)
+    rf3 := ip.Arith(vm, tree, nid, tok.TK_PERCENT, ip.ValFloat(7.5), ip.ValFloat(2.0))
+    testing.AssertTrue(rf3.f == 1.5)
+
+    // ===== arithmetic errors (cooperative rt_error) =====
+    _e1 := ip.Arith(vm, tree, nid, tok.TK_SLASH, ip.ValInt(1 as i64), ip.ValInt(0 as i64))
+    testing.AssertTrue(vm.failed)
+    testing.AssertEqStr(vm.errmsg, "division by zero")
+    testing.AssertTrue(vm.have_errspan)
+    reset_err(vm)
+    _e2 := ip.Arith(vm, tree, nid, tok.TK_PERCENT, ip.ValInt(1 as i64), ip.ValInt(0 as i64))
+    testing.AssertEqStr(vm.errmsg, "modulo by zero")
+    reset_err(vm)
+    _e3 := ip.Arith(vm, tree, nid, tok.TK_SLASH, ip.ValFloat(1.0), ip.ValFloat(0.0))
+    testing.AssertEqStr(vm.errmsg, "division by zero")
+    reset_err(vm)
+    _e4 := ip.Arith(vm, tree, nid, tok.TK_EQ, ip.ValInt(1 as i64), ip.ValInt(2 as i64))
+    testing.AssertEqStr(vm.errmsg, "unsupported arithmetic operator")
+    reset_err(vm)
+
+    // ===== value_cmp / value_eq =====
+    testing.AssertEqInt(ip.ValueCmp(ip.ValStr("a"), ip.ValStr("b")), 0 - 1)
+    testing.AssertEqInt(ip.ValueCmp(ip.ValStr("b"), ip.ValStr("a")), 1)
+    testing.AssertEqInt(ip.ValueCmp(ip.ValStr("a"), ip.ValStr("a")), 0)
+    testing.AssertEqInt(ip.ValueCmp(ip.ValInt(2 as i64), ip.ValFloat(3.5)), 0 - 1)
+    testing.AssertTrue(ip.ValueEq(ip.ValInt(2 as i64), ip.ValFloat(2.0)))
+    testing.AssertTrue(ip.ValueEq(ip.ValBool(true), ip.ValInt(5 as i64)))
+    testing.AssertTrue(ip.ValueEq(ip.ValNull(), ip.ValNull()))
+    testing.AssertFalse(ip.ValueEq(ip.ValNull(), ip.ValInt(0 as i64)))
+    testing.AssertTrue(ip.ValueEq(ip.ValStr("q"), ip.ValStr("q")))
+    testing.AssertFalse(ip.ValueEq(ip.ValStr("q"), ip.ValStr("r")))
+    testing.AssertTrue(ip.ValueEq(ip.ValPtr(4 as i64, ip.PTR_U8),
+                                  ip.ValPtr(4 as i64, ip.PTR_I64)))
+    testing.AssertTrue(ip.ValueEq(ip.ValPtr(0 as i64, ip.PTR_U8), ip.ValNull()))
+    testing.AssertFalse(ip.ValueEq(ip.ValPtr(4 as i64, ip.PTR_U8), ip.ValNull()))
+
+    // ===== arrays (owned + views) =====
+    aid := ip.ArrayNew(vm, 0)
+    av := ip.MkArray(aid)
+    mut noargs := Vector {} as Vector<ip.Value>
+    capv := ip.CallBuiltinMethod(vm, tree, 0, av, "cap", noargs)
+    testing.AssertEqInt64(capv.i, 4 as i64) // C array_new min cap
+    ip.ArrayPush(vm, aid, ip.ValInt(1 as i64))
+    ip.ArrayPush(vm, aid, ip.ValFloat(2.5))
+    ip.ArrayPush(vm, aid, ip.ValStr("x"))
+    ip.ArrayPush(vm, aid, ip.ValBool(true))
+    testing.AssertEqStr(ip.ToStr(vm, av), "[1, 2.5, x, true]")
+    testing.AssertEqInt(ip.ArrayLen(vm, aid), 4)
+    testing.AssertEqStr(ip.ArrayGet(vm, aid, 2).s, "x")
+    ip.ArrayPush(vm, aid, ip.ValInt(9 as i64)) // 5th element: cap 4 -> 8
+    capv2 := ip.CallBuiltinMethod(vm, tree, 0, av, "cap", noargs)
+    testing.AssertEqInt64(capv2.i, 8 as i64)
+    ip.ArraySet(vm, aid, 0, ip.ValInt(7 as i64))
+    testing.AssertEqStr(ip.ToStr(vm, av), "[7, 2.5, x, true, 9]")
+    // views write through to the base; views of views compose
+    vid := ip.ArrayView(vm, aid, 1, 2)
+    vv := ip.MkArray(vid)
+    testing.AssertEqStr(ip.ToStr(vm, vv), "[2.5, x]")
+    ip.ArraySet(vm, vid, 0, ip.ValInt(5 as i64))
+    testing.AssertEqStr(ip.ToStr(vm, av), "[7, 5, x, true, 9]")
+    vid2 := ip.ArrayView(vm, vid, 1, 1)
+    testing.AssertEqStr(ip.ToStr(vm, ip.MkArray(vid2)), "[x]")
+
+    // array builtin methods
+    mut one := Vector {} as Vector<ip.Value>
+    one.push(ip.ValInt(1 as i64))
+    boxv := ip.CallBuiltinMethod(vm, tree, 0, av, "get", one)
+    testing.AssertEqInt(boxv.kind, ip.VAL_ARRAY) // `get` boxes the element
+    testing.AssertEqInt(ip.ArrayLen(vm, boxv.id), 1)
+    testing.AssertEqInt64(ip.ArrayGet(vm, boxv.id, 0).i, 5 as i64)
+    popv := ip.CallBuiltinMethod(vm, tree, 0, av, "pop", noargs)
+    testing.AssertEqInt64(popv.i, 9 as i64)
+    testing.AssertEqInt(ip.ArrayLen(vm, aid), 4)
+    frv := ip.CallBuiltinMethod(vm, tree, 0, av, "free", noargs)
+    testing.AssertEqInt(frv.kind, ip.VAL_NULL) // free is a no-op in the C
+    mut oob := Vector {} as Vector<ip.Value>
+    oob.push(ip.ValInt(9 as i64))
+    _e5 := ip.CallBuiltinMethod(vm, tree, 0, av, "get", oob)
+    testing.AssertTrue(vm.failed)
+    testing.AssertEqStr(vm.errmsg, "vector index 9 out of range (len 4)")
+    reset_err(vm)
+    empty_aid := ip.ArrayNew(vm, 0)
+    _e6 := ip.CallBuiltinMethod(vm, tree, 0, ip.MkArray(empty_aid), "pop", noargs)
+    testing.AssertEqStr(vm.errmsg, "pop from empty vector")
+    reset_err(vm)
+    _e7 := ip.CallBuiltinMethod(vm, tree, 0, ip.ValInt(1 as i64), "wat", noargs)
+    testing.AssertEqStr(vm.errmsg, "method 'wat' is not available on this value")
+    reset_err(vm)
+
+    // ===== maps (C smap semantics: entry order, free_hint reuse) =====
+    mid := ip.MapNew(vm)
+    mv := ip.MkMap(mid)
+    testing.AssertEqStr(ip.ToStr(vm, mv), "<map>")
+    ip.MapPut(vm, mid, ip.ValStr("a"), ip.ValInt(1 as i64))
+    ip.MapPut(vm, mid, ip.ValStr("b"), ip.ValInt(2 as i64))
+    ip.MapPut(vm, mid, ip.ValStr("c"), ip.ValInt(3 as i64))
+    testing.AssertEqInt(ip.MapSize(vm, mid), 3)
+    mut found := false
+    gv := ip.MapGet(vm, mid, ip.ValStr("b"), found)
+    testing.AssertTrue(found)
+    testing.AssertEqInt64(gv.i, 2 as i64)
+    ip.MapPut(vm, mid, ip.ValStr("b"), ip.ValInt(22 as i64)) // overwrite
+    testing.AssertEqInt(ip.MapSize(vm, mid), 3)
+    gv2 := ip.MapGet(vm, mid, ip.ValStr("b"), found)
+    testing.AssertEqInt64(gv2.i, 22 as i64)
+    testing.AssertTrue(ip.MapHas(vm, mid, ip.ValStr("c")))
+    testing.AssertFalse(ip.MapHas(vm, mid, ip.ValStr("z")))
+    testing.AssertTrue(ip.MapRemove(vm, mid, ip.ValStr("b")))
+    testing.AssertFalse(ip.MapRemove(vm, mid, ip.ValStr("b")))
+    testing.AssertEqInt(ip.MapSize(vm, mid), 2)
+    ip.MapPut(vm, mid, ip.ValStr("d"), ip.ValInt(4 as i64)) // reuses b's slot
+    // iteration order via the mapiter builtins: a, d, c (free_hint reuse)
+    itv := ip.CallBuiltinMethod(vm, tree, 0, mv, "iter", noargs)
+    testing.AssertEqInt(itv.kind, ip.VAL_MAPITER)
+    testing.AssertEqStr(ip.ToStr(vm, itv), "<mapiter>")
+    mut order := ""
+    until ip.ToBool(ip.CallBuiltinMethod(vm, tree, 0, itv, "has_next", noargs)):
+        k := ip.CallBuiltinMethod(vm, tree, 0, itv, "key", noargs)
+        v := ip.CallBuiltinMethod(vm, tree, 0, itv, "value", noargs)
+        order = order + k.s + "=" + ip.ToStr(vm, v) + ";"
+        _n := ip.CallBuiltinMethod(vm, tree, 0, itv, "next", noargs)
+    end
+    testing.AssertEqStr(order, "a=1;d=4;c=3;")
+    // mixed key kinds hash/compare by kind (char 65 != int 65)
+    ip.MapPut(vm, mid, ip.ValInt(65 as i64), ip.ValStr("int65"))
+    ip.MapPut(vm, mid, ip.ValChar(65 as i64), ip.ValStr("char65"))
+    ip.MapPut(vm, mid, ip.ValFloat(2.5), ip.ValStr("f"))
+    ip.MapPut(vm, mid, ip.ValBool(true), ip.ValStr("t"))
+    testing.AssertEqInt(ip.MapSize(vm, mid), 7)
+    gv3 := ip.MapGet(vm, mid, ip.ValInt(65 as i64), found)
+    testing.AssertEqStr(gv3.s, "int65")
+    gv4 := ip.MapGet(vm, mid, ip.ValChar(65 as i64), found)
+    testing.AssertEqStr(gv4.s, "char65")
+    gv5 := ip.MapGet(vm, mid, ip.ValFloat(2.5), found)
+    testing.AssertEqStr(gv5.s, "f")
+    gv6 := ip.MapGet(vm, mid, ip.ValBool(true), found)
+    testing.AssertEqStr(gv6.s, "t")
+    // growth past the initial 8 entries
+    mid2 := ip.MapNew(vm)
+    repeat 20 with mi:
+        ip.MapPut(vm, mid2, ip.ValInt(mi as i64), ip.ValInt((mi * 10) as i64))
+    end
+    testing.AssertEqInt(ip.MapSize(vm, mid2), 20)
+    gv7 := ip.MapGet(vm, mid2, ip.ValInt(17 as i64), found)
+    testing.AssertTrue(found)
+    testing.AssertEqInt64(gv7.i, 170 as i64)
+    // empty-map iterator
+    mid3 := ip.MapNew(vm)
+    itv2 := ip.CallBuiltinMethod(vm, tree, 0, ip.MkMap(mid3), "iter", noargs)
+    testing.AssertFalse(ip.ToBool(ip.CallBuiltinMethod(vm, tree, 0, itv2,
+                                                       "has_next", noargs)))
+    kk := ip.CallBuiltinMethod(vm, tree, 0, itv2, "key", noargs)
+    testing.AssertEqInt(kk.kind, ip.VAL_NULL)
+
+    // ===== structs / variants =====
+    sv := ip.MkStruct(vm, "P", 0, 2)
+    testing.AssertEqInt(sv.kind, ip.VAL_STRUCT)
+    testing.AssertEqInt(ip.StructFieldCount(vm, sv.id), 2)
+    ip.StructSetField(vm, sv.id, 0, "x", ip.ValInt(1 as i64))
+    ip.StructSetField(vm, sv.id, 1, "y", ip.ValInt(2 as i64))
+    testing.AssertEqStr(ip.ToStr(vm, sv), "P{x=1, y=2}")
+    testing.AssertEqInt(ip.StructFindField(vm, sv.id, "y"), 1)
+    testing.AssertEqInt(ip.StructFindField(vm, sv.id, "z"), 0 - 1)
+    ip.StructSetFieldVal(vm, sv.id, 1, ip.ValStr("s"))
+    testing.AssertEqStr(ip.ToStr(vm, sv), "P{x=1, y=s}")
+    testing.AssertEqStr(ip.StructFieldName(vm, sv.id, 0), "x")
+    testing.AssertEqStr(ip.ToStr(vm, ip.StructFieldValue(vm, sv.id, 1)), "s")
+    testing.AssertTrue(ip.ValueEq(sv, sv)) // identity, like the C pointer
+    sv2 := ip.MkStruct(vm, "P", 0, 0)
+    testing.AssertFalse(ip.ValueEq(sv, sv2))
+    // nested value printing
+    qv := ip.MkStruct(vm, "Q", 0, 1)
+    ip.StructSetField(vm, qv.id, 0, "v", av)
+    testing.AssertEqStr(ip.ToStr(vm, qv), "Q{v=[7, 5, x, true]}")
+    // variants print their boxed value ("" when unboxed)
+    testing.AssertEqStr(ip.ToStr(vm, ip.MkVariant(vm, 2, true, ip.ValStr("hi"))), "hi")
+    testing.AssertEqStr(ip.ToStr(vm, ip.MkVariant(vm, 0, false, ip.ValNull())), "")
+    // no operator methods on a def-less struct
+    mut sfound := false
+    _so := ip.TryStructOp(vm, tree, tok.TK_PLUS, sv, ip.ValInt(1 as i64), true, sfound)
+    testing.AssertFalse(sfound)
+    _so2 := ip.TryStructOp(vm, tree, tok.TK_PLUS, ip.ValInt(1 as i64),
+                           ip.ValInt(1 as i64), true, sfound)
+    testing.AssertFalse(sfound)
+
+    // ===== typenames / defaults =====
+    testing.AssertEqStr(ip.BaseTypename("Vector<int>"), "Vector")
+    testing.AssertEqStr(ip.BaseTypename("int[3]"), "int")
+    testing.AssertEqStr(ip.BaseTypename("u8*"), "u8")
+    testing.AssertEqStr(ip.BaseTypename("dyn Shape"), "dyn")
+    testing.AssertEqStr(ip.BaseTypename(""), "")
+    testing.AssertTrue(ip.IsIntTypename("i64"))
+    testing.AssertTrue(ip.IsIntTypename("size"))
+    testing.AssertFalse(ip.IsIntTypename("f32"))
+    testing.AssertTrue(ip.IsFloatTypename("float"))
+    testing.AssertFalse(ip.IsFloatTypename("int"))
+    testing.AssertEqInt(ip.PtrElemFromTypestr("u8*"), ip.PTR_U8)
+    testing.AssertEqInt(ip.PtrElemFromTypestr("byte"), ip.PTR_U8)
+    testing.AssertEqInt(ip.PtrElemFromTypestr("size"), ip.PTR_U64)
+    testing.AssertEqInt(ip.PtrElemFromTypestr("str"), ip.PTR_STR)
+    testing.AssertEqInt(ip.PtrElemFromTypestr("Foo*"), ip.PTR_OPAQUE)
+    testing.AssertEqInt(ip.PtrElemFromTypestr("f64"), ip.PTR_F64)
+    testing.AssertEqInt(ip.PtrElemSize(ip.PTR_U8), 1)
+    testing.AssertEqInt(ip.PtrElemSize(ip.PTR_I16), 2)
+    testing.AssertEqInt(ip.PtrElemSize(ip.PTR_F32), 4)
+    testing.AssertEqInt(ip.PtrElemSize(ip.PTR_F64), 8)
+    testing.AssertEqInt(ip.PtrElemSize(ip.PTR_OPAQUE), 8)
+    dft := ip.DefaultForType(vm, "int[3]")
+    testing.AssertEqInt(dft.kind, ip.VAL_ARRAY)
+    testing.AssertEqStr(ip.ToStr(vm, dft), "[0, 0, 0]")
+    testing.AssertEqStr(ip.ToStr(vm, ip.DefaultForType(vm, "str[2]")), "[, ]")
+    testing.AssertEqStr(ip.ToStr(vm, ip.DefaultForType(vm, "bool[2]")),
+                        "[false, false]")
+    testing.AssertEqStr(ip.ToStr(vm, ip.DefaultForType(vm, "f64[1]")), "[0]")
+    testing.AssertEqInt(ip.DefaultForType(vm, "int").kind, ip.VAL_NULL)
+    testing.AssertEqInt(ip.DefaultForType(vm, "").kind, ip.VAL_NULL)
+
+    // ===== compound_base =====
+    testing.AssertEqInt(ip.CompoundBase(tok.TK_PLUS_EQ), tok.TK_PLUS)
+    testing.AssertEqInt(ip.CompoundBase(tok.TK_SLASH_EQ), tok.TK_SLASH)
+    testing.AssertEqInt(ip.CompoundBase(tok.TK_SHR_EQ), tok.TK_SHR)
+    testing.AssertEqInt(ip.CompoundBase(tok.TK_CARET_EQ), tok.TK_CARET)
+    testing.AssertEqInt(ip.CompoundBase(tok.TK_PLUS), tok.TK_EOF)
+
+    // ===== intrinsic dispatch (the C INTRINSICS[] table) =====
+    testing.AssertEqInt(ip.IntrinsicLookup("sqrt"), 0)
+    testing.AssertEqInt(ip.IntrinsicLookup("pow"), 15)
+    testing.AssertEqInt(ip.IntrinsicLookup("time"), 21)
+    testing.AssertEqInt(ip.IntrinsicLookup("nope"), 0 - 1)
+    if SALAM_OS_WINDOWS:
+        testing.AssertEqInt(ip.IntrinsicLookup("SleepEx"), 22)
+        testing.AssertEqInt(ip.IntrinsicLookup("usleep"), 0 - 1)
+    else:
+        testing.AssertEqInt(ip.IntrinsicLookup("usleep"), 22)
+        testing.AssertEqInt(ip.IntrinsicLookup("SleepEx"), 0 - 1)
+    end
+    mut handled := false
+    mut ia := Vector {} as Vector<ip.Value>
+    ia.push(ip.ValFloat(9.0))
+    rq := ip.CallIntrinsic(vm, "sqrt", ia, handled)
+    testing.AssertTrue(handled)
+    testing.AssertEqFloat(rq.f, 3.0, 0.0000001)
+    ia.clear()
+    ia.push(ip.ValFloat(2.0))
+    ia.push(ip.ValFloat(10.0))
+    rp := ip.CallIntrinsic(vm, "pow", ia, handled)
+    testing.AssertEqInt(rp.kind, ip.VAL_FLOAT)
+    testing.AssertEqFloat(rp.f, 1024.0, 0.0000001)
+    ia.clear()
+    ia.push(ip.ValFloat(2.7))
+    testing.AssertEqFloat(ip.CallIntrinsic(vm, "floor", ia, handled).f, 2.0, 0.0)
+    ia.clear()
+    ia.push(ip.ValFloat(0.0 - 3.5))
+    testing.AssertEqFloat(ip.CallIntrinsic(vm, "fabs", ia, handled).f, 3.5, 0.0)
+    ia.clear()
+    ia.push(ip.ValFloat(7.5))
+    ia.push(ip.ValFloat(2.0))
+    testing.AssertEqFloat(ip.CallIntrinsic(vm, "fmod", ia, handled).f, 1.5, 0.0)
+    ia.clear()
+    ia.push(ip.ValStr("héllo"))
+    testing.AssertEqInt64(ip.CallIntrinsic(vm, "strlen", ia, handled).i, 6 as i64)
+    ia.clear()
+    ia.push(ip.ValStr("a"))
+    ia.push(ip.ValStr("b"))
+    testing.AssertTrue(ip.CallIntrinsic(vm, "strcmp", ia, handled).i < (0 as i64))
+    ia.clear()
+    ia.push(ip.ValStr("b"))
+    ia.push(ip.ValStr("a"))
+    testing.AssertTrue(ip.CallIntrinsic(vm, "strcmp", ia, handled).i > (0 as i64))
+    ia.clear()
+    ia.push(ip.ValStr("q"))
+    ia.push(ip.ValStr("q"))
+    testing.AssertEqInt64(ip.CallIntrinsic(vm, "strcmp", ia, handled).i, 0 as i64)
+    ia.clear()
+    ia.push(ip.ValStr("  42abc"))
+    testing.AssertEqInt64(ip.CallIntrinsic(vm, "strtol", ia, handled).i, 42 as i64)
+    ia.clear()
+    ia.push(ip.ValStr("-17"))
+    testing.AssertEqInt64(ip.CallIntrinsic(vm, "strtol", ia, handled).i,
+                          (0 - 17) as i64)
+    ia.clear()
+    ia.push(ip.ValStr("x"))
+    testing.AssertEqInt64(ip.CallIntrinsic(vm, "strtol", ia, handled).i, 0 as i64)
+    ia.clear()
+    ia.push(ip.ValStr("2.5x"))
+    testing.AssertEqFloat(ip.CallIntrinsic(vm, "strtod", ia, handled).f, 2.5, 0.0)
+    ia.clear()
+    tv := ip.CallIntrinsic(vm, "time", ia, handled)
+    testing.AssertTrue(handled)
+    testing.AssertTrue(tv.i > (0 as i64))
+    _z := ip.CallIntrinsic(vm, "zzz", ia, handled)
+    testing.AssertFalse(handled)
+
+    // ===== str builtin methods =====
+    hs := ip.ValStr("hello")
+    mut sa := Vector {} as Vector<ip.Value>
+    testing.AssertEqInt64(ip.CallBuiltinMethod(vm, tree, 0, ip.ValStr("héllo"),
+                                               "len", sa).i, 6 as i64)
+    sa.push(ip.ValInt(1 as i64))
+    testing.AssertEqStr(ip.CallBuiltinMethod(vm, tree, 0, ip.ValStr("ab"),
+                                             "concat", sa).s, "ab1")
+    sa.clear()
+    sa.push(ip.ValInt(1 as i64))
+    sa.push(ip.ValInt(3 as i64))
+    testing.AssertEqStr(ip.CallBuiltinMethod(vm, tree, 0, hs, "substr", sa).s, "ell")
+    sa.clear()
+    sa.push(ip.ValInt(1 as i64))
+    sa.push(ip.ValInt(99 as i64))
+    testing.AssertEqStr(ip.CallBuiltinMethod(vm, tree, 0, hs, "substr", sa).s, "ello")
+    sa.clear()
+    sa.push(ip.ValInt((0 - 5) as i64))
+    sa.push(ip.ValInt(2 as i64))
+    testing.AssertEqStr(ip.CallBuiltinMethod(vm, tree, 0, hs, "substr", sa).s, "he")
+    sa.clear()
+    sa.push(ip.ValStr("ll"))
+    testing.AssertEqInt64(ip.CallBuiltinMethod(vm, tree, 0, hs, "find", sa).i, 2 as i64)
+    testing.AssertEqInt64(ip.CallBuiltinMethod(vm, tree, 0, hs, "search", sa).i,
+                          2 as i64)
+    testing.AssertEqInt64(ip.CallBuiltinMethod(vm, tree, 0, hs, "indexOf", sa).i,
+                          2 as i64)
+    sa.clear()
+    sa.push(ip.ValStr("zz"))
+    testing.AssertEqInt64(ip.CallBuiltinMethod(vm, tree, 0, hs, "find", sa).i,
+                          (0 - 1) as i64)
+    sa.clear()
+    testing.AssertEqStr(ip.CallBuiltinMethod(vm, tree, 0, ip.ValStr(" \t x \n"),
+                                             "trim", sa).s, "x")
+    testing.AssertEqInt64(ip.CallBuiltinMethod(vm, tree, 0, ip.ValStr("42x"),
+                                               "to_int", sa).i, 42 as i64)
+    testing.AssertEqFloat(ip.CallBuiltinMethod(vm, tree, 0, ip.ValStr("2.5"),
+                                               "to_float", sa).f, 2.5, 0.0)
+    sa.push(ip.ValStr(","))
+    spl := ip.CallBuiltinMethod(vm, tree, 0, ip.ValStr("a,b,,c"), "split", sa)
+    testing.AssertEqStr(ip.ToStr(vm, spl), "[a, b, , c]")
+    sa.clear()
+    sa.push(ip.ValStr(""))
+    spl2 := ip.CallBuiltinMethod(vm, tree, 0, ip.ValStr("abc"), "split", sa)
+    testing.AssertEqStr(ip.ToStr(vm, spl2), "[abc]")
+    sa.clear()
+    testing.AssertEqStr(ip.CallBuiltinMethod(vm, tree, 0, ip.ValStr("AbC"),
+                                             "lower", sa).s, "abc")
+    testing.AssertEqStr(ip.CallBuiltinMethod(vm, tree, 0, ip.ValStr("AbC"),
+                                             "upper", sa).s, "ABC")
+    // C upper/lower are ASCII-only: the é bytes pass through untouched
+    testing.AssertEqStr(ip.CallBuiltinMethod(vm, tree, 0, ip.ValStr("héllo"),
+                                             "upper", sa).s, "HéLLO")
+    sa.push(ip.ValInt(3 as i64))
+    testing.AssertEqStr(ip.CallBuiltinMethod(vm, tree, 0, ip.ValStr("ab"),
+                                             "repeat", sa).s, "ababab")
+    sa.clear()
+    testing.AssertEqStr(ip.StrRepeat("ab", 3 as i64).s, "ababab")
+    testing.AssertEqStr(ip.StrRepeat("ab", 1 as i64).s, "ab")
+    testing.AssertEqStr(ip.StrRepeat("ab", 0 as i64).s, "")
+    testing.AssertEqStr(ip.StrRepeat("", 1 as i64).s, "")
+
+    // ===== typed pointers (numeric kinds; PTR_STR is PORT-TODO(B/ffi)) =====
+    pblk := mem.Allocate(64 as u64)
+    pa := pblk as i64
+    ip.PtrStore(pa, ip.PTR_I64, 0 as i64, ip.ValInt(123 as i64))
+    testing.AssertEqInt64(ip.PtrLoad(pa, ip.PTR_I64, 0 as i64).i, 123 as i64)
+    ip.PtrStore(pa, ip.PTR_U8, 8 as i64, ip.ValInt(300 as i64))
+    testing.AssertEqInt64(ip.PtrLoad(pa, ip.PTR_U8, 8 as i64).i, 44 as i64)
+    ip.PtrStore(pa, ip.PTR_I16, 5 as i64, ip.ValInt((0 - 2) as i64))
+    testing.AssertEqInt64(ip.PtrLoad(pa, ip.PTR_I16, 5 as i64).i, (0 - 2) as i64)
+    ip.PtrStore(pa, ip.PTR_F64, 3 as i64, ip.ValFloat(2.5))
+    pf := ip.PtrLoad(pa, ip.PTR_F64, 3 as i64)
+    testing.AssertEqInt(pf.kind, ip.VAL_FLOAT)
+    testing.AssertTrue(pf.f == 2.5)
+    mem.Free(pblk)
+
+    // ===== scripted input (do_input) =====
+    mut opts2 := ip.NewOptions()
+    opts2.has_input = true
+    opts2.input_data = "one\ntwo\nthree"
+    mut vm2 := ip.New(lgr, "main", opts2)
+    testing.AssertEqStr(ip.DoInput(vm2).s, "one")
+    testing.AssertEqStr(ip.DoInput(vm2).s, "two")
+    testing.AssertEqStr(ip.DoInput(vm2).s, "three")
+    testing.AssertEqStr(ip.DoInput(vm2).s, "")
+    mut ia2 := Vector {} as Vector<ip.Value>
+    inv := ip.CallIntrinsic(vm2, "salam_input", ia2, handled)
+    testing.AssertTrue(handled)
+    testing.AssertEqStr(inv.s, "") // input exhausted
+    ia2.free()
+
+    // ===== lookups on an empty program =====
+    testing.AssertEqInt(ip.FindFunc(vm, tree, "main", 0 - 1), 0)
+    testing.AssertEqInt(ip.FindStruct(vm, "X"), 0)
+    testing.AssertEqInt(ip.FindEnum(vm, "E"), 0)
+    testing.AssertEqInt(ip.FindModule(vm, "m"), 0)
+    testing.AssertEqInt(ip.FindExternDecl(vm, "printf"), 0)
+    testing.AssertEqInt(ip.FindImplMethod(vm, tree, "", "rank", 0), 0)
+    testing.AssertEqInt(ip.FindDefEnv(vm, 5), 0)
+
+    // ===== call_func plumbing (body execution needs stage B's exec_stmt) =====
+    fnid := at.NewNode(tree, at.AST_FUNC_DEF)
+    mut cargs := Vector {} as Vector<ip.Value>
+    cr := ip.CallFunc(vm, tree, fnid, vm.globals, false, ip.ValNull(), cargs)
+    testing.AssertEqInt(cr.kind, ip.VAL_NULL)
+    testing.AssertEqInt(vm.depth, 0)
+    vm.depth = ip.INTERP_MAX_DEPTH
+    _cd := ip.CallFunc(vm, tree, fnid, vm.globals, false, ip.ValNull(), cargs)
+    testing.AssertTrue(vm.failed)
+    testing.AssertEqStr(vm.errmsg, "call stack too deep (possible infinite recursion)")
+    vm.depth = 0
+    reset_err(vm)
+    cargs.free()
+
+    // ===== do_print capture (arg values are null until stage B's eval) =====
+    cn := at.NewNode(tree, at.AST_CALL)
+    l1 := at.NewNode(tree, at.AST_LITERAL)
+    l2 := at.NewNode(tree, at.AST_LITERAL)
+    at.AddChild(tree, cn, l1)
+    at.AddChild(tree, cn, l2)
+    ip.DoPrint(vm, tree, vm.globals, cn, true, false)
+    testing.AssertEqStr(vm.out_text, "null null\n") // l1/l2 are op=0 (TK_EOF) literals
+    ip.DoPrint(vm, tree, vm.globals, cn, false, true)
+    testing.AssertEqStr(vm.err_text, "null null")
+
+    // ===== timeout tick =====
+    ip.Tick(vm)
+    testing.AssertFalse(vm.failed)
+    vm.deadline_ms = 1 as i64 // long past
+    repeat 1048576:
+        ip.Tick(vm)
+    end
+    testing.AssertTrue(vm.failed)
+    testing.AssertEqStr(vm.errmsg, "execution timed out (possible infinite loop)")
+    reset_err(vm)
+
+    // ===========================================================================
+    // ===== Stage B: eval / exec_stmt / match / closures / defer / ffi =====
+    // Full-pipeline programs via run_src (see the harness above) — each
+    // exercises real source through lex/parse/sema/interp exactly like
+    // `salam exec`.
+    // ===========================================================================
+    tdir := "compiler/tests_port/tmp_ip"
+    _mk := os.Mkdir(tdir)
+
+    // ----- expressions: literals, arithmetic, bitwise, ternary, casts -----
+    mut o1 := ""
+    mut e1 := ""
+    mut rc1 := 0
+    mut f1 := false
+    mut m1 := ""
+    _k1 := run_src(tdir + "/expr.salam",
+        "func main:\n" +
+        "    println 2 + 3 * 4\n" +
+        "    println (2 + 3) * 4\n" +
+        "    println 2 ** 10\n" +
+        "    println 7 / 2\n" +
+        "    println 7 % 2\n" +
+        "    println 0 - 7\n" +
+        "    println 5 & 3, 5 | 2, 5 ^ 1, ~0\n" +
+        "    println 1 << 4, 256 >> 4\n" +
+        "    println true ? \"yes\" : \"no\"\n" +
+        "    println 3.9 as int\n" +
+        "    println (0 - 2.9) as int\n" +
+        "    println 65 as char\n" +
+        "    println \"ab\" * 3\n" +
+        "    println \"n=\" + 3\n" +
+        "    println !true, !false\n" +
+        "end\n",
+        o1, e1, rc1, f1, m1)
+    testing.AssertTrue(_k1)
+    testing.AssertFalse(f1)
+    testing.AssertEqInt(rc1, 0)
+    testing.AssertEqStr(o1,
+        "14\n20\n1024\n3\n1\n-7\n1 7 4 -1\n16 16\nyes\n3\n-2\nA\nababab\nn=3\nfalse true\n")
+
+    // ----- identifiers, member/index/slice, structs, this, operator overload -----
+    mut o2 := ""
+    mut e2 := ""
+    mut rc2 := 0
+    mut f2 := false
+    mut m2 := ""
+    _k2 := run_src(tdir + "/struct.salam",
+        "struct Point:\n" +
+        "    pub x: int = 0\n" +
+        "    pub y: int = 0\n" +
+        "    pub func sum(): int:\n" +
+        "        ret this.x + this.y\n" +
+        "    end\n" +
+        "    pub func operator_add(o: Point): Point:\n" +
+        "        ret Point { x = this.x + o.x, y = this.y + o.y }\n" +
+        "    end\n" +
+        "end\n" +
+        "func main:\n" +
+        "    p := Point { x = 3, y = 4 }\n" +
+        "    println p.x, p.y, p.sum()\n" +
+        "    q := p + Point { x = 1, y = 1 }\n" +
+        "    println q.x, q.y\n" +
+        "    a := [10, 20, 30, 40]\n" +
+        "    println a[0], a[3]\n" +
+        "    mid := a[1:3]\n" +
+        "    println mid[0], mid[1], len(mid)\n" +
+        "    s := \"hello\"\n" +
+        "    println s[0], s[4]\n" +
+        "end\n",
+        o2, e2, rc2, f2, m2)
+    testing.AssertTrue(_k2)
+    testing.AssertFalse(f2)
+    testing.AssertEqStr(o2, "3 4 7\n4 5\n10 40\n20 30 2\nh o\n")
+
+    // ----- calls: user func, closure/lambda, funcptr, module intrinsic path -----
+    mut o3 := ""
+    mut e3 := ""
+    mut rc3 := 0
+    mut f3 := false
+    mut m3 := ""
+    _k3 := run_src(tdir + "/calls.salam",
+        "import math\n" +
+        "func add(a: int, b: int): int:\n" +
+        "    ret a + b\n" +
+        "end\n" +
+        "func apply(f: func (int) int, x: int): int:\n" +
+        "    ret f(x)\n" +
+        "end\n" +
+        "func main:\n" +
+        "    println add(2, 3)\n" +
+        "    double := (x: int) => x * 2\n" +
+        "    println double(21)\n" +
+        "    println apply((x: int) => x + 100, 5)\n" +
+        "    println math.Sqrt(16.0)\n" +
+        "    println math.Floor(3.7)\n" +
+        "end\n",
+        o3, e3, rc3, f3, m3)
+    testing.AssertTrue(_k3)
+    testing.AssertFalse(f3)
+    testing.AssertEqStr(o3, "5\n42\n105\n4\n3\n")
+
+    // ----- control flow: if/else-if/else, until, repeat forms, for, break/continue -----
+    mut o4 := ""
+    mut e4 := ""
+    mut rc4 := 0
+    mut f4 := false
+    mut m4 := ""
+    _k4 := run_src(tdir + "/control.salam",
+        "func classify(n: int): str:\n" +
+        "    if n < 0: ret \"neg\"\n" +
+        "    else n == 0: ret \"zero\"\n" +
+        "    else: ret \"pos\"\n" +
+        "    end\n" +
+        "end\n" +
+        "func main:\n" +
+        "    println classify(0 - 1), classify(0), classify(5)\n" +
+        "    mut i := 0\n" +
+        "    mut total := 0\n" +
+        "    until i < 5:\n" +
+        "        total = total + i\n" +
+        "        i = i + 1\n" +
+        "    end\n" +
+        "    println total\n" +
+        "    repeat 3 with k:\n" +
+        "        println \"r\", k\n" +
+        "    end\n" +
+        "    repeat 1 to 5:\n" +
+        "        println \"once\"\n" +
+        "    end\n" +
+        "    mut sum := 0\n" +
+        "    repeat 0 to 20 by 2:\n" +
+        "        sum = sum + 1\n" +
+        "    end\n" +
+        "    println sum\n" +
+        "    mut j := 0\n" +
+        "    until j < 10:\n" +
+        "        j = j + 1\n" +
+        "        if j == 3: continue end\n" +
+        "        if j == 6: break end\n" +
+        "        println \"j\", j\n" +
+        "    end\n" +
+        "end\n",
+        o4, e4, rc4, f4, m4)
+    testing.AssertTrue(_k4)
+    testing.AssertFalse(f4)
+    testing.AssertEqStr(o4,
+        "neg zero pos\n10\nr 0\nr 1\nr 2\nonce\nonce\nonce\nonce\nonce\n11\n" +
+        "j 1\nj 2\nj 4\nj 5\n")
+
+    // ----- compound assignment, incdec, defer LIFO ordering -----
+    mut o5 := ""
+    mut e5 := ""
+    mut rc5 := 0
+    mut f5 := false
+    mut m5 := ""
+    _k5 := run_src(tdir + "/defer.salam",
+        "func work():\n" +
+        "    defer println \"first-deferred-runs-last\"\n" +
+        "    defer println \"second-deferred-runs-first\"\n" +
+        "    println \"body\"\n" +
+        "end\n" +
+        "func main:\n" +
+        "    mut n := 10\n" +
+        "    n += 5\n" +
+        "    n *= 2\n" +
+        "    n -= 3\n" +
+        "    println n\n" +
+        "    mut k := 0\n" +
+        "    k++\n" +
+        "    ++k\n" +
+        "    println k, k--, k\n" +
+        "    work()\n" +
+        "end\n",
+        o5, e5, rc5, f5, m5)
+    testing.AssertTrue(_k5)
+    testing.AssertFalse(f5)
+    testing.AssertEqStr(o5,
+        "27\n2 2 1\nbody\nsecond-deferred-runs-first\nfirst-deferred-runs-last\n")
+
+    // ----- match: int/string arms + else, and Variant tag dispatch/unwrap -----
+    mut o6 := ""
+    mut e6 := ""
+    mut rc6 := 0
+    mut f6 := false
+    mut m6 := ""
+    _k6 := run_src(tdir + "/match.salam",
+        "func describe(n: int): str:\n" +
+        "    ret match n:\n" +
+        "        1, 2 => \"small\"\n" +
+        "        3 => \"three\"\n" +
+        "        else => \"big\"\n" +
+        "    end\n" +
+        "end\n" +
+        "func main:\n" +
+        "    println describe(1), describe(3), describe(9)\n" +
+        "    mut v := 21 as Variant<i32, str>\n" +
+        "    label := match v:\n" +
+        "        i32 x => \"int \" + x\n" +
+        "        str s => \"text \" + s\n" +
+        "    end\n" +
+        "    println label\n" +
+        "    v = \"offline\"\n" +
+        "    label2 := match v:\n" +
+        "        i32 x => \"int \" + x\n" +
+        "        str s => \"text \" + s\n" +
+        "    end\n" +
+        "    println label2\n" +
+        "end\n",
+        o6, e6, rc6, f6, m6)
+    testing.AssertTrue(_k6)
+    testing.AssertFalse(f6)
+    testing.AssertEqStr(o6, "small three big\nint 21\ntext offline\n")
+
+    // ----- ffi: interpreter-native extern calls (interp_ffi.c) -----
+    mut o7 := ""
+    mut e7 := ""
+    mut rc7 := 0
+    mut f7 := false
+    mut m7 := ""
+    _k7 := run_src(tdir + "/ffi_ok.salam",
+        "extern:\n" +
+        "    func malloc(size: u64): void*\n" +
+        "    func free(ptr: void*)\n" +
+        "end\n" +
+        "func main:\n" +
+        "    p := malloc(8 as u64)\n" +
+        "    println p != null\n" +
+        "    free(p)\n" +
+        "end\n",
+        o7, e7, rc7, f7, m7)
+    testing.AssertTrue(_k7)
+    testing.AssertFalse(f7)
+    testing.AssertEqInt(rc7, 0)
+    testing.AssertEqStr(o7, "true\n")
+
+    // ffi: variadic extern is rejected by the interpreter (rt_error, not a crash).
+    mut o8 := ""
+    mut e8 := ""
+    mut rc8 := 0
+    mut f8 := false
+    mut m8 := ""
+    _k8 := run_src(tdir + "/ffi_variadic.salam",
+        "extern:\n" +
+        "    func printf(format: str, ...): int\n" +
+        "end\n" +
+        "func main:\n" +
+        "    printf(\"hi\\n\")\n" +
+        "end\n",
+        o8, e8, rc8, f8, m8)
+    testing.AssertTrue(_k8)
+    testing.AssertTrue(f8)
+    testing.AssertEqInt(rc8, 1)
+    testing.AssertEqStr(m8,
+        "extern function 'printf' is variadic, which the interpreter does not " +
+        "support (use 'salam run' instead)")
+
+    // ffi: a float-typed argument is rejected too. Uses a name that is
+    // neither an INTRINSICS[] entry (which would intercept it before the
+    // native-extern path — "fabs"/"pow"/etc are, so avoid those) nor a
+    // NATIVE_SYMS[] entry, so the float-arg guard is what fires.
+    mut o9 := ""
+    mut e9 := ""
+    mut rc9 := 0
+    mut f9 := false
+    mut m9 := ""
+    _k9 := run_src(tdir + "/ffi_float.salam",
+        "extern:\n" +
+        "    func salam_test_no_native_sym(x: f64): f64\n" +
+        "end\n" +
+        "func main:\n" +
+        "    _r := salam_test_no_native_sym(0.0 - 1.0)\n" +
+        "end\n",
+        o9, e9, rc9, f9, m9)
+    testing.AssertTrue(_k9)
+    testing.AssertTrue(f9)
+    testing.AssertEqInt(rc9, 1)
+    testing.AssertEqStr(m9,
+        "extern function 'salam_test_no_native_sym' takes a floating-point " +
+        "argument, which the interpreter does not support (use 'salam run' instead)")
+
+    // ----- runtime errors: cooperative unwinding (ip.failed, first error wins) -----
+    mut o10 := ""
+    mut e10 := ""
+    mut rc10 := 0
+    mut f10 := false
+    mut m10 := ""
+    _k10 := run_src(tdir + "/rt_err.salam",
+        "func main:\n" +
+        "    x := 1\n" +
+        "    y := x / 0\n" +
+        "    println y\n" +
+        "end\n",
+        o10, e10, rc10, f10, m10)
+    testing.AssertTrue(_k10)
+    testing.AssertTrue(f10)
+    testing.AssertEqInt(rc10, 1)
+    testing.AssertEqStr(m10, "division by zero")
+    testing.AssertEqStr(o10, "") // nothing printed after the failing statement
+
+    mut o11 := ""
+    mut e11 := ""
+    mut rc11 := 0
+    mut f11 := false
+    mut m11 := ""
+    _k11 := run_src(tdir + "/rt_err2.salam",
+        "func main:\n" +
+        "    a := [1, 2, 3]\n" +
+        "    println a[10]\n" +
+        "end\n",
+        o11, e11, rc11, f11, m11)
+    testing.AssertTrue(_k11)
+    testing.AssertTrue(f11)
+    testing.AssertEqInt(rc11, 1)
+    testing.AssertEqStr(m11, "index 10 out of range (len 3)")
+
+    // cleanup
+    noargs.free()
+    one.free()
+    oob.free()
+    ia.free()
+    sa.free()
+    ip.Free(vm)
+    ip.Free(vm2)
+    at.FreeAst(tree)
+    lg.Free(lgr)
+    os.Exit(testing.Summary())
+end

@@ -1,0 +1,221 @@
+// Equivalence runner for the layout port (gate for salam/sal_layout.salam):
+// mirrors compiler/src/driver/layout_build.c's driver_layout_build —
+// source(s) -> langpack detect -> lex -> parse -> condcomp prune ->
+// lo.Expand -> sm.Run -> lo.Generate -> lo.Document, writing outputs to the
+// current directory exactly like the C driver (module.html/.css/.js, or
+// style.css/script.js when multiple inputs are given).
+//
+// Usage: layout_run [inline] <file1.salam> [file2.salam ...]
+// (the flag is spelled "inline", no leading dashes: `salam run` intercepts
+// and silently swallows a real "--inline" argv before this program's main
+// ever sees argv, since it collides with the compiler's own global CLI
+// flag of the same name — verified empirically via os.Args() dumps.)
+//
+// Byte-comparable against HEAD `bin/salam layout build <same files>
+// [--inline]` (real dashes, since that IS the C CLI) run from the same
+// directory.
+package main
+
+import os
+import io
+import str
+import tok "../token.salam"
+import src "../source.salam"
+import lg "../logger.salam"
+import dg "../diag.salam"
+import i18 "../i18n.salam"
+import lp "../langpack.salam"
+import lx "../lexer.salam"
+import at "../ast.salam"
+import ps "../parser.salam"
+import cc "../condcomp.salam"
+import sm "../semantic.salam"
+import lo "../sal_layout.salam"
+
+// driver/layout_build.c module_of
+func module_of(path: str): str:
+    slash := str.LastIndex(path, "/")
+    bs := str.LastIndex(path, "\\")
+    mut base := 0
+    if slash >= 0:
+        base = slash + 1
+    end
+    if bs >= 0 && bs + 1 > base:
+        base = bs + 1
+    end
+    stem := str.Substr(path, base, str.Len(path) - base)
+    dot := str.LastIndex(stem, ".")
+    if dot >= 0:
+        ret str.Substr(stem, 0, dot)
+    end
+    ret stem
+end
+
+// driver/layout_build.c dir_of
+func dir_of(path: str): str:
+    slash := str.LastIndex(path, "/")
+    bs := str.LastIndex(path, "\\")
+    mut cut := slash
+    if bs >= 0 && (slash < 0 || bs > slash):
+        cut = bs
+    end
+    if cut < 0:
+        ret ""
+    end
+    ret str.Substr(path, 0, cut)
+end
+
+func write_file(path: str, content: str): bool:
+    n := io.WriteFile(path, content)
+    ret n == str.Len(content)
+end
+
+func main:
+    args := os.Args()
+    defer args.free()
+    mut argi := 1
+    mut inline_mode := false
+    if args.len() > argi && str.Equals(args[argi], "inline"):
+        inline_mode = true
+        argi += 1
+    end
+    if args.len() <= argi:
+        io.EPrintln("usage: layout_run [inline] <file1.salam> [file2.salam ...]")
+        os.Exit(2)
+    end
+
+    // driver.c: i18n_set_lang(opt.lang) (default "en"), then
+    // layout_schema_init(root) before ANY sema.Run on a layout file.
+    i18.SetLang("en")
+    sm.LayoutSchemaInit(sm.GetStdlibRoot())
+
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut diag := dg.NewDefault(2, false, 6) // PH_CODEGEN
+    mut rc := 0
+    minify_ws := true // !opt->no_minify (default on, like the CLI default)
+
+    n_inputs := args.len() - argi
+    multi := n_inputs > 1
+
+    mut modules := Vector {} as Vector<str>
+    mut htmls := Vector {} as Vector<str>
+    mut csss := Vector {} as Vector<str>
+    mut jss := Vector {} as Vector<str>
+    mut heads := Vector {} as Vector<str>
+    mut titles := Vector {} as Vector<str>
+    mut langs := Vector {} as Vector<str>
+    mut dirs := Vector {} as Vector<str>
+    defer modules.free()
+    defer htmls.free()
+    defer csss.free()
+    defer jss.free()
+    defer heads.free()
+    defer titles.free()
+    defer langs.free()
+    defer dirs.free()
+
+    mut i := argi
+    until i < args.len():
+        path := args[i]
+        i += 1
+        mut sf := src.New()
+        if !src.Load(path, sf):
+            io.EPrintln("cannot read source file '" + path + "'")
+            rc = 2
+            continue
+        end
+        pack := lx.Detect(sf, lp.Load("en"))
+        mut toks := tok.StreamNew(path)
+        _lok := lx.Run(quiet, pack, sf, toks)
+        mut a := at.NewAst()
+        mut prog := 0
+        _pok := ps.Run(quiet, toks, a, prog)
+        tok.StreamFree(toks)
+        // driver/layout_build.c builds ONE cc table and shares it across
+        // cc_prune_program, layout_expand and sema_run.
+        table := cc.TableBuild("", Vector {} as Vector<str>)
+        _ck := cc.PruneProgram(a, quiet, path, table, prog)
+
+        base_dir := dir_of(path)
+        eerr := lo.Expand(quiet, pack, table, a, prog, base_dir)
+        if eerr > 0:
+            rc = 1
+        end
+        mut s := sm.New(quiet, path, lp.Code(pack))
+        sm.SetCc(s, table) // sema takes ownership; freed by sm.Free below
+        _sok := sm.Run(s, a, prog)
+
+        lb := lo.FindLayout(a, prog)
+        if lb == 0:
+            io.EPrintln(path + " has no layout block")
+            sm.Free(s)
+            at.FreeAst(a)
+            continue
+        end
+        r := lo.Generate(quiet, diag, path, a, lb, minify_ws)
+        modules.push(module_of(path))
+        htmls.push(r.html)
+        csss.push(r.css)
+        jss.push(r.js)
+        heads.push(r.head)
+        titles.push(r.title)
+        langs.push(r.lang)
+        dirs.push(r.dir)
+        sm.Free(s)
+        at.FreeAst(a)
+    end
+
+    if dg.HasErrors(diag):
+        rc = 1
+    end
+
+    mut mcss := ""
+    mut mjs := ""
+    mut oi := 0
+    until oi < modules.len():
+        mod := modules.get(oi)[0]
+        mut r := lo.NewResult()
+        r.html = htmls.get(oi)[0]
+        r.css = csss.get(oi)[0]
+        r.js = jss.get(oi)[0]
+        r.head = heads.get(oi)[0]
+        r.title = titles.get(oi)[0]
+        r.lang = langs.get(oi)[0]
+        r.dir = dirs.get(oi)[0]
+        html_path := mod + ".html"
+        if inline_mode:
+            _w := write_file(html_path, lo.Document(r, true, "", "", minify_ws))
+        else multi:
+            _w := write_file(html_path,
+                             lo.Document(r, false, "style.css", "script.js", minify_ws))
+            if str.Len(r.css) > 0:
+                mcss += r.css
+            end
+            if str.Len(r.js) > 0:
+                mjs += r.js
+            end
+        else:
+            css_href := str.Len(r.css) > 0 ? mod + ".css" : ""
+            js_href := str.Len(r.js) > 0 ? mod + ".js" : ""
+            _w := write_file(html_path,
+                             lo.Document(r, false, css_href, js_href, minify_ws))
+            if str.Len(css_href) > 0:
+                _w1 := write_file(css_href, r.css)
+            end
+            if str.Len(js_href) > 0:
+                _w2 := write_file(js_href, r.js)
+            end
+        end
+        oi += 1
+    end
+    if multi && !inline_mode:
+        if str.Len(mcss) > 0:
+            _w3 := write_file("style.css", mcss)
+        end
+        if str.Len(mjs) > 0:
+            _w4 := write_file("script.js", mjs)
+        end
+    end
+    dg.Free(diag)
+    os.Exit(rc)
+end

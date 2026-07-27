@@ -84,19 +84,21 @@ built to a native executable; embedded **`layout:`** blocks compile to HTML/CSS/
 
 ### Build
 
-Requires a C compiler. [**tcc**](https://bellard.org/tcc/) is the default backend (bundled math, fast); [gcc](https://gcc.gnu.org/)/[clang](https://clang.llvm.org/) also work.
-
-The compiler lives in [`compiler/`](compiler/) (a self-contained subproject:
-`src/`, `std/`, `tests/`, `tools/`, `Makefile`, `CMakeLists.txt`). Build it from
-there:
+Salam is **self-hosted**: the compiler itself is written in Salam
+([`compiler/`](compiler/), one `.salam` file per module — no C source, no
+`make`/`cmake`). `compiler/salam` is the tracked, prebuilt bootstrap binary
+(Linux); it builds every new version of itself from `compiler/main.salam`:
 
 ```sh
-cd compiler
-sh tools/bash/build-compiler.sh   # quick build with tcc  ->  ./salam
-# or, with CMake (out-of-tree build, then run the test suite via ctest):
-cmake -B build && cmake --build build && ctest --test-dir build
-# or just: make            # (release build via the Makefile -> ../salam at the repo root)
+sh compiler/tools/bash/build-compiler.sh   # compiler/salam builds a fresh compiler/salam
 ```
+
+You still need a C compiler **installed on your system** to run `salam
+build` on your *own* programs, though — not to build the Salam compiler
+itself, but because its default backend transpiles to C and shells out to
+one at runtime. [**tcc**](https://bellard.org/tcc/) is the default (bundled
+math, fast); [gcc](https://gcc.gnu.org/)/[clang](https://clang.llvm.org/)
+also work (`--cc=gcc`).
 
 There is no separate runtime library: `salam build` emits the small C runtime
 (print/strcat/pow/alloc and optional bounds checks) inline into the generated C, so
@@ -123,10 +125,10 @@ salam build app.salam -DDEBUG                  # preprocessor define
 # format source in place (auto-detects nothing - pass --lang=fa for Persian files)
 salam format app.salam                         # reformat one file
 salam format                                   # reformat every .salam under the cwd, recursively
-salam format compiler/src/ compiler/tests/     # reformat given files and/or directories
+salam format compiler/ tests/                  # reformat given files and/or directories
 salam format --check                           # report files that need formatting (exit 1 if any)
 salam format app.salam --tabs                  # indent with tabs (convert spaces to tabs)
-salam format compiler/src/ --indent=2          # indent with 2 spaces per level
+salam format compiler/ --indent=2              # indent with 2 spaces per level
 salam format page.salam --lang=fa              # Persian source
 
 # REPLs
@@ -177,20 +179,14 @@ import libraries, and headers):
 sudo apt install clang lld llvm        # toolchain (or an official LLVM release)
 ```
 
-**Bundled sysroot (zero-setup for your users).** Build the compiler with
-`-DSALAM_BUNDLE_MINGW=ON` and a MinGW-w64 sysroot is staged into
-`<prefix>/share/salam/sysroots/<arch>-w64-mingw32/`; `salam build --target=…-windows-gnu`
-then discovers and passes it automatically, so end users need nothing extra:
-
-```sh
-# copy an existing sysroot (e.g. from the mingw-w64 package)
-cmake -B build -DSALAM_BUNDLE_MINGW=ON \
-      -DSALAM_MINGW_SYSROOT=/usr/x86_64-w64-mingw32
-# or download one (pin the hash for reproducibility)
-cmake -B build -DSALAM_BUNDLE_MINGW=ON \
-      -DSALAM_MINGW_URL=<llvm-mingw archive> -DSALAM_MINGW_SHA256=<hash>
-cmake --build build && cmake --install build
-```
+**Bundled sysroot (zero-setup for your users).** The old CMake build could
+stage a MinGW-w64 sysroot into `<prefix>/share/salam/sysroots/…` at *build
+time* via `-DSALAM_BUNDLE_MINGW=ON`; that mechanism doesn't have a
+self-hosted equivalent yet (no CMake anymore, and this ties into the
+multi-platform release/cross-compile pipeline that's still being reworked
+post-self-host — see `compiler/PORTING.md`). The *runtime* override below
+still works today, though: point `$SALAM_SYSROOTS` at a directory you staged
+yourself.
 
 Point `$SALAM_SYSROOTS` at a directory holding per-target sysroot subdirectories
 to override or add targets without rebuilding. Automatic discovery names them by
@@ -225,16 +221,18 @@ from the repository root. There are two modes:
 
 ### Development (live reload)
 
-The compiler tree is bind-mounted and `./salam` is **recompiled automatically on
-every change** to `src/` (powered by [`entr`](https://eradman.com/entrproject/), see
+The whole repo is bind-mounted and `compiler/salam` is **self-hosted rebuilt
+automatically on every change** to `compiler/*.salam` (powered by
+[`entr`](https://eradman.com/entrproject/), see
 [`tools/bash/docker-dev.sh`](compiler/tools/bash/docker-dev.sh)):
 
 ```sh
 docker compose -f compiler/docker/docker-compose.yml up dev   # build, then watch & rebuild
 ```
 
-Edit any file under `compiler/src/` on your host and the container rebuilds
-`./salam` incrementally. To get a shell inside the same environment:
+Edit any `compiler/*.salam` file on your host and the container rebuilds
+`compiler/salam` (the current binary builds the new one — no C source or
+`make` involved anymore). To get a shell inside the same environment:
 
 ```sh
 docker compose -f compiler/docker/docker-compose.yml run --rm dev sh
@@ -242,13 +240,15 @@ docker compose -f compiler/docker/docker-compose.yml run --rm dev sh
 
 ### Production (copy & build)
 
-The production stage runs `COPY .` then `make && make install`, baking a fully
-built, self-contained compiler into the image. `salam` is the entrypoint, and the
-repository root is mounted at `/work` so the example programs are reachable:
+The production stage runs `COPY .` then self-hosts `compiler/salam` from
+`compiler/main.salam` (there is no C source anymore — the tracked
+`compiler/salam` binary builds its own replacement), then installs it into
+the image. `salam` is the entrypoint, and the repository root is mounted at
+`/work` so the example programs are reachable:
 
 ```sh
 docker compose -f compiler/docker/docker-compose.yml build prod
-docker compose -f compiler/docker/docker-compose.yml run --rm prod build compiler/tests/en/basics/hello.salam --output=hello
+docker compose -f compiler/docker/docker-compose.yml run --rm prod build tests/en/basics/hello.salam --output=hello
 docker compose -f compiler/docker/docker-compose.yml run --rm prod layout build page.salam --inline
 docker compose -f compiler/docker/docker-compose.yml run --rm prod --help
 ```
@@ -632,12 +632,10 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[Bun](https://bun.sh/)** | JavaScript runtime, package manager, and bundler. Used in the Salam monorepo to manage workspaces and run dev servers. |
 | **[C ABI](https://en.wikipedia.org/wiki/Application_binary_interface)** | C Application Binary Interface, the low-level contract for how functions are called and data is laid out in memory. Salam's FFI and `extern` declarations rely on the C ABI. |
 | **[CI (Continuous Integration)](https://en.wikipedia.org/wiki/Continuous_integration)** | Automated pipeline that builds, tests, and lints every pull request. Salam uses GitHub Actions for CI. |
-| **[Clang](https://clang.llvm.org/)** | LLVM-based C compiler. One of the supported backends for building the Salam compiler. |
+| **[Clang](https://clang.llvm.org/)** | LLVM-based C compiler. Salam's self-hosted compiler shells out to it at runtime — as a `salam build --cc=clang` backend option, and for LLVM-target native linking (`salam llvm`). |
 | **[Cloudflare Workers](https://workers.cloudflare.com/)** | Serverless compute platform that runs JavaScript/TypeScript at the edge. The `runner/` workspace deploys to Cloudflare Workers via Wrangler. |
-| **[CMake](https://cmake.org/)** | Cross-platform build tool generator. The Salam compiler can be built with `cmake -B build && cmake --build build`. |
 | **[Codegen](https://en.wikipedia.org/wiki/Code_generation_(compiler))** | Code-generation backend. Transforms the compiler's AST and type information into target output (C source, LLVM IR, or a WebAssembly module). |
 | **[Codespell](https://github.com/codespell-project/codespell)** | Spell checker for source code and documentation. Run as a prek hook to catch typos. |
-| **[CTest](https://cmake.org/cmake/help/latest/manual/ctest.1.html)** | CMake's built-in test runner. Invoked with `ctest --test-dir build` after a CMake build of the compiler. |
 | **defer** | Salam keyword that schedules a statement or block to run at the end of the enclosing scope, regardless of how the scope is exited. |
 | **[Docker](https://www.docker.com/)** | Container platform used to build and run the Salam compiler in an isolated, reproducible environment. |
 | **[Docker Compose](https://docs.docker.com/compose/)** | Tool for defining and running multi-container Docker applications. Salam provides a `docker-compose.yml` in `compiler/docker/` with `dev` and `prod` service targets. |

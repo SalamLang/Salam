@@ -1,0 +1,411 @@
+// Flat single-file module (see salam/PORTING.md "Layout — FLAT").
+// ===== web_api.c =====
+// Port of compiler/src/web/web_api.c (~365 LOC) — the wasm/browser API
+// surface exposed to the online playground. File is `sal_web.salam`
+// (package is still `web`) because `web` collides with the stdlib module
+// name (compiler/std/web/), same reason as sal_core/sal_fmt/sal_layout —
+// see PORTING.md's Layout section.
+//
+// WASM/EMSCRIPTEN RELATIONSHIP — READ THIS FIRST:
+// The C file's four functions are each wrapped in `EMSCRIPTEN_KEEPALIVE`
+// and return `const char *`; under the real build (tools/build-wasm.sh)
+// they're compiled with emscripten and called directly from JS in the
+// browser playground (source in, string out — tokens/AST/symbols XML,
+// generated C/LLVM IR, or HTML/CSS/JS/interpreter-output text). This
+// Salam port does NOT run under emscripten and was never meant to: per
+// the task brief, "port" here means reproducing the C file's LOGIC
+// faithfully in Salam for the self-hosting effort's source fidelity, not
+// producing something wasm-deployable. A native/self-hosted `salam`
+// driver has no use for this module at all — it is 100% playground-only
+// plumbing (see the PORTING.md module-status note added alongside this
+// file). The only real reuse this module gets is as a orchestration
+// example: it calls into lexer/parser/condcomp/layout/semantic/interp/
+// codegen/llvm exactly like driver.c does, just returning a string
+// instead of writing files / exiting a process.
+//
+// C -> Salam deltas in this file specifically:
+// - `static char *g_result` + `set_result()` (a process-global buffer
+//   kept alive so the `const char *` survives the emscripten FFI
+//   boundary) is DROPPED ENTIRELY: every pub function below just returns
+//   an owned `str` value directly. There is no FFI boundary to survive in
+//   a pure Salam call, so the cache/strdup dance has no job left to do.
+// - `arena_t *arena` is dropped everywhere (each helper's Vector/HashMap/
+//   struct fields own their own memory; `at.FreeAst`/`sm.Free` free what
+//   the C's single `arena_free(arena)` released in one shot).
+// - `front_end()` (arena, ast_node_t**, sema_result_t**, char**, out-params
+//   via double pointers) becomes a private `front_end` helper that
+//   RETURNS a `FrontEnd` record by value (a plain struct with a default
+//   per field, same idiom as `lo.NewResult()`/`LoExpand` in
+//   sal_layout.salam) — Salam has no way to hand back a freshly built
+//   struct through a `T **out` parameter, so a value-returning record is
+//   the idiomatic replacement.
+// - `logger_set_diag_source` + a `tmpfile()` diagf that the logger's rich
+//   rust-style renderer writes every lex/parse/sema diagnostic into, later
+//   `slurp()`'d into a string: NOT reproducible as-is. The ported
+//   `logger.salam` always writes phase/level lines straight to stderr
+//   (`SetDiagSource` is state-only; the rich sink is unwired — see
+//   logger.salam's own header and the identical caveat already recorded
+//   for the semantic/interp ports in PORTING.md). What IS capturable is
+//   `sm.Sema.diag` (a `dg.Engine` that DOES collect real diagnostics with
+//   spans) via `dg.RenderAll`, which is what every diagnostic string
+//   returned below is built from. Net effect: a source file that fails at
+//   the LEXER or PARSER stage returns a plain "compilation failed" (no
+//   lexer/parser diagnostics survive to be rendered) instead of the C
+//   build's full rust-style error text; a file that fails at the SEMA
+//   stage (by far the common case for a playground) renders identically
+//   in spirit (same `dg.RenderAll`/rust-style/human-format call the C
+//   build's diag engine used internally). This is a pre-existing,
+//   project-wide gap (driver/logger-wave TODO per PORTING.md), not new.
+// - `salam_web_run_app`'s C `interp_options_t` points BOTH out and err at
+//   ONE `FILE *outf`, so the program's stdout and its own runtime-error
+//   text land in a single ordered stream; this port's `ip.Options.capture`
+//   fills two SEPARATE buffers (`Interp.out_text`/`err_text`). They are
+//   joined the same way the C joins `out` and the diagf-rendered warnings
+//   tail (a `\n` inserted only if the preceding text doesn't already end
+//   in one), so the total text matches; only a pathological interleaving
+//   of stdout writes and a mid-run runtime error could observe a
+//   different join point than the C's single-file byte order.
+package web
+
+import str
+import lg "logger.salam"
+import i18 "i18n.salam"
+import lp "langpack.salam"
+import src "source.salam"
+import tok "token.salam"
+import at "ast.salam"
+import ps "parser.salam"
+import cc "condcomp.salam"
+import sm "semantic.salam"
+import lx "lexer.salam"
+import ip "interp.salam"
+import lo "sal_layout.salam"
+import dg "diag.salam"
+import x "xml.salam"
+import cg "codegen.salam"
+import lv "llvm.salam"
+
+// static bool ready (ensure_schema) — module-global, prefixed per
+// PORTING.md ("package globals share one flat C namespace").
+mut g_wb_schema_ready := false
+
+// front_end()'s ast_node_t**/sema_result_t**/char** out-params collapsed
+// into one record (see file header). Field defaults mirror LoExpand's
+// pattern in sal_layout.salam (throwaway values, always overwritten).
+// E017: fields must be `pub` to be readable even from this same file's
+// free functions.
+struct FrontEnd:
+    pub ok: bool = false
+    pub a: at.Ast = at.NewAst()
+    pub program: int = 0
+    pub s: sm.Sema = sm.New(lg.New(lg.LOG_OFF, false), "", "en")
+    pub entry: str = ""
+    pub diag: str = ""
+end
+
+// ensure_schema (web_api.c) — layout_schema_init(NULL) once per process,
+// guarded exactly like the C's function-local `static bool ready`.
+func ensure_schema():
+    if !g_wb_schema_ready:
+        sm.LayoutSchemaInit(sm.GetStdlibRoot())
+        g_wb_schema_ready = true
+    end
+end
+
+// src_from_string (web_api.c) — an in-memory "main.salam" source, no file
+// on disk (the playground always compiles a pasted snippet).
+func src_from_string(source: str): src.SourceFile:
+    mut sf := src.New()
+    sf.path = "main.salam"
+    sf.text = source
+    sf.len = str.Len(source)
+    ret sf
+end
+
+// front_end (web_api.c) — lex -> parse -> condcomp prune -> layout expand
+// -> sema, exactly the C's sequence (single in-memory file, no package/
+// import resolution — the playground only ever compiles one snippet).
+// On failure `diag` holds rendered sema diagnostics (or a translated
+// fallback message); `a`/`program`/`s` are always populated (even on
+// failure) so callers can free them unconditionally.
+func front_end(lgr: lg.Logger, lang: str, source: str): FrontEnd:
+    mut r := FrontEnd {}
+    i18.SetLang(lang)
+    sm.SetStdlibRoot("")
+    pack := lp.Load(lang)
+    if pack == lp.LP_NONE:
+        r.diag = i18.Tr("unknown language pack")
+        ret r
+    end
+    r.entry = lp.Entry(pack)
+    sf := src_from_string(source)
+
+    mut toks := tok.StreamNew(sf.path)
+    lok := lx.Run(lgr, pack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    mut pok := ps.Run(lgr, toks, a, prog)
+    tok.StreamFree(toks)
+
+    table := cc.TableBuild("", Vector {} as Vector<str>)
+    if !cc.PruneProgram(a, lgr, sf.path, table, prog):
+        pok = false
+    end
+
+    _eerr := lo.Expand(lgr, pack, table, a, prog, "")
+    mut s := sm.New(lgr, sf.path, lp.Code(pack))
+    sm.SetCc(s, table) // sema takes ownership; freed by sm.Free
+    sok := sm.Run(s, a, prog)
+
+    r.a = a
+    r.program = prog
+    r.s = s
+    if !lok || !pok || !sok:
+        rendered := dg.RenderAll(s.diag, sf.text, sf.len, dg.DIAG_STYLE_RUST,
+                                 dg.DIAG_FORMAT_HUMAN, false)
+        r.diag = str.Len(rendered) > 0 ? rendered : i18.Tr("compilation failed")
+        ret r
+    end
+    r.ok = true
+    ret r
+end
+
+// ---------------------------------------------------------------------------
+// Public API (E088: pub section last)
+// ---------------------------------------------------------------------------
+
+// salam_web_run_app — compile + interpret `source`, returning the program's
+// captured output (stdout + its own runtime-error text) followed by any
+// rendered sema diagnostics (warnings that didn't fail the build), or the
+// compile-failure diagnostic text if the front end failed.
+pub func RunApp(source: str, lang: str): str:
+    lgr := lg.New(lg.LOG_WARN, false)
+    fe := front_end(lgr, lang, source)
+    if !fe.ok:
+        d := fe.diag
+        sm.Free(fe.s)
+        at.FreeAst(fe.a)
+        ret d
+    end
+
+    mut opts := ip.NewOptions()
+    opts.capture = true
+    opts.lang = lang
+    opts.timeout_ms = 3000
+    mut vm := ip.New(lgr, fe.entry, opts)
+    _rc := ip.Run(vm, fe.a, fe.s, fe.program)
+
+    mut result := vm.out_text
+    if str.Len(vm.err_text) > 0:
+        if str.Len(result) > 0 && !str.EndsWith(result, "\n"):
+            result += "\n"
+        end
+        result += vm.err_text
+    end
+    warn_text := dg.RenderAll(fe.s.diag, source, str.Len(source), dg.DIAG_STYLE_RUST,
+                              dg.DIAG_FORMAT_HUMAN, false)
+    if str.Len(warn_text) > 0:
+        if str.Len(result) > 0 && !str.EndsWith(result, "\n"):
+            result += "\n"
+        end
+        result += warn_text
+    end
+
+    ip.Free(vm)
+    sm.Free(fe.s)
+    at.FreeAst(fe.a)
+    ret result
+end
+
+// salam_web_build_layout — compile `source` and render its `layout:` block
+// to a full standalone (inline) HTML document.
+pub func BuildLayout(source: str, lang: str): str:
+    ensure_schema()
+    lgr := lg.New(lg.LOG_WARN, false)
+    fe := front_end(lgr, lang, source)
+    if !fe.ok:
+        d := fe.diag
+        sm.Free(fe.s)
+        at.FreeAst(fe.a)
+        ret d
+    end
+
+    lb := lo.FindLayout(fe.a, fe.program)
+    if lb == 0:
+        sm.Free(fe.s)
+        at.FreeAst(fe.a)
+        ret i18.Tr("this program has no layout block; " +
+                   "use a `layout:` block to build an HTML page")
+    end
+
+    mut diag_e := dg.New(lgr, lg.PH_CODEGEN)
+    res := lo.Generate(lgr, diag_e, "main.salam", fe.a, lb, false)
+    mut result := ""
+    if dg.HasErrors(diag_e):
+        rendered := dg.RenderAll(diag_e, source, str.Len(source), dg.DIAG_STYLE_RUST,
+                                 dg.DIAG_FORMAT_HUMAN, false)
+        result = str.Len(rendered) > 0 ? rendered : i18.Tr("layout build failed")
+    else:
+        result = lo.Document(res, true, "", "", false)
+    end
+    dg.Free(diag_e)
+    sm.Free(fe.s)
+    at.FreeAst(fe.a)
+    ret result
+end
+
+// salam_web_emit — run the pipeline up to `phase` and serialize that
+// stage: "tokens"/"ast"/"symbols" -> XML; "html"/"css"/"js" -> the layout
+// block's generated output; "c" -> generated C (.h then .c, driver-style
+// section comments); "llvm" -> generated LLVM IR. Reimplements the
+// front-end steps inline (does NOT call `front_end`) because it must be
+// able to return after the tokens/ast/symbols stage, before the full
+// pipeline (and thus a pass/fail verdict) exists — same shape as the C.
+pub func Emit(source: str, lang: str, phase: str): str:
+    i18.SetLang(lang)
+    sm.SetStdlibRoot("")
+    lgr := lg.New(lg.LOG_WARN, false)
+    pack := lp.Load(lang)
+    if pack == lp.LP_NONE:
+        ret i18.Tr("unknown language pack")
+    end
+    entry := lp.Entry(pack)
+    sf := src_from_string(source)
+
+    mut toks := tok.StreamNew(sf.path)
+    lok := lx.Run(lgr, pack, sf, toks)
+    if str.Equals(phase, "tokens"):
+        mut w := x.New()
+        x.Decl(w)
+        tok.TokensToXml(w, toks)
+        r := x.Str(w)
+        x.Free(w)
+        tok.StreamFree(toks)
+        ret r
+    end
+
+    mut a := at.NewAst()
+    mut prog := 0
+    mut pok := ps.Run(lgr, toks, a, prog)
+    tok.StreamFree(toks)
+    table := cc.TableBuild("", Vector {} as Vector<str>)
+    if !cc.PruneProgram(a, lgr, sf.path, table, prog):
+        pok = false
+    end
+    if str.Equals(phase, "ast"):
+        mut w := x.New()
+        x.Decl(w)
+        at.ToXml(w, a, prog)
+        r := x.Str(w)
+        x.Free(w)
+        cc.TableFree(table) // never handed to a Sema on this early exit
+        at.FreeAst(a)
+        ret r
+    end
+
+    ensure_schema()
+    _eerr := lo.Expand(lgr, pack, table, a, prog, "")
+    mut s := sm.New(lgr, sf.path, lp.Code(pack))
+    sm.SetCc(s, table) // sema takes ownership from here on
+    sok := sm.Run(s, a, prog)
+    if str.Equals(phase, "symbols"):
+        mut w := x.New()
+        x.Decl(w)
+        sm.SymbolsToXml(w, s)
+        r := x.Str(w)
+        x.Free(w)
+        sm.Free(s)
+        at.FreeAst(a)
+        ret r
+    end
+
+    if !lok || !pok || !sok:
+        rendered := dg.RenderAll(s.diag, sf.text, sf.len, dg.DIAG_STYLE_RUST,
+                                 dg.DIAG_FORMAT_HUMAN, false)
+        r := str.Len(rendered) > 0 ? rendered : i18.Tr("compilation failed")
+        sm.Free(s)
+        at.FreeAst(a)
+        ret r
+    end
+
+    if str.Equals(phase, "html") || str.Equals(phase, "css") || str.Equals(phase, "js"):
+        ensure_schema()
+        lb := lo.FindLayout(a, prog)
+        if lb == 0:
+            sm.Free(s)
+            at.FreeAst(a)
+            ret i18.Tr("this program has no layout block; " +
+                       "use a `layout:` block to build an HTML page")
+        end
+        mut diag_e := dg.New(lgr, lg.PH_CODEGEN)
+        res := lo.Generate(lgr, diag_e, "main.salam", a, lb, false)
+        if dg.HasErrors(diag_e):
+            rendered := dg.RenderAll(diag_e, sf.text, sf.len, dg.DIAG_STYLE_RUST,
+                                     dg.DIAG_FORMAT_HUMAN, false)
+            r := str.Len(rendered) > 0 ? rendered : i18.Tr("layout build failed")
+            dg.Free(diag_e)
+            sm.Free(s)
+            at.FreeAst(a)
+            ret r
+        end
+        css_href := str.Len(res.css) > 0 ? "style.css" : ""
+        js_href := str.Len(res.js) > 0 ? "script.js" : ""
+        mut part := ""
+        if str.Equals(phase, "html"):
+            part = lo.Document(res, false, css_href, js_href, false)
+        else str.Equals(phase, "css"):
+            part = res.css
+        else:
+            part = res.js
+        end
+        dg.Free(diag_e)
+        sm.Free(s)
+        at.FreeAst(a)
+        ret part
+    end
+
+    if str.Equals(phase, "c"):
+        cgo := cg.Run(lgr, s, a, prog, "main", false, false, "main.salam", entry, "")
+        mut b := ""
+        if str.Len(cgo.h_src) > 0:
+            b += "/* ===== salam_mod_main.h ===== */\n"
+            b += cgo.h_src
+            b += "\n"
+        end
+        if str.Len(cgo.c_src) > 0:
+            b += "/* ===== salam_mod_main.c ===== */\n"
+            b += cgo.c_src
+        end
+        sm.Free(s)
+        at.FreeAst(a)
+        ret b
+    end
+
+    if str.Equals(phase, "llvm"):
+        llo := lv.Run(lgr, s, a, prog, "main", entry)
+        mut b := ""
+        if !llo.ok:
+            b += "; note: the LLVM backend supports a subset of Salam.\n; "
+            b += str.Len(llo.error) > 0 ? llo.error : "unsupported construct"
+            b += "\n\n"
+        end
+        if str.Len(llo.ll_src) > 0:
+            b += llo.ll_src
+        else llo.ok:
+            b += "; (no IR produced)\n"
+        end
+        sm.Free(s)
+        at.FreeAst(a)
+        ret b
+    end
+
+    r := i18.Tr("compilation failed")
+    sm.Free(s)
+    at.FreeAst(a)
+    ret r
+end
+
+// salam_web_version
+pub func Version(): str:
+    ret "Salam WebAssembly playground"
+end

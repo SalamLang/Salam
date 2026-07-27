@@ -1,0 +1,617 @@
+// Flat merge of the salam/condcomp port (see salam/PORTING.md "Layout — FLAT"):
+// condcomp_table.c + condcomp_fold.c (+ condcomp.h) — one package `condcomp`,
+// one file. Import alias for consumers: `cc`.
+//
+// C -> Salam decisions for this module:
+// - cc_val_kind_t -> pub int constants CC_BOOL / CC_STR (cross-package enums
+//   don't resolve; see PORTING.md "Cross-module enums").
+// - cc_const_t -> pub struct Entry; cc_table_t -> pub struct Table holding a
+//   Vector<Entry>. The arena parameter is gone: TableFree releases the table.
+// - `const cc_const_t *cc_table_lookup` (NULL = absent) -> `Lookup` returning
+//   an int index into the table (-1 = absent, the C NULL) plus Entry*
+//   accessors (EntryName/EntryKind/EntryBool/EntryStr) — consumers cannot
+//   build cross-package struct literals, and index+accessors avoids needing
+//   a sentinel Entry.
+// - ast_node_t* -> NodeId ints into an ast.Ast (0 = C NULL), matching the ast
+//   port; all tree rewiring goes through the get-copy -> mutate -> Put
+//   protocol described in salam/ast.salam.
+// - The host `#if defined(_WIN32)`/... ladder in cc_push_host_defs becomes a
+//   Salam compile-time `if SALAM_OS_*` ladder — the defines the *running*
+//   compiler was built with play the role of the C compiler's predefines.
+// - LOG_E_AT(log, PH_PARSER, file, span, msg) -> lg.LogAt(log, lg.PH_PARSER,
+//   lg.LOG_ERROR, file, line, col, msg) using the condition node's begin span.
+// - Deviation: EvalBool (a pub wrapper over the private cc_fold_bool) is
+//   exported so tests/consumers can evaluate a compile-time condition without
+//   pruning; the C kept the folder entirely static.
+package condcomp
+
+import tok "token.salam"
+import lg "logger.salam"
+import at "ast.salam"
+import str
+
+// cc_val_kind_t (consts must precede globals — E086)
+pub const CC_BOOL := 0
+pub const CC_STR := 1
+
+const K_CC_NUM_BOOL_FLAGS := 20
+
+// ===== condcomp_table.c =====
+// s_all_bool_flags[] (NULL terminator dropped; fixed length instead).
+k_cc_all_bool_flags := [
+    "SALAM_OS_WINDOWS", "SALAM_OS_WIN64",   "SALAM_OS_WIN32",
+    "SALAM_OS_WASM",    "SALAM_OS_ANDROID", "SALAM_OS_LINUX",
+    "SALAM_OS_MAC",     "SALAM_OS_BSD",     "SALAM_OS_FREEBSD",
+    "SALAM_OS_OPENBSD", "SALAM_OS_NETBSD",  "SALAM_OS_UNIX",
+    "SALAM_ARCH_X64",   "SALAM_ARCH_X86",   "SALAM_ARCH_ARM64",
+    "SALAM_ARCH_ARM",   "SALAM_ARCH_WASM",  "SALAM_MEM_DEBUG",
+    "SALAM_ASAN",       "SALAM_SAFE"
+] as str[20]
+
+// cc_const_t
+pub struct Entry:
+    pub name: str = ""
+    pub kind: int = 0 // CC_BOOL
+    pub bval: bool = false
+    pub sval: str = "" // "" where C used NULL
+end
+
+// struct cc_table_t
+pub struct Table:
+    pub entries: Vector<Entry> = Vector {}
+end
+
+// ===== condcomp_fold.c (private result types) =====
+// cc_bres_t (fields pub: E017 makes non-pub fields unusable even inside
+// the defining package's free functions)
+struct Bres:
+    pub ok: bool = false
+    pub bval: bool = false
+end
+
+// cc_scalar_t
+struct Scalar:
+    pub ok: bool = false
+    pub is_str: bool = false
+    pub bval: bool = false
+    pub sval: str = ""
+end
+
+// ===== condcomp_table.c (private helpers) =====
+
+// cc_push_bool
+func cc_push_bool(t &: Table, name: str, val: bool):
+    t.entries.push(Entry { name = name, kind = CC_BOOL, bval = val, sval = "" })
+end
+
+// cc_push_str
+func cc_push_str(t &: Table, name: str, val: str):
+    t.entries.push(Entry { name = name, kind = CC_STR, bval = false, sval = val })
+end
+
+// cc_push_host_defs — the C #if/#elif ladder on the host compiler's
+// predefines becomes a compile-time if-ladder on this compiler's own
+// SALAM_OS_*/SALAM_ARCH_* defines (order preserved from the C).
+func cc_push_host_defs(t &: Table):
+    if SALAM_OS_WINDOWS:
+        cc_push_bool(t, "SALAM_OS_WINDOWS", true)
+        cc_push_str(t, "SALAM_OS", "windows")
+        if SALAM_OS_WIN64:
+            cc_push_bool(t, "SALAM_OS_WIN64", true)
+        else:
+            cc_push_bool(t, "SALAM_OS_WIN32", true)
+        end
+    else SALAM_OS_WASM:
+        cc_push_bool(t, "SALAM_OS_WASM", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "wasm")
+    else SALAM_OS_ANDROID:
+        cc_push_bool(t, "SALAM_OS_ANDROID", true)
+        cc_push_bool(t, "SALAM_OS_LINUX", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "android")
+    else SALAM_OS_LINUX:
+        cc_push_bool(t, "SALAM_OS_LINUX", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "linux")
+    else SALAM_OS_MAC:
+        cc_push_bool(t, "SALAM_OS_MAC", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "mac")
+    else SALAM_OS_FREEBSD:
+        cc_push_bool(t, "SALAM_OS_FREEBSD", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "freebsd")
+    else SALAM_OS_OPENBSD:
+        cc_push_bool(t, "SALAM_OS_OPENBSD", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "openbsd")
+    else SALAM_OS_NETBSD:
+        cc_push_bool(t, "SALAM_OS_NETBSD", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "netbsd")
+    else:
+        cc_push_str(t, "SALAM_OS", "unknown")
+    end
+
+    if SALAM_ARCH_X64:
+        cc_push_bool(t, "SALAM_ARCH_X64", true)
+        cc_push_str(t, "SALAM_ARCH", "x64")
+    else SALAM_ARCH_X86:
+        cc_push_bool(t, "SALAM_ARCH_X86", true)
+        cc_push_str(t, "SALAM_ARCH", "x86")
+    else SALAM_ARCH_ARM64:
+        cc_push_bool(t, "SALAM_ARCH_ARM64", true)
+        cc_push_str(t, "SALAM_ARCH", "arm64")
+    else SALAM_ARCH_ARM:
+        cc_push_bool(t, "SALAM_ARCH_ARM", true)
+        cc_push_str(t, "SALAM_ARCH", "arm")
+    else SALAM_ARCH_WASM:
+        cc_push_bool(t, "SALAM_ARCH_WASM", true)
+        cc_push_str(t, "SALAM_ARCH", "wasm")
+    end
+end
+
+// trip_has
+func trip_has(hay: str, needle: str): bool:
+    ret str.Contains(hay, needle)
+end
+
+// cc_push_target_defs
+func cc_push_target_defs(t &: Table, trip: str):
+    mut bits64 := false
+    if trip_has(trip, "x86_64") || trip_has(trip, "amd64"):
+        bits64 = true
+        cc_push_bool(t, "SALAM_ARCH_X64", true)
+        cc_push_str(t, "SALAM_ARCH", "x64")
+    else trip_has(trip, "aarch64") || trip_has(trip, "arm64"):
+        bits64 = true
+        cc_push_bool(t, "SALAM_ARCH_ARM64", true)
+        cc_push_str(t, "SALAM_ARCH", "arm64")
+    else trip_has(trip, "i386") || trip_has(trip, "i486") ||
+         trip_has(trip, "i586") || trip_has(trip, "i686") ||
+         trip_has(trip, "x86"):
+        cc_push_bool(t, "SALAM_ARCH_X86", true)
+        cc_push_str(t, "SALAM_ARCH", "x86")
+    else trip_has(trip, "wasm64"):
+        bits64 = true
+        cc_push_bool(t, "SALAM_ARCH_WASM", true)
+        cc_push_str(t, "SALAM_ARCH", "wasm")
+    else trip_has(trip, "wasm") || trip_has(trip, "wasm32"):
+        cc_push_bool(t, "SALAM_ARCH_WASM", true)
+        cc_push_str(t, "SALAM_ARCH", "wasm")
+    else trip_has(trip, "arm"):
+        cc_push_bool(t, "SALAM_ARCH_ARM", true)
+        cc_push_str(t, "SALAM_ARCH", "arm")
+    end
+
+    if trip_has(trip, "windows") || trip_has(trip, "mingw") || trip_has(trip, "win32"):
+        cc_push_bool(t, "SALAM_OS_WINDOWS", true)
+        cc_push_str(t, "SALAM_OS", "windows")
+        cc_push_bool(t, bits64 ? "SALAM_OS_WIN64" : "SALAM_OS_WIN32", true)
+    else trip_has(trip, "darwin") || trip_has(trip, "macos") ||
+         trip_has(trip, "macosx") || trip_has(trip, "apple") ||
+         trip_has(trip, "ios"):
+        cc_push_bool(t, "SALAM_OS_MAC", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "mac")
+    else trip_has(trip, "android"):
+        cc_push_bool(t, "SALAM_OS_ANDROID", true)
+        cc_push_bool(t, "SALAM_OS_LINUX", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "android")
+    else trip_has(trip, "linux"):
+        cc_push_bool(t, "SALAM_OS_LINUX", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "linux")
+    else trip_has(trip, "freebsd"):
+        cc_push_bool(t, "SALAM_OS_FREEBSD", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "freebsd")
+    else trip_has(trip, "openbsd"):
+        cc_push_bool(t, "SALAM_OS_OPENBSD", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "openbsd")
+    else trip_has(trip, "netbsd"):
+        cc_push_bool(t, "SALAM_OS_NETBSD", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "netbsd")
+    else trip_has(trip, "wasi") || trip_has(trip, "emscripten") ||
+         trip_has(trip, "wasm"):
+        cc_push_bool(t, "SALAM_OS_WASM", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "wasm")
+    else:
+        cc_push_str(t, "SALAM_OS", "unknown")
+    end
+end
+
+// cc_push_missing_bool_defaults
+func cc_push_missing_bool_defaults(t &: Table):
+    repeat K_CC_NUM_BOOL_FLAGS with i:
+        if Lookup(t, k_cc_all_bool_flags[i]) < 0:
+            cc_push_bool(t, k_cc_all_bool_flags[i], false)
+        end
+    end
+end
+
+// cc_push_define — "NAME" -> bool true, "NAME=value" -> string value.
+func cc_push_define(t &: Table, def: str):
+    eq := str.IndexOf(def, "=")
+    if eq < 0:
+        cc_push_bool(t, def, true)
+        ret
+    end
+    cc_push_str(t, str.Substr(def, 0, eq),
+                str.Substr(def, eq + 1, str.Len(def) - eq - 1))
+end
+
+// ===== condcomp_fold.c (private helpers) =====
+
+// cc_fold_defined_call — `defined(NAME)` -> whether NAME is in the table.
+func cc_fold_defined_call(a: at.Ast, t: Table, id: int): Bres:
+    n := at.Get(a, id)
+    if n.a == 0:
+        ret Bres {}
+    end
+    callee := at.Get(a, n.a)
+    if callee.kind != at.AST_IDENTIFIER || str.Len(callee.name) == 0 ||
+       !str.Equals(callee.name, "defined"):
+        ret Bres {}
+    end
+    if n.list.len() != 1:
+        ret Bres {}
+    end
+    argid := n.list.get(0)[0]
+    if argid == 0:
+        ret Bres {}
+    end
+    arg := at.Get(a, argid)
+    if arg.kind != at.AST_IDENTIFIER || str.Len(arg.name) == 0:
+        ret Bres {}
+    end
+    ret Bres { ok = true, bval = Lookup(t, arg.name) >= 0 }
+end
+
+// cc_fold_scalar — a bool or string compile-time scalar.
+func cc_fold_scalar(a: at.Ast, t: Table, id: int, lenient: bool): Scalar:
+    if id == 0:
+        ret Scalar {}
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_LITERAL:
+        if n.value_kind == tok.TV_BOOL:
+            ret Scalar { ok = true, is_str = false, bval = n.value_bool, sval = "" }
+        end
+        if n.value_kind == tok.TV_STRING:
+            ret Scalar { ok = true, is_str = true, bval = false, sval = n.value_str }
+        end
+        ret Scalar {}
+    end
+    if n.kind == at.AST_IDENTIFIER:
+        ci := Lookup(t, n.name)
+        if ci < 0:
+            if lenient:
+                // Unknown name in lenient (top-level) mode folds to false.
+                ret Scalar { ok = true, is_str = false, bval = false, sval = "" }
+            end
+            ret Scalar {}
+        end
+        e := t.entries.get(ci)[0]
+        if e.kind == CC_BOOL:
+            ret Scalar { ok = true, is_str = false, bval = e.bval, sval = "" }
+        end
+        ret Scalar { ok = true, is_str = true, bval = false, sval = e.sval }
+    end
+    if (n.kind == at.AST_UNARY && n.op == tok.TK_NOT) ||
+       (n.kind == at.AST_BINARY &&
+        (n.op == tok.TK_AND || n.op == tok.TK_OR ||
+         n.op == tok.TK_EQ || n.op == tok.TK_NE)) ||
+       n.kind == at.AST_CALL:
+        r := cc_fold_bool(a, t, id, lenient)
+        if !r.ok:
+            ret Scalar {}
+        end
+        ret Scalar { ok = true, is_str = false, bval = r.bval, sval = "" }
+    end
+    ret Scalar {}
+end
+
+// cc_fold_bool — !, &&, || (short-circuit), ==/!= (bool or string),
+// defined(...), plain scalars.
+func cc_fold_bool(a: at.Ast, t: Table, id: int, lenient: bool): Bres:
+    if id == 0:
+        ret Bres {}
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_UNARY && n.op == tok.TK_NOT:
+        r := cc_fold_bool(a, t, n.a, lenient)
+        if !r.ok:
+            ret Bres {}
+        end
+        ret Bres { ok = true, bval = !r.bval }
+    end
+    if n.kind == at.AST_BINARY && (n.op == tok.TK_AND || n.op == tok.TK_OR):
+        l := cc_fold_bool(a, t, n.a, lenient)
+        if l.ok:
+            if n.op == tok.TK_AND && !l.bval:
+                ret Bres { ok = true, bval = false }
+            end
+            if n.op == tok.TK_OR && l.bval:
+                ret Bres { ok = true, bval = true }
+            end
+        end
+        if !l.ok:
+            ret Bres {}
+        end
+        r := cc_fold_bool(a, t, n.b, lenient)
+        if !r.ok:
+            ret Bres {}
+        end
+        v := n.op == tok.TK_AND ? (l.bval && r.bval) : (l.bval || r.bval)
+        ret Bres { ok = true, bval = v }
+    end
+    if n.kind == at.AST_BINARY && (n.op == tok.TK_EQ || n.op == tok.TK_NE):
+        l := cc_fold_scalar(a, t, n.a, lenient)
+        r := cc_fold_scalar(a, t, n.b, lenient)
+        if !l.ok || !r.ok || l.is_str != r.is_str:
+            ret Bres {}
+        end
+        eq := l.is_str ? str.Equals(l.sval, r.sval) : l.bval == r.bval
+        ret Bres { ok = true, bval = n.op == tok.TK_EQ ? eq : !eq }
+    end
+    if n.kind == at.AST_CALL:
+        ret cc_fold_defined_call(a, t, id)
+    end
+    s := cc_fold_scalar(a, t, id, lenient)
+    if !s.ok || s.is_str:
+        ret Bres {}
+    end
+    ret Bres { ok = true, bval = s.bval }
+end
+
+// cc_cond_has_ref — true when the condition references a name/call, i.e. it
+// is a candidate for compile-time folding even below the top level.
+func cc_cond_has_ref(a: at.Ast, id: int): bool:
+    if id == 0:
+        ret false
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_IDENTIFIER || n.kind == at.AST_CALL:
+        ret true
+    end
+    if n.kind == at.AST_UNARY && n.op == tok.TK_NOT:
+        ret cc_cond_has_ref(a, n.a)
+    end
+    if n.kind == at.AST_BINARY &&
+       (n.op == tok.TK_AND || n.op == tok.TK_OR ||
+        n.op == tok.TK_EQ || n.op == tok.TK_NE):
+        ret cc_cond_has_ref(a, n.a) || cc_cond_has_ref(a, n.b)
+    end
+    ret false
+end
+
+// cc_resolve_if — returns the surviving node id (0 = whole if pruned away).
+func cc_resolve_if(a &: at.Ast, log: lg.Logger, file: str, t: Table,
+                   id: int, top_level: bool, ok &: bool): int:
+    n := at.Get(a, id)
+    mut r := Bres {}
+    if top_level || cc_cond_has_ref(a, n.a):
+        r = cc_fold_bool(a, t, n.a, top_level)
+    end
+    if r.ok:
+        taken := r.bval ? n.b : n.c
+        if taken == 0:
+            ret 0
+        end
+        if at.KindOf(a, taken) == at.AST_IF:
+            ret cc_resolve_if(a, log, file, t, taken, top_level, ok)
+        end
+        cc_process_list(a, log, file, t, taken, top_level, ok)
+        ret taken
+    end
+    if top_level:
+        cond := at.Get(a, n.a)
+        lg.LogAt(log, lg.PH_PARSER, lg.LOG_ERROR, file,
+                 cond.begin_line as int, cond.begin_col as int,
+                 "top-level if condition must be a compile-time constant")
+        ok = false
+        ret 0
+    end
+    cc_process_list(a, log, file, t, n.b, false, ok)
+    if n.c != 0:
+        if at.KindOf(a, n.c) == at.AST_IF:
+            newc := cc_resolve_if(a, log, file, t, n.c, false, ok)
+            mut n2 := at.Get(a, id)
+            n2.c = newc
+            at.Put(a, id, n2)
+        else:
+            cc_process_list(a, log, file, t, n.c, false, ok)
+        end
+    end
+    ret id
+end
+
+// cc_resolve_slot — rewires one child slot, recursing into everything else.
+func cc_resolve_slot(a &: at.Ast, log: lg.Logger, file: str, t: Table,
+                     id: int, ok &: bool): int:
+    if id == 0:
+        ret 0
+    end
+    k := at.KindOf(a, id)
+    if k == at.AST_IF:
+        ret cc_resolve_if(a, log, file, t, id, false, ok)
+    end
+    if k == at.AST_BLOCK || k == at.AST_PROGRAM:
+        cc_process_list(a, log, file, t, id, false, ok)
+        ret id
+    end
+    n := at.Get(a, id)
+    nty := cc_resolve_slot(a, log, file, t, n.ty, ok)
+    na := cc_resolve_slot(a, log, file, t, n.a, ok)
+    nb := cc_resolve_slot(a, log, file, t, n.b, ok)
+    nc := cc_resolve_slot(a, log, file, t, n.c, ok)
+    nd := cc_resolve_slot(a, log, file, t, n.d, ok)
+    mut n2 := at.Get(a, id)
+    n2.ty = nty
+    n2.a = na
+    n2.b = nb
+    n2.c = nc
+    n2.d = nd
+    at.Put(a, id, n2)
+    repeat at.ChildCount(a, id) with i0:
+        cid := at.Child(a, id, i0)
+        nid := cc_resolve_slot(a, log, file, t, cid, ok)
+        if nid != cid:
+            mut n3 := at.Get(a, id)
+            n3.list.set(i0, nid)
+            at.Put(a, id, n3)
+        end
+    end
+    repeat at.DimCount(a, id) with i1:
+        did := at.Dim(a, id, i1)
+        ndid := cc_resolve_slot(a, log, file, t, did, ok)
+        if ndid != did:
+            mut n4 := at.Get(a, id)
+            n4.dims.set(i1, ndid)
+            at.Put(a, id, n4)
+        end
+    end
+    repeat at.CaptureCount(a, id) with i2:
+        capid := at.Capture(a, id, i2)
+        ncap := cc_resolve_slot(a, log, file, t, capid, ok)
+        if ncap != capid:
+            mut n5 := at.Get(a, id)
+            n5.captures.set(i2, ncap)
+            at.Put(a, id, n5)
+        end
+    end
+    ret id
+end
+
+// cc_process_list — rebuilds `owner`'s statement list, resolving each `if`
+// and splicing a surviving block's statements in place of the if.
+func cc_process_list(a &: at.Ast, log: lg.Logger, file: str, t: Table,
+                     owner: int, top_level: bool, ok &: bool):
+    // Snapshot the original child ids (the vec_t walked in C).
+    mut orig := Vector {} as Vector<int>
+    defer orig.free()
+    n0 := at.Get(a, owner)
+    repeat n0.list.len() with i0:
+        orig.push(n0.list.get(i0)[0])
+    end
+    mut out := Vector {} as Vector<int>
+    repeat orig.len() with i1:
+        it := orig.get(i1)[0]
+        if it != 0 && at.KindOf(a, it) == at.AST_IF:
+            resolved := cc_resolve_if(a, log, file, t, it, top_level, ok)
+            if resolved != 0:
+                if at.KindOf(a, resolved) == at.AST_BLOCK:
+                    rn := at.Get(a, resolved)
+                    repeat rn.list.len() with j:
+                        out.push(rn.list.get(j)[0])
+                    end
+                else:
+                    out.push(resolved)
+                end
+            end
+        else:
+            out.push(cc_resolve_slot(a, log, file, t, it, ok))
+        end
+    end
+    // *list = out; — free the replaced vector (the C arena freed in bulk).
+    mut n1 := at.Get(a, owner)
+    n1.list.free()
+    n1.list = out
+    at.Put(a, owner, n1)
+end
+
+// ===== condcomp.h / condcomp_table.c / condcomp_fold.c (public) =====
+
+// cc_table_build — target_triple "" = host defines (C NULL). `defines` are
+// the CLI -D entries ("NAME" or "NAME=value"); pass an empty Vector for none.
+pub func TableBuild(target_triple: str, defines: Vector<str>): Table:
+    mut t := Table {}
+    if str.Len(target_triple) != 0:
+        cc_push_target_defs(t, target_triple)
+    else:
+        cc_push_host_defs(t)
+    end
+    repeat defines.len() with i:
+        cc_push_define(t, defines.get(i)[0])
+    end
+    cc_push_missing_bool_defaults(t)
+    ret t
+end
+
+// Releases the table storage (the C version lived in an arena).
+pub func TableFree(t &: Table):
+    t.entries.free()
+end
+
+// cc_table_lookup — first entry named `name`, or -1 (the C NULL).
+pub func Lookup(t: Table, name: str): int:
+    repeat t.entries.len() with i:
+        e := t.entries.get(i)[0]
+        if str.Equals(e.name, name):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+pub func EntryCount(t: Table): int:
+    ret t.entries.len()
+end
+
+pub func EntryName(t: Table, i: int): str:
+    e := t.entries.get(i)[0]
+    ret e.name
+end
+
+// CC_BOOL or CC_STR
+pub func EntryKind(t: Table, i: int): int:
+    e := t.entries.get(i)[0]
+    ret e.kind
+end
+
+pub func EntryBool(t: Table, i: int): bool:
+    e := t.entries.get(i)[0]
+    ret e.bval
+end
+
+pub func EntryStr(t: Table, i: int): str:
+    e := t.entries.get(i)[0]
+    ret e.sval
+end
+
+// Evaluates a compile-time boolean condition (port deviation: pub wrapper
+// over cc_fold_bool). Returns whether the expression folded; on true the
+// value is written to `bval`. `lenient` treats unknown identifiers as false
+// (the top-level pruning mode).
+pub func EvalBool(a: at.Ast, t: Table, expr: int, lenient: bool, bval &: bool): bool:
+    r := cc_fold_bool(a, t, expr, lenient)
+    if r.ok:
+        bval = r.bval
+    end
+    ret r.ok
+end
+
+// cc_prune_program — folds every compile-time `if` under `program`
+// (an AST_PROGRAM node), splicing taken branches into their parent list and
+// dropping dead ones. Returns false (and logs at PH_PARSER/LOG_ERROR) when a
+// top-level if condition is not a compile-time constant.
+pub func PruneProgram(a &: at.Ast, log: lg.Logger, file: str, t: Table,
+                      program: int): bool:
+    mut ok := true
+    cc_process_list(a, log, file, t, program, true, ok)
+    ret ok
+end

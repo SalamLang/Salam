@@ -1,0 +1,166 @@
+// Smoke test for the salam/core port (arena, numstr, sal_format, sb, vec,
+// span, status, prelude, sal_types, build_info).
+import testing
+import os
+import co "../sal_core.salam"
+
+func test_numstr():
+    testing.AssertEqStr(co.U64Toa(0 as u64), "0")
+    testing.AssertEqStr(co.U64Toa(42 as u64), "42")
+    testing.AssertEqStr(co.U64Toa(co.SizeMax()), "18446744073709551615")
+    testing.AssertEqStr(co.I64Toa(0 as i64), "0")
+    testing.AssertEqStr(co.I64Toa(12345 as i64), "12345")
+    testing.AssertEqStr(co.I64Toa(0 - (123 as i64)), "-123")
+    mut min64 := 1 as i64
+    min64 <<= 62
+    min64 *= 2
+    testing.AssertEqStr(co.I64Toa(min64), "-9223372036854775808")
+    testing.AssertEqInt(co.SAL_NUMSTR_MAX, 21)
+end
+
+func test_prelude():
+    testing.AssertEqStr(co.Strdup("hello"), "hello")
+    testing.AssertTrue(co.SizeAdd(2 as u64, 3 as u64) == (5 as u64))
+    testing.AssertTrue(co.SizeMul(6 as u64, 7 as u64) == (42 as u64))
+    // grow_cap: cap=0 -> seed, then double until >= need
+    testing.AssertTrue(co.GrowCap(0 as u64, 5 as u64, 8 as u64) == (8 as u64))
+    testing.AssertTrue(co.GrowCap(8 as u64, 9 as u64, 8 as u64) == (16 as u64))
+    testing.AssertTrue(co.GrowCap(0 as u64, 100 as u64, 0 as u64) == (128 as u64))
+    testing.AssertTrue(co.GrowCap(64 as u64, 64 as u64, 8 as u64) == (64 as u64))
+end
+
+func test_span():
+    b := co.MakePos(1 as u32, 2 as u32, 3 as u32)
+    e := co.MakePos(1 as u32, 7 as u32, 8 as u32)
+    s := co.MakeSpan(b, e, 5 as u32)
+    testing.AssertEqInt(s.begin.line as int, 1)
+    testing.AssertEqInt(s.begin.col as int, 2)
+    testing.AssertEqInt(s.begin.index as int, 3)
+    testing.AssertEqInt(s.finish.col as int, 7)
+    testing.AssertEqInt(s.length as int, 5)
+    d := co.EmptySpan()
+    testing.AssertEqInt(d.finish.index as int, 0)
+end
+
+func test_status():
+    ok := co.ST_OK
+    testing.AssertTrue(ok == co.ST_OK)
+    testing.AssertTrue(ok != co.ST_ERROR)
+    testing.AssertEqInt(co.ST_OK, 0)
+    testing.AssertEqInt(co.ST_ERROR, 1)
+    testing.AssertEqInt(co.ST_FATAL, 2)
+end
+
+func test_format_ints():
+    testing.AssertEqStr(co.Format2("%s:%d", co.ArgStr("file"), co.ArgInt(42 as i64)), "file:42")
+    testing.AssertEqStr(co.Format1("%5d", co.ArgInt(42 as i64)), "   42")
+    testing.AssertEqStr(co.Format1("%-5d|", co.ArgInt(42 as i64)), "42   |")
+    testing.AssertEqStr(co.Format1("%05d", co.ArgInt(42 as i64)), "00042")
+    testing.AssertEqStr(co.Format1("%+d", co.ArgInt(42 as i64)), "+42")
+    testing.AssertEqStr(co.Format1("% d", co.ArgInt(42 as i64)), " 42")
+    testing.AssertEqStr(co.Format1("%d", co.ArgInt(0 - (7 as i64))), "-7")
+    testing.AssertEqStr(co.Format1("%.3d", co.ArgInt(5 as i64)), "005")
+    testing.AssertEqStr(co.Format1("%x", co.ArgUint(255 as u64)), "ff")
+    testing.AssertEqStr(co.Format1("%X", co.ArgUint(255 as u64)), "FF")
+    testing.AssertEqStr(co.Format1("%#x", co.ArgUint(255 as u64)), "0xff")
+    testing.AssertEqStr(co.Format1("%#o", co.ArgUint(8 as u64)), "010")
+    testing.AssertEqStr(co.Format1("%03o", co.ArgUint(5 as u64)), "005")
+    testing.AssertEqStr(co.Format1("%02x", co.ArgUint(11 as u64)), "0b")
+    testing.AssertEqStr(co.Format1("[%zu]", co.ArgUint(7 as u64)), "[7]")
+    testing.AssertEqStr(co.Format1("%lld", co.ArgInt(0 - (123 as i64))), "-123")
+    testing.AssertEqStr(co.Format1("%llu", co.ArgUint(co.SizeMax())), "18446744073709551615")
+    // diag.c case: "%c%03d"
+    testing.AssertEqStr(co.Format2("%c%03d", co.ArgChar(69), co.ArgInt(7 as i64)), "E007")
+    // width/precision from args
+    testing.AssertEqStr(co.Format2("%*d", co.ArgInt(5 as i64), co.ArgInt(42 as i64)), "   42")
+    testing.AssertEqStr(co.Format2("%.*s", co.ArgInt(3 as i64), co.ArgStr("abcdef")), "abc")
+    // zero with precision 0 prints nothing
+    testing.AssertEqStr(co.Format1("<%.0d>", co.ArgInt(0 as i64)), "<>")
+end
+
+func test_format_misc():
+    testing.AssertEqStr(co.Format0("100%% done"), "100% done")
+    testing.AssertEqStr(co.Format1("%s", co.ArgStr("abc")), "abc")
+    testing.AssertEqStr(co.Format1("%10.3s", co.ArgStr("hello")), "       hel")
+    testing.AssertEqStr(co.Format1("[%-6.2s]", co.ArgStr("hello")), "[he    ]")
+    testing.AssertEqStr(co.Format1("%p", co.ArgPtr(0 as u64)), "(nil)")
+    testing.AssertEqStr(co.Format1("%p", co.ArgPtr(255 as u64)), "0xff")
+    // unknown conversion is copied verbatim, like the C fallback
+    testing.AssertEqStr(co.Format0("%q"), "%q")
+    // floats go through libc snprintf, like the C deleg_dbl path
+    testing.AssertEqStr(co.Format1("%.2f", co.ArgFloat(3.14159)), "3.14")
+    testing.AssertEqStr(co.Format1("%g", co.ArgFloat(3.5)), "3.5")
+    testing.AssertEqStr(co.Format1("%g", co.ArgFloat(1000000.0)), "1e+06")
+    testing.AssertEqStr(co.Format1("%.17g", co.ArgFloat(0.1)), "0.10000000000000001")
+    testing.AssertEqStr(co.Format1("%e", co.ArgFloat(12345.678)), "1.234568e+04")
+    // Catf appends formatted text to an existing string
+    mut cargs := Vector {} as Vector<co.FmtArg>
+    cargs.push(co.ArgInt(3 as i64))
+    testing.AssertEqStr(co.Catf("n=", "%d!", cargs), "n=3!")
+    cargs.free()
+end
+
+func test_sb():
+    mut b := co.SbNew()
+    co.SbPuts(b, "hi")
+    co.SbPutc(b, 33)
+    testing.AssertEqStr(co.SbCstr(b), "hi!")
+    testing.AssertTrue(co.SbLen(b) == (3 as i64))
+    mut pargs := Vector {} as Vector<co.FmtArg>
+    pargs.push(co.ArgInt(7 as i64))
+    co.SbPrintf(b, " n=%d", pargs)
+    pargs.free()
+    testing.AssertEqStr(co.SbCstr(b), "hi! n=7")
+    co.SbFree(b)
+
+    // shell quoting (POSIX branch under WSL): ab'c -> 'ab'\''c'
+    mut q := co.SbNew()
+    co.SbPutShellArg(q, "ab'c")
+    testing.AssertEqStr(co.SbCstr(q), "'ab'\\''c'")
+    co.SbFree(q)
+end
+
+func test_arena():
+    mut a := co.ArenaNew(0 as u64)
+    testing.AssertTrue(a.block_size == (65536 as u64))
+    p := co.ArenaAlloc(a, 8 as u64)
+    q := p as i64*
+    q[0] = 77 as i64
+    testing.AssertTrue(q[0] == (77 as i64))
+    p2 := co.ArenaAlloc(a, 0 as u64)
+    testing.AssertTrue(p2 != null)
+    testing.AssertEqStr(co.ArenaStrndup(a, "hello", 3), "hel")
+    testing.AssertEqStr(co.ArenaStrndup(a, "hi", 10), "hi")
+    testing.AssertEqStr(co.ArenaStrdup(a, "world"), "world")
+    co.ArenaFree(a)
+end
+
+func test_vec():
+    mut v := Vector {} as Vector<int>
+    co.VecPush(v, 10)
+    co.VecPush(v, 20)
+    testing.AssertEqInt(co.VecLen(v), 2)
+    testing.AssertEqInt(co.VecAt(v, 0), 10)
+    testing.AssertEqInt(co.VecAt(v, 1), 20)
+    v.free()
+end
+
+func test_build_info():
+    testing.AssertEqStr(co.VERSION, "0.2.6")
+    testing.AssertEqStr(co.GIT_COMMIT, "unknown")
+    testing.AssertEqStr(co.GIT_DIRTY, "")
+end
+
+func main:
+    test_numstr()
+    test_prelude()
+    test_span()
+    test_status()
+    test_format_ints()
+    test_format_misc()
+    test_sb()
+    test_arena()
+    test_vec()
+    test_build_info()
+    os.Exit(testing.Summary())
+end

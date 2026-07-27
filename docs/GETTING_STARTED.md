@@ -11,42 +11,29 @@
 
 ## ✅ Prerequisites
 
-| Requirement                        | Notes                                                                                                                 |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| A C compiler                       | [**tcc**](https://bellard.org/tcc/) (bundled, fast), [gcc](https://gcc.gnu.org/), or [clang](https://clang.llvm.org/) |
-| [CMake](https://cmake.org/) ≥ 3.15 | Optional — needed for the CMake build and test suite                                                                  |
-| [Git](https://git-scm.com/)        | To clone the repository                                                                                               |
+| Requirement                  | Notes                                                                                                                 |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| A C compiler                  | [**tcc**](https://bellard.org/tcc/) (bundled, fast), [gcc](https://gcc.gnu.org/), or [clang](https://clang.llvm.org/) — used at runtime by `salam build`, not to build `salam` itself |
+| [Git](https://git-scm.com/)   | To clone the repository                                                                                               |
 
 No other runtime or library is required. `salam build` inlines a small C runtime into every generated file, so programs link only `-lm`.
 
-## 🔨 Build the compiler
+## 🔨 The compiler
 
-The compiler source lives in [`compiler/`](../compiler/). All build commands are run from that directory.
+Salam is **self-hosted** — the compiler ([`compiler/`](../compiler/)) is
+written entirely in Salam, and `compiler/salam` is the tracked, prebuilt
+bootstrap binary (Linux). There is no C source and nothing to build on first
+clone. To rebuild it from current source (self-hosting: the current
+`compiler/salam` builds a fresh one from `compiler/main.salam`):
 
 ```sh
-cd compiler
+sh compiler/tools/bash/build-compiler.sh   # rebuilds compiler/salam
 ```
 
-### Quick build (tcc)
+Run the end-to-end test suite the same way `compiler-build-test.yml` (CI) does:
 
 ```sh
-sh tools/bash/build-compiler.sh   # produces ./salam
-```
-
-The `salam` binary is also copied to the repository root.
-
-### CMake build (with tests)
-
-```sh
-cmake -B build
-cmake --build build
-ctest --test-dir build   # run the test suite
-```
-
-### Makefile build
-
-```sh
-make   # release build -> ../salam at the repo root
+sh compiler/tools/bash/run-tests.sh
 ```
 
 ## 👋 Hello, World!
@@ -88,7 +75,7 @@ salam obj app.salam
 salam build app.salam -DDEBUG
 ```
 
-More examples live in [`compiler/tests/en/`](../compiler/tests/en/).
+More examples live in [`tests/en/`](../tests/en/).
 
 ## 🎨 Formatting with `salam format`
 
@@ -141,7 +128,7 @@ salam layout   # layout DSL REPL
 | Resource                                                                                                                     | Description                                                     |
 | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | [Web Playground](https://salamlang.github.io/Salam/)                                                                         | Try Salam in your browser — no install needed                   |
-| [Examples](../compiler/tests/en/)                                                                                            | Ready-to-run programs covering basics, types, stdlib, and more  |
+| [Examples](../tests/en/)                                                                                            | Ready-to-run programs covering basics, types, stdlib, and more  |
 | [Editor readme](../editor/README.md)                                                                                         | How the WebAssembly playground is built and served              |
 | [Platform & word-size support](PLATFORMS.md)                                                                                 | 32-bit vs 64-bit, C backend vs LLVM backend, release matrix     |
 | [Contributing Guide](../CONTRIBUTING.md)                                                                                     | How to fork, branch, build, and open a pull request             |

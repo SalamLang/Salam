@@ -1,0 +1,405 @@
+// Smoke test for salam/condcomp (port of compiler/src/condcomp:
+// condcomp_table.c + condcomp_fold.c). Covers the define table for explicit
+// target triples (windows/linux/mac, x64/arm64, wasm), user -D defines,
+// compile-time constant-expression evaluation (&&/||/!, ==/!=, string
+// equality of SALAM_OS, defined(), undefined-name behavior) and AST pruning
+// of hand-built trees.
+// Run from the repo root:
+//   SALAM_STD=$PWD/compiler ./bin/salam run salam/tests_port/condcomp_test.salam
+import testing
+import os
+import cc "../condcomp.salam"
+import at "../ast.salam"
+import tok "../token.salam"
+import lg "../logger.salam"
+
+// --- node builders (what the parser would produce) ---
+
+func mk_ident(a &: at.Ast, name: str): int:
+    id := at.NewNode(a, at.AST_IDENTIFIER)
+    at.SetName(a, id, name)
+    ret id
+end
+
+func mk_bool_lit(a &: at.Ast, v: bool): int:
+    id := at.NewNode(a, at.AST_LITERAL)
+    at.SetTokenValue(a, id, tok.ValueBool(v))
+    ret id
+end
+
+func mk_str_lit(a &: at.Ast, s: str): int:
+    id := at.NewNode(a, at.AST_LITERAL)
+    at.SetTokenValue(a, id, tok.ValueStr(s))
+    ret id
+end
+
+func mk_int_lit(a &: at.Ast, v: u64): int:
+    id := at.NewNode(a, at.AST_LITERAL)
+    at.SetTokenValue(a, id, tok.ValueInt(v))
+    ret id
+end
+
+func mk_not(a &: at.Ast, x: int): int:
+    id := at.NewNode(a, at.AST_UNARY)
+    at.SetOp(a, id, tok.TK_NOT)
+    mut n := at.Get(a, id)
+    n.a = x
+    at.Put(a, id, n)
+    ret id
+end
+
+func mk_bin(a &: at.Ast, op: int, l: int, r: int): int:
+    id := at.NewNode(a, at.AST_BINARY)
+    at.SetOp(a, id, op)
+    mut n := at.Get(a, id)
+    n.a = l
+    n.b = r
+    at.Put(a, id, n)
+    ret id
+end
+
+// defined(NAME)
+func mk_defined(a &: at.Ast, name: str): int:
+    callee := mk_ident(a, "defined")
+    arg := mk_ident(a, name)
+    id := at.NewNode(a, at.AST_CALL)
+    mut n := at.Get(a, id)
+    n.a = callee
+    at.Put(a, id, n)
+    at.AddChild(a, id, arg)
+    ret id
+end
+
+func mk_if(a &: at.Ast, cond: int, thenb: int, elseb: int): int:
+    id := at.NewNode(a, at.AST_IF)
+    mut n := at.Get(a, id)
+    n.a = cond
+    n.b = thenb
+    n.c = elseb
+    at.Put(a, id, n)
+    ret id
+end
+
+// A named statement we can recognize after pruning.
+func mk_marker(a &: at.Ast, name: str): int:
+    id := at.NewNode(a, at.AST_VAR_DECL)
+    at.SetName(a, id, name)
+    ret id
+end
+
+func marker_name(a: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    ret n.name
+end
+
+// --- table assertion helpers ---
+
+func assert_bool_def(t: cc.Table, name: str, want: bool):
+    i := cc.Lookup(t, name)
+    testing.AssertTrue(i >= 0)
+    testing.AssertEqInt(cc.EntryKind(t, i), cc.CC_BOOL)
+    testing.AssertEqBool(cc.EntryBool(t, i), want)
+    testing.AssertEqStr(cc.EntryName(t, i), name)
+end
+
+func assert_str_def(t: cc.Table, name: str, want: str):
+    i := cc.Lookup(t, name)
+    testing.AssertTrue(i >= 0)
+    testing.AssertEqInt(cc.EntryKind(t, i), cc.CC_STR)
+    testing.AssertEqStr(cc.EntryStr(t, i), want)
+end
+
+func main:
+    mut no_defs := Vector {} as Vector<str>
+    defer no_defs.free()
+
+    // ===== table: windows x64 triple =====
+    mut tw := cc.TableBuild("x86_64-w64-windows-gnu", no_defs)
+    assert_bool_def(tw, "SALAM_OS_WINDOWS", true)
+    assert_bool_def(tw, "SALAM_OS_WIN64", true)
+    assert_bool_def(tw, "SALAM_OS_WIN32", false)
+    assert_bool_def(tw, "SALAM_OS_LINUX", false)
+    assert_bool_def(tw, "SALAM_OS_MAC", false)
+    assert_bool_def(tw, "SALAM_OS_UNIX", false)
+    assert_bool_def(tw, "SALAM_ARCH_X64", true)
+    assert_bool_def(tw, "SALAM_ARCH_ARM64", false)
+    assert_bool_def(tw, "SALAM_MEM_DEBUG", false)
+    assert_bool_def(tw, "SALAM_ASAN", false)
+    assert_bool_def(tw, "SALAM_SAFE", false)
+    assert_str_def(tw, "SALAM_OS", "windows")
+    assert_str_def(tw, "SALAM_ARCH", "x64")
+    testing.AssertEqInt(cc.Lookup(tw, "NO_SUCH_DEFINE"), 0 - 1)
+    // 20 bool flags (defaults filled in) + SALAM_OS + SALAM_ARCH
+    testing.AssertEqInt(cc.EntryCount(tw), 22)
+
+    // ===== table: linux arm64 triple =====
+    mut tl := cc.TableBuild("aarch64-unknown-linux-gnu", no_defs)
+    assert_bool_def(tl, "SALAM_OS_LINUX", true)
+    assert_bool_def(tl, "SALAM_OS_UNIX", true)
+    assert_bool_def(tl, "SALAM_OS_WINDOWS", false)
+    assert_bool_def(tl, "SALAM_OS_ANDROID", false)
+    assert_bool_def(tl, "SALAM_ARCH_ARM64", true)
+    assert_bool_def(tl, "SALAM_ARCH_X64", false)
+    assert_str_def(tl, "SALAM_OS", "linux")
+    assert_str_def(tl, "SALAM_ARCH", "arm64")
+    cc.TableFree(tl)
+
+    // ===== table: mac triples (x64 and arm64) =====
+    mut tm := cc.TableBuild("x86_64-apple-darwin", no_defs)
+    assert_bool_def(tm, "SALAM_OS_MAC", true)
+    assert_bool_def(tm, "SALAM_OS_BSD", true)
+    assert_bool_def(tm, "SALAM_OS_UNIX", true)
+    assert_bool_def(tm, "SALAM_ARCH_X64", true)
+    assert_str_def(tm, "SALAM_OS", "mac")
+    assert_str_def(tm, "SALAM_ARCH", "x64")
+    cc.TableFree(tm)
+    mut tm2 := cc.TableBuild("arm64-apple-darwin24", no_defs)
+    assert_bool_def(tm2, "SALAM_OS_MAC", true)
+    assert_bool_def(tm2, "SALAM_ARCH_ARM64", true)
+    assert_str_def(tm2, "SALAM_OS", "mac")
+    assert_str_def(tm2, "SALAM_ARCH", "arm64")
+    cc.TableFree(tm2)
+
+    // ===== table: wasm triple =====
+    mut twasm := cc.TableBuild("wasm32-unknown-emscripten", no_defs)
+    assert_bool_def(twasm, "SALAM_OS_WASM", true)
+    assert_bool_def(twasm, "SALAM_OS_UNIX", true)
+    assert_bool_def(twasm, "SALAM_ARCH_WASM", true)
+    assert_str_def(twasm, "SALAM_OS", "wasm")
+    assert_str_def(twasm, "SALAM_ARCH", "wasm")
+    cc.TableFree(twasm)
+
+    // ===== table: host build ("" triple = C NULL) =====
+    // The test suite is compiled and run by bin/salam inside WSL (linux x64),
+    // so the host ladder must land on linux/x64.
+    mut th := cc.TableBuild("", no_defs)
+    assert_str_def(th, "SALAM_OS", "linux")
+    assert_bool_def(th, "SALAM_OS_LINUX", true)
+    assert_bool_def(th, "SALAM_OS_UNIX", true)
+    assert_bool_def(th, "SALAM_OS_WINDOWS", false)
+    assert_str_def(th, "SALAM_ARCH", "x64")
+    assert_bool_def(th, "SALAM_ARCH_X64", true)
+    testing.AssertEqInt(cc.EntryCount(th), 22)
+    cc.TableFree(th)
+
+    // ===== table: user -D defines =====
+    mut defs := Vector {} as Vector<str>
+    defer defs.free()
+    defs.push("MYFLAG")
+    defs.push("NAME=World")
+    defs.push("EMPTY=")
+    mut td := cc.TableBuild("x86_64-w64-windows-gnu", defs)
+    assert_bool_def(td, "MYFLAG", true)
+    assert_str_def(td, "NAME", "World")
+    assert_str_def(td, "EMPTY", "")
+    testing.AssertEqInt(cc.EntryCount(td), 25)
+
+    // ===== const-expr evaluation (against the windows x64 table) =====
+    mut tr := at.NewAst()
+    mut ev := false
+
+    // identifiers
+    testing.AssertTrue(cc.EvalBool(tr, tw, mk_ident(tr, "SALAM_OS_WINDOWS"), false, ev))
+    testing.AssertTrue(ev)
+    testing.AssertTrue(cc.EvalBool(tr, tw, mk_ident(tr, "SALAM_OS_LINUX"), false, ev))
+    testing.AssertFalse(ev)
+
+    // bool literals
+    testing.AssertTrue(cc.EvalBool(tr, tw, mk_bool_lit(tr, true), false, ev))
+    testing.AssertTrue(ev)
+
+    // ! (TK_NOT)
+    testing.AssertTrue(cc.EvalBool(tr, tw, mk_not(tr, mk_ident(tr, "SALAM_OS_LINUX")), false, ev))
+    testing.AssertTrue(ev)
+
+    // && / ||
+    e_and := mk_bin(tr, tok.TK_AND, mk_ident(tr, "SALAM_OS_WINDOWS"),
+                    mk_not(tr, mk_ident(tr, "SALAM_OS_LINUX")))
+    testing.AssertTrue(cc.EvalBool(tr, tw, e_and, false, ev))
+    testing.AssertTrue(ev)
+    e_and2 := mk_bin(tr, tok.TK_AND, mk_ident(tr, "SALAM_OS_WINDOWS"),
+                     mk_ident(tr, "SALAM_OS_LINUX"))
+    testing.AssertTrue(cc.EvalBool(tr, tw, e_and2, false, ev))
+    testing.AssertFalse(ev)
+    e_or := mk_bin(tr, tok.TK_OR, mk_ident(tr, "SALAM_OS_LINUX"),
+                   mk_ident(tr, "SALAM_OS_WINDOWS"))
+    testing.AssertTrue(cc.EvalBool(tr, tw, e_or, false, ev))
+    testing.AssertTrue(ev)
+
+    // short-circuit: the undefined right side is never evaluated
+    e_sc_and := mk_bin(tr, tok.TK_AND, mk_ident(tr, "SALAM_OS_LINUX"),
+                       mk_ident(tr, "UNDEFINED_NAME"))
+    testing.AssertTrue(cc.EvalBool(tr, tw, e_sc_and, false, ev))
+    testing.AssertFalse(ev)
+    e_sc_or := mk_bin(tr, tok.TK_OR, mk_ident(tr, "SALAM_OS_WINDOWS"),
+                      mk_ident(tr, "UNDEFINED_NAME"))
+    testing.AssertTrue(cc.EvalBool(tr, tw, e_sc_or, false, ev))
+    testing.AssertTrue(ev)
+    // ... but a required undefined right side fails strict, folds lenient
+    e_need := mk_bin(tr, tok.TK_AND, mk_ident(tr, "SALAM_OS_WINDOWS"),
+                     mk_ident(tr, "UNDEFINED_NAME"))
+    testing.AssertFalse(cc.EvalBool(tr, tw, e_need, false, ev))
+    testing.AssertTrue(cc.EvalBool(tr, tw, e_need, true, ev))
+    testing.AssertFalse(ev)
+
+    // string equality of SALAM_OS
+    e_eq := mk_bin(tr, tok.TK_EQ, mk_ident(tr, "SALAM_OS"), mk_str_lit(tr, "windows"))
+    testing.AssertTrue(cc.EvalBool(tr, tw, e_eq, false, ev))
+    testing.AssertTrue(ev)
+    e_eq2 := mk_bin(tr, tok.TK_EQ, mk_str_lit(tr, "linux"), mk_ident(tr, "SALAM_OS"))
+    testing.AssertTrue(cc.EvalBool(tr, tw, e_eq2, false, ev))
+    testing.AssertFalse(ev)
+    e_ne := mk_bin(tr, tok.TK_NE, mk_ident(tr, "SALAM_OS"), mk_str_lit(tr, "linux"))
+    testing.AssertTrue(cc.EvalBool(tr, tw, e_ne, false, ev))
+    testing.AssertTrue(ev)
+    e_eq3 := mk_bin(tr, tok.TK_EQ, mk_ident(tr, "SALAM_OS"), mk_ident(tr, "SALAM_OS"))
+    testing.AssertTrue(cc.EvalBool(tr, tw, e_eq3, false, ev))
+    testing.AssertTrue(ev)
+
+    // bool == bool literal
+    e_eqb := mk_bin(tr, tok.TK_EQ, mk_ident(tr, "SALAM_OS_WINDOWS"), mk_bool_lit(tr, true))
+    testing.AssertTrue(cc.EvalBool(tr, tw, e_eqb, false, ev))
+    testing.AssertTrue(ev)
+
+    // type mismatch (string vs bool) does not fold
+    e_mix := mk_bin(tr, tok.TK_EQ, mk_ident(tr, "SALAM_OS"),
+                    mk_ident(tr, "SALAM_OS_WINDOWS"))
+    testing.AssertFalse(cc.EvalBool(tr, tw, e_mix, false, ev))
+
+    // undefined identifier: strict fails, lenient folds to false
+    testing.AssertFalse(cc.EvalBool(tr, tw, mk_ident(tr, "UNDEFINED_NAME"), false, ev))
+    testing.AssertTrue(cc.EvalBool(tr, tw, mk_ident(tr, "UNDEFINED_NAME"), true, ev))
+    testing.AssertFalse(ev)
+
+    // a bare string is not a boolean condition
+    testing.AssertFalse(cc.EvalBool(tr, tw, mk_ident(tr, "SALAM_OS"), false, ev))
+    // neither is an int literal
+    testing.AssertFalse(cc.EvalBool(tr, tw, mk_int_lit(tr, 1 as u64), false, ev))
+
+    // defined(...) — needs the table with user defines
+    testing.AssertTrue(cc.EvalBool(tr, td, mk_defined(tr, "MYFLAG"), false, ev))
+    testing.AssertTrue(ev)
+    testing.AssertTrue(cc.EvalBool(tr, td, mk_defined(tr, "NO_SUCH_DEFINE"), false, ev))
+    testing.AssertFalse(ev)
+    // defined() on every table entry kind, incl. string defines
+    testing.AssertTrue(cc.EvalBool(tr, td, mk_defined(tr, "NAME"), false, ev))
+    testing.AssertTrue(ev)
+    at.FreeAst(tr)
+    cc.TableFree(td)
+
+    // ===== pruning ===== (quiet logger: LOG_OFF)
+    log := lg.New(lg.LOG_OFF, false)
+
+    // 1) taken then-branch is spliced in place of the if
+    mut ta := at.NewAst()
+    prog := at.NewNode(ta, at.AST_PROGRAM)
+    at.AddChild(ta, prog, mk_marker(ta, "keep1"))
+    bwin := at.NewNode(ta, at.AST_BLOCK)
+    at.AddChild(ta, bwin, mk_marker(ta, "winA"))
+    at.AddChild(ta, bwin, mk_marker(ta, "winB"))
+    belse := at.NewNode(ta, at.AST_BLOCK)
+    at.AddChild(ta, belse, mk_marker(ta, "other"))
+    at.AddChild(ta, prog, mk_if(ta, mk_ident(ta, "SALAM_OS_WINDOWS"), bwin, belse))
+    at.AddChild(ta, prog, mk_marker(ta, "keep2"))
+    testing.AssertTrue(cc.PruneProgram(ta, log, "condcomp_test.salam", tw, prog))
+    testing.AssertEqInt(at.ChildCount(ta, prog), 4)
+    testing.AssertEqStr(marker_name(ta, at.Child(ta, prog, 0)), "keep1")
+    testing.AssertEqStr(marker_name(ta, at.Child(ta, prog, 1)), "winA")
+    testing.AssertEqStr(marker_name(ta, at.Child(ta, prog, 2)), "winB")
+    testing.AssertEqStr(marker_name(ta, at.Child(ta, prog, 3)), "keep2")
+    at.FreeAst(ta)
+
+    // 2) false cond takes the else branch; false cond without else vanishes
+    mut ta2 := at.NewAst()
+    prog2 := at.NewNode(ta2, at.AST_PROGRAM)
+    bthen := at.NewNode(ta2, at.AST_BLOCK)
+    at.AddChild(ta2, bthen, mk_marker(ta2, "linux_only"))
+    belse2 := at.NewNode(ta2, at.AST_BLOCK)
+    at.AddChild(ta2, belse2, mk_marker(ta2, "fallback"))
+    at.AddChild(ta2, prog2, mk_if(ta2, mk_ident(ta2, "SALAM_OS_LINUX"), bthen, belse2))
+    bgone := at.NewNode(ta2, at.AST_BLOCK)
+    at.AddChild(ta2, bgone, mk_marker(ta2, "never"))
+    at.AddChild(ta2, prog2, mk_if(ta2, mk_ident(ta2, "SALAM_OS_LINUX"), bgone, 0))
+    testing.AssertTrue(cc.PruneProgram(ta2, log, "condcomp_test.salam", tw, prog2))
+    testing.AssertEqInt(at.ChildCount(ta2, prog2), 1)
+    testing.AssertEqStr(marker_name(ta2, at.Child(ta2, prog2, 0)), "fallback")
+    at.FreeAst(ta2)
+
+    // 3) else-if chain picks the matching arm
+    mut ta3 := at.NewAst()
+    prog3 := at.NewNode(ta3, at.AST_PROGRAM)
+    ba := at.NewNode(ta3, at.AST_BLOCK)
+    at.AddChild(ta3, ba, mk_marker(ta3, "armA"))
+    bb := at.NewNode(ta3, at.AST_BLOCK)
+    at.AddChild(ta3, bb, mk_marker(ta3, "armB"))
+    bc := at.NewNode(ta3, at.AST_BLOCK)
+    at.AddChild(ta3, bc, mk_marker(ta3, "armC"))
+    if2 := mk_if(ta3, mk_ident(ta3, "SALAM_OS_WINDOWS"), bb, bc)
+    if1 := mk_if(ta3, mk_ident(ta3, "SALAM_OS_LINUX"), ba, if2)
+    at.AddChild(ta3, prog3, if1)
+    testing.AssertTrue(cc.PruneProgram(ta3, log, "condcomp_test.salam", tw, prog3))
+    testing.AssertEqInt(at.ChildCount(ta3, prog3), 1)
+    testing.AssertEqStr(marker_name(ta3, at.Child(ta3, prog3, 0)), "armB")
+    at.FreeAst(ta3)
+
+    // 4) top-level lenient mode: an undefined name folds to false
+    mut ta4 := at.NewAst()
+    prog4 := at.NewNode(ta4, at.AST_PROGRAM)
+    bt4 := at.NewNode(ta4, at.AST_BLOCK)
+    at.AddChild(ta4, bt4, mk_marker(ta4, "if_undef"))
+    be4 := at.NewNode(ta4, at.AST_BLOCK)
+    at.AddChild(ta4, be4, mk_marker(ta4, "else_undef"))
+    at.AddChild(ta4, prog4, mk_if(ta4, mk_ident(ta4, "TOTALLY_UNDEFINED"), bt4, be4))
+    testing.AssertTrue(cc.PruneProgram(ta4, log, "condcomp_test.salam", tw, prog4))
+    testing.AssertEqInt(at.ChildCount(ta4, prog4), 1)
+    testing.AssertEqStr(marker_name(ta4, at.Child(ta4, prog4, 0)), "else_undef")
+    at.FreeAst(ta4)
+
+    // 5) a top-level if that cannot fold is an error (and is dropped)
+    mut ta5 := at.NewAst()
+    prog5 := at.NewNode(ta5, at.AST_PROGRAM)
+    at.AddChild(ta5, prog5, mk_marker(ta5, "before"))
+    bt5 := at.NewNode(ta5, at.AST_BLOCK)
+    at.AddChild(ta5, bt5, mk_marker(ta5, "body"))
+    at.AddChild(ta5, prog5, mk_if(ta5, mk_int_lit(ta5, 1 as u64), bt5, 0))
+    testing.AssertFalse(cc.PruneProgram(ta5, log, "condcomp_test.salam", tw, prog5))
+    testing.AssertEqInt(at.ChildCount(ta5, prog5), 1)
+    testing.AssertEqStr(marker_name(ta5, at.Child(ta5, prog5, 0)), "before")
+    at.FreeAst(ta5)
+
+    // 6) below the top level: constant ifs fold, runtime ifs survive
+    mut ta6 := at.NewAst()
+    prog6 := at.NewNode(ta6, at.AST_PROGRAM)
+    fn := at.NewNode(ta6, at.AST_FUNC_DEF)
+    at.SetName(ta6, fn, "main")
+    body := at.NewNode(ta6, at.AST_BLOCK)
+    // runtime if: undefined identifier condition, no else — must be kept
+    brt := at.NewNode(ta6, at.AST_BLOCK)
+    at.AddChild(ta6, brt, mk_marker(ta6, "runtime_body"))
+    rif := mk_if(ta6, mk_ident(ta6, "some_runtime_var"), brt, 0)
+    at.AddChild(ta6, body, rif)
+    // constant if: folds and splices inside the function body
+    bwin6 := at.NewNode(ta6, at.AST_BLOCK)
+    at.AddChild(ta6, bwin6, mk_marker(ta6, "win_stmt"))
+    both6 := at.NewNode(ta6, at.AST_BLOCK)
+    at.AddChild(ta6, both6, mk_marker(ta6, "other_stmt"))
+    at.AddChild(ta6, body, mk_if(ta6, mk_ident(ta6, "SALAM_OS_WINDOWS"), bwin6, both6))
+    mut fnode := at.Get(ta6, fn)
+    fnode.a = body
+    at.Put(ta6, fn, fnode)
+    at.AddChild(ta6, prog6, fn)
+    testing.AssertTrue(cc.PruneProgram(ta6, log, "condcomp_test.salam", tw, prog6))
+    testing.AssertEqInt(at.ChildCount(ta6, prog6), 1)
+    testing.AssertEqInt(at.ChildCount(ta6, body), 2)
+    testing.AssertEqInt(at.KindOf(ta6, at.Child(ta6, body, 0)), at.AST_IF)
+    testing.AssertEqInt(at.Child(ta6, body, 0), rif)
+    testing.AssertEqStr(marker_name(ta6, at.Child(ta6, body, 1)), "win_stmt")
+    // the surviving runtime if kept its branch contents
+    kept := at.Get(ta6, rif)
+    testing.AssertEqInt(at.ChildCount(ta6, kept.b), 1)
+    testing.AssertEqStr(marker_name(ta6, at.Child(ta6, kept.b, 0)), "runtime_body")
+    at.FreeAst(ta6)
+
+    cc.TableFree(tw)
+    os.Exit(testing.Summary())
+end

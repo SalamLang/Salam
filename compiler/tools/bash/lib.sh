@@ -1,7 +1,10 @@
 # shellcheck shell=sh
 # Shared helpers for the tools/bash/*.sh scripts, not executable on its own.
 
-cd "$(dirname "$0")/../.." || exit 1
+# Anchor at the REPO ROOT (self-host restructure: std/ and tests/ live here
+# as siblings of compiler/, not inside it). This file is at
+# compiler/tools/bash/lib.sh, so three levels up is the repo root.
+cd "$(dirname "$0")/../../.." || exit 1
 
 salam_python() {
     if command -v python >/dev/null 2>&1; then
@@ -11,14 +14,19 @@ salam_python() {
     fi
 }
 
+# Ensures compiler/salam exists and is runnable, (re)building it from source
+# via self-hosting (compiler/salam building compiler/main.salam) if missing.
+# There is no C source anymore — compiler/salam IS the tracked bootstrap
+# binary, so this only rebuilds when someone explicitly deletes it or wants
+# a fresh self-hosted build reflecting current .salam source changes.
 salam_ensure_compiler() {
-    : "${SALAM:=./salam}"
+    : "${SALAM:=./compiler/salam}"
     [ -x "$SALAM" ] && return 0
-    echo "building salam..." >&2
+    echo "building salam (self-hosted, from compiler/main.salam)..." >&2
     if [ "${1:-}" = "--quiet" ]; then
-        sh tools/bash/build-compiler.sh >/dev/null 2>&1
+        sh compiler/tools/bash/build-compiler.sh >/dev/null 2>&1
     else
-        sh tools/bash/build-compiler.sh
+        sh compiler/tools/bash/build-compiler.sh
     fi
-    SALAM=./salam
+    SALAM=./compiler/salam
 }

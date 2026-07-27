@@ -1,0 +1,463 @@
+// End-to-end equivalence runner for the jsgen port: mirrors the C driver's
+// `salam js <file> --output=<out.js>` pipeline (driver/js_build.c
+// js_build_bundle + driver_js's .js branch) on top of the ported
+// lexer/parser/condcomp/semantic/jsgen/minify modules:
+//   work-list of entry + resolved imports -> per-module lex/parse/prune/
+//   package-merge/sema/jsgen (JS name-minify state threaded across modules)
+//   -> prelude segments (+ minify) -> js_refs dead-segment elimination ->
+//   IIFE bundle wrapper -> output file.
+// Byte-comparable against HEAD `bin/salam js` output (default minified and
+// --no-minify / --no-js-minify-names variants).
+//
+// Usage: jsgen_run <file.salam> <out.js> [--no-minify] [--no-js-minify-names]
+package main
+
+import os
+import io
+import str
+import tok "../token.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import i18 "../i18n.salam"
+import src "../source.salam"
+import lx "../lexer.salam"
+import ps "../parser.salam"
+import cc "../condcomp.salam"
+import lp "../langpack.salam"
+import sm "../semantic.salam"
+import jg "../jsgen.salam"
+import mn "../minify.salam"
+
+// ===== js_build.c: k_prelude[] (name/text pairs, split) =====
+k_jsr_prelude_names := [
+    "salam_panic", "__salam_unsupported", "salam_input", "salam_strcat",
+    "salam_str_hash", "salam_hash_int", "sqrt", "cbrt", "sin", "cos", "tan",
+    "asin", "acos", "atan", "atan2", "exp", "log", "log2", "log10", "floor",
+    "ceil", "round", "trunc", "hypot", "fabs", "pow", "fmod", "__sal_loop",
+    "__sal_tone", "__sal_img", "__sal_rrect", "__sal_lsget_i",
+    "__sal_lsget_s", "__sal_lsset", "__sal_touch"
+] as str[35]
+
+k_jsr_prelude_texts := [
+    "function salam_panic(message) {\n    throw new Error(\"Salam panic: \" + String(message));\n}\n",
+    "function __salam_unsupported(what) {\n    throw new Error(\"not supported in the browser build: \" + what);\n}\n",
+    "function salam_input() {\n    return typeof prompt === \"function\" ? String(prompt(\"\") || \"\") : \"\";\n}\n",
+    "function salam_strcat(a, b) {\n    return String(a) + String(b);\n}\n",
+    "function salam_str_hash(s) {\n    let h = 2166136261 >>> 0;\n    for (let i = 0; i < s.length; i++) {\n        h = Math.imul(h ^ s.charCodeAt(i), 16777619) >>> 0;\n    }\n    return h;\n}\n",
+    "function salam_hash_int(v) {\n    return Math.abs(Math.trunc(v)) >>> 0;\n}\n",
+    "const sqrt = Math.sqrt;\n",
+    "const cbrt = Math.cbrt;\n",
+    "const sin = Math.sin;\n",
+    "const cos = Math.cos;\n",
+    "const tan = Math.tan;\n",
+    "const asin = Math.asin;\n",
+    "const acos = Math.acos;\n",
+    "const atan = Math.atan;\n",
+    "const atan2 = Math.atan2;\n",
+    "const exp = Math.exp;\n",
+    "const log = Math.log;\n",
+    "const log2 = Math.log2;\n",
+    "const log10 = Math.log10;\n",
+    "const floor = Math.floor;\n",
+    "const ceil = Math.ceil;\n",
+    "const round = Math.round;\n",
+    "const trunc = Math.trunc;\n",
+    "const hypot = Math.hypot;\n",
+    "const fabs = Math.abs;\n",
+    "const pow = Math.pow;\n",
+    "function fmod(a, b) {\n    return a % b;\n}\n",
+    "function __sal_loop(f) {\n    let prev = performance.now();\n    const step = function (t) {\n        let dt = t - prev;\n        prev = t;\n        if (dt > 100) dt = 100;\n        f(dt);\n        requestAnimationFrame(step);\n    };\n    requestAnimationFrame(step);\n}\n",
+    "let __sal_audio = null;\nfunction __sal_tone(freq, ms) {\n    try {\n        if (!__sal_audio)\n            __sal_audio = new (window.AudioContext || window.webkitAudioContext)();\n        const t = __sal_audio.currentTime;\n        const osc = __sal_audio.createOscillator();\n        const gain = __sal_audio.createGain();\n        osc.type = \"square\";\n        osc.frequency.value = freq;\n        gain.gain.setValueAtTime(0.04, t);\n        gain.gain.exponentialRampToValueAtTime(0.001, t + ms / 1000);\n        osc.connect(gain);\n        gain.connect(__sal_audio.destination);\n        osc.start(t);\n        osc.stop(t + ms / 1000);\n    } catch (e) {\n        console.warn(\"__sal_tone: audio playback failed\", e);\n    }\n}\n",
+    "function __sal_img(src) {\n    const img = new Image();\n    img.src = src;\n    return img;\n}\n",
+    "function __sal_rrect(c, x, y, w, h, r) {\n    if (c.roundRect) c.roundRect(x, y, w, h, r);\n    else c.rect(x, y, w, h);\n}\n",
+    "function __sal_lsget_i(k) {\n    try {\n        return Math.trunc(Number(localStorage.getItem(k) || 0)) || 0;\n    } catch (e) {\n        console.warn(\"__sal_lsget_i: localStorage read failed\", e);\n        return 0;\n    }\n}\n",
+    "function __sal_lsget_s(k) {\n    try {\n        return String(localStorage.getItem(k) || \"\");\n    } catch (e) {\n        console.warn(\"__sal_lsget_s: localStorage read failed\", e);\n        return \"\";\n    }\n}\n",
+    "function __sal_lsset(k, v) {\n    try {\n        localStorage.setItem(k, String(v));\n    } catch (e) {\n        console.warn(\"__sal_lsset: localStorage write failed\", e);\n    }\n}\n",
+    "function __sal_touch(ev, axis) {\n    const t = (ev.changedTouches && ev.changedTouches[0]) || ev;\n    return Number((axis ? t.clientY : t.clientX) || 0);\n}\n"
+] as str[35]
+
+func byte_at(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+func is_alnum(c: int): bool:
+    ret (c >= 48 && c <= 57) || (c >= 97 && c <= 122) || (c >= 65 && c <= 90)
+end
+
+// static const char *module_of(arena_t *a, const char *path)
+func module_of(path: str): str:
+    n := str.Len(path)
+    mut base := 0
+    mut i := 0
+    until i < n:
+        c := byte_at(path, i)
+        if c == 47 || c == 92: // '/' '\\'
+            base = i + 1
+        end
+        i += 1
+    end
+    mut dot := n
+    mut j := n - 1
+    until j >= base:
+        if byte_at(path, j) == 46: // '.'
+            dot = j
+            break
+        end
+        j -= 1
+    end
+    ret path.substr(base, dot - base)
+end
+
+// static const char *dir_of(arena_t *a, const char *path)
+func dir_of(path: str): str:
+    n := str.Len(path)
+    mut cut := 0 - 1
+    mut i := 0
+    until i < n:
+        c := byte_at(path, i)
+        if c == 47 || c == 92:
+            cut = i
+        end
+        i += 1
+    end
+    if cut < 0:
+        ret ""
+    end
+    ret path.substr(0, cut)
+end
+
+// static bool js_refs(const char *text, const char *name)
+func js_refs(text: str, name: str): bool:
+    nl := str.Len(name)
+    if nl == 0:
+        ret false
+    end
+    tn := str.Len(text)
+    mut p := 0
+    until true:
+        idx := str.IndexFrom(text, name, p)
+        if idx < 0:
+            ret false
+        end
+        before := idx == 0 ? 0 : byte_at(text, idx - 1)
+        after := idx + nl < tn ? byte_at(text, idx + nl) : 0
+        bok := !(is_alnum(before) || before == 95 || before == 36 ||
+                 before == 46) // '_' '$' '.'
+        aok := !(is_alnum(after) || after == 95 || after == 36)
+        if bok && aok:
+            ret true
+        end
+        p = idx + 1
+    end
+end
+
+func main:
+    args := os.Args()
+    defer args.free()
+    if args.len() < 3:
+        io.EPrintln("usage: jsgen_run <file.salam> <out.js> [--no-minify]" +
+                    " [--no-js-minify-names]")
+        os.Exit(2)
+    end
+    entry_path := args[1]
+    out_path := args[2]
+    mut no_minify := false
+    mut no_names := false
+    mut ai := 3
+    until ai < args.len():
+        if str.Equals(args[ai], "--no-minify"):
+            no_minify = true
+        else str.Equals(args[ai], "--no-js-minify-names"):
+            no_names = true
+        end
+        ai += 1
+    end
+    minify_ws := !no_minify
+    minify_names := minify_ws && !no_names
+
+    i18.SetLang("en")
+    sm.LayoutSchemaInit(sm.GetStdlibRoot())
+    quiet := lg.New(lg.LOG_OFF, false)
+    base_pack := lp.Load("en")
+
+    mut work := Vector {} as Vector<str>
+    defer work.free()
+    work.push(entry_path)
+
+    mut a := at.NewAst()
+    defer at.FreeAst(a)
+
+    // per-module collected output (modules in work order)
+    mut mod_globals := Vector {} as Vector<str>
+    defer mod_globals.free()
+    mut seg_mod := Vector {} as Vector<int>
+    defer seg_mod.free()
+    mut modfn_names := Vector {} as Vector<str>
+    defer modfn_names.free()
+    mut modfn_texts := Vector {} as Vector<str>
+    defer modfn_texts.free()
+    mut nmod := 0
+    mut entry_name := ""
+    mut all_ok := true
+
+    // JS minify name state threaded across modules (js_build.c locals)
+    mut ml := ""
+    mut mk := Vector {} as Vector<str>
+    defer mk.free()
+    mut mv := Vector {} as Vector<str>
+    defer mv.free()
+
+    mut defs := Vector {} as Vector<str>
+    defer defs.free()
+    defs.push("SALAM_JS")
+
+    mut wi := 0
+    until wi < work.len():
+        path := work.get(wi)[0]
+        mut dup := false
+        mut j := 0
+        until j < wi:
+            if str.Equals(work.get(j)[0], path):
+                dup = true
+            end
+            j += 1
+        end
+        if dup:
+            wi += 1
+            continue
+        end
+        mut sf := src.New()
+        if !src.Load(path, sf):
+            io.EPrintln("jsgen_run: cannot read source file '" + path + "'")
+            all_ok = false
+            wi += 1
+            continue
+        end
+        modpack := lx.Detect(sf, base_pack)
+        modentry := lp.Entry(modpack)
+        module := module_of(path)
+        mut toks := tok.StreamNew(path)
+        mut lok := lx.Run(quiet, modpack, sf, toks)
+        mut prog := 0
+        mut pok := ps.Run(quiet, toks, a, prog)
+        tok.StreamFree(toks)
+        mut s := sm.New(quiet, path, lp.Code(modpack))
+        sm.SetCc(s, cc.TableBuild("", defs))
+        if !cc.PruneProgram(a, quiet, path, s.cctab, prog):
+            pok = false
+        end
+        // salam_package_files: same-package sibling files merged pre-sema
+        pfiles := sm.PackageFiles(path)
+        mut pi := 1
+        until pi < pfiles.len():
+            ppath := pfiles.get(pi)[0]
+            mut psf := src.New()
+            if !src.Load(ppath, psf):
+                io.EPrintln("jsgen_run: cannot read source file '" + ppath +
+                            "'")
+                all_ok = false
+                pi += 1
+                continue
+            end
+            mut ptoks := tok.StreamNew(ppath)
+            if !lx.Run(quiet, modpack, psf, ptoks):
+                lok = false
+            end
+            mut pprog := 0
+            if !ps.Run(quiet, ptoks, a, pprog):
+                pok = false
+            end
+            tok.StreamFree(ptoks)
+            if !cc.PruneProgram(a, quiet, ppath, s.cctab, pprog):
+                pok = false
+            end
+            sm.MergeProgram(a, prog, pprog)
+            pi += 1
+        end
+        pfiles.free()
+        sok := sm.RunCached(s, a, prog)
+        if !lok || !pok || !sok:
+            all_ok = false
+            sm.Free(s)
+            wi += 1
+            continue
+        end
+        // enqueue resolved imports (sema stamped type_str with the path)
+        idir := dir_of(path)
+        pl := at.Get(a, prog).list
+        mut k := 0
+        until k < pl.len():
+            did := pl.get(k)[0]
+            if at.KindOf(a, did) != at.AST_IMPORT:
+                k += 1
+                continue
+            end
+            mut ipath := at.Get(a, did).type_str
+            if str.Len(ipath) == 0:
+                ipath = sm.ResolveImportNode(a, idir, did, lp.Code(modpack))
+            end
+            if str.Len(ipath) > 0:
+                mut known := false
+                mut j2 := 0
+                until j2 < work.len():
+                    if str.Equals(work.get(j2)[0], ipath):
+                        known = true
+                    end
+                    j2 += 1
+                end
+                if !known:
+                    work.push(ipath)
+                end
+            end
+            k += 1
+        end
+        // jsgen for this module
+        mut out := jg.NewOutput()
+        jg.Run(quiet, a, s, prog, module, modentry, minify_names, minify_ws,
+               ml, mk, mv, out)
+        mod_globals.push(out.globals_src)
+        repeat out.fn_names.len() with fi:
+            modfn_names.push(out.fn_names.get(fi)[0])
+            modfn_texts.push(out.fn_texts.get(fi)[0])
+            seg_mod.push(nmod)
+        end
+        if str.Len(entry_name) == 0 && wi < 1 &&
+           str.Len(out.entry_mangled) > 0:
+            entry_name = out.entry_mangled
+        end
+        nmod += 1
+        jg.FreeOutput(out)
+        sm.Free(s)
+        wi += 1
+    end
+    if !all_ok:
+        io.EPrintln("jsgen_run: build aborted: errors in source")
+        os.Exit(1)
+    end
+    if str.Len(entry_name) == 0:
+        io.EPrintln("jsgen_run: no entry point")
+        os.Exit(1)
+    end
+
+    // ---- segment table: prelude first, then modules in REVERSE order ----
+    mut seg_names := Vector {} as Vector<str>
+    defer seg_names.free()
+    mut seg_texts := Vector {} as Vector<str>
+    defer seg_texts.free()
+    mut seg_used := Vector {} as Vector<int>
+    defer seg_used.free()
+    repeat 35 with pi2:
+        mut ptext := k_jsr_prelude_texts[pi2]
+        if minify_ws:
+            ptext = mn.Js(ptext)
+        end
+        seg_names.push(k_jsr_prelude_names[pi2])
+        seg_texts.push(ptext)
+        seg_used.push(0)
+    end
+    mut m := nmod - 1
+    until m >= 0:
+        repeat modfn_names.len() with si:
+            if seg_mod.get(si)[0] == m:
+                seg_names.push(modfn_names.get(si)[0])
+                seg_texts.push(modfn_texts.get(si)[0])
+                seg_used.push(0)
+            end
+        end
+        m -= 1
+    end
+
+    // ---- dead-segment elimination roots: globals (reverse) + boot ----
+    boot := entry_name
+    mut roots := ""
+    mut m2 := nmod - 1
+    until m2 >= 0:
+        roots = roots + mod_globals.get(m2)[0]
+        m2 -= 1
+    end
+    roots = roots + boot + "\n"
+    mut changed := true
+    until changed:
+        changed = false
+        mut sgi := 0
+        until sgi < seg_names.len():
+            if seg_used.get(sgi)[0] != 0:
+                sgi += 1
+                continue
+            end
+            nm := seg_names.get(sgi)[0]
+            if js_refs(roots, nm):
+                seg_used.set(sgi, 1)
+                changed = true
+                sgi += 1
+                continue
+            end
+            mut ti := 0
+            until ti < seg_names.len():
+                if ti != sgi && seg_used.get(ti)[0] != 0:
+                    if js_refs(seg_texts.get(ti)[0], nm):
+                        seg_used.set(sgi, 1)
+                        changed = true
+                        break
+                    end
+                end
+                ti += 1
+            end
+            sgi += 1
+        end
+    end
+
+    // ---- assemble the bundle ----
+    mut js := str.NewBuilder()
+    str.BufAppend(js, minify_ws ? "(function(){\"use strict\";"
+                                : "(function () {\n\"use strict\";\n\n")
+    mut have_globals := false
+    mut m3 := nmod - 1
+    until m3 >= 0:
+        if str.Len(mod_globals.get(m3)[0]) > 0:
+            have_globals = true
+        end
+        m3 -= 1
+    end
+    if have_globals:
+        mut m4 := nmod - 1
+        until m4 >= 0:
+            str.BufAppend(js, mod_globals.get(m4)[0])
+            m4 -= 1
+        end
+        str.BufAppendChar(js, minify_ws ? 32 : 10)
+    end
+    mut sgi2 := 0
+    until sgi2 < seg_names.len():
+        if seg_used.get(sgi2)[0] != 0:
+            str.BufAppend(js, seg_texts.get(sgi2)[0])
+            str.BufAppendChar(js, minify_ws ? 32 : 10)
+        end
+        sgi2 += 1
+    end
+    if !minify_ws:
+        str.BufAppend(js, "// Run the program once the DOM is ready.\n")
+    end
+    if minify_ws:
+        str.BufAppend(js, "if(document.readyState===\"loading\"){document." +
+                          "addEventListener(\"DOMContentLoaded\"," + boot +
+                          ");}else{" + boot + "();}")
+    else:
+        str.BufAppend(js, "if (document.readyState === \"loading\") {\n" +
+                          "    document.addEventListener(" +
+                          "\"DOMContentLoaded\", " + boot + ");\n" +
+                          "} else {\n    " + boot + "();\n}\n")
+    end
+    str.BufAppend(js, minify_ws ? "})();" : "})();\n")
+    text := str.BufStr(js)
+    str.BufFree(js)
+    if io.WriteFile(out_path, text) < 0:
+        io.EPrintln("jsgen_run: cannot write '" + out_path + "'")
+        os.Exit(2)
+    end
+end

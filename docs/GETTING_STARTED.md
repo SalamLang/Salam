@@ -11,10 +11,10 @@
 
 ## ✅ Prerequisites
 
-| Requirement                  | Notes                                                                                                                 |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| A C compiler                  | [**tcc**](https://bellard.org/tcc/) (bundled, fast), [gcc](https://gcc.gnu.org/), or [clang](https://clang.llvm.org/) — used at runtime by `salam build`, not to build `salam` itself |
-| [Git](https://git-scm.com/)   | To clone the repository                                                                                               |
+| Requirement                 | Notes                                                                                                                                                                                 |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A C compiler                | [**tcc**](https://bellard.org/tcc/) (bundled, fast), [gcc](https://gcc.gnu.org/), or [clang](https://clang.llvm.org/) — used at runtime by `salam build`, not to build `salam` itself |
+| [Git](https://git-scm.com/) | To clone the repository                                                                                                                                                               |
 
 No other runtime or library is required. `salam build` inlines a small C runtime into every generated file, so programs link only `-lm`.
 
@@ -128,7 +128,7 @@ salam layout   # layout DSL REPL
 | Resource                                                                                                                     | Description                                                     |
 | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | [Web Playground](https://salamlang.github.io/Salam/)                                                                         | Try Salam in your browser — no install needed                   |
-| [Examples](../tests/en/)                                                                                            | Ready-to-run programs covering basics, types, stdlib, and more  |
+| [Examples](../tests/en/)                                                                                                     | Ready-to-run programs covering basics, types, stdlib, and more  |
 | [Editor readme](../editor/README.md)                                                                                         | How the WebAssembly playground is built and served              |
 | [Platform & word-size support](PLATFORMS.md)                                                                                 | 32-bit vs 64-bit, C backend vs LLVM backend, release matrix     |
 | [Contributing Guide](../CONTRIBUTING.md)                                                                                     | How to fork, branch, build, and open a pull request             |

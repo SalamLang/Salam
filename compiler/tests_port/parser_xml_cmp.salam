@@ -1,0 +1,59 @@
+// End-to-end equivalence runner for the parser port: lex + parse a file and
+// print the raw parser AST as XML (xml decl + ast_to_xml dump, stdout) — the
+// exact output of the C reference harness (lexer_run + parser_run +
+// ast_to_xml). Note `salam <file> --emit-ast-xml` is NOT byte-comparable:
+// the C driver runs condcomp pruning + sema decoration before dumping.
+//
+// Usage: parser_xml_cmp <file.salam> [lang]
+//   lang: optional fixed langpack code (en/fa/ar); default = detect,
+//   mirroring the C driver (langpack_detect with the --lang pack, default
+//   "en", as fallback).
+package main
+
+import os
+import io
+import x "../xml.salam"
+import tok "../token.salam"
+import src "../source.salam"
+import lg "../logger.salam"
+import lp "../langpack.salam"
+import lx "../lexer.salam"
+import at "../ast.salam"
+import ps "../parser.salam"
+
+func main:
+    args := os.Args()
+    defer args.free()
+    if args.len() < 2:
+        io.EPrintln("usage: parser_xml_cmp <file.salam> [lang]")
+        os.Exit(2)
+    end
+    path := args[1]
+    mut sf := src.New()
+    if !src.Load(path, sf):
+        io.EPrintln("cannot read " + path)
+        os.Exit(2)
+    end
+    mut pack := 0
+    if args.len() > 2:
+        pack = lp.Load(args[2])
+    else:
+        pack = lx.Detect(sf, lp.Load("en"))
+    end
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut ts := tok.StreamNew(path)
+    defer tok.StreamFree(ts)
+    lok := lx.Run(quiet, pack, sf, ts)
+    mut a := at.NewAst()
+    defer at.FreeAst(a)
+    mut prog := 0
+    pok := ps.Run(quiet, ts, a, prog)
+    mut w := x.New()
+    defer x.Free(w)
+    x.Decl(w)
+    at.ToXml(w, a, prog)
+    print x.Str(w)
+    if !lok || !pok:
+        os.Exit(1)
+    end
+end

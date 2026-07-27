@@ -1,0 +1,572 @@
+/*
+ * Salam Programming Language (2024–2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+#include "codegen/codegen_internal.h"
+#include "core/sal_format.h"
+#include "codegen/print_fmt.h"
+#include "i18n/i18n.h"
+#include "semantic/builtins.h"
+
+static const char *arg_at(cg_t *cg, ast_node_t *n, size_t i)
+{
+    return n->list.len > i ? cg_expr(cg, (ast_node_t *)n->list.data[i]) : "0";
+}
+
+static void cg_fill_defaults(cg_t *cg, sb_t *b, ast_node_t *call, func_sig_t *sig,
+                             size_t emitted)
+{
+    if (!sig || !sig->decl) return;
+    size_t np = sig->decl->list.len;
+    {
+        size_t i = call->list.len;
+        for (; i < np; i++) {
+            ast_node_t *param = (ast_node_t *)sig->decl->list.data[i];
+            if (!param->a) continue;
+            if (emitted) sb_puts(b, ", ");
+            sb_puts(b, cg_expr(cg, param->a));
+            emitted++;
+        }
+    }
+}
+
+static const char *call_args(cg_t *cg, ast_node_t *call, func_sig_t *sig)
+{
+    sb_t b;
+    sb_init(&b);
+    {
+        size_t i = 0;
+        for (; i < call->list.len; i++) {
+            ast_node_t *arg = (ast_node_t *)call->list.data[i];
+            if (i) sb_puts(&b, ", ");
+            bool arg_is_ref = sig && sig->decl && i < sig->decl->list.len &&
+                              ((ast_node_t *)sig->decl->list.data[i])->is_ref;
+            if (arg_is_ref) {
+                type_t *pt = (i < sig->params.len) ? (type_t *)sig->params.data[i] : NULL;
+                if (pt)
+                    sb_puts(&b, cg_fmt(cg, "(%s*)&(%s)",
+                                       cg_ctype(cg, type_to_string(cg->sem->tc, pt)),
+                                       cg_expr(cg, arg)));
+                else
+                    sb_puts(&b, cg_fmt(cg, "&(%s)", cg_expr(cg, arg)));
+            } else
+                sb_puts(&b, cg_expr(cg, arg));
+        }
+    }
+    cg_fill_defaults(cg, &b, call, sig, call->list.len);
+    const char *r = arena_strdup(cg->a, sb_cstr(&b));
+    sb_free(&b);
+    return r;
+}
+
+static const char *call_args_lead(cg_t *cg, ast_node_t *call, func_sig_t *sig)
+{
+    sb_t b;
+    sb_init(&b);
+    {
+        size_t i = 0;
+        for (; i < call->list.len; i++) {
+            sb_puts(&b, ", ");
+            sb_puts(&b, cg_expr(cg, (ast_node_t *)call->list.data[i]));
+        }
+    }
+    cg_fill_defaults(cg, &b, call, sig, 1);
+    const char *r = arena_strdup(cg->a, sb_cstr(&b));
+    sb_free(&b);
+    return r;
+}
+
+static const char *call_sret(cg_t *cg, type_t *ret, const char *mangled, const char *args)
+{
+    const char *Rc = cg_ctype(cg, type_to_string(cg->sem->tc, ret));
+    int t = ++cg->tmpn;
+    const char *sep = (args && args[0]) ? ", " : "";
+    return cg_fmt(cg, "({ %s __s%d; %s(%s%s&__s%d); __s%d; })", Rc, t, mangled, args, sep,
+                  t, t);
+}
+
+static const char *call_value(cg_t *cg, ast_node_t *n, ast_node_t *callee)
+{
+    const char *cret = cg_ctype(cg, func_ret_of(callee->type_str));
+    const char *cps = func_cast_params_env(cg, callee->type_str);
+    const char *args = call_args_lead(cg, n, NULL);
+    const char *tmp = cg_fmt(cg, "_clz%d", cg->clos_n++);
+    return cg_fmt(cg, "({ void *%s = (void*)(%s); ((%s(*)%s)(*(void**)%s))(%s%s); })",
+                  tmp, cg_expr(cg, callee), cret, cps, tmp, tmp, args);
+}
+
+/* 'extern func(...)' values are raw C-ABI function pointers (no closure env
+ * word) - call the address directly instead of the lambda deref-and-prepend
+ * convention call_value() uses. See AST_TYPE.is_extern in sema_type.c. */
+static const char *call_raw_ptr(cg_t *cg, ast_node_t *n, ast_node_t *callee)
+{
+    const char *cret = cg_ctype(cg, raw_ret_of(callee->type_str));
+    const char *cps = raw_cast_params(cg, callee->type_str);
+    const char *args = call_args(cg, n, NULL);
+    return cg_fmt(cg, "((%s(*)%s)(%s))(%s)", cret, cps, cg_expr(cg, callee), args);
+}
+
+static const char *cg_order_stdout(cg_t *cg, const char *printf_expr)
+{
+    if (!cg->single_threaded) return printf_expr;
+    return cg_fmt(cg, "({ salam_out_flush(); %s; fflush(0); })", printf_expr);
+}
+
+static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
+{
+    vec_t segs;
+    vec_init(&segs);
+    pf_build(cg->a, n, nl, &segs);
+    if (segs.len == 0) return "(void)0";
+    if (!err && cg->single_threaded) {
+        bool all_lit = true;
+        sb_t raw;
+        sb_init(&raw);
+        {
+            size_t i = 0;
+            for (; i < segs.len; i++) {
+                pf_seg_t *s = (pf_seg_t *)segs.data[i];
+                if (s->kind != PF_LIT) {
+                    all_lit = false;
+                    break;
+                }
+                sb_puts(&raw, s->text);
+            }
+        }
+        if (all_lit) {
+            size_t rawlen = raw.len;
+            const char *lit = cg_cescape(cg, sb_cstr(&raw));
+            sb_free(&raw);
+            return cg_fmt(cg, "SALAM_OUT_LIT(%s, %zu)", lit, rawlen);
+        }
+        sb_free(&raw);
+    }
+    sb_t fmt;
+    sb_init(&fmt);
+    sb_t args;
+    sb_init(&args);
+    {
+        size_t i = 0;
+        for (; i < segs.len; i++) {
+            pf_seg_t *s = (pf_seg_t *)segs.data[i];
+            if (s->kind == PF_LIT) {
+                {
+                    const char *p = s->text;
+                    for (; *p; p++) {
+                        if (*p == '%') sb_putc(&fmt, '%');
+                        sb_putc(&fmt, *p);
+                    }
+                }
+                continue;
+            }
+            const char *e = cg_expr(cg, s->expr);
+            const char *a;
+            switch (s->kind) {
+            case PF_CHAR:
+                sb_puts(&fmt, "%s");
+                a = cg_fmt(cg, "salam_char_from_code(%s)", e);
+                break;
+            case PF_BOOL:
+                sb_puts(&fmt, pf_spec(s->kind));
+                a = cg_fmt(cg, "((%s) ? \"true\" : \"false\")", e);
+                break;
+            case PF_F64:
+                sb_puts(&fmt, pf_spec(s->kind));
+                a = cg_fmt(cg, "(double)(%s)", e);
+                break;
+            case PF_U32:
+                sb_puts(&fmt, pf_spec(s->kind));
+                a = cg_fmt(cg, "(unsigned)(%s)", e);
+                break;
+            case PF_I64:
+                sb_puts(&fmt, pf_spec(s->kind));
+                a = cg_fmt(cg, "(long long)(%s)", e);
+                break;
+            case PF_U64:
+                sb_puts(&fmt, pf_spec(s->kind));
+                a = cg_fmt(cg, "(unsigned long long)(%s)", e);
+                break;
+            case PF_SIZE:
+                sb_puts(&fmt, pf_spec(s->kind));
+                a = cg_fmt(cg, "(size_t)(%s)", e);
+                break;
+            case PF_I32:
+                sb_puts(&fmt, pf_spec(s->kind));
+                a = cg_fmt(cg, "(int)(%s)", e);
+                break;
+            default:
+                sb_puts(&fmt, pf_spec(s->kind));
+                a = e;
+                break;
+            }
+            sb_puts(&args, ", ");
+            sb_puts(&args, a);
+        }
+    }
+    const char *cfmt = cg_cescape(cg, sb_cstr(&fmt));
+    const char *al = arena_strdup(cg->a, sb_cstr(&args));
+    sb_free(&fmt);
+    sb_free(&args);
+    if (err) {
+        return cg_order_stdout(
+            cg,
+            cg_fmt(cg,
+                   "({ int32_t __ern = snprintf((void*)0, (uint64_t)0, %s%s); "
+                   "char *__erb = __ern > 0 ? (char*)" SALAM_MEM_ALLOC
+                   "((uint64_t)__ern + 1) : (char*)0; "
+                   "if (__erb) snprintf(__erb, (uint64_t)__ern + 1, %s%s); "
+                   "if (__erb) { int64_t __err_r = (int64_t)SALAM_RAW_WRITE(2, __erb, "
+                   "__ern); (void)__err_r; } })",
+                   cfmt, al, cfmt, al));
+    }
+    return cg_order_stdout(cg, cg_fmt(cg, "printf(%s%s)", cfmt, al));
+}
+
+static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
+{
+    const char *nm = callee->name;
+    if (!strcmp(nm, "spawn") && n->list.len == 1) {
+        ast_node_t *fn = (ast_node_t *)n->list.data[0];
+        symbol_t *fsym = scope_lookup(cg->sem->global, fn->name);
+        vec_t empty;
+        vec_init(&empty);
+        const char *mangled = fsym ? cg_mangle(cg, NULL, fn->name, &empty) : fn->name;
+        return cg_fmt(cg, "salam_thread_spawn((salam_thread_fn)%s)", mangled);
+    }
+    if (!strcmp(nm, "funcptr") && n->list.len == 1) {
+        ast_node_t *fn = (ast_node_t *)n->list.data[0];
+        symbol_t *fsym = scope_lookup(cg->sem->global, fn->name);
+        const char *mangled;
+        if (fsym && fsym->overloads.len > 0) {
+            func_sig_t *sig = (func_sig_t *)fsym->overloads.data[0];
+            mangled = cg_mangle(cg, NULL, fn->name, &sig->params);
+        } else {
+            mangled = fn->name;
+        }
+        return cg_fmt(cg, "(int64_t)(void*)%s", mangled);
+    }
+    if (!strcmp(nm, "callhandler") && n->list.len == 2) {
+        const char *fnp = cg_expr(cg, (ast_node_t *)n->list.data[0]);
+        const char *arg = cg_expr(cg, (ast_node_t *)n->list.data[1]);
+        return cg_fmt(cg, "((void(*)(int64_t))(intptr_t)(%s))((int64_t)(%s))", fnp, arg);
+    }
+    bool is_print = !strcmp(nm, "print");
+    bool is_println = !strcmp(nm, "println");
+    bool is_printerr = !strcmp(nm, "printerr");
+    bool is_printerrln = !strcmp(nm, "printerrln");
+    if (is_print || is_println || is_printerr || is_printerrln) {
+        int err = (is_printerr || is_printerrln) ? 1 : 0;
+        bool nl = is_println || is_printerrln;
+        return cg_lower_print(cg, n, nl, err);
+    }
+    if (!strcmp(nm, "input")) return "salam_input()";
+    if (!strcmp(nm, "lang")) return cg_fmt(cg, "\"%s\"", i18n_lang());
+    if (!strcmp(nm, "args")) {
+        const char *cn = cg_ctype(cg, n->type_str ? n->type_str : "Vector_str");
+        int t = ++cg->tmpn;
+        return cg_fmt(cg,
+                      "({ int32_t __an%d; char** __ad%d = salam_args(&__an%d); (%s){ "
+                      "__ad%d, __an%d, __an%d }; })",
+                      t, t, t, cn, t, t, t);
+    }
+    if (!strcmp(nm, "listdir") && n->list.len == 1) {
+        const char *cn = cg_ctype(cg, n->type_str ? n->type_str : "Vector_str");
+        const char *arg = cg_expr(cg, (ast_node_t *)n->list.data[0]);
+        int t = ++cg->tmpn;
+        return cg_fmt(cg,
+                      "({ int32_t __vn%d; char** __vd%d = salam_os_listdir(%s, &__vn%d); "
+                      "(%s){ __vd%d, __vn%d, __vn%d }; })",
+                      t, t, arg, t, cn, t, t, t);
+    }
+    if (!strcmp(nm, "sizeof") && n->list.len == 1) {
+        ast_node_t *op = (ast_node_t *)n->list.data[0];
+        return cg_fmt(cg, "(size_t)sizeof(%s)", cg_ctype(cg, op->type_str));
+    }
+
+    if (!scope_lookup(cg->sem->global, nm)) {
+        if (!strcmp(nm, "hash") && n->list.len == 1) {
+            ast_node_t *a = (ast_node_t *)n->list.data[0];
+            const char *ats = a->type_str ? a->type_str : "";
+            if (!strcmp(ats, "str"))
+                return cg_fmt(cg, "salam_str_hash(%s)", cg_expr(cg, a));
+
+            return cg_fmt(cg, "salam_hash_int((uint64_t)(intptr_t)(%s))", cg_expr(cg, a));
+        }
+    }
+    if (!strcmp(nm, "len") && n->list.len == 1) {
+        ast_node_t *arg = (ast_node_t *)n->list.data[0];
+        long klen;
+        if (cg_is_slice_ts(arg->type_str))
+            return cg_fmt(cg, "(int32_t)(%s).len", cg_expr(cg, arg));
+        if (arg->type_str && strchr(arg->type_str, '[')) {
+            long sz = array_size_of(arg->type_str);
+            return cg_fmt(cg, "%ld", sz);
+        }
+        klen = ast_str_lit_len(arg);
+        if (klen >= 0) return cg_fmt(cg, "%ld", klen);
+        return cg_fmt(cg, "(int32_t)strlen(%s)", cg_expr(cg, arg));
+    }
+    if (!strcmp(nm, "char_code") && n->list.len == 1) {
+        const char *arg = cg_expr(cg, (ast_node_t *)n->list.data[0]);
+        return cg_fmt(cg, "(int32_t)(unsigned char)(%s)[0]", arg);
+    }
+    const salam_builtin_t *bi = salam_builtin_lookup(nm);
+    symbol_t *fsym0 = scope_lookup(cg->sem->global, nm);
+    if (bi && !fsym0) {
+        sb_t b;
+        sb_init(&b);
+        sb_puts(&b, bi->runtime);
+        sb_putc(&b, '(');
+        {
+            size_t i = 0;
+            for (; i < n->list.len; i++) {
+                if (i) sb_puts(&b, ", ");
+                sb_puts(&b, cg_expr(cg, (ast_node_t *)n->list.data[i]));
+            }
+        }
+        sb_putc(&b, ')');
+        const char *r = arena_strdup(cg->a, sb_cstr(&b));
+        sb_free(&b);
+        return r;
+    }
+    symbol_t *fsym = scope_lookup(cg->sem->global, nm);
+    const char *home_pkg = NULL;
+    if (!fsym && cg->cur_fn_home) {
+        symbol_t *hs = scope_lookup(cg->cur_fn_home, nm);
+        if (hs && hs->kind == SYM_FUNC) {
+            fsym = hs;
+            home_pkg = hs->pkgname;
+        }
+    }
+    if (!fsym && cg->cur_struct && cg->cur_struct->home) {
+        symbol_t *hs = scope_lookup(cg->cur_struct->home, nm);
+        if (hs && hs->kind == SYM_FUNC) {
+            fsym = hs;
+            home_pkg = hs->pkgname;
+        }
+    }
+    func_sig_t *sig = fsym ? pick_overload(cg, fsym, n) : NULL;
+    bool is_extern_call = sig && sig->decl && sig->decl->is_extern;
+    bool inst_fn = sig && sig->decl && sig->decl->synthetic;
+    const char *mangled =
+        is_extern_call ? nm
+        : inst_fn      ? cg_mangle_in(cg, "g", NULL, nm, &sig->params)
+        : sig ? cg_mangle_in(cg, home_pkg ? home_pkg : cg->pkg, NULL, nm, &sig->params)
+              : nm;
+    const char *args = call_args(cg, n, sig);
+    if (sig && type_is_byval_agg(sig->ret) && !is_extern_call)
+        return call_sret(cg, sig->ret, mangled, args);
+    return cg_fmt(cg, "%s(%s)", mangled, args);
+}
+
+static const char *call_pkg(cg_t *cg, ast_node_t *n, symbol_t *pk, ast_node_t *callee)
+{
+    symbol_t *fn = scope_lookup_local(pk->members, callee->name);
+    func_sig_t *sig = fn ? pick_overload(cg, fn, n) : NULL;
+    bool is_extern_call = sig && sig->decl && sig->decl->is_extern;
+    vec_t empty;
+    vec_init(&empty);
+
+    const char *mangled = is_extern_call ? callee->name
+                          : (sig && sig->decl && sig->decl->synthetic)
+                              ? cg_mangle_in(cg, "g", NULL, callee->name, &sig->params)
+                              : cg_mangle_in(cg, pk->pkgname, NULL, callee->name,
+                                             sig ? &sig->params : &empty);
+    const char *args = call_args(cg, n, sig);
+    if (sig && type_is_byval_agg(sig->ret) && !is_extern_call)
+        return call_sret(cg, sig->ret, mangled, args);
+    return cg_fmt(cg, "%s(%s)", mangled, args);
+}
+
+static const char *call_dyn(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t *callee,
+                            const char *objts)
+{
+    bool is_ptr = objts[strlen(objts) - 1] == '*';
+    const char *recv = cg_expr(cg, obj);
+    const char *acc = is_ptr ? "->" : ".";
+    int t = ++cg->tmpn;
+    const char *dynct = cg_ctype(cg, objts);
+    if (!strcmp(callee->name, "free"))
+        return cg_fmt(cg, "({ %s __dv%d = (%s); " SALAM_MEM_FREE "(__dv%d%sdata); })",
+                      dynct, t, recv, t, acc);
+    const char *as = call_args_lead(cg, n, NULL);
+    return cg_fmt(cg, "({ %s __dv%d = (%s); __dv%d%svtable->%s(__dv%d%sdata%s); })",
+                  dynct, t, recv, t, acc, cg_cident(cg, callee->name), t, acc, as);
+}
+
+static const char *call_file(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t *callee)
+{
+    const char *recv = cg_expr(cg, obj);
+    const char *m = callee->name;
+    const char *a0 = arg_at(cg, n, 0);
+    const char *a1 = arg_at(cg, n, 1);
+    if (!strcmp(m, "read"))
+        return cg_fmt(cg, "salam_file_read(%s, (unsigned long long)(%s))", recv, a0);
+    if (!strcmp(m, "readline")) return cg_fmt(cg, "salam_file_readline(%s)", recv);
+    if (!strcmp(m, "write")) return cg_fmt(cg, "salam_file_write(%s, %s)", recv, a0);
+    if (!strcmp(m, "seek"))
+        return cg_fmt(cg, "salam_file_seek(%s, (long long)(%s), %s)", recv, a0, a1);
+    if (!strcmp(m, "close")) return cg_fmt(cg, "salam_file_close(%s)", recv);
+    return "0";
+}
+
+static const char *call_array(cg_t *cg, ast_node_t *n, ast_node_t *obj,
+                              ast_node_t *callee)
+{
+    const char *m = callee->name;
+    if (!strcmp(m, "len")) {
+        if (cg_is_slice_ts(obj->type_str))
+            return cg_fmt(cg, "(int32_t)(%s).len", cg_expr(cg, obj));
+        return cg_fmt(cg, "%ld", array_size_of(obj->type_str));
+    }
+    (void)n;
+    return "0";
+}
+
+static const char *call_str(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t *callee)
+{
+    const char *m = callee->name;
+    if (!strcmp(m, "len")) {
+        long klen = ast_str_lit_len(obj);
+        if (klen >= 0) return cg_fmt(cg, "%ld", klen);
+    }
+    const char *recv = cg_expr(cg, obj);
+    const char *a0 = arg_at(cg, n, 0);
+    const char *a1 = arg_at(cg, n, 1);
+    if (!strcmp(m, "len")) return cg_fmt(cg, "(int32_t)strlen(%s)", recv);
+    if (!strcmp(m, "concat")) return cg_fmt(cg, "salam_strcat(%s, %s)", recv, a0);
+    if (!strcmp(m, "substr"))
+        return cg_fmt(cg, "salam_str_substr(%s, %s, %s)", recv, a0, a1);
+    if (!strcmp(m, "find") || !strcmp(m, "search") || !strcmp(m, "indexOf")) {
+        int tf = ++cg->tmpn;
+        return cg_fmt(cg,
+                      "({ const char *__fh%d=(%s); const char *__fn%d=(%s); const char "
+                      "*__fp%d=(__fh%d&&__fn%d)?strstr(__fh%d,__fn%d):0; "
+                      "__fp%d?(int32_t)(__fp%d-__fh%d):-1; })",
+                      tf, recv, tf, a0, tf, tf, tf, tf, tf, tf, tf, tf);
+    }
+    if (!strcmp(m, "trim")) return cg_fmt(cg, "salam_str_trim(%s)", recv);
+    if (!strcmp(m, "to_int"))
+        return cg_fmt(cg, "(int32_t)strtol(%s, ((void*)0), 10)", recv);
+    if (!strcmp(m, "to_float")) return cg_fmt(cg, "strtod(%s, ((void*)0))", recv);
+    if (!strcmp(m, "lower")) return cg_fmt(cg, "salam_str_lower(%s)", recv);
+    if (!strcmp(m, "upper")) return cg_fmt(cg, "salam_str_upper(%s)", recv);
+    if (!strcmp(m, "repeat")) return cg_fmt(cg, "salam_str_repeat(%s, %s)", recv, a0);
+    if (!strcmp(m, "split")) {
+        const char *cn = cg_ctype(cg, n->type_str ? n->type_str : "Vector_str");
+        int t = ++cg->tmpn;
+        return cg_fmt(cg,
+                      "({ int32_t __sn%d; char** __sd%d = salam_str_split(%s, %s, "
+                      "&__sn%d); (%s){ __sd%d, __sn%d, __sn%d }; })",
+                      t, t, recv, a0, t, cn, t, t, t);
+    }
+    return "0";
+}
+
+static const char *call_method(cg_t *cg, ast_node_t *n, ast_node_t *obj,
+                               ast_node_t *callee, const char *objts)
+{
+    bool obj_is_ptr = (strlen(objts) && objts[strlen(objts) - 1] == '*');
+    char sname[96];
+    symbol_t *ssym = cg_struct_of(cg, objts, sname, sizeof sname);
+    symbol_t *msym = ssym ? scope_lookup_local(ssym->members, callee->name) : NULL;
+    func_sig_t *sig = msym ? pick_overload(cg, msym, n) : NULL;
+    vec_t empty;
+    vec_init(&empty);
+    const char *mangled =
+        cg_mangle_method(cg, sname, ssym, callee->name, sig ? &sig->params : &empty);
+    const char *as = call_args_lead(cg, n, sig);
+    bool addressable = cg_addressable(obj);
+    bool ret_struct = sig && type_is_byval_agg(sig->ret);
+    const char *Rc =
+        ret_struct ? cg_ctype(cg, type_to_string(cg->sem->tc, sig->ret)) : NULL;
+    if (obj_is_ptr || addressable) {
+        const char *recv =
+            obj_is_ptr ? cg_expr(cg, obj) : cg_fmt(cg, "&(%s)", cg_expr(cg, obj));
+        if (ret_struct) {
+            int s = ++cg->tmpn;
+            return cg_fmt(cg, "({ %s __s%d; %s(%s%s, &__s%d); __s%d; })", Rc, s, mangled,
+                          recv, as, s, s);
+        }
+        return cg_fmt(cg, "%s(%s%s)", mangled, recv, as);
+    }
+    int t = ++cg->tmpn;
+    const char *oexpr = cg_expr(cg, obj);
+    if (ret_struct) {
+        int s = ++cg->tmpn;
+        return cg_fmt(cg, "({ %s __t%d = (%s); %s __s%d; %s(&__t%d%s, &__s%d); __s%d; })",
+                      cg_ctype(cg, objts), t, oexpr, Rc, s, mangled, t, as, s, s);
+    }
+    return cg_fmt(cg, "({ %s __t%d = (%s); %s(&__t%d%s); })", cg_ctype(cg, objts), t,
+                  oexpr, mangled, t, as);
+}
+
+static const char *call_impl(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t *callee,
+                             const char *objts, symbol_t *owner)
+{
+    symbol_t *msym = scope_lookup_local(owner->members, callee->name);
+    func_sig_t *sig = msym ? pick_overload(cg, msym, n) : NULL;
+    vec_t empty;
+    vec_init(&empty);
+    const char *mangled =
+        cg_mangle_ti(cg, objts, callee->name, sig ? &sig->params : &empty);
+    const char *as = call_args_lead(cg, n, sig);
+    const char *recv = cg_expr(cg, obj);
+    if (sig && type_is_byval_agg(sig->ret)) {
+        const char *Rc = cg_ctype(cg, type_to_string(cg->sem->tc, sig->ret));
+        int s = ++cg->tmpn;
+        return cg_fmt(cg, "({ %s __s%d; %s((%s)%s, &__s%d); __s%d; })", Rc, s, mangled,
+                      recv, as, s, s);
+    }
+    return cg_fmt(cg, "%s((%s)%s)", mangled, recv, as);
+}
+
+static const char *call_member(cg_t *cg, ast_node_t *n, ast_node_t *callee)
+{
+    ast_node_t *obj = callee->a;
+    if (obj && obj->kind == AST_IDENTIFIER && !local_known(cg, obj->name)) {
+        symbol_t *pk = scope_lookup(cg->sem->global, obj->name);
+
+        if ((!pk || pk->kind != SYM_PACKAGE) && cg->cur_struct && cg->cur_struct->home)
+            pk = scope_lookup(cg->cur_struct->home, obj->name);
+        if ((!pk || pk->kind != SYM_PACKAGE) && cg->cur_fn_home)
+            pk = scope_lookup(cg->cur_fn_home, obj->name);
+        if (pk && pk->kind == SYM_PACKAGE) return call_pkg(cg, n, pk, callee);
+    }
+    const char *objts = obj->type_str ? obj->type_str : "";
+
+    {
+        symbol_t *impl = scope_lookup(cg->sem->global, impl_owner_key(cg->a, objts));
+        if (impl && impl->kind == SYM_TYPEIMPL &&
+            scope_lookup_local(impl->members, callee->name))
+            return call_impl(cg, n, obj, callee, objts, impl);
+    }
+    if (!strncmp(objts, "dyn ", 4)) return call_dyn(cg, n, obj, callee, objts);
+    if (!strcmp(objts, "File*")) return call_file(cg, n, obj, callee);
+    if (!strcmp(objts, "str")) return call_str(cg, n, obj, callee);
+    if (cg_is_slice_ts(objts) || (objts && strchr(objts, '[')))
+        return call_array(cg, n, obj, callee);
+    return call_method(cg, n, obj, callee, objts);
+}
+
+const char *cg_call(cg_t *cg, ast_node_t *n)
+{
+    ast_node_t *callee = n->a;
+    if (callee && callee->type_str && !strncmp(callee->type_str, "externfunc(", 11))
+        return call_raw_ptr(cg, n, callee);
+    if (callee && callee->type_str && !strncmp(callee->type_str, "func(", 5))
+        return call_value(cg, n, callee);
+    if (callee && callee->kind == AST_IDENTIFIER) return call_ident(cg, n, callee);
+    if (callee && callee->kind == AST_MEMBER) return call_member(cg, n, callee);
+    return "/*uncallable*/0";
+}

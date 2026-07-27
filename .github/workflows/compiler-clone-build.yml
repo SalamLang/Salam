@@ -1,4 +1,17 @@
 ---
+# PORT-NOTE (self-host restructure): this workflow was found with NO build
+# steps at all (checkout-only, silently "passing" on every OS by doing
+# nothing) — predates this restructure, not something the restructure
+# broke. Real steps are restored below, but only for the OSes that CAN
+# currently self-host: the only tracked bootstrap binary is
+# `compiler/salam`, a Linux ELF (there is no C source anymore to compile a
+# native binary for other platforms, and no macOS/Windows bootstrap binary
+# is committed). macOS/Windows/arm64 entries are left in the matrix but
+# explicitly report "blocked, not skipped-silently" rather than either
+# failing red or passing green for nothing — this is the same gap flagged
+# on compiler-release.yml (multi-platform binaries), deferred together;
+# revisit once a per-OS bootstrap story exists (native binaries per
+# platform, or WSL-in-CI for Windows).
 name: 🔧 Compiler - Clone & Build (Windows / macOS / Linux)
 on:
   push:
@@ -18,19 +31,34 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-24.04 }
-          - { os: ubuntu-22.04 }
-          - { os: ubuntu-slim }
-          - { os: macos-26 }
-          - { os: macos-15 }
-          - { os: macos-14 }
-          - { os: windows-2025-vs2026 }
-          - { os: windows-2025 }
-          - { os: windows-2022 }
-          - { os: windows-11-arm }
+          - { os: ubuntu-24.04, can_self_host: true }
+          - { os: ubuntu-22.04, can_self_host: true }
+          - { os: ubuntu-slim, can_self_host: true }
+          - { os: macos-26, can_self_host: false }
+          - { os: macos-15, can_self_host: false }
+          - { os: macos-14, can_self_host: false }
+          - { os: windows-2025-vs2026, can_self_host: false }
+          - { os: windows-2025, can_self_host: false }
+          - { os: windows-2022, can_self_host: false }
+          - { os: windows-11-arm, can_self_host: false }
     steps:
       - name: 'Checkout ${{ github.ref }} ( ${{ github.sha }} )'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Self-host build + smoke test (Linux)
+        if: matrix.can_self_host
+        shell: bash
+        run: |
+          chmod +x compiler/salam
+          SALAM_STD="$PWD" compiler/salam build compiler/main.salam --output=/tmp/salam_clonebuild
+          SALAM_STD="$PWD" /tmp/salam_clonebuild version
+          SALAM_STD="$PWD" /tmp/salam_clonebuild exec tests/en/basics/hello.salam
+
+      - name: Self-host build (blocked on this OS — warning only, not a failure)
+        if: ${{ !matrix.can_self_host }}
+        shell: bash
+        run: |
+          echo "::warning::No bootstrap binary for this OS — compiler/salam is a Linux ELF and there is no C source anymore to compile a native one. This platform cannot self-host until a per-OS bootstrap binary (or WSL-in-CI) is added. Not failing the build over a known, already-flagged gap — see the PORT-NOTE at the top of this file."

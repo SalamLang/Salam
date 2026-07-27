@@ -1,0 +1,646 @@
+// Smoke test for salam/parser.salam (port of compiler/src/parser/).
+// Covers: program/package/import/link, const/type-alias/enum/struct/
+// interface/impl/extern declarations, generics + typarams, multi-word
+// identifiers, statements (if/until/repeat/each/match/defer/return/break/
+// continue/print), full expression precedence (bitwise/shift/ternary/power/
+// cast/incdec/slice/index/member/call/lambda/struct-literal/array-literal/
+// funcaddr/sizeof), types (pointer/dyn/slice/array dims/function types),
+// layout blocks + components, metas (@en/@fa aliases), untyped-param
+// synthesis (__T0/__T1), and parse-error reporting (Run() == false).
+package main
+
+import os
+import testing
+import str
+import src "../source.salam"
+import tok "../token.salam"
+import lg "../logger.salam"
+import lp "../langpack.salam"
+import lx "../lexer.salam"
+import at "../ast.salam"
+import ps "../parser.salam"
+
+// Lex + parse `text` (en pack); fills `a`/`prog`, returns parser_run's bool.
+func parse_src(text: str, a &: at.Ast, prog &: int): bool:
+    mut sf := src.New()
+    sf.path = "test.salam"
+    sf.text = text
+    sf.len = str.Len(text)
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut ts := tok.StreamNew("test.salam")
+    lx.Run(quiet, lp.Load("en"), sf, ts)
+    ok := ps.Run(quiet, ts, a, prog)
+    tok.StreamFree(ts)
+    ret ok
+end
+
+// First top-level def of the program.
+func def0(a: at.Ast, prog: int): int:
+    ret at.Child(a, prog, 0)
+end
+
+// Body block of a FUNC_DEF node.
+func body_of(a: at.Ast, fn: int): int:
+    n := at.Get(a, fn)
+    ret n.a
+end
+
+// i-th statement of a FUNC_DEF's body block.
+func stmt_at(a: at.Ast, fn: int, i: int): int:
+    ret at.Child(a, body_of(a, fn), i)
+end
+
+func test_program_and_imports():
+    mut a := at.NewAst()
+    mut prog := 0
+    ok := parse_src("package demo\nimport str\nimport mx \"math.salam\" \"other.salam\"\nimport db.sqlite\nlink \"m\"\nlink static \"c\"\n@link(\"z\", kind=\"dynamic\")\nfunc main:\n    ret\nend\n", a, prog)
+    testing.AssertTrue(ok)
+    pn := at.Get(a, prog)
+    testing.AssertEqInt(pn.kind, at.AST_PROGRAM)
+    testing.AssertEqStr(pn.name, "demo")
+    // str | mx "math.salam" | "other.salam" | db.sqlite | link | link | @link | main
+    testing.AssertEqInt(at.ChildCount(a, prog), 8)
+
+    i0 := at.Get(a, at.Child(a, prog, 0))
+    testing.AssertEqInt(i0.kind, at.AST_IMPORT)
+    testing.AssertEqStr(i0.name, "str")
+    testing.AssertEqInt(i0.value_kind, tok.TV_NONE)
+
+    i1 := at.Get(a, at.Child(a, prog, 1))
+    testing.AssertEqInt(i1.kind, at.AST_IMPORT)
+    testing.AssertEqStr(i1.name, "mx")
+    testing.AssertEqInt(i1.value_kind, tok.TV_STRING)
+    testing.AssertEqStr(i1.value_str, "math.salam")
+
+    i2 := at.Get(a, at.Child(a, prog, 2))
+    testing.AssertEqInt(i2.kind, at.AST_IMPORT)
+    testing.AssertEqStr(i2.name, "") // no alias
+    testing.AssertEqStr(i2.value_str, "other.salam")
+
+    i3 := at.Get(a, at.Child(a, prog, 3))
+    testing.AssertEqInt(i3.kind, at.AST_IMPORT)
+    testing.AssertEqStr(i3.name, "db.sqlite")
+
+    l0 := at.Get(a, at.Child(a, prog, 4))
+    testing.AssertEqInt(l0.kind, at.AST_LINK)
+    testing.AssertEqStr(l0.name, "") // no kind
+    testing.AssertEqStr(l0.value_str, "m")
+
+    l1 := at.Get(a, at.Child(a, prog, 5))
+    testing.AssertEqStr(l1.name, "static")
+    testing.AssertEqStr(l1.value_str, "c")
+
+    l2 := at.Get(a, at.Child(a, prog, 6))
+    testing.AssertEqInt(l2.kind, at.AST_LINK)
+    testing.AssertEqStr(l2.name, "dynamic")
+    testing.AssertEqStr(l2.value_str, "z")
+
+    fn := at.Get(a, at.Child(a, prog, 7))
+    testing.AssertEqInt(fn.kind, at.AST_FUNC_DEF)
+    testing.AssertEqStr(fn.name, "main")
+    at.FreeAst(a)
+end
+
+func test_simple_decls():
+    mut a := at.NewAst()
+    mut prog := 0
+    ok := parse_src("const K := 3\ntype Id = int\nenum D:\n    A, B = 5, C\nend\nmut g := 0\n", a, prog)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(at.ChildCount(a, prog), 4)
+
+    c0 := at.Get(a, at.Child(a, prog, 0))
+    testing.AssertEqInt(c0.kind, at.AST_CONST_DECL)
+    testing.AssertEqStr(c0.name, "K")
+    lit := at.Get(a, c0.a)
+    testing.AssertEqInt(lit.kind, at.AST_LITERAL)
+    testing.AssertEqInt(lit.op, tok.TK_INT)
+    testing.AssertEqInt(lit.value_kind, tok.TV_INT)
+    testing.AssertEqInt64(lit.value_int as i64, 3 as i64)
+    // Spans come from the tokens (1-based line/col).
+    testing.AssertEqInt(c0.begin_line as int, 1)
+    testing.AssertEqInt(c0.begin_col as int, 1)
+
+    t0 := at.Get(a, at.Child(a, prog, 1))
+    testing.AssertEqInt(t0.kind, at.AST_TYPE_ALIAS)
+    testing.AssertEqStr(t0.name, "Id")
+    testing.AssertEqStr(at.Get(a, t0.ty).name, "int")
+
+    e0 := at.Get(a, at.Child(a, prog, 2))
+    testing.AssertEqInt(e0.kind, at.AST_ENUM_DEF)
+    testing.AssertEqStr(e0.name, "D")
+    testing.AssertEqInt(e0.list.len(), 3)
+    m1 := at.Get(a, e0.list.get(1)[0])
+    testing.AssertEqInt(m1.kind, at.AST_ENUM_MEMBER)
+    testing.AssertEqStr(m1.name, "B")
+    testing.AssertEqInt64(at.Get(a, m1.a).value_int as i64, 5 as i64)
+    m2 := at.Get(a, e0.list.get(2)[0])
+    testing.AssertEqInt(m2.a, 0) // no explicit value
+
+    v0 := at.Get(a, at.Child(a, prog, 3))
+    testing.AssertEqInt(v0.kind, at.AST_VAR_DECL)
+    testing.AssertTrue(v0.is_mut)
+    testing.AssertEqStr(v0.name, "g")
+    at.FreeAst(a)
+end
+
+func test_struct_interface_impl():
+    mut a := at.NewAst()
+    mut prog := 0
+    ok := parse_src("pub struct S<T: Shape, U>:\n    pub x: int = 1\n    func m(): int:\n        ret 2\n    end\n    pub func operator + (o: S): S:\n        ret o\n    end\nend\ninterface I:\n    func area(): f64\nend\nimpl I on int:\n    func area(): f64:\n        ret 1.0\n    end\nend\n", a, prog)
+    testing.AssertTrue(ok)
+
+    s0 := at.Get(a, at.Child(a, prog, 0))
+    testing.AssertEqInt(s0.kind, at.AST_STRUCT_DEF)
+    testing.AssertEqStr(s0.name, "S")
+    testing.AssertTrue(s0.is_pub)
+    testing.AssertEqInt(at.TyparamCount(a, at.Child(a, prog, 0)), 2)
+    testing.AssertEqStr(at.Typaram(a, at.Child(a, prog, 0), 0), "T")
+    testing.AssertEqStr(at.TyparamBound(a, at.Child(a, prog, 0), 0), "Shape")
+    testing.AssertEqStr(at.Typaram(a, at.Child(a, prog, 0), 1), "U")
+    testing.AssertEqStr(at.TyparamBound(a, at.Child(a, prog, 0), 1), "")
+    testing.AssertEqInt(s0.list.len(), 3)
+    f0 := at.Get(a, s0.list.get(0)[0])
+    testing.AssertEqInt(f0.kind, at.AST_FIELD)
+    testing.AssertEqStr(f0.name, "x")
+    testing.AssertTrue(f0.is_pub)
+    testing.AssertEqStr(at.Get(a, f0.ty).name, "int")
+    testing.AssertEqInt64(at.Get(a, f0.a).value_int as i64, 1 as i64)
+    me0 := at.Get(a, s0.list.get(1)[0])
+    testing.AssertEqInt(me0.kind, at.AST_FUNC_DEF)
+    testing.AssertEqStr(me0.name, "m")
+    testing.AssertFalse(me0.is_pub)
+    op0 := at.Get(a, s0.list.get(2)[0])
+    testing.AssertEqStr(op0.name, "operator_add")
+
+    i0 := at.Get(a, at.Child(a, prog, 1))
+    testing.AssertEqInt(i0.kind, at.AST_INTERFACE_DEF)
+    testing.AssertEqStr(i0.name, "I")
+    testing.AssertEqInt(i0.list.len(), 1)
+    am := at.Get(a, i0.list.get(0)[0])
+    testing.AssertEqInt(am.kind, at.AST_FUNC_DEF)
+    testing.AssertEqStr(at.Get(a, am.ty).name, "f64")
+    testing.AssertEqInt(am.a, 0) // signature only, no body
+
+    im := at.Get(a, at.Child(a, prog, 2))
+    testing.AssertEqInt(im.kind, at.AST_IMPL_DEF)
+    testing.AssertEqStr(im.name, "I")
+    testing.AssertEqStr(at.Get(a, im.ty).name, "int")
+    testing.AssertEqInt(im.list.len(), 1)
+    at.FreeAst(a)
+end
+
+func test_extern_and_modifiers():
+    mut a := at.NewAst()
+    mut prog := 0
+    ok := parse_src("extern:\n    func printf(format: str, ...): int\n    deprecated pure func old(x: f64): f64\n    noret func die(code: int)\n    mut errno: int\n    var other: u64\nend\npub inline pure func Area(w: f64): f64:\n    ret w\nend\n", a, prog)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(at.ChildCount(a, prog), 6)
+
+    e0 := at.Get(a, at.Child(a, prog, 0))
+    testing.AssertEqInt(e0.kind, at.AST_FUNC_DEF)
+    testing.AssertEqStr(e0.name, "printf")
+    testing.AssertTrue(e0.is_extern)
+    testing.AssertTrue(e0.is_variadic)
+    testing.AssertEqInt(e0.list.len(), 1) // format only; ... stops the list
+    p0 := at.Get(a, e0.list.get(0)[0])
+    testing.AssertEqStr(p0.name, "format")
+    testing.AssertEqStr(at.Get(a, p0.ty).name, "str")
+
+    e1 := at.Get(a, at.Child(a, prog, 1))
+    testing.AssertTrue(e1.is_deprecated)
+    testing.AssertTrue(e1.is_pure)
+    testing.AssertFalse(e1.is_noret)
+
+    e2 := at.Get(a, at.Child(a, prog, 2))
+    testing.AssertTrue(e2.is_noret)
+
+    e3 := at.Get(a, at.Child(a, prog, 3))
+    testing.AssertEqInt(e3.kind, at.AST_VAR_DECL)
+    testing.AssertTrue(e3.is_extern)
+    testing.AssertTrue(e3.is_mut)
+    testing.AssertEqStr(e3.name, "errno")
+
+    e4 := at.Get(a, at.Child(a, prog, 4))
+    testing.AssertTrue(e4.is_mut) // 'var' spelling
+    testing.AssertEqStr(e4.name, "other")
+
+    f0 := at.Get(a, at.Child(a, prog, 5))
+    testing.AssertTrue(f0.is_pub)
+    testing.AssertTrue(f0.is_inline)
+    testing.AssertTrue(f0.is_pure)
+    testing.AssertFalse(f0.is_noinline)
+    testing.AssertFalse(f0.is_noret)
+    at.FreeAst(a)
+end
+
+func test_statements():
+    mut a := at.NewAst()
+    mut prog := 0
+    ok := parse_src("func main:\n    until i < n:\n        break\n    end\n    repeat 0 to 20 by 2 with j:\n        continue\n    end\n    each (k, v) in xs:\n        ret\n    end\n    defer v.free()\n    println \"hi\", 2\n    x := 5\n    x = 6\n    x += 2\nend\n", a, prog)
+    testing.AssertTrue(ok)
+    fn := def0(a, prog)
+
+    u0 := at.Get(a, stmt_at(a, fn, 0))
+    testing.AssertEqInt(u0.kind, at.AST_UNTIL)
+    cond := at.Get(a, u0.a)
+    testing.AssertEqInt(cond.kind, at.AST_BINARY)
+    testing.AssertEqInt(cond.op, tok.TK_LT)
+    testing.AssertEqInt(at.KindOf(a, at.Child(a, u0.b, 0)), at.AST_BREAK)
+
+    r0 := at.Get(a, stmt_at(a, fn, 1))
+    testing.AssertEqInt(r0.kind, at.AST_REPEAT)
+    testing.AssertEqStr(r0.name, "j")
+    testing.AssertEqInt64(at.Get(a, r0.a).value_int as i64, 0 as i64)
+    testing.AssertEqInt64(at.Get(a, r0.c).value_int as i64, 20 as i64)
+    testing.AssertEqInt64(at.Get(a, r0.d).value_int as i64, 2 as i64)
+    testing.AssertEqInt(at.KindOf(a, at.Child(a, r0.b, 0)), at.AST_CONTINUE)
+
+    e0 := at.Get(a, stmt_at(a, fn, 2))
+    testing.AssertEqInt(e0.kind, at.AST_EACH)
+    testing.AssertEqStr(at.Get(a, e0.c).name, "k") // key binding
+    testing.AssertEqStr(e0.name, "v")              // value binding
+    testing.AssertEqStr(at.Get(a, e0.a).name, "xs")
+    testing.AssertEqInt(at.KindOf(a, at.Child(a, e0.b, 0)), at.AST_RETURN)
+
+    d0 := at.Get(a, stmt_at(a, fn, 3))
+    testing.AssertEqInt(d0.kind, at.AST_DEFER)
+    ds := at.Get(a, d0.a)
+    testing.AssertEqInt(ds.kind, at.AST_EXPR_STMT)
+    testing.AssertEqInt(at.KindOf(a, ds.a), at.AST_CALL)
+
+    pr := at.Get(a, stmt_at(a, fn, 4))
+    testing.AssertEqInt(pr.kind, at.AST_EXPR_STMT)
+    pc := at.Get(a, pr.a)
+    testing.AssertEqInt(pc.kind, at.AST_CALL)
+    testing.AssertEqStr(at.Get(a, pc.a).name, "println")
+    testing.AssertEqInt(pc.list.len(), 2)
+    arg0 := at.Get(a, pc.list.get(0)[0])
+    testing.AssertEqInt(arg0.value_kind, tok.TV_STRING)
+    testing.AssertEqStr(arg0.value_str, "hi")
+
+    vd := at.Get(a, stmt_at(a, fn, 5))
+    testing.AssertEqInt(vd.kind, at.AST_VAR_DECL)
+    testing.AssertFalse(vd.is_mut)
+
+    as0 := at.Get(a, stmt_at(a, fn, 6))
+    testing.AssertEqInt(as0.kind, at.AST_ASSIGN) // assignment IS the statement
+    testing.AssertEqInt(as0.op, tok.TK_ASSIGN)
+
+    as1 := at.Get(a, stmt_at(a, fn, 7))
+    testing.AssertEqInt(as1.kind, at.AST_ASSIGN)
+    testing.AssertEqInt(as1.op, tok.TK_PLUS_EQ)
+    at.FreeAst(a)
+end
+
+func test_if_and_match():
+    mut a := at.NewAst()
+    mut prog := 0
+    ok := parse_src("func main:\n    if x > 0:\n        ret\n    else x == 0:\n        ret\n    else:\n        ret\n    end\n    g := match v:\n        1, 2 => \"low\"\n        else => \"high\"\n    end\nend\n", a, prog)
+    testing.AssertTrue(ok)
+    fn := def0(a, prog)
+
+    i0 := at.Get(a, stmt_at(a, fn, 0))
+    testing.AssertEqInt(i0.kind, at.AST_IF)
+    testing.AssertEqInt(at.KindOf(a, i0.b), at.AST_BLOCK)
+    elif := at.Get(a, i0.c) // "else <cond>" nests another IF
+    testing.AssertEqInt(elif.kind, at.AST_IF)
+    testing.AssertEqInt(at.Get(a, elif.a).op, tok.TK_EQ)
+    testing.AssertEqInt(at.KindOf(a, elif.c), at.AST_BLOCK) // final else
+
+    g0 := at.Get(a, stmt_at(a, fn, 1))
+    testing.AssertEqInt(g0.kind, at.AST_VAR_DECL)
+    mn := at.Get(a, g0.a)
+    testing.AssertEqInt(mn.kind, at.AST_MATCH)
+    testing.AssertEqInt(mn.list.len(), 2)
+    arm0 := at.Get(a, mn.list.get(0)[0])
+    testing.AssertEqInt(arm0.kind, at.AST_MATCH_ARM)
+    testing.AssertEqInt(arm0.list.len(), 2) // two patterns "1, 2"
+    pat0 := at.Get(a, arm0.list.get(0)[0])
+    testing.AssertEqInt(pat0.kind, at.AST_MATCH_PATTERN)
+    testing.AssertEqInt(at.KindOf(a, pat0.a), at.AST_LITERAL)
+    // '=>' arm body is a synthesized block holding one ExprStmt
+    b0 := at.Get(a, arm0.b)
+    testing.AssertEqInt(b0.kind, at.AST_BLOCK)
+    testing.AssertEqInt(at.KindOf(a, at.Child(a, arm0.b, 0)), at.AST_EXPR_STMT)
+    arm1 := at.Get(a, mn.list.get(1)[0])
+    testing.AssertEqInt(arm1.op, tok.TK_KW_ELSE)
+    testing.AssertEqInt(arm1.list.len(), 0)
+    at.FreeAst(a)
+end
+
+func test_match_type_pattern_binding():
+    mut a := at.NewAst()
+    mut prog := 0
+    ok := parse_src("func main:\n    r := match v:\n        i32 n => n\n        str s:\n            ret\n        end\n        else => 0\n    end\nend\n", a, prog)
+    testing.AssertTrue(ok)
+    fn := def0(a, prog)
+    mn := at.Get(a, at.Get(a, stmt_at(a, fn, 0)).a)
+    testing.AssertEqInt(mn.kind, at.AST_MATCH)
+    pat0 := at.Get(a, at.Get(a, mn.list.get(0)[0]).list.get(0)[0])
+    testing.AssertEqStr(at.Get(a, pat0.a).name, "i32") // head identifier
+    testing.AssertEqStr(pat0.name, "n")                // binding name
+    pat1 := at.Get(a, at.Get(a, mn.list.get(1)[0]).list.get(0)[0])
+    testing.AssertEqStr(at.Get(a, pat1.a).name, "str")
+    testing.AssertEqStr(pat1.name, "s")
+    at.FreeAst(a)
+end
+
+func test_expressions():
+    mut a := at.NewAst()
+    mut prog := 0
+    ok := parse_src("func main:\n    a := 1 + 2 * 3\n    b := 1 | 2 & 3\n    c := 1 << 4 + 1\n    d := 2 ** 3 ** 2\n    e := x ? y : z\n    f := 250 as u8\n    ++i\n    i++\n    g := !q && -w || ~r\n    h := v[i]\n    s := v[1: 2]\n    m := o.pet name\n    n := f2(1, 2)\n    t := sizeof(int)\n    u := take(&src)\n    arr := [1, 2, 3]\nend\n", a, prog)
+    testing.AssertTrue(ok)
+    fn := def0(a, prog)
+
+    a0 := at.Get(a, at.Get(a, stmt_at(a, fn, 0)).a)
+    testing.AssertEqInt(a0.op, tok.TK_PLUS)
+    testing.AssertEqInt(at.Get(a, a0.b).op, tok.TK_STAR) // * binds tighter
+
+    b0 := at.Get(a, at.Get(a, stmt_at(a, fn, 1)).a)
+    testing.AssertEqInt(b0.op, tok.TK_PIPE)
+    testing.AssertEqInt(at.Get(a, b0.b).op, tok.TK_AMP) // & tighter than |
+
+    c0 := at.Get(a, at.Get(a, stmt_at(a, fn, 2)).a)
+    testing.AssertEqInt(c0.op, tok.TK_SHL)
+    testing.AssertEqInt(at.Get(a, c0.b).op, tok.TK_PLUS) // + tighter than <<
+
+    d0 := at.Get(a, at.Get(a, stmt_at(a, fn, 3)).a)
+    testing.AssertEqInt(d0.op, tok.TK_POWER)
+    testing.AssertEqInt(at.Get(a, d0.b).op, tok.TK_POWER) // right assoc
+
+    e0 := at.Get(a, at.Get(a, stmt_at(a, fn, 4)).a)
+    testing.AssertEqInt(e0.kind, at.AST_TERNARY)
+    testing.AssertEqStr(at.Get(a, e0.a).name, "x")
+    testing.AssertEqStr(at.Get(a, e0.c).name, "z")
+
+    f0 := at.Get(a, at.Get(a, stmt_at(a, fn, 5)).a)
+    testing.AssertEqInt(f0.kind, at.AST_CAST)
+    testing.AssertEqStr(at.Get(a, f0.ty).name, "u8")
+
+    inc := at.Get(a, at.Get(a, stmt_at(a, fn, 6)).a)
+    testing.AssertEqInt(inc.kind, at.AST_INCDEC)
+    testing.AssertEqInt(inc.op, tok.TK_PLUS_PLUS)
+    testing.AssertTrue(inc.is_prefix)
+
+    pst := at.Get(a, at.Get(a, stmt_at(a, fn, 7)).a)
+    testing.AssertEqInt(pst.kind, at.AST_INCDEC)
+    testing.AssertFalse(pst.is_prefix)
+
+    g0 := at.Get(a, at.Get(a, stmt_at(a, fn, 8)).a)
+    testing.AssertEqInt(g0.op, tok.TK_OR) // || loosest
+    lg0 := at.Get(a, g0.a)
+    testing.AssertEqInt(lg0.op, tok.TK_AND)
+    testing.AssertEqInt(at.Get(a, lg0.a).kind, at.AST_UNARY) // !q
+    testing.AssertEqInt(at.Get(a, lg0.a).op, tok.TK_NOT)
+    testing.AssertEqInt(at.Get(a, g0.b).op, tok.TK_TILDE)
+
+    h0 := at.Get(a, at.Get(a, stmt_at(a, fn, 9)).a)
+    testing.AssertEqInt(h0.kind, at.AST_INDEX)
+
+    s0 := at.Get(a, at.Get(a, stmt_at(a, fn, 10)).a)
+    testing.AssertEqInt(s0.kind, at.AST_SLICE)
+    testing.AssertEqInt64(at.Get(a, s0.b).value_int as i64, 1 as i64)
+    testing.AssertEqInt64(at.Get(a, s0.c).value_int as i64, 2 as i64)
+
+    m0 := at.Get(a, at.Get(a, stmt_at(a, fn, 11)).a)
+    testing.AssertEqInt(m0.kind, at.AST_MEMBER)
+    testing.AssertEqStr(m0.name, "pet name") // multi-word member munch
+    testing.AssertEqStr(at.Get(a, m0.a).name, "o")
+
+    n0 := at.Get(a, at.Get(a, stmt_at(a, fn, 12)).a)
+    testing.AssertEqInt(n0.kind, at.AST_CALL)
+    testing.AssertEqInt(n0.list.len(), 2)
+
+    t0 := at.Get(a, at.Get(a, stmt_at(a, fn, 13)).a)
+    testing.AssertEqInt(t0.kind, at.AST_CALL)
+    testing.AssertEqStr(at.Get(a, t0.a).name, "sizeof")
+    testing.AssertEqInt(at.KindOf(a, t0.list.get(0)[0]), at.AST_TYPE) // type arg
+
+    u0 := at.Get(a, at.Get(a, stmt_at(a, fn, 14)).a)
+    fa := at.Get(a, u0.list.get(0)[0])
+    testing.AssertEqInt(fa.kind, at.AST_FUNC_ADDR)
+    testing.AssertEqStr(fa.name, "src")
+
+    ar := at.Get(a, at.Get(a, stmt_at(a, fn, 15)).a)
+    testing.AssertEqInt(ar.kind, at.AST_ARRAY_LIT)
+    testing.AssertEqInt(ar.list.len(), 3)
+    at.FreeAst(a)
+end
+
+func test_lambdas_and_struct_lit():
+    mut a := at.NewAst()
+    mut prog := 0
+    ok := parse_src("func main:\n    inc := (x: int) => x * 2\n    blk := ():\n        ret 1\n    end\n    acc := Account { balance = 100, owner name = \"sam\" }\nend\n", a, prog)
+    testing.AssertTrue(ok)
+    fn := def0(a, prog)
+
+    l0 := at.Get(a, at.Get(a, stmt_at(a, fn, 0)).a)
+    testing.AssertEqInt(l0.kind, at.AST_LAMBDA)
+    testing.AssertEqInt(l0.list.len(), 1)
+    lp0 := at.Get(a, l0.list.get(0)[0])
+    testing.AssertEqInt(lp0.kind, at.AST_PARAM)
+    testing.AssertEqStr(lp0.name, "x")
+    testing.AssertEqStr(at.Get(a, lp0.ty).name, "int")
+    // '=>' body becomes Block { Return expr }
+    lb := at.Get(a, l0.a)
+    testing.AssertEqInt(lb.kind, at.AST_BLOCK)
+    lr := at.Get(a, at.Child(a, l0.a, 0))
+    testing.AssertEqInt(lr.kind, at.AST_RETURN)
+    testing.AssertEqInt(at.Get(a, lr.a).op, tok.TK_STAR)
+
+    l1 := at.Get(a, at.Get(a, stmt_at(a, fn, 1)).a)
+    testing.AssertEqInt(l1.kind, at.AST_LAMBDA)
+    testing.AssertEqInt(l1.list.len(), 0)
+    testing.AssertEqInt(at.KindOf(a, at.Child(a, l1.a, 0)), at.AST_RETURN)
+
+    sl := at.Get(a, at.Get(a, stmt_at(a, fn, 2)).a)
+    testing.AssertEqInt(sl.kind, at.AST_STRUCT_LIT)
+    testing.AssertEqStr(sl.name, "Account")
+    testing.AssertEqInt(sl.list.len(), 2)
+    fi0 := at.Get(a, sl.list.get(0)[0])
+    testing.AssertEqInt(fi0.kind, at.AST_FIELD_INIT)
+    testing.AssertEqStr(fi0.name, "balance")
+    fi1 := at.Get(a, sl.list.get(1)[0])
+    testing.AssertEqStr(fi1.name, "owner name") // multi-word field munch
+    at.FreeAst(a)
+end
+
+func test_types_and_generics():
+    mut a := at.NewAst()
+    mut prog := 0
+    // NOTE: a nested-generic param ('m: Vector<Vector<int>>') must be LAST:
+    // the C parser's '>>' angle-split leaves a pending '>' that is only
+    // honored at the next p_close_angle, so a following ', p: ...' would be
+    // swallowed into the type-argument list (C behavior, port matches).
+    ok := parse_src("func f(v: int[:], p: i64*, d: dyn Shape, cb: func (int, str) bool, g: int[3][4], m: Vector<Vector<int>>): int:\n    ret 0\nend\nfunc add(x, y):\n    ret x + y\nend\nfunc make counter(): int:\n    ret 0\nend\n", a, prog)
+    testing.AssertTrue(ok)
+
+    fn := at.Get(a, at.Child(a, prog, 0))
+    testing.AssertEqInt(fn.list.len(), 6)
+    testing.AssertEqStr(at.Get(a, fn.ty).name, "int") // return type
+
+    tv := at.Get(a, at.Get(a, fn.list.get(0)[0]).ty)
+    testing.AssertTrue(tv.is_slice)
+
+    tm := at.Get(a, at.Get(a, fn.list.get(5)[0]).ty)
+    testing.AssertEqStr(tm.name, "Vector")
+    testing.AssertEqInt(tm.list.len(), 1) // one type arg (nested '>>' split)
+    inner := at.Get(a, tm.list.get(0)[0])
+    testing.AssertEqStr(inner.name, "Vector")
+    testing.AssertEqStr(at.Get(a, inner.list.get(0)[0]).name, "int")
+
+    tp := at.Get(a, at.Get(a, fn.list.get(1)[0]).ty)
+    testing.AssertTrue(tp.is_pointer)
+
+    td := at.Get(a, at.Get(a, fn.list.get(2)[0]).ty)
+    testing.AssertTrue(td.is_dyn)
+    testing.AssertEqStr(td.name, "Shape")
+
+    tc := at.Get(a, at.Get(a, fn.list.get(3)[0]).ty)
+    testing.AssertEqStr(tc.name, "func")
+    testing.AssertEqInt(tc.list.len(), 2)               // (int, str)
+    testing.AssertEqStr(at.Get(a, tc.ty).name, "bool")  // return type
+
+    tg := at.Get(a, at.Get(a, fn.list.get(4)[0]).ty)
+    testing.AssertEqInt(tg.dims.len(), 2)
+    testing.AssertEqInt64(at.Get(a, tg.dims.get(0)[0]).value_int as i64, 3 as i64)
+    testing.AssertEqInt64(at.Get(a, tg.dims.get(1)[0]).value_int as i64, 4 as i64)
+
+    // Untyped params synthesize __T0/__T1 type params.
+    ad := at.Get(a, at.Child(a, prog, 1))
+    testing.AssertEqInt(at.TyparamCount(a, at.Child(a, prog, 1)), 2)
+    testing.AssertEqStr(at.Typaram(a, at.Child(a, prog, 1), 0), "__T0")
+    testing.AssertEqStr(at.Get(a, at.Get(a, ad.list.get(0)[0]).ty).name, "__T0")
+    testing.AssertEqStr(at.Get(a, at.Get(a, ad.list.get(1)[0]).ty).name, "__T1")
+
+    // Multi-word function name.
+    mw := at.Get(a, at.Child(a, prog, 2))
+    testing.AssertEqStr(mw.name, "make counter")
+    at.FreeAst(a)
+end
+
+func test_layout_and_component():
+    mut a := at.NewAst()
+    mut prog := 0
+    ok := parse_src("component card(title = \"hi\", w):\n    box:\n        padding = \"2px\"\n    end\nend\nlayout:\n    title = \"Page\"\n    header:\n        heading:\n            size = 1\n            content = \"Hello\"\n        end\n    end\nend\n", a, prog)
+    testing.AssertTrue(ok)
+
+    cp := at.Get(a, at.Child(a, prog, 0))
+    testing.AssertEqInt(cp.kind, at.AST_LAYOUT_COMPONENT)
+    testing.AssertEqStr(cp.name, "card")
+    testing.AssertEqInt(cp.list.len(), 2) // title (with default), w
+    cp0 := at.Get(a, cp.list.get(0)[0])
+    testing.AssertEqStr(cp0.name, "title")
+    testing.AssertEqStr(at.Get(a, cp0.a).value_str, "hi")
+    testing.AssertEqInt(at.KindOf(a, cp.a), at.AST_BLOCK)
+    testing.AssertEqInt(at.KindOf(a, at.Child(a, cp.a, 0)), at.AST_LAYOUT_ELEMENT)
+
+    lo := at.Get(a, at.Child(a, prog, 1))
+    testing.AssertEqInt(lo.kind, at.AST_LAYOUT_BLOCK)
+    testing.AssertEqInt(lo.list.len(), 2) // title attr + header element
+    at0 := at.Get(a, lo.list.get(0)[0])
+    testing.AssertEqInt(at0.kind, at.AST_LAYOUT_ATTR)
+    testing.AssertEqStr(at0.name, "title")
+    testing.AssertEqStr(at.Get(a, at0.a).value_str, "Page")
+    hd := at.Get(a, lo.list.get(1)[0])
+    testing.AssertEqInt(hd.kind, at.AST_LAYOUT_ELEMENT)
+    testing.AssertEqStr(hd.name, "header")
+    hg := at.Get(a, hd.list.get(0)[0])
+    testing.AssertEqStr(hg.name, "heading")
+    testing.AssertEqInt(hg.list.len(), 2) // size, content attrs
+    at.FreeAst(a)
+end
+
+func test_metas_and_toplevel_if():
+    mut a := at.NewAst()
+    mut prog := 0
+    ok := parse_src("@en \"Add\" @fa \"Jam\" \"Afzudan\"\npub func Add(x: int): int:\n    ret x\nend\nif SALAM_OS_WINDOWS:\n    const SEP := \"w\"\nelse:\n    const SEP := \"u\"\nend\n", a, prog)
+    testing.AssertTrue(ok)
+
+    fn0 := at.Child(a, prog, 0)
+    testing.AssertEqInt(at.AliasCount(a, fn0), 6) // 3 (lang, value) pairs
+    testing.AssertEqStr(at.Alias(a, fn0, 0), "en")
+    testing.AssertEqStr(at.Alias(a, fn0, 1), "Add")
+    testing.AssertEqStr(at.Alias(a, fn0, 2), "fa")
+    testing.AssertEqStr(at.Alias(a, fn0, 3), "Jam")
+    testing.AssertEqStr(at.Alias(a, fn0, 4), "fa")
+    testing.AssertEqStr(at.Alias(a, fn0, 5), "Afzudan")
+
+    ti := at.Get(a, at.Child(a, prog, 1))
+    testing.AssertEqInt(ti.kind, at.AST_IF)
+    testing.AssertEqStr(at.Get(a, ti.a).name, "SALAM_OS_WINDOWS")
+    testing.AssertEqInt(at.KindOf(a, at.Child(a, ti.b, 0)), at.AST_CONST_DECL)
+    testing.AssertEqInt(at.KindOf(a, at.Child(a, ti.c, 0)), at.AST_CONST_DECL)
+    at.FreeAst(a)
+end
+
+func test_error_cases():
+    // '=' instead of ':=' on a new top-level binding.
+    mut a1 := at.NewAst()
+    mut p1 := 0
+    testing.AssertFalse(parse_src("x = 5\n", a1, p1))
+    at.FreeAst(a1)
+
+    // Grouped imports are rejected.
+    mut a2 := at.NewAst()
+    mut p2 := 0
+    testing.AssertFalse(parse_src("import (a b)\nfunc main:\n    ret\nend\n", a2, p2))
+    at.FreeAst(a2)
+
+    // Missing 'end'.
+    mut a3 := at.NewAst()
+    mut p3 := 0
+    testing.AssertFalse(parse_src("func main:\n    ret\n", a3, p3))
+    at.FreeAst(a3)
+
+    // Typed const declarations were removed.
+    mut a4 := at.NewAst()
+    mut p4 := 0
+    testing.AssertFalse(parse_src("const K: int = 3\n", a4, p4))
+    at.FreeAst(a4)
+
+    // Modifier order is enforced.
+    mut a5 := at.NewAst()
+    mut p5 := 0
+    testing.AssertFalse(parse_src("inline pub func F():\n    ret\nend\n", a5, p5))
+    at.FreeAst(a5)
+
+    // Duplicate '@lang' marker on one definition.
+    mut a6 := at.NewAst()
+    mut p6 := 0
+    testing.AssertFalse(parse_src("@en \"A\" @en \"B\"\nfunc F():\n    ret\nend\n", a6, p6))
+    at.FreeAst(a6)
+
+    // Recovery still produces a program node and keeps later defs.
+    mut a7 := at.NewAst()
+    mut p7 := 0
+    ok7 := parse_src("func broken(:\n    ret\nend\nfunc fine():\n    ret\nend\n", a7, p7)
+    testing.AssertFalse(ok7)
+    testing.AssertEqInt(at.KindOf(a7, p7), at.AST_PROGRAM)
+    mut has_fine := false
+    repeat at.ChildCount(a7, p7) with i:
+        d := at.Get(a7, at.Child(a7, p7, i))
+        if d.kind == at.AST_FUNC_DEF && str.Equals(d.name, "fine"):
+            has_fine = true
+        end
+    end
+    testing.AssertTrue(has_fine)
+    at.FreeAst(a7)
+end
+
+func main:
+    test_program_and_imports()
+    test_simple_decls()
+    test_struct_interface_impl()
+    test_extern_and_modifiers()
+    test_statements()
+    test_if_and_match()
+    test_match_type_pattern_binding()
+    test_expressions()
+    test_lambdas_and_struct_lit()
+    test_types_and_generics()
+    test_layout_and_component()
+    test_metas_and_toplevel_if()
+    test_error_cases()
+    os.Exit(testing.Summary())
+end

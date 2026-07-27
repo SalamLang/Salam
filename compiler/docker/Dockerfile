@@ -1,6 +1,12 @@
 # syntax=docker/dockerfile:1
 #
-# Salam compiler - multi-stage image (Alpine / musl, smallest practical base).
+# Salam compiler - multi-stage image (Alpine / musl, smallest practical
+# base). Self-hosted: there is no C source to compile anymore. `build-base`/
+# `tcc`/`clang`/`llvm` stay in the toolchain image because the self-hosted
+# compiler still SHELLS OUT to them at RUNTIME (the C codegen backend pipes
+# generated C through tcc/gcc/clang; the LLVM backend shells to
+# clang/llc/lli/lld to link). `make`/`cmake` are gone — nothing in this repo
+# uses them anymore.
 #
 
 ARG ALPINE_VERSION=edge
@@ -13,7 +19,6 @@ SHELL ["/bin/ash", "-o", "pipefail", "-c"]
 RUN for i in 1 2 3 4 5; do \
         apk add --no-cache \
             build-base \
-            make \
             musl-dev \
             tcc \
             tcc-libs-static \
@@ -58,20 +63,28 @@ ARG SALAM_GID=1000
 RUN addgroup -g "${SALAM_GID}" salam \
     && adduser -D -u "${SALAM_UID}" -G salam salam
 
+# Build context is now the REPO ROOT (see docker-compose.yml: `context: ../..`),
+# not compiler/ — std/ and tests/ live alongside compiler/ post-restructure,
+# and the self-hosted compiler needs std/ to run at all.
 WORKDIR /app
 
 FROM toolchain AS dev
 RUN apk add --no-cache entr
-RUN chown -R salam:salam /app \
-    && mkdir -p /app/build \
-    && chmod 1777 /app/build
+RUN chown -R salam:salam /app
 ENV HOME=/tmp
 USER salam
-ENTRYPOINT ["sh", "tools/bash/docker-dev.sh"]
+ENTRYPOINT ["sh", "compiler/tools/bash/docker-dev.sh"]
 
 FROM toolchain AS builder
 COPY . .
-RUN make OUTDIR=. -j"$(nproc)" && make OUTDIR=. install PREFIX=/usr/local
+# Self-host: compiler/salam (the tracked bootstrap binary) builds a fresh
+# compiler/salam from compiler/main.salam. No make/cmake, no C source.
+RUN sh compiler/tools/bash/build-compiler.sh
+# Install layout matches resolve_stdlib_root's installed-prefix fallback
+# (bin/salam finds ../share/salam/std automatically, no env var needed).
+RUN mkdir -p /usr/local/bin /usr/local/share/salam \
+    && cp compiler/salam /usr/local/bin/salam \
+    && cp -r std /usr/local/share/salam/std
 RUN salam version
 
 FROM toolchain AS prod

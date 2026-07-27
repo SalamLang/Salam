@@ -69,9 +69,10 @@ salam llvm prog.salam --emit-llvm --target=i686-linux-gnu   # 32-bit: usize = i3
   real 32-bit machine code (verified: a 32-bit triple produces an
   `ELF 32-bit Intel 80386` object).
 
-Width classification lives in `ll_target_ptr_bits()`
-(`compiler/src/llvm/codegen_llvm_type.c`); the prologue generator is
-`ll_emit_prologue()` (`compiler/src/llvm/codegen_llvm.c`).
+Width classification lives in `ll_target_ptr_bits()`; the prologue generator
+is `ll_emit_prologue()`. Both live in `compiler/llvm.salam` (the self-hosted
+compiler's LLVM backend — ported from the former `codegen_llvm_type.c`/
+`codegen_llvm.c`, now retired).
 
 Note: hash values and `%lld`/`%llu` formatting stay `i64` on every target - that
 is correct (64-bit math just runs via the helper routines on 32-bit).

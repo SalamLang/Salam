@@ -1,7 +1,4 @@
 # syntax=docker/dockerfile:1
-#
-# Salam benchmark suite - reproducible cross-language toolchain image.
-#
 # checkov:skip=CKV_DOCKER_2:One-shot CLI benchmark runner, not a long-running service; no process to healthcheck.
 
 ARG ALPINE_VERSION=edge
@@ -67,14 +64,11 @@ RUN addgroup -g "${SALAM_GID}" salam \
 ENV GOCACHE=/tmp/go-cache GOPATH=/tmp/go CARGO_HOME=/tmp/cargo
 WORKDIR /repo
 
-# Self-hosted: there is no C source, no make, no cmake. compiler/salam (the
-# tracked bootstrap binary) builds a fresh compiler/salam from
-# compiler/main.salam via compiler/tools/bash/build-compiler.sh.
 FROM toolchain AS salam-builder
 COPY compiler /repo/compiler
 COPY std /repo/std
 WORKDIR /repo
-RUN sh compiler/tools/bash/build-compiler.sh
+RUN chmod +x compiler/salam && sh compiler/tools/bash/build-compiler.sh
 RUN /repo/compiler/salam version
 
 FROM toolchain AS bench
@@ -88,7 +82,6 @@ ENV SALAM_BIN=/repo/salam \
 
 HEALTHCHECK NONE
 
-# hadolint ignore=SC2016
 RUN printf '%s\n' \
     '#!/bin/sh' \
     'set -e' \

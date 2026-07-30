@@ -203,6 +203,11 @@ pub struct Dr:
     // this only if it was still empty, matching opt->exe_path[0]=='\0').
     pub exe_path: str = ""
     pub defines: Vector<str> = Vector {}
+    // --export=FnName:CName (repeatable): keep a normally-DCE'd top-level
+    // pub func alive and emit it under the literal C name instead of the
+    // usual mangled one. For embedding a hand-picked API surface (e.g. the
+    // WASM playground) into a build that has no entry point of its own.
+    pub exports: Vector<str> = Vector {}
     pub llvm_opt_level: int = 0
     pub llvm_emit: int = 0
     pub llvm_verify: bool = false
@@ -468,6 +473,29 @@ func build_impl(opt &: Dr): int:
     sm.SetStdlibRoot(opt.stdlib_path)
     sm.LayoutSchemaInit(opt.stdlib_path)
 
+    // --export=Fn:CName is only registered (cg.AddExportOverride) once we
+    // know the DEFINING file's own package (modpkg, below) - matching by
+    // name alone would rename EVERY same-named free function across every
+    // module this build transitively pulls in (e.g. llvm.salam's own
+    // Emit() collides with sal_web.salam's Emit() otherwise).
+    mut export_names := Vector {} as Vector<str>
+    mut export_cnames := Vector {} as Vector<str>
+    defer export_names.free()
+    defer export_cnames.free()
+    repeat opt.exports.len() with exi:
+        spec := opt.exports.get(exi)[0]
+        colon := str.IndexOf(spec, ":")
+        if colon <= 0 || colon >= str.Len(spec) - 1:
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
+                   "invalid --export value '" + spec + "' (want Fn:CName)")
+            ret 2
+        end
+        fname := str.Substr(spec, 0, colon)
+        cname := str.Substr(spec, colon + 1, str.Len(spec) - colon - 1)
+        export_names.push(fname)
+        export_cnames.push(cname)
+    end
+
     mut musl_tcc := MuslTcc {}
     if str.Equals(opt.cc, "tcc"):
         mut bundled := ""
@@ -643,6 +671,22 @@ func build_impl(opt &: Dr): int:
                 has_entry = true
                 sm.DceMarkRoot(modpkg, modentry)
                 break
+            end
+        end
+        // --export only applies to the entry file itself (wi==0): matching
+        // by name across every transitively-imported module would catch
+        // unrelated same-named functions too (e.g. llvm.salam's own Emit()).
+        if wi == 0 && export_names.len() > 0:
+            repeat prog_n.list.len() with di3x:
+                d4 := at.Get(a, prog_n.list.get(di3x)[0])
+                if d4.kind == at.AST_FUNC_DEF:
+                    repeat export_names.len() with exj:
+                        if str.Equals(d4.name, export_names.get(exj)[0]):
+                            sm.DceMarkRoot(modpkg, d4.name)
+                            cg.AddExportOverride(modpkg, d4.name, export_cnames.get(exj)[0])
+                        end
+                    end
+                end
             end
         end
 

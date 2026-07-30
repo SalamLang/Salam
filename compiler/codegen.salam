@@ -108,6 +108,15 @@ k_cg_base_c := [
     "uint64_t", "size_t", "float", "double", "salam_file"
 ] as str[17]
 
+// g_cg_export_{pkg,from,to} — --export=Fn:CName overrides (driver.salam
+// populates via AddExportOverride while scanning each module's own AST, so
+// pkg is always that function's OWN defining package). Keyed by (pkg, fn):
+// name-only would rename every same-named free function this build
+// transitively pulls in (e.g. llvm.salam's own Emit() vs. sal_web.salam's).
+mut g_cg_export_pkg := Vector {} as Vector<str>
+mut g_cg_export_from := Vector {} as Vector<str>
+mut g_cg_export_to := Vector {} as Vector<str>
+
 // ===== codegen.h =====
 // codegen_output_t. C field `module` -> module_name (kept obvious).
 pub struct Output:
@@ -160,6 +169,17 @@ pub struct Cg:
     pub match_result_tmp: str = ""
     pub match_end_label: str = ""
     pub compact: bool = false
+end
+
+// cg_export_override — "" if (pkg, fname) has no registered override.
+func cg_export_override(pkg: str, fname: str): str:
+    repeat g_cg_export_from.len() with i:
+        if str.Equals(g_cg_export_pkg.get(i)[0], pkg) &&
+           str.Equals(g_cg_export_from.get(i)[0], fname):
+            ret g_cg_export_to.get(i)[0]
+        end
+    end
+    ret ""
 end
 
 // ---------------------------------------------------------------------------
@@ -726,6 +746,12 @@ end
 // cg_mangle_in — params are sm TypeIds. "" = the C NULL for pkg/sname.
 func cg_mangle_in(s &: sm.Sema, pkg: str, sname: str, fname: str,
                   params: Vector<int>): str:
+    if str.Len(sname) == 0:
+        override := cg_export_override(pkg, fname)
+        if str.Len(override) > 0:
+            ret override
+        end
+    end
     mut b := co.SbNew()
     co.SbPuts(b, "_Salam_")
     co.SbPuts(b, cg_cident(str.Len(pkg) > 0 ? pkg : "main"))
@@ -5126,6 +5152,15 @@ end
 
 pub func VariantTagOf(variant_ts: str, member_ts: str): int:
     ret cg_variant_tag_of(variant_ts, member_ts)
+end
+
+// AddExportOverride — make free (non-method) top-level pub func `fname`,
+// defined in package `pkg`, keep its literal C name `cname` instead of the
+// usual mangled one. See cg_mangle_in.
+pub func AddExportOverride(pkg: str, fname: str, cname: str):
+    g_cg_export_pkg.push(pkg)
+    g_cg_export_from.push(fname)
+    g_cg_export_to.push(cname)
 end
 
 pub func IsSliceTs(ts: str): bool:

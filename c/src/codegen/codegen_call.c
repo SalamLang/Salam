@@ -285,7 +285,7 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
         const char *cn = cg_ctype(cg, n->type_str ? n->type_str : "Vector_str");
         int t = ++cg->tmpn;
         return cg_fmt(cg,
-                      "({ int32_t __an%d; char** __ad%d = salam_args(&__an%d); (%s){ "
+                      "({ int32_t __an%d; const char** __ad%d = salam_args(&__an%d); (%s){ "
                       "__ad%d, __an%d, __an%d }; })",
                       t, t, t, cn, t, t, t);
     }
@@ -294,7 +294,7 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
         const char *arg = cg_expr(cg, (ast_node_t *)n->list.data[0]);
         int t = ++cg->tmpn;
         return cg_fmt(cg,
-                      "({ int32_t __vn%d; char** __vd%d = salam_os_listdir(%s, &__vn%d); "
+                      "({ int32_t __vn%d; const char** __vd%d = salam_os_listdir(%s, &__vn%d); "
                       "(%s){ __vd%d, __vn%d, __vn%d }; })",
                       t, t, arg, t, cn, t, t, t);
     }

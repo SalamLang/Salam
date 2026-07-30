@@ -319,7 +319,8 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                                 all_ok = false;
                                 continue;
                             }
-                            logger_add_diag_source(log, pfiles[pi], psrc->text, psrc->len);
+                            logger_add_diag_source(log, pfiles[pi], psrc->text,
+                                                   psrc->len);
                             if (!lexer_run(arena, log, modpack, psrc, &ptoks))
                                 lok = false;
                             if (!parser_run(arena, log, ptoks, &pprog)) pok = false;

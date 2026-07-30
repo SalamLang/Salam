@@ -284,19 +284,21 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
     if (!strcmp(nm, "args")) {
         const char *cn = cg_ctype(cg, n->type_str ? n->type_str : "Vector_str");
         int t = ++cg->tmpn;
-        return cg_fmt(cg,
-                      "({ int32_t __an%d; const char** __ad%d = salam_args(&__an%d); (%s){ "
-                      "__ad%d, __an%d, __an%d }; })",
-                      t, t, t, cn, t, t, t);
+        return cg_fmt(
+            cg,
+            "({ int32_t __an%d; const char** __ad%d = salam_args(&__an%d); (%s){ "
+            "__ad%d, __an%d, __an%d }; })",
+            t, t, t, cn, t, t, t);
     }
     if (!strcmp(nm, "listdir") && n->list.len == 1) {
         const char *cn = cg_ctype(cg, n->type_str ? n->type_str : "Vector_str");
         const char *arg = cg_expr(cg, (ast_node_t *)n->list.data[0]);
         int t = ++cg->tmpn;
-        return cg_fmt(cg,
-                      "({ int32_t __vn%d; const char** __vd%d = salam_os_listdir(%s, &__vn%d); "
-                      "(%s){ __vd%d, __vn%d, __vn%d }; })",
-                      t, t, arg, t, cn, t, t, t);
+        return cg_fmt(
+            cg,
+            "({ int32_t __vn%d; const char** __vd%d = salam_os_listdir(%s, &__vn%d); "
+            "(%s){ __vd%d, __vn%d, __vn%d }; })",
+            t, t, arg, t, cn, t, t, t);
     }
     if (!strcmp(nm, "sizeof") && n->list.len == 1) {
         ast_node_t *op = (ast_node_t *)n->list.data[0];

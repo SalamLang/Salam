@@ -49,6 +49,26 @@ pub const PH_CODEGEN := 6
 // (salam/diag.salam: DIAG_STYLE_* / DIAG_FORMAT_*); the logger stores
 // them as plain ints. 0 = DIAG_STYLE_RUST = DIAG_FORMAT_HUMAN.
 
+// logger_internal.h: LOGGER_MAX_DIAG_SOURCES. The C used a fixed-size array
+// (diag_source_entry_t src_table[LOGGER_MAX_DIAG_SOURCES]) embedded directly
+// in logger_t, which is safe under struct-copy (a copy duplicates the whole
+// array by value). Logger here is likewise a VALUE struct that gets copied
+// by value throughout the codebase (SetLogger/New/serr/swarn/sm.New/dg.New
+// all take or return a Logger by value) — so src_table's backing storage
+// must never move after construction, or a stale copy taken before a growth
+// point is left holding a pointer into memory that reserve()'s
+// mem.Reallocate has since freed/moved out from under it (confirmed via a
+// real crash: driver.salam's own `lgr` and semantic.salam's `s.log` are
+// independent copies of the same original Logger; s.log's src_table grows
+// past its initial capacity while resolving imports, reallocating its
+// buffer, which leaves `lgr`'s copy of the OLD, now-freed pointer dangling).
+// Vector<T> gives growable-past-capacity semantics for free, so instead of
+// hand-rolling a fixed C array, New() reserves the full C capacity up front
+// and AddDiagSource never pushes past it — this guarantees the buffer is
+// allocated exactly once and never moves, exactly matching the C's
+// by-value-copy safety.
+pub const LOGGER_MAX_DIAG_SOURCES := 512
+
 // diag_source_entry_t (logger_internal.h) — one per-file source buffer,
 // registered via AddDiagSource so a rich-rendered diagnostic for an
 // imported/package file doesn't fall back to whichever file's text happens
@@ -59,9 +79,6 @@ pub struct DiagSourceEntry:
     pub len: int = 0
 end
 
-// struct logger (logger_internal.h) — sink is always stderr in this port.
-// src_table was a fixed-size C array (LOGGER_MAX_DIAG_SOURCES); the port
-// uses an unbounded Vector instead.
 pub struct Logger:
     pub min_level: int = 2
     pub color: bool = false
@@ -174,6 +191,9 @@ pub func New(min_level: int, color: bool): Logger:
     lg.src_text = ""
     lg.src_len = 0
     lg.src_table = Vector {} as Vector<DiagSourceEntry>
+    // Reserve the full fixed capacity now, once, so the buffer never has to
+    // move later — see the LOGGER_MAX_DIAG_SOURCES comment on Logger above.
+    lg.src_table.reserve(LOGGER_MAX_DIAG_SOURCES)
     ret lg
 end
 
@@ -208,11 +228,18 @@ pub func AddDiagSource(lg &: Logger, file: str, src_text: str, src_len: int):
         end
         i += 1
     end
-    mut ne := DiagSourceEntry {}
-    ne.file = file
-    ne.text = src_text
-    ne.len = src_len
-    lg.src_table.push(ne)
+    // Matches the C's `if (lg->src_table_len < LOGGER_MAX_DIAG_SOURCES)`
+    // guard: extra files beyond the fixed capacity are silently dropped
+    // (they fall back to the single SetDiagSource buffer in find_src)
+    // rather than growing src_table's backing storage past its one-time
+    // reserve() in New() — see the LOGGER_MAX_DIAG_SOURCES comment above.
+    if n < LOGGER_MAX_DIAG_SOURCES:
+        mut ne := DiagSourceEntry {}
+        ne.file = file
+        ne.text = src_text
+        ne.len = src_len
+        lg.src_table.push(ne)
+    end
 end
 
 // logger_set_timestamps

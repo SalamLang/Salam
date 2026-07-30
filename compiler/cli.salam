@@ -153,6 +153,33 @@ func parse_indent_width(val: str, out &: int): bool:
     ret true
 end
 
+// --timeout=<ms> for `salam run`/`exec`/`jit`: the tree-walking interpreter's
+// wall-clock deadline (interp.salam defaults to 5000ms when unset). Same
+// digit-only validation as parse_indent_width, but no small upper cap since
+// long-running interpreted programs are a legitimate use case; still bounded
+// so a garbage/huge value can't overflow the int field.
+func parse_timeout_ms(val: str, out &: int): bool:
+    n := str.Len(val)
+    if n == 0 || n > 9:
+        ret false
+    end
+    mut num := 0
+    mut i := 0
+    until i < n:
+        code := byte_at(val, i)
+        if !str.IsDigit(code):
+            ret false
+        end
+        num = num * 10 + (code - 48)
+        i += 1
+    end
+    if num < 1:
+        ret false
+    end
+    out = num
+    ret true
+end
+
 // core/sb.c's sb_put_shell_arg: quote a single argv-style token so it
 // survives a shell command line built with string concatenation (used by
 // debug_cmd/memcheck_cmd, which invoke gdb/lldb/valgrind via os.Run).
@@ -469,6 +496,15 @@ func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
             out.lang = val
         else opt_value(arg, "--xml-out", val):
             out.xml_out = val
+        else opt_value(arg, "--timeout", val):
+            mut ms := 0
+            if !parse_timeout_ms(val, ms):
+                io.EPrintln(co.Format1(
+                    i18.Tr("salam: invalid --timeout value '%s' (milliseconds, > 0)"),
+                    co.ArgStr(val)))
+                ret false
+            end
+            out.timeout_ms = ms
         else str.StartsWith(arg, "-") && str.Len(arg) > 1:
             io.EPrintln(co.Format1(i18.Tr("salam: unknown option '%s'"), co.ArgStr(arg)))
             ret false
@@ -830,7 +866,7 @@ Commands:
                                                 'script: src="*.salam"' programs; one .html
                                                 (default) or .html/.css/.js with --split
   run      [file.salam] [build options]         Build (auto-detect entry) + run, no artifacts kept
-  exec     [file.salam]                          Run with the tree-walking interpreter (no C toolchain)
+  exec     [file.salam] [--timeout=MS]           Run with the tree-walking interpreter (no C toolchain)
   new      [name] [--lang=en|fa|ar]             Scaffold a new project directory
   format   [files/dirs...] [--check] [-r] [--tabs]  Format .salam source in place (recursive)
   layout   build <files...> [--inline]          Build the layout DSL to HTML/CSS/JS
@@ -860,6 +896,10 @@ Build options:
                            e.g. x86_64-w64-windows-gnu (needs clang/llc + lld
                            and a sysroot); honors link/OS macros; a bundled
                            mingw sysroot ($SALAM_SYSROOTS) is used if present
+
+Interpreter options (salam exec/run/jit <file>):
+  --timeout=MS              Wall-clock deadline for the tree-walking
+                           interpreter, in milliseconds (default: 5000)
 
 LLVM backend options (salam llvm <file>):
   -O0|-O1|-O2|-O3|-Os|-Oz   Optimization level (default -O0)

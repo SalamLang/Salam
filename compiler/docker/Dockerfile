@@ -10,6 +10,7 @@ RUN for i in 1 2 3 4 5; do \
         apk add --no-cache \
             build-base \
             musl-dev \
+            gcompat \
             tcc \
             tcc-libs-static \
             clang${LLVM_VERSION} \

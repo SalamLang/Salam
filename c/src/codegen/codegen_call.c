@@ -64,9 +64,9 @@ static const char *call_args(cg_t *cg, ast_node_t *call, func_sig_t *sig)
                 }
                 type_t *pt = (i < sig->params.len) ? (type_t *)sig->params.data[i] : NULL;
                 if (pt)
-                    sb_puts(&b, cg_fmt(cg, "(%s*)%s",
-                                       cg_ctype(cg, type_to_string(cg->sem->tc, pt)),
-                                       ref_c));
+                    sb_puts(&b,
+                            cg_fmt(cg, "(%s*)%s",
+                                   cg_ctype(cg, type_to_string(cg->sem->tc, pt)), ref_c));
                 else
                     sb_puts(&b, ref_c);
             } else

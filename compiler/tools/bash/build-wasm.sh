@@ -3,11 +3,18 @@
 #
 # Self-hosted: compiler/sal_web.salam (not hand-written C) defines the four
 # functions the playground's JS calls via Module.cwrap - RunApp, BuildLayout,
-# Emit, Version. `salam obj` self-hosts them into salam_mod_*.c the same way
-# it does for any Salam build; --export=Fn:CName keeps each one alive despite
-# dead-code elimination and emits it under the literal C name emcc's
-# EXPORTED_FUNCTIONS list below expects (see compiler/codegen.salam's
-# AddExportOverride / cg_export_override - there is no C source here anymore).
+# Emit, Version. Each is wrapped by a same-named `func` inside an `extern:`
+# block in sal_web.salam itself (see the "wasm/emscripten export shims"
+# section there) - that's Salam's EMSCRIPTEN_KEEPALIVE equivalent: it
+# survives codegen.salam's dead-code elimination regardless of reachability
+# from any entry point, and gets emitted under its exact, unmangled name
+# with external linkage, which is exactly what EXPORTED_FUNCTIONS below
+# needs. `salam obj` self-hosts the whole reachable graph into
+# salam_mod_*.c the same way it does for any Salam build (there is no C
+# source here anymore); --cc=true skips the native .o step we don't need
+# (--keep-c keeps the .c/.h regardless of that step's outcome), and emcc
+# compiles+links those generated files directly, same as it once did for
+# the hand-written C sources this replaces.
 
 set -e
 . "$(dirname "$0")/lib.sh"
@@ -56,11 +63,8 @@ OUT_DIR="editor"
 mkdir -p "$OUT_DIR"
 
 echo "==> self-hosting compiler/sal_web.salam -> salam_mod_*.c (kept for emcc)"
-SALAM_STD="$(pwd)" "$SALAM" obj compiler/sal_web.salam --keep-c \
-    --export=RunApp:salam_web_run_app \
-    --export=BuildLayout:salam_web_build_layout \
-    --export=Emit:salam_web_emit \
-    --export=Version:salam_web_version
+SALAM_STD="$(pwd)" "$SALAM" obj compiler/sal_web.salam --cc=true --keep-c \
+    --log-level=warn
 rm -f salam_mod_*.o
 
 # shellcheck disable=SC2046

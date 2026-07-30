@@ -15,7 +15,6 @@ RUN for i in 1 2 3 4 5; do \
         apk add --no-cache \
             build-base \
             g++ \
-            make \
             musl-dev \
             tcc \
             tcc-libs-static \
@@ -68,20 +67,23 @@ RUN addgroup -g "${SALAM_GID}" salam \
 ENV GOCACHE=/tmp/go-cache GOPATH=/tmp/go CARGO_HOME=/tmp/cargo
 WORKDIR /repo
 
+# Self-hosted: there is no C source, no make, no cmake. compiler/salam (the
+# tracked bootstrap binary) builds a fresh compiler/salam from
+# compiler/main.salam via compiler/tools/bash/build-compiler.sh.
 FROM toolchain AS salam-builder
 COPY compiler /repo/compiler
-WORKDIR /repo/compiler
-RUN make -j"$(nproc)"
+COPY std /repo/std
 WORKDIR /repo
-RUN /repo/salam version
+RUN sh compiler/tools/bash/build-compiler.sh
+RUN /repo/compiler/salam version
 
 FROM toolchain AS bench
-COPY --from=salam-builder /repo/salam /repo/salam
-COPY --from=salam-builder /repo/compiler/std /repo/compiler/std
+COPY --from=salam-builder /repo/compiler/salam /repo/salam
+COPY --from=salam-builder /repo/std /repo/std
 COPY benchmark /repo/benchmark
 
 ENV SALAM_BIN=/repo/salam \
-    SALAM_STD=/repo/compiler/std \
+    SALAM_STD=/repo/std \
     BENCH_WORK=/tmp/salam_bench_work
 
 HEALTHCHECK NONE

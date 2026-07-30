@@ -400,28 +400,28 @@ func emit_link(cmdb &: str.StringBuilder, lgr: lg.Logger, spec: str, kind: str,
     str.BufAppend(cmdb, shell_arg(spec))
 end
 
-// driver/build.c detect_bundled_musl_tcc (POSIX only; no-op on Windows).
+// driver/build.c detect_bundled_musl_tcc (POSIX only; no-op on Windows -
+// the caller only invokes this from its `else: (!SALAM_OS_WINDOWS)` branch,
+// so no OS check is needed in here too - doing so would make cc_path/r
+// entirely unused/never-mutated once condcomp folds this body away on a
+// Windows build, tripping E062/E069).
 func detect_bundled_musl_tcc(cc_path: str): MuslTcc:
     mut r := MuslTcc {}
-    if SALAM_OS_WINDOWS:
-        ret r
-    else:
-        if !str.Contains(cc_path, "tcc"):
-            ret r
-        end
-        slash := str.LastIndex(cc_path, "/")
-        if slash < 0:
-            ret r
-        end
-        r.tcc_dir = str.Substr(cc_path, 0, slash)
-        probe := r.tcc_dir + "/musl/lib/crt1.o"
-        if !os.Exists(probe):
-            ret r
-        end
-        r.musl_dir = r.tcc_dir + "/musl"
-        r.active = true
+    if !str.Contains(cc_path, "tcc"):
         ret r
     end
+    slash := str.LastIndex(cc_path, "/")
+    if slash < 0:
+        ret r
+    end
+    r.tcc_dir = str.Substr(cc_path, 0, slash)
+    probe := r.tcc_dir + "/musl/lib/crt1.o"
+    if !os.Exists(probe):
+        ret r
+    end
+    r.musl_dir = r.tcc_dir + "/musl"
+    r.active = true
+    ret r
 end
 
 // POSIX system()'s return packs the child's exit status in bits 8-15
@@ -506,7 +506,9 @@ func build_impl(opt &: Dr): int:
            sm.FindBundledTool("tcc", bundled):
             opt.cc = bundled
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using bundled C compiler: " + opt.cc)
-            if !SALAM_OS_WINDOWS:
+            if SALAM_OS_WINDOWS:
+                musl_tcc = MuslTcc {}
+            else:
                 musl_tcc = detect_bundled_musl_tcc(bundled)
                 if musl_tcc.active:
                     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO,

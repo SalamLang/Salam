@@ -13,6 +13,7 @@ RUN for i in 1 2 3 4 5; do \
             build-base \
             g++ \
             musl-dev \
+            gcompat \
             tcc \
             tcc-libs-static \
             clang${LLVM_VERSION} \

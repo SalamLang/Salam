@@ -83,6 +83,7 @@ ENV SALAM_BIN=/repo/salam \
 
 HEALTHCHECK NONE
 
+# hadolint ignore=SC2016
 RUN printf '%s\n' \
     '#!/bin/sh' \
     'set -e' \

@@ -91,8 +91,9 @@ symbol_t *struct_by_name(cg_t *cg, const char *name)
 
 bool cg_addressable(const ast_node_t *n)
 {
-    return n->kind == AST_IDENTIFIER || n->kind == AST_MEMBER || n->kind == AST_INDEX ||
-           n->kind == AST_THIS || n->kind == AST_STRUCT_LIT;
+    if (n->kind == AST_MEMBER || n->kind == AST_INDEX)
+        return cg_addressable(n->a);
+    return n->kind == AST_IDENTIFIER || n->kind == AST_THIS || n->kind == AST_STRUCT_LIT;
 }
 
 symbol_t *cg_struct_of(cg_t *cg, const char *ts, char *sname, size_t cap)

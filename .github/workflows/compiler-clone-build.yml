@@ -11,23 +11,23 @@ permissions:
   contents: read
 jobs:
   test-git-clone:
-    timeout-minutes: 10
+    timeout-minutes: 15
     name: 'Test git clone on ${{ matrix.os }}'
     runs-on: '${{ matrix.os }}'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: ubuntu-24.04, can_self_host: true }
-          - { os: ubuntu-22.04, can_self_host: true }
-          - { os: ubuntu-slim, can_self_host: true }
-          - { os: macos-26, can_self_host: false }
-          - { os: macos-15, can_self_host: false }
-          - { os: macos-14, can_self_host: false }
-          - { os: windows-2025-vs2026, can_self_host: false }
-          - { os: windows-2025, can_self_host: false }
-          - { os: windows-2022, can_self_host: false }
-          - { os: windows-11-arm, can_self_host: false }
+        os:
+          - ubuntu-24.04
+          - ubuntu-22.04
+          - ubuntu-slim
+          - macos-26
+          - macos-15
+          - macos-14
+          - windows-2025-vs2026
+          - windows-2025
+          - windows-2022
+          - windows-11-arm
     steps:
       - name: 'Checkout ${{ github.ref }} ( ${{ github.sha }} )'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,27 +35,36 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install build dependencies (tcc)
-        if: matrix.can_self_host
+      - name: Install a C compiler (Linux)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           set -e
           sudo apt-get update
-          sudo apt-get install -y tcc
+          sudo apt-get install -y build-essential
 
-      - name: Self-host build + smoke test (Linux)
-        if: matrix.can_self_host
+      # Bootstrap from source instead of the tracked compiler/salam ELF (which
+      # is Linux-glibc-only and has repeatedly drifted to require a newer
+      # GLIBC than some supported runners ship) or a downloaded release
+      # archive (same chicken-and-egg problem). c/ is the portable,
+      # hand-written C implementation kept in sync for exactly this: any OS
+      # with a plain C compiler can build a native salam from scratch.
+      # c/tools/bash/build-compiler.sh auto-detects gcc, then clang, then tcc,
+      # and works unmodified under Git Bash on Windows runners too.
+      - name: Build the c/ bootstrap compiler
+        shell: bash
+        run: sh c/tools/bash/build-compiler.sh
+
+      - name: Self-host build + smoke test
         shell: bash
         run: |
-          chmod +x compiler/salam
-          SALAM_STD="$PWD" compiler/salam build compiler/main.salam --output=/tmp/salam_clonebuild
+          set -e
+          if command -v gcc >/dev/null 2>&1; then CC=gcc
+          elif command -v clang >/dev/null 2>&1; then CC=clang
+          else CC=tcc
+          fi
+          echo "self-hosting with --cc=$CC"
+          SALAM_STD="$PWD" ./c/salam build compiler/main.salam --cc="$CC" \
+            --output=/tmp/salam_clonebuild
           SALAM_STD="$PWD" /tmp/salam_clonebuild version
           SALAM_STD="$PWD" /tmp/salam_clonebuild exec tests/en/basics/hello.salam
-
-      - name: Self-host build (blocked on this OS — warning only, not a failure)
-        if: ${{ !matrix.can_self_host }}
-        shell: bash
-        run: |
-          echo "::warning::No bootstrap binary for this OS — compiler/salam is a Linux ELF and there is no C source anymore to compile a native one." \
-            "This platform cannot self-host until a per-OS bootstrap binary (or WSL-in-CI) is added." \
-            "Not failing the build over a known, already-flagged gap — see the PORT-NOTE at the top of this file."

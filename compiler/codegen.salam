@@ -2998,10 +2998,20 @@ func struct_by_name(s &: sm.Sema, name: str): int:
     ret 0
 end
 
+// A member/index expression is only really addressable in the emitted C if
+// its BASE is: `x.field`/`x[i]` need `x` itself to be a real lvalue (or a
+// compound literal, which C99 lvalues too). A base that is itself a call
+// result (e.g. `sm.SymAt(s, sym).overloads`) is emitted as a GNU
+// statement-expression (see call_sret) whose value gcc/clang do NOT treat
+// as addressable once a further `.field`/`&(...)` is chained onto it
+// ("lvalue required as unary '&' operand") - so this must recurse into the
+// base rather than assume every AST_MEMBER/AST_INDEX is addressable.
 func cg_addressable(a &: at.Ast, n: int): bool:
     k := at.KindOf(a, n)
-    ret k == at.AST_IDENTIFIER || k == at.AST_MEMBER || k == at.AST_INDEX ||
-        k == at.AST_THIS || k == at.AST_STRUCT_LIT
+    if k == at.AST_MEMBER || k == at.AST_INDEX:
+        ret cg_addressable(a, at.Get(a, n).a)
+    end
+    ret k == at.AST_IDENTIFIER || k == at.AST_THIS || k == at.AST_STRUCT_LIT
 end
 
 // cg_struct_of — SymId; sname gets the parsed base typestr (the C wrote
@@ -3929,12 +3939,27 @@ func call_args(g &: Cg, s &: sm.Sema, a &: at.Ast, call: int, sig: int): str:
         end
         if arg_is_ref:
             sv := sm.SigAt(s, sig)
+            mut ref_c := ""
+            if cg_addressable(a, argid):
+                ref_c = "&(" + cg_expr(g, s, a, argid) + ")"
+            else:
+                // argid isn't a real C lvalue (e.g. a member of a
+                // byval-struct-returning call's result) - bind it to a
+                // genuine local temp first, same fallback cg_method already
+                // uses below, so `&` has an actual lvalue to operate on.
+                g.tmpn += 1
+                rt := g.tmpn
+                argc := cg_expr(g, s, a, argid)
+                argts := at.Get(a, argid).type_str
+                ref_c = "({ " + cg_ctype(argts) + " __r" + rt + " = (" +
+                    argc + "); &__r" + rt + "; })"
+            end
             if i < sv.params.len():
                 co.SbPuts(b, "(" +
                              cg_ctype(sm.ToString(s, sv.params.get(i)[0])) +
-                             "*)&(" + cg_expr(g, s, a, argid) + ")")
+                             "*)" + ref_c)
             else:
-                co.SbPuts(b, "&(" + cg_expr(g, s, a, argid) + ")")
+                co.SbPuts(b, ref_c)
             end
         else:
             co.SbPuts(b, cg_expr(g, s, a, argid))

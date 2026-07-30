@@ -221,7 +221,7 @@ from the repository root. There are two modes:
 
 ### Development (live reload)
 
-The whole repo is bind-mounted and `compiler/salam` is **self-hosted rebuilt
+The whole repository is bind-mounted and `compiler/salam` is **self-hosted rebuilt
 automatically on every change** to `compiler/*.salam` (powered by
 [`entr`](https://eradman.com/entrproject/), see
 [`tools/bash/docker-dev.sh`](compiler/tools/bash/docker-dev.sh)):

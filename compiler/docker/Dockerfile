@@ -57,8 +57,7 @@ RUN addgroup -g "${SALAM_GID}" salam \
 WORKDIR /app
 
 FROM toolchain AS dev
-RUN apk add --no-cache entr
-RUN chown -R salam:salam /app
+RUN apk add --no-cache entr && chown -R salam:salam /app
 ENV HOME=/tmp
 USER salam
 ENTRYPOINT ["sh", "compiler/tools/bash/docker-dev.sh"]

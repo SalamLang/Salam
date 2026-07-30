@@ -53,6 +53,9 @@ void logger_set_timestamps(logger_t *lg, bool enabled);
 void logger_set_diag_source(logger_t *lg, const char *src_text, size_t src_len,
                             diag_style_t style, diag_format_t format);
 
+void logger_add_diag_source(logger_t *lg, const char *file, const char *src_text,
+                            size_t src_len);
+
 void logger_log(logger_t *lg, phase_t phase, log_level_t level, const char *file,
                 const src_span_t *span, const char *fmt, ...);
 

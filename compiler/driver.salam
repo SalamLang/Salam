@@ -282,6 +282,16 @@ func write_file(lgr: lg.Logger, path: str, content: str): bool:
     ret true
 end
 
+// Not from build.c: recaps which input file(s) failed right on the abort
+// line itself, so a reader scrolling a long CI log doesn't have to search
+// back through the phase INFO spam to see what actually broke the build.
+func abort_message(base: str, failed: Vector<str>): str:
+    if failed.len() == 0:
+        ret base
+    end
+    ret base + " (" + str.Join(failed, ", ") + ")"
+end
+
 // driver/build.c link_spec_is_path
 func link_spec_is_path(spec: str): bool:
     if str.Contains(spec, "/") || str.Contains(spec, "\\"):
@@ -531,6 +541,11 @@ func build_impl(opt &: Dr): int:
     defer generated.free()
     mut first_module := ""
     mut all_ok := true
+    // paths that failed to read/parse/check/generate, recapped on abort
+    // (below) so the reader doesn't have to scroll back past the phase
+    // INFO logs of every other file in the build to find out what broke.
+    mut failed_files := Vector {} as Vector<str>
+    defer failed_files.free()
 
     entry := lp.Entry(pack)
     mut has_entry := false
@@ -609,6 +624,7 @@ func build_impl(opt &: Dr): int:
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
                    co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path)))
             all_ok = false
+            failed_files.push(path)
             wi += 1
             continue
         end
@@ -658,6 +674,7 @@ func build_impl(opt &: Dr): int:
                 lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
                        co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(ppath)))
                 all_ok = false
+                failed_files.push(ppath)
             end
             pi += 1
         end
@@ -669,6 +686,7 @@ func build_impl(opt &: Dr): int:
 
         if !lok || !pok || !sok:
             all_ok = false
+            failed_files.push(path)
             sm.Free(s)
             at.FreeAst(a)
             wi += 1
@@ -802,6 +820,7 @@ func build_impl(opt &: Dr): int:
         wok2 := write_file(lgr, hpath, o.h_src)
         if !wok1 || !wok2:
             all_ok = false
+            failed_files.push(path2)
         else:
             cfiles.push(cpath)
             generated.push(cpath)
@@ -813,7 +832,8 @@ func build_impl(opt &: Dr): int:
     end
 
     if !all_ok:
-        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("build aborted: errors in source"))
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
+               abort_message(i18.Tr("build aborted: errors in source"), failed_files))
         if !opt.keep_c:
             repeat generated.len() with gi1:
                 _rm1 := os.Remove(generated.get(gi1)[0])
@@ -1316,6 +1336,8 @@ func js_build_bundle(lgr: lg.Logger, opt &: Dr, entries: Vector<str>, module_out
     mut first_module := ""
     mut entry_name := ""
     mut all_ok := true
+    mut failed_files := Vector {} as Vector<str>
+    defer failed_files.free()
 
     mut ml := ""
     mut mk := Vector {} as Vector<str>
@@ -1341,6 +1363,7 @@ func js_build_bundle(lgr: lg.Logger, opt &: Dr, entries: Vector<str>, module_out
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
                    co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path)))
             all_ok = false
+            failed_files.push(path)
             wi += 1
             continue
         end
@@ -1385,6 +1408,7 @@ func js_build_bundle(lgr: lg.Logger, opt &: Dr, entries: Vector<str>, module_out
                 lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
                        co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(ppath)))
                 all_ok = false
+                failed_files.push(ppath)
             end
             pi += 1
         end
@@ -1395,6 +1419,7 @@ func js_build_bundle(lgr: lg.Logger, opt &: Dr, entries: Vector<str>, module_out
         sok := sm.RunCached(s, a, prog)
         if !lok || !pok || !sok:
             all_ok = false
+            failed_files.push(path)
             sm.Free(s)
             wi += 1
             continue
@@ -1446,7 +1471,8 @@ func js_build_bundle(lgr: lg.Logger, opt &: Dr, entries: Vector<str>, module_out
     module_out = first_module
 
     if !all_ok:
-        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("build aborted: errors in source"))
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
+               abort_message(i18.Tr("build aborted: errors in source"), failed_files))
         rc_out = 1
         ret ""
     end
@@ -2383,7 +2409,8 @@ pub func Exec(opt &: Dr): int:
     sm.SetCc(s, table)
     sok := sm.Run(s, a, prog)
     if !lok || !pok || !sok:
-        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("build aborted: errors in source"))
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
+               i18.Tr("build aborted: errors in source") + " (" + opt.input + ")")
         sm.Free(s)
         at.FreeAst(a)
         ret 1
@@ -2544,7 +2571,8 @@ pub func Llvm(opt &: Dr): int:
     sm.SetCc(s, table)
     sok := sm.Run(s, a, prog)
     if !lok || !pok || !sok:
-        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("build aborted: errors in source"))
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
+               i18.Tr("build aborted: errors in source") + " (" + opt.input + ")")
         sm.Free(s)
         at.FreeAst(a)
         ret 1

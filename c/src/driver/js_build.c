@@ -297,6 +297,7 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                     bool lok, pok;
                     logger_set_diag_source(log, src->text, src->len, opt->diag_style,
                                            opt->diag_format);
+                    logger_add_diag_source(log, path, src->text, src->len);
                     if (!first_module) first_module = module;
                     LOG_I(log, PH_DRIVER, i18n_tr("compiling %s -> js"), path);
                     lok = lexer_run(arena, log, modpack, src, &toks);
@@ -318,6 +319,7 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                                 all_ok = false;
                                 continue;
                             }
+                            logger_add_diag_source(log, pfiles[pi], psrc->text, psrc->len);
                             if (!lexer_run(arena, log, modpack, psrc, &ptoks))
                                 lok = false;
                             if (!parser_run(arena, log, ptoks, &pprog)) pok = false;

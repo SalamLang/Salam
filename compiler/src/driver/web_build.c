@@ -16,6 +16,7 @@
 #include "core/sal_format.h"
 #include "driver/web_build.h"
 #include "driver/js_build.h"
+#include "driver/driver.h"
 #include "core/arena.h"
 #include "core/sb.h"
 #include "logger/logger.h"

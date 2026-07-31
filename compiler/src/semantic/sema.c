@@ -16,6 +16,7 @@
 #include "core/sal_format.h"
 #include "core/sb.h"
 #include "core/numstr.h"
+#include <sys/stat.h>
 #include "semantic/sema.h"
 #include "semantic/sema_internal.h"
 #include "source/source.h"
@@ -311,14 +312,12 @@ bool salam_find_bundled_tool(const char *name, char *out, size_t n)
 
     for (i = 0; i < sizeof rel / sizeof rel[0]; i++) {
         char cand[1200];
-        FILE *f;
+        struct stat st;
         if (rel[i][0])
             sal_snprintf(cand, sizeof cand, "%s/%s/%s%s", exedir, rel[i], name, suffix);
         else
             sal_snprintf(cand, sizeof cand, "%s/%s%s", exedir, name, suffix);
-        f = fopen(cand, "rb");
-        if (f) {
-            fclose(f);
+        if (stat(cand, &st) == 0 && S_ISREG(st.st_mode)) {
             sal_snprintf(out, n, "%s", cand);
             return true;
         }
@@ -637,9 +636,14 @@ const char *salam_resolve_import_node(arena_t *a, const char *dir, const ast_nod
         return resolve_user_string(a, dir, imp->value.as.s);
     if (imp->name) {
         const char *root = salam_get_stdlib_root();
-        const char *direct = resolve_ident_direct(a, root, imp->name);
-        if (direct) return direct;
-        return resolve_ident_import(a, root, imp->name, (lang && *lang) ? lang : "en");
+        const char *use_lang = (lang && *lang) ? lang : "en";
+        const char *aliased = resolve_ident_import(a, root, imp->name, use_lang);
+        if (aliased) return aliased;
+        if (strcmp(use_lang, "en") == 0) {
+            const char *direct = resolve_ident_direct(a, root, imp->name);
+            if (direct) return direct;
+        }
+        return NULL;
     }
     return NULL;
 }
@@ -755,6 +759,7 @@ static const char *import_spec_of(ast_node_t *d)
 
 void salam_merge_program(arena_t *a, ast_node_t *dst, ast_node_t *src)
 {
+    bool marked = false;
     size_t i = 0;
     for (; i < src->list.len; i++) {
         ast_node_t *d = (ast_node_t *)src->list.data[i];
@@ -796,6 +801,10 @@ void salam_merge_program(arena_t *a, ast_node_t *dst, ast_node_t *src)
             }
             if (dup) continue;
         }
+        if (!marked) {
+            d->file_boundary = true;
+            marked = true;
+        }
         ast_add(a, dst, d);
     }
 }
@@ -829,6 +838,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
         SERR(s, 8, &imp->span, "import not found: '%s'", path);
         return NULL;
     }
+    logger_add_diag_source(s->log, path, src->text, src->len);
     const langpack_t *fb = langpack_load(i18n_lang());
     if (!fb) fb = langpack_load("en");
     const langpack_t *pack = langpack_detect(s->a, src, fb);
@@ -837,6 +847,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     ast_node_t *prog = NULL;
     parser_run(s->a, s->log, toks, &prog);
     cc_prune_program(s->a, s->log, path, s->cc, prog);
+    sema_check_toplevel_order_in_file(s, prog, path);
 
     {
         const char *files[256];
@@ -845,11 +856,13 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
         for (; fi < nf; fi++) {
             source_file_t *fsrc = source_load(s->a, files[fi]);
             if (!fsrc) continue;
+            logger_add_diag_source(s->log, files[fi], fsrc->text, fsrc->len);
             token_stream_t *ftoks = NULL;
             lexer_run(s->a, s->log, pack, fsrc, &ftoks);
             ast_node_t *fprog = NULL;
             parser_run(s->a, s->log, ftoks, &fprog);
             cc_prune_program(s->a, s->log, files[fi], s->cc, fprog);
+            sema_check_toplevel_order_in_file(s, fprog, files[fi]);
             salam_merge_program(s->a, prog, fprog);
         }
     }
@@ -861,6 +874,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     scope_t *save_global = s->global, *save_cur = s->cur;
     const char *save_dir = s->dir, *save_pkg = s->pkg;
     const char *save_lang = s->lang;
+    const char *save_file = s->file;
     ast_node_t *save_prog = s->program;
     vec_t save_pending = s->pending;
     bool save_in_pkg = s->in_pkg;
@@ -870,6 +884,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     s->dir = dir_of(s->a, path);
     s->pkg = prog->name ? prog->name : "main";
     s->lang = langpack_code(pack);
+    s->file = path;
     s->program = prog;
     vec_init(&s->pending);
     vec_push(s->a, &s->loading, CONST_CAST(path));
@@ -883,6 +898,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
     s->dir = save_dir;
     s->pkg = save_pkg;
     s->lang = save_lang;
+    s->file = save_file;
     s->program = save_prog;
     s->pending = save_pending;
     symbol_t *pk = symbol_new(s->a, SYM_PACKAGE, prog->name);
@@ -921,11 +937,18 @@ static void load_import_file(sema_t *s, ast_node_t *imp)
 
     if (pk->pkgname && strcmp(pk->pkgname, local) != 0 &&
         !scope_lookup_local(s->cur, pk->pkgname)) {
-        symbol_t *cb = symbol_new(s->a, SYM_PACKAGE, pk->pkgname);
-        cb->members = pk->members;
-        cb->pkgname = pk->pkgname;
-        cb->decl = pk->decl;
-        scope_define(s->a, s->cur, cb);
+        bool pkgname_ok = !s->lang || s->lang[0] == 'e';
+        if (!pkgname_ok && pk->decl) {
+            const char *want = alias_for_lang(&pk->decl->aliases, s->lang);
+            pkgname_ok = !want || strcmp(want, pk->pkgname) == 0;
+        }
+        if (pkgname_ok) {
+            symbol_t *cb = symbol_new(s->a, SYM_PACKAGE, pk->pkgname);
+            cb->members = pk->members;
+            cb->pkgname = pk->pkgname;
+            cb->decl = pk->decl;
+            scope_define(s->a, s->cur, cb);
+        }
     }
 
     if (pk->decl) {
@@ -957,6 +980,38 @@ static void load_imports(sema_t *s, ast_node_t *program)
             ast_node_t *d = (ast_node_t *)program->list.data[i];
             if (d->kind == AST_IMPORT) load_import_file(s, d);
         }
+    }
+}
+
+void sema_check_unused_imports(sema_t *s)
+{
+    const char *entry = langpack_entry_for(s->lang);
+    bool has_entry = false;
+    {
+        size_t i = 0;
+        for (; i < s->global->symbols.len; i++) {
+            symbol_t *f = (symbol_t *)s->global->symbols.data[i];
+            if (f->kind == SYM_FUNC && f->name &&
+                (strcmp(f->name, "main") == 0 || strcmp(f->name, entry) == 0)) {
+                has_entry = true;
+                break;
+            }
+        }
+    }
+    if (!has_entry) return;
+    size_t i = 0;
+    for (; i < s->program->list.len; i++) {
+        ast_node_t *imp = (ast_node_t *)s->program->list.data[i];
+        if (imp->kind != AST_IMPORT) continue;
+        const char *spec = import_spec_of(imp);
+        if (!spec) continue;
+        const char *local = norm_ident(s->a, import_local_name(s->a, imp, spec));
+        if (!local || local[0] == '_') continue;
+        symbol_t *bind = scope_lookup_local(s->global, local);
+        if (!bind || bind->kind != SYM_PACKAGE || bind->used) continue;
+        SERR(s, 82, &imp->span,
+             "unused import '%s' (use one of its members, or prefix the name with '_')",
+             local);
     }
 }
 
@@ -1013,8 +1068,12 @@ sema_result_t *sema_run_cached(arena_t *a, logger_t *log, ast_node_t *program,
         }
     }
     sema_collect(&s, program);
+    sema_check_toplevel_order(&s, program);
     sema_check_pass(&s, program);
-    if (!s.in_pkg && !s.relax_unused) sema_check_unused_funcs(&s);
+    if (!s.in_pkg && !s.relax_unused) {
+        sema_check_unused_funcs(&s);
+        sema_check_unused_imports(&s);
+    }
     LOG_I(log, PH_SEMANTIC, "analysis complete: %zu error(s), %zu warning(s)",
           s.diag->errors, s.diag->warnings);
     sema_result_t *r = (sema_result_t *)arena_alloc(a, sizeof(*r));

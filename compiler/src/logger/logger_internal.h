@@ -19,6 +19,14 @@
 #include "logger/logger.h"
 #include "diag/diag_render.h"
 
+#define LOGGER_MAX_DIAG_SOURCES 512
+
+typedef struct {
+    const char *file;
+    const char *text;
+    size_t len;
+} diag_source_entry_t;
+
 struct logger {
     FILE *sink;
     log_level_t min_level;
@@ -29,6 +37,8 @@ struct logger {
     diag_format_t diag_format;
     const char *src_text;
     size_t src_len;
+    diag_source_entry_t src_table[LOGGER_MAX_DIAG_SOURCES];
+    int src_table_len;
 };
 
 #endif /* SALAM_LOGGER_INTERNAL_H */

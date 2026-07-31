@@ -291,7 +291,7 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
     }
     ll_spill_params(ll, fn, sig);
     if (is_main) ll_emit_global_inits(ll);
-    if (fn->a) ll_block(ll, fn->a);
+    if (fn->a) ll_block_top(ll, fn->a);
     if (!ll->term) ll_emit_return(ll, NULL);
     sb_puts(ll->g, header);
     sb_puts(ll->g, "entry:\n");
@@ -588,7 +588,7 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
             ll_local_add(ll, p->name, ptr, p->type_str);
         }
     }
-    if (n->a) ll_block(ll, n->a);
+    if (n->a) ll_block_top(ll, n->a);
     if (!ll->term) ll_emit_return(ll, NULL);
 
     sb_puts(ll->g, header);
@@ -862,24 +862,36 @@ void ll_emit_externs(ll_t *ll)
     ll_emit_externs_in(ll, ll->sem->global);
 }
 
-void ll_emit_packages(ll_t *ll)
+void ll_touch_pkg(ll_t *ll, symbol_t *pk)
 {
-    vec_t *pkgs = &ll->sem->packages;
+    if (!pk || pk->kind != SYM_PACKAGE || !pk->decl) return;
     {
-        size_t p = 0;
-        for (; p < pkgs->len; p++) {
-            symbol_t *pk = (symbol_t *)pkgs->data[p];
-            if (!pk || pk->kind != SYM_PACKAGE || !pk->decl) continue;
-            ast_node_t *prog = pk->decl;
+        size_t i = 0;
+        for (; i < ll->pkg_touched.len; i++)
+            if (ll->pkg_touched.data[i] == pk) return;
+    }
+    vec_push(ll->a, &ll->pkg_touched, pk);
 
-            scope_t *saved = ll->pkg_scope;
-            ll->pkg_scope = pk->members;
-            ll_emit_struct_types(ll, prog);
-            if (pk->members) ll_emit_externs_in(ll, pk->members);
-            ll_emit_globals(ll, prog);
-            if (pk->members) ll_emit_impls_in(ll, pk->members);
+    ast_node_t *prog = pk->decl;
+    scope_t *saved = ll->pkg_scope;
+    ll->pkg_scope = pk->members;
+    ll_emit_struct_types(ll, prog);
+    if (pk->members) ll_emit_externs_in(ll, pk->members);
+    ll_emit_globals(ll, prog);
+    if (pk->members) ll_emit_impls_in(ll, pk->members);
+    ll->pkg_scope = saved;
+}
 
-            ll->pkg_scope = saved;
+void ll_touch_pkg_named(ll_t *ll, const char *pkgname)
+{
+    if (!pkgname) return;
+    vec_t *pkgs = &ll->sem->packages;
+    size_t i = 0;
+    for (; i < pkgs->len; i++) {
+        symbol_t *pk = (symbol_t *)pkgs->data[i];
+        if (pk && pk->pkgname && !strcmp(pk->pkgname, pkgname)) {
+            ll_touch_pkg(ll, pk);
+            return;
         }
     }
 }

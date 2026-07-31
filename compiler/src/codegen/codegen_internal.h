@@ -55,6 +55,7 @@ typedef struct {
     const char *target_triple;
     const char *match_result_tmp;
     const char *match_end_label;
+    bool compact;
 } cg_t;
 
 const char *cg_fmt(cg_t *cg, const char *fmt, ...);
@@ -79,6 +80,8 @@ void parse_typestr(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dim
                    arena_t *a);
 
 bool cg_is_int_typestr(const char *ts);
+
+bool cg_is_unsigned_typestr(const char *ts);
 
 void cg_vec_elem(const char *ts, char *ebuf, size_t cap);
 

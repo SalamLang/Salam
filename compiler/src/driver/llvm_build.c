@@ -15,6 +15,7 @@
 #include "core/prelude.h"
 #include "core/sal_format.h"
 #include "driver/llvm_build.h"
+#include "driver/driver.h"
 #include "core/arena.h"
 #include "logger/logger.h"
 #include "langpack/langpack.h"
@@ -162,6 +163,7 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
         const char *path = work[wi];
         source_file_t *src = source_load(a, path);
         if (!src) continue;
+        logger_add_diag_source(log, path, src->text, src->len);
         const langpack_t *mp = langpack_detect(a, src, pack);
         token_stream_t *toks = NULL;
         lexer_run(a, log, mp, src, &toks);
@@ -175,6 +177,7 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
             for (; pi < npf; pi++) {
                 source_file_t *ps = source_load(a, pf[pi]);
                 if (!ps) continue;
+                logger_add_diag_source(log, pf[pi], ps->text, ps->len);
                 token_stream_t *pt = NULL;
                 lexer_run(a, log, mp, ps, &pt);
                 ast_node_t *pp = NULL;
@@ -198,7 +201,7 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
 
 int driver_llvm(options_t *opt)
 {
-    logger_t *log = logger_new(stderr, opt->log_level, opt->color == 1);
+    logger_t *log = logger_new(stderr, opt->log_level, resolve_color(opt->color));
     arena_t *arena = arena_new(1 << 20);
     int rc = 0;
     langpack_t *pack = langpack_load(opt->lang);
@@ -224,6 +227,7 @@ int driver_llvm(options_t *opt)
         return 2;
     }
     logger_set_diag_source(log, src->text, src->len, opt->diag_style, opt->diag_format);
+    logger_add_diag_source(log, opt->input, src->text, src->len);
     const char *module = module_of(arena, opt->input);
     const langpack_t *modpack = langpack_detect(arena, src, pack);
     token_stream_t *toks = NULL;

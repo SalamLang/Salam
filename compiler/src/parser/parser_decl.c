@@ -131,6 +131,11 @@ ast_node_t *parse_top_level(parser_t *p)
         n = parse_bare_var_decl(p);
         p_term(p);
         break;
+    case TK_KW_PACKAGE:
+        p_error(p, "'package' can be declared only once, and only as the very "
+                   "first statement in the file");
+        if (!p_at_eof(p)) p_advance(p);
+        return NULL;
     default:
         p_error(p, is_pub ? "expected a definition after 'pub'"
                           : "expected a top-level definition");

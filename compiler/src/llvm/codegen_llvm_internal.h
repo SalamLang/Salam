@@ -60,6 +60,9 @@ typedef enum {
     LL_H_F64STR,
     LL_H_CHARSTR,
     LL_H_OUTBUF,
+    LL_H_REPEAT,
+    LL_H_UPPER,
+    LL_H_LOWER,
     LL_H_COUNT
 } ll_helper_t;
 
@@ -91,6 +94,7 @@ typedef struct {
     vec_t extern_names;
     scope_t *pkg_scope;
     vec_t emitted;
+    vec_t pkg_touched;
     ast_node_t *cur_lambda;
     const char *env_ref;
     const char *env_ty;
@@ -149,12 +153,6 @@ SAL_INLINE llv_t ll_poison(const char *ts)
 
 const char *ll_fmt(ll_t *ll, const char *fmt, ...);
 
-/* Salam identifiers may contain characters (spaces, in particular - e.g.
- * "mut is p := ...") that are not valid in an unquoted LLVM IR local/global
- * identifier ([a-zA-Z$._][a-zA-Z$._0-9]*). Call this on any raw Salam name
- * before splicing it into a %-prefixed IR identifier fragment; a trailing
- * uniqueness counter appended by the caller keeps the result collision-free
- * even if two distinct names happen to sanitize to the same string. */
 const char *ll_safe_name(ll_t *ll, const char *raw);
 
 void ll_emit(ll_t *ll, const char *fmt, ...);
@@ -179,7 +177,7 @@ lvar_t *ll_local_find(ll_t *ll, const char *name);
 
 lvar_t *ll_global_find(ll_t *ll, const char *name);
 
-int ll_int_bits(const char *ts);
+int ll_int_bits(ll_t *ll, const char *ts);
 
 int ll_target_ptr_bits(const char *triple);
 
@@ -195,7 +193,7 @@ const char *ll_ty(ll_t *ll, const char *ts);
 
 const char *ll_conv(ll_t *ll, llv_t v, const char *to_ts);
 
-const char *ll_common(const char *a, const char *b);
+const char *ll_common(ll_t *ll, const char *a, const char *b);
 
 const char *ll_as_i1(ll_t *ll, llv_t v);
 
@@ -247,6 +245,8 @@ void ll_stmt(ll_t *ll, ast_node_t *n);
 
 void ll_block(ll_t *ll, ast_node_t *block);
 
+void ll_block_top(ll_t *ll, ast_node_t *block);
+
 void ll_emit_return(ll_t *ll, ast_node_t *value);
 
 const char *ll_mangle(ll_t *ll, const char *owner, const char *fn, func_sig_t *sig);
@@ -265,7 +265,9 @@ void ll_emit_externs(ll_t *ll);
 
 void ll_emit_impls(ll_t *ll);
 
-void ll_emit_packages(ll_t *ll);
+void ll_touch_pkg(ll_t *ll, symbol_t *pk);
+
+void ll_touch_pkg_named(ll_t *ll, const char *pkgname);
 
 void ll_ensure_fn(ll_t *ll, ast_node_t *fn, symbol_t *owner, scope_t *pscope);
 

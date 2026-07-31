@@ -15,6 +15,7 @@
 #include "core/prelude.h"
 #include "core/sal_format.h"
 #include "driver/build.h"
+#include "driver/driver.h"
 #include "driver/llvm_build.h"
 #include "core/arena.h"
 #include "core/sb.h"
@@ -128,11 +129,39 @@ static void emit_link(sb_t *cmd, logger_t *log, const char *spec, const char *ki
     sb_put_shell_arg(cmd, spec);
 }
 
+#if !defined(_WIN32)
+typedef struct {
+    bool active;
+    char tcc_dir[1024];
+    char musl_dir[1024];
+} bundled_musl_tcc_t;
+
+static bundled_musl_tcc_t detect_bundled_musl_tcc(const char *cc_path)
+{
+    bundled_musl_tcc_t r;
+    r.active = false;
+    r.tcc_dir[0] = '\0';
+    r.musl_dir[0] = '\0';
+    if (!strstr(cc_path, "tcc")) return r;
+    const char *slash = strrchr(cc_path, '/');
+    if (!slash) return r;
+    sal_snprintf(r.tcc_dir, sizeof r.tcc_dir, "%.*s", (int)(slash - cc_path), cc_path);
+    char probe[1200];
+    sal_snprintf(probe, sizeof probe, "%s/musl/lib/crt1.o", r.tcc_dir);
+    FILE *f = fopen(probe, "rb");
+    if (!f) return r;
+    fclose(f);
+    sal_snprintf(r.musl_dir, sizeof r.musl_dir, "%s/musl", r.tcc_dir);
+    r.active = true;
+    return r;
+}
+#endif
+
 int driver_build(options_t *opt)
 {
     if (opt->llvm_target && opt->llvm_target[0]) return driver_llvm_build(opt);
 
-    logger_t *log = logger_new(stderr, opt->log_level, opt->color == 1);
+    logger_t *log = logger_new(stderr, opt->log_level, resolve_color(opt->color));
     arena_t *arena = arena_new(1 << 20);
     int rc = 0;
     langpack_t *pack = langpack_load(opt->lang);
@@ -144,6 +173,10 @@ int driver_build(options_t *opt)
     }
     salam_set_stdlib_root(opt->stdlib_path);
 
+#if !defined(_WIN32)
+    bundled_musl_tcc_t musl_tcc;
+    musl_tcc.active = false;
+#endif
     if (opt->cc && strcmp(opt->cc, "tcc") == 0) {
         static char bundled_cc[1200];
         if (salam_find_bundled_tool("gcc", bundled_cc, sizeof bundled_cc) ||
@@ -151,6 +184,12 @@ int driver_build(options_t *opt)
             salam_find_bundled_tool("tcc", bundled_cc, sizeof bundled_cc)) {
             opt->cc = bundled_cc;
             LOG_I(log, PH_DRIVER, "using bundled C compiler: %s", opt->cc);
+#if !defined(_WIN32)
+            musl_tcc = detect_bundled_musl_tcc(bundled_cc);
+            if (musl_tcc.active)
+                LOG_I(log, PH_DRIVER, "using bundled musl sysroot: %s",
+                      musl_tcc.musl_dir);
+#endif
         }
     }
 
@@ -234,7 +273,7 @@ int driver_build(options_t *opt)
             if (dup) continue;
             source_file_t *src = source_load(arena, path);
             if (!src) {
-                LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"), path);
+                LOG_E(log, PH_DRIVER, i18n_tr("cannot read source file '%s'"), path);
                 all_ok = false;
                 continue;
             }
@@ -244,6 +283,7 @@ int driver_build(options_t *opt)
 
             logger_set_diag_source(log, src->text, src->len, opt->diag_style,
                                    opt->diag_format);
+            logger_add_diag_source(log, path, src->text, src->len);
             const char *module = module_of(arena, path);
             if (!first_module) first_module = module;
             LOG_I(log, PH_DRIVER, "compiling %s -> %s.c", path, module);
@@ -260,10 +300,12 @@ int driver_build(options_t *opt)
                 for (; pi < npf; pi++) {
                     source_file_t *psrc = source_load(arena, pfiles[pi]);
                     if (!psrc) {
-                        LOG_E(log, PH_DRIVER, i18n_tr("cannot read '%s'"), pfiles[pi]);
+                        LOG_E(log, PH_DRIVER, i18n_tr("cannot read source file '%s'"),
+                              pfiles[pi]);
                         all_ok = false;
                         continue;
                     }
+                    logger_add_diag_source(log, pfiles[pi], psrc->text, psrc->len);
                     token_stream_t *ptoks = NULL;
                     if (!lexer_run(arena, log, modpack, psrc, &ptoks)) lok = false;
                     ast_node_t *pprog = NULL;
@@ -443,6 +485,8 @@ int driver_build(options_t *opt)
                             !strstr(opt->cc, "-O"))
                                ? " -O2"
                                : "";
+    bool optimizing_build = !opt->debug_info && !opt->asan && !strstr(opt->cc, "tcc") &&
+                            !strstr(opt->cc, "-O0");
     if (opt->command == CMD_OBJ) {
         const char *dbg_flag = (opt->debug_info && !strstr(opt->cc, "tcc")) ? " -g" : "";
         {
@@ -454,6 +498,17 @@ int driver_build(options_t *opt)
                 sb_t cmd;
                 sb_init(&cmd);
                 sb_puts(&cmd, opt->cc);
+#if !defined(_WIN32)
+                if (musl_tcc.active) {
+                    sb_puts(&cmd, " -B");
+                    sb_put_shell_arg(&cmd, musl_tcc.tcc_dir);
+                    sb_puts(&cmd, " -I");
+                    sb_put_shell_arg(&cmd, musl_tcc.tcc_dir);
+                    sb_puts(&cmd, "/include -I");
+                    sb_put_shell_arg(&cmd, musl_tcc.musl_dir);
+                    sb_puts(&cmd, "/include");
+                }
+#endif
                 sb_puts(&cmd, " -c -I.");
                 sb_puts(&cmd, opt_flag);
                 sb_puts(&cmd, dbg_flag);
@@ -487,7 +542,7 @@ int driver_build(options_t *opt)
         const char *lm = " -lm";
 #endif
         const char *lto_flag = "";
-        if (opt_flag[0] && !use_tcc) {
+        if (optimizing_build && !use_tcc) {
 #ifdef _WIN32
             if (!strstr(opt->cc, "clang")) lto_flag = " -flto";
 #else
@@ -497,6 +552,19 @@ int driver_build(options_t *opt)
         sb_t cmd;
         sb_init(&cmd);
         sb_puts(&cmd, opt->cc);
+#if !defined(_WIN32)
+        if (musl_tcc.active) {
+            sb_puts(&cmd, " -B");
+            sb_put_shell_arg(&cmd, musl_tcc.tcc_dir);
+            sb_puts(&cmd, " -nostdlib -static -I");
+            sb_put_shell_arg(&cmd, musl_tcc.tcc_dir);
+            sb_puts(&cmd, "/include -I");
+            sb_put_shell_arg(&cmd, musl_tcc.musl_dir);
+            sb_puts(&cmd, "/include -L");
+            sb_put_shell_arg(&cmd, musl_tcc.musl_dir);
+            sb_puts(&cmd, "/lib");
+        }
+#endif
         sb_puts(&cmd, opt_flag);
         sb_puts(&cmd, lto_flag);
         sb_puts(&cmd, " -I. -o ");
@@ -546,6 +614,17 @@ int driver_build(options_t *opt)
                 }
             }
         }
+#if !defined(_WIN32)
+        if (musl_tcc.active) {
+            char crtobj[1200];
+            sal_snprintf(crtobj, sizeof crtobj, "%s/lib/crt1.o", musl_tcc.musl_dir);
+            sb_putc(&cmd, ' ');
+            sb_put_shell_arg(&cmd, crtobj);
+            sal_snprintf(crtobj, sizeof crtobj, "%s/lib/crti.o", musl_tcc.musl_dir);
+            sb_putc(&cmd, ' ');
+            sb_put_shell_arg(&cmd, crtobj);
+        }
+#endif
         {
             int i = 0;
             for (; i < ncfiles; i++) {
@@ -560,6 +639,23 @@ int driver_build(options_t *opt)
             for (; i < nlinks; i++)
                 emit_link(&cmd, log, links[i], link_kinds[i], use_tcc);
         }
+#if !defined(_WIN32)
+        if (musl_tcc.active) {
+            char libpath[1200];
+            sal_snprintf(libpath, sizeof libpath, "%s/lib/libgcc.a", musl_tcc.musl_dir);
+            sb_puts(&cmd, " -lc ");
+            sb_put_shell_arg(&cmd, libpath);
+            sb_putc(&cmd, ' ');
+            sal_snprintf(libpath, sizeof libpath, "%s/libtcc1.a", musl_tcc.tcc_dir);
+            sb_put_shell_arg(&cmd, libpath);
+            sal_snprintf(libpath, sizeof libpath, "%s/lib/libgcc.a", musl_tcc.musl_dir);
+            sb_puts(&cmd, " -lc ");
+            sb_put_shell_arg(&cmd, libpath);
+            sal_snprintf(libpath, sizeof libpath, "%s/lib/crtn.o", musl_tcc.musl_dir);
+            sb_putc(&cmd, ' ');
+            sb_put_shell_arg(&cmd, libpath);
+        }
+#endif
         LOG_I(log, PH_DRIVER, "linking: %s", sb_cstr(&cmd));
         crc = system(sb_cstr(&cmd));
         sb_free(&cmd);

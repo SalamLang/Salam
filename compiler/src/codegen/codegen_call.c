@@ -52,13 +52,23 @@ static const char *call_args(cg_t *cg, ast_node_t *call, func_sig_t *sig)
             bool arg_is_ref = sig && sig->decl && i < sig->decl->list.len &&
                               ((ast_node_t *)sig->decl->list.data[i])->is_ref;
             if (arg_is_ref) {
+                const char *ref_c;
+                if (cg_addressable(arg)) {
+                    ref_c = cg_fmt(cg, "&(%s)", cg_expr(cg, arg));
+                } else {
+                    int t = ++cg->tmpn;
+                    const char *argc = cg_expr(cg, arg);
+                    const char *argts = arg->type_str ? arg->type_str : "";
+                    ref_c = cg_fmt(cg, "({ %s __r%d = (%s); &__r%d; })",
+                                   cg_ctype(cg, argts), t, argc, t);
+                }
                 type_t *pt = (i < sig->params.len) ? (type_t *)sig->params.data[i] : NULL;
                 if (pt)
-                    sb_puts(&b, cg_fmt(cg, "(%s*)&(%s)",
-                                       cg_ctype(cg, type_to_string(cg->sem->tc, pt)),
-                                       cg_expr(cg, arg)));
+                    sb_puts(&b,
+                            cg_fmt(cg, "(%s*)%s",
+                                   cg_ctype(cg, type_to_string(cg->sem->tc, pt)), ref_c));
                 else
-                    sb_puts(&b, cg_fmt(cg, "&(%s)", cg_expr(cg, arg)));
+                    sb_puts(&b, ref_c);
             } else
                 sb_puts(&b, cg_expr(cg, arg));
         }
@@ -196,6 +206,10 @@ static const char *cg_lower_print(cg_t *cg, ast_node_t *n, bool nl, int err)
                 sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "(unsigned long long)(%s)", e);
                 break;
+            case PF_SIZE:
+                sb_puts(&fmt, pf_spec(s->kind));
+                a = cg_fmt(cg, "(size_t)(%s)", e);
+                break;
             case PF_I32:
                 sb_puts(&fmt, pf_spec(s->kind));
                 a = cg_fmt(cg, "(int)(%s)", e);
@@ -270,23 +284,25 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
     if (!strcmp(nm, "args")) {
         const char *cn = cg_ctype(cg, n->type_str ? n->type_str : "Vector_str");
         int t = ++cg->tmpn;
-        return cg_fmt(cg,
-                      "({ int32_t __an%d; char** __ad%d = salam_args(&__an%d); (%s){ "
-                      "__ad%d, __an%d, __an%d }; })",
-                      t, t, t, cn, t, t, t);
+        return cg_fmt(
+            cg,
+            "({ int32_t __an%d; const char** __ad%d = salam_args(&__an%d); (%s){ "
+            "__ad%d, __an%d, __an%d }; })",
+            t, t, t, cn, t, t, t);
     }
     if (!strcmp(nm, "listdir") && n->list.len == 1) {
         const char *cn = cg_ctype(cg, n->type_str ? n->type_str : "Vector_str");
         const char *arg = cg_expr(cg, (ast_node_t *)n->list.data[0]);
         int t = ++cg->tmpn;
-        return cg_fmt(cg,
-                      "({ int32_t __vn%d; char** __vd%d = salam_os_listdir(%s, &__vn%d); "
-                      "(%s){ __vd%d, __vn%d, __vn%d }; })",
-                      t, t, arg, t, cn, t, t, t);
+        return cg_fmt(
+            cg,
+            "({ int32_t __vn%d; const char** __vd%d = salam_os_listdir(%s, &__vn%d); "
+            "(%s){ __vd%d, __vn%d, __vn%d }; })",
+            t, t, arg, t, cn, t, t, t);
     }
     if (!strcmp(nm, "sizeof") && n->list.len == 1) {
         ast_node_t *op = (ast_node_t *)n->list.data[0];
-        return cg_fmt(cg, "(uint64_t)sizeof(%s)", cg_ctype(cg, op->type_str));
+        return cg_fmt(cg, "(size_t)sizeof(%s)", cg_ctype(cg, op->type_str));
     }
 
     if (!scope_lookup(cg->sem->global, nm)) {
@@ -462,7 +478,7 @@ static const char *call_str(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t
         const char *cn = cg_ctype(cg, n->type_str ? n->type_str : "Vector_str");
         int t = ++cg->tmpn;
         return cg_fmt(cg,
-                      "({ int32_t __sn%d; char** __sd%d = salam_str_split(%s, %s, "
+                      "({ int32_t __sn%d; const char** __sd%d = salam_str_split(%s, %s, "
                       "&__sn%d); (%s){ __sd%d, __sn%d, __sn%d }; })",
                       t, t, recv, a0, t, cn, t, t, t);
     }

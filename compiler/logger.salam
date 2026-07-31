@@ -11,15 +11,21 @@
 // - logger_t* -> value struct Logger; setters take it by reference (&:).
 // - i18n_tr() is skipped (identity for English); it applies unchanged until
 //   the i18n module is ported.
-// - The rich diagnostic path (logger_emit_rich -> diag_render) falls back to
-//   plain emission until wired to the diag module; SetDiagSource state is
-//   stored but not yet consumed here.
+// - The rich diagnostic path (logger_emit_rich -> diag_render) is wired to
+//   diag_render.salam ("diagrender"), not diag.salam ("diag") — diag.salam
+//   itself depends on this package (Engine.log is a Logger), so importing it
+//   here would cycle. diag_render.salam holds only the pure render functions
+//   (no logger dependency), matching how the C build already keeps
+//   diag_render.c's #include chain free of logger.h.
+// - logger_t.src_table (a fixed-size C array, LOGGER_MAX_DIAG_SOURCES) ->
+//   Vector<DiagSourceEntry>, unbounded.
 // - printf-style fmt/varargs -> callers pass a pre-formatted message string.
 package logger
 
 import str
 import io
 import time
+import dr "diag_render.salam"
 
 // ===== logger.c =====
 // log_level_t
@@ -43,7 +49,36 @@ pub const PH_CODEGEN := 6
 // (salam/diag.salam: DIAG_STYLE_* / DIAG_FORMAT_*); the logger stores
 // them as plain ints. 0 = DIAG_STYLE_RUST = DIAG_FORMAT_HUMAN.
 
-// struct logger (logger_internal.h) — sink is always stderr in this port
+// logger_internal.h: LOGGER_MAX_DIAG_SOURCES. The C used a fixed-size array
+// (diag_source_entry_t src_table[LOGGER_MAX_DIAG_SOURCES]) embedded directly
+// in logger_t, which is safe under struct-copy (a copy duplicates the whole
+// array by value). Logger here is likewise a VALUE struct that gets copied
+// by value throughout the codebase (SetLogger/New/serr/swarn/sm.New/dg.New
+// all take or return a Logger by value) — so src_table's backing storage
+// must never move after construction, or a stale copy taken before a growth
+// point is left holding a pointer into memory that reserve()'s
+// mem.Reallocate has since freed/moved out from under it (confirmed via a
+// real crash: driver.salam's own `lgr` and semantic.salam's `s.log` are
+// independent copies of the same original Logger; s.log's src_table grows
+// past its initial capacity while resolving imports, reallocating its
+// buffer, which leaves `lgr`'s copy of the OLD, now-freed pointer dangling).
+// Vector<T> gives growable-past-capacity semantics for free, so instead of
+// hand-rolling a fixed C array, New() reserves the full C capacity up front
+// and AddDiagSource never pushes past it — this guarantees the buffer is
+// allocated exactly once and never moves, exactly matching the C's
+// by-value-copy safety.
+pub const LOGGER_MAX_DIAG_SOURCES := 512
+
+// diag_source_entry_t (logger_internal.h) — one per-file source buffer,
+// registered via AddDiagSource so a rich-rendered diagnostic for an
+// imported/package file doesn't fall back to whichever file's text happens
+// to be the single SetDiagSource buffer.
+pub struct DiagSourceEntry:
+    pub file: str = ""
+    pub text: str = ""
+    pub len: int = 0
+end
+
 pub struct Logger:
     pub min_level: int = 2
     pub color: bool = false
@@ -53,6 +88,7 @@ pub struct Logger:
     pub diag_format: int = 0
     pub src_text: str = ""
     pub src_len: int = 0
+    pub src_table: Vector<DiagSourceEntry> = Vector {}
 end
 
 // ===== logger_emit.c =====
@@ -73,6 +109,75 @@ func timestamp_str(): str:
     ret "[" + time.Format(time.Now()) + "]"
 end
 
+// Per-file byte reader for split_code_prefix, matching the small
+// file-local `byte_at` helper every other compiler/*.salam file that needs
+// raw byte access duplicates (see e.g. driver.salam:232).
+func byte_at(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+// The probe logger_emit_rich (logger_emit.c) runs on every rich-path
+// message before calling diag_render: msg already carries diag.Report's
+// "E012: "/"W031: " prefix (see diag.salam's Report), so pull it back apart
+// here instead of importing diag.salam (which would cycle back to this
+// package).
+func split_code_prefix(msg: str, is_error &: bool, code &: int): str:
+    n := str.Len(msg)
+    if n < 6:
+        ret msg
+    end
+    c0 := byte_at(msg, 0)
+    if c0 != 69 && c0 != 87: // 'E' / 'W'
+        ret msg
+    end
+    d1 := byte_at(msg, 1)
+    d2 := byte_at(msg, 2)
+    d3 := byte_at(msg, 3)
+    if d1 < 48 || d1 > 57 || d2 < 48 || d2 > 57 || d3 < 48 || d3 > 57:
+        ret msg
+    end
+    if byte_at(msg, 4) != 58 || byte_at(msg, 5) != 32: // ": "
+        ret msg
+    end
+    is_error = c0 == 69
+    code = (d1 - 48) * 100 + (d2 - 48) * 10 + (d3 - 48)
+    ret msg.substr(6, n - 6)
+end
+
+// Source text for a rich-rendered diagnostic in `file`: the per-file table
+// (AddDiagSource) first, falling back to the single SetDiagSource buffer —
+// matching logger_emit_rich's `use_text = lg->src_text` default before its
+// src_table scan.
+func find_src(lgr: Logger, file: str): str:
+    n := lgr.src_table.len()
+    mut i := 0
+    until i < n:
+        e := lgr.src_table.get(i)[0]
+        if str.Equals(e.file, file):
+            ret e.text
+        end
+        i += 1
+    end
+    ret lgr.src_text
+end
+
+// logger_emit_rich (logger_emit.c): rustc/gcc/clang-style rendering with a
+// source excerpt, via diag_render.salam.
+func render_rich(lgr: Logger, level: int, file: str, line: int, col: int, msg: str): str:
+    mut is_error := level == LOG_ERROR
+    mut code := 0
+    body := split_code_prefix(msg, is_error, code)
+    lvl := is_error ? "error" : "warning"
+    src := find_src(lgr, file)
+    ret dr.RenderAt(lvl, code, is_error, file, line, col, 0, src, str.Len(src), body,
+                    "", lgr.diag_style, lgr.diag_format, lgr.color)
+end
+
 // ===== logger.c =====
 // logger_new — sink parameter dropped (always stderr)
 pub func New(min_level: int, color: bool): Logger:
@@ -85,6 +190,10 @@ pub func New(min_level: int, color: bool): Logger:
     lg.diag_format = 0 // diag.DIAG_FORMAT_HUMAN
     lg.src_text = ""
     lg.src_len = 0
+    lg.src_table = Vector {} as Vector<DiagSourceEntry>
+    // Reserve the full fixed capacity now, once, so the buffer never has to
+    // move later — see the LOGGER_MAX_DIAG_SOURCES comment on Logger above.
+    lg.src_table.reserve(LOGGER_MAX_DIAG_SOURCES)
     ret lg
 end
 
@@ -100,6 +209,37 @@ pub func SetDiagSource(lg &: Logger, src_text: str, src_len: int, style: int, fo
     lg.src_len = src_len
     lg.diag_style = style
     lg.diag_format = format
+end
+
+// logger_add_diag_source — register (or replace) the source text for one
+// file, keyed by exact path string. Consulted by the rich-diagnostic path
+// (see find_src below) instead of the single SetDiagSource buffer whenever
+// a diagnostic's file matches an entry here.
+pub func AddDiagSource(lg &: Logger, file: str, src_text: str, src_len: int):
+    n := lg.src_table.len()
+    mut i := 0
+    until i < n:
+        mut e := lg.src_table.get(i)[0]
+        if str.Equals(e.file, file):
+            e.text = src_text
+            e.len = src_len
+            lg.src_table.set(i, e)
+            ret
+        end
+        i += 1
+    end
+    // Matches the C's `if (lg->src_table_len < LOGGER_MAX_DIAG_SOURCES)`
+    // guard: extra files beyond the fixed capacity are silently dropped
+    // (they fall back to the single SetDiagSource buffer in find_src)
+    // rather than growing src_table's backing storage past its one-time
+    // reserve() in New() — see the LOGGER_MAX_DIAG_SOURCES comment above.
+    if n < LOGGER_MAX_DIAG_SOURCES:
+        mut ne := DiagSourceEntry {}
+        ne.file = file
+        ne.text = src_text
+        ne.len = src_len
+        lg.src_table.push(ne)
+    end
 end
 
 // logger_set_timestamps
@@ -214,6 +354,11 @@ end
 // logger_log with file + span (LOG_*_AT macros)
 pub func LogAt(lgr: Logger, phase: int, level: int, file: str, line: int, col: int, msg: str):
     if !Enabled(lgr, level):
+        ret
+    end
+    if lgr.diag_rich && str.Len(file) > 0 && line > 0 &&
+       (level == LOG_ERROR || level == LOG_WARN):
+        io.EPrint(render_rich(lgr, level, file, line, col, msg))
         ret
     end
     io.EPrintln(FormatPlain(lgr, phase, level, file, line, col, msg))

@@ -52,8 +52,20 @@ static void logger_emit_rich(logger_t *lg, log_level_t level, const char *file,
         body = msg_buf + 6;
     }
     const char *diag_level = is_error ? "error" : "warning";
-    diag_render(lg->sink, diag_level, code, is_error, file, span, lg->src_text,
-                lg->src_len, body, NULL, lg->diag_style, lg->diag_format, lg->color);
+    const char *use_text = lg->src_text;
+    size_t use_len = lg->src_len;
+    if (file) {
+        int i = 0;
+        for (; i < lg->src_table_len; i++) {
+            if (strcmp(lg->src_table[i].file, file) == 0) {
+                use_text = lg->src_table[i].text;
+                use_len = lg->src_table[i].len;
+                break;
+            }
+        }
+    }
+    diag_render(lg->sink, diag_level, code, is_error, file, span, use_text, use_len, body,
+                NULL, lg->diag_style, lg->diag_format, lg->color);
 }
 
 static void logger_emit_plain(logger_t *lg, phase_t phase, log_level_t level,

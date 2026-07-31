@@ -283,6 +283,7 @@ int driver_build(options_t *opt)
 
             logger_set_diag_source(log, src->text, src->len, opt->diag_style,
                                    opt->diag_format);
+            logger_add_diag_source(log, path, src->text, src->len);
             const char *module = module_of(arena, path);
             if (!first_module) first_module = module;
             LOG_I(log, PH_DRIVER, "compiling %s -> %s.c", path, module);
@@ -304,6 +305,7 @@ int driver_build(options_t *opt)
                         all_ok = false;
                         continue;
                     }
+                    logger_add_diag_source(log, pfiles[pi], psrc->text, psrc->len);
                     token_stream_t *ptoks = NULL;
                     if (!lexer_run(arena, log, modpack, psrc, &ptoks)) lok = false;
                     ast_node_t *pprog = NULL;

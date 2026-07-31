@@ -1,0 +1,184 @@
+// Removes "#" comments from every *.yml / *.yaml file under the roots below.
+// YAML-aware: keeps "#" inside quoted scalars and inside block scalars
+// (| and >, e.g. a GitHub Actions `run: |` body, where "#" is real content).
+import os
+import str
+// Directories scanned. Edit to taste; "." walks the whole repo.
+func roots_list(): Vector<str>:
+    mut v := Vector {} as Vector<str> v.push(".")
+    ret v
+end
+func is_skip_name(name: str): bool:
+    if name == ".git" || name == "node_modules" || name == "dist": ret true end
+    if name == "build" || name == ".venv" || name == "vendor": ret true end
+    ret false
+end
+func is_ws(c: str): bool:
+    ret c == " " || c == "\t"
+end
+func trim_right(s: str): str:
+    mut e := s.len()
+    until e > 0:
+        c := s.substr(e - 1, 1)
+        if c == " " || c == "\t": e = e - 1 else:
+            break
+        end
+    end
+    ret s.substr(0, e)
+end
+func leading_indent(line: str): int:
+    n := line.len()
+    mut i := 0
+    until i < n:
+        c := line.substr(i, 1)
+        if c == " " || c == "\t": i = i + 1 else:
+            break
+        end
+    end
+    ret i
+end
+func is_blank(line: str): bool:
+    n := line.len()
+    mut i := 0
+    until i < n:
+        c := line.substr(i, 1)
+        if c == " " || c == "\t" || c == "\r": i = i + 1 else:
+            ret false
+        end
+    end
+    ret true
+end
+// Strip a trailing "# ..." comment from a single line, honoring quotes.
+func strip_yaml_line(line: str): str:
+    mut cr := ""
+    mut work := line
+    if work.len() > 0 && work.substr(work.len() - 1, 1) == "\r":
+        cr = "\r"
+        work = work.substr(0, work.len() - 1)
+    end
+    n := work.len()
+    mut i := 0
+    mut in_s := false
+    mut in_d := false
+    mut prev := " "
+    until i < n:
+        c := work.substr(i, 1)
+        if in_d:
+            if c == "\\" && i + 1 < n:
+                prev = ""
+                i = i + 2
+                continue
+            end
+            if c == "\"": in_d = false end
+        else in_s:
+            if c == "'":
+                if i + 1 < n && work.substr(i + 1, 1) == "'":
+                    prev = "'"
+                    i = i + 2
+                    continue
+                end
+                in_s = false
+            end
+        else:
+            if c == "\"": in_d = true
+            else c == "'": in_s = true
+            else c == "#":
+                if is_ws(prev): ret trim_right(work.substr(0, i)).concat(cr) end
+            end
+        end
+        prev = c
+        i = i + 1
+    end
+    ret work.concat(cr)
+end
+// True when the comment-stripped line ends with a block scalar header (| or >).
+func block_indicator(stripped: str): bool:
+    t := trim_right(stripped)
+    n := t.len()
+    if n == 0: ret false end
+    mut start := 0
+    repeat n with k:
+        c := t.substr(k, 1)
+        if c == " " || c == "\t": start = k + 1 end
+    end
+    tok := t.substr(start, n - start)
+    first := tok.substr(0, 1)
+    if first != "|" && first != ">": ret false end
+    repeat tok.len() with j:
+        if j == 0: continue end
+        ch := tok.substr(j, 1)
+        if ch == "+" || ch == "-": continue end
+        code := char_code(ch)
+        if code >= 48 && code <= 57: continue end
+        ret false
+    end
+    ret true
+end
+func strip_yaml(text: str): str:
+    mut parts := text.split("\n")
+    mut sb := str.NewBuilder()
+    mut in_block := false
+    mut block_indent := 0
+    repeat parts.len() with i:
+        if i > 0: str.BufAppend(sb, "\n") end
+        line := parts.get(i)[0]
+        if in_block:
+            if is_blank(line):
+                str.BufAppend(sb, line)
+                continue
+            end
+            if leading_indent(line) > block_indent:
+                str.BufAppend(sb, line)
+                continue
+            end
+            in_block = false
+        end
+        out := strip_yaml_line(line)
+        str.BufAppend(sb, out)
+        if block_indicator(out):
+            in_block = true
+            block_indent = leading_indent(line)
+        end
+    end
+    parts.free()
+    res := str.BufStr(sb)
+    str.BufFree(sb)
+    ret res
+end
+func in_skip_dir(path: str): bool:
+    mut parts := path.split("/")
+    repeat parts.len() with i:
+        if is_skip_name(parts.get(i)[0]):
+            parts.free()
+            ret true
+        end
+    end
+    parts.free()
+    ret false
+end
+func main:
+    mut changed := 0
+    mut roots := roots_list()
+    repeat roots.len() with r:
+        root := roots.get(r)[0]
+        if os.IsDir(root) == false: continue end
+        mut all := os.Walk(root)
+        repeat all.len() with i:
+            path := all.get(i)[0]
+            is_yml := str.EndsWith(path, ".yml")
+            is_yaml := str.EndsWith(path, ".yaml")
+            if is_yml == false && is_yaml == false: continue end
+            if in_skip_dir(path): continue end
+            original := os.ReadFile(path)
+            stripped := strip_yaml(original)
+            if stripped != original:
+                os.WriteFile(path, stripped)
+                changed = changed + 1
+                println "stripped:", path
+            end
+        end
+        all.free()
+    end
+    println ""
+    println "Done. Modified", changed, "file(s)."
+end

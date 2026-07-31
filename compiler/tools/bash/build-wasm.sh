@@ -1,11 +1,26 @@
 #!/bin/sh
 # Build the Salam compiler to WebAssembly for the online playground.
+#
+# Self-hosted: compiler/sal_web.salam (not hand-written C) defines the four
+# functions the playground's JS calls via Module.cwrap - RunApp, BuildLayout,
+# Emit, Version. Each is wrapped by a same-named `func` inside an `extern:`
+# block in sal_web.salam itself (see the "wasm/emscripten export shims"
+# section there) - that's Salam's EMSCRIPTEN_KEEPALIVE equivalent: it
+# survives codegen.salam's dead-code elimination regardless of reachability
+# from any entry point, and gets emitted under its exact, unmangled name
+# with external linkage, which is exactly what EXPORTED_FUNCTIONS below
+# needs. `salam obj` self-hosts the whole reachable graph into
+# salam_mod_*.c the same way it does for any Salam build (there is no C
+# source here anymore); --cc=true skips the native .o step we don't need
+# (--keep-c keeps the .c/.h regardless of that step's outcome), and emcc
+# compiles+links those generated files directly, same as it once did for
+# the hand-written C sources this replaces.
 
 set -e
 . "$(dirname "$0")/lib.sh"
 salam_ensure_compiler
-rm -f salam_mod_*.c salam_mod_*.h
-"$SALAM" run tools/salam/gen-examples.salam
+rm -f salam_mod_*.c salam_mod_*.h salam_mod_*.o
+"$SALAM" run compiler/tools/salam/gen-examples.salam
 EMCC="${EMCC:-emcc}"
 if ! command -v "$EMCC" >/dev/null 2>&1; then
     EMSDK_DIR="${SALAM_EMSDK:-C:/emsdk-wasm}"
@@ -39,19 +54,21 @@ command -v "$EMCC" >/dev/null 2>&1 || [ -e "$EMCC" ] || {
         echo "" >&2
         echo "       You are in WSL. If 'emsdk install' can't download, run this step" >&2
         echo "       from Windows (Git Bash/PowerShell) with the existing C:/emsdk-wasm" >&2
-        echo "       bundle:  sh tools/build-wasm.sh" >&2
+        echo "       bundle:  sh compiler/tools/bash/build-wasm.sh" >&2
     fi
     exit 1
 }
 
-OUT_DIR="../editor"
+OUT_DIR="editor"
 mkdir -p "$OUT_DIR"
-SRC_DIRS="core source logger xml condcomp token langpack i18n lexer ast parser
-        diag semantic interp layout minify codegen llvm web"
-SRCS=""
-for d in $SRC_DIRS; do SRCS="$SRCS src/$d/*.c"; done
-# shellcheck disable=SC2086
-"$EMCC" -O2 -Isrc $SRCS \
+
+echo "==> self-hosting compiler/sal_web.salam -> salam_mod_*.c (kept for emcc)"
+SALAM_STD="$(pwd)" "$SALAM" obj compiler/sal_web.salam --cc=true --keep-c \
+    --log-level=warn
+rm -f salam_mod_*.o
+
+# shellcheck disable=SC2046
+"$EMCC" -O2 -I. $(ls salam_mod_*.c) \
     -o "$OUT_DIR/salam-wa.js" \
     --preload-file std@/std \
     -s MODULARIZE=0 \
@@ -65,5 +82,6 @@ for d in $SRC_DIRS; do SRCS="$SRCS src/$d/*.c"; done
     -s EXPORTED_FUNCTIONS="['_salam_web_run_app','_salam_web_build_layout','_salam_web_emit','_salam_web_version','_malloc','_free']" \
     -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']"
 echo "built $OUT_DIR/salam-wa.js (+ .wasm, .data)"
+rm -f salam_mod_*.c salam_mod_*.h
 "$SALAM" web "$OUT_DIR/src/page.salam" --output="$OUT_DIR/index.html"
 echo "built $OUT_DIR/index.html"

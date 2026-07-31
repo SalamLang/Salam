@@ -30,7 +30,6 @@ if [ ! -x "$TMP_OUT" ]; then
     exit 1
 fi
 
-# Sanity check before overwriting the tracked binary.
 if ! "$TMP_OUT" version >/dev/null 2>&1; then
     echo "error: freshly built $TMP_OUT failed 'salam version' — not replacing compiler/salam" >&2
     exit 1

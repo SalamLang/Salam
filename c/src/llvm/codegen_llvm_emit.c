@@ -180,11 +180,11 @@ static const char *ll_escape(ll_t *ll, const char *s, size_t len, size_t *arr_le
 }
 
 #if SIZE_MAX > 0xFFFFFFFFu
-#define LL_STR_HASH_BASIS ((size_t)14695981039346656037ULL)
-#define LL_STR_HASH_PRIME ((size_t)1099511628211ULL)
+#  define LL_STR_HASH_BASIS ((size_t)14695981039346656037ULL)
+#  define LL_STR_HASH_PRIME ((size_t)1099511628211ULL)
 #else
-#define LL_STR_HASH_BASIS ((size_t)2166136261u)
-#define LL_STR_HASH_PRIME ((size_t)16777619u)
+#  define LL_STR_HASH_BASIS ((size_t)2166136261u)
+#  define LL_STR_HASH_PRIME ((size_t)16777619u)
 #endif
 
 static size_t ll_str_hash(const char *s, size_t len)

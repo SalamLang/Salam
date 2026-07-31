@@ -69,19 +69,19 @@ ENV GOCACHE=/tmp/go-cache GOPATH=/tmp/go CARGO_HOME=/tmp/cargo
 WORKDIR /repo
 
 FROM toolchain AS salam-builder
-COPY compiler /repo/compiler
-WORKDIR /repo/compiler
+COPY c /repo/c
+WORKDIR /repo/c
 RUN make -j"$(nproc)"
 WORKDIR /repo
 RUN /repo/salam version
 
 FROM toolchain AS bench
 COPY --from=salam-builder /repo/salam /repo/salam
-COPY --from=salam-builder /repo/compiler/std /repo/compiler/std
+COPY std /repo/std
 COPY benchmark /repo/benchmark
 
 ENV SALAM_BIN=/repo/salam \
-    SALAM_STD=/repo/compiler/std \
+    SALAM_STD=/repo/std \
     BENCH_WORK=/tmp/salam_bench_work
 
 HEALTHCHECK NONE

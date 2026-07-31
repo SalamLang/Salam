@@ -155,7 +155,8 @@ static int64_t nf_fopen(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t 
     (void)a5;
     (void)a6;
     (void)a7;
-    return (int64_t)(intptr_t)fopen((const char *)(intptr_t)a0, (const char *)(intptr_t)a1);
+    return (int64_t)(intptr_t)fopen((const char *)(intptr_t)a0,
+                                    (const char *)(intptr_t)a1);
 }
 static int64_t nf_fclose(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
                          int64_t a5, int64_t a6, int64_t a7)
@@ -365,9 +366,8 @@ static int64_t nf_FindClose(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int6
     (void)a7;
     return (int64_t)FindClose((HANDLE)(intptr_t)a0);
 }
-static int64_t nf_GetSystemTimeAsFileTime(int64_t a0, int64_t a1, int64_t a2,
-                                          int64_t a3, int64_t a4, int64_t a5,
-                                          int64_t a6, int64_t a7)
+static int64_t nf_GetSystemTimeAsFileTime(int64_t a0, int64_t a1, int64_t a2, int64_t a3,
+                                          int64_t a4, int64_t a5, int64_t a6, int64_t a7)
 {
     (void)a1;
     (void)a2;
@@ -401,7 +401,8 @@ static int64_t nf__popen(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t
     (void)a5;
     (void)a6;
     (void)a7;
-    return (int64_t)(intptr_t)_popen((const char *)(intptr_t)a0, (const char *)(intptr_t)a1);
+    return (int64_t)(intptr_t)_popen((const char *)(intptr_t)a0,
+                                     (const char *)(intptr_t)a1);
 }
 static int64_t nf__pclose(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
                           int64_t a5, int64_t a6, int64_t a7)
@@ -539,7 +540,8 @@ static int64_t nf_popen(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t 
     (void)a5;
     (void)a6;
     (void)a7;
-    return (int64_t)(intptr_t)popen((const char *)(intptr_t)a0, (const char *)(intptr_t)a1);
+    return (int64_t)(intptr_t)popen((const char *)(intptr_t)a0,
+                                    (const char *)(intptr_t)a1);
 }
 static int64_t nf_pclose(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
                          int64_t a5, int64_t a6, int64_t a7)

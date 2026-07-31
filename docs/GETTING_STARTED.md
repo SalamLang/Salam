@@ -11,7 +11,7 @@
   - [👋 Hello, World!](#-hello-world)
   - [🏗️ Compiling a program with `salam build`](#-compiling-a-program-with-salam-build)
   - [🎨 Formatting with `salam format`](#-formatting-with-salam-format)
-  - [🌐 Layout DSL — compile to HTML/CSS/JS](#-layout-dsl--compile-to-htmlcssjs)
+  - [🌐 Layout DSL - compile to HTML/CSS/JS](#-layout-dsl---compile-to-htmlcssjs)
   - [🖥️ Interactive REPLs](#-interactive-repls)
   - [📚 Where to go next](#-where-to-go-next)
 
@@ -21,7 +21,7 @@
 
 ## What is Salam?
 
-**Salam** (سلام — _peace_) is a statically typed, compiled, general-purpose systems programming language designed to be efficient, readable, and inclusive.
+**Salam** (سلام - _peace_) is a statically typed, compiled, general-purpose systems programming language designed to be efficient, readable, and inclusive.
 
 - Write code in **English**, **Persian (فارسی)**, or **Arabic (العربية)**.
 - The general language transpiles to C and compiles to a native executable.
@@ -33,7 +33,7 @@
 | Requirement                        | Notes                                                                                                                 |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | A C compiler                       | [**tcc**](https://bellard.org/tcc/) (bundled, fast), [gcc](https://gcc.gnu.org/), or [clang](https://clang.llvm.org/) |
-| [CMake](https://cmake.org/) ≥ 3.15 | Optional — needed for the CMake build and test suite                                                                  |
+| [CMake](https://cmake.org/) ≥ 3.15 | Optional - needed for the CMake build and test suite                                                                  |
 | [Git](https://git-scm.com/)        | To clone the repository                                                                                               |
 
 No other runtime or library is required. `salam build` inlines a small C runtime into every generated file, so programs link only `-lm`.
@@ -133,7 +133,7 @@ salam format app.salam --tabs
 salam format app.salam --lang=fa
 ```
 
-## 🌐 Layout DSL — compile to HTML/CSS/JS
+## 🌐 Layout DSL - compile to HTML/CSS/JS
 
 Salam includes a built-in DSL for describing web layouts.
 
@@ -159,7 +159,7 @@ salam layout   # layout DSL REPL
 
 | Resource                                                                                                                     | Description                                                     |
 | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| [Web Playground](https://salamlang.github.io/Salam/)                                                                         | Try Salam in your browser — no install needed                   |
+| [Web Playground](https://salamlang.github.io/Salam/)                                                                         | Try Salam in your browser - no install needed                   |
 | [Examples](../examples/en/)                                                                                                  | Ready-to-run programs covering basics, types, stdlib, and more  |
 | [Editor readme](../editor/README.md)                                                                                         | How the WebAssembly playground is built and served              |
 | [Platform & word-size support](PLATFORMS.md)                                                                                 | 32-bit vs 64-bit, C backend vs LLVM backend, release matrix     |

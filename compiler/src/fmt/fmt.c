@@ -19,6 +19,7 @@
 
 #define FMT_MAX_BRACKET 256
 #define FMT_MAX_BLOCK 256
+#define FMT_WRAP_WIDTH 100
 
 typedef struct {
     const fmt_style_t *st;
@@ -102,6 +103,11 @@ static bool fmt_angle_is_generic(const token_stream_t *toks, size_t lt_idx)
         case TK_GT:
             if (--depth == 0) return true;
             break;
+        case TK_SHR:
+            /* '>>' closes two generic levels at once (e.g. 'A<B<C>>'). */
+            depth -= 2;
+            if (depth <= 0) return true;
+            break;
         case TK_IDENT:
         case TK_COMMA:
         case TK_DOT:
@@ -142,6 +148,9 @@ static bool fmt_lambda_header_at(const token_stream_t *toks, size_t open_idx)
                 depth++;
             } else if (k == TK_GT && depth > 0) {
                 depth--;
+            } else if (k == TK_SHR && depth > 0) {
+                depth -= 2;
+                if (depth < 0) depth = 0;
             } else if (fmt_is_open(k)) {
                 depth++;
             } else if (fmt_is_close(k)) {
@@ -176,6 +185,7 @@ static bool fmt_type_token(token_kind_t k)
     case TK_AMP:
     case TK_LT:
     case TK_GT:
+    case TK_SHR:
     case TK_LBRACKET:
     case TK_RBRACKET:
     case TK_LPAREN:
@@ -307,6 +317,13 @@ static void fmt_step_leading(fmt_ctx_t *c, const token_t *t, token_kind_t k)
     c->prev_gt_generic = false;
 }
 
+static int fmt_current_column(const sb_t *out)
+{
+    size_t i = out->len;
+    while (i > 0 && out->data[i - 1] != '\n') i--;
+    return (int)(out->len - i);
+}
+
 static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
                                  const token_stream_t *toks, size_t i)
 {
@@ -316,6 +333,10 @@ static void fmt_step_state_after(fmt_ctx_t *c, const token_t *t, token_kind_t k,
         c->stmt_head = k;
 
     if (k == TK_KW_MATCH && c->bracket == 0) c->match_pending = true;
+
+    if (k == TK_COMMA && c->ml_top > 0 && c->ml_top <= FMT_MAX_BRACKET &&
+        c->ml_stack[c->ml_top - 1] && fmt_current_column(c->out) >= FMT_WRAP_WIDTH)
+        c->force_break = true;
 
     if (k == TK_QUESTION && c->bracket <= FMT_MAX_BRACKET) c->q_open[c->bracket]++;
     if (k == TK_COLON && c->bracket <= FMT_MAX_BRACKET && c->q_open[c->bracket] > 0) {

@@ -46,6 +46,18 @@ const char *cg_op(token_kind_t k)
         return "||";
     case TK_NOT:
         return "!";
+    case TK_AMP:
+        return "&";
+    case TK_PIPE:
+        return "|";
+    case TK_CARET:
+        return "^";
+    case TK_TILDE:
+        return "~";
+    case TK_SHL:
+        return "<<";
+    case TK_SHR:
+        return ">>";
     case TK_ASSIGN:
         return "=";
     case TK_PLUS_EQ:
@@ -58,6 +70,16 @@ const char *cg_op(token_kind_t k)
         return "/=";
     case TK_PERCENT_EQ:
         return "%=";
+    case TK_AMP_EQ:
+        return "&=";
+    case TK_PIPE_EQ:
+        return "|=";
+    case TK_CARET_EQ:
+        return "^=";
+    case TK_SHL_EQ:
+        return "<<=";
+    case TK_SHR_EQ:
+        return ">>=";
     default:
         return "?";
     }

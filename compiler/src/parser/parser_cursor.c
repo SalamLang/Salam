@@ -110,9 +110,33 @@ bool p_expect(parser_t *p, token_kind_t k, const char *what)
     return false;
 }
 
+bool p_close_angle(parser_t *p, const char *what)
+{
+    if (p->angle_pending > 0) {
+        p->angle_pending--;
+        return true;
+    }
+    if (p_at(p, TK_GT)) {
+        p_advance(p);
+        return true;
+    }
+    if (p_at(p, TK_SHR)) {
+        p_advance(p);
+        p->angle_pending++;
+        return true;
+    }
+    char buf[128];
+    sal_snprintf(buf, sizeof(buf), i18n_tr("expected %s"), i18n_tr(what));
+    p_error(p, buf);
+    return false;
+}
+
 void p_sync(parser_t *p)
 {
     p->panic = false;
+    /* Drop any half-consumed '>>' split so a malformed generic can't leak a
+     * synthetic '>' into a later, unrelated one. */
+    p->angle_pending = 0;
     while (!p_at_eof(p)) {
         token_kind_t k = p_peek(p)->kind;
         if (k == TK_STMT_END) {

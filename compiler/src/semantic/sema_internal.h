@@ -143,6 +143,8 @@ const char *sema_op_method(token_kind_t k);
 
 token_kind_t sema_compound_base(token_kind_t k);
 
+bool sema_tk_is_bitwise(token_kind_t k);
+
 type_t *sema_try_op_overload(sema_t *s, ast_node_t *n, symbol_t *ssym, const char *mname,
                              type_t *rhs_type);
 

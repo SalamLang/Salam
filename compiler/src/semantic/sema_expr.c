@@ -15,6 +15,7 @@
 #include "core/prelude.h"
 #include "semantic/sema_internal.h"
 #include "semantic/dce.h"
+#include "semantic/builtins.h"
 
 static type_t *ty(sema_t *s, type_kind_t k)
 {
@@ -60,6 +61,7 @@ static bool int_lit_fits(uint64_t u, type_kind_t k)
     case TY_U32:
         return u <= 4294967295ULL;
     case TY_U64:
+    case TY_SIZE:
         return true;
     default:
         return false;
@@ -218,6 +220,16 @@ static type_t *check_binary(sema_t *s, ast_node_t *n)
             SERR(s, 21, &n->span,
                  "operator '+' on a string requires the other operand to be a string, "
                  "number, bool, or char (got '%s' and '%s')",
+                 type_to_string(s->tc, l), type_to_string(s->tc, r));
+            return decorate(s, n, err_ty(s));
+        }
+        if (op == TK_STAR && (l->kind == TY_STR || r->kind == TY_STR)) {
+            if ((l->kind == TY_STR && type_is_integer(r)) ||
+                (r->kind == TY_STR && type_is_integer(l)))
+                return decorate(s, n, ty(s, TY_STR));
+            SERR(s, 21, &n->span,
+                 "operator '*' on a string requires the other operand to be an integer "
+                 "(got '%s' and '%s')",
                  type_to_string(s->tc, l), type_to_string(s->tc, r));
             return decorate(s, n, err_ty(s));
         }
@@ -432,6 +444,11 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *n)
                 n->name = c;
                 sym = scope_lookup(s->cur, n->name);
             }
+        }
+        if (!sym) {
+            bool is_str;
+            if (salam_builtin_global_const(n->name, n, &is_str))
+                return decorate(s, n, is_str ? ty(s, TY_STR) : ty(s, TY_I32));
         }
         if (!sym) {
             SERR(s, 1, &n->span, "unknown identifier '%s'", n->name);

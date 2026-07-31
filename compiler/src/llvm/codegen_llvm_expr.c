@@ -124,6 +124,17 @@ static bool ll_binary_string(ll_t *ll, ast_node_t *n, token_kind_t op, llv_t *ou
         *out = (llv_t){r, "str"};
         return true;
     }
+    if (op == TK_STAR && (as || bs)) {
+        ast_node_t *sop = as ? n->a : n->b;
+        ast_node_t *nop = as ? n->b : n->a;
+        const char *S = ll_expr(ll, sop).ref;
+        const char *N = ll_conv(ll, ll_expr(ll, nop), "i32");
+        const char *r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_REPEAT);
+        ll_emit(ll, "%s = call ptr @salam_ll_repeat(ptr %s, i32 %s)", r, S, N);
+        *out = (llv_t){r, "str"};
+        return true;
+    }
     if (ll_is_cmp(op) && as && bs) {
         llv_t L = ll_expr(ll, n->a), R = ll_expr(ll, n->b);
         const char *c = ll_new_tmp(ll), *r = ll_new_tmp(ll);
@@ -313,7 +324,7 @@ llv_t ll_binary(ll_t *ll, ast_node_t *n)
                     rc);
             return (llv_t){r, "bool"};
         }
-        const char *common = ll_common(L.ts, R.ts);
+        const char *common = ll_common(ll, L.ts, R.ts);
         const char *lc = ll_conv(ll, L, common), *rc = ll_conv(ll, R, common);
         bool flt = ll_is_float(common);
         const char *r = ll_new_tmp(ll);
@@ -322,7 +333,7 @@ llv_t ll_binary(ll_t *ll, ast_node_t *n)
         return (llv_t){r, "bool"};
     }
 
-    const char *rt = n->type_str ? n->type_str : ll_common(L.ts, R.ts);
+    const char *rt = n->type_str ? n->type_str : ll_common(ll, L.ts, R.ts);
     const char *lc = ll_conv(ll, L, rt), *rc = ll_conv(ll, R, rt);
     bool flt = ll_is_float(rt);
     const char *o = ll_arith_op(op, flt, ll_is_signed(rt));
@@ -484,6 +495,9 @@ static void ll_lower_print(ll_t *ll, ast_node_t *n, bool nl, int err)
                 break;
             case PF_U64:
                 sb_puts(&args, ll_fmt(ll, ", i64 %s", v.ref));
+                break;
+            case PF_SIZE:
+                sb_puts(&args, ll_fmt(ll, ", %s %s", ll->usize, ll_conv(ll, v, "size")));
                 break;
             default:
                 break;
@@ -660,6 +674,7 @@ static llv_t ll_emit_call(ll_t *ll, ast_node_t *n, func_sig_t *sig, const char *
 
 static llv_t ll_call_pkg(ll_t *ll, ast_node_t *n, symbol_t *pk, const char *fname_)
 {
+    ll_touch_pkg_named(ll, pk->pkgname);
     symbol_t *fs = scope_lookup_local(pk->members, fname_);
     if (!fs || fs->kind != SYM_FUNC || fs->overloads.len == 0) {
         ll_error(ll, n, "package function '%s' not found", fname_);
@@ -730,7 +745,8 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
         *out = (llv_t){r, "f64"};
         return true;
     }
-    if (!strcmp(m, "find") && na == 1) {
+    if ((!strcmp(m, "find") || !strcmp(m, "search") || !strcmp(m, "indexOf")) &&
+        na == 1) {
         const char *a = ll_expr(ll, (ast_node_t *)n->list.data[0]).ref;
         const char *p = ll_new_tmp(ll), *pi = ll_new_tmp(ll), *ri = ll_new_tmp(ll);
         const char *d = ll_new_tmp(ll), *o = ll_new_tmp(ll), *nz = ll_new_tmp(ll);
@@ -743,6 +759,28 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
         r = ll_new_tmp(ll);
         ll_emit(ll, "%s = select i1 %s, i32 -1, i32 %s", r, nz, o);
         *out = (llv_t){r, "i32"};
+        return true;
+    }
+    if (!strcmp(m, "lower")) {
+        r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_LOWER);
+        ll_emit(ll, "%s = call ptr @salam_ll_lower(ptr %s)", r, recv);
+        *out = (llv_t){r, "str"};
+        return true;
+    }
+    if (!strcmp(m, "upper")) {
+        r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_UPPER);
+        ll_emit(ll, "%s = call ptr @salam_ll_upper(ptr %s)", r, recv);
+        *out = (llv_t){r, "str"};
+        return true;
+    }
+    if (!strcmp(m, "repeat") && na == 1) {
+        const char *cnt = ll_conv(ll, ll_expr(ll, (ast_node_t *)n->list.data[0]), "i32");
+        r = ll_new_tmp(ll);
+        ll_need(ll, LL_H_REPEAT);
+        ll_emit(ll, "%s = call ptr @salam_ll_repeat(ptr %s, i32 %s)", r, recv, cnt);
+        *out = (llv_t){r, "str"};
         return true;
     }
     return false;
@@ -964,8 +1002,8 @@ static llv_t ll_call(ll_t *ll, ast_node_t *n)
             const char *szp = ll_new_tmp(ll), *sz = ll_new_tmp(ll);
             ll_emit(ll, "%s = getelementptr %s, ptr null, i32 1", szp,
                     ll_ty(ll, t ? t : "i32"));
-            ll_emit(ll, "%s = ptrtoint ptr %s to i64", sz, szp);
-            return (llv_t){sz, "u64"};
+            ll_emit(ll, "%s = ptrtoint ptr %s to %s", sz, szp, ll->usize);
+            return (llv_t){sz, "size"};
         }
         symbol_t *fsym = ll_sym(ll, nm);
         if (fsym && fsym->kind == SYM_FUNC) return ll_call_user(ll, n, nm);

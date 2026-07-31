@@ -30,15 +30,18 @@ static void cli_set_defaults(options_t *out)
     out->command = CMD_INSPECT;
     out->new_name = NULL;
     out->inline_mode = false;
+    out->split = false;
     out->input_count = 0;
+    out->run_args_count = 0;
     out->output = NULL;
     out->cc = "tcc";
     out->keep_c = false;
-    out->safe = false;
+    out->safe = true;
     out->fmt_check = false;
     out->fmt_recursive = false;
     out->fmt_tabs = false;
     out->fmt_indent_width = 4;
+    out->fmt_fix_order = false;
     out->debug_info = false;
     out->asan = false;
     out->interp = false;
@@ -51,6 +54,7 @@ static void cli_set_defaults(options_t *out)
     out->llvm_target = NULL;
     out->llvm_native_cpu = false;
     out->no_js_minify_names = OPTIONS_INIT_NO_JS_MINIFY_NAMES;
+    out->no_minify = OPTIONS_INIT_NO_MINIFY;
     out->version_short = false;
 }
 
@@ -58,5 +62,8 @@ bool cli_parse(int argc, char **argv, options_t *out)
 {
     cli_set_defaults(out);
     int start = cli_dispatch_command(argc, argv, out);
-    return cli_parse_options(argc, argv, start, out);
+    if (!cli_parse_options(argc, argv, start, out)) return false;
+    if (out->safe && out->ndefines < SALAM_MAX_INPUTS)
+        out->defines[out->ndefines++] = "SALAM_SAFE";
+    return true;
 }

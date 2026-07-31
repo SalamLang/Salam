@@ -453,6 +453,7 @@ void fmt_tokens(const token_stream_t *toks, const fmt_style_t *style, sb_t *out)
         c.line_has_content = true;
 
         fmt_step_state_after(&c, t, k, toks, i);
+        c.prev_after_dot = c.prev != NULL && c.prev->kind == TK_DOT;
         c.prev = t;
         c.prev_end_line = t->span.end.line;
     }

@@ -6,19 +6,134 @@ package crypto
 import mem
 import str
 import conv
+import encoding
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func rand_s(out: void*): int
+    end
+else:
+    extern:
+        func fopen(path: str, mode: str): void*
+        func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+        func fclose(stream: void*): int
+    end
+end
+
+extern:
+    noret func abort()
+end
+
+const POW2 := [
+    1, 2, 4, 8, 16, 32, 64, 128
+    256, 512, 1024, 2048, 4096, 8192, 16384, 32768
+    65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608
+    16777216, 33554432, 67108864, 134217728, 268435456, 536870912, 1073741824, 2147483648
+] as i64[32]
+
+const XOR4 := [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+    1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14
+    2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13
+    3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12
+    4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11
+    5, 4, 7, 6, 1, 0, 3, 2, 13, 12, 15, 14, 9, 8, 11, 10
+    6, 7, 4, 5, 2, 3, 0, 1, 14, 15, 12, 13, 10, 11, 8, 9
+    7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8
+    8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7
+    9, 8, 11, 10, 13, 12, 15, 14, 1, 0, 3, 2, 5, 4, 7, 6
+    10, 11, 8, 9, 14, 15, 12, 13, 2, 3, 0, 1, 6, 7, 4, 5
+    11, 10, 9, 8, 15, 14, 13, 12, 3, 2, 1, 0, 7, 6, 5, 4
+    12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3
+    13, 12, 15, 14, 9, 8, 11, 10, 5, 4, 7, 6, 1, 0, 3, 2
+    14, 15, 12, 13, 10, 11, 8, 9, 6, 7, 4, 5, 2, 3, 0, 1
+    15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0
+] as int[256]
+
+const AND4 := [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1
+    0, 0, 2, 2, 0, 0, 2, 2, 0, 0, 2, 2, 0, 0, 2, 2
+    0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3
+    0, 0, 0, 0, 4, 4, 4, 4, 0, 0, 0, 0, 4, 4, 4, 4
+    0, 1, 0, 1, 4, 5, 4, 5, 0, 1, 0, 1, 4, 5, 4, 5
+    0, 0, 2, 2, 4, 4, 6, 6, 0, 0, 2, 2, 4, 4, 6, 6
+    0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7
+    0, 0, 0, 0, 0, 0, 0, 0, 8, 8, 8, 8, 8, 8, 8, 8
+    0, 1, 0, 1, 0, 1, 0, 1, 8, 9, 8, 9, 8, 9, 8, 9
+    0, 0, 2, 2, 0, 0, 2, 2, 8, 8, 10, 10, 8, 8, 10, 10
+    0, 1, 2, 3, 0, 1, 2, 3, 8, 9, 10, 11, 8, 9, 10, 11
+    0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12
+    0, 1, 0, 1, 4, 5, 4, 5, 8, 9, 8, 9, 12, 13, 12, 13
+    0, 0, 2, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12, 14, 14
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+] as int[256]
+
+const PBKDF2_DEFAULT_ITERATIONS := 1000
+
+const SHA256_K := [
+    1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221
+    3624381080, 310598401, 607225278, 1426881987, 1925078388, 2162078206, 2614888103, 3248222580
+    3835390401, 4022224774, 264347078, 604807628, 770255983, 1249150122, 1555081692, 1996064986
+    2554220882, 2821834349, 2952996808, 3210313671, 3336571891, 3584528711, 113926993, 338241895
+    666307205, 773529912, 1294757372, 1396182291, 1695183700, 1986661051, 2177026350, 2456956037
+    2730485921, 2820302411, 3259730800, 3345764771, 3516065817, 3600352804, 4094571909, 275423344
+    430227734, 506948616, 659060556, 883997877, 958139571, 1322822218, 1537002063, 1747873779
+    1955562222, 2024104815, 2227730452, 2361852424, 2428436474, 2756734187, 3204031479, 3329325298
+] as i64[64]
+
+const SHA512_K_HI := [
+    1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221
+    3624381080, 310598401, 607225278, 1426881987, 1925078388, 2162078206, 2614888103, 3248222580
+    3835390401, 4022224774, 264347078, 604807628, 770255983, 1249150122, 1555081692, 1996064986
+    2554220882, 2821834349, 2952996808, 3210313671, 3336571891, 3584528711, 113926993, 338241895
+    666307205, 773529912, 1294757372, 1396182291, 1695183700, 1986661051, 2177026350, 2456956037
+    2730485921, 2820302411, 3259730800, 3345764771, 3516065817, 3600352804, 4094571909, 275423344
+    430227734, 506948616, 659060556, 883997877, 958139571, 1322822218, 1537002063, 1747873779
+    1955562222, 2024104815, 2227730452, 2361852424, 2428436474, 2756734187, 3204031479, 3329325298
+    3391569614, 3515267271, 3940187606, 4118630271, 116418474, 174292421, 289380356, 460393269
+    685471733, 852142971, 1017036298, 1126000580, 1288033470, 1501505948, 1607167915, 1816402316
+] as i64[80]
+
+const SHA512_K_LO := [
+    3609767458, 602891725, 3964484399, 2173295548, 4081628472, 3053834265, 2937671579, 3664609560
+    2734883394, 1164996542, 1323610764, 3590304994, 4068182383, 991336113, 633803317, 3479774868
+    2666613458, 944711139, 2341262773, 2007800933, 1495990901, 1856431235, 3175218132, 2198950837
+    3999719339, 766784016, 2566594879, 3203337956, 1034457026, 2466948901, 3758326383, 168717936
+    1188179964, 1546045734, 1522805485, 2643833823, 2343527390, 1014477480, 1206759142, 344077627
+    1290863460, 3158454273, 3505952657, 106217008, 3606008344, 1432725776, 1467031594, 851169720
+    3100823752, 1363258195, 3750685593, 3785050280, 3318307427, 3812723403, 2003034995, 3602036899
+    1575990012, 1125592928, 2716904306, 442776044, 593698344, 3733110249, 2999351573, 3815920427
+    3928383900, 566280711, 3454069534, 4000239992, 1914138554, 2731055270, 3203993006, 320620315
+    587496836, 1086792851, 365543100, 2618297676, 3409855158, 4234509866, 987167468, 1246189591
+] as i64[80]
+
+struct U64Pair:
+    pub hi: i64 = 0
+    pub lo: i64 = 0
+end
+
+struct Sha256State:
+    pub h0: i64 = 0
+    pub h1: i64 = 0
+    pub h2: i64 = 0
+    pub h3: i64 = 0
+    pub h4: i64 = 0
+    pub h5: i64 = 0
+    pub h6: i64 = 0
+    pub h7: i64 = 0
+end
 
 extern:
     func salam_hash_bytes(p: void*, n: u64): u64:
         bp := p as i8*
         ni := n as int
         mut h := 14695981039346656037 as u64
-        mut i := 0
-        until i < ni:
+        repeat ni with i:
             mut c := bp[i] as int
             if c < 0: c = c + 256 end
             h *= (1099511628211 as u64)
             h += (c as u64)
-            i += 1
         end
         ret h
     end
@@ -42,6 +157,756 @@ extern:
         h *= 1099511628211
         ret h
     end
+end
+
+func _xor32(a0: i64, b0: i64): i64:
+    mut a := a0 % 4294967296
+    mut b := b0 % 4294967296
+    mut r := 0 as i64
+    mut p := 1 as i64
+    repeat 8 with i:
+        na := a % 16
+        nb := b % 16
+        r += (XOR4[(na * 16 + nb) as int] as i64) * p
+        a /= 16
+        b /= 16
+        p *= 16
+    end
+    ret r
+end
+
+func _and32(a0: i64, b0: i64): i64:
+    mut a := a0 % 4294967296
+    mut b := b0 % 4294967296
+    mut r := 0 as i64
+    mut p := 1 as i64
+    repeat 8 with i:
+        na := a % 16
+        nb := b % 16
+        r += (AND4[(na * 16 + nb) as int] as i64) * p
+        a /= 16
+        b /= 16
+        p *= 16
+    end
+    ret r
+end
+
+inline func _not32(a0: i64): i64:
+    ret 4294967295 - (a0 % 4294967296)
+end
+
+func _rotr32(x0: i64, n: int): i64:
+    x := x0 % 4294967296
+    if n == 0:
+        ret x
+    end
+    hi := x % POW2[n]
+    lo := x / POW2[n]
+    ret lo + hi * POW2[32 - n]
+end
+
+func _shr32(x0: i64, n: int): i64:
+    x := x0 % 4294967296
+    if n == 0:
+        ret x
+    end
+    if n >= 32:
+        ret 0
+    end
+    ret x / POW2[n]
+end
+
+func _rotr32_2(x0: i64): i64:
+    x := x0 % 4294967296
+    ret x / 4 + (x % 4) * 1073741824
+end
+
+func _rotr32_6(x0: i64): i64:
+    x := x0 % 4294967296
+    ret x / 64 + (x % 64) * 67108864
+end
+
+func _rotr32_7(x0: i64): i64:
+    x := x0 % 4294967296
+    ret x / 128 + (x % 128) * 33554432
+end
+
+func _rotr32_11(x0: i64): i64:
+    x := x0 % 4294967296
+    ret x / 2048 + (x % 2048) * 2097152
+end
+
+func _rotr32_13(x0: i64): i64:
+    x := x0 % 4294967296
+    ret x / 8192 + (x % 8192) * 524288
+end
+
+func _rotr32_17(x0: i64): i64:
+    x := x0 % 4294967296
+    ret x / 131072 + (x % 131072) * 32768
+end
+
+func _rotr32_18(x0: i64): i64:
+    x := x0 % 4294967296
+    ret x / 262144 + (x % 262144) * 16384
+end
+
+func _rotr32_19(x0: i64): i64:
+    x := x0 % 4294967296
+    ret x / 524288 + (x % 524288) * 8192
+end
+
+func _rotr32_22(x0: i64): i64:
+    x := x0 % 4294967296
+    ret x / 4194304 + (x % 4194304) * 1024
+end
+
+func _rotr32_25(x0: i64): i64:
+    x := x0 % 4294967296
+    ret x / 33554432 + (x % 33554432) * 128
+end
+
+func _shr32_3(x0: i64): i64:
+    ret (x0 % 4294967296) / 8
+end
+
+func _shr32_10(x0: i64): i64:
+    ret (x0 % 4294967296) / 1024
+end
+
+func _xor8(a0: int, b0: int): int:
+    na := a0 % 16
+    nb := b0 % 16
+    ha := a0 / 16
+    hb := b0 / 16
+    ret (XOR4[ha * 16 + hb] * 16 + XOR4[na * 16 + nb]) as int
+end
+
+func _bget(p: void*, i: int): int:
+    bp := p as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+func _bput(p: void*, i: int, v: int):
+    bp := p as i8*
+    bp[i] = v as i8
+end
+
+func _put_word32(p: void*, off: int, v: i64):
+    _bput(p, off, ((v / 16777216) % 256) as int)
+    _bput(p, off + 1, ((v / 65536) % 256) as int)
+    _bput(p, off + 2, ((v / 256) % 256) as int)
+    _bput(p, off + 3, (v % 256) as int)
+end
+
+func _hex32(v: i64): str:
+    digits := "0123456789abcdef"
+    mut result := ""
+    repeat 8 with k:
+        d := (v / POW2[4 * (7 - k)]) % 16
+        result = result.concat(digits.substr(d as int, 1))
+    end
+    ret result
+end
+
+func _hex_byte(b: int): str:
+    digits := "0123456789abcdef"
+    ret digits.substr(b / 16, 1).concat(digits.substr(b % 16, 1))
+end
+
+func _u64(hi: i64, lo: i64): U64Pair:
+    ret U64Pair { hi = hi, lo = lo }
+end
+
+func _add64(a: U64Pair, b: U64Pair): U64Pair:
+    lo_sum := a.lo + b.lo
+    carry := lo_sum / 4294967296
+    lo := lo_sum % 4294967296
+    hi := (a.hi + b.hi + carry) % 4294967296
+    ret _u64(hi, lo)
+end
+
+func _xor64(a: U64Pair, b: U64Pair): U64Pair:
+    ret _u64(_xor32(a.hi, b.hi), _xor32(a.lo, b.lo))
+end
+
+func _and64(a: U64Pair, b: U64Pair): U64Pair:
+    ret _u64(_and32(a.hi, b.hi), _and32(a.lo, b.lo))
+end
+
+func _not64(a: U64Pair): U64Pair:
+    ret _u64(_not32(a.hi), _not32(a.lo))
+end
+
+func _rotr64(a: U64Pair, n0: int): U64Pair:
+    mut n := n0 % 64
+    if n < 0:
+        n += 64
+    end
+    if n == 0:
+        ret a
+    end
+    if n == 32:
+        ret _u64(a.lo, a.hi)
+    end
+    if n < 32:
+        nlo := a.lo / POW2[n] + (a.hi % POW2[n]) * POW2[32 - n]
+        nhi := a.hi / POW2[n] + (a.lo % POW2[n]) * POW2[32 - n]
+        ret _u64(nhi % 4294967296, nlo % 4294967296)
+    end
+    m := n - 32
+    hi2 := a.lo
+    lo2 := a.hi
+    if m == 0:
+        ret _u64(hi2, lo2)
+    end
+    nlo := lo2 / POW2[m] + (hi2 % POW2[m]) * POW2[32 - m]
+    nhi := hi2 / POW2[m] + (lo2 % POW2[m]) * POW2[32 - m]
+    ret _u64(nhi % 4294967296, nlo % 4294967296)
+end
+
+func _shr64(a: U64Pair, n: int): U64Pair:
+    if n == 0:
+        ret a
+    end
+    if n < 32:
+        nlo := a.lo / POW2[n] + (a.hi % POW2[n]) * POW2[32 - n]
+        nhi := a.hi / POW2[n]
+        ret _u64(nhi % 4294967296, nlo % 4294967296)
+    end
+    if n < 64:
+        m := n - 32
+        mut nlo := a.hi
+        if m > 0:
+            nlo = a.hi / POW2[m]
+        end
+        ret _u64(0, nlo % 4294967296)
+    end
+    ret _u64(0, 0)
+end
+
+noret func _crypto_fatal():
+    abort()
+end
+
+func _os_random_fill(buf: void*, n: int):
+    if SALAM_OS_WINDOWS:
+        tmp := mem.Allocate(4 as u64)
+        defer mem.Free(tmp)
+        mut filled := 0
+        until filled < n:
+            rc := rand_s(tmp)
+            if rc != 0:
+                _crypto_fatal()
+            end
+            mut k := 0
+            until k < 4 && filled < n:
+                _bput(buf, filled, _bget(tmp, k))
+                filled += 1
+                k += 1
+            end
+        end
+    else:
+        f := fopen("/dev/urandom", "rb")
+        if f == null:
+            _crypto_fatal()
+        end
+        mut total := 0
+        until total < n:
+            dst := ((buf as i64) + total) as void*
+            got := fread(dst, 1 as u64, (n - total) as u64, f)
+            if got == (0 as u64):
+                fclose(f)
+                _crypto_fatal()
+            end
+            total += got as int
+        end
+        fclose(f)
+    end
+end
+
+func _or32(a: i64, b: i64): i64:
+    ret _not32(_and32(_not32(a), _not32(b)))
+end
+
+func _rotl32(x0: i64, n: int): i64:
+    x := x0 % 4294967296
+    if n == 0:
+        ret x
+    end
+    hi := x / POW2[32 - n]
+    lo := (x * POW2[n]) % 4294967296
+    ret lo + hi
+end
+
+func _sha1_pad_byte(data: void*, dlen: int, total: int, i: int): int:
+    if i < dlen:
+        ret _bget(data, i)
+    end
+    if i == dlen:
+        ret 128
+    end
+    if i >= total - 8:
+        ml := (dlen as i64) * 8
+        shift := total - 1 - i
+        mut d := ml
+        repeat shift with j:
+            d /= 256
+        end
+        ret (d % 256) as int
+    end
+    ret 0
+end
+
+func _sha1_core(data: void*, dlen: int, outp: void*):
+    total := ((dlen + 8) / 64 + 1) * 64
+    mut h0 := 1732584193 as i64
+    mut h1 := 4023233417 as i64
+    mut h2 := 2562383102 as i64
+    mut h3 := 271733878 as i64
+    mut h4 := 3285377520 as i64
+    w := mem.Allocate(80 * 8 as u64) as i64*
+    defer mem.Free(w as void*)
+    mut blk := 0
+    until blk < total:
+        mut t := 0
+        until t < 16:
+            base := blk + t * 4
+            b0 := _sha1_pad_byte(data, dlen, total, base) as i64
+            b1 := _sha1_pad_byte(data, dlen, total, base + 1) as i64
+            b2 := _sha1_pad_byte(data, dlen, total, base + 2) as i64
+            b3 := _sha1_pad_byte(data, dlen, total, base + 3) as i64
+            w[t] = b0 * 16777216 + b1 * 65536 + b2 * 256 + b3
+            t += 1
+        end
+        until t < 80:
+            mixed := _xor32(_xor32(w[t - 3], w[t - 8]), _xor32(w[t - 14], w[t - 16]))
+            w[t] = _rotl32(mixed, 1)
+            t += 1
+        end
+        mut a := h0
+        mut b := h1
+        mut c := h2
+        mut d := h3
+        mut e := h4
+        t = 0
+        until t < 80:
+            mut f := 0 as i64
+            mut k := 0 as i64
+            if t < 20:
+                f = _or32(_and32(b, c), _and32(_not32(b), d))
+                k = 1518500249
+            else t < 40:
+                f = _xor32(_xor32(b, c), d)
+                k = 1859775393
+            else t < 60:
+                f = _or32(_or32(_and32(b, c), _and32(b, d)), _and32(c, d))
+                k = 2400959708
+            else:
+                f = _xor32(_xor32(b, c), d)
+                k = 3395469782
+            end
+            temp := (_rotl32(a, 5) + f + e + k + w[t]) % 4294967296
+            e = d
+            d = c
+            c = _rotl32(b, 30)
+            b = a
+            a = temp
+            t += 1
+        end
+        h0 = (h0 + a) % 4294967296
+        h1 = (h1 + b) % 4294967296
+        h2 = (h2 + c) % 4294967296
+        h3 = (h3 + d) % 4294967296
+        h4 = (h4 + e) % 4294967296
+        blk += 64
+    end
+    _put_word32(outp, 0, h0)
+    _put_word32(outp, 4, h1)
+    _put_word32(outp, 8, h2)
+    _put_word32(outp, 12, h3)
+    _put_word32(outp, 16, h4)
+end
+
+func _sha256_pad_byte(data: void*, dlen: int, total: int, i: int): int:
+    if i < dlen:
+        ret _bget(data, i)
+    end
+    if i == dlen:
+        ret 128
+    end
+    if i >= total - 8:
+        ml := (dlen as i64) * 8
+        shift := total - 1 - i
+        mut d := ml
+        repeat shift with j:
+            d /= 256
+        end
+        ret (d % 256) as int
+    end
+    ret 0
+end
+
+func _sha256_iv(): Sha256State:
+    ret Sha256State {
+        h0 = 1779033703, h1 = 3144134277, h2 = 1013904242, h3 = 2773480762
+        h4 = 1359893119, h5 = 2600822924, h6 = 528734635, h7 = 1541459225
+    }
+end
+
+func _sha256_write_state(st: Sha256State, outp: void*):
+    _put_word32(outp, 0, st.h0)
+    _put_word32(outp, 4, st.h1)
+    _put_word32(outp, 8, st.h2)
+    _put_word32(outp, 12, st.h3)
+    _put_word32(outp, 16, st.h4)
+    _put_word32(outp, 20, st.h5)
+    _put_word32(outp, 24, st.h6)
+    _put_word32(outp, 28, st.h7)
+end
+
+func _sha256_compress(st &: Sha256State, w: i64*):
+    mut a := st.h0
+    mut b := st.h1
+    mut c := st.h2
+    mut d := st.h3
+    mut e := st.h4
+    mut f := st.h5
+    mut g := st.h6
+    mut h := st.h7
+    repeat 64 with t:
+        s1cap := _xor32(_xor32(_rotr32_6(e), _rotr32_11(e)), _rotr32_25(e))
+        ch := _xor32(_and32(e, f), _and32(_not32(e), g))
+        temp1 := (h + s1cap + ch + SHA256_K[t] + w[t]) % 4294967296
+        s0cap := _xor32(_xor32(_rotr32_2(a), _rotr32_13(a)), _rotr32_22(a))
+        maj := _xor32(_xor32(_and32(a, b), _and32(a, c)), _and32(b, c))
+        temp2 := (s0cap + maj) % 4294967296
+        h = g
+        g = f
+        f = e
+        e = (d + temp1) % 4294967296
+        d = c
+        c = b
+        b = a
+        a = (temp1 + temp2) % 4294967296
+    end
+    st.h0 = (st.h0 + a) % 4294967296
+    st.h1 = (st.h1 + b) % 4294967296
+    st.h2 = (st.h2 + c) % 4294967296
+    st.h3 = (st.h3 + d) % 4294967296
+    st.h4 = (st.h4 + e) % 4294967296
+    st.h5 = (st.h5 + f) % 4294967296
+    st.h6 = (st.h6 + g) % 4294967296
+    st.h7 = (st.h7 + h) % 4294967296
+end
+
+func _sha256_compress_block(st: Sha256State, block: void*): Sha256State:
+    w := mem.Allocate(64 * 8 as u64) as i64*
+    defer mem.Free(w as void*)
+    mut t := 0
+    until t < 16:
+        base := t * 4
+        w[t] = (_bget(block, base) as i64) * 16777216 + (_bget(block, base + 1) as i64) * 65536 + (_bget(block, base + 2) as i64) * 256 + (_bget(block, base + 3) as i64)
+        t += 1
+    end
+    until t < 64:
+        s0 := _xor32(_xor32(_rotr32_7(w[t - 15]), _rotr32_18(w[t - 15])), _shr32_3(w[t - 15]))
+        s1 := _xor32(_xor32(_rotr32_17(w[t - 2]), _rotr32_19(w[t - 2])), _shr32_10(w[t - 2]))
+        w[t] = (w[t - 16] + s0 + w[t - 7] + s1) % 4294967296
+        t += 1
+    end
+    mut next := st
+    _sha256_compress(next, w)
+    ret next
+end
+
+func _sha256_core(data: void*, dlen: int, outp: void*):
+    total := ((dlen + 8) / 64 + 1) * 64
+    mut st := _sha256_iv()
+    w := mem.Allocate(64 * 8 as u64) as i64*
+    defer mem.Free(w as void*)
+    mut blk := 0
+    until blk < total:
+        mut t := 0
+        until t < 16:
+            base := blk + t * 4
+            b0 := _sha256_pad_byte(data, dlen, total, base) as i64
+            b1 := _sha256_pad_byte(data, dlen, total, base + 1) as i64
+            b2 := _sha256_pad_byte(data, dlen, total, base + 2) as i64
+            b3 := _sha256_pad_byte(data, dlen, total, base + 3) as i64
+            w[t] = b0 * 16777216 + b1 * 65536 + b2 * 256 + b3
+            t += 1
+        end
+        until t < 64:
+            s0 := _xor32(_xor32(_rotr32_7(w[t - 15]), _rotr32_18(w[t - 15])), _shr32_3(w[t - 15]))
+            s1 := _xor32(_xor32(_rotr32_17(w[t - 2]), _rotr32_19(w[t - 2])), _shr32_10(w[t - 2]))
+            w[t] = (w[t - 16] + s0 + w[t - 7] + s1) % 4294967296
+            t += 1
+        end
+        _sha256_compress(st, w)
+        blk += 64
+    end
+    _sha256_write_state(st, outp)
+end
+
+func _sha512_pad_byte(data: void*, dlen: int, total: int, i: int): int:
+    if i < dlen:
+        ret _bget(data, i)
+    end
+    if i == dlen:
+        ret 128
+    end
+    if i >= total - 8:
+        ml := (dlen as i64) * 8
+        shift := total - 1 - i
+        mut d := ml
+        repeat shift with j:
+            d /= 256
+        end
+        ret (d % 256) as int
+    end
+    ret 0
+end
+
+func _sha512_core(data: void*, dlen: int, outp: void*):
+    total := ((dlen + 16) / 128 + 1) * 128
+    mut h0 := _u64(1779033703, 4089235720)
+    mut h1 := _u64(3144134277, 2227873595)
+    mut h2 := _u64(1013904242, 4271175723)
+    mut h3 := _u64(2773480762, 1595750129)
+    mut h4 := _u64(1359893119, 2917565137)
+    mut h5 := _u64(2600822924, 725511199)
+    mut h6 := _u64(528734635, 4215389547)
+    mut h7 := _u64(1541459225, 327033209)
+    w_hi := mem.Allocate(80 * 8 as u64) as i64*
+    w_lo := mem.Allocate(80 * 8 as u64) as i64*
+    defer mem.Free(w_hi as void*)
+    defer mem.Free(w_lo as void*)
+    mut blk := 0
+    until blk < total:
+        mut t := 0
+        until t < 16:
+            base := blk + t * 8
+            b0 := _sha512_pad_byte(data, dlen, total, base) as i64
+            b1 := _sha512_pad_byte(data, dlen, total, base + 1) as i64
+            b2 := _sha512_pad_byte(data, dlen, total, base + 2) as i64
+            b3 := _sha512_pad_byte(data, dlen, total, base + 3) as i64
+            b4 := _sha512_pad_byte(data, dlen, total, base + 4) as i64
+            b5 := _sha512_pad_byte(data, dlen, total, base + 5) as i64
+            b6 := _sha512_pad_byte(data, dlen, total, base + 6) as i64
+            b7 := _sha512_pad_byte(data, dlen, total, base + 7) as i64
+            w_hi[t] = b0 * 16777216 + b1 * 65536 + b2 * 256 + b3
+            w_lo[t] = b4 * 16777216 + b5 * 65536 + b6 * 256 + b7
+            t += 1
+        end
+        until t < 80:
+            wt15 := _u64(w_hi[t - 15], w_lo[t - 15])
+            wt2 := _u64(w_hi[t - 2], w_lo[t - 2])
+            w16 := _u64(w_hi[t - 16], w_lo[t - 16])
+            w7 := _u64(w_hi[t - 7], w_lo[t - 7])
+            s0 := _xor64(_xor64(_rotr64(wt15, 1), _rotr64(wt15, 8)), _shr64(wt15, 7))
+            s1 := _xor64(_xor64(_rotr64(wt2, 19), _rotr64(wt2, 61)), _shr64(wt2, 6))
+            wt := _add64(_add64(w16, s0), _add64(w7, s1))
+            w_hi[t] = wt.hi
+            w_lo[t] = wt.lo
+            t += 1
+        end
+        mut a := h0
+        mut b := h1
+        mut c := h2
+        mut d := h3
+        mut e := h4
+        mut f := h5
+        mut g := h6
+        mut h := h7
+        t = 0
+        until t < 80:
+            s1cap := _xor64(_xor64(_rotr64(e, 14), _rotr64(e, 18)), _rotr64(e, 41))
+            ch := _xor64(_and64(e, f), _and64(_not64(e), g))
+            k := _u64(SHA512_K_HI[t], SHA512_K_LO[t])
+            wtc := _u64(w_hi[t], w_lo[t])
+            temp1 := _add64(_add64(_add64(h, s1cap), ch), _add64(k, wtc))
+            s0cap := _xor64(_xor64(_rotr64(a, 28), _rotr64(a, 34)), _rotr64(a, 39))
+            maj := _xor64(_xor64(_and64(a, b), _and64(a, c)), _and64(b, c))
+            temp2 := _add64(s0cap, maj)
+            h = g
+            g = f
+            f = e
+            e = _add64(d, temp1)
+            d = c
+            c = b
+            b = a
+            a = _add64(temp1, temp2)
+            t += 1
+        end
+        h0 = _add64(h0, a)
+        h1 = _add64(h1, b)
+        h2 = _add64(h2, c)
+        h3 = _add64(h3, d)
+        h4 = _add64(h4, e)
+        h5 = _add64(h5, f)
+        h6 = _add64(h6, g)
+        h7 = _add64(h7, h)
+        blk += 128
+    end
+    _put_word32(outp, 0, h0.hi)
+    _put_word32(outp, 4, h0.lo)
+    _put_word32(outp, 8, h1.hi)
+    _put_word32(outp, 12, h1.lo)
+    _put_word32(outp, 16, h2.hi)
+    _put_word32(outp, 20, h2.lo)
+    _put_word32(outp, 24, h3.hi)
+    _put_word32(outp, 28, h3.lo)
+    _put_word32(outp, 32, h4.hi)
+    _put_word32(outp, 36, h4.lo)
+    _put_word32(outp, 40, h5.hi)
+    _put_word32(outp, 44, h5.lo)
+    _put_word32(outp, 48, h6.hi)
+    _put_word32(outp, 52, h6.lo)
+    _put_word32(outp, 56, h7.hi)
+    _put_word32(outp, 60, h7.lo)
+end
+
+func _hmac_sha256_prep(key: void*, klen: int, ipad: void*, opad: void*):
+    mut keysrc := key
+    mut effklen := klen
+    mut khash := null as void*
+    if klen > 64:
+        khash = mem.Allocate(32 as u64)
+        _sha256_core(key, klen, khash)
+        keysrc = khash
+        effklen = 32
+    end
+    keyblock := mem.Allocate(64 as u64)
+    defer mem.Free(keyblock)
+    mut fi := 0
+    until fi < effklen:
+        _bput(keyblock, fi, _bget(keysrc, fi))
+        fi += 1
+    end
+    until fi < 64:
+        _bput(keyblock, fi, 0)
+        fi += 1
+    end
+    if khash != null:
+        mem.Free(khash)
+    end
+    repeat 64 with pi:
+        kb := _bget(keyblock, pi)
+        _bput(ipad, pi, _xor8(kb, 54))
+        _bput(opad, pi, _xor8(kb, 92))
+    end
+end
+
+func _hmac_sha256_apply(ipad: void*, opad: void*, msg: void*, mlen: int, outp: void*):
+    inner_len := 64 + mlen
+    inner_buf := mem.Allocate(inner_len as u64)
+    defer mem.Free(inner_buf)
+    mem.Copy(inner_buf, ipad, 64 as u64)
+    inner_msg_dst := ((inner_buf as i64) + 64) as void*
+    mem.Copy(inner_msg_dst, msg, mlen as u64)
+    inner_hash := mem.Allocate(32 as u64)
+    defer mem.Free(inner_hash)
+    _sha256_core(inner_buf, inner_len, inner_hash)
+    outer_buf := mem.Allocate(96 as u64)
+    defer mem.Free(outer_buf)
+    mem.Copy(outer_buf, opad, 64 as u64)
+    outer_hash_dst := ((outer_buf as i64) + 64) as void*
+    mem.Copy(outer_hash_dst, inner_hash, 32 as u64)
+    _sha256_core(outer_buf, 96, outp)
+end
+
+func _hmac_fixed96_block2_init(blk2: void*):
+    _bput(blk2, 32, 128)
+    repeat 33 to 61 with z:
+        _bput(blk2, z, 0)
+    end
+    _bput(blk2, 62, 3)
+    _bput(blk2, 63, 0)
+end
+
+func _hmac_sha256_apply32_fast(mid_ipad: Sha256State, mid_opad: Sha256State, blk2: void*, msg32: void*, outp: void*):
+    mem.Copy(blk2, msg32, 32 as u64)
+    inner_final := _sha256_compress_block(mid_ipad, blk2)
+    _sha256_write_state(inner_final, blk2)
+    outer_final := _sha256_compress_block(mid_opad, blk2)
+    _sha256_write_state(outer_final, outp)
+end
+
+func _hmac_sha256_core(key: void*, klen: int, msg: void*, mlen: int, outp: void*):
+    ipad := mem.Allocate(64 as u64)
+    defer mem.Free(ipad)
+    opad := mem.Allocate(64 as u64)
+    defer mem.Free(opad)
+    _hmac_sha256_prep(key, klen, ipad, opad)
+    _hmac_sha256_apply(ipad, opad, msg, mlen, outp)
+end
+
+func _pbkdf2_hmac_sha256_core(password: void*, plen: int, salt: void*, slen: int, iterations: int, outp: void*, dklen: int):
+    ipad := mem.Allocate(64 as u64)
+    defer mem.Free(ipad)
+    opad := mem.Allocate(64 as u64)
+    defer mem.Free(opad)
+    _hmac_sha256_prep(password, plen, ipad, opad)
+    mid_ipad := _sha256_compress_block(_sha256_iv(), ipad)
+    mid_opad := _sha256_compress_block(_sha256_iv(), opad)
+    blk2 := mem.Allocate(64 as u64)
+    defer mem.Free(blk2)
+    _hmac_fixed96_block2_init(blk2)
+    block_salt := mem.Allocate((slen + 4) as u64)
+    defer mem.Free(block_salt)
+    mem.Copy(block_salt, salt, slen as u64)
+    u := mem.Allocate(32 as u64)
+    defer mem.Free(u)
+    acc := mem.Allocate(32 as u64)
+    defer mem.Free(acc)
+    mut produced := 0
+    mut blocknum := 1
+    until produced < dklen:
+        _bput(block_salt, slen, (blocknum / 16777216) % 256)
+        _bput(block_salt, slen + 1, (blocknum / 65536) % 256)
+        _bput(block_salt, slen + 2, (blocknum / 256) % 256)
+        _bput(block_salt, slen + 3, blocknum % 256)
+        _hmac_sha256_apply(ipad, opad, block_salt, slen + 4, u)
+        repeat 32 with ci:
+            _bput(acc, ci, _bget(u, ci))
+        end
+        mut iter := 1
+        until iter < iterations:
+            _hmac_sha256_apply32_fast(mid_ipad, mid_opad, blk2, u, u)
+            repeat 32 with cj:
+                _bput(acc, cj, _xor8(_bget(acc, cj), _bget(u, cj)))
+            end
+            iter += 1
+        end
+        mut take := 32
+        if dklen - produced < 32:
+            take = dklen - produced
+        end
+        repeat take with ck:
+            _bput(outp, produced + ck, _bget(acc, ck))
+        end
+        produced += take
+        blocknum += 1
+    end
+end
+
+func _consttime_eq(a: str, b: str): bool:
+    if a.len() != b.len():
+        ret false
+    end
+    n := a.len()
+    ap := a as void*
+    bp := b as void*
+    mut diff := 0
+    repeat n with i:
+        diff += _xor8(_bget(ap, i), _bget(bp, i))
+    end
+    ret diff == 0
 end
 
 @en "HashBytes"

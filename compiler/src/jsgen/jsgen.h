@@ -32,7 +32,7 @@ typedef struct {
 
 jsgen_output_t *jsgen_run(arena_t *a, logger_t *log, ast_node_t *program,
                           sema_result_t *sem, const char *module, const char *entry,
-                          bool enable_minify, const char **minify_last,
+                          bool enable_minify, bool compact, const char **minify_last,
                           vec_t *minify_keys, vec_t *minify_vals);
 
 #endif /* SALAM_JSGEN_JSGEN_H */

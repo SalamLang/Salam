@@ -42,14 +42,15 @@ fails with a real diagnostic, rather than silently auto-detecting English.
 ## Building
 
 Requires the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html)
-and a built `salam` compiler at the repository root:
+and the tracked `compiler/salam` bootstrap binary (self-hosted - no C source
+or `salam` binary needed at the repository root anymore):
 
 ```sh
 git clone https://github.com/emscripten-core/emsdk
 cd emsdk && ./emsdk install latest && ./emsdk activate latest && . ./emsdk_env.sh
-cd /path/to/Salam/compiler
-sh tools/bash/build-wasm.sh   # -> ../editor/salam-wa.{js,wasm,data}, regenerates
-                              #    examples_data.salam, and builds ../editor/index.html
+cd /path/to/Salam
+sh compiler/tools/bash/build-wasm.sh   # -> editor/salam-wa.{js,wasm,data}, regenerates
+                                       #    examples_data.salam, and builds editor/index.html
 ```
 
 `build-wasm.sh` preloads the `std/` directory into the module's virtual filesystem so

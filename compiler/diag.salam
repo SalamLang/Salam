@@ -1,14 +1,17 @@
 // Flat merge of the salam/diag port (see salam/PORTING.md "Layout — FLAT"):
-// diag.c (+ diag.h, diag_internal.h) + diag_render.c + diag_render_format.c +
-// diag_render_source.c — one package `diag`, one file.
+// diag.c (+ diag.h, diag_internal.h) — one package `diag`, one file.
+//
+// The render dispatcher (diag_render.c) and its format/source-excerpt
+// backends (diag_render_format.c, diag_render_source.c) now live in
+// diag_render.salam ("diagrender" package): this package's Engine needs a
+// Logger (for Report's immediate lg.LogAt), and the logger's own rich
+// diagnostic path needs the render functions, so keeping the renderers here
+// would make `logger` import `diag` right back into a cycle. This file
+// re-exports the render API unchanged so existing callers (sal_web.salam,
+// tests_port/*) don't need to change.
 //
 // C -> Salam decisions for this module:
-// - severity_t / diag_style_t / diag_format_t enums -> pub int constants
-//   (SEV_*, DIAG_STYLE_*, DIAG_FORMAT_*) with `pub type` int aliases, because
-//   enum members are not reachable across packages.
-// - FILE *sink -> every render function RETURNS the rendered text as a str
-//   (byte-identical to what the C fprintf'ed, including trailing newlines);
-//   callers print it (the logger port will io.EPrint it).
+// - severity_t enum -> pub int constants (SEV_*).
 // - diag_report's printf-style fmt/varargs -> callers pass a pre-formatted
 //   message body (same convention as the logger port).
 // - diag_t.message keeps the C "E012: body" full form; the extra `body`
@@ -26,37 +29,24 @@ package diag
 import str
 import co "sal_core.salam"
 import lg "logger.salam"
+import dr "diag_render.salam"
 
 // ===== diag.c =====
 // severity_t
 pub const SEV_ERROR := 0
 pub const SEV_WARNING := 1
 
-// diag_style_t (diag_render.h)
+// diag_style_t / diag_format_t re-exports (see diag_render.salam) — kept
+// here too so existing `dg.DIAG_STYLE_*` / `dg.DIAG_FORMAT_*` call sites
+// don't need to change. Values must stay numerically identical to
+// diag_render.salam's.
 pub const DIAG_STYLE_RUST := 0
 pub const DIAG_STYLE_GCC := 1
 pub const DIAG_STYLE_CLANG := 2
 
-// diag_format_t (diag_render.h)
 pub const DIAG_FORMAT_HUMAN := 0
 pub const DIAG_FORMAT_JSON := 1
 pub const DIAG_FORMAT_XML := 2
-
-// ANSI attributes (diag_internal.h)
-const A_RESET := "\x1b[0m"
-const A_BOLD := "\x1b[1m"
-const A_RED := "\x1b[1;31m"
-const A_YELLOW := "\x1b[1;33m"
-const A_CYAN := "\x1b[1;36m"
-const A_GREEN := "\x1b[1;32m"
-const A_BLUE := "\x1b[34m"
-const A_BBLUE := "\x1b[1;34m"
-
-// TAB_WIDTH (diag_render_source.c)
-const TAB_WIDTH := 4
-
-// The C line buffer was char[1024]; excerpt lines clamp to 1023 bytes.
-const LINE_CAP := 1023
 
 pub type Severity = int
 pub type DiagStyle = int
@@ -94,231 +84,6 @@ func ub(bp: i8*, i: int): int:
         v += 256
     end
     ret v
-end
-
-func spaces(n: int): str:
-    if n <= 0:
-        ret ""
-    end
-    ret " ".repeat(n)
-end
-
-// Two lowercase hex digits (for json \u00XX escapes of control bytes).
-func hex2(c: int): str:
-    tbl := "0123456789abcdef"
-    ret tbl.substr((c / 16) % 16, 1) + tbl.substr(c % 16, 1)
-end
-
-// write_diag_code (diag_render_source.c) without the surrounding brackets:
-// "E012" / "W031". TODO(i18n): the Persian-digit branch ("[خطا۰۱۲]") lands
-// with the i18n port; with English identity translation it is unreachable.
-func code_str(is_error: bool, code: int): str:
-    ret co.Format2("%c%03d", co.ArgChar(is_error ? 69 : 87), co.ArgInt(code as i64))
-end
-
-// level_color (diag_render_source.c)
-func level_color(level: str): str:
-    if str.Equals(level, "error"):
-        ret A_RED
-    end
-    if str.Equals(level, "warning"):
-        ret A_YELLOW
-    end
-    if str.Equals(level, "note"):
-        ret A_CYAN
-    end
-    if str.Equals(level, "help"):
-        ret A_GREEN
-    end
-    ret A_BOLD
-end
-
-// get_src_line (diag_render_source.c): extract 1-based line `lineno` from
-// text[0..text_len), without its trailing \n / \r. Empty when out of range.
-func get_src_line(text: str, text_len: int, lineno: int): str:
-    bp := (text as void*) as i8*
-    mut n := text_len
-    if n > str.Len(text): // safety clamp; the C code trusted the caller
-        n = str.Len(text)
-    end
-    mut p := 0
-    mut cur := 1
-    until cur < lineno && p < n:
-        if bp[p] == (10 as i8):
-            cur += 1
-        end
-        p += 1
-    end
-    if p >= n || cur != lineno:
-        ret ""
-    end
-    start := p
-    until p < n && bp[p] != (10 as i8) && bp[p] != (13 as i8):
-        p += 1
-    end
-    mut ll := p - start
-    if ll > LINE_CAP:
-        ll = LINE_CAP
-    end
-    ret text.substr(start, ll)
-end
-
-// visual_col (diag_render_source.c): visual column of byte offset `byte_off`
-// with tabs expanded to TAB_WIDTH stops. Offsets past the line count 1 each
-// (the C code walked over the NUL there).
-func visual_col(line_buf: str, byte_off: int): int:
-    bp := (line_buf as void*) as i8*
-    n := str.Len(line_buf)
-    mut vis := 0
-    mut i := 0
-    until i < byte_off:
-        if i < n && bp[i] == (9 as i8):
-            vis += TAB_WIDTH - (vis % TAB_WIDTH)
-        else:
-            vis += 1
-        end
-        i += 1
-    end
-    ret vis
-end
-
-// write_expanded (diag_render_source.c): the line with tabs expanded.
-func expand_line(line_buf: str): str:
-    bp := (line_buf as void*) as i8*
-    n := str.Len(line_buf)
-    mut b := str.NewBuilder()
-    mut colv := 0
-    mut i := 0
-    until i < n:
-        if bp[i] == (9 as i8):
-            spn := TAB_WIDTH - (colv % TAB_WIDTH)
-            str.BufAppend(b, spaces(spn))
-            colv += spn
-        else:
-            str.BufAppendChar(b, ub(bp, i))
-            colv += 1
-        end
-        i += 1
-    end
-    r := str.BufStr(b)
-    str.BufFree(b)
-    ret r
-end
-
-// span_visuals (diag_render_source.c): visual start column and caret width
-// for a span at byte column `col` (1-based) with `length` bytes.
-func span_visuals(line_buf: str, col: int, length: int, vis_s &: int, vis_w &: int):
-    line_len := str.Len(line_buf)
-    mut byte_start := 0
-    if col > 0:
-        byte_start = col - 1
-    end
-    if byte_start > line_len:
-        byte_start = line_len
-    end
-    mut span_bytes := 1
-    if length > 0:
-        span_bytes = length
-    end
-    mut byte_end := byte_start + span_bytes
-    if byte_end > line_len:
-        byte_end = line_len
-    end
-    if byte_end <= byte_start:
-        byte_end = byte_start + 1
-    end
-    vis_s = visual_col(line_buf, byte_start)
-    ve := visual_col(line_buf, byte_end)
-    vis_w = 1
-    if ve > vis_s:
-        vis_w = ve - vis_s
-    end
-end
-
-// write_gutter (diag_render_source.c): "NN |" right-aligned to num_width;
-// lineno 0 = the bare gutter line.
-func gutter_str(lineno: int, num_width: int, color: bool): str:
-    mut numpart := ""
-    if lineno == 0:
-        numpart = spaces(num_width)
-    else:
-        ns := str.FromInt(lineno as i64)
-        pad := num_width - str.Len(ns)
-        numpart = spaces(pad) + ns
-    end
-    if color:
-        ret A_BBLUE + numpart + " |" + A_RESET
-    end
-    ret numpart + " |"
-end
-
-// Digit count of the reported line number (diag_render_rust gutter width).
-func num_width_for(line: int): int:
-    mut w := 1
-    mut t := line
-    until t >= 10:
-        t /= 10
-        w += 1
-    end
-    ret w
-end
-
-// json_str (diag_render_format.c)
-func json_escape(s: str): str:
-    bp := (s as void*) as i8*
-    n := str.Len(s)
-    mut b := str.NewBuilder()
-    mut i := 0
-    until i < n:
-        c := ub(bp, i)
-        if c == 34:
-            str.BufAppend(b, "\\\"")
-        else c == 92:
-            str.BufAppend(b, "\\\\")
-        else c == 10:
-            str.BufAppend(b, "\\n")
-        else c == 13:
-            str.BufAppend(b, "\\r")
-        else c == 9:
-            str.BufAppend(b, "\\t")
-        else c < 32:
-            str.BufAppend(b, "\\u00" + hex2(c))
-        else:
-            str.BufAppendChar(b, c)
-        end
-        i += 1
-    end
-    r := str.BufStr(b)
-    str.BufFree(b)
-    ret r
-end
-
-// xml_str (diag_render_format.c)
-func xml_escape(s: str): str:
-    bp := (s as void*) as i8*
-    n := str.Len(s)
-    mut b := str.NewBuilder()
-    mut i := 0
-    until i < n:
-        c := ub(bp, i)
-        if c == 38:
-            str.BufAppend(b, "&amp;")
-        else c == 60:
-            str.BufAppend(b, "&lt;")
-        else c == 62:
-            str.BufAppend(b, "&gt;")
-        else c == 34:
-            str.BufAppend(b, "&quot;")
-        else c == 39:
-            str.BufAppend(b, "&apos;")
-        else:
-            str.BufAppendChar(b, c)
-        end
-        i += 1
-    end
-    r := str.BufStr(b)
-    str.BufFree(b)
-    ret r
 end
 
 // ===== diag.c (public) =====
@@ -468,319 +233,60 @@ pub func RenderAll(e: Engine, src_text: str, src_len: int, style: DiagStyle,
     ret out
 end
 
-// ===== diag_render.c =====
-// Style/format parsing and the render dispatcher.
-// C differences:
-// - FILE *sink -> the rendered text is RETURNED as a str.
-// - diag_style_t / diag_format_t out-params -> plain `int &:` out-params
-//   (DIAG_STYLE_* / DIAG_FORMAT_* values).
-// - RenderAt is a port addition: the same dispatcher taking the span as
-//   line/col/length ints, for callers that don't hold a SrcSpan (the
-//   logger's rich path receives line/col ints).
+// ===== diag_render.c / diag_render_format.c / diag_render_source.c =====
+// Thin re-exports of diag_render.salam's dispatcher and per-style/per-format
+// renderers, kept under the original names so existing `dg.Render*` /
+// `dg.StyleFromString` / `dg.FormatFromString` call sites don't change.
 
-// diag_style_from_string (case-insensitive, like strcasecmp/_stricmp)
 pub func StyleFromString(s: str, out &: int): bool:
-    if str.EqualFold(s, "rust"):
-        out = DIAG_STYLE_RUST
-        ret true
-    end
-    if str.EqualFold(s, "gcc"):
-        out = DIAG_STYLE_GCC
-        ret true
-    end
-    if str.EqualFold(s, "clang"):
-        out = DIAG_STYLE_CLANG
-        ret true
-    end
-    ret false
+    ret dr.StyleFromString(s, out)
 end
 
-// diag_format_from_string
 pub func FormatFromString(s: str, out &: int): bool:
-    if str.EqualFold(s, "human"):
-        out = DIAG_FORMAT_HUMAN
-        ret true
-    end
-    if str.EqualFold(s, "json"):
-        out = DIAG_FORMAT_JSON
-        ret true
-    end
-    if str.EqualFold(s, "xml"):
-        out = DIAG_FORMAT_XML
-        ret true
-    end
-    ret false
+    ret dr.FormatFromString(s, out)
 end
 
-// diag_render — dispatch on format, then style. Returns the rendered text
-// (all lines newline-terminated). Pass co.EmptySpan() for "no span",
-// "" for "no source text" and "" for "no help", where the C passed NULL.
 pub func Render(level: str, code: int, is_error: bool, file: str, span: co.SrcSpan,
                 src_text: str, src_len: int, msg: str, help: str,
                 style: DiagStyle, format: DiagFormat, color: bool): str:
-    ret RenderAt(level, code, is_error, file, span.begin.line as int,
-                 span.begin.col as int, span.length as int, src_text, src_len,
-                 msg, help, style, format, color)
+    ret dr.Render(level, code, is_error, file, span, src_text, src_len, msg,
+                  help, style, format, color)
 end
 
-// Render with the span passed as plain ints (line/col 1-based, 0 = none).
 pub func RenderAt(level: str, code: int, is_error: bool, file: str, line: int,
                   col: int, length: int, src_text: str, src_len: int, msg: str,
                   help: str, style: DiagStyle, format: DiagFormat, color: bool): str:
-    mut lvl := level
-    if str.Len(lvl) == 0: // if (!level) level = "error"
-        lvl = "error"
-    end
-    if format == DIAG_FORMAT_JSON:
-        ret RenderJson(lvl, code, is_error, file, line, col, length, msg, help)
-    end
-    if format == DIAG_FORMAT_XML:
-        ret RenderXml(lvl, code, is_error, file, line, col, length, msg, help)
-    end
-    if style == DIAG_STYLE_GCC:
-        ret RenderGcc(lvl, code, is_error, file, line, col, length, src_text,
-                      src_len, msg, help, color)
-    end
-    if style == DIAG_STYLE_CLANG:
-        ret RenderClang(lvl, code, is_error, file, line, col, length, src_text,
-                        src_len, msg, help, color)
-    end
-    ret RenderRust(lvl, code, is_error, file, line, col, length, src_text,
-                   src_len, msg, help, color)
+    ret dr.RenderAt(level, code, is_error, file, line, col, length, src_text,
+                    src_len, msg, help, style, format, color)
 end
 
-// ===== diag_render_format.c =====
-// Machine-readable diagnostic formats (JSON lines and XML elements).
-// FILE *sink -> the rendered text is RETURNED as a str (with trailing \n).
-
-// diag_render_json — one JSON object per diagnostic, one line.
 pub func RenderJson(level: str, code: int, is_error: bool, file: str, line: int,
                     col: int, length: int, body: str, help: str): str:
-    mut out := "{\"level\":\"" + json_escape(level) + "\""
-    if code > 0:
-        out = out + ",\"code\":\"" + json_escape(code_str(is_error, code)) + "\""
-    end
-    out = out + ",\"message\":\"" + json_escape(body) + "\""
-    if str.Len(file) > 0:
-        out = out + ",\"file\":\"" + json_escape(file) + "\""
-    end
-    if line > 0:
-        out = out + ",\"line\":" + line + ",\"column\":" + col
-        if length > 0:
-            out = out + ",\"length\":" + length
-        end
-    end
-    if str.Len(help) > 0:
-        out = out + ",\"help\":\"" + json_escape(help) + "\""
-    end
-    ret out + "}\n"
+    ret dr.RenderJson(level, code, is_error, file, line, col, length, body, help)
 end
 
-// diag_render_xml — one <diagnostic> element per diagnostic, one line.
 pub func RenderXml(level: str, code: int, is_error: bool, file: str, line: int,
                    col: int, length: int, body: str, help: str): str:
-    mut out := "<diagnostic level=\"" + xml_escape(level) + "\""
-    if code > 0:
-        // the C prints the code attribute unescaped ("%c%03d")
-        out = out + " code=\"" + code_str(is_error, code) + "\""
-    end
-    if str.Len(file) > 0:
-        out = out + " file=\"" + xml_escape(file) + "\""
-    end
-    if line > 0:
-        out = out + " line=\"" + line + "\" column=\"" + col + "\""
-        if length > 0:
-            out = out + " length=\"" + length + "\""
-        end
-    end
-    out = out + "><message>" + xml_escape(body) + "</message>"
-    if str.Len(help) > 0:
-        out = out + "<help>" + xml_escape(help) + "</help>"
-    end
-    ret out + "</diagnostic>\n"
+    ret dr.RenderXml(level, code, is_error, file, line, col, length, body, help)
 end
 
-// ===== diag_render_source.c =====
-// The human-readable diagnostic styles with source excerpts and carets.
-// C differences:
-// - FILE *sink -> the rendered text is RETURNED as a str; every line the C
-//   fprintf'ed ends in \n, byte-identical (including the trailing space on
-//   an empty caret line, and tab expansion to 4-column stops).
-// - const src_span_t* -> line/col/length ints (line/col 1-based, 0 = the C
-//   NULL span); src_text = "" stands for the C NULL source pointer.
-// - i18n_tr -> identity (English). TODO(i18n): route through the i18n module
-//   once ported (incl. write_diag_code's Persian digits).
-
-// diag_render_rust:
-//   error[E012]: message
-//    --> file:line:col
-//     |
-//   N | source line
-//     |      ^^^^
-//     |
-//     | = help: ...        (only with help text)
 pub func RenderRust(level: str, code: int, is_error: bool, file: str, line: int,
                     col: int, length: int, src_text: str, src_len: int,
                     body: str, help: str, color: bool): str:
-    lc := color ? level_color(level) : ""
-    reset := color ? A_RESET : ""
-    blue := color ? A_BLUE : ""
-    bold := color ? A_BOLD : ""
-    green := color ? A_GREEN : ""
-
-    mut out := lc + tr(level)
-    if code > 0:
-        out = out + "[" + code_str(is_error, code) + "]"
-    end
-    out = out + reset + ": " + bold + body + reset + "\n"
-    if str.Len(file) == 0:
-        ret out
-    end
-
-    if line <= 0:
-        out = out + " " + blue + "-->" + reset + " " + file + "\n"
-        if str.Len(help) > 0:
-            out = out + "   " + green + "= " + tr("help") + ":" + reset + " " + help + "\n"
-        end
-        ret out
-    end
-    out = out + " " + blue + "-->" + reset + " " + file + ":" + line + ":" + col + "\n"
-
-    nw := num_width_for(line)
-    has_src := str.Len(src_text) > 0
-
-    out = out + gutter_str(0, nw, color) + "\n"
-
-    mut line_buf := ""
-    if has_src:
-        line_buf = get_src_line(src_text, src_len, line)
-    end
-    out = out + gutter_str(line, nw, color) + " "
-    if has_src:
-        out = out + expand_line(line_buf)
-    end
-    out = out + "\n"
-
-    out = out + gutter_str(0, nw, color) + " "
-    if has_src && col > 0:
-        mut vis_s := 0
-        mut vis_w := 1
-        span_visuals(line_buf, col, length, vis_s, vis_w)
-        out = out + lc + spaces(vis_s) + "^".repeat(vis_w) + reset
-    end
-    out = out + "\n"
-
-    out = out + gutter_str(0, nw, color) + "\n"
-
-    if str.Len(help) > 0:
-        out = out + gutter_str(0, nw, color) + " " + green + "= " + tr("help") +
-              ":" + reset + " " + help + "\n"
-    end
-    ret out
+    ret dr.RenderRust(level, code, is_error, file, line, col, length, src_text,
+                      src_len, body, help, color)
 end
 
-// diag_render_gcc:
-//   file:line:col: error: message [E012]
-//       source line
-//         ^~~~~
-//     note: ...              (only with help text)
 pub func RenderGcc(level: str, code: int, is_error: bool, file: str, line: int,
                    col: int, length: int, src_text: str, src_len: int,
                    body: str, help: str, color: bool): str:
-    lc := color ? level_color(level) : ""
-    reset := color ? A_RESET : ""
-    bold := color ? A_BOLD : ""
-    cyan := color ? A_CYAN : ""
-
-    mut out := ""
-    if str.Len(file) > 0 && line > 0:
-        out = out + bold + file + ":" + line + ":" + col + ":" + reset + " "
-    else str.Len(file) > 0:
-        out = out + bold + file + ":" + reset + " "
-    end
-    out = out + lc + tr(level) + reset + ": " + body
-    if code > 0:
-        out = out + " [" + code_str(is_error, code) + "]"
-    end
-    out = out + "\n"
-    if str.Len(src_text) == 0 || line <= 0:
-        if str.Len(help) > 0:
-            out = out + "  " + cyan + tr("note") + ":" + reset + " " + help + "\n"
-        end
-        ret out
-    end
-
-    line_buf := get_src_line(src_text, src_len, line)
-    out = out + "    " + expand_line(line_buf) + "\n"
-
-    if col > 0:
-        mut vis_s := 0
-        mut vis_w := 1
-        span_visuals(line_buf, col, length, vis_s, vis_w)
-        out = out + "    " + lc + spaces(vis_s) + "^"
-        if vis_w > 1:
-            out = out + "~".repeat(vis_w - 1)
-        end
-        out = out + reset + "\n"
-    end
-    if str.Len(help) > 0:
-        out = out + "  " + cyan + tr("note") + ":" + reset + " " + help + "\n"
-    end
-    ret out
+    ret dr.RenderGcc(level, code, is_error, file, line, col, length, src_text,
+                     src_len, body, help, color)
 end
 
-// diag_render_clang:
-//   file:line:col: error: message [E012]
-//       source line
-//          ^~~~~
-//          | message
-//          = help text        (only with help text)
 pub func RenderClang(level: str, code: int, is_error: bool, file: str, line: int,
                      col: int, length: int, src_text: str, src_len: int,
                      body: str, help: str, color: bool): str:
-    lc := color ? level_color(level) : ""
-    reset := color ? A_RESET : ""
-    bold := color ? A_BOLD : ""
-    cyan := color ? A_CYAN : ""
-    green := color ? A_GREEN : ""
-
-    mut out := ""
-    if str.Len(file) > 0 && line > 0:
-        out = out + bold + file + ":" + line + ":" + col + ":" + reset + " "
-    else str.Len(file) > 0:
-        out = out + bold + file + ":" + reset + " "
-    end
-    out = out + lc + tr(level) + reset + ": " + body
-    if code > 0:
-        out = out + " [" + code_str(is_error, code) + "]"
-    end
-    out = out + "\n"
-    if str.Len(src_text) == 0 || line <= 0:
-        if str.Len(help) > 0:
-            out = out + "  " + cyan + tr("note") + ":" + reset + " " + help + "\n"
-        end
-        ret out
-    end
-
-    line_buf := get_src_line(src_text, src_len, line)
-    out = out + "    " + expand_line(line_buf) + "\n"
-
-    mut vis_s := 0
-    mut vis_w := 1
-    if col > 0:
-        span_visuals(line_buf, col, length, vis_s, vis_w)
-    end
-
-    out = out + "    " + lc + spaces(vis_s) + "^"
-    if vis_w > 1:
-        out = out + "~".repeat(vis_w - 1)
-    end
-    out = out + reset + "\n"
-
-    out = out + "    " + lc + spaces(vis_s) + "| " + body + reset + "\n"
-
-    if str.Len(help) > 0:
-        out = out + "    " + spaces(vis_s) + green + "= " + reset + help + "\n"
-    end
-    ret out
+    ret dr.RenderClang(level, code, is_error, file, line, col, length, src_text,
+                       src_len, body, help, color)
 end

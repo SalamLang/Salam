@@ -27,7 +27,7 @@
 //   integer handle (`id`) into a per-kind pool on Interp:
 //     VAL_ARRAY -> Interp.arrs (Arr), VAL_MAP -> Interp.maps (SMap),
 //     VAL_MAPITER -> Interp.iters, VAL_STRUCT -> Interp.sts (SStruct),
-//     VAL_FUNC -> Interp.clos (Closure), VAL_MODULE -> Interp.mods,
+//     VAL_FUNC -> Interp.closures (Closure), VAL_MODULE -> Interp.mods,
 //     VAL_VARIANT -> Interp.variants. Slot 0 of every pool is a sentinel
 //     (= the C NULL pointer), so handle 0 means "none".
 //   Copying a Value copies the handle — heap values share identity exactly
@@ -387,7 +387,7 @@ pub struct Interp:
     pub maps: Vector<SMap> = Vector {}
     pub iters: Vector<SMapIter> = Vector {}
     pub sts: Vector<SStruct> = Vector {}
-    pub clos: Vector<Closure> = Vector {}
+    pub closures: Vector<Closure> = Vector {}
     pub variants: Vector<SVariant> = Vector {}
     pub mods: Vector<Module> = Vector {}
     pub fnlists: Vector<FuncList> = Vector {}
@@ -1632,8 +1632,8 @@ func st_find_field(ip &: Interp, sid: int, name: str): int:
 end
 
 func mk_closure(ip &: Interp, fnnode: int, env: int): Value:
-    id := ip.clos.len()
-    ip.clos.push(Closure { fn = fnnode, env = env })
+    id := ip.closures.len()
+    ip.closures.push(Closure { fn = fnnode, env = env })
     ret Value { kind = VAL_FUNC, id = id }
 end
 
@@ -2323,7 +2323,7 @@ func call_module_func(ip &: Interp, a &: at.Ast, call: int, mid: int, fnname: st
                             co.ArgStr(md.name), co.ArgStr(fnname)))
         ret val_null()
     end
-    cl := ip.clos.get(fv.id)[0]
+    cl := ip.closures.get(fv.id)[0]
     ret call_func(ip, a, cl.fn, cl.env, false, val_null(), args)
 end
 
@@ -2549,7 +2549,7 @@ func call_builtin_method(ip &: Interp, a &: at.Ast, call: int, recv: Value,
             repeat args.len() with j:
                 allargs.push(args.get(j)[0])
             end
-            cl := ip.clos.get(ef.id)[0]
+            cl := ip.closures.get(ef.id)[0]
             r := call_func(ip, a, cl.fn, cl.env, false, val_null(), allargs)
             allargs.free()
             ret r
@@ -3073,7 +3073,7 @@ func do_listdir(ip &: Interp, a &: at.Ast, call: int, patharg: Value): Value:
     cargs.push(patharg)
     cargs.push(val_ptr(cntp as i64, PTR_I32))
     ef := ip.extern_fns.get(efi)[0]
-    cl := ip.clos.get(ef.id)[0]
+    cl := ip.closures.get(ef.id)[0]
     r := call_func(ip, a, cl.fn, cl.env, false, val_null(), cargs)
     cargs.free()
     cip := cntp as i32*
@@ -3194,7 +3194,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             mut hargs := Vector {} as Vector<Value>
             hargs.push(ha.kind == VAL_STR ? ha : val_int(to_int(ha)))
             hef := ip.extern_fns.get(hefi)[0]
-            hcl := ip.clos.get(hef.id)[0]
+            hcl := ip.closures.get(hef.id)[0]
             hr := call_func(ip, a, hcl.fn, hcl.env, false, val_null(), hargs)
             hargs.free()
             // Clear bit 63: VAL_INT is signed, hash(k) % cap must stay >= 0.
@@ -3206,7 +3206,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if bslot >= 0:
             bv := env_slot_val(ip, bw, bslot)
             if bv.kind == VAL_FUNC:
-                bcl := ip.clos.get(bv.id)[0]
+                bcl := ip.closures.get(bv.id)[0]
                 ret call_func(ip, a, bcl.fn, bcl.env, false, val_null(), args)
             end
         end
@@ -3217,7 +3217,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         efi := find_extern_fn(ip, nm)
         if efi != 0:
             ef := ip.extern_fns.get(efi)[0]
-            ecl := ip.clos.get(ef.id)[0]
+            ecl := ip.closures.get(ef.id)[0]
             ret call_func(ip, a, ecl.fn, ecl.env, false, val_null(), args)
         end
         mut handled := false
@@ -3281,7 +3281,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
                 s2 := ip.sts.get(recv.id)[0]
                 fv := s2.fvals.get(fi)[0]
                 if fv.kind == VAL_FUNC:
-                    fcl := ip.clos.get(fv.id)[0]
+                    fcl := ip.closures.get(fv.id)[0]
                     ret call_func(ip, a, fcl.fn, fcl.env, false, val_null(), args)
                 end
             end
@@ -3309,7 +3309,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if ip.failed:
             ret val_null()
         end
-        vcl := ip.clos.get(fv2.id)[0]
+        vcl := ip.closures.get(fv2.id)[0]
         ret call_func(ip, a, vcl.fn, vcl.env, false, val_null(), args)
     end
     rt_error(ip, a, n, i18.Tr("value is not callable"))
@@ -3416,13 +3416,13 @@ func eval(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         ret val_null()
     end
     if k == at.AST_THIS:
-        mut thw := 0
-        thslot := env_find(ip, env, "this", thw)
+        mut this_env := 0
+        thslot := env_find(ip, env, "this", this_env)
         if thslot < 0:
             rt_error(ip, a, n, i18.Tr("'this' used outside a method"))
             ret val_null()
         end
-        ret env_slot_val(ip, thw, thslot)
+        ret env_slot_val(ip, this_env, thslot)
     end
     if k == at.AST_BINARY:
         op := nd.op
@@ -4413,7 +4413,7 @@ pub func New(lgr: lg.Logger, entry: str, opts: Options): Interp:
     ipn.maps.push(SMap {})
     ipn.iters.push(SMapIter {})
     ipn.sts.push(SStruct {})
-    ipn.clos.push(Closure {})
+    ipn.closures.push(Closure {})
     ipn.variants.push(SVariant {})
     ipn.mods.push(Module {})
     ipn.fnlists.push(FuncList {})
@@ -4487,7 +4487,7 @@ pub func Free(ip &: Interp):
         s.fvals.free()
     end
     ip.sts.free()
-    ip.clos.free()
+    ip.closures.free()
     ip.variants.free()
     ip.mods.free()
     repeat ip.fnlists.len() with i4:

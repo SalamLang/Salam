@@ -108,6 +108,15 @@ k_cg_base_c := [
     "uint64_t", "size_t", "float", "double", "salam_file"
 ] as str[17]
 
+// g_cg_export_{pkg,from,to} — --export=Fn:CName overrides (driver.salam
+// populates via AddExportOverride while scanning each module's own AST, so
+// pkg is always that function's OWN defining package). Keyed by (pkg, fn):
+// name-only would rename every same-named free function this build
+// transitively pulls in (e.g. llvm.salam's own Emit() vs. sal_web.salam's).
+mut g_cg_export_pkg := Vector {} as Vector<str>
+mut g_cg_export_from := Vector {} as Vector<str>
+mut g_cg_export_to := Vector {} as Vector<str>
+
 // ===== codegen.h =====
 // codegen_output_t. C field `module` -> module_name (kept obvious).
 pub struct Output:
@@ -160,6 +169,17 @@ pub struct Cg:
     pub match_result_tmp: str = ""
     pub match_end_label: str = ""
     pub compact: bool = false
+end
+
+// cg_export_override — "" if (pkg, fname) has no registered override.
+func cg_export_override(pkg: str, fname: str): str:
+    repeat g_cg_export_from.len() with i:
+        if str.Equals(g_cg_export_pkg.get(i)[0], pkg) &&
+           str.Equals(g_cg_export_from.get(i)[0], fname):
+            ret g_cg_export_to.get(i)[0]
+        end
+    end
+    ret ""
 end
 
 // ---------------------------------------------------------------------------
@@ -726,6 +746,12 @@ end
 // cg_mangle_in — params are sm TypeIds. "" = the C NULL for pkg/sname.
 func cg_mangle_in(s &: sm.Sema, pkg: str, sname: str, fname: str,
                   params: Vector<int>): str:
+    if str.Len(sname) == 0:
+        override := cg_export_override(pkg, fname)
+        if str.Len(override) > 0:
+            ret override
+        end
+    end
     mut b := co.SbNew()
     co.SbPuts(b, "_Salam_")
     co.SbPuts(b, cg_cident(str.Len(pkg) > 0 ? pkg : "main"))
@@ -2972,10 +2998,20 @@ func struct_by_name(s &: sm.Sema, name: str): int:
     ret 0
 end
 
+// A member/index expression is only really addressable in the emitted C if
+// its BASE is: `x.field`/`x[i]` need `x` itself to be a real lvalue (or a
+// compound literal, which C99 lvalues too). A base that is itself a call
+// result (e.g. `sm.SymAt(s, sym).overloads`) is emitted as a GNU
+// statement-expression (see call_sret) whose value gcc/clang do NOT treat
+// as addressable once a further `.field`/`&(...)` is chained onto it
+// ("lvalue required as unary '&' operand") - so this must recurse into the
+// base rather than assume every AST_MEMBER/AST_INDEX is addressable.
 func cg_addressable(a &: at.Ast, n: int): bool:
     k := at.KindOf(a, n)
-    ret k == at.AST_IDENTIFIER || k == at.AST_MEMBER || k == at.AST_INDEX ||
-        k == at.AST_THIS || k == at.AST_STRUCT_LIT
+    if k == at.AST_MEMBER || k == at.AST_INDEX:
+        ret cg_addressable(a, at.Get(a, n).a)
+    end
+    ret k == at.AST_IDENTIFIER || k == at.AST_THIS || k == at.AST_STRUCT_LIT
 end
 
 // cg_struct_of — SymId; sname gets the parsed base typestr (the C wrote
@@ -3903,12 +3939,27 @@ func call_args(g &: Cg, s &: sm.Sema, a &: at.Ast, call: int, sig: int): str:
         end
         if arg_is_ref:
             sv := sm.SigAt(s, sig)
+            mut ref_c := ""
+            if cg_addressable(a, argid):
+                ref_c = "&(" + cg_expr(g, s, a, argid) + ")"
+            else:
+                // argid isn't a real C lvalue (e.g. a member of a
+                // byval-struct-returning call's result) - bind it to a
+                // genuine local temp first, same fallback cg_method already
+                // uses below, so `&` has an actual lvalue to operate on.
+                g.tmpn += 1
+                rt := g.tmpn
+                argc := cg_expr(g, s, a, argid)
+                argts := at.Get(a, argid).type_str
+                ref_c = "({ " + cg_ctype(argts) + " __r" + rt + " = (" +
+                    argc + "); &__r" + rt + "; })"
+            end
             if i < sv.params.len():
                 co.SbPuts(b, "(" +
                              cg_ctype(sm.ToString(s, sv.params.get(i)[0])) +
-                             "*)&(" + cg_expr(g, s, a, argid) + ")")
+                             "*)" + ref_c)
             else:
-                co.SbPuts(b, "&(" + cg_expr(g, s, a, argid) + ")")
+                co.SbPuts(b, ref_c)
             end
         else:
             co.SbPuts(b, cg_expr(g, s, a, argid))
@@ -4122,7 +4173,7 @@ func call_ident(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int,
         cnv := cg_ctype(str.Len(cn.type_str) > 0 ? cn.type_str : "Vector_str")
         g.tmpn += 1
         t := g.tmpn
-        ret "({ int32_t __an" + t + "; char** __ad" + t +
+        ret "({ int32_t __an" + t + "; const char** __ad" + t +
             " = salam_args(&__an" + t + "); (" + cnv + "){ __ad" + t +
             ", __an" + t + ", __an" + t + " }; })"
     end
@@ -4131,7 +4182,7 @@ func call_ident(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int,
         argx2 := cg_expr(g, s, a, cn.list.get(0)[0])
         g.tmpn += 1
         t2 := g.tmpn
-        ret "({ int32_t __vn" + t2 + "; char** __vd" + t2 +
+        ret "({ int32_t __vn" + t2 + "; const char** __vd" + t2 +
             " = salam_os_listdir(" + argx2 + ", &__vn" + t2 + "); (" +
             cnv2 + "){ __vd" + t2 + ", __vn" + t2 + ", __vn" + t2 + " }; })"
     end
@@ -5126,6 +5177,15 @@ end
 
 pub func VariantTagOf(variant_ts: str, member_ts: str): int:
     ret cg_variant_tag_of(variant_ts, member_ts)
+end
+
+// AddExportOverride — make free (non-method) top-level pub func `fname`,
+// defined in package `pkg`, keep its literal C name `cname` instead of the
+// usual mangled one. See cg_mangle_in.
+pub func AddExportOverride(pkg: str, fname: str, cname: str):
+    g_cg_export_pkg.push(pkg)
+    g_cg_export_from.push(fname)
+    g_cg_export_to.push(cname)
 end
 
 pub func IsSliceTs(ts: str): bool:

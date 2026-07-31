@@ -99,7 +99,12 @@ const char *cg_extern_proto(cg_t *cg, ast_node_t *fn, func_sig_t *sig)
     sb_t b;
     sb_init(&b);
     sb_puts(&b, "extern ");
-    if (fn->is_pure) sb_puts(&b, "SALAM_PURE ");
+    /* No SALAM_PURE here: many externs (libc math builtins like sin/cos/
+     * floor) are already declared `__attribute__((const))` by the system
+     * headers, and redeclaring them `__attribute__((pure))` makes GCC/Clang
+     * emit an "ignoring attribute" warning at every include site. Purity is
+     * still enforced at the Salam level (sema_call.c) via fn->is_pure; this
+     * only skips the redundant/conflicting C attribute on the declaration. */
     if (fn->is_noret) sb_puts(&b, "SALAM_NORET ");
     sb_puts(&b, cg_fmt(cg, "%s %s(", ret, fn->name));
     bool first = true;

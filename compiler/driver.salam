@@ -198,11 +198,17 @@ pub struct Dr:
     pub debug_info: bool = false
     pub asan: bool = false
     pub interp: bool = false
+    pub timeout_ms: int = 0
     pub stdlib_path: str = ""
     // out-param: the real path of the binary Build() produced (build.c sets
     // this only if it was still empty, matching opt->exe_path[0]=='\0').
     pub exe_path: str = ""
     pub defines: Vector<str> = Vector {}
+    // --export=FnName:CName (repeatable): keep a normally-DCE'd top-level
+    // pub func alive and emit it under the literal C name instead of the
+    // usual mangled one. For embedding a hand-picked API surface (e.g. the
+    // WASM playground) into a build that has no entry point of its own.
+    pub exports: Vector<str> = Vector {}
     pub llvm_opt_level: int = 0
     pub llvm_emit: int = 0
     pub llvm_verify: bool = false
@@ -275,6 +281,16 @@ func write_file(lgr: lg.Logger, path: str, content: str): bool:
         ret false
     end
     ret true
+end
+
+// Not from build.c: recaps which input file(s) failed right on the abort
+// line itself, so a reader scrolling a long CI log doesn't have to search
+// back through the phase INFO spam to see what actually broke the build.
+func abort_message(base: str, failed: Vector<str>): str:
+    if failed.len() == 0:
+        ret base
+    end
+    ret base + " (" + str.Join(failed, ", ") + ")"
 end
 
 // driver/build.c link_spec_is_path
@@ -395,12 +411,13 @@ func emit_link(cmdb &: str.StringBuilder, lgr: lg.Logger, spec: str, kind: str,
     str.BufAppend(cmdb, shell_arg(spec))
 end
 
-// driver/build.c detect_bundled_musl_tcc (POSIX only; no-op on Windows).
+// driver/build.c detect_bundled_musl_tcc (POSIX only; no-op on Windows -
+// the caller only invokes this from its `else: (!SALAM_OS_WINDOWS)` branch,
+// so no OS check is needed in here too - doing so would make cc_path/r
+// entirely unused/never-mutated once condcomp folds this body away on a
+// Windows build, tripping E062/E069).
 func detect_bundled_musl_tcc(cc_path: str): MuslTcc:
     mut r := MuslTcc {}
-    if SALAM_OS_WINDOWS:
-        ret r
-    end
     if !str.Contains(cc_path, "tcc"):
         ret r
     end
@@ -424,11 +441,23 @@ end
 func proc_status(code: int): int:
     if SALAM_OS_WINDOWS:
         ret code
+    else:
+        if code < 0:
+            ret 1
+        end
+        ret (code / 256) % 256
     end
-    if code < 0:
-        ret 1
+end
+
+// stderr_is_tty — single home for the isatty/_isatty OS split, so callers
+// (just resolve_color today) don't each need their own SALAM_OS_WINDOWS
+// branch duplicating this.
+func stderr_is_tty(): bool:
+    if SALAM_OS_WINDOWS:
+        ret _isatty(2) != 0
+    else:
+        ret isatty(2) != 0
     end
-    ret (code / 256) % 256
 end
 
 // driver/driver.c resolve_color
@@ -439,10 +468,7 @@ func resolve_color(flag: int): bool:
     if flag == 0:
         ret false
     end
-    if SALAM_OS_WINDOWS:
-        ret _isatty(2) != 0
-    end
-    ret isatty(2) != 0
+    ret stderr_is_tty()
 end
 
 // driver/build.c driver_build (the CMD_BUILD/CMD_OBJ shared body; `opt`
@@ -468,6 +494,29 @@ func build_impl(opt &: Dr): int:
     sm.SetStdlibRoot(opt.stdlib_path)
     sm.LayoutSchemaInit(opt.stdlib_path)
 
+    // --export=Fn:CName is only registered (cg.AddExportOverride) once we
+    // know the DEFINING file's own package (modpkg, below) - matching by
+    // name alone would rename EVERY same-named free function across every
+    // module this build transitively pulls in (e.g. llvm.salam's own
+    // Emit() collides with sal_web.salam's Emit() otherwise).
+    mut export_names := Vector {} as Vector<str>
+    mut export_cnames := Vector {} as Vector<str>
+    defer export_names.free()
+    defer export_cnames.free()
+    repeat opt.exports.len() with exi:
+        spec := opt.exports.get(exi)[0]
+        colon := str.IndexOf(spec, ":")
+        if colon <= 0 || colon >= str.Len(spec) - 1:
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
+                   "invalid --export value '" + spec + "' (want Fn:CName)")
+            ret 2
+        end
+        fname := str.Substr(spec, 0, colon)
+        cname := str.Substr(spec, colon + 1, str.Len(spec) - colon - 1)
+        export_names.push(fname)
+        export_cnames.push(cname)
+    end
+
     mut musl_tcc := MuslTcc {}
     if str.Equals(opt.cc, "tcc"):
         mut bundled := ""
@@ -475,7 +524,9 @@ func build_impl(opt &: Dr): int:
            sm.FindBundledTool("tcc", bundled):
             opt.cc = bundled
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using bundled C compiler: " + opt.cc)
-            if !SALAM_OS_WINDOWS:
+            if SALAM_OS_WINDOWS:
+                musl_tcc = MuslTcc {}
+            else:
                 musl_tcc = detect_bundled_musl_tcc(bundled)
                 if musl_tcc.active:
                     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO,
@@ -491,6 +542,11 @@ func build_impl(opt &: Dr): int:
     defer generated.free()
     mut first_module := ""
     mut all_ok := true
+    // paths that failed to read/parse/check/generate, recapped on abort
+    // (below) so the reader doesn't have to scroll back past the phase
+    // INFO logs of every other file in the build to find out what broke.
+    mut failed_files := Vector {} as Vector<str>
+    defer failed_files.free()
 
     entry := lp.Entry(pack)
     mut has_entry := false
@@ -569,6 +625,7 @@ func build_impl(opt &: Dr): int:
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
                    co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path)))
             all_ok = false
+            failed_files.push(path)
             wi += 1
             continue
         end
@@ -578,6 +635,7 @@ func build_impl(opt &: Dr): int:
         modentry := lp.Entry(modpack)
 
         lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+        lg.AddDiagSource(lgr, path, sf.text, sf.len)
 
         module := module_of(path)
         if str.Len(first_module) == 0:
@@ -601,6 +659,7 @@ func build_impl(opt &: Dr): int:
             ppath := pfiles.get(pi)[0]
             mut psf := src.New()
             if src.Load(ppath, psf):
+                lg.AddDiagSource(lgr, ppath, psf.text, psf.len)
                 mut ptoks := tok.StreamNew(ppath)
                 if !lx.Run(lgr, modpack, psf, ptoks):
                     lok = false
@@ -618,6 +677,7 @@ func build_impl(opt &: Dr): int:
                 lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
                        co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(ppath)))
                 all_ok = false
+                failed_files.push(ppath)
             end
             pi += 1
         end
@@ -629,6 +689,7 @@ func build_impl(opt &: Dr): int:
 
         if !lok || !pok || !sok:
             all_ok = false
+            failed_files.push(path)
             sm.Free(s)
             at.FreeAst(a)
             wi += 1
@@ -643,6 +704,22 @@ func build_impl(opt &: Dr): int:
                 has_entry = true
                 sm.DceMarkRoot(modpkg, modentry)
                 break
+            end
+        end
+        // --export only applies to the entry file itself (wi==0): matching
+        // by name across every transitively-imported module would catch
+        // unrelated same-named functions too (e.g. llvm.salam's own Emit()).
+        if wi == 0 && export_names.len() > 0:
+            repeat prog_n.list.len() with di3x:
+                d4 := at.Get(a, prog_n.list.get(di3x)[0])
+                if d4.kind == at.AST_FUNC_DEF:
+                    repeat export_names.len() with exj:
+                        if str.Equals(d4.name, export_names.get(exj)[0]):
+                            sm.DceMarkRoot(modpkg, d4.name)
+                            cg.AddExportOverride(modpkg, d4.name, export_cnames.get(exj)[0])
+                        end
+                    end
+                end
             end
         end
 
@@ -746,6 +823,7 @@ func build_impl(opt &: Dr): int:
         wok2 := write_file(lgr, hpath, o.h_src)
         if !wok1 || !wok2:
             all_ok = false
+            failed_files.push(path2)
         else:
             cfiles.push(cpath)
             generated.push(cpath)
@@ -757,7 +835,8 @@ func build_impl(opt &: Dr): int:
     end
 
     if !all_ok:
-        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("build aborted: errors in source"))
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
+               abort_message(i18.Tr("build aborted: errors in source"), failed_files))
         if !opt.keep_c:
             repeat generated.len() with gi1:
                 _rm1 := os.Remove(generated.get(gi1)[0])
@@ -1127,6 +1206,7 @@ func ll_gather_links(lgr: lg.Logger, pack: lp.Langpack, main_path: str, a &: at.
             wi += 1
             continue
         end
+        lg.AddDiagSource(lgr, path, sf.text, sf.len)
         mp := lx.Detect(sf, pack)
         mut toks := tok.StreamNew(path)
         _lok := lx.Run(lgr, mp, sf, toks)
@@ -1260,6 +1340,8 @@ func js_build_bundle(lgr: lg.Logger, opt &: Dr, entries: Vector<str>, module_out
     mut first_module := ""
     mut entry_name := ""
     mut all_ok := true
+    mut failed_files := Vector {} as Vector<str>
+    defer failed_files.free()
 
     mut ml := ""
     mut mk := Vector {} as Vector<str>
@@ -1285,6 +1367,7 @@ func js_build_bundle(lgr: lg.Logger, opt &: Dr, entries: Vector<str>, module_out
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
                    co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path)))
             all_ok = false
+            failed_files.push(path)
             wi += 1
             continue
         end
@@ -1293,6 +1376,7 @@ func js_build_bundle(lgr: lg.Logger, opt &: Dr, entries: Vector<str>, module_out
         modentry := lp.Entry(modpack)
         module := module_of(path)
         lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+        lg.AddDiagSource(lgr, path, sf.text, sf.len)
         if str.Len(first_module) == 0:
             first_module = module
         end
@@ -1312,6 +1396,7 @@ func js_build_bundle(lgr: lg.Logger, opt &: Dr, entries: Vector<str>, module_out
             ppath := pfiles.get(pi)[0]
             mut psf := src.New()
             if src.Load(ppath, psf):
+                lg.AddDiagSource(lgr, ppath, psf.text, psf.len)
                 mut ptoks := tok.StreamNew(ppath)
                 if !lx.Run(lgr, modpack, psf, ptoks):
                     lok = false
@@ -1329,6 +1414,7 @@ func js_build_bundle(lgr: lg.Logger, opt &: Dr, entries: Vector<str>, module_out
                 lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
                        co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(ppath)))
                 all_ok = false
+                failed_files.push(ppath)
             end
             pi += 1
         end
@@ -1339,6 +1425,7 @@ func js_build_bundle(lgr: lg.Logger, opt &: Dr, entries: Vector<str>, module_out
         sok := sm.RunCached(s, a, prog)
         if !lok || !pok || !sok:
             all_ok = false
+            failed_files.push(path)
             sm.Free(s)
             wi += 1
             continue
@@ -1390,7 +1477,8 @@ func js_build_bundle(lgr: lg.Logger, opt &: Dr, entries: Vector<str>, module_out
     module_out = first_module
 
     if !all_ok:
-        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("build aborted: errors in source"))
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
+               abort_message(i18.Tr("build aborted: errors in source"), failed_files))
         rc_out = 1
         ret ""
     end
@@ -1548,7 +1636,7 @@ end
 // ===== driver/layout_build.c (stage 8b) =====
 // (module_of/dir_of/write_file are the SAME private helpers build.c already
 // defined above — layout_build.c's own copies were byte-identical to them
-// in the C too, so this port doesn't re-declare them.)
+// in the C too, so this port doesn't redeclare them.)
 
 // ===== driver/web_build.c (stage 8b) =====
 
@@ -1780,8 +1868,9 @@ end
 func debug_tool_name(): str:
     if SALAM_OS_MAC:
         ret "lldb"
+    else:
+        ret "gdb"
     end
-    ret "gdb"
 end
 
 func cache_root(): str:
@@ -2311,6 +2400,7 @@ pub func Exec(opt &: Dr): int:
         ret 2
     end
     lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+    lg.AddDiagSource(lgr, opt.input, sf.text, sf.len)
     modpack := lx.Detect(sf, pack)
     mut toks := tok.StreamNew(opt.input)
     lok := lx.Run(lgr, modpack, sf, toks)
@@ -2326,13 +2416,17 @@ pub func Exec(opt &: Dr): int:
     sm.SetCc(s, table)
     sok := sm.Run(s, a, prog)
     if !lok || !pok || !sok:
-        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("build aborted: errors in source"))
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
+               i18.Tr("build aborted: errors in source") + " (" + opt.input + ")")
         sm.Free(s)
         at.FreeAst(a)
         ret 1
     end
     mut io_opts := ip.NewOptions()
     io_opts.lang = opt.lang
+    if opt.timeout_ms > 0:
+        io_opts.timeout_ms = opt.timeout_ms
+    end
     mut interp := ip.New(lgr, entry, io_opts)
     rc := ip.Run(interp, a, s, prog)
     ip.Free(interp)
@@ -2363,6 +2457,7 @@ pub func Inspect(opt &: Dr): int:
         ret 2
     end
     lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+    lg.AddDiagSource(lgr, opt.input, sf.text, sf.len)
     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO,
            "compiling " + sf.path + " (lang=" + opt.lang + ", " + sf.len + " bytes)")
     modpack := lx.Detect(sf, pack)
@@ -2468,6 +2563,7 @@ pub func Llvm(opt &: Dr): int:
         ret 2
     end
     lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+    lg.AddDiagSource(lgr, opt.input, sf.text, sf.len)
     module := module_of(opt.input)
     modpack := lx.Detect(sf, pack)
     mut toks := tok.StreamNew(opt.input)
@@ -2487,7 +2583,8 @@ pub func Llvm(opt &: Dr): int:
     sm.SetCc(s, table)
     sok := sm.Run(s, a, prog)
     if !lok || !pok || !sok:
-        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("build aborted: errors in source"))
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
+               i18.Tr("build aborted: errors in source") + " (" + opt.input + ")")
         sm.Free(s)
         at.FreeAst(a)
         ret 1

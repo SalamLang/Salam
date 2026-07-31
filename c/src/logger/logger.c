@@ -29,6 +29,7 @@ logger_t *logger_new(FILE *sink, log_level_t min_level, bool color)
     lg->diag_format = DIAG_FORMAT_HUMAN;
     lg->src_text = NULL;
     lg->src_len = 0;
+    lg->src_table_len = 0;
     return lg;
 }
 
@@ -45,6 +46,28 @@ void logger_set_diag_source(logger_t *lg, const char *src_text, size_t src_len,
     lg->src_len = src_len;
     lg->diag_style = style;
     lg->diag_format = format;
+}
+
+void logger_add_diag_source(logger_t *lg, const char *file, const char *src_text,
+                            size_t src_len)
+{
+    if (!lg || !file) return;
+    {
+        int i = 0;
+        for (; i < lg->src_table_len; i++) {
+            if (strcmp(lg->src_table[i].file, file) == 0) {
+                lg->src_table[i].text = src_text;
+                lg->src_table[i].len = src_len;
+                return;
+            }
+        }
+    }
+    if (lg->src_table_len < LOGGER_MAX_DIAG_SOURCES) {
+        lg->src_table[lg->src_table_len].file = file;
+        lg->src_table[lg->src_table_len].text = src_text;
+        lg->src_table[lg->src_table_len].len = src_len;
+        lg->src_table_len++;
+    }
 }
 
 void logger_set_timestamps(logger_t *lg, bool enabled)

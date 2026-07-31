@@ -94,7 +94,7 @@ sh compiler/tools/bash/build-compiler.sh   # compiler/salam builds a fresh compi
 ```
 
 You still need a C compiler **installed on your system** to run `salam
-build` on your *own* programs, though — not to build the Salam compiler
+build` on your _own_ programs, though — not to build the Salam compiler
 itself, but because its default backend transpiles to C and shells out to
 one at runtime. [**tcc**](https://bellard.org/tcc/) is the default (bundled
 math, fast); [gcc](https://gcc.gnu.org/)/[clang](https://clang.llvm.org/)
@@ -180,11 +180,11 @@ sudo apt install clang lld llvm        # toolchain (or an official LLVM release)
 ```
 
 **Bundled sysroot (zero-setup for your users).** The old CMake build could
-stage a MinGW-w64 sysroot into `<prefix>/share/salam/sysroots/…` at *build
-time* via `-DSALAM_BUNDLE_MINGW=ON`; that mechanism doesn't have a
+stage a MinGW-w64 sysroot into `<prefix>/share/salam/sysroots/…` at _build
+time_ via `-DSALAM_BUNDLE_MINGW=ON`; that mechanism doesn't have a
 self-hosted equivalent yet (no CMake anymore, and this ties into the
 multi-platform release/cross-compile pipeline that's still being reworked
-post-self-host — see `compiler/PORTING.md`). The *runtime* override below
+post-self-host — see `compiler/PORTING.md`). The _runtime_ override below
 still works today, though: point `$SALAM_SYSROOTS` at a directory you staged
 yourself.
 
@@ -221,7 +221,7 @@ from the repository root. There are two modes:
 
 ### Development (live reload)
 
-The whole repo is bind-mounted and `compiler/salam` is **self-hosted rebuilt
+The whole repository is bind-mounted and `compiler/salam` is **self-hosted rebuilt
 automatically on every change** to `compiler/*.salam` (powered by
 [`entr`](https://eradman.com/entrproject/), see
 [`tools/bash/docker-dev.sh`](compiler/tools/bash/docker-dev.sh)):

@@ -29,13 +29,13 @@ if command -v taskkill >/dev/null 2>&1; then
     taskkill //F //IM salam.exe >/dev/null 2>&1 || true
 fi
 if [ "$WASM_ONLY" -eq 0 ]; then
-    echo "==> Building native compiler (tools/bash/build-compiler.sh) ..."
-    sh tools/bash/build-compiler.sh
+    echo "==> Building native compiler (compiler/tools/bash/build-compiler.sh) ..."
+    sh compiler/tools/bash/build-compiler.sh
 fi
-echo "==> Building WebAssembly bundle (tools/bash/build-wasm.sh) ..."
-sh tools/bash/build-wasm.sh
+echo "==> Building WebAssembly bundle (compiler/tools/bash/build-wasm.sh) ..."
+sh compiler/tools/bash/build-wasm.sh
 echo "==> Editor bundle:"
-for f in ../editor/salam-wa.js ../editor/salam-wa.wasm ../editor/salam-wa.data; do
+for f in editor/salam-wa.js editor/salam-wa.wasm editor/salam-wa.data; do
     if [ -f "$f" ]; then
         size=$(wc -c <"$f" | tr -d ' ')
         printf '    %-22s %s bytes\n' "$f" "$size"
@@ -45,11 +45,11 @@ for f in ../editor/salam-wa.js ../editor/salam-wa.wasm ../editor/salam-wa.data; 
 done
 echo "==> Exported entry points:"
 for sym in _salam_web_run_app _salam_web_build_layout _salam_web_emit; do
-    if grep -q "$sym" ../editor/salam-wa.js 2>/dev/null; then
+    if grep -q "$sym" editor/salam-wa.js 2>/dev/null; then
         echo "    ok   $sym"
     else echo "    WARN missing $sym" >&2; fi
 done
 echo "==> Done. Reload the editor to pick up the new build."
 if [ "$SERVE" -eq 1 ]; then
-    exec sh tools/bash/editor-serve.sh "$PORT"
+    exec sh compiler/tools/bash/editor-serve.sh "$PORT"
 fi

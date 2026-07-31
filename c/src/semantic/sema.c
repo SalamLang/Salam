@@ -838,6 +838,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
         SERR(s, 8, &imp->span, "import not found: '%s'", path);
         return NULL;
     }
+    logger_add_diag_source(s->log, path, src->text, src->len);
     const langpack_t *fb = langpack_load(i18n_lang());
     if (!fb) fb = langpack_load("en");
     const langpack_t *pack = langpack_detect(s->a, src, fb);
@@ -855,6 +856,7 @@ static symbol_t *load_package(sema_t *s, const char *path, ast_node_t *imp)
         for (; fi < nf; fi++) {
             source_file_t *fsrc = source_load(s->a, files[fi]);
             if (!fsrc) continue;
+            logger_add_diag_source(s->log, files[fi], fsrc->text, fsrc->len);
             token_stream_t *ftoks = NULL;
             lexer_run(s->a, s->log, pack, fsrc, &ftoks);
             ast_node_t *fprog = NULL;

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,14 +17,14 @@ const errInternalError = "internal_error"
 func runSalam(ctx context.Context, req runRequest, timeout time.Duration, reqID string) (runResponse, int) {
 	jobDir, err := os.MkdirTemp(workRoot, "job-*")
 	if err != nil {
-		log.Printf("run error id=%s stage=mkdir_temp error=%q", reqID, err)
+		log.Printf("run error id=%s stage=mkdir_temp error=%s", reqID, strconv.Quote(err.Error()))
 		return runResponse{OK: false, Error: errInternalError, Message: "could not allocate work dir"}, http.StatusInternalServerError
 	}
 	defer os.RemoveAll(jobDir)
 
 	srcPath := filepath.Join(jobDir, "main.salam")
 	if err := os.WriteFile(srcPath, []byte(req.Code), 0o600); err != nil {
-		log.Printf("run error id=%s stage=write_source error=%q", reqID, err)
+		log.Printf("run error id=%s stage=write_source error=%s", reqID, strconv.Quote(err.Error()))
 		return runResponse{OK: false, Error: errInternalError, Message: "could not write source"}, http.StatusInternalServerError
 	}
 
@@ -34,7 +35,7 @@ func runSalam(ctx context.Context, req runRequest, timeout time.Duration, reqID 
 
 	start := time.Now()
 	if err := cmd.Start(); err != nil {
-		log.Printf("run error id=%s stage=cmd_start error=%q", reqID, err)
+		log.Printf("run error id=%s stage=cmd_start error=%s", reqID, strconv.Quote(err.Error()))
 		return runResponse{OK: false, Error: errInternalError, Message: "could not start salam"}, http.StatusInternalServerError
 	}
 
@@ -44,7 +45,7 @@ func runSalam(ctx context.Context, req runRequest, timeout time.Duration, reqID 
 	timedOut := runCtx.Err() == context.DeadlineExceeded
 	if timedOut && cmd.Process != nil {
 		if err := killProcessTree(cmd.Process.Pid); err != nil {
-			log.Printf("run warning id=%s stage=kill_process_group error=%q", reqID, err)
+			log.Printf("run warning id=%s stage=kill_process_group error=%s", reqID, strconv.Quote(err.Error()))
 		}
 	}
 

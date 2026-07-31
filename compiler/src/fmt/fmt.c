@@ -254,6 +254,15 @@ static void fmt_step_break_before(fmt_ctx_t *c, const token_t *t, token_kind_t k
         c->line_has_content = false;
     }
     c->open_colon_line = 0;
+    if (c->bracket == 0 && c->prev_gt_generic && c->line_has_content &&
+        t->span.begin.line > c->prev_end_line) {
+        sb_putc(c->out, '\n');
+        c->line_has_content = false;
+        c->force_break = false;
+        c->q_open[0] = 0;
+        c->stmt_head = TK_EOF;
+        c->match_pending = false;
+    }
 }
 
 static bool fmt_in_match_arms(const fmt_ctx_t *c)

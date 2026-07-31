@@ -16,6 +16,23 @@
 #include "core/sal_format.h"
 #include <math.h>
 
+const char *str_repeat(interp_t *I, const char *s, int64_t n)
+{
+    size_t slen = strlen(s);
+    if (n <= 1 || slen == 0) return n == 1 ? s : "";
+    size_t total = slen * (size_t)n;
+    char *buf = (char *)arena_alloc(I->a, total + 1);
+    memcpy(buf, s, slen);
+    size_t filled = slen;
+    while (filled < total) {
+        size_t chunk = filled < total - filled ? filled : total - filled;
+        memcpy(buf + filled, buf, chunk);
+        filled += chunk;
+    }
+    buf[total] = '\0';
+    return buf;
+}
+
 const char *afmt(interp_t *I, const char *fmt, ...)
 {
     va_list ap, ap2;

@@ -188,7 +188,8 @@ static const char *const s_all_bool_flags[] = {
     "SALAM_OS_ANDROID", "SALAM_OS_LINUX",   "SALAM_OS_MAC",     "SALAM_OS_BSD",
     "SALAM_OS_FREEBSD", "SALAM_OS_OPENBSD", "SALAM_OS_NETBSD",  "SALAM_OS_UNIX",
     "SALAM_ARCH_X64",   "SALAM_ARCH_X86",   "SALAM_ARCH_ARM64", "SALAM_ARCH_ARM",
-    "SALAM_ARCH_WASM",  "SALAM_MEM_DEBUG",  "SALAM_ASAN",       NULL};
+    "SALAM_ARCH_WASM",  "SALAM_MEM_DEBUG",  "SALAM_ASAN",       "SALAM_SAFE",
+    NULL};
 
 static void cc_push_missing_bool_defaults(arena_t *a, cc_table_t *t)
 {

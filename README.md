@@ -35,6 +35,57 @@ Salam is a general-purpose and systems programming language designed for efficie
 
 ---
 
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+- [✨ Introducing Salam](#-introducing-salam)
+  - [Supported Languages](#supported-languages)
+  - [Why Choose Salam?](#why-choose-salam)
+  - [Key Features](#key-features)
+- [🧩 Editor Support](#-editor-support)
+  - [Visual Studio Code](#visual-studio-code)
+- [🛠️ The Compiler (`salam`)](#-the-compiler-salam)
+  - [Build](#build)
+  - [Usage](#usage)
+  - [Cross-compilation](#cross-compilation)
+- [🐳 Docker & Docker Compose](#-docker--docker-compose)
+  - [Development (live reload)](#development-live-reload)
+  - [Production (copy & build)](#production-copy--build)
+  - [Plain Docker (without Compose)](#plain-docker-without-compose)
+  - [Books (XeLaTeX)](#books-xelatex)
+- [🚀 Bun Workspaces: Multi-App Development & Static Site Guide](#-bun-workspaces-multi-app-development--static-site-guide)
+  - [🚀 1. Quickstart Execution Guide](#-1-quickstart-execution-guide)
+  - [📁 2. Monorepo Architecture & Core Setup](#-2-monorepo-architecture--core-setup)
+    - [Root Configuration Files](#root-configuration-files)
+      - [`package.json` (Workspace Root)](#packagejson-workspace-root)
+      - [`bunfig.toml` (Workspace Root)](#bunfigtoml-workspace-root)
+  - [🛠️ 3. Static Site Package Implementation](#-3-static-site-package-implementation)
+    - [Static Site Configuration](#static-site-configuration)
+  - [⚡ 4. The Serve Methods Evaluated](#-4-the-serve-methods-evaluated)
+    - [Method A: Bun Native Dev Engine (`bun run --watch index.html`)](#method-a-bun-native-dev-engine-bun-run---watch-indexhtml)
+    - [Method B: The Local Isolation Method (`bunx vite`)](#method-b-the-local-isolation-method-bunx-vite)
+  - [🔄 5. Global Monorepo Package Updates](#-5-global-monorepo-package-updates)
+    - [Explaining the Flags Behind the Script (`bun update -i -r`)](#explaining-the-flags-behind-the-script-bun-update--i--r)
+  - [🔒 6. Security Breakdown & Best Practices](#-6-security-breakdown--best-practices)
+    - [The Port Selection Architecture](#the-port-selection-architecture)
+    - [Network Address Binding (`0.0.0.0` vs `127.0.0.1`)](#network-address-binding-0000-vs-127001)
+    - [Safe Command Formula](#safe-command-formula)
+  - [📚 7. MyST Documentation](#-7-myst-documentation)
+    - [Configuration Files](#configuration-files)
+    - [Running the Documentation Locally](#running-the-documentation-locally)
+- [🤝 Contributing](#-contributing)
+- [🔍 Joining Code Reviews](#-joining-code-reviews)
+  - [How a GitHub PR Review Works](#how-a-github-pr-review-works)
+    - [Leaving an inline comment](#leaving-an-inline-comment)
+    - [Suggesting a code change](#suggesting-a-code-change)
+    - [Submitting the review](#submitting-the-review)
+    - [Tips for great reviews](#tips-for-great-reviews)
+  - [Growing with the Community](#growing-with-the-community)
+  - [💬 Real-Time Community](#-real-time-community)
+- [📖 Glossary](#-glossary)
+
+<!-- END doctoc -->
+
 <div align="center">
 
 ## ✨ Introducing Salam
@@ -84,21 +135,19 @@ built to a native executable; embedded **`layout:`** blocks compile to HTML/CSS/
 
 ### Build
 
-Salam is **self-hosted**: the compiler itself is written in Salam
-([`compiler/`](compiler/), one `.salam` file per module — no C source, no
-`make`/`cmake`). `compiler/salam` is the tracked, prebuilt bootstrap binary
-(Linux); it builds every new version of itself from `compiler/main.salam`:
+Requires a C compiler. [**tcc**](https://bellard.org/tcc/) is the default backend (bundled math, fast); [gcc](https://gcc.gnu.org/)/[clang](https://clang.llvm.org/) also work.
+
+The compiler lives in [`compiler/`](compiler/) (a self-contained subproject:
+`src/`, `std/`, `tests/`, `tools/`, `Makefile`, `CMakeLists.txt`). Build it from
+there:
 
 ```sh
-sh compiler/tools/bash/build-compiler.sh   # compiler/salam builds a fresh compiler/salam
+cd compiler
+sh tools/bash/build-compiler.sh   # quick build with tcc  ->  ./salam
+# or, with CMake (out-of-tree build, then run the test suite via ctest):
+cmake -B build && cmake --build build && ctest --test-dir build
+# or just: make            # (release build via the Makefile -> ../salam at the repo root)
 ```
-
-You still need a C compiler **installed on your system** to run `salam
-build` on your _own_ programs, though — not to build the Salam compiler
-itself, but because its default backend transpiles to C and shells out to
-one at runtime. [**tcc**](https://bellard.org/tcc/) is the default (bundled
-math, fast); [gcc](https://gcc.gnu.org/)/[clang](https://clang.llvm.org/)
-also work (`--cc=gcc`).
 
 There is no separate runtime library: `salam build` emits the small C runtime
 (print/strcat/pow/alloc and optional bounds checks) inline into the generated C, so
@@ -125,10 +174,10 @@ salam build app.salam -DDEBUG                  # preprocessor define
 # format source in place (auto-detects nothing - pass --lang=fa for Persian files)
 salam format app.salam                         # reformat one file
 salam format                                   # reformat every .salam under the cwd, recursively
-salam format compiler/ tests/                  # reformat given files and/or directories
+salam format compiler/src/ examples/           # reformat given files and/or directories
 salam format --check                           # report files that need formatting (exit 1 if any)
 salam format app.salam --tabs                  # indent with tabs (convert spaces to tabs)
-salam format compiler/ --indent=2              # indent with 2 spaces per level
+salam format compiler/src/ --indent=2          # indent with 2 spaces per level
 salam format page.salam --lang=fa              # Persian source
 
 # REPLs
@@ -179,14 +228,20 @@ import libraries, and headers):
 sudo apt install clang lld llvm        # toolchain (or an official LLVM release)
 ```
 
-**Bundled sysroot (zero-setup for your users).** The old CMake build could
-stage a MinGW-w64 sysroot into `<prefix>/share/salam/sysroots/…` at _build
-time_ via `-DSALAM_BUNDLE_MINGW=ON`; that mechanism doesn't have a
-self-hosted equivalent yet (no CMake anymore, and this ties into the
-multi-platform release/cross-compile pipeline that's still being reworked
-post-self-host — see `compiler/PORTING.md`). The _runtime_ override below
-still works today, though: point `$SALAM_SYSROOTS` at a directory you staged
-yourself.
+**Bundled sysroot (zero-setup for your users).** Build the compiler with
+`-DSALAM_BUNDLE_MINGW=ON` and a MinGW-w64 sysroot is staged into
+`<prefix>/share/salam/sysroots/<arch>-w64-mingw32/`; `salam build --target=…-windows-gnu`
+then discovers and passes it automatically, so end users need nothing extra:
+
+```sh
+# copy an existing sysroot (e.g. from the mingw-w64 package)
+cmake -B build -DSALAM_BUNDLE_MINGW=ON \
+      -DSALAM_MINGW_SYSROOT=/usr/x86_64-w64-mingw32
+# or download one (pin the hash for reproducibility)
+cmake -B build -DSALAM_BUNDLE_MINGW=ON \
+      -DSALAM_MINGW_URL=<llvm-mingw archive> -DSALAM_MINGW_SHA256=<hash>
+cmake --build build && cmake --install build
+```
 
 Point `$SALAM_SYSROOTS` at a directory holding per-target sysroot subdirectories
 to override or add targets without rebuilding. Automatic discovery names them by
@@ -221,18 +276,16 @@ from the repository root. There are two modes:
 
 ### Development (live reload)
 
-The whole repository is bind-mounted and `compiler/salam` is **self-hosted rebuilt
-automatically on every change** to `compiler/*.salam` (powered by
-[`entr`](https://eradman.com/entrproject/), see
+The compiler tree is bind-mounted and `./salam` is **recompiled automatically on
+every change** to `src/` (powered by [`entr`](https://eradman.com/entrproject/), see
 [`tools/bash/docker-dev.sh`](compiler/tools/bash/docker-dev.sh)):
 
 ```sh
 docker compose -f compiler/docker/docker-compose.yml up dev   # build, then watch & rebuild
 ```
 
-Edit any `compiler/*.salam` file on your host and the container rebuilds
-`compiler/salam` (the current binary builds the new one — no C source or
-`make` involved anymore). To get a shell inside the same environment:
+Edit any file under `compiler/src/` on your host and the container rebuilds
+`./salam` incrementally. To get a shell inside the same environment:
 
 ```sh
 docker compose -f compiler/docker/docker-compose.yml run --rm dev sh
@@ -240,15 +293,13 @@ docker compose -f compiler/docker/docker-compose.yml run --rm dev sh
 
 ### Production (copy & build)
 
-The production stage runs `COPY .` then self-hosts `compiler/salam` from
-`compiler/main.salam` (there is no C source anymore — the tracked
-`compiler/salam` binary builds its own replacement), then installs it into
-the image. `salam` is the entrypoint, and the repository root is mounted at
-`/work` so the example programs are reachable:
+The production stage runs `COPY .` then `make && make install`, baking a fully
+built, self-contained compiler into the image. `salam` is the entrypoint, and the
+repository root is mounted at `/work` so shared `examples/` are reachable:
 
 ```sh
 docker compose -f compiler/docker/docker-compose.yml build prod
-docker compose -f compiler/docker/docker-compose.yml run --rm prod build tests/en/basics/hello.salam --output=hello
+docker compose -f compiler/docker/docker-compose.yml run --rm prod build examples/en/basics/hello.salam --output=hello
 docker compose -f compiler/docker/docker-compose.yml run --rm prod layout build page.salam --inline
 docker compose -f compiler/docker/docker-compose.yml run --rm prod --help
 ```
@@ -327,6 +378,11 @@ $ bun run --filter='*' --parallel dev
 @workspace/editor:dev        |   VITE v8.1.3  ready in 65 ms
 @workspace/editor:dev        |
 @workspace/editor:dev        |   ➜  Local:   http://127.0.0.1:55001/
+@workspace/vercel-editor:dev |
+@workspace/vercel-editor:dev |   VITE v8.1.3  ready in 91 ms
+@workspace/vercel-editor:dev |
+@workspace/vercel-editor:dev |   ➜  Local:   http://localhost:5173/
+@workspace/vercel-editor:dev |   ➜  Network: use --host to expose
 @workspace/runner:dev        |
 @workspace/runner:dev        |  ⛅️ wrangler 4.107.0
 @workspace/runner:dev        | ────────────────────
@@ -349,7 +405,8 @@ salam-monorepo/
 ├── extensions/
 │   └── vscode/
 ├── pages/
-└── runner/
+├── runner/
+└── vercel-editor/
 ```
 
 #### Root Configuration Files
@@ -371,13 +428,22 @@ dependency updates.
       "editor",
       "extensions/vscode",
       "pages",
-      "runner"
+      "runner",
+      "vercel-editor"
     ],
     "catalog": {
+      "react": "^19.2.7",
+      "react-dom": "^19.2.7",
+      "tailwindcss": "^4.3.2",
+      "@tailwindcss/vite": "^4.3.2",
+      "@vitejs/plugin-react": "^6.0.3",
+      "vite": "^8.1.3",
       "typescript": "^6.0.3",
       "wrangler": "^4.107.0",
       "@types/bun": "latest",
-      "@types/node": "^26.1.0"
+      "@types/node": "^26.1.0",
+      "@types/react": "^19.2.17",
+      "@types/react-dom": "^19.2.3"
     }
   },
   "scripts": {
@@ -386,16 +452,20 @@ dependency updates.
     "docs:myst": "bun run myst start",
     "dev:pages": "bun run --filter='@workspace/pages' dev",
     "dev:runner": "bun run --filter='@workspace/runner' dev",
+    "dev:vercel": "bun run --filter='@workspace/vercel-editor' dev",
     "build:all": "bun run --filter='*' --if-present build",
     "build:myst": "bun run myst build --html",
+    "build:vercel": "bun run --filter='@workspace/vercel-editor' build",
     "update:deps": "bun update -i -r",
     "clean": "rm -rf node_modules **/node_modules .bun-cache",
     "generate": "bun run --filter='@workspace/runner' generate",
     "typecheck": "bun run --filter='@workspace/runner' typecheck"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.4",
-    "mystmd": "^1.10.1"
+    "@tailwindcss/vite": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "mystmd": "^1.10.1",
+    "vite": "catalog:"
   }
 }
 ```
@@ -403,9 +473,10 @@ dependency updates.
 Useful root commands:
 
 - `bun run dev:all`: start every workspace that exposes a `dev` script
-- `bun run dev:editor`, `bun run dev:pages`, and `bun run dev:runner`:
-  start one workspace at a time
+- `bun run dev:editor`, `bun run dev:pages`, `bun run dev:runner`, and
+  `bun run dev:vercel`: start one workspace at a time
 - `bun run build:all`: run every workspace `build` script that exists
+- `bun run build:vercel`: build the React/Vite app in `vercel-editor/`
 - `bun run docs:myst`: start the [MyST](https://mystmd.org/) documentation dev server
 - `bun run build:myst`: build the MyST documentation to static HTML (`_build/html/`)
 - `bun run generate`: refresh Cloudflare Wrangler types for `runner/`
@@ -632,10 +703,12 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[Bun](https://bun.sh/)** | JavaScript runtime, package manager, and bundler. Used in the Salam monorepo to manage workspaces and run dev servers. |
 | **[C ABI](https://en.wikipedia.org/wiki/Application_binary_interface)** | C Application Binary Interface, the low-level contract for how functions are called and data is laid out in memory. Salam's FFI and `extern` declarations rely on the C ABI. |
 | **[CI (Continuous Integration)](https://en.wikipedia.org/wiki/Continuous_integration)** | Automated pipeline that builds, tests, and lints every pull request. Salam uses GitHub Actions for CI. |
-| **[Clang](https://clang.llvm.org/)** | LLVM-based C compiler. Salam's self-hosted compiler shells out to it at runtime — as a `salam build --cc=clang` backend option, and for LLVM-target native linking (`salam llvm`). |
+| **[Clang](https://clang.llvm.org/)** | LLVM-based C compiler. One of the supported backends for building the Salam compiler. |
 | **[Cloudflare Workers](https://workers.cloudflare.com/)** | Serverless compute platform that runs JavaScript/TypeScript at the edge. The `runner/` workspace deploys to Cloudflare Workers via Wrangler. |
+| **[CMake](https://cmake.org/)** | Cross-platform build tool generator. The Salam compiler can be built with `cmake -B build && cmake --build build`. |
 | **[Codegen](https://en.wikipedia.org/wiki/Code_generation_(compiler))** | Code-generation backend. Transforms the compiler's AST and type information into target output (C source, LLVM IR, or a WebAssembly module). |
 | **[Codespell](https://github.com/codespell-project/codespell)** | Spell checker for source code and documentation. Run as a prek hook to catch typos. |
+| **[CTest](https://cmake.org/cmake/help/latest/manual/ctest.1.html)** | CMake's built-in test runner. Invoked with `ctest --test-dir build` after a CMake build of the compiler. |
 | **defer** | Salam keyword that schedules a statement or block to run at the end of the enclosing scope, regardless of how the scope is exited. |
 | **[Docker](https://www.docker.com/)** | Container platform used to build and run the Salam compiler in an isolated, reproducible environment. |
 | **[Docker Compose](https://docs.docker.com/compose/)** | Tool for defining and running multi-container Docker applications. Salam provides a `docker-compose.yml` in `compiler/docker/` with `dev` and `prod` service targets. |
@@ -661,6 +734,7 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[prek](https://prek.j178.dev/)** | Git hook manager used by Salam. Hooks are defined in `prek.toml` (standard and manual stages) and `prek-audit.toml` (security-focused audit checks). |
 | **prek-audit.toml** | prek configuration file for security-focused audit hooks. Run separately with `prek run --all-files --config prek-audit.toml`. |
 | **[Prettier](https://prettier.io/)** | Opinionated code formatter for JavaScript, TypeScript, CSS, and JSON. Run as a prek hook. |
+| **[React](https://react.dev/)** | JavaScript library for building user interfaces with a component model. Used in the `vercel-editor/` workspace. |
 | **[Read the Docs](https://readthedocs.org/)** | Free documentation hosting platform. Salam's MyST docs are automatically built and published there via `.readthedocs.yaml`. |
 | **[REPL](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop)** | Read-Eval-Print Loop, an interactive session where you type expressions and see results immediately. `salam cli` starts a general REPL; `salam layout` starts a layout REPL. |
 | **[RTL (Right-to-Left)](https://en.wikipedia.org/wiki/Right-to-left_script)** | Text direction used by Arabic and Persian scripts. The Salam web playground supports RTL and switches direction when the Persian language is selected. |
@@ -668,10 +742,11 @@ Terms used across this readme, the [Contributing Guide](CONTRIBUTING.md), and th
 | **[SemVer (Semantic Versioning)](https://semver.org/)** | Version numbering scheme (`MAJOR.MINOR.PATCH`). Used by Bun's interactive update tooling and GitHub releases. |
 | **[shfmt](https://github.com/mvdan/sh)** | Shell script formatter. Run as a prek manual-stage hook to normalise indentation and style in `.sh` files. |
 | **[Super-Linter](https://github.com/super-linter/super-linter)** | GitHub Actions workflow that runs a broad set of language-specific linters across the repository in CI. |
+| **[Tailwind CSS](https://tailwindcss.com/)** | Utility-first CSS framework. Used in the Salam monorepo workspaces; integrated via the `@tailwindcss/vite` plugin. |
 | **[TCC (Tiny C Compiler)](https://bellard.org/tcc/)** | Lightweight, fast C compiler. The default backend used by Salam's quick-build script. |
 | **[Tree-walking interpreter](https://en.wikipedia.org/wiki/Interpreter_(computing))** | An interpreter that evaluates the AST directly without first compiling to native code. Used by the web playground and via `salam exec` / `salam run --interp` for pure-compute programs. |
 | **[TUI (Terminal User Interface)](https://en.wikipedia.org/wiki/Text-based_user_interface)** | Interactive, keyboard-driven interface rendered in the terminal. Bun's `bun update -i` flag opens a TUI for selecting which packages to upgrade. |
-| **[TypeScript](https://www.typescriptlang.org/)** | Typed superset of JavaScript that compiles to plain JavaScript. Used in the `runner/` and `extensions/vscode/` workspaces. |
+| **[TypeScript](https://www.typescriptlang.org/)** | Typed superset of JavaScript that compiles to plain JavaScript. Used in the `runner/` and `vercel-editor/` workspaces. |
 | **[Upstream](https://en.wikipedia.org/wiki/Upstream_(software_development))** | The original `SalamLang/Salam` repository. Contributors add it as a Git remote (`git remote add upstream …`) to keep their fork in sync. |
 | **[Virtual filesystem](https://en.wikipedia.org/wiki/Virtual_file_system)** | Emscripten's in-browser filesystem layer. `build-wasm.sh` preloads the `std/` directory into it so import resolution and the layout schema work when running Salam in the browser. |
 | **[Vite](https://vite.dev/)** | Frontend build tool and dev server. Used in the Salam monorepo to serve the editor and pages workspaces. |

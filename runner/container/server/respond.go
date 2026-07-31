@@ -4,29 +4,11 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 )
 
-const maxRequestIDLen = 128
-
-// sanitizeRequestID strips characters that could be used to forge or split
-// log lines (e.g. CR/LF injection) and caps the length of client-supplied input.
-func sanitizeRequestID(id string) string {
-	id = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return -1
-		}
-		return r
-	}, id)
-	if len(id) > maxRequestIDLen {
-		id = id[:maxRequestIDLen]
-	}
-	return id
-}
-
 func requestID(r *http.Request) string {
-	if id := sanitizeRequestID(r.Header.Get("X-Request-Id")); id != "" {
+	if id := r.Header.Get("X-Request-Id"); id != "" {
 		return id
 	}
 	return "unknown"
@@ -41,7 +23,7 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 func writeError(w http.ResponseWriter, status int, reqID, errCode, message string) {
-	log.Printf("reject id=%s status=%d error=%s message=%q", reqID, status, errCode, message) // #nosec G706
+	log.Printf("reject id=%s status=%d error=%s message=%q", reqID, status, errCode, message)
 	writeJSON(w, status, runResponse{OK: false, Error: errCode, Message: message, RequestID: reqID})
 }
 

@@ -1,7 +1,5 @@
 <?php
 
-// phpcs:disable PSR1.Files.SideEffects -- benchmark script intentionally declares and runs
-
 const N = 300000;
 
 function mergesort_arr(array &$arr, array &$aux, int $lo, int $hi): void

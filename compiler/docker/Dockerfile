@@ -1,4 +1,8 @@
 # syntax=docker/dockerfile:1
+#
+# Salam compiler - multi-stage image (Alpine / musl, smallest practical base).
+#
+
 ARG ALPINE_VERSION=edge
 ARG LLVM_VERSION=22
 
@@ -9,30 +13,21 @@ SHELL ["/bin/ash", "-o", "pipefail", "-c"]
 RUN for i in 1 2 3 4 5; do \
         apk add --no-cache \
             build-base \
+            make \
             musl-dev \
-            gcompat \
             tcc \
             tcc-libs-static \
             clang${LLVM_VERSION} \
             llvm${LLVM_VERSION} \
             bash \
             git \
-            curl \
             sqlite-dev \
             sqlite-static \
             mariadb-connector-c-dev \
-            hiredis-dev \
-            openssl-dev \
-            gtk+3.0-dev \
-            webkit2gtk-4.1-dev \
             nodejs \
             npm \
         && break; \
         echo "apk add attempt $i failed; retrying in 5s..." >&2; sleep 5; \
-        if [ "$i" = 5 ]; then \
-            echo "apk add failed after 5 attempts; aborting build." >&2; \
-            exit 1; \
-        fi; \
     done
 
 RUN node -v && npm -v
@@ -57,17 +52,17 @@ RUN addgroup -g "${SALAM_GID}" salam \
 WORKDIR /app
 
 FROM toolchain AS dev
-RUN apk add --no-cache entr && chown -R salam:salam /app
+RUN apk add --no-cache entr
+RUN chown -R salam:salam /app \
+    && mkdir -p /app/build \
+    && chmod 1777 /app/build
 ENV HOME=/tmp
 USER salam
-ENTRYPOINT ["sh", "compiler/tools/bash/docker-dev.sh"]
+ENTRYPOINT ["sh", "tools/bash/docker-dev.sh"]
 
 FROM toolchain AS builder
 COPY . .
-RUN chmod +x compiler/salam && sh compiler/tools/bash/build-compiler.sh
-RUN mkdir -p /usr/local/bin /usr/local/share/salam \
-    && cp compiler/salam /usr/local/bin/salam \
-    && cp -r std /usr/local/share/salam/std
+RUN make OUTDIR=. -j"$(nproc)" && make OUTDIR=. install PREFIX=/usr/local
 RUN salam version
 
 FROM toolchain AS prod

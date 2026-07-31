@@ -1,5 +1,166 @@
 package bench
 
+import str
+import conv
+import fmt
+import stats
+import io
+import filepath
+import collections
+
+func round0(x: f64): f64: ret ((x + 0.5) as i64) as f64 end
+
+func xstr(r: f64): str: ret fmt.FloatPrec(r, 2).concat("x") end
+
+func names contains(names: Vector<str>, target: str): bool:
+    mut i := 0
+    until i < names.len():
+        if names.get(i)[0] == target: ret true end
+        i = i + 1
+    end
+    ret false
+end
+
+func lang min geomean(s &: Store, names: Vector<str>, lang: str): f64:
+    mut vals := Vector {} as Vector<f64> defer vals.free()
+    mut i := 0
+    until i < names.len():
+        name := names.get(i)[0]
+        k := kkey(name, lang)
+        if sget(s.status, k) == "ok": vals.push(fget(s.m min, k)) end
+        i = i + 1
+    end
+    ret stats.Geomean(vals)
+end
+
+func program best(s &: Store, name: str, order: Vector<str>): f64:
+    mut best := -1.0
+    mut j := 0
+    until j < order.len():
+        k := kkey(name, order.get(j)[0])
+        if sget(s.status, k) == "ok":
+            v := round0(fget(s.m min, k))
+            if best < 0.0 || v < best: best = v end
+        end
+        j = j + 1
+    end
+    ret best
+end
+
+func program winners(s &: Store, name: str, order: Vector<str>): Vector<str>:
+    best := program best(s, name, order)
+    mut winners := Vector {} as Vector<str> mut j := 0
+    until j < order.len():
+        lg := order.get(j)[0]
+        k := kkey(name, lg)
+        if sget(s.status, k) == "ok":
+            v := round0(fget(s.m min, k))
+            if best >= 0.0 && v == best: winners.push(lg) end
+        end
+        j = j + 1
+    end
+    ret winners
+end
+
+func compute wins(s &: Store, names: Vector<str>, order: Vector<str>): Vector<int>:
+    mut wins := Vector {} as Vector<int> mut oi := 0
+    until oi < order.len():
+        wins.push(0)
+        oi = oi + 1
+    end
+    mut i := 0
+    until i < names.len():
+        name := names.get(i)[0]
+        winners := program winners(s, name, order)
+        mut j := 0
+        until j < winners.len():
+            idx := collections.index_of(order, winners.get(j)[0])
+            if idx >= 0: wins.set(idx, wins.get(idx)[0] + 1) end
+            j = j + 1
+        end
+        winners.free()
+        i = i + 1
+    end
+    ret wins
+end
+
+func fastest cell(s &: Store, name: str, order: Vector<str>): str:
+    winners := program winners(s, name, order)
+    defer winners.free()
+    best := program best(s, name, order)
+    mut salam count := 0
+    mut j := 0
+    until j < winners.len():
+        if is salam(winners.get(j)[0]): salam count = salam count + 1 end
+        j = j + 1
+    end
+    mut labels := Vector {} as Vector<str> defer labels.free()
+    mut added salam := false
+    mut j2 := 0
+    until j2 < winners.len():
+        lg := winners.get(j2)[0]
+        if is salam(lg):
+            if salam count >= 2:
+                if !added salam:
+                    labels.push("Salam")
+                    added salam = true
+                end
+            else:
+                labels.push(lang label(lg))
+            end
+        else:
+            labels.push(lang label(lg))
+        end
+        j2 = j2 + 1
+    end
+    joined := str.Join(labels, " / ")
+    mut cell := joined.concat(" (").concat(fmt0(best)).concat(")")
+    if salam count > 0: cell = "**".concat(cell).concat("**") end
+    ret cell
+end
+
+func min cell(s &: Store, name: str, lang: str): str:
+    k := kkey(name, lang)
+    if sget(s.status, k) == "ok": ret fmt0(fget(s.m min, k)) end
+    ret "-"
+end
+
+func program class(s &: Store, name: str, order: Vector<str>): int:
+    winners := program winners(s, name, order)
+    defer winners.free()
+    mut has salam := false
+    mut has other := false
+    mut j := 0
+    until j < winners.len():
+        if is salam(winners.get(j)[0]): has salam = true
+        else:
+            has other = true
+        end
+        j = j + 1
+    end
+    if has salam && !has other: ret 2 end
+    if has salam && has other: ret 1 end
+    ret 0
+end
+
+func salam best min(s &: Store, name: str): f64:
+    mut best := -1.0
+    mut lgs := Vector {} as Vector<str> defer lgs.free()
+    lgs.push("salam_llvm")
+    lgs.push("salam_gcc")
+    lgs.push("salam_tcc")
+    mut i := 0
+    until i < lgs.len():
+        k := kkey(name, lgs.get(i)[0])
+        if sget(s.status, k) == "ok":
+            v := round0(fget(s.m min, k))
+            if best < 0.0 || v < best: best = v end
+        end
+        i = i + 1
+    end
+    ret best
+end
+
 pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vector<str>, evals: Vector<str>, started: i64, finished: i64):
     order := lang order()
     defer order.free()
@@ -10,9 +171,7 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
     lines.push(conv.FormatInt(names.len() as i64).concat(" CPU- and IO-bound programs implemented identically in C, C++, Rust, Go,"))
     lines.push("Python, PHP, and Salam. Salam is measured three ways: the LLVM backend at")
     lines.push("`-O3`, the C backend compiled by `gcc -O3`, and the default `tcc` toolchain")
-    lines.push("(no optimizer) as the out-of-the-box reference. (The tree-walking")
-    lines.push("interpreter, `salam exec`, is disabled for now - too slow to be useful")
-    lines.push("here.) C and C++ run at `-O3` too.")
+    lines.push("(no optimizer) as the out-of-the-box reference. C and C++ run at `-O3` too.")
     lines.push("")
     lines.push("- Started (epoch ns): ".concat(conv.FormatInt(started)))
     lines.push("- Finished (epoch ns): ".concat(conv.FormatInt(finished)))
@@ -44,10 +203,12 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
     env order.push("python")
     env order.push("php")
     env order.push("salam")
-    repeat env order.len() with ei:
+    mut ei := 0
+    until ei < env order.len():
         ek := env order.get(ei)[0]
         ev := env get(ekeys, evals, ek)
         if ev.len() > 0: lines.push("- **".concat(ek).concat("**: ").concat(ev)) end
+        ei = ei + 1
     end
     lines.push("")
 
@@ -71,15 +232,18 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
 
     mut gm langs := Vector {} as Vector<str> defer gm langs.free()
     mut gm vals := Vector {} as Vector<f64> defer gm vals.free()
-    repeat order.len() with oi:
+    mut oi := 0
+    until oi < order.len():
         lg := order.get(oi)[0]
         gm langs.push(lg)
         gm vals.push(lang min geomean(s, names, lg))
+        oi = oi + 1
     end
     mut gm wins := compute wins(s, names, order)
     defer gm wins.free()
 
-    repeat gm vals.len() with si:
+    mut si := 0
+    until si < gm vals.len():
         mut min idx := si
         mut sj := si + 1
         until sj < gm vals.len():
@@ -91,6 +255,7 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
             collections.swap(gm vals, si, min idx)
             collections.swap(gm wins, si, min idx)
         end
+        si = si + 1
     end
 
     lines.push("## Overall ranking (fastest to slowest)")
@@ -99,14 +264,14 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
     lines.push(conv.FormatInt(names.len() as i64).concat(" programs** (geometric mean is used because it is not skewed by the few"))
     lines.push("slow/high-variance programs the way an arithmetic mean would be). Lower is")
     lines.push("faster; `vs C` and `vs Salam` express the same geomean as a multiple of C's")
-    lines.push("and of the fastest Salam backend's (".concat(lang label(salam best lang)).concat("). Salam's variants are"))
+    lines.push("and of the fastest Salam backend's (".concat(lang label(salam best lang)).concat("). Salam's three variants are"))
     lines.push("suffixed **-g** (C backend, `gcc -O3`), **-l** (LLVM backend, `-O3`), and")
-    lines.push("**-t** (C backend, `tcc`, no optimizer, the out-of-the-box default). The")
-    lines.push("tree-walking interpreter (**-i**, `salam exec`) is disabled for now.")
+    lines.push("**-t** (C backend, `tcc`, no optimizer, the out-of-the-box default).")
     lines.push("")
     lines.push("| Rank | Language | Geomean | vs C | vs Salam | Fastest / tied-fastest on |")
     lines.push("|---|---|---|---|---|---|")
-    repeat gm langs.len() with ri:
+    mut ri := 0
+    until ri < gm langs.len():
         lg := gm langs.get(ri)[0]
         val := gm vals.get(ri)[0]
         w := gm wins.get(ri)[0]
@@ -121,19 +286,23 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
         row = row.concat(" | ").concat(salam cell)
         row = row.concat(" | ").concat(conv.FormatInt(w as i64)).concat(" / ").concat(conv.FormatInt(names.len() as i64)).concat(" |")
         lines.push(row)
+        ri = ri + 1
     end
     lines.push("")
 
     mut scale max := 0.0
-    repeat gm langs.len() with smi:
+    mut smi := 0
+    until smi < gm langs.len():
         if gm langs.get(smi)[0] != "python" && gm langs.get(smi)[0] != "php":
             v2 := gm vals.get(smi)[0]
             if v2 > scale max: scale max = v2 end
         end
+        smi = smi + 1
     end
 
     lines.push("```")
-    repeat gm langs.len() with bi:
+    mut bi := 0
+    until bi < gm langs.len():
         lg := gm langs.get(bi)[0]
         val := gm vals.get(bi)[0]
         mut bar text := "(off scale)"
@@ -148,6 +317,7 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
         if c gm > 0.0: line = line.concat("  ").concat(xstr(val / c gm)).concat(" C") end
         if lg == "c": line = line.concat("  <- baseline") end
         lines.push(line)
+        bi = bi + 1
     end
     lines.push("```")
     lines.push("")
@@ -156,12 +326,14 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
     lines.push("")
     mut max win := -1
     mut max win lang := ""
-    repeat gm wins.len() with mi:
+    mut mi := 0
+    until mi < gm wins.len():
         wv := gm wins.get(mi)[0]
         if wv > max win:
             max win = wv
             max win lang = gm langs.get(mi)[0]
         end
+        mi = mi + 1
     end
     lines.push("- **Fastest Salam backend:** ".concat(lang label(salam best lang)).concat(", geomean ").concat(fmt.FloatPrec(salam best gm, 2)).concat(" ms"))
     if c gm > 0.0 && rust gm > 0.0:
@@ -192,50 +364,29 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
     lines.push("  adds 1 to all 4 languages), so the column does not sum to ".concat(conv.FormatInt(names.len() as i64)).concat("."))
     lines.push("")
 
-    lines.push("## How much faster is Salam? (per-program min-time ratio)")
-    lines.push("")
-    lines.push("For every program, `other language's minimum time / fastest Salam backend's")
-    lines.push("minimum time` is computed (values > 1x mean Salam is faster on that program).")
-    lines.push("The columns below are the average, median, min, and max of that per-program")
-    lines.push("ratio across all programs where both sides ran successfully.")
-    lines.push("")
-    lines.push("| Language | Avg | Median | Min | Max | Programs |")
-    lines.push("|---|---|---|---|---|---|")
-    repeat order.len() with vi:
-        lg := order.get(vi)[0]
-        if !is salam(lg):
-            ratios := lang vs salam ratios(s, names, lg)
-            if ratios.len() > 0:
-                mut row := "| ".concat(lang label(lg))
-                row = row.concat(" | ").concat(xstr(stats.Mean(ratios)))
-                row = row.concat(" | ").concat(xstr(stats.Median(ratios)))
-                row = row.concat(" | ").concat(xstr(stats.Min(ratios)))
-                row = row.concat(" | ").concat(xstr(stats.Max(ratios)))
-                row = row.concat(" | ").concat(conv.FormatInt(ratios.len() as i64)).concat("/").concat(conv.FormatInt(names.len() as i64)).concat(" |")
-                lines.push(row)
-            end
-            ratios.free()
-        end
-    end
-    lines.push("")
-
     lines.push("## Per-program results (minimum ms)")
     lines.push("")
     mut hdr := "| Program |"
-    repeat order.len() with hi:
+    mut hi := 0
+    until hi < order.len():
         hdr = hdr.concat(" ").concat(lang label(order.get(hi)[0])).concat(" |")
+        hi = hi + 1
     end
     hdr = hdr.concat(" Fastest |")
     lines.push(hdr)
     lines.push(str.Repeat("|---", order.len() + 2).concat("|"))
-    repeat names.len() with pi:
+    mut pi := 0
+    until pi < names.len():
         name := names.get(pi)[0]
         mut row := "| ".concat(name)
-        repeat order.len() with li:
+        mut li := 0
+        until li < order.len():
             row = row.concat(" | ").concat(min cell(s, name, order.get(li)[0]))
+            li = li + 1
         end
         row = row.concat(" | ").concat(fastest cell(s, name, order))
         lines.push(row.concat(" |"))
+        pi = pi + 1
     end
     lines.push("")
     lines.push("Bold marks rows where a Salam backend is the fastest or tied for fastest.")
@@ -326,9 +477,5 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
     lines.push("- Measurements were taken on a single machine under normal background load;")
     lines.push("  small gaps between the compiled languages can be within run-to-run noise.")
 
-    result path := filepath.Join(cfg.root, "RESULTS.md")
-    if io.WriteLines(result path, lines) < 0:
-        io.EPrintln("bench: failed to write ".concat(result path))
-        os.Exit(1)
-    end
+    io.WriteLines(filepath.Join(cfg.root, "RESULTS.md"), lines)
 end

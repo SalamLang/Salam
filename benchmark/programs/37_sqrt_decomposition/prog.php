@@ -1,7 +1,5 @@
 <?php
 
-// phpcs:disable PSR1.Files.SideEffects -- benchmark script intentionally declares and runs
-
 $N = 2000000;
 $BLOCK = 1414;
 

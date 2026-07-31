@@ -53,7 +53,7 @@ for d in $SRC_DIRS; do SRCS="$SRCS src/$d/*.c"; done
 # shellcheck disable=SC2086
 "$EMCC" -O2 -Isrc $SRCS \
     -o "$OUT_DIR/salam-wa.js" \
-    --preload-file std@/std \
+    --preload-file ../std@/std \
     -s MODULARIZE=0 \
     -s ENVIRONMENT=web,worker,node \
     -s ALLOW_MEMORY_GROWTH=1 \

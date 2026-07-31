@@ -33,6 +33,9 @@ int ll_target_ptr_bits(const char *triple)
     static const char *w64[] = {"x86_64", "amd64",       "aarch64", "arm64",  "riscv64",
                                 "wasm64", "powerpc64",   "ppc64",   "mips64", "sparc64",
                                 "s390x",  "loongarch64", NULL};
+    /* Real LLVM backends with a 16-bit pointer datalayout (p:16). Checked
+     * before w32 so "avr"/"msp430" triples don't fall into a generic bucket. */
+    static const char *w16[] = {"msp430", "avr", NULL};
     static const char *w32[] = {
         "i386",  "i486",   "i586", "i686",    "wasm32",  "armv6", "armv7", "armv5",
         "thumb", "mipsel", "mips", "riscv32", "powerpc", "ppc",   "arm",   NULL};
@@ -40,6 +43,11 @@ int ll_target_ptr_bits(const char *triple)
         int i = 0;
         for (; w64[i]; i++)
             if (strstr(triple, w64[i])) return 64;
+    }
+    {
+        int i = 0;
+        for (; w16[i]; i++)
+            if (strstr(triple, w16[i])) return 16;
     }
     {
         int i = 0;

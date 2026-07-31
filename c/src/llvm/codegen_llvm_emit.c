@@ -179,13 +179,21 @@ static const char *ll_escape(ll_t *ll, const char *s, size_t len, size_t *arr_le
     return r;
 }
 
+#if SIZE_MAX > 0xFFFFFFFFu
+#define LL_STR_HASH_BASIS ((size_t)14695981039346656037ULL)
+#define LL_STR_HASH_PRIME ((size_t)1099511628211ULL)
+#else
+#define LL_STR_HASH_BASIS ((size_t)2166136261u)
+#define LL_STR_HASH_PRIME ((size_t)16777619u)
+#endif
+
 static size_t ll_str_hash(const char *s, size_t len)
 {
-    size_t h = 1469598103934665603u;
+    size_t h = LL_STR_HASH_BASIS;
     size_t i = 0;
     for (; i < len; i++) {
         h ^= (unsigned char)s[i];
-        h *= 1099511628211u;
+        h *= LL_STR_HASH_PRIME;
     }
     return h;
 }

@@ -320,7 +320,8 @@ static void fmt_step_leading(fmt_ctx_t *c, const token_t *t, token_kind_t k)
 static int fmt_current_column(const sb_t *out)
 {
     size_t i = out->len;
-    while (i > 0 && out->data[i - 1] != '\n') i--;
+    while (i > 0 && out->data[i - 1] != '\n')
+        i--;
     return (int)(out->len - i);
 }
 

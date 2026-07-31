@@ -193,6 +193,7 @@ int driver_build(options_t *opt)
         }
     }
 
+    const char *scratch = salam_scratch_dir();
     const char *cfiles[SALAM_MAX_INPUTS];
     int ncfiles = 0;
     const char *generated[SALAM_MAX_INPUTS * 2 + 2];
@@ -441,11 +442,11 @@ int driver_build(options_t *opt)
                 codegen_run(arena, log, program, sr, module, opt->safe, opt->debug_info,
                             b_srcpath[wi], modentry, opt->llvm_target);
             size_t pfxlen = strlen(SALAM_MOD_PREFIX);
-            size_t pathcap = pfxlen + strlen(module) + 3;
+            size_t pathcap = strlen(scratch) + 1 + pfxlen + strlen(module) + 3;
             char *cpath = (char *)arena_alloc(arena, pathcap);
             char *hpath = (char *)arena_alloc(arena, pathcap);
-            sal_snprintf(cpath, pathcap, "%s%s.c", SALAM_MOD_PREFIX, module);
-            sal_snprintf(hpath, pathcap, "%s%s.h", SALAM_MOD_PREFIX, module);
+            sal_snprintf(cpath, pathcap, "%s/%s%s.c", scratch, SALAM_MOD_PREFIX, module);
+            sal_snprintf(hpath, pathcap, "%s/%s%s.h", scratch, SALAM_MOD_PREFIX, module);
             if (!write_file(log, cpath, out->c_src) ||
                 !write_file(log, hpath, out->h_src)) {
                 all_ok = false;
@@ -509,7 +510,8 @@ int driver_build(options_t *opt)
                     sb_puts(&cmd, "/include");
                 }
 #endif
-                sb_puts(&cmd, " -c -I.");
+                sb_puts(&cmd, " -c -I. -I");
+                sb_put_shell_arg(&cmd, scratch);
                 sb_puts(&cmd, opt_flag);
                 sb_puts(&cmd, dbg_flag);
                 sb_putc(&cmd, ' ');
@@ -567,7 +569,9 @@ int driver_build(options_t *opt)
 #endif
         sb_puts(&cmd, opt_flag);
         sb_puts(&cmd, lto_flag);
-        sb_puts(&cmd, " -I. -o ");
+        sb_puts(&cmd, " -I. -I");
+        sb_put_shell_arg(&cmd, scratch);
+        sb_puts(&cmd, " -o ");
         sb_put_shell_arg(&cmd, output);
         if (opt->debug_info) {
             if (use_tcc)

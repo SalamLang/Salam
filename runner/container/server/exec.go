@@ -58,6 +58,8 @@ func runSalam(ctx context.Context, req runRequest, timeout time.Duration, reqID 
 }
 
 func buildSalamCmd(runCtx context.Context, req runRequest, srcPath, jobDir string) (*exec.Cmd, *capBuffer, *capBuffer) {
+	// #nosec G204 -- req.Engine/req.Language are validated against fixed allowlists in
+	// validateRunRequest before this is reached, and srcPath is server-generated (os.MkdirTemp).
 	cmd := exec.CommandContext(runCtx, salamBin, buildArgs(req, srcPath)...)
 	cmd.Dir = jobDir
 	cmd.Env = childEnv(jobDir)

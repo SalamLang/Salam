@@ -15,7 +15,7 @@ for f in ../tests/fa/*/*.salam; do
         skip=$((skip + 1))
         continue
     fi
-    rm -f salam_mod_*.* 2>/dev/null
+    rm -rf .salam-build 2>/dev/null
     "$SALAM" build "$f" --output="/tmp/$name.exe" --lang=fa --no-color --log-level=error >/dev/null 2>&1
     if [ -x "/tmp/$name.exe" ] && out=$("/tmp/$name.exe" 2>&1) && [ -n "$out" ]; then
         echo "PASS $name"
@@ -26,7 +26,8 @@ for f in ../tests/fa/*/*.salam; do
     fi
     rm -f "/tmp/$name.exe"
 done
-rm -f salam_mod_*.* salam_runtime.* 2>/dev/null
+rm -rf .salam-build 2>/dev/null
+rm -f salam_runtime.* 2>/dev/null
 echo "----------------------------------------"
 echo "RESULT: $pass passed, $fail failed, $skip skipped"
 [ "$fail" -eq 0 ]

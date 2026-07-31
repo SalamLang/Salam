@@ -4,7 +4,7 @@
 set -e
 . "$(dirname "$0")/lib.sh"
 salam_ensure_compiler
-rm -f salam_mod_*.c salam_mod_*.h
+rm -rf .salam-build
 "$SALAM" run tools/salam/gen-examples.salam
 EMCC="${EMCC:-emcc}"
 if ! command -v "$EMCC" >/dev/null 2>&1; then

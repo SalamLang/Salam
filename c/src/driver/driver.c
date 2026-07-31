@@ -69,6 +69,19 @@ bool resolve_color(int flag)
     return salam_isatty(salam_fileno(stderr)) != 0;
 }
 
+#define SALAM_SCRATCH_DIR ".salam-build"
+
+const char *salam_scratch_dir(void)
+{
+    if (salam_mkdir(SALAM_SCRATCH_DIR) != 0 && errno != EEXIST) {
+        /* Read-only cwd or similar; fall back so callers keep working the
+         * old way instead of failing outright. write_file() will surface
+         * the real error if "." isn't writable either. */
+        return ".";
+    }
+    return SALAM_SCRATCH_DIR;
+}
+
 static int write_xml(logger_t *log, const sb_t *sb, const char *xml_out, const char *what)
 {
     if (xml_out) {

@@ -7,11 +7,30 @@ import (
 	"time"
 )
 
+const maxRequestIDLen = 128
+
+// requestID reads the client-supplied X-Request-Id header and restricts it to a
+// safe charset so it can't be used to inject fake entries into the server log.
 func requestID(r *http.Request) string {
-	if id := r.Header.Get("X-Request-Id"); id != "" {
-		return id
+	id := r.Header.Get("X-Request-Id")
+	if id == "" || !isSafeRequestID(id) {
+		return "unknown"
 	}
-	return "unknown"
+	return id
+}
+
+func isSafeRequestID(id string) bool {
+	if len(id) > maxRequestIDLen {
+		return false
+	}
+	for _, c := range id {
+		safe := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == '-' || c == '_' || c == '.'
+		if !safe {
+			return false
+		}
+	}
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

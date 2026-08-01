@@ -339,6 +339,30 @@ jobs:
         with:
           persist-credentials: false
 
+      # The test suite builds+runs one native .exe per test case (hundreds of
+      # them), each a fresh file Windows Defender's real-time scanner inspects
+      # before it's allowed to execute. That per-process scan is the single
+      # biggest contributor to this job being far slower than the Linux/macOS
+      # builds for the same test suite - excluding the paths/binaries that
+      # matter here is the standard fix for GitHub-hosted Windows runners.
+      - name: Exclude build/test paths from Windows Defender
+        shell: pwsh
+        run: |
+          # Best-effort: some runner images/policies may reject these: don't
+          # let a blocked exclusion fail the whole build over a speed-up.
+          try {
+            Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+            Add-MpPreference -ExclusionPath "C:\msys64"
+            Add-MpPreference -ExclusionPath "$env:RUNNER_TEMP"
+            Add-MpPreference -ExclusionProcess "tcc.exe"
+            Add-MpPreference -ExclusionProcess "salam.exe"
+            Add-MpPreference -ExclusionProcess "gcc.exe"
+            Set-MpPreference -DisableRealtimeMonitoring $true
+            Write-Host "Windows Defender exclusions applied."
+          } catch {
+            Write-Host "::warning::Could not configure Windows Defender exclusions: $_"
+          }
+
       - name: Cache MSYS2 packages
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -691,6 +715,16 @@ jobs:
           New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" `
             -Name "AllowDevelopmentWithoutDevMode" -Value 1 -PropertyType DWord -Force | Out-Null
 
+      # Chocolatey's own resolve/download/checksum overhead makes a cold
+      # `choco install` take minutes for a single small package; caching the
+      # installed package skips all of that on every run after the first.
+      - name: Cache Chocolatey redis package
+        if: startsWith(github.event.head_commit.message, 'release:')
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\ProgramData\chocolatey\lib\redis
+          key: choco-redis-${{ runner.os }}-v1
+
       - name: Validate test suite (release gate)
         if: startsWith(github.event.head_commit.message, 'release:')
         shell: bash
@@ -701,7 +735,10 @@ jobs:
           # started by hand here. Launched (and left running) within this
           # same step/process tree, not a separate step, so there's no risk
           # of it being torn down by the runner's per-step Job Object.
-          choco install redis -y --no-progress --limit-output
+          # Skip the (slow) install entirely when the cache step above
+          # already restored a working copy.
+          REDIS_EXE=$(find /c/ProgramData/chocolatey -iname "redis-server.exe" 2>/dev/null | head -1)
+          [ -n "$REDIS_EXE" ] || choco install redis -y --no-progress --limit-output
           REDIS_EXE=$(find /c/ProgramData/chocolatey -iname "redis-server.exe" 2>/dev/null | head -1)
           if [ -z "$REDIS_EXE" ]; then
             echo "::error::redis-server.exe not found after choco install"

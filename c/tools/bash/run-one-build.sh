@@ -53,7 +53,7 @@ want=$(tr -d '\r' <"$exp")
 got=""
 _try=1
 while [ "$_try" -le 4 ]; do
-    got=$("$exe" 2>&1 | tr -d '\r')
+    got=$(timeout "${SALAM_TEST_TIMEOUT:-30}" "$exe" 2>&1 | tr -d '\r')
     if [ "$got" = "$want" ]; then break; fi
     case "$got" in *"Permission denied"* | "") sleep 1 ;; *) break ;; esac
     _try=$((_try + 1))

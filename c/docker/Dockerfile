@@ -70,7 +70,8 @@ USER salam
 ENTRYPOINT ["sh", "tools/bash/docker-dev.sh"]
 
 FROM toolchain AS builder
-COPY . .
+COPY c/ .
+COPY std/ ./std
 RUN make OUTDIR=. -j"$(nproc)" && make OUTDIR=. install PREFIX=/usr/local
 RUN salam version
 

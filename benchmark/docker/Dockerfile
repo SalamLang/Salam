@@ -1,4 +1,7 @@
 # syntax=docker/dockerfile:1
+#
+# Salam benchmark suite - reproducible cross-language toolchain image.
+#
 # checkov:skip=CKV_DOCKER_2:One-shot CLI benchmark runner, not a long-running service; no process to healthcheck.
 
 ARG ALPINE_VERSION=edge
@@ -12,8 +15,8 @@ RUN for i in 1 2 3 4 5; do \
         apk add --no-cache \
             build-base \
             g++ \
+            make \
             musl-dev \
-            gcompat \
             tcc \
             tcc-libs-static \
             clang${LLVM_VERSION} \
@@ -66,15 +69,15 @@ ENV GOCACHE=/tmp/go-cache GOPATH=/tmp/go CARGO_HOME=/tmp/cargo
 WORKDIR /repo
 
 FROM toolchain AS salam-builder
-COPY compiler /repo/compiler
-COPY std /repo/std
+COPY c /repo/c
+WORKDIR /repo/c
+RUN make -j"$(nproc)"
 WORKDIR /repo
-RUN chmod +x compiler/salam && sh compiler/tools/bash/build-compiler.sh
-RUN /repo/compiler/salam version
+RUN /repo/salam version
 
 FROM toolchain AS bench
-COPY --from=salam-builder /repo/compiler/salam /repo/salam
-COPY --from=salam-builder /repo/std /repo/std
+COPY --from=salam-builder /repo/salam /repo/salam
+COPY std /repo/std
 COPY benchmark /repo/benchmark
 
 ENV SALAM_BIN=/repo/salam \

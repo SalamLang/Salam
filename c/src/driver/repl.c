@@ -503,9 +503,9 @@ static bool repl_compile_pkg(arena_t *a, logger_t *lg, langpack_t *pack, options
     if (!sr || !sr->ok) return false;
     codegen_output_t *out = codegen_run(a, lg, prog, sr, pkg, false, false, src->path,
                                         langpack_entry(pack), NULL);
-    char cpath[64], hpath[64];
-    sal_snprintf(cpath, sizeof cpath, "salam_mod_%s.c", pkg);
-    sal_snprintf(hpath, sizeof hpath, "salam_mod_%s.h", pkg);
+    char cpath[80], hpath[80];
+    sal_snprintf(cpath, sizeof cpath, "%s/salam_mod_%s.c", salam_scratch_dir(), pkg);
+    sal_snprintf(hpath, sizeof hpath, "%s/salam_mod_%s.h", salam_scratch_dir(), pkg);
     FILE *f;
     if ((f = fopen(cpath, "wb"))) {
         fputs(out->c_src, f);
@@ -544,12 +544,16 @@ static bool repl_exec(const char *full_src, const char *cc, langpack_t *pack,
     }
     codegen_output_t *out = codegen_run(a, lg, prog, sr, "_repl_", false, false, sf.path,
                                         langpack_entry(pack), NULL);
+    const char *scratch = salam_scratch_dir();
+    char repl_c[80], repl_h[80];
+    sal_snprintf(repl_c, sizeof repl_c, "%s/salam_mod__repl_.c", scratch);
+    sal_snprintf(repl_h, sizeof repl_h, "%s/salam_mod__repl_.h", scratch);
     FILE *f;
-    if ((f = fopen("salam_mod__repl_.c", "wb"))) {
+    if ((f = fopen(repl_c, "wb"))) {
         fputs(out->c_src, f);
         fclose(f);
     }
-    if ((f = fopen("salam_mod__repl_.h", "wb"))) {
+    if ((f = fopen(repl_h, "wb"))) {
         fputs(out->h_src, f);
         fclose(f);
     }
@@ -565,18 +569,23 @@ static bool repl_exec(const char *full_src, const char *cc, langpack_t *pack,
     sb_t cmd;
     sb_init(&cmd);
     sb_puts(&cmd, cc);
-    sb_puts(&cmd, " -I. -o _salam_repl_");
+    sb_puts(&cmd, " -I. -I");
+    sb_put_shell_arg(&cmd, scratch);
+    sb_puts(&cmd, " -o _salam_repl_");
 #ifdef _WIN32
     sb_puts(&cmd, ".exe");
 #endif
-    sb_puts(&cmd, " salam_mod__repl_.c");
+    sb_putc(&cmd, ' ');
+    sb_put_shell_arg(&cmd, repl_c);
     {
         size_t i = 0;
         for (; i < sizeof(RT_PKGS) / sizeof(RT_PKGS[0]); i++)
             if (have_pkg[i]) {
-                sb_puts(&cmd, " salam_mod_");
-                sb_puts(&cmd, RT_PKGS[i]);
-                sb_puts(&cmd, ".c");
+                char pkg_c[80];
+                sal_snprintf(pkg_c, sizeof pkg_c, "%s/salam_mod_%s.c", scratch,
+                             RT_PKGS[i]);
+                sb_putc(&cmd, ' ');
+                sb_put_shell_arg(&cmd, pkg_c);
             }
     }
 #ifdef _WIN32
@@ -595,14 +604,14 @@ static bool repl_exec(const char *full_src, const char *cc, langpack_t *pack,
         (void)_src;
         fflush(stdout);
     }
-    remove("salam_mod__repl_.c");
-    remove("salam_mod__repl_.h");
+    remove(repl_c);
+    remove(repl_h);
     {
         size_t i = 0;
         for (; i < sizeof(RT_PKGS) / sizeof(RT_PKGS[0]); i++) {
-            char cp[64], hp[64];
-            sal_snprintf(cp, sizeof cp, "salam_mod_%s.c", RT_PKGS[i]);
-            sal_snprintf(hp, sizeof hp, "salam_mod_%s.h", RT_PKGS[i]);
+            char cp[80], hp[80];
+            sal_snprintf(cp, sizeof cp, "%s/salam_mod_%s.c", scratch, RT_PKGS[i]);
+            sal_snprintf(hp, sizeof hp, "%s/salam_mod_%s.h", scratch, RT_PKGS[i]);
             remove(cp);
             remove(hp);
         }

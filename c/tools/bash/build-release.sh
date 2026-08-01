@@ -11,18 +11,18 @@ echo ">> building compiler ($CC)"
 sh tools/bash/build-compiler.sh
 echo ">> staging $DIST"
 rm -rf "$DIST"
-mkdir -p "$DIST/bin" "$DIST/doc" "$DIST/examples"
+mkdir -p "$DIST/bin" "$DIST/doc" "$DIST/tests"
 cp salam "$DIST/bin/" 2>/dev/null || cp salam.exe "$DIST/bin/"
 cp ../README.md "$DIST/" 2>/dev/null || true
 cp doc/*.md "$DIST/doc/" 2>/dev/null || true
 EXAMPLE_DIRS="apps basics data editor-selected features games interop stdlib types webframework"
 for lang in en fa; do
-    mkdir -p "$DIST/examples/$lang"
+    mkdir -p "$DIST/tests/$lang"
     for d in $EXAMPLE_DIRS; do
-        cp -r "tests/$lang/$d" "$DIST/examples/$lang/$d" 2>/dev/null || true
+        cp -r "../tests/$lang/$d" "$DIST/tests/$lang/$d" 2>/dev/null || true
     done
 done
-find "$DIST/examples" \( -name '*.out' -o -name '*.expect' -o -name '*.buildonly' \) -delete 2>/dev/null || true
+find "$DIST/tests" \( -name '*.out' -o -name '*.expect' -o -name '*.buildonly' \) -delete 2>/dev/null || true
 echo ">> packaging"
 (cd dist && tar -czf "salam-$VERSION-$OS.tar.gz" "salam-$VERSION-$OS") 2>/dev/null &&
     echo "   dist/salam-$VERSION-$OS.tar.gz" ||

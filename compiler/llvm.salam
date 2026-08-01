@@ -1,5 +1,5 @@
-// Flat merge of the salam/llvm port (see salam/PORTING.md "Layout — FLAT"):
-// compiler/src/llvm/ — one package `llvm`, one file. Import alias for
+// Flat merge of the salam/llvm port (see salam/PORTING.md "Layout - FLAT"):
+// compiler/src/llvm/ - one package `llvm`, one file. Import alias for
 // consumers: `lv`. The backend's expr/stmt emitters are mutually recursive
 // with everything else, so the module is ported by three sequential agents
 // INTO THIS ONE FILE:
@@ -22,11 +22,11 @@
 //       lv_block_top, lv_stmt) and add the remaining functions as new
 //       privates in the same section. Do NOT re-port emit_defers,
 //       emit_return, emit_lambda, box_dyn/box_variant/unwrap_variant,
-//       conv/as_i1/common_ts, pick_overload, strconst, local_* — stage A
+//       conv/as_i1/common_ts, pick_overload, strconst, local_* - stage A
 //       owns them.
 //   C (DONE): native toolchain glue, replacing the NativeAvailable/NativeRun
 //       stubs. DEVIATION (deliberate): llvm_native.c's real body only
-//       exists behind `#ifdef SALAM_HAVE_LLVM` (the LLVM-C API) — the same
+//       exists behind `#ifdef SALAM_HAVE_LLVM` (the LLVM-C API) - the same
 //       flag this repo's own reference binary builds WITHOUT (that's why
 //       the pre-C-stage NativeAvailable stub already returned `false`,
 //       mirroring the `#else` branch exactly). Binding the ~30-function
@@ -35,7 +35,7 @@
 //       for a toolchain-glue port and unreachable in every build this repo
 //       ships. What IS reachable, and what stage B's own reference-binary
 //       log line ("native: clang %s -lm -o %s") already showed running,
-//       is driver/llvm_toolchain.c's `salam_llvm_toolchain` — the
+//       is driver/llvm_toolchain.c's `salam_llvm_toolchain` - the
 //       always-available fallback that shells out to `clang`/`opt`/`lli`
 //       directly on the .ll text via a generated bash script (its
 //       LLVM_OUT_EXEC case IS the observed `clang *.ll -lm -o <exe>`
@@ -44,14 +44,14 @@
 //       `emit_tool_cmd` (private `nt_*` helpers below), and NativeAvailable
 //       becomes a real "is a clang toolchain reachable" probe (bundled
 //       tool via sm.FindBundledTool, else a PATH `--version` check) instead
-//       of the C's compile-time `#ifdef` — matching what NativeAvailable is
+//       of the C's compile-time `#ifdef` - matching what NativeAvailable is
 //       actually FOR in this port (gating whether NativeRun can do
 //       anything). A new pub `NativeBuildScript(ll_path, opts): str` exposes
 //       the generated script text so llvm_test.salam can assert the exact
 //       command line NativeRun would run without requiring a real
 //       toolchain. `nt_to_tool_path`'s Windows branch (drive-letter ->
 //       `/mnt/x` for `wsl.exe -e bash`) skips the C's `_fullpath`
-//       resolve-to-absolute step (no equivalent Salam stdlib call) — a
+//       resolve-to-absolute step (no equivalent Salam stdlib call) - a
 //       relative path is passed through unresolved; harmless here since
 //       every caller in this port already supplies a resolved-enough path
 //       and the branch is compile-time-pruned out entirely on the
@@ -64,13 +64,12 @@
 //       its own (it's a thin LLD-library wrapper called only from there).
 //
 // C -> Salam decisions for this module (B/C must inherit these):
-// - ll_t -> `pub struct Lv` (all fields pub — E017). sema_result_t *sem is
+// - ll_t -> `pub struct Lv` (all fields pub - E017). sema_result_t *sem is
 //   NOT stored: thread `s &: sm.Sema` and `a &: at.Ast` through every
 //   function that needs them; parameter order is (v, s, a, ...), exactly
 //   like the codegen port's (g, s, a, ...).
 // - arena_t* and ll_fmt(...) are GONE: strings are values; call sites build
-//   text with `+` / co.I64Toa / co.U64Toa. NO co.Format in this module —
-//   IR text must be byte-exact, so everything is explicit concatenation.
+//   text with `+` / co.I64Toa / co.U64Toa. NO co.Format in this module - //   IR text must be byte-exact, so everything is explicit concatenation.
 // - "" is the C NULL for every str field/return (ts, ret_ts, this_ref,
 //   self_ts, cur_sp, cur_dbg, first_error, triple, env_ref, ...); 0 is the
 //   C NULL for every id (NodeId/SymId/SigId/ScopeId); local_find /
@@ -81,7 +80,7 @@
 //   `ll->b = &body` becomes: in_fn=true selects bb for out_b()/emit();
 //   emit_function/emit_lambda SAVE the builder HEADERS (StringBuilder is a
 //   {data,len,cap} value), install fresh builders, and restore after
-//   appending header+entry+allocas+body to bg — byte-identical nesting
+//   appending header+entry+allocas+body to bg - byte-identical nesting
 //   (inner ensure_fn'd functions land in bg before their caller, like C).
 //   NEVER alias two live builders; only header save/restore is safe.
 // - Value numbering: v.tmp -> "%t<N>" (new_tmp), v.lbl -> "L<N>_<tag>"
@@ -124,7 +123,7 @@ import sm "semantic.salam"
 import cg "codegen.salam"
 
 // ===== codegen_llvm.h =====
-// llvm_opt_level_t — order and values MUST stay identical to the C enum.
+// llvm_opt_level_t - order and values MUST stay identical to the C enum.
 pub const LV_OPT_O0 := 0
 pub const LV_OPT_O1 := 1
 pub const LV_OPT_O2 := 2
@@ -158,30 +157,32 @@ pub const LV_H_UPPER := 12
 pub const LV_H_LOWER := 13
 pub const LV_H_COUNT := 14
 
-// ll_target_ptr_bits' w64[]/w32[] (codegen_llvm_type.c), order kept.
+// ll_target_ptr_bits' w64[]/w16[]/w32[] (codegen_llvm_type.c), order kept.
 k_lv_w64 := [
-    "x86_64", "amd64", "aarch64", "arm64", "riscv64", "wasm64",
-    "powerpc64", "ppc64", "mips64", "sparc64", "s390x", "loongarch64"
+    "x86_64", "amd64", "aarch64", "arm64", "riscv64", "wasm64", "powerpc64", "ppc64", "mips64", "sparc64",
+    "s390x", "loongarch64"
 ] as str[12]
 
+// Real LLVM backends with a 16-bit pointer datalayout (p:16). Checked before
+// w32 so "avr"/"msp430" triples don't fall into a generic bucket.
+k_lv_w16 := ["msp430", "avr"] as str[2]
+
 k_lv_w32 := [
-    "i386", "i486", "i586", "i686", "wasm32", "armv6", "armv7", "armv5",
-    "thumb", "mipsel", "mips", "riscv32", "powerpc", "ppc", "arm"
+    "i386", "i486", "i586", "i686", "wasm32", "armv6", "armv7", "armv5", "thumb", "mipsel", "mips", "riscv32",
+    "powerpc", "ppc", "arm"
 ] as str[15]
 
 // ll_is_int's ints[] / ll_is_signed's uns[] (order kept).
 k_lv_ints := [
-    "bool", "char", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
-    "size"
+    "bool", "char", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "size"
 ] as str[11]
 
 k_lv_uns := ["u8", "u16", "u32", "u64", "size"] as str[5]
 
 // ll_extern_seen's prologue[] (codegen_llvm_decl.c), order kept.
 k_lv_prologue_externs := [
-    "printf", "dprintf", "strlen", "strcmp", "malloc", "memcpy", "realloc",
-    "free", "memmove", "abort", "exit", "snprintf", "strtol", "strtod",
-    "strstr", "write"
+    "printf", "dprintf", "strlen", "strcmp", "malloc", "memcpy", "realloc", "free", "memmove", "abort",
+    "exit", "snprintf", "strtol", "strtod", "strstr", "write"
 ] as str[16]
 
 // codegen_llvm_run_opts' rt_essentials[].
@@ -197,8 +198,8 @@ pub struct Options:
     pub output_mode: int = 0
     pub output_file: str = ""
     pub target_triple: str = ""
-    pub link_libs: Vector<str> = Vector {}   // consumed by NativeRun (-l/-framework/etc.)
-    pub link_kinds: Vector<str> = Vector {}  // "" | "framework" | "static", parallel to link_libs
+    pub link_libs: Vector<str> = Vector {} // consumed by NativeRun (-l/-framework/etc.)
+    pub link_kinds: Vector<str> = Vector {} // "" | "framework" | "static", parallel to link_libs
     pub nlink: int = 0
     pub sysroot: str = ""
 end
@@ -212,26 +213,26 @@ pub struct Output:
 end
 
 // ===== codegen_llvm_internal.h =====
-// llv_t — an emitted value: SSA/constant text + Salam typestring.
+// llv_t - an emitted value: SSA/constant text + Salam typestring.
 pub struct Llv:
     pub ref: str = ""
     pub ts: str = ""
 end
 
-// ll_addr_t — an address: pointer text + pointee typestring.
+// ll_addr_t - an address: pointer text + pointee typestring.
 pub struct LvAddr:
     pub ptr: str = ""
     pub ts: str = ""
 end
 
-// lvar_t — a named local/global slot.
+// lvar_t - a named local/global slot.
 pub struct LvVar:
     pub name: str = ""
     pub ptr: str = ""
     pub ts: str = ""
 end
 
-// lstr_t — an interned string constant.
+// lstr_t - an interned string constant.
 pub struct LvStr:
     pub bytes: str = ""
     pub len: int = 0
@@ -240,17 +241,17 @@ pub struct LvStr:
 end
 
 // ll_t (see the file header for every representation change).
-// Always create through NewLv()/new_lv0() — a bare `Lv {}` lacks hneed.
+// Always create through NewLv()/new_lv0() - a bare `Lv {}` lacks hneed.
 pub struct Lv:
     pub log: lg.Logger = lg.New(2, false)
     pub module: str = ""
     pub entry: str = ""
-    pub bg: str.StringBuilder = str.NewBuilder()    // sb_t *g
-    pub bb: str.StringBuilder = str.NewBuilder()    // sb_t *b (function body)
-    pub ba: str.StringBuilder = str.NewBuilder()    // sb_t *allocas
-    pub bhg: str.StringBuilder = str.NewBuilder()   // sb_t *hg
+    pub bg: str.StringBuilder = str.NewBuilder() // sb_t *g
+    pub bb: str.StringBuilder = str.NewBuilder() // sb_t *b (function body)
+    pub ba: str.StringBuilder = str.NewBuilder() // sb_t *allocas
+    pub bhg: str.StringBuilder = str.NewBuilder() // sb_t *hg
     pub bmeta: str.StringBuilder = str.NewBuilder() // sb_t *meta
-    pub in_fn: bool = false      // C: ll->b == &body / ll->allocas != NULL
+    pub in_fn: bool = false // C: ll->b == &body / ll->allocas != NULL
     pub tmp: int = 0
     pub lbl: int = 0
     pub term: bool = false
@@ -258,8 +259,8 @@ pub struct Lv:
     pub strings: Vector<LvStr> = Vector {}
     pub ret_ts: str = ""
     pub is_main: bool = false
-    pub brk: Vector<str> = Vector {}   // const char *brk[64] (see header)
-    pub cont: Vector<str> = Vector {}  // const char *cont[64]
+    pub brk: Vector<str> = Vector {} // const char *brk[64] (see header)
+    pub cont: Vector<str> = Vector {} // const char *cont[64]
     pub nloop: int = 0
     pub defers: Vector<int> = Vector {} // at.NodeIds of deferred stmts
     pub self_ts: str = ""
@@ -268,10 +269,10 @@ pub struct Lv:
     pub globals: Vector<LvVar> = Vector {}
     pub gdefer: Vector<int> = Vector {} // at.NodeIds of runtime-init decls
     pub extern_names: Vector<str> = Vector {}
-    pub pkg_scope: int = 0       // sm ScopeId (0 = C NULL)
+    pub pkg_scope: int = 0 // sm ScopeId (0 = C NULL)
     pub emitted: Vector<str> = Vector {}
     pub pkg_touched: Vector<int> = Vector {} // sm SymIds
-    pub cur_lambda: int = 0      // at.NodeId (0 = C NULL)
+    pub cur_lambda: int = 0 // at.NodeId (0 = C NULL)
     pub env_ref: str = ""
     pub env_ty: str = ""
     pub lam_n: int = 0
@@ -519,7 +520,7 @@ func safe_name(raw: str): str:
     ret r
 end
 
-// ll_attach_dbg — returns the ", !dbg !N" suffix instead of writing it.
+// ll_attach_dbg - returns the ", !dbg !N" suffix instead of writing it.
 func dbg_suffix(v &: Lv): str:
     if v.debug && str.Len(v.cur_dbg) > 0:
         ret ", !dbg " + v.cur_dbg
@@ -527,7 +528,7 @@ func dbg_suffix(v &: Lv): str:
     ret ""
 end
 
-// ll_emit — one two-space-indented instruction on the current body sink.
+// ll_emit - one two-space-indented instruction on the current body sink.
 func emit(v &: Lv, text: str):
     if v.term:
         ret
@@ -535,7 +536,7 @@ func emit(v &: Lv, text: str):
     out_b(v, "  " + text + dbg_suffix(v) + "\n")
 end
 
-// ll_emit_alloca — no term gate, no !dbg, goes to the allocas sink.
+// ll_emit_alloca - no term gate, no !dbg, goes to the allocas sink.
 func emit_alloca(v &: Lv, text: str):
     out_al(v, "  " + text + "\n")
 end
@@ -569,7 +570,7 @@ func new_lbl(v &: Lv, tag: str): str:
     ret r
 end
 
-// ll_error — message pre-formatted at the call site, clamped like the C's
+// ll_error - message pre-formatted at the call site, clamped like the C's
 // char buf[256].
 func lv_error(v &: Lv, a &: at.Ast, n: int, msg: str):
     v.ok = false
@@ -578,8 +579,7 @@ func lv_error(v &: Lv, a &: at.Ast, n: int, msg: str):
     if n != 0:
         nd := at.Get(a, n)
         if nd.begin_line != (0 as u32):
-            full = "LLVM backend (line " + co.U64Toa(nd.begin_line as u64) +
-                   "): " + body
+            full = "LLVM backend (line " + co.U64Toa(nd.begin_line as u64) + "): " + body
         end
     end
     if str.Len(v.first_error) == 0:
@@ -588,9 +588,9 @@ func lv_error(v &: Lv, a &: at.Ast, n: int, msg: str):
     lg.Log(v.log, lg.PH_CODEGEN, lg.LOG_ERROR, full)
 end
 
-// ll_escape — IR c"..." payload; arr_len = byte length + 1 (the \00).
+// ll_escape - IR c"..." payload; arr_len = byte length + 1 (the \00).
 func escape_bytes(sx: str, arr_len &: int):
-    // (split: see escape_text; ref-returning a pair is clumsy — the two
+    // (split: see escape_text; ref-returning a pair is clumsy - the two
     //  outputs are produced by escape_text + this length rule)
     arr_len = str.Len(sx) + 1
 end
@@ -614,10 +614,10 @@ func escape_text(sx: str): str:
     ret r
 end
 
-// ll_str_hash — FNV-1a with the C's exact constants (note the C's offset
-// basis literal 1469598103934665603 = 0x14650FB0739D0383).
+// ll_str_hash - FNV-1a 64-bit, matching the C's ll_str_hash on 64-bit hosts
+// (offset basis 14695981039346656037 = 0xCBF29CE484222325).
 func str_hash(sx: str): u64:
-    mut h := 0x14650FB0739D0383 as u64
+    mut h := 0xCBF29CE484222325 as u64
     n := str.Len(sx)
     mut i := 0
     until i < n:
@@ -628,7 +628,7 @@ func str_hash(sx: str): u64:
     ret h
 end
 
-// ll_strconst — dedup + emit "@.str.N = private unnamed_addr constant ...".
+// ll_strconst - dedup + emit "@.str.N = private unnamed_addr constant ...".
 func strconst(v &: Lv, sx: str): str:
     n := str.Len(sx)
     h := str_hash(sx)
@@ -642,8 +642,9 @@ func strconst(v &: Lv, sx: str): str:
     escape_bytes(sx, arr)
     esc := escape_text(sx)
     gref := "@.str." + co.I64Toa(v.strings.len() as i64)
-    out_g(v, gref + " = private unnamed_addr constant [" +
-             co.I64Toa(arr as i64) + " x i8] c\"" + esc + "\"\n")
+    out_g(
+        v, gref + " = private unnamed_addr constant [" + co.I64Toa(arr as i64) + " x i8] c\"" + esc + "\"\n"
+    )
     mut e2 := LvStr {}
     e2.bytes = sx
     e2.len = n
@@ -662,7 +663,7 @@ func local_add(v &: Lv, name: str, ptr2: str, ts: str):
     v.locals.push(lvv)
 end
 
-// ll_local_find — newest-first scan; returns index into v.locals, -1 = NULL.
+// ll_local_find - newest-first scan; returns index into v.locals, -1 = NULL.
 func local_find(v &: Lv, name: str): int:
     mut i := v.locals.len()
     until i > 0:
@@ -674,7 +675,7 @@ func local_find(v &: Lv, name: str): int:
     ret 0 - 1
 end
 
-// ll_global_find — returns index into v.globals, -1 = NULL.
+// ll_global_find - returns index into v.globals, -1 = NULL.
 func global_find(v &: Lv, name: str): int:
     repeat v.globals.len() with i:
         if str.Equals(v.globals.get(i)[0].name, name):
@@ -709,7 +710,7 @@ func int_bits(v &: Lv, ts: str): int:
     ret 32
 end
 
-// Host pointer width — the C's sizeof(void *) * 8 at compile time.
+// Host pointer width - the C's sizeof(void *) * 8 at compile time.
 func host_ptr_bits(): int:
     if SALAM_ARCH_X64 || SALAM_ARCH_ARM64:
         ret 64
@@ -726,6 +727,11 @@ func target_ptr_bits_of(triple: str): int:
     repeat 12 with i:
         if str.Contains(triple, k_lv_w64[i]):
             ret 64
+        end
+    end
+    repeat 2 with k:
+        if str.Contains(triple, k_lv_w16[k]):
+            ret 16
         end
     end
     repeat 15 with j:
@@ -797,7 +803,7 @@ func array_elem(ts: str): str:
     if lb < 0:
         ret ts
     end
-    // C: strchr(lb, ']') — first ']' at/after lb
+    // C: strchr(lb, ']') - first ']' at/after lb
     n := str.Len(ts)
     mut rb := 0 - 1
     mut p := lb
@@ -864,7 +870,7 @@ func struct_ltype(name: str): str:
     ret r
 end
 
-// ll_variant_push_trimmed + ll_variant_members — members clamp at 64
+// ll_variant_push_trimmed + ll_variant_members - members clamp at 64
 // entries of at most 159 bytes, exactly like the C's char[64][160].
 func variant_push_trimmed(ts: str, start0: int, end0: int, out2 &: Vector<str>):
     mut s0 := start0
@@ -980,8 +986,9 @@ func variant_cname(ts: str): str:
 end
 
 // ll_struct_layout
-func struct_layout(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str,
-                   out_size &: i64, out_align &: i64):
+func struct_layout(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, out_size &: i64, out_align &: i64
+):
     ssym := struct_sym(v, s, a, ts)
     mut off := 0 as i64
     mut maxalign := 1 as i64
@@ -1018,8 +1025,9 @@ func struct_layout(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str,
 end
 
 // ll_variant_layout_size
-func variant_layout_size(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str,
-                         out_size &: i64, out_align &: i64):
+func variant_layout_size(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, out_size &: i64, out_align &: i64
+):
     mut members := variant_members(ts)
     defer members.free()
     mut maxsz := 1 as i64
@@ -1040,8 +1048,9 @@ func variant_layout_size(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str,
 end
 
 // ll_type_layout
-func type_layout(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str,
-                 out_size &: i64, out_align &: i64):
+func type_layout(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, out_size &: i64, out_align &: i64
+):
     p := (v.ptr_bits / 8) as i64
     if str.Len(ts) == 0 || str.Equals(ts, "void"):
         out_size = 0 as i64
@@ -1133,7 +1142,7 @@ func sym_plain(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
     ret r
 end
 
-// ll_sym_qualified — try every '_'-suffix; accept when the symbol's type
+// ll_sym_qualified - try every '_'-suffix; accept when the symbol's type
 // string equals the full name.
 func sym_qualified(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
     n := str.Len(name)
@@ -1193,7 +1202,7 @@ func enum_sym(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
     ret 0
 end
 
-// ll_field_index — index among SYM_FIELDs; out_field = the field SymId.
+// ll_field_index - index among SYM_FIELDs; out_field = the field SymId.
 func field_index(s &: sm.Sema, ssym: int, field: str, out_field &: int): int:
     mut idx := 0
     members := sm.SymAt(s, ssym).members
@@ -1247,7 +1256,7 @@ func func_ret(ts: str): str:
     ret "void"
 end
 
-// ll_func_params — caller owns (and frees) the returned vector.
+// ll_func_params - caller owns (and frees) the returned vector.
 func func_params(ts: str): Vector<str>:
     mut out2 := Vector {} as Vector<str>
     if !str.StartsWith(ts, "func("):
@@ -1308,7 +1317,7 @@ func zero_of(ts: str): str:
     ret "zeroinitializer"
 end
 
-// ll_ty — Salam typestring -> LLVM type text.
+// ll_ty - Salam typestring -> LLVM type text.
 func ty_of(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): str:
     if str.Len(ts) == 0 || str.Equals(ts, "void"):
         ret "void"
@@ -1330,8 +1339,7 @@ func ty_of(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): str:
         ret "{ ptr, i64 }"
     end
     if idx_byte(ts, 91) >= 0:
-        ret "[" + co.I64Toa(array_dim(ts)) + " x " +
-            ty_of(v, s, a, array_elem(ts)) + "]"
+        ret "[" + co.I64Toa(array_dim(ts)) + " x " + ty_of(v, s, a, array_elem(ts)) + "]"
     end
     if str.Equals(ts, "f32"):
         ret "float"
@@ -1351,16 +1359,17 @@ func ty_of(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): str:
     ret "ptr"
 end
 
-// ll_conv — value conversion; the temp is allocated exactly where the C
-// allocates it (numbering fidelity — see the file header).
+// ll_conv - value conversion; the temp is allocated exactly where the C
+// allocates it (numbering fidelity - see the file header).
 func conv(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, to_ts: str): str:
     from := str.Len(val.ts) > 0 ? val.ts : "i32"
     if str.Equals(from, to_ts):
         ret val.ref
     end
     if str.StartsWith(to_ts, "dyn ") && struct_sym(v, s, a, from) != 0:
-        ret box_dyn(v, s, a, val,
-                    str.Substr(to_ts, 4, str.Len(to_ts) - 4))
+        ret box_dyn(
+            v, s, a, val, str.Substr(to_ts, 4, str.Len(to_ts) - 4)
+        )
     end
     fi := is_int_ts(from)
     ff := is_float(from)
@@ -1395,13 +1404,15 @@ func conv(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, to_ts: str): str:
         ret r
     end
     if fi && tf:
-        emit(v, r + " = " + (is_signed_ts(from) ? "sitofp" : "uitofp") + " " +
-                lf + " " + val.ref + " to " + lt)
+        emit(
+            v, r + " = " + (is_signed_ts(from) ? "sitofp" : "uitofp") + " " + lf + " " + val.ref + " to " + lt
+        )
         ret r
     end
     if ff && ti:
-        emit(v, r + " = " + (is_signed_ts(to_ts) ? "fptosi" : "fptoui") + " " +
-                lf + " " + val.ref + " to " + lt)
+        emit(
+            v, r + " = " + (is_signed_ts(to_ts) ? "fptosi" : "fptoui") + " " + lf + " " + val.ref + " to " + lt
+        )
         ret r
     end
     if fi && tp:
@@ -1449,11 +1460,13 @@ func as_i1(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv): str:
     end
     r := new_tmp(v)
     if is_float(val.ts):
-        emit(v, r + " = fcmp one " + ty_of(v, s, a, val.ts) + " " + val.ref +
-                ", 0.0")
+        emit(
+            v, r + " = fcmp one " + ty_of(v, s, a, val.ts) + " " + val.ref + ", 0.0"
+        )
     else:
-        emit(v, r + " = icmp ne " + ty_of(v, s, a, val.ts) + " " + val.ref +
-                ", 0")
+        emit(
+            v, r + " = icmp ne " + ty_of(v, s, a, val.ts) + " " + val.ref + ", 0"
+        )
     end
     ret r
 end
@@ -1492,17 +1505,16 @@ func datalayout(triple: str): str:
         ret dl_host()
     end
     win := str.Contains(triple, "windows")
-    mac := str.Contains(triple, "apple") || str.Contains(triple, "darwin") ||
-           str.Contains(triple, "macos")
+    mac := str.Contains(triple, "apple") || str.Contains(triple, "darwin") || str.Contains(triple, "macos")
     if str.Contains(triple, "x86_64") || str.Contains(triple, "amd64"):
         ret win ? dl_x64_win : (mac ? dl_x64_mac : dl_x64_elf)
     end
     if str.Contains(triple, "aarch64") || str.Contains(triple, "arm64"):
         ret mac ? dl_a64_mac : dl_a64_elf
     end
-    if !win && !mac &&
-       (str.Contains(triple, "i686") || str.Contains(triple, "i586") ||
-        str.Contains(triple, "i486") || str.Contains(triple, "i386")):
+    if !win && !mac && (
+        str.Contains(triple, "i686") || str.Contains(triple, "i586") || str.Contains(triple, "i486") || str.Contains(triple, "i386")
+    ):
         ret dl_x86_elf
     end
     if str.Contains(triple, "riscv64"):
@@ -1514,8 +1526,7 @@ end
 // ll_target_is_windows
 func target_is_windows_of(triple: str): bool:
     if str.Len(triple) > 0:
-        ret str.Contains(triple, "windows") || str.Contains(triple, "mingw") ||
-            str.Contains(triple, "win32")
+        ret str.Contains(triple, "windows") || str.Contains(triple, "mingw") || str.Contains(triple, "win32")
     end
     if SALAM_OS_WINDOWS:
         ret true
@@ -1524,7 +1535,7 @@ func target_is_windows_of(triple: str): bool:
     end
 end
 
-// pl_widen — helper-local i32 -> usize widening (writes into ll->hg).
+// pl_widen - helper-local i32 -> usize widening (writes into ll->hg).
 func pl_widen(v &: Lv, src: str, dst: str): str:
     if v.ptr_bits <= 32:
         ret src
@@ -1536,17 +1547,20 @@ end
 // ll_emit_prologue
 func emit_prologue(v &: Lv):
     u := v.usize
-    out_g(v, "; Salam -> LLVM IR (textual). usize = " + u + " (" +
-             (v.ptr_bits == 32 ? "32" : "64") + "-bit target).\n")
+    out_g(
+        v, "; Salam -> LLVM IR (textual). usize = " + u + " (" + (v.ptr_bits == 32 ? "32" : "64") + "-bit target).\n"
+    )
     out_g(v, "declare i32 @printf(ptr, ...) nounwind\n")
     out_g(v, "declare i32 @dprintf(i32, ptr, ...) nounwind\n")
     out_g(v, "declare i64 @write(i32, ptr, i64) nounwind\n")
-    out_g(v, "declare " + u +
-             " @strlen(ptr) nounwind willreturn memory(argmem: read)\n")
+    out_g(
+        v, "declare " + u + " @strlen(ptr) nounwind willreturn memory(argmem: read)\n"
+    )
     out_g(v, "declare i32 @strcmp(ptr, ptr) nounwind willreturn memory(argmem: read)\n")
     out_g(v, "declare noalias ptr @malloc(" + u + ") nounwind allocsize(0)\n")
-    out_g(v, "declare noalias ptr @realloc(ptr, " + u +
-             ") nounwind allocsize(1)\n")
+    out_g(
+        v, "declare noalias ptr @realloc(ptr, " + u + ") nounwind allocsize(1)\n"
+    )
     out_g(v, "declare void @free(ptr) nounwind\n")
     out_g(v, "declare ptr @memcpy(ptr, ptr, " + u + ") nounwind\n")
     out_g(v, "declare ptr @memmove(ptr, ptr, " + u + ") nounwind\n")
@@ -1569,8 +1583,9 @@ func emit_substr(v &: Lv):
     out_hg(v, "  %t = add " + u + " " + l + ", 1\n")
     out_hg(v, "  %buf = call ptr @malloc(" + u + " %t)\n")
     out_hg(v, "  %src = getelementptr i8, ptr %s, " + u + " " + so + "\n")
-    out_hg(v, "  %c = call ptr @memcpy(ptr %buf, ptr %src, " + u + " " + l +
-              ")\n")
+    out_hg(
+        v, "  %c = call ptr @memcpy(ptr %buf, ptr %src, " + u + " " + l + ")\n"
+    )
     out_hg(v, "  %e = getelementptr i8, ptr %buf, " + u + " " + l + "\n")
     out_hg(v, "  store i8 0, ptr %e\n  ret ptr %buf\n}\n\n")
 end
@@ -1578,78 +1593,25 @@ end
 // ll_emit_strcat
 func emit_strcat(v &: Lv):
     u := v.usize
-    out_hg(v, "define internal noalias ptr @salam_ll_strcat(ptr %a, ptr %b) nounwind willreturn nofree {\n" +
-              "entry:\n" +
-              "  %la = call " + u + " @strlen(ptr %a)\n" +
-              "  %lb = call " + u + " @strlen(ptr %b)\n" +
-              "  %sum = add " + u + " %la, %lb\n" +
-              "  %tot = add " + u + " %sum, 1\n" +
-              "  %buf = call ptr @malloc(" + u + " %tot)\n" +
-              "  %c1 = call ptr @memcpy(ptr %buf, ptr %a, " + u + " %la)\n" +
-              "  %end = getelementptr i8, ptr %buf, " + u + " %la\n" +
-              "  %lb1 = add " + u + " %lb, 1\n" +
-              "  %c2 = call ptr @memcpy(ptr %end, ptr %b, " + u + " %lb1)\n" +
-              "  ret ptr %buf\n}\n\n")
+    out_hg(
+        v, "define internal noalias ptr @salam_ll_strcat(ptr %a, ptr %b) nounwind willreturn nofree {\n" + "entry:\n" + "  %la = call " + u + " @strlen(ptr %a)\n" + "  %lb = call " + u + " @strlen(ptr %b)\n" + "  %sum = add " + u + " %la, %lb\n" + "  %tot = add " + u + " %sum, 1\n" + "  %buf = call ptr @malloc(" + u + " %tot)\n" + "  %c1 = call ptr @memcpy(ptr %buf, ptr %a, " + u + " %la)\n" + "  %end = getelementptr i8, ptr %buf, " + u + " %la\n" + "  %lb1 = add " + u + " %lb, 1\n" + "  %c2 = call ptr @memcpy(ptr %end, ptr %b, " + u + " %lb1)\n" + "  ret ptr %buf\n}\n\n"
+    )
 end
 
 // ll_emit_isws
 func emit_isws(v &: Lv):
-    out_hg(v, "define internal i1 @salam_ll_isws(i8 %c) nounwind willreturn memory(none) {\n" +
-              "entry:\n" +
-              "  %s32 = icmp eq i8 %c, 32\n" +
-              "  %s9 = icmp eq i8 %c, 9\n" +
-              "  %s10 = icmp eq i8 %c, 10\n" +
-              "  %s13 = icmp eq i8 %c, 13\n" +
-              "  %o1 = or i1 %s32, %s9\n" +
-              "  %o2 = or i1 %o1, %s10\n" +
-              "  %o3 = or i1 %o2, %s13\n" +
-              "  ret i1 %o3\n}\n\n")
+    out_hg(
+        v, "define internal i1 @salam_ll_isws(i8 %c) nounwind willreturn memory(none) {\n" + "entry:\n" + "  %s32 = icmp eq i8 %c, 32\n" + "  %s9 = icmp eq i8 %c, 9\n" + "  %s10 = icmp eq i8 %c, 10\n" + "  %s13 = icmp eq i8 %c, 13\n" + "  %o1 = or i1 %s32, %s9\n" + "  %o2 = or i1 %o1, %s10\n" + "  %o3 = or i1 %o2, %s13\n" + "  ret i1 %o3\n}\n\n"
+    )
 end
 
 // ll_emit_trim
 func emit_trim(v &: Lv):
     need(v, LV_H_ISWS)
     u := v.usize
-    out_hg(v, "define internal noalias ptr @salam_ll_trim(ptr %s) nounwind willreturn nofree {\n" +
-              "entry:\n" +
-              "  %n = call " + u + " @strlen(ptr %s)\n" +
-              "  br label %f\n" +
-              "f:\n" +
-              "  %a = phi " + u + " [ 0, %entry ], [ %an, %fbody ]\n" +
-              "  %c1 = icmp ult " + u + " %a, %n\n" +
-              "  br i1 %c1, label %fchk, label %b\n" +
-              "fchk:\n" +
-              "  %p1 = getelementptr i8, ptr %s, " + u + " %a\n" +
-              "  %ch1 = load i8, ptr %p1\n" +
-              "  %w1 = call i1 @salam_ll_isws(i8 %ch1)\n" +
-              "  br i1 %w1, label %fbody, label %b\n" +
-              "fbody:\n" +
-              "  %an = add " + u + " %a, 1\n" +
-              "  br label %f\n" +
-              "b:\n" +
-              "  br label %r\n" +
-              "r:\n" +
-              "  %e = phi " + u + " [ %n, %b ], [ %en, %rbody ]\n" +
-              "  %c2 = icmp ugt " + u + " %e, %a\n" +
-              "  br i1 %c2, label %rchk, label %done\n" +
-              "rchk:\n" +
-              "  %em1 = sub " + u + " %e, 1\n" +
-              "  %p2 = getelementptr i8, ptr %s, " + u + " %em1\n" +
-              "  %ch2 = load i8, ptr %p2\n" +
-              "  %w2 = call i1 @salam_ll_isws(i8 %ch2)\n" +
-              "  br i1 %w2, label %rbody, label %done\n" +
-              "rbody:\n" +
-              "  %en = sub " + u + " %e, 1\n" +
-              "  br label %r\n" +
-              "done:\n" +
-              "  %len = sub " + u + " %e, %a\n" +
-              "  %tot = add " + u + " %len, 1\n" +
-              "  %buf = call ptr @malloc(" + u + " %tot)\n" +
-              "  %src = getelementptr i8, ptr %s, " + u + " %a\n" +
-              "  %cp = call ptr @memcpy(ptr %buf, ptr %src, " + u + " %len)\n" +
-              "  %endp = getelementptr i8, ptr %buf, " + u + " %len\n" +
-              "  store i8 0, ptr %endp\n" +
-              "  ret ptr %buf\n}\n\n")
+    out_hg(
+        v, "define internal noalias ptr @salam_ll_trim(ptr %s) nounwind willreturn nofree {\n" + "entry:\n" + "  %n = call " + u + " @strlen(ptr %s)\n" + "  br label %f\n" + "f:\n" + "  %a = phi " + u + " [ 0, %entry ], [ %an, %fbody ]\n" + "  %c1 = icmp ult " + u + " %a, %n\n" + "  br i1 %c1, label %fchk, label %b\n" + "fchk:\n" + "  %p1 = getelementptr i8, ptr %s, " + u + " %a\n" + "  %ch1 = load i8, ptr %p1\n" + "  %w1 = call i1 @salam_ll_isws(i8 %ch1)\n" + "  br i1 %w1, label %fbody, label %b\n" + "fbody:\n" + "  %an = add " + u + " %a, 1\n" + "  br label %f\n" + "b:\n" + "  br label %r\n" + "r:\n" + "  %e = phi " + u + " [ %n, %b ], [ %en, %rbody ]\n" + "  %c2 = icmp ugt " + u + " %e, %a\n" + "  br i1 %c2, label %rchk, label %done\n" + "rchk:\n" + "  %em1 = sub " + u + " %e, 1\n" + "  %p2 = getelementptr i8, ptr %s, " + u + " %em1\n" + "  %ch2 = load i8, ptr %p2\n" + "  %w2 = call i1 @salam_ll_isws(i8 %ch2)\n" + "  br i1 %w2, label %rbody, label %done\n" + "rbody:\n" + "  %en = sub " + u + " %e, 1\n" + "  br label %r\n" + "done:\n" + "  %len = sub " + u + " %e, %a\n" + "  %tot = add " + u + " %len, 1\n" + "  %buf = call ptr @malloc(" + u + " %tot)\n" + "  %src = getelementptr i8, ptr %s, " + u + " %a\n" + "  %cp = call ptr @memcpy(ptr %buf, ptr %src, " + u + " %len)\n" + "  %endp = getelementptr i8, ptr %buf, " + u + " %len\n" + "  store i8 0, ptr %endp\n" + "  ret ptr %buf\n}\n\n"
+    )
 end
 
 // ll_emit_repeat
@@ -1672,18 +1634,21 @@ func emit_repeat(v &: Lv):
     out_hg(v, "  %c0 = call ptr @memcpy(ptr %buf, ptr %s, " + u + " %slen)\n")
     out_hg(v, "  br label %loop\n")
     out_hg(v, "loop:\n")
-    out_hg(v, "  %filled = phi " + u +
-              " [ %slen, %compute ], [ %newfilled, %body ]\n")
+    out_hg(
+        v, "  %filled = phi " + u + " [ %slen, %compute ], [ %newfilled, %body ]\n"
+    )
     out_hg(v, "  %done = icmp uge " + u + " %filled, %total\n")
     out_hg(v, "  br i1 %done, label %finish, label %body\n")
     out_hg(v, "body:\n")
     out_hg(v, "  %remain = sub " + u + " %total, %filled\n")
     out_hg(v, "  %lt = icmp ult " + u + " %filled, %remain\n")
-    out_hg(v, "  %chunk = select i1 %lt, " + u + " %filled, " + u +
-              " %remain\n")
+    out_hg(
+        v, "  %chunk = select i1 %lt, " + u + " %filled, " + u + " %remain\n"
+    )
     out_hg(v, "  %dst = getelementptr i8, ptr %buf, " + u + " %filled\n")
-    out_hg(v, "  %cc = call ptr @memcpy(ptr %dst, ptr %buf, " + u +
-              " %chunk)\n")
+    out_hg(
+        v, "  %cc = call ptr @memcpy(ptr %dst, ptr %buf, " + u + " %chunk)\n"
+    )
     out_hg(v, "  %newfilled = add " + u + " %filled, %chunk\n")
     out_hg(v, "  br label %loop\n")
     out_hg(v, "finish:\n")
@@ -1694,8 +1659,9 @@ end
 // ll_emit_case
 func emit_case(v &: Lv, fname: str, lo: int, hi: int, delta: int):
     u := v.usize
-    out_hg(v, "define internal noalias ptr @" + fname +
-              "(ptr %s) nounwind willreturn nofree {\nentry:\n")
+    out_hg(
+        v, "define internal noalias ptr @" + fname + "(ptr %s) nounwind willreturn nofree {\nentry:\n"
+    )
     out_hg(v, "  %n = call " + u + " @strlen(ptr %s)\n")
     out_hg(v, "  %tot = add " + u + " %n, 1\n")
     out_hg(v, "  %buf = call ptr @malloc(" + u + " %tot)\n")
@@ -1732,130 +1698,60 @@ end
 
 // ll_emit_strhash
 func emit_strhash(v &: Lv):
-    out_hg(v, "define internal i64 @salam_ll_strhash(ptr %s) nounwind willreturn memory(argmem: read) {\n" +
-              "entry:\n  br label %loop\n" +
-              "loop:\n" +
-              "  %j = phi i64 [ 0, %entry ], [ %jn, %body ]\n" +
-              "  %h = phi i64 [ 14695981039346656037, %entry ], [ %hn, %body ]\n" +
-              "  %p = getelementptr i8, ptr %s, i64 %j\n" +
-              "  %c8 = load i8, ptr %p\n" +
-              "  %z = icmp eq i8 %c8, 0\n" +
-              "  br i1 %z, label %done, label %body\n" +
-              "body:\n" +
-              "  %c = zext i8 %c8 to i64\n" +
-              "  %hm = mul i64 %h, 1099511628211\n" +
-              "  %hn = add i64 %hm, %c\n" +
-              "  %jn = add i64 %j, 1\n" +
-              "  br label %loop\n" +
-              "done:\n  ret i64 %h\n}\n\n")
+    out_hg(
+        v, "define internal i64 @salam_ll_strhash(ptr %s) nounwind willreturn memory(argmem: read) {\n" + "entry:\n  br label %loop\n" + "loop:\n" + "  %j = phi i64 [ 0, %entry ], [ %jn, %body ]\n" + "  %h = phi i64 [ 14695981039346656037, %entry ], [ %hn, %body ]\n" + "  %p = getelementptr i8, ptr %s, i64 %j\n" + "  %c8 = load i8, ptr %p\n" + "  %z = icmp eq i8 %c8, 0\n" + "  br i1 %z, label %done, label %body\n" + "body:\n" + "  %c = zext i8 %c8 to i64\n" + "  %hm = mul i64 %h, 1099511628211\n" + "  %hn = add i64 %hm, %c\n" + "  %jn = add i64 %j, 1\n" + "  br label %loop\n" + "done:\n  ret i64 %h\n}\n\n"
+    )
 end
 
 // ll_emit_inthash
 func emit_inthash(v &: Lv):
-    out_hg(v, "define internal i64 @salam_ll_inthash(i64 %x) nounwind willreturn memory(none) {\n" +
-              "entry:\n" +
-              "  %h0 = add i64 %x, 14695981039346656037\n" +
-              "  %h1 = mul i64 %h0, 1099511628211\n" +
-              "  %h2 = add i64 %h1, 1099511628211\n" +
-              "  %h3 = mul i64 %h2, 1099511628211\n" +
-              "  ret i64 %h3\n}\n\n")
+    out_hg(
+        v, "define internal i64 @salam_ll_inthash(i64 %x) nounwind willreturn memory(none) {\n" + "entry:\n" + "  %h0 = add i64 %x, 14695981039346656037\n" + "  %h1 = mul i64 %h0, 1099511628211\n" + "  %h2 = add i64 %h1, 1099511628211\n" + "  %h3 = mul i64 %h2, 1099511628211\n" + "  ret i64 %h3\n}\n\n"
+    )
 end
 
 // ll_emit_i64str
 func emit_i64str(v &: Lv):
     u := v.usize
     out_hg(v, "@.sfmt.lld = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n")
-    out_hg(v, "define internal noalias ptr @salam_ll_i64str(i64 %v) nounwind willreturn nofree {\n" +
-              "entry:\n" +
-              "  %b = call ptr @malloc(" + u + " 32)\n" +
-              "  %r = call i32 (ptr, " + u + ", ptr, ...) @snprintf(ptr %b, " +
-              u + " 32, ptr @.sfmt.lld, i64 %v)\n" +
-              "  ret ptr %b\n}\n\n")
+    out_hg(
+        v, "define internal noalias ptr @salam_ll_i64str(i64 %v) nounwind willreturn nofree {\n" + "entry:\n" + "  %b = call ptr @malloc(" + u + " 32)\n" + "  %r = call i32 (ptr, " + u + ", ptr, ...) @snprintf(ptr %b, " + u + " 32, ptr @.sfmt.lld, i64 %v)\n" + "  ret ptr %b\n}\n\n"
+    )
 end
 
 // ll_emit_u64str
 func emit_u64str(v &: Lv):
     u := v.usize
     out_hg(v, "@.sfmt.llu = private unnamed_addr constant [5 x i8] c\"%llu\\00\"\n")
-    out_hg(v, "define internal noalias ptr @salam_ll_u64str(i64 %v) nounwind willreturn nofree {\n" +
-              "entry:\n" +
-              "  %b = call ptr @malloc(" + u + " 32)\n" +
-              "  %r = call i32 (ptr, " + u + ", ptr, ...) @snprintf(ptr %b, " +
-              u + " 32, ptr @.sfmt.llu, i64 %v)\n" +
-              "  ret ptr %b\n}\n\n")
+    out_hg(
+        v, "define internal noalias ptr @salam_ll_u64str(i64 %v) nounwind willreturn nofree {\n" + "entry:\n" + "  %b = call ptr @malloc(" + u + " 32)\n" + "  %r = call i32 (ptr, " + u + ", ptr, ...) @snprintf(ptr %b, " + u + " 32, ptr @.sfmt.llu, i64 %v)\n" + "  ret ptr %b\n}\n\n"
+    )
 end
 
 // ll_emit_f64str
 func emit_f64str(v &: Lv):
     u := v.usize
     out_hg(v, "@.sfmt.g = private unnamed_addr constant [3 x i8] c\"%g\\00\"\n")
-    out_hg(v, "define internal noalias ptr @salam_ll_f64str(double %v) nounwind willreturn nofree {\n" +
-              "entry:\n" +
-              "  %b = call ptr @malloc(" + u + " 32)\n" +
-              "  %r = call i32 (ptr, " + u + ", ptr, ...) @snprintf(ptr %b, " +
-              u + " 32, ptr @.sfmt.g, double %v)\n" +
-              "  ret ptr %b\n}\n\n")
+    out_hg(
+        v, "define internal noalias ptr @salam_ll_f64str(double %v) nounwind willreturn nofree {\n" + "entry:\n" + "  %b = call ptr @malloc(" + u + " 32)\n" + "  %r = call i32 (ptr, " + u + ", ptr, ...) @snprintf(ptr %b, " + u + " 32, ptr @.sfmt.g, double %v)\n" + "  ret ptr %b\n}\n\n"
+    )
 end
 
 // ll_emit_charstr
 func emit_charstr(v &: Lv):
-    out_hg(v, "define internal noalias ptr @salam_ll_charstr(i32 %c) nounwind willreturn nofree {\n" +
-              "entry:\n" +
-              "  %b = call ptr @malloc(" + v.usize + " 2)\n" +
-              "  %t = trunc i32 %c to i8\n" +
-              "  store i8 %t, ptr %b\n" +
-              "  %p1 = getelementptr i8, ptr %b, i64 1\n" +
-              "  store i8 0, ptr %p1\n" +
-              "  ret ptr %b\n}\n\n")
+    out_hg(
+        v, "define internal noalias ptr @salam_ll_charstr(i32 %c) nounwind willreturn nofree {\n" + "entry:\n" + "  %b = call ptr @malloc(" + v.usize + " 2)\n" + "  %t = trunc i32 %c to i8\n" + "  store i8 %t, ptr %b\n" + "  %p1 = getelementptr i8, ptr %b, i64 1\n" + "  store i8 0, ptr %p1\n" + "  ret ptr %b\n}\n\n"
+    )
 end
 
 // ll_emit_outbuf
 func emit_outbuf(v &: Lv):
-    out_hg(v, "@salam_ob = internal global [65536 x i8] zeroinitializer\n" +
-              "@salam_obn = internal global i64 0\n" +
-              "@stdout = external global ptr\n" +
-              "declare i32 @fflush(ptr) nounwind\n" +
-              "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n" +
-              "define internal void @salam_out_flush() nounwind {\n" +
-              "entry:\n" +
-              "  %n = load i64, ptr @salam_obn\n" +
-              "  %z = icmp eq i64 %n, 0\n" +
-              "  br i1 %z, label %done, label %do\n" +
-              "do:\n" +
-              "  %r = call i64 @write(i32 1, ptr @salam_ob, i64 %n)\n" +
-              "  store i64 0, ptr @salam_obn\n" +
-              "  br label %done\n" +
-              "done:\n" +
-              "  ret void\n" +
-              "}\n" +
-              "define internal void @salam_out_write(ptr %s, i64 %n) nounwind {\n" +
-              "entry:\n" +
-              "  %obn = load i64, ptr @salam_obn\n" +
-              "  %sum = add i64 %obn, %n\n" +
-              "  %over = icmp ugt i64 %sum, 65536\n" +
-              "  br i1 %over, label %flush, label %chk\n" +
-              "flush:\n" +
-              "  call void @salam_out_flush()\n" +
-              "  br label %chk\n" +
-              "chk:\n" +
-              "  %big = icmp uge i64 %n, 65536\n" +
-              "  br i1 %big, label %direct, label %copy\n" +
-              "direct:\n" +
-              "  %rd = call i64 @write(i32 1, ptr %s, i64 %n)\n" +
-              "  ret void\n" +
-              "copy:\n" +
-              "  %obn2 = load i64, ptr @salam_obn\n" +
-              "  %dst = getelementptr inbounds [65536 x i8], ptr @salam_ob, i64 0, i64 %obn2\n" +
-              "  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %s, i64 %n, i1 false)\n" +
-              "  %newn = add i64 %obn2, %n\n" +
-              "  store i64 %newn, ptr @salam_obn\n" +
-              "  ret void\n" +
-              "}\n" +
-              "@llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] " +
-              "[{ i32, ptr, ptr } { i32 65535, ptr @salam_out_flush, ptr null }]\n\n")
+    out_hg(
+        v, "@salam_ob = internal global [65536 x i8] zeroinitializer\n" + "@salam_obn = internal global i64 0\n" + "@stdout = external global ptr\n" + "declare i32 @fflush(ptr) nounwind\n" + "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n" + "define internal void @salam_out_flush() nounwind {\n" + "entry:\n" + "  %n = load i64, ptr @salam_obn\n" + "  %z = icmp eq i64 %n, 0\n" + "  br i1 %z, label %done, label %do\n" + "do:\n" + "  %r = call i64 @write(i32 1, ptr @salam_ob, i64 %n)\n" + "  store i64 0, ptr @salam_obn\n" + "  br label %done\n" + "done:\n" + "  ret void\n" + "}\n" + "define internal void @salam_out_write(ptr %s, i64 %n) nounwind {\n" + "entry:\n" + "  %obn = load i64, ptr @salam_obn\n" + "  %sum = add i64 %obn, %n\n" + "  %over = icmp ugt i64 %sum, 65536\n" + "  br i1 %over, label %flush, label %chk\n" + "flush:\n" + "  call void @salam_out_flush()\n" + "  br label %chk\n" + "chk:\n" + "  %big = icmp uge i64 %n, 65536\n" + "  br i1 %big, label %direct, label %copy\n" + "direct:\n" + "  %rd = call i64 @write(i32 1, ptr %s, i64 %n)\n" + "  ret void\n" + "copy:\n" + "  %obn2 = load i64, ptr @salam_obn\n" + "  %dst = getelementptr inbounds [65536 x i8], ptr @salam_ob, i64 0, i64 %obn2\n" + "  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %s, i64 %n, i1 false)\n" + "  %newn = add i64 %obn2, %n\n" + "  store i64 %newn, ptr @salam_obn\n" + "  ret void\n" + "}\n" + "@llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] " + "[{ i32, ptr, ptr } { i32 65535, ptr @salam_out_flush, ptr null }]\n\n"
+    )
 end
 
-// ll_need — the LL_HELPER_EMIT[] dispatch as an if/else chain.
+// ll_need - the LL_HELPER_EMIT[] dispatch as an if/else chain.
 func need(v &: Lv, which: int):
     if v.hneed.get(which)[0]:
         ret
@@ -1915,15 +1811,13 @@ func toplevel(v &: Lv, s &: sm.Sema, a &: at.Ast, d: int):
                 emit_function(v, s, a, m, ssym)
             end
         end
-    else k == at.AST_ENUM_DEF || k == at.AST_CONST_DECL ||
-         k == at.AST_VAR_DECL || k == at.AST_INTERFACE_DEF ||
-         k == at.AST_IMPL_DEF || k == at.AST_IMPORT || k == at.AST_LINK ||
-         k == at.AST_TYPE_ALIAS:
+    else k == at.AST_ENUM_DEF || k == at.AST_CONST_DECL || k == at.AST_VAR_DECL || k == at.AST_INTERFACE_DEF || k == at.AST_IMPL_DEF || k == at.AST_IMPORT || k == at.AST_LINK || k == at.AST_TYPE_ALIAS:
         // nothing at the top level
         _k := k
     else:
-        lv_error(v, a, d, "top-level " + at.KindName(k) +
-                          " (layout/unsupported)")
+        lv_error(
+            v, a, d, "top-level " + at.KindName(k) + " (layout/unsupported)"
+        )
     end
 end
 
@@ -1974,7 +1868,7 @@ func emit_struct_types(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
     out_g(v, "\n")
 end
 
-// ll_mangle — "" owner = the C NULL; sig 0 = the C NULL.
+// ll_mangle - "" owner = the C NULL; sig 0 = the C NULL.
 func mangle(v &: Lv, s &: sm.Sema, owner: str, fn_name: str, sig: int): str:
     if str.Len(owner) == 0 && str.Equals(fn_name, v.entry):
         ret "main"
@@ -1998,10 +1892,11 @@ func mangle(v &: Lv, s &: sm.Sema, owner: str, fn_name: str, sig: int): str:
     ret r
 end
 
-// ll_pick_overload — first exact arg-typestring match; else first
+// ll_pick_overload - first exact arg-typestring match; else first
 // arity-compatible; else overload 0.
-func pick_overload(v &: Lv, s &: sm.Sema, a &: at.Ast, symid: int,
-                   call: int): int:
+func pick_overload(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, symid: int, call: int
+): int:
     _v := v.tmp
     mut arity := 0
     sy := sm.SymAt(s, symid)
@@ -2009,8 +1904,7 @@ func pick_overload(v &: Lv, s &: sm.Sema, a &: at.Ast, symid: int,
     repeat sy.overloads.len() with i:
         sigid := sy.overloads.get(i)[0]
         sg := sm.SigAt(s, sigid)
-        skip := nargs < sg.required ||
-                (!sg.variadic && nargs > sg.params.len())
+        skip := nargs < sg.required || (!sg.variadic && nargs > sg.params.len())
         if !skip:
             if arity == 0:
                 arity = sigid
@@ -2021,8 +1915,7 @@ func pick_overload(v &: Lv, s &: sm.Sema, a &: at.Ast, symid: int,
             until j < nfix && okm:
                 arg := at.Get(a, at.Child(a, call, j))
                 pt := sm.ToString(s, sg.params.get(j)[0])
-                if str.Len(arg.type_str) == 0 ||
-                   !str.Equals(arg.type_str, pt):
+                if str.Len(arg.type_str) == 0 || !str.Equals(arg.type_str, pt):
                     okm = false
                 end
                 j += 1
@@ -2066,13 +1959,15 @@ func sig_of(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int): int:
     ret 0
 end
 
-// ll_fn_header — recv_param "" = the C NULL.
-func fn_header(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, sig: int,
-               ret_lty: str, fname: str, recv_param: str,
-               exported: bool): str:
+// ll_fn_header - recv_param "" = the C NULL.
+func fn_header(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, sig: int, ret_lty: str, fname: str, recv_param: str,
+    exported: bool
+): str:
     mut hdr := co.SbNew()
-    co.SbPuts(hdr, "define " + (exported ? "" : "internal ") + ret_lty +
-                   " @" + fname + "(")
+    co.SbPuts(
+        hdr, "define " + (exported ? "" : "internal ") + ret_lty + " @" + fname + "("
+    )
     mut first := true
     if str.Len(recv_param) > 0:
         co.SbPuts(hdr, recv_param)
@@ -2136,14 +2031,15 @@ func spill_params(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, sig: int):
         else:
             ptr2 := "%p." + safe_name(p.name)
             emit_alloca(v, ptr2 + " = alloca " + ty_of(v, s, a, pts))
-            emit(v, "store " + ty_of(v, s, a, pts) + " %arg" +
-                    co.I64Toa(i as i64) + ", ptr " + ptr2)
+            emit(
+                v, "store " + ty_of(v, s, a, pts) + " %arg" + co.I64Toa(i as i64) + ", ptr " + ptr2
+            )
             local_add(v, p.name, ptr2, pts)
         end
     end
 end
 
-// ll_function — the function frame. Body statements come from stage B's
+// ll_function - the function frame. Body statements come from stage B's
 // lv_block_top; everything else (header, spills, this-slot, global inits,
 // implicit return, builder nesting) is stage A.
 func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
@@ -2171,8 +2067,9 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
     else owner == 0 && fnode.is_extern:
         fname = fnode.name
     else:
-        fname = mangle(v, s, owner != 0 ? sm.SymAt(s, owner).name : "",
-                       fnode.name, sig)
+        fname = mangle(
+            v, s, owner != 0 ? sm.SymAt(s, owner).name : "", fnode.name, sig
+        )
     end
     mut recv_param := ""
     if owner != 0:
@@ -2222,11 +2119,13 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
     v.defers = Vector {} as Vector<int>
     if v.debug:
         _sp := debug_subprogram(v, fnode.name, fnode.begin_line as int)
-        v.cur_dbg = debug_location(v, fnode.begin_line as int,
-                                   fnode.begin_col as int)
+        v.cur_dbg = debug_location(
+            v, fnode.begin_line as int, fnode.begin_col as int
+        )
     end
-    header := fn_header(v, s, a, fn, sig, ret_lty, fname, recv_param,
-                        exported)
+    header := fn_header(
+        v, s, a, fn, sig, ret_lty, fname, recv_param, exported
+    )
     if is_impl:
         emit_alloca(v, "%p.this = alloca " + ty_of(v, s, a, recv_ts))
         emit(v, "store " + ty_of(v, s, a, recv_ts) + " %this, ptr %p.this")
@@ -2270,8 +2169,9 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
 end
 
 // ll_ensure_fn
-func ensure_fn(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int,
-               pscope: int):
+func ensure_fn(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int, pscope: int
+):
     if fn == 0:
         ret
     end
@@ -2307,8 +2207,9 @@ func match_sig(s &: sm.Sema, m: int, want: int): int:
 end
 
 // ll_ensure_vtbl
-func ensure_vtbl(v &: Lv, s &: sm.Sema, a &: at.Ast, iface: str,
-                 concrete: str):
+func ensure_vtbl(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, iface: str, concrete: str
+):
     name := vtbl_name(iface, concrete)
     repeat v.emitted.len() with i:
         if str.Equals(name, v.emitted.get(i)[0]):
@@ -2318,8 +2219,7 @@ func ensure_vtbl(v &: Lv, s &: sm.Sema, a &: at.Ast, iface: str,
     v.emitted.push(name)
     isym := sym_of(v, s, a, iface)
     csym := sym_of(v, s, a, concrete)
-    if isym == 0 || sm.SymAt(s, isym).kind != sm.SYM_INTERFACE ||
-       csym == 0 || sm.SymAt(s, csym).members == 0:
+    if isym == 0 || sm.SymAt(s, isym).kind != sm.SYM_INTERFACE || csym == 0 || sm.SymAt(s, csym).members == 0:
         ret
     end
     mut slots := co.SbNew()
@@ -2340,20 +2240,24 @@ func ensure_vtbl(v &: Lv, s &: sm.Sema, a &: at.Ast, iface: str,
             end
             if csig != 0:
                 ensure_fn(v, s, a, sm.SigAt(s, csig).decl, csym, v.pkg_scope)
-                co.SbPuts(slots, "ptr @" + mangle(v, s, concrete, im.name,
-                                                  csig))
+                co.SbPuts(
+                    slots, "ptr @" + mangle(
+                        v, s, concrete, im.name, csig
+                    )
+                )
             else:
                 co.SbPuts(slots, "ptr null")
             end
             n += 1
         end
     end
-    out_g(v, name + " = private unnamed_addr constant [" +
-             co.I64Toa(n as i64) + " x ptr] [" + co.SbCstr(slots) + "]\n")
+    out_g(
+        v, name + " = private unnamed_addr constant [" + co.I64Toa(n as i64) + " x ptr] [" + co.SbCstr(slots) + "]\n"
+    )
     co.SbFree(slots)
 end
 
-// ll_box_dyn — box a struct value into a %dyn { data, vtbl } pair.
+// ll_box_dyn - box a struct value into a %dyn { data, vtbl } pair.
 func box_dyn(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, iface: str): str:
     // iface truncated at '*' / '[' into char ib[160]
     n := str.Len(iface)
@@ -2380,49 +2284,57 @@ func box_dyn(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, iface: str): str:
     t0 := new_tmp(v)
     t1 := new_tmp(v)
     emit(v, t0 + " = insertvalue %dyn undef, ptr " + data + ", 0")
-    emit(v, t1 + " = insertvalue %dyn " + t0 + ", ptr " +
-            vtbl_name(ib, val.ts) + ", 1")
+    emit(
+        v, t1 + " = insertvalue %dyn " + t0 + ", ptr " + vtbl_name(ib, val.ts) + ", 1"
+    )
     ret t1
 end
 
 // ll_box_variant
-func box_variant(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, tag: int,
-                 variant_ts: str): str:
+func box_variant(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, tag: int, variant_ts: str
+): str:
     vt := ty_of(v, s, a, variant_ts)
     slot := new_tmp(v)
     tagp := new_tmp(v)
     payp := new_tmp(v)
     result := new_tmp(v)
     emit_alloca(v, slot + " = alloca " + vt)
-    emit(v, tagp + " = getelementptr " + vt + ", ptr " + slot +
-            ", i32 0, i32 0")
+    emit(
+        v, tagp + " = getelementptr " + vt + ", ptr " + slot + ", i32 0, i32 0"
+    )
     emit(v, "store i32 " + co.I64Toa(tag as i64) + ", ptr " + tagp)
-    emit(v, payp + " = getelementptr " + vt + ", ptr " + slot +
-            ", i32 0, i32 1")
-    emit(v, "store " + ty_of(v, s, a, val.ts) + " " + val.ref + ", ptr " +
-            payp)
+    emit(
+        v, payp + " = getelementptr " + vt + ", ptr " + slot + ", i32 0, i32 1"
+    )
+    emit(
+        v, "store " + ty_of(v, s, a, val.ts) + " " + val.ref + ", ptr " + payp
+    )
     emit(v, result + " = load " + vt + ", ptr " + slot)
     ret result
 end
 
 // ll_unwrap_variant
-func unwrap_variant(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv,
-                    member_ts: str): Llv:
+func unwrap_variant(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, member_ts: str
+): Llv:
     vt := ty_of(v, s, a, val.ts)
     slot := new_tmp(v)
     payp := new_tmp(v)
     r := new_tmp(v)
     emit_alloca(v, slot + " = alloca " + vt)
     emit(v, "store " + vt + " " + val.ref + ", ptr " + slot)
-    emit(v, payp + " = getelementptr " + vt + ", ptr " + slot +
-            ", i32 0, i32 1")
+    emit(
+        v, payp + " = getelementptr " + vt + ", ptr " + slot + ", i32 0, i32 1"
+    )
     emit(v, r + " = load " + ty_of(v, s, a, member_ts) + ", ptr " + payp)
     ret make_llv(r, member_ts)
 end
 
 // ll_mangle_ti
-func mangle_ti(v &: Lv, s &: sm.Sema, typestr: str, fn_name: str,
-               sig: int): str:
+func mangle_ti(
+    v &: Lv, s &: sm.Sema, typestr: str, fn_name: str, sig: int
+): str:
     _v := v.tmp
     mut b := co.SbNew()
     co.SbPuts(b, "salam_ti_")
@@ -2470,7 +2382,7 @@ func emit_impls(v &: Lv, s &: sm.Sema, a &: at.Ast):
     emit_impls_in(v, s, a, s.global)
 end
 
-// ll_emit_lambda — the lambda frame (stage A); the body comes from stage
+// ll_emit_lambda - the lambda frame (stage A); the body comes from stage
 // B's lv_block_top like ll_function.
 func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     nd := at.Get(a, n)
@@ -2495,8 +2407,9 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     out_g(v, co.SbCstr(et))
     co.SbFree(et)
     if ncap == 0:
-        out_g(v, "@" + name + ".env = internal global " + envty + " { ptr @" +
-                 name + " }\n")
+        out_g(
+            v, "@" + name + ".env = internal global " + envty + " { ptr @" + name + " }\n"
+        )
     end
 
     saved_bb := v.bb
@@ -2542,15 +2455,17 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     v.defers = Vector {} as Vector<int>
 
     mut hdr := co.SbNew()
-    co.SbPuts(hdr, "define internal " + ty_of(v, s, a, rts) + " @" + name +
-                   "(ptr noundef %env")
+    co.SbPuts(
+        hdr, "define internal " + ty_of(v, s, a, rts) + " @" + name + "(ptr noundef %env"
+    )
     repeat at.ChildCount(a, n) with i:
         p := at.Get(a, nd.list.get(i)[0])
         if p.is_ref:
             co.SbPuts(hdr, ", ptr %arg" + co.I64Toa(i as i64))
         else:
-            co.SbPuts(hdr, ", " + ty_of(v, s, a, p.type_str) + " %arg" +
-                           co.I64Toa(i as i64))
+            co.SbPuts(
+                hdr, ", " + ty_of(v, s, a, p.type_str) + " %arg" + co.I64Toa(i as i64)
+            )
         end
     end
     co.SbPuts(hdr, ") nounwind {\n")
@@ -2564,8 +2479,9 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
         else:
             ptr2 := "%p." + safe_name(p2.name)
             emit_alloca(v, ptr2 + " = alloca " + ty_of(v, s, a, p2.type_str))
-            emit(v, "store " + ty_of(v, s, a, p2.type_str) + " %arg" +
-                    co.I64Toa(i2 as i64) + ", ptr " + ptr2)
+            emit(
+                v, "store " + ty_of(v, s, a, p2.type_str) + " %arg" + co.I64Toa(i2 as i64) + ", ptr " + ptr2
+            )
             local_add(v, p2.name, ptr2, p2.type_str)
         end
     end
@@ -2631,16 +2547,16 @@ end
 
 // ll_const_fpfix
 func const_fpfix(lety: str, vtext: str): str:
-    if (str.Equals(lety, "double") || str.Equals(lety, "float")) &&
-       text_is_int(vtext):
+    if (str.Equals(lety, "double") || str.Equals(lety, "float")) && text_is_int(vtext):
         ret vtext + ".0"
     end
     ret vtext
 end
 
-// ll_const_value — true when `n` folds to a global-initializer constant.
-func const_value(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int,
-                 out2 &: str): bool:
+// ll_const_value - true when `n` folds to a global-initializer constant.
+func const_value(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str
+): bool:
     if n == 0:
         ret false
     end
@@ -2650,11 +2566,7 @@ func const_value(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int,
     end
     if nd.kind == at.AST_LITERAL:
         op := nd.op
-        if op == tok.TK_INT || op == tok.TK_FLOAT || op == tok.TK_STRING ||
-           op == tok.TK_TRIPLE_STRING || op == tok.TK_RAW_STRING ||
-           op == tok.TK_UTF8_CHAR || op == tok.TK_CHAR ||
-           op == tok.TK_KW_TRUE || op == tok.TK_KW_FALSE ||
-           op == tok.TK_KW_NULL:
+        if op == tok.TK_INT || op == tok.TK_FLOAT || op == tok.TK_STRING || op == tok.TK_TRIPLE_STRING || op == tok.TK_RAW_STRING || op == tok.TK_UTF8_CHAR || op == tok.TK_CHAR || op == tok.TK_KW_TRUE || op == tok.TK_KW_FALSE || op == tok.TK_KW_NULL:
             out2 = lv_expr(v, s, a, n).ref
             ret true
         end
@@ -2706,8 +2618,9 @@ func const_agg(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str): bool:
         ret true
     end
     if nd.kind == at.AST_STRUCT_LIT:
-        ss := struct_sym(v, s, a,
-                         str.Len(nd.type_str) > 0 ? nd.type_str : nd.name)
+        ss := struct_sym(
+            v, s, a, str.Len(nd.type_str) > 0 ? nd.type_str : nd.name
+        )
         if ss == 0:
             ret false
         end
@@ -2724,8 +2637,7 @@ func const_agg(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str): bool:
                 mut prov := 0
                 repeat nd.list.len() with j:
                     fld := at.Get(a, nd.list.get(j)[0])
-                    if prov == 0 && str.Len(fld.name) > 0 &&
-                       str.Equals(fld.name, f.name):
+                    if prov == 0 && str.Len(fld.name) > 0 && str.Equals(fld.name, f.name):
                         prov = nd.list.get(j)[0]
                     end
                 end
@@ -2776,8 +2688,9 @@ func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
     until i < at.ChildCount(a, program):
         d := at.Child(a, program, i)
         dn := at.Get(a, d)
-        skip := (dn.kind != at.AST_CONST_DECL &&
-                 dn.kind != at.AST_VAR_DECL) || dn.is_extern
+        skip := (
+            dn.kind != at.AST_CONST_DECL && dn.kind != at.AST_VAR_DECL
+        ) || dn.is_extern
         if !skip:
             ts := str.Len(dn.type_str) > 0 ? dn.type_str : "i32"
             gref := "@g." + str.TrimPrefix(struct_ltype(dn.name), "%struct.")
@@ -2857,15 +2770,18 @@ func emit_externs_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
             sg := sm.SigAt(s, sigid)
             dn2 := at.Get(a, sg.decl)
             mut b := co.SbNew()
-            co.SbPuts(b, "declare " +
-                         ty_of(v, s, a, sm.ToString(s, sg.ret_type)) + " @" +
-                         sy.name + "(")
+            co.SbPuts(
+                b, "declare " + ty_of(v, s, a, sm.ToString(s, sg.ret_type)) + " @" + sy.name + "("
+            )
             repeat sg.params.len() with j:
                 if j != 0:
                     co.SbPuts(b, ", ")
                 end
-                co.SbPuts(b, ty_of(v, s, a,
-                                   sm.ToString(s, sg.params.get(j)[0])))
+                co.SbPuts(
+                    b, ty_of(
+                        v, s, a, sm.ToString(s, sg.params.get(j)[0])
+                    )
+                )
             end
             if sg.variadic:
                 co.SbPuts(b, sg.params.len() > 0 ? ", ..." : "...")
@@ -2889,7 +2805,7 @@ func emit_externs(v &: Lv, s &: sm.Sema, a &: at.Ast):
     emit_externs_in(v, s, a, s.global)
 end
 
-// ll_touch_pkg — emit a package's struct types/externs/globals/impls once.
+// ll_touch_pkg - emit a package's struct types/externs/globals/impls once.
 func touch_pkg(v &: Lv, s &: sm.Sema, a &: at.Ast, pk: int):
     if pk == 0:
         ret
@@ -2932,7 +2848,7 @@ func touch_pkg_named(v &: Lv, s &: sm.Sema, a &: at.Ast, pkgname: str):
     end
 end
 
-// ll_emit_global_inits — runs at the top of main().
+// ll_emit_global_inits - runs at the top of main().
 func emit_global_inits(v &: Lv, s &: sm.Sema, a &: at.Ast):
     repeat v.gdefer.len() with i:
         d := v.gdefer.get(i)[0]
@@ -2941,15 +2857,16 @@ func emit_global_inits(v &: Lv, s &: sm.Sema, a &: at.Ast):
         if gi >= 0:
             g := v.globals.get(gi)[0]
             val := conv(v, s, a, lv_expr(v, s, a, dn.a), g.ts)
-            emit(v, "store " + ty_of(v, s, a, g.ts) + " " + val + ", ptr " +
-                    g.ptr)
+            emit(
+                v, "store " + ty_of(v, s, a, g.ts) + " " + val + ", ptr " + g.ptr
+            )
         end
     end
 end
 
-// ===== codegen_llvm_stmt.c (stage A slice — B must NOT re-port) =====
+// ===== codegen_llvm_stmt.c (stage A slice - B must NOT re-port) =====
 
-// ll_emit_defers — LIFO defer replay (body statements come from lv_stmt).
+// ll_emit_defers - LIFO defer replay (body statements come from lv_stmt).
 func emit_defers(v &: Lv, s &: sm.Sema, a &: at.Ast):
     mut i := v.defers.len()
     until i > 0:
@@ -2963,8 +2880,9 @@ func emit_return(v &: Lv, s &: sm.Sema, a &: at.Ast, value: int):
     if str.Len(v.match_result_ptr) > 0:
         if value != 0:
             val := conv(v, s, a, lv_expr(v, s, a, value), v.match_result_ts)
-            emit(v, "store " + ty_of(v, s, a, v.match_result_ts) + " " + val +
-                    ", ptr " + v.match_result_ptr)
+            emit(
+                v, "store " + ty_of(v, s, a, v.match_result_ts) + " " + val + ", ptr " + v.match_result_ptr
+            )
         end
         emit_term(v, "br label %" + v.match_merge_block)
         ret
@@ -2992,7 +2910,7 @@ func emit_return(v &: Lv, s &: sm.Sema, a &: at.Ast, value: int):
     emit_term(v, "ret " + ty_of(v, s, a, v.ret_ts) + " " + val2)
 end
 
-// ===== codegen_llvm_debug.c (stage A — C stage must NOT re-port) =====
+// ===== codegen_llvm_debug.c (stage A - C stage must NOT re-port) =====
 
 // ll_meta_add
 func meta_add(v &: Lv, text: str): str:
@@ -3045,13 +2963,12 @@ end
 // ll_debug_init
 func debug_init(v &: Lv, src_path: str):
     di_split_path(v, src_path)
-    v.di_file = meta_add(v, "!DIFile(filename: \"" + di_escape(v.src_file) +
-                            "\", directory: \"" + di_escape(v.src_dir) +
-                            "\")")
-    v.di_cu = meta_add(v, "distinct !DICompileUnit(language: DW_LANG_C99, " +
-                          "file: " + v.di_file + ", producer: \"salam\", " +
-                          "isOptimized: false, runtimeVersion: 0, " +
-                          "emissionKind: FullDebug)")
+    v.di_file = meta_add(
+        v, "!DIFile(filename: \"" + di_escape(v.src_file) + "\", directory: \"" + di_escape(v.src_dir) + "\")"
+    )
+    v.di_cu = meta_add(
+        v, "distinct !DICompileUnit(language: DW_LANG_C99, " + "file: " + v.di_file + ", producer: \"salam\", " + "isOptimized: false, runtimeVersion: 0, " + "emissionKind: FullDebug)"
+    )
     types := meta_add(v, "!{null}")
     v.di_subty = meta_add(v, "!DISubroutineType(types: " + types + ")")
     v.di_flag_dwarf = meta_add(v, "!{i32 7, !\"Dwarf Version\", i32 5}")
@@ -3060,23 +2977,21 @@ end
 
 // ll_debug_subprogram
 func debug_subprogram(v &: Lv, name: str, line: int): str:
-    sp := meta_add(v, "distinct !DISubprogram(name: \"" + name +
-                      "\", scope: " + v.di_file + ", file: " + v.di_file +
-                      ", line: " + co.I64Toa(line as i64) + ", type: " +
-                      v.di_subty + ", scopeLine: " + co.I64Toa(line as i64) +
-                      ", spFlags: DISPFlagDefinition, unit: " + v.di_cu + ")")
+    sp := meta_add(
+        v, "distinct !DISubprogram(name: \"" + name + "\", scope: " + v.di_file + ", file: " + v.di_file + ", line: " + co.I64Toa(line as i64) + ", type: " + v.di_subty + ", scopeLine: " + co.I64Toa(line as i64) + ", spFlags: DISPFlagDefinition, unit: " + v.di_cu + ")"
+    )
     v.cur_sp = sp
     ret sp
 end
 
-// ll_debug_location — "" when there is no current subprogram (C NULL).
+// ll_debug_location - "" when there is no current subprogram (C NULL).
 func debug_location(v &: Lv, line: int, col: int): str:
     if str.Len(v.cur_sp) == 0:
         ret ""
     end
-    ret meta_add(v, "!DILocation(line: " + co.I64Toa(line as i64) +
-                    ", column: " + co.I64Toa(col as i64) + ", scope: " +
-                    v.cur_sp + ")")
+    ret meta_add(
+        v, "!DILocation(line: " + co.I64Toa(line as i64) + ", column: " + co.I64Toa(col as i64) + ", scope: " + v.cur_sp + ")"
+    )
 end
 
 // ll_debug_finalize
@@ -3085,14 +3000,15 @@ func debug_finalize(v &: Lv):
         ret
     end
     out_g(v, "\n")
-    out_g(v, "!llvm.module.flags = !{" + v.di_flag_dwarf + ", " +
-             v.di_flag_debug + "}\n")
+    out_g(
+        v, "!llvm.module.flags = !{" + v.di_flag_dwarf + ", " + v.di_flag_debug + "}\n"
+    )
     out_g(v, "!llvm.dbg.cu = !{" + v.di_cu + "}\n")
     out_g(v, co.SbCstr(v.bmeta))
 end
 
 // ===========================================================================
-// >>> STAGE B INSERTION POINT — replace the three stubs below IN PLACE and
+// >>> STAGE B INSERTION POINT - replace the three stubs below IN PLACE and
 // >>> add the rest of codegen_llvm_expr.c / codegen_llvm_stmt.c here as new
 // >>> private functions (ll_binary -> lv_binary, ll_addr_of -> lv_addr_of,
 // >>> ll_index_set, ll_match_arm_cond, ll_call*, ll_literal, ll_struct_lit,
@@ -3166,8 +3082,7 @@ end
 
 // ll_is_cmp
 func is_cmp_op(k: int): bool:
-    ret k == tok.TK_EQ || k == tok.TK_NE || k == tok.TK_LT || k == tok.TK_GT ||
-        k == tok.TK_LE || k == tok.TK_GE
+    ret k == tok.TK_EQ || k == tok.TK_NE || k == tok.TK_LT || k == tok.TK_GT || k == tok.TK_LE || k == tok.TK_GE
 end
 
 // ll_to_ptr
@@ -3195,33 +3110,39 @@ func str_operand(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): str:
         emit(v, r + " = select i1 " + val.ref + ", ptr " + t + ", ptr " + f)
     else str.Equals(ts, "char"):
         need(v, LV_H_CHARSTR)
-        emit(v, r + " = call ptr @salam_ll_charstr(i32 " +
-                conv(v, s, a, val, "i32") + ")")
+        emit(
+            v, r + " = call ptr @salam_ll_charstr(i32 " + conv(v, s, a, val, "i32") + ")"
+        )
     else is_float(ts):
         need(v, LV_H_F64STR)
-        emit(v, r + " = call ptr @salam_ll_f64str(double " +
-                conv(v, s, a, val, "f64") + ")")
+        emit(
+            v, r + " = call ptr @salam_ll_f64str(double " + conv(v, s, a, val, "f64") + ")"
+        )
     else is_int_ts(ts):
         if is_signed_ts(ts):
             need(v, LV_H_I64STR)
-            emit(v, r + " = call ptr @salam_ll_i64str(i64 " +
-                    conv(v, s, a, val, "i64") + ")")
+            emit(
+                v, r + " = call ptr @salam_ll_i64str(i64 " + conv(v, s, a, val, "i64") + ")"
+            )
         else:
             need(v, LV_H_U64STR)
-            emit(v, r + " = call ptr @salam_ll_u64str(i64 " +
-                    conv(v, s, a, val, "u64") + ")")
+            emit(
+                v, r + " = call ptr @salam_ll_u64str(i64 " + conv(v, s, a, val, "u64") + ")"
+            )
         end
     else:
-        lv_error(v, a, n, "string concatenation with an unsupported operand type '" +
-                 (str.Len(ts) > 0 ? ts : "?") + "'")
+        lv_error(
+            v, a, n, "string concatenation with an unsupported operand type '" + (str.Len(ts) > 0 ? ts : "?") + "'"
+        )
         r = val.ref
     end
     ret r
 end
 
 // ll_binary_string
-func binary_string(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, op: int,
-                   out2 &: Llv): bool:
+func binary_string(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, op: int, out2 &: Llv
+): bool:
     nd := at.Get(a, n)
     an := at.Get(a, nd.a)
     bn := at.Get(a, nd.b)
@@ -3314,7 +3235,7 @@ func op_method_name(k: int): str:
     ret ""
 end
 
-// ll_op_struct — sname2 receives the (possibly de-pointered) type name;
+// ll_op_struct - sname2 receives the (possibly de-pointered) type name;
 // returns the struct SymId, 0 = none.
 func op_struct(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, sname2 &: str): int:
     if str.Len(ts) == 0:
@@ -3324,7 +3245,7 @@ func op_struct(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, sname2 &: str): int:
     ret struct_sym(v, s, a, sname2)
 end
 
-// ll_pick_arity — first overload of `symid` with exactly `want` params,
+// ll_pick_arity - first overload of `symid` with exactly `want` params,
 // 0 = none.
 func pick_arity(s &: sm.Sema, symid: int, want: int): int:
     sy := sm.SymAt(s, symid)
@@ -3339,9 +3260,10 @@ func pick_arity(s &: sm.Sema, symid: int, want: int): int:
     ret 0
 end
 
-// ll_op_call — rhs = 0 for a unary operator method.
-func op_call(v &: Lv, s &: sm.Sema, a &: at.Ast, recv: int, sname2: str,
-            ss: int, mname: str, rhs: int, out2 &: Llv): bool:
+// ll_op_call - rhs = 0 for a unary operator method.
+func op_call(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, recv: int, sname2: str, ss: int, mname: str, rhs: int, out2 &: Llv
+): bool:
     ms := sm.LookupLocal(s, sm.SymAt(s, ss).members, mname)
     if ms == 0 || sm.SymAt(s, ms).kind != sm.SYM_METHOD:
         ret false
@@ -3351,8 +3273,7 @@ func op_call(v &: Lv, s &: sm.Sema, a &: at.Ast, recv: int, sname2: str,
         ret false
     end
     recvn := at.Get(a, recv)
-    recvref := is_ptr_ts(recvn.type_str) ? lv_expr(v, s, a, recv).ref :
-               lv_addr_of(v, s, a, recv).ptr
+    recvref := is_ptr_ts(recvn.type_str) ? lv_expr(v, s, a, recv).ref : lv_addr_of(v, s, a, recv).ptr
     mut argsb := "ptr " + recvref
     if rhs != 0:
         sg := sm.SigAt(s, sig)
@@ -3396,16 +3317,16 @@ func lv_index_set(v &: Lv, s &: sm.Sema, a &: at.Ast, idx: int, value: int): boo
         ret false
     end
     an := at.Get(a, idxn.a)
-    recv := is_ptr_ts(an.type_str) ? lv_expr(v, s, a, idxn.a).ref :
-            lv_addr_of(v, s, a, idxn.a).ptr
+    recv := is_ptr_ts(an.type_str) ? lv_expr(v, s, a, idxn.a).ref : lv_addr_of(v, s, a, idxn.a).ptr
     sg := sm.SigAt(s, sig)
     p0 := sm.ToString(s, sg.params.get(0)[0])
     p1 := sm.ToString(s, sg.params.get(1)[0])
     iv := conv(v, s, a, lv_expr(v, s, a, idxn.b), p0)
     vv := conv(v, s, a, lv_expr(v, s, a, value), p1)
     fname := mangle(v, s, sname2, "operator_index_set", sig)
-    emit(v, "call void @" + fname + "(ptr " + recv + ", " + ty_of(v, s, a, p0) +
-            " " + iv + ", " + ty_of(v, s, a, p1) + " " + vv + ")")
+    emit(
+        v, "call void @" + fname + "(ptr " + recv + ", " + ty_of(v, s, a, p0) + " " + iv + ", " + ty_of(v, s, a, p1) + " " + vv + ")"
+    )
     ret true
 end
 
@@ -3423,8 +3344,9 @@ func lv_binary(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         neg := op == tok.TK_NE && nd.synthetic
         mname := neg ? "operator_eq" : op_method_name(op)
         mut out2 := Llv {}
-        if str.Len(mname) > 0 && op_call(v, s, a, nd.a, sname2, oss, mname, nd.b,
-                                         out2):
+        if str.Len(mname) > 0 && op_call(
+            v, s, a, nd.a, sname2, oss, mname, nd.b, out2
+        ):
             if !neg:
                 ret out2
             end
@@ -3460,8 +3382,9 @@ func lv_binary(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         emit_term(v, "br label %" + endL)
         emit_label(v, endL)
         r2 := new_tmp(v)
-        emit(v, r2 + " = phi i1 [ " + (is_and ? "false" : "true") + ", %" + scL +
-                " ], [ " + lb + ", %" + joinL + " ]")
+        emit(
+            v, r2 + " = phi i1 [ " + (is_and ? "false" : "true") + ", %" + scL + " ], [ " + lb + ", %" + joinL + " ]"
+        )
         ret make_llv(r2, "bool")
     end
     if op == tok.TK_POWER:
@@ -3476,8 +3399,9 @@ func lv_binary(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
             lc := to_ptr(v, s, a, lval)
             rc := to_ptr(v, s, a, rval)
             r3 := new_tmp(v)
-            emit(v, r3 + " = icmp " + cmp_pred(op, false, false) + " ptr " + lc +
-                    ", " + rc)
+            emit(
+                v, r3 + " = icmp " + cmp_pred(op, false, false) + " ptr " + lc + ", " + rc
+            )
             ret make_llv(r3, "bool")
         end
         common := common_ts(v, lval.ts, rval.ts)
@@ -3485,9 +3409,9 @@ func lv_binary(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         rc2 := conv(v, s, a, rval, common)
         flt := is_float(common)
         r4 := new_tmp(v)
-        emit(v, r4 + " = " + (flt ? "fcmp" : "icmp") + " " +
-                cmp_pred(op, flt, is_signed_ts(common)) + " " +
-                ty_of(v, s, a, common) + " " + lc2 + ", " + rc2)
+        emit(
+            v, r4 + " = " + (flt ? "fcmp" : "icmp") + " " + cmp_pred(op, flt, is_signed_ts(common)) + " " + ty_of(v, s, a, common) + " " + lc2 + ", " + rc2
+        )
         ret make_llv(r4, "bool")
     end
 
@@ -3533,8 +3457,9 @@ func lv_unary(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         if is_float(rt):
             emit(v, r2 + " = fneg " + ty_of(v, s, a, rt) + " " + cv)
         else:
-            emit(v, r2 + " = sub" + (is_signed_ts(rt) ? " nsw" : "") + " " +
-                    ty_of(v, s, a, rt) + " 0, " + cv)
+            emit(
+                v, r2 + " = sub" + (is_signed_ts(rt) ? " nsw" : "") + " " + ty_of(v, s, a, rt) + " 0, " + cv
+            )
         end
         ret make_llv(r2, rt)
     end
@@ -3555,8 +3480,9 @@ func lv_incdec(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     nd := at.Get(a, n)
     tgt := nd.a
     tk := tgt != 0 ? at.KindOf(a, tgt) : 0 - 1
-    if tgt == 0 || (tk != at.AST_IDENTIFIER && tk != at.AST_MEMBER &&
-                    tk != at.AST_INDEX):
+    if tgt == 0 || (
+        tk != at.AST_IDENTIFIER && tk != at.AST_MEMBER && tk != at.AST_INDEX
+    ):
         lv_error(v, a, n, "operand of '++'/'--' is not assignable")
         ret poison(nd.type_str)
     end
@@ -3566,8 +3492,9 @@ func lv_incdec(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     emit(v, oldv + " = load " + ty_of(v, s, a, ts) + ", ptr " + addr.ptr)
     flt := is_float(ts)
     step := flt ? "1.0" : "1"
-    op2 := arith_op(nd.op == tok.TK_PLUS_PLUS ? tok.TK_PLUS : tok.TK_MINUS, flt,
-                    is_signed_ts(ts))
+    op2 := arith_op(
+        nd.op == tok.TK_PLUS_PLUS ? tok.TK_PLUS : tok.TK_MINUS, flt, is_signed_ts(ts)
+    )
     newv := new_tmp(v)
     emit(v, newv + " = " + op2 + " " + ty_of(v, s, a, ts) + " " + oldv + ", " + step)
     emit(v, "store " + ty_of(v, s, a, ts) + " " + newv + ", ptr " + addr.ptr)
@@ -3575,12 +3502,13 @@ func lv_incdec(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
 end
 
 // ll_lower_print
-func lv_lower_print(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nl: bool,
-                    err: bool):
+func lv_lower_print(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nl: bool, err: bool
+):
     mut segs := Vector {} as Vector<cg.PfSeg>
+    defer segs.free()
     cg.PfBuild(a, n, nl, segs)
     if segs.len() == 0:
-        segs.free()
         ret
     end
 
@@ -3605,11 +3533,11 @@ func lv_lower_print(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nl: bool,
             rawlen := co.SbLen(raw)
             lit := strconst(v, co.SbCstr(raw))
             co.SbFree(raw)
-            segs.free()
             if rawlen > (0 as i64):
                 need(v, LV_H_OUTBUF)
-                emit(v, "call void @salam_out_write(ptr " + lit + ", i64 " +
-                        co.I64Toa(rawlen) + ")")
+                emit(
+                    v, "call void @salam_out_write(ptr " + lit + ", i64 " + co.I64Toa(rawlen) + ")"
+                )
             end
             ret
         end
@@ -3641,8 +3569,9 @@ func lv_lower_print(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nl: bool,
                 t2 := strconst(v, "true")
                 f2 := strconst(v, "false")
                 sel := new_tmp(v)
-                emit(v, sel + " = select i1 " + val.ref + ", ptr " + t2 + ", ptr " +
-                        f2)
+                emit(
+                    v, sel + " = select i1 " + val.ref + ", ptr " + t2 + ", ptr " + f2
+                )
                 av = ", ptr " + sel
             else sg.kind == cg.PF_CHAR:
                 av = ", i32 " + conv(v, s, a, val, "i32")
@@ -3670,14 +3599,17 @@ func lv_lower_print(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nl: bool,
     end
     t := new_tmp(v)
     if err && target_is_windows_of(v.triple):
-        emit(v, t + " = call i32 (ptr, ...) @printf(ptr " + f + co.SbCstr(argsb) +
-                ")")
+        emit(
+            v, t + " = call i32 (ptr, ...) @printf(ptr " + f + co.SbCstr(argsb) + ")"
+        )
     else err:
-        emit(v, t + " = call i32 (i32, ptr, ...) @dprintf(i32 2, ptr " + f +
-                co.SbCstr(argsb) + ")")
+        emit(
+            v, t + " = call i32 (i32, ptr, ...) @dprintf(i32 2, ptr " + f + co.SbCstr(argsb) + ")"
+        )
     else:
-        emit(v, t + " = call i32 (ptr, ...) @printf(ptr " + f + co.SbCstr(argsb) +
-                ")")
+        emit(
+            v, t + " = call i32 (ptr, ...) @printf(ptr " + f + co.SbCstr(argsb) + ")"
+        )
         if buffered:
             sp := new_tmp(v)
             emit(v, sp + " = load ptr, ptr @stdout")
@@ -3687,7 +3619,6 @@ func lv_lower_print(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nl: bool,
     end
     co.SbFree(fmt)
     co.SbFree(argsb)
-    segs.free()
 end
 
 // ll_param_is_ref
@@ -3704,8 +3635,9 @@ func param_is_ref(s &: sm.Sema, a &: at.Ast, sig: int, i: int): bool:
 end
 
 // ll_emit_arg
-func emit_arg(v &: Lv, s &: sm.Sema, a &: at.Ast, ab &: str.StringBuilder,
-             arg: int, sig: int, i: int):
+func emit_arg(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ab &: str.StringBuilder, arg: int, sig: int, i: int
+):
     if param_is_ref(s, a, sig, i):
         addr := lv_addr_of(v, s, a, arg)
         co.SbPuts(ab, "ptr " + addr.ptr)
@@ -3718,8 +3650,9 @@ func emit_arg(v &: Lv, s &: sm.Sema, a &: at.Ast, ab &: str.StringBuilder,
 end
 
 // ll_fill_defaults
-func fill_defaults(v &: Lv, s &: sm.Sema, a &: at.Ast, ab &: str.StringBuilder,
-                   n: int, sig: int, first0: bool):
+func fill_defaults(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ab &: str.StringBuilder, n: int, sig: int, first0: bool
+):
     if sig == 0:
         ret
     end
@@ -3769,8 +3702,7 @@ func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
     co.SbFree(ab)
     rts := sm.ToString(s, sm.SigAt(s, sig).ret_type)
 
-    is_ext := sm.SigAt(s, sig).decl != 0 &&
-              at.Get(a, sm.SigAt(s, sig).decl).is_extern
+    is_ext := sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).is_extern
     fname := is_ext ? nm : mangle(v, s, "", nm, sig)
     mut callty := ""
     if is_ext && sm.SigAt(s, sig).variadic:
@@ -3794,12 +3726,13 @@ func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
         ret make_llv("0", "void")
     end
     r := new_tmp(v)
-    emit(v, r + " = call " + ty_of(v, s, a, rts) + callty + " @" + fname + "(" +
-            argsx + ")")
+    emit(
+        v, r + " = call " + ty_of(v, s, a, rts) + callty + " @" + fname + "(" + argsx + ")"
+    )
     ret make_llv(r, rts)
 end
 
-// ast_str_lit_len — -1 = not a foldable string literal.
+// ast_str_lit_len - -1 = not a foldable string literal.
 func ast_str_lit_len(a &: at.Ast, n: int): i64:
     if n == 0:
         ret (0 - 1) as i64
@@ -3808,8 +3741,7 @@ func ast_str_lit_len(a &: at.Ast, n: int): i64:
     if nd.kind != at.AST_LITERAL:
         ret (0 - 1) as i64
     end
-    if nd.op != tok.TK_STRING && nd.op != tok.TK_TRIPLE_STRING &&
-       nd.op != tok.TK_RAW_STRING:
+    if nd.op != tok.TK_STRING && nd.op != tok.TK_TRIPLE_STRING && nd.op != tok.TK_RAW_STRING:
         ret (0 - 1) as i64
     end
     if nd.value_kind != tok.TV_STRING:
@@ -3850,8 +3782,9 @@ func call_len(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
 end
 
 // ll_emit_call
-func emit_call(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, sig: int, lead: str,
-               fname: str, rts: str): Llv:
+func emit_call(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, sig: int, lead: str, fname: str, rts: str
+): Llv:
     nn := at.Get(a, n)
     mut ab := co.SbNew()
     mut first := str.Len(lead) == 0
@@ -3880,28 +3813,29 @@ func emit_call(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, sig: int, lead: str,
 end
 
 // ll_call_pkg
-func call_pkg(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, pk: int,
-              fname_: str): Llv:
+func call_pkg(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, pk: int, fname_: str
+): Llv:
     py := sm.SymAt(s, pk)
     touch_pkg_named(v, s, a, py.pkgname)
     fs := sm.LookupLocal(s, py.members, fname_)
-    if fs == 0 || sm.SymAt(s, fs).kind != sm.SYM_FUNC ||
-       sm.SymAt(s, fs).overloads.len() == 0:
+    if fs == 0 || sm.SymAt(s, fs).kind != sm.SYM_FUNC || sm.SymAt(s, fs).overloads.len() == 0:
         lv_error(v, a, n, "package function '" + fname_ + "' not found")
         ret poison(at.Get(a, n).type_str)
     end
     sig := pick_overload(v, s, a, fs, n)
     ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, py.members)
-    is_ext := sm.SigAt(s, sig).decl != 0 &&
-              at.Get(a, sm.SigAt(s, sig).decl).is_extern
+    is_ext := sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).is_extern
     fname := is_ext ? fname_ : mangle(v, s, "", fname_, sig)
-    ret emit_call(v, s, a, n, sig, "", fname,
-                  sm.ToString(s, sm.SigAt(s, sig).ret_type))
+    ret emit_call(
+        v, s, a, n, sig, "", fname, sm.ToString(s, sm.SigAt(s, sig).ret_type)
+    )
 end
 
 // ll_call_str
-func call_str(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, m: str,
-             out2 &: Llv): bool:
+func call_str(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, m: str, out2 &: Llv
+): bool:
     nn := at.Get(a, n)
     na := nn.list.len()
     if str.Equals(m, "len") && na == 0:
@@ -3923,8 +3857,9 @@ func call_str(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, m: str,
         arg0 := lv_expr(v, s, a, nn.list.get(0)[0]).ref
         r = new_tmp(v)
         need(v, LV_H_STRCAT)
-        emit(v, r + " = call ptr @salam_ll_strcat(ptr " + recv + ", ptr " + arg0 +
-                ")")
+        emit(
+            v, r + " = call ptr @salam_ll_strcat(ptr " + recv + ", ptr " + arg0 + ")"
+        )
         out2 = make_llv(r, "str")
         ret true
     end
@@ -3933,8 +3868,9 @@ func call_str(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, m: str,
         ln := conv(v, s, a, lv_expr(v, s, a, nn.list.get(1)[0]), "i32")
         r = new_tmp(v)
         need(v, LV_H_SUBSTR)
-        emit(v, r + " = call ptr @salam_ll_substr(ptr " + recv + ", i32 " + st +
-                ", i32 " + ln + ")")
+        emit(
+            v, r + " = call ptr @salam_ll_substr(ptr " + recv + ", i32 " + st + ", i32 " + ln + ")"
+        )
         out2 = make_llv(r, "str")
         ret true
     end
@@ -3959,8 +3895,9 @@ func call_str(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, m: str,
         out2 = make_llv(r, "f64")
         ret true
     end
-    if (str.Equals(m, "find") || str.Equals(m, "search") ||
-        str.Equals(m, "indexOf")) && na == 1:
+    if (
+        str.Equals(m, "find") || str.Equals(m, "search") || str.Equals(m, "indexOf")
+    ) && na == 1:
         arg1 := lv_expr(v, s, a, nn.list.get(0)[0]).ref
         p := new_tmp(v)
         pi := new_tmp(v)
@@ -3997,8 +3934,9 @@ func call_str(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, m: str,
         cnt := conv(v, s, a, lv_expr(v, s, a, nn.list.get(0)[0]), "i32")
         r = new_tmp(v)
         need(v, LV_H_REPEAT)
-        emit(v, r + " = call ptr @salam_ll_repeat(ptr " + recv + ", i32 " + cnt +
-                ")")
+        emit(
+            v, r + " = call ptr @salam_ll_repeat(ptr " + recv + ", i32 " + cnt + ")"
+        )
         out2 = make_llv(r, "str")
         ret true
     end
@@ -4006,8 +3944,9 @@ func call_str(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, m: str,
 end
 
 // ll_call_dyn
-func call_dyn(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, iface: str,
-             mname: str): Llv:
+func call_dyn(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, iface: str, mname: str
+): Llv:
     ni := str.Len(iface)
     mut k := 0
     mut stop := false
@@ -4054,8 +3993,9 @@ func call_dyn(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, iface: str,
     fn := new_tmp(v)
     emit(v, data + " = extractvalue %dyn " + dv.ref + ", 0")
     emit(v, vt + " = extractvalue %dyn " + dv.ref + ", 1")
-    emit(v, sl + " = getelementptr inbounds ptr, ptr " + vt + ", i64 " +
-            co.I64Toa(slot as i64))
+    emit(
+        v, sl + " = getelementptr inbounds ptr, ptr " + vt + ", i64 " + co.I64Toa(slot as i64)
+    )
     emit(v, fn + " = load ptr, ptr " + sl)
 
     mut ab := co.SbNew()
@@ -4101,8 +4041,7 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
         end
     end
 
-    if str.Equals(mname, "len") &&
-       (is_slice(ots) || (str.Len(ots) > 0 && idx_byte(ots, 91) >= 0)):
+    if str.Equals(mname, "len") && (is_slice(ots) || (str.Len(ots) > 0 && idx_byte(ots, 91) >= 0)):
         ret len_of(v, s, a, n, obj)
     end
 
@@ -4120,32 +4059,32 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
     if ss != 0:
         ms = sm.LookupLocal(s, sm.SymAt(s, ss).members, mname)
     end
-    if ms != 0 && sm.SymAt(s, ms).kind == sm.SYM_METHOD &&
-       sm.SymAt(s, ms).overloads.len() > 0:
+    if ms != 0 && sm.SymAt(s, ms).kind == sm.SYM_METHOD && sm.SymAt(s, ms).overloads.len() > 0:
         sig := pick_overload(v, s, a, ms, n)
         ensure_fn(v, s, a, sm.SigAt(s, sig).decl, ss, v.pkg_scope)
         recv := isptr ? lv_expr(v, s, a, obj).ref : lv_addr_of(v, s, a, obj).ptr
-        ret emit_call(v, s, a, n, sig, "ptr " + recv,
-                      mangle(v, s, sname2, mname, sig),
-                      sm.ToString(s, sm.SigAt(s, sig).ret_type))
+        ret emit_call(
+            v, s, a, n, sig, "ptr " + recv, mangle(v, s, sname2, mname, sig), sm.ToString(s, sm.SigAt(s, sig).ret_type)
+        )
     end
 
     implsym := sym_of(v, s, a, sm.ImplOwnerKey(ots))
     if implsym != 0 && sm.SymAt(s, implsym).kind == sm.SYM_TYPEIMPL:
         im := sm.LookupLocal(s, sm.SymAt(s, implsym).members, mname)
-        if im != 0 && sm.SymAt(s, im).kind == sm.SYM_METHOD &&
-           sm.SymAt(s, im).overloads.len() > 0:
+        if im != 0 && sm.SymAt(s, im).kind == sm.SYM_METHOD && sm.SymAt(s, im).overloads.len() > 0:
             sig2 := pick_overload(v, s, a, im, n)
             ensure_fn(v, s, a, sm.SigAt(s, sig2).decl, implsym, v.pkg_scope)
             rv := lv_expr(v, s, a, obj)
-            ret emit_call(v, s, a, n, sig2, ty_of(v, s, a, ots) + " " + rv.ref,
-                          mangle_ti(v, s, ots, mname, sig2),
-                          sm.ToString(s, sm.SigAt(s, sig2).ret_type))
+            ret emit_call(
+                v, s, a, n, sig2, ty_of(v, s, a, ots) + " " + rv.ref, mangle_ti(v, s, ots, mname, sig2),
+                sm.ToString(s, sm.SigAt(s, sig2).ret_type)
+            )
         end
     end
 
-    lv_error(v, a, n, "method '" + mname + "' on type '" + ots +
-             "' (or overloaded/builtin method)")
+    lv_error(
+        v, a, n, "method '" + mname + "' on type '" + ots + "' (or overloaded/builtin method)"
+    )
     ret poison(at.Get(a, n).type_str)
 end
 
@@ -4185,8 +4124,9 @@ func is_func_ts(ts: str): bool:
 end
 
 // ll_call_intrinsic
-func call_intrinsic(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str,
-                    out2 &: Llv): bool:
+func call_intrinsic(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str, out2 &: Llv
+): bool:
     nn := at.Get(a, n)
     na := nn.list.len()
     a0 := na > 0 ? nn.list.get(0)[0] : 0
@@ -4195,12 +4135,14 @@ func call_intrinsic(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str,
         r = new_tmp(v)
         if is_str(at.Get(a, a0).type_str):
             need(v, LV_H_STRHASH)
-            emit(v, r + " = call i64 @salam_ll_strhash(ptr " +
-                    lv_expr(v, s, a, a0).ref + ")")
+            emit(
+                v, r + " = call i64 @salam_ll_strhash(ptr " + lv_expr(v, s, a, a0).ref + ")"
+            )
         else:
             need(v, LV_H_INTHASH)
-            emit(v, r + " = call i64 @salam_ll_inthash(i64 " +
-                    conv(v, s, a, lv_expr(v, s, a, a0), "u64") + ")")
+            emit(
+                v, r + " = call i64 @salam_ll_inthash(i64 " + conv(v, s, a, lv_expr(v, s, a, a0), "u64") + ")"
+            )
         end
         out2 = make_llv(r, "u64")
         ret true
@@ -4208,8 +4150,9 @@ func call_intrinsic(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str,
     if str.Equals(nm, "char_from_code") && na == 1:
         r = new_tmp(v)
         need(v, LV_H_CHARSTR)
-        emit(v, r + " = call ptr @salam_ll_charstr(i32 " +
-                conv(v, s, a, lv_expr(v, s, a, a0), "i32") + ")")
+        emit(
+            v, r + " = call ptr @salam_ll_charstr(i32 " + conv(v, s, a, lv_expr(v, s, a, a0), "i32") + ")"
+        )
         out2 = make_llv(r, "str")
         ret true
     end
@@ -4248,9 +4191,9 @@ func lv_call(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
             t := at.Get(a, nn.list.get(0)[0]).type_str
             szp := new_tmp(v)
             sz := new_tmp(v)
-            emit(v, szp + " = getelementptr " +
-                    ty_of(v, s, a, str.Len(t) > 0 ? t : "i32") +
-                    ", ptr null, i32 1")
+            emit(
+                v, szp + " = getelementptr " + ty_of(v, s, a, str.Len(t) > 0 ? t : "i32") + ", ptr null, i32 1"
+            )
             emit(v, sz + " = ptrtoint ptr " + szp + " to " + v.usize)
             ret make_llv(sz, "size")
         end
@@ -4276,8 +4219,7 @@ func lv_call(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     ret poison(nn.type_str)
 end
 
-// ll_addr_of (forward decls of ll_member_addr/ll_index_addr not needed —
-// Salam allows forward reference within the same file).
+// ll_addr_of (forward decls of ll_member_addr/ll_index_addr not needed - // Salam allows forward reference within the same file).
 func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
     k := at.KindOf(a, n)
     if k == at.AST_IDENTIFIER:
@@ -4297,9 +4239,9 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
                 c := at.Get(a, capn.captures.get(ci)[0])
                 if str.Equals(c.name, nm):
                     rr := new_tmp(v)
-                    emit(v, rr + " = getelementptr inbounds " + v.env_ty +
-                            ", ptr " + v.env_ref + ", i32 0, i32 " +
-                            co.I64Toa((ci + 1) as i64))
+                    emit(
+                        v, rr + " = getelementptr inbounds " + v.env_ty + ", ptr " + v.env_ref + ", i32 0, i32 " + co.I64Toa((ci + 1) as i64)
+                    )
                     mut ra := LvAddr {}
                     ra.ptr = rr
                     ra.ts = c.type_str
@@ -4315,9 +4257,9 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
             if idx >= 0:
                 fts := sm.ToString(s, sm.SymAt(s, fs).ty)
                 rr2 := new_tmp(v)
-                emit(v, rr2 + " = getelementptr inbounds " +
-                        struct_ltype(v.self_ts) + ", ptr " + v.this_ref +
-                        ", i32 0, i32 " + co.I64Toa(idx as i64))
+                emit(
+                    v, rr2 + " = getelementptr inbounds " + struct_ltype(v.self_ts) + ", ptr " + v.this_ref + ", i32 0, i32 " + co.I64Toa(idx as i64)
+                )
                 mut ra2 := LvAddr {}
                 ra2.ptr = rr2
                 ra2.ts = fts
@@ -4374,8 +4316,9 @@ func member_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
     mut fs := 0
     idx := ss != 0 ? field_index(s, ss, nn.name, fs) : 0 - 1
     if idx < 0:
-        lv_error(v, a, n, "member '" + nn.name + "' of non-struct/unknown type '" +
-                 sname2 + "'")
+        lv_error(
+            v, a, n, "member '" + nn.name + "' of non-struct/unknown type '" + sname2 + "'"
+        )
         mut ra := LvAddr {}
         ra.ptr = "null"
         ra.ts = str.Len(nn.type_str) > 0 ? nn.type_str : "i32"
@@ -4383,8 +4326,9 @@ func member_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
     end
     fts := sm.ToString(s, sm.SymAt(s, fs).ty)
     r := new_tmp(v)
-    emit(v, r + " = getelementptr inbounds " + struct_ltype(sname2) + ", ptr " +
-            base + ", i32 0, i32 " + co.I64Toa(idx as i64))
+    emit(
+        v, r + " = getelementptr inbounds " + struct_ltype(sname2) + ", ptr " + base + ", i32 0, i32 " + co.I64Toa(idx as i64)
+    )
     mut ra2 := LvAddr {}
     ra2.ptr = r
     ra2.ts = fts
@@ -4402,8 +4346,9 @@ func index_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
         emit(v, data + " = extractvalue { ptr, i64 } " + sv.ref + ", 0")
         idxv := conv(v, s, a, lv_expr(v, s, a, nn.b), "i64")
         r := new_tmp(v)
-        emit(v, r + " = getelementptr inbounds " + ty_of(v, s, a, ets) + ", ptr " +
-                data + ", i64 " + idxv)
+        emit(
+            v, r + " = getelementptr inbounds " + ty_of(v, s, a, ets) + ", ptr " + data + ", i64 " + idxv
+        )
         mut ra := LvAddr {}
         ra.ptr = r
         ra.ts = ets
@@ -4414,8 +4359,9 @@ func index_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
         ets2 := str.Substr(ots, 0, str.Len(ots) - 1)
         idxv2 := conv(v, s, a, lv_expr(v, s, a, nn.b), "i64")
         r2 := new_tmp(v)
-        emit(v, r2 + " = getelementptr inbounds " + ty_of(v, s, a, ets2) + ", ptr " +
-                base + ", i64 " + idxv2)
+        emit(
+            v, r2 + " = getelementptr inbounds " + ty_of(v, s, a, ets2) + ", ptr " + base + ", i64 " + idxv2
+        )
         mut ra2 := LvAddr {}
         ra2.ptr = r2
         ra2.ts = ets2
@@ -4425,8 +4371,9 @@ func index_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
     ets3 := array_elem(ots)
     idxv3 := conv(v, s, a, lv_expr(v, s, a, nn.b), "i64")
     r3 := new_tmp(v)
-    emit(v, r3 + " = getelementptr inbounds " + ty_of(v, s, a, ots) + ", ptr " +
-            b2.ptr + ", i64 0, i64 " + idxv3)
+    emit(
+        v, r3 + " = getelementptr inbounds " + ty_of(v, s, a, ots) + ", ptr " + b2.ptr + ", i64 0, i64 " + idxv3
+    )
     mut ra3 := LvAddr {}
     ra3.ptr = r3
     ra3.ts = ets3
@@ -4447,8 +4394,9 @@ func lv_struct_lit(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     sname2 := str.Len(nn.type_str) > 0 ? nn.type_str : nn.name
     ss := struct_sym(v, s, a, sname2)
     if ss == 0:
-        lv_error(v, a, n, "struct literal of unknown/unsupported type '" +
-                 (str.Len(nn.name) > 0 ? nn.name : "?") + "'")
+        lv_error(
+            v, a, n, "struct literal of unknown/unsupported type '" + (str.Len(nn.name) > 0 ? nn.name : "?") + "'"
+        )
         ret poison(nn.type_str)
     end
     sty := struct_ltype(sname2)
@@ -4478,8 +4426,9 @@ func lv_struct_lit(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
                 val = zero_of(fts)
             end
             r := new_tmp(v)
-            emit(v, r + " = insertvalue " + sty + " " + cur + ", " +
-                    ty_of(v, s, a, fts) + " " + val + ", " + co.I64Toa(idx as i64))
+            emit(
+                v, r + " = insertvalue " + sty + " " + cur + ", " + ty_of(v, s, a, fts) + " " + val + ", " + co.I64Toa(idx as i64)
+            )
             cur = r
             idx += 1
         end
@@ -4504,8 +4453,9 @@ func lv_array_lit(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     until i < nn.list.len():
         vv := conv(v, s, a, lv_expr(v, s, a, nn.list.get(i)[0]), ety)
         r := new_tmp(v)
-        emit(v, r + " = insertvalue " + aty + " " + cur + ", " + lety + " " + vv +
-                ", " + co.I64Toa(i as i64))
+        emit(
+            v, r + " = insertvalue " + aty + " " + cur + ", " + lety + " " + vv + ", " + co.I64Toa(i as i64)
+        )
         cur = r
         i += 1
     end
@@ -4531,14 +4481,16 @@ func lv_slice_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         blen = new_tmp(v)
         emit(v, blen + " = extractvalue { ptr, i64 } " + bv.ref + ", 1")
         data = new_tmp(v)
-        emit(v, data + " = getelementptr inbounds " + let2 + ", ptr " + bp +
-                ", i64 " + lo)
+        emit(
+            v, data + " = getelementptr inbounds " + let2 + ", ptr " + bp + ", i64 " + lo
+        )
     else:
         b := lv_addr_of(v, s, a, nn.a)
         blen = co.I64Toa(array_dim(bts))
         data = new_tmp(v)
-        emit(v, data + " = getelementptr inbounds " + ty_of(v, s, a, bts) +
-                ", ptr " + b.ptr + ", i64 0, i64 " + lo)
+        emit(
+            v, data + " = getelementptr inbounds " + ty_of(v, s, a, bts) + ", ptr " + b.ptr + ", i64 0, i64 " + lo
+        )
     end
 
     hi := nn.c != 0 ? conv(v, s, a, lv_expr(v, s, a, nn.c), "i64") : blen
@@ -4572,18 +4524,21 @@ func lv_lambda_value(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     emit(v, sz + " = ptrtoint ptr " + szp + " to i64")
     emit(v, env + " = call ptr @malloc(i64 " + sz + ")")
     f0 := new_tmp(v)
-    emit(v, f0 + " = getelementptr inbounds " + envty + ", ptr " + env +
-            ", i32 0, i32 0")
+    emit(
+        v, f0 + " = getelementptr inbounds " + envty + ", ptr " + env + ", i32 0, i32 0"
+    )
     emit(v, "store ptr @" + name + ", ptr " + f0)
     mut i := 0
     until i < ncap:
         c := at.Get(a, nd.captures.get(i)[0])
         cv := lv_expr(v, s, a, nd.captures.get(i)[0])
         fp := new_tmp(v)
-        emit(v, fp + " = getelementptr inbounds " + envty + ", ptr " + env +
-                ", i32 0, i32 " + co.I64Toa((i + 1) as i64))
-        emit(v, "store " + ty_of(v, s, a, c.type_str) + " " +
-                conv(v, s, a, cv, c.type_str) + ", ptr " + fp)
+        emit(
+            v, fp + " = getelementptr inbounds " + envty + ", ptr " + env + ", i32 0, i32 " + co.I64Toa((i + 1) as i64)
+        )
+        emit(
+            v, "store " + ty_of(v, s, a, c.type_str) + " " + conv(v, s, a, cv, c.type_str) + ", ptr " + fp
+        )
         i += 1
     end
     ret make_llv(env, nd.type_str)
@@ -4618,8 +4573,7 @@ func lv_literal(v &: Lv, a &: at.Ast, n: int): Llv:
         ts2 := str.Len(nd.type_str) > 0 ? nd.type_str : "f64"
         ret make_llv(float_lit_text(nd.value_float), ts2)
     end
-    if nd.op == tok.TK_STRING || nd.op == tok.TK_TRIPLE_STRING ||
-       nd.op == tok.TK_RAW_STRING || nd.op == tok.TK_UTF8_CHAR:
+    if nd.op == tok.TK_STRING || nd.op == tok.TK_TRIPLE_STRING || nd.op == tok.TK_RAW_STRING || nd.op == tok.TK_UTF8_CHAR:
         ret make_llv(strconst(v, nd.value_str), "str")
     end
     if nd.op == tok.TK_CHAR:
@@ -4638,8 +4592,9 @@ func lv_literal(v &: Lv, a &: at.Ast, n: int): Llv:
 end
 
 // ll_match_pat_eq
-func match_pat_eq(v &: Lv, s &: sm.Sema, a &: at.Ast, subj: Llv,
-                  pat_head: int): str:
+func match_pat_eq(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, subj: Llv, pat_head: int
+): str:
     pv := lv_expr(v, s, a, pat_head)
     if is_str(subj.ts):
         c := new_tmp(v)
@@ -4651,29 +4606,34 @@ func match_pat_eq(v &: Lv, s &: sm.Sema, a &: at.Ast, subj: Llv,
     cv := conv(v, s, a, pv, subj.ts)
     r2 := new_tmp(v)
     if is_float(subj.ts):
-        emit(v, r2 + " = fcmp oeq " + ty_of(v, s, a, subj.ts) + " " + subj.ref +
-                ", " + cv)
+        emit(
+            v, r2 + " = fcmp oeq " + ty_of(v, s, a, subj.ts) + " " + subj.ref + ", " + cv
+        )
     else:
-        emit(v, r2 + " = icmp eq " + ty_of(v, s, a, subj.ts) + " " + subj.ref +
-                ", " + cv)
+        emit(
+            v, r2 + " = icmp eq " + ty_of(v, s, a, subj.ts) + " " + subj.ref + ", " + cv
+        )
     end
     ret r2
 end
 
 // ll_match_variant_tag_cond
-func match_variant_tag_cond(v &: Lv, s &: sm.Sema, a &: at.Ast, subj: Llv,
-                            tag: int): str:
+func match_variant_tag_cond(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, subj: Llv, tag: int
+): str:
     t := new_tmp(v)
     r := new_tmp(v)
-    emit(v, t + " = extractvalue " + ty_of(v, s, a, subj.ts) + " " + subj.ref +
-            ", 0")
+    emit(
+        v, t + " = extractvalue " + ty_of(v, s, a, subj.ts) + " " + subj.ref + ", 0"
+    )
     emit(v, r + " = icmp eq i32 " + t + ", " + co.I64Toa(tag as i64))
     ret r
 end
 
 // ll_match_arm_cond
-func lv_match_arm_cond(v &: Lv, s &: sm.Sema, a &: at.Ast, arm: int, subj: Llv,
-                       is_variant: bool): str:
+func lv_match_arm_cond(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, arm: int, subj: Llv, is_variant: bool
+): str:
     armn := at.Get(a, arm)
     if armn.op == tok.TK_KW_ELSE:
         ret "true"
@@ -4763,14 +4723,12 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     end
     if k == at.AST_FUNC_ADDR:
         fsym := sym_of(v, s, a, nd.name)
-        if fsym == 0 || sm.SymAt(s, fsym).kind != sm.SYM_FUNC ||
-           sm.SymAt(s, fsym).overloads.len() != 1:
+        if fsym == 0 || sm.SymAt(s, fsym).kind != sm.SYM_FUNC || sm.SymAt(s, fsym).overloads.len() != 1:
             lv_error(v, a, n, "cannot take the address of '" + nd.name + "'")
             ret poison(str.Len(nd.type_str) > 0 ? nd.type_str : "ptr")
         end
         sig := sm.SymAt(s, fsym).overloads.get(0)[0]
-        is_ext := sm.SigAt(s, sig).decl != 0 &&
-                  at.Get(a, sm.SigAt(s, sig).decl).is_extern
+        is_ext := sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).is_extern
         if !is_ext:
             ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, v.pkg_scope)
         end
@@ -4784,8 +4742,9 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         end
         if v.self_byval:
             r2 := new_tmp(v)
-            emit(v, r2 + " = load " + ty_of(v, s, a, v.self_ts) + ", ptr " +
-                    v.this_ref)
+            emit(
+                v, r2 + " = load " + ty_of(v, s, a, v.self_ts) + ", ptr " + v.this_ref
+            )
             ret make_llv(r2, v.self_ts)
         end
         ret make_llv(v.this_ref, v.self_ts + "*")
@@ -4798,13 +4757,15 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     end
     if k == at.AST_VARIANT_BOX:
         vv := lv_expr(v, s, a, nd.a)
-        ret make_llv(box_variant(v, s, a, vv, nd.value_int as int, nd.type_str),
-                     nd.type_str)
+        ret make_llv(
+            box_variant(v, s, a, vv, nd.value_int as int, nd.type_str), nd.type_str
+        )
     end
     if k == at.AST_VARIANT_UNWRAP:
         vv2 := lv_expr(v, s, a, nd.a)
-        ret unwrap_variant(v, s, a, vv2,
-                           str.Len(nd.type_str) > 0 ? nd.type_str : "i32")
+        ret unwrap_variant(
+            v, s, a, vv2, str.Len(nd.type_str) > 0 ? nd.type_str : "i32"
+        )
     end
     if k == at.AST_TERNARY:
         rt := str.Len(nd.type_str) > 0 ? nd.type_str : "i32"
@@ -4827,8 +4788,9 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         emit_term(v, "br label %" + endL)
         emit_label(v, endL)
         r3 := new_tmp(v)
-        emit(v, r3 + " = phi " + ty_of(v, s, a, rt) + " [ " + tv + ", %" + tjoinL +
-                " ], [ " + fv + ", %" + fjoinL + " ]")
+        emit(
+            v, r3 + " = phi " + ty_of(v, s, a, rt) + " [ " + tv + ", %" + tjoinL + " ], [ " + fv + ", %" + fjoinL + " ]"
+        )
         ret make_llv(r3, rt)
     end
     if k == at.AST_UNARY:
@@ -4870,8 +4832,9 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
             oss := op_struct(v, s, a, at.Get(a, nd.a).type_str, sname2)
             if oss != 0:
                 mut out2 := Llv {}
-                if op_call(v, s, a, nd.a, sname2, oss, "operator_index", nd.b,
-                          out2):
+                if op_call(
+                    v, s, a, nd.a, sname2, oss, "operator_index", nd.b, out2
+                ):
                     ret out2
                 end
             end
@@ -4953,14 +4916,14 @@ func lv_assign(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     nd := at.Get(a, n)
     tgt := nd.a
     tk := tgt != 0 ? at.KindOf(a, tgt) : 0 - 1
-    if tgt == 0 || (tk != at.AST_IDENTIFIER && tk != at.AST_MEMBER &&
-                    tk != at.AST_INDEX):
+    if tgt == 0 || (
+        tk != at.AST_IDENTIFIER && tk != at.AST_MEMBER && tk != at.AST_INDEX
+    ):
         lv_error(v, a, n, "assignment to a non-lvalue")
         ret
     end
 
-    if nd.op == tok.TK_ASSIGN && tk == at.AST_INDEX &&
-       lv_index_set(v, s, a, tgt, nd.b):
+    if nd.op == tok.TK_ASSIGN && tk == at.AST_INDEX && lv_index_set(v, s, a, tgt, nd.b):
         ret
     end
     addr := lv_addr_of(v, s, a, tgt)
@@ -4986,7 +4949,7 @@ func lv_assign(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     emit(v, "store " + ty_of(v, s, a, ts) + " " + rhs + ", ptr " + addr.ptr)
 end
 
-// (C: cg->locals.len = mark) — pop back to a saved local-scope mark.
+// (C: cg->locals.len = mark) - pop back to a saved local-scope mark.
 func locals_trunc(v &: Lv, mark: int):
     until v.locals.len() > mark:
         _dropped := v.locals.pop()
@@ -5073,8 +5036,9 @@ func lv_while(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     endL := new_lbl(v, "wend")
     emit_term(v, "br label %" + condL)
     emit_label(v, condL)
-    emit_term(v, "br i1 " + as_i1(v, s, a, lv_expr(v, s, a, nd.a)) + ", label %" +
-                 bodyL + ", label %" + endL)
+    emit_term(
+        v, "br i1 " + as_i1(v, s, a, lv_expr(v, s, a, nd.a)) + ", label %" + bodyL + ", label %" + endL
+    )
     emit_label(v, bodyL)
     if v.nloop >= 64:
         lv_error(v, a, n, "loop nesting too deep")
@@ -5101,8 +5065,9 @@ func lv_for(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     emit_term(v, "br label %" + condL)
     emit_label(v, condL)
     if nd.b != 0:
-        emit_term(v, "br i1 " + as_i1(v, s, a, lv_expr(v, s, a, nd.b)) +
-                     ", label %" + bodyL + ", label %" + endL)
+        emit_term(
+            v, "br i1 " + as_i1(v, s, a, lv_expr(v, s, a, nd.b)) + ", label %" + bodyL + ", label %" + endL
+        )
     else:
         emit_term(v, "br label %" + bodyL)
     end
@@ -5180,8 +5145,9 @@ func lv_repeat(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
             emit(v, dir + " = icmp sle i64 " + initv + ", " + boundv)
             emit(v, neg + " = sub i64 0, " + raw2)
             stepv = new_tmp(v)
-            emit(v, stepv + " = select i1 " + dir + ", i64 " + raw2 + ", i64 " +
-                    neg)
+            emit(
+                v, stepv + " = select i1 " + dir + ", i64 " + raw2 + ", i64 " + neg
+            )
         end
     else:
         initv = "0"
@@ -5212,8 +5178,9 @@ func lv_repeat(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     mut cmp := ""
     if nd.c != 0 && static_dir:
         cmp = new_tmp(v)
-        emit(v, cmp + " = icmp " + (static_up ? "sle" : "sge") + " i64 " + cv +
-                ", " + boundv)
+        emit(
+            v, cmp + " = icmp " + (static_up ? "sle" : "sge") + " i64 " + cv + ", " + boundv
+        )
     else nd.c != 0:
         le := new_tmp(v)
         ge := new_tmp(v)
@@ -5349,7 +5316,7 @@ func lv_block_top(v &: Lv, s &: sm.Sema, a &: at.Ast, block: int):
 end
 
 // ===========================================================================
-// driver/llvm_toolchain.c (stage C — see the file-header note for why this,
+// driver/llvm_toolchain.c (stage C - see the file-header note for why this,
 // and not llvm_native.c's #ifdef SALAM_HAVE_LLVM body, is what's ported).
 // Every private below is prefixed `nt_` (native toolchain) to keep it out of
 // the `ll_*`/C-name-mirroring convention used for the LLVM-IR emitter.
@@ -5379,15 +5346,13 @@ func nt_opt_flag(l: int): str:
 end
 
 // triple_is_windows / triple_is_wasm (llvm_toolchain.c: no host-OS fallback
-// for an empty triple, unlike ll_target_is_windows a few hundred lines up —
-// an empty/default triple means "host default", and the C's `!win && !wasm`
+// for an empty triple, unlike ll_target_is_windows a few hundred lines up - // an empty/default triple means "host default", and the C's `!win && !wasm`
 // gate for appending `-lm` must stay true in that case).
 func nt_triple_is_windows(t: str): bool:
     if str.Len(t) == 0:
         ret false
     end
-    ret str.Contains(t, "windows") || str.Contains(t, "mingw") ||
-        str.Contains(t, "win32")
+    ret str.Contains(t, "windows") || str.Contains(t, "mingw") || str.Contains(t, "win32")
 end
 
 func nt_triple_is_wasm(t: str): bool:
@@ -5454,7 +5419,7 @@ func nt_shell_arg(v: str): str:
 end
 
 // to_tool_path. POSIX: passed through unchanged (the C's realpath() call is
-// skipped — no Salam stdlib equivalent, and every caller in this port
+// skipped - no Salam stdlib equivalent, and every caller in this port
 // already hands a cwd-relative or absolute path that bash resolves fine on
 // its own). Windows: `C:\foo\bar` -> `/mnt/c/foo/bar` for `wsl.exe -e bash`
 // (drive-letter case-folded, backslashes flipped); a path with no drive
@@ -5479,7 +5444,7 @@ func nt_to_tool_path(host: str): str:
     end
 end
 
-// resolve_tool — sm.FindBundledTool next to the running executable, else a
+// resolve_tool - sm.FindBundledTool next to the running executable, else a
 // bare fallback name resolved via PATH by the shell.
 func nt_resolve_tool(bundled: str, fallback: str): str:
     mut out := ""
@@ -5490,8 +5455,7 @@ func nt_resolve_tool(bundled: str, fallback: str): str:
 end
 
 func nt_has_path_char(spec: str): bool:
-    ret str.Contains(spec, "/") || str.Contains(spec, "\\") ||
-        str.Contains(spec, ".")
+    ret str.Contains(spec, "/") || str.Contains(spec, "\\") || str.Contains(spec, ".")
 end
 
 // emit_llvm_link
@@ -5513,7 +5477,7 @@ func nt_emit_llvm_link(spec: str, kind: str, windows: bool): str:
     ret " -l" + nt_shell_arg(spec)
 end
 
-// emit_tool_cmd — the tool-invocation line(s) appended after the script's
+// emit_tool_cmd - the tool-invocation line(s) appended after the script's
 // IN/OUT/SYSROOT variable assignments. link_kinds shorter than link_libs
 // (or absent) reads as "" per slot, same as the C's NULL kind.
 func nt_emit_tool_cmd(opts: Options): str:
@@ -5581,15 +5545,13 @@ func nt_emit_tool_cmd(opts: Options): str:
         out += " -o \"$OUT\"\n"
     else opts.output_mode == LV_OUT_JIT:
         if opts.opt_level != LV_OPT_O0:
-            out += "\"" + opt_tool + "\" " + o_flag + " \"$IN\" -o - | \"" +
-                   lli_tool + "\" -\n"
+            out += "\"" + opt_tool + "\" " + o_flag + " \"$IN\" -o - | \"" + lli_tool + "\" -\n"
         else:
             out += "\"" + lli_tool + "\" \"$IN\"\n"
         end
     else opts.output_mode == LV_OUT_IR:
         if opts.opt_level != LV_OPT_O0:
-            out += "\"" + opt_tool + "\" " + o_flag +
-                   " -S \"$IN\" -o \"$IN\"\n"
+            out += "\"" + opt_tool + "\" " + o_flag + " -S \"$IN\" -o \"$IN\"\n"
         else !opts.verify_module:
             out += "true\n"
         end
@@ -5617,9 +5579,9 @@ end
 //                     plays the C NULL; src_path "" = NULL)
 //   NativeAvailable/NativeRun = driver/llvm_toolchain.c's clang/opt/lli
 //                     shell-out path (salam_llvm_toolchain's fallback
-//                     branch — see the file-header note for why, not
+//                     branch - see the file-header note for why, not
 //                     llvm_native.c's #ifdef SALAM_HAVE_LLVM body).
-//   NativeBuildScript = no direct C equivalent — exposes emit_tool_cmd's
+//   NativeBuildScript = no direct C equivalent - exposes emit_tool_cmd's
 //                     generated script text for assertions without running
 //                     a real toolchain.
 // The remaining pubs re-export internals for tests_port/llvm_test.salam and
@@ -5638,8 +5600,9 @@ end
 
 // Test/backend constructor mirroring codegen_llvm_run_opts' init block
 // (no C equivalent; cross-package struct literals are impossible).
-pub func NewLv(lgr: lg.Logger, module_name: str, entry: str,
-               triple: str): Lv:
+pub func NewLv(
+    lgr: lg.Logger, module_name: str, entry: str, triple: str
+): Lv:
     mut v := new_lv0()
     v.log = lgr
     v.module = module_name
@@ -5750,14 +5713,16 @@ pub func TyOf(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): str:
 end
 
 // ll_conv over (ref, ts) text (Llv literals are package-private).
-pub func ConvRef(v &: Lv, s &: sm.Sema, a &: at.Ast, ref2: str, ts: str,
-                 to_ts: str): str:
+pub func ConvRef(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ref2: str, ts: str, to_ts: str
+): str:
     ret conv(v, s, a, make_llv(ref2, ts), to_ts)
 end
 
 // ll_as_i1
-pub func AsI1Ref(v &: Lv, s &: sm.Sema, a &: at.Ast, ref2: str,
-                 ts: str): str:
+pub func AsI1Ref(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ref2: str, ts: str
+): str:
     ret as_i1(v, s, a, make_llv(ref2, ts))
 end
 
@@ -5772,20 +5737,23 @@ pub func UsizeToI32(v &: Lv, ref2: str): str:
 end
 
 // ll_type_layout
-pub func TypeLayoutOf(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str,
-                      out_size &: i64, out_align &: i64):
+pub func TypeLayoutOf(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, out_size &: i64, out_align &: i64
+):
     type_layout(v, s, a, ts, out_size, out_align)
 end
 
 // ll_mangle ("" owner = C NULL, sig 0 = C NULL)
-pub func MangleOf(v &: Lv, s &: sm.Sema, owner: str, fn_name: str,
-                  sig: int): str:
+pub func MangleOf(
+    v &: Lv, s &: sm.Sema, owner: str, fn_name: str, sig: int
+): str:
     ret mangle(v, s, owner, fn_name, sig)
 end
 
 // ll_mangle_ti
-pub func MangleTiOf(v &: Lv, s &: sm.Sema, typestr: str, fn_name: str,
-                    sig: int): str:
+pub func MangleTiOf(
+    v &: Lv, s &: sm.Sema, typestr: str, fn_name: str, sig: int
+): str:
     ret mangle_ti(v, s, typestr, fn_name, sig)
 end
 
@@ -5852,13 +5820,15 @@ pub func GlobalAt(v &: Lv, i: int): LvVar:
 end
 
 // ll_box_variant / ll_unwrap_variant over (ref, ts) text.
-pub func BoxVariantRef(v &: Lv, s &: sm.Sema, a &: at.Ast, ref2: str,
-                       ts: str, tag: int, variant_ts: str): str:
+pub func BoxVariantRef(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ref2: str, ts: str, tag: int, variant_ts: str
+): str:
     ret box_variant(v, s, a, make_llv(ref2, ts), tag, variant_ts)
 end
 
-pub func UnwrapVariantRef(v &: Lv, s &: sm.Sema, a &: at.Ast, ref2: str,
-                          ts: str, member_ts: str): Llv:
+pub func UnwrapVariantRef(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ref2: str, ts: str, member_ts: str
+): Llv:
     ret unwrap_variant(v, s, a, make_llv(ref2, ts), member_ts)
 end
 
@@ -5875,14 +5845,16 @@ pub func EnumSymOf(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
     ret enum_sym(v, s, a, name)
 end
 
-pub func FieldIndexOf(s &: sm.Sema, ssym: int, field: str,
-                      out_field &: int): int:
+pub func FieldIndexOf(
+    s &: sm.Sema, ssym: int, field: str, out_field &: int
+): int:
     ret field_index(s, ssym, field, out_field)
 end
 
 // ll_pick_overload
-pub func PickOverload(v &: Lv, s &: sm.Sema, a &: at.Ast, symid: int,
-                      call: int): int:
+pub func PickOverload(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, symid: int, call: int
+): int:
     ret pick_overload(v, s, a, symid, call)
 end
 
@@ -5897,7 +5869,7 @@ pub func EmitLambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
 end
 
 // Whether a usable clang toolchain is reachable: a bundled tool next to the
-// running executable (sm.FindBundledTool, checked first — matches
+// running executable (sm.FindBundledTool, checked first - matches
 // nt_resolve_tool's own preference order), else a PATH probe for "clang"
 // then the versioned fallback name emit_tool_cmd would fall back to.
 pub func NativeAvailable(): bool:
@@ -5913,7 +5885,7 @@ end
 
 // The exact multi-line bash script NativeRun would write and execute for
 // `ll_path`/`opts` (IN/OUT/SYSROOT assignments + emit_tool_cmd's tool
-// invocation), without running anything — lets tests assert the built
+// invocation), without running anything - lets tests assert the built
 // command line with no toolchain required.
 pub func NativeBuildScript(ll_path: str, opts: Options): str:
     needs_out := opts.output_mode != LV_OUT_JIT && opts.output_mode != LV_OUT_IR
@@ -5934,10 +5906,10 @@ pub func NativeBuildScript(ll_path: str, opts: Options): str:
     ret script
 end
 
-// salam_llvm_toolchain — the real link/emit step: writes NativeBuildScript's
+// salam_llvm_toolchain - the real link/emit step: writes NativeBuildScript's
 // output to `<ll_path>.run.sh` and runs it (bash directly on POSIX,
 // `wsl.exe -e bash` on Windows, exactly like the C). -1 = no toolchain
-// available at all (NativeAvailable() false) — the C's "native path
+// available at all (NativeAvailable() false) - the C's "native path
 // unavailable" sentinel is repurposed for that instead of the unreachable
 // SALAM_HAVE_LLVM branch. Otherwise returns the child process's exit code
 // (0 = success), logged via `lgr` like the C's LOG_I/LOG_E.
@@ -5959,18 +5931,20 @@ pub func NativeRun(lgr: lg.Logger, ll_path: str, opts: Options): int:
     rc := os.Run(cmd)
     _rm := os.Remove(spath)
     if rc != 0:
-        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
-               "LLVM toolchain step failed (exit " + co.I64Toa(rc as i64) + ")")
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, "LLVM toolchain step failed (exit " + co.I64Toa(rc as i64) + ")"
+        )
     end
     ret rc
 end
 
-// codegen_llvm_run_opts — the driver-facing entry (driver/llvm_build.c).
+// codegen_llvm_run_opts - the driver-facing entry (driver/llvm_build.c).
 // `s` must hold a successful sm.Run over `program`; module_name is the
 // output module stem; entry the langpack entry name ("" = "main").
-pub func RunOpts(lgr: lg.Logger, s &: sm.Sema, a &: at.Ast, program: int,
-                 module_name: str, entry: str, opts: Options,
-                 src_path: str): Output:
+pub func RunOpts(
+    lgr: lg.Logger, s &: sm.Sema, a &: at.Ast, program: int, module_name: str, entry: str, opts: Options,
+    src_path: str
+): Output:
     mut v := new_lv0()
     v.log = lgr
     v.module = module_name
@@ -5982,8 +5956,7 @@ pub func RunOpts(lgr: lg.Logger, s &: sm.Sema, a &: at.Ast, program: int,
     v.usize = v.ptr_bits == 32 ? "i32" : "i64"
     v.optsize = opts.opt_level == LV_OPT_OS || opts.opt_level == LV_OPT_OZ
     v.minsize = opts.opt_level == LV_OPT_OZ
-    v.single_threaded = cg.ModuleSingleThreaded(a, program) &&
-                        !target_is_windows_of(v.triple)
+    v.single_threaded = cg.ModuleSingleThreaded(a, program) && !target_is_windows_of(v.triple)
     out_g(v, "; ModuleID = '" + module_name + "'\n")
     out_g(v, "source_filename = \"" + module_name + ".salam\"\n\n")
     if str.Len(v.triple) > 0:
@@ -6038,9 +6011,9 @@ pub func RunOpts(lgr: lg.Logger, s &: sm.Sema, a &: at.Ast, program: int,
         debug_init(v, src_path)
     end
     emit_impls(v, s, a)
-    lg.Log(lgr, lg.PH_CODEGEN, lg.LOG_INFO,
-           "generating LLVM IR for module '" + module_name + "'" +
-           (v.debug ? i18.Tr(" (+debug info)") : ""))
+    lg.Log(
+        lgr, lg.PH_CODEGEN, lg.LOG_INFO, "generating LLVM IR for module '" + module_name + "'" + (v.debug ? i18.Tr(" (+debug info)") : "")
+    )
     mut i := 0
     until i < at.ChildCount(a, program):
         toplevel(v, s, a, at.Child(a, program, i))
@@ -6058,15 +6031,16 @@ pub func RunOpts(lgr: lg.Logger, s &: sm.Sema, a &: at.Ast, program: int,
     o.ll_src = co.SbCstr(v.bg)
     o.ok = v.ok
     o.error = v.first_error
-    lg.Log(lgr, lg.PH_CODEGEN, lg.LOG_INFO,
-           "generated " + str.Len(o.ll_src) + " bytes of LLVM IR" +
-           (v.ok ? "" : i18.Tr(" (with unsupported constructs)")))
+    lg.Log(
+        lgr, lg.PH_CODEGEN, lg.LOG_INFO, "generated " + str.Len(o.ll_src) + " bytes of LLVM IR" + (v.ok ? "" : i18.Tr(" (with unsupported constructs)"))
+    )
     free_lv(v)
     ret o
 end
 
 // codegen_llvm_run
-pub func Run(lgr: lg.Logger, s &: sm.Sema, a &: at.Ast, program: int,
-             module_name: str, entry: str): Output:
+pub func Run(
+    lgr: lg.Logger, s &: sm.Sema, a &: at.Ast, program: int, module_name: str, entry: str
+): Output:
     ret RunOpts(lgr, s, a, program, module_name, entry, OptionsDefault(), "")
 end

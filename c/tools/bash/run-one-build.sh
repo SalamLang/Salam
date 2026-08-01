@@ -17,6 +17,8 @@ exp="$6"
 shift 6
 if [ "$#" -eq 1 ] && [ "$1" = "-" ]; then shift; fi
 
+# /* and C:\ or C:/ are already absolute; only prefix genuinely relative paths.
+# (On Git Bash/MSYS runners TMPDIR is a Windows path, so prefixing it breaks it.)
 case "$f" in /* | [A-Za-z]:*) : ;; *) f="$(pwd)/$f" ;; esac
 case "$WORK" in /* | [A-Za-z]:*) : ;; *) WORK="$(pwd)/$WORK" ;; esac
 
@@ -41,9 +43,8 @@ while [ ! -x "$exe" ] && [ "$_btry" -le 3 ]; do
     _btry=$((_btry + 1))
 done
 if [ ! -x "$exe" ]; then
-    msg="FAIL $label (build failed)
-$(sed 's/^/  /' "$buildlog" 2>/dev/null | head -20)"
-    printf '%s\n' "$msg"
+    echo "FAIL $label (build failed)"
+    sed 's/^/  /' "$buildlog" 2>/dev/null | head -20
     rm -rf "$jobdir"
     exit 0
 fi
@@ -58,12 +59,11 @@ while [ "$_try" -le 4 ]; do
     _try=$((_try + 1))
 done
 if [ "$got" = "$want" ]; then
-    printf '%s\n' "PASS $label"
+    echo "PASS $label"
 else
-    msg="FAIL $label
-    expected: $(echo "$want" | tr '\n' '|')
-    got:      $(echo "$got" | tr '\n' '|')"
-    printf '%s\n' "$msg"
+    echo "FAIL $label"
+    echo "  expected: $(echo "$want" | tr '\n' '|')"
+    echo "  got:      $(echo "$got" | tr '\n' '|')"
 fi
 rm -rf "$jobdir"
 rm -f "$exe"

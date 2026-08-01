@@ -1,0 +1,130 @@
+---
+name: 📱 Application - PR Build (Android APK)
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'android/**'
+      - '.github/workflows/app-android-pr-build.yml'
+permissions:
+  contents: read
+concurrency:
+  group: application-android-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  build:
+    name: Build unsigned debug APK + AAB
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 21 (Temurin) + Gradle cache
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+          cache-dependency-path: |
+            android/gradle/wrapper/gradle-wrapper.properties
+            android/gradle/libs.versions.toml
+            android/**/*.gradle.kts
+
+      - name: Accept Android SDK licenses
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses \
+            >/dev/null 2>&1 || true
+
+      - name: Build debug-signed APK + AAB
+        working-directory: android
+        run: |
+          set -eu
+          chmod +x ./gradlew
+          ./gradlew ":app:assembleRelease" ":app:bundleRelease" "--no-daemon" "--stacktrace"
+
+      - name: Collect & rename the APK + AAB
+        id: apk
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -eu
+          meta="android/app/build/outputs/apk/release/output-metadata.json"
+          apk_dir="android/app/build/outputs/apk/release"
+          aab_dir="android/app/build/outputs/bundle/release"
+          short_sha="${GITHUB_SHA:0:7}"
+          vname=$(jq -r '.elements[0].versionName' "$meta")
+          vcode=$(jq -r '.elements[0].versionCode' "$meta")
+          apk_src="$apk_dir/$(jq -r '.elements[0].outputFile' "$meta")"
+          aab_src=$(find "$aab_dir" -maxdepth 1 -name '*.aab' | head -1)
+          apk_name="salam-application-pr${PR_NUMBER}-${short_sha}.apk"
+          aab_name="salam-application-pr${PR_NUMBER}-${short_sha}.aab"
+          mkdir -p dist
+          cp "$apk_src" "dist/$apk_name"
+          cp "$aab_src" "dist/$aab_name"
+          {
+            echo "apk_path=dist/$apk_name"
+            echo "aab_path=dist/$aab_name"
+            echo "artifact=salam-application-android-pr${PR_NUMBER}"
+            echo "vname=$vname"
+            echo "vcode=$vcode"
+          } >> "$GITHUB_OUTPUT"
+          ls -la dist/
+
+      - name: Upload APK + AAB artifact
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.apk.outputs.artifact }}
+          path: |
+            ${{ steps.apk.outputs.apk_path }}
+            ${{ steps.apk.outputs.aab_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Post or update sticky PR comment with build link
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          VNAME: ${{ steps.apk.outputs.vname }}
+          VCODE: ${{ steps.apk.outputs.vcode }}
+        with:
+          script: |
+            const marker = '<!-- salam-app-android-pr-build -->';
+            const { ARTIFACT_URL, VNAME, VCODE } = process.env;
+            const body = [
+              marker,
+              '### 📱 Android PR build ready',
+              '',
+              `Unsigned debug build v${VNAME} (${VCODE}) - [download APK + AAB](${ARTIFACT_URL})`,
+              '',
+              '_Debug-signed only; not suitable for distribution._',
+            ].join('\n');
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,14 +17,16 @@ const errInternalError = "internal_error"
 func runSalam(ctx context.Context, req runRequest, timeout time.Duration, reqID string) (runResponse, int) {
 	jobDir, err := os.MkdirTemp(workRoot, "job-*")
 	if err != nil {
-		log.Printf("run error id=%s stage=mkdir_temp error=%q", reqID, err) // #nosec G706 -- reqID is control-char-stripped (sanitizeRequestID) and %q escapes err into a single quoted token, so neither can forge log lines
+		// #nosec G706 -- strconv.Quote escapes newlines/control chars, preventing log injection.
+		log.Printf("run error id=%s stage=mkdir_temp error=%s", reqID, strconv.Quote(err.Error()))
 		return runResponse{OK: false, Error: errInternalError, Message: "could not allocate work dir"}, http.StatusInternalServerError
 	}
 	defer os.RemoveAll(jobDir)
 
 	srcPath := filepath.Join(jobDir, "main.salam")
 	if err := os.WriteFile(srcPath, []byte(req.Code), 0o600); err != nil {
-		log.Printf("run error id=%s stage=write_source error=%q", reqID, err) // #nosec G706 -- see mkdir_temp above
+		// #nosec G706 -- strconv.Quote escapes newlines/control chars, preventing log injection.
+		log.Printf("run error id=%s stage=write_source error=%s", reqID, strconv.Quote(err.Error()))
 		return runResponse{OK: false, Error: errInternalError, Message: "could not write source"}, http.StatusInternalServerError
 	}
 
@@ -34,7 +37,8 @@ func runSalam(ctx context.Context, req runRequest, timeout time.Duration, reqID 
 
 	start := time.Now()
 	if err := cmd.Start(); err != nil {
-		log.Printf("run error id=%s stage=cmd_start error=%q", reqID, err) // #nosec G706 -- see mkdir_temp above
+		// #nosec G706 -- strconv.Quote escapes newlines/control chars, preventing log injection.
+		log.Printf("run error id=%s stage=cmd_start error=%s", reqID, strconv.Quote(err.Error()))
 		return runResponse{OK: false, Error: errInternalError, Message: "could not start salam"}, http.StatusInternalServerError
 	}
 
@@ -44,7 +48,9 @@ func runSalam(ctx context.Context, req runRequest, timeout time.Duration, reqID 
 	timedOut := runCtx.Err() == context.DeadlineExceeded
 	if timedOut && cmd.Process != nil {
 		if err := killProcessTree(cmd.Process.Pid); err != nil {
-			log.Printf("run warning id=%s stage=kill_process_group error=%q", reqID, err) // #nosec G706 -- see mkdir_temp above
+			// #nosec G706 -- reqID is restricted to a safe charset by requestID(), and
+			// strconv.Quote escapes newlines/control chars, preventing log injection.
+			log.Printf("run warning id=%s stage=kill_process_group error=%s", reqID, strconv.Quote(err.Error()))
 		}
 	}
 
@@ -58,11 +64,9 @@ func runSalam(ctx context.Context, req runRequest, timeout time.Duration, reqID 
 }
 
 func buildSalamCmd(runCtx context.Context, req runRequest, srcPath, jobDir string) (*exec.Cmd, *capBuffer, *capBuffer) {
-	// req.Type, req.Engine, and req.Language are checked against fixed
-	// allowlists in validateRunRequest before runSalam is ever reached, and
-	// srcPath is a server-generated temp path, so buildArgs never forwards
-	// unvalidated client input to the child process.
-	cmd := exec.CommandContext(runCtx, salamBin, buildArgs(req, srcPath)...) // #nosec G204 -- args are allowlist-validated, see above
+	// #nosec G204 -- req.Engine/req.Language are validated against fixed allowlists in
+	// validateRunRequest before this is reached, and srcPath is server-generated (os.MkdirTemp).
+	cmd := exec.CommandContext(runCtx, salamBin, buildArgs(req, srcPath)...)
 	cmd.Dir = jobDir
 	cmd.Env = childEnv(jobDir)
 	setProcessGroup(cmd)

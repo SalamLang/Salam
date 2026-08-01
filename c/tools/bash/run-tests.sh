@@ -90,11 +90,11 @@ if want general; then
     jobs="$WORK/.jobs-general.$$"
     : >"$jobs"
     for lang in $LANGS; do
-        for f in tests/"$lang"/general/*.salam; do
+        for f in ../tests/"$lang"/general/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            exp="tests/$lang/general/$name.out"
+            exp="../tests/$lang/general/$name.out"
             [ -f "$exp" ] || continue
             def=$(grep -o 'DEFINE: [A-Za-z0-9_]*' "$f" | sed 's/DEFINE: /-D/' | tr '\n' ' ')
             printf 'general/%s/%s\t%s\t%s\t%s\t%s\n' "$lang" "$name" "$f" "$lang" "$exp" "${def:--}" >>"$jobs"
@@ -104,11 +104,11 @@ if want general; then
 fi
 if want exec; then
     for lang in $LANGS; do
-        for f in tests/"$lang"/exec/*.salam; do
+        for f in ../tests/"$lang"/exec/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            exp="tests/$lang/exec/$name.out"
+            exp="../tests/$lang/exec/$name.out"
             [ -f "$exp" ] || continue
             got=$("$SALAM" exec "$f" --no-color --log-level=error --lang="$lang" 2>&1 | tr -d '\r')
             check_out "exec/$lang/$name" "$exp" "$got"
@@ -119,11 +119,11 @@ if want js; then
     jobs="$WORK/.jobs-js.$$"
     : >"$jobs"
     for lang in $LANGS; do
-        for f in tests/"$lang"/js/*.salam; do
+        for f in ../tests/"$lang"/js/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            exp="tests/$lang/js/$name.out"
+            exp="../tests/$lang/js/$name.out"
             [ -f "$exp" ] || continue
             printf 'js/%s/%s\t%s\t%s\t%s\t-\n' "$lang" "$name" "$f" "$lang" "$exp" >>"$jobs"
         done
@@ -132,7 +132,7 @@ if want js; then
 fi
 if want errors; then
     for lang in $LANGS; do
-        for f in tests/"$lang"/errors/*.salam; do
+        for f in ../tests/"$lang"/errors/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
@@ -151,7 +151,7 @@ if want errors; then
 fi
 if want layout; then
     for lang in $LANGS; do
-        for f in tests/"$lang"/layout/*.salam; do
+        for f in ../tests/"$lang"/layout/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
@@ -170,10 +170,10 @@ if want layout; then
 fi
 if want fmt; then
     for lang in $LANGS; do
-        for f in tests/"$lang"/fmt/*.salam; do
+        for f in ../tests/"$lang"/fmt/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
-            exp="tests/$lang/fmt/$name.out"
+            exp="../tests/$lang/fmt/$name.out"
             [ -f "$exp" ] || continue
             cp "$f" "$WORK/$name.salam"
             "$SALAM" format "$WORK/$name.salam" --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
@@ -219,12 +219,12 @@ if want ssl; then
     jobs="$WORK/.jobs-ssl.$$"
     : >"$jobs"
     for lang in $LANGS; do
-        [ -d "tests/$lang/ssl" ] || continue
-        for f in tests/"$lang"/ssl/*.salam; do
+        [ -d "../tests/$lang/ssl" ] || continue
+        for f in ../tests/"$lang"/ssl/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            exp="tests/$lang/ssl/$name.out"
+            exp="../tests/$lang/ssl/$name.out"
             [ -f "$exp" ] || continue
             printf 'ssl/%s/%s\t%s\t%s\t%s\t-\n' "$lang" "$name" "$f" "$lang" "$exp" >>"$jobs"
         done
@@ -233,7 +233,7 @@ if want ssl; then
 fi
 if want db; then
     for lang in $LANGS; do
-        [ -d "tests/$lang/db" ] || continue
+        [ -d "../tests/$lang/db" ] || continue
         DBCC=""
         for c in tcc gcc cc clang; do command -v "$c" >/dev/null 2>&1 && {
             DBCC="$c"
@@ -242,7 +242,7 @@ if want db; then
         dbok=0
         if [ -n "$DBCC" ] && command -v ar >/dev/null 2>&1; then
             mkdir -p "$WORK/dbwork/.work"
-            if "$DBCC" -c "tests/$lang/db/mysql_mock.c" -o "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1 &&
+            if "$DBCC" -c "../tests/$lang/db/mysql_mock.c" -o "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1 &&
                 ar rcs "$WORK/dbwork/.work/libsalammock.a" "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1; then
                 dbok=1
             fi
@@ -250,11 +250,11 @@ if want db; then
         if [ "$dbok" = "1" ]; then
             jobs="$WORK/.jobs-db-$lang.$$"
             : >"$jobs"
-            for f in tests/"$lang"/db/*.salam; do
+            for f in ../tests/"$lang"/db/*.salam; do
                 [ -e "$f" ] || continue
                 name=$(basename "$f" .salam)
                 case "$name" in _*) continue ;; esac
-                exp="tests/$lang/db/$name.out"
+                exp="../tests/$lang/db/$name.out"
                 [ -f "$exp" ] || continue
                 printf 'db/%s/%s\t%s\t%s\t%s\t%s\n' "$lang" "$name" "$f" "$lang" "$exp" \
                     "--cc=$DBCC -DSALAM_DB_MOCK" >>"$jobs"
@@ -267,17 +267,17 @@ if want db; then
 fi
 if want llvm; then
     for lang in $LANGS; do
-        [ -d "tests/$lang/llvm" ] || continue
-        probe_raw=$("$SALAM" llvm "tests/$lang/llvm/_probe.salam" --jit --no-color --log-level=error 2>/dev/null)
+        [ -d "../tests/$lang/llvm" ] || continue
+        probe_raw=$("$SALAM" llvm "../tests/$lang/llvm/_probe.salam" --jit --no-color --log-level=error 2>/dev/null)
         prc=$?
         probe=$(printf '%s' "$probe_raw" | tr -d '\r')
         rm -f _probe.ll _probe.ll.run.sh 2>/dev/null
         if [ "$probe" = "OK" ]; then
-            for f in tests/"$lang"/llvm/*.salam; do
+            for f in ../tests/"$lang"/llvm/*.salam; do
                 [ -e "$f" ] || continue
                 name=$(basename "$f" .salam)
                 case "$name" in _*) continue ;; esac
-                exp="tests/$lang/llvm/$name.out"
+                exp="../tests/$lang/llvm/$name.out"
                 [ -f "$exp" ] || continue
                 got=$("$SALAM" llvm "$f" --jit --no-color --log-level=error 2>/dev/null | tr -d '\r')
                 rm -f "$name.ll" "$name.ll.run.sh" 2>/dev/null
@@ -307,27 +307,27 @@ run_example_dir() {
     jobs="$WORK/.jobs-$dir.$$"
     : >"$jobs"
     for lang in $LANGS; do
-        [ -d "tests/$lang/$dir" ] || continue
+        [ -d "../tests/$lang/$dir" ] || continue
         while IFS= read -r f; do
             case "$(basename "$f")" in _*) continue ;; esac
-            rel="${f#tests/"$lang"/"$dir"/}"
+            rel="${f#../tests/"$lang"/"$dir"/}"
             name="${rel%.salam}"
-            exp="tests/$lang/$dir/$name.out"
+            exp="../tests/$lang/$dir/$name.out"
             [ -f "$exp" ] || continue
             printf '%s/%s/%s\t%s\t%s\t%s\t-\n' "$dir" "$lang" "$name" "$f" "$lang" "$exp" >>"$jobs"
         done <<EOF
-$(find "tests/$lang/$dir" -name '*.salam' | sort)
+$(find "../tests/$lang/$dir" -name '*.salam' | sort)
 EOF
     done
     run_batch "$jobs"
 
     for lang in $LANGS; do
-        [ -d "tests/$lang/$dir" ] || continue
+        [ -d "../tests/$lang/$dir" ] || continue
         while IFS= read -r f; do
             case "$(basename "$f")" in _*) continue ;; esac
-            rel="${f#tests/"$lang"/"$dir"/}"
+            rel="${f#../tests/"$lang"/"$dir"/}"
             name="${rel%.salam}"
-            base="tests/$lang/$dir/$name"
+            base="../tests/$lang/$dir/$name"
             expf="$base.expect"
             [ -f "$expf" ] || continue
             id=$(echo "$name" | tr '/ ' '__')
@@ -374,17 +374,17 @@ EOF
                 fail=$((fail + 1))
             fi
         done <<EOF
-$(find "tests/$lang/$dir" -name '*.salam' | sort)
+$(find "../tests/$lang/$dir" -name '*.salam' | sort)
 EOF
     done
 
     for lang in $LANGS; do
-        [ -d "tests/$lang/$dir" ] || continue
+        [ -d "../tests/$lang/$dir" ] || continue
         while IFS= read -r f; do
             case "$(basename "$f")" in _*) continue ;; esac
-            rel="${f#tests/"$lang"/"$dir"/}"
+            rel="${f#../tests/"$lang"/"$dir"/}"
             name="${rel%.salam}"
-            base="tests/$lang/$dir/$name"
+            base="../tests/$lang/$dir/$name"
             [ -f "$base.buildonly" ] || continue
             id=$(echo "$name" | tr '/ ' '__')
             jobdir="$WORK/exjob_${dir}_${id}"
@@ -409,7 +409,7 @@ $(sed 's/^/  /' "$buildlog" 2>/dev/null | head -20)"
             fi
             rm -rf "$jobdir"
         done <<EOF
-$(find "tests/$lang/$dir" -name '*.salam' | sort)
+$(find "../tests/$lang/$dir" -name '*.salam' | sort)
 EOF
     done
 }

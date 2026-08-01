@@ -51,12 +51,16 @@ jobs:
         run: |
           # musl.cc is a small volunteer-run host serving ~100MB archives.
           # It has been observed fully unreachable (connection timeout, not
-          # just slow) from GitHub-hosted runners, so --connect-timeout stays
-          # short and there is no curl --retry - retrying a dead host just
-          # burns CI minutes across 3 mirror URLs x 4 archs. --max-time stays
-          # generous in case a connection DOES succeed but transfers slowly.
-          # Either way this is a best-effort embed: every embed is optional
-          # and the build falls back gracefully when none of it is present.
+          # just slow) from GitHub-hosted runners - likely rate-limiting or
+          # blocking cloud/CI IP ranges - so --connect-timeout stays short
+          # and there is no curl --retry - retrying a dead host just burns
+          # CI minutes. cross-tools/musl-cross publishes the same prebuilt
+          # toolchains as GitHub Releases, which resolve over the same
+          # network GitHub-hosted runners already use, so it is tried first;
+          # musl.cc stays as a fallback mirror. --max-time stays generous in
+          # case a connection DOES succeed but transfers slowly. Either way
+          # this is a best-effort embed: every embed is optional and the
+          # build falls back gracefully when none of it is present.
           fetch() {
             out="$1"; shift
             for url in "$@"; do
@@ -70,8 +74,10 @@ jobs:
             return 1
           }
           mkdir -p /tmp/muslcc && cd /tmp/muslcc
-          for pair in aarch64:aarch64-linux-musl i686:i686-linux-musl arm:arm-linux-musleabihf; do
-            arch="${pair%%:*}"; triple="${pair#*:}"
+          for pair in aarch64:aarch64-linux-musl:aarch64-unknown-linux-musl \
+                      i686:i686-linux-musl:i686-unknown-linux-musl \
+                      arm:arm-linux-musleabihf:arm-unknown-linux-musleabihf; do
+            arch="${pair%%:*}"; rest="${pair#*:}"; triple="${rest%%:*}"; ctriple="${rest#*:}"
             SR="/tmp/muslcc/sr-${arch}"
             U=$(echo "$arch" | tr '[:lower:]' '[:upper:]')
             if [ -f "$SR/libc.a" ] && [ -f "$SR/libgcc.a" ]; then
@@ -79,20 +85,24 @@ jobs:
               echo "reusing cached $arch musl sysroot -> $SR"
               continue
             fi
-            if fetch "${arch}.tgz" \
+            rm -rf "${arch}-x"; mkdir -p "${arch}-x"
+            if fetch "${arch}.tar" \
+                 "https://github.com/cross-tools/musl-cross/releases/latest/download/${ctriple}.tar.xz" \
                  "https://musl.cc/${triple}-cross.tgz" \
                  "https://more.musl.cc/11.2.1/x86_64-linux-musl/${triple}-cross.tgz" \
                  "https://more.musl.cc/11/x86_64-linux-musl/${triple}-cross.tgz" \
-                 && tar xzf "${arch}.tgz"; then
+                 && tar xf "${arch}.tar" -C "${arch}-x"; then
               mkdir -p "$SR"
-              cp "${triple}-cross/${triple}/lib/"{crt1.o,crti.o,crtn.o,libc.a} "$SR/"
-              cp "$(find "${triple}-cross/lib/gcc/${triple}" -mindepth 2 -maxdepth 2 -name libgcc.a | head -1)" "$SR/libgcc.a"
+              for f in crt1.o crti.o crtn.o libc.a libgcc.a; do
+                found=$(find "${arch}-x" -name "$f" | head -1)
+                [ -n "$found" ] && cp "$found" "$SR/$f"
+              done
               echo "SALAM_EMBED_MUSL_${U}_DIR=$SR" >> "$GITHUB_ENV"
               echo "staged $arch musl sysroot -> $SR"; ls "$SR"
             else
-              echo "::warning::could not fetch $arch ($triple) musl toolchain from musl.cc/mirrors; not embedding $arch."
+              echo "::warning::could not fetch $arch ($triple) musl toolchain from any mirror; not embedding $arch."
             fi
-            rm -rf "${arch}.tgz" "${triple}-cross"
+            rm -rf "${arch}.tar" "${arch}-x"
           done
       - name: Cache ccache (Linux)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -368,6 +378,10 @@ jobs:
           MSYSTEM: MINGW64
           CHERE_INVOKING: '1'
         run: |
+          # cross-tools/musl-cross publishes the same prebuilt toolchains as
+          # GitHub Releases (same network GitHub-hosted runners use), so it
+          # is tried first; musl.cc, which has been observed unreachable
+          # from GitHub-hosted runners, is a fallback mirror only.
           fetch() {
             out="$1"; shift
             for url in "$@"; do
@@ -381,9 +395,11 @@ jobs:
             return 1
           }
           mkdir -p /c/muslcc && cd /c/muslcc
-          for pair in x86_64:x86_64-linux-musl aarch64:aarch64-linux-musl \
-                      i686:i686-linux-musl arm:arm-linux-musleabihf; do
-            arch="${pair%%:*}"; triple="${pair#*:}"
+          for pair in x86_64:x86_64-linux-musl:x86_64-unknown-linux-musl \
+                      aarch64:aarch64-linux-musl:aarch64-unknown-linux-musl \
+                      i686:i686-linux-musl:i686-unknown-linux-musl \
+                      arm:arm-linux-musleabihf:arm-unknown-linux-musleabihf; do
+            arch="${pair%%:*}"; rest="${pair#*:}"; triple="${rest%%:*}"; ctriple="${rest#*:}"
             SR="/c/muslcc/sr-${arch}"
             if [ "$arch" = "x86_64" ]; then VARNAME=SALAM_EMBED_MUSL_DIR
             else VARNAME="SALAM_EMBED_MUSL_$(echo "$arch" | tr '[:lower:]' '[:upper:]')_DIR"; fi
@@ -392,20 +408,24 @@ jobs:
               echo "reusing cached $arch musl sysroot -> $SR"
               continue
             fi
-            if fetch "${arch}.tgz" \
+            rm -rf "${arch}-x"; mkdir -p "${arch}-x"
+            if fetch "${arch}.tar" \
+                 "https://github.com/cross-tools/musl-cross/releases/latest/download/${ctriple}.tar.xz" \
                  "https://musl.cc/${triple}-cross.tgz" \
                  "https://more.musl.cc/11.2.1/x86_64-linux-musl/${triple}-cross.tgz" \
                  "https://more.musl.cc/11/x86_64-linux-musl/${triple}-cross.tgz" \
-                 && tar xzf "${arch}.tgz"; then
+                 && tar xf "${arch}.tar" -C "${arch}-x"; then
               mkdir -p "$SR"
-              cp "${triple}-cross/${triple}/lib/"{crt1.o,crti.o,crtn.o,libc.a} "$SR/"
-              cp "$(find "${triple}-cross/lib/gcc/${triple}" -mindepth 2 -maxdepth 2 -name libgcc.a | head -1)" "$SR/libgcc.a"
+              for f in crt1.o crti.o crtn.o libc.a libgcc.a; do
+                found=$(find "${arch}-x" -name "$f" | head -1)
+                [ -n "$found" ] && cp "$found" "$SR/$f"
+              done
               echo "${VARNAME}=$SR" >> "$GITHUB_ENV"
               echo "staged $arch musl sysroot -> $SR"; ls "$SR"
             else
-              echo "::warning::could not fetch $arch ($triple) musl toolchain; not embedding $arch."
+              echo "::warning::could not fetch $arch ($triple) musl toolchain from any mirror; not embedding $arch."
             fi
-            rm -rf "${arch}.tgz" "${triple}-cross"
+            rm -rf "${arch}.tar" "${arch}-x"
           done
 
       - name: Build salam.exe (embedded LLVM; best-effort LLD + mingw/musl sysroots)
@@ -700,8 +720,8 @@ jobs:
           path: salam.exe
 
   build-windows-i686:
-    name: Build Salam for Windows (32-bit / i686, minimal)
-    runs-on: windows-latest
+    name: Build Salam for Windows (32-bit / i686, cross-compiled static LLVM+LLD)
+    runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - name: Checkout code
@@ -709,63 +729,180 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Cache MSYS2 package downloads (mingw32)
+      - name: Install cross-build prerequisites (cmake, ninja)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake
+
+      - name: Cache llvm-mingw Linux toolchain (cross-compiler + i686 sysroot)
+        id: cache-llvm-mingw
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: C:\msys64\var\cache\pacman\pkg
-          key: msys2-mingw32-pkgs-v2-${{ github.run_id }}
-          restore-keys: |
-            msys2-mingw32-pkgs-v2-
+          path: /tmp/llvm-mingw
+          key: llvm-mingw-toolchain-20260616-v1
 
-      - name: Install MINGW32 toolchain
-        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
-        env:
-          MSYSTEM: MINGW32
-          CHERE_INVOKING: '1'
+      - name: Fetch llvm-mingw Linux toolchain
+        if: steps.cache-llvm-mingw.outputs.cache-hit != 'true'
         run: |
-          # MSYS2 does not package LLVM/clang/lld for i686 at all anymore
-          # (mingw-w64-i686-llvm and mingw-w64-i686-clang were both removed -
-          # confirmed via "target not found" at install time, consistent
-          # with LLVM dropping win32 upstream around v22:
-          # github.com/ScoopInstaller/Main/issues/7685). No LLVM build is
-          # possible on this host; this stays an interpreter + tcc build.
-          pacman -Sy --noconfirm --needed mingw-w64-i686-gcc make ccache
-          gcc --version | head -1
-          gcc -dumpmachine
+          set -eu
+          # MSYS2 dropped LLVM/clang/lld for i686 entirely (confirmed via
+          # "target not found" at install time). llvm-mingw is a separately
+          # maintained project that still builds a real LLVM 22 targeting
+          # i686-w64-mingw32; its Linux-hosted release lets us cross-compile
+          # from here without needing a native 32-bit Windows machine.
+          curl -fL --connect-timeout 15 --max-time 600 --retry 3 --retry-delay 10 \
+            -o /tmp/llvm-mingw.tar.xz \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64.tar.xz"
+          mkdir -p /tmp/llvm-mingw
+          tar xJf /tmp/llvm-mingw.tar.xz -C /tmp/llvm-mingw --strip-components=1
+          rm -f /tmp/llvm-mingw.tar.xz
+
+      - name: Cache static LLVM+LLD built for i686-w64-mingw32
+        id: cache-llvm-i686
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/llvm-i686-install
+          key: llvm-i686-mingw32-static-llvmorg-22.1.8-v1
+
+      # This is the expensive, one-time part: llvm-mingw itself only ships a
+      # *dynamic* libLLVM-22.dll for i686 (confirmed - no static .a anywhere
+      # in its release), so a genuinely static, single-file salam.exe means
+      # building LLVM+LLD from source ourselves, cross-targeting
+      # i686-w64-mingw32 with llvm-mingw's own clang (staying on one
+      # compiler/runtime end to end avoids GCC/Clang ABI-mixing risk).
+      # Cached by LLVM tag, so this only reruns when llvm-mingw bumps its
+      # LLVM version - every other push reuses the cache in seconds.
+      - name: Build static LLVM+LLD for i686-w64-mingw32 (cache miss only - slow)
+        if: steps.cache-llvm-i686.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          TC=/tmp/llvm-mingw/bin
+          git clone --depth 1 --branch llvmorg-22.1.8 --filter=blob:none --sparse \
+            https://github.com/llvm/llvm-project.git /tmp/llvm-src
+          git -C /tmp/llvm-src sparse-checkout set llvm lld cmake third-party libunwind
+
+          echo "--- stage 1: native llvm-tblgen (build-time tool, must match the LLVM source tag) ---"
+          cmake -G Ninja -S /tmp/llvm-src/llvm -B /tmp/llvm-native-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_TARGETS_TO_BUILD=X86 \
+            -DLLVM_ENABLE_PROJECTS="" \
+            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF
+          ninja -C /tmp/llvm-native-build llvm-tblgen
+
+          echo "--- stage 2: cross-compiled static LLVM+LLD for i686-w64-mingw32 ---"
+          # Targets scoped to what salam's own --target flag actually
+          # supports (x86_64/i686 -> X86, aarch64 -> AArch64, arm -> ARM,
+          # wasm32 -> WebAssembly) rather than every obscure LLVM backend,
+          # to keep this one-time build bounded. zlib/zstd/libxml2/terminfo
+          # are disabled - llvm-mingw's i686 sysroot has no static libz/
+          # libzstd to link against, and none of those are load-bearing for
+          # codegen/JIT/linking.
+          cmake -G Ninja -S /tmp/llvm-src/llvm -B /tmp/llvm-cross-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/tmp/llvm-i686-install \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER="$TC/i686-w64-mingw32-clang" \
+            -DCMAKE_CXX_COMPILER="$TC/i686-w64-mingw32-clang++" \
+            -DCMAKE_AR="$TC/i686-w64-mingw32-ar" \
+            -DCMAKE_RANLIB="$TC/i686-w64-mingw32-ranlib" \
+            -DLLVM_TABLEGEN=/tmp/llvm-native-build/bin/llvm-tblgen \
+            -DLLVM_ENABLE_PROJECTS=lld \
+            -DLLVM_TARGETS_TO_BUILD="X86;AArch64;ARM;WebAssembly" \
+            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
+            -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_LIBXML2=OFF \
+            -DLLVM_ENABLE_TERMINFO=OFF -DLLVM_ENABLE_LIBEDIT=OFF \
+            -DBUILD_SHARED_LIBS=OFF -DLLVM_ENABLE_ASSERTIONS=OFF
+          ninja -C /tmp/llvm-cross-build install
+          echo "installed sizes:"; du -sh /tmp/llvm-i686-install/lib /tmp/llvm-i686-install/include
+          rm -rf /tmp/llvm-src /tmp/llvm-native-build /tmp/llvm-cross-build
 
       - name: Cache ccache (Windows i686)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: C:\ccache-i686
-          key: ccache-win-i686-v2-${{ github.run_id }}
+          path: /tmp/ccache-i686
+          key: ccache-win-i686-v3-${{ github.run_id }}
           restore-keys: |
-            ccache-win-i686-v2-
+            ccache-win-i686-v3-
 
-      - name: Build 32-bit salam.exe (C backend, no LLVM by design)
-        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
-        env:
-          MSYSTEM: MINGW32
-          CHERE_INVOKING: '1'
-          CCACHE_DIR: 'C:/ccache-i686'
+      - name: Build 32-bit salam.exe (cross-compiled, embedded static LLVM+LLD, best-effort)
         run: |
-          ccache --max-size=300M >/dev/null 2>&1 || true
-          make -C c -j2 WITH_LLVM=0 CC="ccache gcc" \
-            EXTRA_LDFLAGS="-static -static-libgcc"
+          set -eu
+          TC=/tmp/llvm-mingw/bin
+          LLVM_ROOT=/tmp/llvm-i686-install
+          export CCACHE_DIR=/tmp/ccache-i686; mkdir -p "$CCACHE_DIR"
+          which ccache >/dev/null 2>&1 || sudo apt-get install -y ccache
+          ccache --max-size=500M >/dev/null 2>&1 || true
+
+          # salam's Makefile drives everything off `$(LLVM_CONFIG) --foo`;
+          # llvm-config itself only exists as a native-host tool (we built
+          # LLVM as a *library only*, and a real llvm-config binary would
+          # be a foreign i686-w64-mingw32 PE anyway - can't run it here to
+          # ask it questions). This shim answers the same handful of flags
+          # the Makefile actually calls with the paths/libs from the cross
+          # build above, standing in for the genuine tool.
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'set -eu' \
+            'LIBDIR="/tmp/llvm-i686-install/lib"' \
+            'INCDIR="/tmp/llvm-i686-install/include"' \
+            'for arg in "$@"; do' \
+            '  case "$arg" in' \
+            '    --includedir) echo "$INCDIR" ;;' \
+            '    --version) echo "22.1.8" ;;' \
+            '    --ldflags) echo "-L$LIBDIR" ;;' \
+            '    --system-libs) echo "-lpsapi -lshell32 -lole32 -luuid -ladvapi32 -lws2_32 -lversion -lntdll -lshlwapi -luser32" ;;' \
+            '    --cxxflags) echo "-I$INCDIR -std=c++17" ;;' \
+            '    --libs)' \
+            '      libs=""' \
+            '      for f in "$LIBDIR"/lib*.a; do' \
+            '        [ -e "$f" ] || continue' \
+            '        b=$(basename "$f" .a)' \
+            '        libs="$libs -l${b#lib}"' \
+            '      done' \
+            '      echo "-Wl,--start-group $libs -Wl,--end-group"' \
+            '      ;;' \
+            '  esac' \
+            'done' \
+            > /tmp/fake-llvm-config
+          chmod +x /tmp/fake-llvm-config
+
+          built=0
+          if [ -d "$LLVM_ROOT/lib" ]; then
+            if make -C c -j"$(nproc)" \
+                 WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 \
+                 LLVM_CONFIG=/tmp/fake-llvm-config \
+                 LLVM_CXXLIB=-lc++ \
+                 LLD_LIBS="-llldMinGW -llldELF -llldCOFF -llldMachO -llldWasm -llldCommon" \
+                 CC="ccache $TC/i686-w64-mingw32-clang" CXX="ccache $TC/i686-w64-mingw32-clang++" \
+                 EXTRA_LDFLAGS="-static"; then
+              built=1
+              echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
+              echo "Built cross-compiled, fully static salam.exe with embedded LLVM+LLD."
+            else
+              echo "::warning::cross-compiled LLVM+LLD build failed; falling back to tcc-only (no LLVM)."
+            fi
+          else
+            echo "::warning::no cross-built LLVM available; falling back to tcc-only (no LLVM)."
+          fi
+          if [ "$built" != 1 ]; then
+            make -C c clean
+            make -C c -j"$(nproc)" \
+              WITH_LLVM=0 CC="ccache $TC/i686-w64-mingw32-clang" \
+              EXTRA_LDFLAGS="-static"
+            echo "SELF_CONTAINED=0" >> "$GITHUB_ENV"
+          fi
           ccache --show-stats 2>/dev/null | head -5 || true
           test -f salam.exe || mv salam salam.exe
-          ./salam.exe version
-          file salam.exe || true
+          file salam.exe
 
       - name: Verify salam.exe is self-contained (no third-party DLLs)
-        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
-        env:
-          MSYSTEM: MINGW32
-          CHERE_INVOKING: '1'
         run: |
+          OBJDUMP=/tmp/llvm-mingw/bin/llvm-objdump
+          [ -x "$OBJDUMP" ] || OBJDUMP=objdump
           echo "DLL imports of salam.exe:"
-          objdump -p salam.exe | grep -i 'DLL Name' || true
-          bad=$(objdump -p salam.exe | grep -i 'DLL Name' \
-            | grep -iE 'libzstd|libstdc\+\+|libgcc|libwinpthread|libxml2|libz\.dll|zlib|libz3|libffi|libLLVM|libc\+\+' \
+          "$OBJDUMP" -p salam.exe | grep -i 'DLL Name' || true
+          bad=$("$OBJDUMP" -p salam.exe | grep -i 'DLL Name' \
+            | grep -iE 'libzstd|libstdc\+\+|libgcc|libwinpthread|libxml2|libz\.dll|zlib|libz3|libffi|libLLVM|libc\+\+|libunwind' \
             || true)
           if [ -n "$bad" ]; then
             echo "ERROR: salam.exe depends on non-system DLLs:"
@@ -774,8 +911,7 @@ jobs:
           fi
           echo "OK: salam.exe imports only Windows system DLLs."
 
-      - name: Stage minimal 32-bit bundle
-        shell: bash
+      - name: Stage 32-bit bundle
         run: |
           set -eu
           DIST="salam-windows-i686"
@@ -801,49 +937,52 @@ jobs:
             return 1
           }
           fetch_tcc tcc.zip tcc-0.9.27-win32-bin.zip
-          7z x tcc.zip -o"$DIST" >/dev/null
+          7z x tcc.zip -o"$DIST" >/dev/null 2>&1 || unzip -q tcc.zip -d "$DIST"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           {
-            echo "Salam for Windows (32-bit / i686) - MINIMAL build."
-            echo ""
-            echo "Runs on 32-bit and 64-bit Windows. Ships the interpreter and the"
-            echo "C backend (bundled 32-bit tcc) only - MSYS2 does not package"
-            echo "LLVM/LLD for i686 at all (LLVM dropped win32 upstream around"
-            echo "v22), so there is NO embedded LLVM and NO cross-compilation"
-            echo "in this build."
-            echo ""
-            echo "  salam.exe version"
-            echo "  salam.exe exec  myprogram.salam    (tree-walking interpreter)"
-            echo "  salam.exe build myprogram.salam    (native exe via bundled 32-bit tcc)"
-            echo ""
-            echo "Need 'salam llvm' or 'salam build --target=...' from a 32-bit"
-            echo "host? Use the 32-bit Linux build (salam-<ver>-linux-i686.zip),"
-            echo "which does embed LLVM+LLD (Debian still packages both for"
-            echo "i386). Otherwise use the 64-bit Windows build"
-            echo "(salam-<ver>-windows.zip)."
+            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
+              echo "Salam for Windows (32-bit / i686) - cross-compiled, fully static,"
+              echo "embedded LLVM+LLD toolchain."
+              echo ""
+              echo "Cross-compiled from Linux with llvm-mingw + a from-source static"
+              echo "LLVM+LLD build (MSYS2 no longer packages LLVM for i686 at all)."
+              echo "No installation needed. From this folder:"
+              echo ""
+              echo "  salam.exe version"
+              echo "  salam.exe exec  myprogram.salam              (tree-walking interpreter)"
+              echo "  salam.exe build myprogram.salam              (C backend via bundled tcc)"
+              echo "  salam.exe llvm  myprogram.salam --jit        (run via the built-in LLVM)"
+              echo "  salam.exe llvm  myprogram.salam --exec       (native exe via built-in LLVM)"
+              echo ""
+              echo "LLVM + LLD are compiled into salam.exe itself - no clang/llc/lli"
+              echo "needed, and no separate DLLs (fully static, single-file)."
+            else
+              echo "Salam for Windows (32-bit / i686) - MINIMAL build."
+              echo ""
+              echo "The cross-compiled LLVM+LLD build failed this run and fell back"
+              echo "to an interpreter + tcc-only build - see the CI log for why."
+              echo ""
+              echo "  salam.exe version"
+              echo "  salam.exe exec  myprogram.salam    (tree-walking interpreter)"
+              echo "  salam.exe build myprogram.salam    (native exe via bundled 32-bit tcc)"
+            fi
           } > "$DIST/RUN-ME.txt"
           echo "bundle contents:"; ls -la "$DIST"
 
-      - name: Smoke-test the minimal 32-bit build
-        shell: bash
+      - name: Smoke-test the 32-bit build (format checks only - can't execute an i686 PE on this Linux host)
         run: |
           set -e
           cd salam-windows-i686
-          export SALAM_STD="$PWD/std"
-          printf 'func main:\n    println "ok-win32"\nend\n' > smoke.salam
-          echo "[1] C backend via bundled 32-bit tcc"
-          ./salam.exe build smoke.salam --output=smoke_tcc.exe --log-level=warn
-          ./smoke_tcc.exe
-          echo "[2] interpreter"
-          ./salam.exe exec smoke.salam --log-level=warn
-          rm -f smoke.salam smoke*.exe salam_mod_*.c salam_mod_*.h
+          file salam.exe
+          file tcc/tcc.exe
+          echo "note: no execution smoke test here - this job cross-compiles"
+          echo "from Linux and has no way to run the resulting i686 Windows PE."
           cd ..
 
       - name: Zip the 32-bit bundle
-        shell: bash
         run: |
           VERSION=$(tr -d ' \t\r\n' < VERSION)
-          7z a -tzip "salam-${VERSION}-windows-i686.zip" salam-windows-i686 >/dev/null
+          zip -r "salam-${VERSION}-windows-i686.zip" salam-windows-i686 >/dev/null
           ls -la "salam-${VERSION}-windows-i686.zip"
 
       - name: Upload 32-bit Windows bundle
@@ -1133,6 +1272,10 @@ jobs:
             musl-embed-sysroots-arm64-v1-
       - name: Fetch cross musl sysroots (x86_64 + aarch64 + i686 + armhf) for embedding
         run: |
+          # cross-tools/musl-cross publishes the same prebuilt toolchains as
+          # GitHub Releases (same network GitHub-hosted runners use), so it
+          # is tried first; musl.cc, which has been observed unreachable
+          # from GitHub-hosted runners, is a fallback mirror only.
           fetch() {
             out="$1"; shift
             for url in "$@"; do
@@ -1146,9 +1289,11 @@ jobs:
             return 1
           }
           mkdir -p /tmp/muslcc && cd /tmp/muslcc
-          for pair in x86_64:x86_64-linux-musl aarch64:aarch64-linux-musl \
-                      i686:i686-linux-musl arm:arm-linux-musleabihf; do
-            arch="${pair%%:*}"; triple="${pair#*:}"
+          for pair in x86_64:x86_64-linux-musl:x86_64-unknown-linux-musl \
+                      aarch64:aarch64-linux-musl:aarch64-unknown-linux-musl \
+                      i686:i686-linux-musl:i686-unknown-linux-musl \
+                      arm:arm-linux-musleabihf:arm-unknown-linux-musleabihf; do
+            arch="${pair%%:*}"; rest="${pair#*:}"; triple="${rest%%:*}"; ctriple="${rest#*:}"
             SR="/tmp/muslcc/sr-${arch}"
             if [ "$arch" = "x86_64" ]; then VARNAME=SALAM_EMBED_MUSL_DIR
             else VARNAME="SALAM_EMBED_MUSL_$(echo "$arch" | tr '[:lower:]' '[:upper:]')_DIR"; fi
@@ -1157,20 +1302,24 @@ jobs:
               echo "reusing cached $arch musl sysroot -> $SR"
               continue
             fi
-            if fetch "${arch}.tgz" \
+            rm -rf "${arch}-x"; mkdir -p "${arch}-x"
+            if fetch "${arch}.tar" \
+                 "https://github.com/cross-tools/musl-cross/releases/latest/download/${ctriple}.tar.xz" \
                  "https://musl.cc/${triple}-cross.tgz" \
                  "https://more.musl.cc/11.2.1/x86_64-linux-musl/${triple}-cross.tgz" \
                  "https://more.musl.cc/11/x86_64-linux-musl/${triple}-cross.tgz" \
-                 && tar xzf "${arch}.tgz"; then
+                 && tar xf "${arch}.tar" -C "${arch}-x"; then
               mkdir -p "$SR"
-              cp "${triple}-cross/${triple}/lib/"{crt1.o,crti.o,crtn.o,libc.a} "$SR/"
-              cp "$(find "${triple}-cross/lib/gcc/${triple}" -mindepth 2 -maxdepth 2 -name libgcc.a | head -1)" "$SR/libgcc.a"
+              for f in crt1.o crti.o crtn.o libc.a libgcc.a; do
+                found=$(find "${arch}-x" -name "$f" | head -1)
+                [ -n "$found" ] && cp "$found" "$SR/$f"
+              done
               echo "${VARNAME}=$SR" >> "$GITHUB_ENV"
               echo "staged $arch musl sysroot -> $SR"; ls "$SR"
             else
-              echo "::warning::could not fetch $arch ($triple) musl toolchain; not embedding $arch."
+              echo "::warning::could not fetch $arch ($triple) musl toolchain from any mirror; not embedding $arch."
             fi
-            rm -rf "${arch}.tgz" "${triple}-cross"
+            rm -rf "${arch}.tar" "${arch}-x"
           done
       - name: Stage mingw-w64 x86_64 target files (for cross-to-Windows embed)
         run: |

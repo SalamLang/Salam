@@ -318,7 +318,7 @@ if want cross; then
                 outbin="$WORK/cross_$$_$(echo "$name-$target" | tr '/.' '__')"
                 case "$target" in *windows*) outbin="$outbin.exe" ;; esac
                 if ! "$SALAM_ABS" build "$f" --output="$outbin" --no-color --log-level=error \
-                     --lang="$lang" --target="$target" >/dev/null 2>&1; then
+                    --lang="$lang" --target="$target" >/dev/null 2>&1; then
                     echo "SKIP $label (cross build unavailable for $target - no embedded static libs, or self-hosted/non-flagship salam)"
                     continue
                 fi

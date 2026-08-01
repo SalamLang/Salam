@@ -36,6 +36,37 @@
 #  include <unistd.h>
 #endif
 
+#ifdef SALAM_HAVE_EMBED_HOSTLIBS
+#  include "driver/embed_sysroot.h"
+extern const unsigned char salam_embed_hostlibs[];
+extern const unsigned char salam_embed_hostlibs_end[];
+#endif
+
+/*
+ * Extra `-L` search directory for the embedded static third-party libs
+ * built for this host (SALAM_EMBED_HOSTLIBS_DIR in c/Makefile) - this
+ * whole file only ever runs for a plain native build (driver_build()
+ * redirects to driver_llvm_build() before reaching here whenever
+ * --target= is set), so no target-triple check is needed, unlike the
+ * equivalent salam_try_embed_hostlibs() in llvm_native.c. Returns 0 (out
+ * left untouched) when nothing was embedded - optional, not an error.
+ */
+static int try_embed_hostlibs(logger_t *log, char *out, size_t outn)
+{
+    (void)log;
+    (void)out;
+    (void)outn;
+#ifdef SALAM_HAVE_EMBED_HOSTLIBS
+    if (salam_materialize_sysroot(
+            "hostlibs", salam_embed_hostlibs,
+            (size_t)(salam_embed_hostlibs_end - salam_embed_hostlibs), out, outn)) {
+        LOG_I(log, PH_DRIVER, "using embedded static third-party libs: %s", out);
+        return 1;
+    }
+#endif
+    return 0;
+}
+
 static const char *module_of(arena_t *a, const char *path)
 {
     const char *slash = strrchr(path, '/');
@@ -637,6 +668,14 @@ int driver_build(options_t *opt)
             }
         }
         sb_puts(&cmd, lm);
+
+        {
+            char hostlibs[1024];
+            if (try_embed_hostlibs(log, hostlibs, sizeof hostlibs)) {
+                sb_puts(&cmd, " -L");
+                sb_put_shell_arg(&cmd, hostlibs);
+            }
+        }
 
         {
             int i = 0;

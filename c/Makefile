@@ -177,6 +177,24 @@ $(eval $(call embed_extralibs_target,i686_linux_musl,I686_LINUX_MUSL))
 $(eval $(call embed_extralibs_target,arm_linux_musleabihf,ARM_LINUX_MUSLEABIHF))
 $(eval $(call embed_extralibs_target,x86_64_w64_windows_gnu,X86_64_W64_WINDOWS_GNU))
 
+# Same idea as SALAM_EMBED_EXTRALIBS_*_DIR above, but for a plain native
+# build (no --target=): a single slot, since a given salam binary only ever
+# runs on the one host it was built for. Consumed by the tcc/C backend
+# (build.c) and the LLVM external-tool link path (llvm_native.c's
+# link_executable) as an extra -L search directory, so `link "sqlite3"`
+# etc. resolve to a bundled static archive even for same-host builds.
+SALAM_EMBED_HOSTLIBS_DIR ?=
+ifneq ($(SALAM_EMBED_HOSTLIBS_DIR),)
+  CPPFLAGS   += -DSALAM_HAVE_EMBED_HOSTLIBS
+  EMBED_OBJS += $(BUILD_DIR)/embed/hostlibs.o
+endif
+$(BUILD_DIR)/embed/hostlibs.o:
+	@test -d "$(SALAM_EMBED_HOSTLIBS_DIR)" || { echo "SALAM_EMBED_HOSTLIBS_DIR='$(SALAM_EMBED_HOSTLIBS_DIR)' is not a directory"; exit 1; }
+	@mkdir -p $(BUILD_DIR)/embed
+	tar cf $(BUILD_DIR)/embed/hostlibs.tar -C "$(SALAM_EMBED_HOSTLIBS_DIR)" .
+	printf '.section .rodata\n.global salam_embed_hostlibs\nsalam_embed_hostlibs:\n.incbin "%s"\n.global salam_embed_hostlibs_end\nsalam_embed_hostlibs_end:\n' "$(BUILD_DIR)/embed/hostlibs.tar" > $(BUILD_DIR)/embed/hostlibs.S
+	$(CC) -c $(BUILD_DIR)/embed/hostlibs.S -o $@
+
 .PHONY: all test dist clean debug install uninstall stage-sysroots self-contained
 
 .DEFAULT_GOAL := all

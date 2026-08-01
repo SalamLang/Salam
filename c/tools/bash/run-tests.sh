@@ -291,6 +291,49 @@ if want llvm; then
         fi
     done
 fi
+
+# Cross-compiled builds against the statically-embedded third-party libs
+# (SALAM_EMBED_EXTRALIBS_*_DIR - see c/Makefile and
+# c/src/llvm/llvm_native.c). Only meaningful on a "flagship self-contained"
+# salam build; SKIPs (not FAILs) per-target rather than erroring when a
+# target wasn't embedded (e.g. a plain non-release build) or this host has
+# no way to execute that target's binary (e.g. no qemu-*-static, or the
+# windows target on a runner with no Wine) - building without running is
+# still useful signal (confirms the static link itself succeeded), but
+# without a way to check output it can only SKIP, not PASS/FAIL.
+if want cross; then
+    for lang in $LANGS; do
+        [ -d "../tests/$lang/cross" ] || continue
+        for f in ../tests/"$lang"/cross/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            case "$name" in _*) continue ;; esac
+            exp="../tests/$lang/cross/$name.out"
+            [ -f "$exp" ] || continue
+            for pair in x86_64-linux-musl: aarch64-linux-musl:qemu-aarch64-static \
+                        i686-linux-musl: arm-linux-musleabihf:qemu-arm-static \
+                        x86_64-w64-windows-gnu:wine; do
+                target="${pair%%:*}"; runner="${pair#*:}"
+                label="cross/$lang/$name/$target"
+                outbin="$WORK/cross_$$_$(echo "$name-$target" | tr '/.' '__')"
+                case "$target" in *windows*) outbin="$outbin.exe" ;; esac
+                if ! "$SALAM_ABS" build "$f" --output="$outbin" --no-color --log-level=error \
+                     --lang="$lang" --target="$target" >/dev/null 2>&1; then
+                    echo "SKIP $label (cross build unavailable for $target - no embedded static libs, or self-hosted/non-flagship salam)"
+                    continue
+                fi
+                if [ -n "$runner" ] && ! command -v "$runner" >/dev/null 2>&1; then
+                    echo "SKIP $label (build OK; no $runner on this host to run the $target binary)"
+                    rm -f "$outbin"
+                    continue
+                fi
+                got=$($runner "$outbin" 2>&1 | tr -d '\r')
+                check_out "$label" "$exp" "$got"
+                rm -f "$outbin"
+            done
+        done
+    done
+fi
 # Categories that hold example projects (possibly nested, e.g. apps/webview/*
 # or games/pacman/src/*): discovered recursively and matched by sibling
 # .out/.expect/.buildonly files, unlike the flat sections above.

@@ -120,28 +120,30 @@ jobs:
           key: ccache-linux-${{ github.run_id }}
           restore-keys: |
             ccache-linux-
-      - name: Cache static third-party libs (sqlite3 + hiredis, per --target=)
+      - name: Cache static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-v1
-      # Static libsqlite3.a/libhiredis.a per supported --target= triple,
-      # embedded into salam itself (see SALAM_EMBED_EXTRALIBS_*_DIR below
-      # and c/src/llvm/llvm_native.c's salam_try_embed_extralibs_{musl,mingw})
-      # so `link "sqlite3"`/`link "hiredis"` resolve to a bundled static
-      # archive on any target - no separate install needed by whoever
-      # eventually runs a salam-built program. Kept as its own toolchain
-      # fetch, independent of the crt/libc musl-cross fetch above (which
-      # discards the full toolchain after copying out crt1.o/libc.a/etc.)
-      # so this never risks touching that already-working logic. Both
-      # libraries are built together per target (not as separate steps) so
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v1
+      # Static libsqlite3.a/libhiredis.a/libssl.a/libcrypto.a/libmariadb.a per
+      # supported --target= triple, embedded into salam itself (see
+      # SALAM_EMBED_EXTRALIBS_*_DIR below and c/src/llvm/llvm_native.c's
+      # salam_try_embed_extralibs_{musl,mingw}) so `link "sqlite3"`/
+      # `link "hiredis"`/`link "ssl"`+`link "crypto"`/`link "mariadb"`
+      # resolve to a bundled static archive on any target - no separate
+      # install needed by whoever eventually runs a salam-built program.
+      # Kept as its own toolchain fetch, independent of the crt/libc
+      # musl-cross fetch above (which discards the full toolchain after
+      # copying out crt1.o/libc.a/etc.) so this never risks touching that
+      # already-working logic. All libraries are built together per target
+      # (not as separate steps) so
       # the aarch64/i686/arm cross-toolchain - a real, ~100MB fetch - only
       # gets downloaded once per target rather than once per library.
       - name: Build static third-party libs for all --target= triples
         run: |
           set -eu
           mkdir -p /tmp/extralibs
-          TARGETS="x86_64-linux-musl aarch64-linux-musl i686-linux-musl arm-linux-musleabihf x86_64-w64-windows-gnu"
+          TARGETS="x86_64-linux-musl aarch64-linux-musl i686-linux-musl arm-linux-musleabihf x86_64-w64-windows-gnu hostlibs"
           need_build() { [ ! -f "/tmp/extralibs/$2/lib$1.a" ]; }
           any_needed() { for t in $TARGETS; do need_build "$1" "$t" && return 0; done; return 1; }
 
@@ -190,6 +192,46 @@ jobs:
             fi
             rm -rf /tmp/openssl-build
           }
+          # MariaDB Connector/C is CMake-based (needs a compiler + system-name
+          # override per target, not a simple CC/AR pair) - same reasoning as
+          # openssl above. WITH_SSL/WITH_CURL are OFF: bundling TLS support
+          # for the client would need the openssl *headers* threaded through
+          # too (we only keep libssl.a/libcrypto.a from the build above),
+          # left for a follow-up rather than risking this already-heaviest
+          # phase on more untested surface. The project's own CMake install
+          # step renames the static lib to libmariadb.a via a symlink, but
+          # salam's embed extraction (a deliberately tiny custom untar, see
+          # c/src/driver/embed_sysroot.c) does not support symlinks, so the
+          # rename is done here with a plain copy instead.
+          if any_needed mariadb; then
+            git clone --quiet --depth 1 --branch v3.4.9 \
+              https://github.com/mariadb-corporation/mariadb-connector-c.git /tmp/mariadb-src
+          fi
+          build_mariadb() {
+            target="$1"; shift
+            need_build mariadb "$target" || { echo "reusing cached mariadb for $target"; return 0; }
+            rm -rf /tmp/mariadb-build; mkdir -p /tmp/mariadb-build
+            if ( cd /tmp/mariadb-build \
+                 && cmake /tmp/mariadb-src -DCMAKE_BUILD_TYPE=Release \
+                      -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF -DWITH_SSL=OFF "$@" \
+                 && cmake --build . --target mariadbclient -j"$JOBS" ) \
+                 >/tmp/mariadb-build.log 2>&1; then
+              LIB=$(find /tmp/mariadb-build -name "libmariadbclient.a" | head -1)
+              if [ -n "$LIB" ]; then
+                mkdir -p "/tmp/extralibs/$target"
+                cp "$LIB" "/tmp/extralibs/$target/libmariadbclient.a"
+                cp "$LIB" "/tmp/extralibs/$target/libmariadb.a"
+                cp "$LIB" "/tmp/extralibs/$target/libmysqlclient.a"
+                echo "built libmariadb.a for $target"
+              else
+                echo "::warning::mariadb build for $target reported success but libmariadbclient.a is missing; skipping"
+              fi
+            else
+              echo "::warning::mariadb build failed for $target; skipping static mariadb for this target"
+              tail -80 /tmp/mariadb-build.log || true
+            fi
+            rm -rf /tmp/mariadb-build
+          }
 
           build_sqlite3() {
             target="$1"; cc="$2"; ar="$3"
@@ -223,6 +265,17 @@ jobs:
           build_all x86_64-w64-windows-gnu x86_64-w64-mingw32-gcc x86_64-w64-mingw32-ar
           build_openssl x86_64-linux-musl linux-x86_64 CC=musl-gcc
           build_openssl x86_64-w64-windows-gnu mingw64 --cross-compile-prefix=x86_64-w64-mingw32-
+          build_mariadb x86_64-linux-musl -DCMAKE_C_COMPILER=musl-gcc
+          build_mariadb x86_64-w64-windows-gnu -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc
+          # "hostlibs" isn't a --target= triple - it's this runner's own
+          # native glibc host (ubuntu-latest), for SALAM_EMBED_HOSTLIBS_DIR
+          # (same-host, no --target= builds - see c/src/driver/build.c and
+          # c/src/llvm/llvm_native.c). Genuinely separate from the
+          # x86_64-linux-musl build above: this runner links glibc
+          # natively, not musl, so it needs its own glibc-linked .a files.
+          build_all hostlibs gcc ar
+          build_openssl hostlibs linux-x86_64 CC=gcc
+          build_mariadb hostlibs -DCMAKE_C_COMPILER=gcc
 
           # aarch64/i686/arm need the full cross-tools/musl-cross toolchain
           # (not just the trimmed crt1.o/libc.a the sysroot-embed step
@@ -233,7 +286,8 @@ jobs:
                       arm:arm-linux-musleabihf:arm-unknown-linux-musleabihf:linux-armv4; do
             arch="${pair%%:*}"; rest="${pair#*:}"; target="${rest%%:*}"
             rest2="${rest#*:}"; ctriple="${rest2%%:*}"; ossl_target="${rest2#*:}"
-            need_build sqlite3 "$target" || need_build hiredis "$target" || need_build openssl "$target" || {
+            need_build sqlite3 "$target" || need_build hiredis "$target" \
+              || need_build openssl "$target" || need_build mariadb "$target" || {
               echo "reusing cached static libs for $target"; continue; }
             rm -rf "/tmp/xtc-${arch}"; mkdir -p "/tmp/xtc-${arch}"
             if curl -fL --connect-timeout 5 --max-time 300 --speed-limit 512 --speed-time 30 \
@@ -250,6 +304,8 @@ jobs:
               if [ -n "$GCC" ] && [ -n "$AR" ]; then
                 build_all "$target" "$GCC" "$AR"
                 build_openssl "$target" "$ossl_target" "--cross-compile-prefix=$(dirname "$GCC")/${ctriple}-"
+                build_mariadb "$target" -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR="$arch" \
+                  -DCMAKE_C_COMPILER="$GCC"
               else
                 echo "::warning::could not locate cross-gcc/ar for $arch in the fetched toolchain; skipping static third-party libs for $target"
               fi
@@ -259,10 +315,14 @@ jobs:
             chmod -R u+rwX "/tmp/xtc-${arch}" 2>/dev/null || true
             rm -rf "/tmp/xtc-${arch}" "/tmp/xtc-${arch}.tar"
           done
-          rm -rf /tmp/sqlite3.zip /tmp/sqlite3-src /tmp/hiredis-src /tmp/openssl.tar.gz
+          rm -rf /tmp/sqlite3.zip /tmp/sqlite3-src /tmp/hiredis-src /tmp/openssl.tar.gz /tmp/mariadb-src
 
           for target in $TARGETS; do
             [ -d "/tmp/extralibs/$target" ] || continue
+            if [ "$target" = "hostlibs" ]; then
+              echo "SALAM_EMBED_HOSTLIBS_DIR=/tmp/extralibs/hostlibs" >> "$GITHUB_ENV"
+              continue
+            fi
             var="SALAM_EMBED_EXTRALIBS_$(echo "$target" | tr 'a-z-' 'A-Z_')_DIR"
             echo "${var}=/tmp/extralibs/$target" >> "$GITHUB_ENV"
           done
@@ -278,7 +338,8 @@ jobs:
                SALAM_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL_DIR="${SALAM_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL_DIR:-}" \
                SALAM_EMBED_EXTRALIBS_I686_LINUX_MUSL_DIR="${SALAM_EMBED_EXTRALIBS_I686_LINUX_MUSL_DIR:-}" \
                SALAM_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF_DIR="${SALAM_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF_DIR:-}" \
-               SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR="${SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR:-}"; then
+               SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR="${SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR:-}" \
+               SALAM_EMBED_HOSTLIBS_DIR="${SALAM_EMBED_HOSTLIBS_DIR:-}"; then
             echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
             echo "Built flagship self-contained salam."
           else
@@ -621,11 +682,11 @@ jobs:
             rm -rf "${arch}.tar" "${arch}-x" 2>/dev/null || true
           done
 
-      - name: Cache static third-party libs (sqlite3 + hiredis, per --target=)
+      - name: Cache static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-win-v1
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v1
       # Windows counterpart of the Linux job's identically-named step - see
       # its comment for the overall rationale. Only x86_64-w64-windows-gnu
       # (this job's own native target) is built here, via the native MSYS2
@@ -679,7 +740,61 @@ jobs:
           else
             echo "reusing cached libhiredis.a for x86_64-w64-windows-gnu"
           fi
+          if need_build openssl; then
+            pacman -Sy --noconfirm --needed perl >/dev/null
+            curl -fL --connect-timeout 15 --max-time 180 -o /tmp/openssl.tar.gz \
+              "https://github.com/openssl/openssl/releases/download/openssl-3.6.3/openssl-3.6.3.tar.gz"
+            echo "243a86649cf6f23eeb6a2ff2456e09e5d77dd9018a54d3d96b0c6bdd6ba6c7f1  /tmp/openssl.tar.gz" \
+              | sha256sum -c -
+            rm -rf /tmp/openssl-build; mkdir -p /tmp/openssl-build
+            tar xf /tmp/openssl.tar.gz -C /tmp/openssl-build --strip-components=1
+            if ( cd /tmp/openssl-build && ./Configure mingw64 no-shared no-tests no-docs no-apps \
+                 && make -j"$(nproc)" build_libs ) >/tmp/openssl-build.log 2>&1 \
+               && [ -f /tmp/openssl-build/libssl.a ] && [ -f /tmp/openssl-build/libcrypto.a ]; then
+              cp /tmp/openssl-build/libssl.a /tmp/openssl-build/libcrypto.a \
+                /c/extralibs/x86_64-w64-windows-gnu/
+              echo "built libssl.a/libcrypto.a for x86_64-w64-windows-gnu"
+            else
+              echo "::warning::openssl build failed for x86_64-w64-windows-gnu; skipping static openssl"
+              tail -60 /tmp/openssl-build.log || true
+            fi
+            rm -rf /tmp/openssl-build /tmp/openssl.tar.gz
+          else
+            echo "reusing cached openssl for x86_64-w64-windows-gnu"
+          fi
+          if need_build mariadb; then
+            pacman -Sy --noconfirm --needed mingw-w64-x86_64-cmake >/dev/null
+            git clone --quiet --depth 1 --branch v3.4.9 \
+              https://github.com/mariadb-corporation/mariadb-connector-c.git /tmp/mariadb-src
+            rm -rf /tmp/mariadb-build; mkdir -p /tmp/mariadb-build
+            if ( cd /tmp/mariadb-build \
+                 && cmake /tmp/mariadb-src -G "MSYS Makefiles" -DCMAKE_BUILD_TYPE=Release \
+                      -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF -DWITH_SSL=OFF \
+                 && cmake --build . --target mariadbclient -j"$(nproc)" ) \
+                 >/tmp/mariadb-build.log 2>&1; then
+              LIB=$(find /tmp/mariadb-build -name "libmariadbclient.a" | head -1)
+              if [ -n "$LIB" ]; then
+                cp "$LIB" /c/extralibs/x86_64-w64-windows-gnu/libmariadbclient.a
+                cp "$LIB" /c/extralibs/x86_64-w64-windows-gnu/libmariadb.a
+                cp "$LIB" /c/extralibs/x86_64-w64-windows-gnu/libmysqlclient.a
+                echo "built libmariadb.a for x86_64-w64-windows-gnu"
+              else
+                echo "::warning::mariadb build reported success but libmariadbclient.a is missing; skipping"
+              fi
+            else
+              echo "::warning::mariadb build failed for x86_64-w64-windows-gnu; skipping static mariadb"
+              tail -80 /tmp/mariadb-build.log || true
+            fi
+            rm -rf /tmp/mariadb-build /tmp/mariadb-src
+          else
+            echo "reusing cached mariadb for x86_64-w64-windows-gnu"
+          fi
           echo "SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR=C:/extralibs/x86_64-w64-windows-gnu" \
+            >> "$GITHUB_ENV"
+          # This job's own native (no --target=) build IS x86_64-w64-windows-gnu
+          # - reuse the same staged libs for SALAM_EMBED_HOSTLIBS_DIR rather
+          # than building a redundant second copy.
+          echo "SALAM_EMBED_HOSTLIBS_DIR=C:/extralibs/x86_64-w64-windows-gnu" \
             >> "$GITHUB_ENV"
 
       - name: Build salam.exe (embedded LLVM; best-effort LLD + mingw/musl sysroots)
@@ -720,6 +835,7 @@ jobs:
                  SALAM_EMBED_MUSL_I686_DIR="${SALAM_EMBED_MUSL_I686_DIR:-}" \
                  SALAM_EMBED_MUSL_ARM_DIR="${SALAM_EMBED_MUSL_ARM_DIR:-}" \
                  SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR="${SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR:-}" \
+                 SALAM_EMBED_HOSTLIBS_DIR="${SALAM_EMBED_HOSTLIBS_DIR:-}" \
                  EXTRA_LDFLAGS="-static -static-libgcc -static-libstdc++"; then
               built=1
               echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"

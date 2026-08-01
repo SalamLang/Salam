@@ -29,11 +29,13 @@
 
 #if defined(SALAM_HAVE_EMBED_MUSL) || defined(SALAM_HAVE_EMBED_MUSL_AARCH64) ||          \
     defined(SALAM_HAVE_EMBED_MUSL_I686) || defined(SALAM_HAVE_EMBED_MUSL_ARM) ||         \
-    defined(SALAM_HAVE_EMBED_MINGW) || defined(SALAM_HAVE_EMBED_EXTRALIBS_X86_64_LINUX_MUSL) || \
+    defined(SALAM_HAVE_EMBED_MINGW) ||                                                   \
+    defined(SALAM_HAVE_EMBED_EXTRALIBS_X86_64_LINUX_MUSL) ||                             \
     defined(SALAM_HAVE_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL) ||                            \
     defined(SALAM_HAVE_EMBED_EXTRALIBS_I686_LINUX_MUSL) ||                               \
     defined(SALAM_HAVE_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF) ||                          \
-    defined(SALAM_HAVE_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU)
+    defined(SALAM_HAVE_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU) ||                        \
+    defined(SALAM_HAVE_EMBED_HOSTLIBS)
 #  include "driver/embed_sysroot.h"
 #endif
 #ifdef SALAM_HAVE_EMBED_MUSL /* x86_64 host musl (kept name for compatibility) */
@@ -85,6 +87,15 @@ extern const unsigned char salam_embed_extralibs_arm_linux_musleabihf_end[];
 #ifdef SALAM_HAVE_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU
 extern const unsigned char salam_embed_extralibs_x86_64_w64_windows_gnu[];
 extern const unsigned char salam_embed_extralibs_x86_64_w64_windows_gnu_end[];
+#endif
+/*
+ * Same static third-party libs, but for a plain native build (no
+ * --target=) rather than a cross triple - see SALAM_EMBED_HOSTLIBS_DIR in
+ * c/Makefile. Consumed by link_executable() below.
+ */
+#ifdef SALAM_HAVE_EMBED_HOSTLIBS
+extern const unsigned char salam_embed_hostlibs[];
+extern const unsigned char salam_embed_hostlibs_end[];
 #endif
 
 #ifndef SALAM_HAVE_LLVM
@@ -210,6 +221,29 @@ static int run_opt(logger_t *log, LLVMModuleRef mod, LLVMTargetMachineRef tm,
     return 0;
 }
 
+/*
+ * Extra `-L` search directory for the embedded static third-party libs
+ * built for this exact host (see SALAM_EMBED_HOSTLIBS_DIR in c/Makefile),
+ * analogous to salam_try_embed_extralibs_{musl,mingw} but for a native,
+ * non-cross build. Returns 0 (out left untouched) when nothing was
+ * embedded - optional, not an error.
+ */
+static int salam_try_embed_hostlibs(logger_t *log, char *out, size_t outn)
+{
+    (void)log;
+    (void)out;
+    (void)outn;
+#  ifdef SALAM_HAVE_EMBED_HOSTLIBS
+    if (salam_materialize_sysroot(
+            "hostlibs", salam_embed_hostlibs,
+            (size_t)(salam_embed_hostlibs_end - salam_embed_hostlibs), out, outn)) {
+        LOG_I(log, PH_DRIVER, "using embedded static third-party libs: %s", out);
+        return 1;
+    }
+#  endif
+    return 0;
+}
+
 static const char *resolve_linker(char *buf, size_t cap)
 {
     if (salam_find_bundled_tool("gcc", buf, cap)) return buf;
@@ -238,6 +272,17 @@ static int link_executable(logger_t *log, const char *obj, const char *out,
     sb_puts(&cmd, "\" -o \"");
     sb_puts(&cmd, out);
     sb_puts(&cmd, "\"");
+    if (!opts->target_triple || !opts->target_triple[0]) {
+        /* Host-arch static libs only make sense for a same-host build -
+         * this path is also reached as a fallback for cross triples the
+         * in-process ELF/mingw linkers don't handle (e.g. wasm), where an
+         * x86_64 (or whatever this host is) .a would be the wrong ABI. */
+        char hostlibs[1024];
+        if (salam_try_embed_hostlibs(log, hostlibs, sizeof hostlibs)) {
+            sb_puts(&cmd, " -L");
+            sb_put_shell_arg(&cmd, hostlibs);
+        }
+    }
     {
         int i = 0;
         for (; i < opts->nlink; i++) {
@@ -426,40 +471,40 @@ static int salam_try_embed_extralibs_musl(logger_t *log, const char *arch, char 
     (void)arch;
     (void)out;
     (void)outn;
-#ifdef SALAM_HAVE_EMBED_EXTRALIBS_X86_64_LINUX_MUSL
+#    ifdef SALAM_HAVE_EMBED_EXTRALIBS_X86_64_LINUX_MUSL
     if (strcmp(arch, "x86_64") == 0 &&
-        salam_materialize_sysroot(
-            "extralibs-x86_64-linux-musl", salam_embed_extralibs_x86_64_linux_musl,
-            (size_t)(salam_embed_extralibs_x86_64_linux_musl_end -
-                     salam_embed_extralibs_x86_64_linux_musl),
-            out, outn)) {
+        salam_materialize_sysroot("extralibs-x86_64-linux-musl",
+                                  salam_embed_extralibs_x86_64_linux_musl,
+                                  (size_t)(salam_embed_extralibs_x86_64_linux_musl_end -
+                                           salam_embed_extralibs_x86_64_linux_musl),
+                                  out, outn)) {
         LOG_I(log, PH_DRIVER, "using embedded static third-party libs: %s", out);
         return 1;
     }
-#endif
-#ifdef SALAM_HAVE_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL
+#    endif
+#    ifdef SALAM_HAVE_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL
     if (strcmp(arch, "aarch64") == 0 &&
-        salam_materialize_sysroot(
-            "extralibs-aarch64-linux-musl", salam_embed_extralibs_aarch64_linux_musl,
-            (size_t)(salam_embed_extralibs_aarch64_linux_musl_end -
-                     salam_embed_extralibs_aarch64_linux_musl),
-            out, outn)) {
+        salam_materialize_sysroot("extralibs-aarch64-linux-musl",
+                                  salam_embed_extralibs_aarch64_linux_musl,
+                                  (size_t)(salam_embed_extralibs_aarch64_linux_musl_end -
+                                           salam_embed_extralibs_aarch64_linux_musl),
+                                  out, outn)) {
         LOG_I(log, PH_DRIVER, "using embedded static third-party libs: %s", out);
         return 1;
     }
-#endif
-#ifdef SALAM_HAVE_EMBED_EXTRALIBS_I686_LINUX_MUSL
+#    endif
+#    ifdef SALAM_HAVE_EMBED_EXTRALIBS_I686_LINUX_MUSL
     if (strcmp(arch, "i386") == 0 &&
-        salam_materialize_sysroot(
-            "extralibs-i686-linux-musl", salam_embed_extralibs_i686_linux_musl,
-            (size_t)(salam_embed_extralibs_i686_linux_musl_end -
-                     salam_embed_extralibs_i686_linux_musl),
-            out, outn)) {
+        salam_materialize_sysroot("extralibs-i686-linux-musl",
+                                  salam_embed_extralibs_i686_linux_musl,
+                                  (size_t)(salam_embed_extralibs_i686_linux_musl_end -
+                                           salam_embed_extralibs_i686_linux_musl),
+                                  out, outn)) {
         LOG_I(log, PH_DRIVER, "using embedded static third-party libs: %s", out);
         return 1;
     }
-#endif
-#ifdef SALAM_HAVE_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF
+#    endif
+#    ifdef SALAM_HAVE_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF
     if (strcmp(arch, "arm") == 0 &&
         salam_materialize_sysroot(
             "extralibs-arm-linux-musleabihf", salam_embed_extralibs_arm_linux_musleabihf,
@@ -469,7 +514,7 @@ static int salam_try_embed_extralibs_musl(logger_t *log, const char *arch, char 
         LOG_I(log, PH_DRIVER, "using embedded static third-party libs: %s", out);
         return 1;
     }
-#endif
+#    endif
     return 0;
 }
 
@@ -483,7 +528,7 @@ static int salam_try_embed_extralibs_mingw(logger_t *log, const char *arch, char
     (void)arch;
     (void)out;
     (void)outn;
-#ifdef SALAM_HAVE_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU
+#    ifdef SALAM_HAVE_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU
     if (strcmp(arch, "x86_64") == 0 &&
         salam_materialize_sysroot(
             "extralibs-x86_64-w64-windows-gnu",
@@ -494,7 +539,7 @@ static int salam_try_embed_extralibs_mingw(logger_t *log, const char *arch, char
         LOG_I(log, PH_DRIVER, "using embedded static third-party libs: %s", out);
         return 1;
     }
-#endif
+#    endif
     return 0;
 }
 

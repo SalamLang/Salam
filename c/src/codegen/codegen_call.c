@@ -478,7 +478,7 @@ static const char *call_str(cg_t *cg, ast_node_t *n, ast_node_t *obj, ast_node_t
         const char *cn = cg_ctype(cg, n->type_str ? n->type_str : "Vector_str");
         int t = ++cg->tmpn;
         return cg_fmt(cg,
-                      "({ int32_t __sn%d; char** __sd%d = salam_str_split(%s, %s, "
+                      "({ int32_t __sn%d; const char** __sd%d = salam_str_split(%s, %s, "
                       "&__sn%d); (%s){ __sd%d, __sn%d, __sn%d }; })",
                       t, t, recv, a0, t, cn, t, t, t);
     }

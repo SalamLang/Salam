@@ -4,7 +4,7 @@
 set -e
 . "$(dirname "$0")/lib.sh"
 salam_ensure_compiler
-rm -f salam_mod_*.c salam_mod_*.h
+rm -rf .salam-build
 "$SALAM" run tools/salam/gen-examples.salam
 EMCC="${EMCC:-emcc}"
 if ! command -v "$EMCC" >/dev/null 2>&1; then
@@ -53,7 +53,7 @@ for d in $SRC_DIRS; do SRCS="$SRCS src/$d/*.c"; done
 # shellcheck disable=SC2086
 "$EMCC" -O2 -Isrc $SRCS \
     -o "$OUT_DIR/salam-wa.js" \
-    --preload-file std@/std \
+    --preload-file ../std@/std \
     -s MODULARIZE=0 \
     -s ENVIRONMENT=web,worker,node \
     -s ALLOW_MEMORY_GROWTH=1 \

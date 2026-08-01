@@ -1,7 +1,18 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+- [Salam Web Playground](#salam-web-playground)
+  - [How it works](#how-it-works)
+  - [Building](#building)
+  - [Running it](#running-it)
+  - [Trying the interpreter without the browser](#trying-the-interpreter-without-the-browser)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # Salam Web Playground
 
 Run Salam entirely in the browser. Edit code, run it, and preview layout pages -
-powered by the Salam compiler compiled to **[Wasm](https://webassembly.org/)**.
+powered by the Salam compiler compiled to **[WebAssembly](https://webassembly.org/)**.
 Switching to **فارسی** or **العربية** flips the whole UI **and** the editor to
 true [right-to-left](https://en.wikipedia.org/wiki/Right-to-left_script); English is
 [left-to-right](https://en.wikipedia.org/wiki/Writing_system#Directionality). No server, no C toolchain in the browser.
@@ -42,15 +53,14 @@ fails with a real diagnostic, rather than silently auto-detecting English.
 ## Building
 
 Requires the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html)
-and the tracked `compiler/salam` bootstrap binary (self-hosted - no C source
-or `salam` binary needed at the repository root anymore):
+and a built `salam` compiler at the repository root:
 
 ```sh
 git clone https://github.com/emscripten-core/emsdk
 cd emsdk && ./emsdk install latest && ./emsdk activate latest && . ./emsdk_env.sh
-cd /path/to/Salam
-sh compiler/tools/bash/build-wasm.sh   # -> editor/salam-wa.{js,wasm,data}, regenerates
-                                       #    examples_data.salam, and builds editor/index.html
+cd /path/to/Salam/compiler
+sh tools/bash/build-wasm.sh   # -> ../editor/salam-wa.{js,wasm,data}, regenerates
+                              #    examples_data.salam, and builds ../editor/index.html
 ```
 
 `build-wasm.sh` preloads the `std/` directory into the module's virtual filesystem so

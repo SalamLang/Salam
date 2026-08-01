@@ -23,7 +23,7 @@ quick_section="$(awk '
 
 build_full() {
     echo "$MARKER"
-    echo "## Benchmark results — commit \`${SHORT_SHA}\`"
+    echo "## Benchmark results - commit \`${SHORT_SHA}\`"
     echo
     if [ -n "$quick_section" ]; then
         echo "$quick_section"
@@ -32,7 +32,7 @@ build_full() {
     fi
     echo
     echo "<details>"
-    echo "<summary>Full report — all programs, environment, methodology (click to expand)</summary>"
+    echo "<summary>Full report - all programs, environment, methodology (click to expand)</summary>"
     echo
     cat "$RESULTS_FILE"
     echo
@@ -45,7 +45,7 @@ build_full() {
 
 build_truncated() {
     echo "$MARKER"
-    echo "## Benchmark results — commit \`${SHORT_SHA}\`"
+    echo "## Benchmark results - commit \`${SHORT_SHA}\`"
     echo
     if [ -n "$quick_section" ]; then
         echo "$quick_section"

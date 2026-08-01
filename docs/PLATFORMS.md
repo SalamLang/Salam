@@ -1,3 +1,18 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+- [Salam platform & word-size support](#salam-platform--word-size-support)
+  - [TL;DR](#tldr)
+  - [Can a 32-bit machine use `i64` and `f64`? - Yes.](#can-a-32-bit-machine-use-i64-and-f64---yes)
+  - [How each backend handles word size](#how-each-backend-handles-word-size)
+    - [C backend (`salam build`) - portable by construction](#c-backend-salam-build---portable-by-construction)
+    - [LLVM backend (`salam llvm`) - now width-aware](#llvm-backend-salam-llvm---now-width-aware)
+  - [Release matrix (GitHub Actions: `.github/workflows/compiler-release.yml`)](#release-matrix-github-actions-githubworkflowscompiler-releaseyml)
+    - [Why not embedded LLVM everywhere on 32-bit?](#why-not-embedded-llvm-everywhere-on-32-bit)
+  - [Recommendation](#recommendation)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # Salam platform & word-size support
 
 This document explains which CPU word sizes (32-bit / 64-bit) and operating
@@ -69,10 +84,9 @@ salam llvm prog.salam --emit-llvm --target=i686-linux-gnu   # 32-bit: usize = i3
   real 32-bit machine code (verified: a 32-bit triple produces an
   `ELF 32-bit Intel 80386` object).
 
-Width classification lives in `ll_target_ptr_bits()`; the prologue generator
-is `ll_emit_prologue()`. Both live in `compiler/llvm.salam` (the self-hosted
-compiler's LLVM backend — ported from the former `codegen_llvm_type.c`/
-`codegen_llvm.c`, now retired).
+Width classification lives in `ll_target_ptr_bits()`
+(`compiler/src/llvm/codegen_llvm_type.c`); the prologue generator is
+`ll_emit_prologue()` (`compiler/src/llvm/codegen_llvm.c`).
 
 Note: hash values and `%lld`/`%llu` formatting stay `i64` on every target - that
 is correct (64-bit math just runs via the helper routines on 32-bit).

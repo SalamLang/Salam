@@ -4,32 +4,33 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 )
 
 const maxRequestIDLen = 128
 
-// sanitizeRequestID strips characters that could be used to forge or split
-// log lines (e.g. CR/LF injection) and caps the length of client-supplied input.
-func sanitizeRequestID(id string) string {
-	id = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return -1
-		}
-		return r
-	}, id)
-	if len(id) > maxRequestIDLen {
-		id = id[:maxRequestIDLen]
+// requestID reads the client-supplied X-Request-Id header and restricts it to a
+// safe charset so it can't be used to inject fake entries into the server log.
+func requestID(r *http.Request) string {
+	id := r.Header.Get("X-Request-Id")
+	if id == "" || !isSafeRequestID(id) {
+		return "unknown"
 	}
 	return id
 }
 
-func requestID(r *http.Request) string {
-	if id := sanitizeRequestID(r.Header.Get("X-Request-Id")); id != "" {
-		return id
+func isSafeRequestID(id string) bool {
+	if len(id) > maxRequestIDLen {
+		return false
 	}
-	return "unknown"
+	for _, c := range id {
+		safe := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == '-' || c == '_' || c == '.'
+		if !safe {
+			return false
+		}
+	}
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -41,7 +42,10 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 func writeError(w http.ResponseWriter, status int, reqID, errCode, message string) {
-	log.Printf("reject id=%s status=%d error=%s message=%q", reqID, status, errCode, message) // #nosec G706
+	// #nosec G706 -- reqID is restricted to a safe charset by requestID(), errCode is
+	// always a hardcoded literal from call sites, and message is logged with %q, which
+	// escapes newlines/control characters, preventing log injection.
+	log.Printf("reject id=%s status=%d error=%s message=%q", reqID, status, errCode, message)
 	writeJSON(w, status, runResponse{OK: false, Error: errCode, Message: message, RequestID: reqID})
 }
 

@@ -30,12 +30,10 @@ run_batch() {
     results="$WORK/.batch-results.$$"
     # shellcheck disable=SC2016 # inner variables are expanded by the spawned sh, not here
     tr '\n' '\0' <"$jobs" | xargs -0 -n1 -P "$NPROC" sh -c '
-        RAW="$1"
         IFS="	"
         set -- $1
         label="$1"; f="$2"; lang="$3"; exp="$4"; extra="$5"
         unset IFS
-        printf "DEBUG pid=%s raw=[%s] label=[%s] f=[%s] lang=[%s] exp=[%s] extra=[%s]\n" "$$" "$RAW" "$label" "$f" "$lang" "$exp" "$extra" >> /tmp/debug-run-tests.log
         sh "'"$runner"'" "'"$SALAM_ABS"'" "'"$WORK"'" "$label" "$f" "$lang" "$exp" $extra
     ' _ >"$results" 2>&1
     cat "$results"

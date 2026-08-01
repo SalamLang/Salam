@@ -29,7 +29,11 @@
 
 #if defined(SALAM_HAVE_EMBED_MUSL) || defined(SALAM_HAVE_EMBED_MUSL_AARCH64) ||          \
     defined(SALAM_HAVE_EMBED_MUSL_I686) || defined(SALAM_HAVE_EMBED_MUSL_ARM) ||         \
-    defined(SALAM_HAVE_EMBED_MINGW)
+    defined(SALAM_HAVE_EMBED_MINGW) || defined(SALAM_HAVE_EMBED_EXTRALIBS_X86_64_LINUX_MUSL) || \
+    defined(SALAM_HAVE_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL) ||                            \
+    defined(SALAM_HAVE_EMBED_EXTRALIBS_I686_LINUX_MUSL) ||                               \
+    defined(SALAM_HAVE_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF) ||                          \
+    defined(SALAM_HAVE_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU)
 #  include "driver/embed_sysroot.h"
 #endif
 #ifdef SALAM_HAVE_EMBED_MUSL /* x86_64 host musl (kept name for compatibility) */
@@ -51,6 +55,36 @@ extern const unsigned char salam_embed_musl_arm_end[];
 #ifdef SALAM_HAVE_EMBED_MINGW
 extern const unsigned char salam_embed_mingw[];
 extern const unsigned char salam_embed_mingw_end[];
+#endif
+/*
+ * Static builds of third-party libraries (sqlite3, openssl, hiredis,
+ * mariadb-client) for a given --target= triple. Kept as a directory
+ * separate from the crt/libc sysroots above, because not every target's
+ * crt/libc sysroot is actually embedded on every build host - some are
+ * resolved from a system package (musl-tools/mingw-w64) at link time
+ * instead (see salam_try_embed_musl below and the mingw sysroot lookup in
+ * native_link_mingw) - but every target should still get static
+ * third-party libs regardless of where its crt/libc came from.
+ */
+#ifdef SALAM_HAVE_EMBED_EXTRALIBS_X86_64_LINUX_MUSL
+extern const unsigned char salam_embed_extralibs_x86_64_linux_musl[];
+extern const unsigned char salam_embed_extralibs_x86_64_linux_musl_end[];
+#endif
+#ifdef SALAM_HAVE_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL
+extern const unsigned char salam_embed_extralibs_aarch64_linux_musl[];
+extern const unsigned char salam_embed_extralibs_aarch64_linux_musl_end[];
+#endif
+#ifdef SALAM_HAVE_EMBED_EXTRALIBS_I686_LINUX_MUSL
+extern const unsigned char salam_embed_extralibs_i686_linux_musl[];
+extern const unsigned char salam_embed_extralibs_i686_linux_musl_end[];
+#endif
+#ifdef SALAM_HAVE_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF
+extern const unsigned char salam_embed_extralibs_arm_linux_musleabihf[];
+extern const unsigned char salam_embed_extralibs_arm_linux_musleabihf_end[];
+#endif
+#ifdef SALAM_HAVE_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU
+extern const unsigned char salam_embed_extralibs_x86_64_w64_windows_gnu[];
+extern const unsigned char salam_embed_extralibs_x86_64_w64_windows_gnu_end[];
 #endif
 
 #ifndef SALAM_HAVE_LLVM
@@ -374,15 +408,106 @@ static int salam_try_embed_musl(logger_t *log, const char *arch, char *sr, size_
     return 0;
 }
 
+/*
+ * Extra `-L` search directory for the embedded static third-party libs
+ * (sqlite3, openssl, hiredis, mariadb-client) matching a given target, if
+ * any were embedded for it. Returns 0 (out left untouched) when nothing
+ * was embedded for that target - callers must treat that as "no extra
+ * directory to add", not an error, since these libraries are optional.
+ * `arch` uses the exact same normalized values as salam_try_embed_musl
+ * above ("x86_64"/"aarch64"/"i386"/"arm") so the two stay in lockstep -
+ * an alternate triple spelling that the lenient strstr-based arch
+ * detection in native_link_elf still accepts keeps working here too.
+ */
+static int salam_try_embed_extralibs_musl(logger_t *log, const char *arch, char *out,
+                                          size_t outn)
+{
+    (void)log;
+    (void)arch;
+    (void)out;
+    (void)outn;
+#ifdef SALAM_HAVE_EMBED_EXTRALIBS_X86_64_LINUX_MUSL
+    if (strcmp(arch, "x86_64") == 0 &&
+        salam_materialize_sysroot(
+            "extralibs-x86_64-linux-musl", salam_embed_extralibs_x86_64_linux_musl,
+            (size_t)(salam_embed_extralibs_x86_64_linux_musl_end -
+                     salam_embed_extralibs_x86_64_linux_musl),
+            out, outn)) {
+        LOG_I(log, PH_DRIVER, "using embedded static third-party libs: %s", out);
+        return 1;
+    }
+#endif
+#ifdef SALAM_HAVE_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL
+    if (strcmp(arch, "aarch64") == 0 &&
+        salam_materialize_sysroot(
+            "extralibs-aarch64-linux-musl", salam_embed_extralibs_aarch64_linux_musl,
+            (size_t)(salam_embed_extralibs_aarch64_linux_musl_end -
+                     salam_embed_extralibs_aarch64_linux_musl),
+            out, outn)) {
+        LOG_I(log, PH_DRIVER, "using embedded static third-party libs: %s", out);
+        return 1;
+    }
+#endif
+#ifdef SALAM_HAVE_EMBED_EXTRALIBS_I686_LINUX_MUSL
+    if (strcmp(arch, "i386") == 0 &&
+        salam_materialize_sysroot(
+            "extralibs-i686-linux-musl", salam_embed_extralibs_i686_linux_musl,
+            (size_t)(salam_embed_extralibs_i686_linux_musl_end -
+                     salam_embed_extralibs_i686_linux_musl),
+            out, outn)) {
+        LOG_I(log, PH_DRIVER, "using embedded static third-party libs: %s", out);
+        return 1;
+    }
+#endif
+#ifdef SALAM_HAVE_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF
+    if (strcmp(arch, "arm") == 0 &&
+        salam_materialize_sysroot(
+            "extralibs-arm-linux-musleabihf", salam_embed_extralibs_arm_linux_musleabihf,
+            (size_t)(salam_embed_extralibs_arm_linux_musleabihf_end -
+                     salam_embed_extralibs_arm_linux_musleabihf),
+            out, outn)) {
+        LOG_I(log, PH_DRIVER, "using embedded static third-party libs: %s", out);
+        return 1;
+    }
+#endif
+    return 0;
+}
+
+/* Mingw counterpart of salam_try_embed_extralibs_musl - only x86_64 is
+ * embedded for windows today, matching SALAM_HAVE_EMBED_MINGW's own
+ * x86_64-only scope. `arch` is mingw_arch(t)'s normalized value. */
+static int salam_try_embed_extralibs_mingw(logger_t *log, const char *arch, char *out,
+                                           size_t outn)
+{
+    (void)log;
+    (void)arch;
+    (void)out;
+    (void)outn;
+#ifdef SALAM_HAVE_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU
+    if (strcmp(arch, "x86_64") == 0 &&
+        salam_materialize_sysroot(
+            "extralibs-x86_64-w64-windows-gnu",
+            salam_embed_extralibs_x86_64_w64_windows_gnu,
+            (size_t)(salam_embed_extralibs_x86_64_w64_windows_gnu_end -
+                     salam_embed_extralibs_x86_64_w64_windows_gnu),
+            out, outn)) {
+        LOG_I(log, PH_DRIVER, "using embedded static third-party libs: %s", out);
+        return 1;
+    }
+#endif
+    return 0;
+}
+
 static int native_link_elf(logger_t *log, const char *obj, const char *out,
                            const codegen_llvm_options_t *opts)
 {
     const char *t = opts->target_triple;
     const char *arch, *emul, *rtarch;
     char sr[1024], crt1[1200], crti[1200], crtn[1200], Lsr[1100], rt[1200];
+    char exdir[1024], Lex[1100];
     char userlibs[16][160];
     const char *argv[64];
-    int n = 0, i, rc, have_rt, have_gcc = 0;
+    int n = 0, i, rc, have_rt, have_gcc = 0, have_extralibs;
     FILE *f;
 
     if (strstr(t, "aarch64") || strstr(t, "arm64")) {
@@ -464,6 +589,11 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
     argv[n++] = crti;
     sal_snprintf(Lsr, sizeof Lsr, "-L%s", sr);
     argv[n++] = Lsr;
+    have_extralibs = salam_try_embed_extralibs_musl(log, arch, exdir, sizeof exdir);
+    if (have_extralibs) {
+        sal_snprintf(Lex, sizeof Lex, "-L%s", exdir);
+        argv[n++] = Lex;
+    }
     argv[n++] = obj;
     for (i = 0; i < opts->nlink && i < 16 && n < 50; i++) {
         const char *s = opts->link_libs[i];
@@ -501,9 +631,10 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
     const char *arch, *emul;
     char sr[1024], crt2[1200], crtbegin[1200], crtend[1200];
     char Lgcc[1100], Lsr[1100], Lsrmingw[1100], gccdir[1024];
+    char exdir[1024], Lex[1100];
     char userlibs[16][160];
     const char *argv[96];
-    int n = 0, have_gcc, i, rc;
+    int n = 0, have_gcc, i, rc, have_extralibs;
     FILE *f;
     static const char *group[] = {"-lmingw32", "-lgcc",     "-lgcc_eh",   "-lmoldname",
                                   "-lmingwex", "-lmsvcrt",  "-ladvapi32", "-lshell32",
@@ -571,6 +702,11 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
     argv[n++] = Lsr;
     sal_snprintf(Lsrmingw, sizeof Lsrmingw, "-L%s/mingw/lib", sr);
     argv[n++] = Lsrmingw;
+    have_extralibs = salam_try_embed_extralibs_mingw(log, arch, exdir, sizeof exdir);
+    if (have_extralibs) {
+        sal_snprintf(Lex, sizeof Lex, "-L%s", exdir);
+        argv[n++] = Lex;
+    }
     argv[n++] = obj;
     for (i = 0; i < opts->nlink && i < 16 && n < 70; i++) {
         const char *s = opts->link_libs[i];

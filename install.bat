@@ -63,7 +63,7 @@ rem has a %PLATFORM% asset - guards against a "latest" release that was
 rem tagged with zero assets by a failed build matrix. On success prints
 rem "VERSION|ASSET|ARCHIVEPATH" to stdout for the batch script to capture.
 set "PS_OUT="
-for /f "usebackq tokens=1-3 delims=|" %%A in (`powershell -NoProfile -Command "$ErrorActionPreference='Stop'; function TryOne($v){ $asset='salam-'+$v+'-%PLATFORM%.zip'; $url='https://github.com/%REPO%/releases/download/v'+$v+'/'+$asset; $out='%WORKDIR%\'+$asset; try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out -ErrorAction Stop; Write-Output ($v+'|'+$asset+'|'+$out); return $true } catch { return $false } }; if ('%VERSION%' -ne '') { if (TryOne '%VERSION%') { exit 0 } else { exit 1 } }; try { $rels = Invoke-RestMethod -UseBasicParsing -Uri 'https://api.github.com/repos/%REPO%/releases?per_page=10' } catch { exit 1 }; foreach ($r in $rels) { $ver = $r.tag_name -replace '^v',''; if (TryOne $ver) { exit 0 } }; exit 1"`) do (
+for /f "usebackq tokens=1-3 delims=|" %%A in (`powershell -NoProfile -Command "$ProgressPreference='SilentlyContinue'; $ErrorActionPreference='Stop'; function TryOne($v){ $asset='salam-'+$v+'-%PLATFORM%.zip'; $url='https://github.com/%REPO%/releases/download/v'+$v+'/'+$asset; $out='%WORKDIR%\'+$asset; try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out -ErrorAction Stop; Write-Output ($v+'|'+$asset+'|'+$out); return $true } catch { return $false } }; if ('%VERSION%' -ne '') { if (TryOne '%VERSION%') { exit 0 } else { exit 1 } }; try { $rels = Invoke-RestMethod -UseBasicParsing -Uri 'https://api.github.com/repos/%REPO%/releases?per_page=10' } catch { exit 1 }; foreach ($r in $rels) { $ver = $r.tag_name -replace '^v',''; if (TryOne $ver) { exit 0 } }; exit 1"`) do (
   set "VERSION=%%A"
   set "ASSET=%%B"
   set "ARCHIVE=%%C"
@@ -80,7 +80,7 @@ echo Installing Salam %VERSION% (%PLATFORM%) from:
 echo   https://github.com/%REPO%/releases/download/v%VERSION%/%ASSET%
 
 set "EXTRACT_DIR=%WORKDIR%\extracted"
-powershell -NoProfile -Command "Expand-Archive -LiteralPath '%ARCHIVE%' -DestinationPath '%EXTRACT_DIR%' -Force"
+powershell -NoProfile -Command "$ProgressPreference='SilentlyContinue'; Expand-Archive -LiteralPath '%ARCHIVE%' -DestinationPath '%EXTRACT_DIR%' -Force"
 if %ERRORLEVEL% NEQ 0 (
   echo error: could not extract %ASSET% 1>&2
   rd /s /q "%WORKDIR%" >nul 2>nul

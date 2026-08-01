@@ -8,10 +8,14 @@ rem   install.bat --dir .
 rem
 rem Env overrides:
 rem   SALAM_INSTALL_DIR   directory to place salam.exe in (default: %USERPROFILE%\.salam\bin)
-rem   SALAM_VERSION       version to install, e.g. "0.2.7" (default: latest on main)
+rem   SALAM_VERSION       version to install, e.g. "0.2.7" (default: newest release that ships a
+rem                       matching asset - a "latest" release can exist with zero assets if its
+rem                       build matrix failed, so this is not simply /releases/latest)
+rem
+rem All networking, GitHub API/JSON handling and zip extraction is done via PowerShell
+rem (bundled with every supported Windows release), so this script has no other dependency.
 
 set "REPO=SalamLang/Salam"
-set "RAW_BASE=https://raw.githubusercontent.com/%REPO%/refs/heads/main"
 set "INSTALL_DIR=%SALAM_INSTALL_DIR%"
 set "VERSION=%SALAM_VERSION%"
 
@@ -50,48 +54,30 @@ if /I "%ARCH%"=="AMD64" (
   exit /b 1
 )
 
-rem --- resolve version -------------------------------------------------
-where curl >nul 2>nul
-if %ERRORLEVEL% EQU 0 (
-  set "HAVE_CURL=1"
-) else (
-  set "HAVE_CURL=0"
-)
-
-if "%VERSION%"=="" (
-  echo Resolving latest Salam version...
-  if "%HAVE_CURL%"=="1" (
-    for /f "usebackq delims=" %%V in (`curl -fsSL "%RAW_BASE%/VERSION"`) do set "VERSION=%%V"
-  ) else (
-    for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Invoke-WebRequest -UseBasicParsing '%RAW_BASE%/VERSION').Content.Trim()"`) do set "VERSION=%%V"
-  )
-)
-set "VERSION=%VERSION: =%"
-if "%VERSION%"=="" (
-  echo error: could not resolve latest Salam version 1>&2
-  exit /b 1
-)
-
-set "ASSET=salam-%VERSION%-%PLATFORM%.zip"
-set "URL=https://github.com/%REPO%/releases/download/v%VERSION%/%ASSET%"
-
-echo Installing Salam %VERSION% (%PLATFORM%) from:
-echo   %URL%
-
 set "WORKDIR=%TEMP%\salam-install-%RANDOM%"
 mkdir "%WORKDIR%" >nul 2>nul
-set "ARCHIVE=%WORKDIR%\%ASSET%"
 
-if "%HAVE_CURL%"=="1" (
-  curl -fL --retry 3 --retry-delay 2 -o "%ARCHIVE%" "%URL%"
-) else (
-  powershell -NoProfile -Command "Invoke-WebRequest -UseBasicParsing -Uri '%URL%' -OutFile '%ARCHIVE%'"
+rem --- resolve version and download (PowerShell: HTTP + JSON + retry loop) --
+rem Newest-first walk of releases, downloading the first one that actually
+rem has a %PLATFORM% asset - guards against a "latest" release that was
+rem tagged with zero assets by a failed build matrix. On success prints
+rem "VERSION|ASSET|ARCHIVEPATH" to stdout for the batch script to capture.
+set "PS_OUT="
+for /f "usebackq tokens=1-3 delims=|" %%A in (`powershell -NoProfile -Command "$ErrorActionPreference='Stop'; function TryOne($v){ $asset='salam-'+$v+'-%PLATFORM%.zip'; $url='https://github.com/%REPO%/releases/download/v'+$v+'/'+$asset; $out='%WORKDIR%\'+$asset; try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out -ErrorAction Stop; Write-Output ($v+'|'+$asset+'|'+$out); return $true } catch { return $false } }; if ('%VERSION%' -ne '') { if (TryOne '%VERSION%') { exit 0 } else { exit 1 } }; try { $rels = Invoke-RestMethod -UseBasicParsing -Uri 'https://api.github.com/repos/%REPO%/releases?per_page=10' } catch { exit 1 }; foreach ($r in $rels) { $ver = $r.tag_name -replace '^v',''; if (TryOne $ver) { exit 0 } }; exit 1"`) do (
+  set "VERSION=%%A"
+  set "ASSET=%%B"
+  set "ARCHIVE=%%C"
 )
+
 if not exist "%ARCHIVE%" (
-  echo error: download failed: %URL% 1>&2
+  echo error: could not find a Salam release publishing a %PLATFORM% asset. 1>&2
+  echo Check https://github.com/%REPO%/releases manually. 1>&2
   rd /s /q "%WORKDIR%" >nul 2>nul
   exit /b 1
 )
+
+echo Installing Salam %VERSION% (%PLATFORM%) from:
+echo   https://github.com/%REPO%/releases/download/v%VERSION%/%ASSET%
 
 set "EXTRACT_DIR=%WORKDIR%\extracted"
 powershell -NoProfile -Command "Expand-Archive -LiteralPath '%ARCHIVE%' -DestinationPath '%EXTRACT_DIR%' -Force"

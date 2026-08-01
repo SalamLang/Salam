@@ -27,15 +27,35 @@ run_batch() {
     jobs="$1"
     runner="${2:-$RUN_ONE}"
     [ -s "$jobs" ] || return 0
+    outdir="$WORK/.batch-out.$$"
+    mkdir -p "$outdir"
+    n=0
+    running=0
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        n=$((n + 1))
+        out="$outdir/$(printf '%06d' "$n")"
+        (
+            IFS="	"
+            set -- $line
+            label="$1"
+            f="$2"
+            lang="$3"
+            exp="$4"
+            extra="$5"
+            unset IFS
+            sh "$runner" "$SALAM_ABS" "$WORK" "$label" "$f" "$lang" "$exp" $extra
+        ) >"$out" 2>&1 &
+        running=$((running + 1))
+        if [ "$running" -ge "$NPROC" ]; then
+            wait
+            running=0
+        fi
+    done <"$jobs"
+    wait
     results="$WORK/.batch-results.$$"
-    # shellcheck disable=SC2016 # inner variables are expanded by the spawned sh, not here
-    tr '\n' '\0' <"$jobs" | xargs -0 -n1 -P "$NPROC" sh -c '
-        IFS="	"
-        set -- $1
-        label="$1"; f="$2"; lang="$3"; exp="$4"; extra="$5"
-        unset IFS
-        sh "'"$runner"'" "'"$SALAM_ABS"'" "'"$WORK"'" "$label" "$f" "$lang" "$exp" $extra
-    ' _ >"$results" 2>&1
+    cat "$outdir"/* >"$results" 2>/dev/null
+    rm -rf "$outdir"
     cat "$results"
     p=$(grep -c '^PASS' "$results")
     fcount=$(grep -c '^FAIL' "$results")

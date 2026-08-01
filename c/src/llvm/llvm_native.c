@@ -705,8 +705,8 @@ static int jit_run_file(logger_t *log, const char *ll_path)
             char *host_features = LLVMGetHostCPUFeatures();
             LLVMTargetMachineRef tm = LLVMCreateTargetMachine(
                 target, host_triple, host_cpu ? host_cpu : "",
-                host_features ? host_features : "", LLVMCodeGenLevelDefault,
-                LLVMRelocPIC, LLVMCodeModelLarge);
+                host_features ? host_features : "", LLVMCodeGenLevelDefault, LLVMRelocPIC,
+                LLVMCodeModelLarge);
             if (host_cpu) LLVMDisposeMessage(host_cpu);
             if (host_features) LLVMDisposeMessage(host_features);
             if (tm) {

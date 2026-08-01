@@ -148,6 +148,53 @@ $(eval $(call embed_musl_arch,aarch64,AARCH64))
 $(eval $(call embed_musl_arch,i686,I686))
 $(eval $(call embed_musl_arch,arm,ARM))
 
+# Static builds of third-party libraries (sqlite3, openssl, hiredis,
+# mariadb-client) for a given --target= triple, embedded independently of
+# the musl/mingw crt+libc sysroots above: not every target's crt/libc
+# sysroot is actually embedded on every build host (some resolve it from a
+# system package - e.g. musl-tools/mingw-w64 - at link time instead), but
+# every target should still get static third-party libs regardless of
+# where its crt/libc came from. One embed slot per target holds whatever
+# .a files a given rollout phase has staged into it (starts with just
+# libsqlite3.a; other libraries land in the same directory in later
+# phases) - it's just an extra -L search path, never a full sysroot.
+define embed_extralibs_target
+SALAM_EMBED_EXTRALIBS_$(2)_DIR ?=
+ifneq ($$(SALAM_EMBED_EXTRALIBS_$(2)_DIR),)
+  CPPFLAGS   += -DSALAM_HAVE_EMBED_EXTRALIBS_$(2)
+  EMBED_OBJS += $$(BUILD_DIR)/embed/extralibs_$(1).o
+endif
+$$(BUILD_DIR)/embed/extralibs_$(1).o:
+	@test -d "$$(SALAM_EMBED_EXTRALIBS_$(2)_DIR)" || { echo "SALAM_EMBED_EXTRALIBS_$(2)_DIR='$$(SALAM_EMBED_EXTRALIBS_$(2)_DIR)' is not a directory"; exit 1; }
+	@mkdir -p $$(BUILD_DIR)/embed
+	tar cf $$(BUILD_DIR)/embed/extralibs_$(1).tar -C "$$(SALAM_EMBED_EXTRALIBS_$(2)_DIR)" .
+	printf '.section .rodata\n.global salam_embed_extralibs_$(1)\nsalam_embed_extralibs_$(1):\n.incbin "%s"\n.global salam_embed_extralibs_$(1)_end\nsalam_embed_extralibs_$(1)_end:\n' "$$(BUILD_DIR)/embed/extralibs_$(1).tar" > $$(BUILD_DIR)/embed/extralibs_$(1).S
+	$$(CC) -c $$(BUILD_DIR)/embed/extralibs_$(1).S -o $$@
+endef
+$(eval $(call embed_extralibs_target,x86_64_linux_musl,X86_64_LINUX_MUSL))
+$(eval $(call embed_extralibs_target,aarch64_linux_musl,AARCH64_LINUX_MUSL))
+$(eval $(call embed_extralibs_target,i686_linux_musl,I686_LINUX_MUSL))
+$(eval $(call embed_extralibs_target,arm_linux_musleabihf,ARM_LINUX_MUSLEABIHF))
+$(eval $(call embed_extralibs_target,x86_64_w64_windows_gnu,X86_64_W64_WINDOWS_GNU))
+
+# Same idea as SALAM_EMBED_EXTRALIBS_*_DIR above, but for a plain native
+# build (no --target=): a single slot, since a given salam binary only ever
+# runs on the one host it was built for. Consumed by the tcc/C backend
+# (build.c) and the LLVM external-tool link path (llvm_native.c's
+# link_executable) as an extra -L search directory, so `link "sqlite3"`
+# etc. resolve to a bundled static archive even for same-host builds.
+SALAM_EMBED_HOSTLIBS_DIR ?=
+ifneq ($(SALAM_EMBED_HOSTLIBS_DIR),)
+  CPPFLAGS   += -DSALAM_HAVE_EMBED_HOSTLIBS
+  EMBED_OBJS += $(BUILD_DIR)/embed/hostlibs.o
+endif
+$(BUILD_DIR)/embed/hostlibs.o:
+	@test -d "$(SALAM_EMBED_HOSTLIBS_DIR)" || { echo "SALAM_EMBED_HOSTLIBS_DIR='$(SALAM_EMBED_HOSTLIBS_DIR)' is not a directory"; exit 1; }
+	@mkdir -p $(BUILD_DIR)/embed
+	tar cf $(BUILD_DIR)/embed/hostlibs.tar -C "$(SALAM_EMBED_HOSTLIBS_DIR)" .
+	printf '.section .rodata\n.global salam_embed_hostlibs\nsalam_embed_hostlibs:\n.incbin "%s"\n.global salam_embed_hostlibs_end\nsalam_embed_hostlibs_end:\n' "$(BUILD_DIR)/embed/hostlibs.tar" > $(BUILD_DIR)/embed/hostlibs.S
+	$(CC) -c $(BUILD_DIR)/embed/hostlibs.S -o $@
+
 .PHONY: all test dist clean debug install uninstall stage-sysroots self-contained
 
 .DEFAULT_GOAL := all

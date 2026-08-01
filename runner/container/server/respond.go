@@ -42,6 +42,9 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 func writeError(w http.ResponseWriter, status int, reqID, errCode, message string) {
+	// #nosec G706 -- reqID is restricted to a safe charset by requestID(), errCode is
+	// always a hardcoded literal from call sites, and message is logged with %q, which
+	// escapes newlines/control characters, preventing log injection.
 	log.Printf("reject id=%s status=%d error=%s message=%q", reqID, status, errCode, message)
 	writeJSON(w, status, runResponse{OK: false, Error: errCode, Message: message, RequestID: reqID})
 }

@@ -48,6 +48,8 @@ func runSalam(ctx context.Context, req runRequest, timeout time.Duration, reqID 
 	timedOut := runCtx.Err() == context.DeadlineExceeded
 	if timedOut && cmd.Process != nil {
 		if err := killProcessTree(cmd.Process.Pid); err != nil {
+			// #nosec G706 -- reqID is restricted to a safe charset by requestID(), and
+			// strconv.Quote escapes newlines/control chars, preventing log injection.
 			log.Printf("run warning id=%s stage=kill_process_group error=%s", reqID, strconv.Quote(err.Error()))
 		}
 	}

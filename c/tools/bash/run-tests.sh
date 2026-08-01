@@ -330,6 +330,10 @@ EOF
             base="../tests/$lang/$dir/$name"
             expf="$base.expect"
             [ -f "$expf" ] || continue
+            if [ -f "$base.network" ] && [ "${SALAM_TEST_NETWORK:-0}" != "1" ]; then
+                echo "SKIP $dir/$lang/$name (requires live network; set SALAM_TEST_NETWORK=1 to run - no need inside GitHub Actions)"
+                continue
+            fi
             id=$(echo "$name" | tr '/ ' '__')
             jobdir="$WORK/exjob_${dir}_${id}"
             mkdir -p "$jobdir"

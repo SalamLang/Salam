@@ -684,7 +684,46 @@ static int jit_run_file(logger_t *log, const char *ll_path)
     }
 
     LLVMOrcLLJITRef jit = NULL;
-    LLVMErrorRef e = LLVMOrcCreateLLJIT(&jit, NULL);
+    LLVMErrorRef e = NULL;
+#  if defined(__arm__) && !defined(__aarch64__)
+    /* LLVMOrcCreateLLJIT(&jit, NULL) lets ORC detect the host with its
+     * default code model (JITDefault). On 32-bit ARM that emits direct
+     * BL/B (Arm_Jump24, +-32MB PC-relative range) to runtime helpers
+     * registered as absolute symbols below (salam_panic, memcpy, ...);
+     * when the JIT-allocated code lands further than that from the
+     * helper's real address, JITLink's ARM backend can't turn it into a
+     * long-branch stub and instead produces an invalid opcode. Building
+     * the target machine with CodeModelLarge makes the ARM backend
+     * materialize far calls via movw/movt + indirect branch instead of
+     * a PC-relative Jump24 immediate. */
+    {
+        char *host_triple = LLVMGetDefaultTargetTriple();
+        LLVMTargetRef target = NULL;
+        char *terr = NULL;
+        if (host_triple && !LLVMGetTargetFromTriple(host_triple, &target, &terr)) {
+            char *host_cpu = LLVMGetHostCPUName();
+            char *host_features = LLVMGetHostCPUFeatures();
+            LLVMTargetMachineRef tm = LLVMCreateTargetMachine(
+                target, host_triple, host_cpu ? host_cpu : "",
+                host_features ? host_features : "", LLVMCodeGenLevelDefault,
+                LLVMRelocPIC, LLVMCodeModelLarge);
+            if (host_cpu) LLVMDisposeMessage(host_cpu);
+            if (host_features) LLVMDisposeMessage(host_features);
+            if (tm) {
+                LLVMOrcJITTargetMachineBuilderRef jtmb =
+                    LLVMOrcJITTargetMachineBuilderCreateFromTargetMachine(tm);
+                LLVMOrcLLJITBuilderRef jb = LLVMOrcCreateLLJITBuilder();
+                LLVMOrcLLJITBuilderSetJITTargetMachineBuilder(jb, jtmb);
+                e = LLVMOrcCreateLLJIT(&jit, jb);
+            }
+        }
+        if (terr) LLVMDisposeMessage(terr);
+        if (host_triple) LLVMDisposeMessage(host_triple);
+    }
+    if (!jit && !e) e = LLVMOrcCreateLLJIT(&jit, NULL);
+#  else
+    e = LLVMOrcCreateLLJIT(&jit, NULL);
+#  endif
     if (e) {
         LLVMDisposeModule(mod);
         LLVMOrcDisposeThreadSafeContext(tsctx);

@@ -311,9 +311,10 @@ if want cross; then
             exp="../tests/$lang/cross/$name.out"
             [ -f "$exp" ] || continue
             for pair in x86_64-linux-musl: aarch64-linux-musl:qemu-aarch64-static \
-                        i686-linux-musl: arm-linux-musleabihf:qemu-arm-static \
-                        x86_64-w64-windows-gnu:wine; do
-                target="${pair%%:*}"; runner="${pair#*:}"
+                i686-linux-musl: arm-linux-musleabihf:qemu-arm-static \
+                x86_64-w64-windows-gnu:wine; do
+                target="${pair%%:*}"
+                runner="${pair#*:}"
                 label="cross/$lang/$name/$target"
                 outbin="$WORK/cross_$$_$(echo "$name-$target" | tr '/.' '__')"
                 case "$target" in *windows*) outbin="$outbin.exe" ;; esac

@@ -60,10 +60,26 @@ mkdir "%WORKDIR%" >nul 2>nul
 rem --- resolve version and download (PowerShell: HTTP + JSON + retry loop) --
 rem Newest-first walk of releases, downloading the first one that actually
 rem has a %PLATFORM% asset - guards against a "latest" release that was
-rem tagged with zero assets by a failed build matrix. On success prints
-rem "VERSION|ASSET|ARCHIVEPATH" to stdout for the batch script to capture.
-set "PS_OUT="
-for /f "usebackq tokens=1-3 delims=|" %%A in (`powershell -NoProfile -Command "$ProgressPreference='SilentlyContinue'; $ErrorActionPreference='Stop'; function TryOne($v){ $asset='salam-'+$v+'-%PLATFORM%.zip'; $url='https://github.com/%REPO%/releases/download/v'+$v+'/'+$asset; $out='%WORKDIR%\'+$asset; try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out -ErrorAction Stop; Write-Output ($v+'|'+$asset+'|'+$out); return $true } catch { return $false } }; if ('%VERSION%' -ne '') { if (TryOne '%VERSION%') { exit 0 } else { exit 1 } }; try { $rels = Invoke-RestMethod -UseBasicParsing -Uri 'https://api.github.com/repos/%REPO%/releases?per_page=10' } catch { exit 1 }; foreach ($r in $rels) { $ver = $r.tag_name -replace '^v',''; if (TryOne $ver) { exit 0 } }; exit 1"`) do (
+rem tagged with zero assets by a failed build matrix.
+rem
+rem This is deliberately NOT run through `for /f` with the command inline
+rem (`for /f ... in (\`powershell ...\`) do ...`): for /f's backquote-command
+rem parser has a much smaller internal buffer than a normal cmd line and
+rem silently mangles/truncates long inline commands (confirmed: the exact
+rem same call works standalone but breaks under for /f). So the resolver
+rem runs directly with output redirected to a file, and only that short
+rem file *path* goes through for /f. The script itself is passed via
+rem -EncodedCommand (Base64 of UTF-16LE) rather than -Command, since cmd.exe
+rem treats |, &, <, > as special even inside double quotes, and REPO/
+rem PLATFORM/WORKDIR/VERSION are read from the environment (already real
+rem process env vars via `set`) rather than interpolated into the script
+rem text, so nothing about this call depends on cmd's quoting behavior.
+powershell -NoProfile -NonInteractive -EncodedCommand JABFAHIAcgBvAHIAQQBjAHQAaQBvAG4AUAByAGUAZgBlAHIAZQBuAGMAZQAgAD0AIAAnAFMAdABvAHAAJwAKACQAUAByAG8AZwByAGUAcwBzAFAAcgBlAGYAZQByAGUAbgBjAGUAIAA9ACAAJwBTAGkAbABlAG4AdABsAHkAQwBvAG4AdABpAG4AdQBlACcACgAkAHMAYwByAGkAcAB0ADoAcgBlAHMAdQBsAHQATABpAG4AZQAgAD0AIAAkAG4AdQBsAGwACgBmAHUAbgBjAHQAaQBvAG4AIABUAHIAeQBPAG4AZQAoACQAdgApACAAewAKACAAIAAkAGEAcwBzAGUAdAAgAD0AIAAnAHMAYQBsAGEAbQAtACcAIAArACAAJAB2ACAAKwAgACcALQAnACAAKwAgACQAZQBuAHYAOgBQAEwAQQBUAEYATwBSAE0AIAArACAAJwAuAHoAaQBwACcACgAgACAAJAB1AHIAbAAgAD0AIAAnAGgAdAB0AHAAcwA6AC8ALwBnAGkAdABoAHUAYgAuAGMAbwBtAC8AJwAgACsAIAAkAGUAbgB2ADoAUgBFAFAATwAgACsAIAAnAC8AcgBlAGwAZQBhAHMAZQBzAC8AZABvAHcAbgBsAG8AYQBkAC8AdgAnACAAKwAgACQAdgAgACsAIAAnAC8AJwAgACsAIAAkAGEAcwBzAGUAdAAKACAAIAAkAG8AdQB0ACAAPQAgAEoAbwBpAG4ALQBQAGEAdABoACAAJABlAG4AdgA6AFcATwBSAEsARABJAFIAIAAkAGEAcwBzAGUAdAAKACAAIAB0AHIAeQAgAHsACgAgACAAIAAgAEkAbgB2AG8AawBlAC0AVwBlAGIAUgBlAHEAdQBlAHMAdAAgAC0AVQBzAGUAQgBhAHMAaQBjAFAAYQByAHMAaQBuAGcAIAAtAFUAcgBpACAAJAB1AHIAbAAgAC0ATwB1AHQARgBpAGwAZQAgACQAbwB1AHQAIAAtAEUAcgByAG8AcgBBAGMAdABpAG8AbgAgAFMAdABvAHAACgAgACAAIAAgACQAcwBjAHIAaQBwAHQAOgByAGUAcwB1AGwAdABMAGkAbgBlACAAPQAgACQAdgAgACsAIAAnACwAJwAgACsAIAAkAGEAcwBzAGUAdAAgACsAIAAnACwAJwAgACsAIAAkAG8AdQB0AAoAIAAgACAAIAByAGUAdAB1AHIAbgAgACQAdAByAHUAZQAKACAAIAB9ACAAYwBhAHQAYwBoACAAewAKACAAIAAgACAAcgBlAHQAdQByAG4AIAAkAGYAYQBsAHMAZQAKACAAIAB9AAoAfQAKAGkAZgAgACgAJABlAG4AdgA6AFYARQBSAFMASQBPAE4AIAAtAGEAbgBkACAAJABlAG4AdgA6AFYARQBSAFMASQBPAE4AIAAtAG4AZQAgACcAJwApACAAewAKACAAIABpAGYAIAAoAFQAcgB5AE8AbgBlACAAJABlAG4AdgA6AFYARQBSAFMASQBPAE4AKQAgAHsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACQAcgBlAHMAdQBsAHQATABpAG4AZQA7ACAAZQB4AGkAdAAgADAAIAB9ACAAZQBsAHMAZQAgAHsAIABlAHgAaQB0ACAAMQAgAH0ACgB9AAoAdAByAHkAIAB7AAoAIAAgACQAcgBlAGwAcwAgAD0AIABJAG4AdgBvAGsAZQAtAFIAZQBzAHQATQBlAHQAaABvAGQAIAAtAFUAcwBlAEIAYQBzAGkAYwBQAGEAcgBzAGkAbgBnACAALQBVAHIAaQAgACgAJwBoAHQAdABwAHMAOgAvAC8AYQBwAGkALgBnAGkAdABoAHUAYgAuAGMAbwBtAC8AcgBlAHAAbwBzAC8AJwAgACsAIAAkAGUAbgB2ADoAUgBFAFAATwAgACsAIAAnAC8AcgBlAGwAZQBhAHMAZQBzAD8AcABlAHIAXwBwAGEAZwBlAD0AMQAwACcAKQAKAH0AIABjAGEAdABjAGgAIAB7AAoAIAAgAGUAeABpAHQAIAAxAAoAfQAKAGYAbwByAGUAYQBjAGgAIAAoACQAcgAgAGkAbgAgACQAcgBlAGwAcwApACAAewAKACAAIAAkAHYAZQByACAAPQAgACQAcgAuAHQAYQBnAF8AbgBhAG0AZQAgAC0AcgBlAHAAbABhAGMAZQAgACcAXgB2ACcALAAgACcAJwAKACAAIABpAGYAIAAoAFQAcgB5AE8AbgBlACAAJAB2AGUAcgApACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJAByAGUAcwB1AGwAdABMAGkAbgBlADsAIABlAHgAaQB0ACAAMAAgAH0ACgB9AAoAZQB4AGkAdAAgADEA > "%WORKDIR%\resolve.txt" 2>nul
+
+set "VERSION="
+set "ASSET="
+set "ARCHIVE="
+for /f "usebackq tokens=1-3 delims=," %%A in ("%WORKDIR%\resolve.txt") do (
   set "VERSION=%%A"
   set "ASSET=%%B"
   set "ARCHIVE=%%C"

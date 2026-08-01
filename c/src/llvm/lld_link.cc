@@ -21,11 +21,17 @@
 
 #include <vector>
 
+/* LLD_HAS_DRIVER only exists on newer LLVM (it forward-declares the
+ * per-flavor link() functions that library users must opt into); older LLVM
+ * (e.g. Debian's llvm-15) declares elf::link/mingw::link/etc. directly in
+ * this same header with no opt-in macro, so there is nothing to invoke. */
+#ifdef LLD_HAS_DRIVER
 LLD_HAS_DRIVER(elf)
 LLD_HAS_DRIVER(mingw)
 LLD_HAS_DRIVER(coff)
 LLD_HAS_DRIVER(macho)
 LLD_HAS_DRIVER(wasm)
+#endif
 
 extern "C" int salam_lld_available(void)
 {

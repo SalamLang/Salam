@@ -141,7 +141,7 @@ $$(BUILD_DIR)/embed/musl_$(1).o:
 	@test -d "$$(SALAM_EMBED_MUSL_$(2)_DIR)" || { echo "SALAM_EMBED_MUSL_$(2)_DIR='$$(SALAM_EMBED_MUSL_$(2)_DIR)' is not a directory"; exit 1; }
 	@mkdir -p $$(BUILD_DIR)/embed
 	tar cf $$(BUILD_DIR)/embed/musl_$(1).tar -C "$$(SALAM_EMBED_MUSL_$(2)_DIR)" .
-	printf '.section .rodata\n.global salam_embed_musl_$(1)\nsalam_embed_musl_$(1):\n.incbin "%s"\n.global salam_embed_musl_$(1)_end\nsalam_embed_musl_$(1)_end:\n.section .note.GNU-stack,"",@progbits\n' "$$(BUILD_DIR)/embed/musl_$(1).tar" > $$(BUILD_DIR)/embed/musl_$(1).S
+	printf '.section .rodata\n.global salam_embed_musl_$(1)\nsalam_embed_musl_$(1):\n.incbin "%s"\n.global salam_embed_musl_$(1)_end\nsalam_embed_musl_$(1)_end:\n' "$$(BUILD_DIR)/embed/musl_$(1).tar" > $$(BUILD_DIR)/embed/musl_$(1).S
 	$$(CC) -c $$(BUILD_DIR)/embed/musl_$(1).S -o $$@
 endef
 $(eval $(call embed_musl_arch,aarch64,AARCH64))
@@ -161,7 +161,7 @@ $(BUILD_DIR)/embed/musl.o:
 	@test -d "$(SALAM_EMBED_MUSL_DIR)" || { echo "SALAM_EMBED_MUSL_DIR='$(SALAM_EMBED_MUSL_DIR)' is not a directory (try 'make stage-sysroots')"; exit 1; }
 	@mkdir -p $(BUILD_DIR)/embed
 	tar cf $(BUILD_DIR)/embed/musl.tar -C "$(SALAM_EMBED_MUSL_DIR)" .
-	printf '.section .rodata\n.global salam_embed_musl\nsalam_embed_musl:\n.incbin "%s"\n.global salam_embed_musl_end\nsalam_embed_musl_end:\n.section .note.GNU-stack,"",@progbits\n' "$(BUILD_DIR)/embed/musl.tar" > $(BUILD_DIR)/embed/musl.S
+	printf '.section .rodata\n.global salam_embed_musl\nsalam_embed_musl:\n.incbin "%s"\n.global salam_embed_musl_end\nsalam_embed_musl_end:\n' "$(BUILD_DIR)/embed/musl.tar" > $(BUILD_DIR)/embed/musl.S
 	$(CC) -c $(BUILD_DIR)/embed/musl.S -o $@
 
 $(BUILD_DIR)/embed/mingw.o:

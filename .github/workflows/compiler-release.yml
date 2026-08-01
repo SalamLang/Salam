@@ -49,14 +49,19 @@ jobs:
             musl-embed-sysroots-v2-
       - name: Fetch cross musl sysroots (aarch64 + i686 + armhf) for embedding
         run: |
-          # musl.cc is a small volunteer-run host serving ~100MB archives; a
-          # short --max-time aborts valid-but-slow transfers, so give it room
-          # and fall back across mirrors/paths before giving up.
+          # musl.cc is a small volunteer-run host serving ~100MB archives.
+          # It has been observed fully unreachable (connection timeout, not
+          # just slow) from GitHub-hosted runners, so --connect-timeout stays
+          # short and there is no curl --retry - retrying a dead host just
+          # burns CI minutes across 3 mirror URLs x 4 archs. --max-time stays
+          # generous in case a connection DOES succeed but transfers slowly.
+          # Either way this is a best-effort embed: every embed is optional
+          # and the build falls back gracefully when none of it is present.
           fetch() {
             out="$1"; shift
             for url in "$@"; do
               echo "trying $url"
-              if curl -fL --connect-timeout 10 --max-time 900 --retry 2 --retry-delay 5 \
+              if curl -fL --connect-timeout 5 --max-time 900 \
                    --speed-limit 512 --speed-time 30 \
                    -o "$out" "$url"; then
                 return 0
@@ -367,7 +372,7 @@ jobs:
             out="$1"; shift
             for url in "$@"; do
               echo "trying $url"
-              if curl -fL --connect-timeout 10 --max-time 900 --retry 2 --retry-delay 5 \
+              if curl -fL --connect-timeout 5 --max-time 900 \
                    --speed-limit 512 --speed-time 30 \
                    -o "$out" "$url"; then
                 return 0
@@ -695,7 +700,7 @@ jobs:
           path: salam.exe
 
   build-windows-i686:
-    name: Build Salam for Windows (32-bit / i686, embedded LLVM)
+    name: Build Salam for Windows (32-bit / i686, minimal)
     runs-on: windows-latest
     continue-on-error: true
     steps:
@@ -712,22 +717,21 @@ jobs:
           restore-keys: |
             msys2-mingw32-pkgs-v2-
 
-      - name: Install MINGW32 toolchain + static LLVM
+      - name: Install MINGW32 toolchain
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW32
           CHERE_INVOKING: '1'
         run: |
-          # LLVM dropped official win32 (32-bit) packages starting at v22
-          # (github.com/ScoopInstaller/Main/issues/7685); MSYS2's
-          # mingw-w64-i686-llvm tracks whatever version it last builds for
-          # i686, so no version is pinned here - pacman resolves to it.
-          pacman -Sy --noconfirm --needed \
-            mingw-w64-i686-gcc mingw-w64-i686-llvm mingw-w64-i686-clang \
-            mingw-w64-x86_64-gcc make ccache
+          # MSYS2 does not package LLVM/clang/lld for i686 at all anymore
+          # (mingw-w64-i686-llvm and mingw-w64-i686-clang were both removed -
+          # confirmed via "target not found" at install time, consistent
+          # with LLVM dropping win32 upstream around v22:
+          # github.com/ScoopInstaller/Main/issues/7685). No LLVM build is
+          # possible on this host; this stays an interpreter + tcc build.
+          pacman -Sy --noconfirm --needed mingw-w64-i686-gcc make ccache
           gcc --version | head -1
           gcc -dumpmachine
-          llvm-config --version
 
       - name: Cache ccache (Windows i686)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -737,7 +741,7 @@ jobs:
           restore-keys: |
             ccache-win-i686-v2-
 
-      - name: Build 32-bit salam.exe (embedded static LLVM + embedded x86_64 mingw sysroot)
+      - name: Build 32-bit salam.exe (C backend, no LLVM by design)
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW32
@@ -745,27 +749,8 @@ jobs:
           CCACHE_DIR: 'C:/ccache-i686'
         run: |
           ccache --max-size=300M >/dev/null 2>&1 || true
-          # MSYS2 does not package mingw-w64-i686-lld, so this can only embed
-          # LLVM itself (JIT + object emission), not an in-process linker -
-          # 'salam build' (no --target) still produces native i686 exes via
-          # the bundled tcc C backend below, same as before. The 64-bit gcc
-          # installed above (mingw-w64-x86_64-gcc) is only used for its
-          # crt/lib files, embedded so this 32-bit host can still produce a
-          # native 64-bit Windows exe with zero extra tools installed.
-          SR=/tmp/mingw-sr/lib; mkdir -p "$SR"
-          embed_ok=1; missing=""
-          for x in crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a \
-                   libmsvcrt.a libadvapi32.a libshell32.a libuser32.a libkernel32.a \
-                   crtbegin.o crtend.o libgcc.a libgcc_eh.a; do
-            f=$(find /mingw64 -name "$x" 2>/dev/null | head -1)
-            if [ -n "$f" ]; then cp "$f" "$SR/"; else embed_ok=0; missing="$missing $x"; fi
-          done
-          [ "$embed_ok" = 1 ] || echo "::warning::x86_64 mingw sysroot assembly incomplete, missing:$missing"
-          make -C c -j2 \
-            WITH_LLVM=1 LLVM_LINK_STATIC=1 LLVM_CONFIG=llvm-config CC="ccache gcc" \
-            $([ "$embed_ok" = 1 ] && echo SALAM_EMBED_MINGW_DIR=/tmp/mingw-sr) \
-            EXTRA_LDFLAGS="-static -static-libgcc -static-libstdc++"
-          [ "$embed_ok" = 1 ] && echo "SELF_CONTAINED=1" >> "$GITHUB_ENV" || echo "SELF_CONTAINED=0" >> "$GITHUB_ENV"
+          make -C c -j2 WITH_LLVM=0 CC="ccache gcc" \
+            EXTRA_LDFLAGS="-static -static-libgcc"
           ccache --show-stats 2>/dev/null | head -5 || true
           test -f salam.exe || mv salam salam.exe
           ./salam.exe version
@@ -789,7 +774,7 @@ jobs:
           fi
           echo "OK: salam.exe imports only Windows system DLLs."
 
-      - name: Stage 32-bit bundle
+      - name: Stage minimal 32-bit bundle
         shell: bash
         run: |
           set -eu
@@ -819,53 +804,39 @@ jobs:
           7z x tcc.zip -o"$DIST" >/dev/null
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           {
-            echo "Salam for Windows (32-bit / i686) - embedded LLVM."
+            echo "Salam for Windows (32-bit / i686) - MINIMAL build."
             echo ""
-            echo "Runs on 32-bit and 64-bit Windows. LLVM is compiled into"
-            echo "salam.exe itself (JIT + object emission). MSYS2 does not"
-            echo "package an i686 LLD, so unlike the 64-bit build this can't"
-            echo "link LLVM output in-process for its OWN architecture -"
-            echo "'salam build' (no --target) uses the bundled 32-bit tcc"
-            echo "C backend instead, same as before."
+            echo "Runs on 32-bit and 64-bit Windows. Ships the interpreter and the"
+            echo "C backend (bundled 32-bit tcc) only - MSYS2 does not package"
+            echo "LLVM/LLD for i686 at all (LLVM dropped win32 upstream around"
+            echo "v22), so there is NO embedded LLVM and NO cross-compilation"
+            echo "in this build."
             echo ""
             echo "  salam.exe version"
-            echo "  salam.exe exec  myprogram.salam           (tree-walking interpreter)"
-            echo "  salam.exe build myprogram.salam           (native exe via bundled tcc)"
-            echo "  salam.exe llvm  myprogram.salam --jit     (run via the built-in LLVM)"
-            echo "  salam.exe llvm  myprogram.salam --emit-obj -o app.o"
-            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
-              echo ""
-              echo "This build DOES embed a full x86_64 mingw sysroot + gcc, so it can"
-              echo "still cross-compile a native 64-bit Windows exe with zero extra"
-              echo "tools (via the C backend, not LLVM/LLD):"
-              echo ""
-              echo "  salam.exe build myprogram.salam --target=x86_64-w64-windows-gnu -o app.exe"
-            fi
+            echo "  salam.exe exec  myprogram.salam    (tree-walking interpreter)"
+            echo "  salam.exe build myprogram.salam    (native exe via bundled 32-bit tcc)"
             echo ""
-            echo "Need in-process LLVM+LLD cross-compilation from a 32-bit host?"
-            echo "Use the 32-bit Linux build (salam-<ver>-linux-i686.zip) instead,"
-            echo "which does embed LLD (Debian packages it for i386, MSYS2 does not)."
+            echo "Need 'salam llvm' or 'salam build --target=...' from a 32-bit"
+            echo "host? Use the 32-bit Linux build (salam-<ver>-linux-i686.zip),"
+            echo "which does embed LLVM+LLD (Debian still packages both for"
+            echo "i386). Otherwise use the 64-bit Windows build"
+            echo "(salam-<ver>-windows.zip)."
           } > "$DIST/RUN-ME.txt"
           echo "bundle contents:"; ls -la "$DIST"
 
-      - name: Smoke-test the embedded LLVM backend
+      - name: Smoke-test the minimal 32-bit build
         shell: bash
         run: |
           set -e
           cd salam-windows-i686
           export SALAM_STD="$PWD/std"
           printf 'func main:\n    println "ok-win32"\nend\n' > smoke.salam
-          echo "[1] LLVM JIT (in-process ORC, no external tools)"
-          ./salam.exe llvm smoke.salam --jit --log-level=warn
-          echo "[2] LLVM emit-obj (in-process)"
-          ./salam.exe llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
-          ls -l smoke.o
-          echo "[3] C backend via bundled 32-bit tcc"
+          echo "[1] C backend via bundled 32-bit tcc"
           ./salam.exe build smoke.salam --output=smoke_tcc.exe --log-level=warn
           ./smoke_tcc.exe
-          echo "[4] interpreter"
+          echo "[2] interpreter"
           ./salam.exe exec smoke.salam --log-level=warn
-          rm -f smoke.salam smoke*.exe smoke.o salam_mod_*.c salam_mod_*.h
+          rm -f smoke.salam smoke*.exe salam_mod_*.c salam_mod_*.h
           cd ..
 
       - name: Zip the 32-bit bundle
@@ -924,7 +895,7 @@ jobs:
             -e CCACHE_DIR=/root/.ccache \
             i386/debian:bookworm bash -euxc '
               apt-get update
-              apt-get install -y --no-install-recommends build-essential ccache \
+              apt-get install -y --no-install-recommends build-essential ccache file \
                 llvm-15-dev liblld-15-dev libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev
               ccache --max-size=300M >/dev/null 2>&1 || true
               MUSL_SR=/work/c/build/release/sysroots/x86_64-linux-musl
@@ -1039,7 +1010,7 @@ jobs:
             -e CCACHE_DIR=/root/.ccache \
             arm32v7/debian:bookworm bash -euxc '
               apt-get update
-              apt-get install -y --no-install-recommends build-essential ccache \
+              apt-get install -y --no-install-recommends build-essential ccache file \
                 llvm-15-dev liblld-15-dev libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev
               ccache --max-size=300M >/dev/null 2>&1 || true
               MUSL_SR=/work/c/build/release/sysroots/x86_64-linux-musl
@@ -1157,7 +1128,7 @@ jobs:
             out="$1"; shift
             for url in "$@"; do
               echo "trying $url"
-              if curl -fL --connect-timeout 10 --max-time 900 --retry 2 --retry-delay 5 \
+              if curl -fL --connect-timeout 5 --max-time 900 \
                    --speed-limit 512 --speed-time 30 \
                    -o "$out" "$url"; then
                 return 0
@@ -1245,10 +1216,12 @@ jobs:
           ./salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
           ./salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
           if [ "${SELF_CONTAINED:-0}" = "1" ]; then
-            echo "[cross] aarch64-linux-musl (native target), PATH=/nonexistent"
-            env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
-              ./salam build smoke.salam --target=aarch64-linux-musl -o smoke_a64
-            ./smoke_a64; file smoke_a64
+            if [ -n "${SALAM_EMBED_MUSL_AARCH64_DIR:-}" ]; then
+              echo "[cross] aarch64-linux-musl (native target), PATH=/nonexistent"
+              env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+                ./salam build smoke.salam --target=aarch64-linux-musl -o smoke_a64
+              ./smoke_a64; file smoke_a64
+            fi
             if [ -n "${SALAM_EMBED_MUSL_DIR:-}" ]; then
               echo "[cross] x86_64-linux-musl, PATH=/nonexistent"
               env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
@@ -1306,7 +1279,9 @@ jobs:
               echo "Cross-compile with ZERO tools installed (LLVM + LLD + sysroots are"
               echo "compiled into salam itself):"
               echo ""
-              echo "  ./salam build app.salam --target=aarch64-linux-musl     -o app"
+              if [ -n "${SALAM_EMBED_MUSL_AARCH64_DIR:-}" ]; then
+                echo "  ./salam build app.salam --target=aarch64-linux-musl     -o app"
+              fi
               if [ -n "${SALAM_EMBED_MUSL_DIR:-}" ]; then
                 echo "  ./salam build app.salam --target=x86_64-linux-musl      -o app"
               fi

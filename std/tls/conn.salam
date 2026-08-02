@@ -1,0 +1,496 @@
+package tls
+
+// The public TLS connection: dial, handshake, read, write, close.
+//
+// The handshake driver lives here rather than in handshake13.salam so that the
+// message construction and parsing stay independently testable without a
+// socket.
+
+struct Config:
+    pub server_name: str = ""
+    // Path to a PEM trust store. Empty means the default search in roots.salam.
+    pub ca_file: str = ""
+    // Skip certificate verification. Intended for tests against a known
+    // endpoint; it is deliberately verbose to set and is reported by
+    // Conn.insecure so a caller cannot forget it is on.
+    pub insecure_skip_verify: bool = false
+    pub alpn: str = ""
+end
+
+struct Conn:
+    pub h: Handshake = Handshake {}
+    pub host: str = ""
+    pub open: bool = false
+    pub insecure: bool = false
+    // decrypted application data not yet handed to the caller
+    pub pending: Buf = Buf {}
+    pub err: str = ""
+end
+
+func _conn_fail(c &: Conn, msg: str): bool:
+    if c.err.len() == 0:
+        c.err = msg
+    end
+    c.open = false
+    ret false
+end
+
+// Read the next handshake message, absorbing it into the transcript.
+//
+// Handshake messages are a stream: one record can carry several, and one
+// message can span records. `buf` carries the leftover between calls.
+func _hs_next_msg(h &: Handshake, buf &: Buf, typ &: int, body &: Buf): bool:
+    mut guard := 0
+    until guard < 4096:
+        guard += 1
+        if buf.len >= 4:
+            mlen := (_bufat(buf, 1) << 16) | (_bufat(buf, 2) << 8) | _bufat(buf, 3)
+            if mlen > REC_MAX_PLAINTEXT * 4:
+                ret _hs_fail(h, "handshake message too large")
+            end
+            if buf.len >= 4 + mlen:
+                typ = _bufat(buf, 0)
+                // the transcript covers the message including its 4-byte header
+                _hash_update(h.tr, buf.p, 4 + mlen)
+                _bufreset(body)
+                repeat mlen with i:
+                    _put8(body, _bufat(buf, 4 + i))
+                end
+                _bufconsume(buf, 4 + mlen)
+                ret true
+            end
+        end
+        mut rtyp := 0
+        mut frag := _newbuf(REC_MAX_PLAINTEXT)
+        defer _buf_free(frag)
+        if !_rec_read(h.rec, rtyp, frag):
+            ret _hs_fail(h, "connection closed during handshake")
+        end
+        if rtyp == REC_CHANGE_CIPHER_SPEC:
+            continue
+        end
+        if rtyp == REC_ALERT:
+            ret _hs_fail(h, _alert_text(frag))
+        end
+        if rtyp != REC_HANDSHAKE:
+            ret _hs_fail(h, "unexpected record type during handshake")
+        end
+        _putbuf(buf, frag)
+    end
+    ret _hs_fail(h, "handshake did not converge")
+end
+
+func _alert_text(a: Buf): str:
+    if a.len < 2:
+        ret "malformed alert"
+    end
+    d := _bufat(a, 1)
+    if d == ALERT_CLOSE_NOTIFY: ret "peer closed the connection" end
+    if d == ALERT_BAD_RECORD_MAC: ret "peer reported bad record MAC" end
+    if d == ALERT_HANDSHAKE_FAILURE: ret "peer reported handshake failure" end
+    if d == ALERT_BAD_CERTIFICATE: ret "peer rejected our certificate" end
+    if d == ALERT_ILLEGAL_PARAMETER: ret "peer reported illegal parameter" end
+    if d == ALERT_DECODE_ERROR: ret "peer could not decode our message" end
+    if d == ALERT_DECRYPT_ERROR: ret "peer reported decrypt error" end
+    if d == ALERT_PROTOCOL_VERSION: ret "peer does not support TLS 1.3" end
+    ret "peer sent alert " + d
+end
+
+func _install_keys(h &: Handshake, rx: Buf, tx: Buf):
+    _tk_free(h.rec.rxk)
+    _tk_free(h.rec.txk)
+    h.rec.rxk = _tk_derive(rx.p, rx.len, h.cipher)
+    h.rec.txk = _tk_derive(tx.p, tx.len, h.cipher)
+end
+
+// Run the full client handshake on an already-connected socket.
+func _do_handshake(c &: Conn, cfg: Config): bool:
+    mut h := c.h
+    // The transcript hash algorithm is not known until the server picks a
+    // suite, so the ClientHello is buffered and absorbed once SHA-256 vs
+    // SHA-384 is settled. Both candidate suites here use SHA-256, but the
+    // buffering keeps that from being an unstated assumption.
+    mut ch := _newbuf(512)
+    defer _buf_free(ch)
+    if !_hs_build_client_hello(h, cfg.server_name, cfg.alpn, ch):
+        c.h = h
+        ret _conn_fail(c, "could not build ClientHello")
+    end
+    if !_rec_write(h.rec, REC_HANDSHAKE, ch.p, ch.len):
+        c.h = h
+        ret _conn_fail(c, "could not send ClientHello: " + h.rec.err)
+    end
+
+    mut buf := _newbuf(REC_MAX_PLAINTEXT)
+    defer _buf_free(buf)
+    mut typ := 0
+    mut body := _newbuf(REC_MAX_PLAINTEXT)
+    defer _buf_free(body)
+
+    // ServerHello arrives before the transcript hash is known, so it is read
+    // with the record layer directly and absorbed afterwards.
+    mut rtyp := 0
+    mut frag := _newbuf(REC_MAX_PLAINTEXT)
+    defer _buf_free(frag)
+    mut got := false
+    mut guard := 0
+    until !got && guard < 16:
+        guard += 1
+        if !_rec_read(h.rec, rtyp, frag):
+            c.h = h
+            ret _conn_fail(c, "no ServerHello: " + h.rec.err)
+        end
+        if rtyp == REC_CHANGE_CIPHER_SPEC:
+            continue
+        end
+        if rtyp == REC_ALERT:
+            c.h = h
+            ret _conn_fail(c, _alert_text(frag))
+        end
+        if rtyp != REC_HANDSHAKE:
+            c.h = h
+            ret _conn_fail(c, "expected ServerHello")
+        end
+        got = true
+    end
+    if !got || frag.len < 4 || _bufat(frag, 0) != HS_SERVER_HELLO:
+        c.h = h
+        ret _conn_fail(c, "expected ServerHello")
+    end
+    shlen := (_bufat(frag, 1) << 16) | (_bufat(frag, 2) << 8) | _bufat(frag, 3)
+    if frag.len < 4 + shlen:
+        c.h = h
+        ret _conn_fail(c, "truncated ServerHello")
+    end
+    mut shr := _newreader(_bufptr(frag, 4), shlen)
+    if !_hs_parse_server_hello(h, shr):
+        c.h = h
+        ret _conn_fail(c, h.err)
+    end
+
+    // now the hash is known: start the transcript and absorb both hellos
+    h.tr = _hash_init(h.hash)
+    _hash_update(h.tr, ch.p, ch.len)
+    _hash_update(h.tr, frag.p, 4 + shlen)
+    // anything the same record carried after the ServerHello belongs to the
+    // handshake stream
+    if frag.len > 4 + shlen:
+        _putraw(buf, _bufptr(frag, 4 + shlen), frag.len - (4 + shlen))
+    end
+
+    if !_hs_key_schedule(h):
+        c.h = h
+        ret _conn_fail(c, "key schedule failed")
+    end
+    _install_keys(h, h.s_hs_secret, h.c_hs_secret)
+
+    // EncryptedExtensions
+    if !_hs_next_msg(h, buf, typ, body):
+        c.h = h
+        ret _conn_fail(c, h.err)
+    end
+    if typ != HS_ENCRYPTED_EXTENSIONS:
+        c.h = h
+        ret _conn_fail(c, "expected EncryptedExtensions")
+    end
+
+    if !_hs_next_msg(h, buf, typ, body):
+        c.h = h
+        ret _conn_fail(c, h.err)
+    end
+    if typ == HS_CERTIFICATE_REQUEST:
+        // client certificates are not implemented; the server will reject the
+        // empty Certificate we would have to send, so stop here with a clear
+        // message instead
+        c.h = h
+        ret _conn_fail(c, "server requested a client certificate (unsupported)")
+    end
+    if typ != HS_CERTIFICATE:
+        c.h = h
+        ret _conn_fail(c, "expected Certificate")
+    end
+    mut certr := _readerof(body)
+    if !_hs_parse_certificate(h, certr):
+        c.h = h
+        ret _conn_fail(c, h.err)
+    end
+
+    // The transcript for CertificateVerify covers everything through
+    // Certificate, so it must be taken BEFORE the CertificateVerify message is
+    // absorbed.
+    mut th_cv := _newbuf(64)
+    defer _buf_free(th_cv)
+    _hs_transcript(h, th_cv)
+
+    if !_hs_next_msg(h, buf, typ, body):
+        c.h = h
+        ret _conn_fail(c, h.err)
+    end
+    if typ != HS_CERTIFICATE_VERIFY:
+        c.h = h
+        ret _conn_fail(c, "expected CertificateVerify")
+    end
+    mut cvr := _readerof(body)
+    if !_hs_verify_cert_verify(h, cvr, th_cv):
+        c.h = h
+        ret _conn_fail(c, h.err)
+    end
+
+    // Certificate chain validation. Doing this after CertificateVerify means a
+    // server that fails either check is rejected; doing it before would leak
+    // slightly less, but the ordering does not affect the outcome.
+    if !cfg.insecure_skip_verify:
+        mut roots := _roots_load(cfg.ca_file)
+        defer _roots_free(roots)
+        if roots.count == 0:
+            c.h = h
+            ret _conn_fail(c, "no trusted roots available")
+        end
+        mut chain: Reader[8]
+        repeat 8 with i:
+            chain[i] = _newreader(null, 0)
+        end
+        repeat h.ncerts with i:
+            chain[i] = _newreader(_bufptr(h.certs, _cert_start(h, i)), _cert_len(h, i))
+        end
+        vr := _verify_chain(chain, h.ncerts, roots, c.host, _now_stamp())
+        if vr != VERR_NONE:
+            c.h = h
+            _rec_send_alert(h.rec, 2, ALERT_BAD_CERTIFICATE)
+            ret _conn_fail(c, "certificate verification failed: " + _verr_str(vr))
+        end
+    end
+
+    // The transcript for the server Finished covers everything through
+    // CertificateVerify.
+    mut th_fin := _newbuf(64)
+    defer _buf_free(th_fin)
+    _hs_transcript(h, th_fin)
+
+    if !_hs_next_msg(h, buf, typ, body):
+        c.h = h
+        ret _conn_fail(c, h.err)
+    end
+    if typ != HS_FINISHED:
+        c.h = h
+        ret _conn_fail(c, "expected Finished")
+    end
+    mut expect := _newbuf(64)
+    defer _buf_free(expect)
+    if !_hs_finished_mac(h, h.s_hs_secret, th_fin, expect):
+        c.h = h
+        ret _conn_fail(c, "could not compute Finished MAC")
+    end
+    if body.len != expect.len || !_cteq(body.p, expect.p, expect.len):
+        c.h = h
+        _rec_send_alert(h.rec, 2, ALERT_DECRYPT_ERROR)
+        ret _conn_fail(c, "server Finished did not verify")
+    end
+
+    // Application keys are derived from the transcript through the server's
+    // Finished, which is now absorbed.
+    mut th_app := _newbuf(64)
+    defer _buf_free(th_app)
+    _hs_transcript(h, th_app)
+    if !_hs_derive(h, h.master, "c ap traffic", th_app, h.c_ap_secret):
+        c.h = h
+        ret _conn_fail(c, "could not derive client application secret")
+    end
+    if !_hs_derive(h, h.master, "s ap traffic", th_app, h.s_ap_secret):
+        c.h = h
+        ret _conn_fail(c, "could not derive server application secret")
+    end
+
+    // Middlebox compatibility: a bare ChangeCipherSpec before our Finished.
+    mut ccs := _newbuf(1)
+    defer _buf_free(ccs)
+    _put8(ccs, 1)
+    _rec_write(h.rec, REC_CHANGE_CIPHER_SPEC, ccs.p, 1)
+
+    // client Finished, still under the handshake keys
+    mut cfin := _newbuf(64)
+    defer _buf_free(cfin)
+    if !_hs_finished_mac(h, h.c_hs_secret, th_app, cfin):
+        c.h = h
+        ret _conn_fail(c, "could not compute client Finished")
+    end
+    mut fmsg := _newbuf(64)
+    defer _buf_free(fmsg)
+    _put8(fmsg, HS_FINISHED)
+    _put24(fmsg, cfin.len)
+    _putbuf(fmsg, cfin)
+    if !_rec_write(h.rec, REC_HANDSHAKE, fmsg.p, fmsg.len):
+        c.h = h
+        ret _conn_fail(c, "could not send Finished")
+    end
+
+    _install_keys(h, h.s_ap_secret, h.c_ap_secret)
+    h.ok = true
+    c.h = h
+    c.open = true
+    ret true
+end
+
+// ---------------------------------------------------------------- public API
+
+@en "NewConfig"
+@fa "پیکربندی جدید"
+@ar "إعداد جدید"
+pub func NewConfig(server_name: str): Config:
+    mut c := Config {}
+    c.server_name = server_name
+    ret c
+end
+
+@en "Dial"
+@fa "اتصال امن"
+@ar "اتصال آمن"
+pub func Dial(host: str, port: int, cfg: Config): Conn:
+    mut c := Conn {}
+    c.host = host
+    c.insecure = cfg.insecure_skip_verify
+    c.pending = _newbuf(REC_MAX_PLAINTEXT)
+    mut conf := cfg
+    if conf.server_name.len() == 0:
+        conf.server_name = host
+    end
+    s := net.Connect(host, port)
+    if !net.Ok(s):
+        c.err = "could not connect to " + host
+        ret c
+    end
+    c.h = Handshake {}
+    c.h.rec = _rec_new(s.fd)
+    c.h.priv = _newbuf(32)
+    c.h.pub_key = _newbuf(32)
+    c.h.shared = _newbuf(32)
+    c.h.hs_secret = _newbuf(48)
+    c.h.master = _newbuf(48)
+    c.h.c_hs_secret = _newbuf(48)
+    c.h.s_hs_secret = _newbuf(48)
+    c.h.c_ap_secret = _newbuf(48)
+    c.h.s_ap_secret = _newbuf(48)
+    c.h.certs = _newbuf(8192)
+    c.h.cert_off = _newbuf(128)
+    _do_handshake(c, conf)
+    ret c
+end
+
+@en "ConnOk"
+@fa "اتصال معتبر"
+@ar "الاتصال صالح"
+pub func ConnOk(c: Conn): bool:
+    ret c.open
+end
+
+@en "ConnError"
+@fa "خطای اتصال"
+@ar "خطأ الاتصال"
+pub func ConnError(c: Conn): str:
+    ret c.err
+end
+
+@en "Write"
+@fa "نوشتن"
+@ar "كتابة"
+pub func Write(c &: Conn, data: str): int:
+    if !c.open:
+        ret 0 - 1
+    end
+    if !_rec_write(c.h.rec, REC_APPLICATION_DATA, data as void*, data.len()):
+        _conn_fail(c, "write failed: " + c.h.rec.err)
+        ret 0 - 1
+    end
+    ret data.len()
+end
+
+// Read up to `max` bytes of application data. Returns "" at end of stream.
+@en "Read"
+@fa "خواندن"
+@ar "قراءة"
+pub func Read(c &: Conn, max: int): str:
+    if !c.open:
+        ret ""
+    end
+    mut guard := 0
+    until c.pending.len == 0 && guard < 64:
+        guard += 1
+        mut typ := 0
+        mut frag := _newbuf(REC_MAX_PLAINTEXT)
+        defer _buf_free(frag)
+        if !_rec_read(c.h.rec, typ, frag):
+            c.open = false
+            if c.h.rec.err.len() > 0:
+                c.err = c.h.rec.err
+            end
+            ret ""
+        end
+        if typ == REC_APPLICATION_DATA:
+            _putbuf(c.pending, frag)
+        else if typ == REC_ALERT:
+            c.open = false
+            if _bufat(frag, 1) != ALERT_CLOSE_NOTIFY:
+                c.err = _alert_text(frag)
+            end
+            ret ""
+        else if typ == REC_HANDSHAKE:
+            // NewSessionTicket and friends arrive post-handshake; nothing here
+            // consumes them, and ignoring them is safe because they carry no
+            // application data.
+            continue
+        end
+    end
+    if c.pending.len == 0:
+        ret ""
+    end
+    mut take := c.pending.len
+    if max > 0 && take > max:
+        take = max
+    end
+    mut out := _newbuf(take + 1)
+    defer _buf_free(out)
+    repeat take with i:
+        _put8(out, _bufat(c.pending, i))
+    end
+    _bufconsume(c.pending, take)
+    ret _bufstr(out)
+end
+
+@en "Close"
+@fa "بستن اتصال"
+@ar "إغلاق الاتصال"
+pub func Close(c &: Conn):
+    if c.open:
+        _rec_send_alert(c.h.rec, 1, ALERT_CLOSE_NOTIFY)
+    end
+    c.open = false
+    if c.h.rec.fd >= 0:
+        net.Close(net.SocketFromFd(c.h.rec.fd))
+    end
+    _rec_free(c.h.rec)
+    _hs_free(c.h)
+    _buf_free(c.pending)
+end
+
+@en "CipherName"
+@fa "نام رمز"
+@ar "اسم الشفرة"
+pub func CipherName(c: Conn): str:
+    if c.h.cipher == CIPHER_CHACHA20_SHA256:
+        ret "TLS_CHACHA20_POLY1305_SHA256"
+    end
+    if c.h.cipher == CIPHER_AES128_GCM_SHA256:
+        ret "TLS_AES_128_GCM_SHA256"
+    end
+    if c.h.cipher == CIPHER_AES256_GCM_SHA384:
+        ret "TLS_AES_256_GCM_SHA384"
+    end
+    ret "none"
+end
+
+@en "PeerCertCount"
+@fa "تعداد گواهی همتا"
+@ar "عدد شهادات الند"
+pub func PeerCertCount(c: Conn): int:
+    ret c.h.ncerts
+end

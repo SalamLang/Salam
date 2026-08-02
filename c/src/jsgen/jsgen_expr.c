@@ -509,13 +509,13 @@ static bool jsg_op_is_cmp(token_kind_t k)
            k == TK_GE;
 }
 
-static bool jsg_ts_wrappable(const char *ts)
+bool jsg_ts_wrappable(const char *ts)
 {
     return ts && cg_is_int_typestr(ts) && jsg_int_ts_bits(ts) <= 32;
 }
 
 /* Reduce a JS number to the two's-complement value of type ts. */
-static const char *jsg_wrap_int(jg_t *g, const char *expr, const char *ts)
+const char *jsg_wrap_int(jg_t *g, const char *expr, const char *ts)
 {
     cg_t *cg = &g->cg;
     if (!strcmp(ts, "u8")) return cg_fmt(cg, "((%s) & 255)", expr);

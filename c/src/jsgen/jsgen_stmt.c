@@ -43,6 +43,10 @@ static const char *jsg_compound(jg_t *g, ast_node_t *n)
         strcmp(rhs->a->name, n->a->name) != 0)
         return NULL;
     if (local_known(cg, n->a->name) && !jsg_local_is_mut(g, n->a->name)) return NULL;
+    /* A sized integer result has to be masked back into its type, and there
+     * is nowhere to put the mask in `x += y` / `x++` - fall through to the
+     * plain `x = <wrapped expr>` form. */
+    if (jsg_ts_wrappable(n->a->type_str)) return NULL;
     {
         const char *lv = jsg_expr(g, n->a);
         bool is_int = n->a->type_str && cg_is_int_typestr(n->a->type_str);
@@ -296,10 +300,36 @@ void jsg_stmt(jg_t *g, ast_node_t *n)
                 break;
             }
         }
+        if (n->op != TK_ASSIGN && n->a && jsg_ts_wrappable(n->a->type_str)) {
+            token_kind_t base_op = cg_compound_base(n->op);
+            if (base_op != TK_EOF) {
+                bool uns = cg_is_unsigned_typestr(n->a->type_str);
+                const char *lv = jsg_expr(g, n->a);
+                const char *op = (base_op == TK_SHR && uns) ? ">>>" : cg_op(base_op);
+                const char *rhs =
+                    (base_op == TK_STAR && !strcmp(n->a->type_str, "i32")) ||
+                            (base_op == TK_STAR && !strcmp(n->a->type_str, "u32"))
+                        ? cg_fmt(cg, "Math.imul(%s, %s)", lv, jsg_expr(g, n->b))
+                        : cg_fmt(cg, "%s %s %s", lv, op, jsg_expr_p(g, n->b, 14));
+                cg_line(cg, "%s = %s;", lv, jsg_wrap_int(g, rhs, n->a->type_str));
+                break;
+            }
+        }
         cg_line(cg, "%s %s %s;", jsg_expr(g, n->a), cg_op(n->op), jsg_expr(g, n->b));
         break;
     }
     case AST_EXPR_STMT:
+        /* `x++` on a sized integer wraps at that type's width; JS '++' does
+         * not, so in statement position (where the old value is unused) it
+         * becomes the masked long form. */
+        if (n->a && n->a->kind == AST_INCDEC && n->a->a &&
+            jsg_ts_wrappable(n->a->a->type_str)) {
+            const char *lv = jsg_expr(g, n->a->a);
+            const char *op = (n->a->op == TK_PLUS_PLUS) ? "+" : "-";
+            cg_line(cg, "%s = %s;", lv,
+                    jsg_wrap_int(g, cg_fmt(cg, "%s %s 1", lv, op), n->a->a->type_str));
+            break;
+        }
         cg_line(cg, "%s;", jsg_stmt_expr(g, n->a));
         break;
     case AST_DEFER:

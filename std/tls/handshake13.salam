@@ -1,0 +1,535 @@
+package tls
+
+// TLS 1.3 client handshake and key schedule (RFC 8446 sections 4 and 7.1).
+//
+// Client side only. The flow is:
+//
+//   -> ClientHello                        (key_share: X25519)
+//   <- ServerHello                        (selects suite + peer key share)
+//      [derive handshake traffic keys; everything after is encrypted]
+//   <- EncryptedExtensions
+//   <- Certificate
+//   <- CertificateVerify                  (signature over the transcript)
+//   <- Finished                           (MAC over the transcript)
+//   -> Finished
+//      [derive application traffic keys]
+//
+// THE TRANSCRIPT IS THE POINT. Every handshake message is absorbed into a
+// running hash, and both the CertificateVerify signature and both Finished
+// MACs cover it. That is what binds the negotiated parameters to the server's
+// identity: an attacker who rewrites the ClientHello's cipher list or key share
+// changes the transcript, and the server's Finished then fails to verify. So
+// the transcript must be fed the exact bytes seen on the wire, in order, and
+// nothing else.
+//
+// NOT IMPLEMENTED: session resumption / PSK, 0-RTT, client certificates,
+// HelloRetryRequest, post-handshake KeyUpdate. A server that requires any of
+// them will fail the handshake rather than silently degrade.
+
+const HS_CLIENT_HELLO := 1
+const HS_SERVER_HELLO := 2
+const HS_NEW_SESSION_TICKET := 4
+const HS_ENCRYPTED_EXTENSIONS := 8
+const HS_CERTIFICATE := 11
+const HS_CERTIFICATE_REQUEST := 13
+const HS_CERTIFICATE_VERIFY := 15
+const HS_FINISHED := 20
+const HS_KEY_UPDATE := 24
+
+const EXT_SERVER_NAME := 0
+const EXT_SUPPORTED_GROUPS := 10
+const EXT_SIGNATURE_ALGORITHMS := 13
+const EXT_ALPN := 16
+const EXT_SUPPORTED_VERSIONS := 43
+const EXT_KEY_SHARE := 51
+
+const GROUP_X25519 := 0x001D
+const GROUP_SECP256R1 := 0x0017
+const GROUP_SECP384R1 := 0x0018
+
+// signature_algorithms code points
+const SA_RSA_PKCS1_SHA256 := 0x0401
+const SA_RSA_PKCS1_SHA384 := 0x0501
+const SA_ECDSA_P256_SHA256 := 0x0403
+const SA_ECDSA_P384_SHA384 := 0x0503
+const SA_RSA_PSS_RSAE_SHA256 := 0x0804
+const SA_RSA_PSS_RSAE_SHA384 := 0x0805
+const SA_RSA_PSS_PSS_SHA256 := 0x0809
+
+// HelloRetryRequest is signalled by this fixed value in ServerHello.random.
+const HRR_RANDOM := "cf21ad74e59a6111be1d8c021e65b891c2a211167abb8c5e079e09e2c8a8339c"
+
+struct Handshake:
+    pub rec: RecordLayer = RecordLayer {}
+    pub cipher: int = 0
+    pub hash: int = 0
+    pub hlen: int = 0
+    // running transcript hash over every handshake message
+    pub tr: Hash = Hash {}
+    pub priv: Buf = Buf {}
+    pub pub_key: Buf = Buf {}
+    pub shared: Buf = Buf {}
+    pub hs_secret: Buf = Buf {}
+    pub master: Buf = Buf {}
+    pub c_hs_secret: Buf = Buf {}
+    pub s_hs_secret: Buf = Buf {}
+    pub c_ap_secret: Buf = Buf {}
+    pub s_ap_secret: Buf = Buf {}
+    // the server's certificate chain, as received
+    pub certs: Buf = Buf {}
+    pub cert_off: Buf = Buf {}
+    pub ncerts: int = 0
+    pub ok: bool = false
+    pub err: str = ""
+end
+
+func _hs_free(h &: Handshake):
+    _buf_wipe(h.priv)
+    _buf_free(h.pub_key)
+    _buf_wipe(h.shared)
+    _buf_wipe(h.hs_secret)
+    _buf_wipe(h.master)
+    _buf_wipe(h.c_hs_secret)
+    _buf_wipe(h.s_hs_secret)
+    _buf_wipe(h.c_ap_secret)
+    _buf_wipe(h.s_ap_secret)
+    _buf_free(h.certs)
+    _buf_free(h.cert_off)
+end
+
+func _hs_fail(h &: Handshake, msg: str): bool:
+    if h.err.len() == 0:
+        h.err = msg
+    end
+    ret false
+end
+
+// Transcript-hash of everything absorbed so far.
+func _hs_transcript(h: Handshake, out &: Buf):
+    _bufreset(out)
+    _putzeros(out, h.hlen)
+    _hash_final(h.tr, out.p)
+end
+
+// ---------------------------------------------------------------- schedule
+
+// Derive-Secret(secret, label, transcript) for the current hash.
+func _hs_derive(h: Handshake, secret: Buf, label: str, th: Buf, out &: Buf): bool:
+    _bufreset(out)
+    _putzeros(out, h.hlen)
+    ret _derive_secret(h.hash, secret.p, secret.len, label, th.p, th.len, out.p)
+end
+
+// RFC 8446 section 7.1. With no PSK the early secret is Extract(0, 0), and the
+// binder between stages is Derive-Secret(prev, "derived", "").
+func _hs_key_schedule(h &: Handshake): bool:
+    mut zeros := _newbuf(h.hlen)
+    defer _buf_wipe(zeros)
+    _putzeros(zeros, h.hlen)
+
+    mut early := _newbuf(h.hlen)
+    defer _buf_wipe(early)
+    _putzeros(early, h.hlen)
+    _hkdf_extract(h.hash, zeros.p, 0, zeros.p, h.hlen, early.p)
+
+    mut emptyhash := _newbuf(h.hlen)
+    defer _buf_free(emptyhash)
+    _putzeros(emptyhash, h.hlen)
+    _hash_oneshot(h.hash, zeros.p, 0, emptyhash.p)
+
+    mut derived := _newbuf(h.hlen)
+    defer _buf_wipe(derived)
+    if !_hs_derive(h, early, "derived", emptyhash, derived):
+        ret false
+    end
+
+    // handshake secret = Extract(derived, ECDHE)
+    _bufreset(h.hs_secret)
+    _putzeros(h.hs_secret, h.hlen)
+    _hkdf_extract(h.hash, derived.p, h.hlen, h.shared.p, h.shared.len, h.hs_secret.p)
+
+    mut th := _newbuf(h.hlen)
+    defer _buf_free(th)
+    _hs_transcript(h, th)
+    if !_hs_derive(h, h.hs_secret, "c hs traffic", th, h.c_hs_secret):
+        ret false
+    end
+    if !_hs_derive(h, h.hs_secret, "s hs traffic", th, h.s_hs_secret):
+        ret false
+    end
+
+    // master secret = Extract(Derive-Secret(hs, "derived", ""), 0)
+    mut derived2 := _newbuf(h.hlen)
+    defer _buf_wipe(derived2)
+    if !_hs_derive(h, h.hs_secret, "derived", emptyhash, derived2):
+        ret false
+    end
+    _bufreset(h.master)
+    _putzeros(h.master, h.hlen)
+    _hkdf_extract(h.hash, derived2.p, h.hlen, zeros.p, h.hlen, h.master.p)
+    ret true
+end
+
+// finished_key = HKDF-Expand-Label(secret, "finished", "", hlen)
+// verify_data  = HMAC(finished_key, transcript_hash)
+func _hs_finished_mac(h: Handshake, secret: Buf, th: Buf, out &: Buf): bool:
+    mut fk := _newbuf(h.hlen)
+    defer _buf_wipe(fk)
+    _putzeros(fk, h.hlen)
+    if !_hkdf_expand_label(h.hash, secret.p, secret.len, "finished", null, 0, fk.p, h.hlen):
+        ret false
+    end
+    _bufreset(out)
+    _putzeros(out, h.hlen)
+    _hmac(h.hash, fk.p, h.hlen, th.p, th.len, out.p)
+    ret true
+end
+
+// ---------------------------------------------------------------- ClientHello
+
+func _ext_open(b &: Buf, id: int): int:
+    _put16(b, id)
+    _put16(b, 0)
+    ret b.len
+end
+
+func _ext_close(b &: Buf, mark: int):
+    _patch16(b, mark - 2, b.len - mark)
+end
+
+func _hs_build_client_hello(h &: Handshake, host: str, alpn: str, out &: Buf): bool:
+    _bufreset(out)
+    _put8(out, HS_CLIENT_HELLO)
+    lenmark := out.len
+    _put24(out, 0)
+    body := out.len
+
+    // legacy_version is frozen at TLS 1.2; the real version is in an extension
+    _put16(out, TLS12)
+
+    mut rnd := _newbuf(32)
+    defer _buf_free(rnd)
+    _putzeros(rnd, 32)
+    _os_random_fill_pub(rnd.p, 32)
+    _putbuf(out, rnd)
+
+    // A non-empty legacy_session_id makes the handshake look like a resumed
+    // TLS 1.2 session to middleboxes that would otherwise drop it.
+    mut sid := _newbuf(32)
+    defer _buf_free(sid)
+    _putzeros(sid, 32)
+    _os_random_fill_pub(sid.p, 32)
+    _put8(out, 32)
+    _putbuf(out, sid)
+
+    // ChaCha20-Poly1305 first: it is constant-time by construction, whereas the
+    // AES here is table-driven (see aes.salam).
+    _put16(out, 4)
+    _put16(out, TLS_CHACHA20_POLY1305_SHA256)
+    _put16(out, TLS_AES_128_GCM_SHA256)
+
+    // legacy_compression_methods: null only
+    _put8(out, 1)
+    _put8(out, 0)
+
+    extmark := out.len
+    _put16(out, 0)
+    extstart := out.len
+
+    // server_name
+    if host.len() > 0:
+        m := _ext_open(out, EXT_SERVER_NAME)
+        _put16(out, host.len() + 3)
+        _put8(out, 0)
+        _put16(out, host.len())
+        _putstr(out, host)
+        _ext_close(out, m)
+    end
+
+    // supported_groups
+    m2 := _ext_open(out, EXT_SUPPORTED_GROUPS)
+    _put16(out, 6)
+    _put16(out, GROUP_X25519)
+    _put16(out, GROUP_SECP256R1)
+    _put16(out, GROUP_SECP384R1)
+    _ext_close(out, m2)
+
+    // signature_algorithms
+    m3 := _ext_open(out, EXT_SIGNATURE_ALGORITHMS)
+    _put16(out, 12)
+    _put16(out, SA_ECDSA_P256_SHA256)
+    _put16(out, SA_ECDSA_P384_SHA384)
+    _put16(out, SA_RSA_PSS_RSAE_SHA256)
+    _put16(out, SA_RSA_PSS_RSAE_SHA384)
+    _put16(out, SA_RSA_PKCS1_SHA256)
+    _put16(out, SA_RSA_PKCS1_SHA384)
+    _ext_close(out, m3)
+
+    // supported_versions: TLS 1.3 only
+    m4 := _ext_open(out, EXT_SUPPORTED_VERSIONS)
+    _put8(out, 2)
+    _put16(out, TLS13)
+    _ext_close(out, m4)
+
+    // key_share: a single X25519 share
+    _bufreset(h.priv)
+    _putzeros(h.priv, 32)
+    _os_random_fill_pub(h.priv.p, 32)
+    _bufreset(h.pub_key)
+    _putzeros(h.pub_key, 32)
+    _x25519_base(h.priv.p, h.pub_key.p)
+    m5 := _ext_open(out, EXT_KEY_SHARE)
+    _put16(out, 36)
+    _put16(out, GROUP_X25519)
+    _put16(out, 32)
+    _putbuf(out, h.pub_key)
+    _ext_close(out, m5)
+
+    if alpn.len() > 0:
+        m6 := _ext_open(out, EXT_ALPN)
+        _put16(out, alpn.len() + 1)
+        _put8(out, alpn.len())
+        _putstr(out, alpn)
+        _ext_close(out, m6)
+    end
+
+    _patch16(out, extmark, out.len - extstart)
+    _patch24(out, lenmark, out.len - body)
+    ret true
+end
+
+// ---------------------------------------------------------------- ServerHello
+
+func _hs_parse_server_hello(h &: Handshake, msg: Reader): bool:
+    mut r := msg
+    ver := _rd16(r)
+    if ver != TLS12:
+        ret _hs_fail(h, "unexpected legacy_version in ServerHello")
+    end
+    srand := _rdbytes(r, 32)
+    mut hrr := _hexbuf(HRR_RANDOM)
+    defer _buf_free(hrr)
+    if _cteq(srand.p, hrr.p, 32):
+        // A HelloRetryRequest means the server rejected our key share. Handling
+        // it properly requires re-sending a ClientHello with a different group,
+        // which is not implemented; failing is better than looping.
+        ret _hs_fail(h, "server sent HelloRetryRequest (unsupported)")
+    end
+    sid := _rdvec8(r)
+    _rdskip(sid, sid.len)
+    suite := _rd16(r)
+    comp := _rd8(r)
+    if r.bad:
+        ret _hs_fail(h, "malformed ServerHello")
+    end
+    if comp != 0:
+        ret _hs_fail(h, "server selected a compression method")
+    end
+    h.cipher = _cipher_from_wire(suite)
+    if h.cipher == CIPHER_NONE:
+        ret _hs_fail(h, "server selected an unsupported cipher suite")
+    end
+    h.hash = _cipher_hash(h.cipher)
+    h.hlen = _hash_size(h.hash)
+
+    mut exts := _rdvec16(r)
+    if r.bad:
+        ret _hs_fail(h, "malformed ServerHello extensions")
+    end
+    mut got_version := false
+    mut peer := _newreader(null, 0)
+    until _rdleft(exts) > 0 && !exts.bad:
+        id := _rd16(exts)
+        mut body := _rdvec16(exts)
+        if exts.bad:
+            ret _hs_fail(h, "malformed ServerHello extension")
+        end
+        if id == EXT_SUPPORTED_VERSIONS:
+            v := _rd16(body)
+            if body.bad || v != TLS13:
+                ret _hs_fail(h, "server did not select TLS 1.3")
+            end
+            got_version = true
+        else if id == EXT_KEY_SHARE:
+            g := _rd16(body)
+            if g != GROUP_X25519:
+                ret _hs_fail(h, "server selected a group we did not offer a share for")
+            end
+            peer = _rdvec16(body)
+            if body.bad || peer.len != 32:
+                ret _hs_fail(h, "malformed key share")
+            end
+        end
+    end
+    // Without supported_versions this is a TLS 1.2 ServerHello. Downgrading is
+    // not offered here: the caller asked for the 1.3 client.
+    if !got_version:
+        ret _hs_fail(h, "server did not negotiate TLS 1.3")
+    end
+    if peer.len != 32:
+        ret _hs_fail(h, "server sent no key share")
+    end
+
+    _bufreset(h.shared)
+    _putzeros(h.shared, 32)
+    if !_x25519_shared(h.priv.p, peer.p, h.shared.p):
+        // an all-zero shared secret means a small-order peer key
+        ret _hs_fail(h, "peer key share produced a degenerate shared secret")
+    end
+    ret true
+end
+
+// ---------------------------------------------------------------- Certificate
+
+func _hs_parse_certificate(h &: Handshake, msg: Reader): bool:
+    mut r := msg
+    ctx := _rdvec8(r)
+    if r.bad || ctx.len != 0:
+        // a non-empty certificate_request_context only appears in response to
+        // a CertificateRequest, which this client never sends
+        ret _hs_fail(h, "unexpected certificate context")
+    end
+    mut list := _rdvec24(r)
+    if r.bad:
+        ret _hs_fail(h, "malformed Certificate message")
+    end
+    _bufreset(h.certs)
+    _bufreset(h.cert_off)
+    h.ncerts = 0
+    until _rdleft(list) > 0 && !list.bad:
+        mut cert := _rdvec24(list)
+        exts := _rdvec16(list)
+        _rdskip(exts, exts.len)
+        if list.bad:
+            ret _hs_fail(h, "malformed certificate entry")
+        end
+        if h.ncerts < MAX_CHAIN_DEPTH:
+            start := h.certs.len
+            repeat cert.len with i:
+                _put8(h.certs, _rdat(cert, i))
+            end
+            _put32(h.cert_off, start as i64)
+            _put32(h.cert_off, cert.len as i64)
+            h.ncerts += 1
+        end
+    end
+    if h.ncerts == 0:
+        ret _hs_fail(h, "server sent no certificates")
+    end
+    ret true
+end
+
+// The CertificateVerify signature covers a fixed context string rather than the
+// transcript alone. The 64 spaces and the label make a signature produced for
+// one role or protocol version unusable in another.
+func _hs_cv_content(h: Handshake, th: Buf, out &: Buf):
+    _bufreset(out)
+    repeat 64 with _i:
+        _put8(out, 0x20)
+    end
+    _putstr(out, "TLS 1.3, server CertificateVerify")
+    _put8(out, 0)
+    _putbuf(out, th)
+end
+
+func _hs_verify_cert_verify(h &: Handshake, msg: Reader, th: Buf): bool:
+    mut r := msg
+    scheme := _rd16(r)
+    sig := _rdvec16(r)
+    if r.bad || _rdleft(r) != 0:
+        ret _hs_fail(h, "malformed CertificateVerify")
+    end
+
+    mut content := _newbuf(128)
+    defer _buf_free(content)
+    _hs_cv_content(h, th, content)
+
+    leaf := _cert_parse(_bufptr(h.certs, 0), _cert_len(h, 0))
+    if !leaf.ok:
+        ret _hs_fail(h, "server leaf certificate did not parse")
+    end
+
+    mut kind := HASH_SHA256
+    if scheme == SA_ECDSA_P384_SHA384 || scheme == SA_RSA_PSS_RSAE_SHA384 || scheme == SA_RSA_PKCS1_SHA384:
+        kind = HASH_SHA384
+    end
+    hlen := _hash_size(kind)
+    mut digest := _newbuf(hlen)
+    defer _buf_free(digest)
+    _putzeros(digest, hlen)
+    _hash_oneshot(kind, content.p, content.len, digest.p)
+
+    if scheme == SA_ECDSA_P256_SHA256 || scheme == SA_ECDSA_P384_SHA384:
+        mut rb := _newbuf(48)
+        defer _buf_free(rb)
+        mut sb := _newbuf(48)
+        defer _buf_free(sb)
+        if leaf.pk_alg == PK_EC_P256:
+            if !_ecdsa_split(sig, rb, sb, 32):
+                ret _hs_fail(h, "malformed ECDSA signature")
+            end
+            if !_ecdsa_p256_verify(digest.p, hlen, rb.p, sb.p, leaf.ec_point.p, leaf.ec_point.len):
+                ret _hs_fail(h, "CertificateVerify signature invalid")
+            end
+            ret true
+        end
+        if leaf.pk_alg == PK_EC_P384:
+            if !_ecdsa_split(sig, rb, sb, 48):
+                ret _hs_fail(h, "malformed ECDSA signature")
+            end
+            if !_ecdsa_p384_verify(digest.p, hlen, rb.p, sb.p, leaf.ec_point.p, leaf.ec_point.len):
+                ret _hs_fail(h, "CertificateVerify signature invalid")
+            end
+            ret true
+        end
+        ret _hs_fail(h, "ECDSA signature with a non-EC leaf key")
+    end
+
+    if leaf.pk_alg != PK_RSA:
+        ret _hs_fail(h, "RSA signature with a non-RSA leaf key")
+    end
+    mut n := _newbuf(leaf.rsa_n.len)
+    defer _buf_free(n)
+    repeat leaf.rsa_n.len with i:
+        _put8(n, _rdat(leaf.rsa_n, i))
+    end
+    mut e := _newbuf(leaf.rsa_e.len)
+    defer _buf_free(e)
+    repeat leaf.rsa_e.len with i:
+        _put8(e, _rdat(leaf.rsa_e, i))
+    end
+    mut sg := _newbuf(sig.len)
+    defer _buf_free(sg)
+    repeat sig.len with i:
+        _put8(sg, _rdat(sig, i))
+    end
+
+    if scheme == SA_RSA_PSS_RSAE_SHA256 || scheme == SA_RSA_PSS_RSAE_SHA384 || scheme == SA_RSA_PSS_PSS_SHA256:
+        if !_rsa_verify_pss(kind, digest.p, n.p, n.len, e.p, e.len, sg.p, sg.len, hlen):
+            ret _hs_fail(h, "CertificateVerify signature invalid")
+        end
+        ret true
+    end
+    if scheme == SA_RSA_PKCS1_SHA256 || scheme == SA_RSA_PKCS1_SHA384:
+        // RFC 8446 forbids PKCS#1 v1.5 in CertificateVerify; only PSS is legal
+        // for RSA. Accepting it would undo that decision.
+        ret _hs_fail(h, "server used PKCS#1 v1.5 in CertificateVerify")
+    end
+    ret _hs_fail(h, "unsupported signature scheme in CertificateVerify")
+end
+
+func _cert_len(h: Handshake, i: int): int:
+    mut l := 0
+    repeat 4 with k:
+        l = (l << 8) | _bufat(h.cert_off, i * 8 + 4 + k)
+    end
+    ret l
+end
+
+func _cert_start(h: Handshake, i: int): int:
+    mut o := 0
+    repeat 4 with k:
+        o = (o << 8) | _bufat(h.cert_off, i * 8 + k)
+    end
+    ret o
+end

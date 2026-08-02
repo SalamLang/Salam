@@ -37,6 +37,12 @@ const T_EC_S := "a1ee23bb74cb3e6642322e1babd4b9a3e3794a6b34202e51bbaa586b7057b48
 const T_EC_R384 := "c87f210e9d418a8975f77814b7ea57b27e4f606c79b85d57faf808dc4e2e2b98"
 const T_EC_S384 := "8712f7985c9338f3e80c02c96ed584ec0f702f2569cac0bbab020b48ccba3e00"
 
+const T_P384_PUB := "04b7b42088d2fe3b4b86bfffcb6ce35571c50a4d98900be8c3a1823e56889cfd9eb9dbe581fb04f4e29fa43bf65810ae86295d34122e710d0f3a1fba20fa376c5070fa8a0dbe3dc31953a853078b137e202206b33f0bd5c701b605eb23639f68c9"
+const T_P384_R384 := "6801cba34061bd0f1572c7fbe473f6736f0d9f2d2e27f8d4f91a5dfe7c22c40a50d77174582f20c6fb91252e08bcdbd5"
+const T_P384_S384 := "a5c6fbaf1d32f68781d172ad4d1e96c6313f8e330563f8d809c2a8074c7ec387fa24ddf51f90b8390b7d62cbe9ed7bbf"
+const T_P384_R256 := "51c38a0cb2fb31e20366e7aade2d85de4297b6fc60547423465f4ece8b993da73ffc027c88a0749a643a1a075e3198db"
+const T_P384_S256 := "100403d706c4a990cf957e8384929083420a5d5c02adbe9f580756b3c2d357aa2dafdaa1574145917a33d465541f92d5"
+
 mut _st_fails := 0
 mut _st_total := 0
 
@@ -998,15 +1004,16 @@ end
 func _p256_mul_hex(khex: str): str:
     mut kb := _hexbuf(khex)
     defer _buf_free(kb)
-    k := _fe_from_bytes(kb.p)
-    r := _jac_mul(k, _jac_generator())
+    cv := _curve_p256()
+    k := _fe_from_bytes(kb.p, 32)
+    r := _jac_mul(cv, k, _jac_generator(cv))
     mut x := _newbuf(32)
     defer _buf_free(x)
     _putzeros(x, 32)
     mut y := _newbuf(32)
     defer _buf_free(y)
     _putzeros(y, 32)
-    if !_jac_to_affine(r, x.p, y.p):
+    if !_jac_to_affine(cv, r, x.p, y.p):
         ret "INFINITY"
     end
     ret _hexofbuf(x) + ":" + _hexofbuf(y)
@@ -1017,43 +1024,44 @@ func _selftest_p256():
     // is the base case everything else rests on.
     mut vb := _hexbuf("0123456789abcdeffedcba98765432100011223344556677889900aabbccddee")
     defer _buf_free(vb)
-    v := _fe_from_bytes(vb.p)
+    cv := _curve_p256()
+    v := _fe_from_bytes(vb.p, 32)
     mut vm := Fe {}
-    _fe_to_mont(vm, v)
+    _fe_to_mont(vm, v, cv.p, cv.r2p, cv.nl, cv.n0p)
     mut vback := Fe {}
-    _fe_from_mont(vback, vm)
-    _ck(_fe_eq(v, vback), "p256 montgomery round-trip")
+    _fe_from_mont(vback, vm, cv.p, cv.nl, cv.n0p)
+    _ck(_fe_eq(v, vback, cv.nl), "p256 montgomery round-trip")
 
     // 1 in Montgomery form must equal the published R mod p
     mut one := Fe {}
     one.v[0] = 1 as u32
     mut onem := Fe {}
-    _fe_to_mont(onem, one)
-    _ck(_fe_eq(onem, _fe_from_const(P256_ONE_MONT)), "p256 montgomery one")
+    _fe_to_mont(onem, one, cv.p, cv.r2p, cv.nl, cv.n0p)
+    _ck(_fe_eq(onem, _fe_from(cv.one, cv.nl), cv.nl), "p256 montgomery one")
 
     // multiplication by 1 in the Montgomery domain is the identity
     mut prod := Fe {}
-    _fe_mul(prod, vm, _fe_from_const(P256_ONE_MONT))
-    _ck(_fe_eq(prod, vm), "p256 mont mul by one")
+    _fe_mont_mul(prod, vm, _fe_from(cv.one, cv.nl), cv.p, cv.nl, cv.n0p)
+    _ck(_fe_eq(prod, vm, cv.nl), "p256 mont mul by one")
 
     // inversion: v * v^-1 == 1
     mut vinv := Fe {}
-    _fe_inv(vinv, vm)
+    _fe_inv(vinv, vm, cv.p, cv.one, cv.nl, cv.n0p)
     mut chk := Fe {}
-    _fe_mul(chk, vm, vinv)
-    _ck(_fe_eq(chk, _fe_from_const(P256_ONE_MONT)), "p256 field inversion")
+    _fe_mont_mul(chk, vm, vinv, cv.p, cv.nl, cv.n0p)
+    _ck(_fe_eq(chk, _fe_from(cv.one, cv.nl), cv.nl), "p256 field inversion")
 
     // add/sub round-trip and modular wraparound
     mut s := Fe {}
-    _fe_add_mod(s, vm, vm, P256_P)
+    _fe_add_mod(s, vm, vm, cv.p, cv.nl)
     mut d := Fe {}
-    _fe_sub_mod(d, s, vm, P256_P)
-    _ck(_fe_eq(d, vm), "p256 add then sub")
+    _fe_sub_mod(d, s, vm, cv.p, cv.nl)
+    _ck(_fe_eq(d, vm, cv.nl), "p256 add then sub")
     mut pm1 := Fe {}
-    _fe_sub_mod(pm1, _fe_zero(), one, P256_P)
+    _fe_sub_mod(pm1, _fe_zero(), one, cv.p, cv.nl)
     mut wrap := Fe {}
-    _fe_add_mod(wrap, pm1, one, P256_P)
-    _ck(_fe_is_zero(wrap), "p256 (p-1) + 1 == 0")
+    _fe_add_mod(wrap, pm1, one, cv.p, cv.nl)
+    _ck(_fe_is_zero(wrap, cv.nl), "p256 (p-1) + 1 == 0")
 
     // Scalar multiples of the generator, against values computed independently.
     _ckhex(_p256_mul_hex("0000000000000000000000000000000000000000000000000000000000000001"),
@@ -1081,17 +1089,17 @@ func _selftest_p256():
     _putbuf(enc, gx)
     _putbuf(enc, gy)
     mut gpt := Jac {}
-    _ck(_p256_point_from_bytes(enc.p, enc.len, gpt), "p256 accepts the generator encoding")
+    _ck(_ec_point_from_bytes(_curve_p256(), enc.p, enc.len, gpt), "p256 accepts the generator encoding")
 
     _bufset(enc, 40, _bufat(enc, 40) ^ 0x01)
     mut bad := Jac {}
-    _ck(!_p256_point_from_bytes(enc.p, enc.len, bad), "p256 rejects off-curve point")
+    _ck(!_ec_point_from_bytes(_curve_p256(), enc.p, enc.len, bad), "p256 rejects off-curve point")
     _bufset(enc, 40, _bufat(enc, 40) ^ 0x01)
 
     _bufset(enc, 0, 0x02)
-    _ck(!_p256_point_from_bytes(enc.p, enc.len, bad), "p256 rejects compressed-point tag")
+    _ck(!_ec_point_from_bytes(_curve_p256(), enc.p, enc.len, bad), "p256 rejects compressed-point tag")
     _bufset(enc, 0, 0x04)
-    _ck(!_p256_point_from_bytes(enc.p, 64, bad), "p256 rejects wrong length")
+    _ck(!_ec_point_from_bytes(_curve_p256(), enc.p, 64, bad), "p256 rejects wrong length")
 
     // x or y >= p must be refused even if the pair would satisfy the equation
     // after reduction.
@@ -1102,7 +1110,7 @@ func _selftest_p256():
     defer _buf_free(pbytes)
     _putbuf(ovf, pbytes)
     _putbuf(ovf, gy)
-    _ck(!_p256_point_from_bytes(ovf.p, ovf.len, bad), "p256 rejects x >= p")
+    _ck(!_ec_point_from_bytes(_curve_p256(), ovf.p, ovf.len, bad), "p256 rejects x >= p")
 
     // ECDH: both sides agree, and each public key is a valid curve point.
     mut ka := _hexbuf("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721")
@@ -1541,6 +1549,284 @@ func _selftest_verify():
     _ck(_verr_str(VERR_EXPIRED).len() > 0, "verify: error strings present")
 end
 
+// ---------------------------------------------------------------- roots/PEM
+
+func _selftest_roots():
+    // Round-trip a known certificate through PEM.
+    mut leafder := _hexbuf(TC_LEAF)
+    defer _buf_free(leafder)
+    b64 := encoding.Base64EncodeBytes(leafder.p, leafder.len)
+    pem := "-----BEGIN CERTIFICATE-----\n" + b64 + "\n-----END CERTIFICATE-----\n"
+
+    mut r := _roots_new()
+    defer _roots_free(r)
+    _ck(_roots_add_pem(r, pem) == 1, "pem: loads one certificate")
+    _ck(r.count == 1, "pem: store holds one root")
+    got := _roots_get(r, 0)
+    _ck(got.len == leafder.len, "pem: decoded length matches DER")
+    _ck(_cteq(got.p, leafder.p, leafder.len), "pem: decoded bytes match DER")
+
+    // Two blocks in one document, plus surrounding noise, which is what real
+    // system bundles look like.
+    mut rootder := _hexbuf(TC_ROOT)
+    defer _buf_free(rootder)
+    b2 := encoding.Base64EncodeBytes(rootder.p, rootder.len)
+    multi := "# comment line\nSalam Test Root\n===============\n" + "-----BEGIN CERTIFICATE-----\n" + b64 + "\n-----END CERTIFICATE-----\n" + "\ntrailing notes\n" + "-----BEGIN CERTIFICATE-----\n" + b2 + "\n-----END CERTIFICATE-----\n"
+    mut r2 := _roots_new()
+    defer _roots_free(r2)
+    _ck(_roots_add_pem(r2, multi) == 2, "pem: loads two certificates with noise between")
+
+    // Garbage inside a block must not produce a root.
+    mut r3 := _roots_new()
+    defer _roots_free(r3)
+    bad := "-----BEGIN CERTIFICATE-----\n!!!!not base64!!!!\n-----END CERTIFICATE-----\n"
+    _ck(_roots_add_pem(r3, bad) == 0, "pem: rejects non-base64 body")
+    _ck(r3.count == 0, "pem: nothing added on failure")
+
+    // Valid base64 that is not a certificate must not produce a root either.
+    mut r4 := _roots_new()
+    defer _roots_free(r4)
+    notcert := "-----BEGIN CERTIFICATE-----\nAAAAAAAAAAAAAAAA\n-----END CERTIFICATE-----\n"
+    _ck(_roots_add_pem(r4, notcert) == 0, "pem: rejects base64 that is not a certificate")
+
+    // An unterminated block is ignored rather than read past.
+    mut r5 := _roots_new()
+    defer _roots_free(r5)
+    trunc := "-----BEGIN CERTIFICATE-----\n" + b64
+    _ck(_roots_add_pem(r5, trunc) == 0, "pem: ignores unterminated block")
+
+    // Empty and non-PEM input.
+    mut r6 := _roots_new()
+    defer _roots_free(r6)
+    _ck(_roots_add_pem(r6, "") == 0, "pem: empty input")
+    _ck(_roots_add_pem(r6, "not a pem file at all") == 0, "pem: non-PEM input")
+
+    // A certificate loaded through PEM must verify a chain exactly as the
+    // DER-loaded one did, which is what makes a system bundle usable.
+    mut rr := _roots_new()
+    defer _roots_free(rr)
+    pemroot := "-----BEGIN CERTIFICATE-----\n" + b2 + "\n-----END CERTIFICATE-----\n"
+    _ck(_roots_add_pem(rr, pemroot) == 1, "pem: loads root for chain test")
+    mut ch: Reader[8]
+    repeat 8 with i:
+        ch[i] = _newreader(null, 0)
+    end
+    ch[0] = _readerof(leafder)
+    _ck(_verify_chain(ch, 1, rr, "example.com", 20270601000000 as i64) == VERR_NONE, "pem: PEM-loaded root verifies the chain")
+
+    // The store search must not fabricate roots when handed a missing path.
+    mut r7 := _roots_load("/definitely/not/a/real/ca-bundle.pem")
+    defer _roots_free(r7)
+    _ck(r7.count == 0, "roots: missing ca_file yields an empty store")
+
+    // A SHA-1 self-signed root PARSES (so it remains usable as a trust anchor,
+    // which is how a large share of the real Mozilla bundle is still shipped)
+    // but its signature algorithm must never verify anything.
+    mut sha1der := _hexbuf(TC_SHA1_ROOT)
+    defer _buf_free(sha1der)
+    s1 := _cert_parse(sha1der.p, sha1der.len)
+    _ck(s1.ok, "sha1 root parses")
+    _ck(s1.sig_alg == SIG_UNKNOWN, "sha1 signature algorithm is not recognised")
+    _ck(s1.pk_alg == PK_RSA, "sha1 root public key still usable")
+    _ck(!_cert_signed_by(s1, s1), "sha1 self-signature never verifies")
+
+    // and it must not be able to vouch for anything else
+    mut sroots := _roots_new()
+    defer _roots_free(sroots)
+    _roots_add(sroots, sha1der.p, sha1der.len)
+    mut ch2: Reader[8]
+    repeat 8 with i:
+        ch2[i] = _newreader(null, 0)
+    end
+    ch2[0] = _readerof(leafder)
+    _ck(_verify_chain(ch2, 1, sroots, "example.com", 20270601000000 as i64) != VERR_NONE, "sha1 root cannot vouch for a leaf")
+end
+
+// ---------------------------------------------------------------- P-384
+
+func _p384_mul_hex(khex: str): str:
+    cv := _curve_p384()
+    mut kb := _hexbuf(khex)
+    defer _buf_free(kb)
+    k := _fe_from_bytes(kb.p, 48)
+    r := _jac_mul(cv, k, _jac_generator(cv))
+    mut x := _newbuf(48)
+    defer _buf_free(x)
+    _putzeros(x, 48)
+    mut y := _newbuf(48)
+    defer _buf_free(y)
+    _putzeros(y, 48)
+    if !_jac_to_affine(cv, r, x.p, y.p):
+        ret "INFINITY"
+    end
+    ret _hexofbuf(x) + ":" + _hexofbuf(y)
+end
+
+func _selftest_p384():
+    cv := _curve_p384()
+
+    // Montgomery round-trip and inversion in the wider field.
+    mut vb := _hexbuf("0123456789abcdeffedcba98765432100011223344556677889900aabbccddee0123456789abcdeffedcba9876543210")
+    defer _buf_free(vb)
+    v := _fe_from_bytes(vb.p, 48)
+    mut vm := Fe {}
+    _fe_to_mont(vm, v, cv.p, cv.r2p, cv.nl, cv.n0p)
+    mut vback := Fe {}
+    _fe_from_mont(vback, vm, cv.p, cv.nl, cv.n0p)
+    _ck(_fe_eq(v, vback, cv.nl), "p384 montgomery round-trip")
+
+    mut one := Fe {}
+    one.v[0] = 1 as u32
+    mut onem := Fe {}
+    _fe_to_mont(onem, one, cv.p, cv.r2p, cv.nl, cv.n0p)
+    _ck(_fe_eq(onem, _fe_from(cv.one, cv.nl), cv.nl), "p384 montgomery one")
+
+    mut vinv := Fe {}
+    _fe_inv(vinv, vm, cv.p, cv.one, cv.nl, cv.n0p)
+    mut chk := Fe {}
+    _fe_mont_mul(chk, vm, vinv, cv.p, cv.nl, cv.n0p)
+    _ck(_fe_eq(chk, _fe_from(cv.one, cv.nl), cv.nl), "p384 field inversion")
+
+    mut pm1 := Fe {}
+    _fe_sub_mod(pm1, _fe_zero(), one, cv.p, cv.nl)
+    mut wrap := Fe {}
+    _fe_add_mod(wrap, pm1, one, cv.p, cv.nl)
+    _ck(_fe_is_zero(wrap, cv.nl), "p384 (p-1) + 1 == 0")
+
+    // Generator multiples against values computed independently.
+    _ckhex(_p384_mul_hex("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"),
+        "aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7:3617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f",
+        "p384 1G is the generator")
+    _ckhex(_p384_mul_hex("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002"),
+        "08d999057ba3d2d969260045c55b97f089025959a6f434d651d207d19fb96e9e4fe0e86ebe0e64f85b96a9c75295df61:8e80f1fa5b1b3cedb7bfe8dffd6dba74b275d875bc6cc43e904e505f256ab4255ffd43e94d39e22d61501e700a940e80",
+        "p384 2G")
+    _ckhex(_p384_mul_hex("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003"),
+        "077a41d4606ffa1464793c7e5fdc7d98cb9d3910202dcd06bea4f240d3566da6b408bbae5026580d02d7e5c70500c831:c995f7ca0b0c42837d0bbe9602a9fc998520b41c85115aa5f7684c0edc111eacc24abd6be4b5d298b65f28600a2f1df1",
+        "p384 3G")
+    _ckhex(_p384_mul_hex("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005"),
+        "11de24a2c251c777573cac5ea025e467f208e51dbff98fc54f6661cbe56583b037882f4a1ca297e60abcdbc3836d84bc:8fa696c77440f92d0f5837e90a00e7c5284b447754d5dee88c986533b6901aeb3177686d0ae8fb33184414abe6c1713a",
+        "p384 5G")
+
+    // Point validation, including the invalid-curve rejection.
+    mut pubkey := _hexbuf(T_P384_PUB)
+    defer _buf_free(pubkey)
+    mut q := Jac {}
+    _ck(_ec_point_from_bytes(cv, pubkey.p, pubkey.len, q), "p384 accepts a valid point")
+    _bufset(pubkey, 50, _bufat(pubkey, 50) ^ 0x01)
+    mut bad := Jac {}
+    _ck(!_ec_point_from_bytes(cv, pubkey.p, pubkey.len, bad), "p384 rejects off-curve point")
+    _bufset(pubkey, 50, _bufat(pubkey, 50) ^ 0x01)
+    // a P-256-sized encoding must not be accepted for P-384
+    _ck(!_ec_point_from_bytes(cv, pubkey.p, 65, bad), "p384 rejects P-256-sized point")
+    _ck(!_ec_point_from_bytes(_curve_p256(), pubkey.p, pubkey.len, bad), "p256 rejects P-384-sized point")
+
+    // ECDSA with both digest sizes, against OpenSSL-produced signatures.
+    mut d384 := _newbuf(48)
+    defer _buf_free(d384)
+    _digest_of(HASH_SHA384, T_MSG, d384)
+    mut d256 := _newbuf(48)
+    defer _buf_free(d256)
+    _digest_of(HASH_SHA256, T_MSG, d256)
+
+    mut r3 := _hexbuf(T_P384_R384)
+    defer _buf_free(r3)
+    mut s3 := _hexbuf(T_P384_S384)
+    defer _buf_free(s3)
+    _ck(_ecdsa_p384_verify(d384.p, 48, r3.p, s3.p, pubkey.p, pubkey.len), "ecdsa p384 sha384 accepts valid signature")
+
+    mut r2 := _hexbuf(T_P384_R256)
+    defer _buf_free(r2)
+    mut s2 := _hexbuf(T_P384_S256)
+    defer _buf_free(s2)
+    _ck(_ecdsa_p384_verify(d256.p, 32, r2.p, s2.p, pubkey.p, pubkey.len), "ecdsa p384 sha256 accepts valid signature")
+
+    // Negative cases.
+    _bufset(r3, 47, _bufat(r3, 47) ^ 0x01)
+    _ck(!_ecdsa_p384_verify(d384.p, 48, r3.p, s3.p, pubkey.p, pubkey.len), "ecdsa p384 rejects corrupted r")
+    _bufset(r3, 47, _bufat(r3, 47) ^ 0x01)
+    _bufset(s3, 0, _bufat(s3, 0) ^ 0x10)
+    _ck(!_ecdsa_p384_verify(d384.p, 48, r3.p, s3.p, pubkey.p, pubkey.len), "ecdsa p384 rejects corrupted s")
+    _bufset(s3, 0, _bufat(s3, 0) ^ 0x10)
+    _ck(!_ecdsa_p384_verify(d384.p, 48, s3.p, r3.p, pubkey.p, pubkey.len), "ecdsa p384 rejects swapped r and s")
+    _bufset(d384, 5, _bufat(d384, 5) ^ 0x01)
+    _ck(!_ecdsa_p384_verify(d384.p, 48, r3.p, s3.p, pubkey.p, pubkey.len), "ecdsa p384 rejects wrong digest")
+    _bufset(d384, 5, _bufat(d384, 5) ^ 0x01)
+    mut zed := _hexbuf("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
+    defer _buf_free(zed)
+    _ck(!_ecdsa_p384_verify(d384.p, 48, zed.p, s3.p, pubkey.p, pubkey.len), "ecdsa p384 rejects r == 0")
+    _ck(!_ecdsa_p384_verify(d384.p, 48, r3.p, zed.p, pubkey.p, pubkey.len), "ecdsa p384 rejects s == 0")
+
+    // ECDH on P-384: both sides agree.
+    mut ka := _hexbuf("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721c9afa9d845ba75166b5c215767b1d693")
+    defer _buf_free(ka)
+    mut kb2 := _hexbuf("d9c1c1ff4bee2b2e0d1c2b4a3f5e6d7c8b9a0f1e2d3c4b5a69788796a5b4c3d2d9c1c1ff4bee2b2e0d1c2b4a3f5e6d7c")
+    defer _buf_free(kb2)
+    mut axb := _newbuf(48)
+    defer _buf_free(axb)
+    _putzeros(axb, 48)
+    mut ayb := _newbuf(48)
+    defer _buf_free(ayb)
+    _putzeros(ayb, 48)
+    mut bxb := _newbuf(48)
+    defer _buf_free(bxb)
+    _putzeros(bxb, 48)
+    mut byb := _newbuf(48)
+    defer _buf_free(byb)
+    _putzeros(byb, 48)
+    _ck(_p384_base_mul(ka.p, axb.p, ayb.p), "p384 public key a")
+    _ck(_p384_base_mul(kb2.p, bxb.p, byb.p), "p384 public key b")
+    mut apub := _newbuf(97)
+    defer _buf_free(apub)
+    _put8(apub, 4)
+    _putbuf(apub, axb)
+    _putbuf(apub, ayb)
+    mut bpub := _newbuf(97)
+    defer _buf_free(bpub)
+    _put8(bpub, 4)
+    _putbuf(bpub, bxb)
+    _putbuf(bpub, byb)
+    mut ss1 := _newbuf(48)
+    defer _buf_free(ss1)
+    _putzeros(ss1, 48)
+    mut ss2 := _newbuf(48)
+    defer _buf_free(ss2)
+    _putzeros(ss2, 48)
+    _ck(_p384_ecdh(ka.p, bpub.p, bpub.len, ss1.p), "p384 ecdh a ok")
+    _ck(_p384_ecdh(kb2.p, apub.p, apub.len, ss2.p), "p384 ecdh b ok")
+    _ck(_cteq(ss1.p, ss2.p, 48), "p384 ecdh both sides agree")
+
+    // --- a real P-384 certificate chain
+    mut rootder := _hexbuf(TC_P384_ROOT)
+    defer _buf_free(rootder)
+    mut leafder := _hexbuf(TC_P384_LEAF)
+    defer _buf_free(leafder)
+    root := _cert_parse(rootder.p, rootder.len)
+    leaf := _cert_parse(leafder.p, leafder.len)
+    _ck(root.ok, "x509 parses P-384 root")
+    _ck(root.pk_alg == PK_EC_P384, "x509 P-384 key recognised")
+    _ck(root.ec_point.len == 97, "x509 P-384 point is 97 bytes")
+    _ck(root.sig_alg == SIG_ECDSA_SHA384, "x509 P-384 root sigalg")
+    _ck(leaf.ok, "x509 parses P-384 leaf")
+    _ck(_cert_signed_by(root, root), "p384 root self-signature verifies")
+    _ck(_cert_signed_by(leaf, root), "p384 leaf verifies under P-384 root")
+    _ck(!_cert_signed_by(root, leaf), "p384 root not signed by leaf")
+
+    mut roots := _roots_new()
+    defer _roots_free(roots)
+    _roots_add(roots, rootder.p, rootder.len)
+    mut ch: Reader[8]
+    repeat 8 with i:
+        ch[i] = _newreader(null, 0)
+    end
+    ch[0] = _readerof(leafder)
+    now := 20270601000000 as i64
+    _ck(_verify_chain(ch, 1, roots, "p384.example.com", now) == VERR_NONE, "verify: P-384 chain against P-384 root")
+    _ck(_verify_chain(ch, 1, roots, "evil.com", now) == VERR_HOSTNAME, "verify: P-384 chain rejects wrong host")
+    mut empty := _roots_new()
+    defer _roots_free(empty)
+    _ck(_verify_chain(ch, 1, empty, "p384.example.com", now) == VERR_UNTRUSTED, "verify: P-384 chain needs a trusted root")
+end
+
 @en "SelfTest"
 @fa "خودآزمایی"
 @ar "اختبار ذاتی"
@@ -1557,9 +1843,11 @@ pub func SelfTest(): int:
     _selftest_bigint()
     _selftest_x25519()
     _selftest_p256()
+    _selftest_p384()
     _selftest_sig()
     _selftest_x509()
     _selftest_verify()
+    _selftest_roots()
     if _st_fails == 0:
         println "tls self-test:", _st_total, "checks passed"
     else:

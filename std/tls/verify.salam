@@ -84,7 +84,7 @@ end
 
 // Split an ECDSA signature: SEQUENCE { r INTEGER, s INTEGER }, each
 // left-padded into a fixed 32-byte field.
-func _ecdsa_split(sig: Reader, rout &: Buf, sout &: Buf): bool:
+func _ecdsa_split(sig: Reader, rout &: Buf, sout &: Buf, width: int): bool:
     mut s := sig
     mut seq := _der_seq(s)
     if s.bad:
@@ -95,16 +95,16 @@ func _ecdsa_split(sig: Reader, rout &: Buf, sout &: Buf): bool:
     if seq.bad || _rdleft(seq) != 0:
         ret false
     end
-    if r.len == 0 || v.len == 0 || r.len > 32 || v.len > 32:
+    if r.len == 0 || v.len == 0 || r.len > width || v.len > width:
         ret false
     end
     _bufreset(rout)
-    _putzeros(rout, 32 - r.len)
+    _putzeros(rout, width - r.len)
     repeat r.len with i:
         _put8(rout, _rdat(r, i))
     end
     _bufreset(sout)
-    _putzeros(sout, 32 - v.len)
+    _putzeros(sout, width - v.len)
     repeat v.len with i:
         _put8(sout, _rdat(v, i))
     end
@@ -119,22 +119,32 @@ func _cert_signed_by(child: Cert, parent: Cert): bool:
     defer _buf_free(digest)
     // Scratch buffers live at function scope: a `defer` inside a nested block
     // is hoisted to function exit, where a block-local name is out of scope.
-    mut rb := _newbuf(32)
+    mut rb := _newbuf(48)
     defer _buf_free(rb)
-    mut sb := _newbuf(32)
+    mut sb := _newbuf(48)
     defer _buf_free(sb)
     _putzeros(digest, hlen)
     // hash the tbsCertificate exactly as it arrived on the wire
     _hash_oneshot(kind, child.tbs.p, child.tbs.len, digest.p)
 
     if child.sig_alg == SIG_ECDSA_SHA256 || child.sig_alg == SIG_ECDSA_SHA384:
-        if parent.pk_alg != PK_EC_P256:
-            ret false
+        // The curve comes from the ISSUER's key, not from the signature
+        // algorithm OID: ecdsa-with-SHA256 says nothing about which curve
+        // signed, and trusting the OID instead would let a P-256 signature be
+        // checked against a P-384 key.
+        if parent.pk_alg == PK_EC_P256:
+            if !_ecdsa_split(child.sig, rb, sb, 32):
+                ret false
+            end
+            ret _ecdsa_p256_verify(digest.p, hlen, rb.p, sb.p, parent.ec_point.p, parent.ec_point.len)
         end
-        if !_ecdsa_split(child.sig, rb, sb):
-            ret false
+        if parent.pk_alg == PK_EC_P384:
+            if !_ecdsa_split(child.sig, rb, sb, 48):
+                ret false
+            end
+            ret _ecdsa_p384_verify(digest.p, hlen, rb.p, sb.p, parent.ec_point.p, parent.ec_point.len)
         end
-        ret _ecdsa_p256_verify(digest.p, hlen, rb.p, sb.p, parent.ec_point.p, parent.ec_point.len)
+        ret false
     end
 
     if parent.pk_alg != PK_RSA:

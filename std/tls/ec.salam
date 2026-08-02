@@ -1,0 +1,585 @@
+package tls
+
+// Short-Weierstrass curve arithmetic over a prime field, shared by P-256 and
+// P-384 (and by anything else with a = -3 that gets added later).
+//
+// WHY GENERIC. The two NIST curves differ only in modulus, group order, limb
+// count and constants; the field and point algorithms are identical. Keeping
+// two copies of Montgomery multiplication and Jacobian point addition would
+// mean every subtle fix has to land twice, and the copy nobody is currently
+// testing is the one that rots. So the arithmetic lives here once and takes the
+// modulus, limb count and n0inv as parameters.
+//
+// REPRESENTATION. Montgomery form on 32-bit limbs, in a fixed 12-limb Fe.
+// P-256 uses the low 8 limbs and P-384 all 12; the unused high limbs of a
+// P-256 element stay zero and are simply not iterated. Montgomery CIOS is one
+// uniform loop rather than the usual Solinas fast-reduction table, which for
+// these curves is a hand-unrolled permutation of signed words -- fast, but the
+// kind of code where a transposed index yields a wrong answer that still looks
+// plausible. Both curves also make it cheap: p == -1 mod 2^32 for each, so
+// n0inv is 1 on the field side.
+//
+// CONSTANT-TIME. _jac_mul is used for ECDH, where the scalar is our secret. It
+// runs a fixed number of iterations of double-and-add-always with the addend
+// chosen by an arithmetic mask, so neither the iteration count nor the memory
+// access pattern depends on the scalar. _jac_mul_double_vartime is the
+// signature-verification path, where every input is public and variable time is
+// fine.
+
+const FE_LIMBS := 12
+
+struct Fe:
+    pub v: u32[12] = [
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+    ]
+end
+
+// A curve's fixed parameters. Passed by value; at ~400 bytes that costs a copy
+// per point operation, which is invisible next to the field multiplications
+// each one performs.
+struct Curve:
+    // number of 32-bit limbs in use (8 for P-256, 12 for P-384)
+    pub nl: int = 0
+    // field size in bytes, i.e. the width of a serialised coordinate
+    pub nb: int = 0
+    pub p: u32[12] = [
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+    ]
+    pub n: u32[12] = [
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+    ]
+    pub r2p: u32[12] = [
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+    ]
+    pub r2n: u32[12] = [
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+    ]
+    // R mod p, i.e. 1 in Montgomery form
+    pub one: u32[12] = [
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+    ]
+    pub b: u32[12] = [
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+    ]
+    pub gx: u32[12] = [
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+    ]
+    pub gy: u32[12] = [
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+    ]
+    pub n0p: u32 = 0 as u32
+    pub n0n: u32 = 0 as u32
+end
+
+// Jacobian projective point: affine is (X/Z^2, Y/Z^3). Z == 0 is the point at
+// infinity, which keeps the doubling formula free of special cases.
+struct Jac:
+    pub x: Fe = Fe {}
+    pub y: Fe = Fe {}
+    pub z: Fe = Fe {}
+end
+
+func _fe_from(c: u32[12], nl: int): Fe:
+    mut r := Fe {}
+    repeat nl with i:
+        r.v[i] = c[i]
+    end
+    ret r
+end
+
+func _fe_zero(): Fe:
+    ret Fe {}
+end
+
+func _fe_one_plain(): Fe:
+    mut o := Fe {}
+    o.v[0] = 1 as u32
+    ret o
+end
+
+func _fe_is_zero(a: Fe, nl: int): bool:
+    mut acc := 0 as u32
+    repeat nl with i:
+        acc = acc | a.v[i]
+    end
+    ret acc == (0 as u32)
+end
+
+func _fe_eq(a: Fe, b: Fe, nl: int): bool:
+    mut acc := 0 as u32
+    repeat nl with i:
+        acc = acc | (a.v[i] ^ b.v[i])
+    end
+    ret acc == (0 as u32)
+end
+
+// Branch-free conditional move: r = c ? a : r, with c exactly 0 or 1.
+func _fe_cmov(r &: Fe, a: Fe, c: int, nl: int):
+    mask := (0 as u32) - (c as u32)
+    repeat nl with i:
+        r.v[i] = (r.v[i] & ~mask) | (a.v[i] & mask)
+    end
+end
+
+func _fe_add_raw(r &: Fe, a: Fe, b: Fe, nl: int): u32:
+    mut carry := 0 as u64
+    repeat nl with i:
+        s := (a.v[i] as u64) + (b.v[i] as u64) + carry
+        r.v[i] = s as u32
+        carry = s >> (32 as u64)
+    end
+    ret carry as u32
+end
+
+func _fe_sub_raw(r &: Fe, a: Fe, b: Fe, nl: int): u32:
+    mut borrow := 0 as u64
+    repeat nl with i:
+        d := (a.v[i] as u64) - (b.v[i] as u64) - borrow
+        r.v[i] = d as u32
+        borrow = (d >> (32 as u64)) & (1 as u64)
+    end
+    ret borrow as u32
+end
+
+// Conditionally subtract m when the (carry:r) value is >= m.
+//
+// r - m is computed unconditionally and then selected, which keeps this
+// branch-free. The difference is the right answer when the subtraction did not
+// borrow (so r >= m), and also whenever `carry` is set, because the true value
+// then exceeds 2^(32*nl) and is certainly larger than m.
+func _fe_reduce_once(r &: Fe, carry: u32, m: u32[12], nl: int):
+    mm := _fe_from(m, nl)
+    mut t := Fe {}
+    borrow := _fe_sub_raw(t, r, mm, nl)
+    use := ((carry | (borrow ^ (1 as u32))) & (1 as u32)) as int
+    _fe_cmov(r, t, use, nl)
+end
+
+func _fe_add_mod(r &: Fe, a: Fe, b: Fe, m: u32[12], nl: int):
+    c := _fe_add_raw(r, a, b, nl)
+    _fe_reduce_once(r, c, m, nl)
+end
+
+func _fe_sub_mod(r &: Fe, a: Fe, b: Fe, m: u32[12], nl: int):
+    borrow := _fe_sub_raw(r, a, b, nl)
+    mm := _fe_from(m, nl)
+    mut t := Fe {}
+    _fe_add_raw(t, r, mm, nl)
+    _fe_cmov(r, t, borrow as int, nl)
+end
+
+// Montgomery multiplication (CIOS): r = a * b * R^-1 mod m, where n0inv is
+// -m^-1 mod 2^32.
+func _fe_mont_mul(r &: Fe, a: Fe, b: Fe, m: u32[12], nl: int, n0inv: u32):
+    mut t: u32[14]
+    repeat 14 with i:
+        t[i] = 0 as u32
+    end
+    repeat nl with i:
+        // t += a[i] * b
+        mut carry := 0 as u64
+        ai := a.v[i] as u64
+        repeat nl with j:
+            s := (t[j] as u64) + ai * (b.v[j] as u64) + carry
+            t[j] = s as u32
+            carry = s >> (32 as u64)
+        end
+        sN := (t[nl] as u64) + carry
+        t[nl] = sN as u32
+        t[nl + 1] = (t[nl + 1] as u32) + ((sN >> (32 as u64)) as u32)
+
+        // t += m * ((t[0] * n0inv) mod 2^32), which clears the low limb
+        u := (t[0] as u64) * (n0inv as u64)
+        um := (u as u32) as u64
+        carry = 0 as u64
+        repeat nl with j:
+            s := (t[j] as u64) + um * (m[j] as u64) + carry
+            t[j] = s as u32
+            carry = s >> (32 as u64)
+        end
+        sM := (t[nl] as u64) + carry
+        t[nl] = sM as u32
+        t[nl + 1] = (t[nl + 1] as u32) + ((sM >> (32 as u64)) as u32)
+
+        // shift down one limb
+        repeat nl + 1 with k:
+            t[k] = t[k + 1]
+        end
+        t[nl + 1] = 0 as u32
+    end
+    repeat nl with i:
+        r.v[i] = t[i]
+    end
+    repeat FE_LIMBS - nl with i:
+        r.v[nl + i] = 0 as u32
+    end
+    _fe_reduce_once(r, t[nl], m, nl)
+end
+
+func _fe_to_mont(r &: Fe, a: Fe, m: u32[12], r2: u32[12], nl: int, n0inv: u32):
+    _fe_mont_mul(r, a, _fe_from(r2, nl), m, nl, n0inv)
+end
+
+func _fe_from_mont(r &: Fe, a: Fe, m: u32[12], nl: int, n0inv: u32):
+    _fe_mont_mul(r, a, _fe_one_plain(), m, nl, n0inv)
+end
+
+// Inversion by Fermat: a^(m-2) mod m. The exponent is the fixed public modulus,
+// so the square-and-multiply schedule leaks nothing about the operand.
+func _fe_inv(r &: Fe, a: Fe, m: u32[12], one: u32[12], nl: int, n0inv: u32):
+    mm := _fe_from(m, nl)
+    mut two := Fe {}
+    two.v[0] = 2 as u32
+    mut e := Fe {}
+    _fe_sub_raw(e, mm, two, nl)
+
+    mut acc := _fe_from(one, nl)
+    mut cur := a
+    bits := nl * 32
+    mut i := 0
+    until i < bits:
+        bit := ((e.v[i / 32] >> ((i % 32) as u32)) & (1 as u32)) as int
+        mut prod := Fe {}
+        _fe_mont_mul(prod, acc, cur, m, nl, n0inv)
+        _fe_cmov(acc, prod, bit, nl)
+        mut sq := Fe {}
+        _fe_mont_mul(sq, cur, cur, m, nl, n0inv)
+        cur = sq
+        i += 1
+    end
+    repeat nl with k:
+        r.v[k] = acc.v[k]
+    end
+end
+
+// a < m ?
+func _fe_lt(a: Fe, m: u32[12], nl: int): bool:
+    mut i := nl - 1
+    until i >= 0:
+        if a.v[i] != m[i]:
+            ret a.v[i] < m[i]
+        end
+        i -= 1
+    end
+    ret false
+end
+
+// ---------------------------------------------------------------- bytes
+
+func _fe_from_bytes(p: void*, nb: int): Fe:
+    mut r := Fe {}
+    nl := nb / 4
+    repeat nl with i:
+        o := nb - 4 * (i + 1)
+        r.v[i] = ((_bget(p, o) as u32) << (24 as u32)) | ((_bget(p, o + 1) as u32) << (16 as u32)) | ((_bget(p, o + 2) as u32) << (8 as u32)) | (_bget(p, o + 3) as u32)
+    end
+    ret r
+end
+
+func _fe_to_bytes(a: Fe, out: void*, nb: int):
+    nl := nb / 4
+    repeat nl with i:
+        o := nb - 4 * (i + 1)
+        v := a.v[i]
+        _bput(out, o, ((v >> (24 as u32)) & (0xFF as u32)) as int)
+        _bput(out, o + 1, ((v >> (16 as u32)) & (0xFF as u32)) as int)
+        _bput(out, o + 2, ((v >> (8 as u32)) & (0xFF as u32)) as int)
+        _bput(out, o + 3, (v & (0xFF as u32)) as int)
+    end
+end
+
+// ---------------------------------------------------------------- points
+
+func _jac_infinity(cv: Curve): Jac:
+    mut j := Jac {}
+    j.x = _fe_from(cv.one, cv.nl)
+    j.y = _fe_from(cv.one, cv.nl)
+    j.z = _fe_zero()
+    ret j
+end
+
+func _jac_is_infinity(j: Jac, nl: int): bool:
+    ret _fe_is_zero(j.z, nl)
+end
+
+func _jac_generator(cv: Curve): Jac:
+    mut j := Jac {}
+    j.x = _fe_from(cv.gx, cv.nl)
+    j.y = _fe_from(cv.gy, cv.nl)
+    j.z = _fe_from(cv.one, cv.nl)
+    ret j
+end
+
+// Doubling for a == -3 ("dbl-2001-b"), which is why both NIST curves fix a = -3.
+func _jac_double(cv: Curve, pt: Jac): Jac:
+    nl := cv.nl
+    n0 := cv.n0p
+    mut delta := Fe {}
+    _fe_mont_mul(delta, pt.z, pt.z, cv.p, nl, n0)
+    mut gamma := Fe {}
+    _fe_mont_mul(gamma, pt.y, pt.y, cv.p, nl, n0)
+    mut beta := Fe {}
+    _fe_mont_mul(beta, pt.x, gamma, cv.p, nl, n0)
+
+    mut t1 := Fe {}
+    _fe_sub_mod(t1, pt.x, delta, cv.p, nl)
+    mut t2 := Fe {}
+    _fe_add_mod(t2, pt.x, delta, cv.p, nl)
+    mut t3 := Fe {}
+    _fe_mont_mul(t3, t1, t2, cv.p, nl, n0)
+    mut alpha := Fe {}
+    _fe_add_mod(alpha, t3, t3, cv.p, nl)
+    _fe_add_mod(alpha, alpha, t3, cv.p, nl)
+
+    r := Jac {}
+    mut a2 := Fe {}
+    _fe_mont_mul(a2, alpha, alpha, cv.p, nl, n0)
+    mut b8 := Fe {}
+    _fe_add_mod(b8, beta, beta, cv.p, nl)
+    _fe_add_mod(b8, b8, b8, cv.p, nl)
+    _fe_add_mod(b8, b8, b8, cv.p, nl)
+    _fe_sub_mod(r.x, a2, b8, cv.p, nl)
+
+    mut zy := Fe {}
+    _fe_add_mod(zy, pt.y, pt.z, cv.p, nl)
+    mut zy2 := Fe {}
+    _fe_mont_mul(zy2, zy, zy, cv.p, nl, n0)
+    _fe_sub_mod(zy2, zy2, gamma, cv.p, nl)
+    _fe_sub_mod(r.z, zy2, delta, cv.p, nl)
+
+    mut b4 := Fe {}
+    _fe_add_mod(b4, beta, beta, cv.p, nl)
+    _fe_add_mod(b4, b4, b4, cv.p, nl)
+    _fe_sub_mod(b4, b4, r.x, cv.p, nl)
+    mut ay := Fe {}
+    _fe_mont_mul(ay, alpha, b4, cv.p, nl, n0)
+    mut g2 := Fe {}
+    _fe_mont_mul(g2, gamma, gamma, cv.p, nl, n0)
+    mut g8 := Fe {}
+    _fe_add_mod(g8, g2, g2, cv.p, nl)
+    _fe_add_mod(g8, g8, g8, cv.p, nl)
+    _fe_add_mod(g8, g8, g8, cv.p, nl)
+    _fe_sub_mod(r.y, ay, g8, cv.p, nl)
+    ret r
+end
+
+// Jacobian addition ("add-2007-bl"), with the doubling and identity cases
+// handled explicitly.
+func _jac_add(cv: Curve, pt: Jac, q: Jac): Jac:
+    nl := cv.nl
+    n0 := cv.n0p
+    if _jac_is_infinity(pt, nl):
+        ret q
+    end
+    if _jac_is_infinity(q, nl):
+        ret pt
+    end
+    mut z1z1 := Fe {}
+    _fe_mont_mul(z1z1, pt.z, pt.z, cv.p, nl, n0)
+    mut z2z2 := Fe {}
+    _fe_mont_mul(z2z2, q.z, q.z, cv.p, nl, n0)
+    mut u1 := Fe {}
+    _fe_mont_mul(u1, pt.x, z2z2, cv.p, nl, n0)
+    mut u2 := Fe {}
+    _fe_mont_mul(u2, q.x, z1z1, cv.p, nl, n0)
+    mut s1 := Fe {}
+    _fe_mont_mul(s1, pt.y, q.z, cv.p, nl, n0)
+    _fe_mont_mul(s1, s1, z2z2, cv.p, nl, n0)
+    mut s2 := Fe {}
+    _fe_mont_mul(s2, q.y, pt.z, cv.p, nl, n0)
+    _fe_mont_mul(s2, s2, z1z1, cv.p, nl, n0)
+
+    if _fe_eq(u1, u2, nl):
+        if _fe_eq(s1, s2, nl):
+            ret _jac_double(cv, pt)
+        end
+        ret _jac_infinity(cv)
+    end
+
+    mut h := Fe {}
+    _fe_sub_mod(h, u2, u1, cv.p, nl)
+    mut i := Fe {}
+    _fe_add_mod(i, h, h, cv.p, nl)
+    _fe_mont_mul(i, i, i, cv.p, nl, n0)
+    mut j := Fe {}
+    _fe_mont_mul(j, h, i, cv.p, nl, n0)
+    mut rr := Fe {}
+    _fe_sub_mod(rr, s2, s1, cv.p, nl)
+    _fe_add_mod(rr, rr, rr, cv.p, nl)
+    mut v := Fe {}
+    _fe_mont_mul(v, u1, i, cv.p, nl, n0)
+
+    out := Jac {}
+    mut r2 := Fe {}
+    _fe_mont_mul(r2, rr, rr, cv.p, nl, n0)
+    _fe_sub_mod(out.x, r2, j, cv.p, nl)
+    _fe_sub_mod(out.x, out.x, v, cv.p, nl)
+    _fe_sub_mod(out.x, out.x, v, cv.p, nl)
+
+    mut vx := Fe {}
+    _fe_sub_mod(vx, v, out.x, cv.p, nl)
+    _fe_mont_mul(vx, rr, vx, cv.p, nl, n0)
+    mut s1j := Fe {}
+    _fe_mont_mul(s1j, s1, j, cv.p, nl, n0)
+    _fe_add_mod(s1j, s1j, s1j, cv.p, nl)
+    _fe_sub_mod(out.y, vx, s1j, cv.p, nl)
+
+    mut zz := Fe {}
+    _fe_add_mod(zz, pt.z, q.z, cv.p, nl)
+    _fe_mont_mul(zz, zz, zz, cv.p, nl, n0)
+    _fe_sub_mod(zz, zz, z1z1, cv.p, nl)
+    _fe_sub_mod(zz, zz, z2z2, cv.p, nl)
+    _fe_mont_mul(out.z, zz, h, cv.p, nl, n0)
+    ret out
+end
+
+func _jac_to_affine(cv: Curve, j: Jac, xout: void*, yout: void*): bool:
+    nl := cv.nl
+    n0 := cv.n0p
+    if _jac_is_infinity(j, nl):
+        ret false
+    end
+    mut zinv := Fe {}
+    _fe_inv(zinv, j.z, cv.p, cv.one, nl, n0)
+    mut z2 := Fe {}
+    _fe_mont_mul(z2, zinv, zinv, cv.p, nl, n0)
+    mut z3 := Fe {}
+    _fe_mont_mul(z3, z2, zinv, cv.p, nl, n0)
+    mut x := Fe {}
+    _fe_mont_mul(x, j.x, z2, cv.p, nl, n0)
+    mut y := Fe {}
+    _fe_mont_mul(y, j.y, z3, cv.p, nl, n0)
+    mut xn := Fe {}
+    _fe_from_mont(xn, x, cv.p, nl, n0)
+    mut yn := Fe {}
+    _fe_from_mont(yn, y, cv.p, nl, n0)
+    _fe_to_bytes(xn, xout, cv.nb)
+    _fe_to_bytes(yn, yout, cv.nb)
+    ret true
+end
+
+// Constant-time scalar multiplication for ECDH, where k is our private key.
+func _jac_mul(cv: Curve, k: Fe, pt: Jac): Jac:
+    nl := cv.nl
+    mut acc := _jac_infinity(cv)
+    mut i := nl * 32 - 1
+    until i >= 0:
+        acc = _jac_double(cv, acc)
+        bit := ((k.v[i / 32] >> ((i % 32) as u32)) & (1 as u32)) as int
+        cand := _jac_add(cv, acc, pt)
+        _fe_cmov(acc.x, cand.x, bit, nl)
+        _fe_cmov(acc.y, cand.y, bit, nl)
+        _fe_cmov(acc.z, cand.z, bit, nl)
+        i -= 1
+    end
+    ret acc
+end
+
+// k1*G + k2*Q for signature verification, where every input is public.
+func _jac_mul_double_vartime(cv: Curve, k1: Fe, p1: Jac, k2: Fe, p2: Jac): Jac:
+    nl := cv.nl
+    mut acc := _jac_infinity(cv)
+    mut i := nl * 32 - 1
+    until i >= 0:
+        acc = _jac_double(cv, acc)
+        b1 := ((k1.v[i / 32] >> ((i % 32) as u32)) & (1 as u32)) as int
+        if b1 == 1:
+            acc = _jac_add(cv, acc, p1)
+        end
+        b2 := ((k2.v[i / 32] >> ((i % 32) as u32)) & (1 as u32)) as int
+        if b2 == 1:
+            acc = _jac_add(cv, acc, p2)
+        end
+        i -= 1
+    end
+    ret acc
+end
+
+// Parse an uncompressed point (0x04 || X || Y) and check it satisfies the
+// curve equation. Skipping this is the invalid-curve attack: a peer supplies a
+// point on a weaker curve and recovers the private scalar from the result.
+func _ec_point_from_bytes(cv: Curve, p: void*, n: int, out &: Jac): bool:
+    nl := cv.nl
+    n0 := cv.n0p
+    if n != 1 + 2 * cv.nb:
+        ret false
+    end
+    if _bget(p, 0) != 0x04:
+        ret false
+    end
+    xa := _fe_from_bytes(((p as i64) + 1) as void*, cv.nb)
+    ya := _fe_from_bytes(((p as i64) + (1 + cv.nb) as i64) as void*, cv.nb)
+    if !_fe_lt(xa, cv.p, nl) || !_fe_lt(ya, cv.p, nl):
+        ret false
+    end
+    mut xm := Fe {}
+    _fe_to_mont(xm, xa, cv.p, cv.r2p, nl, n0)
+    mut ym := Fe {}
+    _fe_to_mont(ym, ya, cv.p, cv.r2p, nl, n0)
+
+    // y^2 == x^3 - 3x + b
+    mut lhs := Fe {}
+    _fe_mont_mul(lhs, ym, ym, cv.p, nl, n0)
+    mut x3 := Fe {}
+    _fe_mont_mul(x3, xm, xm, cv.p, nl, n0)
+    _fe_mont_mul(x3, x3, xm, cv.p, nl, n0)
+    mut tx := Fe {}
+    _fe_add_mod(tx, xm, xm, cv.p, nl)
+    _fe_add_mod(tx, tx, xm, cv.p, nl)
+    mut rhs := Fe {}
+    _fe_sub_mod(rhs, x3, tx, cv.p, nl)
+    _fe_add_mod(rhs, rhs, _fe_from(cv.b, nl), cv.p, nl)
+    if !_fe_eq(lhs, rhs, nl):
+        ret false
+    end
+    out.x = xm
+    out.y = ym
+    out.z = _fe_from(cv.one, nl)
+    ret true
+end
+
+// ---------------------------------------------------------------- ECDH
+
+func _ec_base_mul(cv: Curve, scalar: void*, xout: void*, yout: void*): bool:
+    k := _fe_from_bytes(scalar, cv.nb)
+    if _fe_is_zero(k, cv.nl) || !_fe_lt(k, cv.n, cv.nl):
+        ret false
+    end
+    r := _jac_mul(cv, k, _jac_generator(cv))
+    ret _jac_to_affine(cv, r, xout, yout)
+end
+
+func _ec_ecdh(cv: Curve, scalar: void*, peer: void*, peerlen: int, out: void*): bool:
+    k := _fe_from_bytes(scalar, cv.nb)
+    if _fe_is_zero(k, cv.nl) || !_fe_lt(k, cv.n, cv.nl):
+        ret false
+    end
+    mut q := Jac {}
+    if !_ec_point_from_bytes(cv, peer, peerlen, q):
+        ret false
+    end
+    r := _jac_mul(cv, k, q)
+    mut ybuf := _newbuf(cv.nb)
+    defer _buf_wipe(ybuf)
+    _putzeros(ybuf, cv.nb)
+    // the ECDH output is the affine x coordinate only
+    ret _jac_to_affine(cv, r, out, ybuf.p)
+end

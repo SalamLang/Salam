@@ -17,6 +17,7 @@ package tls
 const PK_UNKNOWN := 0
 const PK_RSA := 1
 const PK_EC_P256 := 2
+const PK_EC_P384 := 3
 
 // signature algorithms
 const SIG_UNKNOWN := 0
@@ -40,6 +41,7 @@ const OID_SHA384_RSA := "2a864886f70d01010c"
 const OID_SHA512_RSA := "2a864886f70d01010d"
 const OID_EC_PUBLICKEY := "2a8648ce3d0201"
 const OID_PRIME256V1 := "2a8648ce3d030107"
+const OID_SECP384R1 := "2b81040022"
 const OID_ECDSA_SHA256 := "2a8648ce3d040302"
 const OID_ECDSA_SHA384 := "2a8648ce3d040303"
 const OID_SHA256 := "608648016503040201"
@@ -288,15 +290,27 @@ func _parse_spki(spki: Reader, c &: Cert): bool:
         if p.bad:
             ret false
         end
-        if !_oid_is(curve, OID_PRIME256V1):
-            ret false
+        // Only the two curves the arithmetic implements are accepted. An
+        // unsupported curve is refused rather than stored, because keeping a
+        // key we cannot check signatures against would let it sit in a trust
+        // store looking usable.
+        if _oid_is(curve, OID_PRIME256V1):
+            if key.len != 65 || _rdat(key, 0) != 0x04:
+                ret false
+            end
+            c.ec_point = key
+            c.pk_alg = PK_EC_P256
+            ret true
         end
-        if key.len != 65 || _rdat(key, 0) != 0x04:
-            ret false
+        if _oid_is(curve, OID_SECP384R1):
+            if key.len != 97 || _rdat(key, 0) != 0x04:
+                ret false
+            end
+            c.ec_point = key
+            c.pk_alg = PK_EC_P384
+            ret true
         end
-        c.ec_point = key
-        c.pk_alg = PK_EC_P256
-        ret true
+        ret false
     end
     ret false
 end
@@ -521,11 +535,19 @@ func _cert_parse(p: void*, n: int): Cert:
         ret c
     end
     c.sig_alg = _sig_alg_from_oid(outer_oid, outer_params)
-    if c.sig_alg == SIG_UNKNOWN:
-        ret c
-    end
-    // RFC 5280 4.1.1.2: the inner and outer algorithm identifiers must agree.
-    // If they can differ, an attacker picks which one the verifier honours.
+    // An unsupported signature algorithm (SHA-1, and anything else outside the
+    // supported set) is NOT a parse failure. A trust anchor is trusted because
+    // it is in the store, not because of its own self-signature, and many
+    // still-valid roots self-sign with SHA-1 while issuing SHA-256
+    // intermediates. Refusing to parse them would discard usable anchors for
+    // no security gain.
+    //
+    // Safety comes from the other side: _cert_signed_by only accepts the
+    // algorithms it implements, so SIG_UNKNOWN can never verify a link. A
+    // certificate carrying one is parseable but unusable as a signature.
+    //
+    // RFC 5280 4.1.1.2 still applies: the inner and outer algorithm
+    // identifiers must agree, or an attacker chooses which one is honoured.
     if inner_alg != c.sig_alg:
         ret c
     end

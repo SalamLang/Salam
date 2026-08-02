@@ -616,8 +616,8 @@ static void check_stmt(sema_t *s, ast_node_t *n)
             if (sema_const_eval(s, n->a, &cv)) {
                 zero = (cv.kind == CV_INT && cv.i == 0) ||
                        (cv.kind == CV_FLOAT && cv.f == 0);
-                neg = (cv.kind == CV_INT && cv.i < 0) ||
-                      (cv.kind == CV_FLOAT && cv.f < 0);
+                neg =
+                    (cv.kind == CV_INT && cv.i < 0) || (cv.kind == CV_FLOAT && cv.f < 0);
             } else if (n->a->kind == AST_UNARY && n->a->op == TK_MINUS && n->a->a &&
                        n->a->a->kind == AST_LITERAL) {
                 /* `-<lit>` that stayed un-folded (an unsigned or overflowing

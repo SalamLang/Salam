@@ -117,6 +117,12 @@ func _cert_signed_by(child: Cert, parent: Cert): bool:
     hlen := _hash_size(kind)
     mut digest := _newbuf(hlen)
     defer _buf_free(digest)
+    // Scratch buffers live at function scope: a `defer` inside a nested block
+    // is hoisted to function exit, where a block-local name is out of scope.
+    mut rb := _newbuf(32)
+    defer _buf_free(rb)
+    mut sb := _newbuf(32)
+    defer _buf_free(sb)
     _putzeros(digest, hlen)
     // hash the tbsCertificate exactly as it arrived on the wire
     _hash_oneshot(kind, child.tbs.p, child.tbs.len, digest.p)
@@ -125,10 +131,6 @@ func _cert_signed_by(child: Cert, parent: Cert): bool:
         if parent.pk_alg != PK_EC_P256:
             ret false
         end
-        mut rb := _newbuf(32)
-        defer _buf_free(rb)
-        mut sb := _newbuf(32)
-        defer _buf_free(sb)
         if !_ecdsa_split(child.sig, rb, sb):
             ret false
         end
@@ -245,9 +247,9 @@ func _verify_chain(chain: Reader[8], nchain: int, roots: Roots, host: str, now: 
     // The leaf must match the hostname and be currently valid before any
     // signature work is done.
     leaf := certs[0]
-    te := _cert_time_ok(leaf, now)
-    if te != VERR_NONE:
-        ret te
+    terr := _cert_time_ok(leaf, now)
+    if terr != VERR_NONE:
+        ret terr
     end
     if !_cert_match_host(leaf, host):
         ret VERR_HOSTNAME

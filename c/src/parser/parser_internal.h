@@ -31,6 +31,7 @@ typedef struct {
     bool had_error;
     bool panic;
     bool no_struct_lit;
+    bool no_with_word;
     int depth;
     int angle_pending;
 } parser_t;

@@ -15,6 +15,12 @@
 #include "codegen/codegen_internal.h"
 #include "core/sal_format.h"
 
+static bool cg_op_is_cmp(token_kind_t k)
+{
+    return k == TK_EQ || k == TK_NE || k == TK_LT || k == TK_GT || k == TK_LE ||
+           k == TK_GE;
+}
+
 const char *cg_op(token_kind_t k)
 {
     switch (k) {
@@ -511,6 +517,36 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                 return cg_fmt(cg, "(strcmp(%s, %s) %s 0)", cg_expr(cg, n->a),
                               cg_expr(cg, n->b), op);
         }
+        /*
+         * Integer operands are converted to the operation's common type and
+         * the result is wrapped back into it. C's integer promotions would
+         * otherwise widen u8/u16/i8/i16 operands to int, so `(200 as u8) +
+         * (100 as u8)` yielded 300 instead of wrapping to 44, and a literal
+         * whose `as u64` cast was folded away would shift as a 32-bit int
+         * (`(1 as u64) << 63` produced 0). Salam defines arithmetic to wrap
+         * modulo 2^n in the operand type (SALAM-TYPES.md 4.1, 15).
+         */
+        {
+            const char *lts = n->a ? n->a->type_str : NULL;
+            const char *rts = n->b ? n->b->type_str : NULL;
+            bool shift = (n->op == TK_SHL || n->op == TK_SHR);
+            const char *cts = NULL;
+            if (lts && rts && cg_is_int_typestr(lts) && cg_is_int_typestr(rts))
+                cts = shift ? lts : cg_common_int_typestr(lts, rts);
+            if (cts) {
+                const char *cty = cg_ctype(cg, cts);
+                /* Shifts keep the left operand's type; the right operand's
+                 * value is used as-is. */
+                if (shift)
+                    return cg_fmt(cg, "((%s)((%s)(%s) %s (%s)))", cty, cty,
+                                  cg_expr(cg, n->a), cg_op(n->op), cg_expr(cg, n->b));
+                if (cg_op_is_cmp(n->op))
+                    return cg_fmt(cg, "((%s)(%s) %s (%s)(%s))", cty, cg_expr(cg, n->a),
+                                  cg_op(n->op), cty, cg_expr(cg, n->b));
+                return cg_fmt(cg, "((%s)((%s)(%s) %s (%s)(%s)))", cty, cty,
+                              cg_expr(cg, n->a), cg_op(n->op), cty, cg_expr(cg, n->b));
+            }
+        }
         return cg_fmt(cg, "(%s %s %s)", cg_expr(cg, n->a), cg_op(n->op),
                       cg_expr(cg, n->b));
     }
@@ -534,6 +570,14 @@ const char *cg_expr(cg_t *cg, ast_node_t *n)
                     }
                 }
             }
+        }
+        /* '-' and '~' preserve the operand's type (SALAM-TYPES.md 21); C
+         * would promote a narrow operand to int, so `~(0 as u8)` came back
+         * as -1 rather than 255. */
+        if ((n->op == TK_MINUS || n->op == TK_TILDE) && n->a && n->a->type_str &&
+            cg_is_int_typestr(n->a->type_str)) {
+            const char *cty = cg_ctype(cg, n->a->type_str);
+            return cg_fmt(cg, "((%s)(%s(%s)))", cty, cg_op(n->op), cg_expr(cg, n->a));
         }
         return cg_fmt(cg, "(%s%s)", cg_op(n->op), cg_expr(cg, n->a));
     }

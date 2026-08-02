@@ -211,6 +211,27 @@ bool cg_is_int_typestr(const char *ts)
     return false;
 }
 
+static int cg_int_ts_bits(const char *ts)
+{
+    if (!strcmp(ts, "i8") || !strcmp(ts, "u8")) return 8;
+    if (!strcmp(ts, "i16") || !strcmp(ts, "u16")) return 16;
+    if (!strcmp(ts, "i32") || !strcmp(ts, "u32")) return 32;
+    return 64;
+}
+
+/*
+ * Common type of an integer binary operation (SALAM-TYPES.md 15): same
+ * signedness picks the higher rank, mixed signedness has no common type
+ * (semantic analysis rejects it as E021).
+ */
+const char *cg_common_int_typestr(const char *a, const char *b)
+{
+    if (!a || !b || !cg_is_int_typestr(a) || !cg_is_int_typestr(b)) return NULL;
+    if (!strcmp(a, b)) return a;
+    if (cg_is_unsigned_typestr(a) != cg_is_unsigned_typestr(b)) return NULL;
+    return cg_int_ts_bits(a) >= cg_int_ts_bits(b) ? a : b;
+}
+
 bool cg_is_unsigned_typestr(const char *ts)
 {
     static const char *const uns[] = {"u8", "u16", "u32", "u64", "size", NULL};

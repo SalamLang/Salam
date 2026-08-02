@@ -1044,20 +1044,50 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
         }
         char *host_cpu = NULL;
         char *host_features = NULL;
+        int host_features_is_fallback = 0;
         int is_host_target =
             !opts->target_triple || !opts->target_triple[0] ||
             (host_triple && strcmp(opts->target_triple, host_triple) == 0);
-        if (opts->native_cpu && is_host_target) {
+        /*
+         * Unlike x86_64 (where an empty CPU/features string still yields a
+         * well-defined SSE2 baseline ABI), a 32-bit ARM LLVMTargetMachine
+         * with no explicit target-features has no FPU modeled at all - so
+         * even though arm_force_hardfloat_triple() above puts "hf" in the
+         * triple, codegen falls back to soft-float (integer-register)
+         * argument passing regardless, because there are no VFP registers
+         * to put them in. That mismatches the real hard-float CRT objects
+         * on disk the same way the bare soft-float triple did, just one
+         * layer deeper: `ld` then refuses to merge them ("uses VFP
+         * register arguments, ... does not"). So for a host-target ARM32
+         * build this isn't the opt-in perf tuning --native-cpu is for
+         * elsewhere in this function - it is required for ABI correctness,
+         * independent of that flag.
+         */
+        int is_arm32_host = is_host_target && strstr(triple, "arm") != NULL &&
+                            !strstr(triple, "aarch64") && !strstr(triple, "arm64");
+        if ((opts->native_cpu || is_arm32_host) && is_host_target) {
             host_cpu = LLVMGetHostCPUName();
             host_features = LLVMGetHostCPUFeatures();
             LOG_I(log, PH_DRIVER, "tuning for host CPU: %s",
                   host_cpu ? host_cpu : "(unknown)");
         }
+        if (is_arm32_host && (!host_features || !host_features[0])) {
+            /* LLVMGetHostCPUFeatures() relies on /proc/cpuinfo parsing that
+             * is far less reliable on ARM than x86's cpuid, and can come
+             * back empty under emulation - fall back to the baseline every
+             * armhf Linux distro (Debian/Ubuntu/Raspberry Pi OS) already
+             * requires: VFPv3-D16, so hard-float codegen has an FPU to
+             * target even when host detection finds nothing. */
+            if (host_features) LLVMDisposeMessage(host_features);
+            host_features = "+vfp3,+d16";
+            host_features_is_fallback = 1;
+        }
         LLVMTargetMachineRef tm = LLVMCreateTargetMachine(
             target, triple, host_cpu ? host_cpu : "", host_features ? host_features : "",
             map_cg_level(opts->opt_level), LLVMRelocPIC, LLVMCodeModelDefault);
         if (host_cpu) LLVMDisposeMessage(host_cpu);
-        if (host_features) LLVMDisposeMessage(host_features);
+        if (host_features && !host_features_is_fallback)
+            LLVMDisposeMessage(host_features);
         if (!tm) {
             LOG_E(log, PH_DRIVER, "could not create LLVM target machine for %s", triple);
             rc = 2;

@@ -15,6 +15,10 @@ struct Config:
     // Conn.insecure so a caller cannot forget it is on.
     pub insecure_skip_verify: bool = false
     pub alpn: str = ""
+    // Offer only TLS_AES_128_GCM_SHA256. ChaCha20-Poly1305 is preferred by
+    // default because it is constant-time by construction; this exists so the
+    // AES-GCM path gets exercised against real servers too.
+    pub aes_only: bool = false
 end
 
 struct Conn:
@@ -40,6 +44,11 @@ end
 // Handshake messages are a stream: one record can carry several, and one
 // message can span records. `buf` carries the leftover between calls.
 func _hs_next_msg(h &: Handshake, buf &: Buf, typ &: int, body &: Buf): bool:
+    // Function scope, not inside the loop: a `defer` in a nested block is
+    // hoisted to function exit where the block-local name is out of scope.
+    // It also avoids re-allocating 16 KiB per iteration.
+    mut frag := _newbuf(REC_MAX_PLAINTEXT)
+    defer _buf_free(frag)
     mut guard := 0
     until guard < 4096:
         guard += 1
@@ -61,8 +70,6 @@ func _hs_next_msg(h &: Handshake, buf &: Buf, typ &: int, body &: Buf): bool:
             end
         end
         mut rtyp := 0
-        mut frag := _newbuf(REC_MAX_PLAINTEXT)
-        defer _buf_free(frag)
         if !_rec_read(h.rec, rtyp, frag):
             ret _hs_fail(h, "connection closed during handshake")
         end
@@ -112,7 +119,7 @@ func _do_handshake(c &: Conn, cfg: Config): bool:
     // buffering keeps that from being an unstated assumption.
     mut ch := _newbuf(512)
     defer _buf_free(ch)
-    if !_hs_build_client_hello(h, cfg.server_name, cfg.alpn, ch):
+    if !_hs_build_client_hello(h, cfg.server_name, cfg.alpn, cfg.aes_only, ch):
         c.h = h
         ret _conn_fail(c, "could not build ClientHello")
     end
@@ -162,7 +169,7 @@ func _do_handshake(c &: Conn, cfg: Config): bool:
         c.h = h
         ret _conn_fail(c, "truncated ServerHello")
     end
-    mut shr := _newreader(_bufptr(frag, 4), shlen)
+    shr := _newreader(_bufptr(frag, 4), shlen)
     if !_hs_parse_server_hello(h, shr):
         c.h = h
         ret _conn_fail(c, h.err)
@@ -209,7 +216,7 @@ func _do_handshake(c &: Conn, cfg: Config): bool:
         c.h = h
         ret _conn_fail(c, "expected Certificate")
     end
-    mut certr := _readerof(body)
+    certr := _readerof(body)
     if !_hs_parse_certificate(h, certr):
         c.h = h
         ret _conn_fail(c, h.err)
@@ -230,7 +237,7 @@ func _do_handshake(c &: Conn, cfg: Config): bool:
         c.h = h
         ret _conn_fail(c, "expected CertificateVerify")
     end
-    mut cvr := _readerof(body)
+    cvr := _readerof(body)
     if !_hs_verify_cert_verify(h, cvr, th_cv):
         c.h = h
         ret _conn_fail(c, h.err)
@@ -239,9 +246,11 @@ func _do_handshake(c &: Conn, cfg: Config): bool:
     // Certificate chain validation. Doing this after CertificateVerify means a
     // server that fails either check is rejected; doing it before would leak
     // slightly less, but the ordering does not affect the outcome.
+    mut roots := _roots_new()
+    defer _roots_free(roots)
     if !cfg.insecure_skip_verify:
-        mut roots := _roots_load(cfg.ca_file)
-        defer _roots_free(roots)
+        _roots_free(roots)
+        roots = _roots_load(cfg.ca_file)
         if roots.count == 0:
             c.h = h
             ret _conn_fail(c, "no trusted roots available")
@@ -301,11 +310,13 @@ func _do_handshake(c &: Conn, cfg: Config): bool:
         ret _conn_fail(c, "could not derive server application secret")
     end
 
-    // Middlebox compatibility: a bare ChangeCipherSpec before our Finished.
+    // Middlebox compatibility: a bare, UNENCRYPTED ChangeCipherSpec before our
+    // second flight (RFC 8446 appendix D.4). It must bypass the record layer's
+    // encryption even though handshake keys are already installed.
     mut ccs := _newbuf(1)
     defer _buf_free(ccs)
     _put8(ccs, 1)
-    _rec_write(h.rec, REC_CHANGE_CIPHER_SPEC, ccs.p, 1)
+    _rec_write_plain(h.rec, REC_CHANGE_CIPHER_SPEC, ccs.p, 1)
 
     // client Finished, still under the handshake keys
     mut cfin := _newbuf(64)
@@ -347,13 +358,18 @@ end
 @ar "اتصال آمن"
 pub func Dial(host: str, port: int, cfg: Config): Conn:
     mut c := Conn {}
-    c.host = host
     c.insecure = cfg.insecure_skip_verify
     c.pending = _newbuf(REC_MAX_PLAINTEXT)
     mut conf := cfg
     if conf.server_name.len() == 0:
         conf.server_name = host
     end
+    // The name VERIFIED is the configured server_name, not the TCP target.
+    // Those differ whenever a caller connects to one address but expects a
+    // particular identity (a pinned IP, a proxy, a test harness). Checking the
+    // dial target instead would mean a caller who explicitly asked for one
+    // identity silently gets whatever the endpoint happens to prove.
+    c.host = conf.server_name
     s := net.Connect(host, port)
     if !net.Ok(s):
         c.err = "could not connect to " + host
@@ -412,12 +428,12 @@ pub func Read(c &: Conn, max: int): str:
     if !c.open:
         ret ""
     end
+    mut frag := _newbuf(REC_MAX_PLAINTEXT)
+    defer _buf_free(frag)
     mut guard := 0
     until c.pending.len == 0 && guard < 64:
         guard += 1
         mut typ := 0
-        mut frag := _newbuf(REC_MAX_PLAINTEXT)
-        defer _buf_free(frag)
         if !_rec_read(c.h.rec, typ, frag):
             c.open = false
             if c.h.rec.err.len() > 0:

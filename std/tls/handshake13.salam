@@ -197,7 +197,7 @@ func _ext_close(b &: Buf, mark: int):
     _patch16(b, mark - 2, b.len - mark)
 end
 
-func _hs_build_client_hello(h &: Handshake, host: str, alpn: str, out &: Buf): bool:
+func _hs_build_client_hello(h &: Handshake, host: str, alpn: str, aes_only: bool, out &: Buf): bool:
     _bufreset(out)
     _put8(out, HS_CLIENT_HELLO)
     lenmark := out.len
@@ -224,9 +224,14 @@ func _hs_build_client_hello(h &: Handshake, host: str, alpn: str, out &: Buf): b
 
     // ChaCha20-Poly1305 first: it is constant-time by construction, whereas the
     // AES here is table-driven (see aes.salam).
-    _put16(out, 4)
-    _put16(out, TLS_CHACHA20_POLY1305_SHA256)
-    _put16(out, TLS_AES_128_GCM_SHA256)
+    if aes_only:
+        _put16(out, 2)
+        _put16(out, TLS_AES_128_GCM_SHA256)
+    else:
+        _put16(out, 4)
+        _put16(out, TLS_CHACHA20_POLY1305_SHA256)
+        _put16(out, TLS_AES_128_GCM_SHA256)
+    end
 
     // legacy_compression_methods: null only
     _put8(out, 1)
@@ -397,7 +402,7 @@ func _hs_parse_certificate(h &: Handshake, msg: Reader): bool:
     _bufreset(h.cert_off)
     h.ncerts = 0
     until _rdleft(list) > 0 && !list.bad:
-        mut cert := _rdvec24(list)
+        cert := _rdvec24(list)
         exts := _rdvec16(list)
         _rdskip(exts, exts.len)
         if list.bad:
@@ -422,7 +427,7 @@ end
 // The CertificateVerify signature covers a fixed context string rather than the
 // transcript alone. The 64 spaces and the label make a signature produced for
 // one role or protocol version unusable in another.
-func _hs_cv_content(h: Handshake, th: Buf, out &: Buf):
+func _hs_cv_content(_h: Handshake, th: Buf, out &: Buf):
     _bufreset(out)
     repeat 64 with _i:
         _put8(out, 0x20)
@@ -442,6 +447,11 @@ func _hs_verify_cert_verify(h &: Handshake, msg: Reader, th: Buf): bool:
 
     mut content := _newbuf(128)
     defer _buf_free(content)
+    // function scope: see the note in conn.salam about nested defers
+    mut rb := _newbuf(48)
+    defer _buf_free(rb)
+    mut sb := _newbuf(48)
+    defer _buf_free(sb)
     _hs_cv_content(h, th, content)
 
     leaf := _cert_parse(_bufptr(h.certs, 0), _cert_len(h, 0))
@@ -449,7 +459,7 @@ func _hs_verify_cert_verify(h &: Handshake, msg: Reader, th: Buf): bool:
         ret _hs_fail(h, "server leaf certificate did not parse")
     end
 
-    mut kind := HASH_SHA256
+    mut kind := HASH_SHA256 as int
     if scheme == SA_ECDSA_P384_SHA384 || scheme == SA_RSA_PSS_RSAE_SHA384 || scheme == SA_RSA_PKCS1_SHA384:
         kind = HASH_SHA384
     end
@@ -460,10 +470,6 @@ func _hs_verify_cert_verify(h &: Handshake, msg: Reader, th: Buf): bool:
     _hash_oneshot(kind, content.p, content.len, digest.p)
 
     if scheme == SA_ECDSA_P256_SHA256 || scheme == SA_ECDSA_P384_SHA384:
-        mut rb := _newbuf(48)
-        defer _buf_free(rb)
-        mut sb := _newbuf(48)
-        defer _buf_free(sb)
         if leaf.pk_alg == PK_EC_P256:
             if !_ecdsa_split(sig, rb, sb, 32):
                 ret _hs_fail(h, "malformed ECDSA signature")

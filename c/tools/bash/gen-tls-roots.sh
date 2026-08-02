@@ -27,10 +27,10 @@ SRC="${1:-}"
 
 if [ -z "$SRC" ]; then
     for p in /etc/ssl/certs/ca-certificates.crt \
-             /etc/pki/tls/certs/ca-bundle.crt \
-             /etc/ssl/ca-bundle.pem \
-             /etc/ssl/cert.pem \
-             /usr/ssl/certs/ca-bundle.crt; do
+        /etc/pki/tls/certs/ca-bundle.crt \
+        /etc/ssl/ca-bundle.pem \
+        /etc/ssl/cert.pem \
+        /usr/ssl/certs/ca-bundle.crt; do
         if [ -f "$p" ]; then SRC="$p"; break; fi
     done
 fi

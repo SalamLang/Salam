@@ -11,12 +11,7 @@ FROM alpine:${ALPINE_VERSION} AS toolchain
 ARG LLVM_VERSION
 SHELL ["/bin/ash", "-o", "pipefail", "-c"]
 
-# --mount=type=cache keeps downloaded .apk packages in a BuildKit cache
-# mount instead of the image's own layers - see c/docker/Dockerfile's
-# identical comment for the full rationale (persists across ALPINE_VERSION
-# edge base-image bumps, which invalidate the ordinary layer chain below
-# FROM). This toolchain pulls rust/cargo/go on top of the LLVM stack, so
-# the win is larger here than in the compiler-only image.
+# trivy:ignore:AVD-DS-0025
 RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
     for i in 1 2 3 4 5; do \
         apk add -U --cache-dir=/var/cache/apk \
@@ -42,6 +37,7 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
         echo "apk add attempt $i failed; retrying in 5s..." >&2; sleep 5; \
     done
 
+# trivy:ignore:AVD-DS-0025
 RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
     set -eux; \
     ok=0; \

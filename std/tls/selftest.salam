@@ -1,0 +1,1163 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+// Known-answer self-tests for the internal layers.
+//
+// These live inside the package because the layers they check (Buf, Reader,
+// the constant-time helpers, and later the hashes and ciphers) are private
+// plumbing rather than public API. Keeping them here also makes them runnable
+// on any target the compiler can reach, which is how a port to a new
+// architecture gets validated -- byte-order and integer-width mistakes show up
+// as self-test failures rather than as a mysterious handshake rejection.
+//
+// Every entry point returns a FAILURE COUNT: 0 means pass.
+
+mut _st_fails := 0
+
+func _ck(cond: bool, name: str):
+    if !cond:
+        _st_fails += 1
+        println "  FAIL:", name
+    end
+end
+
+func _ckhex(got: str, want: str, name: str):
+    if got != want:
+        _st_fails += 1
+        println "  FAIL:", name
+        println "    got  ", got
+        println "    want ", want
+    end
+end
+
+// ---------------------------------------------------------------- byte layer
+
+func _selftest_bytes():
+    // big-endian writers
+    mut b := _newbuf(8)
+    defer _buf_free(b)
+    _put8(b, 0x01)
+    _put16(b, 0x0203)
+    _put24(b, 0x040506)
+    _put32(b, 0x0708090A as i64)
+    _put64(b, 0x0B0C0D0E0F101112 as u64)
+    _ckhex(_hexofbuf(b), "0102030405060708090a0b0c0d0e0f101112", "be writers")
+
+    // truncation to the low byte
+    mut t := _newbuf(4)
+    defer _buf_free(t)
+    _put8(t, 0x1FF)
+    _ckhex(_hexofbuf(t), "ff", "put8 masks to one byte")
+
+    // reader over nested length-prefixed vectors, the shape TLS uses
+    mut v := _newbuf(16)
+    defer _buf_free(v)
+    _put16(v, 7)
+    _put8(v, 2)
+    _put8(v, 0xAA)
+    _put8(v, 0xBB)
+    _put24(v, 1)
+    _put8(v, 0xCC)
+    mut r := _readerof(v)
+    mut outer := _rdvec16(r)
+    mut inner := _rdvec8(outer)
+    _ck(inner.len == 2, "vec8 length")
+    _ck(_rd8(inner) == 0xAA, "vec8 first byte")
+    _ck(_rd8(inner) == 0xBB, "vec8 second byte")
+    mut inner2 := _rdvec24(outer)
+    _ck(inner2.len == 1, "vec24 length")
+    _ck(_rd8(inner2) == 0xCC, "vec24 byte")
+    _ck(!r.bad, "well-formed parse leaves bad clear")
+    _ck(_rdleft(r) == 0, "outer fully consumed")
+
+    // sticky bad: reading past the end latches, and later reads return 0
+    // WITHOUT advancing, so truncated input can never look like valid zeros
+    mut sr := _readerof(v)
+    _rdskip(sr, v.len)
+    _ck(!sr.bad, "skip to exact end is fine")
+    x := _rd8(sr)
+    _ck(sr.bad, "read past end latches bad")
+    _ck(x == 0, "read past end yields zero")
+    _ck(_rd16(sr) == 0, "reads stay zero once bad")
+    _ck(_rdleft(sr) == 0, "left is zero once bad")
+    sub := _rdbytes(sr, 4)
+    _ck(sub.len == 0, "sub-reader of a bad reader is empty")
+
+    // an over-long inner length must latch rather than read neighbouring bytes
+    mut o := _newbuf(8)
+    defer _buf_free(o)
+    _put8(o, 200)
+    _put8(o, 0x11)
+    mut orr := _readerof(o)
+    over := _rdvec8(orr)
+    _ck(orr.bad, "over-long vector latches bad")
+    _ck(over.len == 0, "over-long vector yields empty")
+
+    // patch: reserve a length, append a body, backfill
+    mut p := _newbuf(16)
+    defer _buf_free(p)
+    _put8(p, 0x16)
+    lenoff := p.len
+    _put16(p, 0)
+    body := p.len
+    _put8(p, 0xDE)
+    _put8(p, 0xAD)
+    _patch16(p, lenoff, p.len - body)
+    _ckhex(_hexofbuf(p), "160002dead", "patch16 backfills length")
+
+    mut p24 := _newbuf(16)
+    defer _buf_free(p24)
+    off := p24.len
+    _put24(p24, 0)
+    _put8(p24, 0xFF)
+    _patch24(p24, off, 1)
+    _ckhex(_hexofbuf(p24), "000001ff", "patch24 backfills length")
+
+    // consume drops a prefix and keeps the tail intact
+    mut cbuf := _newbuf(8)
+    defer _buf_free(cbuf)
+    _put32(cbuf, 0x01020304 as i64)
+    _bufconsume(cbuf, 1)
+    _ckhex(_hexofbuf(cbuf), "020304", "consume drops prefix")
+    _bufconsume(cbuf, 99)
+    _ck(cbuf.len == 0, "over-long consume empties")
+
+    // growth across many reallocations must preserve contents
+    mut g := _newbuf(1)
+    defer _buf_free(g)
+    repeat 500 with i:
+        _put8(g, i & 0xFF)
+    end
+    _ck(g.len == 500, "grown length")
+    _ck(!g.bad, "growth did not fail")
+    mut gok := true
+    repeat 500 with i:
+        if _bufat(g, i) != (i & 0xFF):
+            gok = false
+        end
+    end
+    _ck(gok, "growth preserved contents")
+
+    // constant-time compare
+    mut a1 := _hexbuf("00112233")
+    defer _buf_free(a1)
+    mut a2 := _hexbuf("00112233")
+    defer _buf_free(a2)
+    mut a3 := _hexbuf("00112234")
+    defer _buf_free(a3)
+    _ck(_cteq(a1.p, a2.p, 4), "cteq equal")
+    _ck(!_cteq(a1.p, a3.p, 4), "cteq differing last byte")
+    mut a4 := _hexbuf("80112233")
+    defer _buf_free(a4)
+    _ck(!_cteq(a1.p, a4.p, 4), "cteq differing first byte")
+    _ck(_cteq(a1.p, a3.p, 0), "cteq of zero length is equal")
+
+    // constant-time select
+    _ck(_ctsel(1, 0xAA, 0x55) == 0xAA, "ctsel picks a on 1")
+    _ck(_ctsel(0, 0xAA, 0x55) == 0x55, "ctsel picks b on 0")
+    _ck(_ctsel(1, 0 - 1, 0) == 0 - 1, "ctsel handles all-ones")
+
+    // xor in place
+    mut xa := _hexbuf("f0f0f0f0")
+    defer _buf_free(xa)
+    mut xb := _hexbuf("0ff00ff0")
+    defer _buf_free(xb)
+    _xorinto(xa.p, xb.p, 4)
+    _ckhex(_hexof(xa.p, 4), "ff00ff00", "xor into")
+
+    // wipe clears key material in place (checked while still allocated --
+    // reading the block after _buf_wipe frees it would be a use-after-free)
+    mut w := _hexbuf("aabbccdd")
+    defer _buf_free(w)
+    wn := w.len
+    _wipe(w.p, wn)
+    mut zeroed := true
+    repeat wn with i:
+        if _bufat(w, i) != 0:
+            zeroed = false
+        end
+    end
+    _ck(zeroed, "wipe zeroes buffer")
+end
+
+// ---------------------------------------------------------------- SHA-2
+
+func _hex_sha256(s: str): str:
+    mut out := _newbuf(32)
+    defer _buf_free(out)
+    _putzeros(out, 32)
+    _sha256(s as void*, s.len(), out.p)
+    ret _hexofbuf(out)
+end
+
+func _hex_sha384(s: str): str:
+    mut out := _newbuf(48)
+    defer _buf_free(out)
+    _putzeros(out, 48)
+    _sha384(s as void*, s.len(), out.p)
+    ret _hexofbuf(out)
+end
+
+func _hex_sha512(s: str): str:
+    mut out := _newbuf(64)
+    defer _buf_free(out)
+    _putzeros(out, 64)
+    _sha512(s as void*, s.len(), out.p)
+    ret _hexofbuf(out)
+end
+
+func _selftest_sha():
+    // FIPS 180-4 / NIST example vectors
+    _ckhex(_hex_sha256(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "sha256 empty")
+    _ckhex(_hex_sha256("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "sha256 abc")
+    _ckhex(_hex_sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1", "sha256 448-bit")
+
+    _ckhex(_hex_sha384(""), "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b", "sha384 empty")
+    _ckhex(_hex_sha384("abc"), "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7", "sha384 abc")
+
+    _ckhex(_hex_sha512(""), "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e", "sha512 empty")
+    _ckhex(_hex_sha512("abc"), "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f", "sha512 abc")
+
+    // Multi-block input: 1,000,000 'a' is the classic NIST long message.
+    mut million := _newbuf(1000000)
+    defer _buf_free(million)
+    repeat 1000000 with _i:
+        _put8(million, 97)
+    end
+    mut d := _newbuf(32)
+    defer _buf_free(d)
+    _putzeros(d, 32)
+    _sha256(million.p, million.len, d.p)
+    _ckhex(_hexofbuf(d), "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0", "sha256 one million a")
+
+    mut d5 := _newbuf(64)
+    defer _buf_free(d5)
+    _putzeros(d5, 64)
+    _sha512(million.p, million.len, d5.p)
+    _ckhex(_hexofbuf(d5), "e718483d0ce769644e2e42c7bc15b4638e1f98b13b2044285632a803afa973ebde0ff244877ea60a4cb0432ce577c31beb009c5c2c49aa2e4eadb217ad8cc09b", "sha512 one million a")
+
+    // Streaming must match one-shot regardless of how the input is chopped.
+    // This is what the transcript hash relies on.
+    mut st := _sha256_init()
+    _sha256_update(st, "ab" as void*, 2)
+    _sha256_update(st, "c" as void*, 1)
+    mut sd := _newbuf(32)
+    defer _buf_free(sd)
+    _putzeros(sd, 32)
+    _sha256_final(st, sd.p)
+    _ckhex(_hexofbuf(sd), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "sha256 split update")
+
+    // final() must not disturb the running state: after taking a digest we can
+    // keep appending, exactly as the handshake transcript does.
+    _sha256_update(st, "d" as void*, 1)
+    mut sd2 := _newbuf(32)
+    defer _buf_free(sd2)
+    _putzeros(sd2, 32)
+    _sha256_final(st, sd2.p)
+    _ckhex(_hexofbuf(sd2), _hex_sha256("abcd"), "sha256 final leaves state usable")
+
+    // cloning a state is a plain assignment (fixed arrays copy by value)
+    mut branch := st
+    _sha256_update(branch, "e" as void*, 1)
+    mut bd := _newbuf(32)
+    defer _buf_free(bd)
+    _putzeros(bd, 32)
+    _sha256_final(branch, bd.p)
+    _ckhex(_hexofbuf(bd), _hex_sha256("abcde"), "sha256 clone diverges independently")
+    mut od := _newbuf(32)
+    defer _buf_free(od)
+    _putzeros(od, 32)
+    _sha256_final(st, od.p)
+    _ckhex(_hexofbuf(od), _hex_sha256("abcd"), "sha256 original unaffected by clone")
+
+    // exercise every block-boundary case around the length-field split
+    repeat 130 with n:
+        mut m := _newbuf(n + 1)
+        repeat n with i:
+            _put8(m, (i * 7 + 3) & 0xFF)
+        end
+        mut a := _newbuf(32)
+        _putzeros(a, 32)
+        _sha256(m.p, m.len, a.p)
+        mut s2 := _sha256_init()
+        repeat n with i:
+            _sha256_update(s2, _bufptr(m, i), 1)
+        end
+        mut c2 := _newbuf(32)
+        _putzeros(c2, 32)
+        _sha256_final(s2, c2.p)
+        if _hexofbuf(a) != _hexofbuf(c2):
+            _ck(false, "sha256 byte-at-a-time matches one-shot at length " + n)
+        end
+        mut a5 := _newbuf(64)
+        _putzeros(a5, 64)
+        _sha512(m.p, m.len, a5.p)
+        mut s5 := _sha512_init()
+        repeat n with i:
+            _sha512_update(s5, _bufptr(m, i), 1)
+        end
+        mut c5 := _newbuf(64)
+        _putzeros(c5, 64)
+        _sha512_final(s5, c5.p)
+        if _hexofbuf(a5) != _hexofbuf(c5):
+            _ck(false, "sha512 byte-at-a-time matches one-shot at length " + n)
+        end
+        _buf_free(m)
+        _buf_free(a)
+        _buf_free(c2)
+        _buf_free(a5)
+        _buf_free(c5)
+    end
+end
+
+// ---------------------------------------------------------------- HMAC/HKDF
+
+func _hexhmac(kind: int, keyhex: str, msghex: str): str:
+    mut k := _hexbuf(keyhex)
+    defer _buf_free(k)
+    mut m := _hexbuf(msghex)
+    defer _buf_free(m)
+    hs := _hash_size(kind)
+    mut o := _newbuf(hs)
+    defer _buf_free(o)
+    _putzeros(o, hs)
+    _hmac(kind, k.p, k.len, m.p, m.len, o.p)
+    ret _hexofbuf(o)
+end
+
+func _selftest_hmac():
+    // RFC 4231 test cases. Case 2 uses an ASCII key/message, case 6 a key
+    // longer than the block size (which forces the hash-down path).
+    _ckhex(_hexhmac(HASH_SHA256, "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b", "4869205468657265"),
+        "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7", "hmac-sha256 rfc4231 case1")
+    _ckhex(_hexhmac(HASH_SHA384, "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b", "4869205468657265"),
+        "afd03944d84895626b0825f4ab46907f15f9dadbe4101ec682aa034c7cebc59cfaea9ea9076ede7f4af152e8b2fa9cb6", "hmac-sha384 rfc4231 case1")
+    _ckhex(_hexhmac(HASH_SHA256, "4a656665", "7768617420646f2079612077616e7420666f72206e6f7468696e673f"),
+        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843", "hmac-sha256 rfc4231 case2")
+    _ckhex(_hexhmac(HASH_SHA384, "4a656665", "7768617420646f2079612077616e7420666f72206e6f7468696e673f"),
+        "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649", "hmac-sha384 rfc4231 case2")
+    _ckhex(_hexhmac(HASH_SHA256,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "54657374205573696e67204c6172676572205468616e20426c6f636b2d53697a65204b6579202d2048617368204b6579204669727374"),
+        "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54", "hmac-sha256 rfc4231 case6 long key")
+    _ckhex(_hexhmac(HASH_SHA384,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "54657374205573696e67204c6172676572205468616e20426c6f636b2d53697a65204b6579202d2048617368204b6579204669727374"),
+        "4ece084485813e9088d2c63a041bc5b44f9ef1012a2b588f3cd11f05033ac4c60c2ef6ab4030fe8296248df163f44952", "hmac-sha384 rfc4231 case6 long key")
+    // Empty key and empty message must still work.
+    _ckhex(_hexhmac(HASH_SHA256, "", ""),
+        "b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad", "hmac-sha256 empty key and msg")
+end
+
+func _hexhkdf(kind: int, ikmhex: str, salthex: str, infohex: str, olen: int): str:
+    mut ikm := _hexbuf(ikmhex)
+    defer _buf_free(ikm)
+    mut salt := _hexbuf(salthex)
+    defer _buf_free(salt)
+    mut info := _hexbuf(infohex)
+    defer _buf_free(info)
+    hs := _hash_size(kind)
+    mut prk := _newbuf(hs)
+    defer _buf_free(prk)
+    _putzeros(prk, hs)
+    _hkdf_extract(kind, salt.p, salt.len, ikm.p, ikm.len, prk.p)
+    mut okm := _newbuf(olen)
+    defer _buf_free(okm)
+    _putzeros(okm, olen)
+    if !_hkdf_expand(kind, prk.p, prk.len, info.p, info.len, okm.p, olen):
+        ret "EXPAND-FAILED"
+    end
+    ret _hexofbuf(okm) + " prk=" + _hexofbuf(prk)
+end
+
+func _selftest_hkdf():
+    // RFC 5869 appendix A, SHA-256 test cases.
+    _ckhex(_hexhkdf(HASH_SHA256,
+            "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+            "000102030405060708090a0b0c",
+            "f0f1f2f3f4f5f6f7f8f9", 42),
+        "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865 prk=077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5",
+        "hkdf-sha256 rfc5869 case1")
+    _ckhex(_hexhkdf(HASH_SHA256, "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b", "", "", 42),
+        "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8 prk=19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04",
+        "hkdf-sha256 rfc5869 case3 zero salt and info")
+
+    // The 255*HashLen ceiling must be enforced rather than silently wrapping
+    // the one-byte counter.
+    mut prk := _newbuf(32)
+    defer _buf_free(prk)
+    _putzeros(prk, 32)
+    mut big := _newbuf(32 * 255 + 1)
+    defer _buf_free(big)
+    _putzeros(big, 32 * 255 + 1)
+    _ck(_hkdf_expand(HASH_SHA256, prk.p, 32, prk.p, 0, big.p, 32 * 255), "hkdf expand accepts 255*HashLen")
+    _ck(!_hkdf_expand(HASH_SHA256, prk.p, 32, prk.p, 0, big.p, 32 * 255 + 1), "hkdf expand rejects over 255*HashLen")
+
+    // TLS 1.3 HKDF-Expand-Label, cross-checked against the RFC 8448 trace:
+    // the early secret with an all-zero PSK, then derived-secret for the
+    // empty transcript.
+    mut zeros := _newbuf(32)
+    defer _buf_free(zeros)
+    _putzeros(zeros, 32)
+    mut early := _newbuf(32)
+    defer _buf_free(early)
+    _putzeros(early, 32)
+    _hkdf_extract(HASH_SHA256, zeros.p, 0, zeros.p, 32, early.p)
+    _ckhex(_hexofbuf(early), "33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a", "tls13 early secret")
+
+    mut eh := _newbuf(32)
+    defer _buf_free(eh)
+    _putzeros(eh, 32)
+    _sha256(zeros.p, 0, eh.p)
+    mut derived := _newbuf(32)
+    defer _buf_free(derived)
+    _putzeros(derived, 32)
+    _ck(_derive_secret(HASH_SHA256, early.p, 32, "derived", eh.p, 32, derived.p), "derive-secret ok")
+    _ckhex(_hexofbuf(derived), "6f2615a108c702c5678f54fc9dbab69716c076189c48250cebeac3576c3611ba", "tls13 derived secret")
+end
+
+// ---------------------------------------------------------------- ChaCha20
+
+func _selftest_chacha():
+    // RFC 8439 section 2.3.2: the reference keystream block.
+    mut key := _hexbuf("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+    defer _buf_free(key)
+    mut nonce := _hexbuf("000000090000004a00000000")
+    defer _buf_free(nonce)
+    mut blk := _newbuf(64)
+    defer _buf_free(blk)
+    _putzeros(blk, 64)
+    _cha_block(key.p, 1 as u32, nonce.p, blk.p)
+    _ckhex(_hexofbuf(blk),
+        "10f1e7e4d13b5915500fdd1fa32071c4c7d1f4c733c068030422aa9ac3d46c4ed2826446079faa0914c2d705d98b02a2b5129cd1de164eb9cbd083e8a2503c4e",
+        "chacha20 block rfc8439 2.3.2")
+
+    // RFC 8439 section 2.4.2: encrypting the "Ladies and Gentlemen" text.
+    pt := "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
+    mut nonce2 := _hexbuf("000000000000004a00000000")
+    defer _buf_free(nonce2)
+    n := pt.len()
+    mut ct := _newbuf(n)
+    defer _buf_free(ct)
+    _putzeros(ct, n)
+    _cha20_xor(key.p, 1 as u32, nonce2.p, pt as void*, ct.p, n)
+    _ckhex(_hexofbuf(ct),
+        "6e2e359a2568f98041ba0728dd0d6981e97e7aec1d4360c20a27afccfd9fae0bf91b65c5524733ab8f593dabcd62b3571639d624e65152ab8f530c359f0861d807ca0dbf500d6a6156a38e088a22b65e52bc514d16ccf806818ce91ab77937365af90bbf74a35be6b40b8eedf2785e42874d",
+        "chacha20 encrypt rfc8439 2.4.2")
+
+    // decryption is the same operation
+    mut back := _newbuf(n)
+    defer _buf_free(back)
+    _putzeros(back, n)
+    _cha20_xor(key.p, 1 as u32, nonce2.p, ct.p, back.p, n)
+    _ck(_cteq(back.p, pt as void*, n), "chacha20 round-trip")
+
+    // RFC 8439 section 2.5.2: Poly1305 reference MAC.
+    mut pkey := _hexbuf("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b")
+    defer _buf_free(pkey)
+    msg := "Cryptographic Forum Research Group"
+    mut tag := _newbuf(16)
+    defer _buf_free(tag)
+    _putzeros(tag, 16)
+    _poly1305(pkey.p, msg as void*, msg.len(), tag.p)
+    _ckhex(_hexofbuf(tag), "a8061dc1305136c6c22b8baf0c0127a9", "poly1305 rfc8439 2.5.2")
+
+    // Poly1305 fed one byte at a time must match the one-shot: exercises the
+    // partial-block buffering path.
+    mut st := _poly_init(pkey.p)
+    repeat msg.len() with i:
+        _poly_update(st, ((msg as void*) as i64 + (i as i64)) as void*, 1)
+    end
+    mut tag2 := _newbuf(16)
+    defer _buf_free(tag2)
+    _putzeros(tag2, 16)
+    _poly_final(st, tag2.p)
+    _ckhex(_hexofbuf(tag2), "a8061dc1305136c6c22b8baf0c0127a9", "poly1305 byte-at-a-time")
+
+    // RFC 8439 section 2.8.2: the AEAD seal.
+    aead_pt := "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
+    mut akey := _hexbuf("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f")
+    defer _buf_free(akey)
+    mut anonce := _hexbuf("070000004041424344454647")
+    defer _buf_free(anonce)
+    mut aad := _hexbuf("50515253c0c1c2c3c4c5c6c7")
+    defer _buf_free(aad)
+    an := aead_pt.len()
+    mut act := _newbuf(an)
+    defer _buf_free(act)
+    _putzeros(act, an)
+    mut atag := _newbuf(16)
+    defer _buf_free(atag)
+    _putzeros(atag, 16)
+    _cha20poly_seal(akey.p, anonce.p, aad.p, aad.len, aead_pt as void*, act.p, an, atag.p)
+    _ckhex(_hexofbuf(act),
+        "d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b6116",
+        "chacha20poly1305 seal ciphertext rfc8439 2.8.2")
+    _ckhex(_hexofbuf(atag), "1ae10b594f09e26a7e902ecbd0600691", "chacha20poly1305 seal tag rfc8439 2.8.2")
+
+    // Open must reproduce the plaintext...
+    mut apt := _newbuf(an)
+    defer _buf_free(apt)
+    _putzeros(apt, an)
+    _ck(_cha20poly_open(akey.p, anonce.p, aad.p, aad.len, act.p, an, atag.p, apt.p), "chacha20poly1305 open accepts valid tag")
+    _ck(_cteq(apt.p, aead_pt as void*, an), "chacha20poly1305 open plaintext")
+
+    // ...and must REJECT every kind of tampering. A forged message that still
+    // decrypts is the failure mode that matters here.
+    _bufset(atag, 0, _bufat(atag, 0) ^ 0x01)
+    _ck(!_cha20poly_open(akey.p, anonce.p, aad.p, aad.len, act.p, an, atag.p, apt.p), "open rejects flipped tag bit")
+    _bufset(atag, 0, _bufat(atag, 0) ^ 0x01)
+
+    _bufset(act, 5, _bufat(act, 5) ^ 0x80)
+    _ck(!_cha20poly_open(akey.p, anonce.p, aad.p, aad.len, act.p, an, atag.p, apt.p), "open rejects modified ciphertext")
+    _bufset(act, 5, _bufat(act, 5) ^ 0x80)
+
+    _bufset(aad, 2, _bufat(aad, 2) ^ 0x40)
+    _ck(!_cha20poly_open(akey.p, anonce.p, aad.p, aad.len, act.p, an, atag.p, apt.p), "open rejects modified aad")
+    _bufset(aad, 2, _bufat(aad, 2) ^ 0x40)
+
+    _bufset(anonce, 0, _bufat(anonce, 0) ^ 0x01)
+    _ck(!_cha20poly_open(akey.p, anonce.p, aad.p, aad.len, act.p, an, atag.p, apt.p), "open rejects wrong nonce")
+    _bufset(anonce, 0, _bufat(anonce, 0) ^ 0x01)
+
+    _bufset(akey, 31, _bufat(akey, 31) ^ 0x01)
+    _ck(!_cha20poly_open(akey.p, anonce.p, aad.p, aad.len, act.p, an, atag.p, apt.p), "open rejects wrong key")
+    _bufset(akey, 31, _bufat(akey, 31) ^ 0x01)
+
+    // truncating the ciphertext must not authenticate either
+    _ck(!_cha20poly_open(akey.p, anonce.p, aad.p, aad.len, act.p, an - 1, atag.p, apt.p), "open rejects truncated ciphertext")
+
+    // Empty plaintext with empty AAD is a legal AEAD input and appears in TLS
+    // as a bare close_notify alert record.
+    mut ekey := _hexbuf("0000000000000000000000000000000000000000000000000000000000000000")
+    defer _buf_free(ekey)
+    mut enonce := _hexbuf("000000000000000000000000")
+    defer _buf_free(enonce)
+    mut etag := _newbuf(16)
+    defer _buf_free(etag)
+    _putzeros(etag, 16)
+    _cha20poly_seal(ekey.p, enonce.p, ekey.p, 0, ekey.p, ekey.p, 0, etag.p)
+    mut ept := _newbuf(16)
+    defer _buf_free(ept)
+    _putzeros(ept, 16)
+    _ck(_cha20poly_open(ekey.p, enonce.p, ekey.p, 0, ekey.p, 0, etag.p, ept.p), "aead handles empty plaintext and aad")
+
+    // Multi-block message crossing the 64-byte keystream boundary, verified by
+    // round-trip at every length up to 200.
+    mut ok := true
+    repeat 200 with ln:
+        mut m := _newbuf(ln + 1)
+        repeat ln with i:
+            _put8(m, (i * 11 + 5) & 0xFF)
+        end
+        mut c := _newbuf(ln + 1)
+        _putzeros(c, ln)
+        mut tg := _newbuf(16)
+        _putzeros(tg, 16)
+        _cha20poly_seal(akey.p, anonce.p, aad.p, aad.len, m.p, c.p, ln, tg.p)
+        mut d := _newbuf(ln + 1)
+        _putzeros(d, ln)
+        if !_cha20poly_open(akey.p, anonce.p, aad.p, aad.len, c.p, ln, tg.p, d.p):
+            ok = false
+        else:
+            if ln > 0 && !_cteq(d.p, m.p, ln):
+                ok = false
+            end
+        end
+        _buf_free(m)
+        _buf_free(c)
+        _buf_free(tg)
+        _buf_free(d)
+    end
+    _ck(ok, "chacha20poly1305 round-trip at every length 0..199")
+end
+
+// ---------------------------------------------------------------- AES-GCM
+
+func _hexaes(keyhex: str, pthex: str): str:
+    mut k := _hexbuf(keyhex)
+    defer _buf_free(k)
+    mut p := _hexbuf(pthex)
+    defer _buf_free(p)
+    mut c := _newbuf(16)
+    defer _buf_free(c)
+    _putzeros(c, 16)
+    a := _aes_init(k.p, k.len)
+    _aes_encrypt_block(a, p.p, c.p)
+    ret _hexofbuf(c)
+end
+
+func _selftest_aes():
+    // FIPS 197 appendix B / C worked examples.
+    _ckhex(_hexaes("000102030405060708090a0b0c0d0e0f", "00112233445566778899aabbccddeeff"),
+        "69c4e0d86a7b0430d8cdb78070b4c55a", "aes-128 fips197 c.1")
+    _ckhex(_hexaes("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "00112233445566778899aabbccddeeff"),
+        "8ea2b7ca516745bfeafc49904b496089", "aes-256 fips197 c.3")
+    _ckhex(_hexaes("2b7e151628aed2a6abf7158809cf4f3c", "6bc1bee22e409f96e93d7e117393172a"),
+        "3ad77bb40d7a3660a89ecaf32466ef97", "aes-128 sp800-38a block1")
+
+    // An unsupported key length must be rejected rather than silently keyed.
+    mut short := _hexbuf("00112233445566778899aabbccdd")
+    defer _buf_free(short)
+    bad := _aes_init(short.p, short.len)
+    _ck(bad.nr == 0, "aes rejects unsupported key length")
+
+    // NIST GCM test vectors (gcmEncryptExtIV128, 96-bit IV).
+    // Case 1: empty plaintext and empty AAD -- tag only.
+    mut k1 := _hexbuf("00000000000000000000000000000000")
+    defer _buf_free(k1)
+    mut n1 := _hexbuf("000000000000000000000000")
+    defer _buf_free(n1)
+    mut t1 := _newbuf(16)
+    defer _buf_free(t1)
+    _putzeros(t1, 16)
+    a1 := _aes_init(k1.p, k1.len)
+    _gcm_seal(a1, n1.p, k1.p, 0, k1.p, k1.p, 0, t1.p)
+    _ckhex(_hexofbuf(t1), "58e2fccefa7e3061367f1d57a4e7455a", "gcm case1 empty")
+
+    // Case 2: 16 zero bytes of plaintext, no AAD.
+    mut p2 := _hexbuf("00000000000000000000000000000000")
+    defer _buf_free(p2)
+    mut c2 := _newbuf(16)
+    defer _buf_free(c2)
+    _putzeros(c2, 16)
+    mut t2 := _newbuf(16)
+    defer _buf_free(t2)
+    _putzeros(t2, 16)
+    _gcm_seal(a1, n1.p, k1.p, 0, p2.p, c2.p, 16, t2.p)
+    _ckhex(_hexofbuf(c2), "0388dace60b6a392f328c2b971b2fe78", "gcm case2 ciphertext")
+    _ckhex(_hexofbuf(t2), "ab6e47d42cec13bdf53a67b21257bddf", "gcm case2 tag")
+
+    // Case 4: 60-byte plaintext with 20 bytes of AAD -- exercises the padded
+    // GHASH path for both the AAD and a non-block-multiple ciphertext.
+    mut k4 := _hexbuf("feffe9928665731c6d6a8f9467308308")
+    defer _buf_free(k4)
+    mut n4 := _hexbuf("cafebabefacedbaddecaf888")
+    defer _buf_free(n4)
+    mut a4 := _hexbuf("feedfacedeadbeeffeedfacedeadbeefabaddad2")
+    defer _buf_free(a4)
+    mut p4 := _hexbuf("d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39")
+    defer _buf_free(p4)
+    mut c4 := _newbuf(64)
+    defer _buf_free(c4)
+    _putzeros(c4, 60)
+    mut t4 := _newbuf(16)
+    defer _buf_free(t4)
+    _putzeros(t4, 16)
+    ak4 := _aes_init(k4.p, k4.len)
+    _gcm_seal(ak4, n4.p, a4.p, a4.len, p4.p, c4.p, 60, t4.p)
+    _ckhex(_hexofbuf(c4),
+        "42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e091",
+        "gcm case4 ciphertext")
+    _ckhex(_hexofbuf(t4), "5bc94fbc3221a5db94fae95ae7121a47", "gcm case4 tag")
+
+    // AES-256 GCM (NIST case 16).
+    mut k16 := _hexbuf("feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308")
+    defer _buf_free(k16)
+    mut c16 := _newbuf(64)
+    defer _buf_free(c16)
+    _putzeros(c16, 60)
+    mut t16 := _newbuf(16)
+    defer _buf_free(t16)
+    _putzeros(t16, 16)
+    ak16 := _aes_init(k16.p, k16.len)
+    _gcm_seal(ak16, n4.p, a4.p, a4.len, p4.p, c16.p, 60, t16.p)
+    _ckhex(_hexofbuf(c16),
+        "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f662",
+        "gcm-256 case16 ciphertext")
+    _ckhex(_hexofbuf(t16), "76fc6ece0f4e1768cddf8853bb2d551b", "gcm-256 case16 tag")
+
+    // Open accepts the genuine tag and rejects every tampering.
+    mut d4 := _newbuf(64)
+    defer _buf_free(d4)
+    _putzeros(d4, 60)
+    _ck(_gcm_open(ak4, n4.p, a4.p, a4.len, c4.p, 60, t4.p, d4.p), "gcm open accepts valid tag")
+    _ck(_cteq(d4.p, p4.p, 60), "gcm open plaintext")
+
+    _bufset(t4, 15, _bufat(t4, 15) ^ 0x01)
+    _ck(!_gcm_open(ak4, n4.p, a4.p, a4.len, c4.p, 60, t4.p, d4.p), "gcm open rejects flipped tag bit")
+    _bufset(t4, 15, _bufat(t4, 15) ^ 0x01)
+
+    _bufset(c4, 0, _bufat(c4, 0) ^ 0x80)
+    _ck(!_gcm_open(ak4, n4.p, a4.p, a4.len, c4.p, 60, t4.p, d4.p), "gcm open rejects modified ciphertext")
+    _bufset(c4, 0, _bufat(c4, 0) ^ 0x80)
+
+    _bufset(a4, 0, _bufat(a4, 0) ^ 0x08)
+    _ck(!_gcm_open(ak4, n4.p, a4.p, a4.len, c4.p, 60, t4.p, d4.p), "gcm open rejects modified aad")
+    _bufset(a4, 0, _bufat(a4, 0) ^ 0x08)
+
+    _bufset(n4, 11, _bufat(n4, 11) ^ 0x01)
+    _ck(!_gcm_open(ak4, n4.p, a4.p, a4.len, c4.p, 60, t4.p, d4.p), "gcm open rejects wrong nonce")
+    _bufset(n4, 11, _bufat(n4, 11) ^ 0x01)
+
+    // Round-trip at every length up to 200, covering the CTR block boundary
+    // and the 32-bit counter increment.
+    mut ok := true
+    repeat 200 with ln:
+        mut m := _newbuf(ln + 1)
+        repeat ln with i:
+            _put8(m, (i * 13 + 7) & 0xFF)
+        end
+        mut c := _newbuf(ln + 1)
+        _putzeros(c, ln)
+        mut tg := _newbuf(16)
+        _putzeros(tg, 16)
+        _gcm_seal(ak4, n4.p, a4.p, a4.len, m.p, c.p, ln, tg.p)
+        mut d := _newbuf(ln + 1)
+        _putzeros(d, ln)
+        if !_gcm_open(ak4, n4.p, a4.p, a4.len, c.p, ln, tg.p, d.p):
+            ok = false
+        else:
+            if ln > 0 && !_cteq(d.p, m.p, ln):
+                ok = false
+            end
+        end
+        _buf_free(m)
+        _buf_free(c)
+        _buf_free(tg)
+        _buf_free(d)
+    end
+    _ck(ok, "aes-gcm round-trip at every length 0..199")
+end
+
+// ---------------------------------------------------------------- bigint
+
+func _bighex(x: Big): str:
+    n := _big_bytelen(x)
+    if n == 0:
+        ret "00"
+    end
+    mut o := _newbuf(n)
+    defer _buf_free(o)
+    _putzeros(o, n)
+    if !_big_to_bytes(x, o.p, n):
+        ret "TOOBIG"
+    end
+    ret _hexofbuf(o)
+end
+
+func _bigof(hex: str): Big:
+    mut h := _hexbuf(hex)
+    defer _buf_free(h)
+    ret _big_from_bytes(h.p, h.len)
+end
+
+func _selftest_bigint():
+    mut a := _bigof("123456789abcdef0fedcba9876543210")
+    defer _big_free(a)
+    mut b := _bigof("deadbeefcafebabe0123456789abcdef")
+    defer _big_free(b)
+    mut m := _bigof("fedcba9876543210123456789abcdef1")
+    defer _big_free(m)
+
+    // byte round-trip, including leading-zero stripping
+    _ckhex(_bighex(a), "123456789abcdef0fedcba9876543210", "big from/to bytes")
+    mut lz := _bigof("0000000000ff00")
+    defer _big_free(lz)
+    _ckhex(_bighex(lz), "ff00", "big strips leading zeros")
+    mut zero := _bigof("00000000")
+    defer _big_free(zero)
+    _ck(_big_is_zero(zero), "big zero detected")
+    _ck(_big_bitlen(zero) == 0, "big zero bitlen")
+
+    // comparison
+    _ck(_big_cmp(a, b) < 0, "big cmp a < b")
+    _ck(_big_cmp(b, a) > 0, "big cmp b > a")
+    _ck(_big_cmp(a, a) == 0, "big cmp equal")
+
+    // add / sub, cross-checked against Python
+    mut r := _big_new(16)
+    defer _big_free(r)
+    _big_add(r, a, b)
+    _ckhex(_bighex(r), "f0e2156865bb99aeffffffffffffffff", "big add")
+    _ck(_big_sub(r, b, a), "big sub ok")
+    _ckhex(_bighex(r), "cc7968773041dbcd02468acf13579bdf", "big sub")
+    _ck(!_big_sub(r, a, b), "big sub refuses to go negative")
+
+    // add then subtract returns the original
+    _big_add(r, a, b)
+    mut back := _big_new(16)
+    defer _big_free(back)
+    _ck(_big_sub(back, r, b), "big add/sub inverse ok")
+    _ck(_big_cmp(back, a) == 0, "big add then sub restores a")
+
+    // multiply
+    mut p := _big_new(32)
+    defer _big_free(p)
+    _big_mul(p, a, b)
+    _ckhex(_bighex(p), "fd5bdeeeb2a01d8c92db8cd43d35b8d6e1bd1a5075ef1322236d88fe5618cf0", "big mul")
+
+    // multiply by zero and by one
+    _big_mul(p, a, zero)
+    _ck(_big_is_zero(p), "big mul by zero")
+    mut one := _big_new(4)
+    defer _big_free(one)
+    _big_set_u32(one, 1 as u32)
+    _big_mul(p, a, one)
+    _ck(_big_cmp(p, a) == 0, "big mul by one")
+
+    // divmod
+    mut q := _big_new(32)
+    defer _big_free(q)
+    mut rem := _big_new(32)
+    defer _big_free(rem)
+    _ck(_big_divmod(q, rem, a, m), "big divmod ok")
+    _ck(_big_is_zero(q), "big divmod quotient a/m")
+    _ckhex(_bighex(rem), "123456789abcdef0fedcba9876543210", "big divmod remainder a%m")
+
+    _big_mul(p, a, b)
+    _ck(_big_mod(rem, p, m), "big mod of product ok")
+    _ckhex(_bighex(rem), "c66d3edf67c257e839c2e724dc6e39c8", "big (a*b) mod m")
+
+    // q*m + rem == a*b, the defining identity
+    _ck(_big_divmod(q, rem, p, m), "big divmod product ok")
+    mut chk := _big_new(64)
+    defer _big_free(chk)
+    _big_mul(chk, q, m)
+    mut sum := _big_new(64)
+    defer _big_free(sum)
+    _big_add(sum, chk, rem)
+    _ck(_big_cmp(sum, p) == 0, "big q*m + rem == a*b")
+    _ck(_big_cmp(rem, m) < 0, "big remainder is reduced")
+
+    // dividing by zero must fail rather than loop or corrupt state
+    _ck(!_big_divmod(q, rem, a, zero), "big divmod rejects zero modulus")
+
+    // modexp, the operation RSA verification is built on
+    mut n := _bigof("c4f8e9e15dcadf2b96c763d981006a644ffb4415030a16ed1283883340f2aa0e2be2be8fa60150b9046965837c3e7d151b7de237ebb957c20663898250703b3f5f4b1e8b8bb7f8b9c1a1e1e2b0d9f0e5f0a0b1c2d3e4f5061728394a5b6c7d8e9fa0b1c2d3e4f50617")
+    defer _big_free(n)
+    mut base := _bigof("1234567890abcdef")
+    defer _big_free(base)
+    mut e := _bigof("010001")
+    defer _big_free(e)
+    mut out := _big_new(n.n + 2)
+    defer _big_free(out)
+    _ck(_big_modexp(out, base, e, n), "big modexp ok")
+    _ckhex(_bighex(out),
+        "1639860633a2eb152470d64d2418b9a02b502baaf3031ac7692bc447e6d082915c2fa8348c97f7253ccc0f4fa5bcfe3c0a9abd2bb54ae32b2f909fcebce85e6857d4a475c1c1e323bdf0433b7209102bac675fdef1b52e85c7fb078d13c0823060f3f746a4c8e65c94",
+        "big modexp base^65537 mod n")
+
+    // modexp edge cases
+    mut e0 := _big_new(2)
+    defer _big_free(e0)
+    _big_set_u32(e0, 0 as u32)
+    _ck(_big_modexp(out, base, e0, n), "big modexp exponent 0 ok")
+    _ck(_big_cmp(out, one) == 0, "big modexp x^0 == 1")
+    mut e1 := _big_new(2)
+    defer _big_free(e1)
+    _big_set_u32(e1, 1 as u32)
+    _ck(_big_modexp(out, base, e1, n), "big modexp exponent 1 ok")
+    _ck(_big_cmp(out, base) == 0, "big modexp x^1 == x")
+
+    // to_bytes must refuse to silently truncate
+    mut tiny := _newbuf(4)
+    defer _buf_free(tiny)
+    _putzeros(tiny, 4)
+    _ck(!_big_to_bytes(a, tiny.p, 4), "big to_bytes rejects short buffer")
+    mut wide := _newbuf(32)
+    defer _buf_free(wide)
+    _putzeros(wide, 32)
+    _ck(_big_to_bytes(a, wide.p, 32), "big to_bytes pads to width")
+    _ckhex(_hexofbuf(wide), "0000000000000000000000000000000" + "0123456789abcdef0fedcba9876543210", "big to_bytes zero-pads on the left")
+end
+
+// ---------------------------------------------------------------- X25519
+
+func _hexx25519(scalarhex: str, pointhex: str): str:
+    mut s := _hexbuf(scalarhex)
+    defer _buf_free(s)
+    mut p := _hexbuf(pointhex)
+    defer _buf_free(p)
+    mut o := _newbuf(32)
+    defer _buf_free(o)
+    _putzeros(o, 32)
+    _x25519_scalarmult(s.p, p.p, o.p)
+    ret _hexofbuf(o)
+end
+
+func _selftest_x25519():
+    // RFC 7748 section 5.2 scalar multiplication vectors.
+    _ckhex(_hexx25519("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+                      "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c"),
+        "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552", "x25519 rfc7748 5.2 vector1")
+    _ckhex(_hexx25519("4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d",
+                      "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493"),
+        "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957", "x25519 rfc7748 5.2 vector2")
+
+    // RFC 7748 section 6.1 Diffie-Hellman: both sides must derive the same
+    // secret, and each public key must match the published value.
+    mut apriv := _hexbuf("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")
+    defer _buf_free(apriv)
+    mut bpriv := _hexbuf("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb")
+    defer _buf_free(bpriv)
+    mut apub := _newbuf(32)
+    defer _buf_free(apub)
+    _putzeros(apub, 32)
+    mut bpub := _newbuf(32)
+    defer _buf_free(bpub)
+    _putzeros(bpub, 32)
+    _x25519_base(apriv.p, apub.p)
+    _x25519_base(bpriv.p, bpub.p)
+    _ckhex(_hexofbuf(apub), "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a", "x25519 rfc7748 6.1 public a")
+    _ckhex(_hexofbuf(bpub), "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f", "x25519 rfc7748 6.1 public b")
+
+    mut sa := _newbuf(32)
+    defer _buf_free(sa)
+    _putzeros(sa, 32)
+    mut sb := _newbuf(32)
+    defer _buf_free(sb)
+    _putzeros(sb, 32)
+    _ck(_x25519_shared(apriv.p, bpub.p, sa.p), "x25519 shared a ok")
+    _ck(_x25519_shared(bpriv.p, apub.p, sb.p), "x25519 shared b ok")
+    _ckhex(_hexofbuf(sa), "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742", "x25519 rfc7748 6.1 shared secret")
+    _ck(_cteq(sa.p, sb.p, 32), "x25519 both sides agree")
+
+    // Small-order points produce an all-zero secret and MUST be rejected
+    // (RFC 7748 section 6.1). Accepting them would let a peer force a shared
+    // secret it already knows.
+    mut zero := _hexbuf("0000000000000000000000000000000000000000000000000000000000000000")
+    defer _buf_free(zero)
+    mut so := _newbuf(32)
+    defer _buf_free(so)
+    _putzeros(so, 32)
+    _ck(!_x25519_shared(apriv.p, zero.p, so.p), "x25519 rejects all-zero peer key")
+    mut one := _hexbuf("0100000000000000000000000000000000000000000000000000000000000000")
+    defer _buf_free(one)
+    _ck(!_x25519_shared(apriv.p, one.p, so.p), "x25519 rejects order-1 point")
+    mut ord8 := _hexbuf("e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800")
+    defer _buf_free(ord8)
+    _ck(!_x25519_shared(apriv.p, ord8.p, so.p), "x25519 rejects order-8 point")
+
+    // RFC 7748 section 5.2 note: the high bit of the u-coordinate is ignored,
+    // so setting it must not change the result.
+    mut u := _hexbuf("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c")
+    defer _buf_free(u)
+    _bufset(u, 31, _bufat(u, 31) | 0x80)
+    mut sc := _hexbuf("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4")
+    defer _buf_free(sc)
+    mut r2 := _newbuf(32)
+    defer _buf_free(r2)
+    _putzeros(r2, 32)
+    _x25519_scalarmult(sc.p, u.p, r2.p)
+    _ckhex(_hexofbuf(r2), "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552", "x25519 ignores high bit of u")
+
+    // RFC 7748 section 5.2 iterated test. Each round feeds the output back in
+    // as the next scalar, so an error in any single ladder step compounds
+    // instead of cancelling -- a much stronger check than one multiplication.
+    // The RFC publishes checkpoints at 1 and 1000 iterations.
+    mut k := _hexbuf("0900000000000000000000000000000000000000000000000000000000000000")
+    defer _buf_free(k)
+    mut pt := _hexbuf("0900000000000000000000000000000000000000000000000000000000000000")
+    defer _buf_free(pt)
+    mut outb := _newbuf(32)
+    defer _buf_free(outb)
+    _putzeros(outb, 32)
+    repeat 1000 with iter:
+        _x25519_scalarmult(k.p, pt.p, outb.p)
+        repeat 32 with i:
+            _bufset(pt, i, _bufat(k, i))
+            _bufset(k, i, _bufat(outb, i))
+        end
+        if iter == 0:
+            _ckhex(_hexofbuf(k), "422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079", "x25519 iterated after 1")
+        end
+    end
+    _ckhex(_hexofbuf(k), "684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51", "x25519 iterated after 1000")
+end
+
+// ---------------------------------------------------------------- P-256
+
+func _p256_mul_hex(khex: str): str:
+    mut kb := _hexbuf(khex)
+    defer _buf_free(kb)
+    k := _fe_from_bytes(kb.p)
+    r := _jac_mul(k, _jac_generator())
+    mut x := _newbuf(32)
+    defer _buf_free(x)
+    _putzeros(x, 32)
+    mut y := _newbuf(32)
+    defer _buf_free(y)
+    _putzeros(y, 32)
+    if !_jac_to_affine(r, x.p, y.p):
+        ret "INFINITY"
+    end
+    ret _hexofbuf(x) + ":" + _hexofbuf(y)
+end
+
+func _selftest_p256():
+    // Montgomery round-trip: a value entering and leaving the domain unchanged
+    // is the base case everything else rests on.
+    mut vb := _hexbuf("0123456789abcdeffedcba98765432100011223344556677889900aabbccddee")
+    defer _buf_free(vb)
+    v := _fe_from_bytes(vb.p)
+    mut vm := Fe {}
+    _fe_to_mont(vm, v)
+    mut vback := Fe {}
+    _fe_from_mont(vback, vm)
+    _ck(_fe_eq(v, vback), "p256 montgomery round-trip")
+
+    // 1 in Montgomery form must equal the published R mod p
+    mut one := Fe {}
+    one.v[0] = 1 as u32
+    mut onem := Fe {}
+    _fe_to_mont(onem, one)
+    _ck(_fe_eq(onem, _fe_from_const(P256_ONE_MONT)), "p256 montgomery one")
+
+    // multiplication by 1 in the Montgomery domain is the identity
+    mut prod := Fe {}
+    _fe_mul(prod, vm, _fe_from_const(P256_ONE_MONT))
+    _ck(_fe_eq(prod, vm), "p256 mont mul by one")
+
+    // inversion: v * v^-1 == 1
+    mut vinv := Fe {}
+    _fe_inv(vinv, vm)
+    mut chk := Fe {}
+    _fe_mul(chk, vm, vinv)
+    _ck(_fe_eq(chk, _fe_from_const(P256_ONE_MONT)), "p256 field inversion")
+
+    // add/sub round-trip and modular wraparound
+    mut s := Fe {}
+    _fe_add_mod(s, vm, vm, P256_P)
+    mut d := Fe {}
+    _fe_sub_mod(d, s, vm, P256_P)
+    _ck(_fe_eq(d, vm), "p256 add then sub")
+    mut pm1 := Fe {}
+    _fe_sub_mod(pm1, _fe_zero(), one, P256_P)
+    mut wrap := Fe {}
+    _fe_add_mod(wrap, pm1, one, P256_P)
+    _ck(_fe_is_zero(wrap), "p256 (p-1) + 1 == 0")
+
+    // Scalar multiples of the generator, against values computed independently.
+    _ckhex(_p256_mul_hex("0000000000000000000000000000000000000000000000000000000000000001"),
+        "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296:4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5",
+        "p256 1G is the generator")
+    _ckhex(_p256_mul_hex("0000000000000000000000000000000000000000000000000000000000000002"),
+        "7cf27b188d034f7e8a52380304b51ac3c08969e277f21b35a60b48fc47669978:07775510db8ed040293d9ac69f7430dbba7dade63ce982299e04b79d227873d1",
+        "p256 2G")
+    _ckhex(_p256_mul_hex("0000000000000000000000000000000000000000000000000000000000000003"),
+        "5ecbe4d1a6330a44c8f7ef951d4bf165e6c6b721efada985fb41661bc6e7fd6c:8734640c4998ff7e374b06ce1a64a2ecd82ab036384fb83d9a79b127a27d5032",
+        "p256 3G")
+    _ckhex(_p256_mul_hex("0000000000000000000000000000000000000000000000000000000000000005"),
+        "51590b7a515140d2d784c85608668fdfef8c82fd1f5be52421554a0dc3d033ed:e0c17da8904a727d8ae1bf36bf8a79260d012f00d4d80888d1d0bb44fda16da4",
+        "p256 5G")
+
+    // Point encoding and on-curve validation. Rejecting off-curve points is
+    // what blocks the invalid-curve attack on ECDH.
+    mut enc := _newbuf(65)
+    defer _buf_free(enc)
+    _put8(enc, 0x04)
+    mut gx := _hexbuf("6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296")
+    defer _buf_free(gx)
+    mut gy := _hexbuf("4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5")
+    defer _buf_free(gy)
+    _putbuf(enc, gx)
+    _putbuf(enc, gy)
+    mut gpt := Jac {}
+    _ck(_p256_point_from_bytes(enc.p, enc.len, gpt), "p256 accepts the generator encoding")
+
+    _bufset(enc, 40, _bufat(enc, 40) ^ 0x01)
+    mut bad := Jac {}
+    _ck(!_p256_point_from_bytes(enc.p, enc.len, bad), "p256 rejects off-curve point")
+    _bufset(enc, 40, _bufat(enc, 40) ^ 0x01)
+
+    _bufset(enc, 0, 0x02)
+    _ck(!_p256_point_from_bytes(enc.p, enc.len, bad), "p256 rejects compressed-point tag")
+    _bufset(enc, 0, 0x04)
+    _ck(!_p256_point_from_bytes(enc.p, 64, bad), "p256 rejects wrong length")
+
+    // x or y >= p must be refused even if the pair would satisfy the equation
+    // after reduction.
+    mut ovf := _newbuf(65)
+    defer _buf_free(ovf)
+    _put8(ovf, 0x04)
+    mut pbytes := _hexbuf("ffffffff00000001000000000000000000000000ffffffffffffffffffffffff")
+    defer _buf_free(pbytes)
+    _putbuf(ovf, pbytes)
+    _putbuf(ovf, gy)
+    _ck(!_p256_point_from_bytes(ovf.p, ovf.len, bad), "p256 rejects x >= p")
+
+    // ECDH: both sides agree, and each public key is a valid curve point.
+    mut ka := _hexbuf("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721")
+    defer _buf_free(ka)
+    mut kb2 := _hexbuf("d9c1c1ff4bee2b2e0d1c2b4a3f5e6d7c8b9a0f1e2d3c4b5a69788796a5b4c3d2")
+    defer _buf_free(kb2)
+    mut axb := _newbuf(32)
+    defer _buf_free(axb)
+    _putzeros(axb, 32)
+    mut ayb := _newbuf(32)
+    defer _buf_free(ayb)
+    _putzeros(ayb, 32)
+    mut bxb := _newbuf(32)
+    defer _buf_free(bxb)
+    _putzeros(bxb, 32)
+    mut byb := _newbuf(32)
+    defer _buf_free(byb)
+    _putzeros(byb, 32)
+    _ck(_p256_base_mul(ka.p, axb.p, ayb.p), "p256 public key a")
+    _ck(_p256_base_mul(kb2.p, bxb.p, byb.p), "p256 public key b")
+
+    mut apub := _newbuf(65)
+    defer _buf_free(apub)
+    _put8(apub, 4)
+    _putbuf(apub, axb)
+    _putbuf(apub, ayb)
+    mut bpub := _newbuf(65)
+    defer _buf_free(bpub)
+    _put8(bpub, 4)
+    _putbuf(bpub, bxb)
+    _putbuf(bpub, byb)
+
+    mut ss1 := _newbuf(32)
+    defer _buf_free(ss1)
+    _putzeros(ss1, 32)
+    mut ss2 := _newbuf(32)
+    defer _buf_free(ss2)
+    _putzeros(ss2, 32)
+    _ck(_p256_ecdh(ka.p, bpub.p, bpub.len, ss1.p), "p256 ecdh a ok")
+    _ck(_p256_ecdh(kb2.p, apub.p, apub.len, ss2.p), "p256 ecdh b ok")
+    _ck(_cteq(ss1.p, ss2.p, 32), "p256 ecdh both sides agree")
+
+    // A zero or out-of-range private scalar must be refused.
+    mut zk := _hexbuf("0000000000000000000000000000000000000000000000000000000000000000")
+    defer _buf_free(zk)
+    _ck(!_p256_base_mul(zk.p, axb.p, ayb.p), "p256 rejects zero scalar")
+    mut nk := _hexbuf("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551")
+    defer _buf_free(nk)
+    _ck(!_p256_base_mul(nk.p, axb.p, ayb.p), "p256 rejects scalar == n")
+end
+
+@en "SelfTest"
+@fa "خودآزمایی"
+@ar "اختبار ذاتی"
+pub func SelfTest(): int:
+    _st_fails = 0
+    println "tls self-test"
+    _selftest_bytes()
+    _selftest_sha()
+    _selftest_hmac()
+    _selftest_hkdf()
+    _selftest_chacha()
+    _selftest_aes()
+    _selftest_bigint()
+    _selftest_x25519()
+    _selftest_p256()
+    if _st_fails == 0:
+        println "tls self-test: all checks passed"
+    else:
+        println "tls self-test:", _st_fails, "failure(s)"
+    end
+    ret _st_fails
+end

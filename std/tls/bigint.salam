@@ -1,0 +1,442 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+// Arbitrary-precision unsigned integers on 32-bit limbs, sized for RSA moduli.
+//
+// SCOPE AND THREAT MODEL: this exists solely to verify RSA signatures, which is
+// a *public-key* operation. Every input -- the signature, the exponent, the
+// modulus -- travels in the clear inside a certificate, so there is no secret
+// for a timing side channel to leak and the code below is deliberately NOT
+// constant-time. Do not reuse it for RSA private-key operations, DH with a
+// secret exponent, or anything else where an operand must stay secret.
+//
+// Division is bit-serial shift-and-subtract rather than Knuth algorithm D.
+// That is asymptotically worse, but a full RSA-2048 verification with e=65537
+// costs only ~18 modular reductions, so the difference is microseconds against
+// a network handshake -- and the simpler algorithm is far easier to get right,
+// which matters more than speed in a signature verifier.
+//
+// Limbs are little-endian (limb 0 is least significant); byte serialisation is
+// big-endian, matching how integers appear in DER and in TLS.
+
+struct Big:
+    pub b: Buf = Buf {}
+    pub cap: int = 0
+    pub n: int = 0
+    pub bad: bool = false
+end
+
+inline func _limb(x: Big, i: int): u32:
+    p := x.b.p as u32*
+    ret p[i]
+end
+
+inline func _setlimb(x: Big, i: int, v: u32):
+    p := x.b.p as u32*
+    p[i] = v
+end
+
+func _big_new(limbs: int): Big:
+    mut nl := limbs
+    if nl < 1:
+        nl = 1
+    end
+    bb := _newbuf(nl * 4)
+    if bb.bad:
+        ret Big { b = bb, cap = 0, n = 0, bad = true }
+    end
+    x := Big { b = bb, cap = nl, n = 0, bad = false }
+    repeat nl with i:
+        _setlimb(x, i, 0 as u32)
+    end
+    ret x
+end
+
+func _big_free(x &: Big):
+    _buf_free(x.b)
+    x.cap = 0
+    x.n = 0
+end
+
+func _big_trim(x &: Big):
+    until x.n < 1:
+        if _limb(x, x.n - 1) != (0 as u32):
+            ret
+        end
+        x.n -= 1
+    end
+end
+
+func _big_zero(x &: Big):
+    nc := x.cap
+    repeat nc with i:
+        _setlimb(x, i, 0 as u32)
+    end
+    x.n = 0
+end
+
+func _big_is_zero(x: Big): bool:
+    ret x.n == 0
+end
+
+func _big_set_u32(x &: Big, v: u32):
+    _big_zero(x)
+    if v != (0 as u32):
+        _setlimb(x, 0, v)
+        x.n = 1
+    end
+end
+
+func _big_copy(dst &: Big, src: Big):
+    if dst.cap < src.n:
+        dst.bad = true
+        ret
+    end
+    dc := dst.cap
+    repeat dc with i:
+        _setlimb(dst, i, 0 as u32)
+    end
+    sn := src.n
+    repeat sn with i:
+        _setlimb(dst, i, _limb(src, i))
+    end
+    dst.n = src.n
+end
+
+// -1, 0 or 1
+func _big_cmp(a: Big, b: Big): int:
+    if a.n != b.n:
+        if a.n < b.n:
+            ret 0 - 1
+        end
+        ret 1
+    end
+    mut i := a.n - 1
+    until i < 0:
+        av := _limb(a, i)
+        bv := _limb(b, i)
+        if av != bv:
+            if av < bv:
+                ret 0 - 1
+            end
+            ret 1
+        end
+        i -= 1
+    end
+    ret 0
+end
+
+func _big_bitlen(x: Big): int:
+    if x.n == 0:
+        ret 0
+    end
+    top := _limb(x, x.n - 1)
+    mut bits := 0
+    mut v := top
+    until v == (0 as u32):
+        bits += 1
+        v = v >> (1 as u32)
+    end
+    ret (x.n - 1) * 32 + bits
+end
+
+func _big_bit(x: Big, i: int): int:
+    if i < 0:
+        ret 0
+    end
+    li := i / 32
+    if li >= x.n:
+        ret 0
+    end
+    ret ((_limb(x, li) >> ((i % 32) as u32)) & (1 as u32)) as int
+end
+
+func _big_setbit(x &: Big, i: int):
+    li := i / 32
+    if li >= x.cap:
+        x.bad = true
+        ret
+    end
+    _setlimb(x, li, _limb(x, li) | ((1 as u32) << ((i % 32) as u32)))
+    if li + 1 > x.n:
+        x.n = li + 1
+    end
+end
+
+// r = a + b
+func _big_add(r &: Big, a: Big, b: Big):
+    mut maxn := a.n
+    if b.n > maxn:
+        maxn = b.n
+    end
+    if r.cap < maxn + 1:
+        r.bad = true
+        ret
+    end
+    _big_zero(r)
+    mut carry := 0 as u64
+    repeat maxn with i:
+        mut s := carry
+        if i < a.n:
+            s += _limb(a, i) as u64
+        end
+        if i < b.n:
+            s += _limb(b, i) as u64
+        end
+        _setlimb(r, i, s as u32)
+        carry = s >> (32 as u64)
+    end
+    mut n := maxn
+    if carry != (0 as u64):
+        _setlimb(r, maxn, carry as u32)
+        n = maxn + 1
+    end
+    r.n = n
+    _big_trim(r)
+end
+
+// r = a - b, requires a >= b (callers guarantee it; returns false otherwise)
+func _big_sub(r &: Big, a: Big, b: Big): bool:
+    if _big_cmp(a, b) < 0:
+        ret false
+    end
+    if r.cap < a.n:
+        r.bad = true
+        ret false
+    end
+    _big_zero(r)
+    an := a.n
+    mut borrow := 0 as i64
+    repeat an with i:
+        mut d := (_limb(a, i) as i64) - borrow
+        if i < b.n:
+            d -= _limb(b, i) as i64
+        end
+        if d < 0:
+            d += 4294967296
+            borrow = 1
+        else:
+            borrow = 0
+        end
+        _setlimb(r, i, d as u32)
+    end
+    r.n = a.n
+    _big_trim(r)
+    ret true
+end
+
+// r = a * b (schoolbook; r must have room for a.n + b.n limbs)
+func _big_mul(r &: Big, a: Big, b: Big):
+    if r.cap < a.n + b.n:
+        r.bad = true
+        ret
+    end
+    _big_zero(r)
+    if a.n == 0 || b.n == 0:
+        ret
+    end
+    an := a.n
+    bn := b.n
+    repeat an with i:
+        mut carry := 0 as u64
+        av := _limb(a, i) as u64
+        repeat bn with j:
+            cur := (_limb(r, i + j) as u64) + av * (_limb(b, j) as u64) + carry
+            _setlimb(r, i + j, cur as u32)
+            carry = cur >> (32 as u64)
+        end
+        mut k := i + bn
+        until carry == (0 as u64):
+            cur := (_limb(r, k) as u64) + carry
+            _setlimb(r, k, cur as u32)
+            carry = cur >> (32 as u64)
+            k += 1
+        end
+    end
+    r.n = a.n + b.n
+    _big_trim(r)
+end
+
+// x <<= 1
+func _big_shl1(x &: Big):
+    mut carry := 0 as u32
+    lim := x.n
+    repeat lim with i:
+        v := _limb(x, i)
+        _setlimb(x, i, (v << (1 as u32)) | carry)
+        carry = v >> (31 as u32)
+    end
+    if carry != (0 as u32):
+        if x.n >= x.cap:
+            x.bad = true
+            ret
+        end
+        _setlimb(x, x.n, carry)
+        x.n += 1
+    end
+end
+
+// q = a / m, rem = a % m. Bit-serial: walk a from its top bit down, shifting
+// each bit into the running remainder and subtracting m whenever it fits.
+func _big_divmod(q &: Big, rem &: Big, a: Big, m: Big): bool:
+    if m.n == 0:
+        ret false
+    end
+    if q.cap < a.n || rem.cap < m.n + 1:
+        q.bad = true
+        ret false
+    end
+    _big_zero(q)
+    _big_zero(rem)
+    mut scratch := _big_new(m.n + 2)
+    defer _big_free(scratch)
+    if scratch.bad:
+        ret false
+    end
+    mut i := _big_bitlen(a) - 1
+    until i < 0:
+        _big_shl1(rem)
+        if rem.bad:
+            ret false
+        end
+        if _big_bit(a, i) == 1:
+            if rem.n == 0:
+                _setlimb(rem, 0, 1 as u32)
+                rem.n = 1
+            else:
+                _setlimb(rem, 0, _limb(rem, 0) | (1 as u32))
+            end
+        end
+        if _big_cmp(rem, m) >= 0:
+            if !_big_sub(scratch, rem, m):
+                ret false
+            end
+            _big_copy(rem, scratch)
+            _big_setbit(q, i)
+        end
+        i -= 1
+    end
+    _big_trim(q)
+    _big_trim(rem)
+    ret true
+end
+
+func _big_mod(r &: Big, a: Big, m: Big): bool:
+    mut q := _big_new(a.n + 1)
+    defer _big_free(q)
+    if q.bad:
+        ret false
+    end
+    ret _big_divmod(q, r, a, m)
+end
+
+// r = base^e mod m, square-and-multiply from the least significant exponent
+// bit. NOT constant-time -- see the file header; RSA verification only.
+func _big_modexp(r &: Big, base: Big, e: Big, m: Big): bool:
+    if m.n == 0:
+        ret false
+    end
+    mut acc := _big_new(m.n + 1)
+    defer _big_free(acc)
+    mut cur := _big_new(m.n + 1)
+    defer _big_free(cur)
+    mut prod := _big_new(2 * m.n + 2)
+    defer _big_free(prod)
+    mut red := _big_new(m.n + 2)
+    defer _big_free(red)
+    if acc.bad || cur.bad || prod.bad || red.bad:
+        ret false
+    end
+
+    _big_set_u32(acc, 1 as u32)
+    if !_big_mod(cur, base, m):
+        ret false
+    end
+
+    bits := _big_bitlen(e)
+    mut i := 0
+    until i < bits:
+        if _big_bit(e, i) == 1:
+            _big_mul(prod, acc, cur)
+            if prod.bad || !_big_mod(red, prod, m):
+                ret false
+            end
+            _big_copy(acc, red)
+        end
+        // skip the final squaring; nothing consumes it
+        if i + 1 < bits:
+            _big_mul(prod, cur, cur)
+            if prod.bad || !_big_mod(red, prod, m):
+                ret false
+            end
+            _big_copy(cur, red)
+        end
+        i += 1
+    end
+    _big_copy(r, acc)
+    ret !r.bad
+end
+
+// ---------------------------------------------------------------- bytes
+
+func _big_from_bytes(p: void*, len: int): Big:
+    mut nl := (len + 3) / 4
+    if nl < 1:
+        nl = 1
+    end
+    mut x := _big_new(nl)
+    if x.bad:
+        ret x
+    end
+    repeat len with i:
+        // i counts from the least significant byte
+        v := _bget(p, len - 1 - i)
+        li := i / 4
+        sh := ((i % 4) * 8) as u32
+        _setlimb(x, li, _limb(x, li) | ((v as u32) << sh))
+    end
+    x.n = nl
+    _big_trim(x)
+    ret x
+end
+
+// Minimum number of bytes needed to represent x.
+func _big_bytelen(x: Big): int:
+    bl := _big_bitlen(x)
+    ret (bl + 7) / 8
+end
+
+// Serialise big-endian, left-padded with zeros to exactly `len` bytes. Returns
+// false if x does not fit, rather than silently emitting a truncated integer.
+func _big_to_bytes(x: Big, out: void*, len: int): bool:
+    if _big_bytelen(x) > len:
+        ret false
+    end
+    repeat len with i:
+        _bput(out, i, 0)
+    end
+    total := x.n * 4
+    repeat total with i:
+        li := i / 4
+        sh := ((i % 4) * 8) as u32
+        v := ((_limb(x, li) >> sh) & (0xFF as u32)) as int
+        pos := len - 1 - i
+        if pos >= 0:
+            _bput(out, pos, v)
+        end
+    end
+    ret true
+end

@@ -175,7 +175,7 @@ func _poly_blocks(st &: Poly1305, p: void*, n: int, fin: bool):
     mut h4 := st.h[4]
     mut off := 0
     mut left := n
-    until left < 16:
+    until left >= 16:
         t0 := _le32(p, off)
         t1 := _le32(p, off + 4)
         t2 := _le32(p, off + 8)
@@ -223,6 +223,11 @@ func _poly_blocks(st &: Poly1305, p: void*, n: int, fin: bool):
 end
 
 func _poly_update(st &: Poly1305, p: void*, n: int):
+    // Allocated at function scope on purpose: a `defer` written inside a
+    // nested block is hoisted to function exit by codegen, where the
+    // block-local name is no longer in scope.
+    mut tmp := _newbuf(16)
+    defer _buf_free(tmp)
     mut i := 0
     // top up a partial block first
     if st.blen > 0:
@@ -236,8 +241,7 @@ func _poly_update(st &: Poly1305, p: void*, n: int):
         st.blen += want
         i += want
         if st.blen == 16:
-            mut tmp := _newbuf(16)
-            defer _buf_free(tmp)
+            _bufreset(tmp)
             repeat 16 with j:
                 _put8(tmp, st.blk[j] as int)
             end
@@ -259,11 +263,12 @@ end
 
 func _poly_final(st0: Poly1305, out: void*):
     mut st := st0
+    // function scope, not inside the `if`: see the note in _poly_update
+    mut tmp := _newbuf(16)
+    defer _buf_free(tmp)
     if st.blen > 0:
         // pad the trailing partial block with 0x01 then zeros, and absorb it
         // with the implicit high bit disabled
-        mut tmp := _newbuf(16)
-        defer _buf_free(tmp)
         n := st.blen
         repeat n with j:
             _put8(tmp, st.blk[j] as int)

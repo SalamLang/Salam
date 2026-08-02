@@ -1,0 +1,156 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+// ECDSA-P256 signature verification (FIPS 186-4, X9.62).
+//
+// Verification only, and every operand is public, so the double scalar
+// multiplication may run in variable time. Signing would need a secret nonce
+// and is deliberately absent -- a biased or reused ECDSA nonce discloses the
+// private key outright.
+//
+// Scalar arithmetic happens mod the group order n, reusing the Montgomery
+// multiplier from p256.salam with n's own n0inv and R^2 constants.
+
+const P256_N0INV := 0xee00bc4f as u32
+
+func _sn_mul(r &: Fe, a: Fe, b: Fe):
+    _fe_mont_mul(r, a, b, P256_N, P256_N0INV)
+end
+
+func _sn_to_mont(r &: Fe, a: Fe):
+    _fe_mont_mul(r, a, _fe_from_const(P256_R2N), P256_N, P256_N0INV)
+end
+
+func _sn_from_mont(r &: Fe, a: Fe):
+    mut one := Fe {}
+    one.v[0] = 1 as u32
+    _fe_mont_mul(r, a, one, P256_N, P256_N0INV)
+end
+
+// Inverse mod n by Fermat (n is prime): a^(n-2).
+func _sn_inv(r &: Fe, a: Fe):
+    nn := _fe_from_const(P256_N)
+    mut two := Fe {}
+    two.v[0] = 2 as u32
+    mut e := Fe {}
+    _fe_sub_raw(e, nn, two)
+
+    mut accn := Fe {}
+    _sn_to_mont(accn, _fe_one())
+    mut cur := a
+    mut i := 0
+    until i < 256:
+        bit := ((e.v[i / 32] >> ((i % 32) as u32)) & (1 as u32)) as int
+        mut prod := Fe {}
+        _sn_mul(prod, accn, cur)
+        _fe_cmov(accn, prod, bit)
+        mut sq := Fe {}
+        _sn_mul(sq, cur, cur)
+        cur = sq
+        i += 1
+    end
+    repeat 8 with k:
+        r.v[k] = accn.v[k]
+    end
+end
+
+func _fe_one(): Fe:
+    mut o := Fe {}
+    o.v[0] = 1 as u32
+    ret o
+end
+
+// Reduce a message digest to a scalar: take the leftmost min(hlen, 32) bytes,
+// right-aligned, then reduce mod n. For SHA-384 with P-256 this truncates to
+// 256 bits, as FIPS 186-4 requires.
+func _ecdsa_digest_scalar(digest: void*, dlen: int): Fe:
+    mut buf := _newbuf(32)
+    defer _buf_free(buf)
+    mut take := dlen
+    if take > 32:
+        take = 32
+    end
+    repeat 32 - take with _i:
+        _put8(buf, 0)
+    end
+    _putraw(buf, digest, take)
+    mut z := _fe_from_bytes(buf.p)
+    // conditional single subtraction is enough: z < 2^256 < 2n
+    mut t := Fe {}
+    borrow := _fe_sub_raw(t, z, _fe_from_const(P256_N))
+    _fe_cmov(z, t, ((borrow ^ (1 as u32)) & (1 as u32)) as int)
+    ret z
+end
+
+// Verify (r, s) over `digest` for the uncompressed public key `pub`.
+func _ecdsa_p256_verify(digest: void*, dlen: int, rbytes: void*, sbytes: void*, pub: void*, publen: int): bool:
+    mut q := Jac {}
+    if !_p256_point_from_bytes(pub, publen, q):
+        ret false
+    end
+    r := _fe_from_bytes(rbytes)
+    s := _fe_from_bytes(sbytes)
+    // Both must lie in [1, n-1]; r == 0 or s == 0 would make the check trivial.
+    if _fe_is_zero(r) || _fe_is_zero(s):
+        ret false
+    end
+    if !_fe_lt(r, P256_N) || !_fe_lt(s, P256_N):
+        ret false
+    end
+
+    z := _ecdsa_digest_scalar(digest, dlen)
+
+    // w = s^-1 mod n, in Montgomery form throughout
+    mut sm := Fe {}
+    _sn_to_mont(sm, s)
+    mut wm := Fe {}
+    _sn_inv(wm, sm)
+
+    mut zm := Fe {}
+    _sn_to_mont(zm, z)
+    mut u1m := Fe {}
+    _sn_mul(u1m, zm, wm)
+    mut u1 := Fe {}
+    _sn_from_mont(u1, u1m)
+
+    mut rm := Fe {}
+    _sn_to_mont(rm, r)
+    mut u2m := Fe {}
+    _sn_mul(u2m, rm, wm)
+    mut u2 := Fe {}
+    _sn_from_mont(u2, u2m)
+
+    pt := _jac_mul_double_vartime(u1, _jac_generator(), u2, q)
+    if _jac_is_infinity(pt):
+        ret false
+    end
+
+    mut xb := _newbuf(32)
+    defer _buf_free(xb)
+    _putzeros(xb, 32)
+    mut yb := _newbuf(32)
+    defer _buf_free(yb)
+    _putzeros(yb, 32)
+    if !_jac_to_affine(pt, xb.p, yb.p):
+        ret false
+    end
+    mut x := _fe_from_bytes(xb.p)
+    // the comparison is against x mod n, not x
+    mut t := Fe {}
+    borrow := _fe_sub_raw(t, x, _fe_from_const(P256_N))
+    _fe_cmov(x, t, ((borrow ^ (1 as u32)) & (1 as u32)) as int)
+    ret _fe_eq(x, r)
+end

@@ -26,8 +26,10 @@ package tls
 // Every entry point returns a FAILURE COUNT: 0 means pass.
 
 mut _st_fails := 0
+mut _st_total := 0
 
 func _ck(cond: bool, name: str):
+    _st_total += 1
     if !cond:
         _st_fails += 1
         println "  FAIL:", name
@@ -35,6 +37,7 @@ func _ck(cond: bool, name: str):
 end
 
 func _ckhex(got: str, want: str, name: str):
+    _st_total += 1
     if got != want:
         _st_fails += 1
         println "  FAIL:", name
@@ -1139,11 +1142,139 @@ func _selftest_p256():
     _ck(!_p256_base_mul(nk.p, axb.p, ayb.p), "p256 rejects scalar == n")
 end
 
+// ------------------------------------------------------ RSA / ECDSA verify
+
+const T_RSA_N := "9abe7ab966c27abf15aeb4f12e6a0fc901d06c520cf32c114d03c602364ed20572c415aaacbbd9f21ca41e1a97cd7a53c79fef2878461f5c2b0036623d9bac391c8f9d4003020e838ebe99f712b2faf627f556e5037f39599cd23b65fc687062ccc8e657655e333c4a2d67f427b5a24edb9111aa7b78d3ebc3846f01832e3f0e17f8a0a045a09702f962e0b509034eb939d8b6307bd3817b790f5b4166fc6984ffa60311b4f65f34a70558d4b7bae9fdd63d2488ccbb44bd2bb2bfbf7a7fa1a141cf07e4b6e0c22d38ba14e8ac006a1dd504ad201d3559103c4be928d879df79f081cba4150855f58f0fcfb03f162e66dba4d9b3510ffa1a9b12d0cf12fd5c09"
+const T_RSA_E := "010001"
+const T_SIG_PKCS1_256 := "950aa1b6acb3867bb6bd70a588c015ad8f16a4c70ea77c9b9910741439657d0a44dc605640bd7e34f38fde02008a9c5779806eb6f575dc133f9ba7808ae403f81512a2b1d1ecd35159da7041c6411362db6d8494dcdff3481167f86c08ea1110f7739fbcc86b6af9a745378c53f4bf8287ef7b896dcc72ea435e5415128ffe05bdc45f9feb7f57afb65ee6844a86f9f2c05ea573ec75bd3be0b349b4c59de1f57db975c299885caa1596676b602d0d579b178bd49d521a4265f75b21b3d78bad5d5bb3cd62b31fc713c3f1c699b0a9adcc2c707f33387bedf46df8cded021e36c20b740706bba30adb79917479ac0bf8fff470e18539ba7c04e5b234cb040d28"
+const T_SIG_PSS_256 := "17537ab606e9e73118ef4ef4ac597a7a09497e186f7825dd769bed076c031d47b4da64be4884cf034cdae4204f528f25edf1021c3f1cd0056ab60b34636766b381582e06c9af80b9611fd6000fbf371c6079aae0c5fdb79613777f9024c2e1a56b2a33b002d7d7a1276f48b84266a340eb370b349da71e126b3d67cf6bfb2390a8f67ea9844b187a3bdbcacab360908fe3c10d0d46b7f39f9f06b54a5d3a4b2471269fdd0f9bd5768f4cdccce0fdb8d2211d8c2b8d3d619a5bdb45d170e609d1e815a1255893c4df54c40f6949bbc288b08519ecd867d2618c19df7dfbf8757f41824d521dabb599ba27611e796c4f3a6b10ab6bce10ddd4dd66b5ddcc5a6315"
+const T_SIG_PKCS1_384 := "545e3595691a558608c6092b14f1f49f2d8f769d4e7b325fe80ea80a71e1dfceb281d4b16ce7354dd38e041e0e9a20b4921d2e822fe8e7be48db5b3e60320c3df0f218c66fe76a88a54b9d4d3aa952c473525e2175b9cf1f64e3f32910cffa71ebcb933863854556b76e0a0c3da91794af74389c3aa65e3f06a11fde219196753fe6084824b069796f7f35fa00dd20bfe43e55e91b990b2308a8bcb774a0f4dff98080823a54337b3ea1da7d500624ce4100981d1636abc2618b9cbb70f3722797581983e4fae5d31e23be292975db02ca997bf4fdd3d9373c51344d7ef07a9f8be547b1a38a0fb5947f49f63ee11bab2974e5e7ce249d5f289b9922c321a268"
+const T_MSG := "Salam native TLS test vector"
+const T_EC_PUB := "043fc15fba21a9ba1be86c5d0fbb3b0fb6ed719775e5b4ea0da96142f5d8747209bc031bfedc902b7ae0b5deb0b620bc1ee9d543a3a572bcc4a1fc8b4628b08354"
+const T_EC_R := "6d02392e3e8704bf05c44ce86d25a4ebc90855dd2d604ec0051085f911bee8d7"
+const T_EC_S := "a1ee23bb74cb3e6642322e1babd4b9a3e3794a6b34202e51bbaa586b7057b488"
+const T_EC_R384 := "c87f210e9d418a8975f77814b7ea57b27e4f606c79b85d57faf808dc4e2e2b98"
+const T_EC_S384 := "8712f7985c9338f3e80c02c96ed584ec0f702f2569cac0bbab020b48ccba3e00"
+
+func _digest_of(kind: int, s: str, out &: Buf):
+    hs := _hash_size(kind)
+    _bufreset(out)
+    _putzeros(out, hs)
+    _hash_oneshot(kind, s as void*, s.len(), out.p)
+end
+
+func _selftest_sig():
+    mut n := _hexbuf(T_RSA_N)
+    defer _buf_free(n)
+    mut e := _hexbuf(T_RSA_E)
+    defer _buf_free(e)
+    mut d256 := _newbuf(48)
+    defer _buf_free(d256)
+    _digest_of(HASH_SHA256, T_MSG, d256)
+    mut d384 := _newbuf(48)
+    defer _buf_free(d384)
+    _digest_of(HASH_SHA384, T_MSG, d384)
+    _ckhex(_hexofbuf(d256), "12f5a3dab2d5fc68e84da05b34534421a8b5568f22e4cb20f86741505da26e75", "test message sha256")
+
+    // --- PKCS#1 v1.5, signatures produced by OpenSSL via python-cryptography
+    mut s1 := _hexbuf(T_SIG_PKCS1_256)
+    defer _buf_free(s1)
+    _ck(_rsa_verify_pkcs1(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, s1.p, s1.len), "rsa pkcs1 sha256 accepts valid signature")
+
+    mut s384 := _hexbuf(T_SIG_PKCS1_384)
+    defer _buf_free(s384)
+    _ck(_rsa_verify_pkcs1(HASH_SHA384, d384.p, n.p, n.len, e.p, e.len, s384.p, s384.len), "rsa pkcs1 sha384 accepts valid signature")
+
+    // Negative cases. A verifier that passes only the positive vectors above
+    // could be one that returns true unconditionally, so these carry the real
+    // weight of the test.
+    _bufset(s1, 200, _bufat(s1, 200) ^ 0x01)
+    _ck(!_rsa_verify_pkcs1(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, s1.p, s1.len), "rsa pkcs1 rejects corrupted signature")
+    _bufset(s1, 200, _bufat(s1, 200) ^ 0x01)
+
+    _bufset(d256, 0, _bufat(d256, 0) ^ 0x01)
+    _ck(!_rsa_verify_pkcs1(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, s1.p, s1.len), "rsa pkcs1 rejects wrong digest")
+    _bufset(d256, 0, _bufat(d256, 0) ^ 0x01)
+
+    // A SHA-256 signature must not verify when interpreted under SHA-384's
+    // DigestInfo -- that is the algorithm-substitution check.
+    _ck(!_rsa_verify_pkcs1(HASH_SHA384, d384.p, n.p, n.len, e.p, e.len, s1.p, s1.len), "rsa pkcs1 rejects hash substitution")
+
+    mut wrongn := _hexbuf(T_RSA_N)
+    defer _buf_free(wrongn)
+    _bufset(wrongn, 100, _bufat(wrongn, 100) ^ 0x02)
+    _ck(!_rsa_verify_pkcs1(HASH_SHA256, d256.p, wrongn.p, wrongn.len, e.p, e.len, s1.p, s1.len), "rsa pkcs1 rejects wrong modulus")
+
+    _ck(!_rsa_verify_pkcs1(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, s1.p, s1.len - 1), "rsa pkcs1 rejects short signature")
+
+    // s == 0 and s == n are not valid residues
+    mut zsig := _newbuf(n.len)
+    defer _buf_free(zsig)
+    _putzeros(zsig, n.len)
+    _ck(!_rsa_verify_pkcs1(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, zsig.p, zsig.len), "rsa pkcs1 rejects zero signature")
+    _ck(!_rsa_verify_pkcs1(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, n.p, n.len), "rsa pkcs1 rejects s == n")
+
+    // --- PSS
+    mut ps := _hexbuf(T_SIG_PSS_256)
+    defer _buf_free(ps)
+    _ck(_rsa_verify_pss(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, ps.p, ps.len, 32), "rsa pss sha256 accepts valid signature")
+    _bufset(ps, 5, _bufat(ps, 5) ^ 0x40)
+    _ck(!_rsa_verify_pss(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, ps.p, ps.len, 32), "rsa pss rejects corrupted signature")
+    _bufset(ps, 5, _bufat(ps, 5) ^ 0x40)
+    _bufset(d256, 10, _bufat(d256, 10) ^ 0x80)
+    _ck(!_rsa_verify_pss(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, ps.p, ps.len, 32), "rsa pss rejects wrong digest")
+    _bufset(d256, 10, _bufat(d256, 10) ^ 0x80)
+    _ck(!_rsa_verify_pss(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, ps.p, ps.len, 20), "rsa pss rejects wrong salt length")
+    // a PKCS#1 v1.5 signature must not pass as PSS, and vice versa
+    _ck(!_rsa_verify_pss(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, s1.p, s1.len, 32), "rsa pss rejects pkcs1 signature")
+    _ck(!_rsa_verify_pkcs1(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, ps.p, ps.len), "rsa pkcs1 rejects pss signature")
+
+    // --- ECDSA P-256
+    mut pub := _hexbuf(T_EC_PUB)
+    defer _buf_free(pub)
+    mut r := _hexbuf(T_EC_R)
+    defer _buf_free(r)
+    mut s := _hexbuf(T_EC_S)
+    defer _buf_free(s)
+    _ck(_ecdsa_p256_verify(d256.p, 32, r.p, s.p, pub.p, pub.len), "ecdsa p256 sha256 accepts valid signature")
+
+    mut r3 := _hexbuf(T_EC_R384)
+    defer _buf_free(r3)
+    mut s3 := _hexbuf(T_EC_S384)
+    defer _buf_free(s3)
+    _ck(_ecdsa_p256_verify(d384.p, 48, r3.p, s3.p, pub.p, pub.len), "ecdsa p256 sha384 accepts valid signature")
+
+    _bufset(r, 31, _bufat(r, 31) ^ 0x01)
+    _ck(!_ecdsa_p256_verify(d256.p, 32, r.p, s.p, pub.p, pub.len), "ecdsa rejects corrupted r")
+    _bufset(r, 31, _bufat(r, 31) ^ 0x01)
+    _bufset(s, 0, _bufat(s, 0) ^ 0x10)
+    _ck(!_ecdsa_p256_verify(d256.p, 32, r.p, s.p, pub.p, pub.len), "ecdsa rejects corrupted s")
+    _bufset(s, 0, _bufat(s, 0) ^ 0x10)
+    _bufset(d256, 20, _bufat(d256, 20) ^ 0x01)
+    _ck(!_ecdsa_p256_verify(d256.p, 32, r.p, s.p, pub.p, pub.len), "ecdsa rejects wrong digest")
+    _bufset(d256, 20, _bufat(d256, 20) ^ 0x01)
+
+    // swapping r and s must not verify
+    _ck(!_ecdsa_p256_verify(d256.p, 32, s.p, r.p, pub.p, pub.len), "ecdsa rejects swapped r and s")
+
+    // r or s equal to zero, and a corrupted (off-curve) public key
+    mut zed := _hexbuf("0000000000000000000000000000000000000000000000000000000000000000")
+    defer _buf_free(zed)
+    _ck(!_ecdsa_p256_verify(d256.p, 32, zed.p, s.p, pub.p, pub.len), "ecdsa rejects r == 0")
+    _ck(!_ecdsa_p256_verify(d256.p, 32, r.p, zed.p, pub.p, pub.len), "ecdsa rejects s == 0")
+    mut nb := _hexbuf("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551")
+    defer _buf_free(nb)
+    _ck(!_ecdsa_p256_verify(d256.p, 32, nb.p, s.p, pub.p, pub.len), "ecdsa rejects r == n")
+    _bufset(pub, 40, _bufat(pub, 40) ^ 0x01)
+    _ck(!_ecdsa_p256_verify(d256.p, 32, r.p, s.p, pub.p, pub.len), "ecdsa rejects off-curve public key")
+end
+
 @en "SelfTest"
 @fa "خودآزمایی"
 @ar "اختبار ذاتی"
 pub func SelfTest(): int:
     _st_fails = 0
+    _st_total = 0
     println "tls self-test"
     _selftest_bytes()
     _selftest_sha()
@@ -1154,10 +1285,11 @@ pub func SelfTest(): int:
     _selftest_bigint()
     _selftest_x25519()
     _selftest_p256()
+    _selftest_sig()
     if _st_fails == 0:
-        println "tls self-test: all checks passed"
+        println "tls self-test:", _st_total, "checks passed"
     else:
-        println "tls self-test:", _st_fails, "failure(s)"
+        println "tls self-test:", _st_fails, "of", _st_total, "checks FAILED"
     end
     ret _st_fails
 end

@@ -426,10 +426,24 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
      * hand-rolled ones don't all match libc exactly (e.g. strstr's real
      * return type is `char*`, declared here as `const char*`), so tcc
      * sees two incompatible declarations of the same symbol in one
-     * translation unit ("incompatible types for redefinition"). Only
-     * declare them by hand when nothing already will have.
+     * translation unit ("incompatible types for redefinition").
+     *
+     * is_gui_mode is per-module (set from THIS module's own imports), but
+     * every non-core module also #includes salam_mod_core.h a few lines
+     * down - and core.h is generated independently, with its own
+     * is_gui_mode=false (the "core" module doesn't import webview), so it
+     * always emits these regardless. Guarding core.h's copy on _WIN32
+     * there wouldn't help: both headers land in the *same* translation
+     * unit (e.g. salam_mod_hello.c), so whichever comes first "wins" the
+     * SALAM_RT_STR_DEFINED include-guard and the other's copy is already
+     * suppressed by it - meaning the fix has to guarantee *this* file
+     * claims the guard before core.h ever gets a chance to, on _WIN32,
+     * without actually declaring anything (the real prototypes are already
+     * visible via <windows.h> by then). Every module's header includes
+     * core.h in the same relative position, so whichever one is textually
+     * first in the .c file still defines the guard correctly either way.
      */
-    if (cg->is_gui_mode) sb_puts(h, "#ifndef _WIN32\n");
+    if (cg->is_gui_mode) sb_puts(h, "#ifdef _WIN32\n#define SALAM_RT_STR_DEFINED\n#endif\n");
     sb_puts(h, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n"
                "extern uint64_t strlen(const char* s);\n"
                "extern int32_t strcmp(const char* a, const char* b);\n"
@@ -437,7 +451,6 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "extern int64_t strtol(const char* s, void* endptr, int32_t base);\n"
                "extern double strtod(const char* s, void* endptr);\n"
                "#endif\n");
-    if (cg->is_gui_mode) sb_puts(h, "#endif\n");
     sb_puts(h, "#ifndef SALAM_RT_STR2_DEFINED\n#define SALAM_RT_STR2_DEFINED\n"
                "extern const char* salam_strcat(const char* a, const char* b);\n"
                "extern const char* salam_char_from_code(int32_t c);\n"

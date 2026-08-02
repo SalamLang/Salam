@@ -349,7 +349,7 @@ if want cross; then
             exp="$(pick_expect "../tests/$lang/cross/$name")"
             [ -f "$exp" ] || continue
             for pair in x86_64-linux-musl: aarch64-linux-musl:qemu-aarch64-static \
-                i686-linux-musl: arm-linux-musleabihf:qemu-arm-static \
+                i686-linux-musl:qemu-i386-static arm-linux-musleabihf:qemu-arm-static \
                 x86_64-w64-windows-gnu:wine; do
                 target="${pair%%:*}"
                 runner="${pair#*:}"

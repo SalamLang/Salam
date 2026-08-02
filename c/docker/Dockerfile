@@ -10,11 +10,24 @@ FROM alpine:${ALPINE_VERSION} AS toolchain
 ARG LLVM_VERSION
 SHELL ["/bin/ash", "-o", "pipefail", "-c"]
 
-RUN for i in 1 2 3 4 5; do \
-        apk add --no-cache \
+# --mount=type=cache keeps downloaded .apk packages in a BuildKit cache
+# mount instead of the image's own layers: docker/build-push-action's
+# cache-to: type=gha (see compiler-build-test.yml) persists this mount's
+# contents as part of the exported build cache, independent of the layer
+# chain above it. That matters because ALPINE_VERSION=edge is a rolling
+# tag - a new base-image digest invalidates every ordinary layer below it
+# (including this one), but the mount survives that invalidation, so a
+# base-image bump costs a re-install-from-local-cache, not a re-download
+# of ~every package (wine alone is ~400MB). This mount only ever holds
+# package archives, never the compiler source (see the `builder` stage
+# below, and compiler-build-test.yml's runtime bind-mount of the repo).
+RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
+    for i in 1 2 3 4 5; do \
+        apk add -U --cache-dir=/var/cache/apk \
             build-base \
             make \
             musl-dev \
+            ccache \
             tcc \
             tcc-libs-static \
             clang${LLVM_VERSION} \
@@ -65,7 +78,8 @@ RUN addgroup -g "${SALAM_GID}" salam \
 WORKDIR /app
 
 FROM toolchain AS dev
-RUN apk add --no-cache entr
+RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
+    apk add -U --cache-dir=/var/cache/apk entr
 RUN chown -R salam:salam /app \
     && mkdir -p /app/build \
     && chmod 1777 /app/build

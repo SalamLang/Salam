@@ -31,7 +31,10 @@ if [ -z "$SRC" ]; then
         /etc/ssl/ca-bundle.pem \
         /etc/ssl/cert.pem \
         /usr/ssl/certs/ca-bundle.crt; do
-        if [ -f "$p" ]; then SRC="$p"; break; fi
+        if [ -f "$p" ]; then
+            SRC="$p"
+            break
+        fi
     done
 fi
 
@@ -82,7 +85,7 @@ HDR
     awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/' "$SRC"
     echo '"""'
     echo 'end'
-} > "$OUT"
+} >"$OUT"
 
 echo "gen-tls-roots: wrote $OUT" >&2
 echo "gen-tls-roots: now point _embedded_roots_pem() in roots.salam at" >&2

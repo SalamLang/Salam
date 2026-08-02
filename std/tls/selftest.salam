@@ -1270,6 +1270,164 @@ func _selftest_sig():
     _ck(!_ecdsa_p256_verify(d256.p, 32, r.p, s.p, pubkey.p, pubkey.len), "ecdsa rejects off-curve public key")
 end
 
+// ---------------------------------------------------------------- X.509
+
+func _selftest_x509():
+    mut rootder := _hexbuf(TC_ROOT)
+    defer _buf_free(rootder)
+    mut leafder := _hexbuf(TC_LEAF)
+    defer _buf_free(leafder)
+    mut expder := _hexbuf(TC_EXPIRED)
+    defer _buf_free(expder)
+    mut pssder := _hexbuf(TC_PSS)
+    defer _buf_free(pssder)
+    mut ecrootder := _hexbuf(TC_EC_ROOT)
+    defer _buf_free(ecrootder)
+
+    // --- structural parse
+    root := _cert_parse(rootder.p, rootder.len)
+    _ck(root.ok, "x509 parses RSA root")
+    _ck(root.has_basic_constraints && root.is_ca, "x509 root is a CA")
+    _ck(root.has_path_len && root.path_len == 1, "x509 root pathlen 1")
+    _ck(root.pk_alg == PK_RSA, "x509 root key is RSA")
+    _ck(root.rsa_n.len == 256, "x509 root modulus is 2048 bits")
+    _ck(root.sig_alg == SIG_RSA_PKCS1_SHA256, "x509 root sigalg pkcs1-sha256")
+    _ck(root.has_key_usage && (root.key_usage & KU_KEY_CERT_SIGN) != 0, "x509 root has keyCertSign")
+
+    leaf := _cert_parse(leafder.p, leafder.len)
+    _ck(leaf.ok, "x509 parses EC leaf")
+    _ck(leaf.pk_alg == PK_EC_P256, "x509 leaf key is P-256")
+    _ck(leaf.ec_point.len == 65, "x509 leaf point is uncompressed")
+    _ck(leaf.has_basic_constraints && !leaf.is_ca, "x509 leaf is not a CA")
+    _ck(leaf.has_san, "x509 leaf has SAN")
+    _ck(leaf.has_eku && leaf.eku_server_auth, "x509 leaf has serverAuth EKU")
+    _ck(leaf.subject_cn == "example.com", "x509 leaf CN parsed")
+    _ck(leaf.serial.len == 5, "x509 leaf serial is 5 bytes")
+
+    // issuer of the leaf must be byte-identical to the root's subject, which is
+    // what chain building keys on
+    _ck(_cteqrd(leaf.issuer, root.subject), "x509 leaf issuer matches root subject")
+
+    pss := _cert_parse(pssder.p, pssder.len)
+    _ck(pss.ok, "x509 parses PSS-signed cert")
+    _ck(pss.sig_alg == SIG_RSA_PSS_SHA256, "x509 reads PSS digest from parameters")
+
+    ecroot := _cert_parse(ecrootder.p, ecrootder.len)
+    _ck(ecroot.ok, "x509 parses ECDSA-signed root")
+    _ck(ecroot.sig_alg == SIG_ECDSA_SHA256, "x509 ecdsa-sha256 sigalg")
+
+    // --- validity window
+    exp := _cert_parse(expder.p, expder.len)
+    _ck(exp.ok, "x509 parses expired cert")
+    _ck(exp.not_before == 20150101000000 as i64, "x509 notBefore parsed")
+    _ck(exp.not_after == 20160101000000 as i64, "x509 notAfter parsed")
+    _ck(leaf.not_before < leaf.not_after, "x509 validity ordered")
+    _ck(exp.not_after < leaf.not_before, "x509 expired cert precedes valid one")
+
+    // --- hostname matching (RFC 6125)
+    _ck(_cert_match_host(leaf, "example.com"), "host exact match")
+    _ck(_cert_match_host(leaf, "EXAMPLE.COM"), "host match is case-insensitive")
+    _ck(_cert_match_host(leaf, "www.example.com"), "wildcard matches one label")
+    _ck(!_cert_match_host(leaf, "a.b.example.com"), "wildcard does not span dots")
+    _ck(!_cert_match_host(leaf, "example.org"), "host rejects different domain")
+    _ck(!_cert_match_host(leaf, "notexample.com"), "host rejects suffix confusion")
+    _ck(!_cert_match_host(leaf, "example.com.evil.net"), "host rejects trailing domain")
+    _ck(!_cert_match_host(leaf, ""), "host rejects empty")
+    // CN must never be consulted: this cert's CN is example.com but the SAN is
+    // what decides, and a name only in the CN must not match
+    _ck(!_cert_match_host(exp, "example.com"), "CN is not used for matching")
+
+    // wildcard rules in isolation
+    _ck(_host_match("*.example.com", "a.example.com"), "wildcard leftmost label")
+    _ck(!_host_match("*.com", "example.com"), "wildcard needs two labels after it")
+    _ck(!_host_match("*", "example.com"), "bare wildcard rejected")
+    _ck(!_host_match("w*.example.com", "www.example.com"), "partial-label wildcard rejected")
+    _ck(!_host_match("*w.example.com", "www.example.com"), "suffix-label wildcard rejected")
+    _ck(!_host_match("*.example.com", "example.com"), "wildcard does not match bare domain")
+
+    // --- malformed input must be rejected, not silently reinterpreted
+    _ck(!_cert_parse(leafder.p, leafder.len - 1).ok, "x509 rejects truncated cert")
+    _ck(!_cert_parse(leafder.p, 0).ok, "x509 rejects empty input")
+
+    mut trailing := _newbuf(leafder.len + 1)
+    defer _buf_free(trailing)
+    _putbuf(trailing, leafder)
+    _put8(trailing, 0x00)
+    _ck(!_cert_parse(trailing.p, trailing.len).ok, "x509 rejects trailing bytes")
+
+    // flipping a byte inside the TBS must still parse or fail cleanly, never
+    // crash; flipping the outer SEQUENCE tag must fail
+    mut badtag := _newbuf(leafder.len)
+    defer _buf_free(badtag)
+    _putbuf(badtag, leafder)
+    _bufset(badtag, 0, 0x31)
+    _ck(!_cert_parse(badtag.p, badtag.len).ok, "x509 rejects wrong outer tag")
+
+    // a non-minimal length encoding is valid BER but not DER
+    mut ber := _newbuf(8)
+    defer _buf_free(ber)
+    _put8(ber, 0x30)
+    _put8(ber, 0x81)
+    _put8(ber, 0x01)
+    _put8(ber, 0x00)
+    mut br := _readerof(ber)
+    _der(br)
+    _ck(br.bad, "der rejects non-minimal length")
+
+    // indefinite length is BER only
+    mut indef := _newbuf(8)
+    defer _buf_free(indef)
+    _put8(indef, 0x30)
+    _put8(indef, 0x80)
+    _put8(indef, 0x00)
+    _put8(indef, 0x00)
+    mut ir := _readerof(indef)
+    _der(ir)
+    _ck(ir.bad, "der rejects indefinite length")
+
+    // an INTEGER with redundant leading zero
+    mut padint := _newbuf(8)
+    defer _buf_free(padint)
+    _put8(padint, 0x02)
+    _put8(padint, 0x02)
+    _put8(padint, 0x00)
+    _put8(padint, 0x01)
+    mut pr := _readerof(padint)
+    _der_int(pr)
+    _ck(pr.bad, "der rejects redundant integer padding")
+
+    // a well-formed INTEGER keeps its sign byte stripped
+    mut okint := _newbuf(8)
+    defer _buf_free(okint)
+    _put8(okint, 0x02)
+    _put8(okint, 0x02)
+    _put8(okint, 0x00)
+    _put8(okint, 0x80)
+    mut orr2 := _readerof(okint)
+    iv := _der_int(orr2)
+    _ck(!orr2.bad && iv.len == 1 && _rdat(iv, 0) == 0x80, "der strips integer sign byte")
+
+    // a negative INTEGER where an unsigned value is required
+    mut negint := _newbuf(8)
+    defer _buf_free(negint)
+    _put8(negint, 0x02)
+    _put8(negint, 0x01)
+    _put8(negint, 0xFF)
+    mut nr := _readerof(negint)
+    _der_uint(nr)
+    _ck(nr.bad, "der rejects negative unsigned integer")
+
+    // length running past the end of the buffer
+    mut over := _newbuf(8)
+    defer _buf_free(over)
+    _put8(over, 0x30)
+    _put8(over, 0x7F)
+    _put8(over, 0x00)
+    mut ovr := _readerof(over)
+    _der(ovr)
+    _ck(ovr.bad, "der rejects length past end of buffer")
+end
+
 @en "SelfTest"
 @fa "خودآزمایی"
 @ar "اختبار ذاتی"
@@ -1287,6 +1445,7 @@ pub func SelfTest(): int:
     _selftest_x25519()
     _selftest_p256()
     _selftest_sig()
+    _selftest_x509()
     if _st_fails == 0:
         println "tls self-test:", _st_total, "checks passed"
     else:

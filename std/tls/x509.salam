@@ -1,0 +1,634 @@
+package tls
+
+// X.509 v3 certificate parsing (RFC 5280).
+//
+// Parsing only; chain building and trust decisions live in verify.salam. The
+// split matters: everything here is "what does this blob say", and nothing here
+// should ever be read as "and therefore it is trustworthy".
+//
+// Fields are kept as Readers pointing into the caller's certificate buffer
+// rather than copied out. That keeps a Cert cheap and, more importantly, keeps
+// `tbs` byte-identical to what the issuer actually signed. Re-encoding a parsed
+// structure and verifying the re-encoding is a classic way to accept a
+// certificate whose signature covers different bytes than the ones interpreted.
+// The consequence is that a Cert is only valid while its backing buffer lives.
+
+// public key algorithms
+const PK_UNKNOWN := 0
+const PK_RSA := 1
+const PK_EC_P256 := 2
+
+// signature algorithms
+const SIG_UNKNOWN := 0
+const SIG_RSA_PKCS1_SHA256 := 1
+const SIG_RSA_PKCS1_SHA384 := 2
+const SIG_RSA_PKCS1_SHA512 := 3
+const SIG_RSA_PSS_SHA256 := 4
+const SIG_RSA_PSS_SHA384 := 5
+const SIG_ECDSA_SHA256 := 6
+const SIG_ECDSA_SHA384 := 7
+
+// key usage bits (RFC 5280 4.2.1.3), bit 0 is the most significant
+const KU_DIGITAL_SIGNATURE := 0x0080
+const KU_KEY_ENCIPHERMENT := 0x0020
+const KU_KEY_CERT_SIGN := 0x0004
+
+const OID_RSA_ENCRYPTION := "2a864886f70d010101"
+const OID_RSASSA_PSS := "2a864886f70d01010a"
+const OID_SHA256_RSA := "2a864886f70d01010b"
+const OID_SHA384_RSA := "2a864886f70d01010c"
+const OID_SHA512_RSA := "2a864886f70d01010d"
+const OID_EC_PUBLICKEY := "2a8648ce3d0201"
+const OID_PRIME256V1 := "2a8648ce3d030107"
+const OID_ECDSA_SHA256 := "2a8648ce3d040302"
+const OID_ECDSA_SHA384 := "2a8648ce3d040303"
+const OID_SHA256 := "608648016503040201"
+const OID_SHA384 := "608648016503040202"
+const OID_CN := "550403"
+const OID_EXT_SAN := "551d11"
+const OID_EXT_BASIC_CONSTRAINTS := "551d13"
+const OID_EXT_KEY_USAGE := "551d0f"
+const OID_EXT_EXT_KEY_USAGE := "551d25"
+const OID_EKU_SERVER_AUTH := "2b06010505070301"
+
+struct Cert:
+    // the bytes the issuer signed, exactly as received
+    pub tbs: Reader = Reader {}
+    pub serial: Reader = Reader {}
+    // full DER of the Name, for byte-exact issuer/subject chaining
+    pub issuer: Reader = Reader {}
+    pub subject: Reader = Reader {}
+    pub subject_cn: str = ""
+
+    pub pk_alg: int = 0
+    pub rsa_n: Reader = Reader {}
+    pub rsa_e: Reader = Reader {}
+    pub ec_point: Reader = Reader {}
+
+    pub sig_alg: int = 0
+    pub sig: Reader = Reader {}
+
+    // validity as YYYYMMDDHHMMSS packed into an i64, which compares correctly
+    // without any calendar arithmetic
+    pub not_before: i64 = 0
+    pub not_after: i64 = 0
+
+    pub has_basic_constraints: bool = false
+    pub is_ca: bool = false
+    pub has_path_len: bool = false
+    pub path_len: int = 0
+    pub has_key_usage: bool = false
+    pub key_usage: int = 0
+    pub has_eku: bool = false
+    pub eku_server_auth: bool = false
+    // contents of the SubjectAltName extension, walked by _cert_match_host
+    pub san: Reader = Reader {}
+    pub has_san: bool = false
+
+    pub ok: bool = false
+end
+
+func _sig_alg_from_oid(o: Reader, params: Reader): int:
+    if _oid_is(o, OID_SHA256_RSA):
+        ret SIG_RSA_PKCS1_SHA256
+    end
+    if _oid_is(o, OID_SHA384_RSA):
+        ret SIG_RSA_PKCS1_SHA384
+    end
+    if _oid_is(o, OID_SHA512_RSA):
+        ret SIG_RSA_PKCS1_SHA512
+    end
+    if _oid_is(o, OID_ECDSA_SHA256):
+        ret SIG_ECDSA_SHA256
+    end
+    if _oid_is(o, OID_ECDSA_SHA384):
+        ret SIG_ECDSA_SHA384
+    end
+    if _oid_is(o, OID_RSASSA_PSS):
+        ret _pss_params_digest(params)
+    end
+    ret SIG_UNKNOWN
+end
+
+// RSASSA-PSS carries its digest in the parameters rather than the algorithm
+// OID, so the parameters must actually be read. Defaulting to SHA-1 (the ASN.1
+// default) is refused outright.
+func _pss_params_digest(params: Reader): int:
+    mut p := params
+    mut s := _der_seq(p)
+    if p.bad:
+        ret SIG_UNKNOWN
+    end
+    if !_der_is(s, ASN1_CTX0):
+        ret SIG_UNKNOWN
+    end
+    t := _der_tag(s, ASN1_CTX0)
+    if !t.ok:
+        ret SIG_UNKNOWN
+    end
+    mut inner := t.body
+    mut hp := Reader {}
+    o := _der_algid(inner, hp)
+    if inner.bad:
+        ret SIG_UNKNOWN
+    end
+    if _oid_is(o, OID_SHA256):
+        ret SIG_RSA_PSS_SHA256
+    end
+    if _oid_is(o, OID_SHA384):
+        ret SIG_RSA_PSS_SHA384
+    end
+    ret SIG_UNKNOWN
+end
+
+func _sig_hash(alg: int): int:
+    if alg == SIG_RSA_PKCS1_SHA384 || alg == SIG_RSA_PSS_SHA384 || alg == SIG_ECDSA_SHA384:
+        ret HASH_SHA384
+    end
+    ret HASH_SHA256
+end
+
+// Two ASCII digits at offset i.
+func _t2(r: Reader, i: int): int:
+    a := _rdat(r, i)
+    b := _rdat(r, i + 1)
+    if a < 48 || a > 57 || b < 48 || b > 57:
+        ret 0 - 1
+    end
+    ret (a - 48) * 10 + (b - 48)
+end
+
+// UTCTime is YYMMDDHHMMSSZ with the RFC 5280 sliding window (00-49 means
+// 20xx, 50-99 means 19xx); GeneralizedTime is YYYYMMDDHHMMSSZ. Both become
+// YYYYMMDDHHMMSS as an integer so comparison is a plain <.
+func _parse_time(t: Tlv): i64:
+    r := t.body
+    mut year := 0
+    mut off := 0
+    if t.tag == ASN1_UTCTIME:
+        if r.len != 13 || _rdat(r, 12) != 90:
+            ret 0
+        end
+        yy := _t2(r, 0)
+        if yy < 0:
+            ret 0
+        end
+        if yy < 50:
+            year = 2000 + yy
+        else:
+            year = 1900 + yy
+        end
+        off = 2
+    else if t.tag == ASN1_GENERALIZEDTIME:
+        if r.len != 15 || _rdat(r, 14) != 90:
+            ret 0
+        end
+        hi := _t2(r, 0)
+        lo := _t2(r, 2)
+        if hi < 0 || lo < 0:
+            ret 0
+        end
+        year = hi * 100 + lo
+        off = 4
+    else:
+        ret 0
+    end
+    mon := _t2(r, off)
+    day := _t2(r, off + 2)
+    hh := _t2(r, off + 4)
+    mm := _t2(r, off + 6)
+    ss := _t2(r, off + 8)
+    if mon < 1 || mon > 12 || day < 1 || day > 31 || hh > 23 || mm > 59 || ss > 60:
+        ret 0
+    end
+    mut v := year as i64
+    v = v * 100 + (mon as i64)
+    v = v * 100 + (day as i64)
+    v = v * 100 + (hh as i64)
+    v = v * 100 + (mm as i64)
+    v = v * 100 + (ss as i64)
+    ret v
+end
+
+// Pull the last CN out of a Name. Only used for diagnostics: hostname matching
+// goes through SubjectAltName, because CN-based matching is what RFC 6125
+// deprecated and what a number of name-confusion bugs relied on.
+func _name_cn(name: Reader): str:
+    mut n := name
+    mut seq := _der_seq(n)
+    if n.bad:
+        ret ""
+    end
+    mut out := ""
+    until _rdleft(seq) > 0 && !seq.bad:
+        rdn := _der_tag(seq, ASN1_SET)
+        if !rdn.ok:
+            ret out
+        end
+        mut set := rdn.body
+        until _rdleft(set) > 0 && !set.bad:
+            atv := _der_tag(set, ASN1_SEQUENCE)
+            if !atv.ok:
+                ret out
+            end
+            mut a := atv.body
+            o := _der_oid(a)
+            if a.bad:
+                ret out
+            end
+            v := _der(a)
+            if !v.ok:
+                ret out
+            end
+            if _oid_is(o, OID_CN):
+                out = _rd_to_str(v.body)
+            end
+        end
+    end
+    ret out
+end
+
+func _parse_spki(spki: Reader, c &: Cert): bool:
+    mut s := spki
+    mut inner := _der_seq(s)
+    if s.bad:
+        ret false
+    end
+    mut params := Reader {}
+    o := _der_algid(inner, params)
+    if inner.bad:
+        ret false
+    end
+    key := _der_bitstring(inner, false)
+    if inner.bad:
+        ret false
+    end
+    if _oid_is(o, OID_RSA_ENCRYPTION):
+        // RSAPublicKey ::= SEQUENCE { modulus INTEGER, publicExponent INTEGER }
+        mut k := key
+        mut ks := _der_seq(k)
+        if k.bad:
+            ret false
+        end
+        c.rsa_n = _der_uint(ks)
+        c.rsa_e = _der_uint(ks)
+        if ks.bad || _rdleft(ks) != 0:
+            ret false
+        end
+        if c.rsa_n.len < 128:
+            // under 1024 bits; refuse rather than verify something forgeable
+            ret false
+        end
+        c.pk_alg = PK_RSA
+        ret true
+    end
+    if _oid_is(o, OID_EC_PUBLICKEY):
+        mut p := params
+        curve := _der_oid(p)
+        if p.bad:
+            ret false
+        end
+        if !_oid_is(curve, OID_PRIME256V1):
+            ret false
+        end
+        if key.len != 65 || _rdat(key, 0) != 0x04:
+            ret false
+        end
+        c.ec_point = key
+        c.pk_alg = PK_EC_P256
+        ret true
+    end
+    ret false
+end
+
+func _parse_extensions(exts: Reader, c &: Cert): bool:
+    mut e := exts
+    mut seq := _der_seq(e)
+    if e.bad:
+        ret false
+    end
+    until _rdleft(seq) > 0 && !seq.bad:
+        ext := _der_tag(seq, ASN1_SEQUENCE)
+        if !ext.ok:
+            ret false
+        end
+        mut x := ext.body
+        o := _der_oid(x)
+        if x.bad:
+            ret false
+        end
+        mut critical := false
+        if _der_is(x, ASN1_BOOLEAN):
+            b := _der_tag(x, ASN1_BOOLEAN)
+            if !b.ok || b.body.len != 1:
+                ret false
+            end
+            // DER booleans are 0x00 or 0xFF, nothing else
+            bv := _rdat(b.body, 0)
+            if bv != 0x00 && bv != 0xFF:
+                ret false
+            end
+            critical = bv != 0
+        end
+        val := _der_tag(x, ASN1_OCTETSTRING)
+        if !val.ok:
+            ret false
+        end
+        mut v := val.body
+
+        if _oid_is(o, OID_EXT_BASIC_CONSTRAINTS):
+            mut bs := _der_seq(v)
+            if v.bad:
+                ret false
+            end
+            c.has_basic_constraints = true
+            if _der_is(bs, ASN1_BOOLEAN):
+                b := _der_tag(bs, ASN1_BOOLEAN)
+                if !b.ok || b.body.len != 1:
+                    ret false
+                end
+                c.is_ca = _rdat(b.body, 0) != 0
+            end
+            if _der_is(bs, ASN1_INTEGER):
+                pl := _der_uint(bs)
+                if bs.bad:
+                    ret false
+                end
+                mut n := 0
+                repeat pl.len with i:
+                    n = (n << 8) | _rdat(pl, i)
+                end
+                c.has_path_len = true
+                c.path_len = n
+            end
+        else if _oid_is(o, OID_EXT_KEY_USAGE):
+            bits := _der_bitstring(v, true)
+            if v.bad:
+                ret false
+            end
+            mut ku := 0
+            if bits.len > 0:
+                ku = _rdat(bits, 0) << 8
+            end
+            if bits.len > 1:
+                ku = ku | _rdat(bits, 1)
+            end
+            c.has_key_usage = true
+            c.key_usage = ku >> 8
+        else if _oid_is(o, OID_EXT_SAN):
+            c.san = v
+            c.has_san = true
+        else if _oid_is(o, OID_EXT_EXT_KEY_USAGE):
+            mut es := _der_seq(v)
+            if v.bad:
+                ret false
+            end
+            c.has_eku = true
+            until _rdleft(es) > 0 && !es.bad:
+                u := _der_oid(es)
+                if es.bad:
+                    ret false
+                end
+                if _oid_is(u, OID_EKU_SERVER_AUTH):
+                    c.eku_server_auth = true
+                end
+            end
+        else:
+            // An unrecognised extension marked critical must not be ignored:
+            // RFC 5280 requires rejecting the certificate outright, since the
+            // issuer said it changes the meaning of what we just parsed.
+            if critical:
+                ret false
+            end
+        end
+    end
+    ret true
+end
+
+// Parse a DER certificate. Returns a Cert whose `ok` reports success; the
+// Readers inside borrow from `p`, which must outlive the Cert.
+func _cert_parse(p: void*, n: int): Cert:
+    mut c := Cert {}
+    mut top := _newreader(p, n)
+    mut outer := _der_seq(top)
+    if top.bad:
+        ret c
+    end
+    // Trailing bytes after the certificate are not allowed: they would let the
+    // same buffer be read two different ways.
+    if _rdleft(top) != 0:
+        ret c
+    end
+
+    tbs := _der_tag(outer, ASN1_SEQUENCE)
+    if !tbs.ok:
+        ret c
+    end
+    c.tbs = tbs.full
+    mut t := tbs.body
+
+    // version [0] EXPLICIT, default v1
+    mut version := 1
+    if _der_is(t, ASN1_CTX0):
+        vt := _der_tag(t, ASN1_CTX0)
+        if !vt.ok:
+            ret c
+        end
+        mut vb := vt.body
+        vi := _der_uint(vb)
+        if vb.bad || vi.len != 1:
+            ret c
+        end
+        version = _rdat(vi, 0) + 1
+    end
+    if version != 3:
+        // v1/v2 certificates carry no extensions, so no basicConstraints and
+        // no SAN. Nothing on the modern web should present one.
+        ret c
+    end
+
+    c.serial = _der_uint(t)
+    if t.bad:
+        ret c
+    end
+
+    mut inner_params := Reader {}
+    inner_sig_oid := _der_algid(t, inner_params)
+    if t.bad:
+        ret c
+    end
+    inner_alg := _sig_alg_from_oid(inner_sig_oid, inner_params)
+
+    issuer := _der_tag(t, ASN1_SEQUENCE)
+    if !issuer.ok:
+        ret c
+    end
+    c.issuer = issuer.full
+
+    mut validity := _der_seq(t)
+    if t.bad:
+        ret c
+    end
+    nb := _der(validity)
+    na := _der(validity)
+    if !nb.ok || !na.ok || _rdleft(validity) != 0:
+        ret c
+    end
+    c.not_before = _parse_time(nb)
+    c.not_after = _parse_time(na)
+    if c.not_before == 0 || c.not_after == 0:
+        ret c
+    end
+
+    subject := _der_tag(t, ASN1_SEQUENCE)
+    if !subject.ok:
+        ret c
+    end
+    c.subject = subject.full
+    c.subject_cn = _name_cn(subject.full)
+
+    spki := _der_tag(t, ASN1_SEQUENCE)
+    if !spki.ok:
+        ret c
+    end
+    if !_parse_spki(spki.full, c):
+        ret c
+    end
+
+    // issuerUniqueID [1] / subjectUniqueID [2] are v2 leftovers; skip them
+    if _der_is(t, ASN1_CTX1):
+        _der_skip(t)
+    end
+    if _der_is(t, ASN1_CTX2):
+        _der_skip(t)
+    end
+    if _der_is(t, ASN1_CTX3):
+        et := _der_tag(t, ASN1_CTX3)
+        if !et.ok:
+            ret c
+        end
+        if !_parse_extensions(et.body, c):
+            ret c
+        end
+    end
+    if t.bad || _rdleft(t) != 0:
+        ret c
+    end
+
+    mut outer_params := Reader {}
+    outer_oid := _der_algid(outer, outer_params)
+    if outer.bad:
+        ret c
+    end
+    c.sig_alg = _sig_alg_from_oid(outer_oid, outer_params)
+    if c.sig_alg == SIG_UNKNOWN:
+        ret c
+    end
+    // RFC 5280 4.1.1.2: the inner and outer algorithm identifiers must agree.
+    // If they can differ, an attacker picks which one the verifier honours.
+    if inner_alg != c.sig_alg:
+        ret c
+    end
+
+    c.sig = _der_bitstring(outer, false)
+    if outer.bad || _rdleft(outer) != 0:
+        ret c
+    end
+
+    c.ok = true
+    ret c
+end
+
+// ---------------------------------------------------------------- hostname
+
+// Case-insensitive ASCII compare. Host names are ASCII here; a caller handing
+// in a Unicode name is expected to have already applied IDNA.
+func _ascii_eqfold(a: str, b: str): bool:
+    if a.len() != b.len():
+        ret false
+    end
+    ap := a as void*
+    bp := b as void*
+    repeat a.len() with i:
+        mut x := _bget(ap, i)
+        mut y := _bget(bp, i)
+        if x >= 65 && x <= 90:
+            x += 32
+        end
+        if y >= 65 && y <= 90:
+            y += 32
+        end
+        if x != y:
+            ret false
+        end
+    end
+    ret true
+end
+
+// RFC 6125 wildcard matching, deliberately restrictive:
+//   * the wildcard must be the entire leftmost label ("*.example.com"), so
+//     "w*.example.com" and "*w.example.com" do not match;
+//   * it matches exactly one label, never a dot;
+//   * it never matches a bare "*" or a two-label name like "*.com".
+func _host_match(pattern: str, host: str): bool:
+    if pattern.len() == 0 || host.len() == 0:
+        ret false
+    end
+    if pattern.substr(0, 1) != "*":
+        ret _ascii_eqfold(pattern, host)
+    end
+    if pattern.len() < 3 || pattern.substr(1, 1) != ".":
+        ret false
+    end
+    suffix := pattern.substr(1, pattern.len() - 1)
+    // the remainder must still contain at least two labels
+    mut dots := 0
+    repeat suffix.len() with i:
+        if suffix.substr(i, 1) == ".":
+            dots += 1
+        end
+    end
+    if dots < 2:
+        ret false
+    end
+    dot := host.find(".")
+    if dot < 0:
+        ret false
+    end
+    // the wildcard covers exactly the first label of the host
+    rest := host.substr(dot, host.len() - dot)
+    if rest.len() != suffix.len():
+        ret false
+    end
+    ret _ascii_eqfold(suffix, rest)
+end
+
+// Match `host` against the certificate's SubjectAltName dNSName entries.
+// CN is never consulted: RFC 6125 deprecated CN matching, and honouring it
+// lets a certificate assert a name its issuer never placed in a SAN.
+func _cert_match_host(c: Cert, host: str): bool:
+    if !c.has_san:
+        ret false
+    end
+    mut s := c.san
+    mut seq := _der_seq(s)
+    if s.bad:
+        ret false
+    end
+    until _rdleft(seq) > 0 && !seq.bad:
+        t := _der(seq)
+        if !t.ok:
+            ret false
+        end
+        // dNSName is [2] IMPLICIT IA5String -> primitive context tag 0x82
+        if t.tag == 0x82:
+            name := _rd_to_str(t.body)
+            if name.len() > 0:
+                if _host_match(name, host):
+                    ret true
+                end
+            end
+        end
+    end
+    ret false
+end

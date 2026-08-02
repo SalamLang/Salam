@@ -715,13 +715,11 @@ static void hdr_aliases(cg_t *cg, ast_node_t *program, sb_t *h)
 static bool is_wellknown_libc_name(const char *name)
 {
     static const char *const names[] = {
-        "malloc",        "realloc",       "free",      "calloc",
-        "memset",        "memcpy",        "memmove",   "memcmp",
-        "strlen",        "strcmp",        "strncmp",   "strcpy",
-        "strncpy",       "strcat",        "strncat",   "strstr",
-        "strchr",        "strrchr",       "strtol",    "strtod",
-        "atoi",          "atof",          "FindFirstFileA", "FindNextFileA",
-        "FindClose",
+        "malloc",  "realloc", "free",           "calloc",        "memset",
+        "memcpy",  "memmove", "memcmp",         "strlen",        "strcmp",
+        "strncmp", "strcpy",  "strncpy",        "strcat",        "strncat",
+        "strstr",  "strchr",  "strrchr",        "strtol",        "strtod",
+        "atoi",    "atof",    "FindFirstFileA", "FindNextFileA", "FindClose",
     };
     size_t i = 0;
     for (; i < sizeof(names) / sizeof(names[0]); i++)

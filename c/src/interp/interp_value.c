@@ -712,30 +712,6 @@ int_ty_t int_ty_from_typestr(const char *ts)
     }
 }
 
-int_ty_t int_ty_from_ptr_elem(ptr_elem_t e)
-{
-    switch (e) {
-    case PTR_I8:
-        return ITY_I8;
-    case PTR_U8:
-        return ITY_U8;
-    case PTR_I16:
-        return ITY_I16;
-    case PTR_U16:
-        return ITY_U16;
-    case PTR_I32:
-        return ITY_I32;
-    case PTR_U32:
-        return ITY_U32;
-    case PTR_I64:
-        return ITY_I64;
-    case PTR_U64:
-        return ITY_U64;
-    default:
-        return ITY_NONE;
-    }
-}
-
 /*
  * Common type of a binary operation (SALAM-TYPES.md 15): same signedness
  * picks the higher rank. Mixed signedness is rejected by semantic analysis,

@@ -1428,6 +1428,119 @@ func _selftest_x509():
     _ck(ovr.bad, "der rejects length past end of buffer")
 end
 
+// ------------------------------------------------------- chain verification
+
+func _mkchain1(a: Buf): Reader[8]:
+    mut c: Reader[8]
+    repeat 8 with i:
+        c[i] = _newreader(null, 0)
+    end
+    c[0] = _readerof(a)
+    ret c
+end
+
+func _selftest_verify():
+    mut rootder := _hexbuf(TC_ROOT)
+    defer _buf_free(rootder)
+    mut leafder := _hexbuf(TC_LEAF)
+    defer _buf_free(leafder)
+    mut expder := _hexbuf(TC_EXPIRED)
+    defer _buf_free(expder)
+    mut pssder := _hexbuf(TC_PSS)
+    defer _buf_free(pssder)
+    mut ecrootder := _hexbuf(TC_EC_ROOT)
+    defer _buf_free(ecrootder)
+
+    // Direct signature check: the leaf really is signed by the root.
+    root := _cert_parse(rootder.p, rootder.len)
+    leaf := _cert_parse(leafder.p, leafder.len)
+    pss := _cert_parse(pssder.p, pssder.len)
+    ecroot := _cert_parse(ecrootder.p, ecrootder.len)
+    _ck(_cert_signed_by(leaf, root), "chain: leaf signature verifies under root (RSA PKCS#1)")
+    _ck(_cert_signed_by(pss, root), "chain: PSS-signed leaf verifies under root")
+    _ck(_cert_signed_by(root, root), "chain: root is self-signed")
+    _ck(_cert_signed_by(ecroot, ecroot), "chain: EC root self-signature verifies (ECDSA)")
+
+    // Cross-checks that must fail.
+    _ck(!_cert_signed_by(leaf, leaf), "chain: leaf is not signed by itself")
+    _ck(!_cert_signed_by(root, ecroot), "chain: root not signed by unrelated EC root")
+    _ck(!_cert_signed_by(leaf, ecroot), "chain: leaf not signed by unrelated root")
+
+    // A single flipped bit anywhere in the signed body must break the
+    // signature. This is the property the whole PKI rests on.
+    mut tampered := _newbuf(leafder.len)
+    defer _buf_free(tampered)
+    _putbuf(tampered, leafder)
+    // flip a byte inside the SAN extension
+    _bufset(tampered, 300, _bufat(tampered, 300) ^ 0x01)
+    tc := _cert_parse(tampered.p, tampered.len)
+    if tc.ok:
+        _ck(!_cert_signed_by(tc, root), "chain: tampered TBS fails signature")
+    else:
+        _ck(true, "chain: tampered TBS fails to parse")
+    end
+
+    now := 20270601000000 as i64
+
+    // --- full chain verification against a trust store
+    mut roots := _roots_new()
+    defer _roots_free(roots)
+    _roots_add(roots, rootder.p, rootder.len)
+
+    ch := _mkchain1(leafder)
+    _ck(_verify_chain(ch, 1, roots, "example.com", now) == VERR_NONE, "verify: leaf against trusted root")
+    _ck(_verify_chain(ch, 1, roots, "www.example.com", now) == VERR_NONE, "verify: wildcard host")
+
+    // wrong hostname
+    _ck(_verify_chain(ch, 1, roots, "evil.com", now) == VERR_HOSTNAME, "verify: rejects wrong hostname")
+    _ck(_verify_chain(ch, 1, roots, "a.b.example.com", now) == VERR_HOSTNAME, "verify: rejects multi-label wildcard")
+
+    // outside the validity window
+    _ck(_verify_chain(ch, 1, roots, "example.com", 20200101000000 as i64) == VERR_NOT_YET_VALID, "verify: rejects not-yet-valid")
+    _ck(_verify_chain(ch, 1, roots, "example.com", 20400101000000 as i64) == VERR_EXPIRED, "verify: rejects expired leaf")
+
+    // expired certificate with an otherwise valid signature
+    che := _mkchain1(expder)
+    _ck(_verify_chain(che, 1, roots, "old.example.com", now) == VERR_EXPIRED, "verify: rejects expired certificate")
+
+    // EMPTY trust store: the same chain that verified above must now fail.
+    // This is the check that catches a verifier which trusts anything.
+    mut empty := _roots_new()
+    defer _roots_free(empty)
+    _ck(_verify_chain(ch, 1, empty, "example.com", now) == VERR_UNTRUSTED, "verify: rejects when no roots are trusted")
+
+    // A trust store holding an unrelated root must not validate the leaf.
+    mut wrongroots := _roots_new()
+    defer _roots_free(wrongroots)
+    _roots_add(wrongroots, ecrootder.p, ecrootder.len)
+    _ck(_verify_chain(ch, 1, wrongroots, "example.com", now) == VERR_UNTRUSTED, "verify: rejects unrelated trusted root")
+
+    // The leaf is not a CA, so presenting it as its own issuer must fail.
+    mut leafroots := _roots_new()
+    defer _roots_free(leafroots)
+    _roots_add(leafroots, leafder.p, leafder.len)
+    _ck(_verify_chain(ch, 1, leafroots, "example.com", now) != VERR_NONE, "verify: non-CA cannot act as an anchor")
+
+    // Self-signed leaf presented alone, with an empty store: must not be
+    // trusted just because the chain terminates.
+    chr := _mkchain1(rootder)
+    _ck(_verify_chain(chr, 1, empty, "example.com", now) != VERR_NONE, "verify: self-signed root alone is not trusted")
+
+    // A tampered certificate must not verify even with the right root present.
+    if tc.ok:
+        cht := _mkchain1(tampered)
+        _ck(_verify_chain(cht, 1, roots, "example.com", now) != VERR_NONE, "verify: rejects tampered certificate")
+    else:
+        _ck(true, "verify: tampered certificate does not parse")
+    end
+
+    // zero-length chain
+    _ck(_verify_chain(ch, 0, roots, "example.com", now) == VERR_PARSE, "verify: rejects empty chain")
+
+    // reason strings are wired up
+    _ck(_verr_str(VERR_EXPIRED).len() > 0, "verify: error strings present")
+end
+
 @en "SelfTest"
 @fa "خودآزمایی"
 @ar "اختبار ذاتی"
@@ -1446,6 +1559,7 @@ pub func SelfTest(): int:
     _selftest_p256()
     _selftest_sig()
     _selftest_x509()
+    _selftest_verify()
     if _st_fails == 0:
         println "tls self-test:", _st_total, "checks passed"
     else:

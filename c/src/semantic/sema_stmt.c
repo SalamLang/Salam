@@ -562,16 +562,20 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         if (c->kind != TY_BOOL && !type_is_error(c))
             SERR(s, 21, &n->a->span, "if condition must be bool, got '%s'",
                  type_to_string(s->tc, c));
-        if (n->a->kind == AST_LITERAL && n->a->op == TK_KW_FALSE)
-            SERR(s, 68, &n->a->span,
-                 "'if' condition is always false: its body can never run");
-        else if (n->a->kind == AST_LITERAL && n->a->op == TK_KW_TRUE) {
-            if (n->c)
-                SERR(s, 68, &n->a->span,
-                     "'if' condition is always true: the 'else' branch can never run");
-            else
-                SERR(s, 68, &n->a->span,
-                     "'if' condition is always true: remove the redundant 'if'");
+        {
+            bool cv;
+            if (sema_const_bool(s, n->a, &cv)) {
+                if (!cv)
+                    SERR(s, 68, &n->a->span,
+                         "'if' condition is always false: its body can never run");
+                else if (n->c)
+                    SERR(s, 68, &n->a->span,
+                         "'if' condition is always true: the 'else' branch can never "
+                         "run");
+                else
+                    SERR(s, 68, &n->a->span,
+                         "'if' condition is always true: remove the redundant 'if'");
+            }
         }
         if (n->b && n->b->kind == AST_BLOCK && n->b->list.len == 0)
             SERR(s, 60, &n->b->span,
@@ -590,9 +594,12 @@ static void check_stmt(sema_t *s, ast_node_t *n)
         if (c->kind != TY_BOOL && !type_is_error(c))
             SERR(s, 21, &n->a->span, "until condition must be bool, got '%s'",
                  type_to_string(s->tc, c));
-        if (n->a->kind == AST_LITERAL && n->a->op == TK_KW_FALSE)
-            SERR(s, 68, &n->a->span,
-                 "'until' condition is always false: the loop body can never run");
+        {
+            bool cv;
+            if (sema_const_bool(s, n->a, &cv) && !cv)
+                SERR(s, 68, &n->a->span,
+                     "'until' condition is always false: the loop body can never run");
+        }
         s->loop_depth++;
         check_stmt(s, n->b);
         s->loop_depth--;
@@ -604,16 +611,23 @@ static void check_stmt(sema_t *s, ast_node_t *n)
             SERR(s, 63, &n->a->span, "repeat count must be a number, got '%s'",
                  type_to_string(s->tc, c));
         if (!n->c) {
-            if (n->a->kind == AST_LITERAL &&
-                ((n->a->value.kind == TV_INT && n->a->value.as.i == 0) ||
-                 (n->a->value.kind == TV_FLOAT && n->a->value.as.f == 0)))
+            const_val_t cv;
+            bool zero = false, neg = false;
+            if (sema_const_eval(s, n->a, &cv)) {
+                zero = (cv.kind == CV_INT && cv.i == 0) ||
+                       (cv.kind == CV_FLOAT && cv.f == 0);
+                neg = (cv.kind == CV_INT && cv.i < 0) ||
+                      (cv.kind == CV_FLOAT && cv.f < 0);
+            } else if (n->a->kind == AST_UNARY && n->a->op == TK_MINUS && n->a->a &&
+                       n->a->a->kind == AST_LITERAL) {
+                /* `-<lit>` that stayed un-folded (an unsigned or overflowing
+                 * literal) is still a negative count. */
+                neg = true;
+            }
+            if (zero)
                 SERR(s, 68, &n->a->span,
                      "'repeat' count is the constant 0: the loop body can never run");
-            else if ((n->a->kind == AST_UNARY && n->a->op == TK_MINUS && n->a->a &&
-                      n->a->a->kind == AST_LITERAL) ||
-                     (n->a->kind == AST_LITERAL && n->a->value.kind == TV_INT &&
-                      n->a->type_str && n->a->type_str[0] != 'u' &&
-                      (long long)n->a->value.as.i < 0))
+            else if (neg)
                 SERR(s, 68, &n->a->span,
                      "'repeat' count is a negative constant: the loop body can never "
                      "run");

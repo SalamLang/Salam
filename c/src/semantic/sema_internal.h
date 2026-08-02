@@ -135,6 +135,20 @@ type_t *sema_check_expr(sema_t *s, ast_node_t *node);
 
 void sema_fold_expr(sema_t *s, ast_node_t *node);
 
+/* A compile-time value, or CV_NONE when the expression has none. */
+typedef enum { CV_NONE, CV_INT, CV_FLOAT, CV_BOOL } const_val_kind_t;
+
+typedef struct {
+    const_val_kind_t kind;
+    long long i;
+    double f;
+    bool b;
+} const_val_t;
+
+bool sema_const_eval(sema_t *s, ast_node_t *node, const_val_t *out);
+
+bool sema_const_bool(sema_t *s, ast_node_t *node, bool *out);
+
 void sema_check_layout(sema_t *s, ast_node_t *layout, const char *parent);
 
 type_t *sema_check_match(sema_t *s, ast_node_t *n, bool is_expr, type_t *expected);

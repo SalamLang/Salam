@@ -33,16 +33,105 @@ func json_escape(s: str): str:
     ret out
 end
 
+// The header every .salam file in the repository carries. The generated
+// examples file is written from scratch on each run, so it has to be emitted
+// here or the header would be dropped on every rebuild.
+func copyright_header(): str:
+    mut h := "/*\n"
+    h = h.concat(" * Salam Programming Language (2024-2026)\n")
+    h = h.concat(" *\n")
+    h = h.concat(" *   +-------------------+\n")
+    h = h.concat(" *   |     S A L A M     |\n")
+    h = h.concat(" *   +-------------------+\n")
+    h = h.concat(" *\n")
+    h = h.concat(" * Designed by Seyyed Ali Mohammadiyeh and the Salam Team\n")
+    h = h.concat(" * Born from a decade of language design experience (since 2018)\n")
+    h = h.concat(" *\n")
+    h = h.concat(" * Repository: https://github.com/SalamLang/Salam\n")
+    h = h.concat(" *\n")
+    h = h.concat(" */\n\n")
+    ret h
+end
+
+func find_from(s: str, sub: str, start: int): int:
+    if start >= s.len(): ret 0 - 1 end
+    rest := s.substr(start, s.len() - start)
+    k := rest.find(sub)
+    if k < 0: ret 0 - 1 end
+    ret start + k
+end
+
+// Offset of the `//!` directive, skipping any leading whitespace, `//` line
+// comments and (possibly nested) block comments. Examples open with the
+// standard copyright header, so the directive is found wherever it sits
+// rather than being assumed to be the first line. When a file carries no
+// directive this returns the first non-comment character instead, which is
+// where its code body begins.
+func head_offset(s: str): int:
+    n := s.len()
+    mut i := 0
+    until i < n:
+        c := s.substr(i, 1)
+        if c == " " || c == "\t" || c == "\n" || c == "\r":
+            i = i + 1
+            continue
+        end
+        mut nxt := ""
+        if i + 1 < n: nxt = s.substr(i + 1, 1) end
+        if c == "/" && nxt == "/":
+            mut bang := ""
+            if i + 2 < n: bang = s.substr(i + 2, 1) end
+            if bang == "!": ret i end
+            j := find_from(s, "\n", i)
+            if j < 0: ret n end
+            i = j + 1
+            continue
+        end
+        if c == "/" && nxt == "*":
+            mut depth := 1
+            i = i + 2
+            until i < n && depth > 0:
+                c2 := s.substr(i, 1)
+                mut n2 := ""
+                if i + 1 < n: n2 = s.substr(i + 1, 1) end
+                if c2 == "/" && n2 == "*":
+                    depth = depth + 1
+                    i = i + 2
+                else c2 == "*" && n2 == "/":
+                    depth = depth - 1
+                    i = i + 2
+                else:
+                    i = i + 1
+                end
+            end
+            continue
+        end
+        ret i
+    end
+    ret n
+end
+
+func is_directive_at(s: str, off: int): bool:
+    if off + 3 > s.len(): ret false end
+    ret s.substr(off, 3) == "//!"
+end
+
 func first_line(s: str): str:
-    nl := s.find("\n")
-    if nl < 0: ret s end
-    ret s.substr(0, nl)
+    off := head_offset(s)
+    if is_directive_at(s, off) == false: ret "" end
+    rest := s.substr(off, s.len() - off)
+    nl := rest.find("\n")
+    if nl < 0: ret rest end
+    ret rest.substr(0, nl)
 end
 
 func strip_header(s: str): str:
-    nl := s.find("\n")
+    off := head_offset(s)
+    rest := s.substr(off, s.len() - off)
+    if is_directive_at(s, off) == false: ret rest end
+    nl := rest.find("\n")
     if nl < 0: ret "" end
-    ret s.substr(nl + 1, s.len() - nl - 1)
+    ret rest.substr(nl + 1, rest.len() - nl - 1)
 end
 
 func field_value(header: str, key_en: str, key_fa: str, key_ar: str): str:
@@ -152,7 +241,8 @@ func main:
     end
     examples_lit = examples_lit.concat("]\n\n")
 
-    mut out := "package examples_data\n\n"
+    mut out := copyright_header()
+    out = out.concat("package examples_data\n\n")
     out = out.concat("pub const EXAMPLE_COUNT := ").concat(conv.FormatInt(n as i64)).concat("\n\n")
     out = out.concat(examples_lit)
     out = out.concat("pub struct Example:\n")

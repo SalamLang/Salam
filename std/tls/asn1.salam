@@ -152,9 +152,9 @@ func _der_seq(r &: Reader): Reader:
     ret t.body
 end
 
-// An INTEGER's contents, with DER's padding rules enforced and any single
-// leading zero (the sign byte on a positive value) stripped.
-func _der_int(r &: Reader): Reader:
+// An INTEGER's contents with DER's padding rules enforced, returned WITHOUT
+// stripping. The sign lives in the top bit of the first byte here.
+func _der_int_raw(r &: Reader): Reader:
     t := _der_tag(r, ASN1_INTEGER)
     if !t.ok:
         ret _newreader(null, 0)
@@ -178,24 +178,42 @@ func _der_int(r &: Reader): Reader:
             ret _newreader(null, 0)
         end
     end
-    if _rdat(b, 0) == 0x00 && b.len > 1:
+    ret b
+end
+
+// Drop the single leading 0x00 that DER prepends to keep a large positive
+// value from reading as negative.
+func _der_strip_sign(b: Reader): Reader:
+    if b.len > 1 && _rdat(b, 0) == 0x00:
         ret _subreader(b, 1, b.len - 1)
     end
     ret b
 end
 
-// Reject negative INTEGERs where the caller expects an unsigned quantity
-// (serial numbers, RSA moduli, ECDSA r/s).
-func _der_uint(r &: Reader): Reader:
-    out := _der_int(r)
+func _der_int(r &: Reader): Reader:
+    b := _der_int_raw(r)
     if r.bad:
-        ret out
+        ret b
     end
-    if out.len > 0 && _rdat(out, 0) >= 0x80:
+    ret _der_strip_sign(b)
+end
+
+// An INTEGER that must be non-negative (serial numbers, RSA moduli and
+// exponents, ECDSA r/s).
+//
+// The sign is judged on the UNSTRIPPED encoding: a 2048-bit modulus is encoded
+// as 0x00 followed by a byte with its top bit set, and testing the stripped
+// bytes would reject every RSA key of full width.
+func _der_uint(r &: Reader): Reader:
+    b := _der_int_raw(r)
+    if r.bad:
+        ret b
+    end
+    if b.len > 0 && _rdat(b, 0) >= 0x80:
         r.bad = true
         ret _newreader(null, 0)
     end
-    ret out
+    ret _der_strip_sign(b)
 end
 
 // BIT STRING contents minus the "unused bits" prefix byte. X.509 only ever

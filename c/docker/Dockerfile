@@ -34,6 +34,7 @@ RUN for i in 1 2 3 4 5; do \
             qemu-aarch64 \
             qemu-arm \
             qemu-i386 \
+            wine \
         && break; \
         echo "apk add attempt $i failed; retrying in 5s..." >&2; sleep 5; \
         if [ "$i" = 5 ]; then \

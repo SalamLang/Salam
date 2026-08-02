@@ -1,0 +1,177 @@
+package tls
+
+// Trust store loading: PEM decoding and system CA bundle discovery.
+//
+// Where the roots come from, in order:
+//   1. an explicit path from Config.ca_file, if the caller set one;
+//   2. $SSL_CERT_FILE, the conventional override honoured by OpenSSL and curl;
+//   3. the first of the well-known system bundle paths that exists;
+//   4. the bundle embedded at build time, if one was generated.
+//
+// A caller that reaches step 4 with no embedded bundle gets an EMPTY trust
+// store, and an empty store makes every chain fail verification. That is the
+// intended behaviour: silently trusting nothing is recoverable, silently
+// trusting everything is not.
+//
+// The embedded bundle is deliberately not checked in by default. Generate it
+// with c/tools/bash/gen-tls-roots.sh, which writes std/tls/roots_embedded.salam
+// from a system bundle. Without it, _embedded_roots_pem() returns "".
+//
+// Coverage: with P-256 and P-384 both implemented, all 152 certificates in the
+// Mozilla bundle shipped with git-for-windows load successfully. Roots whose
+// self-signature uses an algorithm outside the supported set (SHA-1, 27 of
+// those 152) still load, because a trust anchor is trusted by membership in
+// this store rather than by its own signature; they simply cannot verify
+// anything, which _cert_signed_by enforces.
+
+const PEM_BEGIN := "-----BEGIN CERTIFICATE-----"
+const PEM_END := "-----END CERTIFICATE-----"
+
+// Candidate system bundle locations, most common first.
+const CA_PATH_0 := "/etc/ssl/certs/ca-certificates.crt"
+const CA_PATH_1 := "/etc/pki/tls/certs/ca-bundle.crt"
+const CA_PATH_2 := "/etc/ssl/ca-bundle.pem"
+const CA_PATH_3 := "/etc/ssl/cert.pem"
+const CA_PATH_4 := "/usr/local/etc/ssl/cert.pem"
+const CA_PATH_5 := "/usr/local/share/certs/ca-root-nss.crt"
+const CA_PATH_6 := "/etc/ssl/certs/ca-bundle.crt"
+const CA_PATH_COUNT := 7
+
+func _ca_path(i: int): str:
+    if i == 0: ret CA_PATH_0 end
+    if i == 1: ret CA_PATH_1 end
+    if i == 2: ret CA_PATH_2 end
+    if i == 3: ret CA_PATH_3 end
+    if i == 4: ret CA_PATH_4 end
+    if i == 5: ret CA_PATH_5 end
+    if i == 6: ret CA_PATH_6 end
+    ret ""
+end
+
+// Decode one base64 body into DER. Returns false on any character outside the
+// alphabet, so a truncated or corrupted PEM block is dropped rather than
+// half-decoded into something that might still parse as a certificate.
+func _b64_decode(s: str, start: int, stop: int, out &: Buf): bool:
+    mut acc := 0
+    mut nbits := 0
+    mut pad := 0
+    sp := s as void*
+    mut i := start
+    until i < stop:
+        c := _bget(sp, i)
+        i += 1
+        if c == 10 || c == 13 || c == 32 || c == 9:
+            continue
+        end
+        mut v := 0 - 1
+        if c >= 65 && c <= 90:
+            v = c - 65
+        else if c >= 97 && c <= 122:
+            v = c - 97 + 26
+        else if c >= 48 && c <= 57:
+            v = c - 48 + 52
+        else if c == 43:
+            v = 62
+        else if c == 47:
+            v = 63
+        else if c == 61:
+            pad += 1
+            continue
+        else:
+            ret false
+        end
+        if pad > 0:
+            // data after padding is malformed
+            ret false
+        end
+        acc = (acc << 6) | v
+        nbits += 6
+        if nbits >= 8:
+            nbits -= 8
+            _put8(out, (acc >> nbits) & 0xFF)
+        end
+    end
+    ret true
+end
+
+// Scan a PEM document and append every CERTIFICATE block to the store.
+// Anything that is not a CERTIFICATE block, and any block that fails to decode
+// or to parse as a certificate, is skipped rather than aborting the load: a
+// real system bundle occasionally carries entries this profile cannot use, and
+// one of those should not cost the caller every other root.
+func _roots_add_pem(r &: Roots, pem: str): int:
+    mut added := 0
+    mut pos := 0
+    n := pem.len()
+    until pos < n:
+        b := str.IndexFrom(pem, PEM_BEGIN, pos)
+        if b < 0:
+            ret added
+        end
+        body := b + PEM_BEGIN.len()
+        e := str.IndexFrom(pem, PEM_END, body)
+        if e < 0:
+            ret added
+        end
+        mut der := _newbuf(2048)
+        if _b64_decode(pem, body, e, der):
+            if der.len > 0:
+                c := _cert_parse(der.p, der.len)
+                if c.ok:
+                    _roots_add(r, der.p, der.len)
+                    added += 1
+                end
+            end
+        end
+        _buf_free(der)
+        pos = e + PEM_END.len()
+    end
+    ret added
+end
+
+// Overridden by a generated roots_embedded.salam when one is present.
+func _embedded_roots_pem(): str:
+    ret ""
+end
+
+func _roots_load_file(r &: Roots, path: str): int:
+    if path.len() == 0:
+        ret 0
+    end
+    if !os.Exists(path):
+        ret 0
+    end
+    pem := io.ReadFile(path)
+    if pem.len() == 0:
+        ret 0
+    end
+    ret _roots_add_pem(r, pem)
+end
+
+// Build the trust store. `ca_file` may be empty to use the default search.
+func _roots_load(ca_file: str): Roots:
+    mut r := _roots_new()
+    if ca_file.len() > 0:
+        // An explicit path is authoritative: if it yields nothing, fall through
+        // to nothing rather than quietly widening trust to the system store.
+        _roots_load_file(r, ca_file)
+        ret r
+    end
+    env := os.Env("SSL_CERT_FILE")
+    if env.len() > 0:
+        _roots_load_file(r, env)
+        ret r
+    end
+    mut i := 0
+    until i < CA_PATH_COUNT:
+        if _roots_load_file(r, _ca_path(i)) > 0:
+            ret r
+        end
+        i += 1
+    end
+    emb := _embedded_roots_pem()
+    if emb.len() > 0:
+        _roots_add_pem(r, emb)
+    end
+    ret r
+end

@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024–2026)
+ * Salam Programming Language (2024-2026)
  *
  *   +-------------------+
  *   |     S A L A M     |
@@ -327,7 +327,26 @@ static value_t eval_match(interp_t *I, env_t *env, ast_node_t *n)
     }
 }
 
+/*
+ * Give an integer result the width and signedness semantic analysis
+ * inferred for this expression. Every expression node is decorated with
+ * its static type (sema_decorate), so this one choke point is what makes
+ * `x as u32`, u64 products, unsigned `>>`, and unsigned printing behave
+ * like the compiled backends instead of collapsing to signed i64.
+ *
+ * Nodes reached without semantic analysis (REPL fragments, synthetic
+ * nodes) have no decoration and are left exactly as before.
+ */
+static value_t eval_node(interp_t *I, env_t *env, ast_node_t *n);
+
 value_t eval(interp_t *I, env_t *env, ast_node_t *n)
+{
+    value_t v = eval_node(I, env, n);
+    if (v.kind != VAL_INT || !n) return v;
+    return coerce_int_ty(v, int_ty_from_typestr(n->type_str));
+}
+
+static value_t eval_node(interp_t *I, env_t *env, ast_node_t *n)
 {
     if (!n) return val_null();
     switch (n->kind) {
@@ -435,11 +454,15 @@ value_t eval(interp_t *I, env_t *env, ast_node_t *n)
             if (found) return r;
         }
 
+        /* Unary '-' and '~' preserve the operand's type (SALAM-TYPES.md 21),
+         * so they wrap in that type rather than promoting to signed i64. */
         if (n->op == TK_MINUS)
-            return a.kind == VAL_FLOAT ? val_float(-a.as.f)
-                                       : val_int((int64_t)(0 - (uint64_t)to_int(a)));
+            return a.kind == VAL_FLOAT
+                       ? val_float(-a.as.f)
+                       : val_int_ty((int64_t)(0 - (uint64_t)to_int(a)), (int_ty_t)a.ity);
         if (n->op == TK_NOT) return val_bool(!to_bool(a));
-        if (n->op == TK_TILDE) return val_int((int64_t)(~(uint64_t)to_int(a)));
+        if (n->op == TK_TILDE)
+            return val_int_ty((int64_t)(~(uint64_t)to_int(a)), (int_ty_t)a.ity);
         return a;
     }
     case AST_INCDEC: {
@@ -461,7 +484,15 @@ value_t eval(interp_t *I, env_t *env, ast_node_t *n)
         char base[96];
         base_typename(ts, base, sizeof base);
         if (!strcmp(base, "char")) return val_char(to_int(a));
-        if (is_int_typename(base)) return val_int(to_int(a));
+        if (is_int_typename(base)) {
+            /* int -> int keeps the two's-complement bit pattern and truncates
+             * to the target width (SALAM-TYPES.md 16); float -> int truncates
+             * toward zero first. */
+            int_ty_t t = int_ty_from_typestr(base);
+            if (a.kind == VAL_FLOAT && int_ty_is_unsigned(t))
+                return val_int_ty((int64_t)(uint64_t)a.as.f, t);
+            return val_int_ty(to_int(a), t);
+        }
         if (is_float_typename(base)) return val_float(to_float(a));
         if (!strcmp(base, "bool")) return val_bool(to_bool(a));
         if (!strcmp(base, "str")) {

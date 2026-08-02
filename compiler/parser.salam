@@ -1,3 +1,17 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
 // Flat merge of the salam/parser port (see salam/PORTING.md "Layout - FLAT"):
 // parser.c + parser.h + parser_internal.h + parser_cursor.c + parser_decl.c +
 // parser_decl_var.c + parser_expr.c + parser_expr_primary.c + parser_ffi.c +
@@ -47,6 +61,7 @@ struct Ps:
     pub had_error: bool = false
     pub panic: bool = false
     pub no_struct_lit: bool = false
+    pub no_with_word: bool = false
     pub depth: int = 0
     pub angle_pending: int = 0
 end
@@ -379,8 +394,14 @@ func p_is_alias_word_keyword(k: int): bool:
     ret k == tok.TK_KW_WITH || k == tok.TK_KW_PACKAGE
 end
 
+/* 'with' normally merges into a multi-word member name ('cfg.retry with backoff'),
+ * but a repeat header ends with 'with <index>', so the loop bound must stop the
+ * merge there or 'repeat box.count with i' reads as the field 'count with i'. */
 func p_at_mergeable_word(p &: Ps): bool:
     k := p_peek(p).kind
+    if k == tok.TK_KW_WITH && p.no_with_word:
+        ret false
+    end
     ret k == tok.TK_IDENT || p_is_alias_word_keyword(k)
 end
 
@@ -1335,21 +1356,32 @@ func parse_until(p &: Ps, a &: at.Ast): int:
     ret n
 end
 
+/* Loop bounds stop before 'with' so the index binding stays visible: without
+ * this a member access would swallow it ('repeat box.count with i' parsing as
+ * the field 'count with i'). */
+func parse_repeat_bound(p &: Ps, a &: at.Ast): int:
+    saved := p.no_with_word
+    p.no_with_word = true
+    e := parse_cond_expr(p, a)
+    p.no_with_word = saved
+    ret e
+end
+
 func parse_repeat(p &: Ps, a &: at.Ast): int:
     p_rule(p, "repeat_stmt")
     n := p_mk(p, a, at.AST_REPEAT)
     p_advance(p)
-    ps_set_a(a, n, parse_cond_expr(p, a))
+    ps_set_a(a, n, parse_repeat_bound(p, a))
     if p_at(p, tok.TK_KW_TO):
         p_advance(p)
-        ps_set_c(a, n, parse_cond_expr(p, a))
+        ps_set_c(a, n, parse_repeat_bound(p, a))
     end
     if p_at(p, tok.TK_KW_STEP):
         p_advance(p)
         if at.Get(a, n).c == 0:
             p_error(p, "'by' in a repeat loop needs a 'to' bound before it")
         end
-        ps_set_d(a, n, parse_cond_expr(p, a))
+        ps_set_d(a, n, parse_repeat_bound(p, a))
     end
     if p_match(p, tok.TK_KW_WITH):
         at.SetName(a, n, p_name(p, "expected an index variable name after 'with'"))

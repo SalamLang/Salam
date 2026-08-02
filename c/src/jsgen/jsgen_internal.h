@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024–2026)
+ * Salam Programming Language (2024-2026)
  *
  *   +-------------------+
  *   |     S A L A M     |
@@ -77,6 +77,10 @@ const char *jsg_zero(jg_t *g, const char *ts);
 const char *jsg_expr(jg_t *g, ast_node_t *n);
 
 const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec);
+
+bool jsg_ts_wrappable(const char *ts);
+
+const char *jsg_wrap_int(jg_t *g, const char *expr, const char *ts);
 
 const char *jsg_match_arm_cond(jg_t *g, ast_node_t *arm, const char *subj_var,
                                const char *subj_ts);

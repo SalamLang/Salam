@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024–2026)
+ * Salam Programming Language (2024-2026)
  *
  *   +-------------------+
  *   |     S A L A M     |
@@ -22,6 +22,9 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <limits.h>
+#if !defined(_WIN32)
+#  include <sys/wait.h>
+#endif
 
 #if defined(PATH_MAX)
 #  define SALAM_PATH_MAX PATH_MAX
@@ -297,6 +300,14 @@ int salam_llvm_toolchain(logger_t *log, const char *ll_path,
     int rc = system(sb_cstr(&cmd));
     sb_free(&cmd);
     remove(spath);
+#if !defined(_WIN32)
+    /* system()'s return value is a raw wait status, not a plain exit code
+     * (WIFEXITED/WEXITSTATUS decode it) - returning it as-is lets a status
+     * like 256 (exit code 1 shifted left 8 bits) survive all the way up to
+     * main()'s `return rc`, where the OS truncates the exit() argument to
+     * its low 8 bits and silently turns the failure into exit code 0. */
+    rc = WIFEXITED(rc) ? WEXITSTATUS(rc) : 1;
+#endif
     if (rc != 0)
         LOG_E(log, PH_DRIVER, i18n_tr("LLVM toolchain step failed (exit %d)"), rc);
     return rc;

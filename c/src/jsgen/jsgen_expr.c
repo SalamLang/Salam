@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024–2026)
+ * Salam Programming Language (2024-2026)
  *
  *   +-------------------+
  *   |     S A L A M     |
@@ -484,6 +484,46 @@ static int jsg_binprec(token_kind_t k)
     default:
         return 12;
     }
+}
+
+/*
+ * JavaScript has one numeric type (f64) and its bitwise operators coerce to
+ * *signed* 32-bit, so salam's sized integers need explicit wrapping to keep
+ * the modulo-2^n semantics of SALAM-TYPES.md 4.1: without it `~(0 as u32)`
+ * was -1 instead of 4294967295 and `(4000000000 as u32) + x` never wrapped.
+ *
+ * Only widths up to 32 bits can be modelled: an f64 cannot hold every i64/
+ * u64 value, so 64-bit types are left alone rather than silently rounded.
+ */
+static int jsg_int_ts_bits(const char *ts)
+{
+    if (!strcmp(ts, "i8") || !strcmp(ts, "u8")) return 8;
+    if (!strcmp(ts, "i16") || !strcmp(ts, "u16")) return 16;
+    if (!strcmp(ts, "i32") || !strcmp(ts, "u32")) return 32;
+    return 64;
+}
+
+static bool jsg_op_is_cmp(token_kind_t k)
+{
+    return k == TK_EQ || k == TK_NE || k == TK_LT || k == TK_GT || k == TK_LE ||
+           k == TK_GE;
+}
+
+bool jsg_ts_wrappable(const char *ts)
+{
+    return ts && cg_is_int_typestr(ts) && jsg_int_ts_bits(ts) <= 32;
+}
+
+/* Reduce a JS number to the two's-complement value of type ts. */
+const char *jsg_wrap_int(jg_t *g, const char *expr, const char *ts)
+{
+    cg_t *cg = &g->cg;
+    if (!strcmp(ts, "u8")) return cg_fmt(cg, "((%s) & 255)", expr);
+    if (!strcmp(ts, "u16")) return cg_fmt(cg, "((%s) & 65535)", expr);
+    if (!strcmp(ts, "u32")) return cg_fmt(cg, "((%s) >>> 0)", expr);
+    if (!strcmp(ts, "i8")) return cg_fmt(cg, "((%s) << 24 >> 24)", expr);
+    if (!strcmp(ts, "i16")) return cg_fmt(cg, "((%s) << 16 >> 16)", expr);
+    return cg_fmt(cg, "((%s) | 0)", expr); /* i32 */
 }
 
 static const char *jsg_op(token_kind_t k)
@@ -1455,9 +1495,11 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
         if (n->op == TK_POWER)
             return cg_fmt(cg, "Math.pow(%s, %s)", jsg_expr_p(g, n->a, 0),
                           jsg_expr_p(g, n->b, 0));
-        if (n->op == TK_SLASH && cg_is_int_typestr(n->type_str))
-            return cg_fmt(cg, "Math.trunc(%s / %s)", jsg_expr_p(g, n->a, 13),
-                          jsg_expr_p(g, n->b, 14));
+        if (n->op == TK_SLASH && cg_is_int_typestr(n->type_str)) {
+            const char *q = cg_fmt(cg, "Math.trunc(%s / %s)", jsg_expr_p(g, n->a, 13),
+                                   jsg_expr_p(g, n->b, 14));
+            return jsg_ts_wrappable(n->type_str) ? jsg_wrap_int(g, q, n->type_str) : q;
+        }
         if (n->op == TK_PLUS && n->type_str && !strcmp(n->type_str, "str")) {
             const char *t = jsg_template_concat(g, n);
             if (t) return t;
@@ -1468,6 +1510,34 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
             ast_node_t *nop = a_str ? n->b : n->a;
             return cg_fmt(cg, "%s.repeat(Math.max(0, %s))",
                           jsg_expr_p(g, sop, JSP_MEMBER), jsg_expr_p(g, nop, 0));
+        }
+        {
+            const char *lts = n->a ? n->a->type_str : NULL;
+            const char *rts = n->b ? n->b->type_str : NULL;
+            bool shift = (n->op == TK_SHL || n->op == TK_SHR);
+            const char *cts = NULL;
+            if (lts && rts && cg_is_int_typestr(lts) && cg_is_int_typestr(rts))
+                cts = shift ? lts : cg_common_int_typestr(lts, rts);
+            if (cts && jsg_ts_wrappable(cts) && !jsg_op_is_cmp(n->op)) {
+                bool uns = cg_is_unsigned_typestr(cts);
+                /* '>>' must be logical for unsigned; JS '>>' is arithmetic. */
+                const char *op = (n->op == TK_SHR && uns) ? ">>>" : jsg_op(n->op);
+                /* A 32x32 product exceeds f64's exact range, so the low 32
+                 * bits have to come from Math.imul rather than '*'. */
+                if (n->op == TK_STAR && jsg_int_ts_bits(cts) == 32)
+                    return jsg_wrap_int(g,
+                                        cg_fmt(cg, "Math.imul(%s, %s)",
+                                               jsg_expr_p(g, n->a, 0),
+                                               jsg_expr_p(g, n->b, 0)),
+                                        cts);
+                {
+                    int own = jsg_binprec(n->op);
+                    return jsg_wrap_int(g,
+                                        cg_fmt(cg, "%s %s %s", jsg_expr_p(g, n->a, own),
+                                               op, jsg_expr_p(g, n->b, own + 1)),
+                                        cts);
+                }
+            }
         }
         {
             int own = jsg_binprec(n->op);
@@ -1497,6 +1567,12 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
                 }
             }
         }
+        /* '-' and '~' preserve the operand's type (SALAM-TYPES.md 21). */
+        if ((n->op == TK_MINUS || n->op == TK_TILDE) && n->a &&
+            jsg_ts_wrappable(n->a->type_str))
+            return jsg_wrap_int(
+                g, cg_fmt(cg, "%s%s", cg_op(n->op), jsg_expr_p(g, n->a, JSP_UNARY)),
+                n->a->type_str);
         {
             const char *s =
                 cg_fmt(cg, "%s%s", cg_op(n->op), jsg_expr_p(g, n->a, JSP_UNARY));
@@ -1521,8 +1597,13 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
             if (!strcmp(dts, sts)) return jsg_expr_p(g, n->a, minprec);
             if (!strncmp(dts, "dyn ", 4)) return jsg_unsupported(g, "dyn cast");
             if (cg_is_int_typestr(dts) && dts[strlen(dts) - 1] != '*' &&
-                !strchr(dts, '['))
+                !strchr(dts, '[')) {
+                /* ToInt32/ToUint32 already truncate toward zero, so the wrap
+                 * form both narrows and reinterprets (SALAM-TYPES.md 16). */
+                if (jsg_ts_wrappable(dts))
+                    return jsg_wrap_int(g, jsg_expr_p(g, n->a, 0), dts);
                 return cg_fmt(cg, "Math.trunc(%s)", jsg_expr_p(g, n->a, 0));
+            }
             if (!strcmp(dts, "f32") || !strcmp(dts, "f64"))
                 return cg_fmt(cg, "Number(%s)", jsg_expr_p(g, n->a, 0));
             if (!strcmp(dts, "bool")) {

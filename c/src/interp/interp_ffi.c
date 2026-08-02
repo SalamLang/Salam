@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024–2026)
+ * Salam Programming Language (2024-2026)
  *
  *   +-------------------+
  *   |     S A L A M     |
@@ -716,5 +716,7 @@ value_t call_native_extern(interp_t *I, ast_node_t *call, ast_node_t *decl, valu
     char rbase[96];
     base_typename(rts, rbase, sizeof rbase);
     if (!strcmp(rbase, "bool")) return val_bool(r != 0);
-    return val_int(r);
+    /* Tag the result with the declared return type so an extern returning
+     * u32/u64 does not read back as a negative i64. */
+    return val_int_ty(r, int_ty_from_typestr(rbase));
 }

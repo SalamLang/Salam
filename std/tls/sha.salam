@@ -1,0 +1,437 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+// SHA-2 family: SHA-256, SHA-384, SHA-512 (FIPS 180-4).
+//
+// Streaming (init/update/final) rather than one-shot, because TLS needs a
+// running *transcript hash* over every handshake message and must be able to
+// take a digest of the transcript-so-far at several points without disturbing
+// the running state. `final` therefore takes its state BY VALUE: it pads and
+// finishes a copy, leaving the caller free to keep appending. Cloning the
+// transcript is likewise just an assignment, since Salam copies struct-embedded
+// fixed arrays by value.
+//
+// Unlike std/crypto (which predates Salam's bitwise operators and emulates them
+// with nibble lookup tables), this uses native u32/u64 operations throughout.
+// NOTE: these must be exercised via the compiled backend -- `salam exec` does
+// not implement unsigned wraparound.
+
+const SHA256_SIZE := 32
+const SHA384_SIZE := 48
+const SHA512_SIZE := 64
+const SHA256_BLOCK := 64
+const SHA512_BLOCK := 128
+
+const K256 := [
+    0x428a2f98 as u32, 0x71374491 as u32, 0xb5c0fbcf as u32, 0xe9b5dba5 as u32
+    0x3956c25b as u32, 0x59f111f1 as u32, 0x923f82a4 as u32, 0xab1c5ed5 as u32
+    0xd807aa98 as u32, 0x12835b01 as u32, 0x243185be as u32, 0x550c7dc3 as u32
+    0x72be5d74 as u32, 0x80deb1fe as u32, 0x9bdc06a7 as u32, 0xc19bf174 as u32
+    0xe49b69c1 as u32, 0xefbe4786 as u32, 0x0fc19dc6 as u32, 0x240ca1cc as u32
+    0x2de92c6f as u32, 0x4a7484aa as u32, 0x5cb0a9dc as u32, 0x76f988da as u32
+    0x983e5152 as u32, 0xa831c66d as u32, 0xb00327c8 as u32, 0xbf597fc7 as u32
+    0xc6e00bf3 as u32, 0xd5a79147 as u32, 0x06ca6351 as u32, 0x14292967 as u32
+    0x27b70a85 as u32, 0x2e1b2138 as u32, 0x4d2c6dfc as u32, 0x53380d13 as u32
+    0x650a7354 as u32, 0x766a0abb as u32, 0x81c2c92e as u32, 0x92722c85 as u32
+    0xa2bfe8a1 as u32, 0xa81a664b as u32, 0xc24b8b70 as u32, 0xc76c51a3 as u32
+    0xd192e819 as u32, 0xd6990624 as u32, 0xf40e3585 as u32, 0x106aa070 as u32
+    0x19a4c116 as u32, 0x1e376c08 as u32, 0x2748774c as u32, 0x34b0bcb5 as u32
+    0x391c0cb3 as u32, 0x4ed8aa4a as u32, 0x5b9cca4f as u32, 0x682e6ff3 as u32
+    0x748f82ee as u32, 0x78a5636f as u32, 0x84c87814 as u32, 0x8cc70208 as u32
+    0x90befffa as u32, 0xa4506ceb as u32, 0xbef9a3f7 as u32, 0xc67178f2 as u32
+] as u32[64]
+
+const IV256 := [
+    0x6a09e667 as u32, 0xbb67ae85 as u32, 0x3c6ef372 as u32, 0xa54ff53a as u32
+    0x510e527f as u32, 0x9b05688c as u32, 0x1f83d9ab as u32, 0x5be0cd19 as u32
+] as u32[8]
+
+const K512 := [
+    0x428a2f98d728ae22 as u64, 0x7137449123ef65cd as u64
+    0xb5c0fbcfec4d3b2f as u64, 0xe9b5dba58189dbbc as u64
+    0x3956c25bf348b538 as u64, 0x59f111f1b605d019 as u64
+    0x923f82a4af194f9b as u64, 0xab1c5ed5da6d8118 as u64
+    0xd807aa98a3030242 as u64, 0x12835b0145706fbe as u64
+    0x243185be4ee4b28c as u64, 0x550c7dc3d5ffb4e2 as u64
+    0x72be5d74f27b896f as u64, 0x80deb1fe3b1696b1 as u64
+    0x9bdc06a725c71235 as u64, 0xc19bf174cf692694 as u64
+    0xe49b69c19ef14ad2 as u64, 0xefbe4786384f25e3 as u64
+    0x0fc19dc68b8cd5b5 as u64, 0x240ca1cc77ac9c65 as u64
+    0x2de92c6f592b0275 as u64, 0x4a7484aa6ea6e483 as u64
+    0x5cb0a9dcbd41fbd4 as u64, 0x76f988da831153b5 as u64
+    0x983e5152ee66dfab as u64, 0xa831c66d2db43210 as u64
+    0xb00327c898fb213f as u64, 0xbf597fc7beef0ee4 as u64
+    0xc6e00bf33da88fc2 as u64, 0xd5a79147930aa725 as u64
+    0x06ca6351e003826f as u64, 0x142929670a0e6e70 as u64
+    0x27b70a8546d22ffc as u64, 0x2e1b21385c26c926 as u64
+    0x4d2c6dfc5ac42aed as u64, 0x53380d139d95b3df as u64
+    0x650a73548baf63de as u64, 0x766a0abb3c77b2a8 as u64
+    0x81c2c92e47edaee6 as u64, 0x92722c851482353b as u64
+    0xa2bfe8a14cf10364 as u64, 0xa81a664bbc423001 as u64
+    0xc24b8b70d0f89791 as u64, 0xc76c51a30654be30 as u64
+    0xd192e819d6ef5218 as u64, 0xd69906245565a910 as u64
+    0xf40e35855771202a as u64, 0x106aa07032bbd1b8 as u64
+    0x19a4c116b8d2d0c8 as u64, 0x1e376c085141ab53 as u64
+    0x2748774cdf8eeb99 as u64, 0x34b0bcb5e19b48a8 as u64
+    0x391c0cb3c5c95a63 as u64, 0x4ed8aa4ae3418acb as u64
+    0x5b9cca4f7763e373 as u64, 0x682e6ff3d6b2b8a3 as u64
+    0x748f82ee5defb2fc as u64, 0x78a5636f43172f60 as u64
+    0x84c87814a1f0ab72 as u64, 0x8cc702081a6439ec as u64
+    0x90befffa23631e28 as u64, 0xa4506cebde82bde9 as u64
+    0xbef9a3f7b2c67915 as u64, 0xc67178f2e372532b as u64
+    0xca273eceea26619c as u64, 0xd186b8c721c0c207 as u64
+    0xeada7dd6cde0eb1e as u64, 0xf57d4f7fee6ed178 as u64
+    0x06f067aa72176fba as u64, 0x0a637dc5a2c898a6 as u64
+    0x113f9804bef90dae as u64, 0x1b710b35131c471b as u64
+    0x28db77f523047d84 as u64, 0x32caab7b40c72493 as u64
+    0x3c9ebe0a15c9bebc as u64, 0x431d67c49c100d4c as u64
+    0x4cc5d4becb3e42b6 as u64, 0x597f299cfc657e2a as u64
+    0x5fcb6fab3ad6faec as u64, 0x6c44198c4a475817 as u64
+] as u64[80]
+
+const IV512 := [
+    0x6a09e667f3bcc908 as u64, 0xbb67ae8584caa73b as u64
+    0x3c6ef372fe94f82b as u64, 0xa54ff53a5f1d36f1 as u64
+    0x510e527fade682d1 as u64, 0x9b05688c2b3e6c1f as u64
+    0x1f83d9abfb41bd6b as u64, 0x5be0cd19137e2179 as u64
+] as u64[8]
+
+const IV384 := [
+    0xcbbb9d5dc1059ed8 as u64, 0x629a292a367cd507 as u64
+    0x9159015a3070dd17 as u64, 0x152fecd8f70e5939 as u64
+    0x67332667ffc00b31 as u64, 0x8eb44a8768581511 as u64
+    0xdb0c2e0d64f98fa7 as u64, 0x47b5481dbefa4fa4 as u64
+] as u64[8]
+
+struct Sha256:
+    pub h: u32[8] = [
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+    ]
+    pub blk: u8[64] = [
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+    ]
+    pub blen: int = 0
+    pub total: u64 = 0 as u64
+end
+
+struct Sha512:
+    pub h: u64[8] = [
+        0 as u64, 0 as u64, 0 as u64, 0 as u64
+        0 as u64, 0 as u64, 0 as u64, 0 as u64
+    ]
+    pub blk: u8[128] = [
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+    ]
+    pub blen: int = 0
+    pub total: u64 = 0 as u64
+    pub outlen: int = 64
+end
+
+// ---------------------------------------------------------------- SHA-256
+
+// Rotation counts are always in 1..31 here, so the `x << (32 - n)` half never
+// becomes an undefined shift-by-width.
+inline func _rotr32(x: u32, n: u32): u32:
+    ret (x >> n) | (x << ((32 as u32) - n))
+end
+
+func _sha256_init(): Sha256:
+    mut s := Sha256 {}
+    repeat 8 with i:
+        s.h[i] = IV256[i]
+    end
+    s.blen = 0
+    s.total = 0 as u64
+    ret s
+end
+
+func _sha256_block(s &: Sha256):
+    mut w: u32[64]
+    repeat 16 with t:
+        o := t * 4
+        w[t] = ((s.blk[o] as u32) << (24 as u32)) | ((s.blk[o + 1] as u32) << (16 as u32)) | ((s.blk[o + 2] as u32) << (8 as u32)) | (s.blk[o + 3] as u32)
+    end
+    repeat 48 with k:
+        t := k + 16
+        x15 := w[t - 15]
+        x2 := w[t - 2]
+        s0 := _rotr32(x15, 7 as u32) ^ _rotr32(x15, 18 as u32) ^ (x15 >> (3 as u32))
+        s1 := _rotr32(x2, 17 as u32) ^ _rotr32(x2, 19 as u32) ^ (x2 >> (10 as u32))
+        w[t] = w[t - 16] + s0 + w[t - 7] + s1
+    end
+    mut a := s.h[0]
+    mut b := s.h[1]
+    mut c := s.h[2]
+    mut d := s.h[3]
+    mut e := s.h[4]
+    mut f := s.h[5]
+    mut g := s.h[6]
+    mut hh := s.h[7]
+    repeat 64 with t:
+        bigs1 := _rotr32(e, 6 as u32) ^ _rotr32(e, 11 as u32) ^ _rotr32(e, 25 as u32)
+        ch := (e & f) ^ ((~e) & g)
+        t1 := hh + bigs1 + ch + K256[t] + w[t]
+        bigs0 := _rotr32(a, 2 as u32) ^ _rotr32(a, 13 as u32) ^ _rotr32(a, 22 as u32)
+        maj := (a & b) ^ (a & c) ^ (b & c)
+        t2 := bigs0 + maj
+        hh = g
+        g = f
+        f = e
+        e = d + t1
+        d = c
+        c = b
+        b = a
+        a = t1 + t2
+    end
+    s.h[0] += a
+    s.h[1] += b
+    s.h[2] += c
+    s.h[3] += d
+    s.h[4] += e
+    s.h[5] += f
+    s.h[6] += g
+    s.h[7] += hh
+end
+
+func _sha256_update(s &: Sha256, p: void*, n: int):
+    mut i := 0
+    until i < n:
+        space := SHA256_BLOCK - s.blen
+        mut take := n - i
+        if take > space:
+            take = space
+        end
+        repeat take with j:
+            s.blk[s.blen + j] = _bget(p, i + j) as u8
+        end
+        s.blen += take
+        i += take
+        s.total += take as u64
+        if s.blen == SHA256_BLOCK:
+            _sha256_block(s)
+            s.blen = 0
+        end
+    end
+end
+
+// Takes the state by value: pads and finishes a copy so the caller's running
+// transcript hash is left intact and can keep absorbing messages.
+func _sha256_final(s0: Sha256, out: void*):
+    mut s := s0
+    bits := s.total * (8 as u64)
+    s.blk[s.blen] = 0x80 as u8
+    s.blen += 1
+    if s.blen > 56:
+        until s.blen < SHA256_BLOCK:
+            s.blk[s.blen] = 0 as u8
+            s.blen += 1
+        end
+        _sha256_block(s)
+        s.blen = 0
+    end
+    until s.blen < 56:
+        s.blk[s.blen] = 0 as u8
+        s.blen += 1
+    end
+    repeat 8 with i:
+        sh := ((7 - i) * 8) as u64
+        s.blk[56 + i] = ((bits >> sh) & (0xFF as u64)) as u8
+    end
+    _sha256_block(s)
+    repeat 8 with i:
+        v := s.h[i]
+        _bput(out, i * 4, ((v >> (24 as u32)) & (0xFF as u32)) as int)
+        _bput(out, i * 4 + 1, ((v >> (16 as u32)) & (0xFF as u32)) as int)
+        _bput(out, i * 4 + 2, ((v >> (8 as u32)) & (0xFF as u32)) as int)
+        _bput(out, i * 4 + 3, (v & (0xFF as u32)) as int)
+    end
+end
+
+// ---------------------------------------------------------------- SHA-512/384
+
+inline func _rotr64(x: u64, n: u64): u64:
+    ret (x >> n) | (x << ((64 as u64) - n))
+end
+
+func _sha512_init_with(iv: u64[8], outlen: int): Sha512:
+    mut s := Sha512 {}
+    repeat 8 with i:
+        s.h[i] = iv[i]
+    end
+    s.blen = 0
+    s.total = 0 as u64
+    s.outlen = outlen
+    ret s
+end
+
+func _sha512_init(): Sha512:
+    ret _sha512_init_with(IV512, SHA512_SIZE)
+end
+
+func _sha384_init(): Sha512:
+    ret _sha512_init_with(IV384, SHA384_SIZE)
+end
+
+func _sha512_block(s &: Sha512):
+    mut w: u64[80]
+    repeat 16 with t:
+        o := t * 8
+        mut v := 0 as u64
+        repeat 8 with j:
+            v = (v << (8 as u64)) | (s.blk[o + j] as u64)
+        end
+        w[t] = v
+    end
+    repeat 64 with k:
+        t := k + 16
+        x15 := w[t - 15]
+        x2 := w[t - 2]
+        s0 := _rotr64(x15, 1 as u64) ^ _rotr64(x15, 8 as u64) ^ (x15 >> (7 as u64))
+        s1 := _rotr64(x2, 19 as u64) ^ _rotr64(x2, 61 as u64) ^ (x2 >> (6 as u64))
+        w[t] = w[t - 16] + s0 + w[t - 7] + s1
+    end
+    mut a := s.h[0]
+    mut b := s.h[1]
+    mut c := s.h[2]
+    mut d := s.h[3]
+    mut e := s.h[4]
+    mut f := s.h[5]
+    mut g := s.h[6]
+    mut hh := s.h[7]
+    repeat 80 with t:
+        bigs1 := _rotr64(e, 14 as u64) ^ _rotr64(e, 18 as u64) ^ _rotr64(e, 41 as u64)
+        ch := (e & f) ^ ((~e) & g)
+        t1 := hh + bigs1 + ch + K512[t] + w[t]
+        bigs0 := _rotr64(a, 28 as u64) ^ _rotr64(a, 34 as u64) ^ _rotr64(a, 39 as u64)
+        maj := (a & b) ^ (a & c) ^ (b & c)
+        t2 := bigs0 + maj
+        hh = g
+        g = f
+        f = e
+        e = d + t1
+        d = c
+        c = b
+        b = a
+        a = t1 + t2
+    end
+    s.h[0] += a
+    s.h[1] += b
+    s.h[2] += c
+    s.h[3] += d
+    s.h[4] += e
+    s.h[5] += f
+    s.h[6] += g
+    s.h[7] += hh
+end
+
+func _sha512_update(s &: Sha512, p: void*, n: int):
+    mut i := 0
+    until i < n:
+        space := SHA512_BLOCK - s.blen
+        mut take := n - i
+        if take > space:
+            take = space
+        end
+        repeat take with j:
+            s.blk[s.blen + j] = _bget(p, i + j) as u8
+        end
+        s.blen += take
+        i += take
+        s.total += take as u64
+        if s.blen == SHA512_BLOCK:
+            _sha512_block(s)
+            s.blen = 0
+        end
+    end
+end
+
+func _sha512_final(s0: Sha512, out: void*):
+    mut s := s0
+    bits := s.total * (8 as u64)
+    s.blk[s.blen] = 0x80 as u8
+    s.blen += 1
+    if s.blen > 112:
+        until s.blen < SHA512_BLOCK:
+            s.blk[s.blen] = 0 as u8
+            s.blen += 1
+        end
+        _sha512_block(s)
+        s.blen = 0
+    end
+    until s.blen < 112:
+        s.blk[s.blen] = 0 as u8
+        s.blen += 1
+    end
+    // The length field is 128 bits; the high half stays zero because `total`
+    // counts bytes in a u64 and can never reach 2^61 bytes.
+    repeat 8 with i:
+        s.blk[112 + i] = 0 as u8
+    end
+    repeat 8 with i:
+        sh := ((7 - i) * 8) as u64
+        s.blk[120 + i] = ((bits >> sh) & (0xFF as u64)) as u8
+    end
+    _sha512_block(s)
+    n := s.outlen
+    repeat n with i:
+        word := s.h[i / 8]
+        sh := ((7 - (i % 8)) * 8) as u64
+        _bput(out, i, ((word >> sh) & (0xFF as u64)) as int)
+    end
+end
+
+// ---------------------------------------------------------------- one-shot
+
+func _sha256(p: void*, n: int, out: void*):
+    mut s := _sha256_init()
+    _sha256_update(s, p, n)
+    _sha256_final(s, out)
+end
+
+func _sha384(p: void*, n: int, out: void*):
+    mut s := _sha384_init()
+    _sha512_update(s, p, n)
+    _sha512_final(s, out)
+end
+
+func _sha512(p: void*, n: int, out: void*):
+    mut s := _sha512_init()
+    _sha512_update(s, p, n)
+    _sha512_final(s, out)
+end

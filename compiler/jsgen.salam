@@ -1,3 +1,17 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
 // Flat port of compiler/src/jsgen (see salam/PORTING.md "Layout - FLAT"):
 // jsgen.c + jsgen_expr.c + jsgen_stmt.c + jsgen_host.c - one package `jsgen`,
 // one file. Import alias for consumers: `jg`.
@@ -321,6 +335,22 @@ end
 
 func cg_is_unsigned_typestr(ts: str): bool:
     ret str.Equals(ts, "u8") || str.Equals(ts, "u16") || str.Equals(ts, "u32") || str.Equals(ts, "u64") || str.Equals(ts, "size")
+end
+
+// Common type of an integer binary operation (SALAM-TYPES.md 15): same
+// signedness picks the higher rank, mixed signedness has no common type
+// (semantic analysis rejects it as E021).
+func cg_common_int_typestr(x: str, y: str): str:
+    if !cg_is_int_typestr(x) || !cg_is_int_typestr(y):
+        ret ""
+    end
+    if str.Equals(x, y):
+        ret x
+    end
+    if cg_is_unsigned_typestr(x) != cg_is_unsigned_typestr(y):
+        ret ""
+    end
+    ret jsg_int_ts_bits(x) >= jsg_int_ts_bits(y) ? x : y
 end
 
 func cg_is_slice_ts(ts: str): bool:
@@ -1071,6 +1101,54 @@ func jsg_binprec(k: int): int:
         ret 4
     end
     ret 12
+end
+
+// JavaScript has one numeric type (f64) and its bitwise operators coerce to
+// *signed* 32-bit, so salam's sized integers need explicit wrapping to keep
+// the modulo-2^n semantics of SALAM-TYPES.md 4.1: without it `~(0 as u32)`
+// was -1 instead of 4294967295 and `(4000000000 as u32) + x` never wrapped.
+//
+// Only widths up to 32 bits can be modelled: an f64 cannot hold every i64/
+// u64 value, so 64-bit types are left alone rather than silently rounded.
+func jsg_int_ts_bits(ts: str): int:
+    if str.Equals(ts, "i8") || str.Equals(ts, "u8"):
+        ret 8
+    end
+    if str.Equals(ts, "i16") || str.Equals(ts, "u16"):
+        ret 16
+    end
+    if str.Equals(ts, "i32") || str.Equals(ts, "u32"):
+        ret 32
+    end
+    ret 64
+end
+
+func jsg_ts_wrappable(ts: str): bool:
+    ret cg_is_int_typestr(ts) && jsg_int_ts_bits(ts) <= 32
+end
+
+func jsg_op_is_cmp(k: int): bool:
+    ret k == tok.TK_EQ || k == tok.TK_NE || k == tok.TK_LT || k == tok.TK_GT || k == tok.TK_LE || k == tok.TK_GE
+end
+
+// Reduce a JS number to the two's-complement value of type ts.
+func jsg_wrap_int(expr: str, ts: str): str:
+    if str.Equals(ts, "u8"):
+        ret "((" + expr + ") & 255)"
+    end
+    if str.Equals(ts, "u16"):
+        ret "((" + expr + ") & 65535)"
+    end
+    if str.Equals(ts, "u32"):
+        ret "((" + expr + ") >>> 0)"
+    end
+    if str.Equals(ts, "i8"):
+        ret "((" + expr + ") << 24 >> 24)"
+    end
+    if str.Equals(ts, "i16"):
+        ret "((" + expr + ") << 16 >> 16)"
+    end
+    ret "((" + expr + ") | 0)"
 end
 
 func jsg_op(k: int): str:
@@ -2308,7 +2386,11 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
             ret "Math.pow(" + jsg_expr_p(g, s, a, n.a, 0) + ", " + jsg_expr_p(g, s, a, n.b, 0) + ")"
         end
         if n.op == tok.TK_SLASH && cg_is_int_typestr(n.type_str):
-            ret "Math.trunc(" + jsg_expr_p(g, s, a, n.a, 13) + " / " + jsg_expr_p(g, s, a, n.b, 14) + ")"
+            qv := "Math.trunc(" + jsg_expr_p(g, s, a, n.a, 13) + " / " + jsg_expr_p(g, s, a, n.b, 14) + ")"
+            if jsg_ts_wrappable(n.type_str):
+                ret jsg_wrap_int(qv, n.type_str)
+            end
+            ret qv
         end
         if n.op == tok.TK_PLUS && str.Equals(n.type_str, "str"):
             t := jsg_template_concat(g, s, a, id)
@@ -2321,6 +2403,29 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
             sop := a_str ? n.a : n.b
             nop := a_str ? n.b : n.a
             ret jsg_expr_p(g, s, a, sop, JSP_MEMBER) + ".repeat(Math.max(0, " + jsg_expr_p(g, s, a, nop, 0) + "))"
+        end
+        lts := at.Get(a, n.a).type_str
+        rts := at.Get(a, n.b).type_str
+        shift := n.op == tok.TK_SHL || n.op == tok.TK_SHR
+        mut cts := ""
+        if cg_is_int_typestr(lts) && cg_is_int_typestr(rts):
+            cts = shift ? lts : cg_common_int_typestr(lts, rts)
+        end
+        if str.Len(cts) > 0 && jsg_ts_wrappable(cts) && !jsg_op_is_cmp(n.op):
+            uns := cg_is_unsigned_typestr(cts)
+            // '>>' must be logical for unsigned; JS '>>' is arithmetic.
+            opw := (n.op == tok.TK_SHR && uns) ? ">>>" : jsg_op(n.op)
+            // A 32x32 product exceeds f64's exact range, so the low 32 bits
+            // have to come from Math.imul rather than '*'.
+            if n.op == tok.TK_STAR && jsg_int_ts_bits(cts) == 32:
+                ret jsg_wrap_int(
+                    "Math.imul(" + jsg_expr_p(g, s, a, n.a, 0) + ", " + jsg_expr_p(g, s, a, n.b, 0) + ")", cts
+                )
+            end
+            ownw := jsg_binprec(n.op)
+            ret jsg_wrap_int(
+                jsg_expr_p(g, s, a, n.a, ownw) + " " + opw + " " + jsg_expr_p(g, s, a, n.b, ownw + 1), cts
+            )
         end
         own := jsg_binprec(n.op)
         sv := jsg_expr_p(g, s, a, n.a, own) + " " + jsg_op(n.op) + " " + jsg_expr_p(g, s, a, n.b, own + 1)
@@ -2354,6 +2459,12 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
                 end
             end
         end
+        // '-' and '~' preserve the operand's type (SALAM-TYPES.md 21).
+        if (n.op == tok.TK_MINUS || n.op == tok.TK_TILDE) && n.a != 0 && jsg_ts_wrappable(at.Get(a, n.a).type_str):
+            ret jsg_wrap_int(
+                cg_op(n.op) + jsg_expr_p(g, s, a, n.a, JSP_UNARY), at.Get(a, n.a).type_str
+            )
+        end
         sv2 := cg_op(n.op) + jsg_expr_p(g, s, a, n.a, JSP_UNARY)
         ret jsg_wrap(sv2, JSP_UNARY, minprec)
     end
@@ -2385,6 +2496,11 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         end
         dn := str.Len(dts)
         if cg_is_int_typestr(dts) && dn > 0 && byte_at(dts, dn - 1) != 42 && !has_bracket(dts):
+            // ToInt32/ToUint32 already truncate toward zero, so the wrap form
+            // both narrows and reinterprets (SALAM-TYPES.md 16).
+            if jsg_ts_wrappable(dts):
+                ret jsg_wrap_int(jsg_expr_p(g, s, a, n.a, 0), dts)
+            end
             ret "Math.trunc(" + jsg_expr_p(g, s, a, n.a, 0) + ")"
         end
         if str.Equals(dts, "f32") || str.Equals(dts, "f64"):
@@ -2548,6 +2664,12 @@ func jsg_compound(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
         ret ""
     end
     if local_known(g, av.name) && !jsg_local_is_mut(g, av.name):
+        ret ""
+    end
+    // A sized integer result has to be masked back into its type, and there
+    // is nowhere to put the mask in `x += y` / `x++` - fall through to the
+    // plain `x = <wrapped expr>` form.
+    if jsg_ts_wrappable(av.type_str):
         ret ""
     end
     lv := jsg_expr(g, s, a, n.a)
@@ -2861,12 +2983,40 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
             cg_line(g, c + ";")
             ret
         end
+        if n.op != tok.TK_ASSIGN && n.a != 0 && jsg_ts_wrappable(at.Get(a, n.a).type_str):
+            wts := at.Get(a, n.a).type_str
+            bop := cg_compound_base(n.op)
+            if bop != tok.TK_EOF:
+                wuns := cg_is_unsigned_typestr(wts)
+                wlv := jsg_expr(g, s, a, n.a)
+                wop := (bop == tok.TK_SHR && wuns) ? ">>>" : cg_op(bop)
+                mut wrhs := wlv + " " + wop + " " + jsg_expr_p(g, s, a, n.b, 14)
+                if bop == tok.TK_STAR && jsg_int_ts_bits(wts) == 32:
+                    wrhs = "Math.imul(" + wlv + ", " + jsg_expr(g, s, a, n.b) + ")"
+                end
+                cg_line(g, wlv + " = " + jsg_wrap_int(wrhs, wts) + ";")
+                ret
+            end
+        end
         cg_line(
             g, jsg_expr(g, s, a, n.a) + " " + cg_op(n.op) + " " + jsg_expr(g, s, a, n.b) + ";"
         )
         ret
     end
     if n.kind == at.AST_EXPR_STMT:
+        // `x++` on a sized integer wraps at that type's width; JS '++' does
+        // not, so in statement position (where the old value is unused) it
+        // becomes the masked long form.
+        if n.a != 0 && at.KindOf(a, n.a) == at.AST_INCDEC:
+            iv := at.Get(a, n.a)
+            if iv.a != 0 && jsg_ts_wrappable(at.Get(a, iv.a).type_str):
+                its := at.Get(a, iv.a).type_str
+                ilv := jsg_expr(g, s, a, iv.a)
+                iop := iv.op == tok.TK_PLUS_PLUS ? "+" : "-"
+                cg_line(g, ilv + " = " + jsg_wrap_int(ilv + " " + iop + " 1", its) + ";")
+                ret
+            end
+        end
         cg_line(g, jsg_stmt_expr(g, s, a, n.a) + ";")
         ret
     end

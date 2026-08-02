@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024–2026)
+ * Salam Programming Language (2024-2026)
  *
  *   +-------------------+
  *   |     S A L A M     |
@@ -417,12 +417,43 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "{ return (void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n"
                "typedef void (*salam_thread_fn)(void);\n"
                "#endif\n");
+    /*
+     * strlen/strcmp/strstr/strtol/strtod below are hand-declared (rather
+     * than #include <string.h>/<stdlib.h>) so non-GUI builds don't need
+     * those headers at all. But in GUI mode, line ~343 conditionally
+     * #includes <windows.h> when _WIN32 is defined, which transitively
+     * pulls in the *real* <string.h>/<stdlib.h> prototypes - and salam's
+     * hand-rolled ones don't all match libc exactly (e.g. strstr's real
+     * return type is `char*`, declared here as `const char*`), so tcc
+     * sees two incompatible declarations of the same symbol in one
+     * translation unit ("incompatible types for redefinition").
+     *
+     * is_gui_mode is per-module (set from THIS module's own imports), but
+     * every non-core module also #includes salam_mod_core.h a few lines
+     * down - and core.h is generated independently, with its own
+     * is_gui_mode=false (the "core" module doesn't import webview), so it
+     * always emits these regardless. Guarding core.h's copy on _WIN32
+     * there wouldn't help: both headers land in the *same* translation
+     * unit (e.g. salam_mod_hello.c), so whichever comes first "wins" the
+     * SALAM_RT_STR_DEFINED include-guard and the other's copy is already
+     * suppressed by it - meaning the fix has to guarantee *this* file
+     * claims the guard before core.h ever gets a chance to, on _WIN32,
+     * without actually declaring anything (the real prototypes are already
+     * visible via <windows.h> by then). Every module's header includes
+     * core.h in the same relative position, so whichever one is textually
+     * first in the .c file still defines the guard correctly either way.
+     */
+    if (cg->is_gui_mode)
+        sb_puts(h, "#ifdef _WIN32\n#define SALAM_RT_STR_DEFINED\n"
+                   "#define SALAM_EXTERN_LIBC_ON_WIN32\n#endif\n");
     sb_puts(h, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n"
                "extern uint64_t strlen(const char* s);\n"
                "extern int32_t strcmp(const char* a, const char* b);\n"
                "extern const char* strstr(const char* haystack, const char* needle);\n"
                "extern int64_t strtol(const char* s, void* endptr, int32_t base);\n"
                "extern double strtod(const char* s, void* endptr);\n"
+               "#endif\n");
+    sb_puts(h, "#ifndef SALAM_RT_STR2_DEFINED\n#define SALAM_RT_STR2_DEFINED\n"
                "extern const char* salam_strcat(const char* a, const char* b);\n"
                "extern const char* salam_char_from_code(int32_t c);\n"
                "extern const char* salam_str_substr(const char* s, int32_t start, "
@@ -668,6 +699,34 @@ static void hdr_aliases(cg_t *cg, ast_node_t *program, sb_t *h)
     }
 }
 
+/*
+ * Names of standard C/CRT functions that std/ modules (mem, str, ...)
+ * declare via their own `extern func` blocks using salam's fixed-width
+ * type spellings (e.g. memset's 3rd param as `uint64_t`). tcc does strict
+ * typedef-identity comparison, not underlying-type resolution, so on
+ * _WIN32 in GUI mode - where <windows.h> transitively pulls in the *real*
+ * prototypes (spelled with `size_t`/`int`, not `uint64_t`/`int32_t`) -
+ * these collide the exact same way the compiler's own hand-rolled
+ * strlen/strstr/etc in hdr_prelude above do. See SALAM_EXTERN_LIBC_ON_WIN32
+ * below for the fix (same "claim the guard early" mechanism as
+ * SALAM_RT_STR_DEFINED, just for arbitrary std-module extern declarations
+ * rather than the compiler's own fixed prelude text).
+ */
+static bool is_wellknown_libc_name(const char *name)
+{
+    static const char *const names[] = {
+        "malloc",  "realloc", "free",           "calloc",        "memset",
+        "memcpy",  "memmove", "memcmp",         "strlen",        "strcmp",
+        "strncmp", "strcpy",  "strncpy",        "strcat",        "strncat",
+        "strstr",  "strchr",  "strrchr",        "strtol",        "strtod",
+        "atoi",    "atof",    "FindFirstFileA", "FindNextFileA", "FindClose",
+    };
+    size_t i = 0;
+    for (; i < sizeof(names) / sizeof(names[0]); i++)
+        if (strcmp(name, names[i]) == 0) return true;
+    return false;
+}
+
 static void hdr_externs(cg_t *cg, ast_node_t *program, sb_t *h)
 {
     {
@@ -678,7 +737,11 @@ static void hdr_externs(cg_t *cg, ast_node_t *program, sb_t *h)
             if (d->kind == AST_FUNC_DEF) {
                 symbol_t *fsym = scope_lookup_local(cg->sem->global, d->name);
                 func_sig_t *sig = sig_of_decl(fsym, d);
-                if (sig) sb_puts(h, cg_fmt(cg, "%s;\n", cg_extern_proto(cg, d, sig)));
+                if (!sig) continue;
+                bool risky = is_wellknown_libc_name(d->name);
+                if (risky) sb_puts(h, "#ifndef SALAM_EXTERN_LIBC_ON_WIN32\n");
+                sb_puts(h, cg_fmt(cg, "%s;\n", cg_extern_proto(cg, d, sig)));
+                if (risky) sb_puts(h, "#endif\n");
             } else if (d->kind == AST_VAR_DECL) {
                 const char *ts = d->type_str ? d->type_str : "int32_t";
                 sb_puts(h, cg_fmt(cg, "extern %s;\n", cg_decl(cg, ts, d->name)));

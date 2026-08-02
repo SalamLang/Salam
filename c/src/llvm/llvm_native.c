@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024–2026)
+ * Salam Programming Language (2024-2026)
  *
  *   +-------------------+
  *   |     S A L A M     |
@@ -959,6 +959,34 @@ static int jit_run_file(logger_t *log, const char *ll_path)
     return rc;
 }
 
+/*
+ * LLVMGetDefaultTargetTriple() returns the triple LLVM itself was built
+ * with, which a distro's libLLVM package can configure independently of
+ * the system's actual C ABI - so on a real 32-bit ARM Linux host it can
+ * come back as a soft-float "gnueabi" triple even though every CRT
+ * object and shared library on disk is hard-float only (Debian/Ubuntu/
+ * Raspberry Pi OS armhf). When that happens, LLVMCreateTargetMachine
+ * silently emits a soft-float-ABI object (float/double args passed in
+ * GPRs, no VFP register args) that the system linker then refuses to
+ * merge with the hard-float CRT objects ("uses VFP register arguments,
+ * ... does not"). 32-bit ARM Linux soft-float ("gnueabi"/"eabi" without
+ * the "hf" suffix) has been essentially extinct on these distros since
+ * ~2012, so force the "hf" suffix onto any bare 32-bit ARM Linux host
+ * triple to match reality - this only touches the implicit host-triple
+ * path, never an explicit user-supplied --target=.
+ */
+static void arm_force_hardfloat_triple(char *buf, size_t bufn, const char *triple)
+{
+    int is_arm32 = strstr(triple, "arm") != NULL && !strstr(triple, "aarch64") &&
+                   !strstr(triple, "arm64");
+    int is_linux = strstr(triple, "linux") != NULL;
+    int has_hf = strstr(triple, "hf") != NULL;
+    if (is_arm32 && is_linux && !has_hf)
+        sal_snprintf(buf, bufn, "%shf", triple);
+    else
+        sal_snprintf(buf, bufn, "%s", triple);
+}
+
 int salam_llvm_native(logger_t *log, const char *ll_path,
                       const codegen_llvm_options_t *opts)
 {
@@ -978,10 +1006,34 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
     LLVMModuleRef mod = NULL;
     if (parse_ir(log, ll_path, &ctx, &mod) != 0) return 2;
 
-    char *host_triple = LLVMGetDefaultTargetTriple();
+    char *host_triple_raw = LLVMGetDefaultTargetTriple();
+    /*
+     * LLVMGetDefaultTargetTriple() on some distro LLVM builds returns the
+     * bare 3-component "arch-os-env" shorthand (e.g. Debian/Ubuntu's
+     * "arm-linux-gnueabihf", matching their arm-linux-gnueabihf-gcc cross
+     * prefix) rather than the canonical 4-component "arch-vendor-os-env"
+     * form. Feeding that shorthand straight into LLVMGetTargetFromTriple/
+     * LLVMCreateTargetMachine (which construct a raw llvm::Triple with no
+     * normalization pass) leaves its Environment unset internally on ARM,
+     * so the "gnueabihf" hard-float marker is silently lost - the object
+     * still gets emitted (no error), just with the ARM hard-float ABI
+     * build attribute absent, which is exactly what left the "does not
+     * [use VFP register arguments]" mismatch against the real hard-float
+     * CRT objects unexplained for so long. LLVMNormalizeTargetTriple()
+     * expands the shorthand to the 4-component form ("arm-unknown-linux-
+     * gnueabihf") that the raw parser reads correctly - verified directly
+     * against libLLVM (llvm-readelf -A on the emitted .o only shows
+     * Tag_ABI_VFP_args with the normalized triple, never with the bare
+     * one, regardless of which CPU/FPU features are passed alongside it).
+     */
+    char *host_triple =
+        host_triple_raw ? LLVMNormalizeTargetTriple(host_triple_raw) : NULL;
+    char host_triple_hf[512];
+    if (host_triple)
+        arm_force_hardfloat_triple(host_triple_hf, sizeof host_triple_hf, host_triple);
     const char *triple = (opts->target_triple && opts->target_triple[0])
                              ? opts->target_triple
-                             : host_triple;
+                             : (host_triple ? host_triple_hf : host_triple);
     LLVMSetTarget(mod, triple);
 
     int rc = 0;
@@ -1013,20 +1065,45 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
         }
         char *host_cpu = NULL;
         char *host_features = NULL;
+        int host_features_is_fallback = 0;
         int is_host_target =
             !opts->target_triple || !opts->target_triple[0] ||
             (host_triple && strcmp(opts->target_triple, host_triple) == 0);
+        /*
+         * A 32-bit ARM LLVMTargetMachine with no explicit target-features
+         * has no FPU modeled at all, so a program that actually does
+         * float/double arithmetic would have nothing to lower it onto -
+         * even though the triple above is now correctly recognized as
+         * hard-float (see the LLVMNormalizeTargetTriple() comment). This
+         * is a correctness floor, not the opt-in perf tuning --native-cpu
+         * is for elsewhere in this function, so it applies unconditionally
+         * on a host-target ARM32 build, independent of that flag.
+         */
+        int is_arm32_host = is_host_target && strstr(triple, "arm") != NULL &&
+                            !strstr(triple, "aarch64") && !strstr(triple, "arm64");
         if (opts->native_cpu && is_host_target) {
             host_cpu = LLVMGetHostCPUName();
             host_features = LLVMGetHostCPUFeatures();
             LOG_I(log, PH_DRIVER, "tuning for host CPU: %s",
                   host_cpu ? host_cpu : "(unknown)");
         }
+        if (is_arm32_host && (!host_features || !host_features[0])) {
+            /* LLVMGetHostCPUFeatures() relies on /proc/cpuinfo parsing that
+             * is far less reliable on ARM than x86's cpuid, and can come
+             * back empty (or wasn't queried at all without --native-cpu) -
+             * fall back to the FPU baseline every armhf Linux distro
+             * (Debian/Ubuntu/Raspberry Pi OS) already requires, so
+             * hard-float codegen has an FPU to target either way. */
+            if (host_features) LLVMDisposeMessage(host_features);
+            host_features = "+vfp3";
+            host_features_is_fallback = 1;
+        }
         LLVMTargetMachineRef tm = LLVMCreateTargetMachine(
             target, triple, host_cpu ? host_cpu : "", host_features ? host_features : "",
             map_cg_level(opts->opt_level), LLVMRelocPIC, LLVMCodeModelDefault);
         if (host_cpu) LLVMDisposeMessage(host_cpu);
-        if (host_features) LLVMDisposeMessage(host_features);
+        if (host_features && !host_features_is_fallback)
+            LLVMDisposeMessage(host_features);
         if (!tm) {
             LOG_E(log, PH_DRIVER, "could not create LLVM target machine for %s", triple);
             rc = 2;
@@ -1094,6 +1171,7 @@ cleanup:
     if (mod) LLVMDisposeModule(mod);
     if (ctx) LLVMContextDispose(ctx);
     LLVMDisposeMessage(host_triple);
+    LLVMDisposeMessage(host_triple_raw);
     return rc;
 }
 

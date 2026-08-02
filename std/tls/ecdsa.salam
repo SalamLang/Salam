@@ -1,0 +1,146 @@
+package tls
+
+// ECDSA signature verification over P-256 and P-384 (FIPS 186-4, X9.62).
+//
+// Verification only, and every operand is public, so the double scalar
+// multiplication may run in variable time. Signing is deliberately absent: it
+// needs a secret per-signature nonce, and a biased or repeated ECDSA nonce
+// discloses the private key outright.
+//
+// Scalar arithmetic happens mod the group order n, reusing the same Montgomery
+// multiplier as the field with the curve's n-side constants.
+
+func _sn_mul(cv: Curve, r &: Fe, a: Fe, b: Fe):
+    _fe_mont_mul(r, a, b, cv.n, cv.nl, cv.n0n)
+end
+
+func _sn_to_mont(cv: Curve, r &: Fe, a: Fe):
+    _fe_mont_mul(r, a, _fe_from(cv.r2n, cv.nl), cv.n, cv.nl, cv.n0n)
+end
+
+func _sn_from_mont(cv: Curve, r &: Fe, a: Fe):
+    _fe_mont_mul(r, a, _fe_one_plain(), cv.n, cv.nl, cv.n0n)
+end
+
+// Inverse mod n by Fermat; n is prime for both curves.
+func _sn_inv(cv: Curve, r &: Fe, a: Fe):
+    // the Montgomery form of 1 mod n, derived rather than tabulated
+    mut onen := Fe {}
+    _sn_to_mont(cv, onen, _fe_one_plain())
+    mut onearr: u32[12]
+    repeat 12 with i:
+        onearr[i] = 0 as u32
+    end
+    repeat cv.nl with i:
+        onearr[i] = onen.v[i]
+    end
+    _fe_inv(r, a, cv.n, onearr, cv.nl, cv.n0n)
+end
+
+// Reduce a digest to a scalar. FIPS 186-4 takes the leftmost min(hashlen,
+// orderlen) bytes: a SHA-256 digest under P-384 is right-aligned into the wider
+// field, and a SHA-384 digest under P-256 is truncated to its leading 32 bytes.
+func _ecdsa_digest_scalar(cv: Curve, digest: void*, dlen: int): Fe:
+    mut buf := _newbuf(cv.nb)
+    defer _buf_free(buf)
+    mut take := dlen
+    if take > cv.nb:
+        take = cv.nb
+    end
+    repeat cv.nb - take with _i:
+        _put8(buf, 0)
+    end
+    _putraw(buf, digest, take)
+    mut z := _fe_from_bytes(buf.p, cv.nb)
+    // a single conditional subtraction suffices: z < 2^(8*nb) < 2n
+    mut t := Fe {}
+    borrow := _fe_sub_raw(t, z, _fe_from(cv.n, cv.nl), cv.nl)
+    _fe_cmov(z, t, ((borrow ^ (1 as u32)) & (1 as u32)) as int, cv.nl)
+    ret z
+end
+
+// Verify (r, s) over `digest` for the uncompressed public key `pubkey`.
+func _ecdsa_verify(cv: Curve, digest: void*, dlen: int, rbytes: void*, sbytes: void*, pubkey: void*, publen: int): bool:
+    mut q := Jac {}
+    if !_ec_point_from_bytes(cv, pubkey, publen, q):
+        ret false
+    end
+    r := _fe_from_bytes(rbytes, cv.nb)
+    s := _fe_from_bytes(sbytes, cv.nb)
+    // both must lie in [1, n-1]; r == 0 or s == 0 makes the check trivial
+    if _fe_is_zero(r, cv.nl) || _fe_is_zero(s, cv.nl):
+        ret false
+    end
+    if !_fe_lt(r, cv.n, cv.nl) || !_fe_lt(s, cv.n, cv.nl):
+        ret false
+    end
+
+    z := _ecdsa_digest_scalar(cv, digest, dlen)
+
+    // w = s^-1 mod n, carried in Montgomery form throughout
+    mut sm := Fe {}
+    _sn_to_mont(cv, sm, s)
+    mut wm := Fe {}
+    _sn_inv(cv, wm, sm)
+
+    mut zm := Fe {}
+    _sn_to_mont(cv, zm, z)
+    mut u1m := Fe {}
+    _sn_mul(cv, u1m, zm, wm)
+    mut u1 := Fe {}
+    _sn_from_mont(cv, u1, u1m)
+
+    mut rm := Fe {}
+    _sn_to_mont(cv, rm, r)
+    mut u2m := Fe {}
+    _sn_mul(cv, u2m, rm, wm)
+    mut u2 := Fe {}
+    _sn_from_mont(cv, u2, u2m)
+
+    pt := _jac_mul_double_vartime(cv, u1, _jac_generator(cv), u2, q)
+    if _jac_is_infinity(pt, cv.nl):
+        ret false
+    end
+
+    mut xb := _newbuf(cv.nb)
+    defer _buf_free(xb)
+    _putzeros(xb, cv.nb)
+    mut yb := _newbuf(cv.nb)
+    defer _buf_free(yb)
+    _putzeros(yb, cv.nb)
+    if !_jac_to_affine(cv, pt, xb.p, yb.p):
+        ret false
+    end
+    mut x := _fe_from_bytes(xb.p, cv.nb)
+    // the comparison is against x mod n, not x
+    mut t := Fe {}
+    borrow := _fe_sub_raw(t, x, _fe_from(cv.n, cv.nl), cv.nl)
+    _fe_cmov(x, t, ((borrow ^ (1 as u32)) & (1 as u32)) as int, cv.nl)
+    ret _fe_eq(x, r, cv.nl)
+end
+
+func _ecdsa_p256_verify(digest: void*, dlen: int, rbytes: void*, sbytes: void*, pubkey: void*, publen: int): bool:
+    ret _ecdsa_verify(_curve_p256(), digest, dlen, rbytes, sbytes, pubkey, publen)
+end
+
+func _ecdsa_p384_verify(digest: void*, dlen: int, rbytes: void*, sbytes: void*, pubkey: void*, publen: int): bool:
+    ret _ecdsa_verify(_curve_p384(), digest, dlen, rbytes, sbytes, pubkey, publen)
+end
+
+// ---------------------------------------------------------------- ECDH shims
+
+func _p256_base_mul(scalar: void*, xout: void*, yout: void*): bool:
+    ret _ec_base_mul(_curve_p256(), scalar, xout, yout)
+end
+
+func _p256_ecdh(scalar: void*, peer: void*, peerlen: int, out: void*): bool:
+    ret _ec_ecdh(_curve_p256(), scalar, peer, peerlen, out)
+end
+
+func _p384_base_mul(scalar: void*, xout: void*, yout: void*): bool:
+    ret _ec_base_mul(_curve_p384(), scalar, xout, yout)
+end
+
+func _p384_ecdh(scalar: void*, peer: void*, peerlen: int, out: void*): bool:
+    ret _ec_ecdh(_curve_p384(), scalar, peer, peerlen, out)
+end

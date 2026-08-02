@@ -1,0 +1,172 @@
+// Live TLS 1.3 interop check.
+//
+// Known-answer vectors prove the primitives compute the right values. Only a
+// real server proves the ClientHello is well formed, the transcript is fed the
+// exact bytes, the key schedule agrees with someone else's implementation, and
+// the record layer frames correctly.
+//
+// The badssl.com cases matter more than the successful fetches: a verifier that
+// accepts everything passes every positive test. Each of those hosts serves a
+// deliberately broken certificate and MUST be rejected.
+//
+// Requires network access, so it is not part of the offline vector suite.
+//
+//   salam build tests/en/tls/live_handshake.salam --output=/tmp/live && /tmp/live
+
+package main
+
+import tls
+import os
+import str
+import io
+
+const LONE_ROOT_PEM := """
+-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
+KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
+OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
+jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
+qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
+rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
+hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
+3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
+NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
+ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
+TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
+jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
+oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
+4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
+mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
+emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
+-----END CERTIFICATE-----
+"""
+
+mut failures := 0
+
+func report ok(what: str, detail: str):
+    println "  ok      ", what, detail
+end
+
+func report fail(what: str, detail: str):
+    println "  FAIL    ", what, detail
+    failures += 1
+end
+
+// Fetch a page and require a 2xx/3xx status line back.
+func fetch(host: str, path: str, aes: bool):
+    mut cfg := tls.NewConfig(host)
+    cfg.aes_only = aes
+    mut c := tls.Dial(host, 443, cfg)
+    if !tls.ConnOk(c):
+        report fail(host, "-> " + tls.ConnError(c))
+        tls.Close(c)
+        ret
+    end
+    req := "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\nUser-Agent: Salam-TLS/0.1\r\nAccept: */*\r\n\r\n"
+    tls.Write(c, req)
+
+    mut body := ""
+    mut reading := true
+    mut rounds := 0
+    until reading && rounds < 4000:
+        rounds += 1
+        chunk := tls.Read(c, 16384)
+        if chunk.len() == 0:
+            reading = false
+        else:
+            body = body + chunk
+        end
+    end
+    cipher := tls.CipherName(c)
+    ncerts := tls.PeerCertCount(c)
+    err := tls.ConnError(c)
+    tls.Close(c)
+
+    mut status := ""
+    nl := str.Find(body, "\r\n")
+    if nl > 0:
+        status = body.substr(0, nl)
+    end
+    if str.StartsWith(status, "HTTP/1.1 2") || str.StartsWith(status, "HTTP/1.1 3"):
+        report ok(host, "| " + cipher + " | certs " + ncerts + " | " + status + " | " + body.len() + " bytes")
+    else:
+        report fail(host, "-> unexpected response: " + status + " (" + body.len() + " bytes, " + err + ")")
+    end
+end
+
+// A connection that must fail IN OUR VERIFIER.
+//
+// Requiring the error to be a certificate-verification failure is the whole
+// point: if the peer simply aborts the handshake (say, because it does not
+// speak TLS 1.3), the connection also "fails" while proving nothing about the
+// verifier. That is how the badssl.com hosts read as passing until it turned
+// out they are TLS 1.2 only.
+func must reject(host: str, sni: str, ca: str, why: str):
+    mut cfg := tls.NewConfig(sni)
+    cfg.ca_file = ca
+    mut c := tls.Dial(host, 443, cfg)
+    e := tls.ConnError(c)
+    if tls.ConnOk(c):
+        report fail(why, "-> ACCEPTED a chain that must be rejected")
+    else if str.Contains(e, "certificate verification failed"):
+        report ok(why, "-> " + e)
+    else:
+        report fail(why, "-> failed, but NOT in our verifier: " + e)
+    end
+    tls.Close(c)
+end
+
+func main:
+    println "live TLS 1.3 interop"
+    println " positive:"
+    fetch("example.com", "/", false)
+    fetch("www.cloudflare.com", "/", false)
+    fetch("api.github.com", "/zen", false)
+    // same servers, forcing the other mandatory cipher suite
+    fetch("example.com", "/", true)
+    fetch("api.github.com", "/zen", true)
+    // a differently anchored chain, exercising more of the PKI
+    fetch("www.google.com", "/", false)
+
+    println " negative (must fail inside our verifier):"
+    // Hostname mismatch has to be provoked with an SNI the server will still
+    // answer: a bogus TLD makes it abort before we ever see a certificate, and
+    // "wrong-name.example.org" is legitimately covered by that server's
+    // *.example.org SAN. Connecting to one real host while expecting another
+    // real host's identity reaches the verifier and must be refused.
+    must reject("www.google.com", "example.com", "", "hostname mismatch (google cert, expecting example.com)")
+    must reject("api.github.com", "example.com", "", "hostname mismatch (real host, wrong SNI)")
+
+    // a trust store holding one real but unrelated root: the chain is genuine
+    // and correctly signed, and must still be refused for lack of an anchor
+    lone := "/tmp/salam-tls-lone-root.pem"
+    io.WriteFile(lone, LONE_ROOT_PEM)
+    must reject("example.com", "example.com", lone, "chain to an untrusted root")
+    must reject("www.google.com", "www.google.com", lone, "chain to an untrusted root (google)")
+
+    // NOTE: the badssl.com hosts (expired / self-signed / untrusted-root /
+    // wrong.host) are deliberately NOT used here. They serve TLS 1.2 only, so
+    // this TLS 1.3 client never reaches certificate validation against them and
+    // the resulting "failure" would say nothing about the verifier. They become
+    // useful once the TLS 1.2 path exists.
+
+    if failures == 0:
+        println "live interop: all checks passed"
+    else:
+        println "live interop:", failures, "failure(s)"
+    end
+    os.Exit(failures)
+end

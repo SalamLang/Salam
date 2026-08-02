@@ -1,0 +1,202 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+// AES-GCM (NIST SP 800-38D), the AEAD behind TLS_AES_128_GCM_SHA256 and
+// TLS_AES_256_GCM_SHA384.
+//
+// GHASH is the bit-serial algorithm: 128 shift-and-conditional-xor steps per
+// block, with the conditional expressed as an arithmetic mask rather than a
+// branch. That is roughly an order of magnitude slower than the usual 4-bit or
+// 8-bit precomputed-table variants, and it is chosen deliberately: those tables
+// are indexed by the multiplier, which for GHASH is the *authentication key*,
+// so a table-driven GHASH leaks H through cache timing. The bit-serial form
+// touches the same memory in the same order regardless of the data.
+//
+// The block cipher underneath still has the S-box caveat documented in
+// aes.salam; ChaCha20-Poly1305 remains the preferred suite.
+
+struct Ghash:
+    pub h: u8[16] = [
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+    ]
+    pub y: u8[16] = [
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+    ]
+end
+
+// y = y * h in GF(2^128) using GCM's bit ordering (bit 0 is the MSB of byte 0,
+// reduction polynomial x^128 + x^7 + x^2 + x + 1 represented as 0xe1...).
+func _ghash_mul(g &: Ghash):
+    mut z: int[16]
+    mut v: int[16]
+    repeat 16 with i:
+        z[i] = 0
+        v[i] = g.h[i] as int
+    end
+    repeat 128 with i:
+        bit := ((g.y[i / 8] as int) >> (7 - (i % 8))) & 1
+        mask := 0 - bit
+        repeat 16 with j:
+            z[j] = z[j] ^ (v[j] & mask)
+        end
+        lsb := v[15] & 1
+        mut carry := 0
+        repeat 16 with j:
+            b := v[j]
+            v[j] = ((b >> 1) | (carry << 7)) & 0xFF
+            carry = b & 1
+        end
+        v[0] = v[0] ^ (0xe1 & (0 - lsb))
+    end
+    repeat 16 with i:
+        g.y[i] = z[i] as u8
+    end
+end
+
+func _ghash_init(hkey: void*): Ghash:
+    mut g := Ghash {}
+    repeat 16 with i:
+        g.h[i] = _bget(hkey, i) as u8
+        g.y[i] = 0 as u8
+    end
+    ret g
+end
+
+// Absorb one block, zero-padded to 16 bytes if short.
+func _ghash_block(g &: Ghash, p: void*, n: int):
+    repeat 16 with i:
+        if i < n:
+            g.y[i] = ((g.y[i] as int) ^ _bget(p, i)) as u8
+        end
+    end
+    _ghash_mul(g)
+end
+
+func _ghash_data(g &: Ghash, p: void*, n: int):
+    mut off := 0
+    until off < n:
+        mut take := n - off
+        if take > 16:
+            take = 16
+        end
+        _ghash_block(g, ((p as i64) + (off as i64)) as void*, take)
+        off += take
+    end
+end
+
+// GCTR: XOR the data with AES-CTR keystream, big-endian 32-bit counter in the
+// low word of the 16-byte counter block.
+func _gcm_ctr(a: Aes, icb: void*, inp: void*, out: void*, n: int):
+    mut cb := _newbuf(16)
+    defer _buf_free(cb)
+    _putraw(cb, icb, 16)
+    mut ks := _newbuf(16)
+    defer _buf_wipe(ks)
+    _putzeros(ks, 16)
+    mut off := 0
+    until off < n:
+        _aes_encrypt_block(a, cb.p, ks.p)
+        mut take := n - off
+        if take > 16:
+            take = 16
+        end
+        repeat take with i:
+            _bput(out, off + i, _bget(inp, off + i) ^ _bufat(ks, i))
+        end
+        // increment only the trailing 32 bits, as GCM specifies
+        mut c := 1
+        mut i := 15
+        until i > 11:
+            v := _bufat(cb, i) + c
+            _bufset(cb, i, v & 0xFF)
+            c = (v >> 8) & 1
+            i -= 1
+        end
+        off += take
+    end
+end
+
+func _gcm_lenblock(g &: Ghash, aadlen: int, ctlen: int):
+    mut lb := _newbuf(16)
+    defer _buf_free(lb)
+    _put64(lb, (aadlen as u64) * (8 as u64))
+    _put64(lb, (ctlen as u64) * (8 as u64))
+    _ghash_block(g, lb.p, 16)
+end
+
+// Compute the GCM tag over (aad, ct) for a 12-byte nonce. TLS always uses a
+// 96-bit nonce, so the J0 = IV || 0^31 || 1 shortcut always applies and the
+// GHASH-based IV derivation for other lengths is not implemented.
+func _gcm_tag(a: Aes, nonce: void*, aad: void*, aadlen: int, ct: void*, ctlen: int, tag: void*):
+    mut hk := _newbuf(16)
+    defer _buf_wipe(hk)
+    _putzeros(hk, 16)
+    mut zero := _newbuf(16)
+    defer _buf_free(zero)
+    _putzeros(zero, 16)
+    _aes_encrypt_block(a, zero.p, hk.p)
+
+    mut g := _ghash_init(hk.p)
+    if aadlen > 0:
+        _ghash_data(g, aad, aadlen)
+    end
+    if ctlen > 0:
+        _ghash_data(g, ct, ctlen)
+    end
+    _gcm_lenblock(g, aadlen, ctlen)
+
+    // J0 for a 96-bit IV, then E(K, J0) masks the GHASH output
+    mut j0 := _newbuf(16)
+    defer _buf_free(j0)
+    _putraw(j0, nonce, 12)
+    _put32(j0, 1 as i64)
+    mut ej0 := _newbuf(16)
+    defer _buf_wipe(ej0)
+    _putzeros(ej0, 16)
+    _aes_encrypt_block(a, j0.p, ej0.p)
+    repeat 16 with i:
+        _bput(tag, i, (g.y[i] as int) ^ _bufat(ej0, i))
+    end
+end
+
+func _gcm_seal(a: Aes, nonce: void*, aad: void*, aadlen: int, pt: void*, ct: void*, n: int, tag: void*):
+    mut icb := _newbuf(16)
+    defer _buf_free(icb)
+    _putraw(icb, nonce, 12)
+    // counter starts at 2; J0 (counter 1) is reserved for the tag mask
+    _put32(icb, 2 as i64)
+    _gcm_ctr(a, icb.p, pt, ct, n)
+    _gcm_tag(a, nonce, aad, aadlen, ct, n, tag)
+end
+
+// Verifies the tag BEFORE decrypting, and writes no plaintext on failure.
+func _gcm_open(a: Aes, nonce: void*, aad: void*, aadlen: int, ct: void*, n: int, tag: void*, pt: void*): bool:
+    mut want := _newbuf(16)
+    defer _buf_free(want)
+    _putzeros(want, 16)
+    _gcm_tag(a, nonce, aad, aadlen, ct, n, want.p)
+    if !_cteq(want.p, tag, 16):
+        ret false
+    end
+    mut icb := _newbuf(16)
+    defer _buf_free(icb)
+    _putraw(icb, nonce, 12)
+    _put32(icb, 2 as i64)
+    _gcm_ctr(a, icb.p, ct, pt, n)
+    ret true
+end

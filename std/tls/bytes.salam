@@ -1,0 +1,515 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "tls"
+@fa "تی ال اس"
+@ar "تی ال اس"
+package tls
+
+import mem
+import str
+import time
+import io
+import os
+import encoding
+import net
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func rand_s(out: void*): int
+    end
+else:
+    extern:
+        func fopen(path: str, mode: str): void*
+        func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+        func fclose(stream: void*): int
+    end
+end
+
+extern:
+    noret func abort()
+end
+
+// Byte primitives shared by every part of the TLS stack.
+//
+// Two types carry binary data around:
+//   Buf    - a growable output buffer (building handshake messages, records)
+//   Reader - a bounds-checked cursor over borrowed bytes (parsing anything)
+//
+// Reader uses a *sticky* error flag rather than per-call error returns: once a
+// read runs past the end, `bad` latches true and every later read returns zero
+// without advancing. Parsers therefore read a whole structure optimistically
+// and check `r.bad` once at the end. This is what keeps the ASN.1 and handshake
+// parsers readable, and it means a truncated message can never be mistaken for
+// a well-formed one carrying zeros.
+
+const HEXDIGITS := "0123456789abcdef"
+
+struct Buf:
+    pub p: void* = null
+    pub len: int = 0
+    pub cap: int = 0
+    // Latches when an allocation fails. Every put becomes a no-op afterwards,
+    // so callers check once before using the result instead of after each put.
+    pub bad: bool = false
+end
+
+struct Reader:
+    pub p: void* = null
+    pub len: int = 0
+    pub pos: int = 0
+    pub bad: bool = false
+end
+
+inline func _bget(p: void*, i: int): int:
+    bp := p as u8*
+    ret bp[i] as int
+end
+
+inline func _bput(p: void*, i: int, v: int):
+    bp := p as u8*
+    bp[i] = v as u8
+end
+
+// ---------------------------------------------------------------- Buf
+
+func _newbuf(cap0: int): Buf:
+    mut c := cap0
+    if c < 32:
+        c = 32
+    end
+    p := mem.Allocate(c as u64)
+    if p == null:
+        ret Buf { p = null, len = 0, cap = 0, bad = true }
+    end
+    ret Buf { p = p, len = 0, cap = c, bad = false }
+end
+
+func _buf_free(b &: Buf):
+    if b.p != null:
+        mem.Free(b.p)
+    end
+    b.p = null
+    b.len = 0
+    b.cap = 0
+end
+
+func _wipe(p: void*, n: int):
+    if p != null && n > 0:
+        mem.Set(p, 0, n as u64)
+    end
+end
+
+// Overwrite the contents before releasing. Used for anything holding key
+// material so secrets do not outlive the buffer in freed heap memory.
+func _buf_wipe(b &: Buf):
+    _wipe(b.p, b.cap)
+    _buf_free(b)
+end
+
+func _buf_grow(b &: Buf, need: int):
+    if b.bad:
+        ret
+    end
+    if b.len + need <= b.cap:
+        ret
+    end
+    mut nc := b.cap
+    if nc < 32:
+        nc = 32
+    end
+    until b.len + need > nc:
+        nc *= 2
+    end
+    np := mem.Reallocate(b.p, nc as u64)
+    if np == null:
+        b.bad = true
+        ret
+    end
+    b.p = np
+    b.cap = nc
+end
+
+func _put8(b &: Buf, v: int):
+    _buf_grow(b, 1)
+    if b.bad:
+        ret
+    end
+    _bput(b.p, b.len, v & 0xFF)
+    b.len += 1
+end
+
+func _put16(b &: Buf, v: int):
+    _put8(b, (v >> 8) & 0xFF)
+    _put8(b, v & 0xFF)
+end
+
+func _put24(b &: Buf, v: int):
+    _put8(b, (v >> 16) & 0xFF)
+    _put8(b, (v >> 8) & 0xFF)
+    _put8(b, v & 0xFF)
+end
+
+func _put32(b &: Buf, v: i64):
+    _put8(b, ((v >> 24) & 0xFF) as int)
+    _put8(b, ((v >> 16) & 0xFF) as int)
+    _put8(b, ((v >> 8) & 0xFF) as int)
+    _put8(b, (v & 0xFF) as int)
+end
+
+func _put64(b &: Buf, v: u64):
+    repeat 8 with i:
+        sh := ((7 - i) * 8) as u64
+        _put8(b, ((v >> sh) & (0xFF as u64)) as int)
+    end
+end
+
+func _putraw(b &: Buf, src: void*, n: int):
+    if n <= 0:
+        ret
+    end
+    _buf_grow(b, n)
+    if b.bad:
+        ret
+    end
+    dst := ((b.p as i64) + (b.len as i64)) as void*
+    mem.Copy(dst, src, n as u64)
+    b.len += n
+end
+
+func _putbuf(b &: Buf, src: Buf):
+    _putraw(b, src.p, src.len)
+end
+
+// `str` is UTF-8 bytes in Salam, so a str doubles as a byte string here.
+func _putstr(b &: Buf, s: str):
+    _putraw(b, s as void*, s.len())
+end
+
+func _putzeros(b &: Buf, n: int):
+    repeat n with _i:
+        _put8(b, 0)
+    end
+end
+
+func _bufat(b: Buf, i: int): int:
+    if i < 0 || i >= b.len:
+        ret 0
+    end
+    ret _bget(b.p, i)
+end
+
+func _bufset(b &: Buf, i: int, v: int):
+    if i < 0 || i >= b.len:
+        ret
+    end
+    _bput(b.p, i, v & 0xFF)
+end
+
+// Patch a length that was reserved earlier with a zero placeholder. Handshake
+// and extension bodies are built this way: reserve, append the body, then
+// backfill the byte count.
+func _patch16(b &: Buf, off: int, v: int):
+    _bufset(b, off, (v >> 8) & 0xFF)
+    _bufset(b, off + 1, v & 0xFF)
+end
+
+func _patch24(b &: Buf, off: int, v: int):
+    _bufset(b, off, (v >> 16) & 0xFF)
+    _bufset(b, off + 1, (v >> 8) & 0xFF)
+    _bufset(b, off + 2, v & 0xFF)
+end
+
+func _bufreset(b &: Buf):
+    b.len = 0
+end
+
+// Drop the first n bytes, keeping the tail. Used by the record layer to consume
+// a parsed record out of the receive buffer.
+func _bufconsume(b &: Buf, n: int):
+    if n <= 0:
+        ret
+    end
+    if n >= b.len:
+        b.len = 0
+        ret
+    end
+    src := ((b.p as i64) + (n as i64)) as void*
+    mem.MemMove(b.p, src, (b.len - n) as u64)
+    b.len -= n
+end
+
+func _bufptr(b: Buf, off: int): void*:
+    ret ((b.p as i64) + (off as i64)) as void*
+end
+
+// Copy out as a Salam str. Only safe for data known to be free of NUL bytes
+// (header blocks, hostnames); binary payloads stay in Buf/pointers.
+func _bufstr(b: Buf): str:
+    if b.len <= 0:
+        ret ""
+    end
+    d := mem.Allocate((b.len + 1) as u64)
+    mem.Copy(d, b.p, b.len as u64)
+    _bput(d, b.len, 0)
+    ret d as str
+end
+
+// ---------------------------------------------------------------- Reader
+
+func _newreader(p: void*, n: int): Reader:
+    ret Reader { p = p, len = n, pos = 0, bad = false }
+end
+
+func _readerof(b: Buf): Reader:
+    ret _newreader(b.p, b.len)
+end
+
+func _subreader(r: Reader, off: int, n: int): Reader:
+    ret _newreader(((r.p as i64) + (off as i64)) as void*, n)
+end
+
+func _rdleft(r: Reader): int:
+    if r.bad:
+        ret 0
+    end
+    ret r.len - r.pos
+end
+
+func _rdneed(r &: Reader, n: int): bool:
+    if r.bad:
+        ret false
+    end
+    if n < 0 || r.pos + n > r.len:
+        r.bad = true
+        ret false
+    end
+    ret true
+end
+
+func _rd8(r &: Reader): int:
+    if !_rdneed(r, 1):
+        ret 0
+    end
+    v := _bget(r.p, r.pos)
+    r.pos += 1
+    ret v
+end
+
+func _rd16(r &: Reader): int:
+    hi := _rd8(r)
+    lo := _rd8(r)
+    ret (hi << 8) | lo
+end
+
+func _rd24(r &: Reader): int:
+    a := _rd8(r)
+    b := _rd8(r)
+    c := _rd8(r)
+    ret (a << 16) | (b << 8) | c
+end
+
+func _rd32(r &: Reader): i64:
+    a := _rd8(r) as i64
+    b := _rd8(r) as i64
+    c := _rd8(r) as i64
+    d := _rd8(r) as i64
+    ret (a << 24) | (b << 16) | (c << 8) | d
+end
+
+func _rdskip(r &: Reader, n: int):
+    if !_rdneed(r, n):
+        ret
+    end
+    r.pos += n
+end
+
+// Borrow n bytes as a sub-reader without copying. The result points into the
+// same memory, so it stays valid only as long as the parent buffer does.
+func _rdbytes(r &: Reader, n: int): Reader:
+    if !_rdneed(r, n):
+        ret _newreader(null, 0)
+    end
+    out := _subreader(r, r.pos, n)
+    r.pos += n
+    ret out
+end
+
+// Read a length-prefixed vector, the shape TLS uses everywhere.
+func _rdvec8(r &: Reader): Reader:
+    n := _rd8(r)
+    ret _rdbytes(r, n)
+end
+
+func _rdvec16(r &: Reader): Reader:
+    n := _rd16(r)
+    ret _rdbytes(r, n)
+end
+
+func _rdvec24(r &: Reader): Reader:
+    n := _rd24(r)
+    ret _rdbytes(r, n)
+end
+
+func _rdinto(r &: Reader, b &: Buf, n: int):
+    if !_rdneed(r, n):
+        ret
+    end
+    _putraw(b, ((r.p as i64) + (r.pos as i64)) as void*, n)
+    r.pos += n
+end
+
+func _rdrest(r &: Reader): Reader:
+    ret _rdbytes(r, _rdleft(r))
+end
+
+func _rdat(r: Reader, i: int): int:
+    if i < 0 || i >= r.len:
+        ret 0
+    end
+    ret _bget(r.p, i)
+end
+
+// ---------------------------------------------------------------- comparison
+
+// Constant-time equality: always touches every byte and never branches on the
+// data. Used for AEAD tags and any other attacker-supplied value compared
+// against a secret, where an early exit would leak a byte-by-byte oracle.
+func _cteq(a: void*, b: void*, n: int): bool:
+    mut diff := 0
+    repeat n with i:
+        diff |= _bget(a, i) ^ _bget(b, i)
+    end
+    ret diff == 0
+end
+
+func _cteqrd(a: Reader, b: Reader): bool:
+    if a.len != b.len:
+        ret false
+    end
+    ret _cteq(a.p, b.p, a.len)
+end
+
+// Branch-free select: returns a when c is 1, b when c is 0. Callers must pass
+// c as exactly 0 or 1.
+inline func _ctsel(c: int, a: int, b: int): int:
+    m := 0 - c
+    ret (a & m) | (b & ~m)
+end
+
+func _xorinto(dst: void*, src: void*, n: int):
+    repeat n with i:
+        _bput(dst, i, _bget(dst, i) ^ _bget(src, i))
+    end
+end
+
+// ---------------------------------------------------------------- hex
+
+func _hexof(p: void*, n: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n with i:
+        v := _bget(p, i)
+        str.BufAppend(sb, HEXDIGITS.substr(v >> 4, 1))
+        str.BufAppend(sb, HEXDIGITS.substr(v & 0x0F, 1))
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _hexofbuf(b: Buf): str:
+    ret _hexof(b.p, b.len)
+end
+
+func _hexnib(c: int): int:
+    if c >= 48 && c <= 57:
+        ret c - 48
+    end
+    if c >= 97 && c <= 102:
+        ret c - 87
+    end
+    if c >= 65 && c <= 70:
+        ret c - 55
+    end
+    ret 0 - 1
+end
+
+// Parse a hex literal into a Buf. Whitespace and ':' separators are skipped so
+// test vectors can be pasted straight from an RFC.
+func _hexbuf(s: str): Buf:
+    mut b := _newbuf(s.len() / 2 + 8)
+    mut hi := 0 - 1
+    n := s.len()
+    sp := s as void*
+    repeat n with i:
+        v := _hexnib(_bget(sp, i))
+        if v >= 0:
+            if hi < 0:
+                hi = v
+            else:
+                _put8(b, (hi << 4) | v)
+                hi = 0 - 1
+            end
+        end
+    end
+    ret b
+end
+
+// ---------------------------------------------------------------- randomness
+
+
+// Fill n bytes from the OS entropy source.
+//
+// There is no userspace PRNG here on purpose: a TLS client needs unpredictable
+// private keys and ClientHello randoms, and seeding a generator badly is a
+// classic way to make every session recoverable. If the OS source cannot be
+// read this aborts rather than returning predictable bytes, because a caller
+// that ignored an error return would produce a key an attacker can guess.
+func _os_random_fill_pub(buf: void*, n: int):
+    if n <= 0:
+        ret
+    end
+    if SALAM_OS_WINDOWS:
+        tmp := mem.Allocate(4 as u64)
+        defer mem.Free(tmp)
+        mut filled := 0
+        until filled < n:
+            if rand_s(tmp) != 0:
+                abort()
+            end
+            mut k := 0
+            until k < 4 && filled < n:
+                _bput(buf, filled, _bget(tmp, k))
+                filled += 1
+                k += 1
+            end
+        end
+    else:
+        f := fopen("/dev/urandom", "rb")
+        if f == null:
+            abort()
+        end
+        mut total := 0
+        until total < n:
+            dst := ((buf as i64) + (total as i64)) as void*
+            got := fread(dst, 1 as u64, (n - total) as u64, f)
+            if got == (0 as u64):
+                fclose(f)
+                abort()
+            end
+            total += got as int
+        end
+        fclose(f)
+    end
+end

@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024–2026)
+ * Salam Programming Language (2024-2026)
  *
  *   +-------------------+
  *   |     S A L A M     |
@@ -82,6 +82,8 @@ void parse_typestr(const char *ts, char *base, size_t cap, bool *ptr, vec_t *dim
 bool cg_is_int_typestr(const char *ts);
 
 bool cg_is_unsigned_typestr(const char *ts);
+
+const char *cg_common_int_typestr(const char *a, const char *b);
 
 void cg_vec_elem(const char *ts, char *ebuf, size_t cap);
 

@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024–2026)
+ * Salam Programming Language (2024-2026)
  *
  *   +-------------------+
  *   |     S A L A M     |
@@ -354,20 +354,32 @@ static ast_node_t *parse_until(parser_t *p)
     return n;
 }
 
+/* Loop bounds stop before 'with' so the index binding stays visible: without
+ * this a member access would swallow it ('repeat box.count with i' parsing as
+ * the field 'count with i'). */
+static ast_node_t *parse_repeat_bound(parser_t *p)
+{
+    bool saved = p->no_with_word;
+    p->no_with_word = true;
+    ast_node_t *e = parse_cond_expr(p);
+    p->no_with_word = saved;
+    return e;
+}
+
 static ast_node_t *parse_repeat(parser_t *p)
 {
     P_RULE(p, "repeat_stmt");
     ast_node_t *n = p_mk(p, AST_REPEAT);
     p_advance(p);
-    n->a = parse_cond_expr(p);
+    n->a = parse_repeat_bound(p);
     if (p_at(p, TK_KW_TO)) {
         p_advance(p);
-        n->c = parse_cond_expr(p);
+        n->c = parse_repeat_bound(p);
     }
     if (p_at(p, TK_KW_STEP)) {
         p_advance(p);
         if (!n->c) p_error(p, "'by' in a repeat loop needs a 'to' bound before it");
-        n->d = parse_cond_expr(p);
+        n->d = parse_repeat_bound(p);
     }
     if (p_match(p, TK_KW_WITH))
         n->name = p_name(p, "expected an index variable name after 'with'");

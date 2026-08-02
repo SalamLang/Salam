@@ -1,0 +1,406 @@
+package tls
+
+// TLS 1.3 record layer (RFC 8446 section 5) and traffic-key management.
+//
+// A record is a 5-byte header followed by a fragment. Before the handshake
+// keys exist the fragment is plaintext; afterwards it is an AEAD ciphertext
+// whose additional data is the header itself, so a rewritten length or content
+// type breaks authentication.
+//
+// Two details that are easy to get subtly wrong and are called out here:
+//
+//  * The per-record nonce is the static IV XOR the 64-bit sequence number,
+//    right-aligned. The sequence number is NEVER transmitted; both sides count
+//    independently, which is what stops a record being replayed or reordered
+//    within a connection. It resets to zero on every key change.
+//
+//  * TLS 1.3 hides the real content type inside the encrypted payload and puts
+//    a fixed 0x17 (application_data) in the visible header. The true type is
+//    the last non-zero byte of the decrypted inner plaintext, after any padding
+//    zeros. Reading the visible header's type instead would mean trusting a
+//    field the AEAD does authenticate but which is deliberately meaningless.
+
+const REC_CHANGE_CIPHER_SPEC := 20
+const REC_ALERT := 21
+const REC_HANDSHAKE := 22
+const REC_APPLICATION_DATA := 23
+
+// RFC 8446 allows 2^14 of plaintext, plus up to 256 bytes of expansion.
+const REC_MAX_PLAINTEXT := 16384
+const REC_MAX_CIPHERTEXT := 16640
+const REC_HEADER := 5
+
+const CIPHER_NONE := 0
+const CIPHER_AES128_GCM_SHA256 := 1
+const CIPHER_CHACHA20_SHA256 := 2
+const CIPHER_AES256_GCM_SHA384 := 3
+
+// wire code points
+const TLS_AES_128_GCM_SHA256 := 0x1301
+const TLS_AES_256_GCM_SHA384 := 0x1302
+const TLS_CHACHA20_POLY1305_SHA256 := 0x1303
+
+const ALERT_CLOSE_NOTIFY := 0
+const ALERT_UNEXPECTED_MESSAGE := 10
+const ALERT_BAD_RECORD_MAC := 20
+const ALERT_HANDSHAKE_FAILURE := 40
+const ALERT_BAD_CERTIFICATE := 42
+const ALERT_CERTIFICATE_EXPIRED := 45
+const ALERT_CERTIFICATE_UNKNOWN := 46
+const ALERT_ILLEGAL_PARAMETER := 47
+const ALERT_DECODE_ERROR := 50
+const ALERT_DECRYPT_ERROR := 51
+const ALERT_PROTOCOL_VERSION := 70
+const ALERT_INTERNAL_ERROR := 80
+
+struct TrafficKeys:
+    pub key: Buf = Buf {}
+    pub iv: Buf = Buf {}
+    pub seq: u64 = 0 as u64
+    pub cipher: int = 0
+    pub live: bool = false
+end
+
+// ---------------------------------------------------------------- transport
+
+struct RecordLayer:
+    pub fd: i64 = 0 - 1
+    // bytes received but not yet consumed
+    pub rx: Buf = Buf {}
+    pub rxk: TrafficKeys = TrafficKeys {}
+    pub txk: TrafficKeys = TrafficKeys {}
+    pub eof: bool = false
+    pub failed: bool = false
+    pub err: str = ""
+end
+
+func _cipher_hash(c: int): int:
+    if c == CIPHER_AES256_GCM_SHA384:
+        ret HASH_SHA384
+    end
+    ret HASH_SHA256
+end
+
+func _cipher_keylen(c: int): int:
+    if c == CIPHER_CHACHA20_SHA256:
+        ret 32
+    end
+    if c == CIPHER_AES256_GCM_SHA384:
+        ret 32
+    end
+    ret 16
+end
+
+func _cipher_from_wire(w: int): int:
+    if w == TLS_AES_128_GCM_SHA256:
+        ret CIPHER_AES128_GCM_SHA256
+    end
+    if w == TLS_CHACHA20_POLY1305_SHA256:
+        ret CIPHER_CHACHA20_SHA256
+    end
+    if w == TLS_AES_256_GCM_SHA384:
+        ret CIPHER_AES256_GCM_SHA384
+    end
+    ret CIPHER_NONE
+end
+
+func _tk_free(t &: TrafficKeys):
+    _buf_wipe(t.key)
+    _buf_wipe(t.iv)
+    t.seq = 0 as u64
+    t.live = false
+end
+
+// Derive {key, iv} from a traffic secret, per RFC 8446 section 7.3.
+func _tk_derive(secret: void*, slen: int, cipher: int): TrafficKeys:
+    kind := _cipher_hash(cipher)
+    klen := _cipher_keylen(cipher)
+    mut t := TrafficKeys {}
+    t.cipher = cipher
+    t.key = _newbuf(klen)
+    _putzeros(t.key, klen)
+    t.iv = _newbuf(12)
+    _putzeros(t.iv, 12)
+    mut ok := _hkdf_expand_label(kind, secret, slen, "key", null, 0, t.key.p, klen)
+    if !_hkdf_expand_label(kind, secret, slen, "iv", null, 0, t.iv.p, 12):
+        ok = false
+    end
+    t.seq = 0 as u64
+    t.live = ok
+    ret t
+end
+
+// nonce = static IV XOR the sequence number, right-aligned in 12 bytes.
+func _tk_nonce(t: TrafficKeys, out &: Buf):
+    _bufreset(out)
+    repeat 12 with i:
+        _put8(out, _bufat(t.iv, i))
+    end
+    mut s := t.seq
+    mut i := 11
+    until i >= 4:
+        _bufset(out, i, _bufat(out, i) ^ ((s & (0xFF as u64)) as int))
+        s = s >> (8 as u64)
+        i -= 1
+    end
+end
+
+// A sequence number must never wrap: reuse of a (key, nonce) pair destroys the
+// confidentiality of both records. RFC 8446 requires a KeyUpdate or connection
+// close well before this, so hitting it is a hard failure.
+func _tk_advance(t &: TrafficKeys): bool:
+    if t.seq == (18446744073709551615 as u64):
+        ret false
+    end
+    t.seq += 1 as u64
+    ret true
+end
+
+func _aead_seal(t: TrafficKeys, nonce: Buf, aad: void*, aadlen: int, pt: void*, ct: void*, n: int, tag: void*):
+    if t.cipher == CIPHER_CHACHA20_SHA256:
+        _cha20poly_seal(t.key.p, nonce.p, aad, aadlen, pt, ct, n, tag)
+        ret
+    end
+    a := _aes_init(t.key.p, t.key.len)
+    _gcm_seal(a, nonce.p, aad, aadlen, pt, ct, n, tag)
+end
+
+func _aead_open(t: TrafficKeys, nonce: Buf, aad: void*, aadlen: int, ct: void*, n: int, tag: void*, pt: void*): bool:
+    if t.cipher == CIPHER_CHACHA20_SHA256:
+        ret _cha20poly_open(t.key.p, nonce.p, aad, aadlen, ct, n, tag, pt)
+    end
+    a := _aes_init(t.key.p, t.key.len)
+    ret _gcm_open(a, nonce.p, aad, aadlen, ct, n, tag, pt)
+end
+
+func _rec_new(fd: i64): RecordLayer:
+    mut r := RecordLayer {}
+    r.fd = fd
+    r.rx = _newbuf(REC_MAX_CIPHERTEXT + REC_HEADER)
+    ret r
+end
+
+func _rec_free(r &: RecordLayer):
+    _buf_free(r.rx)
+    _tk_free(r.rxk)
+    _tk_free(r.txk)
+end
+
+func _rec_fail(r &: RecordLayer, msg: str):
+    if !r.failed:
+        r.failed = true
+        r.err = msg
+    end
+end
+
+// Pull more bytes from the socket into the receive buffer.
+func _rec_fill(r &: RecordLayer): bool:
+    mut tmp := _newbuf(4096)
+    defer _buf_free(tmp)
+    _putzeros(tmp, 4096)
+    n := net.RecvBytes(net.SocketFromFd(r.fd), tmp.p, 4096)
+    if n <= 0:
+        r.eof = true
+        ret false
+    end
+    _putraw(r.rx, tmp.p, n)
+    ret true
+end
+
+// Block until the receive buffer holds at least n bytes.
+func _rec_need(r &: RecordLayer, n: int): bool:
+    until r.rx.len < n:
+        if !_rec_fill(r):
+            ret false
+        end
+    end
+    ret true
+end
+
+// Read one record. On success `typ` receives the content type and `out` the
+// fragment (decrypted, with the inner type and padding stripped, once keys are
+// installed).
+func _rec_read(r &: RecordLayer, typ &: int, out &: Buf): bool:
+    if r.failed:
+        ret false
+    end
+    if !_rec_need(r, REC_HEADER):
+        ret false
+    end
+    ctype := _bufat(r.rx, 0)
+    length := (_bufat(r.rx, 3) << 8) | _bufat(r.rx, 4)
+    if length > REC_MAX_CIPHERTEXT:
+        _rec_fail(r, "record too large")
+        ret false
+    end
+    if !_rec_need(r, REC_HEADER + length):
+        _rec_fail(r, "truncated record")
+        ret false
+    end
+
+    mut hdr := _newbuf(REC_HEADER)
+    defer _buf_free(hdr)
+    repeat REC_HEADER with i:
+        _put8(hdr, _bufat(r.rx, i))
+    end
+
+    _bufreset(out)
+    if !r.rxk.live:
+        // plaintext record
+        repeat length with i:
+            _put8(out, _bufat(r.rx, REC_HEADER + i))
+        end
+        _bufconsume(r.rx, REC_HEADER + length)
+        typ = ctype
+        ret true
+    end
+
+    // ChangeCipherSpec may still arrive after keys are installed, as
+    // middlebox-compatibility filler. It is not encrypted and must be ignored
+    // rather than fed to the AEAD.
+    if ctype == REC_CHANGE_CIPHER_SPEC:
+        _bufconsume(r.rx, REC_HEADER + length)
+        typ = REC_CHANGE_CIPHER_SPEC
+        ret true
+    end
+
+    if length < 17:
+        _rec_fail(r, "encrypted record shorter than its tag")
+        ret false
+    end
+    ctlen := length - 16
+    mut nonce := _newbuf(12)
+    defer _buf_free(nonce)
+    _putzeros(nonce, 12)
+    _tk_nonce(r.rxk, nonce)
+
+    mut plain := _newbuf(ctlen + 1)
+    defer _buf_free(plain)
+    _putzeros(plain, ctlen)
+    ctp := _bufptr(r.rx, REC_HEADER)
+    tagp := _bufptr(r.rx, REC_HEADER + ctlen)
+    if !_aead_open(r.rxk, nonce, hdr.p, REC_HEADER, ctp, ctlen, tagp, plain.p):
+        _rec_fail(r, "bad record MAC")
+        ret false
+    end
+    _bufconsume(r.rx, REC_HEADER + length)
+    if !_tk_advance(r.rxk):
+        _rec_fail(r, "sequence number exhausted")
+        ret false
+    end
+
+    // strip zero padding from the end; the last non-zero byte is the real type
+    mut last := ctlen - 1
+    until last >= 0 && _bufat(plain, last) == 0:
+        last -= 1
+    end
+    if last < 0:
+        _rec_fail(r, "record with no content type")
+        ret false
+    end
+    typ = _bufat(plain, last)
+    repeat last with i:
+        _put8(out, _bufat(plain, i))
+    end
+    ret true
+end
+
+func _rec_write_raw(r &: RecordLayer, typ: int, p: void*, n: int): bool:
+    mut rec := _newbuf(n + REC_HEADER + 32)
+    defer _buf_free(rec)
+    // All scratch lives at function scope: a `defer` inside the else branch
+    // would be hoisted past the branch-local declaration.
+    mut inner := _newbuf(n + 1)
+    defer _buf_free(inner)
+    mut nonce := _newbuf(12)
+    defer _buf_free(nonce)
+    mut ct := _newbuf(n + 1)
+    defer _buf_free(ct)
+    mut tag := _newbuf(16)
+    defer _buf_free(tag)
+    if !r.txk.live:
+        _put8(rec, typ)
+        _put16(rec, TLS12)
+        _put16(rec, n)
+        _putraw(rec, p, n)
+    else:
+        // inner plaintext is content || real type; the visible header always
+        // claims application_data
+        _putraw(inner, p, n)
+        _put8(inner, typ)
+
+        _put8(rec, REC_APPLICATION_DATA)
+        _put16(rec, TLS12)
+        _put16(rec, inner.len + 16)
+
+        _putzeros(nonce, 12)
+        _tk_nonce(r.txk, nonce)
+
+        _putzeros(ct, inner.len)
+        _putzeros(tag, 16)
+        _aead_seal(r.txk, nonce, rec.p, REC_HEADER, inner.p, ct.p, inner.len, tag.p)
+        _putbuf(rec, ct)
+        _putbuf(rec, tag)
+        if !_tk_advance(r.txk):
+            _rec_fail(r, "sequence number exhausted")
+            ret false
+        end
+    end
+    sent := net.SendBytes(net.SocketFromFd(r.fd), rec.p, rec.len)
+    if sent != rec.len:
+        _rec_fail(r, "short write")
+        ret false
+    end
+    ret true
+end
+
+// Write a payload, fragmenting at the plaintext record limit.
+func _rec_write(r &: RecordLayer, typ: int, p: void*, n: int): bool:
+    if r.failed:
+        ret false
+    end
+    mut off := 0
+    if n == 0:
+        ret _rec_write_raw(r, typ, p, 0)
+    end
+    until off < n:
+        mut take := n - off
+        if take > REC_MAX_PLAINTEXT:
+            take = REC_MAX_PLAINTEXT
+        end
+        if !_rec_write_raw(r, typ, ((p as i64) + (off as i64)) as void*, take):
+            ret false
+        end
+        off += take
+    end
+    ret true
+end
+
+// Write an unencrypted record regardless of key state.
+//
+// Only the middlebox-compatibility ChangeCipherSpec uses this. RFC 8446
+// appendix D.4 has that record sent in the clear even though handshake keys
+// already exist; encrypting it makes the peer see an inner content type it
+// cannot place, and servers answer with unexpected_message.
+func _rec_write_plain(r &: RecordLayer, typ: int, p: void*, n: int): bool:
+    mut rec := _newbuf(n + REC_HEADER)
+    defer _buf_free(rec)
+    _put8(rec, typ)
+    _put16(rec, TLS12)
+    _put16(rec, n)
+    _putraw(rec, p, n)
+    sent := net.SendBytes(net.SocketFromFd(r.fd), rec.p, rec.len)
+    if sent != rec.len:
+        _rec_fail(r, "short write")
+        ret false
+    end
+    ret true
+end
+
+func _rec_send_alert(r &: RecordLayer, level: int, desc: int):
+    mut a := _newbuf(2)
+    defer _buf_free(a)
+    _put8(a, level)
+    _put8(a, desc)
+    _rec_write(r, REC_ALERT, a.p, 2)
+end

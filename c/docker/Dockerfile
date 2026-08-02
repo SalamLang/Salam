@@ -10,11 +10,14 @@ FROM alpine:${ALPINE_VERSION} AS toolchain
 ARG LLVM_VERSION
 SHELL ["/bin/ash", "-o", "pipefail", "-c"]
 
-RUN for i in 1 2 3 4 5; do \
-        apk add --no-cache \
+# trivy:ignore:AVD-DS-0025
+RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
+    for i in 1 2 3 4 5; do \
+        apk add -U --cache-dir=/var/cache/apk \
             build-base \
             make \
             musl-dev \
+            ccache \
             tcc \
             tcc-libs-static \
             clang${LLVM_VERSION} \
@@ -31,6 +34,10 @@ RUN for i in 1 2 3 4 5; do \
             webkit2gtk-4.1-dev \
             nodejs \
             npm \
+            qemu-aarch64 \
+            qemu-arm \
+            qemu-i386 \
+            wine \
         && break; \
         echo "apk add attempt $i failed; retrying in 5s..." >&2; sleep 5; \
         if [ "$i" = 5 ]; then \
@@ -38,6 +45,17 @@ RUN for i in 1 2 3 4 5; do \
             exit 1; \
         fi; \
     done
+
+ENV WINEDEBUG=-all
+ENV XDG_RUNTIME_DIR=/tmp/xdg-runtime
+
+RUN mkdir -p "$XDG_RUNTIME_DIR" && chmod 0700 "$XDG_RUNTIME_DIR" \
+    && timeout 60 wineboot --init >/tmp/wineboot-init.log 2>&1; \
+    timeout 30 wineserver -w || wineserver -k || true; \
+    if [ ! -f /root/.wine/system.reg ]; then \
+        echo "wine prefix init failed:" >&2; cat /tmp/wineboot-init.log >&2; exit 1; \
+    fi; \
+    rm -f /tmp/wineboot-init.log
 
 RUN node -v && npm -v
 
@@ -61,7 +79,9 @@ RUN addgroup -g "${SALAM_GID}" salam \
 WORKDIR /app
 
 FROM toolchain AS dev
-RUN apk add --no-cache entr
+# trivy:ignore:AVD-DS-0025
+RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
+    apk add -U --cache-dir=/var/cache/apk entr
 RUN chown -R salam:salam /app \
     && mkdir -p /app/build \
     && chmod 1777 /app/build

@@ -492,6 +492,39 @@ func cg_is_unsigned_typestr(ts: str): bool:
     ret str.Equals(ts, "u8") || str.Equals(ts, "u16") || str.Equals(ts, "u32") || str.Equals(ts, "u64") || str.Equals(ts, "size")
 end
 
+func cg_int_ts_bits(ts: str): int:
+    if str.Equals(ts, "i8") || str.Equals(ts, "u8"):
+        ret 8
+    end
+    if str.Equals(ts, "i16") || str.Equals(ts, "u16"):
+        ret 16
+    end
+    if str.Equals(ts, "i32") || str.Equals(ts, "u32"):
+        ret 32
+    end
+    ret 64
+end
+
+// Common type of an integer binary operation (SALAM-TYPES.md 15): same
+// signedness picks the higher rank, mixed signedness has no common type
+// (semantic analysis rejects it as E021).
+func cg_common_int_typestr(x: str, y: str): str:
+    if !cg_is_int_typestr(x) || !cg_is_int_typestr(y):
+        ret ""
+    end
+    if str.Equals(x, y):
+        ret x
+    end
+    if cg_is_unsigned_typestr(x) != cg_is_unsigned_typestr(y):
+        ret ""
+    end
+    ret cg_int_ts_bits(x) >= cg_int_ts_bits(y) ? x : y
+end
+
+func cg_op_is_cmp(k: int): bool:
+    ret k == tok.TK_EQ || k == tok.TK_NE || k == tok.TK_LT || k == tok.TK_GT || k == tok.TK_LE || k == tok.TK_GE
+end
+
 // cg_vec_elem - elem of "Vector<T>" (cap mirrors the C ebuf).
 func cg_vec_elem(ts: str, cap: int): str:
     lt := str.IndexOf(ts, "<")
@@ -3618,6 +3651,32 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
                 ret "(strcmp(" + ea2 + ", " + eb2 + ") " + opv + " 0)"
             end
         end
+        // Integer operands are converted to the operation's common type and
+        // the result is wrapped back into it. C's integer promotions would
+        // otherwise widen u8/u16/i8/i16 operands to int, so `(200 as u8) +
+        // (100 as u8)` yielded 300 instead of wrapping to 44, and a literal
+        // whose `as u64` cast was folded away would shift as a 32-bit int
+        // (`(1 as u64) << 63` produced 0). Salam defines arithmetic to wrap
+        // modulo 2^n in the operand type (SALAM-TYPES.md 4.1, 15).
+        shift := nn.op == tok.TK_SHL || nn.op == tok.TK_SHR
+        mut cts := ""
+        if cg_is_int_typestr(an.type_str) && cg_is_int_typestr(bn.type_str):
+            cts = shift ? an.type_str : cg_common_int_typestr(an.type_str, bn.type_str)
+        end
+        if str.Len(cts) > 0:
+            cty := cg_ctype(cts)
+            eaq := cg_expr(g, s, a, nn.a)
+            ebq := cg_expr(g, s, a, nn.b)
+            // Shifts keep the left operand's type; the right operand's value
+            // is used as-is.
+            if shift:
+                ret "((" + cty + ")((" + cty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + ebq + ")))"
+            end
+            if cg_op_is_cmp(nn.op):
+                ret "((" + cty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + cty + ")(" + ebq + "))"
+            end
+            ret "((" + cty + ")((" + cty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + cty + ")(" + ebq + ")))"
+        end
         ea3 := cg_expr(g, s, a, nn.a)
         eb3 := cg_expr(g, s, a, nn.b)
         ret "(" + ea3 + " " + cg_op(nn.op) + " " + eb3 + ")"
@@ -3653,6 +3712,13 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
                     end
                 end
             end
+        end
+        // '-' and '~' preserve the operand's type (SALAM-TYPES.md 21); C
+        // would promote a narrow operand to int, so `~(0 as u8)` came back
+        // as -1 rather than 255.
+        if (nn.op == tok.TK_MINUS || nn.op == tok.TK_TILDE) && nn.a != 0 && cg_is_int_typestr(at.Get(a, nn.a).type_str):
+            ucty := cg_ctype(at.Get(a, nn.a).type_str)
+            ret "((" + ucty + ")(" + cg_op(nn.op) + "(" + cg_expr(g, s, a, nn.a) + ")))"
         end
         ret "(" + cg_op(nn.op) + cg_expr(g, s, a, nn.a) + ")"
     end

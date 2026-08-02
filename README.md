@@ -18,7 +18,6 @@ Salam is a general-purpose and systems programming language designed for efficie
 
 </div>
 
-[![Compiler - Build & Test](https://github.com/SalamLang/Salam/actions/workflows/compiler-build-test.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/compiler-build-test.yml)
 [![Compiler - Clone & Build](https://github.com/SalamLang/Salam/actions/workflows/compiler-clone-build.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/compiler-clone-build.yml)
 [![Compiler - Build & Release](https://github.com/SalamLang/Salam/actions/workflows/compiler-release.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/compiler-release.yml)
 [![Editor - Playground (WebAssembly)](https://github.com/SalamLang/Salam/actions/workflows/editor-playground-deploy.yml/badge.svg)](https://github.com/SalamLang/Salam/actions/workflows/editor-playground-deploy.yml)

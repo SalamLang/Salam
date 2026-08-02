@@ -443,7 +443,9 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
      * core.h in the same relative position, so whichever one is textually
      * first in the .c file still defines the guard correctly either way.
      */
-    if (cg->is_gui_mode) sb_puts(h, "#ifdef _WIN32\n#define SALAM_RT_STR_DEFINED\n#endif\n");
+    if (cg->is_gui_mode)
+        sb_puts(h, "#ifdef _WIN32\n#define SALAM_RT_STR_DEFINED\n"
+                   "#define SALAM_EXTERN_LIBC_ON_WIN32\n#endif\n");
     sb_puts(h, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n"
                "extern uint64_t strlen(const char* s);\n"
                "extern int32_t strcmp(const char* a, const char* b);\n"
@@ -697,6 +699,36 @@ static void hdr_aliases(cg_t *cg, ast_node_t *program, sb_t *h)
     }
 }
 
+/*
+ * Names of standard C/CRT functions that std/ modules (mem, str, ...)
+ * declare via their own `extern func` blocks using salam's fixed-width
+ * type spellings (e.g. memset's 3rd param as `uint64_t`). tcc does strict
+ * typedef-identity comparison, not underlying-type resolution, so on
+ * _WIN32 in GUI mode - where <windows.h> transitively pulls in the *real*
+ * prototypes (spelled with `size_t`/`int`, not `uint64_t`/`int32_t`) -
+ * these collide the exact same way the compiler's own hand-rolled
+ * strlen/strstr/etc in hdr_prelude above do. See SALAM_EXTERN_LIBC_ON_WIN32
+ * below for the fix (same "claim the guard early" mechanism as
+ * SALAM_RT_STR_DEFINED, just for arbitrary std-module extern declarations
+ * rather than the compiler's own fixed prelude text).
+ */
+static bool is_wellknown_libc_name(const char *name)
+{
+    static const char *const names[] = {
+        "malloc",        "realloc",       "free",      "calloc",
+        "memset",        "memcpy",        "memmove",   "memcmp",
+        "strlen",        "strcmp",        "strncmp",   "strcpy",
+        "strncpy",       "strcat",        "strncat",   "strstr",
+        "strchr",        "strrchr",       "strtol",    "strtod",
+        "atoi",          "atof",          "FindFirstFileA", "FindNextFileA",
+        "FindClose",
+    };
+    size_t i = 0;
+    for (; i < sizeof(names) / sizeof(names[0]); i++)
+        if (strcmp(name, names[i]) == 0) return true;
+    return false;
+}
+
 static void hdr_externs(cg_t *cg, ast_node_t *program, sb_t *h)
 {
     {
@@ -707,7 +739,11 @@ static void hdr_externs(cg_t *cg, ast_node_t *program, sb_t *h)
             if (d->kind == AST_FUNC_DEF) {
                 symbol_t *fsym = scope_lookup_local(cg->sem->global, d->name);
                 func_sig_t *sig = sig_of_decl(fsym, d);
-                if (sig) sb_puts(h, cg_fmt(cg, "%s;\n", cg_extern_proto(cg, d, sig)));
+                if (!sig) continue;
+                bool risky = is_wellknown_libc_name(d->name);
+                if (risky) sb_puts(h, "#ifndef SALAM_EXTERN_LIBC_ON_WIN32\n");
+                sb_puts(h, cg_fmt(cg, "%s;\n", cg_extern_proto(cg, d, sig)));
+                if (risky) sb_puts(h, "#endif\n");
             } else if (d->kind == AST_VAR_DECL) {
                 const char *ts = d->type_str ? d->type_str : "int32_t";
                 sb_puts(h, cg_fmt(cg, "extern %s;\n", cg_decl(cg, ts, d->name)));

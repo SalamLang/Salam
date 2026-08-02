@@ -31,6 +31,9 @@ RUN for i in 1 2 3 4 5; do \
             webkit2gtk-4.1-dev \
             nodejs \
             npm \
+            qemu-aarch64 \
+            qemu-arm \
+            qemu-i386 \
         && break; \
         echo "apk add attempt $i failed; retrying in 5s..." >&2; sleep 5; \
         if [ "$i" = 5 ]; then \

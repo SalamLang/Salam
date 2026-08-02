@@ -362,9 +362,17 @@ if want cross; then
                     continue
                 fi
                 if [ -n "$runner" ] && ! command -v "$runner" >/dev/null 2>&1; then
-                    echo "SKIP $label (build OK; no $runner on this host to run the $target binary)"
-                    rm -f "$outbin"
-                    continue
+                    # Debian/multiarch ship qemu-*-static; Alpine's qemu-user
+                    # packages (used in c/docker/Dockerfile) provide the same
+                    # binaries without the -static suffix - accept either.
+                    alt="${runner%-static}"
+                    if [ "$alt" != "$runner" ] && command -v "$alt" >/dev/null 2>&1; then
+                        runner="$alt"
+                    else
+                        echo "SKIP $label (build OK; no $runner on this host to run the $target binary)"
+                        rm -f "$outbin"
+                        continue
+                    fi
                 fi
                 got=$($runner "$outbin" 2>&1 | tr -d '\r')
                 check_out "$label" "$exp" "$got"

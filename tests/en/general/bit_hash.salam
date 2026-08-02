@@ -1,0 +1,204 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Bit-mixing kernels that only work if xor, shift, rotate and unsigned
+// wrapping multiplication all behave exactly: FNV-1a, djb2, a CRC-32
+// computed a bit at a time, xorshift generators at 32 and 64 bits, and
+// the SplitMix64 finaliser.
+
+func fnv1a32(s: str): u32:
+    mut h := 2166136261 as u32
+    mut i := 0
+    until i < s.len():
+        h = h ^ ((s[i] as int) as u32)
+        h = h * (16777619 as u32)
+        i = i + 1
+    end
+    ret h
+end
+
+func fnv1a64(s: str): u64:
+    mut h := 14695981039346656037 as u64
+    mut i := 0
+    until i < s.len():
+        h = h ^ ((s[i] as int) as u64)
+        h = h * (1099511628211 as u64)
+        i = i + 1
+    end
+    ret h
+end
+
+func djb2(s: str): u32:
+    mut h := 5381 as u32
+    mut i := 0
+    until i < s.len():
+        h = ((h << (5 as u32)) + h) + ((s[i] as int) as u32)
+        i = i + 1
+    end
+    ret h
+end
+
+func sdbm(s: str): u32:
+    mut h := 0 as u32
+    mut i := 0
+    until i < s.len():
+        c := (s[i] as int) as u32
+        h = c + (h << (6 as u32)) + (h << (16 as u32)) - h
+        i = i + 1
+    end
+    ret h
+end
+
+func crc32(s: str): u32:
+    mut crc := ~(0 as u32)
+    mut i := 0
+    until i < s.len():
+        crc = crc ^ ((s[i] as int) as u32)
+        mut b := 0
+        until b < 8:
+            mask := (0 as u32) - (crc & (1 as u32))
+            crc = (crc >> (1 as u32)) ^ ((0xEDB88320 as u32) & mask)
+            b = b + 1
+        end
+        i = i + 1
+    end
+    ret ~crc
+end
+
+func xorshift32(x: u32): u32:
+    mut v := x
+    v = v ^ (v << (13 as u32))
+    v = v ^ (v >> (17 as u32))
+    v = v ^ (v << (5 as u32))
+    ret v
+end
+
+func xorshift64(x: u64): u64:
+    mut v := x
+    v = v ^ (v << (13 as u64))
+    v = v ^ (v >> (7 as u64))
+    v = v ^ (v << (17 as u64))
+    ret v
+end
+
+func splitmix64(x: u64): u64:
+    mut z := x + (0x9E3779B97F4A7C15 as u64)
+    z = (z ^ (z >> (30 as u64))) * (0xBF58476D1CE4E5B9 as u64)
+    z = (z ^ (z >> (27 as u64))) * (0x94D049BB133111EB as u64)
+    ret z ^ (z >> (31 as u64))
+end
+
+func mix32(x: u32): u32:
+    mut h := x
+    h = h ^ (h >> (16 as u32))
+    h = h * (0x85EBCA6B as u32)
+    h = h ^ (h >> (13 as u32))
+    h = h * (0xC2B2AE35 as u32)
+    ret h ^ (h >> (16 as u32))
+end
+
+func popcount32(x: u32): int:
+    mut v := x
+    mut n := 0
+    until v != (0 as u32):
+        v = v & (v - (1 as u32))
+        n = n + 1
+    end
+    ret n
+end
+
+func main:
+    // FNV-1a against its published test vectors
+    println fnv1a32(""), fnv1a32("a"), fnv1a32("foobar")
+    println fnv1a64(""), fnv1a64("a"), fnv1a64("foobar")
+
+    // the empty string leaves the offset basis untouched
+    println fnv1a32("") == (2166136261 as u32)
+    println fnv1a64("") == (14695981039346656037 as u64)
+
+    // a one-character difference changes many output bits
+    println fnv1a32("salam"), fnv1a32("salan")
+    println popcount32(fnv1a32("salam") ^ fnv1a32("salan")) > 4
+
+    // djb2 and sdbm
+    println djb2(""), djb2("a"), djb2("abc"), djb2("salam")
+    println sdbm(""), sdbm("a"), sdbm("abc")
+
+    // CRC-32 against its published test vectors
+    println crc32(""), crc32("a"), crc32("abc"), crc32("123456789")
+    println crc32("123456789") == (3421780262 as u32)
+
+    // xorshift32 must never collapse to zero and must cycle through
+    // distinct values
+    mut x := 2463534242 as u32
+    mut seen := ""
+    mut i := 0
+    until i < 6:
+        x = xorshift32(x)
+        seen = seen + x + " "
+        i = i + 1
+    end
+    println seen
+    println x != (0 as u32)
+
+    // xorshift64
+    mut y := 88172645463325252 as u64
+    mut seen64 := ""
+    i = 0
+    until i < 4:
+        y = xorshift64(y)
+        seen64 = seen64 + y + " "
+        i = i + 1
+    end
+    println seen64
+
+    // SplitMix64 walks a counter into well-spread output
+    mut z := 0 as u64
+    mut out := ""
+    i = 0
+    until i < 4:
+        z = z + (1 as u64)
+        out = out + splitmix64(z) + " "
+        i = i + 1
+    end
+    println out
+
+    // a 32-bit finaliser is a bijection on small inputs: no collisions
+    mut collisions := 0
+    mut a := 0
+    until a < 64:
+        mut b := a + 1
+        until b < 64:
+            if mix32(a as u32) == mix32(b as u32):
+                collisions = collisions + 1
+            end
+            b = b + 1
+        end
+        a = a + 1
+    end
+    println "collisions:", collisions
+    println mix32(0 as u32), mix32(1 as u32), mix32(4294967295 as u32)
+
+    // the avalanche property: flipping one input bit moves many output bits
+    mut worst := 32
+    mut bit := 0
+    until bit < 32:
+        d := popcount32(mix32(0x12345678 as u32) ^ mix32((0x12345678 as u32) ^ ((1 as u32) << (bit as u32))))
+        if d < worst:
+            worst = d
+        end
+        bit = bit + 1
+    end
+    println "min avalanche:", worst > 4
+end

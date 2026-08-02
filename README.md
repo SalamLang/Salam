@@ -567,9 +567,9 @@ When operating servers on your host machine, observe these boundaries:
 
 Network ports scale from `1` to `65535`.
 
-- **`1` – `1023`**: System-privileged root ports. Avoid using these.
-- **`1024` – `49151`**: Registered user application ports (e.g., `8080`, `3000`). High risk of overlapping with other applications.
-- **`49152` – `65535`**: **Dynamic, Private, and High Ports**. Ideal for setting up workspace dev contexts cleanly.
+- **`1` - `1023`**: System-privileged root ports. Avoid using these.
+- **`1024` - `49151`**: Registered user application ports (e.g., `8080`, `3000`). High risk of overlapping with other applications.
+- **`49152` - `65535`**: **Dynamic, Private, and High Ports**. Ideal for setting up workspace dev contexts cleanly.
 
 #### Network Address Binding (`0.0.0.0` vs `127.0.0.1`)
 

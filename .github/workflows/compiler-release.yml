@@ -124,7 +124,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v1
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v2
       # Static libsqlite3.a/libhiredis.a/libssl.a/libcrypto.a/libmariadb.a per
       # supported --target= triple, embedded into salam itself (see
       # SALAM_EMBED_EXTRALIBS_*_DIR below and c/src/llvm/llvm_native.c's
@@ -177,17 +177,36 @@ jobs:
               | sha256sum -c -
           fi
           JOBS=$(nproc 2>/dev/null || echo 4)
+          # no-engine: the legacy engines/ (e_afalg, e_capi, e_padlock, ...) are
+          # optional OS/hardware-integration modules superseded by OpenSSL 3.x
+          # "providers" - e_afalg.c specifically needs the Linux kernel's
+          # <linux/version.h>, absent from musl's minimal sysroot. Disabling
+          # the whole category avoids that (and whatever the next engine's
+          # missing-header turns out to be on some other cross-toolchain)
+          # rather than chasing them one at a time; nothing in std/ssl/ssl.salam
+          # needs engine-specific APIs.
           build_openssl() {
             target="$1"; ossl_target="$2"; shift 2
             need_build openssl "$target" || { echo "reusing cached openssl for $target"; return 0; }
             rm -rf /tmp/openssl-build; mkdir -p /tmp/openssl-build
             tar xf /tmp/openssl.tar.gz -C /tmp/openssl-build --strip-components=1
             if ( cd /tmp/openssl-build \
-                 && ./Configure "$ossl_target" no-shared no-tests no-docs no-apps no-secure-memory "$@" \
+                 && ./Configure "$ossl_target" no-shared no-tests no-docs no-apps \
+                      no-secure-memory no-engine "$@" \
                  && make -j"$JOBS" build_libs ) >/tmp/openssl-build.log 2>&1; then
               if [ -f /tmp/openssl-build/libssl.a ] && [ -f /tmp/openssl-build/libcrypto.a ]; then
                 mkdir -p "/tmp/extralibs/$target"
                 cp /tmp/openssl-build/libssl.a /tmp/openssl-build/libcrypto.a "/tmp/extralibs/$target/"
+                # Scratch OpenSSL "root" (headers + libs) for build_mariadb()
+                # below to point CMake's FindOpenSSL at - deliberately NOT
+                # under /tmp/extralibs (which gets embedded into salam
+                # itself): the headers are only needed to configure
+                # mariadbclient's build here in CI, never at runtime.
+                rm -rf "/tmp/openssl-root-$target"
+                mkdir -p "/tmp/openssl-root-$target/include" "/tmp/openssl-root-$target/lib"
+                cp -r /tmp/openssl-build/include/. "/tmp/openssl-root-$target/include/"
+                cp /tmp/openssl-build/libssl.a /tmp/openssl-build/libcrypto.a \
+                  "/tmp/openssl-root-$target/lib/"
                 echo "built libssl.a/libcrypto.a for $target"
               else
                 echo "::warning::openssl build for $target reported success but libssl.a/libcrypto.a are missing; skipping"
@@ -200,26 +219,68 @@ jobs:
           }
           # MariaDB Connector/C is CMake-based (needs a compiler + system-name
           # override per target, not a simple CC/AR pair) - same reasoning as
-          # openssl above. WITH_SSL/WITH_CURL are OFF: bundling TLS support
-          # for the client would need the openssl *headers* threaded through
-          # too (we only keep libssl.a/libcrypto.a from the build above),
-          # left for a follow-up rather than risking this already-heaviest
-          # phase on more untested surface. The project's own CMake install
-          # step renames the static lib to libmariadb.a via a symlink, but
-          # salam's embed extraction (a deliberately tiny custom untar, see
-          # c/src/driver/embed_sysroot.c) does not support symlinks, so the
-          # rename is done here with a plain copy instead.
+          # openssl above. Its CMakeLists has no "disable TLS" option at all -
+          # WITH_SSL must be OPENSSL, GNUTLS, or (Windows-only) SCHANNEL, else
+          # it hard-errors ("Invalid TLS/SSL option") - so windows targets use
+          # SCHANNEL (native Windows API, zero extra dependency) and
+          # everything else points CMake's FindOpenSSL at the scratch
+          # "openssl-root" build_openssl() staged above via OPENSSL_ROOT_DIR.
+          # The project's own CMake install step renames the static lib to
+          # libmariadb.a via a symlink, but salam's embed extraction (a
+          # deliberately tiny custom untar, see c/src/driver/embed_sysroot.c)
+          # does not support symlinks, so the rename is done here with a
+          # plain copy instead.
           if any_needed mariadb; then
             git clone --quiet --depth 1 --branch v3.4.9 \
               https://github.com/mariadb-corporation/mariadb-connector-c.git /tmp/mariadb-src
           fi
+          # Regenerates just the openssl-root scratch headers (cheap:
+          # extract + `Configure`, no `make`) when build_openssl() didn't
+          # run this CI invocation because its .a files were already cache
+          # hit - the headers live outside the cached /tmp/extralibs path
+          # (see build_openssl()'s comment), so a cache hit alone leaves
+          # them missing even though the actual libs are available.
+          ensure_openssl_root() {
+            target="$1"; ossl_target="$2"; shift 2
+            [ -f "/tmp/openssl-root-$target/include/openssl/ssl.h" ] && return 0
+            [ -f "/tmp/extralibs/$target/libssl.a" ] || return 1
+            [ -f /tmp/openssl.tar.gz ] || {
+              curl -fL --connect-timeout 15 --max-time 180 -o /tmp/openssl.tar.gz \
+                "https://github.com/openssl/openssl/releases/download/openssl-3.6.3/openssl-3.6.3.tar.gz" || return 1
+              echo "243a86649cf6f23eeb6a2ff2456e09e5d77dd9018a54d3d96b0c6bdd6ba6c7f1  /tmp/openssl.tar.gz" \
+                | sha256sum -c - || return 1
+            }
+            rm -rf /tmp/openssl-build; mkdir -p /tmp/openssl-build
+            tar xf /tmp/openssl.tar.gz -C /tmp/openssl-build --strip-components=1
+            ( cd /tmp/openssl-build \
+              && ./Configure "$ossl_target" no-shared no-tests no-docs no-apps \
+                   no-secure-memory no-engine "$@" ) >/tmp/openssl-build.log 2>&1 || {
+              rm -rf /tmp/openssl-build; return 1; }
+            rm -rf "/tmp/openssl-root-$target"
+            mkdir -p "/tmp/openssl-root-$target/include" "/tmp/openssl-root-$target/lib"
+            cp -r /tmp/openssl-build/include/. "/tmp/openssl-root-$target/include/"
+            cp "/tmp/extralibs/$target/libssl.a" "/tmp/extralibs/$target/libcrypto.a" \
+              "/tmp/openssl-root-$target/lib/"
+            rm -rf /tmp/openssl-build
+          }
           build_mariadb() {
-            target="$1"; shift
+            target="$1"; ossl_target="$2"; shift 2
             need_build mariadb "$target" || { echo "reusing cached mariadb for $target"; return 0; }
+            case "$target" in
+              *windows*) ssl_args="-DWITH_SSL=SCHANNEL" ;;
+              *)
+                if ensure_openssl_root "$target" "$ossl_target"; then
+                  ssl_args="-DWITH_SSL=OPENSSL -DOPENSSL_ROOT_DIR=/tmp/openssl-root-$target -DOPENSSL_USE_STATIC_LIBS=TRUE"
+                else
+                  echo "::warning::no static openssl available for $target; skipping static mariadb (it has no TLS-less build option)"
+                  return 0
+                fi
+                ;;
+            esac
             rm -rf /tmp/mariadb-build; mkdir -p /tmp/mariadb-build
             if ( cd /tmp/mariadb-build \
                  && cmake /tmp/mariadb-src -DCMAKE_BUILD_TYPE=Release \
-                      -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF -DWITH_SSL=OFF "$@" \
+                      -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF $ssl_args "$@" \
                  && cmake --build . --target mariadbclient -j"$JOBS" ) \
                  >/tmp/mariadb-build.log 2>&1; then
               LIB=$(find /tmp/mariadb-build -name "libmariadbclient.a" | head -1)
@@ -271,8 +332,8 @@ jobs:
           build_all x86_64-w64-windows-gnu x86_64-w64-mingw32-gcc x86_64-w64-mingw32-ar
           build_openssl x86_64-linux-musl linux-x86_64 CC=musl-gcc
           build_openssl x86_64-w64-windows-gnu mingw64 --cross-compile-prefix=x86_64-w64-mingw32-
-          build_mariadb x86_64-linux-musl -DCMAKE_C_COMPILER=musl-gcc
-          build_mariadb x86_64-w64-windows-gnu -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc
+          build_mariadb x86_64-linux-musl linux-x86_64 -DCMAKE_C_COMPILER=musl-gcc
+          build_mariadb x86_64-w64-windows-gnu mingw64 -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc
           # "hostlibs" isn't a --target= triple - it's this runner's own
           # native glibc host (ubuntu-latest), for SALAM_EMBED_HOSTLIBS_DIR
           # (same-host, no --target= builds - see c/src/driver/build.c and
@@ -281,7 +342,7 @@ jobs:
           # natively, not musl, so it needs its own glibc-linked .a files.
           build_all hostlibs gcc ar
           build_openssl hostlibs linux-x86_64 CC=gcc
-          build_mariadb hostlibs -DCMAKE_C_COMPILER=gcc
+          build_mariadb hostlibs linux-x86_64 -DCMAKE_C_COMPILER=gcc
 
           # aarch64/i686/arm need the full cross-tools/musl-cross toolchain
           # (not just the trimmed crt1.o/libc.a the sysroot-embed step
@@ -310,8 +371,8 @@ jobs:
               if [ -n "$GCC" ] && [ -n "$AR" ]; then
                 build_all "$target" "$GCC" "$AR"
                 build_openssl "$target" "$ossl_target" "--cross-compile-prefix=$(dirname "$GCC")/${ctriple}-"
-                build_mariadb "$target" -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR="$arch" \
-                  -DCMAKE_C_COMPILER="$GCC"
+                build_mariadb "$target" "$ossl_target" -DCMAKE_SYSTEM_NAME=Linux \
+                  -DCMAKE_SYSTEM_PROCESSOR="$arch" -DCMAKE_C_COMPILER="$GCC"
               else
                 echo "::warning::could not locate cross-gcc/ar for $arch in the fetched toolchain; skipping static third-party libs for $target"
               fi
@@ -321,7 +382,8 @@ jobs:
             chmod -R u+rwX "/tmp/xtc-${arch}" 2>/dev/null || true
             rm -rf "/tmp/xtc-${arch}" "/tmp/xtc-${arch}.tar"
           done
-          rm -rf /tmp/sqlite3.zip /tmp/sqlite3-src /tmp/hiredis-src /tmp/openssl.tar.gz /tmp/mariadb-src
+          rm -rf /tmp/sqlite3.zip /tmp/sqlite3-src /tmp/hiredis-src /tmp/openssl.tar.gz /tmp/mariadb-src \
+            /tmp/openssl-root-*
 
           for target in $TARGETS; do
             [ -d "/tmp/extralibs/$target" ] || continue
@@ -692,7 +754,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v1
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v2
       # Windows counterpart of the Linux job's identically-named step - see
       # its comment for the overall rationale. Only x86_64-w64-windows-gnu
       # (this job's own native target) is built here, via the native MSYS2
@@ -754,7 +816,8 @@ jobs:
               | sha256sum -c -
             rm -rf /tmp/openssl-build; mkdir -p /tmp/openssl-build
             tar xf /tmp/openssl.tar.gz -C /tmp/openssl-build --strip-components=1
-            if ( cd /tmp/openssl-build && ./Configure mingw64 no-shared no-tests no-docs no-apps no-secure-memory \
+            if ( cd /tmp/openssl-build && ./Configure mingw64 no-shared no-tests no-docs no-apps \
+                      no-secure-memory no-engine \
                  && make -j"$(nproc)" build_libs ) >/tmp/openssl-build.log 2>&1 \
                && [ -f /tmp/openssl-build/libssl.a ] && [ -f /tmp/openssl-build/libcrypto.a ]; then
               cp /tmp/openssl-build/libssl.a /tmp/openssl-build/libcrypto.a \
@@ -775,7 +838,7 @@ jobs:
             rm -rf /tmp/mariadb-build; mkdir -p /tmp/mariadb-build
             if ( cd /tmp/mariadb-build \
                  && cmake /tmp/mariadb-src -G "MSYS Makefiles" -DCMAKE_BUILD_TYPE=Release \
-                      -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF -DWITH_SSL=OFF \
+                      -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF -DWITH_SSL=SCHANNEL \
                  && cmake --build . --target mariadbclient -j"$(nproc)" ) \
                  >/tmp/mariadb-build.log 2>&1; then
               LIB=$(find /tmp/mariadb-build -name "libmariadbclient.a" | head -1)
@@ -1606,7 +1669,21 @@ jobs:
               # object emission + a real linker, a separate and mature path.
               /work/salam llvm /tmp/smoke.salam --jit --log-level=warn \
                 || echo "::warning::--jit failed on armhf (known LLVM JITLink AArch32 limitation, not a salam bug); continuing with AOT checks."
-              /work/salam llvm /tmp/smoke.salam --exec -o /tmp/smoke_exec --log-level=warn && /tmp/smoke_exec
+              # --exec emits an AOT object and links it with the system
+              # linker - unlike --jit above, this has no known upstream gap
+              # and is expected to just work. Keep this and the smoke-exec
+              # run as two separate top-level statements (not `a && b`):
+              # with `set -e`, a failing first command in an `&&` list is
+              # exempt from triggering exit (bash only checks the last
+              # command in the list), so `a && b` would silently skip `b`
+              # and let the step report success even if `a` itself failed
+              # to produce a working binary - which is exactly how a real
+              # armhf hard/soft-float ABI link failure here went unnoticed
+              # previously. Two statements means either one failing now
+              # correctly fails this step (still non-fatal to the overall
+              # release build, since the job has continue-on-error: true).
+              /work/salam llvm /tmp/smoke.salam --exec -o /tmp/smoke_exec --log-level=warn
+              /tmp/smoke_exec
               if [ "$(cat /work/.self_contained)" = 1 ]; then
                 /work/salam build /tmp/smoke.salam --target=x86_64-linux-musl -o /work/.smoke_x86_64 --log-level=warn
                 /work/salam build /tmp/smoke.salam --target=x86_64-w64-windows-gnu -o /work/.smoke_x86_64.exe --log-level=warn

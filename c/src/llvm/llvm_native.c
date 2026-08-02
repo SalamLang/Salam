@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024–2026)
+ * Salam Programming Language (2024-2026)
  *
  *   +-------------------+
  *   |     S A L A M     |
@@ -959,6 +959,34 @@ static int jit_run_file(logger_t *log, const char *ll_path)
     return rc;
 }
 
+/*
+ * LLVMGetDefaultTargetTriple() returns the triple LLVM itself was built
+ * with, which a distro's libLLVM package can configure independently of
+ * the system's actual C ABI - so on a real 32-bit ARM Linux host it can
+ * come back as a soft-float "gnueabi" triple even though every CRT
+ * object and shared library on disk is hard-float only (Debian/Ubuntu/
+ * Raspberry Pi OS armhf). When that happens, LLVMCreateTargetMachine
+ * silently emits a soft-float-ABI object (float/double args passed in
+ * GPRs, no VFP register args) that the system linker then refuses to
+ * merge with the hard-float CRT objects ("uses VFP register arguments,
+ * ... does not"). 32-bit ARM Linux soft-float ("gnueabi"/"eabi" without
+ * the "hf" suffix) has been essentially extinct on these distros since
+ * ~2012, so force the "hf" suffix onto any bare 32-bit ARM Linux host
+ * triple to match reality - this only touches the implicit host-triple
+ * path, never an explicit user-supplied --target=.
+ */
+static void arm_force_hardfloat_triple(char *buf, size_t bufn, const char *triple)
+{
+    int is_arm32 = strstr(triple, "arm") != NULL && !strstr(triple, "aarch64") &&
+                   !strstr(triple, "arm64");
+    int is_linux = strstr(triple, "linux") != NULL;
+    int has_hf = strstr(triple, "hf") != NULL;
+    if (is_arm32 && is_linux && !has_hf)
+        sal_snprintf(buf, bufn, "%shf", triple);
+    else
+        sal_snprintf(buf, bufn, "%s", triple);
+}
+
 int salam_llvm_native(logger_t *log, const char *ll_path,
                       const codegen_llvm_options_t *opts)
 {
@@ -979,9 +1007,12 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
     if (parse_ir(log, ll_path, &ctx, &mod) != 0) return 2;
 
     char *host_triple = LLVMGetDefaultTargetTriple();
+    char host_triple_hf[512];
+    if (host_triple)
+        arm_force_hardfloat_triple(host_triple_hf, sizeof host_triple_hf, host_triple);
     const char *triple = (opts->target_triple && opts->target_triple[0])
                              ? opts->target_triple
-                             : host_triple;
+                             : (host_triple ? host_triple_hf : host_triple);
     LLVMSetTarget(mod, triple);
 
     int rc = 0;

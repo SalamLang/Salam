@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024–2026)
+ * Salam Programming Language (2024-2026)
  *
  *   +-------------------+
  *   |     S A L A M     |
@@ -417,12 +417,28 @@ static void hdr_prelude(cg_t *cg, ast_node_t *program, sb_t *h)
                "{ return (void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n"
                "typedef void (*salam_thread_fn)(void);\n"
                "#endif\n");
+    /*
+     * strlen/strcmp/strstr/strtol/strtod below are hand-declared (rather
+     * than #include <string.h>/<stdlib.h>) so non-GUI builds don't need
+     * those headers at all. But in GUI mode, line ~343 conditionally
+     * #includes <windows.h> when _WIN32 is defined, which transitively
+     * pulls in the *real* <string.h>/<stdlib.h> prototypes - and salam's
+     * hand-rolled ones don't all match libc exactly (e.g. strstr's real
+     * return type is `char*`, declared here as `const char*`), so tcc
+     * sees two incompatible declarations of the same symbol in one
+     * translation unit ("incompatible types for redefinition"). Only
+     * declare them by hand when nothing already will have.
+     */
+    if (cg->is_gui_mode) sb_puts(h, "#ifndef _WIN32\n");
     sb_puts(h, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n"
                "extern uint64_t strlen(const char* s);\n"
                "extern int32_t strcmp(const char* a, const char* b);\n"
                "extern const char* strstr(const char* haystack, const char* needle);\n"
                "extern int64_t strtol(const char* s, void* endptr, int32_t base);\n"
                "extern double strtod(const char* s, void* endptr);\n"
+               "#endif\n");
+    if (cg->is_gui_mode) sb_puts(h, "#endif\n");
+    sb_puts(h, "#ifndef SALAM_RT_STR2_DEFINED\n#define SALAM_RT_STR2_DEFINED\n"
                "extern const char* salam_strcat(const char* a, const char* b);\n"
                "extern const char* salam_char_from_code(int32_t c);\n"
                "extern const char* salam_str_substr(const char* s, int32_t start, "

@@ -37,6 +37,32 @@ typedef enum {
     VAL_VARIANT
 } val_kind_t;
 
+/*
+ * Static integer type carried by a VAL_INT/VAL_CHAR value.
+ *
+ * The interpreter stores every integer in an int64_t, but the language
+ * defines arithmetic to wrap modulo 2^n in the operand's own type and
+ * to keep signed and unsigned apart (SALAM-TYPES.md 4.1 and 15). Without
+ * a tag a u64 product reads back as a negative i64 and `>>`/`/`/`%`/
+ * comparisons pick the signed operation, so every value remembers the
+ * type semantic analysis gave it.
+ *
+ * ITY_NONE means "untyped/unknown" - it behaves as i64 and is what values
+ * built by paths with no static type (REPL fragments, synthetic nodes)
+ * carry, preserving the historical behaviour there.
+ */
+typedef enum {
+    ITY_NONE = 0,
+    ITY_I8,
+    ITY_I16,
+    ITY_I32,
+    ITY_I64,
+    ITY_U8,
+    ITY_U16,
+    ITY_U32,
+    ITY_U64
+} int_ty_t;
+
 typedef enum {
     PTR_I8,
     PTR_U8,
@@ -77,6 +103,7 @@ typedef struct {
 
 struct value {
     val_kind_t kind;
+    uint8_t ity; /* int_ty_t; only meaningful for VAL_INT/VAL_CHAR */
     union {
         int64_t i;
         double f;
@@ -142,10 +169,51 @@ struct sclosure {
     struct env *env;
 };
 
+SAL_INLINE bool int_ty_is_unsigned(int_ty_t t)
+{
+    return t >= ITY_U8;
+}
+
+SAL_INLINE int int_ty_bits(int_ty_t t)
+{
+    switch (t) {
+    case ITY_I8:
+    case ITY_U8:
+        return 8;
+    case ITY_I16:
+    case ITY_U16:
+        return 16;
+    case ITY_I32:
+    case ITY_U32:
+        return 32;
+    default:
+        return 64;
+    }
+}
+
+/* Rank for the "higher-rank operand wins" rule of SALAM-TYPES.md 15. */
+SAL_INLINE int int_ty_rank(int_ty_t t)
+{
+    return int_ty_bits(t);
+}
+
+/* Reduce x to the two's-complement bit pattern of type t, then read it back
+ * as a signed int64_t (the interpreter's single integer carrier). */
+SAL_INLINE int64_t int_ty_wrap(int_ty_t t, int64_t x)
+{
+    int bits = int_ty_bits(t);
+    if (bits >= 64) return x;
+    uint64_t mask = (uint64_t)1 << bits;
+    uint64_t bitsv = (uint64_t)x & (mask - 1);
+    if (!int_ty_is_unsigned(t) && (bitsv & (mask >> 1))) bitsv |= ~(mask - 1);
+    return (int64_t)bitsv;
+}
+
 SAL_INLINE value_t val_null(void)
 {
     value_t v;
     v.kind = VAL_NULL;
+    v.ity = ITY_NONE;
     return v;
 }
 
@@ -153,7 +221,17 @@ SAL_INLINE value_t val_int(int64_t x)
 {
     value_t v;
     v.kind = VAL_INT;
+    v.ity = ITY_NONE;
     v.as.i = x;
+    return v;
+}
+
+SAL_INLINE value_t val_int_ty(int64_t x, int_ty_t t)
+{
+    value_t v;
+    v.kind = VAL_INT;
+    v.ity = (uint8_t)t;
+    v.as.i = int_ty_wrap(t, x);
     return v;
 }
 
@@ -161,6 +239,7 @@ SAL_INLINE value_t val_char(int64_t x)
 {
     value_t v;
     v.kind = VAL_CHAR;
+    v.ity = ITY_NONE;
     v.as.i = x;
     return v;
 }
@@ -169,6 +248,7 @@ SAL_INLINE value_t val_float(double x)
 {
     value_t v;
     v.kind = VAL_FLOAT;
+    v.ity = ITY_NONE;
     v.as.f = x;
     return v;
 }
@@ -177,6 +257,7 @@ SAL_INLINE value_t val_bool(bool x)
 {
     value_t v;
     v.kind = VAL_BOOL;
+    v.ity = ITY_NONE;
     v.as.b = x;
     return v;
 }
@@ -185,6 +266,7 @@ SAL_INLINE value_t val_str(const char *s)
 {
     value_t v;
     v.kind = VAL_STR;
+    v.ity = ITY_NONE;
     v.as.s = s ? s : "";
     return v;
 }
@@ -193,6 +275,7 @@ SAL_INLINE value_t val_module(struct module *m)
 {
     value_t v;
     v.kind = VAL_MODULE;
+    v.ity = ITY_NONE;
     v.as.mod = m;
     return v;
 }
@@ -201,6 +284,7 @@ SAL_INLINE value_t val_ptr(void *addr, ptr_elem_t elem)
 {
     value_t v;
     v.kind = VAL_PTR;
+    v.ity = ITY_NONE;
     v.as.ptr.addr = addr;
     v.as.ptr.elem = elem;
     return v;
@@ -210,8 +294,15 @@ SAL_INLINE value_t val_variant(svariant_t *variant)
 {
     value_t v;
     v.kind = VAL_VARIANT;
+    v.ity = ITY_NONE;
     v.as.variant = variant;
     return v;
+}
+
+/* Read an integer value as the unsigned bit pattern of its own type. */
+SAL_INLINE uint64_t val_int_bits(value_t v)
+{
+    return (uint64_t)int_ty_wrap((int_ty_t)v.ity, v.as.i);
 }
 
 SAL_INLINE size_t ptr_elem_size(ptr_elem_t elem)

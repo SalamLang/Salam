@@ -74,6 +74,7 @@ double to_float(value_t v)
         return v.as.f;
     case VAL_INT:
     case VAL_CHAR:
+        if (int_ty_is_unsigned((int_ty_t)v.ity)) return (double)val_int_bits(v);
         return (double)v.as.i;
     case VAL_BOOL:
         return v.as.b ? 1.0 : 0.0;
@@ -135,6 +136,8 @@ const char *to_str(interp_t *I, value_t v)
     case VAL_STR:
         return v.as.s ? v.as.s : "";
     case VAL_INT:
+        if (int_ty_is_unsigned((int_ty_t)v.ity))
+            return afmt(I, "%llu", (unsigned long long)val_int_bits(v));
         return afmt(I, "%lld", (long long)v.as.i);
     case VAL_CHAR: {
         sb_t b;
@@ -239,6 +242,7 @@ value_t mk_array(interp_t *I, sarray_t *a)
     (void)I;
     value_t v;
     v.kind = VAL_ARRAY;
+    v.ity = ITY_NONE;
     v.as.arr = a;
     return v;
 }
@@ -402,6 +406,7 @@ value_t mk_map(smap_t *m)
 {
     value_t v;
     v.kind = VAL_MAP;
+    v.ity = ITY_NONE;
     v.as.map = m;
     return v;
 }
@@ -417,6 +422,7 @@ value_t mk_struct(interp_t *I, const char *name, ast_node_t *def, size_t nfields
                 : NULL;
     value_t v;
     v.kind = VAL_STRUCT;
+    v.ity = ITY_NONE;
     v.as.st = s;
     return v;
 }
@@ -428,6 +434,7 @@ value_t mk_closure(interp_t *I, ast_node_t *fn, env_t *env)
     c->env = env;
     value_t v;
     v.kind = VAL_FUNC;
+    v.ity = ITY_NONE;
     v.as.fn = c;
     return v;
 }
@@ -467,21 +474,21 @@ value_t ptr_load(sptr_t p, int64_t idx)
 {
     switch (p.elem) {
     case PTR_I8:
-        return val_int(((int8_t *)p.addr)[idx]);
+        return val_int_ty(((int8_t *)p.addr)[idx], ITY_I8);
     case PTR_U8:
-        return val_int(((uint8_t *)p.addr)[idx]);
+        return val_int_ty(((uint8_t *)p.addr)[idx], ITY_U8);
     case PTR_I16:
-        return val_int(((int16_t *)p.addr)[idx]);
+        return val_int_ty(((int16_t *)p.addr)[idx], ITY_I16);
     case PTR_U16:
-        return val_int(((uint16_t *)p.addr)[idx]);
+        return val_int_ty(((uint16_t *)p.addr)[idx], ITY_U16);
     case PTR_I32:
-        return val_int(((int32_t *)p.addr)[idx]);
+        return val_int_ty(((int32_t *)p.addr)[idx], ITY_I32);
     case PTR_U32:
-        return val_int(((uint32_t *)p.addr)[idx]);
+        return val_int_ty(((uint32_t *)p.addr)[idx], ITY_U32);
     case PTR_I64:
-        return val_int(((int64_t *)p.addr)[idx]);
+        return val_int_ty(((int64_t *)p.addr)[idx], ITY_I64);
     case PTR_U64:
-        return val_int((int64_t)((uint64_t *)p.addr)[idx]);
+        return val_int_ty((int64_t)((uint64_t *)p.addr)[idx], ITY_U64);
     case PTR_F32:
         return val_float((double)((float *)p.addr)[idx]);
     case PTR_F64:
@@ -674,6 +681,86 @@ value_t try_struct_op(interp_t *I, token_kind_t op, value_t a, value_t b, bool h
     }
 }
 
+int_ty_t int_ty_from_typestr(const char *ts)
+{
+    if (!ts || !ts[0]) return ITY_NONE;
+    /* Only bare scalar names count: a trailing '*', '[' or '<' means the
+     * decoration is a pointer/array/generic type, not an integer. */
+    switch (ts[0]) {
+    case 'i':
+        if (ts[1] == '8' && !ts[2]) return ITY_I8;
+        if (ts[1] == '1' && ts[2] == '6' && !ts[3]) return ITY_I16;
+        if (ts[1] == '3' && ts[2] == '2' && !ts[3]) return ITY_I32;
+        if (ts[1] == '6' && ts[2] == '4' && !ts[3]) return ITY_I64;
+        if (!strcmp(ts, "int")) return ITY_I32;
+        return ITY_NONE;
+    case 'u':
+        if (ts[1] == '8' && !ts[2]) return ITY_U8;
+        if (ts[1] == '1' && ts[2] == '6' && !ts[3]) return ITY_U16;
+        if (ts[1] == '3' && ts[2] == '2' && !ts[3]) return ITY_U32;
+        if (ts[1] == '6' && ts[2] == '4' && !ts[3]) return ITY_U64;
+        if (!strcmp(ts, "uint")) return ITY_U32;
+        return ITY_NONE;
+    case 's':
+        if (!strcmp(ts, "size")) return ITY_U64;
+        return ITY_NONE;
+    case 'b':
+        if (!strcmp(ts, "byte")) return ITY_U8;
+        return ITY_NONE;
+    default:
+        return ITY_NONE;
+    }
+}
+
+int_ty_t int_ty_from_ptr_elem(ptr_elem_t e)
+{
+    switch (e) {
+    case PTR_I8:
+        return ITY_I8;
+    case PTR_U8:
+        return ITY_U8;
+    case PTR_I16:
+        return ITY_I16;
+    case PTR_U16:
+        return ITY_U16;
+    case PTR_I32:
+        return ITY_I32;
+    case PTR_U32:
+        return ITY_U32;
+    case PTR_I64:
+        return ITY_I64;
+    case PTR_U64:
+        return ITY_U64;
+    default:
+        return ITY_NONE;
+    }
+}
+
+/*
+ * Common type of a binary operation (SALAM-TYPES.md 15): same signedness
+ * picks the higher rank. Mixed signedness is rejected by semantic analysis,
+ * so it can only be reached from undecorated values; there the sized operand
+ * wins, which is what the int-literal adaptation in check_binary() would have
+ * produced for the usual `x + 1` shape.
+ */
+int_ty_t int_ty_common(int_ty_t a, int_ty_t b)
+{
+    if (a == b) return a;
+    if (a == ITY_NONE) return b;
+    if (b == ITY_NONE) return a;
+    if (int_ty_is_unsigned(a) != int_ty_is_unsigned(b))
+        return int_ty_is_unsigned(a) ? a : b;
+    return int_ty_rank(a) >= int_ty_rank(b) ? a : b;
+}
+
+value_t coerce_int_ty(value_t v, int_ty_t t)
+{
+    if (t == ITY_NONE || v.kind != VAL_INT) return v;
+    v.ity = (uint8_t)t;
+    v.as.i = int_ty_wrap(t, v.as.i);
+    return v;
+}
+
 value_t arith(interp_t *I, ast_node_t *n, token_kind_t op, value_t a, value_t b)
 {
     if (op == TK_PLUS && (a.kind == VAL_STR || b.kind == VAL_STR))
@@ -692,31 +779,50 @@ value_t arith(interp_t *I, ast_node_t *n, token_kind_t op, value_t a, value_t b)
     }
     bool both_int = is_intlike(a) && is_intlike(b);
     if (both_int) {
-        int64_t x = a.as.i, y = b.as.i;
+        /*
+         * Shifts keep the left operand's type; everything else uses the
+         * common type of both. The operation is then carried out at that
+         * type's width and signedness and wrapped back into it, so u32/u64
+         * results stay unsigned instead of reading back as negative i64.
+         */
+        int_ty_t rt = (op == TK_SHL || op == TK_SHR)
+                          ? (int_ty_t)a.ity
+                          : int_ty_common((int_ty_t)a.ity, (int_ty_t)b.ity);
+        bool uns = int_ty_is_unsigned(rt);
+        int bits = int_ty_bits(rt);
+        int64_t x = int_ty_wrap(rt, a.as.i);
+        int64_t y = (op == TK_SHL || op == TK_SHR) ? b.as.i : int_ty_wrap(rt, b.as.i);
+        uint64_t ux = (uint64_t)x, uy = (uint64_t)y;
 
         switch (op) {
         case TK_PLUS:
-            return val_int((int64_t)((uint64_t)x + (uint64_t)y));
+            return val_int_ty((int64_t)(ux + uy), rt);
         case TK_MINUS:
-            return val_int((int64_t)((uint64_t)x - (uint64_t)y));
+            return val_int_ty((int64_t)(ux - uy), rt);
         case TK_STAR:
-            return val_int((int64_t)((uint64_t)x * (uint64_t)y));
+            return val_int_ty((int64_t)(ux * uy), rt);
         case TK_SLASH:
             if (y == 0) rt_error(I, n, "division by zero");
-            return val_int((x == INT64_MIN && y == -1) ? INT64_MIN : x / y);
+            if (uns) return val_int_ty((int64_t)(ux / uy), rt);
+            return val_int_ty((x == INT64_MIN && y == -1) ? INT64_MIN : x / y, rt);
         case TK_PERCENT:
             if (y == 0) rt_error(I, n, "modulo by zero");
-            return val_int((x == INT64_MIN && y == -1) ? 0 : x % y);
+            if (uns) return val_int_ty((int64_t)(ux % uy), rt);
+            return val_int_ty((x == INT64_MIN && y == -1) ? 0 : x % y, rt);
         case TK_AMP:
-            return val_int((int64_t)((uint64_t)x & (uint64_t)y));
+            return val_int_ty((int64_t)(ux & uy), rt);
         case TK_PIPE:
-            return val_int((int64_t)((uint64_t)x | (uint64_t)y));
+            return val_int_ty((int64_t)(ux | uy), rt);
         case TK_CARET:
-            return val_int((int64_t)((uint64_t)x ^ (uint64_t)y));
+            return val_int_ty((int64_t)(ux ^ uy), rt);
         case TK_SHL:
-            return val_int((int64_t)((uint64_t)x << ((uint64_t)y & 63)));
+            return val_int_ty((int64_t)(ux << (uy & (uint64_t)(bits - 1))), rt);
         case TK_SHR:
-            return val_int(x >> ((uint64_t)y & 63));
+            /* Logical for unsigned, arithmetic for signed - decided by the
+             * declared type, not by the sign of the int64_t carrier. ux is
+             * already the zero-extended pattern when rt is unsigned. */
+            if (uns) return val_int_ty((int64_t)(ux >> (uy & (uint64_t)(bits - 1))), rt);
+            return val_int_ty(x >> (uy & (uint64_t)(bits - 1)), rt);
         default:
             break;
         }
@@ -749,6 +855,18 @@ int value_cmp(interp_t *I, value_t a, value_t b)
         int c = strcmp(a.as.s, b.as.s);
         return c < 0 ? -1 : c > 0 ? 1 : 0;
     }
+    /* Integer pairs compare as integers: going through double both loses
+     * precision past 2^53 and would order u64 values by their signed
+     * reinterpretation. */
+    if (is_intlike(a) && is_intlike(b)) {
+        int_ty_t rt = int_ty_common((int_ty_t)a.ity, (int_ty_t)b.ity);
+        int64_t x = int_ty_wrap(rt, a.as.i), y = int_ty_wrap(rt, b.as.i);
+        if (int_ty_is_unsigned(rt)) {
+            uint64_t ux = (uint64_t)x, uy = (uint64_t)y;
+            return ux < uy ? -1 : ux > uy ? 1 : 0;
+        }
+        return x < y ? -1 : x > y ? 1 : 0;
+    }
     double x = to_float(a), y = to_float(b);
     return x < y ? -1 : x > y ? 1 : 0;
 }
@@ -762,6 +880,10 @@ bool value_eq(interp_t *I, value_t a, value_t b)
     if (a.kind == VAL_NULL && b.kind == VAL_PTR) return b.as.ptr.addr == NULL;
     if (a.kind == VAL_NULL || b.kind == VAL_NULL) return a.kind == b.kind;
     if (a.kind == VAL_BOOL || b.kind == VAL_BOOL) return to_bool(a) == to_bool(b);
+    if (is_intlike(a) && is_intlike(b)) {
+        int_ty_t rt = int_ty_common((int_ty_t)a.ity, (int_ty_t)b.ity);
+        return int_ty_wrap(rt, a.as.i) == int_ty_wrap(rt, b.as.i);
+    }
     if (is_number(a) && is_number(b)) return to_float(a) == to_float(b);
     if (a.kind == VAL_STRUCT && b.kind == VAL_STRUCT) return a.as.st == b.as.st;
     return false;

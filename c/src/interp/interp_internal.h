@@ -222,6 +222,14 @@ void base_typename(const char *ts, char *out, size_t cap);
 
 ptr_elem_t ptr_elem_from_typestr(const char *ts);
 
+int_ty_t int_ty_from_typestr(const char *ts);
+
+int_ty_t int_ty_from_ptr_elem(ptr_elem_t e);
+
+int_ty_t int_ty_common(int_ty_t a, int_ty_t b);
+
+value_t coerce_int_ty(value_t v, int_ty_t t);
+
 value_t ptr_load(sptr_t p, int64_t idx);
 
 void ptr_store(sptr_t p, int64_t idx, value_t v);

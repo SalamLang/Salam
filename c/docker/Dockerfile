@@ -46,34 +46,9 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
         fi; \
     done
 
-# Wine defaults: WINEDEBUG=-all silences its very chatty fixme:/err: debug
-# channels, which otherwise land on stdout/stderr right alongside whatever
-# the guest .exe prints and corrupt run-tests.sh's exact-match output
-# comparison for cross/*/x86_64-w64-windows-gnu. XDG_RUNTIME_DIR must be a
-# real, 0700 directory the current user owns - wineserver uses it for its
-# IPC socket and refuses to work correctly without it (this was silently
-# breaking every wine invocation: "wine: failed to open <exe>" even though
-# the exe existed and the earlier build succeeded).
 ENV WINEDEBUG=-all
 ENV XDG_RUNTIME_DIR=/tmp/xdg-runtime
 
-# Wine's first-ever run for a given $HOME (here root's, since this image
-# runs as root) bootstraps a whole $WINEPREFIX (registry hives, drive_c,
-# fonts, background services like explorer.exe/services.exe) - slow, and
-# noisy even with WINEDEBUG=-all (mostly one-time nodrv_CreateWindow
-# warnings from those background services probing for a display that
-# doesn't exist in CI, which is expected/harmless for a console-only
-# target). Doing that bootstrap here, at build time, means: (a) it happens
-# once and gets cached like any other layer/apk package instead of on
-# every test run, and (b) any real init failure shows up as a build error
-# instead of a mysteriously-failing test run. `wineserver -w` waits for
-# the background services wineboot spawns to fully exit before the layer
-# is committed, so the prefix that ships in the image is a clean,
-# quiescent one rather than one frozen mid-boot. Both waits are
-# timeout-bounded ("|| true"): a background service that never settles
-# (e.g. still retrying a display connection) must not be able to hang the
-# whole image build - the presence of system.reg below is what actually
-# decides pass/fail, not a clean wineserver exit.
 RUN mkdir -p "$XDG_RUNTIME_DIR" && chmod 0700 "$XDG_RUNTIME_DIR" \
     && timeout 60 wineboot --init >/tmp/wineboot-init.log 2>&1; \
     timeout 30 wineserver -w || wineserver -k || true; \

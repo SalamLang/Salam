@@ -1082,9 +1082,24 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
             host_features = "+vfp3,+d16";
             host_features_is_fallback = 1;
         }
-        LLVMTargetMachineRef tm = LLVMCreateTargetMachine(
-            target, triple, host_cpu ? host_cpu : "", host_features ? host_features : "",
-            map_cg_level(opts->opt_level), LLVMRelocPIC, LLVMCodeModelDefault);
+        LOG_I(log, PH_DRIVER, "DEBUG target machine: triple=%s cpu=%s features=%s", triple,
+              host_cpu ? host_cpu : "(empty)", host_features ? host_features : "(empty)");
+        LLVMTargetMachineRef tm;
+        if (is_arm32_host) {
+            LLVMTargetMachineOptionsRef tmo = LLVMCreateTargetMachineOptions();
+            LLVMTargetMachineOptionsSetCPU(tmo, host_cpu ? host_cpu : "");
+            LLVMTargetMachineOptionsSetFeatures(tmo, host_features ? host_features : "");
+            LLVMTargetMachineOptionsSetABI(tmo, "aapcs-vfp");
+            LLVMTargetMachineOptionsSetCodeGenOptLevel(tmo, map_cg_level(opts->opt_level));
+            LLVMTargetMachineOptionsSetRelocMode(tmo, LLVMRelocPIC);
+            LLVMTargetMachineOptionsSetCodeModel(tmo, LLVMCodeModelDefault);
+            tm = LLVMCreateTargetMachineWithOptions(target, triple, tmo);
+            LLVMDisposeTargetMachineOptions(tmo);
+        } else {
+            tm = LLVMCreateTargetMachine(
+                target, triple, host_cpu ? host_cpu : "", host_features ? host_features : "",
+                map_cg_level(opts->opt_level), LLVMRelocPIC, LLVMCodeModelDefault);
+        }
         if (host_cpu) LLVMDisposeMessage(host_cpu);
         if (host_features && !host_features_is_fallback)
             LLVMDisposeMessage(host_features);

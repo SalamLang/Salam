@@ -1,0 +1,189 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "tls"
+@fa "تی ال اس"
+@ar "تی ال اس"
+package tls
+
+// Native TLS for Salam.
+//
+// ============================ SECURITY STATUS ============================
+// EXPERIMENTAL. This implementation has NOT had independent cryptographic
+// review. Do not use it to protect real secrets. The vetted paths remain
+// libcurl/OpenSSL (Unix) and WinHTTP (Windows); this package is reached only
+// when a program is built with -DSALAM_NATIVE_TLS.
+// =========================================================================
+//
+// Scope: TLS 1.3 with a TLS 1.2 fallback, X25519 and secp256r1 key exchange,
+// AEAD cipher suites only (ChaCha20-Poly1305 and AES-GCM; no CBC suites, so
+// no MAC-then-encrypt padding oracles). Certificates are verified against the
+// system trust store with an embedded fallback.
+
+// TLS 1.0 (0x0301) and 1.1 (0x0302) are deliberately NOT implemented.
+//
+// RFC 8996 deprecated both in 2021 and every major browser dropped them in
+// 2020. Supporting them would mean adding the machinery this stack exists to
+// avoid: CBC cipher suites with MAC-then-encrypt (the BEAST and Lucky13
+// padding-oracle families), an MD5+SHA-1 PRF, and SHA-1 signatures. A server
+// offering only 1.0/1.1 today is already broken, so the compatibility gained
+// does not pay for that surface.
+//
+// The version constants and negotiation are written so a legacy path could be
+// added later behind its own explicitly-unsafe build flag, but nothing here
+// will negotiate below TLS 1.2.
+
+@en "TLS10"
+@fa "تی ال اس ۱۰"
+@ar "تی ال اس ۱۰"
+pub const TLS10 := 0x0301
+
+@en "TLS11"
+@fa "تی ال اس ۱۱"
+@ar "تی ال اس ۱۱"
+pub const TLS11 := 0x0302
+
+@en "TLS12"
+@fa "تی ال اس ۱۲"
+@ar "تی ال اس ۱۲"
+pub const TLS12 := 0x0303
+
+@en "TLS13"
+@fa "تی ال اس ۱۳"
+@ar "تی ال اس ۱۳"
+pub const TLS13 := 0x0304
+
+// ---------------------------------------------------------------- byte utils
+//
+// Exposed so the test-vector suites can build, inspect and release byte
+// strings without duplicating a hex codec.
+
+@en "HexEncodeBuf"
+@fa "کدگذاری شانزدهی"
+@ar "ترمیز سداسی"
+pub func HexEncodeBuf(b: Buf): str:
+    ret _hexofbuf(b)
+end
+
+@en "HexDecodeBuf"
+@fa "کدگشایی شانزدهی"
+@ar "فك ترمیز سداسی"
+pub func HexDecodeBuf(s: str): Buf:
+    ret _hexbuf(s)
+end
+
+@en "NewBuf"
+@fa "بافر جدید"
+@ar "مخزن جدید"
+pub func NewBuf(cap: int): Buf:
+    ret _newbuf(cap)
+end
+
+@en "FreeBuf"
+@fa "آزادسازی بافر"
+@ar "تحریر المخزن"
+pub func FreeBuf(b &: Buf):
+    _buf_free(b)
+end
+
+@en "WipeBuf"
+@fa "پاک سازی بافر"
+@ar "مسح المخزن"
+pub func WipeBuf(b &: Buf):
+    _buf_wipe(b)
+end
+
+@en "BufLen"
+@fa "طول بافر"
+@ar "طول المخزن"
+pub func BufLen(b: Buf): int:
+    ret b.len
+end
+
+@en "BufAppendStr"
+@fa "افزودن رشته به بافر"
+@ar "إلحاق نص بالمخزن"
+pub func BufAppendStr(b &: Buf, s: str):
+    _putstr(b, s)
+end
+
+// ---------------------------------------------------------------- trust store
+
+@en "LoadRoots"
+@fa "بارگذاری ریشه ها"
+@ar "تحمیل الجذور"
+pub func LoadRoots(ca_file: str): Roots:
+    ret _roots_load(ca_file)
+end
+
+@en "RootCount"
+@fa "تعداد ریشه ها"
+@ar "عدد الجذور"
+pub func RootCount(r: Roots): int:
+    ret r.count
+end
+
+@en "FreeRoots"
+@fa "آزادسازی ریشه ها"
+@ar "تحریر الجذور"
+pub func FreeRoots(r &: Roots):
+    _roots_free(r)
+end
+
+// ---------------------------------------------------------------- certificates
+
+@en "VerifyError"
+@fa "خطای تایید"
+@ar "خطأ التحقق"
+pub func VerifyError(code: int): str:
+    ret _verr_str(code)
+end
+
+// Verify a single DER certificate against a trust store for `host`, using the
+// current system time. Returns 0 on success, or a VerifyError code.
+//
+// This is the one-certificate case; a full handshake passes the server's whole
+// chain instead.
+@en "VerifyCert"
+@fa "تایید گواهی"
+@ar "تحقق الشهادة"
+pub func VerifyCert(der: Buf, roots: Roots, host: str): int:
+    mut ch: Reader[8]
+    repeat 8 with i:
+        ch[i] = _newreader(null, 0)
+    end
+    ch[0] = _readerof(der)
+    ret _verify_chain(ch, 1, roots, host, _now_stamp())
+end
+
+// Parse a DER certificate and report whether it is well formed. Exposed mostly
+// so tooling can check a bundle without attempting to trust it.
+@en "CertIsValid"
+@fa "گواهی معتبر است"
+@ar "الشهادة صالحة"
+pub func CertIsValid(der: Buf): bool:
+    c := _cert_parse(der.p, der.len)
+    ret c.ok
+end
+
+@en "CertSubjectCN"
+@fa "نام مشترک گواهی"
+@ar "الاسم الشائع للشهادة"
+pub func CertSubjectCN(der: Buf): str:
+    c := _cert_parse(der.p, der.len)
+    if !c.ok:
+        ret ""
+    end
+    ret c.subject_cn
+end

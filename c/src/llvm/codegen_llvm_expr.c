@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024–2026)
+ * Salam Programming Language (2024-2026)
  *
  *   +-------------------+
  *   |     S A L A M     |
@@ -16,15 +16,21 @@
 #include "core/sal_format.h"
 #include "codegen/print_fmt.h"
 
+/*
+ * No 'nsw'/'nuw': salam defines signed and unsigned overflow alike as
+ * two's-complement wrap (SALAM-TYPES.md 4.1), while 'nsw' tells LLVM that
+ * signed overflow is poison - which let `(100 as i8) + (100 as i8)` fold to
+ * 200 instead of wrapping to -56.
+ */
 static const char *ll_arith_op(token_kind_t k, bool isflt, bool issigned)
 {
     switch (k) {
     case TK_PLUS:
-        return isflt ? "fadd" : (issigned ? "add nsw" : "add");
+        return isflt ? "fadd" : "add";
     case TK_MINUS:
-        return isflt ? "fsub" : (issigned ? "sub nsw" : "sub");
+        return isflt ? "fsub" : "sub";
     case TK_STAR:
-        return isflt ? "fmul" : (issigned ? "mul nsw" : "mul");
+        return isflt ? "fmul" : "mul";
     case TK_SLASH:
         return isflt ? "fdiv" : (issigned ? "sdiv" : "udiv");
     case TK_PERCENT:
@@ -371,8 +377,7 @@ static llv_t ll_unary(ll_t *ll, ast_node_t *n)
         if (ll_is_float(rt))
             ll_emit(ll, "%s = fneg %s %s", r, ll_ty(ll, rt), cv);
         else
-            ll_emit(ll, "%s = sub%s %s 0, %s", r, ll_is_signed(rt) ? " nsw" : "",
-                    ll_ty(ll, rt), cv);
+            ll_emit(ll, "%s = sub %s 0, %s", r, ll_ty(ll, rt), cv);
         return (llv_t){r, rt};
     }
     if (n->op == TK_TILDE) {

@@ -1,0 +1,253 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+// X25519 ECDH (RFC 7748) -- the primary key exchange for the native stack.
+//
+// CONSTANT-TIME: unlike bigint.salam, this operates on a SECRET scalar (our
+// ephemeral private key). A timing or cache signal here leaks the private key
+// and with it the session. Accordingly:
+//   * the Montgomery ladder runs all 255 iterations unconditionally;
+//   * the per-bit choice is made by _gf_sel, an arithmetic-mask conditional
+//     swap, never by a branch;
+//   * no array is ever indexed by a secret value;
+//   * the field arithmetic carries uniformly regardless of operand values.
+//
+// The field representation follows TweetNaCl: 16 limbs of 16 bits held in i64.
+// Each limb product is at most 2^32 and at most 16 of them are summed, so an
+// i64 accumulator cannot overflow -- which is what lets this avoid both the
+// 128-bit type Salam does not have and the trickier 26/25-bit split that a
+// faster implementation would use.
+//
+// Structure and step order are a direct port of TweetNaCl's crypto_scalarmult,
+// chosen because it is small enough to audit line by line and has been widely
+// reviewed. Field elements are passed and returned BY VALUE, which makes the
+// "output must not alias the inputs" precondition of the C original
+// structurally impossible to violate here.
+
+const X25519_SIZE := 32
+
+struct Gf:
+    pub v: i64[16] = [
+        0 as i64, 0 as i64, 0 as i64, 0 as i64
+        0 as i64, 0 as i64, 0 as i64, 0 as i64
+        0 as i64, 0 as i64, 0 as i64, 0 as i64
+        0 as i64, 0 as i64, 0 as i64, 0 as i64
+    ]
+end
+
+// The constant (a-2)/4 = 121665 for Curve25519.
+func _gf_121665(): Gf:
+    mut g := Gf {}
+    g.v[0] = 0xDB41 as i64
+    g.v[1] = 1 as i64
+    ret g
+end
+
+func _gf_add(a: Gf, b: Gf): Gf:
+    mut o := Gf {}
+    repeat 16 with i:
+        o.v[i] = a.v[i] + b.v[i]
+    end
+    ret o
+end
+
+func _gf_sub(a: Gf, b: Gf): Gf:
+    mut o := Gf {}
+    repeat 16 with i:
+        o.v[i] = a.v[i] - b.v[i]
+    end
+    ret o
+end
+
+// Propagate carries so every limb returns to 16 bits. The +2^16/-1 dance keeps
+// the arithmetic correct for negative limbs without branching on the sign, and
+// the wrap at limb 15 folds 2^256 back in as 38 (since 2^255 = 19 mod p).
+func _gf_car(o &: Gf):
+    repeat 16 with i:
+        o.v[i] += (1 as i64) << (16 as i64)
+        c := o.v[i] >> (16 as i64)
+        if i < 15:
+            o.v[i + 1] += c - 1
+        else:
+            o.v[0] += 38 * (c - 1)
+        end
+        o.v[i] -= c << (16 as i64)
+    end
+end
+
+func _gf_mul(a: Gf, b: Gf): Gf:
+    mut t: i64[31]
+    repeat 31 with i:
+        t[i] = 0 as i64
+    end
+    repeat 16 with i:
+        repeat 16 with j:
+            t[i + j] += a.v[i] * b.v[j]
+        end
+    end
+    repeat 15 with i:
+        t[i] += 38 * t[i + 16]
+    end
+    mut o := Gf {}
+    repeat 16 with i:
+        o.v[i] = t[i]
+    end
+    _gf_car(o)
+    _gf_car(o)
+    ret o
+end
+
+func _gf_sq(a: Gf): Gf:
+    ret _gf_mul(a, a)
+end
+
+// Conditional swap driven by an arithmetic mask: when b is 1 the limbs are
+// exchanged, when 0 they are not, and the same instructions execute either way.
+func _gf_sel(p &: Gf, q &: Gf, b: int):
+    c := ~((b as i64) - (1 as i64))
+    repeat 16 with i:
+        t := c & (p.v[i] ^ q.v[i])
+        p.v[i] = p.v[i] ^ t
+        q.v[i] = q.v[i] ^ t
+    end
+end
+
+func _gf_unpack(p: void*): Gf:
+    mut o := Gf {}
+    repeat 16 with i:
+        o.v[i] = (_bget(p, 2 * i) as i64) + ((_bget(p, 2 * i + 1) as i64) << (8 as i64))
+    end
+    // RFC 7748: the high bit of the u-coordinate is ignored on input
+    o.v[15] = o.v[15] & (0x7fff as i64)
+    ret o
+end
+
+// Fully reduce mod 2^255-19 and serialise little-endian. The two masked
+// subtraction rounds bring a value in [0, 2p) into [0, p) without branching.
+func _gf_pack(n: Gf, out: void*):
+    mut t := n
+    _gf_car(t)
+    _gf_car(t)
+    _gf_car(t)
+    repeat 2 with _round:
+        mut m := Gf {}
+        m.v[0] = t.v[0] - (0xffed as i64)
+        mut i := 1
+        until i < 15:
+            m.v[i] = t.v[i] - (0xffff as i64) - ((m.v[i - 1] >> (16 as i64)) & (1 as i64))
+            m.v[i - 1] = m.v[i - 1] & (0xffff as i64)
+            i += 1
+        end
+        m.v[15] = t.v[15] - (0x7fff as i64) - ((m.v[14] >> (16 as i64)) & (1 as i64))
+        b := ((m.v[15] >> (16 as i64)) & (1 as i64)) as int
+        m.v[14] = m.v[14] & (0xffff as i64)
+        _gf_sel(t, m, 1 - b)
+    end
+    repeat 16 with i:
+        _bput(out, 2 * i, (t.v[i] & (0xff as i64)) as int)
+        _bput(out, 2 * i + 1, ((t.v[i] >> (8 as i64)) & (0xff as i64)) as int)
+    end
+end
+
+// Inversion by Fermat: x^(p-2). The exponent is a fixed public constant, so the
+// skipped squarings at bits 2 and 4 leak nothing about the operand.
+func _gf_inv(i: Gf): Gf:
+    mut c := i
+    mut a := 253
+    until a >= 0:
+        c = _gf_sq(c)
+        if a != 2 && a != 4:
+            c = _gf_mul(c, i)
+        end
+        a -= 1
+    end
+    ret c
+end
+
+// Montgomery ladder scalar multiplication: out = scalar * point (u-coordinate).
+func _x25519_scalarmult(scalar: void*, point: void*, out: void*):
+    mut z := _newbuf(32)
+    defer _buf_wipe(z)
+    repeat 31 with i:
+        _put8(z, _bget(scalar, i))
+    end
+    // RFC 7748 clamping: clear the low 3 bits, clear bit 255, set bit 254
+    _put8(z, (_bget(scalar, 31) & 127) | 64)
+    _bufset(z, 0, _bufat(z, 0) & 248)
+
+    x := _gf_unpack(point)
+    mut a := Gf {}
+    mut b := x
+    mut c := Gf {}
+    mut d := Gf {}
+    a.v[0] = 1 as i64
+    d.v[0] = 1 as i64
+
+    mut i := 254
+    until i >= 0:
+        r := (_bufat(z, i >> 3) >> (i & 7)) & 1
+        _gf_sel(a, b, r)
+        _gf_sel(c, d, r)
+        mut e := _gf_add(a, c)
+        a = _gf_sub(a, c)
+        c = _gf_add(b, d)
+        b = _gf_sub(b, d)
+        d = _gf_sq(e)
+        f := _gf_sq(a)
+        a = _gf_mul(c, a)
+        c = _gf_mul(b, e)
+        e = _gf_add(a, c)
+        a = _gf_sub(a, c)
+        b = _gf_sq(a)
+        c = _gf_sub(d, f)
+        a = _gf_mul(c, _gf_121665())
+        a = _gf_add(a, d)
+        c = _gf_mul(c, a)
+        a = _gf_mul(d, f)
+        d = _gf_mul(b, x)
+        b = _gf_sq(e)
+        _gf_sel(a, b, r)
+        _gf_sel(c, d, r)
+        i -= 1
+    end
+
+    // affine u = X/Z
+    c = _gf_inv(c)
+    a = _gf_mul(a, c)
+    _gf_pack(a, out)
+end
+
+// Public key for a private scalar: scalar * basepoint, where the basepoint has
+// u-coordinate 9.
+func _x25519_base(scalar: void*, out: void*):
+    mut bp := _newbuf(32)
+    defer _buf_free(bp)
+    _put8(bp, 9)
+    _putzeros(bp, 31)
+    _x25519_scalarmult(scalar, bp.p, out)
+end
+
+// A shared secret of all zeros means the peer sent a small-order point and the
+// result carries no entropy. RFC 7748 section 6.1 requires aborting on it, so
+// this reports failure rather than continuing with a predictable secret.
+func _x25519_shared(scalar: void*, peer: void*, out: void*): bool:
+    _x25519_scalarmult(scalar, peer, out)
+    mut acc := 0
+    repeat 32 with i:
+        acc = acc | _bget(out, i)
+    end
+    ret acc != 0
+end

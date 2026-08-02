@@ -11,8 +11,10 @@ FROM alpine:${ALPINE_VERSION} AS toolchain
 ARG LLVM_VERSION
 SHELL ["/bin/ash", "-o", "pipefail", "-c"]
 
-RUN for i in 1 2 3 4 5; do \
-        apk add --no-cache \
+# trivy:ignore:AVD-DS-0025
+RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
+    for i in 1 2 3 4 5; do \
+        apk add -U --cache-dir=/var/cache/apk \
             build-base \
             g++ \
             make \
@@ -35,12 +37,14 @@ RUN for i in 1 2 3 4 5; do \
         echo "apk add attempt $i failed; retrying in 5s..." >&2; sleep 5; \
     done
 
-RUN set -eux; \
+# trivy:ignore:AVD-DS-0025
+RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
+    set -eux; \
     ok=0; \
     for i in 1 2 3 4 5; do \
-        if apk add --no-cache php php-cli 2>/dev/null; then ok=1; break; fi; \
-        pkg="$(apk search -e 'php*-cli' 2>/dev/null | sort -V | tail -1)"; \
-        if [ -n "$pkg" ] && apk add --no-cache "$pkg" 2>/dev/null; then ok=1; break; fi; \
+        if apk add -U --cache-dir=/var/cache/apk php php-cli 2>/dev/null; then ok=1; break; fi; \
+        pkg="$(apk search -e --cache-dir=/var/cache/apk 'php*-cli' 2>/dev/null | sort -V | tail -1)"; \
+        if [ -n "$pkg" ] && apk add -U --cache-dir=/var/cache/apk "$pkg" 2>/dev/null; then ok=1; break; fi; \
         echo "apk add php attempt $i failed; retrying in 5s..." >&2; sleep 5; \
     done; \
     [ "$ok" = 1 ]; \

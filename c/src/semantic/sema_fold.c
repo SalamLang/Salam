@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024–2026)
+ * Salam Programming Language (2024-2026)
  *
  *   +-------------------+
  *   |     S A L A M     |
@@ -342,4 +342,415 @@ void sema_fold_expr(sema_t *s, ast_node_t *n)
         fold_binary(s, n);
     else if (n->kind == AST_UNARY)
         fold_unary(n);
+}
+
+/*
+ * Constant-expression evaluation.
+ *
+ * sema_fold_expr above rewrites a node into a literal, and it only fires
+ * when the operands already *are* literals. That is enough for `1 > 2` but
+ * it stops at a named `const`, so the dead-branch checks that read the
+ * folded node saw an identifier and gave up. sema_const_eval answers the
+ * same question without rewriting anything: it walks the expression, looks
+ * consts up in the scope chain, and evaluates their initializers too.
+ *
+ * It is a query, so it reports nothing and marks nothing used - a check
+ * that merely asks whether a loop is dead must not change what else the
+ * program diagnoses.
+ *
+ * Soundness rule: every arithmetic result must fit the node's own type, or
+ * the answer is "unknown". A u8 expression that wraps at run time is not
+ * folded here, because saying "always false" about a wrapped value that is
+ * actually true would turn a diagnostic into a false accusation. Missing a
+ * dead loop is fine; inventing one is not.
+ */
+
+#define CONST_EVAL_MAX_DEPTH 32
+
+static const char *cv_type_str(const ast_node_t *n)
+{
+    if (n->type_str) return n->type_str;
+    return n->type ? n->type->name : NULL;
+}
+
+/* cv_int_range - the value range of an integer type_str. u64/size are
+ * capped at i64 max because lit_int already refuses anything above it. */
+static bool cv_int_range(const char *ts, long long *lo, long long *hi)
+{
+    if (!ts) return false;
+    if (!strcmp(ts, "i8")) {
+        *lo = -128LL;
+        *hi = 127LL;
+        return true;
+    }
+    if (!strcmp(ts, "i16")) {
+        *lo = -32768LL;
+        *hi = 32767LL;
+        return true;
+    }
+    if (!strcmp(ts, "i32")) {
+        *lo = -2147483648LL;
+        *hi = 2147483647LL;
+        return true;
+    }
+    if (!strcmp(ts, "i64")) {
+        *lo = FOLD_I64_MIN;
+        *hi = FOLD_I64_MAX;
+        return true;
+    }
+    if (!strcmp(ts, "u8")) {
+        *lo = 0LL;
+        *hi = 255LL;
+        return true;
+    }
+    if (!strcmp(ts, "u16")) {
+        *lo = 0LL;
+        *hi = 65535LL;
+        return true;
+    }
+    if (!strcmp(ts, "u32")) {
+        *lo = 0LL;
+        *hi = 4294967295LL;
+        return true;
+    }
+    if (!strcmp(ts, "u64") || !strcmp(ts, "size")) {
+        *lo = 0LL;
+        *hi = FOLD_I64_MAX;
+        return true;
+    }
+    return false;
+}
+
+static bool cv_fits(const char *ts, long long v)
+{
+    long long lo, hi;
+    if (!cv_int_range(ts, &lo, &hi)) return false;
+    return v >= lo && v <= hi;
+}
+
+static bool cv_is_float_ts(const char *ts)
+{
+    return ts && !strcmp(ts, "f64");
+}
+
+static double cv_as_flt(const const_val_t *v)
+{
+    return v->kind == CV_FLOAT ? v->f : (double)v->i;
+}
+
+static void cv_set_int(const_val_t *out, long long v)
+{
+    out->kind = CV_INT;
+    out->i = v;
+    out->f = 0.0;
+    out->b = false;
+}
+
+static void cv_set_flt(const_val_t *out, double v)
+{
+    out->kind = CV_FLOAT;
+    out->i = 0;
+    out->f = v;
+    out->b = false;
+}
+
+static void cv_set_bool(const_val_t *out, bool v)
+{
+    out->kind = CV_BOOL;
+    out->i = 0;
+    out->f = 0.0;
+    out->b = v;
+}
+
+static bool const_eval(sema_t *s, ast_node_t *n, const_val_t *out, int depth);
+
+static bool const_binary_int(ast_node_t *n, long long a, long long b, const_val_t *out)
+{
+    long long r;
+    switch (n->op) {
+    case TK_EQ:
+        cv_set_bool(out, a == b);
+        return true;
+    case TK_NE:
+        cv_set_bool(out, a != b);
+        return true;
+    case TK_LT:
+        cv_set_bool(out, a < b);
+        return true;
+    case TK_GT:
+        cv_set_bool(out, a > b);
+        return true;
+    case TK_LE:
+        cv_set_bool(out, a <= b);
+        return true;
+    case TK_GE:
+        cv_set_bool(out, a >= b);
+        return true;
+    case TK_PLUS:
+        if (!add_ok(a, b)) return false;
+        r = a + b;
+        break;
+    case TK_MINUS:
+        if (!sub_ok(a, b)) return false;
+        r = a - b;
+        break;
+    case TK_STAR:
+        if (!mul_ok(a, b)) return false;
+        r = a * b;
+        break;
+    case TK_SLASH:
+    case TK_PERCENT:
+        if (b == 0 || (a == FOLD_I64_MIN && b == -1)) return false;
+        r = (n->op == TK_SLASH) ? a / b : a % b;
+        break;
+    case TK_AMP:
+        r = (long long)((uint64_t)a & (uint64_t)b);
+        break;
+    case TK_PIPE:
+        r = (long long)((uint64_t)a | (uint64_t)b);
+        break;
+    case TK_CARET:
+        r = (long long)((uint64_t)a ^ (uint64_t)b);
+        break;
+    case TK_SHL:
+        if (b < 0 || b >= 64) return false;
+        r = (long long)((uint64_t)a << b);
+        break;
+    case TK_SHR:
+        if (b < 0 || b >= 64) return false;
+        r = a >> b;
+        break;
+    default:
+        return false;
+    }
+    if (!cv_fits(cv_type_str(n), r)) return false;
+    cv_set_int(out, r);
+    return true;
+}
+
+static bool const_binary_flt(ast_node_t *n, double a, double b, const_val_t *out)
+{
+    double r;
+    switch (n->op) {
+    case TK_EQ:
+        cv_set_bool(out, a == b);
+        return true;
+    case TK_NE:
+        cv_set_bool(out, a != b);
+        return true;
+    case TK_LT:
+        cv_set_bool(out, a < b);
+        return true;
+    case TK_GT:
+        cv_set_bool(out, a > b);
+        return true;
+    case TK_LE:
+        cv_set_bool(out, a <= b);
+        return true;
+    case TK_GE:
+        cv_set_bool(out, a >= b);
+        return true;
+    case TK_PLUS:
+        r = a + b;
+        break;
+    case TK_MINUS:
+        r = a - b;
+        break;
+    case TK_STAR:
+        r = a * b;
+        break;
+    case TK_SLASH:
+        if (b == 0.0) return false;
+        r = a / b;
+        break;
+    default:
+        return false;
+    }
+    /* f32 arithmetic rounds narrower than this double math, so only f64
+     * results are exact enough to claim as constants. */
+    if (!flt_finite(r) || !cv_is_float_ts(cv_type_str(n))) return false;
+    cv_set_flt(out, r);
+    return true;
+}
+
+static bool const_binary(sema_t *s, ast_node_t *n, const_val_t *out, int depth)
+{
+    const_val_t va, vb;
+    if (!n->a || !n->b) return false;
+
+    /* Short-circuit: `false && f()` is false however unknown f() is. */
+    if (n->op == TK_AND || n->op == TK_OR) {
+        if (!const_eval(s, n->a, &va, depth) || va.kind != CV_BOOL) return false;
+        if (n->op == TK_AND && !va.b) {
+            cv_set_bool(out, false);
+            return true;
+        }
+        if (n->op == TK_OR && va.b) {
+            cv_set_bool(out, true);
+            return true;
+        }
+        if (!const_eval(s, n->b, &vb, depth) || vb.kind != CV_BOOL) return false;
+        cv_set_bool(out, vb.b);
+        return true;
+    }
+
+    if (!const_eval(s, n->a, &va, depth) || !const_eval(s, n->b, &vb, depth))
+        return false;
+    if (va.kind == CV_BOOL || vb.kind == CV_BOOL) {
+        if (va.kind != CV_BOOL || vb.kind != CV_BOOL) return false;
+        if (n->op == TK_EQ) {
+            cv_set_bool(out, va.b == vb.b);
+            return true;
+        }
+        if (n->op == TK_NE) {
+            cv_set_bool(out, va.b != vb.b);
+            return true;
+        }
+        return false;
+    }
+    if (va.kind == CV_INT && vb.kind == CV_INT)
+        return const_binary_int(n, va.i, vb.i, out);
+    return const_binary_flt(n, cv_as_flt(&va), cv_as_flt(&vb), out);
+}
+
+static bool const_unary(sema_t *s, ast_node_t *n, const_val_t *out, int depth)
+{
+    const_val_t v;
+    if (!n->a || !const_eval(s, n->a, &v, depth)) return false;
+    if (n->op == TK_NOT) {
+        if (v.kind != CV_BOOL) return false;
+        cv_set_bool(out, !v.b);
+        return true;
+    }
+    if (n->op == TK_MINUS) {
+        if (v.kind == CV_FLOAT) {
+            cv_set_flt(out, -v.f);
+            return true;
+        }
+        if (v.kind != CV_INT || v.i == FOLD_I64_MIN) return false;
+        if (!cv_fits(cv_type_str(n), -v.i)) return false;
+        cv_set_int(out, -v.i);
+        return true;
+    }
+    if (n->op == TK_TILDE) {
+        long long r;
+        if (v.kind != CV_INT) return false;
+        r = (long long)(~(uint64_t)v.i);
+        if (!cv_fits(cv_type_str(n), r)) return false;
+        cv_set_int(out, r);
+        return true;
+    }
+    return false;
+}
+
+static bool const_cast(sema_t *s, ast_node_t *n, const_val_t *out, int depth)
+{
+    const_val_t v;
+    const char *ts;
+    if (!n->a || !const_eval(s, n->a, &v, depth)) return false;
+    ts = cv_type_str(n);
+    if (!ts) return false;
+    if (!strcmp(ts, "bool")) {
+        if (v.kind != CV_BOOL) return false;
+        cv_set_bool(out, v.b);
+        return true;
+    }
+    if (cv_is_float_ts(ts)) {
+        if (v.kind == CV_BOOL) return false;
+        cv_set_flt(out, cv_as_flt(&v));
+        return true;
+    }
+    if (v.kind == CV_BOOL) return false;
+    if (v.kind == CV_FLOAT) {
+        /* A cast that would wrap or round is not a value we can claim. */
+        if (v.f != (double)(long long)v.f) return false;
+        if (!cv_fits(ts, (long long)v.f)) return false;
+        cv_set_int(out, (long long)v.f);
+        return true;
+    }
+    if (!cv_fits(ts, v.i)) return false;
+    cv_set_int(out, v.i);
+    return true;
+}
+
+/* const_eval_sym - the value a `const` binding was declared with. */
+static bool const_eval_sym(sema_t *s, symbol_t *sym, const_val_t *out, int depth)
+{
+    if (!sym || sym->kind != SYM_CONST || sym->is_mut) return false;
+    if (sym->decl && sym->decl->a && const_eval(s, sym->decl->a, out, depth)) return true;
+    if (sym->has_ival) {
+        cv_set_int(out, sym->ival);
+        return true;
+    }
+    return false;
+}
+
+/* const_eval_member - a `pkg.NAME` reference to an exported const. */
+static bool const_eval_member(sema_t *s, ast_node_t *n, const_val_t *out, int depth)
+{
+    symbol_t *pk, *cs;
+    if (!n->a || n->a->kind != AST_IDENTIFIER || !n->name) return false;
+    pk = scope_lookup(s->cur, n->a->name);
+    if (!pk || pk->kind != SYM_PACKAGE || !pk->members) return false;
+    cs = scope_lookup_local(pk->members, n->name);
+    if (!cs || !cs->is_pub) return false;
+    return const_eval_sym(s, cs, out, depth);
+}
+
+static bool const_eval(sema_t *s, ast_node_t *n, const_val_t *out, int depth)
+{
+    if (!n || depth >= CONST_EVAL_MAX_DEPTH) return false;
+    depth++;
+    switch (n->kind) {
+    case AST_LITERAL:
+        if (n->op == TK_KW_TRUE) {
+            cv_set_bool(out, true);
+            return true;
+        }
+        if (n->op == TK_KW_FALSE) {
+            cv_set_bool(out, false);
+            return true;
+        }
+        if (n->op == TK_INT) {
+            long long v;
+            if (!lit_int(n, &v)) return false;
+            cv_set_int(out, v);
+            return true;
+        }
+        if (n->op == TK_FLOAT) {
+            cv_set_flt(out, n->value.as.f);
+            return true;
+        }
+        return false;
+    case AST_IDENTIFIER:
+        return const_eval_sym(s, scope_lookup(s->cur, n->name), out, depth);
+    case AST_MEMBER:
+        return const_eval_member(s, n, out, depth);
+    case AST_UNARY:
+        return const_unary(s, n, out, depth);
+    case AST_BINARY:
+        return const_binary(s, n, out, depth);
+    case AST_CAST:
+        return const_cast(s, n, out, depth);
+    case AST_TERNARY: {
+        const_val_t c;
+        if (!const_eval(s, n->a, &c, depth) || c.kind != CV_BOOL) return false;
+        return const_eval(s, c.b ? n->b : n->c, out, depth);
+    }
+    default:
+        return false;
+    }
+}
+
+bool sema_const_eval(sema_t *s, ast_node_t *n, const_val_t *out)
+{
+    return const_eval(s, n, out, 0);
+}
+
+bool sema_const_bool(sema_t *s, ast_node_t *n, bool *out)
+{
+    const_val_t v;
+    if (!const_eval(s, n, &v, 0) || v.kind != CV_BOOL) return false;
+    *out = v.b;
+    return true;
 }

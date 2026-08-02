@@ -1,3 +1,17 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
 // Flat merge of the salam/interp port (see salam/PORTING.md "Layout - FLAT"):
 // compiler/src/interp/ - one package `interp`, one file. Import alias for
 // consumers: `ip`. The module is ported by TWO sequential agents INTO THIS
@@ -160,6 +174,26 @@ else:
 end
 
 // ===== value.h =====
+// int_ty_t - the static integer type carried by a VAL_INT/VAL_CHAR value.
+//
+// Every integer is stored in an i64, but the language defines arithmetic to
+// wrap modulo 2^n in the operand's own type and to keep signed and unsigned
+// apart (SALAM-TYPES.md 4.1 and 15). Without a tag a u64 product reads back
+// as a negative i64 and `>>`/`/`/`%`/comparisons pick the signed operation,
+// so every value remembers the type semantic analysis gave it.
+//
+// ITY_NONE means "untyped/unknown" - it behaves as i64 and is what values
+// built by paths with no static type carry.
+pub const ITY_NONE := 0
+pub const ITY_I8 := 1
+pub const ITY_I16 := 2
+pub const ITY_I32 := 3
+pub const ITY_I64 := 4
+pub const ITY_U8 := 5
+pub const ITY_U16 := 6
+pub const ITY_U32 := 7
+pub const ITY_U64 := 8
+
 // val_kind_t - order and values MUST stay identical to the C enum.
 pub const VAL_NULL := 0
 pub const VAL_INT := 1
@@ -234,6 +268,7 @@ pub type ModId = int
 // file header for the pool table). Copying a Value copies the handle only.
 pub struct Value:
     pub kind: int = VAL_NULL
+    pub ity: int = ITY_NONE // ITY_* - only meaningful for VAL_INT/VAL_CHAR
     pub i: i64 = 0 as i64 // VAL_INT / VAL_CHAR (codepoint)
     pub f: f64 = 0.0 // VAL_FLOAT
     pub b: bool = false // VAL_BOOL
@@ -1105,8 +1140,54 @@ func val_null(): Value:
     ret Value {}
 end
 
+func int_ty_is_unsigned(t: int): bool:
+    ret t >= ITY_U8
+end
+
+func int_ty_bits(t: int): int:
+    if t == ITY_I8 || t == ITY_U8:
+        ret 8
+    end
+    if t == ITY_I16 || t == ITY_U16:
+        ret 16
+    end
+    if t == ITY_I32 || t == ITY_U32:
+        ret 32
+    end
+    ret 64
+end
+
+// Rank for the "higher-rank operand wins" rule of SALAM-TYPES.md 15.
+func int_ty_rank(t: int): int:
+    ret int_ty_bits(t)
+end
+
+// Reduce x to the two's-complement bit pattern of type t, then read it back
+// as a signed i64 (the interpreter's single integer carrier).
+func int_ty_wrap(t: int, x: i64): i64:
+    bits := int_ty_bits(t)
+    if bits >= 64:
+        ret x
+    end
+    mask := (1 as u64) << (bits as u64)
+    mut bv := (x as u64) & (mask - (1 as u64))
+    if !int_ty_is_unsigned(t) && (bv & (mask >> (1 as u64))) != (0 as u64):
+        bv = bv | (~(mask - (1 as u64)))
+    end
+    ret bv as i64
+end
+
 func val_int(x: i64): Value:
     ret Value { kind = VAL_INT, i = x }
+end
+
+func val_int_ty(x: i64, t: int): Value:
+    ret Value { kind = VAL_INT, ity = t, i = int_ty_wrap(t, x) }
+end
+
+// Read an integer value as the unsigned bit pattern of its own type.
+func val_int_bits(v: Value): u64:
+    ret int_ty_wrap(v.ity, v.i) as u64
 end
 
 func val_char(x: i64): Value:
@@ -1196,6 +1277,9 @@ func to_float(v: Value): f64:
         ret v.f
     end
     if v.kind == VAL_INT || v.kind == VAL_CHAR:
+        if int_ty_is_unsigned(v.ity):
+            ret val_int_bits(v) as f64
+        end
         ret v.i as f64
     end
     if v.kind == VAL_BOOL:
@@ -1255,6 +1339,9 @@ func to_str(ip &: Interp, v: Value): str:
         ret v.s
     end
     if v.kind == VAL_INT:
+        if int_ty_is_unsigned(v.ity):
+            ret co.U64Toa(val_int_bits(v))
+        end
         ret co.I64Toa(v.i)
     end
     if v.kind == VAL_CHAR:
@@ -1709,35 +1796,35 @@ end
 func ptr_load(pa: i64, elem: int, idx: i64): Value:
     if elem == PTR_I8:
         p0 := pa as i8*
-        ret val_int(p0[idx] as i64)
+        ret val_int_ty(p0[idx] as i64, ITY_I8)
     end
     if elem == PTR_U8:
         p1 := pa as u8*
-        ret val_int(p1[idx] as i64)
+        ret val_int_ty(p1[idx] as i64, ITY_U8)
     end
     if elem == PTR_I16:
         p2 := pa as i16*
-        ret val_int(p2[idx] as i64)
+        ret val_int_ty(p2[idx] as i64, ITY_I16)
     end
     if elem == PTR_U16:
         p3 := pa as u16*
-        ret val_int(p3[idx] as i64)
+        ret val_int_ty(p3[idx] as i64, ITY_U16)
     end
     if elem == PTR_I32:
         p4 := pa as i32*
-        ret val_int(p4[idx] as i64)
+        ret val_int_ty(p4[idx] as i64, ITY_I32)
     end
     if elem == PTR_U32:
         p5 := pa as u32*
-        ret val_int(p5[idx] as i64)
+        ret val_int_ty(p5[idx] as i64, ITY_U32)
     end
     if elem == PTR_I64:
         p6 := pa as i64*
-        ret val_int(p6[idx])
+        ret val_int_ty(p6[idx], ITY_I64)
     end
     if elem == PTR_U64:
         p7 := pa as u64*
-        ret val_int(p7[idx] as i64)
+        ret val_int_ty(p7[idx] as i64, ITY_U64)
     end
     if elem == PTR_F32:
         p8 := pa as f32*
@@ -1994,6 +2081,95 @@ func try_struct_op(
     ret r2
 end
 
+func int_ty_from_typestr(ts: str): int:
+    if str.Len(ts) == 0:
+        ret ITY_NONE
+    end
+    // Only bare scalar names count: a trailing '*', '[' or '<' means the
+    // decoration is a pointer/array/generic type, not an integer.
+    c0 := byte_at(ts, 0)
+    if c0 == 105:
+        if str.Equals(ts, "i8"):
+            ret ITY_I8
+        end
+        if str.Equals(ts, "i16"):
+            ret ITY_I16
+        end
+        if str.Equals(ts, "i32"):
+            ret ITY_I32
+        end
+        if str.Equals(ts, "i64"):
+            ret ITY_I64
+        end
+        if str.Equals(ts, "int"):
+            ret ITY_I32
+        end
+        ret ITY_NONE
+    end
+    if c0 == 117:
+        if str.Equals(ts, "u8"):
+            ret ITY_U8
+        end
+        if str.Equals(ts, "u16"):
+            ret ITY_U16
+        end
+        if str.Equals(ts, "u32"):
+            ret ITY_U32
+        end
+        if str.Equals(ts, "u64"):
+            ret ITY_U64
+        end
+        if str.Equals(ts, "uint"):
+            ret ITY_U32
+        end
+        ret ITY_NONE
+    end
+    if c0 == 115:
+        if str.Equals(ts, "size"):
+            ret ITY_U64
+        end
+        ret ITY_NONE
+    end
+    if c0 == 98:
+        if str.Equals(ts, "byte"):
+            ret ITY_U8
+        end
+        ret ITY_NONE
+    end
+    ret ITY_NONE
+end
+
+// Common type of a binary operation (SALAM-TYPES.md 15): same signedness
+// picks the higher rank. Mixed signedness is rejected by semantic analysis,
+// so it can only be reached from undecorated values; there the sized operand
+// wins, which is what the int-literal adaptation in check_binary() would have
+// produced for the usual `x + 1` shape.
+func int_ty_common(x: int, y: int): int:
+    if x == y:
+        ret x
+    end
+    if x == ITY_NONE:
+        ret y
+    end
+    if y == ITY_NONE:
+        ret x
+    end
+    if int_ty_is_unsigned(x) != int_ty_is_unsigned(y):
+        ret int_ty_is_unsigned(x) ? x : y
+    end
+    ret int_ty_rank(x) >= int_ty_rank(y) ? x : y
+end
+
+func coerce_int_ty(v: Value, t: int): Value:
+    if t == ITY_NONE || v.kind != VAL_INT:
+        ret v
+    end
+    mut r := v
+    r.ity = t
+    r.i = int_ty_wrap(t, v.i)
+    ret r
+end
+
 func arith(ip &: Interp, a &: at.Ast, n: int, op: int, x: Value, y: Value): Value:
     if op == tok.TK_PLUS && (x.kind == VAL_STR || y.kind == VAL_STR):
         ret val_str(to_str(ip, x) + to_str(ip, y))
@@ -2012,54 +2188,77 @@ func arith(ip &: Interp, a &: at.Ast, n: int, op: int, x: Value, y: Value): Valu
         ret val_float(r)
     end
     if is_intlike(x) && is_intlike(y):
-        xi := x.i
-        yi := y.i
+        // Shifts keep the left operand's type; everything else uses the
+        // common type of both. The operation is then carried out at that
+        // type's width and signedness and wrapped back into it, so u32/u64
+        // results stay unsigned instead of reading back as negative i64.
+        shift := op == tok.TK_SHL || op == tok.TK_SHR
+        rt := shift ? x.ity : int_ty_common(x.ity, y.ity)
+        uns := int_ty_is_unsigned(rt)
+        bits := int_ty_bits(rt)
+        xi := int_ty_wrap(rt, x.i)
+        yi := shift ? y.i : int_ty_wrap(rt, y.i)
+        ux := xi as u64
+        uy := yi as u64
+        shmask := (bits - 1) as u64
         negone := (0 as i64) - (1 as i64)
         // INT64_MIN (a literal-lhs 1<<63 would be const-folded at 32 bits)
         imin := (0x8000000000000000 as u64) as i64
         if op == tok.TK_PLUS:
-            ret val_int(((xi as u64) + (yi as u64)) as i64)
+            ret val_int_ty((ux + uy) as i64, rt)
         end
         if op == tok.TK_MINUS:
-            ret val_int(((xi as u64) - (yi as u64)) as i64)
+            ret val_int_ty((ux - uy) as i64, rt)
         end
         if op == tok.TK_STAR:
-            ret val_int(((xi as u64) * (yi as u64)) as i64)
+            ret val_int_ty((ux * uy) as i64, rt)
         end
         if op == tok.TK_SLASH:
             if yi == (0 as i64):
                 rt_error(ip, a, n, i18.Tr("division by zero"))
                 ret val_null()
             end
-            if xi == imin && yi == negone:
-                ret val_int(imin)
+            if uns:
+                ret val_int_ty((ux / uy) as i64, rt)
             end
-            ret val_int(xi / yi)
+            if xi == imin && yi == negone:
+                ret val_int_ty(imin, rt)
+            end
+            ret val_int_ty(xi / yi, rt)
         end
         if op == tok.TK_PERCENT:
             if yi == (0 as i64):
                 rt_error(ip, a, n, i18.Tr("modulo by zero"))
                 ret val_null()
             end
-            if xi == imin && yi == negone:
-                ret val_int(0 as i64)
+            if uns:
+                ret val_int_ty((ux % uy) as i64, rt)
             end
-            ret val_int(xi % yi)
+            if xi == imin && yi == negone:
+                ret val_int_ty(0 as i64, rt)
+            end
+            ret val_int_ty(xi % yi, rt)
         end
         if op == tok.TK_AMP:
-            ret val_int(((xi as u64) & (yi as u64)) as i64)
+            ret val_int_ty((ux & uy) as i64, rt)
         end
         if op == tok.TK_PIPE:
-            ret val_int(((xi as u64) | (yi as u64)) as i64)
+            ret val_int_ty((ux | uy) as i64, rt)
         end
         if op == tok.TK_CARET:
-            ret val_int(((xi as u64) ^ (yi as u64)) as i64)
+            ret val_int_ty((ux ^ uy) as i64, rt)
         end
         if op == tok.TK_SHL:
-            ret val_int(((xi as u64) << ((yi as u64) & (63 as u64))) as i64)
+            ret val_int_ty((ux << (uy & shmask)) as i64, rt)
         end
         if op == tok.TK_SHR:
-            ret val_int(xi >> ((((yi as u64) & (63 as u64))) as i64))
+            // Logical for unsigned, arithmetic for signed - decided by the
+            // declared type, not by the sign of the i64 carrier. ux is
+            // already the zero-extended pattern when rt is unsigned.
+            if uns:
+                ret val_int_ty((ux >> (uy & shmask)) as i64, rt)
+            end
+            ret val_int_ty(xi >> ((uy & shmask) as i64), rt)
         end
     end
     xf := to_float(x)
@@ -2096,6 +2295,20 @@ func value_cmp(x: Value, y: Value): int:
         c := str.Compare(x.s, y.s)
         ret c < 0 ? (0 - 1) : (c > 0 ? 1 : 0)
     end
+    // Integer pairs compare as integers: going through f64 both loses
+    // precision past 2^53 and would order u64 values by their signed
+    // reinterpretation.
+    if is_intlike(x) && is_intlike(y):
+        rt := int_ty_common(x.ity, y.ity)
+        xi := int_ty_wrap(rt, x.i)
+        yi := int_ty_wrap(rt, y.i)
+        if int_ty_is_unsigned(rt):
+            ux := xi as u64
+            uy := yi as u64
+            ret ux < uy ? (0 - 1) : (ux > uy ? 1 : 0)
+        end
+        ret xi < yi ? (0 - 1) : (xi > yi ? 1 : 0)
+    end
     xf := to_float(x)
     yf := to_float(y)
     ret xf < yf ? (0 - 1) : (xf > yf ? 1 : 0)
@@ -2119,6 +2332,10 @@ func value_eq(x: Value, y: Value): bool:
     end
     if x.kind == VAL_BOOL || y.kind == VAL_BOOL:
         ret to_bool(x) == to_bool(y)
+    end
+    if is_intlike(x) && is_intlike(y):
+        rt := int_ty_common(x.ity, y.ity)
+        ret int_ty_wrap(rt, x.i) == int_ty_wrap(rt, y.i)
     end
     if is_number(x) && is_number(y):
         ret to_float(x) == to_float(y)
@@ -3404,7 +3621,23 @@ func eval_match(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
 end
 
 // eval (interp_expr.c) - the full expression evaluator.
+// Give an integer result the width and signedness semantic analysis
+// inferred for this expression. Every expression node is decorated with its
+// static type (sema_decorate), so this one choke point is what makes
+// `x as u32`, u64 products, unsigned `>>`, and unsigned printing behave like
+// the compiled backends instead of collapsing to signed i64.
+//
+// Nodes reached without semantic analysis (REPL fragments, synthetic nodes)
+// have no decoration and are left exactly as before.
 func eval(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
+    v := eval_node(ip, a, env, n)
+    if v.kind != VAL_INT || n == 0:
+        ret v
+    end
+    ret coerce_int_ty(v, int_ty_from_typestr(at.Get(a, n).type_str))
+end
+
+func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
     if n == 0 || ip.failed:
         ret val_null()
     end
@@ -3569,17 +3802,19 @@ func eval(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
                 ret ur
             end
         end
+        // Unary '-' and '~' preserve the operand's type (SALAM-TYPES.md 21),
+        // so they wrap in that type rather than promoting to signed i64.
         if nd.op == tok.TK_MINUS:
             if uav.kind == VAL_FLOAT:
                 ret val_float(0.0 - uav.f)
             end
-            ret val_int(((0 as u64) - (to_int(uav) as u64)) as i64)
+            ret val_int_ty(((0 as u64) - (to_int(uav) as u64)) as i64, uav.ity)
         end
         if nd.op == tok.TK_NOT:
             ret val_bool(!to_bool(uav))
         end
         if nd.op == tok.TK_TILDE:
-            ret val_int((~(to_int(uav) as u64)) as i64)
+            ret val_int_ty((~(to_int(uav) as u64)) as i64, uav.ity)
         end
         ret uav
     end
@@ -3622,7 +3857,14 @@ func eval(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             ret val_char(to_int(cav))
         end
         if is_int_typename(base):
-            ret val_int(to_int(cav))
+            // int -> int keeps the two's-complement bit pattern and truncates
+            // to the target width (SALAM-TYPES.md 16); float -> int truncates
+            // toward zero first.
+            cty := int_ty_from_typestr(base)
+            if cav.kind == VAL_FLOAT && int_ty_is_unsigned(cty):
+                ret val_int_ty((cav.f as u64) as i64, cty)
+            end
+            ret val_int_ty(to_int(cav), cty)
         end
         if is_float_typename(base):
             ret val_float(to_float(cav))

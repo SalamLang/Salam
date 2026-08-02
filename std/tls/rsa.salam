@@ -1,0 +1,234 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+// RSA signature VERIFICATION only: RSASSA-PKCS1-v1_5 and RSASSA-PSS (RFC 8017).
+//
+// There is no signing code and no private-key handling here, by design. That
+// keeps every operand public -- signature, exponent, modulus, digest -- so the
+// non-constant-time bigint underneath is not a liability (see bigint.salam).
+//
+// Two rules the implementation follows because getting them wrong is how RSA
+// verifiers get broken:
+//
+//  1. PKCS#1 v1.5 is verified by CONSTRUCTING the expected padded block and
+//     comparing it whole, never by parsing the recovered block and hunting for
+//     the digest inside it. A parsing verifier that tolerates trailing bytes or
+//     a short padding string is the Bleichenbacher'06 signature forgery, which
+//     lets anyone forge signatures under a low public exponent.
+//  2. The recovered value is re-encoded to exactly the modulus length. A
+//     verifier that accepts a shorter encoding lets an attacker vary the
+//     representation of the same integer.
+
+const RSA_MAX_BYTES := 1024
+
+// DigestInfo DER prefixes for PKCS#1 v1.5, RFC 8017 section 9.2 note 1.
+func _rsa_digestinfo(kind: int): str:
+    if kind == HASH_SHA384:
+        ret "3041300d060960864801650304020205000430"
+    end
+    ret "3031300d060960864801650304020105000420"
+end
+
+// m = s^e mod n, rendered big-endian in exactly `klen` bytes.
+func _rsa_public_op(sig: void*, siglen: int, nmod: void*, nlen: int, expo: void*, elen: int, out: void*, klen: int): bool:
+    mut n := _big_from_bytes(nmod, nlen)
+    defer _big_free(n)
+    mut e := _big_from_bytes(expo, elen)
+    defer _big_free(e)
+    mut s := _big_from_bytes(sig, siglen)
+    defer _big_free(s)
+    if n.bad || e.bad || s.bad:
+        ret false
+    end
+    if _big_is_zero(n) || _big_is_zero(e):
+        ret false
+    end
+    // A signature must be a residue: s < n. Rejecting s >= n keeps the
+    // representation of a given signature unique.
+    if _big_cmp(s, n) >= 0:
+        ret false
+    end
+    mut m := _big_new(n.n + 2)
+    defer _big_free(m)
+    if m.bad:
+        ret false
+    end
+    if !_big_modexp(m, s, e, n):
+        ret false
+    end
+    ret _big_to_bytes(m, out, klen)
+end
+
+// EMSA-PKCS1-v1_5: EM = 0x00 || 0x01 || 0xFF... || 0x00 || DigestInfo || H
+func _rsa_verify_pkcs1(kind: int, digest: void*, nmod: void*, nlen: int, expo: void*, elen: int, sig: void*, siglen: int): bool:
+    klen := nlen
+    if klen < 16 || klen > RSA_MAX_BYTES:
+        ret false
+    end
+    if siglen != klen:
+        ret false
+    end
+    hlen := _hash_size(kind)
+    mut di := _hexbuf(_rsa_digestinfo(kind))
+    defer _buf_free(di)
+
+    // Build the block we expect, then compare in full.
+    mut want := _newbuf(klen)
+    defer _buf_free(want)
+    tlen := di.len + hlen
+    if klen < tlen + 11:
+        ret false
+    end
+    _put8(want, 0x00)
+    _put8(want, 0x01)
+    pslen := klen - tlen - 3
+    repeat pslen with _i:
+        _put8(want, 0xFF)
+    end
+    _put8(want, 0x00)
+    _putbuf(want, di)
+    _putraw(want, digest, hlen)
+
+    mut got := _newbuf(klen)
+    defer _buf_free(got)
+    _putzeros(got, klen)
+    if !_rsa_public_op(sig, siglen, nmod, nlen, expo, elen, got.p, klen):
+        ret false
+    end
+    ret _cteq(got.p, want.p, klen)
+end
+
+// MGF1 from RFC 8017 appendix B.2.1.
+func _mgf1(kind: int, seed: void*, seedlen: int, out: void*, outlen: int):
+    hlen := _hash_size(kind)
+    mut ctr := _newbuf(4)
+    defer _buf_free(ctr)
+    _putzeros(ctr, 4)
+    mut blk := _newbuf(hlen)
+    defer _buf_free(blk)
+    _putzeros(blk, hlen)
+    mut done := 0
+    mut counter := 0
+    until done < outlen:
+        _bufset(ctr, 0, (counter >> 24) & 0xFF)
+        _bufset(ctr, 1, (counter >> 16) & 0xFF)
+        _bufset(ctr, 2, (counter >> 8) & 0xFF)
+        _bufset(ctr, 3, counter & 0xFF)
+        mut h := _hash_init(kind)
+        _hash_update(h, seed, seedlen)
+        _hash_update(h, ctr.p, 4)
+        _hash_final(h, blk.p)
+        mut take := outlen - done
+        if take > hlen:
+            take = hlen
+        end
+        repeat take with i:
+            _bput(out, done + i, _bufat(blk, i))
+        end
+        done += take
+        counter += 1
+    end
+end
+
+// EMSA-PSS-VERIFY, RFC 8017 section 9.1.2. TLS 1.3 fixes the salt length to
+// the digest length (RFC 8446 section 4.2.3), which is what `slen` carries.
+func _rsa_verify_pss(kind: int, digest: void*, nmod: void*, nlen: int, expo: void*, elen: int, sig: void*, siglen: int, slen: int): bool:
+    klen := nlen
+    if klen < 16 || klen > RSA_MAX_BYTES:
+        ret false
+    end
+    if siglen != klen:
+        ret false
+    end
+    hlen := _hash_size(kind)
+
+    // modBits is the true bit length of the modulus, so emLen can be one byte
+    // shorter than the modulus when the top byte is small.
+    mut nbig := _big_from_bytes(nmod, nlen)
+    defer _big_free(nbig)
+    modbits := _big_bitlen(nbig)
+    if modbits < 2:
+        ret false
+    end
+    emlen := (modbits - 1 + 7) / 8
+    if emlen < hlen + slen + 2:
+        ret false
+    end
+
+    mut em := _newbuf(klen)
+    defer _buf_free(em)
+    _putzeros(em, klen)
+    if !_rsa_public_op(sig, siglen, nmod, nlen, expo, elen, em.p, klen):
+        ret false
+    end
+    // Work from the low `emlen` bytes of the klen-byte encoding.
+    skip := klen - emlen
+    repeat skip with i:
+        if _bufat(em, i) != 0:
+            ret false
+        end
+    end
+
+    if _bufat(em, klen - 1) != 0xbc:
+        ret false
+    end
+    dblen := emlen - hlen - 1
+    hoff := skip + dblen
+
+    // The unused leading bits of the first DB byte must be zero.
+    unused := 8 * emlen - (modbits - 1)
+    topmask := (0xFF >> unused) & 0xFF
+    if (_bufat(em, skip) & ~topmask & 0xFF) != 0:
+        ret false
+    end
+
+    mut dbmask := _newbuf(dblen)
+    defer _buf_free(dbmask)
+    _putzeros(dbmask, dblen)
+    _mgf1(kind, _bufptr(em, hoff), hlen, dbmask.p, dblen)
+
+    mut db := _newbuf(dblen)
+    defer _buf_free(db)
+    repeat dblen with i:
+        _put8(db, _bufat(em, skip + i) ^ _bufat(dbmask, i))
+    end
+    _bufset(db, 0, _bufat(db, 0) & topmask)
+
+    // DB must be PS || 0x01 || salt with PS all zero.
+    pslen := dblen - slen - 1
+    repeat pslen with i:
+        if _bufat(db, i) != 0:
+            ret false
+        end
+    end
+    if _bufat(db, pslen) != 0x01:
+        ret false
+    end
+
+    // H' = Hash(0x00 * 8 || mHash || salt)
+    mut mprime := _newbuf(8 + hlen + slen)
+    defer _buf_free(mprime)
+    _putzeros(mprime, 8)
+    _putraw(mprime, digest, hlen)
+    repeat slen with i:
+        _put8(mprime, _bufat(db, pslen + 1 + i))
+    end
+    mut hprime := _newbuf(hlen)
+    defer _buf_free(hprime)
+    _putzeros(hprime, hlen)
+    _hash_oneshot(kind, mprime.p, mprime.len, hprime.p)
+    ret _cteq(hprime.p, _bufptr(em, hoff), hlen)
+end

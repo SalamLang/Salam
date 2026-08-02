@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024–2026)
+ * Salam Programming Language (2024-2026)
  *
  *   +-------------------+
  *   |     S A L A M     |
@@ -341,6 +341,7 @@ value_t call_builtin_method(interp_t *I, ast_node_t *call, value_t recv,
             it->idx = 0;
             value_t v;
             v.kind = VAL_MAPITER;
+            v.ity = ITY_NONE;
             v.as.iter = it;
             return v;
         }

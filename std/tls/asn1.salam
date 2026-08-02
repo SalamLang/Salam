@@ -1,0 +1,306 @@
+package tls
+
+// DER (Distinguished Encoding Rules) reader for X.509.
+//
+// STRICT BY DESIGN. DER admits exactly one encoding of any value, and a parser
+// that quietly accepts other encodings is a security bug rather than a
+// convenience: two parsers disagreeing about what a certificate says is how
+// name-confusion and signature-substitution attacks get in. So this rejects,
+// rather than tolerates:
+//   * indefinite lengths (BER only, never valid DER);
+//   * non-minimal length encodings (0x81 0x05 for a length that fits in one byte);
+//   * lengths whose contents run past the end of the enclosing value;
+//   * multi-byte tag numbers (nothing in X.509 needs them);
+//   * INTEGERs with redundant leading 0x00 or 0xFF padding.
+//
+// Every parse routine reports failure through the Reader's sticky `bad` flag or
+// a `ok`/bool result, so a malformed certificate can never be mistaken for a
+// well-formed one describing something else.
+
+const ASN1_BOOLEAN := 0x01
+const ASN1_INTEGER := 0x02
+const ASN1_BITSTRING := 0x03
+const ASN1_OCTETSTRING := 0x04
+const ASN1_NULL := 0x05
+const ASN1_OID := 0x06
+const ASN1_UTF8STRING := 0x0C
+const ASN1_PRINTABLESTRING := 0x13
+const ASN1_T61STRING := 0x14
+const ASN1_IA5STRING := 0x16
+const ASN1_UTCTIME := 0x17
+const ASN1_GENERALIZEDTIME := 0x18
+const ASN1_SEQUENCE := 0x30
+const ASN1_SET := 0x31
+
+// context-specific constructed tags [0]..[3], as used by TBSCertificate
+const ASN1_CTX0 := 0xA0
+const ASN1_CTX1 := 0xA1
+const ASN1_CTX2 := 0xA2
+const ASN1_CTX3 := 0xA3
+
+struct Tlv:
+    pub tag: int = 0
+    // the V of the TLV
+    pub body: Reader = Reader {}
+    // the whole TLV including its header, needed wherever a signature covers
+    // the encoded form (tbsCertificate) or where two names are compared byte
+    // for byte (issuer/subject chaining)
+    pub full: Reader = Reader {}
+    pub ok: bool = false
+end
+
+// Read one TLV from r, advancing past it.
+func _der(r &: Reader): Tlv:
+    mut t := Tlv {}
+    if r.bad:
+        ret t
+    end
+    start := r.pos
+    tag := _rd8(r)
+    if r.bad:
+        ret t
+    end
+    // Low tag numbers only: 0x1F in the low five bits introduces a multi-byte
+    // tag, which no X.509 structure uses.
+    if (tag & 0x1F) == 0x1F:
+        r.bad = true
+        ret t
+    end
+    first := _rd8(r)
+    if r.bad:
+        ret t
+    end
+    mut length := 0
+    if first < 0x80:
+        length = first
+    else:
+        nbytes := first & 0x7F
+        if nbytes == 0:
+            // 0x80 is the indefinite length: BER, never DER
+            r.bad = true
+            ret t
+        end
+        if nbytes > 4:
+            r.bad = true
+            ret t
+        end
+        mut v := 0
+        repeat nbytes with i:
+            v = (v << 8) | _rd8(r)
+        end
+        if r.bad:
+            ret t
+        end
+        // minimal encoding: a long form must have been necessary, and must not
+        // carry a leading zero byte
+        if v < 0x80:
+            r.bad = true
+            ret t
+        end
+        if nbytes > 1 && v < (1 << (8 * (nbytes - 1))):
+            r.bad = true
+            ret t
+        end
+        if v < 0:
+            r.bad = true
+            ret t
+        end
+        length = v
+    end
+    body := _rdbytes(r, length)
+    if r.bad:
+        ret t
+    end
+    t.tag = tag
+    t.body = body
+    t.full = _subreader(r, start, r.pos - start)
+    t.ok = true
+    ret t
+end
+
+// Read a TLV and require a specific tag.
+func _der_tag(r &: Reader, want: int): Tlv:
+    mut t := _der(r)
+    if !t.ok:
+        ret t
+    end
+    if t.tag != want:
+        r.bad = true
+        t.ok = false
+    end
+    ret t
+end
+
+// Peek the next tag without consuming, for OPTIONAL fields.
+func _der_peek(r: Reader): int:
+    if r.bad || r.pos >= r.len:
+        ret 0 - 1
+    end
+    ret _rdat(r, r.pos)
+end
+
+func _der_is(r: Reader, tag: int): bool:
+    ret _der_peek(r) == tag
+end
+
+// Open a SEQUENCE and return a reader over its contents.
+func _der_seq(r &: Reader): Reader:
+    t := _der_tag(r, ASN1_SEQUENCE)
+    if !t.ok:
+        ret _newreader(null, 0)
+    end
+    ret t.body
+end
+
+// An INTEGER's contents with DER's padding rules enforced, returned WITHOUT
+// stripping. The sign lives in the top bit of the first byte here.
+func _der_int_raw(r &: Reader): Reader:
+    t := _der_tag(r, ASN1_INTEGER)
+    if !t.ok:
+        ret _newreader(null, 0)
+    end
+    b := t.body
+    if b.len == 0:
+        r.bad = true
+        ret _newreader(null, 0)
+    end
+    if b.len > 1:
+        f := _rdat(b, 0)
+        s := _rdat(b, 1)
+        // 0x00 followed by a byte < 0x80, or 0xFF followed by a byte >= 0x80,
+        // is redundant padding and not valid DER
+        if f == 0x00 && s < 0x80:
+            r.bad = true
+            ret _newreader(null, 0)
+        end
+        if f == 0xFF && s >= 0x80:
+            r.bad = true
+            ret _newreader(null, 0)
+        end
+    end
+    ret b
+end
+
+// Drop the single leading 0x00 that DER prepends to keep a large positive
+// value from reading as negative.
+func _der_strip_sign(b: Reader): Reader:
+    if b.len > 1 && _rdat(b, 0) == 0x00:
+        ret _subreader(b, 1, b.len - 1)
+    end
+    ret b
+end
+
+func _der_int(r &: Reader): Reader:
+    b := _der_int_raw(r)
+    if r.bad:
+        ret b
+    end
+    ret _der_strip_sign(b)
+end
+
+// An INTEGER that must be non-negative (serial numbers, RSA moduli and
+// exponents, ECDSA r/s).
+//
+// The sign is judged on the UNSTRIPPED encoding: a 2048-bit modulus is encoded
+// as 0x00 followed by a byte with its top bit set, and testing the stripped
+// bytes would reject every RSA key of full width.
+func _der_uint(r &: Reader): Reader:
+    b := _der_int_raw(r)
+    if r.bad:
+        ret b
+    end
+    if b.len > 0 && _rdat(b, 0) >= 0x80:
+        r.bad = true
+        ret _newreader(null, 0)
+    end
+    ret _der_strip_sign(b)
+end
+
+// BIT STRING contents minus the "unused bits" prefix byte. X.509 only ever
+// uses whole-byte bit strings for keys and signatures, so a nonzero unused
+// count is rejected there via `allow_unused = false`.
+func _der_bitstring(r &: Reader, allow_unused: bool): Reader:
+    t := _der_tag(r, ASN1_BITSTRING)
+    if !t.ok:
+        ret _newreader(null, 0)
+    end
+    b := t.body
+    if b.len < 1:
+        r.bad = true
+        ret _newreader(null, 0)
+    end
+    unused := _rdat(b, 0)
+    if unused > 7:
+        r.bad = true
+        ret _newreader(null, 0)
+    end
+    if unused != 0 && !allow_unused:
+        r.bad = true
+        ret _newreader(null, 0)
+    end
+    ret _subreader(b, 1, b.len - 1)
+end
+
+func _der_oid(r &: Reader): Reader:
+    t := _der_tag(r, ASN1_OID)
+    if !t.ok:
+        ret _newreader(null, 0)
+    end
+    ret t.body
+end
+
+// Compare an OID's contents against a hex literal of its DER encoding.
+func _oid_is(o: Reader, hexoid: str): bool:
+    mut want := _hexbuf(hexoid)
+    defer _buf_free(want)
+    if o.len != want.len:
+        ret false
+    end
+    repeat o.len with i:
+        if _rdat(o, i) != _bufat(want, i):
+            ret false
+        end
+    end
+    ret true
+end
+
+// AlgorithmIdentifier ::= SEQUENCE { algorithm OID, parameters ANY OPTIONAL }
+// Returns the algorithm OID; `params` receives whatever followed it.
+func _der_algid(r &: Reader, params &: Reader): Reader:
+    mut s := _der_seq(r)
+    if r.bad:
+        ret _newreader(null, 0)
+    end
+    o := _der_oid(s)
+    if s.bad:
+        r.bad = true
+        ret _newreader(null, 0)
+    end
+    params = _rdrest(s)
+    ret o
+end
+
+// Skip one TLV.
+func _der_skip(r &: Reader):
+    t := _der(r)
+    if !t.ok:
+        r.bad = true
+    end
+end
+
+// Copy a reader's bytes into a str. Used for DNS names and DN components,
+// which are ASCII in practice; embedded NULs are rejected because a name
+// containing one parses differently in a C string than in a length-delimited
+// buffer, which is the classic "null-prefix" certificate attack.
+func _rd_to_str(r: Reader): str:
+    mut b := _newbuf(r.len + 1)
+    defer _buf_free(b)
+    repeat r.len with i:
+        c := _rdat(r, i)
+        if c == 0:
+            ret ""
+        end
+        _put8(b, c)
+    end
+    ret _bufstr(b)
+end

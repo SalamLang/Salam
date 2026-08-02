@@ -1,0 +1,426 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+// ChaCha20, Poly1305, and the ChaCha20-Poly1305 AEAD (RFC 8439).
+//
+// This is the preferred cipher suite for the native stack. Both primitives are
+// built entirely from add/xor/rotate on whole registers with no data-dependent
+// table lookups or branches, so they are constant-time by construction -- which
+// is exactly what a table-driven AES cannot promise (see aes.salam).
+//
+// Poly1305 uses the well-known 5 x 26-bit limb representation: each limb fits
+// in a u32, and every limb-by-limb product fits in a u64 with room for the
+// five-term sum, so no 128-bit type is needed.
+
+const POLY_MASK26 := 0x3ffffff as u32
+
+struct ChaState:
+    pub w: u32[16] = [
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+        0 as u32, 0 as u32, 0 as u32, 0 as u32
+    ]
+end
+
+struct Poly1305:
+    pub r: u32[5] = [0 as u32, 0 as u32, 0 as u32, 0 as u32, 0 as u32]
+    pub h: u32[5] = [0 as u32, 0 as u32, 0 as u32, 0 as u32, 0 as u32]
+    pub pad: u32[4] = [0 as u32, 0 as u32, 0 as u32, 0 as u32]
+    pub blk: u8[16] = [
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
+    ]
+    pub blen: int = 0
+end
+
+inline func _rotl32(x: u32, n: u32): u32:
+    ret (x << n) | (x >> ((32 as u32) - n))
+end
+
+inline func _le32(p: void*, o: int): u32:
+    ret (_bget(p, o) as u32) | ((_bget(p, o + 1) as u32) << (8 as u32)) | ((_bget(p, o + 2) as u32) << (16 as u32)) | ((_bget(p, o + 3) as u32) << (24 as u32))
+end
+
+inline func _ple32(v: u32, p: void*, o: int):
+    _bput(p, o, (v & (0xFF as u32)) as int)
+    _bput(p, o + 1, ((v >> (8 as u32)) & (0xFF as u32)) as int)
+    _bput(p, o + 2, ((v >> (16 as u32)) & (0xFF as u32)) as int)
+    _bput(p, o + 3, ((v >> (24 as u32)) & (0xFF as u32)) as int)
+end
+
+// ---------------------------------------------------------------- ChaCha20
+
+func _cha_qr(s &: ChaState, a: int, b: int, c: int, d: int):
+    s.w[a] += s.w[b]
+    s.w[d] = _rotl32(s.w[d] ^ s.w[a], 16 as u32)
+    s.w[c] += s.w[d]
+    s.w[b] = _rotl32(s.w[b] ^ s.w[c], 12 as u32)
+    s.w[a] += s.w[b]
+    s.w[d] = _rotl32(s.w[d] ^ s.w[a], 8 as u32)
+    s.w[c] += s.w[d]
+    s.w[b] = _rotl32(s.w[b] ^ s.w[c], 7 as u32)
+end
+
+// Produce one 64-byte keystream block for (key, counter, nonce).
+func _cha_block(key: void*, counter: u32, nonce: void*, out: void*):
+    mut st := ChaState {}
+    // "expand 32-byte k"
+    st.w[0] = 0x61707865 as u32
+    st.w[1] = 0x3320646e as u32
+    st.w[2] = 0x79622d32 as u32
+    st.w[3] = 0x6b206574 as u32
+    repeat 8 with i:
+        st.w[4 + i] = _le32(key, i * 4)
+    end
+    st.w[12] = counter
+    repeat 3 with i:
+        st.w[13 + i] = _le32(nonce, i * 4)
+    end
+    mut wk := st
+    repeat 10 with _i:
+        // column rounds
+        _cha_qr(wk, 0, 4, 8, 12)
+        _cha_qr(wk, 1, 5, 9, 13)
+        _cha_qr(wk, 2, 6, 10, 14)
+        _cha_qr(wk, 3, 7, 11, 15)
+        // diagonal rounds
+        _cha_qr(wk, 0, 5, 10, 15)
+        _cha_qr(wk, 1, 6, 11, 12)
+        _cha_qr(wk, 2, 7, 8, 13)
+        _cha_qr(wk, 3, 4, 9, 14)
+    end
+    repeat 16 with i:
+        _ple32(wk.w[i] + st.w[i], out, i * 4)
+    end
+end
+
+// XOR `n` bytes of input with the ChaCha20 keystream starting at `counter`.
+// Encryption and decryption are the same operation.
+func _cha20_xor(key: void*, counter: u32, nonce: void*, inp: void*, out: void*, n: int):
+    mut ks := _newbuf(64)
+    defer _buf_wipe(ks)
+    _putzeros(ks, 64)
+    mut done := 0
+    mut ctr := counter
+    until done < n:
+        _cha_block(key, ctr, nonce, ks.p)
+        mut take := n - done
+        if take > 64:
+            take = 64
+        end
+        repeat take with i:
+            _bput(out, done + i, _bget(inp, done + i) ^ _bufat(ks, i))
+        end
+        done += take
+        ctr += 1 as u32
+    end
+end
+
+// ---------------------------------------------------------------- Poly1305
+
+func _poly_init(key: void*): Poly1305:
+    mut st := Poly1305 {}
+    t0 := _le32(key, 0)
+    t1 := _le32(key, 4)
+    t2 := _le32(key, 8)
+    t3 := _le32(key, 12)
+    // r &= 0x0ffffffc0ffffffc0ffffffc0fffffff, folded into the limb masks
+    st.r[0] = t0 & (0x3ffffff as u32)
+    st.r[1] = ((t0 >> (26 as u32)) | (t1 << (6 as u32))) & (0x3ffff03 as u32)
+    st.r[2] = ((t1 >> (20 as u32)) | (t2 << (12 as u32))) & (0x3ffc0ff as u32)
+    st.r[3] = ((t2 >> (14 as u32)) | (t3 << (18 as u32))) & (0x3f03fff as u32)
+    st.r[4] = (t3 >> (8 as u32)) & (0x00fffff as u32)
+    repeat 4 with i:
+        st.pad[i] = _le32(key, 16 + i * 4)
+    end
+    st.blen = 0
+    ret st
+end
+
+// Absorb whole 16-byte blocks. `final` selects the high bit: complete blocks
+// carry an implicit 2^128, the last partial block carries its own 0x01 byte
+// appended by the caller instead.
+func _poly_blocks(st &: Poly1305, p: void*, n: int, fin: bool):
+    mut hibit := (1 as u32) << (24 as u32)
+    if fin:
+        hibit = 0 as u32
+    end
+    r0 := st.r[0]
+    r1 := st.r[1]
+    r2 := st.r[2]
+    r3 := st.r[3]
+    r4 := st.r[4]
+    s1 := r1 * (5 as u32)
+    s2 := r2 * (5 as u32)
+    s3 := r3 * (5 as u32)
+    s4 := r4 * (5 as u32)
+    mut h0 := st.h[0]
+    mut h1 := st.h[1]
+    mut h2 := st.h[2]
+    mut h3 := st.h[3]
+    mut h4 := st.h[4]
+    mut off := 0
+    mut left := n
+    until left >= 16:
+        t0 := _le32(p, off)
+        t1 := _le32(p, off + 4)
+        t2 := _le32(p, off + 8)
+        t3 := _le32(p, off + 12)
+        h0 += t0 & POLY_MASK26
+        h1 += ((t0 >> (26 as u32)) | (t1 << (6 as u32))) & POLY_MASK26
+        h2 += ((t1 >> (20 as u32)) | (t2 << (12 as u32))) & POLY_MASK26
+        h3 += ((t2 >> (14 as u32)) | (t3 << (18 as u32))) & POLY_MASK26
+        h4 += (t3 >> (8 as u32)) | hibit
+
+        // h *= r mod 2^130-5; the 5x reduction is folded into s1..s4
+        d0 := (h0 as u64) * (r0 as u64) + (h1 as u64) * (s4 as u64) + (h2 as u64) * (s3 as u64) + (h3 as u64) * (s2 as u64) + (h4 as u64) * (s1 as u64)
+        mut d1 := (h0 as u64) * (r1 as u64) + (h1 as u64) * (r0 as u64) + (h2 as u64) * (s4 as u64) + (h3 as u64) * (s3 as u64) + (h4 as u64) * (s2 as u64)
+        mut d2 := (h0 as u64) * (r2 as u64) + (h1 as u64) * (r1 as u64) + (h2 as u64) * (r0 as u64) + (h3 as u64) * (s4 as u64) + (h4 as u64) * (s3 as u64)
+        mut d3 := (h0 as u64) * (r3 as u64) + (h1 as u64) * (r2 as u64) + (h2 as u64) * (r1 as u64) + (h3 as u64) * (r0 as u64) + (h4 as u64) * (s4 as u64)
+        mut d4 := (h0 as u64) * (r4 as u64) + (h1 as u64) * (r3 as u64) + (h2 as u64) * (r2 as u64) + (h3 as u64) * (r1 as u64) + (h4 as u64) * (r0 as u64)
+
+        mut c := (d0 >> (26 as u64)) as u32
+        h0 = (d0 as u32) & POLY_MASK26
+        d1 += c as u64
+        c = (d1 >> (26 as u64)) as u32
+        h1 = (d1 as u32) & POLY_MASK26
+        d2 += c as u64
+        c = (d2 >> (26 as u64)) as u32
+        h2 = (d2 as u32) & POLY_MASK26
+        d3 += c as u64
+        c = (d3 >> (26 as u64)) as u32
+        h3 = (d3 as u32) & POLY_MASK26
+        d4 += c as u64
+        c = (d4 >> (26 as u64)) as u32
+        h4 = (d4 as u32) & POLY_MASK26
+        h0 += c * (5 as u32)
+        c = h0 >> (26 as u32)
+        h0 = h0 & POLY_MASK26
+        h1 += c
+
+        off += 16
+        left -= 16
+    end
+    st.h[0] = h0
+    st.h[1] = h1
+    st.h[2] = h2
+    st.h[3] = h3
+    st.h[4] = h4
+end
+
+func _poly_update(st &: Poly1305, p: void*, n: int):
+    // Allocated at function scope on purpose: a `defer` written inside a
+    // nested block is hoisted to function exit by codegen, where the
+    // block-local name is no longer in scope.
+    mut tmp := _newbuf(16)
+    defer _buf_free(tmp)
+    mut i := 0
+    // top up a partial block first
+    if st.blen > 0:
+        mut want := 16 - st.blen
+        if want > n:
+            want = n
+        end
+        repeat want with j:
+            st.blk[st.blen + j] = _bget(p, j) as u8
+        end
+        st.blen += want
+        i += want
+        if st.blen == 16:
+            _bufreset(tmp)
+            repeat 16 with j:
+                _put8(tmp, st.blk[j] as int)
+            end
+            _poly_blocks(st, tmp.p, 16, false)
+            st.blen = 0
+        end
+    end
+    whole := ((n - i) / 16) * 16
+    if whole > 0:
+        _poly_blocks(st, ((p as i64) + (i as i64)) as void*, whole, false)
+        i += whole
+    end
+    until i < n:
+        st.blk[st.blen] = _bget(p, i) as u8
+        st.blen += 1
+        i += 1
+    end
+end
+
+func _poly_final(st0: Poly1305, out: void*):
+    mut st := st0
+    // function scope, not inside the `if`: see the note in _poly_update
+    mut tmp := _newbuf(16)
+    defer _buf_free(tmp)
+    if st.blen > 0:
+        // pad the trailing partial block with 0x01 then zeros, and absorb it
+        // with the implicit high bit disabled
+        n := st.blen
+        repeat n with j:
+            _put8(tmp, st.blk[j] as int)
+        end
+        _put8(tmp, 1)
+        until tmp.len < 16:
+            _put8(tmp, 0)
+        end
+        _poly_blocks(st, tmp.p, 16, true)
+    end
+
+    mut h0 := st.h[0]
+    mut h1 := st.h[1]
+    mut h2 := st.h[2]
+    mut h3 := st.h[3]
+    mut h4 := st.h[4]
+
+    mut c := h1 >> (26 as u32)
+    h1 = h1 & POLY_MASK26
+    h2 += c
+    c = h2 >> (26 as u32)
+    h2 = h2 & POLY_MASK26
+    h3 += c
+    c = h3 >> (26 as u32)
+    h3 = h3 & POLY_MASK26
+    h4 += c
+    c = h4 >> (26 as u32)
+    h4 = h4 & POLY_MASK26
+    h0 += c * (5 as u32)
+    c = h0 >> (26 as u32)
+    h0 = h0 & POLY_MASK26
+    h1 += c
+
+    // g = h + 5; if it did not borrow, h was >= p and g is the reduced value
+    mut g0 := h0 + (5 as u32)
+    c = g0 >> (26 as u32)
+    g0 = g0 & POLY_MASK26
+    mut g1 := h1 + c
+    c = g1 >> (26 as u32)
+    g1 = g1 & POLY_MASK26
+    mut g2 := h2 + c
+    c = g2 >> (26 as u32)
+    g2 = g2 & POLY_MASK26
+    mut g3 := h3 + c
+    c = g3 >> (26 as u32)
+    g3 = g3 & POLY_MASK26
+    g4 := h4 + c - ((1 as u32) << (26 as u32))
+
+    // Branch-free select: mask is all-ones when g4 stayed non-negative.
+    mut mask := (g4 >> (31 as u32)) - (1 as u32)
+    g0 = g0 & mask
+    g1 = g1 & mask
+    g2 = g2 & mask
+    g3 = g3 & mask
+    g4m := g4 & mask
+    mask = ~mask
+    h0 = (h0 & mask) | g0
+    h1 = (h1 & mask) | g1
+    h2 = (h2 & mask) | g2
+    h3 = (h3 & mask) | g3
+    h4 = (h4 & mask) | g4m
+
+    // repack the 26-bit limbs into four 32-bit words
+    h0 = (h0 | (h1 << (26 as u32)))
+    h1 = ((h1 >> (6 as u32)) | (h2 << (20 as u32)))
+    h2 = ((h2 >> (12 as u32)) | (h3 << (14 as u32)))
+    h3 = ((h3 >> (18 as u32)) | (h4 << (8 as u32)))
+
+    mut f := (h0 as u64) + (st.pad[0] as u64)
+    h0 = f as u32
+    f = (h1 as u64) + (st.pad[1] as u64) + (f >> (32 as u64))
+    h1 = f as u32
+    f = (h2 as u64) + (st.pad[2] as u64) + (f >> (32 as u64))
+    h2 = f as u32
+    f = (h3 as u64) + (st.pad[3] as u64) + (f >> (32 as u64))
+    h3 = f as u32
+
+    _ple32(h0, out, 0)
+    _ple32(h1, out, 4)
+    _ple32(h2, out, 8)
+    _ple32(h3, out, 12)
+end
+
+func _poly1305(key: void*, msg: void*, n: int, out: void*):
+    mut st := _poly_init(key)
+    _poly_update(st, msg, n)
+    _poly_final(st, out)
+end
+
+// ---------------------------------------------------------------- AEAD
+
+func _poly_pad16(st &: Poly1305, n: int):
+    rem := n % 16
+    if rem == 0:
+        ret
+    end
+    mut z := _newbuf(16)
+    defer _buf_free(z)
+    _putzeros(z, 16 - rem)
+    _poly_update(st, z.p, 16 - rem)
+end
+
+// The AEAD tag covers AAD || pad16 || ciphertext || pad16 || le64(aadlen) ||
+// le64(ctlen). The trailing lengths are what stop an attacker from shifting
+// bytes between the AAD and the ciphertext.
+func _cha20poly_tag(key: void*, nonce: void*, aad: void*, aadlen: int, ct: void*, ctlen: int, tag: void*):
+    mut otk := _newbuf(64)
+    defer _buf_wipe(otk)
+    _putzeros(otk, 64)
+    _cha_block(key, 0 as u32, nonce, otk.p)
+    mut st := _poly_init(otk.p)
+    if aadlen > 0:
+        _poly_update(st, aad, aadlen)
+    end
+    _poly_pad16(st, aadlen)
+    if ctlen > 0:
+        _poly_update(st, ct, ctlen)
+    end
+    _poly_pad16(st, ctlen)
+    mut lens := _newbuf(16)
+    defer _buf_free(lens)
+    mut a64 := aadlen as u64
+    repeat 8 with _i:
+        _put8(lens, (a64 & (0xFF as u64)) as int)
+        a64 = a64 >> (8 as u64)
+    end
+    mut c64 := ctlen as u64
+    repeat 8 with _i:
+        _put8(lens, (c64 & (0xFF as u64)) as int)
+        c64 = c64 >> (8 as u64)
+    end
+    _poly_update(st, lens.p, 16)
+    _poly_final(st, tag)
+end
+
+// Seal: encrypts `n` bytes in place from `pt` to `ct` and writes a 16-byte tag.
+func _cha20poly_seal(key: void*, nonce: void*, aad: void*, aadlen: int, pt: void*, ct: void*, n: int, tag: void*):
+    _cha20_xor(key, 1 as u32, nonce, pt, ct, n)
+    _cha20poly_tag(key, nonce, aad, aadlen, ct, n, tag)
+end
+
+// Open: verifies the tag BEFORE decrypting, and returns false without writing
+// plaintext if it does not match. Releasing unauthenticated plaintext to the
+// caller is how AEAD misuse turns into a decryption oracle.
+func _cha20poly_open(key: void*, nonce: void*, aad: void*, aadlen: int, ct: void*, n: int, tag: void*, pt: void*): bool:
+    mut want := _newbuf(16)
+    defer _buf_free(want)
+    _putzeros(want, 16)
+    _cha20poly_tag(key, nonce, aad, aadlen, ct, n, want.p)
+    if !_cteq(want.p, tag, 16):
+        ret false
+    end
+    _cha20_xor(key, 1 as u32, nonce, ct, pt, n)
+    ret true
+end

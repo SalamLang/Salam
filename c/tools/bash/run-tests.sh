@@ -23,6 +23,44 @@ if [ -z "${SALAM_STD:-}" ] && [ -d "$(pwd)/std" ]; then
     export SALAM_STD
 fi
 
+# Some tests (e.g. stdlib/os_detect) legitimately produce different, all
+# "correct", output depending on the host OS and/or CPU architecture -
+# rather than skip them off the primary (linux/x64) CI host, an optional
+# more-specific sibling is preferred over the plain $name.out when one is
+# present for this host, checked most-specific first:
+#   $name.$HOST_OS.$HOST_ARCH.out   (e.g. os_detect.windows.arm64.out)
+#   $name.$HOST_OS.out              (e.g. os_detect.windows.out)
+#   $name.out                       (default/fallback - every existing
+#                                     test is unaffected unless it actually
+#                                     ships one of the more specific files)
+# HOST_OS/HOST_ARCH use the same normalized vocabulary as install.sh's
+# platform detection (linux/mac/windows, x64/arm64/x86/arm) so a test's
+# variant filenames read the same way across the codebase.
+case "$(uname -s 2>/dev/null)" in
+Linux) HOST_OS=linux ;;
+Darwin) HOST_OS=mac ;;
+MINGW* | MSYS* | CYGWIN*) HOST_OS=windows ;;
+*) HOST_OS="" ;;
+esac
+[ "${OS:-}" = "Windows_NT" ] && HOST_OS=windows
+case "$(uname -m 2>/dev/null)" in
+x86_64 | amd64) HOST_ARCH=x64 ;;
+aarch64 | arm64) HOST_ARCH=arm64 ;;
+i386 | i486 | i586 | i686 | x86) HOST_ARCH=x86 ;;
+armv6l | armv7l | armv7 | arm) HOST_ARCH=arm ;;
+*) HOST_ARCH="" ;;
+esac
+pick_expect() {
+    # $1 = path without extension (e.g. ../tests/en/stdlib/os_detect)
+    if [ -n "$HOST_OS" ] && [ -n "$HOST_ARCH" ] && [ -f "$1.$HOST_OS.$HOST_ARCH.out" ]; then
+        printf '%s\n' "$1.$HOST_OS.$HOST_ARCH.out"
+    elif [ -n "$HOST_OS" ] && [ -f "$1.$HOST_OS.out" ]; then
+        printf '%s\n' "$1.$HOST_OS.out"
+    else
+        printf '%s\n' "$1.out"
+    fi
+}
+
 run_batch() {
     jobs="$1"
     runner="${2:-$RUN_ONE}"
@@ -94,7 +132,7 @@ if want general; then
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            exp="../tests/$lang/general/$name.out"
+            exp="$(pick_expect "../tests/$lang/general/$name")"
             [ -f "$exp" ] || continue
             def=$(grep -o 'DEFINE: [A-Za-z0-9_]*' "$f" | sed 's/DEFINE: /-D/' | tr '\n' ' ')
             printf 'general/%s/%s\t%s\t%s\t%s\t%s\n' "$lang" "$name" "$f" "$lang" "$exp" "${def:--}" >>"$jobs"
@@ -108,7 +146,7 @@ if want exec; then
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            exp="../tests/$lang/exec/$name.out"
+            exp="$(pick_expect "../tests/$lang/exec/$name")"
             [ -f "$exp" ] || continue
             got=$("$SALAM" exec "$f" --no-color --log-level=error --lang="$lang" 2>&1 | tr -d '\r')
             check_out "exec/$lang/$name" "$exp" "$got"
@@ -123,7 +161,7 @@ if want js; then
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            exp="../tests/$lang/js/$name.out"
+            exp="$(pick_expect "../tests/$lang/js/$name")"
             [ -f "$exp" ] || continue
             printf 'js/%s/%s\t%s\t%s\t%s\t-\n' "$lang" "$name" "$f" "$lang" "$exp" >>"$jobs"
         done
@@ -173,7 +211,7 @@ if want fmt; then
         for f in ../tests/"$lang"/fmt/*.salam; do
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
-            exp="../tests/$lang/fmt/$name.out"
+            exp="$(pick_expect "../tests/$lang/fmt/$name")"
             [ -f "$exp" ] || continue
             cp "$f" "$WORK/$name.salam"
             "$SALAM" format "$WORK/$name.salam" --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
@@ -224,7 +262,7 @@ if want ssl; then
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            exp="../tests/$lang/ssl/$name.out"
+            exp="$(pick_expect "../tests/$lang/ssl/$name")"
             [ -f "$exp" ] || continue
             printf 'ssl/%s/%s\t%s\t%s\t%s\t-\n' "$lang" "$name" "$f" "$lang" "$exp" >>"$jobs"
         done
@@ -254,7 +292,7 @@ if want db; then
                 [ -e "$f" ] || continue
                 name=$(basename "$f" .salam)
                 case "$name" in _*) continue ;; esac
-                exp="../tests/$lang/db/$name.out"
+                exp="$(pick_expect "../tests/$lang/db/$name")"
                 [ -f "$exp" ] || continue
                 printf 'db/%s/%s\t%s\t%s\t%s\t%s\n' "$lang" "$name" "$f" "$lang" "$exp" \
                     "--cc=$DBCC -DSALAM_DB_MOCK" >>"$jobs"
@@ -277,7 +315,7 @@ if want llvm; then
                 [ -e "$f" ] || continue
                 name=$(basename "$f" .salam)
                 case "$name" in _*) continue ;; esac
-                exp="../tests/$lang/llvm/$name.out"
+                exp="$(pick_expect "../tests/$lang/llvm/$name")"
                 [ -f "$exp" ] || continue
                 got=$("$SALAM" llvm "$f" --jit --no-color --log-level=error 2>/dev/null | tr -d '\r')
                 rm -f "$name.ll" "$name.ll.run.sh" 2>/dev/null
@@ -308,10 +346,10 @@ if want cross; then
             [ -e "$f" ] || continue
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
-            exp="../tests/$lang/cross/$name.out"
+            exp="$(pick_expect "../tests/$lang/cross/$name")"
             [ -f "$exp" ] || continue
             for pair in x86_64-linux-musl: aarch64-linux-musl:qemu-aarch64-static \
-                i686-linux-musl: arm-linux-musleabihf:qemu-arm-static \
+                i686-linux-musl:qemu-i386-static arm-linux-musleabihf:qemu-arm-static \
                 x86_64-w64-windows-gnu:wine; do
                 target="${pair%%:*}"
                 runner="${pair#*:}"
@@ -324,9 +362,17 @@ if want cross; then
                     continue
                 fi
                 if [ -n "$runner" ] && ! command -v "$runner" >/dev/null 2>&1; then
-                    echo "SKIP $label (build OK; no $runner on this host to run the $target binary)"
-                    rm -f "$outbin"
-                    continue
+                    # Debian/multiarch ship qemu-*-static; Alpine's qemu-user
+                    # packages (used in c/docker/Dockerfile) provide the same
+                    # binaries without the -static suffix - accept either.
+                    alt="${runner%-static}"
+                    if [ "$alt" != "$runner" ] && command -v "$alt" >/dev/null 2>&1; then
+                        runner="$alt"
+                    else
+                        echo "SKIP $label (build OK; no $runner on this host to run the $target binary)"
+                        rm -f "$outbin"
+                        continue
+                    fi
                 fi
                 got=$($runner "$outbin" 2>&1 | tr -d '\r')
                 check_out "$label" "$exp" "$got"
@@ -356,7 +402,7 @@ run_example_dir() {
             case "$(basename "$f")" in _*) continue ;; esac
             rel="${f#../tests/"$lang"/"$dir"/}"
             name="${rel%.salam}"
-            exp="../tests/$lang/$dir/$name.out"
+            exp="$(pick_expect "../tests/$lang/$dir/$name")"
             [ -f "$exp" ] || continue
             printf '%s/%s/%s\t%s\t%s\t%s\t-\n' "$dir" "$lang" "$name" "$f" "$lang" "$exp" >>"$jobs"
         done <<EOF

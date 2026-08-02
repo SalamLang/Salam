@@ -1,5 +1,5 @@
 /*
- * Salam Programming Language (2024–2026)
+ * Salam Programming Language (2024-2026)
  *
  *   +-------------------+
  *   |     S A L A M     |
@@ -288,9 +288,13 @@ static bool p_is_alias_word_keyword(token_kind_t k)
     return k == TK_KW_WITH || k == TK_KW_PACKAGE;
 }
 
+/* 'with' normally merges into a multi-word member name ('cfg.retry with backoff'),
+ * but a repeat header ends with 'with <index>', so the loop bound must stop the
+ * merge there or 'repeat box.count with i' reads as the field 'count with i'. */
 static bool p_at_mergeable_word(const parser_t *p)
 {
     token_kind_t k = p_peek(p)->kind;
+    if (k == TK_KW_WITH && p->no_with_word) return false;
     return k == TK_IDENT || p_is_alias_word_keyword(k);
 }
 

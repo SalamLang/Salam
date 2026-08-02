@@ -1,0 +1,232 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+// A hash selector, HMAC (RFC 2104), HKDF (RFC 5869), and the TLS 1.3 key
+// schedule primitives HKDF-Expand-Label / Derive-Secret (RFC 8446 section 7.1).
+//
+// TLS 1.3 picks its hash from the negotiated cipher suite -- SHA-256 for
+// TLS_AES_128_GCM_SHA256 and TLS_CHACHA20_POLY1305_SHA256, SHA-384 for
+// TLS_AES_256_GCM_SHA384 -- so everything above the raw compression functions
+// is written against a `Hash` selector rather than a concrete algorithm.
+//
+// HMAC keeps a precomputed *outer* state alongside the inner one. Both key-pad
+// blocks are absorbed once at init, so finishing a MAC costs one extra
+// compression rather than a full re-keying. HKDF-Expand calls HMAC once per
+// output block, which makes that worth having.
+
+const HASH_SHA256 := 0
+const HASH_SHA384 := 1
+
+struct Hash:
+    pub kind: int = 0
+    pub s256: Sha256 = Sha256 {}
+    pub s384: Sha512 = Sha512 {}
+end
+
+struct Hmac:
+    pub kind: int = 0
+    pub inner: Hash = Hash {}
+    pub outer: Hash = Hash {}
+end
+
+func _hash_size(kind: int): int:
+    if kind == HASH_SHA384:
+        ret SHA384_SIZE
+    end
+    ret SHA256_SIZE
+end
+
+func _hash_blocksize(kind: int): int:
+    if kind == HASH_SHA384:
+        ret SHA512_BLOCK
+    end
+    ret SHA256_BLOCK
+end
+
+func _hash_init(kind: int): Hash:
+    mut h := Hash { kind = kind }
+    if kind == HASH_SHA384:
+        h.s384 = _sha384_init()
+    else:
+        h.s256 = _sha256_init()
+    end
+    ret h
+end
+
+func _hash_update(h &: Hash, p: void*, n: int):
+    if h.kind == HASH_SHA384:
+        _sha512_update(h.s384, p, n)
+    else:
+        _sha256_update(h.s256, p, n)
+    end
+end
+
+// By value, like the underlying finals: taking a digest never disturbs the
+// running state, which is what the handshake transcript depends on.
+func _hash_final(h: Hash, out: void*):
+    if h.kind == HASH_SHA384:
+        _sha512_final(h.s384, out)
+    else:
+        _sha256_final(h.s256, out)
+    end
+end
+
+func _hash_oneshot(kind: int, p: void*, n: int, out: void*):
+    mut h := _hash_init(kind)
+    _hash_update(h, p, n)
+    _hash_final(h, out)
+end
+
+// ---------------------------------------------------------------- HMAC
+
+func _hmac_init(kind: int, key: void*, klen: int): Hmac:
+    bs := _hash_blocksize(kind)
+    hs := _hash_size(kind)
+    // assigned field by field, not as a struct literal: see the note in
+    // bigint.salam's _big_new about tcc and compound literals
+    mut m := Hmac {}
+    m.kind = kind
+    m.inner = _hash_init(kind)
+    m.outer = _hash_init(kind)
+
+    // K0: the key hashed down if longer than a block, then zero-padded up to a
+    // full block.
+    mut k0 := _newbuf(bs)
+    defer _buf_wipe(k0)
+    if klen > bs:
+        _putzeros(k0, hs)
+        _hash_oneshot(kind, key, klen, k0.p)
+    else:
+        _putraw(k0, key, klen)
+    end
+    until k0.len < bs:
+        _put8(k0, 0)
+    end
+
+    mut pad := _newbuf(bs)
+    defer _buf_wipe(pad)
+    repeat bs with i:
+        _put8(pad, _bufat(k0, i) ^ 0x36)
+    end
+    _hash_update(m.inner, pad.p, bs)
+    _bufreset(pad)
+    repeat bs with i:
+        _put8(pad, _bufat(k0, i) ^ 0x5C)
+    end
+    _hash_update(m.outer, pad.p, bs)
+    ret m
+end
+
+func _hmac_update(m &: Hmac, p: void*, n: int):
+    _hash_update(m.inner, p, n)
+end
+
+func _hmac_final(m: Hmac, out: void*):
+    hs := _hash_size(m.kind)
+    mut id := _newbuf(hs)
+    defer _buf_wipe(id)
+    _putzeros(id, hs)
+    _hash_final(m.inner, id.p)
+    mut o := m.outer
+    _hash_update(o, id.p, hs)
+    _hash_final(o, out)
+end
+
+func _hmac(kind: int, key: void*, klen: int, msg: void*, mlen: int, out: void*):
+    m := _hmac_init(kind, key, klen)
+    _hmac_update(m, msg, mlen)
+    _hmac_final(m, out)
+end
+
+// ---------------------------------------------------------------- HKDF
+
+// HKDF-Extract(salt, IKM) = HMAC(key = salt, msg = IKM). Output is HashLen.
+func _hkdf_extract(kind: int, salt: void*, saltlen: int, ikm: void*, ikmlen: int, out: void*):
+    _hmac(kind, salt, saltlen, ikm, ikmlen, out)
+end
+
+// HKDF-Expand. Returns false if the requested length exceeds RFC 5869's
+// 255*HashLen ceiling, where the one-byte counter would wrap.
+func _hkdf_expand(kind: int, prk: void*, prklen: int, info: void*, infolen: int, out: void*, olen: int): bool:
+    hs := _hash_size(kind)
+    if olen < 0 || olen > 255 * hs:
+        ret false
+    end
+    mut t := _newbuf(hs)
+    defer _buf_wipe(t)
+    mut cb := _newbuf(1)
+    defer _buf_free(cb)
+    _put8(cb, 0)
+    mut tlen := 0
+    mut done := 0
+    mut ctr := 1
+    until done < olen:
+        _bufset(cb, 0, ctr)
+        m := _hmac_init(kind, prk, prklen)
+        if tlen > 0:
+            _hmac_update(m, t.p, tlen)
+        end
+        if infolen > 0:
+            _hmac_update(m, info, infolen)
+        end
+        _hmac_update(m, cb.p, 1)
+        _bufreset(t)
+        _putzeros(t, hs)
+        _hmac_final(m, t.p)
+        tlen = hs
+        mut take := olen - done
+        if take > hs:
+            take = hs
+        end
+        repeat take with i:
+            _bput(out, done + i, _bufat(t, i))
+        end
+        done += take
+        ctr += 1
+    end
+    ret true
+end
+
+// ---------------------------------------------------------------- TLS 1.3
+
+// HKDF-Expand-Label from RFC 8446 section 7.1:
+//
+//   struct {
+//       uint16 length;
+//       opaque label<7..255>  = "tls13 " + Label;
+//       opaque context<0..255>;
+//   } HkdfLabel;
+func _hkdf_expand_label(kind: int, secret: void*, slen: int, label: str, ctx: void*, ctxlen: int, out: void*, olen: int): bool:
+    full := "tls13 " + label
+    if full.len() > 255 || ctxlen > 255:
+        ret false
+    end
+    mut info := _newbuf(64)
+    defer _buf_free(info)
+    _put16(info, olen)
+    _put8(info, full.len())
+    _putstr(info, full)
+    _put8(info, ctxlen)
+    _putraw(info, ctx, ctxlen)
+    ret _hkdf_expand(kind, secret, slen, info.p, info.len, out, olen)
+end
+
+// Derive-Secret(Secret, Label, Messages) = HKDF-Expand-Label(Secret, Label,
+// Transcript-Hash(Messages), Hash.length). `th` is the already-computed
+// transcript hash.
+func _derive_secret(kind: int, secret: void*, slen: int, label: str, th: void*, thlen: int, out: void*): bool:
+    ret _hkdf_expand_label(kind, secret, slen, label, th, thlen, out, _hash_size(kind))
+end

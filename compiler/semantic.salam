@@ -9349,69 +9349,8 @@ end
 // ===== sema_lit.c (5c) =====
 // ===========================================================================
 
-func check_struct_lit(s &: Sema, a &: at.Ast, nid: int): int:
+func finish_struct_lit(s &: Sema, a &: at.Ast, nid: int, ssym: int): int:
     sp := span_of(a, nid)
-    if str.Len(at.Get(a, nid).name) > 0:
-        orig := at.Get(a, nid).name
-        at.SetName(a, nid, intrinsic_type_canon(local_canon(s, a, orig, sp)))
-        sema_check_intrinsic_type_lang(s, orig, sp)
-    end
-    exp := s.expected
-    s.expected = TYPE_NONE
-    mut name := at.Get(a, nid).name
-    if exp >= 0 && ty_at(s, exp).kind == TY_STRUCT && str.Len(name) > 0 && (
-        generic_template(s, a, name, SYM_STRUCT) != 0 || scope_lookup(s, s.global, name) == 0
-    ):
-        name = ty_at(s, exp).name
-        at.SetName(a, nid, name)
-    end
-    if str.Len(name) == 0:
-        serr(s, 1, sp, i18.Tr("cannot infer the struct type of this literal"))
-        ret sema_decorate(s, a, nid, sema_err_ty(s))
-    end
-    ssym := scope_lookup(s, s.global, name)
-    mut is_struct := ssym != 0
-    if is_struct && sym_at(s, ssym).kind != SYM_STRUCT:
-        is_struct = false
-    end
-    if !is_struct && at.ChildCount(a, nid) == 0:
-        mut tmpl := generic_template(s, a, name, SYM_STRUCT)
-        if tmpl == 0:
-            sema_load_prelude(s, a)
-            if s.prelude != 0:
-                psym := scope_lookup_local(s, s.prelude, name)
-                if psym != 0:
-                    pv := sym_at(s, psym)
-                    if pv.kind == SYM_STRUCT && pv.decl != 0 && at.TyparamCount(a, pv.decl) > 0:
-                        tmpl = psym
-                    end
-                end
-            end
-        end
-        if tmpl != 0:
-            td := sym_at(s, tmpl).decl
-            mut targs := ""
-            repeat at.TyparamCount(a, td) with ti:
-                if ti > 0:
-                    targs = targs + ", "
-                end
-                targs = targs + at.Typaram(a, td, ti)
-            end
-            serr(
-                s, 71, sp, co.Format4(
-                    i18.Tr("cannot infer the type arguments of '%s'; write '%s {} as %s<%s>'"), co.ArgStr(name),
-                    co.ArgStr(name), co.ArgStr(name), co.ArgStr(targs)
-                )
-            )
-            ret sema_decorate(s, a, nid, sema_err_ty(s))
-        end
-    end
-    if !is_struct:
-        serr(
-            s, 1, sp, co.Format1(i18.Tr("unknown struct '%s'"), co.ArgStr(name))
-        )
-        ret sema_decorate(s, a, nid, sema_err_ty(s))
-    end
     ssv := sym_at(s, ssym)
 
     repeat at.ChildCount(a, nid) with i:
@@ -9493,6 +9432,134 @@ func check_struct_lit(s &: Sema, a &: at.Ast, nid: int): int:
         end
     end
     ret sema_decorate(s, a, nid, ssv.ty)
+end
+
+func resolve_pkg_struct_lit(s &: Sema, a &: at.Ast, nid: int, name: str, dot: int): int:
+    sp := span_of(a, nid)
+    mut pl := dot
+    if pl > 63:
+        pl = 63
+    end
+    pname := str.Substr(name, 0, pl)
+    mut tname := str.Substr(name, dot + 1, str.Len(name) - dot - 1)
+    pk := scope_lookup(s, s.cur, pname)
+    mut pk_ok := pk != 0
+    if pk_ok:
+        if sym_at(s, pk).kind != SYM_PACKAGE:
+            pk_ok = false
+        end
+    end
+    if !pk_ok:
+        serr(
+            s, 1, sp, co.Format2(
+                i18.Tr("unknown package '%s' in struct literal '%s'"), co.ArgStr(pname), co.ArgStr(name)
+            )
+        )
+        ret 0
+    end
+    tname = pkg_member_canon(s, a, pk, tname, sp)
+    tsym := scope_lookup_local(s, sym_at(s, pk).members, tname)
+    mut tsym_ok := tsym != 0
+    if tsym_ok:
+        if sym_at(s, tsym).kind != SYM_STRUCT:
+            tsym_ok = false
+        end
+    end
+    if !tsym_ok:
+        serr(
+            s, 1, sp, co.Format2(
+                i18.Tr("package '%s' has no exported struct '%s'"), co.ArgStr(pname), co.ArgStr(tname)
+            )
+        )
+        ret 0
+    end
+    tsv := sym_at(s, tsym)
+    if !tsv.is_pub:
+        serr(
+            s, 17, sp, co.Format2(
+                i18.Tr("'%s' is not exported by package '%s' (mark it 'pub')"), co.ArgStr(tname), co.ArgStr(pname)
+            )
+        )
+        ret 0
+    end
+    at.SetName(a, nid, tname)
+    ret tsym
+end
+
+func check_struct_lit(s &: Sema, a &: at.Ast, nid: int): int:
+    sp := span_of(a, nid)
+    name0 := at.Get(a, nid).name
+    dot := str.IndexOf(name0, ".")
+    if dot >= 0:
+        s.expected = TYPE_NONE
+        ssym := resolve_pkg_struct_lit(s, a, nid, name0, dot)
+        if ssym == 0:
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
+        ret finish_struct_lit(s, a, nid, ssym)
+    end
+    if str.Len(at.Get(a, nid).name) > 0:
+        orig := at.Get(a, nid).name
+        at.SetName(a, nid, intrinsic_type_canon(local_canon(s, a, orig, sp)))
+        sema_check_intrinsic_type_lang(s, orig, sp)
+    end
+    exp := s.expected
+    s.expected = TYPE_NONE
+    mut name := at.Get(a, nid).name
+    if exp >= 0 && ty_at(s, exp).kind == TY_STRUCT && str.Len(name) > 0 && (
+        generic_template(s, a, name, SYM_STRUCT) != 0 || scope_lookup(s, s.global, name) == 0
+    ):
+        name = ty_at(s, exp).name
+        at.SetName(a, nid, name)
+    end
+    if str.Len(name) == 0:
+        serr(s, 1, sp, i18.Tr("cannot infer the struct type of this literal"))
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    ssym := scope_lookup(s, s.global, name)
+    mut is_struct := ssym != 0
+    if is_struct && sym_at(s, ssym).kind != SYM_STRUCT:
+        is_struct = false
+    end
+    if !is_struct && at.ChildCount(a, nid) == 0:
+        mut tmpl := generic_template(s, a, name, SYM_STRUCT)
+        if tmpl == 0:
+            sema_load_prelude(s, a)
+            if s.prelude != 0:
+                psym := scope_lookup_local(s, s.prelude, name)
+                if psym != 0:
+                    pv := sym_at(s, psym)
+                    if pv.kind == SYM_STRUCT && pv.decl != 0 && at.TyparamCount(a, pv.decl) > 0:
+                        tmpl = psym
+                    end
+                end
+            end
+        end
+        if tmpl != 0:
+            td := sym_at(s, tmpl).decl
+            mut targs := ""
+            repeat at.TyparamCount(a, td) with ti:
+                if ti > 0:
+                    targs = targs + ", "
+                end
+                targs = targs + at.Typaram(a, td, ti)
+            end
+            serr(
+                s, 71, sp, co.Format4(
+                    i18.Tr("cannot infer the type arguments of '%s'; write '%s {} as %s<%s>'"), co.ArgStr(name),
+                    co.ArgStr(name), co.ArgStr(name), co.ArgStr(targs)
+                )
+            )
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
+    end
+    if !is_struct:
+        serr(
+            s, 1, sp, co.Format1(i18.Tr("unknown struct '%s'"), co.ArgStr(name))
+        )
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    ret finish_struct_lit(s, a, nid, ssym)
 end
 
 func check_array_lit(s &: Sema, a &: at.Ast, nid: int): int:

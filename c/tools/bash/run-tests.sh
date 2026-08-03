@@ -256,12 +256,26 @@ if [ "${1:-}" = "--worker" ]; then
 
     block=$(run_worker)
     [ -n "$block" ] || block="FAIL $label (worker produced no output)"
-    # Progress index: append one line, count lines. Appends of a short
-    # line with O_APPEND are atomic on every supported host; a rare
-    # duplicate display index under extreme contention is harmless.
-    printf '.\n' >>"$WORK/.progress"
-    idx=$(wc -l <"$WORK/.progress")
-    idx=$((idx + 0))
+    # Exact progress index: a noclobber-created lockfile serializes the
+    # read-increment-write of $WORK/.counter. `set -C; : > file` is an
+    # atomic O_EXCL create in every POSIX sh (pure builtins, no external
+    # process) and behaves correctly on Linux, macOS and MSYS2/NTFS, so
+    # no two workers can ever claim the same index. The spin is bounded:
+    # if a worker is killed while holding the lock, the stale lockfile
+    # is stolen after ~5s instead of hanging the whole suite.
+    spins=0
+    while ! (set -C && : >"$WORK/.counter.lock") 2>/dev/null; do
+        spins=$((spins + 1))
+        case "$spins" in
+        500 | 1000 | 1500 | 2000 | 2500) sleep 1 ;;
+        3000) break ;;
+        esac
+    done
+    idx=0
+    [ -f "$WORK/.counter" ] && read -r idx <"$WORK/.counter"
+    idx=$((idx + 1))
+    printf '%s\n' "$idx" >"$WORK/.counter"
+    rm -f "$WORK/.counter.lock"
     printf '%s\n' "$block" >"$WORK/results/$(printf 'r%06d' "$idx").$$"
     first=$(printf '%s\n' "$block" | sed 1q)
     rest=$(printf '%s\n' "$block" | sed 1d)
@@ -284,7 +298,7 @@ fi
 salam_ensure_compiler --quiet
 WORK="${WORK:-${TMPDIR:-/tmp}/salam-run-tests-work.$$}"
 mkdir -p "$WORK/results"
-: >"$WORK/.progress"
+printf '0\n' >"$WORK/.counter"
 trap 'rm -rf "$WORK"' EXIT
 LANGS="${LANGS:-en fa ar}"
 NPROC="${NPROC:-$(command -v nproc >/dev/null 2>&1 && nproc || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"

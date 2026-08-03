@@ -512,6 +512,65 @@ end
 
 // ---------------------------------------------------------------- public API
 
+// RFC 8446 section 4.6.3. A peer may rekey at any point after the handshake:
+//
+//   application_traffic_secret_N+1 =
+//       HKDF-Expand-Label(application_traffic_secret_N, "traffic upd", "", Hash.length)
+//
+// and the sequence number restarts at zero with the new key.
+//
+// Ignoring a KeyUpdate does not merely lose a feature: every record after it is
+// encrypted under a key we no longer hold, so the connection dies with a
+// bad-MAC error that reads like corruption. Short request/response exchanges
+// never reach it, which is exactly why it went unnoticed.
+func _traffic_update(h &: Handshake, secret &: Buf): bool:
+    mut next := _newbuf(h.hlen)
+    defer _buf_wipe(next)
+    _putzeros(next, h.hlen)
+    if !_hkdf_expand_label(h.hash, secret.p, secret.len, "traffic upd", null, 0, next.p, h.hlen):
+        ret false
+    end
+    _bufreset(secret)
+    _putbuf(secret, next)
+    ret true
+end
+
+// Handle a KeyUpdate from the peer. `requested` asks us to rekey our own
+// sending direction and answer in kind.
+func _do_key_update(c &: Conn, requested: bool): bool:
+    if c.h.ver != TLS13:
+        // TLS 1.2 has no KeyUpdate; seeing one means the peer is confused
+        ret false
+    end
+    if !_traffic_update(c.h, c.h.s_ap_secret):
+        ret false
+    end
+    _tk_free(c.h.rec.rxk)
+    c.h.rec.rxk = _tk_derive(c.h.s_ap_secret.p, c.h.s_ap_secret.len, c.h.cipher)
+    if !c.h.rec.rxk.live:
+        ret false
+    end
+    if !requested:
+        ret true
+    end
+    // Answer before rekeying our own send direction, so the reply still goes
+    // out under the key the peer currently has.
+    mut msg := _newbuf(8)
+    defer _buf_free(msg)
+    _put8(msg, HS_KEY_UPDATE)
+    _put24(msg, 1)
+    _put8(msg, 0)
+    if !_rec_write(c.h.rec, REC_HANDSHAKE, msg.p, msg.len):
+        ret false
+    end
+    if !_traffic_update(c.h, c.h.c_ap_secret):
+        ret false
+    end
+    _tk_free(c.h.rec.txk)
+    c.h.rec.txk = _tk_derive(c.h.c_ap_secret.p, c.h.c_ap_secret.len, c.h.cipher)
+    ret c.h.rec.txk.live
+end
+
 @en "NewConfig"
 @fa "پیکربندی جدید"
 @ar "إعداد جدید"
@@ -622,9 +681,19 @@ pub func Read(c &: Conn, max: int): str:
             end
             ret ""
         else if typ == REC_HANDSHAKE:
-            // NewSessionTicket and friends arrive post-handshake; nothing here
-            // consumes them, and ignoring them is safe because they carry no
-            // application data.
+            // Post-handshake messages. NewSessionTicket carries no application
+            // data and is genuinely safe to drop, but KeyUpdate rekeys the
+            // connection and MUST be acted on.
+            if frag.len >= 4:
+                if _bufat(frag, 0) == HS_KEY_UPDATE:
+                    req := _bufat(frag, 4) == 1
+                    if !_do_key_update(c, req):
+                        c.open = false
+                        c.err = "key update failed"
+                        ret ""
+                    end
+                end
+            end
             continue
         end
     end

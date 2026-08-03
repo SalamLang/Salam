@@ -2187,6 +2187,13 @@ func parse_link_kind(p &: Ps): str:
     ret ""
 end
 
+// try_link_directive - the kind is mandatory: a bare `link "x"` is still
+// recognized here (by the TK_STRING branch below, so it produces a
+// targeted error instead of a confusing "unknown identifier 'link'" from
+// falling through to statement parsing), but parse_link_kind returning ""
+// is now an error. Only one way to write this directive - mirrors
+// c/src/parser/parser_ffi.c's try_link_directive (try_link_attr / @link(...)
+// is gone from both sides, see that file's history).
 func try_link_directive(p &: Ps, a &: at.Ast, prog: int): bool:
     if !(
         p_at(p, tok.TK_IDENT) && str.Equals(p_peek(p).lexeme, "link") && (
@@ -2199,7 +2206,13 @@ func try_link_directive(p &: Ps, a &: at.Ast, prog: int): bool:
     end
     ln := p_mk(p, a, at.AST_LINK)
     p_advance(p)
-    at.SetName(a, ln, parse_link_kind(p))
+    kind := parse_link_kind(p)
+    at.SetName(a, ln, kind)
+    if kind.len() == 0:
+        p_error(
+            p, "'link' requires an explicit kind: write 'link static \"...\"', 'link dynamic \"...\"', or 'link framework \"...\"'"
+        )
+    end
     if p_at(p, tok.TK_STRING):
         at.SetTokenValue(a, ln, p_peek(p).value)
         p_advance(p)
@@ -2207,46 +2220,6 @@ func try_link_directive(p &: Ps, a &: at.Ast, prog: int): bool:
         p_error(p, "expected a library-name string after 'link'")
     end
     p_term(p)
-    p_fin(p, a, ln)
-    at.AddChild(a, prog, ln)
-    ret true
-end
-
-func try_link_attr(p &: Ps, a &: at.Ast, prog: int): bool:
-    if !(p_at(p, tok.TK_META) && str.Equals(p_peek(p).lexeme, "link")):
-        ret false
-    end
-    ln := p_mk(p, a, at.AST_LINK)
-    p_advance(p)
-    p_expect(p, tok.TK_LPAREN, "'(' after @link")
-    if p_at(p, tok.TK_STRING):
-        at.SetTokenValue(a, ln, p_peek(p).value)
-        p_advance(p)
-    else:
-        p_error(p, "expected a library-name string in @link(\"...\")")
-    end
-
-    if p_match(p, tok.TK_COMMA):
-        if p_at(p, tok.TK_IDENT) && str.Equals(p_peek(p).lexeme, "kind"):
-            p_advance(p)
-            p_expect(p, tok.TK_ASSIGN, "'=' after 'kind'")
-            if p_at(p, tok.TK_STRING):
-                kd := canon_link_kind(p_peek(p).value.sval)
-                if kd.len() > 0:
-                    at.SetName(a, ln, kd)
-                else:
-                    p_error(p, "link kind must be \"static\", \"dynamic\", or \"framework\"")
-                end
-                p_advance(p)
-            else:
-                p_error(p, "expected a kind string after 'kind='")
-            end
-        else:
-            p_error(p, "expected 'kind=\"...\"' after ',' in @link(...)")
-        end
-    end
-    p_expect(p, tok.TK_RPAREN, "')' to close @link")
-    p_skip_terminators(p)
     p_fin(p, a, ln)
     at.AddChild(a, prog, ln)
     ret true
@@ -2548,10 +2521,6 @@ end
 
 func parse_top_level_item_into(p &: Ps, a &: at.Ast, dest: int, pending &: Vector<str>):
     p_skip_terminators(p)
-    mut more := true
-    until more:
-        more = try_link_attr(p, a, dest)
-    end
     parse_metas(p, pending)
     if p_at_eof(p):
         ret
@@ -2648,10 +2617,6 @@ func parse_program(p &: Ps, a &: at.Ast): int:
     mut pending := Vector {} as Vector<str>
     defer pending.free()
     p_skip_terminators(p)
-    mut more := true
-    until more:
-        more = try_link_attr(p, a, prog)
-    end
     parse_metas(p, pending)
     parse_package(p, a, prog, pending)
     until !p_at_eof(p):

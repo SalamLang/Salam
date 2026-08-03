@@ -301,7 +301,22 @@ mkdir -p "$WORK/results"
 printf '0\n' >"$WORK/.counter"
 trap 'rm -rf "$WORK"' EXIT
 LANGS="${LANGS:-en fa ar}"
-NPROC="${NPROC:-$(command -v nproc >/dev/null 2>&1 && nproc || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
+# Detect CPU count across every host compiler-release.yml runs on
+# (Linux incl. arm/i686, macOS, Windows/MSYS2 Git Bash) whether run
+# locally or on a GitHub Actions runner - all of which are just the
+# same OSes, so no CI-specific env var is needed here.
+if [ -z "$NPROC" ]; then
+    command -v nproc >/dev/null 2>&1 && NPROC=$(nproc 2>/dev/null)
+    # macOS getconf lacks _NPROCESSORS_ONLN on some older releases.
+    [ -z "$NPROC" ] && command -v getconf >/dev/null 2>&1 && NPROC=$(getconf _NPROCESSORS_ONLN 2>/dev/null)
+    # BSD/macOS fallback when getconf doesn't know the variable.
+    [ -z "$NPROC" ] && command -v sysctl >/dev/null 2>&1 && NPROC=$(sysctl -n hw.ncpu 2>/dev/null)
+    # Native Windows sets this env var even without coreutils on PATH.
+    [ -z "$NPROC" ] && [ -n "$NUMBER_OF_PROCESSORS" ] && NPROC="$NUMBER_OF_PROCESSORS"
+    # Last resort for minimal/BusyBox systems with none of the above.
+    [ -z "$NPROC" ] && [ -r /proc/cpuinfo ] && NPROC=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
+    NPROC="${NPROC:-4}"
+fi
 while [ $# -gt 0 ]; do
     case "$1" in
     -j)

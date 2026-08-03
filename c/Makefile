@@ -74,11 +74,23 @@ CXX             ?= c++
 
 LLD_LIBS  :=
 LLD_SRCS  :=
+WIN_LLD_SHIM_OBJS :=
 ifeq ($(WITH_LLD),1)
   override WITH_LLVM := 1
   CPPFLAGS += -DSALAM_HAVE_LLD
   LLD_LIBS := -llldMinGW -llldELF -llldCOFF -llldMachO -llldWasm -llldCommon -lz -lzstd
   LLD_SRCS := src/llvm/lld_link.cc
+  # MSYS2's mingw-w64-x86_64-lld/-llvm packages ship their static archives
+  # built as if always consumed alongside the shared libLLVM-*.dll/libxml2
+  # DLL, so those archives reach the demangler and libxml2 through
+  # __imp_-prefixed dllimport pointers instead of calling the (also
+  # statically available) real symbols directly - see
+  # win_lld_demangle_shim.S for the full explanation and undefined-symbol
+  # list this resolves. Only needed on the MSYS2 toolchain; Linux/macOS
+  # LLVM/lld packages link these calls directly with no __imp_ involved.
+  ifeq ($(IS_WINDOWS),1)
+    WIN_LLD_SHIM_OBJS = $(BUILD_DIR)/llvm/win_lld_demangle_shim.o
+  endif
 endif
 LLVM_CXXLIB     ?= -lstdc++
 LLVM_ZSTD_LIB   ?= -l:libzstd.a
@@ -109,6 +121,17 @@ ifeq ($(WITH_LLVM),1)
   LDLIBS   += $(LLD_LIBS) \
               $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --libs $(LLVM_COMPONENTS)) \
               $(LLVM_SYSTEM_LIBS) $(LLVM_CXXLIB)
+  ifeq ($(IS_WINDOWS),1)
+    ifeq ($(WITH_LLD),1)
+      # libxml2.a (pulled in via libLLVMWindowsManifest.a, itself pulled in
+      # by liblldCOFF.a) needs zlib/iconv/bcrypt symbols - llvm-config's
+      # --system-libs above already lists -lz, but earlier than -lxml2, and
+      # never lists -liconv/-lbcrypt at all. GNU ld resolves an undefined
+      # symbol only from an archive it hasn't scanned past yet, so these
+      # have to be repeated here, after -lxml2, to actually satisfy them.
+      LDLIBS += -lz -liconv -lbcrypt
+    endif
+  endif
 endif
 
 LLVM_CXXFLAGS := $(if $(filter 1,$(WITH_LLD)),$(shell $(LLVM_CONFIG) --cxxflags))
@@ -119,7 +142,7 @@ CXXOBJS   := $(LLD_SRCS:src/%.cc=$(BUILD_DIR)/%.o)
 MAIN_OBJ  := $(MAIN_SRC:src/%.c=$(BUILD_DIR)/%.o)
 DEPS      := $(OBJS:.o=.d) $(MAIN_OBJ:.o=.d)
 
-EMBED_OBJS :=
+EMBED_OBJS := $(WIN_LLD_SHIM_OBJS)
 SALAM_EMBED_MUSL_DIR ?=
 ifneq ($(SALAM_EMBED_MUSL_DIR),)
   CPPFLAGS   += -DSALAM_HAVE_EMBED_MUSL
@@ -194,6 +217,10 @@ $(BUILD_DIR)/embed/hostlibs.o:
 	tar cf $(BUILD_DIR)/embed/hostlibs.tar -C "$(SALAM_EMBED_HOSTLIBS_DIR)" .
 	printf '.section .rodata\n.global salam_embed_hostlibs\nsalam_embed_hostlibs:\n.incbin "%s"\n.global salam_embed_hostlibs_end\nsalam_embed_hostlibs_end:\n' "$(BUILD_DIR)/embed/hostlibs.tar" > $(BUILD_DIR)/embed/hostlibs.S
 	$(CC) -c $(BUILD_DIR)/embed/hostlibs.S -o $@
+
+$(BUILD_DIR)/llvm/win_lld_demangle_shim.o: src/llvm/win_lld_demangle_shim.S
+	@mkdir -p $(BUILD_DIR)/llvm
+	$(CC) -c $< -o $@
 
 .PHONY: all test dist clean debug install uninstall stage-sysroots self-contained
 

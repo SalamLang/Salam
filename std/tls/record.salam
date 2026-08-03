@@ -59,6 +59,18 @@ struct TrafficKeys:
     pub seq: u64 = 0 as u64
     pub cipher: int = 0
     pub live: bool = false
+    // TLS 1.2 framing. Three things differ from 1.3 and each one breaks
+    // interop silently if wrong:
+    //   * AES-GCM carries an 8-byte explicit nonce on the wire, appended to a
+    //     4-byte fixed IV from the key block. ChaCha20-Poly1305 (RFC 7905) has
+    //     no explicit nonce and uses a 12-byte fixed IV XOR the sequence
+    //     number, exactly as 1.3 does.
+    //   * the additional data is seq || type || version || plaintext_length,
+    //     not the record header.
+    //   * the record header carries the REAL content type; 1.3's trick of
+    //     hiding it inside the ciphertext does not apply.
+    pub is12: bool = false
+    pub explicit_len: int = 0
 end
 
 // ---------------------------------------------------------------- transport
@@ -130,8 +142,60 @@ func _tk_derive(secret: void*, slen: int, cipher: int): TrafficKeys:
     ret t
 end
 
+// Build TLS 1.2 traffic keys from a slice of the key block.
+func _tk_from_block(kb: Buf, koff: int, klen: int, ivoff: int, ivlen: int, cipher: int): TrafficKeys:
+    mut t := TrafficKeys {}
+    t.cipher = cipher
+    t.is12 = true
+    t.key = _newbuf(klen)
+    repeat klen with i:
+        _put8(t.key, _bufat(kb, koff + i))
+    end
+    t.iv = _newbuf(ivlen)
+    repeat ivlen with i:
+        _put8(t.iv, _bufat(kb, ivoff + i))
+    end
+    if cipher == CIPHER_CHACHA20_SHA256:
+        t.explicit_len = 0
+    else:
+        t.explicit_len = 8
+    end
+    t.seq = 0 as u64
+    t.live = true
+    ret t
+end
+
+// Fixed IV width for a TLS 1.2 suite: 4 bytes for GCM (the other 8 travel on
+// the wire), 12 for ChaCha20-Poly1305.
+func _tk12_ivlen(cipher: int): int:
+    if cipher == CIPHER_CHACHA20_SHA256:
+        ret 12
+    end
+    ret 4
+end
+
+// The TLS 1.2 additional data: seq(8) || type(1) || version(2) || length(2),
+// where length is the PLAINTEXT length.
+func _tk12_aad(seq: u64, typ: int, plen: int, out &: Buf):
+    _bufreset(out)
+    _put64(out, seq)
+    _put8(out, typ)
+    _put16(out, TLS12)
+    _put16(out, plen)
+end
+
 // nonce = static IV XOR the sequence number, right-aligned in 12 bytes.
 func _tk_nonce(t: TrafficKeys, out &: Buf):
+    if t.is12 && t.explicit_len > 0:
+        // GCM in TLS 1.2: fixed IV then the explicit nonce, for which the
+        // sequence number is the conventional (and RFC-permitted) choice.
+        _bufreset(out)
+        repeat 4 with i:
+            _put8(out, _bufat(t.iv, i))
+        end
+        _put64(out, t.seq)
+        ret
+    end
     _bufreset(out)
     repeat 12 with i:
         _put8(out, _bufat(t.iv, i))
@@ -240,6 +304,14 @@ func _rec_read(r &: RecordLayer, typ &: int, out &: Buf): bool:
 
     mut hdr := _newbuf(REC_HEADER)
     defer _buf_free(hdr)
+    // TLS 1.2 scratch at function scope: a defer inside the branch below would
+    // outlive the name it frees
+    mut n12 := _newbuf(12)
+    defer _buf_free(n12)
+    mut a12 := _newbuf(16)
+    defer _buf_free(a12)
+    mut p12 := _newbuf(REC_MAX_CIPHERTEXT)
+    defer _buf_free(p12)
     repeat REC_HEADER with i:
         _put8(hdr, _bufat(r.rx, i))
     end
@@ -268,6 +340,50 @@ func _rec_read(r &: RecordLayer, typ &: int, out &: Buf): bool:
         _rec_fail(r, "encrypted record shorter than its tag")
         ret false
     end
+
+    if r.rxk.is12:
+        // is12 read path: the header carries the real content type, the
+        // additional data is seq||type||version||plaintext_len, and AES-GCM
+        // prefixes an 8-byte explicit nonce to the ciphertext.
+        exp := r.rxk.explicit_len
+        if length < exp + 17:
+            _rec_fail(r, "encrypted record too short")
+            ret false
+        end
+        clen := length - exp - 16
+        _bufreset(n12)
+        if exp > 0:
+            repeat 4 with i:
+                _put8(n12, _bufat(r.rxk.iv, i))
+            end
+            repeat 8 with i:
+                _put8(n12, _bufat(r.rx, REC_HEADER + i))
+            end
+        else:
+            _putzeros(n12, 12)
+            _tk_nonce(r.rxk, n12)
+        end
+        _tk12_aad(r.rxk.seq, ctype, clen, a12)
+        _bufreset(p12)
+        _putzeros(p12, clen)
+        cp := _bufptr(r.rx, REC_HEADER + exp)
+        tp := _bufptr(r.rx, REC_HEADER + exp + clen)
+        if !_aead_open(r.rxk, n12, a12.p, a12.len, cp, clen, tp, p12.p):
+            _rec_fail(r, "bad record MAC")
+            ret false
+        end
+        _bufconsume(r.rx, REC_HEADER + length)
+        if !_tk_advance(r.rxk):
+            _rec_fail(r, "sequence number exhausted")
+            ret false
+        end
+        repeat clen with i:
+            _put8(out, _bufat(p12, i))
+        end
+        typ = ctype
+        ret true
+    end
+
     ctlen := length - 16
     mut nonce := _newbuf(12)
     defer _buf_free(nonce)
@@ -318,11 +434,36 @@ func _rec_write_raw(r &: RecordLayer, typ: int, p: void*, n: int): bool:
     defer _buf_free(ct)
     mut tag := _newbuf(16)
     defer _buf_free(tag)
+    mut wa12 := _newbuf(16)
+    defer _buf_free(wa12)
     if !r.txk.live:
         _put8(rec, typ)
         _put16(rec, TLS12)
         _put16(rec, n)
         _putraw(rec, p, n)
+    else if r.txk.is12:
+        exp := r.txk.explicit_len
+        _put8(rec, typ)
+        _put16(rec, TLS12)
+        _put16(rec, exp + n + 16)
+        _putzeros(nonce, 12)
+        _tk_nonce(r.txk, nonce)
+        if exp > 0:
+            // the explicit nonce is the low 8 bytes of the constructed nonce
+            repeat 8 with i:
+                _put8(rec, _bufat(nonce, 4 + i))
+            end
+        end
+        _tk12_aad(r.txk.seq, typ, n, wa12)
+        _putzeros(ct, n)
+        _putzeros(tag, 16)
+        _aead_seal(r.txk, nonce, wa12.p, wa12.len, p, ct.p, n, tag.p)
+        _putbuf(rec, ct)
+        _putbuf(rec, tag)
+        if !_tk_advance(r.txk):
+            _rec_fail(r, "sequence number exhausted")
+            ret false
+        end
     else:
         // inner plaintext is content || real type; the visible header always
         // claims application_data

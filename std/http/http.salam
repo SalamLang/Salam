@@ -23,6 +23,8 @@ import io
 import os
 import time
 import encoding
+import net
+import tls
 
 if SALAM_OS_WINDOWS:
     link "winhttp"
@@ -68,8 +70,10 @@ end
 mut _g_http_status := 0
 mut _g_http_headers := ""
 if !SALAM_OS_WINDOWS:
-    if !SALAM_LINK_CURL:
-        mut _g_tmp_ctr := 0
+    if !SALAM_NATIVE_TLS:
+        if !SALAM_LINK_CURL:
+            mut _g_tmp_ctr := 0
+        end
     end
 end
 
@@ -316,6 +320,163 @@ if SALAM_OS_WINDOWS:
         ret result
     end
 else:
+    if SALAM_NATIVE_TLS:
+        // Native backend: std/tls for https, a plain socket for http. No
+        // external library and no child process either way.
+        //
+        // Selected by building with -DSALAM_NATIVE_TLS. The libcurl and
+        // curl-binary backends below stay the default, because this one has not
+        // had a security review; see the banner in std/tls/tls.salam.
+
+        func _read_all_plain(s: net.Socket): str:
+            mut out := ""
+            mut going := true
+            until going:
+                chunk := net.Recv(s, 16384)
+                if chunk.len() == 0:
+                    going = false
+                else:
+                    out = out.concat(chunk)
+                end
+            end
+            ret out
+        end
+
+        func _read_all_tls(c &: tls.Conn): str:
+            mut out := ""
+            mut going := true
+            until going:
+                chunk := tls.Read(c, 16384)
+                if chunk.len() == 0:
+                    going = false
+                else:
+                    out = out.concat(chunk)
+                end
+            end
+            ret out
+        end
+
+        func _hexval(s: str): int:
+            mut v := 0
+            n := s.len()
+            repeat n with i:
+                c := char_code(s.substr(i, 1))
+                mut d := 0 - 1
+                if c >= 48 && c <= 57: d = c - 48 end
+                if c >= 97 && c <= 102: d = c - 87 end
+                if c >= 65 && c <= 70: d = c - 55 end
+                if d < 0:
+                    ret v
+                end
+                v = v * 16 + d
+            end
+            ret v
+        end
+
+        // Undo Transfer-Encoding: chunked. The curl and WinHTTP backends hand
+        // back a de-chunked body, so this one must too, or every caller sees
+        // framing bytes mixed into the payload.
+        func _dechunk(body: str): str:
+            mut out := ""
+            mut pos := 0
+            mut going := true
+            until going:
+                nl := str.IndexFrom(body, "\r\n", pos)
+                if nl < 0:
+                    going = false
+                else:
+                    line := body.substr(pos, nl - pos)
+                    semi := line.find(";")
+                    mut sizestr := line
+                    if semi >= 0:
+                        sizestr = line.substr(0, semi)
+                    end
+                    sz := _hexval(str.Trim(sizestr))
+                    pos = nl + 2
+                    if sz <= 0:
+                        going = false
+                    else:
+                        if pos + sz > body.len():
+                            going = false
+                        else:
+                            out = out.concat(body.substr(pos, sz))
+                            pos = pos + sz + 2
+                        end
+                    end
+                end
+            end
+            ret out
+        end
+
+        func _build_request(method: str, u: net.URL, headers: str, body: str): str:
+            mut path := u.path
+            if path.len() == 0:
+                path = "/"
+            end
+            mut req := method.concat(" ").concat(path).concat(" HTTP/1.1\r\nHost: ").concat(u.host).concat("\r\n")
+            req = req.concat("User-Agent: Salam/1.0\r\nAccept: */*\r\nConnection: close\r\n")
+            if headers.len() > 0:
+                req = req.concat(headers)
+            end
+            if body.len() > 0:
+                req = req.concat("Content-Length: ").concat(str.FromInt(body.len() as i64)).concat("\r\n")
+            end
+            req = req.concat("\r\n")
+            if body.len() > 0:
+                req = req.concat(body)
+            end
+            ret req
+        end
+
+        func _fetch_https(method: str, url: str, headers: str, body: str): str:
+            u := net.Parse(url)
+            secure := u.scheme != "http"
+            mut port := u.port
+            if port == 0:
+                if secure:
+                    port = 443
+                else:
+                    port = 80
+                end
+            end
+            if u.host.len() == 0:
+                ret ""
+            end
+            req := _build_request(method, u, headers, body)
+
+            mut raw := ""
+            if secure:
+                cfg := tls.NewConfig(u.host)
+                mut c := tls.Dial(u.host, port, cfg)
+                if !tls.ConnOk(c):
+                    tls.Close(c)
+                    ret ""
+                end
+                tls.Write(c, req)
+                raw = _read_all_tls(c)
+                tls.Close(c)
+            else:
+                s := net.Connect(u.host, port)
+                if !net.Ok(s):
+                    ret ""
+                end
+                net.Send(s, req)
+                raw = _read_all_plain(s)
+                net.Close(s)
+            end
+
+            sep := raw.find("\r\n\r\n")
+            if sep < 0:
+                ret raw
+            end
+            head := raw.substr(0, sep + 4)
+            rest := raw.substr(sep + 4, raw.len() - sep - 4)
+            if str.Find(str.Lower(head), "transfer-encoding: chunked") >= 0:
+                ret head.concat(_dechunk(rest))
+            end
+            ret head.concat(rest)
+        end
+    else:
     if SALAM_LINK_CURL:
         func _cbuf(): void*:
             ret mem.AllocateZeroed(24 as u64)
@@ -489,6 +650,7 @@ else:
                 os.Remove(body_path)
             end
             ret _last_header_block(all_headers).concat(resp_body)
+        end
         end
     end
 end

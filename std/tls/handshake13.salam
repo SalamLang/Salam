@@ -79,6 +79,17 @@ struct Handshake:
     pub certs: Buf = Buf {}
     pub cert_off: Buf = Buf {}
     pub ncerts: int = 0
+    // negotiated version, and the randoms TLS 1.2 signs and seeds with
+    // the cipher suite exactly as the server sent it, kept so the
+    // connection can be reported accurately rather than reconstructed
+    pub suite: int = 0
+    pub ver: int = 0
+    pub crand: Buf = Buf {}
+    pub srand: Buf = Buf {}
+    pub ems: bool = false
+    pub group: int = 0
+    pub ecpriv: Buf = Buf {}
+    pub ecpub: Buf = Buf {}
     pub ok: bool = false
     pub err: str = ""
 end
@@ -95,6 +106,10 @@ func _hs_free(h &: Handshake):
     _buf_wipe(h.s_ap_secret)
     _buf_free(h.certs)
     _buf_free(h.cert_off)
+    _buf_free(h.crand)
+    _buf_free(h.srand)
+    _buf_wipe(h.ecpriv)
+    _buf_free(h.ecpub)
 end
 
 func _hs_fail(h &: Handshake, msg: str): bool:
@@ -212,6 +227,8 @@ func _hs_build_client_hello(h &: Handshake, host: str, alpn: str, aes_only: bool
     _putzeros(rnd, 32)
     _os_random_fill_pub(rnd.p, 32)
     _putbuf(out, rnd)
+    _bufreset(h.crand)
+    _putbuf(h.crand, rnd)
 
     // A non-empty legacy_session_id makes the handshake look like a resumed
     // TLS 1.2 session to middleboxes that would otherwise drop it.
@@ -224,13 +241,23 @@ func _hs_build_client_hello(h &: Handshake, host: str, alpn: str, aes_only: bool
 
     // ChaCha20-Poly1305 first: it is constant-time by construction, whereas the
     // AES here is table-driven (see aes.salam).
+    // Both TLS 1.3 and the ECDHE+AEAD TLS 1.2 suites are offered in one hello;
+    // the server picks a version by including or omitting supported_versions.
     if aes_only:
-        _put16(out, 2)
+        _put16(out, 6)
         _put16(out, TLS_AES_128_GCM_SHA256)
+        _put16(out, TLS12_ECDHE_ECDSA_AES128_GCM_SHA256)
+        _put16(out, TLS12_ECDHE_RSA_AES128_GCM_SHA256)
     else:
-        _put16(out, 4)
+        _put16(out, 16)
         _put16(out, TLS_CHACHA20_POLY1305_SHA256)
         _put16(out, TLS_AES_128_GCM_SHA256)
+        _put16(out, TLS12_ECDHE_ECDSA_CHACHA20_SHA256)
+        _put16(out, TLS12_ECDHE_RSA_CHACHA20_SHA256)
+        _put16(out, TLS12_ECDHE_ECDSA_AES128_GCM_SHA256)
+        _put16(out, TLS12_ECDHE_RSA_AES128_GCM_SHA256)
+        _put16(out, TLS12_ECDHE_ECDSA_AES256_GCM_SHA384)
+        _put16(out, TLS12_ECDHE_RSA_AES256_GCM_SHA384)
     end
 
     // legacy_compression_methods: null only
@@ -272,9 +299,21 @@ func _hs_build_client_hello(h &: Handshake, host: str, alpn: str, aes_only: bool
 
     // supported_versions: TLS 1.3 only
     m4 := _ext_open(out, EXT_SUPPORTED_VERSIONS)
-    _put8(out, 2)
+    _put8(out, 4)
     _put16(out, TLS13)
+    _put16(out, TLS12)
     _ext_close(out, m4)
+
+    // TLS 1.2 needs these; TLS 1.3 servers ignore them.
+    m7 := _ext_open(out, EXT_EC_POINT_FORMATS)
+    _put8(out, 1)
+    _put8(out, 0)
+    _ext_close(out, m7)
+
+    // RFC 7627. Binds the master secret to the handshake transcript rather
+    // than just the two randoms, closing the triple-handshake splice.
+    m8 := _ext_open(out, EXT_EXTENDED_MASTER_SECRET)
+    _ext_close(out, m8)
 
     // key_share: a single X25519 share
     _bufreset(h.priv)
@@ -283,6 +322,22 @@ func _hs_build_client_hello(h &: Handshake, host: str, alpn: str, aes_only: bool
     _bufreset(h.pub_key)
     _putzeros(h.pub_key, 32)
     _x25519_base(h.priv.p, h.pub_key.p)
+    _bufreset(h.ecpriv)
+    _putzeros(h.ecpriv, 32)
+    _os_random_fill_pub(h.ecpriv.p, 32)
+    mut ecx := _newbuf(32)
+    defer _buf_free(ecx)
+    _putzeros(ecx, 32)
+    mut ecy := _newbuf(32)
+    defer _buf_free(ecy)
+    _putzeros(ecy, 32)
+    _bufreset(h.ecpub)
+    if _p256_base_mul(h.ecpriv.p, ecx.p, ecy.p):
+        _put8(h.ecpub, 4)
+        _putbuf(h.ecpub, ecx)
+        _putbuf(h.ecpub, ecy)
+    end
+
     m5 := _ext_open(out, EXT_KEY_SHARE)
     _put16(out, 36)
     _put16(out, GROUP_X25519)
@@ -312,6 +367,10 @@ func _hs_parse_server_hello(h &: Handshake, msg: Reader): bool:
         ret _hs_fail(h, "unexpected legacy_version in ServerHello")
     end
     srand := _rdbytes(r, 32)
+    _bufreset(h.srand)
+    repeat 32 with i:
+        _put8(h.srand, _rdat(srand, i))
+    end
     mut hrr := _hexbuf(HRR_RANDOM)
     defer _buf_free(hrr)
     if _cteq(srand.p, hrr.p, 32):
@@ -330,12 +389,11 @@ func _hs_parse_server_hello(h &: Handshake, msg: Reader): bool:
     if comp != 0:
         ret _hs_fail(h, "server selected a compression method")
     end
-    h.cipher = _cipher_from_wire(suite)
-    if h.cipher == CIPHER_NONE:
+    suite13 := _cipher_from_wire(suite)
+    suite12 := _tls12_cipher(suite)
+    if suite13 == CIPHER_NONE && suite12 == CIPHER_NONE:
         ret _hs_fail(h, "server selected an unsupported cipher suite")
     end
-    h.hash = _cipher_hash(h.cipher)
-    h.hlen = _hash_size(h.hash)
 
     mut exts := _rdvec16(r)
     if r.bad:
@@ -352,9 +410,11 @@ func _hs_parse_server_hello(h &: Handshake, msg: Reader): bool:
         if id == EXT_SUPPORTED_VERSIONS:
             v := _rd16(body)
             if body.bad || v != TLS13:
-                ret _hs_fail(h, "server did not select TLS 1.3")
+                ret _hs_fail(h, "server selected an unknown version")
             end
             got_version = true
+        else if id == EXT_EXTENDED_MASTER_SECRET:
+            h.ems = true
         else if id == EXT_KEY_SHARE:
             g := _rd16(body)
             if g != GROUP_X25519:
@@ -366,11 +426,27 @@ func _hs_parse_server_hello(h &: Handshake, msg: Reader): bool:
             end
         end
     end
-    // Without supported_versions this is a TLS 1.2 ServerHello. Downgrading is
-    // not offered here: the caller asked for the 1.3 client.
+    // No supported_versions means this is a TLS 1.2 ServerHello. The key
+    // exchange then arrives later, in ServerKeyExchange.
     if !got_version:
-        ret _hs_fail(h, "server did not negotiate TLS 1.3")
+        if suite12 == CIPHER_NONE:
+            ret _hs_fail(h, "server picked a TLS 1.3 suite without selecting TLS 1.3")
+        end
+        h.ver = TLS12
+        h.suite = suite
+        h.cipher = suite12
+        h.hash = _cipher_hash(h.cipher)
+        h.hlen = _hash_size(h.hash)
+        ret true
     end
+    if suite13 == CIPHER_NONE:
+        ret _hs_fail(h, "server picked a TLS 1.2 suite while selecting TLS 1.3")
+    end
+    h.ver = TLS13
+    h.suite = suite
+    h.cipher = suite13
+    h.hash = _cipher_hash(h.cipher)
+    h.hlen = _hash_size(h.hash)
     if peer.len != 32:
         ret _hs_fail(h, "server sent no key share")
     end

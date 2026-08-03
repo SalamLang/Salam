@@ -1,0 +1,99 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Top-level entry point - ports salam_llvm_native()'s output-kind dispatch
+// (llvm_native.c:983-1140ish, minus the JIT branch which jit_run_file
+// already owns end-to-end). This is what compiler/llvm.salam's NativeRun
+// calls when std/llvm is actually linked in.
+package llvm
+
+@en "Available"
+@fa "در دسترس"
+@ar "متوفر"
+pub func Available(): bool:
+    ret true
+end
+
+// Run - parses `ll_path`, then does whatever `opts.output_mode` asks for:
+// OUT_IR is a no-op (the caller already has the .ll text), OUT_ASM/OBJ/
+// BITCODE emit straight to opts.output_file, OUT_EXEC emits an object
+// then in-process-links it (LinkAuto), OUT_JIT hands off to RunJIT (which
+// does its own independent parse - jit_run_file never reuses the
+// ParseIR'd module either, since JIT needs its own ThreadSafeContext).
+@en "Run"
+@fa "اجرا"
+@ar "تشغیل"
+pub func Run(ll_path: str, opts: Options): Output:
+    if opts.output_mode == OUT_IR:
+        ret Output { ok = true }
+    end
+
+    if opts.output_mode == OUT_JIT:
+        jr := RunJIT(ll_path)
+        ret Output { ok = jr.ok, error = jr.err }
+    end
+
+    pr := ParseIR(ll_path)
+    if !pr.ok:
+        ret Output { ok = false, error = pr.err }
+    end
+    SetTargetTriple(pr.mod, opts.target_triple)
+
+    tmr := NewTargetMachine(opts.target_triple, opts.opt_level, opts.native_cpu)
+    if !tmr.ok:
+        FreeModule(pr.mod)
+        FreeContext(pr.ctx)
+        ret Output { ok = false, error = tmr.err }
+    end
+    ApplyDataLayout(pr.mod, tmr.tm)
+
+    _opt := RunOpt(pr.mod, tmr.tm, opts.opt_level) // best-effort, matches the C's LOG_W-only failure
+
+    if opts.verify_module:
+        vr := Verify(pr.mod)
+        if !vr.ok:
+            FreeTargetMachine(tmr.tm)
+            FreeModule(pr.mod)
+            FreeContext(pr.ctx)
+            ret Output { ok = false, error = vr.err }
+        end
+    end
+
+    mut out := Output { ok = false, error = "unknown output mode" }
+    if opts.output_mode == OUT_ASM:
+        er := EmitAsm(pr.mod, tmr.tm, opts.output_file)
+        out = Output { ok = er.ok, error = er.err }
+    else opts.output_mode == OUT_BITCODE:
+        er := EmitBitcode(pr.mod, opts.output_file)
+        out = Output { ok = er.ok, error = er.err }
+    else opts.output_mode == OUT_OBJ:
+        er := EmitObject(pr.mod, tmr.tm, opts.output_file)
+        out = Output { ok = er.ok, error = er.err }
+    else opts.output_mode == OUT_EXEC:
+        obj_path := opts.output_file + ".o"
+        er := EmitObject(pr.mod, tmr.tm, obj_path)
+        if !er.ok:
+            out = Output { ok = false, error = er.err }
+        else:
+            lr := LinkAuto(obj_path, opts.output_file, opts)
+            _rm := os.Remove(obj_path)
+            out = Output { ok = lr.ok, error = lr.err }
+        end
+    end
+
+    FreeTargetMachine(tmr.tm)
+    FreeModule(pr.mod)
+    FreeContext(pr.ctx)
+    ret out
+end

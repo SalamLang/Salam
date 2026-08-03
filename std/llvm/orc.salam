@@ -1,0 +1,265 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// ORC/LLJIT in-process JIT - llvm-c/Orc.h, llvm-c/LLJIT.h. Ports
+// orc_fail()/define_runtime_symbols()/jit_run_file() (llvm_native.c:799-
+// 960). Targets LLVM >= 21's API shape (LLVMContextCreate +
+// LLVMOrcCreateNewThreadSafeContextFromLLVMContext) - the only branch
+// verified against a real installed llvm-c/Orc.h while writing this port
+// (LLVM 22's header no longer even declares the older
+// LLVMOrcThreadSafeContextGetContext the C's pre-21 fallback used).
+//
+// KNOWN SIMPLIFICATIONS vs the C (flag for a closer read before relying on
+// JIT on these paths):
+//  - The 32-bit ARM CodeModelLarge far-call workaround (llvm_native.c:869-
+//    904, for JITLink's +-32MB Arm_Jump24 range) is not ported; RunJIT
+//    always takes LLVMOrcCreateLLJIT's host-autodetect path
+//    (LLVMOrcCreateLLJIT(&jit, NULL)).
+//  - define_runtime_symbols' absolute-symbol registration below hand-packs
+//    LLVMOrcCSymbolMapPair/LLVMJITEvaluatedSymbol/LLVMJITSymbolFlags by
+//    raw byte offset (Salam's `extern:` has no by-value C struct-array
+//    binding) - offsets were read directly from llvm-c-22/llvm-c/Orc.h,
+//    not guessed, but this is the highest-risk, least-precedented part of
+//    this whole port and deserves independent verification against a real
+//    JIT run before being trusted.
+//  - Calling the JIT-resolved `main` needs a tiny new C trampoline,
+//    c/src/llvm/orc_call.{h,c} (`salam_orc_call_main`): a JIT'd address is
+//    only known at runtime, and Salam's `as` cast has no i64 ->
+//    callable-function-type conversion (extern: bindings are link-time
+//    only), so there is no purely-Salam way to invoke it. This is the same
+//    kind of minimal C-ABI bridge lld_link.cc already is for LLD.
+package llvm
+
+extern:
+    func LLVMOrcCreateNewThreadSafeContextFromLLVMContext(ctx: void*): void*
+    func LLVMOrcDisposeThreadSafeContext(tsctx: void*)
+    func LLVMOrcCreateNewThreadSafeModule(mod: void*, tsctx: void*): void*
+    func LLVMOrcDisposeThreadSafeModule(tsm: void*)
+    func LLVMOrcJITTargetMachineBuilderCreateFromTargetMachine(tm: void*): void*
+    func LLVMOrcCreateLLJITBuilder(): void*
+    func LLVMOrcLLJITBuilderSetJITTargetMachineBuilder(builder: void*, jtmb: void*)
+    func LLVMOrcCreateLLJIT(out_jit &: void*, builder: void*): void*
+    func LLVMOrcDisposeLLJIT(jit: void*): void*
+    func LLVMOrcLLJITGetDataLayoutStr(jit: void*): str
+    func LLVMOrcLLJITGetMainJITDylib(jit: void*): void*
+    func LLVMOrcLLJITGetGlobalPrefix(jit: void*): char
+    func LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess(
+        out_gen &: void*, global_prefix: char, filter: void*, filter_ctx: void*
+    ): void*
+    func LLVMOrcJITDylibAddGenerator(jd: void*, gen: void*)
+    func LLVMOrcLLJITAddLLVMIRModule(jit: void*, jd: void*, tsm: void*): void*
+    func LLVMOrcLLJITLookup(jit: void*, out_addr &: i64, name: str): void*
+    func LLVMOrcLLJITMangleAndIntern(jit: void*, name: str): void*
+    func LLVMOrcJITDylibDefine(jd: void*, mu: void*): void*
+    func LLVMOrcAbsoluteSymbols(syms: void*, n_pairs: u64): void*
+end
+
+// The C standard library functions define_runtime_symbols() registers as
+// absolute JIT symbols, so JIT'd code can call them even in a statically
+// linked salam.exe where the process's dynamic symbol table (which
+// LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess searches) may not
+// expose them at all - exactly this feature's own target scenario.
+extern:
+    func printf(fmt: str, ...): int
+    func snprintf(buf: char*, cap: u64, fmt: str, ...): int
+    func strlen(s: str): u64
+    func strcmp(a: str, b: str): int
+    func malloc(size: u64): void*
+    func realloc(ptr: void*, size: u64): void*
+    func free(ptr: void*)
+    func memcpy(dst: void*, src: void*, n: u64): void*
+    func memmove(dst: void*, src: void*, n: u64): void*
+    func abort()
+    func exit(code: int)
+    func strtol(s: str, endp: void*, base: int): i64
+    func strtod(s: str, endp: void*): f64
+    func strstr(haystack: str, needle: str): str
+end
+
+extern:
+    func __main()
+    func salam_orc_call_main(addr: i64): int
+end
+
+// LLVMJITSymbolGenericFlags (llvm-c/Orc.h) - Exported | Callable, the
+// exact flag combination RT_FLAGS uses in the C.
+const RT_FLAGS := 5 as u8 // (1 << 0) | (1 << 2)
+
+// sizeof(LLVMOrcCSymbolMapPair) on a 64-bit host: {Name: void* @0} +
+// {Sym.Address: u64 @8, Sym.Flags.{Generic,Target}: u8 @16/@17} + 6 bytes
+// tail padding (struct alignment 8) = 24. Read from the real header, not
+// guessed - see the file banner.
+const SYM_PAIR_SIZE := 24 as u64
+
+@en "RunResult"
+@fa "نتیجه اجرا"
+@ar "نتیجة التنفیذ"
+pub struct RunResult:
+    pub ok: bool = false
+    pub rc: int = 0
+    pub err: str = ""
+end
+
+// pack_symbol - writes one LLVMOrcCSymbolMapPair into `buf` at slot `idx`.
+func pack_symbol(buf: void*, idx: int, name_entry: void*, addr: i64):
+    base := (buf as u64) + (idx as u64) * SYM_PAIR_SIZE
+    mut name_slot := base as u64*
+    name_slot[0] = name_entry as u64
+    mut addr_slot := (base + 8) as i64*
+    addr_slot[0] = addr
+    mut flags_slot := (base + 16) as u8*
+    flags_slot[0] = RT_FLAGS
+end
+
+// define_runtime_symbols - ports define_runtime_symbols(): binds libc
+// helpers (and, on Windows, mingw's __main CRT-init hook) as absolute JIT
+// symbols in `jd`. SALAM_OS_WINDOWS is a compile-time condcomp symbol (its
+// `if` branches are pruned per-host, not decided at runtime - see
+// compiler/condcomp.salam), so the Windows/non-Windows cases are two full
+// branches (mirroring the C's `#if defined(_WIN32)`) rather than a shared
+// buffer size computed with a `mut` - a var only mutated inside a pruned
+// branch reads as "never mutated" on hosts where that branch is gone.
+func define_runtime_symbols(jit: void*, jd: void*):
+    if SALAM_OS_WINDOWS:
+        buf := mem.AllocateZeroed((15 as u64) * SYM_PAIR_SIZE)
+        defer mem.Free(buf)
+        pack_symbol(buf, 0, LLVMOrcLLJITMangleAndIntern(jit, "printf"), funcptr(printf))
+        pack_symbol(buf, 1, LLVMOrcLLJITMangleAndIntern(jit, "snprintf"), funcptr(snprintf))
+        pack_symbol(buf, 2, LLVMOrcLLJITMangleAndIntern(jit, "strlen"), funcptr(strlen))
+        pack_symbol(buf, 3, LLVMOrcLLJITMangleAndIntern(jit, "strcmp"), funcptr(strcmp))
+        pack_symbol(buf, 4, LLVMOrcLLJITMangleAndIntern(jit, "malloc"), funcptr(malloc))
+        pack_symbol(buf, 5, LLVMOrcLLJITMangleAndIntern(jit, "realloc"), funcptr(realloc))
+        pack_symbol(buf, 6, LLVMOrcLLJITMangleAndIntern(jit, "free"), funcptr(free))
+        pack_symbol(buf, 7, LLVMOrcLLJITMangleAndIntern(jit, "memcpy"), funcptr(memcpy))
+        pack_symbol(buf, 8, LLVMOrcLLJITMangleAndIntern(jit, "memmove"), funcptr(memmove))
+        pack_symbol(buf, 9, LLVMOrcLLJITMangleAndIntern(jit, "abort"), funcptr(abort))
+        pack_symbol(buf, 10, LLVMOrcLLJITMangleAndIntern(jit, "exit"), funcptr(exit))
+        pack_symbol(buf, 11, LLVMOrcLLJITMangleAndIntern(jit, "strtol"), funcptr(strtol))
+        pack_symbol(buf, 12, LLVMOrcLLJITMangleAndIntern(jit, "strtod"), funcptr(strtod))
+        pack_symbol(buf, 13, LLVMOrcLLJITMangleAndIntern(jit, "strstr"), funcptr(strstr))
+        pack_symbol(buf, 14, LLVMOrcLLJITMangleAndIntern(jit, "__main"), funcptr(__main))
+        LLVMOrcJITDylibDefine(jd, LLVMOrcAbsoluteSymbols(buf, 15 as u64))
+    else:
+        buf := mem.AllocateZeroed((14 as u64) * SYM_PAIR_SIZE)
+        defer mem.Free(buf)
+        pack_symbol(buf, 0, LLVMOrcLLJITMangleAndIntern(jit, "printf"), funcptr(printf))
+        pack_symbol(buf, 1, LLVMOrcLLJITMangleAndIntern(jit, "snprintf"), funcptr(snprintf))
+        pack_symbol(buf, 2, LLVMOrcLLJITMangleAndIntern(jit, "strlen"), funcptr(strlen))
+        pack_symbol(buf, 3, LLVMOrcLLJITMangleAndIntern(jit, "strcmp"), funcptr(strcmp))
+        pack_symbol(buf, 4, LLVMOrcLLJITMangleAndIntern(jit, "malloc"), funcptr(malloc))
+        pack_symbol(buf, 5, LLVMOrcLLJITMangleAndIntern(jit, "realloc"), funcptr(realloc))
+        pack_symbol(buf, 6, LLVMOrcLLJITMangleAndIntern(jit, "free"), funcptr(free))
+        pack_symbol(buf, 7, LLVMOrcLLJITMangleAndIntern(jit, "memcpy"), funcptr(memcpy))
+        pack_symbol(buf, 8, LLVMOrcLLJITMangleAndIntern(jit, "memmove"), funcptr(memmove))
+        pack_symbol(buf, 9, LLVMOrcLLJITMangleAndIntern(jit, "abort"), funcptr(abort))
+        pack_symbol(buf, 10, LLVMOrcLLJITMangleAndIntern(jit, "exit"), funcptr(exit))
+        pack_symbol(buf, 11, LLVMOrcLLJITMangleAndIntern(jit, "strtol"), funcptr(strtol))
+        pack_symbol(buf, 12, LLVMOrcLLJITMangleAndIntern(jit, "strtod"), funcptr(strtod))
+        pack_symbol(buf, 13, LLVMOrcLLJITMangleAndIntern(jit, "strstr"), funcptr(strstr))
+        LLVMOrcJITDylibDefine(jd, LLVMOrcAbsoluteSymbols(buf, 14 as u64))
+    end
+end
+
+// RunJIT - ports jit_run_file(): parse `ll_path`'s IR, JIT-compile it
+// in-process, look up and call `main`, and return its exit code. This is
+// the LLVM_OUT_JIT output mode's implementation.
+@en "RunJIT"
+@fa "اجرای جیت"
+@ar "تنفیذ جیت"
+pub func RunJIT(ll_path: str): RunResult:
+    ctx := LLVMContextCreate()
+    tsctx := LLVMOrcCreateNewThreadSafeContextFromLLVMContext(ctx)
+
+    mut buf := null as void*
+    mut berr := null as void*
+    if LLVMCreateMemoryBufferWithContentsOfFile(ll_path, buf, berr) != 0:
+        msg := berr != null ? str.Clone(berr as str) : "cannot read '" + ll_path + "'"
+        if berr != null: LLVMDisposeMessage(berr) end
+        LLVMOrcDisposeThreadSafeContext(tsctx)
+        ret RunResult { ok = false, err = msg }
+    end
+    mut mod := null as void*
+    mut perr := null as void*
+    if LLVMParseIRInContext(ctx, buf, mod, perr) != 0:
+        msg := perr != null ? str.Clone(perr as str) : "(unknown)"
+        if perr != null: LLVMDisposeMessage(perr) end
+        LLVMOrcDisposeThreadSafeContext(tsctx)
+        ret RunResult { ok = false, err = "LLVM IR parse error: " + msg }
+    end
+
+    mut jit := null as void*
+    jit_err := LLVMOrcCreateLLJIT(jit, null)
+    if jit_err != null:
+        msg := LLVMGetErrorMessage(jit_err)
+        out := msg != null ? str.Clone(msg as str) : "(unknown)"
+        if msg != null: LLVMDisposeErrorMessage(msg) end
+        LLVMDisposeModule(mod)
+        LLVMOrcDisposeThreadSafeContext(tsctx)
+        ret RunResult { ok = false, err = "JIT init failed: " + out }
+    end
+
+    dl_str := LLVMOrcLLJITGetDataLayoutStr(jit)
+    if str.Len(dl_str) > 0:
+        jit_dl := LLVMCreateTargetData(dl_str)
+        LLVMSetModuleDataLayout(mod, jit_dl)
+        LLVMDisposeTargetData(jit_dl)
+    end
+
+    tsm := LLVMOrcCreateNewThreadSafeModule(mod, tsctx)
+    LLVMOrcDisposeThreadSafeContext(tsctx)
+
+    jd := LLVMOrcLLJITGetMainJITDylib(jit)
+
+    mut gen := null as void*
+    gen_err := LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess(
+        gen, LLVMOrcLLJITGetGlobalPrefix(jit), null, null
+    )
+    if gen_err != null:
+        msg := LLVMGetErrorMessage(gen_err)
+        out := msg != null ? str.Clone(msg as str) : "(unknown)"
+        if msg != null: LLVMDisposeErrorMessage(msg) end
+        _d := LLVMOrcDisposeLLJIT(jit)
+        LLVMOrcDisposeThreadSafeModule(tsm)
+        ret RunResult { ok = false, err = "JIT symbol generator failed: " + out }
+    end
+    LLVMOrcJITDylibAddGenerator(jd, gen)
+    define_runtime_symbols(jit, jd)
+
+    add_err := LLVMOrcLLJITAddLLVMIRModule(jit, jd, tsm)
+    if add_err != null:
+        msg := LLVMGetErrorMessage(add_err)
+        out := msg != null ? str.Clone(msg as str) : "(unknown)"
+        if msg != null: LLVMDisposeErrorMessage(msg) end
+        _d := LLVMOrcDisposeLLJIT(jit)
+        ret RunResult { ok = false, err = "JIT add module failed: " + out }
+    end
+
+    mut addr := 0 as i64
+    lookup_err := LLVMOrcLLJITLookup(jit, addr, "main")
+    if lookup_err != null:
+        msg := LLVMGetErrorMessage(lookup_err)
+        out := msg != null ? str.Clone(msg as str) : "(unknown)"
+        if msg != null: LLVMDisposeErrorMessage(msg) end
+        _d := LLVMOrcDisposeLLJIT(jit)
+        ret RunResult { ok = false, err = "no 'main' function to run: " + out }
+    end
+    if addr == 0:
+        _d := LLVMOrcDisposeLLJIT(jit)
+        ret RunResult { ok = false, err = "no 'main' function to run" }
+    end
+
+    rc := salam_orc_call_main(addr)
+    _d := LLVMOrcDisposeLLJIT(jit)
+    ret RunResult { ok = true, rc = rc }
+end

@@ -1,0 +1,150 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Context/MemoryBuffer/Module/verify - llvm-c/Core.h, llvm-c/IRReader.h,
+// llvm-c/Analysis.h. Ports llvm_native.c's parse_ir() (lines 184-205).
+package llvm
+
+extern:
+    func LLVMContextCreate(): void*
+    func LLVMContextDispose(ctx: void*)
+    func LLVMCreateMemoryBufferWithContentsOfFile(path: str, out_buf &: void*, out_err &: void*): int
+    func LLVMDisposeMemoryBuffer(buf: void*)
+    func LLVMParseIRInContext(ctx: void*, buf: void*, out_mod &: void*, out_err &: void*): int
+    func LLVMDisposeModule(mod: void*)
+    func LLVMVerifyModule(mod: void*, action: int, out_err &: void*): int
+    func LLVMPrintModuleToFile(mod: void*, path: str, out_err &: void*): int
+    func LLVMSetTarget(mod: void*, triple: str)
+    func LLVMSetModuleDataLayout(mod: void*, td: void*)
+    func LLVMDisposeMessage(msg: void*)
+end
+
+// LLVMVerifierFailureAction (llvm-c/Analysis.h) - LLVMReturnStatusAction:
+// print diagnostics to stderr and return failure, without aborting the
+// process the way LLVMAbortProcessAction would.
+pub const VERIFY_RETURN_STATUS := 1
+
+@en "Context"
+@fa "زمینه"
+@ar "سیاق"
+pub struct Context:
+    pub handle: void* = null
+end
+
+@en "Module"
+@fa "ماژول"
+@ar "وحدة"
+pub struct Module:
+    pub handle: void* = null
+end
+
+// ParseResult - multiple return values become a struct (this codebase has
+// no tuple type; see SKILL.md #7 "multiple returns -> a struct").
+@en "ParseResult"
+@fa "نتیجه تجزیه"
+@ar "نتیجة التحلیل"
+pub struct ParseResult:
+    pub ctx: Context = Context {}
+    pub mod: Module = Module {}
+    pub ok: bool = false
+    pub err: str = ""
+end
+
+// VerifyResult - see ParseResult.
+@en "VerifyResult"
+@fa "نتیجه بررسی"
+@ar "نتیجة التحقق"
+pub struct VerifyResult:
+    pub ok: bool = false
+    pub err: str = ""
+end
+
+@en "NewContext"
+@fa "زمینه جدید"
+@ar "سیاق جدید"
+pub func NewContext(): Context:
+    ret Context { handle = LLVMContextCreate() }
+end
+
+@en "FreeContext"
+@fa "آزادسازی زمینه"
+@ar "تحریر السیاق"
+pub func FreeContext(ctx: Context):
+    if ctx.handle != null:
+        LLVMContextDispose(ctx.handle)
+    end
+end
+
+@en "FreeModule"
+@fa "آزادسازی ماژول"
+@ar "تحریر الوحدة"
+pub func FreeModule(mod: Module):
+    if mod.handle != null:
+        LLVMDisposeModule(mod.handle)
+    end
+end
+
+// ParseIR - ports parse_ir(): read `ll_path`'s text into a fresh context +
+// module. On failure `ok` is false and `err` carries the LLVM diagnostic
+// (memory-buffer read error or IR parse error, matching the C's two
+// distinct failure points).
+@en "ParseIR"
+@fa "تجزیه آی آر"
+@ar "تحلیل آی آر"
+pub func ParseIR(ll_path: str): ParseResult:
+    mut buf := null as void*
+    mut berr := null as void*
+    if LLVMCreateMemoryBufferWithContentsOfFile(ll_path, buf, berr) != 0:
+        msg := berr != null ? str.Clone(berr as str) : "cannot read '" + ll_path + "'"
+        if berr != null: LLVMDisposeMessage(berr) end
+        ret ParseResult { ok = false, err = msg }
+    end
+
+    ctx := LLVMContextCreate()
+    mut mod := null as void*
+    mut perr := null as void*
+    if LLVMParseIRInContext(ctx, buf, mod, perr) != 0:
+        msg := perr != null ? str.Clone(perr as str) : "(unknown)"
+        if perr != null: LLVMDisposeMessage(perr) end
+        LLVMContextDispose(ctx)
+        ret ParseResult { ok = false, err = "LLVM IR parse error: " + msg }
+    end
+
+    ret ParseResult { ctx = Context { handle = ctx }, mod = Module { handle = mod }, ok = true }
+end
+
+// Verify - ports the module-verification step (LLVM_HAVE_LLVM's
+// opts->verify_module branch): LLVMReturnStatusAction so a bad module is
+// reported, not aborted.
+@en "Verify"
+@fa "بررسی"
+@ar "تحقق"
+pub func Verify(mod: Module): VerifyResult:
+    mut verr := null as void*
+    if LLVMVerifyModule(mod.handle, VERIFY_RETURN_STATUS, verr) != 0:
+        msg := verr != null ? str.Clone(verr as str) : "(unknown)"
+        if verr != null: LLVMDisposeMessage(verr) end
+        ret VerifyResult { ok = false, err = "LLVM module verification failed: " + msg }
+    end
+    ret VerifyResult { ok = true }
+end
+
+@en "SetTargetTriple"
+@fa "تنظیم سه‌تایی هدف"
+@ar "تعیین ثلاثیة الهدف"
+pub func SetTargetTriple(mod: Module, triple: str):
+    if str.Len(triple) > 0:
+        LLVMSetTarget(mod.handle, triple)
+    end
+end

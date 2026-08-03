@@ -419,7 +419,7 @@ collect_example_dir() {
         [ -d "../tests/$lang/$dir" ] || continue
         find "../tests/$lang/$dir" -name '*.salam' | sort | while IFS= read -r f; do
             case "$(basename "$f")" in _*) continue ;; esac
-            rel="${f#../tests/$lang/$dir/}"
+            rel="${f#../tests/"$lang"/"$dir"/}"
             name="${rel%.salam}"
             base="../tests/$lang/$dir/$name"
             exp="$(pick_expect "$base")"

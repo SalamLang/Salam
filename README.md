@@ -215,8 +215,9 @@ salam obj main.salam --target=x86_64-pc-windows-msvc      # -> main.obj
 
 The target is fully wired through the pipeline: the OS/arch predefined macros
 (`SALAM_OS_WINDOWS`, `SALAM_ARCH_X64`, …) describe the **target**, so
-`@if SALAM_OS_WINDOWS` selects the right branch, and `link "..."` directives are
-passed to the cross-linker (e.g. `link "user32"` → `-luser32`).
+`@if SALAM_OS_WINDOWS` selects the right branch, and `link dynamic|static|
+framework "..."` directives are passed to the cross-linker (e.g.
+`link dynamic "user32"` → `-luser32`).
 
 **Prerequisites.** Cross-compilation drives the LLVM toolchain, so you need a
 recent `clang`/`llc` (v22 is what the toolchain invokes) plus, for Windows

@@ -33,10 +33,13 @@
 //    not guessed, but this is the highest-risk, least-precedented part of
 //    this whole port and deserves independent verification against a real
 //    JIT run before being trusted.
+//  - Calling the JIT-resolved `main` needs a tiny new C trampoline,
+//    c/src/llvm/orc_call.{h,c} (`salam_orc_call_main`): a JIT'd address is
+//    only known at runtime, and Salam's `as` cast has no i64 ->
+//    callable-function-type conversion (extern: bindings are link-time
+//    only), so there is no purely-Salam way to invoke it. This is the same
+//    kind of minimal C-ABI bridge lld_link.cc already is for LLD.
 package llvm
-
-import str
-import mem
 
 extern:
     func LLVMOrcCreateNewThreadSafeContextFromLLVMContext(ctx: void*): void*
@@ -86,15 +89,7 @@ end
 
 extern:
     func __main()
-end
-
-@en "RunResult"
-@fa "نتیجه اجرا"
-@ar "نتیجة التنفیذ"
-pub struct RunResult:
-    pub ok: bool = false
-    pub rc: int = 0
-    pub err: str = ""
+    func salam_orc_call_main(addr: i64): int
 end
 
 // LLVMJITSymbolGenericFlags (llvm-c/Orc.h) - Exported | Callable, the
@@ -106,6 +101,15 @@ const RT_FLAGS := 5 as u8 // (1 << 0) | (1 << 2)
 // tail padding (struct alignment 8) = 24. Read from the real header, not
 // guessed - see the file banner.
 const SYM_PAIR_SIZE := 24 as u64
+
+@en "RunResult"
+@fa "نتیجه اجرا"
+@ar "نتیجة التنفیذ"
+pub struct RunResult:
+    pub ok: bool = false
+    pub rc: int = 0
+    pub err: str = ""
+end
 
 // pack_symbol - writes one LLVMOrcCSymbolMapPair into `buf` at slot `idx`.
 func pack_symbol(buf: void*, idx: int, name_entry: void*, addr: i64):
@@ -120,31 +124,51 @@ end
 
 // define_runtime_symbols - ports define_runtime_symbols(): binds libc
 // helpers (and, on Windows, mingw's __main CRT-init hook) as absolute JIT
-// symbols in `jd`.
+// symbols in `jd`. SALAM_OS_WINDOWS is a compile-time condcomp symbol (its
+// `if` branches are pruned per-host, not decided at runtime - see
+// compiler/condcomp.salam), so the Windows/non-Windows cases are two full
+// branches (mirroring the C's `#if defined(_WIN32)`) rather than a shared
+// buffer size computed with a `mut` - a var only mutated inside a pruned
+// branch reads as "never mutated" on hosts where that branch is gone.
 func define_runtime_symbols(jit: void*, jd: void*):
-    n := SALAM_OS_WINDOWS ? 15 : 14
-    buf := mem.AllocateZeroed((n as u64) * SYM_PAIR_SIZE)
-    defer mem.Free(buf)
-
-    pack_symbol(buf, 0, LLVMOrcLLJITMangleAndIntern(jit, "printf"), funcptr(printf))
-    pack_symbol(buf, 1, LLVMOrcLLJITMangleAndIntern(jit, "snprintf"), funcptr(snprintf))
-    pack_symbol(buf, 2, LLVMOrcLLJITMangleAndIntern(jit, "strlen"), funcptr(strlen))
-    pack_symbol(buf, 3, LLVMOrcLLJITMangleAndIntern(jit, "strcmp"), funcptr(strcmp))
-    pack_symbol(buf, 4, LLVMOrcLLJITMangleAndIntern(jit, "malloc"), funcptr(malloc))
-    pack_symbol(buf, 5, LLVMOrcLLJITMangleAndIntern(jit, "realloc"), funcptr(realloc))
-    pack_symbol(buf, 6, LLVMOrcLLJITMangleAndIntern(jit, "free"), funcptr(free))
-    pack_symbol(buf, 7, LLVMOrcLLJITMangleAndIntern(jit, "memcpy"), funcptr(memcpy))
-    pack_symbol(buf, 8, LLVMOrcLLJITMangleAndIntern(jit, "memmove"), funcptr(memmove))
-    pack_symbol(buf, 9, LLVMOrcLLJITMangleAndIntern(jit, "abort"), funcptr(abort))
-    pack_symbol(buf, 10, LLVMOrcLLJITMangleAndIntern(jit, "exit"), funcptr(exit))
-    pack_symbol(buf, 11, LLVMOrcLLJITMangleAndIntern(jit, "strtol"), funcptr(strtol))
-    pack_symbol(buf, 12, LLVMOrcLLJITMangleAndIntern(jit, "strtod"), funcptr(strtod))
-    pack_symbol(buf, 13, LLVMOrcLLJITMangleAndIntern(jit, "strstr"), funcptr(strstr))
     if SALAM_OS_WINDOWS:
+        buf := mem.AllocateZeroed(15 as u64 * SYM_PAIR_SIZE)
+        defer mem.Free(buf)
+        pack_symbol(buf, 0, LLVMOrcLLJITMangleAndIntern(jit, "printf"), funcptr(printf))
+        pack_symbol(buf, 1, LLVMOrcLLJITMangleAndIntern(jit, "snprintf"), funcptr(snprintf))
+        pack_symbol(buf, 2, LLVMOrcLLJITMangleAndIntern(jit, "strlen"), funcptr(strlen))
+        pack_symbol(buf, 3, LLVMOrcLLJITMangleAndIntern(jit, "strcmp"), funcptr(strcmp))
+        pack_symbol(buf, 4, LLVMOrcLLJITMangleAndIntern(jit, "malloc"), funcptr(malloc))
+        pack_symbol(buf, 5, LLVMOrcLLJITMangleAndIntern(jit, "realloc"), funcptr(realloc))
+        pack_symbol(buf, 6, LLVMOrcLLJITMangleAndIntern(jit, "free"), funcptr(free))
+        pack_symbol(buf, 7, LLVMOrcLLJITMangleAndIntern(jit, "memcpy"), funcptr(memcpy))
+        pack_symbol(buf, 8, LLVMOrcLLJITMangleAndIntern(jit, "memmove"), funcptr(memmove))
+        pack_symbol(buf, 9, LLVMOrcLLJITMangleAndIntern(jit, "abort"), funcptr(abort))
+        pack_symbol(buf, 10, LLVMOrcLLJITMangleAndIntern(jit, "exit"), funcptr(exit))
+        pack_symbol(buf, 11, LLVMOrcLLJITMangleAndIntern(jit, "strtol"), funcptr(strtol))
+        pack_symbol(buf, 12, LLVMOrcLLJITMangleAndIntern(jit, "strtod"), funcptr(strtod))
+        pack_symbol(buf, 13, LLVMOrcLLJITMangleAndIntern(jit, "strstr"), funcptr(strstr))
         pack_symbol(buf, 14, LLVMOrcLLJITMangleAndIntern(jit, "__main"), funcptr(__main))
+        LLVMOrcJITDylibDefine(jd, LLVMOrcAbsoluteSymbols(buf, 15 as u64))
+    else:
+        buf := mem.AllocateZeroed(14 as u64 * SYM_PAIR_SIZE)
+        defer mem.Free(buf)
+        pack_symbol(buf, 0, LLVMOrcLLJITMangleAndIntern(jit, "printf"), funcptr(printf))
+        pack_symbol(buf, 1, LLVMOrcLLJITMangleAndIntern(jit, "snprintf"), funcptr(snprintf))
+        pack_symbol(buf, 2, LLVMOrcLLJITMangleAndIntern(jit, "strlen"), funcptr(strlen))
+        pack_symbol(buf, 3, LLVMOrcLLJITMangleAndIntern(jit, "strcmp"), funcptr(strcmp))
+        pack_symbol(buf, 4, LLVMOrcLLJITMangleAndIntern(jit, "malloc"), funcptr(malloc))
+        pack_symbol(buf, 5, LLVMOrcLLJITMangleAndIntern(jit, "realloc"), funcptr(realloc))
+        pack_symbol(buf, 6, LLVMOrcLLJITMangleAndIntern(jit, "free"), funcptr(free))
+        pack_symbol(buf, 7, LLVMOrcLLJITMangleAndIntern(jit, "memcpy"), funcptr(memcpy))
+        pack_symbol(buf, 8, LLVMOrcLLJITMangleAndIntern(jit, "memmove"), funcptr(memmove))
+        pack_symbol(buf, 9, LLVMOrcLLJITMangleAndIntern(jit, "abort"), funcptr(abort))
+        pack_symbol(buf, 10, LLVMOrcLLJITMangleAndIntern(jit, "exit"), funcptr(exit))
+        pack_symbol(buf, 11, LLVMOrcLLJITMangleAndIntern(jit, "strtol"), funcptr(strtol))
+        pack_symbol(buf, 12, LLVMOrcLLJITMangleAndIntern(jit, "strtod"), funcptr(strtod))
+        pack_symbol(buf, 13, LLVMOrcLLJITMangleAndIntern(jit, "strstr"), funcptr(strstr))
+        LLVMOrcJITDylibDefine(jd, LLVMOrcAbsoluteSymbols(buf, 14 as u64))
     end
-
-    LLVMOrcJITDylibDefine(jd, LLVMOrcAbsoluteSymbols(buf, n as u64))
 end
 
 // RunJIT - ports jit_run_file(): parse `ll_path`'s IR, JIT-compile it
@@ -235,8 +259,7 @@ pub func RunJIT(ll_path: str): RunResult:
         ret RunResult { ok = false, err = "no 'main' function to run" }
     end
 
-    main_fn := addr as func (): int
-    rc := main_fn()
+    rc := salam_orc_call_main(addr)
     _d := LLVMOrcDisposeLLJIT(jit)
     ret RunResult { ok = true, rc = rc }
 end

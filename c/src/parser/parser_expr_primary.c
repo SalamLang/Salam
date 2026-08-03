@@ -13,6 +13,7 @@
  */
 
 #include "core/prelude.h"
+#include "core/sal_format.h"
 #include "parser/parser_internal.h"
 
 static ast_node_t *parse_lambda(parser_t *p);
@@ -138,6 +139,9 @@ ast_node_t *parse_primary(parser_t *p)
     case TK_IDENT: {
         if (p_peek2(p)->kind == TK_LBRACE && !p->no_struct_lit)
             return parse_struct_lit(p);
+        if (p_peek2(p)->kind == TK_DOT && p_peekn(p, 2)->kind == TK_IDENT &&
+            p_peekn(p, 3)->kind == TK_LBRACE && !p->no_struct_lit)
+            return parse_struct_lit(p);
 
         ast_node_t *n = p_mk(p, AST_IDENTIFIER);
         n->name = p_munch_value_name(p);
@@ -206,6 +210,15 @@ static ast_node_t *parse_struct_lit(parser_t *p)
     ast_node_t *n = p_mk(p, AST_STRUCT_LIT);
     n->name = p_peek(p)->lexeme;
     p_advance(p);
+    if (p_at(p, TK_DOT) && p_peek2(p)->kind == TK_IDENT) {
+        p_advance(p);
+        const char *pkg = n->name, *ty = p_peek(p)->lexeme;
+        p_advance(p);
+        size_t ln = strlen(pkg) + strlen(ty) + 2;
+        char *q = (char *)arena_alloc(p->a, ln);
+        sal_snprintf(q, ln, "%s.%s", pkg, ty);
+        n->name = q;
+    }
     p_expect(p, TK_LBRACE, "'{' in struct literal");
 
     p_skip_terminators(p);

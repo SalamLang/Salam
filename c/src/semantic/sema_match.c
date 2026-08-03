@@ -16,6 +16,11 @@
 #include "core/sal_format.h"
 #include "semantic/sema_internal.h"
 
+static const char *plural_suffix(size_t n)
+{
+    return n == 1 ? "" : "s";
+}
+
 static type_t *ty(sema_t *s, type_kind_t k)
 {
     return sema_ty(s, k);
@@ -311,8 +316,8 @@ type_t *sema_check_match(sema_t *s, ast_node_t *n, bool is_expr, type_t *expecte
             }
             if (mi < sy->members->symbols.len) o = sal_catf(buf, sizeof(buf), o, ", ...");
             SWARN(s, 80, &n->span,
-                  "non-exhaustive match on enum '%s': missing member(s) %s", sy->name,
-                  buf);
+                  "non-exhaustive match on enum '%s': missing member%s %s", sy->name,
+                  plural_suffix(total - seen_members.len), buf);
         }
     }
     if (!has_wildcard && subj_is_variant) {
@@ -335,8 +340,8 @@ type_t *sema_check_match(sema_t *s, ast_node_t *n, bool is_expr, type_t *expecte
             }
             if (ti < total) o = sal_catf(buf, sizeof(buf), o, ", ...");
             SERR(s, 79, &n->span,
-                 "non-exhaustive match on Variant '%s': missing case(s) for %s",
-                 type_to_string(s->tc, subj), buf);
+                 "non-exhaustive match on Variant '%s': missing case%s for %s",
+                 type_to_string(s->tc, subj), plural_suffix(total - seen_tags.len), buf);
         }
     }
 

@@ -15,6 +15,11 @@
 #include "jsgen/jsgen_internal.h"
 #include "i18n/i18n.h"
 
+static const char *plural_suffix(size_t n)
+{
+    return n == 1 ? "" : "s";
+}
+
 static void collect_local_names(jg_t *g, ast_node_t *n)
 {
     if (!n) return;
@@ -188,7 +193,7 @@ jsgen_output_t *jsgen_run(arena_t *a, logger_t *log, ast_node_t *program,
     if (minify_last) *minify_last = g.minify_last;
     if (minify_keys) *minify_keys = g.minify_keys;
     if (minify_vals) *minify_vals = g.minify_vals;
-    LOG_I(log, PH_CODEGEN, i18n_tr("generated %zu function(s) for '%s'"),
-          out->fn_names.len, module);
+    LOG_I(log, PH_CODEGEN, i18n_tr("generated %zu function%s for '%s'"),
+          out->fn_names.len, plural_suffix(out->fn_names.len), module);
     return out;
 }

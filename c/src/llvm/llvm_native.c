@@ -755,9 +755,23 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
     argv[n++] = obj;
     for (i = 0; i < opts->nlink && i < 16 && n < 70; i++) {
         const char *s = opts->link_libs[i];
+        const char *k = opts->link_kinds ? opts->link_kinds[i] : NULL;
         if (!s) continue;
         if (s[0] == '-' || strpbrk(s, "/\\.") != NULL) {
             argv[n++] = s;
+        } else if (k && strcmp(k, "static") == 0) {
+            /* -l:libX.a - GNU ld/lld "exact archive name" syntax, picks the
+             * static archive regardless of whether a same-named shared lib
+             * is also on the search path. Supported by ld.lld's mingw
+             * flavor (same GNU-compatible option parser as its ELF flavor)
+             * - see native_link_elf's own -static (always-on there) for
+             * the ELF-target precedent. Bracketing with -Wl,-Bstatic/
+             * -Bdynamic (what the external-clang path uses, emit_llvm_link
+             * in llvm_toolchain.c) would also work, but -l: is a single
+             * self-contained flag that doesn't need matching state tracked
+             * across this argv array. */
+            sal_snprintf(userlibs[i], sizeof userlibs[i], "-l:lib%s.a", s);
+            argv[n++] = userlibs[i];
         } else {
             sal_snprintf(userlibs[i], sizeof userlibs[i], "-l%s", s);
             argv[n++] = userlibs[i];

@@ -53,48 +53,20 @@ bool try_link_directive(parser_t *p, ast_node_t *prog)
     ast_node_t *ln = p_mk(p, AST_LINK);
     p_advance(p);
     ln->name = parse_link_kind(p);
+    /* The kind is mandatory - a bare `link "x"` (still recognized above, by
+     * the TK_STRING branch, so this produces a targeted error instead of a
+     * confusing "unknown identifier 'link'" from falling through to
+     * statement parsing) must say which of static/dynamic/framework it
+     * means. Only one way to write this directive. */
+    if (!ln->name)
+        p_error(p, "'link' requires an explicit kind: write 'link static \"...\"', "
+                   "'link dynamic \"...\"', or 'link framework \"...\"'");
     if (p_at(p, TK_STRING)) {
         ln->value = p_peek(p)->value;
         p_advance(p);
     } else
         p_error(p, "expected a library-name string after 'link'");
     p_term(p);
-    p_fin(p, ln);
-    ast_add(p->a, prog, ln);
-    return true;
-}
-
-bool try_link_attr(parser_t *p, ast_node_t *prog)
-{
-    if (!(p_at(p, TK_META) && strcmp(p_peek(p)->lexeme, "link") == 0)) return false;
-    ast_node_t *ln = p_mk(p, AST_LINK);
-    p_advance(p);
-    p_expect(p, TK_LPAREN, "'(' after @link");
-    if (p_at(p, TK_STRING)) {
-        ln->value = p_peek(p)->value;
-        p_advance(p);
-    } else
-        p_error(p, "expected a library-name string in @link(\"...\")");
-
-    if (p_match(p, TK_COMMA)) {
-        if (p_at(p, TK_IDENT) && strcmp(p_peek(p)->lexeme, "kind") == 0) {
-            p_advance(p);
-            p_expect(p, TK_ASSIGN, "'=' after 'kind'");
-            if (p_at(p, TK_STRING)) {
-                const char *k = canon_link_kind(p_peek(p)->value.as.s);
-                if (k)
-                    ln->name = k;
-                else
-                    p_error(
-                        p, "link kind must be \"static\", \"dynamic\", or \"framework\"");
-                p_advance(p);
-            } else
-                p_error(p, "expected a kind string after 'kind='");
-        } else
-            p_error(p, "expected 'kind=\"...\"' after ',' in @link(...)");
-    }
-    p_expect(p, TK_RPAREN, "')' to close @link");
-    p_skip_terminators(p);
     p_fin(p, ln);
     ast_add(p->a, prog, ln);
     return true;

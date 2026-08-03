@@ -128,8 +128,6 @@ void parse_metas(parser_t *p, vec_t *out);
 
 void parse_extern_into(parser_t *p, ast_node_t *prog);
 
-bool try_link_attr(parser_t *p, ast_node_t *prog);
-
 bool try_link_directive(parser_t *p, ast_node_t *prog);
 
 #endif /* SALAM_PARSER_INTERNAL_H */

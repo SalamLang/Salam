@@ -39,17 +39,29 @@
 //       conv/as_i1/common_ts, pick_overload, strconst, local_* - stage A
 //       owns them.
 //   C (DONE): native toolchain glue, replacing the NativeAvailable/NativeRun
-//       stubs. DEVIATION (deliberate): llvm_native.c's real body only
-//       exists behind `#ifdef SALAM_HAVE_LLVM` (the LLVM-C API) - the same
-//       flag this repo's own reference binary builds WITHOUT (that's why
-//       the pre-C-stage NativeAvailable stub already returned `false`,
-//       mirroring the `#else` branch exactly). Binding the ~30-function
-//       LLVM-C surface (opaque context/module/target-machine handles, the
-//       ORC/LLJIT API for LLVM_OUT_JIT, ...) via `extern:` is out of scope
-//       for a toolchain-glue port and unreachable in every build this repo
-//       ships. What IS reachable, and what stage B's own reference-binary
-//       log line ("native: clang %s -lm -o %s") already showed running,
-//       is driver/llvm_toolchain.c's `salam_llvm_toolchain` - the
+//       stubs. CORRECTION (2026-08): this banner previously claimed
+//       llvm_native.c's `#ifdef SALAM_HAVE_LLVM` body was "unreachable in
+//       every build this repo ships" - false. CI's flagship release builds
+//       (see .github/workflows/compiler-release.yml) build the C compiler
+//       with WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1, statically linking
+//       real LLVM-C + in-process LLD; only the default/dev build omits it.
+//       That surface (~48 LLVM-C functions incl. the full ORC/LLJIT API,
+//       plus native_link_elf/native_link_mingw's in-process LLD linking) IS
+//       now ported, as its own reusable package: std/llvm/ (9 files -
+//       core/target/passes/emit/orc/lld/linker + the llvm.salam/run.salam
+//       entry points), not inline here, so any Salam program can drive
+//       static LLVM/LLD, not just this compiler. It is deliberately NOT
+//       imported by NativeRun below yet: doing so would add std/llvm's
+//       `link static "LLVM"`/`link static "lldELF"`/etc directives to every
+//       self-host build unconditionally (condcomp.salam's flag set is a fixed list of
+//       20 OS/arch bools - there is no user-definable flag to gate an
+//       opt-in the way the C's WITH_LLVM does), which would break any build
+//       or CI job where those static libraries aren't installed. Wiring
+//       NativeRun to prefer std/llvm when linked in - and adding whatever
+//       condcomp/build-flag mechanism makes that opt-in safe - is future
+//       work alongside the self-host static-link build pipeline itself
+//       (std/llvm/llvm.salam has its own TODO(build-pipeline) marker).
+//       Meanwhile NativeRun below still ports `salam_llvm_toolchain` - the
 //       always-available fallback that shells out to `clang`/`opt`/`lli`
 //       directly on the .ll text via a generated bash script (its
 //       LLVM_OUT_EXEC case IS the observed `clang *.ll -lm -o <exe>`
@@ -72,10 +84,12 @@
 //       Linux/WSL builds this port is verified against (SALAM_OS_WINDOWS
 //       false), same as `target_is_windows_of`'s pre-existing host-OS
 //       fallback a few hundred lines up. llvm_native.c's own
-//       `native_link_elf`/`native_link_mingw` in-process-lld path
-//       (SALAM_HAVE_LLD) is likewise unreachable without SALAM_HAVE_LLVM
-//       and is not ported; lld_link.cc has no Salam-reachable behavior of
-//       its own (it's a thin LLD-library wrapper called only from there).
+//       `native_link_elf`/`native_link_mingw` in-process-lld path is now
+//       ported too, as std/llvm/linker.salam's LinkElf/LinkMingw/LinkAuto -
+//       see the CORRECTION above; lld_link.cc itself stays exactly as-is
+//       (unported, unmodified), since it's already the minimal C-ABI shim
+//       over LLD's C++ driver headers that std/llvm/lld.salam's `extern:`
+//       declarations bind straight to.
 //
 // C -> Salam decisions for this module (B/C must inherit these):
 // - ll_t -> `pub struct Lv` (all fields pub - E017). sema_result_t *sem is
@@ -5475,7 +5489,7 @@ func nt_has_path_char(spec: str): bool:
 end
 
 // emit_llvm_link
-func nt_emit_llvm_link(spec: str, kind: str, windows: bool): str:
+func nt_emit_llvm_link(spec: str, kind: str): str:
     if str.Len(spec) == 0:
         ret " -l" + nt_shell_arg(spec)
     end
@@ -5487,8 +5501,17 @@ func nt_emit_llvm_link(spec: str, kind: str, windows: bool): str:
     if byte_at(spec, 0) == 45 || nt_has_path_char(spec):
         ret " " + nt_shell_arg(spec)
     end
-    if is_static && !windows:
-        ret " -Wl,-Bstatic -l" + nt_shell_arg(spec) + " -Wl,-Bdynamic"
+    // -l:libX.a - GNU ld/lld "exact archive name" syntax, picks the static
+    // archive regardless of a same-named shared lib also being on the
+    // search path. Previously gated on `!windows` (mirroring the pre-fix
+    // C), silently falling back to a bare (dynamic) -lX there - but the
+    // clang this script invokes on Windows still targets *-w64-mingw32
+    // through the same GNU-compatible driver/lld-mingw-flavor toolchain
+    // this whole driver assumes elsewhere, which understands -l: just
+    // like the Linux/macOS case - see c/src/driver/llvm_toolchain.c's
+    // emit_llvm_link for the parity fix this mirrors.
+    if is_static:
+        ret " -l:lib" + nt_shell_arg(spec) + ".a"
     end
     ret " -l" + nt_shell_arg(spec)
 end
@@ -5552,7 +5575,7 @@ func nt_emit_tool_cmd(opts: Options): str:
             if li < opts.link_kinds.len():
                 kind = opts.link_kinds.get(li)[0]
             end
-            out += nt_emit_llvm_link(spec, kind, win)
+            out += nt_emit_llvm_link(spec, kind)
             li += 1
         end
         if !win && !wasm:

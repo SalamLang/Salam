@@ -253,3 +253,154 @@ pub func URLDecode(s: str): str:
     out := str.BufStr(sb)
     ret out
 end
+
+// Base64 decode that REPORTS failure instead of skipping what it cannot read.
+//
+// Base64Decode above is deliberately lenient: any byte outside the alphabet is
+// ignored, which is what you want for hand-wrapped text. That is the wrong
+// default for anything security-relevant, where a corrupted block should be
+// rejected rather than silently decoded into whatever survived the skipping.
+// PEM trust stores are the motivating case.
+//
+// LIMITATION: the result is a `str`, so this cannot carry arbitrary binary.
+// Decoded data containing a 0x00 byte is truncated there by any caller that
+// measures the result. Base64 of text is fine; base64 of a certificate, a key
+// or a compressed blob is not. std/tls decodes PEM into its own byte buffer
+// for exactly this reason. A byte-oriented variant writing into a caller
+// buffer would fix it and is worth adding.
+//
+// Whitespace is still accepted, since every real encoder wraps lines. `ok` is
+// set false on any other stray character, on data after padding, or on a
+// length that cannot be a whole number of quanta.
+@en "Base64DecodeStrict"
+@fa "کدگشایی شصت و چهار سخت گیرانه"
+@ar "فك ترمیز ستة أربعة صارم"
+pub func Base64DecodeStrict(s: str, ok &: bool): str:
+    ok = true
+    n := s.len()
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut acc := 0
+    mut nbits := 0
+    mut pad := 0
+    mut ndigits := 0
+    mut i := 0
+    until i < n:
+        code := _ub(bp, i)
+        i += 1
+        if code == 32 || code == 9 || code == 10 || code == 13:
+            continue
+        end
+        if code == 61:
+            pad += 1
+            if pad > 2:
+                ok = false
+                ret ""
+            end
+            continue
+        end
+        if pad > 0:
+            // data after padding is malformed, not merely odd
+            ok = false
+            ret ""
+        end
+        v := _b64val(code)
+        if v < 0:
+            ok = false
+            ret ""
+        end
+        ndigits += 1
+        acc = acc * 64 + v
+        nbits += 6
+        if nbits >= 8:
+            nbits -= 8
+            mut shift := 1
+            repeat nbits with _k:
+                shift = shift * 2
+            end
+            str.BufAppendChar(sb, (acc / shift) % 256)
+            acc = acc % shift
+        end
+    end
+    if (ndigits + pad) % 4 != 0:
+        ok = false
+        ret ""
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+// Strict, binary-safe base64 decode into a caller-supplied buffer.
+//
+// This is the form to use for anything that is not text. The `str`-returning
+// decoders above cannot carry binary at all: decoded data containing a 0x00
+// byte is truncated there by any caller that measures the result, which rules
+// them out for certificates, keys and compressed blobs.
+//
+// Returns the number of bytes written, or 0 with `ok` false. `ok` is set false
+// on a stray character, on data after padding, on a length that is not a whole
+// number of quanta, or if the output would exceed `cap`. Whitespace is
+// accepted, since every real encoder wraps lines.
+@en "Base64DecodeBytes"
+@fa "کدگشایی شصت و چهار به بایت"
+@ar "فك ترمیز ستة أربعة إلى بایتات"
+pub func Base64DecodeBytes(s: str, out: void*, cap: int, ok &: bool): int:
+    ok = true
+    n := s.len()
+    bp := _bp(s)
+    op := out as u8*
+    mut written := 0
+    mut acc := 0
+    mut nbits := 0
+    mut pad := 0
+    mut ndigits := 0
+    mut i := 0
+    until i < n:
+        code := _ub(bp, i)
+        i += 1
+        if code == 32 || code == 9 || code == 10 || code == 13:
+            continue
+        end
+        if code == 61:
+            pad += 1
+            if pad > 2:
+                ok = false
+                ret 0
+            end
+            continue
+        end
+        if pad > 0:
+            // data after padding is malformed, not merely unusual
+            ok = false
+            ret 0
+        end
+        v := _b64val(code)
+        if v < 0:
+            ok = false
+            ret 0
+        end
+        ndigits += 1
+        acc = acc * 64 + v
+        nbits += 6
+        if nbits >= 8:
+            nbits -= 8
+            mut shift := 1
+            repeat nbits with _k:
+                shift = shift * 2
+            end
+            if written >= cap:
+                ok = false
+                ret 0
+            end
+            op[written] = ((acc / shift) % 256) as u8
+            written += 1
+            acc = acc % shift
+        end
+    end
+    if (ndigits + pad) % 4 != 0:
+        ok = false
+        ret 0
+    end
+    ret written
+end

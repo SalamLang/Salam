@@ -1,0 +1,168 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+// Checks for the byte buffer, reader and constant-time helpers.
+
+
+// ---------------------------------------------------------------- byte layer
+
+func _selftest_bytes():
+    // big-endian writers
+    mut b := _newbuf(8)
+    defer _buf_free(b)
+    _put8(b, 0x01)
+    _put16(b, 0x0203)
+    _put24(b, 0x040506)
+    _put32(b, 0x0708090A as i64)
+    _put64(b, 0x0B0C0D0E0F101112 as u64)
+    _ckhex(_hexofbuf(b), "0102030405060708090a0b0c0d0e0f101112", "be writers")
+
+    // truncation to the low byte
+    mut t := _newbuf(4)
+    defer _buf_free(t)
+    _put8(t, 0x1FF)
+    _ckhex(_hexofbuf(t), "ff", "put8 masks to one byte")
+
+    // reader over nested length-prefixed vectors, the shape TLS uses
+    mut v := _newbuf(16)
+    defer _buf_free(v)
+    _put16(v, 7)
+    _put8(v, 2)
+    _put8(v, 0xAA)
+    _put8(v, 0xBB)
+    _put24(v, 1)
+    _put8(v, 0xCC)
+    mut r := _readerof(v)
+    mut outer := _rdvec16(r)
+    mut inner := _rdvec8(outer)
+    _ck(inner.len == 2, "vec8 length")
+    _ck(_rd8(inner) == 0xAA, "vec8 first byte")
+    _ck(_rd8(inner) == 0xBB, "vec8 second byte")
+    mut inner2 := _rdvec24(outer)
+    _ck(inner2.len == 1, "vec24 length")
+    _ck(_rd8(inner2) == 0xCC, "vec24 byte")
+    _ck(!r.bad, "well-formed parse leaves bad clear")
+    _ck(_rdleft(r) == 0, "outer fully consumed")
+
+    // sticky bad: reading past the end latches, and later reads return 0
+    // WITHOUT advancing, so truncated input can never look like valid zeros
+    mut sr := _readerof(v)
+    _rdskip(sr, v.len)
+    _ck(!sr.bad, "skip to exact end is fine")
+    x := _rd8(sr)
+    _ck(sr.bad, "read past end latches bad")
+    _ck(x == 0, "read past end yields zero")
+    _ck(_rd16(sr) == 0, "reads stay zero once bad")
+    _ck(_rdleft(sr) == 0, "left is zero once bad")
+    sub := _rdbytes(sr, 4)
+    _ck(sub.len == 0, "sub-reader of a bad reader is empty")
+
+    // an over-long inner length must latch rather than read neighbouring bytes
+    mut o := _newbuf(8)
+    defer _buf_free(o)
+    _put8(o, 200)
+    _put8(o, 0x11)
+    mut orr := _readerof(o)
+    over := _rdvec8(orr)
+    _ck(orr.bad, "over-long vector latches bad")
+    _ck(over.len == 0, "over-long vector yields empty")
+
+    // patch: reserve a length, append a body, backfill
+    mut p := _newbuf(16)
+    defer _buf_free(p)
+    _put8(p, 0x16)
+    lenoff := p.len
+    _put16(p, 0)
+    body := p.len
+    _put8(p, 0xDE)
+    _put8(p, 0xAD)
+    _patch16(p, lenoff, p.len - body)
+    _ckhex(_hexofbuf(p), "160002dead", "patch16 backfills length")
+
+    mut p24 := _newbuf(16)
+    defer _buf_free(p24)
+    off := p24.len
+    _put24(p24, 0)
+    _put8(p24, 0xFF)
+    _patch24(p24, off, 1)
+    _ckhex(_hexofbuf(p24), "000001ff", "patch24 backfills length")
+
+    // consume drops a prefix and keeps the tail intact
+    mut cbuf := _newbuf(8)
+    defer _buf_free(cbuf)
+    _put32(cbuf, 0x01020304 as i64)
+    _bufconsume(cbuf, 1)
+    _ckhex(_hexofbuf(cbuf), "020304", "consume drops prefix")
+    _bufconsume(cbuf, 99)
+    _ck(cbuf.len == 0, "over-long consume empties")
+
+    // growth across many reallocations must preserve contents
+    mut g := _newbuf(1)
+    defer _buf_free(g)
+    repeat 500 with i:
+        _put8(g, i & 0xFF)
+    end
+    _ck(g.len == 500, "grown length")
+    _ck(!g.bad, "growth did not fail")
+    mut gok := true
+    repeat 500 with i:
+        if _bufat(g, i) != (i & 0xFF):
+            gok = false
+        end
+    end
+    _ck(gok, "growth preserved contents")
+
+    // constant-time compare
+    mut a1 := _hexbuf("00112233")
+    defer _buf_free(a1)
+    mut a2 := _hexbuf("00112233")
+    defer _buf_free(a2)
+    mut a3 := _hexbuf("00112234")
+    defer _buf_free(a3)
+    _ck(_cteq(a1.p, a2.p, 4), "cteq equal")
+    _ck(!_cteq(a1.p, a3.p, 4), "cteq differing last byte")
+    mut a4 := _hexbuf("80112233")
+    defer _buf_free(a4)
+    _ck(!_cteq(a1.p, a4.p, 4), "cteq differing first byte")
+    _ck(_cteq(a1.p, a3.p, 0), "cteq of zero length is equal")
+
+    // constant-time select
+    _ck(_ctsel(1, 0xAA, 0x55) == 0xAA, "ctsel picks a on 1")
+    _ck(_ctsel(0, 0xAA, 0x55) == 0x55, "ctsel picks b on 0")
+    _ck(_ctsel(1, 0 - 1, 0) == 0 - 1, "ctsel handles all-ones")
+
+    // xor in place
+    mut xa := _hexbuf("f0f0f0f0")
+    defer _buf_free(xa)
+    mut xb := _hexbuf("0ff00ff0")
+    defer _buf_free(xb)
+    _xorinto(xa.p, xb.p, 4)
+    _ckhex(_hexof(xa.p, 4), "ff00ff00", "xor into")
+
+    // wipe clears key material in place (checked while still allocated --
+    // reading the block after _buf_wipe frees it would be a use-after-free)
+    mut w := _hexbuf("aabbccdd")
+    defer _buf_free(w)
+    wn := w.len
+    _wipe(w.p, wn)
+    mut zeroed := true
+    repeat wn with i:
+        if _bufat(w, i) != 0:
+            zeroed = false
+        end
+    end
+    _ck(zeroed, "wipe zeroes buffer")
+end

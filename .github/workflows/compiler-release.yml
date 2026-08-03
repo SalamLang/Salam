@@ -7,6 +7,16 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      nightly:
+        description: Build the full multi-platform release and publish it as a nightly release (used by the nightly-release-check workflow)
+        type: boolean
+        default: false
+      nightly_date:
+        description: 'Date (YYYY-MM-DD) to stamp the nightly tag/title with; defaults to today (UTC) if left blank'
+        type: string
+        default: ''
 permissions:
   contents: read
 jobs:
@@ -159,9 +169,10 @@ jobs:
       # Static libsqlite3.a/libhiredis.a/libssl.a/libcrypto.a/libmariadb.a per
       # supported --target= triple, embedded into salam itself (see
       # SALAM_EMBED_EXTRALIBS_*_DIR below and c/src/llvm/llvm_native.c's
-      # salam_try_embed_extralibs_{musl,mingw}) so `link "sqlite3"`/
-      # `link "hiredis"`/`link "ssl"`+`link "crypto"`/`link "mariadb"`
-      # resolve to a bundled static archive on any target - no separate
+      # salam_try_embed_extralibs_{musl,mingw}) so `link dynamic "sqlite3"`/
+      # `link dynamic "hiredis"`/`link dynamic "ssl"`+`link dynamic "crypto"`/
+      # `link dynamic "mariadb"` resolve to a bundled static archive on any
+      # target - no separate
       # install needed by whoever eventually runs a salam-built program.
       # Kept as its own toolchain fetch, independent of the crt/libc
       # musl-cross fetch above (which discards the full toolchain after
@@ -177,6 +188,13 @@ jobs:
           TARGETS="x86_64-linux-musl aarch64-linux-musl i686-linux-musl arm-linux-musleabihf x86_64-w64-windows-gnu hostlibs"
           need_build() { [ ! -f "/tmp/extralibs/$2/lib$1.a" ]; }
           any_needed() { for t in $TARGETS; do need_build "$1" "$t" && return 0; done; return 1; }
+          # openssl's build_openssl() below writes libssl.a + libcrypto.a, not
+          # a "libopenssl.a" - need_build()'s generic lib$1.a pattern doesn't
+          # match either file, so a plain `need_build openssl` is always true
+          # and would force a from-source openssl rebuild for every target on
+          # every run regardless of cache. Check the real output files instead.
+          need_build_openssl() { [ ! -f "/tmp/extralibs/$1/libssl.a" ] || [ ! -f "/tmp/extralibs/$1/libcrypto.a" ]; }
+          any_needed_openssl() { for t in $TARGETS; do need_build_openssl "$t" && return 0; done; return 1; }
 
           if any_needed sqlite3; then
             curl -fL --connect-timeout 10 --max-time 120 -o /tmp/sqlite3.zip \
@@ -201,7 +219,13 @@ jobs:
           # OPENSSL_SYS_LINUX block is guarded by #ifndef
           # OPENSSL_NO_SECURE_MEMORY, so disabling the feature skips that
           # include entirely rather than needing the header.
-          if any_needed openssl; then
+          # Also pre-fetched whenever mariadb needs (re)building, even if
+          # openssl itself is fully cached: build_mariadb() below points
+          # CMake's FindOpenSSL at a scratch "openssl-root" (headers only,
+          # via ensure_openssl_root()) that isn't part of the cached
+          # /tmp/extralibs path, so a fresh runner needs the tarball on hand
+          # to regenerate just those headers even on an openssl cache hit.
+          if any_needed_openssl || any_needed mariadb; then
             curl -fL --connect-timeout 15 --max-time 180 -o /tmp/openssl.tar.gz \
               "https://github.com/openssl/openssl/releases/download/openssl-3.6.3/openssl-3.6.3.tar.gz"
             echo "243a86649cf6f23eeb6a2ff2456e09e5d77dd9018a54d3d96b0c6bdd6ba6c7f1  /tmp/openssl.tar.gz" \
@@ -218,16 +242,20 @@ jobs:
           # needs engine-specific APIs.
           build_openssl() {
             target="$1"; ossl_target="$2"; shift 2
-            need_build openssl "$target" || { echo "reusing cached openssl for $target"; return 0; }
-            rm -rf /tmp/openssl-build; mkdir -p /tmp/openssl-build
-            tar xf /tmp/openssl.tar.gz -C /tmp/openssl-build --strip-components=1
-            if ( cd /tmp/openssl-build \
+            need_build_openssl "$target" || { echo "reusing cached openssl for $target"; return 0; }
+            # Per-target scratch dir (not a single shared /tmp/openssl-build)
+            # so independent targets can be built concurrently below without
+            # clobbering each other's in-progress Configure/make tree.
+            ob_dir="/tmp/openssl-build-$target"
+            rm -rf "$ob_dir" "$ob_dir.log"; mkdir -p "$ob_dir"
+            tar xf /tmp/openssl.tar.gz -C "$ob_dir" --strip-components=1
+            if ( cd "$ob_dir" \
                  && ./Configure "$ossl_target" no-shared no-tests no-docs no-apps \
                       no-secure-memory no-engine "$@" \
-                 && make -j"$JOBS" build_libs ) >/tmp/openssl-build.log 2>&1; then
-              if [ -f /tmp/openssl-build/libssl.a ] && [ -f /tmp/openssl-build/libcrypto.a ]; then
+                 && make -j"$JOBS" build_libs ) >"$ob_dir.log" 2>&1; then
+              if [ -f "$ob_dir/libssl.a" ] && [ -f "$ob_dir/libcrypto.a" ]; then
                 mkdir -p "/tmp/extralibs/$target"
-                cp /tmp/openssl-build/libssl.a /tmp/openssl-build/libcrypto.a "/tmp/extralibs/$target/"
+                cp "$ob_dir/libssl.a" "$ob_dir/libcrypto.a" "/tmp/extralibs/$target/"
                 # Scratch OpenSSL "root" (headers + libs) for build_mariadb()
                 # below to point CMake's FindOpenSSL at - deliberately NOT
                 # under /tmp/extralibs (which gets embedded into salam
@@ -235,8 +263,8 @@ jobs:
                 # mariadbclient's build here in CI, never at runtime.
                 rm -rf "/tmp/openssl-root-$target"
                 mkdir -p "/tmp/openssl-root-$target/include" "/tmp/openssl-root-$target/lib"
-                cp -r /tmp/openssl-build/include/. "/tmp/openssl-root-$target/include/"
-                cp /tmp/openssl-build/libssl.a /tmp/openssl-build/libcrypto.a \
+                cp -r "$ob_dir/include/." "/tmp/openssl-root-$target/include/"
+                cp "$ob_dir/libssl.a" "$ob_dir/libcrypto.a" \
                   "/tmp/openssl-root-$target/lib/"
                 echo "built libssl.a/libcrypto.a for $target"
               else
@@ -244,9 +272,9 @@ jobs:
               fi
             else
               echo "::warning::openssl build failed for $target; skipping static openssl for this target"
-              tail -60 /tmp/openssl-build.log || true
+              tail -60 "$ob_dir.log" || true
             fi
-            rm -rf /tmp/openssl-build
+            rm -rf "$ob_dir" "$ob_dir.log"
           }
           # MariaDB Connector/C is CMake-based (needs a compiler + system-name
           # override per target, not a simple CC/AR pair) - same reasoning as
@@ -281,18 +309,20 @@ jobs:
               echo "243a86649cf6f23eeb6a2ff2456e09e5d77dd9018a54d3d96b0c6bdd6ba6c7f1  /tmp/openssl.tar.gz" \
                 | sha256sum -c - || return 1
             }
-            rm -rf /tmp/openssl-build; mkdir -p /tmp/openssl-build
-            tar xf /tmp/openssl.tar.gz -C /tmp/openssl-build --strip-components=1
-            ( cd /tmp/openssl-build \
+            # Per-target scratch dir - see build_openssl()'s comment above.
+            ob_dir="/tmp/openssl-build-$target"
+            rm -rf "$ob_dir" "$ob_dir.log"; mkdir -p "$ob_dir"
+            tar xf /tmp/openssl.tar.gz -C "$ob_dir" --strip-components=1
+            ( cd "$ob_dir" \
               && ./Configure "$ossl_target" no-shared no-tests no-docs no-apps \
-                   no-secure-memory no-engine "$@" ) >/tmp/openssl-build.log 2>&1 || {
-              rm -rf /tmp/openssl-build; return 1; }
+                   no-secure-memory no-engine "$@" ) >"$ob_dir.log" 2>&1 || {
+              rm -rf "$ob_dir" "$ob_dir.log"; return 1; }
             rm -rf "/tmp/openssl-root-$target"
             mkdir -p "/tmp/openssl-root-$target/include" "/tmp/openssl-root-$target/lib"
-            cp -r /tmp/openssl-build/include/. "/tmp/openssl-root-$target/include/"
+            cp -r "$ob_dir/include/." "/tmp/openssl-root-$target/include/"
             cp "/tmp/extralibs/$target/libssl.a" "/tmp/extralibs/$target/libcrypto.a" \
               "/tmp/openssl-root-$target/lib/"
-            rm -rf /tmp/openssl-build
+            rm -rf "$ob_dir" "$ob_dir.log"
           }
           build_mariadb() {
             target="$1"; ossl_target="$2"; shift 2
@@ -308,13 +338,18 @@ jobs:
                 fi
                 ;;
             esac
-            rm -rf /tmp/mariadb-build; mkdir -p /tmp/mariadb-build
-            if ( cd /tmp/mariadb-build \
+            # Per-target scratch build dir (mariadb-connector-c is built
+            # out-of-source, so /tmp/mariadb-src itself is only ever read,
+            # not written - safe to share read-only across concurrent
+            # targets below) so independent targets can build concurrently.
+            mb_dir="/tmp/mariadb-build-$target"
+            rm -rf "$mb_dir" "$mb_dir.log"; mkdir -p "$mb_dir"
+            if ( cd "$mb_dir" \
                  && cmake /tmp/mariadb-src -DCMAKE_BUILD_TYPE=Release \
                       -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF "${ssl_args[@]}" "$@" \
                  && cmake --build . --target mariadbclient -j"$JOBS" ) \
-                 >/tmp/mariadb-build.log 2>&1; then
-              LIB=$(find /tmp/mariadb-build -name "libmariadbclient.a" | head -1)
+                 >"$mb_dir.log" 2>&1; then
+              LIB=$(find "$mb_dir" -name "libmariadbclient.a" | head -1)
               if [ -n "$LIB" ]; then
                 mkdir -p "/tmp/extralibs/$target"
                 cp "$LIB" "/tmp/extralibs/$target/libmariadbclient.a"
@@ -326,9 +361,9 @@ jobs:
               fi
             else
               echo "::warning::mariadb build failed for $target; skipping static mariadb for this target"
-              tail -80 /tmp/mariadb-build.log || true
+              tail -80 "$mb_dir.log" || true
             fi
-            rm -rf /tmp/mariadb-build
+            rm -rf "$mb_dir" "$mb_dir.log"
           }
 
           build_sqlite3() {
@@ -361,10 +396,6 @@ jobs:
           # above) - straightforward.
           build_all x86_64-linux-musl musl-gcc ar
           build_all x86_64-w64-windows-gnu x86_64-w64-mingw32-gcc x86_64-w64-mingw32-ar
-          build_openssl x86_64-linux-musl linux-x86_64 CC=musl-gcc
-          build_openssl x86_64-w64-windows-gnu mingw64 --cross-compile-prefix=x86_64-w64-mingw32-
-          build_mariadb x86_64-linux-musl linux-x86_64 -DCMAKE_C_COMPILER=musl-gcc
-          build_mariadb x86_64-w64-windows-gnu mingw64 -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc
           # "hostlibs" isn't a --target= triple - it's this runner's own
           # native glibc host (ubuntu-latest), for SALAM_EMBED_HOSTLIBS_DIR
           # (same-host, no --target= builds - see c/src/driver/build.c and
@@ -372,20 +403,50 @@ jobs:
           # x86_64-linux-musl build above: this runner links glibc
           # natively, not musl, so it needs its own glibc-linked .a files.
           build_all hostlibs gcc ar
-          build_openssl hostlibs linux-x86_64 CC=gcc
-          build_mariadb hostlibs linux-x86_64 -DCMAKE_C_COMPILER=gcc
+
+          # openssl (a from-source ./Configure + make, minutes per target on
+          # a genuine cache miss) and mariadb (a CMake build depending on it)
+          # are the only slow part of this step on a cache miss - sqlite3/
+          # hiredis above stay sequential because build_hiredis() does an
+          # in-tree `make clean && make` in the single shared
+          # /tmp/hiredis-src checkout, which would race under real
+          # concurrency. build_openssl()/build_mariadb() build into
+          # per-target scratch dirs instead (see their definitions above), so
+          # these 3 independent targets are safe to build concurrently here.
+          (
+            build_openssl x86_64-linux-musl linux-x86_64 CC=musl-gcc
+            build_mariadb x86_64-linux-musl linux-x86_64 -DCMAKE_C_COMPILER=musl-gcc
+          ) &
+          (
+            build_openssl x86_64-w64-windows-gnu mingw64 --cross-compile-prefix=x86_64-w64-mingw32-
+            build_mariadb x86_64-w64-windows-gnu mingw64 -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc
+          ) &
+          (
+            build_openssl hostlibs linux-x86_64 CC=gcc
+            build_mariadb hostlibs linux-x86_64 -DCMAKE_C_COMPILER=gcc
+          ) &
+          wait
 
           # aarch64/i686/arm need the full cross-tools/musl-cross toolchain
           # (not just the trimmed crt1.o/libc.a the sysroot-embed step
           # keeps) - fetch it fresh here, use its bundled gcc + headers,
           # then discard everything except the resulting .a files.
+          #
+          # Split into two passes: fetching the toolchain and building
+          # sqlite3/hiredis (build_all) touch shared host state (the single
+          # /tmp/hiredis-src checkout - see build_all's own parallelism note
+          # above) and stay sequential per arch below; the actual
+          # openssl+mariadb builds are queued into the ARCH_* arrays and run
+          # concurrently across all 3 archs afterward, same as the x86_64/
+          # hostlibs targets above.
+          ARCH_TARGETS=(); ARCH_GCC=(); ARCH_OSSL=(); ARCH_ARCH=(); ARCH_CTRIPLE=()
           for pair in aarch64:aarch64-linux-musl:aarch64-unknown-linux-musl:linux-aarch64 \
                       i686:i686-linux-musl:i686-unknown-linux-musl:linux-x86 \
                       arm:arm-linux-musleabihf:arm-unknown-linux-musleabihf:linux-armv4; do
             arch="${pair%%:*}"; rest="${pair#*:}"; target="${rest%%:*}"
             rest2="${rest#*:}"; ctriple="${rest2%%:*}"; ossl_target="${rest2#*:}"
             need_build sqlite3 "$target" || need_build hiredis "$target" \
-              || need_build openssl "$target" || need_build mariadb "$target" || {
+              || need_build_openssl "$target" || need_build mariadb "$target" || {
               echo "reusing cached static libs for $target"; continue; }
             rm -rf "/tmp/xtc-${arch}"; mkdir -p "/tmp/xtc-${arch}"
             if curl -fL --connect-timeout 5 --max-time 300 --speed-limit 512 --speed-time 30 \
@@ -401,15 +462,36 @@ jobs:
                      -o -name "*musleabihf-ar" | head -1)
               if [ -n "$GCC" ] && [ -n "$AR" ]; then
                 build_all "$target" "$GCC" "$AR"
-                build_openssl "$target" "$ossl_target" "--cross-compile-prefix=$(dirname "$GCC")/${ctriple}-"
-                build_mariadb "$target" "$ossl_target" -DCMAKE_SYSTEM_NAME=Linux \
-                  -DCMAKE_SYSTEM_PROCESSOR="$arch" -DCMAKE_C_COMPILER="$GCC"
+                # $GCC/$AR point inside /tmp/xtc-${arch}: queue this arch for
+                # the parallel openssl/mariadb pass below instead of
+                # cleaning up the fetched toolchain right away (the
+                # unconditional cleanup a few lines down is skipped via
+                # `continue` for exactly this case), since that pass still
+                # needs a real cross-gcc/ar to invoke. All queued archs'
+                # toolchains are removed together after that pass completes.
+                ARCH_TARGETS+=("$target"); ARCH_GCC+=("$GCC"); ARCH_OSSL+=("$ossl_target")
+                ARCH_ARCH+=("$arch"); ARCH_CTRIPLE+=("$ctriple")
+                continue
               else
                 echo "::warning::could not locate cross-gcc/ar for $arch in the fetched toolchain; skipping static third-party libs for $target"
               fi
             else
               echo "::warning::could not fetch $arch musl-cross toolchain; skipping static third-party libs for $target"
             fi
+            chmod -R u+rwX "/tmp/xtc-${arch}" 2>/dev/null || true
+            rm -rf "/tmp/xtc-${arch}" "/tmp/xtc-${arch}.tar"
+          done
+          for i in "${!ARCH_TARGETS[@]}"; do
+            target="${ARCH_TARGETS[$i]}"; GCC="${ARCH_GCC[$i]}"; ossl_target="${ARCH_OSSL[$i]}"
+            arch="${ARCH_ARCH[$i]}"; ctriple="${ARCH_CTRIPLE[$i]}"
+            (
+              build_openssl "$target" "$ossl_target" "--cross-compile-prefix=$(dirname "$GCC")/${ctriple}-"
+              build_mariadb "$target" "$ossl_target" -DCMAKE_SYSTEM_NAME=Linux \
+                -DCMAKE_SYSTEM_PROCESSOR="$arch" -DCMAKE_C_COMPILER="$GCC"
+            ) &
+          done
+          wait
+          for arch in aarch64 i686 arm; do
             chmod -R u+rwX "/tmp/xtc-${arch}" 2>/dev/null || true
             rm -rf "/tmp/xtc-${arch}" "/tmp/xtc-${arch}.tar"
           done
@@ -491,7 +573,7 @@ jobs:
           fi
           rm -f smoke.salam smoke_exe smoke_musl smoke.exe smoke_a64 smoke_i686 smoke_armhf smoke.o salam_mod_*.c salam_mod_*.h
       - name: Validate full test suite (release gate)
-        if: startsWith(github.event.head_commit.message, 'release:')
+        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         run: |
           sudo apt-get install -y tcc libhiredis-dev libmariadb-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           cd c
@@ -599,7 +681,7 @@ jobs:
           ./salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
           rm -f smoke.salam smoke_exe smoke.o salam_mod_*.c salam_mod_*.h
       - name: Validate test suite (release gate)
-        if: startsWith(github.event.head_commit.message, 'release:')
+        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         run: |
           cd c
           SALAM="$GITHUB_WORKSPACE/salam" sh tools/bash/run-tests.sh exec errors layout llvm 2>&1 | tee /tmp/tests.log || true
@@ -809,6 +891,12 @@ jobs:
           pacman -Sy --noconfirm --needed git unzip >/dev/null
           mkdir -p /c/extralibs/x86_64-w64-windows-gnu
           need_build() { [ ! -f "/c/extralibs/x86_64-w64-windows-gnu/lib$1.a" ]; }
+          # openssl below writes libssl.a + libcrypto.a, not a "libopenssl.a"
+          # - need_build()'s generic lib$1.a pattern doesn't match either
+          # file, so a plain `need_build openssl` is always true and would
+          # force a from-source openssl rebuild (~5 min) on every run
+          # regardless of cache. Check the real output files instead.
+          need_build_openssl() { [ ! -f "/c/extralibs/x86_64-w64-windows-gnu/libssl.a" ] || [ ! -f "/c/extralibs/x86_64-w64-windows-gnu/libcrypto.a" ]; }
           if need_build sqlite3; then
             curl -fL --connect-timeout 10 --max-time 120 -o /tmp/sqlite3.zip \
               "https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip"
@@ -837,56 +925,73 @@ jobs:
           else
             echo "reusing cached libhiredis.a for x86_64-w64-windows-gnu"
           fi
-          if need_build openssl; then
-            pacman -Sy --noconfirm --needed perl >/dev/null
-            curl -fL --connect-timeout 15 --max-time 180 -o /tmp/openssl.tar.gz \
-              "https://github.com/openssl/openssl/releases/download/openssl-3.6.3/openssl-3.6.3.tar.gz"
-            echo "243a86649cf6f23eeb6a2ff2456e09e5d77dd9018a54d3d96b0c6bdd6ba6c7f1  /tmp/openssl.tar.gz" \
-              | sha256sum -c -
-            rm -rf /tmp/openssl-build; mkdir -p /tmp/openssl-build
-            tar xf /tmp/openssl.tar.gz -C /tmp/openssl-build --strip-components=1
-            if ( cd /tmp/openssl-build && ./Configure mingw64 no-shared no-tests no-docs no-apps \
-                      no-secure-memory no-engine \
-                 && make -j"$(nproc)" build_libs ) >/tmp/openssl-build.log 2>&1 \
-               && [ -f /tmp/openssl-build/libssl.a ] && [ -f /tmp/openssl-build/libcrypto.a ]; then
-              cp /tmp/openssl-build/libssl.a /tmp/openssl-build/libcrypto.a \
-                /c/extralibs/x86_64-w64-windows-gnu/
-              echo "built libssl.a/libcrypto.a for x86_64-w64-windows-gnu"
-            else
-              echo "::warning::openssl build failed for x86_64-w64-windows-gnu; skipping static openssl"
-              tail -60 /tmp/openssl-build.log || true
-            fi
-            rm -rf /tmp/openssl-build /tmp/openssl.tar.gz
-          else
-            echo "reusing cached openssl for x86_64-w64-windows-gnu"
+          # openssl and mariadb (SCHANNEL here, not linked against the
+          # openssl built below at all - unlike the Linux job, see its
+          # comment) are fully independent on Windows, so they build
+          # concurrently below into their own already-distinct scratch dirs
+          # (/tmp/openssl-build vs /tmp/mariadb-build). Their pacman package
+          # installs are hoisted into one combined call first since pacman
+          # itself cannot run two concurrent instances (db lock).
+          if need_build_openssl || need_build mariadb; then
+            pkgs=""
+            if need_build_openssl; then pkgs="$pkgs perl"; fi
+            if need_build mariadb; then pkgs="$pkgs mingw-w64-x86_64-cmake"; fi
+            # shellcheck disable=SC2086
+            pacman -Sy --noconfirm --needed $pkgs >/dev/null
           fi
-          if need_build mariadb; then
-            pacman -Sy --noconfirm --needed mingw-w64-x86_64-cmake >/dev/null
-            git clone --quiet --depth 1 --branch v3.4.9 \
-              https://github.com/mariadb-corporation/mariadb-connector-c.git /tmp/mariadb-src
-            rm -rf /tmp/mariadb-build; mkdir -p /tmp/mariadb-build
-            if ( cd /tmp/mariadb-build \
-                 && cmake /tmp/mariadb-src -G "MSYS Makefiles" -DCMAKE_BUILD_TYPE=Release \
-                      -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF -DWITH_SSL=SCHANNEL \
-                 && cmake --build . --target mariadbclient -j"$(nproc)" ) \
-                 >/tmp/mariadb-build.log 2>&1; then
-              LIB=$(find /tmp/mariadb-build -name "libmariadbclient.a" | head -1)
-              if [ -n "$LIB" ]; then
-                cp "$LIB" /c/extralibs/x86_64-w64-windows-gnu/libmariadbclient.a
-                cp "$LIB" /c/extralibs/x86_64-w64-windows-gnu/libmariadb.a
-                cp "$LIB" /c/extralibs/x86_64-w64-windows-gnu/libmysqlclient.a
-                echo "built libmariadb.a for x86_64-w64-windows-gnu"
+          (
+            if need_build_openssl; then
+              curl -fL --connect-timeout 15 --max-time 180 -o /tmp/openssl.tar.gz \
+                "https://github.com/openssl/openssl/releases/download/openssl-3.6.3/openssl-3.6.3.tar.gz"
+              echo "243a86649cf6f23eeb6a2ff2456e09e5d77dd9018a54d3d96b0c6bdd6ba6c7f1  /tmp/openssl.tar.gz" \
+                | sha256sum -c -
+              rm -rf /tmp/openssl-build; mkdir -p /tmp/openssl-build
+              tar xf /tmp/openssl.tar.gz -C /tmp/openssl-build --strip-components=1
+              if ( cd /tmp/openssl-build && ./Configure mingw64 no-shared no-tests no-docs no-apps \
+                        no-secure-memory no-engine \
+                   && make -j"$(nproc)" build_libs ) >/tmp/openssl-build.log 2>&1 \
+                 && [ -f /tmp/openssl-build/libssl.a ] && [ -f /tmp/openssl-build/libcrypto.a ]; then
+                cp /tmp/openssl-build/libssl.a /tmp/openssl-build/libcrypto.a \
+                  /c/extralibs/x86_64-w64-windows-gnu/
+                echo "built libssl.a/libcrypto.a for x86_64-w64-windows-gnu"
               else
-                echo "::warning::mariadb build reported success but libmariadbclient.a is missing; skipping"
+                echo "::warning::openssl build failed for x86_64-w64-windows-gnu; skipping static openssl"
+                tail -60 /tmp/openssl-build.log || true
               fi
+              rm -rf /tmp/openssl-build /tmp/openssl.tar.gz
             else
-              echo "::warning::mariadb build failed for x86_64-w64-windows-gnu; skipping static mariadb"
-              tail -80 /tmp/mariadb-build.log || true
+              echo "reusing cached openssl for x86_64-w64-windows-gnu"
             fi
-            rm -rf /tmp/mariadb-build /tmp/mariadb-src
-          else
-            echo "reusing cached mariadb for x86_64-w64-windows-gnu"
-          fi
+          ) &
+          (
+            if need_build mariadb; then
+              git clone --quiet --depth 1 --branch v3.4.9 \
+                https://github.com/mariadb-corporation/mariadb-connector-c.git /tmp/mariadb-src
+              rm -rf /tmp/mariadb-build; mkdir -p /tmp/mariadb-build
+              if ( cd /tmp/mariadb-build \
+                   && cmake /tmp/mariadb-src -G "MSYS Makefiles" -DCMAKE_BUILD_TYPE=Release \
+                        -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF -DWITH_SSL=SCHANNEL \
+                   && cmake --build . --target mariadbclient -j"$(nproc)" ) \
+                   >/tmp/mariadb-build.log 2>&1; then
+                LIB=$(find /tmp/mariadb-build -name "libmariadbclient.a" | head -1)
+                if [ -n "$LIB" ]; then
+                  cp "$LIB" /c/extralibs/x86_64-w64-windows-gnu/libmariadbclient.a
+                  cp "$LIB" /c/extralibs/x86_64-w64-windows-gnu/libmariadb.a
+                  cp "$LIB" /c/extralibs/x86_64-w64-windows-gnu/libmysqlclient.a
+                  echo "built libmariadb.a for x86_64-w64-windows-gnu"
+                else
+                  echo "::warning::mariadb build reported success but libmariadbclient.a is missing; skipping"
+                fi
+              else
+                echo "::warning::mariadb build failed for x86_64-w64-windows-gnu; skipping static mariadb"
+                tail -80 /tmp/mariadb-build.log || true
+              fi
+              rm -rf /tmp/mariadb-build /tmp/mariadb-src
+            else
+              echo "reusing cached mariadb for x86_64-w64-windows-gnu"
+            fi
+          ) &
+          wait
           echo "SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR=C:/extralibs/x86_64-w64-windows-gnu" \
             >> "$GITHUB_ENV"
           # This job's own native (no --target=) build IS x86_64-w64-windows-gnu
@@ -1076,7 +1181,7 @@ jobs:
           cd ..
 
       - name: Install native libraries for full test suite (hiredis, mariadb, sqlite3, openssl)
-        if: startsWith(github.event.head_commit.message, 'release:')
+        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
           MSYSTEM: MINGW64
@@ -1109,7 +1214,7 @@ jobs:
       # actual `.def` - generated via tcc's own bundled `-impdef`, exactly
       # as tcc-win32.txt documents for linking against arbitrary DLLs.
       - name: Stage native libs for full test suite (hiredis, mariadb, sqlite3, openssl, WebView2Loader)
-        if: startsWith(github.event.head_commit.message, 'release:')
+        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         shell: bash
         run: |
           set -eu
@@ -1134,7 +1239,7 @@ jobs:
       # on Windows silently no-ops without Developer Mode, which failed
       # tests would otherwise mask as ordinary link errors.
       - name: Enable Developer Mode (symlink support for db mock tests)
-        if: startsWith(github.event.head_commit.message, 'release:')
+        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         shell: pwsh
         run: |
           New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" `
@@ -1144,14 +1249,14 @@ jobs:
       # `choco install` take minutes for a single small package; caching the
       # installed package skips all of that on every run after the first.
       - name: Cache Chocolatey redis package
-        if: startsWith(github.event.head_commit.message, 'release:')
+        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\ProgramData\chocolatey\lib\redis
           key: choco-redis-${{ runner.os }}-v1
 
       - name: Validate test suite (release gate)
-        if: startsWith(github.event.head_commit.message, 'release:')
+        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         shell: bash
         run: |
           set -eu
@@ -1967,7 +2072,7 @@ jobs:
           fi
           rm -f smoke.salam smoke_exe smoke_a64 smoke_x64 smoke_i686 smoke_armhf smoke.exe smoke.o salam_mod_*.c salam_mod_*.h
       - name: Validate test suite (release gate)
-        if: startsWith(github.event.head_commit.message, 'release:')
+        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         run: |
           sudo apt-get install -y tcc
           cd c
@@ -2032,10 +2137,10 @@ jobs:
 
   create-release:
     if: |
-      github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
-      startsWith(github.event.head_commit.message, 'release:') &&
-      github.repository == 'SalamLang/Salam'
+      github.repository == 'SalamLang/Salam' &&
+      ((github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
+       (github.event_name == 'workflow_dispatch' && inputs.nightly))
     name: Create Release
     runs-on: ubuntu-latest
     needs:
@@ -2062,6 +2167,19 @@ jobs:
           VERSION=$(cat VERSION | sed 's/^[ \t]*//;s/[ \t]*$//')
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
           echo "Salam version: ${VERSION}"
+      - name: Compute release tag/title (nightly vs versioned)
+        run: |
+          if [ "${{ inputs.nightly }}" = "true" ]; then
+            NIGHTLY_DATE="${{ inputs.nightly_date }}"
+            [ -n "$NIGHTLY_DATE" ] || NIGHTLY_DATE="$(date -u +%Y-%m-%d)"
+            echo "TAG=nightly-${NIGHTLY_DATE}" >> "$GITHUB_ENV"
+            echo "RELEASE_TITLE=Salam Nightly Release ${NIGHTLY_DATE}" >> "$GITHUB_ENV"
+            echo "PRERELEASE_FLAG=--prerelease" >> "$GITHUB_ENV"
+          else
+            echo "TAG=v${VERSION}" >> "$GITHUB_ENV"
+            echo "RELEASE_TITLE=Salam Release v${VERSION}" >> "$GITHUB_ENV"
+            echo "PRERELEASE_FLAG=" >> "$GITHUB_ENV"
+          fi
       - name: Download Linux artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -2197,7 +2315,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v$VERSION"
           if gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null; then
             echo "Deleted existing release $TAG (and its tag)."
           else
@@ -2226,8 +2343,9 @@ jobs:
             for f in $c; do [ -e "$f" ] && assets+=("$f"); done
           done
           echo "Publishing ${#assets[@]} assets:"; printf '  %s\n' "${assets[@]}"
-          gh release create "v$VERSION" \
+          gh release create "$TAG" \
             --target "$GITHUB_SHA" \
-            --title "Salam Release v$VERSION" \
+            --title "$RELEASE_TITLE" \
             --generate-notes \
+            ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
             "${assets[@]}"

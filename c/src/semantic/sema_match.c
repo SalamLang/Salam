@@ -16,7 +16,10 @@
 #include "core/sal_format.h"
 #include "semantic/sema_internal.h"
 
-static const char *plural_suffix(size_t n) { return n == 1 ? "" : "s"; }
+static const char *plural_suffix(size_t n)
+{
+    return n == 1 ? "" : "s";
+}
 
 static type_t *ty(sema_t *s, type_kind_t k)
 {

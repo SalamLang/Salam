@@ -28,7 +28,10 @@
 #include "driver/llvm_toolchain.h"
 #include "i18n/i18n.h"
 
-static const char *plural_suffix(int n) { return n == 1 ? "" : "s"; }
+static const char *plural_suffix(int n)
+{
+    return n == 1 ? "" : "s";
+}
 
 static const char *module_of(arena_t *a, const char *path)
 {

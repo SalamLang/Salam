@@ -17,7 +17,10 @@
 #include "semantic/builtins.h"
 #include "semantic/dce.h"
 
-static const char *plural_suffix(size_t n) { return n == 1 ? "" : "s"; }
+static const char *plural_suffix(size_t n)
+{
+    return n == 1 ? "" : "s";
+}
 
 static type_t *ty(sema_t *s, type_kind_t k)
 {
@@ -438,8 +441,8 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             const salam_builtin_t *b = salam_builtin_lookup(nm);
             if (b) {
                 if (b->nargs >= 0 && (int)argtypes.len != b->nargs)
-                    SERR(s, 12, &n->span, "builtin '%s' takes %d argument%s, got %zu",
-                         nm, b->nargs, plural_suffix((size_t)b->nargs), argtypes.len);
+                    SERR(s, 12, &n->span, "builtin '%s' takes %d argument%s, got %zu", nm,
+                         b->nargs, plural_suffix((size_t)b->nargs), argtypes.len);
 
                 if (strcmp(b->arg, "*") != 0) {
                     int ak = type_prim_kind_from_name(b->arg, NULL);

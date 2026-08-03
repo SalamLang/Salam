@@ -56,7 +56,10 @@ typedef struct {
         LOG_E((ex)->log, PH_DRIVER, __VA_ARGS__);                                        \
         (ex)->errors++;                                                                  \
     } while (0)
-static const char *plural_suffix(size_t n) { return n == 1 ? "" : "s"; }
+static const char *plural_suffix(size_t n)
+{
+    return n == 1 ? "" : "s";
+}
 
 static bool name_eq(const char *a, const char *b)
 {

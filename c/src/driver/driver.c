@@ -82,7 +82,10 @@ const char *salam_scratch_dir(void)
     return SALAM_SCRATCH_DIR;
 }
 
-static const char *plural_suffix(int n) { return n == 1 ? "" : "s"; }
+static const char *plural_suffix(int n)
+{
+    return n == 1 ? "" : "s";
+}
 
 static int write_xml(logger_t *log, const sb_t *sb, const char *xml_out, const char *what)
 {

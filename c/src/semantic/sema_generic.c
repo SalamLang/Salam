@@ -23,7 +23,10 @@ symbol_t *generic_template(sema_t *s, const char *name, sym_kind_t kind)
     return NULL;
 }
 
-static const char *plural_suffix(size_t n) { return n == 1 ? "" : "s"; }
+static const char *plural_suffix(size_t n)
+{
+    return n == 1 ? "" : "s";
+}
 
 static void g_sanitize(const char *ts, char *out, size_t cap)
 {

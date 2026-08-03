@@ -40,7 +40,10 @@ static char g_stdlib_root_buf[1200];
 static const char *g_stdlib_root = NULL;
 static bool g_stdlib_resolved = false;
 
-static const char *plural_suffix(size_t n) { return n == 1 ? "" : "s"; }
+static const char *plural_suffix(size_t n)
+{
+    return n == 1 ? "" : "s";
+}
 
 static bool file_exists(const char *p);
 

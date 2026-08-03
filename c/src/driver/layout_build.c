@@ -73,7 +73,10 @@ static const char *path_ext(arena_t *a, const char *mod, const char *ext)
     return p;
 }
 
-static const char *plural_suffix(size_t n) { return n == 1 ? "" : "s"; }
+static const char *plural_suffix(size_t n)
+{
+    return n == 1 ? "" : "s";
+}
 
 static ast_node_t *find_layout(ast_node_t *program)
 {

@@ -15,7 +15,10 @@
 #include "jsgen/jsgen_internal.h"
 #include "i18n/i18n.h"
 
-static const char *plural_suffix(size_t n) { return n == 1 ? "" : "s"; }
+static const char *plural_suffix(size_t n)
+{
+    return n == 1 ? "" : "s";
+}
 
 static void collect_local_names(jg_t *g, ast_node_t *n)
 {

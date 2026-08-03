@@ -78,6 +78,8 @@ import lv "llvm.salam"
 import jg "jsgen.salam"
 import mn "minify.salam"
 import lo "sal_layout.salam"
+import thread
+import sync
 
 // process spawn (system()) - same idiom the C driver uses directly; no
 // link needed, libc is always linked.
@@ -195,6 +197,12 @@ pub struct Dr:
         pub fmt_fix_order: bool = false
         pub debug_info: bool = false
         pub asan: bool = false
+        // Whole-program LTO for the final link (gcc/clang only). Opt-in:
+        // on this toolchain's Windows lto-wrapper, LTRANS always falls back
+        // to serial compilation regardless of -flto=N, so a plain optimizing
+        // build compiles its .c files in parallel (compile_parallel below)
+        // and skips LTO by default instead of paying that serial cost.
+        pub lto: bool = false
         pub interp: bool = false
         pub timeout_ms: int = 0
         pub stdlib_path: str = ""
@@ -468,6 +476,98 @@ pub struct Dr:
             ret false
         end
         ret stderr_is_tty()
+    end
+
+    // Not from build.c: parallel object-file compilation. A single
+    // `gcc a.c b.c ... -o exe` invocation compiles each translation unit
+    // one at a time inside one gcc process; compiling each .c to its own
+    // .o across worker threads, then linking the .o files, uses every
+    // core instead. Shared mutable job-queue state is fine here since
+    // compile_parallel is only ever called once per build, never nested.
+    mut g_cw_jobs := Vector {} as Vector<str>
+    mut g_cw_next := 0
+    mut g_cw_mu := sync.NewMutex()
+    mut g_cw_rc := 0
+
+    // Thread entry point (spawn() requires a plain, zero-arg, void-returning
+    // top-level function - see semantic.salam's "spawn" builtin check).
+    func compile_worker():
+        mut running := true
+        until !running:
+            sync.Lock(g_cw_mu)
+            mut idx := 0 - 1
+            if g_cw_next < g_cw_jobs.len():
+                idx = g_cw_next
+                g_cw_next += 1
+            end
+            sync.Unlock(g_cw_mu)
+            if idx < 0:
+                running = false
+            else:
+                job_rc := proc_status(system(g_cw_jobs.get(idx)[0]))
+                if job_rc != 0:
+                    sync.Lock(g_cw_mu)
+                    if g_cw_rc == 0:
+                        g_cw_rc = job_rc
+                    end
+                    sync.Unlock(g_cw_mu)
+                end
+            end
+        end
+    end
+
+    // Best-effort logical CPU count (NUMBER_OF_PROCESSORS on Windows,
+    // `nproc` elsewhere); falls back to 4 workers if detection fails.
+    func cpu_count(): int:
+        mut txt := ""
+        if SALAM_OS_WINDOWS:
+            txt = os.Env("NUMBER_OF_PROCESSORS")
+        else:
+            res := os.RunCapture("nproc")
+            txt = str.TrimRight(res.out)
+        end
+        n := str.Len(txt)
+        if n == 0:
+            ret 4
+        end
+        mut v := 0
+        repeat n with i:
+            c := byte_at(txt, i)
+            if c < 48 || c > 57:
+                ret 4
+            end
+            v = v * 10 + (c - 48)
+        end
+        if v <= 0:
+            ret 4
+        end
+        ret v
+    end
+
+    // Runs `jobs` (each a complete "cc ... -c file -o file.o" command)
+    // across min(cpu_count(), jobs.len()) worker threads. Returns the
+    // first nonzero exit code seen (0 if every job succeeded).
+    func compile_parallel(jobs: Vector<str>): int:
+        if jobs.len() == 0:
+            ret 0
+        end
+        g_cw_jobs = jobs
+        g_cw_next = 0
+        g_cw_rc = 0
+        mut workers := cpu_count()
+        if workers > jobs.len():
+            workers = jobs.len()
+        end
+        if workers < 1:
+            workers = 1
+        end
+        mut threads := Vector {} as Vector<thread.Thread>
+        repeat workers with wi:
+            threads.push(thread.New(spawn(compile_worker)))
+        end
+        thread.JoinAll(threads)
+        threads.free()
+        ret g_cw_rc
     end
 
     // driver/build.c driver_build (the CMD_BUILD/CMD_OBJ shared body; `opt`
@@ -927,49 +1027,20 @@ pub struct Dr:
             else:
                 lm = " -lm"
             end
-            mut lto_flag := ""
-            if optimizing_build && !use_tcc:
-                if SALAM_OS_WINDOWS:
-                    if !str.Contains(opt.cc, "clang"):
-                        lto_flag = " -flto"
-                    end
-                else:
-                    lto_flag = " -flto"
-                end
-            end
 
-            mut cmdb := str.NewBuilder()
-            str.BufAppend(cmdb, opt.cc)
-            if musl_tcc.active:
-                str.BufAppend(cmdb, " -B")
-                str.BufAppend(cmdb, shell_arg(musl_tcc.tcc_dir))
-                str.BufAppend(cmdb, " -nostdlib -static -I")
-                str.BufAppend(cmdb, shell_arg(musl_tcc.tcc_dir))
-                str.BufAppend(cmdb, "/include -I")
-                str.BufAppend(cmdb, shell_arg(musl_tcc.musl_dir))
-                str.BufAppend(cmdb, "/include -L")
-                str.BufAppend(cmdb, shell_arg(musl_tcc.musl_dir))
-                str.BufAppend(cmdb, "/lib")
+            if opt.debug_info && use_tcc:
+                lg.Log(
+                    lgr, lg.PH_DRIVER, lg.LOG_WARN, "tcc has limited debug-symbol support; prefer --cc=gcc or " + "--cc=clang with -g"
+                )
             end
-            str.BufAppend(cmdb, opt_flag)
-            str.BufAppend(cmdb, lto_flag)
-            str.BufAppend(cmdb, " -I. -o ")
-            str.BufAppend(cmdb, shell_arg(output))
-            if opt.debug_info:
-                if use_tcc:
-                    lg.Log(
-                        lgr, lg.PH_DRIVER, lg.LOG_WARN, "tcc has limited debug-symbol support; prefer --cc=gcc or " + "--cc=clang with -g"
-                    )
-                else:
-                    str.BufAppend(cmdb, " -g")
-                end
-            end
+            dbg_flag2 := (opt.debug_info && no_tcc_opt) ? " -g" : ""
+
+            mut asan_flag := ""
             if opt.asan:
                 if use_tcc:
                     lg.Log(
                         lgr, lg.PH_DRIVER, lg.LOG_ERROR, "tcc does not support AddressSanitizer; use --cc=gcc or --cc=clang"
                     )
-                    str.BufFree(cmdb)
                     if !opt.keep_c:
                         repeat generated.len() with gi3:
                             _rm3 := os.Remove(generated.get(gi3)[0])
@@ -977,61 +1048,166 @@ pub struct Dr:
                     end
                     ret 2
                 end
-                str.BufAppend(cmdb, " -fsanitize=address -fno-omit-frame-pointer")
-                str.BufAppend(cmdb, " -DSALAM_MEM_DEBUG")
+                asan_flag = " -fsanitize=address -fno-omit-frame-pointer -DSALAM_MEM_DEBUG"
             end
 
+            mut link_defines := ""
             repeat links.len() with li:
-                str.BufAppend(cmdb, " -DSALAM_LINK_")
-                str.BufAppend(cmdb, sanitize_ident(links.get(li)[0]))
+                link_defines = link_defines + " -DSALAM_LINK_" + sanitize_ident(links.get(li)[0])
             end
 
-            if musl_tcc.active:
-                str.BufAppendChar(cmdb, 32)
-                str.BufAppend(cmdb, shell_arg(musl_tcc.musl_dir + "/lib/crt1.o"))
-                str.BufAppendChar(cmdb, 32)
-                str.BufAppend(cmdb, shell_arg(musl_tcc.musl_dir + "/lib/crti.o"))
-            end
-
-            repeat cfiles.len() with ci:
-                str.BufAppendChar(cmdb, 32)
-                str.BufAppend(cmdb, shell_arg(cfiles.get(ci)[0]))
-            end
-            str.BufAppend(cmdb, lm)
-
-            repeat links.len() with li2:
-                emit_link(cmdb, lgr, links.get(li2)[0], link_kinds.get(li2)[0], use_tcc)
-            end
-
-            if musl_tcc.active:
-                libgcc := musl_tcc.musl_dir + "/lib/libgcc.a"
-                str.BufAppend(cmdb, " -lc ")
-                str.BufAppend(cmdb, shell_arg(libgcc))
-                str.BufAppendChar(cmdb, 32)
-                libtcc1 := musl_tcc.tcc_dir + "/libtcc1.a"
-                str.BufAppend(cmdb, shell_arg(libtcc1))
-                str.BufAppend(cmdb, " -lc ")
-                str.BufAppend(cmdb, shell_arg(libgcc))
-                crtn := musl_tcc.musl_dir + "/lib/crtn.o"
-                str.BufAppendChar(cmdb, 32)
-                str.BufAppend(cmdb, shell_arg(crtn))
-            end
-
-            cmdtext := str.BufStr(cmdb)
-            str.BufFree(cmdb)
-            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "linking: " + cmdtext)
-            crc = proc_status(system(cmdtext))
-            if crc != 0:
+            if !opt.lto && !musl_tcc.active:
+                // Fast path (default): compile every .c to its own .o across
+                // worker threads, then one ordinary (non-LTO) link. See
+                // compile_parallel's comment for why LTO stays opt-in instead.
+                mut objs := Vector {} as Vector<str>
+                mut jobs := Vector {} as Vector<str>
+                repeat cfiles.len() with ci2:
+                    cf2 := cfiles.get(ci2)[0]
+                    obj2 := str.Substr(cf2, 0, str.Len(cf2) - 2) + ".o"
+                    objs.push(obj2)
+                    mut jb := str.NewBuilder()
+                    str.BufAppend(jb, opt.cc)
+                    str.BufAppend(jb, " -c -I.")
+                    str.BufAppend(jb, opt_flag)
+                    str.BufAppend(jb, dbg_flag2)
+                    str.BufAppend(jb, asan_flag)
+                    str.BufAppend(jb, link_defines)
+                    str.BufAppendChar(jb, 32)
+                    str.BufAppend(jb, shell_arg(cf2))
+                    str.BufAppend(jb, " -o ")
+                    str.BufAppend(jb, shell_arg(obj2))
+                    jobs.push(str.BufStr(jb))
+                    str.BufFree(jb)
+                end
                 lg.Log(
-                    lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
-                        i18.Tr("C compiler '%s' failed (exit %d)"), co.ArgStr(opt.cc), co.ArgInt(crc as i64)
-                    )
+                    lgr, lg.PH_DRIVER, lg.LOG_INFO, "compiling " + str.FromInt(jobs.len() as i64) + " object file(s) in parallel"
                 )
-                rc = 3
+                crc = compile_parallel(jobs)
+                jobs.free()
+                if crc != 0:
+                    lg.Log(
+                        lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                            i18.Tr("C compiler '%s' failed (exit %d)"), co.ArgStr(opt.cc), co.ArgInt(crc as i64)
+                        )
+                    )
+                    rc = 3
+                else:
+                    mut cmdb2 := str.NewBuilder()
+                    str.BufAppend(cmdb2, opt.cc)
+                    str.BufAppend(cmdb2, asan_flag)
+                    str.BufAppend(cmdb2, " -I. -o ")
+                    str.BufAppend(cmdb2, shell_arg(output))
+                    repeat objs.len() with oi2:
+                        str.BufAppendChar(cmdb2, 32)
+                        str.BufAppend(cmdb2, shell_arg(objs.get(oi2)[0]))
+                    end
+                    str.BufAppend(cmdb2, lm)
+                    repeat links.len() with li2:
+                        emit_link(cmdb2, lgr, links.get(li2)[0], link_kinds.get(li2)[0], use_tcc)
+                    end
+                    cmdtext2 := str.BufStr(cmdb2)
+                    str.BufFree(cmdb2)
+                    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "linking: " + cmdtext2)
+                    crc = proc_status(system(cmdtext2))
+                    if crc != 0:
+                        lg.Log(
+                            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                                i18.Tr("C compiler '%s' failed (exit %d)"), co.ArgStr(opt.cc), co.ArgInt(crc as i64)
+                            )
+                        )
+                        rc = 3
+                    else:
+                        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "built executable: " + output)
+                        if str.Len(opt.exe_path) == 0:
+                            opt.exe_path = output
+                        end
+                    end
+                end
+                repeat objs.len() with oi3:
+                    _rmo := os.Remove(objs.get(oi3)[0])
+                end
+                objs.free()
             else:
-                lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "built executable: " + output)
-                if str.Len(opt.exe_path) == 0:
-                    opt.exe_path = output
+                mut lto_flag := ""
+                if optimizing_build && !use_tcc:
+                    if SALAM_OS_WINDOWS:
+                        if !str.Contains(opt.cc, "clang"):
+                            lto_flag = " -flto"
+                        end
+                    else:
+                        lto_flag = " -flto"
+                    end
+                end
+
+                mut cmdb := str.NewBuilder()
+                str.BufAppend(cmdb, opt.cc)
+                if musl_tcc.active:
+                    str.BufAppend(cmdb, " -B")
+                    str.BufAppend(cmdb, shell_arg(musl_tcc.tcc_dir))
+                    str.BufAppend(cmdb, " -nostdlib -static -I")
+                    str.BufAppend(cmdb, shell_arg(musl_tcc.tcc_dir))
+                    str.BufAppend(cmdb, "/include -I")
+                    str.BufAppend(cmdb, shell_arg(musl_tcc.musl_dir))
+                    str.BufAppend(cmdb, "/include -L")
+                    str.BufAppend(cmdb, shell_arg(musl_tcc.musl_dir))
+                    str.BufAppend(cmdb, "/lib")
+                end
+                str.BufAppend(cmdb, opt_flag)
+                str.BufAppend(cmdb, lto_flag)
+                str.BufAppend(cmdb, " -I. -o ")
+                str.BufAppend(cmdb, shell_arg(output))
+                str.BufAppend(cmdb, dbg_flag2)
+                str.BufAppend(cmdb, asan_flag)
+                str.BufAppend(cmdb, link_defines)
+
+                if musl_tcc.active:
+                    str.BufAppendChar(cmdb, 32)
+                    str.BufAppend(cmdb, shell_arg(musl_tcc.musl_dir + "/lib/crt1.o"))
+                    str.BufAppendChar(cmdb, 32)
+                    str.BufAppend(cmdb, shell_arg(musl_tcc.musl_dir + "/lib/crti.o"))
+                end
+
+                repeat cfiles.len() with ci:
+                    str.BufAppendChar(cmdb, 32)
+                    str.BufAppend(cmdb, shell_arg(cfiles.get(ci)[0]))
+                end
+                str.BufAppend(cmdb, lm)
+
+                repeat links.len() with li2b:
+                    emit_link(cmdb, lgr, links.get(li2b)[0], link_kinds.get(li2b)[0], use_tcc)
+                end
+
+                if musl_tcc.active:
+                    libgcc := musl_tcc.musl_dir + "/lib/libgcc.a"
+                    str.BufAppend(cmdb, " -lc ")
+                    str.BufAppend(cmdb, shell_arg(libgcc))
+                    str.BufAppendChar(cmdb, 32)
+                    libtcc1 := musl_tcc.tcc_dir + "/libtcc1.a"
+                    str.BufAppend(cmdb, shell_arg(libtcc1))
+                    str.BufAppend(cmdb, " -lc ")
+                    str.BufAppend(cmdb, shell_arg(libgcc))
+                    crtn := musl_tcc.musl_dir + "/lib/crtn.o"
+                    str.BufAppendChar(cmdb, 32)
+                    str.BufAppend(cmdb, shell_arg(crtn))
+                end
+
+                cmdtext := str.BufStr(cmdb)
+                str.BufFree(cmdb)
+                lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "linking: " + cmdtext)
+                crc = proc_status(system(cmdtext))
+                if crc != 0:
+                    lg.Log(
+                        lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                            i18.Tr("C compiler '%s' failed (exit %d)"), co.ArgStr(opt.cc), co.ArgInt(crc as i64)
+                        )
+                    )
+                    rc = 3
+                else:
+                    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "built executable: " + output)
+                    if str.Len(opt.exe_path) == 0:
+                        opt.exe_path = output
+                    end
                 end
             end
         end

@@ -184,26 +184,8 @@ func _do_handshake12(c &: Conn, h &: Handshake, cfg: Config, buf &: Buf): bool:
     end
 
     // Verify the chain before sending anything derived from the shared secret.
-    mut roots := _roots_new()
-    defer _roots_free(roots)
-    if !cfg.insecure_skip_verify:
-        _roots_free(roots)
-        roots = _roots_load(cfg.ca_file)
-        if roots.count == 0:
-            ret _conn_fail(c, "no trusted roots available")
-        end
-        mut chain: Reader[8]
-        repeat 8 with i:
-            chain[i] = _newreader(null, 0)
-        end
-        repeat h.ncerts with i:
-            chain[i] = _newreader(_bufptr(h.certs, _cert_start(h, i)), _cert_len(h, i))
-        end
-        vr := _verify_chain(chain, h.ncerts, roots, c.host, _now_stamp())
-        if vr != VERR_NONE:
-            _rec_send_alert(h.rec, 2, ALERT_BAD_CERTIFICATE)
-            ret _conn_fail(c, "certificate verification failed: " + _verr_str(vr))
-        end
+    if !_verify_peer_chain(c, h, cfg):
+        ret false
     end
 
     // ClientKeyExchange
@@ -269,6 +251,39 @@ func _do_handshake12(c &: Conn, h &: Handshake, cfg: Config, buf &: Buf): bool:
 
     h.ok = true
     c.open = true
+    ret true
+end
+
+// Validate the peer's certificate chain against the configured trust store.
+//
+// Extracted because TLS 1.2 and TLS 1.3 previously carried byte-identical
+// copies of it. Two copies of the block that decides whether a connection is
+// trustworthy is the worst possible place for duplication: a fix to one is a
+// fix nobody applied to the other, and the untouched copy is still deciding.
+//
+// Returns false with the connection failed and an alert sent, so callers do
+// nothing but propagate.
+func _verify_peer_chain(c &: Conn, h &: Handshake, cfg: Config): bool:
+    if cfg.insecure_skip_verify:
+        ret true
+    end
+    mut roots := _roots_load(cfg.ca_file)
+    defer _roots_free(roots)
+    if roots.count == 0:
+        ret _conn_fail(c, "no trusted roots available")
+    end
+    mut chain: Reader[8]
+    repeat 8 with i:
+        chain[i] = _newreader(null, 0)
+    end
+    repeat h.ncerts with i:
+        chain[i] = _newreader(_bufptr(h.certs, _cert_start(h, i)), _cert_len(h, i))
+    end
+    vr := _verify_chain(chain, h.ncerts, roots, c.host, _now_stamp())
+    if vr != VERR_NONE:
+        _rec_send_alert(h.rec, 2, ALERT_BAD_CERTIFICATE)
+        ret _conn_fail(c, "certificate verification failed: " + _verr_str(vr))
+    end
     ret true
 end
 
@@ -414,28 +429,9 @@ func _do_handshake(c &: Conn, cfg: Config): bool:
     // Certificate chain validation. Doing this after CertificateVerify means a
     // server that fails either check is rejected; doing it before would leak
     // slightly less, but the ordering does not affect the outcome.
-    mut roots := _roots_new()
-    defer _roots_free(roots)
-    if !cfg.insecure_skip_verify:
-        _roots_free(roots)
-        roots = _roots_load(cfg.ca_file)
-        if roots.count == 0:
-            c.h = h
-            ret _conn_fail(c, "no trusted roots available")
-        end
-        mut chain: Reader[8]
-        repeat 8 with i:
-            chain[i] = _newreader(null, 0)
-        end
-        repeat h.ncerts with i:
-            chain[i] = _newreader(_bufptr(h.certs, _cert_start(h, i)), _cert_len(h, i))
-        end
-        vr := _verify_chain(chain, h.ncerts, roots, c.host, _now_stamp())
-        if vr != VERR_NONE:
-            c.h = h
-            _rec_send_alert(h.rec, 2, ALERT_BAD_CERTIFICATE)
-            ret _conn_fail(c, "certificate verification failed: " + _verr_str(vr))
-        end
+    if !_verify_peer_chain(c, h, cfg):
+        c.h = h
+        ret false
     end
 
     // The transcript for the server Finished covers everything through

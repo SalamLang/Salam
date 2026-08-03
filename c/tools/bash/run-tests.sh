@@ -301,19 +301,11 @@ mkdir -p "$WORK/results"
 printf '0\n' >"$WORK/.counter"
 trap 'rm -rf "$WORK"' EXIT
 LANGS="${LANGS:-en fa ar}"
-# Detect CPU count across every host compiler-release.yml runs on
-# (Linux incl. arm/i686, macOS, Windows/MSYS2 Git Bash) whether run
-# locally or on a GitHub Actions runner - all of which are just the
-# same OSes, so no CI-specific env var is needed here.
 if [ -z "$NPROC" ]; then
     command -v nproc >/dev/null 2>&1 && NPROC=$(nproc 2>/dev/null)
-    # macOS getconf lacks _NPROCESSORS_ONLN on some older releases.
     [ -z "$NPROC" ] && command -v getconf >/dev/null 2>&1 && NPROC=$(getconf _NPROCESSORS_ONLN 2>/dev/null)
-    # BSD/macOS fallback when getconf doesn't know the variable.
     [ -z "$NPROC" ] && command -v sysctl >/dev/null 2>&1 && NPROC=$(sysctl -n hw.ncpu 2>/dev/null)
-    # Native Windows sets this env var even without coreutils on PATH.
     [ -z "$NPROC" ] && [ -n "$NUMBER_OF_PROCESSORS" ] && NPROC="$NUMBER_OF_PROCESSORS"
-    # Last resort for minimal/BusyBox systems with none of the above.
     [ -z "$NPROC" ] && [ -r /proc/cpuinfo ] && NPROC=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
     NPROC="${NPROC:-4}"
 fi
@@ -380,15 +372,9 @@ pick_expect() {
 
 JOBS="$WORK/jobs.tsv"
 : >"$JOBS"
-# add_job <kind> <label> <file> <lang> <expected> [extra]
-# One tab-separated line per test; "-" marks an empty field (tab is IFS
-# whitespace in sh, so genuinely empty fields would collapse when the
-# worker re-splits the line).
 add_job() {
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "${6:--}" >>"$JOBS"
 }
-# note_result <block> <unique-label>: record a result decided at collect
-# time (probe SKIP/FAIL) without occupying a worker slot.
 note_result() {
     printf '%s\n' "$1" >"$WORK/results/s_$(printf '%s' "$2" | tr '/ .*' '____')"
     printf '%s\n' "$1"
@@ -412,9 +398,6 @@ want_example() {
     for s in $SECTIONS; do [ "$s" = examples ] && return 0; done
     return 1
 }
-
-# Collection order is heavy-first (multi-second builds before sub-second
-# checks) so the pool never drains into a long single-job tail.
 
 if want fmt; then
     for lang in $LANGS; do
@@ -486,9 +469,6 @@ if want db; then
             break
         }
     done
-    # The mysql mock source is identical across languages; build it once
-    # into the shared $WORK/dbwork that run-one-build.sh symlinks into
-    # every job dir.
     mockc=""
     for lang in $LANGS; do
         [ -f "../tests/$lang/db/mysql_mock.c" ] && {
@@ -548,15 +528,6 @@ if want js; then
     done
 fi
 
-# Cross-compiled builds against the statically-embedded third-party libs
-# (SALAM_EMBED_EXTRALIBS_*_DIR - see c/Makefile and
-# c/src/llvm/llvm_native.c). Only meaningful on a "flagship self-contained"
-# salam build; SKIPs (not FAILs) per-target rather than erroring when a
-# target wasn't embedded (e.g. a plain non-release build) or this host has
-# no way to execute that target's binary (e.g. no qemu-*-static, or the
-# windows target on a runner with no Wine) - building without running is
-# still useful signal (confirms the static link itself succeeded), but
-# without a way to check output it can only SKIP, not PASS/FAIL.
 if want cross; then
     for lang in $LANGS; do
         [ -d "../tests/$lang/cross" ] || continue
@@ -635,9 +606,6 @@ if want layout; then
     done
 fi
 
-# ---------------------------------------------------------------------------
-# Dispatch: run every collected job on $NPROC parallel workers.
-# ---------------------------------------------------------------------------
 TOTAL=$(wc -l <"$JOBS")
 TOTAL=$((TOTAL + 0))
 START=$(date +%s 2>/dev/null || echo 0)
@@ -647,8 +615,6 @@ if [ "$TOTAL" -gt 0 ]; then
     if printf 'x\0' | xargs -0 -n 1 -P 2 sh -c ':' probe >/dev/null 2>&1; then
         tr '\n' '\000' <"$JOBS" | xargs -0 -n 1 -P "$NPROC" sh "$SELF" --worker
     else
-        # Fallback pool for hosts whose xargs lacks -0/-P: keep at most
-        # $NPROC background workers alive, always reaping the oldest.
         pids=""
         n=0
         while IFS= read -r line; do
@@ -669,9 +635,6 @@ if [ "$TOTAL" -gt 0 ]; then
     fi
 fi
 
-# ---------------------------------------------------------------------------
-# Tally + failure recap.
-# ---------------------------------------------------------------------------
 ALL="$WORK/all-results.txt"
 cat "$WORK/results"/* >"$ALL" 2>/dev/null || true
 pass=$(grep -c '^PASS' "$ALL")

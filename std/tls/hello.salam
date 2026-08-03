@@ -1,0 +1,302 @@
+package tls
+
+// ClientHello construction and ServerHello parsing, plus the extension,
+// group and signature-scheme code points they negotiate with.
+//
+// One hello offers both TLS 1.3 and 1.2; the server picks a version by
+// including or omitting supported_versions in its reply, which is what
+// _hs_parse_server_hello keys off.
+
+
+const EXT_SERVER_NAME := 0
+const EXT_SUPPORTED_GROUPS := 10
+const EXT_SIGNATURE_ALGORITHMS := 13
+const EXT_ALPN := 16
+const EXT_SUPPORTED_VERSIONS := 43
+const EXT_KEY_SHARE := 51
+
+const GROUP_X25519 := 0x001D
+const GROUP_SECP256R1 := 0x0017
+const GROUP_SECP384R1 := 0x0018
+
+// signature_algorithms code points
+const SA_RSA_PKCS1_SHA256 := 0x0401
+const SA_RSA_PKCS1_SHA384 := 0x0501
+const SA_ECDSA_P256_SHA256 := 0x0403
+const SA_ECDSA_P384_SHA384 := 0x0503
+const SA_RSA_PSS_RSAE_SHA256 := 0x0804
+const SA_RSA_PSS_RSAE_SHA384 := 0x0805
+const SA_RSA_PSS_PSS_SHA256 := 0x0809
+
+// HelloRetryRequest is signalled by this fixed value in ServerHello.random.
+const HRR_RANDOM := "cf21ad74e59a6111be1d8c021e65b891c2a211167abb8c5e079e09e2c8a8339c"
+
+// ---------------------------------------------------------------- ClientHello
+
+func _ext_open(b &: Buf, id: int): int:
+    _put16(b, id)
+    _put16(b, 0)
+    ret b.len
+end
+
+func _ext_close(b &: Buf, mark: int):
+    _patch16(b, mark - 2, b.len - mark)
+end
+
+func _hs_build_client_hello(h &: Handshake, host: str, alpn: str, aes_only: bool, out &: Buf): bool:
+    _bufreset(out)
+    _put8(out, HS_CLIENT_HELLO)
+    lenmark := out.len
+    _put24(out, 0)
+    body := out.len
+
+    // legacy_version is frozen at TLS 1.2; the real version is in an extension
+    _put16(out, TLS12)
+
+    mut rnd := _newbuf(32)
+    defer _buf_free(rnd)
+    _putzeros(rnd, 32)
+    crypto.RandomBytes(rnd.p, 32)
+    _putbuf(out, rnd)
+    _bufreset(h.crand)
+    _putbuf(h.crand, rnd)
+
+    // A non-empty legacy_session_id makes the handshake look like a resumed
+    // TLS 1.2 session to middleboxes that would otherwise drop it.
+    mut sid := _newbuf(32)
+    defer _buf_free(sid)
+    _putzeros(sid, 32)
+    crypto.RandomBytes(sid.p, 32)
+    _put8(out, 32)
+    _putbuf(out, sid)
+
+    // ChaCha20-Poly1305 first: it is constant-time by construction, whereas the
+    // AES here is table-driven (see aes.salam).
+    // Both TLS 1.3 and the ECDHE+AEAD TLS 1.2 suites are offered in one hello;
+    // the server picks a version by including or omitting supported_versions.
+    if aes_only:
+        _put16(out, 6)
+        _put16(out, TLS_AES_128_GCM_SHA256)
+        _put16(out, TLS12_ECDHE_ECDSA_AES128_GCM_SHA256)
+        _put16(out, TLS12_ECDHE_RSA_AES128_GCM_SHA256)
+    else:
+        _put16(out, 16)
+        _put16(out, TLS_CHACHA20_POLY1305_SHA256)
+        _put16(out, TLS_AES_128_GCM_SHA256)
+        _put16(out, TLS12_ECDHE_ECDSA_CHACHA20_SHA256)
+        _put16(out, TLS12_ECDHE_RSA_CHACHA20_SHA256)
+        _put16(out, TLS12_ECDHE_ECDSA_AES128_GCM_SHA256)
+        _put16(out, TLS12_ECDHE_RSA_AES128_GCM_SHA256)
+        _put16(out, TLS12_ECDHE_ECDSA_AES256_GCM_SHA384)
+        _put16(out, TLS12_ECDHE_RSA_AES256_GCM_SHA384)
+    end
+
+    // legacy_compression_methods: null only
+    _put8(out, 1)
+    _put8(out, 0)
+
+    extmark := out.len
+    _put16(out, 0)
+    extstart := out.len
+
+    // server_name
+    if host.len() > 0:
+        m := _ext_open(out, EXT_SERVER_NAME)
+        _put16(out, host.len() + 3)
+        _put8(out, 0)
+        _put16(out, host.len())
+        _putstr(out, host)
+        _ext_close(out, m)
+    end
+
+    // supported_groups
+    m2 := _ext_open(out, EXT_SUPPORTED_GROUPS)
+    _put16(out, 6)
+    _put16(out, GROUP_X25519)
+    _put16(out, GROUP_SECP256R1)
+    _put16(out, GROUP_SECP384R1)
+    _ext_close(out, m2)
+
+    // signature_algorithms
+    m3 := _ext_open(out, EXT_SIGNATURE_ALGORITHMS)
+    _put16(out, 12)
+    _put16(out, SA_ECDSA_P256_SHA256)
+    _put16(out, SA_ECDSA_P384_SHA384)
+    _put16(out, SA_RSA_PSS_RSAE_SHA256)
+    _put16(out, SA_RSA_PSS_RSAE_SHA384)
+    _put16(out, SA_RSA_PKCS1_SHA256)
+    _put16(out, SA_RSA_PKCS1_SHA384)
+    _ext_close(out, m3)
+
+    // supported_versions: TLS 1.3 only
+    m4 := _ext_open(out, EXT_SUPPORTED_VERSIONS)
+    _put8(out, 4)
+    _put16(out, TLS13)
+    _put16(out, TLS12)
+    _ext_close(out, m4)
+
+    // TLS 1.2 needs these; TLS 1.3 servers ignore them.
+    m7 := _ext_open(out, EXT_EC_POINT_FORMATS)
+    _put8(out, 1)
+    _put8(out, 0)
+    _ext_close(out, m7)
+
+    // RFC 7627. Binds the master secret to the handshake transcript rather
+    // than just the two randoms, closing the triple-handshake splice.
+    m8 := _ext_open(out, EXT_EXTENDED_MASTER_SECRET)
+    _ext_close(out, m8)
+
+    // key_share: a single X25519 share
+    _bufreset(h.priv)
+    _putzeros(h.priv, 32)
+    crypto.RandomBytes(h.priv.p, 32)
+    _bufreset(h.pub_key)
+    _putzeros(h.pub_key, 32)
+    _x25519_base(h.priv.p, h.pub_key.p)
+    _bufreset(h.ecpriv)
+    _putzeros(h.ecpriv, 32)
+    crypto.RandomBytes(h.ecpriv.p, 32)
+    mut ecx := _newbuf(32)
+    defer _buf_free(ecx)
+    _putzeros(ecx, 32)
+    mut ecy := _newbuf(32)
+    defer _buf_free(ecy)
+    _putzeros(ecy, 32)
+    _bufreset(h.ecpub)
+    if _p256_base_mul(h.ecpriv.p, ecx.p, ecy.p):
+        _put8(h.ecpub, 4)
+        _putbuf(h.ecpub, ecx)
+        _putbuf(h.ecpub, ecy)
+    end
+
+    m5 := _ext_open(out, EXT_KEY_SHARE)
+    _put16(out, 36)
+    _put16(out, GROUP_X25519)
+    _put16(out, 32)
+    _putbuf(out, h.pub_key)
+    _ext_close(out, m5)
+
+    if alpn.len() > 0:
+        m6 := _ext_open(out, EXT_ALPN)
+        _put16(out, alpn.len() + 1)
+        _put8(out, alpn.len())
+        _putstr(out, alpn)
+        _ext_close(out, m6)
+    end
+
+    _patch16(out, extmark, out.len - extstart)
+    _patch24(out, lenmark, out.len - body)
+    ret true
+end
+
+// ---------------------------------------------------------------- ServerHello
+
+func _hs_parse_server_hello(h &: Handshake, msg: Reader): bool:
+    mut r := msg
+    ver := _rd16(r)
+    if ver != TLS12:
+        // A server that answers 1.0 or 1.1 is not a version we will ever
+        // negotiate, and saying so beats a generic parse error. Those versions
+        // offer no AEAD cipher suite at all, so supporting them would mean
+        // implementing CBC with MAC-then-encrypt and a constant-time padding
+        // check: the Lucky13 surface, plus TLS 1.0's implicit IV (BEAST) and an
+        // MD5+SHA-1 PRF. RFC 8996 deprecated both in 2021 and every major
+        // browser dropped them in 2020.
+        if ver == TLS10 || ver == TLS11:
+            ret _hs_fail(h, "server requires TLS 1.0/1.1, which this client does not implement (deprecated by RFC 8996)")
+        end
+        ret _hs_fail(h, "unexpected legacy_version in ServerHello")
+    end
+    srand := _rdbytes(r, 32)
+    _bufreset(h.srand)
+    repeat 32 with i:
+        _put8(h.srand, _rdat(srand, i))
+    end
+    mut hrr := _hexbuf(HRR_RANDOM)
+    defer _buf_free(hrr)
+    if _cteq(srand.p, hrr.p, 32):
+        // A HelloRetryRequest means the server rejected our key share. Handling
+        // it properly requires re-sending a ClientHello with a different group,
+        // which is not implemented; failing is better than looping.
+        ret _hs_fail(h, "server sent HelloRetryRequest (unsupported)")
+    end
+    sid := _rdvec8(r)
+    _rdskip(sid, sid.len)
+    suite := _rd16(r)
+    comp := _rd8(r)
+    if r.bad:
+        ret _hs_fail(h, "malformed ServerHello")
+    end
+    if comp != 0:
+        ret _hs_fail(h, "server selected a compression method")
+    end
+    suite13 := _cipher_from_wire(suite)
+    suite12 := _tls12_cipher(suite)
+    if suite13 == CIPHER_NONE && suite12 == CIPHER_NONE:
+        ret _hs_fail(h, "server selected an unsupported cipher suite")
+    end
+
+    mut exts := _rdvec16(r)
+    if r.bad:
+        ret _hs_fail(h, "malformed ServerHello extensions")
+    end
+    mut got_version := false
+    mut peer := _newreader(null, 0)
+    until _rdleft(exts) > 0 && !exts.bad:
+        id := _rd16(exts)
+        mut body := _rdvec16(exts)
+        if exts.bad:
+            ret _hs_fail(h, "malformed ServerHello extension")
+        end
+        if id == EXT_SUPPORTED_VERSIONS:
+            v := _rd16(body)
+            if body.bad || v != TLS13:
+                ret _hs_fail(h, "server selected an unknown version")
+            end
+            got_version = true
+        else if id == EXT_EXTENDED_MASTER_SECRET:
+            h.ems = true
+        else if id == EXT_KEY_SHARE:
+            g := _rd16(body)
+            if g != GROUP_X25519:
+                ret _hs_fail(h, "server selected a group we did not offer a share for")
+            end
+            peer = _rdvec16(body)
+            if body.bad || peer.len != 32:
+                ret _hs_fail(h, "malformed key share")
+            end
+        end
+    end
+    // No supported_versions means this is a TLS 1.2 ServerHello. The key
+    // exchange then arrives later, in ServerKeyExchange.
+    if !got_version:
+        if suite12 == CIPHER_NONE:
+            ret _hs_fail(h, "server picked a TLS 1.3 suite without selecting TLS 1.3")
+        end
+        h.ver = TLS12
+        h.suite = suite
+        h.cipher = suite12
+        h.hash = _cipher_hash(h.cipher)
+        h.hlen = _hash_size(h.hash)
+        ret true
+    end
+    if suite13 == CIPHER_NONE:
+        ret _hs_fail(h, "server picked a TLS 1.2 suite while selecting TLS 1.3")
+    end
+    h.ver = TLS13
+    h.suite = suite
+    h.cipher = suite13
+    h.hash = _cipher_hash(h.cipher)
+    h.hlen = _hash_size(h.hash)
+    if peer.len != 32:
+        ret _hs_fail(h, "server sent no key share")
+    end
+
+    _bufreset(h.shared)
+    _putzeros(h.shared, 32)
+    if !_x25519_shared(h.priv.p, peer.p, h.shared.p):
+        // an all-zero shared secret means a small-order peer key
+        ret _hs_fail(h, "peer key share produced a degenerate shared secret")
+    end
+    ret true
+end

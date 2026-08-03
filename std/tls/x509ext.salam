@@ -1,0 +1,222 @@
+package tls
+
+// X.509 extensions, distinguished names and validity times.
+//
+// An unrecognised extension marked critical rejects the certificate, per
+// RFC 5280: the issuer said it changes the meaning of everything else.
+
+
+// key usage bits (RFC 5280 4.2.1.3), bit 0 is the most significant
+const KU_DIGITAL_SIGNATURE := 0x0080
+const KU_KEY_ENCIPHERMENT := 0x0020
+const KU_KEY_CERT_SIGN := 0x0004
+const OID_CN := "550403"
+const OID_EXT_SAN := "551d11"
+const OID_EXT_BASIC_CONSTRAINTS := "551d13"
+const OID_EXT_KEY_USAGE := "551d0f"
+const OID_EXT_EXT_KEY_USAGE := "551d25"
+const OID_EKU_SERVER_AUTH := "2b06010505070301"
+
+// Two ASCII digits at offset i.
+func _t2(r: Reader, i: int): int:
+    a := _rdat(r, i)
+    b := _rdat(r, i + 1)
+    if a < 48 || a > 57 || b < 48 || b > 57:
+        ret 0 - 1
+    end
+    ret (a - 48) * 10 + (b - 48)
+end
+
+// UTCTime is YYMMDDHHMMSSZ with the RFC 5280 sliding window (00-49 means
+// 20xx, 50-99 means 19xx); GeneralizedTime is YYYYMMDDHHMMSSZ. Both become
+// YYYYMMDDHHMMSS as an integer so comparison is a plain <.
+func _parse_time(t: Tlv): i64:
+    r := t.body
+    mut year := 0
+    mut off := 0
+    if t.tag == ASN1_UTCTIME:
+        if r.len != 13 || _rdat(r, 12) != 90:
+            ret 0
+        end
+        yy := _t2(r, 0)
+        if yy < 0:
+            ret 0
+        end
+        if yy < 50:
+            year = 2000 + yy
+        else:
+            year = 1900 + yy
+        end
+        off = 2
+    else if t.tag == ASN1_GENERALIZEDTIME:
+        if r.len != 15 || _rdat(r, 14) != 90:
+            ret 0
+        end
+        hi := _t2(r, 0)
+        lo := _t2(r, 2)
+        if hi < 0 || lo < 0:
+            ret 0
+        end
+        year = hi * 100 + lo
+        off = 4
+    else:
+        ret 0
+    end
+    mon := _t2(r, off)
+    day := _t2(r, off + 2)
+    hh := _t2(r, off + 4)
+    mm := _t2(r, off + 6)
+    ss := _t2(r, off + 8)
+    if mon < 1 || mon > 12 || day < 1 || day > 31 || hh > 23 || mm > 59 || ss > 60:
+        ret 0
+    end
+    mut v := year as i64
+    v = v * 100 + (mon as i64)
+    v = v * 100 + (day as i64)
+    v = v * 100 + (hh as i64)
+    v = v * 100 + (mm as i64)
+    v = v * 100 + (ss as i64)
+    ret v
+end
+
+// Pull the last CN out of a Name. Only used for diagnostics: hostname matching
+// goes through SubjectAltName, because CN-based matching is what RFC 6125
+// deprecated and what a number of name-confusion bugs relied on.
+func _name_cn(name: Reader): str:
+    mut n := name
+    mut seq := _der_seq(n)
+    if n.bad:
+        ret ""
+    end
+    mut out := ""
+    until _rdleft(seq) > 0 && !seq.bad:
+        rdn := _der_tag(seq, ASN1_SET)
+        if !rdn.ok:
+            ret out
+        end
+        mut set := rdn.body
+        until _rdleft(set) > 0 && !set.bad:
+            atv := _der_tag(set, ASN1_SEQUENCE)
+            if !atv.ok:
+                ret out
+            end
+            mut a := atv.body
+            o := _der_oid(a)
+            if a.bad:
+                ret out
+            end
+            v := _der(a)
+            if !v.ok:
+                ret out
+            end
+            if _oid_is(o, OID_CN):
+                out = _rd_to_str(v.body)
+            end
+        end
+    end
+    ret out
+end
+
+func _parse_extensions(exts: Reader, c &: Cert): bool:
+    mut e := exts
+    mut seq := _der_seq(e)
+    if e.bad:
+        ret false
+    end
+    until _rdleft(seq) > 0 && !seq.bad:
+        ext := _der_tag(seq, ASN1_SEQUENCE)
+        if !ext.ok:
+            ret false
+        end
+        mut x := ext.body
+        o := _der_oid(x)
+        if x.bad:
+            ret false
+        end
+        mut critical := false
+        if _der_is(x, ASN1_BOOLEAN):
+            b := _der_tag(x, ASN1_BOOLEAN)
+            if !b.ok || b.body.len != 1:
+                ret false
+            end
+            // DER booleans are 0x00 or 0xFF, nothing else
+            bv := _rdat(b.body, 0)
+            if bv != 0x00 && bv != 0xFF:
+                ret false
+            end
+            critical = bv != 0
+        end
+        val := _der_tag(x, ASN1_OCTETSTRING)
+        if !val.ok:
+            ret false
+        end
+        mut v := val.body
+
+        if _oid_is(o, OID_EXT_BASIC_CONSTRAINTS):
+            mut bs := _der_seq(v)
+            if v.bad:
+                ret false
+            end
+            c.has_basic_constraints = true
+            if _der_is(bs, ASN1_BOOLEAN):
+                b := _der_tag(bs, ASN1_BOOLEAN)
+                if !b.ok || b.body.len != 1:
+                    ret false
+                end
+                c.is_ca = _rdat(b.body, 0) != 0
+            end
+            if _der_is(bs, ASN1_INTEGER):
+                pl := _der_uint(bs)
+                if bs.bad:
+                    ret false
+                end
+                mut n := 0
+                repeat pl.len with i:
+                    n = (n << 8) | _rdat(pl, i)
+                end
+                c.has_path_len = true
+                c.path_len = n
+            end
+        else if _oid_is(o, OID_EXT_KEY_USAGE):
+            bits := _der_bitstring(v, true)
+            if v.bad:
+                ret false
+            end
+            mut ku := 0
+            if bits.len > 0:
+                ku = _rdat(bits, 0) << 8
+            end
+            if bits.len > 1:
+                ku = ku | _rdat(bits, 1)
+            end
+            c.has_key_usage = true
+            c.key_usage = ku >> 8
+        else if _oid_is(o, OID_EXT_SAN):
+            c.san = v
+            c.has_san = true
+        else if _oid_is(o, OID_EXT_EXT_KEY_USAGE):
+            mut es := _der_seq(v)
+            if v.bad:
+                ret false
+            end
+            c.has_eku = true
+            until _rdleft(es) > 0 && !es.bad:
+                u := _der_oid(es)
+                if es.bad:
+                    ret false
+                end
+                if _oid_is(u, OID_EKU_SERVER_AUTH):
+                    c.eku_server_auth = true
+                end
+            end
+        else:
+            // An unrecognised extension marked critical must not be ignored:
+            // RFC 5280 requires rejecting the certificate outright, since the
+            // issuer said it changes the meaning of what we just parsed.
+            if critical:
+                ret false
+            end
+        end
+    end
+    ret true
+end

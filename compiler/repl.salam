@@ -105,15 +105,6 @@ import src "source.salam"
 import i18 "i18n.salam"
 import co "sal_core.salam"
 
-// REPL_HIST_MAX (repl.c)
-const HIST_MAX := 200
-
-// repl_hist[]/repl_nhist (repl.c) - module-global session history, shared
-// across every readline() call in one `salam repl` run (matches the C's
-// static array living for the process, reset only at the top of driver_repl
-// via repl_nhist=0/frees, which Run() below reproduces on entry).
-mut g_hist := Vector {} as Vector<str>
-
 // process spawn (system()) - same idiom driver.salam's own identical
 // comment uses; no link needed, libc is always linked.
 extern:
@@ -143,6 +134,9 @@ else:
         func write(fd: int, buf: void*, n: u64): i64
     end
 end
+
+// REPL_HIST_MAX (repl.c)
+const HIST_MAX := 200
 
 // STD_INPUT_HANDLE (winbase.h): (DWORD)-10, passed as the i32 bit pattern
 // GetStdHandle expects.
@@ -175,6 +169,12 @@ const IFLAG_KEEP_MASK := 4294965965 // ~IFLAG_CLEAR_BITS as u32
 const LFLAG_CLEAR_BITS := 32779 // ECHO|ICANON|IEXTEN|ISIG
 const LFLAG_KEEP_MASK := 4294934516 // ~LFLAG_CLEAR_BITS as u32
 const CFLAG_CS8 := 48
+
+// repl_hist[]/repl_nhist (repl.c) - module-global session history, shared
+// across every readline() call in one `salam repl` run (matches the C's
+// static array living for the process, reset only at the top of driver_repl
+// via repl_nhist=0/frees, which Run() below reproduces on entry).
+mut g_hist := Vector {} as Vector<str>
 
 // resolve_color / stderr_is_tty - private copies of driver.salam's own
 // identically-named helpers (not reusable from here: driver.salam keeps
@@ -291,9 +291,7 @@ if SALAM_OS_WINDOWS:
                 base := rec as i64
                 evtype := ((base + 0) as u16*)[0] as int
                 keydown := ((base + 4) as i32*)[0]
-                if evtype != KEY_EVENT || keydown == 0:
-                    // not a key-down event; keep reading
-                else:
+                if evtype == KEY_EVENT && keydown != 0:
                     vk := ((base + 10) as u16*)[0] as int
                     ch := ((base + 14) as i8*)[0] as int
                     len := str.Len(line)
@@ -442,16 +440,12 @@ else:
                 n1 := read(0, s1b, 1 as u64)
                 s1 := n1 > (0 as i64) ? ((s1b as u8*)[0] as int) : 0
                 mem.Free(s1b)
-                if n1 <= (0 as i64) || s1 != 91: // '['
-                    // ignore malformed/short escape sequence
-                else:
+                if n1 > (0 as i64) && s1 == 91: // '['
                     s2b := mem.Allocate(1 as u64)
                     n2 := read(0, s2b, 1 as u64)
                     s2 := n2 > (0 as i64) ? ((s2b as u8*)[0] as int) : 0
                     mem.Free(s2b)
-                    if n2 <= (0 as i64):
-                        // ignore short escape sequence
-                    else s2 == 65: // 'A' - up
+                    if n2 > (0 as i64) && s2 == 65: // 'A' - up
                         if hi == g_hist.len():
                             saved = line
                         end
@@ -506,8 +500,9 @@ end
 func readline(prompt: str, ok &: bool): str:
     if SALAM_OS_WINDOWS:
         ret win_readline(prompt, ok)
+    else:
+        ret posix_readline(prompt, ok)
     end
-    ret posix_readline(prompt, ok)
 end
 
 // repl_is_def - does `line` (already left-trimmed by the caller) start a

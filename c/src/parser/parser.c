@@ -89,8 +89,6 @@ static bool parse_package(parser_t *p, ast_node_t *prog, vec_t *pending)
 static void parse_top_level_item_into(parser_t *p, ast_node_t *dest, vec_t *pending)
 {
     p_skip_terminators(p);
-    while (try_link_attr(p, dest)) {
-    }
     parse_metas(p, pending);
     if (p_at_eof(p)) return;
     if (p_at(p, TK_KW_IMPORT)) {
@@ -179,8 +177,6 @@ static ast_node_t *parse_program(parser_t *p)
     vec_t pending;
     vec_init(&pending);
     p_skip_terminators(p);
-    while (try_link_attr(p, prog)) {
-    }
     parse_metas(p, &pending);
     parse_package(p, prog, &pending);
     while (!p_at_eof(p))

@@ -23,6 +23,11 @@ symbol_t *generic_template(sema_t *s, const char *name, sym_kind_t kind)
     return NULL;
 }
 
+static const char *plural_suffix(size_t n)
+{
+    return n == 1 ? "" : "s";
+}
+
 static void g_sanitize(const char *ts, char *out, size_t cap)
 {
     size_t o = 0;
@@ -288,8 +293,8 @@ symbol_t *g_instantiate_struct(sema_t *s, ast_node_t *tmpl, vec_t *targ_nodes,
                                const src_span_t *span)
 {
     if (targ_nodes->len != tmpl->typarams.len) {
-        SERR(s, 1, span, "generic '%s' expects %zu type argument(s), got %zu", tmpl->name,
-             tmpl->typarams.len, targ_nodes->len);
+        SERR(s, 1, span, "generic '%s' expects %zu type argument%s, got %zu", tmpl->name,
+             tmpl->typarams.len, plural_suffix(tmpl->typarams.len), targ_nodes->len);
         return NULL;
     }
     vec_t argtypes;
@@ -358,8 +363,8 @@ static symbol_t *g_instantiate_func(sema_t *s, ast_node_t *tmpl, vec_t *targ_nod
                                     const src_span_t *span)
 {
     if (targ_nodes->len != tmpl->typarams.len) {
-        SERR(s, 1, span, "generic '%s' expects %zu type argument(s), got %zu", tmpl->name,
-             tmpl->typarams.len, targ_nodes->len);
+        SERR(s, 1, span, "generic '%s' expects %zu type argument%s, got %zu", tmpl->name,
+             tmpl->typarams.len, plural_suffix(tmpl->typarams.len), targ_nodes->len);
         return NULL;
     }
     vec_t argtypes;
@@ -473,13 +478,13 @@ symbol_t *g_infer_call(sema_t *s, symbol_t *tsym, vec_t *argtypes, const src_spa
         }
         if (argtypes->len < required || (!tmpl->is_variadic && argtypes->len > total)) {
             if (tmpl->is_variadic)
-                SERR(s, 12, span, "'%s' expects at least %zu argument(s), got %zu",
-                     tsym->name, required, argtypes->len);
+                SERR(s, 12, span, "'%s' expects at least %zu argument%s, got %zu",
+                     tsym->name, required, plural_suffix(required), argtypes->len);
             else if (required == total)
-                SERR(s, 12, span, "'%s' expects %zu argument(s), got %zu", tsym->name,
-                     total, argtypes->len);
+                SERR(s, 12, span, "'%s' expects %zu argument%s, got %zu", tsym->name,
+                     total, plural_suffix(total), argtypes->len);
             else
-                SERR(s, 12, span, "'%s' expects %zu to %zu argument(s), got %zu",
+                SERR(s, 12, span, "'%s' expects %zu to %zu arguments, got %zu",
                      tsym->name, required, total, argtypes->len);
             return NULL;
         }

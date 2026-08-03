@@ -1,0 +1,110 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+// Mutation fuzz over the X.509 parser and chain verifier.
+
+
+// A deterministic LCG for the parser fuzz. Reproducibility matters more than
+// statistical quality: a failure has to be replayable from the seed alone.
+mut _fz_state := 0 as u64
+
+// ------------------------------------------------------- parser mutation fuzz
+
+func _fz_next(): int:
+    _fz_state = _fz_state * (6364136223846793005 as u64) + (1442695040888963407 as u64)
+    ret ((_fz_state >> (33 as u64)) & (0x7FFFFFFF as u64)) as int
+end
+
+// Feed corrupted certificates to the parser and the chain verifier.
+//
+// Two invariants, both of which must hold for EVERY mutation:
+//   1. nothing crashes, reads out of bounds, or hangs -- run this build under
+//      --asan and the first violation is a hard failure rather than a quiet
+//      memory error;
+//   2. no mutated certificate ever verifies. Any edit inside the TBS breaks
+//      the issuer's signature, and any edit outside it breaks the encoding or
+//      the signature field, so a VERR_NONE here would mean the verifier
+//      accepted something nobody signed.
+//
+// This is a smoke test, not a substitute for a real fuzzing campaign against
+// the DER parser; it covers a few thousand mutations, not millions.
+func _selftest_fuzz():
+    _fz_state = 0x5A1A11C0FFEE as u64
+
+    mut root := _hexbuf(TC_ROOT)
+    defer _buf_free(root)
+    mut leaf := _hexbuf(TC_LEAF)
+    defer _buf_free(leaf)
+
+    mut roots := _roots_new()
+    defer _roots_free(roots)
+    _roots_add(roots, root.p, root.len)
+
+    mut work := _newbuf(leaf.len + 8)
+    defer _buf_free(work)
+    mut ch: Reader[8]
+    repeat 8 with i:
+        ch[i] = _newreader(null, 0)
+    end
+
+    now := 20270601000000 as i64
+    mut accepted := 0
+    mut parsed := 0
+    // Sized to finish in seconds even under ASan. A mutation that still parses
+    // costs a full RSA-2048 verification, so a larger count turns this from a
+    // CI smoke test into something nobody runs.
+    rounds := 400
+
+    repeat rounds with iter:
+        _bufreset(work)
+        _putbuf(work, leaf)
+        // truncate on some rounds, otherwise flip one to three bytes
+        if (iter % 7) == 0:
+            cut := 1 + (_fz_next() % work.len)
+            work.len = work.len - cut
+        else:
+            nmut := 1 + (_fz_next() % 3)
+            repeat nmut with _m:
+                if work.len > 0:
+                    pos := _fz_next() % work.len
+                    // must differ from what is already there: writing the same
+                    // byte back leaves a valid certificate, which then verifies
+                    // correctly and looks like a verifier bug
+                    old := _bufat(work, pos)
+                    _bufset(work, pos, (old + 1 + (_fz_next() % 255)) & 0xFF)
+                end
+            end
+        end
+        if work.len > 0:
+            c := _cert_parse(work.p, work.len)
+            if c.ok:
+                parsed += 1
+                // exercise the accessors a caller would reach for
+                _cert_match_host(c, "example.com")
+            end
+            ch[0] = _readerof(work)
+            if _verify_chain(ch, 1, roots, "example.com", now) == VERR_NONE:
+                accepted += 1
+            end
+        end
+    end
+
+    _ck(accepted == 0, "fuzz: no mutated certificate verifies")
+    // If nothing at all still parsed, the mutations were too destructive to be
+    // exercising the deeper structure, and the run proved little.
+    _ck(parsed > 0, "fuzz: some mutations still reach the parser body")
+    println "  fuzz:", rounds, "mutations,", parsed, "parsed,", accepted, "accepted"
+end

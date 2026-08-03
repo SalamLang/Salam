@@ -82,6 +82,11 @@ const char *salam_scratch_dir(void)
     return SALAM_SCRATCH_DIR;
 }
 
+static const char *plural_suffix(int n)
+{
+    return n == 1 ? "" : "s";
+}
+
 static int write_xml(logger_t *log, const sb_t *sb, const char *xml_out, const char *what)
 {
     if (xml_out) {
@@ -310,9 +315,9 @@ static int driver_run(options_t *opt)
         }
         if (nentries == 0) {
             LOG_E(log, PH_DRIVER,
-                  i18n_tr("no entry point: none of the %d .salam file(s) here defines a "
+                  i18n_tr("no entry point: none of the %d .salam file%s here defines a "
                           "'%s' function"),
-                  nfiles, entry);
+                  nfiles, plural_suffix(nfiles), entry);
             arena_free(arena);
             logger_free(log);
             return 2;
@@ -635,9 +640,11 @@ static int driver_fmt(options_t *opt)
     (void)opt->fmt_recursive;
     if (c.check) {
         if (c.changed == 0)
-            printf(i18n_tr("all %d file(s) already formatted\n"), c.total);
+            printf(i18n_tr("all %d file%s already formatted\n"), c.total,
+                   plural_suffix(c.total));
         else
-            printf(i18n_tr("%d of %d file(s) need formatting\n"), c.changed, c.total);
+            printf(i18n_tr("%d of %d file%s need formatting\n"), c.changed, c.total,
+                   plural_suffix(c.total));
     } else {
         printf(i18n_tr("done: %d formatted, %d unchanged\n"), c.changed, c.ok);
     }

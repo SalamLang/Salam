@@ -40,6 +40,11 @@ static char g_stdlib_root_buf[1200];
 static const char *g_stdlib_root = NULL;
 static bool g_stdlib_resolved = false;
 
+static const char *plural_suffix(size_t n)
+{
+    return n == 1 ? "" : "s";
+}
+
 static bool file_exists(const char *p);
 
 static bool root_has_std(const char *root)
@@ -1074,8 +1079,9 @@ sema_result_t *sema_run_cached(arena_t *a, logger_t *log, ast_node_t *program,
         sema_check_unused_funcs(&s);
         sema_check_unused_imports(&s);
     }
-    LOG_I(log, PH_SEMANTIC, "analysis complete: %zu error(s), %zu warning(s)",
-          s.diag->errors, s.diag->warnings);
+    LOG_I(log, PH_SEMANTIC, "analysis complete: %zu error%s, %zu warning%s",
+          s.diag->errors, plural_suffix(s.diag->errors), s.diag->warnings,
+          plural_suffix(s.diag->warnings));
     sema_result_t *r = (sema_result_t *)arena_alloc(a, sizeof(*r));
     r->global = s.global;
     r->tc = s.tc;

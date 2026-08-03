@@ -35,7 +35,16 @@ const CA_PATH_3 := "/etc/ssl/cert.pem"
 const CA_PATH_4 := "/usr/local/etc/ssl/cert.pem"
 const CA_PATH_5 := "/usr/local/share/certs/ca-root-nss.crt"
 const CA_PATH_6 := "/etc/ssl/certs/ca-bundle.crt"
-const CA_PATH_COUNT := 7
+// Windows has no conventional CA bundle file at all: the system trust store
+// lives in CryptoAPI, which this package does not read. These are the bundles
+// that common toolchains install, and they are the only reason a native
+// Windows build finds any roots. Without one, _roots_load returns an empty
+// store and every chain fails closed, which is correct but unhelpful; set
+// SSL_CERT_FILE or Config.ca_file to fix it explicitly.
+const CA_PATH_7 := "C:/Program Files/Git/mingw64/etc/ssl/certs/ca-bundle.crt"
+const CA_PATH_8 := "C:/Program Files/Git/usr/ssl/certs/ca-bundle.crt"
+const CA_PATH_9 := "C:/msys64/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
+const CA_PATH_COUNT := 10
 
 func _ca_path(i: int): str:
     if i == 0: ret CA_PATH_0 end
@@ -45,53 +54,10 @@ func _ca_path(i: int): str:
     if i == 4: ret CA_PATH_4 end
     if i == 5: ret CA_PATH_5 end
     if i == 6: ret CA_PATH_6 end
+    if i == 7: ret CA_PATH_7 end
+    if i == 8: ret CA_PATH_8 end
+    if i == 9: ret CA_PATH_9 end
     ret ""
-end
-
-// Decode one base64 body into DER. Returns false on any character outside the
-// alphabet, so a truncated or corrupted PEM block is dropped rather than
-// half-decoded into something that might still parse as a certificate.
-func _b64_decode(s: str, start: int, stop: int, out &: Buf): bool:
-    mut acc := 0
-    mut nbits := 0
-    mut pad := 0
-    sp := s as void*
-    mut i := start
-    until i < stop:
-        c := _bget(sp, i)
-        i += 1
-        if c == 10 || c == 13 || c == 32 || c == 9:
-            continue
-        end
-        mut v := 0 - 1
-        if c >= 65 && c <= 90:
-            v = c - 65
-        else if c >= 97 && c <= 122:
-            v = c - 97 + 26
-        else if c >= 48 && c <= 57:
-            v = c - 48 + 52
-        else if c == 43:
-            v = 62
-        else if c == 47:
-            v = 63
-        else if c == 61:
-            pad += 1
-            continue
-        else:
-            ret false
-        end
-        if pad > 0:
-            // data after padding is malformed
-            ret false
-        end
-        acc = (acc << 6) | v
-        nbits += 6
-        if nbits >= 8:
-            nbits -= 8
-            _put8(out, (acc >> nbits) & 0xFF)
-        end
-    end
-    ret true
 end
 
 // Scan a PEM document and append every CERTIFICATE block to the store.
@@ -113,14 +79,15 @@ func _roots_add_pem(r &: Roots, pem: str): int:
         if e < 0:
             ret added
         end
-        mut der := _newbuf(2048)
-        if _b64_decode(pem, body, e, der):
-            if der.len > 0:
-                c := _cert_parse(der.p, der.len)
-                if c.ok:
-                    _roots_add(r, der.p, der.len)
-                    added += 1
-                end
+        room := (e - body) / 4 * 3 + 8
+        mut der := _newbuf(room)
+        mut good := false
+        got := encoding.Base64DecodeBytes(pem.substr(body, e - body), der.p, room, good)
+        if good && got > 0:
+            c := _cert_parse(der.p, got)
+            if c.ok:
+                _roots_add(r, der.p, got)
+                added += 1
             end
         end
         _buf_free(der)

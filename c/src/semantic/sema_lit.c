@@ -30,8 +30,98 @@ static type_t *decorate(sema_t *s, ast_node_t *n, type_t *t)
     return sema_decorate(s, n, t);
 }
 
+static type_t *finish_struct_lit(sema_t *s, ast_node_t *n, symbol_t *ssym)
+{
+    {
+        size_t i = 0;
+        for (; i < n->list.len; i++) {
+            ast_node_t *fi = (ast_node_t *)n->list.data[i];
+            fi->name = scope_member_canon(s, ssym->members, fi->name, &fi->span);
+            symbol_t *f = scope_lookup_local(ssym->members, fi->name);
+            type_t *vt =
+                (f && f->kind == SYM_FIELD && stamp_empty_intrinsic(s, fi->a, f->type))
+                    ? f->type
+                    : sema_check_expr(s, fi->a);
+            if (!f || f->kind != SYM_FIELD) {
+                SERR(s, 16, &fi->span, "struct '%s' has no field '%s'", ssym->name,
+                     fi->name);
+            } else if (!type_assignable(f->type, vt)) {
+                SERR(s, 2, &fi->span, "field '%s': cannot assign '%s' to '%s'", fi->name,
+                     type_to_string(s->tc, vt), type_to_string(s->tc, f->type));
+            } else if (f->type && f->type->kind == TY_DYN) {
+                fi->a = coerce_to_dyn(s, f->type, fi->a, vt);
+            } else if (f->type && f->type->kind == TY_VARIANT && vt &&
+                       vt->kind != TY_VARIANT) {
+                int tag = type_variant_tag(f->type, vt);
+                if (tag >= 0) fi->a = coerce_to_variant(s, f->type, fi->a, tag);
+            }
+            if (f) decorate(s, fi, f->type);
+        }
+    }
+
+    {
+        size_t i = 0;
+        for (; i < ssym->members->symbols.len; i++) {
+            symbol_t *f = (symbol_t *)ssym->members->symbols.data[i];
+            if (f->kind != SYM_FIELD) continue;
+            if (f->decl && f->decl->a) continue;
+            bool provided = false;
+            {
+                size_t j = 0;
+                for (; j < n->list.len; j++) {
+                    ast_node_t *fi = (ast_node_t *)n->list.data[j];
+                    if (fi->name && strcmp(fi->name, f->name) == 0) {
+                        provided = true;
+                        break;
+                    }
+                }
+            }
+            if (!provided)
+                SERR(s, 28, &n->span, "struct literal '%s' requires field '%s'",
+                     ssym->name, f->name);
+        }
+    }
+    return decorate(s, n, ssym->type);
+}
+
+static symbol_t *resolve_pkg_struct_lit(sema_t *s, ast_node_t *n, const char *dot)
+{
+    char pname[64];
+    size_t pl = (size_t)(dot - n->name);
+    if (pl >= sizeof(pname)) pl = sizeof(pname) - 1;
+    memcpy(pname, n->name, pl);
+    pname[pl] = 0;
+    const char *tname = dot + 1;
+    symbol_t *pk = scope_lookup(s->cur, pname);
+    if (!pk || pk->kind != SYM_PACKAGE) {
+        SERR(s, 1, &n->span, "unknown package '%s' in struct literal '%s'", pname,
+             n->name);
+        return NULL;
+    }
+    tname = pkg_member_canon(s, pk, tname, &n->span);
+    symbol_t *tsym = scope_lookup_local(pk->members, tname);
+    if (!tsym || tsym->kind != SYM_STRUCT) {
+        SERR(s, 1, &n->span, "package '%s' has no exported struct '%s'", pname, tname);
+        return NULL;
+    }
+    if (!tsym->is_pub) {
+        SERR(s, 17, &n->span, "'%s' is not exported by package '%s' (mark it 'pub')",
+             tname, pname);
+        return NULL;
+    }
+    n->name = tname;
+    return tsym;
+}
+
 type_t *check_struct_lit(sema_t *s, ast_node_t *n)
 {
+    const char *dot = n->name ? strchr(n->name, '.') : NULL;
+    if (dot) {
+        s->expected = NULL;
+        symbol_t *ssym = resolve_pkg_struct_lit(s, n, dot);
+        if (!ssym) return decorate(s, n, err_ty(s));
+        return finish_struct_lit(s, n, ssym);
+    }
     if (n->name) {
         const char *orig = n->name;
         n->name = intrinsic_type_canon(local_canon(s, n->name, &n->span));
@@ -86,57 +176,7 @@ type_t *check_struct_lit(sema_t *s, ast_node_t *n)
         SERR(s, 1, &n->span, "unknown struct '%s'", n->name);
         return decorate(s, n, err_ty(s));
     }
-
-    {
-        size_t i = 0;
-        for (; i < n->list.len; i++) {
-            ast_node_t *fi = (ast_node_t *)n->list.data[i];
-            fi->name = scope_member_canon(s, ssym->members, fi->name, &fi->span);
-            symbol_t *f = scope_lookup_local(ssym->members, fi->name);
-            type_t *vt =
-                (f && f->kind == SYM_FIELD && stamp_empty_intrinsic(s, fi->a, f->type))
-                    ? f->type
-                    : sema_check_expr(s, fi->a);
-            if (!f || f->kind != SYM_FIELD) {
-                SERR(s, 16, &fi->span, "struct '%s' has no field '%s'", ssym->name,
-                     fi->name);
-            } else if (!type_assignable(f->type, vt)) {
-                SERR(s, 2, &fi->span, "field '%s': cannot assign '%s' to '%s'", fi->name,
-                     type_to_string(s->tc, vt), type_to_string(s->tc, f->type));
-            } else if (f->type && f->type->kind == TY_DYN) {
-                fi->a = coerce_to_dyn(s, f->type, fi->a, vt);
-            } else if (f->type && f->type->kind == TY_VARIANT && vt &&
-                       vt->kind != TY_VARIANT) {
-                int tag = type_variant_tag(f->type, vt);
-                if (tag >= 0) fi->a = coerce_to_variant(s, f->type, fi->a, tag);
-            }
-            if (f) decorate(s, fi, f->type);
-        }
-    }
-
-    {
-        size_t i = 0;
-        for (; i < ssym->members->symbols.len; i++) {
-            symbol_t *f = (symbol_t *)ssym->members->symbols.data[i];
-            if (f->kind != SYM_FIELD) continue;
-            if (f->decl && f->decl->a) continue;
-            bool provided = false;
-            {
-                size_t j = 0;
-                for (; j < n->list.len; j++) {
-                    ast_node_t *fi = (ast_node_t *)n->list.data[j];
-                    if (fi->name && strcmp(fi->name, f->name) == 0) {
-                        provided = true;
-                        break;
-                    }
-                }
-            }
-            if (!provided)
-                SERR(s, 28, &n->span, "struct literal '%s' requires field '%s'",
-                     ssym->name, f->name);
-        }
-    }
-    return decorate(s, n, ssym->type);
+    return finish_struct_lit(s, n, ssym);
 }
 
 type_t *check_array_lit(sema_t *s, ast_node_t *n)

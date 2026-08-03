@@ -1,5 +1,8 @@
 package tls
 
+
+// Record framing. Traffic keys and AEAD dispatch live in keys.salam.
+
 // TLS 1.3 record layer (RFC 8446 section 5) and traffic-key management.
 //
 // A record is a 5-byte header followed by a fragment. Before the handshake
@@ -53,26 +56,6 @@ const ALERT_DECRYPT_ERROR := 51
 const ALERT_PROTOCOL_VERSION := 70
 const ALERT_INTERNAL_ERROR := 80
 
-struct TrafficKeys:
-    pub key: Buf = Buf {}
-    pub iv: Buf = Buf {}
-    pub seq: u64 = 0 as u64
-    pub cipher: int = 0
-    pub live: bool = false
-    // TLS 1.2 framing. Three things differ from 1.3 and each one breaks
-    // interop silently if wrong:
-    //   * AES-GCM carries an 8-byte explicit nonce on the wire, appended to a
-    //     4-byte fixed IV from the key block. ChaCha20-Poly1305 (RFC 7905) has
-    //     no explicit nonce and uses a 12-byte fixed IV XOR the sequence
-    //     number, exactly as 1.3 does.
-    //   * the additional data is seq || type || version || plaintext_length,
-    //     not the record header.
-    //   * the record header carries the REAL content type; 1.3's trick of
-    //     hiding it inside the ciphertext does not apply.
-    pub is12: bool = false
-    pub explicit_len: int = 0
-end
-
 // ---------------------------------------------------------------- transport
 
 struct RecordLayer:
@@ -84,157 +67,6 @@ struct RecordLayer:
     pub eof: bool = false
     pub failed: bool = false
     pub err: str = ""
-end
-
-func _cipher_hash(c: int): int:
-    if c == CIPHER_AES256_GCM_SHA384:
-        ret HASH_SHA384
-    end
-    ret HASH_SHA256
-end
-
-func _cipher_keylen(c: int): int:
-    if c == CIPHER_CHACHA20_SHA256:
-        ret 32
-    end
-    if c == CIPHER_AES256_GCM_SHA384:
-        ret 32
-    end
-    ret 16
-end
-
-func _cipher_from_wire(w: int): int:
-    if w == TLS_AES_128_GCM_SHA256:
-        ret CIPHER_AES128_GCM_SHA256
-    end
-    if w == TLS_CHACHA20_POLY1305_SHA256:
-        ret CIPHER_CHACHA20_SHA256
-    end
-    if w == TLS_AES_256_GCM_SHA384:
-        ret CIPHER_AES256_GCM_SHA384
-    end
-    ret CIPHER_NONE
-end
-
-func _tk_free(t &: TrafficKeys):
-    _buf_wipe(t.key)
-    _buf_wipe(t.iv)
-    t.seq = 0 as u64
-    t.live = false
-end
-
-// Derive {key, iv} from a traffic secret, per RFC 8446 section 7.3.
-func _tk_derive(secret: void*, slen: int, cipher: int): TrafficKeys:
-    kind := _cipher_hash(cipher)
-    klen := _cipher_keylen(cipher)
-    mut t := TrafficKeys {}
-    t.cipher = cipher
-    t.key = _newbuf(klen)
-    _putzeros(t.key, klen)
-    t.iv = _newbuf(12)
-    _putzeros(t.iv, 12)
-    mut ok := _hkdf_expand_label(kind, secret, slen, "key", null, 0, t.key.p, klen)
-    if !_hkdf_expand_label(kind, secret, slen, "iv", null, 0, t.iv.p, 12):
-        ok = false
-    end
-    t.seq = 0 as u64
-    t.live = ok
-    ret t
-end
-
-// Build TLS 1.2 traffic keys from a slice of the key block.
-func _tk_from_block(kb: Buf, koff: int, klen: int, ivoff: int, ivlen: int, cipher: int): TrafficKeys:
-    mut t := TrafficKeys {}
-    t.cipher = cipher
-    t.is12 = true
-    t.key = _newbuf(klen)
-    repeat klen with i:
-        _put8(t.key, _bufat(kb, koff + i))
-    end
-    t.iv = _newbuf(ivlen)
-    repeat ivlen with i:
-        _put8(t.iv, _bufat(kb, ivoff + i))
-    end
-    if cipher == CIPHER_CHACHA20_SHA256:
-        t.explicit_len = 0
-    else:
-        t.explicit_len = 8
-    end
-    t.seq = 0 as u64
-    t.live = true
-    ret t
-end
-
-// Fixed IV width for a TLS 1.2 suite: 4 bytes for GCM (the other 8 travel on
-// the wire), 12 for ChaCha20-Poly1305.
-func _tk12_ivlen(cipher: int): int:
-    if cipher == CIPHER_CHACHA20_SHA256:
-        ret 12
-    end
-    ret 4
-end
-
-// The TLS 1.2 additional data: seq(8) || type(1) || version(2) || length(2),
-// where length is the PLAINTEXT length.
-func _tk12_aad(seq: u64, typ: int, plen: int, out &: Buf):
-    _bufreset(out)
-    _put64(out, seq)
-    _put8(out, typ)
-    _put16(out, TLS12)
-    _put16(out, plen)
-end
-
-// nonce = static IV XOR the sequence number, right-aligned in 12 bytes.
-func _tk_nonce(t: TrafficKeys, out &: Buf):
-    if t.is12 && t.explicit_len > 0:
-        // GCM in TLS 1.2: fixed IV then the explicit nonce, for which the
-        // sequence number is the conventional (and RFC-permitted) choice.
-        _bufreset(out)
-        repeat 4 with i:
-            _put8(out, _bufat(t.iv, i))
-        end
-        _put64(out, t.seq)
-        ret
-    end
-    _bufreset(out)
-    repeat 12 with i:
-        _put8(out, _bufat(t.iv, i))
-    end
-    mut s := t.seq
-    mut i := 11
-    until i >= 4:
-        _bufset(out, i, _bufat(out, i) ^ ((s & (0xFF as u64)) as int))
-        s = s >> (8 as u64)
-        i -= 1
-    end
-end
-
-// A sequence number must never wrap: reuse of a (key, nonce) pair destroys the
-// confidentiality of both records. RFC 8446 requires a KeyUpdate or connection
-// close well before this, so hitting it is a hard failure.
-func _tk_advance(t &: TrafficKeys): bool:
-    if t.seq == (18446744073709551615 as u64):
-        ret false
-    end
-    t.seq += 1 as u64
-    ret true
-end
-
-func _aead_seal(t: TrafficKeys, nonce: Buf, aad: void*, aadlen: int, pt: void*, ct: void*, n: int, tag: void*):
-    if t.cipher == CIPHER_CHACHA20_SHA256:
-        _cha20poly_seal(t.key.p, nonce.p, aad, aadlen, pt, ct, n, tag)
-        ret
-    end
-    a := _aes_init(t.key.p, t.key.len)
-    _gcm_seal(a, nonce.p, aad, aadlen, pt, ct, n, tag)
-end
-
-func _aead_open(t: TrafficKeys, nonce: Buf, aad: void*, aadlen: int, ct: void*, n: int, tag: void*, pt: void*): bool:
-    if t.cipher == CIPHER_CHACHA20_SHA256:
-        ret _cha20poly_open(t.key.p, nonce.p, aad, aadlen, ct, n, tag, pt)
-    end
-    a := _aes_init(t.key.p, t.key.len)
-    ret _gcm_open(a, nonce.p, aad, aadlen, ct, n, tag, pt)
 end
 
 func _rec_new(fd: i64): RecordLayer:

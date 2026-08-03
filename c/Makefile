@@ -204,8 +204,9 @@ $(eval $(call embed_extralibs_target,x86_64_w64_windows_gnu,X86_64_W64_WINDOWS_G
 # build (no --target=): a single slot, since a given salam binary only ever
 # runs on the one host it was built for. Consumed by the tcc/C backend
 # (build.c) and the LLVM external-tool link path (llvm_native.c's
-# link_executable) as an extra -L search directory, so `link "sqlite3"`
-# etc. resolve to a bundled static archive even for same-host builds.
+# link_executable) as an extra -L search directory, so `link dynamic
+# "sqlite3"` etc. resolve to a bundled static archive even for same-host
+# builds.
 SALAM_EMBED_HOSTLIBS_DIR ?=
 ifneq ($(SALAM_EMBED_HOSTLIBS_DIR),)
   CPPFLAGS   += -DSALAM_HAVE_EMBED_HOSTLIBS

@@ -271,10 +271,22 @@ func _verify_chain(chain: Reader[8], nchain: int, roots: Roots, host: str, now: 
         ret VERR_USAGE
     end
 
-    // Walk up the peer-supplied chain, then try to land on a trusted root.
+    // Walk up the chain. The peer's certificates are matched by subject rather
+    // than by position: RFC 8446 recommends sending them in order but does not
+    // require it, and servers that ship a shuffled chain are common enough that
+    // requiring strict leaf-to-root ordering is a real interop failure.
+    //
+    // `used` keeps a certificate from being consumed twice, which is what stops
+    // a cross-signed or self-referential set from looping forever.
+    mut used: bool[8]
+    repeat 8 with i:
+        used[i] = false
+    end
+    used[0] = true
+    mut cur := 0
     mut depth := 0
     until depth < nchain:
-        child := certs[depth]
+        child := certs[cur]
 
         // Does a trusted root sign this certificate directly? Checking roots
         // first means a peer cannot lengthen the chain past a valid anchor.
@@ -298,14 +310,19 @@ func _verify_chain(chain: Reader[8], nchain: int, roots: Roots, host: str, now: 
             ri += 1
         end
 
-        // Otherwise the next certificate the peer sent must be the issuer.
-        if depth + 1 >= nchain:
+        // Otherwise some certificate the peer sent must be the issuer.
+        mut nxt := 0 - 1
+        repeat nchain with j:
+            if !used[j] && nxt < 0:
+                if _cteqrd(child.issuer, certs[j].subject):
+                    nxt = j
+                end
+            end
+        end
+        if nxt < 0:
             ret VERR_UNTRUSTED
         end
-        parent := certs[depth + 1]
-        if !_cteqrd(child.issuer, parent.subject):
-            ret VERR_UNTRUSTED
-        end
+        parent := certs[nxt]
         pe := _cert_can_issue(parent, depth)
         if pe != VERR_NONE:
             ret pe
@@ -317,6 +334,8 @@ func _verify_chain(chain: Reader[8], nchain: int, roots: Roots, host: str, now: 
         if !_cert_signed_by(child, parent):
             ret VERR_BAD_SIGNATURE
         end
+        used[nxt] = true
+        cur = nxt
         depth += 1
     end
     // Ran out of certificates without reaching a trusted root. A self-signed

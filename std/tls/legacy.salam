@@ -1,0 +1,140 @@
+package tls
+
+// The TLS 1.0/1.1 key-derivation primitives: the legacy HMAC and the split
+// MD5/SHA-1 PRF. The hashes themselves come from std/crypto, which already
+// had SHA-1 and now also carries MD5.
+//
+// ====================== READ THIS BEFORE USING ANY OF IT ======================
+// TLS 1.0 and 1.1 were deprecated by RFC 8996 in 2021 and removed from every
+// major browser in 2020. They have NO AEAD cipher suite -- AEAD arrived in
+// TLS 1.2 -- so a connection using them is necessarily CBC with
+// MAC-then-encrypt, which is the Lucky13 padding-oracle surface, and TLS 1.0
+// additionally chains the IV across records, which is BEAST.
+//
+// Nothing here is reachable unless a caller explicitly opts into those
+// versions. MD5 and SHA-1 are present ONLY to satisfy the legacy PRF and MAC;
+// neither is acceptable for signatures or certificate digests, and neither is
+// wired into any other part of this package.
+// =============================================================================
+
+// named apart from std/crypto's LEG_MD5_LEN: the generated C modules share a
+// namespace and a duplicate definition is a link-time error
+const LEG_MD5_LEN := 16
+const LEG_SHA1_LEN := 20
+
+// ---------------------------------------------------------------- legacy HMAC
+
+// HMAC over MD5 or SHA-1. Both have a 64-byte block, so one routine covers
+// them; `use_sha1` selects the compression function.
+func _legacy_hmac(use_sha1: bool, key: void*, klen: int, msg: void*, mlen: int, out: void*):
+    mut hlen := LEG_MD5_LEN
+    if use_sha1:
+        hlen = LEG_SHA1_LEN
+    end
+    mut k0 := _newbuf(64)
+    defer _buf_wipe(k0)
+    if klen > 64:
+        _putzeros(k0, hlen)
+        if use_sha1:
+            crypto.Sha1Bytes(key, klen, k0.p)
+        else:
+            crypto.Md5Bytes(key, klen, k0.p)
+        end
+    else:
+        _putraw(k0, key, klen)
+    end
+    until k0.len < 64:
+        _put8(k0, 0)
+    end
+
+    mut inner := _newbuf(64 + mlen)
+    defer _buf_wipe(inner)
+    repeat 64 with i:
+        _put8(inner, _bufat(k0, i) ^ 0x36)
+    end
+    _putraw(inner, msg, mlen)
+    mut ih := _newbuf(hlen)
+    defer _buf_wipe(ih)
+    _putzeros(ih, hlen)
+    if use_sha1:
+        crypto.Sha1Bytes(inner.p, inner.len, ih.p)
+    else:
+        crypto.Md5Bytes(inner.p, inner.len, ih.p)
+    end
+
+    mut outer := _newbuf(64 + hlen)
+    defer _buf_wipe(outer)
+    repeat 64 with i:
+        _put8(outer, _bufat(k0, i) ^ 0x5C)
+    end
+    _putbuf(outer, ih)
+    if use_sha1:
+        crypto.Sha1Bytes(outer.p, outer.len, out)
+    else:
+        crypto.Md5Bytes(outer.p, outer.len, out)
+    end
+end
+
+// ---------------------------------------------------------------- legacy PRF
+
+// P_hash for the legacy construction, parameterised by which hash to use.
+func _legacy_p_hash(use_sha1: bool, secret: void*, slen: int, seed: Buf, out: void*, olen: int):
+    mut hlen := LEG_MD5_LEN
+    if use_sha1:
+        hlen = LEG_SHA1_LEN
+    end
+    mut a := _newbuf(hlen)
+    defer _buf_wipe(a)
+    _putzeros(a, hlen)
+    _legacy_hmac(use_sha1, secret, slen, seed.p, seed.len, a.p)
+    mut blk := _newbuf(hlen)
+    defer _buf_wipe(blk)
+    _putzeros(blk, hlen)
+    mut msg := _newbuf(hlen + seed.len)
+    defer _buf_free(msg)
+    mut done := 0
+    until done < olen:
+        _bufreset(msg)
+        _putbuf(msg, a)
+        _putbuf(msg, seed)
+        _legacy_hmac(use_sha1, secret, slen, msg.p, msg.len, blk.p)
+        mut take := olen - done
+        if take > hlen:
+            take = hlen
+        end
+        repeat take with i:
+            _bput(out, done + i, _bufat(blk, i))
+        end
+        done += take
+        _legacy_hmac(use_sha1, secret, slen, a.p, hlen, a.p)
+    end
+end
+
+// The TLS 1.0/1.1 PRF (RFC 2246 / RFC 4346 section 5):
+//
+//   PRF(secret, label, seed) = P_MD5(S1, label + seed) XOR
+//                              P_SHA1(S2, label + seed)
+//
+// S1 and S2 are the two halves of the secret, each ceil(len/2) bytes, so they
+// OVERLAP by one byte when the length is odd. That overlap is deliberate in the
+// specification and is a common place to get the split wrong.
+func _legacy_prf(secret: void*, slen: int, label: str, seed: Buf, out: void*, olen: int):
+    half := (slen + 1) / 2
+    s1 := secret
+    s2 := ((secret as i64) + ((slen - half) as i64)) as void*
+
+    mut ls := _newbuf(label.len() + seed.len)
+    defer _buf_free(ls)
+    _putstr(ls, label)
+    _putbuf(ls, seed)
+
+    _legacy_p_hash(false, s1, half, ls, out, olen)
+
+    mut tmp := _newbuf(olen)
+    defer _buf_wipe(tmp)
+    _putzeros(tmp, olen)
+    _legacy_p_hash(true, s2, half, ls, tmp.p, olen)
+    repeat olen with i:
+        _bput(out, i, _bget(out, i) ^ _bufat(tmp, i))
+    end
+end

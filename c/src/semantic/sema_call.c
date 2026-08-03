@@ -17,6 +17,11 @@
 #include "semantic/builtins.h"
 #include "semantic/dce.h"
 
+static const char *plural_suffix(size_t n)
+{
+    return n == 1 ? "" : "s";
+}
+
 static type_t *ty(sema_t *s, type_kind_t k)
 {
     return sema_ty(s, k);
@@ -129,13 +134,13 @@ func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,
         if (argtypes->len < sig->required ||
             (!sig->variadic && argtypes->len > sig->params.len)) {
             if (sig->variadic)
-                SERR(s, 12, span, "'%s' expects at least %zu argument(s), got %zu", what,
-                     sig->required, argtypes->len);
+                SERR(s, 12, span, "'%s' expects at least %zu argument%s, got %zu", what,
+                     sig->required, plural_suffix(sig->required), argtypes->len);
             else if (sig->required == sig->params.len)
-                SERR(s, 12, span, "'%s' expects %zu argument(s), got %zu", what,
-                     sig->params.len, argtypes->len);
+                SERR(s, 12, span, "'%s' expects %zu argument%s, got %zu", what,
+                     sig->params.len, plural_suffix(sig->params.len), argtypes->len);
             else
-                SERR(s, 12, span, "'%s' expects %zu to %zu argument(s), got %zu", what,
+                SERR(s, 12, span, "'%s' expects %zu to %zu arguments, got %zu", what,
                      sig->required, sig->params.len, argtypes->len);
             return NULL;
         }
@@ -153,8 +158,8 @@ func_sig_t *resolve_overload(sema_t *s, symbol_t *fsym, vec_t *argtypes,
             }
         }
     }
-    SERR(s, 12, span, "no matching overload for '%s' with %zu argument(s)", what,
-         argtypes->len);
+    SERR(s, 12, span, "no matching overload for '%s' with %zu argument%s", what,
+         argtypes->len, plural_suffix(argtypes->len));
     return NULL;
 }
 
@@ -351,8 +356,8 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                          pf->name);
             }
             if (argtypes.len != ft->params.len)
-                SERR(s, 12, &n->span, "function value takes %zu argument(s), got %zu",
-                     ft->params.len, argtypes.len);
+                SERR(s, 12, &n->span, "function value takes %zu argument%s, got %zu",
+                     ft->params.len, plural_suffix(ft->params.len), argtypes.len);
             else {
                 size_t i = 0;
                 for (; i < argtypes.len; i++)
@@ -436,8 +441,8 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             const salam_builtin_t *b = salam_builtin_lookup(nm);
             if (b) {
                 if (b->nargs >= 0 && (int)argtypes.len != b->nargs)
-                    SERR(s, 12, &n->span, "builtin '%s' takes %d argument(s), got %zu",
-                         nm, b->nargs, argtypes.len);
+                    SERR(s, 12, &n->span, "builtin '%s' takes %d argument%s, got %zu", nm,
+                         b->nargs, plural_suffix((size_t)b->nargs), argtypes.len);
 
                 if (strcmp(b->arg, "*") != 0) {
                     int ak = type_prim_kind_from_name(b->arg, NULL);
@@ -771,8 +776,8 @@ type_t *check_call(sema_t *s, ast_node_t *n)
                          pf->name);
             }
             if (argtypes.len != ft->params.len)
-                SERR(s, 12, &n->span, "function value takes %zu argument(s), got %zu",
-                     ft->params.len, argtypes.len);
+                SERR(s, 12, &n->span, "function value takes %zu argument%s, got %zu",
+                     ft->params.len, plural_suffix(ft->params.len), argtypes.len);
             else {
                 size_t i = 0;
                 for (; i < argtypes.len; i++)

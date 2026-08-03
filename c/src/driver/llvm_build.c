@@ -28,6 +28,11 @@
 #include "driver/llvm_toolchain.h"
 #include "i18n/i18n.h"
 
+static const char *plural_suffix(int n)
+{
+    return n == 1 ? "" : "s";
+}
+
 static const char *module_of(arena_t *a, const char *path)
 {
     const char *slash = strrchr(path, '/');
@@ -192,10 +197,10 @@ static int ll_gather_links(arena_t *a, logger_t *log, langpack_t *pack,
     }
     if (dropped > 0)
         LOG_W(log, PH_DRIVER,
-              i18n_tr("import graph exceeds the %d-file scan limit; %d import(s) were "
+              i18n_tr("import graph exceeds the %d-file scan limit; %d import%s were "
                       "skipped when collecting link directives, so some libraries may "
                       "be missing at link time"),
-              (int)(sizeof work / sizeof work[0]), dropped);
+              (int)(sizeof work / sizeof work[0]), dropped, plural_suffix(dropped));
     return n;
 }
 

@@ -149,11 +149,11 @@ if [ "${1:-}" = "--worker" ]; then
         while IFS= read -r l || [ -n "$l" ]; do
             [ -z "$l" ] && continue
             case "$got" in
-            *"$l"*) ;;
-            *)
-                ok=0
-                missing="$l"
-                ;;
+                *"$l"*) ;;
+                *)
+                    ok=0
+                    missing="$l"
+                    ;;
             esac
         done <"$expabs"
         if [ "$ok" -eq 1 ]; then
@@ -207,50 +207,50 @@ if [ "${1:-}" = "--worker" ]; then
     }
     run_worker() {
         case "$kind" in
-        build)
-            sh "$TOOLS_DIR/run-one-build.sh" "$SALAM_ABS" "$WORK" "$label" "$f" "$lang" "$exp" ${extra:--} 2>&1
-            ;;
-        js)
-            sh "$TOOLS_DIR/run-one-js.sh" "$SALAM_ABS" "$WORK" "$label" "$f" "$lang" "$exp" 2>&1
-            ;;
-        exec)
-            got=$("$SALAM_ABS" exec "$f" --no-color --log-level=error --lang="$lang" 2>&1 | tr -d '\r')
-            wk_check "$expabs" "$got"
-            ;;
-        errors)
-            code=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
-            out=$("$SALAM_ABS" "$f" --emit-symbol-xml --no-color --log-level=error --lang="$lang" 2>&1 >/dev/null)
-            if [ -n "$code" ] && printf '%s\n' "$out" | grep -qF "$code"; then
-                echo "PASS $label ($code)"
-            else
-                echo "FAIL $label (want $code)"
-                echo "  $out"
-            fi
-            ;;
-        layout)
-            expect=$(grep -oE '(EXPECT|انتظار|توقع): .*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
-            html="$WORK/layout_${jobid}_$$.html"
-            "$SALAM_ABS" layout build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1
-            if [ -f "$html" ] && grep -qF "$expect" "$html"; then
-                echo "PASS $label (has '$expect')"
-            else
-                echo "FAIL $label (want '$expect')"
-            fi
-            rm -f "$html"
-            ;;
-        llvm)
-            # `salam llvm --jit` drops <name>.ll next to the process cwd,
-            # so each job gets a private cwd to run from.
-            jobdir="$WORK/llvmjob_${jobid}_$$"
-            mkdir -p "$jobdir"
-            got=$( (cd "$jobdir" && "$SALAM_ABS" llvm "$fabs" --jit --no-color --log-level=error 2>/dev/null) | tr -d '\r')
-            rm -rf "$jobdir"
-            wk_check "$expabs" "$got"
-            ;;
-        fmt) wk_fmt ;;
-        expect) wk_expect ;;
-        buildonly) wk_buildonly ;;
-        cross) wk_cross ;;
+            build)
+                sh "$TOOLS_DIR/run-one-build.sh" "$SALAM_ABS" "$WORK" "$label" "$f" "$lang" "$exp" ${extra:--} 2>&1
+                ;;
+            js)
+                sh "$TOOLS_DIR/run-one-js.sh" "$SALAM_ABS" "$WORK" "$label" "$f" "$lang" "$exp" 2>&1
+                ;;
+            exec)
+                got=$("$SALAM_ABS" exec "$f" --no-color --log-level=error --lang="$lang" 2>&1 | tr -d '\r')
+                wk_check "$expabs" "$got"
+                ;;
+            errors)
+                code=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
+                out=$("$SALAM_ABS" "$f" --emit-symbol-xml --no-color --log-level=error --lang="$lang" 2>&1 >/dev/null)
+                if [ -n "$code" ] && printf '%s\n' "$out" | grep -qF "$code"; then
+                    echo "PASS $label ($code)"
+                else
+                    echo "FAIL $label (want $code)"
+                    echo "  $out"
+                fi
+                ;;
+            layout)
+                expect=$(grep -oE '(EXPECT|انتظار|توقع): .*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
+                html="$WORK/layout_${jobid}_$$.html"
+                "$SALAM_ABS" layout build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1
+                if [ -f "$html" ] && grep -qF "$expect" "$html"; then
+                    echo "PASS $label (has '$expect')"
+                else
+                    echo "FAIL $label (want '$expect')"
+                fi
+                rm -f "$html"
+                ;;
+            llvm)
+                # `salam llvm --jit` drops <name>.ll next to the process cwd,
+                # so each job gets a private cwd to run from.
+                jobdir="$WORK/llvmjob_${jobid}_$$"
+                mkdir -p "$jobdir"
+                got=$( (cd "$jobdir" && "$SALAM_ABS" llvm "$fabs" --jit --no-color --log-level=error 2>/dev/null) | tr -d '\r')
+                rm -rf "$jobdir"
+                wk_check "$expabs" "$got"
+                ;;
+            fmt) wk_fmt ;;
+            expect) wk_expect ;;
+            buildonly) wk_buildonly ;;
+            cross) wk_cross ;;
         esac
     }
 
@@ -267,8 +267,8 @@ if [ "${1:-}" = "--worker" ]; then
     while ! (set -C && : >"$WORK/.counter.lock") 2>/dev/null; do
         spins=$((spins + 1))
         case "$spins" in
-        500 | 1000 | 1500 | 2000 | 2500) sleep 1 ;;
-        3000) break ;;
+            500 | 1000 | 1500 | 2000 | 2500) sleep 1 ;;
+            3000) break ;;
         esac
     done
     idx=0
@@ -301,34 +301,35 @@ mkdir -p "$WORK/results"
 printf '0\n' >"$WORK/.counter"
 trap 'rm -rf "$WORK"' EXIT
 LANGS="${LANGS:-en fa ar}"
+NPROC="${NPROC:-}"
 if [ -z "$NPROC" ]; then
     command -v nproc >/dev/null 2>&1 && NPROC=$(nproc 2>/dev/null)
     [ -z "$NPROC" ] && command -v getconf >/dev/null 2>&1 && NPROC=$(getconf _NPROCESSORS_ONLN 2>/dev/null)
     [ -z "$NPROC" ] && command -v sysctl >/dev/null 2>&1 && NPROC=$(sysctl -n hw.ncpu 2>/dev/null)
-    [ -z "$NPROC" ] && [ -n "$NUMBER_OF_PROCESSORS" ] && NPROC="$NUMBER_OF_PROCESSORS"
+    [ -z "$NPROC" ] && [ -n "${NUMBER_OF_PROCESSORS:-}" ] && NPROC="$NUMBER_OF_PROCESSORS"
     [ -z "$NPROC" ] && [ -r /proc/cpuinfo ] && NPROC=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
     NPROC="${NPROC:-4}"
 fi
 while [ $# -gt 0 ]; do
     case "$1" in
-    -j)
-        NPROC="$2"
-        shift 2
-        ;;
-    -j*)
-        NPROC="${1#-j}"
-        shift
-        ;;
-    --jobs=*)
-        NPROC="${1#--jobs=}"
-        shift
-        ;;
-    *) break ;;
+        -j)
+            NPROC="$2"
+            shift 2
+            ;;
+        -j*)
+            NPROC="${1#-j}"
+            shift
+            ;;
+        --jobs=*)
+            NPROC="${1#--jobs=}"
+            shift
+            ;;
+        *) break ;;
     esac
 done
 case "$SALAM" in
-/* | [A-Za-z]:*) SALAM_ABS="$SALAM" ;;
-*) SALAM_ABS="$(pwd)/$SALAM" ;;
+    /* | [A-Za-z]:*) SALAM_ABS="$SALAM" ;;
+    *) SALAM_ABS="$(pwd)/$SALAM" ;;
 esac
 
 if [ -z "${SALAM_STD:-}" ] && [ -d "$(pwd)/std" ]; then
@@ -347,18 +348,18 @@ fi
 #                                     test is unaffected unless it actually
 #                                     ships one of the more specific files)
 case "$(uname -s 2>/dev/null)" in
-Linux) HOST_OS=linux ;;
-Darwin) HOST_OS=mac ;;
-MINGW* | MSYS* | CYGWIN*) HOST_OS=windows ;;
-*) HOST_OS="" ;;
+    Linux) HOST_OS=linux ;;
+    Darwin) HOST_OS=mac ;;
+    MINGW* | MSYS* | CYGWIN*) HOST_OS=windows ;;
+    *) HOST_OS="" ;;
 esac
 [ "${OS:-}" = "Windows_NT" ] && HOST_OS=windows
 case "$(uname -m 2>/dev/null)" in
-x86_64 | amd64) HOST_ARCH=x64 ;;
-aarch64 | arm64) HOST_ARCH=arm64 ;;
-i386 | i486 | i586 | i686 | x86) HOST_ARCH=x86 ;;
-armv6l | armv7l | armv7 | arm) HOST_ARCH=arm ;;
-*) HOST_ARCH="" ;;
+    x86_64 | amd64) HOST_ARCH=x64 ;;
+    aarch64 | arm64) HOST_ARCH=arm64 ;;
+    i386 | i486 | i586 | i686 | x86) HOST_ARCH=x86 ;;
+    armv6l | armv7l | armv7 | arm) HOST_ARCH=arm ;;
+    *) HOST_ARCH="" ;;
 esac
 pick_expect() {
     if [ -n "$HOST_OS" ] && [ -n "$HOST_ARCH" ] && [ -f "$1.$HOST_OS.$HOST_ARCH.out" ]; then

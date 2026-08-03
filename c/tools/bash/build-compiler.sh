@@ -13,8 +13,8 @@ if [ -z "${CC:-}" ]; then
     fi
 fi
 case "$CC" in
-*tcc*) LDLIBS="" ;;
-*) LDLIBS="-lm" ;;
+    *tcc*) LDLIBS="" ;;
+    *) LDLIBS="-lm" ;;
 esac
 "$CC" -Wall -Isrc -o salam \
     src/salam.c \

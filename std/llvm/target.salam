@@ -1,0 +1,201 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Target/TargetMachine - llvm-c/Target.h, llvm-c/TargetMachine.h. Ports
+// init_targets_once() (llvm_native.c:172-182), map_cg_level()/
+// map_pass_pipeline() (:134-170), and the TargetMachine setup in
+// salam_llvm_native() (:1009-1116) - this is the cross-compile entry
+// point: every codegen/link call downstream takes a `triple` string.
+package llvm
+
+import str
+
+extern:
+    func LLVMInitializeAllTargetInfos()
+    func LLVMInitializeAllTargets()
+    func LLVMInitializeAllTargetMCs()
+    func LLVMInitializeAllAsmPrinters()
+    func LLVMInitializeAllAsmParsers()
+    func LLVMGetDefaultTargetTriple(): str
+    func LLVMNormalizeTargetTriple(triple: str): str
+    func LLVMGetTargetFromTriple(triple: str, out_target &: void*, out_err &: void*): int
+    func LLVMGetHostCPUName(): str
+    func LLVMGetHostCPUFeatures(): str
+    func LLVMCreateTargetMachine(
+        target: void*, triple: str, cpu: str, features: str, level: int, reloc: int, model: int
+    ): void*
+    func LLVMDisposeTargetMachine(tm: void*)
+    func LLVMCreateTargetDataLayout(tm: void*): void*
+    func LLVMCreateTargetData(layout_str: str): void*
+    func LLVMDisposeTargetData(td: void*)
+end
+
+@en "TargetMachine"
+@fa "ماشین هدف"
+@ar "آلة الهدف"
+pub struct TargetMachine:
+    pub handle: void* = null
+end
+
+@en "TargetData"
+@fa "داده هدف"
+@ar "بیانات الهدف"
+pub struct TargetData:
+    pub handle: void* = null
+end
+
+// TargetMachineResult - see core.salam's ParseResult for why this is a
+// struct and not a tuple.
+@en "TargetMachineResult"
+@fa "نتیجه ماشین هدف"
+@ar "نتیجة آلة الهدف"
+pub struct TargetMachineResult:
+    pub tm: TargetMachine = TargetMachine {}
+    pub ok: bool = false
+    pub err: str = ""
+end
+
+mut _targets_inited := false
+
+// InitTargets - ports init_targets_once(): idempotent, must run once
+// before any Target*/TargetMachine* call. Registers every backend (not
+// just the host's) so cross-compiling to another arch/OS is possible.
+@en "InitTargets"
+@fa "مقداردهی اهداف"
+@ar "تهیئة الأهداف"
+pub func InitTargets():
+    if _targets_inited:
+        ret
+    end
+    _targets_inited = true
+    LLVMInitializeAllTargetInfos()
+    LLVMInitializeAllTargets()
+    LLVMInitializeAllTargetMCs()
+    LLVMInitializeAllAsmPrinters()
+    LLVMInitializeAllAsmParsers()
+end
+
+// CodeGenLevelOf - ports map_cg_level(): llvm_opt_level_t -> LLVMCodeGenOptLevel.
+@en "CodeGenLevelOf"
+@fa "سطح تولید کد"
+@ar "مستوى توليد الكود"
+pub func CodeGenLevelOf(opt_level: int): int:
+    if opt_level == OPT_O0: ret CODEGEN_LEVEL_NONE end
+    if opt_level == OPT_O1: ret CODEGEN_LEVEL_LESS end
+    if opt_level == OPT_O3: ret CODEGEN_LEVEL_AGGRESSIVE end
+    ret CODEGEN_LEVEL_DEFAULT
+end
+
+// PassPipelineOf - ports map_pass_pipeline(): llvm_opt_level_t -> the
+// new-pass-manager pipeline text RunPasses expects. "" (the C's NULL)
+// means "no optimization pipeline" (O0 - a real pipeline would be a
+// no-op there anyway).
+@en "PassPipelineOf"
+@fa "خط لوله پاس"
+@ar "خط أنابیب التمریرات"
+pub func PassPipelineOf(opt_level: int): str:
+    if opt_level == OPT_O1: ret "default<O1>" end
+    if opt_level == OPT_O2: ret "default<O2>" end
+    if opt_level == OPT_O3: ret "default<O3>" end
+    if opt_level == OPT_OS: ret "default<Os>" end
+    if opt_level == OPT_OZ: ret "default<Oz>" end
+    ret ""
+end
+
+// DefaultTriple - the triple LLVM itself targets by default (this host's
+// triple when no --target= cross triple is requested), normalized to the
+// canonical 4-component form. LLVMNormalizeTargetTriple matters here: a
+// bare LLVMGetDefaultTargetTriple() can come back as a 3-component
+// "arch-os-env" shorthand on some distro LLVM builds (e.g. Debian's
+// "arm-linux-gnueabihf"), which silently drops ABI-relevant environment
+// info (hard-float vs soft-float) when fed straight into
+// LLVMGetTargetFromTriple/LLVMCreateTargetMachine - see llvm_native.c:
+// 1009-1030 for the full story this port condenses to just the fix.
+@en "DefaultTriple"
+@fa "سه‌تایی پیش‌فرض"
+@ar "الثلاثیة الافتراضیة"
+pub func DefaultTriple(): str:
+    raw := LLVMGetDefaultTargetTriple()
+    if str.Len(raw) == 0:
+        ret ""
+    end
+    ret LLVMNormalizeTargetTriple(raw)
+end
+
+// NewTargetMachine - resolves `triple` (empty = DefaultTriple()) to an
+// LLVMTargetRef and builds a TargetMachine for it. `native_cpu` mirrors
+// opts->native_cpu: tune for the exact host CPU/features instead of a
+// generic baseline for that arch - only meaningful when `triple` is the
+// host triple (or empty), matching the C's `is_host_target` guard.
+@en "NewTargetMachine"
+@fa "ماشین هدف جدید"
+@ar "آلة هدف جدیدة"
+pub func NewTargetMachine(triple: str, opt_level: int, native_cpu: bool): TargetMachineResult:
+    InitTargets()
+
+    mut t := triple
+    if str.Len(t) == 0:
+        t = DefaultTriple()
+    end
+    if str.Len(t) == 0:
+        ret TargetMachineResult { ok = false, err = "no default target triple available" }
+    end
+
+    mut target := null as void*
+    mut terr := null as void*
+    if LLVMGetTargetFromTriple(t, target, terr) != 0:
+        msg := terr != null ? str.Clone(terr as str) : "(unavailable)"
+        ret TargetMachineResult { ok = false, err = "LLVM target '" + t + "': " + msg }
+    end
+
+    mut cpu := ""
+    mut features := ""
+    host := DefaultTriple()
+    is_host_target := str.Len(host) > 0 && str.EqualFold(host, t)
+    if native_cpu && is_host_target:
+        hc := LLVMGetHostCPUName()
+        hf := LLVMGetHostCPUFeatures()
+        cpu = str.Len(hc) > 0 ? hc : ""
+        features = str.Len(hf) > 0 ? hf : ""
+    end
+
+    tm := LLVMCreateTargetMachine(
+        target, t, cpu, features, CodeGenLevelOf(opt_level), RELOC_PIC, CODE_MODEL_DEFAULT
+    )
+    if tm == null:
+        ret TargetMachineResult { ok = false, err = "LLVMCreateTargetMachine failed for '" + t + "'" }
+    end
+    ret TargetMachineResult { tm = TargetMachine { handle = tm }, ok = true }
+end
+
+@en "FreeTargetMachine"
+@fa "آزادسازی ماشین هدف"
+@ar "تحریر آلة الهدف"
+pub func FreeTargetMachine(tm: TargetMachine):
+    if tm.handle != null:
+        LLVMDisposeTargetMachine(tm.handle)
+    end
+end
+
+// ApplyDataLayout - sets `mod`'s data layout from `tm`'s, matching
+// llvm_native.c:1113-1116 (LLVMCreateTargetDataLayout ->
+// LLVMSetModuleDataLayout -> LLVMDisposeTargetData).
+@en "ApplyDataLayout"
+@fa "اعمال چیدمان داده"
+@ar "تطبیق تخطیط البیانات"
+pub func ApplyDataLayout(mod: Module, tm: TargetMachine):
+    td := LLVMCreateTargetDataLayout(tm.handle)
+    LLVMSetModuleDataLayout(mod.handle, td)
+    LLVMDisposeTargetData(td)
+end

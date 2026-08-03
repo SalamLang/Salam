@@ -56,6 +56,8 @@ typedef struct {
         LOG_E((ex)->log, PH_DRIVER, __VA_ARGS__);                                        \
         (ex)->errors++;                                                                  \
     } while (0)
+static const char *plural_suffix(size_t n) { return n == 1 ? "" : "s"; }
+
 static bool name_eq(const char *a, const char *b)
 {
     return a && b && strcmp(a, b) == 0;
@@ -517,7 +519,8 @@ size_t layout_expand(arena_t *a, logger_t *log, const langpack_t *pack,
     vec_init(&items);
     expand_items(&ex, &items, lb, NULL, base_dir ? base_dir : "", 0);
     lb->list = items;
-    LOG_I(log, PH_DRIVER, "layout expand: %zu component(s), %zu included file(s)",
-          ex.comps.len, ex.loaded.len);
+    LOG_I(log, PH_DRIVER, "layout expand: %zu component%s, %zu included file%s",
+          ex.comps.len, plural_suffix(ex.comps.len), ex.loaded.len,
+          plural_suffix(ex.loaded.len));
     return ex.errors;
 }

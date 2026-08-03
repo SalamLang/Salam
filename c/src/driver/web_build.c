@@ -167,6 +167,8 @@ static void collect_scripts(ast_node_t *node, script_list_t *out)
     }
 }
 
+static const char *plural_suffix(int n) { return n == 1 ? "" : "s"; }
+
 int driver_web(options_t *opt)
 {
     logger_t *log = logger_new(stderr, opt->log_level, resolve_color(opt->color));
@@ -300,8 +302,8 @@ int driver_web(options_t *opt)
                     }
                     if (rc == 0)
                         LOG_I(log, PH_DRIVER,
-                              "web build complete: %s (%d page script(s))", html_path,
-                              scripts.n);
+                              "web build complete: %s (%d page script%s)", html_path,
+                              scripts.n, plural_suffix(scripts.n));
                 }
                 sb_free(&bundles);
             }

@@ -82,6 +82,8 @@ const char *salam_scratch_dir(void)
     return SALAM_SCRATCH_DIR;
 }
 
+static const char *plural_suffix(int n) { return n == 1 ? "" : "s"; }
+
 static int write_xml(logger_t *log, const sb_t *sb, const char *xml_out, const char *what)
 {
     if (xml_out) {
@@ -310,9 +312,9 @@ static int driver_run(options_t *opt)
         }
         if (nentries == 0) {
             LOG_E(log, PH_DRIVER,
-                  i18n_tr("no entry point: none of the %d .salam file(s) here defines a "
+                  i18n_tr("no entry point: none of the %d .salam file%s here defines a "
                           "'%s' function"),
-                  nfiles, entry);
+                  nfiles, plural_suffix(nfiles), entry);
             arena_free(arena);
             logger_free(log);
             return 2;

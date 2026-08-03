@@ -73,6 +73,8 @@ static const char *path_ext(arena_t *a, const char *mod, const char *ext)
     return p;
 }
 
+static const char *plural_suffix(size_t n) { return n == 1 ? "" : "s"; }
+
 static ast_node_t *find_layout(ast_node_t *program)
 {
     {
@@ -173,8 +175,9 @@ int driver_layout_build(options_t *opt)
     }
     sb_free(&mcss);
     sb_free(&mjs);
-    LOG_I(log, PH_DRIVER, "layout build complete (%zu error(s), %zu warning(s))",
-          diag->errors, diag->warnings);
+    LOG_I(log, PH_DRIVER, "layout build complete (%zu error%s, %zu warning%s)",
+          diag->errors, plural_suffix(diag->errors), diag->warnings,
+          plural_suffix(diag->warnings));
     logger_free(log);
     arena_free(arena);
     return rc;

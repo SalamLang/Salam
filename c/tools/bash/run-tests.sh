@@ -33,9 +33,6 @@ fi
 #   $name.out                       (default/fallback - every existing
 #                                     test is unaffected unless it actually
 #                                     ships one of the more specific files)
-# HOST_OS/HOST_ARCH use the same normalized vocabulary as install.sh's
-# platform detection (linux/mac/windows, x64/arm64/x86/arm) so a test's
-# variant filenames read the same way across the codebase.
 case "$(uname -s 2>/dev/null)" in
 Linux) HOST_OS=linux ;;
 Darwin) HOST_OS=mac ;;
@@ -51,7 +48,6 @@ armv6l | armv7l | armv7 | arm) HOST_ARCH=arm ;;
 *) HOST_ARCH="" ;;
 esac
 pick_expect() {
-    # $1 = path without extension (e.g. ../tests/en/stdlib/os_detect)
     if [ -n "$HOST_OS" ] && [ -n "$HOST_ARCH" ] && [ -f "$1.$HOST_OS.$HOST_ARCH.out" ]; then
         printf '%s\n' "$1.$HOST_OS.$HOST_ARCH.out"
     elif [ -n "$HOST_OS" ] && [ -f "$1.$HOST_OS.out" ]; then
@@ -362,9 +358,6 @@ if want cross; then
                     continue
                 fi
                 if [ -n "$runner" ] && ! command -v "$runner" >/dev/null 2>&1; then
-                    # Debian/multiarch ship qemu-*-static; Alpine's qemu-user
-                    # packages (used in c/docker/Dockerfile) provide the same
-                    # binaries without the -static suffix - accept either.
                     alt="${runner%-static}"
                     if [ "$alt" != "$runner" ] && command -v "$alt" >/dev/null 2>&1; then
                         runner="$alt"
@@ -381,9 +374,6 @@ if want cross; then
         done
     done
 fi
-# Categories that hold example projects (possibly nested, e.g. apps/webview/*
-# or games/pacman/src/*): discovered recursively and matched by sibling
-# .out/.expect/.buildonly files, unlike the flat sections above.
 EXAMPLE_DIRS="apps basics data editor-selected features games interop stdlib types webframework"
 
 want_example() {
@@ -420,10 +410,13 @@ EOF
             base="../tests/$lang/$dir/$name"
             expf="$base.expect"
             [ -f "$expf" ] || continue
+            skip=""
             if [ -f "$base.network" ] && [ "${SALAM_TEST_NETWORK:-0}" != "1" ]; then
-                echo "SKIP $dir/$lang/$name (requires live network; set SALAM_TEST_NETWORK=1 to run - no need inside GitHub Actions)"
-                continue
+                skip="requires live network; set SALAM_TEST_NETWORK=1"
+            elif [ -f "$base.interactive" ] && [ "${SALAM_TEST_INTERACTIVE:-0}" != "1" ]; then
+                skip="opens a modal window; set SALAM_TEST_INTERACTIVE=1 on a desktop session"
             fi
+            [ -n "$skip" ] && { echo "SKIP $dir/$lang/$name ($skip)"; continue; }
             id=$(echo "$name" | tr '/ ' '__')
             jobdir="$WORK/exjob_${dir}_${id}"
             mkdir -p "$jobdir"

@@ -637,9 +637,11 @@ static int driver_fmt(options_t *opt)
     (void)opt->fmt_recursive;
     if (c.check) {
         if (c.changed == 0)
-            printf(i18n_tr("all %d file(s) already formatted\n"), c.total);
+            printf(i18n_tr("all %d file%s already formatted\n"), c.total,
+                   plural_suffix(c.total));
         else
-            printf(i18n_tr("%d of %d file(s) need formatting\n"), c.changed, c.total);
+            printf(i18n_tr("%d of %d file%s need formatting\n"), c.changed, c.total,
+                   plural_suffix(c.total));
     } else {
         printf(i18n_tr("done: %d formatted, %d unchanged\n"), c.changed, c.ok);
     }

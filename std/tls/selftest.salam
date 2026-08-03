@@ -43,6 +43,10 @@ const T_P384_S384 := "a5c6fbaf1d32f68781d172ad4d1e96c6313f8e330563f8d809c2a8074c
 const T_P384_R256 := "51c38a0cb2fb31e20366e7aade2d85de4297b6fc60547423465f4ece8b993da73ffc027c88a0749a643a1a075e3198db"
 const T_P384_S256 := "100403d706c4a990cf957e8384929083420a5d5c02adbe9f580756b3c2d357aa2dafdaa1574145917a33d465541f92d5"
 
+// A deterministic LCG for the parser fuzz. Reproducibility matters more than
+// statistical quality: a failure has to be replayable from the seed alone.
+mut _fz_state := 0 as u64
+
 mut _st_fails := 0
 mut _st_total := 0
 
@@ -1922,6 +1926,87 @@ func _selftest_prf():
     _ck(_tk12_ivlen(CIPHER_CHACHA20_SHA256) == 12, "tls12 chacha fixed iv is 12 bytes")
 end
 
+// ------------------------------------------------------- parser mutation fuzz
+
+func _fz_next(): int:
+    _fz_state = _fz_state * (6364136223846793005 as u64) + (1442695040888963407 as u64)
+    ret ((_fz_state >> (33 as u64)) & (0x7FFFFFFF as u64)) as int
+end
+
+// Feed corrupted certificates to the parser and the chain verifier.
+//
+// Two invariants, both of which must hold for EVERY mutation:
+//   1. nothing crashes, reads out of bounds, or hangs -- run this build under
+//      --asan and the first violation is a hard failure rather than a quiet
+//      memory error;
+//   2. no mutated certificate ever verifies. Any edit inside the TBS breaks
+//      the issuer's signature, and any edit outside it breaks the encoding or
+//      the signature field, so a VERR_NONE here would mean the verifier
+//      accepted something nobody signed.
+//
+// This is a smoke test, not a substitute for a real fuzzing campaign against
+// the DER parser; it covers a few thousand mutations, not millions.
+func _selftest_fuzz():
+    _fz_state = 0x5A1A11C0FFEE as u64
+
+    mut root := _hexbuf(TC_ROOT)
+    defer _buf_free(root)
+    mut leaf := _hexbuf(TC_LEAF)
+    defer _buf_free(leaf)
+
+    mut roots := _roots_new()
+    defer _roots_free(roots)
+    _roots_add(roots, root.p, root.len)
+
+    mut work := _newbuf(leaf.len + 8)
+    defer _buf_free(work)
+    mut ch: Reader[8]
+    repeat 8 with i:
+        ch[i] = _newreader(null, 0)
+    end
+
+    now := 20270601000000 as i64
+    mut accepted := 0
+    mut parsed := 0
+    rounds := 3000
+
+    repeat rounds with iter:
+        _bufreset(work)
+        _putbuf(work, leaf)
+        // truncate on some rounds, otherwise flip one to three bytes
+        if (iter % 7) == 0:
+            cut := 1 + (_fz_next() % work.len)
+            work.len = work.len - cut
+        else:
+            nmut := 1 + (_fz_next() % 3)
+            repeat nmut with _m:
+                if work.len > 0:
+                    pos := _fz_next() % work.len
+                    _bufset(work, pos, _fz_next() & 0xFF)
+                end
+            end
+        end
+        if work.len > 0:
+            c := _cert_parse(work.p, work.len)
+            if c.ok:
+                parsed += 1
+                // exercise the accessors a caller would reach for
+                _cert_match_host(c, "example.com")
+            end
+            ch[0] = _readerof(work)
+            if _verify_chain(ch, 1, roots, "example.com", now) == VERR_NONE:
+                accepted += 1
+            end
+        end
+    end
+
+    _ck(accepted == 0, "fuzz: no mutated certificate verifies")
+    // If nothing at all still parsed, the mutations were too destructive to be
+    // exercising the deeper structure, and the run proved little.
+    _ck(parsed > 0, "fuzz: some mutations still reach the parser body")
+    println "  fuzz:", rounds, "mutations,", parsed, "parsed,", accepted, "accepted"
+end
+
 @en "SelfTest"
 @fa "خودآزمایی"
 @ar "اختبار ذاتی"
@@ -1944,6 +2029,7 @@ pub func SelfTest(): int:
     _selftest_x509()
     _selftest_verify()
     _selftest_roots()
+    _selftest_fuzz()
     if _st_fails == 0:
         println "tls self-test:", _st_total, "checks passed"
     else:

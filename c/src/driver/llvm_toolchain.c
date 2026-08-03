@@ -92,7 +92,7 @@ static bool triple_is_wasm(const char *t)
     return t && strstr(t, "wasm");
 }
 
-static void emit_llvm_link(sb_t *s, const char *spec, const char *kind, bool windows)
+static void emit_llvm_link(sb_t *s, const char *spec, const char *kind)
 {
     bool framework = kind && strcmp(kind, "framework") == 0;
     bool is_static = kind && strcmp(kind, "static") == 0;
@@ -106,10 +106,22 @@ static void emit_llvm_link(sb_t *s, const char *spec, const char *kind, bool win
         sb_put_shell_arg(s, spec);
         return;
     }
-    if (is_static && !windows) {
-        sb_puts(s, " -Wl,-Bstatic -l");
+    if (is_static) {
+        /* -l:libX.a - GNU ld/lld "exact archive name" syntax: picks the
+         * static archive regardless of a same-named shared lib also being
+         * on the search path. Previously gated on `!windows`, silently
+         * falling back to a bare (dynamic) -lX there - but the clang this
+         * script invokes on Windows still targets *-w64-mingw32 through
+         * the same GNU-compatible driver/lld-mingw-flavor toolchain this
+         * whole driver assumes elsewhere (see llvm_native.c's
+         * native_link_mingw), which understands -l: identically to the
+         * Linux/macOS case, so there was no real platform reason for the
+         * guard. (This toolchain does not target *-windows-msvc, whose
+         * link.exe-style linker has no -l: equivalent - not a case this
+         * driver needs to handle.) */
+        sb_puts(s, " -l:lib");
         sb_put_shell_arg(s, spec);
-        sb_puts(s, " -Wl,-Bdynamic");
+        sb_puts(s, ".a");
         return;
     }
     sb_puts(s, " -l");
@@ -203,7 +215,7 @@ static void emit_tool_cmd(sb_t *s, const codegen_llvm_options_t *opts)
             int i = 0;
             for (; i < opts->nlink; i++)
                 emit_llvm_link(s, opts->link_libs[i],
-                               opts->link_kinds ? opts->link_kinds[i] : NULL, win);
+                               opts->link_kinds ? opts->link_kinds[i] : NULL);
         }
         if (!win && !wasm) sb_puts(s, " -lm");
         sb_puts(s, " -o \"$OUT\"\n");

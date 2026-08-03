@@ -523,11 +523,6 @@ func _hs_verify_cert_verify(h &: Handshake, msg: Reader, th: Buf): bool:
 
     mut content := _newbuf(128)
     defer _buf_free(content)
-    // function scope: see the note in conn.salam about nested defers
-    mut rb := _newbuf(48)
-    defer _buf_free(rb)
-    mut sb := _newbuf(48)
-    defer _buf_free(sb)
     _hs_cv_content(h, th, content)
 
     leaf := _cert_parse(_bufptr(h.certs, 0), _cert_len(h, 0))
@@ -535,69 +530,12 @@ func _hs_verify_cert_verify(h &: Handshake, msg: Reader, th: Buf): bool:
         ret _hs_fail(h, "server leaf certificate did not parse")
     end
 
-    mut kind := HASH_SHA256 as int
-    if scheme == SA_ECDSA_P384_SHA384 || scheme == SA_RSA_PSS_RSAE_SHA384 || scheme == SA_RSA_PKCS1_SHA384:
-        kind = HASH_SHA384
+    // Same dispatch as the TLS 1.2 ServerKeyExchange check, with PKCS#1 v1.5
+    // refused: RFC 8446 4.4.3 allows only PSS for RSA in CertificateVerify.
+    if !_tls_verify_leaf_sig(leaf, scheme, content, sig, false):
+        ret _hs_fail(h, "CertificateVerify signature invalid")
     end
-    hlen := _hash_size(kind)
-    mut digest := _newbuf(hlen)
-    defer _buf_free(digest)
-    _putzeros(digest, hlen)
-    _hash_oneshot(kind, content.p, content.len, digest.p)
-
-    if scheme == SA_ECDSA_P256_SHA256 || scheme == SA_ECDSA_P384_SHA384:
-        if leaf.pk_alg == PK_EC_P256:
-            if !_ecdsa_split(sig, rb, sb, 32):
-                ret _hs_fail(h, "malformed ECDSA signature")
-            end
-            if !_ecdsa_p256_verify(digest.p, hlen, rb.p, sb.p, leaf.ec_point.p, leaf.ec_point.len):
-                ret _hs_fail(h, "CertificateVerify signature invalid")
-            end
-            ret true
-        end
-        if leaf.pk_alg == PK_EC_P384:
-            if !_ecdsa_split(sig, rb, sb, 48):
-                ret _hs_fail(h, "malformed ECDSA signature")
-            end
-            if !_ecdsa_p384_verify(digest.p, hlen, rb.p, sb.p, leaf.ec_point.p, leaf.ec_point.len):
-                ret _hs_fail(h, "CertificateVerify signature invalid")
-            end
-            ret true
-        end
-        ret _hs_fail(h, "ECDSA signature with a non-EC leaf key")
-    end
-
-    if leaf.pk_alg != PK_RSA:
-        ret _hs_fail(h, "RSA signature with a non-RSA leaf key")
-    end
-    mut n := _newbuf(leaf.rsa_n.len)
-    defer _buf_free(n)
-    repeat leaf.rsa_n.len with i:
-        _put8(n, _rdat(leaf.rsa_n, i))
-    end
-    mut e := _newbuf(leaf.rsa_e.len)
-    defer _buf_free(e)
-    repeat leaf.rsa_e.len with i:
-        _put8(e, _rdat(leaf.rsa_e, i))
-    end
-    mut sg := _newbuf(sig.len)
-    defer _buf_free(sg)
-    repeat sig.len with i:
-        _put8(sg, _rdat(sig, i))
-    end
-
-    if scheme == SA_RSA_PSS_RSAE_SHA256 || scheme == SA_RSA_PSS_RSAE_SHA384 || scheme == SA_RSA_PSS_PSS_SHA256:
-        if !_rsa_verify_pss(kind, digest.p, n.p, n.len, e.p, e.len, sg.p, sg.len, hlen):
-            ret _hs_fail(h, "CertificateVerify signature invalid")
-        end
-        ret true
-    end
-    if scheme == SA_RSA_PKCS1_SHA256 || scheme == SA_RSA_PKCS1_SHA384:
-        // RFC 8446 forbids PKCS#1 v1.5 in CertificateVerify; only PSS is legal
-        // for RSA. Accepting it would undo that decision.
-        ret _hs_fail(h, "server used PKCS#1 v1.5 in CertificateVerify")
-    end
-    ret _hs_fail(h, "unsupported signature scheme in CertificateVerify")
+    ret true
 end
 
 func _cert_len(h: Handshake, i: int): int:

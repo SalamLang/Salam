@@ -5489,7 +5489,7 @@ func nt_has_path_char(spec: str): bool:
 end
 
 // emit_llvm_link
-func nt_emit_llvm_link(spec: str, kind: str, windows: bool): str:
+func nt_emit_llvm_link(spec: str, kind: str): str:
     if str.Len(spec) == 0:
         ret " -l" + nt_shell_arg(spec)
     end
@@ -5501,8 +5501,17 @@ func nt_emit_llvm_link(spec: str, kind: str, windows: bool): str:
     if byte_at(spec, 0) == 45 || nt_has_path_char(spec):
         ret " " + nt_shell_arg(spec)
     end
-    if is_static && !windows:
-        ret " -Wl,-Bstatic -l" + nt_shell_arg(spec) + " -Wl,-Bdynamic"
+    // -l:libX.a - GNU ld/lld "exact archive name" syntax, picks the static
+    // archive regardless of a same-named shared lib also being on the
+    // search path. Previously gated on `!windows` (mirroring the pre-fix
+    // C), silently falling back to a bare (dynamic) -lX there - but the
+    // clang this script invokes on Windows still targets *-w64-mingw32
+    // through the same GNU-compatible driver/lld-mingw-flavor toolchain
+    // this whole driver assumes elsewhere, which understands -l: just
+    // like the Linux/macOS case - see c/src/driver/llvm_toolchain.c's
+    // emit_llvm_link for the parity fix this mirrors.
+    if is_static:
+        ret " -l:lib" + nt_shell_arg(spec) + ".a"
     end
     ret " -l" + nt_shell_arg(spec)
 end
@@ -5566,7 +5575,7 @@ func nt_emit_tool_cmd(opts: Options): str:
             if li < opts.link_kinds.len():
                 kind = opts.link_kinds.get(li)[0]
             end
-            out += nt_emit_llvm_link(spec, kind, win)
+            out += nt_emit_llvm_link(spec, kind)
             li += 1
         end
         if !win && !wasm:

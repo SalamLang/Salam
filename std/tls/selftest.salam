@@ -2014,6 +2014,54 @@ func _selftest_fuzz():
     println "  fuzz:", rounds, "mutations,", parsed, "parsed,", accepted, "accepted"
 end
 
+// ---------------------------------------------------------------- IP SANs
+
+func _ip4_str(s: str): str:
+    r := _parse_ip4(s)
+    if !r.ok:
+        ret "reject"
+    end
+    ret r.b[0] + "." + r.b[1] + "." + r.b[2] + "." + r.b[3]
+end
+
+func _selftest_ip():
+    // Accepted forms, round-tripped through the parsed octets.
+    _ckhex(_ip4_str("1.2.3.4"), "1.2.3.4", "ip4 basic")
+    _ckhex(_ip4_str("0.0.0.0"), "0.0.0.0", "ip4 all zero")
+    _ckhex(_ip4_str("255.255.255.255"), "255.255.255.255", "ip4 all ones")
+    _ckhex(_ip4_str("93.184.216.34"), "93.184.216.34", "ip4 real address")
+    _ckhex(_ip4_str("10.0.0.1"), "10.0.0.1", "ip4 zero inside an octet")
+
+    // Rejected forms. Permissive IP parsing is a standing source of SSRF and
+    // name-confusion bugs, so every one of these must fail closed rather than
+    // be interpreted generously.
+    _ckhex(_ip4_str("01.2.3.4"), "reject", "ip4 rejects leading zero")
+    _ckhex(_ip4_str("1.02.3.4"), "reject", "ip4 rejects leading zero mid-address")
+    _ckhex(_ip4_str("0177.0.0.1"), "reject", "ip4 rejects octal-looking form")
+    _ckhex(_ip4_str("256.1.1.1"), "reject", "ip4 rejects octet over 255")
+    _ckhex(_ip4_str("1.2.3.256"), "reject", "ip4 rejects last octet over 255")
+    _ckhex(_ip4_str("1.2.3"), "reject", "ip4 rejects three parts")
+    _ckhex(_ip4_str("1.2.3.4.5"), "reject", "ip4 rejects five parts")
+    _ckhex(_ip4_str("1.2.3."), "reject", "ip4 rejects trailing dot")
+    _ckhex(_ip4_str(".1.2.3"), "reject", "ip4 rejects leading dot")
+    _ckhex(_ip4_str("1.2..4"), "reject", "ip4 rejects empty octet")
+    _ckhex(_ip4_str("1.2.3.a"), "reject", "ip4 rejects non-digit")
+    _ckhex(_ip4_str("0x7f.0.0.1"), "reject", "ip4 rejects hex form")
+    _ckhex(_ip4_str("example.com"), "reject", "ip4 rejects a hostname")
+    _ckhex(_ip4_str(""), "reject", "ip4 rejects empty")
+    _ckhex(_ip4_str("1234.1.1.1"), "reject", "ip4 rejects four-digit octet")
+    _ckhex(_ip4_str("::1"), "reject", "ip4 rejects an IPv6 literal")
+
+    // A certificate whose SANs are dNSName only must not be satisfied by an
+    // address, even though the verifier is being asked about one.
+    mut leafder := _hexbuf(TC_LEAF)
+    defer _buf_free(leafder)
+    leaf := _cert_parse(leafder.p, leafder.len)
+    _ck(leaf.ok, "ip: leaf parses")
+    _ck(!_cert_match_host(leaf, "93.184.216.34"), "ip: dNSName-only cert rejects an address")
+    _ck(_cert_match_host(leaf, "example.com"), "ip: dNSName still matches by name")
+end
+
 @en "SelfTest"
 @fa "خودآزمایی"
 @ar "اختبار ذاتی"
@@ -2034,6 +2082,7 @@ pub func SelfTest(): int:
     _selftest_p384()
     _selftest_sig()
     _selftest_x509()
+    _selftest_ip()
     _selftest_verify()
     _selftest_roots()
     _selftest_fuzz()

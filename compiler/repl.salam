@@ -1,0 +1,817 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Flat single-file module (see salam/PORTING.md "Layout - FLAT").
+// Port of compiler/src/driver/repl.c (+ repl.h, which is just the one
+// `driver_repl` declaration - nothing to port there). Package `repl`,
+// alias `rp`. Replaces cli.salam's CMD_REPL/CMD_REPL_LAYOUT stub
+// ("the interactive REPL is not ported yet (PORT-TODO)").
+//
+// Scope: driver_repl's whole interactive loop - readline with history and
+// in-place line editing, block-depth tracking (waits for a matching 'end'
+// before running a multi-line paste), the "accumulate defs / wrap bare
+// statements in func main / :run on demand" general-REPL flow, and the
+// layout-REPL's "render a `layout: ... end` block to HTML on every Enter"
+// flow.
+//
+// C -> Salam decisions:
+// - repl_hist[REPL_HIST_MAX] (fixed C array) -> a module-global
+//   Vector<str> g_hist, still capped at REPL_HIST_MAX entries (oldest
+//   evicted on overflow, same as the C's memmove-down-by-one), just without
+//   a hand-rolled ring buffer.
+// - char *buf / int len,pos (a hand-edited byte array) -> a plain `str`
+//   line plus an int `pos` (byte offset), rebuilt via substr/concat on
+//   every keystroke instead of memmove'd in place. Editing a REPL line is
+//   never hot enough for the extra allocations to matter; this stays much
+//   closer to idiomatic Salam than porting memmove byte-shuffling would.
+// - repl_compile_pkg + repl_exec's own hand-rolled mini "compile these 7
+//   runtime packages + the session, then cc/system() the result" linker
+//   (RT_PKGS: mem/core/map/text/console/fs/thread) is NOT reproduced.
+//   Instead exec_session() below writes the session to a real temp
+//   .salam file and calls dr.Build() - the SAME full package-resolution
+//   pipeline `salam build` itself uses. This is a deliberate improvement,
+//   not a shortcut: it transitively resolves whatever the session actually
+//   imports (any std package, not just a fixed list of 7), and it's far
+//   less code since dr.Build already existed. It also gets rich
+//   rustc-style diagnostics for free (build_impl calls
+//   lg.SetDiagSource/AddDiagSource internally), where the C's repl_exec
+//   only had plain logger_log output.
+// - repl_readline's Win32 console / POSIX termios raw-input loops are
+//   ported as win_readline/posix_readline below, gated the same way every
+//   other OS-specific pair in this codebase is (`if SALAM_OS_WINDOWS:`).
+//   Both share one non-tty fallback_readline (byte-at-a-time via getchar,
+//   matching the C's fgets fallback - stops at EOF or '\n', strips a
+//   trailing '\r', and - unlike io.Input()/salam_input() - distinguishes
+//   "EOF with zero bytes read" (ok=false, like fgets returning NULL) from
+//   an actual empty line (ok=true, ""), which the REPL's `for(;;)` loop
+//   needs to know when to stop vs. just re-prompt).
+// - INPUT_RECORD/KEY_EVENT_RECORD (wincontypes.h) are read through raw
+//   byte offsets into a manually `mem.Allocate`d buffer (matching
+//   interp.salam's ptr_load/ptr_store idiom) rather than an `extern
+//   struct` binding, which this language doesn't have. Offsets were
+//   computed by hand from the real header
+//   (C:\msys64\mingw64\include\wincontypes.h on this repo's own dev
+//   host) for the standard Win64 layout: EventType:u16@0,
+//   KeyEvent.bKeyDown:i32@4, KeyEvent.wVirtualKeyCode:u16@10,
+//   KeyEvent.uChar.AsciiChar:i8@14, sizeof(INPUT_RECORD)=20 (a 24-byte
+//   buffer is allocated for headroom). See win_readline's own comment for
+//   the layout derivation.
+// - struct termios (bits/termios.h) is likewise read/written through raw
+//   byte offsets rather than a real header include. UNLIKE the Windows
+//   struct above, this layout is **glibc/Linux-specific** (x86_64 and
+//   i386 share it; musl, macOS/BSD, and other libcs lay c_line/c_cc/NCCS
+//   out differently and are NOT handled) - offset 0/4/8/12 = c_iflag/
+//   c_oflag/c_cflag/c_lflag (tcflag_t, 4 bytes each), offset 16 = c_line
+//   (1 byte), offset 17 = c_cc[NCCS=32], c_ispeed/c_ospeed follow at the
+//   next 4-byte-aligned offsets (52/56), size 60. This mirrors how
+//   driver.salam's bundled-musl-tcc detection is already POSIX-scoped to
+//   "whatever this repo's own dev/CI environment provides" rather than
+//   fully general; unlike that gap this one cannot be exercised or
+//   verified at all on this repo's Windows dev host, so it is a
+//   best-effort straight transcription of the C's raw/canon flag toggles
+//   (BRKINT/ICRNL/INPCK/ISTRIP/IXON/CS8/ECHO/ICANON/IEXTEN/ISIG/VMIN/
+//   VTIME/TCSAFLUSH) against those glibc offsets, not independently
+//   tested. A non-glibc POSIX target would need its own offsets.
+package repl
+
+import os
+import io
+import str
+import time
+import mem
+import lg "logger.salam"
+import dr "driver.salam"
+import lp "langpack.salam"
+import lx "lexer.salam"
+import ps "parser.salam"
+import cc "condcomp.salam"
+import sm "semantic.salam"
+import lo "sal_layout.salam"
+import dg "diag.salam"
+import tok "token.salam"
+import at "ast.salam"
+import src "source.salam"
+import i18 "i18n.salam"
+import co "sal_core.salam"
+
+// REPL_HIST_MAX (repl.c)
+const HIST_MAX := 200
+
+// repl_hist[]/repl_nhist (repl.c) - module-global session history, shared
+// across every readline() call in one `salam repl` run (matches the C's
+// static array living for the process, reset only at the top of driver_repl
+// via repl_nhist=0/frees, which Run() below reproduces on entry).
+mut g_hist := Vector {} as Vector<str>
+
+// process spawn (system()) - same idiom driver.salam's own identical
+// comment uses; no link needed, libc is always linked.
+extern:
+    func system(cmd: str): int
+    func getchar(): int
+end
+
+if SALAM_OS_WINDOWS:
+    // wincon.h / wincontypes.h - see the file header for the byte-offset
+    // derivation this reads INPUT_RECORD/KEY_EVENT_RECORD through.
+    extern:
+        func GetStdHandle(nStdHandle: i32): void*
+        func GetFileType(h: void*): i32
+        func GetConsoleMode(h: void*, out_mode: void*): i32
+        func SetConsoleMode(h: void*, mode: u32): i32
+        func ReadConsoleInputA(h: void*, buf: void*, n: i32, out_read: void*): i32
+        func _isatty(fd: int): int
+    end
+else:
+    // termios.h / unistd.h - see the file header for the (glibc-only)
+    // byte-offset derivation this reads/writes `struct termios` through.
+    extern:
+        func isatty(fd: int): int
+        func tcgetattr(fd: int, buf: void*): int
+        func tcsetattr(fd: int, action: int, buf: void*): int
+        func read(fd: int, buf: void*, n: u64): i64
+        func write(fd: int, buf: void*, n: u64): i64
+    end
+end
+
+// STD_INPUT_HANDLE (winbase.h): (DWORD)-10, passed as the i32 bit pattern
+// GetStdHandle expects.
+const STD_INPUT_HANDLE := 0 - 10
+const FILE_TYPE_CHAR := 2
+const ENABLE_PROCESSED_INPUT := 1
+const KEY_EVENT := 1
+const VK_RETURN := 13
+const VK_BACK := 8
+const VK_DELETE := 46 // 0x2E
+const VK_LEFT := 37 // 0x25
+const VK_RIGHT := 39 // 0x27
+const VK_HOME := 36 // 0x24
+const VK_END := 35 // 0x23
+const VK_UP := 38 // 0x26
+const VK_DOWN := 40 // 0x28
+
+// TCSAFLUSH (termios.h)
+const TCSAFLUSH := 2
+// VMIN/VTIME indices into glibc's c_cc[NCCS] (bits/termios.h)
+const CC_VTIME_IDX := 5
+const CC_VMIN_IDX := 6
+// Raw-mode flag masks (see file header for the octal->decimal derivation).
+// Written as "the bits raw mode CLEARS" so cflag/lflag/iflag can be ANDed
+// with these directly (`flag & IFLAG_KEEP_MASK`) instead of needing a `~`
+// operator: each KEEP_MASK is precomputed as 0xFFFFFFFF minus the exact
+// set of bits the C's `&= ~(...)` clears.
+const IFLAG_CLEAR_BITS := 1330 // BRKINT|ICRNL|INPCK|ISTRIP|IXON
+const IFLAG_KEEP_MASK := 4294965965 // ~IFLAG_CLEAR_BITS as u32
+const LFLAG_CLEAR_BITS := 32779 // ECHO|ICANON|IEXTEN|ISIG
+const LFLAG_KEEP_MASK := 4294934516 // ~LFLAG_CLEAR_BITS as u32
+const CFLAG_CS8 := 48
+
+// resolve_color / stderr_is_tty - private copies of driver.salam's own
+// identically-named helpers (not reusable from here: driver.salam keeps
+// them package-private, per the "driver.salam is read-only from here"
+// convention cli.salam's own header already documents).
+func stderr_is_tty(): bool:
+    if SALAM_OS_WINDOWS:
+        ret _isatty(2) != 0
+    else:
+        ret isatty(2) != 0
+    end
+end
+
+func resolve_color(flag: int): bool:
+    if flag == 1:
+        ret true
+    end
+    if flag == 0:
+        ret false
+    end
+    ret stderr_is_tty()
+end
+
+// Unsigned byte read from a str's bytes (idiom shared with driver.salam's
+// own byte_at / diag.salam's ub).
+func byte_at(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+// repl_hist_push - append to session history, capped at HIST_MAX (oldest
+// evicted), skipping a blank line or an exact repeat of the last entry.
+func hist_push(line: str):
+    if str.Len(line) == 0:
+        ret
+    end
+    n := g_hist.len()
+    if n > 0 && str.Equals(g_hist.get(n - 1)[0], line):
+        ret
+    end
+    if n == HIST_MAX:
+        mut i := 0
+        until i >= HIST_MAX - 1:
+            g_hist.set(i, g_hist.get(i + 1)[0])
+            i += 1
+        end
+        _p := g_hist.pop()
+    end
+    g_hist.push(line)
+end
+
+// repl_readline's non-tty fallback (both OS branches use the same fgets
+// idiom in the C; ok=false only when EOF hits before any byte was read -
+// same distinction fgets' NULL return makes, which io.Input()/salam_input()
+// cannot make since both treat "EOF at once" and "" as identical).
+func fallback_readline(prompt: str, ok &: bool): str:
+    print prompt
+    mut c := getchar()
+    if c == 0 - 1:
+        ok = false
+        ret ""
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    until c == 0 - 1 || c == 10:
+        if c != 13:
+            str.BufAppendChar(b, c)
+        end
+        c = getchar()
+    end
+    ok = true
+    ret str.BufStr(b)
+end
+
+if SALAM_OS_WINDOWS:
+    // repl_readline (Win32 branch). INPUT_RECORD layout (see file header):
+    // a 24-byte buffer, EventType:u16@0, KeyEvent.bKeyDown:i32@4,
+    // KeyEvent.wVirtualKeyCode:u16@10, KeyEvent.uChar.AsciiChar:i8@14.
+    func win_readline(prompt: str, ok &: bool): str:
+        hIn := GetStdHandle(STD_INPUT_HANDLE as i32)
+        invalid := (hIn as i64) == (0 - 1)
+        mut is_char := false
+        if !invalid:
+            is_char = GetFileType(hIn) == FILE_TYPE_CHAR
+        end
+        if invalid || !is_char:
+            ret fallback_readline(prompt, ok)
+        end
+
+        mode_buf := mem.Allocate(4 as u64)
+        _gm := GetConsoleMode(hIn, mode_buf)
+        orig := (mode_buf as u32*)[0]
+        mem.Free(mode_buf)
+        _sm := SetConsoleMode(hIn, ENABLE_PROCESSED_INPUT as u32)
+
+        print prompt
+        mut line := ""
+        mut pos := 0
+        mut hi := g_hist.len()
+        mut saved := ""
+        rec := mem.Allocate(24 as u64)
+        nread := mem.Allocate(4 as u64)
+        ok = true
+        mut done := false
+        until done:
+            rc := ReadConsoleInputA(hIn, rec, 1 as i32, nread)
+            if rc == 0:
+                done = true
+            else:
+                base := rec as i64
+                evtype := ((base + 0) as u16*)[0] as int
+                keydown := ((base + 4) as i32*)[0]
+                if evtype != KEY_EVENT || keydown == 0:
+                    // not a key-down event; keep reading
+                else:
+                    vk := ((base + 10) as u16*)[0] as int
+                    ch := ((base + 14) as i8*)[0] as int
+                    len := str.Len(line)
+                    if vk == VK_RETURN:
+                        println ""
+                        done = true
+                    else vk == VK_BACK && pos > 0:
+                        line = line.substr(0, pos - 1) + line.substr(pos, len - pos)
+                        pos -= 1
+                        print "\r" + prompt + line + " " + "\r" + prompt + line.substr(0, pos)
+                    else vk == VK_DELETE && pos < len:
+                        line = line.substr(0, pos) + line.substr(pos + 1, len - pos - 1)
+                        print "\r" + prompt + line + " " + "\r" + prompt + line.substr(0, pos)
+                    else vk == VK_LEFT && pos > 0:
+                        pos -= 1
+                        print "\r" + prompt + line.substr(0, pos)
+                    else vk == VK_RIGHT && pos < len:
+                        pos += 1
+                        print "\r" + prompt + line.substr(0, pos)
+                    else vk == VK_HOME:
+                        pos = 0
+                        print "\r" + prompt
+                    else vk == VK_END:
+                        pos = len
+                        print "\r" + prompt + line
+                    else vk == VK_UP:
+                        if hi == g_hist.len():
+                            saved = line
+                        end
+                        if hi > 0:
+                            hi -= 1
+                            hline := g_hist.get(hi)[0]
+                            print "\r" + prompt + " ".repeat(len + 1) + "\r" + prompt + hline
+                            line = hline
+                            pos = str.Len(line)
+                        end
+                    else vk == VK_DOWN:
+                        if hi < g_hist.len():
+                            hi += 1
+                            mut hline := saved
+                            if hi < g_hist.len():
+                                hline = g_hist.get(hi)[0]
+                            end
+                            print "\r" + prompt + " ".repeat(len + 1) + "\r" + prompt + hline
+                            line = hline
+                            pos = str.Len(line)
+                        end
+                    else ch == 1:
+                        pos = 0
+                        print "\r" + prompt
+                    else ch == 5:
+                        pos = len
+                        print "\r" + prompt + line
+                    else ch == 21:
+                        print "\r" + prompt + " ".repeat(len + 1) + "\r" + prompt
+                        line = ""
+                        pos = 0
+                    else ch == 3 || (ch == 4 && len == 0):
+                        println ""
+                        ok = false
+                        done = true
+                    else ch >= 32 && ch < 256 && str.Len(line) < 4095:
+                        line = line.substr(0, pos) + char_from_code(ch) + line.substr(pos, len - pos)
+                        pos += 1
+                        print "\r" + prompt + line + " " + "\r" + prompt + line.substr(0, pos)
+                    end
+                end
+            end
+        end
+        mem.Free(rec)
+        mem.Free(nread)
+        _rm := SetConsoleMode(hIn, orig)
+        ret line
+    end
+else:
+    // repl_readline (POSIX branch). `struct termios` layout (see file
+    // header): glibc-only, 60-byte buffer, c_iflag/c_oflag/c_cflag/
+    // c_lflag:u32@0/4/8/12, c_cc[NCCS]@17 (VMIN@17+6, VTIME@17+5).
+    func posix_readline(prompt: str, ok &: bool): str:
+        if isatty(0) == 0:
+            ret fallback_readline(prompt, ok)
+        end
+        orig := mem.Allocate(60 as u64)
+        _gt := tcgetattr(0, orig)
+        raw := mem.Allocate(60 as u64)
+        mem.Copy(raw, orig, 60 as u64)
+        iflag_p := raw as u32*
+        cflag_p := ((raw as i64) + 8) as u32*
+        lflag_p := ((raw as i64) + 12) as u32*
+        iflag_p[0] = iflag_p[0] & IFLAG_KEEP_MASK
+        cflag_p[0] = cflag_p[0] | (CFLAG_CS8 as u32)
+        lflag_p[0] = lflag_p[0] & LFLAG_KEEP_MASK
+        vmin_p := ((raw as i64) + 17 + CC_VMIN_IDX) as i8*
+        vtime_p := ((raw as i64) + 17 + CC_VTIME_IDX) as i8*
+        vmin_p[0] = 1 as i8
+        vtime_p[0] = 0 as i8
+        _st := tcsetattr(0, TCSAFLUSH, raw)
+        mem.Free(raw)
+
+        print prompt
+        mut line := ""
+        mut pos := 0
+        mut hi := g_hist.len()
+        mut saved := ""
+        ok = true
+        mut done := false
+        until done:
+            cb := mem.Allocate(1 as u64)
+            nr := read(0, cb, 1 as u64)
+            mut c := 0 - 1
+            if nr > (0 as i64):
+                c = (cb as u8*)[0] as int
+            end
+            mem.Free(cb)
+            len := str.Len(line)
+            if nr <= (0 as i64):
+                if len == 0:
+                    ok = false
+                end
+                done = true
+            else c == 13 || c == 10:
+                print "\r\n"
+                done = true
+            else c == 127 || c == 8:
+                if pos > 0:
+                    line = line.substr(0, pos - 1) + line.substr(pos, len - pos)
+                    pos -= 1
+                    print "\b" + line.substr(pos, len - 1 - pos) + " " + "\b".repeat(len - pos)
+                end
+            else c == 1:
+                print "\b".repeat(pos)
+                pos = 0
+            else c == 5:
+                print line.substr(pos, len - pos)
+                pos = len
+            else c == 21:
+                print "\b".repeat(pos) + " ".repeat(len) + "\b".repeat(len)
+                line = ""
+                pos = 0
+            else c == 3 || (c == 4 && len == 0):
+                print "\r\n"
+                ok = false
+                done = true
+            else c == 27:
+                s1b := mem.Allocate(1 as u64)
+                n1 := read(0, s1b, 1 as u64)
+                s1 := n1 > (0 as i64) ? ((s1b as u8*)[0] as int) : 0
+                mem.Free(s1b)
+                if n1 <= (0 as i64) || s1 != 91: // '['
+                    // ignore malformed/short escape sequence
+                else:
+                    s2b := mem.Allocate(1 as u64)
+                    n2 := read(0, s2b, 1 as u64)
+                    s2 := n2 > (0 as i64) ? ((s2b as u8*)[0] as int) : 0
+                    mem.Free(s2b)
+                    if n2 <= (0 as i64):
+                        // ignore short escape sequence
+                    else s2 == 65: // 'A' - up
+                        if hi == g_hist.len():
+                            saved = line
+                        end
+                        if hi > 0:
+                            hi -= 1
+                            hline := g_hist.get(hi)[0]
+                            print "\b".repeat(pos) + " ".repeat(len) + "\b".repeat(len) + hline
+                            line = hline
+                            pos = str.Len(line)
+                        end
+                    else s2 == 66: // 'B' - down
+                        if hi < g_hist.len():
+                            hi += 1
+                            mut hline := saved
+                            if hi < g_hist.len():
+                                hline = g_hist.get(hi)[0]
+                            end
+                            print "\b".repeat(pos) + " ".repeat(len) + "\b".repeat(len) + hline
+                            line = hline
+                            pos = str.Len(line)
+                        end
+                    else s2 == 67 && pos < len: // 'C' - right
+                        print line.substr(pos, 1)
+                        pos += 1
+                    else s2 == 68 && pos > 0: // 'D' - left
+                        print "\b"
+                        pos -= 1
+                    else s2 == 51: // '3' - possibly Delete (ESC [ 3 ~)
+                        tb := mem.Allocate(1 as u64)
+                        nt := read(0, tb, 1 as u64)
+                        tch := nt > (0 as i64) ? ((tb as u8*)[0] as int) : 0
+                        mem.Free(tb)
+                        if nt > (0 as i64) && tch == 126 && pos < len: // '~'
+                            line = line.substr(0, pos) + line.substr(pos + 1, len - pos - 1)
+                            print line.substr(pos, len - 1 - pos) + " " + "\b".repeat(len - pos)
+                        end
+                    end
+                end
+            else c >= 32 && c < 256 && str.Len(line) < 4095:
+                line = line.substr(0, pos) + char_from_code(c) + line.substr(pos, len - pos)
+                pos += 1
+                print line.substr(pos - 1, len + 1 - pos) + "\b".repeat(len - pos)
+            end
+        end
+        _rt := tcsetattr(0, TCSAFLUSH, orig)
+        mem.Free(orig)
+        ret line
+    end
+end
+
+// repl_readline dispatcher.
+func readline(prompt: str, ok &: bool): str:
+    if SALAM_OS_WINDOWS:
+        ret win_readline(prompt, ok)
+    end
+    ret posix_readline(prompt, ok)
+end
+
+// repl_is_def - does `line` (already left-trimmed by the caller) start a
+// top-level definition (or a comment, which the C also lets straight into
+// the accumulated session unexamined)?
+func is_def(line: str): bool:
+    kws := ["func ", "struct ", "enum ", "type ", "import ", "package ", "link ", "//"] as str[8]
+    repeat 8 with i:
+        if str.StartsWith(line, kws[i]):
+            ret true
+        end
+    end
+    ret false
+end
+
+// repl_wants_run
+func wants_run(line: str): bool:
+    ret str.StartsWith(line, "main()")
+end
+
+// repl_block_depth - scans `src_text` for a colon that OPENS a block (not
+// preceded by whitespace, followed by whitespace/EOF - the same heuristic
+// that distinguishes `if x:` from a `key: value`-style colon elsewhere) vs
+// a lowercase `end` keyword that closes one. Positive means "still waiting
+// for more input" (a lone left-trimmed statement never opens unmatched
+// blocks, so 0 is the common case).
+func block_depth(pack: int, src_text: str): int:
+    lgr := lg.New(lg.LOG_OFF, false)
+    mut sf := src.New()
+    sf.path = "<repl>"
+    sf.text = src_text
+    sf.len = str.Len(src_text)
+    mut toks := tok.StreamNew(sf.path)
+    mut depth := 0
+    if lx.Run(lgr, pack, sf, toks):
+        n := tok.StreamCount(toks)
+        mut i := 0
+        until i >= n:
+            t := tok.StreamAt(toks, i)
+            if t.kind == tok.TK_KW_END:
+                depth -= 1
+            else t.kind == tok.TK_COLON:
+                idx := t.begin_index as int
+                mut lws := idx == 0
+                if !lws:
+                    pc := byte_at(src_text, idx - 1)
+                    lws = pc == 32 || pc == 9 || pc == 10 || pc == 13
+                end
+                mut nxt := true
+                if idx + 1 < str.Len(src_text):
+                    nc := byte_at(src_text, idx + 1)
+                    nxt = nc == 32 || nc == 9 || nc == 10 || nc == 13
+                end
+                if !lws && nxt:
+                    depth += 1
+                end
+            end
+            i += 1
+        end
+    end
+    tok.StreamFree(toks)
+    ret depth
+end
+
+// compile_check - repl_is_def's validation branch: does session+block
+// lex/parse/prune/sema cleanly (codegen is never reached - this is a
+// dry-run gate before accepting the def into the session, matching the
+// C's own throwaway arena_t exactly).
+func compile_check(opt &: dr.Dr, pack: int, test_src: str): bool:
+    lgr := lg.New(lg.LOG_ERROR, resolve_color(opt.color))
+    mut sf := src.New()
+    sf.path = "<repl>"
+    sf.text = test_src
+    sf.len = str.Len(test_src)
+    lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+    mut toks := tok.StreamNew(sf.path)
+    ok := lx.Run(lgr, pack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    mut pok := ok
+    if ok:
+        pok = ps.Run(lgr, toks, a, prog)
+    end
+    tok.StreamFree(toks)
+    table := cc.TableBuild("", opt.defines)
+    mut cok := pok
+    if pok:
+        cok = cc.PruneProgram(a, lgr, sf.path, table, prog)
+    end
+    mut s := sm.New(lgr, sf.path, lp.Code(pack))
+    sm.SetCc(s, table)
+    mut sok := false
+    if cok:
+        sok = sm.Run(s, a, prog)
+    end
+    sm.Free(s)
+    at.FreeAst(a)
+    ret ok && pok && cok && sok
+end
+
+// exec_session - repl_exec, reworked to reuse dr.Build's own full
+// package-resolution pipeline (see the file header's "C -> Salam decisions"
+// note on why this is simpler AND more complete than the C's hand-rolled
+// RT_PKGS mini-linker). `opt` is mutated in place (inputs/output/command),
+// matching dr.Run()'s own established idiom of repurposing its `&: Dr` for
+// a one-shot sub-build.
+func exec_session(opt &: dr.Dr, full_src: str):
+    ts := time.NowMicros()
+    tmp_src := os.TempDir() + "/salam-repl-" + ts + ".salam"
+    mut exe_suffix := ""
+    if SALAM_OS_WINDOWS:
+        exe_suffix = ".exe"
+    end
+    tmp_exe := os.TempDir() + "/salam-repl-" + ts + exe_suffix
+    if io.WriteFile(tmp_src, full_src) < 0:
+        io.EPrintln("error: could not write a temp file for the session")
+        ret
+    end
+    opt.inputs = Vector {} as Vector<str>
+    opt.inputs.push(tmp_src)
+    opt.output = tmp_exe
+    opt.exe_path = ""
+    opt.keep_c = false
+    rc := dr.Build(opt)
+    if rc == 0:
+        exe := str.Len(opt.exe_path) > 0 ? opt.exe_path : tmp_exe
+        mut cmdb := str.NewBuilder()
+        str.BufAppendChar(cmdb, 34)
+        if SALAM_OS_WINDOWS:
+            str.BufAppend(cmdb, exe)
+        else:
+            if str.Contains(exe, "/"):
+                str.BufAppend(cmdb, exe)
+            else:
+                str.BufAppend(cmdb, "./" + exe)
+            end
+        end
+        str.BufAppendChar(cmdb, 34)
+        cmdtext := str.BufStr(cmdb)
+        str.BufFree(cmdb)
+        _run := system(cmdtext)
+    end
+    _r1 := os.Remove(tmp_src)
+    _r2 := os.Remove(opt.exe_path.len() > 0 ? opt.exe_path : tmp_exe)
+end
+
+// repl_layout_exec - lex/parse/prune, then (regardless of sema's own
+// result, matching the C's `if (ok) sema_run(...)` with the bool
+// discarded) find and render a `layout: ... end` block to stdout.
+func layout_exec(opt &: dr.Dr, pack: int, src_text: str):
+    lgr := lg.New(lg.LOG_ERROR, resolve_color(opt.color))
+    mut sf := src.New()
+    sf.path = "<repl>"
+    sf.text = src_text
+    sf.len = str.Len(src_text)
+    lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+    mut toks := tok.StreamNew(sf.path)
+    ok := lx.Run(lgr, pack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    mut pok := ok
+    if ok:
+        pok = ps.Run(lgr, toks, a, prog)
+    end
+    tok.StreamFree(toks)
+    mut cok := pok
+    if pok:
+        table := cc.TableBuild("", opt.defines)
+        cok = cc.PruneProgram(a, lgr, sf.path, table, prog)
+        if cok:
+            mut s := sm.New(lgr, sf.path, lp.Code(pack))
+            sm.SetCc(s, table)
+            _sok := sm.Run(s, a, prog)
+            sm.Free(s)
+        end
+    end
+    if cok:
+        lb := lo.FindLayout(a, prog)
+        if lb != 0:
+            mut diag_e := dg.New(lgr, lg.PH_CODEGEN)
+            res := lo.Generate(lgr, diag_e, "<repl>", a, lb, false)
+            if dg.ErrorCount(diag_e) == 0:
+                print lo.Document(res, true, "", "", false)
+            end
+            dg.Free(diag_e)
+        else:
+            io.EPrintln("error: no layout block found")
+        end
+    end
+    at.FreeAst(a)
+end
+
+// driver_repl - the interactive loop.
+pub func Run(opt &: dr.Dr): int:
+    g_hist = Vector {} as Vector<str>
+    pack := lp.Load(opt.lang)
+    if pack == lp.LP_NONE:
+        io.EPrintln(
+            co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
+        )
+        ret 2
+    end
+    sm.SetStdlibRoot(opt.stdlib_path)
+    sm.LayoutSchemaInit(opt.stdlib_path)
+    is_layout := opt.command == dr.CMD_REPL_LAYOUT
+    which := is_layout ? "layout" : "general"
+    println "Salam " + which + " REPL (lang=" + opt.lang + "). ':help' for commands."
+    mut session := ""
+    mut has_main := false
+
+    mut running := true
+    until !running:
+        mut ok := false
+        line := readline("salam> ", ok)
+        if !ok:
+            running = false
+        else str.Len(line) == 0:
+            // blank line, just re-prompt
+        else str.Equals(line, ":quit") || str.Equals(line, ":q") || str.Equals(line, "quit") || str.Equals(line, "exit") || str.Equals(line, "q"):
+            running = false
+        else str.Equals(line, ":help"):
+            if is_layout:
+                println "Layout REPL commands:"
+                println "  :clear  erase accumulated session"
+                println "  :defs   show current session"
+                println "  :quit   exit  (also: :q  quit  exit  q  Ctrl-D)"
+                println ""
+                println "Type a 'layout: ... end' block to render HTML inline."
+                println "Blocks can span multiple lines - the REPL waits until every"
+                println "':' opener has a matching 'end' (always lowercase) before running."
+                println ""
+                println "Root-level attributes: title, lang, dir"
+                println "Common elements:  box  heading  p  link  image  input  button"
+                println "Element attrs:    content  color  background  font-size  ..."
+                println ""
+                println "Example:"
+                println "  layout: title = \"Hi\" box: heading: size = 1 content = \"Hello\" end end end"
+            else:
+                println "Commands:"
+                println "  :run    compile + run the session (requires func main:)"
+                println "  :clear  erase all accumulated definitions"
+                println "  :defs   print current session"
+                println "  :quit   exit  (also: :q  quit  exit  q  Ctrl-D)"
+                println ""
+                println "Top-level defs (func/struct/enum/type) are accumulated."
+                println "Statements are wrapped in func main: and executed immediately."
+                println "Any block opened with ':' waits for a matching 'end' (lowercase)."
+            end
+        else str.Equals(line, ":clear"):
+            session = ""
+            has_main = false
+            println "session cleared."
+        else str.Equals(line, ":defs"):
+            println str.Len(session) > 0 ? session : "(empty)"
+        else str.Equals(line, ":run") || wants_run(line):
+            if is_layout:
+                println "layout REPL: type 'layout: ... end' blocks to render HTML."
+            else has_main:
+                exec_session(opt, session)
+            else:
+                println "no func main defined - define one, or type a statement."
+            end
+            hist_push(line)
+        else:
+            mut block := line + "\n"
+            mut cont_ok := true
+            until block_depth(pack, block) <= 0 || !cont_ok:
+                mut cont := readline("  ... ", cont_ok)
+                if cont_ok:
+                    block += cont + "\n"
+                    hist_push(cont)
+                end
+            end
+            mut first := str.TrimLeft(line)
+
+            if is_layout:
+                if str.StartsWith(first, "layout") && (str.Len(first) == 6 || byte_at(first, 6) == 58 || byte_at(first, 6) == 32 || byte_at(first, 6) == 9):
+                    layout_exec(opt, pack, block)
+                else:
+                    io.EPrintln("error: layout REPL only accepts 'layout: ... end' blocks")
+                end
+                hist_push(line)
+            else is_def(first):
+                test_src := session + block
+                if compile_check(opt, pack, test_src):
+                    session += block
+                    if str.StartsWith(first, "func main"):
+                        has_main = true
+                        println "defined. ':run' to execute."
+                    else:
+                        println "defined."
+                    end
+                end
+                hist_push(line)
+            else has_main:
+                println "func main is defined - ':run' to execute, ':clear' to reset."
+            else:
+                full := session + "\nfunc main:\n" + block + "end\n"
+                exec_session(opt, full)
+                hist_push(line)
+            end
+        end
+    end
+    println "bye."
+    g_hist = Vector {} as Vector<str>
+    ret 0
+end

@@ -23,23 +23,8 @@ import time
 import io
 import os
 import encoding
+import crypto
 import net
-
-if SALAM_OS_WINDOWS:
-    extern:
-        func rand_s(out: void*): int
-    end
-else:
-    extern:
-        func fopen(path: str, mode: str): void*
-        func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
-        func fclose(stream: void*): int
-    end
-end
-
-extern:
-    noret func abort()
-end
 
 // Byte primitives shared by every part of the TLS stack.
 //
@@ -474,52 +459,4 @@ func _hexbuf(s: str): Buf:
         end
     end
     ret b
-end
-
-// ---------------------------------------------------------------- randomness
-
-
-// Fill n bytes from the OS entropy source.
-//
-// There is no userspace PRNG here on purpose: a TLS client needs unpredictable
-// private keys and ClientHello randoms, and seeding a generator badly is a
-// classic way to make every session recoverable. If the OS source cannot be
-// read this aborts rather than returning predictable bytes, because a caller
-// that ignored an error return would produce a key an attacker can guess.
-func _os_random_fill_pub(buf: void*, n: int):
-    if n <= 0:
-        ret
-    end
-    if SALAM_OS_WINDOWS:
-        tmp := mem.Allocate(4 as u64)
-        defer mem.Free(tmp)
-        mut filled := 0
-        until filled < n:
-            if rand_s(tmp) != 0:
-                abort()
-            end
-            mut k := 0
-            until k < 4 && filled < n:
-                _bput(buf, filled, _bget(tmp, k))
-                filled += 1
-                k += 1
-            end
-        end
-    else:
-        f := fopen("/dev/urandom", "rb")
-        if f == null:
-            abort()
-        end
-        mut total := 0
-        until total < n:
-            dst := ((buf as i64) + (total as i64)) as void*
-            got := fread(dst, 1 as u64, (n - total) as u64, f)
-            if got == (0 as u64):
-                fclose(f)
-                abort()
-            end
-            total += got as int
-        end
-        fclose(f)
-    end
 end

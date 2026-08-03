@@ -1,0 +1,393 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+// Checks for SHA-2, HMAC, HKDF and the TLS 1.2 PRF.
+
+
+// ---------------------------------------------------------------- SHA-2
+
+func _hex_sha256(s: str): str:
+    mut out := _newbuf(32)
+    defer _buf_free(out)
+    _putzeros(out, 32)
+    _sha256(s as void*, s.len(), out.p)
+    ret _hexofbuf(out)
+end
+
+func _hex_sha384(s: str): str:
+    mut out := _newbuf(48)
+    defer _buf_free(out)
+    _putzeros(out, 48)
+    _sha384(s as void*, s.len(), out.p)
+    ret _hexofbuf(out)
+end
+
+func _hex_sha512(s: str): str:
+    mut out := _newbuf(64)
+    defer _buf_free(out)
+    _putzeros(out, 64)
+    _sha512(s as void*, s.len(), out.p)
+    ret _hexofbuf(out)
+end
+
+func _selftest_sha():
+    // FIPS 180-4 / NIST example vectors
+    _ckhex(_hex_sha256(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "sha256 empty")
+    _ckhex(_hex_sha256("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "sha256 abc")
+    _ckhex(_hex_sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1", "sha256 448-bit")
+
+    _ckhex(_hex_sha384(""), "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b", "sha384 empty")
+    _ckhex(_hex_sha384("abc"), "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7", "sha384 abc")
+
+    _ckhex(_hex_sha512(""), "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e", "sha512 empty")
+    _ckhex(_hex_sha512("abc"), "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f", "sha512 abc")
+
+    // Multi-block input: 1,000,000 'a' is the classic NIST long message.
+    mut million := _newbuf(1000000)
+    defer _buf_free(million)
+    repeat 1000000 with _i:
+        _put8(million, 97)
+    end
+    mut d := _newbuf(32)
+    defer _buf_free(d)
+    _putzeros(d, 32)
+    _sha256(million.p, million.len, d.p)
+    _ckhex(_hexofbuf(d), "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0", "sha256 one million a")
+
+    mut d5 := _newbuf(64)
+    defer _buf_free(d5)
+    _putzeros(d5, 64)
+    _sha512(million.p, million.len, d5.p)
+    _ckhex(_hexofbuf(d5), "e718483d0ce769644e2e42c7bc15b4638e1f98b13b2044285632a803afa973ebde0ff244877ea60a4cb0432ce577c31beb009c5c2c49aa2e4eadb217ad8cc09b", "sha512 one million a")
+
+    // Streaming must match one-shot regardless of how the input is chopped.
+    // This is what the transcript hash relies on.
+    mut st := _sha256_init()
+    _sha256_update(st, "ab" as void*, 2)
+    _sha256_update(st, "c" as void*, 1)
+    mut sd := _newbuf(32)
+    defer _buf_free(sd)
+    _putzeros(sd, 32)
+    _sha256_final(st, sd.p)
+    _ckhex(_hexofbuf(sd), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "sha256 split update")
+
+    // final() must not disturb the running state: after taking a digest we can
+    // keep appending, exactly as the handshake transcript does.
+    _sha256_update(st, "d" as void*, 1)
+    mut sd2 := _newbuf(32)
+    defer _buf_free(sd2)
+    _putzeros(sd2, 32)
+    _sha256_final(st, sd2.p)
+    _ckhex(_hexofbuf(sd2), _hex_sha256("abcd"), "sha256 final leaves state usable")
+
+    // cloning a state is a plain assignment (fixed arrays copy by value)
+    mut branch := st
+    _sha256_update(branch, "e" as void*, 1)
+    mut bd := _newbuf(32)
+    defer _buf_free(bd)
+    _putzeros(bd, 32)
+    _sha256_final(branch, bd.p)
+    _ckhex(_hexofbuf(bd), _hex_sha256("abcde"), "sha256 clone diverges independently")
+    mut od := _newbuf(32)
+    defer _buf_free(od)
+    _putzeros(od, 32)
+    _sha256_final(st, od.p)
+    _ckhex(_hexofbuf(od), _hex_sha256("abcd"), "sha256 original unaffected by clone")
+
+    // exercise every block-boundary case around the length-field split
+    repeat 130 with n:
+        mut m := _newbuf(n + 1)
+        repeat n with i:
+            _put8(m, (i * 7 + 3) & 0xFF)
+        end
+        mut a := _newbuf(32)
+        _putzeros(a, 32)
+        _sha256(m.p, m.len, a.p)
+        mut s2 := _sha256_init()
+        repeat n with i:
+            _sha256_update(s2, _bufptr(m, i), 1)
+        end
+        mut c2 := _newbuf(32)
+        _putzeros(c2, 32)
+        _sha256_final(s2, c2.p)
+        if _hexofbuf(a) != _hexofbuf(c2):
+            _ck(false, "sha256 byte-at-a-time matches one-shot at length " + n)
+        end
+        mut a5 := _newbuf(64)
+        _putzeros(a5, 64)
+        _sha512(m.p, m.len, a5.p)
+        mut s5 := _sha512_init()
+        repeat n with i:
+            _sha512_update(s5, _bufptr(m, i), 1)
+        end
+        mut c5 := _newbuf(64)
+        _putzeros(c5, 64)
+        _sha512_final(s5, c5.p)
+        if _hexofbuf(a5) != _hexofbuf(c5):
+            _ck(false, "sha512 byte-at-a-time matches one-shot at length " + n)
+        end
+        _buf_free(m)
+        _buf_free(a)
+        _buf_free(c2)
+        _buf_free(a5)
+        _buf_free(c5)
+    end
+end
+
+// ---------------------------------------------------------------- HMAC/HKDF
+
+func _hexhmac(kind: int, keyhex: str, msghex: str): str:
+    mut k := _hexbuf(keyhex)
+    defer _buf_free(k)
+    mut m := _hexbuf(msghex)
+    defer _buf_free(m)
+    hs := _hash_size(kind)
+    mut o := _newbuf(hs)
+    defer _buf_free(o)
+    _putzeros(o, hs)
+    _hmac(kind, k.p, k.len, m.p, m.len, o.p)
+    ret _hexofbuf(o)
+end
+
+func _selftest_hmac():
+    // RFC 4231 test cases. Case 2 uses an ASCII key/message, case 6 a key
+    // longer than the block size (which forces the hash-down path).
+    _ckhex(_hexhmac(HASH_SHA256, "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b", "4869205468657265"),
+        "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7", "hmac-sha256 rfc4231 case1")
+    _ckhex(_hexhmac(HASH_SHA384, "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b", "4869205468657265"),
+        "afd03944d84895626b0825f4ab46907f15f9dadbe4101ec682aa034c7cebc59cfaea9ea9076ede7f4af152e8b2fa9cb6", "hmac-sha384 rfc4231 case1")
+    _ckhex(_hexhmac(HASH_SHA256, "4a656665", "7768617420646f2079612077616e7420666f72206e6f7468696e673f"),
+        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843", "hmac-sha256 rfc4231 case2")
+    _ckhex(_hexhmac(HASH_SHA384, "4a656665", "7768617420646f2079612077616e7420666f72206e6f7468696e673f"),
+        "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649", "hmac-sha384 rfc4231 case2")
+    _ckhex(_hexhmac(HASH_SHA256,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "54657374205573696e67204c6172676572205468616e20426c6f636b2d53697a65204b6579202d2048617368204b6579204669727374"),
+        "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54", "hmac-sha256 rfc4231 case6 long key")
+    _ckhex(_hexhmac(HASH_SHA384,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "54657374205573696e67204c6172676572205468616e20426c6f636b2d53697a65204b6579202d2048617368204b6579204669727374"),
+        "4ece084485813e9088d2c63a041bc5b44f9ef1012a2b588f3cd11f05033ac4c60c2ef6ab4030fe8296248df163f44952", "hmac-sha384 rfc4231 case6 long key")
+    // Empty key and empty message must still work.
+    _ckhex(_hexhmac(HASH_SHA256, "", ""),
+        "b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad", "hmac-sha256 empty key and msg")
+end
+
+func _hexhkdf(kind: int, ikmhex: str, salthex: str, infohex: str, olen: int): str:
+    mut ikm := _hexbuf(ikmhex)
+    defer _buf_free(ikm)
+    mut salt := _hexbuf(salthex)
+    defer _buf_free(salt)
+    mut info := _hexbuf(infohex)
+    defer _buf_free(info)
+    hs := _hash_size(kind)
+    mut prk := _newbuf(hs)
+    defer _buf_free(prk)
+    _putzeros(prk, hs)
+    _hkdf_extract(kind, salt.p, salt.len, ikm.p, ikm.len, prk.p)
+    mut okm := _newbuf(olen)
+    defer _buf_free(okm)
+    _putzeros(okm, olen)
+    if !_hkdf_expand(kind, prk.p, prk.len, info.p, info.len, okm.p, olen):
+        ret "EXPAND-FAILED"
+    end
+    ret _hexofbuf(okm) + " prk=" + _hexofbuf(prk)
+end
+
+func _selftest_hkdf():
+    // RFC 5869 appendix A, SHA-256 test cases.
+    _ckhex(_hexhkdf(HASH_SHA256,
+            "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+            "000102030405060708090a0b0c",
+            "f0f1f2f3f4f5f6f7f8f9", 42),
+        "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865 prk=077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5",
+        "hkdf-sha256 rfc5869 case1")
+    _ckhex(_hexhkdf(HASH_SHA256, "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b", "", "", 42),
+        "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8 prk=19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04",
+        "hkdf-sha256 rfc5869 case3 zero salt and info")
+
+    // The 255*HashLen ceiling must be enforced rather than silently wrapping
+    // the one-byte counter.
+    mut prk := _newbuf(32)
+    defer _buf_free(prk)
+    _putzeros(prk, 32)
+    mut big := _newbuf(32 * 255 + 1)
+    defer _buf_free(big)
+    _putzeros(big, 32 * 255 + 1)
+    _ck(_hkdf_expand(HASH_SHA256, prk.p, 32, prk.p, 0, big.p, 32 * 255), "hkdf expand accepts 255*HashLen")
+    _ck(!_hkdf_expand(HASH_SHA256, prk.p, 32, prk.p, 0, big.p, 32 * 255 + 1), "hkdf expand rejects over 255*HashLen")
+
+    // TLS 1.3 HKDF-Expand-Label, cross-checked against the RFC 8448 trace:
+    // the early secret with an all-zero PSK, then derived-secret for the
+    // empty transcript.
+    mut zeros := _newbuf(32)
+    defer _buf_free(zeros)
+    _putzeros(zeros, 32)
+    mut early := _newbuf(32)
+    defer _buf_free(early)
+    _putzeros(early, 32)
+    _hkdf_extract(HASH_SHA256, zeros.p, 0, zeros.p, 32, early.p)
+    _ckhex(_hexofbuf(early), "33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a", "tls13 early secret")
+
+    mut eh := _newbuf(32)
+    defer _buf_free(eh)
+    _putzeros(eh, 32)
+    _sha256(zeros.p, 0, eh.p)
+    mut derived := _newbuf(32)
+    defer _buf_free(derived)
+    _putzeros(derived, 32)
+    _ck(_derive_secret(HASH_SHA256, early.p, 32, "derived", eh.p, 32, derived.p), "derive-secret ok")
+    _ckhex(_hexofbuf(derived), "6f2615a108c702c5678f54fc9dbab69716c076189c48250cebeac3576c3611ba", "tls13 derived secret")
+end
+
+// ---------------------------------------------------------------- TLS 1.2 PRF
+
+func _hexseq(n: int, base: int): Buf:
+    mut b := _newbuf(n)
+    repeat n with i:
+        _put8(b, (base + i) & 0xFF)
+    end
+    ret b
+end
+
+func _selftest_prf():
+    // Cross-checked against an independent implementation of RFC 5246's PRF.
+    // There are no official test vectors in the RFC, so the check is that two
+    // implementations written from the specification agree.
+    mut pms := _hexseq(48, 0)
+    defer _buf_free(pms)
+    mut cr := _hexseq(32, 0)
+    defer _buf_free(cr)
+    mut sr := _hexseq(32, 100)
+    defer _buf_free(sr)
+
+    mut ms := _newbuf(48)
+    defer _buf_free(ms)
+    _putzeros(ms, 48)
+    _tls12_master(HASH_SHA256, pms.p, pms.len, cr, sr, ms.p)
+    _ckhex(_hexofbuf(ms),
+        "bfaee7c76696a0000a4bc22b387327b11ed6551f387205e7bb49982188eb74b593750a2abcc33904c0a6f02673e8995d",
+        "tls12 prf master secret (sha256)")
+
+    mut ms384 := _newbuf(48)
+    defer _buf_free(ms384)
+    _putzeros(ms384, 48)
+    _tls12_master(HASH_SHA384, pms.p, pms.len, cr, sr, ms384.p)
+    _ckhex(_hexofbuf(ms384),
+        "43d9526bfc7da55fdd21a2028490133dbca1b1c47a96253d39d7e4667cb95c319356e4bc0efe3085ffdef1a89e0fb044",
+        "tls12 prf master secret (sha384)")
+
+    // key expansion seeds the randoms in the OPPOSITE order to the master
+    // secret; swapping them yields self-consistent keys that no peer agrees with
+    mut kb := _newbuf(72)
+    defer _buf_free(kb)
+    _putzeros(kb, 72)
+    _tls12_key_block(HASH_SHA256, ms.p, ms.len, sr, cr, kb.p, 72)
+    _ckhex(_hexofbuf(kb),
+        "e3608c9774a7cfb1b8e9db74209c684bbb2532fdb2a3f727470fff50146c7b575052a3675561530177f67af414b45e99ec3e5e6b6cc39bb36ab6f348010856bf92260ec2cac76a68",
+        "tls12 prf key expansion")
+
+    mut th := _hexseq(32, 200)
+    defer _buf_free(th)
+    mut vd := _newbuf(12)
+    defer _buf_free(vd)
+    _putzeros(vd, 12)
+    _tls12_verify_data(HASH_SHA256, ms.p, ms.len, PRF_LABEL_CLIENT_FINISHED, th, vd.p)
+    _ckhex(_hexofbuf(vd), "a6f0a4bd66dcaa4df3d0e426", "tls12 prf client verify_data")
+
+    // client and server Finished must not collide: the labels are what keep a
+    // server's Finished from being replayed back as the client's
+    mut vs := _newbuf(12)
+    defer _buf_free(vs)
+    _putzeros(vs, 12)
+    _tls12_verify_data(HASH_SHA256, ms.p, ms.len, PRF_LABEL_SERVER_FINISHED, th, vs.p)
+    _ck(!_cteq(vd.p, vs.p, 12), "tls12 client and server verify_data differ")
+
+    // a one-bit change anywhere in the transcript must change verify_data
+    _bufset(th, 5, _bufat(th, 5) ^ 0x01)
+    mut vd2 := _newbuf(12)
+    defer _buf_free(vd2)
+    _putzeros(vd2, 12)
+    _tls12_verify_data(HASH_SHA256, ms.p, ms.len, PRF_LABEL_CLIENT_FINISHED, th, vd2.p)
+    _ck(!_cteq(vd.p, vd2.p, 12), "tls12 verify_data covers the transcript")
+
+    // extended master secret must differ from the legacy derivation
+    mut mse := _newbuf(48)
+    defer _buf_free(mse)
+    _putzeros(mse, 48)
+    _tls12_master_ext(HASH_SHA256, pms.p, pms.len, th, mse.p)
+    _ck(!_cteq(ms.p, mse.p, 48), "tls12 extended master secret differs from legacy")
+
+    // PRF output must be a prefix-stable stream: a longer request agrees with
+    // a shorter one on the shared prefix
+    mut long := _newbuf(100)
+    defer _buf_free(long)
+    _putzeros(long, 100)
+    _tls12_key_block(HASH_SHA256, ms.p, ms.len, sr, cr, long.p, 100)
+    _ck(_cteq(long.p, kb.p, 72), "tls12 prf stream is prefix-stable")
+
+    // TLS 1.2 AEAD framing
+    mut aad := _newbuf(16)
+    defer _buf_free(aad)
+    _tk12_aad(0 as u64, REC_APPLICATION_DATA, 5, aad)
+    _ckhex(_hexofbuf(aad), "00000000000000001703030005", "tls12 aad layout")
+    _ck(_tk12_ivlen(CIPHER_AES128_GCM_SHA256) == 4, "tls12 gcm fixed iv is 4 bytes")
+    _ck(_tk12_ivlen(CIPHER_CHACHA20_SHA256) == 12, "tls12 chacha fixed iv is 12 bytes")
+end
+
+// ---------------------------------------------------------------- legacy
+
+func _hexmd5(s: str): str:
+    mut o := _newbuf(16)
+    defer _buf_free(o)
+    _putzeros(o, 16)
+    crypto.Md5Bytes(s as void*, s.len(), o.p)
+    ret _hexofbuf(o)
+end
+
+func _hexsha1(s: str): str:
+    mut o := _newbuf(20)
+    defer _buf_free(o)
+    _putzeros(o, 20)
+    crypto.Sha1Bytes(s as void*, s.len(), o.p)
+    ret _hexofbuf(o)
+end
+
+func _selftest_legacy():
+    // RFC 1321 appendix A.5
+    _ckhex(_hexmd5(""), "d41d8cd98f00b204e9800998ecf8427e", "md5 empty")
+    _ckhex(_hexmd5("abc"), "900150983cd24fb0d6963f7d28e17f72", "md5 abc")
+    _ckhex(_hexmd5("message digest"), "f96b697d7cb7938d525a2f31aaf161d0", "md5 message digest")
+    _ckhex(_hexmd5("abcdefghijklmnopqrstuvwxyz"), "c3fcd3d76192e4007dfb496cca67e13b", "md5 alphabet")
+    // FIPS 180-1
+    _ckhex(_hexsha1(""), "da39a3ee5e6b4b0d3255bfef95601890afd80709", "sha1 empty")
+    _ckhex(_hexsha1("abc"), "a9993e364706816aba3e25717850c26c9cd0d89d", "sha1 abc")
+    // RFC 2202 HMAC-MD5 and RFC 2202 HMAC-SHA1, test case 2
+    mut k := _hexbuf("4a656665")
+    defer _buf_free(k)
+    mut m := _hexbuf("7768617420646f2079612077616e7420666f72206e6f7468696e673f")
+    defer _buf_free(m)
+    mut o1 := _newbuf(16)
+    defer _buf_free(o1)
+    _putzeros(o1, 16)
+    _legacy_hmac(false, k.p, k.len, m.p, m.len, o1.p)
+    _ckhex(_hexofbuf(o1), "750c783e6ab0b503eaa86e310a5db738", "hmac-md5 rfc2202 case2")
+    mut o2 := _newbuf(20)
+    defer _buf_free(o2)
+    _putzeros(o2, 20)
+    _legacy_hmac(true, k.p, k.len, m.p, m.len, o2.p)
+    _ckhex(_hexofbuf(o2), "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79", "hmac-sha1 rfc2202 case2")
+end

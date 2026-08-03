@@ -225,7 +225,7 @@ func _hs_build_client_hello(h &: Handshake, host: str, alpn: str, aes_only: bool
     mut rnd := _newbuf(32)
     defer _buf_free(rnd)
     _putzeros(rnd, 32)
-    _os_random_fill_pub(rnd.p, 32)
+    crypto.RandomBytes(rnd.p, 32)
     _putbuf(out, rnd)
     _bufreset(h.crand)
     _putbuf(h.crand, rnd)
@@ -235,7 +235,7 @@ func _hs_build_client_hello(h &: Handshake, host: str, alpn: str, aes_only: bool
     mut sid := _newbuf(32)
     defer _buf_free(sid)
     _putzeros(sid, 32)
-    _os_random_fill_pub(sid.p, 32)
+    crypto.RandomBytes(sid.p, 32)
     _put8(out, 32)
     _putbuf(out, sid)
 
@@ -318,13 +318,13 @@ func _hs_build_client_hello(h &: Handshake, host: str, alpn: str, aes_only: bool
     // key_share: a single X25519 share
     _bufreset(h.priv)
     _putzeros(h.priv, 32)
-    _os_random_fill_pub(h.priv.p, 32)
+    crypto.RandomBytes(h.priv.p, 32)
     _bufreset(h.pub_key)
     _putzeros(h.pub_key, 32)
     _x25519_base(h.priv.p, h.pub_key.p)
     _bufreset(h.ecpriv)
     _putzeros(h.ecpriv, 32)
-    _os_random_fill_pub(h.ecpriv.p, 32)
+    crypto.RandomBytes(h.ecpriv.p, 32)
     mut ecx := _newbuf(32)
     defer _buf_free(ecx)
     _putzeros(ecx, 32)
@@ -364,6 +364,16 @@ func _hs_parse_server_hello(h &: Handshake, msg: Reader): bool:
     mut r := msg
     ver := _rd16(r)
     if ver != TLS12:
+        // A server that answers 1.0 or 1.1 is not a version we will ever
+        // negotiate, and saying so beats a generic parse error. Those versions
+        // offer no AEAD cipher suite at all, so supporting them would mean
+        // implementing CBC with MAC-then-encrypt and a constant-time padding
+        // check: the Lucky13 surface, plus TLS 1.0's implicit IV (BEAST) and an
+        // MD5+SHA-1 PRF. RFC 8996 deprecated both in 2021 and every major
+        // browser dropped them in 2020.
+        if ver == TLS10 || ver == TLS11:
+            ret _hs_fail(h, "server requires TLS 1.0/1.1, which this client does not implement (deprecated by RFC 8996)")
+        end
         ret _hs_fail(h, "unexpected legacy_version in ServerHello")
     end
     srand := _rdbytes(r, 32)
@@ -462,13 +472,21 @@ end
 
 // ---------------------------------------------------------------- Certificate
 
-func _hs_parse_certificate(h &: Handshake, msg: Reader): bool:
+// Read a Certificate message's chain into the handshake buffer.
+//
+// The two versions differ only at the edges: TLS 1.3 prefixes a
+// certificate_request_context and follows each entry with an extensions
+// vector, TLS 1.2 has neither. Everything between was duplicated, including
+// the depth cap and the offset bookkeeping the verifier later reads.
+func _hs_read_cert_list(h &: Handshake, msg: Reader, tls13: bool): bool:
     mut r := msg
-    ctx := _rdvec8(r)
-    if r.bad || ctx.len != 0:
-        // a non-empty certificate_request_context only appears in response to
-        // a CertificateRequest, which this client never sends
-        ret _hs_fail(h, "unexpected certificate context")
+    if tls13:
+        ctx := _rdvec8(r)
+        // a non-empty context only answers a CertificateRequest, which this
+        // client never sends
+        if r.bad || ctx.len != 0:
+            ret _hs_fail(h, "unexpected certificate context")
+        end
     end
     mut list := _rdvec24(r)
     if r.bad:
@@ -479,17 +497,21 @@ func _hs_parse_certificate(h &: Handshake, msg: Reader): bool:
     h.ncerts = 0
     until _rdleft(list) > 0 && !list.bad:
         cert := _rdvec24(list)
-        exts := _rdvec16(list)
-        _rdskip(exts, exts.len)
+        if tls13:
+            exts := _rdvec16(list)
+            _rdskip(exts, exts.len)
+        end
         if list.bad:
             ret _hs_fail(h, "malformed certificate entry")
         end
+        // Anything past the depth cap is dropped rather than rejected: a
+        // server padding its chain should not cost the caller a connection.
         if h.ncerts < MAX_CHAIN_DEPTH:
-            start := h.certs.len
+            begin := h.certs.len
             repeat cert.len with i:
                 _put8(h.certs, _rdat(cert, i))
             end
-            _put32(h.cert_off, start as i64)
+            _put32(h.cert_off, begin as i64)
             _put32(h.cert_off, cert.len as i64)
             h.ncerts += 1
         end
@@ -498,6 +520,10 @@ func _hs_parse_certificate(h &: Handshake, msg: Reader): bool:
         ret _hs_fail(h, "server sent no certificates")
     end
     ret true
+end
+
+func _hs_parse_certificate(h &: Handshake, msg: Reader): bool:
+    ret _hs_read_cert_list(h, msg, true)
 end
 
 // The CertificateVerify signature covers a fixed context string rather than the

@@ -1,0 +1,159 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+// Checks for the variable-length bignum behind RSA verification.
+
+
+// ---------------------------------------------------------------- bigint
+
+func _bighex(x: Big): str:
+    n := _big_bytelen(x)
+    if n == 0:
+        ret "00"
+    end
+    mut o := _newbuf(n)
+    defer _buf_free(o)
+    _putzeros(o, n)
+    if !_big_to_bytes(x, o.p, n):
+        ret "TOOBIG"
+    end
+    ret _hexofbuf(o)
+end
+
+func _bigof(hex: str): Big:
+    mut h := _hexbuf(hex)
+    defer _buf_free(h)
+    ret _big_from_bytes(h.p, h.len)
+end
+
+func _selftest_bigint():
+    mut a := _bigof("123456789abcdef0fedcba9876543210")
+    defer _big_free(a)
+    mut b := _bigof("deadbeefcafebabe0123456789abcdef")
+    defer _big_free(b)
+    mut m := _bigof("fedcba9876543210123456789abcdef1")
+    defer _big_free(m)
+
+    // byte round-trip, including leading-zero stripping
+    _ckhex(_bighex(a), "123456789abcdef0fedcba9876543210", "big from/to bytes")
+    mut lz := _bigof("0000000000ff00")
+    defer _big_free(lz)
+    _ckhex(_bighex(lz), "ff00", "big strips leading zeros")
+    mut zero := _bigof("00000000")
+    defer _big_free(zero)
+    _ck(_big_is_zero(zero), "big zero detected")
+    _ck(_big_bitlen(zero) == 0, "big zero bitlen")
+
+    // comparison
+    _ck(_big_cmp(a, b) < 0, "big cmp a < b")
+    _ck(_big_cmp(b, a) > 0, "big cmp b > a")
+    _ck(_big_cmp(a, a) == 0, "big cmp equal")
+
+    // add / sub, cross-checked against Python
+    mut r := _big_new(16)
+    defer _big_free(r)
+    _big_add(r, a, b)
+    _ckhex(_bighex(r), "f0e2156865bb99aeffffffffffffffff", "big add")
+    _ck(_big_sub(r, b, a), "big sub ok")
+    _ckhex(_bighex(r), "cc7968773041dbcd02468acf13579bdf", "big sub")
+    _ck(!_big_sub(r, a, b), "big sub refuses to go negative")
+
+    // add then subtract returns the original
+    _big_add(r, a, b)
+    mut back := _big_new(16)
+    defer _big_free(back)
+    _ck(_big_sub(back, r, b), "big add/sub inverse ok")
+    _ck(_big_cmp(back, a) == 0, "big add then sub restores a")
+
+    // multiply
+    mut p := _big_new(32)
+    defer _big_free(p)
+    _big_mul(p, a, b)
+    _ckhex(_bighex(p), "0fd5bdeeeb2a01d8c92db8cd43d35b8d6e1bd1a5075ef1322236d88fe5618cf0", "big mul")
+
+    // multiply by zero and by one
+    _big_mul(p, a, zero)
+    _ck(_big_is_zero(p), "big mul by zero")
+    mut one := _big_new(4)
+    defer _big_free(one)
+    _big_set_u32(one, 1 as u32)
+    _big_mul(p, a, one)
+    _ck(_big_cmp(p, a) == 0, "big mul by one")
+
+    // divmod
+    mut q := _big_new(32)
+    defer _big_free(q)
+    mut rem := _big_new(32)
+    defer _big_free(rem)
+    _ck(_big_divmod(q, rem, a, m), "big divmod ok")
+    _ck(_big_is_zero(q), "big divmod quotient a/m")
+    _ckhex(_bighex(rem), "123456789abcdef0fedcba9876543210", "big divmod remainder a%m")
+
+    _big_mul(p, a, b)
+    _ck(_big_mod(rem, p, m), "big mod of product ok")
+    _ckhex(_bighex(rem), "c66d3edf67c257e839c2e724dc6e39c8", "big (a*b) mod m")
+
+    // q*m + rem == a*b, the defining identity
+    _ck(_big_divmod(q, rem, p, m), "big divmod product ok")
+    mut chk := _big_new(64)
+    defer _big_free(chk)
+    _big_mul(chk, q, m)
+    mut sum := _big_new(64)
+    defer _big_free(sum)
+    _big_add(sum, chk, rem)
+    _ck(_big_cmp(sum, p) == 0, "big q*m + rem == a*b")
+    _ck(_big_cmp(rem, m) < 0, "big remainder is reduced")
+
+    // dividing by zero must fail rather than loop or corrupt state
+    _ck(!_big_divmod(q, rem, a, zero), "big divmod rejects zero modulus")
+
+    // modexp, the operation RSA verification is built on
+    mut n := _bigof("c4f8e9e15dcadf2b96c763d981006a644ffb4415030a16ed1283883340f2aa0e2be2be8fa60150b9046965837c3e7d151b7de237ebb957c20663898250703b3f5f4b1e8b8bb7f8b9c1a1e1e2b0d9f0e5f0a0b1c2d3e4f5061728394a5b6c7d8e9fa0b1c2d3e4f50617")
+    defer _big_free(n)
+    mut base := _bigof("1234567890abcdef")
+    defer _big_free(base)
+    mut e := _bigof("010001")
+    defer _big_free(e)
+    mut out := _big_new(n.n + 2)
+    defer _big_free(out)
+    _ck(_big_modexp(out, base, e, n), "big modexp ok")
+    _ckhex(_bighex(out),
+        "1639860633a2eb152470d64d2418b9a02b502baaf3031ac7692bc447e6d082915c2fa8348c97f7253ccc0f4fa5bcfe3c0a9abd2bb54ae32b2f909fcebce85e6857d4a475c1c1e323bdf0433b7209102bac675fdef1b52e85c7fb078d13c0823060f3f746a4c8e65c94",
+        "big modexp base^65537 mod n")
+
+    // modexp edge cases
+    mut e0 := _big_new(2)
+    defer _big_free(e0)
+    _big_set_u32(e0, 0 as u32)
+    _ck(_big_modexp(out, base, e0, n), "big modexp exponent 0 ok")
+    _ck(_big_cmp(out, one) == 0, "big modexp x^0 == 1")
+    mut e1 := _big_new(2)
+    defer _big_free(e1)
+    _big_set_u32(e1, 1 as u32)
+    _ck(_big_modexp(out, base, e1, n), "big modexp exponent 1 ok")
+    _ck(_big_cmp(out, base) == 0, "big modexp x^1 == x")
+
+    // to_bytes must refuse to silently truncate
+    mut tiny := _newbuf(4)
+    defer _buf_free(tiny)
+    _putzeros(tiny, 4)
+    _ck(!_big_to_bytes(a, tiny.p, 4), "big to_bytes rejects short buffer")
+    mut wide := _newbuf(32)
+    defer _buf_free(wide)
+    _putzeros(wide, 32)
+    _ck(_big_to_bytes(a, wide.p, 32), "big to_bytes pads to width")
+    _ckhex(_hexofbuf(wide), "0000000000000000000000000000000" + "0123456789abcdef0fedcba9876543210", "big to_bytes zero-pads on the left")
+end

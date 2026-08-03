@@ -1,0 +1,368 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// In-process cross-linking - ports native_link_elf/native_link_mingw/
+// native_link_lld (llvm_native.c:546-796): builds an `ld.lld`-style argv
+// and calls lld.salam's Link. The .incbin-embedded musl/mingw sysroot
+// tarballs (SALAM_HAVE_EMBED_MUSL/_MINGW/_EXTRALIBS_*, llvm_native.c:41-
+// 99,225-519) are NOT ported - they exist only to support the C build's
+// asm-embedding trick, which self-host has no build step for yet (a
+// deferred build-pipeline task). Sysroot resolution here still works for
+// cross-compiling: explicit `opts.sysroot` -> $SALAM_SYSROOTS env var ->
+// the OS-default system-package path (mingw-w64/musl-tools) - the same
+// fallback chain the C uses once its embedded-tarball checks come up
+// empty.
+package llvm
+
+@en "LinkResult"
+@fa "نتیجه پیوند"
+@ar "نتیجة الربط"
+pub struct LinkResult:
+    pub ok: bool = false
+    pub err: str = ""
+end
+
+// ArgvOf - marshals a Vector<str> into a contiguous char*[] (as a `str*`,
+// ABI-identical to lld_link.h's `const char *const *argv`) for
+// salam_lld_link. Pointer width is assumed to be 8 bytes, same assumption
+// std/mem/mem.salam's own HDR_SIZE already makes for this host - not
+// portable to a 32-bit self-host build, same known limitation.
+func argv_of(items: Vector<str>): void*:
+    mut buf := mem.Allocate((items.len() * 8) as u64) as str*
+    repeat items.len() with i:
+        buf[i] = items.get(i)[0]
+    end
+    ret buf as void*
+end
+
+// elf_arch_of/emul/rtarch - ports native_link_elf's `t` substring sniffing
+// (llvm_native.c:558-574).
+func elf_arch_of(t: str): str:
+    if str.Contains(t, "aarch64") || str.Contains(t, "arm64"): ret "aarch64" end
+    if str.Contains(t, "i686") || str.Contains(t, "i386") || str.Contains(t, "i586"): ret "i386" end
+    if str.Contains(t, "arm"): ret "arm" end
+    ret "x86_64"
+end
+
+func elf_emul_of(t: str): str:
+    if str.Contains(t, "aarch64") || str.Contains(t, "arm64"): ret "aarch64linux" end
+    if str.Contains(t, "i686") || str.Contains(t, "i386") || str.Contains(t, "i586"): ret "elf_i386" end
+    if str.Contains(t, "arm"): ret "armelf_linux_eabi" end
+    ret "elf_x86_64"
+end
+
+// mingw_arch/mingw_emul - llvm_native.c:329-341.
+func mingw_arch(t: str): str:
+    if str.Contains(t, "aarch64") || str.Contains(t, "arm64"): ret "aarch64" end
+    if str.Contains(t, "i686") || str.Contains(t, "i386") || str.Contains(t, "i586"): ret "i686" end
+    ret "x86_64"
+end
+
+func mingw_emul(t: str): str:
+    if str.Contains(t, "aarch64") || str.Contains(t, "arm64"): ret "arm64pe" end
+    if str.Contains(t, "i686") || str.Contains(t, "i386") || str.Contains(t, "i586"): ret "i386pe" end
+    ret "i386pep"
+end
+
+// find_compiler_rt - ports find_compiler_rt() (llvm_native.c:376-409):
+// scans a handful of clang install prefixes for
+// <prefix>/<version>/lib/linux/libclang_rt.builtins-<rtarch>.a. "" = not
+// found (mirrors the C's `have_rt = 0` fallthrough).
+func find_compiler_rt(rtarch: str): str:
+    mut bases := Vector {} as Vector<str>
+    defer bases.free()
+    bases.push("/usr/lib/llvm-22/lib/clang")
+    bases.push("/usr/lib/llvm/lib/clang")
+    bases.push("/usr/lib/clang")
+    repeat bases.len() with bi:
+        base := bases.get(bi)[0]
+        if !os.IsDir(base):
+            continue
+        end
+        entries := os.ListDir(base)
+        defer entries.free()
+        repeat entries.len() with i:
+            name := entries.get(i)[0]
+            candidate := filepath.Join(filepath.Join(filepath.Join(base, name), "lib"), "linux")
+            path := filepath.Join(candidate, "libclang_rt.builtins-" + rtarch + ".a")
+            if os.Exists(path):
+                ret path
+            end
+        end
+    end
+    ret ""
+end
+
+// find_mingw_gccdir - ports find_mingw_gccdir() (llvm_native.c:343-374):
+// scans /usr/lib/gcc/<arch>-w64-mingw32/<version>/ for crtbegin.o, exactly
+// as the C does (last hit wins unless a "win32" subdir variant is found,
+// which wins immediately - same tie-break). "" = not found.
+func find_mingw_gccdir(arch: str): str:
+    base := "/usr/lib/gcc/" + arch + "-w64-mingw32"
+    if !os.IsDir(base):
+        ret ""
+    end
+    entries := os.ListDir(base)
+    defer entries.free()
+    mut found := ""
+    repeat entries.len() with i:
+        name := entries.get(i)[0]
+        if str.Len(name) > 0 && str.StartsWith(name, "."):
+            continue
+        end
+        dir := filepath.Join(base, name)
+        if os.Exists(filepath.Join(dir, "crtbegin.o")):
+            found = dir
+            if str.Contains(name, "win32"):
+                ret found
+            end
+        end
+    end
+    ret found
+end
+
+// musl_sysroot - resolves the musl sysroot directory for `arch`: explicit
+// opts.sysroot -> $SALAM_SYSROOTS/<arch>-linux-musl (only if it actually
+// has a crt1.o) -> the plain system-package path. Ports the non-embedded
+// tail of native_link_elf's sysroot resolution (llvm_native.c:576-594).
+func musl_sysroot(explicit: str, arch: str): str:
+    if str.Len(explicit) > 0:
+        ret explicit
+    end
+    env := os.Env("SALAM_SYSROOTS")
+    if str.Len(env) > 0:
+        candidate := filepath.Join(env, arch + "-linux-musl")
+        if os.Exists(filepath.Join(candidate, "crt1.o")):
+            ret candidate
+        end
+    end
+    ret "/usr/lib/" + arch + "-linux-musl"
+end
+
+// mingw_sysroot - same idea for mingw (llvm_native.c:692-707): explicit
+// opts.sysroot -> $SALAM_SYSROOTS/<arch>-w64-mingw32 -> system package path.
+func mingw_sysroot(explicit: str, arch: str): str:
+    if str.Len(explicit) > 0:
+        ret explicit
+    end
+    env := os.Env("SALAM_SYSROOTS")
+    if str.Len(env) > 0:
+        candidate := filepath.Join(env, arch + "-w64-mingw32")
+        if os.Exists(filepath.Join(candidate, "lib/crt2.o")):
+            ret candidate
+        end
+    end
+    ret "/usr/" + arch + "-w64-mingw32"
+end
+
+func user_libs_of(opts: Options): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    repeat opts.link_libs.len() with i:
+        s := opts.link_libs.get(i)[0]
+        if str.Len(s) == 0:
+            continue
+        end
+        if str.StartsWith(s, "-") || str.Contains(s, "/") || str.Contains(s, "\\") || str.Contains(s, "."):
+            out.push(s)
+        else:
+            out.push("-l" + s)
+        end
+    end
+    ret out
+end
+
+// CanLinkTriple - ports lld_can_link(): whether LinkAuto has an in-process
+// linker for `t` at all (mingw+gnu windows, or musl linux). Anything else
+// (e.g. wasm, glibc linux, macOS) falls back to the caller's external
+// clang-shellout path.
+@en "CanLinkTriple"
+@fa "میتوان سه‌تایی را پیوند داد"
+@ar "یمکن ربط الثلاثیة"
+pub func CanLinkTriple(t: str): bool:
+    if str.Len(t) == 0:
+        ret false
+    end
+    win := str.Contains(t, "windows") || str.Contains(t, "mingw") || str.Contains(t, "win32")
+    gnu := str.Contains(t, "gnu") || str.Contains(t, "mingw")
+    musl := str.Contains(t, "linux") && str.Contains(t, "musl")
+    ret (win && gnu) || musl
+end
+
+// LinkElf - ports native_link_elf(): static-links a musl-libc ELF
+// executable in-process via LLD. `obj` is a native object file already
+// emitted (emit.salam's EmitObject); `opts.target_triple` selects the
+// arch, `opts.sysroot`/$SALAM_SYSROOTS/system-package resolves the musl
+// sysroot, `opts.debug_info` controls symbol stripping.
+@en "LinkElf"
+@fa "پیوند ای ال اف"
+@ar "ربط إی إل إف"
+pub func LinkElf(obj: str, out_path: str, opts: Options): LinkResult:
+    t := opts.target_triple
+    arch := elf_arch_of(t)
+    emul := elf_emul_of(t)
+    sr := musl_sysroot(opts.sysroot, arch)
+
+    crt1 := filepath.Join(sr, "crt1.o")
+    if !os.Exists(crt1):
+        ret LinkResult {
+            ok = false,
+            err = "no musl sysroot for '" + t + "' (looked in " + sr + "): install musl-dev or bundle a sysroot ($SALAM_SYSROOTS)"
+        }
+    end
+    crti := filepath.Join(sr, "crti.o")
+    crtn := filepath.Join(sr, "crtn.o")
+
+    mut rt := filepath.Join(sr, "libclang_rt.builtins-" + arch + ".a")
+    if !os.Exists(rt):
+        rt = find_compiler_rt(arch)
+    end
+    have_gcc := os.Exists(filepath.Join(sr, "libgcc.a"))
+
+    mut argv := Vector {} as Vector<str>
+    defer argv.free()
+    argv.push("ld.lld")
+    argv.push("-m")
+    argv.push(emul)
+    argv.push("-static")
+    if !opts.debug_info:
+        argv.push("-s")
+    end
+    argv.push("-o")
+    argv.push(out_path)
+    argv.push(crt1)
+    argv.push(crti)
+    argv.push("-L" + sr)
+    argv.push(obj)
+    libs := user_libs_of(opts)
+    defer libs.free()
+    repeat libs.len() with i:
+        argv.push(libs.get(i)[0])
+    end
+    argv.push("--start-group")
+    argv.push("-lc")
+    if str.Len(rt) > 0:
+        argv.push(rt)
+    end
+    if have_gcc:
+        argv.push("-lgcc")
+    end
+    argv.push("--end-group")
+    argv.push(crtn)
+
+    if Link(LLD_ELF, argv_of(argv), argv.len()):
+        ret LinkResult { ok = true }
+    end
+    ret LinkResult { ok = false, err = "in-process lld link failed" }
+end
+
+// LinkMingw - ports native_link_mingw(): dynamically-linked (against the
+// mingw-w64 CRT DLLs) PE executable, in-process via LLD.
+@en "LinkMingw"
+@fa "پیوند مینگو"
+@ar "ربط مینغو"
+pub func LinkMingw(obj: str, out_path: str, opts: Options): LinkResult:
+    t := opts.target_triple
+    if !CanLinkTriple(t):
+        ret LinkResult { ok = false, err = "'" + t + "' is not a mingw target" }
+    end
+    arch := mingw_arch(t)
+    emul := mingw_emul(t)
+    sr := mingw_sysroot(opts.sysroot, arch)
+
+    crt2 := filepath.Join(sr, "lib/crt2.o")
+    if !os.Exists(crt2):
+        ret LinkResult {
+            ok = false,
+            err = "no mingw sysroot for '" + t + "' (looked in " + sr + "): install mingw-w64 or bundle a sysroot ($SALAM_SYSROOTS)"
+        }
+    end
+
+    mut gccdir := filepath.Join(sr, "lib")
+    mut have_gcc := os.Exists(filepath.Join(gccdir, "libgcc.a"))
+    if !have_gcc:
+        found := find_mingw_gccdir(arch)
+        if str.Len(found) > 0:
+            gccdir = found
+            have_gcc = true
+        end
+    end
+
+    mut argv := Vector {} as Vector<str>
+    defer argv.free()
+    argv.push("ld.lld")
+    argv.push("-m")
+    argv.push(emul)
+    argv.push("-Bdynamic")
+    if !opts.debug_info:
+        argv.push("-s")
+    end
+    argv.push("-o")
+    argv.push(out_path)
+    argv.push(crt2)
+    if have_gcc:
+        argv.push(filepath.Join(gccdir, "crtbegin.o"))
+        argv.push("-L" + gccdir)
+    end
+    argv.push("-L" + filepath.Join(sr, "lib"))
+    argv.push("-L" + filepath.Join(sr, "mingw/lib"))
+    argv.push(obj)
+    libs := user_libs_of(opts)
+    defer libs.free()
+    repeat libs.len() with i:
+        argv.push(libs.get(i)[0])
+    end
+    argv.push("--start-group")
+    argv.push("-lmingw32")
+    argv.push("-lgcc")
+    argv.push("-lgcc_eh")
+    argv.push("-lmoldname")
+    argv.push("-lmingwex")
+    argv.push("-lmsvcrt")
+    argv.push("-ladvapi32")
+    argv.push("-lshell32")
+    argv.push("-luser32")
+    argv.push("-lkernel32")
+    argv.push("--end-group")
+    if have_gcc:
+        argv.push(filepath.Join(gccdir, "crtend.o"))
+    end
+
+    if Link(LLD_MINGW, argv_of(argv), argv.len()):
+        ret LinkResult { ok = true }
+    end
+    ret LinkResult { ok = false, err = "in-process lld link failed" }
+end
+
+// LinkAuto - ports native_link_lld(): picks LinkMingw or LinkElf by
+// `opts.target_triple`, or reports "no in-process linker for this
+// triple" (the C's -1 sentinel) so the caller can fall back to an
+// external clang-shellout link.
+@en "LinkAuto"
+@fa "پیوند خودکار"
+@ar "ربط تلقائي"
+pub func LinkAuto(obj: str, out_path: str, opts: Options): LinkResult:
+    t := opts.target_triple
+    if str.Len(t) == 0:
+        ret LinkResult { ok = false, err = "no target triple set" }
+    end
+    win := str.Contains(t, "windows") || str.Contains(t, "mingw") || str.Contains(t, "win32")
+    gnu := str.Contains(t, "gnu") || str.Contains(t, "mingw")
+    if win && gnu:
+        ret LinkMingw(obj, out_path, opts)
+    end
+    if str.Contains(t, "linux") && str.Contains(t, "musl"):
+        ret LinkElf(obj, out_path, opts)
+    end
+    ret LinkResult { ok = false, err = "no in-process linker for triple '" + t + "'" }
+end

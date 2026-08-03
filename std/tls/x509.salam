@@ -466,11 +466,16 @@ func _cert_parse(p: void*, n: int): Cert:
         ret c
     end
 
-    mut inner_params := Reader {}
-    inner_sig_oid := _der_algid(t, inner_params)
-    if t.bad:
+    ia := _der_tag(t, ASN1_SEQUENCE)
+    if !ia.ok:
         ret c
     end
+    mut ib := ia.body
+    inner_sig_oid := _der_oid(ib)
+    if ib.bad:
+        ret c
+    end
+    inner_params := _rdrest(ib)
     inner_alg := _sig_alg_from_oid(inner_sig_oid, inner_params)
 
     issuer := _der_tag(t, ASN1_SEQUENCE)
@@ -529,11 +534,16 @@ func _cert_parse(p: void*, n: int): Cert:
         ret c
     end
 
-    mut outer_params := Reader {}
-    outer_oid := _der_algid(outer, outer_params)
-    if outer.bad:
+    oa := _der_tag(outer, ASN1_SEQUENCE)
+    if !oa.ok:
         ret c
     end
+    mut ob := oa.body
+    outer_oid := _der_oid(ob)
+    if ob.bad:
+        ret c
+    end
+    outer_params := _rdrest(ob)
     c.sig_alg = _sig_alg_from_oid(outer_oid, outer_params)
     // An unsupported signature algorithm (SHA-1, and anything else outside the
     // supported set) is NOT a parse failure. A trust anchor is trusted because
@@ -546,9 +556,20 @@ func _cert_parse(p: void*, n: int): Cert:
     // algorithms it implements, so SIG_UNKNOWN can never verify a link. A
     // certificate carrying one is parseable but unusable as a signature.
     //
-    // RFC 5280 4.1.1.2 still applies: the inner and outer algorithm
-    // identifiers must agree, or an attacker chooses which one is honoured.
+    // RFC 5280 4.1.1.2: the inner and outer algorithm identifiers must agree.
+    //
+    // Compared as full DER, not as the algorithm id they decode to. The outer
+    // signatureAlgorithm sits OUTSIDE tbsCertificate and is therefore not
+    // covered by the signature, so anything about it that is not checked here
+    // can be altered freely on a validly signed certificate. Comparing only
+    // the decoded id left the AlgorithmIdentifier parameters unconstrained,
+    // which a mutation fuzz found: flipping bytes there produced a modified
+    // certificate that still verified. Signature malleability like that is
+    // worth closing even when the field carries no meaning of its own.
     if inner_alg != c.sig_alg:
+        ret c
+    end
+    if !_cteqrd(ia.full, oa.full):
         ret c
     end
 
@@ -592,37 +613,75 @@ end
 //     "w*.example.com" and "*w.example.com" do not match;
 //   * it matches exactly one label, never a dot;
 //   * it never matches a bare "*" or a two-label name like "*.com".
+//
+// Written against byte offsets rather than str.substr: substr allocates a
+// fresh string per call and Salam has no collector, so the previous
+// character-by-character form leaked one allocation per byte of every hostname
+// checked, on every connection.
+inline func _sbyte(s: str, i: int): int:
+    ret _bget(s as void*, i)
+end
+
+inline func _lowerb(c: int): int:
+    if c >= 65 && c <= 90:
+        ret c + 32
+    end
+    ret c
+end
+
 func _host_match(pattern: str, host: str): bool:
-    if pattern.len() == 0 || host.len() == 0:
+    plen := pattern.len()
+    hlen := host.len()
+    if plen == 0 || hlen == 0:
         ret false
     end
-    if pattern.substr(0, 1) != "*":
+    // 42 is '*', 46 is '.'
+    if _sbyte(pattern, 0) != 42:
         ret _ascii_eqfold(pattern, host)
     end
-    if pattern.len() < 3 || pattern.substr(1, 1) != ".":
+    if plen < 3 || _sbyte(pattern, 1) != 46:
         ret false
     end
-    suffix := pattern.substr(1, pattern.len() - 1)
-    // the remainder must still contain at least two labels
+
+    // the part after the wildcard must still hold at least two labels, which
+    // is what stops "*.com" matching every domain in a TLD
     mut dots := 0
-    repeat suffix.len() with i:
-        if suffix.substr(i, 1) == ".":
+    mut i := 1
+    until i < plen:
+        if _sbyte(pattern, i) == 46:
             dots += 1
         end
+        i += 1
     end
     if dots < 2:
         ret false
     end
-    dot := host.find(".")
+
+    // the wildcard covers exactly the first label of the host
+    mut dot := 0 - 1
+    mut j := 0
+    until j < hlen:
+        if _sbyte(host, j) == 46:
+            dot = j
+            j = hlen
+        else:
+            j += 1
+        end
+    end
     if dot < 0:
         ret false
     end
-    // the wildcard covers exactly the first label of the host
-    rest := host.substr(dot, host.len() - dot)
-    if rest.len() != suffix.len():
+    if hlen - dot != plen - 1:
         ret false
     end
-    ret _ascii_eqfold(suffix, rest)
+    mut k := 0
+    until k < plen - 1:
+        if _lowerb(_sbyte(pattern, 1 + k)) != _lowerb(_sbyte(host, dot + k)):
+            ret false
+        end
+        k += 1
+    end
+    ret true
 end
 
 // Match `host` against the certificate's SubjectAltName dNSName entries.

@@ -110,6 +110,168 @@ func _install_keys(h &: Handshake, rx: Buf, tx: Buf):
     h.rec.txk = _tk_derive(tx.p, tx.len, h.cipher)
 end
 
+
+// TLS 1.2 continuation, entered after ServerHello selected 1.2.
+//
+// Certificate validation happens here exactly as it does for 1.3, against the
+// same chain verifier. The difference is what proves possession of the key:
+// 1.3 signs the transcript in CertificateVerify, 1.2 signs only the randoms
+// and the ECDHE parameters in ServerKeyExchange.
+func _do_handshake12(c &: Conn, h &: Handshake, cfg: Config, buf &: Buf): bool:
+    mut typ := 0
+    mut body := _newbuf(REC_MAX_PLAINTEXT)
+    defer _buf_free(body)
+    // function scope: a defer in a nested block outlives the name
+    mut sesshash := _newbuf(64)
+    defer _buf_free(sesshash)
+
+    // Certificate
+    if !_hs_next_msg(h, buf, typ, body):
+        ret _conn_fail(c, h.err)
+    end
+    if typ != HS_CERTIFICATE:
+        ret _conn_fail(c, "expected Certificate")
+    end
+    // TLS 1.2 has no certificate_request_context, so the list starts directly
+    mut cr := _readerof(body)
+    mut list := _rdvec24(cr)
+    if cr.bad:
+        ret _conn_fail(c, "malformed Certificate")
+    end
+    _bufreset(h.certs)
+    _bufreset(h.cert_off)
+    h.ncerts = 0
+    until _rdleft(list) > 0 && !list.bad:
+        cert := _rdvec24(list)
+        if list.bad:
+            ret _conn_fail(c, "malformed certificate entry")
+        end
+        if h.ncerts < MAX_CHAIN_DEPTH:
+            start := h.certs.len
+            repeat cert.len with i:
+                _put8(h.certs, _rdat(cert, i))
+            end
+            _put32(h.cert_off, start as i64)
+            _put32(h.cert_off, cert.len as i64)
+            h.ncerts += 1
+        end
+    end
+    if h.ncerts == 0:
+        ret _conn_fail(c, "server sent no certificates")
+    end
+
+    // ServerKeyExchange
+    if !_hs_next_msg(h, buf, typ, body):
+        ret _conn_fail(c, h.err)
+    end
+    if typ != HS_SERVER_KEY_EXCHANGE:
+        ret _conn_fail(c, "expected ServerKeyExchange (static RSA suites are not offered)")
+    end
+    sker := _readerof(body)
+    if !_tls12_parse_ske(h, sker):
+        ret _conn_fail(c, h.err)
+    end
+
+    // ServerHelloDone, or a CertificateRequest we cannot answer
+    if !_hs_next_msg(h, buf, typ, body):
+        ret _conn_fail(c, h.err)
+    end
+    if typ == HS_CERTIFICATE_REQUEST:
+        ret _conn_fail(c, "server requested a client certificate (unsupported)")
+    end
+    if typ != HS_SERVER_HELLO_DONE:
+        ret _conn_fail(c, "expected ServerHelloDone")
+    end
+
+    // Verify the chain before sending anything derived from the shared secret.
+    mut roots := _roots_new()
+    defer _roots_free(roots)
+    if !cfg.insecure_skip_verify:
+        _roots_free(roots)
+        roots = _roots_load(cfg.ca_file)
+        if roots.count == 0:
+            ret _conn_fail(c, "no trusted roots available")
+        end
+        mut chain: Reader[8]
+        repeat 8 with i:
+            chain[i] = _newreader(null, 0)
+        end
+        repeat h.ncerts with i:
+            chain[i] = _newreader(_bufptr(h.certs, _cert_start(h, i)), _cert_len(h, i))
+        end
+        vr := _verify_chain(chain, h.ncerts, roots, c.host, _now_stamp())
+        if vr != VERR_NONE:
+            _rec_send_alert(h.rec, 2, ALERT_BAD_CERTIFICATE)
+            ret _conn_fail(c, "certificate verification failed: " + _verr_str(vr))
+        end
+    end
+
+    // ClientKeyExchange
+    mut cke := _newbuf(256)
+    defer _buf_free(cke)
+    _tls12_client_key_exchange(h, h.group, cke)
+    _hash_update(h.tr, cke.p, cke.len)
+    if !_rec_write(h.rec, REC_HANDSHAKE, cke.p, cke.len):
+        ret _conn_fail(c, "could not send ClientKeyExchange")
+    end
+
+    // master secret: extended (RFC 7627) when the server agreed, else legacy
+    _bufreset(h.master)
+    _putzeros(h.master, MASTER_SECRET_LEN)
+    if h.ems:
+        _hs_transcript(h, sesshash)
+        _tls12_master_ext(h.hash, h.shared.p, h.shared.len, sesshash, h.master.p)
+    else:
+        _tls12_master(h.hash, h.shared.p, h.shared.len, h.crand, h.srand, h.master.p)
+    end
+    h.master.len = MASTER_SECRET_LEN
+
+    // ChangeCipherSpec is a record, not a handshake message: it is sent in the
+    // clear and must NOT enter the Finished transcript.
+    mut ccs := _newbuf(1)
+    defer _buf_free(ccs)
+    _put8(ccs, 1)
+    _rec_write_plain(h.rec, REC_CHANGE_CIPHER_SPEC, ccs.p, 1)
+
+    if !_tls12_install_keys(h):
+        ret _conn_fail(c, "could not install TLS 1.2 keys")
+    end
+
+    mut th := _newbuf(64)
+    defer _buf_free(th)
+    _hs_transcript(h, th)
+    mut fin := _newbuf(32)
+    defer _buf_free(fin)
+    _tls12_finished_msg(h, PRF_LABEL_CLIENT_FINISHED, th, fin)
+    _hash_update(h.tr, fin.p, fin.len)
+    if !_rec_write(h.rec, REC_HANDSHAKE, fin.p, fin.len):
+        ret _conn_fail(c, "could not send Finished")
+    end
+
+    // the server's Finished covers the transcript including ours
+    mut th2 := _newbuf(64)
+    defer _buf_free(th2)
+    _hs_transcript(h, th2)
+    mut want := _newbuf(32)
+    defer _buf_free(want)
+    _tls12_finished_msg(h, PRF_LABEL_SERVER_FINISHED, th2, want)
+
+    if !_hs_next_msg(h, buf, typ, body):
+        ret _conn_fail(c, h.err)
+    end
+    if typ != HS_FINISHED:
+        ret _conn_fail(c, "expected server Finished")
+    end
+    if body.len != VERIFY_DATA_LEN || !_cteq(body.p, _bufptr(want, 4), VERIFY_DATA_LEN):
+        _rec_send_alert(h.rec, 2, ALERT_DECRYPT_ERROR)
+        ret _conn_fail(c, "server Finished did not verify")
+    end
+
+    h.ok = true
+    c.open = true
+    ret true
+end
+
 // Run the full client handshake on an already-connected socket.
 func _do_handshake(c &: Conn, cfg: Config): bool:
     mut h := c.h
@@ -183,6 +345,12 @@ func _do_handshake(c &: Conn, cfg: Config): bool:
     // handshake stream
     if frag.len > 4 + shlen:
         _putraw(buf, _bufptr(frag, 4 + shlen), frag.len - (4 + shlen))
+    end
+
+    if h.ver == TLS12:
+        ok12 := _do_handshake12(c, h, cfg, buf)
+        c.h = h
+        ret ok12
     end
 
     if !_hs_key_schedule(h):
@@ -388,6 +556,10 @@ pub func Dial(host: str, port: int, cfg: Config): Conn:
     c.h.s_ap_secret = _newbuf(48)
     c.h.certs = _newbuf(8192)
     c.h.cert_off = _newbuf(128)
+    c.h.crand = _newbuf(32)
+    c.h.srand = _newbuf(32)
+    c.h.ecpriv = _newbuf(32)
+    c.h.ecpub = _newbuf(65)
     _do_handshake(c, conf)
     ret c
 end
@@ -488,18 +660,50 @@ pub func Close(c &: Conn):
     _buf_free(c.pending)
 end
 
+@en "Version"
+@fa "نسخه"
+@ar "إصدار"
+pub func Version(c: Conn): str:
+    if c.h.ver == TLS13:
+        ret "TLS1.3"
+    end
+    if c.h.ver == TLS12:
+        ret "TLS1.2"
+    end
+    ret "none"
+end
+
 @en "CipherName"
 @fa "نام رمز"
 @ar "اسم الشفرة"
 pub func CipherName(c: Conn): str:
-    if c.h.cipher == CIPHER_CHACHA20_SHA256:
+    s := c.h.suite
+    if s == TLS_CHACHA20_POLY1305_SHA256:
         ret "TLS_CHACHA20_POLY1305_SHA256"
     end
-    if c.h.cipher == CIPHER_AES128_GCM_SHA256:
+    if s == TLS_AES_128_GCM_SHA256:
         ret "TLS_AES_128_GCM_SHA256"
     end
-    if c.h.cipher == CIPHER_AES256_GCM_SHA384:
+    if s == TLS_AES_256_GCM_SHA384:
         ret "TLS_AES_256_GCM_SHA384"
+    end
+    if s == TLS12_ECDHE_ECDSA_AES128_GCM_SHA256:
+        ret "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+    end
+    if s == TLS12_ECDHE_RSA_AES128_GCM_SHA256:
+        ret "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+    end
+    if s == TLS12_ECDHE_ECDSA_AES256_GCM_SHA384:
+        ret "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
+    end
+    if s == TLS12_ECDHE_RSA_AES256_GCM_SHA384:
+        ret "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+    end
+    if s == TLS12_ECDHE_RSA_CHACHA20_SHA256:
+        ret "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
+    end
+    if s == TLS12_ECDHE_ECDSA_CHACHA20_SHA256:
+        ret "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"
     end
     ret "none"
 end

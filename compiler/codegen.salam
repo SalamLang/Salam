@@ -1925,6 +1925,17 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
     outh(
         g, "#ifndef SALAM_RT_TYPES_DEFINED\n#define " + "SALAM_RT_TYPES_DEFINED\n" + "typedef struct salam_file salam_file;\n" + "typedef struct salam_map salam_map;\n" + "typedef struct salam_map_iter salam_map_iter;\n" + "typedef struct { void* data; int64_t len; } salam_slice;\n" + "extern int64_t salam_idx(int64_t, int64_t);\n" + "extern SALAM_NORET void salam_panic(const char* msg);\n" + "void* " + CG_MEM_ALLOC + "(uint64_t size);\n" + "void* " + CG_MEM_REALLOC + "(void* ptr, uint64_t size);\n" + "void " + CG_MEM_FREE + "(void* ptr);\n" + "static inline void salam_slice_new(salam_slice* out, void* " + "b, int64_t lo, int64_t hi, int64_t esz)" + "{ out->data=(void*)((char*)b+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void salam_slice_sub(salam_slice* out, " + "salam_slice b, int64_t lo, int64_t hi, int has_hi, int64_t " + "esz)" + "{ if(!has_hi) hi=b.len; " + "out->data=(void*)((char*)b.data+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void* salam_slice_at(salam_slice s, int64_t i, " + "int64_t esz, int sf)" + "{ return " + "(void*)((char*)s.data+(sf?salam_idx(i,s.len):i)*(esz)); }\n" + "typedef void (*salam_thread_fn)(void);\n" + "#endif\n"
     )
+    // std/ modules (mem, str, thread, sync, webview, ...) declare their own
+    // CRT/WinAPI extern funcs (e.g. strlen, WaitForSingleObject) using
+    // salam's own type spellings. tcc does strict typedef-identity
+    // comparison, so on _WIN32 in GUI mode - where <windows.h> above
+    // transitively pulls in the *real* prototypes - those collide with the
+    // hand-rolled ones just below and in hdr_externs. Claiming both guards
+    // here, before either block, suppresses this module's own copies so
+    // only the <windows.h> versions apply. See is_wellknown_libc_name.
+    if g.is_gui_mode:
+        outh(g, "#ifdef _WIN32\n#define SALAM_RT_STR_DEFINED\n#define SALAM_EXTERN_LIBC_ON_WIN32\n#endif\n")
+    end
     outh(
         g, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n" + "extern uint64_t strlen(const char* s);\n" + "extern int32_t strcmp(const char* a, const char* b);\n" + "extern const char* strstr(const char* haystack, const char* " + "needle);\n" + "extern int64_t strtol(const char* s, void* endptr, int32_t " + "base);\n" + "extern double strtod(const char* s, void* endptr);\n" + "extern const char* salam_strcat(const char* a, const char* " + "b);\n" + "extern const char* salam_char_from_code(int32_t c);\n" + "extern const char* salam_str_substr(const char* s, int32_t " + "start, int32_t n);\n" + "extern const char* salam_str_trim(const char* s);\n" + "extern void* salam_str_split(const char* s, const char* " + "delim, void* out_count);\n" + "extern const char* salam_str_repeat(const char* s, int32_t " + "n);\n" + "extern const char* salam_str_upper(const char* s);\n" + "extern const char* salam_str_lower(const char* s);\n" + "#endif\n"
     )
@@ -2202,6 +2213,32 @@ func hdr_aliases(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     end
 end
 
+// CRT functions and genuine WinAPI functions (kernel32/user32, all
+// transitively declared by <windows.h>) that std/ modules declare via
+// their own `extern func` blocks - see the comment above the
+// SALAM_EXTERN_LIBC_ON_WIN32 guard in hdr_prelude for why these must not
+// be redeclared when windows.h has already provided the real prototype.
+func is_wellknown_libc_name(name: str): bool:
+    names := [
+        "malloc", "realloc", "free", "calloc", "memset", "memcpy", "memmove",
+        "memcmp", "strlen", "strcmp", "strncmp", "strcpy", "strncpy", "strcat",
+        "strncat", "strstr", "strchr", "strrchr", "strtol", "strtod", "atoi",
+        "atof",
+        "FindFirstFileA", "FindNextFileA", "FindClose", "WaitForSingleObject",
+        "CloseHandle", "CreateMutexA", "ReleaseMutex", "Sleep", "SleepEx",
+        "GetSystemTimeAsFileTime", "GetCurrentDirectoryA", "GetFileAttributesA",
+        "MultiByteToWideChar", "WideCharToMultiByte", "CreateWindowExA",
+        "DestroyWindow", "IsWindow", "PeekMessageA", "TranslateMessage",
+        "DispatchMessageA", "SetWindowTextA", "SetWindowPos",
+    ] as str[44]
+    repeat 44 with i:
+        if str.Equals(names[i], name):
+            ret true
+        end
+    end
+    ret false
+end
+
 func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
@@ -2214,7 +2251,14 @@ func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             fsym := sm.LookupLocal(s, s.global, d.name)
             sig := sig_of_decl(s, fsym, did)
             if sig != 0:
+                risky := is_wellknown_libc_name(d.name)
+                if risky:
+                    outh(g, "#ifndef SALAM_EXTERN_LIBC_ON_WIN32\n")
+                end
                 outh(g, cg_extern_proto(s, a, did, sig) + ";\n")
+                if risky:
+                    outh(g, "#endif\n")
+                end
             end
         else d.kind == at.AST_VAR_DECL:
             ts := str.Len(d.type_str) > 0 ? d.type_str : "int32_t"

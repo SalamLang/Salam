@@ -416,7 +416,10 @@ EOF
             elif [ -f "$base.interactive" ] && [ "${SALAM_TEST_INTERACTIVE:-0}" != "1" ]; then
                 skip="opens a modal window; set SALAM_TEST_INTERACTIVE=1 on a desktop session"
             fi
-            [ -n "$skip" ] && { echo "SKIP $dir/$lang/$name ($skip)"; continue; }
+            [ -n "$skip" ] && {
+                echo "SKIP $dir/$lang/$name ($skip)"
+                continue
+            }
             id=$(echo "$name" | tr '/ ' '__')
             jobdir="$WORK/exjob_${dir}_${id}"
             mkdir -p "$jobdir"

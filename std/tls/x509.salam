@@ -592,37 +592,75 @@ end
 //     "w*.example.com" and "*w.example.com" do not match;
 //   * it matches exactly one label, never a dot;
 //   * it never matches a bare "*" or a two-label name like "*.com".
+//
+// Written against byte offsets rather than str.substr: substr allocates a
+// fresh string per call and Salam has no collector, so the previous
+// character-by-character form leaked one allocation per byte of every hostname
+// checked, on every connection.
+inline func _sbyte(s: str, i: int): int:
+    ret _bget(s as void*, i)
+end
+
+inline func _lowerb(c: int): int:
+    if c >= 65 && c <= 90:
+        ret c + 32
+    end
+    ret c
+end
+
 func _host_match(pattern: str, host: str): bool:
-    if pattern.len() == 0 || host.len() == 0:
+    plen := pattern.len()
+    hlen := host.len()
+    if plen == 0 || hlen == 0:
         ret false
     end
-    if pattern.substr(0, 1) != "*":
+    // 42 is '*', 46 is '.'
+    if _sbyte(pattern, 0) != 42:
         ret _ascii_eqfold(pattern, host)
     end
-    if pattern.len() < 3 || pattern.substr(1, 1) != ".":
+    if plen < 3 || _sbyte(pattern, 1) != 46:
         ret false
     end
-    suffix := pattern.substr(1, pattern.len() - 1)
-    // the remainder must still contain at least two labels
+
+    // the part after the wildcard must still hold at least two labels, which
+    // is what stops "*.com" matching every domain in a TLD
     mut dots := 0
-    repeat suffix.len() with i:
-        if suffix.substr(i, 1) == ".":
+    mut i := 1
+    until i < plen:
+        if _sbyte(pattern, i) == 46:
             dots += 1
         end
+        i += 1
     end
     if dots < 2:
         ret false
     end
-    dot := host.find(".")
+
+    // the wildcard covers exactly the first label of the host
+    mut dot := 0 - 1
+    mut j := 0
+    until j < hlen:
+        if _sbyte(host, j) == 46:
+            dot = j
+            j = hlen
+        else:
+            j += 1
+        end
+    end
     if dot < 0:
         ret false
     end
-    // the wildcard covers exactly the first label of the host
-    rest := host.substr(dot, host.len() - dot)
-    if rest.len() != suffix.len():
+    if hlen - dot != plen - 1:
         ret false
     end
-    ret _ascii_eqfold(suffix, rest)
+    mut k := 0
+    until k < plen - 1:
+        if _lowerb(_sbyte(pattern, 1 + k)) != _lowerb(_sbyte(host, dot + k)):
+            ret false
+        end
+        k += 1
+    end
+    ret true
 end
 
 // Match `host` against the certificate's SubjectAltName dNSName entries.

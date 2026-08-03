@@ -1,0 +1,92 @@
+// Live TLS 1.2 interop check (needs network).
+//
+// badssl.com serves TLS 1.2 only, which makes it the one endpoint that can
+// exercise the 1.2 path end to end AND its four deliberately broken
+// certificates. Those negative cases assert the failure text contains
+// "certificate verification failed": before the 1.2 path existed they all
+// "passed" because the server aborted our 1.3-only hello and no certificate
+// was ever examined.
+//
+//   salam build tests/en/tls/live_tls12.salam --output=/tmp/t12 && /tmp/t12
+
+package main
+
+import tls
+import str
+import os
+
+mut failures := 0
+
+func probe(host: str, want tls12: bool):
+    cfg := tls.NewConfig(host)
+    mut c := tls.Dial(host, 443, cfg)
+    if !tls.ConnOk(c):
+        println "  FAIL", host, "->", tls.ConnError(c)
+        failures += 1
+        tls.Close(c)
+        ret
+    end
+    tls.Write(c, "GET / HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n")
+    mut body := ""
+    mut going := true
+    mut n := 0
+    until going && n < 3000:
+        n += 1
+        ch := tls.Read(c, 16384)
+        if ch.len() == 0:
+            going = false
+        else:
+            body = body + ch
+        end
+    end
+    ver := tls.Version(c)
+    cip := tls.CipherName(c)
+    tls.Close(c)
+    ok := str.StartsWith(body, "HTTP/1.1 2") || str.StartsWith(body, "HTTP/1.1 3") || str.StartsWith(body, "HTTP/1.1 4")
+    if ok:
+        println "  ok  ", host, "|", ver, "|", cip, "|", body.len(), "bytes"
+        if want tls12 && ver != "TLS1.2":
+            println "       (note: expected TLS1.2, negotiated", ver, ")"
+        end
+    else:
+        println "  FAIL", host, "-> no HTTP response"
+        failures += 1
+    end
+end
+
+func must reject(host: str, why: str):
+    cfg := tls.NewConfig(host)
+    mut c := tls.Dial(host, 443, cfg)
+    e := tls.ConnError(c)
+    if tls.ConnOk(c):
+        println "  FAIL", why, "-> ACCEPTED, must be rejected"
+        failures += 1
+    else if str.Contains(e, "certificate verification failed"):
+        println "  ok   rejected:", why, "->", e
+    else:
+        println "  FAIL", why, "-> failed but NOT in our verifier:", e
+        failures += 1
+    end
+    tls.Close(c)
+end
+
+func main:
+    println "TLS 1.2 interop"
+    // badssl.com is TLS 1.2 only, so reaching it at all proves the 1.2 path
+    probe("badssl.com", true)
+    probe("tls-v1-2.badssl.com", true)
+    println " TLS 1.3 hosts must still negotiate 1.3:"
+    probe("example.com", false)
+    probe("www.google.com", false)
+    println " negative (TLS 1.2 certificate failures, now reachable):"
+    must reject("expired.badssl.com", "expired certificate")
+    must reject("self-signed.badssl.com", "self-signed leaf")
+    must reject("untrusted-root.badssl.com", "untrusted root")
+    must reject("wrong.host.badssl.com", "hostname mismatch")
+    if failures == 0:
+        println "TLS 1.2 interop: all checks passed"
+    else:
+        println "TLS 1.2 interop:", failures, "failure(s)"
+    end
+    os.Exit(failures)
+end

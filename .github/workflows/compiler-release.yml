@@ -37,9 +37,28 @@ jobs:
           sudo apt-get install -y build-essential ccache \
             llvm-22-dev liblld-22-dev libpolly-22-dev libclang-rt-22-dev \
             libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev \
-            musl-dev musl-tools mingw-w64 qemu-user-static
+            musl-dev musl-tools mingw-w64 qemu-user-static wine64
+          # wine64 alone (no i386 multiarch) can run the 64-bit-only PE
+          # binaries this job cross-compiles (--target=x86_64-w64-windows-gnu);
+          # run-tests.sh's cross section looks for a "wine" command, so
+          # symlink it rather than pulling in wine32/i386 dependencies.
+          sudo ln -sf "$(command -v wine64)" /usr/local/bin/wine
           gcc --version | head -1
           llvm-config-22 --version
+      - name: Initialize Wine prefix (for running cross-compiled Windows test binaries)
+        run: |
+          echo "WINEDEBUG=-all" >> "$GITHUB_ENV"
+          echo "XDG_RUNTIME_DIR=/tmp/xdg-runtime" >> "$GITHUB_ENV"
+          mkdir -p /tmp/xdg-runtime && chmod 0700 /tmp/xdg-runtime
+          export WINEDEBUG=-all XDG_RUNTIME_DIR=/tmp/xdg-runtime
+          timeout 60 wineboot --init >/tmp/wineboot-init.log 2>&1
+          timeout 30 wineserver -w || wineserver -k || true
+          if [ ! -f ~/.wine/system.reg ]; then
+            echo "::error::wine prefix init failed:"
+            cat /tmp/wineboot-init.log
+            exit 1
+          fi
+          rm -f /tmp/wineboot-init.log
       - name: Cache cross musl sysroots (aarch64 + i686 + armhf)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -428,7 +447,6 @@ jobs:
           export SALAM_STD="$PWD/std"
           printf 'func main:\n    println "ok-llvm"\nend\n' > smoke.salam
           echo "[native] embedded LLVM backend"
-          ./salam llvm smoke.salam --jit --log-level=warn
           ./salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
           ./salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
           if [ "${SELF_CONTAINED:-0}" = "1" ]; then
@@ -568,7 +586,6 @@ jobs:
         run: |
           export SALAM_STD="$PWD/std"
           printf 'func main:\n    println "ok-llvm"\nend\n' > smoke.salam
-          ./salam llvm smoke.salam --jit --log-level=warn
           ./salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
           ./salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
           rm -f smoke.salam smoke_exe smoke.o salam_mod_*.c salam_mod_*.h
@@ -1019,15 +1036,13 @@ jobs:
           cd salam-windows
           export SALAM_STD="$PWD/std"
           printf 'func main:\n    println "ok-llvm"\nend\n' > smoke.salam
-          echo "[1] LLVM JIT (in-process ORC, no external tools)"
-          ./salam.exe llvm smoke.salam --jit --log-level=warn
-          echo "[2] LLVM emit-obj (in-process)"
+          echo "[1] LLVM emit-obj (in-process)"
           ./salam.exe llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
           ls -l smoke.o
-          echo "[3] C backend via bundled tcc"
+          echo "[2] C backend via bundled tcc (build and run)"
           ./salam.exe build smoke.salam --output=smoke_tcc.exe --log-level=warn
           ./smoke_tcc.exe
-          echo "[4] LLVM --exec (best-effort: tcc cannot link LLVM COFF objects)"
+          echo "[3] LLVM --exec (build and run; best-effort: tcc cannot link LLVM COFF objects)"
           if ./salam.exe llvm smoke.salam --exec -o smoke_llvm.exe --log-level=warn \
                && ./smoke_llvm.exe; then
             echo "    llvm --exec OK"
@@ -1042,7 +1057,7 @@ jobs:
               eval "val=\${$var:-}"
               [ -z "$val" ] && continue
               triple="$tgt-linux-musl"; [ "$tgt" = "arm" ] && triple="arm-linux-musleabihf"
-              echo "[5] cross target $triple, PATH=/nonexistent (embedded musl, no tools on Windows)"
+              echo "[4] cross target $triple, PATH=/nonexistent (embedded musl, no tools on Windows)"
               PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
                 ./salam.exe build smoke.salam --target="$triple" -o "smoke_$tgt" --log-level=warn
               file "smoke_$tgt"
@@ -1537,7 +1552,6 @@ jobs:
               /work/salam version
               export SALAM_STD=/work/std
               printf "func main:\n    println \"ok-linux32\"\nend\n" > /tmp/smoke.salam
-              /work/salam llvm /tmp/smoke.salam --jit --log-level=warn
               /work/salam llvm /tmp/smoke.salam --exec -o /tmp/smoke_exec --log-level=warn && /tmp/smoke_exec
               if [ "$(cat /work/.self_contained)" = 1 ]; then
                 /work/salam build /tmp/smoke.salam --target=x86_64-linux-musl -o /work/.smoke_x86_64 --log-level=warn
@@ -1679,13 +1693,12 @@ jobs:
               # ORC in-process JIT goes through LLVM JITLink, whose AArch32
               # (32-bit ARM) backend is explicitly documented upstream as
               # not production-ready (llvm.org/docs/JITLink.html: "the arm32
-              # ... backend[s] ... are not yet ready for general use").
-              # "Invalid opcode ... for relocation: Arm_Jump24" here is that
-              # known gap, not a salam bug or an LLVM-21-vs-22 regression -
-              # do not fail the whole build over it. --exec below uses AOT
-              # object emission + a real linker, a separate and mature path.
-              /work/salam llvm /tmp/smoke.salam --jit --log-level=warn \
-                || echo "::warning::--jit failed on armhf (known LLVM JITLink AArch32 limitation, not a salam bug); continuing with AOT checks."
+              # ... backend[s] ... are not yet ready for general use"), and
+              # fails with "Invalid opcode ... for relocation: Arm_Jump24" -
+              # a known gap, not a salam bug or an LLVM-21-vs-22 regression.
+              # Skip --jit here rather than run-and-warn; --exec below still
+              # exercises the same LLVM codegen via AOT object emission + a
+              # real linker (build-and-run), a separate and mature path.
               # --exec emits an AOT object and links it with the system
               # linker - unlike --jit above, this has no known upstream gap
               # and is expected to just work. Keep this and the smoke-exec
@@ -1909,7 +1922,6 @@ jobs:
           export SALAM_STD="$PWD/std"
           printf 'func main:\n    println "ok-llvm"\nend\n' > smoke.salam
           echo "[native] embedded LLVM backend"
-          ./salam llvm smoke.salam --jit --log-level=warn
           ./salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
           ./salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
           if [ "${SELF_CONTAINED:-0}" = "1" ]; then

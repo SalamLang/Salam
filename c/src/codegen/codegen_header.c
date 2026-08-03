@@ -700,13 +700,15 @@ static void hdr_aliases(cg_t *cg, ast_node_t *program, sb_t *h)
 }
 
 /*
- * Names of standard C/CRT functions that std/ modules (mem, str, ...)
- * declare via their own `extern func` blocks using salam's fixed-width
- * type spellings (e.g. memset's 3rd param as `uint64_t`). tcc does strict
- * typedef-identity comparison, not underlying-type resolution, so on
- * _WIN32 in GUI mode - where <windows.h> transitively pulls in the *real*
- * prototypes (spelled with `size_t`/`int`, not `uint64_t`/`int32_t`) -
- * these collide the exact same way the compiler's own hand-rolled
+ * Names of standard C/CRT functions *and* genuine WinAPI functions that
+ * std/ modules (mem, str, thread, sync, webview, ...) declare via their own
+ * `extern func` blocks using salam's own type spellings (e.g. memset's 3rd
+ * param as `uint64_t`, or WaitForSingleObject's handle as `void*` instead
+ * of `HANDLE`). tcc does strict typedef-identity comparison, not
+ * underlying-type resolution, so on _WIN32 in GUI mode - where
+ * <windows.h> transitively pulls in the *real* prototypes (spelled with
+ * `size_t`/`DWORD`/`HANDLE`, not `uint64_t`/`int32_t`/`void*`) - these
+ * collide the exact same way the compiler's own hand-rolled
  * strlen/strstr/etc in hdr_prelude above do. See SALAM_EXTERN_LIBC_ON_WIN32
  * below for the fix (same "claim the guard early" mechanism as
  * SALAM_RT_STR_DEFINED, just for arbitrary std-module extern declarations
@@ -715,11 +717,20 @@ static void hdr_aliases(cg_t *cg, ast_node_t *program, sb_t *h)
 static bool is_wellknown_libc_name(const char *name)
 {
     static const char *const names[] = {
-        "malloc",  "realloc", "free",           "calloc",        "memset",
-        "memcpy",  "memmove", "memcmp",         "strlen",        "strcmp",
-        "strncmp", "strcpy",  "strncpy",        "strcat",        "strncat",
-        "strstr",  "strchr",  "strrchr",        "strtol",        "strtod",
-        "atoi",    "atof",    "FindFirstFileA", "FindNextFileA", "FindClose",
+        /* CRT functions */
+        "malloc", "realloc", "free", "calloc", "memset", "memcpy", "memmove",
+        "memcmp", "strlen", "strcmp", "strncmp", "strcpy", "strncpy", "strcat",
+        "strncat", "strstr", "strchr", "strrchr", "strtol", "strtod", "atoi",
+        "atof",
+        /* WinAPI functions (kernel32/user32, all transitively declared by
+         * <windows.h> - see std/fs, std/thread, std/sync, std/time,
+         * std/os, std/http, std/webview/windows.salam) */
+        "FindFirstFileA", "FindNextFileA", "FindClose", "WaitForSingleObject",
+        "CloseHandle", "CreateMutexA", "ReleaseMutex", "Sleep", "SleepEx",
+        "GetSystemTimeAsFileTime", "GetCurrentDirectoryA", "GetFileAttributesA",
+        "MultiByteToWideChar", "WideCharToMultiByte", "CreateWindowExA",
+        "DestroyWindow", "IsWindow", "PeekMessageA", "TranslateMessage",
+        "DispatchMessageA", "SetWindowTextA", "SetWindowPos",
     };
     size_t i = 0;
     for (; i < sizeof(names) / sizeof(names[0]); i++)

@@ -1827,6 +1827,101 @@ func _selftest_p384():
     _ck(_verify_chain(ch, 1, empty, "p384.example.com", now) == VERR_UNTRUSTED, "verify: P-384 chain needs a trusted root")
 end
 
+// ---------------------------------------------------------------- TLS 1.2 PRF
+
+func _hexseq(n: int, base: int): Buf:
+    mut b := _newbuf(n)
+    repeat n with i:
+        _put8(b, (base + i) & 0xFF)
+    end
+    ret b
+end
+
+func _selftest_prf():
+    // Cross-checked against an independent implementation of RFC 5246's PRF.
+    // There are no official test vectors in the RFC, so the check is that two
+    // implementations written from the specification agree.
+    mut pms := _hexseq(48, 0)
+    defer _buf_free(pms)
+    mut cr := _hexseq(32, 0)
+    defer _buf_free(cr)
+    mut sr := _hexseq(32, 100)
+    defer _buf_free(sr)
+
+    mut ms := _newbuf(48)
+    defer _buf_free(ms)
+    _putzeros(ms, 48)
+    _tls12_master(HASH_SHA256, pms.p, pms.len, cr, sr, ms.p)
+    _ckhex(_hexofbuf(ms),
+        "bfaee7c76696a0000a4bc22b387327b11ed6551f387205e7bb49982188eb74b593750a2abcc33904c0a6f02673e8995d",
+        "tls12 prf master secret (sha256)")
+
+    mut ms384 := _newbuf(48)
+    defer _buf_free(ms384)
+    _putzeros(ms384, 48)
+    _tls12_master(HASH_SHA384, pms.p, pms.len, cr, sr, ms384.p)
+    _ckhex(_hexofbuf(ms384),
+        "43d9526bfc7da55fdd21a2028490133dbca1b1c47a96253d39d7e4667cb95c319356e4bc0efe3085ffdef1a89e0fb044",
+        "tls12 prf master secret (sha384)")
+
+    // key expansion seeds the randoms in the OPPOSITE order to the master
+    // secret; swapping them yields self-consistent keys that no peer agrees with
+    mut kb := _newbuf(72)
+    defer _buf_free(kb)
+    _putzeros(kb, 72)
+    _tls12_key_block(HASH_SHA256, ms.p, ms.len, sr, cr, kb.p, 72)
+    _ckhex(_hexofbuf(kb),
+        "e3608c9774a7cfb1b8e9db74209c684bbb2532fdb2a3f727470fff50146c7b575052a3675561530177f67af414b45e99ec3e5e6b6cc39bb36ab6f348010856bf92260ec2cac76a68",
+        "tls12 prf key expansion")
+
+    mut th := _hexseq(32, 200)
+    defer _buf_free(th)
+    mut vd := _newbuf(12)
+    defer _buf_free(vd)
+    _putzeros(vd, 12)
+    _tls12_verify_data(HASH_SHA256, ms.p, ms.len, PRF_LABEL_CLIENT_FINISHED, th, vd.p)
+    _ckhex(_hexofbuf(vd), "a6f0a4bd66dcaa4df3d0e426", "tls12 prf client verify_data")
+
+    // client and server Finished must not collide: the labels are what keep a
+    // server's Finished from being replayed back as the client's
+    mut vs := _newbuf(12)
+    defer _buf_free(vs)
+    _putzeros(vs, 12)
+    _tls12_verify_data(HASH_SHA256, ms.p, ms.len, PRF_LABEL_SERVER_FINISHED, th, vs.p)
+    _ck(!_cteq(vd.p, vs.p, 12), "tls12 client and server verify_data differ")
+
+    // a one-bit change anywhere in the transcript must change verify_data
+    _bufset(th, 5, _bufat(th, 5) ^ 0x01)
+    mut vd2 := _newbuf(12)
+    defer _buf_free(vd2)
+    _putzeros(vd2, 12)
+    _tls12_verify_data(HASH_SHA256, ms.p, ms.len, PRF_LABEL_CLIENT_FINISHED, th, vd2.p)
+    _ck(!_cteq(vd.p, vd2.p, 12), "tls12 verify_data covers the transcript")
+
+    // extended master secret must differ from the legacy derivation
+    mut mse := _newbuf(48)
+    defer _buf_free(mse)
+    _putzeros(mse, 48)
+    _tls12_master_ext(HASH_SHA256, pms.p, pms.len, th, mse.p)
+    _ck(!_cteq(ms.p, mse.p, 48), "tls12 extended master secret differs from legacy")
+
+    // PRF output must be a prefix-stable stream: a longer request agrees with
+    // a shorter one on the shared prefix
+    mut long := _newbuf(100)
+    defer _buf_free(long)
+    _putzeros(long, 100)
+    _tls12_key_block(HASH_SHA256, ms.p, ms.len, sr, cr, long.p, 100)
+    _ck(_cteq(long.p, kb.p, 72), "tls12 prf stream is prefix-stable")
+
+    // TLS 1.2 AEAD framing
+    mut aad := _newbuf(16)
+    defer _buf_free(aad)
+    _tk12_aad(0 as u64, REC_APPLICATION_DATA, 5, aad)
+    _ckhex(_hexofbuf(aad), "00000000000000001703030005", "tls12 aad layout")
+    _ck(_tk12_ivlen(CIPHER_AES128_GCM_SHA256) == 4, "tls12 gcm fixed iv is 4 bytes")
+    _ck(_tk12_ivlen(CIPHER_CHACHA20_SHA256) == 12, "tls12 chacha fixed iv is 12 bytes")
+end
+
 @en "SelfTest"
 @fa "خودآزمایی"
 @ar "اختبار ذاتی"
@@ -1836,6 +1931,7 @@ pub func SelfTest(): int:
     println "tls self-test"
     _selftest_bytes()
     _selftest_sha()
+    _selftest_prf()
     _selftest_hmac()
     _selftest_hkdf()
     _selftest_chacha()

@@ -25,29 +25,29 @@ die() {
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --dir | -d)
-            [ $# -ge 2 ] || die "$1 requires a value"
-            INSTALL_DIR="$2"
-            shift 2
-            ;;
-        --dir=*)
-            INSTALL_DIR="${1#--dir=}"
-            shift
-            ;;
-        --version | -v)
-            [ $# -ge 2 ] || die "$1 requires a value"
-            VERSION="$2"
-            shift 2
-            ;;
-        --version=*)
-            VERSION="${1#--version=}"
-            shift
-            ;;
-        -h | --help)
-            sed -n '2,13p' "$0"
-            exit 0
-            ;;
-        *) die "unknown option: $1" ;;
+    --dir | -d)
+        [ $# -ge 2 ] || die "$1 requires a value"
+        INSTALL_DIR="$2"
+        shift 2
+        ;;
+    --dir=*)
+        INSTALL_DIR="${1#--dir=}"
+        shift
+        ;;
+    --version | -v)
+        [ $# -ge 2 ] || die "$1 requires a value"
+        VERSION="$2"
+        shift 2
+        ;;
+    --version=*)
+        VERSION="${1#--version=}"
+        shift
+        ;;
+    -h | --help)
+        sed -n '2,13p' "$0"
+        exit 0
+        ;;
+    *) die "unknown option: $1" ;;
     esac
 done
 
@@ -76,22 +76,22 @@ fetch_to_file() {
 # --- detect OS ---------------------------------------------------------
 os="$(uname -s)"
 case "$os" in
-    Linux)
-        kernel="linux"
-        ;;
-    Darwin)
-        kernel="mac"
-        ;;
-    FreeBSD | OpenBSD | NetBSD | DragonFly)
-        die "Salam does not publish native $os binaries yet. Linux and macOS binaries are ELF/Mach-O and will not run here." \
-            "Follow BUILD instructions in the repository README to compile from source: https://github.com/${REPO}"
-        ;;
-    MINGW* | MSYS* | CYGWIN*)
-        die "this is a Windows shell; use install.bat instead: https://raw.githubusercontent.com/${REPO}/refs/heads/main/install.bat"
-        ;;
-    *)
-        die "unsupported OS: $os"
-        ;;
+Linux)
+    kernel="linux"
+    ;;
+Darwin)
+    kernel="mac"
+    ;;
+FreeBSD | OpenBSD | NetBSD | DragonFly)
+    die "Salam does not publish native $os binaries yet. Linux and macOS binaries are ELF/Mach-O and will not run here." \
+        "Follow BUILD instructions in the repository README to compile from source: https://github.com/${REPO}"
+    ;;
+MINGW* | MSYS* | CYGWIN*)
+    die "this is a Windows shell; use install.bat instead: https://raw.githubusercontent.com/${REPO}/refs/heads/main/install.bat"
+    ;;
+*)
+    die "unsupported OS: $os"
+    ;;
 esac
 
 # --- detect arch (Linux only; macOS ships a single 'mac' asset) --------
@@ -101,21 +101,21 @@ if [ "$kernel" = "mac" ]; then
     platform="mac"
 else
     case "$arch" in
-        x86_64 | amd64)
-            platform="linux"
-            ;;
-        i386 | i486 | i586 | i686 | x86)
-            platform="linux-i686"
-            ;;
-        aarch64 | arm64)
-            platform="linux-aarch64"
-            ;;
-        armv6l | armv7l | armv7 | arm)
-            platform="linux-armhf"
-            ;;
-        *)
-            die "unsupported architecture: $arch ($kernel)"
-            ;;
+    x86_64 | amd64)
+        platform="linux"
+        ;;
+    i386 | i486 | i586 | i686 | x86)
+        platform="linux-i686"
+        ;;
+    aarch64 | arm64)
+        platform="linux-aarch64"
+        ;;
+    armv6l | armv7l | armv7 | arm)
+        platform="linux-armhf"
+        ;;
+    *)
+        die "unsupported architecture: $arch ($kernel)"
+        ;;
     esac
 fi
 
@@ -195,22 +195,22 @@ log "Installed: $INSTALL_DIR/salam"
 # script that expects it there) means "just put it here", not "onto PATH".
 if [ "$INSTALL_DIR" = "$HOME/.salam/bin" ]; then
     case ":$PATH:" in
-        *":$INSTALL_DIR:"*) ;;
-        *)
-            rc=""
-            case "${SHELL:-}" in
-                */zsh) rc="$HOME/.zshrc" ;;
-                */bash) [ -f "$HOME/.bash_profile" ] && rc="$HOME/.bash_profile" || rc="$HOME/.bashrc" ;;
-                *) rc="$HOME/.profile" ;;
-            esac
-            line="export PATH=\"$INSTALL_DIR:\$PATH\""
-            if [ -f "$rc" ] && grep -qF "$INSTALL_DIR" "$rc" 2>/dev/null; then
-                :
-            else
-                printf '\n# added by Salam installer\n%s\n' "$line" >>"$rc"
-                log "Added $INSTALL_DIR to PATH in $rc (restart your shell, or run: $line)"
-            fi
-            ;;
+    *":$INSTALL_DIR:"*) ;;
+    *)
+        rc=""
+        case "${SHELL:-}" in
+        */zsh) rc="$HOME/.zshrc" ;;
+        */bash) [ -f "$HOME/.bash_profile" ] && rc="$HOME/.bash_profile" || rc="$HOME/.bashrc" ;;
+        *) rc="$HOME/.profile" ;;
+        esac
+        line="export PATH=\"$INSTALL_DIR:\$PATH\""
+        if [ -f "$rc" ] && grep -qF "$INSTALL_DIR" "$rc" 2>/dev/null; then
+            :
+        else
+            printf '\n# added by Salam installer\n%s\n' "$line" >>"$rc"
+            log "Added $INSTALL_DIR to PATH in $rc (restart your shell, or run: $line)"
+        fi
+        ;;
     esac
 fi
 

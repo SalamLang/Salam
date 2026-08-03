@@ -8,20 +8,20 @@ SERVE=0
 PORT=8080
 while [ $# -gt 0 ]; do
     case "$1" in
-        --wasm-only) WASM_ONLY=1 ;;
-        --serve) SERVE=1 ;;
-        --port)
-            shift
-            PORT="${1:?--port needs a number}"
-            ;;
-        -h | --help)
-            sed -n '2,19p' "$0"
-            exit 0
-            ;;
-        *)
-            echo "unknown option: $1 (try --help)" >&2
-            exit 2
-            ;;
+    --wasm-only) WASM_ONLY=1 ;;
+    --serve) SERVE=1 ;;
+    --port)
+        shift
+        PORT="${1:?--port needs a number}"
+        ;;
+    -h | --help)
+        sed -n '2,19p' "$0"
+        exit 0
+        ;;
+    *)
+        echo "unknown option: $1 (try --help)" >&2
+        exit 2
+        ;;
     esac
     shift
 done

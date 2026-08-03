@@ -119,6 +119,20 @@ inclusive environment for building high-performance software.
 - 🔧 Linting and code checks for best practices.
 - 🔄 Built-in commands for versioning and updates.
 
+## Quick Installing
+
+**GNU-Linux/Mac:**
+
+```bash
+{ curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh && export PATH="$HOME/.salam/bin:$PATH"
+```
+
+**Windows:**
+
+```bash
+powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat','%TEMP%\salam-install.bat')" && call "%TEMP%\salam-install.bat" && set "PATH=%USERPROFILE%\.salam\bin;%PATH%"
+```
+
 ## 🧩 Editor Support
 
 ### [Visual Studio Code](https://code.visualstudio.com/)

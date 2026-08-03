@@ -41,6 +41,7 @@ Salam is a general-purpose and systems programming language designed for efficie
   - [Supported Languages](#supported-languages)
   - [Why Choose Salam?](#why-choose-salam)
   - [Key Features](#key-features)
+- [Quick Installing](#quick-installing)
 - [🧩 Editor Support](#-editor-support)
   - [Visual Studio Code](#visual-studio-code)
 - [🛠️ The Compiler (`salam`)](#-the-compiler-salam)

@@ -194,8 +194,12 @@ func _consume(c &: Conn, n: int):
 end
 
 func _shutdown(c &: Conn):
-    if c.fd >= 0:
-        net.Close(net.SocketFromFd(c.fd))
+    if c.secure:
+        tls.Close(c.tconn)
+    else:
+        if c.fd >= 0:
+            net.Close(net.SocketFromFd(c.fd))
+        end
     end
     c.open = false
     c.fd = 0 - 1
@@ -356,7 +360,19 @@ func _send_frame(c &: Conn, opcode: int, payload: str): int:
             _bput(buf, hlen + i, _byte_at(payload, i))
         end
     end
-    sent := net.SendBytes(net.SocketFromFd(c.fd), buf, total)
+    mut sent := 0
+    if c.secure:
+        // tls.Write only takes a str, so hand it a null-terminated copy of
+        // the framed bytes rather than the raw buffer used for the plain path.
+        sbuf := mem.Allocate((total + 1) as u64)
+        mem.Set(sbuf, 0, (total + 1) as u64)
+        mem.Copy(sbuf, buf, total as u64)
+        wrote := tls.Write(c.tconn, sbuf as str)
+        mem.Free(sbuf)
+        sent = wrote
+    else:
+        sent = net.SendBytes(net.SocketFromFd(c.fd), buf, total)
+    end
     if sent != total:
         c.open = false
         ret 0 - 1

@@ -201,6 +201,29 @@ func parse_timeout_ms(val: str, out &: int): bool:
     ret true
 end
 
+// cli_options.c's --port handler for `salam serve`.
+func parse_port(val: str, out &: int): bool:
+    n := str.Len(val)
+    if n == 0 || n > 5:
+        ret false
+    end
+    mut num := 0
+    mut i := 0
+    until i < n:
+        code := byte_at(val, i)
+        if !str.IsDigit(code):
+            ret false
+        end
+        num = num * 10 + (code - 48)
+        i += 1
+    end
+    if num < 1 || num > 65535:
+        ret false
+    end
+    out = num
+    ret true
+end
+
 // core/sb.c's sb_put_shell_arg: quote a single argv-style token so it
 // survives a shell command line built with string concatenation (used by
 // debug_cmd/memcheck_cmd, which invoke gdb/lldb/valgrind via os.Run).
@@ -265,6 +288,17 @@ func positional(arg: str, out &: dr.Dr): bool:
             ret false
         end
         out.new_name = arg
+    else out.command == dr.CMD_SERVE:
+        if str.Len(out.input) > 0:
+            io.EPrintln(
+                co.Format2(
+                    i18.Tr("salam: 'serve' takes a single directory argument ('%s' after '%s')"), co.ArgStr(arg),
+                    co.ArgStr(out.input)
+                )
+            )
+            ret false
+        end
+        out.input = arg
     else out.command == dr.CMD_RUN:
         if str.Len(out.input) == 0:
             out.inputs.push(arg)
@@ -347,8 +381,14 @@ func dispatch_command(args: Vector<str>, out &: dr.Dr): int:
     else str.Equals(cmd, "version"):
         out.command = dr.CMD_VERSION
         start = 2
+    else str.Equals(cmd, "inspect"):
+        out.command = dr.CMD_INSPECT
+        start = 2
     else str.Equals(cmd, "web"):
         out.command = dr.CMD_WEB
+        start = 2
+    else str.Equals(cmd, "serve"):
+        out.command = dr.CMD_SERVE
         start = 2
     else str.Equals(cmd, "layout"):
         if n > 2 && str.Equals(args.get(2)[0], "build"):
@@ -369,11 +409,13 @@ func dispatch_command(args: Vector<str>, out &: dr.Dr): int:
             out.command = dr.CMD_REPL
             start = 2
         end
+    else:
+        // Unmatched `cmd` (e.g. a bare "file.salam"): no command word was
+        // given, so this is an error - a command (run/build/exec/inspect/...)
+        // is now required. ParseArgs checks for CMD_UNKNOWN and bails before
+        // parse_options ever runs.
+        out.command = dr.CMD_UNKNOWN
     end
-    // Unmatched `cmd` (e.g. a bare "file.salam"): leave out.command at the
-    // CMD_INSPECT default ParseArgs already set via dr.NewOptions(), start
-    // stays 1 so parse_options treats `cmd` itself as the first positional
-    // ("salam <input.salam> [inspect options]").
     ret start
 end
 
@@ -528,6 +570,17 @@ func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
             out.lang = val
         else opt_value(arg, "--xml-out", val):
             out.xml_out = val
+        else opt_value(arg, "--host", val):
+            out.serve_host = val
+        else opt_value(arg, "--port", val):
+            mut prt := 0
+            if !parse_port(val, prt):
+                io.EPrintln(
+                    co.Format1(i18.Tr("salam: invalid --port value '%s' (use 1-65535)"), co.ArgStr(val))
+                )
+                ret false
+            end
+            out.serve_port = prt
         else opt_value(arg, "--timeout", val):
             mut ms := 0
             if !parse_timeout_ms(val, ms):
@@ -884,6 +937,12 @@ end
 pub func ParseArgs(args: Vector<str>, out &: dr.Dr): bool:
     out = dr.NewOptions()
     start := dispatch_command(args, out)
+    if out.command == dr.CMD_UNKNOWN:
+        io.EPrintln(co.Format1(i18.Tr("salam: unknown command '%s'"), co.ArgStr(args.get(1)[0])))
+        io.EPrintln("")
+        io.EPrint(UsageText())
+        ret false
+    end
     if !parse_options(args, start, out):
         ret false
     end
@@ -901,7 +960,6 @@ pub func UsageText(): str:
 
 Usage:
   salam <command> [arguments] [options]
-  salam <input.salam> [inspect options]
 
 Commands:
   build    <files...> [build options]           Compile to an executable (cross-compile with --target)
@@ -912,6 +970,9 @@ Commands:
   web      <page.salam> [--output=FILE] [--split]  Build a web project: layout page + compiled
                                                 'script: src="*.salam"' programs; one .html
                                                 (default) or .html/.css/.js with --split
+  serve    [dir] [--port=N] [--host=H]          Serve a directory over HTTP (default: '.',
+                                                127.0.0.1:8000); directory listing when no
+                                                index.html is present
   run      [file.salam] [build options]         Build (auto-detect entry) + run, no artifacts kept
   exec     [file.salam] [--timeout=MS]           Run with the tree-walking interpreter (no C toolchain)
   new      [name] [--lang=en|fa|ar]             Scaffold a new project directory
@@ -919,6 +980,7 @@ Commands:
   layout   build <files...> [--inline]          Build the layout DSL to HTML/CSS/JS
   debug    <file.salam> [build options]         Build -g + launch GDB/LLDB
   memcheck <file.salam> [build options]         Build ASAN + run memory checker
+  inspect  <file.salam> [inspect options]       Lex/parse/analyze and dump tokens/AST/symbols as XML
   cli                                           Start the general REPL
   layout                                        Start the layout REPL
   help                                          Show this help
@@ -950,6 +1012,11 @@ Build options:
 Interpreter options (salam exec/run/jit <file>):
   --timeout=MS              Wall-clock deadline for the tree-walking
                            interpreter, in milliseconds (default: 5000)
+
+Serve options (salam serve [dir]):
+  --port=N                 Port to listen on (default: 8000)
+  --host=HOST              Address to bind: 127.0.0.1 (default), 0.0.0.0 (all
+                           interfaces), localhost, or any resolvable host/IP
 
 LLVM backend options (salam llvm <file>):
   -O0|-O1|-O2|-O3|-Os|-Oz   Optimization level (default -O0)
@@ -1106,7 +1173,11 @@ pub func Run(args: Vector<str>): int:
         r_web := dr.Web(opt)
         ret r_web
     end
-    // CMD_INSPECT (default command, or a bare "salam <file.salam>" call).
+    if opt.command == dr.CMD_SERVE:
+        r_serve := dr.Serve(opt)
+        ret r_serve
+    end
+    // CMD_INSPECT ("salam inspect <file.salam> [inspect options]").
     if str.Len(opt.input) == 0:
         io.EPrintln(i18.Tr("salam: no input file"))
         io.EPrintln("")

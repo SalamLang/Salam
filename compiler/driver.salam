@@ -123,6 +123,8 @@ pub const CMD_REPL := 12
 pub const CMD_REPL_LAYOUT := 13
 pub const CMD_HELP := 14
 pub const CMD_VERSION := 15
+pub const CMD_SERVE := 16
+pub const CMD_UNKNOWN := 17
 
 // Not from build.c: parallel object-file compilation. A single
 // `gcc a.c b.c ... -o exe` invocation compiles each translation unit one
@@ -235,6 +237,11 @@ pub struct Dr:
         pub no_js_minify_names: bool = false
         pub no_minify: bool = false
         pub version_short: bool = false
+        // `salam serve` (not from cli/options.h - no C parity field, since
+        // the C driver reads the same two flags straight off options_t's own
+        // serve_host/serve_port added alongside CMD_SERVE there).
+        pub serve_host: str = ""
+        pub serve_port: int = 0
     end
 
     // Private, package-internal (not pub - E017 still requires pub fields for
@@ -2437,6 +2444,24 @@ pub struct Dr:
         at.FreeAst(a)
     end
 
+    // Quoted string literal for the tiny generated Salam source `Serve()`
+    // (below) writes out to drive `salam serve`.
+    func salam_str_literal(s: str): str:
+        mut b := str.NewBuilder()
+        defer str.BufFree(b)
+        str.BufAppendChar(b, 34) // '"'
+        n := str.Len(s)
+        repeat n with i:
+            c := str.Substr(s, i, 1)
+            if c == "\\" || c == "\"":
+                str.BufAppendChar(b, 92) // '\'
+            end
+            str.BufAppend(b, c)
+        end
+        str.BufAppendChar(b, 34)
+        ret str.BufStr(b)
+    end
+
     // ===== PUBLIC API (rule E088: nothing but pub funcs below this line) =====
 
     // cli_set_defaults equivalent - `Dr {}` already carries every default (see
@@ -2684,8 +2709,9 @@ pub struct Dr:
         ret rc
     end
 
-    // driver_main's CMD_INSPECT fallback: raw single-file compile driving the
-    // --emit-tokens-xml / --emit-ast-xml / --emit-symbol-xml flags.
+    // driver_main's CMD_INSPECT body ("salam inspect <file>"): raw
+    // single-file compile driving the --emit-tokens-xml / --emit-ast-xml /
+    // --emit-symbol-xml flags.
     pub func Inspect(opt &: Dr): int:
         if str.Len(opt.input) == 0:
             io.EPrintln(i18.Tr("salam: no input file"))
@@ -3344,6 +3370,62 @@ pub struct Dr:
         sm.Free(s)
         at.FreeAst(a)
         dg.Free(diag)
+        ret rc
+    end
+
+    // Not from any C driver/*.c file: `salam serve [dir]`, the Salam
+    // equivalent of `python -m http.server` / `php -S`. Rather than
+    // reimplementing sockets/HTTP here, this generates a tiny Salam program
+    // that wires up the real std/web router (web.Static + web.EnableListing
+    // own the actual path-traversal safety and directory-listing logic -
+    // see std/web/web.salam's _safe_static_path/_dir_listing_html) and runs
+    // it exactly like Run() above does for `salam run` - one implementation
+    // of "serve files safely over HTTP", shared with the C driver's own
+    // driver/serve_build.c (which takes the same generate-and-build
+    // approach, for the same reason: std/web's thread-per-connection model
+    // needs a real compiled binary, not the tree-walking interpreter).
+    pub func Serve(opt &: Dr): int:
+        mut dir := opt.input
+        if str.Len(dir) == 0:
+            dir = "."
+        end
+        if !os.IsDir(dir):
+            lgr := lg.New(opt.log_level, resolve_color(opt.color))
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                    i18.Tr("salam: serve directory '%s' does not exist"), co.ArgStr(dir)
+                )
+            )
+            ret 2
+        end
+        mut host := opt.serve_host
+        if str.Len(host) == 0:
+            host = "127.0.0.1"
+        end
+        mut port := opt.serve_port
+        if port <= 0:
+            port = 8000
+        end
+
+        mut src_text := "import web\n\nfunc main:\n    r := web.NewRouter()\n    web.EnableListing(r)\n    web.Static(r, \"/\", "
+        src_text = src_text + salam_str_literal(dir) + ")\n    s := web.NewServer(" + co.I64Toa(port as i64)
+        src_text = src_text + ")\n    web.SetHost(s, " + salam_str_literal(host)
+        src_text = src_text + ")\n    web.EnableAccessLog(s)\n    web.Use(s, r)\n    web.Run(s)\nend\n"
+
+        salam_path := scratch_dir() + "/salam-serve-" + time.NowMicros() + ".salam"
+        if os.WriteFile(salam_path, src_text) < 0:
+            io.EPrintln(
+                co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(salam_path))
+            )
+            ret 2
+        end
+
+        opt.inputs.push(salam_path)
+        opt.input = salam_path
+
+        println "salam: serving " + dir + " at http://" + host + ":" + co.I64Toa(port as i64) + "/ (Ctrl+C to stop)"
+        rc := Run(opt)
+        _rm := os.Remove(salam_path)
         ret rc
     end
 

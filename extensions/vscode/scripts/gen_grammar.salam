@@ -1,0 +1,749 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Generates the Salam TextMate grammar (source.salam).
+// Ported from scripts/gen-grammar.js: builds the same nested grammar
+// structure (keyword lists -> kw() word-boundary alternation -> a
+// patterns/repository tree), hand-serializes it to compact JSON text via
+// the jStr/jFieldStr/jFieldRaw/jObj/jArr helpers below, then reindents it
+// with json.IndentWith to match `JSON.stringify(grammar, null, 2)`.
+// Run: salam exec scripts/gen_grammar.salam > syntaxes/salam.tmLanguage.json
+
+import str
+import json
+import sort
+
+// Unicode ranges for Arabic/Persian identifier chars (Arabic, Arabic
+// Supplement, Arabic Extended-A, Arabic Presentation Forms A/B, ZWNJ/ZWJ),
+// composed the same way as UNI/IDC/IDS/IDENT/NBB/NBA in gen-grammar.js.
+IDC := "A-Za-z0-9_\\x{0600}-\\x{06FF}\\x{0750}-\\x{077F}\\x{08A0}-\\x{08FF}\\x{FB50}-\\x{FDFF}\\x{FE70}-\\x{FEFF}\\x{200C}\\x{200D}"
+IDENT := "[A-Za-z_\\x{0600}-\\x{06FF}\\x{0750}-\\x{077F}\\x{08A0}-\\x{08FF}\\x{FB50}-\\x{FDFF}\\x{FE70}-\\x{FEFF}\\x{200C}\\x{200D}][A-Za-z0-9_\\x{0600}-\\x{06FF}\\x{0750}-\\x{077F}\\x{08A0}-\\x{08FF}\\x{FB50}-\\x{FDFF}\\x{FE70}-\\x{FEFF}\\x{200C}\\x{200D}]*"
+NBB := "(?<![A-Za-z0-9_\\x{0600}-\\x{06FF}\\x{0750}-\\x{077F}\\x{08A0}-\\x{08FF}\\x{FB50}-\\x{FDFF}\\x{FE70}-\\x{FEFF}\\x{200C}\\x{200D}])"
+NBA := "(?![A-Za-z0-9_\\x{0600}-\\x{06FF}\\x{0750}-\\x{077F}\\x{08A0}-\\x{08FF}\\x{FB50}-\\x{FDFF}\\x{FE70}-\\x{FEFF}\\x{200C}\\x{200D}])"
+
+// ===== JSON text builders (compact; json.IndentWith reflows it later) =====
+
+func jStr(s: str): str:
+    ret "\"".concat(json.Escape(s)).concat("\"")
+end
+
+func jFieldStr(key: str, value: str): str:
+    ret jStr(key).concat(":").concat(jStr(value))
+end
+
+func jFieldRaw(key: str, valueJson: str): str:
+    ret jStr(key).concat(":").concat(valueJson)
+end
+
+func jObj(fields: Vector<str>): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 123)
+    repeat fields.len() with i:
+        if i > 0: str.BufAppendChar(sb, 44) end
+        str.BufAppend(sb, fields.get(i)[0])
+    end
+    str.BufAppendChar(sb, 125)
+    ret str.BufStr(sb)
+end
+
+func jArr(items: Vector<str>): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 91)
+    repeat items.len() with i:
+        if i > 0: str.BufAppendChar(sb, 44) end
+        str.BufAppend(sb, items.get(i)[0])
+    end
+    str.BufAppendChar(sb, 93)
+    ret str.BufStr(sb)
+end
+
+// ===== kw(): sort words by (Unicode) char count descending, stable, then
+// wrap in a word-boundary alternation, mirroring gen-grammar.js's kw(). =====
+
+func kwRegex(words: Vector<str>): str:
+    mut sorted := Vector {} as Vector<str>
+    repeat words.len() with i:
+        sorted.push(words.get(i)[0])
+    end
+    sort.StableSortBy(sorted, (a: str, b: str) => str.CharCount(a) > str.CharCount(b))
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, NBB)
+    str.BufAppend(sb, "(?:")
+    repeat sorted.len() with i:
+        if i > 0: str.BufAppendChar(sb, 124) end
+        str.BufAppend(sb, sorted.get(i)[0])
+    end
+    str.BufAppend(sb, ")")
+    str.BufAppend(sb, NBA)
+    ret str.BufStr(sb)
+end
+
+// ===== keyword word lists (English/Persian/Arabic), same content as
+// CONTROL/LOGICAL/STORAGE/IO/CONSTS/THIS/AUTO/CONTEXTUAL/TYPES/
+// FUNC_DEF_KW/TYPE_DEF_KW in gen-grammar.js =====
+
+func vec_control(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("if") v.push("else") v.push("until") v.push("each") v.push("in") v.push("with")
+    v.push("ret") v.push("break") v.push("continue") v.push("repeat") v.push("to") v.push("by")
+    v.push("defer") v.push("end") v.push("اگر") v.push("وگرنه") v.push("تاوقتی") v.push("هر")
+    v.push("در") v.push("با") v.push("بازگشت") v.push("بشکن") v.push("ادامه") v.push("تکرار")
+    v.push("تا") v.push("گام") v.push("تعلیق") v.push("تمام") v.push("إذا") v.push("وإلا")
+    v.push("بينما") v.push("كل") v.push("في") v.push("مع") v.push("أرجع") v.push("اكسر")
+    v.push("واصل") v.push("كرر") v.push("إلى") v.push("خطوة") v.push("أجل") v.push("نهاية")
+    ret v
+end
+
+func vec_logical(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("و") v.push("یا") v.push("أو")
+    ret v
+end
+
+func vec_storage(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("func") v.push("mut") v.push("const") v.push("type") v.push("struct") v.push("enum")
+    v.push("interface") v.push("impl") v.push("on") v.push("بر") v.push("على") v.push("package")
+    v.push("import") v.push("as") v.push("pub") v.push("inline") v.push("noinline") v.push("pure")
+    v.push("noret") v.push("deprecated") v.push("component") v.push("layout") v.push("operator") v.push("extern")
+    v.push("تابع") v.push("متغیر") v.push("ثابت") v.push("نوع") v.push("ساختار") v.push("شمارش")
+    v.push("واسط") v.push("پیاده‌سازی") v.push("بسته") v.push("واردکردن") v.push("بعنوان") v.push("عمومی")
+    v.push("درون‌خطی") v.push("غیردرون‌خطی") v.push("خالص") v.push("بی‌بازگشت") v.push("منسوخ") v.push("مولفه")
+    v.push("صفحه") v.push("عملگر") v.push("خارجی") v.push("دالة") v.push("متغير") v.push("بنية")
+    v.push("تعداد") v.push("واجهة") v.push("تنفيذ") v.push("حزمة") v.push("استيراد") v.push("بوصفه")
+    v.push("عام") v.push("مضمن") v.push("غيرمضمن") v.push("نقي") v.push("لايرجع") v.push("مهجور")
+    v.push("مكون") v.push("صفحة") v.push("عامل") v.push("خارجي")
+    ret v
+end
+
+func vec_io(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("printerrln") v.push("printerr") v.push("println") v.push("print") v.push("input") v.push("خطاچاپ")
+    v.push("خطابنویس") v.push("چاپ") v.push("بنویس") v.push("بخوان") v.push("اطبعخطأ") v.push("اكتبخطأ")
+    v.push("اطبع") v.push("اكتب") v.push("اقرأ")
+    ret v
+end
+
+func vec_consts(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("true") v.push("false") v.push("null") v.push("درست") v.push("نادرست") v.push("پوچ")
+    v.push("صواب") v.push("خطأ") v.push("عدم")
+    ret v
+end
+
+func vec_this(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("this") v.push("این") v.push("هذا")
+    ret v
+end
+
+func vec_auto(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("auto") v.push("خودکار") v.push("تلقائي")
+    ret v
+end
+
+func vec_contextual(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("link") v.push("static") v.push("dynamic") v.push("framework") v.push("kind") v.push("dyn")
+    v.push("پیوند") v.push("ایستا") v.push("پویا") v.push("چارچوب") v.push("گونه") v.push("رابط")
+    v.push("ساكن") v.push("ديناميكي") v.push("إطار") v.push("صنف")
+    ret v
+end
+
+func vec_types(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("i8") v.push("i16") v.push("i32") v.push("i64") v.push("u8") v.push("u16")
+    v.push("u32") v.push("u64") v.push("f32") v.push("f64") v.push("isize") v.push("usize")
+    v.push("bool") v.push("str") v.push("char") v.push("void") v.push("صحیح۸") v.push("صحیح۱۶")
+    v.push("صحیح۳۲") v.push("صحیح۶۴") v.push("اعشار۳۲") v.push("اعشار۶۴") v.push("رشته") v.push("منطقی")
+    v.push("بایت") v.push("کاراکتر") v.push("صحيح٨") v.push("صحيح١٦") v.push("صحيح٣٢") v.push("صحيح٦٤")
+    v.push("صحيح") v.push("طبيعي٨") v.push("طبيعي١٦") v.push("طبيعي٣٢") v.push("طبيعي٦٤") v.push("طبيعي")
+    v.push("عشري٣٢") v.push("عشري٦٤") v.push("عشري") v.push("نص") v.push("منطقي") v.push("حرف")
+    v.push("فراغ") v.push("يونيكود")
+    ret v
+end
+
+func vec_func_def_kw(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("func") v.push("تابع") v.push("دالة")
+    ret v
+end
+
+func vec_type_def_kw(): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("type") v.push("struct") v.push("enum") v.push("interface") v.push("component") v.push("package")
+    v.push("نوع") v.push("ساختار") v.push("شمارش") v.push("واسط") v.push("مولفه") v.push("بسته")
+    v.push("بنية") v.push("تعداد") v.push("واجهة") v.push("مكون") v.push("حزمة")
+    ret v
+end
+
+
+// ===== grammar assembly: mirrors the `grammar` object literal in
+// gen-grammar.js field-for-field, key order preserved. =====
+
+func buildGrammar(controlRe: str, logicalRe: str, storageRe: str, ioRe: str, constsRe: str, thisRe: str, autoRe: str, typesRe: str, contextualRe: str, funcDefRe: str, typeDefRe: str): str:
+    mut f0 := Vector {} as Vector<str>
+    f0.push(jFieldStr("match", "\\b(mode|title|lang|dir|name|version)\\b"))
+    f0.push(jFieldStr("name", "keyword.other.directive.salam"))
+    o1 := jObj(f0)
+    mut f2 := Vector {} as Vector<str>
+    f2.push(jFieldStr("match", "\\|"))
+    f2.push(jFieldStr("name", "punctuation.separator.directive.salam"))
+    o3 := jObj(f2)
+    mut a4 := Vector {} as Vector<str>
+    a4.push(o1)
+    a4.push(o3)
+    r5 := jArr(a4)
+    mut f6 := Vector {} as Vector<str>
+    f6.push(jFieldStr("name", "punctuation.definition.comment.salam"))
+    o7 := jObj(f6)
+    mut f8 := Vector {} as Vector<str>
+    f8.push(jFieldRaw("0", o7))
+    o9 := jObj(f8)
+    mut f10 := Vector {} as Vector<str>
+    f10.push(jFieldStr("name", "comment.line.directive.salam"))
+    f10.push(jFieldStr("begin", "//!"))
+    f10.push(jFieldRaw("beginCaptures", o9))
+    f10.push(jFieldStr("end", "$"))
+    f10.push(jFieldRaw("patterns", r5))
+    o11 := jObj(f10)
+    mut a12 := Vector {} as Vector<str>
+    a12.push(o11)
+    r13 := jArr(a12)
+    mut f14 := Vector {} as Vector<str>
+    f14.push(jFieldRaw("patterns", r13))
+    o15 := jObj(f14)
+    directives := o15
+
+    mut f16 := Vector {} as Vector<str>
+    f16.push(jFieldStr("name", "punctuation.definition.comment.salam"))
+    o17 := jObj(f16)
+    mut f18 := Vector {} as Vector<str>
+    f18.push(jFieldRaw("0", o17))
+    o19 := jObj(f18)
+    mut f20 := Vector {} as Vector<str>
+    f20.push(jFieldStr("name", "punctuation.definition.comment.salam"))
+    o21 := jObj(f20)
+    mut f22 := Vector {} as Vector<str>
+    f22.push(jFieldRaw("0", o21))
+    o23 := jObj(f22)
+    mut f24 := Vector {} as Vector<str>
+    f24.push(jFieldStr("name", "comment.block.salam"))
+    f24.push(jFieldStr("begin", "/\\*"))
+    f24.push(jFieldRaw("beginCaptures", o19))
+    f24.push(jFieldStr("end", "\\*/"))
+    f24.push(jFieldRaw("endCaptures", o23))
+    o25 := jObj(f24)
+    mut f26 := Vector {} as Vector<str>
+    f26.push(jFieldStr("name", "punctuation.definition.comment.salam"))
+    o27 := jObj(f26)
+    mut f28 := Vector {} as Vector<str>
+    f28.push(jFieldRaw("0", o27))
+    o29 := jObj(f28)
+    mut f30 := Vector {} as Vector<str>
+    f30.push(jFieldStr("name", "comment.line.double-slash.salam"))
+    f30.push(jFieldStr("begin", "//"))
+    f30.push(jFieldRaw("beginCaptures", o29))
+    f30.push(jFieldStr("end", "$"))
+    o31 := jObj(f30)
+    mut a32 := Vector {} as Vector<str>
+    a32.push(o25)
+    a32.push(o31)
+    r33 := jArr(a32)
+    mut f34 := Vector {} as Vector<str>
+    f34.push(jFieldRaw("patterns", r33))
+    o35 := jObj(f34)
+    comments := o35
+
+    mut f36 := Vector {} as Vector<str>
+    f36.push(jFieldStr("name", "punctuation.definition.annotation.salam"))
+    o37 := jObj(f36)
+    mut f38 := Vector {} as Vector<str>
+    f38.push(jFieldStr("name", "storage.modifier.annotation.salam"))
+    o39 := jObj(f38)
+    mut f40 := Vector {} as Vector<str>
+    f40.push(jFieldRaw("1", o37))
+    f40.push(jFieldRaw("2", o39))
+    o41 := jObj(f40)
+    mut f42 := Vector {} as Vector<str>
+    f42.push(jFieldRaw("match", jStr("(@)([A-Za-z_][".concat(IDC).concat("]*)"))))
+    f42.push(jFieldRaw("captures", o41))
+    o43 := jObj(f42)
+    mut a44 := Vector {} as Vector<str>
+    a44.push(o43)
+    r45 := jArr(a44)
+    mut f46 := Vector {} as Vector<str>
+    f46.push(jFieldRaw("patterns", r45))
+    o47 := jObj(f46)
+    metaAnnotations := o47
+
+    mut f48 := Vector {} as Vector<str>
+    f48.push(jFieldStr("name", "punctuation.definition.string.begin.salam"))
+    o49 := jObj(f48)
+    mut f50 := Vector {} as Vector<str>
+    f50.push(jFieldRaw("0", o49))
+    o51 := jObj(f50)
+    mut f52 := Vector {} as Vector<str>
+    f52.push(jFieldStr("name", "punctuation.definition.string.end.salam"))
+    o53 := jObj(f52)
+    mut f54 := Vector {} as Vector<str>
+    f54.push(jFieldRaw("0", o53))
+    o55 := jObj(f54)
+    mut f56 := Vector {} as Vector<str>
+    f56.push(jFieldStr("include", "#string-escapes"))
+    o57 := jObj(f56)
+    mut a58 := Vector {} as Vector<str>
+    a58.push(o57)
+    r59 := jArr(a58)
+    mut f60 := Vector {} as Vector<str>
+    f60.push(jFieldStr("name", "string.quoted.triple.salam"))
+    f60.push(jFieldStr("begin", "\"\"\""))
+    f60.push(jFieldStr("end", "\"\"\""))
+    f60.push(jFieldRaw("beginCaptures", o51))
+    f60.push(jFieldRaw("endCaptures", o55))
+    f60.push(jFieldRaw("patterns", r59))
+    o61 := jObj(f60)
+    mut f62 := Vector {} as Vector<str>
+    f62.push(jFieldStr("name", "punctuation.definition.string.begin.salam"))
+    o63 := jObj(f62)
+    mut f64 := Vector {} as Vector<str>
+    f64.push(jFieldRaw("0", o63))
+    o65 := jObj(f64)
+    mut f66 := Vector {} as Vector<str>
+    f66.push(jFieldStr("name", "punctuation.definition.string.end.salam"))
+    o67 := jObj(f66)
+    mut f68 := Vector {} as Vector<str>
+    f68.push(jFieldRaw("0", o67))
+    o69 := jObj(f68)
+    mut f70 := Vector {} as Vector<str>
+    f70.push(jFieldStr("include", "#string-escapes"))
+    o71 := jObj(f70)
+    mut f72 := Vector {} as Vector<str>
+    f72.push(jFieldStr("name", "invalid.illegal.newline.salam"))
+    f72.push(jFieldStr("match", "\\n"))
+    o73 := jObj(f72)
+    mut a74 := Vector {} as Vector<str>
+    a74.push(o71)
+    a74.push(o73)
+    r75 := jArr(a74)
+    mut f76 := Vector {} as Vector<str>
+    f76.push(jFieldStr("name", "string.quoted.double.salam"))
+    f76.push(jFieldStr("begin", "\""))
+    f76.push(jFieldStr("end", "\""))
+    f76.push(jFieldRaw("beginCaptures", o65))
+    f76.push(jFieldRaw("endCaptures", o69))
+    f76.push(jFieldRaw("patterns", r75))
+    o77 := jObj(f76)
+    mut f78 := Vector {} as Vector<str>
+    f78.push(jFieldStr("name", "punctuation.definition.string.begin.salam"))
+    o79 := jObj(f78)
+    mut f80 := Vector {} as Vector<str>
+    f80.push(jFieldRaw("0", o79))
+    o81 := jObj(f80)
+    mut f82 := Vector {} as Vector<str>
+    f82.push(jFieldStr("name", "punctuation.definition.string.end.salam"))
+    o83 := jObj(f82)
+    mut f84 := Vector {} as Vector<str>
+    f84.push(jFieldRaw("0", o83))
+    o85 := jObj(f84)
+    mut f86 := Vector {} as Vector<str>
+    f86.push(jFieldStr("name", "string.quoted.raw.salam"))
+    f86.push(jFieldStr("begin", "`"))
+    f86.push(jFieldStr("end", "`"))
+    f86.push(jFieldRaw("beginCaptures", o81))
+    f86.push(jFieldRaw("endCaptures", o85))
+    o87 := jObj(f86)
+    mut f88 := Vector {} as Vector<str>
+    f88.push(jFieldStr("name", "string.quoted.single.salam"))
+    f88.push(jFieldRaw("match", jStr(NBB.concat("u?'(\\\\(?:x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]+\\}|u[0-9A-Fa-f]{4}|.)|[^'\\\\])'"))))
+    o89 := jObj(f88)
+    mut a90 := Vector {} as Vector<str>
+    a90.push(o61)
+    a90.push(o77)
+    a90.push(o87)
+    a90.push(o89)
+    r91 := jArr(a90)
+    mut f92 := Vector {} as Vector<str>
+    f92.push(jFieldRaw("patterns", r91))
+    o93 := jObj(f92)
+    stringsRepo := o93
+
+    mut f94 := Vector {} as Vector<str>
+    f94.push(jFieldStr("name", "constant.character.escape.salam"))
+    f94.push(jFieldStr("match", "\\\\(?:x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]+\\}|u[0-9A-Fa-f]{4}|[0abfnrtv\"'\\\\])"))
+    o95 := jObj(f94)
+    mut f96 := Vector {} as Vector<str>
+    f96.push(jFieldStr("name", "invalid.illegal.unknown-escape.salam"))
+    f96.push(jFieldStr("match", "\\\\."))
+    o97 := jObj(f96)
+    mut a98 := Vector {} as Vector<str>
+    a98.push(o95)
+    a98.push(o97)
+    r99 := jArr(a98)
+    mut f100 := Vector {} as Vector<str>
+    f100.push(jFieldRaw("patterns", r99))
+    o101 := jObj(f100)
+    stringEscapes := o101
+
+    mut f102 := Vector {} as Vector<str>
+    f102.push(jFieldStr("name", "constant.numeric.float.salam"))
+    f102.push(jFieldRaw("match", jStr(NBB.concat("(?:[0-9][0-9_]*\\.[0-9][0-9_]*(?:[eE][+-]?[0-9][0-9_]*)?|[0-9][0-9_]*[eE][+-]?[0-9][0-9_]*)f?").concat(NBA))))
+    o103 := jObj(f102)
+    mut f104 := Vector {} as Vector<str>
+    f104.push(jFieldStr("name", "constant.numeric.hex.salam"))
+    f104.push(jFieldRaw("match", jStr(NBB.concat("0[xX][0-9A-Fa-f][0-9A-Fa-f_]*").concat(NBA))))
+    o105 := jObj(f104)
+    mut f106 := Vector {} as Vector<str>
+    f106.push(jFieldStr("name", "constant.numeric.binary.salam"))
+    f106.push(jFieldRaw("match", jStr(NBB.concat("0[bB][01][01_]*").concat(NBA))))
+    o107 := jObj(f106)
+    mut f108 := Vector {} as Vector<str>
+    f108.push(jFieldStr("name", "constant.numeric.octal.salam"))
+    f108.push(jFieldRaw("match", jStr(NBB.concat("0[oO][0-7][0-7_]*").concat(NBA))))
+    o109 := jObj(f108)
+    mut f110 := Vector {} as Vector<str>
+    f110.push(jFieldStr("name", "constant.numeric.integer.salam"))
+    f110.push(jFieldRaw("match", jStr(NBB.concat("[0-9][0-9_]*f?").concat(NBA))))
+    o111 := jObj(f110)
+    mut a112 := Vector {} as Vector<str>
+    a112.push(o103)
+    a112.push(o105)
+    a112.push(o107)
+    a112.push(o109)
+    a112.push(o111)
+    r113 := jArr(a112)
+    mut f114 := Vector {} as Vector<str>
+    f114.push(jFieldRaw("patterns", r113))
+    o115 := jObj(f114)
+    numbersRepo := o115
+
+    mut f116 := Vector {} as Vector<str>
+    f116.push(jFieldStr("name", "storage.type.function.salam keyword.declaration.function.salam"))
+    o117 := jObj(f116)
+    mut f118 := Vector {} as Vector<str>
+    f118.push(jFieldStr("name", "entity.name.function.salam"))
+    o119 := jObj(f118)
+    mut f120 := Vector {} as Vector<str>
+    f120.push(jFieldRaw("1", o117))
+    f120.push(jFieldRaw("2", o119))
+    o121 := jObj(f120)
+    mut f122 := Vector {} as Vector<str>
+    f122.push(jFieldRaw("match", jStr("(".concat(funcDefRe).concat(")\\s+(").concat(IDENT).concat(")"))))
+    f122.push(jFieldRaw("captures", o121))
+    o123 := jObj(f122)
+    mut f124 := Vector {} as Vector<str>
+    f124.push(jFieldStr("name", "storage.type.salam keyword.declaration.type.salam"))
+    o125 := jObj(f124)
+    mut f126 := Vector {} as Vector<str>
+    f126.push(jFieldStr("name", "entity.name.type.salam"))
+    o127 := jObj(f126)
+    mut f128 := Vector {} as Vector<str>
+    f128.push(jFieldRaw("1", o125))
+    f128.push(jFieldRaw("2", o127))
+    o129 := jObj(f128)
+    mut f130 := Vector {} as Vector<str>
+    f130.push(jFieldRaw("match", jStr("(".concat(typeDefRe).concat(")\\s+(").concat(IDENT).concat(")"))))
+    f130.push(jFieldRaw("captures", o129))
+    o131 := jObj(f130)
+    mut a132 := Vector {} as Vector<str>
+    a132.push(o123)
+    a132.push(o131)
+    r133 := jArr(a132)
+    mut f134 := Vector {} as Vector<str>
+    f134.push(jFieldRaw("patterns", r133))
+    o135 := jObj(f134)
+    definitions := o135
+
+    mut f136 := Vector {} as Vector<str>
+    f136.push(jFieldStr("name", "keyword.control.salam"))
+    f136.push(jFieldRaw("match", jStr(controlRe)))
+    o137 := jObj(f136)
+    mut f138 := Vector {} as Vector<str>
+    f138.push(jFieldStr("name", "keyword.operator.logical.salam"))
+    f138.push(jFieldRaw("match", jStr(logicalRe)))
+    o139 := jObj(f138)
+    mut f140 := Vector {} as Vector<str>
+    f140.push(jFieldStr("name", "storage.type.salam"))
+    f140.push(jFieldRaw("match", jStr(storageRe)))
+    o141 := jObj(f140)
+    mut f142 := Vector {} as Vector<str>
+    f142.push(jFieldStr("name", "support.function.builtin.salam"))
+    f142.push(jFieldRaw("match", jStr(ioRe)))
+    o143 := jObj(f142)
+    mut f144 := Vector {} as Vector<str>
+    f144.push(jFieldStr("name", "support.function.builtin.print.salam"))
+    f144.push(jFieldRaw("match", jStr(NBB.concat("_{1,2}").concat(NBA))))
+    o145 := jObj(f144)
+    mut f146 := Vector {} as Vector<str>
+    f146.push(jFieldStr("name", "constant.language.salam"))
+    f146.push(jFieldRaw("match", jStr(constsRe)))
+    o147 := jObj(f146)
+    mut f148 := Vector {} as Vector<str>
+    f148.push(jFieldStr("name", "variable.language.this.salam"))
+    f148.push(jFieldRaw("match", jStr(thisRe)))
+    o149 := jObj(f148)
+    mut f150 := Vector {} as Vector<str>
+    f150.push(jFieldStr("name", "storage.type.auto.salam"))
+    f150.push(jFieldRaw("match", jStr(autoRe)))
+    o151 := jObj(f150)
+    mut f152 := Vector {} as Vector<str>
+    f152.push(jFieldStr("name", "support.type.primitive.salam"))
+    f152.push(jFieldRaw("match", jStr(typesRe)))
+    o153 := jObj(f152)
+    mut f154 := Vector {} as Vector<str>
+    f154.push(jFieldStr("name", "keyword.other.salam"))
+    f154.push(jFieldRaw("match", jStr(contextualRe)))
+    o155 := jObj(f154)
+    mut a156 := Vector {} as Vector<str>
+    a156.push(o137)
+    a156.push(o139)
+    a156.push(o141)
+    a156.push(o143)
+    a156.push(o145)
+    a156.push(o147)
+    a156.push(o149)
+    a156.push(o151)
+    a156.push(o153)
+    a156.push(o155)
+    r157 := jArr(a156)
+    mut f158 := Vector {} as Vector<str>
+    f158.push(jFieldRaw("patterns", r157))
+    o159 := jObj(f158)
+    keywordsRepo := o159
+
+    mut f160 := Vector {} as Vector<str>
+    f160.push(jFieldStr("name", "entity.name.tag.layout.salam"))
+    o161 := jObj(f160)
+    mut f162 := Vector {} as Vector<str>
+    f162.push(jFieldStr("name", "punctuation.section.layout.salam"))
+    o163 := jObj(f162)
+    mut f164 := Vector {} as Vector<str>
+    f164.push(jFieldRaw("1", o161))
+    f164.push(jFieldRaw("2", o163))
+    o165 := jObj(f164)
+    mut f166 := Vector {} as Vector<str>
+    f166.push(jFieldRaw("match", jStr("^\\s*".concat(NBB).concat("(?!(?:else|وگرنه)").concat(NBA).concat(")(").concat(IDENT).concat(")\\s*(:)\\s*$"))))
+    f166.push(jFieldRaw("captures", o165))
+    o167 := jObj(f166)
+    mut a168 := Vector {} as Vector<str>
+    a168.push(o167)
+    r169 := jArr(a168)
+    mut f170 := Vector {} as Vector<str>
+    f170.push(jFieldRaw("patterns", r169))
+    o171 := jObj(f170)
+    layoutElement := o171
+
+    mut f172 := Vector {} as Vector<str>
+    f172.push(jFieldRaw("match", jStr("(".concat(IDENT).concat(")\\s*(?=\\()"))))
+    f172.push(jFieldStr("name", "entity.name.function.call.salam"))
+    o173 := jObj(f172)
+    mut a174 := Vector {} as Vector<str>
+    a174.push(o173)
+    r175 := jArr(a174)
+    mut f176 := Vector {} as Vector<str>
+    f176.push(jFieldRaw("patterns", r175))
+    o177 := jObj(f176)
+    functionCall := o177
+
+    mut f178 := Vector {} as Vector<str>
+    f178.push(jFieldRaw("match", jStr("(?<=\\.)\\s*(".concat(IDENT).concat(")"))))
+    f178.push(jFieldStr("name", "variable.other.member.salam"))
+    o179 := jObj(f178)
+    mut a180 := Vector {} as Vector<str>
+    a180.push(o179)
+    r181 := jArr(a180)
+    mut f182 := Vector {} as Vector<str>
+    f182.push(jFieldRaw("patterns", r181))
+    o183 := jObj(f182)
+    memberRepo := o183
+
+    mut f184 := Vector {} as Vector<str>
+    f184.push(jFieldStr("name", "keyword.operator.arrow.salam"))
+    f184.push(jFieldStr("match", "=>"))
+    o185 := jObj(f184)
+    mut f186 := Vector {} as Vector<str>
+    f186.push(jFieldStr("name", "keyword.operator.spread.salam"))
+    f186.push(jFieldStr("match", "\\.\\.\\."))
+    o187 := jObj(f186)
+    mut f188 := Vector {} as Vector<str>
+    f188.push(jFieldStr("name", "keyword.operator.comparison.salam"))
+    f188.push(jFieldStr("match", "==|!=|<=|>=|<|>"))
+    o189 := jObj(f188)
+    mut f190 := Vector {} as Vector<str>
+    f190.push(jFieldStr("name", "keyword.operator.assignment.compound.salam"))
+    f190.push(jFieldStr("match", "\\+=|-=|\\*=|/=|%="))
+    o191 := jObj(f190)
+    mut f192 := Vector {} as Vector<str>
+    f192.push(jFieldStr("name", "keyword.operator.logical.salam"))
+    f192.push(jFieldStr("match", "&&|\\|\\||!"))
+    o193 := jObj(f192)
+    mut f194 := Vector {} as Vector<str>
+    f194.push(jFieldStr("name", "keyword.operator.arithmetic.salam"))
+    f194.push(jFieldStr("match", "\\*\\*|[+\\-*/%]"))
+    o195 := jObj(f194)
+    mut f196 := Vector {} as Vector<str>
+    f196.push(jFieldStr("name", "keyword.operator.reference.salam"))
+    f196.push(jFieldStr("match", "&"))
+    o197 := jObj(f196)
+    mut f198 := Vector {} as Vector<str>
+    f198.push(jFieldStr("name", "keyword.operator.assignment.salam"))
+    f198.push(jFieldStr("match", "="))
+    o199 := jObj(f198)
+    mut a200 := Vector {} as Vector<str>
+    a200.push(o185)
+    a200.push(o187)
+    a200.push(o189)
+    a200.push(o191)
+    a200.push(o193)
+    a200.push(o195)
+    a200.push(o197)
+    a200.push(o199)
+    r201 := jArr(a200)
+    mut f202 := Vector {} as Vector<str>
+    f202.push(jFieldRaw("patterns", r201))
+    o203 := jObj(f202)
+    operatorsRepo := o203
+
+    mut f204 := Vector {} as Vector<str>
+    f204.push(jFieldStr("name", "punctuation.separator.salam"))
+    f204.push(jFieldStr("match", "[,:]"))
+    o205 := jObj(f204)
+    mut f206 := Vector {} as Vector<str>
+    f206.push(jFieldStr("name", "punctuation.accessor.salam"))
+    f206.push(jFieldStr("match", "\\."))
+    o207 := jObj(f206)
+    mut f208 := Vector {} as Vector<str>
+    f208.push(jFieldStr("name", "meta.brace.round.salam"))
+    f208.push(jFieldStr("match", "[()]"))
+    o209 := jObj(f208)
+    mut f210 := Vector {} as Vector<str>
+    f210.push(jFieldStr("name", "meta.brace.square.salam"))
+    f210.push(jFieldStr("match", "[\\[\\]]"))
+    o211 := jObj(f210)
+    mut f212 := Vector {} as Vector<str>
+    f212.push(jFieldStr("name", "meta.brace.curly.salam"))
+    f212.push(jFieldStr("match", "[{}]"))
+    o213 := jObj(f212)
+    mut a214 := Vector {} as Vector<str>
+    a214.push(o205)
+    a214.push(o207)
+    a214.push(o209)
+    a214.push(o211)
+    a214.push(o213)
+    r215 := jArr(a214)
+    mut f216 := Vector {} as Vector<str>
+    f216.push(jFieldRaw("patterns", r215))
+    o217 := jObj(f216)
+    punctuationRepo := o217
+
+    mut f218 := Vector {} as Vector<str>
+    f218.push(jFieldRaw("directives", directives))
+    f218.push(jFieldRaw("comments", comments))
+    f218.push(jFieldRaw("meta-annotations", metaAnnotations))
+    f218.push(jFieldRaw("strings", stringsRepo))
+    f218.push(jFieldRaw("string-escapes", stringEscapes))
+    f218.push(jFieldRaw("numbers", numbersRepo))
+    f218.push(jFieldRaw("definitions", definitions))
+    f218.push(jFieldRaw("keywords", keywordsRepo))
+    f218.push(jFieldRaw("layout-element", layoutElement))
+    f218.push(jFieldRaw("function-call", functionCall))
+    f218.push(jFieldRaw("member", memberRepo))
+    f218.push(jFieldRaw("operators", operatorsRepo))
+    f218.push(jFieldRaw("punctuation", punctuationRepo))
+    o219 := jObj(f218)
+    repository := o219
+
+    mut f220 := Vector {} as Vector<str>
+    f220.push(jFieldStr("include", "#directives"))
+    o221 := jObj(f220)
+    mut f222 := Vector {} as Vector<str>
+    f222.push(jFieldStr("include", "#comments"))
+    o223 := jObj(f222)
+    mut f224 := Vector {} as Vector<str>
+    f224.push(jFieldStr("include", "#meta-annotations"))
+    o225 := jObj(f224)
+    mut f226 := Vector {} as Vector<str>
+    f226.push(jFieldStr("include", "#strings"))
+    o227 := jObj(f226)
+    mut f228 := Vector {} as Vector<str>
+    f228.push(jFieldStr("include", "#numbers"))
+    o229 := jObj(f228)
+    mut f230 := Vector {} as Vector<str>
+    f230.push(jFieldStr("include", "#definitions"))
+    o231 := jObj(f230)
+    mut f232 := Vector {} as Vector<str>
+    f232.push(jFieldStr("include", "#keywords"))
+    o233 := jObj(f232)
+    mut f234 := Vector {} as Vector<str>
+    f234.push(jFieldStr("include", "#layout-element"))
+    o235 := jObj(f234)
+    mut f236 := Vector {} as Vector<str>
+    f236.push(jFieldStr("include", "#function-call"))
+    o237 := jObj(f236)
+    mut f238 := Vector {} as Vector<str>
+    f238.push(jFieldStr("include", "#member"))
+    o239 := jObj(f238)
+    mut f240 := Vector {} as Vector<str>
+    f240.push(jFieldStr("include", "#operators"))
+    o241 := jObj(f240)
+    mut f242 := Vector {} as Vector<str>
+    f242.push(jFieldStr("include", "#punctuation"))
+    o243 := jObj(f242)
+    mut a244 := Vector {} as Vector<str>
+    a244.push(o221)
+    a244.push(o223)
+    a244.push(o225)
+    a244.push(o227)
+    a244.push(o229)
+    a244.push(o231)
+    a244.push(o233)
+    a244.push(o235)
+    a244.push(o237)
+    a244.push(o239)
+    a244.push(o241)
+    a244.push(o243)
+    r245 := jArr(a244)
+    topPatterns := r245
+
+    mut f246 := Vector {} as Vector<str>
+    f246.push(jFieldStr("$schema", "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json"))
+    f246.push(jFieldStr("name", "Salam"))
+    f246.push(jFieldStr("scopeName", "source.salam"))
+    f246.push(jFieldRaw("patterns", topPatterns))
+    f246.push(jFieldRaw("repository", repository))
+    o247 := jObj(f246)
+    ret o247
+end
+
+func main:
+    controlRe := kwRegex(vec_control())
+    logicalRe := kwRegex(vec_logical())
+    storageRe := kwRegex(vec_storage())
+    ioRe := kwRegex(vec_io())
+    constsRe := kwRegex(vec_consts())
+    thisRe := kwRegex(vec_this())
+    autoRe := kwRegex(vec_auto())
+    typesRe := kwRegex(vec_types())
+    contextualRe := kwRegex(vec_contextual())
+    funcDefRe := kwRegex(vec_func_def_kw())
+    typeDefRe := kwRegex(vec_type_def_kw())
+
+    compact := buildGrammar(controlRe, logicalRe, storageRe, ioRe, constsRe, thisRe, autoRe, typesRe, contextualRe, funcDefRe, typeDefRe)
+    pretty := json.IndentWith(compact, "  ")
+    println pretty
+end

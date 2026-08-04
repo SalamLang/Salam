@@ -1,0 +1,218 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "archive"
+@fa "بایگانی"
+@ar "أرشيف"
+package archive
+
+import mem
+import compress
+import os
+
+// archive - real, interoperable ZIP/GZIP/TAR reading and writing, plus
+// read-only RAR listing/extraction of uncompressed entries.
+//
+// Unlike std/compress (whose formats are Salam-native and not meant to be
+// read by any other tool), the whole point of this package is
+// interoperability: a .zip written by ZipWriter opens in Windows Explorer,
+// macOS Archive Utility, 7-Zip and `unzip`; a .zip/.gz written by any of
+// those opens here. That means real RFC 1951 DEFLATE (deflate.salam,
+// inflate.salam) - bit-for-bit the algorithm zlib/gzip/zip use - not the
+// simplified, self-describing format std/compress's own Deflate uses.
+//
+// Every format here is plain byte/bit parsing with no OS-specific code, so
+// it behaves identically on Linux, macOS, Windows and the BSDs. The one
+// place the OS actually matters - opening a file in **binary** mode and
+// seeking in files larger than 2GB - is handled once, here, via `fopen`/
+// `fread`/`fwrite`/`fseek` FFI (std/os and std/io's own ReadFile/WriteFile
+// return `str`, which truncates at an embedded NUL byte and is unusable
+// for archive payloads; see std/compress's own header comment for the same
+// reasoning). The 64-bit seek/tell call differs by OS (`_fseeki64` on
+// Windows vs. `fseeko`/`ftello` elsewhere), mirroring std/fs's own
+// already-cross-platform pattern.
+//
+// Formats:
+//   inflate.salam / deflate.salam - RFC 1951 DEFLATE decoder/encoder
+//   gzip.salam                    - single-file .gz container (RFC 1952)
+//   zip.salam                     - .zip archives, read + write (store,
+//                                    deflate; encrypted/unknown methods are
+//                                    reported, not silently misread)
+//   tar.salam                     - POSIX ustar archives, read + write
+//                                    (pair with gzip.salam for .tar.gz)
+//   rar.salam                     - RAR4/RAR5 structure parsing: list any
+//                                    archive's contents, extract entries
+//                                    stored with no compression. RAR's
+//                                    compression (PPMd + a proprietary,
+//                                    VM-filtered LZ variant) has no public
+//                                    specification and no open
+//                                    implementation independent of
+//                                    Alexander Roshal's non-redistributable
+//                                    unrar code - reimplementing it from
+//                                    scratch is out of scope. Compressed
+//                                    entries are reported as unsupported,
+//                                    never silently corrupted. RAR is
+//                                    read-only throughout: there is no open
+//                                    format to write RAR archives against.
+//
+// Every reader loads its whole input into memory first (via ReadBinaryFile
+// below, or a caller-supplied buffer) rather than streaming - archive
+// central directories (ZIP) and end-of-archive markers (TAR, RAR) require
+// random access anyway, and this keeps every parser a simple function over
+// a `void*`/`int` span, the same shape std/compress already uses.
+
+@en "Entry"
+@fa "مدخل"
+@ar "مدخل"
+pub struct Entry:
+    pub name: str = ""
+    pub size: i64 = 0 as i64
+    pub compressed_size: i64 = 0 as i64
+    pub is_dir: bool = false
+    pub method: int = 0
+    pub crc32: u32 = 0 as u32
+    pub mtime: i64 = 0 as i64
+end
+
+extern:
+    func fopen(path: str, mode: str): void*
+    func fclose(fp: void*): int
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _fseeki64(fp: void*, off: i64, whence: int): int
+        func _ftelli64(fp: void*): i64
+    end
+else:
+    extern:
+        func fseeko(fp: void*, off: i64, whence: int): int
+        func ftello(fp: void*): i64
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    func _seek64(fp: void*, off: i64, w: int): int: ret _fseeki64(fp, off, w) end
+    func _tell64(fp: void*): i64: ret _ftelli64(fp) end
+else:
+    func _seek64(fp: void*, off: i64, w: int): int: ret fseeko(fp, off, w) end
+    func _tell64(fp: void*): i64: ret ftello(fp) end
+end
+
+// ---------------------------------------------------------- binary file IO
+
+// Reads a whole file into a binary-safe buffer. `ok` is false (and the
+// returned buffer empty) if the file cannot be opened.
+@en "ReadBinaryFile"
+@fa "خواندن پرونده دودویی"
+@ar "قراءة ملف ثنائي"
+pub func ReadBinaryFile(path: str, ok &: bool): compress.ByteBuf:
+    ok = false
+    fp := fopen(path, "rb")
+    if fp == null:
+        ret compress.NewByteBuf()
+    end
+    _seek64(fp, 0 as i64, 2)
+    size := _tell64(fp)
+    _seek64(fp, 0 as i64, 0)
+    mut buf := compress.NewByteBufCap(size as int)
+    if size > (0 as i64):
+        raw := mem.Allocate(size as u64)
+        got := fread(raw, 1 as u64, size as u64, fp)
+        compress.BufPushBytes(buf, raw, got as int)
+        mem.Free(raw)
+    end
+    fclose(fp)
+    ok = true
+    ret buf
+end
+
+// Writes `n` bytes at `p` to `path`, creating/truncating it. Returns false
+// if the file could not be opened or the full write did not complete.
+@en "WriteBinaryFile"
+@fa "نوشتن پرونده دودویی"
+@ar "كتابة ملف ثنائي"
+pub func WriteBinaryFile(path: str, p: void*, n: int): bool:
+    fp := fopen(path, "wb")
+    if fp == null:
+        ret false
+    end
+    mut written := 0 as u64
+    if n > 0:
+        written = fwrite(p, 1 as u64, n as u64, fp)
+    end
+    fclose(fp)
+    ret (written as int) == n
+end
+
+@en "WriteBinaryFileBuf"
+@fa "نوشتن پرونده دودویی از بافر"
+@ar "كتابة ملف ثنائي من مخزن"
+pub func WriteBinaryFileBuf(path: str, b: compress.ByteBuf): bool:
+    ret WriteBinaryFile(path, b.data, b.len)
+end
+
+// Creates every path component of `dir` (a no-op for components that
+// already exist), for extracting archive entries that live in
+// subdirectories.
+@en "EnsureDir"
+@fa "اطمینان از پوشه"
+@ar "التأكد من المجلد"
+pub func EnsureDir(dir: str):
+    if dir.len() == 0: ret end
+    if os.Exists(dir): ret end
+    os.MkdirAll(dir)
+end
+
+// -------------------------------------------------- little-endian helpers
+
+// Every format in this package other than std/compress's own big-endian
+// headers (which this package does not use) is little-endian: ZIP, GZIP
+// and RAR all store multi-byte integers least-significant-byte first.
+
+@en "LEGet16"
+@fa "خواندن شانزده بیتی کم ارزش‌اول"
+@ar "قراءة ستة عشر بت الأقل أولاً"
+pub func LEGet16(p: void*, off: int): int:
+    bp := p as u8*
+    ret (bp[off] as int) | ((bp[off + 1] as int) << 8)
+end
+
+@en "LEGet32"
+@fa "خواندن سی و دو بیتی کم ارزش‌اول"
+@ar "قراءة اثنين وثلاثين بت الأقل أولاً"
+pub func LEGet32(p: void*, off: int): int:
+    bp := p as u8*
+    ret (bp[off] as int) | ((bp[off + 1] as int) << 8) | ((bp[off + 2] as int) << 16) | ((bp[off + 3] as int) << 24)
+end
+
+@en "LEPut16"
+@fa "نوشتن شانزده بیتی کم ارزش‌اول"
+@ar "كتابة ستة عشر بت الأقل أولاً"
+pub func LEPut16(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, v & 255)
+    compress.BufPush(b, (v >> 8) & 255)
+end
+
+@en "LEPut32"
+@fa "نوشتن سی و دو بیتی کم ارزش‌اول"
+@ar "كتابة اثنين وثلاثين بت الأقل أولاً"
+pub func LEPut32(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, v & 255)
+    compress.BufPush(b, (v >> 8) & 255)
+    compress.BufPush(b, (v >> 16) & 255)
+    compress.BufPush(b, (v >> 24) & 255)
+end

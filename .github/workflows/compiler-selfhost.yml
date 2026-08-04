@@ -1,0 +1,184 @@
+---
+name: 🧬 Self-Host - Bootstrap & Parity
+# Builds the self-hosted compiler (compiler/*.salam) the way a user would -
+# install a released `salam`, then `salam build compiler/main.salam` - and
+# gates it against the reference compiler on the shared test corpus.
+#
+# Deliberately touches nothing in c/: no `make`, no C sources. The only
+# compiler this workflow needs is the released binary install.sh fetches,
+# which is also the reference the parity gate diffs against. That is the
+# whole point - it is the proving ground for making the self-hosted
+# compiler primary, and it must not depend on the C build to work.
+# checkov:skip=CKV_GHA_7:inputs are only ever read via env: indirection, never interpolated into a run: script
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'compiler/**'
+      - 'std/**'
+      - 'tests/**'
+      - 'install.sh'
+      - '.github/workflows/compiler-selfhost.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'compiler/**'
+      - 'std/**'
+      - 'tests/**'
+      - 'install.sh'
+      - '.github/workflows/compiler-selfhost.yml'
+  workflow_dispatch:
+    inputs:
+      seed_version:
+        description: 'Released salam version to bootstrap FROM (e.g. 0.2.7). Blank = latest release with an asset for the runner platform.'
+        type: string
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: compiler-selfhost-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  # Resolved once, in its own job, because a matrix job's outputs are
+  # written by every leg and the surviving value is whichever finished
+  # last. Every downstream job pins this exact version so the whole run
+  # bootstraps from, and diffs against, one reference compiler - even if a
+  # release is published while the run is in flight.
+  seed:
+    name: Resolve seed release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve the seed salam version
+        id: resolve
+        env:
+          SALAM_VERSION: ${{ inputs.seed_version }}
+        run: |
+          set -eu
+          sh ./install.sh
+          v=$("$HOME/.salam/bin/salam" version | head -1 | awk '{ print $2 }')
+          [ -n "$v" ] || { echo "::error::could not read version from the installed salam"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "seed salam version: $v"
+
+  bootstrap:
+    name: Bootstrap on ${{ matrix.os }}
+    needs: seed
+    runs-on: ${{ matrix.os }}
+    # macOS is not yet known-good for the self-hosted driver; keep it
+    # visible without letting it block the branch. Drop `experimental`
+    # from the matrix entry once it goes green consistently.
+    continue-on-error: ${{ matrix.experimental }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, experimental: false }
+          - { os: macos-latest, experimental: true }
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Uses the checked-out install.sh rather than curl-ing it from main,
+      # so a PR that breaks the installer fails here instead of shipping.
+      # It still downloads the same published release archive.
+      - name: Install seed salam from a published release
+        env:
+          SALAM_VERSION: ${{ needs.seed.outputs.version }}
+        run: |
+          set -eu
+          sh ./install.sh
+          echo "$HOME/.salam/bin" >> "$GITHUB_PATH"
+          "$HOME/.salam/bin/salam" version | head -1
+
+      - name: Bootstrap stage1 -> stage2 -> stage3
+        run: |
+          set -eu
+          sh compiler/tools/bash/bootstrap.sh "$HOME/.salam/bin/salam" build/selfhost
+
+      - name: Smoke-test the self-hosted compiler
+        env:
+          SALAM_STD: ${{ github.workspace }}/std
+        run: |
+          set -eu
+          sh=build/selfhost/salam-stage2
+          printf 'func main:\n    println "ok-selfhost"\nend\n' > smoke.salam
+          "$sh" exec smoke.salam
+          "$sh" build smoke.salam --output=smoke_exe --cc=cc
+          ./smoke_exe
+          rm -f smoke.salam smoke_exe
+
+      - name: Upload stage2 compiler
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: salam-selfhost-stage2-${{ matrix.os }}
+          path: build/selfhost/salam-stage2
+          if-no-files-found: error
+          retention-days: 14
+
+  parity:
+    name: Parity - ${{ matrix.suite }}
+    needs: [seed, bootstrap]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # One leg per suite so the two runs each suite needs (reference +
+        # self-host) overlap with the other suites instead of queueing
+        # behind them. Suites must match compiler/tools/selfhost-parity-budget.txt.
+        suite: [exec, layout, llvm, errors, general]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Pinned to the exact version the bootstrap job resolved, so every
+      # matrix leg diffs against the same reference even if a release is
+      # published mid-run.
+      - name: Install the same seed salam (reference compiler)
+        env:
+          SALAM_VERSION: ${{ needs.seed.outputs.version }}
+        run: |
+          set -eu
+          sh ./install.sh
+          "$HOME/.salam/bin/salam" version | head -1
+
+      - name: Download stage2 self-hosted compiler
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: salam-selfhost-stage2-ubuntu-latest
+          path: build/selfhost
+
+      - name: Install test-suite dependencies
+        run: |
+          set -eu
+          sudo apt-get update
+          # tcc: the corpus' default --cc for `general`; libsqlite3/libmariadb/
+          # libhiredis: `link dynamic` targets several tests need present to
+          # link at all. Missing ones fail BOTH compilers, so they would not
+          # break the delta - installing them just keeps the comparison wide.
+          sudo apt-get install -y tcc libsqlite3-dev libhiredis-dev libmariadb-dev
+
+      - name: Run parity gate for ${{ matrix.suite }}
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          set -eu
+          chmod +x build/selfhost/salam-stage2
+          sh compiler/tools/bash/selfhost-parity.sh \
+            "$HOME/.salam/bin/salam" \
+            build/selfhost/salam-stage2 \
+            "$SUITE"

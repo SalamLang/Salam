@@ -1,0 +1,207 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import compress
+import testing
+import os
+
+func roundtrip_check(name: str, orig: compress.ByteBuf, decoded: compress.ByteBuf):
+    testing.AssertMsg(compress.BufEquals(orig, decoded), name + " round-trip mismatch")
+end
+
+func check_rle(s: str):
+    orig := compress.BufFromStr(s)
+    comp := compress.RLECompress(orig.data, orig.len)
+    decomp := compress.RLEDecompress(comp.data, comp.len)
+    roundtrip_check("rle:" + s, orig, decomp)
+    compress.BufFree(orig)
+    compress.BufFree(comp)
+    compress.BufFree(decomp)
+end
+
+func check_huffman(s: str):
+    orig := compress.BufFromStr(s)
+    comp := compress.HuffmanCompress(orig.data, orig.len)
+    decomp := compress.HuffmanDecompress(comp.data, comp.len)
+    roundtrip_check("huffman:" + s, orig, decomp)
+    compress.BufFree(orig)
+    compress.BufFree(comp)
+    compress.BufFree(decomp)
+end
+
+func check_lz77(s: str):
+    orig := compress.BufFromStr(s)
+    comp := compress.LZ77Compress(orig.data, orig.len)
+    decomp := compress.LZ77Decompress(comp.data, comp.len)
+    roundtrip_check("lz77:" + s, orig, decomp)
+    compress.BufFree(orig)
+    compress.BufFree(comp)
+    compress.BufFree(decomp)
+end
+
+func check_lzw(s: str):
+    orig := compress.BufFromStr(s)
+    comp := compress.LZWCompress(orig.data, orig.len)
+    decomp := compress.LZWDecompress(comp.data, comp.len)
+    roundtrip_check("lzw:" + s, orig, decomp)
+    compress.BufFree(orig)
+    compress.BufFree(comp)
+    compress.BufFree(decomp)
+end
+
+func check_deflate(s: str):
+    orig := compress.BufFromStr(s)
+    comp := compress.DeflateCompress(orig.data, orig.len)
+    decomp := compress.DeflateDecompress(comp.data, comp.len)
+    roundtrip_check("deflate:" + s, orig, decomp)
+    compress.BufFree(orig)
+    compress.BufFree(comp)
+    compress.BufFree(decomp)
+end
+
+func check_bwt(s: str):
+    orig := compress.BufFromStr(s)
+    comp := compress.BWTCompress(orig.data, orig.len)
+    decomp := compress.BWTDecompress(comp.data, comp.len)
+    roundtrip_check("bwt:" + s, orig, decomp)
+    compress.BufFree(orig)
+    compress.BufFree(comp)
+    compress.BufFree(decomp)
+end
+
+func repeat_str(s: str, count: int): str:
+    mut sb := ""
+    mut i := 0
+    until i < count:
+        sb = sb + s
+        i += 1
+    end
+    ret sb
+end
+
+func main:
+    // Checksums against known reference values.
+    testing.AssertEqInt(compress.CRC32Str("123456789") as int, -873187034)
+    testing.AssertEqInt(compress.Adler32Str("Wikipedia") as int, 300286872)
+    testing.AssertEqInt(compress.CRC32Str("") as int, 0)
+
+    corpus := [
+        ""
+        "a"
+        "abcdefgh"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaabbbbbbbbccccccccccccccccddddddefgh"
+        "the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog"
+        "bananabananabananabanana"
+        "mississippi"
+        "abababababababababab"
+    ] as str[9]
+
+    mut i := 0
+    until i < 9:
+        s := corpus[i]
+        check_rle(s)
+        check_huffman(s)
+        check_lz77(s)
+        check_lzw(s)
+        check_deflate(s)
+        check_bwt(s)
+        i += 1
+    end
+
+    // LZW's dictionary code width grows at 512/1024/2048 entries; a size
+    // sweep across those thresholds is what caught a real encoder/decoder
+    // desync bug during development, so it stays as a regression test.
+    check_lzw(repeat_str("The quick brown fox jumps over the lazy dog. ", 200))
+
+    // Binary data with embedded NUL bytes - str-based round-trips above
+    // cannot exercise this, since str.Len relies on strlen.
+    mut bin := compress.NewByteBuf()
+    compress.BufPush(bin, 0)
+    compress.BufPush(bin, 1)
+    compress.BufPush(bin, 2)
+    compress.BufPush(bin, 0)
+    compress.BufPush(bin, 0)
+    compress.BufPush(bin, 255)
+    compress.BufPush(bin, 254)
+    compress.BufPush(bin, 0)
+
+    mut bc := compress.HuffmanCompress(bin.data, bin.len)
+    mut bd := compress.HuffmanDecompress(bc.data, bc.len)
+    roundtrip_check("binary:huffman", bin, bd)
+    compress.BufFree(bc)
+    compress.BufFree(bd)
+
+    bc = compress.RLECompress(bin.data, bin.len)
+    bd = compress.RLEDecompress(bc.data, bc.len)
+    roundtrip_check("binary:rle", bin, bd)
+    compress.BufFree(bc)
+    compress.BufFree(bd)
+
+    bc = compress.LZ77Compress(bin.data, bin.len)
+    bd = compress.LZ77Decompress(bc.data, bc.len)
+    roundtrip_check("binary:lz77", bin, bd)
+    compress.BufFree(bc)
+    compress.BufFree(bd)
+
+    bc = compress.LZWCompress(bin.data, bin.len)
+    bd = compress.LZWDecompress(bc.data, bc.len)
+    roundtrip_check("binary:lzw", bin, bd)
+    compress.BufFree(bc)
+    compress.BufFree(bd)
+
+    bc = compress.DeflateCompress(bin.data, bin.len)
+    bd = compress.DeflateDecompress(bc.data, bc.len)
+    roundtrip_check("binary:deflate", bin, bd)
+    compress.BufFree(bc)
+    compress.BufFree(bd)
+
+    bc = compress.BWTCompress(bin.data, bin.len)
+    bd = compress.BWTDecompress(bc.data, bc.len)
+    roundtrip_check("binary:bwt", bin, bd)
+    compress.BufFree(bc)
+    compress.BufFree(bd)
+
+    compress.BufFree(bin)
+
+    // Unified Method-dispatched API, and the CompressBest picker.
+    text := compress.BufFromStr("the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog")
+    methods := [
+        compress.MethodNone, compress.MethodRLE, compress.MethodHuffman
+        compress.MethodLZ77, compress.MethodLZW, compress.MethodDeflate, compress.MethodBWT
+    ] as int[7]
+    mut m := 0
+    until m < 7:
+        method := methods[m]
+        mc := compress.CompressBuf(method, text)
+        md := compress.DecompressBuf(method, mc)
+        testing.AssertMsg(compress.BufEquals(text, md), "dispatch method " + method + " round-trip mismatch")
+        compress.BufFree(mc)
+        compress.BufFree(md)
+        m += 1
+    end
+
+    mut winner := compress.MethodNone
+    best := compress.CompressBest(text.data, text.len, winner)
+    bestDecoded := compress.Decompress(winner, best.data, best.len)
+    testing.AssertMsg(compress.BufEquals(text, bestDecoded), "CompressBest round-trip mismatch")
+    testing.AssertTrue(compress.BufLen(best) <= compress.BufLen(text) + 5)
+    compress.BufFree(best)
+    compress.BufFree(bestDecoded)
+    compress.BufFree(text)
+
+    os.Exit(testing.Summary())
+end

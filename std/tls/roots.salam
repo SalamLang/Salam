@@ -5,10 +5,15 @@ package tls
 // Where the roots come from, in order:
 //   1. an explicit path from Config.ca_file, if the caller set one;
 //   2. $SSL_CERT_FILE, the conventional override honoured by OpenSSL and curl;
-//   3. the first of the well-known system bundle paths that exists;
-//   4. the bundle embedded at build time, if one was generated.
+//   3. the live OS trust store, on platforms with one (CryptoAPI on Windows,
+//      Keychain's root-program anchors on macOS - see _roots_load_native
+//      below);
+//   4. the first of the well-known system bundle paths that exists (this is
+//      the ONLY source on Linux/FreeBSD/OpenBSD/NetBSD, which have no
+//      keychain-style API);
+//   5. the bundle embedded at build time, if one was generated.
 //
-// A caller that reaches step 4 with no embedded bundle gets an EMPTY trust
+// A caller that reaches step 5 with no embedded bundle gets an EMPTY trust
 // store, and an empty store makes every chain fail verification. That is the
 // intended behaviour: silently trusting nothing is recoverable, silently
 // trusting everything is not.
@@ -44,7 +49,11 @@ const CA_PATH_6 := "/etc/ssl/certs/ca-bundle.crt"
 const CA_PATH_7 := "C:/Program Files/Git/mingw64/etc/ssl/certs/ca-bundle.crt"
 const CA_PATH_8 := "C:/Program Files/Git/usr/ssl/certs/ca-bundle.crt"
 const CA_PATH_9 := "C:/msys64/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
-const CA_PATH_COUNT := 10
+// NetBSD's pkgsrc mozilla-rootcerts package installs here (no native
+// keychain-style API exists on NetBSD/FreeBSD/OpenBSD, unlike macOS, so a
+// flat file is the only source on those three).
+const CA_PATH_10 := "/usr/pkg/etc/openssl/certs/ca-certificates.crt"
+const CA_PATH_COUNT := 11
 
 func _ca_path(i: int): str:
     if i == 0: ret CA_PATH_0 end
@@ -57,6 +66,7 @@ func _ca_path(i: int): str:
     if i == 7: ret CA_PATH_7 end
     if i == 8: ret CA_PATH_8 end
     if i == 9: ret CA_PATH_9 end
+    if i == 10: ret CA_PATH_10 end
     ret ""
 end
 
@@ -101,6 +111,116 @@ func _embedded_roots_pem(): str:
     ret ""
 end
 
+// ------------------------------------------------------- native OS trust store
+//
+// Windows and macOS keep their root certificates in a live OS-managed store
+// (CryptoAPI, Keychain) rather than a conventional flat file, so the file
+// candidates above never find anything there on their own. Where a native API
+// exists, read it directly instead of guessing installer-specific paths.
+// FreeBSD/OpenBSD/NetBSD have no such API (no keychain-style service); they
+// really do ship a flat file, which the CA_PATH_* list above already covers.
+
+if SALAM_OS_WIN64:
+    link dynamic "crypt32"
+
+    extern:
+        func CertOpenSystemStoreA(hprov: i64, subsystem: str): void*
+        func CertEnumCertificatesInStore(store: void*, prev: void*): void*
+        func CertCloseStore(store: void*, flags: int): int
+    end
+
+    // CERT_CONTEXT (64-bit layout): dwCertEncodingType@0, pbCertEncoded@8,
+    // cbCertEncoded@16, pCertInfo@24, hCertStore@32. Only the encoded-DER
+    // pointer and its length are needed here.
+    func _roots_load_native(r &: Roots): int:
+        store := CertOpenSystemStoreA(0, "ROOT")
+        if store == null:
+            ret 0
+        end
+        mut added := 0
+        mut ctx := null as void*
+        mut going := true
+        until going:
+            ctx = CertEnumCertificatesInStore(store, ctx)
+            if ctx == null:
+                going = false
+            else:
+                pp := (ctx as i64 + 8) as i64*
+                lp := (ctx as i64 + 16) as int*
+                der := pp[0] as void*
+                dlen := lp[0]
+                if der != null && dlen > 0:
+                    _roots_add(r, der, dlen)
+                    added += 1
+                end
+            end
+        end
+        CertCloseStore(store, 0)
+        ret added
+    end
+else:
+    if SALAM_OS_MAC:
+        link framework "Security"
+        link framework "CoreFoundation"
+
+        extern:
+            func SecTrustCopyAnchorCertificates(anchors: void*): int
+            func CFArrayGetCount(arr: void*): i64
+            func CFArrayGetValueAtIndex(arr: void*, idx: i64): void*
+            func SecCertificateCopyData(cert: void*): void*
+            func CFDataGetBytePtr(data: void*): void*
+            func CFDataGetLength(data: void*): i64
+            func CFRelease(obj: void*)
+        end
+
+        // SecTrustCopyAnchorCertificates returns the OS's built-in anchor set
+        // (the root-program membership Schannel/Keychain trust by default) -
+        // not per-user Keychain trust overrides, which would need the
+        // heavier SecTrustSettingsCopyCertificates + per-entry trust-state
+        // checks. The simpler call matches what this store already does on
+        // every other platform: a root-program bundle, no admin overrides.
+        func _roots_load_native(r &: Roots): int:
+            outbuf := mem.Allocate(8 as u64)
+            defer mem.Free(outbuf)
+            outp := outbuf as i64*
+            outp[0] = 0
+            status := SecTrustCopyAnchorCertificates(outbuf)
+            if status != 0:
+                ret 0
+            end
+            arr := outp[0] as void*
+            if arr == null:
+                ret 0
+            end
+            defer CFRelease(arr)
+            n := CFArrayGetCount(arr)
+            mut added := 0
+            mut i := 0 as i64
+            until i >= n:
+                cert := CFArrayGetValueAtIndex(arr, i)
+                if cert != null:
+                    data := SecCertificateCopyData(cert)
+                    if data != null:
+                        p := CFDataGetBytePtr(data)
+                        dlen := CFDataGetLength(data)
+                        if p != null && dlen > 0:
+                            _roots_add(r, p, dlen as int)
+                            added += 1
+                        end
+                        CFRelease(data)
+                    end
+                end
+                i += 1
+            end
+            ret added
+        end
+    else:
+        func _roots_load_native(r &: Roots): int:
+            ret 0
+        end
+    end
+end
+
 func _roots_load_file(r &: Roots, path: str): int:
     if path.len() == 0:
         ret 0
@@ -127,6 +247,9 @@ func _roots_load(ca_file: str): Roots:
     env := os.Env("SSL_CERT_FILE")
     if env.len() > 0:
         _roots_load_file(r, env)
+        ret r
+    end
+    if _roots_load_native(r) > 0:
         ret r
     end
     mut i := 0

@@ -1,0 +1,164 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+// The GZIP file format (RFC 1952): a small header, a raw DEFLATE stream
+// (raw_deflate.salam/raw_inflate.salam), then a CRC-32 and the
+// uncompressed size, both little-endian. GzipCompress always writes the
+// minimal 10-byte header (no name/comment/extra field); GzipDecompress
+// reads any header a real encoder might produce (FEXTRA/FNAME/FCOMMENT/
+// FHCRC), so it can open a real .gz stream, e.g. `gzip file.txt`'s output,
+// not just its own.
+//
+// This is the one format in this package that is wire-compatible with a
+// real, third-party tool - see this package's own header comment. Verified
+// interoperable both directions against the system `gzip`: GzipCompress's
+// output passes `gzip -t` and decompresses byte-identical via `gzip -d`;
+// GzipDecompress reads `gzip`'s own output byte-identical.
+//
+// Operates purely on buffers (ByteBuf/void*), like every other algorithm
+// here - no file I/O, so this is reachable from anywhere that already
+// imports compress (e.g. an HTTP server compressing a response body with
+// Content-Encoding: gzip) without also pulling in std/archive's OS-specific
+// file handling. std/archive's own GzipCompressFile/GzipDecompressFile
+// wrap these two functions for the "read/write a .gz file on disk" case.
+
+func _gzip_skip_cstring(p: void*, start: int, n: int): int:
+    bp := p as u8*
+    mut pos := start
+    until pos >= n || (bp[pos] as int) == 0:
+        pos += 1
+    end
+    if pos < n: pos += 1 end
+    ret pos
+end
+
+func _gzip_le_get16(p: void*, off: int): int:
+    bp := p as u8*
+    ret (bp[off] as int) | ((bp[off + 1] as int) << 8)
+end
+
+func _gzip_le_get32(p: void*, off: int): int:
+    bp := p as u8*
+    ret (bp[off] as int) | ((bp[off + 1] as int) << 8) | ((bp[off + 2] as int) << 16) | ((bp[off + 3] as int) << 24)
+end
+
+func _gzip_le_put32(b &: ByteBuf, v: int):
+    BufPush(b, v & 255)
+    BufPush(b, (v >> 8) & 255)
+    BufPush(b, (v >> 16) & 255)
+    BufPush(b, (v >> 24) & 255)
+end
+
+@en "GzipCompress"
+@fa "فشرده سازی جی زیپ"
+@ar "ضغط جي زيب"
+pub func GzipCompress(p: void*, n: int): ByteBuf:
+    mut out := NewByteBuf()
+    BufPush(out, 0x1f)
+    BufPush(out, 0x8b)
+    BufPush(out, 8)
+    BufPush(out, 0)
+    _gzip_le_put32(out, 0)
+    BufPush(out, 0)
+    BufPush(out, 255)
+
+    mut comp := RawDeflate(p, n)
+    BufPushBuf(out, comp)
+    BufFree(comp)
+
+    crc := CRC32(p, n)
+    _gzip_le_put32(out, crc as int)
+    _gzip_le_put32(out, n)
+    ret out
+end
+
+// `ok` is false for anything that is not a well-formed, CM=8 (deflate)
+// gzip stream this can actually decode (encrypted/multi-member/unknown
+// compression-method streams are rejected rather than misread).
+@en "GzipDecompress"
+@fa "کدگشایی جی زیپ"
+@ar "فك ضغط جي زيب"
+pub func GzipDecompress(p: void*, n: int, ok &: bool): ByteBuf:
+    ok = false
+    if n < 18:
+        ret NewByteBuf()
+    end
+    bp := p as u8*
+    if (bp[0] as int) != 0x1f || (bp[1] as int) != 0x8b:
+        ret NewByteBuf()
+    end
+    if (bp[2] as int) != 8:
+        ret NewByteBuf()
+    end
+    flg := bp[3] as int
+    mut pos := 10
+
+    if (flg & 4) != 0:
+        xlen := _gzip_le_get16(p, pos)
+        pos += 2 + xlen
+    end
+    if (flg & 8) != 0:
+        pos = _gzip_skip_cstring(p, pos, n)
+    end
+    if (flg & 16) != 0:
+        pos = _gzip_skip_cstring(p, pos, n)
+    end
+    if (flg & 2) != 0:
+        pos += 2
+    end
+    if pos >= n - 8:
+        ret NewByteBuf()
+    end
+
+    isize := _gzip_le_get32(p, n - 4)
+    deflate_len := n - 8 - pos
+    src := ((p as i64) + (pos as i64)) as void*
+    mut inflate_ok := false
+    out := RawInflate(src, deflate_len, isize, inflate_ok)
+    if !inflate_ok:
+        ret out
+    end
+    ok = true
+    ret out
+end
+
+// Convenience wrapper over GzipCompress for a caller that already has a
+// ByteBuf (e.g. the output of another step in a pipeline).
+@en "GzipCompressBuf"
+@fa "فشرده سازی جی زیپ بافر"
+@ar "ضغط جي زيب مخزن"
+pub func GzipCompressBuf(b: ByteBuf): ByteBuf:
+    ret GzipCompress(b.data, b.len)
+end
+
+// Convenience wrapper over GzipCompress for `str` input - safe in this
+// direction since the input is known-length UTF-8, not something that gets
+// measured with strlen afterward. The decompressed side has no `str`
+// counterpart: gzip payloads are arbitrary binary, so GzipDecompress always
+// returns a ByteBuf (see this package's header comment on BufToStrUnsafe).
+@en "GzipCompressStr"
+@fa "فشرده سازی جی زیپ رشته"
+@ar "ضغط جي زيب نص"
+pub func GzipCompressStr(s: str): ByteBuf:
+    ret GzipCompress(s as void*, s.len())
+end
+
+@en "GzipDecompressBuf"
+@fa "کدگشایی جی زیپ بافر"
+@ar "فك ضغط جي زيب مخزن"
+pub func GzipDecompressBuf(b: ByteBuf, ok &: bool): ByteBuf:
+    ret GzipDecompress(b.data, b.len, ok)
+end

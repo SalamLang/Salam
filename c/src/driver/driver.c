@@ -21,6 +21,7 @@
 #include "driver/js_build.h"
 #include "driver/layout_build.h"
 #include "driver/web_build.h"
+#include "driver/serve_build.h"
 #include "driver/debug_cmd.h"
 #include "driver/repl.h"
 #include "core/arena.h"
@@ -739,8 +740,13 @@ int driver_main(int argc, char **argv)
             return 2;
         }
         return driver_web(&opt);
+    case CMD_SERVE:
+        return driver_serve(&opt);
     case CMD_INSPECT:
         break;
+    case CMD_UNKNOWN:
+        cli_print_usage(stderr);
+        return 2;
     }
     if (!opt.input) {
         fprintf(stderr, "%s", i18n_tr("salam: no input file\n\n"));

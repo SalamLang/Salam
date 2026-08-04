@@ -38,6 +38,16 @@ static bool cli_positional(const char *arg, options_t *out)
         }
         out->new_name = arg;
         break;
+    case CMD_SERVE:
+        if (out->input != NULL) {
+            fprintf(stderr,
+                    i18n_tr("salam: 'serve' takes a single directory argument "
+                            "('%s' after '%s')\n"),
+                    arg, out->input);
+            return false;
+        }
+        out->input = arg;
+        break;
     case CMD_RUN:
         if (out->input == NULL) {
             if (out->input_count >= SALAM_MAX_INPUTS) {
@@ -229,6 +239,19 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                 out->lang = val;
             } else if ((val = cli_opt_value(arg, "--xml-out")) != NULL) {
                 out->xml_out = val;
+            } else if ((val = cli_opt_value(arg, "--host")) != NULL) {
+                out->serve_host = val;
+            } else if ((val = cli_opt_value(arg, "--port")) != NULL) {
+                char *endp = NULL;
+                long n = strtol(val, &endp, 10);
+                if (endp == val || *endp != '\0' || n < 1 || n > 65535) {
+                    fprintf(stderr,
+                            i18n_tr("salam: invalid --port value '%s' "
+                                    "(use 1-65535)\n"),
+                            val);
+                    return false;
+                }
+                out->serve_port = (int)n;
             } else if (arg[0] == '-' && arg[1] != '\0') {
                 fprintf(stderr, i18n_tr("salam: unknown option '%s'\n"), arg);
                 return false;

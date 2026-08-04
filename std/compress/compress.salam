@@ -1,0 +1,119 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "compress"
+@fa "فشرده سازی"
+@ar "ضغط"
+package compress
+
+import mem
+import encoding
+
+// compress - a from-scratch data compression toolkit.
+//
+// Every algorithm here works on raw bytes (`void*` + a length), never on
+// `str`: Salam's `str` is a NUL-terminated C string under the hood
+// (str.Len compiles to strlen), so it cannot carry arbitrary binary safely.
+// Compressed output, and anything decoded back out of it, is carried in a
+// `ByteBuf` instead - a small growable byte buffer modeled on
+// std/tls's Buf/Reader pair. If you only ever compress/decompress text that
+// is itself free of embedded NUL bytes, BufToStrUnsafe is a convenience
+// escape hatch back to `str`; anything else (images, already-compressed
+// data, ciphertext, ...) should stay in ByteBuf/void* form, or be carried
+// as text via BufToBase64 (see std/encoding).
+//
+// Building blocks, shared across every algorithm below:
+//   ByteBuf     - growable output buffer                        (buffer.salam)
+//   ByteReader  - bounds-checked cursor over borrowed bytes      (buffer.salam)
+//   BitWriter   - LSB-first bit-packed output over a ByteBuf     (bits.salam)
+//   BitReader   - LSB-first bit-packed cursor over a ByteReader  (bits.salam)
+//
+// Algorithms, each independently usable (`import compress`, call directly)
+// and also reachable through the unified Compress/Decompress dispatcher in
+// api.salam (MethodRLE, MethodHuffman, ... + Compress/Decompress/
+// CompressBest):
+//   CRC32 / Adler32          - integrity checksums                (checksum.salam)
+//   RLE (PackBits)           - byte-run compression                (rle.salam)
+//   Huffman coding           - optimal prefix-code entropy coding  (huffman.salam)
+//   LZ77 / LZSS              - sliding-window dictionary coding    (lz77.salam)
+//   LZW                      - growing-dictionary coding           (lzw.salam)
+//   Deflate (LZ77 + Huffman) - the two combined, DEFLATE-style     (deflate.salam)
+//   BWT + MTF (+RLE+Huffman) - Burrows-Wheeler transform pipeline  (bwt.salam)
+//
+// None of these formats are wire-compatible with zlib/gzip/PNG/GIF - they
+// implement the same algorithms from first principles with Salam-native,
+// self-describing headers (each compressed blob starts with the original
+// length, so Decompress never needs to be told how big the result is).
+// That keeps every encoder/decoder pair self-contained and testable without
+// needing an external reference implementation, which is the point of a
+// from-scratch stdlib package.
+//
+// Like std/crypto, this is pointer/mem.Allocate-heavy code: verify it with
+// the compiled backend (`salam build` / `salam run`), not `salam exec` -
+// the tree-walking interpreter cannot resolve some of the stdlib calls
+// this package's LZW dictionary goes through, and is not guaranteed to
+// match the compiled backend's arithmetic in general (see SKILL.md).
+
+@en "Method"
+@fa "روش"
+@ar "طريقة"
+pub enum Method: None, RLE, Huffman, LZ77, LZW, Deflate, BWT end
+
+@en "ByteBuf"
+@fa "بافر بایت"
+@ar "مخزن بايتات"
+pub struct ByteBuf:
+    pub data: void* = null
+    pub len: int = 0
+    pub cap: int = 0
+end
+
+@en "ByteReader"
+@fa "خواننده بایت"
+@ar "قارئ بايتات"
+pub struct ByteReader:
+    pub data: void* = null
+    pub len: int = 0
+    pub pos: int = 0
+    // Sticky error flag: once a read runs past the end, `bad` latches true
+    // and every later read returns 0 without advancing, so a decoder can
+    // read optimistically and check `r.bad` once at the end instead of
+    // threading an ok/err result through every call.
+    pub bad: bool = false
+end
+
+inline func _bget(p: void*, i: int): int:
+    bp := p as u8*
+    ret bp[i] as int
+end
+
+inline func _bput(p: void*, i: int, v: int):
+    bp := p as u8*
+    bp[i] = (v & 255) as u8
+end
+
+// A cross-package expression like `compress.Method.RLE` cannot be written
+// directly from another package - the compiler resolves at most one dotted
+// member access after an imported package name, so `pkg.EnumType.Member`
+// does not parse from outside the package (nor does routing around it with
+// `pub const X := Method.RLE`: every top-level const must precede every
+// type/enum declaration in its file, so it cannot refer back to Method
+// either). A function returning `Method` by value does parse, but the
+// generated C redeclares the return type inconsistently (`Method` at the
+// enum's own typedef, `compress__Method` at the call site) and fails to
+// compile. Given both routes are closed, api.salam's cross-package
+// Compress/Decompress dispatcher below identifies an algorithm with a
+// plain `int` (see the MethodXxx constants there) instead of a `Method`
+// value; `Method` itself remains what every algorithm's own internal
+// dispatch matches on, and works normally for code inside this package.

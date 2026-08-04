@@ -1,0 +1,113 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+// LZ77 / LZSS: a sliding-window dictionary coder. Each output token is one
+// flag bit followed by either a literal byte or a (distance, length) back
+// reference into the already-emitted output:
+//
+//   0  + 8 bits            - literal byte
+//   1  + 12 bits + 4 bits  - back reference: distance-1 (window <= 4096),
+//                            length-MIN_MATCH (3 <= length <= 18)
+//
+// These are the classic LZSS parameters (12-bit window, 4-bit length):
+// simple, and enough to find real redundancy in repetitive input. Match
+// search is a brute-force scan of the window - O(n * WINDOW) worst case -
+// which keeps the encoder easy to verify; a production encoder would use a
+// hash chain instead. Decoding is O(n) either way, and correctly handles
+// overlapping references (distance < length) by copying one byte at a
+// time from the output built so far.
+
+const _LZ_WINDOW := 4096
+const _LZ_MIN_MATCH := 3
+const _LZ_MAX_MATCH := 18
+
+func _lz77_find_match(p: void*, n: int, pos: int, bestlen &: int, bestdist &: int):
+    bp := p as u8*
+    bestlen = 0
+    bestdist = 0
+    mut winstart := pos - _LZ_WINDOW
+    if winstart < 0: winstart = 0 end
+    mut cand := winstart
+    until cand < pos:
+        mut len := 0
+        until len < _LZ_MAX_MATCH && pos + len < n && (bp[cand + len] as int) == (bp[pos + len] as int):
+            len += 1
+        end
+        if len > bestlen:
+            bestlen = len
+            bestdist = pos - cand
+        end
+        cand += 1
+    end
+end
+
+@en "LZ77Compress"
+@fa "فشرده سازی ال زد هفتاد و هفت"
+@ar "ضغط إل زد سبعة وسبعين"
+pub func LZ77Compress(p: void*, n: int): ByteBuf:
+    mut out := NewByteBuf()
+    BufPushU32(out, n)
+    mut w := NewBitWriter()
+    bp := p as u8*
+    mut pos := 0
+    until pos < n:
+        mut bestlen := 0
+        mut bestdist := 0
+        _lz77_find_match(p, n, pos, bestlen, bestdist)
+        if bestlen >= _LZ_MIN_MATCH:
+            BitWriteBit(w, 1)
+            BitWriteBits(w, bestdist - 1, 12)
+            BitWriteBits(w, bestlen - _LZ_MIN_MATCH, 4)
+            pos += bestlen
+        else:
+            BitWriteBit(w, 0)
+            BitWriteBits(w, bp[pos] as int, 8)
+            pos += 1
+        end
+    end
+    BitFlush(w)
+    BufPushBuf(out, w.buf)
+    BitWriterFree(w)
+    ret out
+end
+
+@en "LZ77Decompress"
+@fa "کدگشایی ال زد هفتاد و هفت"
+@ar "فك ضغط إل زد سبعة وسبعين"
+pub func LZ77Decompress(p: void*, n: int): ByteBuf:
+    mut r := NewByteReader(p, n)
+    origLen := RdU32(r)
+    mut out := NewByteBufCap(origLen)
+    remaining := RdLeft(r)
+    mut br := NewBitReader(((r.data as i64) + (r.pos as i64)) as void*, remaining)
+    until BufLen(out) < origLen:
+        bit := BitReadBit(br)
+        if bit == 0:
+            b := BitReadBits(br, 8)
+            BufPush(out, b)
+        else:
+            dist := BitReadBits(br, 12) + 1
+            length := BitReadBits(br, 4) + _LZ_MIN_MATCH
+            start := BufLen(out) - dist
+            mut k := 0
+            until k < length:
+                BufPush(out, BufGet(out, start + k))
+                k += 1
+            end
+        end
+    end
+    ret out
+end

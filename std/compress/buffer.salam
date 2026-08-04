@@ -1,0 +1,252 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+import mem
+import str
+import encoding
+
+func _buf_grow(b &: ByteBuf, need: int):
+    if b.len + need <= b.cap:
+        ret
+    end
+    mut nc := b.cap
+    if nc < 32: nc = 32 end
+    until nc < b.len + need: nc = nc * 2 end
+    b.data = mem.Reallocate(b.data, nc as u64)
+    b.cap = nc
+end
+
+func _rd_need(r &: ByteReader, n: int): bool:
+    if r.bad: ret false end
+    if n < 0 || r.pos + n > r.len:
+        r.bad = true
+        ret false
+    end
+    ret true
+end
+
+// ---------------------------------------------------------------- ByteBuf
+
+@en "NewByteBuf"
+@fa "بافر بایت جدید"
+@ar "مخزن بايتات جديد"
+pub func NewByteBuf(): ByteBuf:
+    ret ByteBuf { data = null, len = 0, cap = 0 }
+end
+
+@en "NewByteBufCap"
+@fa "بافر بایت جدید با ظرفیت"
+@ar "مخزن بايتات جديد بسعة"
+pub func NewByteBufCap(capacity: int): ByteBuf:
+    mut b := ByteBuf { data = null, len = 0, cap = 0 }
+    if capacity > 0:
+        _buf_grow(b, capacity)
+    end
+    ret b
+end
+
+@en "BufPush"
+@fa "افزودن بایت"
+@ar "إلحاق بايت"
+pub func BufPush(b &: ByteBuf, v: int):
+    _buf_grow(b, 1)
+    _bput(b.data, b.len, v)
+    b.len += 1
+end
+
+@en "BufPushBytes"
+@fa "افزودن بایت‌ها"
+@ar "إلحاق بايتات"
+pub func BufPushBytes(b &: ByteBuf, p: void*, n: int):
+    if n <= 0: ret end
+    _buf_grow(b, n)
+    dst := ((b.data as i64) + (b.len as i64)) as void*
+    mem.Copy(dst, p, n as u64)
+    b.len += n
+end
+
+@en "BufPushBuf"
+@fa "افزودن بافر"
+@ar "إلحاق مخزن"
+pub func BufPushBuf(b &: ByteBuf, src: ByteBuf):
+    BufPushBytes(b, src.data, src.len)
+end
+
+// Big-endian 32-bit length/count header, used by every algorithm below to
+// self-describe the original size so Decompress never needs an out-of-band
+// length.
+@en "BufPushU32"
+@fa "افزودن عدد سی و دو بیتی"
+@ar "إلحاق عدد اثنين وثلاثين بت"
+pub func BufPushU32(b &: ByteBuf, v: int):
+    BufPush(b, (v >> 24) & 255)
+    BufPush(b, (v >> 16) & 255)
+    BufPush(b, (v >> 8) & 255)
+    BufPush(b, v & 255)
+end
+
+@en "BufGet"
+@fa "دریافت بایت"
+@ar "أحضر بايت"
+pub func BufGet(b: ByteBuf, i: int): int:
+    if i < 0 || i >= b.len: ret 0 end
+    ret _bget(b.data, i)
+end
+
+@en "BufSet"
+@fa "تنظیم بایت"
+@ar "عيّن بايت"
+pub func BufSet(b &: ByteBuf, i: int, v: int):
+    if i < 0 || i >= b.len: ret end
+    _bput(b.data, i, v)
+end
+
+@en "BufLen"
+@fa "طول بافر"
+@ar "طول المخزن"
+pub func BufLen(b: ByteBuf): int: ret b.len end
+
+@en "BufFree"
+@fa "آزادسازی بافر"
+@ar "تحریر المخزن"
+pub func BufFree(b &: ByteBuf):
+    if b.data != null: mem.Free(b.data) end
+    b.data = null
+    b.len = 0
+    b.cap = 0
+end
+
+@en "BufReset"
+@fa "بازنشانی بافر"
+@ar "إعادة تعیین المخزن"
+pub func BufReset(b &: ByteBuf): b.len = 0 end
+
+@en "BufClone"
+@fa "کپی بافر"
+@ar "استنساخ المخزن"
+pub func BufClone(b: ByteBuf): ByteBuf:
+    mut out := NewByteBufCap(b.len)
+    BufPushBytes(out, b.data, b.len)
+    ret out
+end
+
+@en "BufEquals"
+@fa "برابری بافر"
+@ar "تساوي المخزن"
+pub func BufEquals(a: ByteBuf, b: ByteBuf): bool:
+    if a.len != b.len: ret false end
+    mut i := 0
+    until i < a.len:
+        if BufGet(a, i) != BufGet(b, i): ret false end
+        i += 1
+    end
+    ret true
+end
+
+// Copies `s`'s bytes into a fresh ByteBuf. `str` is UTF-8 bytes in Salam,
+// so this is a safe way to feed text into a byte-oriented algorithm.
+@en "BufFromStr"
+@fa "بافر از رشته"
+@ar "مخزن من نص"
+pub func BufFromStr(s: str): ByteBuf:
+    n := s.len()
+    mut out := NewByteBufCap(n)
+    BufPushBytes(out, s as void*, n)
+    ret out
+end
+
+// Copies raw bytes back out as a `str`. Only safe when the bytes are known
+// to be free of embedded NUL (plain text that started life as a `str`,
+// e.g. round-tripped through one of these algorithms) - `str.Len` compiles
+// to `strlen`, so an embedded 0x00 byte truncates anything that measures
+// the result. Compressed/binary output should stay in ByteBuf form, or go
+// through BufToBase64 below.
+@en "BufToStrUnsafe"
+@fa "بافر به رشته"
+@ar "مخزن إلى نص"
+pub func BufToStrUnsafe(b: ByteBuf): str:
+    if b.len <= 0: ret "" end
+    d := mem.Allocate((b.len + 1) as u64)
+    mem.Copy(d, b.data, b.len as u64)
+    _bput(d, b.len, 0)
+    ret d as str
+end
+
+// Base64 is binary-safe (see std/encoding), so this is the right way to
+// print, log or store a ByteBuf that may contain arbitrary bytes.
+@en "BufToBase64"
+@fa "بافر به شصت و چهار"
+@ar "مخزن إلى ستة أربعة"
+pub func BufToBase64(b: ByteBuf): str:
+    ret encoding.Base64EncodeBytes(b.data, b.len)
+end
+
+// ---------------------------------------------------------------- ByteReader
+
+@en "NewByteReader"
+@fa "خواننده بایت جدید"
+@ar "قارئ بايتات جديد"
+pub func NewByteReader(p: void*, n: int): ByteReader:
+    ret ByteReader { data = p, len = n, pos = 0, bad = false }
+end
+
+@en "ReaderFromBuf"
+@fa "خواننده از بافر"
+@ar "قارئ من مخزن"
+pub func ReaderFromBuf(b: ByteBuf): ByteReader:
+    ret NewByteReader(b.data, b.len)
+end
+
+@en "RdLeft"
+@fa "باقیمانده"
+@ar "المتبقي"
+pub func RdLeft(r: ByteReader): int:
+    if r.bad: ret 0 end
+    ret r.len - r.pos
+end
+
+@en "RdByte"
+@fa "خواندن بایت"
+@ar "قراءة بايت"
+pub func RdByte(r &: ByteReader): int:
+    if !_rd_need(r, 1): ret 0 end
+    v := _bget(r.data, r.pos)
+    r.pos += 1
+    ret v
+end
+
+@en "RdU32"
+@fa "خواندن عدد سی و دو بیتی"
+@ar "قراءة عدد اثنين وثلاثين بت"
+pub func RdU32(r &: ByteReader): int:
+    a := RdByte(r)
+    b := RdByte(r)
+    c := RdByte(r)
+    d := RdByte(r)
+    ret (a << 24) | (b << 16) | (c << 8) | d
+end
+
+@en "RdBytes"
+@fa "خواندن بایت‌ها"
+@ar "قراءة بايتات"
+pub func RdBytes(r &: ByteReader, n: int): ByteBuf:
+    mut out := NewByteBufCap(n)
+    if !_rd_need(r, n): ret out end
+    src := ((r.data as i64) + (r.pos as i64)) as void*
+    BufPushBytes(out, src, n)
+    r.pos += n
+    ret out
+end

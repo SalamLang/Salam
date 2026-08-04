@@ -1,0 +1,96 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+// Run-length encoding, in the classic "PackBits" framing (Apple/TIFF): the
+// stream is a sequence of (control byte, payload) records with no escape
+// character needed, so it round-trips any byte value including 0x00-0xFF
+// run bytes.
+//
+//   control in 0..127    -> a literal run: the next (control+1) bytes are
+//                           copied verbatim (run length 1..128)
+//   control in 129..255  -> a repeat run: the next single byte is repeated
+//                           (257-control) times (run length 2..128)
+//   control == 128        -> unused (never emitted; reserved, as in
+//                           PackBits proper)
+//
+// Worst case (no repeats anywhere) expands the input by 1/128; best case
+// (one repeated byte) compresses arbitrarily long runs to 2 bytes.
+
+const _RLE_MAX_RUN := 128
+
+func _rle_run_len(p: void*, n: int, i: int): int:
+    bp := p as u8*
+    mut r := 1
+    until r < _RLE_MAX_RUN && i + r < n && (bp[i + r] as int) == (bp[i] as int):
+        r += 1
+    end
+    ret r
+end
+
+@en "RLECompress"
+@fa "فشرده سازی طول اجرا"
+@ar "ضغط طول التشغيل"
+pub func RLECompress(p: void*, n: int): ByteBuf:
+    mut out := NewByteBuf()
+    BufPushU32(out, n)
+    bp := p as u8*
+    mut i := 0
+    until i < n:
+        r := _rle_run_len(p, n, i)
+        if r >= 3:
+            BufPush(out, 257 - r)
+            BufPush(out, bp[i] as int)
+            i += r
+        else:
+            litstart := i
+            mut litlen := 0
+            until litlen < _RLE_MAX_RUN && i < n:
+                rr := _rle_run_len(p, n, i)
+                if rr >= 3: break end
+                litlen += 1
+                i += 1
+            end
+            BufPush(out, litlen - 1)
+            BufPushBytes(out, ((p as i64) + (litstart as i64)) as void*, litlen)
+        end
+    end
+    ret out
+end
+
+@en "RLEDecompress"
+@fa "کدگشایی طول اجرا"
+@ar "فك ضغط طول التشغيل"
+pub func RLEDecompress(p: void*, n: int): ByteBuf:
+    mut r := NewByteReader(p, n)
+    origLen := RdU32(r)
+    mut out := NewByteBufCap(origLen)
+    until BufLen(out) < origLen:
+        c := RdByte(r)
+        if c <= 127:
+            litlen := c + 1
+            repeat litlen with _k:
+                BufPush(out, RdByte(r))
+            end
+        else:
+            runlen := 257 - c
+            b := RdByte(r)
+            repeat runlen with _k:
+                BufPush(out, b)
+            end
+        end
+    end
+    ret out
+end

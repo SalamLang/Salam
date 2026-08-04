@@ -1,0 +1,157 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+// Bit-level I/O shared by lz77, lzw and huffman/deflate's tag streams.
+//
+// Bits are packed LSB-first within each byte (the same convention DEFLATE
+// itself uses): the first bit written becomes bit 0 of the first byte, the
+// ninth bit written becomes bit 0 of the second byte, and so on. BitFlush
+// pads the final partial byte with zero bits.
+
+@en "BitWriter"
+@fa "نویسنده بیت"
+@ar "كاتب بتات"
+pub struct BitWriter:
+    pub buf: ByteBuf = ByteBuf { data = null, len = 0, cap = 0 }
+    pub acc: int = 0
+    pub nbits: int = 0
+end
+
+@en "BitReader"
+@fa "خواننده بیت"
+@ar "قارئ بتات"
+pub struct BitReader:
+    pub data: void* = null
+    pub len: int = 0
+    pub pos: int = 0
+    pub acc: int = 0
+    pub nbits: int = 0
+    pub bad: bool = false
+end
+
+@en "NewBitWriter"
+@fa "نویسنده بیت جدید"
+@ar "كاتب بتات جديد"
+// NOTE: BitWriter's `buf` field is left to its own struct default here
+// rather than set with `buf = NewByteBuf()` in this literal - tcc (the
+// bundled C backend) cannot parse a designated initializer whose value is
+// a multi-field struct carried in a plain variable, when that struct is
+// itself nested inside another struct literal. ByteBuf's own field
+// defaults (data=null, len=0, cap=0) are exactly what NewByteBuf() would
+// produce anyway, so omitting it here is equivalent, not a workaround that
+// changes behavior.
+pub func NewBitWriter(): BitWriter:
+    ret BitWriter { acc = 0, nbits = 0 }
+end
+
+@en "BitWriteBit"
+@fa "نوشتن بیت"
+@ar "كتابة بت"
+pub func BitWriteBit(w &: BitWriter, bit: int):
+    if bit != 0:
+        w.acc = w.acc | (1 << w.nbits)
+    end
+    w.nbits += 1
+    if w.nbits == 8:
+        BufPush(w.buf, w.acc)
+        w.acc = 0
+        w.nbits = 0
+    end
+end
+
+// Writes the low `count` bits of `value`, least-significant bit first.
+@en "BitWriteBits"
+@fa "نوشتن بیت‌ها"
+@ar "كتابة بتات"
+pub func BitWriteBits(w &: BitWriter, value: int, count: int):
+    mut i := 0
+    until i < count:
+        BitWriteBit(w, (value >> i) & 1)
+        i += 1
+    end
+end
+
+@en "BitFlush"
+@fa "تخلیه بیت"
+@ar "إفراغ البتات"
+pub func BitFlush(w &: BitWriter):
+    if w.nbits > 0:
+        BufPush(w.buf, w.acc)
+        w.acc = 0
+        w.nbits = 0
+    end
+end
+
+@en "BitWriterLen"
+@fa "طول نویسنده بیت"
+@ar "طول كاتب البتات"
+pub func BitWriterLen(w &: BitWriter): int: ret BufLen(w.buf) end
+
+@en "BitWriterFree"
+@fa "آزادسازی نویسنده بیت"
+@ar "تحریر كاتب البتات"
+pub func BitWriterFree(w &: BitWriter): BufFree(w.buf) end
+
+@en "NewBitReader"
+@fa "خواننده بیت جدید"
+@ar "قارئ بتات جديد"
+pub func NewBitReader(p: void*, n: int): BitReader:
+    ret BitReader { data = p, len = n, pos = 0, acc = 0, nbits = 0, bad = false }
+end
+
+@en "BitReaderFromBuf"
+@fa "خواننده بیت از بافر"
+@ar "قارئ بتات من مخزن"
+pub func BitReaderFromBuf(b: ByteBuf): BitReader:
+    ret NewBitReader(b.data, b.len)
+end
+
+// Reads one bit, or 0 with `bad` latched true once the underlying bytes are
+// exhausted (mirrors ByteReader's sticky error flag).
+@en "BitReadBit"
+@fa "خواندن بیت"
+@ar "قراءة بت"
+pub func BitReadBit(r &: BitReader): int:
+    if r.nbits == 0:
+        if r.bad || r.pos >= r.len:
+            r.bad = true
+            ret 0
+        end
+        r.acc = _bget(r.data, r.pos)
+        r.pos += 1
+        r.nbits = 8
+    end
+    bit := r.acc & 1
+    r.acc = r.acc >> 1
+    r.nbits -= 1
+    ret bit
+end
+
+// Reads `count` bits, least-significant bit first, and reassembles them
+// into an integer (mirroring BitWriteBits).
+@en "BitReadBits"
+@fa "خواندن بیت‌ها"
+@ar "قراءة بتات"
+pub func BitReadBits(r &: BitReader, count: int): int:
+    mut v := 0
+    mut i := 0
+    until i < count:
+        b := BitReadBit(r)
+        v = v | (b << i)
+        i += 1
+    end
+    ret v
+end

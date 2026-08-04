@@ -1,0 +1,612 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "telegram.bot"
+@fa "بات تلگرام"
+@ar "بوت تلغرام"
+package bot
+
+import http
+import json
+import str
+import conv
+import time
+
+// ---------------------------------------------------------------------------
+// Data model
+// ---------------------------------------------------------------------------
+
+@en "User"
+@fa "کاربر"
+@ar "مستخدم"
+pub struct User:
+    pub id: i64 = 0
+    pub is_bot: bool = false
+    pub first_name: str = ""
+    pub last_name: str = ""
+    pub username: str = ""
+    pub language_code: str = ""
+end
+
+@en "Chat"
+@fa "گفتگو"
+@ar "محادثة"
+pub struct Chat:
+    pub id: i64 = 0
+    pub chat_type: str = ""
+    pub title: str = ""
+    pub username: str = ""
+    pub first_name: str = ""
+    pub last_name: str = ""
+end
+
+@en "Message"
+@fa "پیام"
+@ar "رسالة"
+pub struct Message:
+    pub message_id: i64 = 0
+    pub date: i64 = 0
+    pub chat: Chat = Chat {}
+    pub from_user: User = User {}
+    pub text: str = ""
+    pub caption: str = ""
+end
+
+@en "CallbackQuery"
+@fa "پرسمان بازخوان"
+@ar "استعلام رد الاتصال"
+pub struct CallbackQuery:
+    pub id: str = ""
+    pub from_user: User = User {}
+    pub message: Message = Message {}
+    pub data: str = ""
+end
+
+@en "Update"
+@fa "بروزرسانی"
+@ar "تحديث"
+pub struct Update:
+    pub update_id: i64 = 0
+    pub message: Message = Message {}
+    pub has_message: bool = false
+    pub callback_query: CallbackQuery = CallbackQuery {}
+    pub has_callback_query: bool = false
+end
+
+@en "ApiResponse"
+@fa "پاسخ ای پی آی"
+@ar "استجابة API"
+pub struct ApiResponse:
+    pub ok: bool = false
+    pub result: str = ""
+    pub description: str = ""
+    pub error_code: i64 = 0
+end
+
+@en "SendOptions"
+@fa "گزینه های ارسال"
+@ar "خیارات الإرسال"
+pub struct SendOptions:
+    pub parse_mode: str = ""
+    pub disable_notification: bool = false
+    pub reply_to_message_id: i64 = 0
+    pub reply_markup: str = ""
+end
+
+@en "Bot"
+@fa "بات"
+@ar "بوت"
+pub struct Bot:
+    pub token: str = ""
+end
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+func _new_params(): HashMap<str, str>:
+    ret HashMap {} as HashMap<str, str>
+end
+
+func _api_url(bot: Bot, method: str): str:
+    ret "https://api.telegram.org/bot".concat(bot.token).concat("/").concat(method)
+end
+
+func _call(bot: Bot, method: str, params: HashMap<str, str>): ApiResponse:
+    url := http.WithQuery(_api_url(bot, method), params)
+    raw := http.Get(url).body
+    mut resp := ApiResponse {}
+    resp.ok = json.Get(raw, "ok") == "true"
+    resp.result = json.Get(raw, "result")
+    resp.description = json.Get(raw, "description")
+    resp.error_code = conv.ParseInt(json.Get(raw, "error_code"))
+    ret resp
+end
+
+// Byte-level scan (mirrors std/json's own technique) to split a top-level
+// JSON array's elements without a full parser: strings and nested {}/[] are
+// skipped over so commas inside them are not mistaken for separators.
+func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+func _split_json_array(raw: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    l := raw.len()
+    if l < 2: ret out end
+    bp := _bp(raw)
+    mut i := 0
+    until i < l:
+        if _ub(bp, i) == 91: break end
+        i += 1
+    end
+    if i >= l: ret out end
+    i += 1
+    mut depth := 0
+    mut in_str := false
+    mut start := i
+    until i < l:
+        code := _ub(bp, i)
+        if in_str:
+            if code == 92:
+                i += 1
+            else code == 34:
+                in_str = false
+            end
+        else code == 34:
+            in_str = true
+        else code == 123 || code == 91:
+            depth += 1
+        else code == 125 || code == 93:
+            if depth == 0:
+                if i > start:
+                    item := raw.substr(start, i - start).trim()
+                    if item.len() > 0: out.push(item) end
+                end
+                ret out
+            end
+            depth -= 1
+        else code == 44 && depth == 0:
+            item := raw.substr(start, i - start).trim()
+            if item.len() > 0: out.push(item) end
+            start = i + 1
+        end
+        i += 1
+    end
+    ret out
+end
+
+// ---------------------------------------------------------------------------
+// Response parsing
+// ---------------------------------------------------------------------------
+
+@en "ParseUser"
+@fa "تجزیه کاربر"
+@ar "تحلیل المستخدم"
+pub func ParseUser(raw: str): User:
+    mut u := User {}
+    if raw.len() == 0: ret u end
+    u.id = conv.ParseInt(json.Get(raw, "id"))
+    u.is_bot = json.Get(raw, "is_bot") == "true"
+    u.first_name = json.Get(raw, "first_name")
+    u.last_name = json.Get(raw, "last_name")
+    u.username = json.Get(raw, "username")
+    u.language_code = json.Get(raw, "language_code")
+    ret u
+end
+
+@en "ParseChat"
+@fa "تجزیه گفتگو"
+@ar "تحلیل المحادثة"
+pub func ParseChat(raw: str): Chat:
+    mut c := Chat {}
+    if raw.len() == 0: ret c end
+    c.id = conv.ParseInt(json.Get(raw, "id"))
+    c.chat_type = json.Get(raw, "type")
+    c.title = json.Get(raw, "title")
+    c.username = json.Get(raw, "username")
+    c.first_name = json.Get(raw, "first_name")
+    c.last_name = json.Get(raw, "last_name")
+    ret c
+end
+
+@en "ParseMessage"
+@fa "تجزیه پیام"
+@ar "تحلیل الرسالة"
+pub func ParseMessage(raw: str): Message:
+    mut m := Message {}
+    if raw.len() == 0: ret m end
+    m.message_id = conv.ParseInt(json.Get(raw, "message_id"))
+    m.date = conv.ParseInt(json.Get(raw, "date"))
+    m.chat = ParseChat(json.Get(raw, "chat"))
+    m.from_user = ParseUser(json.Get(raw, "from"))
+    m.text = json.Get(raw, "text")
+    m.caption = json.Get(raw, "caption")
+    ret m
+end
+
+@en "ParseCallbackQuery"
+@fa "تجزیه پرسمان بازخوان"
+@ar "تحلیل استعلام رد الاتصال"
+pub func ParseCallbackQuery(raw: str): CallbackQuery:
+    mut q := CallbackQuery {}
+    if raw.len() == 0: ret q end
+    q.id = json.Get(raw, "id")
+    q.from_user = ParseUser(json.Get(raw, "from"))
+    q.message = ParseMessage(json.Get(raw, "message"))
+    q.data = json.Get(raw, "data")
+    ret q
+end
+
+@en "ParseUpdate"
+@fa "تجزیه بروزرسانی"
+@ar "تحلیل التحديث"
+pub func ParseUpdate(raw: str): Update:
+    mut u := Update {}
+    if raw.len() == 0: ret u end
+    u.update_id = conv.ParseInt(json.Get(raw, "update_id"))
+    msg_raw := json.Get(raw, "message")
+    if msg_raw.len() > 0:
+        u.message = ParseMessage(msg_raw)
+        u.has_message = true
+    end
+    cq_raw := json.Get(raw, "callback_query")
+    if cq_raw.len() > 0:
+        u.callback_query = ParseCallbackQuery(cq_raw)
+        u.has_callback_query = true
+    end
+    ret u
+end
+
+@en "ParseUpdates"
+@fa "تجزیه بروزرسانی ها"
+@ar "تحلیل التحديثات"
+pub func ParseUpdates(raw: str): Vector<Update>:
+    mut out := Vector {} as Vector<Update>
+    items := _split_json_array(raw)
+    repeat items.len() with i:
+        out.push(ParseUpdate(items.get(i)[0]))
+    end
+    items.free()
+    ret out
+end
+
+// ---------------------------------------------------------------------------
+// Bot construction & the generic escape hatch
+// ---------------------------------------------------------------------------
+
+@en "NewBot"
+@fa "بات جدید"
+@ar "بوت جدید"
+pub func NewBot(token: str): Bot:
+    ret Bot { token = token }
+end
+
+@en "Ok"
+@fa "موفق"
+@ar "ناجح"
+pub func Ok(resp: ApiResponse): bool:
+    ret resp.ok
+end
+
+@en "Call"
+@fa "فراخوانی"
+@ar "استدعاء"
+pub func Call(bot: Bot, method: str, params: HashMap<str, str>): ApiResponse:
+    ret _call(bot, method, params)
+end
+
+@en "GetMe"
+@fa "دریافت من"
+@ar "جلب أنا"
+pub func GetMe(bot: Bot): ApiResponse:
+    ret _call(bot, "getMe", _new_params())
+end
+
+@en "GetUpdates"
+@fa "دریافت بروزرسانی ها"
+@ar "جلب التحديثات"
+pub func GetUpdates(bot: Bot, offset: i64, limit: i64, timeout: i64): ApiResponse:
+    mut params := _new_params()
+    if offset != 0: params.put("offset", str.FromInt(offset)) end
+    if limit > 0: params.put("limit", str.FromInt(limit)) end
+    if timeout > 0: params.put("timeout", str.FromInt(timeout)) end
+    resp := _call(bot, "getUpdates", params)
+    params.free()
+    ret resp
+end
+
+// ---------------------------------------------------------------------------
+// Messaging
+// ---------------------------------------------------------------------------
+
+@en "SendMessage"
+@fa "ارسال پیام"
+@ar "إرسال رسالة"
+pub func SendMessage(bot: Bot, chat_id: i64, text: str): ApiResponse:
+    mut params := _new_params()
+    params.put("chat_id", str.FromInt(chat_id))
+    params.put("text", text)
+    resp := _call(bot, "sendMessage", params)
+    params.free()
+    ret resp
+end
+
+@en "SendMessage"
+@fa "ارسال پیام"
+@ar "إرسال رسالة"
+pub func SendMessage(bot: Bot, chat_id: str, text: str): ApiResponse:
+    mut params := _new_params()
+    params.put("chat_id", chat_id)
+    params.put("text", text)
+    resp := _call(bot, "sendMessage", params)
+    params.free()
+    ret resp
+end
+
+@en "SendMessageOptions"
+@fa "ارسال پیام با گزینه ها"
+@ar "إرسال رسالة مع خیارات"
+pub func SendMessageOptions(bot: Bot, chat_id: i64, text: str, opts: SendOptions): ApiResponse:
+    mut params := _new_params()
+    params.put("chat_id", str.FromInt(chat_id))
+    params.put("text", text)
+    if opts.parse_mode.len() > 0: params.put("parse_mode", opts.parse_mode) end
+    if opts.disable_notification: params.put("disable_notification", "true") end
+    if opts.reply_to_message_id > 0: params.put("reply_to_message_id", str.FromInt(opts.reply_to_message_id)) end
+    if opts.reply_markup.len() > 0: params.put("reply_markup", opts.reply_markup) end
+    resp := _call(bot, "sendMessage", params)
+    params.free()
+    ret resp
+end
+
+@en "SendPhoto"
+@fa "ارسال عکس"
+@ar "إرسال صورة"
+pub func SendPhoto(bot: Bot, chat_id: i64, photo: str, caption: str): ApiResponse:
+    mut params := _new_params()
+    params.put("chat_id", str.FromInt(chat_id))
+    params.put("photo", photo)
+    if caption.len() > 0: params.put("caption", caption) end
+    resp := _call(bot, "sendPhoto", params)
+    params.free()
+    ret resp
+end
+
+@en "SendDocument"
+@fa "ارسال سند"
+@ar "إرسال مستند"
+pub func SendDocument(bot: Bot, chat_id: i64, document: str, caption: str): ApiResponse:
+    mut params := _new_params()
+    params.put("chat_id", str.FromInt(chat_id))
+    params.put("document", document)
+    if caption.len() > 0: params.put("caption", caption) end
+    resp := _call(bot, "sendDocument", params)
+    params.free()
+    ret resp
+end
+
+@en "SendChatAction"
+@fa "ارسال کنش گفتگو"
+@ar "إرسال إجراء المحادثة"
+pub func SendChatAction(bot: Bot, chat_id: i64, action: str): ApiResponse:
+    mut params := _new_params()
+    params.put("chat_id", str.FromInt(chat_id))
+    params.put("action", action)
+    resp := _call(bot, "sendChatAction", params)
+    params.free()
+    ret resp
+end
+
+@en "EditMessageText"
+@fa "ویرایش متن پیام"
+@ar "تعديل نص الرسالة"
+pub func EditMessageText(bot: Bot, chat_id: i64, message_id: i64, text: str): ApiResponse:
+    mut params := _new_params()
+    params.put("chat_id", str.FromInt(chat_id))
+    params.put("message_id", str.FromInt(message_id))
+    params.put("text", text)
+    resp := _call(bot, "editMessageText", params)
+    params.free()
+    ret resp
+end
+
+@en "DeleteMessage"
+@fa "حذف پیام"
+@ar "حذف رسالة"
+pub func DeleteMessage(bot: Bot, chat_id: i64, message_id: i64): ApiResponse:
+    mut params := _new_params()
+    params.put("chat_id", str.FromInt(chat_id))
+    params.put("message_id", str.FromInt(message_id))
+    resp := _call(bot, "deleteMessage", params)
+    params.free()
+    ret resp
+end
+
+@en "ForwardMessage"
+@fa "ارسال دوباره پیام"
+@ar "إعادة توجيه رسالة"
+pub func ForwardMessage(bot: Bot, chat_id: i64, from_chat_id: i64, message_id: i64): ApiResponse:
+    mut params := _new_params()
+    params.put("chat_id", str.FromInt(chat_id))
+    params.put("from_chat_id", str.FromInt(from_chat_id))
+    params.put("message_id", str.FromInt(message_id))
+    resp := _call(bot, "forwardMessage", params)
+    params.free()
+    ret resp
+end
+
+@en "AnswerCallbackQuery"
+@fa "پاسخ به پرسمان بازخوان"
+@ar "الرد على استعلام رد الاتصال"
+pub func AnswerCallbackQuery(bot: Bot, callback_query_id: str, text: str): ApiResponse:
+    mut params := _new_params()
+    params.put("callback_query_id", callback_query_id)
+    if text.len() > 0: params.put("text", text) end
+    resp := _call(bot, "answerCallbackQuery", params)
+    params.free()
+    ret resp
+end
+
+@en "GetFile"
+@fa "دریافت فایل"
+@ar "جلب الملف"
+pub func GetFile(bot: Bot, file_id: str): ApiResponse:
+    mut params := _new_params()
+    params.put("file_id", file_id)
+    resp := _call(bot, "getFile", params)
+    params.free()
+    ret resp
+end
+
+@en "FileURL"
+@fa "پیوند فایل"
+@ar "رابط الملف"
+pub func FileURL(bot: Bot, file_path: str): str:
+    ret "https://api.telegram.org/file/bot".concat(bot.token).concat("/").concat(file_path)
+end
+
+@en "SetWebhook"
+@fa "تنظیم وب هوک"
+@ar "ضبط ویب هوك"
+pub func SetWebhook(bot: Bot, url: str): ApiResponse:
+    mut params := _new_params()
+    params.put("url", url)
+    resp := _call(bot, "setWebhook", params)
+    params.free()
+    ret resp
+end
+
+@en "DeleteWebhook"
+@fa "حذف وب هوک"
+@ar "حذف ویب هوك"
+pub func DeleteWebhook(bot: Bot): ApiResponse:
+    ret _call(bot, "deleteWebhook", _new_params())
+end
+
+// ---------------------------------------------------------------------------
+// Inline keyboards (reply_markup builders)
+// ---------------------------------------------------------------------------
+
+@en "InlineButton"
+@fa "دکمه درون خطی"
+@ar "زر مضمّن"
+pub func InlineButton(text: str, callback_data: str): str:
+    mut members := Vector {} as Vector<str>
+    members.push(json.Member("text", text))
+    members.push(json.Member("callback_data", callback_data))
+    out := json.Object(members)
+    members.free()
+    ret out
+end
+
+@en "InlineButtonURL"
+@fa "دکمه درون خطی با پیوند"
+@ar "زر مضمّن برابط"
+pub func InlineButtonURL(text: str, url: str): str:
+    mut members := Vector {} as Vector<str>
+    members.push(json.Member("text", text))
+    members.push(json.Member("url", url))
+    out := json.Object(members)
+    members.free()
+    ret out
+end
+
+@en "Row"
+@fa "ردیف"
+@ar "صف"
+pub func Row(buttons: Vector<str>): str:
+    ret json.Array(buttons)
+end
+
+@en "InlineKeyboardMarkup"
+@fa "صفحه کلید درون خطی"
+@ar "لوحة مفاتيح مضمّنة"
+pub func InlineKeyboardMarkup(rows: Vector<str>): str:
+    keyboard := json.Array(rows)
+    mut members := Vector {} as Vector<str>
+    members.push(json.MemberRaw("inline_keyboard", keyboard))
+    out := json.Object(members)
+    members.free()
+    ret out
+end
+
+@en "RemoveKeyboard"
+@fa "حذف صفحه کلید"
+@ar "إزالة لوحة المفاتیح"
+pub func RemoveKeyboard(): str:
+    ret "{\"remove_keyboard\": true}"
+end
+
+// ---------------------------------------------------------------------------
+// Command parsing ("/start@MyBot arg1 arg2" -> name "start", args "arg1 arg2")
+// ---------------------------------------------------------------------------
+
+@en "IsCommand"
+@fa "دستور است"
+@ar "هل أمر"
+pub func IsCommand(text: str): bool:
+    ret text.len() > 0 && text.substr(0, 1) == "/"
+end
+
+@en "CommandName"
+@fa "نام دستور"
+@ar "اسم الأمر"
+pub func CommandName(text: str): str:
+    if !IsCommand(text): ret "" end
+    sp := text.find(" ")
+    mut head := text
+    if sp >= 0: head = text.substr(0, sp) end
+    at := head.find("@")
+    if at >= 0: head = head.substr(0, at) end
+    ret head.substr(1, head.len() - 1)
+end
+
+@en "CommandArgs"
+@fa "آرگومان های دستور"
+@ar "معطيات الأمر"
+pub func CommandArgs(text: str): str:
+    sp := text.find(" ")
+    if sp < 0: ret "" end
+    ret text.substr(sp + 1, text.len() - sp - 1).trim()
+end
+
+// ---------------------------------------------------------------------------
+// Long polling
+// ---------------------------------------------------------------------------
+
+@en "Poll"
+@fa "حلقه دریافت"
+@ar "حلقة الاستطلاع"
+pub func Poll(bot: Bot, timeout: i64, handler: func (Update)):
+    mut offset := 0 as i64
+    until true:
+        resp := GetUpdates(bot, offset, 100, timeout)
+        if resp.ok:
+            updates := ParseUpdates(resp.result)
+            repeat updates.len() with i:
+                u := updates.get(i)[0]
+                handler(u)
+                if u.update_id >= offset: offset = u.update_id + 1 end
+            end
+            updates.free()
+        else:
+            time.Sleep(1000)
+        end
+    end
+end

@@ -1,0 +1,92 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import crypto
+
+// HMAC-SHA1 and HMAC-SHA2-256 (RFC 2104) - "hmac-sha1" and "hmac-sha2-256",
+// the packet MACs this package negotiates. Both underlying hashes come from
+// std/crypto (Sha1Bytes/Sha256Bytes), which is a genuinely shared, generic
+// package - unlike std/tls's internals, this one is meant to be imported
+// cross-package, so only the outer HMAC construction (a handful of XORs and
+// two hash calls) needs writing here.
+
+const MAC_SHA1 := 0
+const MAC_SHA256 := 1
+const _HMAC_BLOCK := 64
+
+func _mac_size(kind: int): int:
+    if kind == MAC_SHA256:
+        ret 32
+    end
+    ret 20
+end
+
+func _mac_hash(kind: int, p: void*, n: int, out: void*):
+    if kind == MAC_SHA256:
+        crypto.Sha256Bytes(p, n, out)
+        ret
+    end
+    crypto.Sha1Bytes(p, n, out)
+end
+
+// out must have room for _mac_size(kind) bytes.
+func _hmac(kind: int, key: void*, klen: int, msg: void*, mlen: int, out: void*):
+    hlen := _mac_size(kind)
+    mut key0 := NewBuf(_HMAC_BLOCK)
+    BufPutZeros(key0, _HMAC_BLOCK)
+    if klen > _HMAC_BLOCK:
+        mut kh := NewBuf(hlen)
+        BufPutZeros(kh, hlen)
+        _mac_hash(kind, key, klen, kh.p)
+        repeat hlen with i:
+            _bput(key0.p, i, _bget(kh.p, i))
+        end
+        FreeBuf(kh)
+    else:
+        repeat klen with i:
+            _bput(key0.p, i, _bget(key, i))
+        end
+    end
+
+    mut ipad := NewBuf(_HMAC_BLOCK)
+    BufPutZeros(ipad, _HMAC_BLOCK)
+    mut opad := NewBuf(_HMAC_BLOCK)
+    BufPutZeros(opad, _HMAC_BLOCK)
+    repeat _HMAC_BLOCK with i:
+        kb := _bget(key0.p, i)
+        _bput(ipad.p, i, kb ^ 0x36)
+        _bput(opad.p, i, kb ^ 0x5c)
+    end
+
+    mut inner_in := NewBuf(_HMAC_BLOCK + mlen)
+    BufPutBytes(inner_in, ipad.p, _HMAC_BLOCK)
+    BufPutBytes(inner_in, msg, mlen)
+    mut inner := NewBuf(hlen)
+    BufPutZeros(inner, hlen)
+    _mac_hash(kind, inner_in.p, inner_in.len, inner.p)
+
+    mut outer_in := NewBuf(_HMAC_BLOCK + hlen)
+    BufPutBytes(outer_in, opad.p, _HMAC_BLOCK)
+    BufPutBytes(outer_in, inner.p, hlen)
+    _mac_hash(kind, outer_in.p, outer_in.len, out)
+
+    WipeBuf(key0)
+    FreeBuf(ipad)
+    FreeBuf(opad)
+    FreeBuf(inner_in)
+    FreeBuf(inner)
+    FreeBuf(outer_in)
+end

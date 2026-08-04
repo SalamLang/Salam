@@ -1,0 +1,534 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import mem
+import str
+
+// Byte primitives shared by the whole ssh package, mirroring std/tls's
+// Buf/Reader split (see std/tls/bytes.salam): a growable output buffer for
+// building packets, and a bounds-checked cursor for parsing them. `str` is
+// NOT used for protocol bytes anywhere in this package - Salam strings are
+// C-style and truncate at the first 0x00 byte, which the SSH binary packet
+// protocol (mpints, ciphertext, raw key material) hits constantly. `str` only
+// ever carries text that is guaranteed not to contain a NUL: the version
+// banner, algorithm name-lists, host/user/command text.
+
+// On the tcc/Windows toolchain, the very first str.split() call in a process
+// that produces 3+ pieces can hand back a Vector whose last slot was never
+// written (reads back as heap-poison garbage) - a one-time lazy-init gap; see
+// the identical workaround and full explanation in std/web/web.salam's
+// _warm_up_split. Algorithm name-lists routinely split into 3+ pieces
+// (KEXINIT offers a dozen-plus KEX/cipher/MAC names), so every split() in
+// this package is routed through _ensure_split_warm() first.
+mut _ssh_split_warmed := false
+
+struct Buf:
+    pub p: void* = null
+    pub len: int = 0
+    pub cap: int = 0
+    pub bad: bool = false
+end
+
+struct Reader:
+    pub p: void* = null
+    pub len: int = 0
+    pub pos: int = 0
+    pub bad: bool = false
+end
+
+inline func _bget(p: void*, i: int): int:
+    bp := p as u8*
+    ret bp[i] as int
+end
+
+inline func _bput(p: void*, i: int, v: int):
+    bp := p as u8*
+    bp[i] = v as u8
+end
+
+func _buf_grow(b &: Buf, need: int):
+    if b.bad:
+        ret
+    end
+    if b.len + need <= b.cap:
+        ret
+    end
+    mut nc := b.cap
+    if nc < 32:
+        nc = 32
+    end
+    until b.len + need <= nc:
+        nc *= 2
+    end
+    np := mem.Reallocate(b.p, nc as u64)
+    if np == null:
+        b.bad = true
+        ret
+    end
+    b.p = np
+    b.cap = nc
+end
+
+func _ensure_split_warm():
+    if !_ssh_split_warmed:
+        mut junk := "a,b,c".split(",")
+        junk.free()
+        _ssh_split_warmed = true
+    end
+end
+
+// ============================================================== public API
+
+// ---------------------------------------------------------------- Buf
+
+@en "NewBuf"
+@fa "بافر جدید"
+@ar "مخزن جدید"
+pub func NewBuf(cap0: int): Buf:
+    mut c := cap0
+    if c < 32:
+        c = 32
+    end
+    p := mem.Allocate(c as u64)
+    mut b := Buf {}
+    if p == null:
+        b.bad = true
+        ret b
+    end
+    b.p = p
+    b.len = 0
+    b.cap = c
+    b.bad = false
+    ret b
+end
+
+@en "FreeBuf"
+@fa "آزادسازی بافر"
+@ar "تحریر المخزن"
+pub func FreeBuf(b &: Buf):
+    if b.p != null:
+        mem.Free(b.p)
+    end
+    b.p = null
+    b.len = 0
+    b.cap = 0
+end
+
+// Overwrite before releasing - used for anything that held key material,
+// a plaintext password, or a decrypted private key.
+@en "WipeBuf"
+@fa "پاک سازی بافر"
+@ar "مسح المخزن"
+pub func WipeBuf(b &: Buf):
+    if b.p != null && b.cap > 0:
+        mem.Set(b.p, 0, b.cap as u64)
+    end
+    FreeBuf(b)
+end
+
+@en "BufPutByte"
+@fa "افزودن بایت"
+@ar "إلحاق بایت"
+pub func BufPutByte(b &: Buf, v: int):
+    _buf_grow(b, 1)
+    if b.bad:
+        ret
+    end
+    _bput(b.p, b.len, v)
+    b.len += 1
+end
+
+@en "BufPutBytes"
+@fa "افزودن بایت ها"
+@ar "إلحاق بایتات"
+pub func BufPutBytes(b &: Buf, p: void*, n: int):
+    if n <= 0:
+        ret
+    end
+    _buf_grow(b, n)
+    if b.bad:
+        ret
+    end
+    mem.Copy((b.p as i64 + b.len) as void*, p, n as u64)
+    b.len += n
+end
+
+@en "BufPutBuf"
+@fa "افزودن بافر"
+@ar "إلحاق مخزن"
+pub func BufPutBuf(b &: Buf, src: Buf):
+    BufPutBytes(b, src.p, src.len)
+end
+
+@en "BufPutZeros"
+@fa "افزودن صفرها"
+@ar "إلحاق أصفار"
+pub func BufPutZeros(b &: Buf, n: int):
+    if n <= 0:
+        ret
+    end
+    _buf_grow(b, n)
+    if b.bad:
+        ret
+    end
+    mem.Set((b.p as i64 + b.len) as void*, 0, n as u64)
+    b.len += n
+end
+
+@en "BufPutUint32"
+@fa "افزودن یو۳۲"
+@ar "إلحاق يو٣٢"
+pub func BufPutUint32(b &: Buf, v: u32):
+    _buf_grow(b, 4)
+    if b.bad:
+        ret
+    end
+    _bput(b.p, b.len, ((v >> (24 as u32)) & (0xFF as u32)) as int)
+    _bput(b.p, b.len + 1, ((v >> (16 as u32)) & (0xFF as u32)) as int)
+    _bput(b.p, b.len + 2, ((v >> (8 as u32)) & (0xFF as u32)) as int)
+    _bput(b.p, b.len + 3, (v & (0xFF as u32)) as int)
+    b.len += 4
+end
+
+@en "BufPutUint64"
+@fa "افزودن یو۶۴"
+@ar "إلحاق يو٦٤"
+pub func BufPutUint64(b &: Buf, v: u64):
+    _buf_grow(b, 8)
+    if b.bad:
+        ret
+    end
+    mut i := 0
+    until i < 8:
+        sh := ((7 - i) * 8) as u64
+        _bput(b.p, b.len + i, ((v >> sh) & (0xFF as u64)) as int)
+        i += 1
+    end
+    b.len += 8
+end
+
+@en "BufPutBool"
+@fa "افزودن بولی"
+@ar "إلحاق بولیة"
+pub func BufPutBool(b &: Buf, v: bool):
+    if v:
+        BufPutByte(b, 1)
+    else:
+        BufPutByte(b, 0)
+    end
+end
+
+// SSH "string": a uint32 length followed by that many raw bytes (RFC 4251
+// 5). Used for both binary blobs and text - text just happens to be ASCII.
+@en "BufPutString"
+@fa "افزودن رشته"
+@ar "إلحاق سلسلة"
+pub func BufPutString(b &: Buf, p: void*, n: int):
+    BufPutUint32(b, n as u32)
+    BufPutBytes(b, p, n)
+end
+
+@en "BufPutStringBuf"
+@fa "افزودن رشته بافر"
+@ar "إلحاق سلسلة مخزن"
+pub func BufPutStringBuf(b &: Buf, src: Buf):
+    BufPutString(b, src.p, src.len)
+end
+
+// Only for fields guaranteed to contain no embedded NUL: algorithm names,
+// the version banner, name-lists.
+@en "BufPutStringStr"
+@fa "افزودن رشته متن"
+@ar "إلحاق سلسلة نص"
+pub func BufPutStringStr(b &: Buf, s: str):
+    BufPutString(b, s as void*, s.len())
+end
+
+// SSH "mpint": a string carrying the two's-complement big-endian encoding of
+// an integer, minimally sized, with a leading 0x00 inserted when the high
+// bit of the first magnitude byte is set (so a byte string that happens to
+// look negative is not misread as one) - RFC 4251 5. Every mpint this
+// package emits is non-negative (moduli, DH/RSA public values), so only the
+// positive-padding case is implemented.
+@en "BufPutMpintBytes"
+@fa "افزودن ام پی اینت"
+@ar "إلحاق ام بي اینت"
+pub func BufPutMpintBytes(b &: Buf, p: void*, n: int):
+    mut start := 0
+    until start >= n:
+        if _bget(p, start) != 0:
+            break
+        end
+        start += 1
+    end
+    mlen := n - start
+    mut needpad := false
+    if mlen > 0 && (_bget(p, start) & 0x80) != 0:
+        needpad = true
+    end
+    if mlen == 0:
+        BufPutUint32(b, 0 as u32)
+        ret
+    end
+    mut extra := 0
+    if needpad:
+        extra = 1
+    end
+    BufPutUint32(b, (mlen + extra) as u32)
+    if needpad:
+        BufPutByte(b, 0)
+    end
+    BufPutBytes(b, (p as i64 + start) as void*, mlen)
+end
+
+@en "BufPutMpintBuf"
+@fa "افزودن ام پی اینت بافر"
+@ar "إلحاق ام بي اینت مخزن"
+pub func BufPutMpintBuf(b &: Buf, src: Buf):
+    BufPutMpintBytes(b, src.p, src.len)
+end
+
+// ---------------------------------------------------------------- Reader
+
+@en "NewReader"
+@fa "خواننده جدید"
+@ar "قارئ جدید"
+pub func NewReader(p: void*, n: int): Reader:
+    mut r := Reader {}
+    r.p = p
+    r.len = n
+    r.pos = 0
+    r.bad = false
+    ret r
+end
+
+@en "ReaderFromBuf"
+@fa "خواننده از بافر"
+@ar "قارئ من مخزن"
+pub func ReaderFromBuf(b: Buf): Reader:
+    ret NewReader(b.p, b.len)
+end
+
+@en "RRemaining"
+@fa "باقی مانده"
+@ar "المتبقي"
+pub func RRemaining(r: Reader): int:
+    ret r.len - r.pos
+end
+
+@en "RGetByte"
+@fa "دریافت بایت"
+@ar "قراءة بایت"
+pub func RGetByte(r &: Reader): int:
+    if r.bad || r.pos >= r.len:
+        r.bad = true
+        ret 0
+    end
+    v := _bget(r.p, r.pos)
+    r.pos += 1
+    ret v
+end
+
+@en "RGetBool"
+@fa "دریافت بولی"
+@ar "قراءة بولیة"
+pub func RGetBool(r &: Reader): bool:
+    ret RGetByte(r) != 0
+end
+
+@en "RSkip"
+@fa "رد شدن"
+@ar "تخطي"
+pub func RSkip(r &: Reader, n: int):
+    if r.bad || n < 0 || r.pos + n > r.len:
+        r.bad = true
+        ret
+    end
+    r.pos += n
+end
+
+@en "RGetUint32"
+@fa "دریافت یو۳۲"
+@ar "قراءة يو٣٢"
+pub func RGetUint32(r &: Reader): u32:
+    if r.bad || r.pos + 4 > r.len:
+        r.bad = true
+        ret 0 as u32
+    end
+    b0 := _bget(r.p, r.pos) as u32
+    b1 := _bget(r.p, r.pos + 1) as u32
+    b2 := _bget(r.p, r.pos + 2) as u32
+    b3 := _bget(r.p, r.pos + 3) as u32
+    r.pos += 4
+    ret (b0 << (24 as u32)) | (b1 << (16 as u32)) | (b2 << (8 as u32)) | b3
+end
+
+@en "RGetUint64"
+@fa "دریافت یو۶۴"
+@ar "قراءة يو٦٤"
+pub func RGetUint64(r &: Reader): u64:
+    if r.bad || r.pos + 8 > r.len:
+        r.bad = true
+        ret 0 as u64
+    end
+    mut v := 0 as u64
+    mut i := 0
+    until i < 8:
+        v = (v << (8 as u64)) | (_bget(r.p, r.pos + i) as u64)
+        i += 1
+    end
+    r.pos += 8
+    ret v
+end
+
+// Returns a Reader that BORROWS the string's bytes (points into the same
+// backing memory) - no allocation. Valid only as long as the parent buffer
+// is alive, exactly like std/tls's der/handshake sub-readers.
+@en "RGetStringView"
+@fa "دریافت نمای رشته"
+@ar "قراءة عرض السلسلة"
+pub func RGetStringView(r &: Reader): Reader:
+    n := RGetUint32(r) as int
+    if r.bad || n < 0 || r.pos + n > r.len:
+        r.bad = true
+        ret NewReader(null, 0)
+    end
+    v := NewReader((r.p as i64 + r.pos) as void*, n)
+    r.pos += n
+    ret v
+end
+
+// Owning copy - for values that must outlive the packet buffer (an
+// algorithm name kept for later, a host key blob).
+@en "RGetStringCopy"
+@fa "کپی رشته"
+@ar "نسخ السلسلة"
+pub func RGetStringCopy(r &: Reader): Buf:
+    v := RGetStringView(r)
+    if r.bad:
+        ret NewBuf(1)
+    end
+    mut out := NewBuf(v.len)
+    BufPutBytes(out, v.p, v.len)
+    ret out
+end
+
+// Decodes a string field as text. Only call this on fields the protocol
+// guarantees are text (algorithm names, name-lists) - never on a blob that
+// might carry arbitrary binary (a key, a signature, ciphertext).
+@en "RGetStringAsStr"
+@fa "دریافت رشته متن"
+@ar "قراءة السلسلة كنص"
+pub func RGetStringAsStr(r &: Reader): str:
+    v := RGetStringView(r)
+    if r.bad || v.len == 0:
+        ret ""
+    end
+    p := mem.Allocate((v.len + 1) as u64)
+    defer mem.Free(p)
+    mem.Copy(p, v.p, v.len as u64)
+    _bput(p, v.len, 0)
+    ret str.Clone(p as str)
+end
+
+// mpint -> a borrowed view over its magnitude bytes (the leading 0x00 pad
+// byte, if any, is dropped; SSH never sends a negative mpint in any field
+// this package reads).
+@en "RGetMpintView"
+@fa "خواندن ام پی اینت"
+@ar "قراءة ام بي اینت"
+pub func RGetMpintView(r &: Reader): Reader:
+    v := RGetStringView(r)
+    if r.bad:
+        ret v
+    end
+    if v.len > 0 && _bget(v.p, 0) == 0:
+        ret NewReader((v.p as i64 + 1) as void*, v.len - 1)
+    end
+    ret v
+end
+
+@en "RGetMpintCopy"
+@fa "کپی ام پی اینت"
+@ar "نسخ ام بي اینت"
+pub func RGetMpintCopy(r &: Reader): Buf:
+    v := RGetMpintView(r)
+    if r.bad:
+        ret NewBuf(1)
+    end
+    mut out := NewBuf(v.len)
+    BufPutBytes(out, v.p, v.len)
+    ret out
+end
+
+// name-list: a string of comma-separated ASCII names (RFC 4251 5). Splitting
+// is plain str work since the whole point of a name-list is that it is text.
+@en "RGetNameList"
+@fa "دریافت لیست نام"
+@ar "قراءة قائمة الأسماء"
+pub func RGetNameList(r &: Reader): str:
+    ret RGetStringAsStr(r)
+end
+
+@en "NameListContains"
+@fa "شامل لیست نام"
+@ar "تحتوي قائمة الأسماء"
+pub func NameListContains(list: str, name: str): bool:
+    if list.len() == 0:
+        ret false
+    end
+    _ensure_split_warm()
+    parts := list.split(",")
+    defer parts.free()
+    mut found := false
+    each p in parts:
+        if str.Equals(p, name):
+            found = true
+        end
+    end
+    ret found
+end
+
+// First name in `mine` (in our preference order) that also appears in
+// `theirs`. Returns "" when nothing matches.
+@en "NegotiateFirstMatch"
+@fa "توافق اولین تطابق"
+@ar "التفاوض أول تطابق"
+pub func NegotiateFirstMatch(mine: str, theirs: str): str:
+    _ensure_split_warm()
+    parts := mine.split(",")
+    defer parts.free()
+    mut result := ""
+    each p in parts:
+        if result.len() == 0 && NameListContains(theirs, p):
+            result = p
+        end
+    end
+    ret result
+end
+
+// ---------------------------------------------------------------- misc
+
+@en "ConstantTimeEqual"
+@fa "برابری زمان ثابت"
+@ar "تساوي زمن ثابت"
+pub func ConstantTimeEqual(a: void*, b: void*, n: int): bool:
+    mut diff := 0
+    repeat n with i:
+        diff = diff | (_bget(a, i) ^ _bget(b, i))
+    end
+    ret diff == 0
+end

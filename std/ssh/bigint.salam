@@ -1,0 +1,661 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+// Arbitrary-precision unsigned integers on 32-bit limbs - the shared engine
+// behind RSA (rsakey.salam) and classic Diffie-Hellman group14
+// (dhgroups.salam). Deliberately the same shape as std/tls/bigint.salam
+// (limbs little-endian, bytes big-endian, bit-serial shift-and-subtract
+// division) since that file cannot be imported across the package boundary
+// (see ssh.salam's header) and the algorithm is already well exercised
+// there; only the blinding helper at the bottom is new.
+//
+// NOT constant-time: division is bit-serial shift-and-subtract, and none of
+// the arithmetic below hides the operand through its timing. That is fine
+// for a PUBLIC operand (verifying a host key signature, a DH public value)
+// and is why every private-key use of modexp in this package - RSA signing
+// in rsakey.salam, and our own ephemeral DH exponent in dhgroups.salam -
+// goes through _big_modexp_blinded below rather than calling _big_modexp
+// directly on secret data.
+
+struct Big:
+    pub b: Buf = Buf {}
+    pub cap: int = 0
+    pub n: int = 0
+    pub bad: bool = false
+end
+
+// Barrett-reduction state (see the "Barrett reduction" section below for
+// what this is for); declared here because Salam requires every type
+// grouped above the functions in a file.
+struct Barrett:
+    pub m: Big = Big {}
+    pub mu: Big = Big {}
+    pub k: int = 0
+end
+
+inline func _limb(x: Big, i: int): u32:
+    p := x.b.p as u32*
+    ret p[i]
+end
+
+inline func _setlimb(x: Big, i: int, v: u32):
+    p := x.b.p as u32*
+    p[i] = v
+end
+
+func _big_new(limbs: int): Big:
+    mut nl := limbs
+    if nl < 1:
+        nl = 1
+    end
+    bb := NewBuf(nl * 4)
+    mut x := Big {}
+    x.b = bb
+    x.cap = nl
+    x.n = 0
+    x.bad = bb.bad
+    if bb.bad:
+        x.cap = 0
+        ret x
+    end
+    repeat nl with i:
+        _setlimb(x, i, 0 as u32)
+    end
+    ret x
+end
+
+func _big_free(x &: Big):
+    FreeBuf(x.b)
+    x.cap = 0
+    x.n = 0
+end
+
+func _big_wipe_free(x &: Big):
+    WipeBuf(x.b)
+    x.cap = 0
+    x.n = 0
+end
+
+func _big_trim(x &: Big):
+    until x.n >= 1:
+        if _limb(x, x.n - 1) != (0 as u32):
+            ret
+        end
+        x.n -= 1
+    end
+end
+
+func _big_zero(x &: Big):
+    nc := x.cap
+    repeat nc with i:
+        _setlimb(x, i, 0 as u32)
+    end
+    x.n = 0
+end
+
+func _big_is_zero(x: Big): bool:
+    ret x.n == 0
+end
+
+func _big_set_u32(x &: Big, v: u32):
+    _big_zero(x)
+    if v != (0 as u32):
+        _setlimb(x, 0, v)
+        x.n = 1
+    end
+end
+
+func _big_copy(dst &: Big, src: Big):
+    if dst.cap < src.n:
+        dst.bad = true
+        ret
+    end
+    dc := dst.cap
+    repeat dc with i:
+        _setlimb(dst, i, 0 as u32)
+    end
+    sn := src.n
+    repeat sn with i:
+        _setlimb(dst, i, _limb(src, i))
+    end
+    dst.n = src.n
+end
+
+// -1, 0 or 1
+func _big_cmp(a: Big, b: Big): int:
+    if a.n != b.n:
+        if a.n < b.n:
+            ret 0 - 1
+        end
+        ret 1
+    end
+    mut i := a.n - 1
+    until i >= 0:
+        av := _limb(a, i)
+        bv := _limb(b, i)
+        if av != bv:
+            if av < bv:
+                ret 0 - 1
+            end
+            ret 1
+        end
+        i -= 1
+    end
+    ret 0
+end
+
+func _big_bitlen(x: Big): int:
+    if x.n == 0:
+        ret 0
+    end
+    top := _limb(x, x.n - 1)
+    mut bits := 0
+    mut v := top
+    until v != (0 as u32):
+        bits += 1
+        v = v >> (1 as u32)
+    end
+    ret (x.n - 1) * 32 + bits
+end
+
+func _big_bit(x: Big, i: int): int:
+    if i < 0:
+        ret 0
+    end
+    li := i / 32
+    if li >= x.n:
+        ret 0
+    end
+    ret ((_limb(x, li) >> ((i % 32) as u32)) & (1 as u32)) as int
+end
+
+func _big_setbit(x &: Big, i: int):
+    li := i / 32
+    if li >= x.cap:
+        x.bad = true
+        ret
+    end
+    _setlimb(x, li, _limb(x, li) | ((1 as u32) << ((i % 32) as u32)))
+    if li + 1 > x.n:
+        x.n = li + 1
+    end
+end
+
+// r = a + b
+func _big_add(r &: Big, a: Big, b: Big):
+    mut maxn := a.n
+    if b.n > maxn:
+        maxn = b.n
+    end
+    if r.cap < maxn + 1:
+        r.bad = true
+        ret
+    end
+    _big_zero(r)
+    mut carry := 0 as u64
+    repeat maxn with i:
+        mut s := carry
+        if i < a.n:
+            s += _limb(a, i) as u64
+        end
+        if i < b.n:
+            s += _limb(b, i) as u64
+        end
+        _setlimb(r, i, s as u32)
+        carry = s >> (32 as u64)
+    end
+    mut n := maxn
+    if carry != (0 as u64):
+        _setlimb(r, maxn, carry as u32)
+        n = maxn + 1
+    end
+    r.n = n
+    _big_trim(r)
+end
+
+// r = a - b, requires a >= b (returns false otherwise, r left unspecified)
+func _big_sub(r &: Big, a: Big, b: Big): bool:
+    if _big_cmp(a, b) < 0:
+        ret false
+    end
+    if r.cap < a.n:
+        r.bad = true
+        ret false
+    end
+    _big_zero(r)
+    an := a.n
+    mut borrow := 0 as i64
+    repeat an with i:
+        mut d := (_limb(a, i) as i64) - borrow
+        if i < b.n:
+            d -= _limb(b, i) as i64
+        end
+        if d < 0:
+            d += 4294967296
+            borrow = 1
+        else:
+            borrow = 0
+        end
+        _setlimb(r, i, d as u32)
+    end
+    r.n = a.n
+    _big_trim(r)
+    ret true
+end
+
+// r = a * b (schoolbook; r must have room for a.n + b.n limbs)
+func _big_mul(r &: Big, a: Big, b: Big):
+    if r.cap < a.n + b.n:
+        r.bad = true
+        ret
+    end
+    _big_zero(r)
+    if a.n == 0 || b.n == 0:
+        ret
+    end
+    an := a.n
+    bn := b.n
+    repeat an with i:
+        mut carry := 0 as u64
+        av := _limb(a, i) as u64
+        repeat bn with j:
+            cur := (_limb(r, i + j) as u64) + av * (_limb(b, j) as u64) + carry
+            _setlimb(r, i + j, cur as u32)
+            carry = cur >> (32 as u64)
+        end
+        mut k := i + bn
+        until carry != (0 as u64):
+            cur := (_limb(r, k) as u64) + carry
+            _setlimb(r, k, cur as u32)
+            carry = cur >> (32 as u64)
+            k += 1
+        end
+    end
+    r.n = a.n + b.n
+    _big_trim(r)
+end
+
+// x <<= 1
+func _big_shl1(x &: Big):
+    mut carry := 0 as u32
+    lim := x.n
+    repeat lim with i:
+        v := _limb(x, i)
+        _setlimb(x, i, (v << (1 as u32)) | carry)
+        carry = v >> (31 as u32)
+    end
+    if carry != (0 as u32):
+        if x.n >= x.cap:
+            x.bad = true
+            ret
+        end
+        _setlimb(x, x.n, carry)
+        x.n += 1
+    end
+end
+
+// q = a / m, rem = a % m. Bit-serial: walk a from its top bit down.
+func _big_divmod(q &: Big, rem &: Big, a: Big, m: Big): bool:
+    if m.n == 0:
+        ret false
+    end
+    if q.cap < a.n || rem.cap < m.n + 1:
+        q.bad = true
+        ret false
+    end
+    _big_zero(q)
+    _big_zero(rem)
+    mut scratch := _big_new(m.n + 2)
+    defer _big_free(scratch)
+    if scratch.bad:
+        ret false
+    end
+    mut i := _big_bitlen(a) - 1
+    until i >= 0:
+        _big_shl1(rem)
+        if rem.bad:
+            ret false
+        end
+        if _big_bit(a, i) == 1:
+            if rem.n == 0:
+                _setlimb(rem, 0, 1 as u32)
+                rem.n = 1
+            else:
+                _setlimb(rem, 0, _limb(rem, 0) | (1 as u32))
+            end
+        end
+        if _big_cmp(rem, m) >= 0:
+            if !_big_sub(scratch, rem, m):
+                ret false
+            end
+            _big_copy(rem, scratch)
+            _big_setbit(q, i)
+        end
+        i -= 1
+    end
+    _big_trim(q)
+    _big_trim(rem)
+    ret true
+end
+
+func _big_mod(r &: Big, a: Big, m: Big): bool:
+    mut q := _big_new(a.n + 1)
+    defer _big_free(q)
+    if q.bad:
+        ret false
+    end
+    ret _big_divmod(q, r, a, m)
+end
+
+// r = base^e mod m, square-and-multiply. NOT constant-time.
+func _big_modexp(r &: Big, base: Big, e: Big, m: Big): bool:
+    if m.n == 0:
+        ret false
+    end
+    mut acc := _big_new(m.n + 1)
+    defer _big_free(acc)
+    mut cur := _big_new(m.n + 1)
+    defer _big_free(cur)
+    mut prod := _big_new(2 * m.n + 2)
+    defer _big_free(prod)
+    mut red := _big_new(m.n + 2)
+    defer _big_free(red)
+    if acc.bad || cur.bad || prod.bad || red.bad:
+        ret false
+    end
+
+    _big_set_u32(acc, 1 as u32)
+    if !_big_mod(cur, base, m):
+        ret false
+    end
+
+    bits := _big_bitlen(e)
+    mut i := 0
+    until i < bits:
+        if _big_bit(e, i) == 1:
+            _big_mul(prod, acc, cur)
+            if prod.bad || !_big_mod(red, prod, m):
+                ret false
+            end
+            _big_copy(acc, red)
+        end
+        if i + 1 < bits:
+            _big_mul(prod, cur, cur)
+            if prod.bad || !_big_mod(red, prod, m):
+                ret false
+            end
+            _big_copy(cur, red)
+        end
+        i += 1
+    end
+    _big_copy(r, acc)
+    ret !r.bad
+end
+
+// ---------------------------------------------------------------- Barrett reduction
+//
+// _big_modexp above is bit-serial-division-based (O(bits(a) * limbs(m)) PER
+// reduction), which is fine for RSA verification's handful of reductions
+// but far too slow for DH group14's 2048-bit modexp done several times per
+// connection - measured at tens of seconds each. Barrett reduction turns
+// "divide by m" into two multiplications against a precomputed constant, cut
+// to the ~limbs(m)^2 cost a schoolbook multiply already has, which is the
+// difference between this being usable as a KEX fallback and not.
+//
+// mu = floor(b^(2k) / m), b = 2^32, k = limbs(m), computed ONCE per modexp
+// call (a single division, not one per squaring). Reduction of a product x
+// (0 <= x < b^(2k), which every squaring/multiply inside modexp satisfies
+// since both operands are already < m) is then: q = floor((x >> (k-1)) * mu
+// >> (k+1)), r = (x - q*m) mod b^(k+1), followed by at most a couple of
+// corrective subtractions of m - Handbook of Applied Cryptography 14.42.
+
+// x >> (32*s): drop the low s limbs.
+func _big_shr_limbs(x: Big, s: int): Big:
+    mut nn := x.n - s
+    if nn < 0:
+        nn = 0
+    end
+    mut r := _big_new(nn + 1)
+    repeat nn with i:
+        _setlimb(r, i, _limb(x, i + s))
+    end
+    r.n = nn
+    _big_trim(r)
+    ret r
+end
+
+// x mod 2^(32*s): keep only the low s limbs.
+func _big_low_limbs(x: Big, s: int): Big:
+    mut nn := x.n
+    if nn > s:
+        nn = s
+    end
+    mut r := _big_new(s + 1)
+    repeat nn with i:
+        _setlimb(r, i, _limb(x, i))
+    end
+    r.n = nn
+    _big_trim(r)
+    ret r
+end
+
+func _barrett_new(m: Big): Barrett:
+    mut bt := Barrett {}
+    k := m.n
+    mut bk2 := _big_new(2 * k + 4)
+    _big_setbit(bk2, 2 * k * 32)
+    mut mu := _big_new(2 * k + 4)
+    mut rem := _big_new(k + 4)
+    _dok := _big_divmod(mu, rem, bk2, m)
+    _big_free(bk2)
+    _big_free(rem)
+    mut mcopy := _big_new(k + 4)
+    _big_copy(mcopy, m)
+    bt.m = mcopy
+    bt.mu = mu
+    bt.k = k
+    ret bt
+end
+
+func _barrett_free(bt &: Barrett):
+    _big_free(bt.m)
+    _big_free(bt.mu)
+    bt.k = 0
+end
+
+// r = x mod m, for 0 <= x < b^(2k). Requires x.n <= 2*bt.k.
+func _barrett_reduce(bt: Barrett, x: Big, r &: Big): bool:
+    k := bt.k
+    if x.n > 2 * k:
+        ret false
+    end
+    mut q1 := _big_shr_limbs(x, k - 1)
+    mut q2 := _big_new(q1.n + bt.mu.n + 4)
+    _big_mul(q2, q1, bt.mu)
+    mut q3 := _big_shr_limbs(q2, k + 1)
+    _big_free(q1)
+    _big_free(q2)
+
+    mut r1 := _big_low_limbs(x, k + 1)
+    mut prod := _big_new(q3.n + bt.m.n + 4)
+    _big_mul(prod, q3, bt.m)
+    mut r2 := _big_low_limbs(prod, k + 1)
+    _big_free(q3)
+    _big_free(prod)
+
+    mut wide := _big_new(k + 6)
+    if _big_cmp(r1, r2) >= 0:
+        _s1 := _big_sub(wide, r1, r2)
+    else:
+        // r1 - r2 wrapped mod b^(k+1): add b^(k+1) back in first.
+        mut base := _big_new(k + 6)
+        _big_setbit(base, (k + 1) * 32)
+        mut r1adj := _big_new(k + 6)
+        _s2 := _big_add(r1adj, r1, base)
+        _s3 := _big_sub(wide, r1adj, r2)
+        _big_free(base)
+        _big_free(r1adj)
+    end
+    _big_free(r1)
+    _big_free(r2)
+
+    mut cur := wide
+    mut guard := 0
+    until _big_cmp(cur, bt.m) >= 0 && guard <= 4:
+        mut nxt := _big_new(k + 6)
+        _s4 := _big_sub(nxt, cur, bt.m)
+        _big_free(cur)
+        cur = nxt
+        guard += 1
+    end
+    _big_copy(r, cur)
+    _big_free(cur)
+    ret !r.bad
+end
+
+// r = base^e mod m via Barrett reduction - drop-in fast replacement for
+// _big_modexp when the same modulus is reduced against many times, which
+// is exactly modexp's access pattern. NOT constant-time (same caveat as
+// _big_modexp: fine for a public modulus/base, so private-key/private-
+// exponent callers must still go through the blinding helpers).
+func _big_modexp_barrett(r &: Big, base: Big, e: Big, m: Big): bool:
+    if m.n == 0:
+        ret false
+    end
+    mut bt := _barrett_new(m)
+    mut acc := _big_new(m.n + 1)
+    _big_set_u32(acc, 1 as u32)
+    mut cur := _big_new(m.n + 1)
+    _dok2 := _big_mod(cur, base, m)
+
+    bits := _big_bitlen(e)
+    mut i := 0
+    mut ok := true
+    until i < bits && ok:
+        if _big_bit(e, i) == 1:
+            mut prod := _big_new(acc.n + cur.n)
+            _big_mul(prod, acc, cur)
+            mut red := _big_new(m.n + 1)
+            if prod.bad || !_barrett_reduce(bt, prod, red):
+                ok = false
+            end
+            _big_free(prod)
+            _big_copy(acc, red)
+            _big_free(red)
+        end
+        if ok && i + 1 < bits:
+            mut sq := _big_new(cur.n + cur.n)
+            _big_mul(sq, cur, cur)
+            mut red2 := _big_new(m.n + 1)
+            if sq.bad || !_barrett_reduce(bt, sq, red2):
+                ok = false
+            end
+            _big_free(sq)
+            _big_copy(cur, red2)
+            _big_free(red2)
+        end
+        i += 1
+    end
+    if ok:
+        _big_copy(r, acc)
+    end
+    _big_free(acc)
+    _big_free(cur)
+    _barrett_free(bt)
+    ret ok && !r.bad
+end
+
+// ---------------------------------------------------------------- bytes
+
+func _big_from_bytes(p: void*, len: int): Big:
+    mut nl := (len + 3) / 4
+    if nl < 1:
+        nl = 1
+    end
+    mut x := _big_new(nl)
+    if x.bad:
+        ret x
+    end
+    repeat len with i:
+        v := _bget(p, len - 1 - i)
+        li := i / 4
+        sh := ((i % 4) * 8) as u32
+        _setlimb(x, li, _limb(x, li) | ((v as u32) << sh))
+    end
+    x.n = nl
+    _big_trim(x)
+    ret x
+end
+
+func _big_bytelen(x: Big): int:
+    bl := _big_bitlen(x)
+    ret (bl + 7) / 8
+end
+
+// Serialise big-endian, left-padded with zeros to exactly `outlen` bytes.
+func _big_to_bytes(x: Big, out: void*, outlen: int): bool:
+    if _big_bytelen(x) > outlen:
+        ret false
+    end
+    repeat outlen with i:
+        _bput(out, i, 0)
+    end
+    total := x.n * 4
+    repeat total with i:
+        li := i / 4
+        sh := ((i % 4) * 8) as u32
+        v := ((_limb(x, li) >> sh) & (0xFF as u32)) as int
+        pos := outlen - 1 - i
+        if pos >= 0:
+            _bput(out, pos, v)
+        end
+    end
+    ret true
+end
+
+// ---------------------------------------------------------------- blinding
+//
+// r = base^secret_e mod m where `secret_e` is SECRET (our own ephemeral DH
+// exponent) - via exponent blinding rather than a constant-time ladder.
+// `group_order` is the group's order (p-1 for a safe-prime MODP group), so
+// for any random k >= 0, base^(secret_e + k*group_order) = base^secret_e
+// mod m by Fermat's little theorem. Adding a fresh random multiple of the
+// order before every call changes the bit pattern _big_modexp actually
+// walks from one call to the next without changing the result, which is
+// what dhgroups.salam uses to decorrelate its exponent across repeated key
+// exchanges. (RSA signing has a different, cheaper trick available - blind
+// the base by a random invertible factor and unblind the result via
+// Euler's theorem - see rsakey.salam.)
+func _big_modexp_blinded_dh(r &: Big, base: Big, secret_e: Big, group_order: Big, m: Big, rnd_p: void*, rnd_n: int): bool:
+    mut mask := _big_from_bytes(rnd_p, rnd_n)
+    defer _big_free(mask)
+    if mask.bad:
+        ret false
+    end
+    mut kord := _big_new(group_order.n + mask.n + 1)
+    defer _big_free(kord)
+    _big_mul(kord, mask, group_order)
+    if kord.bad:
+        ret false
+    end
+    mut blinded_e := _big_new(kord.n + secret_e.n + 1)
+    defer _big_wipe_free(blinded_e)
+    _big_add(blinded_e, secret_e, kord)
+    if blinded_e.bad:
+        ret false
+    end
+    ret _big_modexp_barrett(r, base, blinded_e, m)
+end

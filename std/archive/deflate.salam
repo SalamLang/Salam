@@ -1,0 +1,195 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+
+// RFC 1951 DEFLATE compression (Deflate) - the encoder half of
+// inflate.salam. Every compressed stream is a single block, BFINAL=1,
+// BTYPE=01 (fixed Huffman, RFC 1951 3.2.6): the codes are the ones the
+// spec hardcodes (no table to transmit), so every real decoder - zlib,
+// gzip, any ZIP tool, this package's own Inflate - can read it, at the
+// cost of the extra ~2-5% a dynamic Huffman table would have saved. That
+// trade is deliberate: it turns "build a correct DEFLATE encoder" into
+// "build a correct LZ77 tokenizer plus a fixed, spec-hardcoded lookup
+// table", with no canonical-code construction or block-splitting heuristic
+// to get wrong.
+//
+// LZ77 matching is a brute-force scan of the 32768-byte window - O(n *
+// window) worst case, the same complexity/simplicity trade std/compress's
+// own lz77.salam and deflate.salam make. Fine for the file sizes this
+// package is meant for; a production encoder would use a hash chain.
+//
+// The length/distance base/extra-bits tables below duplicate
+// inflate.salam's _LENGTH_BASE/_LENGTH_EXTRA/_DIST_BASE/_DIST_EXTRA rather
+// than reusing them: referencing those arrays from this file crashes the
+// compiler's semantic pass (confirmed as a compiler defect via a minimal
+// repro - a small const array shared the same way across two files
+// compiles fine, so it is specific to this package's actual size/shape,
+// not a simple "cross-file const" rule). Duplicating four small constant
+// tables is a trivial price for a working build.
+
+const _DFL_WINDOW := 32768
+const _DFL_MIN_MATCH := 3
+const _DFL_MAX_MATCH := 258
+
+const _DFL_LENGTH_BASE := [
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31
+    35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258
+] as int[29]
+
+const _DFL_LENGTH_EXTRA := [
+    0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2
+    3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0
+] as int[29]
+
+const _DFL_DIST_BASE := [
+    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193
+    257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577
+] as int[30]
+
+const _DFL_DIST_EXTRA := [
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6
+    7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13
+] as int[30]
+
+func _write_bits_msb(w &: compress.BitWriter, code: int, len: int):
+    mut bit := len - 1
+    until bit >= 0:
+        compress.BitWriteBit(w, (code >> bit) & 1)
+        bit -= 1
+    end
+end
+
+// RFC 1951 3.2.6's hardcoded fixed literal/length code table.
+func _fixed_lit_code(sym: int, code_out &: int, len_out &: int):
+    if sym <= 143:
+        code_out = 0x30 + sym
+        len_out = 8
+    else:
+        if sym <= 255:
+            code_out = 0x190 + (sym - 144)
+            len_out = 9
+        else:
+            if sym <= 279:
+                code_out = sym - 256
+                len_out = 7
+            else:
+                code_out = 0xc0 + (sym - 280)
+                len_out = 8
+            end
+        end
+    end
+end
+
+func _write_fixed_literal(w &: compress.BitWriter, sym: int):
+    mut code := 0
+    mut len := 0
+    _fixed_lit_code(sym, code, len)
+    _write_bits_msb(w, code, len)
+end
+
+func _length_to_code(length: int, idx_out &: int, extra_out &: int):
+    mut idx := 0
+    until idx + 1 < 29 && _DFL_LENGTH_BASE[idx + 1] <= length:
+        idx += 1
+    end
+    idx_out = idx
+    extra_out = length - _DFL_LENGTH_BASE[idx]
+end
+
+func _dist_to_code(dist: int, idx_out &: int, extra_out &: int):
+    mut idx := 0
+    until idx + 1 < 30 && _DFL_DIST_BASE[idx + 1] <= dist:
+        idx += 1
+    end
+    idx_out = idx
+    extra_out = dist - _DFL_DIST_BASE[idx]
+end
+
+func _write_fixed_length(w &: compress.BitWriter, length: int):
+    mut idx := 0
+    mut extra := 0
+    _length_to_code(length, idx, extra)
+    _write_fixed_literal(w, 257 + idx)
+    if _DFL_LENGTH_EXTRA[idx] > 0:
+        compress.BitWriteBits(w, extra, _DFL_LENGTH_EXTRA[idx])
+    end
+end
+
+// Fixed distance codes (RFC 1951 3.2.6) are all 5 bits, the code value
+// being the index itself - no lookup table needed.
+func _write_fixed_distance(w &: compress.BitWriter, dist: int):
+    mut idx := 0
+    mut extra := 0
+    _dist_to_code(dist, idx, extra)
+    _write_bits_msb(w, idx, 5)
+    if _DFL_DIST_EXTRA[idx] > 0:
+        compress.BitWriteBits(w, extra, _DFL_DIST_EXTRA[idx])
+    end
+end
+
+func _dfl_find_match(p: void*, n: int, pos: int, bestlen &: int, bestdist &: int):
+    bp := p as u8*
+    bestlen = 0
+    bestdist = 0
+    mut winstart := pos - _DFL_WINDOW
+    if winstart < 0: winstart = 0 end
+    mut maxlen := n - pos
+    if maxlen > _DFL_MAX_MATCH: maxlen = _DFL_MAX_MATCH end
+    mut cand := winstart
+    until cand < pos:
+        mut len := 0
+        until len < maxlen && (bp[cand + len] as int) == (bp[pos + len] as int):
+            len += 1
+        end
+        if len > bestlen:
+            bestlen = len
+            bestdist = pos - cand
+        end
+        cand += 1
+    end
+end
+
+@en "Deflate"
+@fa "فشرده سازی دیفلیت"
+@ar "ضغط ديفليت"
+pub func Deflate(p: void*, n: int): compress.ByteBuf:
+    mut w := compress.NewBitWriter()
+    compress.BitWriteBit(w, 1)
+    compress.BitWriteBits(w, 1, 2)
+
+    if n > 0:
+        bp := p as u8*
+        mut pos := 0
+        until pos < n:
+            mut bestlen := 0
+            mut bestdist := 0
+            _dfl_find_match(p, n, pos, bestlen, bestdist)
+            if bestlen >= _DFL_MIN_MATCH:
+                _write_fixed_length(w, bestlen)
+                _write_fixed_distance(w, bestdist)
+                pos += bestlen
+            else:
+                _write_fixed_literal(w, bp[pos] as int)
+                pos += 1
+            end
+        end
+    end
+
+    _write_fixed_literal(w, 256)
+    compress.BitFlush(w)
+    ret w.buf
+end

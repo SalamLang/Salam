@@ -115,9 +115,6 @@ static const char *call_value(cg_t *cg, ast_node_t *n, ast_node_t *callee)
                   tmp, cg_expr(cg, callee), cret, cps, tmp, tmp, args);
 }
 
-/* 'extern func(...)' values are raw C-ABI function pointers (no closure env
- * word) - call the address directly instead of the lambda deref-and-prepend
- * convention call_value() uses. See AST_TYPE.is_extern in sema_type.c. */
 static const char *call_raw_ptr(cg_t *cg, ast_node_t *n, ast_node_t *callee)
 {
     const char *cret = cg_ctype(cg, raw_ret_of(callee->type_str));

@@ -2314,15 +2314,29 @@ jobs:
       github.repository == 'SalamLang/Salam' &&
       ((github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
        (github.event_name == 'workflow_dispatch' && inputs.nightly))
-    # Best-effort: a signing-secret hiccup on the Android side (or an
-    # android/ build regression) should not block the far more heavily-used
-    # native-binary release. create-release below downloads this job's
-    # artifact with continue-on-error, so a failure here just means the AAB/
-    # APKs are missing from that run's release rather than the whole release
-    # failing.
-    continue-on-error: true
     uses: ./.github/workflows/_reusable-android-build.yml
-    secrets: inherit
+    secrets:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+  # Best-effort gate: a signing-secret hiccup on the Android side (or an
+  # android/ build regression) should not block the far more heavily-used
+  # native-binary release. Jobs that call a reusable workflow via `uses:`
+  # can't set `continue-on-error`, so this no-op job absorbs build-android's
+  # failure and always reports success; create-release depends on this job
+  # instead and downloads build-android's artifact with continue-on-error,
+  # so a failure there just means the AAB/APKs are missing from that run's
+  # release rather than the whole release failing.
+  android-gate:
+    name: Android build gate (best-effort)
+    needs: build-android
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report Android build result
+        run: echo "build-android result=${{ needs.build-android.result }}"
 
   create-release:
     if: |
@@ -2341,7 +2355,7 @@ jobs:
         build-linux-i686,
         build-linux-armhf,
         build-linux-aarch64,
-        build-android,
+        android-gate,
       ]
     permissions:
       contents: write

@@ -1,0 +1,325 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import filepath
+
+// The ZIP archive format (PKWARE's APPNOTE.TXT): a local file header
+// immediately before each entry's data, a central directory listing every
+// entry (name, sizes, CRC-32, method, and the byte offset of its local
+// header) after all the data, and an End Of Central Directory record at
+// the very end pointing at the central directory. Reading therefore starts
+// from the END of the file (find the EOCD, usually the last 22 bytes) and
+// works backward/through the central directory - the same approach every
+// real ZIP reader uses, and why this package loads archives into memory
+// rather than streaming them.
+//
+// Two entry methods are implemented: 0 (store, raw bytes) and 8 (deflate,
+// via inflate.salam/deflate.salam). Encrypted entries (general-purpose
+// flag bit 0) and any other compression method are reported through `ok`,
+// never silently misread as garbage. ZipCreate writes only these two
+// methods and no encryption, so its output is exactly the same shape as
+// zips made by anything else that supports store/deflate - which is all
+// of them.
+
+@en "ZipFileInput"
+@fa "ورودی پرونده زیپ"
+@ar "إدخال ملف زيب"
+pub struct ZipFileInput:
+    pub name: str = ""
+    pub data_ptr: void* = null
+    pub data_len: int = 0
+    pub method: int = 8
+end
+
+func _zip_find_eocd(p: void*, n: int, eocd_pos_out &: int): bool:
+    if n < 22:
+        ret false
+    end
+    mut search_start := n - 22 - 65535
+    if search_start < 0: search_start = 0 end
+    mut i := n - 22
+    until i < search_start:
+        if LEGet32(p, i) == 0x06054b50:
+            eocd_pos_out = i
+            ret true
+        end
+        i -= 1
+    end
+    ret false
+end
+
+func _zip_read_name(p: void*, off: int, name_len: int): str:
+    mut nmbuf := compress.NewByteBuf()
+    name_ptr := ((p as i64) + (off as i64)) as void*
+    compress.BufPushBytes(nmbuf, name_ptr, name_len)
+    nm := compress.BufToStrUnsafe(nmbuf)
+    compress.BufFree(nmbuf)
+    ret nm
+end
+
+func _zip_is_dir_name(name: str): bool:
+    n := name.len()
+    if n == 0: ret false end
+    ret str.EndsWith(name, "/")
+end
+
+@en "MakeZipFileInput"
+@fa "ساخت ورودی پرونده زیپ"
+@ar "إنشاء إدخال ملف زيب"
+pub func MakeZipFileInput(name: str, data_ptr: void*, data_len: int, method: int): ZipFileInput:
+    ret ZipFileInput { name = name, data_ptr = data_ptr, data_len = data_len, method = method }
+end
+
+// Builds a ZIP archive in memory from a list of (name, bytes, method)
+// entries. `method` should be compress's MethodNone-style int, but here
+// it is a literal 0 (store) or 8 (deflate) - the ZIP method codes
+// themselves, not std/compress's Method constants.
+@en "ZipCreate"
+@fa "ساخت زیپ"
+@ar "إنشاء زيب"
+pub func ZipCreate(files: Vector<ZipFileInput>): compress.ByteBuf:
+    mut body := compress.NewByteBuf()
+    mut central := compress.NewByteBuf()
+    mut count := 0
+    mut i := 0
+    until i < files.len():
+        f := files.get(i)[0]
+        crc := compress.CRC32(f.data_ptr, f.data_len)
+        mut comp_ptr := f.data_ptr
+        mut comp_len := f.data_len
+        mut owned := compress.NewByteBuf()
+        mut has_owned := false
+        if f.method == 8:
+            owned = Deflate(f.data_ptr, f.data_len)
+            comp_ptr = owned.data
+            comp_len = owned.len
+            has_owned = true
+        end
+
+        offset := compress.BufLen(body)
+        name_len := f.name.len()
+
+        LEPut32(body, 0x04034b50)
+        LEPut16(body, 20)
+        LEPut16(body, 0)
+        LEPut16(body, f.method)
+        LEPut16(body, 0)
+        LEPut16(body, 0x21)
+        LEPut32(body, crc as int)
+        LEPut32(body, comp_len)
+        LEPut32(body, f.data_len)
+        LEPut16(body, name_len)
+        LEPut16(body, 0)
+        compress.BufPushBytes(body, f.name as void*, name_len)
+        compress.BufPushBytes(body, comp_ptr, comp_len)
+
+        LEPut32(central, 0x02014b50)
+        LEPut16(central, 20)
+        LEPut16(central, 20)
+        LEPut16(central, 0)
+        LEPut16(central, f.method)
+        LEPut16(central, 0)
+        LEPut16(central, 0x21)
+        LEPut32(central, crc as int)
+        LEPut32(central, comp_len)
+        LEPut32(central, f.data_len)
+        LEPut16(central, name_len)
+        LEPut16(central, 0)
+        LEPut16(central, 0)
+        LEPut16(central, 0)
+        LEPut16(central, 0)
+        LEPut32(central, 0)
+        LEPut32(central, offset)
+        compress.BufPushBytes(central, f.name as void*, name_len)
+
+        if has_owned:
+            compress.BufFree(owned)
+        end
+        count += 1
+        i += 1
+    end
+
+    mut out := compress.NewByteBuf()
+    compress.BufPushBuf(out, body)
+    cd_offset := compress.BufLen(out)
+    compress.BufPushBuf(out, central)
+    cd_size := compress.BufLen(central)
+    compress.BufFree(body)
+    compress.BufFree(central)
+
+    LEPut32(out, 0x06054b50)
+    LEPut16(out, 0)
+    LEPut16(out, 0)
+    LEPut16(out, count)
+    LEPut16(out, count)
+    LEPut32(out, cd_size)
+    LEPut32(out, cd_offset)
+    LEPut16(out, 0)
+    ret out
+end
+
+@en "ZipCreateFile"
+@fa "ساخت پرونده زیپ"
+@ar "إنشاء ملف زيب"
+pub func ZipCreateFile(files: Vector<ZipFileInput>, outpath: str): bool:
+    mut out := ZipCreate(files)
+    ok := WriteBinaryFileBuf(outpath, out)
+    compress.BufFree(out)
+    ret ok
+end
+
+// Reads every entry's metadata from the central directory (no data is
+// decompressed). Returns an empty Vector if `p`/`n` is not a readable ZIP.
+@en "ZipList"
+@fa "فهرست زیپ"
+@ar "قائمة زيب"
+pub func ZipList(p: void*, n: int): Vector<Entry>:
+    mut out := Vector {} as Vector<Entry>
+    mut eocd_pos := 0
+    if !_zip_find_eocd(p, n, eocd_pos):
+        ret out
+    end
+    count := LEGet16(p, eocd_pos + 10)
+    cd_offset := LEGet32(p, eocd_pos + 16)
+    mut pos := cd_offset
+    mut k := 0
+    until k < count:
+        if LEGet32(p, pos) != 0x02014b50:
+            break
+        end
+        method := LEGet16(p, pos + 10)
+        crc := LEGet32(p, pos + 16)
+        comp_size := LEGet32(p, pos + 20)
+        uncomp_size := LEGet32(p, pos + 24)
+        name_len := LEGet16(p, pos + 28)
+        extra_len := LEGet16(p, pos + 30)
+        comment_len := LEGet16(p, pos + 32)
+        nm := _zip_read_name(p, pos + 46, name_len)
+
+        mut e := Entry {
+            name = nm
+            size = uncomp_size as i64
+            compressed_size = comp_size as i64
+            is_dir = _zip_is_dir_name(nm)
+            method = method
+            crc32 = crc as u32
+            mtime = 0 as i64
+        }
+        out.push(e)
+
+        pos += 46 + name_len + extra_len + comment_len
+        k += 1
+    end
+    ret out
+end
+
+// Extracts one entry by exact name. `ok` is false if the name is not
+// found, the entry is encrypted, or its method is not store/deflate.
+@en "ZipExtractByName"
+@fa "استخراج با نام از زیپ"
+@ar "استخراج بالاسم من زيب"
+pub func ZipExtractByName(p: void*, n: int, name: str, ok &: bool): compress.ByteBuf:
+    ok = false
+    mut out := compress.NewByteBuf()
+    mut eocd_pos := 0
+    if !_zip_find_eocd(p, n, eocd_pos):
+        ret out
+    end
+    count := LEGet16(p, eocd_pos + 10)
+    cd_offset := LEGet32(p, eocd_pos + 16)
+    mut pos := cd_offset
+    mut k := 0
+    until k < count:
+        if LEGet32(p, pos) != 0x02014b50:
+            break
+        end
+        flags := LEGet16(p, pos + 8)
+        method := LEGet16(p, pos + 10)
+        comp_size := LEGet32(p, pos + 20)
+        uncomp_size := LEGet32(p, pos + 24)
+        name_len := LEGet16(p, pos + 28)
+        extra_len := LEGet16(p, pos + 30)
+        comment_len := LEGet16(p, pos + 32)
+        local_offset := LEGet32(p, pos + 42)
+        nm := _zip_read_name(p, pos + 46, name_len)
+
+        if nm == name:
+            if (flags & 1) != 0:
+                ret out
+            end
+            lname_len := LEGet16(p, local_offset + 26)
+            lextra_len := LEGet16(p, local_offset + 28)
+            data_start := local_offset + 30 + lname_len + lextra_len
+            data_ptr := ((p as i64) + (data_start as i64)) as void*
+            if method == 0:
+                compress.BufPushBytes(out, data_ptr, comp_size)
+                ok = true
+            else:
+                if method == 8:
+                    mut infl_ok := false
+                    result := Inflate(data_ptr, comp_size, uncomp_size, infl_ok)
+                    if infl_ok:
+                        compress.BufFree(out)
+                        out = result
+                        ok = true
+                    else:
+                        compress.BufFree(result)
+                    end
+                end
+            end
+            ret out
+        end
+        pos += 46 + name_len + extra_len + comment_len
+        k += 1
+    end
+    ret out
+end
+
+// Extracts every entry into `destdir`, recreating subdirectories as
+// needed. Returns false if any entry fails to extract (an unsupported
+// method, an encrypted entry, or a write error) - already-extracted
+// entries are left on disk rather than rolled back.
+@en "ZipExtractAll"
+@fa "استخراج همه از زیپ"
+@ar "استخراج الكل من زيب"
+pub func ZipExtractAll(p: void*, n: int, destdir: str): bool:
+    entries := ZipList(p, n)
+    mut all_ok := true
+    mut i := 0
+    until i < entries.len():
+        e := entries.get(i)[0]
+        outpath := filepath.Join(destdir, e.name)
+        if e.is_dir:
+            EnsureDir(outpath)
+        else:
+            EnsureDir(filepath.Dir(outpath))
+            mut ok := false
+            data := ZipExtractByName(p, n, e.name, ok)
+            if ok:
+                if !WriteBinaryFileBuf(outpath, data):
+                    all_ok = false
+                end
+            else:
+                all_ok = false
+            end
+            compress.BufFree(data)
+        end
+        i += 1
+    end
+    entries.free()
+    ret all_ok
+end

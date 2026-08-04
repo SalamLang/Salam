@@ -924,10 +924,12 @@ static const char *jsg_call_ident(jg_t *g, ast_node_t *n, ast_node_t *callee)
             }
         }
         if (fsym && (fsym->kind == SYM_VAR || fsym->kind == SYM_CONST) &&
-            !local_known(cg, nm))
-            return cg_fmt(cg, "%s(%s)",
-                          jsg_global_ref(g, fsym->pkgname ? fsym->pkgname : cg->pkg, nm),
-                          jsg_call_args(g, n, NULL));
+            !local_known(cg, nm)) {
+            const char *callee = (fsym->decl && fsym->decl->is_extern)
+                                      ? cg_cident(cg, nm)
+                                      : jsg_global_ref(g, fsym->pkgname ? fsym->pkgname : cg->pkg, nm);
+            return cg_fmt(cg, "%s(%s)", callee, jsg_call_args(g, n, NULL));
+        }
         {
             func_sig_t *sig = fsym ? pick_overload(cg, fsym, n) : NULL;
             bool is_extern_call = sig && sig->decl && sig->decl->is_extern;
@@ -1465,8 +1467,10 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
         {
             symbol_t *s = scope_lookup(cg->sem->global, n->name);
             if (!s && cg->cur_fn_home) s = scope_lookup(cg->cur_fn_home, n->name);
-            if (s && (s->kind == SYM_VAR || s->kind == SYM_CONST))
+            if (s && (s->kind == SYM_VAR || s->kind == SYM_CONST)) {
+                if (s->decl && s->decl->is_extern) return cg_cident(cg, n->name);
                 return jsg_global_ref(g, s->pkgname ? s->pkgname : cg->pkg, n->name);
+            }
             if (s && s->kind == SYM_FUNC && s->overloads.len) {
                 func_sig_t *sig = (func_sig_t *)s->overloads.data[0];
                 if (sig)
@@ -1628,9 +1632,11 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
             }
             if (e && e->kind == SYM_PACKAGE) {
                 symbol_t *m = scope_lookup_local(e->members, n->name);
-                if (m && (m->kind == SYM_CONST || m->kind == SYM_VAR))
+                if (m && (m->kind == SYM_CONST || m->kind == SYM_VAR)) {
+                    if (m->decl && m->decl->is_extern) return cg_cident(cg, n->name);
                     return jsg_global_ref(g, e->pkgname ? e->pkgname : n->a->name,
                                           n->name);
+                }
                 if (m && m->decl && m->decl->a) return jsg_expr_p(g, m->decl->a, minprec);
             }
         }

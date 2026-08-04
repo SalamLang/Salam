@@ -10,22 +10,6 @@
  *
  * Repository: https://github.com/SalamLang/Salam
  *
- * MSYS2's mingw-w64-x86_64-lld and mingw-w64-x86_64-llvm packages ship
- * liblld{ELF,COFF,MinGW,MachO,Wasm,Common}.a and libLLVMWindowsManifest.a
- * pre-built as if they will always be consumed alongside the shared
- * libLLVM-*.dll / libxml2 DLL: their object code reaches the demangler and
- * libxml2 through __imp_-prefixed indirect pointers (the standard PE
- * dllimport calling convention), even though the real implementations are
- * also available as plain static archives in this very link
- * (libLLVMDemangle.a, libxml2.a). Linking against libLLVM-*.dll.a /
- * libxml2.dll.a to satisfy those __imp_ symbols would pull in a runtime
- * dependency on libLLVM-*.dll / libxml2-*.dll, defeating the point of a
- * self-contained salam.exe (see the "Verify salam.exe is self-contained"
- * CI step). Since a dllimport-style reference is just an extra pointer
- * indirection - call/load through __imp_X instead of calling/using X
- * directly - defining each __imp_X here as a plain data pointer aliasing
- * the real, statically-linked X satisfies the linker without needing any
- * DLL at runtime.
  */
 
 .section .data

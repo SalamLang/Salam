@@ -116,6 +116,19 @@ static const js_host_t k_js_host[] = {
     {"salam_js_rotate", "%0.rotate(%1)"},
     {"salam_js_scale", "%0.scale(%1, %2)"},
     {"salam_js_draw_image", "%0.drawImage(%1, %2, %3, %4, %5)"},
+    {"salam_js_new_promise", "new Promise(%0)"},
+    {"salam_js_new", "new %0(%+1)"},
+    {"salam_js_invoke", "%0(%+1)"},
+    {"salam_js_is_nullish", "(%0 === null || %0 === undefined)"},
+    {"salam_js_null", "null"},
+    {"salam_js_undefined", "undefined"},
+    {"strcmp", "(%0 < %1 ? -1 : (%0 > %1 ? 1 : 0))"},
+    {"salam_js_to_str", "String(%0)"},
+    {"salam_js_to_num", "Number(%0)"},
+    {"salam_js_to_bool", "!!(%0)"},
+    {"salam_js_typeof", "typeof %0"},
+    {"salam_js_array0", "[]"},
+    {"salam_js_obj0", "{}"},
 };
 
 const js_host_t *js_host_lookup(const char *name)

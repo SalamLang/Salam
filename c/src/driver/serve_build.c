@@ -81,13 +81,12 @@ int driver_serve(options_t *opt)
 
     sb_t src;
     sb_init(&src);
-    sb_puts(&src,
-            "import web\n"
-            "\n"
-            "func main:\n"
-            "    r := web.NewRouter()\n"
-            "    web.EnableListing(r)\n"
-            "    web.Static(r, \"/\", ");
+    sb_puts(&src, "import web\n"
+                  "\n"
+                  "func main:\n"
+                  "    r := web.NewRouter()\n"
+                  "    web.EnableListing(r)\n"
+                  "    web.Static(r, \"/\", ");
     sb_put_salam_string_literal(&src, dir);
     sb_puts(&src, ")\n    s := web.NewServer(");
     {
@@ -97,7 +96,8 @@ int driver_serve(options_t *opt)
     }
     sb_puts(&src, ")\n    web.SetHost(s, ");
     sb_put_salam_string_literal(&src, host);
-    sb_puts(&src, ")\n    web.EnableAccessLog(s)\n    web.Use(s, r)\n    web.Run(s)\nend\n");
+    sb_puts(&src,
+            ")\n    web.EnableAccessLog(s)\n    web.Use(s, r)\n    web.Run(s)\nend\n");
 
     char salam_path[600];
 #if defined(_WIN32)
@@ -124,8 +124,8 @@ int driver_serve(options_t *opt)
         sal_snprintf(exe_path, sizeof exe_path, "%s\\salam-serve-%lu.exe",
                      salam_scratch_dir(), (unsigned long)_getpid());
 #else
-        sal_snprintf(exe_path, sizeof exe_path, "%s/salam-serve-%lu",
-                     salam_scratch_dir(), (unsigned long)getpid());
+        sal_snprintf(exe_path, sizeof exe_path, "%s/salam-serve-%lu", salam_scratch_dir(),
+                     (unsigned long)getpid());
 #endif
         opt->output = exe_path;
     }
@@ -143,8 +143,8 @@ int driver_serve(options_t *opt)
     }
 
     const char *exe = opt->exe_path[0] ? opt->exe_path : opt->output;
-    fprintf(stdout, i18n_tr("salam: serving '%s' at http://%s:%d/ (Ctrl+C to stop)\n"), dir,
-            host, port);
+    fprintf(stdout, i18n_tr("salam: serving '%s' at http://%s:%d/ (Ctrl+C to stop)\n"),
+            dir, host, port);
     fflush(stdout);
 
     sb_t cmd;

@@ -181,8 +181,8 @@ salam layout build page.salam --inline         # one self-contained page.html
 salam layout build a.salam b.salam             # per-page html + merged style.css/script.js
 
 # inspect any stage (general or layout)
-salam app.salam --emit-tokens-xml | --emit-ast-xml | --emit-symbol-xml
-salam app.salam --log-level=trace
+salam inspect app.salam --emit-tokens-xml | --emit-ast-xml | --emit-symbol-xml
+salam inspect app.salam --log-level=trace
 salam build app.salam -DDEBUG                  # preprocessor define
 
 # format source in place (auto-detects nothing - pass --lang=fa for Persian files)

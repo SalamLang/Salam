@@ -1,5 +1,36 @@
 package tls
 
+// Native OS trust-store FFI bindings (Windows CryptoAPI, macOS Security
+// framework). `link`/`import` must precede every other top-level statement
+// in a Salam file, so only the link/extern declarations live up here; the
+// _roots_load_native() bodies that use them are defined further down, next
+// to the rest of the trust-store loading logic, since consts in turn must be
+// declared before any function/type definition.
+if SALAM_OS_WIN64:
+    link dynamic "crypt32"
+
+    extern:
+        func CertOpenSystemStoreA(hprov: i64, subsystem: str): void*
+        func CertEnumCertificatesInStore(store: void*, prev: void*): void*
+        func CertCloseStore(store: void*, flags: int): int
+    end
+else:
+    if SALAM_OS_MAC:
+        link framework "Security"
+        link framework "CoreFoundation"
+
+        extern:
+            func SecTrustCopyAnchorCertificates(anchors: void*): int
+            func CFArrayGetCount(arr: void*): i64
+            func CFArrayGetValueAtIndex(arr: void*, idx: i64): void*
+            func SecCertificateCopyData(cert: void*): void*
+            func CFDataGetBytePtr(data: void*): void*
+            func CFDataGetLength(data: void*): i64
+            func CFRelease(obj: void*)
+        end
+    end
+end
+
 // Trust store loading: PEM decoding and system CA bundle discovery.
 //
 // Where the roots come from, in order:
@@ -111,24 +142,13 @@ func _embedded_roots_pem(): str:
     ret ""
 end
 
-// ------------------------------------------------------- native OS trust store
-//
 // Windows and macOS keep their root certificates in a live OS-managed store
-// (CryptoAPI, Keychain) rather than a conventional flat file, so the file
-// candidates above never find anything there on their own. Where a native API
-// exists, read it directly instead of guessing installer-specific paths.
-// FreeBSD/OpenBSD/NetBSD have no such API (no keychain-style service); they
-// really do ship a flat file, which the CA_PATH_* list above already covers.
-
+// (CryptoAPI, Keychain) rather than a conventional flat file, so the CA_PATH_*
+// candidates above never find anything there on their own; read the native
+// API directly instead of guessing installer-specific paths. FreeBSD/OpenBSD/
+// NetBSD have no such API (no keychain-style service) - they really do ship a
+// flat file, which the CA_PATH_* list already covers.
 if SALAM_OS_WIN64:
-    link dynamic "crypt32"
-
-    extern:
-        func CertOpenSystemStoreA(hprov: i64, subsystem: str): void*
-        func CertEnumCertificatesInStore(store: void*, prev: void*): void*
-        func CertCloseStore(store: void*, flags: int): int
-    end
-
     // CERT_CONTEXT (64-bit layout): dwCertEncodingType@0, pbCertEncoded@8,
     // cbCertEncoded@16, pCertInfo@24, hCertStore@32. Only the encoded-DER
     // pointer and its length are needed here.
@@ -160,19 +180,6 @@ if SALAM_OS_WIN64:
     end
 else:
     if SALAM_OS_MAC:
-        link framework "Security"
-        link framework "CoreFoundation"
-
-        extern:
-            func SecTrustCopyAnchorCertificates(anchors: void*): int
-            func CFArrayGetCount(arr: void*): i64
-            func CFArrayGetValueAtIndex(arr: void*, idx: i64): void*
-            func SecCertificateCopyData(cert: void*): void*
-            func CFDataGetBytePtr(data: void*): void*
-            func CFDataGetLength(data: void*): i64
-            func CFRelease(obj: void*)
-        end
-
         // SecTrustCopyAnchorCertificates returns the OS's built-in anchor set
         // (the root-program membership Schannel/Keychain trust by default) -
         // not per-user Keychain trust overrides, which would need the
@@ -215,7 +222,7 @@ else:
             ret added
         end
     else:
-        func _roots_load_native(r &: Roots): int:
+        func _roots_load_native(_r &: Roots): int:
             ret 0
         end
     end

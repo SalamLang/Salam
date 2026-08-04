@@ -31,7 +31,7 @@ RUN sh /tmp/install.sh --dir /opt/salam && rm -f /tmp/install.sh
 FROM debian:${DEBIAN_VERSION} AS runtime
 # trivy:ignore:AVD-DS-0025
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates libstdc++6 libtinfo6 libxml2 libzstd1 zlib1g \
+        ca-certificates libstdc++6 libtinfo6 libxml2 libzstd1 zlib1g tcc \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 salam \
     && useradd --uid 10001 --gid salam --no-create-home --shell /usr/sbin/nologin salam \

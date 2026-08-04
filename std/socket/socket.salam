@@ -23,6 +23,7 @@ import str
 import rand
 import encoding
 import crypto
+import tls
 
 const WS_GUID := "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -74,6 +75,11 @@ pub struct Conn:
     pub buf: void* = null
     pub blen: int = 0
     pub bcap: int = 0
+    // wss:// - set only by DialWSS. There is no server-side (Accept) TLS yet,
+    // since std/tls is client-only today; a plain-TCP Accept always leaves
+    // this false.
+    pub secure: bool = false
+    pub tconn: tls.Conn = tls.Conn {}
 end
 
 @en "Message"
@@ -158,7 +164,16 @@ func _fill(c &: Conn): int:
         ret 0 - 1
     end
     dst := ((c.buf as i64) + (c.blen as i64)) as void*
-    n := net.RecvBytes(net.SocketFromFd(c.fd), dst, space)
+    mut n := 0
+    if c.secure:
+        chunk := tls.Read(c.tconn, space)
+        n = chunk.len()
+        if n > 0:
+            mem.Copy(dst, chunk as void*, n as u64)
+        end
+    else:
+        n = net.RecvBytes(net.SocketFromFd(c.fd), dst, space)
+    end
     if n > 0:
         c.blen += n
     end

@@ -24,7 +24,6 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
             llvm${LLVM_VERSION} \
             bash \
             git \
-            curl \
             sqlite-dev \
             sqlite-static \
             mariadb-connector-c-dev \

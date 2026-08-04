@@ -19,9 +19,6 @@ package http
 
 import mem
 import str
-import io
-import os
-import time
 import encoding
 import net
 import tls
@@ -44,38 +41,10 @@ if SALAM_OS_WINDOWS:
         func WinHttpAddRequestHeaders(req: void*, headers: void*, hlen: int, modifiers: int): int
         func WinHttpCloseHandle(handle: void*): int
     end
-else:
-    if SALAM_LINK_CURL:
-        extern:
-            func curl_easy_init(): void*
-            func curl_easy_setopt(h: void*, opt: int, ...): i64
-            func curl_easy_perform(h: void*): i64
-            func curl_easy_cleanup(h: void*)
-            func curl_slist_append(list: void*, s: str): void*
-            func curl_slist_free_all(list: void*)
-        end
-        const _CURLOPT_URL := 10002
-        const _CURLOPT_WRITEDATA := 10001
-        const _CURLOPT_WRITEFUNCTION := 20011
-        const _CURLOPT_POSTFIELDS := 10015
-        const _CURLOPT_HTTPHEADER := 10023
-        const _CURLOPT_CUSTOMREQUEST := 10036
-        const _CURLOPT_USERAGENT := 10018
-        const _CURLOPT_HEADERFUNCTION := 20079
-        const _CURLOPT_HEADERDATA := 10029
-        const _CURLOPT_FOLLOWLOCATION := 52
-    end
 end
 
 mut _g_http_status := 0
 mut _g_http_headers := ""
-if !SALAM_OS_WINDOWS:
-    if !SALAM_NATIVE_TLS:
-        if !SALAM_LINK_CURL:
-            mut _g_tmp_ctr := 0
-        end
-    end
-end
 
 @en "Response"
 @fa "پاسخ"
@@ -320,338 +289,156 @@ if SALAM_OS_WINDOWS:
         ret result
     end
 else:
-    if SALAM_NATIVE_TLS:
-        // Native backend: std/tls for https, a plain socket for http. No
-        // external library and no child process either way.
-        //
-        // Selected by building with -DSALAM_NATIVE_TLS. The libcurl and
-        // curl-binary backends below stay the default, because this one has not
-        // had a security review; see the banner in std/tls/tls.salam.
+    // Native backend: std/tls for https, a plain socket for http. No
+    // external library and no child process either way.
 
-        func _read_all_plain(s: net.Socket): str:
-            mut out := ""
-            mut going := true
-            until going:
-                chunk := net.Recv(s, 16384)
-                if chunk.len() == 0:
+    func _read_all_plain(s: net.Socket): str:
+        mut out := ""
+        mut going := true
+        until going:
+            chunk := net.Recv(s, 16384)
+            if chunk.len() == 0:
+                going = false
+            else:
+                out = out.concat(chunk)
+            end
+        end
+        ret out
+    end
+
+    func _read_all_tls(c &: tls.Conn): str:
+        mut out := ""
+        mut going := true
+        until going:
+            chunk := tls.Read(c, 16384)
+            if chunk.len() == 0:
+                going = false
+            else:
+                out = out.concat(chunk)
+            end
+        end
+        ret out
+    end
+
+    func _hexval(s: str): int:
+        mut v := 0
+        n := s.len()
+        repeat n with i:
+            c := char_code(s.substr(i, 1))
+            mut d := 0 - 1
+            if c >= 48 && c <= 57: d = c - 48 end
+            if c >= 97 && c <= 102: d = c - 87 end
+            if c >= 65 && c <= 70: d = c - 55 end
+            if d < 0:
+                ret v
+            end
+            v = v * 16 + d
+        end
+        ret v
+    end
+
+    // Undo Transfer-Encoding: chunked. The WinHTTP backend hands back a
+    // de-chunked body, so this one must too, or every caller sees framing
+    // bytes mixed into the payload.
+    func _dechunk(body: str): str:
+        mut out := ""
+        mut pos := 0
+        mut going := true
+        until going:
+            nl := str.IndexFrom(body, "\r\n", pos)
+            if nl < 0:
+                going = false
+            else:
+                line := body.substr(pos, nl - pos)
+                semi := line.find(";")
+                mut sizestr := line
+                if semi >= 0:
+                    sizestr = line.substr(0, semi)
+                end
+                sz := _hexval(str.Trim(sizestr))
+                pos = nl + 2
+                if sz <= 0:
                     going = false
                 else:
-                    out = out.concat(chunk)
-                end
-            end
-            ret out
-        end
-
-        func _read_all_tls(c &: tls.Conn): str:
-            mut out := ""
-            mut going := true
-            until going:
-                chunk := tls.Read(c, 16384)
-                if chunk.len() == 0:
-                    going = false
-                else:
-                    out = out.concat(chunk)
-                end
-            end
-            ret out
-        end
-
-        func _hexval(s: str): int:
-            mut v := 0
-            n := s.len()
-            repeat n with i:
-                c := char_code(s.substr(i, 1))
-                mut d := 0 - 1
-                if c >= 48 && c <= 57: d = c - 48 end
-                if c >= 97 && c <= 102: d = c - 87 end
-                if c >= 65 && c <= 70: d = c - 55 end
-                if d < 0:
-                    ret v
-                end
-                v = v * 16 + d
-            end
-            ret v
-        end
-
-        // Undo Transfer-Encoding: chunked. The curl and WinHTTP backends hand
-        // back a de-chunked body, so this one must too, or every caller sees
-        // framing bytes mixed into the payload.
-        func _dechunk(body: str): str:
-            mut out := ""
-            mut pos := 0
-            mut going := true
-            until going:
-                nl := str.IndexFrom(body, "\r\n", pos)
-                if nl < 0:
-                    going = false
-                else:
-                    line := body.substr(pos, nl - pos)
-                    semi := line.find(";")
-                    mut sizestr := line
-                    if semi >= 0:
-                        sizestr = line.substr(0, semi)
-                    end
-                    sz := _hexval(str.Trim(sizestr))
-                    pos = nl + 2
-                    if sz <= 0:
+                    if pos + sz > body.len():
                         going = false
                     else:
-                        if pos + sz > body.len():
-                            going = false
-                        else:
-                            out = out.concat(body.substr(pos, sz))
-                            pos = pos + sz + 2
-                        end
+                        out = out.concat(body.substr(pos, sz))
+                        pos = pos + sz + 2
                     end
                 end
             end
-            ret out
         end
+        ret out
+    end
 
-        func _build_request(method: str, u: net.URL, headers: str, body: str): str:
-            mut path := u.path
-            if path.len() == 0:
-                path = "/"
-            end
-            mut req := method.concat(" ").concat(path).concat(" HTTP/1.1\r\nHost: ").concat(u.host).concat("\r\n")
-            req = req.concat("User-Agent: Salam/1.0\r\nAccept: */*\r\nConnection: close\r\n")
-            if headers.len() > 0:
-                req = req.concat(headers)
-            end
-            if body.len() > 0:
-                req = req.concat("Content-Length: ").concat(str.FromInt(body.len() as i64)).concat("\r\n")
-            end
-            req = req.concat("\r\n")
-            if body.len() > 0:
-                req = req.concat(body)
-            end
-            ret req
+    func _build_request(method: str, u: net.URL, headers: str, body: str): str:
+        mut path := u.path
+        if path.len() == 0:
+            path = "/"
         end
+        mut req := method.concat(" ").concat(path).concat(" HTTP/1.1\r\nHost: ").concat(u.host).concat("\r\n")
+        req = req.concat("User-Agent: Salam/1.0\r\nAccept: */*\r\nConnection: close\r\n")
+        if headers.len() > 0:
+            req = req.concat(headers)
+        end
+        if body.len() > 0:
+            req = req.concat("Content-Length: ").concat(str.FromInt(body.len() as i64)).concat("\r\n")
+        end
+        req = req.concat("\r\n")
+        if body.len() > 0:
+            req = req.concat(body)
+        end
+        ret req
+    end
 
-        func _fetch_https(method: str, url: str, headers: str, body: str): str:
-            u := net.Parse(url)
-            secure := u.scheme != "http"
-            mut port := u.port
-            if port == 0:
-                if secure:
-                    port = 443
-                else:
-                    port = 80
-                end
+    func _fetch_https(method: str, url: str, headers: str, body: str): str:
+        u := net.Parse(url)
+        secure := u.scheme != "http"
+        mut port := u.port
+        if port == 0:
+            if secure:
+                port = 443
+            else:
+                port = 80
             end
-            if u.host.len() == 0:
+        end
+        if u.host.len() == 0:
+            ret ""
+        end
+        req := _build_request(method, u, headers, body)
+
+        mut raw := ""
+        if secure:
+            cfg := tls.NewConfig(u.host)
+            mut c := tls.Dial(u.host, port, cfg)
+            if !tls.ConnOk(c):
+                tls.Close(c)
                 ret ""
             end
-            req := _build_request(method, u, headers, body)
-
-            mut raw := ""
-            if secure:
-                cfg := tls.NewConfig(u.host)
-                mut c := tls.Dial(u.host, port, cfg)
-                if !tls.ConnOk(c):
-                    tls.Close(c)
-                    ret ""
-                end
-                tls.Write(c, req)
-                raw = _read_all_tls(c)
-                tls.Close(c)
-            else:
-                s := net.Connect(u.host, port)
-                if !net.Ok(s):
-                    ret ""
-                end
-                net.Send(s, req)
-                raw = _read_all_plain(s)
-                net.Close(s)
+            tls.Write(c, req)
+            raw = _read_all_tls(c)
+            tls.Close(c)
+        else:
+            s := net.Connect(u.host, port)
+            if !net.Ok(s):
+                ret ""
             end
-
-            sep := raw.find("\r\n\r\n")
-            if sep < 0:
-                ret raw
-            end
-            head := raw.substr(0, sep + 4)
-            rest := raw.substr(sep + 4, raw.len() - sep - 4)
-            if str.Find(str.Lower(head), "transfer-encoding: chunked") >= 0:
-                ret head.concat(_dechunk(rest))
-            end
-            ret head.concat(rest)
-        end
-    else:
-    if SALAM_LINK_CURL:
-        func _cbuf(): void*:
-            ret mem.AllocateZeroed(24 as u64)
+            net.Send(s, req)
+            raw = _read_all_plain(s)
+            net.Close(s)
         end
 
-        func _cbuf_str(b: void*): str:
-            p := b as i64*
-            if p[0] == 0: ret "" end
-            d := p[0] as void*
-            ret d as str
+        sep := raw.find("\r\n\r\n")
+        if sep < 0:
+            ret raw
         end
-
-        func _cbuf_free(b: void*):
-            p := b as i64*
-            if p[0] != 0:
-                mem.Free(p[0] as void*)
-            end
-            mem.Free(b)
+        head := raw.substr(0, sep + 4)
+        rest := raw.substr(sep + 4, raw.len() - sep - 4)
+        if str.Find(str.Lower(head), "transfer-encoding: chunked") >= 0:
+            ret head.concat(_dechunk(rest))
         end
-
-        func _curl_write(ptr: void*, size: u64, nmemb: u64, ud: void*): u64:
-            n := (size * nmemb) as i64
-            mut b := ud as i64*
-            mut len := b[1]
-            mut cap := b[2]
-            if (len + n + 1) > cap:
-                until (len + n + 1) > cap:
-                    if cap == 0: cap = 4096 else:
-                        cap *= 2
-                    end
-                end
-                nd := mem.Reallocate(b[0] as void*, cap as u64)
-                b[0] = nd as i64
-                b[2] = cap
-            end
-            dst := (b[0] + len) as void*
-            mem.Copy(dst, ptr, n as u64)
-            len += n
-            b[1] = len
-            term := (b[0] + len) as void*
-            mem.Set(term, 0, 1 as u64)
-            ret n as u64
-        end
-
-        func _fetch_https(method: str, url: str, headers: str, body: str): str:
-            h := curl_easy_init()
-            if h == null: ret "" end
-            defer curl_easy_cleanup(h)
-            buf := _cbuf()
-            defer _cbuf_free(buf)
-            hbuf := _cbuf()
-            defer _cbuf_free(hbuf)
-            wcb := funcptr(_curl_write)
-            curl_easy_setopt(h, _CURLOPT_URL, url)
-            curl_easy_setopt(h, _CURLOPT_WRITEFUNCTION, wcb)
-            curl_easy_setopt(h, _CURLOPT_WRITEDATA, buf)
-            curl_easy_setopt(h, _CURLOPT_HEADERFUNCTION, wcb)
-            curl_easy_setopt(h, _CURLOPT_HEADERDATA, hbuf)
-            curl_easy_setopt(h, _CURLOPT_FOLLOWLOCATION, 1 as i64)
-            curl_easy_setopt(h, _CURLOPT_USERAGENT, "Salam/1.0")
-            if method != "GET":
-                curl_easy_setopt(h, _CURLOPT_CUSTOMREQUEST, method)
-            end
-            if body.len() > 0:
-                curl_easy_setopt(h, _CURLOPT_POSTFIELDS, body)
-            end
-            mut slist := null as void*
-            if headers.len() > 0:
-                lines := headers.split("\r\n")
-                repeat lines.len() with i:
-                    line := lines.get(i)[0]
-                    if line.len() > 0:
-                        slist = curl_slist_append(slist, line)
-                    end
-                end
-            end
-            if slist != null:
-                curl_easy_setopt(h, _CURLOPT_HTTPHEADER, slist)
-            end
-            curl_easy_perform(h)
-            if slist != null:
-                curl_slist_free_all(slist)
-            end
-            result := _cbuf_str(hbuf).concat(_cbuf_str(buf))
-            ret result
-        end
-    else:
-        func _shq(s: str): str:
-            mut sb := str.NewBuilder()
-            defer str.BufFree(sb)
-            str.BufAppendChar(sb, 39)
-            n := s.len()
-            repeat n with i:
-                ch := s.substr(i, 1)
-                if ch == "'":
-                    str.BufAppend(sb, "'\\''")
-                else:
-                    str.BufAppend(sb, ch)
-                end
-            end
-            str.BufAppendChar(sb, 39)
-            out := str.BufStr(sb)
-            ret out
-        end
-
-        func _cli_tmp_name(suffix: str): str:
-            _g_tmp_ctr += 1
-            ret os.TempDir().concat("/salam_http_").concat(str.FromInt(os.Pid() as i64)).concat("_").concat(str.FromInt(time.NowNanos())).concat("_").concat(str.FromInt(_g_tmp_ctr as i64)).concat(suffix)
-        end
-
-        func _last_header_block(all: str): str:
-            parts := all.split("\r\n\r\n")
-            defer parts.free()
-            mut last_idx := 0 - 1
-            repeat parts.len() with i:
-                if parts.get(i)[0].len() > 0:
-                    last_idx = i
-                end
-            end
-            if last_idx < 0: ret "" end
-            last := parts.get(last_idx)[0]
-            mut extra_cookies := ""
-            repeat parts.len() with i:
-                if i != last_idx:
-                    blk := parts.get(i)[0]
-                    if blk.len() > 0:
-                        blines := blk.split("\r\n")
-                        repeat blines.len() with j:
-                            bline := blines.get(j)[0]
-                            c := bline.find(":")
-                            if c > 0:
-                                if _hdr_lower(bline.substr(0, c)) == "set-cookie":
-                                    extra_cookies = extra_cookies.concat(bline).concat("\r\n")
-                                end
-                            end
-                        end
-                        blines.free()
-                    end
-                end
-            end
-            ret last.concat("\r\n").concat(extra_cookies).concat("\r\n")
-        end
-
-        func _fetch_https(method: str, url: str, headers: str, body: str): str:
-            head_path := _cli_tmp_name(".hdr")
-            out_path := _cli_tmp_name(".out")
-            mut cmd := "curl -s -S -L --max-time 30 -A ".concat(_shq("Salam/1.0")).concat(" -X ").concat(_shq(method)).concat(" ").concat(_shq(url)).concat(" -D ").concat(_shq(head_path)).concat(" -o ").concat(_shq(out_path))
-            if headers.len() > 0:
-                lines := headers.split("\r\n")
-                repeat lines.len() with i:
-                    line := lines.get(i)[0]
-                    if line.len() > 0:
-                        cmd = cmd.concat(" -H ").concat(_shq(line))
-                    end
-                end
-                lines.free()
-            end
-            mut body_path := ""
-            if body.len() > 0:
-                body_path = _cli_tmp_name(".in")
-                io.WriteFile(body_path, body)
-                cmd = cmd.concat(" --data-binary ").concat(_shq("@".concat(body_path)))
-            end
-            cmd = cmd.concat(" >/dev/null 2>&1")
-            os.Run(cmd)
-            all_headers := io.ReadFile(head_path)
-            resp_body := io.ReadFile(out_path)
-            os.Remove(head_path)
-            os.Remove(out_path)
-            if body_path.len() > 0:
-                os.Remove(body_path)
-            end
-            ret _last_header_block(all_headers).concat(resp_body)
-        end
-        end
+        ret head.concat(rest)
     end
 end
 

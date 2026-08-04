@@ -70,7 +70,18 @@ pub struct CallbackQuery:
     pub id: str = ""
     pub from_user: User = User {}
     pub message: Message = Message {}
+    pub has_message: bool = false
     pub data: str = ""
+end
+
+@en "InlineQuery"
+@fa "پرسمان درون خطی"
+@ar "استعلام مضمّن"
+pub struct InlineQuery:
+    pub id: str = ""
+    pub from_user: User = User {}
+    pub query: str = ""
+    pub offset: str = ""
 end
 
 @en "Update"
@@ -80,8 +91,12 @@ pub struct Update:
     pub update_id: i64 = 0
     pub message: Message = Message {}
     pub has_message: bool = false
+    pub channel_post: Message = Message {}
+    pub has_channel_post: bool = false
     pub callback_query: CallbackQuery = CallbackQuery {}
     pub has_callback_query: bool = false
+    pub inline_query: InlineQuery = InlineQuery {}
+    pub has_inline_query: bool = false
 end
 
 @en "ApiResponse"
@@ -112,19 +127,48 @@ pub struct Bot:
 end
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// Internal helpers (must all precede the public API - see the compiler's
+// top-level ordering rule: once a 'pub func' appears, only 'pub func's may
+// follow it in the file)
 // ---------------------------------------------------------------------------
 
 func _new_params(): HashMap<str, str>:
     ret HashMap {} as HashMap<str, str>
 end
 
+func _put_chat_id(params: HashMap<str, str>, chat_id: i64):
+    params.put("chat_id", str.FromInt(chat_id))
+end
+
+func _put_chat_id(params: HashMap<str, str>, chat_id: str):
+    params.put("chat_id", chat_id)
+end
+
+func _msg_params(chat_id: i64, message_id: i64): HashMap<str, str>:
+    mut params := _new_params()
+    _put_chat_id(params, chat_id)
+    params.put("message_id", str.FromInt(message_id))
+    ret params
+end
+
+func _user_params(chat_id: i64, user_id: i64): HashMap<str, str>:
+    mut params := _new_params()
+    _put_chat_id(params, chat_id)
+    params.put("user_id", str.FromInt(user_id))
+    ret params
+end
+
 func _api_url(bot: Bot, method: str): str:
     ret "https://api.telegram.org/bot".concat(bot.token).concat("/").concat(method)
 end
 
+// Every Bot API call is a GET with the payload URL-encoded as a query string
+// (Telegram documents this as a valid transport for every method, alongside
+// POST). _call takes ownership of `params` and frees it once the URL is
+// built - callers never call params.free() themselves.
 func _call(bot: Bot, method: str, params: HashMap<str, str>): ApiResponse:
     url := http.WithQuery(_api_url(bot, method), params)
+    params.free()
     raw := http.Get(url).body
     mut resp := ApiResponse {}
     resp.ok = json.Get(raw, "ok") == "true"
@@ -132,6 +176,14 @@ func _call(bot: Bot, method: str, params: HashMap<str, str>): ApiResponse:
     resp.description = json.Get(raw, "description")
     resp.error_code = conv.ParseInt(json.Get(raw, "error_code"))
     ret resp
+end
+
+func _send_media(bot: Bot, chat_id: i64, method: str, field: str, media: str, caption: str): ApiResponse:
+    mut params := _new_params()
+    _put_chat_id(params, chat_id)
+    params.put(field, media)
+    if caption.len() > 0: params.put("caption", caption) end
+    ret _call(bot, method, params)
 end
 
 // Byte-level scan (mirrors std/json's own technique) to split a top-level
@@ -248,8 +300,25 @@ pub func ParseCallbackQuery(raw: str): CallbackQuery:
     if raw.len() == 0: ret q end
     q.id = json.Get(raw, "id")
     q.from_user = ParseUser(json.Get(raw, "from"))
-    q.message = ParseMessage(json.Get(raw, "message"))
+    msg_raw := json.Get(raw, "message")
+    if msg_raw.len() > 0:
+        q.message = ParseMessage(msg_raw)
+        q.has_message = true
+    end
     q.data = json.Get(raw, "data")
+    ret q
+end
+
+@en "ParseInlineQuery"
+@fa "تجزیه پرسمان درون خطی"
+@ar "تحلیل الاستعلام المضمّن"
+pub func ParseInlineQuery(raw: str): InlineQuery:
+    mut q := InlineQuery {}
+    if raw.len() == 0: ret q end
+    q.id = json.Get(raw, "id")
+    q.from_user = ParseUser(json.Get(raw, "from"))
+    q.query = json.Get(raw, "query")
+    q.offset = json.Get(raw, "offset")
     ret q
 end
 
@@ -265,10 +334,20 @@ pub func ParseUpdate(raw: str): Update:
         u.message = ParseMessage(msg_raw)
         u.has_message = true
     end
+    post_raw := json.Get(raw, "channel_post")
+    if post_raw.len() > 0:
+        u.channel_post = ParseMessage(post_raw)
+        u.has_channel_post = true
+    end
     cq_raw := json.Get(raw, "callback_query")
     if cq_raw.len() > 0:
         u.callback_query = ParseCallbackQuery(cq_raw)
         u.has_callback_query = true
+    end
+    iq_raw := json.Get(raw, "inline_query")
+    if iq_raw.len() > 0:
+        u.inline_query = ParseInlineQuery(iq_raw)
+        u.has_inline_query = true
     end
     ret u
 end
@@ -326,9 +405,7 @@ pub func GetUpdates(bot: Bot, offset: i64, limit: i64, timeout: i64): ApiRespons
     if offset != 0: params.put("offset", str.FromInt(offset)) end
     if limit > 0: params.put("limit", str.FromInt(limit)) end
     if timeout > 0: params.put("timeout", str.FromInt(timeout)) end
-    resp := _call(bot, "getUpdates", params)
-    params.free()
-    ret resp
+    ret _call(bot, "getUpdates", params)
 end
 
 // ---------------------------------------------------------------------------
@@ -340,11 +417,9 @@ end
 @ar "إرسال رسالة"
 pub func SendMessage(bot: Bot, chat_id: i64, text: str): ApiResponse:
     mut params := _new_params()
-    params.put("chat_id", str.FromInt(chat_id))
+    _put_chat_id(params, chat_id)
     params.put("text", text)
-    resp := _call(bot, "sendMessage", params)
-    params.free()
-    ret resp
+    ret _call(bot, "sendMessage", params)
 end
 
 @en "SendMessage"
@@ -352,11 +427,9 @@ end
 @ar "إرسال رسالة"
 pub func SendMessage(bot: Bot, chat_id: str, text: str): ApiResponse:
     mut params := _new_params()
-    params.put("chat_id", chat_id)
+    _put_chat_id(params, chat_id)
     params.put("text", text)
-    resp := _call(bot, "sendMessage", params)
-    params.free()
-    ret resp
+    ret _call(bot, "sendMessage", params)
 end
 
 @en "SendMessageOptions"
@@ -364,41 +437,80 @@ end
 @ar "إرسال رسالة مع خیارات"
 pub func SendMessageOptions(bot: Bot, chat_id: i64, text: str, opts: SendOptions): ApiResponse:
     mut params := _new_params()
-    params.put("chat_id", str.FromInt(chat_id))
+    _put_chat_id(params, chat_id)
     params.put("text", text)
     if opts.parse_mode.len() > 0: params.put("parse_mode", opts.parse_mode) end
     if opts.disable_notification: params.put("disable_notification", "true") end
     if opts.reply_to_message_id > 0: params.put("reply_to_message_id", str.FromInt(opts.reply_to_message_id)) end
     if opts.reply_markup.len() > 0: params.put("reply_markup", opts.reply_markup) end
-    resp := _call(bot, "sendMessage", params)
-    params.free()
-    ret resp
+    ret _call(bot, "sendMessage", params)
 end
 
 @en "SendPhoto"
 @fa "ارسال عکس"
 @ar "إرسال صورة"
 pub func SendPhoto(bot: Bot, chat_id: i64, photo: str, caption: str): ApiResponse:
-    mut params := _new_params()
-    params.put("chat_id", str.FromInt(chat_id))
-    params.put("photo", photo)
-    if caption.len() > 0: params.put("caption", caption) end
-    resp := _call(bot, "sendPhoto", params)
-    params.free()
-    ret resp
+    ret _send_media(bot, chat_id, "sendPhoto", "photo", photo, caption)
 end
 
 @en "SendDocument"
 @fa "ارسال سند"
 @ar "إرسال مستند"
 pub func SendDocument(bot: Bot, chat_id: i64, document: str, caption: str): ApiResponse:
+    ret _send_media(bot, chat_id, "sendDocument", "document", document, caption)
+end
+
+@en "SendVideo"
+@fa "ارسال ویدیو"
+@ar "إرسال فيديو"
+pub func SendVideo(bot: Bot, chat_id: i64, video: str, caption: str): ApiResponse:
+    ret _send_media(bot, chat_id, "sendVideo", "video", video, caption)
+end
+
+@en "SendAudio"
+@fa "ارسال صدا"
+@ar "إرسال صوت"
+pub func SendAudio(bot: Bot, chat_id: i64, audio: str, caption: str): ApiResponse:
+    ret _send_media(bot, chat_id, "sendAudio", "audio", audio, caption)
+end
+
+@en "SendVoice"
+@fa "ارسال پیام صوتی"
+@ar "إرسال رسالة صوتية"
+pub func SendVoice(bot: Bot, chat_id: i64, voice: str, caption: str): ApiResponse:
+    ret _send_media(bot, chat_id, "sendVoice", "voice", voice, caption)
+end
+
+@en "SendSticker"
+@fa "ارسال استیکر"
+@ar "إرسال ملصق"
+pub func SendSticker(bot: Bot, chat_id: i64, sticker: str): ApiResponse:
     mut params := _new_params()
-    params.put("chat_id", str.FromInt(chat_id))
-    params.put("document", document)
-    if caption.len() > 0: params.put("caption", caption) end
-    resp := _call(bot, "sendDocument", params)
-    params.free()
-    ret resp
+    _put_chat_id(params, chat_id)
+    params.put("sticker", sticker)
+    ret _call(bot, "sendSticker", params)
+end
+
+@en "SendLocation"
+@fa "ارسال موقعیت"
+@ar "إرسال الموقع"
+pub func SendLocation(bot: Bot, chat_id: i64, latitude: f64, longitude: f64): ApiResponse:
+    mut params := _new_params()
+    _put_chat_id(params, chat_id)
+    params.put("latitude", conv.FormatFloat(latitude))
+    params.put("longitude", conv.FormatFloat(longitude))
+    ret _call(bot, "sendLocation", params)
+end
+
+@en "SendContact"
+@fa "ارسال مخاطب"
+@ar "إرسال جهة اتصال"
+pub func SendContact(bot: Bot, chat_id: i64, phone_number: str, first_name: str): ApiResponse:
+    mut params := _new_params()
+    _put_chat_id(params, chat_id)
+    params.put("phone_number", phone_number)
+    params.put("first_name", first_name)
+    ret _call(bot, "sendContact", params)
 end
 
 @en "SendChatAction"
@@ -406,49 +518,48 @@ end
 @ar "إرسال إجراء المحادثة"
 pub func SendChatAction(bot: Bot, chat_id: i64, action: str): ApiResponse:
     mut params := _new_params()
-    params.put("chat_id", str.FromInt(chat_id))
+    _put_chat_id(params, chat_id)
     params.put("action", action)
-    resp := _call(bot, "sendChatAction", params)
-    params.free()
-    ret resp
+    ret _call(bot, "sendChatAction", params)
 end
 
 @en "EditMessageText"
 @fa "ویرایش متن پیام"
 @ar "تعديل نص الرسالة"
 pub func EditMessageText(bot: Bot, chat_id: i64, message_id: i64, text: str): ApiResponse:
-    mut params := _new_params()
-    params.put("chat_id", str.FromInt(chat_id))
-    params.put("message_id", str.FromInt(message_id))
+    mut params := _msg_params(chat_id, message_id)
     params.put("text", text)
-    resp := _call(bot, "editMessageText", params)
-    params.free()
-    ret resp
+    ret _call(bot, "editMessageText", params)
 end
 
 @en "DeleteMessage"
 @fa "حذف پیام"
 @ar "حذف رسالة"
 pub func DeleteMessage(bot: Bot, chat_id: i64, message_id: i64): ApiResponse:
-    mut params := _new_params()
-    params.put("chat_id", str.FromInt(chat_id))
-    params.put("message_id", str.FromInt(message_id))
-    resp := _call(bot, "deleteMessage", params)
-    params.free()
-    ret resp
+    ret _call(bot, "deleteMessage", _msg_params(chat_id, message_id))
 end
 
 @en "ForwardMessage"
 @fa "ارسال دوباره پیام"
 @ar "إعادة توجيه رسالة"
 pub func ForwardMessage(bot: Bot, chat_id: i64, from_chat_id: i64, message_id: i64): ApiResponse:
-    mut params := _new_params()
-    params.put("chat_id", str.FromInt(chat_id))
+    mut params := _msg_params(chat_id, message_id)
     params.put("from_chat_id", str.FromInt(from_chat_id))
-    params.put("message_id", str.FromInt(message_id))
-    resp := _call(bot, "forwardMessage", params)
-    params.free()
-    ret resp
+    ret _call(bot, "forwardMessage", params)
+end
+
+@en "PinChatMessage"
+@fa "سنجاق کردن پیام"
+@ar "تثبيت الرسالة"
+pub func PinChatMessage(bot: Bot, chat_id: i64, message_id: i64): ApiResponse:
+    ret _call(bot, "pinChatMessage", _msg_params(chat_id, message_id))
+end
+
+@en "UnpinChatMessage"
+@fa "برداشتن سنجاق پیام"
+@ar "إلغاء تثبيت الرسالة"
+pub func UnpinChatMessage(bot: Bot, chat_id: i64, message_id: i64): ApiResponse:
+    ret _call(bot, "unpinChatMessage", _msg_params(chat_id, message_id))
 end
 
 @en "AnswerCallbackQuery"
@@ -458,9 +569,17 @@ pub func AnswerCallbackQuery(bot: Bot, callback_query_id: str, text: str): ApiRe
     mut params := _new_params()
     params.put("callback_query_id", callback_query_id)
     if text.len() > 0: params.put("text", text) end
-    resp := _call(bot, "answerCallbackQuery", params)
-    params.free()
-    ret resp
+    ret _call(bot, "answerCallbackQuery", params)
+end
+
+@en "AnswerInlineQuery"
+@fa "پاسخ به پرسمان درون خطی"
+@ar "الرد على الاستعلام المضمّن"
+pub func AnswerInlineQuery(bot: Bot, inline_query_id: str, results: str): ApiResponse:
+    mut params := _new_params()
+    params.put("inline_query_id", inline_query_id)
+    params.put("results", results)
+    ret _call(bot, "answerInlineQuery", params)
 end
 
 @en "GetFile"
@@ -469,9 +588,7 @@ end
 pub func GetFile(bot: Bot, file_id: str): ApiResponse:
     mut params := _new_params()
     params.put("file_id", file_id)
-    resp := _call(bot, "getFile", params)
-    params.free()
-    ret resp
+    ret _call(bot, "getFile", params)
 end
 
 @en "FileURL"
@@ -481,15 +598,69 @@ pub func FileURL(bot: Bot, file_path: str): str:
     ret "https://api.telegram.org/file/bot".concat(bot.token).concat("/").concat(file_path)
 end
 
+// ---------------------------------------------------------------------------
+// Chats & members
+// ---------------------------------------------------------------------------
+
+@en "GetChat"
+@fa "دریافت گفتگو"
+@ar "جلب المحادثة"
+pub func GetChat(bot: Bot, chat_id: i64): ApiResponse:
+    params := _new_params()
+    _put_chat_id(params, chat_id)
+    ret _call(bot, "getChat", params)
+end
+
+@en "GetChatMemberCount"
+@fa "تعداد اعضای گفتگو"
+@ar "عدد أعضاء المحادثة"
+pub func GetChatMemberCount(bot: Bot, chat_id: i64): ApiResponse:
+    params := _new_params()
+    _put_chat_id(params, chat_id)
+    ret _call(bot, "getChatMemberCount", params)
+end
+
+@en "GetChatMember"
+@fa "عضو گفتگو"
+@ar "عضو المحادثة"
+pub func GetChatMember(bot: Bot, chat_id: i64, user_id: i64): ApiResponse:
+    ret _call(bot, "getChatMember", _user_params(chat_id, user_id))
+end
+
+@en "LeaveChat"
+@fa "ترک گفتگو"
+@ar "مغادرة المحادثة"
+pub func LeaveChat(bot: Bot, chat_id: i64): ApiResponse:
+    params := _new_params()
+    _put_chat_id(params, chat_id)
+    ret _call(bot, "leaveChat", params)
+end
+
+@en "BanChatMember"
+@fa "مسدود کردن عضو"
+@ar "حظر عضو"
+pub func BanChatMember(bot: Bot, chat_id: i64, user_id: i64): ApiResponse:
+    ret _call(bot, "banChatMember", _user_params(chat_id, user_id))
+end
+
+@en "UnbanChatMember"
+@fa "رفع مسدودیت عضو"
+@ar "إلغاء حظر عضو"
+pub func UnbanChatMember(bot: Bot, chat_id: i64, user_id: i64): ApiResponse:
+    ret _call(bot, "unbanChatMember", _user_params(chat_id, user_id))
+end
+
+// ---------------------------------------------------------------------------
+// Webhooks
+// ---------------------------------------------------------------------------
+
 @en "SetWebhook"
 @fa "تنظیم وب هوک"
 @ar "ضبط ویب هوك"
 pub func SetWebhook(bot: Bot, url: str): ApiResponse:
     mut params := _new_params()
     params.put("url", url)
-    resp := _call(bot, "setWebhook", params)
-    params.free()
-    ret resp
+    ret _call(bot, "setWebhook", params)
 end
 
 @en "DeleteWebhook"
@@ -500,7 +671,32 @@ pub func DeleteWebhook(bot: Bot): ApiResponse:
 end
 
 // ---------------------------------------------------------------------------
-// Inline keyboards (reply_markup builders)
+// Bot command menu
+// ---------------------------------------------------------------------------
+
+@en "BotCommand"
+@fa "دستور بات"
+@ar "أمر البوت"
+pub func BotCommand(command: str, description: str): str:
+    mut members := Vector {} as Vector<str>
+    members.push(json.Member("command", command))
+    members.push(json.Member("description", description))
+    out := json.Object(members)
+    members.free()
+    ret out
+end
+
+@en "SetMyCommands"
+@fa "تنظیم دستورات بات"
+@ar "ضبط أوامر البوت"
+pub func SetMyCommands(bot: Bot, commands: Vector<str>): ApiResponse:
+    mut params := _new_params()
+    params.put("commands", json.Array(commands))
+    ret _call(bot, "setMyCommands", params)
+end
+
+// ---------------------------------------------------------------------------
+// Keyboards (reply_markup builders)
 // ---------------------------------------------------------------------------
 
 @en "InlineButton"
@@ -527,6 +723,13 @@ pub func InlineButtonURL(text: str, url: str): str:
     ret out
 end
 
+@en "KeyboardButton"
+@fa "دکمه صفحه کلید"
+@ar "زر لوحة المفاتيح"
+pub func KeyboardButton(text: str): str:
+    ret json.Str(text)
+end
+
 @en "Row"
 @fa "ردیف"
 @ar "صف"
@@ -538,9 +741,20 @@ end
 @fa "صفحه کلید درون خطی"
 @ar "لوحة مفاتيح مضمّنة"
 pub func InlineKeyboardMarkup(rows: Vector<str>): str:
-    keyboard := json.Array(rows)
     mut members := Vector {} as Vector<str>
-    members.push(json.MemberRaw("inline_keyboard", keyboard))
+    members.push(json.MemberRaw("inline_keyboard", json.Array(rows)))
+    out := json.Object(members)
+    members.free()
+    ret out
+end
+
+@en "ReplyKeyboardMarkup"
+@fa "صفحه کلید پاسخ"
+@ar "لوحة مفاتيح الرد"
+pub func ReplyKeyboardMarkup(rows: Vector<str>): str:
+    mut members := Vector {} as Vector<str>
+    members.push(json.MemberRaw("keyboard", json.Array(rows)))
+    members.push(json.MemberBool("resize_keyboard", true))
     out := json.Object(members)
     members.free()
     ret out
@@ -551,6 +765,13 @@ end
 @ar "إزالة لوحة المفاتیح"
 pub func RemoveKeyboard(): str:
     ret "{\"remove_keyboard\": true}"
+end
+
+@en "ForceReply"
+@fa "پاسخ اجباری"
+@ar "فرض الرد"
+pub func ForceReply(): str:
+    ret "{\"force_reply\": true}"
 end
 
 // ---------------------------------------------------------------------------

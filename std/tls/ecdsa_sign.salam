@@ -1,0 +1,226 @@
+package tls
+
+// ECDSA signing over P-256 and P-384, the counterpart to ecdsa.salam's
+// verify-only code. ecdsa.salam explains why signing was absent there: a
+// biased or repeated per-signature nonce discloses the private key outright
+// (the Sony PS3 root-key leak and Android's 2013 Bitcoin-wallet thefts were
+// both exactly this bug). Two ways to avoid it: a cryptographically secure
+// random nonce, or a deterministic one derived from the message and key so
+// there is nothing left for a weak RNG to get wrong. This uses the latter -
+// RFC 6979 - because it is independently testable (fixed input always gives
+// the fixed, checkable output) in a way "trust the RNG" is not, and it
+// removes this package's own RNG quality from the ECDSA threat model
+// entirely.
+//
+// r and s come out as fixed-width big-endian integers (cv.nb bytes each);
+// _ecdsa_der_encode wraps them in the SEQUENCE{INTEGER, INTEGER} the wire
+// format (and ecdsa.salam's own _ecdsa_split, on the verify side) expects.
+
+// RFC 6979 section 3.2: deterministic k from an HMAC-DRBG seeded with the
+// private key and the message digest. `kind` is used both for the DRBG's
+// HMAC and, by the caller, for the message digest - the conventional
+// pairing (ECDSA-with-SHA-256 drives an HMAC-SHA256 DRBG here).
+func _rfc6979_k(cv: Curve, kind: int, dbytes: void*, h1: void*, h1len: int, kout: void*): bool:
+    hlen := _hash_size(kind)
+    rlen := cv.nb
+
+    // bits2octets(h1): the same leftmost-bits-then-conditional-reduce
+    // construction used to turn a digest into a scalar for verification.
+    z := _ecdsa_digest_scalar(cv, h1, h1len)
+    mut h1oct := _newbuf(rlen)
+    defer _buf_wipe(h1oct)
+    _putzeros(h1oct, rlen)
+    _fe_to_bytes(z, h1oct.p, rlen)
+
+    mut v := _newbuf(hlen)
+    defer _buf_wipe(v)
+    _putzeros(v, hlen)
+    repeat hlen with i:
+        _bufset(v, i, 0x01)
+    end
+
+    mut k := _newbuf(hlen)
+    defer _buf_wipe(k)
+    _putzeros(k, hlen)
+
+    mut scratch := _newbuf(hlen)
+    defer _buf_wipe(scratch)
+    _putzeros(scratch, hlen)
+
+    mut seed := _newbuf(hlen + 1 + 2 * rlen)
+    defer _buf_wipe(seed)
+
+    // K = HMAC_K(V || 0x00 || int2octets(d) || bits2octets(h1)); V = HMAC_K(V)
+    _bufreset(seed)
+    _putraw(seed, v.p, hlen)
+    _put8(seed, 0x00)
+    _putraw(seed, dbytes, rlen)
+    _putraw(seed, h1oct.p, rlen)
+    _hmac(kind, k.p, hlen, seed.p, seed.len, scratch.p)
+    mem.Copy(k.p, scratch.p, hlen as u64)
+    _hmac(kind, k.p, hlen, v.p, hlen, scratch.p)
+    mem.Copy(v.p, scratch.p, hlen as u64)
+
+    // K = HMAC_K(V || 0x01 || int2octets(d) || bits2octets(h1)); V = HMAC_K(V)
+    _bufreset(seed)
+    _putraw(seed, v.p, hlen)
+    _put8(seed, 0x01)
+    _putraw(seed, dbytes, rlen)
+    _putraw(seed, h1oct.p, rlen)
+    _hmac(kind, k.p, hlen, seed.p, seed.len, scratch.p)
+    mem.Copy(k.p, scratch.p, hlen as u64)
+    _hmac(kind, k.p, hlen, v.p, hlen, scratch.p)
+    mem.Copy(v.p, scratch.p, hlen as u64)
+
+    // Candidate loop (RFC 6979 3.2 step h): build T in hlen-byte chunks until
+    // it holds rlen bytes, take the leading rlen as the candidate. Retrying
+    // (candidate is 0 or >= n) is rare for curves this close to a power of
+    // two, but bounded rather than assumed to always succeed on try one.
+    mut t := _newbuf(rlen + hlen)
+    defer _buf_wipe(t)
+    mut tries := 0
+    mut found := false
+    until tries < 256 && !found:
+        _bufreset(t)
+        until t.len < rlen:
+            _hmac(kind, k.p, hlen, v.p, hlen, scratch.p)
+            mem.Copy(v.p, scratch.p, hlen as u64)
+            _putraw(t, v.p, hlen)
+        end
+        cand := _fe_from_bytes(t.p, rlen)
+        if !_fe_is_zero(cand, cv.nl) && _fe_lt(cand, cv.n, cv.nl):
+            _fe_to_bytes(cand, kout, rlen)
+            found = true
+        else:
+            _bufreset(seed)
+            _putraw(seed, v.p, hlen)
+            _put8(seed, 0x00)
+            _hmac(kind, k.p, hlen, seed.p, seed.len, scratch.p)
+            mem.Copy(k.p, scratch.p, hlen as u64)
+            _hmac(kind, k.p, hlen, v.p, hlen, scratch.p)
+            mem.Copy(v.p, scratch.p, hlen as u64)
+            tries += 1
+        end
+    end
+    ret found
+end
+
+// Sign `digest` (already hashed) with ECDSA over `cv`, using the private
+// scalar `dbytes` (big-endian, cv.nb bytes - PrivateKey.ec_scalar's shape).
+// `rout`/`sout` each receive cv.nb raw bytes; wire encoding is a separate
+// step (_ecdsa_der_encode), same split as ecdsa.salam's verify/_ecdsa_split.
+func _ecdsa_sign(cv: Curve, kind: int, dbytes: void*, digest: void*, dlen: int, rout: void*, sout: void*): bool:
+    mut kbuf := _newbuf(cv.nb)
+    defer _buf_wipe(kbuf)
+    _putzeros(kbuf, cv.nb)
+    if !_rfc6979_k(cv, kind, dbytes, digest, dlen, kbuf.p):
+        ret false
+    end
+    kfe := _fe_from_bytes(kbuf.p, cv.nb)
+    if _fe_is_zero(kfe, cv.nl) || !_fe_lt(kfe, cv.n, cv.nl):
+        ret false
+    end
+
+    // R = k*G. Constant-time scalar mul: k is secret, unlike verification's
+    // double-scalar mul where both scalars are public.
+    r := _jac_mul(cv, kfe, _jac_generator(cv))
+    mut xb := _newbuf(cv.nb)
+    defer _buf_free(xb)
+    _putzeros(xb, cv.nb)
+    mut yb := _newbuf(cv.nb)
+    defer _buf_free(yb)
+    _putzeros(yb, cv.nb)
+    if !_jac_to_affine(cv, r, xb.p, yb.p):
+        ret false
+    end
+    mut x1 := _fe_from_bytes(xb.p, cv.nb)
+    mut rn := Fe {}
+    borrow := _fe_sub_raw(rn, x1, _fe_from(cv.n, cv.nl), cv.nl)
+    _fe_cmov(x1, rn, ((borrow ^ (1 as u32)) & (1 as u32)) as int, cv.nl)
+    if _fe_is_zero(x1, cv.nl):
+        ret false
+    end
+
+    z := _ecdsa_digest_scalar(cv, digest, dlen)
+    dfe := _fe_from_bytes(dbytes, cv.nb)
+
+    // s = k^-1 * (z + r*d) mod n
+    mut km := Fe {}
+    _sn_to_mont(cv, km, kfe)
+    mut kinv := Fe {}
+    _sn_inv(cv, kinv, km)
+
+    mut rm := Fe {}
+    _sn_to_mont(cv, rm, x1)
+    mut dm := Fe {}
+    _sn_to_mont(cv, dm, dfe)
+    mut rdm := Fe {}
+    _sn_mul(cv, rdm, rm, dm)
+    mut rd := Fe {}
+    _sn_from_mont(cv, rd, rdm)
+
+    mut zrd := Fe {}
+    _fe_add_mod(zrd, z, rd, cv.n, cv.nl)
+
+    mut zrdm := Fe {}
+    _sn_to_mont(cv, zrdm, zrd)
+    mut sm := Fe {}
+    _sn_mul(cv, sm, kinv, zrdm)
+    mut s := Fe {}
+    _sn_from_mont(cv, s, sm)
+    if _fe_is_zero(s, cv.nl):
+        ret false
+    end
+
+    _fe_to_bytes(x1, rout, cv.nb)
+    _fe_to_bytes(s, sout, cv.nb)
+    ret true
+end
+
+func _ecdsa_p256_sign(dbytes: void*, digest: void*, dlen: int, rout: void*, sout: void*): bool:
+    ret _ecdsa_sign(_curve_p256(), HASH_SHA256, dbytes, digest, dlen, rout, sout)
+end
+
+func _ecdsa_p384_sign(dbytes: void*, digest: void*, dlen: int, rout: void*, sout: void*): bool:
+    ret _ecdsa_sign(_curve_p384(), HASH_SHA384, dbytes, digest, dlen, rout, sout)
+end
+
+// One DER INTEGER from a fixed-width big-endian buffer: strip redundant
+// leading zero bytes (keeping at least one), then prepend a single 0x00 if
+// the remaining top bit is set, so the value reads as positive.
+func _der_put_uint_from_bytes(out &: Buf, p: void*, n: int):
+    mut i := 0
+    until i < n - 1 && _bget(p, i) == 0:
+        i += 1
+    end
+    mut vlen := n - i
+    mut needpad := false
+    if _bget(p, i) >= 0x80:
+        needpad = true
+        vlen += 1
+    end
+    _put8(out, ASN1_INTEGER)
+    _put8(out, vlen)
+    if needpad:
+        _put8(out, 0x00)
+    end
+    _putraw(out, ((p as i64) + (i as i64)) as void*, n - i)
+end
+
+// SEQUENCE { r INTEGER, s INTEGER }, the wire (and DER-signature-value)
+// encoding ecdsa.salam's _ecdsa_split parses on the way in.
+func _ecdsa_der_encode(rbytes: void*, sbytes: void*, width: int, out &: Buf):
+    _bufreset(out)
+    mut body := _newbuf(2 * width + 8)
+    defer _buf_free(body)
+    _der_put_uint_from_bytes(body, rbytes, width)
+    _der_put_uint_from_bytes(body, sbytes, width)
+    _put8(out, ASN1_SEQUENCE)
+    if body.len < 128:
+        _put8(out, body.len)
+    else:
+        _put8(out, 0x81)
+        _put8(out, body.len)
+    end
+    _putbuf(out, body)
+end

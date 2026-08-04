@@ -103,6 +103,53 @@ func _do_key_update(c &: Conn, requested: bool): bool:
     ret c.h.rec.txk.live
 end
 
+// Pull decrypted application data into c.pending, handling post-handshake
+// NewSessionTicket/KeyUpdate messages and alerts along the way. Shared by
+// Read and ReadBytes, which differ only in how they drain c.pending
+// afterward. Returns false on EOF/alert/error (c.err set if it was an error,
+// not a clean close).
+func _fill_pending(c &: Conn): bool:
+    mut frag := _newbuf(REC_MAX_PLAINTEXT)
+    defer _buf_free(frag)
+    mut guard := 0
+    until c.pending.len == 0 && guard < 64:
+        guard += 1
+        mut typ := 0
+        if !_rec_read(c.h.rec, typ, frag):
+            c.open = false
+            if c.h.rec.err.len() > 0:
+                c.err = c.h.rec.err
+            end
+            ret false
+        end
+        if typ == REC_APPLICATION_DATA:
+            _putbuf(c.pending, frag)
+        else if typ == REC_ALERT:
+            c.open = false
+            if _bufat(frag, 1) != ALERT_CLOSE_NOTIFY:
+                c.err = _alert_text(frag)
+            end
+            ret false
+        else if typ == REC_HANDSHAKE:
+            // Post-handshake messages. NewSessionTicket carries no application
+            // data and is genuinely safe to drop, but KeyUpdate rekeys the
+            // connection and MUST be acted on.
+            if frag.len >= 4:
+                if _bufat(frag, 0) == HS_KEY_UPDATE:
+                    req := _bufat(frag, 4) == 1
+                    if !_do_key_update(c, req):
+                        c.open = false
+                        c.err = "key update failed"
+                        ret false
+                    end
+                end
+            end
+            continue
+        end
+    end
+    ret true
+end
+
 @en "NewConfig"
 @fa "پیکربندی جدید"
 @ar "إعداد جدید"
@@ -155,6 +202,57 @@ pub func Dial(host: str, port: int, cfg: Config): Conn:
     ret c
 end
 
+// Load a server identity: a leaf-first certificate chain PEM and the
+// matching private key PEM (PKCS#1/SEC1/PKCS#8, whichever the file uses -
+// see privkey.salam). `ok` is false if either file was missing, empty, or
+// did not parse; WrapServer refuses to run a handshake with a config that
+// failed to load, rather than fail confusingly mid-handshake instead.
+@en "NewServerConfig"
+@fa "پیکربندی کارساز جدید"
+@ar "إعداد الخادم جدید"
+pub func NewServerConfig(cert_file: str, key_file: str): ServerConfig:
+    mut cfg := ServerConfig {}
+    cfg.chain = LoadCertChainFile(cert_file)
+    cfg.key = LoadPrivateKeyFile(key_file)
+    cfg.ok = cfg.chain.count > 0 && cfg.key.ok
+    ret cfg
+end
+
+// Run the server side of a TLS handshake on `fd`, an already-accepted plain
+// TCP socket (e.g. from net.Accept/tcp.Accept). TLS 1.3 only for now - a
+// client that cannot negotiate it is refused with ConnError explaining why,
+// not silently mishandled.
+@en "WrapServer"
+@fa "پوشش کارساز"
+@ar "تغليف الخادم"
+pub func WrapServer(fd: i64, cfg: ServerConfig): Conn:
+    mut c := Conn {}
+    c.pending = _newbuf(REC_MAX_PLAINTEXT)
+    if !cfg.ok:
+        c.err = "server config did not load (bad certificate or key file)"
+        ret c
+    end
+    c.h = Handshake {}
+    c.h.rec = _rec_new(fd)
+    c.h.priv = _newbuf(32)
+    c.h.pub_key = _newbuf(32)
+    c.h.shared = _newbuf(32)
+    c.h.hs_secret = _newbuf(48)
+    c.h.master = _newbuf(48)
+    c.h.c_hs_secret = _newbuf(48)
+    c.h.s_hs_secret = _newbuf(48)
+    c.h.c_ap_secret = _newbuf(48)
+    c.h.s_ap_secret = _newbuf(48)
+    c.h.certs = _newbuf(8192)
+    c.h.cert_off = _newbuf(128)
+    c.h.crand = _newbuf(32)
+    c.h.srand = _newbuf(32)
+    c.h.ecpriv = _newbuf(32)
+    c.h.ecpub = _newbuf(65)
+    _do_server_handshake(c, cfg)
+    ret c
+end
+
 @en "ConnOk"
 @fa "اتصال معتبر"
 @ar "الاتصال صالح"
@@ -173,14 +271,27 @@ end
 @fa "نوشتن"
 @ar "كتابة"
 pub func Write(c &: Conn, data: str): int:
+    ret WriteBytes(c, data as void*, data.len())
+end
+
+// Byte-count variant of Write. str is a NUL-terminated C string under the
+// hood (confirmed: str.len() stops at the first embedded NUL byte), so any
+// caller layering a binary protocol over TLS - WebSocket framing, with its
+// mandatory XOR-masked payloads that can legitimately contain a 0x00 byte
+// anywhere - must go through this, not Write, or bytes past the first NUL
+// silently never get sent.
+@en "WriteBytes"
+@fa "نوشتن بایت"
+@ar "كتابة بایتات"
+pub func WriteBytes(c &: Conn, ptr: void*, n: int): int:
     if !c.open:
         ret 0 - 1
     end
-    if !_rec_write(c.h.rec, REC_APPLICATION_DATA, data as void*, data.len()):
+    if !_rec_write(c.h.rec, REC_APPLICATION_DATA, ptr, n):
         _conn_fail(c, "write failed: " + c.h.rec.err)
         ret 0 - 1
     end
-    ret data.len()
+    ret n
 end
 
 // Read up to `max` bytes of application data. Returns "" at end of stream.
@@ -191,43 +302,8 @@ pub func Read(c &: Conn, max: int): str:
     if !c.open:
         ret ""
     end
-    mut frag := _newbuf(REC_MAX_PLAINTEXT)
-    defer _buf_free(frag)
-    mut guard := 0
-    until c.pending.len == 0 && guard < 64:
-        guard += 1
-        mut typ := 0
-        if !_rec_read(c.h.rec, typ, frag):
-            c.open = false
-            if c.h.rec.err.len() > 0:
-                c.err = c.h.rec.err
-            end
-            ret ""
-        end
-        if typ == REC_APPLICATION_DATA:
-            _putbuf(c.pending, frag)
-        else if typ == REC_ALERT:
-            c.open = false
-            if _bufat(frag, 1) != ALERT_CLOSE_NOTIFY:
-                c.err = _alert_text(frag)
-            end
-            ret ""
-        else if typ == REC_HANDSHAKE:
-            // Post-handshake messages. NewSessionTicket carries no application
-            // data and is genuinely safe to drop, but KeyUpdate rekeys the
-            // connection and MUST be acted on.
-            if frag.len >= 4:
-                if _bufat(frag, 0) == HS_KEY_UPDATE:
-                    req := _bufat(frag, 4) == 1
-                    if !_do_key_update(c, req):
-                        c.open = false
-                        c.err = "key update failed"
-                        ret ""
-                    end
-                end
-            end
-            continue
-        end
+    if !_fill_pending(c):
+        ret ""
     end
     if c.pending.len == 0:
         ret ""
@@ -243,6 +319,36 @@ pub func Read(c &: Conn, max: int): str:
     end
     _bufconsume(c.pending, take)
     ret _bufstr(out)
+end
+
+// Byte-count variant of Read: copies decrypted bytes directly into `buf`
+// (caller-owned, at least `max` bytes) and returns the real count, so a
+// caller expecting embedded NUL bytes (e.g. WebSocket frame payloads) does
+// not lose data the way a str-and-.len() round trip would. Returns 0 at end
+// of stream, same as Read returning "".
+@en "ReadBytes"
+@fa "خواندن بایت"
+@ar "قراءة بایتات"
+pub func ReadBytes(c &: Conn, buf: void*, max: int): int:
+    if !c.open:
+        ret 0
+    end
+    if !_fill_pending(c):
+        ret 0
+    end
+    if c.pending.len == 0:
+        ret 0
+    end
+    mut take := c.pending.len
+    if max > 0 && take > max:
+        take = max
+    end
+    mut dst := buf as i8*
+    repeat take with i:
+        dst[i] = _bufat(c.pending, i) as i8
+    end
+    _bufconsume(c.pending, take)
+    ret take
 end
 
 @en "Close"

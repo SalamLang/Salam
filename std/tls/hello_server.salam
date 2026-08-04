@@ -1,0 +1,170 @@
+package tls
+
+// Server-side hello handling: parse ClientHello, build ServerHello and
+// EncryptedExtensions. The client-side counterparts (_hs_build_client_hello,
+// _hs_parse_server_hello) live in hello.salam; this mirrors that split.
+
+struct ClientHelloInfo:
+    pub crand: Buf = Buf {}
+    pub session_id: Buf = Buf {}
+    pub want_tls13: bool = false
+    // raw u16 cipher suite codes, 2 bytes each in wire order
+    pub suites: Buf = Buf {}
+    pub nsuites: int = 0
+    // the client's key_share, if it offered one this server can use
+    pub kx_group: int = 0
+    pub kx_pub: Buf = Buf {}
+    // raw u16 signature_algorithms codes, 2 bytes each
+    pub sig_algos: Buf = Buf {}
+    pub nsigalgos: int = 0
+    pub server_name: str = ""
+    pub alpn: Buf = Buf {}
+    pub nalpn: int = 0
+    pub ext_ems: bool = false
+    pub ok: bool = false
+end
+
+func _chi_free(i &: ClientHelloInfo):
+    _buf_free(i.crand)
+    _buf_free(i.session_id)
+    _buf_free(i.suites)
+    _buf_free(i.kx_pub)
+    _buf_free(i.sig_algos)
+    _buf_free(i.alpn)
+end
+
+func _chi_suite_at(i: ClientHelloInfo, idx: int): int:
+    ret (_bufat(i.suites, idx * 2) << 8) | _bufat(i.suites, idx * 2 + 1)
+end
+
+func _chi_sigalgo_at(i: ClientHelloInfo, idx: int): int:
+    ret (_bufat(i.sig_algos, idx * 2) << 8) | _bufat(i.sig_algos, idx * 2 + 1)
+end
+
+// Parse a ClientHello body (the bytes after the 4-byte handshake header).
+// Unlike the client's ServerHello parser, this cannot fail the connection on
+// most malformed/unsupported extensions: a real browser sends many this
+// server does not understand, and RFC 8446 requires ignoring unknown ones.
+func _hs_parse_client_hello(msg: Reader): ClientHelloInfo:
+    mut info := ClientHelloInfo {}
+    mut r := msg
+    _rd16(r) // legacy_version, ignored - the real version is negotiated via the extension
+    crand := _rdbytes(r, 32)
+    if r.bad:
+        ret info
+    end
+    info.crand = _newbuf(32)
+    repeat 32 with i:
+        _put8(info.crand, _rdat(crand, i))
+    end
+
+    sid := _rdvec8(r)
+    if r.bad:
+        ret info
+    end
+    info.session_id = _newbuf(sid.len)
+    repeat sid.len with i:
+        _put8(info.session_id, _rdat(sid, i))
+    end
+
+    suitesr := _rdvec16(r)
+    if r.bad || suitesr.len % 2 != 0:
+        ret info
+    end
+    info.nsuites = suitesr.len / 2
+    info.suites = _newbuf(suitesr.len)
+    repeat suitesr.len with i:
+        _put8(info.suites, _rdat(suitesr, i))
+    end
+
+    _rdvec8(r) // legacy_compression_methods, always null in practice
+    if r.bad:
+        ret info
+    end
+
+    mut exts := _rdvec16(r)
+    if r.bad:
+        ret info
+    end
+    until _rdleft(exts) > 0 && !exts.bad:
+        id := _rd16(exts)
+        mut body := _rdvec16(exts)
+        if exts.bad:
+            ret info
+        end
+        if id == EXT_SUPPORTED_VERSIONS:
+            n := _rd8(body)
+            mut has13 := false
+            mut j := 0
+            until j < n / 2:
+                v := _rd16(body)
+                if v == TLS13:
+                    has13 = true
+                end
+                j += 1
+            end
+            info.want_tls13 = has13
+        else if id == EXT_EXTENDED_MASTER_SECRET:
+            info.ext_ems = true
+        else if id == EXT_SERVER_NAME:
+            listlen := _rd16(body)
+            if listlen > 0:
+                nametype := _rd8(body)
+                namelen := _rd16(body)
+                nr := _rdbytes(body, namelen)
+                if !body.bad && nametype == 0:
+                    info.server_name = _rd_to_str(nr)
+                end
+            end
+        else if id == EXT_SIGNATURE_ALGORITHMS:
+            n := _rd16(body)
+            info.nsigalgos = n / 2
+            info.sig_algos = _newbuf(n)
+            repeat n with i:
+                _put8(info.sig_algos, _rd8(body))
+            end
+        else if id == EXT_KEY_SHARE:
+            n := _rd16(body)
+            mut left := n
+            until left > 3 && info.kx_group == 0:
+                g := _rd16(body)
+                plen := _rd16(body)
+                pr := _rdbytes(body, plen)
+                left -= 4 + plen
+                if !body.bad:
+                    if g == GROUP_X25519 && plen == 32:
+                        info.kx_group = g
+                        info.kx_pub = _newbuf(plen)
+                        repeat plen with i:
+                            _put8(info.kx_pub, _rdat(pr, i))
+                        end
+                    else if (g == GROUP_SECP256R1 || g == GROUP_SECP384R1) && plen == (1 + 2 * _group_nb(g)):
+                        info.kx_group = g
+                        info.kx_pub = _newbuf(plen)
+                        repeat plen with i:
+                            _put8(info.kx_pub, _rdat(pr, i))
+                        end
+                    end
+                end
+            end
+        else if id == EXT_ALPN:
+            n := _rd16(body)
+            info.alpn = _newbuf(n)
+            repeat n with i:
+                _put8(info.alpn, _rd8(body))
+            end
+        end
+    end
+    if r.bad:
+        ret info
+    end
+    info.ok = true
+    ret info
+end
+
+func _group_nb(g: int): int:
+    if g == GROUP_SECP384R1:
+        ret 48
+    end
+    ret 32
+end

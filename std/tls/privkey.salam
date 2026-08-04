@@ -1,0 +1,290 @@
+package tls
+
+// Private key parsing: PKCS#1 RSA, SEC1 EC, and the PKCS#8 wrapper around
+// either. Used only for a server's own key (never peer input), so unlike
+// x509.salam this copies fields into owned, wipeable buffers rather than
+// borrowing Readers into the caller's buffer - a private key must be
+// destroyable on its own schedule, not tied to how long some PEM text buffer
+// happens to live.
+//
+// Parsing only. What you do with the result (RSA/ECDSA signing) lives in
+// rsa.salam / ecdsa.salam, next to the verifiers whose format assumptions the
+// signing code must match exactly.
+
+struct PrivateKey:
+    pub pk_alg: int = 0
+    pub rsa_n: Buf = Buf {}
+    pub rsa_e: Buf = Buf {}
+    pub rsa_d: Buf = Buf {}
+    // phi(n) = (p-1)(q-1), kept instead of p/q themselves. Signing blinds its
+    // input with a fresh random r per call (see rsa_sign.salam) and unblinds
+    // via r^(phi-1) mod n - Euler's theorem giving r^-1 mod n from a plain
+    // modexp, with no separate signed-bigint extended-Euclidean routine
+    // needed. p and q are wiped right after this is computed.
+    pub rsa_phi: Buf = Buf {}
+    // big-endian, left-padded to the curve's field width (32 or 48 bytes)
+    pub ec_scalar: Buf = Buf {}
+    pub ok: bool = false
+end
+
+func _der_octetstring(r &: Reader): Reader:
+    t := _der_tag(r, ASN1_OCTETSTRING)
+    if !t.ok:
+        ret _newreader(null, 0)
+    end
+    ret t.body
+end
+
+// RSAPrivateKey ::= SEQUENCE { version, n, e, d, p, q, dP, dQ, qInv, ... }
+// (RFC 8017 appendix A.1.2). dP/dQ/qInv (the CRT speedup factors) are parsed
+// and discarded rather than validated - a malformed factor cannot make the
+// (n, d) modexp this package uses produce a wrong-but-verifiable signature,
+// it can only make signing itself fail, which is an availability problem for
+// the key's own owner, not a forgery. p and q ARE used, once, to compute
+// phi(n); see the PrivateKey.rsa_phi comment.
+func _parse_rsa_pkcs1_body(body: Reader, k &: PrivateKey): bool:
+    mut r := body
+    mut seq := _der_seq(r)
+    if r.bad:
+        ret false
+    end
+    _der_skip(seq) // version
+    n := _der_uint(seq)
+    e := _der_uint(seq)
+    d := _der_uint(seq)
+    p := _der_uint(seq)
+    q := _der_uint(seq)
+    if seq.bad:
+        ret false
+    end
+    if n.len < 128:
+        // under 1024 bits; refuse rather than sign with something forgeable
+        ret false
+    end
+    if e.len == 0 || d.len == 0 || p.len == 0 || q.len == 0:
+        ret false
+    end
+    k.rsa_n = _newbuf(n.len)
+    repeat n.len with i:
+        _put8(k.rsa_n, _rdat(n, i))
+    end
+    k.rsa_e = _newbuf(e.len)
+    repeat e.len with i:
+        _put8(k.rsa_e, _rdat(e, i))
+    end
+    k.rsa_d = _newbuf(d.len)
+    repeat d.len with i:
+        _put8(k.rsa_d, _rdat(d, i))
+    end
+
+    mut pbig := _big_from_bytes(p.p, p.len)
+    defer _big_wipe_free(pbig)
+    mut qbig := _big_from_bytes(q.p, q.len)
+    defer _big_wipe_free(qbig)
+    mut one := _big_new(1)
+    defer _big_free(one)
+    _big_set_u32(one, 1 as u32)
+    mut pm1 := _big_new(pbig.n + 1)
+    defer _big_wipe_free(pm1)
+    mut qm1 := _big_new(qbig.n + 1)
+    defer _big_wipe_free(qm1)
+    if pbig.bad || qbig.bad || one.bad || pm1.bad || qm1.bad:
+        ret false
+    end
+    if !_big_sub(pm1, pbig, one) || !_big_sub(qm1, qbig, one):
+        ret false
+    end
+    mut phi := _big_new(pm1.n + qm1.n)
+    defer _big_wipe_free(phi)
+    if phi.bad:
+        ret false
+    end
+    _big_mul(phi, pm1, qm1)
+    if phi.bad:
+        ret false
+    end
+    philen := _big_bytelen(phi)
+    k.rsa_phi = _newbuf(philen)
+    _putzeros(k.rsa_phi, philen)
+    if !_big_to_bytes(phi, k.rsa_phi.p, philen):
+        ret false
+    end
+
+    k.pk_alg = PK_RSA
+    k.ok = true
+    ret true
+end
+
+// ECPrivateKey ::= SEQUENCE { version, privateKey OCTET STRING,
+//                              parameters [0] OPTIONAL, publicKey [1] OPTIONAL }
+// (RFC 5915). `curve_hint` carries the curve when PKCS#8 already named it in
+// the outer AlgorithmIdentifier; SEC1's own [0] parameters, when present,
+// override it, since they are the more specific source.
+func _parse_ec_sec1_body(body: Reader, curve_hint: int, k &: PrivateKey): bool:
+    mut r := body
+    mut seq := _der_seq(r)
+    if r.bad:
+        ret false
+    end
+    _der_skip(seq) // version
+    priv := _der_octetstring(seq)
+    if seq.bad:
+        ret false
+    end
+    mut alg := curve_hint
+    if _der_is(seq, ASN1_CTX0):
+        pt := _der_tag(seq, ASN1_CTX0)
+        if !pt.ok:
+            ret false
+        end
+        mut pb := pt.body
+        curve_oid := _der_oid(pb)
+        if pb.bad:
+            ret false
+        end
+        if _oid_is(curve_oid, OID_PRIME256V1):
+            alg = PK_EC_P256
+        else if _oid_is(curve_oid, OID_SECP384R1):
+            alg = PK_EC_P384
+        else:
+            ret false
+        end
+    end
+    if alg == PK_UNKNOWN:
+        // No curve named anywhere; fall back to inferring it from the
+        // scalar's width, since P-256 and P-384 scalars never collide there.
+        if priv.len == 32:
+            alg = PK_EC_P256
+        else if priv.len == 48:
+            alg = PK_EC_P384
+        else:
+            ret false
+        end
+    end
+    mut width := 32
+    if alg == PK_EC_P384:
+        width = 48
+    end
+    if priv.len > width || priv.len == 0:
+        ret false
+    end
+    k.ec_scalar = _newbuf(width)
+    _putzeros(k.ec_scalar, width - priv.len)
+    repeat priv.len with i:
+        _put8(k.ec_scalar, _rdat(priv, i))
+    end
+    k.pk_alg = alg
+    k.ok = true
+    ret true
+end
+
+// PrivateKeyInfo ::= SEQUENCE { version, privateKeyAlgorithm AlgorithmIdentifier,
+//                                privateKey OCTET STRING, attributes OPTIONAL }
+// (RFC 5958). The OCTET STRING's contents are themselves a full RSAPrivateKey
+// or ECPrivateKey DER encoding, unwrapped one level.
+func _parse_pkcs8_body(body: Reader, k &: PrivateKey): bool:
+    mut r := body
+    mut seq := _der_seq(r)
+    if r.bad:
+        ret false
+    end
+    _der_skip(seq) // version
+    mut params := _newreader(null, 0)
+    alg_oid := _der_algid(seq, params)
+    if seq.bad:
+        ret false
+    end
+    pkoct := _der_octetstring(seq)
+    if seq.bad:
+        ret false
+    end
+    if _oid_is(alg_oid, OID_RSA_ENCRYPTION):
+        ret _parse_rsa_pkcs1_body(pkoct, k)
+    end
+    if _oid_is(alg_oid, OID_EC_PUBLICKEY):
+        mut pkcs8_curve := 0 // PK_UNKNOWN
+        mut pp := params
+        curve_oid := _der_oid(pp)
+        if !pp.bad:
+            if _oid_is(curve_oid, OID_PRIME256V1):
+                pkcs8_curve = PK_EC_P256
+            else if _oid_is(curve_oid, OID_SECP384R1):
+                pkcs8_curve = PK_EC_P384
+            end
+        end
+        ret _parse_ec_sec1_body(pkoct, pkcs8_curve, k)
+    end
+    ret false
+end
+
+@en "FreePrivateKey"
+@fa "آزادسازی کلید خصوصی"
+@ar "تحریر المفتاح الخاص"
+pub func FreePrivateKey(k &: PrivateKey):
+    _buf_wipe(k.rsa_d)
+    _buf_wipe(k.rsa_phi)
+    _buf_free(k.rsa_n)
+    _buf_free(k.rsa_e)
+    _buf_wipe(k.ec_scalar)
+    k.ok = false
+end
+
+// Parse one PEM-encoded private key. Tries, in order, PKCS#1 RSA
+// ("-----BEGIN RSA PRIVATE KEY-----"), SEC1 EC ("-----BEGIN EC PRIVATE
+// KEY-----"), and PKCS#8 ("-----BEGIN PRIVATE KEY-----"), matching whichever
+// marker the PEM text actually carries; encrypted PKCS#8
+// ("-----BEGIN ENCRYPTED PRIVATE KEY-----") is not supported.
+@en "ParsePrivateKeyPEM"
+@fa "تجزیه کلید خصوصی پم"
+@ar "تحليل المفتاح الخاص"
+pub func ParsePrivateKeyPEM(pem: str): PrivateKey:
+    mut k := PrivateKey {}
+    mut markers: str[3]
+    markers[0] = "RSA PRIVATE KEY"
+    markers[1] = "EC PRIVATE KEY"
+    markers[2] = "PRIVATE KEY"
+    mut mi := 0
+    until mi < 3:
+        begintag := "-----BEGIN " + markers[mi] + "-----"
+        endtag := "-----END " + markers[mi] + "-----"
+        b := pem.find(begintag)
+        if b >= 0:
+            bodystart := b + begintag.len()
+            e := str.IndexFrom(pem, endtag, bodystart)
+            if e >= 0:
+                room := (e - bodystart) / 4 * 3 + 8
+                mut der := _newbuf(room)
+                mut good := false
+                got := encoding.Base64DecodeBytes(pem.substr(bodystart, e - bodystart), der.p, room, good)
+                if good && got > 0:
+                    rd := _newreader(der.p, got)
+                    if mi == 0:
+                        _parse_rsa_pkcs1_body(rd, k)
+                    else if mi == 1:
+                        _parse_ec_sec1_body(rd, PK_UNKNOWN, k)
+                    else:
+                        _parse_pkcs8_body(rd, k)
+                    end
+                end
+                _buf_wipe(der)
+                if k.ok:
+                    ret k
+                end
+            end
+        end
+        mi += 1
+    end
+    ret k
+end
+
+@en "LoadPrivateKeyFile"
+@fa "بارگذاری فایل کلید خصوصی"
+@ar "تحميل ملف المفتاح الخاص"
+pub func LoadPrivateKeyFile(path: str): PrivateKey:
+    if !os.Exists(path):
+        k := PrivateKey {}
+        ret k
+    end
+    pem := io.ReadFile(path)
+    ret ParsePrivateKeyPEM(pem)
+end

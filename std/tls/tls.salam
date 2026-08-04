@@ -31,6 +31,12 @@ package tls
 // AEAD cipher suites only (ChaCha20-Poly1305 and AES-GCM; no CBC suites, so
 // no MAC-then-encrypt padding oracles). Certificates are verified against the
 // system trust store with an embedded fallback.
+//
+// Both roles are supported: Dial() for clients, and NewServerConfig() +
+// WrapServer() for servers (RSA and ECDSA leaf certs, PKCS#1/SEC1/PKCS#8
+// private keys). Server-side signing uses RSA blinding against timing
+// side-channels and RFC 6979 deterministic nonces for ECDSA. See
+// privkey.salam, rsa_sign.salam, ecdsa_sign.salam, serverdriver*.salam.
 
 // TLS 1.0 (0x0301) and 1.1 (0x0302) are deliberately NOT implemented.
 //
@@ -89,6 +95,20 @@ end
 @ar "مخزن جدید"
 pub func NewBuf(cap: int): Buf:
     ret _newbuf(cap)
+end
+
+// A Buf's length only grows through an explicit put/append; NewBuf(n) alone
+// gives n bytes of capacity with length 0 - not n usable bytes. This is for
+// a caller that wants n zeroed, WRITABLE (Buf.p can be handed to a
+// C-level/pointer-taking function) bytes upfront, e.g. as a signature
+// output buffer before SignRSAPKCS1/SignECDSA.
+@en "NewZeroBuf"
+@fa "بافر صفر جدید"
+@ar "مخزن صفري جدید"
+pub func NewZeroBuf(n: int): Buf:
+    mut b := _newbuf(n)
+    _putzeros(b, n)
+    ret b
 end
 
 @en "FreeBuf"
@@ -187,4 +207,114 @@ pub func CertSubjectCN(der: Buf): str:
         ret ""
     end
     ret c.subject_cn
+end
+
+// ---------------------------------------------------------------- signing
+//
+// Exposed for the cross-tool interop check (sign here, verify with OpenSSL,
+// and the reverse) and for anything outside the package needing raw
+// signing without a full handshake - the handshake driver itself will call
+// straight into rsa_sign.salam/ecdsa_sign.salam.
+
+@en "HashDigest"
+@fa "درهم ساز"
+@ar "دالة اختزال"
+pub func HashDigest(sha384: bool, msg: str): Buf:
+    mut kind := 0 // HASH_SHA256
+    mut hlen := 32
+    if sha384:
+        kind = HASH_SHA384
+        hlen = 48
+    end
+    mut d := _newbuf(hlen)
+    _putzeros(d, hlen)
+    _hash_oneshot(kind, msg as void*, msg.len(), d.p)
+    ret d
+end
+
+@en "SignRSAPKCS1"
+@fa "امضای آر اس ای پی کی سی اس یک"
+@ar "توقيع آر إس إيه بي كي سي إس ون"
+pub func SignRSAPKCS1(k: PrivateKey, sha384: bool, digest: Buf, sigout: Buf): bool:
+    mut kind := 0 // HASH_SHA256
+    if sha384:
+        kind = HASH_SHA384
+    end
+    ret _rsa_sign_pkcs1(kind, digest.p, k.rsa_n, k.rsa_e, k.rsa_d, k.rsa_phi, sigout.p)
+end
+
+@en "SignRSAPSS"
+@fa "امضای آر اس ای پی اس اس"
+@ar "توقيع آر إس إيه بي إس إس"
+pub func SignRSAPSS(k: PrivateKey, sha384: bool, digest: Buf, sigout: Buf): bool:
+    mut kind := 0 // HASH_SHA256
+    mut slen := 32
+    if sha384:
+        kind = HASH_SHA384
+        slen = 48
+    end
+    ret _rsa_sign_pss(kind, digest.p, k.rsa_n, k.rsa_e, k.rsa_d, k.rsa_phi, slen, sigout.p)
+end
+
+@en "SignECDSA"
+@fa "امضای بیضوی"
+@ar "توقيع منحني بيضوي"
+pub func SignECDSA(k: PrivateKey, digest: Buf, rout: Buf, sout: Buf): bool:
+    if k.pk_alg == PK_EC_P384:
+        ret _ecdsa_sign(_curve_p384(), HASH_SHA384, k.ec_scalar.p, digest.p, digest.len, rout.p, sout.p)
+    end
+    ret _ecdsa_sign(_curve_p256(), HASH_SHA256, k.ec_scalar.p, digest.p, digest.len, rout.p, sout.p)
+end
+
+@en "ECDSADerEncode"
+@fa "کدگذاری دی ای آر بیضوی"
+@ar "ترميز دي إي آر منحني بيضوي"
+pub func ECDSADerEncode(rbytes: Buf, sbytes: Buf, width: int): Buf:
+    mut out := _newbuf(2 * width + 8)
+    _ecdsa_der_encode(rbytes.p, sbytes.p, width, out)
+    ret out
+end
+
+// Reverse-direction interop check: something else (OpenSSL) signed, this
+// verifies. Takes the PrivateKey only for its public components (n/e, or
+// the EC point derived from the scalar) - the digest and signature are the
+// untrusted-until-verified inputs.
+@en "VerifyRSAPSSWithKey"
+@fa "تایید آر اس ای پی اس اس با کلید"
+@ar "تحقق آر إس إيه بي إس إس بالمفتاح"
+pub func VerifyRSAPSSWithKey(k: PrivateKey, sha384: bool, digest: Buf, sig: Buf): bool:
+    mut kind := 0 // HASH_SHA256
+    mut slen := 32
+    if sha384:
+        kind = 1 // HASH_SHA384
+        slen = 48
+    end
+    ret _rsa_verify_pss(kind, digest.p, k.rsa_n.p, k.rsa_n.len, k.rsa_e.p, k.rsa_e.len, sig.p, sig.len, slen)
+end
+
+@en "VerifyECDSADERWithKey"
+@fa "تایید دی ای آر بیضوی با کلید"
+@ar "تحقق دي إي آر منحني بيضوي بالمفتاح"
+pub func VerifyECDSADERWithKey(k: PrivateKey, digest: Buf, dersig: Buf): bool:
+    mut cv := _curve_p256()
+    if k.pk_alg == PK_EC_P384:
+        cv = _curve_p384()
+    end
+    mut xb := _newbuf(cv.nb)
+    _putzeros(xb, cv.nb)
+    mut yb := _newbuf(cv.nb)
+    _putzeros(yb, cv.nb)
+    if !_ec_base_mul(cv, k.ec_scalar.p, xb.p, yb.p):
+        ret false
+    end
+    mut pubkey := _newbuf(1 + 2 * cv.nb)
+    _put8(pubkey, 0x04)
+    _putbuf(pubkey, xb)
+    _putbuf(pubkey, yb)
+    mut rb := _newbuf(cv.nb)
+    mut sb := _newbuf(cv.nb)
+    if !_ecdsa_split(_readerof(dersig), rb, sb, cv.nb):
+        ret false
+    end
+    ret _ecdsa_verify(cv, digest.p, digest.len, rb.p, sb.p, pubkey.p, pubkey.len)
 end

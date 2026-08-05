@@ -19,6 +19,7 @@ package fs
 
 import mem
 import str
+import conv
 
 extern:
     func fopen(path: str, mode: str): void*
@@ -50,6 +51,19 @@ else:
         func opendir(path: str): void*
         func readdir(d: void*): void*
         func closedir(d: void*): int
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func GetFileAttributesExA(path: str, level: int, data: void*): int
+        func _chmod(path: str, mode: int): int
+    end
+else:
+    extern:
+        func chmod(path: str, mode: int): int
+        func popen(cmd: str, mode: str): void*
+        func pclose(fp: void*): int
     end
 end
 
@@ -201,4 +215,147 @@ else:
             ret arr
         end
     end
+end
+
+func _u32_at(base: void*, off: i64): u32:
+    p := ((base as i64) + off) as u32*
+    ret p[0]
+end
+
+func _filetime_to_unix(low: u32, high: u32): i64:
+    combined := (high as u64) * (4294967296 as u64) + (low as u64)
+    epoch := 116444736000000000 as u64
+    if combined < epoch: ret 0 end
+    ret ((combined - epoch) / (10000000 as u64)) as i64
+end
+
+if SALAM_OS_WINDOWS:
+    func _fs_times(path: str): i64*:
+        buf := mem.AllocateZeroed(40 as u64)
+        out := mem.Allocate(24 as u64) as i64*
+        ok := GetFileAttributesExA(path, 0, buf)
+        if ok == 0:
+            out[0] = 0 - 1
+            out[1] = 0 - 1
+            out[2] = 0 - 1
+            mem.Free(buf)
+            ret out
+        end
+        ctime := _filetime_to_unix(_u32_at(buf, 4), _u32_at(buf, 8))
+        atime := _filetime_to_unix(_u32_at(buf, 12), _u32_at(buf, 16))
+        mtime := _filetime_to_unix(_u32_at(buf, 20), _u32_at(buf, 24))
+        out[0] = mtime
+        out[1] = atime
+        out[2] = ctime
+        mem.Free(buf)
+        ret out
+    end
+else:
+    func _fs_stat_field(path: str, fmt: str): i64:
+        mut cmd := ""
+        if SALAM_OS_MAC:
+            cmd = "stat -f ".concat(fmt).concat(" ").concat(path).concat(" 2>/dev/null")
+        else:
+            cmd = "stat -c ".concat(fmt).concat(" ").concat(path).concat(" 2>/dev/null")
+        end
+        fp := popen(cmd, "r")
+        if fp == null: ret 0 - 1 end
+        buf := mem.Allocate(256 as u64)
+        mut sb := str.NewBuilder()
+        mut c := fgetc(fp)
+        until c != -1 && c != 10:
+            str.BufAppendChar(sb, c)
+            c = fgetc(fp)
+        end
+        mem.Free(buf)
+        line := str.BufStr(sb)
+        str.BufFree(sb)
+        pclose(fp)
+        if line.len() == 0: ret 0 - 1 end
+        ret conv.ParseInt(line)
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    @en "ModTime"
+    @fa "زمان تغییر"
+    @ar "وقت التعدیل"
+    pub func ModTime(path: str): i64:
+        t := _fs_times(path)
+        ret t[0]
+    end
+
+    @en "AccessedTime"
+    @fa "زمان دسترسی"
+    @ar "وقت الوصول"
+    pub func AccessedTime(path: str): i64:
+        t := _fs_times(path)
+        ret t[1]
+    end
+
+    @en "CreatedTime"
+    @fa "زمان ایجاد"
+    @ar "وقت الإنشاء"
+    pub func CreatedTime(path: str): i64:
+        t := _fs_times(path)
+        ret t[2]
+    end
+
+    @en "Chmod"
+    @fa "تغییر مجوز"
+    @ar "تغییر الإذن"
+    pub func Chmod(path: str, mode: int): int:
+        if _chmod(path, mode) == 0: ret 0 end
+        ret 0 - 1
+    end
+
+    @en "Permissions"
+    @fa "مجوزها"
+    @ar "الأذونات"
+    pub func Permissions(path: str): int:
+        buf := mem.AllocateZeroed(40 as u64)
+        ok := GetFileAttributesExA(path, 0, buf)
+        if ok == 0:
+            mem.Free(buf)
+            ret 0 - 1
+        end
+        attrs := _u32_at(buf, 0)
+        mem.Free(buf)
+        if (attrs as int) % 2 == 1: ret 292 end
+        ret 438
+    end
+else:
+    @en "ModTime"
+    @fa "زمان تغییر"
+    @ar "وقت التعدیل"
+    pub func ModTime(path: str): i64: ret _fs_stat_field(path, "%Y") end
+
+    @en "AccessedTime"
+    @fa "زمان دسترسی"
+    @ar "وقت الوصول"
+    pub func AccessedTime(path: str): i64: ret _fs_stat_field(path, "%X") end
+
+    @en "CreatedTime"
+    @fa "زمان ایجاد"
+    @ar "وقت الإنشاء"
+    pub func CreatedTime(path: str): i64:
+        if SALAM_OS_MAC:
+            ret _fs_stat_field(path, "%B")
+        else:
+            ret _fs_stat_field(path, "%W")
+        end
+    end
+
+    @en "Chmod"
+    @fa "تغییر مجوز"
+    @ar "تغییر الإذن"
+    pub func Chmod(path: str, mode: int): int:
+        if chmod(path, mode) == 0: ret 0 end
+        ret 0 - 1
+    end
+
+    @en "Permissions"
+    @fa "مجوزها"
+    @ar "الأذونات"
+    pub func Permissions(path: str): int: ret _fs_stat_field(path, "%a") as int end
 end

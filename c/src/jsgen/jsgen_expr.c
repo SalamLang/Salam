@@ -925,9 +925,10 @@ static const char *jsg_call_ident(jg_t *g, ast_node_t *n, ast_node_t *callee)
         }
         if (fsym && (fsym->kind == SYM_VAR || fsym->kind == SYM_CONST) &&
             !local_known(cg, nm)) {
-            const char *callee = (fsym->decl && fsym->decl->is_extern)
-                                      ? cg_cident(cg, nm)
-                                      : jsg_global_ref(g, fsym->pkgname ? fsym->pkgname : cg->pkg, nm);
+            const char *callee =
+                (fsym->decl && fsym->decl->is_extern)
+                    ? cg_cident(cg, nm)
+                    : jsg_global_ref(g, fsym->pkgname ? fsym->pkgname : cg->pkg, nm);
             return cg_fmt(cg, "%s(%s)", callee, jsg_call_args(g, n, NULL));
         }
         {

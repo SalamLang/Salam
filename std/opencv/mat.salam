@@ -1,0 +1,840 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package opencv
+
+import mem
+import collections
+
+// Mat - a thin, safe handle around one native cv::Mat. `handle` is owned by
+// the shim's heap (via `new cv::Mat(...)`/clone), never by Salam's
+// allocator - always release it with `.free()` (or `defer m.free()`) when
+// done, mirroring sqlite.Database/ssl.Conn. A Mat with `handle == null`
+// represents "no image" (a failed load, a released Mat, or the zero
+// value); `.ok()` / `.empty()` are the two ways to check that.
+//
+// Almost every method below returns a *new* Mat rather than mutating the
+// receiver in place (resize, to_gray, crop, ...) - the exception is the
+// drawing section further down, which mutates on purpose (matching
+// cv::line/cv::rectangle/... semantics) since that is what "draw onto this
+// image" means. Call `.clone()` first if you need to keep the original
+// pristine before drawing on a copy.
+//
+// Channel order: every 3-channel Mat is stored internally as BGR - the
+// same convention cv::imread/cv::VideoCapture use - but every pixel-color-
+// facing part of *this* API (`.at()`, `.set_pixel()`, drawing colors,
+// FromImage/ToImage in interop.salam) speaks plain RGB; the shim converts
+// at the boundary so callers never have to think about it. The one
+// deliberate exception is `.data()`/`.step()`, the raw escape hatch, which
+// hands back the native BGR bytes untouched (see its own doc comment).
+@en "Mat"
+@fa "ماتریس"
+@ar "مصفوفة"
+pub struct Mat:
+    pub handle: void* = null
+
+    @en "ok"
+    @fa "معتبر"
+    @ar "صالح"
+    pub func ok(): bool: ret this.handle != null end
+
+    @en "empty"
+    @fa "خالی"
+    @ar "فارغ"
+    pub func empty(): bool:
+        if this.handle == null: ret true end
+        ret scv_empty(this.handle) != 0
+    end
+
+    @en "width"
+    @fa "عرض"
+    @ar "عرض"
+    pub func width(): int:
+        if this.handle == null: ret 0 end
+        ret scv_width(this.handle)
+    end
+
+    @en "height"
+    @fa "ارتفاع"
+    @ar "ارتفاع"
+    pub func height(): int:
+        if this.handle == null: ret 0 end
+        ret scv_height(this.handle)
+    end
+
+    @en "channels"
+    @fa "کانال‌ها"
+    @ar "قنوات"
+    pub func channels(): int:
+        if this.handle == null: ret 0 end
+        ret scv_channels(this.handle)
+    end
+
+    @en "size"
+    @fa "اندازه"
+    @ar "حجم"
+    pub func size(): Size: ret Size { width = this.width(), height = this.height() } end
+
+    // Deep-copies the underlying pixel buffer into a brand-new Mat. Use this
+    // before drawing on an image you still need untouched elsewhere.
+    @en "clone"
+    @fa "کپی"
+    @ar "استنساخ"
+    pub func clone(): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_clone(this.handle) }
+    end
+
+    // Releases the native buffer. Safe to call once; calling twice or using
+    // the Mat afterwards is undefined the same way a double free/use-after-
+    // free would be for any manually managed resource in Salam - set the
+    // variable aside (or just let it go out of scope) once you've freed it.
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحریر"
+    pub func free():
+        if this.handle != null:
+            scv_free(this.handle)
+        end
+        this.handle = null
+    end
+
+    // Saves to disk; the format is taken from the file extension (.png,
+    // .jpg/.jpeg, .bmp, .tiff, .webp, ...), exactly as cv::imwrite behaves.
+    @en "save"
+    @fa "ذخیره"
+    @ar "حفظ"
+    pub func save(path: str): bool:
+        if this.handle == null: ret false end
+        ret scv_write(path, this.handle) != 0
+    end
+
+    // Raw pointer to the underlying pixel buffer (row-major, `.step()`
+    // bytes per row, `.channels()` interleaved bytes per pixel, in the
+    // Mat's *native* channel order - BGR for 3-channel color Mats, exactly
+    // like cv::Mat::data). Power-user escape hatch for callers who need
+    // OpenCV-level performance; prefer `.at()`/`.set_pixel()` (RGB-ordered,
+    // bounds-checked) for everyday pixel access.
+    @en "data"
+    @fa "داده"
+    @ar "بيانات"
+    pub func data(): void*:
+        if this.handle == null: ret null end
+        ret scv_data(this.handle)
+    end
+
+    @en "step"
+    @fa "گام"
+    @ar "خطوة"
+    pub func step(): int:
+        if this.handle == null: ret 0 end
+        ret scv_step(this.handle)
+    end
+
+    // Total element count (cv::Mat::total()) - width*height for an
+    // ordinary 2D image, but the only meaningful "how big is this" for a
+    // higher-dimensional blob like a DNN's output (see dnn.salam), which
+    // isn't a plain 2D image at all. Pair with `.data()` cast to the
+    // appropriate pointer type (`f32*` for the float32 blobs DNN models
+    // typically produce) to read raw elements.
+    @en "total"
+    @fa "مجموع"
+    @ar "المجموع"
+    pub func total(): int:
+        if this.handle == null: ret 0 end
+        ret scv_mat_total(this.handle)
+    end
+
+    // Reads one pixel as RGB, regardless of the Mat's native channel order
+    // or count (a 1-channel gray Mat reports r == g == b == the gray
+    // value). Out-of-bounds coordinates return black, mirroring
+    // image.GetPixel's "safe default" behavior.
+    @en "at"
+    @fa "در"
+    @ar "عند"
+    pub func at(x: int, y: int): Color:
+        if this.handle == null: ret Color { r = 0, g = 0, b = 0 } end
+        buf := mem.Allocate(12 as u64)
+        defer mem.Free(buf)
+        p := buf as i32*
+        if scv_get_pixel(this.handle, x, y, p) == 0:
+            ret Color { r = 0, g = 0, b = 0 }
+        end
+        ret Color { r = p[0] as int, g = p[1] as int, b = p[2] as int }
+    end
+
+    // Writes one pixel, given as RGB - converted to the Mat's native
+    // channel order internally. No-op past the edges or on a 1-channel Mat
+    // being given a non-gray color (average of r,g,b is used for gray).
+    @en "set_pixel"
+    @fa "تنظیم پیکسل"
+    @ar "عيّن بكسل"
+    pub func set_pixel(x: int, y: int, c: Color):
+        if this.handle == null: ret end
+        scv_set_pixel(this.handle, x, y, c.r, c.g, c.b)
+    end
+
+    // ------------------------------------------------------------- color
+
+    // General color-space conversion; `code` is one of the COLOR_* constants
+    // in opencv.salam. The named helpers below cover the common cases and
+    // account for the internal-BGR storage convention described above them
+    // - prefer those unless you specifically constructed a Mat with a
+    // non-default channel order (e.g. straight off `.data()`) and know
+    // which raw conversion you need.
+    @en "convert_color"
+    @fa "تبدیل رنگ"
+    @ar "تحويل اللون"
+    pub func convert_color(code: int): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_cvt_color(this.handle, code) }
+    end
+
+    // Converts to single-channel grayscale (a no-op clone if already gray).
+    // Every 3-channel Mat in this package is stored internally as BGR (see
+    // the header comment) regardless of how it reads back through `.at()`,
+    // so this always uses the BGR-input conversion - using the RGB-input
+    // one here would silently swap the red/blue weights in the luminance
+    // formula.
+    @en "to_gray"
+    @fa "به خاکستری"
+    @ar "إلى رمادي"
+    pub func to_gray(): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        if this.channels() == 1: ret this.clone() end
+        ret this.convert_color(COLOR_BGR2GRAY)
+    end
+
+    // Converts a single-channel Mat to a 3-channel color Mat, replicating
+    // the gray value across all three channels (a no-op clone if already
+    // multi-channel) - channel order is moot here since gray is achromatic
+    // (R == G == B), so the result reads correctly via `.at()` either way.
+    @en "to_rgb"
+    @fa "به آر‌جی‌بی"
+    @ar "إلى آر جي بي"
+    pub func to_rgb(): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        if this.channels() != 1: ret this.clone() end
+        ret this.convert_color(COLOR_GRAY2BGR)
+    end
+
+    // Converts to the HSV color space (H in [0,179], S/V in [0,255] -
+    // OpenCV's 8-bit HSV convention). The result is *not* a color Mat -
+    // its 3 channels are H, S, V, not R/G/B - so `.at()`/`.set_pixel()`
+    // don't apply to it; use `.data()` or convert back with
+    // `.hsv_to_rgb()`.
+    @en "to_hsv"
+    @fa "به اچ‌اس‌وی"
+    @ar "إلى إتش إس في"
+    pub func to_hsv(): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret this.convert_color(COLOR_BGR2HSV)
+    end
+
+    // Converts an HSV Mat (as produced by to_hsv) back into a normal color
+    // Mat whose pixels read correctly through `.at()`.
+    @en "hsv_to_rgb"
+    @fa "اچ‌اس‌وی به آر‌جی‌بی"
+    @ar "إتش إس في إلى آر جي بي"
+    pub func hsv_to_rgb(): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret this.convert_color(COLOR_HSV2BGR)
+    end
+
+    // ---------------------------------------------------------- transform
+
+    // Resizes to an exact width/height using the given interpolation mode
+    // (one of the INTERP_* constants; INTERP_LINEAR is a good default).
+    @en "resize"
+    @fa "تغییر اندازه"
+    @ar "تغییر الحجم"
+    pub func resize(width: int, height: int, interpolation: int): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_resize(this.handle, width, height, interpolation) }
+    end
+
+    // Resize by scale factor, e.g. resize_scale(0.5, 0.5) for half size.
+    @en "resize_scale"
+    @fa "تغییر اندازه با ضریب"
+    @ar "تغییر الحجم بمعامل"
+    pub func resize_scale(fx: f64, fy: f64): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        w := ((this.width() as f64) * fx) as int
+        h := ((this.height() as f64) * fy) as int
+        ret this.resize(w, h, INTERP_LINEAR)
+    end
+
+    // Extracts the sub-rectangle [x, y, x+w, y+h). Returns an empty Mat if
+    // the rectangle isn't fully inside the source.
+    @en "crop"
+    @fa "برش"
+    @ar "قص"
+    pub func crop(x: int, y: int, w: int, h: int): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_crop(this.handle, x, y, w, h) }
+    end
+
+    // Axis-aligned 90-degree rotation (one of ROTATE_90_CW, ROTATE_180,
+    // ROTATE_90_CCW) - lossless and dimension-swapping, unlike rotate().
+    @en "rotate90"
+    @fa "چرخش نود درجه"
+    @ar "دوران تسعين درجة"
+    pub func rotate90(code: int): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_rotate90(this.handle, code) }
+    end
+
+    // Arbitrary-angle rotation (degrees, counter-clockwise) around the
+    // image center, with optional uniform scaling; canvas size is
+    // unchanged, so corners may be cropped - use rotate90 when you need a
+    // lossless, dimension-swapping 90/180/270 rotation instead.
+    @en "rotate"
+    @fa "چرخش"
+    @ar "دوران"
+    pub func rotate(angle_degrees: f64, scale: f64): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_rotate_angle(this.handle, angle_degrees, scale) }
+    end
+
+    // Flips around the given axis (FLIP_VERTICAL, FLIP_HORIZONTAL or
+    // FLIP_BOTH).
+    @en "flip"
+    @fa "بازتاب"
+    @ar "انعكاس"
+    pub func flip(mode: int): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_flip(this.handle, mode) }
+    end
+
+    @en "flip_horizontal"
+    @fa "بازتاب افقی"
+    @ar "انعكاس أفقي"
+    pub func flip_horizontal(): Mat: ret this.flip(FLIP_HORIZONTAL) end
+
+    @en "flip_vertical"
+    @fa "بازتاب عمودی"
+    @ar "انعكاس عمودي"
+    pub func flip_vertical(): Mat: ret this.flip(FLIP_VERTICAL) end
+
+    // ------------------------------------------------------------ filters
+
+    // Simple box (mean) blur with a ksize x ksize kernel.
+    @en "blur"
+    @fa "تاری"
+    @ar "تمويه"
+    pub func blur(ksize: int): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_blur(this.handle, ksize) }
+    end
+
+    // Gaussian blur with a ksize x ksize kernel; sigma <= 0 lets OpenCV
+    // derive sigma from ksize (its usual default behavior).
+    @en "gaussian_blur"
+    @fa "تاری گاوسی"
+    @ar "تمويه غاوسي"
+    pub func gaussian_blur(ksize: int, sigma: f64): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_gaussian_blur(this.handle, ksize, sigma) }
+    end
+
+    // Median blur - excellent for salt-and-pepper noise, edge-preserving.
+    @en "median_blur"
+    @fa "تاری میانه"
+    @ar "تمويه وسيط"
+    pub func median_blur(ksize: int): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_median_blur(this.handle, ksize) }
+    end
+
+    // Canny edge detection; result is a single-channel Mat of 0/255 edge
+    // pixels. t1/t2 are the low/high hysteresis thresholds.
+    @en "canny"
+    @fa "لبه‌یابی کنی"
+    @ar "كشف حواف كاني"
+    pub func canny(t1: f64, t2: f64): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_canny(this.handle, t1, t2) }
+    end
+
+    // Fixed-level thresholding (one of the THRESH_* kinds).
+    @en "threshold"
+    @fa "آستانه‌گذاری"
+    @ar "عتبة"
+    pub func threshold(thresh: f64, maxval: f64, kind: int): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_threshold(this.handle, thresh, maxval, kind) }
+    end
+
+    // Otsu's method: automatically picks the threshold from the image
+    // histogram. Only meaningful on a single-channel (grayscale) Mat.
+    @en "threshold_otsu"
+    @fa "آستانه اوتسو"
+    @ar "عتبة أوتسو"
+    pub func threshold_otsu(maxval: f64): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_threshold(this.handle, 0.0, maxval, THRESH_OTSU) }
+    end
+
+    // Per-pixel adaptive thresholding (one of ADAPTIVE_MEAN/GAUSSIAN),
+    // useful when lighting varies across the image. block_size must be odd
+    // and > 1; c is subtracted from the computed local threshold.
+    @en "adaptive_threshold"
+    @fa "آستانه تطبیقی"
+    @ar "عتبة تكيفية"
+    pub func adaptive_threshold(maxval: f64, method: int, kind: int, block_size: int, c: f64): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_adaptive_threshold(this.handle, maxval, method, kind, block_size, c) }
+    end
+
+    // 256-bucket intensity histogram of a single-channel (grayscale) Mat.
+    // Convert a color Mat first with `.to_gray()`.
+    @en "histogram_gray"
+    @fa "هیستوگرام خاکستری"
+    @ar "مدرج تكراري رمادي"
+    pub func histogram_gray(): Vector<int>:
+        mut out := Vector {} as Vector<int>
+        if this.handle == null: ret out end
+        buf := mem.AllocateZeroed((256 * 4) as u64)
+        defer mem.Free(buf)
+        p := buf as i32*
+        scv_hist_gray(this.handle, p)
+        mut i := 0
+        until i < 256:
+            out.push(p[i] as int)
+            i += 1
+        end
+        ret out
+    end
+
+    // -------------------------------------------------------------- draw
+    //
+    // These mutate the Mat in place (matching cv::line/cv::rectangle/...
+    // semantics) - clone() first if the original must stay untouched.
+
+    @en "line"
+    @fa "خط"
+    @ar "خط"
+    pub func line(x1: int, y1: int, x2: int, y2: int, color: Color, thickness: int):
+        if this.handle == null: ret end
+        scv_line(this.handle, x1, y1, x2, y2, color.r, color.g, color.b, thickness)
+    end
+
+    // thickness = -1 fills the rectangle instead of just outlining it.
+    @en "rectangle"
+    @fa "مستطیل"
+    @ar "مستطيل"
+    pub func rectangle(x: int, y: int, w: int, h: int, color: Color, thickness: int):
+        if this.handle == null: ret end
+        scv_rectangle(this.handle, x, y, w, h, color.r, color.g, color.b, thickness)
+    end
+
+    // thickness = -1 fills the circle instead of just outlining it.
+    @en "circle"
+    @fa "دایره"
+    @ar "دائرة"
+    pub func circle(cx: int, cy: int, radius: int, color: Color, thickness: int):
+        if this.handle == null: ret end
+        scv_circle(this.handle, cx, cy, radius, color.r, color.g, color.b, thickness)
+    end
+
+    // Draws `text` with its baseline's bottom-left corner at (x, y), using
+    // OpenCV's built-in Hershey font, scaled by font_scale.
+    @en "put_text"
+    @fa "نوشتن متن"
+    @ar "كتابة نص"
+    pub func put_text(text: str, x: int, y: int, font_scale: f64, color: Color, thickness: int):
+        if this.handle == null: ret end
+        scv_put_text(this.handle, text, x, y, font_scale, color.r, color.g, color.b, thickness)
+    end
+
+    // ---------------------------------------------------------- features
+    //
+    // See features.salam for the Keypoint/Keypoints/Match types and
+    // MatchDescriptors().
+
+    // "Good features to track": strong corners via the Shi-Tomasi method.
+    // quality is a fraction (0,1] of the strongest corner's response used
+    // as the acceptance threshold; min_dist is the minimum pixel distance
+    // enforced between returned corners.
+    //
+    // Compiler note: assign the result with an explicit, package-qualified
+    // cast - `pts := img.good_features(...) as Vector<opencv.Point>` -
+    // this codebase's generic-return type inference doesn't reliably
+    // resolve a `Vector<T>` across a package boundary when T is a struct
+    // owned by the callee's package (Point is opencv's, not the caller's).
+    // See the package README's "known limitations" section.
+    @en "good_features"
+    @fa "ویژگی‌های خوب"
+    @ar "ميزات جيدة"
+    pub func good_features(max_corners: int, quality: f64, min_dist: f64): Vector<Point>:
+        mut out := Vector {} as Vector<Point>
+        if this.handle == null || max_corners <= 0: ret out end
+        xbuf := mem.Allocate((max_corners * 4) as u64)
+        ybuf := mem.Allocate((max_corners * 4) as u64)
+        defer mem.Free(xbuf)
+        defer mem.Free(ybuf)
+        xp := xbuf as i32*
+        yp := ybuf as i32*
+        n := scv_good_features(this.handle, max_corners, quality, min_dist, xp, yp)
+        mut i := 0
+        until i < n:
+            out.push(Point { x = xp[i] as int, y = yp[i] as int })
+            i += 1
+        end
+        ret out
+    end
+
+    // Detects ORB keypoints and computes their descriptors in one pass
+    // (mirroring cv::ORB::detectAndCompute). Free the result with
+    // `.free()` when done.
+    @en "detect_orb"
+    @fa "شناسایی اور‌بی"
+    @ar "كشف أوربي"
+    pub func detect_orb(max_features: int): Keypoints:
+        if this.handle == null: ret Keypoints { handle = null } end
+        ret Keypoints { handle = scv_orb_detect(this.handle, max_features) }
+    end
+
+    // Detects SIFT keypoints and computes their (float) descriptors in one
+    // pass. Free (patent-unencumbered) since OpenCV 4.4. SIFT descriptors
+    // need NORM_L2 matching - pass opencv.NORM_L2 to MatchDescriptors(),
+    // not the ORB-oriented default.
+    @en "detect_sift"
+    @fa "شناسایی سیفت"
+    @ar "كشف سيفت"
+    pub func detect_sift(max_features: int): Keypoints:
+        if this.handle == null: ret Keypoints { handle = null } end
+        ret Keypoints { handle = scv_sift_detect(this.handle, max_features) }
+    end
+
+    // -------------------------------------------------------- morphology
+
+    // Erodes bright regions (shrinks foreground / grows background) with a
+    // ksize x ksize structuring element, repeated `iterations` times.
+    @en "erode"
+    @fa "فرسایش"
+    @ar "تآكل"
+    pub func erode(ksize: int, iterations: int): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_erode(this.handle, ksize, iterations) }
+    end
+
+    // Dilates bright regions (grows foreground / shrinks background) with
+    // a ksize x ksize structuring element, repeated `iterations` times.
+    @en "dilate"
+    @fa "اتساع"
+    @ar "تمدد"
+    pub func dilate(ksize: int, iterations: int): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_dilate(this.handle, ksize, iterations) }
+    end
+
+    // General morphological transform (one of MORPH_OPEN/CLOSE/GRADIENT/
+    // TOPHAT/BLACKHAT) - opening/closing are the common "clean up a
+    // threshold mask" ops (erode-then-dilate / dilate-then-erode).
+    @en "morphology"
+    @fa "ریخت‌شناسی"
+    @ar "مورفولوجيا"
+    pub func morphology(op: int, ksize: int): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_morphology(this.handle, op, ksize) }
+    end
+
+    // -------------------------------------------------------- arithmetic
+
+    // Alpha-blends this Mat with `other`: result = this*alpha + other*beta
+    // + gamma (per-pixel, per-channel) - both Mats must be the same size
+    // and channel count. Mirrors cv::addWeighted.
+    @en "blend"
+    @fa "ترکیب"
+    @ar "مزج"
+    pub func blend(other: Mat, alpha: f64, beta: f64, gamma: f64): Mat:
+        if this.handle == null || other.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_add_weighted(this.handle, alpha, other.handle, beta, gamma) }
+    end
+
+    // Per-pixel bitwise AND/OR/XOR against `other` (one of BITWISE_AND/OR/
+    // XOR) - the standard way to apply a binary mask to an image.
+    @en "bitwise"
+    @fa "بیتی"
+    @ar "بتّي"
+    pub func bitwise(other: Mat, op: int): Mat:
+        if this.handle == null || other.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_bitwise(this.handle, other.handle, op) }
+    end
+
+    // Per-pixel bitwise NOT (channel-wise 255-v) - handy for inverting a
+    // mask produced by threshold().
+    @en "bitwise_not"
+    @fa "نقیض بیتی"
+    @ar "نفي بتّي"
+    pub func bitwise_not(): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_bitwise_not(this.handle) }
+    end
+
+    // Per-pixel |this - other| - useful for change/motion detection
+    // between two frames.
+    @en "abs_diff"
+    @fa "تفاضل مطلق"
+    @ar "فرق مطلق"
+    pub func abs_diff(other: Mat): Mat:
+        if this.handle == null || other.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_abs_diff(this.handle, other.handle) }
+    end
+
+    // ------------------------------------------------- perspective / match
+
+    // Warps the quadrilateral `src` (4 points, this Mat's coordinate
+    // space) onto a (out_width x out_height) rectangle - the standard
+    // "flatten a photographed document/whiteboard" transform. `src` must
+    // have exactly 4 points, ordered consistently (e.g. top-left,
+    // top-right, bottom-right, bottom-left); the destination is implicitly
+    // the full output rectangle's 4 corners in that same order.
+    @en "warp_perspective"
+    @fa "تاب دیدگاهی"
+    @ar "تحويل منظوري"
+    pub func warp_perspective(src: Vector<Point>, out_width: int, out_height: int): Mat:
+        if this.handle == null || src.len() != 4: ret Mat { handle = null } end
+        src_buf := mem.Allocate(64 as u64) // 8 x f64
+        dst_buf := mem.Allocate(64 as u64)
+        defer mem.Free(src_buf)
+        defer mem.Free(dst_buf)
+        sp := src_buf as f64*
+        dp := dst_buf as f64*
+        mut i := 0
+        until i < 4:
+            p := src.get(i)[0]
+            sp[i * 2] = p.x as f64
+            sp[i * 2 + 1] = p.y as f64
+            i += 1
+        end
+        dp[0] = 0.0
+        dp[1] = 0.0
+        dp[2] = (out_width - 1) as f64
+        dp[3] = 0.0
+        dp[4] = (out_width - 1) as f64
+        dp[5] = (out_height - 1) as f64
+        dp[6] = 0.0
+        dp[7] = (out_height - 1) as f64
+        ret Mat { handle = scv_warp_perspective_quad(this.handle, sp, dp, out_width, out_height) }
+    end
+
+    // Locates the best match of `template` inside this Mat (normalized
+    // cross-correlation) - returns the top-left corner of the best match
+    // and a 0..1 confidence score. `template` must be no larger than this
+    // Mat in either dimension.
+    @en "find_template"
+    @fa "یافتن الگو"
+    @ar "إيجاد قالب"
+    pub func find_template(template: Mat): TemplateMatch:
+        if this.handle == null || template.handle == null:
+            ret TemplateMatch { found = false }
+        end
+        xbuf := mem.Allocate(4 as u64)
+        ybuf := mem.Allocate(4 as u64)
+        sbuf := mem.Allocate(8 as u64)
+        defer mem.Free(xbuf)
+        defer mem.Free(ybuf)
+        defer mem.Free(sbuf)
+        xp := xbuf as i32*
+        yp := ybuf as i32*
+        sp := sbuf as f64*
+        ok := scv_match_template(this.handle, template.handle, xp, yp, sp)
+        if ok == 0: ret TemplateMatch { found = false } end
+        ret TemplateMatch { found = true, x = xp[0] as int, y = yp[0] as int, score = sp[0] }
+    end
+
+    // --------------------------------------------------------- drawing +
+
+    @en "ellipse"
+    @fa "بیضی"
+    @ar "قطع ناقص"
+    pub func ellipse(cx: int, cy: int, axis_width: int, axis_height: int, angle_degrees: f64, color: Color, thickness: int):
+        if this.handle == null: ret end
+        scv_ellipse(this.handle, cx, cy, axis_width, axis_height, angle_degrees, color.r, color.g, color.b, thickness)
+    end
+
+    // Draws connected line segments through `pts`, in order; `closed`
+    // additionally connects the last point back to the first.
+    @en "polylines"
+    @fa "چندخطی"
+    @ar "خطوط متعددة"
+    pub func polylines(pts: Vector<Point>, closed: bool, color: Color, thickness: int):
+        if this.handle == null || pts.len() < 2: ret end
+        buf := mem.Allocate((pts.len() * 8) as u64)
+        defer mem.Free(buf)
+        p := buf as i32*
+        mut i := 0
+        until i < pts.len():
+            pt := pts.get(i)[0]
+            p[i * 2] = pt.x as i32
+            p[i * 2 + 1] = pt.y as i32
+            i += 1
+        end
+        mut cf := 0
+        if closed: cf = 1 end
+        scv_polylines(this.handle, p, pts.len(), cf, color.r, color.g, color.b, thickness)
+    end
+
+    // Fills the polygon defined by `pts` (implicitly closed).
+    @en "fill_poly"
+    @fa "پر کردن چندضلعی"
+    @ar "تعبئة مضلع"
+    pub func fill_poly(pts: Vector<Point>, color: Color):
+        if this.handle == null || pts.len() < 3: ret end
+        buf := mem.Allocate((pts.len() * 8) as u64)
+        defer mem.Free(buf)
+        p := buf as i32*
+        mut i := 0
+        until i < pts.len():
+            pt := pts.get(i)[0]
+            p[i * 2] = pt.x as i32
+            p[i * 2 + 1] = pt.y as i32
+            i += 1
+        end
+        scv_fill_poly(this.handle, p, pts.len(), color.r, color.g, color.b)
+    end
+
+    // ---------------------------------------------------------- contours
+
+    // Finds the outer contours of white regions in this Mat (which should
+    // be a binary/thresholded single-channel image - see threshold()/
+    // threshold_otsu()/adaptive_threshold()). Free the result with
+    // `.free()` when done - see contours.salam for Contours' accessors.
+    @en "find_contours"
+    @fa "یافتن پیرامون‌ها"
+    @ar "إيجاد الخطوط الكونتورية"
+    pub func find_contours(): Contours:
+        if this.handle == null: ret Contours { handle = null } end
+        ret Contours { handle = scv_find_contours(this.handle) }
+    end
+
+    // Draws contour `idx` from `cs` (a Contours from find_contours()) onto
+    // this Mat - thickness = -1 fills it. Pass idx = -1 to draw all
+    // contours at once.
+    @en "draw_contour"
+    @fa "رسم پیرامون"
+    @ar "رسم كونتور"
+    pub func draw_contour(cs: Contours, idx: int, color: Color, thickness: int):
+        if this.handle == null || cs.handle == null: ret end
+        scv_draw_contour(this.handle, cs.handle, idx, color.r, color.g, color.b, thickness)
+    end
+end
+
+// Result of Mat.find_template().
+@en "TemplateMatch"
+@fa "تطابق الگو"
+@ar "تطابق القالب"
+pub struct TemplateMatch:
+    pub found: bool = false
+    pub x: int = 0
+    pub y: int = 0
+    pub score: f64 = 0.0
+end
+
+@en "Size"
+@fa "اندازه"
+@ar "حجم"
+pub struct Size:
+    pub width: int = 0
+    pub height: int = 0
+end
+
+@en "Point"
+@fa "نقطه"
+@ar "نقطة"
+pub struct Point:
+    pub x: int = 0
+    pub y: int = 0
+end
+
+@en "Rect"
+@fa "مستطیل"
+@ar "مستطيل"
+pub struct Rect:
+    pub x: int = 0
+    pub y: int = 0
+    pub width: int = 0
+    pub height: int = 0
+end
+
+// RGB color, 0-255 per channel - the color type used throughout this
+// package's public API (drawing, pixel access). Matches image.Color's
+// component order (image.Color additionally carries alpha, which OpenCV
+// Mats don't track).
+@en "Color"
+@fa "رنگ"
+@ar "لون"
+pub struct Color:
+    pub r: int = 0
+    pub g: int = 0
+    pub b: int = 0
+end
+
+@en "RGB"
+@fa "آر‌جی‌بی"
+@ar "آر جي بي"
+pub func RGB(r: int, g: int, b: int): Color:
+    ret Color { r = r & 255, g = g & 255, b = b & 255 }
+end
+
+@en "Black" @fa "سیاه" @ar "أسود"
+pub func Black(): Color: ret Color { r = 0, g = 0, b = 0 } end
+@en "White" @fa "سفید" @ar "أبيض"
+pub func White(): Color: ret Color { r = 255, g = 255, b = 255 } end
+@en "Red" @fa "قرمز" @ar "أحمر"
+pub func Red(): Color: ret Color { r = 255, g = 0, b = 0 } end
+@en "Green" @fa "سبز" @ar "أخضر"
+pub func Green(): Color: ret Color { r = 0, g = 255, b = 0 } end
+@en "Blue" @fa "آبی" @ar "أزرق"
+pub func Blue(): Color: ret Color { r = 0, g = 0, b = 255 } end
+
+// ------------------------------------------------------------- lifecycle
+
+// Loads an image from disk (any format OpenCV's codecs support - png/jpg/
+// bmp/tiff/webp/...). Returns a Mat with handle == null on failure; check
+// with `.ok()` and consult LastError() for why.
+@en "Read"
+@fa "خواندن"
+@ar "قراءة"
+pub func Read(path: str): Mat:
+    ret Mat { handle = scv_read(path) }
+end
+
+// Saves `m` to disk; format taken from the file extension. Equivalent to
+// `m.save(path)` - provided as a free function so it reads naturally next
+// to Read() (see the module example in README.md).
+@en "Write"
+@fa "نوشتن"
+@ar "كتابة"
+pub func Write(path: str, m: Mat): bool:
+    ret m.save(path)
+end
+
+// A solid-filled canvas, `channels` in {1, 3} (gray or RGB). Handy as a
+// drawing surface or test fixture.
+@en "NewBlank"
+@fa "بوم خالی"
+@ar "لوحة فارغة"
+pub func NewBlank(width: int, height: int, channels: int, fill: Color): Mat:
+    ret Mat { handle = scv_new_blank(width, height, channels, fill.r, fill.g, fill.b) }
+end
+
+@en "Zeros"
+@fa "صفرها"
+@ar "أصفار"
+pub func Zeros(width: int, height: int, channels: int): Mat:
+    ret NewBlank(width, height, channels, Black())
+end

@@ -1,0 +1,188 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package opencv
+
+import collections
+
+// Deep-learning inference via OpenCV's DNN module (cv::dnn::Net) - runs a
+// pretrained model (ONNX, Caffe, Darknet, TensorFlow) for classification,
+// detection, or any other forward-pass task, entirely on the CPU (or
+// whatever backend/target your OpenCV build was compiled with - this
+// module never picks a backend itself, see native/BUILD.md's GPU/CUDA
+// note).
+//
+// This package deliberately does NOT hardcode any one model architecture's
+// output format - YOLO, SSD, and classification nets all shape their
+// output differently, and that variety is the whole point of "bring your
+// own model". What's provided:
+//   - Net: load a model, preprocess an image into it, run the forward pass.
+//   - The raw output Mat, readable via `.data()`/`.width()`/`.total()` for
+//     architectures you decode yourself (see examples/06_dnn_classification
+//     .salam for the simplest case: a single confidence-per-class vector).
+//   - ParseSSDDetections(): a ready-made parser for OpenCV's own standard
+//     SSD/Faster-R-CNN detection output layout (`N x 7`:
+//     [batchId, classId, confidence, x1, y1, x2, y2], normalized 0..1) -
+//     the format used by most of OpenCV's own model-zoo detection models
+//     (e.g. MobileNet-SSD, Faster R-CNN Caffe/TF exports). YOLO's anchor-
+//     box decoding is architecture-version-specific (v3 vs v4 vs v8 differ)
+//     and is left to you via Forward()'s raw output - see that function's
+//     doc comment for the shape you'll get back.
+
+@en "Net"
+@fa "شبکه"
+@ar "شبكة"
+pub struct Net:
+    pub handle: void* = null
+
+    @en "ok"
+    @fa "معتبر"
+    @ar "صالح"
+    pub func ok(): bool: ret this.handle != null end
+
+    // Preprocesses `image` into the network's input blob and sets it as
+    // the input for the next forward() call (mirrors
+    // cv::dnn::blobFromImage + Net::setInput combined). `scale` divides
+    // every pixel value (typically 1.0/255.0 to normalize 0-255 to 0-1);
+    // `mean` is subtracted per-channel *before* scaling (the model's
+    // training-time normalization - check the model's docs; RGB(0,0,0) if
+    // unspecified); `swap_rb` should be true for models trained on RGB
+    // input (most ONNX/PyTorch exports) and false for BGR-trained ones
+    // (many Caffe models) - if colors look inverted in your results, flip
+    // this; `size` is the model's expected input resolution (e.g. 224x224
+    // for many classifiers, 300x300 for MobileNet-SSD - check the model's
+    // docs, this is not auto-detected).
+    @en "set_input"
+    @fa "تنظیم ورودی"
+    @ar "تعیین المدخل"
+    pub func set_input(image: Mat, scale: f64, mean: Color, swap_rb: bool, size: Size): bool:
+        if this.handle == null || image.handle == null: ret false end
+        mut swap := 0
+        if swap_rb: swap = 1 end
+        ret scv_dnn_set_input(this.handle, image.handle, scale, mean.r as f64, mean.g as f64, mean.b as f64, swap, size.width, size.height) != 0
+    end
+
+    // Runs the forward pass on the network's default (last) output layer
+    // and returns the raw output as a Mat. Shape depends entirely on the
+    // model: a classifier typically yields a 1 x num_classes row (read
+    // with `.data()` cast to `f32*`, one score per class - see
+    // examples/06_dnn_classification.salam); an SSD-style detector yields
+    // 1 x 1 x N x 7 (feed straight into ParseSSDDetections()); other
+    // architectures (YOLO variants, segmentation nets, ...) use their own
+    // layouts documented by the model itself.
+    @en "forward"
+    @fa "پیش‌رو"
+    @ar "أمامي"
+    pub func forward(): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_dnn_forward(this.handle) }
+    end
+
+    // Like forward(), but reads a specific named output layer - needed for
+    // multi-output architectures (e.g. some YOLO/segmentation exports that
+    // expose several output tensors by name; use a model-inspection tool
+    // like Netron to find the layer names).
+    @en "forward_layer"
+    @fa "پیش‌رو لایه"
+    @ar "أمامي طبقة"
+    pub func forward_layer(layer_name: str): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_dnn_forward_named(this.handle, layer_name) }
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحریر"
+    pub func free():
+        if this.handle != null: scv_dnn_free(this.handle) end
+        this.handle = null
+    end
+end
+
+// One parsed detection: class id, confidence (0..1), and bounding box in
+// the *source image's* pixel coordinates (already de-normalized from the
+// network's 0..1 output - see ParseSSDDetections).
+@en "Detection"
+@fa "شناسایی"
+@ar "اكتشاف"
+pub struct Detection:
+    pub class_id: int = 0
+    pub confidence: f64 = 0.0
+    pub x: int = 0
+    pub y: int = 0
+    pub width: int = 0
+    pub height: int = 0
+end
+
+// Loads a model. `config_path` is the architecture file some formats need
+// alongside their weights (Caffe's `.prototxt`, Darknet's `.cfg`) - pass
+// "" for self-contained single-file formats (ONNX, most TensorFlow
+// SavedModel exports). Format is auto-detected from the file extension,
+// mirroring cv::dnn::readNet.
+@en "LoadNet"
+@fa "بارگذاری شبکه"
+@ar "تحميل شبكة"
+pub func LoadNet(model_path: str, config_path: str): Net:
+    ret Net { handle = scv_dnn_load(model_path, config_path) }
+end
+
+// Convenience for the common single-file case (ONNX, etc.) - equivalent
+// to `LoadNet(path, "")`.
+@en "LoadNetSingleFile"
+@fa "بارگذاری شبکه تک‌فایل"
+@ar "تحميل شبكة أحادية الملف"
+pub func LoadNetSingleFile(path: str): Net:
+    ret LoadNet(path, "")
+end
+
+// Parses OpenCV's standard SSD/Faster-R-CNN detection output layout
+// (`N x 7`: [batchId, classId, confidence, x1, y1, x2, y2], all but
+// classId/batchId normalized 0..1) into Detections with pixel-space boxes,
+// keeping only entries at or above `confidence_threshold`. `img_width`/
+// `img_height` are the *original* source image's dimensions (before any
+// resize set_input() applied), used to de-normalize the box coordinates.
+//
+// Compiler note: assign the result with an explicit, package-qualified
+// cast - `ds := opencv.ParseSSDDetections(...) as Vector<opencv.Detection>`
+// - see Mat.good_features()'s doc comment in mat.salam for why.
+@en "ParseSSDDetections"
+@fa "تجزیه شناسایی‌های اس‌اس‌دی"
+@ar "تحليل اكتشافات إس إس دي"
+pub func ParseSSDDetections(output: Mat, img_width: int, img_height: int, confidence_threshold: f64): Vector<Detection>:
+    mut out := Vector {} as Vector<Detection>
+    if output.handle == null: ret out end
+    n := output.total() / 7
+    p := output.data() as f32*
+    mut i := 0
+    until i < n:
+        base := i * 7
+        confidence := p[base + 2] as f64
+        if confidence >= confidence_threshold:
+            x1 := ((p[base + 3] as f64) * (img_width as f64)) as int
+            y1 := ((p[base + 4] as f64) * (img_height as f64)) as int
+            x2 := ((p[base + 5] as f64) * (img_width as f64)) as int
+            y2 := ((p[base + 6] as f64) * (img_height as f64)) as int
+            out.push(Detection {
+                class_id = p[base + 1] as int,
+                confidence = confidence,
+                x = x1,
+                y = y1,
+                width = x2 - x1,
+                height = y2 - y1,
+            })
+        end
+        i += 1
+    end
+    ret out
+end

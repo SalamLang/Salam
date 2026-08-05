@@ -1,0 +1,334 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "opencv"
+@fa "اپن‌سی‌وی"
+@ar "أوبن سي في"
+package opencv
+
+import mem
+import str
+
+// opencv - a high-level, Salam-idiomatic computer-vision package backed by
+// OpenCV 4.x. OpenCV's public API is C++ (no stable C ABI), so this package
+// talks to a small native shim - native/opencv_shim.cpp, built separately
+// and linked as one ordinary library - which exposes a flat, versioned
+// extern "C" surface (the `scv_*` functions below). See native/BUILD.md for
+// how to build and link the shim on Linux/macOS/Windows, and README.md for
+// the architecture and memory-ownership model.
+//
+// Design rules (see also SKILL.md and the package README):
+//   - Raw OpenCV types/enums are never exposed. All modes/codes are `pub
+//     const` ints owned by this package (COLOR_*, THRESH_*, ...), decoupled
+//     from cv::*'s own numeric values, so an OpenCV upgrade can never
+//     silently change behavior here - only native/opencv_shim.cpp's switch
+//     statements need to track OpenCV's enums.
+//   - Every pixel-color-facing function in this package (drawing, GetPixel/
+//     SetPixel, FromImage/ToImage) speaks RGB order, matching std/image and
+//     ordinary user expectations. OpenCV's own BGR-by-default convention is
+//     an implementation detail hidden inside the shim.
+//   - No exceptions (SKILL.md rule 6): every fallible call returns a Mat
+//     with handle == null (check with `.ok()`) or a false/empty result;
+//     LastError() holds the most recent shim-side error message.
+//   - Mat owns native heap memory (a cv::Mat on the shim side) and must be
+//     released with `.free()` when done - mirrors sqlite.Database/ssl.Conn
+//     and image.Image's own Free(img) idiom. Prefer `defer m.free()`.
+//
+// Package layout:
+//   opencv.salam     - this file: linking, extern ABI, shared constants, errors
+//   mat.salam        - Mat: lifecycle (Read/Write/New/Clone/Free), pixel access
+//   color.salam      - color-space conversions (to_gray/to_rgb/to_hsv/...)
+//   transform.salam  - resize/crop/rotate/flip
+//   filters.salam    - blur/gaussian_blur/median_blur/canny/threshold/histogram
+//   draw.salam       - line/rectangle/circle/put_text
+//   features.salam   - corner detection, ORB keypoints/descriptors, matching
+//   objdetect.salam  - Haar cascade object detection
+//   video.salam      - VideoCapture (file/camera) and VideoWriter
+//   gui.salam        - imshow/wait_key/destroy_window (highgui, optional)
+//   interop.salam    - bridges to/from std/image.Image
+
+// The native shim library. Ships as a normal shared library (see
+// native/CMakeLists.txt); rename/repackage as needed for your platform's
+// packaging, this is just the default `-l` name the linker looks for.
+//
+// Skipped when built with -DSALAM_OPENCV_MOCK (used only by
+// tests/en/opencv/*.salam, which link the dependency-free
+// native/mock/opencv_mock.c stand-in instead via _linkmock.salam) -
+// mirrors std/db/mysql's own `if !SALAM_DB_MOCK:` pattern exactly.
+if !SALAM_OPENCV_MOCK:
+    link dynamic "salam_opencv_shim"
+
+    if SALAM_OS_LINUX:
+        link dynamic "dl"
+        link dynamic "pthread"
+    end
+end
+
+extern:
+    // -- diagnostics -----------------------------------------------------
+    func scv_last_error(): str
+    func scv_version(): str
+
+    // -- lifecycle / io ----------------------------------------------------
+    func scv_read(path: str): void*
+    func scv_write(path: str, mat: void*): int
+    func scv_free(mat: void*)
+    func scv_clone(mat: void*): void*
+    func scv_new_blank(width: int, height: int, channels: int, r: int, g: int, b: int): void*
+    func scv_from_buffer(data: void*, width: int, height: int, channels: int): void*
+
+    // -- introspection -----------------------------------------------------
+    func scv_width(mat: void*): int
+    func scv_height(mat: void*): int
+    func scv_channels(mat: void*): int
+    func scv_empty(mat: void*): int
+    func scv_data(mat: void*): void*
+    func scv_step(mat: void*): int
+    func scv_mat_total(mat: void*): int
+    func scv_get_pixel(mat: void*, x: int, y: int, out_rgb: i32*): int
+    func scv_set_pixel(mat: void*, x: int, y: int, r: int, g: int, b: int): int
+
+    // -- color space ---------------------------------------------------
+    func scv_cvt_color(mat: void*, code: int): void*
+
+    // -- geometry --------------------------------------------------------
+    func scv_resize(mat: void*, width: int, height: int, interpolation: int): void*
+    func scv_crop(mat: void*, x: int, y: int, w: int, h: int): void*
+    func scv_rotate90(mat: void*, code: int): void*
+    func scv_rotate_angle(mat: void*, angle_deg: f64, scale: f64): void*
+    func scv_flip(mat: void*, mode: int): void*
+
+    // -- filters -------------------------------------------------------
+    func scv_blur(mat: void*, ksize: int): void*
+    func scv_gaussian_blur(mat: void*, ksize: int, sigma: f64): void*
+    func scv_median_blur(mat: void*, ksize: int): void*
+    func scv_canny(mat: void*, t1: f64, t2: f64): void*
+    func scv_threshold(mat: void*, thresh: f64, maxval: f64, kind: int): void*
+    func scv_adaptive_threshold(mat: void*, maxval: f64, method: int, kind: int, block_size: int, c: f64): void*
+    func scv_hist_gray(mat: void*, out_counts: i32*): int
+
+    // -- drawing (mutate the Mat in place) ------------------------------
+    func scv_line(mat: void*, x1: int, y1: int, x2: int, y2: int, r: int, g: int, b: int, thickness: int): int
+    func scv_rectangle(mat: void*, x: int, y: int, w: int, h: int, r: int, g: int, b: int, thickness: int): int
+    func scv_circle(mat: void*, cx: int, cy: int, radius: int, r: int, g: int, b: int, thickness: int): int
+    func scv_ellipse(mat: void*, cx: int, cy: int, axis_w: int, axis_h: int, angle: f64, r: int, g: int, b: int, thickness: int): int
+    func scv_polylines(mat: void*, pts_xy: i32*, count: int, closed: int, r: int, g: int, b: int, thickness: int): int
+    func scv_fill_poly(mat: void*, pts_xy: i32*, count: int, r: int, g: int, b: int): int
+    func scv_put_text(mat: void*, text: str, x: int, y: int, font_scale: f64, r: int, g: int, b: int, thickness: int): int
+
+    // -- morphology ------------------------------------------------------
+    func scv_erode(mat: void*, ksize: int, iterations: int): void*
+    func scv_dilate(mat: void*, ksize: int, iterations: int): void*
+    func scv_morphology(mat: void*, op: int, ksize: int): void*
+
+    // -- arithmetic / blending -------------------------------------------
+    func scv_add_weighted(mat1: void*, alpha: f64, mat2: void*, beta: f64, gamma: f64): void*
+    func scv_bitwise(mat1: void*, mat2: void*, op: int): void*
+    func scv_bitwise_not(mat: void*): void*
+    func scv_abs_diff(mat1: void*, mat2: void*): void*
+
+    // -- perspective / template matching ----------------------------------
+    func scv_warp_perspective_quad(mat: void*, src_xy: f64*, dst_xy: f64*, out_width: int, out_height: int): void*
+    func scv_match_template(mat: void*, tmpl: void*, out_x: i32*, out_y: i32*, out_score: f64*): int
+
+    // -- contours ----------------------------------------------------------
+    func scv_find_contours(mat: void*): void*
+    func scv_contour_count(cs: void*): int
+    func scv_contour_point_count(cs: void*, idx: int): int
+    func scv_contour_point_get(cs: void*, idx: int, pt_idx: int, out_xy: i32*): int
+    func scv_contour_area(cs: void*, idx: int): f64
+    func scv_contour_bounding_rect(cs: void*, idx: int, out_xywh: i32*): int
+    func scv_draw_contour(mat: void*, cs: void*, idx: int, r: int, g: int, b: int, thickness: int): int
+    func scv_free_contours(cs: void*)
+
+    // -- features --------------------------------------------------------
+    func scv_good_features(mat: void*, max_corners: int, quality: f64, min_dist: f64, out_x: i32*, out_y: i32*): int
+    func scv_orb_detect(mat: void*, max_features: int): void*
+    func scv_sift_detect(mat: void*, max_features: int): void*
+    func scv_keypoint_count(kp: void*): int
+    func scv_keypoint_get(kp: void*, idx: int, out_xy: f64*): int
+    func scv_orb_descriptors(kp: void*): void*
+    func scv_free_keypoints(kp: void*)
+    func scv_bf_match(desc1: void*, desc2: void*, max_matches: int, norm: int): void*
+    func scv_match_count(m: void*): int
+    func scv_match_get(m: void*, idx: int, out_query: i32*, out_train: i32*, out_dist: f64*): int
+    func scv_free_matches(m: void*)
+
+    // -- dnn -----------------------------------------------------------
+    func scv_dnn_load(model_path: str, config_path: str): void*
+    func scv_dnn_free(net: void*)
+    func scv_dnn_set_input(net: void*, mat: void*, scale: f64, mean_r: f64, mean_g: f64, mean_b: f64, swap_rb: int, width: int, height: int): int
+    func scv_dnn_forward(net: void*): void*
+    func scv_dnn_forward_named(net: void*, layer_name: str): void*
+
+    // -- object detection ------------------------------------------------
+    func scv_cascade_load(path: str): void*
+    func scv_cascade_free(c: void*)
+    func scv_cascade_detect(c: void*, mat: void*, scale_factor: f64, min_neighbors: int, max_results: int, out_x: i32*, out_y: i32*, out_w: i32*, out_h: i32*): int
+
+    // -- video ------------------------------------------------------------
+    func scv_video_open_file(path: str): void*
+    func scv_video_open_camera(index: int): void*
+    func scv_video_read(v: void*): void*
+    func scv_video_release(v: void*)
+    func scv_video_ok(v: void*): int
+    func scv_video_fps(v: void*): f64
+    func scv_video_frame_count(v: void*): int
+    func scv_writer_open(path: str, fourcc: str, fps: f64, width: int, height: int): void*
+    func scv_writer_write(w: void*, frame: void*): int
+    func scv_writer_release(w: void*)
+
+    // -- gui (highgui, optional module) -----------------------------------
+    func scv_imshow(window: str, mat: void*)
+    func scv_wait_key(delay_ms: int): int
+    func scv_destroy_window(window: str)
+    func scv_destroy_all_windows()
+    func scv_create_trackbar(name: str, window: str, initial: int, max: int): int
+    func scv_get_trackbar_pos(name: str, window: str): int
+    func scv_set_trackbar_pos(name: str, window: str, pos: int)
+end
+
+// ------------------------------------------------------------- constants
+
+// Color-space conversion codes for CvtColor / the To*() convenience methods.
+// Deliberately our own numbering (see the header comment above) - mapped to
+// cv::COLOR_* inside native/opencv_shim.cpp.
+@en "ColorBgr2Gray" @fa "بی‌جی‌آر به خاکستری" @ar "بي جي آر إلى رمادي"
+pub const COLOR_BGR2GRAY := 0
+@en "ColorGray2Bgr" @fa "خاکستری به بی‌جی‌آر" @ar "رمادي إلى بي جي آر"
+pub const COLOR_GRAY2BGR := 1
+@en "ColorRgb2Gray" @fa "آر‌جی‌بی به خاکستری" @ar "آر جي بي إلى رمادي"
+pub const COLOR_RGB2GRAY := 2
+@en "ColorGray2Rgb" @fa "خاکستری به آر‌جی‌بی" @ar "رمادي إلى آر جي بي"
+pub const COLOR_GRAY2RGB := 3
+@en "ColorBgr2Rgb" @fa "بی‌جی‌آر به آر‌جی‌بی" @ar "بي جي آر إلى آر جي بي"
+pub const COLOR_BGR2RGB := 4
+@en "ColorRgb2Bgr" @fa "آر‌جی‌بی به بی‌جی‌آر" @ar "آر جي بي إلى بي جي آر"
+pub const COLOR_RGB2BGR := 5
+@en "ColorBgr2Hsv" @fa "بی‌جی‌آر به اچ‌اس‌وی" @ar "بي جي آر إلى إتش إس في"
+pub const COLOR_BGR2HSV := 6
+@en "ColorHsv2Bgr" @fa "اچ‌اس‌وی به بی‌جی‌آر" @ar "إتش إس في إلى بي جي آر"
+pub const COLOR_HSV2BGR := 7
+@en "ColorRgb2Hsv" @fa "آر‌جی‌بی به اچ‌اس‌وی" @ar "آر جي بي إلى إتش إس في"
+pub const COLOR_RGB2HSV := 8
+@en "ColorHsv2Rgb" @fa "اچ‌اس‌وی به آر‌جی‌بی" @ar "إتش إس في إلى آر جي بي"
+pub const COLOR_HSV2RGB := 9
+
+// Thresholding kinds for Threshold().
+@en "ThreshBinary" @fa "آستانه دودویی" @ar "عتبة ثنائية"
+pub const THRESH_BINARY := 0
+@en "ThreshBinaryInv" @fa "آستانه دودویی معکوس" @ar "عتبة ثنائية معكوسة"
+pub const THRESH_BINARY_INV := 1
+@en "ThreshTrunc" @fa "آستانه برش" @ar "عتبة قطع"
+pub const THRESH_TRUNC := 2
+@en "ThreshToZero" @fa "آستانه به صفر" @ar "عتبة إلى صفر"
+pub const THRESH_TOZERO := 3
+@en "ThreshToZeroInv" @fa "آستانه به صفر معکوس" @ar "عتبة إلى صفر معكوسة"
+pub const THRESH_TOZERO_INV := 4
+@en "ThreshOtsu" @fa "آستانه اوتسو" @ar "عتبة أوتسو"
+pub const THRESH_OTSU := 5
+
+// Adaptive-threshold methods for AdaptiveThreshold().
+@en "AdaptiveMean" @fa "میانگین تطبیقی" @ar "متوسط تكيفي"
+pub const ADAPTIVE_MEAN := 0
+@en "AdaptiveGaussian" @fa "گاوسی تطبیقی" @ar "غاوسي تكيفي"
+pub const ADAPTIVE_GAUSSIAN := 1
+
+// Interpolation modes for Resize().
+@en "InterpNearest" @fa "نزدیک‌ترین" @ar "أقرب جار"
+pub const INTERP_NEAREST := 0
+@en "InterpLinear" @fa "خطی" @ar "خطي"
+pub const INTERP_LINEAR := 1
+@en "InterpCubic" @fa "مکعبی" @ar "تكعيبي"
+pub const INTERP_CUBIC := 2
+@en "InterpArea" @fa "مساحتی" @ar "مساحي"
+pub const INTERP_AREA := 3
+@en "InterpLanczos4" @fa "لانچوس چهار" @ar "لانكزوس أربعة"
+pub const INTERP_LANCZOS4 := 4
+
+// 90-degree rotation codes for Rotate90().
+@en "Rotate90Cw" @fa "چرخش نود درجه ساعتگرد" @ar "دوران تسعين درجة مع عقارب الساعة"
+pub const ROTATE_90_CW := 0
+@en "Rotate180" @fa "چرخش صد‌و‌هشتاد درجه" @ar "دوران مئة وثمانين درجة"
+pub const ROTATE_180 := 1
+@en "Rotate90Ccw" @fa "چرخش نود درجه پادساعتگرد" @ar "دوران تسعين درجة عكس عقارب الساعة"
+pub const ROTATE_90_CCW := 2
+
+// Flip modes for Flip().
+@en "FlipVertical" @fa "بازتاب عمودی" @ar "انعكاس عمودي"
+pub const FLIP_VERTICAL := 0
+@en "FlipHorizontal" @fa "بازتاب افقی" @ar "انعكاس أفقي"
+pub const FLIP_HORIZONTAL := 1
+@en "FlipBoth" @fa "بازتاب هر دو" @ar "انعكاس كلاهما"
+pub const FLIP_BOTH := 2
+
+// Morphological operations for Mat.morphology() (erode()/dilate() are
+// their own dedicated methods, not routed through these codes).
+@en "MorphOpen" @fa "باز کردن ریختی" @ar "فتح مورفولوجي"
+pub const MORPH_OPEN := 0
+@en "MorphClose" @fa "بستن ریختی" @ar "إغلاق مورفولوجي"
+pub const MORPH_CLOSE := 1
+@en "MorphGradient" @fa "گرادیان ریختی" @ar "تدرج مورفولوجي"
+pub const MORPH_GRADIENT := 2
+@en "MorphTophat" @fa "کلاه بالایی ریختی" @ar "قبعة علوية مورفولوجية"
+pub const MORPH_TOPHAT := 3
+@en "MorphBlackhat" @fa "کلاه سیاه ریختی" @ar "قبعة سوداء مورفولوجية"
+pub const MORPH_BLACKHAT := 4
+
+// Bitwise operations for Mat.bitwise().
+@en "BitwiseAnd" @fa "و بیتی" @ar "و بتّي"
+pub const BITWISE_AND := 0
+@en "BitwiseOr" @fa "یا بیتی" @ar "أو بتّي"
+pub const BITWISE_OR := 1
+@en "BitwiseXor" @fa "یای انحصاری بیتی" @ar "أو حصري بتّي"
+pub const BITWISE_XOR := 2
+
+// Descriptor-distance norms for MatchDescriptors() - NORM_HAMMING for
+// ORB's binary descriptors (the default), NORM_L2 for SIFT's float ones.
+@en "NormHamming" @fa "هنجار همینگ" @ar "معيار هامينغ"
+pub const NORM_HAMMING := 0
+@en "NormL2" @fa "هنجار ال۲" @ar "معيار إل٢"
+pub const NORM_L2 := 1
+
+// ---------------------------------------------------------------- errors
+
+// Returns the most recent error message set by a failing native call.
+// Cleared at the start of every scv_* call that can fail, so this only
+// ever reflects the last failure, not a persistent log.
+@en "LastError"
+@fa "آخرین خطا"
+@ar "آخر خطأ"
+pub func LastError(): str:
+    ret str.Clone(scv_last_error())
+end
+
+// Reports whether the native shim (and, transitively, OpenCV) loaded
+// successfully and is ready to use. Since Salam FFI resolves symbols at
+// link time, a program that fails to link never reaches this call - so in
+// practice this is mostly useful as a version/sanity probe.
+@en "Available"
+@fa "در دسترس"
+@ar "متوفر"
+pub func Available(): bool:
+    ret str.Len(Version()) > 0
+end
+
+// The linked OpenCV version string (e.g. "4.9.0"), or the mock shim's own
+// version tag when linked against native/mock/opencv_mock.c for testing.
+@en "Version"
+@fa "نسخه"
+@ar "إصدار"
+pub func Version(): str:
+    ret str.Clone(scv_version())
+end

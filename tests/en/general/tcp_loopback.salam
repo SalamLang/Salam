@@ -12,12 +12,21 @@
  *
  */
 
-import tcp
+import net.tcp
 import sync
 
 mut srv wg := sync.NewWaitGroup()
+// Bind(0) asks the OS for a free ephemeral port instead of a hardcoded
+// one - see rawsock.LocalPort's doc comment for why: a hardcoded port
+// can collide with another process, or with a host's dynamic port
+// reservations (observed in practice on Windows with Hyper-V/WSL2's NAT
+// active). bound_port is written once by the server before it signals
+// srv_wg, and read by main() only after Wait() returns, so the WaitGroup
+// itself is the happens-before edge - no separate lock needed for it.
+mut bound_port := 0
 func echo server():
-    srv := tcp.Bind(19202)
+    srv := tcp.Bind(0)
+    bound_port = tcp.Port(srv)
     sync.Done(srv wg)
     if !tcp.Ok(srv):
         ret
@@ -35,7 +44,7 @@ func main:
     sync.Add(srv wg, 1 as i64)
     t := spawn(echo server)
     sync.Wait(srv wg)
-    c := tcp.Dial("127.0.0.1", 19202)
+    c := tcp.Dial("127.0.0.1", bound_port)
     println tcp.ConnOk(c)
     tcp.Write(c, "hello")
     resp := tcp.Read(c, 1024)

@@ -1,0 +1,356 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import str
+
+// SSH connection-protocol channels (RFC 4254): opening a "session" channel,
+// window-based flow control, channel requests (exec/shell/pty-req/env), and
+// the data/close/exit-status lifecycle. session.salam builds Exec/Start/
+// Wait/Output on top of this; this file only ever manages ONE channel at a
+// time (this client never multiplexes several channels over one
+// connection), which is what lets the pump loop below dispatch every
+// incoming channel message straight to `ch` with no channel-id lookup.
+
+const _CHANNEL_INITIAL_WINDOW := 1048576 // 1 MiB - generous enough that a
+// short command's output never needs a mid-stream WINDOW_ADJUST from us.
+const _CHANNEL_MAX_PACKET := 32768
+const _CHANNEL_WINDOW_LOW_WATER := 262144
+
+struct Channel:
+    pub local_id: u32 = 0 as u32
+    pub remote_id: u32 = 0 as u32
+    pub local_window: u32 = 0 as u32
+    pub remote_window: u32 = 0 as u32
+    pub eof_received: bool = false
+    pub close_received: bool = false
+    pub close_sent: bool = false
+    pub exit_status: int = 0 - 1
+    pub stdout: Buf = Buf {}
+    pub stderr: Buf = Buf {}
+    pub open: bool = false
+end
+
+func _channel_new(): Channel:
+    mut ch := Channel {}
+    ch.local_id = 0 as u32
+    ch.local_window = _CHANNEL_INITIAL_WINDOW as u32
+    ch.exit_status = 0 - 1
+    ch.stdout = NewBuf(4096)
+    ch.stderr = NewBuf(1024)
+    ch.open = false
+    ret ch
+end
+
+func _channel_free(ch &: Channel):
+    FreeBuf(ch.stdout)
+    FreeBuf(ch.stderr)
+    ch.open = false
+end
+
+func _channel_open_session(t &: Transport): Channel:
+    mut ch := _channel_new()
+    mut req := NewBuf(32)
+    BufPutByte(req, SSH_MSG_CHANNEL_OPEN)
+    BufPutStringStr(req, "session")
+    BufPutUint32(req, ch.local_id)
+    BufPutUint32(req, ch.local_window)
+    BufPutUint32(req, _CHANNEL_MAX_PACKET as u32)
+    if !_packet_send(t.ps, req):
+        FreeBuf(req)
+        ret ch
+    end
+    FreeBuf(req)
+
+    // The server may interleave messages unrelated to this channel before
+    // answering (OpenSSH commonly sends a "hostkeys-00@openssh.com"
+    // SSH_MSG_GLOBAL_REQUEST right after auth succeeds) - skip anything
+    // that isn't the channel-open answer, same as _auth_send_and_await
+    // skips USERAUTH_BANNER.
+    mut attempts := 0
+    until attempts < 20:
+        reply := _packet_recv(t.ps)
+        if reply.bad:
+            ret ch
+        end
+        mut r := ReaderFromBuf(reply)
+        msgtype := RGetByte(r)
+        if msgtype == SSH_MSG_CHANNEL_OPEN_CONFIRMATION:
+            _their_id_of_our_channel := RGetUint32(r)
+            ch.remote_id = RGetUint32(r)
+            ch.remote_window = RGetUint32(r)
+            _their_max_packet := RGetUint32(r)
+            if !r.bad:
+                ch.open = true
+            end
+            FreeBuf(reply)
+            ret ch
+        end
+        if msgtype == SSH_MSG_CHANNEL_OPEN_FAILURE:
+            FreeBuf(reply)
+            ret ch
+        end
+        FreeBuf(reply)
+        attempts += 1
+    end
+    ret ch
+end
+
+func _channel_send_window_adjust(t &: Transport, ch &: Channel, add: u32):
+    mut m := NewBuf(16)
+    BufPutByte(m, SSH_MSG_CHANNEL_WINDOW_ADJUST)
+    BufPutUint32(m, ch.remote_id)
+    BufPutUint32(m, add)
+    _sent_ok := _packet_send(t.ps, m)
+    FreeBuf(m)
+    ch.local_window = ch.local_window + add
+end
+
+// One blocking read+dispatch cycle. Returns: 0 = ordinary message handled
+// (data/window-adjust/etc, keep pumping), 1 = CHANNEL_SUCCESS, 2 =
+// CHANNEL_FAILURE, 3 = channel fully closed (both EOF and CLOSE seen),
+// -1 = read/protocol error (treat the connection as dead).
+func _channel_pump_step(t &: Transport, ch &: Channel): int:
+    pkt := _packet_recv(t.ps)
+    if pkt.bad:
+        ch.close_received = true
+        FreeBuf(pkt)
+        ret 0 - 1
+    end
+    mut r := ReaderFromBuf(pkt)
+    msgtype := RGetByte(r)
+
+    if msgtype == SSH_MSG_CHANNEL_DATA:
+        _cid := RGetUint32(r)
+        data := RGetStringView(r)
+        if !r.bad:
+            BufPutBytes(ch.stdout, data.p, data.len)
+            if (ch.local_window as i64) - (data.len as i64) < (_CHANNEL_WINDOW_LOW_WATER as i64):
+                _channel_send_window_adjust(t, ch, _CHANNEL_INITIAL_WINDOW as u32)
+            else:
+                ch.local_window = ch.local_window - (data.len as u32)
+            end
+        end
+        FreeBuf(pkt)
+        ret 0
+    end
+
+    if msgtype == SSH_MSG_CHANNEL_EXTENDED_DATA:
+        _cid := RGetUint32(r)
+        dtype := RGetUint32(r)
+        data := RGetStringView(r)
+        if !r.bad && dtype == (SSH_EXTENDED_DATA_STDERR as u32):
+            BufPutBytes(ch.stderr, data.p, data.len)
+            if (ch.local_window as i64) - (data.len as i64) < (_CHANNEL_WINDOW_LOW_WATER as i64):
+                _channel_send_window_adjust(t, ch, _CHANNEL_INITIAL_WINDOW as u32)
+            else:
+                ch.local_window = ch.local_window - (data.len as u32)
+            end
+        end
+        FreeBuf(pkt)
+        ret 0
+    end
+
+    if msgtype == SSH_MSG_CHANNEL_WINDOW_ADJUST:
+        _cid := RGetUint32(r)
+        add := RGetUint32(r)
+        if !r.bad:
+            ch.remote_window = ch.remote_window + add
+        end
+        FreeBuf(pkt)
+        ret 0
+    end
+
+    if msgtype == SSH_MSG_CHANNEL_EOF:
+        ch.eof_received = true
+        FreeBuf(pkt)
+        ret ch.close_received ? 3 : 0
+    end
+
+    if msgtype == SSH_MSG_CHANNEL_CLOSE:
+        ch.close_received = true
+        if !ch.close_sent:
+            mut m := NewBuf(8)
+            BufPutByte(m, SSH_MSG_CHANNEL_CLOSE)
+            BufPutUint32(m, ch.remote_id)
+            _sent_ok := _packet_send(t.ps, m)
+            FreeBuf(m)
+            ch.close_sent = true
+        end
+        FreeBuf(pkt)
+        ret 3
+    end
+
+    if msgtype == SSH_MSG_CHANNEL_REQUEST:
+        _cid := RGetUint32(r)
+        reqtype := RGetStringAsStr(r)
+        _want_reply := RGetBool(r)
+        if str.Equals(reqtype, "exit-status"):
+            code := RGetUint32(r)
+            if !r.bad:
+                ch.exit_status = code as int
+            end
+        end
+        // exit-signal and any other request type: nothing more to extract
+        // for this client's purposes: no reply is expected of the client
+        // for CHANNEL_REQUEST messages the SERVER sends.
+        FreeBuf(pkt)
+        ret 0
+    end
+
+    if msgtype == SSH_MSG_CHANNEL_SUCCESS:
+        FreeBuf(pkt)
+        ret 1
+    end
+    if msgtype == SSH_MSG_CHANNEL_FAILURE:
+        FreeBuf(pkt)
+        ret 2
+    end
+
+    FreeBuf(pkt)
+    ret 0
+end
+
+// Pumps until a CHANNEL_SUCCESS/FAILURE answers a request we just sent with
+// want_reply=true. Data/window/exit-status messages arriving first are
+// handled (not discarded) along the way.
+func _channel_await_reply(t &: Transport, ch &: Channel): bool:
+    mut steps := 0
+    until steps < 100000:
+        code := _channel_pump_step(t, ch)
+        if code == 1:
+            ret true
+        end
+        if code == 2 || code == (0 - 1) || code == 3:
+            ret false
+        end
+        steps += 1
+    end
+    ret false
+end
+
+// Pumps until the channel is fully closed (both directions' EOF+CLOSE),
+// collecting all remaining stdout/stderr/exit-status along the way. This is
+// what a blocking Exec/Wait sits on.
+func _channel_pump_to_close(t &: Transport, ch &: Channel):
+    mut steps := 0
+    until (!ch.eof_received || !ch.close_received) && steps < 1000000:
+        code := _channel_pump_step(t, ch)
+        if code == 3 || code == (0 - 1):
+            ret
+        end
+        steps += 1
+    end
+end
+
+func _channel_send_request(t &: Transport, ch &: Channel, reqtype: str, want_reply: bool, extra: Buf): bool:
+    mut m := NewBuf(32 + extra.len)
+    BufPutByte(m, SSH_MSG_CHANNEL_REQUEST)
+    BufPutUint32(m, ch.remote_id)
+    BufPutStringStr(m, reqtype)
+    BufPutBool(m, want_reply)
+    BufPutBuf(m, extra)
+    ok := _packet_send(t.ps, m)
+    FreeBuf(m)
+    if !ok:
+        ret false
+    end
+    if want_reply:
+        ret _channel_await_reply(t, ch)
+    end
+    ret true
+end
+
+func _channel_exec(t &: Transport, ch &: Channel, cmd: str): bool:
+    mut extra := NewBuf(8 + cmd.len())
+    BufPutStringStr(extra, cmd)
+    ok := _channel_send_request(t, ch, "exec", true, extra)
+    FreeBuf(extra)
+    ret ok
+end
+
+func _channel_shell(t &: Transport, ch &: Channel): bool:
+    extra := NewBuf(1)
+    ret _channel_send_request(t, ch, "shell", true, extra)
+end
+
+func _channel_pty(t &: Transport, ch &: Channel, term: str, cols: int, rows: int): bool:
+    mut extra := NewBuf(32 + term.len())
+    BufPutStringStr(extra, term)
+    BufPutUint32(extra, cols as u32)
+    BufPutUint32(extra, rows as u32)
+    BufPutUint32(extra, 0 as u32) // width px
+    BufPutUint32(extra, 0 as u32) // height px
+    BufPutStringStr(extra, "") // encoded terminal modes: none
+    ok := _channel_send_request(t, ch, "pty-req", true, extra)
+    FreeBuf(extra)
+    ret ok
+end
+
+// Sends stdin data, respecting the peer's advertised window (pumping for a
+// WINDOW_ADJUST if it has run out rather than overrunning it).
+func _channel_write(t &: Transport, ch &: Channel, data: void*, n: int): bool:
+    mut sent := 0
+    mut waits := 0
+    until sent < n && waits < 10000:
+        if ch.remote_window == (0 as u32):
+            code := _channel_pump_step(t, ch)
+            if code == (0 - 1) || code == 3:
+                ret false
+            end
+            waits += 1
+            continue
+        end
+        mut chunk := n - sent
+        if chunk > _CHANNEL_MAX_PACKET:
+            chunk = _CHANNEL_MAX_PACKET
+        end
+        if (chunk as u32) > ch.remote_window:
+            chunk = ch.remote_window as int
+        end
+        mut m := NewBuf(16 + chunk)
+        BufPutByte(m, SSH_MSG_CHANNEL_DATA)
+        BufPutUint32(m, ch.remote_id)
+        BufPutString(m, (data as i64 + sent) as void*, chunk)
+        ok := _packet_send(t.ps, m)
+        FreeBuf(m)
+        if !ok:
+            ret false
+        end
+        ch.remote_window = ch.remote_window - (chunk as u32)
+        sent += chunk
+    end
+    ret sent >= n
+end
+
+func _channel_send_eof(t &: Transport, ch &: Channel):
+    mut m := NewBuf(8)
+    BufPutByte(m, SSH_MSG_CHANNEL_EOF)
+    BufPutUint32(m, ch.remote_id)
+    _sent_ok := _packet_send(t.ps, m)
+    FreeBuf(m)
+end
+
+func _channel_send_close(t &: Transport, ch &: Channel):
+    if ch.close_sent:
+        ret
+    end
+    mut m := NewBuf(8)
+    BufPutByte(m, SSH_MSG_CHANNEL_CLOSE)
+    BufPutUint32(m, ch.remote_id)
+    _sent_ok := _packet_send(t.ps, m)
+    FreeBuf(m)
+    ch.close_sent = true
+end

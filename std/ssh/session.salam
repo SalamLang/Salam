@@ -1,0 +1,226 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import str
+
+// The command-running API built on channel.salam: a blocking Exec for the
+// common "run this, get output and exit code" case, and Start/Wait/Output/
+// WriteInput for a session you drive yourself (an interactive shell, or a
+// long-running command whose output you want to display as it streams in -
+// see ReadStep).
+//
+// Session.stdout/stderr are exposed as `str`. SSH command output is
+// overwhelmingly text (command results, logs), so this is the ergonomic
+// choice, but it means binary data on stdout/stderr gets truncated at the
+// first 0x00 byte like any Salam string (see bytes.salam's header) - pipe
+// binary data through SFTP (sftp.salam) instead of through a command's
+// stdout.
+
+pub struct Session:
+    pub ch: Channel = Channel {}
+    pub ok: bool = false
+end
+
+pub struct ExecResult:
+    pub stdout: str = ""
+    pub stderr: str = ""
+    pub exit_code: int = 0 - 1
+    pub ok: bool = false
+end
+
+func _buf_to_str_lossy(b: Buf): str:
+    if b.len == 0:
+        ret ""
+    end
+    mut z := NewBuf(b.len + 1)
+    BufPutBuf(z, b)
+    BufPutByte(z, 0)
+    ret str.Clone(z.p as str)
+end
+
+@en "NewSession"
+@fa "نشست جدید"
+@ar "جلسة جدیدة"
+pub func NewSession(client &: Client): Session:
+    mut s := Session {}
+    s.ch = _channel_open_session(client.transport)
+    s.ok = s.ch.open
+    ret s
+end
+
+@en "RequestPty"
+@fa "درخواست پی تی وای"
+@ar "طلب pty"
+pub func RequestPty(session &: Session, client &: Client, term: str, cols: int, rows: int): bool:
+    ret _channel_pty(client.transport, session.ch, term, cols, rows)
+end
+
+// Starts a command without waiting for it to finish - call Wait (or drive
+// ReadStep yourself) afterward.
+@en "Start"
+@fa "شروع"
+@ar "بدء"
+pub func Start(session &: Session, client &: Client, cmd: str): bool:
+    ret _channel_exec(client.transport, session.ch, cmd)
+end
+
+@en "Shell"
+@fa "پوسته"
+@ar "غلاف"
+pub func Shell(session &: Session, client &: Client): bool:
+    ret _channel_shell(client.transport, session.ch)
+end
+
+// Blocks until the remote command/shell exits and the channel closes,
+// returning its exit code (-1 if the server never sent one, e.g. it was
+// killed by a signal instead).
+@en "Wait"
+@fa "انتظار"
+@ar "انتظار"
+pub func Wait(session &: Session, client &: Client): int:
+    _channel_pump_to_close(client.transport, session.ch)
+    ret session.ch.exit_status
+end
+
+// One blocking read+dispatch step (a single incoming packet). Returns false
+// once the channel is closed or the connection is dead - build an
+// interactive/streaming loop by calling this repeatedly and reading
+// Output()/StderrOutput() between calls (see tests/en/apps/ssh_assistant.salam
+// for a worked example).
+@en "ReadStep"
+@fa "گام خواندن"
+@ar "خطوة قراءة"
+pub func ReadStep(session &: Session, client &: Client): bool:
+    code := _channel_pump_step(client.transport, session.ch)
+    ret code != 3 && code != (0 - 1)
+end
+
+// Everything received on stdout/stderr so far, as text (see this file's
+// header). Does not drain the buffer - call DrainOutput if you are
+// streaming and do not want to re-read what you already printed.
+@en "Output"
+@fa "خروجی"
+@ar "مخرجات"
+pub func Output(session: Session): str:
+    ret _buf_to_str_lossy(session.ch.stdout)
+end
+
+@en "StderrOutput"
+@fa "خروجی خطا"
+@ar "مخرجات الخطأ"
+pub func StderrOutput(session: Session): str:
+    ret _buf_to_str_lossy(session.ch.stderr)
+end
+
+// Returns everything accumulated since the last DrainOutput call (or since
+// the session started) and clears the buffer - the right primitive for a
+// polling loop that prints output incrementally instead of re-printing the
+// whole transcript each time.
+@en "DrainOutput"
+@fa "تخلیه خروجی"
+@ar "تفريغ المخرجات"
+pub func DrainOutput(session &: Session): str:
+    out := _buf_to_str_lossy(session.ch.stdout)
+    FreeBuf(session.ch.stdout)
+    session.ch.stdout = NewBuf(256)
+    ret out
+end
+
+@en "DrainStderrOutput"
+@fa "تخلیه خروجی خطا"
+@ar "تفريغ مخرجات الخطأ"
+pub func DrainStderrOutput(session &: Session): str:
+    out := _buf_to_str_lossy(session.ch.stderr)
+    FreeBuf(session.ch.stderr)
+    session.ch.stderr = NewBuf(256)
+    ret out
+end
+
+@en "ExitCode"
+@fa "کد خروج"
+@ar "رمز الخروج"
+pub func ExitCode(session: Session): int:
+    ret session.ch.exit_status
+end
+
+@en "SessionClosed"
+@fa "نشست بسته شده"
+@ar "الجلسة مغلقة"
+pub func SessionClosed(session: Session): bool:
+    ret session.ch.close_received
+end
+
+@en "WriteInput"
+@fa "نوشتن ورودی"
+@ar "كتابة الإدخال"
+pub func WriteInput(session &: Session, client &: Client, data: str): bool:
+    ret _channel_write(client.transport, session.ch, data as void*, data.len())
+end
+
+// Sends EOF on stdin (so a remote reader sees end-of-input, e.g. a program
+// reading from stdin until closed) without closing the channel itself.
+@en "CloseInput"
+@fa "بستن ورودی"
+@ar "إغلاق الإدخال"
+pub func CloseInput(session &: Session, client &: Client):
+    _channel_send_eof(client.transport, session.ch)
+end
+
+@en "CloseSession"
+@fa "بستن نشست"
+@ar "إغلاق الجلسة"
+pub func CloseSession(session &: Session, client &: Client):
+    // If Wait() already drove the channel through a full close handshake
+    // (the common case: the server's own CHANNEL_CLOSE arrives, and
+    // _channel_pump_step immediately answers it - see channel.salam), the
+    // channel is already gone on both sides. Sending another EOF/CLOSE for
+    // a channel id the server already closed is a protocol violation that
+    // real servers can react to by tearing down the whole connection, not
+    // just the channel - which then silently breaks every subsequent
+    // command on this Client, not just this one. Only send the close
+    // handshake ourselves when the server hasn't already closed it (e.g.
+    // CloseSession called to abandon a session without ever Wait()-ing).
+    if !session.ch.close_received:
+        _channel_send_eof(client.transport, session.ch)
+        _channel_send_close(client.transport, session.ch)
+    end
+    _channel_free(session.ch)
+end
+
+// Runs one command start-to-finish: opens a session, execs `cmd`, waits for
+// it to exit, and returns everything it printed plus its exit code. The
+// single call most scripts want.
+@en "Exec"
+@fa "اجرا"
+@ar "تنفيذ"
+pub func Exec(client &: Client, cmd: str): ExecResult:
+    mut result := ExecResult {}
+    mut s := NewSession(client)
+    if !s.ok:
+        ret result
+    end
+    if !Start(s, client, cmd):
+        CloseSession(s, client)
+        ret result
+    end
+    exit_code := Wait(s, client)
+    result.stdout = Output(s)
+    result.stderr = StderrOutput(s)
+    result.exit_code = exit_code
+    result.ok = true
+    CloseSession(s, client)
+    ret result
+end

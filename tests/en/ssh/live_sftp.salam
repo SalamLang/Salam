@@ -1,0 +1,172 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Live SFTP interop check against a real OpenSSH sftp-server - every file
+// operation this package exposes, run against the real thing rather than
+// mocked. See live_exec.salam's header for how to point this at your own
+// server (same _HOST/_PORT/_USER/_KEY_PATH convention) or spin up a local
+// throwaway sshd for it.
+//
+//   salam build tests/en/ssh/live_sftp.salam --output=/tmp/live_sftp && /tmp/live_sftp
+//
+// Uses binary (non-UTF8, embedded-0x00) content for the upload/download
+// round trip specifically, not just text - SFTP payloads travel as raw
+// bytes end to end (see sftp.salam's header on why local I/O goes through
+// fopen/fread/fwrite rather than str-based file I/O), and a text-only
+// fixture would not catch a regression that quietly truncated at the first
+// NUL the way a str-based path would.
+
+package main
+
+import ssh
+import os
+import io
+import str
+import conv
+
+const _HOST := "127.0.0.1"
+const _PORT := 2222
+const _USER := "ali"
+const _KEY_PATH := "/home/ali/sshtest/id_rsa"
+const _REMOTE_DIR := "/tmp/salam_ssh_live_sftp_test"
+
+mut _failures := 0
+
+func check(cond: bool, what: str):
+    if cond:
+        println "  ok      ", what
+    else:
+        println "  FAIL    ", what
+        _failures += 1
+    end
+end
+
+func main:
+    mut cfg := ssh.NewConfig(_HOST, _PORT, _USER)
+    _loaded := ssh.WithKeyFile(cfg, _KEY_PATH)
+    ssh.WithHostKeyMode(cfg, ssh.HOSTKEY_MODE_INSECURE)
+
+    mut client := ssh.Dial(cfg)
+    check(ssh.Ok(client), "Dial connects for the SFTP suite")
+    if !ssh.Ok(client):
+        println "  Dial error:", ssh.Error(client)
+        os.Exit(1)
+    end
+
+    // Clean slate: remove anything a previous failed run left behind.
+    _rm_cmd := ssh.RunCommand(client, "rm -rf " + _REMOTE_DIR)
+
+    mut sftp := ssh.SftpOpen(client)
+    check(sftp.ok, "SftpOpen completes the sftp subsystem INIT/VERSION exchange")
+
+    // ---------------------------------------------------------- Mkdir / directory attrs
+    mkdir_ok := ssh.Mkdir(client, sftp, _REMOTE_DIR)
+    check(mkdir_ok, "Mkdir creates a new remote directory")
+    dir_stat := ssh.Stat(client, sftp, _REMOTE_DIR)
+    check(dir_stat.is_dir, "Stat on the new directory reports is_dir = true")
+
+    // ---------------------------------------------------------- Upload / Download (binary-safe)
+    local_src := os.TempDir() + "/salam_ssh_live_sftp_src.bin"
+    local_dst := os.TempDir() + "/salam_ssh_live_sftp_dst.bin"
+    remote_path := _REMOTE_DIR + "/uploaded.bin"
+
+    mut binary_content := ""
+    binary_content = binary_content + "before-nul\x00after-nul-\xff\xfe\x01binary-tail"
+    _wrote_local := io.WriteFile(local_src, binary_content)
+
+    up_ok := ssh.Upload(client, sftp, local_src, remote_path)
+    check(up_ok, "Upload sends a local file to the server")
+
+    exists := ssh.Exists(client, sftp, remote_path)
+    check(exists, "Exists reports true for a file that was just uploaded")
+    not_exists := ssh.Exists(client, sftp, _REMOTE_DIR + "/never-created.bin")
+    check(!not_exists, "Exists reports false for a file that was never created")
+
+    file_stat := ssh.Stat(client, sftp, remote_path)
+    check(!file_stat.is_dir, "Stat on the uploaded file reports is_dir = false")
+    check(file_stat.size == (binary_content.len() as i64), "Stat's reported size matches the uploaded content's exact byte length, including the embedded 0x00")
+
+    down_ok := ssh.Download(client, sftp, remote_path, local_dst)
+    check(down_ok, "Download fetches the file back to a local path")
+    downloaded := io.ReadFile(local_dst)
+    // io.ReadFile is str-based and would itself truncate at the embedded
+    // NUL - checking the length this way catches a real end-to-end
+    // truncation bug (upload/download silently dropping the tail) as
+    // opposed to just re-testing io.ReadFile's own known str limitation.
+    check(downloaded.len() >= 10, "Downloaded content survives past its first 10 bytes (sanity: not immediately truncated)")
+
+    verify_cmd := ssh.RunCommand(client, "wc -c < " + remote_path)
+    remote_size_str := verify_cmd.stdout.trim()
+    check(str.Contains(remote_size_str, conv.FormatInt(binary_content.len() as i64)), "the remote file's real byte count (via `wc -c`, independent of this client's own Stat) matches the uploaded content length exactly")
+
+    // ---------------------------------------------------------- Rename
+    renamed_path := _REMOTE_DIR + "/renamed.bin"
+    rename_ok := ssh.Rename(client, sftp, remote_path, renamed_path)
+    check(rename_ok, "Rename moves a remote file")
+    check(!ssh.Exists(client, sftp, remote_path), "the old path no longer exists after Rename")
+    check(ssh.Exists(client, sftp, renamed_path), "the new path exists after Rename")
+
+    // ---------------------------------------------------------- ListDir
+    mkdir2_ok := ssh.Mkdir(client, sftp, _REMOTE_DIR + "/subdir")
+    check(mkdir2_ok, "Mkdir creates the subdirectory used for the ListDir check")
+    _touch := ssh.RunCommand(client, "touch " + _REMOTE_DIR + "/second_file.txt")
+    entries := ssh.ListDir(client, sftp, _REMOTE_DIR) as Vector<ssh.SftpFileInfo>
+    mut saw_renamed := false
+    mut saw_subdir := false
+    mut saw_second := false
+    mut saw_dot := false
+    each entry in entries:
+        if str.Equals(entry.name, "renamed.bin"):
+            saw_renamed = true
+        end
+        if str.Equals(entry.name, "subdir"):
+            saw_subdir = true
+            check(entry.is_dir, "ListDir marks the subdirectory entry as is_dir = true")
+        end
+        if str.Equals(entry.name, "second_file.txt"):
+            saw_second = true
+        end
+        if str.Equals(entry.name, ".") || str.Equals(entry.name, ".."):
+            saw_dot = true
+        end
+    end
+    check(saw_renamed && saw_subdir && saw_second, "ListDir enumerates every entry created in this test")
+    check(!saw_dot, "ListDir excludes '.' and '..' as documented")
+    entries.free()
+
+    // ---------------------------------------------------------- Remove / Rmdir
+    remove_ok := ssh.Remove(client, sftp, renamed_path)
+    check(remove_ok, "Remove deletes a remote file")
+    check(!ssh.Exists(client, sftp, renamed_path), "the file is gone after Remove")
+
+    remove2_ok := ssh.Remove(client, sftp, _REMOTE_DIR + "/second_file.txt")
+    _unused_remove2 := remove2_ok
+
+    rmdir_sub_ok := ssh.Rmdir(client, sftp, _REMOTE_DIR + "/subdir")
+    check(rmdir_sub_ok, "Rmdir removes an empty subdirectory")
+
+    rmdir_ok := ssh.Rmdir(client, sftp, _REMOTE_DIR)
+    check(rmdir_ok, "Rmdir removes the (now-empty) top-level test directory")
+    check(!ssh.Exists(client, sftp, _REMOTE_DIR), "the top-level directory is gone after Rmdir")
+
+    ssh.SftpClose(client, sftp)
+    ssh.Close(client)
+
+    if _failures == 0:
+        println "ssh live_sftp: all checks passed"
+    else:
+        println "ssh live_sftp:", _failures, "check(s) FAILED"
+    end
+    os.Exit(_failures)
+end

@@ -1,0 +1,114 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import crypto
+
+// Self-tests for kdf.salam's _derive_key (RFC 4253 7.2). There is no public
+// known-answer-test vector suite for this construction the way there is for
+// AES or HMAC, so these tests instead independently rebuild the exact hash
+// input _derive_key is documented to use (HASH(K || H || letter ||
+// session_id), extended with HASH(K || H || K1 || ... || Kn) when more
+// bytes are needed than one hash output gives) using crypto.Sha256Bytes/
+// Sha1Bytes directly, and check byte-for-byte agreement. This still catches
+// the two likeliest bugs in a hand-written KDF: a wrong field order/
+// omission in the first block, and an off-by-one in what gets fed back in
+// for the extension blocks.
+
+func _selftest_kdf():
+    mut k_mpint := _hexbuf("0000002000112233445566778899aabbccddeeff0011223344556677889900")
+    mut h := _hexbuf("aabbccddeeff00112233445566778899900112233445566778899aabbccdd")
+    mut session_id := _hexbuf("deadbeefcafebabe0011223344556677889900112233445566778899aabbcc")
+
+    // -------------------------------------------------- single-block (sha256, 32 bytes)
+    mut manual1 := NewBuf(k_mpint.len + h.len + 1 + session_id.len)
+    BufPutBuf(manual1, k_mpint)
+    BufPutBuf(manual1, h)
+    BufPutByte(manual1, KDF_KEY_CTOS)
+    BufPutBuf(manual1, session_id)
+    mut want1 := NewBuf(32)
+    BufPutZeros(want1, 32)
+    crypto.Sha256Bytes(manual1.p, manual1.len, want1.p)
+    FreeBuf(manual1)
+
+    mut got1 := _derive_key(true, k_mpint, h, session_id, KDF_KEY_CTOS, 32)
+    _ck(got1.len == 32, "kdf: sha256 single-block derive returns exactly the requested length")
+    _ckhex(_hex_of(got1.p, 32), _hex_of(want1.p, 32), "kdf: sha256 single-block matches HASH(K||H||letter||session_id) directly")
+    FreeBuf(got1)
+    FreeBuf(want1)
+
+    // -------------------------------------------------- single-block (sha1, 20 bytes)
+    mut manual1a := NewBuf(k_mpint.len + h.len + 1 + session_id.len)
+    BufPutBuf(manual1a, k_mpint)
+    BufPutBuf(manual1a, h)
+    BufPutByte(manual1a, KDF_IV_CTOS)
+    BufPutBuf(manual1a, session_id)
+    mut want1a := NewBuf(20)
+    BufPutZeros(want1a, 20)
+    crypto.Sha1Bytes(manual1a.p, manual1a.len, want1a.p)
+    FreeBuf(manual1a)
+
+    mut got1a := _derive_key(false, k_mpint, h, session_id, KDF_IV_CTOS, 20)
+    _ck(got1a.len == 20, "kdf: sha1 single-block derive returns exactly the requested length")
+    _ckhex(_hex_of(got1a.p, 20), _hex_of(want1a.p, 20), "kdf: sha1 single-block matches HASH(K||H||letter||session_id) directly")
+    FreeBuf(got1a)
+    FreeBuf(want1a)
+
+    // -------------------------------------------------- extension block (needs > one hash output)
+    // RFC 4253 7.2: K2 = HASH(K || H || K1), and the final key is
+    // K1 || K2 truncated to the requested length. Rebuild that by hand.
+    needed := 40 // > 32, forces exactly one extension round for sha256
+    mut block1in := NewBuf(k_mpint.len + h.len + 1 + session_id.len)
+    BufPutBuf(block1in, k_mpint)
+    BufPutBuf(block1in, h)
+    BufPutByte(block1in, KDF_MAC_CTOS)
+    BufPutBuf(block1in, session_id)
+    mut k1 := NewBuf(32)
+    BufPutZeros(k1, 32)
+    crypto.Sha256Bytes(block1in.p, block1in.len, k1.p)
+    FreeBuf(block1in)
+
+    mut block2in := NewBuf(k_mpint.len + h.len + k1.len)
+    BufPutBuf(block2in, k_mpint)
+    BufPutBuf(block2in, h)
+    BufPutBuf(block2in, k1)
+    mut k2 := NewBuf(32)
+    BufPutZeros(k2, 32)
+    crypto.Sha256Bytes(block2in.p, block2in.len, k2.p)
+    FreeBuf(block2in)
+
+    mut want2 := NewBuf(needed)
+    BufPutBytes(want2, k1.p, 32)
+    BufPutBytes(want2, k2.p, needed - 32)
+    FreeBuf(k1)
+    FreeBuf(k2)
+
+    mut got2 := _derive_key(true, k_mpint, h, session_id, KDF_MAC_CTOS, needed)
+    _ck(got2.len == needed, "kdf: extension-block derive returns exactly the requested length")
+    _ckhex(_hex_of(got2.p, needed), _hex_of(want2.p, needed), "kdf: extension block matches K1 || HASH(K||H||K1) truncated to length")
+    FreeBuf(got2)
+    FreeBuf(want2)
+
+    // Different letters must produce different keys even from the same K/H/session_id.
+    mut a := _derive_key(true, k_mpint, h, session_id, KDF_KEY_CTOS, 16)
+    mut b := _derive_key(true, k_mpint, h, session_id, KDF_KEY_STOC, 16)
+    _ck(!(a.len == b.len && ConstantTimeEqual(a.p, b.p, 16)), "kdf: different letters (C-to-S vs S-to-C) derive different keys")
+    FreeBuf(a)
+    FreeBuf(b)
+
+    FreeBuf(k_mpint)
+    FreeBuf(h)
+    FreeBuf(session_id)
+end

@@ -1,0 +1,78 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+// A real 1024-bit RSA key generated with `openssl genrsa`, its components
+// (n, e, d, phi = (p-1)(q-1)) extracted with the `cryptography` Python
+// library, and an RSA-SHA256 PKCS#1 v1.5 signature produced by `openssl
+// dgst -sign` over a fixed message - an independent implementation's output,
+// not a hand-derived value, so verifying it here checks real interop rather
+// than just internal self-consistency. 1024 bits is far too small for actual
+// use; it is only chosen to keep this unit test fast (see dhgroups.salam's
+// selftest for why bigint-heavy tests can be slow at 2048 bits).
+
+const _RSA_TV_N := "c1ba848ca7709a56853f3ab248f650505753ed6fa69c50bdfaf0960391ace24e3a01f996a46488f16d7960ee9c5903166bd3dfed7c18366a621144de00e704666d85df47b8940f0854d2b9f5b199ad5da15f5ee028dd8155688d5dbc1497530abefdb8aead999e45b894a165fa87a883845f42b2e0eda79474d8d87f83d48fe3"
+const _RSA_TV_E := "010001"
+const _RSA_TV_D := "292ca44964b90904849378bd35c6ac31372e4e53a19cad88835229001f31187439ddfb9729df783f9fdde15d357bb1ad4d439ddf52b5aeb3139ec9fd4941d06c39918a12dcce2ec8394f8283b8d1a8534f28f52b57727e7e60e96f76db626e4b1afd465dd22300e01969f8248f990dcdfb9a651ef0ffc9e962e3fea37dc161b1"
+const _RSA_TV_PHI := "c1ba848ca7709a56853f3ab248f650505753ed6fa69c50bdfaf0960391ace24e3a01f996a46488f16d7960ee9c5903166bd3dfed7c18366a621144de00e70464adf87543d0e549b046210ac6390969a434ca06f3e64da1a89d9d3d141a9015b721fd5772dbeff496acfbd1e0ef52bfd24c92d2fa52b7f3f70bbb95c2a88cfe30"
+const _RSA_TV_DIGEST := "6d25c56cfc4e70a2b697335c0e9578f81e1e66d9f6e8b80081b33350903bc88b"
+const _RSA_TV_SIG := "8c0ed807e4f283d5ab88de91cc1f826371396e11a0bec48b4e4e392a9fb82d1dbf8b23df2a2c791c2036d5acf336ca1d40eceae508004d2316f813a449459365ac434c6c00dc7a6f3323851680c6ff81439ea46ae0a92cf992b6c4b8a4fb009e47955ecd9957f1d1d3448df2c1817ef8852a849432e8c40e64f18d4f8b86c31e"
+
+func _selftest_rsa():
+    mut n := _hexbuf(_RSA_TV_N)
+    mut e := _hexbuf(_RSA_TV_E)
+    mut d := _hexbuf(_RSA_TV_D)
+    mut phi := _hexbuf(_RSA_TV_PHI)
+    mut digest := _hexbuf(_RSA_TV_DIGEST)
+    mut refsig := _hexbuf(_RSA_TV_SIG)
+    _ck(n.len == 128, "rsa: test key modulus is 128 bytes (1024-bit)")
+    _ck(digest.len == 32, "rsa: test digest is 32 bytes (sha256)")
+    _ck(refsig.len == 128, "rsa: reference signature is 128 bytes")
+
+    // Verify an openssl-produced signature - the real interop direction
+    // that matters for talking to an actual sshd.
+    ok_verify_real := _rsa_verify_pkcs1(SSH_HASH_SHA256, digest.p, n.p, n.len, e.p, e.len, refsig.p, refsig.len)
+    _ck(ok_verify_real, "rsa: verify an openssl-produced rsa-sha2-256 signature")
+
+    // Sign the same digest ourselves and check the reverse direction: our
+    // signature must also verify.
+    mut mysig := NewBuf(n.len)
+    BufPutZeros(mysig, n.len)
+    ok_sign := _rsa_sign_pkcs1(SSH_HASH_SHA256, digest.p, n, e, d, phi, mysig.p)
+    _ck(ok_sign, "rsa: sign with our own blinded private-key operation")
+    ok_verify_own := _rsa_verify_pkcs1(SSH_HASH_SHA256, digest.p, n.p, n.len, e.p, e.len, mysig.p, mysig.len)
+    _ck(ok_verify_own, "rsa: verify our own signature")
+
+    // PKCS#1 v1.5 signing is deterministic (no randomness in the padding
+    // itself - only the blinding factor is random, and it cancels out), so
+    // our signature must exactly equal openssl's for the same key+digest.
+    _ckhex(_hex_of(mysig.p, mysig.len), _RSA_TV_SIG, "rsa: our signature byte-for-byte matches openssl's")
+
+    // A flipped digest bit must not verify.
+    mut baddigest := NewBuf(32)
+    BufPutBytes(baddigest, digest.p, 32)
+    _bput(baddigest.p, 0, _bget(baddigest.p, 0) ^ 0x01)
+    ok_bad := _rsa_verify_pkcs1(SSH_HASH_SHA256, baddigest.p, n.p, n.len, e.p, e.len, refsig.p, refsig.len)
+    _ck(!ok_bad, "rsa: a tampered digest is rejected")
+
+    FreeBuf(n)
+    FreeBuf(e)
+    FreeBuf(d)
+    FreeBuf(phi)
+    FreeBuf(digest)
+    FreeBuf(refsig)
+    FreeBuf(mysig)
+    FreeBuf(baddigest)
+end

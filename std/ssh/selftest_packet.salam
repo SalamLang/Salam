@@ -1,0 +1,183 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import net.internal.rawsock
+
+// Self-test for packet.salam's _packet_send/_packet_recv - the SSH binary
+// packet protocol - over a real local TCP loopback connection. Every other
+// test in this suite either exercises pure in-memory logic or (for the
+// live E2E path) needs an actual remote sshd; this is the one test that
+// proves _packet_send and _packet_recv themselves agree on framing,
+// encryption and MAC computation, independent of any real server, by
+// connecting this process to itself over 127.0.0.1.
+//
+// The connection starts in the plaintext phase every real SSH connection
+// begins in, then flips both directions to encrypted mid-stream on the
+// SAME PacketState/sequence-number pair - exactly what a real NEWKEYS
+// transition does (see transport.salam's _transport_handshake) - rather
+// than starting a fresh connection already encrypted, so this also checks
+// that the plaintext/encrypted switch itself doesn't desync anything.
+
+const _PKT_TEST_PORT := 48391
+
+func _pkt_expect_roundtrip(sender &: PacketState, receiver &: PacketState, payload: Buf, label: str):
+    ok_send := _packet_send(sender, payload)
+    _ck(ok_send, label + ": send succeeds")
+    mut got := _packet_recv(receiver)
+    _ck(!got.bad, label + ": receive succeeds (frame parses, MAC checks out if encrypted)")
+    _ck(got.len == payload.len, label + ": received payload length matches what was sent")
+    _ckhex(_hex_of(got.p, got.len), _hex_of(payload.p, payload.len), label + ": received payload bytes match what was sent exactly")
+    FreeBuf(got)
+end
+
+func _selftest_packet():
+    srv := rawsock.Listen(_PKT_TEST_PORT)
+    if !rawsock.Ok(srv):
+        _ck(false, "packet: (setup) could not open a loopback listen socket - skipping the rest of this suite")
+        ret
+    end
+    cli := rawsock.Connect("127.0.0.1", _PKT_TEST_PORT)
+    peer := rawsock.Accept(srv)
+    _ck(rawsock.Ok(cli), "packet: (setup) client connects to the loopback listener")
+    _ck(rawsock.Ok(peer), "packet: (setup) server accepts the loopback connection")
+    if !rawsock.Ok(cli) || !rawsock.Ok(peer):
+        rawsock.Close(srv)
+        ret
+    end
+
+    mut cli_ps := _packet_state_new(cli)
+    mut peer_ps := _packet_state_new(peer)
+
+    // ---------------------------------------------------------- plaintext phase
+    mut p1 := NewBuf(4)
+    BufPutByte(p1, 1) // SSH_MSG_DISCONNECT-shaped, but content doesn't matter here
+    BufPutStringStr(p1, "hello server")
+    _pkt_expect_roundtrip(cli_ps, peer_ps, p1, "packet plaintext: client -> server, small payload")
+    FreeBuf(p1)
+
+    mut p2 := NewBuf(4)
+    BufPutByte(p2, 2)
+    BufPutStringStr(p2, "hello client")
+    _pkt_expect_roundtrip(peer_ps, cli_ps, p2, "packet plaintext: server -> client, small payload")
+    FreeBuf(p2)
+
+    _ck(cli_ps.seq_write == (1 as u32), "packet: client's write sequence number is 1 after one send")
+    _ck(peer_ps.seq_read == (1 as u32), "packet: server's read sequence number is 1 after one receive")
+    _ck(peer_ps.seq_write == (1 as u32), "packet: server's write sequence number is 1 after one send")
+    _ck(cli_ps.seq_read == (1 as u32), "packet: client's read sequence number is 1 after one receive")
+
+    // A payload spanning several cipher/padding blocks even in the
+    // plaintext phase (padding math still applies - see _packet_send).
+    mut big_pt := NewBuf(5000)
+    mut bi := 0
+    until bi < 5000:
+        BufPutByte(big_pt, bi & 0xFF)
+        bi += 1
+    end
+    _pkt_expect_roundtrip(cli_ps, peer_ps, big_pt, "packet plaintext: client -> server, 5000-byte payload spanning many blocks")
+    FreeBuf(big_pt)
+
+    // ---------------------------------------------------------- switch to encrypted (like NEWKEYS)
+    key_c2s := _hexbuf("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+    key_s2c := _hexbuf("1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100")
+
+    cli_ps.cipher_write = _aes_init(key_c2s.p, 32)
+    cli_ps.cipher_read = _aes_init(key_s2c.p, 32)
+    peer_ps.cipher_write = _aes_init(key_s2c.p, 32)
+    peer_ps.cipher_read = _aes_init(key_c2s.p, 32)
+    FreeBuf(key_c2s)
+    FreeBuf(key_s2c)
+
+    // Independent Buf copies for every counter/mac-key field: _aes_ctr_xor
+    // mutates its counter argument in place, and _packet_state_free wipes
+    // and frees whatever a PacketState's counter_*/mac_key_* fields point
+    // to, so two PacketStates must never share the same underlying buffer
+    // for these (aliased mutation on one side, or a double free on
+    // teardown, either way).
+    cli_ps.counter_write = _hexbuf("00000000000000000000000000000001")
+    peer_ps.counter_read = _hexbuf("00000000000000000000000000000001")
+    peer_ps.counter_write = _hexbuf("000000000000000000000000000000ff")
+    cli_ps.counter_read = _hexbuf("000000000000000000000000000000ff")
+
+    cli_ps.mac_key_write = _hexbuf("2020202020202020202020202020202020202020202020202020202020202020")
+    peer_ps.mac_key_read = _hexbuf("2020202020202020202020202020202020202020202020202020202020202020")
+    peer_ps.mac_key_write = _hexbuf("3030303030303030303030303030303030303030303030303030303030303030")
+    cli_ps.mac_key_read = _hexbuf("3030303030303030303030303030303030303030303030303030303030303030")
+
+    cli_ps.mac_kind_write = MAC_SHA256
+    cli_ps.mac_kind_read = MAC_SHA256
+    peer_ps.mac_kind_write = MAC_SHA256
+    peer_ps.mac_kind_read = MAC_SHA256
+
+    cli_ps.block_size_write = 16
+    cli_ps.block_size_read = 16
+    peer_ps.block_size_write = 16
+    peer_ps.block_size_read = 16
+
+    cli_ps.encrypted = true
+    peer_ps.encrypted = true
+
+    // ---------------------------------------------------------- encrypted phase
+    mut e1 := NewBuf(4)
+    BufPutByte(e1, 50)
+    BufPutStringStr(e1, "encrypted hello from client")
+    _pkt_expect_roundtrip(cli_ps, peer_ps, e1, "packet encrypted: client -> server, small payload")
+    FreeBuf(e1)
+
+    mut e2 := NewBuf(4)
+    BufPutByte(e2, 51)
+    BufPutStringStr(e2, "encrypted hello from server")
+    _pkt_expect_roundtrip(peer_ps, cli_ps, e2, "packet encrypted: server -> client, small payload")
+    FreeBuf(e2)
+
+    mut big_ct := NewBuf(9000)
+    mut ci := 0
+    until ci < 9000:
+        BufPutByte(big_ct, (ci * 3) & 0xFF)
+        ci += 1
+    end
+    _pkt_expect_roundtrip(cli_ps, peer_ps, big_ct, "packet encrypted: client -> server, 9000-byte payload spanning many cipher blocks")
+    FreeBuf(big_ct)
+
+    // Sequence numbers must keep counting up across the plaintext/encrypted
+    // boundary, never reset at NEWKEYS (this package never rekeys, so
+    // seq_write/seq_read run for the whole connection's lifetime). Client
+    // write count so far: p1, big_pt (plaintext) + e1, big_ct (encrypted) = 4.
+    _ck(cli_ps.seq_write == (4 as u32), "packet: client's write sequence continues counting across the encryption switch (2 plaintext + 2 encrypted sends so far)")
+
+    // ---------------------------------------------------------- MAC rejection
+    // Corrupt the server's read-side MAC key so it can no longer agree
+    // with what the client actually used - the packet must be rejected
+    // (.bad = true), never silently accepted with wrong-but-plausible
+    // decrypted content.
+    tampered_key := peer_ps.mac_key_read
+    _bput(tampered_key.p, 0, _bget(tampered_key.p, 0) ^ 0xFF)
+    mut e3 := NewBuf(4)
+    BufPutByte(e3, 52)
+    BufPutStringStr(e3, "this must not verify")
+    ok_send3 := _packet_send(cli_ps, e3)
+    _ck(ok_send3, "packet: (setup) send for the MAC-mismatch case succeeds at the transport level")
+    mut got3 := _packet_recv(peer_ps)
+    _ck(got3.bad, "packet: a receiver with the wrong MAC key rejects the packet instead of accepting it")
+    FreeBuf(got3)
+    FreeBuf(e3)
+
+    _packet_state_free(cli_ps)
+    _packet_state_free(peer_ps)
+    rawsock.Close(cli)
+    rawsock.Close(peer)
+    rawsock.Close(srv)
+end

@@ -1,0 +1,228 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import str
+import io
+import os
+import encoding
+import tls
+
+// Load a user's RSA private key for publickey authentication. Two on-disk
+// formats are supported, both unencrypted only - see the header note below:
+//
+//   1. Traditional PEM (PKCS#1 "RSA PRIVATE KEY" or PKCS#8 "PRIVATE KEY"),
+//      via std/tls's already-solid DER/PEM parser (LoadPrivateKeyFile) -
+//      tls.PrivateKey's fields are pub, so its rsa_n/rsa_e/rsa_d/rsa_phi can
+//      be read from here even though the TYPE itself cannot be named across
+//      the package boundary (see ssh.salam's header); the values are copied
+//      out into this package's own Identity before tls's value goes away.
+//   2. The OpenSSH container format ("-----BEGIN OPENSSH PRIVATE KEY-----"),
+//      which every `ssh-keygen` since OpenSSH 7.8 (2018) produces by default
+//      for every key type including RSA. Parsed directly here: once
+//      base64-decoded, its body is plain SSH-wire-format data (the same
+//      uint32/string/mpint encoding as the network protocol), so it reuses
+//      bytes.salam's Reader rather than needing a separate parser.
+//
+// NOT SUPPORTED: passphrase-encrypted keys, in either format. PEM encryption
+// uses OpenSSL's legacy EVP_BytesToKey + AES-CBC; the OpenSSH format uses
+// bcrypt_pbkdf + AES-CTR/GCM. Both are real algorithms this package would
+// need to add just to unwrap a key before ever touching RSA, and neither is
+// implemented. Decrypt the key first (`ssh-keygen -p -N ""`) or use password
+// authentication instead.
+
+const _OPENSSH_MAGIC := "openssh-key-v1"
+
+struct Identity:
+    pub ok: bool = false
+    pub n: Buf = Buf {}
+    pub e: Buf = Buf {}
+    pub d: Buf = Buf {}
+    pub phi: Buf = Buf {}
+end
+
+func _identity_bad(): Identity:
+    ret Identity {}
+end
+
+func _identity_free(k &: Identity):
+    WipeBuf(k.d)
+    WipeBuf(k.phi)
+    FreeBuf(k.n)
+    FreeBuf(k.e)
+    k.ok = false
+end
+
+// ---------------------------------------------------------------- PEM (via tls)
+
+func _load_pem(pem: str): Identity:
+    tk := tls.ParsePrivateKeyPEM(pem)
+    if !tk.ok || tk.rsa_n.len == 0:
+        ret _identity_bad()
+    end
+    mut id := Identity {}
+    id.n = NewBuf(tk.rsa_n.len)
+    BufPutBytes(id.n, tk.rsa_n.p, tk.rsa_n.len)
+    id.e = NewBuf(tk.rsa_e.len)
+    BufPutBytes(id.e, tk.rsa_e.p, tk.rsa_e.len)
+    id.d = NewBuf(tk.rsa_d.len)
+    BufPutBytes(id.d, tk.rsa_d.p, tk.rsa_d.len)
+    id.phi = NewBuf(tk.rsa_phi.len)
+    BufPutBytes(id.phi, tk.rsa_phi.p, tk.rsa_phi.len)
+    id.ok = true
+    ret id
+end
+
+// ---------------------------------------------------------------- OpenSSH container
+
+// phi = (p-1)(q-1), from the p/q the OpenSSH format carries directly
+// (unlike a PKCS#1 DER key, there is no pre-computed phi to reuse).
+func _phi_from_pq(p: Buf, q: Buf): Buf:
+    mut pbig := _big_from_bytes(p.p, p.len)
+    mut qbig := _big_from_bytes(q.p, q.len)
+    mut one := _big_new(1)
+    _big_set_u32(one, 1 as u32)
+    mut pm1 := _big_new(pbig.n + 4)
+    mut qm1 := _big_new(qbig.n + 4)
+    ok := _big_sub(pm1, pbig, one) && _big_sub(qm1, qbig, one)
+    mut phi := _big_new(pm1.n + qm1.n + 4)
+    mut out := NewBuf(1)
+    if ok:
+        _big_mul(phi, pm1, qm1)
+        philen := _big_bytelen(phi)
+        FreeBuf(out)
+        out = NewBuf(philen)
+        BufPutZeros(out, philen)
+        _tobytes_ok := _big_to_bytes(phi, out.p, philen)
+    end
+    _big_free(pbig)
+    _big_free(qbig)
+    _big_free(one)
+    _big_free(pm1)
+    _big_free(qm1)
+    _big_free(phi)
+    ret out
+end
+
+func _parse_openssh_body(r &: Reader): Identity:
+    mut magic := NewBuf(_OPENSSH_MAGIC.len() + 1)
+    repeat _OPENSSH_MAGIC.len() + 1 with i:
+        BufPutByte(magic, RGetByte(r))
+    end
+    magic_ok := !r.bad && ConstantTimeEqual(magic.p, _OPENSSH_MAGIC as void*, _OPENSSH_MAGIC.len())
+    FreeBuf(magic)
+    if !magic_ok:
+        ret _identity_bad()
+    end
+
+    _ciphername := RGetStringAsStr(r)
+    _kdfname := RGetStringAsStr(r)
+    _kdfopts := RGetStringView(r)
+    nkeys := RGetUint32(r) as int
+    if r.bad || nkeys != 1 || !str.Equals(_ciphername, "none"):
+        ret _identity_bad()
+    end
+    _pubblob := RGetStringView(r) // public key blob - the private section below is authoritative
+
+    priv := RGetStringView(r)
+    if r.bad:
+        ret _identity_bad()
+    end
+    mut pr := priv
+    check1 := RGetUint32(pr)
+    check2 := RGetUint32(pr)
+    if pr.bad || check1 != check2:
+        ret _identity_bad()
+    end
+    keytype := RGetStringAsStr(pr)
+    if !str.Equals(keytype, "ssh-rsa"):
+        ret _identity_bad()
+    end
+    n := RGetMpintCopy(pr)
+    e := RGetMpintCopy(pr)
+    d := RGetMpintCopy(pr)
+    _iqmp := RGetMpintCopy(pr) // q^-1 mod p - unused, we derive phi from p/q instead
+    p := RGetMpintCopy(pr)
+    q := RGetMpintCopy(pr)
+    if pr.bad:
+        FreeBuf(n)
+        FreeBuf(e)
+        WipeBuf(d)
+        WipeBuf(_iqmp)
+        WipeBuf(p)
+        WipeBuf(q)
+        ret _identity_bad()
+    end
+
+    mut id := Identity {}
+    id.n = n
+    id.e = e
+    id.d = d
+    id.phi = _phi_from_pq(p, q)
+    id.ok = id.phi.len > 0
+    WipeBuf(p)
+    WipeBuf(q)
+    WipeBuf(_iqmp)
+    if !id.ok:
+        _identity_free(id)
+        ret _identity_bad()
+    end
+    ret id
+end
+
+func _load_openssh(pem: str): Identity:
+    begintag := "-----BEGIN OPENSSH PRIVATE KEY-----"
+    endtag := "-----END OPENSSH PRIVATE KEY-----"
+    b := pem.find(begintag)
+    if b < 0:
+        ret _identity_bad()
+    end
+    bodystart := b + begintag.len()
+    e := str.IndexFrom(pem, endtag, bodystart)
+    if e < 0:
+        ret _identity_bad()
+    end
+    b64 := pem.substr(bodystart, e - bodystart)
+    room := b64.len() / 4 * 3 + 8
+    mut der := NewBuf(room)
+    BufPutZeros(der, room)
+    mut good := false
+    got := encoding.Base64DecodeBytes(b64, der.p, room, good)
+    if !good || got <= 0:
+        FreeBuf(der)
+        ret _identity_bad()
+    end
+    mut r := NewReader(der.p, got)
+    id := _parse_openssh_body(r)
+    FreeBuf(der)
+    ret id
+end
+
+// ---------------------------------------------------------------- entry point
+
+func _load_identity_pem(pem: str): Identity:
+    if str.Contains(pem, "OPENSSH PRIVATE KEY"):
+        ret _load_openssh(pem)
+    end
+    ret _load_pem(pem)
+end
+
+func _load_identity_file(path: str): Identity:
+    if !os.Exists(path):
+        ret _identity_bad()
+    end
+    pem := io.ReadFile(path)
+    ret _load_identity_pem(pem)
+end

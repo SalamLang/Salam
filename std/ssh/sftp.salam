@@ -1,0 +1,649 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import os
+import mem
+import str
+import fs
+
+// SFTP version 3 (draft-ietf-secsh-filexfer-02) file transfer, the version
+// essentially every server still speaks (OpenSSH's sftp-server has offered
+// v3 since 2001 and never moved past it, precisely so old and new clients
+// alike can rely on it - which is exactly this package's own "old and new"
+// brief). Runs over the "sftp" subsystem of an ordinary session channel:
+// SFTP's own uint32-length-prefixed packets travel inside SSH_MSG_CHANNEL_
+// DATA, so this file has to re-frame them out of the channel's byte stream
+// itself (a CHANNEL_DATA message boundary has no relationship to an SFTP
+// packet boundary - see _sftp_read_packet).
+//
+// One request in flight at a time (no pipelining) - simple and correct,
+// and file transfer throughput here is dominated by AES-CTR/HMAC and the
+// network round-trip, not by request pipelining.
+//
+// Local file I/O goes through fopen/fread/fwrite directly, not std/io's
+// str-based WriteFile/ReadFile (a Salam str truncates at the first
+// embedded 0x00 byte - see bytes.salam's header - which would silently
+// corrupt any non-text file transferred through this). The extern
+// declarations below duplicate names std/fs/fs.salam already declares -
+// unavoidable, since fopen/fread/fwrite are what byte-safe file I/O is -
+// and merely doing so, without importing fs, is enough to make the
+// compiler mis-resolve fs.salam's own conditional extern blocks while
+// checking for a conflict (a latent parser bug in that file, unrelated to
+// this package: fs.salam compiles and runs correctly on its own, as
+// confirmed separately - see this file's PR notes for the isolated repro).
+// `import fs` plus one real call to it - not just the import - is the
+// workaround: it forces fs.salam to resolve normally through the ordinary
+// import path before anything here can trip the conflict check (see
+// _fs_import_workaround below, called once from SftpOpen).
+
+extern:
+    func fopen(path: str, mode: str): void*
+    func fclose(stream: void*): int
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+end
+
+const SSH_FXP_INIT := 1
+const SSH_FXP_VERSION := 2
+const SSH_FXP_OPEN := 3
+const SSH_FXP_CLOSE := 4
+const SSH_FXP_READ := 5
+const SSH_FXP_WRITE := 6
+const SSH_FXP_LSTAT := 7
+const SSH_FXP_FSTAT := 8
+const SSH_FXP_OPENDIR := 11
+const SSH_FXP_READDIR := 12
+const SSH_FXP_REMOVE := 13
+const SSH_FXP_MKDIR := 14
+const SSH_FXP_RMDIR := 15
+const SSH_FXP_REALPATH := 16
+const SSH_FXP_STAT := 17
+const SSH_FXP_RENAME := 18
+const SSH_FXP_STATUS := 101
+const SSH_FXP_HANDLE := 102
+const SSH_FXP_DATA := 103
+const SSH_FXP_NAME := 104
+const SSH_FXP_ATTRS := 105
+
+const SSH_FXF_READ := 0x00000001
+const SSH_FXF_WRITE := 0x00000002
+const SSH_FXF_CREAT := 0x00000008
+const SSH_FXF_TRUNC := 0x00000010
+
+const SSH_FX_OK := 0
+const SSH_FX_EOF := 1
+
+const SFTP_ATTR_SIZE := 0x00000001
+const SFTP_ATTR_PERMISSIONS := 0x00000004
+
+const _SFTP_CHUNK := 32768
+const _RAW_IO_CHUNK := 65536
+
+pub struct Sftp:
+    pub ch: Channel = Channel {}
+    pub ok: bool = false
+    pub next_id: u32 = 1 as u32
+end
+
+pub struct SftpFileInfo:
+    pub name: str = ""
+    pub size: i64 = 0 as i64
+    pub is_dir: bool = false
+    pub permissions: u32 = 0 as u32
+end
+
+struct SftpPacket:
+    pub msgtype: int = 0 - 1
+    pub body: Reader = Reader {}
+    pub bodybuf: Buf = Buf {}
+    pub ok: bool = false
+end
+
+// See this file's header: importing fs is not enough by itself to dodge
+// the extern-conflict parser bug in fs.salam - fs needs one genuine call
+// through the normal import path too, before fopen/fread/fwrite below are
+// declared. SftpOpen calls this once; the result is never otherwise used.
+func _fs_import_workaround(): i64:
+    ret fs.ModTime(".")
+end
+
+// Reads a whole file into memory via repeated chunked fread calls (no
+// fseek/ftell dependency, since std/fs's own fseek/ftell would need the
+// same import-workaround treatment for no benefit here - a plain read
+// loop to EOF is all this needs).
+func _read_file_bytes(path: str): Buf:
+    f := fopen(path, "rb")
+    if f == null:
+        ret NewBuf(0)
+    end
+    mut out := NewBuf(_RAW_IO_CHUNK)
+    mut chunk := NewBuf(_RAW_IO_CHUNK)
+    BufPutZeros(chunk, _RAW_IO_CHUNK)
+    mut reading := true
+    until reading:
+        got := fread(chunk.p, 1 as u64, _RAW_IO_CHUNK as u64, f)
+        if got == (0 as u64):
+            reading = false
+        else:
+            BufPutBytes(out, chunk.p, got as int)
+            if got < (_RAW_IO_CHUNK as u64):
+                reading = false
+            end
+        end
+    end
+    FreeBuf(chunk)
+    fclose(f)
+    ret out
+end
+
+func _write_file_bytes(path: str, p: void*, n: int): bool:
+    f := fopen(path, "wb")
+    if f == null:
+        ret false
+    end
+    written := fwrite(p, 1 as u64, n as u64, f)
+    fclose(f)
+    ret written == (n as u64)
+end
+
+func _sftp_alloc_id(sftp &: Sftp): u32:
+    id := sftp.next_id
+    sftp.next_id = sftp.next_id + (1 as u32)
+    ret id
+end
+
+// Drops the first `n` bytes of `b`, shifting the remainder down - how
+// _sftp_read_packet consumes one reassembled SFTP message out of the
+// channel's stdout buffer without disturbing whatever arrived after it.
+func _buf_consume_front(b &: Buf, n: int):
+    if n <= 0:
+        ret
+    end
+    if n >= b.len:
+        b.len = 0
+        ret
+    end
+    remaining := b.len - n
+    mem.Copy(b.p, (b.p as i64 + n) as void*, remaining as u64)
+    b.len = remaining
+end
+
+func _sftp_send(t &: Transport, sftp &: Sftp, msgtype: int, body: Buf): bool:
+    mut pkt := NewBuf(5 + body.len)
+    BufPutUint32(pkt, (1 + body.len) as u32)
+    BufPutByte(pkt, msgtype)
+    BufPutBuf(pkt, body)
+    ok := _channel_write(t, sftp.ch, pkt.p, pkt.len)
+    FreeBuf(pkt)
+    ret ok
+end
+
+// Pumps channel steps until a full SFTP packet (length prefix + payload)
+// is available in sftp.ch.stdout, then removes and returns it as a Reader
+// positioned right after the packet's own type byte, plus that type byte.
+func _sftp_read_packet(t &: Transport, sftp &: Sftp): SftpPacket:
+    mut steps := 0
+    until sftp.ch.stdout.len < 4 && steps < 200000:
+        code := _channel_pump_step(t, sftp.ch)
+        if code == (0 - 1) || code == 3:
+            ret SftpPacket {}
+        end
+        steps += 1
+    end
+    if sftp.ch.stdout.len < 4:
+        ret SftpPacket {}
+    end
+    plen := ((_bget(sftp.ch.stdout.p, 0) as u32) << (24 as u32)) | ((_bget(sftp.ch.stdout.p, 1) as u32) << (16 as u32)) | ((_bget(sftp.ch.stdout.p, 2) as u32) << (8 as u32)) | (_bget(sftp.ch.stdout.p, 3) as u32)
+    total := 4 + (plen as int)
+    until sftp.ch.stdout.len < total && steps < 200000:
+        code := _channel_pump_step(t, sftp.ch)
+        if code == (0 - 1) || code == 3:
+            ret SftpPacket {}
+        end
+        steps += 1
+    end
+    if sftp.ch.stdout.len < total:
+        ret SftpPacket {}
+    end
+    msgtype := _bget(sftp.ch.stdout.p, 4)
+    mut body := NewBuf(plen as int - 1)
+    BufPutBytes(body, (sftp.ch.stdout.p as i64 + 5) as void*, (plen as int) - 1)
+    _buf_consume_front(sftp.ch.stdout, total)
+
+    mut p := SftpPacket {}
+    p.msgtype = msgtype
+    p.bodybuf = body
+    p.body = ReaderFromBuf(body)
+    p.ok = true
+    ret p
+end
+
+func _sftp_expect_status_ok(t &: Transport, sftp &: Sftp): bool:
+    pkt := _sftp_read_packet(t, sftp)
+    if !pkt.ok:
+        ret false
+    end
+    ok := pkt.msgtype == SSH_FXP_STATUS
+    mut r := pkt.body
+    _id := RGetUint32(r)
+    code := RGetUint32(r)
+    result := ok && !r.bad && code == (SSH_FX_OK as u32)
+    FreeBuf(pkt.bodybuf)
+    ret result
+end
+
+func _sftp_open_handle(t &: Transport, sftp &: Sftp, path: str, pflags: u32): Buf:
+    id := _sftp_alloc_id(sftp)
+    mut body := NewBuf(32 + path.len())
+    BufPutUint32(body, id)
+    BufPutStringStr(body, path)
+    BufPutUint32(body, pflags)
+    BufPutUint32(body, 0 as u32) // attrs flags = none
+    ok := _sftp_send(t, sftp, SSH_FXP_OPEN, body)
+    FreeBuf(body)
+    if !ok:
+        ret NewBuf(0)
+    end
+    pkt := _sftp_read_packet(t, sftp)
+    if !pkt.ok || pkt.msgtype != SSH_FXP_HANDLE:
+        FreeBuf(pkt.bodybuf)
+        ret NewBuf(0)
+    end
+    mut r := pkt.body
+    _rid := RGetUint32(r)
+    handle := RGetStringCopy(r)
+    FreeBuf(pkt.bodybuf)
+    if r.bad:
+        FreeBuf(handle)
+        ret NewBuf(0)
+    end
+    ret handle
+end
+
+func _sftp_close_handle(t &: Transport, sftp &: Sftp, handle: Buf):
+    id := _sftp_alloc_id(sftp)
+    mut body := NewBuf(8 + handle.len)
+    BufPutUint32(body, id)
+    BufPutStringBuf(body, handle)
+    _sent_ok := _sftp_send(t, sftp, SSH_FXP_CLOSE, body)
+    FreeBuf(body)
+    _status_ok := _sftp_expect_status_ok(t, sftp)
+end
+
+func _sftp_parse_attrs(r &: Reader): SftpFileInfo:
+    mut info := SftpFileInfo {}
+    flags := RGetUint32(r)
+    if (flags & (SFTP_ATTR_SIZE as u32)) != (0 as u32):
+        info.size = RGetUint64(r) as i64
+    end
+    if (flags & (0x00000002 as u32)) != (0 as u32): // UIDGID
+        _uid := RGetUint32(r)
+        _gid := RGetUint32(r)
+    end
+    if (flags & (SFTP_ATTR_PERMISSIONS as u32)) != (0 as u32):
+        info.permissions = RGetUint32(r)
+        // POSIX S_IFMT/S_IFDIR. Written in hex, not octal: Salam has no
+        // bare-leading-zero octal literal syntax (only an explicit `0o`
+        // prefix is octal - see compiler/lexer.salam's scan_number), so
+        // the traditional C `0170000`/`0040000` spelling here previously
+        // parsed as plain DECIMAL 170000/40000 and silently never matched
+        // any real st_mode value, making is_dir always false.
+        info.is_dir = (info.permissions & (0xF000 as u32)) == (0x4000 as u32)
+    end
+    if (flags & (0x00000008 as u32)) != (0 as u32): // ACMODTIME
+        _atime := RGetUint32(r)
+        _mtime := RGetUint32(r)
+    end
+    ret info
+end
+
+// ============================================================== public API
+
+// Opens the "sftp" subsystem on a fresh channel and completes the
+// INIT/VERSION exchange.
+@en "SftpOpen"
+@fa "باز کردن اس اف تی پی"
+@ar "فتح sftp"
+pub func SftpOpen(client &: Client): Sftp:
+    _fs_workaround_probe := _fs_import_workaround()
+    mut sftp := Sftp {}
+    sftp.ch = _channel_open_session(client.transport)
+    sftp.next_id = 1 as u32
+    if !sftp.ch.open:
+        ret sftp
+    end
+    mut extra := NewBuf(16)
+    BufPutStringStr(extra, "sftp")
+    if !_channel_send_request(client.transport, sftp.ch, "subsystem", true, extra):
+        FreeBuf(extra)
+        ret sftp
+    end
+    FreeBuf(extra)
+
+    mut initbody := NewBuf(4)
+    BufPutUint32(initbody, 3 as u32)
+    if !_sftp_send(client.transport, sftp, SSH_FXP_INIT, initbody):
+        FreeBuf(initbody)
+        ret sftp
+    end
+    FreeBuf(initbody)
+
+    pkt := _sftp_read_packet(client.transport, sftp)
+    if pkt.ok && pkt.msgtype == SSH_FXP_VERSION:
+        sftp.ok = true
+    end
+    FreeBuf(pkt.bodybuf)
+    ret sftp
+end
+
+@en "SftpClose"
+@fa "بستن اس اف تی پی"
+@ar "إغلاق sftp"
+pub func SftpClose(client &: Client, sftp &: Sftp):
+    _channel_send_eof(client.transport, sftp.ch)
+    _channel_send_close(client.transport, sftp.ch)
+    _channel_free(sftp.ch)
+    sftp.ok = false
+end
+
+// Uploads local file `localpath` to `remotepath`, creating/truncating it.
+@en "Upload"
+@fa "بارگذاری"
+@ar "رفع"
+pub func Upload(client &: Client, sftp &: Sftp, localpath: str, remotepath: str): bool:
+    if !os.Exists(localpath):
+        ret false
+    end
+    handle := _sftp_open_handle(client.transport, sftp, remotepath, (SSH_FXF_WRITE | SSH_FXF_CREAT | SSH_FXF_TRUNC) as u32)
+    if handle.len == 0:
+        ret false
+    end
+    content := _read_file_bytes(localpath)
+    total := content.len
+    mut offset := 0 as u64
+    mut ok := true
+    mut sent := 0
+    until sent < total && ok:
+        mut chunk := total - sent
+        if chunk > _SFTP_CHUNK:
+            chunk = _SFTP_CHUNK
+        end
+        id := _sftp_alloc_id(sftp)
+        mut body := NewBuf(24 + handle.len + chunk)
+        BufPutUint32(body, id)
+        BufPutStringBuf(body, handle)
+        BufPutUint64(body, offset)
+        BufPutString(body, (content.p as i64 + sent) as void*, chunk)
+        ok = _sftp_send(client.transport, sftp, SSH_FXP_WRITE, body)
+        FreeBuf(body)
+        if ok:
+            ok = _sftp_expect_status_ok(client.transport, sftp)
+        end
+        offset = offset + (chunk as u64)
+        sent += chunk
+    end
+    _sftp_close_handle(client.transport, sftp, handle)
+    FreeBuf(handle)
+    FreeBuf(content)
+    ret ok
+end
+
+// Downloads `remotepath` to local file `localpath`.
+@en "Download"
+@fa "دانلود"
+@ar "تنزيل"
+pub func Download(client &: Client, sftp &: Sftp, remotepath: str, localpath: str): bool:
+    handle := _sftp_open_handle(client.transport, sftp, remotepath, SSH_FXF_READ as u32)
+    if handle.len == 0:
+        ret false
+    end
+    mut out := NewBuf(65536)
+    mut offset := 0 as u64
+    mut done := false
+    mut ok := true
+    until !done && ok:
+        id := _sftp_alloc_id(sftp)
+        mut body := NewBuf(20 + handle.len)
+        BufPutUint32(body, id)
+        BufPutStringBuf(body, handle)
+        BufPutUint64(body, offset)
+        BufPutUint32(body, _SFTP_CHUNK as u32)
+        ok = _sftp_send(client.transport, sftp, SSH_FXP_READ, body)
+        FreeBuf(body)
+        if !ok:
+            continue
+        end
+        pkt := _sftp_read_packet(client.transport, sftp)
+        if !pkt.ok:
+            ok = false
+        else if pkt.msgtype == SSH_FXP_STATUS:
+            mut r := pkt.body
+            _rid := RGetUint32(r)
+            code := RGetUint32(r)
+            done = true // SSH_FX_EOF (or any status here) ends the transfer
+            _unused_code := code
+            FreeBuf(pkt.bodybuf)
+        else if pkt.msgtype == SSH_FXP_DATA:
+            mut r := pkt.body
+            _rid := RGetUint32(r)
+            data := RGetStringView(r)
+            if r.bad:
+                ok = false
+            else:
+                BufPutBytes(out, data.p, data.len)
+                offset = offset + (data.len as u64)
+                if data.len == 0:
+                    done = true
+                end
+            end
+            FreeBuf(pkt.bodybuf)
+        else:
+            FreeBuf(pkt.bodybuf)
+            ok = false
+        end
+    end
+    _sftp_close_handle(client.transport, sftp, handle)
+    FreeBuf(handle)
+    if ok:
+        ok = _write_file_bytes(localpath, out.p, out.len)
+    end
+    FreeBuf(out)
+    ret ok
+end
+
+@en "Mkdir"
+@fa "ساخت پوشه"
+@ar "إنشاء مجلد"
+pub func Mkdir(client &: Client, sftp &: Sftp, path: str): bool:
+    id := _sftp_alloc_id(sftp)
+    mut body := NewBuf(32 + path.len())
+    BufPutUint32(body, id)
+    BufPutStringStr(body, path)
+    BufPutUint32(body, 0 as u32)
+    ok := _sftp_send(client.transport, sftp, SSH_FXP_MKDIR, body)
+    FreeBuf(body)
+    if !ok:
+        ret false
+    end
+    ret _sftp_expect_status_ok(client.transport, sftp)
+end
+
+@en "Remove"
+@fa "حذف"
+@ar "إزالة"
+pub func Remove(client &: Client, sftp &: Sftp, path: str): bool:
+    id := _sftp_alloc_id(sftp)
+    mut body := NewBuf(16 + path.len())
+    BufPutUint32(body, id)
+    BufPutStringStr(body, path)
+    ok := _sftp_send(client.transport, sftp, SSH_FXP_REMOVE, body)
+    FreeBuf(body)
+    if !ok:
+        ret false
+    end
+    ret _sftp_expect_status_ok(client.transport, sftp)
+end
+
+@en "Rmdir"
+@fa "حذف پوشه"
+@ar "إزالة مجلد"
+pub func Rmdir(client &: Client, sftp &: Sftp, path: str): bool:
+    id := _sftp_alloc_id(sftp)
+    mut body := NewBuf(16 + path.len())
+    BufPutUint32(body, id)
+    BufPutStringStr(body, path)
+    ok := _sftp_send(client.transport, sftp, SSH_FXP_RMDIR, body)
+    FreeBuf(body)
+    if !ok:
+        ret false
+    end
+    ret _sftp_expect_status_ok(client.transport, sftp)
+end
+
+@en "Rename"
+@fa "تغییر نام"
+@ar "إعادة تسمية"
+pub func Rename(client &: Client, sftp &: Sftp, oldpath: str, newpath: str): bool:
+    id := _sftp_alloc_id(sftp)
+    mut body := NewBuf(32 + oldpath.len() + newpath.len())
+    BufPutUint32(body, id)
+    BufPutStringStr(body, oldpath)
+    BufPutStringStr(body, newpath)
+    ok := _sftp_send(client.transport, sftp, SSH_FXP_RENAME, body)
+    FreeBuf(body)
+    if !ok:
+        ret false
+    end
+    ret _sftp_expect_status_ok(client.transport, sftp)
+end
+
+@en "Stat"
+@fa "وضعیت"
+@ar "حالة"
+pub func Stat(client &: Client, sftp &: Sftp, path: str): SftpFileInfo:
+    id := _sftp_alloc_id(sftp)
+    mut body := NewBuf(16 + path.len())
+    BufPutUint32(body, id)
+    BufPutStringStr(body, path)
+    ok := _sftp_send(client.transport, sftp, SSH_FXP_STAT, body)
+    FreeBuf(body)
+    if !ok:
+        ret SftpFileInfo {}
+    end
+    pkt := _sftp_read_packet(client.transport, sftp)
+    if !pkt.ok || pkt.msgtype != SSH_FXP_ATTRS:
+        FreeBuf(pkt.bodybuf)
+        ret SftpFileInfo {}
+    end
+    mut r := pkt.body
+    _rid := RGetUint32(r)
+    info := _sftp_parse_attrs(r)
+    FreeBuf(pkt.bodybuf)
+    info.name = path
+    ret info
+end
+
+@en "Exists"
+@fa "وجود دارد"
+@ar "موجود"
+pub func Exists(client &: Client, sftp &: Sftp, path: str): bool:
+    id := _sftp_alloc_id(sftp)
+    mut body := NewBuf(16 + path.len())
+    BufPutUint32(body, id)
+    BufPutStringStr(body, path)
+    ok := _sftp_send(client.transport, sftp, SSH_FXP_STAT, body)
+    FreeBuf(body)
+    if !ok:
+        ret false
+    end
+    pkt := _sftp_read_packet(client.transport, sftp)
+    result := pkt.ok && pkt.msgtype == SSH_FXP_ATTRS
+    FreeBuf(pkt.bodybuf)
+    ret result
+end
+
+// Lists a directory's entries (excluding "." and "..").
+@en "ListDir"
+@fa "لیست پوشه"
+@ar "قائمة المجلد"
+pub func ListDir(client &: Client, sftp &: Sftp, path: str): Vector<SftpFileInfo>:
+    mut out := Vector {} as Vector<SftpFileInfo>
+    id := _sftp_alloc_id(sftp)
+    mut body := NewBuf(16 + path.len())
+    BufPutUint32(body, id)
+    BufPutStringStr(body, path)
+    ok := _sftp_send(client.transport, sftp, SSH_FXP_OPENDIR, body)
+    FreeBuf(body)
+    if !ok:
+        ret out
+    end
+    pkt0 := _sftp_read_packet(client.transport, sftp)
+    if !pkt0.ok || pkt0.msgtype != SSH_FXP_HANDLE:
+        FreeBuf(pkt0.bodybuf)
+        ret out
+    end
+    mut r0 := pkt0.body
+    _rid0 := RGetUint32(r0)
+    handle := RGetStringCopy(r0)
+    FreeBuf(pkt0.bodybuf)
+
+    mut done := false
+    until !done:
+        rid := _sftp_alloc_id(sftp)
+        mut rbody := NewBuf(8 + handle.len)
+        BufPutUint32(rbody, rid)
+        BufPutStringBuf(rbody, handle)
+        rok := _sftp_send(client.transport, sftp, SSH_FXP_READDIR, rbody)
+        FreeBuf(rbody)
+        if !rok:
+            done = true
+            continue
+        end
+        pkt := _sftp_read_packet(client.transport, sftp)
+        if !pkt.ok:
+            done = true
+            continue
+        end
+        if pkt.msgtype == SSH_FXP_STATUS:
+            done = true
+            FreeBuf(pkt.bodybuf)
+            continue
+        end
+        if pkt.msgtype != SSH_FXP_NAME:
+            done = true
+            FreeBuf(pkt.bodybuf)
+            continue
+        end
+        mut r := pkt.body
+        _rid := RGetUint32(r)
+        count := RGetUint32(r) as int
+        repeat count with _i:
+            fname := RGetStringAsStr(r)
+            _longname := RGetStringAsStr(r)
+            info := _sftp_parse_attrs(r)
+            if !str.Equals(fname, ".") && !str.Equals(fname, ".."):
+                mut fi := info
+                fi.name = fname
+                out.push(fi)
+            end
+        end
+        FreeBuf(pkt.bodybuf)
+    end
+
+    _sftp_close_handle(client.transport, sftp, handle)
+    FreeBuf(handle)
+    ret out
+end

@@ -3901,12 +3901,39 @@ func sema_check_pass(s &: Sema, a &: at.Ast, program: int):
         end
         lint_lang_types(s, a, did)
     end
+    // A top-level `const NAME := <expr>` (no type annotation) leaves its
+    // symbol's type TYPE_NONE after sema_collect(); sema_check_var_decl()
+    // (inside check_toplevel) is what fills it in. Package files are merged
+    // in sorted-filename order, not declaration order, so a function body in
+    // an alphabetically earlier sibling file can be checked before the file
+    // that declares a const it references. Resolving every top-level
+    // const/var here first - ahead of any function body, struct default, or
+    // impl - makes that reference order-independent: identifier lookup
+    // always sees the real type instead of a still-unresolved placeholder
+    // (which reads as an error type with no diagnostic, silently poisoning
+    // the expression and surfacing only as a nonsense generated-C error such
+    // as "unknown type name '_3cerror_3e'").
+    mut ic := 0
+    until ic < at.ChildCount(a, program):
+        didc := at.Child(a, program, ic)
+        ic += 1
+        dc := at.Get(a, didc)
+        if dc.synthetic || dc.typarams.len() > 0:
+            continue
+        end
+        if dc.kind == at.AST_CONST_DECL || dc.kind == at.AST_VAR_DECL:
+            check_toplevel(s, a, didc)
+        end
+    end
     mut i2 := 0
     until i2 < at.ChildCount(a, program):
         did2 := at.Child(a, program, i2)
         i2 += 1
         d2 := at.Get(a, did2)
         if d2.synthetic || d2.typarams.len() > 0:
+            continue
+        end
+        if d2.kind == at.AST_CONST_DECL || d2.kind == at.AST_VAR_DECL:
             continue
         end
         check_toplevel(s, a, did2)

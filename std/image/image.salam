@@ -1,0 +1,241 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "image"
+@fa "تصویر"
+@ar "صورة"
+package image
+
+import mem
+
+// image - a from-scratch, self-hosted image processing toolkit: creation,
+// drawing, resizing/rotation, filters, and PNG/BMP/JPEG codecs, with no
+// dependency on libpng/libjpeg/libwebp/GD or any other external runtime.
+//
+// Every pixel operation works against ONE canonical in-memory layout -
+// straight (non-premultiplied) 8-bit RGBA, row-major, top row first - held
+// in a flat `void*` buffer (`Image.pixels`, width*height*4 bytes),
+// allocated with mem.Allocate like every other heap-owning stdlib type
+// (ByteBuf, StringBuilder, ...). Format codecs (bmp.salam/png.salam/
+// jpeg.salam/webp.salam) only need to convert to/from this one layout, so
+// drawing/resize/filter code never has to branch on "what format did this
+// come from".
+//
+// Following std/compress and std/archive's proven shape for this codebase:
+// behavior lives in free functions that take the struct as their first
+// argument (`Fill(img &: Image, c: Color)`, not `img.fill(c)` methods) -
+// struct fields are plain data, spread across many small files in one flat
+// package. `Image` owns heap memory, so call Free(img) when done (idiom:
+// `defer image.Free(img)`), mirroring ByteBuf/BufFree.
+//
+// Building blocks:
+//   Image / Color              - the core data model                (image.salam)
+//   RGB/RGBA/ParseHex/...      - color construction & blending      (color.salam)
+//   DrawLine/DrawRect/...      - drawing primitives                 (draw.salam)
+//   DrawText                   - tiny embedded bitmap font          (font.salam)
+//   Resize/Crop/Rotate*/Flip*  - geometric transforms                (transform.salam)
+//   Grayscale/BoxBlur/...      - pixel filters                       (filters.salam)
+//   ComputeHistogram/Diff/PSNR - analysis & comparison                (analyze.salam)
+//   Open/Save/Decode/Encode    - format-detecting file I/O            (io.salam)
+//   DecodeBMP/EncodeBMP        - Windows BMP codec                    (bmp.salam)
+//   DecodePNG/EncodePNG        - PNG codec (built on std/compress)    (png.salam)
+//   DecodeJPEG/EncodeJPEG      - baseline JPEG codec                  (jpeg.salam)
+//   DecodeWebP/EncodeWebP      - WebP (lossless VP8L) codec           (webp.salam)
+//
+// Out-of-bounds pixel access never crashes: GetPixel returns transparent
+// black and SetPixel is a no-op past the edges (the same "safe default,
+// checkable with a predicate" shape as compress.ByteBuf's BufGet/BufSet -
+// call InBounds first if you need to distinguish "black pixel" from
+// "outside the image"). Decode functions report failure through an
+// `ok &: bool` out-parameter (never an exception - see SKILL.md's
+// no-exceptions rule), the same idiom compress.GzipDecompress/RawInflate
+// already use, so every codec has one consistent failure shape.
+//
+// This is pointer/mem.Allocate-heavy code: verify with the compiled
+// backend (`salam build`/`salam run`), not `salam exec` - see
+// std/compress's own header comment and SKILL.md's interpreter caveat.
+
+@en "Image"
+@fa "تصویر"
+@ar "صورة"
+pub struct Image:
+    pub width: int = 0
+    pub height: int = 0
+    // RGBA8, row-major, top-to-bottom; width*height*4 bytes; null for a
+    // zero-sized or failed-decode image.
+    pub pixels: void* = null
+end
+
+@en "Color"
+@fa "رنگ"
+@ar "لون"
+pub struct Color:
+    pub r: u8 = 0 as u8
+    pub g: u8 = 0 as u8
+    pub b: u8 = 0 as u8
+    pub a: u8 = 255 as u8
+end
+
+inline func _px_off(img: Image, x: int, y: int): int:
+    ret (y * img.width + x) * 4
+end
+
+// ------------------------------------------------------------- lifecycle
+
+// Allocates a new width*height image, fully transparent black. Negative or
+// zero dimensions produce an empty (pixels = null) image rather than
+// erroring, since "0x0 canvas" is a valid, harmless degenerate case.
+@en "New"
+@fa "جدید"
+@ar "جدید"
+pub func New(width: int, height: int): Image:
+    if width <= 0 || height <= 0:
+        ret Image { width = 0, height = 0 }
+    end
+    n := (width * height * 4) as u64
+    p := mem.AllocateZeroed(n)
+    mut img := Image { width = width, height = height }
+    img.pixels = p
+    ret img
+end
+
+// Like New, but pre-filled with `c` instead of transparent black.
+@en "NewFilled"
+@fa "جدید با رنگ"
+@ar "جدید بلون"
+pub func NewFilled(width: int, height: int, c: Color): Image:
+    mut img := New(width, height)
+    Fill(img, c)
+    ret img
+end
+
+@en "Free"
+@fa "آزادسازی"
+@ar "تحریر"
+pub func Free(img &: Image):
+    if img.pixels != null:
+        mem.Free(img.pixels)
+    end
+    img.pixels = null
+    img.width = 0
+    img.height = 0
+end
+
+@en "Clone"
+@fa "کپی"
+@ar "استنساخ"
+pub func Clone(img: Image): Image:
+    out := New(img.width, img.height)
+    if out.pixels != null && img.pixels != null:
+        mem.Copy(out.pixels, img.pixels, (img.width * img.height * 4) as u64)
+    end
+    ret out
+end
+
+@en "IsEmpty"
+@fa "خالی است"
+@ar "فارغ"
+pub func IsEmpty(img: Image): bool:
+    ret img.width <= 0 || img.height <= 0 || img.pixels == null
+end
+
+// ---------------------------------------------------------------- pixels
+
+@en "InBounds"
+@fa "در محدوده"
+@ar "ضمن الحدود"
+pub func InBounds(img: Image, x: int, y: int): bool:
+    ret x >= 0 && y >= 0 && x < img.width && y < img.height
+end
+
+// Returns transparent black for out-of-bounds coordinates or an empty
+// image, rather than erroring - check InBounds first if that distinction
+// matters to the caller.
+@en "GetPixel"
+@fa "دریافت پیکسل"
+@ar "أحضر بكسل"
+pub func GetPixel(img: Image, x: int, y: int): Color:
+    if img.pixels == null || !InBounds(img, x, y):
+        ret Color { r = 0 as u8, g = 0 as u8, b = 0 as u8, a = 0 as u8 }
+    end
+    bp := img.pixels as u8*
+    off := _px_off(img, x, y)
+    mut c := Color { r = bp[off], g = bp[off + 1] }
+    c.b = bp[off + 2]
+    c.a = bp[off + 3]
+    ret c
+end
+
+// No-op for out-of-bounds coordinates or an empty image.
+@en "SetPixel"
+@fa "تنظیم پیکسل"
+@ar "عيّن بكسل"
+pub func SetPixel(img &: Image, x: int, y: int, c: Color):
+    if img.pixels == null || !InBounds(img, x, y):
+        ret
+    end
+    bp := img.pixels as u8*
+    off := _px_off(img, x, y)
+    bp[off] = c.r
+    bp[off + 1] = c.g
+    bp[off + 2] = c.b
+    bp[off + 3] = c.a
+end
+
+// Alpha-composites `c` over the existing pixel (src-over), instead of
+// replacing it outright - used by drawing/watermark code that wants
+// semi-transparent overlays to blend.
+@en "BlendPixel"
+@fa "ترکیب پیکسل"
+@ar "مزج بكسل"
+pub func BlendPixel(img &: Image, x: int, y: int, c: Color):
+    if c.a == (255 as u8):
+        SetPixel(img, x, y, c)
+        ret
+    end
+    if c.a == (0 as u8):
+        ret
+    end
+    under := GetPixel(img, x, y)
+    SetPixel(img, x, y, Blend(under, c))
+end
+
+@en "Fill"
+@fa "پر کردن"
+@ar "تعبئة"
+pub func Fill(img &: Image, c: Color):
+    if img.pixels == null:
+        ret
+    end
+    bp := img.pixels as u8*
+    mut i := 0
+    n := img.width * img.height
+    until i < n:
+        off := i * 4
+        bp[off] = c.r
+        bp[off + 1] = c.g
+        bp[off + 2] = c.b
+        bp[off + 3] = c.a
+        i += 1
+    end
+end
+
+// Convenience over Fill(img, ParseHex(hex)) for the common "clear the
+// canvas to a CSS-style hex color" case.
+@en "FillHex"
+@fa "پر کردن با هگز"
+@ar "تعبئة بلون سداسي"
+pub func FillHex(img &: Image, hex: str):
+    Fill(img, ParseHex(hex))
+end

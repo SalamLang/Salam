@@ -1,0 +1,183 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import mem
+import math
+
+// Image analysis and comparison: per-channel histograms, pixel-diff
+// images, mean absolute error and PSNR. Histogram counts are held in a
+// flat 256-entry `i32` buffer per channel (mem.Allocate'd, like
+// Image.pixels) rather than a `Vector<int>`/array-typed struct field, so
+// this never nests a generic container inside another (Vector<Vector<T>>
+// and similar are unreliable in this compiler - see this package's
+// module-level notes and std/telegram's write-up of the same issue).
+
+@en "Histogram"
+@fa "بافت‌نگار"
+@ar "الرسم البياني"
+pub struct Histogram:
+    pub r: void* = null
+    pub g: void* = null
+    pub b: void* = null
+    // Combined luminance histogram (see Luminance in color.salam).
+    pub luma: void* = null
+end
+
+func _hist_alloc(): void*:
+    ret mem.AllocateZeroed(256 * 4 as u64)
+end
+
+func _hist_bump(buf: void*, bucket: int):
+    p := buf as i32*
+    p[bucket] = p[bucket] + (1 as i32)
+end
+
+@en "ComputeHistogram"
+@fa "محاسبه بافت‌نگار"
+@ar "احسب الرسم البياني"
+pub func ComputeHistogram(img: Image): Histogram:
+    mut h := Histogram { r = _hist_alloc(), g = _hist_alloc() }
+    h.b = _hist_alloc()
+    h.luma = _hist_alloc()
+    if img.pixels == null:
+        ret h
+    end
+    bp := img.pixels as u8*
+    mut i := 0
+    n := img.width * img.height
+    until i < n:
+        off := i * 4
+        r := bp[off] as int
+        g := bp[off + 1] as int
+        b := bp[off + 2] as int
+        _hist_bump(h.r, r)
+        _hist_bump(h.g, g)
+        _hist_bump(h.b, b)
+        _hist_bump(h.luma, (r * 299 + g * 587 + b * 114) / 1000)
+        i += 1
+    end
+    ret h
+end
+
+@en "HistogramGet"
+@fa "خواندن بافت‌نگار"
+@ar "أحضر من الرسم البياني"
+pub func HistogramGet(channel: void*, bucket: int): int:
+    if channel == null || bucket < 0 || bucket > 255:
+        ret 0
+    end
+    p := channel as i32*
+    ret p[bucket] as int
+end
+
+@en "HistogramFree"
+@fa "آزادسازی بافت‌نگار"
+@ar "تحریر الرسم البياني"
+pub func HistogramFree(h &: Histogram):
+    if h.r != null: mem.Free(h.r) end
+    if h.g != null: mem.Free(h.g) end
+    if h.b != null: mem.Free(h.b) end
+    if h.luma != null: mem.Free(h.luma) end
+    h.r = null
+    h.g = null
+    h.b = null
+    h.luma = null
+end
+
+// Per-pixel absolute difference (|a-b| per channel, alpha included) -
+// bright pixels in the result mark where the two images disagree. Regions
+// outside either image's bounds compare against transparent black.
+@en "Diff"
+@fa "تفاوت"
+@ar "الفرق"
+pub func Diff(a: Image, b: Image): Image:
+    w := a.width > b.width ? a.width : b.width
+    h := a.height > b.height ? a.height : b.height
+    out := New(w, h)
+    mut y := 0
+    until y < h:
+        mut x := 0
+        until x < w:
+            ca := GetPixel(a, x, y)
+            cb := GetPixel(b, x, y)
+            dr := ca.r as int - (cb.r as int)
+            dg := ca.g as int - (cb.g as int)
+            db := ca.b as int - (cb.b as int)
+            SetPixel(out, x, y, RGB(_iabs(dr), _iabs(dg), _iabs(db)))
+            x += 1
+        end
+        y += 1
+    end
+    ret out
+end
+
+// Mean absolute per-channel error over RGB, 0.0 (identical) to 255.0
+// (maximally different) - the simplest single-number similarity metric,
+// used by PSNR below.
+@en "MeanAbsError"
+@fa "میانگین خطای مطلق"
+@ar "متوسط الخطأ المطلق"
+pub func MeanAbsError(a: Image, b: Image): f64:
+    w := a.width > b.width ? a.width : b.width
+    h := a.height > b.height ? a.height : b.height
+    if w == 0 || h == 0: ret 0.0 end
+    mut total := 0.0
+    mut y := 0
+    until y < h:
+        mut x := 0
+        until x < w:
+            ca := GetPixel(a, x, y)
+            cb := GetPixel(b, x, y)
+            total += (_iabs(ca.r as int - (cb.r as int)) as f64)
+            total += (_iabs(ca.g as int - (cb.g as int)) as f64)
+            total += (_iabs(ca.b as int - (cb.b as int)) as f64)
+            x += 1
+        end
+        y += 1
+    end
+    ret total / ((w * h * 3) as f64)
+end
+
+// Peak Signal-to-Noise Ratio in dB - higher means more similar; identical
+// images report a sentinel of 100.0 (real PSNR is undefined/infinite for
+// zero error, and callers comparing against a "good enough" threshold
+// don't want to special-case infinity).
+@en "PSNR"
+@fa "نسبت سیگنال به نویز"
+@ar "نسبة الإشارة إلى الضوضاء"
+pub func PSNR(a: Image, b: Image): f64:
+    w := a.width > b.width ? a.width : b.width
+    h := a.height > b.height ? a.height : b.height
+    if w == 0 || h == 0: ret 100.0 end
+    mut sq_sum := 0.0
+    mut y := 0
+    until y < h:
+        mut x := 0
+        until x < w:
+            ca := GetPixel(a, x, y)
+            cb := GetPixel(b, x, y)
+            dr := (ca.r as int) - (cb.r as int)
+            dg := (ca.g as int) - (cb.g as int)
+            db := (ca.b as int) - (cb.b as int)
+            sq_sum += (dr * dr + dg * dg + db * db) as f64
+            x += 1
+        end
+        y += 1
+    end
+    mse := sq_sum / ((w * h * 3) as f64)
+    if mse <= 0.0: ret 100.0 end
+    ret 10.0 * math.Log10(65025.0 / mse)
+end

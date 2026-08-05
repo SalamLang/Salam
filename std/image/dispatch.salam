@@ -1,0 +1,206 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import compress
+import archive
+import str
+import filepath
+
+// Format-detecting, extension-driven file I/O: Open/Save auto-detect the
+// format from magic bytes (decode) or the file extension (encode), so
+// callers rarely need to name DecodePNG/EncodeJPEG/etc. directly - see
+// bmp.salam/png.salam/jpeg.salam/webp.salam for the codecs themselves.
+//
+// A `Format` is a plain `int` constant, not an enum - see std/compress's
+// own header comment on why a cross-package-visible "which variant" value
+// has to be a plain int in this compiler, not an enum member.
+
+@en "FormatUnknown"
+@fa "قالب نامشخص"
+@ar "تنسيق غير معروف"
+pub const FormatUnknown := 0
+
+@en "FormatPNG"
+@fa "قالب پی‌ان‌جی"
+@ar "تنسيق بي إن جي"
+pub const FormatPNG := 1
+
+@en "FormatBMP"
+@fa "قالب بی‌ام‌پی"
+@ar "تنسيق بي إم بي"
+pub const FormatBMP := 2
+
+@en "FormatJPEG"
+@fa "قالب جی‌پگ"
+@ar "تنسيق جي بيغ"
+pub const FormatJPEG := 3
+
+@en "FormatWebP"
+@fa "قالب وب‌پی"
+@ar "تنسيق ويب بي"
+pub const FormatWebP := 4
+
+// Identifies a format from its magic bytes - works on any buffer, so it
+// is what Decode uses instead of trusting a file extension.
+@en "DetectFormat"
+@fa "شناسایی قالب"
+@ar "تحديد التنسيق"
+pub func DetectFormat(p: void*, n: int): int:
+    if n < 12:
+        ret FormatUnknown
+    end
+    bp := p as u8*
+    if n >= 8 && (bp[0] as int) == 137 && (bp[1] as int) == 80 && (bp[2] as int) == 78 && (bp[3] as int) == 71:
+        ret FormatPNG
+    end
+    if (bp[0] as int) == 66 && (bp[1] as int) == 77:
+        ret FormatBMP
+    end
+    if (bp[0] as int) == 0xFF && (bp[1] as int) == 0xD8:
+        ret FormatJPEG
+    end
+    if (bp[0] as int) == 82 && (bp[1] as int) == 73 && (bp[2] as int) == 70 && (bp[3] as int) == 70 && (bp[8] as int) == 87 && (bp[9] as int) == 69 && (bp[10] as int) == 66 && (bp[11] as int) == 80:
+        ret FormatWebP
+    end
+    ret FormatUnknown
+end
+
+@en "FormatFromExt"
+@fa "قالب از پسوند"
+@ar "التنسيق من الامتداد"
+pub func FormatFromExt(path: str): int:
+    ext := str.Lower(filepath.Ext(path))
+    if ext == ".png": ret FormatPNG end
+    if ext == ".bmp": ret FormatBMP end
+    if ext == ".jpg" || ext == ".jpeg": ret FormatJPEG end
+    if ext == ".webp": ret FormatWebP end
+    ret FormatUnknown
+end
+
+// Decodes any supported format, auto-detected from its magic bytes.
+@en "Decode"
+@fa "کدگشایی"
+@ar "فك الترميز"
+pub func Decode(p: void*, n: int, ok &: bool): Image:
+    fmt := DetectFormat(p, n)
+    if fmt == FormatPNG: ret DecodePNG(p, n, ok) end
+    if fmt == FormatBMP: ret DecodeBMP(p, n, ok) end
+    if fmt == FormatJPEG: ret DecodeJPEG(p, n, ok) end
+    if fmt == FormatWebP: ret DecodeWebP(p, n, ok) end
+    ok = false
+    ret New(0, 0)
+end
+
+// Reads and decodes a file, format auto-detected from its contents.
+@en "Open"
+@fa "بازکردن"
+@ar "افتح"
+pub func Open(path: str, ok &: bool): Image:
+    mut read_ok := false
+    buf := archive.ReadBinaryFile(path, read_ok)
+    if !read_ok:
+        ok = false
+        ret New(0, 0)
+    end
+    out := Decode(buf.data, buf.len, ok)
+    compress.BufFree(buf)
+    ret out
+end
+
+// Composites `img` over an opaque `bg` color (src-over, see color.salam's
+// Blend), producing a fully-opaque image - the "PNG with transparency ->
+// JPG" fallback the spec calls for, since JPEG/24-bit BMP have no alpha
+// channel. A no-op (returns a plain Clone) if `img` is already fully
+// opaque.
+@en "FlattenAlpha"
+@fa "تخت کردن آلفا"
+@ar "تسطيح ألفا"
+pub func FlattenAlpha(img: Image, bg: Color): Image:
+    out := New(img.width, img.height)
+    Fill(out, bg)
+    mut y := 0
+    until y < img.height:
+        mut x := 0
+        until x < img.width:
+            BlendPixel(out, x, y, GetPixel(img, x, y))
+            x += 1
+        end
+        y += 1
+    end
+    ret out
+end
+
+// Prepares `img` for the given target format: flattens transparency onto
+// white for formats with no alpha channel (JPEG), otherwise an identical
+// Clone. Pair with EncodeXxx/Save when converting a possibly-transparent
+// image to a lossy/alpha-less format.
+@en "Convert"
+@fa "تبدیل"
+@ar "تحويل"
+pub func Convert(img: Image, format: int): Image:
+    if format == FormatJPEG:
+        ret FlattenAlpha(img, RGB(255, 255, 255))
+    end
+    ret Clone(img)
+end
+
+@en "Encode"
+@fa "کدگذاری"
+@ar "ترميز"
+pub func Encode(img: Image, format: int, quality: int): compress.ByteBuf:
+    prepared := Convert(img, format)
+    mut out := compress.NewByteBuf()
+    if format == FormatPNG: out = EncodePNG(prepared) end
+    if format == FormatBMP: out = EncodeBMP(prepared) end
+    if format == FormatJPEG: out = EncodeJPEG(prepared, quality) end
+    if format == FormatWebP: out = EncodeWebP(prepared) end
+    Free(prepared)
+    ret out
+end
+
+// Saves `img`, format chosen from the file extension, at the given JPEG/
+// WebP quality (1-100; ignored for the lossless PNG/BMP/WebP-lossless
+// paths). Returns false for an unrecognized extension.
+@en "SaveQuality"
+@fa "ذخیره با کیفیت"
+@ar "حفظ بجودة"
+pub func SaveQuality(img: Image, path: str, quality: int): bool:
+    format := FormatFromExt(path)
+    if format == FormatUnknown:
+        ret false
+    end
+    buf := Encode(img, format, quality)
+    // A real codec here always emits at least a fixed header (PNG's
+    // signature+IHDR+IDAT+IEND, BMP's 54-byte header, JPEG's markers, ...)
+    // even for a 0x0 image, so a genuinely empty buffer only happens for
+    // an unimplemented codec (see webp.salam's EncodeWebP) - treat that as
+    // failure rather than "successfully" writing a 0-byte file.
+    if buf.len == 0:
+        compress.BufFree(buf)
+        ret false
+    end
+    ok := archive.WriteBinaryFileBuf(path, buf)
+    compress.BufFree(buf)
+    ret ok
+end
+
+// SaveQuality with a sensible default quality (90) for lossy formats.
+@en "Save"
+@fa "ذخیره"
+@ar "حفظ"
+pub func Save(img: Image, path: str): bool:
+    ret SaveQuality(img, path, 90)
+end

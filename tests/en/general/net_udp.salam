@@ -1,0 +1,81 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// UDP is connectionless, so a server thread isn't needed to test a
+// send/receive round trip: bind the "server" socket and exchange
+// datagrams with a second socket, both on the main thread.
+
+import net.udp
+import mem
+
+func main:
+    // Bind(0) asks the OS for a free ephemeral port rather than using a
+    // hardcoded one - see rawsock.LocalPort's doc comment for why: a
+    // hardcoded port can collide with another process or a host's
+    // dynamic port reservations (observed in practice on Windows with
+    // Hyper-V/WSL2's NAT active).
+    srv := udp.Bind(0)
+    println udp.Ok(srv)
+    udp.SetTimeout(srv, 2000)
+    srv_port := udp.Port(srv)
+
+    c := udp.Open()
+    println udp.Ok(c)
+    udp.SetTimeout(c, 2000)
+
+    udp.Send(c, "127.0.0.1", srv_port, "hello-udp")
+    p := udp.Receive(srv, 1024)
+    println p.data == "hello-udp"
+
+    udp.Send(srv, p.from_host, p.from_port, "echo:" + p.data)
+    resp := udp.Receive(c, 1024)
+    println resp.data == "echo:hello-udp"
+
+    udp.Close(c)
+    udp.Close(srv)
+
+    // Binary-safe SendBytes/ReceiveBytes path, including an embedded NUL
+    // byte a plain `str` round-trip would truncate.
+    srv2 := udp.Bind(0)
+    println udp.Ok(srv2)
+    udp.SetTimeout(srv2, 2000)
+    srv2_port := udp.Port(srv2)
+    c2 := udp.Open()
+
+    buf := mem.Allocate(5 as u64)
+    bp := buf as i8*
+    bp[0] = 65 as i8
+    bp[1] = 0 as i8
+    bp[2] = 66 as i8
+    bp[3] = 67 as i8
+    bp[4] = 68 as i8
+    sent := udp.SendBytes(c2, "127.0.0.1", srv2_port, buf, 5)
+    println sent == 5
+
+    rbuf := mem.Allocate(16 as u64)
+    mut fh := ""
+    mut fp := 0
+    n := udp.ReceiveBytes(srv2, rbuf, 16, fh, fp)
+    println n == 5
+    rp := rbuf as i8*
+    println rp[0] as int == 65
+    println rp[1] as int == 0
+    println rp[2] as int == 66
+    println rp[3] as int == 67
+    println rp[4] as int == 68
+    mem.Free(buf)
+    mem.Free(rbuf)
+    udp.Close(c2)
+    udp.Close(srv2)
+end

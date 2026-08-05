@@ -1,0 +1,200 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.http
+import net.router
+import net.http.session
+import net.internal.rawsock
+import str
+import time
+
+func set_h(ctx: i64):
+    http.Ctx_set_cookie(ctx, http.NewCookie("greeting", "hi there"))
+    http.Ctx_text(ctx, "set")
+end
+
+func read_h(ctx: i64):
+    v := http.Ctx_cookie(ctx, "greeting")
+    http.Ctx_text(ctx, "cookie:" + v)
+end
+
+func multi_h(ctx: i64):
+    http.Ctx_set_cookie(ctx, http.NewCookie("a", "1"))
+    http.Ctx_set_cookie(ctx, http.NewCookie("b", "2"))
+    http.Ctx_text(ctx, "multi")
+end
+
+func clear_h(ctx: i64):
+    http.Ctx_clear_cookie(ctx, "greeting")
+    http.Ctx_text(ctx, "cleared")
+end
+
+func incr_h(ctx: i64):
+    mut s := session.Start(ctx)
+    n := session.Value(s, "n")
+    mut next := 1
+    if n.len() > 0:
+        next = n.to_int() + 1
+    end
+    session.SetValue(s, "n", str.FromInt(next as i64))
+    session.Save(s)
+    http.Ctx_text(ctx, "n=" + str.FromInt(next as i64))
+end
+
+func sid_h(ctx: i64):
+    s := session.Start(ctx)
+    http.Ctx_text(ctx, "sid:" + s.id)
+end
+
+func regen_h(ctx: i64):
+    mut s := session.Start(ctx)
+    old_id := s.id
+    session.Regenerate(ctx, s)
+    ok := s.id != old_id
+    http.Ctx_text(ctx, "regen:" + (ok ? "changed" : "same"))
+end
+
+func csrf_h(ctx: i64):
+    mut s := session.Start(ctx)
+    t := session.CSRFToken(s)
+    session.Save(s)
+    http.Ctx_text(ctx, "csrf:" + t)
+end
+
+func logout_h(ctx: i64):
+    session.End(ctx)
+    http.Ctx_text(ctx, "logged-out")
+end
+
+func run_web():
+    mut r := router.NewRouter()
+    router.Get(r, "/set", funcptr(set_h))
+    router.Get(r, "/read", funcptr(read_h))
+    router.Get(r, "/multi", funcptr(multi_h))
+    router.Get(r, "/clear", funcptr(clear_h))
+    router.Get(r, "/incr", funcptr(incr_h))
+    router.Get(r, "/sid", funcptr(sid_h))
+    router.Get(r, "/regen", funcptr(regen_h))
+    router.Get(r, "/csrf", funcptr(csrf_h))
+    router.Get(r, "/logout", funcptr(logout_h))
+    s := http.NewServer(19305)
+    http.Use(s, r)
+    http.Run(s)
+end
+
+func send_raw(req: str): str:
+    mut sock := rawsock.Connect("127.0.0.1", 19305)
+    mut tries := 0
+    until !rawsock.Ok(sock) && tries < 200:
+        time.Sleep(10)
+        sock = rawsock.Connect("127.0.0.1", 19305)
+        tries = tries + 1
+    end
+    if !rawsock.Ok(sock):
+        ret ""
+    end
+    rawsock.Send(sock, req)
+    resp := rawsock.Recv(sock, 8192)
+    rawsock.Close(sock)
+    ret resp
+end
+
+func get(path: str): str:
+    ret send_raw("GET " + path + " HTTP/1.0\r\nHost: localhost\r\n\r\n")
+end
+
+func get_with_cookie(path: str, cookie: str): str:
+    ret send_raw("GET " + path + " HTTP/1.0\r\nHost: localhost\r\nCookie: " + cookie + "\r\n\r\n")
+end
+
+// Pulls a single "name=value" pair for `name` out of a raw HTTP response's
+// Set-Cookie line(s) - just enough of a fake cookie jar to round-trip a
+// session id between requests in this test, without pulling in a real
+// browser-grade cookie jar.
+func extract_cookie(resp: str, name: str): str:
+    needle := "Set-Cookie: " + name + "="
+    pos := resp.find(needle)
+    if pos < 0: ret "" end
+    start := pos + needle.len()
+    rest := resp.substr(start, resp.len() - start)
+    semi := rest.find(";")
+    if semi < 0: ret "" end
+    ret name + "=" + rest.substr(0, semi)
+end
+
+func main:
+    _t := spawn(run_web)
+
+    // --- plain cookies ---
+    r1 := get("/set")
+    println str.Contains(r1, "Set-Cookie: greeting=hi%20there")
+    println str.Contains(r1, "Path=/")
+    println str.Contains(r1, "HttpOnly")
+
+    ck := extract_cookie(r1, "greeting")
+    r2 := get_with_cookie("/read", ck)
+    println str.Contains(r2, "cookie:hi there")
+
+    r3 := get("/read")
+    println str.Contains(r3, "Content-Length: 7\r\n") && str.Contains(r3, "cookie:")
+
+    r4 := get("/multi")
+    a_lines := str.Contains(r4, "Set-Cookie: a=1")
+    b_lines := str.Contains(r4, "Set-Cookie: b=2")
+    println a_lines && b_lines
+
+    r5 := get("/clear")
+    println str.Contains(r5, "Set-Cookie: greeting=")
+    println str.Contains(r5, "Max-Age=-1")
+
+    // --- sessions: two independent "clients" ---
+    ra1 := get("/incr")
+    println str.Contains(ra1, "n=1")
+    sida := extract_cookie(ra1, "salam_sid")
+    println sida.len() > 0
+
+    ra2 := get_with_cookie("/incr", sida)
+    println str.Contains(ra2, "n=2")
+
+    ra3 := get_with_cookie("/incr", sida)
+    println str.Contains(ra3, "n=3")
+
+    rb1 := get("/incr")
+    println str.Contains(rb1, "n=1")
+    sidb := extract_cookie(rb1, "salam_sid")
+    println sidb != sida
+
+    // --- csrf token stability within a session ---
+    rc1 := get_with_cookie("/csrf", sida)
+    rc2 := get_with_cookie("/csrf", sida)
+    tok1 := rc1.substr(rc1.find("csrf:") + 5, 48)
+    tok2 := rc2.substr(rc2.find("csrf:") + 5, 48)
+    println tok1 == tok2
+    println tok1.len() > 0
+
+    // --- regenerate rotates the id but keeps data ---
+    rr := get_with_cookie("/regen", sida)
+    println str.Contains(rr, "regen:changed")
+    new_sida := extract_cookie(rr, "salam_sid")
+    println (new_sida != sida) && new_sida.len() > 0
+
+    r_after_regen := get_with_cookie("/incr", new_sida)
+    println str.Contains(r_after_regen, "n=4")
+
+    // --- logout destroys the session server-side ---
+    rl := get_with_cookie("/logout", new_sida)
+    println str.Contains(rl, "Max-Age=-1")
+    r_after_logout := get_with_cookie("/incr", new_sida)
+    println str.Contains(r_after_logout, "n=1")
+end

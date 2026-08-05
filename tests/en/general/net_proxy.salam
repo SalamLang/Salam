@@ -1,0 +1,155 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Exercises net/proxy's SOCKS5 client handshake against a hand-rolled
+// mock SOCKS5 proxy (RFC 1928) running on its own thread, and the HTTP
+// CONNECT client handshake against a mock HTTP proxy. proxy.Dial is
+// retried rather than called once: the spawned mock server's Bind()
+// isn't guaranteed to have completed by the time this thread reaches
+// Dial (a real, pre-existing race in this toolchain's thread startup,
+// unrelated to net/proxy itself - see net_udp.salam's header for the
+// same note), and a failed connect attempt never reaches the server, so
+// retrying is safe.
+
+import net.proxy
+import net.tcp
+import mem
+import sync
+import time
+
+mut swg := sync.NewWaitGroup()
+mut hwg := sync.NewWaitGroup()
+
+func mock_socks5_server():
+    srv := tcp.Bind(19801)
+    sync.Done(swg)
+    if !tcp.Ok(srv):
+        ret
+    end
+    c := tcp.Accept(srv)
+    if !tcp.ConnOk(c):
+        tcp.CloseServer(srv)
+        ret
+    end
+
+    greet := mem.Allocate(8 as u64)
+    tcp.ReadBytes(c, greet, 8)
+    resp1 := mem.Allocate(2 as u64)
+    r1p := resp1 as i8*
+    r1p[0] = 5 as i8
+    r1p[1] = 0 as i8
+    tcp.WriteBytes(c, resp1, 2)
+
+    req := mem.Allocate(300 as u64)
+    tcp.ReadBytes(c, req, 300)
+
+    resp2 := mem.Allocate(10 as u64)
+    r2p := resp2 as i8*
+    r2p[0] = 5 as i8
+    r2p[1] = 0 as i8
+    r2p[2] = 0 as i8
+    r2p[3] = 1 as i8
+    r2p[4] = 0 as i8
+    r2p[5] = 0 as i8
+    r2p[6] = 0 as i8
+    r2p[7] = 0 as i8
+    r2p[8] = 0 as i8
+    r2p[9] = 0 as i8
+    tcp.WriteBytes(c, resp2, 10)
+
+    echo := tcp.Read(c, 128)
+    tcp.Write(c, "tunnel:" + echo)
+
+    tcp.Close(c)
+    tcp.CloseServer(srv)
+end
+
+func dial_socks5_retry(): tcp.Conn:
+    p := proxy.NewSOCKS5Proxy("127.0.0.1:19801")
+    mut attempt := 0
+    mut conn := tcp.Conn {}
+    until !tcp.ConnOk(conn) && attempt < 200:
+        conn = proxy.Dial(p, "target.example.com", 443)
+        if !tcp.ConnOk(conn):
+            time.Sleep(10)
+        end
+        attempt += 1
+    end
+    ret conn
+end
+
+func mock_http_connect_server():
+    srv := tcp.Bind(19802)
+    sync.Done(hwg)
+    if !tcp.Ok(srv):
+        ret
+    end
+    c := tcp.Accept(srv)
+    if !tcp.ConnOk(c):
+        tcp.CloseServer(srv)
+        ret
+    end
+    req := tcp.Read(c, 4096)
+    mut ok := false
+    if req.find("CONNECT") == 0:
+        ok = true
+    end
+    if ok:
+        tcp.Write(c, "HTTP/1.1 200 Connection established\r\n\r\n")
+        echo := tcp.Read(c, 128)
+        tcp.Write(c, "tunnel:" + echo)
+    end
+    tcp.Close(c)
+    tcp.CloseServer(srv)
+end
+
+func dial_http_connect_retry(): tcp.Conn:
+    p := proxy.NewHTTPProxy("127.0.0.1:19802")
+    mut attempt := 0
+    mut conn := tcp.Conn {}
+    until !tcp.ConnOk(conn) && attempt < 200:
+        conn = proxy.Dial(p, "target.example.com", 443)
+        if !tcp.ConnOk(conn):
+            time.Sleep(10)
+        end
+        attempt += 1
+    end
+    ret conn
+end
+
+func main:
+    sync.Add(swg, 1 as i64)
+    t1 := spawn(mock_socks5_server)
+    sync.Wait(swg)
+
+    c1 := dial_socks5_retry()
+    println tcp.ConnOk(c1)
+    tcp.Write(c1, "hello-through-tunnel")
+    resp1 := tcp.Read(c1, 128)
+    println resp1 == "tunnel:hello-through-tunnel"
+    tcp.Close(c1)
+    join(t1)
+
+    sync.Add(hwg, 1 as i64)
+    t2 := spawn(mock_http_connect_server)
+    sync.Wait(hwg)
+
+    c2 := dial_http_connect_retry()
+    println tcp.ConnOk(c2)
+    tcp.Write(c2, "hello-via-connect")
+    resp2 := tcp.Read(c2, 128)
+    println resp2 == "tunnel:hello-via-connect"
+    tcp.Close(c2)
+    join(t2)
+end

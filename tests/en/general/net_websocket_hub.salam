@@ -1,0 +1,85 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// The Hub (broadcast/rooms) feature, exercised against two real
+// concurrent WebSocket connections: a server thread accepts both,
+// registers them into the same room, and broadcasts one message that
+// both clients must receive.
+
+import net.websocket
+import sync
+import time
+
+mut wswg := sync.NewWaitGroup()
+
+func hub_server():
+    srv := websocket.Listen(19901)
+    sync.Done(wswg)
+    if !websocket.Ok(srv):
+        ret
+    end
+    mut hub := websocket.NewHub()
+
+    c1 := websocket.Accept(srv)
+    websocket.Register(hub, "room1", c1)
+
+    c2 := websocket.Accept(srv)
+    websocket.Register(hub, "room1", c2)
+
+    size := websocket.RoomSize(hub, "room1")
+    println size == 2
+
+    sent := websocket.Broadcast(hub, "room1", "hello-room")
+    println sent == 2
+
+    websocket.Unregister(hub, "room1", c1)
+    println websocket.RoomSize(hub, "room1") == 1
+    websocket.Unregister(hub, "room1", c2)
+    println websocket.RoomSize(hub, "room1") == 0
+
+    websocket.CloseServer(srv)
+end
+
+func dial_retry(): websocket.Conn:
+    mut attempt := 0
+    mut c := websocket.Conn {}
+    until !websocket.IsOpen(c) && attempt < 300:
+        c = websocket.Dial("127.0.0.1", 19901, "/")
+        if !websocket.IsOpen(c):
+            time.Sleep(10)
+        end
+        attempt += 1
+    end
+    ret c
+end
+
+func main:
+    sync.Add(wswg, 1 as i64)
+    t := spawn(hub_server)
+    sync.Wait(wswg)
+
+    c1 := dial_retry()
+    println websocket.IsOpen(c1)
+    c2 := dial_retry()
+    println websocket.IsOpen(c2)
+
+    m1 := websocket.ReceiveText(c1)
+    println m1 == "hello-room"
+    m2 := websocket.ReceiveText(c2)
+    println m2 == "hello-room"
+
+    websocket.Close(c1)
+    websocket.Close(c2)
+    join(t)
+end

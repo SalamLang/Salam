@@ -1,0 +1,365 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/http/session"
+@fa "نشست اچ‌تی‌تی‌پی شبکه"
+@ar "جلسة HTTP للشبکة"
+package session
+
+import net.http
+import crypto
+import time
+import sync
+
+// Server-side sessions on top of net/http's cookie support: an in-memory
+// id -> Session store, keyed by a random token handed to the client as an
+// HttpOnly cookie. Deliberately in-memory-only (no pluggable backend) -
+// Salam has no interfaces/closures to make a Store abstraction cheap the
+// way Go's http.Store or Express's session-store packages do, and a
+// single process's memory is exactly where most Salam web servers
+// (single binary, no separate cache tier) want this to live. Restarting
+// the process drops all sessions; that trade-off is the whole point of
+// keeping this simple rather than half-building a persistence layer.
+//
+// Thread safety: net/http.Run spawns one OS thread per accepted
+// connection (see ctx_internal.salam), so every public function here
+// that touches the session table takes sync's Mutex. The mutex itself is
+// created in a top-level `mut` initializer, which - like
+// ctx_internal.salam's `_current_router`/`_current_tls_cfg` - runs once,
+// single-threaded, before main() and therefore before any request thread
+// exists, so there is no init race to guard against.
+
+@en "DefaultCookieName"
+@fa "نام پیش فرض کوکی"
+@ar "اسم الكوكي الافتراضي"
+pub const DefaultCookieName := "salam_sid"
+
+@en "DefaultMaxAge"
+@fa "حداکثر عمر پیش فرض"
+@ar "العمر الافتراضي الأقصی"
+pub const DefaultMaxAge := 86400
+
+const _csrf_key := "_csrf_token"
+
+mut _sessions := HashMap {} as HashMap<str, Session>
+mut _mu := sync.NewMutex()
+// Literal defaults, not a reference to DefaultCookieName/DefaultMaxAge
+// above: a top-level `mut` global initialized from another top-level
+// `const` silently loses its initializer in this compiler (the global
+// ends up NULL/0, not the const's value) - a real codegen gap, worked
+// around here by duplicating the literal instead of pointing at the
+// const. DefaultCookieName/DefaultMaxAge stay as the documented, citable
+// values for callers; they're just not wired to these vars directly.
+mut _cookie_name := "salam_sid"
+mut _max_age := 86400
+mut _secure := false
+mut _same_site := "Lax"
+// Approximate on purpose: bumped from multiple request threads with no
+// lock of its own. Worst case a sweep fires a request early/late or two
+// fire back to back - never a correctness issue, just a GC cadence
+// wobble, and not worth a second mutex to smooth out.
+mut _gc_hits := 0
+
+// A named wrapper around the per-session key/value bag, not a bare
+// HashMap<str,str> field on Session directly stored inside another
+// HashMap<str,Session> - a generic argument that is itself a generic
+// instantiation is a known-broken pattern in this compiler (see
+// net/websocket.Hub's RoomMembers for the same fix applied to a Vector).
+@en "SessionData"
+@fa "داده نشست"
+@ar "بیانات الجلسة"
+pub struct SessionData:
+    pub items: HashMap<str, str> = HashMap {} as HashMap<str, str>
+end
+
+@en "Session"
+@fa "نشست"
+@ar "جلسة"
+pub struct Session:
+    pub id: str = ""
+    pub data: SessionData = SessionData {}
+    pub created_at: i64 = 0
+    pub last_seen: i64 = 0
+    pub max_age: int = 0
+end
+
+func _gen_id(): str:
+    // 32 bytes = 256 bits of OS entropy, hex-encoded - plenty to make the
+    // id unguessable, which is all that stands between a visitor and
+    // anyone else's session data.
+    ret crypto.RandomToken(32)
+end
+
+func _is_expired(s: Session, now: i64): bool:
+    if s.max_age <= 0: ret false end
+    ret (now - s.last_seen) > (s.max_age as i64)
+end
+
+func _store_put(id: str, s: Session):
+    sync.Lock(_mu)
+    _sessions.put(id, s)
+    sync.Unlock(_mu)
+end
+
+func _store_delete(id: str):
+    sync.Lock(_mu)
+    _sessions.remove(id)
+    sync.Unlock(_mu)
+end
+
+// Single lock covers read-check-touch-write so a concurrent Destroy/GC
+// can't land between "read" and "write back the refreshed last_seen".
+func _store_touch(id: str, ok &: bool): Session:
+    now := time.Now()
+    sync.Lock(_mu)
+    mut found := _sessions.has(id)
+    mut s := Session {}
+    if found:
+        s = _sessions.get(id)
+        if _is_expired(s, now):
+            _sessions.remove(id)
+            found = false
+        else:
+            s.last_seen = now
+            _sessions.put(id, s)
+        end
+    end
+    sync.Unlock(_mu)
+    ok = found
+    ret s
+end
+
+func _cleanup_expired(): int:
+    now := time.Now()
+    mut dead := Vector {} as Vector<str>
+    sync.Lock(_mu)
+    it := _sessions.iter()
+    until it.has_next():
+        s := it.value()
+        if _is_expired(s, now):
+            dead.push(it.key())
+        end
+        it.next()
+    end
+    repeat dead.len() with i:
+        _sessions.remove(dead.get(i)[0])
+    end
+    sync.Unlock(_mu)
+    n := dead.len()
+    dead.free()
+    ret n
+end
+
+// PHP-style probabilistic GC: roughly every 100th New()/Get() call sweeps
+// the whole table for expired entries, so a long-running server doesn't
+// accumulate abandoned sessions forever without needing a dedicated
+// background thread (this package spawns none).
+func _maybe_gc():
+    _gc_hits += 1
+    if _gc_hits < 100:
+        ret
+    end
+    _gc_hits = 0
+    _cleanup_expired()
+end
+
+func _cookie_for(id: str): http.Cookie:
+    mut c := http.ExpiringCookie(_cookie_name, id, _max_age)
+    c.secure = _secure
+    c.same_site = _same_site
+    c.http_only = true
+    c.path = "/"
+    ret c
+end
+
+// Call once, before http.Run(s) - same "configure, then start serving"
+// convention as http.Server's Use/SetHost/HideTokens. cookie_name is the
+// name the session id rides in; max_age_seconds is both the cookie's
+// Max-Age and the server-side idle timeout (sliding: every touched
+// session's clock resets); secure/same_site are forwarded to every
+// Set-Cookie this package issues.
+@en "Configure"
+@fa "پیکربندی"
+@ar "تهیئة"
+pub func Configure(cookie_name: str, max_age_seconds: int, secure: bool, same_site: str):
+    _cookie_name = cookie_name
+    _max_age = max_age_seconds
+    _secure = secure
+    _same_site = same_site
+end
+
+// Full sweep of every expired session. Safe to call any time - it's what
+// the probabilistic GC above calls, and it's exposed directly for an app
+// that wants to drive cleanup from its own cron/scheduler instead.
+@en "CleanupExpired"
+@fa "پاکسازی منقضی شده ها"
+@ar "تنظیف المنتهیة"
+pub func CleanupExpired(): int: ret _cleanup_expired() end
+
+@en "New"
+@fa "جدید"
+@ar "جدید"
+pub func New(): Session:
+    _maybe_gc()
+    now := time.Now()
+    s := Session { id = _gen_id(), created_at = now, last_seen = now, max_age = _max_age }
+    _store_put(s.id, s)
+    ret s
+end
+
+// Looks a session up by id. ok is false for a missing, unknown, or
+// expired id (an expired one is also evicted from the table as a side
+// effect) - callers almost always want New() as the fallback, which is
+// exactly what Start() below does.
+@en "Get"
+@fa "دریافت"
+@ar "جلب"
+pub func Get(id: str, ok &: bool): Session:
+    _maybe_gc()
+    mut found := false
+    s := _store_touch(id, found)
+    ok = found
+    ret s
+end
+
+// Persists a Session back to the store. Session is a value type - every
+// Get()/New()/Start() hands back a copy, so mutating it through
+// SetValue/DeleteValue only changes the caller's local copy until Save
+// writes it back. This mirrors the rest of this codebase's copy-then-
+// write-back convention (e.g. ctx_internal.salam's Vector<_KV> get/set).
+@en "Save"
+@fa "ذخیره"
+@ar "حفظ"
+pub func Save(s: Session): _store_put(s.id, s) end
+
+@en "Destroy"
+@fa "نابودسازی"
+@ar "إتلاف"
+pub func Destroy(id: str): _store_delete(id) end
+
+@en "Value"
+@fa "مقدار"
+@ar "قیمة"
+pub func Value(s: Session, key: str): str:
+    if s.data.items.has(key): ret s.data.items.get(key) end
+    ret ""
+end
+
+@en "HasValue"
+@fa "مقدار دارد"
+@ar "یحتوي قیمة"
+pub func HasValue(s: Session, key: str): bool:
+    ret s.data.items.has(key)
+end
+
+@en "SetValue"
+@fa "تنظیم مقدار"
+@ar "تعیین قیمة"
+pub func SetValue(s &: Session, key: str, value: str):
+    s.data.items.put(key, value)
+end
+
+@en "DeleteValue"
+@fa "حذف مقدار"
+@ar "حذف قیمة"
+pub func DeleteValue(s &: Session, key: str): bool:
+    ret s.data.items.remove(key)
+end
+
+@en "ClearValues"
+@fa "پاک کردن مقادیر"
+@ar "مسح القیم"
+pub func ClearValues(s &: Session):
+    s.data = SessionData {}
+end
+
+// The primary handler-facing entry point: reads the request's session
+// cookie, resumes that session if it's still valid or silently starts a
+// fresh one otherwise, and (re-)issues the Set-Cookie response header
+// either way - a returning visitor's Max-Age slides forward on every
+// request, kept in sync between the server's idle timeout and the
+// cookie the browser is holding.
+@en "Start"
+@fa "شروع"
+@ar "بدء"
+pub func Start(h: i64): Session:
+    sid := http.Ctx_cookie(h, _cookie_name)
+    mut ok := false
+    mut s := Session {}
+    if sid.len() > 0:
+        s = Get(sid, ok)
+    end
+    if ok == false:
+        s = New()
+    end
+    http.Ctx_set_cookie(h, _cookie_for(s.id))
+    ret s
+end
+
+// Logs a session out: removes it from the store and tells the browser to
+// drop the cookie. Safe to call even if the request carried no session
+// cookie at all.
+@en "End"
+@fa "پایان"
+@ar "إنهاء"
+pub func End(h: i64):
+    sid := http.Ctx_cookie(h, _cookie_name)
+    if sid.len() > 0:
+        Destroy(sid)
+    end
+    http.Ctx_clear_cookie(h, _cookie_name)
+end
+
+// Rotates a session's id while keeping its data, and re-issues the
+// cookie. Call this right after a privilege change (login, permission
+// elevation) - it defeats session fixation, where an attacker plants a
+// known session id in a victim's browser before they authenticate and
+// then reuses that same id post-login.
+@en "Regenerate"
+@fa "بازتولید"
+@ar "إعادة توليد"
+pub func Regenerate(h: i64, s &: Session):
+    Destroy(s.id)
+    now := time.Now()
+    s.id = _gen_id()
+    s.created_at = now
+    s.last_seen = now
+    Save(s)
+    http.Ctx_set_cookie(h, _cookie_for(s.id))
+end
+
+// Returns this session's CSRF token, minting one on first use. Render it
+// into a hidden form field (or an X-CSRF-Token response header for an
+// API) and check it with CSRFVerify on every state-changing request -
+// the standard synchronizer-token defense against cross-site request
+// forgery, piggy-backing on the session store that already exists here.
+// Like SetValue, a freshly minted token only sticks if the caller follows
+// up with Save(s).
+@en "CSRFToken"
+@fa "توکن سی اس آر اف"
+@ar "رمز CSRF"
+pub func CSRFToken(s &: Session): str:
+    if HasValue(s, _csrf_key) == false:
+        SetValue(s, _csrf_key, crypto.RandomToken(24))
+    end
+    ret Value(s, _csrf_key)
+end
+
+@en "CSRFVerify"
+@fa "تایید سی اس آر اف"
+@ar "تحقق CSRF"
+pub func CSRFVerify(s: Session, token: str): bool:
+    if token.len() == 0: ret false end
+    ret Value(s, _csrf_key) == token
+end

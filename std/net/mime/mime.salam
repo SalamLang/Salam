@@ -1,0 +1,462 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/mime"
+@fa "مایم شبکه"
+@ar "MIME للشبکة"
+package mime
+
+import mem
+import str
+import filepath
+import crypto
+import compress
+
+// Content-type detection, Content-Type header parsing, HTTP status
+// reason phrases, and multipart/form-data read+write.
+//
+// MimeExt/MimeType/StatusText are migrated from std/web/mime.salam
+// (deleted - was a sibling file of `package web`, not its own package).
+// StatusText stays here rather than moving straight to net/http because
+// net/http doesn't exist yet at this point in the migration (Phase 5) and
+// std/web still needs a working StatusText today; it will move to
+// net/http once that package exists and std/web is retired (Phase 9).
+//
+// Multipart parsing works on raw void*/int byte spans, not `str`, for the
+// body of each part - file uploads can contain arbitrary bytes including
+// embedded NUL, which a NUL-terminated C string (what Salam's `str` is
+// under the hood) cannot carry safely. Header lines within a part are
+// treated as text (safe: RFC 7578 headers are ASCII/latin1 with no
+// embedded NUL in practice).
+
+@en "ContentTypeParam"
+@fa "پارامتر نوع محتوا"
+@ar "معامل نوع المحتوی"
+pub struct ContentTypeParam:
+    pub key: str = ""
+    pub value: str = ""
+end
+
+@en "ContentTypeParams"
+@fa "پارامترهای نوع محتوا"
+@ar "معاملات نوع المحتوی"
+pub struct ContentTypeParams:
+    pub items: Vector<ContentTypeParam> = Vector {}
+end
+
+@en "ContentType"
+@fa "نوع محتوا"
+@ar "نوع المحتوی"
+pub struct ContentType:
+    pub media_type: str = ""
+    pub params: ContentTypeParams = ContentTypeParams {}
+end
+
+@en "MultipartHeader"
+@fa "سرآیند بخش"
+@ar "ترویسة جزء"
+pub struct MultipartHeader:
+    pub key: str = ""
+    pub value: str = ""
+end
+
+@en "MultipartHeaders"
+@fa "سرآیندهای بخش"
+@ar "ترویسات جزء"
+pub struct MultipartHeaders:
+    pub items: Vector<MultipartHeader> = Vector {}
+end
+
+@en "MultipartPart"
+@fa "بخش چندبخشی"
+@ar "جزء متعدد الأجزاء"
+pub struct MultipartPart:
+    pub name: str = ""
+    pub filename: str = ""
+    pub content_type: str = ""
+    pub headers: MultipartHeaders = MultipartHeaders {}
+    pub body: compress.ByteBuf = compress.ByteBuf {}
+end
+
+@en "MultipartParts"
+@fa "بخش‌های چندبخشی"
+@ar "أجزاء متعددة الأجزاء"
+pub struct MultipartParts:
+    pub items: Vector<MultipartPart> = Vector {}
+end
+
+@en "MultipartWriter"
+@fa "نویسنده چندبخشی"
+@ar "کاتب متعدد الأجزاء"
+pub struct MultipartWriter:
+    pub boundary: str = ""
+    pub buf: compress.ByteBuf = compress.ByteBuf {}
+    pub closed: bool = false
+end
+
+func _wbytes(b &: compress.ByteBuf, s: str):
+    compress.BufPushBytes(b, s as void*, s.len())
+end
+
+func _bytes_to_str(p: void*, n: int): str:
+    buf := mem.Allocate((n + 1) as u64)
+    defer mem.Free(buf)
+    mem.Copy(buf, p, n as u64)
+    bufp := buf as i8*
+    bufp[n] = 0 as i8
+    ret str.Clone(buf as str)
+end
+
+func _mem_find(hay: void*, hay_len: int, needle: void*, needle_len: int, start: int): int:
+    if needle_len == 0: ret start end
+    if needle_len > hay_len: ret 0 - 1 end
+    hp := hay as i64
+    np := needle as i64
+    limit := hay_len - needle_len
+    mut i := start
+    until i <= limit:
+        mut j := 0
+        mut matched := true
+        until j < needle_len:
+            hb := ((hp + i + j) as i8*)[0]
+            nb := ((np + j) as i8*)[0]
+            if hb != nb:
+                matched = false
+                j = needle_len
+            else:
+                j += 1
+            end
+        end
+        if matched: ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _ltrim(s: str): str:
+    mut a := 0
+    n := s.len()
+    until a < n:
+        c := s.substr(a, 1)
+        if c == " " || c == "\t":
+            a += 1
+        else:
+            ret s.substr(a, n - a)
+        end
+    end
+    ret ""
+end
+
+func _rtrim(s: str): str:
+    mut b := s.len()
+    until b > 0:
+        c := s.substr(b - 1, 1)
+        if c == " " || c == "\t" || c == "\r" || c == "\n":
+            b -= 1
+        else:
+            ret s.substr(0, b)
+        end
+    end
+    ret ""
+end
+
+func _strip(s: str): str:
+    ret _rtrim(_ltrim(s))
+end
+
+func _unquote(s: str): str:
+    if s.len() >= 2 && s.substr(0, 1) == "\"" && s.substr(s.len() - 1, 1) == "\"":
+        ret s.substr(1, s.len() - 2)
+    end
+    ret s
+end
+
+func _header_value(headers: MultipartHeaders, key: str): str:
+    n := headers.items.len()
+    mut i := 0
+    until i < n:
+        h := headers.items.get(i)[0]
+        if h.key == key:
+            ret h.value
+        end
+        i += 1
+    end
+    ret ""
+end
+
+func _cd_quoted_param(cd: str, key: str): str:
+    needle := key + "=\""
+    idx := cd.find(needle)
+    if idx < 0: ret "" end
+    start := idx + needle.len()
+    rest := cd.substr(start, cd.len() - start)
+    close := rest.find("\"")
+    if close < 0: ret "" end
+    ret rest.substr(0, close)
+end
+
+func _write_part_header(w &: MultipartWriter, disposition: str, content_type: str):
+    _wbytes(w.buf, "--" + w.boundary + "\r\n")
+    _wbytes(w.buf, "Content-Disposition: " + disposition + "\r\n")
+    if content_type.len() > 0:
+        _wbytes(w.buf, "Content-Type: " + content_type + "\r\n")
+    end
+    _wbytes(w.buf, "\r\n")
+end
+
+@en "MimeExt"
+@fa "پسوند مایم"
+@ar "امتداد المایم"
+pub func MimeExt(ext: str): str:
+    if ext == "html" || ext == "htm": ret "text/html; charset=utf-8"
+    else ext == "css": ret "text/css"
+    else ext == "js" || ext == "mjs": ret "application/javascript"
+    else ext == "json": ret "application/json"
+    else ext == "png": ret "image/png"
+    else ext == "jpg" || ext == "jpeg": ret "image/jpeg"
+    else ext == "gif": ret "image/gif"
+    else ext == "svg": ret "image/svg+xml"
+    else ext == "ico": ret "image/x-icon"
+    else ext == "webp": ret "image/webp"
+    else ext == "txt": ret "text/plain; charset=utf-8"
+    else ext == "md": ret "text/markdown; charset=utf-8"
+    else ext == "pdf": ret "application/pdf"
+    else ext == "xml": ret "application/xml"
+    else ext == "wasm": ret "application/wasm"
+    else ext == "map": ret "application/json"
+    else ext == "zip": ret "application/zip"
+    else ext == "mp4": ret "video/mp4"
+    else ext == "webm": ret "video/webm"
+    else ext == "mp3": ret "audio/mpeg"
+    else ext == "wav": ret "audio/wav"
+    else ext == "woff": ret "font/woff"
+    else ext == "woff2": ret "font/woff2"
+    else:
+        ret "application/octet-stream"
+    end
+end
+
+@en "MimeType"
+@fa "رده مایم"
+@ar "فئة المایم"
+pub func MimeType(p: str): str:
+    e := filepath.Ext(p)
+    if e.len() == 0: ret "application/octet-stream" end
+    ret MimeExt(e.substr(1, e.len() - 1))
+end
+
+@en "StatusText"
+@fa "متن وضعیت"
+@ar "نص الحالة"
+pub func StatusText(code: int): str:
+    if code == 200: ret "OK"
+    else code == 201: ret "Created"
+    else code == 204: ret "No Content"
+    else code == 301: ret "Moved Permanently"
+    else code == 302: ret "Found"
+    else code == 304: ret "Not Modified"
+    else code == 400: ret "Bad Request"
+    else code == 401: ret "Unauthorized"
+    else code == 403: ret "Forbidden"
+    else code == 404: ret "Not Found"
+    else code == 405: ret "Method Not Allowed"
+    else code == 409: ret "Conflict"
+    else code == 422: ret "Unprocessable Entity"
+    else code == 429: ret "Too Many Requests"
+    else code == 500: ret "Internal Server Error"
+    else code == 502: ret "Bad Gateway"
+    else code == 503: ret "Service Unavailable"
+    else:
+        ret "Unknown"
+    end
+end
+
+@en "ParseContentType"
+@fa "تجزیه نوع محتوا"
+@ar "تحلیل نوع المحتوی"
+pub func ParseContentType(header: str): ContentType:
+    mut out := ContentType {}
+    parts := str.Split(header, ";")
+    if parts.len() == 0: ret out end
+    out.media_type = _strip(parts.get(0)[0])
+    mut i := 1
+    until i < parts.len():
+        piece := _strip(parts.get(i)[0])
+        eq := piece.find("=")
+        if eq >= 0:
+            k := _strip(piece.substr(0, eq))
+            v := _unquote(_strip(piece.substr(eq + 1, piece.len() - eq - 1)))
+            out.params.items.push(ContentTypeParam { key = k, value = v })
+        end
+        i += 1
+    end
+    ret out
+end
+
+@en "ParamGet"
+@fa "دریافت پارامتر"
+@ar "الحصول علی المعامل"
+pub func ParamGet(ct: ContentType, key: str): str:
+    n := ct.params.items.len()
+    mut i := 0
+    until i < n:
+        p := ct.params.items.get(i)[0]
+        if p.key == key:
+            ret p.value
+        end
+        i += 1
+    end
+    ret ""
+end
+
+// ------------------------------------------------------- multipart reader
+
+// Parses a multipart body (e.g. multipart/form-data) given the raw bytes
+// and the boundary token from the Content-Type header's `boundary=`
+// param (without the leading "--"). Malformed/truncated input yields
+// whatever complete parts were found rather than erroring - callers that
+// need strict validation should check `.items.len()` against what they
+// expected.
+@en "ParseMultipart"
+@fa "تجزیه چندبخشی"
+@ar "تحلیل متعدد الأجزاء"
+pub func ParseMultipart(data: void*, n: int, boundary: str): MultipartParts:
+    mut out := MultipartParts {}
+    delim := "--" + boundary
+    dbytes := delim as void*
+    dlen := delim.len()
+    mut pos := _mem_find(data, n, dbytes, dlen, 0)
+    if pos < 0: ret out end
+    pos += dlen
+
+    mut done := false
+    until !done:
+        if pos + 1 < n:
+            b0 := ((data as i64 + pos) as i8*)[0]
+            b1 := ((data as i64 + pos + 1) as i8*)[0]
+            if b0 == 45 && b1 == 45:
+                done = true
+                continue
+            end
+        end
+
+        crlf := _mem_find(data, n, "\r\n" as void*, 2, pos)
+        if crlf < 0:
+            done = true
+            continue
+        end
+        header_start := crlf + 2
+        sep := _mem_find(data, n, "\r\n\r\n" as void*, 4, header_start)
+        if sep < 0:
+            done = true
+            continue
+        end
+        next_boundary := _mem_find(data, n, dbytes, dlen, header_start)
+        if next_boundary < 0:
+            done = true
+            continue
+        end
+
+        header_text := _bytes_to_str((data as i64 + header_start) as void*, sep - header_start)
+        mut part := MultipartPart {}
+        lines := str.Split(header_text, "\r\n")
+        mut li := 0
+        until li < lines.len():
+            line := lines.get(li)[0]
+            colon := line.find(":")
+            if colon >= 0:
+                hk := _strip(line.substr(0, colon))
+                hv := _strip(line.substr(colon + 1, line.len() - colon - 1))
+                part.headers.items.push(MultipartHeader { key = hk, value = hv })
+            end
+            li += 1
+        end
+        cd := _header_value(part.headers, "Content-Disposition")
+        part.name = _cd_quoted_param(cd, "name")
+        part.filename = _cd_quoted_param(cd, "filename")
+        part.content_type = _header_value(part.headers, "Content-Type")
+
+        body_start := sep + 4
+        mut body_end := next_boundary
+        if body_end - 2 >= body_start:
+            body_end -= 2
+        end
+        blen := body_end - body_start
+        if blen > 0:
+            src := (data as i64 + body_start) as void*
+            compress.BufPushBytes(part.body, src, blen)
+        end
+        out.items.push(part)
+        pos = next_boundary + dlen
+    end
+    ret out
+end
+
+// ------------------------------------------------------- multipart writer
+
+@en "NewMultipartWriter"
+@fa "نویسنده چندبخشی جدید"
+@ar "کاتب متعدد الأجزاء جدید"
+pub func NewMultipartWriter(): MultipartWriter:
+    mut w := MultipartWriter {}
+    w.boundary = "SalamBoundary" + crypto.RandomHex(16)
+    w.buf = compress.NewByteBuf()
+    w.closed = false
+    ret w
+end
+
+@en "ContentTypeHeader"
+@fa "سرآیند نوع محتوا"
+@ar "ترویسة نوع المحتوی"
+pub func ContentTypeHeader(w: MultipartWriter): str:
+    ret "multipart/form-data; boundary=" + w.boundary
+end
+
+@en "WriteField"
+@fa "نوشتن فیلد"
+@ar "کتابة حقل"
+pub func WriteField(w &: MultipartWriter, name: str, value: str):
+    _write_part_header(w, "form-data; name=\"" + name + "\"", "")
+    _wbytes(w.buf, value)
+    _wbytes(w.buf, "\r\n")
+end
+
+@en "WriteFileBytes"
+@fa "نوشتن پرونده"
+@ar "کتابة ملف"
+pub func WriteFileBytes(w &: MultipartWriter, name: str, filename: str, content_type: str, data: void*, n: int):
+    mut ct := content_type
+    if ct.len() == 0: ct = MimeType(filename) end
+    _write_part_header(w, "form-data; name=\"" + name + "\"; filename=\"" + filename + "\"", ct)
+    compress.BufPushBytes(w.buf, data, n)
+    _wbytes(w.buf, "\r\n")
+end
+
+@en "WriteFileStr"
+@fa "نوشتن پرونده متنی"
+@ar "کتابة ملف نصی"
+pub func WriteFileStr(w &: MultipartWriter, name: str, filename: str, content_type: str, data: str):
+    WriteFileBytes(w, name, filename, content_type, data as void*, data.len())
+end
+
+@en "CloseWriter"
+@fa "بستن نویسنده"
+@ar "إغلاق الکاتب"
+pub func CloseWriter(w &: MultipartWriter): compress.ByteBuf:
+    if !w.closed:
+        _wbytes(w.buf, "--" + w.boundary + "--\r\n")
+        w.closed = true
+    end
+    ret w.buf
+end

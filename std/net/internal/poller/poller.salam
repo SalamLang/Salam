@@ -1,0 +1,476 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/internal/poller"
+@fa "پایشگر شبکه"
+@ar "مراقب الشبکة"
+package poller
+
+import mem
+
+// A single readiness-based non-blocking I/O multiplexer behind one API,
+// backed by whichever native mechanism fits the target OS:
+//
+//   Linux            epoll        (epoll_create1/epoll_ctl/epoll_wait)
+//   macOS/BSD        kqueue       (kqueue/kevent)
+//   Windows          WSAPoll      (see note below - NOT IOCP)
+//   anything else    poll()       (POSIX fallback, no FD_SETSIZE cap)
+//
+// SUBSTITUTION FROM THE ORIGINAL SPEC: Windows uses WSAPoll, not IOCP.
+// IOCP is completion-based (you post an overlapped Read/Write and later
+// dequeue its completion) which is a fundamentally different model from
+// epoll/kqueue/poll's readiness-based one ("fd X is readable now, go
+// read"). Unifying both models under one Wait()->[]Event API would mean
+// either faking readiness on top of IOCP or exposing a second,
+// incompatible poller shape - neither is worth it when WSAPoll already
+// gives Windows a readiness-based, non-FD_SETSIZE-limited poller with the
+// exact same programming model as the other three backends. True IOCP
+// support (AcceptEx/WSARecv+overlapped I/O) is left as a documented
+// future optimization, not attempted here.
+//
+// EXPERIMENTAL: the epoll and kqueue backends are implemented against
+// their documented struct layouts/constants but have not been run on
+// Linux/macOS/BSD in this environment (development happens on Windows) -
+// only the WSAPoll backend and the generic poll() fallback's *code path*
+// have been exercised here (poll() itself needs a POSIX host to run).
+// Verify epoll/kqueue on a real Linux/macOS box before relying on them.
+
+if SALAM_OS_WINDOWS:
+    link dynamic "ws2_32"
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func WSAPoll(fds: void*, nfds: u64, timeout: int): int
+    end
+else SALAM_OS_LINUX:
+    extern:
+        func epoll_create1(flags: int): int
+        func epoll_ctl(epfd: int, op: int, fd: int, event: void*): int
+        func epoll_wait(epfd: int, events: void*, maxevents: int, timeout: int): int
+        func close(fd: int): int
+    end
+else SALAM_OS_MAC:
+    extern:
+        func kqueue(): int
+        func kevent(kq: int, changelist: void*, nchanges: int, eventlist: void*, nevents: int, timeout: void*): int
+        func close(fd: int): int
+    end
+else SALAM_OS_BSD:
+    extern:
+        func kqueue(): int
+        func kevent(kq: int, changelist: void*, nchanges: int, eventlist: void*, nevents: int, timeout: void*): int
+        func close(fd: int): int
+    end
+else:
+    extern:
+        func poll(fds: void*, nfds: u64, timeout: int): int
+    end
+end
+
+extern:
+    func memset(ptr: void*, val: int, n: u64): void*
+end
+
+// -------------------------------------------------------------- constants
+
+pub const BackendEpoll := 1
+pub const BackendKqueue := 2
+pub const BackendWSAPoll := 3
+pub const BackendPoll := 4
+
+pub const Readable := 1
+pub const Writable := 2
+
+@en "Event"
+@fa "رویداد"
+@ar "حدث"
+pub struct Event:
+    pub fd: i64 = 0
+    pub readable: bool = false
+    pub writable: bool = false
+    pub err: bool = false
+end
+
+@en "RegisteredFd"
+@fa "توصیف‌گر ثبت‌شده"
+@ar "واصف مسجل"
+pub struct RegisteredFd:
+    pub fd: i64 = 0
+    pub interest: int = 0
+end
+
+@en "RegisteredFds"
+@fa "توصیف‌گرهای ثبت‌شده"
+@ar "الواصفات المسجلة"
+pub struct RegisteredFds:
+    pub items: Vector<RegisteredFd> = Vector {}
+end
+
+@en "Events"
+@fa "رویدادها"
+@ar "الأحداث"
+pub struct Events:
+    pub items: Vector<Event> = Vector {}
+end
+
+@en "Poller"
+@fa "پایشگر"
+@ar "مراقب"
+pub struct Poller:
+    pub backend: int = 0
+    pub kfd: i64 = 0 - 1
+    pub regs: RegisteredFds = RegisteredFds {}
+end
+
+func _find_reg(p: Poller, fd: i64): int:
+    n := p.regs.items.len()
+    mut i := 0
+    until i < n:
+        if p.regs.items.get(i)[0].fd == fd:
+            ret i
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+// --------------------------------------------------------- epoll backend
+
+func _epoll_register(_p &: Poller, _fd: i64, _interest: int): bool:
+    if SALAM_OS_LINUX:
+        ev := mem.Allocate(12 as u64)
+        defer mem.Free(ev)
+        memset(ev, 0, 12 as u64)
+        ev32 := ev as int*
+        mut evbits := 0
+        if (_interest & Readable) != 0: evbits = evbits | 1 end
+        if (_interest & Writable) != 0: evbits = evbits | 4 end
+        ev32[0] = evbits
+        evi64 := (ev as i64 + 4) as i64*
+        evi64[0] = _fd
+        r := epoll_ctl(_p.kfd as int, 1, _fd as int, ev) // EPOLL_CTL_ADD
+        ret r == 0
+    end
+    ret false
+end
+
+func _epoll_modify(_p &: Poller, _fd: i64, _interest: int): bool:
+    if SALAM_OS_LINUX:
+        ev := mem.Allocate(12 as u64)
+        defer mem.Free(ev)
+        memset(ev, 0, 12 as u64)
+        ev32 := ev as int*
+        mut evbits := 0
+        if (_interest & Readable) != 0: evbits = evbits | 1 end
+        if (_interest & Writable) != 0: evbits = evbits | 4 end
+        ev32[0] = evbits
+        evi64 := (ev as i64 + 4) as i64*
+        evi64[0] = _fd
+        r := epoll_ctl(_p.kfd as int, 3, _fd as int, ev) // EPOLL_CTL_MOD
+        ret r == 0
+    end
+    ret false
+end
+
+func _epoll_unregister(_p &: Poller, _fd: i64): bool:
+    if SALAM_OS_LINUX:
+        r := epoll_ctl(_p.kfd as int, 2, _fd as int, null) // EPOLL_CTL_DEL
+        ret r == 0
+    end
+    ret false
+end
+
+func _epoll_wait(_p &: Poller, _timeout_ms: int): Events:
+    out := Events {}
+    if SALAM_OS_LINUX:
+        cap := 64
+        buf := mem.Allocate((12 * cap) as u64)
+        defer mem.Free(buf)
+        n := epoll_wait(_p.kfd as int, buf, cap, _timeout_ms)
+        mut i := 0
+        until i < n:
+            base := buf as i64 + (i * 12)
+            bitsp := base as int*
+            bits := bitsp[0]
+            fdp := (base + 4) as i64*
+            e := Event { fd = fdp[0], readable = (bits & 1) != 0, writable = (bits & 4) != 0, err = (bits & 8) != 0 || (bits & 16) != 0 }
+            out.items.push(e)
+            i += 1
+        end
+    end
+    ret out
+end
+
+// -------------------------------------------------------- kqueue backend
+
+func _kevent_add(_p &: Poller, _fd: i64, _filter: int, _flags: int): bool:
+    if SALAM_OS_MAC || SALAM_OS_BSD:
+        kev := mem.Allocate(32 as u64)
+        defer mem.Free(kev)
+        memset(kev, 0, 32 as u64)
+        kp64 := kev as i64*
+        kp64[0] = _fd // ident
+        f16 := (kev as i64 + 8) as int*
+        // filter (i16) + flags (u16) packed into one 32-bit write, low
+        // 16 bits = filter (sign-extended caller value, e.g. -1/-2),
+        // high 16 bits = flags.
+        packed := (_flags * 65536) + (_filter & 65535)
+        f16[0] = packed
+        r := kevent(_p.kfd as int, kev, 1, null, 0, null)
+        ret r == 0
+    end
+    ret false
+end
+
+func _kqueue_register(_p &: Poller, _fd: i64, _interest: int): bool:
+    mut ok := true
+    if (_interest & Readable) != 0:
+        ok = ok && _kevent_add(_p, _fd, 0 - 1, 1) // EVFILT_READ, EV_ADD
+    end
+    if (_interest & Writable) != 0:
+        ok = ok && _kevent_add(_p, _fd, 0 - 2, 1) // EVFILT_WRITE, EV_ADD
+    end
+    ret ok
+end
+
+func _kqueue_unregister(_p &: Poller, _fd: i64): bool:
+    mut ok := true
+    ok = ok && _kevent_add(_p, _fd, 0 - 1, 2) // EVFILT_READ, EV_DELETE
+    ok = ok && _kevent_add(_p, _fd, 0 - 2, 2) // EVFILT_WRITE, EV_DELETE
+    ret ok
+end
+
+func _kqueue_wait(_p &: Poller, _timeout_ms: int): Events:
+    out := Events {}
+    if SALAM_OS_MAC || SALAM_OS_BSD:
+        cap := 64
+        buf := mem.Allocate((32 * cap) as u64)
+        defer mem.Free(buf)
+        ts := mem.Allocate(16 as u64)
+        defer mem.Free(ts)
+        ts64 := ts as i64*
+        ts64[0] = (_timeout_ms / 1000) as i64
+        ts64[1] = ((_timeout_ms % 1000) * 1000000) as i64
+        n := kevent(_p.kfd as int, null, 0, buf, cap, ts)
+        mut i := 0
+        until i < n:
+            base := buf as i64
+            entry := base + (i * 32)
+            fdp := entry as i64*
+            fd := fdp[0]
+            packedp := (entry + 8) as int*
+            packed := packedp[0]
+            filt := packed & 65535
+            mut sfilt := filt
+            if sfilt > 32767: sfilt = sfilt - 65536 end
+            e := Event { fd = fd, readable = sfilt == (0 - 1), writable = sfilt == (0 - 2), err = false }
+            out.items.push(e)
+            i += 1
+        end
+    end
+    ret out
+end
+
+// ------------------------------------------------------------- WSAPoll backend
+
+// WSAPOLLFD is { SOCKET fd (8); SHORT events (2); SHORT revents (2) },
+// padded to 16 bytes for 8-byte array alignment.
+func _wsapoll_wait(p &: Poller, timeout_ms: int): Events:
+    out := Events {}
+    if SALAM_OS_WINDOWS:
+        n := p.regs.items.len()
+        if n == 0: ret out end
+        buf := mem.Allocate((16 * n) as u64)
+        defer mem.Free(buf)
+        memset(buf, 0, (16 * n) as u64)
+        mut i := 0
+        until i < n:
+            r := p.regs.items.get(i)[0]
+            base := buf as i64 + (i * 16)
+            fdp := base as i64*
+            fdp[0] = r.fd
+            mut evbits := 0
+            if (r.interest & Readable) != 0: evbits = evbits | 768 end // POLLIN
+            if (r.interest & Writable) != 0: evbits = evbits | 16 end // POLLOUT
+            evp := (base + 8) as int*
+            evp[0] = evbits & 65535
+            i += 1
+        end
+        rc := WSAPoll(buf, n as u64, timeout_ms)
+        if rc > 0:
+            i = 0
+            until i < n:
+                base := buf as i64 + (i * 16)
+                fdp := base as i64*
+                fd := fdp[0]
+                revp := (base + 10) as int*
+                revbits := revp[0] & 65535
+                if revbits != 0:
+                    e := Event { fd = fd, readable = (revbits & 768) != 0, writable = (revbits & 16) != 0, err = (revbits & 7) != 0 }
+                    out.items.push(e)
+                end
+                i += 1
+            end
+        end
+    end
+    ret out
+end
+
+// --------------------------------------------------------------- poll() backend
+
+// POSIX pollfd is { int fd (4); short events (2); short revents (2) } =
+// 8 bytes, naturally aligned, no padding.
+func _poll_wait(_p &: Poller, _timeout_ms: int): Events:
+    out := Events {}
+    if !SALAM_OS_WINDOWS:
+        n := _p.regs.items.len()
+        if n == 0: ret out end
+        buf := mem.Allocate((8 * n) as u64)
+        defer mem.Free(buf)
+        memset(buf, 0, (8 * n) as u64)
+        mut i := 0
+        until i < n:
+            r := _p.regs.items.get(i)[0]
+            base := buf as i64 + (i * 8)
+            fdp := base as int*
+            fdp[0] = r.fd as int
+            mut evbits := 0
+            if (r.interest & Readable) != 0: evbits = evbits | 1 end // POLLIN
+            if (r.interest & Writable) != 0: evbits = evbits | 4 end // POLLOUT
+            evp := (base + 4) as int*
+            evp[0] = evbits & 65535
+            i += 1
+        end
+        rc := poll(buf, n as u64, _timeout_ms)
+        if rc > 0:
+            i = 0
+            until i < n:
+                base := buf as i64 + (i * 8)
+                fdp := base as int*
+                fd := fdp[0] as i64
+                revp := (base + 6) as int*
+                revbits := revp[0] & 65535
+                if revbits != 0:
+                    e := Event { fd = fd, readable = (revbits & 1) != 0, writable = (revbits & 4) != 0, err = (revbits & 24) != 0 }
+                    out.items.push(e)
+                end
+                i += 1
+            end
+        end
+    end
+    ret out
+end
+
+// ------------------------------------------------------------------ public API
+
+@en "New"
+@fa "پایشگر جدید"
+@ar "مراقب جدید"
+pub func New(): Poller:
+    if SALAM_OS_LINUX:
+        kfd := epoll_create1(0) as i64
+        ret Poller { backend = BackendEpoll, kfd = kfd, regs = RegisteredFds {} }
+    else SALAM_OS_MAC:
+        kfd := kqueue() as i64
+        ret Poller { backend = BackendKqueue, kfd = kfd, regs = RegisteredFds {} }
+    else SALAM_OS_BSD:
+        kfd := kqueue() as i64
+        ret Poller { backend = BackendKqueue, kfd = kfd, regs = RegisteredFds {} }
+    else SALAM_OS_WINDOWS:
+        ret Poller { backend = BackendWSAPoll, kfd = 0 - 1, regs = RegisteredFds {} }
+    else:
+        ret Poller { backend = BackendPoll, kfd = 0 - 1, regs = RegisteredFds {} }
+    end
+end
+
+@en "Register"
+@fa "ثبت"
+@ar "تسجیل"
+pub func Register(p &: Poller, fd: i64, interest: int): bool:
+    if _find_reg(p, fd) >= 0:
+        ret Modify(p, fd, interest)
+    end
+    p.regs.items.push(RegisteredFd { fd = fd, interest = interest })
+    if p.backend == BackendEpoll:
+        ret _epoll_register(p, fd, interest)
+    else p.backend == BackendKqueue:
+        ret _kqueue_register(p, fd, interest)
+    end
+    ret true
+end
+
+@en "Modify"
+@fa "تغییر"
+@ar "تعدیل"
+pub func Modify(p &: Poller, fd: i64, interest: int): bool:
+    idx := _find_reg(p, fd)
+    if idx < 0:
+        ret Register(p, fd, interest)
+    end
+    p.regs.items.set(idx, RegisteredFd { fd = fd, interest = interest })
+    if p.backend == BackendEpoll:
+        ret _epoll_modify(p, fd, interest)
+    else p.backend == BackendKqueue:
+        ret _kqueue_unregister(p, fd) && _kqueue_register(p, fd, interest)
+    end
+    ret true
+end
+
+@en "Unregister"
+@fa "لغو ثبت"
+@ar "إلغاء التسجیل"
+pub func Unregister(p &: Poller, fd: i64): bool:
+    idx := _find_reg(p, fd)
+    if idx >= 0:
+        p.regs.items.remove_at(idx)
+    end
+    if p.backend == BackendEpoll:
+        ret _epoll_unregister(p, fd)
+    else p.backend == BackendKqueue:
+        ret _kqueue_unregister(p, fd)
+    end
+    ret true
+end
+
+// Returns an Events wrapper (not a bare Vector<Event>) - a cross-package
+// generic return (Vector<T> where T is a foreign struct) is a known-broken
+// codegen pattern in this compiler; wrapping it in a one-field named
+// struct, the same trick std/encoding/query/query.salam uses for its
+// QueryValues/QueryMap, sidesteps it. Access results via `.items`.
+@en "Wait"
+@fa "انتظار"
+@ar "انتظار"
+pub func Wait(p &: Poller, timeout_ms: int): Events:
+    if p.backend == BackendEpoll:
+        ret _epoll_wait(p, timeout_ms)
+    else p.backend == BackendKqueue:
+        ret _kqueue_wait(p, timeout_ms)
+    else p.backend == BackendWSAPoll:
+        ret _wsapoll_wait(p, timeout_ms)
+    end
+    ret _poll_wait(p, timeout_ms)
+end
+
+@en "Close"
+@fa "بستن"
+@ar "إغلاق"
+pub func Close(p &: Poller):
+    if p.kfd >= 0:
+        if SALAM_OS_LINUX || SALAM_OS_MAC || SALAM_OS_BSD:
+            close(p.kfd as int)
+        end
+        p.kfd = 0 - 1
+    end
+end

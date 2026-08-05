@@ -1,0 +1,198 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/udp"
+@fa "یو دی پی شبکه"
+@ar "بروتوکول UDP للشبکة"
+package udp
+
+import mem
+import net.internal.rawsock
+
+// Datagram (UDP) sockets: bind, send/receive, broadcast, multicast
+// group join/leave. Built directly on net/internal/rawsock's SOCK_DGRAM
+// support rather than duplicating socket-option FFI here.
+
+@en "Socket"
+@fa "سوکت یو دی پی"
+@ar "مقبس UDP"
+pub struct Socket:
+    pub fd: i64 = 0 - 1
+end
+
+@en "Packet"
+@fa "بسته"
+@ar "حزمة"
+pub struct Packet:
+    pub data: str = ""
+    pub from_host: str = ""
+    pub from_port: int = 0
+end
+
+func _sock(s: Socket): rawsock.Socket:
+    ret rawsock.FromFd(s.fd)
+end
+
+// Builds an 8-byte ip_mreq: 4-byte multicast group address, 4-byte local
+// interface address (0.0.0.0 = INADDR_ANY, the common case).
+func _make_mreq(group_addr: int, iface_addr: int): void*:
+    m := mem.Allocate(8 as u64)
+    m32 := m as int*
+    m32[0] = group_addr
+    m32[1] = iface_addr
+    ret m
+end
+
+// IPPROTO_IP == 0 everywhere. IP_ADD_MEMBERSHIP/IP_DROP_MEMBERSHIP differ
+// between Windows (12/13) and Linux/BSD (35/36).
+func _mcast_optname(joining: bool): int:
+    if SALAM_OS_WINDOWS:
+        if joining: ret 12 end
+        ret 13
+    else:
+        if joining: ret 35 end
+        ret 36
+    end
+end
+
+@en "Bind"
+@fa "پیوند"
+@ar "ربط"
+pub func Bind(port: int): Socket:
+    ret Socket { fd = rawsock.ListenOn("", port, rawsock.SOCK_DGRAM).fd }
+end
+
+@en "BindOn"
+@fa "پیوند روی"
+@ar "ربط علی"
+pub func BindOn(host: str, port: int): Socket:
+    ret Socket { fd = rawsock.ListenOn(host, port, rawsock.SOCK_DGRAM).fd }
+end
+
+// A socket with no local binding, for a client that only sends/receives
+// replies rather than listening on a fixed port.
+@en "Open"
+@fa "باز کردن"
+@ar "فتح"
+pub func Open(): Socket:
+    ret Socket { fd = rawsock.Open(rawsock.AF_INET, rawsock.SOCK_DGRAM).fd }
+end
+
+// The port a socket actually ended up bound to - see tcp.Port/
+// rawsock.LocalPort for why Bind(0) plus this beats a hardcoded port
+// for test code and short-lived local sockets.
+@en "Port"
+@fa "درگاه"
+@ar "منفذ"
+pub func Port(s: Socket): int:
+    ret rawsock.LocalPort(_sock(s))
+end
+
+@en "Ok"
+@fa "معتبر"
+@ar "صالح"
+pub func Ok(s: Socket): bool:
+    ret s.fd >= 0
+end
+
+@en "Close"
+@fa "بستن"
+@ar "إغلاق"
+pub func Close(s: Socket):
+    rawsock.Close(_sock(s))
+end
+
+@en "Send"
+@fa "ارسال"
+@ar "إرسال"
+pub func Send(s: Socket, host: str, port: int, data: str): int:
+    ret rawsock.SendTo(_sock(s), host, port, data)
+end
+
+@en "SendTo"
+@fa "ارسال به"
+@ar "إرسال إلی"
+pub func SendTo(s: Socket, host: str, port: int, data: str): int:
+    ret rawsock.SendTo(_sock(s), host, port, data)
+end
+
+// Binary-safe send/receive for protocols that can't tolerate `str`'s
+// NUL-terminated-C-string truncation (DNS, and anything else built
+// directly on datagrams rather than a text protocol).
+@en "SendBytes"
+@fa "ارسال بایت"
+@ar "إرسال بایتات"
+pub func SendBytes(s: Socket, host: str, port: int, ptr: void*, n: int): int:
+    ret rawsock.SendToBytes(_sock(s), host, port, ptr, n)
+end
+
+@en "Receive"
+@fa "دریافت"
+@ar "استقبال"
+pub func Receive(s: Socket, max: int): Packet:
+    mut p := Packet {}
+    mut fh := ""
+    mut fp := 0
+    p.data = rawsock.RecvFrom(_sock(s), max, fh, fp)
+    p.from_host = fh
+    p.from_port = fp
+    ret p
+end
+
+@en "ReceiveBytes"
+@fa "دریافت بایت"
+@ar "استقبال بایتات"
+pub func ReceiveBytes(s: Socket, buf: void*, max: int, out_host &: str, out_port &: int): int:
+    ret rawsock.RecvFromBytes(_sock(s), buf, max, out_host, out_port)
+end
+
+@en "SetBroadcast"
+@fa "فعال‌سازی پخش"
+@ar "تفعیل البث"
+pub func SetBroadcast(s: Socket, enable: bool):
+    rawsock.SetBroadcast(_sock(s), enable)
+end
+
+@en "SetTimeout"
+@fa "تنظیم زمان انتظار"
+@ar "تعیین مهلة الانتظار"
+pub func SetTimeout(s: Socket, millis: int):
+    rawsock.SetTimeout(_sock(s), millis)
+end
+
+// ---------------------------------------------------------------- multicast
+
+@en "JoinMulticast"
+@fa "پیوستن به گروه پخش"
+@ar "الانضمام لمجموعة البث"
+pub func JoinMulticast(s: Socket, group_ip: str): bool:
+    group := rawsock.ResolveAddr4Raw(group_ip)
+    if group == 0: ret false end
+    mreq := _make_mreq(group, 0)
+    defer mem.Free(mreq)
+    r := rawsock.SetOpt(_sock(s), 0, _mcast_optname(true), mreq, 8)
+    ret r == 0
+end
+
+@en "LeaveMulticast"
+@fa "ترک گروه پخش"
+@ar "مغادرة مجموعة البث"
+pub func LeaveMulticast(s: Socket, group_ip: str): bool:
+    group := rawsock.ResolveAddr4Raw(group_ip)
+    if group == 0: ret false end
+    mreq := _make_mreq(group, 0)
+    defer mem.Free(mreq)
+    r := rawsock.SetOpt(_sock(s), 0, _mcast_optname(false), mreq, 8)
+    ret r == 0
+end

@@ -708,11 +708,10 @@ int driver_main(int argc, char **argv)
         return driver_memcheck(&opt);
     case CMD_BUILD:
     case CMD_OBJ:
-        if (opt.input_count == 0) {
-            fprintf(stderr, i18n_tr("salam: '%s' requires at least one input file\n"),
-                    opt.command == CMD_OBJ ? "obj" : "build");
-            return 2;
-        }
+        /* No input given -> driver_build() scans the current directory for
+         * the one .salam file defining `main` (same auto-detection CMD_RUN
+         * already gets in driver_run()), so an empty input_count is not an
+         * error here. */
         return driver_build(&opt);
     case CMD_LLVM:
         if (opt.input_count == 0) {

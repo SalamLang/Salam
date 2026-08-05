@@ -32,8 +32,11 @@
 
 #if defined(_WIN32)
 #  include <io.h>
+#  include <sys/stat.h>
 #else
 #  include <unistd.h>
+#  include <sys/stat.h>
+#  include <dirent.h>
 #endif
 
 #ifdef SALAM_HAVE_EMBED_HOSTLIBS
@@ -87,6 +90,99 @@ static const char *dir_of(arena_t *a, const char *path)
     if (bs && (!slash || bs > slash)) cut = bs;
     if (!cut) return "";
     return arena_strndup(a, path, (size_t)(cut - path));
+}
+
+static bool copy_file_bin(const char *src, const char *dst)
+{
+    FILE *in = fopen(src, "rb");
+    if (!in) return false;
+    FILE *out = fopen(dst, "wb");
+    if (!out) {
+        fclose(in);
+        return false;
+    }
+    char buf[65536];
+    size_t n;
+    bool ok = true;
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) {
+            ok = false;
+            break;
+        }
+    }
+    if (ferror(in)) ok = false;
+    fclose(in);
+    fclose(out);
+    return ok;
+}
+
+/* try_embed_hostlibs() only gets the static archive a linker needs at build
+ * time onto its `-L` path - a dynamically-linked host lib (sqlite3.dll on
+ * this Windows/tcc combination, since tcc cannot read GCC's static .a/
+ * .dll.a archives at all - "invalid object file" / "cannot find" - but
+ * CAN link directly against a real DLL by reading its export table, the
+ * same trick that makes `-lwinhttp`/`-lws2_32` work against
+ * C:\Windows\System32 with no import lib in sight) still needs to be
+ * next to the *produced executable* at run time, or Windows' loader
+ * fails with "cannot open shared object file" the moment the program
+ * calls into it - none of hostlibs_dir/System32/PATH is guaranteed to be
+ * on the loader's search path for wherever `output` ends up. Copying any
+ * shared libs found in hostlibs_dir alongside `output` after a
+ * successful link closes that gap; a no-op when hostlibs weren't used
+ * (hostlibs_dir NULL) or contain no shared libs (e.g. a Unix build,
+ * where the embedded lib is a plain .a and this step is unnecessary).
+ */
+static void copy_hostlib_shared_libs(logger_t *log, arena_t *a, const char *hostlibs_dir,
+                                     const char *output)
+{
+    if (!hostlibs_dir || !hostlibs_dir[0]) return;
+    const char *dest_dir = dir_of(a, output);
+    const char *out_name = strrchr(output, '/');
+    {
+        const char *bs = strrchr(output, '\\');
+        if (bs && (!out_name || bs > out_name)) out_name = bs;
+    }
+    out_name = out_name ? out_name + 1 : output;
+#if defined(_WIN32)
+    char pattern[1024];
+    sal_snprintf(pattern, sizeof pattern, "%s\\*.dll", hostlibs_dir);
+    struct _finddata_t fd;
+    intptr_t h = _findfirst(pattern, &fd);
+    if (h == -1) return;
+    do {
+        if (fd.attrib & _A_SUBDIR) continue;
+        char src[1200], dst[1200];
+        sal_snprintf(src, sizeof src, "%s/%s", hostlibs_dir, fd.name);
+        if (dest_dir[0])
+            sal_snprintf(dst, sizeof dst, "%s/%s", dest_dir, fd.name);
+        else
+            sal_snprintf(dst, sizeof dst, "%s", fd.name);
+        if (strcmp(dst, output) == 0 || strcmp(fd.name, out_name) == 0)
+            continue; /* never overwrite the binary we just linked */
+        if (!copy_file_bin(src, dst))
+            LOG_W(log, PH_DRIVER, "could not copy '%s' next to '%s'", src, output);
+    } while (_findnext(h, &fd) == 0);
+    _findclose(h);
+#else
+    DIR *d = opendir(hostlibs_dir);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        size_t L = strlen(e->d_name);
+        bool is_so = L > 3 && strstr(e->d_name, ".so") != NULL;
+        if (!is_so) continue;
+        char src[1200], dst[1200];
+        sal_snprintf(src, sizeof src, "%s/%s", hostlibs_dir, e->d_name);
+        if (dest_dir[0])
+            sal_snprintf(dst, sizeof dst, "%s/%s", dest_dir, e->d_name);
+        else
+            sal_snprintf(dst, sizeof dst, "%s", e->d_name);
+        if (strcmp(dst, output) == 0 || strcmp(e->d_name, out_name) == 0) continue;
+        if (!copy_file_bin(src, dst))
+            LOG_W(log, PH_DRIVER, "could not copy '%s' next to '%s'", src, output);
+    }
+    closedir(d);
+#endif
 }
 
 static bool write_file(logger_t *log, const char *path, const char *content)
@@ -188,6 +284,148 @@ static bundled_musl_tcc_t detect_bundled_musl_tcc(const char *cc_path)
 }
 #endif
 
+static const char *plural_suffix(int n)
+{
+    return n == 1 ? "" : "s";
+}
+
+static bool path_is_dir(const char *p)
+{
+#if defined(_WIN32)
+    struct _stat st;
+    return _stat(p, &st) == 0 && (st.st_mode & _S_IFDIR) != 0;
+#else
+    struct stat st;
+    return stat(p, &st) == 0 && S_ISDIR(st.st_mode);
+#endif
+}
+
+/* driver.c's list_salam_files, generalized to an arbitrary directory (still
+ * bare filenames when dir=="." for backward compat with that cwd-only
+ * caller; dir-prefixed otherwise) - no recursion either way. */
+static void list_salam_files_in(arena_t *a, const char *dir, const char **out, int *n)
+{
+    *n = 0;
+    bool is_cwd = strcmp(dir, ".") == 0;
+    /* Strip a trailing slash (`salam build ./compiler/` passes one) so the
+     * joined path below doesn't come out as "./compiler//main.salam" - a
+     * string that dedup-by-equality import resolution elsewhere doesn't
+     * recognize as the same file as the canonical one, causing the entry
+     * file to be compiled twice under two different-looking paths. */
+    char trimmed[1024];
+    sal_snprintf(trimmed, sizeof trimmed, "%s", dir);
+    size_t tlen = strlen(trimmed);
+    if (tlen > 0 && (trimmed[tlen - 1] == '/' || trimmed[tlen - 1] == '\\'))
+        trimmed[tlen - 1] = '\0';
+#if defined(_WIN32)
+    char pattern[1024];
+    sal_snprintf(pattern, sizeof pattern, "%s\\*.salam", trimmed);
+    struct _finddata_t fd;
+    intptr_t h = _findfirst(is_cwd ? "*.salam" : pattern, &fd);
+    if (h == -1) return;
+    do {
+        if (!(fd.attrib & _A_SUBDIR) && *n < SALAM_MAX_INPUTS) {
+            if (is_cwd)
+                out[(*n)++] = arena_strdup(a, fd.name);
+            else {
+                char full[1024];
+                sal_snprintf(full, sizeof full, "%s/%s", trimmed, fd.name);
+                out[(*n)++] = arena_strdup(a, full);
+            }
+        }
+    } while (_findnext(h, &fd) == 0);
+    _findclose(h);
+#else
+    DIR *d = opendir(trimmed);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL && *n < SALAM_MAX_INPUTS) {
+        size_t L = strlen(e->d_name);
+        if (L > 6 && strcmp(e->d_name + L - 6, ".salam") == 0) {
+            if (is_cwd)
+                out[(*n)++] = arena_strdup(a, e->d_name);
+            else {
+                char full[1024];
+                sal_snprintf(full, sizeof full, "%s/%s", trimmed, e->d_name);
+                out[(*n)++] = arena_strdup(a, full);
+            }
+        }
+    }
+    closedir(d);
+#endif
+}
+
+static bool file_has_entry(arena_t *a, langpack_t *pack, const char *entry,
+                           const char *path)
+{
+    logger_t *quiet = logger_new(stderr, LOG_OFF, false);
+    source_file_t *src = source_load(a, path);
+    bool found = false;
+    if (src) {
+        token_stream_t *toks = NULL;
+        lexer_run(a, quiet, pack, src, &toks);
+        ast_node_t *program = NULL;
+        parser_run(a, quiet, toks, &program);
+        if (program) {
+            cc_table_t *cc = cc_table_build(a, NULL, NULL, 0);
+            cc_prune_program(a, quiet, path, cc, program);
+            size_t i = 0;
+            for (; i < program->list.len; i++) {
+                ast_node_t *d = (ast_node_t *)program->list.data[i];
+                if (d->kind == AST_FUNC_DEF && d->name && strcmp(d->name, entry) == 0) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    logger_free(quiet);
+    return found;
+}
+
+/* Shared "scan dir for exactly one file defining `entry`" used by driver_build
+ * when no input was given (dir=".") or an explicit directory was passed
+ * instead of a file. Logs its own error and returns NULL on failure (0 or >1
+ * matches); returns the resolved path (arena-owned) on success. */
+static const char *resolve_dir_entry(arena_t *arena, logger_t *log, langpack_t *pack,
+                                     const char *dir)
+{
+    const char *entry = langpack_entry(pack);
+    const char *files[SALAM_MAX_INPUTS];
+    int nfiles = 0;
+    list_salam_files_in(arena, dir, files, &nfiles);
+    if (nfiles == 0) {
+        LOG_E(log, PH_DRIVER, i18n_tr("no .salam files found in the current directory"));
+        return NULL;
+    }
+    const char *entries[SALAM_MAX_INPUTS];
+    int nentries = 0;
+    {
+        int i = 0;
+        for (; i < nfiles; i++)
+            if (file_has_entry(arena, pack, entry, files[i]))
+                entries[nentries++] = files[i];
+    }
+    if (nentries == 0) {
+        LOG_E(log, PH_DRIVER,
+              i18n_tr("no entry point: none of the %d .salam file%s here defines a "
+                      "'%s' function"),
+              nfiles, plural_suffix(nfiles), entry);
+        return NULL;
+    }
+    if (nentries > 1) {
+        LOG_E(log, PH_DRIVER, i18n_tr("ambiguous entry point: %d files define '%s':"),
+              nentries, entry);
+        int i = 0;
+        for (; i < nentries; i++)
+            fprintf(stderr, "    %s\n", entries[i]);
+        fprintf(stderr, "  run a specific one with: salam run <file.salam>\n");
+        return NULL;
+    }
+    LOG_I(log, PH_DRIVER, i18n_tr("entry point: %s"), entries[0]);
+    return entries[0];
+}
+
 int driver_build(options_t *opt)
 {
     if (opt->llvm_target && opt->llvm_target[0]) return driver_llvm_build(opt);
@@ -202,6 +440,33 @@ int driver_build(options_t *opt)
         arena_free(arena);
         return 2;
     }
+    /* A bare `salam build` (no inputs) or a directory passed as the sole
+     * input (`salam build .`, `salam build ./compiler/`) doesn't name a
+     * file - scan that directory's top-level .salam files for the one that
+     * defines `main` and build that, same auto-detection driver_run()
+     * already does for a bare `salam run`. Without this, a directory input
+     * used to fall through to the per-file work-loop below, which reads it
+     * as a (nonexistent) source file instead of "build the program in this
+     * directory". */
+    if (opt->input_count == 0) {
+        const char *first = resolve_dir_entry(arena, log, pack, ".");
+        if (!first) {
+            logger_free(log);
+            arena_free(arena);
+            return 2;
+        }
+        opt->inputs[0] = first;
+        opt->input_count = 1;
+    } else if (opt->input_count == 1 && path_is_dir(opt->inputs[0])) {
+        const char *first = resolve_dir_entry(arena, log, pack, opt->inputs[0]);
+        if (!first) {
+            logger_free(log);
+            arena_free(arena);
+            return 2;
+        }
+        opt->inputs[0] = first;
+    }
+
     salam_set_stdlib_root(opt->stdlib_path);
 
 #if !defined(_WIN32)
@@ -582,6 +847,8 @@ int driver_build(options_t *opt)
             lto_flag = " -flto";
 #endif
         }
+        char hostlibs[1024];
+        hostlibs[0] = '\0';
         sb_t cmd;
         sb_init(&cmd);
         sb_puts(&cmd, opt->cc);
@@ -604,6 +871,37 @@ int driver_build(options_t *opt)
         sb_put_shell_arg(&cmd, scratch);
         sb_puts(&cmd, " -o ");
         sb_put_shell_arg(&cmd, output);
+#if defined(_WIN32)
+        /* tcc's default linked stack (SizeOfStackReserve in the PE header)
+         * is only 1MiB on this target - half of MinGW gcc's 2MiB default -
+         * which is too little for the self-hosted compiler's own recursive
+         * descent parser/semantic pass to process its own (large, deeply
+         * nested) source: a tcc-linked salam.exe building the self-hosted
+         * compiler/ sources with --cc=tcc reliably stack-overflows partway
+         * through parsing,
+         * while the identical workload run from a gcc-linked salam.exe
+         * (2MiB stack) does not. Confirmed via objdump -p on minimal tcc
+         * output (SizeOfStackReserve 0x100000) vs the same source built by
+         * gcc (0x200000), and via a direct A/B: a tcc-linked self-hosted
+         * binary crashes rebuilding itself; the same binary relinked with
+         * gcc instead does not. -Wl,--stack tells tcc's linker to reserve
+         * more (8MiB, matching common *nix default thread stack sizes)
+         * regardless of which --cc built the binary doing the *compiling*.
+         */
+        if (use_tcc) sb_puts(&cmd, " -Wl,--stack=8388608");
+        /* codegen_header.c per-module prelude marks salam_ob, salam_obn,
+         * salam_out_flush and salam_out_fini as weak, so every module can
+         * carry its own copy and the linker picks one - standard
+         * practice, reliable on ELF. On this MinGW/GCC plus binutils
+         * combination, weak data symbols (salam_ob/salam_obn) sometimes
+         * still collide at link time with a multiple-definition error;
+         * reproduced building tests general web_router.salam (query.o
+         * vs url.o). tcc takes the plain non-weak fallback in that same
+         * prelude, so it never hits this; the allow-multiple-definition
+         * linker flag restores the intended any-one-definition-is-fine
+         * behavior for gcc/clang on Windows. */
+        if (!use_tcc) sb_puts(&cmd, " -Wl,--allow-multiple-definition");
+#endif
         if (opt->debug_info) {
             if (use_tcc)
                 LOG_W(log, PH_DRIVER,
@@ -669,12 +967,9 @@ int driver_build(options_t *opt)
         }
         sb_puts(&cmd, lm);
 
-        {
-            char hostlibs[1024];
-            if (try_embed_hostlibs(log, hostlibs, sizeof hostlibs)) {
-                sb_puts(&cmd, " -L");
-                sb_put_shell_arg(&cmd, hostlibs);
-            }
+        if (try_embed_hostlibs(log, hostlibs, sizeof hostlibs)) {
+            sb_puts(&cmd, " -L");
+            sb_put_shell_arg(&cmd, hostlibs);
         }
 
         {
@@ -708,6 +1003,7 @@ int driver_build(options_t *opt)
             rc = 3;
         } else {
             LOG_I(log, PH_DRIVER, "built executable: %s", output);
+            copy_hostlib_shared_libs(log, arena, hostlibs, output);
 
             if (opt->exe_path[0] == '\0')
                 sal_snprintf(opt->exe_path, sizeof(opt->exe_path), "%s", output);

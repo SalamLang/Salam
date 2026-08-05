@@ -84,6 +84,7 @@ import os
 import io
 import str
 import dr "driver.salam"
+import docg "docgen.salam"
 import rp "repl.salam"
 import lg "logger.salam"
 import dg "diag.salam"
@@ -229,9 +230,9 @@ end
 // debug_cmd/memcheck_cmd, which invoke gdb/lldb/valgrind via os.Run).
 func shell_arg(s: str): str:
     if SALAM_OS_WINDOWS:
-        mut out := "\""
-        out = out + str.Replace(s, "\"", "\\\"")
-        out = out + "\""
+        mut out := `"`
+        out = out + str.Replace(s, `"`, `\"`)
+        out = out + `"`
         ret out
     else:
         mut sb := str.NewBuilder()
@@ -306,7 +307,7 @@ func positional(arg: str, out &: dr.Dr): bool:
         else:
             out.run_args.push(arg)
         end
-    else out.command == dr.CMD_BUILD || out.command == dr.CMD_OBJ || out.command == dr.CMD_LLVM || out.command == dr.CMD_JS || out.command == dr.CMD_LAYOUT_BUILD || out.command == dr.CMD_WEB || out.command == dr.CMD_DEBUG || out.command == dr.CMD_MEMCHECK || out.command == dr.CMD_FMT:
+    else out.command == dr.CMD_BUILD || out.command == dr.CMD_OBJ || out.command == dr.CMD_LLVM || out.command == dr.CMD_JS || out.command == dr.CMD_LAYOUT_BUILD || out.command == dr.CMD_WEB || out.command == dr.CMD_DEBUG || out.command == dr.CMD_MEMCHECK || out.command == dr.CMD_FMT || out.command == dr.CMD_DOC:
         out.inputs.push(arg)
         if str.Len(out.input) == 0:
             out.input = arg
@@ -383,6 +384,9 @@ func dispatch_command(args: Vector<str>, out &: dr.Dr): int:
         start = 2
     else str.Equals(cmd, "inspect"):
         out.command = dr.CMD_INSPECT
+        start = 2
+    else str.Equals(cmd, "doc"):
+        out.command = dr.CMD_DOC
         start = 2
     else str.Equals(cmd, "web"):
         out.command = dr.CMD_WEB
@@ -797,6 +801,129 @@ func fmt_cmd(opt &: dr.Dr): int:
 end
 
 // ---------------------------------------------------------------------------
+// `salam doc` (CMD_DOC) - not from any C original (docgen.salam is a new,
+// self-hosted-only feature, same as CMD_SERVE above). Discovers .salam files
+// (recursive walk for a directory input, mirroring fmt_walk; the stdlib
+// package auto-glob via sm.PackageFiles for a single-file input), hands each
+// one to docg.ParseFile, then renders the whole DocDb with docg.Render.
+// ---------------------------------------------------------------------------
+func doc_walk(dir: str, files &: Vector<str>):
+    entries := os.ListDir(dir)
+    defer entries.free()
+    repeat entries.len() with i:
+        name := entries.get(i)[0]
+        if str.StartsWith(name, "."):
+            continue
+        end
+        child := dir + "/" + name
+        if os.IsDir(child):
+            doc_walk(child, files)
+        else has_salam_ext(name):
+            files.push(child)
+        end
+    end
+end
+
+func strip_trailing_slash(p: str): str:
+    n := str.Len(p)
+    if n > 0:
+        last := byte_at(p, n - 1)
+        if last == 47 || last == 92:
+            ret str.Substr(p, 0, n - 1)
+        end
+    end
+    ret p
+end
+
+func doc_dir_prefix(path: str): str:
+    slash := str.LastIndex(path, "/")
+    bslash := str.LastIndex(path, "\\")
+    mut cut := slash
+    if bslash > cut:
+        cut = bslash
+    end
+    if cut < 0:
+        ret ""
+    end
+    ret str.Substr(path, 0, cut + 1)
+end
+
+// Directory input -> "<dir>/doc.html" (so bare `salam doc` writes
+// "./doc.html"); single-file input -> "<same dir>/<stem>.doc.html".
+// --output=FILE overrides either default.
+func doc_output_path(explicit: str, path: str): str:
+    if str.Len(explicit) > 0:
+        ret explicit
+    end
+    if os.IsDir(path):
+        ret strip_trailing_slash(path) + "/doc.html"
+    end
+    ret doc_dir_prefix(path) + path_stem(path) + ".doc.html"
+end
+
+func doc_write(lgr: lg.Logger, path: str, content: str): bool:
+    if io.WriteFile(path, content) < 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot write '%s'"), co.ArgStr(path)))
+        ret false
+    end
+    ret true
+end
+
+func doc_cmd(opt &: dr.Dr): int:
+    path := opt.inputs.len() > 0 ? opt.inputs.get(0)[0] : "."
+    if !os.Exists(path):
+        io.EPrintln(co.Format1(i18.Tr("salam doc: '%s' does not exist"), co.ArgStr(path)))
+        ret 2
+    end
+    pack := lp.Load(opt.lang)
+    if pack == lp.LP_NONE:
+        io.EPrintln(co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang)))
+        ret 2
+    end
+    mut files := Vector {} as Vector<str>
+    defer files.free()
+    if os.IsDir(path):
+        doc_walk(strip_trailing_slash(path), files)
+    else:
+        files = sm.PackageFiles(path)
+    end
+    if files.len() == 0:
+        io.EPrintln(co.Format1(i18.Tr("salam doc: no .salam files found under '%s'"), co.ArgStr(path)))
+        ret 2
+    end
+    lgr := lg.New(lg.LOG_OFF, false)
+    mut db := docg.NewDb()
+    mut warn := 0
+    repeat files.len() with i:
+        p := files.get(i)[0]
+        ok := docg.ParseFile(db, lgr, pack, p, p, opt.defines)
+        if !ok:
+            warn += 1
+        end
+    end
+    title := path_stem(strip_trailing_slash(path))
+    html := docg.Render(db, title)
+    out := doc_output_path(opt.output, path)
+    if !doc_write(lgr, out, html):
+        ret 2
+    end
+    mut pub_count := 0
+    mut priv_count := 0
+    repeat db.decls.len() with i:
+        d := db.decls.get(i)[0]
+        if d.is_pub:
+            pub_count += 1
+        else:
+            priv_count += 1
+        end
+    end
+    summary := "salam doc: scanned " + str.FromInt(files.len() as i64) + " file" + plural_suffix(files.len()) + " (" + str.FromInt(pub_count as i64) + " public, " + str.FromInt(priv_count as i64) + " private declarations)"
+    println summary
+    println "  -> " + out
+    ret warn > 0 ? 1 : 0
+end
+
+// ---------------------------------------------------------------------------
 // driver/debug_cmd.c's driver_debug/driver_memcheck.
 // ---------------------------------------------------------------------------
 func debug_cmd(opt &: dr.Dr): int:
@@ -977,6 +1104,8 @@ Commands:
   exec     [file.salam] [--timeout=MS]           Run with the tree-walking interpreter (no C toolchain)
   new      [name] [--lang=en|fa|ar]             Scaffold a new project directory
   format   [files/dirs...] [--check] [-r] [--tabs]  Format .salam source in place (recursive)
+  doc      [path] [--output=FILE] [--lang=CODE]     Generate a self-contained API doc.html from a
+                                                project directory (default '.') or a single file
   layout   build <files...> [--inline]          Build the layout DSL to HTML/CSS/JS
   debug    <file.salam> [build options]         Build -g + launch GDB/LLDB
   memcheck <file.salam> [build options]         Build ASAN + run memory checker
@@ -1053,6 +1182,20 @@ Format options:
                            'if' blocks, is left in place and reported)
   --lang=CODE              Language pack of the source (fa=Persian, ar=Arabic)
 
+Doc options:
+  --output=FILE            Output HTML file (default: '<dir>/doc.html', or
+                           '<file-stem>.doc.html' next to a single input file)
+  --lang=CODE              Language pack of the source (fa=Persian, ar=Arabic)
+  Doc comments: a run of leading '//' or '///' line comments, or one
+  '/** ... */' block, with no blank line before the declaration, becomes its
+  doc text. Optional '@lang' tags split it per language, e.g.:
+    /// @en Adds two integers.
+    /// @fa دو عدد صحیح را جمع می کند.
+    pub func Add(x: int, y: int): int
+  Struct/interface/enum members and existing @en/@fa/@ar name aliases are
+  picked up automatically; the generated page's language switcher only
+  appears when more than one language is actually present in the project.
+
 Inspect options:
   --emit-tokens-xml        Emit the token stream as XML
   --emit-ast-xml           Lex + parse + analyze, emit the decorated AST as XML
@@ -1112,6 +1255,10 @@ pub func Run(args: Vector<str>): int:
         r_fmt := fmt_cmd(opt)
         ret r_fmt
     end
+    if opt.command == dr.CMD_DOC:
+        r_doc := doc_cmd(opt)
+        ret r_doc
+    end
     if opt.command == dr.CMD_RUN:
         r_run := opt.interp ? dr.Exec(opt) : dr.Run(opt)
         ret r_run
@@ -1129,15 +1276,9 @@ pub func Run(args: Vector<str>): int:
         ret r_mc
     end
     if opt.command == dr.CMD_BUILD || opt.command == dr.CMD_OBJ:
-        if opt.inputs.len() == 0:
-            which := opt.command == dr.CMD_OBJ ? "obj" : "build"
-            io.EPrintln(
-                co.Format1(
-                    i18.Tr("salam: '%s' requires at least one input file"), co.ArgStr(which)
-                )
-            )
-            ret 2
-        end
+        // No input given -> build_impl scans the current directory for the
+        // one .salam file defining `main` (same auto-detection CMD_RUN
+        // already gets below), so an empty opt.inputs is not an error here.
         r_bo := opt.command == dr.CMD_OBJ ? dr.Obj(opt) : dr.Build(opt)
         ret r_bo
     end

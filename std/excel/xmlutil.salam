@@ -1,0 +1,230 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package excel
+
+import str
+
+// A minimal, hand-rolled XML scanner - there is no XML parser anywhere in
+// std/ to build on (see std/json's own text-scanning approach, which this
+// mirrors). It is deliberately not a general DOM: xlsx/ods parts (sheetN.xml,
+// styles.xml, sharedStrings.xml, content.xml) are shallow, machine-generated
+// XML, so a handful of forward-only primitives - find a tag, find its
+// matching close, read one attribute, read one attribute at a time - cover
+// everything xlsx_reader.salam/ods_reader.salam need without pulling in a
+// real parser. Every position is a byte offset into the source string.
+
+func _is_name_boundary(code: int): bool:
+    if code == 32 || code == 9 || code == 10 || code == 13: ret true end
+    if code == 62 || code == 47: ret true end
+    ret false
+end
+
+@en "XmlEscape"
+@fa "اسکیپ ایکس‌ام‌ال"
+@ar "تهریب إكس إم إل"
+pub func XmlEscape(s: str): str:
+    mut out := s
+    out = str.Replace(out, "&", "&amp;")
+    out = str.Replace(out, "<", "&lt;")
+    out = str.Replace(out, ">", "&gt;")
+    out = str.Replace(out, `"`, "&quot;")
+    out = str.Replace(out, "'", "&apos;")
+    ret out
+end
+
+@en "XmlUnescape"
+@fa "برگرداندن اسکیپ ایکس‌ام‌ال"
+@ar "فك تهریب إكس إم إل"
+pub func XmlUnescape(s: str): str:
+    mut out := s
+    out = str.Replace(out, "&lt;", "<")
+    out = str.Replace(out, "&gt;", ">")
+    out = str.Replace(out, "&quot;", `"`)
+    out = str.Replace(out, "&apos;", "'")
+    out = str.Replace(out, "&amp;", "&")
+    ret out
+end
+
+// Finds the next `<tag` occurrence at or after `from` whose name ends at a
+// real boundary (whitespace, '>' or '/', not just a common prefix like
+// "row" inside "rowspan"). Returns the index of the leading '<', or -1.
+@en "XmlFind"
+@fa "یافتن ایکس‌ام‌ال"
+@ar "بحث إكس إم إل"
+pub func XmlFind(xml: str, tag: str, from: int): int:
+    needle := "<".concat(tag)
+    n := xml.len()
+    bp := _bp(xml)
+    mut pos := from
+    if pos < 0: pos = 0 end
+    until pos <= n:
+        idx := str.IndexFrom(xml, needle, pos)
+        if idx < 0: ret -1 end
+        after := idx + needle.len()
+        if after >= n:
+            ret idx
+        end
+        if _is_name_boundary(_ub(bp, after)):
+            ret idx
+        end
+        pos = idx + 1
+    end
+    ret -1
+end
+
+// Given the index of a tag's leading '<' (from XmlFind), returns the index
+// just past its closing '>', honoring quoted attribute values that might
+// otherwise contain '>'.
+@en "XmlTagEnd"
+@fa "پایان برچسب ایکس‌ام‌ال"
+@ar "نهایة وسم إكس إم إل"
+pub func XmlTagEnd(xml: str, start: int): int:
+    n := xml.len()
+    bp := _bp(xml)
+    mut i := start
+    mut in_quote := false
+    mut quote := 34
+    until i < n:
+        code := _ub(bp, i)
+        if in_quote:
+            if code == quote: in_quote = false end
+        else code == 34 || code == 39:
+            in_quote = true
+            quote = code
+        else code == 62:
+            ret i + 1
+        end
+        i += 1
+    end
+    ret n
+end
+
+// True if the tag starting at `start` is self-closing ("<tag .../>").
+@en "XmlSelfClosing"
+@fa "بستن خودکار ایکس‌ام‌ال"
+@ar "إغلاق ذاتي إكس إم إل"
+pub func XmlSelfClosing(xml: str, start: int): bool:
+    e := XmlTagEnd(xml, start)
+    if e < start + 2: ret false end
+    bp := _bp(xml)
+    ret _ub(bp, e - 2) == 47
+end
+
+// Reads one attribute's (unescaped) value out of the tag starting at
+// `start`, or "" if the attribute is not present. Scans name="value" pairs
+// one at a time rather than substring-searching `attr.."="` directly, so
+// a short attribute name (e.g. "r") cannot false-match inside a longer one
+// (e.g. "xmlns:r").
+@en "XmlAttr"
+@fa "ویژگی ایکس‌ام‌ال"
+@ar "خاصیة إكس إم إل"
+pub func XmlAttr(xml: str, start: int, attr: str): str:
+    e := XmlTagEnd(xml, start)
+    bp := _bp(xml)
+    mut i := start
+    until i < e:
+        if _is_name_boundary(_ub(bp, i)): break end
+        i += 1
+    end
+    until i < e:
+        until i < e:
+            code := _ub(bp, i)
+            if code != 32 && code != 9 && code != 10 && code != 13: break end
+            i += 1
+        end
+        if i >= e: break end
+        c0 := _ub(bp, i)
+        if c0 == 62 || c0 == 47: break end
+        name_start := i
+        until i < e:
+            code := _ub(bp, i)
+            if code == 61 || code == 32 || code == 62 || code == 47: break end
+            i += 1
+        end
+        name := xml.substr(name_start, i - name_start)
+        mut val := ""
+        mut has_val := false
+        if i < e && _ub(bp, i) == 61:
+            i += 1
+            if i < e:
+                q := _ub(bp, i)
+                if q == 34 || q == 39:
+                    i += 1
+                    val_start := i
+                    until i < e:
+                        if _ub(bp, i) == q: break end
+                        i += 1
+                    end
+                    val = xml.substr(val_start, i - val_start)
+                    has_val = true
+                    if i < e: i += 1 end
+                end
+            end
+        end
+        if has_val && name == attr:
+            ret XmlUnescape(val)
+        end
+    end
+    ret ""
+end
+
+// Finds the matching "</tag>" for the open tag starting at `start`
+// (assumed non-self-closing), honoring same-named nesting - a depth
+// counter, not just the next literal "</tag>", since ODF cell content in
+// particular can nest tags of workbook interest inside each other.
+// Returns the index of the closing tag's leading '<', or -1 if unmatched.
+@en "XmlFindClose"
+@fa "یافتن بستن ایکس‌ام‌ال"
+@ar "بحث إغلاق إكس إم إل"
+pub func XmlFindClose(xml: str, tag: str, content_start: int): int:
+    close_tag := "/".concat(tag)
+    mut depth := 1
+    mut pos := content_start
+    until depth > 0:
+        open_idx := XmlFind(xml, tag, pos)
+        close_idx := XmlFind(xml, close_tag, pos)
+        if close_idx < 0: ret -1 end
+        if open_idx >= 0 && open_idx < close_idx:
+            if XmlSelfClosing(xml, open_idx):
+                pos = XmlTagEnd(xml, open_idx)
+            else:
+                depth += 1
+                pos = XmlTagEnd(xml, open_idx)
+            end
+        else:
+            depth -= 1
+            if depth <= 0: ret close_idx end
+            pos = XmlTagEnd(xml, close_idx)
+        end
+    end
+    ret -1
+end
+
+// Convenience: the raw text between an open tag's end and its matching
+// close tag's start (no unescaping - callers that want plain text should
+// call XmlUnescape themselves, since some callers want to keep nested
+// markup, e.g. ODF's <text:p> paragraphs).
+@en "XmlInner"
+@fa "درون ایکس‌ام‌ال"
+@ar "داخل إكس إم إل"
+pub func XmlInner(xml: str, tag: str, from: int): str:
+    open_idx := XmlFind(xml, tag, from)
+    if open_idx < 0: ret "" end
+    if XmlSelfClosing(xml, open_idx): ret "" end
+    content_start := XmlTagEnd(xml, open_idx)
+    close_idx := XmlFindClose(xml, tag, content_start)
+    if close_idx < 0: ret "" end
+    ret xml.substr(content_start, close_idx - content_start)
+end

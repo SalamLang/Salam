@@ -55,6 +55,19 @@ typedef struct {
     const char *target_triple;
     const char *match_result_tmp;
     const char *match_end_label;
+    /* C type used to declare match_result_tmp inside its "({ ... })" block,
+     * and the type any AST_RETURN "value; goto end;" assignment into it
+     * should cast to. Normally == the match expression's real result type,
+     * except when that type is a pointer: tcc 0.9.26 fails to compile a GNU
+     * statement-expression whose trailing value is a bare identifier of
+     * pointer type declared inside that same block ("unsupported expression
+     * type", reproduced with e.g. `({ const char* y = f(); y; })`) even
+     * though a non-pointer trailing identifier, or a pointer-typed one
+     * declared outside the block, both compile fine. cg_match_expr works
+     * around this by declaring the temp as intptr_t internally (a bare
+     * intptr_t tail hits none of tcc's affected paths) and casting the
+     * whole "({ ... })" back to the real pointer type from the outside. */
+    const char *match_result_ctype;
     bool compact;
 } cg_t;
 

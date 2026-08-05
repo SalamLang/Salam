@@ -179,6 +179,11 @@ pub struct Cg:
     pub target_triple: str = ""
     pub match_result_tmp: str = ""
     pub match_end_label: str = ""
+    // C type used to declare match_result_tmp inside its "({ ... })" block,
+    // and the type any match-arm "value; goto end;" assignment into it
+    // should cast to. See cg_match_expr's own comment for why this is
+    // usually the match's real result type, except when that's a pointer.
+    pub match_result_ctype: str = ""
     pub compact: bool = false
 end
 
@@ -1940,7 +1945,7 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
         g, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n" + "extern uint64_t strlen(const char* s);\n" + "extern int32_t strcmp(const char* a, const char* b);\n" + "extern const char* strstr(const char* haystack, const char* " + "needle);\n" + "extern int64_t strtol(const char* s, void* endptr, int32_t " + "base);\n" + "extern double strtod(const char* s, void* endptr);\n" + "extern const char* salam_strcat(const char* a, const char* " + "b);\n" + "extern const char* salam_char_from_code(int32_t c);\n" + "extern const char* salam_str_substr(const char* s, int32_t " + "start, int32_t n);\n" + "extern const char* salam_str_trim(const char* s);\n" + "extern void* salam_str_split(const char* s, const char* " + "delim, void* out_count);\n" + "extern const char* salam_str_repeat(const char* s, int32_t " + "n);\n" + "extern const char* salam_str_upper(const char* s);\n" + "extern const char* salam_str_lower(const char* s);\n" + "#endif\n"
     )
     if !str.Equals(g.module, "core"):
-        outh(g, "#include \"" + CG_MOD_PREFIX + "core.h\"\n")
+        outh(g, `#include "` + CG_MOD_PREFIX + "core.h\"\n")
     end
     prog := at.Get(a, program)
     repeat prog.list.len() with i:
@@ -1981,7 +1986,7 @@ func hdr_prelude(g &: Cg, a &: at.Ast, program: int):
         end
         basev := co.SbCstr(b)
         co.SbFree(b)
-        outh(g, "#include \"" + CG_MOD_PREFIX + basev + ".h\"\n")
+        outh(g, `#include "` + CG_MOD_PREFIX + basev + ".h\"\n")
     end
     outh(g, "\n")
 end
@@ -3256,9 +3261,9 @@ func cg_cescape(sv: str): str:
         else c == 11:
             co.SbPuts(b, "\\v")
         else c == 34:
-            co.SbPuts(b, "\\\"")
+            co.SbPuts(b, `\"`)
         else c == 92:
-            co.SbPuts(b, "\\\\")
+            co.SbPuts(b, `\\`)
         else:
             if c < 32 || c >= 127:
                 co.SbPutc(b, 92)
@@ -3337,18 +3342,29 @@ func cg_match_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     rty := cg_ctype(str.Len(nn.type_str) > 0 ? nn.type_str : "int32_t")
     subj_ts := at.Get(a, nn.a).type_str
     sty := cg_ctype(str.Len(subj_ts) > 0 ? subj_ts : "int32_t")
+    // tcc 0.9.26 cannot parse a "({ ... })" GNU statement-expression whose
+    // trailing value is a bare identifier of pointer type declared inside
+    // that same block ("unsupported expression type"), even cast-wrapped,
+    // even though the identical block declared as a non-pointer (e.g.
+    // intptr_t) type is fine. Declare the temp as intptr_t internally and
+    // cast the whole "({ ... })" back to the real pointer type from the
+    // outside instead.
+    rty_is_ptr := str.Len(rty) > 0 && str.EndsWith(rty, "*")
+    res_ctype := rty_is_ptr ? "intptr_t" : rty
     subj_var := "__msubj" + t
     res_var := "__mres" + t
     end_lbl := "__mend" + t
     saved_tmp := g.match_result_tmp
     saved_lbl := g.match_end_label
+    saved_ctype := g.match_result_ctype
     mut has_wildcard := false
     mut b := co.SbNew()
     co.SbPuts(
-        b, "({ " + rty + " " + res_var + "; " + sty + " " + subj_var + " = (" + cg_expr(g, s, a, nn.a) + ");\n"
+        b, (rty_is_ptr ? "(" + rty + ")" : "") + "({ " + res_ctype + " " + res_var + "; " + sty + " " + subj_var + " = (" + cg_expr(g, s, a, nn.a) + ");\n"
     )
     g.match_result_tmp = res_var
     g.match_end_label = end_lbl
+    g.match_result_ctype = res_ctype
     repeat nn.list.len() with i:
         armid := nn.list.get(i)[0]
         armn := at.Get(a, armid)
@@ -3376,6 +3392,7 @@ func cg_match_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     co.SbPuts(b, end_lbl + ": " + res_var + "; })")
     g.match_result_tmp = saved_tmp
     g.match_end_label = saved_lbl
+    g.match_result_ctype = saved_ctype
     r := co.SbCstr(b)
     co.SbFree(b)
     ret r
@@ -3447,6 +3464,59 @@ func cg_emit_op_call(
     ret "({ " + cg_ctype(lhs_ts) + " __t" + t + " = (" + lhs_c + "); " + mangled + "(&__t" + t + sep + rhs_c + "); })"
 end
 
+func cg_ident_char(c: int, first: bool): bool:
+    if c == 95 || (c >= 97 && c <= 122) || (c >= 65 && c <= 90):
+        ret true
+    end
+    if !first && c >= 48 && c <= 57:
+        ret true
+    end
+    ret false
+end
+
+func cg_val_is_bare_ident(v: str): bool:
+    n := str.Len(v)
+    if n == 0 || !cg_ident_char(byte_at(v, 0), true):
+        ret false
+    end
+    mut i := 1
+    until i < n:
+        if !cg_ident_char(byte_at(v, i), false):
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+// Two confirmed, distinct tcc 0.9.26 bugs, both reproduced with minimal
+// standalone .c files against the bundled tcc binary (see the matching
+// note in c/src/codegen/codegen_expr.c's own cg_val_needs_hoist):
+// 1. A "({ ... })" GNU statement-expression can't be a compound-literal
+//    initializer-list element at all, positional or designated, even
+//    cast-wrapped - "cast expected". Every stmt-expr this codegen emits
+//    ends in "})", optionally behind an outer cast, so that suffix
+//    reliably detects the shape.
+// 2. A plain bare-identifier field value (e.g. ".f = someVar", regardless
+//    of someVar's type or where it came from) is rejected with "field
+//    expected" whenever it is *not* the list's last element. Both
+//    symptoms disappear once the value lives in its own
+//    "tmp.field = value;" statement instead of the initializer list.
+// NULL/true/false are constant tokens, not variable references - they
+// never trip bug 2 and, unlike one, are always safe to leave in a
+// top-level/global initializer, which can't hold hoisted statements at
+// all (there is no enclosing function body to emit them into).
+func cg_val_needs_hoist(v: str): bool:
+    n := str.Len(v)
+    if n >= 2 && byte_at(v, n - 1) == 41 && byte_at(v, n - 2) == 125:
+        ret true
+    end
+    if str.Equals(v, "NULL") || str.Equals(v, "true") || str.Equals(v, "false"):
+        ret false
+    end
+    ret cg_val_is_bare_ident(v)
+end
+
 func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     nn := at.Get(a, n)
     ssym := struct_by_name(s, nn.name)
@@ -3457,9 +3527,10 @@ func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             sl_cn = sm.TypeAt(s, sv.ty).name
         end
     end
-    mut b := co.SbNew()
-    co.SbPuts(b, "(" + cg_cident(sl_cn) + "){ ")
+    mut inl := co.SbNew()
     mut first := true
+    mut post_names := Vector {} as Vector<str>
+    mut post_vals := Vector {} as Vector<str>
     if ssym != 0:
         msc := sm.ScopeAt(s, sm.SymAt(s, ssym).members)
         repeat msc.symbols.len() with i:
@@ -3487,19 +3558,44 @@ func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             if !has_val:
                 continue
             end
-            if !first:
-                co.SbPuts(b, ", ")
+            if cg_val_needs_hoist(val):
+                post_names.push(f.name)
+                post_vals.push(val)
+            else:
+                if !first:
+                    co.SbPuts(inl, ", ")
+                end
+                co.SbPuts(inl, "." + cg_cident(f.name) + " = " + val)
+                first = false
             end
-            co.SbPuts(b, "." + cg_cident(f.name) + " = " + val)
-            first = false
         end
     end
     if first:
-        co.SbPuts(b, "0")
+        co.SbPuts(inl, "0")
     end
-    co.SbPuts(b, " }")
-    r := co.SbCstr(b)
-    co.SbFree(b)
+    mut r := ""
+    if post_names.len() == 0:
+        r = "(" + cg_cident(sl_cn) + "){ " + co.SbCstr(inl) + " }"
+    else:
+        // At least one field needs the post-assignment treatment:
+        // materialize the literal from only the safe fields into a named
+        // temp, apply the rest as plain "tmp.field = value;" statements
+        // (always accepted regardless of value shape or position), and
+        // use the bare temp as this expression's result. If that result
+        // itself ends up as a field value of an *enclosing* struct
+        // literal, cg_val_needs_hoist catches it there too (a bare
+        // identifier), so this composes safely at any nesting depth.
+        g.tmpn += 1
+        t := g.tmpn
+        cg_line(
+            g, cg_cident(sl_cn) + " __sl" + t + " = (" + cg_cident(sl_cn) + "){ " + co.SbCstr(inl) + " };"
+        )
+        repeat post_names.len() with k:
+            cg_line(g, "__sl" + t + "." + cg_cident(post_names.get(k)[0]) + " = " + post_vals.get(k)[0] + ";")
+        end
+        r = "__sl" + t
+    end
+    co.SbFree(inl)
     ret r
 end
 
@@ -3949,52 +4045,58 @@ func cg_fill_defaults(
     end
 end
 
-// call_args - sig is a SigId (0 = C NULL).
-func call_args(g &: Cg, s &: sm.Sema, a &: at.Ast, call: int, sig: int): str:
-    mut b := co.SbNew()
-    cn := at.Get(a, call)
+// call_emit_arg - appends arg `i`'s C expression to b, taking its address
+// first if the matching param (from sig) is declared `&:`.
+func call_emit_arg(g &: Cg, s &: sm.Sema, a &: at.Ast, b &: str.StringBuilder, argid: int, sig: int, i: int): void:
     mut sdecl := 0
     if sig != 0:
         sdecl = sm.SigAt(s, sig).decl
     end
+    mut arg_is_ref := false
+    if sig != 0 && sdecl != 0:
+        dn := at.Get(a, sdecl)
+        if i < dn.list.len():
+            arg_is_ref = at.Get(a, dn.list.get(i)[0]).is_ref
+        end
+    end
+    if !arg_is_ref:
+        co.SbPuts(b, cg_expr(g, s, a, argid))
+        ret
+    end
+    sv := sm.SigAt(s, sig)
+    mut ref_c := ""
+    if cg_addressable(a, argid):
+        ref_c = "&(" + cg_expr(g, s, a, argid) + ")"
+    else:
+        // argid isn't a real C lvalue (e.g. a member of a
+        // byval-struct-returning call's result) - bind it to a
+        // genuine local temp first, same fallback cg_method already
+        // uses below, so `&` has an actual lvalue to operate on.
+        g.tmpn += 1
+        rt := g.tmpn
+        argc := cg_expr(g, s, a, argid)
+        argts := at.Get(a, argid).type_str
+        ref_c = "({ " + cg_ctype(argts) + " __r" + rt + " = (" + argc + "); &__r" + rt + "; })"
+    end
+    if i < sv.params.len():
+        co.SbPuts(
+            b, "(" + cg_ctype(sm.ToString(s, sv.params.get(i)[0])) + "*)" + ref_c
+        )
+    else:
+        co.SbPuts(b, ref_c)
+    end
+end
+
+// call_args - sig is a SigId (0 = C NULL).
+func call_args(g &: Cg, s &: sm.Sema, a &: at.Ast, call: int, sig: int): str:
+    mut b := co.SbNew()
+    cn := at.Get(a, call)
     repeat cn.list.len() with i:
         argid := cn.list.get(i)[0]
         if i > 0:
             co.SbPuts(b, ", ")
         end
-        mut arg_is_ref := false
-        if sig != 0 && sdecl != 0:
-            dn := at.Get(a, sdecl)
-            if i < dn.list.len():
-                arg_is_ref = at.Get(a, dn.list.get(i)[0]).is_ref
-            end
-        end
-        if arg_is_ref:
-            sv := sm.SigAt(s, sig)
-            mut ref_c := ""
-            if cg_addressable(a, argid):
-                ref_c = "&(" + cg_expr(g, s, a, argid) + ")"
-            else:
-                // argid isn't a real C lvalue (e.g. a member of a
-                // byval-struct-returning call's result) - bind it to a
-                // genuine local temp first, same fallback cg_method already
-                // uses below, so `&` has an actual lvalue to operate on.
-                g.tmpn += 1
-                rt := g.tmpn
-                argc := cg_expr(g, s, a, argid)
-                argts := at.Get(a, argid).type_str
-                ref_c = "({ " + cg_ctype(argts) + " __r" + rt + " = (" + argc + "); &__r" + rt + "; })"
-            end
-            if i < sv.params.len():
-                co.SbPuts(
-                    b, "(" + cg_ctype(sm.ToString(s, sv.params.get(i)[0])) + "*)" + ref_c
-                )
-            else:
-                co.SbPuts(b, ref_c)
-            end
-        else:
-            co.SbPuts(b, cg_expr(g, s, a, argid))
-        end
+        call_emit_arg(g, s, a, b, argid, sig, i)
     end
     cg_fill_defaults(g, s, a, b, call, sig, cn.list.len())
     r := co.SbCstr(b)
@@ -4009,7 +4111,7 @@ func call_args_lead(
     cn := at.Get(a, call)
     repeat cn.list.len() with i:
         co.SbPuts(b, ", ")
-        co.SbPuts(b, cg_expr(g, s, a, cn.list.get(i)[0]))
+        call_emit_arg(g, s, a, b, cn.list.get(i)[0], sig, i)
     end
     cg_fill_defaults(g, s, a, b, call, sig, 1)
     r := co.SbCstr(b)
@@ -4112,7 +4214,7 @@ func cg_lower_print(
             av = "salam_char_from_code(" + e + ")"
         else sg2.kind == PF_BOOL:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
-            av = "((" + e + ") ? \"true\" : \"false\")"
+            av = "((" + e + `) ? "true" : "false")`
         else sg2.kind == PF_F64:
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = "(double)(" + e + ")"
@@ -4196,7 +4298,7 @@ func call_ident(
         ret "salam_input()"
     end
     if str.Equals(nm, "lang"):
-        ret "\"" + i18.Lang() + "\""
+        ret `"` + i18.Lang() + `"`
     end
     if str.Equals(nm, "args"):
         cnv := cg_ctype(str.Len(cn.type_str) > 0 ? cn.type_str : "Vector_str")
@@ -4769,7 +4871,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         if str.Len(g.match_result_tmp) > 0:
             if nn.a != 0:
                 cg_line(
-                    g, g.match_result_tmp + " = (" + cg_expr(g, s, a, nn.a) + "); goto " + g.match_end_label + ";"
+                    g, g.match_result_tmp + " = (" + g.match_result_ctype + ")(" + cg_expr(g, s, a, nn.a) + "); goto " + g.match_end_label + ";"
                 )
             else:
                 cg_line(g, "goto " + g.match_end_label + ";")
@@ -5298,7 +5400,7 @@ pub func Run(
     emit_instances_header(g, s, a, program)
     emit_inline_header(g, s, a, program)
     outh(g, "\n#endif\n")
-    out(g, "#include \"" + CG_MOD_PREFIX + module_name + ".h\"\n\n")
+    out(g, `#include "` + CG_MOD_PREFIX + module_name + ".h\"\n\n")
     cg_emit_dyn_vtables_impl(g, s)
     emit_private_protos(g, s, a, program)
     emit_impl_protos(g, s, a)

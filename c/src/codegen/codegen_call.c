@@ -40,6 +40,33 @@ static void cg_fill_defaults(cg_t *cg, sb_t *b, ast_node_t *call, func_sig_t *si
     }
 }
 
+static void cg_emit_call_arg(cg_t *cg, sb_t *b, ast_node_t *arg, func_sig_t *sig,
+                             size_t i)
+{
+    bool arg_is_ref = sig && sig->decl && i < sig->decl->list.len &&
+                      ((ast_node_t *)sig->decl->list.data[i])->is_ref;
+    if (!arg_is_ref) {
+        sb_puts(b, cg_expr(cg, arg));
+        return;
+    }
+    const char *ref_c;
+    if (cg_addressable(arg)) {
+        ref_c = cg_fmt(cg, "&(%s)", cg_expr(cg, arg));
+    } else {
+        int t = ++cg->tmpn;
+        const char *argc = cg_expr(cg, arg);
+        const char *argts = arg->type_str ? arg->type_str : "";
+        ref_c =
+            cg_fmt(cg, "({ %s __r%d = (%s); &__r%d; })", cg_ctype(cg, argts), t, argc, t);
+    }
+    type_t *pt = (i < sig->params.len) ? (type_t *)sig->params.data[i] : NULL;
+    if (pt)
+        sb_puts(b, cg_fmt(cg, "(%s*)%s", cg_ctype(cg, type_to_string(cg->sem->tc, pt)),
+                          ref_c));
+    else
+        sb_puts(b, ref_c);
+}
+
 static const char *call_args(cg_t *cg, ast_node_t *call, func_sig_t *sig)
 {
     sb_t b;
@@ -47,30 +74,8 @@ static const char *call_args(cg_t *cg, ast_node_t *call, func_sig_t *sig)
     {
         size_t i = 0;
         for (; i < call->list.len; i++) {
-            ast_node_t *arg = (ast_node_t *)call->list.data[i];
             if (i) sb_puts(&b, ", ");
-            bool arg_is_ref = sig && sig->decl && i < sig->decl->list.len &&
-                              ((ast_node_t *)sig->decl->list.data[i])->is_ref;
-            if (arg_is_ref) {
-                const char *ref_c;
-                if (cg_addressable(arg)) {
-                    ref_c = cg_fmt(cg, "&(%s)", cg_expr(cg, arg));
-                } else {
-                    int t = ++cg->tmpn;
-                    const char *argc = cg_expr(cg, arg);
-                    const char *argts = arg->type_str ? arg->type_str : "";
-                    ref_c = cg_fmt(cg, "({ %s __r%d = (%s); &__r%d; })",
-                                   cg_ctype(cg, argts), t, argc, t);
-                }
-                type_t *pt = (i < sig->params.len) ? (type_t *)sig->params.data[i] : NULL;
-                if (pt)
-                    sb_puts(&b,
-                            cg_fmt(cg, "(%s*)%s",
-                                   cg_ctype(cg, type_to_string(cg->sem->tc, pt)), ref_c));
-                else
-                    sb_puts(&b, ref_c);
-            } else
-                sb_puts(&b, cg_expr(cg, arg));
+            cg_emit_call_arg(cg, &b, (ast_node_t *)call->list.data[i], sig, i);
         }
     }
     cg_fill_defaults(cg, &b, call, sig, call->list.len);
@@ -87,7 +92,7 @@ static const char *call_args_lead(cg_t *cg, ast_node_t *call, func_sig_t *sig)
         size_t i = 0;
         for (; i < call->list.len; i++) {
             sb_puts(&b, ", ");
-            sb_puts(&b, cg_expr(cg, (ast_node_t *)call->list.data[i]));
+            cg_emit_call_arg(cg, &b, (ast_node_t *)call->list.data[i], sig, i);
         }
     }
     cg_fill_defaults(cg, &b, call, sig, 1);

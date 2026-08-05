@@ -169,8 +169,8 @@ void cg_stmt(cg_t *cg, ast_node_t *n)
     case AST_RETURN:
         if (cg->match_result_tmp) {
             if (n->a)
-                cg_line(cg, "%s = (%s); goto %s;", cg->match_result_tmp,
-                        cg_expr(cg, n->a), cg->match_end_label);
+                cg_line(cg, "%s = (%s)(%s); goto %s;", cg->match_result_tmp,
+                        cg->match_result_ctype, cg_expr(cg, n->a), cg->match_end_label);
             else
                 cg_line(cg, "goto %s;", cg->match_end_label);
             break;

@@ -2,19 +2,17 @@
  * Salam Programming Language - VS Code extension entry point.
  */
 
-import vscode
+import "vscode.salam"
 import node
 import str
 
+// The only irreducible bit of raw FFI left in this file: pushing an
+// arbitrary user struct (LangItem) into a JS array has no typed std/node
+// wrapper (and can't, short of one overload per struct type), so it goes
+// through the raw variadic call directly. Everything else in this file
+// goes through node.*/vscode.*'s typed wrappers.
 extern:
-    func salam_js_new_promise(executor: func (i64, i64)): i64
-    func salam_js_invoke(fn: i64, ...): i64
-    func salam_js_is_nullish(x: i64): bool
-    func salam_js_get_prop(obj: i64, name: str): i64
-    func salam_js_set_prop(obj: i64, name: str, ...)
     func salam_js_call(obj: i64, method: str, ...): i64
-    func salam_js_array0(): i64
-    module: i64
 end
 
 const LANG_ID := "salam"
@@ -78,39 +76,12 @@ end
 
 func contains_substr(s: str, sub: str): bool: ret s.find(sub) >= 0 end
 
-// UTF-8 codepoint decode using only s[i] (byte access) and s.len(), both
-// safe on every backend. Used by detect_lang's Persian/Arabic script check.
-func utf8_seq_len(lead: int): int:
-    if lead >= 240: ret 4
-    else lead >= 224: ret 3
-    else lead >= 192: ret 2
-    else:
-        ret 1
-    end
-end
-
-// Ref (`&`) out-params are passed by value on the JS backend, so the
-// codepoint and its byte length come back together in a struct instead.
-func decode_utf8_at(s: str, i: int, n: int): Utf8Char:
-    b0 := s[i] as int
-    if b0 < 128:
-        ret Utf8Char { cp = b0, clen = 1 }
-    end
-    mut l := utf8_seq_len(b0)
-    if i + l > n: l = n - i end
-    mut cp := 0
-    if l == 2: cp = b0 & 0x1F
-    else l == 3: cp = b0 & 0x0F
-    else l == 4: cp = b0 & 0x07
-    else:
-        cp = b0
-    end
-    mut k := 1
-    until k < l:
-        cp = (cp << 6) | ((s[i + k] as int) & 0x3F)
-        k += 1
-    end
-    ret Utf8Char { cp = cp, clen = l }
+// This extension only ever runs through the JS backend, where `str` is a
+// native (UTF-16) JS string and `s[i]` already yields a full code unit
+// (`charCodeAt`), not a UTF-8 byte — Persian/Arabic are all BMP codepoints,
+// so no surrogate-pair or multi-byte decoding is needed here.
+func decode_utf8_at(s: str, i: int, _n: int): Utf8Char:
+    ret Utf8Char { cp = s[i] as int, clen = 1 }
 end
 
 func is_persian_specific(cp: int): bool:
@@ -232,7 +203,7 @@ end
 // async/await.
 func with_salam_doc(cb: func (i64)):
     editor := vscode.ActiveTextEditor()
-    if vscode.IsNullish(editor):
+    if node.IsNullish(editor):
         vscode.ShowWarningMessage("Salam: open a .salam file first.")
         ret
     end
@@ -296,7 +267,7 @@ func report_compiler_missing():
         "Salam: could not run '" + compiler_path() + "'. Set \"salam.compilerPath\" to the salam executable.",
         "Open Settings"
     ), (pick: i64):
-        if vscode.IsPresent(pick) && vscode.ToStr(pick) == "Open Settings":
+        if !node.IsNullish(pick) && node.ToStr(pick) == "Open Settings":
             vscode.OpenSettings("salam.compilerPath")
         end
     end)
@@ -306,11 +277,11 @@ end
 // exit, -1 when the compiler binary itself could not be found (ENOENT).
 func exec_capture(args: i64, cwd: str, cb: func (i64, str, str)):
     node.ExecFileRaw(compiler_path(), args, cwd, (err: i64, stdout: str, stderr: str):
-        if salam_js_is_nullish(err):
+        if node.IsNullish(err):
             cb(0, stdout, stderr)
         else:
-            code_prop := salam_js_get_prop(err, "code")
-            is_enoent := !salam_js_is_nullish(code_prop) && node.ToStr(code_prop) == "ENOENT"
+            code_prop := node.GetProp(err, "code")
+            is_enoent := !node.IsNullish(code_prop) && node.ToStr(code_prop) == "ENOENT"
             cb(is_enoent ? (0 - 1) : 1, stdout, stderr)
         end
     end)
@@ -404,29 +375,29 @@ func whole_document_range(doc: i64): i64:
 end
 
 func provide_formatting_edits(doc: i64): i64:
-    ret salam_js_new_promise((resolve: i64, _reject: i64):
+    ret node.NewPromise((resolve: i64, _reject: i64):
         cfg := vscode.GetConfiguration("salam")
         if !vscode.ConfigGetBool(cfg, "format.enable", true):
-            salam_js_invoke(resolve, vscode.NewArray())
+            node.Invoke1(resolve, node.NewArray())
             ret
         end
         text := vscode.DocumentGetText(doc)
         lang := detect_lang(text)
         format_text(text, lang, (ok: bool, formatted: str):
             if !ok || formatted == "" || formatted == text:
-                salam_js_invoke(resolve, vscode.NewArray())
+                node.Invoke1(resolve, node.NewArray())
                 ret
             end
-            edits := vscode.NewArray()
-            vscode.Push(edits, vscode.TextEditReplace(whole_document_range(doc), formatted))
-            salam_js_invoke(resolve, edits)
+            edits := node.NewArray()
+            node.Push(edits, vscode.TextEditReplace(whole_document_range(doc), formatted))
+            node.Invoke1(resolve, edits)
         end)
     end)
 end
 
 func cmd_format():
     editor := vscode.ActiveTextEditor()
-    if vscode.IsNullish(editor) || vscode.DocumentLanguageId(vscode.EditorDocument(editor)) != LANG_ID:
+    if node.IsNullish(editor) || vscode.DocumentLanguageId(vscode.EditorDocument(editor)) != LANG_ID:
         vscode.ShowWarningMessage("Salam: open a .salam file first.")
         ret
     end
@@ -448,8 +419,8 @@ end
 
 func cmd_new_project():
     vscode.Then1(vscode.ShowInputBox("Project name", "my-salam-app"), (nameV: i64):
-        if !vscode.IsPresent(nameV): ret end
-        name := vscode.ToStr(nameV)
+        if node.IsNullish(nameV): ret end
+        name := node.ToStr(nameV)
         if !is_valid_project_name(name):
             vscode.ShowErrorMessage("Salam: use letters, digits, dots, hyphens or underscores for the project name.")
             ret
@@ -460,7 +431,7 @@ func cmd_new_project():
             LangItem { label = "فارسی (fa)", value = "fa" },
             LangItem { label = "العربية (ar)", value = "ar" }
         ] as LangItem[3]
-        picks := salam_js_array0()
+        picks := node.NewArray()
         mut k := 0
         until k < 3:
             salam_js_call(picks, "push", items[k])
@@ -468,8 +439,8 @@ func cmd_new_project():
         end
 
         vscode.Then1(vscode.ShowQuickPick(picks, "Keyword language pack for the new project"), (pick: i64):
-            if !vscode.IsPresent(pick): ret end
-            value := vscode.GetStr(pick, "value")
+            if node.IsNullish(pick): ret end
+            value := node.GetStr(pick, "value")
             args := node.NewArray()
             node.PushStr(args, "new")
             node.PushStr(args, name)
@@ -508,7 +479,7 @@ func deactivate():
 end
 
 func main():
-    exports := salam_js_get_prop(module, "exports")
-    salam_js_set_prop(exports, "activate", (ctx: i64): activate(ctx) end)
-    salam_js_set_prop(exports, "deactivate", (): deactivate() end)
+    exports := node.Exports()
+    node.SetPropFn1(exports, "activate", (ctx: i64): activate(ctx) end)
+    node.SetPropFn0(exports, "deactivate", (): deactivate() end)
 end

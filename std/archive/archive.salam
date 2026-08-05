@@ -24,28 +24,35 @@ import os
 // archive - real, interoperable ZIP/GZIP/TAR reading and writing, plus
 // read-only RAR listing/extraction of uncompressed entries.
 //
-// Unlike std/compress (whose formats are Salam-native and not meant to be
-// read by any other tool), the whole point of this package is
-// interoperability: a .zip written by ZipWriter opens in Windows Explorer,
+// Unlike most of std/compress (whose formats are Salam-native and not meant
+// to be read by any other tool), the whole point of this package is
+// interoperability: a .zip written by ZipCreate opens in Windows Explorer,
 // macOS Archive Utility, 7-Zip and `unzip`; a .zip/.gz written by any of
-// those opens here. That means real RFC 1951 DEFLATE (deflate.salam,
-// inflate.salam) - bit-for-bit the algorithm zlib/gzip/zip use - not the
-// simplified, self-describing format std/compress's own Deflate uses.
+// those opens here. That means real RFC 1951 DEFLATE - bit-for-bit the
+// algorithm zlib/gzip/zip use, not the simplified, self-describing format
+// std/compress's own DeflateCompress uses - via compress.RawDeflate/
+// compress.RawInflate, which this package builds its ZIP/GZIP support on
+// top of (see std/compress's own header comment for why that real decoder
+// lives there instead of here: it needs no OS-specific code, so it stays
+// reachable by anything that imports compress alone, e.g. an HTTP server
+// wanting Content-Encoding: gzip without this package's file I/O).
 //
 // Every format here is plain byte/bit parsing with no OS-specific code, so
 // it behaves identically on Linux, macOS, Windows and the BSDs. The one
-// place the OS actually matters - opening a file in **binary** mode and
-// seeking in files larger than 2GB - is handled once, here, via `fopen`/
-// `fread`/`fwrite`/`fseek` FFI (std/os and std/io's own ReadFile/WriteFile
-// return `str`, which truncates at an embedded NUL byte and is unusable
-// for archive payloads; see std/compress's own header comment for the same
-// reasoning). The 64-bit seek/tell call differs by OS (`_fseeki64` on
-// Windows vs. `fseeko`/`ftello` elsewhere), mirroring std/fs's own
-// already-cross-platform pattern.
+// place the OS matters at all - opening a file in **binary** mode - is
+// handled once, here, via plain `fopen`/`fread`/`fwrite`/`fseek`/`ftell`
+// FFI (std/os and std/io's own ReadFile/WriteFile return `str`, which
+// truncates at an embedded NUL byte and is unusable for archive payloads;
+// see std/compress's own header comment for the same reasoning). See
+// ReadBinaryFile's comment below for why this stays with the plain
+// 32-bit `fseek`/`ftell` rather than a 64-bit variant.
 //
 // Formats:
-//   inflate.salam / deflate.salam - RFC 1951 DEFLATE decoder/encoder
-//   gzip.salam                    - single-file .gz container (RFC 1952)
+//   gzip.salam                    - single-file .gz container I/O
+//                                    (RFC 1952); the format itself (RFC
+//                                    1951 DEFLATE + gzip framing) lives in
+//                                    std/compress, reachable without this
+//                                    package's OS-specific file I/O
 //   zip.salam                     - .zip archives, read + write (store,
 //                                    deflate; encrypted/unknown methods are
 //                                    reported, not silently misread)
@@ -72,23 +79,18 @@ import os
 // random access anyway, and this keeps every parser a simple function over
 // a `void*`/`int` span, the same shape std/compress already uses.
 
+// 64-bit `_ftelli64` does not link against tcc's bundled msvcrt import
+// library on Windows (undefined symbol at link time), so this uses the
+// same plain 32-bit `fseek`/`ftell` std/os/os.salam's own FileSize already
+// relies on - portable across Linux/macOS/Windows/BSD, at the documented
+// cost of a ~2GB ceiling on any single file this package reads or writes.
 extern:
     func fopen(path: str, mode: str): void*
     func fclose(fp: void*): int
     func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
     func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
-end
-
-if SALAM_OS_WINDOWS:
-    extern:
-        func _fseeki64(fp: void*, off: i64, whence: int): int
-        func _ftelli64(fp: void*): i64
-    end
-else:
-    extern:
-        func fseeko(fp: void*, off: i64, whence: int): int
-        func ftello(fp: void*): i64
-    end
+    func fseek(fp: void*, off: int, whence: int): int
+    func ftell(fp: void*): int
 end
 
 @en "Entry"
@@ -104,14 +106,6 @@ pub struct Entry:
     pub mtime: i64 = 0 as i64
 end
 
-if SALAM_OS_WINDOWS:
-    func _seek64(fp: void*, off: i64, w: int): int: ret _fseeki64(fp, off, w) end
-    func _tell64(fp: void*): i64: ret _ftelli64(fp) end
-else:
-    func _seek64(fp: void*, off: i64, w: int): int: ret fseeko(fp, off, w) end
-    func _tell64(fp: void*): i64: ret ftello(fp) end
-end
-
 // ---------------------------------------------------------- binary file IO
 
 // Reads a whole file into a binary-safe buffer. `ok` is false (and the
@@ -125,11 +119,11 @@ pub func ReadBinaryFile(path: str, ok &: bool): compress.ByteBuf:
     if fp == null:
         ret compress.NewByteBuf()
     end
-    _seek64(fp, 0 as i64, 2)
-    size := _tell64(fp)
-    _seek64(fp, 0 as i64, 0)
-    mut buf := compress.NewByteBufCap(size as int)
-    if size > (0 as i64):
+    fseek(fp, 0, 2)
+    size := ftell(fp)
+    fseek(fp, 0, 0)
+    mut buf := compress.NewByteBufCap(size)
+    if size > 0:
         raw := mem.Allocate(size as u64)
         got := fread(raw, 1 as u64, size as u64, fp)
         compress.BufPushBytes(buf, raw, got as int)

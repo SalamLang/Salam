@@ -1,4 +1,5 @@
 package tls
+import net.internal.rawsock
 
 
 // The public connection API. The handshake flows live in driver.salam.
@@ -176,13 +177,54 @@ pub func Dial(host: str, port: int, cfg: Config): Conn:
     // dial target instead would mean a caller who explicitly asked for one
     // identity silently gets whatever the endpoint happens to prove.
     c.host = conf.server_name
-    s := net.Connect(host, port)
-    if !net.Ok(s):
+    s := rawsock.Connect(host, port)
+    if !rawsock.Ok(s):
         c.err = "could not connect to " + host
         ret c
     end
     c.h = Handshake {}
     c.h.rec = _rec_new(s.fd)
+    c.h.priv = _newbuf(32)
+    c.h.pub_key = _newbuf(32)
+    c.h.shared = _newbuf(32)
+    c.h.hs_secret = _newbuf(48)
+    c.h.master = _newbuf(48)
+    c.h.c_hs_secret = _newbuf(48)
+    c.h.s_hs_secret = _newbuf(48)
+    c.h.c_ap_secret = _newbuf(48)
+    c.h.s_ap_secret = _newbuf(48)
+    c.h.certs = _newbuf(8192)
+    c.h.cert_off = _newbuf(128)
+    c.h.crand = _newbuf(32)
+    c.h.srand = _newbuf(32)
+    c.h.ecpriv = _newbuf(32)
+    c.h.ecpub = _newbuf(65)
+    _do_handshake(c, conf)
+    ret c
+end
+
+// Runs the client side of a TLS handshake on `fd`, an already-connected
+// plain TCP socket, instead of dialing a fresh connection the way Dial
+// does. This is what a STARTTLS-style protocol upgrade needs (SMTP,
+// IMAP, ...): the plaintext greeting/negotiation happens first on a
+// plain rawsock.Connect'd socket, and only then does TLS begin on that same
+// fd. `cfg.server_name` must be set by the caller - unlike Dial, there is
+// no dial-target hostname to default it from here.
+@en "WrapClient"
+@fa "پوشش کارخواه"
+@ar "تغليف العميل"
+pub func WrapClient(fd: i64, cfg: Config): Conn:
+    mut c := Conn {}
+    c.insecure = cfg.insecure_skip_verify
+    c.pending = _newbuf(REC_MAX_PLAINTEXT)
+    conf := cfg
+    c.host = conf.server_name
+    if fd < 0:
+        c.err = "invalid fd"
+        ret c
+    end
+    c.h = Handshake {}
+    c.h.rec = _rec_new(fd)
     c.h.priv = _newbuf(32)
     c.h.pub_key = _newbuf(32)
     c.h.shared = _newbuf(32)
@@ -360,7 +402,7 @@ pub func Close(c &: Conn):
     end
     c.open = false
     if c.h.rec.fd >= 0:
-        net.Close(net.SocketFromFd(c.h.rec.fd))
+        rawsock.Close(rawsock.FromFd(c.h.rec.fd))
     end
     _rec_free(c.h.rec)
     _hs_free(c.h)

@@ -1,0 +1,193 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "cli"
+@fa "خط فرمان"
+@ar "سطر الأوامر"
+package cli
+
+import str
+import fmt
+import io
+import flag
+import collections
+
+// App is a thin subcommand *router*: it only tracks command names/
+// descriptions and resolves argv[0] to one of them. Each subcommand still
+// owns and builds its own flag.FlagSet (Salam has no closures to register
+// per-command handlers with, and nesting FlagSet's own Vector fields inside
+// another Vector is exactly the kind of nested-generic shape that doesn't
+// codegen reliably) - the caller dispatches on the returned command name and
+// parses RemainingArgs() with whichever FlagSet belongs to that command.
+@en "CmdHelp"
+@fa "دستور راهنما"
+@ar "أمر المساعدة"
+pub const CmdHelp := "__help__"
+
+@en "CmdVersion"
+@fa "دستور نسخه"
+@ar "أمر الإصدار"
+pub const CmdVersion := "__version__"
+
+@en "CmdUnknown"
+@fa "دستور نامشخص"
+@ar "أمر غیر معروف"
+pub const CmdUnknown := "__unknown__"
+
+@en "App"
+@fa "برنامه"
+@ar "تطبیق"
+pub struct App:
+    pub name: str = ""
+    pub desc: str = ""
+    pub version: str = ""
+    pub cmd_names: Vector<str> = Vector {}
+    pub cmd_descs: Vector<str> = Vector {}
+end
+
+func _find_cmd(app &: App, name: str): int:
+    repeat app.cmd_names.len() with i:
+        if app.cmd_names.get(i)[0] == name: ret i end
+    end
+    ret 0 - 1
+end
+
+@en "New"
+@fa "جدید"
+@ar "جدید"
+pub func New(name: str, desc: str, version: str): App:
+    ret App { name = name, desc = desc, version = version }
+end
+
+@en "Register"
+@fa "ثبت"
+@ar "تسجیل"
+pub func Register(app &: App, name: str, desc: str):
+    app.cmd_names.push(name)
+    app.cmd_descs.push(desc)
+end
+
+@en "HasCommand"
+@fa "دستور دارد"
+@ar "یملک أمر"
+pub func HasCommand(app &: App, name: str): bool: ret _find_cmd(app, name) >= 0 end
+
+@en "CommandDesc"
+@fa "شرح دستور"
+@ar "وصف الأمر"
+pub func CommandDesc(app &: App, name: str): str:
+    idx := _find_cmd(app, name)
+    if idx < 0: ret "" end
+    ret app.cmd_descs.get(idx)[0]
+end
+
+// Dispatch inspects argv[0] and returns: CmdHelp for "-h"/"--help"/"help"/no
+// args, CmdVersion for "-v"/"--version"/"version", the matched command name
+// if argv[0] names a registered command, or CmdUnknown otherwise. Use
+// RemainingArgs(argv) to get the rest of argv to hand to that command's own
+// flag.FlagSet.
+@en "Dispatch"
+@fa "توزیع"
+@ar "توزیع"
+pub func Dispatch(app &: App, argv: Vector<str>): str:
+    if argv.len() == 0: ret CmdHelp end
+    name := argv.get(0)[0]
+    if name == "-h" || name == "--help" || name == "help": ret CmdHelp end
+    if name == "-v" || name == "--version" || name == "version": ret CmdVersion end
+    if HasCommand(app, name): ret name end
+    ret CmdUnknown
+end
+
+@en "RemainingArgs"
+@fa "آرگومان‌های باقیمانده"
+@ar "الوسائط المتبقیة"
+pub func RemainingArgs(argv: Vector<str>): Vector<str>:
+    if argv.len() <= 1: ret Vector {} as Vector<str> end
+    ret collections.slice(argv, 1, argv.len() - 1)
+end
+
+@en "Usage"
+@fa "راهنما"
+@ar "الاستخدام"
+pub func Usage(app &: App): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, app.name)
+    if app.version.len() > 0:
+        str.BufAppend(b, " ")
+        str.BufAppend(b, app.version)
+    end
+    str.BufAppend(b, "\n")
+    if app.desc.len() > 0:
+        str.BufAppend(b, app.desc)
+        str.BufAppend(b, "\n")
+    end
+    str.BufAppend(b, "\nUsage: ")
+    str.BufAppend(b, app.name)
+    str.BufAppend(b, " <command> [options]\n\nCommands:\n")
+    repeat app.cmd_names.len() with i:
+        str.BufAppend(b, "  ")
+        str.BufAppend(b, fmt.PadRight(app.cmd_names.get(i)[0], 14))
+        str.BufAppend(b, app.cmd_descs.get(i)[0])
+        str.BufAppend(b, "\n")
+    end
+    str.BufAppend(b, "\nRun '")
+    str.BufAppend(b, app.name)
+    str.BufAppend(b, " <command> --help' for help on a specific command.\n")
+    ret str.BufStr(b)
+end
+
+// RequireFlags validates that every named flag was explicitly set on fs
+// (post-Parse); returns the names that are still missing (empty = ok).
+@en "RequireFlags"
+@fa "الزامی بودن پرچم‌ها"
+@ar "رایات مطلوبة"
+pub func RequireFlags(fs &: flag.FlagSet, names: Vector<str>): Vector<str>:
+    mut missing := Vector {} as Vector<str>
+    repeat names.len() with i:
+        n := names.get(i)[0]
+        if flag.WasSet(fs, n) == false: missing.push(n) end
+    end
+    ret missing
+end
+
+// Confirm prompts "question [y/N]: " and reports whether the user answered
+// affirmatively (y/yes, case-insensitive; empty/anything else is "no").
+@en "Confirm"
+@fa "تایید"
+@ar "تأكید"
+pub func Confirm(question: str): bool:
+    print question
+    print " [y/N]: "
+    ans := str.Lower(str.Trim(io.Input()))
+    ret ans == "y" || ans == "yes"
+end
+
+@en "Prompt"
+@fa "درخواست"
+@ar "طلب"
+pub func Prompt(question: str): str:
+    print question
+    print ": "
+    ret str.Trim(io.Input())
+end
+
+@en "PromptOr"
+@fa "درخواست یا"
+@ar "طلب أو"
+pub func PromptOr(question: str, def: str): str:
+    v := Prompt(question.concat(" (").concat(def).concat(")"))
+    if v.len() == 0: ret def end
+    ret v
+end

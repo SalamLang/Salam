@@ -1,0 +1,138 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Truncated-buffer and malformed-input error paths for encoding.protobuf's
+// wire.salam, complementing protobuf_wire_demo.salam's happy-path round trips.
+// Every Read* function here signals failure via an `ok &: bool` out-param
+// rather than a panic - this file proves every one of those paths actually
+// flips to false on bad input, not just the happy path back to true.
+
+package main
+
+import encoding.protobuf
+import compress
+import testing
+import os
+
+func main:
+    // ReadVarint on a completely empty buffer -> ok=false, not a crash
+    mut bEmpty := compress.NewByteBuf()
+    mut rEmpty := compress.NewByteReader(bEmpty.data, bEmpty.len)
+    mut okEmpty := true
+    protobuf.ReadVarint(rEmpty, okEmpty)
+    testing.AssertFalse(okEmpty)
+
+    // a varint whose continuation bit (0x80) is set on every byte, that
+    // never terminates before the buffer runs out -> ok=false
+    mut bTrunc := compress.NewByteBuf()
+    compress.BufPush(bTrunc, 0x80)
+    compress.BufPush(bTrunc, 0x80)
+    mut rTrunc := compress.NewByteReader(bTrunc.data, bTrunc.len)
+    mut okTrunc := true
+    protobuf.ReadVarint(rTrunc, okTrunc)
+    testing.AssertFalse(okTrunc)
+
+    // ReadTag on an empty buffer -> ok=false
+    mut rTag := compress.NewByteReader(bEmpty.data, bEmpty.len)
+    mut fnum := 0
+    mut wtype := 0
+    mut tagOk := true
+    protobuf.ReadTag(rTag, fnum, wtype, tagOk)
+    testing.AssertFalse(tagOk)
+
+    // ReadFixed32/ReadFixed64 on a too-short buffer -> ok=false
+    mut bShort := compress.NewByteBuf()
+    compress.BufPush(bShort, 1)
+    compress.BufPush(bShort, 2)
+    mut rF32 := compress.NewByteReader(bShort.data, bShort.len)
+    mut okF32 := true
+    protobuf.ReadFixed32(rF32, okF32)
+    testing.AssertFalse(okF32)
+
+    mut rF64 := compress.NewByteReader(bShort.data, bShort.len)
+    mut okF64 := true
+    protobuf.ReadFixed64(rF64, okF64)
+    testing.AssertFalse(okF64)
+
+    // ReadFloat/ReadDouble on a too-short buffer -> ok=false
+    mut rFlt := compress.NewByteReader(bShort.data, bShort.len)
+    mut okFlt := true
+    protobuf.ReadFloat(rFlt, okFlt)
+    testing.AssertFalse(okFlt)
+
+    mut rDbl := compress.NewByteReader(bShort.data, bShort.len)
+    mut okDbl := true
+    protobuf.ReadDouble(rDbl, okDbl)
+    testing.AssertFalse(okDbl)
+
+    // length-prefixed string whose declared length exceeds the remaining
+    // buffer -> ok=false (not a buffer over-read)
+    mut bBadLen := compress.NewByteBuf()
+    protobuf.WriteVarint(bBadLen, 100 as u64)
+    compress.BufPush(bBadLen, 65)
+    mut rBadLen := compress.NewByteReader(bBadLen.data, bBadLen.len)
+    mut okBadLen := true
+    protobuf.ReadLenPrefixedStr(rBadLen, okBadLen)
+    testing.AssertFalse(okBadLen)
+
+    // SkipField with an unrecognized wire type (3 = deprecated group-start,
+    // 4 = deprecated group-end) -> ok=false, since neither is supported
+    mut bAny := compress.NewByteBuf()
+    compress.BufPush(bAny, 0)
+    mut rGroup := compress.NewByteReader(bAny.data, bAny.len)
+    mut okGroup := true
+    protobuf.SkipField(rGroup, 3, okGroup)
+    testing.AssertFalse(okGroup)
+
+    // SkipField happy path for every wire type this format actually supports
+    mut bSkip := compress.NewByteBuf()
+    protobuf.WriteFixed32(bSkip, 1 as u32)
+    protobuf.WriteFixed64(bSkip, 2 as u64)
+    protobuf.WriteLenPrefixedStr(bSkip, "skip-me")
+    protobuf.WriteVarint(bSkip, 9 as u64)
+    mut rSkip := compress.NewByteReader(bSkip.data, bSkip.len)
+
+    mut okSkip32 := false
+    protobuf.SkipField(rSkip, protobuf.WT_FIXED32, okSkip32)
+    testing.AssertTrue(okSkip32)
+
+    mut okSkip64 := false
+    protobuf.SkipField(rSkip, protobuf.WT_FIXED64, okSkip64)
+    testing.AssertTrue(okSkip64)
+
+    mut okSkipLen := false
+    protobuf.SkipField(rSkip, protobuf.WT_LEN, okSkipLen)
+    testing.AssertTrue(okSkipLen)
+
+    // after skipping every prior field, the real trailing varint is intact
+    mut okTail := false
+    tail := protobuf.ReadVarint(rSkip, okTail)
+    testing.AssertTrue(okTail)
+    testing.AssertEqInt64(tail as i64, 9 as i64)
+
+    // SkipField(WT_FIXED32/FIXED64/LEN) on a too-short buffer -> ok=false
+    mut rSkipShort32 := compress.NewByteReader(bShort.data, bShort.len)
+    mut okSkipShort32 := true
+    protobuf.SkipField(rSkipShort32, protobuf.WT_FIXED64, okSkipShort32)
+    testing.AssertFalse(okSkipShort32)
+
+    compress.BufFree(bEmpty)
+    compress.BufFree(bTrunc)
+    compress.BufFree(bShort)
+    compress.BufFree(bBadLen)
+    compress.BufFree(bAny)
+    compress.BufFree(bSkip)
+
+    os.Exit(testing.Summary())
+end

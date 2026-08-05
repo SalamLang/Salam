@@ -1,0 +1,151 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import encoding.value
+import testing
+import os
+import str
+
+func main:
+    // construction + type tests + unwraps
+    testing.AssertTrue(value.IsNull(value.ValueNull()))
+    testing.AssertTrue(value.IsBool(value.ValueBool(true)))
+    testing.AssertEqBool(value.AsBool(value.ValueBool(true)), true)
+    testing.AssertTrue(value.IsInt(value.ValueInt(42 as i64)))
+    testing.AssertEqInt64(value.AsInt(value.ValueInt(42 as i64)), 42 as i64)
+    testing.AssertTrue(value.IsFloat(value.ValueFloat(3.5)))
+    testing.AssertEqFloat(value.AsFloat(value.ValueFloat(3.5)), 3.5, 0.0001)
+    testing.AssertTrue(value.IsString(value.ValueString("hi")))
+    testing.AssertEqStr(value.AsString(value.ValueString("hi")), "hi")
+
+    // int/float cross-coercion
+    testing.AssertEqFloat(value.AsFloat(value.ValueInt(7 as i64)), 7.0, 0.0001)
+    testing.AssertEqInt64(value.AsInt(value.ValueFloat(9.9)), 9 as i64)
+
+    // array
+    mut arr := value.NewValueArray()
+    testing.AssertTrue(value.IsArray(arr))
+    value.ArrayPush(arr, value.ValueInt(1 as i64))
+    value.ArrayPush(arr, value.ValueInt(2 as i64))
+    value.ArrayPush(arr, value.ValueInt(3 as i64))
+    testing.AssertEqInt(value.ArrayLen(arr), 3)
+    testing.AssertEqInt64(value.AsInt(value.ArrayGet(arr, 1)), 2 as i64)
+    value.ArraySet(arr, 1, value.ValueInt(99 as i64))
+    testing.AssertEqInt64(value.AsInt(value.ArrayGet(arr, 1)), 99 as i64)
+
+    // object
+    mut obj := value.NewValueObject()
+    testing.AssertTrue(value.IsObject(obj))
+    value.ObjectSet(obj, "name", value.ValueString("salam"))
+    value.ObjectSet(obj, "version", value.ValueInt(2 as i64))
+    testing.AssertEqInt(value.ObjectLen(obj), 2)
+    testing.AssertTrue(value.ObjectHas(obj, "name"))
+    testing.AssertEqStr(value.AsString(value.ObjectGet(obj, "name")), "salam")
+    testing.AssertTrue(value.ObjectDelete(obj, "version"))
+    testing.AssertEqInt(value.ObjectLen(obj), 1)
+    testing.AssertFalse(value.ObjectHas(obj, "version"))
+
+    mut missOk := true
+    missed := value.ObjectGetOk(obj, "nope", missOk)
+    testing.AssertFalse(missOk)
+    testing.AssertTrue(value.IsNull(missed))
+
+    // copy-out / mutate / write-back discipline on a 3-level tree: after
+    // writing every mutated level back up to the root, the root must
+    // observe the mutation. (Whether it's *also* visible before the
+    // write-back depends on incidental Vector/HashMap aliasing that isn't
+    // guaranteed - see the mutation-safety note in value.salam - so the
+    // only thing this test asserts is the one guarantee the discipline
+    // actually provides: correctness AFTER writing back.)
+    mut root := value.NewValueObject()
+    mut a := value.NewValueObject()
+    mut b := value.NewValueArray()
+    value.ArrayPush(b, value.ValueInt(1 as i64))
+    value.ArrayPush(b, value.ValueInt(2 as i64))
+    value.ArrayPush(b, value.ValueInt(3 as i64))
+    value.ObjectSet(a, "b", b)
+    value.ObjectSet(root, "a", a)
+
+    mut a2 := value.ObjectGet(root, "a")
+    mut b2 := value.ObjectGet(a2, "b")
+    value.ArraySet(b2, 2, value.ValueInt(9 as i64))
+    value.ObjectSet(a2, "b", b2)
+    value.ObjectSet(root, "a", a2)
+    nowNew := value.ObjectGet(value.ObjectGet(root, "a"), "b")
+    testing.AssertEqInt64(value.AsInt(value.ArrayGet(nowNew, 2)), 9 as i64)
+
+    // Equal: order-sensitive arrays, order-insensitive objects
+    mut o1 := value.NewValueObject()
+    value.ObjectSet(o1, "x", value.ValueInt(1 as i64))
+    value.ObjectSet(o1, "y", value.ValueInt(2 as i64))
+    mut o2 := value.NewValueObject()
+    value.ObjectSet(o2, "y", value.ValueInt(2 as i64))
+    value.ObjectSet(o2, "x", value.ValueInt(1 as i64))
+    testing.AssertTrue(value.Equal(o1, o2))
+    // negative case with the SAME key count as o1/o2 - this is the one that
+    // actually exercises the object-comparison loop body: a loop that never
+    // iterates (e.g. a has_next()-polarity bug) would vacuously fall through
+    // to "true" here since both objects are the same size, silently passing
+    // the positive case above too.
+    mut o3 := value.NewValueObject()
+    value.ObjectSet(o3, "x", value.ValueInt(1 as i64))
+    value.ObjectSet(o3, "y", value.ValueInt(999 as i64))
+    testing.AssertFalse(value.Equal(o1, o3))
+
+    // ObjectKeys must return every key, not zero (same vacuous-loop risk)
+    keys := value.ObjectKeys(o1)
+    testing.AssertEqInt(keys.len(), 2)
+
+    mut arrA := value.NewValueArray()
+    value.ArrayPush(arrA, value.ValueInt(1 as i64))
+    value.ArrayPush(arrA, value.ValueInt(2 as i64))
+    mut arrB := value.NewValueArray()
+    value.ArrayPush(arrB, value.ValueInt(2 as i64))
+    value.ArrayPush(arrB, value.ValueInt(1 as i64))
+    testing.AssertFalse(value.Equal(arrA, arrB))
+
+    // ValueClone: deep copy, mutating the clone must not affect the original
+    mut orig := value.NewValueArray()
+    value.ArrayPush(orig, value.ValueInt(1 as i64))
+    mut clone := value.ValueClone(orig)
+    value.ArraySet(clone, 0, value.ValueInt(777 as i64))
+    testing.AssertEqInt64(value.AsInt(value.ArrayGet(orig, 0)), 1 as i64)
+    testing.AssertEqInt64(value.AsInt(value.ArrayGet(clone, 0)), 777 as i64)
+
+    // ToDebugString sanity - must actually contain the nested int, not just
+    // be non-empty (an object loop that never iterates would still print
+    // "object{...}" wrapper text and pass a bare length check)
+    dbg := value.ToDebugString(root)
+    testing.AssertTrue(str.Contains(dbg, "int(9)"))
+
+    value.ValueFree(o1)
+    value.ValueFree(o2)
+    value.ValueFree(o3)
+    value.ValueFree(arrA)
+    value.ValueFree(arrB)
+    value.ValueFree(orig)
+    value.ValueFree(clone)
+    value.ValueFree(root)
+    value.ValueFree(missed)
+    value.ValueFree(obj)
+    // NOTE: nowNew is not freed separately here - it was obtained via
+    // ObjectGet from inside root and (per the mutation-safety note in
+    // value.salam) still aliases the same backing storage that
+    // ValueFree(root) above already recursively freed. Freeing both would
+    // double-free the same heap block.
+
+    os.Exit(testing.Summary())
+end

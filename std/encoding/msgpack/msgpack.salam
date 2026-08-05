@@ -1,0 +1,282 @@
+package msgpack
+
+import compress
+import encoding.binary
+import encoding.value
+import encoding.encerr
+
+// msgpack - MessagePack marshal/unmarshal against the shared encoding.value
+// tree. Covers nil/bool/int (fixint/uint8..64/int8..64, smallest tag that
+// fits)/float64/fixstr+str8..32/fixarray+array16..32/fixmap+map16..32.
+//
+// Documented gaps: ext types (including the timestamp ext) are not
+// encoded/decoded - Unmarshal reports encerr.KindCustom rather than
+// silently misreading one. bin8/16/32 are unsupported since value.Value has
+// no distinct "bytes" kind (round-tripping through KindString would lose
+// the bin/str distinction); a future KindBytes constant would be additive.
+// float32 is never emitted on encode (Value.n is always f64), but is
+// accepted on decode and widened.
+
+pub struct MsgpackOptions:
+    pub use_str8: bool = true
+end
+
+func _fits_u8(v: i64): bool: ret v >= 0 && v <= 255 end
+func _fits_u16(v: i64): bool: ret v >= 0 && v <= 65535 end
+func _fits_u32(v: i64): bool: ret v >= 0 && v <= 4294967295 end
+func _fits_i8(v: i64): bool: ret v >= (0 - 128) && v <= 127 end
+func _fits_i16(v: i64): bool: ret v >= (0 - 32768) && v <= 32767 end
+func _fits_i32(v: i64): bool: ret v >= (0 - 2147483648) && v <= 2147483647 end
+
+func _marshal_int(buf &: compress.ByteBuf, v: i64):
+    if v >= 0 && v <= 127:
+        binary.WriteU8(buf, v as int)
+        ret
+    end
+    if v < 0 && v >= (0 - 32):
+        binary.WriteU8(buf, (v as int) & 255)
+        ret
+    end
+    if v >= 0:
+        if _fits_u8(v):
+            binary.WriteU8(buf, 0xcc)
+            binary.WriteU8(buf, v as int)
+        else _fits_u16(v):
+            binary.WriteU8(buf, 0xcd)
+            binary.WriteU16BE(buf, v as int)
+        else _fits_u32(v):
+            binary.WriteU8(buf, 0xce)
+            binary.WriteU32BE(buf, v as int)
+        else:
+            binary.WriteU8(buf, 0xcf)
+            binary.WriteU64BE(buf, v)
+        end
+        ret
+    end
+    if _fits_i8(v):
+        binary.WriteU8(buf, 0xd0)
+        binary.WriteU8(buf, (v as int) & 255)
+    else _fits_i16(v):
+        binary.WriteU8(buf, 0xd1)
+        binary.WriteU16BE(buf, (v as int) & 65535)
+    else _fits_i32(v):
+        binary.WriteU8(buf, 0xd2)
+        binary.WriteU32BE(buf, v as int)
+    else:
+        binary.WriteU8(buf, 0xd3)
+        binary.WriteI64BE(buf, v)
+    end
+end
+
+func _marshal_str(buf &: compress.ByteBuf, s: str, use_str8: bool):
+    n := s.len()
+    if n <= 31:
+        binary.WriteU8(buf, 0xa0 | n)
+    else n <= 255 && use_str8:
+        binary.WriteU8(buf, 0xd9)
+        binary.WriteU8(buf, n)
+    else n <= 65535:
+        binary.WriteU8(buf, 0xda)
+        binary.WriteU16BE(buf, n)
+    else:
+        binary.WriteU8(buf, 0xdb)
+        binary.WriteU32BE(buf, n)
+    end
+    compress.BufPushBytes(buf, s as void*, n)
+end
+
+func _marshal(buf &: compress.ByteBuf, v: value.Value, opts: MsgpackOptions):
+    if value.IsNull(v):
+        binary.WriteU8(buf, 0xc0)
+        ret
+    end
+    if value.IsBool(v):
+        if value.AsBool(v): binary.WriteU8(buf, 0xc3) else: binary.WriteU8(buf, 0xc2) end
+        ret
+    end
+    if value.IsInt(v):
+        _marshal_int(buf, value.AsInt(v))
+        ret
+    end
+    if value.IsFloat(v):
+        binary.WriteU8(buf, 0xcb)
+        binary.WriteF64(buf, value.AsFloat(v), true)
+        ret
+    end
+    if value.IsString(v):
+        _marshal_str(buf, value.AsString(v), opts.use_str8)
+        ret
+    end
+    if value.IsArray(v):
+        n := value.ArrayLen(v)
+        if n <= 15:
+            binary.WriteU8(buf, 0x90 | n)
+        else n <= 65535:
+            binary.WriteU8(buf, 0xdc)
+            binary.WriteU16BE(buf, n)
+        else:
+            binary.WriteU8(buf, 0xdd)
+            binary.WriteU32BE(buf, n)
+        end
+        mut i := 0
+        until i < n:
+            _marshal(buf, value.ArrayGet(v, i), opts)
+            i += 1
+        end
+        ret
+    end
+    if value.IsObject(v):
+        n := value.ObjectLen(v)
+        if n <= 15:
+            binary.WriteU8(buf, 0x80 | n)
+        else n <= 65535:
+            binary.WriteU8(buf, 0xde)
+            binary.WriteU16BE(buf, n)
+        else:
+            binary.WriteU8(buf, 0xdf)
+            binary.WriteU32BE(buf, n)
+        end
+        keys := value.ObjectKeys(v)
+        mut i := 0
+        until i < keys.len():
+            k := keys.get(i)[0]
+            _marshal_str(buf, k, opts.use_str8)
+            _marshal(buf, value.ObjectGet(v, k), opts)
+            i += 1
+        end
+        ret
+    end
+end
+
+func _read_str(r &: compress.ByteReader, n: int): str:
+    b := compress.RdBytes(r, n)
+    out := compress.BufToStrUnsafe(b)
+    compress.BufFree(b)
+    ret out
+end
+
+func _unmarshal(r &: compress.ByteReader, err &: encerr.EncodingError): value.Value:
+    if encerr.IsError(err): ret value.ValueNull() end
+    tag := binary.ReadU8(r)
+    if r.bad:
+        err = encerr.ErrUnexpectedEOF(r.pos)
+        ret value.ValueNull()
+    end
+    if tag <= 0x7f: ret value.ValueInt(tag as i64) end
+    if tag >= 0xe0: ret value.ValueInt((tag - 256) as i64) end
+    if tag >= 0x80 && tag <= 0x8f:
+        n := tag & 15
+        ret _unmarshal_map(r, n, err)
+    end
+    if tag >= 0x90 && tag <= 0x9f:
+        n := tag & 15
+        ret _unmarshal_array(r, n, err)
+    end
+    if tag >= 0xa0 && tag <= 0xbf:
+        n := tag & 31
+        ret value.ValueString(_read_str(r, n))
+    end
+    if tag == 0xc0: ret value.ValueNull() end
+    if tag == 0xc2: ret value.ValueBool(false) end
+    if tag == 0xc3: ret value.ValueBool(true) end
+    if tag == 0xca: ret value.ValueFloat(binary.ReadF32(r, true)) end
+    if tag == 0xcb: ret value.ValueFloat(binary.ReadF64(r, true)) end
+    if tag == 0xcc: ret value.ValueInt(binary.ReadU8(r) as i64) end
+    if tag == 0xcd: ret value.ValueInt(binary.ReadU16BE(r) as i64) end
+    if tag == 0xce: ret value.ValueInt(binary.ReadU32BE(r) as i64) end
+    if tag == 0xcf: ret value.ValueInt(binary.ReadU64BE(r)) end
+    if tag == 0xd0:
+        b := binary.ReadU8(r)
+        mut sv := b as i64
+        if b > 127: sv = sv - 256 end
+        ret value.ValueInt(sv)
+    end
+    if tag == 0xd1:
+        b := binary.ReadU16BE(r)
+        mut sv := b as i64
+        if b > 32767: sv = sv - 65536 end
+        ret value.ValueInt(sv)
+    end
+    if tag == 0xd2:
+        b := binary.ReadU32BE(r)
+        mut sv := b as i64
+        if b > 2147483647: sv = sv - 4294967296 end
+        ret value.ValueInt(sv)
+    end
+    if tag == 0xd3: ret value.ValueInt(binary.ReadI64BE(r)) end
+    if tag == 0xd9:
+        n := binary.ReadU8(r)
+        ret value.ValueString(_read_str(r, n))
+    end
+    if tag == 0xda:
+        n := binary.ReadU16BE(r)
+        ret value.ValueString(_read_str(r, n))
+    end
+    if tag == 0xdb:
+        n := binary.ReadU32BE(r)
+        ret value.ValueString(_read_str(r, n))
+    end
+    if tag == 0xdc:
+        n := binary.ReadU16BE(r)
+        ret _unmarshal_array(r, n, err)
+    end
+    if tag == 0xdd:
+        n := binary.ReadU32BE(r)
+        ret _unmarshal_array(r, n, err)
+    end
+    if tag == 0xde:
+        n := binary.ReadU16BE(r)
+        ret _unmarshal_map(r, n, err)
+    end
+    if tag == 0xdf:
+        n := binary.ReadU32BE(r)
+        ret _unmarshal_map(r, n, err)
+    end
+    err = encerr.NewError(encerr.KindCustom, "unsupported msgpack tag (ext/bin types are not supported)", r.pos)
+    ret value.ValueNull()
+end
+
+func _unmarshal_array(r &: compress.ByteReader, n: int, err &: encerr.EncodingError): value.Value:
+    mut out := value.NewValueArray()
+    mut i := 0
+    until i < n:
+        item := _unmarshal(r, err)
+        if encerr.IsError(err): ret value.ValueNull() end
+        value.ArrayPush(out, item)
+        i += 1
+    end
+    ret out
+end
+
+func _unmarshal_map(r &: compress.ByteReader, n: int, err &: encerr.EncodingError): value.Value:
+    mut out := value.NewValueObject()
+    mut i := 0
+    until i < n:
+        k := _unmarshal(r, err)
+        if encerr.IsError(err): ret value.ValueNull() end
+        v := _unmarshal(r, err)
+        if encerr.IsError(err): ret value.ValueNull() end
+        value.ObjectSet(out, value.AsString(k), v)
+        i += 1
+    end
+    ret out
+end
+
+pub func MarshalWith(v: value.Value, opts: MsgpackOptions): compress.ByteBuf:
+    mut buf := compress.NewByteBuf()
+    _marshal(buf, v, opts)
+    ret buf
+end
+
+pub func Marshal(v: value.Value): compress.ByteBuf:
+    ret MarshalWith(v, MsgpackOptions {})
+end
+
+pub func UnmarshalBytes(p: void*, n: int, err &: encerr.EncodingError): value.Value:
+    mut r := compress.NewByteReader(p, n)
+    ret _unmarshal(r, err)
+end
+
+pub func Unmarshal(b: compress.ByteBuf, err &: encerr.EncodingError): value.Value:
+    ret UnmarshalBytes(b.data, b.len, err)
+end

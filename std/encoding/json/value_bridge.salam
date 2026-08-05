@@ -1,0 +1,284 @@
+package json
+
+import encoding.value
+import encoding.encerr
+import encoding
+import conv
+
+// value_bridge - Value-based Decode/Encode, additive alongside json.salam's
+// existing string-based Get/Object/Array/etc API (nothing there changes).
+// Decode is a fresh recursive-descent parser (over the same _bp/_ub
+// byte-pointer style json.salam's own scan-only _jws/_jstr/_jnum/_jval
+// helpers already use, for consistency) that builds a value.Value tree
+// directly rather than just locating spans. Encode builds compact JSON text
+// via a small recursive walk and, when JSONOptions.indent is set, pipes the
+// result through the existing IndentWith - no separate pretty-printer.
+
+pub struct JSONOptions:
+    pub indent: str = ""
+    pub sort_keys: bool = false
+    pub ignore_null: bool = false
+end
+
+func _skip_ws(s: str, i: int): int:
+    n := s.len()
+    mut p := i
+    until p < n:
+        c := _ub(_bp(s), p)
+        if c != 32 && c != 9 && c != 10 && c != 13: ret p end
+        p += 1
+    end
+    ret p
+end
+
+// _pstr - parses a JSON string starting at the opening quote `i`. Returns
+// the decoded text; writes the position just past the closing quote into
+// `endpos`.
+func _pstr(s: str, i: int, endpos &: int, err &: encerr.EncodingError): str:
+    n := s.len()
+    bp := _bp(s)
+    if i >= n || _ub(bp, i) != 34:
+        err = encerr.ErrUnexpectedToken(`expected '"'`, i)
+        endpos = i
+        ret ""
+    end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut p := i + 1
+    until p < n:
+        c := _ub(bp, p)
+        if c == 34:
+            endpos = p + 1
+            ret str.BufStr(sb)
+        end
+        if c == 92:
+            p += 1
+            if p >= n:
+                err = encerr.ErrUnexpectedEOF(p)
+                endpos = p
+                ret str.BufStr(sb)
+            end
+            e := _ub(bp, p)
+            if e == 34: str.BufAppendChar(sb, 34)
+            else e == 92: str.BufAppendChar(sb, 92)
+            else e == 47: str.BufAppendChar(sb, 47)
+            else e == 98: str.BufAppendChar(sb, 8)
+            else e == 102: str.BufAppendChar(sb, 12)
+            else e == 110: str.BufAppendChar(sb, 10)
+            else e == 114: str.BufAppendChar(sb, 13)
+            else e == 116: str.BufAppendChar(sb, 9)
+            else e == 117:
+                if p + 4 < n:
+                    h0 := encoding.HexVal(s.substr(p + 1, 1))
+                    h1 := encoding.HexVal(s.substr(p + 2, 1))
+                    h2 := encoding.HexVal(s.substr(p + 3, 1))
+                    h3 := encoding.HexVal(s.substr(p + 4, 1))
+                    code := h0 * 4096 + h1 * 256 + h2 * 16 + h3
+                    str.BufAppendChar(sb, code)
+                    p += 4
+                end
+            else:
+                str.BufAppendChar(sb, e)
+            end
+            p += 1
+        else:
+            str.BufAppendChar(sb, c)
+            p += 1
+        end
+    end
+    err = encerr.ErrUnexpectedEOF(p)
+    endpos = p
+    ret str.BufStr(sb)
+end
+
+func _pval(s: str, i: int, endpos &: int, err &: encerr.EncodingError): value.Value:
+    if encerr.IsError(err):
+        endpos = i
+        ret value.ValueNull()
+    end
+    n := s.len()
+    p0 := _skip_ws(s, i)
+    if p0 >= n:
+        err = encerr.ErrUnexpectedEOF(p0)
+        endpos = p0
+        ret value.ValueNull()
+    end
+    bp := _bp(s)
+    c := _ub(bp, p0)
+    if c == 34:
+        mut ep := p0
+        text := _pstr(s, p0, ep, err)
+        endpos = ep
+        ret value.ValueString(text)
+    end
+    if c == 123:
+        mut out := value.NewValueObject()
+        mut q := _skip_ws(s, p0 + 1)
+        if q < n && _ub(bp, q) == 125:
+            endpos = q + 1
+            ret out
+        end
+        until true:
+            q = _skip_ws(s, q)
+            if q >= n || _ub(bp, q) != 34:
+                err = encerr.ErrUnexpectedToken("expected object key", q)
+                endpos = q
+                ret out
+            end
+            mut kend := q
+            key := _pstr(s, q, kend, err)
+            if encerr.IsError(err): endpos = kend ret out end
+            q = _skip_ws(s, kend)
+            if q >= n || _ub(bp, q) != 58:
+                err = encerr.ErrUnexpectedToken("expected ':'", q)
+                endpos = q
+                ret out
+            end
+            mut vend := q + 1
+            v := _pval(s, q + 1, vend, err)
+            if encerr.IsError(err): endpos = vend ret out end
+            value.ObjectSet(out, key, v)
+            q = _skip_ws(s, vend)
+            if q < n && _ub(bp, q) == 44:
+                q += 1
+                continue
+            end
+            if q < n && _ub(bp, q) == 125:
+                endpos = q + 1
+                ret out
+            end
+            err = encerr.ErrUnexpectedToken("expected ',' or '}'", q)
+            endpos = q
+            ret out
+        end
+    end
+    if c == 91:
+        mut out := value.NewValueArray()
+        mut q := _skip_ws(s, p0 + 1)
+        if q < n && _ub(bp, q) == 93:
+            endpos = q + 1
+            ret out
+        end
+        until true:
+            mut vend := q
+            v := _pval(s, q, vend, err)
+            if encerr.IsError(err): endpos = vend ret out end
+            value.ArrayPush(out, v)
+            q = _skip_ws(s, vend)
+            if q < n && _ub(bp, q) == 44:
+                q += 1
+                continue
+            end
+            if q < n && _ub(bp, q) == 93:
+                endpos = q + 1
+                ret out
+            end
+            err = encerr.ErrUnexpectedToken("expected ',' or ']'", q)
+            endpos = q
+            ret out
+        end
+    end
+    if p0 + 4 <= n && s.substr(p0, 4) == "true":
+        endpos = p0 + 4
+        ret value.ValueBool(true)
+    end
+    if p0 + 5 <= n && s.substr(p0, 5) == "false":
+        endpos = p0 + 5
+        ret value.ValueBool(false)
+    end
+    if p0 + 4 <= n && s.substr(p0, 4) == "null":
+        endpos = p0 + 4
+        ret value.ValueNull()
+    end
+    ep := _jnum(s, p0)
+    if ep < 0 || ep == p0:
+        err = encerr.ErrUnexpectedToken("invalid value", p0)
+        endpos = p0
+        ret value.ValueNull()
+    end
+    numtext := s.substr(p0, ep - p0)
+    endpos = ep
+    if str.Contains(numtext, ".") || str.Contains(numtext, "e") || str.Contains(numtext, "E"):
+        ret value.ValueFloat(numtext.to_float())
+    end
+    ret value.ValueInt(numtext.to_int() as i64)
+end
+
+// Small insertion sort for the (typically short) key list - avoids taking
+// a dependency on std/sort's generic-comparator API for one call site.
+func _sort_keys(keys &: Vector<str>):
+    n := keys.len()
+    mut i := 1
+    until i < n:
+        mut j := i
+        until j > 0:
+            a := keys.get(j - 1)[0]
+            b := keys.get(j)[0]
+            if a <= b: break end
+            keys.set(j - 1, b)
+            keys.set(j, a)
+            j -= 1
+        end
+        i += 1
+    end
+end
+
+func _encode_value(v: value.Value, opts: JSONOptions): str:
+    if value.IsNull(v): ret "null" end
+    if value.IsBool(v):
+        if value.AsBool(v): ret "true" end
+        ret "false"
+    end
+    if value.IsInt(v): ret conv.FormatInt(value.AsInt(v)) end
+    if value.IsFloat(v): ret conv.FormatFloat(value.AsFloat(v)) end
+    if value.IsString(v): ret Str(value.AsString(v)) end
+    if value.IsArray(v):
+        mut parts := Vector {} as Vector<str>
+        mut i := 0
+        n := value.ArrayLen(v)
+        until i < n:
+            parts.push(_encode_value(value.ArrayGet(v, i), opts))
+            i += 1
+        end
+        ret Array(parts)
+    end
+    if value.IsObject(v):
+        mut keys := value.ObjectKeys(v)
+        if opts.sort_keys: _sort_keys(keys) end
+        mut parts := Vector {} as Vector<str>
+        mut i := 0
+        until i < keys.len():
+            k := keys.get(i)[0]
+            fv := value.ObjectGet(v, k)
+            if opts.ignore_null && value.IsNull(fv):
+                i += 1
+                continue
+            end
+            parts.push(MemberRaw(k, _encode_value(fv, opts)))
+            i += 1
+        end
+        ret Object(parts)
+    end
+    ret "null"
+end
+
+pub func Decode(text: str, err &: encerr.EncodingError): value.Value:
+    mut endpos := 0
+    v := _pval(text, 0, endpos, err)
+    if encerr.IsError(err): ret v end
+    p := _skip_ws(text, endpos)
+    if p < text.len():
+        err = encerr.NewError(encerr.KindTrailingData, "trailing data after JSON value", p)
+    end
+    ret v
+end
+
+pub func Encode(v: value.Value, opts: JSONOptions): str:
+    text := _encode_value(v, opts)
+    if opts.indent != "": ret IndentWith(text, opts.indent) end
+    ret text
+end
+
+pub func EncodeDefault(v: value.Value): str:
+    ret Encode(v, JSONOptions {})
+end

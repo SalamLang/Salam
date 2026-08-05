@@ -1,0 +1,202 @@
+package value
+
+import mem
+
+// value - a hand-rolled dynamic tree (Go's interface{}/Rust's serde_json::Value
+// equivalent) shared by every encoding.* format package (json, yaml, toml,
+// msgpack, csv's bridge, xml's bridge) so they can all round-trip through one
+// common representation instead of each inventing its own.
+//
+// MUTATION SAFETY (read this before touching arr/obj directly): a Value
+// fetched out of a parent's arr/obj (ArrayGet/ObjectGet) is a shallow struct
+// copy - it copies Vector<Value>'s/HashMap<str,Value>'s header (data
+// pointer + len/cap), NOT the backing array, so the copy still ALIASES the
+// same heap storage as the parent's own copy. An in-place ArraySet/
+// ObjectSet on that "copy" therefore often IS visible through the parent
+// immediately - but this is not something to rely on: Vector<T>.push()/
+// HashMap<K,V>.put() can trigger a resize (see vector.salam's reserve() and
+// hashmap.salam's _resize()), which reallocates and reassigns that ONE
+// copy's own data pointer, silently severing the alias from that point on
+// while the parent's copy still points at the old block. Relying on
+// incidental aliasing is therefore unsafe (it can appear to work and then
+// stop the moment a resize happens); relying on NO aliasing is equally
+// wrong (a raw struct copy is not a deep copy - see ValueClone below for
+// that). The one discipline that is always correct regardless of whether
+// aliasing happens to hold at a given moment is: always write every
+// mutated level back into its parent explicitly, all the way to the root:
+//
+//   mut a := value.ObjectGet(root, "a")
+//   mut b := value.ObjectGet(a, "b")
+//   value.ArraySet(b, 2, value.ValueInt(9))
+//   value.ObjectSet(a, "b", b)
+//   value.ObjectSet(root, "a", a)
+//
+// And if you need a Value that is genuinely independent of its source (no
+// aliasing at all, ever), call ValueClone - a real deep copy that builds
+// fresh backing storage for every nested array/object.
+
+pub const KindNull := 0
+pub const KindBool := 1
+pub const KindInt := 2
+pub const KindFloat := 3
+pub const KindString := 4
+pub const KindArray := 5
+pub const KindObject := 6
+
+pub struct Value:
+    pub kind: int = KindNull
+    pub b: bool = false
+    pub i: i64 = 0
+    pub n: f64 = 0.0
+    pub s: str = ""
+    pub arr: Vector<Value> = Vector {}
+    pub obj: HashMap<str, Value> = HashMap {} as HashMap<str, Value>
+end
+
+// ---- construction ----
+
+pub func ValueNull(): Value: ret Value { kind = KindNull } end
+pub func ValueBool(b: bool): Value: ret Value { kind = KindBool, b = b } end
+pub func ValueInt(i: i64): Value: ret Value { kind = KindInt, i = i } end
+pub func ValueFloat(n: f64): Value: ret Value { kind = KindFloat, n = n } end
+pub func ValueString(s: str): Value: ret Value { kind = KindString, s = s } end
+
+// NOTE: these two build the Value via field assignment, not a single struct
+// literal - tcc (the default C backend) miscompiles a struct literal that
+// sets a Vector<Self>/HashMap<K,Self> field from a passed-in parameter on a
+// self-referential struct like Value (a spurious "cannot cast" error on
+// otherwise-valid generated C; confirmed fine under gcc). Field-by-field
+// assignment after a default-constructed literal sidesteps it.
+pub func ValueArray(items: Vector<Value>): Value:
+    mut v := Value { kind = KindArray }
+    v.arr = items
+    ret v
+end
+
+pub func ValueObject(fields: HashMap<str, Value>): Value:
+    mut v := Value { kind = KindObject }
+    v.obj = fields
+    ret v
+end
+
+pub func NewValueArray(): Value:
+    ret Value { kind = KindArray, arr = Vector {} as Vector<Value> }
+end
+
+pub func NewValueObject(): Value:
+    ret Value { kind = KindObject, obj = HashMap {} as HashMap<str, Value> }
+end
+
+// ---- type tests ----
+
+pub func IsNull(v: Value): bool: ret v.kind == KindNull end
+pub func IsBool(v: Value): bool: ret v.kind == KindBool end
+pub func IsInt(v: Value): bool: ret v.kind == KindInt end
+pub func IsFloat(v: Value): bool: ret v.kind == KindFloat end
+pub func IsNumber(v: Value): bool: ret v.kind == KindInt || v.kind == KindFloat end
+pub func IsString(v: Value): bool: ret v.kind == KindString end
+pub func IsArray(v: Value): bool: ret v.kind == KindArray end
+pub func IsObject(v: Value): bool: ret v.kind == KindObject end
+
+// ---- unwraps (total: wrong-kind returns the zero value, matching
+// HashMap.get's zeroed-miss convention) ----
+
+pub func AsBool(v: Value): bool: ret v.b end
+
+pub func AsInt(v: Value): i64:
+    if v.kind == KindFloat: ret v.n as i64 end
+    ret v.i
+end
+
+pub func AsFloat(v: Value): f64:
+    if v.kind == KindInt: ret v.i as f64 end
+    ret v.n
+end
+
+pub func AsString(v: Value): str: ret v.s end
+
+// ---- array/object access: reads copy out, writes take the parent by
+// reference and mutate in one call - see the mutation-safety note above ----
+
+pub func ArrayLen(v: Value): int: ret v.arr.len() end
+
+pub func ArrayGet(v: Value, i: int): Value: ret v.arr.get(i)[0] end
+
+pub func ArraySet(v &: Value, i: int, item: Value): v.arr.set(i, item) end
+
+pub func ArrayPush(v &: Value, item: Value): v.arr.push(item) end
+
+pub func ObjectLen(v: Value): int: ret v.obj.size() end
+
+pub func ObjectHas(v: Value, key: str): bool: ret v.obj.has(key) end
+
+pub func ObjectGet(v: Value, key: str): Value: ret v.obj.get(key) end
+
+pub func ObjectGetOk(v: Value, key: str, ok &: bool): Value:
+    ok = v.obj.has(key)
+    if ok: ret v.obj.get(key) end
+    ret ValueNull()
+end
+
+pub func ObjectSet(v &: Value, key: str, item: Value): v.obj.put(key, item) end
+
+pub func ObjectDelete(v &: Value, key: str): bool: ret v.obj.remove(key) end
+
+pub func ObjectKeys(v: Value): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut it := v.obj.iter()
+    until it.has_next():
+        out.push(it.key())
+        it.next()
+    end
+    ret out
+end
+
+// ---- deep copy: a plain struct copy (`x := v`) only copies the
+// Vector/HashMap header (data pointer + len/cap), aliasing the same backing
+// storage - ValueClone actually duplicates every nested array/object ----
+
+pub func ValueClone(v: Value): Value:
+    if v.kind == KindArray:
+        mut out := Vector {} as Vector<Value>
+        mut i := 0
+        until i < v.arr.len():
+            out.push(ValueClone(v.arr.get(i)[0]))
+            i += 1
+        end
+        ret ValueArray(out)
+    end
+    if v.kind == KindObject:
+        mut out := HashMap {} as HashMap<str, Value>
+        mut it := v.obj.iter()
+        until it.has_next():
+            out.put(it.key(), ValueClone(it.value()))
+            it.next()
+        end
+        ret ValueObject(out)
+    end
+    ret v
+end
+
+// Recursively frees nested arrays/objects before freeing the container
+// itself - Vector<Value>.free()/HashMap<str,Value>.free() only free their
+// OWN backing array, not each element's nested arr/obj.
+pub func ValueFree(v &: Value):
+    if v.kind == KindArray:
+        mut i := 0
+        until i < v.arr.len():
+            mut child := v.arr.get(i)[0]
+            ValueFree(child)
+            i += 1
+        end
+        v.arr.free()
+    else v.kind == KindObject:
+        mut it := v.obj.iter()
+        until it.has_next():
+            mut child := it.value()
+            ValueFree(child)
+            it.next()
+        end
+        v.obj.free()
+    end
+end

@@ -1,0 +1,232 @@
+package protobuf
+
+import str
+
+pub struct PTokenStream:
+    pub toks: Vector<PToken> = Vector {}
+end
+
+struct Lx:
+    pub s: str = ""
+    pub n: int = 0
+    pub pos: int = 0
+    pub line: int = 1
+end
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+func _is_digit(c: int): bool: ret c >= 48 && c <= 57 end
+
+func _is_ident_start(c: int): bool:
+    ret (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95
+end
+
+func _is_ident_cont(c: int): bool:
+    ret _is_ident_start(c) || _is_digit(c)
+end
+
+func _is_hex_digit(c: int): bool:
+    ret _is_digit(c) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70)
+end
+
+func _lx_peek(lx: Lx): int:
+    if lx.pos >= lx.n: ret -1 end
+    ret _ub(_bp(lx.s), lx.pos)
+end
+
+func _lx_peek2(lx: Lx): int:
+    if lx.pos + 1 >= lx.n: ret -1 end
+    ret _ub(_bp(lx.s), lx.pos + 1)
+end
+
+func _lx_skip_trivia(lx &: Lx):
+    until true:
+        c := _lx_peek(lx)
+        if c == 32 || c == 9 || c == 13:
+            lx.pos += 1
+        else c == 10:
+            lx.pos += 1
+            lx.line += 1
+        else c == 47 && _lx_peek2(lx) == 47:
+            until _lx_peek(lx) != 10 && _lx_peek(lx) != -1:
+                lx.pos += 1
+            end
+        else c == 47 && _lx_peek2(lx) == 42:
+            lx.pos += 2
+            until true:
+                d := _lx_peek(lx)
+                if d == -1: ret end
+                if d == 42 && _lx_peek2(lx) == 47:
+                    lx.pos += 2
+                    break
+                end
+                if d == 10: lx.line += 1 end
+                lx.pos += 1
+            end
+        else:
+            ret
+        end
+    end
+end
+
+func _lx_string(lx &: Lx): PToken:
+    quote := _lx_peek(lx)
+    startLine := lx.line
+    lx.pos += 1
+    mut sb := str.NewBuilder()
+    until true:
+        c := _lx_peek(lx)
+        if c == -1 || c == quote:
+            if c == quote: lx.pos += 1 end
+            out := str.BufStr(sb)
+            str.BufFree(sb)
+            mut tok := PToken { kind = PTK_STRING }
+            tok.sval = out
+            tok.line = startLine
+            ret tok
+        end
+        if c == 92:
+            lx.pos += 1
+            e := _lx_peek(lx)
+            if e == 110: str.BufAppendChar(sb, 10)
+            else e == 116: str.BufAppendChar(sb, 9)
+            else e == 114: str.BufAppendChar(sb, 13)
+            else e == 92: str.BufAppendChar(sb, 92)
+            else e == 34: str.BufAppendChar(sb, 34)
+            else e == 39: str.BufAppendChar(sb, 39)
+            else: str.BufAppendChar(sb, e)
+            end
+            lx.pos += 1
+        else:
+            str.BufAppendChar(sb, c)
+            lx.pos += 1
+        end
+    end
+end
+
+func _lx_number(lx &: Lx): PToken:
+    startLine := lx.line
+    start := lx.pos
+    mut isFloat := false
+    if _lx_peek(lx) == 48 && (_lx_peek2(lx) == 120 || _lx_peek2(lx) == 88):
+        lx.pos += 2
+        until _is_hex_digit(_lx_peek(lx)):
+            lx.pos += 1
+        end
+        text := lx.s.substr(start, lx.pos - start)
+        mut tok := PToken { kind = PTK_INT }
+        tok.lexeme = text
+        tok.ival = _hex_to_i64(text.substr(2, text.len() - 2))
+        tok.line = startLine
+        ret tok
+    end
+    until _is_digit(_lx_peek(lx)):
+        lx.pos += 1
+    end
+    if _lx_peek(lx) == 46 && _is_digit(_lx_peek2(lx)):
+        isFloat = true
+        lx.pos += 1
+        until _is_digit(_lx_peek(lx)):
+            lx.pos += 1
+        end
+    end
+    if _lx_peek(lx) == 101 || _lx_peek(lx) == 69:
+        isFloat = true
+        lx.pos += 1
+        if _lx_peek(lx) == 43 || _lx_peek(lx) == 45: lx.pos += 1 end
+        until _is_digit(_lx_peek(lx)):
+            lx.pos += 1
+        end
+    end
+    text := lx.s.substr(start, lx.pos - start)
+    if isFloat:
+        mut tok := PToken { kind = PTK_FLOAT }
+        tok.lexeme = text
+        tok.fval = text.to_float()
+        tok.line = startLine
+        ret tok
+    end
+    mut tok := PToken { kind = PTK_INT }
+    tok.lexeme = text
+    tok.ival = text.to_int() as i64
+    tok.line = startLine
+    ret tok
+end
+
+func _hex_digit_val(c: int): i64:
+    if c >= 48 && c <= 57: ret (c - 48) as i64 end
+    if c >= 97 && c <= 102: ret (c - 97 + 10) as i64 end
+    if c >= 65 && c <= 70: ret (c - 65 + 10) as i64 end
+    ret 0 as i64
+end
+
+func _hex_to_i64(s: str): i64:
+    n := s.len()
+    bp := _bp(s)
+    mut out := 0 as i64
+    mut i := 0
+    until i < n:
+        out = out * (16 as i64) + _hex_digit_val(_ub(bp, i))
+        i += 1
+    end
+    ret out
+end
+
+func _lx_ident(lx &: Lx): PToken:
+    startLine := lx.line
+    start := lx.pos
+    until _is_ident_cont(_lx_peek(lx)):
+        lx.pos += 1
+    end
+    mut tok := PToken { kind = PTK_IDENT }
+    tok.lexeme = lx.s.substr(start, lx.pos - start)
+    tok.line = startLine
+    ret tok
+end
+
+func _lx_next(lx &: Lx): PToken:
+    _lx_skip_trivia(lx)
+    line := lx.line
+    c := _lx_peek(lx)
+    if c == -1: ret PToken { kind = PTK_EOF, line = line } end
+    if _is_ident_start(c): ret _lx_ident(lx) end
+    if _is_digit(c): ret _lx_number(lx) end
+    if c == 34 || c == 39: ret _lx_string(lx) end
+    if c == 59: lx.pos += 1 ret PToken { kind = PTK_SEMI, line = line } end
+    if c == 123: lx.pos += 1 ret PToken { kind = PTK_LBRACE, line = line } end
+    if c == 125: lx.pos += 1 ret PToken { kind = PTK_RBRACE, line = line } end
+    if c == 40: lx.pos += 1 ret PToken { kind = PTK_LPAREN, line = line } end
+    if c == 41: lx.pos += 1 ret PToken { kind = PTK_RPAREN, line = line } end
+    if c == 91: lx.pos += 1 ret PToken { kind = PTK_LBRACKET, line = line } end
+    if c == 93: lx.pos += 1 ret PToken { kind = PTK_RBRACKET, line = line } end
+    if c == 60: lx.pos += 1 ret PToken { kind = PTK_LANGLE, line = line } end
+    if c == 62: lx.pos += 1 ret PToken { kind = PTK_RANGLE, line = line } end
+    if c == 61: lx.pos += 1 ret PToken { kind = PTK_EQ, line = line } end
+    if c == 44: lx.pos += 1 ret PToken { kind = PTK_COMMA, line = line } end
+    if c == 46: lx.pos += 1 ret PToken { kind = PTK_DOT, line = line } end
+    if c == 45: lx.pos += 1 ret PToken { kind = PTK_MINUS, line = line } end
+    lx.pos += 1
+    mut tok := PToken { kind = PTK_ERROR }
+    tok.lexeme = lx.s.substr(lx.pos - 1, 1)
+    tok.line = line
+    ret tok
+end
+
+pub func Tokenize(source: str, ok &: bool): PTokenStream:
+    mut lx := Lx { s = source }
+    lx.n = source.len()
+    mut out := PTokenStream {}
+    ok = true
+    until true:
+        tok := _lx_next(lx)
+        out.toks.push(tok)
+        if tok.kind == PTK_EOF: ret out end
+        if tok.kind == PTK_ERROR: ok = false end
+    end
+end

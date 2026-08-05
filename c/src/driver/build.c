@@ -116,6 +116,23 @@ static bool copy_file_bin(const char *src, const char *dst)
     return ok;
 }
 
+/* True when `filename` (a hostlibs directory entry, e.g. "sqlite3.dll")
+ * looks like it belongs to one of the `-l` names this specific build
+ * requested (e.g. "sqlite3"). Deliberately conservative - substring, not
+ * exact-basename, matching (so "libsqlite3-0.dll" still matches a
+ * request for "sqlite3") - since this only gates an extra file copy, not
+ * anything correctness-critical; a false positive costs a few KB of
+ * needless copying, a false negative costs a "DLL not found" at run
+ * time, so this errs toward matching. */
+static bool hostlib_file_wanted(const char *filename, const char **links, int nlinks)
+{
+    int i = 0;
+    for (; i < nlinks; i++) {
+        if (strstr(filename, links[i])) return true;
+    }
+    return false;
+}
+
 /* try_embed_hostlibs() only gets the static archive a linker needs at build
  * time onto its `-L` path - a dynamically-linked host lib (sqlite3.dll on
  * this Windows/tcc combination, since tcc cannot read GCC's static .a/
@@ -126,16 +143,19 @@ static bool copy_file_bin(const char *src, const char *dst)
  * next to the *produced executable* at run time, or Windows' loader
  * fails with "cannot open shared object file" the moment the program
  * calls into it - none of hostlibs_dir/System32/PATH is guaranteed to be
- * on the loader's search path for wherever `output` ends up. Copying any
- * shared libs found in hostlibs_dir alongside `output` after a
- * successful link closes that gap; a no-op when hostlibs weren't used
- * (hostlibs_dir NULL) or contain no shared libs (e.g. a Unix build,
- * where the embedded lib is a plain .a and this step is unnecessary).
+ * on the loader's search path for wherever `output` ends up. Copying the
+ * shared libs THIS BUILD ACTUALLY LINKED (via `links`/`nlinks` - not a
+ * blanket copy of everything in hostlibs_dir) alongside `output` after a
+ * successful link closes that gap without taxing every other build in
+ * the embedded hostlibs directory's file-copy cost; a no-op when
+ * hostlibs weren't used (hostlibs_dir NULL), nothing linked matches one
+ * (a Unix build, say, where the embedded lib is a plain .a and this step
+ * is unnecessary - or simply a build that never asked for sqlite3).
  */
 static void copy_hostlib_shared_libs(logger_t *log, arena_t *a, const char *hostlibs_dir,
-                                     const char *output)
+                                     const char *output, const char **links, int nlinks)
 {
-    if (!hostlibs_dir || !hostlibs_dir[0]) return;
+    if (!hostlibs_dir || !hostlibs_dir[0] || nlinks <= 0) return;
     const char *dest_dir = dir_of(a, output);
     const char *out_name = strrchr(output, '/');
     {
@@ -151,6 +171,7 @@ static void copy_hostlib_shared_libs(logger_t *log, arena_t *a, const char *host
     if (h == -1) return;
     do {
         if (fd.attrib & _A_SUBDIR) continue;
+        if (!hostlib_file_wanted(fd.name, links, nlinks)) continue;
         char src[1200], dst[1200];
         sal_snprintf(src, sizeof src, "%s/%s", hostlibs_dir, fd.name);
         if (dest_dir[0])
@@ -171,6 +192,7 @@ static void copy_hostlib_shared_libs(logger_t *log, arena_t *a, const char *host
         size_t L = strlen(e->d_name);
         bool is_so = L > 3 && strstr(e->d_name, ".so") != NULL;
         if (!is_so) continue;
+        if (!hostlib_file_wanted(e->d_name, links, nlinks)) continue;
         char src[1200], dst[1200];
         sal_snprintf(src, sizeof src, "%s/%s", hostlibs_dir, e->d_name);
         if (dest_dir[0])
@@ -1003,7 +1025,7 @@ int driver_build(options_t *opt)
             rc = 3;
         } else {
             LOG_I(log, PH_DRIVER, "built executable: %s", output);
-            copy_hostlib_shared_libs(log, arena, hostlibs, output);
+            copy_hostlib_shared_libs(log, arena, hostlibs, output, links, nlinks);
 
             if (opt->exe_path[0] == '\0')
                 sal_snprintf(opt->exe_path, sizeof(opt->exe_path), "%s", output);

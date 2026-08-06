@@ -159,17 +159,51 @@ end
 
 // --------------------------------------------------------- epoll backend
 
+// struct epoll_event is NOT the same shape on every Linux architecture:
+// the kernel headers only mark it __attribute__((packed)) on plain
+// x86_64 (EPOLL_PACKED in <linux/eventpoll.h>), giving a 12-byte struct
+// with the u64 `data` union unaligned at offset 4. Every other
+// architecture - including aarch64 and 32-bit arm, both real CI targets
+// here - gets the natural-alignment layout instead: 4 bytes of padding
+// after `events` so `data` lands 8-byte-aligned at offset 8, for a
+// 16-byte struct. (i686/x86 is packed-or-not moot: a u64 only needs
+// 4-byte alignment there either way, so it's 12 bytes regardless.)
+// Verified empirically (offsetof against the real kernel headers) via
+// gcc on x86_64 (12/@4) and an aarch64-linux-gnu cross-compile run under
+// qemu-aarch64-static (16/@8). Getting this wrong doesn't just misread
+// the fd back out of Wait() - epoll_ctl and epoll_wait are told `cap`
+// structs of whatever size THIS code assumes, so an undersized buffer
+// against the kernel's real (larger, on non-x86_64) per-entry stride is
+// an out-of-bounds write in epoll_wait's buffer, not just a bad read.
+func _epoll_evsize(): int:
+    if SALAM_ARCH_ARM64 || SALAM_ARCH_ARM:
+        ret 16
+    else:
+        ret 12
+    end
+end
+
+func _epoll_dataoff(): int:
+    if SALAM_ARCH_ARM64 || SALAM_ARCH_ARM:
+        ret 8
+    else:
+        ret 4
+    end
+end
+
 func _epoll_register(_p &: Poller, _fd: i64, _interest: int): bool:
     if SALAM_OS_LINUX:
-        ev := mem.Allocate(12 as u64)
+        sz := _epoll_evsize()
+        off := _epoll_dataoff()
+        ev := mem.Allocate(sz as u64)
         defer mem.Free(ev)
-        memset(ev, 0, 12 as u64)
+        memset(ev, 0, sz as u64)
         ev32 := ev as int*
         mut evbits := 0
         if (_interest & Readable) != 0: evbits = evbits | 1 end
         if (_interest & Writable) != 0: evbits = evbits | 4 end
         ev32[0] = evbits
-        evi64 := (ev as i64 + 4) as i64*
+        evi64 := (ev as i64 + off) as i64*
         evi64[0] = _fd
         r := epoll_ctl(_p.kfd as int, 1, _fd as int, ev) // EPOLL_CTL_ADD
         ret r == 0
@@ -180,15 +214,17 @@ end
 
 func _epoll_modify(_p &: Poller, _fd: i64, _interest: int): bool:
     if SALAM_OS_LINUX:
-        ev := mem.Allocate(12 as u64)
+        sz := _epoll_evsize()
+        off := _epoll_dataoff()
+        ev := mem.Allocate(sz as u64)
         defer mem.Free(ev)
-        memset(ev, 0, 12 as u64)
+        memset(ev, 0, sz as u64)
         ev32 := ev as int*
         mut evbits := 0
         if (_interest & Readable) != 0: evbits = evbits | 1 end
         if (_interest & Writable) != 0: evbits = evbits | 4 end
         ev32[0] = evbits
-        evi64 := (ev as i64 + 4) as i64*
+        evi64 := (ev as i64 + off) as i64*
         evi64[0] = _fd
         r := epoll_ctl(_p.kfd as int, 3, _fd as int, ev) // EPOLL_CTL_MOD
         ret r == 0
@@ -210,15 +246,17 @@ func _epoll_wait(_p &: Poller, _timeout_ms: int): Events:
     out := Events {}
     if SALAM_OS_LINUX:
         cap := 64
-        buf := mem.Allocate((12 * cap) as u64)
+        sz := _epoll_evsize()
+        off := _epoll_dataoff()
+        buf := mem.Allocate((sz * cap) as u64)
         defer mem.Free(buf)
         n := epoll_wait(_p.kfd as int, buf, cap, _timeout_ms)
         mut i := 0
         until i < n:
-            base := buf as i64 + (i * 12)
+            base := buf as i64 + (i * sz)
             bitsp := base as int*
             bits := bitsp[0]
-            fdp := (base + 4) as i64*
+            fdp := (base + off) as i64*
             e := Event { fd = fdp[0], readable = (bits & 1) != 0, writable = (bits & 4) != 0, err = (bits & 8) != 0 || (bits & 16) != 0 }
             out.items.push(e)
             i += 1

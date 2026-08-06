@@ -196,14 +196,43 @@ end
 
 // ---------------------------------------------------- getaddrinfo (IPv6+v4)
 
-// struct addrinfo layout on 64-bit Windows/Linux/macOS:
-//   0: int ai_flags        4: int ai_family
-//   8: int ai_socktype    12: int ai_protocol
-//  16: u64 ai_addrlen     24: char* ai_canonname
-//  32: sockaddr* ai_addr  40: addrinfo* ai_next     (size 48)
+// struct addrinfo layout, size 48 on every 64-bit target, but NOT
+// identical across libc's - verified by dumping real offsetof() values
+// from each platform's own headers (glibc's <netdb.h>, Windows'
+// <ws2tcpip.h>):
+//
+//   field        Windows          Linux (glibc)     macOS/BSD
+//   ai_flags     0 (int)          0 (int)           0 (int)
+//   ai_family    4 (int)          4 (int)           4 (int)
+//   ai_socktype  8 (int)          8 (int)           8 (int)
+//   ai_protocol  12 (int)         12 (int)          12 (int)
+//   ai_addrlen   16 (size_t, 8)   16 (socklen_t, 4)  16 (socklen_t, 4)
+//   ai_canonname 24 (char*)       32 (char*)         24 (char*)
+//   ai_addr      32 (sockaddr*)   24 (sockaddr*)     32 (sockaddr*)
+//   ai_next      40               40                40
+//
+// glibc reorders ai_addr before ai_canonname relative to the struct's
+// documented declaration order (which Windows and the BSD family keep);
+// getting this wrong reads ai_canonname (NULL, since AI_CANONNAME is
+// never requested here) as the sockaddr pointer on Linux, and the
+// caller's subsequent memcpy from that NULL pointer segfaults - this
+// was hit by every code path that resolves a hostname to connect out
+// (rawsock.ConnectProto and everything built on it).
 func _ai_family(ai: void*): int: ret ((ai as i64 + 4) as int*)[0] end
-func _ai_addrlen(ai: void*): i64: ret ((ai as i64 + 16) as i64*)[0] end
-func _ai_addr(ai: void*): void*: ret ((ai as i64 + 32) as i64*)[0] as void* end
+func _ai_addrlen(ai: void*): i64:
+    if SALAM_OS_WINDOWS:
+        ret ((ai as i64 + 16) as i64*)[0]
+    else:
+        ret ((ai as i64 + 16) as int*)[0] as i64
+    end
+end
+func _ai_addr(ai: void*): void*:
+    if SALAM_OS_LINUX:
+        ret ((ai as i64 + 24) as i64*)[0] as void*
+    else:
+        ret ((ai as i64 + 32) as i64*)[0] as void*
+    end
+end
 func _ai_next(ai: void*): void*: ret ((ai as i64 + 40) as i64*)[0] as void* end
 
 // Resolves `host` to a raw sockaddr blob usable directly with connect()/

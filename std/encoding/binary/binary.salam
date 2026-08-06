@@ -1,0 +1,184 @@
+package binary
+
+import compress
+import mem
+
+// binary - endianness-aware integer/float read/write over compress.ByteBuf/
+// ByteReader (reused rather than duplicated - one buffer type across the
+// whole encoding effort, matching msgpack/protobuf's wire.salam choice).
+// Integer read/write use manual shift/mask assembly (generalizing
+// compress.BufPushU32/RdU32's own style to 16/64-bit and both byte orders)
+// - portable regardless of host endianness, no alignment-fault risk, no
+// pointer punning needed. F32/F64 are the one case that genuinely needs raw
+// IEEE-754 bits; that goes through a small mem.Allocate-based
+// read-through-a-differently-typed-pointer-at-the-same-address trick,
+// confirmed to work on this compiler/toolchain via an isolated spike before
+// it was relied on here.
+
+pub struct BinaryOptions:
+    pub big_endian: bool = false
+end
+
+// f64_bits/bits_to_f64/f32_bits/bits_to_f32 - IEEE-754 bit reinterpretation
+// via a shared scratch allocation, viewed through two differently-typed
+// pointers at the same address. Confirmed to work on this compiler/
+// toolchain by an isolated throwaway spike (round-tripped 1.5 and -42.25
+// through their exact bit patterns) before being relied on here.
+func f64_bits(v: f64): i64:
+    buf := mem.Allocate(8 as u64)
+    p := buf as f64*
+    p[0] = v
+    q := buf as i64*
+    bits := q[0]
+    mem.Free(buf)
+    ret bits
+end
+
+func bits_to_f64(bits: i64): f64:
+    buf := mem.Allocate(8 as u64)
+    p := buf as i64*
+    p[0] = bits
+    q := buf as f64*
+    v := q[0]
+    mem.Free(buf)
+    ret v
+end
+
+func f32_bits(v: f32): int:
+    buf := mem.Allocate(4 as u64)
+    p := buf as f32*
+    p[0] = v
+    q := buf as u32*
+    bits := q[0] as int
+    mem.Free(buf)
+    ret bits
+end
+
+func bits_to_f32(bits: int): f32:
+    buf := mem.Allocate(4 as u64)
+    p := buf as u32*
+    p[0] = bits as u32
+    q := buf as f32*
+    v := q[0]
+    mem.Free(buf)
+    ret v
+end
+
+pub func WriteU8(b &: compress.ByteBuf, v: int): compress.BufPush(b, v & 255) end
+
+pub func WriteU16BE(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, (v >> 8) & 255)
+    compress.BufPush(b, v & 255)
+end
+
+pub func WriteU16LE(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, v & 255)
+    compress.BufPush(b, (v >> 8) & 255)
+end
+
+pub func WriteU32BE(b &: compress.ByteBuf, v: int): compress.BufPushU32(b, v) end
+
+pub func WriteU32LE(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, v & 255)
+    compress.BufPush(b, (v >> 8) & 255)
+    compress.BufPush(b, (v >> 16) & 255)
+    compress.BufPush(b, (v >> 24) & 255)
+end
+
+pub func WriteU64BE(b &: compress.ByteBuf, v: i64):
+    mut shift := 56
+    until shift >= 0:
+        compress.BufPush(b, ((v >> shift) & (255 as i64)) as int)
+        shift -= 8
+    end
+end
+
+pub func WriteU64LE(b &: compress.ByteBuf, v: i64):
+    mut shift := 0
+    until shift <= 56:
+        compress.BufPush(b, ((v >> shift) & (255 as i64)) as int)
+        shift += 8
+    end
+end
+
+pub func WriteI16BE(b &: compress.ByteBuf, v: int): WriteU16BE(b, v) end
+pub func WriteI16LE(b &: compress.ByteBuf, v: int): WriteU16LE(b, v) end
+pub func WriteI32BE(b &: compress.ByteBuf, v: int): WriteU32BE(b, v) end
+pub func WriteI32LE(b &: compress.ByteBuf, v: int): WriteU32LE(b, v) end
+pub func WriteI64BE(b &: compress.ByteBuf, v: i64): WriteU64BE(b, v) end
+pub func WriteI64LE(b &: compress.ByteBuf, v: i64): WriteU64LE(b, v) end
+
+pub func WriteF64(b &: compress.ByteBuf, v: f64, big_endian: bool):
+    bits := f64_bits(v)
+    if big_endian: WriteU64BE(b, bits) else: WriteU64LE(b, bits) end
+end
+
+pub func WriteF32(b &: compress.ByteBuf, v: f64, big_endian: bool):
+    bits := f32_bits(v as f32)
+    if big_endian: WriteU32BE(b, bits) else: WriteU32LE(b, bits) end
+end
+
+pub func ReadU8(r &: compress.ByteReader): int: ret compress.RdByte(r) end
+
+pub func ReadU16BE(r &: compress.ByteReader): int:
+    a := compress.RdByte(r)
+    b := compress.RdByte(r)
+    ret (a << 8) | b
+end
+
+pub func ReadU16LE(r &: compress.ByteReader): int:
+    a := compress.RdByte(r)
+    b := compress.RdByte(r)
+    ret (b << 8) | a
+end
+
+pub func ReadU32BE(r &: compress.ByteReader): int: ret compress.RdU32(r) end
+
+pub func ReadU32LE(r &: compress.ByteReader): int:
+    a := compress.RdByte(r)
+    b := compress.RdByte(r)
+    c := compress.RdByte(r)
+    d := compress.RdByte(r)
+    ret (d << 24) | (c << 16) | (b << 8) | a
+end
+
+pub func ReadU64BE(r &: compress.ByteReader): i64:
+    mut out := 0 as i64
+    mut i := 0
+    until i < 8:
+        out = (out << (8 as i64)) | (compress.RdByte(r) as i64)
+        i += 1
+    end
+    ret out
+end
+
+pub func ReadU64LE(r &: compress.ByteReader): i64:
+    mut out := 0 as i64
+    mut shift := 0 as i64
+    mut i := 0
+    until i < 8:
+        out = out | ((compress.RdByte(r) as i64) << shift)
+        shift += 8 as i64
+        i += 1
+    end
+    ret out
+end
+
+pub func ReadI16BE(r &: compress.ByteReader): int: ret ReadU16BE(r) end
+pub func ReadI16LE(r &: compress.ByteReader): int: ret ReadU16LE(r) end
+pub func ReadI32BE(r &: compress.ByteReader): int: ret ReadU32BE(r) end
+pub func ReadI32LE(r &: compress.ByteReader): int: ret ReadU32LE(r) end
+pub func ReadI64BE(r &: compress.ByteReader): i64: ret ReadU64BE(r) end
+pub func ReadI64LE(r &: compress.ByteReader): i64: ret ReadU64LE(r) end
+
+pub func ReadF64(r &: compress.ByteReader, big_endian: bool): f64:
+    mut bits := 0 as i64
+    if big_endian: bits = ReadU64BE(r) else: bits = ReadU64LE(r) end
+    ret bits_to_f64(bits)
+end
+
+pub func ReadF32(r &: compress.ByteReader, big_endian: bool): f64:
+    mut bits := 0
+    if big_endian: bits = ReadU32BE(r) else: bits = ReadU32LE(r) end
+    ret bits_to_f32(bits) as f64
+end

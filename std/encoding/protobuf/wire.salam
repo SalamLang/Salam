@@ -1,0 +1,184 @@
+package protobuf
+
+import compress
+import encoding.binary
+
+// wire - protobuf wire-format primitives (varint, zigzag, fixed32/64,
+// length-delimited) over compress.ByteBuf/ByteReader, reusing
+// encoding.binary's little-endian writers for the fixed-width forms
+// (protobuf's wire format is little-endian, unlike msgpack's big-endian).
+
+pub const WT_VARINT := 0
+pub const WT_FIXED64 := 1
+pub const WT_LEN := 2
+pub const WT_FIXED32 := 5
+
+pub func MakeTag(fieldNum: int, wireType: int): u64:
+    ret ((fieldNum as u64) << (3 as u64)) | (wireType as u64)
+end
+
+pub func WriteVarint(buf &: compress.ByteBuf, n: u64):
+    mut v := n
+    until true:
+        b := (v & (127 as u64)) as int
+        v = v >> (7 as u64)
+        if v != (0 as u64):
+            compress.BufPush(buf, b | 128)
+        else:
+            compress.BufPush(buf, b)
+            ret
+        end
+    end
+end
+
+pub func ReadVarint(r &: compress.ByteReader, ok &: bool): u64:
+    mut result := 0 as u64
+    mut shift := 0 as u64
+    mut i := 0
+    until i < 10:
+        b := compress.RdByte(r)
+        if r.bad:
+            ok = false
+            ret 0 as u64
+        end
+        result = result | (((b & 127) as u64) << shift)
+        if (b & 128) == 0:
+            ok = true
+            ret result
+        end
+        shift = shift + (7 as u64)
+        i += 1
+    end
+    ok = false
+    ret 0 as u64
+end
+
+pub func WriteTag(buf &: compress.ByteBuf, fieldNum: int, wireType: int):
+    WriteVarint(buf, MakeTag(fieldNum, wireType))
+end
+
+pub func ReadTag(r &: compress.ByteReader, fieldNum &: int, wireType &: int, ok &: bool):
+    mut vok := false
+    tag := ReadVarint(r, vok)
+    if !vok:
+        ok = false
+        ret
+    end
+    fieldNum = (tag >> (3 as u64)) as int
+    wireType = (tag & (7 as u64)) as int
+    ok = true
+end
+
+pub func ZigZagEncode32(n: i32): u32: ret ((n << 1) ^ (n >> 31)) as u32 end
+pub func ZigZagDecode32(n: u32): i32:
+    ni := n as i32
+    ret ((ni >> 1) ^ (0 - (ni & 1))) as i32
+end
+
+pub func ZigZagEncode64(n: i64): u64: ret ((n << 1) ^ (n >> 63)) as u64 end
+pub func ZigZagDecode64(n: u64): i64:
+    ni := n as i64
+    ret ((ni >> 1) ^ (0 - (ni & 1))) as i64
+end
+
+pub func WriteFixed32(buf &: compress.ByteBuf, v: u32): binary.WriteU32LE(buf, v as int) end
+pub func ReadFixed32(r &: compress.ByteReader, ok &: bool): u32:
+    if compress.RdLeft(r) < 4:
+        ok = false
+        ret 0 as u32
+    end
+    ok = true
+    ret binary.ReadU32LE(r) as u32
+end
+
+pub func WriteFixed64(buf &: compress.ByteBuf, v: u64): binary.WriteU64LE(buf, v as i64) end
+pub func ReadFixed64(r &: compress.ByteReader, ok &: bool): u64:
+    if compress.RdLeft(r) < 8:
+        ok = false
+        ret 0 as u64
+    end
+    ok = true
+    ret binary.ReadU64LE(r) as u64
+end
+
+pub func WriteFloat(buf &: compress.ByteBuf, v: f64): binary.WriteF32(buf, v, false) end
+pub func ReadFloat(r &: compress.ByteReader, ok &: bool): f64:
+    if compress.RdLeft(r) < 4:
+        ok = false
+        ret 0.0
+    end
+    ok = true
+    ret binary.ReadF32(r, false)
+end
+
+pub func WriteDouble(buf &: compress.ByteBuf, v: f64): binary.WriteF64(buf, v, false) end
+pub func ReadDouble(r &: compress.ByteReader, ok &: bool): f64:
+    if compress.RdLeft(r) < 8:
+        ok = false
+        ret 0.0
+    end
+    ok = true
+    ret binary.ReadF64(r, false)
+end
+
+pub func WriteLenPrefixedBytes(buf &: compress.ByteBuf, p: void*, n: int):
+    WriteVarint(buf, n as u64)
+    compress.BufPushBytes(buf, p, n)
+end
+
+pub func WriteLenPrefixedStr(buf &: compress.ByteBuf, s: str):
+    WriteLenPrefixedBytes(buf, s as void*, s.len())
+end
+
+pub func ReadLenPrefixedBuf(r &: compress.ByteReader, ok &: bool): compress.ByteBuf:
+    mut vok := false
+    n := ReadVarint(r, vok)
+    if !vok || compress.RdLeft(r) < (n as int):
+        ok = false
+        ret compress.NewByteBuf()
+    end
+    ok = true
+    ret compress.RdBytes(r, n as int)
+end
+
+pub func ReadLenPrefixedStr(r &: compress.ByteReader, ok &: bool): str:
+    b := ReadLenPrefixedBuf(r, ok)
+    out := compress.BufToStrUnsafe(b)
+    compress.BufFree(b)
+    ret out
+end
+
+pub func SkipField(r &: compress.ByteReader, wireType: int, ok &: bool):
+    if wireType == WT_VARINT:
+        mut vok := false
+        ReadVarint(r, vok)
+        ok = vok
+        ret
+    end
+    if wireType == WT_FIXED64:
+        if compress.RdLeft(r) < 8:
+            ok = false
+            ret
+        end
+        binary.ReadU64LE(r)
+        ok = true
+        ret
+    end
+    if wireType == WT_FIXED32:
+        if compress.RdLeft(r) < 4:
+            ok = false
+            ret
+        end
+        binary.ReadU32LE(r)
+        ok = true
+        ret
+    end
+    if wireType == WT_LEN:
+        mut bok := false
+        b := ReadLenPrefixedBuf(r, bok)
+        compress.BufFree(b)
+        ok = bok
+        ret
+    end
+    ok = false
+end

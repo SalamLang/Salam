@@ -1,0 +1,148 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package opencv
+
+import mem
+import collections
+
+// Feature detection & matching: `Mat.detect_orb()` (mat.salam) finds ORB
+// keypoints and computes their descriptors together, mirroring OpenCV's own
+// `cv::ORB::detectAndCompute`; `MatchDescriptors()` below then pairs up two
+// descriptor sets with a brute-force Hamming matcher (cv::BFMatcher),
+// sorted by ascending distance (best match first) - the usual
+// "detect -> describe -> match" pipeline for panorama stitching, object
+// recognition, tracking, etc. See examples/03_feature_matching.salam.
+
+// One detected keypoint - position, the scale it was detected at, its
+// dominant orientation (degrees) and the detector's response/strength.
+@en "Keypoint"
+@fa "نقطه کلیدی"
+@ar "نقطة مميزة"
+pub struct Keypoint:
+    pub x: f64 = 0.0
+    pub y: f64 = 0.0
+    pub size: f64 = 0.0
+    pub angle: f64 = 0.0
+    pub response: f64 = 0.0
+end
+
+// The result of Mat.detect_orb(): a native-owned set of keypoints plus
+// their descriptors, kept together since that is how OpenCV computes and
+// consumes them. Release with `.free()` when done.
+@en "Keypoints"
+@fa "نقاط کلیدی"
+@ar "نقاط مميزة"
+pub struct Keypoints:
+    pub handle: void* = null
+
+    @en "ok"
+    @fa "معتبر"
+    @ar "صالح"
+    pub func ok(): bool: ret this.handle != null end
+
+    @en "count"
+    @fa "تعداد"
+    @ar "عدد"
+    pub func count(): int:
+        if this.handle == null: ret 0 end
+        ret scv_keypoint_count(this.handle)
+    end
+
+    // Out-of-range `i` returns the zero Keypoint rather than erroring.
+    @en "get"
+    @fa "دریافت"
+    @ar "جلب"
+    pub func get(i: int): Keypoint:
+        if this.handle == null || i < 0 || i >= this.count(): ret Keypoint {} end
+        buf := mem.Allocate(40 as u64) // 5 x f64
+        defer mem.Free(buf)
+        p := buf as f64*
+        scv_keypoint_get(this.handle, i, p)
+        ret Keypoint { x = p[0], y = p[1], size = p[2], angle = p[3], response = p[4] }
+    end
+
+    // The descriptor matrix (one row per keypoint, in the same order as
+    // .get(i)) - pass this Mat into MatchDescriptors() to compare two
+    // images' features. Each call returns an independently owned Mat (a
+    // copy) - free it with `.free()` on its own; it does not need this
+    // Keypoints to stay alive.
+    @en "descriptors"
+    @fa "توصیف‌گرها"
+    @ar "واصفات"
+    pub func descriptors(): Mat:
+        if this.handle == null: ret Mat { handle = null } end
+        ret Mat { handle = scv_orb_descriptors(this.handle) }
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحریر"
+    pub func free():
+        if this.handle != null: scv_free_keypoints(this.handle) end
+        this.handle = null
+    end
+end
+
+// One matched keypoint pair: query_idx indexes into the first image's
+// keypoints, train_idx into the second's; distance is the descriptor
+// distance (lower = more similar - Hamming distance for ORB's binary
+// descriptors).
+@en "Match"
+@fa "تطابق"
+@ar "تطابق"
+pub struct Match:
+    pub query_idx: int = 0
+    pub train_idx: int = 0
+    pub distance: f64 = 0.0
+end
+
+// Brute-force-matches two descriptor Mats (from Keypoints.descriptors),
+// returning up to max_matches pairs sorted by ascending distance (best
+// first). Typical usage keeps only the best few dozen and discards the
+// rest as noise - see examples/03_feature_matching.salam. `norm` must
+// match how the descriptors were computed: opencv.NORM_HAMMING for ORB
+// (binary descriptors), opencv.NORM_L2 for SIFT (float descriptors) -
+// mismatching them produces meaningless distances, not an error.
+//
+// Compiler note: assign the result with an explicit, package-qualified
+// cast - `ms := opencv.MatchDescriptors(...) as Vector<opencv.Match>` -
+// see good_features()'s doc comment in mat.salam for why.
+@en "MatchDescriptors"
+@fa "تطبیق توصیف‌گرها"
+@ar "مطابقة الواصفات"
+pub func MatchDescriptors(desc1: Mat, desc2: Mat, max_matches: int, norm: int): Vector<Match>:
+    mut out := Vector {} as Vector<Match>
+    if desc1.handle == null || desc2.handle == null || max_matches <= 0: ret out end
+    handle := scv_bf_match(desc1.handle, desc2.handle, max_matches, norm)
+    if handle == null: ret out end
+    defer scv_free_matches(handle)
+    n := scv_match_count(handle)
+    qbuf := mem.Allocate(4 as u64)
+    tbuf := mem.Allocate(4 as u64)
+    dbuf := mem.Allocate(8 as u64)
+    defer mem.Free(qbuf)
+    defer mem.Free(tbuf)
+    defer mem.Free(dbuf)
+    qp := qbuf as i32*
+    tp := tbuf as i32*
+    dp := dbuf as f64*
+    mut i := 0
+    until i < n:
+        scv_match_get(handle, i, qp, tp, dp)
+        out.push(Match { query_idx = qp[0] as int, train_idx = tp[0] as int, distance = dp[0] })
+        i += 1
+    end
+    ret out
+end

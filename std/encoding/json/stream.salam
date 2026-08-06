@@ -1,0 +1,136 @@
+package json
+
+import encoding.value
+import encoding.encerr
+import io
+import str
+
+// stream - JSONEncoder/JSONDecoder, working directly against a File* (no
+// Reader/Writer interface exists in this language) or an in-memory buffer
+// for tests. Honest incrementality, not oversold:
+//
+//   - Encoder is genuinely incremental: each Encode(v) call formats and
+//     writes immediately, so N calls never hold more than one value's text
+//     in memory.
+//   - Decoder is partial: the first Decode()/More() call slurps the WHOLE
+//     remaining file (same as io.ReadAll) - I/O itself is not incremental -
+//     but each subsequent Decode() call parses exactly one top-level value
+//     out of the already-loaded buffer and advances a position, so a
+//     multi-value (NDJSON-style) stream is consumed one Value at a time
+//     without re-parsing earlier values or materializing a Vector<Value> of
+//     everything up front. True chunked-refill input streaming is flagged
+//     as unbuilt follow-on work, not attempted here.
+//
+// Open files passed to NewEncoder/NewDecoder in BINARY mode ("wb"/"rb"),
+// not text mode ("w"/"r"): on Windows, text-mode reads translate CRLF back
+// to LF, and this was observed to corrupt trailing bytes of the last chunk
+// read via File.read() in a real end-to-end test (a written "20" came back
+// as "200"). JSON content has no reason to want OS line-ending translation
+// anyway, so binary mode is the correct choice regardless.
+
+pub struct JSONEncoder:
+    pub dst: File* = null
+    pub useFile: bool = false
+    pub buf: str.StringBuilder = str.StringBuilder {}
+    pub indent: str = ""
+    pub count: int = 0
+
+    pub func Encode(v: value.Value): bool:
+        mut text := _encode_value(v, JSONOptions {})
+        if this.indent != "": text = IndentWith(text, this.indent) end
+        if this.count > 0:
+            if this.useFile: this.dst.write("\n") else: str.BufAppendChar(this.buf, 10) end
+        end
+        if this.useFile:
+            this.dst.write(text)
+        else:
+            str.BufAppend(this.buf, text)
+        end
+        this.count += 1
+        ret true
+    end
+
+    pub func String(): str: ret str.BufStr(this.buf) end
+
+    pub func Close():
+        if this.useFile && this.dst != null: this.dst.close() end
+    end
+end
+
+pub struct JSONDecoder:
+    pub src: File* = null
+    pub useFile: bool = false
+    pub buf: str = ""
+    pub pos: int = 0
+    pub loaded: bool = false
+    pub eof: bool = false
+    pub bad: bool = false
+
+    pub func _ensureLoaded():
+        if this.loaded: ret end
+        if this.useFile: this.buf = io.ReadAll(this.src) end
+        this.loaded = true
+    end
+
+    pub func More(): bool:
+        this._ensureLoaded()
+        p := _skip_ws(this.buf, this.pos)
+        ret p < this.buf.len()
+    end
+
+    pub func Decode(): value.Value:
+        this._ensureLoaded()
+        p := _skip_ws(this.buf, this.pos)
+        if p >= this.buf.len():
+            this.eof = true
+            ret value.ValueNull()
+        end
+        mut ep := p
+        mut err := encerr.NoError()
+        v := _pval(this.buf, p, ep, err)
+        if encerr.IsError(err):
+            this.bad = true
+            this.eof = true
+            ret value.ValueNull()
+        end
+        this.pos = ep
+        ret v
+    end
+end
+
+pub func NewEncoder(f: File*): JSONEncoder:
+    mut e := JSONEncoder {}
+    e.dst = f
+    e.useFile = true
+    ret e
+end
+
+pub func NewEncoderIndent(f: File*, unit: str): JSONEncoder:
+    mut e := NewEncoder(f)
+    e.indent = unit
+    ret e
+end
+
+pub func NewBufEncoder(): JSONEncoder:
+    ret JSONEncoder {}
+end
+
+pub func NewBufEncoderIndent(unit: str): JSONEncoder:
+    mut e := JSONEncoder {}
+    e.indent = unit
+    ret e
+end
+
+pub func NewDecoder(f: File*): JSONDecoder:
+    mut d := JSONDecoder {}
+    d.src = f
+    d.useFile = true
+    ret d
+end
+
+pub func NewBufDecoder(s: str): JSONDecoder:
+    mut d := JSONDecoder {}
+    d.buf = s
+    d.loaded = true
+    ret d
+end

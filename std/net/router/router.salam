@@ -1,0 +1,241 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/router"
+@fa "مسیریاب شبکه"
+@ar "موجه الشبکة"
+package router
+
+// Path/method routing, extracted out of std/web's router.salam so it can
+// be reasoned about (and reused) independently of any particular HTTP
+// server implementation. The original `_try_match` wrote extracted
+// `:param` values directly into std/web's request-context handle - this
+// version is a pure function: `Dispatch` takes a method+path and returns
+// a `Match` (which route, if any, plus its extracted params) with no
+// side effects on caller state. net/http's server calls Dispatch and
+// then copies `Match.params` into its own request context itself -
+// cleaner layering, and Dispatch/_try_match are independently testable.
+//
+// Handlers are stored as raw function pointers (`fn: i64`, via Salam's
+// `funcptr(...)`), the same convention std/web used - Salam has no
+// closures, so there is no way to capture per-group middleware/prefix
+// state in a builder object the way Express/Go routers do. "Group"
+// below is therefore a plain string-prefixing helper, not a sub-router
+// builder: `router.Group(r, "/v1", "GET", "/users", fn)` is exactly
+// `router.Get(r, "/v1/users", fn)` with the prefix computed once at the
+// call site - honest about what the language can express here, not a
+// thin unimplemented stub of a fluent API this codebase can't support.
+//
+// Route priority (spec requirement): matching no longer depends on
+// registration order. Dispatch tries every route with a literal
+// (non-parametric, non-wildcard) pattern first, then every `:param`
+// route, then every `*` wildcard route - static beats param beats
+// wildcard, exactly like Go/Express routers, regardless of the order
+// routes were registered in.
+
+@en "Param"
+@fa "پارامتر"
+@ar "معامل"
+pub struct Param:
+    pub key: str = ""
+    pub value: str = ""
+end
+
+@en "ParamList"
+@fa "پارامترها"
+@ar "معاملات"
+pub struct ParamList:
+    pub items: Vector<Param> = Vector {}
+end
+
+@en "Route"
+@fa "مسیر مسیریابی"
+@ar "مسار توجیه"
+pub struct Route:
+    pub method: str = ""
+    pub pattern: str = ""
+    pub fn: i64 = 0
+end
+
+@en "Router"
+@fa "مسیریاب"
+@ar "موجه"
+pub struct Router:
+    pub routes: Vector<Route> = Vector {}
+    pub static_prefix: str = ""
+    pub static_dir: str = ""
+    pub has_static: bool = false
+    pub static_listing: bool = false
+end
+
+@en "Match"
+@fa "تطابق"
+@ar "مطابقة"
+pub struct Match:
+    pub matched: bool = false
+    pub fn: i64 = 0
+    pub params: ParamList = ParamList {}
+end
+
+func _param_get(p: ParamList, key: str): str:
+    n := p.items.len()
+    mut i := 0
+    until i < n:
+        kv := p.items.get(i)[0]
+        if kv.key == key: ret kv.value end
+        i += 1
+    end
+    ret ""
+end
+
+func _specificity(pattern: str): int:
+    if pattern.find("*") >= 0: ret 2 end
+    if pattern.find(":") >= 0: ret 1 end
+    ret 0
+end
+
+// Matches `path` against `pattern` (":name" captures one path segment,
+// "*" matches the remainder unconditionally), appending any captures to
+// `out_params`. Direct port of std/web's original algorithm, minus the
+// context-handle side effect.
+func _try_match(pattern: str, path: str, out_params &: ParamList): bool:
+    mut pi := 0
+    mut pp := 0
+    plen := pattern.len()
+    pathlen := path.len()
+    until pi < plen || pp < pathlen:
+        if pi < plen && pattern.substr(pi, 1) == "*":
+            ret true
+        end
+        if pi < plen && pattern.substr(pi, 1) == ":":
+            mut ne := pi + 1
+            until ne < plen && pattern.substr(ne, 1) != "/":
+                ne += 1
+            end
+            pname := pattern.substr(pi + 1, ne - pi - 1)
+            mut ve := pp
+            until ve < pathlen && path.substr(ve, 1) != "/":
+                ve += 1
+            end
+            pval := path.substr(pp, ve - pp)
+            out_params.items.push(Param { key = pname, value = pval })
+            pi = ne
+            pp = ve
+        else:
+            if pi >= plen || pp >= pathlen:
+                break
+            end
+            if pattern.substr(pi, 1) != path.substr(pp, 1):
+                ret false
+            end
+            pi += 1
+            pp += 1
+        end
+    end
+    until pi < plen && pattern.substr(pi, 1) == "/": pi = pi + 1 end
+    until pp < pathlen && path.substr(pp, 1) == "/": pp = pp + 1 end
+    ret pi == plen && pp == pathlen
+end
+
+@en "NewRouter"
+@fa "مسیریاب جدید"
+@ar "موجه جدید"
+pub func NewRouter(): Router:
+    ret Router {}
+end
+
+@en "Get"
+@fa "دریافت"
+@ar "جلب"
+pub func Get(r &: Router, path: str, fn: i64): r.routes.push(Route { method = "GET", pattern = path, fn = fn }) end
+
+@en "Post"
+@fa "ارسال"
+@ar "إرسال"
+pub func Post(r &: Router, path: str, fn: i64): r.routes.push(Route { method = "POST", pattern = path, fn = fn }) end
+
+@en "Put"
+@fa "قراردادن"
+@ar "وضع"
+pub func Put(r &: Router, path: str, fn: i64): r.routes.push(Route { method = "PUT", pattern = path, fn = fn }) end
+
+@en "Delete"
+@fa "حذف"
+@ar "حذف"
+pub func Delete(r &: Router, path: str, fn: i64): r.routes.push(Route { method = "DELETE", pattern = path, fn = fn }) end
+
+@en "Route"
+@fa "مسیر مسیریابی"
+@ar "مسار توجیه"
+pub func Route(r &: Router, method: str, path: str, fn: i64):
+    r.routes.push(Route { method = method, pattern = path, fn = fn })
+end
+
+@en "Group"
+@fa "گروه"
+@ar "مجموعة"
+pub func Group(r &: Router, prefix: str, method: str, path: str, fn: i64):
+    r.routes.push(Route { method = method, pattern = prefix + path, fn = fn })
+end
+
+@en "Static"
+@fa "ایستا"
+@ar "ثابت"
+pub func Static(r &: Router, prefix: str, dir: str):
+    r.static_prefix = prefix
+    r.static_dir = dir
+    r.has_static = true
+end
+
+@en "EnableListing"
+@fa "فعال سازی فهرست پوشه"
+@ar "تفعیل سرد المجلد"
+pub func EnableListing(r &: Router):
+    r.static_listing = true
+end
+
+@en "ParamGet"
+@fa "دریافت پارامتر"
+@ar "الحصول علی المعامل"
+pub func ParamGet(m: Match, key: str): str:
+    ret _param_get(m.params, key)
+end
+
+@en "Dispatch"
+@fa "اعزام"
+@ar "إرسال"
+pub func Dispatch(r: Router, method: str, path: str): Match:
+    n := r.routes.len()
+    mut level := 0
+    until level <= 2:
+        mut i := 0
+        until i < n:
+            route := r.routes.get(i)[0]
+            if route.method == method && _specificity(route.pattern) == level:
+                mut params := ParamList {}
+                ok := _try_match(route.pattern, path, params)
+                if ok:
+                    mut m := Match {}
+                    m.matched = true
+                    m.fn = route.fn
+                    m.params = params
+                    ret m
+                end
+            end
+            i += 1
+        end
+        level += 1
+    end
+    ret Match {}
+end

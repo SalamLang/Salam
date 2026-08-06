@@ -1,0 +1,782 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package http
+
+import net.tcp
+import net.mime
+import net.router
+import net.internal.rawsock
+import tls
+import mem
+import str
+import conv
+import encoding
+import filepath
+import os
+
+// The request-handling internals migrated from std/web/web.salam: the
+// opaque request-context handle (an i64 pointing at a heap-allocated
+// _ReqCtx - kept as a raw handle, not a Salam struct with foreign
+// fields, for the same cross-package struct-embedding codegen reasons
+// tcp.Conn/DialTLS document), HTTP/1.1 request parsing, response
+// serialization, static file serving with directory-traversal
+// protection, and the per-connection handler run on its own OS thread.
+//
+// Route matching itself is delegated to net/router.Dispatch (a pure
+// function, no side effects on this context) - this file's job is
+// purely translating between "the wire" and "a Router lookup", which is
+// the same responsibility std/web's `_dispatch` had, just no longer
+// entangled with the matching algorithm.
+
+extern:
+    func fopen(path: str, mode: str): void *
+    func fread(ptr: void *, size: u64, nmemb: u64, stream: void *): u64
+    func fseek(stream: void *, off: int, whence: int): int
+    // int, not i64: std/os.salam's own `extern func ftell` declares the
+    // same libc symbol as returning plain `int` (both get emitted into the
+    // same generated C header once a program imports both packages), so
+    // the two declarations must agree exactly or the C build fails with
+    // "conflicting types for 'ftell'". Widened to i64 at every call site.
+    func ftell(stream: void *): int
+    func fclose(stream: void *): int
+end
+
+@en "SERVER_VERSION"
+@fa "نسخه سرور"
+@ar "إصدار الخادم"
+pub const SERVER_VERSION := "0.2.6"
+
+mut _reqctx_size := 0 as i64
+mut _current_router := router.NewRouter()
+mut _hide_tokens := false
+mut _access_log := false
+mut _current_tls_cfg := tls.NewServerConfig("", "")
+
+@en "Context"
+@fa "زمینه"
+@ar "سیاق"
+pub struct Context:
+    pub h: i64
+end
+
+struct _KV:
+    pub k: str = ""
+    pub v: str = ""
+end
+
+struct _ReqCtx:
+    pub fd: i64 = 0
+    pub status: int = 200
+    pub is_sent: bool = false
+    pub method: str = ""
+    pub path: str = ""
+    pub query: str = ""
+    pub body: str = ""
+    pub resp_ct: str = ""
+    pub resp_body: str = ""
+    pub req_hdrs: Vector<_KV> = Vector {}
+    pub path_params: Vector<_KV> = Vector {}
+    pub resp_hdrs: Vector<_KV> = Vector {}
+end
+
+@en "Server"
+@fa "سرور"
+@ar "خادم"
+pub struct Server:
+    pub port: int = 0
+    pub host: str = "0.0.0.0"
+    pub router: router.Router = router.Router {}
+    pub hide_tokens: bool = false
+    pub access_log: bool = false
+end
+
+// Path/query parsing and the static-file safety check (_safe_static_path)
+// all go through str.split("/") indirectly via filepath.Clean/Join. On this
+// toolchain, the very first str.split() call in a process that produces 3+
+// pieces can return a Vector whose last slot was never actually written
+// (reads back as the Windows "uninitialized heap" poison pattern
+// 0xBAADF00D, confirmed under gdb) - some one-time lazy-init gap in the
+// C runtime/allocator that a single earlier split() call papers over for
+// the rest of the process's lifetime. Running one harmless split here,
+// before the first real request can reach _safe_static_path, avoids
+// hitting that gap on live traffic. Cheap and process-wide: this needs to
+// run exactly once, not once per connection/thread.
+func _warm_up_split():
+    junk := "a/b".split("/")
+    defer junk.free()
+end
+
+func _reqctx_sizeof(): i64:
+    if _reqctx_size == 0:
+        v := Vector {} as Vector<_ReqCtx> v.push(_ReqCtx {})
+        v.push(_ReqCtx {})
+        _reqctx_size = (v.get(1) as i64) - (v.get(0) as i64)
+    end
+    ret _reqctx_size
+end
+
+func _rc(h: i64): _ReqCtx *:
+    ret h as _ReqCtx *
+end
+
+func salam_ctx_new(fd: i64): i64:
+    p := mem.Allocate(_reqctx_sizeof() as u64)
+    c := p as _ReqCtx * c[0] = _ReqCtx { fd = fd }
+    ret p as i64
+end
+
+func salam_ctx_free(h: i64):
+    mem.Free(h as void *)
+end
+
+func salam_ctx_fd(h: i64): i64:
+    ret _rc(h).fd
+end
+
+func salam_ctx_get(h: i64, idx: int): str:
+    c := _rc(h)
+    if idx == 0: ret c.method
+    else idx == 1: ret c.path
+    else idx == 2: ret c.query
+    else idx == 3: ret c.body
+    else idx == 4: ret c.resp_ct
+    else idx == 5: ret c.resp_body
+    else:
+        ret ""
+    end
+end
+
+func salam_ctx_set(h: i64, idx: int, val: str):
+    c := _rc(h)
+    if idx == 0: c.method = val
+    else idx == 1: c.path = val
+    else idx == 2: c.query = val
+    else idx == 3: c.body = val
+    else idx == 4: c.resp_ct = val
+    else idx == 5: c.resp_body = val end
+end
+
+func salam_ctx_get_status(h: i64): int:
+    ret _rc(h).status
+end
+
+func salam_ctx_set_status(h: i64, status: int):
+    c := _rc(h)
+    c.status = status
+end
+
+func salam_ctx_is_sent(h: i64): int:
+    if _rc(h).is_sent: ret 1 end
+    ret 0
+end
+
+func _ctx_mark_sent(h: i64):
+    c := _rc(h)
+    c.is_sent = true
+end
+
+func _kvl_get(l &: Vector<_KV>, key: str): str:
+    repeat l.len() with i:
+        kv := l.get(i)[0]
+        if kv.k == key: ret kv.v end
+    end
+    ret ""
+end
+
+func _kvl_set(l &: Vector<_KV>, key: str, val: str):
+    repeat l.len() with i:
+        if l.get(i)[0].k == key:
+            l.set(i, _KV { k = key, v = val })
+            ret
+        end
+    end
+    l.push(_KV { k = key, v = val })
+end
+
+// Set-Cookie specifically dedupes by cookie NAME (the "n=" prefix of the
+// serialized value), unlike every other response header. Setting the same
+// cookie twice in one handler - e.g. session.Start followed immediately by
+// session.Regenerate, both of which set the session-id cookie - should
+// replace the earlier Set-Cookie line, not add a second one for a value
+// that's about to be superseded. A real browser resolves two same-name
+// Set-Cookie lines fine on its own (last one wins), but there's no reason
+// to ship the dead first line over the wire.
+func _kvl_set_cookie(l &: Vector<_KV>, cookie_name: str, val: str):
+    prefix := cookie_name.concat("=")
+    mut i := 0
+    until i < l.len():
+        kv := l.get(i)[0]
+        if kv.k == "Set-Cookie" && kv.v.len() >= prefix.len() && kv.v.substr(0, prefix.len()) == prefix:
+            l.remove_at(i)
+        else:
+            i += 1
+        end
+    end
+    l.push(_KV { k = "Set-Cookie", v = val })
+end
+
+func _kvl_clear(l &: Vector<_KV>):
+    until l.len() > 0:
+        l.pop()
+    end
+end
+
+func salam_ctx_kv_get(h: i64, list: int, key: str): str:
+    c := _rc(h)
+    if list == 0: ret _kvl_get(c.req_hdrs, key)
+    else list == 1: ret _kvl_get(c.path_params, key)
+    else:
+        ret _kvl_get(c.resp_hdrs, key)
+    end
+end
+
+func salam_ctx_kv_add(h: i64, list: int, key: str, val: str):
+    c := _rc(h)
+    if list == 0: _kvl_set(c.req_hdrs, key, val)
+else list == 1: _kvl_set(c.path_params, key, val)
+else:
+    _kvl_set(c.resp_hdrs, key, val)
+end
+end
+
+func salam_ctx_kv_set_cookie(h: i64, cookie_name: str, val: str):
+    c := _rc(h)
+    _kvl_set_cookie(c.resp_hdrs, cookie_name, val)
+end
+
+func salam_ctx_kv_clear(h: i64, list: int):
+    c := _rc(h)
+    if list == 0: _kvl_clear(c.req_hdrs)
+else list == 1: _kvl_clear(c.path_params)
+else:
+    _kvl_clear(c.resp_hdrs)
+end
+end
+
+func salam_ctx_kv_n(h: i64, list: int): int:
+    c := _rc(h)
+    if list == 0: ret c.req_hdrs.len()
+    else list == 1: ret c.path_params.len()
+    else:
+        ret c.resp_hdrs.len()
+    end
+end
+
+func salam_ctx_kv_key(h: i64, list: int, idx: int): str:
+    c := _rc(h)
+    if list == 0: ret c.req_hdrs.get(idx)[0].k
+    else list == 1: ret c.path_params.get(idx)[0].k
+    else:
+        ret c.resp_hdrs.get(idx)[0].k
+    end
+end
+
+func salam_ctx_kv_val(h: i64, list: int, idx: int): str:
+    c := _rc(h)
+    if list == 0: ret c.req_hdrs.get(idx)[0].v
+    else list == 1: ret c.path_params.get(idx)[0].v
+    else:
+        ret c.resp_hdrs.get(idx)[0].v
+    end
+end
+
+func _query_parse(req: str, key: str): str:
+    if req.len() == 0: ret "" end
+    decoded := UrlDecode(req)
+    mut rest := decoded
+    until rest.len() > 0:
+        amp := rest.find("&")
+        mut pair := ""
+        if amp >= 0:
+            pair = rest.substr(0, amp)
+            rest = rest.substr(amp + 1, rest.len() - amp - 1)
+        else:
+            pair = rest
+            rest = ""
+        end
+        eq := pair.find("=")
+        if eq >= 0:
+            if pair.substr(0, eq) == key:
+                ret pair.substr(eq + 1, pair.len() - eq - 1)
+            end
+        end
+    end
+    ret ""
+end
+
+func _parse_http(ctx: i64, req: str):
+    sp1 := req.find(" ")
+    if sp1 < 0: ret end
+    salam_ctx_set(ctx, 0, req.substr(0, sp1))
+    after_method := req.substr(sp1 + 1, req.len() - sp1 - 1)
+    sp2 := after_method.find(" ")
+    if sp2 < 0: ret end
+    pathquery := after_method.substr(0, sp2)
+    qmark := pathquery.find("?")
+    if qmark >= 0:
+        salam_ctx_set(ctx, 1, pathquery.substr(0, qmark))
+        salam_ctx_set(ctx, 2, pathquery.substr(qmark + 1, pathquery.len() - qmark - 1))
+    else:
+        salam_ctx_set(ctx, 1, pathquery)
+        salam_ctx_set(ctx, 2, "")
+    end
+    first_crlf := req.find("\r\n")
+    if first_crlf < 0: ret end
+    mut pos := first_crlf + 2
+    until pos < req.len():
+        if pos + 1 < req.len() && req.substr(pos, 2) == "\r\n":
+            pos += 2
+            break
+        end
+        line_end := str.IndexFrom(req, "\r\n", pos)
+        if line_end < 0:
+            pos = req.len()
+            break
+        end
+        line := req.substr(pos, line_end - pos)
+        colon := line.find(":")
+        if colon >= 0:
+            hk := line.substr(0, colon)
+            hv := str.TrimLeft(line.substr(colon + 1, line.len() - colon - 1))
+            salam_ctx_kv_add(ctx, 0, hk, hv)
+        end
+        pos = line_end + 2
+    end
+    body_sep := str.IndexFrom(req, "\r\n\r\n", 0)
+    if body_sep >= 0:
+        body_start := body_sep + 4
+        if body_start < req.len():
+            salam_ctx_set(ctx, 3, req.substr(body_start, req.len() - body_start))
+        end
+    end
+end
+
+func _server_header(hide: bool): str:
+    if hide: ret "Salam" end
+    ret "Salam/".concat(SERVER_VERSION)
+end
+
+func _build_response(ctx: i64, hide: bool): str:
+    status := salam_ctx_get_status(ctx)
+    ct := salam_ctx_get(ctx, 4)
+    body := salam_ctx_get(ctx, 5)
+    mut resp := "HTTP/1.1 "
+    resp = resp.concat(conv.FormatInt(status as i64))
+    resp = resp.concat(" ")
+    resp = resp.concat(mime.StatusText(status))
+    resp = resp.concat("\r\nContent-Length: ")
+    resp = resp.concat(conv.FormatInt(body.len() as i64))
+    resp = resp.concat("\r\nConnection: close\r\nServer: ")
+    resp = resp.concat(_server_header(hide))
+    resp = resp.concat("\r\n")
+    if ct.len() > 0:
+        resp = resp.concat("Content-Type: ")
+        resp = resp.concat(ct)
+        resp = resp.concat("\r\n")
+    end
+    nhdr := salam_ctx_kv_n(ctx, 2)
+    repeat nhdr with i:
+        resp = resp.concat(salam_ctx_kv_key(ctx, 2, i))
+        resp = resp.concat(": ")
+        resp = resp.concat(salam_ctx_kv_val(ctx, 2, i))
+        resp = resp.concat("\r\n")
+    end
+    resp = resp.concat("\r\n")
+    resp = resp.concat(body)
+    ret resp
+end
+
+// Runs net/router.Dispatch and, on a match, copies the extracted path
+// params into this request's ctx before invoking the handler - the only
+// bridge between router's pure Match value and web's ctx-handle world.
+func _dispatch(r: router.Router, ctx: i64): bool:
+    method := salam_ctx_get(ctx, 0)
+    path := salam_ctx_get(ctx, 1)
+    m := router.Dispatch(r, method, path)
+    if !m.matched: ret false end
+    salam_ctx_kv_clear(ctx, 1)
+    n := m.params.items.len()
+    mut i := 0
+    until i < n:
+        kv := m.params.items.get(i)[0]
+        salam_ctx_kv_add(ctx, 1, kv.key, kv.value)
+        i += 1
+    end
+    callhandler(m.fn, ctx)
+    ret true
+end
+
+func _net_listen(host: str, port: int): i64:
+    ret rawsock.ListenOn(host, port, rawsock.SOCK_STREAM).fd
+end
+
+func _net_accept(lfd: i64): i64:
+    ret rawsock.Accept(rawsock.FromFd(lfd)).fd
+end
+
+func _net_recv_req(fd: i64): str:
+    ret tcp.Read(tcp.ConnFromFd(fd), 32768)
+end
+
+func _net_send_all(fd: i64, data: str):
+    tcp.Write(tcp.ConnFromFd(fd), data)
+end
+
+func _net_close(fd: i64):
+    tcp.Close(tcp.ConnFromFd(fd))
+end
+
+// Streams the file in fixed-size chunks instead of loading it whole into
+// memory, so serving large files (video, archives, ...) doesn't blow up
+// process memory or hit an arbitrary size cap.
+func _send_file(fd: i64, path: str, ct: str, server_hdr: str): int:
+    f := fopen(path, "rb")
+    if f == null:
+        ret 0
+    end
+    defer fclose(f)
+    fseek(f, 0, 2)
+    sz := ftell(f) as i64
+    fseek(f, 0, 0)
+    if sz < 0:
+        ret 0
+    end
+    mut hdr := "HTTP/1.1 200 OK\r\nContent-Length: "
+    hdr = hdr.concat(conv.FormatInt(sz))
+    hdr = hdr.concat("\r\nContent-Type: ")
+    hdr = hdr.concat(ct)
+    hdr = hdr.concat("\r\nConnection: close\r\nServer: ")
+    hdr = hdr.concat(server_hdr)
+    hdr = hdr.concat("\r\n\r\n")
+    _net_send_all(fd, hdr)
+    chunk_cap := 65536 as u64
+    buf := mem.Allocate(chunk_cap)
+    defer mem.Free(buf)
+    conn := tcp.ConnFromFd(fd)
+    mut remaining := sz
+    until remaining > 0:
+        want := remaining < (chunk_cap as i64) ? (remaining as u64) : chunk_cap
+        got := fread(buf, 1 as u64, want, f)
+        if got == (0 as u64):
+            break
+        end
+        tcp.WriteBytes(conn, buf, got as int)
+        remaining -= got as i64
+    end
+    ret 1
+end
+
+// Escapes text for safe inclusion in an HTML document (directory listings,
+// generated error pages, ...).
+func _html_escape(s: str): str:
+    n := s.len()
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    repeat n with i:
+        c := s.substr(i, 1)
+        if c == "&": str.BufAppend(b, "&amp;")
+        else c == "<": str.BufAppend(b, "&lt;")
+        else c == ">": str.BufAppend(b, "&gt;")
+        else c == `"`: str.BufAppend(b, "&quot;")
+        else c == "'": str.BufAppend(b, "&#39;")
+        else:
+            str.BufAppend(b, c)
+        end
+    end
+    ret str.BufStr(b)
+end
+
+// Resolves an (already percent-decoded) request path against a static
+// root directory and guarantees the result cannot escape that root, no
+// matter how many "../", encoded traversal segments, or absolute-looking
+// paths appear in `rel`. Returns "" when the request would escape.
+//
+// Uses filepath.Clean's segment-collapsing algorithm: joining then
+// cleaning "root/../../../etc/passwd" yields "/etc/passwd" (or similar),
+// which fails the containment check below and is rejected - the request
+// is judged by where it ends up, not by pattern-matching "..".
+//
+// root == "." (the common `salam serve` case, serving the current
+// directory) needs its own branch: filepath.Clean(".") returns the
+// literal "." but filepath.Clean drops "." segments from every other
+// path it cleans, so a contained request like "src" cleans to "src",
+// never to "./src" - the croot-prefix check below would never match it
+// and every subpath would 404. Under root ".", any cleaned path that
+// isn't an escape ("..", "../...") or OS-absolute is contained.
+func _safe_static_path(root: str, rel: str): str:
+    croot := filepath.Clean(root)
+    joined := filepath.Join(croot, rel)
+    cleaned := filepath.Clean(joined)
+    if croot == ".":
+        if cleaned == ".": ret cleaned end
+        if cleaned == "..": ret "" end
+        if str.StartsWith(cleaned, "../"): ret "" end
+        if filepath.IsAbs(cleaned): ret "" end
+        ret cleaned
+    end
+    if cleaned == croot: ret cleaned end
+    if str.StartsWith(cleaned, croot.concat("/")): ret cleaned end
+    ret ""
+end
+
+// Renders a simple "Index of <path>" directory listing, like a plain dev
+// HTTP file server. Entries are shown alphabetically, directories first,
+// with a ".." link when not already at the served root.
+func _dir_listing_html(url_path: str, disk_path: str): str:
+    names := os.ListDir(disk_path)
+    defer names.free()
+    mut dirs := Vector {} as Vector<str>
+    defer dirs.free()
+    mut files := Vector {} as Vector<str>
+    defer files.free()
+    repeat names.len() with i:
+        name := names.get(i)[0]
+        if os.IsDir(filepath.Join(disk_path, name)):
+            dirs.push(name)
+        else:
+            files.push(name)
+        end
+    end
+    _insertion_sort_strs(dirs)
+    _insertion_sort_strs(files)
+    mut rows := str.NewBuilder()
+    defer str.BufFree(rows)
+    if url_path != "/":
+        str.BufAppend(rows, "<li><a href=\"../\">../</a></li>\n")
+    end
+    repeat dirs.len() with i:
+        name := dirs.get(i)[0]
+        href := encoding.URLEncode(name)
+        str.BufAppend(rows, `<li><a href="`)
+        str.BufAppend(rows, href)
+        str.BufAppend(rows, `/">`)
+        str.BufAppend(rows, _html_escape(name))
+        str.BufAppend(rows, "/</a></li>\n")
+    end
+    repeat files.len() with i:
+        name := files.get(i)[0]
+        href := encoding.URLEncode(name)
+        str.BufAppend(rows, `<li><a href="`)
+        str.BufAppend(rows, href)
+        str.BufAppend(rows, `">`)
+        str.BufAppend(rows, _html_escape(name))
+        str.BufAppend(rows, "</a></li>\n")
+    end
+    title := _html_escape(url_path)
+    mut out := "<!doctype html>\n<html><head><meta charset=\"utf-8\"><title>Index of "
+    out = out.concat(title)
+    out = out.concat("</title></head><body>\n<h1>Index of ")
+    out = out.concat(title)
+    out = out.concat("</h1>\n<ul>\n")
+    out = out.concat(str.BufStr(rows))
+    out = out.concat("</ul>\n</body></html>\n")
+    ret out
+end
+
+// Tiny in-place insertion sort local to this package, to avoid pulling in
+// a cross-package generic Vector<str> instantiation for a handful of
+// directory entries.
+func _insertion_sort_strs(v &: Vector<str>):
+    n := v.len()
+    repeat n with i:
+        mut j := i
+        // `until COND: ...` loops WHILE COND holds (see e.g. _parse_http's
+        // "until pos < req.len()"), not "until COND becomes true" - the
+        // condition here is deliberately the keep-shifting condition
+        // (in-bounds AND out of order), not a stop condition.
+        until j > 0 && v.get(j - 1)[0] > v.get(j)[0]:
+            a := v.get(j - 1)[0]
+            b := v.get(j)[0]
+            v.set(j - 1, b)
+            v.set(j, a)
+            j -= 1
+        end
+    end
+end
+
+func _log_access(method: str, path: str, status: int):
+    if _access_log == false: ret end
+    println method, path, "->", status
+end
+
+// Shared by both the plain and TLS handlers: parses the request, runs
+// static-file/router dispatch, and returns the fully-serialized response
+// (or "" when the static-file branch already streamed its own response
+// straight to the transport and there is nothing left to send).
+func _handle_request(fd: i64, req: str): str:
+    if req.len() == 0: ret "" end
+    ctx := salam_ctx_new(fd)
+    defer salam_ctx_free(ctx)
+    _parse_http(ctx, req)
+    r := _current_router
+    hide := _hide_tokens
+    shdr := _server_header(hide)
+    mut static_handled := false
+    if r.has_static:
+        prefix := r.static_prefix
+        path := salam_ctx_get(ctx, 1)
+        if path.len() >= prefix.len() && path.substr(0, prefix.len()) == prefix:
+            rel := UrlDecode(path.substr(prefix.len(), path.len() - prefix.len()))
+            target := _safe_static_path(r.static_dir, rel)
+            if target.len() > 0:
+                if os.IsDir(target):
+                    idx := filepath.Join(target, "index.html")
+                    if os.Exists(idx) && os.IsDir(idx) == false:
+                        if _send_file(fd, idx, mime.MimeType(idx), shdr) == 1:
+                            _ctx_mark_sent(ctx)
+                            static_handled = true
+                        end
+                    else r.static_listing:
+                        salam_ctx_set_status(ctx, 200)
+                        salam_ctx_set(ctx, 4, "text/html; charset=utf-8")
+                        salam_ctx_set(ctx, 5, _dir_listing_html(path, target))
+                        static_handled = true
+                    end
+                else os.Exists(target):
+                    if _send_file(fd, target, mime.MimeType(target), shdr) == 1:
+                        _ctx_mark_sent(ctx)
+                        static_handled = true
+                    end
+                end
+            end
+        end
+    end
+    if static_handled == false:
+        dispatched := _dispatch(r, ctx)
+        if dispatched == false:
+            salam_ctx_set_status(ctx, 404)
+            salam_ctx_set(ctx, 4, "text/plain; charset=utf-8")
+            salam_ctx_set(ctx, 5, "404 Not Found")
+        end
+    end
+    _log_access(salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_get_status(ctx))
+    if salam_ctx_is_sent(ctx) != 0: ret "" end
+    ret _build_response(ctx, hide)
+end
+
+func _web_conn_handler(fd: i64):
+    req := _net_recv_req(fd)
+    resp := _handle_request(fd, req)
+    if resp.len() > 0:
+        _net_send_all(fd, resp)
+    end
+    _net_close(fd)
+end
+
+// TLS variant of the connection handler: wraps the accepted fd in a
+// server-side TLS 1.3 handshake (std/tls.WrapServer) before doing
+// anything else, then reads/writes through the tls.Conn instead of the
+// raw fd. Static files are read fully into memory and sent in one
+// tls.Write rather than streamed in fixed chunks over the raw fd - TLS
+// already segments its own records, so the streaming optimization
+// _send_file relies on for plain connections doesn't carry the same
+// value here, and doing it this way avoids a second chunked-file-over-
+// TLS code path for what is, on the TLS listener, presumably a much
+// smaller fraction of traffic than dynamic API responses.
+//
+// This duplicates _handle_request's static/dispatch decision tree
+// rather than sharing it, because the static-file branch needs a
+// different low-level write primitive (tls.Write vs the raw fd) at the
+// exact point the decision is made - a real DRY gap, not an oversight;
+// factoring it out cleanly needs the static-file decision separated
+// from the static-file I/O, which is a slightly bigger refactor than
+// this pass covers. Keep both branches in sync by hand until then.
+func _web_tls_conn_handler(fd: i64):
+    mut c := tls.WrapServer(fd, _current_tls_cfg)
+    if !tls.ConnOk(c):
+        tls.Close(c)
+        ret
+    end
+    req := tls.Read(c, 32768)
+    if req.len() == 0:
+        tls.Close(c)
+        ret
+    end
+    ctx := salam_ctx_new(fd)
+    defer salam_ctx_free(ctx)
+    _parse_http(ctx, req)
+    r := _current_router
+    hide := _hide_tokens
+    shdr := _server_header(hide)
+    mut static_handled := false
+    if r.has_static:
+        prefix := r.static_prefix
+        path := salam_ctx_get(ctx, 1)
+        if path.len() >= prefix.len() && path.substr(0, prefix.len()) == prefix:
+            rel := UrlDecode(path.substr(prefix.len(), path.len() - prefix.len()))
+            target := _safe_static_path(r.static_dir, rel)
+            if target.len() > 0:
+                if os.IsDir(target):
+                    idx := filepath.Join(target, "index.html")
+                    if os.Exists(idx) && os.IsDir(idx) == false:
+                        _tls_send_file(c, idx, mime.MimeType(idx), shdr)
+                        _ctx_mark_sent(ctx)
+                        static_handled = true
+                    else r.static_listing:
+                        salam_ctx_set_status(ctx, 200)
+                        salam_ctx_set(ctx, 4, "text/html; charset=utf-8")
+                        salam_ctx_set(ctx, 5, _dir_listing_html(path, target))
+                        static_handled = true
+                    end
+                else os.Exists(target):
+                    _tls_send_file(c, target, mime.MimeType(target), shdr)
+                    _ctx_mark_sent(ctx)
+                    static_handled = true
+                end
+            end
+        end
+    end
+    if static_handled == false:
+        dispatched := _dispatch(r, ctx)
+        if dispatched == false:
+            salam_ctx_set_status(ctx, 404)
+            salam_ctx_set(ctx, 4, "text/plain; charset=utf-8")
+            salam_ctx_set(ctx, 5, "404 Not Found")
+        end
+    end
+    _log_access(salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_get_status(ctx))
+    if salam_ctx_is_sent(ctx) == 0:
+        resp := _build_response(ctx, hide)
+        tls.Write(c, resp)
+    end
+    tls.Close(c)
+end
+
+func _tls_send_file(c &: tls.Conn, path: str, ct: str, server_hdr: str):
+    f := fopen(path, "rb")
+    if f == null: ret end
+    fseek(f, 0, 2)
+    sz := ftell(f) as i64
+    fseek(f, 0, 0)
+    if sz < 0:
+        fclose(f)
+        ret
+    end
+    mut hdr := "HTTP/1.1 200 OK\r\nContent-Length: "
+    hdr = hdr.concat(conv.FormatInt(sz))
+    hdr = hdr.concat("\r\nContent-Type: ")
+    hdr = hdr.concat(ct)
+    hdr = hdr.concat("\r\nConnection: close\r\nServer: ")
+    hdr = hdr.concat(server_hdr)
+    hdr = hdr.concat("\r\n\r\n")
+    tls.Write(c, hdr)
+    buf := mem.Allocate((sz + 1) as u64)
+    defer mem.Free(buf)
+    got := fread(buf, 1 as u64, sz as u64, f)
+    fclose(f)
+    if got > (0 as u64):
+        tls.WriteBytes(c, buf, got as int)
+    end
+end

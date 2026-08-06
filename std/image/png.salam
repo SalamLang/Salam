@@ -1,0 +1,485 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import compress
+import archive
+import mem
+
+// PNG (RFC 2083 / ISO 15948): chunked container + zlib-compressed,
+// per-row-filtered scanlines. Built entirely on std/compress's real RFC
+// 1950/1951 primitives (RawDeflate/RawInflate for the DEFLATE stream,
+// CRC32 for chunk integrity, Adler32 for the zlib trailer) - PNG's own
+// wire format needs nothing else, so there is no format-specific
+// compression code here, only chunk/filter framing around those.
+//
+// Supported: 8-bit depth, non-interlaced, color types 0/2/3/4/6
+// (grayscale, RGB, palette [+ tRNS alpha], grayscale+alpha, RGBA) for
+// decode; encode always writes 8-bit RGBA (color type 6), the one
+// representation every PNG reader accepts unconditionally. Encoding
+// chooses the best of the 5 standard filter types (None/Sub/Up/Average/
+// Paeth) per row by minimizing the sum of absolute filtered-byte values -
+// the same practical heuristic libpng's "minimum sum of absolute
+// differences" heuristic uses - rather than always emitting the simplest
+// (None), so real files come out meaningfully smaller.
+//
+// NOT supported: 16-bit depth, Adam7 interlacing, non-IDAT ancillary
+// chunks (EXIF/text - see this package's header comment on metadata: not
+// reading them also means never writing them, i.e. "strip metadata" is
+// the only mode). All are reported via `ok = false` on decode, never
+// silently misread.
+
+const _CT_IHDR := (73 << 24) | (72 << 16) | (68 << 8) | 82
+const _CT_PLTE := (80 << 24) | (76 << 16) | (84 << 8) | 69
+const _CT_TRNS := (116 << 24) | (82 << 16) | (78 << 8) | 83
+const _CT_IDAT := (73 << 24) | (68 << 16) | (65 << 8) | 84
+const _CT_IEND := (73 << 24) | (69 << 16) | (78 << 8) | 68
+
+func _be_get32(p: void*, off: int): int:
+    bp := p as u8*
+    ret ((bp[off] as int) << 24) | ((bp[off + 1] as int) << 16) | ((bp[off + 2] as int) << 8) | (bp[off + 3] as int)
+end
+
+func _paeth(a: int, b: int, c: int): int:
+    p := a + b - c
+    mut pa := p - a
+    if pa < 0: pa = -pa end
+    mut pb := p - b
+    if pb < 0: pb = -pb end
+    mut pc := p - c
+    if pc < 0: pc = -pc end
+    if pa <= pb && pa <= pc: ret a end
+    if pb <= pc: ret b end
+    ret c
+end
+
+func _abs_signed_byte(v: int): int:
+    b := v & 255
+    if b >= 128: ret 256 - b end
+    ret b
+end
+
+func _write_chunk(out &: compress.ByteBuf, type_tag: int, data: void*, data_len: int):
+    compress.BufPushU32(out, data_len)
+    start := out.len
+    compress.BufPush(out, (type_tag >> 24) & 255)
+    compress.BufPush(out, (type_tag >> 16) & 255)
+    compress.BufPush(out, (type_tag >> 8) & 255)
+    compress.BufPush(out, type_tag & 255)
+    if data_len > 0:
+        compress.BufPushBytes(out, data, data_len)
+    end
+    body := ((out.data as i64) + (start as i64)) as void*
+    crc := compress.CRC32(body, 4 + data_len)
+    compress.BufPushU32(out, crc as int)
+end
+
+// zlib (RFC 1950): a 2-byte header, the raw DEFLATE stream, then a
+// big-endian Adler-32 of the uncompressed bytes. 0x78 0x9C is the
+// standard "deflate, default compression, no preset dictionary" header
+// zlib itself emits - any valid CMF/FLG pair works for a decoder, so this
+// fixed pair is simplest to both write and recognize.
+func _zlib_wrap(raw: void*, raw_len: int): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    compress.BufPush(out, 0x78)
+    compress.BufPush(out, 0x9C)
+    deflated := compress.RawDeflate(raw, raw_len)
+    compress.BufPushBuf(out, deflated)
+    compress.BufFree(deflated)
+    adler := compress.Adler32(raw, raw_len)
+    compress.BufPushU32(out, adler as int)
+    ret out
+end
+
+func _zlib_unwrap(p: void*, n: int, expected_size: int, ok &: bool): compress.ByteBuf:
+    ok = false
+    if n < 6:
+        ret compress.NewByteBuf()
+    end
+    bp := p as u8*
+    cmf := bp[0] as int
+    if (cmf & 15) != 8:
+        ret compress.NewByteBuf()
+    end
+    body := ((p as i64) + 2) as void*
+    body_len := n - 6
+    mut inflate_ok := false
+    out := compress.RawInflate(body, body_len, expected_size, inflate_ok)
+    if !inflate_ok:
+        ret out
+    end
+    ok = true
+    ret out
+end
+
+func _channels_for(color_type: int): int:
+    if color_type == 0: ret 1 end
+    if color_type == 2: ret 3 end
+    if color_type == 3: ret 1 end
+    if color_type == 4: ret 2 end
+    if color_type == 6: ret 4 end
+    ret 0
+end
+
+// Reverses PNG's per-scanline filtering in place, producing the raw
+// (unfiltered) width*bpp bytes per row. `raw` is the inflated IDAT stream:
+// height rows of (1 filter-type byte + stride bytes).
+func _unfilter(raw: compress.ByteBuf, width: int, height: int, bpp: int, out: void*):
+    stride := width * bpp
+    op := out as u8*
+    mut y := 0
+    until y < height:
+        row_start := y * (1 + stride)
+        ftype := compress.BufGet(raw, row_start)
+        out_row := y * stride
+        prev_row := out_row - stride
+        mut i := 0
+        until i < stride:
+            x := compress.BufGet(raw, row_start + 1 + i)
+            mut a := 0
+            if i >= bpp: a = op[out_row + i - bpp] as int end
+            mut b := 0
+            if y > 0: b = op[prev_row + i] as int end
+            mut c := 0
+            if y > 0 && i >= bpp: c = op[prev_row + i - bpp] as int end
+
+            mut recon := x
+            if ftype == 1: recon = x + a end
+            if ftype == 2: recon = x + b end
+            if ftype == 3: recon = x + (a + b) / 2 end
+            if ftype == 4: recon = x + _paeth(a, b, c) end
+            op[out_row + i] = (recon & 255) as u8
+            i += 1
+        end
+        y += 1
+    end
+end
+
+@en "EncodePNG"
+@fa "کدگذاری پی‌ان‌جی"
+@ar "ترميز بي إن جي"
+pub func EncodePNG(img: Image): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    compress.BufPush(out, 137)
+    compress.BufPush(out, 80)
+    compress.BufPush(out, 78)
+    compress.BufPush(out, 71)
+    compress.BufPush(out, 13)
+    compress.BufPush(out, 10)
+    compress.BufPush(out, 26)
+    compress.BufPush(out, 10)
+
+    w := img.width
+    h := img.height
+
+    mut ihdr := compress.NewByteBuf()
+    compress.BufPushU32(ihdr, w)
+    compress.BufPushU32(ihdr, h)
+    compress.BufPush(ihdr, 8)
+    compress.BufPush(ihdr, 6)
+    compress.BufPush(ihdr, 0)
+    compress.BufPush(ihdr, 0)
+    compress.BufPush(ihdr, 0)
+    _write_chunk(out, _CT_IHDR, ihdr.data, ihdr.len)
+    compress.BufFree(ihdr)
+
+    stride := w * 4
+    raw_len := (h * (1 + stride)) as u64
+    raw := mem.AllocateZeroed(raw_len)
+    rp := raw as u8*
+
+    mut cur := mem.AllocateZeroed(stride as u64)
+    mut prev := mem.AllocateZeroed(stride as u64)
+    mut cp := cur as u8*
+    mut pp := prev as u8*
+    cand := mem.AllocateZeroed(stride as u64)
+    candp := cand as u8*
+
+    mut y := 0
+    until y < h:
+        mut x := 0
+        until x < w:
+            c := GetPixel(img, x, y)
+            off := x * 4
+            cp[off] = c.r
+            cp[off + 1] = c.g
+            cp[off + 2] = c.b
+            cp[off + 3] = c.a
+            x += 1
+        end
+
+        mut best_type := 0
+        mut best_score := -1
+        mut ftype := 0
+        until ftype <= 4:
+            mut score := 0
+            mut i := 0
+            until i < stride:
+                xv := cp[i] as int
+                mut a := 0
+                if i >= 4: a = cp[i - 4] as int end
+                b := pp[i] as int
+                mut c2 := 0
+                if i >= 4: c2 = pp[i - 4] as int end
+                mut fv := xv
+                if ftype == 1: fv = xv - a end
+                if ftype == 2: fv = xv - b end
+                if ftype == 3: fv = xv - (a + b) / 2 end
+                if ftype == 4: fv = xv - _paeth(a, b, c2) end
+                score += _abs_signed_byte(fv)
+                i += 1
+            end
+            if best_score < 0 || score < best_score:
+                best_score = score
+                best_type = ftype
+            end
+            ftype += 1
+        end
+
+        mut i := 0
+        until i < stride:
+            xv := cp[i] as int
+            mut a := 0
+            if i >= 4: a = cp[i - 4] as int end
+            b := pp[i] as int
+            mut c2 := 0
+            if i >= 4: c2 = pp[i - 4] as int end
+            mut fv := xv
+            if best_type == 1: fv = xv - a end
+            if best_type == 2: fv = xv - b end
+            if best_type == 3: fv = xv - (a + b) / 2 end
+            if best_type == 4: fv = xv - _paeth(a, b, c2) end
+            candp[i] = (fv & 255) as u8
+            i += 1
+        end
+
+        row_start := y * (1 + stride)
+        rp[row_start] = (best_type & 255) as u8
+        mem.Copy(((raw as i64) + ((row_start + 1) as i64)) as void*, cand, stride as u64)
+
+        tmp := prev
+        prev = cur
+        cur = tmp
+        pp = prev as u8*
+        cp = cur as u8*
+        y += 1
+    end
+    mem.Free(cur)
+    mem.Free(prev)
+    mem.Free(cand)
+
+    zdata := _zlib_wrap(raw, raw_len as int)
+    mem.Free(raw)
+    _write_chunk(out, _CT_IDAT, zdata.data, zdata.len)
+    compress.BufFree(zdata)
+
+    _write_chunk(out, _CT_IEND, null, 0)
+    ret out
+end
+
+@en "SavePNG"
+@fa "ذخیره پی‌ان‌جی"
+@ar "حفظ بي إن جي"
+pub func SavePNG(img: Image, path: str): bool:
+    buf := EncodePNG(img)
+    ok := archive.WriteBinaryFileBuf(path, buf)
+    compress.BufFree(buf)
+    ret ok
+end
+
+@en "DecodePNG"
+@fa "کدگشایی پی‌ان‌جی"
+@ar "فك ترميز بي إن جي"
+pub func DecodePNG(p: void*, n: int, ok &: bool): Image:
+    ok = false
+    if n < 8:
+        ret New(0, 0)
+    end
+    bp := p as u8*
+    if (bp[0] as int) != 137 || (bp[1] as int) != 80 || (bp[2] as int) != 78 || (bp[3] as int) != 71:
+        ret New(0, 0)
+    end
+
+    mut width := 0
+    mut height := 0
+    mut bit_depth := 0
+    mut color_type := -1
+    mut have_ihdr := false
+    mut idat := compress.NewByteBuf()
+    mut palette := compress.NewByteBuf()
+    mut trns := compress.NewByteBuf()
+
+    mut pos := 8
+    mut fatal := false
+    until pos + 12 <= n && !fatal:
+        chunk_len := _be_get32(p, pos)
+        if chunk_len < 0 || pos + 12 + chunk_len > n:
+            fatal = true
+            break
+        end
+        chunk_type := _be_get32(p, pos + 4)
+        data_off := pos + 8
+        chunk_body := ((p as i64) + ((data_off - 4) as i64)) as void*
+        expected_crc := _be_get32(p, data_off + chunk_len) as u32
+        actual_crc := compress.CRC32(chunk_body, 4 + chunk_len)
+        if actual_crc != expected_crc:
+            fatal = true
+            break
+        end
+
+        if chunk_type == _CT_IHDR:
+            if chunk_len < 13:
+                fatal = true
+                break
+            end
+            width = _be_get32(p, data_off)
+            height = _be_get32(p, data_off + 4)
+            bit_depth = bp[data_off + 8] as int
+            color_type = bp[data_off + 9] as int
+            interlace := bp[data_off + 12] as int
+            if width <= 0 || height <= 0 || bit_depth != 8 || interlace != 0:
+                fatal = true
+                break
+            end
+            if _channels_for(color_type) == 0:
+                fatal = true
+                break
+            end
+            have_ihdr = true
+        end
+        if chunk_type == _CT_PLTE:
+            src := ((p as i64) + (data_off as i64)) as void*
+            compress.BufPushBytes(palette, src, chunk_len)
+        end
+        if chunk_type == _CT_TRNS:
+            src := ((p as i64) + (data_off as i64)) as void*
+            compress.BufPushBytes(trns, src, chunk_len)
+        end
+        if chunk_type == _CT_IDAT:
+            src := ((p as i64) + (data_off as i64)) as void*
+            compress.BufPushBytes(idat, src, chunk_len)
+        end
+        if chunk_type == _CT_IEND:
+            pos = n
+            break
+        end
+        pos = data_off + chunk_len + 4
+    end
+
+    if !have_ihdr || fatal:
+        compress.BufFree(idat)
+        compress.BufFree(palette)
+        compress.BufFree(trns)
+        ret New(0, 0)
+    end
+
+    channels := _channels_for(color_type)
+    stride := width * channels
+    expected_raw := height * (1 + stride)
+
+    mut inflate_ok := false
+    inflated := _zlib_unwrap(idat.data, idat.len, expected_raw, inflate_ok)
+    compress.BufFree(idat)
+    if !inflate_ok || inflated.len < expected_raw:
+        compress.BufFree(inflated)
+        compress.BufFree(palette)
+        compress.BufFree(trns)
+        ret New(0, 0)
+    end
+
+    raw_size := (width * height * channels) as u64
+    raw := mem.AllocateZeroed(raw_size)
+    _unfilter(inflated, width, height, channels, raw)
+    compress.BufFree(inflated)
+    rp := raw as u8*
+
+    out := New(width, height)
+    mut y := 0
+    until y < height:
+        mut x := 0
+        until x < width:
+            row_off := y * stride
+            off := row_off + x * channels
+            mut r := 0
+            mut g := 0
+            mut b := 0
+            mut a := 255
+            if color_type == 0:
+                v := rp[off] as int
+                r = v
+                g = v
+                b = v
+            end
+            if color_type == 2:
+                r = rp[off] as int
+                g = rp[off + 1] as int
+                b = rp[off + 2] as int
+            end
+            if color_type == 3:
+                idx := rp[off] as int
+                mut pr := 0
+                mut pg := 0
+                mut pb := 0
+                if idx * 3 + 2 < palette.len:
+                    pr = compress.BufGet(palette, idx * 3)
+                    pg = compress.BufGet(palette, idx * 3 + 1)
+                    pb = compress.BufGet(palette, idx * 3 + 2)
+                end
+                r = pr
+                g = pg
+                b = pb
+                if idx < trns.len:
+                    a = compress.BufGet(trns, idx)
+                end
+            end
+            if color_type == 4:
+                v := rp[off] as int
+                r = v
+                g = v
+                b = v
+                a = rp[off + 1] as int
+            end
+            if color_type == 6:
+                r = rp[off] as int
+                g = rp[off + 1] as int
+                b = rp[off + 2] as int
+                a = rp[off + 3] as int
+            end
+            SetPixel(out, x, y, RGBA(r, g, b, a))
+            x += 1
+        end
+        y += 1
+    end
+    mem.Free(raw)
+    compress.BufFree(palette)
+    compress.BufFree(trns)
+    ok = true
+    ret out
+end
+
+@en "OpenPNG"
+@fa "بازکردن پی‌ان‌جی"
+@ar "افتح بي إن جي"
+pub func OpenPNG(path: str, ok &: bool): Image:
+    mut read_ok := false
+    buf := archive.ReadBinaryFile(path, read_ok)
+    if !read_ok:
+        ok = false
+        ret New(0, 0)
+    end
+    out := DecodePNG(buf.data, buf.len, ok)
+    compress.BufFree(buf)
+    ret out
+end

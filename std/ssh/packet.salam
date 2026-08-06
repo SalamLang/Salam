@@ -1,0 +1,253 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import net.internal.rawsock
+import crypto
+
+// The SSH binary packet protocol (RFC 4253 6): length-prefixed, padded
+// packets, each authenticated once encryption is active. One PacketState
+// per direction's worth of cipher/MAC state, but a single struct here since
+// a connection always activates both directions together at NEWKEYS.
+//
+//   uint32 packet_length   (bytes following, i.e. everything but this field
+//                            and the MAC - NOT including padding_length's
+//                            own byte... it IS included: packet_length
+//                            counts padding_length + payload + padding)
+//   byte   padding_length
+//   byte[] payload
+//   byte[] random padding  (4..255 bytes, keeps total length block-aligned)
+//   byte[] mac             (only once a MAC is negotiated, i.e. after NEWKEYS)
+//
+// aes*-ctr encrypts the packet_length field too (RFC 4253 6: "the
+// 'packet_length' field is also encrypted" for non-AEAD ciphers), so
+// _packet_recv decrypts one cipher block first (enough to learn the
+// length) before it knows how many more bytes to read.
+//
+// The MAC covers the sequence number prepended to the PLAINTEXT packet
+// (RFC 4253 6.4) - both peers count every packet each direction has ever
+// sent, starting at 0, wrapping mod 2^32; the count is never reset (this
+// package does not rekey, so it never needs to be).
+
+struct PacketState:
+    pub sock: rawsock.Socket = rawsock.Socket {}
+    pub seq_read: u32 = 0 as u32
+    pub seq_write: u32 = 0 as u32
+    pub encrypted: bool = false
+    pub cipher_read: Aes = Aes {}
+    pub cipher_write: Aes = Aes {}
+    pub counter_read: Buf = Buf {}
+    pub counter_write: Buf = Buf {}
+    pub mac_kind_read: int = 0
+    pub mac_kind_write: int = 0
+    pub mac_key_read: Buf = Buf {}
+    pub mac_key_write: Buf = Buf {}
+    pub block_size_read: int = 8
+    pub block_size_write: int = 8
+    pub ok: bool = true
+end
+
+func _packet_state_new(sock: rawsock.Socket): PacketState:
+    mut ps := PacketState {}
+    ps.sock = sock
+    ps.seq_read = 0 as u32
+    ps.seq_write = 0 as u32
+    ps.encrypted = false
+    ps.block_size_read = 8
+    ps.block_size_write = 8
+    ps.ok = true
+    ret ps
+end
+
+func _packet_state_free(ps &: PacketState):
+    WipeBuf(ps.counter_read)
+    WipeBuf(ps.counter_write)
+    WipeBuf(ps.mac_key_read)
+    WipeBuf(ps.mac_key_write)
+end
+
+func _read_exact(sock: rawsock.Socket, buf: void*, n: int): bool:
+    mut got := 0
+    until got < n:
+        r := rawsock.RecvBytes(sock, (buf as i64 + got) as void*, n - got)
+        if r <= 0:
+            ret false
+        end
+        got += r
+    end
+    ret true
+end
+
+func _packet_mac_compute(kind: int, key: Buf, seq: u32, plaintext: Buf, out: void*):
+    mut m := NewBuf(4 + plaintext.len)
+    BufPutUint32(m, seq)
+    BufPutBuf(m, plaintext)
+    _hmac(kind, key.p, key.len, m.p, m.len, out)
+    FreeBuf(m)
+end
+
+// Frames, encrypts (if active) and sends one payload as an SSH packet.
+func _packet_send(ps &: PacketState, payload: Buf): bool:
+    bs := ps.block_size_write
+    mut padlen := bs - ((5 + payload.len) % bs)
+    if padlen < 4:
+        padlen += bs
+    end
+    packet_len := 1 + payload.len + padlen
+
+    mut pkt := NewBuf(4 + packet_len)
+    BufPutUint32(pkt, packet_len as u32)
+    BufPutByte(pkt, padlen)
+    BufPutBuf(pkt, payload)
+    mut padbytes := NewBuf(padlen)
+    BufPutZeros(padbytes, padlen)
+    crypto.RandomBytes(padbytes.p, padlen)
+    BufPutBuf(pkt, padbytes)
+    FreeBuf(padbytes)
+
+    mlen := ps.encrypted ? _mac_size(ps.mac_kind_write) : 0
+    mut mac := NewBuf(1)
+    if ps.encrypted:
+        FreeBuf(mac)
+        mac = NewBuf(mlen)
+        BufPutZeros(mac, mlen)
+        _packet_mac_compute(ps.mac_kind_write, ps.mac_key_write, ps.seq_write, pkt, mac.p)
+    end
+
+    mut wire := NewBuf(pkt.len + mlen)
+    if ps.encrypted:
+        mut enc := NewBuf(pkt.len)
+        BufPutZeros(enc, pkt.len)
+        _aes_ctr_xor(ps.cipher_write, ps.counter_write, pkt.p, pkt.len, enc.p)
+        BufPutBuf(wire, enc)
+        FreeBuf(enc)
+    else:
+        BufPutBuf(wire, pkt)
+    end
+    BufPutBuf(wire, mac)
+
+    sent := rawsock.SendBytes(ps.sock, wire.p, wire.len)
+    ok := sent == wire.len
+    FreeBuf(pkt)
+    FreeBuf(mac)
+    FreeBuf(wire)
+    if ok:
+        ps.seq_write = ps.seq_write + (1 as u32)
+    end
+    ret ok
+end
+
+// Reads, decrypts and authenticates one SSH packet, returning its payload.
+// The returned Buf's .bad is true on any read/decrypt/MAC failure - the
+// connection must be torn down at that point, never retried, since a failed
+// MAC (or a desynced cipher stream) means every subsequent byte on this
+// connection is unrecoverable.
+func _packet_recv(ps &: PacketState): Buf:
+    bs := ps.block_size_read
+    mut first := NewBuf(bs)
+    BufPutZeros(first, bs)
+    if !_read_exact(ps.sock, first.p, bs):
+        FreeBuf(first)
+        mut bad := NewBuf(1)
+        bad.bad = true
+        ret bad
+    end
+    mut plain := NewBuf(bs)
+    BufPutZeros(plain, bs)
+    if ps.encrypted:
+        _aes_ctr_xor(ps.cipher_read, ps.counter_read, first.p, bs, plain.p)
+    else:
+        plain.len = 0
+        BufPutBytes(plain, first.p, bs)
+    end
+    FreeBuf(first)
+
+    mut plr := ReaderFromBuf(plain)
+    packet_len := RGetUint32(plr) as int
+    if plr.bad || packet_len < 1 || packet_len > 262144:
+        FreeBuf(plain)
+        mut bad := NewBuf(1)
+        bad.bad = true
+        ret bad
+    end
+
+    total_needed := 4 + packet_len
+    mut full := NewBuf(total_needed)
+    BufPutBuf(full, plain)
+    FreeBuf(plain)
+
+    remaining := total_needed - bs
+    if remaining > 0:
+        mut rest_enc := NewBuf(remaining)
+        BufPutZeros(rest_enc, remaining)
+        if !_read_exact(ps.sock, rest_enc.p, remaining):
+            FreeBuf(rest_enc)
+            FreeBuf(full)
+            mut bad := NewBuf(1)
+            bad.bad = true
+            ret bad
+        end
+        mut rest_plain := NewBuf(remaining)
+        BufPutZeros(rest_plain, remaining)
+        if ps.encrypted:
+            _aes_ctr_xor(ps.cipher_read, ps.counter_read, rest_enc.p, remaining, rest_plain.p)
+        else:
+            rest_plain.len = 0
+            BufPutBytes(rest_plain, rest_enc.p, remaining)
+        end
+        BufPutBytes(full, rest_plain.p, remaining)
+        FreeBuf(rest_enc)
+        FreeBuf(rest_plain)
+    end
+
+    if ps.encrypted:
+        mlen := _mac_size(ps.mac_kind_read)
+        mut got_mac := NewBuf(mlen)
+        BufPutZeros(got_mac, mlen)
+        if !_read_exact(ps.sock, got_mac.p, mlen):
+            FreeBuf(got_mac)
+            FreeBuf(full)
+            mut bad := NewBuf(1)
+            bad.bad = true
+            ret bad
+        end
+        mut want_mac := NewBuf(mlen)
+        BufPutZeros(want_mac, mlen)
+        _packet_mac_compute(ps.mac_kind_read, ps.mac_key_read, ps.seq_read, full, want_mac.p)
+        mac_ok := ConstantTimeEqual(got_mac.p, want_mac.p, mlen)
+        FreeBuf(got_mac)
+        FreeBuf(want_mac)
+        if !mac_ok:
+            FreeBuf(full)
+            mut bad := NewBuf(1)
+            bad.bad = true
+            ret bad
+        end
+    end
+
+    padding_len := _bget(full.p, 4)
+    payload_len := packet_len - padding_len - 1
+    if payload_len < 0 || 5 + payload_len > full.len:
+        FreeBuf(full)
+        mut bad := NewBuf(1)
+        bad.bad = true
+        ret bad
+    end
+    mut payload := NewBuf(payload_len)
+    BufPutBytes(payload, (full.p as i64 + 5) as void*, payload_len)
+    FreeBuf(full)
+    ps.seq_read = ps.seq_read + (1 as u32)
+    ret payload
+end

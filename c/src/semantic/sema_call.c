@@ -375,6 +375,31 @@ type_t *check_call(sema_t *s, ast_node_t *n)
         const char *nm = callee->name;
         if (strcmp(nm, "print") == 0 || strcmp(nm, "println") == 0 ||
             strcmp(nm, "printerr") == 0 || strcmp(nm, "printerrln") == 0) {
+            {
+                size_t i = 0;
+                for (; i < argtypes.len; i++) {
+                    type_t *at = (type_t *)argtypes.data[i];
+                    if (!at) continue;
+                    switch (at->kind) {
+                    case TY_ARRAY:
+                    case TY_STRUCT:
+                    case TY_MAP:
+                    case TY_MAP_ITER:
+                    case TY_VEC:
+                    case TY_FILE:
+                    case TY_FUNC:
+                    case TY_SLICE:
+                    case TY_VARIANT:
+                        SERR(s, 2, &n->span,
+                             "cannot print value of type '%s' directly - print its "
+                             "elements or fields instead",
+                             type_to_string(s->tc, at));
+                        break;
+                    default:
+                        break;
+                    }
+                }
+            }
             decorate(s, callee, ty(s, TY_VOID));
             return decorate(s, n, ty(s, TY_VOID));
         }

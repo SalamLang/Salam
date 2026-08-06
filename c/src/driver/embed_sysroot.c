@@ -20,10 +20,13 @@
 #include <sys/stat.h>
 #if defined(_WIN32)
 #  include <direct.h>
+#  include <process.h>
 #  define salam_mkdir(p) _mkdir(p)
+#  define salam_getpid() _getpid()
 #else
 #  include <unistd.h>
 #  define salam_mkdir(p) mkdir((p), 0755)
+#  define salam_getpid() getpid()
 #endif
 
 static int path_exists(const char *p)
@@ -168,14 +171,43 @@ int salam_materialize_sysroot(const char *name, const unsigned char *tar, size_t
                  (unsigned long)tar_len);
     sal_snprintf(marker, sizeof marker, "%s/.salam-ok", out);
     if (path_exists(marker)) return 1;
-    if (mkdir_p(out) != 0) return 0;
-    if (untar(tar, tar_len, out) != 0) return 0;
+
+    /* Cold cache: another `salam build` process may be materializing the
+     * same sysroot at the same moment - this runs once per invocation,
+     * and a parallel test-suite worker pool routinely launches many
+     * builds at once against a shared, initially-empty cache dir.
+     * Extracting straight into `out` let two such processes' fopen(...,
+     * "wb") calls on the same destination files race each other,
+     * producing a truncated/corrupted extraction for whichever one lost
+     * (observed as `-lsqlite3` failing to link, sporadically, only under
+     * `run-tests.sh`'s parallel dispatch - never in a single serial
+     * build). Extracting into a private, PID-suffixed staging directory
+     * first and renaming it into place avoids that: concurrent
+     * extractions never touch the same file, and the rename is the only
+     * point of contention, which is atomic (or simply fails, handled
+     * below) rather than interleavable. */
+    char staging[1200];
+    sal_snprintf(staging, sizeof staging, "%s.tmp.%ld", out, (long)salam_getpid());
+    if (mkdir_p(staging) != 0) return 0;
+    if (untar(tar, tar_len, staging) != 0) return 0;
     {
-        FILE *f = fopen(marker, "wb");
+        char stage_marker[1200];
+        sal_snprintf(stage_marker, sizeof stage_marker, "%s/.salam-ok", staging);
+        FILE *f = fopen(stage_marker, "wb");
         if (f) {
             fputs("ok\n", f);
             fclose(f);
         }
+    }
+    if (rename(staging, out) != 0) {
+        /* Lost the race to another process (Windows' rename() fails
+         * outright when the destination already exists, unlike POSIX's
+         * atomic replace) - if a complete extraction is already sitting
+         * at `out`, that's fine, use it. The now-orphaned staging
+         * directory this process extracted is harmless cache clutter,
+         * not a correctness problem, and not worth a recursive-delete
+         * implementation to clean up. */
+        if (!path_exists(marker)) return 0;
     }
     return 1;
 }

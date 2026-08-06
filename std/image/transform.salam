@@ -1,0 +1,310 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+// Geometric transforms: resize (nearest-neighbor or bilinear), crop,
+// rotate (90/180/270), flip, and the "fit"/"fill" resize modes used by
+// Thumbnail. Every function returns a brand-new Image; the source is
+// never mutated (call Free on whichever copy you no longer need).
+
+@en "ResizeNearest"
+@fa "نزدیک‌ترین همسایه"
+@ar "أقرب جار"
+pub const ResizeNearest := 0
+
+@en "ResizeBilinear"
+@fa "دو خطی"
+@ar "ثنائي الخط"
+pub const ResizeBilinear := 1
+
+func _clampi(v: int, lo: int, hi: int): int:
+    if v < lo: ret lo end
+    if v > hi: ret hi end
+    ret v
+end
+
+// Nearest-neighbor resize - fast, blocky, ideal for pixel art.
+@en "ResizeNearestNeighbor"
+@fa "تغییر اندازه نزدیک‌ترین همسایه"
+@ar "تغيير الحجم بأقرب جار"
+pub func ResizeNearestNeighbor(img: Image, new_width: int, new_height: int): Image:
+    if new_width <= 0 || new_height <= 0 || IsEmpty(img):
+        ret New(new_width, new_height)
+    end
+    out := New(new_width, new_height)
+    mut y := 0
+    until y < new_height:
+        sy := _clampi((y * img.height) / new_height, 0, img.height - 1)
+        mut x := 0
+        until x < new_width:
+            sx := _clampi((x * img.width) / new_width, 0, img.width - 1)
+            SetPixel(out, x, y, GetPixel(img, sx, sy))
+            x += 1
+        end
+        y += 1
+    end
+    ret out
+end
+
+// Smooth resize via bilinear interpolation of the 4 nearest source pixels -
+// the usual default for photos.
+@en "ResizeBilinearFilter"
+@fa "تغییر اندازه دو خطی"
+@ar "تغيير الحجم ثنائي الخط"
+pub func ResizeBilinearFilter(img: Image, new_width: int, new_height: int): Image:
+    if new_width <= 0 || new_height <= 0 || IsEmpty(img):
+        ret New(new_width, new_height)
+    end
+    out := New(new_width, new_height)
+    sx_ratio := (img.width as f64) / (new_width as f64)
+    sy_ratio := (img.height as f64) / (new_height as f64)
+    mut y := 0
+    until y < new_height:
+        fy := ((y as f64) + 0.5) * sy_ratio - 0.5
+        mut y0 := fy as int
+        if fy < 0.0: y0 = -1 end
+        ty := fy - (y0 as f64)
+        y0 = _clampi(y0, 0, img.height - 1)
+        y1 := _clampi(y0 + 1, 0, img.height - 1)
+
+        mut x := 0
+        until x < new_width:
+            fx := ((x as f64) + 0.5) * sx_ratio - 0.5
+            mut x0 := fx as int
+            if fx < 0.0: x0 = -1 end
+            tx := fx - (x0 as f64)
+            x0 = _clampi(x0, 0, img.width - 1)
+            x1 := _clampi(x0 + 1, 0, img.width - 1)
+
+            c00 := GetPixel(img, x0, y0)
+            c10 := GetPixel(img, x1, y0)
+            c01 := GetPixel(img, x0, y1)
+            c11 := GetPixel(img, x1, y1)
+            top := LerpColor(c00, c10, tx)
+            bot := LerpColor(c01, c11, tx)
+            SetPixel(out, x, y, LerpColor(top, bot, ty))
+            x += 1
+        end
+        y += 1
+    end
+    ret out
+end
+
+@en "Resize"
+@fa "تغییر اندازه"
+@ar "تغيير الحجم"
+pub func Resize(img: Image, new_width: int, new_height: int, method: int): Image:
+    if method == ResizeNearest:
+        ret ResizeNearestNeighbor(img, new_width, new_height)
+    end
+    ret ResizeBilinearFilter(img, new_width, new_height)
+end
+
+// Resize by a uniform scale factor (1.0 = unchanged, 0.5 = half size).
+@en "Scale"
+@fa "مقیاس"
+@ar "تحجيم"
+pub func Scale(img: Image, factor: f64): Image:
+    nw := ((img.width as f64) * factor) as int
+    nh := ((img.height as f64) * factor) as int
+    ret Resize(img, nw, nh, ResizeBilinear)
+end
+
+// Extracts the w x h region starting at (x, y). Out-of-range source
+// coordinates read as transparent black (same convention as GetPixel), so
+// a crop rectangle that partially overhangs the source just pads with
+// transparency instead of failing.
+@en "Crop"
+@fa "برش"
+@ar "قص"
+pub func Crop(img: Image, x: int, y: int, w: int, h: int): Image:
+    if w <= 0 || h <= 0:
+        ret New(0, 0)
+    end
+    out := New(w, h)
+    mut yy := 0
+    until yy < h:
+        mut xx := 0
+        until xx < w:
+            SetPixel(out, xx, yy, GetPixel(img, x + xx, y + yy))
+            xx += 1
+        end
+        yy += 1
+    end
+    ret out
+end
+
+@en "RotateCW"
+@fa "چرخش ساعتگرد"
+@ar "دوران مع عقارب الساعة"
+pub func RotateCW(img: Image): Image:
+    out := New(img.height, img.width)
+    mut y := 0
+    until y < img.height:
+        mut x := 0
+        until x < img.width:
+            SetPixel(out, img.height - 1 - y, x, GetPixel(img, x, y))
+            x += 1
+        end
+        y += 1
+    end
+    ret out
+end
+
+@en "RotateCCW"
+@fa "چرخش پادساعتگرد"
+@ar "دوران عكس عقارب الساعة"
+pub func RotateCCW(img: Image): Image:
+    out := New(img.height, img.width)
+    mut y := 0
+    until y < img.height:
+        mut x := 0
+        until x < img.width:
+            SetPixel(out, y, img.width - 1 - x, GetPixel(img, x, y))
+            x += 1
+        end
+        y += 1
+    end
+    ret out
+end
+
+@en "Rotate180"
+@fa "چرخش صد و هشتاد درجه"
+@ar "دوران مائة وثمانين درجة"
+pub func Rotate180(img: Image): Image:
+    out := New(img.width, img.height)
+    mut y := 0
+    until y < img.height:
+        mut x := 0
+        until x < img.width:
+            SetPixel(out, img.width - 1 - x, img.height - 1 - y, GetPixel(img, x, y))
+            x += 1
+        end
+        y += 1
+    end
+    ret out
+end
+
+@en "FlipHorizontal"
+@fa "قرینه افقی"
+@ar "قلب أفقي"
+pub func FlipHorizontal(img: Image): Image:
+    out := New(img.width, img.height)
+    mut y := 0
+    until y < img.height:
+        mut x := 0
+        until x < img.width:
+            SetPixel(out, img.width - 1 - x, y, GetPixel(img, x, y))
+            x += 1
+        end
+        y += 1
+    end
+    ret out
+end
+
+@en "FlipVertical"
+@fa "قرینه عمودی"
+@ar "قلب عمودي"
+pub func FlipVertical(img: Image): Image:
+    out := New(img.width, img.height)
+    mut y := 0
+    until y < img.height:
+        mut x := 0
+        until x < img.width:
+            SetPixel(out, x, img.height - 1 - y, GetPixel(img, x, y))
+            x += 1
+        end
+        y += 1
+    end
+    ret out
+end
+
+// Scales to fit entirely inside box_w x box_h, preserving aspect ratio,
+// and pads the rest with transparent pixels so the result is always
+// exactly box_w x box_h ("letterbox"/"fit" mode).
+@en "ResizeFit"
+@fa "تغییر اندازه متناسب"
+@ar "تغيير الحجم للملاءمة"
+pub func ResizeFit(img: Image, box_w: int, box_h: int): Image:
+    out := New(box_w, box_h)
+    if IsEmpty(img) || box_w <= 0 || box_h <= 0:
+        ret out
+    end
+    scale_w := (box_w as f64) / (img.width as f64)
+    scale_h := (box_h as f64) / (img.height as f64)
+    mut scale := scale_w
+    if scale_h < scale: scale = scale_h end
+    nw := _clampi((((img.width as f64) * scale) as int), 1, box_w)
+    nh := _clampi((((img.height as f64) * scale) as int), 1, box_h)
+    scaled := Resize(img, nw, nh, ResizeBilinear)
+    off_x := (box_w - nw) / 2
+    off_y := (box_h - nh) / 2
+    mut y := 0
+    until y < nh:
+        mut x := 0
+        until x < nw:
+            SetPixel(out, off_x + x, off_y + y, GetPixel(scaled, x, y))
+            x += 1
+        end
+        y += 1
+    end
+    Free(scaled)
+    ret out
+end
+
+// Scales to cover box_w x box_h, preserving aspect ratio, then center-crops
+// the overhang so the result is always exactly box_w x box_h ("cover"/
+// "fill" mode - no padding, some source content may be cropped away).
+@en "ResizeFill"
+@fa "تغییر اندازه پرکننده"
+@ar "تغيير الحجم للتغطية"
+pub func ResizeFill(img: Image, box_w: int, box_h: int): Image:
+    if IsEmpty(img) || box_w <= 0 || box_h <= 0:
+        ret New(box_w, box_h)
+    end
+    scale_w := (box_w as f64) / (img.width as f64)
+    scale_h := (box_h as f64) / (img.height as f64)
+    mut scale := scale_w
+    if scale_h > scale: scale = scale_h end
+    nw := _imax(((img.width as f64) * scale) as int, box_w)
+    nh := _imax(((img.height as f64) * scale) as int, box_h)
+    scaled := Resize(img, nw, nh, ResizeBilinear)
+    out := Crop(scaled, (nw - box_w) / 2, (nh - box_h) / 2, box_w, box_h)
+    Free(scaled)
+    ret out
+end
+
+// Fit within max_size x max_size (keeping aspect ratio, no padding) -
+// the common "generate a thumbnail" case. Never upscales: an image
+// already smaller than max_size is returned unchanged (as a Clone, so the
+// caller always owns a fresh copy to Free).
+@en "Thumbnail"
+@fa "تصویر کوچک"
+@ar "صورة مصغرة"
+pub func Thumbnail(img: Image, max_size: int): Image:
+    if IsEmpty(img) || max_size <= 0:
+        ret New(0, 0)
+    end
+    if img.width <= max_size && img.height <= max_size:
+        ret Clone(img)
+    end
+    scale_w := (max_size as f64) / (img.width as f64)
+    scale_h := (max_size as f64) / (img.height as f64)
+    mut scale := scale_w
+    if scale_h < scale: scale = scale_h end
+    nw := _imax(((img.width as f64) * scale) as int, 1)
+    nh := _imax(((img.height as f64) * scale) as int, 1)
+    ret Resize(img, nw, nh, ResizeBilinear)
+end

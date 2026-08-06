@@ -1,0 +1,151 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Live interop check against a real, unmodified OpenSSH sshd - connect,
+// authenticate, run commands, and check the client/session API end to end.
+// tests/en/ssh/vectors_bytes.salam proves the primitives are correct in
+// isolation; this proves the whole stack actually talks to someone else's
+// server implementation, on a non-default port (the "old and new server,
+// custom port" part of this package's own brief).
+//
+// Requires network access to a real sshd and a matching key, so - like
+// tests/en/tls/live_handshake.salam - this is not part of the offline
+// vector suite. Fill in _HOST/_PORT/_USER/_KEY_PATH for your own server
+// before running, or point them at a local throwaway sshd:
+//
+//   ssh-keygen -t rsa -b 2048 -f /tmp/sshtest/id_rsa -N ""
+//   echo "Port 2222
+//   ListenAddress 127.0.0.1
+//   HostKey <a real host key file>
+//   AuthorizedKeysFile /tmp/sshtest/id_rsa.pub
+//   PubkeyAuthentication yes
+//   PasswordAuthentication no
+//   StrictModes no" > /tmp/sshtest/sshd_config
+//   /usr/sbin/sshd -f /tmp/sshtest/sshd_config -D &
+//
+//   salam build tests/en/ssh/live_exec.salam --output=/tmp/live_exec && /tmp/live_exec
+//
+// This does NOT test password authentication - see this file's header note
+// at the bottom for why, and WithPassword's own unit-level wiring is
+// covered by nothing more than "the field gets set" since exercising the
+// real password codepath needs a live account with a known password,
+// which a committed test cannot safely provision for itself.
+
+package main
+
+import ssh
+import os
+import str
+
+const _HOST := "127.0.0.1"
+const _PORT := 2222
+const _USER := "ali"
+const _KEY_PATH := "/home/ali/sshtest/id_rsa"
+
+mut _failures := 0
+
+func check(cond: bool, what: str):
+    if cond:
+        println "  ok      ", what
+    else:
+        println "  FAIL    ", what
+        _failures += 1
+    end
+end
+
+func main:
+    mut cfg := ssh.NewConfig(_HOST, _PORT, _USER)
+    loaded := ssh.WithKeyFile(cfg, _KEY_PATH)
+    check(loaded, "WithKeyFile loads the identity from disk")
+    ssh.WithHostKeyMode(cfg, ssh.HOSTKEY_MODE_INSECURE) // throwaway test host key, not a real trust decision
+
+    mut client := ssh.Dial(cfg)
+    check(ssh.Ok(client), "Dial connects and authenticates with a private key, on a non-default port")
+    if !ssh.Ok(client):
+        println "  Dial error:", ssh.Error(client)
+        os.Exit(1)
+    end
+
+    fp := ssh.HostKeyFingerprint(client)
+    check(str.StartsWith(fp, "SHA256:"), "HostKeyFingerprint returns a ssh-keygen -lf-shaped fingerprint")
+
+    // ---------------------------------------------------------- RunCommand / exit codes
+    res_ok := ssh.RunCommand(client, "echo hello-from-real-sshd; exit 0")
+    check(res_ok.ok, "RunCommand reports ok for a command that runs to completion")
+    check(str.Contains(res_ok.stdout, "hello-from-real-sshd"), "RunCommand captures real stdout")
+    check(res_ok.exit_code == 0, "RunCommand captures exit code 0")
+
+    res_fail := ssh.RunCommand(client, "exit 7")
+    check(res_fail.exit_code == 7, "RunCommand captures a non-zero exit code exactly")
+
+    res_stderr := ssh.RunCommand(client, "echo to-stdout; echo to-stderr 1>&2; exit 3")
+    check(str.Contains(res_stderr.stdout, "to-stdout"), "RunCommand keeps stdout and stderr separate: stdout side")
+    check(str.Contains(res_stderr.stderr, "to-stderr"), "RunCommand keeps stdout and stderr separate: stderr side")
+    check(res_stderr.exit_code == 3, "RunCommand exit code is captured alongside separated stdout/stderr")
+
+    res_whoami := ssh.RunCommand(client, "whoami")
+    check(str.Contains(res_whoami.stdout, _USER), "RunCommand's remote whoami matches the authenticated user")
+
+    // ---------------------------------------------------------- Start / Wait / Output (drive it yourself)
+    mut sess := ssh.NewSession(client)
+    check(sess.ok, "NewSession opens a channel")
+    started := ssh.Start(sess, client, "echo step1; sleep 1; echo step2; exit 42")
+    check(started, "Start launches a command without blocking for completion")
+    exit_code := ssh.Wait(sess, client)
+    check(exit_code == 42, "Wait blocks until completion and returns the real exit code")
+    out := ssh.Output(sess)
+    check(str.Contains(out, "step1") && str.Contains(out, "step2"), "Output() has everything the command printed across its whole run")
+    check(ssh.ExitCode(sess) == 42, "ExitCode() agrees with what Wait() already returned")
+    check(ssh.SessionClosed(sess), "SessionClosed() is true once the remote command has exited and the channel closed")
+    ssh.CloseSession(sess, client)
+
+    // ---------------------------------------------------------- WriteInput (stdin) + DrainOutput
+    mut sess2 := ssh.NewSession(client)
+    _started2 := ssh.Start(sess2, client, "read line; echo got: $line")
+    wrote := ssh.WriteInput(sess2, client, "hello-stdin\n")
+    check(wrote, "WriteInput sends bytes to the remote command's stdin")
+    ssh.CloseInput(sess2, client) // EOF so `read` isn't left hanging if it wants more
+    _exit2 := ssh.Wait(sess2, client)
+    out2 := ssh.Output(sess2)
+    check(str.Contains(out2, "got: hello-stdin"), "a command reading stdin sees exactly what WriteInput sent")
+    ssh.CloseSession(sess2, client)
+
+    // DrainOutput: read what's arrived so far, then confirm the buffer was
+    // actually cleared (a second drain right after has nothing new).
+    mut sess3 := ssh.NewSession(client)
+    _started3 := ssh.Start(sess3, client, "echo first; sleep 1; echo second")
+    _exit3 := ssh.Wait(sess3, client)
+    drained1 := ssh.DrainOutput(sess3)
+    check(str.Contains(drained1, "first") && str.Contains(drained1, "second"), "DrainOutput returns everything accumulated so far")
+    drained2 := ssh.DrainOutput(sess3)
+    check(str.Equals(drained2, ""), "DrainOutput clears its buffer - a second call with nothing new returns empty")
+    ssh.CloseSession(sess3, client)
+
+    // ---------------------------------------------------------- Reconnect
+    ssh.Close(client)
+    check(!ssh.Ok(client), "Close() marks the client as no longer connected")
+    reconnected := ssh.Reconnect(client)
+    check(reconnected, "Reconnect() re-dials with the same Config after Close()")
+    res_after_reconnect := ssh.RunCommand(client, "echo still-works-after-reconnect")
+    check(str.Contains(res_after_reconnect.stdout, "still-works-after-reconnect"), "commands run normally after Reconnect()")
+
+    ssh.Close(client)
+
+    if _failures == 0:
+        println "ssh live_exec: all checks passed"
+    else:
+        println "ssh live_exec:", _failures, "check(s) FAILED"
+    end
+    os.Exit(_failures)
+end

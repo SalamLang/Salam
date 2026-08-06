@@ -1,0 +1,283 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/proxy"
+@fa "پراکسی شبکه"
+@ar "بروکسي للشبکة"
+package proxy
+
+import mem
+import str
+import encoding
+import net.tcp
+
+// HTTP CONNECT and SOCKS5 (RFC 1928/1929) proxy dialers, plus chaining
+// (dial hop 0, then ask each hop in turn to CONNECT to the next one,
+// ending at the real target). `Dial`/`DialChain` return a plain
+// net/tcp.Conn - an already-established, already-tunneled byte pipe -
+// so callers use it exactly like a direct tcp.Dial result (layer TLS on
+// top via tcp.UpgradeTLS for an HTTPS target, or hand it straight to
+// net/http once that package can accept a pre-dialed connection).
+//
+// An HTTP proxy is only ever used in CONNECT-tunnel mode here, for both
+// http:// and https:// targets - CONNECT just gives back a raw
+// byte pipe, so it works for anything, and it keeps this package's job
+// to exactly "give me a tunnel to host:port", not also rewriting
+// request lines for the plain-forwarding proxy mode (that belongs in
+// net/http, which is welcome to skip this package and just tcp.Dial the
+// proxy directly if it wants that alternate mode instead).
+
+@en "TypeHTTP"
+@fa "نوع اچ‌تی‌تی‌پی"
+@ar "نوع HTTP"
+pub const TypeHTTP := 0
+
+@en "TypeSOCKS5"
+@fa "نوع ساکس۵"
+@ar "نوع SOCKS5"
+pub const TypeSOCKS5 := 1
+
+@en "Proxy"
+@fa "پراکسی"
+@ar "بروکسي"
+pub struct Proxy:
+    pub kind: int = 0
+    pub host: str = ""
+    pub port: int = 0
+    pub username: str = ""
+    pub password: str = ""
+end
+
+@en "Chain"
+@fa "زنجیره پراکسی"
+@ar "سلسلة البروکسي"
+pub struct Chain:
+    pub items: Vector<Proxy> = Vector {}
+end
+
+struct _AddrParts:
+    pub host: str = ""
+    pub port: int = 0
+end
+
+inline pure func _ub(p: i8*, i: int): int:
+    b := p[i] as int
+    if b < 0: ret b + 256 end
+    ret b
+end
+
+func _parse_addr(addr: str): _AddrParts:
+    mut r := _AddrParts {}
+    idx := addr.find(":")
+    if idx < 0:
+        r.host = addr
+    else:
+        r.host = addr.substr(0, idx)
+        r.port = addr.substr(idx + 1, addr.len() - idx - 1).to_int()
+    end
+    ret r
+end
+
+func _http_connect(conn: tcp.Conn, p: Proxy, host: str, port: int): bool:
+    hostport := host + ":" + str.FromInt(port as i64)
+    mut req := "CONNECT " + hostport + " HTTP/1.1\r\nHost: " + hostport + "\r\n"
+    if p.username.len() > 0:
+        cred := p.username + ":" + p.password
+        req += "Proxy-Authorization: Basic " + encoding.Base64Encode(cred) + "\r\n"
+    end
+    req += "Proxy-Connection: Keep-Alive\r\n\r\n"
+    tcp.Write(conn, req)
+    resp := tcp.Read(conn, 4096)
+    if resp.len() < 12: ret false end
+    ret resp.substr(9, 3) == "200"
+end
+
+func _socks5_auth(conn: tcp.Conn, p: Proxy): bool:
+    ulen := p.username.len()
+    plen := p.password.len()
+    total := 3 + ulen + plen
+    buf := mem.Allocate(total as u64)
+    defer mem.Free(buf)
+    bp := buf as i8*
+    bp[0] = 1 as i8
+    bp[1] = ulen as i8
+    mem.Copy((buf as i64 + 2) as void*, p.username as void*, ulen as u64)
+    bp[2 + ulen] = plen as i8
+    mem.Copy((buf as i64 + 3 + ulen) as void*, p.password as void*, plen as u64)
+    tcp.WriteBytes(conn, buf, total)
+
+    resp := mem.Allocate(2 as u64)
+    defer mem.Free(resp)
+    n := tcp.ReadBytes(conn, resp, 2)
+    if n < 2: ret false end
+    rp := resp as i8*
+    ret _ub(rp, 1) == 0
+end
+
+func _socks5_negotiate(conn: tcp.Conn, p: Proxy): bool:
+    mut nmethods := 1
+    if p.username.len() > 0: nmethods = 2 end
+    buf := mem.Allocate((2 + nmethods) as u64)
+    defer mem.Free(buf)
+    bp := buf as i8*
+    bp[0] = 5 as i8
+    bp[1] = nmethods as i8
+    bp[2] = 0 as i8
+    if nmethods == 2: bp[3] = 2 as i8 end
+    tcp.WriteBytes(conn, buf, 2 + nmethods)
+
+    resp := mem.Allocate(2 as u64)
+    defer mem.Free(resp)
+    n := tcp.ReadBytes(conn, resp, 2)
+    if n < 2: ret false end
+    rp := resp as i8*
+    method := _ub(rp, 1)
+    if method == 255: ret false end
+    if method == 2: ret _socks5_auth(conn, p) end
+    ret true
+end
+
+func _socks5_connect(conn: tcp.Conn, host: str, port: int): bool:
+    hlen := host.len()
+    total := 4 + 1 + hlen + 2
+    buf := mem.Allocate(total as u64)
+    defer mem.Free(buf)
+    bp := buf as i8*
+    bp[0] = 5 as i8
+    bp[1] = 1 as i8
+    bp[2] = 0 as i8
+    bp[3] = 3 as i8
+    bp[4] = hlen as i8
+    mem.Copy((buf as i64 + 5) as void*, host as void*, hlen as u64)
+    bp[5 + hlen] = ((port / 256) & 255) as i8
+    bp[6 + hlen] = (port & 255) as i8
+    tcp.WriteBytes(conn, buf, total)
+
+    resp := mem.Allocate(262 as u64)
+    defer mem.Free(resp)
+    n := tcp.ReadBytes(conn, resp, 262)
+    if n < 4: ret false end
+    rp := resp as i8*
+    ret _ub(rp, 1) == 0
+end
+
+func _handshake(conn: tcp.Conn, p: Proxy, host: str, port: int): bool:
+    if p.kind == TypeSOCKS5:
+        if !_socks5_negotiate(conn, p): ret false end
+        ret _socks5_connect(conn, host, port)
+    end
+    ret _http_connect(conn, p, host, port)
+end
+
+@en "NewHTTPProxy"
+@fa "پراکسی اچ‌تی‌تی‌پی جدید"
+@ar "بروکسي HTTP جدید"
+pub func NewHTTPProxy(addr: str): Proxy:
+    parts := _parse_addr(addr)
+    ret Proxy { kind = TypeHTTP, host = parts.host, port = parts.port }
+end
+
+@en "NewHTTPProxyAuth"
+@fa "پراکسی اچ‌تی‌تی‌پی با احراز هویت"
+@ar "بروکسي HTTP مع مصادقة"
+pub func NewHTTPProxyAuth(addr: str, username: str, password: str): Proxy:
+    mut p := NewHTTPProxy(addr)
+    p.username = username
+    p.password = password
+    ret p
+end
+
+@en "NewSOCKS5Proxy"
+@fa "پراکسی ساکس۵ جدید"
+@ar "بروکسي SOCKS5 جدید"
+pub func NewSOCKS5Proxy(addr: str): Proxy:
+    parts := _parse_addr(addr)
+    ret Proxy { kind = TypeSOCKS5, host = parts.host, port = parts.port }
+end
+
+@en "NewSOCKS5ProxyAuth"
+@fa "پراکسی ساکس۵ با احراز هویت"
+@ar "بروکسي SOCKS5 مع مصادقة"
+pub func NewSOCKS5ProxyAuth(addr: str, username: str, password: str): Proxy:
+    mut p := NewSOCKS5Proxy(addr)
+    p.username = username
+    p.password = password
+    ret p
+end
+
+@en "Dial"
+@fa "شماره‌گیری"
+@ar "اتصال"
+pub func Dial(p: Proxy, target_host: str, target_port: int): tcp.Conn:
+    conn := tcp.Dial(p.host, p.port)
+    if !tcp.ConnOk(conn): ret conn end
+    ok := _handshake(conn, p, target_host, target_port)
+    if !ok:
+        tcp.Close(conn)
+        ret tcp.Conn {}
+    end
+    ret conn
+end
+
+@en "NewChain"
+@fa "زنجیره جدید"
+@ar "سلسلة جدیدة"
+pub func NewChain(): Chain:
+    ret Chain {}
+end
+
+@en "Add"
+@fa "افزودن"
+@ar "إضافة"
+pub func Add(c &: Chain, p: Proxy):
+    c.items.push(p)
+end
+
+@en "DialChain"
+@fa "شماره‌گیری زنجیره‌ای"
+@ar "اتصال متسلسل"
+pub func DialChain(c: Chain, target_host: str, target_port: int): tcp.Conn:
+    n := c.items.len()
+    if n == 0: ret tcp.Dial(target_host, target_port) end
+
+    first := c.items.get(0)[0]
+    conn := tcp.Dial(first.host, first.port)
+    if !tcp.ConnOk(conn): ret conn end
+
+    mut i := 0
+    mut failed := false
+    until i < n:
+        p := c.items.get(i)[0]
+        mut next_host := target_host
+        mut next_port := target_port
+        if i + 1 < n:
+            nxt := c.items.get(i + 1)[0]
+            next_host = nxt.host
+            next_port = nxt.port
+        end
+        ok := _handshake(conn, p, next_host, next_port)
+        if !ok:
+            failed = true
+            i = n
+            continue
+        end
+        i += 1
+    end
+
+    if failed:
+        tcp.Close(conn)
+        ret tcp.Conn {}
+    end
+    ret conn
+end

@@ -1,0 +1,191 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import testing
+import error
+import env
+import debug
+import runtime
+import mem
+import cli
+import flag
+import log
+import config
+import types
+import i18n
+
+func test_error():
+    e := error.New(error.KindNotFound, "config.yaml missing")
+    e2 := error.Wrap(e, "while loading configuration")
+    e3 := error.WithMeta(e2, "path", "/etc/app/config.yaml")
+    testing.AssertEqStr(error.Message(e3), "while loading configuration: config.yaml missing")
+    testing.AssertTrue(error.IsNotFound(e3))
+    testing.AssertEqStr(error.Meta(e3, "path"), "/etc/app/config.yaml")
+    testing.AssertTrue(error.IsNil(error.Nil()))
+    p := error.NewRetryPolicy(5, 100, 2000)
+    testing.AssertEqInt64(error.DelayForAttempt(p, 1), 100)
+    testing.AssertEqInt64(error.DelayForAttempt(p, 3), 400)
+    testing.AssertEqInt64(error.DelayForAttempt(p, 10), 2000)
+end
+
+func test_env():
+    testing.AssertTrue(env.Set("SALAM_CF_TEST", "hello"))
+    testing.AssertEqStr(env.Get("SALAM_CF_TEST"), "hello")
+    testing.AssertEqInt64(env.GetInt("SALAM_CF_TEST_MISSING", 42 as i64), 42 as i64)
+    testing.AssertTrue(env.Unset("SALAM_CF_TEST"))
+    testing.AssertEqStr(env.Mask("AKIA1234567890ABCD"), "AK****CD")
+end
+
+func test_debug():
+    debug.Assert(1 + 1 == 2, "math still works")
+    debug.Enter("outer")
+    debug.Enter("inner")
+    testing.AssertEqStr(debug.Stack(), "outer > inner")
+    debug.Exit()
+    debug.Exit()
+    testing.AssertEqInt(debug.Depth(), 0)
+    testing.AssertTrue(debug.MemStats().len() > 0)
+end
+
+func test_runtime():
+    testing.AssertTrue(runtime.CpuCount() > 0)
+    testing.AssertTrue(runtime.OS().len() > 0)
+    testing.AssertTrue(runtime.Arch().len() > 0)
+    testing.AssertTrue(runtime.BuildFlags().len() > 0)
+end
+
+func test_mem():
+    mut a := mem.NewArena(64 as u64)
+    p1 := mem.ArenaAlloc(a, 10 as u64)
+    p2 := mem.ArenaAlloc(a, 10 as u64)
+    testing.AssertNotNil(p1)
+    testing.AssertNotNil(p2)
+    testing.AssertEqInt64(mem.ArenaUsed(a) as i64, 32 as i64)
+    mem.ArenaFree(a)
+
+    mut pool := mem.NewPool(16 as u64, 2 as u64)
+    b1 := mem.PoolAlloc(pool)
+    b2 := mem.PoolAlloc(pool)
+    b3 := mem.PoolAlloc(pool)
+    testing.AssertNotNil(b1)
+    testing.AssertNotNil(b2)
+    testing.AssertNil(b3)
+    mem.PoolFree(pool, b1)
+    b4 := mem.PoolAlloc(pool)
+    testing.AssertTrue(b4 == b1)
+    mem.PoolDestroy(pool)
+end
+
+func test_cli():
+    mut app := cli.New("myapp", "demo app", "1.0.0")
+    cli.Register(app, "serve", "start the server")
+    testing.AssertTrue(cli.HasCommand(app, "serve"))
+
+    mut argv := Vector {} as Vector<str>
+    argv.push("serve")
+    argv.push("--port")
+    argv.push("9090")
+    testing.AssertEqStr(cli.Dispatch(app, argv), "serve")
+
+    rest := cli.RemainingArgs(argv)
+    mut fs := flag.New("myapp serve", "serve")
+    flag.AddInt(fs, "port", "p", 8080, "port")
+    testing.AssertTrue(flag.Parse(fs, rest))
+    testing.AssertEqInt64(flag.GetInt(fs, "port"), 9090 as i64)
+end
+
+func test_log():
+    log.SetLevel(log.LevelDebug)
+    log.ShowTime(false)
+    log.SetFormat(log.FormatJSON)
+    log.ToStdout()
+    log.Info("json line check")
+    log.SetFormat(log.FormatText)
+    log.ToStderr()
+end
+
+func test_config():
+    yaml_text := `
+app:
+  name: myservice
+  port: 8080
+`
+    c := config.ParseYAML(yaml_text)
+    testing.AssertEqStr(config.Get(c, "app.name"), "myservice")
+
+    defaults := config.New()
+    config.Set(defaults, "app.port", "3000")
+    config.Set(defaults, "app.host", "localhost")
+    merged := config.Merge(defaults, c)
+    testing.AssertEqStr(config.Get(merged, "app.host"), "localhost")
+    testing.AssertEqInt64(config.GetInt(merged, "app.port", 0 as i64), 8080 as i64)
+end
+
+func test_types():
+    testing.AssertTrue(types.IsInt("42"))
+    testing.AssertFalse(types.IsInt("42.5"))
+    testing.AssertTrue(types.IsFloat("42.5"))
+    testing.AssertTrue(types.IsBool("true"))
+    testing.AssertEqStr(types.KindName(types.KindOf("hello")), "string")
+
+    mut a := Vector {} as Vector<str>
+    mut b := Vector {} as Vector<str>
+    a.push("x")
+    b.push("x")
+    testing.AssertTrue(types.Equal(a, b))
+    b.push("y")
+    testing.AssertFalse(types.Equal(a, b))
+end
+
+func test_i18n():
+    mut cat := i18n.New("en")
+    i18n.Set(cat, "en", "hello", "Hello!")
+    i18n.Set(cat, "fa", "hello", "سلام!")
+    testing.AssertEqStr(i18n.T(cat, "en", "hello"), "Hello!")
+    testing.AssertEqStr(i18n.T(cat, "ar", "hello"), "Hello!")
+    testing.AssertEqStr(i18n.T(cat, "ar", "no_such_key"), "no_such_key")
+
+    mut names := Vector {} as Vector<str>
+    mut vals := Vector {} as Vector<str>
+    names.push("name")
+    vals.push("Ali")
+    i18n.Set(cat, "en", "welcome", "Welcome, {name}!")
+    testing.AssertEqStr(i18n.Tf(cat, "en", "welcome", names, vals), "Welcome, Ali!")
+
+    i18n.Set(cat, "en", "items.one", "{count} item")
+    i18n.Set(cat, "en", "items.other", "{count} items")
+    mut cnames := Vector {} as Vector<str>
+    mut cvals := Vector {} as Vector<str>
+    cnames.push("count")
+    cvals.push("1")
+    testing.AssertEqStr(i18n.Interpolate(i18n.Plural(cat, "en", "items", 1 as i64), cnames, cvals), "1 item")
+    cvals.set(0, "5")
+    testing.AssertEqStr(i18n.Interpolate(i18n.Plural(cat, "en", "items", 5 as i64), cnames, cvals), "5 items")
+end
+
+func main:
+    test_error()
+    test_env()
+    test_debug()
+    test_runtime()
+    test_mem()
+    test_cli()
+    test_log()
+    test_config()
+    test_types()
+    test_i18n()
+    testing.Summary()
+end

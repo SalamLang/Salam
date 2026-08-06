@@ -1,0 +1,186 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import compress
+import archive
+import mem
+
+// Windows BMP: the simplest real image file format, and useful as a
+// completely lossless, allocation-cheap baseline the other codecs can be
+// checked against. Always encodes 32-bit BGRA, uncompressed (BI_RGB),
+// bottom-up (the most broadly compatible layout: 4-byte pixel stride
+// needs no row padding, and positive height is understood by every BMP
+// reader, unlike the less common negative-height/top-down form). Decoding
+// accepts what real-world encoders actually produce: 24-bit BGR (row
+// padded to a 4-byte stride, no alpha - filled in as opaque) and 32-bit
+// BGRA/BGRx, either bottom-up or top-down, BI_RGB or BI_BITFIELDS
+// (the mask table itself is skipped, not parsed - both compressions lay
+// out 32bpp pixels as BGRA in practice).
+//
+// Little-endian field access reuses std/archive's LEGet16/32 and
+// LEPut16/32 rather than redefining them - this package already depends
+// on std/archive for real binary file I/O (fopen/fread in "rb" mode;
+// std/io's ReadFile/WriteFile are str-based and truncate at an embedded
+// NUL, unusable for pixel data), so the little-endian helpers come along
+// for free.
+
+func _row_stride(width: int, bytes_per_pixel: int): int:
+    ret ((width * bytes_per_pixel + 3) / 4) * 4
+end
+
+@en "EncodeBMP"
+@fa "کدگذاری بی‌ام‌پی"
+@ar "ترميز بي إم بي"
+pub func EncodeBMP(img: Image): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    w := img.width
+    h := img.height
+    pixel_bytes := w * h * 4
+    file_size := 54 + pixel_bytes
+
+    compress.BufPush(out, 66) // 'B'
+    compress.BufPush(out, 77) // 'M'
+    archive.LEPut32(out, file_size)
+    archive.LEPut32(out, 0)
+    archive.LEPut32(out, 54)
+
+    archive.LEPut32(out, 40)
+    archive.LEPut32(out, w)
+    archive.LEPut32(out, h)
+    archive.LEPut16(out, 1)
+    archive.LEPut16(out, 32)
+    archive.LEPut32(out, 0)
+    archive.LEPut32(out, pixel_bytes)
+    archive.LEPut32(out, 2835)
+    archive.LEPut32(out, 2835)
+    archive.LEPut32(out, 0)
+    archive.LEPut32(out, 0)
+
+    if img.pixels != null:
+        mut y := h - 1
+        until y >= 0:
+            mut x := 0
+            until x < w:
+                c := GetPixel(img, x, y)
+                compress.BufPush(out, c.b as int)
+                compress.BufPush(out, c.g as int)
+                compress.BufPush(out, c.r as int)
+                compress.BufPush(out, c.a as int)
+                x += 1
+            end
+            y -= 1
+        end
+    end
+    ret out
+end
+
+@en "SaveBMP"
+@fa "ذخیره بی‌ام‌پی"
+@ar "حفظ بي إم بي"
+pub func SaveBMP(img: Image, path: str): bool:
+    buf := EncodeBMP(img)
+    ok := archive.WriteBinaryFileBuf(path, buf)
+    compress.BufFree(buf)
+    ret ok
+end
+
+@en "DecodeBMP"
+@fa "کدگشایی بی‌ام‌پی"
+@ar "فك ترميز بي إم بي"
+pub func DecodeBMP(p: void*, n: int, ok &: bool): Image:
+    ok = false
+    if n < 54:
+        ret New(0, 0)
+    end
+    bp := p as u8*
+    if (bp[0] as int) != 66 || (bp[1] as int) != 77:
+        ret New(0, 0)
+    end
+    data_offset := archive.LEGet32(p, 10)
+    dib_size := archive.LEGet32(p, 14)
+    if dib_size < 40 || n < 14 + dib_size:
+        ret New(0, 0)
+    end
+    width := archive.LEGet32(p, 18)
+    height_raw := archive.LEGet32(p, 22)
+    bitcount := archive.LEGet16(p, 28)
+    compression := archive.LEGet32(p, 30)
+
+    if width <= 0 || height_raw == 0:
+        ret New(0, 0)
+    end
+    if bitcount != 24 && bitcount != 32:
+        ret New(0, 0)
+    end
+    if compression != 0 && compression != 3:
+        ret New(0, 0)
+    end
+
+    mut top_down := false
+    mut height := height_raw
+    if height_raw < 0:
+        top_down = true
+        height = -height_raw
+    end
+
+    bytes_per_pixel := bitcount / 8
+    stride := _row_stride(width, bytes_per_pixel)
+    needed := data_offset + stride * height
+    if n < needed || data_offset < 14 + dib_size:
+        ret New(0, 0)
+    end
+
+    out := New(width, height)
+    mut row := 0
+    until row < height:
+        mut dst_y := height - 1 - row
+        if top_down:
+            dst_y = row
+        end
+        row_off := data_offset + row * stride
+        mut x := 0
+        until x < width:
+            px_off := row_off + x * bytes_per_pixel
+            b := bp[px_off] as int
+            g := bp[px_off + 1] as int
+            r := bp[px_off + 2] as int
+            mut a := 255
+            if bytes_per_pixel == 4:
+                a = bp[px_off + 3] as int
+            end
+            SetPixel(out, x, dst_y, RGBA(r, g, b, a))
+            x += 1
+        end
+        row += 1
+    end
+    ok = true
+    ret out
+end
+
+@en "OpenBMP"
+@fa "بازکردن بی‌ام‌پی"
+@ar "افتح بي إم بي"
+pub func OpenBMP(path: str, ok &: bool): Image:
+    mut read_ok := false
+    buf := archive.ReadBinaryFile(path, read_ok)
+    if !read_ok:
+        ok = false
+        ret New(0, 0)
+    end
+    out := DecodeBMP(buf.data, buf.len, ok)
+    compress.BufFree(buf)
+    ret out
+end

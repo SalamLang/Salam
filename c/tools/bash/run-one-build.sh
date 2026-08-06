@@ -26,6 +26,7 @@ jobid=$(echo "$label" | tr '/ ' '__')
 jobdir="$WORK/job_${jobid}_$$"
 mkdir -p "$jobdir"
 [ -d "$WORK/dbwork" ] && ln -s "$WORK/dbwork" "$jobdir/tests" 2>/dev/null
+[ -d "$WORK/opencvwork" ] && ln -s "$WORK/opencvwork" "$jobdir/ocvtests" 2>/dev/null
 exe="$WORK/exe_$jobid.exe"
 rm -f "$exe"
 

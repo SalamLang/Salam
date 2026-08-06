@@ -1,0 +1,183 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Live checks for everything live_exec.salam and live_sftp.salam don't
+// cover: authentication FAILURE paths (wrong key, wrong port, wrong user,
+// wrong password), the known_hosts policy modes actually wired through
+// Dial (not just the pure decision logic vectors_bytes.salam already
+// unit-tests), and an interactive PTY/Shell session. See live_exec.salam's
+// header for the _HOST/_PORT/_USER/_KEY_PATH convention and how to point
+// this at your own server or a local throwaway sshd.
+//
+//   salam build tests/en/ssh/live_auth_and_policy.salam --output=/tmp/live_auth && /tmp/live_auth
+//
+// _WRONG_KEY_PATH needs a real RSA key that is NOT in the server's
+// authorized_keys - generate one with:
+//   ssh-keygen -t rsa -b 1024 -f /tmp/sshtest/wrong_key -N ""
+//
+// Does NOT test password auth SUCCEEDING: that needs a real account with a
+// known password, which a committed test cannot safely provision for
+// itself (see live_exec.salam's header) - only that a wrong password is
+// correctly rejected, which needs no such account.
+
+package main
+
+import ssh
+import os
+import io
+import str
+
+const _HOST := "127.0.0.1"
+const _PORT := 2222
+const _USER := "ali"
+const _KEY_PATH := "/home/ali/sshtest/id_rsa"
+const _WRONG_KEY_PATH := "/home/ali/sshtest/wrong_key"
+
+mut _failures := 0
+
+func check(cond: bool, what: str):
+    if cond:
+        println "  ok      ", what
+    else:
+        println "  FAIL    ", what
+        _failures += 1
+    end
+end
+
+func main:
+    // ---------------------------------------------------------- auth failure paths
+    mut cfg_wrongkey := ssh.NewConfig(_HOST, _PORT, _USER)
+    _loaded_wk := ssh.WithKeyFile(cfg_wrongkey, _WRONG_KEY_PATH)
+    ssh.WithHostKeyMode(cfg_wrongkey, ssh.HOSTKEY_MODE_INSECURE)
+    client_wrongkey := ssh.Dial(cfg_wrongkey)
+    check(!ssh.Ok(client_wrongkey), "Dial fails when the private key isn't in the server's authorized_keys")
+    check(ssh.Error(client_wrongkey).len() > 0, "a failed Dial leaves a non-empty Error() message")
+
+    mut cfg_wrongport := ssh.NewConfig(_HOST, 2223, _USER)
+    _loaded_wp := ssh.WithKeyFile(cfg_wrongport, _KEY_PATH)
+    ssh.WithHostKeyMode(cfg_wrongport, ssh.HOSTKEY_MODE_INSECURE)
+    client_wrongport := ssh.Dial(cfg_wrongport)
+    check(!ssh.Ok(client_wrongport), "Dial fails against a port nothing is listening on")
+
+    mut cfg_wronguser := ssh.NewConfig(_HOST, _PORT, "definitely_not_a_real_user")
+    _loaded_wu := ssh.WithKeyFile(cfg_wronguser, _KEY_PATH)
+    ssh.WithHostKeyMode(cfg_wronguser, ssh.HOSTKEY_MODE_INSECURE)
+    client_wronguser := ssh.Dial(cfg_wronguser)
+    check(!ssh.Ok(client_wronguser), "Dial fails for a username the server doesn't recognize")
+
+    mut cfg_wrongpass := ssh.NewConfig(_HOST, _PORT, _USER)
+    ssh.WithPassword(cfg_wrongpass, "definitely-the-wrong-password-12345")
+    ssh.WithHostKeyMode(cfg_wrongpass, ssh.HOSTKEY_MODE_INSECURE)
+    client_wrongpass := ssh.Dial(cfg_wrongpass)
+    check(!ssh.Ok(client_wrongpass), "Dial fails for a wrong password (server has PasswordAuthentication on)")
+
+    // ---------------------------------------------------------- known_hosts policy, wired through Dial
+    kh_path := os.TempDir() + "/salam_ssh_live_policy_known_hosts"
+    _removed_before := os.Remove(kh_path)
+
+    // STRICT against an empty/nonexistent known_hosts file: the host is
+    // UNKNOWN, and STRICT only proceeds on MATCH - Dial must refuse.
+    mut cfg_strict_unknown := ssh.NewConfig(_HOST, _PORT, _USER)
+    _loaded_su := ssh.WithKeyFile(cfg_strict_unknown, _KEY_PATH)
+    ssh.WithHostKeyMode(cfg_strict_unknown, ssh.HOSTKEY_MODE_STRICT)
+    ssh.WithKnownHostsPath(cfg_strict_unknown, kh_path)
+    client_strict_unknown := ssh.Dial(cfg_strict_unknown)
+    check(!ssh.Ok(client_strict_unknown), "STRICT mode refuses an unknown host and does not connect")
+    check(!os.Exists(kh_path), "STRICT mode never writes a known_hosts entry for a host it refused")
+
+    // ACCEPT_NEW against the same still-empty file: proceeds (TOFU) AND
+    // records the key.
+    mut cfg_acceptnew := ssh.NewConfig(_HOST, _PORT, _USER)
+    _loaded_an := ssh.WithKeyFile(cfg_acceptnew, _KEY_PATH)
+    ssh.WithHostKeyMode(cfg_acceptnew, ssh.HOSTKEY_MODE_ACCEPT_NEW)
+    ssh.WithKnownHostsPath(cfg_acceptnew, kh_path)
+    mut client_acceptnew := ssh.Dial(cfg_acceptnew)
+    check(ssh.Ok(client_acceptnew), "ACCEPT_NEW connects to a first-seen host (trust on first use)")
+    check(os.Exists(kh_path), "ACCEPT_NEW records the host's key after connecting")
+    fp1 := ssh.HostKeyFingerprint(client_acceptnew)
+    ssh.Close(client_acceptnew)
+
+    // STRICT against the now-populated file: the recorded key matches, so
+    // this must now succeed.
+    mut cfg_strict_known := ssh.NewConfig(_HOST, _PORT, _USER)
+    _loaded_sk := ssh.WithKeyFile(cfg_strict_known, _KEY_PATH)
+    ssh.WithHostKeyMode(cfg_strict_known, ssh.HOSTKEY_MODE_STRICT)
+    ssh.WithKnownHostsPath(cfg_strict_known, kh_path)
+    mut client_strict_known := ssh.Dial(cfg_strict_known)
+    check(ssh.Ok(client_strict_known), "STRICT mode connects once the host's real key is already on file")
+    fp2 := ssh.HostKeyFingerprint(client_strict_known)
+    check(str.Equals(fp1, fp2), "the fingerprint recorded by ACCEPT_NEW matches what STRICT verified against")
+    ssh.Close(client_strict_known)
+
+    // MISMATCH: corrupt the recorded key in the known_hosts file (simulate
+    // a changed host key / MITM) - STRICT must now refuse, the single most
+    // important security property this whole mode exists for.
+    content := io.ReadFile(kh_path)
+    tampered := str.Replace(content, "A", "Z")
+    _wrote_tampered := io.WriteFile(kh_path, tampered)
+    mut cfg_strict_mismatch := ssh.NewConfig(_HOST, _PORT, _USER)
+    _loaded_sm := ssh.WithKeyFile(cfg_strict_mismatch, _KEY_PATH)
+    ssh.WithHostKeyMode(cfg_strict_mismatch, ssh.HOSTKEY_MODE_STRICT)
+    ssh.WithKnownHostsPath(cfg_strict_mismatch, kh_path)
+    client_strict_mismatch := ssh.Dial(cfg_strict_mismatch)
+    check(!ssh.Ok(client_strict_mismatch), "STRICT mode refuses to connect once the on-file key no longer matches the server's real key")
+
+    _removed_after := os.Remove(kh_path)
+
+    // ---------------------------------------------------------- interactive PTY + shell
+    mut cfg := ssh.NewConfig(_HOST, _PORT, _USER)
+    _loaded := ssh.WithKeyFile(cfg, _KEY_PATH)
+    ssh.WithHostKeyMode(cfg, ssh.HOSTKEY_MODE_INSECURE)
+    mut client := ssh.Dial(cfg)
+    check(ssh.Ok(client), "Dial connects for the interactive shell check")
+    if ssh.Ok(client):
+        mut sess := ssh.NewSession(client)
+        pty_ok := ssh.RequestPty(sess, client, "xterm", 80, 24)
+        check(pty_ok, "RequestPty succeeds before starting a shell")
+        shell_ok := ssh.Shell(sess, client)
+        check(shell_ok, "Shell starts an interactive shell on the pty")
+
+        wrote := ssh.WriteInput(sess, client, "echo shell_marker_98765\n")
+        check(wrote, "WriteInput sends a command line to the interactive shell's stdin")
+
+        // Poll a few read steps so the echoed command + its output have a
+        // chance to arrive, then check for the marker without needing a
+        // fixed sleep.
+        mut got_marker := false
+        mut steps := 0
+        until !got_marker && steps < 200:
+            more := ssh.ReadStep(sess, client)
+            if str.Contains(ssh.Output(sess), "shell_marker_98765"):
+                got_marker = true
+            end
+            if !more:
+                steps = 200
+            end
+            steps += 1
+        end
+        check(got_marker, "the interactive shell actually ran the command sent via WriteInput and echoed it back")
+
+        _sent_exit := ssh.WriteInput(sess, client, "exit\n")
+        _exit_code := ssh.Wait(sess, client)
+        ssh.CloseSession(sess, client)
+    end
+    ssh.Close(client)
+
+    if _failures == 0:
+        println "ssh live_auth_and_policy: all checks passed"
+    else:
+        println "ssh live_auth_and_policy:", _failures, "check(s) FAILED"
+    end
+    os.Exit(_failures)
+end

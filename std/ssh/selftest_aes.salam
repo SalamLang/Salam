@@ -1,0 +1,110 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+// Known-answer vectors generated with `openssl enc` locally (an independent
+// implementation) rather than transcribed from a spec by hand - see the AES
+// section of ssh.salam's design notes for why: hand-copying long hex
+// strings in this environment has repeatedly produced off-by-a-few-
+// characters errors during development. The AES-128 ECB vector also happens
+// to match FIPS-197's own worked example (key 00..0f, plaintext 00..ff),
+// which is a useful independent cross-check that the openssl-generated
+// vectors themselves are the well-known standard ones and not an artifact
+// of some local misconfiguration.
+
+func _selftest_aes():
+    // AES-128, single block, ECB (CTR with an all-zero counter and exactly
+    // one block IS one ECB block encryption, so this exercises
+    // _aes_encrypt_block directly through the same path CTR uses).
+    mut key128 := _hexbuf("000102030405060708090a0b0c0d0e0f")
+    mut pt := _hexbuf("00112233445566778899aabbccddeeff")
+    _ck(key128.len == 16, "aes: 128-bit key is 16 bytes")
+    _ck(pt.len == 16, "aes: test block is 16 bytes")
+    a128 := _aes_init(key128.p, 16)
+    _ck(a128.nr == 10, "aes-128: key schedule has 10 rounds")
+    mut ct128 := NewBuf(16)
+    BufPutZeros(ct128, 16)
+    _aes_encrypt_block(a128, pt.p, ct128.p)
+    _ckhex(_hex_of(ct128.p, 16), "69c4e0d86a7b0430d8cdb78070b4c55a", "aes-128: FIPS-197 worked example")
+
+    // AES-256, same plaintext.
+    mut key256 := _hexbuf("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+    _ck(key256.len == 32, "aes: 256-bit key is 32 bytes")
+    a256 := _aes_init(key256.p, 32)
+    _ck(a256.nr == 14, "aes-256: key schedule has 14 rounds")
+    mut ct256 := NewBuf(16)
+    BufPutZeros(ct256, 16)
+    _aes_encrypt_block(a256, pt.p, ct256.p)
+    _ckhex(_hex_of(ct256.p, 16), "8ea2b7ca516745bfeafc49904b496089", "aes-256: openssl cross-check")
+
+    // AES-128-CTR against an independent openssl-generated vector: key =
+    // NIST SP 800-38A's standard AES-128 test key, initial counter =
+    // SP 800-38A's standard initial counter block.
+    mut ctrkey := _hexbuf("2b7e151628aed2a6abf7158809cf4f3c")
+    mut ctr_pt := _hexbuf("74686520717569636b2062726f776e20666f7820313233343536373839303132")
+    _ck(ctr_pt.len == 32, "aes-ctr: test plaintext is 32 bytes (2 full blocks)")
+    a_ctr := _aes_init(ctrkey.p, 16)
+    mut counter := _hexbuf("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff")
+    mut ctr_ct := NewBuf(ctr_pt.len)
+    BufPutZeros(ctr_ct, ctr_pt.len)
+    _aes_ctr_xor(a_ctr, counter, ctr_pt.p, ctr_pt.len, ctr_ct.p)
+    _ckhex(_hex_of(ctr_ct.p, ctr_ct.len), "98e4ba53e91515d399f2740785e9cfc45044041c564162572d9640efc560429c", "aes-128-ctr: openssl cross-check")
+
+    // CTR decrypt = CTR encrypt (XOR is its own inverse) - round-trip back
+    // to the original plaintext with a freshly reset counter.
+    mut counter2 := _hexbuf("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff")
+    mut roundtrip := NewBuf(ctr_ct.len)
+    BufPutZeros(roundtrip, ctr_ct.len)
+    _aes_ctr_xor(a_ctr, counter2, ctr_ct.p, ctr_ct.len, roundtrip.p)
+    _ckhex(_hex_of(roundtrip.p, roundtrip.len), _hex_of(ctr_pt.p, ctr_pt.len), "aes-128-ctr: decrypt(encrypt(x)) == x")
+
+    // Partial final block (20 bytes = 1 full block + 4 bytes) exercises the
+    // "take < 16" tail of _aes_ctr_xor's loop.
+    mut counter3 := _hexbuf("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff")
+    mut partial_pt := _hexbuf("7061727469616c20626c6f636b20746573742121")
+    _ck(partial_pt.len == 20, "aes-ctr: partial-block test plaintext is 20 bytes")
+    mut partial_ct := NewBuf(20)
+    BufPutZeros(partial_ct, 20)
+    _aes_ctr_xor(a_ctr, counter3, partial_pt.p, 20, partial_ct.p)
+    _ckhex(_hex_of(partial_ct.p, 20), "9cedad07f101109090be791681bed581455f5d1d", "aes-128-ctr: partial final block")
+
+    // Counter-wraparound: 0xff..ff must roll over to 0x00..00, exercising
+    // the full carry chain in _ctr_increment.
+    mut allff := NewBuf(16)
+    repeat 16 with _i:
+        BufPutByte(allff, 0xFF)
+    end
+    _ctr_increment(allff)
+    mut allzero := NewBuf(16)
+    BufPutZeros(allzero, 16)
+    _ckhex(_hex_of(allff.p, 16), _hex_of(allzero.p, 16), "aes-ctr: 0xff..ff counter wraps to 0x00..00")
+
+    FreeBuf(key128)
+    FreeBuf(pt)
+    FreeBuf(ct128)
+    FreeBuf(key256)
+    FreeBuf(ct256)
+    FreeBuf(ctrkey)
+    FreeBuf(ctr_pt)
+    FreeBuf(counter)
+    FreeBuf(ctr_ct)
+    FreeBuf(counter2)
+    FreeBuf(roundtrip)
+    FreeBuf(allff)
+    FreeBuf(allzero)
+    FreeBuf(counter3)
+    FreeBuf(partial_pt)
+    FreeBuf(partial_ct)
+end

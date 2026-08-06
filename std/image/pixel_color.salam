@@ -1,0 +1,186 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import str
+
+// Color construction, CSS-style hex parsing/formatting, and alpha
+// compositing. `Color` itself is declared in image.salam next to `Image`,
+// since both are the core data model - this file is just the functions
+// over it.
+//
+// All private helpers are grouped at the top of the file: once a `pub`
+// function appears, every function after it must also be `pub` (E088), so
+// they can't be interleaved with the public API below.
+
+// str is NUL-terminated UTF-8 bytes under the hood (see std/compress's own
+// header comment on why), so hex parsing works directly on raw ASCII bytes
+// via a void*/u8* view instead of str.CharAt (which returns a 1-character
+// str, not a codepoint - fine for iteration, awkward for digit math).
+func _byte_at(s: str, i: int): int:
+    bp := s as u8*
+    ret bp[i] as int
+end
+
+func _hex_digit(ch: int, ok &: bool): int:
+    if ch >= 48 && ch <= 57: ret ch - 48 end
+    if ch >= 97 && ch <= 102: ret ch - 97 + 10 end
+    if ch >= 65 && ch <= 70: ret ch - 65 + 10 end
+    ok = false
+    ret 0
+end
+
+func _hex_byte(s: str, i: int, ok &: bool): int:
+    hi := _hex_digit(_byte_at(s, i), ok)
+    lo := _hex_digit(_byte_at(s, i + 1), ok)
+    ret (hi << 4) | lo
+end
+
+func _hex_char(v: int): str:
+    if v < 10: ret str.FromInt(v as i64) end
+    letters := "abcdef"
+    ret str.Substr(letters, v - 10, 1)
+end
+
+func _hex_pair(v: int): str:
+    ret _hex_char((v >> 4) & 15) + _hex_char(v & 15)
+end
+
+@en "RGB"
+@fa "قرمز سبز آبی"
+@ar "أحمر أخضر أزرق"
+pub func RGB(r: int, g: int, b: int): Color:
+    ret Color { r = (r & 255) as u8, g = (g & 255) as u8, b = (b & 255) as u8, a = 255 as u8 }
+end
+
+@en "RGBA"
+@fa "قرمز سبز آبی آلفا"
+@ar "أحمر أخضر أزرق ألفا"
+pub func RGBA(r: int, g: int, b: int, a: int): Color:
+    ret Color { r = (r & 255) as u8, g = (g & 255) as u8, b = (b & 255) as u8, a = (a & 255) as u8 }
+end
+
+@en "Gray"
+@fa "خاکستری"
+@ar "رمادي"
+pub func Gray(v: int): Color:
+    g := (v & 255) as u8
+    ret Color { r = g, g = g, b = g, a = 255 as u8 }
+end
+
+@en "Equals"
+@fa "برابری"
+@ar "تساوي"
+pub func Equals(a: Color, b: Color): bool:
+    ret a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a
+end
+
+// Perceptual luminance (Rec. 601), 0-255 - used by Grayscale and the
+// histogram's combined channel.
+@en "Luminance"
+@fa "روشنایی"
+@ar "الإضاءة"
+pub func Luminance(c: Color): int:
+    r := c.r as int
+    g := c.g as int
+    b := c.b as int
+    ret (r * 299 + g * 587 + b * 114) / 1000
+end
+
+// Parses a CSS-style hex color: "#rgb", "#rgba", "#rrggbb" or "#rrggbbaa"
+// (a leading '#' is optional in every form). Unparsable input returns
+// opaque black rather than erroring.
+@en "ParseHex"
+@fa "خواندن هگز"
+@ar "تحليل سداسي"
+pub func ParseHex(hex: str): Color:
+    mut s := hex
+    if str.Len(s) > 0 && _byte_at(s, 0) == 35:
+        s = str.Substr(s, 1, str.Len(s) - 1)
+    end
+    n := str.Len(s)
+    mut ok := true
+    if n == 3 || n == 4:
+        r := _hex_digit(_byte_at(s, 0), ok)
+        g := _hex_digit(_byte_at(s, 1), ok)
+        b := _hex_digit(_byte_at(s, 2), ok)
+        mut a := 15
+        if n == 4: a = _hex_digit(_byte_at(s, 3), ok) end
+        if !ok: ret Color { a = 255 as u8 } end
+        ret RGBA(r * 16 + r, g * 16 + g, b * 16 + b, a * 16 + a)
+    end
+    if n == 6 || n == 8:
+        r := _hex_byte(s, 0, ok)
+        g := _hex_byte(s, 2, ok)
+        b := _hex_byte(s, 4, ok)
+        mut a := 255
+        if n == 8: a = _hex_byte(s, 6, ok) end
+        if !ok: ret Color { a = 255 as u8 } end
+        ret RGBA(r, g, b, a)
+    end
+    ret Color { a = 255 as u8 }
+end
+
+// Always the 8-digit "#rrggbbaa" form (ToHexRGB below omits alpha).
+@en "ToHex"
+@fa "به هگز"
+@ar "إلى سداسي"
+pub func ToHex(c: Color): str:
+    ret "#" + _hex_pair(c.r as int) + _hex_pair(c.g as int) + _hex_pair(c.b as int) + _hex_pair(c.a as int)
+end
+
+@en "ToHexRGB"
+@fa "به هگز آر جی بی"
+@ar "إلى سداسي آر جي بي"
+pub func ToHexRGB(c: Color): str:
+    ret "#" + _hex_pair(c.r as int) + _hex_pair(c.g as int) + _hex_pair(c.b as int)
+end
+
+// src-over alpha compositing: `src` drawn on top of `dst`, both treated as
+// straight (non-premultiplied) alpha. Used by BlendPixel and any filter
+// that overlays one color/image on another (watermarking, anti-aliased
+// drawing).
+@en "Blend"
+@fa "ترکیب"
+@ar "مزج"
+pub func Blend(dst: Color, src: Color): Color:
+    sa := (src.a as int)
+    if sa == 0: ret dst end
+    if sa == 255: ret src end
+    da := dst.a as int
+    // out_a = sa + da*(1-sa); out_c = (src.c*sa + dst.c*da*(1-sa)) / out_a
+    inv := 255 - sa
+    out_a := sa * 255 + da * inv
+    if out_a == 0:
+        ret Color { a = 0 as u8 }
+    end
+    r := ((src.r as int) * sa * 255 + (dst.r as int) * da * inv) / out_a
+    g := ((src.g as int) * sa * 255 + (dst.g as int) * da * inv) / out_a
+    b := ((src.b as int) * sa * 255 + (dst.b as int) * da * inv) / out_a
+    ret RGBA(r, g, b, out_a / 255)
+end
+
+// Linear interpolation between two colors, t in [0,1] - used by resize's
+// bilinear filter.
+@en "LerpColor"
+@fa "درون‌یابی رنگ"
+@ar "استيفاء اللون"
+pub func LerpColor(a: Color, b: Color, t: f64): Color:
+    r := (a.r as f64) + ((b.r as f64) - (a.r as f64)) * t
+    g := (a.g as f64) + ((b.g as f64) - (a.g as f64)) * t
+    bl := (a.b as f64) + ((b.b as f64) - (a.b as f64)) * t
+    al := (a.a as f64) + ((b.a as f64) - (a.a as f64)) * t
+    ret RGBA(r as int, g as int, bl as int, al as int)
+end

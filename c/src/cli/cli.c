@@ -14,6 +14,7 @@
 
 #include "core/prelude.h"
 #include "cli/cli_internal.h"
+#include "i18n/i18n.h"
 
 static void cli_set_defaults(options_t *out)
 {
@@ -56,12 +57,19 @@ static void cli_set_defaults(options_t *out)
     out->no_js_minify_names = OPTIONS_INIT_NO_JS_MINIFY_NAMES;
     out->no_minify = OPTIONS_INIT_NO_MINIFY;
     out->version_short = false;
+    out->serve_host = NULL;
+    out->serve_port = -1;
 }
 
 bool cli_parse(int argc, char **argv, options_t *out)
 {
     cli_set_defaults(out);
     int start = cli_dispatch_command(argc, argv, out);
+    if (out->command == CMD_UNKNOWN) {
+        fprintf(stderr, i18n_tr("salam: unknown command '%s'\n\n"), argv[1]);
+        cli_print_usage(stderr);
+        return false;
+    }
     if (!cli_parse_options(argc, argv, start, out)) return false;
     if (out->safe && out->ndefines < SALAM_MAX_INPUTS)
         out->defines[out->ndefines++] = "SALAM_SAFE";

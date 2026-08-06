@@ -1,0 +1,142 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import encoding.msgpack
+import encoding.value
+import encoding.encerr
+import compress
+import testing
+import os
+
+func roundtrip_int(n: i64):
+    b := msgpack.Marshal(value.ValueInt(n))
+    mut err := encerr.NoError()
+    v := msgpack.Unmarshal(b, err)
+    testing.AssertFalse(encerr.IsError(err))
+    testing.AssertEqInt64(value.AsInt(v), n)
+    compress.BufFree(b)
+end
+
+func main:
+    // null/bool
+    mut err1 := encerr.NoError()
+    bn := msgpack.Marshal(value.ValueNull())
+    vn := msgpack.Unmarshal(bn, err1)
+    testing.AssertTrue(value.IsNull(vn))
+    compress.BufFree(bn)
+
+    mut err2 := encerr.NoError()
+    bt := msgpack.Marshal(value.ValueBool(true))
+    vt := msgpack.Unmarshal(bt, err2)
+    testing.AssertTrue(value.IsBool(vt))
+    testing.AssertTrue(value.AsBool(vt))
+    compress.BufFree(bt)
+
+    mut err3 := encerr.NoError()
+    bf := msgpack.Marshal(value.ValueBool(false))
+    vf := msgpack.Unmarshal(bf, err3)
+    testing.AssertFalse(value.AsBool(vf))
+    compress.BufFree(bf)
+
+    // int boundary values
+    roundtrip_int(0 as i64)
+    roundtrip_int(127 as i64)
+    roundtrip_int(128 as i64)
+    roundtrip_int(255 as i64)
+    roundtrip_int(256 as i64)
+    roundtrip_int(65535 as i64)
+    roundtrip_int(65536 as i64)
+    roundtrip_int(0 - 1 as i64)
+    roundtrip_int(0 - 32 as i64)
+    roundtrip_int(0 - 33 as i64)
+    roundtrip_int(0 - 129 as i64)
+    roundtrip_int(4294967296 as i64)
+    roundtrip_int(0 - 9223372036854775807 as i64)
+
+    // float
+    mut errF := encerr.NoError()
+    bF := msgpack.Marshal(value.ValueFloat(3.5))
+    vF := msgpack.Unmarshal(bF, errF)
+    testing.AssertEqFloat(value.AsFloat(vF), 3.5, 0.0001)
+    compress.BufFree(bF)
+
+    // fixstr vs str8 boundary (31 vs 32 bytes)
+    s31 := "1234567890123456789012345678901"
+    testing.AssertEqInt(s31.len(), 31)
+    mut errS1 := encerr.NoError()
+    bS1 := msgpack.Marshal(value.ValueString(s31))
+    testing.AssertEqInt(compress.BufLen(bS1), 32)
+    vS1 := msgpack.Unmarshal(bS1, errS1)
+    testing.AssertEqStr(value.AsString(vS1), s31)
+    compress.BufFree(bS1)
+
+    s32 := "12345678901234567890123456789012"
+    testing.AssertEqInt(s32.len(), 32)
+    mut errS2 := encerr.NoError()
+    bS2 := msgpack.Marshal(value.ValueString(s32))
+    testing.AssertEqInt(compress.BufLen(bS2), 34)
+    vS2 := msgpack.Unmarshal(bS2, errS2)
+    testing.AssertEqStr(value.AsString(vS2), s32)
+    compress.BufFree(bS2)
+
+    // array
+    mut arr := value.NewValueArray()
+    value.ArrayPush(arr, value.ValueInt(1 as i64))
+    value.ArrayPush(arr, value.ValueString("x"))
+    value.ArrayPush(arr, value.ValueBool(true))
+    mut errA := encerr.NoError()
+    bA := msgpack.Marshal(arr)
+    vA := msgpack.Unmarshal(bA, errA)
+    testing.AssertFalse(encerr.IsError(errA))
+    testing.AssertEqInt(value.ArrayLen(vA), 3)
+    testing.AssertEqInt64(value.AsInt(value.ArrayGet(vA, 0)), 1 as i64)
+    testing.AssertEqStr(value.AsString(value.ArrayGet(vA, 1)), "x")
+    testing.AssertTrue(value.AsBool(value.ArrayGet(vA, 2)))
+    compress.BufFree(bA)
+    value.ValueFree(arr)
+    value.ValueFree(vA)
+
+    // nested array-of-objects
+    mut obj := value.NewValueObject()
+    value.ObjectSet(obj, "name", value.ValueString("salam"))
+    value.ObjectSet(obj, "n", value.ValueInt(42 as i64))
+    mut outer := value.NewValueArray()
+    value.ArrayPush(outer, obj)
+    mut errO := encerr.NoError()
+    bO := msgpack.Marshal(outer)
+    vO := msgpack.Unmarshal(bO, errO)
+    testing.AssertFalse(encerr.IsError(errO))
+    testing.AssertEqInt(value.ArrayLen(vO), 1)
+    inner := value.ArrayGet(vO, 0)
+    testing.AssertEqStr(value.AsString(value.ObjectGet(inner, "name")), "salam")
+    testing.AssertEqInt64(value.AsInt(value.ObjectGet(inner, "n")), 42 as i64)
+    compress.BufFree(bO)
+    value.ValueFree(outer)
+    value.ValueFree(vO)
+
+    // ext-type byte sequence must be rejected, not silently misparsed
+    mut extBuf := compress.NewByteBuf()
+    compress.BufPush(extBuf, 0xd4)
+    compress.BufPush(extBuf, 1)
+    compress.BufPush(extBuf, 0)
+    mut errE := encerr.NoError()
+    msgpack.Unmarshal(extBuf, errE)
+    testing.AssertTrue(encerr.IsError(errE))
+    testing.AssertEqInt(errE.kind, encerr.KindCustom)
+    compress.BufFree(extBuf)
+
+    os.Exit(testing.Summary())
+end

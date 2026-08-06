@@ -1,0 +1,190 @@
+package query
+
+import str
+import encoding
+
+// query - URL query string encode/decode (application/x-www-form-urlencoded
+// style, e.g. "a=1&b=2&b=3"). Reuses encoding.URLEncode/URLDecode for the
+// actual percent-encoding rather than reimplementing it.
+//
+// Multi-value keys are represented as HashMap<str, QueryValues> internally,
+// but no public function spells that generic instantiation out directly in
+// its own signature - a `pub func` taking a parameter AND mentioning
+// HashMap<str, LocalStruct>/Vector<LocalStruct> directly as a param/return
+// type fails to compile when called from a different package (confirmed via
+// isolated repro; a zero-parameter function returning the same generic is
+// fine, and a same-package indirection call is fine - only a parameterized
+// function's own signature spelling out the generic, called cross-package,
+// breaks). QueryMap wraps the HashMap in a one-field named struct instead -
+// every public function here takes/returns QueryMap, never the raw
+// HashMap<str, QueryValues> - which sidesteps it entirely (the same pattern
+// encoding.value's own Value struct already uses for its Vector<Value>/
+// HashMap<str,Value> fields).
+//
+// Separately: HashMap<str, Vector<str>> (a generic argument that is itself
+// a generic) is ALSO a known-broken pattern in this compiler regardless of
+// cross-package concerns, which is why QueryValues wraps Vector<str> in its
+// own one-field struct rather than using HashMap<str, Vector<str>> directly.
+
+pub struct QueryOptions:
+    pub space_as_plus: bool = true
+end
+
+pub struct QueryValues:
+    pub items: Vector<str> = Vector {}
+end
+
+pub struct QueryMap:
+    pub data: HashMap<str, QueryValues> = HashMap {} as HashMap<str, QueryValues>
+end
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+// A small local copy of encoding.URLDecode's byte-pointer scan with the '+'
+// branch made conditional - encoding.URLDecode always turns '+' into a
+// space, which is wrong when space_as_plus is false, and its private
+// helpers aren't reachable from this package to build a variant on top of.
+func _pct_decode(s: str, plus_as_space: bool): str:
+    n := s.len()
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < n:
+        code := _ub(bp, i)
+        if code == 37 && i + 2 < n:
+            hi := encoding.HexVal(str.CharAt(s, i + 1))
+            lo := encoding.HexVal(str.CharAt(s, i + 2))
+            if hi >= 0 && lo >= 0:
+                str.BufAppendChar(sb, hi * 16 + lo)
+                i += 3
+            else:
+                str.BufAppendChar(sb, code)
+                i += 1
+            end
+        else code == 43:
+            if plus_as_space:
+                str.BufAppendChar(sb, 32)
+            else:
+                str.BufAppendChar(sb, 43)
+            end
+            i += 1
+        else:
+            str.BufAppendChar(sb, code)
+            i += 1
+        end
+    end
+    ret str.BufStr(sb)
+end
+
+func _decode_component(s: str, space_as_plus: bool): str:
+    if space_as_plus: ret encoding.URLDecode(s) end
+    ret _pct_decode(s, false)
+end
+
+func _encode_component(s: str, space_as_plus: bool): str:
+    enc := encoding.URLEncode(s)
+    if space_as_plus: ret str.Replace(enc, "%20", "+") end
+    ret enc
+end
+
+pub func NewQueryMap(): QueryMap: ret QueryMap {} end
+
+pub func DecodeWith(qs: str, opts: QueryOptions): QueryMap:
+    mut out := QueryMap {}
+    mut body := qs
+    if body.len() > 0 && str.CharAt(body, 0) == "?":
+        body = body.substr(1, body.len() - 1)
+    end
+    if body.len() == 0: ret out end
+
+    pairs := str.Split(body, "&")
+    mut i := 0
+    until i < pairs.len():
+        pair := pairs.get(i)[0]
+        i += 1
+        if pair.len() == 0: continue end
+        eq := str.IndexOf(pair, "=")
+        mut rawKey := pair
+        mut rawVal := ""
+        if eq >= 0:
+            rawKey = pair.substr(0, eq)
+            rawVal = pair.substr(eq + 1, pair.len() - eq - 1)
+        end
+        key := _decode_component(rawKey, opts.space_as_plus)
+        val := _decode_component(rawVal, opts.space_as_plus)
+
+        mut qv := QueryValues {}
+        if out.data.has(key): qv = out.data.get(key) end
+        qv.items.push(val)
+        out.data.put(key, qv)
+    end
+    ret out
+end
+
+pub func Decode(qs: str): QueryMap:
+    ret DecodeWith(qs, QueryOptions {})
+end
+
+pub func EncodeWith(values: QueryMap, opts: QueryOptions): str:
+    mut out := str.NewBuilder()
+    mut it := values.data.iter()
+    mut first := true
+    until it.has_next():
+        k := it.key()
+        qv := it.value()
+        mut j := 0
+        until j < qv.items.len():
+            if !first: str.BufAppendChar(out, 38) end
+            first = false
+            str.BufAppend(out, _encode_component(k, opts.space_as_plus))
+            str.BufAppendChar(out, 61)
+            str.BufAppend(out, _encode_component(qv.items.get(j)[0], opts.space_as_plus))
+            j += 1
+        end
+        it.next()
+    end
+    ret str.BufStr(out)
+end
+
+pub func Encode(values: QueryMap): str:
+    ret EncodeWith(values, QueryOptions {})
+end
+
+pub func GetAll(qs: str, key: str): Vector<str>:
+    m := Decode(qs)
+    if m.data.has(key): ret m.data.get(key).items end
+    ret Vector {} as Vector<str>
+end
+
+pub func Get(qs: str, key: str): str:
+    vs := GetAll(qs, key)
+    if vs.len() > 0: ret vs.get(0)[0] end
+    ret ""
+end
+
+pub func Has(qs: str, key: str): bool:
+    m := Decode(qs)
+    ret m.data.has(key)
+end
+
+pub func Size(m: QueryMap): int: ret m.data.size() end
+
+pub func Add(values &: QueryMap, key: str, val: str):
+    mut qv := QueryValues {}
+    if values.data.has(key): qv = values.data.get(key) end
+    qv.items.push(val)
+    values.data.put(key, qv)
+end
+
+pub func Set(values &: QueryMap, key: str, val: str):
+    mut qv := QueryValues {}
+    qv.items.push(val)
+    values.data.put(key, qv)
+end

@@ -1,0 +1,1366 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// `salam doc` engine: lexes + parses (+ best-effort semantic pass, for real
+// inferred types on ':='-declared consts/vars) one file at a time, walks the
+// resulting AST into a flat, dependency-free "DocDb" (mirrors ast.salam's own
+// Node/Ast flat-storage design - see the header note on DocDecl below for
+// why), then renders the whole database as one self-contained HTML file
+// (inline CSS + JS, no external assets). No codegen, no build - this package
+// never touches codegen.salam/jsgen.salam/llvm.salam.
+//
+// Doc comments are a new convention (there is no such concept upstream):
+// a contiguous run of leading `//`/`///` line comments, or a single
+// `/** ... */` block comment, with no blank line before the declaration it
+// precedes, becomes that declaration's doc text. Optional `@lang` tags split
+// it into per-language prose, reusing the same tagging idea as the existing
+// `@en "..."`/`@fa "..."` name-alias metas (parser.salam's parse_metas).
+//
+// Top-level ordering below follows this compiler's own required layout
+// (E085/E087/E088): consts, then global vars, then types, then private
+// functions, then the pub section last.
+package docgen
+
+import at "ast.salam"
+import tok "token.salam"
+import ps "parser.salam"
+import lx "lexer.salam"
+import cc "condcomp.salam"
+import sm "semantic.salam"
+import src "source.salam"
+import lg "logger.salam"
+import lp "langpack.salam"
+import str
+import co "sal_core.salam"
+
+// ---------------------------------------------------------------------------
+// Declaration kinds
+// ---------------------------------------------------------------------------
+pub const DOC_CONST := 0
+pub const DOC_VAR := 1
+pub const DOC_TYPE := 2
+pub const DOC_STRUCT := 3
+pub const DOC_INTERFACE := 4
+pub const DOC_ENUM := 5
+pub const DOC_IMPL := 6
+pub const DOC_FUNC := 7
+pub const DOC_FIELD := 8
+pub const DOC_ENUM_MEMBER := 9
+
+// ---------------------------------------------------------------------------
+// Static HTML assets. Backtick-delimited RAW string literals (no escape
+// decoding at all in this language - see lexer.salam's scan_raw_string), so
+// the embedded CSS/JS can be written verbatim. The one rule this buys: never
+// put a literal backtick inside them (the raw scan has no way to escape one),
+// so the JS avoids template literals and uses '+' string concatenation
+// instead.
+// ---------------------------------------------------------------------------
+css_text := `
+:root {
+  --bg: #ffffff;
+  --bg-alt: #f6f7f9;
+  --fg: #1a1d23;
+  --fg-muted: #5b6270;
+  --border: #e3e6ea;
+  --accent: #3860ff;
+  --accent-fg: #ffffff;
+  --code-bg: #f0f2f5;
+  --badge-priv-bg: #fdecec;
+  --badge-priv-fg: #b3261e;
+  --badge-dep-bg: #fff4e0;
+  --badge-dep-fg: #9a5b00;
+  --shadow: 0 1px 3px rgba(20, 22, 30, 0.08);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161c;
+    --bg-alt: #1b1e26;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b1;
+    --border: #2a2e39;
+    --accent: #7b9bff;
+    --accent-fg: #10131a;
+    --code-bg: #10131a;
+    --badge-priv-bg: #3a1c1c;
+    --badge-priv-fg: #ff9d92;
+    --badge-dep-bg: #3a2c10;
+    --badge-dep-fg: #ffcb7a;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14161c;
+  --bg-alt: #1b1e26;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b1;
+  --border: #2a2e39;
+  --accent: #7b9bff;
+  --accent-fg: #10131a;
+  --code-bg: #10131a;
+  --badge-priv-bg: #3a1c1c;
+  --badge-priv-fg: #ff9d92;
+  --badge-dep-bg: #3a2c10;
+  --badge-dep-fg: #ffcb7a;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+}
+code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.topbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+}
+.topbar .title { font-weight: 600; font-size: 15px; white-space: nowrap; margin-right: 4px; }
+.topbar input[type="search"] {
+  flex: 1 1 220px; min-width: 120px; max-width: 420px;
+  padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg-alt); color: var(--fg); font-size: 14px;
+}
+.topbar label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--fg-muted); white-space: nowrap; }
+.topbar select {
+  padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg-alt); color: var(--fg); font-size: 13px;
+}
+.icon-btn {
+  border: 1px solid var(--border); background: var(--bg-alt); color: var(--fg);
+  border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer;
+}
+.icon-btn:hover { border-color: var(--accent); }
+#sidebar-toggle { display: none; }
+.layout { display: flex; align-items: flex-start; }
+aside.sidebar {
+  width: 280px; flex: 0 0 280px; position: sticky; top: 49px;
+  height: calc(100vh - 49px); overflow-y: auto;
+  border-right: 1px solid var(--border); background: var(--bg-alt);
+  padding: 10px 0;
+}
+.nav-file {
+  padding: 10px 14px 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.03em;
+  text-transform: uppercase; color: var(--fg-muted);
+}
+.nav-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 14px; font-size: 13px; color: var(--fg);
+}
+.nav-item:hover { background: var(--border); text-decoration: none; }
+.nav-kind {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 5px; font-size: 10px; font-weight: 700;
+  background: var(--accent); color: var(--accent-fg); flex: none;
+}
+.nav-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-lock { margin-left: auto; font-size: 10px; color: var(--fg-muted); flex: none; }
+main#main-content { flex: 1 1 auto; min-width: 0; padding: 20px 28px 80px; max-width: 920px; }
+.file-heading {
+  font-size: 13px; font-weight: 700; color: var(--fg-muted);
+  margin: 32px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+}
+.file-heading:first-child { margin-top: 0; }
+.empty-state { color: var(--fg-muted); padding: 40px 0; text-align: center; }
+.decl-card {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px 18px; margin-bottom: 14px; box-shadow: var(--shadow);
+}
+.decl-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.decl-name { margin: 0; font-size: 16px; font-weight: 650; }
+.decl-source-name { font-size: 12px; color: var(--fg-muted); font-family: ui-monospace, monospace; }
+.kind-tag {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  padding: 2px 7px; border-radius: 5px; background: var(--accent); color: var(--accent-fg);
+}
+.badge { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 7px; border-radius: 5px; }
+.badge-private { background: var(--badge-priv-bg); color: var(--badge-priv-fg); }
+.badge-dep { background: var(--badge-dep-bg); color: var(--badge-dep-fg); }
+.decl-sig, .member-sig {
+  background: var(--code-bg); border-radius: 8px; padding: 10px 12px; margin: 10px 0 0;
+  font-size: 13px; overflow-x: auto; white-space: pre;
+}
+.decl-doc, .member-doc { margin: 10px 0 0; color: var(--fg); white-space: pre-wrap; }
+.member-list { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+.member-row { padding: 8px 0; border-bottom: 1px dashed var(--border); }
+.member-row:last-child { border-bottom: none; }
+.member-head { display: flex; align-items: center; gap: 8px; }
+.member-name { font-weight: 600; font-size: 13.5px; }
+.member-sig { font-size: 12.5px; }
+.member-doc { font-size: 13px; }
+@media (max-width: 860px) {
+  aside.sidebar {
+    position: fixed; left: 0; top: 49px; bottom: 0; z-index: 15;
+    transform: translateX(-100%); transition: transform 0.15s ease; box-shadow: var(--shadow);
+  }
+  body.sidebar-open aside.sidebar { transform: translateX(0); }
+  #sidebar-toggle { display: inline-flex; }
+  main#main-content { padding: 16px; }
+  .topbar .title { display: none; }
+}
+`
+
+js_text := `
+(function () {
+  "use strict";
+  var state = { lang: "", showPrivate: false, query: "" };
+  var KIND_ORDER = { struct: 0, interface: 1, enum: 2, impl: 3, type: 4, const: 5, var: 6, func: 7, field: 8, member: 9 };
+  var KIND_LABEL = { const: "Const", var: "Var", type: "Type", struct: "Struct", interface: "Interface", enum: "Enum", impl: "Impl", func: "Func", field: "Field", member: "Member" };
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null && text !== "") e.textContent = text;
+    return e;
+  }
+
+  function pairGet(pairs, lang) {
+    for (var i = 0; i < pairs.length; i++) {
+      if (pairs[i][0] === lang) return pairs[i][1];
+    }
+    return null;
+  }
+
+  function collectLangs() {
+    var seen = {};
+    var out = [];
+    DOC.decls.forEach(function (d) {
+      [d.a, d.doc].forEach(function (pairs) {
+        pairs.forEach(function (pair) {
+          var lg = pair[0];
+          if (lg && !seen[lg]) { seen[lg] = true; out.push(lg); }
+        });
+      });
+    });
+    out.sort();
+    return out;
+  }
+
+  function displayName(d) {
+    if (state.lang) {
+      var v = pairGet(d.a, state.lang);
+      if (v) return v;
+    }
+    var en = pairGet(d.a, "en");
+    if (en) return en;
+    if (d.a.length >= 1) return d.a[0][1];
+    return d.n;
+  }
+
+  function displayDoc(d) {
+    if (state.lang) {
+      var v = pairGet(d.doc, state.lang);
+      if (v) return v;
+    }
+    var en = pairGet(d.doc, "en");
+    if (en) return en;
+    if (d.doc.length >= 1) return d.doc[0][1];
+    return "";
+  }
+
+  function matchesQuery(d) {
+    if (!state.query) return true;
+    var q = state.query.toLowerCase();
+    if (d.n.toLowerCase().indexOf(q) !== -1) return true;
+    if (d.s.toLowerCase().indexOf(q) !== -1) return true;
+    for (var i = 0; i < d.a.length; i++) {
+      if (d.a[i][1].toLowerCase().indexOf(q) !== -1) return true;
+    }
+    return false;
+  }
+
+  function declVisible(i) {
+    var d = DOC.decls[i];
+    if (!state.showPrivate && !d.p) return false;
+    if (matchesQuery(d)) return true;
+    for (var mi = 0; mi < d.m.length; mi++) {
+      var md = DOC.decls[d.m[mi]];
+      if ((state.showPrivate || md.p) && matchesQuery(md)) return true;
+    }
+    return false;
+  }
+
+  function topLevelForFile(fi) {
+    var out = [];
+    for (var i = 0; i < DOC.decls.length; i++) {
+      if (DOC.decls[i].f === fi && DOC.decls[i].par === -1) out.push(i);
+    }
+    out.sort(function (ai, bi) {
+      var a = DOC.decls[ai], b = DOC.decls[bi];
+      var ka = KIND_ORDER[a.k]; if (ka === undefined) ka = 99;
+      var kb = KIND_ORDER[b.k]; if (kb === undefined) kb = 99;
+      if (ka !== kb) return ka - kb;
+      if (a.p !== b.p) return a.p ? -1 : 1;
+      return a.n < b.n ? -1 : (a.n > b.n ? 1 : 0);
+    });
+    return out;
+  }
+
+  function renderNavItem(container, i) {
+    var d = DOC.decls[i];
+    var a = el("a", "nav-item kind-" + d.k, null);
+    a.href = "#decl-" + i;
+    var label = KIND_LABEL[d.k] || d.k;
+    a.appendChild(el("span", "nav-kind", label.substring(0, 1)));
+    a.appendChild(el("span", "nav-name", displayName(d)));
+    if (!d.p) a.appendChild(el("span", "nav-lock", "private"));
+    container.appendChild(a);
+  }
+
+  function sigLine(d) {
+    return d.s ? d.s : d.n;
+  }
+
+  function renderMemberRow(container, mi) {
+    var md = DOC.decls[mi];
+    if (!state.showPrivate && !md.p) return;
+    if (state.query && !matchesQuery(md)) return;
+    var row = el("div", "member-row", null);
+    row.id = "decl-" + mi;
+    var head = el("div", "member-head", null);
+    if (!md.p) head.appendChild(el("span", "badge badge-private", "private"));
+    if (md.dep) head.appendChild(el("span", "badge badge-dep", "deprecated"));
+    head.appendChild(el("span", "member-name", displayName(md)));
+    row.appendChild(head);
+    var sig = el("pre", "member-sig", null);
+    sig.appendChild(el("code", null, sigLine(md)));
+    row.appendChild(sig);
+    var doc = displayDoc(md);
+    if (doc) row.appendChild(el("p", "member-doc", doc));
+    container.appendChild(row);
+  }
+
+  function renderCard(container, i) {
+    var d = DOC.decls[i];
+    var card = el("section", "decl-card", null);
+    card.id = "decl-" + i;
+    var head = el("div", "decl-head", null);
+    head.appendChild(el("span", "kind-tag", KIND_LABEL[d.k] || d.k));
+    if (!d.p) head.appendChild(el("span", "badge badge-private", "private"));
+    if (d.dep) head.appendChild(el("span", "badge badge-dep", "deprecated"));
+    var dn = displayName(d);
+    head.appendChild(el("h3", "decl-name", dn));
+    if (dn !== d.n) head.appendChild(el("span", "decl-source-name", d.n));
+    card.appendChild(head);
+    var sig = el("pre", "decl-sig", null);
+    sig.appendChild(el("code", null, sigLine(d)));
+    card.appendChild(sig);
+    var doc = displayDoc(d);
+    if (doc) card.appendChild(el("p", "decl-doc", doc));
+    if (d.m.length) {
+      var mlist = el("div", "member-list", null);
+      d.m.forEach(function (mi) { renderMemberRow(mlist, mi); });
+      if (mlist.childNodes.length) card.appendChild(mlist);
+    }
+    container.appendChild(card);
+  }
+
+  function render() {
+    var sidebar = document.getElementById("sidebar-nav");
+    var main = document.getElementById("main-content");
+    sidebar.innerHTML = "";
+    main.innerHTML = "";
+    var shown = 0;
+    DOC.files.forEach(function (fname, fi) {
+      var top = topLevelForFile(fi).filter(declVisible);
+      if (!top.length) return;
+      shown += top.length;
+      sidebar.appendChild(el("div", "nav-file", fname));
+      var heading = el("h2", "file-heading", fname);
+      heading.id = "file-" + fi;
+      main.appendChild(heading);
+      top.forEach(function (i) {
+        renderNavItem(sidebar, i);
+        renderCard(main, i);
+      });
+    });
+    if (!shown) main.appendChild(el("p", "empty-state", "No declarations match the current filters."));
+  }
+
+  function initLangSwitcher() {
+    var langs = collectLangs();
+    var wrap = document.getElementById("lang-switcher");
+    if (langs.length < 2) { wrap.style.display = "none"; return; }
+    var select = document.getElementById("lang-select");
+    var srcOpt = document.createElement("option");
+    srcOpt.value = "";
+    srcOpt.textContent = "Source";
+    select.appendChild(srcOpt);
+    langs.forEach(function (lg) {
+      var opt = document.createElement("option");
+      opt.value = lg;
+      opt.textContent = lg;
+      select.appendChild(opt);
+    });
+    select.addEventListener("change", function () {
+      state.lang = select.value;
+      render();
+    });
+  }
+
+  function initTheme() {
+    var saved = null;
+    try { saved = localStorage.getItem("salam-doc-theme"); } catch (e) {}
+    if (saved === "dark" || saved === "light") document.documentElement.setAttribute("data-theme", saved);
+    var btn = document.getElementById("theme-toggle");
+    btn.addEventListener("click", function () {
+      var cur = document.documentElement.getAttribute("data-theme");
+      var next;
+      if (cur === "dark") next = "light";
+      else if (cur === "light") next = "dark";
+      else {
+        var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+        next = prefersDark ? "light" : "dark";
+      }
+      document.documentElement.setAttribute("data-theme", next);
+      try { localStorage.setItem("salam-doc-theme", next); } catch (e) {}
+    });
+  }
+
+  function init() {
+    document.getElementById("doc-title").textContent = DOC_TITLE;
+    document.title = DOC_TITLE + " - API Documentation";
+    document.getElementById("search-box").addEventListener("input", function (e) {
+      state.query = e.target.value;
+      render();
+    });
+    document.getElementById("show-private").addEventListener("change", function (e) {
+      state.showPrivate = e.target.checked;
+      render();
+    });
+    document.getElementById("sidebar-toggle").addEventListener("click", function () {
+      document.body.classList.toggle("sidebar-open");
+    });
+    initLangSwitcher();
+    initTheme();
+    render();
+  }
+
+  init();
+})();
+`
+
+body_text := `<div class="topbar">
+  <button id="sidebar-toggle" class="icon-btn" type="button">Menu</button>
+  <span class="title" id="doc-title">salam doc</span>
+  <input type="search" id="search-box" placeholder="Search declarations...">
+  <label><input type="checkbox" id="show-private"> Show private</label>
+  <div id="lang-switcher"><select id="lang-select"></select></div>
+  <button id="theme-toggle" class="icon-btn" type="button">Theme</button>
+</div>
+<div class="layout">
+  <aside class="sidebar"><nav id="sidebar-nav"></nav></aside>
+  <main id="main-content"></main>
+</div>
+`
+
+// ---------------------------------------------------------------------------
+// Data model. Flat-storage, mirroring ast.salam's own Ast/Node design: one
+// Vector<DocDecl> (a plain, non-generic struct - not a nested generic type),
+// with integer-index parent/member links and flat [k,v,k,v,...] pair vectors
+// for aliases/doc text instead of Vector<Vector<str>>. Nested generic
+// containers (Vector<Vector<T>>, HashMap<K,Vector<V>>) are a known landmine
+// in this compiler; this shape sidesteps them entirely.
+// ---------------------------------------------------------------------------
+pub struct DocDecl:
+    pub kind: int = 0
+    pub name: str = ""
+    pub sig: str = ""
+    pub is_pub: bool = false
+    pub is_deprecated: bool = false
+    pub file_idx: int = 0
+    pub line: int = 0
+    pub parent: int = 0 - 1 // -1 = top-level; else index of the owning struct/interface/enum/impl row
+    pub members: Vector<int> = Vector {} // child row indices
+    pub aliases: Vector<str> = Vector {} // flat [lang, name, lang, name, ...] from @lang metas
+    pub doc: Vector<str> = Vector {} // flat [lang, text, lang, text, ...] from doc comments
+end
+
+pub struct DocDb:
+    pub decls: Vector<DocDecl> = Vector {}
+    pub files: Vector<str> = Vector {} // relative paths, in discovery order
+end
+
+// One contiguous doc-comment block, keyed by the source line right after it
+// ends (a declaration starting on end_line+1 claims it).
+struct CommentBlock:
+    pub end_line: int = 0
+    pub texts: Vector<str> = Vector {} // flat [lang, text, lang, text, ...]
+end
+
+// ---------------------------------------------------------------------------
+// Small private helpers
+// ---------------------------------------------------------------------------
+
+// Unsigned byte read from a str (same idiom used throughout the port, e.g.
+// driver.salam's byte_at / jsgen.salam's jsg_escape).
+func byte_at(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+func is_alpha(b: int): bool:
+    ret (b >= 97 && b <= 122) || (b >= 65 && b <= 90)
+end
+
+// ---------------------------------------------------------------------------
+// DocDb row builders. Every get-mutate-set pair below is tight (nothing else
+// touches the same row between the Get and the Set), matching ast.salam's
+// own mutation protocol.
+// ---------------------------------------------------------------------------
+
+func db_add_file(db &: DocDb, rel: str): int:
+    idx := db.files.len()
+    db.files.push(rel)
+    ret idx
+end
+
+func db_add_decl(
+    db &: DocDb, kind: int, name: str, sig: str, is_pub: bool, is_dep: bool, file_idx: int, line: int,
+    parent: int
+): int:
+    mut d := DocDecl {}
+    d.kind = kind
+    d.name = name
+    d.sig = sig
+    d.is_pub = is_pub
+    d.is_deprecated = is_dep
+    d.file_idx = file_idx
+    d.line = line
+    d.parent = parent
+    idx := db.decls.len()
+    db.decls.push(d)
+    if parent >= 0:
+        mut pd := db.decls.get(parent)[0]
+        pd.members.push(idx)
+        db.decls.set(parent, pd)
+    end
+    ret idx
+end
+
+func db_add_alias(db &: DocDb, id: int, lang: str, val: str):
+    mut d := db.decls.get(id)[0]
+    d.aliases.push(lang)
+    d.aliases.push(val)
+    db.decls.set(id, d)
+end
+
+func db_add_doc(db &: DocDb, id: int, lang: str, text: str):
+    mut d := db.decls.get(id)[0]
+    d.doc.push(lang)
+    d.doc.push(text)
+    db.decls.set(id, d)
+end
+
+func attach_aliases(db &: DocDb, a: at.Ast, node_id: int, decl_idx: int):
+    cnt := at.AliasCount(a, node_id)
+    mut i := 0
+    until i + 1 < cnt:
+        lang := at.Alias(a, node_id, i)
+        val := at.Alias(a, node_id, i + 1)
+        db_add_alias(db, decl_idx, lang, val)
+        i += 2
+    end
+end
+
+// ---------------------------------------------------------------------------
+// Type / signature rendering (purely syntactic - walks AST_TYPE trees
+// directly). `finish_untyped_params` (parser.salam) synthesizes "__T0"-style
+// placeholder type names for untyped params; hide those and just show the
+// bare param name instead.
+// ---------------------------------------------------------------------------
+
+func is_synth_typaram(name: str): bool:
+    ret str.StartsWith(name, "__T")
+end
+
+func type_node_to_str(a: at.Ast, id: int): str:
+    if id == 0:
+        ret ""
+    end
+    n := at.Get(a, id)
+    mut base := ""
+    if n.is_dyn:
+        base = "dyn " + n.name
+    else str.Equals(n.name, "func"):
+        mut b := str.NewBuilder()
+        str.BufAppend(b, "func(")
+        cnt := at.ChildCount(a, id)
+        mut i := 0
+        until i < cnt:
+            if i != 0:
+                str.BufAppend(b, ", ")
+            end
+            str.BufAppend(b, type_node_to_str(a, at.Child(a, id, i)))
+            i += 1
+        end
+        str.BufAppend(b, ")")
+        if n.ty != 0:
+            str.BufAppend(b, ": ")
+            str.BufAppend(b, type_node_to_str(a, n.ty))
+        end
+        base = str.BufStr(b)
+        str.BufFree(b)
+    else:
+        if is_synth_typaram(n.name):
+            base = "auto"
+        else:
+            base = n.name
+        end
+        gcount := at.ChildCount(a, id)
+        if gcount > 0:
+            mut b2 := str.NewBuilder()
+            str.BufAppend(b2, base)
+            str.BufAppend(b2, "<")
+            mut i2 := 0
+            until i2 < gcount:
+                if i2 != 0:
+                    str.BufAppend(b2, ", ")
+                end
+                str.BufAppend(b2, type_node_to_str(a, at.Child(a, id, i2)))
+                i2 += 1
+            end
+            str.BufAppend(b2, ">")
+            base = str.BufStr(b2)
+            str.BufFree(b2)
+        end
+    end
+    dcount := at.DimCount(a, id)
+    mut i3 := 0
+    until i3 < dcount:
+        base = base + "[]"
+        i3 += 1
+    end
+    if n.is_pointer:
+        base = base + "*"
+    end
+    ret base
+end
+
+// Best-effort one-line rendering of a simple literal initializer. Used only
+// when neither an explicit type annotation nor a semantic-resolved type is
+// available.
+func literal_preview(a: at.Ast, id: int): str:
+    if id == 0:
+        ret ""
+    end
+    n := at.Get(a, id)
+    if n.kind != at.AST_LITERAL:
+        ret ""
+    end
+    v := at.ValueOf(a, id)
+    if v.kind == tok.TV_INT:
+        ret str.FromInt(v.ival as i64)
+    end
+    if v.kind == tok.TV_FLOAT:
+        ret co.Format1("%g", co.ArgFloat(v.fval))
+    end
+    if v.kind == tok.TV_STRING:
+        ret "\"" + v.sval + "\""
+    end
+    if v.kind == tok.TV_BOOL:
+        ret v.bval ? "true" : "false"
+    end
+    ret ""
+end
+
+func typarams_str(a: at.Ast, id: int): str:
+    n := at.TyparamCount(a, id)
+    if n == 0:
+        ret ""
+    end
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "<")
+    mut i := 0
+    until i < n:
+        if i != 0:
+            str.BufAppend(b, ", ")
+        end
+        tp := at.Typaram(a, id, i)
+        if is_synth_typaram(tp):
+            i += 1
+            continue
+        end
+        str.BufAppend(b, tp)
+        bound := at.TyparamBound(a, id, i)
+        if bound.len() != 0:
+            str.BufAppend(b, ": ")
+            str.BufAppend(b, bound)
+        end
+        i += 1
+    end
+    str.BufAppend(b, ">")
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func params_str(a: at.Ast, fid: int): str:
+    cnt := at.ChildCount(a, fid)
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "(")
+    mut shown := 0
+    mut i := 0
+    until i < cnt:
+        pid := at.Child(a, fid, i)
+        pn := at.Get(a, pid)
+        if pn.kind != at.AST_PARAM:
+            i += 1
+            continue
+        end
+        if shown != 0:
+            str.BufAppend(b, ", ")
+        end
+        str.BufAppend(b, pn.name)
+        if pn.is_ref:
+            str.BufAppend(b, " &")
+        end
+        if pn.ty != 0:
+            tstr := type_node_to_str(a, pn.ty)
+            if !str.Equals(tstr, "auto"):
+                str.BufAppend(b, ": ")
+                str.BufAppend(b, tstr)
+            end
+        end
+        if pn.a != 0:
+            prev := literal_preview(a, pn.a)
+            if prev.len() != 0:
+                str.BufAppend(b, " = ")
+                str.BufAppend(b, prev)
+            end
+        end
+        shown += 1
+        i += 1
+    end
+    str.BufAppend(b, ")")
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func func_signature(a: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "func ")
+    str.BufAppend(b, n.name)
+    str.BufAppend(b, typarams_str(a, id))
+    str.BufAppend(b, params_str(a, id))
+    if n.ty != 0:
+        str.BufAppend(b, ": ")
+        str.BufAppend(b, type_node_to_str(a, n.ty))
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+// Resolved type for a var/const/field: explicit annotation first, else the
+// semantic pass's inferred type_str (covers ':=' decls), else "".
+func resolved_type_str(a: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    if n.ty != 0:
+        ret type_node_to_str(a, n.ty)
+    end
+    if n.type_str.len() != 0:
+        ret n.type_str
+    end
+    ret ""
+end
+
+func value_suffix(a: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    if n.a == 0:
+        ret ""
+    end
+    prev := literal_preview(a, n.a)
+    if prev.len() == 0:
+        ret ""
+    end
+    ret " = " + prev
+end
+
+func const_sig(a: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    mut s := "const " + n.name
+    ty := resolved_type_str(a, id)
+    if ty.len() != 0:
+        s = s + ": " + ty
+    end
+    s = s + value_suffix(a, id)
+    ret s
+end
+
+func var_decl_sig(a: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    mut s := n.is_mut ? "mut var " : "var "
+    s = s + n.name
+    ty := resolved_type_str(a, id)
+    if ty.len() != 0:
+        s = s + ": " + ty
+    end
+    s = s + value_suffix(a, id)
+    ret s
+end
+
+func field_sig(a: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    mut s := n.name
+    ty := resolved_type_str(a, id)
+    if ty.len() != 0:
+        s = s + ": " + ty
+    end
+    s = s + value_suffix(a, id)
+    ret s
+end
+
+func enum_member_sig(a: at.Ast, id: int): str:
+    n := at.Get(a, id)
+    s := literal_preview(a, n.a)
+    if s.len() == 0:
+        ret n.name
+    end
+    ret n.name + " = " + s
+end
+
+// ---------------------------------------------------------------------------
+// Doc-comment extraction: a second, comment-preserving lex of the same file
+// (never fed to the parser - see the file header note), grouped into
+// contiguous blocks by physical line adjacency between consecutive comment
+// tokens (any non-comment token in between is simply ignored, since only
+// comment-to-comment line adjacency matters for grouping).
+// ---------------------------------------------------------------------------
+
+func split_lines(s: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    n := s.len()
+    mut start := 0
+    mut i := 0
+    until i < n:
+        if byte_at(s, i) == 10:
+            out.push(str.Substr(s, start, i - start))
+            start = i + 1
+        end
+        i += 1
+    end
+    out.push(str.Substr(s, start, n - start))
+    ret out
+end
+
+// "// text" / "/// text" -> "text"
+func strip_line_comment(raw: str): str:
+    n := raw.len()
+    mut i := 0
+    until i < n && byte_at(raw, i) == 47:
+        i += 1
+    end
+    ret str.Trim(str.Substr(raw, i, n - i))
+end
+
+// "/* ... */" / "/** ... */" -> inner text, with a leading '*' (JSDoc style)
+// stripped from each interior line.
+func strip_block_comment(raw: str): str:
+    n := raw.len()
+    mut start := 0
+    if n >= 2 && byte_at(raw, 0) == 47 && byte_at(raw, 1) == 42:
+        start = 2
+    end
+    until start < n && byte_at(raw, start) == 42:
+        start += 1
+    end
+    mut stop := n
+    if stop >= 2 && byte_at(raw, stop - 1) == 47 && byte_at(raw, stop - 2) == 42:
+        stop -= 2
+    end
+    body := str.Substr(raw, start, stop - start)
+    lines := split_lines(body)
+    mut b := str.NewBuilder()
+    mut first := true
+    mut li := 0
+    until li < lines.len():
+        mut line := str.Trim(lines.get(li)[0])
+        if line.len() > 0 && byte_at(line, 0) == 42:
+            line = str.Trim(str.Substr(line, 1, line.len() - 1))
+        end
+        if !first:
+            str.BufAppendChar(b, 10)
+        end
+        str.BufAppend(b, line)
+        first = false
+        li += 1
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret str.Trim(r)
+end
+
+// Splits a doc-comment block's joined text on "@lang" tags into flat
+// [lang, text, lang, text, ...] pairs pushed onto `out`. Untagged text (no
+// "@lang" line at all) becomes one pair with lang = "" (the default/fallback
+// bucket).
+func split_lang_sections(text: str, out &: Vector<str>):
+    lines := split_lines(text)
+    mut cur_lang := ""
+    mut cur := ""
+    mut has_any := false
+    mut i := 0
+    until i < lines.len():
+        line := lines.get(i)[0]
+        trimmed := str.Trim(line)
+        mut tag := ""
+        mut rest := ""
+        mut is_tag := false
+        if trimmed.len() > 1 && byte_at(trimmed, 0) == 64:
+            mut j := 1
+            until j < trimmed.len() && is_alpha(byte_at(trimmed, j)):
+                j += 1
+            end
+            if j > 1:
+                tag = str.Substr(trimmed, 1, j - 1)
+                rest = str.Trim(str.Substr(trimmed, j, trimmed.len() - j))
+                is_tag = true
+            end
+        end
+        if is_tag:
+            if has_any:
+                out.push(cur_lang)
+                out.push(str.Trim(cur))
+            end
+            cur_lang = tag
+            cur = rest
+            has_any = true
+        else:
+            if has_any || line.len() > 0:
+                if cur.len() > 0:
+                    cur = cur + "\n"
+                end
+                cur = cur + line
+                has_any = true
+            end
+        end
+        i += 1
+    end
+    if has_any:
+        out.push(cur_lang)
+        out.push(str.Trim(cur))
+    end
+end
+
+func finalize_block(blocks &: Vector<CommentBlock>, raw: Vector<str>, end_line: int):
+    if raw.len() == 0:
+        ret
+    end
+    mut joined := ""
+    mut i := 0
+    until i < raw.len():
+        if i != 0:
+            joined = joined + "\n"
+        end
+        joined = joined + raw.get(i)[0]
+        i += 1
+    end
+    mut cb := CommentBlock {}
+    cb.end_line = end_line
+    split_lang_sections(joined, cb.texts)
+    blocks.push(cb)
+end
+
+func collect_comment_blocks(toks2: tok.TokenStream): Vector<CommentBlock>:
+    mut blocks := Vector {} as Vector<CommentBlock>
+    n := tok.StreamCount(toks2)
+    mut raw := Vector {} as Vector<str>
+    mut last_end := 0 - 1000
+    mut i := 0
+    until i < n:
+        t := tok.StreamAt(toks2, i)
+        if t.kind == tok.TK_COMMENT_BLOCK:
+            finalize_block(blocks, raw, last_end)
+            raw.free()
+            raw = Vector {} as Vector<str>
+            mut single := Vector {} as Vector<str>
+            single.push(strip_block_comment(t.lexeme))
+            finalize_block(blocks, single, t.end_line as int)
+            single.free()
+            last_end = 0 - 1000
+        else t.kind == tok.TK_COMMENT_LINE:
+            this_begin := t.begin_line as int
+            if raw.len() > 0 && this_begin != last_end + 1:
+                finalize_block(blocks, raw, last_end)
+                raw.free()
+                raw = Vector {} as Vector<str>
+            end
+            raw.push(strip_line_comment(t.lexeme))
+            last_end = t.end_line as int
+        end
+        i += 1
+    end
+    finalize_block(blocks, raw, last_end)
+    raw.free()
+    ret blocks
+end
+
+func attach_doc(db &: DocDb, blocks: Vector<CommentBlock>, decl_idx: int, begin_line: int):
+    n := blocks.len()
+    mut i := 0
+    until i < n:
+        cb := blocks.get(i)[0]
+        if cb.end_line == begin_line - 1:
+            mut j := 0
+            until j + 1 < cb.texts.len():
+                db_add_doc(db, decl_idx, cb.texts.get(j)[0], cb.texts.get(j + 1)[0])
+                j += 2
+            end
+            ret
+        end
+        i += 1
+    end
+end
+
+// ---------------------------------------------------------------------------
+// AST walk
+// ---------------------------------------------------------------------------
+
+func walk_member(db &: DocDb, a: at.Ast, mid: int, file_idx: int, parent: int, blocks: Vector<CommentBlock>):
+    mn := at.Get(a, mid)
+    mut mkind := 0 - 1
+    mut msig := ""
+    if mn.kind == at.AST_FIELD:
+        mkind = DOC_FIELD
+        msig = field_sig(a, mid)
+    else mn.kind == at.AST_FUNC_DEF:
+        mkind = DOC_FUNC
+        msig = func_signature(a, mid)
+    else:
+        ret
+    end
+    midx := db_add_decl(
+        db, mkind, mn.name, msig, mn.is_pub, mn.is_deprecated, file_idx, mn.begin_line as int, parent
+    )
+    attach_aliases(db, a, mid, midx)
+    attach_doc(db, blocks, midx, mn.begin_line as int)
+end
+
+func walk_top(db &: DocDb, a: at.Ast, id: int, file_idx: int, blocks: Vector<CommentBlock>):
+    n := at.Get(a, id)
+    mut kind := 0 - 1
+    mut sig := ""
+    if n.kind == at.AST_CONST_DECL:
+        kind = DOC_CONST
+        sig = const_sig(a, id)
+    else n.kind == at.AST_VAR_DECL:
+        kind = DOC_VAR
+        sig = var_decl_sig(a, id)
+    else n.kind == at.AST_TYPE_ALIAS:
+        kind = DOC_TYPE
+        sig = "type " + n.name + " = " + type_node_to_str(a, n.ty)
+    else n.kind == at.AST_FUNC_DEF:
+        kind = DOC_FUNC
+        sig = func_signature(a, id)
+    else n.kind == at.AST_STRUCT_DEF:
+        kind = DOC_STRUCT
+        sig = "struct " + n.name + typarams_str(a, id)
+    else n.kind == at.AST_INTERFACE_DEF:
+        kind = DOC_INTERFACE
+        sig = "interface " + n.name + typarams_str(a, id)
+    else n.kind == at.AST_ENUM_DEF:
+        kind = DOC_ENUM
+        sig = "enum " + n.name
+    else n.kind == at.AST_IMPL_DEF:
+        kind = DOC_IMPL
+        sig = "impl " + n.name + " on " + type_node_to_str(a, n.ty)
+    else:
+        ret
+    end
+    idx := db_add_decl(db, kind, n.name, sig, n.is_pub, n.is_deprecated, file_idx, n.begin_line as int, 0 - 1)
+    attach_aliases(db, a, id, idx)
+    attach_doc(db, blocks, idx, n.begin_line as int)
+
+    if n.kind == at.AST_STRUCT_DEF || n.kind == at.AST_INTERFACE_DEF || n.kind == at.AST_IMPL_DEF:
+        mcount := at.ChildCount(a, id)
+        mut i := 0
+        until i < mcount:
+            walk_member(db, a, at.Child(a, id, i), file_idx, idx, blocks)
+            i += 1
+        end
+    else n.kind == at.AST_ENUM_DEF:
+        mcount := at.ChildCount(a, id)
+        mut i2 := 0
+        until i2 < mcount:
+            mid := at.Child(a, id, i2)
+            mn := at.Get(a, mid)
+            midx := db_add_decl(
+                db, DOC_ENUM_MEMBER, mn.name, enum_member_sig(a, mid), true, false, file_idx,
+                mn.begin_line as int, idx
+            )
+            attach_doc(db, blocks, midx, mn.begin_line as int)
+            i2 += 1
+        end
+    end
+end
+
+// ---------------------------------------------------------------------------
+// HTML rendering (private helpers - json/escape/kind-name building blocks)
+// ---------------------------------------------------------------------------
+
+func kind_name(k: int): str:
+    if k == DOC_CONST:
+        ret "const"
+    end
+    if k == DOC_VAR:
+        ret "var"
+    end
+    if k == DOC_TYPE:
+        ret "type"
+    end
+    if k == DOC_STRUCT:
+        ret "struct"
+    end
+    if k == DOC_INTERFACE:
+        ret "interface"
+    end
+    if k == DOC_ENUM:
+        ret "enum"
+    end
+    if k == DOC_IMPL:
+        ret "impl"
+    end
+    if k == DOC_FUNC:
+        ret "func"
+    end
+    if k == DOC_FIELD:
+        ret "field"
+    end
+    ret "member"
+end
+
+// Escapes a runtime str into a JS/JSON string literal (double-quoted).
+// Escapes every '/' too, so embedded doc text can never spell "</script>"
+// and break out of the surrounding <script> block.
+func js_str(s: str): str:
+    mut b := str.NewBuilder()
+    str.BufAppendChar(b, 34)
+    n := s.len()
+    mut i := 0
+    until i < n:
+        ch := byte_at(s, i)
+        if ch == 10:
+            str.BufAppend(b, "\\n")
+        else ch == 13:
+            str.BufAppend(b, "\\r")
+        else ch == 9:
+            str.BufAppend(b, "\\t")
+        else ch == 34:
+            str.BufAppend(b, "\\\"")
+        else ch == 92:
+            str.BufAppend(b, "\\\\")
+        else ch == 47:
+            str.BufAppend(b, "\\/")
+        else:
+            if ch < 32:
+                str.BufAppend(b, co.Format1("\\u%04x", co.ArgUint(ch as u64)))
+            else:
+                str.BufAppendChar(b, ch)
+            end
+        end
+        i += 1
+    end
+    str.BufAppendChar(b, 34)
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func emit_pairs(b &: str.StringBuilder, pairs: Vector<str>):
+    str.BufAppendChar(b, 91)
+    n := pairs.len()
+    mut first := true
+    mut i := 0
+    until i + 1 < n:
+        if !first:
+            str.BufAppendChar(b, 44)
+        end
+        str.BufAppendChar(b, 91)
+        str.BufAppend(b, js_str(pairs.get(i)[0]))
+        str.BufAppendChar(b, 44)
+        str.BufAppend(b, js_str(pairs.get(i + 1)[0]))
+        str.BufAppendChar(b, 93)
+        first = false
+        i += 2
+    end
+    str.BufAppendChar(b, 93)
+end
+
+func emit_ints(b &: str.StringBuilder, xs: Vector<int>):
+    str.BufAppendChar(b, 91)
+    n := xs.len()
+    mut i := 0
+    until i < n:
+        if i != 0:
+            str.BufAppendChar(b, 44)
+        end
+        str.BufAppend(b, str.FromInt(xs.get(i)[0] as i64))
+        i += 1
+    end
+    str.BufAppendChar(b, 93)
+end
+
+func emit_decl(b &: str.StringBuilder, d: DocDecl):
+    str.BufAppendChar(b, 123)
+    str.BufAppend(b, "\"k\":")
+    str.BufAppend(b, js_str(kind_name(d.kind)))
+    str.BufAppend(b, ",\"n\":")
+    str.BufAppend(b, js_str(d.name))
+    str.BufAppend(b, ",\"s\":")
+    str.BufAppend(b, js_str(d.sig))
+    str.BufAppend(b, ",\"p\":")
+    str.BufAppend(b, d.is_pub ? "true" : "false")
+    str.BufAppend(b, ",\"dep\":")
+    str.BufAppend(b, d.is_deprecated ? "true" : "false")
+    str.BufAppend(b, ",\"f\":")
+    str.BufAppend(b, str.FromInt(d.file_idx as i64))
+    str.BufAppend(b, ",\"l\":")
+    str.BufAppend(b, str.FromInt(d.line as i64))
+    str.BufAppend(b, ",\"par\":")
+    str.BufAppend(b, str.FromInt(d.parent as i64))
+    str.BufAppend(b, ",\"a\":")
+    emit_pairs(b, d.aliases)
+    str.BufAppend(b, ",\"doc\":")
+    emit_pairs(b, d.doc)
+    str.BufAppend(b, ",\"m\":")
+    emit_ints(b, d.members)
+    str.BufAppendChar(b, 125)
+end
+
+func emit_db_json(b &: str.StringBuilder, db: DocDb):
+    str.BufAppend(b, "{\"files\":[")
+    fnn := db.files.len()
+    mut fi := 0
+    until fi < fnn:
+        if fi != 0:
+            str.BufAppendChar(b, 44)
+        end
+        str.BufAppend(b, js_str(db.files.get(fi)[0]))
+        fi += 1
+    end
+    str.BufAppend(b, "],\"decls\":[")
+    dn := db.decls.len()
+    mut di := 0
+    until di < dn:
+        if di != 0:
+            str.BufAppendChar(b, 44)
+        end
+        emit_decl(b, db.decls.get(di)[0])
+        di += 1
+    end
+    str.BufAppend(b, "]}")
+end
+
+// ---------------------------------------------------------------------------
+// Public API (E088: pub section last)
+// ---------------------------------------------------------------------------
+
+pub func NewDb(): DocDb:
+    ret DocDb {}
+end
+
+// Lexes, parses, prunes platform-conditional blocks, and (best-effort) runs
+// the semantic pass on one file, then walks its top-level declarations into
+// `db` under the display name `rel`. Never aborts the whole run on a single
+// file's errors - a file with parse or type errors still contributes
+// whatever it could produce; the returned bool is purely informational (used
+// by the CLI to report a warning count).
+pub func ParseFile(db &: DocDb, lgr: lg.Logger, pack: int, path: str, rel: str, defines: Vector<str>): bool:
+    mut sf := src.New()
+    if !src.Load(path, sf):
+        ret false
+    end
+    file_idx := db_add_file(db, rel)
+    modpack := lx.Detect(sf, pack)
+
+    mut toks := tok.StreamNew(path)
+    lok := lx.Run(lgr, modpack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    pok := ps.Run(lgr, toks, a, prog)
+    tok.StreamFree(toks)
+
+    table := cc.TableBuild("", defines)
+    cc.PruneProgram(a, lgr, path, table, prog)
+
+    mut s := sm.New(lgr, path, lp.Code(modpack))
+    sm.SetCc(s, table)
+    sm.Run(s, a, prog)
+    sm.Free(s)
+
+    mut toks2 := tok.StreamNew(path)
+    lx.RunEx(lgr, modpack, sf, true, toks2)
+    blocks := collect_comment_blocks(toks2)
+    tok.StreamFree(toks2)
+
+    cnt := at.ChildCount(a, prog)
+    mut i := 0
+    until i < cnt:
+        walk_top(db, a, at.Child(a, prog, i), file_idx, blocks)
+        i += 1
+    end
+
+    mut bi := 0
+    until bi < blocks.len():
+        cb := blocks.get(bi)[0]
+        cb.texts.free()
+        bi += 1
+    end
+    blocks.free()
+    at.FreeAst(a)
+    ret lok && pok
+end
+
+// Builds the complete self-contained HTML document (inline <style> and
+// <script>, no external assets), mirroring driver.salam's js_html_page (the
+// "salam web" single-file page assembler) for the doctype/head/body shape.
+pub func Render(db: DocDb, title: str): str:
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "<!doctype html>\n<html lang=\"en\">\n<head>\n")
+    str.BufAppend(b, "<meta charset=\"utf-8\">\n")
+    str.BufAppend(b, "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
+    str.BufAppend(b, "<title>")
+    str.BufAppend(b, title)
+    str.BufAppend(b, " - API Documentation</title>\n")
+    str.BufAppend(b, "<style>")
+    str.BufAppend(b, css_text)
+    str.BufAppend(b, "</style>\n</head>\n<body>\n")
+    str.BufAppend(b, body_text)
+    str.BufAppend(b, "\n<script>\nvar DOC_TITLE = ")
+    str.BufAppend(b, js_str(title))
+    str.BufAppend(b, ";\nvar DOC = ")
+    emit_db_json(b, db)
+    str.BufAppend(b, ";\n")
+    str.BufAppend(b, js_text)
+    str.BufAppend(b, "\n</script>\n</body>\n</html>\n")
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end

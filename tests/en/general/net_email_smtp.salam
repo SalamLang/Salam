@@ -1,0 +1,104 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// SMTP client protocol test against a hand-rolled mock SMTP server:
+// EHLO/AUTH PLAIN/MAIL FROM/RCPT TO/DATA, including RFC 5321 dot-
+// stuffing - a body line that is exactly "." must be escaped to ".."
+// on the wire and unstuffed back by any compliant server (this mock
+// checks for the escaped form arriving, proving BuildMessage/Data did
+// the escaping rather than the mock silently accepting raw ".").
+
+import net.email
+import net.tcp
+import sync
+import time
+
+mut smwg := sync.NewWaitGroup()
+
+func mock_smtp_server():
+    srv := tcp.Bind(19501)
+    sync.Done(smwg)
+    if !tcp.Ok(srv):
+        ret
+    end
+    c := tcp.Accept(srv)
+    if !tcp.ConnOk(c):
+        tcp.CloseServer(srv)
+        ret
+    end
+
+    tcp.Write(c, "220 mock.smtp ready\r\n")
+    tcp.Read(c, 4096) // EHLO
+    tcp.Write(c, "250-mock.smtp\r\n250 AUTH PLAIN\r\n")
+    tcp.Read(c, 4096) // AUTH PLAIN ...
+    tcp.Write(c, "235 Authentication successful\r\n")
+    tcp.Read(c, 4096) // MAIL FROM
+    tcp.Write(c, "250 OK\r\n")
+    tcp.Read(c, 4096) // RCPT TO
+    tcp.Write(c, "250 OK\r\n")
+    tcp.Read(c, 4096) // DATA
+    tcp.Write(c, "354 Send message\r\n")
+
+    mut body := ""
+    mut going := true
+    until going:
+        chunk := tcp.Read(c, 4096)
+        body += chunk
+        if body.find("\r\n.\r\n") >= 0:
+            going = false
+        end
+    end
+    // The dot-stuffed line ("." escaped to "..") must appear on the
+    // wire, and the raw un-stuffed terminator must not appear mid-body.
+    println body.find("\r\n..\r\n") >= 0
+
+    tcp.Write(c, "250 OK: queued\r\n")
+    tcp.Read(c, 4096) // QUIT
+
+    tcp.Close(c)
+    tcp.CloseServer(srv)
+end
+
+func dial_smtp_retry(): email.SMTPClient:
+    mut attempt := 0
+    mut c := email.SMTPClient {}
+    until !c.ok && attempt < 300:
+        c = email.DialSMTP("127.0.0.1", 19501)
+        if !c.ok:
+            time.Sleep(10)
+        end
+        attempt += 1
+    end
+    ret c
+end
+
+func main:
+    sync.Add(smwg, 1 as i64)
+    t := spawn(mock_smtp_server)
+    sync.Wait(smwg)
+
+    mut c := dial_smtp_retry()
+    println c.ok
+
+    println email.Hello(c, "client.example")
+    println email.AuthPlain(c, "user@example.com", "secret")
+    println email.MailFrom(c, "sender@example.com")
+    println email.RcptTo(c, "dest@example.com")
+
+    msg := email.BuildMessage("sender@example.com", "dest@example.com", "Test Subject", "line one\r\n.\r\nline three (dot-stuff test)", "")
+    println email.Data(c, msg)
+
+    email.Quit(c)
+    join(t)
+end

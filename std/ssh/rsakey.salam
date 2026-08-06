@@ -1,0 +1,238 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import crypto
+
+// RSA sign (blinded) and verify, RSASSA-PKCS1-v1_5 (RFC 8017) - the "ssh-rsa"
+// (SHA-1) and "rsa-sha2-256"/"rsa-sha2-512" (RFC 8332) signature algorithms.
+// Same shape as std/tls's rsa.salam/rsa_sign.salam split, ported rather than
+// imported for the reason given in ssh.salam's header (the package
+// boundary), and using this package's own bigint.salam/Barrett modexp.
+//
+// PKCS#1 v1.5 is verified by CONSTRUCTING the expected padded block and
+// comparing it whole, never by parsing the recovered block and hunting for
+// the digest inside it - a parsing verifier that tolerates trailing bytes
+// or a short padding string is the Bleichenbacher'06 forgery. The recovered
+// value is re-encoded to exactly the modulus length so a short encoding of
+// the same integer cannot be substituted either.
+//
+// Signing uses RSA blinding (Rivest): every private-key operation picks a
+// fresh random r, computes (msg * r^e) mod n with the modexp that uses only
+// the PUBLIC exponent e, exponentiates the blinded value with the secret d,
+// then unblinds via r^(phi(n)-1) mod n (Euler's theorem gives r^-1 mod n
+// from a plain modexp, with no separate extended-Euclidean routine needed).
+// This decorrelates the modexp's input from the message on every call,
+// defeating a timing attack that needs many observations against the SAME
+// operand - it does not make the modexp itself constant-time.
+
+const SSH_HASH_SHA1 := 0
+const SSH_HASH_SHA256 := 1
+const SSH_HASH_SHA512 := 2
+const SSH_RSA_MAX_BYTES := 1024
+
+func _rsa_hash_size(kind: int): int:
+    if kind == SSH_HASH_SHA1:
+        ret 20
+    end
+    if kind == SSH_HASH_SHA512:
+        ret 64
+    end
+    ret 32
+end
+
+// DigestInfo DER prefix (RFC 8017 9.2 note 1), NOT including the digest
+// bytes themselves - the caller appends exactly _rsa_hash_size(kind) bytes
+// right after this.
+func _rsa_digestinfo(kind: int): str:
+    if kind == SSH_HASH_SHA1:
+        ret "3021300906052b0e03021a05000414"
+    end
+    if kind == SSH_HASH_SHA512:
+        ret "3051300d060960864801650304020305000440"
+    end
+    ret "3031300d060960864801650304020105000420"
+end
+
+// m = s^e mod n, rendered big-endian in exactly `klen` bytes.
+func _rsa_public_op(sig: void*, siglen: int, nmod: void*, nlen: int, expo: void*, elen: int, out: void*, klen: int): bool:
+    mut n := _big_from_bytes(nmod, nlen)
+    mut e := _big_from_bytes(expo, elen)
+    mut s := _big_from_bytes(sig, siglen)
+    mut ok := !n.bad && !e.bad && !s.bad && !_big_is_zero(n) && !_big_is_zero(e)
+    // A signature must be a residue: s < n, keeping its representation unique.
+    if ok && _big_cmp(s, n) >= 0:
+        ok = false
+    end
+    mut m := _big_new(n.n + 4)
+    if ok:
+        ok = _big_modexp_barrett(m, s, e, n)
+    end
+    if ok:
+        ok = _big_to_bytes(m, out, klen)
+    end
+    _big_free(n)
+    _big_free(e)
+    _big_free(s)
+    _big_free(m)
+    ret ok
+end
+
+// EMSA-PKCS1-v1_5 verify: EM = 0x00 || 0x01 || 0xFF... || 0x00 || DigestInfo || H
+func _rsa_verify_pkcs1(kind: int, digest: void*, nmod: void*, nlen: int, expo: void*, elen: int, sig: void*, siglen: int): bool:
+    klen := nlen
+    if klen < 16 || klen > SSH_RSA_MAX_BYTES || siglen != klen:
+        ret false
+    end
+    hlen := _rsa_hash_size(kind)
+    mut di := _hexbuf(_rsa_digestinfo(kind))
+
+    mut want := NewBuf(klen)
+    tlen := di.len + hlen
+    mut ok := klen >= tlen + 11
+    if ok:
+        BufPutByte(want, 0x00)
+        BufPutByte(want, 0x01)
+        pslen := klen - tlen - 3
+        repeat pslen with _i:
+            BufPutByte(want, 0xFF)
+        end
+        BufPutByte(want, 0x00)
+        BufPutBuf(want, di)
+        BufPutBytes(want, digest, hlen)
+    end
+
+    mut got := NewBuf(klen)
+    BufPutZeros(got, klen)
+    if ok:
+        ok = _rsa_public_op(sig, siglen, nmod, nlen, expo, elen, got.p, klen)
+    end
+    result := ok && ConstantTimeEqual(got.p, want.p, klen)
+    FreeBuf(di)
+    FreeBuf(want)
+    FreeBuf(got)
+    ret result
+end
+
+// m = base^d mod n using the SECRET exponent d, blinded. `out` receives
+// exactly `klen` bytes.
+func _rsa_private_op_blinded(msg: void*, mlen: int, nmod: void*, nlen: int, dexp: void*, dlen: int, eexp: void*, elen: int, phi: void*, philen: int, out: void*, klen: int): bool:
+    mut n := _big_from_bytes(nmod, nlen)
+    mut e := _big_from_bytes(eexp, elen)
+    mut d := _big_from_bytes(dexp, dlen)
+    mut ph := _big_from_bytes(phi, philen)
+    mut m := _big_from_bytes(msg, mlen)
+    mut ok := !n.bad && !e.bad && !d.bad && !ph.bad && !m.bad && !_big_is_zero(n) && _big_cmp(m, n) < 0
+
+    mut rbytes := NewBuf(nlen)
+    if ok:
+        BufPutZeros(rbytes, nlen)
+        crypto.RandomBytes(rbytes.p, nlen)
+    end
+    mut rraw := _big_from_bytes(rbytes.p, rbytes.len)
+    mut r := _big_new(n.n + 4)
+    if ok:
+        ok = !rraw.bad && _big_mod(r, rraw, n) && !_big_is_zero(r)
+    end
+
+    // re = r^e mod n - public exponent, nothing secret in this call.
+    mut re := _big_new(n.n + 4)
+    if ok:
+        ok = _big_modexp_barrett(re, r, e, n)
+    end
+
+    mut prod := _big_new(2 * n.n + 8)
+    mut blinded := _big_new(n.n + 4)
+    if ok:
+        _big_mul(prod, m, re)
+        ok = !prod.bad && _big_mod(blinded, prod, n)
+    end
+
+    // The only step touching the secret exponent; its input is decorrelated
+    // from `msg` by r on every call.
+    mut s := _big_new(n.n + 4)
+    if ok:
+        ok = _big_modexp_barrett(s, blinded, d, n)
+    end
+
+    // r^-1 mod n = r^(phi(n)-1) mod n, by Euler's theorem.
+    mut one := _big_new(1)
+    _big_set_u32(one, 1 as u32)
+    mut phim1 := _big_new(ph.n + 4)
+    mut rinv := _big_new(n.n + 4)
+    if ok:
+        ok = _big_sub(phim1, ph, one) && _big_modexp_barrett(rinv, r, phim1, n)
+    end
+
+    mut prod2 := _big_new(2 * n.n + 8)
+    mut result := _big_new(n.n + 4)
+    if ok:
+        _big_mul(prod2, s, rinv)
+        ok = !prod2.bad && _big_mod(result, prod2, n)
+    end
+    if ok:
+        ok = _big_to_bytes(result, out, klen)
+    end
+
+    _big_free(n)
+    _big_free(e)
+    _big_wipe_free(d)
+    _big_wipe_free(ph)
+    _big_free(m)
+    WipeBuf(rbytes)
+    _big_wipe_free(rraw)
+    _big_wipe_free(r)
+    _big_free(re)
+    _big_free(prod)
+    _big_wipe_free(blinded)
+    _big_wipe_free(s)
+    _big_free(one)
+    _big_wipe_free(phim1)
+    _big_wipe_free(rinv)
+    _big_free(prod2)
+    _big_wipe_free(result)
+    ret ok
+end
+
+// EMSA-PKCS1-v1_5 encode + sign: build the exact block _rsa_verify_pkcs1
+// expects, then apply the blinded private-key operation to it. `n`/`e`/`d`/
+// `phi` are the raw big-endian magnitude bytes from a PrivateKey (see
+// privatekey.salam); `sigout` receives exactly n.len bytes.
+func _rsa_sign_pkcs1(kind: int, digest: void*, n: Buf, e: Buf, d: Buf, phi: Buf, sigout: void*): bool:
+    klen := n.len
+    if klen < 16 || klen > SSH_RSA_MAX_BYTES:
+        ret false
+    end
+    hlen := _rsa_hash_size(kind)
+    mut di := _hexbuf(_rsa_digestinfo(kind))
+    tlen := di.len + hlen
+    mut ok := klen >= tlen + 11
+    mut em := NewBuf(klen)
+    if ok:
+        BufPutByte(em, 0x00)
+        BufPutByte(em, 0x01)
+        pslen := klen - tlen - 3
+        repeat pslen with _i:
+            BufPutByte(em, 0xFF)
+        end
+        BufPutByte(em, 0x00)
+        BufPutBuf(em, di)
+        BufPutBytes(em, digest, hlen)
+        ok = _rsa_private_op_blinded(em.p, em.len, n.p, n.len, d.p, d.len, e.p, e.len, phi.p, phi.len, sigout, klen)
+    end
+    FreeBuf(di)
+    FreeBuf(em)
+    ret ok
+end

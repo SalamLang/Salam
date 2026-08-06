@@ -1,0 +1,283 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package excel
+
+import archive
+import conv
+import str
+
+// Writes a Workbook as a .xlsx (OOXML SpreadsheetML) file: a ZIP container
+// of [Content_Types].xml, _rels/.rels, xl/workbook.xml (+ its _rels),
+// xl/styles.xml, and one xl/worksheets/sheetN.xml per sheet. String cells
+// are written as inline strings (`t="inlineStr"`, `<is><t>...</t></is>`)
+// rather than a shared-string table - valid per ECMA-376 and simpler to
+// generate correctly, at the cost of some size on files with heavily
+// repeated strings.
+
+func _xlsx_align_attrs(align_h: int, align_v: int): str:
+    mut h := ""
+    if align_h == AlignLeft: h = "left"
+    else align_h == AlignCenter: h = "center"
+    else align_h == AlignRight: h = "right"
+    end
+    mut v := ""
+    if align_v == AlignTop: v = "top"
+    else align_v == AlignMiddle: v = "center"
+    else align_v == AlignBottom: v = "bottom"
+    end
+    if h.len() == 0 && v.len() == 0: ret "" end
+    mut out := "<alignment"
+    if h.len() > 0: out = out.concat(` horizontal="`).concat(h).concat(`"`) end
+    if v.len() > 0: out = out.concat(` vertical="`).concat(v).concat(`"`) end
+    out = out.concat("/>")
+    ret out
+end
+
+func _xlsx_cell_xml(c: Cell, date_style_id: int): str:
+    ref := CellRef(c.row, c.col)
+    mut sid := c.style_id
+    if c.kind == CellDate && sid < 0: sid = date_style_id end
+    mut s_attr := ""
+    if sid >= 0: s_attr = ` s="`.concat(conv.FormatInt(sid as i64)).concat(`"`) end
+    if c.kind == CellString:
+        ret `<c r="`.concat(ref).concat(`"`).concat(s_attr).concat(` t="inlineStr"><is><t>`).concat(XmlEscape(c.text)).concat("</t></is></c>")
+    else c.kind == CellBool:
+        mut v := "0"
+        if c.flag: v = "1" end
+        ret `<c r="`.concat(ref).concat(`"`).concat(s_attr).concat(` t="b"><v>`).concat(v).concat("</v></c>")
+    else c.kind == CellFormula:
+        ret `<c r="`.concat(ref).concat(`"`).concat(s_attr).concat("><f>").concat(XmlEscape(c.formula)).concat("</f><v>").concat(conv.FormatFloat(c.num)).concat("</v></c>")
+    else c.kind == CellError:
+        ret `<c r="`.concat(ref).concat(`"`).concat(s_attr).concat(` t="e"><v>`).concat(XmlEscape(c.text)).concat("</v></c>")
+    else c.kind == CellNumber || c.kind == CellDate:
+        ret `<c r="`.concat(ref).concat(`"`).concat(s_attr).concat("><v>").concat(conv.FormatFloat(c.num)).concat("</v></c>")
+    else:
+        ret ""
+    end
+end
+
+func _xlsx_sheet_body(sheet: Sheet, date_style_id: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    nr := sheet.row_count()
+    nc := sheet.col_count()
+    mut r := 0
+    until r < nr:
+        mut has_any := false
+        mut c := 0
+        until c < nc:
+            if sheet.has_cell(r, c): has_any = true end
+            c += 1
+        end
+        if has_any:
+            str.BufAppend(sb, `<row r="`)
+            str.BufAppendInt(sb, (r + 1) as i64)
+            str.BufAppend(sb, `">`)
+            mut cc := 0
+            until cc < nc:
+                if sheet.has_cell(r, cc):
+                    cell := sheet.get_cell(r, cc)
+                    str.BufAppend(sb, _xlsx_cell_xml(cell, date_style_id))
+                end
+                cc += 1
+            end
+            str.BufAppend(sb, "</row>")
+        end
+        r += 1
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _xlsx_sheet_xml(sheet: Sheet, date_style_id: int): str:
+    mut out := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`
+    out = out.concat("<sheetData>").concat(_xlsx_sheet_body(sheet, date_style_id)).concat("</sheetData>")
+    if sheet.merges.len() > 0:
+        out = out.concat(`<mergeCells count="`).concat(conv.FormatInt(sheet.merges.len() as i64)).concat(`">`)
+        mut i := 0
+        until i < sheet.merges.len():
+            m := sheet.merges.get(i)[0]
+            ref := CellRef(m.row1, m.col1).concat(":").concat(CellRef(m.row2, m.col2))
+            out = out.concat(`<mergeCell ref="`).concat(ref).concat(`"/>`)
+            i += 1
+        end
+        out = out.concat("</mergeCells>")
+    end
+    out = out.concat("</worksheet>")
+    ret out
+end
+
+func _xlsx_styles_xml(styles: StyleSheet): str:
+    n := styles.count()
+    mut numfmts := str.NewBuilder()
+    defer str.BufFree(numfmts)
+    mut fonts := str.NewBuilder()
+    defer str.BufFree(fonts)
+    mut fills := str.NewBuilder()
+    defer str.BufFree(fills)
+    mut xfs := str.NewBuilder()
+    defer str.BufFree(xfs)
+
+    mut numfmt_count := 0
+    mut i := 0
+    until i < n:
+        st := styles.get(i)
+
+        str.BufAppend(fonts, "<font>")
+        if st.bold: str.BufAppend(fonts, "<b/>") end
+        if st.italic: str.BufAppend(fonts, "<i/>") end
+        if st.underline: str.BufAppend(fonts, "<u/>") end
+        str.BufAppend(fonts, `<sz val="`)
+        str.BufAppendInt(fonts, st.font_size as i64)
+        str.BufAppend(fonts, `"/>`)
+        if st.font_color.len() > 0:
+            str.BufAppend(fonts, `<color rgb="FF`.concat(st.font_color).concat(`"/>`))
+        end
+        str.BufAppend(fonts, `<name val="`.concat(XmlEscape(st.font_name)).concat(`"/>`))
+        str.BufAppend(fonts, "</font>")
+
+        if st.bg_color.len() > 0:
+            str.BufAppend(fills, `<fill><patternFill patternType="solid"><fgColor rgb="FF`.concat(st.bg_color).concat(`"/><bgColor indexed="64"/></patternFill></fill>`))
+        else:
+            str.BufAppend(fills, `<fill><patternFill patternType="none"/></fill>`)
+        end
+
+        mut numfmt_id := 0
+        if st.num_format.len() > 0:
+            numfmt_id = 164 + numfmt_count
+            str.BufAppend(numfmts, `<numFmt numFmtId="`.concat(conv.FormatInt(numfmt_id as i64)).concat(`" formatCode="`).concat(XmlEscape(st.num_format)).concat(`"/>`))
+            numfmt_count += 1
+        end
+
+        align_attrs := _xlsx_align_attrs(st.align_h, st.align_v)
+        fill_id := i + 2
+        font_id := i
+        str.BufAppend(xfs, `<xf numFmtId="`.concat(conv.FormatInt(numfmt_id as i64)).concat(`" fontId="`).concat(conv.FormatInt(font_id as i64)).concat(`" fillId="`).concat(conv.FormatInt(fill_id as i64)).concat(`" borderId="0" xfId="0" applyFont="1" applyFill="1" applyNumberFormat="1"`))
+        if align_attrs.len() > 0:
+            str.BufAppend(xfs, ` applyAlignment="1">`)
+            str.BufAppend(xfs, align_attrs)
+            str.BufAppend(xfs, "</xf>")
+        else:
+            str.BufAppend(xfs, "/>")
+        end
+
+        i += 1
+    end
+
+    numfmts_str := str.BufStr(numfmts)
+    fonts_str := str.BufStr(fonts)
+    fills_str := str.BufStr(fills)
+    xfs_str := str.BufStr(xfs)
+
+    mut out := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`
+    if numfmt_count > 0:
+        out = out.concat(`<numFmts count="`).concat(conv.FormatInt(numfmt_count as i64)).concat(`">`).concat(numfmts_str).concat("</numFmts>")
+    end
+    out = out.concat(`<fonts count="`).concat(conv.FormatInt(n as i64)).concat(`">`).concat(fonts_str).concat("</fonts>")
+    out = out.concat(`<fills count="`).concat(conv.FormatInt((n + 2) as i64)).concat(`">`)
+    out = out.concat(`<fill><patternFill patternType="none"/></fill>`)
+    out = out.concat(`<fill><patternFill patternType="gray125"/></fill>`)
+    out = out.concat(fills_str).concat("</fills>")
+    out = out.concat(`<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>`)
+    out = out.concat(`<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>`)
+    out = out.concat(`<cellXfs count="`).concat(conv.FormatInt(n as i64)).concat(`">`).concat(xfs_str).concat("</cellXfs>")
+    out = out.concat(`<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>`)
+    out = out.concat("</styleSheet>")
+    ret out
+end
+
+func _xlsx_content_types(sheet_count: int): str:
+    mut out := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`
+    out = out.concat(`<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>`)
+    out = out.concat(`<Default Extension="xml" ContentType="application/xml"/>`)
+    out = out.concat(`<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>`)
+    out = out.concat(`<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>`)
+    mut i := 0
+    until i < sheet_count:
+        out = out.concat(`<Override PartName="/xl/worksheets/sheet`).concat(conv.FormatInt((i + 1) as i64)).concat(`.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`)
+        i += 1
+    end
+    out = out.concat("</Types>")
+    ret out
+end
+
+func _xlsx_root_rels(): str:
+    ret `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`
+end
+
+func _xlsx_workbook_xml(names: Vector<str>): str:
+    mut out := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>`
+    mut i := 0
+    until i < names.len():
+        out = out.concat(`<sheet name="`).concat(XmlEscape(names.get(i)[0])).concat(`" sheetId="`).concat(conv.FormatInt((i + 1) as i64)).concat(`" r:id="rId`).concat(conv.FormatInt((i + 1) as i64)).concat(`"/>`)
+        i += 1
+    end
+    out = out.concat("</sheets></workbook>")
+    ret out
+end
+
+func _xlsx_workbook_rels(sheet_count: int): str:
+    mut out := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
+    mut i := 0
+    until i < sheet_count:
+        out = out.concat(`<Relationship Id="rId`).concat(conv.FormatInt((i + 1) as i64)).concat(`" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet`).concat(conv.FormatInt((i + 1) as i64)).concat(`.xml"/>`)
+        i += 1
+    end
+    out = out.concat(`<Relationship Id="rId`).concat(conv.FormatInt((sheet_count + 1) as i64)).concat(`" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`)
+    out = out.concat("</Relationships>")
+    ret out
+end
+
+// Writes `book` to `path` as a .xlsx file. Returns false if the workbook
+// has no sheets or the ZIP could not be written.
+@en "WriteXLSX"
+@fa "نوشتن ایکس‌ال‌اس‌ایکس"
+@ar "كتابة إكس إل إس إكس"
+pub func WriteXLSX(book &: Workbook, path: str): bool:
+    n := book.sheets.len()
+    if n == 0: ret false end
+    date_style_id := book.styles.get_or_add(Style { num_format = "yyyy-mm-dd hh:mm:ss" })
+
+    mut files := Vector {} as Vector<archive.ZipFileInput>
+    defer files.free()
+
+    ct := _xlsx_content_types(n)
+    files.push(archive.MakeZipFileInput("[Content_Types].xml", ct as void*, ct.len(), 8))
+
+    rr := _xlsx_root_rels()
+    files.push(archive.MakeZipFileInput("_rels/.rels", rr as void*, rr.len(), 8))
+
+    names := book.sheet_names()
+    wbxml := _xlsx_workbook_xml(names)
+    names.free()
+    files.push(archive.MakeZipFileInput("xl/workbook.xml", wbxml as void*, wbxml.len(), 8))
+
+    wbrels := _xlsx_workbook_rels(n)
+    files.push(archive.MakeZipFileInput("xl/_rels/workbook.xml.rels", wbrels as void*, wbrels.len(), 8))
+
+    stylesxml := _xlsx_styles_xml(book.styles)
+    files.push(archive.MakeZipFileInput("xl/styles.xml", stylesxml as void*, stylesxml.len(), 8))
+
+    mut i := 0
+    until i < n:
+        sh := book.sheets.get(i)[0]
+        sxml := _xlsx_sheet_xml(sh, date_style_id)
+        name := "xl/worksheets/sheet".concat(conv.FormatInt((i + 1) as i64)).concat(".xml")
+        files.push(archive.MakeZipFileInput(name, sxml as void*, sxml.len(), 8))
+        i += 1
+    end
+
+    ret archive.ZipCreateFile(files, path)
+end

@@ -1,0 +1,211 @@
+package tls
+
+// RSA signing: RSASSA-PKCS1-v1_5 and RSASSA-PSS (RFC 8017), the counterpart
+// to rsa.salam's verification. Kept in a separate file because the threat
+// model is the opposite of rsa.salam's: here the exponent is SECRET, so
+// bigint.salam's "not constant-time, verification only" modexp is no longer
+// automatically safe to call on it directly.
+//
+// Mitigation: standard RSA blinding (Rivest). Every private-key operation
+// picks a fresh random r, computes (msg * r^e) mod n with the modexp that
+// uses only the PUBLIC exponent e (cheap, and there is nothing secret in
+// that call), exponentiates the blinded value with the secret d, then
+// unblinds by multiplying by r^-1 mod n. r^-1 is obtained via Euler's
+// theorem (r^(phi(n)-1) mod n) rather than a separate signed
+// extended-Euclidean routine - see PrivateKey.rsa_phi in privkey.salam.
+//
+// This decorrelates the modexp's input from the caller's message on every
+// single call, which is what defeats a timing attack that needs to correlate
+// many observations against the SAME operand. It does not make the modexp
+// itself constant-time; the non-constant-time division inside it is still
+// there. That gap, plus the fact that none of this has had independent
+// review, is exactly why std/tls stays marked EXPERIMENTAL.
+
+// m = base^e mod n using the SECRET exponent `dexp`, blinded. `out` receives
+// exactly `klen` bytes (the modulus width).
+func _rsa_private_op_blinded(msg: void*, mlen: int, nmod: void*, nlen: int, dexp: void*, dlen: int, eexp: void*, elen: int, phi: void*, philen: int, out: void*, klen: int): bool:
+    mut n := _big_from_bytes(nmod, nlen)
+    defer _big_free(n)
+    mut e := _big_from_bytes(eexp, elen)
+    defer _big_free(e)
+    mut d := _big_from_bytes(dexp, dlen)
+    defer _big_wipe_free(d)
+    mut ph := _big_from_bytes(phi, philen)
+    defer _big_wipe_free(ph)
+    mut m := _big_from_bytes(msg, mlen)
+    defer _big_free(m)
+    if n.bad || e.bad || d.bad || ph.bad || m.bad:
+        ret false
+    end
+    if _big_is_zero(n) || _big_cmp(m, n) >= 0:
+        ret false
+    end
+
+    mut rbytes := _newbuf(nlen)
+    defer _buf_wipe(rbytes)
+    crypto.RandomBytes(rbytes.p, nlen)
+    mut rraw := _big_from_bytes(rbytes.p, nlen)
+    defer _big_wipe_free(rraw)
+    if rraw.bad:
+        ret false
+    end
+    mut r := _big_new(n.n + 1)
+    defer _big_wipe_free(r)
+    if !_big_mod(r, rraw, n):
+        ret false
+    end
+    // A fresh 2048-bit-scale random value landing on 0 is far less likely
+    // than a hardware fault during this call, but the math is undefined
+    // there (r would have no inverse), so it is checked rather than assumed.
+    if _big_is_zero(r):
+        ret false
+    end
+
+    // re = r^e mod n - public exponent, nothing secret in this call.
+    mut re := _big_new(n.n + 1)
+    defer _big_free(re)
+    if !_big_modexp(re, r, e, n):
+        ret false
+    end
+
+    mut prod := _big_new(2 * n.n + 2)
+    defer _big_wipe_free(prod)
+    _big_mul(prod, m, re)
+    if prod.bad:
+        ret false
+    end
+    mut blinded := _big_new(n.n + 1)
+    defer _big_wipe_free(blinded)
+    if !_big_mod(blinded, prod, n):
+        ret false
+    end
+
+    // The only step touching the secret exponent; its input is decorrelated
+    // from `msg` by r on every call.
+    mut s := _big_new(n.n + 1)
+    defer _big_wipe_free(s)
+    if !_big_modexp(s, blinded, d, n):
+        ret false
+    end
+
+    // r^-1 mod n = r^(phi(n)-1) mod n, by Euler's theorem.
+    mut one := _big_new(1)
+    defer _big_free(one)
+    _big_set_u32(one, 1 as u32)
+    mut phim1 := _big_new(ph.n + 1)
+    defer _big_wipe_free(phim1)
+    if !_big_sub(phim1, ph, one):
+        ret false
+    end
+    mut rinv := _big_new(n.n + 1)
+    defer _big_wipe_free(rinv)
+    if !_big_modexp(rinv, r, phim1, n):
+        ret false
+    end
+
+    mut prod2 := _big_new(2 * n.n + 2)
+    defer _big_wipe_free(prod2)
+    _big_mul(prod2, s, rinv)
+    if prod2.bad:
+        ret false
+    end
+    mut result := _big_new(n.n + 1)
+    defer _big_wipe_free(result)
+    if !_big_mod(result, prod2, n):
+        ret false
+    end
+    ret _big_to_bytes(result, out, klen)
+end
+
+// EMSA-PKCS1-v1_5 encoding (RFC 8017 section 9.2), signing side: build the
+// exact block rsa.salam's verifier expects to see, then apply the private
+// key to it. TLS 1.2's ServerKeyExchange uses this; TLS 1.3's
+// CertificateVerify does not (PSS only, RFC 8446 4.4.3).
+func _rsa_sign_pkcs1(kind: int, digest: void*, n: Buf, e: Buf, d: Buf, phi: Buf, sigout: void*): bool:
+    klen := n.len
+    if klen < 16 || klen > RSA_MAX_BYTES:
+        ret false
+    end
+    hlen := _hash_size(kind)
+    mut di := _hexbuf(_rsa_digestinfo(kind))
+    defer _buf_free(di)
+    tlen := di.len + hlen
+    if klen < tlen + 11:
+        ret false
+    end
+    mut em := _newbuf(klen)
+    defer _buf_free(em)
+    _put8(em, 0x00)
+    _put8(em, 0x01)
+    pslen := klen - tlen - 3
+    repeat pslen with _i:
+        _put8(em, 0xFF)
+    end
+    _put8(em, 0x00)
+    _putbuf(em, di)
+    _putraw(em, digest, hlen)
+    ret _rsa_private_op_blinded(em.p, em.len, n.p, n.len, d.p, d.len, e.p, e.len, phi.p, phi.len, sigout, klen)
+end
+
+// EMSA-PSS-ENCODE (RFC 8017 section 9.1.1), signing side: the mirror image of
+// rsa.salam's _rsa_verify_pss. `slen` is the salt length; TLS fixes it to the
+// digest length (RFC 8446 4.2.3).
+func _rsa_sign_pss(kind: int, digest: void*, n: Buf, e: Buf, d: Buf, phi: Buf, slen: int, sigout: void*): bool:
+    klen := n.len
+    if klen < 16 || klen > RSA_MAX_BYTES:
+        ret false
+    end
+    hlen := _hash_size(kind)
+
+    mut nbig := _big_from_bytes(n.p, n.len)
+    defer _big_free(nbig)
+    modbits := _big_bitlen(nbig)
+    if modbits < 2:
+        ret false
+    end
+    emlen := (modbits - 1 + 7) / 8
+    if emlen < hlen + slen + 2:
+        ret false
+    end
+    dblen := emlen - hlen - 1
+    skip := klen - emlen
+
+    mut salt := _newbuf(slen)
+    defer _buf_wipe(salt)
+    _putzeros(salt, slen)
+    crypto.RandomBytes(salt.p, slen)
+
+    mut mprime := _newbuf(8 + hlen + slen)
+    defer _buf_free(mprime)
+    _putzeros(mprime, 8)
+    _putraw(mprime, digest, hlen)
+    _putbuf(mprime, salt)
+    mut hpr := _newbuf(hlen)
+    defer _buf_free(hpr)
+    _putzeros(hpr, hlen)
+    _hash_oneshot(kind, mprime.p, mprime.len, hpr.p)
+
+    mut dbmask := _newbuf(dblen)
+    defer _buf_free(dbmask)
+    _putzeros(dbmask, dblen)
+    _mgf1(kind, hpr.p, hlen, dbmask.p, dblen)
+
+    pslen := dblen - slen - 1
+    mut em := _newbuf(klen)
+    defer _buf_free(em)
+    _putzeros(em, skip)
+    repeat pslen with i:
+        _put8(em, 0x00 ^ _bufat(dbmask, i))
+    end
+    _put8(em, 0x01 ^ _bufat(dbmask, pslen))
+    repeat slen with i:
+        _put8(em, _bufat(salt, i) ^ _bufat(dbmask, pslen + 1 + i))
+    end
+    unused := 8 * emlen - (modbits - 1)
+    topmask := (0xFF >> unused) & 0xFF
+    _bufset(em, skip, _bufat(em, skip) & topmask)
+    _putbuf(em, hpr)
+    _put8(em, 0xbc)
+
+    ret _rsa_private_op_blinded(em.p, em.len, n.p, n.len, d.p, d.len, e.p, e.len, phi.p, phi.len, sigout, klen)
+end

@@ -1,0 +1,170 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import str
+import io
+import os
+
+// Self-tests for privatekey.salam's two supported on-disk key formats.
+// Both test keys were generated with real tooling, not hand-crafted, so
+// parsing them is a genuine interop check rather than a test of this
+// package's own encoder decoding its own output:
+//   - K1: `ssh-keygen -t rsa -b 1024`, then re-exported to traditional
+//     PKCS#1 PEM with `ssh-keygen -p -m PEM`. Same key material also kept
+//     in its ORIGINAL OpenSSH-container form (K1_OPENSSH) before that
+//     conversion, so both parsers can be checked against one one key.
+//   - K2: a second, independent key, exported to PKCS#8 PEM with
+//     `ssh-keygen -p -m PKCS8` (the "-----BEGIN PRIVATE KEY-----" form,
+//     distinct from K1's PKCS#1 "-----BEGIN RSA PRIVATE KEY-----").
+// n/e/d/phi for both were independently extracted with Python's
+// `cryptography` library (RSAPrivateNumbers), not derived from this
+// package's own parser - an independent oracle, same approach as
+// selftest_rsa.salam's _RSA_TV_* fixture.
+// 1024-bit only to keep the self-test fast; see selftest_rsa.salam's note.
+
+const _PK_K1_N := "c3533c2e5d02fa7066755107be2ad0b4b25c17b8da43e8cb38800b7eeb4e9f155b90083c5414eab9b708155837c3cf7f57963e2dfa9f72e0e9ca4843987de715ad942b801f37a87986f3df0009ec7eaaaabfa7f2d7692aeecb2df7752d0772dc934c200b5e1014229d2c5974a9de59ef5e47d4bc2c9ee0a6cb57a10f8134f57d"
+const _PK_K1_E := "010001"
+const _PK_K1_D := "669055608f0c9a4edd2e2b2f62a6fed27379b22729cd50f72d22e7666cceeaefff15618db4250ba01b410e5c35640797f978f60b94b7974e0cd5601ec67b0e14c3575a522891b50af695b4ddd46e868568242faa5b084c4b86b221ed27681dec42a1e88f9525fbf404f10bc293fa230550fc2b5a14fb7b136e612945c50462ed"
+const _PK_K1_PHI := "c3533c2e5d02fa7066755107be2ad0b4b25c17b8da43e8cb38800b7eeb4e9f155b90083c5414eab9b708155837c3cf7f57963e2dfa9f72e0e9ca4843987de713ecc74286168a10dca3b19e3b89743664d1a4ee024be2170b7c5ef4e72f913a420c4a626e01a9c28612bd4c9caa177c2d0d096d8319d153ed3c132172090c0b1c"
+
+const _PK_K2_N := "de6ba2f8144fc08e17b4a13f8c9e6b6429df080a8d3e66f74fd8be04e8bc3547fdc4ff469f97a029589a9d3c474d9f87cdb924afd200fc3303b02faa45352ec2ec8986cedca5145b19fafeb0bcdf0ba28b20db5c3d5e47c46d52290c221625fa609775b1e19e36506adfa4eebba77616ce6f66ee8f0768d78c4263f0b7426227"
+const _PK_K2_E := "010001"
+const _PK_K2_D := "a954bcdfad67022bab74830684a1df1484a41dd51aaf1568d74b256f4b586e1ffedd499394d0b4c88582408eb1a231000ce9153b1de04e20f07fe3e9f78283b3cb56546dbb468db44d3a1752a5fe26b72e95e650bab0863d60428cd83e7ca5684ee481076b07399e57e996440a70d346dda85f94bdb96790a3b9a81a4e004111"
+const _PK_K2_PHI := "de6ba2f8144fc08e17b4a13f8c9e6b6429df080a8d3e66f74fd8be04e8bc3547fdc4ff469f97a029589a9d3c474d9f87cdb924afd200fc3303b02faa45352ec10f4a6822f87585cc11ede6ad83335d1c9b2f0e05521c59052cab463c4b6daff694ccb37a4a24fc9744209f7f1db1134cffad903c143a06cdc3db7ce006601b58"
+
+const _PK_K1_PKCS1_PEM := """
+-----BEGIN RSA PRIVATE KEY-----
+MIICWwIBAAKBgQDDUzwuXQL6cGZ1UQe+KtC0slwXuNpD6Ms4gAt+606fFVuQCDxU
+FOq5twgVWDfDz39Xlj4t+p9y4OnKSEOYfecVrZQrgB83qHmG898ACex+qqq/p/LX
+aSruyy33dS0HctyTTCALXhAUIp0sWXSp3lnvXkfUvCye4KbLV6EPgTT1fQIDAQAB
+AoGAZpBVYI8Mmk7dLisvYqb+0nN5sicpzVD3LSLnZmzO6u//FWGNtCULoBtBDlw1
+ZAeX+Xj2C5S3l04M1WAexnsOFMNXWlIokbUK9pW03dRuhoVoJC+qWwhMS4ayIe0n
+aB3sQqHoj5Ul+/QE8QvCk/ojBVD8K1oU+3sTbmEpRcUEYu0CQQDzKvN0Y/p6Y//I
+EluFKPSFI713IfXA9EAYZ4ZtAXkn3gEuW0ZBy6sDxcjTOevUFOJbu9C9lzKPH8SC
+Kgk3y7pHAkEAzaH1haSzHTjjei5o+09TwLVdQs6Vxh+jNmd8IPv9ELyF02JXGpqm
+mMSmOZ4T8sjf9YKWe3ua/ZnKwlWUQF0wGwJAO9Vvvk3zjjYY9CQAPQ3MzQ30SuIi
+VG5FbzvaCex44WRxKfTvnrT8yZrbRY5VBwR0hln6jQwtNqZ8dgLd7crFdQJARBmG
+/iN1ThAxBZ2pFtFGo2Ns51sTLvH7U2EiMqpBPPGyQDcpMZ5V3fICOsKnSJhN0zjU
+LUDaK3JrO8CrwEUcUQJAaOr4r3guKHudhfvBJl8/pRSZBEEg5FdmdBDwYdPnM40H
+JMJw3dtHAJHl/Dc38UqnDZuP2MgL25/cn9AYzeioiw==
+-----END RSA PRIVATE KEY-----
+"""
+
+const _PK_K2_PKCS8_PEM := """
+-----BEGIN PRIVATE KEY-----
+MIICdwIBADANBgkqhkiG9w0BAQEFAASCAmEwggJdAgEAAoGBAN5rovgUT8COF7Sh
+P4yea2Qp3wgKjT5m90/YvgTovDVH/cT/Rp+XoClYmp08R02fh825JK/SAPwzA7Av
+qkU1LsLsiYbO3KUUWxn6/rC83wuiiyDbXD1eR8RtUikMIhYl+mCXdbHhnjZQat+k
+7rundhbOb2bujwdo14xCY/C3QmInAgMBAAECgYEAqVS8361nAiurdIMGhKHfFISk
+HdUarxVo10slb0tYbh/+3UmTlNC0yIWCQI6xojEADOkVOx3gTiDwf+Pp94KDs8tW
+VG27Ro20TToXUqX+JrculeZQurCGPWBCjNg+fKVoTuSBB2sHOZ5X6ZZECnDTRt2o
+X5S9uWeQo7moGk4AQRECQQDv0hMG7cmCIxU3bjwgFoFhhcM0+atGQQGiqtK5aPOa
+QU3jQb/Brjw504xVbU8Dy3ntrvUN9kpX6XfDH+9IpzdjAkEA7W0LpPZmDGvy1anH
+GZUtJGoumF0/+629nfwQFm2028J954B31cr9f1MysAJO8pdP4RLhpISDCiBQo8ch
+aDsPbQJBAIlcGJvSXKWWNJPAJt32JfrWo51XF1uw5h/mmbWqwERs/RCaWxuzETnJ
+ykovxp8Uz2xs1l094Q0DYx42z1YcuKMCQBIiuDb7k0PzovLrKwgrOu2DJtgAl3iU
+Bt3geSIdcykuLAvY5k5wWPi21DJZmsoxAKsClDXK4W+OlFpORaD+kekCQCa4i0Ed
+tOaE3FETcOsrjvlH91lvX3wicqRN1ZeECfL0+gfX7GgfSNCeDURdrJt4BZ5uAoHo
+kTTE6wZujKPz3js=
+-----END PRIVATE KEY-----
+"""
+
+const _PK_K1_OPENSSH := """
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAlwAAAAdzc2gtcn
+NhAAAAAwEAAQAAAIEAw1M8Ll0C+nBmdVEHvirQtLJcF7jaQ+jLOIALfutOnxVbkAg8VBTq
+ubcIFVg3w89/V5Y+LfqfcuDpykhDmH3nFa2UK4AfN6h5hvPfAAnsfqqqv6fy12kq7sst93
+UtB3Lck0wgC14QFCKdLFl0qd5Z715H1LwsnuCmy1ehD4E09X0AAAIIrDH7lawx+5UAAAAH
+c3NoLXJzYQAAAIEAw1M8Ll0C+nBmdVEHvirQtLJcF7jaQ+jLOIALfutOnxVbkAg8VBTqub
+cIFVg3w89/V5Y+LfqfcuDpykhDmH3nFa2UK4AfN6h5hvPfAAnsfqqqv6fy12kq7sst93Ut
+B3Lck0wgC14QFCKdLFl0qd5Z715H1LwsnuCmy1ehD4E09X0AAAADAQABAAAAgGaQVWCPDJ
+pO3S4rL2Km/tJzebInKc1Q9y0i52Zszurv/xVhjbQlC6AbQQ5cNWQHl/l49guUt5dODNVg
+HsZ7DhTDV1pSKJG1CvaVtN3UboaFaCQvqlsITEuGsiHtJ2gd7EKh6I+VJfv0BPELwpP6Iw
+VQ/CtaFPt7E25hKUXFBGLtAAAAQGjq+K94Lih7nYX7wSZfP6UUmQRBIORXZnQQ8GHT5zON
+ByTCcN3bRwCR5fw3N/FKpw2bj9jIC9uf3J/QGM3oqIsAAABBAPMq83Rj+npj/8gSW4Uo9I
+UjvXch9cD0QBhnhm0BeSfeAS5bRkHLqwPFyNM569QU4lu70L2XMo8fxIIqCTfLukcAAABB
+AM2h9YWksx0443ouaPtPU8C1XULOlcYfozZnfCD7/RC8hdNiVxqappjEpjmeE/LI3/WCln
+t7mv2ZysJVlEBdMBsAAAATYWxpQERFU0tUT1AtNTVBU1ZUTA==
+-----END OPENSSH PRIVATE KEY-----
+"""
+
+func _pk_check(id: Identity, n_hex: str, e_hex: str, d_hex: str, phi_hex: str, label: str):
+    _ck(id.ok, label + ": parses successfully")
+    if !id.ok:
+        ret
+    end
+    _ckhex(_hex_of(id.n.p, id.n.len), n_hex, label + ": modulus n matches the independent oracle")
+    _ckhex(_hex_of(id.e.p, id.e.len), e_hex, label + ": public exponent e matches the independent oracle")
+    _ckhex(_hex_of(id.d.p, id.d.len), d_hex, label + ": private exponent d matches the independent oracle")
+    _ckhex(_hex_of(id.phi.p, id.phi.len), phi_hex, label + ": phi=(p-1)(q-1) matches the independent oracle")
+end
+
+func _selftest_privatekey():
+    // ---------------------------------------------------------- PKCS#1 PEM
+    id_pkcs1 := _load_identity_pem(_PK_K1_PKCS1_PEM)
+    _pk_check(id_pkcs1, _PK_K1_N, _PK_K1_E, _PK_K1_D, _PK_K1_PHI, "privatekey: PKCS#1 PEM (K1)")
+    mut id_pkcs1m := id_pkcs1
+    _identity_free(id_pkcs1m)
+
+    // ---------------------------------------------------------- PKCS#8 PEM
+    id_pkcs8 := _load_identity_pem(_PK_K2_PKCS8_PEM)
+    _pk_check(id_pkcs8, _PK_K2_N, _PK_K2_E, _PK_K2_D, _PK_K2_PHI, "privatekey: PKCS#8 PEM (K2)")
+    mut id_pkcs8m := id_pkcs8
+    _identity_free(id_pkcs8m)
+
+    // ---------------------------------------------------------- OpenSSH container
+    // Same underlying key as K1's PKCS#1 PEM above (see the file header) -
+    // both parsers must agree on every field, including phi, which the
+    // OpenSSH-format parser computes fresh from p/q rather than reusing a
+    // stored phi (see _phi_from_pq).
+    id_openssh := _load_identity_pem(_PK_K1_OPENSSH)
+    _pk_check(id_openssh, _PK_K1_N, _PK_K1_E, _PK_K1_D, _PK_K1_PHI, "privatekey: OpenSSH container format (same key as K1)")
+    mut id_opensshm := id_openssh
+    _identity_free(id_opensshm)
+
+    // ---------------------------------------------------------- file loading wrapper
+    dir := os.TempDir()
+    path := dir + "/salam_ssh_selftest_id_rsa"
+    _wrote := io.WriteFile(path, _PK_K1_PKCS1_PEM)
+    id_file := _load_identity_file(path)
+    _pk_check(id_file, _PK_K1_N, _PK_K1_E, _PK_K1_D, _PK_K1_PHI, "privatekey: _load_identity_file reads PEM from disk")
+    mut id_filem := id_file
+    _identity_free(id_filem)
+    _removed := os.Remove(path)
+
+    nonexistent := _load_identity_file(dir + "/salam_ssh_selftest_id_rsa_missing")
+    _ck(!nonexistent.ok, "privatekey: loading a nonexistent file fails cleanly, not a crash")
+
+    // ---------------------------------------------------------- malformed input
+    empty := _load_identity_pem("")
+    _ck(!empty.ok, "privatekey: an empty string is rejected")
+
+    garbage := _load_identity_pem("this is not a PEM file at all")
+    _ck(!garbage.ok, "privatekey: non-PEM garbage is rejected")
+
+    // A structurally-tagged OpenSSH block whose body is not valid base64 /
+    // not the real magic - must fail the magic check, not crash reading
+    // past a too-short decoded buffer.
+    fakeopenssh := "-----BEGIN OPENSSH PRIVATE KEY-----\nQUJDRA==\n-----END OPENSSH PRIVATE KEY-----\n"
+    fake := _load_identity_pem(fakeopenssh)
+    _ck(!fake.ok, "privatekey: an OpenSSH-tagged block with a bad magic/body is rejected, not crashed on")
+
+    // A PEM tag present but with corrupted base64 body (odd/garbled chars)
+    // must also fail cleanly.
+    badpem := "-----BEGIN RSA PRIVATE KEY-----\n!!!not-valid-base64!!!\n-----END RSA PRIVATE KEY-----\n"
+    badid := _load_identity_pem(badpem)
+    _ck(!badid.ok, "privatekey: a corrupted PKCS#1 PEM body is rejected, not crashed on")
+end

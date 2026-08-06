@@ -480,10 +480,12 @@ const char *js_build_bundle(arena_t *arena, logger_t *log, options_t *opt,
                     sb_puts(&js, "// Run the program once the DOM is ready.\n");
                 sb_printf(&js,
                           minify_ws
-                              ? "if(document.readyState===\"loading\"){document."
+                              ? "if(typeof document!==\"undefined\"&&document."
+                                "readyState===\"loading\"){document."
                                 "addEventListener(\"DOMContentLoaded\",%s);}else{%"
                                 "s();}"
-                              : "if (document.readyState === \"loading\") {\n"
+                              : "if (typeof document !== \"undefined\" && "
+                                "document.readyState === \"loading\") {\n"
                                 "    document.addEventListener(\"DOMContentLoaded\", "
                                 "%s);\n"
                                 "} else {\n"

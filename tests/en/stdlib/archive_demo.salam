@@ -1,0 +1,294 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import compress
+import testing
+import os
+import filepath
+
+func repeat_str(s: str, count: int): str:
+    mut sb := ""
+    mut i := 0
+    until i < count:
+        sb = sb + s
+        i += 1
+    end
+    ret sb
+end
+
+// Hand-builds a minimal RAR4 archive (signature, MAIN_HEAD, two stored
+// FILE_HEAD blocks, ENDARC_HEAD) so RarList/RarExtractByName have
+// something to read without depending on an external .rar - there is no
+// `rar`/`unrar` tool to create one with in this environment, and RAR has
+// no open format to encode against even if there were.
+func _rar_write_file_block(b &: compress.ByteBuf, name: str, data: str):
+    name_len := name.len()
+    data_len := data.len()
+    head_size := 7 + 25 + name_len
+    archive.LEPut16(b, 0)
+    compress.BufPush(b, 0x74)
+    archive.LEPut16(b, 0)
+    archive.LEPut16(b, head_size)
+    archive.LEPut32(b, data_len)
+    archive.LEPut32(b, data_len)
+    compress.BufPush(b, 0)
+    archive.LEPut32(b, 0)
+    archive.LEPut32(b, 0)
+    compress.BufPush(b, 20)
+    compress.BufPush(b, 0x30)
+    archive.LEPut16(b, name_len)
+    archive.LEPut32(b, 0x20)
+    compress.BufPushBytes(b, name as void*, name_len)
+    compress.BufPushBytes(b, data as void*, data_len)
+end
+
+func build_synthetic_rar(name1: str, data1: str, name2: str, data2: str): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    compress.BufPush(b, 0x52)
+    compress.BufPush(b, 0x61)
+    compress.BufPush(b, 0x72)
+    compress.BufPush(b, 0x21)
+    compress.BufPush(b, 0x1a)
+    compress.BufPush(b, 0x07)
+    compress.BufPush(b, 0x00)
+    archive.LEPut16(b, 0)
+    compress.BufPush(b, 0x73)
+    archive.LEPut16(b, 0)
+    archive.LEPut16(b, 13)
+    archive.LEPut16(b, 0)
+    archive.LEPut32(b, 0)
+    _rar_write_file_block(b, name1, data1)
+    _rar_write_file_block(b, name2, data2)
+    archive.LEPut16(b, 0)
+    compress.BufPush(b, 0x7b)
+    archive.LEPut16(b, 0)
+    archive.LEPut16(b, 7)
+    ret b
+end
+
+// Hand-builds a minimal RAR5 archive (signature, MAIN header, one stored
+// FILE header, END header). RAR5 header fields are "vint" (base-128,
+// least-significant-7-bits-first) rather than fixed little-endian, but
+// every value used here is under 128, so each vint is exactly one raw
+// byte - no multi-byte encoding needed. Layout confirmed against real
+// `rar`/`unrar` 7.00 output (see rar.salam's header comment); this fixture
+// keeps that coverage in the repo without depending on an external tool
+// or a generated .rar file.
+func build_synthetic_rar5(name: str, data: str): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    compress.BufPush(b, 0x52)
+    compress.BufPush(b, 0x61)
+    compress.BufPush(b, 0x72)
+    compress.BufPush(b, 0x21)
+    compress.BufPush(b, 0x1a)
+    compress.BufPush(b, 0x07)
+    compress.BufPush(b, 0x01)
+    compress.BufPush(b, 0x00)
+
+    // MAIN header: CRC32(4, unchecked by RarList) + HeaderSize(vint=2) +
+    // HeaderType(vint=1) + HeaderFlags(vint=0, no extra/data area).
+    archive.LEPut32(b, 0)
+    compress.BufPush(b, 2)
+    compress.BufPush(b, 1)
+    compress.BufPush(b, 0)
+
+    // FILE header: HeaderType(2) HeaderFlags(2=DATA only) DataSize(vint)
+    // FileFlags(0) UnpackedSize(vint) Attributes(0) CompressionInfo(0=
+    // store) HostOS(0) NameSize(vint) Name.
+    name_len := name.len()
+    data_len := data.len()
+    header_data_len := 9 + name_len
+    archive.LEPut32(b, 0)
+    compress.BufPush(b, header_data_len)
+    compress.BufPush(b, 2)
+    compress.BufPush(b, 2)
+    compress.BufPush(b, data_len)
+    compress.BufPush(b, 0)
+    compress.BufPush(b, data_len)
+    compress.BufPush(b, 0)
+    compress.BufPush(b, 0)
+    compress.BufPush(b, 0)
+    compress.BufPush(b, name_len)
+    compress.BufPushBytes(b, name as void*, name_len)
+    compress.BufPushBytes(b, data as void*, data_len)
+
+    // END header: HeaderType(5) HeaderFlags(0).
+    archive.LEPut32(b, 0)
+    compress.BufPush(b, 2)
+    compress.BufPush(b, 5)
+    compress.BufPush(b, 0)
+    ret b
+end
+
+func main:
+    tmpdir := filepath.Join(os.TempDir(), "salam_archive_test")
+    os.MkdirAll(tmpdir)
+
+    text1 := "The quick brown fox jumps over the lazy dog.\n"
+    text2 := repeat_str("Salam archive test data, repeated for a real compression ratio. ", 100)
+    d1 := compress.BufFromStr(text1)
+    d2 := compress.BufFromStr(text2)
+
+    // ---------------------------------------------------------- GZIP
+    p1 := filepath.Join(tmpdir, "sample1.txt")
+    testing.AssertTrue(archive.WriteBinaryFile(p1, d1.data, d1.len))
+    gzpath := filepath.Join(tmpdir, "sample1.txt.gz")
+    testing.AssertTrue(archive.GzipCompressFile(p1, gzpath))
+    gzout := filepath.Join(tmpdir, "sample1_from_gz.txt")
+    testing.AssertTrue(archive.GzipDecompressFile(gzpath, gzout))
+    mut ok1 := false
+    r1 := archive.ReadBinaryFile(gzout, ok1)
+    testing.AssertTrue(ok1)
+    testing.AssertMsg(compress.BufEquals(d1, r1), "gzip file round-trip mismatch")
+    compress.BufFree(r1)
+
+    // ---------------------------------------------------------- ZIP
+    p2 := filepath.Join(tmpdir, "sample2.txt")
+    testing.AssertTrue(archive.WriteBinaryFile(p2, d2.data, d2.len))
+
+    mut zfiles := Vector {} as Vector<archive.ZipFileInput>
+    zfiles.push(archive.MakeZipFileInput("sample1.txt", d1.data, d1.len, 8))
+    zfiles.push(archive.MakeZipFileInput("sample2.txt", d2.data, d2.len, 0))
+    zippath := filepath.Join(tmpdir, "test.zip")
+    testing.AssertTrue(archive.ZipCreateFile(zfiles, zippath))
+    zfiles.free()
+
+    mut zok := false
+    zipbuf := archive.ReadBinaryFile(zippath, zok)
+    testing.AssertTrue(zok)
+    zentries := archive.ZipList(zipbuf.data, zipbuf.len) as Vector<archive.Entry>
+    testing.AssertEqInt(zentries.len(), 2)
+    zentries.free()
+
+    mut ze1ok := false
+    ze1 := archive.ZipExtractByName(zipbuf.data, zipbuf.len, "sample1.txt", ze1ok)
+    testing.AssertTrue(ze1ok)
+    testing.AssertMsg(compress.BufEquals(d1, ze1), "zip deflate entry mismatch")
+    compress.BufFree(ze1)
+
+    mut ze2ok := false
+    ze2 := archive.ZipExtractByName(zipbuf.data, zipbuf.len, "sample2.txt", ze2ok)
+    testing.AssertTrue(ze2ok)
+    testing.AssertMsg(compress.BufEquals(d2, ze2), "zip store entry mismatch")
+    compress.BufFree(ze2)
+
+    zextractdir := filepath.Join(tmpdir, "zip_extracted")
+    testing.AssertTrue(archive.ZipExtractAll(zipbuf.data, zipbuf.len, zextractdir))
+    compress.BufFree(zipbuf)
+
+    // ---------------------------------------------------------- TAR
+    mut tfiles := Vector {} as Vector<archive.TarFileInput>
+    tfiles.push(archive.MakeTarFileInput("sample1.txt", d1.data, d1.len, false))
+    tfiles.push(archive.MakeTarFileInput("sub/", 0 as void*, 0, true))
+    tfiles.push(archive.MakeTarFileInput("sub/sample2.txt", d2.data, d2.len, false))
+    tarpath := filepath.Join(tmpdir, "test.tar")
+    testing.AssertTrue(archive.TarCreateFile(tfiles, tarpath))
+    tfiles.free()
+
+    mut tok := false
+    tarbuf := archive.ReadBinaryFile(tarpath, tok)
+    testing.AssertTrue(tok)
+    tentries := archive.TarList(tarbuf.data, tarbuf.len) as Vector<archive.Entry>
+    testing.AssertEqInt(tentries.len(), 3)
+    tentries.free()
+
+    mut te1ok := false
+    te1 := archive.TarExtractByName(tarbuf.data, tarbuf.len, "sample1.txt", te1ok)
+    testing.AssertTrue(te1ok)
+    testing.AssertMsg(compress.BufEquals(d1, te1), "tar entry mismatch")
+    compress.BufFree(te1)
+
+    mut te2ok := false
+    te2 := archive.TarExtractByName(tarbuf.data, tarbuf.len, "sub/sample2.txt", te2ok)
+    testing.AssertTrue(te2ok)
+    testing.AssertMsg(compress.BufEquals(d2, te2), "tar nested entry mismatch")
+    compress.BufFree(te2)
+
+    textractdir := filepath.Join(tmpdir, "tar_extracted")
+    testing.AssertTrue(archive.TarExtractAll(tarbuf.data, tarbuf.len, textractdir))
+    compress.BufFree(tarbuf)
+
+    // ---------------------------------------------------------- RAR (read-only)
+    rarbuf := build_synthetic_rar("hi.txt", "Hi Salam!", "sub/nested.txt", "Nested RAR content")
+    testing.AssertTrue(archive.IsRar(rarbuf.data, rarbuf.len))
+    rentries := archive.RarList(rarbuf.data, rarbuf.len) as Vector<archive.Entry>
+    testing.AssertEqInt(rentries.len(), 2)
+    rentries.free()
+
+    mut re1ok := false
+    re1 := archive.RarExtractByName(rarbuf.data, rarbuf.len, "hi.txt", re1ok)
+    testing.AssertTrue(re1ok)
+    testing.AssertEqStr(compress.BufToStrUnsafe(re1), "Hi Salam!")
+    compress.BufFree(re1)
+
+    mut re2ok := false
+    re2 := archive.RarExtractByName(rarbuf.data, rarbuf.len, "sub/nested.txt", re2ok)
+    testing.AssertTrue(re2ok)
+    testing.AssertEqStr(compress.BufToStrUnsafe(re2), "Nested RAR content")
+    compress.BufFree(re2)
+    compress.BufFree(rarbuf)
+
+    // ---------------------------------------------------------- RAR5 (read-only)
+    rar5buf := build_synthetic_rar5("hello5.txt", "Hello RAR5!")
+    testing.AssertTrue(archive.IsRar(rar5buf.data, rar5buf.len))
+    r5entries := archive.RarList(rar5buf.data, rar5buf.len) as Vector<archive.Entry>
+    testing.AssertEqInt(r5entries.len(), 1)
+    r5e := r5entries.get(0)[0]
+    testing.AssertEqStr(r5e.name, "hello5.txt")
+    testing.AssertEqInt(r5e.method, 0)
+    r5entries.free()
+
+    mut r5ok := false
+    r5x := archive.RarExtractByName(rar5buf.data, rar5buf.len, "hello5.txt", r5ok)
+    testing.AssertTrue(r5ok)
+    testing.AssertEqStr(compress.BufToStrUnsafe(r5x), "Hello RAR5!")
+    compress.BufFree(r5x)
+    compress.BufFree(rar5buf)
+
+    // ------------------------------------------------ binary data (embedded NUL)
+    mut bin := compress.NewByteBuf()
+    compress.BufPush(bin, 0)
+    compress.BufPush(bin, 1)
+    compress.BufPush(bin, 2)
+    compress.BufPush(bin, 0)
+    compress.BufPush(bin, 0)
+    compress.BufPush(bin, 255)
+    compress.BufPush(bin, 254)
+    compress.BufPush(bin, 0)
+
+    mut bfiles := Vector {} as Vector<archive.ZipFileInput>
+    bfiles.push(archive.MakeZipFileInput("bin.dat", bin.data, bin.len, 8))
+    binzip := filepath.Join(tmpdir, "bin.zip")
+    testing.AssertTrue(archive.ZipCreateFile(bfiles, binzip))
+    bfiles.free()
+
+    mut bzok := false
+    binzipbuf := archive.ReadBinaryFile(binzip, bzok)
+    mut bxok := false
+    bx := archive.ZipExtractByName(binzipbuf.data, binzipbuf.len, "bin.dat", bxok)
+    testing.AssertTrue(bxok)
+    testing.AssertMsg(compress.BufEquals(bin, bx), "zip binary entry mismatch")
+    compress.BufFree(bx)
+    compress.BufFree(binzipbuf)
+    compress.BufFree(bin)
+
+    compress.BufFree(d1)
+    compress.BufFree(d2)
+    os.RemoveAll(tmpdir)
+
+    os.Exit(testing.Summary())
+end

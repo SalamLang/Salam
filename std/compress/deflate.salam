@@ -1,0 +1,169 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+// A DEFLATE-style pipeline: LZ77 tokenizes the input, then each part of the
+// token stream is entropy-coded with the Huffman coder from huffman.salam -
+// the same two ideas RFC 1951 combines, just framed as three independent,
+// byte-aligned streams instead of one interleaved bitstream with two
+// shared alphabets. That trade keeps this a straightforward composition of
+// the pieces already in this package rather than a reimplementation of
+// RFC 1951's fixed/dynamic block format - so it is NOT wire-compatible
+// with zlib/gzip, but it is the same two algorithms doing the same job.
+//
+// Tokenization uses a 32768-byte window and a 1-byte length field (matches
+// are 3..254 bytes), so it finds real redundancy at file scale, not just
+// within a few hundred bytes like lz77.salam's LZSS parameters.
+//
+// The three streams:
+//   tags   - 1 bit per token: 0 = literal, 1 = match (raw bits, not
+//            entropy-coded further; splitting it out keeps the other two
+//            streams byte-aligned and skew-free)
+//   litlen - 1 byte per token: a literal's value, or a match's
+//            (length - MIN_MATCH); Huffman-compressed as a whole
+//   dist   - 2 bytes per match (distance-1, big-endian); Huffman-compressed
+//            as a whole (its high/low byte halves each end up with their
+//            own skewed distribution when distances repeat)
+//
+// Format: [4B n][4B tagLen][tag bytes]
+//         [4B huffLitLen][Huffman(litlen stream)]
+//         [4B huffDistLen][Huffman(dist stream)]
+
+const _DEFLATE_WINDOW := 32768
+const _DEFLATE_MIN_MATCH := 3
+const _DEFLATE_MAX_MATCH := 254
+
+func _deflate_find_match(p: void*, n: int, pos: int, bestlen &: int, bestdist &: int):
+    bp := p as u8*
+    bestlen = 0
+    bestdist = 0
+    mut winstart := pos - _DEFLATE_WINDOW
+    if winstart < 0: winstart = 0 end
+    mut cand := winstart
+    until cand < pos:
+        mut len := 0
+        until len < _DEFLATE_MAX_MATCH && pos + len < n && (bp[cand + len] as int) == (bp[pos + len] as int):
+            len += 1
+        end
+        if len > bestlen:
+            bestlen = len
+            bestdist = pos - cand
+        end
+        cand += 1
+    end
+end
+
+@en "DeflateCompress"
+@fa "فشرده سازی دیفلیت"
+@ar "ضغط ديفليت"
+pub func DeflateCompress(p: void*, n: int): ByteBuf:
+    mut out := NewByteBuf()
+    BufPushU32(out, n)
+
+    mut tagw := NewBitWriter()
+    mut litlen := NewByteBuf()
+    mut dist := NewByteBuf()
+
+    bp := p as u8*
+    mut pos := 0
+    until pos < n:
+        mut bestlen := 0
+        mut bestdist := 0
+        _deflate_find_match(p, n, pos, bestlen, bestdist)
+        if bestlen >= _DEFLATE_MIN_MATCH:
+            BitWriteBit(tagw, 1)
+            BufPush(litlen, bestlen - _DEFLATE_MIN_MATCH)
+            BufPush(dist, ((bestdist - 1) >> 8) & 255)
+            BufPush(dist, (bestdist - 1) & 255)
+            pos += bestlen
+        else:
+            BitWriteBit(tagw, 0)
+            BufPush(litlen, bp[pos] as int)
+            pos += 1
+        end
+    end
+    BitFlush(tagw)
+
+    BufPushU32(out, BufLen(tagw.buf))
+    BufPushBuf(out, tagw.buf)
+    BitWriterFree(tagw)
+
+    mut huffLit := HuffmanCompress(litlen.data, litlen.len)
+    BufPushU32(out, BufLen(huffLit))
+    BufPushBuf(out, huffLit)
+    BufFree(huffLit)
+    BufFree(litlen)
+
+    mut huffDist := HuffmanCompress(dist.data, dist.len)
+    BufPushU32(out, BufLen(huffDist))
+    BufPushBuf(out, huffDist)
+    BufFree(huffDist)
+    BufFree(dist)
+
+    ret out
+end
+
+@en "DeflateDecompress"
+@fa "کدگشایی دیفلیت"
+@ar "فك ضغط ديفليت"
+pub func DeflateDecompress(p: void*, n: int): ByteBuf:
+    mut r := NewByteReader(p, n)
+    origLen := RdU32(r)
+    mut out := NewByteBufCap(origLen)
+
+    tagLen := RdU32(r)
+    mut tagBytes := RdBytes(r, tagLen)
+    mut tagr := BitReaderFromBuf(tagBytes)
+
+    huffLitLen := RdU32(r)
+    mut huffLitBytes := RdBytes(r, huffLitLen)
+    mut litlen := HuffmanDecompress(huffLitBytes.data, huffLitBytes.len)
+    BufFree(huffLitBytes)
+
+    huffDistLen := RdU32(r)
+    mut huffDistBytes := RdBytes(r, huffDistLen)
+    mut dist := HuffmanDecompress(huffDistBytes.data, huffDistBytes.len)
+    BufFree(huffDistBytes)
+
+    mut litpos := 0
+    mut distpos := 0
+    until BufLen(out) < origLen:
+        bit := BitReadBit(tagr)
+        if bit == 0:
+            b := BufGet(litlen, litpos)
+            litpos += 1
+            BufPush(out, b)
+        else:
+            lb := BufGet(litlen, litpos)
+            litpos += 1
+            length := lb + _DEFLATE_MIN_MATCH
+            hi := BufGet(dist, distpos)
+            lo := BufGet(dist, distpos + 1)
+            distpos += 2
+            d := ((hi << 8) | lo) + 1
+            start := BufLen(out) - d
+            mut k := 0
+            until k < length:
+                BufPush(out, BufGet(out, start + k))
+                k += 1
+            end
+        end
+    end
+
+    BufFree(tagBytes)
+    BufFree(litlen)
+    BufFree(dist)
+    ret out
+end

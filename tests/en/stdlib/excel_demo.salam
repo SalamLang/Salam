@@ -1,0 +1,788 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import excel
+import testing
+import os
+import filepath
+import compress
+
+// ------------------------------------------------------- cell.salam
+
+func test_a1_references():
+    testing.AssertEqStr(excel.ColumnLabel(0), "A")
+    testing.AssertEqStr(excel.ColumnLabel(1), "B")
+    testing.AssertEqStr(excel.ColumnLabel(25), "Z")
+    testing.AssertEqStr(excel.ColumnLabel(26), "AA")
+    testing.AssertEqStr(excel.ColumnLabel(27), "AB")
+    testing.AssertEqStr(excel.ColumnLabel(701), "ZZ")
+
+    testing.AssertEqInt(excel.ColumnIndex("A"), 0)
+    testing.AssertEqInt(excel.ColumnIndex("a"), 0)
+    testing.AssertEqInt(excel.ColumnIndex("Z"), 25)
+    testing.AssertEqInt(excel.ColumnIndex("AA"), 26)
+    testing.AssertEqInt(excel.ColumnIndex("ZZ"), 701)
+    testing.AssertEqInt(excel.ColumnIndex(""), -1)
+    testing.AssertEqInt(excel.ColumnIndex("1"), -1)
+
+    testing.AssertEqStr(excel.CellRef(0, 0), "A1")
+    testing.AssertEqStr(excel.CellRef(9, 2), "C10")
+
+    mut r := 0
+    mut c := 0
+    testing.AssertTrue(excel.ParseCellRef("C10", r, c))
+    testing.AssertEqInt(r, 9)
+    testing.AssertEqInt(c, 2)
+
+    mut r2 := 0
+    mut c2 := 0
+    testing.AssertTrue(excel.ParseCellRef("a1", r2, c2))
+    testing.AssertEqInt(r2, 0)
+    testing.AssertEqInt(c2, 0)
+
+    mut r3 := 0
+    mut c3 := 0
+    testing.AssertFalse(excel.ParseCellRef("", r3, c3))
+    testing.AssertFalse(excel.ParseCellRef("123", r3, c3))
+    testing.AssertFalse(excel.ParseCellRef("ABC", r3, c3))
+    testing.AssertFalse(excel.ParseCellRef("A0", r3, c3))
+end
+
+func test_cell_constructors():
+    sc := excel.NewStringCell(1, 2, "hi")
+    testing.AssertEqInt(sc.row, 1)
+    testing.AssertEqInt(sc.col, 2)
+    testing.AssertEqInt(sc.kind, excel.CellString)
+    testing.AssertEqStr(sc.text, "hi")
+
+    nc := excel.NewNumberCell(0, 0, 3.5)
+    testing.AssertEqInt(nc.kind, excel.CellNumber)
+    testing.AssertEqFloat(nc.num, 3.5, 0.0001)
+
+    bc := excel.NewBoolCell(0, 0, true)
+    testing.AssertEqInt(bc.kind, excel.CellBool)
+    testing.AssertTrue(bc.flag)
+
+    dc := excel.NewDateCell(0, 0, 0 as i64)
+    testing.AssertEqInt(dc.kind, excel.CellDate)
+    testing.AssertEqFloat(dc.num, 25569.0, 0.001)
+
+    fc := excel.NewFormulaCell(0, 0, "A1+A2", 42.0)
+    testing.AssertEqInt(fc.kind, excel.CellFormula)
+    testing.AssertEqStr(fc.formula, "A1+A2")
+    testing.AssertEqFloat(fc.num, 42.0, 0.0001)
+
+    testing.AssertEqInt(excel.CellEmpty, 0)
+    testing.AssertNeInt(excel.CellString, excel.CellNumber)
+    testing.AssertNeInt(excel.CellBool, excel.CellDate)
+    testing.AssertNeInt(excel.CellFormula, excel.CellError)
+end
+
+func test_serial_dates():
+    testing.AssertEqFloat(excel.EpochToSerial(0 as i64), 25569.0, 0.001)
+    testing.AssertEqInt64(excel.SerialToEpoch(25569.0), 0 as i64)
+    // 500 whole days - an exact multiple of 86400, so the round trip
+    // through a f64 serial number has no fractional-day rounding to lose
+    back := excel.SerialToEpoch(excel.EpochToSerial(43200000 as i64))
+    testing.AssertEqInt64(back, 43200000 as i64)
+end
+
+// ------------------------------------------------------- xmlutil.salam
+
+func test_xml_utils():
+    xml := `<row r="1" ht="20"><c r="A1" t="s"><v>0</v></c><c r="B1"><v>3.14</v></c></row><row r="2"/>`
+
+    r1 := excel.XmlFind(xml, "row", 0)
+    testing.AssertEqInt(r1, 0)
+    testing.AssertFalse(excel.XmlSelfClosing(xml, r1))
+    testing.AssertEqStr(excel.XmlAttr(xml, r1, "r"), "1")
+    testing.AssertEqStr(excel.XmlAttr(xml, r1, "ht"), "20")
+    testing.AssertEqStr(excel.XmlAttr(xml, r1, "nope"), "")
+
+    content_start := excel.XmlTagEnd(xml, r1)
+    close1 := excel.XmlFindClose(xml, "row", content_start)
+    testing.AssertEqInt(close1, 72)
+
+    c1 := excel.XmlFind(xml, "c", content_start)
+    testing.AssertEqStr(excel.XmlAttr(xml, c1, "r"), "A1")
+    testing.AssertEqStr(excel.XmlAttr(xml, c1, "t"), "s")
+    testing.AssertEqStr(excel.XmlInner(xml, "v", c1), "0")
+
+    c2 := excel.XmlFind(xml, "c", excel.XmlTagEnd(xml, c1))
+    testing.AssertEqStr(excel.XmlAttr(xml, c2, "r"), "B1")
+    testing.AssertEqStr(excel.XmlInner(xml, "v", c2), "3.14")
+
+    r2 := excel.XmlFind(xml, "row", close1)
+    testing.AssertTrue(excel.XmlSelfClosing(xml, r2))
+    testing.AssertEqStr(excel.XmlAttr(xml, r2, "r"), "2")
+
+    testing.AssertEqInt(excel.XmlFind(xml, "nonexistent", 0), -1)
+    testing.AssertEqInt(excel.XmlFindClose(xml, "nonexistent", 0), -1)
+    testing.AssertEqStr(excel.XmlInner(xml, "nonexistent", 0), "")
+
+    testing.AssertEqStr(excel.XmlEscape(`<a & "b" 'c'>`), "&lt;a &amp; &quot;b&quot; &apos;c&apos;&gt;")
+    testing.AssertEqStr(excel.XmlUnescape("&lt;a &amp; &quot;b&quot; &apos;c&apos;&gt;"), `<a & "b" 'c'>`)
+
+    // nested same-named tags: XmlFindClose must count depth, not stop at
+    // the first literal close
+    nested := "<a><a>inner</a>tail</a>"
+    outer := excel.XmlFind(nested, "a", 0)
+    outer_cs := excel.XmlTagEnd(nested, outer)
+    outer_close := excel.XmlFindClose(nested, "a", outer_cs)
+    testing.AssertEqStr(nested.substr(outer_cs, outer_close - outer_cs), "<a>inner</a>tail")
+end
+
+// ------------------------------------------------------- style.salam
+
+func test_style_dedup():
+    mut styles := excel.NewStyleSheet()
+    testing.AssertEqInt(styles.count(), 1)
+
+    mut s1 := excel.Style {}
+    s1.bold = true
+    mut s2 := excel.Style {}
+    s2.bold = true
+    mut s3 := excel.Style {}
+    s3.italic = true
+
+    testing.AssertTrue(s1.equals(s2))
+    testing.AssertFalse(s1.equals(s3))
+
+    id1 := styles.get_or_add(s1)
+    id2 := styles.get_or_add(s2)
+    id3 := styles.get_or_add(s3)
+    testing.AssertEqInt(id1, id2)
+    testing.AssertTrue(id3 != id1)
+    testing.AssertEqInt(styles.count(), 3)
+
+    got1 := styles.get(id1)
+    testing.AssertTrue(got1.bold)
+    got_missing := styles.get(999)
+    testing.AssertFalse(got_missing.bold)
+
+    styles.free()
+end
+
+// ------------------------------------------------------- sheet.salam
+
+func test_sheet_cell_types():
+    mut sh := excel.NewSheet("Types")
+    sh.set_cell(0, 0, "via-set_cell")
+    sh.set_string(0, 1, "via-set_string")
+    sh.set_number(1, 0, 3.5)
+    sh.set_int(1, 1, 7 as i64)
+    sh.set_bool(2, 0, true)
+    sh.set_bool(2, 1, false)
+    sh.set_date(3, 0, 0 as i64)
+    sh.set_formula(4, 0, "A1+A2", 99.0)
+    sh.set_error(5, 0, "#DIV/0!")
+
+    testing.AssertEqStr(sh.get_string(0, 0), "via-set_cell")
+    testing.AssertEqStr(sh.get_string(0, 1), "via-set_string")
+    testing.AssertEqFloat(sh.get_number(1, 0), 3.5, 0.0001)
+    testing.AssertEqFloat(sh.get_number(1, 1), 7.0, 0.0001)
+    testing.AssertTrue(sh.get_bool(2, 0))
+    testing.AssertFalse(sh.get_bool(2, 1))
+    testing.AssertEqStr(sh.get_string(3, 0), "1970-01-01")
+    testing.AssertEqStr(sh.get_formula(4, 0), "A1+A2")
+    testing.AssertEqFloat(sh.get_number(4, 0), 99.0, 0.0001)
+    testing.AssertEqStr(sh.get_string(5, 0), "#DIV/0!")
+
+    // cross-kind coercion: get_number(bool) and get_bool(nonzero number)
+    testing.AssertEqFloat(sh.get_number(2, 0), 1.0, 0.0001)
+    testing.AssertEqFloat(sh.get_number(2, 1), 0.0, 0.0001)
+    testing.AssertTrue(sh.get_bool(1, 0))
+    testing.AssertTrue(sh.get_bool(1, 1))
+
+    // empty cell defaults
+    testing.AssertEqStr(sh.get_string(50, 50), "")
+    testing.AssertEqFloat(sh.get_number(50, 50), 0.0, 0.0001)
+    testing.AssertFalse(sh.get_bool(50, 50))
+    empty_cell := sh.get_cell(50, 50)
+    testing.AssertEqInt(empty_cell.kind, excel.CellEmpty)
+
+    testing.AssertTrue(sh.has_cell(0, 0))
+    testing.AssertFalse(sh.has_cell(50, 50))
+    sh.clear_cell(0, 0)
+    testing.AssertFalse(sh.has_cell(0, 0))
+    testing.AssertEqStr(sh.get_string(0, 0), "")
+
+    testing.AssertEqInt(sh.row_count(), 6)
+    testing.AssertEqInt(sh.col_count(), 2)
+
+    sh.free()
+end
+
+func test_sheet_style():
+    mut sh := excel.NewSheet("StyleTest")
+    sh.set_string(0, 0, "styled")
+    sh.set_style(0, 0, 5)
+    testing.AssertEqInt(sh.get_cell(0, 0).style_id, 5)
+    // set_style on a cell with no prior value still creates it
+    sh.set_style(9, 9, 3)
+    testing.AssertEqInt(sh.get_cell(9, 9).style_id, 3)
+    testing.AssertEqInt(sh.get_cell(9, 9).kind, excel.CellEmpty)
+    sh.free()
+end
+
+func test_sheet_row_col_table():
+    mut sh := excel.NewSheet("RowColTable")
+
+    mut rowvals := Vector {} as Vector<str>
+    rowvals.push("R0")
+    rowvals.push("R1")
+    rowvals.push("R2")
+    sh.set_row(0, rowvals)
+    rowvals.free()
+    testing.AssertEqStr(sh.get_string(0, 0), "R0")
+    testing.AssertEqStr(sh.get_string(0, 1), "R1")
+    testing.AssertEqStr(sh.get_string(0, 2), "R2")
+
+    mut colvals := Vector {} as Vector<str>
+    colvals.push("C0")
+    colvals.push("C1")
+    sh.set_column(5, colvals)
+    colvals.free()
+    testing.AssertEqStr(sh.get_string(0, 5), "C0")
+    testing.AssertEqStr(sh.get_string(1, 5), "C1")
+
+    mut flat := Vector {} as Vector<str>
+    flat.push("a")
+    flat.push("b")
+    flat.push("c")
+    flat.push("d")
+    flat.push("e")
+    flat.push("f")
+    sh.set_table(10, 0, flat, 3)
+    flat.free()
+    testing.AssertEqStr(sh.get_string(10, 0), "a")
+    testing.AssertEqStr(sh.get_string(10, 1), "b")
+    testing.AssertEqStr(sh.get_string(10, 2), "c")
+    testing.AssertEqStr(sh.get_string(11, 0), "d")
+    testing.AssertEqStr(sh.get_string(11, 1), "e")
+    testing.AssertEqStr(sh.get_string(11, 2), "f")
+
+    row0 := sh.get_row(0) as Vector<excel.Cell>
+    testing.AssertEqInt(row0.len(), sh.col_count())
+    testing.AssertEqStr(row0.get(0)[0].text, "R0")
+    row0.free()
+
+    col5 := sh.get_column(5) as Vector<excel.Cell>
+    testing.AssertEqStr(col5.get(0)[0].text, "C0")
+    testing.AssertEqStr(col5.get(1)[0].text, "C1")
+    col5.free()
+
+    all := sh.get_all() as Vector<excel.Cell>
+    testing.AssertEqInt(all.len(), sh.row_count() * sh.col_count())
+    all.free()
+
+    sh.free()
+end
+
+func test_sheet_search_filter():
+    mut sh := excel.NewSheet("SearchFilter")
+    sh.set_string(0, 0, "Ada")
+    sh.set_bool(0, 1, true)
+    sh.set_string(1, 0, "Grace")
+    sh.set_bool(1, 1, false)
+    sh.set_string(2, 0, "Ada")
+    sh.set_bool(2, 1, true)
+
+    found := sh.find("Ada") as Vector<excel.CellPos>
+    testing.AssertEqInt(found.len(), 2)
+    testing.AssertEqInt(found.get(0)[0].row, 0)
+    testing.AssertEqInt(found.get(1)[0].row, 2)
+    found.free()
+
+    none_found := sh.find("Nobody") as Vector<excel.CellPos>
+    testing.AssertEqInt(none_found.len(), 0)
+    none_found.free()
+
+    passing := sh.filter_rows_equals(1, "true")
+    testing.AssertEqInt(passing.len(), 2)
+    testing.AssertEqInt(passing.get(0)[0], 0)
+    testing.AssertEqInt(passing.get(1)[0], 2)
+    passing.free()
+
+    sh.free()
+end
+
+func test_sheet_merges():
+    mut sh := excel.NewSheet("Merges")
+    sh.set_string(0, 0, "Title")
+    sh.merge_cells(0, 0, 0, 2)
+    sh.set_string(3, 3, "Block")
+    sh.merge_cells(3, 3, 4, 4)
+
+    testing.AssertTrue(sh.is_merged(0, 0))
+    testing.AssertTrue(sh.is_merged(0, 1))
+    testing.AssertTrue(sh.is_merged(0, 2))
+    testing.AssertFalse(sh.is_merged(0, 3))
+    testing.AssertFalse(sh.is_merged(1, 0))
+
+    testing.AssertTrue(sh.is_merged(3, 3))
+    testing.AssertTrue(sh.is_merged(4, 4))
+    testing.AssertFalse(sh.is_merged(5, 5))
+
+    mut found1 := false
+    rg1 := sh.merged_range(0, 2, found1)
+    testing.AssertTrue(found1)
+    testing.AssertEqInt(rg1.row1, 0)
+    testing.AssertEqInt(rg1.col1, 0)
+    testing.AssertEqInt(rg1.row2, 0)
+    testing.AssertEqInt(rg1.col2, 2)
+
+    mut found2 := false
+    rg2 := sh.merged_range(4, 3, found2)
+    testing.AssertTrue(found2)
+    testing.AssertEqInt(rg2.row1, 3)
+    testing.AssertEqInt(rg2.col1, 3)
+    testing.AssertEqInt(rg2.row2, 4)
+    testing.AssertEqInt(rg2.col2, 4)
+
+    mut found3 := false
+    sh.merged_range(10, 10, found3)
+    testing.AssertFalse(found3)
+
+    sh.free()
+end
+
+// ------------------------------------------------------- workbook.salam
+
+func test_workbook_management():
+    mut book := excel.NewWorkbook()
+    testing.AssertEqInt(book.sheet_count(), 0)
+    testing.AssertTrue(book.active() == null)
+    testing.AssertTrue(book.sheet_at(0) == null)
+    testing.AssertTrue(book.sheet("nope") == null)
+
+    s1 := book.add_sheet("Alpha")
+    s1.set_string(0, 0, "a")
+    book.add_sheet("Beta")
+    book.add_sheet("Gamma")
+    testing.AssertEqInt(book.sheet_count(), 3)
+
+    testing.AssertEqInt(book.sheet_index("Alpha"), 0)
+    testing.AssertEqInt(book.sheet_index("Beta"), 1)
+    testing.AssertEqInt(book.sheet_index("Gamma"), 2)
+    testing.AssertEqInt(book.sheet_index("Missing"), -1)
+
+    names := book.sheet_names()
+    testing.AssertEqInt(names.len(), 3)
+    testing.AssertEqStr(names.get(0)[0], "Alpha")
+    testing.AssertEqStr(names.get(2)[0], "Gamma")
+    names.free()
+
+    testing.AssertEqInt(book.active_sheet, 0)
+    testing.AssertTrue(book.set_active(2))
+    testing.AssertEqInt(book.active_sheet, 2)
+    testing.AssertFalse(book.set_active(99))
+    testing.AssertEqInt(book.active_sheet, 2)
+    act := book.active()
+    testing.AssertTrue(act != null)
+    testing.AssertEqStr(act.name, "Gamma")
+
+    testing.AssertTrue(book.rename_sheet(0, "AlphaRenamed"))
+    testing.AssertFalse(book.rename_sheet(99, "X"))
+    testing.AssertTrue(book.sheet("AlphaRenamed") != null)
+    testing.AssertTrue(book.sheet("Alpha") == null)
+    renamed := book.sheet("AlphaRenamed")
+    testing.AssertEqStr(renamed.get_string(0, 0), "a")
+
+    at1 := book.sheet_at(1)
+    testing.AssertTrue(at1 != null)
+    testing.AssertEqStr(at1.name, "Beta")
+
+    testing.AssertTrue(book.remove_sheet_named("Beta"))
+    testing.AssertEqInt(book.sheet_count(), 2)
+    testing.AssertFalse(book.remove_sheet_named("Beta"))
+    testing.AssertTrue(book.sheet("Beta") == null)
+
+    testing.AssertTrue(book.remove_sheet(0))
+    testing.AssertEqInt(book.sheet_count(), 1)
+    remaining_names := book.sheet_names()
+    testing.AssertEqStr(remaining_names.get(0)[0], "Gamma")
+    remaining_names.free()
+    testing.AssertFalse(book.remove_sheet(99))
+    testing.AssertFalse(book.remove_sheet(-1))
+
+    book.free()
+end
+
+// ------------------------------------------------------- xlsx round-trip
+
+func test_xlsx_roundtrip(tmpdir: str):
+    mut book := excel.NewWorkbook()
+    sheet1 := book.add_sheet("Data")
+    sheet1.set_cell(0, 0, "Name")
+    sheet1.set_cell(0, 1, "Score")
+    sheet1.set_cell(0, 2, "Passed")
+    sheet1.set_cell(0, 3, "Joined")
+    sheet1.set_string(1, 0, "Ada")
+    sheet1.set_number(1, 1, 92.5)
+    sheet1.set_bool(1, 2, true)
+    sheet1.set_date(1, 3, 0 as i64)
+    sheet1.set_string(2, 0, "Grace")
+    sheet1.set_number(2, 1, 58.0)
+    sheet1.set_bool(2, 2, false)
+    sheet1.set_formula(3, 1, "B2+B3", 150.5)
+    sheet1.set_error(3, 2, "#N/A")
+    sheet1.merge_cells(0, 0, 0, 0)
+
+    mut header_style := excel.Style {}
+    header_style.bold = true
+    header_style.italic = true
+    header_style.underline = true
+    header_style.font_name = "Arial"
+    header_style.font_size = 14
+    header_style.font_color = "FF0000"
+    header_style.bg_color = "DDDDDD"
+    header_style.align_h = excel.AlignCenter
+    header_style.align_v = excel.AlignTop
+    hsid := book.styles.get_or_add(header_style)
+    sheet1.set_style(0, 0, hsid)
+    sheet1.set_style(0, 1, hsid)
+
+    sheet2 := book.add_sheet("Notes")
+    sheet2.set_string(0, 0, "auxiliary sheet")
+    sheet2.set_string(0, 1, `special: <a> & "quote" 'apos'`)
+
+    xlsxpath := filepath.Join(tmpdir, "roundtrip.xlsx")
+    testing.AssertTrue(book.save(xlsxpath))
+
+    mut ok := false
+    mut err := ""
+    mut reloaded := excel.Open(xlsxpath, ok, err)
+    testing.AssertMsg(ok, err)
+    testing.AssertEqInt(excel.DetectFormat(xlsxpath), excel.FormatXLSX)
+    testing.AssertEqInt(reloaded.format, excel.FormatXLSX)
+    testing.AssertEqInt(reloaded.sheet_count(), 2)
+
+    rs1 := reloaded.sheet("Data")
+    testing.AssertTrue(rs1 != null)
+    testing.AssertEqStr(rs1.get_string(0, 0), "Name")
+    testing.AssertEqStr(rs1.get_string(0, 1), "Score")
+    testing.AssertEqStr(rs1.get_string(1, 0), "Ada")
+    testing.AssertEqFloat(rs1.get_number(1, 1), 92.5, 0.001)
+    testing.AssertEqBool(rs1.get_bool(1, 2), true)
+    testing.AssertEqStr(rs1.get_string(1, 3), "1970-01-01")
+    testing.AssertEqStr(rs1.get_string(2, 0), "Grace")
+    testing.AssertEqFloat(rs1.get_number(2, 1), 58.0, 0.001)
+    testing.AssertEqBool(rs1.get_bool(2, 2), false)
+    testing.AssertEqStr(rs1.get_formula(3, 1), "B2+B3")
+    testing.AssertEqFloat(rs1.get_number(3, 1), 150.5, 0.001)
+    testing.AssertEqStr(rs1.get_cell(3, 2).text, "#N/A")
+    testing.AssertEqInt(rs1.get_cell(3, 2).kind, excel.CellError)
+    testing.AssertTrue(rs1.is_merged(0, 0))
+
+    // full style round-trip
+    hcell := rs1.get_cell(0, 0)
+    testing.AssertTrue(hcell.style_id >= 0)
+    hst := reloaded.styles.get(hcell.style_id)
+    testing.AssertTrue(hst.bold)
+    testing.AssertTrue(hst.italic)
+    testing.AssertTrue(hst.underline)
+    testing.AssertEqStr(hst.font_name, "Arial")
+    testing.AssertEqInt(hst.font_size, 14)
+    testing.AssertEqStr(hst.font_color, "FF0000")
+    testing.AssertEqStr(hst.bg_color, "DDDDDD")
+    testing.AssertEqInt(hst.align_h, excel.AlignCenter)
+    testing.AssertEqInt(hst.align_v, excel.AlignTop)
+
+    rs2 := reloaded.sheet("Notes")
+    testing.AssertTrue(rs2 != null)
+    testing.AssertEqStr(rs2.get_string(0, 0), "auxiliary sheet")
+    testing.AssertEqStr(rs2.get_string(0, 1), `special: <a> & "quote" 'apos'`)
+
+    reloaded.free()
+    book.free()
+end
+
+// -------------------------------------------------------- ods round-trip
+
+func test_ods_roundtrip(tmpdir: str):
+    mut book := excel.NewWorkbook()
+    sheet1 := book.add_sheet("Data")
+    sheet1.set_string(0, 0, "Name")
+    sheet1.set_string(1, 0, "Ada")
+    sheet1.set_number(1, 1, 92.5)
+    sheet1.set_bool(1, 2, true)
+    sheet1.set_date(1, 3, 0 as i64)
+    sheet1.set_formula(2, 1, "B2*2", 185.0)
+
+    mut st := excel.Style {}
+    st.bold = true
+    st.italic = true
+    st.font_color = "0000FF"
+    st.bg_color = "FFFF00"
+    st.align_h = excel.AlignRight
+    sid := book.styles.get_or_add(st)
+    sheet1.set_style(0, 0, sid)
+
+    sheet1.set_string(5, 5, "merged-top-left")
+    sheet1.merge_cells(5, 5, 6, 6)
+
+    odspath := filepath.Join(tmpdir, "roundtrip.ods")
+    testing.AssertTrue(book.save(odspath))
+
+    mut ok := false
+    mut err := ""
+    mut reloaded := excel.Open(odspath, ok, err)
+    testing.AssertMsg(ok, err)
+    testing.AssertEqInt(reloaded.format, excel.FormatODS)
+    testing.AssertEqInt(reloaded.sheet_count(), 1)
+
+    rs1 := reloaded.sheet("Data")
+    testing.AssertTrue(rs1 != null)
+    testing.AssertEqStr(rs1.get_string(1, 0), "Ada")
+    testing.AssertEqFloat(rs1.get_number(1, 1), 92.5, 0.001)
+    testing.AssertEqBool(rs1.get_bool(1, 2), true)
+    testing.AssertEqStr(rs1.get_string(1, 3), "1970-01-01")
+    testing.AssertEqStr(rs1.get_formula(2, 1), "B2*2")
+    testing.AssertEqFloat(rs1.get_number(2, 1), 185.0, 0.001)
+
+    hcell := rs1.get_cell(0, 0)
+    testing.AssertTrue(hcell.style_id >= 0)
+    hst := reloaded.styles.get(hcell.style_id)
+    testing.AssertTrue(hst.bold)
+    testing.AssertTrue(hst.italic)
+    testing.AssertEqStr(hst.font_color, "0000FF")
+    testing.AssertEqStr(hst.bg_color, "FFFF00")
+    testing.AssertEqInt(hst.align_h, excel.AlignRight)
+
+    testing.AssertTrue(rs1.is_merged(5, 5))
+    testing.AssertTrue(rs1.is_merged(6, 6))
+    testing.AssertEqStr(rs1.get_string(5, 5), "merged-top-left")
+    // ODF covered-cell semantics: the non-top-left cell in a merge has no
+    // value of its own, unlike OOXML - this is correct, not a bug (see
+    // ods_writer.salam's header comment)
+    testing.AssertEqStr(rs1.get_string(6, 6), "")
+
+    reloaded.free()
+    book.free()
+end
+
+// -------------------------------------------------------- csv_bridge.salam
+
+func test_csv_bridge(tmpdir: str):
+    mut sh := excel.NewSheet("CSV")
+    sh.set_string(0, 0, "simple")
+    sh.set_string(0, 1, "has,comma")
+    sh.set_string(0, 2, `has"quote`)
+    sh.set_string(1, 0, "second row")
+
+    text := excel.SheetToCSV(sh)
+    testing.AssertContains(text, "simple")
+    testing.AssertContains(text, `"has,comma"`)
+
+    mut back := excel.CSVToSheet(text, "CSVBack")
+    testing.AssertEqStr(back.get_string(0, 0), "simple")
+    testing.AssertEqStr(back.get_string(0, 1), "has,comma")
+    testing.AssertEqStr(back.get_string(0, 2), `has"quote`)
+    testing.AssertEqStr(back.get_string(1, 0), "second row")
+    back.free()
+    sh.free()
+
+    mut book := excel.NewWorkbook()
+    fsheet := book.add_sheet("Sheet1")
+    fsheet.set_string(0, 0, "x")
+    fsheet.set_number(0, 1, 1.5)
+    csvpath := filepath.Join(tmpdir, "bridge.csv")
+    testing.AssertTrue(excel.WriteCSVWorkbook(book, csvpath))
+    testing.AssertTrue(book.save(filepath.Join(tmpdir, "bridge2.csv")))
+    book.free()
+
+    mut ok := false
+    mut err := ""
+    mut loaded := excel.ReadCSVWorkbook(csvpath, ok, err)
+    testing.AssertMsg(ok, err)
+    testing.AssertEqInt(loaded.format, excel.FormatCSV)
+    lsheet := loaded.sheet("Sheet1")
+    testing.AssertTrue(lsheet != null)
+    testing.AssertEqStr(lsheet.get_string(0, 0), "x")
+    testing.AssertEqStr(lsheet.get_string(0, 1), "1.5")
+    loaded.free()
+
+    mut mok := false
+    mut merr := ""
+    mut missing := excel.ReadCSVWorkbook(filepath.Join(tmpdir, "does-not-exist.csv"), mok, merr)
+    testing.AssertFalse(mok)
+    testing.AssertContains(merr, "cannot open file")
+    missing.free()
+
+    mut empty_book := excel.NewWorkbook()
+    testing.AssertFalse(excel.WriteCSVWorkbook(empty_book, filepath.Join(tmpdir, "empty.csv")))
+    empty_book.free()
+end
+
+// ------------------------------------------------------- json_bridge.salam
+
+func test_json_bridge():
+    mut sh := excel.NewSheet("JSON")
+    sh.set_string(0, 0, "x")
+    sh.set_string(0, 1, "y")
+    sh.set_string(1, 0, `say "hi"`)
+    sh.set_string(1, 1, "line1\nline2")
+
+    text := excel.SheetToJSON(sh)
+    testing.AssertContains(text, "x")
+    testing.AssertContains(text, "y")
+
+    mut back := excel.JSONToSheet(text, "JSONBack")
+    testing.AssertEqStr(back.get_string(0, 0), "x")
+    testing.AssertEqStr(back.get_string(0, 1), "y")
+    testing.AssertEqStr(back.get_string(1, 0), `say "hi"`)
+    testing.AssertEqStr(back.get_string(1, 1), "line1\nline2")
+    back.free()
+    sh.free()
+
+    mut empty_sheet := excel.NewSheet("Empty")
+    etext := excel.SheetToJSON(empty_sheet)
+    testing.AssertEqStr(etext, "[]")
+    mut eback := excel.JSONToSheet(etext, "EmptyBack")
+    testing.AssertEqInt(eback.row_count(), 0)
+    empty_sheet.free()
+    eback.free()
+end
+
+// ------------------------------------------------------------ meta.salam
+
+func test_meta_inspect(tmpdir: str):
+    mut book := excel.NewWorkbook()
+    s := book.add_sheet("Sheet1")
+    s.set_string(0, 0, "a")
+    s.set_string(1, 1, "b")
+    book.add_sheet("Sheet2")
+    metapath := filepath.Join(tmpdir, "meta.xlsx")
+    testing.AssertTrue(book.save(metapath))
+    book.free()
+
+    mut ok := false
+    mut err := ""
+    meta := excel.Inspect(metapath, ok, err)
+    testing.AssertMsg(ok, err)
+    testing.AssertTrue(meta.exists)
+    testing.AssertTrue(meta.size > (0 as i64))
+    testing.AssertEqInt(meta.format, excel.FormatXLSX)
+    testing.AssertEqInt(meta.sheet_names.len(), 2)
+    testing.AssertEqStr(meta.sheet_names.get(0)[0], "Sheet1")
+    testing.AssertEqInt(meta.sheet_rows.get(0)[0], 2)
+    testing.AssertEqInt(meta.sheet_cols.get(0)[0], 2)
+    meta.free()
+
+    mut mok := false
+    mut merr := ""
+    missing_meta := excel.Inspect(filepath.Join(tmpdir, "nope.xlsx"), mok, merr)
+    testing.AssertFalse(mok)
+    testing.AssertFalse(missing_meta.exists)
+    testing.AssertContains(merr, "does not exist")
+    missing_meta.free()
+end
+
+// -------------------------------------------------------------- xls.salam
+
+func test_xls_detection(tmpdir: str):
+    mut sig := compress.NewByteBuf()
+    compress.BufPush(sig, 0xd0)
+    compress.BufPush(sig, 0xcf)
+    compress.BufPush(sig, 0x11)
+    compress.BufPush(sig, 0xe0)
+    compress.BufPush(sig, 0xa1)
+    compress.BufPush(sig, 0xb1)
+    compress.BufPush(sig, 0x1a)
+    compress.BufPush(sig, 0xe1)
+    testing.AssertTrue(excel.IsXLS(sig.data, sig.len))
+    compress.BufFree(sig)
+
+    mut notsig := compress.NewByteBuf()
+    compress.BufPush(notsig, 0x50)
+    compress.BufPush(notsig, 0x4b)
+    compress.BufPush(notsig, 0x03)
+    compress.BufPush(notsig, 0x04)
+    testing.AssertFalse(excel.IsXLS(notsig.data, notsig.len))
+    compress.BufFree(notsig)
+
+    xlspath := filepath.Join(tmpdir, "legacy.xls")
+    mut xok := false
+    mut xerr := ""
+    mut xbook := excel.ReadXLS(xlspath, xok, xerr)
+    testing.AssertFalse(xok)
+    testing.AssertContains(xerr, "not supported")
+    testing.AssertContains(xerr, xlspath)
+    testing.AssertEqInt(xbook.sheet_count(), 0)
+    xbook.free()
+end
+
+// ------------------------------------------------------------ excel.salam
+
+func test_excel_toplevel(tmpdir: str):
+    testing.AssertEqInt(excel.DetectFormat("a.xlsx"), excel.FormatXLSX)
+    testing.AssertEqInt(excel.DetectFormat("a.XLSX"), excel.FormatXLSX)
+    testing.AssertEqInt(excel.DetectFormat("a.xls"), excel.FormatXLS)
+    testing.AssertEqInt(excel.DetectFormat("a.ods"), excel.FormatODS)
+    testing.AssertEqInt(excel.DetectFormat("a.csv"), excel.FormatCSV)
+    testing.AssertEqInt(excel.DetectFormat("a.txt"), excel.FormatUnknown)
+    testing.AssertEqInt(excel.DetectFormat("noext"), excel.FormatUnknown)
+
+    mut book := excel.New()
+    testing.AssertEqInt(book.sheet_count(), 0)
+    book.free()
+
+    mut uok := false
+    mut uerr := ""
+    mut ubook := excel.Open(filepath.Join(tmpdir, "x.txt"), uok, uerr)
+    testing.AssertFalse(uok)
+    testing.AssertContains(uerr, "unsupported")
+    ubook.free()
+
+    mut nok := false
+    mut nerr := ""
+    mut nbook := excel.Open(filepath.Join(tmpdir, "missing.xlsx"), nok, nerr)
+    testing.AssertFalse(nok)
+    testing.AssertContains(nerr, "cannot open file")
+    nbook.free()
+
+    mut nsbook := excel.NewWorkbook()
+    testing.AssertFalse(excel.Save(nsbook, filepath.Join(tmpdir, "unsupported.bin")))
+    nsbook.free()
+end
+
+func main:
+    tmpdir := filepath.Join(os.TempDir(), "salam_excel_test")
+    os.MkdirAll(tmpdir)
+
+    test_a1_references()
+    test_cell_constructors()
+    test_serial_dates()
+    test_xml_utils()
+    test_style_dedup()
+    test_sheet_cell_types()
+    test_sheet_style()
+    test_sheet_row_col_table()
+    test_sheet_search_filter()
+    test_sheet_merges()
+    test_workbook_management()
+    test_xlsx_roundtrip(tmpdir)
+    test_ods_roundtrip(tmpdir)
+    test_csv_bridge(tmpdir)
+    test_json_bridge()
+    test_meta_inspect(tmpdir)
+    test_xls_detection(tmpdir)
+    test_excel_toplevel(tmpdir)
+
+    os.RemoveAll(tmpdir)
+    os.Exit(testing.Summary())
+end

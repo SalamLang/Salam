@@ -1,0 +1,177 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package http
+
+import encoding
+import conv
+import time
+
+// Server-side cookies: parsing the request's "Cookie" header and
+// serializing "Set-Cookie" response lines (RFC 6265). Client-side cookie
+// handling (the jar carried by http.Client, CookieMap/CookieHeader for
+// reading a Set-Cookie response) already lives in http.salam - this file
+// is strictly the other half, for handlers running inside net/http's own
+// server.
+//
+// Cookie values are percent-encoded on the wire (encoding.URLEncode /
+// URLDecode) so arbitrary app values - spaces, "=", ";", non-ASCII - can
+// never break the Cookie/Set-Cookie grammar. Names are sent verbatim and
+// are the caller's responsibility to keep as a plain token.
+
+@en "Cookie"
+@fa "کوکی"
+@ar "كوكي"
+pub struct Cookie:
+    pub name: str = ""
+    pub value: str = ""
+    pub path: str = "/"
+    pub domain: str = ""
+    pub max_age: int = 0
+    // Distinguishes an explicit "Max-Age=0" (delete immediately) from an
+    // unset Max-Age (session cookie - the attribute is omitted entirely
+    // and the browser keeps it only until it closes).
+    pub has_max_age: bool = false
+    pub secure: bool = false
+    pub http_only: bool = true
+    // "Strict" | "Lax" | "None" | "" (omit the attribute)
+    pub same_site: str = "Lax"
+end
+
+func _cookie_string(c: Cookie): str:
+    mut out := c.name.concat("=").concat(encoding.URLEncode(c.value))
+    if c.path.len() > 0:
+        out = out.concat("; Path=").concat(c.path)
+    end
+    if c.domain.len() > 0:
+        out = out.concat("; Domain=").concat(c.domain)
+    end
+    if c.has_max_age:
+        out = out.concat("; Max-Age=").concat(conv.FormatInt(c.max_age as i64))
+        expires_at := time.Now() + (c.max_age as i64)
+        out = out.concat("; Expires=").concat(time.FormatHTTPDate(expires_at))
+    end
+    mut force_secure := c.secure
+    if c.same_site.len() > 0:
+        // Browsers reject SameSite=None unless Secure is also present -
+        // force it rather than silently emitting a cookie they'll drop.
+        if c.same_site == "None":
+            force_secure = true
+        end
+        out = out.concat("; SameSite=").concat(c.same_site)
+    end
+    if force_secure:
+        out = out.concat("; Secure")
+    end
+    if c.http_only:
+        out = out.concat("; HttpOnly")
+    end
+    ret out
+end
+
+func _parse_cookie_header(raw: str): HashMap<str, str>:
+    m := HashMap {} as HashMap<str, str>
+    if raw.len() == 0: ret m end
+    mut rest := raw
+    until rest.len() > 0:
+        semi := rest.find(";")
+        mut pair := ""
+        if semi >= 0:
+            pair = rest.substr(0, semi)
+            rest = rest.substr(semi + 1, rest.len() - semi - 1).trim()
+        else:
+            pair = rest
+            rest = ""
+        end
+        eq := pair.find("=")
+        if eq >= 0:
+            nm := pair.substr(0, eq).trim()
+            vl := pair.substr(eq + 1, pair.len() - eq - 1).trim()
+            if nm.len() > 0:
+                m.put(nm, encoding.URLDecode(vl))
+            end
+        end
+    end
+    ret m
+end
+
+@en "NewCookie"
+@fa "کوکی جدید"
+@ar "كوكي جدید"
+pub func NewCookie(name: str, value: str): Cookie:
+    ret Cookie { name = name, value = value }
+end
+
+@en "ExpiringCookie"
+@fa "کوکی با انقضا"
+@ar "كوكي منتهي الصلاحیة"
+pub func ExpiringCookie(name: str, value: str, max_age_seconds: int): Cookie:
+    ret Cookie { name = name, value = value, max_age = max_age_seconds, has_max_age = true }
+end
+
+// A cookie that overwrites and immediately expires whatever the browser
+// currently holds for (name, path, domain) - the standard way to "delete"
+// a cookie, since HTTP has no actual delete verb for them. path/domain
+// must match the cookie being cleared or the browser treats it as a
+// different cookie and leaves the original alone.
+@en "ExpiredCookie"
+@fa "کوکی منقضی شده"
+@ar "كوكي منتهي"
+pub func ExpiredCookie(name: str, path: str, domain: str): Cookie:
+    ret Cookie { name = name, value = "", path = path, domain = domain, max_age = 0 - 1, has_max_age = true, http_only = true }
+end
+
+@en "Ctx_cookies"
+@fa "کوکی های زمینه"
+@ar "كوكیات السیاق"
+pub func Ctx_cookies(h: i64): HashMap<str, str>:
+    ret _parse_cookie_header(salam_ctx_kv_get(h, 0, "Cookie"))
+end
+
+@en "Ctx_cookie"
+@fa "کوکی زمینه"
+@ar "كوكي السیاق"
+pub func Ctx_cookie(h: i64, name: str): str:
+    m := Ctx_cookies(h)
+    if m.has(name): ret m.get(name) end
+    ret ""
+end
+
+@en "Ctx_has_cookie"
+@fa "زمینه کوکی دارد"
+@ar "السیاق یحتوي كوكي"
+pub func Ctx_has_cookie(h: i64, name: str): bool:
+    ret Ctx_cookies(h).has(name)
+end
+
+@en "Ctx_set_cookie"
+@fa "تنظیم کوکی زمینه"
+@ar "تعیین كوكي السیاق"
+pub func Ctx_set_cookie(h: i64, c: Cookie):
+    salam_ctx_kv_set_cookie(h, c.name, _cookie_string(c))
+end
+
+@en "Ctx_clear_cookie"
+@fa "پاک کردن کوکی زمینه"
+@ar "مسح كوكي السیاق"
+pub func Ctx_clear_cookie(h: i64, name: str):
+    Ctx_set_cookie(h, ExpiredCookie(name, "/", ""))
+end
+
+@en "Ctx_clear_cookie_at"
+@fa "پاک کردن کوکی زمینه در مسیر"
+@ar "مسح كوكي السیاق في مسار"
+pub func Ctx_clear_cookie_at(h: i64, name: str, path: str, domain: str):
+    Ctx_set_cookie(h, ExpiredCookie(name, path, domain))
+end

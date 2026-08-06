@@ -1,0 +1,1428 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import compress
+import archive
+import mem
+import math
+
+// Baseline sequential JPEG (ITU-T T.81), from scratch: RGB->YCbCr, 8x8
+// forward/inverse DCT, the standard (Annex K) quantization and Huffman
+// tables, and MSB-first entropy coding with byte-stuffing. No progressive
+// scans, no arithmetic coding, no restart markers - the same "baseline,
+// single scan" subset every encoder/decoder in existence supports.
+//
+// EncodeJPEG always writes 4:4:4 (no chroma subsampling: every component
+// at full resolution) - simpler to encode correctly than interleaved
+// subsampled MCUs, at the cost of a bit less compression than a
+// subsampling encoder would get at the same quality. DecodeJPEG reads
+// real-world files as produced by libjpeg/Pillow/etc: any of 4:4:4/4:2:2/
+// 4:2:0 sampling, and Huffman/quantization tables with id 0 or 1 per
+// class (universally what real encoders emit) - not the full spec's id
+// 0-3 range, and not progressive/arithmetic scans (ok = false for those,
+// same "report, don't misread" rule as every other decoder here).
+//
+// This is float-math-heavy code (the DCT); verify with the compiled
+// backend, not `salam exec` (see this package's/std/compress's notes on
+// the interpreter being a poor fit for numerically heavy stdlib code).
+
+const _PI := 3.14159265358979323846
+
+// MSB-first bit accumulator for entropy-coded output, with JPEG's
+// 0xFF -> 0xFF 0x00 byte-stuffing applied as each full byte is flushed.
+// `buf`'s default is left to ByteBuf's own field defaults (see
+// std/compress/bits.salam's identical BitWriter for why: tcc cannot parse
+// a nested multi-field struct literal passed in as a plain variable).
+struct _BitWriter:
+    pub buf: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
+    pub acc: int = 0
+    pub nbits: int = 0
+end
+
+// MSB-first bit cursor over entropy-coded input, undoing byte-stuffing as
+// it goes; `hit_marker` latches true once a real marker (FF followed by a
+// non-zero, non-RST byte) is seen, after which reads return 0 bits
+// instead of consuming the marker.
+struct _BitReader:
+    pub data: void* = null
+    pub len: int = 0
+    pub pos: int = 0
+    pub acc: int = 0
+    pub nbits: int = 0
+    pub hit_marker: bool = false
+end
+
+func _zigzag(i: int): int:
+    if i == 0: ret 0 end
+    if i == 1: ret 1 end
+    if i == 2: ret 8 end
+    if i == 3: ret 16 end
+    if i == 4: ret 9 end
+    if i == 5: ret 2 end
+    if i == 6: ret 3 end
+    if i == 7: ret 10 end
+    if i == 8: ret 17 end
+    if i == 9: ret 24 end
+    if i == 10: ret 32 end
+    if i == 11: ret 25 end
+    if i == 12: ret 18 end
+    if i == 13: ret 11 end
+    if i == 14: ret 4 end
+    if i == 15: ret 5 end
+    if i == 16: ret 12 end
+    if i == 17: ret 19 end
+    if i == 18: ret 26 end
+    if i == 19: ret 33 end
+    if i == 20: ret 40 end
+    if i == 21: ret 48 end
+    if i == 22: ret 41 end
+    if i == 23: ret 34 end
+    if i == 24: ret 27 end
+    if i == 25: ret 20 end
+    if i == 26: ret 13 end
+    if i == 27: ret 6 end
+    if i == 28: ret 7 end
+    if i == 29: ret 14 end
+    if i == 30: ret 21 end
+    if i == 31: ret 28 end
+    if i == 32: ret 35 end
+    if i == 33: ret 42 end
+    if i == 34: ret 49 end
+    if i == 35: ret 56 end
+    if i == 36: ret 57 end
+    if i == 37: ret 50 end
+    if i == 38: ret 43 end
+    if i == 39: ret 36 end
+    if i == 40: ret 29 end
+    if i == 41: ret 22 end
+    if i == 42: ret 15 end
+    if i == 43: ret 23 end
+    if i == 44: ret 30 end
+    if i == 45: ret 37 end
+    if i == 46: ret 44 end
+    if i == 47: ret 51 end
+    if i == 48: ret 58 end
+    if i == 49: ret 59 end
+    if i == 50: ret 52 end
+    if i == 51: ret 45 end
+    if i == 52: ret 38 end
+    if i == 53: ret 31 end
+    if i == 54: ret 39 end
+    if i == 55: ret 46 end
+    if i == 56: ret 53 end
+    if i == 57: ret 60 end
+    if i == 58: ret 61 end
+    if i == 59: ret 54 end
+    if i == 60: ret 47 end
+    if i == 61: ret 55 end
+    if i == 62: ret 62 end
+    ret 63
+end
+
+func _std_luma_quant(i: int): int:
+    t := [16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56, 14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113, 92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99] as int[64]
+    ret t[i]
+end
+
+func _std_chroma_quant(i: int): int:
+    t := [17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26, 56, 99, 99, 99, 99, 99, 47, 66, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99] as int[64]
+    ret t[i]
+end
+
+func _dc_luma_bits(i: int): int:
+    t := [0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0] as int[16]
+    ret t[i]
+end
+
+func _dc_luma_values(i: int): int:
+    ret i
+end
+
+func _dc_chroma_bits(i: int): int:
+    t := [0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0] as int[16]
+    ret t[i]
+end
+
+func _dc_chroma_values(i: int): int:
+    ret i
+end
+
+func _ac_luma_bits(i: int): int:
+    t := [0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125] as int[16]
+    ret t[i]
+end
+
+func _ac_luma_values(i: int): int:
+    t := [
+        0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12,
+        0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07,
+        0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08,
+        0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1, 0xf0,
+        0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0a, 0x16,
+        0x17, 0x18, 0x19, 0x1a, 0x25, 0x26, 0x27, 0x28,
+        0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
+        0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49,
+        0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
+        0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69,
+        0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79,
+        0x7a, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89,
+        0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98,
+        0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
+        0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6,
+        0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5,
+        0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4,
+        0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2,
+        0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea,
+        0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8,
+        0xf9, 0xfa
+    ] as int[162]
+    ret t[i]
+end
+
+func _ac_chroma_bits(i: int): int:
+    t := [0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 119] as int[16]
+    ret t[i]
+end
+
+func _ac_chroma_values(i: int): int:
+    t := [
+        0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21,
+        0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71,
+        0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91,
+        0xa1, 0xb1, 0xc1, 0x09, 0x23, 0x33, 0x52, 0xf0,
+        0x15, 0x62, 0x72, 0xd1, 0x0a, 0x16, 0x24, 0x34,
+        0xe1, 0x25, 0xf1, 0x17, 0x18, 0x19, 0x1a, 0x26,
+        0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38,
+        0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
+        0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,
+        0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68,
+        0x69, 0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78,
+        0x79, 0x7a, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+        0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96,
+        0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5,
+        0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4,
+        0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3,
+        0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2,
+        0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda,
+        0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9,
+        0xea, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8,
+        0xf9, 0xfa
+    ] as int[162]
+    ret t[i]
+end
+
+// -------------------------------------------------------------- bit I/O
+
+func _bw_put_bit(w &: _BitWriter, bit: int):
+    if bit != 0:
+        w.acc = w.acc | (1 << (7 - w.nbits))
+    end
+    w.nbits += 1
+    if w.nbits == 8:
+        compress.BufPush(w.buf, w.acc)
+        if w.acc == 0xFF:
+            compress.BufPush(w.buf, 0)
+        end
+        w.acc = 0
+        w.nbits = 0
+    end
+end
+
+// Writes the low `size` bits of `value`, most-significant bit first.
+func _bw_put_bits(w &: _BitWriter, value: int, size: int):
+    mut i := size - 1
+    until i >= 0:
+        _bw_put_bit(w, (value >> i) & 1)
+        i -= 1
+    end
+end
+
+// Pads the final partial byte with 1 bits (the conventional JPEG padding)
+// and flushes it.
+func _bw_flush(w &: _BitWriter):
+    if w.nbits > 0:
+        mut i := w.nbits
+        until i < 8:
+            w.acc = w.acc | (1 << (7 - i))
+            i += 1
+        end
+        compress.BufPush(w.buf, w.acc)
+        if w.acc == 0xFF:
+            compress.BufPush(w.buf, 0)
+        end
+        w.acc = 0
+        w.nbits = 0
+    end
+end
+
+func _br_next_byte(r &: _BitReader): int:
+    if r.hit_marker || r.pos >= r.len:
+        r.hit_marker = true
+        ret 0
+    end
+    bp := r.data as u8*
+    b := bp[r.pos] as int
+    r.pos += 1
+    if b == 0xFF:
+        if r.pos < r.len:
+            nb := bp[r.pos] as int
+            if nb == 0:
+                r.pos += 1
+                ret 0xFF
+            end
+            r.hit_marker = true
+            ret 0
+        end
+        r.hit_marker = true
+        ret 0
+    end
+    ret b
+end
+
+func _br_get_bit(r &: _BitReader): int:
+    if r.nbits == 0:
+        r.acc = _br_next_byte(r)
+        r.nbits = 8
+    end
+    r.nbits -= 1
+    ret (r.acc >> r.nbits) & 1
+end
+
+func _br_get_bits(r &: _BitReader, count: int): int:
+    mut v := 0
+    mut i := 0
+    until i < count:
+        v = (v << 1) | _br_get_bit(r)
+        i += 1
+    end
+    ret v
+end
+
+// ---------------------------------------------------------------- huffman
+
+// Canonical Huffman code assignment (JPEG Annex C): codes[symbol] / lens[symbol],
+// indexed by the raw symbol byte (DC: 0-11 size category; AC: the RRRRSSSS byte).
+func _build_huff_encode(bits_fn: func (int) int, values_fn: func (int) int, codes: void*, lens: void*):
+    cp := codes as i32*
+    lp := lens as i32*
+    mut code := 0
+    mut k := 0
+    mut len := 1
+    until len <= 16:
+        cnt := bits_fn(len - 1)
+        mut i := 0
+        until i < cnt:
+            sym := values_fn(k)
+            cp[sym] = code as i32
+            lp[sym] = len as i32
+            code += 1
+            k += 1
+            i += 1
+        end
+        code = code << 1
+        len += 1
+    end
+end
+
+// mincode/maxcode/valptr decode tables (libjpeg's classic approach), 16
+// entries indexed by (length-1).
+func _build_huff_decode(bits_fn: func (int) int, mincode: void*, maxcode: void*, valptr: void*):
+    minp := mincode as i32*
+    maxp := maxcode as i32*
+    valp := valptr as i32*
+    mut code := 0
+    mut k := 0
+    mut len := 1
+    until len <= 16:
+        idx := len - 1
+        cnt := bits_fn(idx)
+        if cnt == 0:
+            minp[idx] = 0 as i32
+            maxp[idx] = -1 as i32
+            valp[idx] = 0 as i32
+        else:
+            valp[idx] = k as i32
+            minp[idx] = code as i32
+            code += cnt - 1
+            maxp[idx] = code as i32
+            code += 1
+            k += cnt
+        end
+        code = code << 1
+        len += 1
+    end
+end
+
+func _huff_decode_symbol(r &: _BitReader, mincode: void*, maxcode: void*, valptr: void*, values_fn: func (int) int): int:
+    minp := mincode as i32*
+    maxp := maxcode as i32*
+    valp := valptr as i32*
+    mut code := 0
+    mut len := 0
+    until len < 16:
+        code = (code << 1) | _br_get_bit(r)
+        len += 1
+        idx := len - 1
+        mx := maxp[idx] as int
+        if mx >= 0 && code <= mx && code >= (minp[idx] as int):
+            ret values_fn((valp[idx] as int) + (code - (minp[idx] as int)))
+        end
+    end
+    ret -1
+end
+
+// ------------------------------------------------------------------ math
+
+func _bit_size(v: int): int:
+    mut a := v
+    if a < 0: a = -a end
+    mut s := 0
+    until a != 0:
+        a = a >> 1
+        s += 1
+    end
+    ret s
+end
+
+func _amplitude(v: int, size: int): int:
+    if v >= 0: ret v end
+    ret v + (1 << size) - 1
+end
+
+// "Receive and extend": the inverse of _amplitude, given `size` raw bits.
+func _extend(v: int, size: int): int:
+    if size == 0: ret 0 end
+    if v < (1 << (size - 1)): ret v - (1 << size) + 1 end
+    ret v
+end
+
+func _make_cos_table(): void*:
+    raw := mem.Allocate((64 * 8) as u64)
+    tp := raw as f64*
+    mut n := 0
+    until n < 8:
+        mut k := 0
+        until k < 8:
+            tp[n * 8 + k] = math.Cos(_PI * (2.0 * (n as f64) + 1.0) * (k as f64) / 16.0)
+            k += 1
+        end
+        n += 1
+    end
+    ret raw
+end
+
+func _fdct8x8(block: void*, cos_table: void*, out: void*):
+    bp := block as f64*
+    ct := cos_table as f64*
+    op := out as f64*
+    mut u := 0
+    until u < 8:
+        mut v := 0
+        until v < 8:
+            mut sum := 0.0
+            mut y := 0
+            until y < 8:
+                mut x := 0
+                until x < 8:
+                    sum += bp[y * 8 + x] * ct[x * 8 + u] * ct[y * 8 + v]
+                    x += 1
+                end
+                y += 1
+            end
+            cu := u == 0 ? (1.0 / math.Sqrt(2.0)) : 1.0
+            cv := v == 0 ? (1.0 / math.Sqrt(2.0)) : 1.0
+            op[u * 8 + v] = 0.25 * cu * cv * sum
+            v += 1
+        end
+        u += 1
+    end
+end
+
+func _idct8x8(coef: void*, cos_table: void*, out: void*):
+    cf := coef as f64*
+    ct := cos_table as f64*
+    op := out as f64*
+    mut y := 0
+    until y < 8:
+        mut x := 0
+        until x < 8:
+            mut sum := 0.0
+            mut u := 0
+            until u < 8:
+                cu := u == 0 ? (1.0 / math.Sqrt(2.0)) : 1.0
+                mut v := 0
+                until v < 8:
+                    cv := v == 0 ? (1.0 / math.Sqrt(2.0)) : 1.0
+                    sum += cu * cv * cf[u * 8 + v] * ct[x * 8 + u] * ct[y * 8 + v]
+                    v += 1
+                end
+                u += 1
+            end
+            op[y * 8 + x] = 0.25 * sum
+            x += 1
+        end
+        y += 1
+    end
+end
+
+// ----------------------------------------------------------- color space
+
+func _clamp_byte(v: int): int:
+    if v < 0: ret 0 end
+    if v > 255: ret 255 end
+    ret v
+end
+
+func _rgb_to_y(r: int, g: int, b: int): int:
+    ret _clamp_byte((299 * r + 587 * g + 114 * b + 500) / 1000)
+end
+
+func _rgb_to_cb(r: int, g: int, b: int): int:
+    v := (-168736 * r - 331264 * g + 500000 * b) / 1000000 + 128
+    ret _clamp_byte(v)
+end
+
+func _rgb_to_cr(r: int, g: int, b: int): int:
+    v := (500000 * r - 418688 * g - 81312 * b) / 1000000 + 128
+    ret _clamp_byte(v)
+end
+
+func _ycbcr_to_r(y: int, _cb: int, cr: int): int:
+    ret _clamp_byte(y + (140200 * (cr - 128)) / 100000)
+end
+
+func _ycbcr_to_g(y: int, cb: int, cr: int): int:
+    ret _clamp_byte(y - (34414 * (cb - 128)) / 100000 - (71414 * (cr - 128)) / 100000)
+end
+
+func _ycbcr_to_b(y: int, cb: int, _cr: int): int:
+    ret _clamp_byte(y + (177200 * (cb - 128)) / 100000)
+end
+
+// ------------------------------------------------------------- quantize
+
+func _scale_quant(quality: int, luma_out: void*, chroma_out: void*):
+    mut q := quality
+    if q < 1: q = 1 end
+    if q > 100: q = 100 end
+    scale := q < 50 ? (5000 / q) : (200 - q * 2)
+    lp := luma_out as i32*
+    cp := chroma_out as i32*
+    mut i := 0
+    until i < 64:
+        lv := (_std_luma_quant(i) * scale + 50) / 100
+        cv := (_std_chroma_quant(i) * scale + 50) / 100
+        mut lc := lv
+        if lc < 1: lc = 1 end
+        if lc > 255: lc = 255 end
+        mut cc := cv
+        if cc < 1: cc = 1 end
+        if cc > 255: cc = 255 end
+        lp[i] = lc as i32
+        cp[i] = cc as i32
+        i += 1
+    end
+end
+
+func _write_dht(out &: compress.ByteBuf, table_class_id: int, bits_fn: func (int) int, values_fn: func (int) int):
+    mut total := 0
+    mut i := 0
+    until i < 16:
+        total += bits_fn(i)
+        i += 1
+    end
+    length := 2 + 1 + 16 + total
+    compress.BufPush(out, 0xFF)
+    compress.BufPush(out, 0xC4)
+    compress.BufPush(out, (length >> 8) & 255)
+    compress.BufPush(out, length & 255)
+    compress.BufPush(out, table_class_id)
+    i = 0
+    until i < 16:
+        compress.BufPush(out, bits_fn(i))
+        i += 1
+    end
+    i = 0
+    until i < total:
+        compress.BufPush(out, values_fn(i))
+        i += 1
+    end
+end
+
+func _extract_block(img: Image, block_x: int, block_y: int, comp: int, block: void*):
+    bp := block as f64*
+    mut dy := 0
+    until dy < 8:
+        mut dx := 0
+        until dx < 8:
+            mut sx := block_x + dx
+            mut sy := block_y + dy
+            if sx >= img.width: sx = img.width - 1 end
+            if sy >= img.height: sy = img.height - 1 end
+            c := GetPixel(img, sx, sy)
+            r := c.r as int
+            g := c.g as int
+            b := c.b as int
+            mut v := 0
+            if comp == 0: v = _rgb_to_y(r, g, b) end
+            if comp == 1: v = _rgb_to_cb(r, g, b) end
+            if comp == 2: v = _rgb_to_cr(r, g, b) end
+            bp[dy * 8 + dx] = (v as f64) - 128.0
+            dx += 1
+        end
+        dy += 1
+    end
+end
+
+// Divides each DCT coefficient by its quantization step and reorders into
+// zigzag scan order (the order AC coefficients are entropy-coded in).
+func _quantize_block(coef: void*, quant: void*, zz: void*):
+    cf := coef as f64*
+    qp := quant as i32*
+    zp := zz as i32*
+    mut i := 0
+    until i < 64:
+        nat := _zigzag(i)
+        q := qp[nat] as int
+        val := cf[nat] / (q as f64)
+        mut r := val
+        if val >= 0.0:
+            r = val + 0.5
+        else:
+            r = val - 0.5
+        end
+        zp[i] = (r as int) as i32
+        i += 1
+    end
+end
+
+func _emit_huff(bw &: _BitWriter, codes: void*, lens: void*, symbol: int):
+    cp := codes as i32*
+    lp := lens as i32*
+    _bw_put_bits(bw, cp[symbol] as int, lp[symbol] as int)
+end
+
+func _encode_block_entropy(bw &: _BitWriter, zz: void*, dc_prev &: int, dc_codes: void*, dc_lens: void*, ac_codes: void*, ac_lens: void*):
+    zp := zz as i32*
+    dc := zp[0] as int
+    diff := dc - dc_prev
+    dc_prev = dc
+    size := _bit_size(diff)
+    _emit_huff(bw, dc_codes, dc_lens, size)
+    if size > 0:
+        amp := _amplitude(diff, size)
+        _bw_put_bits(bw, amp, size)
+    end
+    mut run := 0
+    mut k := 1
+    until k < 64:
+        v := zp[k] as int
+        if v == 0:
+            run += 1
+        else:
+            until run > 15:
+                _emit_huff(bw, ac_codes, ac_lens, 0xF0)
+                run -= 16
+            end
+            s := _bit_size(v)
+            sym := (run << 4) | s
+            _emit_huff(bw, ac_codes, ac_lens, sym)
+            amp2 := _amplitude(v, s)
+            _bw_put_bits(bw, amp2, s)
+            run = 0
+        end
+        k += 1
+    end
+    if run > 0:
+        _emit_huff(bw, ac_codes, ac_lens, 0x00)
+    end
+end
+
+// ----------------------------------------------------------- decode side
+
+func _buf_geti32(buf: void*, i: int): int:
+    p := buf as i32*
+    ret p[i] as int
+end
+
+// Decodes one 8x8 block's DC+AC coefficients from the entropy stream,
+// dequantizes, inverse-transforms, and writes the resulting 8-bit samples
+// into `out_buf` (a component's full pixel plane) at (out_x, out_y).
+func _decode_one_block(br &: _BitReader, quant: void*, dc_prev &: int, dc_min: void*, dc_max: void*, dc_valptr: void*, dc_values: void*, ac_min: void*, ac_max: void*, ac_valptr: void*, ac_values: void*, cos_table: void*, zz_scratch: void*, coef_scratch: void*, pix_scratch: void*, out_buf: void*, out_stride: int, out_x: int, out_y: int):
+    zp := zz_scratch as i32*
+    size := _huff_decode_symbol(br, dc_min, dc_max, dc_valptr, (i: int) => _buf_geti32(dc_values, i))
+    mut diff := 0
+    if size > 0:
+        raw := _br_get_bits(br, size)
+        diff = _extend(raw, size)
+    end
+    dc_prev = dc_prev + diff
+    zp[0] = dc_prev as i32
+    mut zi := 1
+    until zi < 64:
+        zp[zi] = 0 as i32
+        zi += 1
+    end
+
+    mut k := 1
+    mut done := false
+    until k < 64 && !done:
+        rs := _huff_decode_symbol(br, ac_min, ac_max, ac_valptr, (i: int) => _buf_geti32(ac_values, i))
+        if rs <= 0:
+            done = true
+        else:
+            r := (rs >> 4) & 15
+            s := rs & 15
+            if rs == 0xF0:
+                k += 16
+            else:
+                k += r
+                if k < 64:
+                    raw2 := _br_get_bits(br, s)
+                    zp[k] = _extend(raw2, s) as i32
+                end
+                k += 1
+            end
+        end
+    end
+
+    cf := coef_scratch as f64*
+    qp := quant as i32*
+    mut ii := 0
+    until ii < 64:
+        nat := _zigzag(ii)
+        cf[nat] = (zp[ii] as f64) * (qp[nat] as f64)
+        ii += 1
+    end
+    _idct8x8(coef_scratch, cos_table, pix_scratch)
+    pf := pix_scratch as f64*
+    op := out_buf as u8*
+    mut py := 0
+    until py < 8:
+        mut px := 0
+        until px < 8:
+            v := pf[py * 8 + px] + 128.0
+            mut iv := (v + 0.5) as int
+            if iv < 0: iv = 0 end
+            if iv > 255: iv = 255 end
+            op[(out_y + py) * out_stride + (out_x + px)] = iv as u8
+            px += 1
+        end
+        py += 1
+    end
+end
+
+// Decodes the h_i x v_i blocks belonging to one component within one MCU.
+func _decode_component_mcu(br &: _BitReader, comp_buf: void*, comp_stride: int, mcu_col: int, mcu_row: int, h_i: int, v_i: int, quant: void*, dc_prev &: int, dc_min: void*, dc_max: void*, dc_valptr: void*, dc_values: void*, ac_min: void*, ac_max: void*, ac_valptr: void*, ac_values: void*, cos_table: void*, zz_scratch: void*, coef_scratch: void*, pix_scratch: void*):
+    mut bi_y := 0
+    until bi_y < v_i:
+        mut bi_x := 0
+        until bi_x < h_i:
+            out_x := (mcu_col * h_i + bi_x) * 8
+            out_y := (mcu_row * v_i + bi_y) * 8
+            _decode_one_block(br, quant, dc_prev, dc_min, dc_max, dc_valptr, dc_values, ac_min, ac_max, ac_valptr, ac_values, cos_table, zz_scratch, coef_scratch, pix_scratch, comp_buf, comp_stride, out_x, out_y)
+            bi_x += 1
+        end
+        bi_y += 1
+    end
+end
+
+@en "EncodeJPEG"
+@fa "کدگذاری جی‌پگ"
+@ar "ترميز جي بيغ"
+pub func EncodeJPEG(img: Image, quality: int): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    compress.BufPush(out, 0xFF)
+    compress.BufPush(out, 0xD8)
+
+    compress.BufPush(out, 0xFF)
+    compress.BufPush(out, 0xE0)
+    compress.BufPush(out, 0x00)
+    compress.BufPush(out, 0x10)
+    compress.BufPush(out, 74)
+    compress.BufPush(out, 70)
+    compress.BufPush(out, 73)
+    compress.BufPush(out, 70)
+    compress.BufPush(out, 0)
+    compress.BufPush(out, 1)
+    compress.BufPush(out, 1)
+    compress.BufPush(out, 0)
+    compress.BufPush(out, 0)
+    compress.BufPush(out, 1)
+    compress.BufPush(out, 0)
+    compress.BufPush(out, 1)
+    compress.BufPush(out, 0)
+    compress.BufPush(out, 0)
+
+    lumaq := mem.Allocate((64 * 4) as u64)
+    chromaq := mem.Allocate((64 * 4) as u64)
+    _scale_quant(quality, lumaq, chromaq)
+    lqp := lumaq as i32*
+    cqp := chromaq as i32*
+
+    compress.BufPush(out, 0xFF)
+    compress.BufPush(out, 0xDB)
+    compress.BufPush(out, 0x00)
+    compress.BufPush(out, 0x43)
+    compress.BufPush(out, 0x00)
+    mut zi := 0
+    until zi < 64:
+        compress.BufPush(out, lqp[_zigzag(zi)] as int)
+        zi += 1
+    end
+
+    compress.BufPush(out, 0xFF)
+    compress.BufPush(out, 0xDB)
+    compress.BufPush(out, 0x00)
+    compress.BufPush(out, 0x43)
+    compress.BufPush(out, 0x01)
+    zi = 0
+    until zi < 64:
+        compress.BufPush(out, cqp[_zigzag(zi)] as int)
+        zi += 1
+    end
+
+    w := img.width
+    h := img.height
+    compress.BufPush(out, 0xFF)
+    compress.BufPush(out, 0xC0)
+    compress.BufPush(out, 0x00)
+    compress.BufPush(out, 0x11)
+    compress.BufPush(out, 8)
+    compress.BufPush(out, (h >> 8) & 255)
+    compress.BufPush(out, h & 255)
+    compress.BufPush(out, (w >> 8) & 255)
+    compress.BufPush(out, w & 255)
+    compress.BufPush(out, 3)
+    compress.BufPush(out, 1)
+    compress.BufPush(out, 0x11)
+    compress.BufPush(out, 0)
+    compress.BufPush(out, 2)
+    compress.BufPush(out, 0x11)
+    compress.BufPush(out, 1)
+    compress.BufPush(out, 3)
+    compress.BufPush(out, 0x11)
+    compress.BufPush(out, 1)
+
+    dc_luma_codes := mem.Allocate((256 * 4) as u64)
+    dc_luma_lens := mem.Allocate((256 * 4) as u64)
+    _build_huff_encode((i: int) => _dc_luma_bits(i), (i: int) => _dc_luma_values(i), dc_luma_codes, dc_luma_lens)
+    dc_chroma_codes := mem.Allocate((256 * 4) as u64)
+    dc_chroma_lens := mem.Allocate((256 * 4) as u64)
+    _build_huff_encode((i: int) => _dc_chroma_bits(i), (i: int) => _dc_chroma_values(i), dc_chroma_codes, dc_chroma_lens)
+    ac_luma_codes := mem.Allocate((256 * 4) as u64)
+    ac_luma_lens := mem.Allocate((256 * 4) as u64)
+    _build_huff_encode((i: int) => _ac_luma_bits(i), (i: int) => _ac_luma_values(i), ac_luma_codes, ac_luma_lens)
+    ac_chroma_codes := mem.Allocate((256 * 4) as u64)
+    ac_chroma_lens := mem.Allocate((256 * 4) as u64)
+    _build_huff_encode((i: int) => _ac_chroma_bits(i), (i: int) => _ac_chroma_values(i), ac_chroma_codes, ac_chroma_lens)
+
+    _write_dht(out, 0x00, (i: int) => _dc_luma_bits(i), (i: int) => _dc_luma_values(i))
+    _write_dht(out, 0x01, (i: int) => _dc_chroma_bits(i), (i: int) => _dc_chroma_values(i))
+    _write_dht(out, 0x10, (i: int) => _ac_luma_bits(i), (i: int) => _ac_luma_values(i))
+    _write_dht(out, 0x11, (i: int) => _ac_chroma_bits(i), (i: int) => _ac_chroma_values(i))
+
+    compress.BufPush(out, 0xFF)
+    compress.BufPush(out, 0xDA)
+    compress.BufPush(out, 0x00)
+    compress.BufPush(out, 0x0C)
+    compress.BufPush(out, 3)
+    compress.BufPush(out, 1)
+    compress.BufPush(out, 0x00)
+    compress.BufPush(out, 2)
+    compress.BufPush(out, 0x11)
+    compress.BufPush(out, 3)
+    compress.BufPush(out, 0x11)
+    compress.BufPush(out, 0)
+    compress.BufPush(out, 63)
+    compress.BufPush(out, 0)
+
+    cos_table := _make_cos_table()
+    mut bw := _BitWriter { acc = 0, nbits = 0 }
+    mut dc_prev_y := 0
+    mut dc_prev_cb := 0
+    mut dc_prev_cr := 0
+
+    padded_w := ((w + 7) / 8) * 8
+    padded_h := ((h + 7) / 8) * 8
+    block := mem.Allocate((64 * 8) as u64)
+    coef := mem.Allocate((64 * 8) as u64)
+    zz := mem.Allocate((64 * 4) as u64)
+
+    mut block_y := 0
+    until block_y < padded_h:
+        mut block_x := 0
+        until block_x < padded_w:
+            _extract_block(img, block_x, block_y, 0, block)
+            _fdct8x8(block, cos_table, coef)
+            _quantize_block(coef, lumaq, zz)
+            _encode_block_entropy(bw, zz, dc_prev_y, dc_luma_codes, dc_luma_lens, ac_luma_codes, ac_luma_lens)
+
+            _extract_block(img, block_x, block_y, 1, block)
+            _fdct8x8(block, cos_table, coef)
+            _quantize_block(coef, chromaq, zz)
+            _encode_block_entropy(bw, zz, dc_prev_cb, dc_chroma_codes, dc_chroma_lens, ac_chroma_codes, ac_chroma_lens)
+
+            _extract_block(img, block_x, block_y, 2, block)
+            _fdct8x8(block, cos_table, coef)
+            _quantize_block(coef, chromaq, zz)
+            _encode_block_entropy(bw, zz, dc_prev_cr, dc_chroma_codes, dc_chroma_lens, ac_chroma_codes, ac_chroma_lens)
+
+            block_x += 8
+        end
+        block_y += 8
+    end
+    _bw_flush(bw)
+    compress.BufPushBuf(out, bw.buf)
+    compress.BufFree(bw.buf)
+
+    compress.BufPush(out, 0xFF)
+    compress.BufPush(out, 0xD9)
+
+    mem.Free(lumaq)
+    mem.Free(chromaq)
+    mem.Free(dc_luma_codes)
+    mem.Free(dc_luma_lens)
+    mem.Free(dc_chroma_codes)
+    mem.Free(dc_chroma_lens)
+    mem.Free(ac_luma_codes)
+    mem.Free(ac_luma_lens)
+    mem.Free(ac_chroma_codes)
+    mem.Free(ac_chroma_lens)
+    mem.Free(cos_table)
+    mem.Free(block)
+    mem.Free(coef)
+    mem.Free(zz)
+    ret out
+end
+
+@en "SaveJPEG"
+@fa "ذخیره جی‌پگ"
+@ar "حفظ جي بيغ"
+pub func SaveJPEG(img: Image, path: str, quality: int): bool:
+    buf := EncodeJPEG(img, quality)
+    ok := archive.WriteBinaryFileBuf(path, buf)
+    compress.BufFree(buf)
+    ret ok
+end
+
+@en "DecodeJPEG"
+@fa "کدگشایی جی‌پگ"
+@ar "فك ترميز جي بيغ"
+pub func DecodeJPEG(p: void*, n: int, ok &: bool): Image:
+    ok = false
+    if n < 4:
+        ret New(0, 0)
+    end
+    bp := p as u8*
+    if (bp[0] as int) != 0xFF || (bp[1] as int) != 0xD8:
+        ret New(0, 0)
+    end
+
+    q0 := mem.AllocateZeroed((64 * 4) as u64)
+    q1 := mem.AllocateZeroed((64 * 4) as u64)
+    mut have_q0 := false
+    mut have_q1 := false
+
+    dc0_bits := mem.AllocateZeroed((16 * 4) as u64)
+    dc0_values := mem.AllocateZeroed((256 * 4) as u64)
+    dc0_min := mem.AllocateZeroed((16 * 4) as u64)
+    dc0_max := mem.AllocateZeroed((16 * 4) as u64)
+    dc0_valptr := mem.AllocateZeroed((16 * 4) as u64)
+    dc1_bits := mem.AllocateZeroed((16 * 4) as u64)
+    dc1_values := mem.AllocateZeroed((256 * 4) as u64)
+    dc1_min := mem.AllocateZeroed((16 * 4) as u64)
+    dc1_max := mem.AllocateZeroed((16 * 4) as u64)
+    dc1_valptr := mem.AllocateZeroed((16 * 4) as u64)
+    ac0_bits := mem.AllocateZeroed((16 * 4) as u64)
+    ac0_values := mem.AllocateZeroed((256 * 4) as u64)
+    ac0_min := mem.AllocateZeroed((16 * 4) as u64)
+    ac0_max := mem.AllocateZeroed((16 * 4) as u64)
+    ac0_valptr := mem.AllocateZeroed((16 * 4) as u64)
+    ac1_bits := mem.AllocateZeroed((16 * 4) as u64)
+    ac1_values := mem.AllocateZeroed((256 * 4) as u64)
+    ac1_min := mem.AllocateZeroed((16 * 4) as u64)
+    ac1_max := mem.AllocateZeroed((16 * 4) as u64)
+    ac1_valptr := mem.AllocateZeroed((16 * 4) as u64)
+    mut have_dc0 := false
+    mut have_dc1 := false
+    mut have_ac0 := false
+    mut have_ac1 := false
+
+    mut width := 0
+    mut height := 0
+    mut ncomp := 0
+    comp_id := mem.AllocateZeroed((4 * 4) as u64) as i32*
+    comp_h := mem.AllocateZeroed((4 * 4) as u64) as i32*
+    comp_v := mem.AllocateZeroed((4 * 4) as u64) as i32*
+    comp_q := mem.AllocateZeroed((4 * 4) as u64) as i32*
+    comp_dc_sel := mem.AllocateZeroed((4 * 4) as u64) as i32*
+    comp_ac_sel := mem.AllocateZeroed((4 * 4) as u64) as i32*
+    mut sof_found := false
+    mut sos_data_pos := -1
+    mut fatal := false
+
+    mut pos := 2
+    until pos + 2 <= n && !fatal && sos_data_pos < 0:
+        if (bp[pos] as int) != 0xFF:
+            fatal = true
+            break
+        end
+        marker := bp[pos + 1] as int
+        pos += 2
+        if marker == 0xD8 || marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7):
+            continue
+        end
+        if marker == 0xD9:
+            fatal = true
+            break
+        end
+        if pos + 2 > n:
+            fatal = true
+            break
+        end
+        length := ((bp[pos] as int) << 8) | (bp[pos + 1] as int)
+        seg_start := pos + 2
+        if length < 2 || seg_start + (length - 2) > n:
+            fatal = true
+            break
+        end
+        seg_end := seg_start + length - 2
+
+        if marker == 0xDB:
+            mut off := seg_start
+            until off < seg_end && !fatal:
+                pq_tq := bp[off] as int
+                precision := (pq_tq >> 4) & 15
+                tid := pq_tq & 15
+                if precision != 0 || tid > 1 || off + 65 > seg_end:
+                    fatal = true
+                    break
+                end
+                off += 1
+                mut target := q0
+                if tid == 1: target = q1 end
+                tp := target as i32*
+                mut zi2 := 0
+                until zi2 < 64:
+                    tp[_zigzag(zi2)] = (bp[off + zi2] as int) as i32
+                    zi2 += 1
+                end
+                if tid == 0: have_q0 = true end
+                if tid == 1: have_q1 = true end
+                off += 64
+            end
+        end
+
+        if marker == 0xC4:
+            mut off := seg_start
+            until off < seg_end && !fatal:
+                if off + 17 > seg_end:
+                    fatal = true
+                    break
+                end
+                tc_th := bp[off] as int
+                tclass := (tc_th >> 4) & 15
+                tid := tc_th & 15
+                if tid > 1 || tclass > 1:
+                    fatal = true
+                    break
+                end
+                off += 1
+                mut total := 0
+                mut bi := 0
+                until bi < 16:
+                    total += bp[off + bi] as int
+                    bi += 1
+                end
+                if off + 16 + total > seg_end:
+                    fatal = true
+                    break
+                end
+                mut bits_buf := dc0_bits
+                mut values_buf := dc0_values
+                mut min_buf := dc0_min
+                mut max_buf := dc0_max
+                mut valptr_buf := dc0_valptr
+                if tclass == 0 && tid == 1:
+                    bits_buf = dc1_bits
+                    values_buf = dc1_values
+                    min_buf = dc1_min
+                    max_buf = dc1_max
+                    valptr_buf = dc1_valptr
+                end
+                if tclass == 1 && tid == 0:
+                    bits_buf = ac0_bits
+                    values_buf = ac0_values
+                    min_buf = ac0_min
+                    max_buf = ac0_max
+                    valptr_buf = ac0_valptr
+                end
+                if tclass == 1 && tid == 1:
+                    bits_buf = ac1_bits
+                    values_buf = ac1_values
+                    min_buf = ac1_min
+                    max_buf = ac1_max
+                    valptr_buf = ac1_valptr
+                end
+                bp_i32 := bits_buf as i32*
+                vp_i32 := values_buf as i32*
+                mut bj := 0
+                until bj < 16:
+                    bp_i32[bj] = (bp[off + bj] as int) as i32
+                    bj += 1
+                end
+                mut vj := 0
+                until vj < total:
+                    vp_i32[vj] = (bp[off + 16 + vj] as int) as i32
+                    vj += 1
+                end
+                _build_huff_decode((i: int) => _buf_geti32(bits_buf, i), min_buf, max_buf, valptr_buf)
+                if tclass == 0 && tid == 0: have_dc0 = true end
+                if tclass == 0 && tid == 1: have_dc1 = true end
+                if tclass == 1 && tid == 0: have_ac0 = true end
+                if tclass == 1 && tid == 1: have_ac1 = true end
+                off += 16 + total
+            end
+        end
+
+        if marker == 0xC0:
+            if sof_found || seg_end - seg_start < 6:
+                fatal = true
+                break
+            end
+            precision := bp[seg_start] as int
+            height = ((bp[seg_start + 1] as int) << 8) | (bp[seg_start + 2] as int)
+            width = ((bp[seg_start + 3] as int) << 8) | (bp[seg_start + 4] as int)
+            ncomp = bp[seg_start + 5] as int
+            if precision != 8 || width <= 0 || height <= 0 || (ncomp != 1 && ncomp != 3):
+                fatal = true
+                break
+            end
+            if seg_end - seg_start < 6 + ncomp * 3:
+                fatal = true
+                break
+            end
+            mut ci := 0
+            until ci < ncomp:
+                base := seg_start + 6 + ci * 3
+                comp_id[ci] = (bp[base] as int) as i32
+                hv := bp[base + 1] as int
+                hf := (hv >> 4) & 15
+                vf := hv & 15
+                if hf < 1 || hf > 2 || vf < 1 || vf > 2:
+                    fatal = true
+                    break
+                end
+                comp_h[ci] = hf as i32
+                comp_v[ci] = vf as i32
+                comp_q[ci] = (bp[base + 2] as int) as i32
+                ci += 1
+            end
+            sof_found = true
+        end
+        if marker >= 0xC1 && marker <= 0xCF && marker != 0xC4 && marker != 0xC8 && marker != 0xCC && marker != 0xC0:
+            fatal = true
+            break
+        end
+
+        if marker == 0xDA:
+            if !sof_found || seg_end - seg_start < 1:
+                fatal = true
+                break
+            end
+            scan_ncomp := bp[seg_start] as int
+            if scan_ncomp != ncomp || seg_end - seg_start < 1 + scan_ncomp * 2:
+                fatal = true
+                break
+            end
+            mut sci := 0
+            until sci < scan_ncomp:
+                base := seg_start + 1 + sci * 2
+                sel_id := bp[base] as int
+                tsel := bp[base + 1] as int
+                dc_id := (tsel >> 4) & 15
+                ac_id := tsel & 15
+                mut match_idx := -1
+                mut cj := 0
+                until cj < ncomp:
+                    if (comp_id[cj] as int) == sel_id:
+                        match_idx = cj
+                    end
+                    cj += 1
+                end
+                if match_idx < 0 || dc_id > 1 || ac_id > 1:
+                    fatal = true
+                    break
+                end
+                comp_dc_sel[match_idx] = dc_id as i32
+                comp_ac_sel[match_idx] = ac_id as i32
+                sci += 1
+            end
+            sos_data_pos = seg_end
+        end
+
+        pos = seg_end
+    end
+
+    mut ready := sof_found && !fatal && sos_data_pos >= 0
+    if ready:
+        mut ci2 := 0
+        until ci2 < ncomp:
+            qid := comp_q[ci2] as int
+            if qid == 0 && !have_q0: ready = false end
+            if qid == 1 && !have_q1: ready = false end
+            dcid := comp_dc_sel[ci2] as int
+            acid := comp_ac_sel[ci2] as int
+            if dcid == 0 && !have_dc0: ready = false end
+            if dcid == 1 && !have_dc1: ready = false end
+            if acid == 0 && !have_ac0: ready = false end
+            if acid == 1 && !have_ac1: ready = false end
+            ci2 += 1
+        end
+    end
+
+    if !ready:
+        mem.Free(q0)
+        mem.Free(q1)
+        mem.Free(dc0_bits)
+        mem.Free(dc0_values)
+        mem.Free(dc0_min)
+        mem.Free(dc0_max)
+        mem.Free(dc0_valptr)
+        mem.Free(dc1_bits)
+        mem.Free(dc1_values)
+        mem.Free(dc1_min)
+        mem.Free(dc1_max)
+        mem.Free(dc1_valptr)
+        mem.Free(ac0_bits)
+        mem.Free(ac0_values)
+        mem.Free(ac0_min)
+        mem.Free(ac0_max)
+        mem.Free(ac0_valptr)
+        mem.Free(ac1_bits)
+        mem.Free(ac1_values)
+        mem.Free(ac1_min)
+        mem.Free(ac1_max)
+        mem.Free(ac1_valptr)
+        mem.Free(comp_id as void*)
+        mem.Free(comp_h as void*)
+        mem.Free(comp_v as void*)
+        mem.Free(comp_q as void*)
+        mem.Free(comp_dc_sel as void*)
+        mem.Free(comp_ac_sel as void*)
+        ret New(0, 0)
+    end
+
+    mut max_h := 1
+    mut max_v := 1
+    mut ci3 := 0
+    until ci3 < ncomp:
+        if (comp_h[ci3] as int) > max_h: max_h = comp_h[ci3] as int end
+        if (comp_v[ci3] as int) > max_v: max_v = comp_v[ci3] as int end
+        ci3 += 1
+    end
+    mcu_w := 8 * max_h
+    mcu_h := 8 * max_v
+    mcu_cols := (width + mcu_w - 1) / mcu_w
+    mcu_rows := (height + mcu_h - 1) / mcu_h
+
+    comp0_w := mcu_cols * 8 * (comp_h[0] as int)
+    comp0_h := mcu_rows * 8 * (comp_v[0] as int)
+    comp0_buf := mem.AllocateZeroed((comp0_w * comp0_h) as u64)
+    mut comp1_buf := comp0_buf
+    mut comp2_buf := comp0_buf
+    mut comp1_w := comp0_w
+    mut comp2_w := comp0_w
+    if ncomp == 3:
+        comp1_w = mcu_cols * 8 * (comp_h[1] as int)
+        comp1_h := mcu_rows * 8 * (comp_v[1] as int)
+        comp1_buf = mem.AllocateZeroed((comp1_w * comp1_h) as u64)
+        comp2_w = mcu_cols * 8 * (comp_h[2] as int)
+        comp2_h := mcu_rows * 8 * (comp_v[2] as int)
+        comp2_buf = mem.AllocateZeroed((comp2_w * comp2_h) as u64)
+    end
+
+    cos_table := _make_cos_table()
+    zz_scratch := mem.Allocate((64 * 4) as u64)
+    coef_scratch := mem.Allocate((64 * 8) as u64)
+    pix_scratch := mem.Allocate((64 * 8) as u64)
+    mut dc_prev0 := 0
+    mut dc_prev1 := 0
+    mut dc_prev2 := 0
+    mut br := _BitReader { data = p, len = n, pos = sos_data_pos, acc = 0, nbits = 0, hit_marker = false }
+
+    q_for_0 := (comp_q[0] as int) == 0 ? q0 : q1
+    dc_min0 := (comp_dc_sel[0] as int) == 0 ? dc0_min : dc1_min
+    dc_max0 := (comp_dc_sel[0] as int) == 0 ? dc0_max : dc1_max
+    dc_valptr0 := (comp_dc_sel[0] as int) == 0 ? dc0_valptr : dc1_valptr
+    dc_values0 := (comp_dc_sel[0] as int) == 0 ? dc0_values : dc1_values
+    ac_min0 := (comp_ac_sel[0] as int) == 0 ? ac0_min : ac1_min
+    ac_max0 := (comp_ac_sel[0] as int) == 0 ? ac0_max : ac1_max
+    ac_valptr0 := (comp_ac_sel[0] as int) == 0 ? ac0_valptr : ac1_valptr
+    ac_values0 := (comp_ac_sel[0] as int) == 0 ? ac0_values : ac1_values
+
+    mut q_for_1 := q_for_0
+    mut dc_min1 := dc_min0
+    mut dc_max1 := dc_max0
+    mut dc_valptr1 := dc_valptr0
+    mut dc_values1 := dc_values0
+    mut ac_min1 := ac_min0
+    mut ac_max1 := ac_max0
+    mut ac_valptr1 := ac_valptr0
+    mut ac_values1 := ac_values0
+    mut q_for_2 := q_for_0
+    mut dc_min2 := dc_min0
+    mut dc_max2 := dc_max0
+    mut dc_valptr2 := dc_valptr0
+    mut dc_values2 := dc_values0
+    mut ac_min2 := ac_min0
+    mut ac_max2 := ac_max0
+    mut ac_valptr2 := ac_valptr0
+    mut ac_values2 := ac_values0
+    if ncomp == 3:
+        q_for_1 = (comp_q[1] as int) == 0 ? q0 : q1
+        dc_min1 = (comp_dc_sel[1] as int) == 0 ? dc0_min : dc1_min
+        dc_max1 = (comp_dc_sel[1] as int) == 0 ? dc0_max : dc1_max
+        dc_valptr1 = (comp_dc_sel[1] as int) == 0 ? dc0_valptr : dc1_valptr
+        dc_values1 = (comp_dc_sel[1] as int) == 0 ? dc0_values : dc1_values
+        ac_min1 = (comp_ac_sel[1] as int) == 0 ? ac0_min : ac1_min
+        ac_max1 = (comp_ac_sel[1] as int) == 0 ? ac0_max : ac1_max
+        ac_valptr1 = (comp_ac_sel[1] as int) == 0 ? ac0_valptr : ac1_valptr
+        ac_values1 = (comp_ac_sel[1] as int) == 0 ? ac0_values : ac1_values
+        q_for_2 = (comp_q[2] as int) == 0 ? q0 : q1
+        dc_min2 = (comp_dc_sel[2] as int) == 0 ? dc0_min : dc1_min
+        dc_max2 = (comp_dc_sel[2] as int) == 0 ? dc0_max : dc1_max
+        dc_valptr2 = (comp_dc_sel[2] as int) == 0 ? dc0_valptr : dc1_valptr
+        dc_values2 = (comp_dc_sel[2] as int) == 0 ? dc0_values : dc1_values
+        ac_min2 = (comp_ac_sel[2] as int) == 0 ? ac0_min : ac1_min
+        ac_max2 = (comp_ac_sel[2] as int) == 0 ? ac0_max : ac1_max
+        ac_valptr2 = (comp_ac_sel[2] as int) == 0 ? ac0_valptr : ac1_valptr
+        ac_values2 = (comp_ac_sel[2] as int) == 0 ? ac0_values : ac1_values
+    end
+
+    mut mcu_row := 0
+    until mcu_row < mcu_rows:
+        mut mcu_col := 0
+        until mcu_col < mcu_cols:
+            _decode_component_mcu(br, comp0_buf, comp0_w, mcu_col, mcu_row, comp_h[0] as int, comp_v[0] as int, q_for_0, dc_prev0, dc_min0, dc_max0, dc_valptr0, dc_values0, ac_min0, ac_max0, ac_valptr0, ac_values0, cos_table, zz_scratch, coef_scratch, pix_scratch)
+            if ncomp == 3:
+                _decode_component_mcu(br, comp1_buf, comp1_w, mcu_col, mcu_row, comp_h[1] as int, comp_v[1] as int, q_for_1, dc_prev1, dc_min1, dc_max1, dc_valptr1, dc_values1, ac_min1, ac_max1, ac_valptr1, ac_values1, cos_table, zz_scratch, coef_scratch, pix_scratch)
+                _decode_component_mcu(br, comp2_buf, comp2_w, mcu_col, mcu_row, comp_h[2] as int, comp_v[2] as int, q_for_2, dc_prev2, dc_min2, dc_max2, dc_valptr2, dc_values2, ac_min2, ac_max2, ac_valptr2, ac_values2, cos_table, zz_scratch, coef_scratch, pix_scratch)
+            end
+            mcu_col += 1
+        end
+        mcu_row += 1
+    end
+
+    out := New(width, height)
+    yp := comp0_buf as u8*
+    cbp := comp1_buf as u8*
+    crp := comp2_buf as u8*
+    ch0 := comp_h[0] as int
+    cv0 := comp_v[0] as int
+    mut ch1 := ch0
+    mut cv1 := cv0
+    mut ch2 := ch0
+    mut cv2 := cv0
+    if ncomp == 3:
+        ch1 = comp_h[1] as int
+        cv1 = comp_v[1] as int
+        ch2 = comp_h[2] as int
+        cv2 = comp_v[2] as int
+    end
+    mut y := 0
+    until y < height:
+        mut x := 0
+        until x < width:
+            cx0 := (x * ch0) / max_h
+            cy0 := (y * cv0) / max_v
+            yv := yp[cy0 * comp0_w + cx0] as int
+            if ncomp == 1:
+                SetPixel(out, x, y, RGB(yv, yv, yv))
+            else:
+                cx1 := (x * ch1) / max_h
+                cy1 := (y * cv1) / max_v
+                cx2 := (x * ch2) / max_h
+                cy2 := (y * cv2) / max_v
+                cbv := cbp[cy1 * comp1_w + cx1] as int
+                crv := crp[cy2 * comp2_w + cx2] as int
+                r := _ycbcr_to_r(yv, cbv, crv)
+                g := _ycbcr_to_g(yv, cbv, crv)
+                b := _ycbcr_to_b(yv, cbv, crv)
+                SetPixel(out, x, y, RGB(r, g, b))
+            end
+            x += 1
+        end
+        y += 1
+    end
+
+    mem.Free(q0)
+    mem.Free(q1)
+    mem.Free(dc0_bits)
+    mem.Free(dc0_values)
+    mem.Free(dc0_min)
+    mem.Free(dc0_max)
+    mem.Free(dc0_valptr)
+    mem.Free(dc1_bits)
+    mem.Free(dc1_values)
+    mem.Free(dc1_min)
+    mem.Free(dc1_max)
+    mem.Free(dc1_valptr)
+    mem.Free(ac0_bits)
+    mem.Free(ac0_values)
+    mem.Free(ac0_min)
+    mem.Free(ac0_max)
+    mem.Free(ac0_valptr)
+    mem.Free(ac1_bits)
+    mem.Free(ac1_values)
+    mem.Free(ac1_min)
+    mem.Free(ac1_max)
+    mem.Free(ac1_valptr)
+    mem.Free(comp_id as void*)
+    mem.Free(comp_h as void*)
+    mem.Free(comp_v as void*)
+    mem.Free(comp_q as void*)
+    mem.Free(comp_dc_sel as void*)
+    mem.Free(comp_ac_sel as void*)
+    mem.Free(cos_table)
+    mem.Free(zz_scratch)
+    mem.Free(coef_scratch)
+    mem.Free(pix_scratch)
+    mem.Free(comp0_buf)
+    if ncomp == 3:
+        mem.Free(comp1_buf)
+        mem.Free(comp2_buf)
+    end
+
+    ok = true
+    ret out
+end
+
+@en "OpenJPEG"
+@fa "بازکردن جی‌پگ"
+@ar "افتح جي بيغ"
+pub func OpenJPEG(path: str, ok &: bool): Image:
+    mut read_ok := false
+    buf := archive.ReadBinaryFile(path, read_ok)
+    if !read_ok:
+        ok = false
+        ret New(0, 0)
+    end
+    out := DecodeJPEG(buf.data, buf.len, ok)
+    compress.BufFree(buf)
+    ret out
+end

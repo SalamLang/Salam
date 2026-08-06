@@ -1,0 +1,130 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import str
+import io
+import os
+import encoding
+import conv
+import filepath
+
+// OpenSSH-compatible known_hosts handling: parsing, host lookup, and
+// appending new entries. Only the plain "hostname keytype base64key"
+// line format is read (RFC 4251's host key checking, as OpenSSH's
+// known_hosts has used it since day one) - HashKnownHosts-style hashed
+// entries ("|1|salt|hash ...") are skipped rather than matched, so a host
+// only ever hashed into such a file will look "unknown" here. That is a
+// safe failure direction (falls through to AcceptNew's TOFU prompt/append
+// rather than silently trusting), just not a complete implementation.
+
+// Exported so callers can pass a named mode to WithHostKeyMode (config.salam)
+// instead of a raw int.
+pub const HOSTKEY_MODE_INSECURE := 0
+pub const HOSTKEY_MODE_ACCEPT_NEW := 1
+pub const HOSTKEY_MODE_STRICT := 2
+
+const KH_UNKNOWN := 0
+const KH_MATCH := 1
+const KH_MISMATCH := 2
+
+func _knownhosts_default_path(): str:
+    if SALAM_OS_WINDOWS:
+        home := os.Env("USERPROFILE")
+        ret home + "\\.ssh\\known_hosts"
+    end
+    home := os.Env("HOME")
+    ret home + "/.ssh/known_hosts"
+end
+
+// The host-pattern OpenSSH writes/matches: bare "host" for the default
+// port, "[host]:port" otherwise.
+func _knownhosts_hostpattern(host: str, port: int): str:
+    if port == DefaultPort:
+        ret host
+    end
+    ret "[" + host + "]:" + conv.FormatInt(port as i64)
+end
+
+func _knownhosts_line_matches_host(line_hosts: str, pattern: str): bool:
+    if line_hosts.len() == 0 || _bget(line_hosts as void*, 0) == 124: // '|' = hashed entry, skip
+        ret false
+    end
+    ret NameListContains(line_hosts, pattern)
+end
+
+// Check whether (host, port, keytype, key blob) is already known. Returns
+// KH_MATCH (byte-identical key on file), KH_MISMATCH (this host is on file
+// under a DIFFERENT key - the classic MITM/host-reinstall warning), or
+// KH_UNKNOWN (host not present at all).
+func _knownhosts_check(path: str, host: str, port: int, keytype: str, key_b64: str): int:
+    if !os.Exists(path):
+        ret KH_UNKNOWN
+    end
+    pattern := _knownhosts_hostpattern(host, port)
+    content := io.ReadFile(path)
+    lines := content.split("\n")
+    mut result := KH_UNKNOWN
+    each ln in lines:
+        trimmed := ln.trim()
+        if trimmed.len() == 0 || str.StartsWith(trimmed, "#"):
+            continue
+        end
+        fields := trimmed.split(" ")
+        if fields.len() < 3:
+            continue
+        end
+        lhosts := fields.get(0)[0]
+        lkeytype := fields.get(1)[0]
+        lkey := fields.get(2)[0]
+        if _knownhosts_line_matches_host(lhosts, pattern) && str.Equals(lkeytype, keytype):
+            if str.Equals(lkey, key_b64):
+                result = KH_MATCH
+            else if result != KH_MATCH:
+                result = KH_MISMATCH
+            end
+        end
+        fields.free()
+    end
+    lines.free()
+    ret result
+end
+
+func _knownhosts_append(path: str, host: str, port: int, keytype: str, key_b64: str): bool:
+    dir := filepath.Dir(path)
+    if dir.len() > 0 && !os.Exists(dir):
+        _mkdir_ok := os.MkdirAll(dir)
+    end
+    pattern := _knownhosts_hostpattern(host, port)
+    line := pattern + " " + keytype + " " + key_b64 + "\n"
+    ret io.AppendFile(path, line) >= 0
+end
+
+// True if `mode` should proceed with the connection given the check
+// result - the single decision point transport.salam calls after
+// _knownhosts_check (and, for ACCEPT_NEW on an unknown host, after
+// _knownhosts_append has recorded it).
+func _knownhosts_decide(mode: int, result: int): bool:
+    if mode == HOSTKEY_MODE_INSECURE:
+        ret true
+    end
+    if result == KH_MISMATCH:
+        ret false
+    end
+    if mode == HOSTKEY_MODE_STRICT:
+        ret result == KH_MATCH
+    end
+    ret true // ACCEPT_NEW: MATCH or UNKNOWN (caller appends UNKNOWN before this)
+end

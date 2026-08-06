@@ -1,0 +1,905 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Exhaustive regression test for std/image: every pub function gets at
+// least one assertion, plus edge cases (out-of-bounds access, degenerate
+// 0x0 images, malformed/truncated/corrupted files) for anything that
+// takes untrusted input. Codec round-trips are self-contained (encode
+// with this package, decode with this package) rather than depending on
+// an external tool at test time - see the package's own memory notes for
+// the separate, one-off PIL cross-validation done during development.
+
+package main
+
+import image
+import compress
+import archive
+import testing
+import os
+import filepath
+
+// ------------------------------------------------------------------ core
+
+func check_core:
+    mut img := image.New(8, 6)
+    testing.AssertEqInt(img.width, 8)
+    testing.AssertEqInt(img.height, 6)
+    testing.AssertFalse(image.IsEmpty(img))
+
+    image.Fill(img, image.RGB(10, 20, 30))
+    c := image.GetPixel(img, 3, 3)
+    testing.AssertEqInt(c.r as int, 10)
+    testing.AssertEqInt(c.g as int, 20)
+    testing.AssertEqInt(c.b as int, 30)
+    testing.AssertEqInt(c.a as int, 255)
+
+    testing.AssertTrue(image.InBounds(img, 0, 0))
+    testing.AssertTrue(image.InBounds(img, 7, 5))
+    testing.AssertFalse(image.InBounds(img, 8, 0))
+    testing.AssertFalse(image.InBounds(img, 0, 6))
+    testing.AssertFalse(image.InBounds(img, -1, 0))
+
+    image.SetPixel(img, 0, 0, image.RGBA(1, 2, 3, 4))
+    p := image.GetPixel(img, 0, 0)
+    testing.AssertEqInt(p.r as int, 1)
+    testing.AssertEqInt(p.a as int, 4)
+
+    // Out-of-bounds reads/writes never crash: reads return transparent
+    // black, writes are a silent no-op.
+    oob := image.GetPixel(img, 999, 999)
+    testing.AssertEqInt(oob.r as int, 0)
+    testing.AssertEqInt(oob.a as int, 0)
+    image.SetPixel(img, -5, -5, image.RGB(9, 9, 9))
+    image.SetPixel(img, 999, 999, image.RGB(9, 9, 9))
+
+    image.BlendPixel(img, 1, 1, image.RGBA(255, 0, 0, 255))
+    bp1 := image.GetPixel(img, 1, 1)
+    testing.AssertEqInt(bp1.r as int, 255)
+    image.BlendPixel(img, 1, 1, image.RGBA(0, 255, 0, 0))
+    bp2 := image.GetPixel(img, 1, 1)
+    testing.AssertEqInt(bp2.r as int, 255)
+    image.BlendPixel(img, 2, 2, image.RGBA(0, 0, 0, 255))
+    image.BlendPixel(img, 2, 2, image.RGBA(255, 255, 255, 128))
+    bp3 := image.GetPixel(img, 2, 2)
+    testing.AssertTrue((bp3.r as int) > 100 && (bp3.r as int) < 200)
+
+    clone := image.Clone(img)
+    cc := image.GetPixel(clone, 3, 3)
+    testing.AssertEqInt(cc.g as int, 20)
+    image.SetPixel(clone, 3, 3, image.RGB(0, 0, 0))
+    orig_after_clone_mut := image.GetPixel(img, 3, 3)
+    testing.AssertEqInt(orig_after_clone_mut.g as int, 20)
+    image.Free(clone)
+
+    filled := image.NewFilled(3, 3, image.RGB(7, 8, 9))
+    fc := image.GetPixel(filled, 1, 1)
+    testing.AssertEqInt(fc.r as int, 7)
+    testing.AssertEqInt(fc.g as int, 8)
+    testing.AssertEqInt(fc.b as int, 9)
+    image.Free(filled)
+
+    image.FillHex(img, "#00ff00")
+    hc := image.GetPixel(img, 0, 0)
+    testing.AssertEqInt(hc.g as int, 255)
+
+    // Degenerate 0x0 / negative-size images are harmless, not errors.
+    zero := image.New(0, 0)
+    testing.AssertTrue(image.IsEmpty(zero))
+    testing.AssertEqInt(zero.width, 0)
+    neg := image.New(-4, 10)
+    testing.AssertTrue(image.IsEmpty(neg))
+    zc := image.GetPixel(zero, 0, 0)
+    testing.AssertEqInt(zc.a as int, 0)
+    image.SetPixel(zero, 0, 0, image.RGB(1, 1, 1))
+    image.Free(zero)
+    image.Free(neg)
+
+    image.Free(img)
+    testing.AssertTrue(image.IsEmpty(img))
+end
+
+// ----------------------------------------------------------------- color
+
+func check_color:
+    r1 := image.RGB(10, 20, 30)
+    testing.AssertEqInt(r1.a as int, 255)
+    r2 := image.RGBA(10, 20, 30, 40)
+    testing.AssertEqInt(r2.a as int, 40)
+    g := image.Gray(77)
+    testing.AssertTrue(g.r == g.g && g.g == g.b && (g.r as int) == 77)
+
+    testing.AssertTrue(image.Equals(image.RGB(1, 2, 3), image.RGB(1, 2, 3)))
+    testing.AssertFalse(image.Equals(image.RGB(1, 2, 3), image.RGB(1, 2, 4)))
+
+    testing.AssertEqInt(image.Luminance(image.RGB(255, 255, 255)), 255)
+    testing.AssertEqInt(image.Luminance(image.RGB(0, 0, 0)), 0)
+    testing.AssertTrue(image.Luminance(image.RGB(255, 0, 0)) < image.Luminance(image.RGB(0, 255, 0)))
+
+    // #rrggbb, #rrggbbaa, #rgb, #rgba, and the bare (no '#') forms.
+    hex1 := image.ParseHex("#ff8800")
+    testing.AssertEqInt(hex1.r as int, 255)
+    testing.AssertEqInt(hex1.g as int, 136)
+    testing.AssertEqInt(hex1.b as int, 0)
+    testing.AssertEqInt(hex1.a as int, 255)
+    testing.AssertEqStr(image.ToHexRGB(hex1), "#ff8800")
+    testing.AssertEqStr(image.ToHex(hex1), "#ff8800ff")
+
+    hex2 := image.ParseHex("#ff880080")
+    testing.AssertEqInt(hex2.a as int, 128)
+
+    hex3 := image.ParseHex("f80")
+    testing.AssertEqInt(hex3.r as int, 255)
+    testing.AssertEqInt(hex3.g as int, 136)
+    testing.AssertEqInt(hex3.b as int, 0)
+    testing.AssertEqInt(hex3.a as int, 255)
+
+    hex4 := image.ParseHex("#f808")
+    testing.AssertEqInt(hex4.r as int, 255)
+    testing.AssertEqInt(hex4.a as int, 136)
+
+    hex5 := image.ParseHex("000000")
+    testing.AssertEqInt(hex5.r as int, 0)
+    testing.AssertEqInt(hex5.a as int, 255)
+
+    // Malformed input (wrong length / non-hex char) falls back to opaque
+    // black rather than erroring.
+    bad1 := image.ParseHex("zz")
+    testing.AssertEqInt(bad1.r as int, 0)
+    testing.AssertEqInt(bad1.a as int, 255)
+    bad2 := image.ParseHex("#gggggg")
+    testing.AssertEqInt(bad2.a as int, 255)
+
+    // src-over alpha compositing: opaque source replaces outright,
+    // fully-transparent source is a no-op, partial blends between.
+    opaque_blend := image.Blend(image.RGB(0, 0, 0), image.RGB(255, 255, 255))
+    testing.AssertEqInt(opaque_blend.r as int, 255)
+    noop_blend := image.Blend(image.RGB(9, 9, 9), image.RGBA(255, 255, 255, 0))
+    testing.AssertEqInt(noop_blend.r as int, 9)
+    mid_blend := image.Blend(image.RGB(0, 0, 255), image.RGBA(255, 0, 0, 128))
+    testing.AssertTrue((mid_blend.r as int) > 100 && (mid_blend.r as int) < 200)
+    testing.AssertTrue((mid_blend.b as int) > 50 && (mid_blend.b as int) < 155)
+
+    lerp_start := image.LerpColor(image.RGB(0, 0, 0), image.RGB(200, 100, 50), 0.0)
+    testing.AssertEqInt(lerp_start.r as int, 0)
+    lerp_end := image.LerpColor(image.RGB(0, 0, 0), image.RGB(200, 100, 50), 1.0)
+    testing.AssertEqInt(lerp_end.r as int, 200)
+    lerp_mid := image.LerpColor(image.RGB(0, 0, 0), image.RGB(200, 100, 50), 0.5)
+    testing.AssertTrue((lerp_mid.r as int) > 90 && (lerp_mid.r as int) < 110)
+end
+
+// ------------------------------------------------------------------ draw
+
+func check_draw:
+    testing.AssertEqInt(image.FontWidth, 5)
+    testing.AssertEqInt(image.FontHeight, 7)
+
+    mut img := image.New(20, 20)
+    image.FillHex(img, "#000000")
+
+    image.DrawRectFilled(img, 2, 2, 5, 5, image.RGB(255, 0, 0))
+    rc := image.GetPixel(img, 4, 4)
+    testing.AssertEqInt(rc.r as int, 255)
+    outside_rect := image.GetPixel(img, 7, 7)
+    testing.AssertEqInt(outside_rect.r as int, 0)
+    // Filled rect straddling the canvas edge clips instead of crashing.
+    image.DrawRectFilled(img, 18, 18, 10, 10, image.RGB(9, 9, 9))
+    corner := image.GetPixel(img, 19, 19)
+    testing.AssertEqInt(corner.r as int, 9)
+    // Non-positive width/height is a no-op.
+    image.DrawRectFilled(img, 0, 0, 0, 5, image.RGB(1, 1, 1))
+    still_black := image.GetPixel(img, 0, 0)
+    testing.AssertEqInt(still_black.r as int, 0)
+
+    image.DrawRect(img, 0, 0, 10, 10, image.RGB(0, 255, 0))
+    border := image.GetPixel(img, 0, 0)
+    testing.AssertEqInt(border.g as int, 255)
+    border2 := image.GetPixel(img, 9, 0)
+    testing.AssertEqInt(border2.g as int, 255)
+    border3 := image.GetPixel(img, 0, 9)
+    testing.AssertEqInt(border3.g as int, 255)
+
+    // Lines: horizontal, vertical, and both diagonal directions.
+    mut lineimg := image.New(10, 10)
+    image.FillHex(lineimg, "#000000")
+    image.DrawLine(lineimg, 0, 5, 9, 5, image.RGB(255, 0, 0))
+    testing.AssertEqInt((image.GetPixel(lineimg, 0, 5)).r as int, 255)
+    testing.AssertEqInt((image.GetPixel(lineimg, 9, 5)).r as int, 255)
+    image.DrawLine(lineimg, 3, 0, 3, 9, image.RGB(0, 255, 0))
+    testing.AssertEqInt((image.GetPixel(lineimg, 3, 0)).g as int, 255)
+    testing.AssertEqInt((image.GetPixel(lineimg, 3, 9)).g as int, 255)
+    image.DrawLine(lineimg, 0, 0, 9, 9, image.RGB(0, 0, 255))
+    testing.AssertEqInt((image.GetPixel(lineimg, 0, 0)).b as int, 255)
+    testing.AssertEqInt((image.GetPixel(lineimg, 9, 9)).b as int, 255)
+    testing.AssertEqInt((image.GetPixel(lineimg, 5, 5)).b as int, 255)
+    image.DrawLine(lineimg, 9, 0, 0, 9, image.RGB(255, 255, 0))
+    testing.AssertEqInt((image.GetPixel(lineimg, 9, 0)).r as int, 255)
+    testing.AssertEqInt((image.GetPixel(lineimg, 0, 9)).r as int, 255)
+    image.Free(lineimg)
+
+    image.DrawCircle(img, 15, 15, 4, image.RGB(255, 255, 0))
+    edge := image.GetPixel(img, 19, 15)
+    testing.AssertEqInt(edge.r as int, 255)
+    testing.AssertEqInt(edge.g as int, 255)
+    // radius 0 degenerates to a single pixel, not a crash.
+    image.DrawCircle(img, 1, 18, 0, image.RGB(100, 100, 100))
+    single := image.GetPixel(img, 1, 18)
+    testing.AssertEqInt(single.r as int, 100)
+
+    image.DrawCircleFilled(img, 15, 15, 2, image.RGB(0, 255, 255))
+    center := image.GetPixel(img, 15, 15)
+    testing.AssertEqInt(center.g as int, 255)
+    testing.AssertEqInt(center.b as int, 255)
+    image.DrawCircleFilled(img, 2, 18, 0, image.RGB(50, 60, 70))
+    single2 := image.GetPixel(img, 2, 18)
+    testing.AssertEqInt(single2.g as int, 60)
+
+    tw1 := image.TextWidth("HI", 1)
+    testing.AssertEqInt(tw1, 2 * (image.FontWidth + 1))
+    tw2 := image.TextWidth("HI", 2)
+    testing.AssertEqInt(tw2, tw1 * 2)
+
+    mut textimg := image.New(40, 10)
+    image.FillHex(textimg, "#000000")
+    image.DrawText(textimg, 0, 0, "A", image.RGB(255, 255, 255), 1)
+    mut any_lit := false
+    mut ty := 0
+    until ty < 7:
+        mut tx := 0
+        until tx < 5:
+            px := image.GetPixel(textimg, tx, ty)
+            if (px.r as int) == 255:
+                any_lit = true
+            end
+            tx += 1
+        end
+        ty += 1
+    end
+    testing.AssertTrue(any_lit)
+    // An unsupported character (lowercase) draws as blank, not garbage.
+    mut lowerimg := image.New(10, 10)
+    image.FillHex(lowerimg, "#000000")
+    image.DrawText(lowerimg, 0, 0, "a", image.RGB(255, 255, 255), 1)
+    mut any_lit2 := false
+    mut uy := 0
+    until uy < 7:
+        mut ux := 0
+        until ux < 5:
+            px2 := image.GetPixel(lowerimg, ux, uy)
+            if (px2.r as int) == 255:
+                any_lit2 = true
+            end
+            ux += 1
+        end
+        uy += 1
+    end
+    testing.AssertFalse(any_lit2)
+    image.Free(lowerimg)
+    image.Free(textimg)
+
+    image.Free(img)
+end
+
+// ------------------------------------------------------------- transform
+
+func check_transform:
+    mut img := image.New(10, 6)
+    image.FillHex(img, "#000000")
+    image.DrawRectFilled(img, 0, 0, 5, 3, image.RGB(255, 0, 0))
+    image.DrawRectFilled(img, 5, 3, 5, 3, image.RGB(0, 255, 0))
+
+    small := image.ResizeNearestNeighbor(img, 4, 3)
+    testing.AssertEqInt(small.width, 4)
+    testing.AssertEqInt(small.height, 3)
+    stl := image.GetPixel(small, 0, 0)
+    testing.AssertEqInt(stl.r as int, 255)
+    image.Free(small)
+
+    bl := image.ResizeBilinearFilter(img, 20, 12)
+    testing.AssertEqInt(bl.width, 20)
+    image.Free(bl)
+
+    via_nearest := image.Resize(img, 4, 3, image.ResizeNearest)
+    testing.AssertEqInt(via_nearest.width, 4)
+    image.Free(via_nearest)
+    via_bilinear := image.Resize(img, 20, 12, image.ResizeBilinear)
+    testing.AssertEqInt(via_bilinear.width, 20)
+    image.Free(via_bilinear)
+
+    scaled := image.Scale(img, 2.0)
+    testing.AssertEqInt(scaled.width, 20)
+    testing.AssertEqInt(scaled.height, 12)
+    image.Free(scaled)
+    half := image.Scale(img, 0.5)
+    testing.AssertEqInt(half.width, 5)
+    image.Free(half)
+
+    cropped := image.Crop(img, 5, 3, 5, 3)
+    cc := image.GetPixel(cropped, 0, 0)
+    testing.AssertEqInt(cc.g as int, 255)
+    image.Free(cropped)
+    // A crop rectangle overhanging the source pads with transparency
+    // instead of erroring.
+    overhang := image.Crop(img, 8, 4, 6, 6)
+    testing.AssertEqInt(overhang.width, 6)
+    oh := image.GetPixel(overhang, 5, 5)
+    testing.AssertEqInt(oh.a as int, 0)
+    image.Free(overhang)
+
+    rot_cw := image.RotateCW(img)
+    testing.AssertEqInt(rot_cw.width, img.height)
+    testing.AssertEqInt(rot_cw.height, img.width)
+    rc := image.GetPixel(rot_cw, rot_cw.width - 1, 0)
+    testing.AssertEqInt(rc.r as int, 255)
+    image.Free(rot_cw)
+
+    rot_ccw := image.RotateCCW(img)
+    testing.AssertEqInt(rot_ccw.width, img.height)
+    rcc := image.GetPixel(rot_ccw, 0, rot_ccw.height - 1)
+    testing.AssertEqInt(rcc.r as int, 255)
+    image.Free(rot_ccw)
+
+    rot180 := image.Rotate180(img)
+    testing.AssertEqInt(rot180.width, img.width)
+    r180 := image.GetPixel(rot180, rot180.width - 1, rot180.height - 1)
+    testing.AssertEqInt(r180.r as int, 255)
+    image.Free(rot180)
+
+    flh := image.FlipHorizontal(img)
+    fc := image.GetPixel(flh, flh.width - 1, 0)
+    testing.AssertEqInt(fc.r as int, 255)
+    image.Free(flh)
+
+    flv := image.FlipVertical(img)
+    fcv := image.GetPixel(flv, 0, flv.height - 1)
+    testing.AssertEqInt(fcv.r as int, 255)
+    image.Free(flv)
+
+    fit := image.ResizeFit(img, 8, 8)
+    testing.AssertEqInt(fit.width, 8)
+    testing.AssertEqInt(fit.height, 8)
+    image.Free(fit)
+
+    fill := image.ResizeFill(img, 8, 8)
+    testing.AssertEqInt(fill.width, 8)
+    testing.AssertEqInt(fill.height, 8)
+    image.Free(fill)
+
+    thumb := image.Thumbnail(img, 4)
+    testing.AssertTrue(thumb.width <= 4 && thumb.height <= 4)
+    image.Free(thumb)
+    // Thumbnail never upscales - an already-small image comes back
+    // unchanged (as a fresh Clone).
+    no_upscale := image.Thumbnail(img, 1000)
+    testing.AssertEqInt(no_upscale.width, img.width)
+    testing.AssertEqInt(no_upscale.height, img.height)
+    image.Free(no_upscale)
+
+    image.Free(img)
+end
+
+// --------------------------------------------------------------- filters
+
+func check_filters:
+    mut img := image.New(4, 4)
+    image.FillHex(img, "#c83232")
+
+    mut g := image.Clone(img)
+    image.Grayscale(g)
+    gc := image.GetPixel(g, 0, 0)
+    testing.AssertTrue(gc.r == gc.g && gc.g == gc.b)
+    image.Free(g)
+
+    mut inv := image.Clone(img)
+    image.Invert(inv)
+    ic := image.GetPixel(inv, 0, 0)
+    testing.AssertEqInt(ic.r as int, 255 - 200)
+    image.Free(inv)
+
+    mut br_up := image.Clone(img)
+    image.Brightness(br_up, 100)
+    bc := image.GetPixel(br_up, 0, 0)
+    testing.AssertEqInt(bc.r as int, 255)
+    image.Free(br_up)
+    mut br_down := image.Clone(img)
+    image.Brightness(br_down, -250)
+    bd := image.GetPixel(br_down, 0, 0)
+    testing.AssertEqInt(bd.r as int, 0)
+    image.Free(br_down)
+
+    mut ct_flat := image.Clone(img)
+    image.Contrast(ct_flat, 0.0)
+    ctf := image.GetPixel(ct_flat, 0, 0)
+    testing.AssertEqInt(ctf.r as int, 128)
+    testing.AssertEqInt(ctf.g as int, 128)
+    testing.AssertEqInt(ctf.b as int, 128)
+    image.Free(ct_flat)
+    mut ct_boost := image.Clone(img)
+    image.Contrast(ct_boost, 2.0)
+    ctb := image.GetPixel(ct_boost, 0, 0)
+    testing.AssertEqInt(ctb.r as int, 255)
+    image.Free(ct_boost)
+
+    mut th := image.Clone(img)
+    image.Threshold(th, 128)
+    tc := image.GetPixel(th, 0, 0)
+    testing.AssertTrue(tc.r == (0 as u8) || tc.r == (255 as u8))
+    testing.AssertTrue(tc.r == tc.g && tc.g == tc.b)
+    image.Free(th)
+
+    // radius <= 0 is a defined no-op copy, not an error.
+    unblurred := image.Blurred(img, 0)
+    ub := image.GetPixel(unblurred, 0, 0)
+    testing.AssertEqInt(ub.r as int, 200)
+    image.Free(unblurred)
+
+    mut edgeimg := image.New(6, 6)
+    image.FillHex(edgeimg, "#000000")
+    image.DrawRectFilled(edgeimg, 3, 0, 3, 6, image.RGB(255, 255, 255))
+    blurred := image.Blurred(edgeimg, 2)
+    boundary := image.GetPixel(blurred, 3, 3)
+    testing.AssertTrue((boundary.r as int) > 0 && (boundary.r as int) < 255)
+    image.Free(blurred)
+    image.Free(edgeimg)
+
+    sharp := image.Sharpened(img, 0.5)
+    testing.AssertEqInt(sharp.width, 4)
+    // A flat-color image is unchanged by sharpening (no local contrast to
+    // amplify away from the edges).
+    sc := image.GetPixel(sharp, 1, 1)
+    testing.AssertEqInt(sc.r as int, 200)
+    image.Free(sharp)
+
+    mut base := image.New(4, 4)
+    image.FillHex(base, "#101010")
+    mark := image.NewFilled(2, 2, image.RGBA(255, 255, 0, 255))
+    image.Overlay(base, mark, 1, 1, 1.0)
+    oc := image.GetPixel(base, 1, 1)
+    testing.AssertEqInt(oc.r as int, 255)
+    untouched := image.GetPixel(base, 0, 0)
+    testing.AssertEqInt(untouched.r as int, 16)
+    image.Free(base)
+
+    mut base2 := image.New(4, 4)
+    image.FillHex(base2, "#000000")
+    image.Overlay(base2, mark, 0, 0, 0.5)
+    partial := image.GetPixel(base2, 0, 0)
+    testing.AssertTrue((partial.r as int) > 0 && (partial.r as int) < 255)
+    image.Free(base2)
+    image.Free(mark)
+
+    image.Free(img)
+end
+
+// --------------------------------------------------------------- analyze
+
+func check_analyze:
+    mut a := image.New(4, 4)
+    image.FillHex(a, "#808080")
+    mut b := image.Clone(a)
+    image.SetPixel(b, 0, 0, image.RGB(255, 255, 255))
+
+    h := image.ComputeHistogram(a)
+    testing.AssertEqInt(image.HistogramGet(h.r, 128), 16)
+    testing.AssertEqInt(image.HistogramGet(h.g, 128), 16)
+    testing.AssertEqInt(image.HistogramGet(h.b, 128), 16)
+    testing.AssertEqInt(image.HistogramGet(h.luma, 128), 16)
+    testing.AssertEqInt(image.HistogramGet(h.r, 0), 0)
+    // Out-of-range buckets return 0 rather than reading out of bounds.
+    testing.AssertEqInt(image.HistogramGet(h.r, -1), 0)
+    testing.AssertEqInt(image.HistogramGet(h.r, 999), 0)
+    image.HistogramFree(h)
+
+    h2 := image.ComputeHistogram(b)
+    testing.AssertEqInt(image.HistogramGet(h2.r, 255), 1)
+    testing.AssertEqInt(image.HistogramGet(h2.r, 128), 15)
+    image.HistogramFree(h2)
+
+    d := image.Diff(a, b)
+    dc := image.GetPixel(d, 0, 0)
+    testing.AssertEqInt(dc.r as int, 127)
+    dc2 := image.GetPixel(d, 1, 1)
+    testing.AssertEqInt(dc2.r as int, 0)
+    image.Free(d)
+
+    testing.AssertEqFloat(image.PSNR(a, a), 100.0, 0.001)
+    testing.AssertTrue(image.PSNR(a, b) < 100.0)
+    testing.AssertTrue(image.PSNR(a, b) > 0.0)
+    testing.AssertEqFloat(image.MeanAbsError(a, a), 0.0, 0.001)
+    testing.AssertTrue(image.MeanAbsError(a, b) > 0.0)
+
+    image.Free(a)
+    image.Free(b)
+end
+
+// ------------------------------------------------------------------ BMP
+
+func check_bmp(tmpdir: str):
+    mut img := image.New(12, 10)
+    image.FillHex(img, "#ffffff")
+    image.DrawRectFilled(img, 0, 0, 6, 5, image.RGB(220, 20, 60))
+    image.DrawRectFilled(img, 6, 5, 6, 5, image.RGB(20, 120, 220))
+    image.SetPixel(img, 11, 9, image.RGBA(1, 2, 3, 40))
+
+    encoded := image.EncodeBMP(img)
+    testing.AssertTrue(encoded.len > 54)
+    mut dec_ok := false
+    decoded := image.DecodeBMP(encoded.data, encoded.len, dec_ok)
+    testing.AssertTrue(dec_ok)
+    testing.AssertEqFloat(image.MeanAbsError(img, decoded), 0.0, 0.001)
+    dp := image.GetPixel(decoded, 11, 9)
+    testing.AssertEqInt(dp.a as int, 40)
+    image.Free(decoded)
+    compress.BufFree(encoded)
+
+    bmp_path := filepath.Join(tmpdir, "t.bmp")
+    testing.AssertTrue(image.SaveBMP(img, bmp_path))
+    mut ok1 := false
+    bmp_loaded := image.OpenBMP(bmp_path, ok1)
+    testing.AssertTrue(ok1)
+    testing.AssertEqFloat(image.MeanAbsError(img, bmp_loaded), 0.0, 0.001)
+    image.Free(bmp_loaded)
+
+    // A hand-built 24-bit, top-down BMP (the shape a non-Salam encoder
+    // would commonly produce) exercises the decode paths EncodeBMP's own
+    // always-32-bit-bottom-up output never does.
+    mut hand := compress.NewByteBuf()
+    compress.BufPush(hand, 66)
+    compress.BufPush(hand, 77)
+    archive.LEPut32(hand, 70)
+    archive.LEPut32(hand, 0)
+    archive.LEPut32(hand, 54)
+    archive.LEPut32(hand, 40)
+    archive.LEPut32(hand, 2)
+    archive.LEPut32(hand, -2)
+    archive.LEPut16(hand, 1)
+    archive.LEPut16(hand, 24)
+    archive.LEPut32(hand, 0)
+    archive.LEPut32(hand, 16)
+    archive.LEPut32(hand, 2835)
+    archive.LEPut32(hand, 2835)
+    archive.LEPut32(hand, 0)
+    archive.LEPut32(hand, 0)
+    // top row (image y=0): blue, white
+    compress.BufPush(hand, 255)
+    compress.BufPush(hand, 0)
+    compress.BufPush(hand, 0)
+    compress.BufPush(hand, 255)
+    compress.BufPush(hand, 255)
+    compress.BufPush(hand, 255)
+    compress.BufPush(hand, 0)
+    compress.BufPush(hand, 0)
+    // bottom row (image y=1): red, green
+    compress.BufPush(hand, 0)
+    compress.BufPush(hand, 0)
+    compress.BufPush(hand, 255)
+    compress.BufPush(hand, 0)
+    compress.BufPush(hand, 255)
+    compress.BufPush(hand, 0)
+    compress.BufPush(hand, 0)
+    compress.BufPush(hand, 0)
+
+    mut hand_ok := false
+    hand_img := image.DecodeBMP(hand.data, hand.len, hand_ok)
+    testing.AssertTrue(hand_ok)
+    testing.AssertEqInt(hand_img.width, 2)
+    testing.AssertEqInt(hand_img.height, 2)
+    top_left := image.GetPixel(hand_img, 0, 0)
+    testing.AssertEqInt(top_left.b as int, 255)
+    top_right := image.GetPixel(hand_img, 1, 0)
+    testing.AssertEqInt(top_right.r as int, 255)
+    testing.AssertEqInt(top_right.g as int, 255)
+    bottom_left := image.GetPixel(hand_img, 0, 1)
+    testing.AssertEqInt(bottom_left.r as int, 255)
+    bottom_right := image.GetPixel(hand_img, 1, 1)
+    testing.AssertEqInt(bottom_right.g as int, 255)
+    image.Free(hand_img)
+    compress.BufFree(hand)
+
+    // Malformed input is reported, never misread.
+    mut bad_ok := false
+    bad_img := image.DecodeBMP("not a bmp" as void*, 9, bad_ok)
+    testing.AssertFalse(bad_ok)
+    testing.AssertTrue(image.IsEmpty(bad_img))
+
+    reencoded := image.EncodeBMP(img)
+    mut trunc_ok := false
+    truncated := image.DecodeBMP(reencoded.data, 20, trunc_ok)
+    testing.AssertFalse(trunc_ok)
+    testing.AssertTrue(image.IsEmpty(truncated))
+    compress.BufFree(reencoded)
+
+    image.Free(img)
+end
+
+// ------------------------------------------------------------------ PNG
+
+func check_png(tmpdir: str):
+    mut img := image.New(12, 10)
+    image.FillHex(img, "#ffffff")
+    image.DrawRectFilled(img, 0, 0, 6, 5, image.RGB(220, 20, 60))
+    image.DrawCircleFilled(img, 8, 6, 3, image.RGBA(0, 255, 0, 128))
+    image.SetPixel(img, 11, 9, image.RGBA(1, 2, 3, 40))
+
+    encoded := image.EncodePNG(img)
+    testing.AssertTrue(encoded.len > 40)
+    mut dec_ok := false
+    decoded := image.DecodePNG(encoded.data, encoded.len, dec_ok)
+    testing.AssertTrue(dec_ok)
+    testing.AssertEqFloat(image.MeanAbsError(img, decoded), 0.0, 0.001)
+    dp := image.GetPixel(decoded, 11, 9)
+    testing.AssertEqInt(dp.a as int, 40)
+    image.Free(decoded)
+
+    png_path := filepath.Join(tmpdir, "t.png")
+    testing.AssertTrue(image.SavePNG(img, png_path))
+    mut ok2 := false
+    png_loaded := image.OpenPNG(png_path, ok2)
+    testing.AssertTrue(ok2)
+    testing.AssertEqFloat(image.MeanAbsError(img, png_loaded), 0.0, 0.001)
+    image.Free(png_loaded)
+
+    // Bad signature, truncated stream, and a corrupted chunk CRC must
+    // all be reported as failure, never a silently-wrong image.
+    mut bad_ok := false
+    bad_img := image.DecodePNG("not a png!" as void*, 10, bad_ok)
+    testing.AssertFalse(bad_ok)
+    testing.AssertTrue(image.IsEmpty(bad_img))
+
+    mut trunc_ok := false
+    truncated := image.DecodePNG(encoded.data, 20, trunc_ok)
+    testing.AssertFalse(trunc_ok)
+    testing.AssertTrue(image.IsEmpty(truncated))
+
+    corrupt := compress.BufClone(encoded)
+    cp := corrupt.data as u8*
+    // Flip a byte well inside the IDAT payload (past the 8-byte
+    // signature + IHDR chunk) so the chunk's CRC no longer matches.
+    flip_at := corrupt.len - 15
+    cp[flip_at] = ((cp[flip_at] as int) ^ 0xFF) as u8
+    mut corrupt_ok := false
+    corrupt_img := image.DecodePNG(corrupt.data, corrupt.len, corrupt_ok)
+    testing.AssertFalse(corrupt_ok)
+    testing.AssertTrue(image.IsEmpty(corrupt_img))
+    compress.BufFree(corrupt)
+
+    compress.BufFree(encoded)
+    image.Free(img)
+end
+
+// ------------------------------------------------------------------ JPEG
+
+func check_jpeg(tmpdir: str):
+    mut img := image.New(32, 24)
+    image.FillHex(img, "#ffffff")
+    image.DrawRectFilled(img, 0, 0, 16, 12, image.RGB(220, 20, 60))
+    image.DrawRectFilled(img, 16, 12, 16, 12, image.RGB(20, 120, 220))
+    image.DrawCircleFilled(img, 16, 12, 6, image.RGB(30, 200, 30))
+
+    mut q := 10
+    until q <= 95:
+        encoded := image.EncodeJPEG(img, q)
+        testing.AssertTrue(encoded.len > 100)
+        mut dec_ok := false
+        decoded := image.DecodeJPEG(encoded.data, encoded.len, dec_ok)
+        testing.AssertTrue(dec_ok)
+        testing.AssertEqInt(decoded.width, img.width)
+        testing.AssertEqInt(decoded.height, img.height)
+        testing.AssertTrue(image.PSNR(img, decoded) > 18.0)
+        image.Free(decoded)
+        compress.BufFree(encoded)
+        q += 40
+    end
+
+    // Higher quality should mean lower distortion (higher PSNR).
+    low_q := image.EncodeJPEG(img, 10)
+    high_q := image.EncodeJPEG(img, 95)
+    mut low_ok := false
+    mut high_ok := false
+    low_dec := image.DecodeJPEG(low_q.data, low_q.len, low_ok)
+    high_dec := image.DecodeJPEG(high_q.data, high_q.len, high_ok)
+    testing.AssertTrue(image.PSNR(img, high_dec) > image.PSNR(img, low_dec))
+    testing.AssertTrue(compress.BufLen(high_q) > compress.BufLen(low_q))
+    image.Free(low_dec)
+    image.Free(high_dec)
+    compress.BufFree(low_q)
+    compress.BufFree(high_q)
+
+    jpg_path := filepath.Join(tmpdir, "t.jpg")
+    testing.AssertTrue(image.SaveJPEG(img, jpg_path, 85))
+    mut ok3 := false
+    jpg_loaded := image.OpenJPEG(jpg_path, ok3)
+    testing.AssertTrue(ok3)
+    testing.AssertEqInt(jpg_loaded.width, img.width)
+    testing.AssertTrue(image.PSNR(img, jpg_loaded) > 25.0)
+    image.Free(jpg_loaded)
+
+    mut bad_ok := false
+    bad_img := image.DecodeJPEG("nope" as void*, 4, bad_ok)
+    testing.AssertFalse(bad_ok)
+    testing.AssertTrue(image.IsEmpty(bad_img))
+
+    reencoded := image.EncodeJPEG(img, 80)
+    corrupt := compress.BufClone(reencoded)
+    cbp := corrupt.data as u8*
+    cbp[0] = 0 as u8
+    mut corrupt_ok := false
+    corrupt_img := image.DecodeJPEG(corrupt.data, corrupt.len, corrupt_ok)
+    testing.AssertFalse(corrupt_ok)
+    testing.AssertTrue(image.IsEmpty(corrupt_img))
+    compress.BufFree(corrupt)
+    compress.BufFree(reencoded)
+
+    image.Free(img)
+end
+
+// ----------------------------------------------------------------- WebP
+
+func check_webp:
+    mut riff := compress.NewByteBuf()
+    compress.BufPush(riff, 82)
+    compress.BufPush(riff, 73)
+    compress.BufPush(riff, 70)
+    compress.BufPush(riff, 70)
+    compress.BufPush(riff, 0)
+    compress.BufPush(riff, 0)
+    compress.BufPush(riff, 0)
+    compress.BufPush(riff, 0)
+    compress.BufPush(riff, 87)
+    compress.BufPush(riff, 69)
+    compress.BufPush(riff, 66)
+    compress.BufPush(riff, 80)
+    testing.AssertTrue(image.IsWebP(riff.data, riff.len))
+    compress.BufFree(riff)
+
+    testing.AssertFalse(image.IsWebP("not webp!!!!" as void*, 12))
+    testing.AssertFalse(image.IsWebP("short" as void*, 5))
+
+    mut img := image.New(4, 4)
+    image.FillHex(img, "#ff00ff")
+    empty := image.EncodeWebP(img)
+    testing.AssertEqInt(empty.len, 0)
+    compress.BufFree(empty)
+
+    testing.AssertFalse(image.SaveWebP(img, "should_not_exist.webp"))
+
+    mut dec_ok := false
+    dec_img := image.DecodeWebP("whatever" as void*, 8, dec_ok)
+    testing.AssertFalse(dec_ok)
+    testing.AssertTrue(image.IsEmpty(dec_img))
+
+    mut open_ok := false
+    open_img := image.OpenWebP("definitely_missing.webp", open_ok)
+    testing.AssertFalse(open_ok)
+    testing.AssertTrue(image.IsEmpty(open_img))
+
+    image.Free(img)
+end
+
+// -------------------------------------------------------------- dispatch
+
+func check_dispatch(tmpdir: str):
+    testing.AssertEqInt(image.FormatFromExt("photo.png"), image.FormatPNG)
+    testing.AssertEqInt(image.FormatFromExt("photo.PNG"), image.FormatPNG)
+    testing.AssertEqInt(image.FormatFromExt("photo.bmp"), image.FormatBMP)
+    testing.AssertEqInt(image.FormatFromExt("photo.jpg"), image.FormatJPEG)
+    testing.AssertEqInt(image.FormatFromExt("photo.jpeg"), image.FormatJPEG)
+    testing.AssertEqInt(image.FormatFromExt("photo.webp"), image.FormatWebP)
+    testing.AssertEqInt(image.FormatFromExt("photo.xyz"), image.FormatUnknown)
+    testing.AssertEqInt(image.FormatFromExt("noextension"), image.FormatUnknown)
+
+    mut img := image.New(8, 8)
+    image.FillHex(img, "#4488cc")
+    image.SetPixel(img, 0, 0, image.RGBA(10, 20, 30, 77))
+
+    png_buf := image.EncodePNG(img)
+    testing.AssertEqInt(image.DetectFormat(png_buf.data, png_buf.len), image.FormatPNG)
+    compress.BufFree(png_buf)
+    bmp_buf := image.EncodeBMP(img)
+    testing.AssertEqInt(image.DetectFormat(bmp_buf.data, bmp_buf.len), image.FormatBMP)
+    compress.BufFree(bmp_buf)
+    jpg_buf := image.EncodeJPEG(img, 80)
+    testing.AssertEqInt(image.DetectFormat(jpg_buf.data, jpg_buf.len), image.FormatJPEG)
+    compress.BufFree(jpg_buf)
+    testing.AssertEqInt(image.DetectFormat("garbage!!!!" as void*, 11), image.FormatUnknown)
+    testing.AssertEqInt(image.DetectFormat("tiny" as void*, 4), image.FormatUnknown)
+
+    encoded_via_dispatch := image.Encode(img, image.FormatPNG, 0)
+    testing.AssertEqInt(image.DetectFormat(encoded_via_dispatch.data, encoded_via_dispatch.len), image.FormatPNG)
+    mut decode_ok := false
+    decoded_via_dispatch := image.Decode(encoded_via_dispatch.data, encoded_via_dispatch.len, decode_ok)
+    testing.AssertTrue(decode_ok)
+    testing.AssertEqFloat(image.MeanAbsError(img, decoded_via_dispatch), 0.0, 0.001)
+    image.Free(decoded_via_dispatch)
+    compress.BufFree(encoded_via_dispatch)
+
+    // Convert flattens alpha onto white for JPEG (no alpha channel of its
+    // own) and leaves alpha-capable formats untouched.
+    for_jpeg := image.Convert(img, image.FormatJPEG)
+    fj := image.GetPixel(for_jpeg, 0, 0)
+    testing.AssertEqInt(fj.a as int, 255)
+    image.Free(for_jpeg)
+    for_png := image.Convert(img, image.FormatPNG)
+    fp := image.GetPixel(for_png, 0, 0)
+    testing.AssertEqInt(fp.a as int, 77)
+    image.Free(for_png)
+
+    flattened := image.FlattenAlpha(img, image.RGB(255, 255, 255))
+    fa := image.GetPixel(flattened, 0, 0)
+    testing.AssertEqInt(fa.a as int, 255)
+    image.Free(flattened)
+
+    dispatch_path := filepath.Join(tmpdir, "auto.png")
+    testing.AssertTrue(image.Save(img, dispatch_path))
+    mut ok4 := false
+    auto_loaded := image.Open(dispatch_path, ok4)
+    testing.AssertTrue(ok4)
+    testing.AssertEqFloat(image.MeanAbsError(img, auto_loaded), 0.0, 0.001)
+    image.Free(auto_loaded)
+
+    jpg_dispatch_path := filepath.Join(tmpdir, "auto.jpg")
+    testing.AssertTrue(image.SaveQuality(img, jpg_dispatch_path, 70))
+    mut ok5 := false
+    jpg_dispatch_loaded := image.Open(jpg_dispatch_path, ok5)
+    testing.AssertTrue(ok5)
+    testing.AssertEqInt(jpg_dispatch_loaded.width, img.width)
+    image.Free(jpg_dispatch_loaded)
+
+    // WebP is a documented, honest stub (see webp.salam) - Save must
+    // report failure, never write a bogus/empty file.
+    webp_path := filepath.Join(tmpdir, "t.webp")
+    testing.AssertFalse(image.Save(img, webp_path))
+    unknown_path := filepath.Join(tmpdir, "t.xyz")
+    testing.AssertFalse(image.Save(img, unknown_path))
+
+    mut missing_ok := false
+    missing := image.Open(filepath.Join(tmpdir, "does_not_exist.png"), missing_ok)
+    testing.AssertFalse(missing_ok)
+    testing.AssertTrue(image.IsEmpty(missing))
+
+    image.Free(img)
+end
+
+func main:
+    println "core"
+    check_core()
+    println "color"
+    check_color()
+    println "draw"
+    check_draw()
+    println "transform"
+    check_transform()
+    println "filters"
+    check_filters()
+    println "analyze"
+    check_analyze()
+
+    tmpdir := filepath.Join(os.TempDir(), "salam_image_test")
+    os.MkdirAll(tmpdir)
+
+    println "bmp"
+    check_bmp(tmpdir)
+    println "png"
+    check_png(tmpdir)
+    println "jpeg"
+    check_jpeg(tmpdir)
+    println "webp"
+    check_webp()
+    println "dispatch"
+    check_dispatch(tmpdir)
+
+    os.RemoveAll(tmpdir)
+    println "done"
+
+    os.Exit(testing.Summary())
+end

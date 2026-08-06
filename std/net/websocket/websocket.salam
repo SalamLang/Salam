@@ -1,0 +1,899 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/websocket"
+@fa "وب‌سوکت شبکه"
+@ar "WebSocket للشبکة"
+package websocket
+
+import net.internal.rawsock
+import mem
+import str
+import rand
+import encoding
+import crypto
+import tls
+
+// Migrated from std/socket (renamed - it implemented WebSocket, not a raw
+// socket, which the old name made every caller's `import socket` read
+// backwards). RFC 6455 client + server, ws:// and wss://, plus (new in
+// this migration) server-side wss:// via std/tls.WrapServer and a Hub
+// for broadcast/rooms.
+//
+// wss:// SERVER support (AcceptWSS) has the same caveat net/http's
+// RunTLS documents: it is wired exactly per std/tls/conn.salam's
+// documented WrapServer signature, but an end-to-end local check during
+// this migration found WrapServer hanging mid-handshake against this
+// codebase's own tls.Dial client, with zero existing test coverage for
+// WrapServer anywhere in the repo to compare against. Treat AcceptWSS
+// as unverified until std/tls's server-side handshake has its own
+// passing test. ws:// (plain) Accept/Dial and wss:// client (DialWSS)
+// are unaffected - both existed in std/socket before this migration and
+// are unchanged here.
+
+const WS_GUID := "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+@en "NONE"
+@fa "هیچ"
+@ar "لا شیء"
+pub const NONE := 0
+
+@en "TEXT"
+@fa "متن"
+@ar "نص"
+pub const TEXT := 1
+
+@en "BINARY"
+@fa "دودویی"
+@ar "ثنائی"
+pub const BINARY := 2
+
+@en "CLOSE"
+@fa "بسته"
+@ar "مغلق"
+pub const CLOSE := 8
+
+@en "PING"
+@fa "پینگ"
+@ar "بینغ"
+pub const PING := 9
+
+@en "PONG"
+@fa "پونگ"
+@ar "بونغ"
+pub const PONG := 10
+
+// Slot table for wss:// connections' underlying std/tls state. Conn cannot
+// embed a tls.Conn field directly - a struct field whose default value
+// references another package's type hits a codegen bug (confirmed via an
+// isolated repro: the generated C either references the foreign struct's
+// bare unqualified name, producing "'Foo' undeclared", or in one variant
+// segfaults the compiler outright). A plain int index into this table, with
+// explicit get/mutate/set around every tls.Read/Write/Close call, avoids the
+// bug entirely and was verified to correctly preserve TLS record state
+// (sequence numbers, buffered plaintext) across calls.
+mut _tls_slots := Vector {} as Vector<tls.Conn>
+
+// tls.ServerConfig is not `pub` in std/tls (see net/http/server.salam's
+// RunTLS for the same constraint), so it cannot be named as a parameter
+// type here either - AcceptWSS reads this global instead of taking a
+// config argument, loaded once via LoadWSSConfig before the accept loop
+// starts, same "set once, read from every connection" pattern RunTLS
+// uses for its own TLS config.
+mut _wss_cfg := tls.NewServerConfig("", "")
+
+@en "Server"
+@fa "سرور"
+@ar "خادم"
+pub struct Server:
+    pub fd: i64 = 0 - 1
+    pub port: int = 0
+end
+
+@en "Conn"
+@fa "اتصال وب"
+@ar "اتصال"
+pub struct Conn:
+    pub fd: i64 = 0 - 1
+    pub open: bool = false
+    pub client: bool = false
+    pub buf: void* = null
+    pub blen: int = 0
+    pub bcap: int = 0
+    // wss:// - set by DialWSS (client) or AcceptWSS (server). tls_idx
+    // indexes _tls_slots when secure is true.
+    pub secure: bool = false
+    pub tls_idx: int = 0 - 1
+end
+
+@en "Message"
+@fa "پیام"
+@ar "رسالة"
+pub struct Message:
+    pub kind: int = 0
+    pub text: str = ""
+end
+
+// Broadcast/rooms registry. `HashMap<str, RoomMembers>` rather than
+// `HashMap<str, Vector<Conn>>` directly - a generic argument that is
+// itself a generic is a known-broken pattern in this compiler regardless
+// of cross-package concerns (see std/encoding/query/query.salam), so the
+// inner Vector is wrapped in a one-field named struct first.
+@en "RoomMembers"
+@fa "اعضای اتاق"
+@ar "أعضاء الغرفة"
+pub struct RoomMembers:
+    pub items: Vector<Conn> = Vector {}
+end
+
+@en "Hub"
+@fa "هاب"
+@ar "محور"
+pub struct Hub:
+    pub rooms: HashMap<str, RoomMembers> = HashMap {} as HashMap<str, RoomMembers>
+end
+
+// See the comment above _tls_slots (near the consts) for why wss:// state
+// lives in this table instead of a Conn field.
+func _tls_store(tc: tls.Conn): int:
+    _tls_slots.push(tc)
+    ret _tls_slots.len() - 1
+end
+
+func _tls_get(idx: int): tls.Conn:
+    ret _tls_slots.get(idx)[0]
+end
+
+func _tls_put(idx: int, tc: tls.Conn):
+    _tls_slots.set(idx, tc)
+end
+
+func _pow2(n: int): i64:
+    mut r := 1 as i64
+    repeat n with i:
+        r *= 2
+    end
+    ret r
+end
+
+func _xor8(a0: int, b0: int): int:
+    mut a := a0
+    mut b := b0
+    mut r := 0
+    mut p := 1
+    repeat 8 with i:
+        if a % 2 != b % 2:
+            r += p
+        end
+        a /= 2
+        b /= 2
+        p *= 2
+    end
+    ret r
+end
+
+func _bget(p: void*, i: int): int:
+    bp := p as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+func _bput(p: void*, i: int, v: int):
+    bp := p as i8*
+    bp[i] = v as i8
+end
+
+func _byte_at(s: str, i: int): int:
+    mut v := char_code(s.substr(i, 1))
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+func _new_conn(fd: i64, client: bool): Conn:
+    ret Conn { fd = fd, open = false, client = client, buf = mem.Allocate(4096 as u64), blen = 0, bcap = 4096 }
+end
+
+func _ensure(c &: Conn, need: int):
+    if need <= c.bcap:
+        ret
+    end
+    mut ncap := c.bcap * 2
+    if ncap < need:
+        ncap = need
+    end
+    nb := mem.Reallocate(c.buf, ncap as u64)
+    if nb != null:
+        c.buf = nb
+        c.bcap = ncap
+    end
+end
+
+func _fill(c &: Conn): int:
+    if c.bcap - c.blen < 1024:
+        _ensure(c, c.bcap + 4096)
+    end
+    space := c.bcap - c.blen
+    if space <= 0:
+        ret 0 - 1
+    end
+    dst := ((c.buf as i64) + (c.blen as i64)) as void*
+    mut n := 0
+    if c.secure:
+        mut tc := _tls_get(c.tls_idx)
+        n = tls.ReadBytes(tc, dst, space)
+        _tls_put(c.tls_idx, tc)
+    else:
+        n = rawsock.RecvBytes(rawsock.FromFd(c.fd), dst, space)
+    end
+    if n > 0:
+        c.blen += n
+    end
+    ret n
+end
+
+func _consume(c &: Conn, n: int):
+    if n <= 0:
+        ret
+    end
+    if n >= c.blen:
+        c.blen = 0
+        ret
+    end
+    src := ((c.buf as i64) + (n as i64)) as void*
+    mem.MemMove(c.buf, src, (c.blen - n) as u64)
+    c.blen -= n
+end
+
+func _shutdown(c &: Conn):
+    if c.secure:
+        mut tc := _tls_get(c.tls_idx)
+        tls.Close(tc)
+        _tls_put(c.tls_idx, tc)
+    else:
+        if c.fd >= 0:
+            rawsock.Close(rawsock.FromFd(c.fd))
+        end
+    end
+    c.open = false
+    c.fd = 0 - 1
+    if c.buf != null:
+        mem.Free(c.buf)
+        c.buf = null
+        c.blen = 0
+        c.bcap = 0
+    end
+end
+
+func _payload_str(c &: Conn, off: int, plen: int, masked: bool, moff: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat plen with i:
+        mut b := _bget(c.buf, off + i)
+        if masked:
+            mk := _bget(c.buf, moff + (i % 4))
+            b = _xor8(b, mk)
+        end
+        str.BufAppendChar(sb, b)
+    end
+    result := str.BufStr(sb)
+    ret result
+end
+
+func _find_hdr_end(c &: Conn): int:
+    mut i := 0
+    until i + 3 < c.blen:
+        if _bget(c.buf, i) == 13 && _bget(c.buf, i + 1) == 10 && _bget(c.buf, i + 2) == 13 && _bget(c.buf, i + 3) == 10:
+            ret i
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _read_headers(c &: Conn): str:
+    mut hdr := ""
+    mut going := true
+    until going:
+        e := _find_hdr_end(c)
+        if e >= 0:
+            hdr = _payload_str(c, 0, e + 4, false, 0)
+            _consume(c, e + 4)
+            going = false
+        else:
+            if c.blen > 65536:
+                going = false
+            else:
+                n := _fill(c)
+                if n <= 0:
+                    going = false
+                end
+            end
+        end
+    end
+    ret hdr
+end
+
+func _frame_size(c &: Conn): int:
+    if c.blen < 2:
+        ret 0
+    end
+    b1 := _bget(c.buf, 1)
+    masked := b1 / 128
+    mut plen := (b1 % 128) as i64
+    mut hlen := 2
+    if plen == 126:
+        if c.blen < 4:
+            ret 0
+        end
+        plen = (_bget(c.buf, 2) * 256 + _bget(c.buf, 3)) as i64
+        hlen = 4
+    else plen == 127:
+        if c.blen < 10:
+            ret 0
+        end
+        mut v := 0 as i64
+        repeat 8 with k:
+            v = v * 256 + (_bget(c.buf, 2 + k) as i64)
+        end
+        if v > 104857600:
+            ret 0 - 1
+        end
+        plen = v
+        hlen = 10
+    end
+    if masked == 1:
+        hlen += 4
+    end
+    need := (hlen as i64) + plen
+    if (c.blen as i64) < need:
+        ret 0
+    end
+    ret need as int
+end
+
+func _send_frame(c &: Conn, opcode: int, payload: str): int:
+    if !c.open && opcode != 8:
+        ret 0 - 1
+    end
+    // A secure Conn has fd == -1 on purpose (it routes through _tls_slots by
+    // tls_idx instead), so this guard only applies to the plain path.
+    if !c.secure && c.fd < 0:
+        ret 0 - 1
+    end
+    plen := payload.len()
+    mut hlen := 2
+    if plen >= 126 && plen < 65536:
+        hlen = 4
+    end
+    if plen >= 65536:
+        hlen = 10
+    end
+    mut mlen := 0
+    if c.client:
+        mlen = 4
+    end
+    total := hlen + mlen + plen
+    buf := mem.Allocate(total as u64)
+    defer mem.Free(buf)
+    _bput(buf, 0, 128 + opcode)
+    mut maskbit := 0
+    if c.client:
+        maskbit = 128
+    end
+    if plen < 126:
+        _bput(buf, 1, maskbit + plen)
+    else plen < 65536:
+        _bput(buf, 1, maskbit + 126)
+        _bput(buf, 2, plen / 256)
+        _bput(buf, 3, plen % 256)
+    else:
+        _bput(buf, 1, maskbit + 127)
+        p64 := plen as i64
+        repeat 8 with k:
+            _bput(buf, 2 + k, ((p64 / _pow2(8 * (7 - k))) % 256) as int)
+        end
+    end
+    if c.client:
+        m0 := rand.Int32Range(0, 255)
+        m1 := rand.Int32Range(0, 255)
+        m2 := rand.Int32Range(0, 255)
+        m3 := rand.Int32Range(0, 255)
+        _bput(buf, hlen, m0)
+        _bput(buf, hlen + 1, m1)
+        _bput(buf, hlen + 2, m2)
+        _bput(buf, hlen + 3, m3)
+        repeat plen with i:
+            mi := i % 4
+            mut mk := m0
+            if mi == 1: mk = m1 end
+            if mi == 2: mk = m2 end
+            if mi == 3: mk = m3 end
+            _bput(buf, hlen + 4 + i, _xor8(_byte_at(payload, i), mk))
+        end
+    else:
+        repeat plen with i:
+            _bput(buf, hlen + i, _byte_at(payload, i))
+        end
+    end
+    mut sent := 0
+    if c.secure:
+        mut tc := _tls_get(c.tls_idx)
+        sent = tls.WriteBytes(tc, buf, total)
+        _tls_put(c.tls_idx, tc)
+    else:
+        sent = rawsock.SendBytes(rawsock.FromFd(c.fd), buf, total)
+    end
+    if sent != total:
+        c.open = false
+        ret 0 - 1
+    end
+    ret 0
+end
+
+func _header_value(headers: str, name_lower: str): str:
+    lower := str.Lower(headers)
+    idx := str.Find(lower, name_lower)
+    if idx < 0:
+        ret ""
+    end
+    ci := str.IndexFrom(headers, ":", idx)
+    if ci < 0:
+        ret ""
+    end
+    mut e := str.IndexFrom(headers, "\r", ci)
+    if e < 0:
+        e = headers.len()
+    end
+    ret str.Trim(headers.substr(ci + 1, e - ci - 1))
+end
+
+@en "AcceptKey"
+@fa "کلید پذیرش"
+@ar "مفتاح قبول"
+pub func AcceptKey(key: str): str:
+    ret crypto.Sha1Base64(key + WS_GUID)
+end
+
+@en "HandshakeResponse"
+@fa "پاسخ دست دادن"
+@ar "استجابة مصافحة"
+pub func HandshakeResponse(request: str): str:
+    key := _header_value(request, "sec-websocket-key")
+    if key == "":
+        ret ""
+    end
+    ret "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + AcceptKey(key) + "\r\n\r\n"
+end
+
+@en "HandshakeRequest"
+@fa "درخواست دست دادن"
+@ar "طلب مصافحة"
+pub func HandshakeRequest(host: str, path: str, key: str): str:
+    ret "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n\r\n"
+end
+
+@en "Listen"
+@fa "شنود"
+@ar "استماع"
+pub func Listen(port: int): Server:
+    ret Server { fd = rawsock.Listen(port).fd, port = port }
+end
+
+@en "Ok"
+@fa "معتبر"
+@ar "صالح"
+pub func Ok(srv: Server): bool:
+    ret srv.fd >= 0
+end
+
+@en "CloseServer"
+@fa "بستن سرور"
+@ar "إغلاق الخادم"
+pub func CloseServer(srv: Server):
+    if srv.fd >= 0:
+        rawsock.Close(rawsock.FromFd(srv.fd))
+    end
+end
+
+@en "Accept"
+@fa "پذیرش"
+@ar "قبول"
+pub func Accept(srv: Server): Conn:
+    t := rawsock.Accept(rawsock.FromFd(srv.fd))
+    mut c := _new_conn(t.fd, false)
+    if t.fd < 0:
+        ret c
+    end
+    hdr := _read_headers(c)
+    resp := HandshakeResponse(hdr)
+    if resp == "":
+        _shutdown(c)
+        ret c
+    end
+    n := rawsock.Send(rawsock.FromFd(c.fd), resp)
+    if n <= 0:
+        _shutdown(c)
+        ret c
+    end
+    c.open = true
+    ret c
+end
+
+// Loads the certificate/key AcceptWSS will use for every subsequent
+// call - call this once before the accept loop starts, not per
+// connection.
+@en "LoadWSSConfig"
+@fa "بارگذاری پیکربندی امن"
+@ar "تحمیل إعداد TLS"
+pub func LoadWSSConfig(cert_file: str, key_file: str):
+    _wss_cfg = tls.NewServerConfig(cert_file, key_file)
+end
+
+// wss:// server-side upgrade: runs the TLS 1.3 handshake on an already-
+// accepted fd (via std/tls.WrapServer, same as net/http's RunTLS) before
+// reading the WebSocket handshake request over it. See this file's
+// header comment for the caveat on WrapServer's verification status.
+@en "AcceptWSS"
+@fa "پذیرش امن"
+@ar "قبول آمن"
+pub func AcceptWSS(srv: Server): Conn:
+    t := rawsock.Accept(rawsock.FromFd(srv.fd))
+    mut c := _new_conn(0 - 1, false)
+    if t.fd < 0:
+        ret c
+    end
+    tc := tls.WrapServer(t.fd, _wss_cfg)
+    c.secure = true
+    c.tls_idx = _tls_store(tc)
+    if !tls.ConnOk(tc):
+        c.open = false
+        ret c
+    end
+    hdr := _read_headers(c)
+    resp := HandshakeResponse(hdr)
+    if resp == "":
+        _shutdown(c)
+        ret c
+    end
+    mut tc2 := _tls_get(c.tls_idx)
+    n := tls.Write(tc2, resp)
+    _tls_put(c.tls_idx, tc2)
+    if n <= 0:
+        _shutdown(c)
+        ret c
+    end
+    c.open = true
+    ret c
+end
+
+@en "Dial"
+@fa "شماره گیری"
+@ar "اتصال هاتفی"
+pub func Dial(host: str, port: int, path: str): Conn:
+    s := rawsock.Connect(host, port)
+    mut c := _new_conn(s.fd, true)
+    if s.fd < 0:
+        ret c
+    end
+    key := encoding.Base64Encode(rand.Alnum(16))
+    req := HandshakeRequest(host, path, key)
+    n := rawsock.Send(s, req)
+    if n <= 0:
+        _shutdown(c)
+        ret c
+    end
+    hdr := _read_headers(c)
+    if !str.Contains(hdr, " 101 "):
+        _shutdown(c)
+        ret c
+    end
+    if !str.Contains(hdr, AcceptKey(key)):
+        _shutdown(c)
+        ret c
+    end
+    c.open = true
+    ret c
+end
+
+// wss:// - dials over a std/tls connection instead of a plain socket.
+@en "DialWSS"
+@fa "شماره گیری امن"
+@ar "اتصال هاتفی آمن"
+pub func DialWSS(host: str, port: int, path: str): Conn:
+    cfg := tls.NewConfig(host)
+    mut tc := tls.Dial(host, port, cfg)
+    mut c := _new_conn(0 - 1, true)
+    c.secure = true
+    c.tls_idx = _tls_store(tc)
+    if !tls.ConnOk(tc):
+        c.open = false
+        ret c
+    end
+    key := encoding.Base64Encode(rand.Alnum(16))
+    req := HandshakeRequest(host, path, key)
+    n := tls.Write(tc, req)
+    _tls_put(c.tls_idx, tc)
+    if n <= 0:
+        _shutdown(c)
+        ret c
+    end
+    hdr := _read_headers(c)
+    if !str.Contains(hdr, " 101 "):
+        _shutdown(c)
+        ret c
+    end
+    if !str.Contains(hdr, AcceptKey(key)):
+        _shutdown(c)
+        ret c
+    end
+    c.open = true
+    ret c
+end
+
+@en "IsOpen"
+@fa "باز است"
+@ar "مفتوح"
+pub func IsOpen(c &: Conn): bool:
+    ret c.open
+end
+
+@en "Receive"
+@fa "دریافت پیام"
+@ar "استقبال رسالة"
+pub func Receive(c &: Conn): Message:
+    mut msg := Message { kind = 0, text = "" }
+    if !c.open:
+        ret msg
+    end
+    mut acc := ""
+    mut acc_kind := 1
+    mut going := true
+    until going:
+        fsize := _frame_size(c)
+        if fsize < 0:
+            Close(c)
+            going = false
+        else fsize == 0:
+            n := _fill(c)
+            if n <= 0:
+                _shutdown(c)
+                going = false
+            end
+        else:
+            b0 := _bget(c.buf, 0)
+            b1 := _bget(c.buf, 1)
+            fin := b0 / 128
+            opcode := b0 % 16
+            masked := (b1 / 128) == 1
+            mut plen := b1 % 128
+            mut hlen := 2
+            if plen == 126:
+                plen = _bget(c.buf, 2) * 256 + _bget(c.buf, 3)
+                hlen = 4
+            else plen == 127:
+                mut v := 0 as i64
+                repeat 8 with k:
+                    v = v * 256 + (_bget(c.buf, 2 + k) as i64)
+                end
+                plen = v as int
+                hlen = 10
+            end
+            mut moff := 0
+            if masked:
+                moff = hlen
+                hlen += 4
+            end
+            payload := _payload_str(c, hlen, plen, masked, moff)
+            _consume(c, fsize)
+            if opcode == 9:
+                _send_frame(c, 10, payload)
+            else opcode == 10:
+                msg = Message { kind = 10, text = payload }
+                going = false
+            else opcode == 8:
+                _send_frame(c, 8, "")
+                _shutdown(c)
+                msg = Message { kind = 8, text = "" }
+                going = false
+            else:
+                if opcode == 1 || opcode == 2:
+                    acc_kind = opcode
+                end
+                acc += payload
+                if fin == 1:
+                    msg = Message { kind = acc_kind, text = acc }
+                    going = false
+                end
+            end
+        end
+    end
+    ret msg
+end
+
+@en "ReceiveText"
+@fa "دریافت متن"
+@ar "استقبال نص"
+pub func ReceiveText(c &: Conn): str:
+    m := Receive(c)
+    if m.kind == 1:
+        ret m.text
+    end
+    ret ""
+end
+
+@en "IsText"
+@fa "متن است"
+@ar "هو نص"
+pub func IsText(m: Message): bool:
+    ret m.kind == 1
+end
+
+@en "IsBinary"
+@fa "دودویی است"
+@ar "هو ثنائی"
+pub func IsBinary(m: Message): bool:
+    ret m.kind == 2
+end
+
+@en "IsClose"
+@fa "بسته است"
+@ar "هو إغلاق"
+pub func IsClose(m: Message): bool:
+    ret m.kind == 8
+end
+
+@en "IsPong"
+@fa "پونگ است"
+@ar "هو بونغ"
+pub func IsPong(m: Message): bool:
+    ret m.kind == 10
+end
+
+@en "SendText"
+@fa "ارسال متن"
+@ar "إرسال نص"
+pub func SendText(c &: Conn, msg: str): int:
+    ret _send_frame(c, 1, msg)
+end
+
+@en "SendBinary"
+@fa "ارسال دودویی"
+@ar "إرسال ثنائی"
+pub func SendBinary(c &: Conn, data: str): int:
+    ret _send_frame(c, 2, data)
+end
+
+@en "Ping"
+@fa "پینگ فرست"
+@ar "إرسال بینغ"
+pub func Ping(c &: Conn, data: str): int:
+    ret _send_frame(c, 9, data)
+end
+
+@en "Close"
+@fa "بستن"
+@ar "إغلاق"
+pub func Close(c &: Conn):
+    if c.open:
+        _send_frame(c, 8, "")
+    end
+    _shutdown(c)
+end
+
+// ------------------------------------------------------------------ Hub
+
+@en "NewHub"
+@fa "هاب جدید"
+@ar "محور جدید"
+pub func NewHub(): Hub:
+    ret Hub {}
+end
+
+@en "Register"
+@fa "ثبت"
+@ar "تسجیل"
+pub func Register(h &: Hub, room: str, c: Conn):
+    mut members := RoomMembers {}
+    if h.rooms.has(room): members = h.rooms.get(room) end
+    members.items.push(c)
+    h.rooms.put(room, members)
+end
+
+// Removes every connection in `room` with a matching fd (plain) or
+// tls_idx (secure) - Conn has no identity field of its own to key on,
+// so the transport handle is the closest thing to one.
+@en "Unregister"
+@fa "لغو ثبت"
+@ar "إلغاء التسجیل"
+pub func Unregister(h &: Hub, room: str, c: Conn):
+    if !h.rooms.has(room): ret end
+    mut members := h.rooms.get(room)
+    mut kept := RoomMembers {}
+    n := members.items.len()
+    mut i := 0
+    until i < n:
+        m := members.items.get(i)[0]
+        mut same := false
+        if c.secure:
+            same = m.secure && m.tls_idx == c.tls_idx
+        else:
+            same = !m.secure && m.fd == c.fd
+        end
+        if !same:
+            kept.items.push(m)
+        end
+        i += 1
+    end
+    h.rooms.put(room, kept)
+end
+
+@en "RoomSize"
+@fa "اندازه اتاق"
+@ar "حجم الغرفة"
+pub func RoomSize(h: Hub, room: str): int:
+    if !h.rooms.has(room): ret 0 end
+    ret h.rooms.get(room).items.len()
+end
+
+// Sends `msg` to every open connection in `room`, dropping ones that
+// fail to send (their .open flips false in _send_frame). Returns how
+// many connections received it.
+@en "Broadcast"
+@fa "پخش"
+@ar "بث"
+pub func Broadcast(h &: Hub, room: str, msg: str): int:
+    if !h.rooms.has(room): ret 0 end
+    mut members := h.rooms.get(room)
+    mut sent := 0
+    n := members.items.len()
+    mut i := 0
+    until i < n:
+        mut m := members.items.get(i)[0]
+        if m.open:
+            rc := _send_frame(m, 1, msg)
+            if rc == 0: sent += 1 end
+            members.items.set(i, m)
+        end
+        i += 1
+    end
+    h.rooms.put(room, members)
+    ret sent
+end
+
+@en "BroadcastBinary"
+@fa "پخش دودویی"
+@ar "بث ثنائی"
+pub func BroadcastBinary(h &: Hub, room: str, data: str): int:
+    if !h.rooms.has(room): ret 0 end
+    mut members := h.rooms.get(room)
+    mut sent := 0
+    n := members.items.len()
+    mut i := 0
+    until i < n:
+        mut m := members.items.get(i)[0]
+        if m.open:
+            rc := _send_frame(m, 2, data)
+            if rc == 0: sent += 1 end
+            members.items.set(i, m)
+        end
+        i += 1
+    end
+    h.rooms.put(room, members)
+    ret sent
+end

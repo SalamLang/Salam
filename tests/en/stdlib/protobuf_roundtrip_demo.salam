@@ -1,0 +1,156 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// This is the ACTUAL output of protobuf.GenerateSingle() on:
+//
+//   syntax = "proto3";
+//   message Person {
+//     string name = 1;
+//     int32 age = 2;
+//     repeated string emails = 3;
+//   }
+//
+// captured verbatim (only the `package generated_pb` line and its own
+// `import encoding.protobuf`/`import compress` were merged into this file's
+// own package/imports below, since this is a single-file test rather than a
+// separate imported fixture package) - proving the wire codec and the
+// generated-code shape actually work together end to end, the same way
+// compress_demo.salam proves compress's algorithms round-trip.
+
+package main
+
+import encoding.protobuf
+import compress
+import testing
+import os
+
+pub struct Person:
+    pub name: str = ""
+    pub age: i64 = 0 as i64
+    pub emails: Vector<str> = Vector {}
+end
+
+pub func MarshalPerson(m: Person): compress.ByteBuf:
+    mut buf := compress.NewByteBuf()
+    if m.name.len() > 0:
+        protobuf.WriteTag(buf, 1, protobuf.WT_LEN)
+        protobuf.WriteLenPrefixedStr(buf, m.name)
+    end
+    if m.age != (0 as i64):
+        protobuf.WriteTag(buf, 2, protobuf.WT_VARINT)
+        protobuf.WriteVarint(buf, m.age as u64)
+    end
+    mut ri3 := 0
+    until ri3 < m.emails.len():
+        protobuf.WriteTag(buf, 3, protobuf.WT_LEN)
+        protobuf.WriteLenPrefixedStr(buf, m.emails.get(ri3)[0])
+        ri3 += 1
+    end
+    ret buf
+end
+
+pub func UnmarshalPerson(data: void*, n: int, ok &: bool): Person:
+    mut out := Person {}
+    mut r := compress.NewByteReader(data, n)
+    ok = true
+    until compress.RdLeft(r) > 0:
+        mut fnum := 0
+        mut wtype := 0
+        mut tagOk := false
+        protobuf.ReadTag(r, fnum, wtype, tagOk)
+        if !tagOk:
+            ok = false
+            ret out
+        end
+        if fnum == 1:
+            mut fok := false
+            v := protobuf.ReadLenPrefixedStr(r, fok)
+            if !fok:
+                ok = false
+                ret out
+            end
+            out.name = v
+        else fnum == 2:
+            mut fok := false
+            v := protobuf.ReadVarint(r, fok) as i64
+            if !fok:
+                ok = false
+                ret out
+            end
+            out.age = v
+        else fnum == 3:
+            mut fok := false
+            v := protobuf.ReadLenPrefixedStr(r, fok)
+            if !fok:
+                ok = false
+                ret out
+            end
+            out.emails.push(v)
+        else:
+            mut skipOk := false
+            protobuf.SkipField(r, wtype, skipOk)
+            if !skipOk:
+                ok = false
+                ret out
+            end
+        end
+    end
+    ret out
+end
+
+func main:
+    mut p := Person {}
+    p.name = "Ada"
+    p.age = 36 as i64
+    p.emails.push("ada@example.com")
+    p.emails.push("ada2@example.com")
+
+    buf := MarshalPerson(p)
+    mut ok := false
+    p2 := UnmarshalPerson(buf.data, buf.len, ok)
+
+    testing.AssertTrue(ok)
+    testing.AssertEqStr(p2.name, "Ada")
+    testing.AssertEqInt64(p2.age, 36 as i64)
+    testing.AssertEqInt(p2.emails.len(), 2)
+    testing.AssertEqStr(p2.emails.get(0)[0], "ada@example.com")
+    testing.AssertEqStr(p2.emails.get(1)[0], "ada2@example.com")
+
+    // zero-valued optional fields (proto3 no-presence: omitted on the wire)
+    empty := Person {}
+    emptyBuf := MarshalPerson(empty)
+    testing.AssertEqInt(compress.BufLen(emptyBuf), 0)
+    mut ok2 := false
+    roundEmpty := UnmarshalPerson(emptyBuf.data, emptyBuf.len, ok2)
+    testing.AssertTrue(ok2)
+    testing.AssertEqStr(roundEmpty.name, "")
+    testing.AssertEqInt64(roundEmpty.age, 0 as i64)
+
+    // unknown field (a bogus field number) is skipped, not a hard failure
+    mut extra := compress.NewByteBuf()
+    protobuf.WriteTag(extra, 99, protobuf.WT_VARINT)
+    protobuf.WriteVarint(extra, 12345 as u64)
+    protobuf.WriteTag(extra, 1, protobuf.WT_LEN)
+    protobuf.WriteLenPrefixedStr(extra, "Grace")
+    mut ok3 := false
+    p3 := UnmarshalPerson(extra.data, extra.len, ok3)
+    testing.AssertTrue(ok3)
+    testing.AssertEqStr(p3.name, "Grace")
+
+    compress.BufFree(buf)
+    compress.BufFree(emptyBuf)
+    compress.BufFree(extra)
+
+    os.Exit(testing.Summary())
+end

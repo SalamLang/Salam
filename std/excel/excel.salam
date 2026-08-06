@@ -1,0 +1,160 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "excel"
+@fa "اکسل"
+@ar "إكسل"
+package excel
+
+import archive
+import compress
+import conv
+import encoding.csv
+import filepath
+import encoding.json
+import os
+import str
+import time
+
+// excel - spreadsheet creation and reading, with a single Workbook/Sheet/
+// Cell data model shared by every file format so callers write against one
+// API regardless of what they're producing or opening.
+//
+// Files:
+//   cell.salam         - Cell/CellPos, cell-kind constants, A1 reference
+//                        conversion (ColumnLabel/ParseCellRef/CellRef),
+//                        Excel's 1900 serial-date encoding
+//   style.salam        - Style (font/alignment/number format) and the
+//                        deduplicated StyleSheet every Workbook owns
+//   sheet.salam        - Sheet: cell/row/column/table read+write, search,
+//                        row filtering, merged cells
+//   workbook.salam     - Workbook: ordered sheets + shared style table
+//   xmlutil.salam      - the minimal hand-rolled XML scanner xlsx/ods build
+//                        on (there is no XML parser anywhere else in std/)
+//   xlsx_writer.salam,
+//   xlsx_reader.salam  - .xlsx (OOXML SpreadsheetML): a ZIP of XML parts,
+//                        built on std/archive's ZipCreate/ZipList/
+//                        ZipExtractByName and std/compress's ByteBuf
+//   ods_writer.salam,
+//   ods_reader.salam   - .ods (OpenDocument Spreadsheet): also a ZIP of
+//                        XML parts, same underlying tools
+//   xls.salam          - legacy .xls (binary BIFF/OLE2, pre-2007): read is
+//                        intentionally out of scope (see that file's own
+//                        header comment for why); IsXLS/ReadXLS give a
+//                        clear "unsupported, convert to .xlsx" result
+//                        instead of guessing at a binary format this
+//                        package cannot verify against a real parser
+//   csv_bridge.salam   - Sheet <-> CSV (via std/encoding/csv)
+//   json_bridge.salam  - Sheet <-> JSON (via std/encoding/json)
+//   meta.salam         - Inspect: sheet names/dimensions/file size without
+//                        loading cell data into a Workbook
+//
+// Format is selected by file extension (case-insensitive): .xlsx, .xls,
+// .ods, .csv. Open/Save report failure through an `ok`/`err` pair (this
+// package's error convention throughout - see each function's own comment)
+// rather than exceptions, matching the rest of std/.
+
+@en "FormatUnknown"
+@fa "قالب نامشخص"
+@ar "تنسیق غیر معروف"
+pub const FormatUnknown := 0
+
+@en "FormatXLSX"
+@fa "قالب ایکس‌ال‌اس‌ایکس"
+@ar "تنسیق إكس إل إس إكس"
+pub const FormatXLSX := 1
+
+@en "FormatXLS"
+@fa "قالب ایکس‌ال‌اس"
+@ar "تنسیق إكس إل إس"
+pub const FormatXLS := 2
+
+@en "FormatODS"
+@fa "قالب اُدی‌اس"
+@ar "تنسیق أو دي إس"
+pub const FormatODS := 3
+
+@en "FormatCSV"
+@fa "قالب سی‌اس‌وی"
+@ar "تنسیق سی إس فی"
+pub const FormatCSV := 4
+
+// Detects a workbook format from a file's extension (case-insensitive).
+// Returns FormatUnknown for anything else.
+@en "DetectFormat"
+@fa "تشخیص قالب"
+@ar "كشف التنسیق"
+pub func DetectFormat(path: str): int:
+    ext := filepath.Ext(path).lower()
+    if ext == ".xlsx": ret FormatXLSX end
+    if ext == ".xls": ret FormatXLS end
+    if ext == ".ods": ret FormatODS end
+    if ext == ".csv": ret FormatCSV end
+    ret FormatUnknown
+end
+
+// Creates a new, empty in-memory workbook (equivalent to NewWorkbook).
+@en "New"
+@fa "جدید"
+@ar "جدید"
+pub func New(): Workbook:
+    ret NewWorkbook()
+end
+
+// Opens `path`, detecting its format from the file extension. `ok` is
+// false (and `err` set to a human-readable message) on any failure:
+// unreadable file, unrecognized extension, or a format-specific parse
+// failure. A CSV file is loaded as a single sheet named "Sheet1".
+@en "Open"
+@fa "بازکردن"
+@ar "فتح"
+pub func Open(path: str, ok &: bool, err &: str): Workbook:
+    fmt := DetectFormat(path)
+    if fmt == FormatXLSX:
+        ret ReadXLSX(path, ok, err)
+    end
+    if fmt == FormatODS:
+        ret ReadODS(path, ok, err)
+    end
+    if fmt == FormatXLS:
+        ret ReadXLS(path, ok, err)
+    end
+    if fmt == FormatCSV:
+        ret ReadCSVWorkbook(path, ok, err)
+    end
+    ok = false
+    err = "unsupported file extension: ".concat(filepath.Ext(path))
+    ret NewWorkbook()
+end
+
+// Saves `book` to `path`, detecting the target format from the file
+// extension. Returns false for an unrecognized extension, a workbook with
+// no sheets, or a write failure. A CSV target saves only the active sheet
+// (CSV has no concept of multiple sheets).
+@en "Save"
+@fa "ذخیره"
+@ar "حفظ"
+pub func Save(book &: Workbook, path: str): bool:
+    fmt := DetectFormat(path)
+    if fmt == FormatXLSX:
+        ret WriteXLSX(book, path)
+    end
+    if fmt == FormatODS:
+        ret WriteODS(book, path)
+    end
+    if fmt == FormatCSV:
+        ret WriteCSVWorkbook(book, path)
+    end
+    ret false
+end

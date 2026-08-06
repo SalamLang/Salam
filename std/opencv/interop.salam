@@ -1,0 +1,82 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package opencv
+
+import mem
+import image
+
+// Bridges this package's Mat (OpenCV-backed) to std/image's Image (a
+// from-scratch, pure-Salam RGBA8 buffer with its own PNG/JPEG/BMP/WebP
+// codecs). Two independent ways to get pixels onto disk now exist - pick
+// whichever fits:
+//   - Mat.save()/Read() go through OpenCV's own codecs (fast, broad format
+//     support, but requires the native shim + OpenCV to be linked).
+//   - image.Open()/image.Save() are pure Salam (no native dependency at
+//     all) - convert with FromImage()/ToImage() to run OpenCV algorithms
+//     (blur, Canny, ORB, cascades, ...) on pixels you loaded that way, or
+//     to save an OpenCV result through image's codecs instead.
+// Alpha is not part of OpenCV's Mat model: FromImage drops it, ToImage
+// fills it back in as fully opaque (255).
+
+// Converts a std/image Image (RGBA8) into a 3-channel RGB Mat, dropping
+// alpha. An empty/zero-sized Image converts to an empty Mat.
+@en "FromImage"
+@fa "از تصویر"
+@ar "من صورة"
+pub func FromImage(img: image.Image): Mat:
+    if img.pixels == null || img.width <= 0 || img.height <= 0:
+        ret Mat { handle = null }
+    end
+    n := img.width * img.height
+    buf := mem.Allocate((n * 3) as u64)
+    defer mem.Free(buf)
+    src := img.pixels as u8*
+    dst := buf as u8*
+    mut i := 0
+    until i < n:
+        so := i * 4
+        do := i * 3
+        dst[do] = src[so]
+        dst[do + 1] = src[so + 1]
+        dst[do + 2] = src[so + 2]
+        i += 1
+    end
+    ret Mat { handle = scv_from_buffer(buf, img.width, img.height, 3) }
+end
+
+// Converts a Mat back into a std/image Image (RGBA8, alpha forced to 255).
+// Goes through Mat.at() pixel-by-pixel for correctness regardless of the
+// source Mat's channel count/order - for hot paths on large images, work
+// against `.data()`/`.step()` directly instead.
+@en "ToImage"
+@fa "به تصویر"
+@ar "إلى صورة"
+pub func ToImage(m: Mat): image.Image:
+    if m.handle == null: ret image.New(0, 0) end
+    w := m.width()
+    h := m.height()
+    mut out := image.New(w, h)
+    mut y := 0
+    until y < h:
+        mut x := 0
+        until x < w:
+            c := m.at(x, y)
+            image.SetPixel(out, x, y, image.RGBA(c.r, c.g, c.b, 255))
+            x += 1
+        end
+        y += 1
+    end
+    ret out
+end

@@ -1,0 +1,253 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+// Pixel-level filters: grayscale, invert, threshold, brightness/contrast,
+// and two small convolution filters (box blur, sharpen). Every filter
+// works in place on the Image passed in (mirroring Fill's shape) unless
+// its name says otherwise (Blurred/Sharpened return a new Image, since a
+// convolution needs to read neighboring pixels that must not have already
+// been overwritten).
+
+func _clamp255(v: int): int:
+    if v < 0: ret 0 end
+    if v > 255: ret 255 end
+    ret v
+end
+
+func _copy_pixels(dst &: Image, src: Image):
+    if dst.pixels == null || src.pixels == null: ret end
+    n := (src.width * src.height * 4) as u64
+    mut i := 0 as u64
+    dp := dst.pixels as u8*
+    sp := src.pixels as u8*
+    until i < n:
+        dp[i as int] = sp[i as int]
+        i += 1 as u64
+    end
+end
+
+@en "Grayscale"
+@fa "خاکستری کردن"
+@ar "تدرج الرمادي"
+pub func Grayscale(img &: Image):
+    if img.pixels == null: ret end
+    bp := img.pixels as u8*
+    mut i := 0
+    n := img.width * img.height
+    until i < n:
+        off := i * 4
+        r := bp[off] as int
+        g := bp[off + 1] as int
+        b := bp[off + 2] as int
+        l := (r * 299 + g * 587 + b * 114) / 1000
+        lv := l as u8
+        bp[off] = lv
+        bp[off + 1] = lv
+        bp[off + 2] = lv
+        i += 1
+    end
+end
+
+@en "Invert"
+@fa "معکوس کردن"
+@ar "عكس الألوان"
+pub func Invert(img &: Image):
+    if img.pixels == null: ret end
+    bp := img.pixels as u8*
+    mut i := 0
+    n := img.width * img.height
+    until i < n:
+        off := i * 4
+        bp[off] = (255 - (bp[off] as int)) as u8
+        bp[off + 1] = (255 - (bp[off + 1] as int)) as u8
+        bp[off + 2] = (255 - (bp[off + 2] as int)) as u8
+        i += 1
+    end
+end
+
+// Pushes each channel toward 0 or 255 by `delta` (-255..255). Alpha is
+// left untouched.
+@en "Brightness"
+@fa "روشنایی"
+@ar "السطوع"
+pub func Brightness(img &: Image, delta: int):
+    if img.pixels == null: ret end
+    bp := img.pixels as u8*
+    mut i := 0
+    n := img.width * img.height
+    until i < n:
+        off := i * 4
+        bp[off] = _clamp255((bp[off] as int) + delta) as u8
+        bp[off + 1] = _clamp255((bp[off + 1] as int) + delta) as u8
+        bp[off + 2] = _clamp255((bp[off + 2] as int) + delta) as u8
+        i += 1
+    end
+end
+
+// `factor` of 1.0 leaves the image unchanged; 0.0 flattens it to mid-gray;
+// > 1.0 increases contrast. The classic "(c-128)*factor+128" formula.
+@en "Contrast"
+@fa "کنتراست"
+@ar "التباين"
+pub func Contrast(img &: Image, factor: f64):
+    if img.pixels == null: ret end
+    bp := img.pixels as u8*
+    mut i := 0
+    n := img.width * img.height
+    until i < n:
+        off := i * 4
+        r := (((bp[off] as f64) - 128.0) * factor + 128.0) as int
+        g := (((bp[off + 1] as f64) - 128.0) * factor + 128.0) as int
+        b := (((bp[off + 2] as f64) - 128.0) * factor + 128.0) as int
+        bp[off] = _clamp255(r) as u8
+        bp[off + 1] = _clamp255(g) as u8
+        bp[off + 2] = _clamp255(b) as u8
+        i += 1
+    end
+end
+
+// Converts to pure black/white by luminance threshold (0-255) - useful
+// before 1-bit-style output or as a stylization effect.
+@en "Threshold"
+@fa "آستانه"
+@ar "العتبة"
+pub func Threshold(img &: Image, level: int):
+    if img.pixels == null: ret end
+    bp := img.pixels as u8*
+    mut i := 0
+    n := img.width * img.height
+    until i < n:
+        off := i * 4
+        r := bp[off] as int
+        g := bp[off + 1] as int
+        b := bp[off + 2] as int
+        l := (r * 299 + g * 587 + b * 114) / 1000
+        mut v := 0 as u8
+        if l >= level: v = 255 as u8 end
+        bp[off] = v
+        bp[off + 1] = v
+        bp[off + 2] = v
+        i += 1
+    end
+end
+
+// A `radius`-sized box blur (averages a (2*radius+1)^2 neighborhood around
+// every pixel; edges clamp to the nearest in-bounds pixel). O(width *
+// height * radius^2) - fine for the thumbnail/watermark-sized images this
+// package targets, not meant for huge photos at a large radius.
+@en "Blurred"
+@fa "تار شده"
+@ar "مموه"
+pub func Blurred(img: Image, radius: int): Image:
+    out := New(img.width, img.height)
+    if IsEmpty(img) || radius <= 0:
+        if !IsEmpty(img): _copy_pixels(out, img) end
+        ret out
+    end
+    mut y := 0
+    until y < img.height:
+        mut x := 0
+        until x < img.width:
+            mut sr := 0
+            mut sg := 0
+            mut sb := 0
+            mut sa := 0
+            mut count := 0
+            mut dy := -radius
+            until dy <= radius:
+                sy := _clampi(y + dy, 0, img.height - 1)
+                mut dx := -radius
+                until dx <= radius:
+                    sx := _clampi(x + dx, 0, img.width - 1)
+                    c := GetPixel(img, sx, sy)
+                    sr += c.r as int
+                    sg += c.g as int
+                    sb += c.b as int
+                    sa += c.a as int
+                    count += 1
+                    dx += 1
+                end
+                dy += 1
+            end
+            SetPixel(out, x, y, RGBA(sr / count, sg / count, sb / count, sa / count))
+            x += 1
+        end
+        y += 1
+    end
+    ret out
+end
+
+// A 3x3 unsharp-mask-style sharpen kernel:
+//     0 -1  0
+//    -1  5 -1
+//     0 -1  0
+// `amount` scales the effect (1.0 = the kernel above; 0.0 = no change).
+@en "Sharpened"
+@fa "تیزتر شده"
+@ar "أكثر حدة"
+pub func Sharpened(img: Image, amount: f64): Image:
+    out := New(img.width, img.height)
+    if IsEmpty(img):
+        ret out
+    end
+    mut y := 0
+    until y < img.height:
+        mut x := 0
+        until x < img.width:
+            center := GetPixel(img, x, y)
+            up := GetPixel(img, x, _clampi(y - 1, 0, img.height - 1))
+            down := GetPixel(img, x, _clampi(y + 1, 0, img.height - 1))
+            left := GetPixel(img, _clampi(x - 1, 0, img.width - 1), y)
+            right := GetPixel(img, _clampi(x + 1, 0, img.width - 1), y)
+
+            cr := (center.r as f64) * (1.0 + 4.0 * amount) - amount * ((up.r as f64) + (down.r as f64) + (left.r as f64) + (right.r as f64))
+            cg := (center.g as f64) * (1.0 + 4.0 * amount) - amount * ((up.g as f64) + (down.g as f64) + (left.g as f64) + (right.g as f64))
+            cb := (center.b as f64) * (1.0 + 4.0 * amount) - amount * ((up.b as f64) + (down.b as f64) + (left.b as f64) + (right.b as f64))
+
+            SetPixel(out, x, y, RGBA(cr as int, cg as int, cb as int, center.a as int))
+            x += 1
+        end
+        y += 1
+    end
+    ret out
+end
+
+// Draws `overlay` on top of `base` at (x, y), src-over alpha-blended and
+// additionally scaled by `opacity` (0.0-1.0) - the general-purpose "stamp
+// one image onto another" primitive that image watermarking (a logo) and
+// DrawText-based text watermarks (see font.salam) both build on.
+@en "Overlay"
+@fa "روپوش"
+@ar "تراكب"
+pub func Overlay(base &: Image, mark: Image, x: int, y: int, opacity: f64):
+    if IsEmpty(mark): ret end
+    mut op := opacity
+    if op < 0.0: op = 0.0 end
+    if op > 1.0: op = 1.0 end
+    mut yy := 0
+    until yy < mark.height:
+        mut xx := 0
+        until xx < mark.width:
+            c := GetPixel(mark, xx, yy)
+            a := ((c.a as f64) * op) as int
+            if a > 0:
+                BlendPixel(base, x + xx, y + yy, RGBA(c.r as int, c.g as int, c.b as int, a))
+            end
+            xx += 1
+        end
+        yy += 1
+    end
+end

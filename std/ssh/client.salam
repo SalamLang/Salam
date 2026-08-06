@@ -1,0 +1,180 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import net.internal.rawsock
+import str
+import encoding
+
+// The top-level client: Dial connects, verifies the host key against
+// known_hosts, authenticates, and hands back a Client ready for
+// NewSession/Exec/sftp.*. Reconnect repeats the same sequence with the
+// Config a Client remembers from Dial, for recovering from a dropped
+// connection without re-entering credentials.
+
+pub struct Client:
+    pub transport: Transport = Transport {}
+    pub cfg: Config = Config {}
+    pub connected: bool = false
+    pub errmsg: str = ""
+end
+
+func _client_fail(msg: str): Client:
+    mut c := Client {}
+    c.connected = false
+    c.errmsg = msg
+    ret c
+end
+
+func _knownhosts_path_for(cfg: Config): str:
+    if cfg.known_hosts_path.len() > 0:
+        ret cfg.known_hosts_path
+    end
+    ret _knownhosts_default_path()
+end
+
+func _check_host_key(cfg: Config, hk: HostKey): bool:
+    if cfg.hostkey_mode == HOSTKEY_MODE_INSECURE:
+        ret true
+    end
+    path := _knownhosts_path_for(cfg)
+    key_b64 := encoding.Base64EncodeBytes(hk.blob.p, hk.blob.len)
+    result := _knownhosts_check(path, cfg.host, cfg.port, HOSTKEY_SSH_RSA, key_b64)
+    if result == KH_UNKNOWN && cfg.hostkey_mode == HOSTKEY_MODE_ACCEPT_NEW:
+        _appended_ok := _knownhosts_append(path, cfg.host, cfg.port, HOSTKEY_SSH_RSA, key_b64)
+    end
+    ret _knownhosts_decide(cfg.hostkey_mode, result)
+end
+
+func _authenticate(t &: Transport, cfg: Config): bool:
+    if !_auth_request_service(t):
+        ret false
+    end
+    if cfg.use_key:
+        id := _load_identity_pem(cfg.key_pem)
+        if !id.ok:
+            ret false
+        end
+        ok := _auth_publickey(t, cfg.user, id)
+        _identity_free(id)
+        ret ok
+    end
+    if cfg.use_password:
+        ret _auth_password(t, cfg.user, cfg.password)
+    end
+    ret false
+end
+
+@en "Dial"
+@fa "شماره گیری"
+@ar "اتصال"
+pub func Dial(cfg: Config): Client:
+    sock := rawsock.Connect(cfg.host, cfg.port)
+    if !rawsock.Ok(sock):
+        ret _client_fail("could not connect to " + cfg.host)
+    end
+    mut t := _transport_handshake(sock)
+    if !t.ok:
+        rawsock.Close(sock)
+        ret _client_fail("handshake failed: " + t.errmsg)
+    end
+    if !_check_host_key(cfg, t.hostkey):
+        _packet_state_free(t.ps)
+        rawsock.Close(sock)
+        ret _client_fail("host key verification failed for " + cfg.host)
+    end
+    if !_authenticate(t, cfg):
+        _packet_state_free(t.ps)
+        rawsock.Close(sock)
+        ret _client_fail("authentication failed for user " + cfg.user)
+    end
+    mut c := Client {}
+    c.transport = t
+    c.cfg = cfg
+    c.connected = true
+    ret c
+end
+
+@en "Connect"
+@fa "اتصال"
+@ar "اتصال"
+pub func Connect(cfg: Config): Client:
+    ret Dial(cfg)
+end
+
+@en "Ok"
+@fa "معتبر"
+@ar "صالح"
+pub func Ok(client: Client): bool:
+    ret client.connected
+end
+
+@en "Error"
+@fa "خطا"
+@ar "خطأ"
+pub func Error(client: Client): str:
+    ret client.errmsg
+end
+
+@en "HostKeyFingerprint"
+@fa "اثر انگشت کلید میزبان"
+@ar "بصمة مفتاح المضيف"
+pub func HostKeyFingerprint(client: Client): str:
+    ret _hostkey_fingerprint(client.transport.hostkey)
+end
+
+@en "Close"
+@fa "بستن"
+@ar "إغلاق"
+pub func Close(client &: Client):
+    if !client.connected:
+        ret
+    end
+    sock := client.transport.ps.sock
+    _packet_state_free(client.transport.ps)
+    rawsock.Close(sock)
+    client.connected = false
+end
+
+// Closes (if still open) and re-establishes the connection with the same
+// Config Dial was originally called with - the same host-key and
+// credential handling, so a host-key change between attempts is still
+// caught, not silently trusted just because it once succeeded.
+@en "Reconnect"
+@fa "اتصال مجدد"
+@ar "إعادة الاتصال"
+pub func Reconnect(client &: Client): bool:
+    cfg := client.cfg
+    if client.connected:
+        Close(client)
+    end
+    fresh := Dial(cfg)
+    client.transport = fresh.transport
+    client.cfg = fresh.cfg
+    client.connected = fresh.connected
+    client.errmsg = fresh.errmsg
+    ret client.connected
+end
+
+// Opens a session, execs `cmd`, waits for completion, and returns its
+// output and exit code - the one-call convenience wrapper around
+// session.salam's Exec for scripts that just want "run this and tell me
+// what happened".
+@en "RunCommand"
+@fa "اجرای دستور"
+@ar "تشغيل الأمر"
+pub func RunCommand(client &: Client, cmd: str): ExecResult:
+    ret Exec(client, cmd)
+end

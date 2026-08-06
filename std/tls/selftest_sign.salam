@@ -1,0 +1,147 @@
+package tls
+
+// Known-answer and round-trip checks for the SIGNING half of RSA/ECDSA:
+// rsa_sign.salam and ecdsa_sign.salam, the counterpart to the verify-only
+// checks in selftest_pki.salam.
+//
+// A signing implementation cannot be checked against fixed known-answer
+// vectors the way verification can (RSA-PSS and ECDSA both randomize the
+// signature itself - salt, nonce - so the SAME message signs to a different
+// signature every time, even with the same key). What is checked instead:
+//
+// sign-then-verify with THIS package's own (already-tested) verifier, for
+// fixed test keys generated once with OpenSSL and embedded as raw DER below
+// (`openssl genrsa -traditional 1024` for RSA - 1024 bits only because a
+// self-test that runs on every build should not pay 2048-bit modexp cost;
+// `openssl ecparam -genkey` for P-256/P-384). Real cross-tool interop
+// (OpenSSL signs, this verifies; this signs, OpenSSL verifies) lives outside
+// the self-test suite, in the manual interop check.
+
+const T_SIGN_RSA1024_DER := "3082025e02010002818100ba02a397bdefbb957f2c9018368b44218be103026028619ae04f749232e3887d3c5f1b4ce26ca2807bd79025d7b842a259fbbd79639183311750f58ed122d79ebb74ea43e0c2ccdeac0fa771c608bf2587c252c7d9256bd776516b0616b447c5d077ca963432e6766836a89cb986f60859ee81707b8ba86d71d61eb2e2808a150203010001028181009c2114f18c32ca500c63fa3ae8a572b579b48f9311e533300d7183d62732c6e0dfa8b0c093193e38fc3a0ebb44db5bcaec1e9a866665c029977993f3a1654e77750184c0ae3ed874e34101a683ae11e764c16bf17a819dd3f3477b944cedb6fb4ebd70ce031898a7987239ac238ccf8bcf96ad93b575d7d239601c7951225941024100ee397b00486908248678253cc473925627dfa401324ea9d7b7fc913090576b0c1199d0c25da5fb8644bcbb7009902a50d7b2d5bd091c8eaaf7158f746ca99e51024100c7e3c5bd5ee5b1f6ddb953ff4938688fff0a854030167d651a36b7e3f09e2c802933dbe33955603fee90472d52eaa15d5027f60eacca34d95b4950fbd1e82a85024100b550c89eb17e47b54d27bae7e27a38621cdd29fdc3257e3df30a6813777921bfc0d1bac384f5a5584f8efa76cec08c849577c718a70bb646c7e30019d3eed1d1024100c65b06bc96d104badee7abace6f1ed0107ab5ef38544ac0689eec6a890fbc5592089efa81a1ad8ba58781fc9a04069047a284d89de7981dc37341802ec17a129024045644d18c6f5a107d24bf93d0b1d00215c5438cf5493b3e11b026ed80bf40e1940bcbe44702b6a07109c399e1b84cd4182ac9547c6d88f7c14b115dba6a4c360"
+const T_SIGN_MSG := "sign-then-verify self-test message"
+const T_SIGN_EC256_DER := "307702010104208e08ea08657d334d68fc931d0cad4a469674dd8f6cf64982905f4e30fd925013a00a06082a8648ce3d030107a144034200043c365401224fe40b62618aefe3ee51eb41e378ea0a2d58061eb92a90cdf362a554a8121573e6af33143b9f5617bfea7a4cbac3aa740976f2d8dd5adfd8772f33"
+const T_SIGN_EC384_DER := "3081a402010104308127369cbbcda8fd7adb50d6d1bcbc69764c3a9cc83b947ad614b350fca5bd2accd388b3b98e29c8656c46e308ddb834a00706052b81040022a16403620004f9bc1eb50e7c441ebc4234dd2b8bf4fab7f092a1df43a67553bcda0bcdbb5b7b96fef0830a3774e017919b93edd7118c9d11f40bd925d67036763c782b12c314d7342a44a441d4db99b82edc678be1dd7ceeb9e063855eea8a43fd641d8fec61"
+
+func _selftest_rsa_sign_one(kind: int, name: str):
+    mut der := _hexbuf(T_SIGN_RSA1024_DER)
+    defer _buf_free(der)
+    mut k := PrivateKey {}
+    ok := _parse_rsa_pkcs1_body(_newreader(der.p, der.len), k)
+    _ck(ok, name + ": key parses")
+    if !ok:
+        ret
+    end
+
+    hlen := _hash_size(kind)
+    mut digest := _newbuf(hlen)
+    defer _buf_free(digest)
+    _putzeros(digest, hlen)
+    _hash_oneshot(kind, T_SIGN_MSG as void*, T_SIGN_MSG.len(), digest.p)
+
+    klen := k.rsa_n.len
+    mut sig1 := _newbuf(klen)
+    defer _buf_free(sig1)
+    _putzeros(sig1, klen)
+    ok1 := _rsa_sign_pkcs1(kind, digest.p, k.rsa_n, k.rsa_e, k.rsa_d, k.rsa_phi, sig1.p)
+    _ck(ok1, name + ": pkcs1 sign succeeds")
+    if ok1:
+        _ck(_rsa_verify_pkcs1(kind, digest.p, k.rsa_n.p, k.rsa_n.len, k.rsa_e.p, k.rsa_e.len, sig1.p, klen), name + ": pkcs1 sign verifies")
+    end
+
+    mut sig2 := _newbuf(klen)
+    defer _buf_free(sig2)
+    _putzeros(sig2, klen)
+    ok2 := _rsa_sign_pss(kind, digest.p, k.rsa_n, k.rsa_e, k.rsa_d, k.rsa_phi, hlen, sig2.p)
+    _ck(ok2, name + ": pss sign succeeds")
+    if ok2:
+        _ck(_rsa_verify_pss(kind, digest.p, k.rsa_n.p, k.rsa_n.len, k.rsa_e.p, k.rsa_e.len, sig2.p, klen, hlen), name + ": pss sign verifies")
+    end
+
+    // A signature must not verify against a different message: catches a
+    // sign routine that accidentally ignores its digest input.
+    mut wrong := _newbuf(hlen)
+    defer _buf_free(wrong)
+    _putzeros(wrong, hlen)
+    _hash_oneshot(kind, "different message" as void*, 17, wrong.p)
+    if ok1:
+        _ck(!_rsa_verify_pkcs1(kind, wrong.p, k.rsa_n.p, k.rsa_n.len, k.rsa_e.p, k.rsa_e.len, sig1.p, klen), name + ": pkcs1 sig rejects wrong message")
+    end
+
+    FreePrivateKey(k)
+end
+
+func _selftest_ecdsa_sign_one(cv: Curve, kind: int, der_hex: str, name: str):
+    mut der := _hexbuf(der_hex)
+    defer _buf_free(der)
+    mut k := PrivateKey {}
+    ok := _parse_ec_sec1_body(_newreader(der.p, der.len), PK_UNKNOWN, k)
+    _ck(ok, name + ": key parses")
+    if !ok:
+        ret
+    end
+
+    mut xb := _newbuf(cv.nb)
+    defer _buf_free(xb)
+    _putzeros(xb, cv.nb)
+    mut yb := _newbuf(cv.nb)
+    defer _buf_free(yb)
+    _putzeros(yb, cv.nb)
+    _ck(_ec_base_mul(cv, k.ec_scalar.p, xb.p, yb.p), name + ": public point derives")
+    mut pubkey := _newbuf(1 + 2 * cv.nb)
+    defer _buf_free(pubkey)
+    _put8(pubkey, 0x04)
+    _putbuf(pubkey, xb)
+    _putbuf(pubkey, yb)
+
+    hlen := _hash_size(kind)
+    mut digest := _newbuf(hlen)
+    defer _buf_free(digest)
+    _putzeros(digest, hlen)
+    _hash_oneshot(kind, T_SIGN_MSG as void*, T_SIGN_MSG.len(), digest.p)
+
+    mut rb := _newbuf(cv.nb)
+    defer _buf_free(rb)
+    _putzeros(rb, cv.nb)
+    mut sb := _newbuf(cv.nb)
+    defer _buf_free(sb)
+    _putzeros(sb, cv.nb)
+    mut der_sig := _newbuf(2 * cv.nb + 8)
+    defer _buf_free(der_sig)
+    mut rb2 := _newbuf(cv.nb)
+    defer _buf_free(rb2)
+    mut sb2 := _newbuf(cv.nb)
+    defer _buf_free(sb2)
+
+    ok2 := _ecdsa_sign(cv, kind, k.ec_scalar.p, digest.p, hlen, rb.p, sb.p)
+    _ck(ok2, name + ": sign succeeds")
+    if ok2:
+        _ck(_ecdsa_verify(cv, digest.p, hlen, rb.p, sb.p, pubkey.p, pubkey.len), name + ": sign verifies")
+
+        // DER round trip: encode then decode with the same routine the
+        // verify path (ecdsa.salam's _ecdsa_split, via verify.salam) uses.
+        _ecdsa_der_encode(rb.p, sb.p, cv.nb, der_sig)
+        desplit_ok := _ecdsa_split(_readerof(der_sig), rb2, sb2, cv.nb)
+        _ck(desplit_ok, name + ": der signature round-trips")
+        if desplit_ok:
+            _ck(_cteq(rb.p, rb2.p, cv.nb), name + ": der round trip preserves r")
+            _ck(_cteq(sb.p, sb2.p, cv.nb), name + ": der round trip preserves s")
+        end
+    end
+
+    // A signature must not verify against a different message.
+    mut wrong := _newbuf(hlen)
+    defer _buf_free(wrong)
+    _putzeros(wrong, hlen)
+    _hash_oneshot(kind, "different message" as void*, 17, wrong.p)
+    if ok2:
+        _ck(!_ecdsa_verify(cv, wrong.p, hlen, rb.p, sb.p, pubkey.p, pubkey.len), name + ": sig rejects wrong message")
+    end
+
+    FreePrivateKey(k)
+end
+
+func _selftest_sign():
+    _selftest_rsa_sign_one(HASH_SHA256, "rsa1024/sha256")
+    _selftest_ecdsa_sign_one(_curve_p256(), HASH_SHA256, T_SIGN_EC256_DER, "ecdsa-p256/sha256")
+    _selftest_ecdsa_sign_one(_curve_p384(), HASH_SHA384, T_SIGN_EC384_DER, "ecdsa-p384/sha384")
+end

@@ -1,0 +1,178 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+// A single method-dispatched entry point over every algorithm in this
+// package, for callers that pick (or store) the algorithm as data instead
+// of calling e.g. HuffmanCompress directly.
+//
+// The algorithm is identified with a plain `int` (the MethodXxx constants
+// below), not the `Method` enum declared in compress.salam - see the note
+// there for why a `Method` cannot cross a package boundary here, either as
+// `compress.Method.RLE` or as a function's return value. MethodNone still
+// goes through the same [4-byte length][bytes] framing as every real
+// algorithm, so a caller can switch methods (including "no compression")
+// without changing how it reads the result.
+
+pub const MethodNone := 0
+pub const MethodRLE := 1
+pub const MethodHuffman := 2
+pub const MethodLZ77 := 3
+pub const MethodLZW := 4
+pub const MethodDeflate := 5
+pub const MethodBWT := 6
+
+func _raw_copy(p: void*, n: int): ByteBuf:
+    mut out := NewByteBuf()
+    BufPushU32(out, n)
+    BufPushBytes(out, p, n)
+    ret out
+end
+
+func _raw_restore(p: void*, n: int): ByteBuf:
+    mut r := NewByteReader(p, n)
+    origLen := RdU32(r)
+    src := ((r.data as i64) + (r.pos as i64)) as void*
+    mut out := NewByteBufCap(origLen)
+    BufPushBytes(out, src, origLen)
+    ret out
+end
+
+@en "Compress"
+@fa "فشرده سازی"
+@ar "ضغط"
+pub func Compress(method: int, p: void*, n: int): ByteBuf:
+    if method == MethodRLE: ret RLECompress(p, n) end
+    if method == MethodHuffman: ret HuffmanCompress(p, n) end
+    if method == MethodLZ77: ret LZ77Compress(p, n) end
+    if method == MethodLZW: ret LZWCompress(p, n) end
+    if method == MethodDeflate: ret DeflateCompress(p, n) end
+    if method == MethodBWT: ret BWTCompress(p, n) end
+    ret _raw_copy(p, n)
+end
+
+@en "Decompress"
+@fa "کدگشایی"
+@ar "فك الضغط"
+pub func Decompress(method: int, p: void*, n: int): ByteBuf:
+    if method == MethodRLE: ret RLEDecompress(p, n) end
+    if method == MethodHuffman: ret HuffmanDecompress(p, n) end
+    if method == MethodLZ77: ret LZ77Decompress(p, n) end
+    if method == MethodLZW: ret LZWDecompress(p, n) end
+    if method == MethodDeflate: ret DeflateDecompress(p, n) end
+    if method == MethodBWT: ret BWTDecompress(p, n) end
+    ret _raw_restore(p, n)
+end
+
+@en "CompressStr"
+@fa "فشرده سازی رشته"
+@ar "ضغط النص"
+pub func CompressStr(method: int, s: str): ByteBuf:
+    ret Compress(method, s as void*, s.len())
+end
+
+@en "CompressBuf"
+@fa "فشرده سازی بافر"
+@ar "ضغط المخزن"
+pub func CompressBuf(method: int, b: ByteBuf): ByteBuf:
+    ret Compress(method, b.data, b.len)
+end
+
+@en "DecompressBuf"
+@fa "کدگشایی بافر"
+@ar "فك ضغط المخزن"
+pub func DecompressBuf(method: int, b: ByteBuf): ByteBuf:
+    ret Decompress(method, b.data, b.len)
+end
+
+// Tries every algorithm and keeps the smallest result (falling back to an
+// uncompressed copy if nothing beats it, so the output never expands more
+// than the 4-byte header), reporting which one won through method_out (one
+// of the MethodXxx constants above). Runs all six encoders up front, so it
+// costs roughly their sum - meant for "compress this once, decide later
+// how" use, not a hot path.
+@en "CompressBest"
+@fa "بهترین فشرده سازی"
+@ar "أفضل ضغط"
+pub func CompressBest(p: void*, n: int, method_out &: int): ByteBuf:
+    mut best := _raw_copy(p, n)
+    method_out = MethodNone
+
+    mut cand := RLECompress(p, n)
+    if BufLen(cand) < BufLen(best):
+        BufFree(best)
+        best = cand
+        method_out = MethodRLE
+    else:
+        BufFree(cand)
+    end
+
+    cand = HuffmanCompress(p, n)
+    if BufLen(cand) < BufLen(best):
+        BufFree(best)
+        best = cand
+        method_out = MethodHuffman
+    else:
+        BufFree(cand)
+    end
+
+    cand = LZ77Compress(p, n)
+    if BufLen(cand) < BufLen(best):
+        BufFree(best)
+        best = cand
+        method_out = MethodLZ77
+    else:
+        BufFree(cand)
+    end
+
+    cand = LZWCompress(p, n)
+    if BufLen(cand) < BufLen(best):
+        BufFree(best)
+        best = cand
+        method_out = MethodLZW
+    else:
+        BufFree(cand)
+    end
+
+    cand = DeflateCompress(p, n)
+    if BufLen(cand) < BufLen(best):
+        BufFree(best)
+        best = cand
+        method_out = MethodDeflate
+    else:
+        BufFree(cand)
+    end
+
+    cand = BWTCompress(p, n)
+    if BufLen(cand) < BufLen(best):
+        BufFree(best)
+        best = cand
+        method_out = MethodBWT
+    else:
+        BufFree(cand)
+    end
+
+    ret best
+end
+
+// Compressed size / original size (0.0 for an empty input). Below 1.0
+// means smaller than the original.
+@en "Ratio"
+@fa "نسبت"
+@ar "نسبة"
+pub func Ratio(compressed_len: int, original_len: int): f64:
+    if original_len == 0: ret 0.0 end
+    ret (compressed_len as f64) / (original_len as f64)
+end

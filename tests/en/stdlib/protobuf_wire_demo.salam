@@ -1,0 +1,128 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import encoding.protobuf
+import compress
+import testing
+import os
+
+func main:
+    // varint(300) -> [0xAC, 0x02] (protobuf spec's own documented example)
+    mut b1 := compress.NewByteBuf()
+    protobuf.WriteVarint(b1, 300 as u64)
+    testing.AssertEqInt(compress.BufLen(b1), 2)
+    testing.AssertEqInt(compress.BufGet(b1, 0), 0xAC)
+    testing.AssertEqInt(compress.BufGet(b1, 1), 0x02)
+    mut r1 := compress.NewByteReader(b1.data, b1.len)
+    mut ok1 := false
+    testing.AssertEqInt64((protobuf.ReadVarint(r1, ok1)) as i64, 300 as i64)
+    testing.AssertTrue(ok1)
+
+    // small varint round trip
+    mut b2 := compress.NewByteBuf()
+    protobuf.WriteVarint(b2, 1 as u64)
+    testing.AssertEqInt(compress.BufLen(b2), 1)
+    testing.AssertEqInt(compress.BufGet(b2, 0), 1)
+
+    // zigzag reference table: 0,-1,1,-2,2 -> 0,1,2,3,4
+    testing.AssertEqInt64(protobuf.ZigZagEncode64(0 as i64) as i64, 0 as i64)
+    testing.AssertEqInt64(protobuf.ZigZagEncode64(0 - 1 as i64) as i64, 1 as i64)
+    testing.AssertEqInt64(protobuf.ZigZagEncode64(1 as i64) as i64, 2 as i64)
+    testing.AssertEqInt64(protobuf.ZigZagEncode64(0 - 2 as i64) as i64, 3 as i64)
+    testing.AssertEqInt64(protobuf.ZigZagEncode64(2 as i64) as i64, 4 as i64)
+    testing.AssertEqInt64(protobuf.ZigZagDecode64(0 as u64) as i64, 0 as i64)
+    testing.AssertEqInt64(protobuf.ZigZagDecode64(1 as u64) as i64, 0 - 1 as i64)
+    testing.AssertEqInt64(protobuf.ZigZagDecode64(3 as u64) as i64, 0 - 2 as i64)
+    testing.AssertEqInt64(protobuf.ZigZagDecode64(4 as u64) as i64, 2 as i64)
+
+    testing.AssertEqInt(protobuf.ZigZagEncode32(0 - 1 as i32) as int, 1)
+    testing.AssertEqInt(protobuf.ZigZagDecode32(1 as u32) as int, 0 - 1)
+
+    // tag round trip
+    mut b3 := compress.NewByteBuf()
+    protobuf.WriteTag(b3, 5, protobuf.WT_LEN)
+    mut r3 := compress.NewByteReader(b3.data, b3.len)
+    mut fnum := 0
+    mut wtype := 0
+    mut tok := false
+    protobuf.ReadTag(r3, fnum, wtype, tok)
+    testing.AssertTrue(tok)
+    testing.AssertEqInt(fnum, 5)
+    testing.AssertEqInt(wtype, protobuf.WT_LEN)
+
+    // fixed32/fixed64 round trip
+    mut b4 := compress.NewByteBuf()
+    protobuf.WriteFixed32(b4, 0x01020304 as u32)
+    testing.AssertEqInt(compress.BufGet(b4, 0), 0x04)
+    testing.AssertEqInt(compress.BufGet(b4, 3), 0x01)
+    mut r4 := compress.NewByteReader(b4.data, b4.len)
+    mut ok4 := false
+    testing.AssertEqInt(protobuf.ReadFixed32(r4, ok4) as int, 0x01020304)
+    testing.AssertTrue(ok4)
+
+    mut b5 := compress.NewByteBuf()
+    protobuf.WriteFixed64(b5, 0x0102030405060708 as u64)
+    mut r5 := compress.NewByteReader(b5.data, b5.len)
+    mut ok5 := false
+    testing.AssertEqInt64(protobuf.ReadFixed64(r5, ok5) as i64, 0x0102030405060708 as i64)
+    testing.AssertTrue(ok5)
+
+    // float/double round trip
+    mut b6 := compress.NewByteBuf()
+    protobuf.WriteFloat(b6, 3.5)
+    mut r6 := compress.NewByteReader(b6.data, b6.len)
+    mut ok6 := false
+    testing.AssertEqFloat(protobuf.ReadFloat(r6, ok6), 3.5, 0.0001)
+    testing.AssertTrue(ok6)
+
+    mut b7 := compress.NewByteBuf()
+    protobuf.WriteDouble(b7, 0.0 - 42.25)
+    mut r7 := compress.NewByteReader(b7.data, b7.len)
+    mut ok7 := false
+    testing.AssertEqFloat(protobuf.ReadDouble(r7, ok7), 0.0 - 42.25, 0.0000001)
+    testing.AssertTrue(ok7)
+
+    // length-prefixed string round trip
+    mut b8 := compress.NewByteBuf()
+    protobuf.WriteLenPrefixedStr(b8, "hello")
+    mut r8 := compress.NewByteReader(b8.data, b8.len)
+    mut ok8 := false
+    testing.AssertEqStr(protobuf.ReadLenPrefixedStr(r8, ok8), "hello")
+    testing.AssertTrue(ok8)
+
+    // SkipField over a varint field, then read the next real field
+    mut b9 := compress.NewByteBuf()
+    protobuf.WriteVarint(b9, 42 as u64)
+    protobuf.WriteVarint(b9, 7 as u64)
+    mut r9 := compress.NewByteReader(b9.data, b9.len)
+    mut skipOk := false
+    protobuf.SkipField(r9, protobuf.WT_VARINT, skipOk)
+    testing.AssertTrue(skipOk)
+    mut ok9 := false
+    testing.AssertEqInt64(protobuf.ReadVarint(r9, ok9) as i64, 7 as i64)
+
+    compress.BufFree(b1)
+    compress.BufFree(b2)
+    compress.BufFree(b3)
+    compress.BufFree(b4)
+    compress.BufFree(b5)
+    compress.BufFree(b6)
+    compress.BufFree(b7)
+    compress.BufFree(b8)
+    compress.BufFree(b9)
+
+    os.Exit(testing.Summary())
+end

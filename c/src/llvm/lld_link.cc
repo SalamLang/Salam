@@ -10,8 +10,6 @@
  *
  * Repository: https://github.com/SalamLang/Salam
  *
- * In-process linker: calls the lld driver libraries directly so a
- * WITH_LLD=1 salam links executables without a separate ld.lld/clang process.
  */
 
 #include "llvm/lld_link.h"

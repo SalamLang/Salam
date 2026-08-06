@@ -1,0 +1,157 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+func _bighex(x: Big): str:
+    n := _big_bytelen(x)
+    if n == 0:
+        ret "00"
+    end
+    mut o := NewBuf(n)
+    BufPutZeros(o, n)
+    ok := _big_to_bytes(x, o.p, n)
+    if !ok:
+        FreeBuf(o)
+        ret "TOOBIG"
+    end
+    out := _hex_of(o.p, n)
+    FreeBuf(o)
+    ret out
+end
+
+func _bigof(hex: str): Big:
+    h := _hexbuf(hex)
+    x := _big_from_bytes(h.p, h.len)
+    FreeBuf(h)
+    ret x
+end
+
+func _selftest_bigint():
+    mut a := _bigof("123456789abcdef0fedcba9876543210")
+    mut b := _bigof("deadbeefcafebabe0123456789abcdef")
+
+    _ckhex(_bighex(a), "123456789abcdef0fedcba9876543210", "bigint: from/to bytes")
+    mut lz := _bigof("0000000000ff00")
+    _ckhex(_bighex(lz), "ff00", "bigint: strips leading zeros")
+    mut zero := _bigof("00")
+    _ck(_big_is_zero(zero), "bigint: zero detected")
+    _ck(_big_bitlen(zero) == 0, "bigint: zero bitlen")
+
+    _ck(_big_cmp(a, b) < 0, "bigint: cmp a<b")
+    _ck(_big_cmp(b, a) > 0, "bigint: cmp b>a")
+    _ck(_big_cmp(a, a) == 0, "bigint: cmp a==a")
+
+    mut x2 := _bigof("02")
+    mut x3 := _bigof("03")
+    mut sum := _big_new(2)
+    _big_add(sum, x2, x3)
+    _ckhex(_bighex(sum), "05", "bigint: 2+3=5")
+
+    mut x10 := _bigof("0a")
+    mut x4 := _bigof("04")
+    mut diff := _big_new(2)
+    _ok_sub := _big_sub(diff, x10, x4)
+    _ck(_ok_sub, "bigint: 10-4 ok")
+    _ckhex(_bighex(diff), "06", "bigint: 10-4=6")
+
+    mut x6 := _bigof("06")
+    mut x7 := _bigof("07")
+    mut prod := _big_new(4)
+    _big_mul(prod, x6, x7)
+    _ckhex(_bighex(prod), "2a", "bigint: 6*7=42")
+
+    mut x17 := _bigof("11")
+    mut x5 := _bigof("05")
+    mut rem := _big_new(2)
+    _ok_mod := _big_mod(rem, x17, x5)
+    _ck(_ok_mod, "bigint: 17 mod 5 ok")
+    _ckhex(_bighex(rem), "02", "bigint: 17 mod 5 = 2")
+
+    // Textbook RSA example: 4^13 mod 497 = 445.
+    mut base := _bigof("04")
+    mut expo := _bigof("0d")
+    mut modu := _bigof("01f1")
+    mut result := _big_new(4)
+    _ok_exp := _big_modexp(result, base, expo, modu)
+    _ck(_ok_exp, "bigint: modexp ok")
+    _ckhex(_bighex(result), "01bd", "bigint: 4^13 mod 497 = 445")
+
+    // Barrett-reduction modexp must agree with the plain bit-serial one -
+    // this is the fast path dhgroups.salam actually uses (see the
+    // performance note in bigint.salam's Barrett section header).
+    mut result_bt := _big_new(4)
+    _ok_bt := _big_modexp_barrett(result_bt, base, expo, modu)
+    _ck(_ok_bt, "bigint: barrett modexp ok")
+    _ckhex(_bighex(result_bt), "01bd", "bigint: barrett 4^13 mod 497 = 445")
+
+    // A larger (256-bit-ish) cross-check between the two implementations,
+    // since a 2-byte modulus above cannot exercise multi-limb reduction.
+    mut bigbase := _bigof("9a8b7c6d5e4f30211f2e3d4c5b6a798897a6b5c4d3e2f1009182736455647382")
+    mut bigexpo := _bigof("010203040506070809")
+    mut bigmod := _bigof("d1e2f30415263748596a7b8c9daebfc011223344556677889900aabbccddeef1")
+    mut r_plain := _big_new(40)
+    mut r_bt := _big_new(40)
+    _ok_p := _big_modexp(r_plain, bigbase, bigexpo, bigmod)
+    _ok_b := _big_modexp_barrett(r_bt, bigbase, bigexpo, bigmod)
+    _ck(_ok_p && _ok_b, "bigint: large modexp (plain+barrett) ok")
+    _ckhex(_bighex(r_plain), _bighex(r_bt), "bigint: barrett agrees with plain modexp on a large case")
+
+    _big_free(result_bt)
+    _big_free(bigbase)
+    _big_free(bigexpo)
+    _big_free(bigmod)
+    _big_free(r_plain)
+    _big_free(r_bt)
+
+    // Blinded DH-style exponentiation must agree with the plain modexp:
+    // g=5, secret exponent x=6, group order = p-1 = 22 (p=23), so
+    // 5^6 mod 23 = 15625 mod 23 = 8.
+    mut g := _bigof("05")
+    mut xsec := _bigof("06")
+    mut order := _bigof("16")
+    mut p23 := _bigof("17")
+    mut blinded := _big_new(4)
+    mut rndbuf := _hexbuf("03")
+    _ok_bl := _big_modexp_blinded_dh(blinded, g, xsec, order, p23, rndbuf.p, rndbuf.len)
+    _ck(_ok_bl, "bigint: blinded modexp ok")
+    _ckhex(_bighex(blinded), "08", "bigint: blinded 5^6 mod 23 = 8")
+
+    _big_free(a)
+    _big_free(b)
+    _big_free(lz)
+    _big_free(zero)
+    _big_free(x2)
+    _big_free(x3)
+    _big_free(sum)
+    _big_free(x10)
+    _big_free(x4)
+    _big_free(diff)
+    _big_free(x6)
+    _big_free(x7)
+    _big_free(prod)
+    _big_free(x17)
+    _big_free(x5)
+    _big_free(rem)
+    _big_free(base)
+    _big_free(expo)
+    _big_free(modu)
+    _big_free(result)
+    _big_free(g)
+    _big_free(xsec)
+    _big_free(order)
+    _big_free(p23)
+    _big_free(blinded)
+    FreeBuf(rndbuf)
+end

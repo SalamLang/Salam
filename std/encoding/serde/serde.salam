@@ -1,0 +1,171 @@
+package serde
+
+import encoding.value
+import encoding.encerr
+import encoding.json
+import encoding.yaml
+import encoding.toml
+import encoding.xml
+import encoding.csv
+import str
+
+// serde - format auto-detection and transcoding across every text-based
+// encoding.* format (bonus feature per the original spec; "encoding" itself
+// was already taken by base64/hex/url, hence the separate package name).
+// Transcode dispatches through each format's Decode(text)->Value and the
+// target format's Encode(Value)->text - this is why the json/csv/yaml/toml
+// Value bridges all had to exist first.
+
+pub const FormatUnknown := 0
+pub const FormatJSON := 1
+pub const FormatYAML := 2
+pub const FormatTOML := 3
+pub const FormatXML := 4
+pub const FormatCSV := 5
+
+func _trim_leading_ws(s: str): str:
+    n := s.len()
+    mut i := 0
+    until i < n:
+        c := s.substr(i, 1)
+        if c != " " && c != "\t" && c != "\n" && c != "\r": break end
+        i += 1
+    end
+    ret s.substr(i, n - i)
+end
+
+// Looks like a TOML statement: a `[table]`/`[[array]]` header, or a
+// `key = value`-shaped line (bare-key '=' - distinct from JSON's no-bare-'='
+// and YAML's 'key:' colon convention, so this signal never collides with
+// either).
+func _looks_toml(s: str): bool:
+    lines := str.Split(s, "\n")
+    mut i := 0
+    until i < lines.len():
+        line := _trim_leading_ws(lines.get(i)[0])
+        if line.len() > 0 && str.CharAt(line, 0) != "#":
+            if str.CharAt(line, 0) == "[": ret true end
+            eq := str.IndexOf(line, "=")
+            colon := str.IndexOf(line, ":")
+            if eq >= 0 && (colon < 0 || eq < colon): ret true end
+        end
+        i += 1
+    end
+    ret false
+end
+
+func _looks_csv(s: str): bool:
+    mut lines := Vector {} as Vector<str>
+    all := str.Split(s, "\n")
+    mut i := 0
+    until i < all.len():
+        line := all.get(i)[0]
+        if line.len() > 0: lines.push(line) end
+        i += 1
+    end
+    if lines.len() < 2: ret false end
+    firstCount := csv.ReadLine(lines.get(0)[0]).len()
+    if firstCount < 2: ret false end
+    mut j := 1
+    until j < lines.len():
+        n := csv.ReadLine(lines.get(j)[0]).len()
+        if n != firstCount: ret false end
+        j += 1
+    end
+    ret true
+end
+
+func _decode_by_name(data: str, from: str, ok &: bool): value.Value:
+    ok = true
+    if from == "json":
+        mut err := encerr.NoError()
+        v := json.Decode(data, err)
+        if encerr.IsError(err): ok = false end
+        ret v
+    end
+    if from == "yaml":
+        mut err := encerr.NoError()
+        v := yaml.Decode(data, err)
+        if encerr.IsError(err): ok = false end
+        ret v
+    end
+    if from == "toml":
+        mut tok := false
+        v := toml.DecodeStrict(data, tok)
+        if !tok: ok = false end
+        ret v
+    end
+    if from == "xml":
+        mut xok := false
+        node := xml.DecodeStrict(data, xok)
+        if !xok:
+            ok = false
+            ret value.ValueNull()
+        end
+        ret xml.ToValue(node)
+    end
+    if from == "csv":
+        ret csv.ToValue(data)
+    end
+    ok = false
+    ret value.ValueNull()
+end
+
+func _encode_by_name(v: value.Value, dest: str, ok &: bool): str:
+    ok = true
+    if dest == "json": ret json.EncodeDefault(v) end
+    if dest == "yaml": ret yaml.Encode(v) end
+    if dest == "toml":
+        mut tok := true
+        out := toml.EncodeStrict(v, tok)
+        if !tok: ok = false end
+        ret out
+    end
+    if dest == "xml": ret xml.EncodeDeclaration(xml.FromValue(v, "root")) end
+    if dest == "csv": ret csv.FromValue(v) end
+    ok = false
+    ret ""
+end
+
+pub func DetectFormat(text: str): int:
+    trimmed := _trim_leading_ws(text)
+    if trimmed.len() == 0: ret FormatUnknown end
+    if str.CharAt(trimmed, 0) == "<": ret FormatXML end
+    if json.Valid(trimmed): ret FormatJSON end
+    if _looks_toml(trimmed) && toml.Valid(trimmed): ret FormatTOML end
+    if _looks_csv(trimmed): ret FormatCSV end
+    if yaml.Valid(trimmed): ret FormatYAML end
+    ret FormatUnknown
+end
+
+pub func Detect(text: str): str:
+    f := DetectFormat(text)
+    if f == FormatJSON: ret "json" end
+    if f == FormatYAML: ret "yaml" end
+    if f == FormatTOML: ret "toml" end
+    if f == FormatXML: ret "xml" end
+    if f == FormatCSV: ret "csv" end
+    ret ""
+end
+
+pub func TranscodeStrict(data: str, from: str, dest: str, ok &: bool): str:
+    mut decOk := false
+    v := _decode_by_name(data, from, decOk)
+    if !decOk:
+        ok = false
+        ret ""
+    end
+    mut encOk := false
+    out := _encode_by_name(v, dest, encOk)
+    if !encOk:
+        ok = false
+        ret ""
+    end
+    ok = true
+    ret out
+end
+
+pub func Transcode(data: str, from: str, dest: str): str:
+    mut ok := false
+    ret TranscodeStrict(data, from, dest, ok)
+end

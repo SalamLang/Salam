@@ -1,0 +1,90 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Boundary values and signed round trips for encoding.binary, complementing
+// binary_demo.salam's happy-path unsigned/float coverage.
+
+package main
+
+import encoding.binary
+import compress
+import testing
+import os
+
+func main:
+    // zero round trips through every width/order
+    mut bz := compress.NewByteBuf()
+    binary.WriteU32BE(bz, 0)
+    mut rz := compress.NewByteReader(bz.data, bz.len)
+    testing.AssertEqInt(binary.ReadU32BE(rz), 0)
+
+    // WriteU8 masks to a single byte: 0x1FF & 0xFF == 0xFF
+    mut b1 := compress.NewByteBuf()
+    binary.WriteU8(b1, 0x1FF)
+    testing.AssertEqInt(compress.BufLen(b1), 1)
+    testing.AssertEqInt(compress.BufGet(b1, 0), 0xFF)
+
+    // negative i16 round trip (two's complement bit pattern, both orders)
+    mut b2 := compress.NewByteBuf()
+    binary.WriteI16BE(b2, 0 - 1)
+    testing.AssertEqInt(compress.BufGet(b2, 0), 0xFF)
+    testing.AssertEqInt(compress.BufGet(b2, 1), 0xFF)
+    mut r2 := compress.NewByteReader(b2.data, b2.len)
+    testing.AssertEqInt(binary.ReadU16BE(r2), 0xFFFF)
+
+    // negative i32 boundary value
+    mut b3 := compress.NewByteBuf()
+    binary.WriteI32LE(b3, (0 - 2147483648) as int)
+    mut r3 := compress.NewByteReader(b3.data, b3.len)
+    testing.AssertEqInt(binary.ReadU32LE(r3), (0x80000000 as i64) as int)
+
+    // negative i64 round trip
+    negBig := 0 - 1 as i64
+    mut b4 := compress.NewByteBuf()
+    binary.WriteI64BE(b4, negBig)
+    testing.AssertEqInt(compress.BufLen(b4), 8)
+    testing.AssertEqInt(compress.BufGet(b4, 0), 0xFF)
+    testing.AssertEqInt(compress.BufGet(b4, 7), 0xFF)
+
+    // sequential reads consume the reader position correctly (three
+    // back-to-back U8 reads off one buffer, not just a single-shot read)
+    mut b5 := compress.NewByteBuf()
+    binary.WriteU8(b5, 10)
+    binary.WriteU8(b5, 20)
+    binary.WriteU8(b5, 30)
+    mut r5 := compress.NewByteReader(b5.data, b5.len)
+    testing.AssertEqInt(binary.ReadU8(r5), 10)
+    testing.AssertEqInt(binary.ReadU8(r5), 20)
+    testing.AssertEqInt(binary.ReadU8(r5), 30)
+
+    // BinaryOptions{big_endian} default is false
+    defaultOpts := binary.BinaryOptions {}
+    testing.AssertFalse(defaultOpts.big_endian)
+
+    // f32/f64 zero and negative-zero-adjacent small values round trip
+    mut b6 := compress.NewByteBuf()
+    binary.WriteF32(b6, 0.0, false)
+    mut r6 := compress.NewByteReader(b6.data, b6.len)
+    testing.AssertEqFloat(binary.ReadF32(r6, false), 0.0, 0.0000001)
+
+    compress.BufFree(bz)
+    compress.BufFree(b1)
+    compress.BufFree(b2)
+    compress.BufFree(b3)
+    compress.BufFree(b4)
+    compress.BufFree(b5)
+    compress.BufFree(b6)
+
+    os.Exit(testing.Summary())
+end

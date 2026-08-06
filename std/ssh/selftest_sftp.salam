@@ -1,0 +1,127 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+// Self-tests for sftp.salam's pure wire-format logic: SFTP v3 ATTRS
+// decoding (_sftp_parse_attrs) and the stream-reassembly buffer helper
+// (_buf_consume_front) that peels one framed SFTP packet at a time out of
+// a channel's accumulated stdout bytes. Both are exercised live against a
+// real OpenSSH sftp-server too (see the package header), but that only
+// covers whatever attribute flags OpenSSH happens to send back - these
+// tests hit every flag combination directly, including ones a live server
+// may never actually produce for a given file.
+
+func _selftest_sftp():
+    // ---------------------------------------------------------- ATTRS decoding
+    // flags = 0: no optional fields follow at all.
+    mut b0 := NewBuf(4)
+    BufPutUint32(b0, 0 as u32)
+    mut r0 := NewReader(b0.p, b0.len)
+    info0 := _sftp_parse_attrs(r0)
+    _ck(!r0.bad, "sftp attrs: flags=0 reads cleanly with nothing left to consume")
+    _ck(info0.size == (0 as i64), "sftp attrs: flags=0 leaves size at its zero default")
+    _ck(!info0.is_dir, "sftp attrs: flags=0 leaves is_dir at its false default")
+    FreeBuf(b0)
+
+    // flags = SIZE only.
+    mut b1 := NewBuf(12)
+    BufPutUint32(b1, SFTP_ATTR_SIZE as u32)
+    BufPutUint64(b1, 123456 as u64)
+    mut r1 := NewReader(b1.p, b1.len)
+    info1 := _sftp_parse_attrs(r1)
+    _ck(!r1.bad, "sftp attrs: SIZE-only decodes without error")
+    _ck(info1.size == (123456 as i64), "sftp attrs: SIZE field value round-trips")
+    FreeBuf(b1)
+
+    // flags = PERMISSIONS, directory mode bits (octal 040755 = S_IFDIR |
+    // 0755 = hex 0x41ED - written in hex, not octal: Salam has no bare
+    // leading-zero octal literal syntax, see sftp.salam's _sftp_parse_attrs
+    // for the real bug this caught).
+    mut b2 := NewBuf(8)
+    BufPutUint32(b2, SFTP_ATTR_PERMISSIONS as u32)
+    BufPutUint32(b2, 0x41ED as u32)
+    mut r2 := NewReader(b2.p, b2.len)
+    info2 := _sftp_parse_attrs(r2)
+    _ck(info2.permissions == (0x41ED as u32), "sftp attrs: PERMISSIONS field value round-trips")
+    _ck(info2.is_dir, "sftp attrs: S_IFDIR permission bits set is_dir")
+    FreeBuf(b2)
+
+    // flags = PERMISSIONS, regular-file mode bits (octal 100644 = S_IFREG |
+    // 0644 = hex 0x81A4).
+    mut b3 := NewBuf(8)
+    BufPutUint32(b3, SFTP_ATTR_PERMISSIONS as u32)
+    BufPutUint32(b3, 0x81A4 as u32)
+    mut r3 := NewReader(b3.p, b3.len)
+    info3 := _sftp_parse_attrs(r3)
+    _ck(!info3.is_dir, "sftp attrs: S_IFREG permission bits do NOT set is_dir")
+    FreeBuf(b3)
+
+    // All four optional groups present at once (SIZE | UIDGID | PERMISSIONS
+    // | ACMODTIME = 0x0000000F) - the real thing OpenSSH sends for a Stat()
+    // reply. A marker uint32 written right after must still be read back
+    // correctly, proving the uid/gid and atime/mtime fields were consumed
+    // (skipped) exactly once each, not zero or twice.
+    mut b4 := NewBuf(32)
+    BufPutUint32(b4, 0x0000000F as u32)
+    BufPutUint64(b4, 999 as u64) // size
+    BufPutUint32(b4, 1000 as u32) // uid
+    BufPutUint32(b4, 1000 as u32) // gid
+    BufPutUint32(b4, 0x81A4 as u32) // permissions
+    BufPutUint32(b4, 1700000000 as u32) // atime
+    BufPutUint32(b4, 1700000001 as u32) // mtime
+    BufPutUint32(b4, 0xCAFEBABE as u32) // marker - only correctly reached if every prior field was consumed exactly once
+    mut r4 := NewReader(b4.p, b4.len)
+    info4 := _sftp_parse_attrs(r4)
+    _ck(!r4.bad, "sftp attrs: all four optional groups together decode without error")
+    _ck(info4.size == (999 as i64), "sftp attrs: SIZE survives alongside UIDGID/PERMISSIONS/ACMODTIME")
+    _ck(info4.permissions == (0x81A4 as u32), "sftp attrs: PERMISSIONS survives alongside the other groups")
+    marker := RGetUint32(r4)
+    _ck(!r4.bad && marker == (0xCAFEBABE as u32), "sftp attrs: the byte immediately after all four groups is read at the right offset")
+    FreeBuf(b4)
+
+    // ---------------------------------------------------------- _buf_consume_front
+    mut cf1 := NewBuf(8)
+    repeat 8 with i:
+        BufPutByte(cf1, i)
+    end
+    _buf_consume_front(cf1, 3)
+    _ck(cf1.len == 5, "consume-front: dropping 3 of 8 bytes leaves len 5")
+    _ckhex(_hex_of(cf1.p, 5), "0304050607", "consume-front: remaining bytes shift down correctly")
+    FreeBuf(cf1)
+
+    mut cf2 := NewBuf(4)
+    repeat 4 with i:
+        BufPutByte(cf2, i)
+    end
+    _buf_consume_front(cf2, 0)
+    _ck(cf2.len == 4, "consume-front: n=0 is a no-op")
+    FreeBuf(cf2)
+
+    mut cf3 := NewBuf(4)
+    repeat 4 with i:
+        BufPutByte(cf3, i)
+    end
+    _buf_consume_front(cf3, 4)
+    _ck(cf3.len == 0, "consume-front: consuming exactly len bytes empties the buffer")
+    FreeBuf(cf3)
+
+    mut cf4 := NewBuf(4)
+    repeat 4 with i:
+        BufPutByte(cf4, i)
+    end
+    _buf_consume_front(cf4, 100)
+    _ck(cf4.len == 0, "consume-front: consuming more than len clamps to empty rather than going negative")
+    FreeBuf(cf4)
+end

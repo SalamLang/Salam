@@ -1,0 +1,401 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import filepath
+
+// Read-only RAR support: list any RAR4 or RAR5 archive's contents, extract
+// entries stored with no compression. See archive.salam's header comment
+// for why RAR's own compression (a proprietary LZ variant with VM-based
+// filters, plus PPMd) is out of scope - there is no public specification
+// and no open implementation independent of Alexander Roshal's
+// non-redistributable unrar code. Attempting to extract a compressed entry
+// returns `ok = false` rather than garbage. There is no RAR writer: RAR is
+// a closed format to encode against.
+//
+// Both RAR4 (signature "Rar!\x1a\x07\x00") and RAR5 (signature
+// "Rar!\x1a\x07\x01\x00") are fully parsed and were verified against
+// archives built with the real `rar`/`unrar` 7.00: RAR5-store and
+// RAR5-compressed archives (nested directories, mixed store/compress -
+// RAR falls back to store on incompressible data even in a "compressed"
+// archive) list and extract byte-identical to `unrar`'s own listing/
+// extraction. Real `rar` 7.00 no longer creates RAR4 archives at all (the
+// `-ma4` switch is gone), so RAR4 support is verified against a hand-built
+// buffer matching the documented block layout instead - `rar`/`unrar`
+// still read/list it fine as a sanity check, and the format hasn't changed
+// since RAR 1.5.
+//
+// RAR5's header fields (HeaderSize, HeaderFlags, ExtraAreaSize, DataSize,
+// UnpackedSize, CompressionInfo, NameSize, ...) are "vint": base-128,
+// least-significant-7-bits-first, continuation in the top bit of each
+// byte - unlike everything else in this package (ZIP/GZIP/RAR4), which is
+// little-endian fixed-width. CompressionInfo's method field sits at bits
+// 7-9 (`(compinfo >> 7) & 7`; 0 = store), confirmed by diffing a RAR5-store
+// and RAR5-compressed archive of the same files byte-for-byte.
+
+const _RAR4_SIG_LEN := 7
+const _RAR5_SIG_LEN := 8
+
+func _rar4_sig_match(p: void*, n: int): bool:
+    if n < _RAR4_SIG_LEN: ret false end
+    bp := p as u8*
+    ret bp[0] as int == 0x52 && bp[1] as int == 0x61 && bp[2] as int == 0x72 && bp[3] as int == 0x21 && bp[4] as int == 0x1a && bp[5] as int == 0x07 && bp[6] as int == 0x00
+end
+
+func _rar5_sig_match(p: void*, n: int): bool:
+    if n < _RAR5_SIG_LEN: ret false end
+    bp := p as u8*
+    ret bp[0] as int == 0x52 && bp[1] as int == 0x61 && bp[2] as int == 0x72 && bp[3] as int == 0x21 && bp[4] as int == 0x1a && bp[5] as int == 0x07 && bp[6] as int == 0x01 && bp[7] as int == 0x00
+end
+
+func _rar_bytes_to_str(p: void*, off: int, n: int): str:
+    mut buf := compress.NewByteBuf()
+    compress.BufPushBytes(buf, ((p as i64) + (off as i64)) as void*, n)
+    s := compress.BufToStrUnsafe(buf)
+    compress.BufFree(buf)
+    ret s
+end
+
+// Parses a FILE_HEAD block's fixed fields (RAR4 format) starting at
+// `block_start`, returning the block's HEAD_SIZE. RarList/RarExtractByName
+// each walk the block chain themselves and call this per FILE_HEAD block.
+func _rar4_read_file_fields(p: void*, block_start: int, pack_size_out &: int, unp_size_out &: int, method_out &: int, flags_out &: int, name_out &: str): int:
+    bp := p as u8*
+    flags_out = (bp[block_start + 3] as int) | ((bp[block_start + 4] as int) << 8)
+    head_size := (bp[block_start + 5] as int) | ((bp[block_start + 6] as int) << 8)
+    // FILE_HEAD fixed fields, relative to f: PACK_SIZE(4) UNP_SIZE(4)
+    // HOST_OS(1) FILE_CRC(4) FTIME(4) UNP_VER(1) METHOD(1) NAME_SIZE(2)
+    // ATTR(4) = 25 bytes, then FILE_NAME.
+    f := block_start + 7
+    pack_size_out = LEGet32(p, f)
+    unp_size_out = LEGet32(p, f + 4)
+    method_out = bp[f + 18] as int
+    name_size := LEGet16(p, f + 19)
+    name_off := f + 25
+    name_out = _rar_bytes_to_str(p, name_off, name_size)
+    ret head_size
+end
+
+// Reads one RAR5 "vint" (base-128, least-significant-7-bits-first, top bit
+// of each byte = continuation) starting at `pos`, returning the decoded
+// value and (via `len_out`) the number of bytes consumed. Capped at 10
+// bytes, comfortably enough for any real 64-bit field.
+func _rar5_vint(p: void*, pos: int, len_out &: int): i64:
+    bp := p as u8*
+    mut result := 0 as i64
+    mut shift := 0
+    mut i := 0
+    until i < 10:
+        b := bp[pos + i] as int
+        result = result | (((b & 0x7f) as i64) << shift)
+        i += 1
+        if (b & 0x80) == 0:
+            len_out = i
+            ret result
+        end
+        shift += 7
+    end
+    len_out = i
+    ret result
+end
+
+// Parses one RAR5 block (any type) starting at `block_start` (the CRC32
+// that opens every block). Always fills `header_type_out`/`total_size_out`
+// (the byte span from this block's start to the next one's, needed to walk
+// the chain regardless of block type); for a File/Service header
+// (type 2 or 3, which share the same field layout) also fills the
+// file-specific fields. Returns false on a truncated/malformed block.
+func _rar5_parse_block(p: void*, block_start: int, n: int, header_type_out &: int, total_size_out &: int, is_dir_out &: bool, unp_size_out &: int, method_out &: int, name_out &: str, data_offset_out &: int, data_size_out &: int): bool:
+    if block_start + 5 > n:
+        ret false
+    end
+    mut hsize_len := 0
+    hsize := _rar5_vint(p, block_start + 4, hsize_len) as int
+    header_data_start := block_start + 4 + hsize_len
+    if header_data_start + hsize > n:
+        ret false
+    end
+
+    mut cur := header_data_start
+    mut vlen := 0
+    header_type := _rar5_vint(p, cur, vlen) as int
+    cur += vlen
+    header_flags := _rar5_vint(p, cur, vlen) as int
+    cur += vlen
+
+    if (header_flags & 0x01) != 0:
+        _extra_size := _rar5_vint(p, cur, vlen)
+        cur += vlen
+    end
+    mut data_size := 0
+    if (header_flags & 0x02) != 0:
+        data_size = _rar5_vint(p, cur, vlen) as int
+        cur += vlen
+    end
+
+    header_type_out = header_type
+    data_size_out = data_size
+    is_dir_out = false
+    unp_size_out = 0
+    method_out = 0
+    name_out = ""
+    data_offset_out = header_data_start + hsize
+
+    if header_type == 2 || header_type == 3:
+        file_flags := _rar5_vint(p, cur, vlen) as int
+        cur += vlen
+        unp_size := _rar5_vint(p, cur, vlen) as int
+        cur += vlen
+        _attr := _rar5_vint(p, cur, vlen)
+        cur += vlen
+        if (file_flags & 0x02) != 0:
+            cur += 4
+        end
+        if (file_flags & 0x04) != 0:
+            cur += 4
+        end
+        compinfo := _rar5_vint(p, cur, vlen) as int
+        cur += vlen
+        _host_os := _rar5_vint(p, cur, vlen)
+        cur += vlen
+        name_size := _rar5_vint(p, cur, vlen) as int
+        cur += vlen
+        name_out = _rar_bytes_to_str(p, cur, name_size)
+
+        is_dir_out = (file_flags & 0x01) != 0
+        unp_size_out = unp_size as int
+        method_out = (compinfo >> 7) & 7
+    end
+
+    total_size_out = (header_data_start - block_start) + hsize + data_size
+    ret true
+end
+
+func _rar4_list(p: void*, n: int, out &: Vector<Entry>):
+    bp := p as u8*
+    mut pos := _RAR4_SIG_LEN
+    until pos + 7 <= n:
+        head_type := bp[pos + 2] as int
+        head_size := (bp[pos + 5] as int) | ((bp[pos + 6] as int) << 8)
+        if head_size < 7:
+            break
+        end
+        if head_type == 0x7b:
+            break
+        end
+        if head_type == 0x74:
+            mut pack_size := 0
+            mut unp_size := 0
+            mut method := 0
+            mut flags := 0
+            mut name := ""
+            _rar4_read_file_fields(p, pos, pack_size, unp_size, method, flags, name)
+            e := Entry {
+                name = name
+                size = unp_size as i64
+                compressed_size = pack_size as i64
+                is_dir = false
+                method = method
+                crc32 = 0 as u32
+                mtime = 0 as i64
+            }
+            out.push(e)
+            pos += head_size + pack_size
+        else:
+            pos += head_size
+        end
+    end
+end
+
+func _rar5_list(p: void*, n: int, out &: Vector<Entry>):
+    mut pos := _RAR5_SIG_LEN
+    until pos < n:
+        mut header_type := 0
+        mut total_size := 0
+        mut is_dir := false
+        mut unp_size := 0
+        mut method := 0
+        mut name := ""
+        mut data_offset := 0
+        mut data_size := 0
+        good := _rar5_parse_block(p, pos, n, header_type, total_size, is_dir, unp_size, method, name, data_offset, data_size)
+        if !good || total_size <= 0:
+            break
+        end
+        if header_type == 5:
+            break
+        end
+        if header_type == 2 && name.len() > 0:
+            e := Entry {
+                name = name
+                size = unp_size as i64
+                compressed_size = data_size as i64
+                is_dir = is_dir
+                method = method
+                crc32 = 0 as u32
+                mtime = 0 as i64
+            }
+            out.push(e)
+        end
+        pos += total_size
+    end
+end
+
+func _rar4_extract(p: void*, n: int, name: str, out &: compress.ByteBuf, ok &: bool):
+    bp := p as u8*
+    mut pos := _RAR4_SIG_LEN
+    until pos + 7 <= n:
+        head_type := bp[pos + 2] as int
+        head_size := (bp[pos + 5] as int) | ((bp[pos + 6] as int) << 8)
+        if head_size < 7:
+            break
+        end
+        if head_type == 0x7b:
+            break
+        end
+        if head_type == 0x74:
+            mut pack_size := 0
+            mut unp_size := 0
+            mut method := 0
+            mut flags := 0
+            mut nm := ""
+            _rar4_read_file_fields(p, pos, pack_size, unp_size, method, flags, nm)
+            if nm == name:
+                if (flags & 0x0004) != 0:
+                    ret
+                end
+                if method != 0x30:
+                    ret
+                end
+                data_ptr := ((p as i64) + ((pos + head_size) as i64)) as void*
+                compress.BufPushBytes(out, data_ptr, pack_size)
+                ok = true
+                ret
+            end
+            pos += head_size + pack_size
+        else:
+            pos += head_size
+        end
+    end
+end
+
+func _rar5_extract(p: void*, n: int, name: str, out &: compress.ByteBuf, ok &: bool):
+    mut pos := _RAR5_SIG_LEN
+    until pos < n:
+        mut header_type := 0
+        mut total_size := 0
+        mut is_dir := false
+        mut unp_size := 0
+        mut method := 0
+        mut nm := ""
+        mut data_offset := 0
+        mut data_size := 0
+        good := _rar5_parse_block(p, pos, n, header_type, total_size, is_dir, unp_size, method, nm, data_offset, data_size)
+        if !good || total_size <= 0:
+            break
+        end
+        if header_type == 5:
+            break
+        end
+        if header_type == 2 && nm == name && !is_dir:
+            if method != 0:
+                ret
+            end
+            data_ptr := ((p as i64) + (data_offset as i64)) as void*
+            compress.BufPushBytes(out, data_ptr, data_size)
+            ok = true
+            ret
+        end
+        pos += total_size
+    end
+end
+
+// True if `p`/`n` starts with a RAR4 or RAR5 signature (of either kind -
+// use _rar4_sig_match/_rar5_sig_match to tell which).
+@en "IsRar"
+@fa "آیا آر ای آر است"
+@ar "هل هو آر إيه آر"
+pub func IsRar(p: void*, n: int): bool:
+    ret _rar4_sig_match(p, n) || _rar5_sig_match(p, n)
+end
+
+// Lists every file entry in a RAR4 or RAR5 archive (name, sizes, method -
+// 0 is store for both formats, anything else is RAR's own compression).
+// Returns an empty Vector for anything that is not a readable RAR file.
+@en "RarList"
+@fa "فهرست آر ای آر"
+@ar "قائمة آر إيه آر"
+pub func RarList(p: void*, n: int): Vector<Entry>:
+    mut out := Vector {} as Vector<Entry>
+    if _rar4_sig_match(p, n):
+        _rar4_list(p, n, out)
+    else:
+        if _rar5_sig_match(p, n):
+            _rar5_list(p, n, out)
+        end
+    end
+    ret out
+end
+
+// Extracts one entry by exact name. `ok` is false if the name is not
+// found, the entry is encrypted (RAR4 LHD_PASSWORD, flag bit 0x0004), or
+// its method is not store (RAR4 0x30, RAR5 0).
+@en "RarExtractByName"
+@fa "استخراج با نام از آر ای آر"
+@ar "استخراج بالاسم من آر إيه آر"
+pub func RarExtractByName(p: void*, n: int, name: str, ok &: bool): compress.ByteBuf:
+    ok = false
+    mut out := compress.NewByteBuf()
+    if _rar4_sig_match(p, n):
+        _rar4_extract(p, n, name, out, ok)
+    else:
+        if _rar5_sig_match(p, n):
+            _rar5_extract(p, n, name, out, ok)
+        end
+    end
+    ret out
+end
+
+@en "RarExtractAll"
+@fa "استخراج همه از آر ای آر"
+@ar "استخراج الكل من آر إيه آر"
+pub func RarExtractAll(p: void*, n: int, destdir: str): bool:
+    entries := RarList(p, n)
+    mut all_ok := true
+    mut i := 0
+    until i < entries.len():
+        e := entries.get(i)[0]
+        outpath := filepath.Join(destdir, e.name)
+        if e.is_dir:
+            EnsureDir(outpath)
+        else:
+            EnsureDir(filepath.Dir(outpath))
+            mut ok := false
+            data := RarExtractByName(p, n, e.name, ok)
+            if ok:
+                if !WriteBinaryFileBuf(outpath, data):
+                    all_ok = false
+                end
+            else:
+                all_ok = false
+            end
+            compress.BufFree(data)
+        end
+        i += 1
+    end
+    entries.free()
+    ret all_ok
+end

@@ -1,0 +1,283 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+// Canonical Huffman coding over the 256-symbol byte alphabet.
+//
+// Rather than serializing the tree shape, the header stores one code
+// LENGTH per symbol (0 for symbols that do not occur); both the encoder
+// and the decoder rebuild identical canonical codes from those lengths
+// with the standard algorithm (RFC 1951 3.2.2: shorter codes first,
+// ties broken by symbol value), so no tree needs to cross the wire at
+// all. The decoder still builds a small binary trie from the
+// reconstructed codes, purely as a convenient bit-by-bit walk structure.
+//
+// Format: [4 bytes n][1 byte mode][mode==2: 256 length bytes][bitstream]
+//   mode 0 - n == 0, nothing follows.
+//   mode 2 - the general case, including a single distinct symbol (its
+//            length is forced to 1 so it still gets a real code).
+
+const _HUFF_ALPHA := 256
+const _HUFF_MAX_NODES := 512
+
+func _huff_canonical_codes(lengths: int[:], codes_out: int[:]):
+    mut blcount: int[256]
+    repeat 256 with i: blcount[i] = 0 end
+    mut maxlen := 0
+    repeat _HUFF_ALPHA with s:
+        l := lengths[s]
+        if l > maxlen: maxlen = l end
+        if l > 0: blcount[l] = blcount[l] + 1 end
+    end
+    mut nextcode: int[256]
+    repeat 256 with i: nextcode[i] = 0 end
+    mut code := 0
+    mut len := 1
+    until len <= maxlen:
+        code = (code + blcount[len - 1]) * 2
+        nextcode[len] = code
+        len += 1
+    end
+    repeat _HUFF_ALPHA with s:
+        l := lengths[s]
+        if l > 0:
+            codes_out[s] = nextcode[l]
+            nextcode[l] = nextcode[l] + 1
+        else:
+            codes_out[s] = 0
+        end
+    end
+end
+
+// Builds the Huffman tree over the byte frequencies of p[0..n) and writes
+// each symbol's optimal code length into lengths_out (0 = unused). Returns
+// the number of distinct symbols (0 for empty input).
+func _huff_lengths(p: void*, n: int, lengths_out: int[:]): int:
+    mut freq: i64[256]
+    repeat 256 with i: freq[i] = 0 as i64 end
+    bp := p as u8*
+    mut i := 0
+    until i < n:
+        b := bp[i] as int
+        freq[b] = freq[b] + (1 as i64)
+        i += 1
+    end
+
+    mut nfreq: i64[512]
+    mut nleft: int[512]
+    mut nright: int[512]
+    mut nsym: int[512]
+    mut nleaf: bool[512]
+    repeat _HUFF_MAX_NODES with k:
+        nfreq[k] = 0 as i64
+        nleft[k] = -1
+        nright[k] = -1
+        nsym[k] = -1
+        nleaf[k] = false
+    end
+    mut nodecount := 0
+    mut active: int[256]
+    mut activecount := 0
+    repeat 256 with s:
+        if freq[s] > (0 as i64):
+            nfreq[nodecount] = freq[s]
+            nleaf[nodecount] = true
+            nsym[nodecount] = s
+            active[activecount] = nodecount
+            activecount += 1
+            nodecount += 1
+        end
+    end
+
+    distinct := activecount
+    if distinct == 0: ret 0 end
+    if distinct == 1:
+        lengths_out[nsym[active[0]]] = 1
+        ret 1
+    end
+
+    until activecount > 1:
+        mut i1 := 0
+        repeat activecount with k:
+            if nfreq[active[k]] < nfreq[active[i1]]: i1 = k end
+        end
+        idx1 := active[i1]
+        active[i1] = active[activecount - 1]
+        activecount -= 1
+
+        mut i2 := 0
+        repeat activecount with k:
+            if nfreq[active[k]] < nfreq[active[i2]]: i2 = k end
+        end
+        idx2 := active[i2]
+        active[i2] = active[activecount - 1]
+        activecount -= 1
+
+        newidx := nodecount
+        nfreq[newidx] = nfreq[idx1] + nfreq[idx2]
+        nleft[newidx] = idx1
+        nright[newidx] = idx2
+        nleaf[newidx] = false
+        nodecount += 1
+
+        active[activecount] = newidx
+        activecount += 1
+    end
+
+    root := active[0]
+    mut stacknode: int[512]
+    mut stackdepth: int[512]
+    stacknode[0] = root
+    stackdepth[0] = 0
+    mut stacktop := 1
+    until stacktop > 0:
+        stacktop -= 1
+        cur := stacknode[stacktop]
+        d := stackdepth[stacktop]
+        if nleaf[cur]:
+            lengths_out[nsym[cur]] = d
+        else:
+            stacknode[stacktop] = nleft[cur]
+            stackdepth[stacktop] = d + 1
+            stacktop += 1
+            stacknode[stacktop] = nright[cur]
+            stackdepth[stacktop] = d + 1
+            stacktop += 1
+        end
+    end
+    ret distinct
+end
+
+@en "HuffmanCompress"
+@fa "فشرده سازی هافمن"
+@ar "ضغط هوفمان"
+pub func HuffmanCompress(p: void*, n: int): ByteBuf:
+    mut lengths: int[256]
+    repeat 256 with i: lengths[i] = 0 end
+    distinct := _huff_lengths(p, n, lengths[:])
+
+    mut out := NewByteBuf()
+    BufPushU32(out, n)
+
+    if distinct == 0:
+        BufPush(out, 0)
+        ret out
+    end
+    BufPush(out, 2)
+
+    mut codes: int[256]
+    repeat 256 with i: codes[i] = 0 end
+    _huff_canonical_codes(lengths[:], codes[:])
+
+    repeat 256 with s:
+        BufPush(out, lengths[s])
+    end
+
+    mut w := NewBitWriter()
+    bp := p as u8*
+    mut i := 0
+    until i < n:
+        b := bp[i] as int
+        len := lengths[b]
+        code := codes[b]
+        mut bit := len - 1
+        until bit >= 0:
+            BitWriteBit(w, (code >> bit) & 1)
+            bit -= 1
+        end
+        i += 1
+    end
+    BitFlush(w)
+    BufPushBuf(out, w.buf)
+    BitWriterFree(w)
+    ret out
+end
+
+@en "HuffmanDecompress"
+@fa "کدگشایی هافمن"
+@ar "فك ضغط هوفمان"
+pub func HuffmanDecompress(p: void*, n: int): ByteBuf:
+    mut r := NewByteReader(p, n)
+    origLen := RdU32(r)
+    mode := RdByte(r)
+    mut out := NewByteBufCap(origLen)
+    if mode == 0:
+        ret out
+    end
+
+    mut lengths: int[256]
+    repeat 256 with s:
+        lengths[s] = RdByte(r)
+    end
+    mut codes: int[256]
+    repeat 256 with i: codes[i] = 0 end
+    _huff_canonical_codes(lengths[:], codes[:])
+
+    mut tleft: int[512]
+    mut tright: int[512]
+    mut tsym: int[512]
+    mut tleaf: bool[512]
+    repeat _HUFF_MAX_NODES with k:
+        tleft[k] = -1
+        tright[k] = -1
+        tsym[k] = -1
+        tleaf[k] = false
+    end
+    mut nodecount := 1
+
+    repeat 256 with s:
+        len := lengths[s]
+        if len > 0:
+            code := codes[s]
+            mut cur := 0
+            mut bit := len - 1
+            until bit >= 0:
+                b := (code >> bit) & 1
+                if b == 0:
+                    if tleft[cur] < 0:
+                        tleft[cur] = nodecount
+                        nodecount += 1
+                    end
+                    cur = tleft[cur]
+                else:
+                    if tright[cur] < 0:
+                        tright[cur] = nodecount
+                        nodecount += 1
+                    end
+                    cur = tright[cur]
+                end
+                bit -= 1
+            end
+            tleaf[cur] = true
+            tsym[cur] = s
+        end
+    end
+
+    remaining := RdLeft(r)
+    mut br := NewBitReader(((r.data as i64) + (r.pos as i64)) as void*, remaining)
+    until BufLen(out) < origLen:
+        mut cur := 0
+        until !tleaf[cur]:
+            bit := BitReadBit(br)
+            if bit == 0:
+                cur = tleft[cur]
+            else:
+                cur = tright[cur]
+            end
+        end
+        BufPush(out, tsym[cur])
+    end
+    ret out
+end

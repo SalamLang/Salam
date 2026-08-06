@@ -1,0 +1,522 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package excel
+
+import archive
+import compress
+import conv
+import str
+
+// Reads any .xlsx file - not just ones WriteXLSX produced - by resolving
+// xl/workbook.xml's sheet list through xl/_rels/workbook.xml.rels (real
+// spreadsheets don't reliably name worksheet parts sheet1.xml/sheet2.xml in
+// document order), and understanding both this package's own inline
+// strings and the shared-string table (xl/sharedStrings.xml) real Excel/
+// LibreOffice write by default.
+
+func _xlsx_resolve_target(target: str): str:
+    if str.StartsWith(target, "/"):
+        ret target.substr(1, target.len() - 1)
+    end
+    ret "xl/".concat(target)
+end
+
+func _xlsx_parse_rels(xml: str): HashMap<str, str>:
+    mut out := HashMap {} as HashMap<str, str>
+    mut pos := 0
+    until true:
+        idx := XmlFind(xml, "Relationship", pos)
+        if idx < 0: break end
+        id := XmlAttr(xml, idx, "Id")
+        target := XmlAttr(xml, idx, "Target")
+        if id.len() > 0:
+            out.put(id, target)
+        end
+        pos = XmlTagEnd(xml, idx)
+    end
+    ret out
+end
+
+func _xlsx_collect_text(body: str): str:
+    mut out := ""
+    mut pos := 0
+    until true:
+        idx := XmlFind(body, "t", pos)
+        if idx < 0: break end
+        if XmlSelfClosing(body, idx):
+            pos = XmlTagEnd(body, idx)
+        else:
+            cs := XmlTagEnd(body, idx)
+            ce := XmlFindClose(body, "t", cs)
+            if ce < 0: break end
+            out = out.concat(XmlUnescape(body.substr(cs, ce - cs)))
+            pos = XmlTagEnd(body, ce)
+        end
+    end
+    ret out
+end
+
+func _xlsx_parse_shared_strings(xml: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut pos := 0
+    until true:
+        idx := XmlFind(xml, "si", pos)
+        if idx < 0: break end
+        if XmlSelfClosing(xml, idx):
+            out.push("")
+            pos = XmlTagEnd(xml, idx)
+        else:
+            cs := XmlTagEnd(xml, idx)
+            ce := XmlFindClose(xml, "si", cs)
+            if ce < 0: break end
+            out.push(_xlsx_collect_text(xml.substr(cs, ce - cs)))
+            pos = XmlTagEnd(xml, ce)
+        end
+    end
+    ret out
+end
+
+func _xlsx_parse_numfmts(xml: str): HashMap<int, str>:
+    mut out := HashMap {} as HashMap<int, str>
+    start := XmlFind(xml, "numFmts", 0)
+    if start < 0: ret out end
+    if XmlSelfClosing(xml, start): ret out end
+    cs := XmlTagEnd(xml, start)
+    ce := XmlFindClose(xml, "numFmts", cs)
+    if ce < 0: ret out end
+    mut pos := cs
+    until true:
+        idx := XmlFind(xml, "numFmt", pos)
+        if idx < 0 || idx >= ce: break end
+        id_str := XmlAttr(xml, idx, "numFmtId")
+        code := XmlAttr(xml, idx, "formatCode")
+        if id_str.len() > 0:
+            out.put(conv.ParseInt(id_str) as int, code)
+        end
+        pos = XmlTagEnd(xml, idx)
+    end
+    ret out
+end
+
+func _xlsx_builtin_is_date(id: int): bool:
+    if id >= 14 && id <= 22: ret true end
+    if id >= 45 && id <= 47: ret true end
+    ret false
+end
+
+// Best-effort: a custom format code is treated as a date/time format if it
+// contains any of the year/day/hour literals ('m' is deliberately excluded
+// - it is ambiguous between "month" and "minute" placeholders and other
+// uses, but 'y'/'d'/'h' are not used in ordinary numeric formats).
+func _xlsx_code_looks_like_date(code: str): bool:
+    if code.len() == 0: ret false end
+    lc := code.lower()
+    if str.Contains(lc, "y") || str.Contains(lc, "d") || str.Contains(lc, "h"): ret true end
+    ret false
+end
+
+func _xlsx_parse_cellxfs_date_flags(xml: str, numfmt_codes: HashMap<int, str>): Vector<bool>:
+    mut out := Vector {} as Vector<bool>
+    xfs_start := XmlFind(xml, "cellXfs", 0)
+    if xfs_start < 0: ret out end
+    if XmlSelfClosing(xml, xfs_start): ret out end
+    cs := XmlTagEnd(xml, xfs_start)
+    ce := XmlFindClose(xml, "cellXfs", cs)
+    if ce < 0: ret out end
+    mut pos := cs
+    until true:
+        idx := XmlFind(xml, "xf", pos)
+        if idx < 0 || idx >= ce: break end
+        id_str := XmlAttr(xml, idx, "numFmtId")
+        mut is_date := false
+        if id_str.len() > 0:
+            fid := conv.ParseInt(id_str) as int
+            if _xlsx_builtin_is_date(fid):
+                is_date = true
+            else numfmt_codes.has(fid):
+                is_date = _xlsx_code_looks_like_date(numfmt_codes.get(fid))
+            end
+        end
+        out.push(is_date)
+        pos = XmlTagEnd(xml, idx)
+    end
+    ret out
+end
+
+func _xlsx_parse_fonts(xml: str): Vector<Style>:
+    mut out := Vector {} as Vector<Style>
+    start := XmlFind(xml, "fonts", 0)
+    if start < 0: ret out end
+    if XmlSelfClosing(xml, start): ret out end
+    cs := XmlTagEnd(xml, start)
+    ce := XmlFindClose(xml, "fonts", cs)
+    if ce < 0: ret out end
+    mut pos := cs
+    until true:
+        idx := XmlFind(xml, "font", pos)
+        if idx < 0 || idx >= ce: break end
+        if XmlSelfClosing(xml, idx):
+            out.push(Style {})
+            pos = XmlTagEnd(xml, idx)
+        else:
+            fcs := XmlTagEnd(xml, idx)
+            fce := XmlFindClose(xml, "font", fcs)
+            if fce < 0 || fce > ce: break end
+            mut st := Style {}
+            bidx := XmlFind(xml, "b", fcs)
+            if bidx >= 0 && bidx < fce: st.bold = true end
+            iidx := XmlFind(xml, "i", fcs)
+            if iidx >= 0 && iidx < fce: st.italic = true end
+            uidx := XmlFind(xml, "u", fcs)
+            if uidx >= 0 && uidx < fce: st.underline = true end
+            szidx := XmlFind(xml, "sz", fcs)
+            if szidx >= 0 && szidx < fce:
+                szv := XmlAttr(xml, szidx, "val")
+                if szv.len() > 0: st.font_size = conv.ParseInt(szv) as int end
+            end
+            coloridx := XmlFind(xml, "color", fcs)
+            if coloridx >= 0 && coloridx < fce:
+                rgb := XmlAttr(xml, coloridx, "rgb")
+                if rgb.len() == 8: st.font_color = rgb.substr(2, 6)
+                else rgb.len() == 6: st.font_color = rgb
+                end
+            end
+            nameidx := XmlFind(xml, "name", fcs)
+            if nameidx >= 0 && nameidx < fce:
+                nv := XmlAttr(xml, nameidx, "val")
+                if nv.len() > 0: st.font_name = nv end
+            end
+            out.push(st)
+            pos = XmlTagEnd(xml, fce)
+        end
+    end
+    ret out
+end
+
+func _xlsx_parse_fills(xml: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    start := XmlFind(xml, "fills", 0)
+    if start < 0: ret out end
+    if XmlSelfClosing(xml, start): ret out end
+    cs := XmlTagEnd(xml, start)
+    ce := XmlFindClose(xml, "fills", cs)
+    if ce < 0: ret out end
+    mut pos := cs
+    until true:
+        idx := XmlFind(xml, "fill", pos)
+        if idx < 0 || idx >= ce: break end
+        if XmlSelfClosing(xml, idx):
+            out.push("")
+            pos = XmlTagEnd(xml, idx)
+        else:
+            fcs := XmlTagEnd(xml, idx)
+            fce := XmlFindClose(xml, "fill", fcs)
+            if fce < 0 || fce > ce: break end
+            mut bg := ""
+            fgidx := XmlFind(xml, "fgColor", fcs)
+            if fgidx >= 0 && fgidx < fce:
+                rgb := XmlAttr(xml, fgidx, "rgb")
+                if rgb.len() == 8: bg = rgb.substr(2, 6)
+                else rgb.len() == 6: bg = rgb
+                end
+            end
+            out.push(bg)
+            pos = XmlTagEnd(xml, fce)
+        end
+    end
+    ret out
+end
+
+func _xlsx_align_from_str(h: str): int:
+    if h == "left": ret AlignLeft end
+    if h == "center": ret AlignCenter end
+    if h == "right": ret AlignRight end
+    ret AlignDefault
+end
+
+func _xlsx_valign_from_str(v: str): int:
+    if v == "top": ret AlignTop end
+    if v == "center": ret AlignMiddle end
+    if v == "bottom": ret AlignBottom end
+    ret AlignDefault
+end
+
+// Rebuilds the workbook's full style table (fonts+fills+numFmts+alignment,
+// combined per cellXfs entry) so cells that carry an `s="N"` attribute get
+// a matching Style back in the reloaded Workbook - not just the plain
+// value/kind date_flags alone would give. cellXfs order is the same as
+// the `s` index cells reference (both this reader and WriteXLSX treat
+// position in cellXfs as the style id directly), so `result.styles[i]`
+// after this matches `s="i"` on any `<c>`.
+func _xlsx_parse_styles(xml: str): StyleSheet:
+    mut result := StyleSheet {}
+    fonts := _xlsx_parse_fonts(xml)
+    fills := _xlsx_parse_fills(xml)
+    numfmt_codes := _xlsx_parse_numfmts(xml)
+
+    xfs_start := XmlFind(xml, "cellXfs", 0)
+    mut ce := -1
+    mut cs := -1
+    if xfs_start >= 0 && !XmlSelfClosing(xml, xfs_start):
+        cs = XmlTagEnd(xml, xfs_start)
+        ce = XmlFindClose(xml, "cellXfs", cs)
+    end
+
+    if ce >= 0:
+        mut pos := cs
+        until true:
+            idx := XmlFind(xml, "xf", pos)
+            if idx < 0 || idx >= ce: break end
+
+            font_id_str := XmlAttr(xml, idx, "fontId")
+            fill_id_str := XmlAttr(xml, idx, "fillId")
+            numfmt_id_str := XmlAttr(xml, idx, "numFmtId")
+
+            mut st := Style {}
+            if font_id_str.len() > 0:
+                fid := conv.ParseInt(font_id_str) as int
+                if fid >= 0 && fid < fonts.len():
+                    fst := fonts.get(fid)[0]
+                    st.bold = fst.bold
+                    st.italic = fst.italic
+                    st.underline = fst.underline
+                    st.font_size = fst.font_size
+                    st.font_color = fst.font_color
+                    st.font_name = fst.font_name
+                end
+            end
+            if fill_id_str.len() > 0:
+                flid := conv.ParseInt(fill_id_str) as int
+                if flid >= 0 && flid < fills.len():
+                    st.bg_color = fills.get(flid)[0]
+                end
+            end
+            if numfmt_id_str.len() > 0:
+                nfid := conv.ParseInt(numfmt_id_str) as int
+                if numfmt_codes.has(nfid):
+                    st.num_format = numfmt_codes.get(nfid)
+                end
+            end
+
+            if XmlSelfClosing(xml, idx):
+                pos = XmlTagEnd(xml, idx)
+            else:
+                xcs := XmlTagEnd(xml, idx)
+                xce := XmlFindClose(xml, "xf", xcs)
+                if xce < 0 || xce > ce: break end
+                aidx := XmlFind(xml, "alignment", xcs)
+                if aidx >= 0 && aidx < xce:
+                    st.align_h = _xlsx_align_from_str(XmlAttr(xml, aidx, "horizontal"))
+                    st.align_v = _xlsx_valign_from_str(XmlAttr(xml, aidx, "vertical"))
+                end
+                pos = XmlTagEnd(xml, xce)
+            end
+
+            result.styles.push(st)
+        end
+    end
+
+    fonts.free()
+    fills.free()
+    numfmt_codes.free()
+    ret result
+end
+
+func _xlsx_parse_row_into(xml: str, from: int, to_pos: int, sheet &: Sheet, date_flags: Vector<bool>, shared: Vector<str>):
+    mut pos := from
+    until true:
+        cidx := XmlFind(xml, "c", pos)
+        if cidx < 0 || cidx >= to_pos: break end
+        cref := XmlAttr(xml, cidx, "r")
+        mut row := 0
+        mut col := 0
+        has_ref := ParseCellRef(cref, row, col)
+        ttype := XmlAttr(xml, cidx, "t")
+        sid_str := XmlAttr(xml, cidx, "s")
+        mut sid := -1
+        if sid_str.len() > 0: sid = conv.ParseInt(sid_str) as int end
+
+        if XmlSelfClosing(xml, cidx):
+            pos = XmlTagEnd(xml, cidx)
+        else:
+            ccs := XmlTagEnd(xml, cidx)
+            cce := XmlFindClose(xml, "c", ccs)
+            if cce < 0: break end
+            body := xml.substr(ccs, cce - ccs)
+
+            if has_ref:
+                if ttype == "inlineStr":
+                    sheet.set_string(row, col, _xlsx_collect_text(body))
+                else ttype == "str":
+                    sheet.set_string(row, col, XmlUnescape(XmlInner(body, "v", 0)))
+                else ttype == "s":
+                    idx := conv.ParseInt(XmlInner(body, "v", 0)) as int
+                    if idx >= 0 && idx < shared.len():
+                        sheet.set_string(row, col, shared.get(idx)[0])
+                    end
+                else ttype == "b":
+                    sheet.set_bool(row, col, XmlInner(body, "v", 0) == "1")
+                else ttype == "e":
+                    sheet.set_error(row, col, XmlInner(body, "v", 0))
+                else:
+                    fidx := XmlFind(body, "f", 0)
+                    vtxt := XmlInner(body, "v", 0)
+                    num := conv.ParseFloat(vtxt)
+                    if fidx >= 0:
+                        sheet.set_formula(row, col, XmlUnescape(XmlInner(body, "f", 0)), num)
+                    else:
+                        mut is_date := false
+                        if sid >= 0 && sid < date_flags.len(): is_date = date_flags.get(sid)[0] end
+                        if is_date:
+                            sheet.set_date(row, col, SerialToEpoch(num))
+                        else:
+                            sheet.set_number(row, col, num)
+                        end
+                    end
+                end
+                if sid >= 0: sheet.set_style(row, col, sid) end
+            end
+            pos = XmlTagEnd(xml, cce)
+        end
+    end
+end
+
+func _xlsx_parse_sheet_into(xml: str, sheet &: Sheet, date_flags: Vector<bool>, shared: Vector<str>):
+    mut pos := 0
+    until true:
+        ridx := XmlFind(xml, "row", pos)
+        if ridx < 0: break end
+        if XmlSelfClosing(xml, ridx):
+            pos = XmlTagEnd(xml, ridx)
+        else:
+            rcs := XmlTagEnd(xml, ridx)
+            rce := XmlFindClose(xml, "row", rcs)
+            if rce < 0: break end
+            _xlsx_parse_row_into(xml, rcs, rce, sheet, date_flags, shared)
+            pos = XmlTagEnd(xml, rce)
+        end
+    end
+    mut mpos := 0
+    until true:
+        midx := XmlFind(xml, "mergeCell", mpos)
+        if midx < 0: break end
+        ref := XmlAttr(xml, midx, "ref")
+        colon := str.IndexOf(ref, ":")
+        if colon > 0:
+            mut r1 := 0
+            mut c1 := 0
+            mut r2 := 0
+            mut c2 := 0
+            if ParseCellRef(ref.substr(0, colon), r1, c1) && ParseCellRef(ref.substr(colon + 1, ref.len() - colon - 1), r2, c2):
+                sheet.merge_cells(r1, c1, r2, c2)
+            end
+        end
+        mpos = XmlTagEnd(xml, midx)
+    end
+end
+
+// Reads `path` as a .xlsx file. `ok` is false (and `err` set to a
+// human-readable message) if the file cannot be opened or is not a
+// readable .xlsx archive.
+@en "ReadXLSX"
+@fa "خواندن ایکس‌ال‌اس‌ایکس"
+@ar "قراءة إكس إل إس إكس"
+pub func ReadXLSX(path: str, ok &: bool, err &: str): Workbook:
+    ok = false
+    err = ""
+    mut book := NewWorkbook()
+    mut read_ok := false
+    data := archive.ReadBinaryFile(path, read_ok)
+    if !read_ok:
+        err = "cannot open file: ".concat(path)
+        compress.BufFree(data)
+        ret book
+    end
+
+    mut wb_ok := false
+    wbbuf := archive.ZipExtractByName(data.data, data.len, "xl/workbook.xml", wb_ok)
+    if !wb_ok:
+        err = "not a valid .xlsx file (missing xl/workbook.xml)"
+        compress.BufFree(wbbuf)
+        compress.BufFree(data)
+        ret book
+    end
+    wbxml := compress.BufToStrUnsafe(wbbuf)
+
+    mut rels_ok := false
+    relsbuf := archive.ZipExtractByName(data.data, data.len, "xl/_rels/workbook.xml.rels", rels_ok)
+    mut rels := HashMap {} as HashMap<str, str>
+    if rels_ok:
+        rels = _xlsx_parse_rels(compress.BufToStrUnsafe(relsbuf))
+    end
+    compress.BufFree(relsbuf)
+
+    mut shared := Vector {} as Vector<str>
+    mut ss_ok := false
+    ssbuf := archive.ZipExtractByName(data.data, data.len, "xl/sharedStrings.xml", ss_ok)
+    if ss_ok:
+        shared = _xlsx_parse_shared_strings(compress.BufToStrUnsafe(ssbuf))
+    end
+    compress.BufFree(ssbuf)
+
+    mut date_flags := Vector {} as Vector<bool>
+    mut styles_ok := false
+    stylesbuf := archive.ZipExtractByName(data.data, data.len, "xl/styles.xml", styles_ok)
+    if styles_ok:
+        stylesxml := compress.BufToStrUnsafe(stylesbuf)
+        numfmt_codes := _xlsx_parse_numfmts(stylesxml)
+        date_flags = _xlsx_parse_cellxfs_date_flags(stylesxml, numfmt_codes)
+        book.styles = _xlsx_parse_styles(stylesxml)
+        numfmt_codes.free()
+    end
+    compress.BufFree(stylesbuf)
+
+    mut pos := 0
+    until true:
+        sidx := XmlFind(wbxml, "sheet", pos)
+        if sidx < 0: break end
+        name := XmlAttr(wbxml, sidx, "name")
+        mut rid := XmlAttr(wbxml, sidx, "r:id")
+        if rid.len() == 0: rid = XmlAttr(wbxml, sidx, "id") end
+
+        mut sh := NewSheet(name)
+        if rels.has(rid):
+            target := rels.get(rid)
+            if target.len() > 0:
+                partpath := _xlsx_resolve_target(target)
+                mut sheet_ok := false
+                sheetbuf := archive.ZipExtractByName(data.data, data.len, partpath, sheet_ok)
+                if sheet_ok:
+                    _xlsx_parse_sheet_into(compress.BufToStrUnsafe(sheetbuf), sh, date_flags, shared)
+                end
+                compress.BufFree(sheetbuf)
+            end
+        end
+        book.sheets.push(sh)
+
+        pos = XmlTagEnd(wbxml, sidx)
+    end
+
+    rels.free()
+    shared.free()
+    date_flags.free()
+    compress.BufFree(wbbuf)
+    compress.BufFree(data)
+
+    book.format = FormatXLSX
+    book.source_path = path
+    ok = true
+    ret book
+end

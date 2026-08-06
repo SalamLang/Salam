@@ -1,0 +1,117 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import encoding.json
+import encoding.value
+import encoding.encerr
+import testing
+import os
+import str
+
+func main:
+    mut members := Vector {} as Vector<str>
+    members.push(json.Member("name", "salam"))
+    members.push(json.MemberInt("version", 2 as i64))
+    members.push(json.MemberBool("active", true))
+    members.push(json.MemberFloat("pi", 3.5))
+    mut tagItems := Vector {} as Vector<str>
+    tagItems.push(json.Str("a"))
+    tagItems.push(json.Str("b"))
+    members.push(json.MemberRaw("tags", json.Array(tagItems)))
+    jsonText := json.Object(members)
+
+    mut err := encerr.NoError()
+    v := json.Decode(jsonText, err)
+    testing.AssertFalse(encerr.IsError(err))
+    testing.AssertEqStr(value.AsString(value.ObjectGet(v, "name")), "salam")
+    testing.AssertEqInt64(value.AsInt(value.ObjectGet(v, "version")), 2 as i64)
+    testing.AssertTrue(value.AsBool(value.ObjectGet(v, "active")))
+    testing.AssertEqFloat(value.AsFloat(value.ObjectGet(v, "pi")), 3.5, 0.0001)
+    tags := value.ObjectGet(v, "tags")
+    testing.AssertEqInt(value.ArrayLen(tags), 2)
+    testing.AssertEqStr(value.AsString(value.ArrayGet(tags, 0)), "a")
+
+    // null handling (kept as a separate short literal - a single long
+    // string literal combining this object shape with the one above hit
+    // some lexer length/complexity threshold and failed to parse at all;
+    // not investigated further, just avoided)
+    mut errNull := encerr.NoError()
+    vNull := json.Decode(`{"nothing": null}`, errNull)
+    testing.AssertFalse(encerr.IsError(errNull))
+    testing.AssertTrue(value.IsNull(value.ObjectGet(vNull, "nothing")))
+    value.ObjectSet(v, "nothing", value.ValueNull())
+    value.ValueFree(vNull)
+
+    // round trip: decode then encode (compact) then decode again -> equal
+    compact := json.EncodeDefault(v)
+    mut err2 := encerr.NoError()
+    v2 := json.Decode(compact, err2)
+    testing.AssertFalse(encerr.IsError(err2))
+    testing.AssertTrue(value.Equal(v, v2))
+
+    // JSONOptions{indent} cross-checked against the existing json.Indent -
+    // structurally (decode both back), not by exact text: HashMap iteration
+    // order isn't guaranteed, so key order in the encoded text can differ
+    // between the two independent encoders even when the content is
+    // identical.
+    minified := json.Minify(jsonText)
+    mut err3 := encerr.NoError()
+    vMin := json.Decode(minified, err3)
+    prettyA := json.Encode(vMin, json.JSONOptions { indent = "  " })
+    prettyB := json.Indent(minified)
+    testing.AssertTrue(str.Contains(prettyA, "\n"))
+    mut errPA := encerr.NoError()
+    mut errPB := encerr.NoError()
+    vPA := json.Decode(prettyA, errPA)
+    vPB := json.Decode(prettyB, errPB)
+    testing.AssertFalse(encerr.IsError(errPA))
+    testing.AssertFalse(encerr.IsError(errPB))
+    testing.AssertTrue(value.Equal(vPA, vPB))
+    value.ValueFree(vPA)
+    value.ValueFree(vPB)
+
+    // ignore_null
+    noNull := json.Encode(v, json.JSONOptions { ignore_null = true })
+    testing.AssertFalse(str.Contains(noNull, "nothing"))
+    withNull := json.Encode(v, json.JSONOptions {})
+    testing.AssertTrue(str.Contains(withNull, "nothing"))
+
+    // sort_keys: output key order must be alphabetical
+    mut obj := value.NewValueObject()
+    value.ObjectSet(obj, "z", value.ValueInt(1 as i64))
+    value.ObjectSet(obj, "a", value.ValueInt(2 as i64))
+    sorted := json.Encode(obj, json.JSONOptions { sort_keys = true })
+    testing.AssertTrue(str.IndexOf(sorted, "a") < str.IndexOf(sorted, "z"))
+
+    // escapes and unicode round trip
+    mut errEsc := encerr.NoError()
+    vEsc := json.Decode("\"hi \\\"there\\\"\\n\"", errEsc)
+    testing.AssertFalse(encerr.IsError(errEsc))
+    testing.AssertEqStr(value.AsString(vEsc), "hi \"there\"\n")
+
+    // malformed jsonText sets an error
+    mut errBad := encerr.NoError()
+    json.Decode(`{"a": }`, errBad)
+    testing.AssertTrue(encerr.IsError(errBad))
+
+    value.ValueFree(v)
+    value.ValueFree(v2)
+    value.ValueFree(vMin)
+    value.ValueFree(obj)
+    value.ValueFree(vEsc)
+
+    os.Exit(testing.Summary())
+end

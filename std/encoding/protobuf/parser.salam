@@ -1,0 +1,376 @@
+package protobuf
+
+struct Pp:
+    pub toks: PTokenStream = PTokenStream {}
+    pub count: int = 0
+    pub pos: int = 0
+    pub hadError: bool = false
+    pub errMsg: str = ""
+end
+
+func pp_peek(p: Pp): PToken: ret p.toks.toks.get(p.pos)[0] end
+
+func pp_check(p: Pp, kind: int): bool: ret pp_peek(p).kind == kind end
+
+func pp_check_ident(p: Pp, lexeme: str): bool:
+    t := pp_peek(p)
+    ret t.kind == PTK_IDENT && t.lexeme == lexeme
+end
+
+func pp_advance(p &: Pp): PToken:
+    t := pp_peek(p)
+    if p.pos < p.count - 1: p.pos += 1 end
+    ret t
+end
+
+func pp_match(p &: Pp, kind: int): bool:
+    if pp_check(p, kind):
+        pp_advance(p)
+        ret true
+    end
+    ret false
+end
+
+func pp_match_ident(p &: Pp, lexeme: str): bool:
+    if pp_check_ident(p, lexeme):
+        pp_advance(p)
+        ret true
+    end
+    ret false
+end
+
+func pp_error(p &: Pp, msg: str):
+    p.hadError = true
+    if p.errMsg == "": p.errMsg = msg end
+end
+
+func pp_expect(p &: Pp, kind: int, what: str): bool:
+    if pp_check(p, kind):
+        pp_advance(p)
+        ret true
+    end
+    pp_error(p, "expected ".concat(what))
+    ret false
+end
+
+// Advances until the token right after a ';' (or right before a '}'/EOF) -
+// panic-mode recovery so one bad field doesn't abort the whole file.
+func pp_sync(p &: Pp):
+    until !(pp_check(p, PTK_SEMI) || pp_check(p, PTK_RBRACE) || pp_check(p, PTK_EOF)):
+        pp_advance(p)
+    end
+    if pp_check(p, PTK_SEMI): pp_advance(p) end
+end
+
+func pp_skip_balanced(p &: Pp):
+    pp_expect(p, PTK_LBRACE, "'{'")
+    mut depth := 1
+    until depth > 0 && !pp_check(p, PTK_EOF):
+        if pp_check(p, PTK_LBRACE): depth += 1 end
+        if pp_check(p, PTK_RBRACE): depth -= 1 end
+        pp_advance(p)
+    end
+end
+
+func parse_type_name(p &: Pp): str:
+    mut sb := ""
+    if pp_check(p, PTK_DOT):
+        pp_advance(p)
+        sb = "."
+    end
+    t := pp_advance(p)
+    sb = sb.concat(t.lexeme)
+    until pp_check(p, PTK_DOT):
+        pp_advance(p)
+        t2 := pp_advance(p)
+        sb = sb.concat(".").concat(t2.lexeme)
+    end
+    ret sb
+end
+
+func parse_field_options(p &: Pp, f &: PField):
+    if !pp_match(p, PTK_LBRACKET): ret end
+    until true:
+        nameTok := pp_advance(p)
+        pp_expect(p, PTK_EQ, "'='")
+        valTok := pp_advance(p)
+        if nameTok.lexeme == "packed":
+            f.packedOpt = valTok.kind == PTK_IDENT && valTok.lexeme == "true"
+        end
+        if nameTok.lexeme == "deprecated":
+            f.deprecated = valTok.kind == PTK_IDENT && valTok.lexeme == "true"
+        end
+        if !pp_match(p, PTK_COMMA): break end
+    end
+    pp_expect(p, PTK_RBRACKET, "']'")
+end
+
+func parse_field_with_type(p &: Pp, msg &: PMessage, typeName: str, repeated: bool): bool:
+    mut f := PField {}
+    f.repeated = repeated
+    scalarKind := ScalarKindFromName(typeName)
+    if scalarKind != 0:
+        f.kind = scalarKind
+    else:
+        f.kind = FK_MESSAGE
+        f.typeName = typeName
+    end
+    nameTok := pp_advance(p)
+    f.name = nameTok.lexeme
+    if !pp_expect(p, PTK_EQ, "'='"):
+        pp_sync(p)
+        ret false
+    end
+    numTok := pp_advance(p)
+    f.number = numTok.ival as int
+    parse_field_options(p, f)
+    if !pp_expect(p, PTK_SEMI, "';'"):
+        pp_sync(p)
+        ret false
+    end
+    msg.fields.push(f)
+    ret true
+end
+
+func parse_map_field(p &: Pp, msg &: PMessage): bool:
+    pp_advance(p)
+    pp_expect(p, PTK_LANGLE, "'<'")
+    keyTypeName := parse_type_name(p)
+    pp_expect(p, PTK_COMMA, "','")
+    valTypeName := parse_type_name(p)
+    pp_expect(p, PTK_RANGLE, "'>'")
+    nameTok := pp_advance(p)
+    if !pp_expect(p, PTK_EQ, "'='"):
+        pp_sync(p)
+        ret false
+    end
+    numTok := pp_advance(p)
+    mut f := PField {}
+    f.name = nameTok.lexeme
+    f.kind = FK_MAP
+    f.keyKind = ScalarKindFromName(keyTypeName)
+    valScalar := ScalarKindFromName(valTypeName)
+    if valScalar != 0:
+        f.mapValueKind = valScalar
+    else:
+        f.mapValueKind = FK_MESSAGE
+        f.mapValueTypeName = valTypeName
+    end
+    f.number = numTok.ival as int
+    parse_field_options(p, f)
+    if !pp_expect(p, PTK_SEMI, "';'"):
+        pp_sync(p)
+        ret false
+    end
+    msg.fields.push(f)
+    ret true
+end
+
+func parse_oneof(p &: Pp, msg &: PMessage): bool:
+    pp_advance(p)
+    nameTok := pp_advance(p)
+    mut oneof := POneof { name = nameTok.lexeme }
+    if !pp_expect(p, PTK_LBRACE, "'{'"):
+        pp_sync(p)
+        ret false
+    end
+    until true:
+        if pp_check(p, PTK_RBRACE) || pp_check(p, PTK_EOF): break end
+        if pp_match(p, PTK_SEMI): continue end
+        idx := msg.fields.len()
+        typeName := parse_type_name(p)
+        ok := parse_field_with_type(p, msg, typeName, false)
+        if ok:
+            mut lastField := msg.fields.get(idx)[0]
+            lastField.oneofIndex = msg.oneofs.len()
+            msg.fields.set(idx, lastField)
+            oneof.fieldIndices.push(idx)
+        end
+    end
+    pp_expect(p, PTK_RBRACE, "'}'")
+    msg.oneofs.push(oneof)
+    ret true
+end
+
+func parse_reserved(p &: Pp):
+    pp_advance(p)
+    until !(pp_check(p, PTK_SEMI) || pp_check(p, PTK_EOF)):
+        pp_advance(p)
+    end
+    pp_match(p, PTK_SEMI)
+end
+
+func parse_option_stmt(p &: Pp):
+    pp_advance(p)
+    until !(pp_check(p, PTK_SEMI) || pp_check(p, PTK_EOF)):
+        pp_advance(p)
+    end
+    pp_match(p, PTK_SEMI)
+end
+
+func parse_enum(p &: Pp, out &: PEnum): bool:
+    pp_advance(p)
+    nameTok := pp_advance(p)
+    out.name = nameTok.lexeme
+    if !pp_expect(p, PTK_LBRACE, "'{'"):
+        pp_sync(p)
+        ret false
+    end
+    until true:
+        if pp_check(p, PTK_RBRACE) || pp_check(p, PTK_EOF): break end
+        if pp_match(p, PTK_SEMI): continue end
+        if pp_check_ident(p, "option"):
+            parse_option_stmt(p)
+            continue
+        end
+        if pp_check_ident(p, "reserved"):
+            parse_reserved(p)
+            continue
+        end
+        valNameTok := pp_advance(p)
+        if !pp_expect(p, PTK_EQ, "'='"):
+            pp_sync(p)
+            continue
+        end
+        mut sign := 1 as i64
+        if pp_match(p, PTK_MINUS): sign = 0 - 1 as i64 end
+        numTok := pp_advance(p)
+        mut ev := PEnumValue { name = valNameTok.lexeme }
+        ev.number = (sign * numTok.ival) as int
+        // trailing field options e.g. [deprecated = true] - parsed and discarded
+        if pp_check(p, PTK_LBRACKET):
+            mut dummy := PField {}
+            parse_field_options(p, dummy)
+        end
+        out.values.push(ev)
+        pp_expect(p, PTK_SEMI, "';'")
+    end
+    pp_expect(p, PTK_RBRACE, "'}'")
+    ret true
+end
+
+func parse_message(p &: Pp, out &: PMessage): bool:
+    pp_advance(p)
+    nameTok := pp_advance(p)
+    out.name = nameTok.lexeme
+    if !pp_expect(p, PTK_LBRACE, "'{'"):
+        pp_sync(p)
+        ret false
+    end
+    until true:
+        if pp_check(p, PTK_RBRACE) || pp_check(p, PTK_EOF): break end
+        if pp_match(p, PTK_SEMI): continue end
+        if pp_check_ident(p, "message"):
+            mut nested := PMessage {}
+            parse_message(p, nested)
+            out.nestedMessages.push(nested)
+            continue
+        end
+        if pp_check_ident(p, "enum"):
+            mut nestedEnum := PEnum {}
+            parse_enum(p, nestedEnum)
+            out.nestedEnums.push(nestedEnum)
+            continue
+        end
+        if pp_check_ident(p, "oneof"):
+            parse_oneof(p, out)
+            continue
+        end
+        if pp_check_ident(p, "map"):
+            parse_map_field(p, out)
+            continue
+        end
+        if pp_check_ident(p, "reserved"):
+            parse_reserved(p)
+            continue
+        end
+        if pp_check_ident(p, "option"):
+            parse_option_stmt(p)
+            continue
+        end
+        mut repeated := false
+        if pp_match_ident(p, "repeated"): repeated = true end
+        typeName := parse_type_name(p)
+        parse_field_with_type(p, out, typeName, repeated)
+    end
+    pp_expect(p, PTK_RBRACE, "'}'")
+    ret true
+end
+
+func parse_service(p &: Pp):
+    pp_advance(p)
+    pp_advance(p)
+    pp_skip_balanced(p)
+end
+
+func parse_package_stmt(p &: Pp, out &: PFile):
+    pp_advance(p)
+    name := parse_type_name(p)
+    out.packageName = name
+    pp_expect(p, PTK_SEMI, "';'")
+end
+
+func parse_import_stmt(p &: Pp, out &: PFile):
+    pp_advance(p)
+    strTok := pp_advance(p)
+    out.imports.push(strTok.sval)
+    pp_expect(p, PTK_SEMI, "';'")
+end
+
+func parse_syntax_stmt(p &: Pp):
+    pp_advance(p)
+    pp_expect(p, PTK_EQ, "'='")
+    pp_advance(p)
+    pp_expect(p, PTK_SEMI, "';'")
+end
+
+pub func ParseFile(source: str, ok &: bool): PFile:
+    mut out := PFile {}
+    mut tokOk := false
+    ts := Tokenize(source, tokOk)
+    mut p := Pp {}
+    p.toks = ts
+    p.count = ts.toks.len()
+    p.pos = 0
+    ok = tokOk
+    until true:
+        if pp_check(p, PTK_EOF): break end
+        if pp_match(p, PTK_SEMI): continue end
+        if pp_check_ident(p, "syntax"):
+            parse_syntax_stmt(p)
+            continue
+        end
+        if pp_check_ident(p, "package"):
+            parse_package_stmt(p, out)
+            continue
+        end
+        if pp_check_ident(p, "import"):
+            parse_import_stmt(p, out)
+            continue
+        end
+        if pp_check_ident(p, "option"):
+            parse_option_stmt(p)
+            continue
+        end
+        if pp_check_ident(p, "message"):
+            mut msg := PMessage {}
+            parse_message(p, msg)
+            out.messages.push(msg)
+            continue
+        end
+        if pp_check_ident(p, "enum"):
+            mut en := PEnum {}
+            parse_enum(p, en)
+            out.enums.push(en)
+            continue
+        end
+        if pp_check_ident(p, "service"):
+            parse_service(p)
+            continue
+        end
+        pp_error(p, "unexpected top-level token")
+        pp_sync(p)
+    end
+    if p.hadError: ok = false end
+    ret out
+end

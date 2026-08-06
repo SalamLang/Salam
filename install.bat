@@ -1,19 +1,12 @@
-@echo off
-setlocal EnableDelayedExpansion
 rem Salam installer for Windows.
 rem
 rem Usage:
 rem   powershell -c "irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat -OutFile install.bat"; .\install.bat
 rem   install.bat --dir .
 rem
-rem Env overrides:
-rem   SALAM_INSTALL_DIR   directory to place salam.exe in (default: %USERPROFILE%\.salam\bin)
-rem   SALAM_VERSION       version to install, e.g. "0.2.7" (default: newest release that ships a
-rem                       matching asset - a "latest" release can exist with zero assets if its
-rem                       build matrix failed, so this is not simply /releases/latest)
-rem
-rem All networking, GitHub API/JSON handling and zip extraction is done via PowerShell
-rem (bundled with every supported Windows release), so this script has no other dependency.
+
+@echo off
+setlocal EnableDelayedExpansion
 
 set "REPO=SalamLang/Salam"
 set "INSTALL_DIR=%SALAM_INSTALL_DIR%"
@@ -40,7 +33,6 @@ echo Usage: install.bat [--dir DIR] [--version X.Y.Z]
 exit /b 0
 :args_done
 
-rem --- detect architecture -------------------------------------------------
 set "ARCH=%PROCESSOR_ARCHITECTURE%"
 if /I "%PROCESSOR_ARCHITEW6432%" NEQ "" set "ARCH=%PROCESSOR_ARCHITEW6432%"
 
@@ -48,6 +40,14 @@ if /I "%ARCH%"=="AMD64" (
   set "PLATFORM=windows"
 ) else if /I "%ARCH%"=="x86" (
   set "PLATFORM=windows-i686"
+) else if /I "%ARCH%"=="ARM64" (
+  for /f "tokens=4-5 delims=. " %%a in ('ver') do set "WINVER=%%a.%%b"
+  if "!WINVER!"=="10.0" (
+    for /f "tokens=3" %%b in ('reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion" /v CurrentBuildNumber 2^>nul') do set "BUILD=%%b"
+    if !BUILD! GEQ 22000 (set "PLATFORM=windows") else (set "PLATFORM=windows-i686")
+  ) else (
+    set "PLATFORM=windows-i686"
+  )
 ) else (
   echo error: unsupported architecture: %ARCH% 1>&2
   echo Salam publishes windows ^(x86_64^) and windows-i686 ^(32-bit^) builds only. 1>&2
@@ -57,23 +57,6 @@ if /I "%ARCH%"=="AMD64" (
 set "WORKDIR=%TEMP%\salam-install-%RANDOM%"
 mkdir "%WORKDIR%" >nul 2>nul
 
-rem --- resolve version and download (PowerShell: HTTP + JSON + retry loop) --
-rem Newest-first walk of releases, downloading the first one that actually
-rem has a %PLATFORM% asset - guards against a "latest" release that was
-rem tagged with zero assets by a failed build matrix.
-rem
-rem This is deliberately NOT run through `for /f` with the command inline
-rem (`for /f ... in (\`powershell ...\`) do ...`): for /f's backquote-command
-rem parser has a much smaller internal buffer than a normal cmd line and
-rem silently mangles/truncates long inline commands (confirmed: the exact
-rem same call works standalone but breaks under for /f). So the resolver
-rem runs directly with output redirected to a file, and only that short
-rem file *path* goes through for /f. The script itself is passed via
-rem -EncodedCommand (Base64 of UTF-16LE) rather than -Command, since cmd.exe
-rem treats |, &, <, > as special even inside double quotes, and REPO/
-rem PLATFORM/WORKDIR/VERSION are read from the environment (already real
-rem process env vars via `set`) rather than interpolated into the script
-rem text, so nothing about this call depends on cmd's quoting behavior.
 powershell -NoProfile -NonInteractive -EncodedCommand JABFAHIAcgBvAHIAQQBjAHQAaQBvAG4AUAByAGUAZgBlAHIAZQBuAGMAZQAgAD0AIAAnAFMAdABvAHAAJwAKACQAUAByAG8AZwByAGUAcwBzAFAAcgBlAGYAZQByAGUAbgBjAGUAIAA9ACAAJwBTAGkAbABlAG4AdABsAHkAQwBvAG4AdABpAG4AdQBlACcACgAkAHMAYwByAGkAcAB0ADoAcgBlAHMAdQBsAHQATABpAG4AZQAgAD0AIAAkAG4AdQBsAGwACgBmAHUAbgBjAHQAaQBvAG4AIABUAHIAeQBPAG4AZQAoACQAdgApACAAewAKACAAIAAkAGEAcwBzAGUAdAAgAD0AIAAnAHMAYQBsAGEAbQAtACcAIAArACAAJAB2ACAAKwAgACcALQAnACAAKwAgACQAZQBuAHYAOgBQAEwAQQBUAEYATwBSAE0AIAArACAAJwAuAHoAaQBwACcACgAgACAAJAB1AHIAbAAgAD0AIAAnAGgAdAB0AHAAcwA6AC8ALwBnAGkAdABoAHUAYgAuAGMAbwBtAC8AJwAgACsAIAAkAGUAbgB2ADoAUgBFAFAATwAgACsAIAAnAC8AcgBlAGwAZQBhAHMAZQBzAC8AZABvAHcAbgBsAG8AYQBkAC8AdgAnACAAKwAgACQAdgAgACsAIAAnAC8AJwAgACsAIAAkAGEAcwBzAGUAdAAKACAAIAAkAG8AdQB0ACAAPQAgAEoAbwBpAG4ALQBQAGEAdABoACAAJABlAG4AdgA6AFcATwBSAEsARABJAFIAIAAkAGEAcwBzAGUAdAAKACAAIAB0AHIAeQAgAHsACgAgACAAIAAgAEkAbgB2AG8AawBlAC0AVwBlAGIAUgBlAHEAdQBlAHMAdAAgAC0AVQBzAGUAQgBhAHMAaQBjAFAAYQByAHMAaQBuAGcAIAAtAFUAcgBpACAAJAB1AHIAbAAgAC0ATwB1AHQARgBpAGwAZQAgACQAbwB1AHQAIAAtAEUAcgByAG8AcgBBAGMAdABpAG8AbgAgAFMAdABvAHAACgAgACAAIAAgACQAcwBjAHIAaQBwAHQAOgByAGUAcwB1AGwAdABMAGkAbgBlACAAPQAgACQAdgAgACsAIAAnACwAJwAgACsAIAAkAGEAcwBzAGUAdAAgACsAIAAnACwAJwAgACsAIAAkAG8AdQB0AAoAIAAgACAAIAByAGUAdAB1AHIAbgAgACQAdAByAHUAZQAKACAAIAB9ACAAYwBhAHQAYwBoACAAewAKACAAIAAgACAAcgBlAHQAdQByAG4AIAAkAGYAYQBsAHMAZQAKACAAIAB9AAoAfQAKAGkAZgAgACgAJABlAG4AdgA6AFYARQBSAFMASQBPAE4AIAAtAGEAbgBkACAAJABlAG4AdgA6AFYARQBSAFMASQBPAE4AIAAtAG4AZQAgACcAJwApACAAewAKACAAIABpAGYAIAAoAFQAcgB5AE8AbgBlACAAJABlAG4AdgA6AFYARQBSAFMASQBPAE4AKQAgAHsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACQAcgBlAHMAdQBsAHQATABpAG4AZQA7ACAAZQB4AGkAdAAgADAAIAB9ACAAZQBsAHMAZQAgAHsAIABlAHgAaQB0ACAAMQAgAH0ACgB9AAoAdAByAHkAIAB7AAoAIAAgACQAcgBlAGwAcwAgAD0AIABJAG4AdgBvAGsAZQAtAFIAZQBzAHQATQBlAHQAaABvAGQAIAAtAFUAcwBlAEIAYQBzAGkAYwBQAGEAcgBzAGkAbgBnACAALQBVAHIAaQAgACgAJwBoAHQAdABwAHMAOgAvAC8AYQBwAGkALgBnAGkAdABoAHUAYgAuAGMAbwBtAC8AcgBlAHAAbwBzAC8AJwAgACsAIAAkAGUAbgB2ADoAUgBFAFAATwAgACsAIAAnAC8AcgBlAGwAZQBhAHMAZQBzAD8AcABlAHIAXwBwAGEAZwBlAD0AMQAwACcAKQAKAH0AIABjAGEAdABjAGgAIAB7AAoAIAAgAGUAeABpAHQAIAAxAAoAfQAKAGYAbwByAGUAYQBjAGgAIAAoACQAcgAgAGkAbgAgACQAcgBlAGwAcwApACAAewAKACAAIAAkAHYAZQByACAAPQAgACQAcgAuAHQAYQBnAF8AbgBhAG0AZQAgAC0AcgBlAHAAbABhAGMAZQAgACcAXgB2ACcALAAgACcAJwAKACAAIABpAGYAIAAoAFQAcgB5AE8AbgBlACAAJAB2AGUAcgApACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJAByAGUAcwB1AGwAdABMAGkAbgBlADsAIABlAHgAaQB0ACAAMAAgAH0ACgB9AAoAZQB4AGkAdAAgADEA > "%WORKDIR%\resolve.txt" 2>nul
 
 set "VERSION="
@@ -113,13 +96,10 @@ if not exist "%BINARY%" (
   exit /b 1
 )
 
-rem --- install ---------------------------------------------------------------
 if "%INSTALL_DIR%"=="" set "INSTALL_DIR=%USERPROFILE%\.salam\bin"
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%" >nul 2>nul
 copy /y "%BINARY%" "%INSTALL_DIR%\salam.exe" >nul
 
-rem Ship the C backend's bundled tcc/ alongside salam.exe when present, since
-rem `salam build` (the non-LLVM backend) resolves it relative to the exe.
 if exist "%EXTRACT_DIR%\salam-%PLATFORM%\tcc" (
   xcopy /e /i /y /q "%EXTRACT_DIR%\salam-%PLATFORM%\tcc" "%INSTALL_DIR%\tcc" >nul
 )
@@ -127,9 +107,6 @@ if exist "%EXTRACT_DIR%\salam-%PLATFORM%\tcc" (
 echo Installed: %INSTALL_DIR%\salam.exe
 "%INSTALL_DIR%\salam.exe" version 2>nul
 
-rem Only touch the user PATH for the default, non-CI install location; a
-rem caller-specified --dir (e.g. a build pipeline dropping .\salam.exe next
-rem to a script that expects it there) means "just put it here".
 if /I "%INSTALL_DIR%"=="%USERPROFILE%\.salam\bin" (
   echo ";%PATH%;" | find /I ";%INSTALL_DIR%;" >nul
   if errorlevel 1 (

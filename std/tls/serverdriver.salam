@@ -1,0 +1,231 @@
+package tls
+
+// Server-side handshake driver: reads ClientHello, negotiates version and
+// suite, and dispatches to the TLS 1.3 flow (below) or the 1.2 flow
+// (serverdriver12.salam). A client offering neither is refused with a clear
+// reason rather than silently mishandled.
+
+struct ServerConfig:
+    pub chain: Roots = Roots {}
+    pub key: PrivateKey = PrivateKey {}
+    pub ok: bool = false
+end
+
+func _do_server_handshake13(c &: Conn, h &: Handshake, cfg: ServerConfig, chi: ClientHelloInfo, suite: int, buf &: Buf): bool:
+    scheme := _pick_sig_scheme(chi, cfg.key)
+    if scheme == 0:
+        ret _conn_fail(c, "no compatible signature scheme for this server key")
+    end
+    if chi.kx_group == 0:
+        ret _conn_fail(c, "client sent no usable key share (HelloRetryRequest not implemented)")
+    end
+    if !_hs_server_kx(h, chi.kx_group, chi.kx_pub):
+        ret _conn_fail(c, "key exchange failed")
+    end
+
+    mut sh := _newbuf(256)
+    defer _buf_free(sh)
+    if !_hs_build_server_hello(h, chi, suite, true, sh):
+        ret _conn_fail(c, "could not build ServerHello")
+    end
+    _hash_update(h.tr, sh.p, sh.len)
+    if !_rec_write(h.rec, REC_HANDSHAKE, sh.p, sh.len):
+        ret _conn_fail(c, "could not send ServerHello")
+    end
+
+    // Middlebox compatibility (RFC 8446 appendix D.4): a plaintext
+    // ChangeCipherSpec right after ServerHello, mirroring where one would
+    // sit in a TLS 1.2 handshake. It carries no meaning here and must not
+    // enter any transcript; real servers send it and real clients (this
+    // one included, via _hs_next_msg's CCS-skipping) ignore it.
+    mut ccs := _newbuf(1)
+    defer _buf_free(ccs)
+    _put8(ccs, 1)
+    _rec_write_plain(h.rec, REC_CHANGE_CIPHER_SPEC, ccs.p, 1)
+
+    if !_hs_key_schedule(h):
+        ret _conn_fail(c, "key schedule failed")
+    end
+    // server writes with s_hs_secret, reads with c_hs_secret - the mirror
+    // image of the client's _install_keys(h, s_hs_secret, c_hs_secret)
+    _install_keys(h, h.c_hs_secret, h.s_hs_secret)
+
+    mut ee := _newbuf(64)
+    defer _buf_free(ee)
+    _hs_build_encrypted_extensions(ee)
+    _hash_update(h.tr, ee.p, ee.len)
+    if !_rec_write(h.rec, REC_HANDSHAKE, ee.p, ee.len):
+        ret _conn_fail(c, "could not send EncryptedExtensions")
+    end
+
+    mut certmsg := _newbuf(8192)
+    defer _buf_free(certmsg)
+    _hs_build_certificate_msg(cfg.chain, true, certmsg)
+    _hash_update(h.tr, certmsg.p, certmsg.len)
+    if !_rec_write(h.rec, REC_HANDSHAKE, certmsg.p, certmsg.len):
+        ret _conn_fail(c, "could not send Certificate")
+    end
+
+    mut th_cv := _newbuf(64)
+    defer _buf_free(th_cv)
+    _hs_transcript(h, th_cv)
+    mut cv := _newbuf(600)
+    defer _buf_free(cv)
+    if !_hs_build_certificate_verify(h, cfg.key, scheme, th_cv, cv):
+        ret _conn_fail(c, "could not build CertificateVerify")
+    end
+    _hash_update(h.tr, cv.p, cv.len)
+    if !_rec_write(h.rec, REC_HANDSHAKE, cv.p, cv.len):
+        ret _conn_fail(c, "could not send CertificateVerify")
+    end
+
+    mut th_fin := _newbuf(64)
+    defer _buf_free(th_fin)
+    _hs_transcript(h, th_fin)
+    mut sfin := _newbuf(64)
+    defer _buf_free(sfin)
+    if !_hs_finished_mac(h, h.s_hs_secret, th_fin, sfin):
+        ret _conn_fail(c, "could not compute server Finished")
+    end
+    mut sfmsg := _newbuf(64)
+    defer _buf_free(sfmsg)
+    _put8(sfmsg, HS_FINISHED)
+    _put24(sfmsg, sfin.len)
+    _putbuf(sfmsg, sfin)
+    _hash_update(h.tr, sfmsg.p, sfmsg.len)
+    if !_rec_write(h.rec, REC_HANDSHAKE, sfmsg.p, sfmsg.len):
+        ret _conn_fail(c, "could not send server Finished")
+    end
+
+    mut th_app := _newbuf(64)
+    defer _buf_free(th_app)
+    _hs_transcript(h, th_app)
+    if !_hs_derive(h, h.master, "c ap traffic", th_app, h.c_ap_secret):
+        ret _conn_fail(c, "could not derive client application secret")
+    end
+    if !_hs_derive(h, h.master, "s ap traffic", th_app, h.s_ap_secret):
+        ret _conn_fail(c, "could not derive server application secret")
+    end
+
+    // The client's Finished, still under handshake keys. A middlebox
+    // compatible client sends its own plaintext ChangeCipherSpec first;
+    // _hs_next_msg already treats that as ignorable filler.
+    mut typ := 0
+    mut cfinbody := _newbuf(64)
+    defer _buf_free(cfinbody)
+    if !_hs_next_msg(h, buf, typ, cfinbody):
+        ret _conn_fail(c, h.err)
+    end
+    if typ != HS_FINISHED:
+        ret _conn_fail(c, "expected client Finished")
+    end
+    mut want := _newbuf(64)
+    defer _buf_free(want)
+    if !_hs_finished_mac(h, h.c_hs_secret, th_app, want):
+        ret _conn_fail(c, "could not compute expected client Finished")
+    end
+    if cfinbody.len != want.len || !_cteq(cfinbody.p, want.p, want.len):
+        _rec_send_alert(h.rec, 2, ALERT_DECRYPT_ERROR)
+        ret _conn_fail(c, "client Finished did not verify")
+    end
+
+    _install_keys(h, h.c_ap_secret, h.s_ap_secret)
+    h.ok = true
+    c.open = true
+    ret true
+end
+
+// Run the full server handshake on an already-accepted socket.
+func _do_server_handshake(c &: Conn, cfg: ServerConfig): bool:
+    mut h := c.h
+    mut buf := _newbuf(REC_MAX_PLAINTEXT)
+    defer _buf_free(buf)
+
+    // ClientHello arrives before the transcript hash algorithm is known
+    // (it depends on the suite we are about to choose), so it is read with
+    // the record layer directly, same as the client does for ServerHello.
+    mut rtyp := 0
+    mut frag := _newbuf(REC_MAX_PLAINTEXT)
+    defer _buf_free(frag)
+    mut got := false
+    mut guard := 0
+    until !got && guard < 16:
+        guard += 1
+        if !_rec_read(h.rec, rtyp, frag):
+            c.h = h
+            ret _conn_fail(c, "no ClientHello: " + h.rec.err)
+        end
+        if rtyp == REC_CHANGE_CIPHER_SPEC:
+            continue
+        end
+        if rtyp == REC_ALERT:
+            c.h = h
+            ret _conn_fail(c, _alert_text(frag))
+        end
+        if rtyp != REC_HANDSHAKE:
+            c.h = h
+            ret _conn_fail(c, "expected ClientHello")
+        end
+        got = true
+    end
+    if !got || frag.len < 4 || _bufat(frag, 0) != HS_CLIENT_HELLO:
+        c.h = h
+        ret _conn_fail(c, "expected ClientHello")
+    end
+    chlen := (_bufat(frag, 1) << 16) | (_bufat(frag, 2) << 8) | _bufat(frag, 3)
+    if frag.len < 4 + chlen:
+        c.h = h
+        ret _conn_fail(c, "truncated ClientHello")
+    end
+    chr := _newreader(_bufptr(frag, 4), chlen)
+    mut chi := _hs_parse_client_hello(chr)
+    if !chi.ok:
+        c.h = h
+        _chi_free(chi)
+        ret _conn_fail(c, "could not parse ClientHello")
+    end
+    _bufreset(h.crand)
+    _putbuf(h.crand, chi.crand)
+
+    mut suite13 := 0
+    if chi.want_tls13:
+        suite13 = _pick_suite13(chi)
+    end
+    mut suite12 := 0
+    if suite13 == 0:
+        suite12 = _pick_suite12(chi, cfg.key)
+    end
+
+    mut ok := false
+    if suite13 != 0:
+        h.ver = TLS13
+        h.suite = suite13
+        h.cipher = _cipher_from_wire(suite13)
+        h.hash = _cipher_hash(h.cipher)
+        h.hlen = _hash_size(h.hash)
+        h.tr = _hash_init(h.hash)
+        _hash_update(h.tr, frag.p, 4 + chlen)
+        if frag.len > 4 + chlen:
+            _putraw(buf, _bufptr(frag, 4 + chlen), frag.len - (4 + chlen))
+        end
+        ok = _do_server_handshake13(c, h, cfg, chi, suite13, buf)
+    else if suite12 != 0:
+        h.ver = TLS12
+        h.suite = suite12
+        h.cipher = _tls12_cipher(suite12)
+        h.hash = _cipher_hash(h.cipher)
+        h.hlen = _hash_size(h.hash)
+        h.tr = _hash_init(h.hash)
+        _hash_update(h.tr, frag.p, 4 + chlen)
+        if frag.len > 4 + chlen:
+            _putraw(buf, _bufptr(frag, 4 + chlen), frag.len - (4 + chlen))
+        end
+        ok = _do_server_handshake12(c, h, cfg, chi, buf)
+    else:
+        c.err = "no cipher suite overlap with this client for this server key type"
+        ok = false
+    end
+    _chi_free(chi)
+    c.h = h
+    ret ok
+end

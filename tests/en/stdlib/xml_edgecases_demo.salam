@@ -1,0 +1,89 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Edge cases + malformed input for encoding.xml, complementing xml_demo.salam's
+// happy-path tree/tokenizer/entity/ToValue coverage.
+
+package main
+
+import encoding.xml
+import testing
+import os
+import str
+
+func main:
+    // well-formed input -> Valid() true
+    testing.AssertTrue(xml.Valid(`<a><b>1</b></a>`))
+
+    // unclosed tag -> DecodeStrict ok=false (stack not empty at EOF)
+    mut ok1 := true
+    xml.DecodeStrict(`<a><b>1</b>`, ok1)
+    testing.AssertFalse(ok1)
+    testing.AssertFalse(xml.Valid(`<a><b>1</b>`))
+
+    // extra/unbalanced closing tag -> ok=false (nothing left on the stack)
+    mut ok2 := true
+    xml.DecodeStrict(`<a>1</a></a>`, ok2)
+    testing.AssertFalse(ok2)
+
+    // empty document -> a "not found" root, not an error
+    mut ok3 := false
+    root3 := xml.DecodeStrict("", ok3)
+    testing.AssertTrue(ok3)
+    testing.AssertFalse(xml.Found(root3))
+
+    // processing instructions and DOCTYPE are skipped, not fatal
+    doc := `<?xml version="1.0"?><!DOCTYPE root><root><a>1</a></root>`
+    mut ok4 := false
+    root4 := xml.DecodeStrict(doc, ok4)
+    testing.AssertTrue(ok4)
+    testing.AssertEqStr(root4.tag, "root")
+    a := xml.Child(root4, "a")
+    testing.AssertEqStr(a.text, "1")
+
+    // self-closing element carrying attributes
+    mut ok5 := false
+    root5 := xml.DecodeStrict(`<r><img src="x.png" width="10"/></r>`, ok5)
+    testing.AssertTrue(ok5)
+    img := xml.Child(root5, "img")
+    testing.AssertTrue(xml.Found(img))
+    testing.AssertEqStr(xml.Attr(img, "src"), "x.png")
+    testing.AssertEqStr(xml.Attr(img, "width"), "10")
+    testing.AssertFalse(xml.HasAttr(img, "height"))
+
+    // EncodeIndent produces newline-separated, indented output containing
+    // the requested indent unit before a nested child tag
+    mut n := xml.NewXMLNode("root")
+    child := xml.NewXMLNode("child")
+    xml.AppendChild(n, child)
+    indented := xml.EncodeIndent(n, "  ")
+    testing.AssertTrue(str.Contains(indented, "\n"))
+    testing.AssertTrue(str.Contains(indented, "  <child"))
+
+    // EncodeDeclaration prepends the XML prolog
+    withDecl := xml.EncodeDeclaration(xml.NewXMLNode("root"))
+    testing.AssertTrue(str.StartsWith(withDecl, "<?xml"))
+
+    // numeric and hex character references
+    testing.AssertEqStr(xml.UnescapeEntities("&#65;&#x42;"), "AB")
+
+    // unknown entity is left as-is rather than corrupting the stream
+    testing.AssertEqStr(xml.UnescapeEntities("a &foo; b"), "a &foo; b")
+
+    // attribute value escaping round trip through EscapeAttr
+    escAttr := xml.EscapeAttr(`he said "hi" & left`)
+    testing.AssertEqStr(escAttr, "he said &quot;hi&quot; &amp; left")
+
+    os.Exit(testing.Summary())
+end

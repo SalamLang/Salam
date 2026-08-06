@@ -310,30 +310,87 @@ else:
     // Native backend: std/tls for https, a plain socket for http. No
     // external library and no child process either way.
 
-    func _read_all_plain(s: rawsock.Socket): str:
-        mut out := ""
+    // Reads with the binary-safe *Bytes APIs, not rawsock.Recv/tls.Read -
+    // a chunked+gzip response body (the common case once a client sends
+    // Accept-Encoding: gzip, e.g. against Cloudflare-fronted origins) is
+    // arbitrary binary data that routinely contains embedded NUL bytes,
+    // which the str-returning Recv/Read silently truncate at (str is a
+    // NUL-terminated C string under the hood - see tcp.ReadBytes's doc
+    // comment for the same caveat on the socket layer this builds on).
+    func _read_all_plain(s: rawsock.Socket): compress.ByteBuf:
+        buf := compress.NewByteBuf()
+        tmp := mem.Allocate(16384 as u64)
+        defer mem.Free(tmp)
         mut going := true
         until going:
-            chunk := rawsock.Recv(s, 16384)
-            if chunk.len() == 0:
+            n := rawsock.RecvBytes(s, tmp, 16384)
+            if n <= 0:
                 going = false
             else:
-                out = out.concat(chunk)
+                compress.BufPushBytes(buf, tmp, n)
             end
         end
-        ret out
+        ret buf
     end
 
-    func _read_all_tls(c &: tls.Conn): str:
-        mut out := ""
+    func _read_all_tls(c &: tls.Conn): compress.ByteBuf:
+        buf := compress.NewByteBuf()
+        tmp := mem.Allocate(16384 as u64)
+        defer mem.Free(tmp)
         mut going := true
         until going:
-            chunk := tls.Read(c, 16384)
-            if chunk.len() == 0:
+            n := tls.ReadBytes(c, tmp, 16384)
+            if n <= 0:
                 going = false
             else:
-                out = out.concat(chunk)
+                compress.BufPushBytes(buf, tmp, n)
             end
+        end
+        ret buf
+    end
+
+    // Byte-offset scans over a ByteBuf, used to split the raw response
+    // into header/body and to walk chunk-size lines without ever routing
+    // binary body bytes through a str (see _read_all_plain's doc comment
+    // above for why that truncates at embedded NULs).
+    func _buf_find_crlf(b: compress.ByteBuf, from: int): int:
+        p := b.data as i8*
+        n := b.len
+        mut i := from
+        until i + 1 < n:
+            if p[i] == 13 && p[i + 1] == 10:
+                ret i
+            end
+            i += 1
+        end
+        ret 0 - 1
+    end
+
+    func _buf_find_crlf_crlf(b: compress.ByteBuf): int:
+        p := b.data as i8*
+        n := b.len
+        mut i := 0
+        until i + 3 < n:
+            if p[i] == 13 && p[i + 1] == 10 && p[i + 2] == 13 && p[i + 3] == 10:
+                ret i
+            end
+            i += 1
+        end
+        ret 0 - 1
+    end
+
+    func _buf_slice_str(b: compress.ByteBuf, start: int, length: int): str:
+        tmp := compress.NewByteBuf()
+        if length > 0:
+            compress.BufPushBytes(tmp, ((b.data as i64) + start) as void*, length)
+        end
+        ret compress.BufToStrUnsafe(tmp)
+    end
+
+    func _buf_slice_buf(b: compress.ByteBuf, start: int, length: int): compress.ByteBuf:
+        out := compress.NewByteBuf()
+        if length > 0:
+            compress.BufPushBytes(out, ((b.data as i64) + start) as void*, length)
         end
         ret out
     end
@@ -357,17 +414,20 @@ else:
 
     // Undo Transfer-Encoding: chunked. The WinHTTP backend hands back a
     // de-chunked body, so this one must too, or every caller sees framing
-    // bytes mixed into the payload.
-    func _dechunk(body: str): str:
-        mut out := ""
+    // bytes mixed into the payload. Works over ByteBuf, not str - chunk
+    // *data* is arbitrary binary (routinely gzip, once content-encoding
+    // is in play), only the size-prefix line on each chunk is guaranteed
+    // ASCII/NUL-free.
+    func _dechunk_buf(body: compress.ByteBuf): compress.ByteBuf:
+        out := compress.NewByteBuf()
         mut pos := 0
         mut going := true
         until going:
-            nl := str.IndexFrom(body, "\r\n", pos)
+            nl := _buf_find_crlf(body, pos)
             if nl < 0:
                 going = false
             else:
-                line := body.substr(pos, nl - pos)
+                line := _buf_slice_str(body, pos, nl - pos)
                 semi := line.find(";")
                 mut sizestr := line
                 if semi >= 0:
@@ -378,10 +438,10 @@ else:
                 if sz <= 0:
                     going = false
                 else:
-                    if pos + sz > body.len():
+                    if pos + sz > body.len:
                         going = false
                     else:
-                        out = out.concat(body.substr(pos, sz))
+                        compress.BufPushBytes(out, ((body.data as i64) + pos) as void*, sz)
                         pos = pos + sz + 2
                     end
                 end
@@ -438,7 +498,7 @@ else:
         end
         req := _build_request(method, u, headers, body)
 
-        mut raw := ""
+        mut raw := compress.NewByteBuf()
         if secure:
             cfg := tls.NewConfig(u.host)
             mut c := tls.Dial(u.host, port, cfg)
@@ -459,24 +519,29 @@ else:
             rawsock.Close(s)
         end
 
-        sep := raw.find("\r\n\r\n")
+        sep := _buf_find_crlf_crlf(raw)
         if sep < 0:
-            ret raw
+            ret _buf_slice_str(raw, 0, raw.len)
         end
-        head := raw.substr(0, sep + 4)
-        mut rest := raw.substr(sep + 4, raw.len() - sep - 4)
+        head := _buf_slice_str(raw, 0, sep + 4)
+        mut rest := _buf_slice_buf(raw, sep + 4, raw.len - sep - 4)
         lhead := str.Lower(head)
         if str.Find(lhead, "transfer-encoding: chunked") >= 0:
-            rest = _dechunk(rest)
+            rest = _dechunk_buf(rest)
         end
+        mut rest_str := ""
         if str.Find(lhead, "content-encoding: gzip") >= 0:
             mut ok := false
-            decompressed := compress.GzipDecompressBuf(compress.BufFromStr(rest), ok)
+            decompressed := compress.GzipDecompressBuf(rest, ok)
             if ok:
-                rest = compress.BufToStrUnsafe(decompressed)
+                rest_str = compress.BufToStrUnsafe(decompressed)
+            else:
+                rest_str = compress.BufToStrUnsafe(rest)
             end
+        else:
+            rest_str = compress.BufToStrUnsafe(rest)
         end
-        ret head.concat(rest)
+        ret head.concat(rest_str)
     end
 end
 

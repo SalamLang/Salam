@@ -34,11 +34,20 @@ import sync
 //
 // Thread safety: net/http.Run spawns one OS thread per accepted
 // connection (see ctx_internal.salam), so every public function here
-// that touches the session table takes sync's Mutex. The mutex itself is
-// created in a top-level `mut` initializer, which - like
-// ctx_internal.salam's `_current_router`/`_current_tls_cfg` - runs once,
-// single-threaded, before main() and therefore before any request thread
-// exists, so there is no init race to guard against.
+// that touches the session table takes sync's Mutex.
+//
+// The mutex is NOT created via a top-level `mut _mu := sync.NewMutex()`
+// initializer, unlike ctx_internal.salam's `_current_router`/
+// `_current_tls_cfg`: those two are safe because server.salam's Run()
+// unconditionally reassigns them (via ordinary in-function statements)
+// before spawning any connection thread, but nothing re-assigns _mu -
+// callers reach _store_put/_store_delete/_store_touch/_cleanup_expired
+// directly. And a package-level global's non-literal initializer here
+// silently never runs at all: this compiler only flushes a package's
+// deferred top-level initializers into ITS OWN `main()`, which only
+// exists for `package main` - never for an imported package like this
+// one (see the same gap documented on compiler/driver.salam's g_cw_mu).
+// _mu is instead lazily created on first real use by _ensure_mu below.
 
 @en "DefaultCookieName"
 @fa "نام پیش فرض کوکی"
@@ -53,7 +62,7 @@ pub const DefaultMaxAge := 86400
 const _csrf_key := "_csrf_token"
 
 mut _sessions := HashMap {} as HashMap<str, Session>
-mut _mu := sync.NewMutex()
+mut _mu := sync.Mutex {}
 // Literal defaults, not a reference to DefaultCookieName/DefaultMaxAge
 // above: a top-level `mut` global initialized from another top-level
 // `const` silently loses its initializer in this compiler (the global
@@ -106,13 +115,29 @@ func _is_expired(s: Session, now: i64): bool:
     ret (now - s.last_seen) > (s.max_age as i64)
 end
 
+// Lazily creates _mu on first real use (see the thread-safety note near
+// its declaration above for why a top-level initializer can't do this).
+// A tiny benign race is possible the very first time two request threads
+// call this simultaneously - both see a null handle and both allocate a
+// mutex, so one allocation leaks - but that is a one-time, bounded leak,
+// not a correctness issue: every caller here still ends up locking
+// *some* valid, live mutex, and whichever handle wins is the one every
+// later call converges on and shares from then on.
+func _ensure_mu():
+    if _mu.handle == null:
+        _mu = sync.NewMutex()
+    end
+end
+
 func _store_put(id: str, s: Session):
+    _ensure_mu()
     sync.Lock(_mu)
     _sessions.put(id, s)
     sync.Unlock(_mu)
 end
 
 func _store_delete(id: str):
+    _ensure_mu()
     sync.Lock(_mu)
     _sessions.remove(id)
     sync.Unlock(_mu)
@@ -122,6 +147,7 @@ end
 // can't land between "read" and "write back the refreshed last_seen".
 func _store_touch(id: str, ok &: bool): Session:
     now := time.Now()
+    _ensure_mu()
     sync.Lock(_mu)
     mut found := _sessions.has(id)
     mut s := Session {}
@@ -143,6 +169,7 @@ end
 func _cleanup_expired(): int:
     now := time.Now()
     mut dead := Vector {} as Vector<str>
+    _ensure_mu()
     sync.Lock(_mu)
     it := _sessions.iter()
     until it.has_next():

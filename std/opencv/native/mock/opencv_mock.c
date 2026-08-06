@@ -34,17 +34,20 @@
 typedef struct {
     int32_t width;
     int32_t height;
-    int32_t channels; /* 1 = gray, 3 = BGR (matches the real shim's internal-BGR convention) */
+    int32_t channels; /* 1 = gray, 3 = BGR (matches the real shim's internal-BGR
+                         convention) */
     unsigned char *data;
 } MockMat;
 
 static char g_last_error[512];
 
-static void set_error(const char *msg) {
+static void set_error(const char *msg)
+{
     snprintf(g_last_error, sizeof(g_last_error), "%s", msg ? msg : "");
 }
 
-static void unsupported(const char *fn) {
+static void unsupported(const char *fn)
+{
     char buf[512];
     snprintf(buf, sizeof(buf),
              "%s: not implemented in the mock shim (test-only stand-in) - build against "
@@ -53,7 +56,8 @@ static void unsupported(const char *fn) {
     set_error(buf);
 }
 
-static MockMat *alloc_mat(int32_t w, int32_t h, int32_t ch) {
+static MockMat *alloc_mat(int32_t w, int32_t h, int32_t ch)
+{
     MockMat *m = (MockMat *)malloc(sizeof(MockMat));
     m->width = w;
     m->height = h;
@@ -62,21 +66,32 @@ static MockMat *alloc_mat(int32_t w, int32_t h, int32_t ch) {
     return m;
 }
 
-static int in_bounds(MockMat *m, int32_t x, int32_t y) {
+static int in_bounds(MockMat *m, int32_t x, int32_t y)
+{
     return m && x >= 0 && y >= 0 && x < m->width && y < m->height;
 }
 
-static unsigned char clampb(int v) { return v < 0 ? 0 : (v > 255 ? 255 : (unsigned char)v); }
+static unsigned char clampb(int v)
+{
+    return v < 0 ? 0 : (v > 255 ? 255 : (unsigned char)v);
+}
 
 /* --------------------------------------------------------------- diagnostics */
 
-const char *scv_last_error(void) { return g_last_error; }
-const char *scv_version(void) { return "mock-1.0 (not OpenCV - see opencv_mock.c)"; }
+const char *scv_last_error(void)
+{
+    return g_last_error;
+}
+const char *scv_version(void)
+{
+    return "mock-1.0 (not OpenCV - see opencv_mock.c)";
+}
 
 /* ----------------------------------------------------------------- lifecycle */
 
 void *scv_new_blank(int32_t width, int32_t height, int32_t channels, int32_t r, int32_t g,
-                     int32_t b) {
+                    int32_t b)
+{
     set_error("");
     if (width <= 0 || height <= 0 || (channels != 1 && channels != 3)) {
         set_error("scv_new_blank: invalid width/height/channels");
@@ -97,7 +112,9 @@ void *scv_new_blank(int32_t width, int32_t height, int32_t channels, int32_t r, 
     return m;
 }
 
-void *scv_from_buffer(const uint8_t *data, int32_t width, int32_t height, int32_t channels) {
+void *scv_from_buffer(const uint8_t *data, int32_t width, int32_t height,
+                      int32_t channels)
+{
     set_error("");
     if (!data || width <= 0 || height <= 0 || (channels != 1 && channels != 3)) {
         set_error("scv_from_buffer: invalid arguments");
@@ -118,7 +135,8 @@ void *scv_from_buffer(const uint8_t *data, int32_t width, int32_t height, int32_
     return m;
 }
 
-void *scv_clone(void *mat) {
+void *scv_clone(void *mat)
+{
     if (!mat) return NULL;
     MockMat *src = (MockMat *)mat;
     MockMat *out = alloc_mat(src->width, src->height, src->channels);
@@ -126,14 +144,16 @@ void *scv_clone(void *mat) {
     return out;
 }
 
-void scv_free(void *mat) {
+void scv_free(void *mat)
+{
     if (!mat) return;
     MockMat *m = (MockMat *)mat;
     free(m->data);
     free(m);
 }
 
-int32_t scv_write(const char *path, void *mat) {
+int32_t scv_write(const char *path, void *mat)
+{
     set_error("");
     if (!mat || !path) return 0;
     MockMat *m = (MockMat *)mat;
@@ -149,7 +169,8 @@ int32_t scv_write(const char *path, void *mat) {
         fprintf(f, "P6\n%d %d\n255\n", m->width, m->height);
         int32_t n = m->width * m->height;
         for (int32_t i = 0; i < n; i++) {
-            unsigned char rgb[3] = {m->data[i * 3 + 2], m->data[i * 3 + 1], m->data[i * 3 + 0]};
+            unsigned char rgb[3] = {m->data[i * 3 + 2], m->data[i * 3 + 1],
+                                    m->data[i * 3 + 0]};
             fwrite(rgb, 1, 3, f);
         }
     }
@@ -157,7 +178,8 @@ int32_t scv_write(const char *path, void *mat) {
     return 1;
 }
 
-void *scv_read(const char *path) {
+void *scv_read(const char *path)
+{
     set_error("");
     if (!path) return NULL;
     FILE *f = fopen(path, "rb");
@@ -206,25 +228,42 @@ void *scv_read(const char *path) {
 
 /* -------------------------------------------------------------- introspection */
 
-int32_t scv_width(void *mat) { return mat ? ((MockMat *)mat)->width : 0; }
-int32_t scv_height(void *mat) { return mat ? ((MockMat *)mat)->height : 0; }
-int32_t scv_channels(void *mat) { return mat ? ((MockMat *)mat)->channels : 0; }
-int32_t scv_empty(void *mat) {
-    return (!mat || ((MockMat *)mat)->width <= 0 || ((MockMat *)mat)->height <= 0) ? 1 : 0;
+int32_t scv_width(void *mat)
+{
+    return mat ? ((MockMat *)mat)->width : 0;
 }
-uint8_t *scv_data(void *mat) { return mat ? ((MockMat *)mat)->data : NULL; }
-int32_t scv_step(void *mat) {
+int32_t scv_height(void *mat)
+{
+    return mat ? ((MockMat *)mat)->height : 0;
+}
+int32_t scv_channels(void *mat)
+{
+    return mat ? ((MockMat *)mat)->channels : 0;
+}
+int32_t scv_empty(void *mat)
+{
+    return (!mat || ((MockMat *)mat)->width <= 0 || ((MockMat *)mat)->height <= 0) ? 1
+                                                                                   : 0;
+}
+uint8_t *scv_data(void *mat)
+{
+    return mat ? ((MockMat *)mat)->data : NULL;
+}
+int32_t scv_step(void *mat)
+{
     if (!mat) return 0;
     MockMat *m = (MockMat *)mat;
     return m->width * m->channels;
 }
-int32_t scv_mat_total(void *mat) {
+int32_t scv_mat_total(void *mat)
+{
     if (!mat) return 0;
     MockMat *m = (MockMat *)mat;
     return m->width * m->height;
 }
 
-int32_t scv_get_pixel(void *mat, int32_t x, int32_t y, int32_t *out_rgb) {
+int32_t scv_get_pixel(void *mat, int32_t x, int32_t y, int32_t *out_rgb)
+{
     MockMat *m = (MockMat *)mat;
     if (!in_bounds(m, x, y) || !out_rgb) return 0;
     int32_t off = (y * m->width + x) * m->channels;
@@ -238,7 +277,8 @@ int32_t scv_get_pixel(void *mat, int32_t x, int32_t y, int32_t *out_rgb) {
     return 1;
 }
 
-int32_t scv_set_pixel(void *mat, int32_t x, int32_t y, int32_t r, int32_t g, int32_t b) {
+int32_t scv_set_pixel(void *mat, int32_t x, int32_t y, int32_t r, int32_t g, int32_t b)
+{
     MockMat *m = (MockMat *)mat;
     if (!in_bounds(m, x, y)) return 0;
     int32_t off = (y * m->width + x) * m->channels;
@@ -254,18 +294,21 @@ int32_t scv_set_pixel(void *mat, int32_t x, int32_t y, int32_t r, int32_t g, int
 
 /* ---------------------------------------------------------------- color space */
 
-static MockMat *to_gray(MockMat *m) {
+static MockMat *to_gray(MockMat *m)
+{
     if (m->channels == 1) return (MockMat *)scv_clone(m);
     MockMat *out = alloc_mat(m->width, m->height, 1);
     int32_t n = m->width * m->height;
     for (int32_t i = 0; i < n; i++) {
-        unsigned char bb = m->data[i * 3 + 0], gg = m->data[i * 3 + 1], rr = m->data[i * 3 + 2];
+        unsigned char bb = m->data[i * 3 + 0], gg = m->data[i * 3 + 1],
+                      rr = m->data[i * 3 + 2];
         out->data[i] = clampb((rr * 299 + gg * 587 + bb * 114) / 1000);
     }
     return out;
 }
 
-static MockMat *gray_to_color(MockMat *m) {
+static MockMat *gray_to_color(MockMat *m)
+{
     MockMat *out = alloc_mat(m->width, m->height, 3);
     int32_t n = m->width * m->height;
     for (int32_t i = 0; i < n; i++) {
@@ -274,8 +317,9 @@ static MockMat *gray_to_color(MockMat *m) {
     return out;
 }
 
-static void rgb_to_hsv_px(unsigned char r, unsigned char g, unsigned char b, unsigned char *h,
-                           unsigned char *s, unsigned char *v) {
+static void rgb_to_hsv_px(unsigned char r, unsigned char g, unsigned char b,
+                          unsigned char *h, unsigned char *s, unsigned char *v)
+{
     unsigned char maxc = r > g ? (r > b ? r : b) : (g > b ? g : b);
     unsigned char minc = r < g ? (r < b ? r : b) : (g < b ? g : b);
     int delta = maxc - minc;
@@ -295,88 +339,110 @@ static void rgb_to_hsv_px(unsigned char r, unsigned char g, unsigned char b, uns
     *h = clampb((int)(hue / 2.0)); /* OpenCV's 0-179 8-bit hue range */
 }
 
-static void hsv_to_rgb_px(unsigned char h, unsigned char s, unsigned char v, unsigned char *r,
-                           unsigned char *g, unsigned char *b) {
+static void hsv_to_rgb_px(unsigned char h, unsigned char s, unsigned char v,
+                          unsigned char *r, unsigned char *g, unsigned char *b)
+{
     double hh = h * 2.0, ss = s / 255.0, vv = v / 255.0;
     double c = vv * ss;
     double x = c * (1 - fabs(fmod(hh / 60.0, 2) - 1));
     double m = vv - c;
     double rp, gp, bp;
-    if (hh < 60) { rp = c; gp = x; bp = 0; }
-    else if (hh < 120) { rp = x; gp = c; bp = 0; }
-    else if (hh < 180) { rp = 0; gp = c; bp = x; }
-    else if (hh < 240) { rp = 0; gp = x; bp = c; }
-    else if (hh < 300) { rp = x; gp = 0; bp = c; }
-    else { rp = c; gp = 0; bp = x; }
+    if (hh < 60) {
+        rp = c;
+        gp = x;
+        bp = 0;
+    } else if (hh < 120) {
+        rp = x;
+        gp = c;
+        bp = 0;
+    } else if (hh < 180) {
+        rp = 0;
+        gp = c;
+        bp = x;
+    } else if (hh < 240) {
+        rp = 0;
+        gp = x;
+        bp = c;
+    } else if (hh < 300) {
+        rp = x;
+        gp = 0;
+        bp = c;
+    } else {
+        rp = c;
+        gp = 0;
+        bp = x;
+    }
     *r = clampb((int)((rp + m) * 255));
     *g = clampb((int)((gp + m) * 255));
     *b = clampb((int)((bp + m) * 255));
 }
 
-void *scv_cvt_color(void *mat, int32_t code) {
+void *scv_cvt_color(void *mat, int32_t code)
+{
     set_error("");
     MockMat *m = (MockMat *)mat;
     if (!m) return NULL;
     switch (code) {
-        case 0: /* BGR2GRAY */
-            return to_gray(m);
-        case 1: /* GRAY2BGR */
-        case 3: /* GRAY2RGB (achromatic - identical bytes) */
-            return m->channels == 1 ? gray_to_color(m) : scv_clone(m);
-        case 4: /* BGR2RGB */
-        case 5: { /* RGB2BGR - both are the same byte-swap */
-            if (m->channels != 3) return scv_clone(m);
-            MockMat *out = alloc_mat(m->width, m->height, 3);
-            int32_t n = m->width * m->height;
-            for (int32_t i = 0; i < n; i++) {
-                out->data[i * 3 + 0] = m->data[i * 3 + 2];
-                out->data[i * 3 + 1] = m->data[i * 3 + 1];
-                out->data[i * 3 + 2] = m->data[i * 3 + 0];
-            }
-            return out;
+    case 0: /* BGR2GRAY */
+        return to_gray(m);
+    case 1: /* GRAY2BGR */
+    case 3: /* GRAY2RGB (achromatic - identical bytes) */
+        return m->channels == 1 ? gray_to_color(m) : scv_clone(m);
+    case 4:   /* BGR2RGB */
+    case 5: { /* RGB2BGR - both are the same byte-swap */
+        if (m->channels != 3) return scv_clone(m);
+        MockMat *out = alloc_mat(m->width, m->height, 3);
+        int32_t n = m->width * m->height;
+        for (int32_t i = 0; i < n; i++) {
+            out->data[i * 3 + 0] = m->data[i * 3 + 2];
+            out->data[i * 3 + 1] = m->data[i * 3 + 1];
+            out->data[i * 3 + 2] = m->data[i * 3 + 0];
         }
-        case 6: { /* BGR2HSV */
-            if (m->channels != 3) {
-                set_error("scv_cvt_color: BGR2HSV needs a 3-channel Mat");
-                return NULL;
-            }
-            MockMat *out = alloc_mat(m->width, m->height, 3);
-            int32_t n = m->width * m->height;
-            for (int32_t i = 0; i < n; i++) {
-                unsigned char bb = m->data[i * 3 + 0], gg = m->data[i * 3 + 1],
-                              rr = m->data[i * 3 + 2];
-                rgb_to_hsv_px(rr, gg, bb, &out->data[i * 3 + 0], &out->data[i * 3 + 1],
-                              &out->data[i * 3 + 2]);
-            }
-            return out;
-        }
-        case 7: { /* HSV2BGR */
-            if (m->channels != 3) {
-                set_error("scv_cvt_color: HSV2BGR needs a 3-channel Mat");
-                return NULL;
-            }
-            MockMat *out = alloc_mat(m->width, m->height, 3);
-            int32_t n = m->width * m->height;
-            for (int32_t i = 0; i < n; i++) {
-                unsigned char r, g, b;
-                hsv_to_rgb_px(m->data[i * 3 + 0], m->data[i * 3 + 1], m->data[i * 3 + 2], &r, &g,
-                              &b);
-                out->data[i * 3 + 0] = b;
-                out->data[i * 3 + 1] = g;
-                out->data[i * 3 + 2] = r;
-            }
-            return out;
-        }
-        default:
-            set_error("scv_cvt_color: color code not implemented in mock shim (HSV RGB-input "
-                      "variants 8/9 - use BGR2HSV/HSV2BGR instead)");
+        return out;
+    }
+    case 6: { /* BGR2HSV */
+        if (m->channels != 3) {
+            set_error("scv_cvt_color: BGR2HSV needs a 3-channel Mat");
             return NULL;
+        }
+        MockMat *out = alloc_mat(m->width, m->height, 3);
+        int32_t n = m->width * m->height;
+        for (int32_t i = 0; i < n; i++) {
+            unsigned char bb = m->data[i * 3 + 0], gg = m->data[i * 3 + 1],
+                          rr = m->data[i * 3 + 2];
+            rgb_to_hsv_px(rr, gg, bb, &out->data[i * 3 + 0], &out->data[i * 3 + 1],
+                          &out->data[i * 3 + 2]);
+        }
+        return out;
+    }
+    case 7: { /* HSV2BGR */
+        if (m->channels != 3) {
+            set_error("scv_cvt_color: HSV2BGR needs a 3-channel Mat");
+            return NULL;
+        }
+        MockMat *out = alloc_mat(m->width, m->height, 3);
+        int32_t n = m->width * m->height;
+        for (int32_t i = 0; i < n; i++) {
+            unsigned char r, g, b;
+            hsv_to_rgb_px(m->data[i * 3 + 0], m->data[i * 3 + 1], m->data[i * 3 + 2], &r,
+                          &g, &b);
+            out->data[i * 3 + 0] = b;
+            out->data[i * 3 + 1] = g;
+            out->data[i * 3 + 2] = r;
+        }
+        return out;
+    }
+    default:
+        set_error("scv_cvt_color: color code not implemented in mock shim (HSV RGB-input "
+                  "variants 8/9 - use BGR2HSV/HSV2BGR instead)");
+        return NULL;
     }
 }
 
 /* -------------------------------------------------------------------- geometry */
 
-void *scv_resize(void *mat, int32_t width, int32_t height, int32_t interpolation) {
+void *scv_resize(void *mat, int32_t width, int32_t height, int32_t interpolation)
+{
     (void)interpolation; /* mock always uses nearest-neighbor */
     set_error("");
     MockMat *m = (MockMat *)mat;
@@ -396,10 +462,12 @@ void *scv_resize(void *mat, int32_t width, int32_t height, int32_t interpolation
     return out;
 }
 
-void *scv_crop(void *mat, int32_t x, int32_t y, int32_t w, int32_t h) {
+void *scv_crop(void *mat, int32_t x, int32_t y, int32_t w, int32_t h)
+{
     set_error("");
     MockMat *m = (MockMat *)mat;
-    if (!m || w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > m->width || y + h > m->height) {
+    if (!m || w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > m->width ||
+        y + h > m->height) {
         set_error("scv_crop: rectangle outside the image");
         return NULL;
     }
@@ -412,7 +480,8 @@ void *scv_crop(void *mat, int32_t x, int32_t y, int32_t w, int32_t h) {
     return out;
 }
 
-void *scv_rotate90(void *mat, int32_t code) {
+void *scv_rotate90(void *mat, int32_t code)
+{
     set_error("");
     MockMat *m = (MockMat *)mat;
     if (!m) return NULL;
@@ -443,15 +512,21 @@ void *scv_rotate90(void *mat, int32_t code) {
     return out;
 }
 
-void *scv_flip(void *mat, int32_t mode) {
+void *scv_flip(void *mat, int32_t mode)
+{
     set_error("");
     MockMat *m = (MockMat *)mat;
     if (!m) return NULL;
     MockMat *out = alloc_mat(m->width, m->height, m->channels);
     for (int32_t y = 0; y < m->height; y++) {
-        int32_t sy = (mode == 1) ? y : (m->height - 1 - y); /* 1 = horizontal only -> rows unchanged */
+        int32_t sy =
+            (mode == 1) ? y
+                        : (m->height - 1 - y); /* 1 = horizontal only -> rows unchanged */
         for (int32_t x = 0; x < m->width; x++) {
-            int32_t sx = (mode == 0) ? x : (m->width - 1 - x); /* 0 = vertical only -> cols unchanged */
+            int32_t sx =
+                (mode == 0)
+                    ? x
+                    : (m->width - 1 - x); /* 0 = vertical only -> cols unchanged */
             memcpy(out->data + (y * m->width + x) * m->channels,
                    m->data + (sy * m->width + sx) * m->channels, (size_t)m->channels);
         }
@@ -462,7 +537,8 @@ void *scv_flip(void *mat, int32_t mode) {
 /* rotate_angle: arbitrary-angle rotation isn't worth reimplementing for a
  * test mock; real geometry is exercised via resize/crop/rotate90/flip
  * above, all of which are exact and image-independent. */
-void *scv_rotate_angle(void *mat, double angle_deg, double scale) {
+void *scv_rotate_angle(void *mat, double angle_deg, double scale)
+{
     (void)mat;
     (void)angle_deg;
     (void)scale;
@@ -472,7 +548,8 @@ void *scv_rotate_angle(void *mat, double angle_deg, double scale) {
 
 /* --------------------------------------------------------------------- filters */
 
-void *scv_blur(void *mat, int32_t ksize) {
+void *scv_blur(void *mat, int32_t ksize)
+{
     set_error("");
     MockMat *m = (MockMat *)mat;
     if (!m || ksize <= 0) return NULL;
@@ -492,14 +569,16 @@ void *scv_blur(void *mat, int32_t ksize) {
                         cnt++;
                     }
                 }
-                out->data[(y * m->width + x) * m->channels + c] = clampb(sum / (cnt > 0 ? cnt : 1));
+                out->data[(y * m->width + x) * m->channels + c] =
+                    clampb(sum / (cnt > 0 ? cnt : 1));
             }
         }
     }
     return out;
 }
 
-void *scv_gaussian_blur(void *mat, int32_t ksize, double sigma) {
+void *scv_gaussian_blur(void *mat, int32_t ksize, double sigma)
+{
     (void)mat;
     (void)ksize;
     (void)sigma;
@@ -507,14 +586,16 @@ void *scv_gaussian_blur(void *mat, int32_t ksize, double sigma) {
     return NULL;
 }
 
-void *scv_median_blur(void *mat, int32_t ksize) {
+void *scv_median_blur(void *mat, int32_t ksize)
+{
     (void)mat;
     (void)ksize;
     unsupported("scv_median_blur");
     return NULL;
 }
 
-void *scv_canny(void *mat, double t1, double t2) {
+void *scv_canny(void *mat, double t1, double t2)
+{
     (void)mat;
     (void)t1;
     (void)t2;
@@ -522,7 +603,8 @@ void *scv_canny(void *mat, double t1, double t2) {
     return NULL;
 }
 
-void *scv_threshold(void *mat, double thresh, double maxval, int32_t kind) {
+void *scv_threshold(void *mat, double thresh, double maxval, int32_t kind)
+{
     set_error("");
     MockMat *m = (MockMat *)mat;
     if (!m) return NULL;
@@ -537,11 +619,21 @@ void *scv_threshold(void *mat, double thresh, double maxval, int32_t kind) {
         int v = gray->data[i];
         int out_v;
         switch (kind) {
-            case 1: out_v = v > thresh ? 0 : (int)maxval; break;          /* BINARY_INV */
-            case 2: out_v = v > thresh ? (int)thresh : v; break;          /* TRUNC */
-            case 3: out_v = v > thresh ? v : 0; break;                    /* TOZERO */
-            case 4: out_v = v > thresh ? 0 : v; break;                    /* TOZERO_INV */
-            default: out_v = v > thresh ? (int)maxval : 0; break;         /* BINARY */
+        case 1:
+            out_v = v > thresh ? 0 : (int)maxval;
+            break; /* BINARY_INV */
+        case 2:
+            out_v = v > thresh ? (int)thresh : v;
+            break; /* TRUNC */
+        case 3:
+            out_v = v > thresh ? v : 0;
+            break; /* TOZERO */
+        case 4:
+            out_v = v > thresh ? 0 : v;
+            break; /* TOZERO_INV */
+        default:
+            out_v = v > thresh ? (int)maxval : 0;
+            break; /* BINARY */
         }
         out->data[i] = clampb(out_v);
     }
@@ -550,7 +642,8 @@ void *scv_threshold(void *mat, double thresh, double maxval, int32_t kind) {
 }
 
 void *scv_adaptive_threshold(void *mat, double maxval, int32_t method, int32_t kind,
-                              int32_t block_size, double c) {
+                             int32_t block_size, double c)
+{
     (void)mat;
     (void)maxval;
     (void)method;
@@ -561,22 +654,25 @@ void *scv_adaptive_threshold(void *mat, double maxval, int32_t method, int32_t k
     return NULL;
 }
 
-int32_t scv_hist_gray(void *mat, int32_t *out_counts) {
+int32_t scv_hist_gray(void *mat, int32_t *out_counts)
+{
     set_error("");
     MockMat *m = (MockMat *)mat;
     if (!m || !out_counts) return 0;
     memset(out_counts, 0, sizeof(int32_t) * 256);
     MockMat *gray = to_gray(m);
     int32_t n = gray->width * gray->height;
-    for (int32_t i = 0; i < n; i++) out_counts[gray->data[i]]++;
+    for (int32_t i = 0; i < n; i++)
+        out_counts[gray->data[i]]++;
     scv_free(gray);
     return 1;
 }
 
 /* ---------------------------------------------------------------------- drawing */
 
-int32_t scv_line(void *mat, int32_t x1, int32_t y1, int32_t x2, int32_t y2, int32_t r, int32_t g,
-                  int32_t b, int32_t thickness) {
+int32_t scv_line(void *mat, int32_t x1, int32_t y1, int32_t x2, int32_t y2, int32_t r,
+                 int32_t g, int32_t b, int32_t thickness)
+{
     (void)thickness; /* mock always draws a 1px line */
     MockMat *m = (MockMat *)mat;
     if (!m) return 0;
@@ -588,19 +684,27 @@ int32_t scv_line(void *mat, int32_t x1, int32_t y1, int32_t x2, int32_t y2, int3
         scv_set_pixel(m, x, y, r, g, b);
         if (x == x2 && y == y2) break;
         int32_t e2 = 2 * err;
-        if (e2 >= dy) { err += dy; x += sx; }
-        if (e2 <= dx) { err += dx; y += sy; }
+        if (e2 >= dy) {
+            err += dy;
+            x += sx;
+        }
+        if (e2 <= dx) {
+            err += dx;
+            y += sy;
+        }
     }
     return 1;
 }
 
-int32_t scv_rectangle(void *mat, int32_t x, int32_t y, int32_t w, int32_t h, int32_t r, int32_t g,
-                       int32_t b, int32_t thickness) {
+int32_t scv_rectangle(void *mat, int32_t x, int32_t y, int32_t w, int32_t h, int32_t r,
+                      int32_t g, int32_t b, int32_t thickness)
+{
     MockMat *m = (MockMat *)mat;
     if (!m) return 0;
     if (thickness < 0) { /* filled */
         for (int32_t yy = y; yy < y + h; yy++)
-            for (int32_t xx = x; xx < x + w; xx++) scv_set_pixel(m, xx, yy, r, g, b);
+            for (int32_t xx = x; xx < x + w; xx++)
+                scv_set_pixel(m, xx, yy, r, g, b);
         return 1;
     }
     scv_line(m, x, y, x + w - 1, y, r, g, b, 1);
@@ -610,8 +714,9 @@ int32_t scv_rectangle(void *mat, int32_t x, int32_t y, int32_t w, int32_t h, int
     return 1;
 }
 
-int32_t scv_circle(void *mat, int32_t cx, int32_t cy, int32_t radius, int32_t r, int32_t g,
-                    int32_t b, int32_t thickness) {
+int32_t scv_circle(void *mat, int32_t cx, int32_t cy, int32_t radius, int32_t r,
+                   int32_t g, int32_t b, int32_t thickness)
+{
     MockMat *m = (MockMat *)mat;
     if (!m) return 0;
     for (int32_t y = cy - radius; y <= cy + radius; y++) {
@@ -628,7 +733,8 @@ int32_t scv_circle(void *mat, int32_t cx, int32_t cy, int32_t radius, int32_t r,
 }
 
 int32_t scv_ellipse(void *mat, int32_t cx, int32_t cy, int32_t axis_w, int32_t axis_h,
-                     double angle, int32_t r, int32_t g, int32_t b, int32_t thickness) {
+                    double angle, int32_t r, int32_t g, int32_t b, int32_t thickness)
+{
     /* Approximated as an axis-aligned ellipse via a coarse point walk;
      * arbitrary rotation isn't worth reimplementing for a test mock (see
      * scv_rotate_angle's own note) - real angle support comes from the
@@ -651,21 +757,23 @@ int32_t scv_ellipse(void *mat, int32_t cx, int32_t cy, int32_t axis_w, int32_t a
     return 1;
 }
 
-int32_t scv_polylines(void *mat, const int32_t *pts_xy, int32_t count, int32_t closed, int32_t r,
-                       int32_t g, int32_t b, int32_t thickness) {
+int32_t scv_polylines(void *mat, const int32_t *pts_xy, int32_t count, int32_t closed,
+                      int32_t r, int32_t g, int32_t b, int32_t thickness)
+{
     MockMat *m = (MockMat *)mat;
     if (!m || !pts_xy || count < 2) return 0;
     for (int32_t i = 0; i < count - 1; i++)
-        scv_line(m, pts_xy[i * 2], pts_xy[i * 2 + 1], pts_xy[(i + 1) * 2], pts_xy[(i + 1) * 2 + 1],
-                 r, g, b, thickness);
+        scv_line(m, pts_xy[i * 2], pts_xy[i * 2 + 1], pts_xy[(i + 1) * 2],
+                 pts_xy[(i + 1) * 2 + 1], r, g, b, thickness);
     if (closed)
-        scv_line(m, pts_xy[(count - 1) * 2], pts_xy[(count - 1) * 2 + 1], pts_xy[0], pts_xy[1], r,
-                 g, b, thickness);
+        scv_line(m, pts_xy[(count - 1) * 2], pts_xy[(count - 1) * 2 + 1], pts_xy[0],
+                 pts_xy[1], r, g, b, thickness);
     return 1;
 }
 
-int32_t scv_fill_poly(void *mat, const int32_t *pts_xy, int32_t count, int32_t r, int32_t g,
-                       int32_t b) {
+int32_t scv_fill_poly(void *mat, const int32_t *pts_xy, int32_t count, int32_t r,
+                      int32_t g, int32_t b)
+{
     /* Simple scanline-free approximation: fill the bounding box, clipped
      * to a coarse point-in-polygon test - adequate for a test mock. */
     MockMat *m = (MockMat *)mat;
@@ -694,7 +802,8 @@ int32_t scv_fill_poly(void *mat, const int32_t *pts_xy, int32_t count, int32_t r
 }
 
 int32_t scv_put_text(void *mat, const char *text, int32_t x, int32_t y, double font_scale,
-                      int32_t r, int32_t g, int32_t b, int32_t thickness) {
+                     int32_t r, int32_t g, int32_t b, int32_t thickness)
+{
     (void)mat;
     (void)text;
     (void)x;
@@ -710,7 +819,8 @@ int32_t scv_put_text(void *mat, const char *text, int32_t x, int32_t y, double f
 
 /* ------------------------------------------------------------------ morphology */
 
-void *scv_erode(void *mat, int32_t ksize, int32_t iterations) {
+void *scv_erode(void *mat, int32_t ksize, int32_t iterations)
+{
     (void)iterations; /* mock applies a single pass regardless of iteration count */
     set_error("");
     MockMat *m = (MockMat *)mat;
@@ -738,7 +848,8 @@ void *scv_erode(void *mat, int32_t ksize, int32_t iterations) {
     return out;
 }
 
-void *scv_dilate(void *mat, int32_t ksize, int32_t iterations) {
+void *scv_dilate(void *mat, int32_t ksize, int32_t iterations)
+{
     (void)iterations;
     set_error("");
     MockMat *m = (MockMat *)mat;
@@ -766,7 +877,8 @@ void *scv_dilate(void *mat, int32_t ksize, int32_t iterations) {
     return out;
 }
 
-void *scv_morphology(void *mat, int32_t op, int32_t ksize) {
+void *scv_morphology(void *mat, int32_t op, int32_t ksize)
+{
     /* OPEN = erode then dilate; CLOSE = dilate then erode; the rest
      * (GRADIENT/TOPHAT/BLACKHAT) need both a base image and one of those
      * results, which is more than this mock's scope - the real shim
@@ -792,11 +904,14 @@ void *scv_morphology(void *mat, int32_t op, int32_t ksize) {
 
 /* --------------------------------------------------------------- arithmetic */
 
-static int32_t same_shape(MockMat *a, MockMat *b) {
-    return a && b && a->width == b->width && a->height == b->height && a->channels == b->channels;
+static int32_t same_shape(MockMat *a, MockMat *b)
+{
+    return a && b && a->width == b->width && a->height == b->height &&
+           a->channels == b->channels;
 }
 
-void *scv_add_weighted(void *mat1, double alpha, void *mat2, double beta, double gamma) {
+void *scv_add_weighted(void *mat1, double alpha, void *mat2, double beta, double gamma)
+{
     set_error("");
     MockMat *m1 = (MockMat *)mat1, *m2 = (MockMat *)mat2;
     if (!same_shape(m1, m2)) {
@@ -810,7 +925,8 @@ void *scv_add_weighted(void *mat1, double alpha, void *mat2, double beta, double
     return out;
 }
 
-void *scv_bitwise(void *mat1, void *mat2, int32_t op) {
+void *scv_bitwise(void *mat1, void *mat2, int32_t op)
+{
     set_error("");
     MockMat *m1 = (MockMat *)mat1, *m2 = (MockMat *)mat2;
     if (!same_shape(m1, m2)) {
@@ -821,25 +937,34 @@ void *scv_bitwise(void *mat1, void *mat2, int32_t op) {
     int32_t n = m1->width * m1->height * m1->channels;
     for (int32_t i = 0; i < n; i++) {
         switch (op) {
-            case 1: out->data[i] = m1->data[i] | m2->data[i]; break;
-            case 2: out->data[i] = m1->data[i] ^ m2->data[i]; break;
-            default: out->data[i] = m1->data[i] & m2->data[i]; break;
+        case 1:
+            out->data[i] = m1->data[i] | m2->data[i];
+            break;
+        case 2:
+            out->data[i] = m1->data[i] ^ m2->data[i];
+            break;
+        default:
+            out->data[i] = m1->data[i] & m2->data[i];
+            break;
         }
     }
     return out;
 }
 
-void *scv_bitwise_not(void *mat) {
+void *scv_bitwise_not(void *mat)
+{
     set_error("");
     MockMat *m = (MockMat *)mat;
     if (!m) return NULL;
     MockMat *out = alloc_mat(m->width, m->height, m->channels);
     int32_t n = m->width * m->height * m->channels;
-    for (int32_t i = 0; i < n; i++) out->data[i] = (unsigned char)(255 - m->data[i]);
+    for (int32_t i = 0; i < n; i++)
+        out->data[i] = (unsigned char)(255 - m->data[i]);
     return out;
 }
 
-void *scv_abs_diff(void *mat1, void *mat2) {
+void *scv_abs_diff(void *mat1, void *mat2)
+{
     set_error("");
     MockMat *m1 = (MockMat *)mat1, *m2 = (MockMat *)mat2;
     if (!same_shape(m1, m2)) {
@@ -858,7 +983,8 @@ void *scv_abs_diff(void *mat1, void *mat2) {
 /* --------------------------------------------------- perspective / template */
 
 void *scv_warp_perspective_quad(void *mat, const double *src_xy, const double *dst_xy,
-                                 int32_t out_width, int32_t out_height) {
+                                int32_t out_width, int32_t out_height)
+{
     /* A true perspective warp (3x3 homography solve) is out of scope for
      * this mock; real usage is verified against the OpenCV-backed shim.
      * This still exercises the Salam-side call/marshaling path. */
@@ -872,7 +998,8 @@ void *scv_warp_perspective_quad(void *mat, const double *src_xy, const double *d
 }
 
 int32_t scv_match_template(void *mat, void *tmpl, int32_t *out_x, int32_t *out_y,
-                            double *out_score) {
+                           double *out_score)
+{
     /* Exact (non-normalized) brute-force SSD match - correct for a small
      * test mock, just not calibrated to OpenCV's TM_CCOEFF_NORMED score
      * range (out_score here is a placeholder 1.0 on any match). */
@@ -892,7 +1019,8 @@ int32_t scv_match_template(void *mat, void *tmpl, int32_t *out_x, int32_t *out_y
             for (int32_t ty = 0; ty < t->height; ty++) {
                 for (int32_t tx = 0; tx < t->width; tx++) {
                     for (int32_t c = 0; c < t->channels; c++) {
-                        int a = m->data[((y + ty) * m->width + (x + tx)) * m->channels + c];
+                        int a =
+                            m->data[((y + ty) * m->width + (x + tx)) * m->channels + c];
                         int b = t->data[(ty * t->width + tx) * t->channels + c];
                         int64_t d = a - b;
                         sum += d * d;
@@ -914,40 +1042,47 @@ int32_t scv_match_template(void *mat, void *tmpl, int32_t *out_x, int32_t *out_y
 
 /* ------------------------------------------------------------------- contours */
 
-void *scv_find_contours(void *mat) {
+void *scv_find_contours(void *mat)
+{
     (void)mat;
     unsupported("scv_find_contours");
     return NULL;
 }
-int32_t scv_contour_count(void *cs) {
+int32_t scv_contour_count(void *cs)
+{
     (void)cs;
     return 0;
 }
-int32_t scv_contour_point_count(void *cs, int32_t idx) {
+int32_t scv_contour_point_count(void *cs, int32_t idx)
+{
     (void)cs;
     (void)idx;
     return 0;
 }
-int32_t scv_contour_point_get(void *cs, int32_t idx, int32_t pt_idx, int32_t *out_xy) {
+int32_t scv_contour_point_get(void *cs, int32_t idx, int32_t pt_idx, int32_t *out_xy)
+{
     (void)cs;
     (void)idx;
     (void)pt_idx;
     (void)out_xy;
     return 0;
 }
-double scv_contour_area(void *cs, int32_t idx) {
+double scv_contour_area(void *cs, int32_t idx)
+{
     (void)cs;
     (void)idx;
     return 0.0;
 }
-int32_t scv_contour_bounding_rect(void *cs, int32_t idx, int32_t *out_xywh) {
+int32_t scv_contour_bounding_rect(void *cs, int32_t idx, int32_t *out_xywh)
+{
     (void)cs;
     (void)idx;
     (void)out_xywh;
     return 0;
 }
-int32_t scv_draw_contour(void *mat, void *cs, int32_t idx, int32_t r, int32_t g, int32_t b,
-                          int32_t thickness) {
+int32_t scv_draw_contour(void *mat, void *cs, int32_t idx, int32_t r, int32_t g,
+                         int32_t b, int32_t thickness)
+{
     (void)mat;
     (void)cs;
     (void)idx;
@@ -957,12 +1092,16 @@ int32_t scv_draw_contour(void *mat, void *cs, int32_t idx, int32_t r, int32_t g,
     (void)thickness;
     return 0;
 }
-void scv_free_contours(void *cs) { (void)cs; }
+void scv_free_contours(void *cs)
+{
+    (void)cs;
+}
 
 /* -------------------------------------------------------------------- features */
 
 int32_t scv_good_features(void *mat, int32_t max_corners, double quality, double min_dist,
-                           int32_t *out_x, int32_t *out_y) {
+                          int32_t *out_x, int32_t *out_y)
+{
     (void)mat;
     (void)max_corners;
     (void)quality;
@@ -973,41 +1112,50 @@ int32_t scv_good_features(void *mat, int32_t max_corners, double quality, double
     return 0;
 }
 
-void *scv_orb_detect(void *mat, int32_t max_features) {
+void *scv_orb_detect(void *mat, int32_t max_features)
+{
     (void)mat;
     (void)max_features;
     unsupported("scv_orb_detect");
     return NULL;
 }
 
-void *scv_sift_detect(void *mat, int32_t max_features) {
+void *scv_sift_detect(void *mat, int32_t max_features)
+{
     (void)mat;
     (void)max_features;
     unsupported("scv_sift_detect");
     return NULL;
 }
 
-int32_t scv_keypoint_count(void *kp) {
+int32_t scv_keypoint_count(void *kp)
+{
     (void)kp;
     return 0;
 }
 
-int32_t scv_keypoint_get(void *kp, int32_t idx, double *out_xy) {
+int32_t scv_keypoint_get(void *kp, int32_t idx, double *out_xy)
+{
     (void)kp;
     (void)idx;
     (void)out_xy;
     return 0;
 }
 
-void *scv_orb_descriptors(void *kp) {
+void *scv_orb_descriptors(void *kp)
+{
     (void)kp;
     unsupported("scv_orb_descriptors");
     return NULL;
 }
 
-void scv_free_keypoints(void *kp) { (void)kp; }
+void scv_free_keypoints(void *kp)
+{
+    (void)kp;
+}
 
-void *scv_bf_match(void *desc1, void *desc2, int32_t max_matches, int32_t norm) {
+void *scv_bf_match(void *desc1, void *desc2, int32_t max_matches, int32_t norm)
+{
     (void)desc1;
     (void)desc2;
     (void)max_matches;
@@ -1016,13 +1164,15 @@ void *scv_bf_match(void *desc1, void *desc2, int32_t max_matches, int32_t norm) 
     return NULL;
 }
 
-int32_t scv_match_count(void *m) {
+int32_t scv_match_count(void *m)
+{
     (void)m;
     return 0;
 }
 
 int32_t scv_match_get(void *m, int32_t idx, int32_t *out_query, int32_t *out_train,
-                       double *out_dist) {
+                      double *out_dist)
+{
     (void)m;
     (void)idx;
     (void)out_query;
@@ -1031,21 +1181,29 @@ int32_t scv_match_get(void *m, int32_t idx, int32_t *out_query, int32_t *out_tra
     return 0;
 }
 
-void scv_free_matches(void *m) { (void)m; }
+void scv_free_matches(void *m)
+{
+    (void)m;
+}
 
 /* -------------------------------------------------------------- object detection */
 
-void *scv_cascade_load(const char *path) {
+void *scv_cascade_load(const char *path)
+{
     (void)path;
     unsupported("scv_cascade_load");
     return NULL;
 }
 
-void scv_cascade_free(void *c) { (void)c; }
+void scv_cascade_free(void *c)
+{
+    (void)c;
+}
 
 int32_t scv_cascade_detect(void *c, void *mat, double scale_factor, int32_t min_neighbors,
-                            int32_t max_results, int32_t *out_x, int32_t *out_y, int32_t *out_w,
-                            int32_t *out_h) {
+                           int32_t max_results, int32_t *out_x, int32_t *out_y,
+                           int32_t *out_w, int32_t *out_h)
+{
     (void)c;
     (void)mat;
     (void)scale_factor;
@@ -1061,15 +1219,21 @@ int32_t scv_cascade_detect(void *c, void *mat, double scale_factor, int32_t min_
 
 /* ------------------------------------------------------------------------ dnn */
 
-void *scv_dnn_load(const char *model_path, const char *config_path) {
+void *scv_dnn_load(const char *model_path, const char *config_path)
+{
     (void)model_path;
     (void)config_path;
     unsupported("scv_dnn_load");
     return NULL;
 }
-void scv_dnn_free(void *net) { (void)net; }
-int32_t scv_dnn_set_input(void *net, void *mat, double scale, double mean_r, double mean_g,
-                           double mean_b, int32_t swap_rb, int32_t width, int32_t height) {
+void scv_dnn_free(void *net)
+{
+    (void)net;
+}
+int32_t scv_dnn_set_input(void *net, void *mat, double scale, double mean_r,
+                          double mean_g, double mean_b, int32_t swap_rb, int32_t width,
+                          int32_t height)
+{
     (void)net;
     (void)mat;
     (void)scale;
@@ -1081,11 +1245,13 @@ int32_t scv_dnn_set_input(void *net, void *mat, double scale, double mean_r, dou
     (void)height;
     return 0;
 }
-void *scv_dnn_forward(void *net) {
+void *scv_dnn_forward(void *net)
+{
     (void)net;
     return NULL;
 }
-void *scv_dnn_forward_named(void *net, const char *layer_name) {
+void *scv_dnn_forward_named(void *net, const char *layer_name)
+{
     (void)net;
     (void)layer_name;
     return NULL;
@@ -1093,35 +1259,45 @@ void *scv_dnn_forward_named(void *net, const char *layer_name) {
 
 /* ---------------------------------------------------------------------- video */
 
-void *scv_video_open_file(const char *path) {
+void *scv_video_open_file(const char *path)
+{
     (void)path;
     unsupported("scv_video_open_file");
     return NULL;
 }
-void *scv_video_open_camera(int32_t index) {
+void *scv_video_open_camera(int32_t index)
+{
     (void)index;
     unsupported("scv_video_open_camera");
     return NULL;
 }
-void *scv_video_read(void *v) {
+void *scv_video_read(void *v)
+{
     (void)v;
     return NULL;
 }
-void scv_video_release(void *v) { (void)v; }
-int32_t scv_video_ok(void *v) {
+void scv_video_release(void *v)
+{
+    (void)v;
+}
+int32_t scv_video_ok(void *v)
+{
     (void)v;
     return 0;
 }
-double scv_video_fps(void *v) {
+double scv_video_fps(void *v)
+{
     (void)v;
     return 0.0;
 }
-int32_t scv_video_frame_count(void *v) {
+int32_t scv_video_frame_count(void *v)
+{
     (void)v;
     return 0;
 }
 void *scv_writer_open(const char *path, const char *fourcc, double fps, int32_t width,
-                       int32_t height) {
+                      int32_t height)
+{
     (void)path;
     (void)fourcc;
     (void)fps;
@@ -1130,26 +1306,37 @@ void *scv_writer_open(const char *path, const char *fourcc, double fps, int32_t 
     unsupported("scv_writer_open");
     return NULL;
 }
-int32_t scv_writer_write(void *w, void *frame) {
+int32_t scv_writer_write(void *w, void *frame)
+{
     (void)w;
     (void)frame;
     return 0;
 }
-void scv_writer_release(void *w) { (void)w; }
+void scv_writer_release(void *w)
+{
+    (void)w;
+}
 
 /* ------------------------------------------------------------------------ gui */
 
-void scv_imshow(const char *window, void *mat) {
+void scv_imshow(const char *window, void *mat)
+{
     (void)window;
     (void)mat;
     unsupported("scv_imshow");
 }
-int32_t scv_wait_key(int32_t delay_ms) {
+int32_t scv_wait_key(int32_t delay_ms)
+{
     (void)delay_ms;
     return -1;
 }
-void scv_destroy_window(const char *window) { (void)window; }
-void scv_destroy_all_windows(void) {}
+void scv_destroy_window(const char *window)
+{
+    (void)window;
+}
+void scv_destroy_all_windows(void)
+{
+}
 
 /* Trackbars are pure bookkeeping (no real window to attach to without a
  * GUI backend), so the mock tracks positions itself - enough to exercise
@@ -1159,7 +1346,8 @@ static char g_trackbar_keys[SCV_MAX_TRACKBARS][256];
 static int32_t g_trackbar_vals[SCV_MAX_TRACKBARS];
 static int32_t g_trackbar_count = 0;
 
-static int32_t trackbar_find(const char *name, const char *window) {
+static int32_t trackbar_find(const char *name, const char *window)
+{
     char key[256];
     snprintf(key, sizeof(key), "%s::%s", window, name);
     for (int32_t i = 0; i < g_trackbar_count; i++)
@@ -1167,7 +1355,9 @@ static int32_t trackbar_find(const char *name, const char *window) {
     return -1;
 }
 
-int32_t scv_create_trackbar(const char *name, const char *window, int32_t initial, int32_t max) {
+int32_t scv_create_trackbar(const char *name, const char *window, int32_t initial,
+                            int32_t max)
+{
     (void)max;
     if (!name || !window || g_trackbar_count >= SCV_MAX_TRACKBARS) return 0;
     int32_t i = trackbar_find(name, window);
@@ -1179,12 +1369,14 @@ int32_t scv_create_trackbar(const char *name, const char *window, int32_t initia
     return 1;
 }
 
-int32_t scv_get_trackbar_pos(const char *name, const char *window) {
+int32_t scv_get_trackbar_pos(const char *name, const char *window)
+{
     int32_t i = trackbar_find(name, window);
     return i < 0 ? 0 : g_trackbar_vals[i];
 }
 
-void scv_set_trackbar_pos(const char *name, const char *window, int32_t pos) {
+void scv_set_trackbar_pos(const char *name, const char *window, int32_t pos)
+{
     int32_t i = trackbar_find(name, window);
     if (i >= 0) g_trackbar_vals[i] = pos;
 }

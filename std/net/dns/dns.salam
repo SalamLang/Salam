@@ -1,0 +1,645 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/dns"
+@fa "دی‌ان‌اس شبکه"
+@ar "DNS للشبکة"
+package dns
+
+import mem
+import str
+import io
+import os
+import crypto
+import compress
+import net.udp
+import net.internal.rawsock
+
+// A real DNS resolver: RFC 1035 message encode/decode over UDP/53
+// (header, question, resource records, name-compression pointers),
+// queryable against any server, plus a small set of convenience
+// Lookup*() helpers that walk the OS's configured resolvers.
+//
+// Two tiers, matching the master plan: `Lookup` is the simple case
+// (delegates to rawsock.Resolve, i.e. the platform's own getaddrinfo/
+// gethostbyname - fine for "just give me an IP for this host" callers).
+// Everything else here (EncodeQuery/Decode/QueryServer/LookupA/AAAA/
+// CNAME/MX/TXT/PTR) is the real protocol implementation, useful when a
+// caller needs record types the platform resolver doesn't expose, a
+// non-default server, or the raw record set (TTL, priority, ...).
+//
+// TTLs are kept as plain `int`, not `i64`/unsigned - real-world TTLs are
+// always far below 2^31 seconds (68 years), so this sidesteps the
+// unsigned-math correctness issues noted elsewhere in this codebase for
+// the interpreter without losing anything a real resolver needs.
+//
+// No in-memory response cache is implemented - the stdlib has no
+// confirmed mutex/atomic primitive, and a cache is exactly the kind of
+// shared mutable state that needs one once callers span threads (see
+// std/web's thread-per-connection server). A documented gap, not a
+// silent one: callers that want caching should cache at their own layer
+// (e.g. a QueryMap keyed by "name:type" refreshed on TTL expiry) until a
+// real concurrency primitive lands in std/thread.
+//
+// Likewise LookupAsync is not implemented: std/thread's Thread.spawn has
+// no argument slot to hand a hostname into the worker function, and
+// building one specifically for this package (as std/web does inline
+// for its accept loop) is more machinery than this pass justifies.
+// Callers needing async resolution can wrap Lookup*/QueryServer in their
+// own std/thread.Thread today.
+
+@en "TypeA"
+@fa "نوع آ"
+@ar "نوع A"
+pub const TypeA := 1
+
+@en "TypeNS"
+@fa "نوع ان‌اس"
+@ar "نوع NS"
+pub const TypeNS := 2
+
+@en "TypeCNAME"
+@fa "نوع سی‌نیم"
+@ar "نوع CNAME"
+pub const TypeCNAME := 5
+
+@en "TypeSOA"
+@fa "نوع اس‌اُاِی"
+@ar "نوع SOA"
+pub const TypeSOA := 6
+
+@en "TypePTR"
+@fa "نوع پی‌تی‌آر"
+@ar "نوع PTR"
+pub const TypePTR := 12
+
+@en "TypeMX"
+@fa "نوع ام‌ایکس"
+@ar "نوع MX"
+pub const TypeMX := 15
+
+@en "TypeTXT"
+@fa "نوع تی‌ایکس‌تی"
+@ar "نوع TXT"
+pub const TypeTXT := 16
+
+@en "TypeAAAA"
+@fa "نوع کواداِی"
+@ar "نوع AAAA"
+pub const TypeAAAA := 28
+
+@en "ClassIN"
+@fa "رده اینترنت"
+@ar "فئة الإنترنت"
+pub const ClassIN := 1
+
+@en "Question"
+@fa "پرسش"
+@ar "سؤال"
+pub struct Question:
+    pub name: str = ""
+    pub qtype: int = 0
+    pub qclass: int = 0
+end
+
+@en "Questions"
+@fa "پرسش‌ها"
+@ar "أسئلة"
+pub struct Questions:
+    pub items: Vector<Question> = Vector {}
+end
+
+@en "Record"
+@fa "رکورد"
+@ar "سجل"
+pub struct Record:
+    pub name: str = ""
+    pub rtype: int = 0
+    pub rclass: int = 0
+    pub ttl: int = 0
+    pub priority: int = 0
+    pub data: str = ""
+end
+
+@en "Records"
+@fa "رکوردها"
+@ar "سجلات"
+pub struct Records:
+    pub items: Vector<Record> = Vector {}
+end
+
+@en "Message"
+@fa "پیام"
+@ar "رسالة"
+pub struct Message:
+    pub id: int = 0
+    pub qr: bool = false
+    pub opcode: int = 0
+    pub aa: bool = false
+    pub tc: bool = false
+    pub rd: bool = false
+    pub ra: bool = false
+    pub rcode: int = 0
+    pub questions: Questions = Questions {}
+    pub answers: Records = Records {}
+    pub authorities: Records = Records {}
+    pub additionals: Records = Records {}
+end
+
+inline pure func _ub(p: void*, i: int): int:
+    b := ((p as i64 + i) as i8*)[0] as int
+    if b < 0: ret b + 256 end
+    ret b
+end
+
+func _bytes_to_str(p: void*, n: int): str:
+    buf := mem.Allocate((n + 1) as u64)
+    defer mem.Free(buf)
+    mem.Copy(buf, p, n as u64)
+    bufp := buf as i8*
+    bufp[n] = 0 as i8
+    ret str.Clone(buf as str)
+end
+
+func _is_space(c: str): bool:
+    ret c == " " || c == "\t" || c == "\r" || c == "\n"
+end
+
+func _ltrim(s: str): str:
+    mut a := 0
+    n := s.len()
+    until a < n:
+        if _is_space(s.substr(a, 1)):
+            a += 1
+        else:
+            ret s.substr(a, n - a)
+        end
+    end
+    ret ""
+end
+
+func _rtrim(s: str): str:
+    mut b := s.len()
+    until b > 0:
+        if _is_space(s.substr(b - 1, 1)):
+            b -= 1
+        else:
+            ret s.substr(0, b)
+        end
+    end
+    ret ""
+end
+
+func _strip(s: str): str:
+    ret _rtrim(_ltrim(s))
+end
+
+func _put_u16(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, (v / 256) & 255)
+    compress.BufPush(b, v & 255)
+end
+
+func _encode_name(b &: compress.ByteBuf, name: str):
+    if name.len() == 0:
+        compress.BufPush(b, 0)
+        ret
+    end
+    labels := str.Split(name, ".")
+    mut i := 0
+    until i < labels.len():
+        lbl := labels.get(i)[0]
+        compress.BufPush(b, lbl.len())
+        compress.BufPushBytes(b, lbl as void*, lbl.len())
+        i += 1
+    end
+    compress.BufPush(b, 0)
+end
+
+// Decodes a (possibly compressed) domain name starting at `start`.
+// `out_consumed` receives the number of bytes consumed from `start` in
+// the ORIGINAL stream (i.e. up to and including the first compression
+// pointer, if any) - what the caller needs to advance past this name,
+// as opposed to however far a compression jump wandered off to.
+func _decode_name(data: void*, n: int, start: int, out_consumed &: int): str:
+    mut labels := Vector {} as Vector<str>
+    mut pos := start
+    mut jumped := false
+    mut consumed := 0
+    mut safety := 0
+    mut done := false
+    until !done:
+        safety += 1
+        if safety > 128 || pos < 0 || pos >= n:
+            done = true
+            continue
+        end
+        b0 := _ub(data, pos)
+        if (b0 & 192) == 192:
+            if pos + 1 >= n:
+                done = true
+                continue
+            end
+            b1 := _ub(data, pos + 1)
+            offset := ((b0 & 63) * 256) + b1
+            if !jumped:
+                consumed = (pos - start) + 2
+            end
+            jumped = true
+            pos = offset
+        else b0 == 0:
+            if !jumped:
+                consumed = (pos - start) + 1
+            end
+            done = true
+        else:
+            label_start := pos + 1
+            if label_start + b0 > n:
+                done = true
+                continue
+            end
+            labels.push(_bytes_to_str((data as i64 + label_start) as void*, b0))
+            pos = label_start + b0
+        end
+    end
+    out_consumed = consumed
+    mut name := ""
+    mut i := 0
+    until i < labels.len():
+        if i > 0: name += "." end
+        name += labels.get(i)[0]
+        i += 1
+    end
+    ret name
+end
+
+func _format_ipv4(data: void*, pos: int): str:
+    a := _ub(data, pos)
+    b := _ub(data, pos + 1)
+    c := _ub(data, pos + 2)
+    d := _ub(data, pos + 3)
+    ret str.FromInt(a as i64) + "." + str.FromInt(b as i64) + "." + str.FromInt(c as i64) + "." + str.FromInt(d as i64)
+end
+
+func _hex1(v: int): str:
+    digits := "0123456789abcdef"
+    ret digits.substr(v, 1)
+end
+
+func _format_ipv6(data: void*, pos: int): str:
+    mut out := ""
+    mut i := 0
+    until i < 16:
+        hi := _ub(data, pos + i)
+        lo := _ub(data, pos + i + 1)
+        g := (hi * 256) + lo
+        mut piece := ""
+        mut started := false
+        mut shift := 12
+        until shift >= 0:
+            nib := (g >> shift) & 15
+            if nib != 0 || started || shift == 0:
+                piece += _hex1(nib)
+                started = true
+            end
+            shift -= 4
+        end
+        out += piece
+        if i < 14: out += ":" end
+        i += 2
+    end
+    ret out
+end
+
+func _decode_txt(data: void*, pos: int, rdlength: int): str:
+    mut out := ""
+    mut p := pos
+    end_pos := pos + rdlength
+    until p < end_pos:
+        clen := _ub(data, p)
+        cstart := p + 1
+        if cstart + clen > end_pos: ret out end
+        out += _bytes_to_str((data as i64 + cstart) as void*, clen)
+        p = cstart + clen
+    end
+    ret out
+end
+
+func _decode_rr(data: void*, n: int, pos: int, out_next &: int): Record:
+    mut rec := Record {}
+    mut consumed := 0
+    rec.name = _decode_name(data, n, pos, consumed)
+    p := pos + consumed
+    if p + 10 > n:
+        out_next = n
+        ret rec
+    end
+    rec.rtype = (_ub(data, p) * 256) + _ub(data, p + 1)
+    rec.rclass = (_ub(data, p + 2) * 256) + _ub(data, p + 3)
+    rec.ttl = (_ub(data, p + 4) * 16777216) + (_ub(data, p + 5) * 65536) + (_ub(data, p + 6) * 256) + _ub(data, p + 7)
+    rdlength := (_ub(data, p + 8) * 256) + _ub(data, p + 9)
+    rdata_start := p + 10
+
+    if rdata_start + rdlength > n:
+        out_next = n
+        ret rec
+    end
+
+    if rec.rtype == TypeA && rdlength == 4:
+        rec.data = _format_ipv4(data, rdata_start)
+    else rec.rtype == TypeAAAA && rdlength == 16:
+        rec.data = _format_ipv6(data, rdata_start)
+    else rec.rtype == TypeCNAME || rec.rtype == TypeNS || rec.rtype == TypePTR:
+        mut nl := 0
+        rec.data = _decode_name(data, n, rdata_start, nl)
+    else rec.rtype == TypeMX && rdlength >= 2:
+        rec.priority = (_ub(data, rdata_start) * 256) + _ub(data, rdata_start + 1)
+        mut nl2 := 0
+        rec.data = _decode_name(data, n, rdata_start + 2, nl2)
+    else rec.rtype == TypeTXT:
+        rec.data = _decode_txt(data, rdata_start, rdlength)
+    else:
+        rec.data = ""
+    end
+
+    out_next = rdata_start + rdlength
+    ret rec
+end
+
+func _random_id(): int:
+    buf := mem.Allocate(2 as u64)
+    defer mem.Free(buf)
+    crypto.RandomBytes(buf, 2)
+    bp := buf as i8*
+    mut b0 := bp[0] as int
+    mut b1 := bp[1] as int
+    if b0 < 0: b0 += 256 end
+    if b1 < 0: b1 += 256 end
+    ret (b0 * 256) + b1
+end
+
+func _reverse_name4(ip: str): str:
+    parts := str.Split(ip, ".")
+    if parts.len() != 4: ret "" end
+    p0 := parts.get(0)[0]
+    p1 := parts.get(1)[0]
+    p2 := parts.get(2)[0]
+    p3 := parts.get(3)[0]
+    ret p3 + "." + p2 + "." + p1 + "." + p0 + ".in-addr.arpa"
+end
+
+// Forward-reference note: these two call QueryServer/DefaultServers,
+// which are declared further down as part of the public API - fine,
+// same two-pass resolution this codebase relies on elsewhere, but they
+// themselves must sit here (before the first `pub func`) since a
+// private `func` can never follow a `pub func` in file order.
+func _lookup_records(name: str, qtype: int): Records:
+    mut out := Records {}
+    servers := DefaultServers()
+    mut si := 0
+    until si < servers.len():
+        msg := QueryServer(servers.get(si)[0], name, qtype, 3000)
+        if msg.answers.items.len() > 0:
+            mut i := 0
+            until i < msg.answers.items.len():
+                rec := msg.answers.items.get(i)[0]
+                if rec.rtype == qtype:
+                    out.items.push(rec)
+                end
+                i += 1
+            end
+            si = servers.len()
+            continue
+        end
+        si += 1
+    end
+    ret out
+end
+
+func _records_to_strings(recs: Records): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    until i < recs.items.len():
+        out.push(recs.items.get(i)[0].data)
+        i += 1
+    end
+    ret out
+end
+
+@en "EncodeQuery"
+@fa "کدگذاری پرسش"
+@ar "ترمیز الاستعلام"
+pub func EncodeQuery(name: str, qtype: int, id: int): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    _put_u16(b, id)
+    _put_u16(b, 256) // flags: RD=1, everything else 0 (standard recursive query)
+    _put_u16(b, 1) // QDCOUNT
+    _put_u16(b, 0) // ANCOUNT
+    _put_u16(b, 0) // NSCOUNT
+    _put_u16(b, 0) // ARCOUNT
+    _encode_name(b, name)
+    _put_u16(b, qtype)
+    _put_u16(b, ClassIN)
+    ret b
+end
+
+@en "Decode"
+@fa "کدگشایی"
+@ar "فک الترمیز"
+pub func Decode(data: void*, n: int): Message:
+    mut msg := Message {}
+    if n < 12: ret msg end
+
+    flags0 := _ub(data, 2)
+    flags1 := _ub(data, 3)
+    msg.id = (_ub(data, 0) * 256) + _ub(data, 1)
+    msg.qr = (flags0 & 128) != 0
+    msg.opcode = (flags0 >> 3) & 15
+    msg.aa = (flags0 & 4) != 0
+    msg.tc = (flags0 & 2) != 0
+    msg.rd = (flags0 & 1) != 0
+    msg.ra = (flags1 & 128) != 0
+    msg.rcode = flags1 & 15
+
+    qdcount := (_ub(data, 4) * 256) + _ub(data, 5)
+    ancount := (_ub(data, 6) * 256) + _ub(data, 7)
+    nscount := (_ub(data, 8) * 256) + _ub(data, 9)
+    arcount := (_ub(data, 10) * 256) + _ub(data, 11)
+
+    mut pos := 12
+    mut qi := 0
+    until qi < qdcount:
+        mut consumed := 0
+        qname := _decode_name(data, n, pos, consumed)
+        if consumed <= 0 || pos + 4 > n:
+            qi = qdcount
+            continue
+        end
+        pos += consumed
+        if pos + 4 > n:
+            qi = qdcount
+            continue
+        end
+        qtype := (_ub(data, pos) * 256) + _ub(data, pos + 1)
+        qclass := (_ub(data, pos + 2) * 256) + _ub(data, pos + 3)
+        pos += 4
+        msg.questions.items.push(Question { name = qname, qtype = qtype, qclass = qclass })
+        qi += 1
+    end
+
+    mut ai := 0
+    until ai < ancount:
+        mut nextp := 0
+        rec := _decode_rr(data, n, pos, nextp)
+        if nextp <= pos:
+            ai = ancount
+            continue
+        end
+        pos = nextp
+        msg.answers.items.push(rec)
+        ai += 1
+    end
+
+    mut ni := 0
+    until ni < nscount:
+        mut nextp := 0
+        rec := _decode_rr(data, n, pos, nextp)
+        if nextp <= pos:
+            ni = nscount
+            continue
+        end
+        pos = nextp
+        msg.authorities.items.push(rec)
+        ni += 1
+    end
+
+    mut xi := 0
+    until xi < arcount:
+        mut nextp := 0
+        rec := _decode_rr(data, n, pos, nextp)
+        if nextp <= pos:
+            xi = arcount
+            continue
+        end
+        pos = nextp
+        msg.additionals.items.push(rec)
+        xi += 1
+    end
+
+    ret msg
+end
+
+@en "Lookup"
+@fa "جستجو"
+@ar "بحث"
+pub func Lookup(host: str): str:
+    ret rawsock.Resolve(host)
+end
+
+@en "QueryServer"
+@fa "پرسش از کارگزار"
+@ar "استعلام من الخادم"
+pub func QueryServer(server: str, name: str, qtype: int, timeout_ms: int): Message:
+    msg := Message {}
+    sock := udp.Open()
+    if !udp.Ok(sock): ret msg end
+    defer udp.Close(sock)
+    udp.SetTimeout(sock, timeout_ms)
+
+    id := _random_id()
+    q := EncodeQuery(name, qtype, id)
+    sent := udp.SendBytes(sock, server, 53, q.data, q.len)
+    if sent < 0: ret msg end
+
+    cap := 4096
+    buf := mem.Allocate(cap as u64)
+    defer mem.Free(buf)
+    mut fh := ""
+    mut fp := 0
+    n := udp.ReceiveBytes(sock, buf, cap, fh, fp)
+    if n <= 0: ret msg end
+    ret Decode(buf, n)
+end
+
+@en "DefaultServers"
+@fa "کارگزارهای پیش‌فرض"
+@ar "الخوادم الافتراضية"
+pub func DefaultServers(): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    if SALAM_OS_UNIX:
+        if os.Exists("/etc/resolv.conf"):
+            content := io.ReadFile("/etc/resolv.conf")
+            lines := str.Split(content, "\n")
+            mut i := 0
+            until i < lines.len():
+                line := _strip(lines.get(i)[0])
+                if line.len() > 11 && line.substr(0, 11) == "nameserver ":
+                    ip := _strip(line.substr(11, line.len() - 11))
+                    if ip.len() > 0: out.push(ip) end
+                end
+                i += 1
+            end
+        end
+    end
+    if out.len() == 0:
+        out.push("8.8.8.8")
+        out.push("1.1.1.1")
+    end
+    ret out
+end
+
+@en "LookupA"
+@fa "جستجوی آ"
+@ar "بحث A"
+pub func LookupA(name: str): Vector<str>:
+    ret _records_to_strings(_lookup_records(name, TypeA))
+end
+
+@en "LookupAAAA"
+@fa "جستجوی کواداِی"
+@ar "بحث AAAA"
+pub func LookupAAAA(name: str): Vector<str>:
+    ret _records_to_strings(_lookup_records(name, TypeAAAA))
+end
+
+@en "LookupCNAME"
+@fa "جستجوی سی‌نیم"
+@ar "بحث CNAME"
+pub func LookupCNAME(name: str): str:
+    recs := _lookup_records(name, TypeCNAME)
+    if recs.items.len() > 0: ret recs.items.get(0)[0].data end
+    ret ""
+end
+
+@en "LookupMX"
+@fa "جستجوی ام‌ایکس"
+@ar "بحث MX"
+pub func LookupMX(name: str): Records:
+    ret _lookup_records(name, TypeMX)
+end
+
+@en "LookupTXT"
+@fa "جستجوی تی‌ایکس‌تی"
+@ar "بحث TXT"
+pub func LookupTXT(name: str): Vector<str>:
+    ret _records_to_strings(_lookup_records(name, TypeTXT))
+end
+
+@en "LookupPTR"
+@fa "جستجوی معکوس"
+@ar "بحث عکسی"
+pub func LookupPTR(ip: str): Vector<str>:
+    rname := _reverse_name4(ip)
+    if rname.len() == 0: ret Vector {} as Vector<str> end
+    ret _records_to_strings(_lookup_records(rname, TypePTR))
+end

@@ -677,11 +677,33 @@ void sema_check_pass(sema_t *s, ast_node_t *program)
             lint_lang_types(s, d);
         }
     }
+    /* A top-level `const NAME := <expr>` (no type annotation) leaves its symbol's
+     * type NULL after sema_collect(); sema_check_var_decl() below is what fills
+     * it in. Package files are merged in sorted-filename order, not declaration
+     * order, so a function body in an alphabetically earlier sibling file can
+     * be checked before the file that declares a const it references. Resolving
+     * every top-level const/var here first - ahead of any function body, struct
+     * default, or impl - makes that reference order-independent: identifier
+     * lookup always sees the real type instead of a still-NULL placeholder
+     * (which type_is_error() treats as an error type with no diagnostic,
+     * silently poisoning the expression and surfacing only as a nonsense
+     * generated-C error such as "unknown type name '_3cerror_3e'"). */
     {
         size_t i = 0;
         for (; i < program->list.len; i++) {
             ast_node_t *d = (ast_node_t *)program->list.data[i];
             if (d->synthetic || d->typarams.len > 0) continue;
+            if (d->kind == AST_CONST_DECL || d->kind == AST_VAR_DECL)
+                check_toplevel(s, d);
+        }
+    }
+
+    {
+        size_t i = 0;
+        for (; i < program->list.len; i++) {
+            ast_node_t *d = (ast_node_t *)program->list.data[i];
+            if (d->synthetic || d->typarams.len > 0) continue;
+            if (d->kind == AST_CONST_DECL || d->kind == AST_VAR_DECL) continue;
             check_toplevel(s, d);
         }
     }

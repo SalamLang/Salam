@@ -1,0 +1,86 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import crypto
+
+// Session key derivation, RFC 4253 7.2. Six values (two IVs, two encryption
+// keys, two MAC keys) are each derived from the same shared secret K and
+// exchange hash H by hashing K || H || <letter> || session_id, then, if more
+// bytes are needed than one hash output gives, extending with
+// HASH(K || H || K1 || K2 || ...). `session_id` is H from the very first key
+// exchange on the connection; this package never rekeys, so it is always
+// just this connection's H (see transport.salam).
+//
+// K here means the mpint WIRE ENCODING of the shared secret (RFC 4253's "K"
+// as it appears inside the hash, not the raw magnitude bytes) - callers pass
+// `k_mpint` already encoded that way (BufPutMpintBytes into a fresh Buf),
+// which is also exactly the encoding transport.salam needs when hashing K
+// into the exchange hash H itself, so both call sites share one buffer.
+
+const KDF_IV_CTOS := 65 // 'A'
+const KDF_IV_STOC := 66 // 'B'
+const KDF_KEY_CTOS := 67 // 'C'
+const KDF_KEY_STOC := 68 // 'D'
+const KDF_MAC_CTOS := 69 // 'E'
+const KDF_MAC_STOC := 70 // 'F'
+
+func _kdf_hash(sha256: bool, p: void*, n: int, out: void*):
+    if sha256:
+        crypto.Sha256Bytes(p, n, out)
+        ret
+    end
+    crypto.Sha1Bytes(p, n, out)
+end
+
+func _derive_key(sha256: bool, k_mpint: Buf, h: Buf, session_id: Buf, letter: int, needed_len: int): Buf:
+    hlen := sha256 ? 32 : 20
+    mut result := NewBuf(needed_len)
+
+    mut hbuf := NewBuf(k_mpint.len + h.len + 1 + session_id.len)
+    BufPutBuf(hbuf, k_mpint)
+    BufPutBuf(hbuf, h)
+    BufPutByte(hbuf, letter)
+    BufPutBuf(hbuf, session_id)
+    mut block := NewBuf(hlen)
+    BufPutZeros(block, hlen)
+    _kdf_hash(sha256, hbuf.p, hbuf.len, block.p)
+    FreeBuf(hbuf)
+
+    mut take := needed_len
+    if take > hlen:
+        take = hlen
+    end
+    BufPutBytes(result, block.p, take)
+    FreeBuf(block)
+
+    until result.len < needed_len:
+        mut input2 := NewBuf(k_mpint.len + h.len + result.len)
+        BufPutBuf(input2, k_mpint)
+        BufPutBuf(input2, h)
+        BufPutBytes(input2, result.p, result.len)
+        mut block2 := NewBuf(hlen)
+        BufPutZeros(block2, hlen)
+        _kdf_hash(sha256, input2.p, input2.len, block2.p)
+        FreeBuf(input2)
+        mut take2 := needed_len - result.len
+        if take2 > hlen:
+            take2 = hlen
+        end
+        BufPutBytes(result, block2.p, take2)
+        FreeBuf(block2)
+    end
+    ret result
+end

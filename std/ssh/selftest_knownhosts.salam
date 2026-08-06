@@ -1,0 +1,93 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import str
+import os
+import io
+
+// Self-tests for knownhosts.salam: host-pattern formatting, the OpenSSH
+// known_hosts line format (comments, blank lines, hashed entries skipped,
+// non-default-port [host]:port bracketing), the MATCH/MISMATCH/UNKNOWN
+// decision, and the mode policy (insecure/accept-new/strict) built on top
+// of it. Uses a real temp file on disk rather than mocking file I/O, since
+// _knownhosts_check's actual job is reading and parsing that file - a mock
+// would test nothing but the mock.
+
+func _selftest_knownhosts():
+    // ---------------------------------------------------------- hostpattern
+    _ck(str.Equals(_knownhosts_hostpattern("example.com", 22), "example.com"), "knownhosts: default port 22 uses the bare hostname")
+    _ck(str.Equals(_knownhosts_hostpattern("example.com", 2222), "[example.com]:2222"), "knownhosts: a non-default port is bracketed OpenSSH-style")
+
+    // ---------------------------------------------------------- line-matches-host
+    _ck(_knownhosts_line_matches_host("host1.com,host2.com", "host2.com"), "knownhosts: line-matches finds a host in a comma-separated list")
+    _ck(!_knownhosts_line_matches_host("host1.com,host2.com", "host3.com"), "knownhosts: line-matches rejects a host not in the list")
+    _ck(!_knownhosts_line_matches_host("|1|abcd1234|deadbeef==", "example.com"), "knownhosts: a hashed entry (starts with '|') is never matched")
+    _ck(!_knownhosts_line_matches_host("", "example.com"), "knownhosts: an empty host field never matches")
+
+    // ---------------------------------------------------------- check() against a real file
+    dir := os.TempDir()
+    path := dir + "/salam_ssh_selftest_known_hosts"
+    mut content := ""
+    content = content + "# a comment line, must be skipped\n"
+    content = content + "\n"
+    content = content + "otherhost.example ssh-rsa AAAAOTHERHOSTKEY==\n"
+    content = content + "example.com ssh-rsa AAAAEXAMPLEKEYA==\n"
+    content = content + "|1|c29tZXNhbHQ=|c29tZWhhc2g= ssh-rsa AAAAHASHEDKEY==\n"
+    content = content + "[example.com]:2222 ssh-rsa AAAAEXAMPLEKEYB==\n"
+    _wrote := io.WriteFile(path, content)
+
+    r_match := _knownhosts_check(path, "example.com", 22, "ssh-rsa", "AAAAEXAMPLEKEYA==")
+    _ck(r_match == KH_MATCH, "knownhosts: check() reports MATCH for a byte-identical known key")
+
+    r_mismatch := _knownhosts_check(path, "example.com", 22, "ssh-rsa", "AAAADIFFERENTKEY==")
+    _ck(r_mismatch == KH_MISMATCH, "knownhosts: check() reports MISMATCH when the host is known under a different key")
+
+    r_unknown := _knownhosts_check(path, "neverseen.example", 22, "ssh-rsa", "AAAAEXAMPLEKEYA==")
+    _ck(r_unknown == KH_UNKNOWN, "knownhosts: check() reports UNKNOWN for a host not in the file")
+
+    r_customport := _knownhosts_check(path, "example.com", 2222, "ssh-rsa", "AAAAEXAMPLEKEYB==")
+    _ck(r_customport == KH_MATCH, "knownhosts: check() matches a [host]:port entry on a non-default port")
+
+    r_hashed_ignored := _knownhosts_check(path, "example.com", 22, "ssh-rsa", "AAAAHASHEDKEY==")
+    _ck(r_hashed_ignored == KH_MISMATCH || r_hashed_ignored == KH_MATCH, "knownhosts: (sanity) a hashed-entry-only key never independently causes MISMATCH against the plain entry")
+    _ck(r_hashed_ignored == KH_MISMATCH, "knownhosts: a hashed entry is skipped, so looking up its key against the plain entry is a MISMATCH, not a MATCH")
+
+    r_missing_file := _knownhosts_check(dir + "/salam_ssh_selftest_does_not_exist", "example.com", 22, "ssh-rsa", "AAAAEXAMPLEKEYA==")
+    _ck(r_missing_file == KH_UNKNOWN, "knownhosts: check() against a nonexistent file reports UNKNOWN, not an error")
+
+    _removed := os.Remove(path)
+
+    // ---------------------------------------------------------- append() then re-check
+    path2 := dir + "/salam_ssh_selftest_known_hosts_append"
+    _removed_before := os.Remove(path2)
+    appended := _knownhosts_append(path2, "fresh.example", 22, "ssh-rsa", "AAAAFRESHKEY==")
+    _ck(appended, "knownhosts: append() reports success")
+    r_after_append := _knownhosts_check(path2, "fresh.example", 22, "ssh-rsa", "AAAAFRESHKEY==")
+    _ck(r_after_append == KH_MATCH, "knownhosts: a freshly appended entry is found by check() immediately after")
+    _removed2 := os.Remove(path2)
+
+    // ---------------------------------------------------------- decide() policy
+    _ck(_knownhosts_decide(HOSTKEY_MODE_INSECURE, KH_MISMATCH), "knownhosts: INSECURE mode proceeds even on MISMATCH")
+    _ck(_knownhosts_decide(HOSTKEY_MODE_INSECURE, KH_UNKNOWN), "knownhosts: INSECURE mode proceeds on UNKNOWN")
+
+    _ck(_knownhosts_decide(HOSTKEY_MODE_STRICT, KH_MATCH), "knownhosts: STRICT mode proceeds on MATCH")
+    _ck(!_knownhosts_decide(HOSTKEY_MODE_STRICT, KH_UNKNOWN), "knownhosts: STRICT mode refuses an UNKNOWN host")
+    _ck(!_knownhosts_decide(HOSTKEY_MODE_STRICT, KH_MISMATCH), "knownhosts: STRICT mode refuses a MISMATCH")
+
+    _ck(_knownhosts_decide(HOSTKEY_MODE_ACCEPT_NEW, KH_MATCH), "knownhosts: ACCEPT_NEW proceeds on MATCH")
+    _ck(_knownhosts_decide(HOSTKEY_MODE_ACCEPT_NEW, KH_UNKNOWN), "knownhosts: ACCEPT_NEW proceeds on UNKNOWN (caller appends first)")
+    _ck(!_knownhosts_decide(HOSTKEY_MODE_ACCEPT_NEW, KH_MISMATCH), "knownhosts: ACCEPT_NEW still refuses a MISMATCH - TOFU never overrides a changed key")
+end

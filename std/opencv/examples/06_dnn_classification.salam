@@ -1,0 +1,67 @@
+// std/opencv example: image classification with a pretrained DNN.
+//
+// Loads an ONNX classifier (e.g. a MobileNet/SqueezeNet/ResNet export),
+// runs one forward pass, and prints the top predicted class index and its
+// confidence. Swap in ParseSSDDetections (dnn.salam) instead of this
+// argmax if your model is a detector rather than a classifier. Needs the
+// native shim built with the dnn module - see native/BUILD.md.
+//
+//   salam run 06_dnn_classification.salam -- photo.jpg model.onnx
+
+import opencv
+import os
+
+func main:
+    args := os.Args()
+    if args.len() < 3:
+        println "usage: 06_dnn_classification <image> <model.onnx>"
+        ret 1
+    end
+
+    img := opencv.Read(args.get(1)[0])
+    if !img.ok():
+        println "failed to read image -", opencv.LastError()
+        ret 1
+    end
+
+    net := opencv.LoadNetSingleFile(args.get(2)[0])
+    if !net.ok():
+        println "failed to load model -", opencv.LastError()
+        ret 1
+    end
+
+    // 1/255.0 scale + no mean-subtraction + RGB swap is a common
+    // preprocessing recipe for ONNX classifiers exported from
+    // PyTorch/timm - check your specific model's expected preprocessing
+    // and input resolution (224x224 here is just the common default).
+    ok := net.set_input(img, 1.0 / 255.0, opencv.RGB(0, 0, 0), true, opencv.Size { width = 224, height = 224 })
+    if !ok:
+        println "set_input failed -", opencv.LastError()
+        ret 1
+    end
+
+    output := net.forward()
+    if !output.ok():
+        println "forward pass failed -", opencv.LastError()
+        ret 1
+    end
+
+    n := output.total()
+    p := output.data() as f32*
+    mut best_idx := 0
+    mut best_score := p[0]
+    mut i := 1
+    until i < n:
+        if p[i] > best_score:
+            best_score = p[i]
+            best_idx = i
+        end
+        i += 1
+    end
+    println "predicted class:", best_idx, "score:", best_score
+
+    img.free()
+    net.free()
+    output.free()
+    ret 0
+end

@@ -1,0 +1,129 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import str
+import crypto
+import encoding
+
+// A server's host key, as received on the wire during key exchange, and
+// signature verification over it. RSA only - see ssh.salam's header.
+//
+// Wire format of the key blob (RFC 4253 6.6): string "ssh-rsa", mpint e,
+// mpint n. Wire format of the signature blob: string signature-format
+// ("ssh-rsa", "rsa-sha2-256" or "rsa-sha2-512" - RFC 8332 - which may differ
+// from the key blob's own "ssh-rsa" type name), string raw-signature-bytes.
+// The signature is computed over Hash(H) where Hash is the algorithm the
+// signature format names - NOT over H directly, and not necessarily the
+// same hash the key exchange itself used for H.
+
+struct HostKey:
+    pub ok: bool = false
+    pub n: Buf = Buf {}
+    pub e: Buf = Buf {}
+    pub blob: Buf = Buf {}
+end
+
+func _hostkey_free(hk &: HostKey):
+    FreeBuf(hk.n)
+    FreeBuf(hk.e)
+    FreeBuf(hk.blob)
+    hk.ok = false
+end
+
+// Parse a host key blob (the raw bytes as they appeared in the KEXINIT
+// exchange, e.g. KEX_ECDH_REPLY's K_S field) - `raw` is kept verbatim in
+// .blob for fingerprinting and for known_hosts storage.
+func _hostkey_parse(raw: Buf): HostKey:
+    mut r := ReaderFromBuf(raw)
+    keytype := RGetStringAsStr(r)
+    if r.bad || !str.Equals(keytype, "ssh-rsa"):
+        ret HostKey {}
+    end
+    e := RGetMpintCopy(r)
+    n := RGetMpintCopy(r)
+    if r.bad:
+        FreeBuf(e)
+        FreeBuf(n)
+        ret HostKey {}
+    end
+    mut hk := HostKey {}
+    hk.n = n
+    hk.e = e
+    hk.blob = NewBuf(raw.len)
+    BufPutBuf(hk.blob, raw)
+    hk.ok = true
+    ret hk
+end
+
+func _hostkey_digest_kind(sig_format: str): int:
+    if str.Equals(sig_format, HOSTKEY_RSA_SHA256):
+        ret SSH_HASH_SHA256
+    end
+    if str.Equals(sig_format, HOSTKEY_RSA_SHA512):
+        ret SSH_HASH_SHA512
+    end
+    ret SSH_HASH_SHA1
+end
+
+func _hash_for_kind(kind: int, p: void*, n: int, out: void*):
+    if kind == SSH_HASH_SHA1:
+        crypto.Sha1Bytes(p, n, out)
+        ret
+    end
+    if kind == SSH_HASH_SHA512:
+        crypto.Sha512Bytes(p, n, out)
+        ret
+    end
+    crypto.Sha256Bytes(p, n, out)
+end
+
+// Verify a KEX_ECDH_REPLY/KEXDH_REPLY signature blob over exchange hash H.
+func _hostkey_verify(hk: HostKey, h: Buf, sig_blob: Buf): bool:
+    if !hk.ok:
+        ret false
+    end
+    mut r := ReaderFromBuf(sig_blob)
+    sig_format := RGetStringAsStr(r)
+    sig := RGetStringCopy(r)
+    if r.bad || !(str.Equals(sig_format, HOSTKEY_SSH_RSA) || str.Equals(sig_format, HOSTKEY_RSA_SHA256) || str.Equals(sig_format, HOSTKEY_RSA_SHA512)):
+        FreeBuf(sig)
+        ret false
+    end
+    kind := _hostkey_digest_kind(sig_format)
+    hlen := _rsa_hash_size(kind)
+    mut digest := NewBuf(hlen)
+    BufPutZeros(digest, hlen)
+    _hash_for_kind(kind, h.p, h.len, digest.p)
+    result := _rsa_verify_pkcs1(kind, digest.p, hk.n.p, hk.n.len, hk.e.p, hk.e.len, sig.p, sig.len)
+    FreeBuf(sig)
+    FreeBuf(digest)
+    ret result
+end
+
+// SHA256 fingerprint of the key blob, base64 without padding, matching
+// `ssh-keygen -lf`'s "SHA256:xxxx" display format.
+func _hostkey_fingerprint(hk: HostKey): str:
+    mut d := NewBuf(32)
+    BufPutZeros(d, 32)
+    crypto.Sha256Bytes(hk.blob.p, hk.blob.len, d.p)
+    b64 := encoding.Base64EncodeBytes(d.p, 32)
+    FreeBuf(d)
+    mut trimmed := b64
+    until str.EndsWith(trimmed, "="):
+        trimmed = trimmed.substr(0, trimmed.len() - 1)
+    end
+    ret "SHA256:" + trimmed
+end

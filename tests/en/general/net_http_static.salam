@@ -1,0 +1,92 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Static file serving (net/http's _send_file + _safe_static_path),
+// including the directory-traversal guard, exercised against real
+// files on disk rather than dynamic route handlers.
+
+import net.http
+import net.router
+import net.internal.rawsock
+import os.temp
+import os
+import io
+import filepath
+import time
+
+func run_server():
+    dir := filepath.Join(temp.Directory(), "salam_net_http_static_test")
+    os.Mkdir(dir)
+    io.WriteFile(filepath.Join(dir, "index.html"), "<h1>hi</h1>")
+    io.WriteFile(filepath.Join(dir, "style.css"), "body{color:red}")
+
+    mut r := router.NewRouter()
+    router.Static(r, "/static/", dir)
+    s := http.NewServer(19211)
+    http.Use(s, r)
+    http.Run(s)
+end
+
+func get_raw(path: str): str:
+    mut sock := rawsock.Connect("127.0.0.1", 19211)
+    mut tries := 0
+    until !rawsock.Ok(sock) && tries < 300:
+        time.Sleep(10)
+        sock = rawsock.Connect("127.0.0.1", 19211)
+        tries = tries + 1
+    end
+    if !rawsock.Ok(sock):
+        ret ""
+    end
+    rawsock.Send(sock, "GET " + path + " HTTP/1.0\r\nHost: localhost\r\n\r\n")
+    // _send_file writes the header and the body as separate socket
+    // writes, so a single recv can race the second write and return
+    // only the headers - read until the server closes the connection.
+    mut resp := ""
+    mut going := true
+    until going:
+        chunk := rawsock.Recv(sock, 8192)
+        if chunk.len() == 0:
+            going = false
+        else:
+            resp += chunk
+        end
+    end
+    rawsock.Close(sock)
+    ret resp
+end
+
+func main:
+    _t := spawn(run_server)
+
+    r1 := get_raw("/static/style.css")
+    println r1.find("200 OK") >= 0
+    println r1.find("text/css") >= 0
+    println r1.find("body{color:red}") >= 0
+
+    r2 := get_raw("/static/index.html")
+    println r2.find("200 OK") >= 0
+    println r2.find("text/html") >= 0
+    println r2.find("<h1>hi</h1>") >= 0
+
+    // Directory traversal must not escape the static root.
+    r3 := get_raw("/static/../../../../etc/passwd")
+    println r3.find("200 OK") < 0
+
+    r4 := get_raw("/static/does-not-exist.txt")
+    println r4.find("404") >= 0
+
+    r5 := get_raw("/not-static-at-all")
+    println r5.find("404") >= 0
+end

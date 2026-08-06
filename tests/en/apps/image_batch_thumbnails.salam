@@ -1,0 +1,92 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// image_batch_thumbnails - filters, a text+image watermark, thumbnail
+// generation over a batch of generated "photos", and a before/after
+// comparison via histogram + PSNR. Everything here composes out of
+// std/image's small functions (filters.salam, transform.salam,
+// analyze.salam) rather than one big "process()" call.
+
+package main
+
+import image
+import filepath
+import os
+
+// Stands in for a batch of real photos - a handful of synthetic images
+// with different dominant colors, so the batch loop below has something
+// to iterate over.
+func make_source(seed: int): image.Image:
+    mut img := image.New(120, 90)
+    image.Fill(img, image.RGB((seed * 37) % 256, (seed * 91) % 256, (seed * 53) % 256))
+    image.DrawCircleFilled(img, 60, 45, 30, image.RGBA(255, 255, 255, 160))
+    ret img
+end
+
+func watermark(img &: image.Image):
+    mark := image.RGBA(255, 255, 255, 200)
+    image.DrawText(img, img.width - image.TextWidth("SAMPLE", 1) - 4, img.height - 10, "SAMPLE", mark, 1)
+end
+
+func main:
+    outdir := filepath.Join(os.TempDir(), "salam_image_batch_demo")
+    os.MkdirAll(outdir)
+
+    mut i := 0
+    until i < 4:
+        source := make_source(i)
+
+        // grayscale + contrast boost, a thumbnail, and a watermarked
+        // full-size copy, saved side by side.
+        mut gray := image.Clone(source)
+        image.Grayscale(gray)
+        image.Contrast(gray, 1.3)
+
+        thumb := image.Thumbnail(source, 48)
+
+        mut marked := image.Clone(source)
+        watermark(marked)
+
+        base := filepath.Join(outdir, "photo" + i)
+        image.SavePNG(gray, base + "_gray.png")
+        image.SavePNG(thumb, base + "_thumb.png")
+        image.SaveQuality(marked, base + "_marked.jpg", 85)
+
+        // Compare the watermarked copy against the original: PSNR should
+        // stay high since only a small text region actually changed.
+        psnr := image.PSNR(source, marked)
+        println "photo", i, "watermark PSNR:", psnr
+
+        image.Free(gray)
+        image.Free(thumb)
+        image.Free(marked)
+        image.Free(source)
+        i += 1
+    end
+
+    // A histogram over one more synthetic image, just to show the API -
+    // this is the kind of thing a "does this look like a solid color
+    // banner or a real photo" heuristic would use.
+    mut banner := image.New(64, 64)
+    image.FillHex(banner, "#3366cc")
+    hist := image.ComputeHistogram(banner)
+    // "#3366cc" -> blue channel is 0xcc (204) everywhere, so every one of
+    // the 64*64 pixels lands in that single histogram bucket.
+    println "banner blue-channel count at 0xcc:", image.HistogramGet(hist.b, 0xcc)
+    image.HistogramFree(hist)
+    image.Free(banner)
+
+    os.RemoveAll(outdir)
+    println "done"
+end

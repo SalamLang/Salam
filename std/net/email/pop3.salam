@@ -1,0 +1,216 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package email
+
+import str
+import net.tcp
+import tls
+
+// POP3 client (RFC 1939): USER/PASS, STAT, LIST, RETR, DELE, QUIT - the
+// simpler fallback protocol when a server doesn't offer IMAP.
+
+mut _pop3_tls_slots := Vector {} as Vector<tls.Conn>
+
+@en "POP3Client"
+@fa "کارخواه پاپ۳"
+@ar "عمیل POP3"
+pub struct POP3Client:
+    pub conn: tcp.Conn = tcp.Conn {}
+    pub secure: bool = false
+    pub tls_idx: int = 0 - 1
+    pub ok: bool = false
+    pub rxbuf: str = ""
+end
+
+func _pop3_tls_store(tc: tls.Conn): int:
+    _pop3_tls_slots.push(tc)
+    ret _pop3_tls_slots.len() - 1
+end
+
+func _pop3_tls_get(idx: int): tls.Conn:
+    ret _pop3_tls_slots.get(idx)[0]
+end
+
+func _pop3_tls_put(idx: int, tc: tls.Conn):
+    _pop3_tls_slots.set(idx, tc)
+end
+
+func _pop3_fill(c &: POP3Client):
+    mut chunk := ""
+    if c.secure:
+        mut tc := _pop3_tls_get(c.tls_idx)
+        chunk = tls.Read(tc, 4096)
+        _pop3_tls_put(c.tls_idx, tc)
+    else:
+        chunk = tcp.Read(c.conn, 4096)
+    end
+    c.rxbuf += chunk
+end
+
+func _pop3_read_line(c &: POP3Client): str:
+    mut idx := c.rxbuf.find("\r\n")
+    mut tries := 0
+    until idx < 0 && tries < 200:
+        _pop3_fill(c)
+        idx = c.rxbuf.find("\r\n")
+        tries += 1
+    end
+    if idx < 0:
+        line := c.rxbuf
+        c.rxbuf = ""
+        ret line
+    end
+    line := c.rxbuf.substr(0, idx)
+    c.rxbuf = c.rxbuf.substr(idx + 2, c.rxbuf.len() - idx - 2)
+    ret line
+end
+
+func _pop3_send_line(c &: POP3Client, line: str): int:
+    if c.secure:
+        mut tc := _pop3_tls_get(c.tls_idx)
+        n := tls.Write(tc, line + "\r\n")
+        _pop3_tls_put(c.tls_idx, tc)
+        ret n
+    end
+    ret tcp.Write(c.conn, line + "\r\n")
+end
+
+func _pop3_command(c &: POP3Client, line: str): str:
+    _pop3_send_line(c, line)
+    ret _pop3_read_line(c)
+end
+
+func _pop3_ok(reply: str): bool:
+    ret reply.len() >= 3 && reply.substr(0, 3) == "+OK"
+end
+
+// Reads a multi-line response body (LIST/RETR) up to the terminating
+// "." line, un-dot-stuffing any line that starts with ".." back to ".".
+func _pop3_read_multiline(c &: POP3Client): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut done := false
+    mut safety := 0
+    until !done:
+        safety += 1
+        line := _pop3_read_line(c)
+        if line == "." || safety > 100000:
+            done = true
+        else:
+            if line.len() >= 2 && line.substr(0, 2) == "..":
+                out.push(line.substr(1, line.len() - 1))
+            else:
+                out.push(line)
+            end
+        end
+    end
+    ret out
+end
+
+func _pop3_connect_common(conn: tcp.Conn): POP3Client:
+    mut c := POP3Client { conn = conn }
+    if !tcp.ConnOk(conn):
+        c.ok = false
+        ret c
+    end
+    greeting := _pop3_read_line(c)
+    c.ok = _pop3_ok(greeting)
+    ret c
+end
+
+@en "Dial"
+@fa "شماره‌گیری"
+@ar "اتصال"
+pub func DialPOP3(host: str, port: int): POP3Client:
+    ret _pop3_connect_common(tcp.Dial(host, port))
+end
+
+@en "DialTLS"
+@fa "شماره‌گیری امن"
+@ar "اتصال آمن"
+pub func DialPOP3TLS(host: str, port: int): POP3Client:
+    cfg := tls.NewConfig(host)
+    tc := tls.Dial(host, port, cfg)
+    mut c := POP3Client {}
+    c.secure = true
+    c.tls_idx = _pop3_tls_store(tc)
+    if !tls.ConnOk(tc):
+        c.ok = false
+        ret c
+    end
+    greeting := _pop3_read_line(c)
+    c.ok = _pop3_ok(greeting)
+    ret c
+end
+
+@en "User"
+@fa "کاربر"
+@ar "مستخدم"
+pub func User(c &: POP3Client, username: str): bool:
+    ret _pop3_ok(_pop3_command(c, "USER " + username))
+end
+
+@en "Pass"
+@fa "گذرواژه"
+@ar "کلمة المرور"
+pub func Pass(c &: POP3Client, password: str): bool:
+    ret _pop3_ok(_pop3_command(c, "PASS " + password))
+end
+
+@en "Stat"
+@fa "وضعیت"
+@ar "حالة"
+pub func Stat(c &: POP3Client): str:
+    ret _pop3_command(c, "STAT")
+end
+
+@en "List"
+@fa "فهرست"
+@ar "قائمة"
+pub func POP3List(c &: POP3Client): Vector<str>:
+    reply := _pop3_command(c, "LIST")
+    if !_pop3_ok(reply): ret Vector {} as Vector<str> end
+    ret _pop3_read_multiline(c)
+end
+
+@en "Retr"
+@fa "دریافت"
+@ar "استرجاع"
+pub func Retr(c &: POP3Client, msgnum: int): str:
+    reply := _pop3_command(c, "RETR " + str.FromInt(msgnum as i64))
+    if !_pop3_ok(reply): ret "" end
+    lines := _pop3_read_multiline(c)
+    ret str.Join(lines, "\r\n")
+end
+
+@en "Dele"
+@fa "حذف"
+@ar "حذف"
+pub func Dele(c &: POP3Client, msgnum: int): bool:
+    ret _pop3_ok(_pop3_command(c, "DELE " + str.FromInt(msgnum as i64)))
+end
+
+@en "Quit"
+@fa "خروج"
+@ar "خروج"
+pub func POP3Quit(c &: POP3Client):
+    _pop3_command(c, "QUIT")
+    if c.secure:
+        mut tc := _pop3_tls_get(c.tls_idx)
+        tls.Close(tc)
+        _pop3_tls_put(c.tls_idx, tc)
+    else:
+        tcp.Close(c.conn)
+    end
+end

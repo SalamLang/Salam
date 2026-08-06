@@ -1,0 +1,296 @@
+package protobuf
+
+import str
+import conv
+
+// codegen - AST -> Salam source text (offline codegen, not runtime schema
+// reflection - matches how Salam's own compiler backend already works, and
+// gives generated structs real compile-time type checking with zero
+// runtime .proto-parsing dependency). Scope: proto3 message/enum wire
+// encoding for scalar and repeated-scalar fields. Message-typed and
+// map-typed fields are a documented gap - parsed into the AST (so
+// ParseFile/tests can see them) but not emitted into generated code, since
+// that needs cross-message type resolution this pass doesn't attempt yet.
+// All generated messages from one .proto file land in a single generated
+// Salam package (flattening), since Salam packages are already flat and
+// this sidesteps the cross-package-enum restriction entirely for any
+// future multi-file import support.
+
+func _scalar_salam_type(kind: int): str:
+    if kind == FK_STRING: ret "str" end
+    if kind == FK_BYTES: ret "str" end
+    if kind == FK_BOOL: ret "bool" end
+    if kind == FK_DOUBLE: ret "f64" end
+    if kind == FK_FLOAT: ret "f64" end
+    ret "i64"
+end
+
+func _is_scalar_or_string(kind: int): bool:
+    ret kind != FK_MESSAGE && kind != FK_MAP && kind != 0
+end
+
+func _salam_field_type(f: PField): str:
+    base := _scalar_salam_type(f.kind)
+    if f.repeated: ret "Vector<".concat(base).concat(">") end
+    ret base
+end
+
+func _salam_field_default(f: PField): str:
+    if f.repeated: ret "Vector {}" end
+    if f.kind == FK_STRING || f.kind == FK_BYTES: ret "\"\"" end
+    if f.kind == FK_BOOL: ret "false" end
+    if f.kind == FK_DOUBLE || f.kind == FK_FLOAT: ret "0.0" end
+    ret "0 as i64"
+end
+
+func _wire_type_const(kind: int): str:
+    if kind == FK_STRING || kind == FK_BYTES: ret "protobuf.WT_LEN" end
+    if kind == FK_DOUBLE: ret "protobuf.WT_FIXED64" end
+    if kind == FK_FLOAT: ret "protobuf.WT_FIXED32" end
+    if kind == FK_FIXED32 || kind == FK_SFIXED32: ret "protobuf.WT_FIXED32" end
+    if kind == FK_FIXED64 || kind == FK_SFIXED64: ret "protobuf.WT_FIXED64" end
+    ret "protobuf.WT_VARINT"
+end
+
+// _write_expr - a Salam expression writing `expr` (of the field's Salam
+// type) into `buf`.
+func _write_stmt(kind: int, expr: str): str:
+    if kind == FK_STRING || kind == FK_BYTES:
+        ret "protobuf.WriteLenPrefixedStr(buf, ".concat(expr).concat(")")
+    end
+    if kind == FK_DOUBLE: ret "protobuf.WriteDouble(buf, ".concat(expr).concat(")") end
+    if kind == FK_FLOAT: ret "protobuf.WriteFloat(buf, ".concat(expr).concat(")") end
+    if kind == FK_BOOL:
+        ret "protobuf.WriteVarint(buf, (".concat(expr).concat(" ? 1 : 0) as u64)")
+    end
+    if kind == FK_SINT32:
+        ret "protobuf.WriteVarint(buf, protobuf.ZigZagEncode32(".concat(expr).concat(" as i32) as u64)")
+    end
+    if kind == FK_SINT64:
+        ret "protobuf.WriteVarint(buf, protobuf.ZigZagEncode64(".concat(expr).concat(") as u64)")
+    end
+    if kind == FK_FIXED32 || kind == FK_SFIXED32:
+        ret "protobuf.WriteFixed32(buf, ".concat(expr).concat(" as u32)")
+    end
+    if kind == FK_FIXED64 || kind == FK_SFIXED64:
+        ret "protobuf.WriteFixed64(buf, ".concat(expr).concat(" as u64)")
+    end
+    ret "protobuf.WriteVarint(buf, ".concat(expr).concat(" as u64)")
+end
+
+// _read_expr - a Salam expression (of the field's Salam type) reading one
+// value from `r`, given a bool out-var name `okVar` already declared.
+func _read_expr(kind: int, okVar: str): str:
+    if kind == FK_STRING || kind == FK_BYTES:
+        ret "protobuf.ReadLenPrefixedStr(r, ".concat(okVar).concat(")")
+    end
+    if kind == FK_DOUBLE: ret "protobuf.ReadDouble(r, ".concat(okVar).concat(")") end
+    if kind == FK_FLOAT: ret "protobuf.ReadFloat(r, ".concat(okVar).concat(")") end
+    if kind == FK_BOOL:
+        ret "(protobuf.ReadVarint(r, ".concat(okVar).concat(") != (0 as u64))")
+    end
+    if kind == FK_SINT32:
+        ret "protobuf.ZigZagDecode32((protobuf.ReadVarint(r, ".concat(okVar).concat(") as u32)) as i64")
+    end
+    if kind == FK_SINT64:
+        ret "protobuf.ZigZagDecode64(protobuf.ReadVarint(r, ".concat(okVar).concat("))")
+    end
+    if kind == FK_FIXED32 || kind == FK_SFIXED32:
+        ret "protobuf.ReadFixed32(r, ".concat(okVar).concat(") as i64")
+    end
+    if kind == FK_FIXED64 || kind == FK_SFIXED64:
+        ret "protobuf.ReadFixed64(r, ".concat(okVar).concat(") as i64")
+    end
+    ret "protobuf.ReadVarint(r, ".concat(okVar).concat(") as i64")
+end
+
+func _nonzero_check(f: PField): str:
+    if f.kind == FK_STRING || f.kind == FK_BYTES: ret "m.".concat(f.name).concat(".len() > 0") end
+    if f.kind == FK_BOOL: ret "m.".concat(f.name) end
+    if f.kind == FK_DOUBLE || f.kind == FK_FLOAT: ret "m.".concat(f.name).concat(" != 0.0") end
+    ret "m.".concat(f.name).concat(" != (0 as i64)")
+end
+
+func _emit_struct(sb &: str.StringBuilder, msg: PMessage):
+    str.BufAppend(sb, "pub struct ")
+    str.BufAppend(sb, msg.name)
+    str.BufAppend(sb, ":\n")
+    mut fi := 0
+    until fi < msg.fields.len():
+        f := msg.fields.get(fi)[0]
+        if _is_scalar_or_string(f.kind):
+            str.BufAppend(sb, "    pub ")
+            str.BufAppend(sb, f.name)
+            str.BufAppend(sb, ": ")
+            str.BufAppend(sb, _salam_field_type(f))
+            str.BufAppend(sb, " = ")
+            str.BufAppend(sb, _salam_field_default(f))
+            str.BufAppendChar(sb, 10)
+        end
+        fi += 1
+    end
+    str.BufAppend(sb, "end\n\n")
+end
+
+func _emit_marshal(sb &: str.StringBuilder, msg: PMessage):
+    str.BufAppend(sb, "pub func Marshal")
+    str.BufAppend(sb, msg.name)
+    str.BufAppend(sb, "(m: ")
+    str.BufAppend(sb, msg.name)
+    str.BufAppend(sb, "): compress.ByteBuf:\n")
+    str.BufAppend(sb, "    mut buf := compress.NewByteBuf()\n")
+    mut fi := 0
+    until fi < msg.fields.len():
+        f := msg.fields.get(fi)[0]
+        if _is_scalar_or_string(f.kind):
+            numStr := conv.FormatInt(f.number as i64)
+            if f.repeated:
+                str.BufAppend(sb, "    mut ri")
+                str.BufAppend(sb, numStr)
+                str.BufAppend(sb, " := 0\n")
+                str.BufAppend(sb, "    until ri")
+                str.BufAppend(sb, numStr)
+                str.BufAppend(sb, " < m.")
+                str.BufAppend(sb, f.name)
+                str.BufAppend(sb, ".len():\n")
+                str.BufAppend(sb, "        protobuf.WriteTag(buf, ")
+                str.BufAppend(sb, numStr)
+                str.BufAppend(sb, ", ")
+                str.BufAppend(sb, _wire_type_const(f.kind))
+                str.BufAppend(sb, ")\n        ")
+                elemExpr := "m.".concat(f.name).concat(".get(ri").concat(numStr).concat(")[0]")
+                str.BufAppend(sb, _write_stmt(f.kind, elemExpr))
+                str.BufAppendChar(sb, 10)
+                str.BufAppend(sb, "        ri")
+                str.BufAppend(sb, numStr)
+                str.BufAppend(sb, " += 1\n    end\n")
+            else:
+                str.BufAppend(sb, "    if ")
+                str.BufAppend(sb, _nonzero_check(f))
+                str.BufAppend(sb, ":\n        protobuf.WriteTag(buf, ")
+                str.BufAppend(sb, numStr)
+                str.BufAppend(sb, ", ")
+                str.BufAppend(sb, _wire_type_const(f.kind))
+                str.BufAppend(sb, ")\n        ")
+                str.BufAppend(sb, _write_stmt(f.kind, "m.".concat(f.name)))
+                str.BufAppendChar(sb, 10)
+                str.BufAppend(sb, "    end\n")
+            end
+        end
+        fi += 1
+    end
+    str.BufAppend(sb, "    ret buf\n")
+    str.BufAppend(sb, "end\n\n")
+end
+
+func _emit_unmarshal(sb &: str.StringBuilder, msg: PMessage):
+    str.BufAppend(sb, "pub func Unmarshal")
+    str.BufAppend(sb, msg.name)
+    str.BufAppend(sb, "(data: void*, n: int, ok &: bool): ")
+    str.BufAppend(sb, msg.name)
+    str.BufAppend(sb, ":\n")
+    str.BufAppend(sb, "    mut out := ")
+    str.BufAppend(sb, msg.name)
+    str.BufAppend(sb, " {}\n")
+    str.BufAppend(sb, "    mut r := compress.NewByteReader(data, n)\n")
+    str.BufAppend(sb, "    ok = true\n")
+    str.BufAppend(sb, "    until compress.RdLeft(r) > 0:\n")
+    str.BufAppend(sb, "        mut fnum := 0\n")
+    str.BufAppend(sb, "        mut wtype := 0\n")
+    str.BufAppend(sb, "        mut tagOk := false\n")
+    str.BufAppend(sb, "        protobuf.ReadTag(r, fnum, wtype, tagOk)\n")
+    str.BufAppend(sb, "        if !tagOk:\n            ok = false\n            ret out\n        end\n")
+    mut fi := 0
+    mut any := false
+    until fi < msg.fields.len():
+        f := msg.fields.get(fi)[0]
+        if _is_scalar_or_string(f.kind):
+            numStr := conv.FormatInt(f.number as i64)
+            mut kw := "if"
+            if any: kw = "else" end
+            any = true
+            str.BufAppend(sb, "        ")
+            str.BufAppend(sb, kw)
+            str.BufAppend(sb, " fnum == ")
+            str.BufAppend(sb, numStr)
+            str.BufAppend(sb, ":\n")
+            str.BufAppend(sb, "            mut fok := false\n")
+            str.BufAppend(sb, "            v := ")
+            str.BufAppend(sb, _read_expr(f.kind, "fok"))
+            str.BufAppendChar(sb, 10)
+            str.BufAppend(sb, "            if !fok:\n                ok = false\n                ret out\n            end\n")
+            if f.repeated:
+                str.BufAppend(sb, "            out.")
+                str.BufAppend(sb, f.name)
+                str.BufAppend(sb, ".push(v)\n")
+            else:
+                str.BufAppend(sb, "            out.")
+                str.BufAppend(sb, f.name)
+                str.BufAppend(sb, " = v\n")
+            end
+        end
+        fi += 1
+    end
+    if any:
+        str.BufAppend(sb, "        else:\n")
+    else:
+        str.BufAppend(sb, "        if true:\n")
+    end
+    str.BufAppend(sb, "            mut skipOk := false\n")
+    str.BufAppend(sb, "            protobuf.SkipField(r, wtype, skipOk)\n")
+    str.BufAppend(sb, "            if !skipOk:\n                ok = false\n                ret out\n            end\n")
+    str.BufAppend(sb, "        end\n")
+    str.BufAppend(sb, "    end\n")
+    str.BufAppend(sb, "    ret out\n")
+    str.BufAppend(sb, "end\n\n")
+end
+
+func _emit_enum(sb &: str.StringBuilder, en: PEnum):
+    mut vi := 0
+    until vi < en.values.len():
+        v := en.values.get(vi)[0]
+        str.BufAppend(sb, "pub const ")
+        str.BufAppend(sb, en.name)
+        str.BufAppendChar(sb, 95)
+        str.BufAppend(sb, v.name)
+        str.BufAppend(sb, " := ")
+        str.BufAppend(sb, conv.FormatInt(v.number as i64))
+        str.BufAppendChar(sb, 10)
+        vi += 1
+    end
+    str.BufAppendChar(sb, 10)
+end
+
+func _emit_message(sb &: str.StringBuilder, msg: PMessage):
+    _emit_struct(sb, msg)
+    _emit_marshal(sb, msg)
+    _emit_unmarshal(sb, msg)
+end
+
+pub func GenerateSingle(protoSource: str, ok &: bool): str:
+    mut pok := false
+    f := ParseFile(protoSource, pok)
+    if !pok:
+        ok = false
+        ret ""
+    end
+    ok = true
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "// Generated by encoding.protobuf - DO NOT EDIT.\n\n")
+    str.BufAppend(sb, "package generated_pb\n\n")
+    str.BufAppend(sb, "import encoding.protobuf\n")
+    str.BufAppend(sb, "import compress\n\n")
+    mut ei := 0
+    until ei < f.enums.len():
+        _emit_enum(sb, f.enums.get(ei)[0])
+        ei += 1
+    end
+    mut mi := 0
+    until mi < f.messages.len():
+        _emit_message(sb, f.messages.get(mi)[0])
+        mi += 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end

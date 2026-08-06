@@ -1,0 +1,219 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package excel
+
+import archive
+import conv
+import str
+import time
+
+// Writes a Workbook as a .ods (OpenDocument Spreadsheet) file: a ZIP
+// containing an uncompressed "mimetype" entry (first, per the ODF spec,
+// so tools can identify the format from the archive's first bytes without
+// decompressing), META-INF/manifest.xml, and content.xml (automatic
+// styles plus every sheet's table). There is no separate styles.xml -
+// content.xml's own <office:automatic-styles> is sufficient for a
+// self-contained document.
+//
+// KNOWN LIMITATION: number/date formatting is not translated into ODF's
+// <number:number-style>/<number:date-style> definitions (a substantial
+// sub-system on its own) - cells still carry the correct office:value-type
+// and value/date-value for round-tripping, and the displayed <text:p> text
+// is pre-formatted using this package's own formatting, but a cell re-
+// opened in Calc will use Calc's own default display for its value type
+// rather than the original Style.num_format string. Font/alignment/color
+// styling (bold, italic, underline, size, colors, horizontal alignment)
+// is written correctly via per-style automatic styles. Formulas are
+// written with an "of:=" prefix around the raw formula text as stored -
+// this round-trips through this package but is not a real translation to
+// ODF's bracketed cell-reference syntax ("[.A1]"), so a formula containing
+// cell references may not evaluate in Calc without editing.
+
+const _ODS_MIME := "application/vnd.oasis.opendocument.spreadsheet"
+
+func _ods_style_name(idx: int): str:
+    ret "ce".concat(conv.FormatInt(idx as i64))
+end
+
+func _ods_text_props(st: Style): str:
+    mut out := "<style:text-properties"
+    if st.bold: out = out.concat(` fo:font-weight="bold"`) end
+    if st.italic: out = out.concat(` fo:font-style="italic"`) end
+    if st.underline: out = out.concat(` style:text-underline-style="solid" style:text-underline-type="single"`) end
+    out = out.concat(` fo:font-size="`).concat(conv.FormatInt(st.font_size as i64)).concat(`pt"`)
+    if st.font_color.len() > 0: out = out.concat(` fo:color="#`).concat(st.font_color).concat(`"`) end
+    out = out.concat("/>")
+    ret out
+end
+
+func _ods_align_value(h: int): str:
+    if h == AlignLeft: ret "start" end
+    if h == AlignCenter: ret "center" end
+    if h == AlignRight: ret "end" end
+    ret ""
+end
+
+func _ods_automatic_styles(styles: StyleSheet): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    n := styles.count()
+    mut i := 0
+    until i < n:
+        st := styles.get(i)
+        str.BufAppend(sb, `<style:style style:name="`)
+        str.BufAppend(sb, _ods_style_name(i))
+        str.BufAppend(sb, `" style:family="table-cell">`)
+        str.BufAppend(sb, _ods_text_props(st))
+        if st.bg_color.len() > 0:
+            str.BufAppend(sb, `<style:table-cell-properties fo:background-color="#`.concat(st.bg_color).concat(`"/>`))
+        end
+        align := _ods_align_value(st.align_h)
+        if align.len() > 0:
+            str.BufAppend(sb, `<style:paragraph-properties fo:text-align="`.concat(align).concat(`"/>`))
+        end
+        str.BufAppend(sb, "</style:style>")
+        i += 1
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _ods_cell_xml(c: Cell): str:
+    mut style_attr := ""
+    if c.style_id >= 0: style_attr = ` table:style-name="`.concat(_ods_style_name(c.style_id)).concat(`"`) end
+
+    if c.kind == CellString:
+        ret `<table:table-cell office:value-type="string"`.concat(style_attr).concat("><text:p>").concat(XmlEscape(c.text)).concat("</text:p></table:table-cell>")
+    else c.kind == CellBool:
+        mut bv := "false"
+        mut disp := "FALSE"
+        if c.flag:
+            bv = "true"
+            disp = "TRUE"
+        end
+        ret `<table:table-cell office:value-type="boolean" office:boolean-value="`.concat(bv).concat(`"`).concat(style_attr).concat("><text:p>").concat(disp).concat("</text:p></table:table-cell>")
+    else c.kind == CellDate:
+        epoch := SerialToEpoch(c.num)
+        iso := time.FormatISO(epoch)
+        disp := time.FormatDate(epoch)
+        ret `<table:table-cell office:value-type="date" office:date-value="`.concat(iso).concat(`"`).concat(style_attr).concat("><text:p>").concat(disp).concat("</text:p></table:table-cell>")
+    else c.kind == CellFormula:
+        ret `<table:table-cell table:formula="of:=`.concat(XmlEscape(c.formula)).concat(`" office:value-type="float" office:value="`).concat(conv.FormatFloat(c.num)).concat(`"`).concat(style_attr).concat("><text:p>").concat(conv.FormatFloat(c.num)).concat("</text:p></table:table-cell>")
+    else c.kind == CellError:
+        ret `<table:table-cell office:value-type="string"`.concat(style_attr).concat("><text:p>").concat(XmlEscape(c.text)).concat("</text:p></table:table-cell>")
+    else c.kind == CellNumber:
+        ret `<table:table-cell office:value-type="float" office:value="`.concat(conv.FormatFloat(c.num)).concat(`"`).concat(style_attr).concat("><text:p>").concat(conv.FormatFloat(c.num)).concat("</text:p></table:table-cell>")
+    else:
+        ret "<table:table-cell/>"
+    end
+end
+
+func _ods_splice_span(cellxml: str, cols: int, rows: int): str:
+    prefix := "<table:table-cell"
+    if !str.StartsWith(cellxml, prefix): ret cellxml end
+    rest := cellxml.substr(prefix.len(), cellxml.len() - prefix.len())
+    span := ` table:number-columns-spanned="`.concat(conv.FormatInt(cols as i64)).concat(`" table:number-rows-spanned="`).concat(conv.FormatInt(rows as i64)).concat(`"`)
+    ret prefix.concat(span).concat(rest)
+end
+
+func _ods_sheet_xml(sheet: Sheet): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, `<table:table table:name="`)
+    str.BufAppend(sb, XmlEscape(sheet.name))
+    str.BufAppend(sb, `">`)
+    nr := sheet.row_count()
+    nc := sheet.col_count()
+    if nc > 0:
+        str.BufAppend(sb, `<table:table-column table:number-columns-repeated="`)
+        str.BufAppendInt(sb, nc as i64)
+        str.BufAppend(sb, `"/>`)
+    end
+    mut r := 0
+    until r < nr:
+        str.BufAppend(sb, "<table:table-row>")
+        mut c := 0
+        until c < nc:
+            mut found := false
+            rg := sheet.merged_range(r, c, found)
+            if found && rg.row1 == r && rg.col1 == c:
+                span_cols := rg.col2 - rg.col1 + 1
+                span_rows := rg.row2 - rg.row1 + 1
+                cell := sheet.get_cell(r, c)
+                str.BufAppend(sb, _ods_splice_span(_ods_cell_xml(cell), span_cols, span_rows))
+            else found:
+                str.BufAppend(sb, "<table:covered-table-cell/>")
+            else:
+                if sheet.has_cell(r, c):
+                    str.BufAppend(sb, _ods_cell_xml(sheet.get_cell(r, c)))
+                else:
+                    str.BufAppend(sb, "<table:table-cell/>")
+                end
+            end
+            c += 1
+        end
+        str.BufAppend(sb, "</table:table-row>")
+        r += 1
+    end
+    str.BufAppend(sb, "</table:table>")
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _ods_content_xml(book &: Workbook): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, `<?xml version="1.0" encoding="UTF-8"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.2">`)
+    str.BufAppend(sb, "<office:automatic-styles>")
+    str.BufAppend(sb, _ods_automatic_styles(book.styles))
+    str.BufAppend(sb, "</office:automatic-styles>")
+    str.BufAppend(sb, "<office:body><office:spreadsheet>")
+    mut i := 0
+    until i < book.sheets.len():
+        sh := book.sheets.get(i)[0]
+        str.BufAppend(sb, _ods_sheet_xml(sh))
+        i += 1
+    end
+    str.BufAppend(sb, "</office:spreadsheet></office:body></office:document-content>")
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _ods_manifest_xml(): str:
+    ret `<?xml version="1.0" encoding="UTF-8"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2"><manifest:file-entry manifest:full-path="/" manifest:version="1.2" manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/></manifest:manifest>`
+end
+
+// Writes `book` to `path` as a .ods file. Returns false if the workbook
+// has no sheets or the ZIP could not be written.
+@en "WriteODS"
+@fa "نوشتن اُدی‌اس"
+@ar "كتابة أو دي إس"
+pub func WriteODS(book &: Workbook, path: str): bool:
+    n := book.sheets.len()
+    if n == 0: ret false end
+
+    mut files := Vector {} as Vector<archive.ZipFileInput>
+    defer files.free()
+
+    files.push(archive.MakeZipFileInput("mimetype", _ODS_MIME as void*, _ODS_MIME.len(), 0))
+
+    manifest := _ods_manifest_xml()
+    files.push(archive.MakeZipFileInput("META-INF/manifest.xml", manifest as void*, manifest.len(), 8))
+
+    content := _ods_content_xml(book)
+    files.push(archive.MakeZipFileInput("content.xml", content as void*, content.len(), 8))
+
+    ret archive.ZipCreateFile(files, path)
+end

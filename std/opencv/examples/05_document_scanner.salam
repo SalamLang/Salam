@@ -1,0 +1,75 @@
+// std/opencv example: a simple document scanner.
+//
+// Thresholds a photo of a document, finds its outline via contours, then
+// perspective-warps that quadrilateral flat - the classic "scan with your
+// phone camera" pipeline (minus the corner-detection heuristics a
+// production scanner would add; this assumes the largest contour found
+// is roughly the document). Needs the native shim built and linked - see
+// native/BUILD.md.
+//
+//   salam run 05_document_scanner.salam -- photo.jpg
+
+import opencv
+import os
+
+func main:
+    args := os.Args()
+    mut path := "photo.jpg"
+    if args.len() > 1:
+        path = args.get(1)[0]
+    end
+
+    img := opencv.Read(path)
+    if !img.ok():
+        println "failed to read", path, "-", opencv.LastError()
+        ret 1
+    end
+
+    gray := img.to_gray()
+    blurred := gray.gaussian_blur(5, 0.0)
+    edges := blurred.threshold_otsu(255.0)
+    cs := edges.find_contours()
+    println "found", cs.count(), "contour(s)"
+
+    mut best_idx := -1
+    mut best_area := 0.0
+    mut i := 0
+    until i < cs.count():
+        a := cs.area(i)
+        if a > best_area:
+            best_area = a
+            best_idx = i
+        end
+        i += 1
+    end
+
+    if best_idx < 0:
+        println "no document-sized contour found"
+        ret 1
+    end
+    println "largest contour area:", best_area
+
+    r := cs.bounding_rect(best_idx)
+    println "bounding box:", r.x, r.y, r.width, r.height
+
+    // A production scanner would fit the contour's 4 actual corners
+    // (cv::approxPolyDP) instead of its bounding box - kept simple here to
+    // focus on the warp_perspective() call itself.
+    corners := Vector {} as Vector<opencv.Point>
+    corners.push(opencv.Point { x = r.x, y = r.y })
+    corners.push(opencv.Point { x = r.x + r.width, y = r.y })
+    corners.push(opencv.Point { x = r.x + r.width, y = r.y + r.height })
+    corners.push(opencv.Point { x = r.x, y = r.y + r.height })
+
+    flattened := img.warp_perspective(corners, 800, 1000)
+    opencv.Write("scanned.png", flattened)
+    println "wrote scanned.png"
+
+    img.free()
+    gray.free()
+    blurred.free()
+    edges.free()
+    cs.free()
+    flattened.free()
+    ret 0
+end

@@ -1,0 +1,429 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import net.internal.rawsock
+import str
+import crypto
+
+// The transport layer: version exchange, KEXINIT negotiation, key exchange,
+// NEWKEYS, and session-key activation (RFC 4253). No rekeying - a rekey-free
+// session is a supported simplification for a client whose sessions are
+// short-lived command/file-transfer runs rather than long-lived shells; see
+// ssh.salam's header.
+
+struct Transport:
+    pub ps: PacketState = PacketState {}
+    pub session_id: Buf = Buf {}
+    pub hostkey: HostKey = HostKey {}
+    pub cipher_name: str = ""
+    pub mac_name: str = ""
+    pub ok: bool = false
+    pub errmsg: str = ""
+end
+
+struct KexinitInfo:
+    pub kex: str = ""
+    pub hostkey_algo: str = ""
+    pub cipher: str = ""
+    pub mac: str = ""
+    pub ok: bool = false
+end
+
+func _transport_fail(msg: str): Transport:
+    mut t := Transport {}
+    t.ok = false
+    t.errmsg = msg
+    ret t
+end
+
+// ---------------------------------------------------------------- version exchange
+
+// Reads lines from the socket until one starting with "SSH-" is found (RFC
+// 4253 4.2 lets a server send other text first), returning that line
+// without its trailing CR/LF. Gives up after 50 lines to avoid spinning
+// forever against a non-SSH peer.
+func _read_ident_line(sock: rawsock.Socket): str:
+    mut attempt := 0
+    until attempt < 50:
+        mut lb := NewBuf(128)
+        mut done := false
+        mut toolong := false
+        mut ch := NewBuf(1)
+        BufPutZeros(ch, 1)
+        until !done:
+            if !_read_exact(sock, ch.p, 1):
+                FreeBuf(ch)
+                FreeBuf(lb)
+                ret ""
+            end
+            b := _bget(ch.p, 0)
+            if b == 10:
+                done = true
+            else if b != 13:
+                if lb.len > 255:
+                    toolong = true
+                else:
+                    BufPutByte(lb, b)
+                end
+            end
+        end
+        FreeBuf(ch)
+        mut z := NewBuf(lb.len + 1)
+        BufPutBuf(z, lb)
+        BufPutByte(z, 0)
+        line := str.Clone(z.p as str)
+        FreeBuf(z)
+        FreeBuf(lb)
+        if !toolong && str.StartsWith(line, "SSH-"):
+            ret line
+        end
+        attempt += 1
+    end
+    ret ""
+end
+
+// ---------------------------------------------------------------- KEXINIT
+
+func _build_kexinit(): Buf:
+    mut b := NewBuf(256)
+    BufPutByte(b, SSH_MSG_KEXINIT)
+    mut cookie := NewBuf(16)
+    BufPutZeros(cookie, 16)
+    crypto.RandomBytes(cookie.p, 16)
+    BufPutBytes(b, cookie.p, 16)
+    FreeBuf(cookie)
+    BufPutStringStr(b, KEX_ALGORITHMS)
+    BufPutStringStr(b, HOSTKEY_ALGORITHMS)
+    BufPutStringStr(b, CIPHER_ALGORITHMS)
+    BufPutStringStr(b, CIPHER_ALGORITHMS)
+    BufPutStringStr(b, MAC_ALGORITHMS)
+    BufPutStringStr(b, MAC_ALGORITHMS)
+    BufPutStringStr(b, COMPRESSION_ALGORITHMS)
+    BufPutStringStr(b, COMPRESSION_ALGORITHMS)
+    BufPutStringStr(b, "")
+    BufPutStringStr(b, "")
+    BufPutBool(b, false)
+    BufPutUint32(b, 0 as u32)
+    ret b
+end
+
+func _parse_kexinit(payload: Buf): KexinitInfo:
+    mut r := ReaderFromBuf(payload)
+    msgtype := RGetByte(r)
+    if r.bad || msgtype != SSH_MSG_KEXINIT:
+        ret KexinitInfo {}
+    end
+    RSkip(r, 16) // cookie
+    kex_list := RGetNameList(r)
+    hostkey_list := RGetNameList(r)
+    enc_c2s := RGetNameList(r)
+    _enc_s2c := RGetNameList(r)
+    mac_c2s := RGetNameList(r)
+    _mac_s2c := RGetNameList(r)
+    _comp_c2s := RGetNameList(r)
+    _comp_s2c := RGetNameList(r)
+    _lang1 := RGetNameList(r)
+    _lang2 := RGetNameList(r)
+    _follows := RGetBool(r)
+    _reserved := RGetUint32(r)
+    if r.bad:
+        ret KexinitInfo {}
+    end
+
+    mut info := KexinitInfo {}
+    info.kex = NegotiateFirstMatch(KEX_ALGORITHMS, kex_list)
+    info.hostkey_algo = NegotiateFirstMatch(HOSTKEY_ALGORITHMS, hostkey_list)
+    info.cipher = NegotiateFirstMatch(CIPHER_ALGORITHMS, enc_c2s)
+    info.mac = NegotiateFirstMatch(MAC_ALGORITHMS, mac_c2s)
+    info.ok = info.kex.len() > 0 && info.hostkey_algo.len() > 0 && info.cipher.len() > 0 && info.mac.len() > 0
+    ret info
+end
+
+// ---------------------------------------------------------------- exchange hash
+
+func _hash_bytes(sha256: bool, p: void*, n: int, out: void*):
+    if sha256:
+        crypto.Sha256Bytes(p, n, out)
+        ret
+    end
+    crypto.Sha1Bytes(p, n, out)
+end
+
+// H = HASH(V_C || V_S || I_C || I_S || K_S || <kex-specific> || mpint(K))
+// RFC 4253 8 / RFC 8731 (curve25519): <kex-specific> is string Q_C, string
+// Q_S for curve25519; RFC 4253 8 classic DH: mpint e, mpint f.
+func _compute_exchange_hash(sha256: bool, client_ver: str, server_ver: str, i_c: Buf, i_s: Buf, hostkey_blob: Buf, client_kex_pub: Buf, server_kex_pub: Buf, k_mpint: Buf, curve25519: bool): Buf:
+    mut m := NewBuf(512)
+    BufPutStringStr(m, client_ver)
+    BufPutStringStr(m, server_ver)
+    BufPutStringBuf(m, i_c)
+    BufPutStringBuf(m, i_s)
+    BufPutStringBuf(m, hostkey_blob)
+    if curve25519:
+        BufPutStringBuf(m, client_kex_pub)
+        BufPutStringBuf(m, server_kex_pub)
+    else:
+        BufPutMpintBuf(m, client_kex_pub)
+        BufPutMpintBuf(m, server_kex_pub)
+    end
+    BufPutBuf(m, k_mpint) // already mpint-encoded by the caller
+    hlen := sha256 ? 32 : 20
+    mut h := NewBuf(hlen)
+    BufPutZeros(h, hlen)
+    _hash_bytes(sha256, m.p, m.len, h.p)
+    FreeBuf(m)
+    ret h
+end
+
+// ---------------------------------------------------------------- handshake
+
+@en "Handshake"
+@fa "دست دهی"
+@ar "مصافحة"
+func _transport_handshake(sock: rawsock.Socket): Transport:
+    mut ps := _packet_state_new(sock)
+
+    banner := ClientVersion + "\r\n"
+    sent := rawsock.SendBytes(sock, banner as void*, banner.len())
+    if sent != banner.len():
+        ret _transport_fail("failed to send version banner")
+    end
+    server_ver := _read_ident_line(sock)
+    if server_ver.len() == 0:
+        ret _transport_fail("server did not send an SSH identification string")
+    end
+
+    mut ckex := _build_kexinit()
+    if !_packet_send(ps, ckex):
+        FreeBuf(ckex)
+        ret _transport_fail("failed to send KEXINIT")
+    end
+
+    skex := _packet_recv(ps)
+    if skex.bad:
+        FreeBuf(ckex)
+        ret _transport_fail("failed to receive server KEXINIT")
+    end
+    // _packet_recv's payload already starts with the message-type byte
+    // (RFC 4253's framing puts padding_length right after packet_length,
+    // then payload - the byte packet.salam hands back at offset 5 IS
+    // SSH_MSG_KEXINIT), so skex is already exactly what _parse_kexinit and
+    // the exchange-hash's I_S (RFC 4253 8) both need - no re-wrapping.
+    info := _parse_kexinit(skex)
+    if !info.ok:
+        FreeBuf(ckex)
+        FreeBuf(skex)
+        ret _transport_fail("no compatible algorithm with server")
+    end
+
+    sha256 := _kex_uses_sha256(info.kex)
+    curve25519 := _kex_is_curve25519(info.kex)
+
+    mut hostkey_blob := NewBuf(1)
+    mut client_pub := NewBuf(1)
+    mut server_pub := NewBuf(1)
+    mut k_mpint := NewBuf(1)
+    mut sig_blob := NewBuf(1)
+    mut kex_ok := false
+
+    if curve25519:
+        mut sk := NewBuf(32)
+        BufPutZeros(sk, 32)
+        crypto.RandomBytes(sk.p, 32)
+        mut pk := NewBuf(32)
+        BufPutZeros(pk, 32)
+        _x25519_base(sk.p, pk.p)
+
+        mut initmsg := NewBuf(1 + 4 + 32)
+        BufPutByte(initmsg, SSH_MSG_KEXDH_INIT)
+        BufPutString(initmsg, pk.p, 32)
+        if _packet_send(ps, initmsg):
+            FreeBuf(initmsg)
+            reply := _packet_recv(ps)
+            if !reply.bad:
+                mut rr := ReaderFromBuf(reply)
+                msgtype := RGetByte(rr)
+                hostkey_blob = RGetStringCopy(rr)
+                mut server_q := RGetStringCopy(rr)
+                sig_blob = RGetStringCopy(rr)
+                if !rr.bad && msgtype == SSH_MSG_KEXDH_REPLY && server_q.len == 32:
+                    mut shared := NewBuf(32)
+                    BufPutZeros(shared, 32)
+                    shared_ok := _x25519_shared(sk.p, server_q.p, shared.p)
+                    if shared_ok:
+                        FreeBuf(client_pub)
+                        client_pub = NewBuf(32)
+                        BufPutBuf(client_pub, pk)
+                        FreeBuf(server_pub)
+                        server_pub = server_q
+                        FreeBuf(k_mpint)
+                        k_mpint = NewBuf(36)
+                        BufPutMpintBytes(k_mpint, shared.p, 32)
+                        kex_ok = true
+                    else:
+                        FreeBuf(server_q)
+                    end
+                    FreeBuf(shared)
+                else:
+                    FreeBuf(server_q)
+                end
+            end
+            FreeBuf(reply)
+        else:
+            FreeBuf(initmsg)
+        end
+        FreeBuf(sk)
+        FreeBuf(pk)
+    else:
+        kp := _dh14_generate()
+        mut initmsg := NewBuf(1 + 4 + kp.public.len)
+        BufPutByte(initmsg, SSH_MSG_KEXDH_INIT)
+        BufPutMpintBuf(initmsg, kp.public)
+        if _packet_send(ps, initmsg):
+            FreeBuf(initmsg)
+            reply := _packet_recv(ps)
+            if !reply.bad:
+                mut rr := ReaderFromBuf(reply)
+                msgtype := RGetByte(rr)
+                hostkey_blob = RGetStringCopy(rr)
+                mut server_f := RGetMpintCopy(rr)
+                sig_blob = RGetStringCopy(rr)
+                if !rr.bad && msgtype == SSH_MSG_KEXDH_REPLY:
+                    mut shared := _dh14_shared(kp.secret, server_f)
+                    if shared.len > 0:
+                        FreeBuf(client_pub)
+                        client_pub = NewBuf(kp.public.len)
+                        BufPutBuf(client_pub, kp.public)
+                        FreeBuf(server_pub)
+                        server_pub = server_f
+                        FreeBuf(k_mpint)
+                        k_mpint = NewBuf(shared.len + 8)
+                        BufPutMpintBytes(k_mpint, shared.p, shared.len)
+                        kex_ok = true
+                    else:
+                        FreeBuf(server_f)
+                    end
+                    FreeBuf(shared)
+                else:
+                    FreeBuf(server_f)
+                end
+            end
+            FreeBuf(reply)
+        else:
+            FreeBuf(initmsg)
+        end
+        FreeBuf(kp.secret)
+        FreeBuf(kp.public)
+    end
+
+    if !kex_ok:
+        FreeBuf(ckex)
+        FreeBuf(skex)
+        FreeBuf(hostkey_blob)
+        FreeBuf(client_pub)
+        FreeBuf(server_pub)
+        FreeBuf(k_mpint)
+        FreeBuf(sig_blob)
+        ret _transport_fail("key exchange failed")
+    end
+
+    hk := _hostkey_parse(hostkey_blob)
+    if !hk.ok:
+        FreeBuf(ckex)
+        FreeBuf(skex)
+        FreeBuf(hostkey_blob)
+        FreeBuf(client_pub)
+        FreeBuf(server_pub)
+        FreeBuf(k_mpint)
+        FreeBuf(sig_blob)
+        ret _transport_fail("could not parse server host key")
+    end
+
+    h := _compute_exchange_hash(sha256, ClientVersion, server_ver, ckex, skex, hostkey_blob, client_pub, server_pub, k_mpint, curve25519)
+    sig_ok := _hostkey_verify(hk, h, sig_blob)
+
+    FreeBuf(ckex)
+    FreeBuf(skex)
+    FreeBuf(client_pub)
+    FreeBuf(server_pub)
+    FreeBuf(sig_blob)
+
+    if !sig_ok:
+        FreeBuf(hostkey_blob)
+        FreeBuf(k_mpint)
+        FreeBuf(h)
+        ret _transport_fail("host key signature verification failed")
+    end
+
+    mut newkeys := NewBuf(1)
+    BufPutByte(newkeys, SSH_MSG_NEWKEYS)
+    if !_packet_send(ps, newkeys):
+        FreeBuf(newkeys)
+        FreeBuf(hostkey_blob)
+        FreeBuf(k_mpint)
+        FreeBuf(h)
+        ret _transport_fail("failed to send NEWKEYS")
+    end
+    FreeBuf(newkeys)
+    peer_newkeys := _packet_recv(ps)
+    peer_newkeys_ok := !peer_newkeys.bad && peer_newkeys.len == 1 && _bget(peer_newkeys.p, 0) == SSH_MSG_NEWKEYS
+    if !peer_newkeys_ok:
+        FreeBuf(peer_newkeys)
+        FreeBuf(hostkey_blob)
+        FreeBuf(k_mpint)
+        FreeBuf(h)
+        ret _transport_fail("did not receive NEWKEYS from server")
+    end
+    FreeBuf(peer_newkeys)
+
+    ekeylen := _cipher_key_len(info.cipher)
+    ivlen := _cipher_iv_len(info.cipher)
+    mkeylen := _mac_key_len(info.mac)
+
+    iv_c2s := _derive_key(sha256, k_mpint, h, h, KDF_IV_CTOS, ivlen)
+    iv_s2c := _derive_key(sha256, k_mpint, h, h, KDF_IV_STOC, ivlen)
+    key_c2s := _derive_key(sha256, k_mpint, h, h, KDF_KEY_CTOS, ekeylen)
+    key_s2c := _derive_key(sha256, k_mpint, h, h, KDF_KEY_STOC, ekeylen)
+    mac_c2s := _derive_key(sha256, k_mpint, h, h, KDF_MAC_CTOS, mkeylen)
+    mac_s2c := _derive_key(sha256, k_mpint, h, h, KDF_MAC_STOC, mkeylen)
+
+    ps.cipher_write = _aes_init(key_c2s.p, ekeylen)
+    ps.cipher_read = _aes_init(key_s2c.p, ekeylen)
+    ps.counter_write = iv_c2s
+    ps.counter_read = iv_s2c
+    ps.mac_kind_write = _mac_kind_for(info.mac)
+    ps.mac_kind_read = _mac_kind_for(info.mac)
+    ps.mac_key_write = mac_c2s
+    ps.mac_key_read = mac_s2c
+    ps.block_size_write = 16
+    ps.block_size_read = 16
+    ps.encrypted = true
+
+    FreeBuf(key_c2s)
+    FreeBuf(key_s2c)
+
+    mut t := Transport {}
+    t.ps = ps
+    t.session_id = h
+    t.hostkey = hk
+    t.cipher_name = info.cipher
+    t.mac_name = info.mac
+    t.ok = true
+    _unused_kmp := k_mpint
+    FreeBuf(k_mpint)
+    FreeBuf(hostkey_blob)
+    ret t
+end

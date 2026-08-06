@@ -1,0 +1,253 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+// The Burrows-Wheeler Transform, plus the Move-To-Front recoding and
+// bzip2-style pipeline built on top of it.
+//
+// BWTTransform sorts all n cyclic rotations of the input and returns their
+// last column, alongside the "primary index" - the sorted position of the
+// rotation that starts at the ORIGINAL string's position 0. That index is
+// exactly what BWTInverse needs to undo the transform in O(n) via the
+// standard LF-mapping walk; no sentinel byte is needed, so it works on
+// arbitrary binary. Sorting itself is a plain O(n log n)-comparisons
+// quicksort with an O(n) cyclic byte comparison, i.e. O(n^2 log n)
+// overall - a reference implementation, not the O(n log n) suffix-array
+// construction a production BWT would use.
+//
+// The BWT itself does not compress anything - it rearranges the input so
+// that bytes following similar contexts end up adjacent, which is exactly
+// what Move-To-Front (MTF) turns into long runs of small numbers, and
+// RLE + Huffman then compress those runs. BWTCompress/BWTDecompress chain
+// all four steps (BWT -> MTF -> RLE -> Huffman), the same shape bzip2 uses.
+//
+// Format: [4B n][4B primary index][Huffman(RLE(MTF(BWT(data))))]
+
+func _bwt_cmp(p: void*, n: int, a: int, b: int): int:
+    bp := p as u8*
+    mut k := 0
+    until k < n:
+        ca := bp[(a + k) % n] as int
+        cb := bp[(b + k) % n] as int
+        if ca != cb:
+            if ca < cb: ret -1 end
+            ret 1
+        end
+        k += 1
+    end
+    ret 0
+end
+
+func _bwt_quicksort(idx &: Vector<int>, p: void*, n: int, lo: int, hi: int):
+    if lo >= hi: ret end
+    pivot := idx.get((lo + hi) / 2)[0]
+    mut i := lo
+    mut j := hi
+    until i <= j:
+        until _bwt_cmp(p, n, idx.get(i)[0], pivot) < 0:
+            i += 1
+        end
+        until _bwt_cmp(p, n, idx.get(j)[0], pivot) > 0:
+            j -= 1
+        end
+        if i <= j:
+            tmp := idx.get(i)[0]
+            idx.set(i, idx.get(j)[0])
+            idx.set(j, tmp)
+            i += 1
+            j -= 1
+        end
+    end
+    if lo < j: _bwt_quicksort(idx, p, n, lo, j) end
+    if i < hi: _bwt_quicksort(idx, p, n, i, hi) end
+end
+
+@en "MTFEncode"
+@fa "کدگذاری انتقال به جلو"
+@ar "ترميز النقل إلى الأمام"
+pub func MTFEncode(inbuf: ByteBuf): ByteBuf:
+    mut table: int[256]
+    repeat 256 with i: table[i] = i end
+    mut out := NewByteBufCap(inbuf.len)
+    mut k := 0
+    until k < inbuf.len:
+        b := BufGet(inbuf, k)
+        mut pos := 0
+        until table[pos] != b:
+            pos += 1
+        end
+        BufPush(out, pos)
+        mut j := pos
+        until j > 0:
+            table[j] = table[j - 1]
+            j -= 1
+        end
+        table[0] = b
+        k += 1
+    end
+    ret out
+end
+
+@en "MTFDecode"
+@fa "کدگشایی انتقال به جلو"
+@ar "فك ترميز النقل إلى الأمام"
+pub func MTFDecode(inbuf: ByteBuf): ByteBuf:
+    mut table: int[256]
+    repeat 256 with i: table[i] = i end
+    mut out := NewByteBufCap(inbuf.len)
+    mut k := 0
+    until k < inbuf.len:
+        pos := BufGet(inbuf, k)
+        b := table[pos]
+        BufPush(out, b)
+        mut j := pos
+        until j > 0:
+            table[j] = table[j - 1]
+            j -= 1
+        end
+        table[0] = b
+        k += 1
+    end
+    ret out
+end
+
+// Returns the BWT last-column bytes and writes the primary index (the
+// sorted rank of the rotation starting at position 0) into primary_out.
+@en "BWTTransform"
+@fa "تبدیل باروز ویلر"
+@ar "تحويل باروز ويلر"
+pub func BWTTransform(p: void*, n: int, primary_out &: int): ByteBuf:
+    mut out := NewByteBufCap(n)
+    if n == 0:
+        primary_out = 0
+        ret out
+    end
+    mut idx := Vector {} as Vector<int>
+    defer idx.free()
+    repeat n with i: idx.push(i) end
+    _bwt_quicksort(idx, p, n, 0, n - 1)
+
+    bp := p as u8*
+    mut primary := 0
+    mut k := 0
+    until k < n:
+        rot := idx.get(k)[0]
+        if rot == 0:
+            primary = k
+        end
+        last := (rot - 1 + n) % n
+        BufPush(out, bp[last] as int)
+        k += 1
+    end
+    primary_out = primary
+    ret out
+end
+
+// Reconstructs the original bytes from a BWT last column and its primary
+// index, via the standard O(n) LF-mapping walk.
+@en "BWTInverse"
+@fa "معکوس باروز ویلر"
+@ar "معكوس باروز ويلر"
+pub func BWTInverse(p: void*, n: int, primary: int): ByteBuf:
+    mut out := NewByteBufCap(n)
+    if n == 0: ret out end
+    bp := p as u8*
+
+    mut count: int[256]
+    repeat 256 with i: count[i] = 0 end
+    mut k := 0
+    until k < n:
+        count[bp[k] as int] += 1
+        k += 1
+    end
+    mut cum: int[256]
+    mut total := 0
+    repeat 256 with i:
+        cum[i] = total
+        total += count[i]
+    end
+
+    mut occ: int[256]
+    repeat 256 with i: occ[i] = 0 end
+    mut t := Vector {} as Vector<int>
+    defer t.free()
+    k = 0
+    until k < n:
+        b := bp[k] as int
+        t.push(cum[b] + occ[b])
+        occ[b] += 1
+        k += 1
+    end
+
+    repeat n with _z: BufPush(out, 0) end
+    mut row := primary
+    mut i := n - 1
+    until i >= 0:
+        BufSet(out, i, bp[row] as int)
+        row = t.get(row)[0]
+        i -= 1
+    end
+    ret out
+end
+
+@en "BWTCompress"
+@fa "فشرده سازی باروز ویلر"
+@ar "ضغط باروز ويلر"
+pub func BWTCompress(p: void*, n: int): ByteBuf:
+    mut out := NewByteBuf()
+    BufPushU32(out, n)
+    if n == 0: ret out end
+
+    mut primary := 0
+    mut bwtbuf := BWTTransform(p, n, primary)
+    BufPushU32(out, primary)
+
+    mut mtfbuf := MTFEncode(bwtbuf)
+    BufFree(bwtbuf)
+
+    mut rlebuf := RLECompress(mtfbuf.data, mtfbuf.len)
+    BufFree(mtfbuf)
+
+    mut huffbuf := HuffmanCompress(rlebuf.data, rlebuf.len)
+    BufFree(rlebuf)
+
+    BufPushBuf(out, huffbuf)
+    BufFree(huffbuf)
+    ret out
+end
+
+@en "BWTDecompress"
+@fa "کدگشایی باروز ویلر"
+@ar "فك ضغط باروز ويلر"
+pub func BWTDecompress(p: void*, n: int): ByteBuf:
+    mut r := NewByteReader(p, n)
+    origLen := RdU32(r)
+    if origLen == 0: ret NewByteBuf() end
+    primary := RdU32(r)
+
+    remaining := RdLeft(r)
+    huffSrc := ((r.data as i64) + (r.pos as i64)) as void*
+    mut rlebuf := HuffmanDecompress(huffSrc, remaining)
+
+    mut mtfbuf := RLEDecompress(rlebuf.data, rlebuf.len)
+    BufFree(rlebuf)
+
+    mut bwtbuf := MTFDecode(mtfbuf)
+    BufFree(mtfbuf)
+
+    out := BWTInverse(bwtbuf.data, bwtbuf.len, primary)
+    BufFree(bwtbuf)
+    ret out
+end

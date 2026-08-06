@@ -64,5 +64,6 @@ esac
     src/driver/llvm_toolchain.c src/driver/js_build.c src/driver/web_build.c \
     src/driver/embed_sysroot.c \
     src/driver/layout_build.c src/driver/debug_cmd.c src/driver/repl.c \
+    src/driver/serve_build.c \
     $LDLIBS
 echo "built ./salam with $CC"

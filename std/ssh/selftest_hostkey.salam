@@ -1,0 +1,148 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import str
+import crypto
+import encoding
+
+// Self-tests for hostkey.salam: wire-blob parsing, signature verification
+// over an exchange hash, and the known_hosts-style SHA256 fingerprint.
+// _rsa_sign_pkcs1/_rsa_verify_pkcs1 themselves are already cross-checked
+// against an independent openssl-produced signature in selftest_rsa.salam,
+// so these tests reuse that same real key (_RSA_TV_N/E/D/PHI, from
+// selftest_rsa.salam - package-private consts are visible package-wide) and
+// focus on what is unique to THIS layer: the "ssh-rsa" key-blob wire
+// format, picking the right hash from the signature-format string (which
+// can legitimately differ from the key blob's own type name - RFC 8332),
+// and the fingerprint's base64 formatting.
+
+func _selftest_hostkey():
+    mut n := _hexbuf(_RSA_TV_N)
+    mut e := _hexbuf(_RSA_TV_E)
+    mut d := _hexbuf(_RSA_TV_D)
+    mut phi := _hexbuf(_RSA_TV_PHI)
+
+    // ---------------------------------------------------------- blob parse
+    mut blob := NewBuf(8 + n.len)
+    BufPutStringStr(blob, "ssh-rsa")
+    BufPutMpintBuf(blob, e)
+    BufPutMpintBuf(blob, n)
+
+    mut hk := _hostkey_parse(blob)
+    _ck(hk.ok, "hostkey: parses a well-formed ssh-rsa key blob")
+    _ck(hk.n.len == n.len, "hostkey: parsed modulus length matches the source key")
+    _ckhex(_hex_of(hk.n.p, hk.n.len), _hex_of(n.p, n.len), "hostkey: parsed modulus bytes match the source key exactly")
+    _ckhex(_hex_of(hk.e.p, hk.e.len), _hex_of(e.p, e.len), "hostkey: parsed exponent bytes match the source key exactly")
+    _ck(hk.blob.len == blob.len, "hostkey: .blob keeps the original wire bytes verbatim")
+
+    // An unrecognized key type must be rejected, not silently accepted with
+    // garbage n/e.
+    mut badtype := NewBuf(8)
+    BufPutStringStr(badtype, "ssh-ed25519")
+    badhk := _hostkey_parse(badtype)
+    _ck(!badhk.ok, "hostkey: an unsupported key type (ssh-ed25519) is rejected, not misparsed")
+    FreeBuf(badtype)
+
+    // Truncated input (claims a key type but has no e/n after it) must fail
+    // cleanly rather than reading past the buffer.
+    mut truncated := NewBuf(8)
+    BufPutStringStr(truncated, "ssh-rsa")
+    trunchk := _hostkey_parse(truncated)
+    _ck(!trunchk.ok, "hostkey: a truncated blob (missing e/n) is rejected")
+    FreeBuf(truncated)
+
+    // ---------------------------------------------------------- signature verify
+    // H is whatever this connection's exchange hash happened to be - its
+    // actual value doesn't matter here, only that signing and verifying
+    // agree on hashing it the same way for a given signature-format name.
+    mut h := _hexbuf("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+
+    mut digest256 := NewBuf(32)
+    BufPutZeros(digest256, 32)
+    crypto.Sha256Bytes(h.p, h.len, digest256.p)
+    mut sig256 := NewBuf(n.len)
+    BufPutZeros(sig256, n.len)
+    signed256 := _rsa_sign_pkcs1(SSH_HASH_SHA256, digest256.p, n, e, d, phi, sig256.p)
+    _ck(signed256, "hostkey: (setup) sign H's SHA-256 digest for the rsa-sha2-256 case")
+
+    mut sigblob256 := NewBuf(8 + sig256.len)
+    BufPutStringStr(sigblob256, "rsa-sha2-256")
+    BufPutStringBuf(sigblob256, sig256)
+    _ck(_hostkey_verify(hk, h, sigblob256), "hostkey: verifies a valid rsa-sha2-256 signature over H")
+
+    // Tamper with H after signing: verification must fail.
+    mut htampered := NewBuf(h.len)
+    BufPutBytes(htampered, h.p, h.len)
+    _bput(htampered.p, 0, _bget(htampered.p, 0) ^ 0x01)
+    _ck(!_hostkey_verify(hk, htampered, sigblob256), "hostkey: a tampered exchange hash fails verification")
+    FreeBuf(htampered)
+
+    // ssh-rsa (SHA-1) uses a different hash than its signature-format name
+    // would suggest at a glance (RFC 8332's whole point: same key type,
+    // different signature formats) - make sure that hash selection is
+    // actually wired to sig_format, not to the key's own "ssh-rsa" type tag.
+    mut digest1 := NewBuf(20)
+    BufPutZeros(digest1, 20)
+    crypto.Sha1Bytes(h.p, h.len, digest1.p)
+    mut sig1 := NewBuf(n.len)
+    BufPutZeros(sig1, n.len)
+    signed1 := _rsa_sign_pkcs1(SSH_HASH_SHA1, digest1.p, n, e, d, phi, sig1.p)
+    _ck(signed1, "hostkey: (setup) sign H's SHA-1 digest for the ssh-rsa case")
+    mut sigblob1 := NewBuf(8 + sig1.len)
+    BufPutStringStr(sigblob1, "ssh-rsa")
+    BufPutStringBuf(sigblob1, sig1)
+    _ck(_hostkey_verify(hk, h, sigblob1), "hostkey: verifies a valid ssh-rsa (SHA-1) signature over H")
+
+    // A sha256 signature must NOT verify as if it were a sha1 signature
+    // (wrong sig_format label attached to right bytes) - the label drives
+    // which hash gets recomputed, so this must fail.
+    mut mislabeled := NewBuf(8 + sig256.len)
+    BufPutStringStr(mislabeled, "ssh-rsa")
+    BufPutStringBuf(mislabeled, sig256)
+    _ck(!_hostkey_verify(hk, h, mislabeled), "hostkey: a sha2-256 signature mislabeled as ssh-rsa (sha1) does not verify")
+    FreeBuf(mislabeled)
+
+    // ---------------------------------------------------------- fingerprint
+    mut want_digest := NewBuf(32)
+    BufPutZeros(want_digest, 32)
+    crypto.Sha256Bytes(hk.blob.p, hk.blob.len, want_digest.p)
+    want_b64 := encoding.Base64EncodeBytes(want_digest.p, 32)
+    mut want_trimmed := want_b64
+    until str.EndsWith(want_trimmed, "="):
+        want_trimmed = want_trimmed.substr(0, want_trimmed.len() - 1)
+    end
+    want_fp := "SHA256:" + want_trimmed
+
+    got_fp := _hostkey_fingerprint(hk)
+    _ck(str.Equals(got_fp, want_fp), "hostkey: fingerprint matches an independently recomputed SHA256/base64 value")
+    _ck(str.StartsWith(got_fp, "SHA256:"), "hostkey: fingerprint carries the SHA256: prefix ssh-keygen -lf uses")
+    _ck(!str.Contains(got_fp, "="), "hostkey: fingerprint base64 has padding stripped")
+
+    FreeBuf(want_digest)
+    FreeBuf(n)
+    FreeBuf(e)
+    WipeBuf(d)
+    WipeBuf(phi)
+    FreeBuf(blob)
+    FreeBuf(h)
+    FreeBuf(digest256)
+    FreeBuf(sig256)
+    FreeBuf(sigblob256)
+    FreeBuf(digest1)
+    FreeBuf(sig1)
+    FreeBuf(sigblob1)
+    _hostkey_free(hk)
+end

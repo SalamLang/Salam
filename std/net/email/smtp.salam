@@ -1,0 +1,362 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package email
+
+import mem
+import str
+import encoding
+import crypto
+import net.tcp
+import tls
+
+// SMTP client: STARTTLS (port 587) and implicit-TLS (port 465) both
+// supported, AUTH LOGIN/PLAIN/XOAUTH2, and a high-level Send() that
+// builds a plain-text-or-HTML(-or-both)-plus-attachments message via
+// net/mime's multipart writer.
+//
+// SMTP is a line-oriented text protocol end to end - even attachments
+// cross the wire as base64 text inside the DATA body (RFC 2045 content-
+// transfer-encoding), never raw binary - so, unlike net/dns or
+// net/proxy's SOCKS5, everything here is safely `str`-based with no
+// embedded-NUL truncation risk.
+//
+// tls.Conn cannot be a struct field directly (see net/websocket's
+// _tls_slots comment for the codegen bug this works around), so a TLS
+// session is threaded through the same slot-table pattern.
+
+mut _smtp_tls_slots := Vector {} as Vector<tls.Conn>
+
+@en "SMTPClient"
+@fa "کارخواه اس‌ام‌تی‌پی"
+@ar "عمیل SMTP"
+pub struct SMTPClient:
+    pub conn: tcp.Conn = tcp.Conn {}
+    pub secure: bool = false
+    pub tls_idx: int = 0 - 1
+    pub ok: bool = false
+    pub rxbuf: str = ""
+    pub last_reply: str = ""
+end
+
+func _smtp_tls_store(tc: tls.Conn): int:
+    _smtp_tls_slots.push(tc)
+    ret _smtp_tls_slots.len() - 1
+end
+
+func _smtp_tls_get(idx: int): tls.Conn:
+    ret _smtp_tls_slots.get(idx)[0]
+end
+
+func _smtp_tls_put(idx: int, tc: tls.Conn):
+    _smtp_tls_slots.set(idx, tc)
+end
+
+func _smtp_fill(c &: SMTPClient):
+    mut chunk := ""
+    if c.secure:
+        mut tc := _smtp_tls_get(c.tls_idx)
+        chunk = tls.Read(tc, 4096)
+        _smtp_tls_put(c.tls_idx, tc)
+    else:
+        chunk = tcp.Read(c.conn, 4096)
+    end
+    c.rxbuf += chunk
+end
+
+func _smtp_read_line(c &: SMTPClient): str:
+    mut idx := c.rxbuf.find("\r\n")
+    mut tries := 0
+    until idx < 0 && tries < 200:
+        _smtp_fill(c)
+        idx = c.rxbuf.find("\r\n")
+        tries += 1
+    end
+    if idx < 0:
+        line := c.rxbuf
+        c.rxbuf = ""
+        ret line
+    end
+    line := c.rxbuf.substr(0, idx)
+    c.rxbuf = c.rxbuf.substr(idx + 2, c.rxbuf.len() - idx - 2)
+    ret line
+end
+
+// Reads a full (possibly multi-line, "250-...\r\n250 ...\r\n") SMTP
+// reply and returns it verbatim; the 3-digit code is at the front of
+// the last line, which is what every caller below checks.
+func _smtp_read_reply(c &: SMTPClient): str:
+    mut full := ""
+    mut done := false
+    until !done:
+        line := _smtp_read_line(c)
+        full += line + "\r\n"
+        if line.len() == 0:
+            done = true
+        else line.len() >= 4 && line.substr(3, 1) == " ":
+            done = true
+        end
+    end
+    ret full
+end
+
+func _smtp_send_line(c &: SMTPClient, line: str): int:
+    if c.secure:
+        mut tc := _smtp_tls_get(c.tls_idx)
+        n := tls.Write(tc, line + "\r\n")
+        _smtp_tls_put(c.tls_idx, tc)
+        ret n
+    end
+    ret tcp.Write(c.conn, line + "\r\n")
+end
+
+func _smtp_code(reply: str): int:
+    if reply.len() < 3: ret 0 end
+    ret reply.substr(0, 3).to_int()
+end
+
+// Sends `line`, reads the reply, and reports whether the reply code is
+// below 400 (SMTP 4xx/5xx are failures; 2xx/3xx are success/continue).
+func _smtp_command(c &: SMTPClient, line: str): bool:
+    _smtp_send_line(c, line)
+    c.last_reply = _smtp_read_reply(c)
+    code := _smtp_code(c.last_reply)
+    ret code > 0 && code < 400
+end
+
+// Dot-stuffs any line that starts with "." (RFC 5321 4.5.2 - otherwise
+// a body line of exactly "." would be read as the end-of-DATA marker).
+func _dot_stuff(body: str): str:
+    lines := str.Split(body, "\r\n")
+    mut out := ""
+    mut i := 0
+    until i < lines.len():
+        line := lines.get(i)[0]
+        if line.len() > 0 && line.substr(0, 1) == ".":
+            out += "."
+        end
+        out += line
+        if i < lines.len() - 1:
+            out += "\r\n"
+        end
+        i += 1
+    end
+    ret out
+end
+
+func _hdr_line(name: str, value: str): str:
+    ret name + ": " + value + "\r\n"
+end
+
+func _smtp_connect_common(conn: tcp.Conn): SMTPClient:
+    mut c := SMTPClient { conn = conn }
+    if !tcp.ConnOk(conn):
+        c.ok = false
+        ret c
+    end
+    c.last_reply = _smtp_read_reply(c)
+    c.ok = _smtp_code(c.last_reply) == 220
+    ret c
+end
+
+@en "Dial"
+@fa "شماره‌گیری"
+@ar "اتصال"
+pub func DialSMTP(host: str, port: int): SMTPClient:
+    ret _smtp_connect_common(tcp.Dial(host, port))
+end
+
+@en "DialTLS"
+@fa "شماره‌گیری امن"
+@ar "اتصال آمن"
+pub func DialSMTPTLS(host: str, port: int): SMTPClient:
+    cfg := tls.NewConfig(host)
+    tc := tls.Dial(host, port, cfg)
+    mut c := SMTPClient {}
+    c.secure = true
+    c.tls_idx = _smtp_tls_store(tc)
+    if !tls.ConnOk(tc):
+        c.ok = false
+        ret c
+    end
+    c.last_reply = _smtp_read_reply(c)
+    c.ok = _smtp_code(c.last_reply) == 220
+    ret c
+end
+
+@en "Hello"
+@fa "سلام"
+@ar "تحیة"
+pub func Hello(c &: SMTPClient, domain: str): bool:
+    ret _smtp_command(c, "EHLO " + domain)
+end
+
+// Upgrades an already-Dial'd (plaintext, port 587-style) connection to
+// TLS: sends STARTTLS, and on a 220 reply, wraps the underlying fd.
+@en "StartTLS"
+@fa "شروع تی‌ال‌اس"
+@ar "بدء TLS"
+pub func StartTLS(c &: SMTPClient, host: str): bool:
+    if !_smtp_command(c, "STARTTLS"): ret false end
+    cfg := tls.NewConfig(host)
+    tc := tls.WrapClient(c.conn.fd, cfg)
+    if !tls.ConnOk(tc): ret false end
+    c.secure = true
+    c.tls_idx = _smtp_tls_store(tc)
+    c.rxbuf = ""
+    ret true
+end
+
+@en "AuthLogin"
+@fa "ورود با احراز هویت"
+@ar "مصادقة تسجیل الدخول"
+pub func AuthLogin(c &: SMTPClient, username: str, password: str): bool:
+    if !_smtp_command(c, "AUTH LOGIN"): ret false end
+    if !_smtp_command(c, encoding.Base64Encode(username)): ret false end
+    ret _smtp_command(c, encoding.Base64Encode(password))
+end
+
+@en "AuthPlain"
+@fa "ورود ساده"
+@ar "مصادقة عادیة"
+pub func AuthPlain(c &: SMTPClient, username: str, password: str): bool:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppendChar(sb, 0)
+    str.BufAppend(sb, username)
+    str.BufAppendChar(sb, 0)
+    str.BufAppend(sb, password)
+    raw := str.BufStr(sb)
+    ret _smtp_command(c, "AUTH PLAIN " + encoding.Base64Encode(raw))
+end
+
+@en "AuthXOAuth2"
+@fa "ورود ایکس‌اواث۲"
+@ar "مصادقة XOAUTH2"
+pub func AuthXOAuth2(c &: SMTPClient, username: str, access_token: str): bool:
+    ret _smtp_command(c, "AUTH XOAUTH2 " + BuildXOAuth2(username, access_token))
+end
+
+@en "MailFrom"
+@fa "فرستنده"
+@ar "من"
+pub func MailFrom(c &: SMTPClient, addr: str): bool:
+    ret _smtp_command(c, "MAIL FROM:<" + addr + ">")
+end
+
+@en "RcptTo"
+@fa "گیرنده"
+@ar "إلی"
+pub func RcptTo(c &: SMTPClient, addr: str): bool:
+    ret _smtp_command(c, "RCPT TO:<" + addr + ">")
+end
+
+@en "Data"
+@fa "داده"
+@ar "بیانات"
+pub func Data(c &: SMTPClient, raw_message: str): bool:
+    if !_smtp_command(c, "DATA"): ret false end
+    _smtp_send_line(c, _dot_stuff(raw_message))
+    ret _smtp_command(c, ".")
+end
+
+@en "Quit"
+@fa "خروج"
+@ar "خروج"
+pub func Quit(c &: SMTPClient):
+    _smtp_command(c, "QUIT")
+    if c.secure:
+        mut tc := _smtp_tls_get(c.tls_idx)
+        tls.Close(tc)
+        _smtp_tls_put(c.tls_idx, tc)
+    else:
+        tcp.Close(c.conn)
+    end
+end
+
+// Builds an RFC 5322 message: plain text, HTML, or both (as
+// multipart/alternative). Attachments are deliberately not built in
+// here - a caller that needs them combines net/mime.NewMultipartWriter
+// (multipart/mixed, WriteFileBytes per attachment, WriteField for the
+// text/html body part) with this package's Data() directly. Reusing
+// net/mime's writer for the text/html *alternative* pairing specifically
+// would be wrong - WriteField frames each part as
+// "Content-Disposition: form-data" (correct for an HTTP upload, not
+// what an alternative-text/html body part is), so that pairing is built
+// by hand below instead.
+@en "BuildMessage"
+@fa "ساخت پیام"
+@ar "بناء الرسالة"
+pub func BuildMessage(from: str, to_addr: str, subject: str, text_body: str, html_body: str): str:
+    mut headers := _hdr_line("From", from)
+    headers += _hdr_line("To", to_addr)
+    headers += _hdr_line("Subject", subject)
+    headers += _hdr_line("MIME-Version", "1.0")
+
+    if html_body.len() == 0:
+        headers += _hdr_line("Content-Type", "text/plain; charset=utf-8")
+        ret headers + "\r\n" + text_body
+    end
+    if text_body.len() == 0:
+        headers += _hdr_line("Content-Type", "text/html; charset=utf-8")
+        ret headers + "\r\n" + html_body
+    end
+
+    boundary := "SalamAltBoundary" + crypto.RandomHex(12)
+    headers += _hdr_line("Content-Type", "multipart/alternative; boundary=" + boundary)
+    mut body := "--" + boundary + "\r\n"
+    body += "Content-Type: text/plain; charset=utf-8\r\n\r\n"
+    body += text_body + "\r\n"
+    body += "--" + boundary + "\r\n"
+    body += "Content-Type: text/html; charset=utf-8\r\n\r\n"
+    body += html_body + "\r\n"
+    body += "--" + boundary + "--\r\n"
+    ret headers + "\r\n" + body
+end
+
+@en "Send"
+@fa "ارسال"
+@ar "إرسال"
+pub func Send(host: str, port: int, use_tls: bool, username: str, password: str, from: str, to_addr: str, subject: str, text_body: str, html_body: str): bool:
+    mut c := SMTPClient {}
+    if use_tls:
+        c = DialSMTPTLS(host, port)
+    else:
+        c = DialSMTP(host, port)
+    end
+    if !c.ok: ret false end
+    if !Hello(c, "localhost"): ret false end
+    if !use_tls:
+        // Opportunistic upgrade (port-587 style). Abort rather than send
+        // AUTH credentials in the clear if the server can't/won't
+        // upgrade.
+        if !StartTLS(c, host):
+            Quit(c)
+            ret false
+        end
+        if !Hello(c, "localhost"):
+            Quit(c)
+            ret false
+        end
+    end
+    if username.len() > 0:
+        if !AuthPlain(c, username, password): ret false end
+    end
+    if !MailFrom(c, from): ret false end
+    if !RcptTo(c, to_addr): ret false end
+    msg := BuildMessage(from, to_addr, subject, text_body, html_body)
+    ok := Data(c, msg)
+    Quit(c)
+    ret ok
+end

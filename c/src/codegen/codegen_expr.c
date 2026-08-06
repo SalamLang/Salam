@@ -210,19 +210,27 @@ static const char *cg_match_expr(cg_t *cg, ast_node_t *n)
     int t = ++cg->tmpn;
     const char *rty = cg_ctype(cg, n->type_str ? n->type_str : "int32_t");
     const char *sty = cg_ctype(cg, n->a->type_str ? n->a->type_str : "int32_t");
+    /* See the match_result_ctype comment in codegen_internal.h: a pointer
+     * result type must be declared as intptr_t inside the "({ ... })" and
+     * cast back to rty from the outside, or tcc rejects the expression. */
+    bool rty_is_ptr = rty[0] && rty[strlen(rty) - 1] == '*';
+    const char *res_ctype = rty_is_ptr ? "intptr_t" : rty;
     const char *subj_var = cg_fmt(cg, "__msubj%d", t);
     const char *res_var = cg_fmt(cg, "__mres%d", t);
     const char *end_lbl = cg_fmt(cg, "__mend%d", t);
     const char *saved_tmp = cg->match_result_tmp;
     const char *saved_lbl = cg->match_end_label;
+    const char *saved_ctype = cg->match_result_ctype;
     bool has_wildcard = false;
     sb_t b;
     const char *r;
     sb_init(&b);
-    sb_puts(&b, cg_fmt(cg, "({ %s %s; %s %s = (%s);\n", rty, res_var, sty, subj_var,
-                       cg_expr(cg, n->a)));
+    sb_puts(&b, cg_fmt(cg, "%s({ %s %s; %s %s = (%s);\n",
+                       rty_is_ptr ? cg_fmt(cg, "(%s)", rty) : "", res_ctype, res_var, sty,
+                       subj_var, cg_expr(cg, n->a)));
     cg->match_result_tmp = res_var;
     cg->match_end_label = end_lbl;
+    cg->match_result_ctype = res_ctype;
     {
         size_t i = 0;
         for (; i < n->list.len; i++) {
@@ -255,6 +263,7 @@ static const char *cg_match_expr(cg_t *cg, ast_node_t *n)
     sb_puts(&b, cg_fmt(cg, "%s: %s; })", end_lbl, res_var));
     cg->match_result_tmp = saved_tmp;
     cg->match_end_label = saved_lbl;
+    cg->match_result_ctype = saved_ctype;
     r = arena_strdup(cg->a, sb_cstr(&b));
     sb_free(&b);
     return r;
@@ -315,46 +324,130 @@ const char *cg_emit_op_call(cg_t *cg, ast_node_t *lhs_node, symbol_t *ssym,
                   lhs_c, mangled, t, sep, rhs_c ? rhs_c : "");
 }
 
+/* Struct-literal field values that tcc 0.9.26 cannot safely leave inside a
+ * "(T){ .f = v, ... }" initializer list - see cg_struct_lit below. */
+typedef struct {
+    const char *name;
+    const char *val;
+} cg_sl_post_t;
+
+static bool cg_ident_char(int c, bool first)
+{
+    if (c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) return true;
+    if (!first && c >= '0' && c <= '9') return true;
+    return false;
+}
+
+static bool cg_val_is_bare_ident(const char *s)
+{
+    size_t i;
+    if (!s || !s[0] || !cg_ident_char((unsigned char)s[0], true)) return false;
+    for (i = 1; s[i]; i++) {
+        if (!cg_ident_char((unsigned char)s[i], false)) return false;
+    }
+    return true;
+}
+
+/* Two confirmed, distinct tcc 0.9.26 bugs, both reproduced with minimal
+ * standalone .c files against the bundled tcc binary:
+ * 1. A "({ ... })" GNU statement-expression can't be a compound-literal
+ *    initializer-list element at all, positional or designated, even
+ *    cast-wrapped - "cast expected". Every stmt-expr this codegen emits
+ *    (aggregate out-param calls, cg_match_expr, cg_dyn_box, ...) ends in
+ *    "})", optionally behind an outer cast, so that suffix reliably
+ *    detects the shape.
+ * 2. A plain bare-identifier field value (e.g. ".f = someVar", regardless
+ *    of someVar's type or where it came from) is rejected with "field
+ *    expected" whenever it is *not* the list's last element - reproduced
+ *    with e.g. `(T){ .a = x, .b = 0 }` where x is any local/param
+ *    identifier. Both symptoms disappear once the value lives in its own
+ *    "tmp.field = value;" statement instead of the initializer list. */
+static bool cg_val_needs_hoist(const char *s)
+{
+    size_t vlen = s ? strlen(s) : 0;
+    if (vlen >= 2 && s[vlen - 1] == ')' && s[vlen - 2] == '}') return true;
+    /* NULL/true/false are constant tokens, not variable references - they
+     * never trip the "field expected" bug (only an actual local/param
+     * identifier does) and, unlike one, are always safe to leave in a
+     * top-level/global initializer, which can't hold hoisted statements at
+     * all (there is no enclosing function body to emit them into). */
+    if (!strcmp(s, "NULL") || !strcmp(s, "true") || !strcmp(s, "false")) return false;
+    return cg_val_is_bare_ident(s);
+}
+
 static const char *cg_struct_lit(cg_t *cg, ast_node_t *n)
 {
     symbol_t *ssym = struct_by_name(cg, n->name);
-    sb_t b;
-    sb_init(&b);
     const char *sl_cn =
         (ssym && ssym->type && ssym->type->name) ? ssym->type->name : n->name;
-    sb_puts(&b, cg_fmt(cg, "(%s){ ", cg_cident(cg, sl_cn)));
+    sb_t inl;
+    vec_t post;
     bool first = true;
+    const char *r;
+    sb_init(&inl);
+    vec_init(&post);
     if (ssym) {
-        {
-            size_t i = 0;
-            for (; i < ssym->members->symbols.len; i++) {
-                symbol_t *f = (symbol_t *)ssym->members->symbols.data[i];
-                if (f->kind != SYM_FIELD) continue;
-                ast_node_t *provided = NULL;
-                {
-                    size_t j = 0;
-                    for (; j < n->list.len; j++) {
-                        ast_node_t *fi = (ast_node_t *)n->list.data[j];
-                        if (fi->name && !strcmp(fi->name, f->name)) {
-                            provided = fi;
-                            break;
-                        }
+        size_t i = 0;
+        for (; i < ssym->members->symbols.len; i++) {
+            symbol_t *f = (symbol_t *)ssym->members->symbols.data[i];
+            ast_node_t *provided;
+            const char *val;
+            if (f->kind != SYM_FIELD) continue;
+            provided = NULL;
+            {
+                size_t j = 0;
+                for (; j < n->list.len; j++) {
+                    ast_node_t *fi = (ast_node_t *)n->list.data[j];
+                    if (fi->name && !strcmp(fi->name, f->name)) {
+                        provided = fi;
+                        break;
                     }
                 }
-                const char *val = provided                  ? cg_expr(cg, provided->a)
-                                  : (f->decl && f->decl->a) ? cg_expr(cg, f->decl->a)
-                                                            : NULL;
-                if (!val) continue;
-                if (!first) sb_puts(&b, ", ");
-                sb_puts(&b, cg_fmt(cg, ".%s = %s", cg_cident(cg, f->name), val));
+            }
+            val = provided                  ? cg_expr(cg, provided->a)
+                  : (f->decl && f->decl->a) ? cg_expr(cg, f->decl->a)
+                                            : NULL;
+            if (!val) continue;
+            if (cg_val_needs_hoist(val)) {
+                cg_sl_post_t *pf =
+                    (cg_sl_post_t *)arena_alloc(cg->a, sizeof(cg_sl_post_t));
+                pf->name = f->name;
+                pf->val = val;
+                vec_push(cg->a, &post, pf);
+            } else {
+                if (!first) sb_puts(&inl, ", ");
+                sb_puts(&inl, cg_fmt(cg, ".%s = %s", cg_cident(cg, f->name), val));
                 first = false;
             }
         }
     }
-    if (first) sb_puts(&b, "0");
-    sb_puts(&b, " }");
-    const char *r = arena_strdup(cg->a, sb_cstr(&b));
-    sb_free(&b);
+    if (first) sb_puts(&inl, "0");
+    if (post.len == 0) {
+        r = arena_strdup(cg->a,
+                         cg_fmt(cg, "(%s){ %s }", cg_cident(cg, sl_cn), sb_cstr(&inl)));
+        sb_free(&inl);
+        return r;
+    }
+    /* At least one field needs the post-assignment treatment: materialize
+     * the literal from only the safe fields into a named temp, apply the
+     * rest as plain "tmp.field = value;" statements (always accepted
+     * regardless of value shape or position), and use the bare temp as
+     * this expression's result. If that result itself ends up as a field
+     * value of an *enclosing* struct literal, cg_val_needs_hoist catches
+     * it there too (a bare identifier), so this composes safely at any
+     * nesting depth. */
+    {
+        int t = ++cg->tmpn;
+        size_t k;
+        cg_line(cg, "%s __sl%d = (%s){ %s };", cg_cident(cg, sl_cn), t,
+                cg_cident(cg, sl_cn), sb_cstr(&inl));
+        for (k = 0; k < post.len; k++) {
+            cg_sl_post_t *pf = (cg_sl_post_t *)post.data[k];
+            cg_line(cg, "__sl%d.%s = %s;", t, cg_cident(cg, pf->name), pf->val);
+        }
+        r = cg_fmt(cg, "__sl%d", t);
+    }
+    sb_free(&inl);
     return r;
 }
 

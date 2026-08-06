@@ -1,0 +1,408 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package excel
+
+import conv
+import time
+
+// A single sheet's cell grid. Cells are stored sparsely in a
+// `HashMap<str, Cell>` keyed by "row:col" (a composite string key, since
+// this compiler mis-resolves nested generic containers like
+// `Vector<Vector<Cell>>` - a flat map keyed by a joined string is the
+// established workaround) rather than a dense 2D array, so a freshly
+// created sheet with a single cell at row 9999 costs one entry, not ten
+// thousand rows. `max_row`/`max_col` (both -1 when empty) track the
+// smallest bounding box containing every cell that has ever been set, so
+// row/column/whole-sheet reads know how far to scan without walking the
+// whole map first.
+@en "MergeRange"
+@fa "بازه ادغام"
+@ar "نطاق الدمج"
+pub struct MergeRange:
+    pub row1: int = 0
+    pub col1: int = 0
+    pub row2: int = 0
+    pub col2: int = 0
+end
+
+// Salam 0.2.8 used to be unable to pass a `&: bool` reference parameter
+// through a struct method call (only through free functions), so
+// `Sheet.merged_range` returned a bundled `MergeLookup { found, row1, col1,
+// row2, col2 }` result struct instead of taking a `found &: bool`
+// out-parameter. Fixed in c/src/codegen/codegen_call.c and
+// compiler/codegen.salam (call_args_lead now shares call_args's
+// ref-argument handling) - `merged_range` below takes a real `found &:
+// bool` out-param again and returns a plain `MergeRange`. A method
+// returning a byval struct while also writing to a `&:` out-param is safe
+// under both backends (verified: neither corrupts fields) as long as the
+// returned struct itself has no nested-struct field - a *different*, still
+// open `tcc` bug corrupts every field but the first when a struct return
+// value's field is itself a struct, which is why `MergeRange` stays flat.
+
+@en "Sheet"
+@fa "برگه"
+@ar "ورقة"
+pub struct Sheet:
+    pub name: str = ""
+    pub cells: HashMap<str, Cell> = HashMap {} as HashMap<str, Cell>
+    pub max_row: int = -1
+    pub max_col: int = -1
+    pub merges: Vector<MergeRange> = Vector {} as Vector<MergeRange>
+
+    pub func _touch(row: int, col: int):
+        if row > this.max_row: this.max_row = row end
+        if col > this.max_col: this.max_col = col end
+    end
+
+    @en "set_string"
+    @fa "تنظیم رشته"
+    @ar "تعیین نص"
+    pub func set_string(row: int, col: int, value: str):
+        this.cells.put(_cell_key(row, col), NewStringCell(row, col, value))
+        this._touch(row, col)
+    end
+
+    // Alias for set_string, matching the common `sheet.set_cell(row, col,
+    // value)` spelling used elsewhere for string data.
+    @en "set_cell"
+    @fa "تنظیم سلول"
+    @ar "تعیین الخلیة"
+    pub func set_cell(row: int, col: int, value: str):
+        this.set_string(row, col, value)
+    end
+
+    @en "set_number"
+    @fa "تنظیم عدد"
+    @ar "تعیین رقم"
+    pub func set_number(row: int, col: int, value: f64):
+        this.cells.put(_cell_key(row, col), NewNumberCell(row, col, value))
+        this._touch(row, col)
+    end
+
+    @en "set_int"
+    @fa "تنظیم عدد صحیح"
+    @ar "تعیین عدد صحیح"
+    pub func set_int(row: int, col: int, value: i64):
+        this.set_number(row, col, value as f64)
+    end
+
+    @en "set_bool"
+    @fa "تنظیم منطقی"
+    @ar "تعیین منطقي"
+    pub func set_bool(row: int, col: int, value: bool):
+        this.cells.put(_cell_key(row, col), NewBoolCell(row, col, value))
+        this._touch(row, col)
+    end
+
+    @en "set_date"
+    @fa "تنظیم تاریخ"
+    @ar "تعیین تاریخ"
+    pub func set_date(row: int, col: int, epoch: i64):
+        this.cells.put(_cell_key(row, col), NewDateCell(row, col, epoch))
+        this._touch(row, col)
+    end
+
+    @en "set_formula"
+    @fa "تنظیم فرمول"
+    @ar "تعیین صیغة"
+    pub func set_formula(row: int, col: int, formula: str, cached: f64):
+        this.cells.put(_cell_key(row, col), NewFormulaCell(row, col, formula, cached))
+        this._touch(row, col)
+    end
+
+    @en "set_error"
+    @fa "تنظیم خطا"
+    @ar "تعیین خطأ"
+    pub func set_error(row: int, col: int, code: str):
+        c := Cell { row = row, col = col, kind = CellError, text = code }
+        this.cells.put(_cell_key(row, col), c)
+        this._touch(row, col)
+    end
+
+    @en "set_style"
+    @fa "تنظیم سبک"
+    @ar "تعیین نمط"
+    pub func set_style(row: int, col: int, style_id: int):
+        mut c := this.get_cell(row, col)
+        c.style_id = style_id
+        this.cells.put(_cell_key(row, col), c)
+        this._touch(row, col)
+    end
+
+    @en "clear_cell"
+    @fa "پاک‌سازی سلول"
+    @ar "مسح الخلیة"
+    pub func clear_cell(row: int, col: int):
+        this.cells.remove(_cell_key(row, col))
+    end
+
+    @en "has_cell"
+    @fa "دارای سلول"
+    @ar "یحتوي خلیة"
+    pub func has_cell(row: int, col: int): bool:
+        ret this.cells.has(_cell_key(row, col))
+    end
+
+    @en "get_cell"
+    @fa "دریافت سلول"
+    @ar "جلب الخلیة"
+    pub func get_cell(row: int, col: int): Cell:
+        key := _cell_key(row, col)
+        if this.cells.has(key): ret this.cells.get(key) end
+        ret Cell { row = row, col = col, kind = CellEmpty }
+    end
+
+    @en "get_string"
+    @fa "دریافت رشته"
+    @ar "جلب النص"
+    pub func get_string(row: int, col: int): str:
+        ret _cell_display(this.get_cell(row, col))
+    end
+
+    @en "get_number"
+    @fa "دریافت عدد"
+    @ar "جلب الرقم"
+    pub func get_number(row: int, col: int): f64:
+        c := this.get_cell(row, col)
+        if c.kind == CellNumber: ret c.num
+        else c.kind == CellDate: ret c.num
+        else c.kind == CellFormula: ret c.num
+        else c.kind == CellBool:
+            if c.flag: ret 1.0 end
+            ret 0.0
+        else:
+            ret 0.0
+        end
+    end
+
+    @en "get_bool"
+    @fa "دریافت منطقی"
+    @ar "جلب منطقي"
+    pub func get_bool(row: int, col: int): bool:
+        c := this.get_cell(row, col)
+        if c.kind == CellBool: ret c.flag end
+        if c.kind == CellNumber: ret c.num != 0.0 end
+        ret false
+    end
+
+    @en "get_formula"
+    @fa "دریافت فرمول"
+    @ar "جلب الصیغة"
+    pub func get_formula(row: int, col: int): str:
+        ret this.get_cell(row, col).formula
+    end
+
+    @en "row_count"
+    @fa "شمار سطرها"
+    @ar "عدد الصفوف"
+    pub func row_count(): int: ret this.max_row + 1 end
+
+    @en "col_count"
+    @fa "شمار ستون‌ها"
+    @ar "عدد الأعمدة"
+    pub func col_count(): int: ret this.max_col + 1 end
+
+    @en "set_row"
+    @fa "تنظیم سطر"
+    @ar "تعیین صف"
+    pub func set_row(row: int, values: Vector<str>):
+        mut i := 0
+        until i < values.len():
+            this.set_string(row, i, values.get(i)[0])
+            i += 1
+        end
+    end
+
+    @en "set_column"
+    @fa "تنظیم ستون"
+    @ar "تعیین عمود"
+    pub func set_column(col: int, values: Vector<str>):
+        mut i := 0
+        until i < values.len():
+            this.set_string(i, col, values.get(i)[0])
+            i += 1
+        end
+    end
+
+    // `flat` is a row-major flattening of a `num_cols`-wide table
+    // (`flat[r * num_cols + c]` is the value for relative row r, column
+    // c) - the workaround for this compiler's broken
+    // `Vector<Vector<str>>` support.
+    @en "set_table"
+    @fa "تنظیم جدول"
+    @ar "تعیین جدول"
+    pub func set_table(start_row: int, start_col: int, flat: Vector<str>, num_cols: int):
+        if num_cols <= 0: ret end
+        mut i := 0
+        until i < flat.len():
+            r := start_row + i / num_cols
+            c := start_col + i % num_cols
+            this.set_string(r, c, flat.get(i)[0])
+            i += 1
+        end
+    end
+
+    @en "get_row"
+    @fa "دریافت سطر"
+    @ar "جلب الصف"
+    pub func get_row(row: int): Vector<Cell>:
+        mut out := Vector {} as Vector<Cell>
+        mut c := 0
+        n := this.col_count()
+        until c < n:
+            out.push(this.get_cell(row, c))
+            c += 1
+        end
+        ret out
+    end
+
+    @en "get_column"
+    @fa "دریافت ستون"
+    @ar "جلب العمود"
+    pub func get_column(col: int): Vector<Cell>:
+        mut out := Vector {} as Vector<Cell>
+        mut r := 0
+        n := this.row_count()
+        until r < n:
+            out.push(this.get_cell(r, col))
+            r += 1
+        end
+        ret out
+    end
+
+    // The whole sheet flattened row-major (`row_count() * col_count()`
+    // cells, including empty gaps), the same layout `set_table` accepts.
+    @en "get_all"
+    @fa "دریافت همه"
+    @ar "جلب الكل"
+    pub func get_all(): Vector<Cell>:
+        mut out := Vector {} as Vector<Cell>
+        nr := this.row_count()
+        nc := this.col_count()
+        mut r := 0
+        until r < nr:
+            mut c := 0
+            until c < nc:
+                out.push(this.get_cell(r, c))
+                c += 1
+            end
+            r += 1
+        end
+        ret out
+    end
+
+    @en "find"
+    @fa "جستجو"
+    @ar "بحث"
+    pub func find(value: str): Vector<CellPos>:
+        mut out := Vector {} as Vector<CellPos>
+        mut it := this.cells.iter()
+        until it.has_next():
+            cell := it.value()
+            if _cell_display(cell) == value:
+                out.push(CellPos { row = cell.row, col = cell.col })
+            end
+            it.next()
+        end
+        ret out
+    end
+
+    @en "filter_rows_equals"
+    @fa "پالایش سطرها"
+    @ar "تصفیة الصفوف"
+    pub func filter_rows_equals(col: int, value: str): Vector<int>:
+        mut out := Vector {} as Vector<int>
+        mut r := 0
+        n := this.row_count()
+        until r < n:
+            if this.get_string(r, col) == value:
+                out.push(r)
+            end
+            r += 1
+        end
+        ret out
+    end
+
+    @en "merge_cells"
+    @fa "ادغام سلول‌ها"
+    @ar "دمج الخلایا"
+    pub func merge_cells(row1: int, col1: int, row2: int, col2: int):
+        this.merges.push(MergeRange { row1 = row1, col1 = col1, row2 = row2, col2 = col2 })
+        this._touch(row2, col2)
+    end
+
+    @en "is_merged"
+    @fa "ادغام‌شده است"
+    @ar "مدموجة"
+    pub func is_merged(row: int, col: int): bool:
+        mut i := 0
+        until i < this.merges.len():
+            m := this.merges.get(i)[0]
+            if row >= m.row1 && row <= m.row2 && col >= m.col1 && col <= m.col2:
+                ret true
+            end
+            i += 1
+        end
+        ret false
+    end
+
+    @en "merged_range"
+    @fa "بازه ادغام‌شده"
+    @ar "نطاق مدموج"
+    pub func merged_range(row: int, col: int, found &: bool): MergeRange:
+        mut i := 0
+        until i < this.merges.len():
+            m := this.merges.get(i)[0]
+            if row >= m.row1 && row <= m.row2 && col >= m.col1 && col <= m.col2:
+                found = true
+                ret m
+            end
+            i += 1
+        end
+        found = false
+        ret MergeRange {}
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    @ar "تحریر"
+    pub func free():
+        this.cells.free()
+        this.merges.free()
+    end
+end
+
+func _cell_key(row: int, col: int): str:
+    ret conv.FormatInt(row as i64).concat(":").concat(conv.FormatInt(col as i64))
+end
+
+func _cell_display(c: Cell): str:
+    if c.kind == CellString: ret c.text
+    else c.kind == CellNumber: ret conv.FormatFloat(c.num)
+    else c.kind == CellBool: ret conv.FormatBool(c.flag)
+    else c.kind == CellDate: ret time.FormatDate(SerialToEpoch(c.num))
+    else c.kind == CellFormula: ret conv.FormatFloat(c.num)
+    else c.kind == CellError: ret c.text
+    else:
+        ret ""
+    end
+end
+
+@en "NewSheet"
+@fa "برگه جدید"
+@ar "ورقة جدیدة"
+pub func NewSheet(name: str): Sheet:
+    ret Sheet { name = name }
+end

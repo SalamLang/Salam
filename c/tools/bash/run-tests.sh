@@ -13,9 +13,9 @@
 #
 # Usage:
 #   sh tools/bash/run-tests.sh [-j N] [section ...]
-# Sections: general exec js errors layout fmt ssl db llvm cross examples
-#           apps basics data editor-selected features games interop
-#           stdlib types webframework
+# Sections: general exec js errors layout fmt ssl db opencv llvm cross
+#           examples apps basics data editor-selected features games
+#           interop stdlib types webframework
 # Env: SALAM, SALAM_STD, LANGS, NPROC, SALAM_TEST_TIMEOUT,
 #      SALAM_TEST_NETWORK=1, SALAM_TEST_INTERACTIVE=1
 #
@@ -219,7 +219,7 @@ if [ "${1:-}" = "--worker" ]; then
             ;;
         errors)
             code=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
-            out=$("$SALAM_ABS" "$f" --emit-symbol-xml --no-color --log-level=error --lang="$lang" 2>&1 >/dev/null)
+            out=$("$SALAM_ABS" inspect "$f" --emit-symbol-xml --no-color --log-level=error --lang="$lang" 2>&1 >/dev/null)
             if [ -n "$code" ] && printf '%s\n' "$out" | grep -qF "$code"; then
                 echo "PASS $label ($code)"
             else
@@ -498,6 +498,46 @@ if want db; then
             done
         else
             note_result "SKIP db/$lang/* (no C compiler/ar to build the mysql mock)" "db/$lang/all"
+        fi
+    done
+fi
+
+if want opencv; then
+    OCVCC=""
+    for c in tcc gcc cc clang; do
+        command -v "$c" >/dev/null 2>&1 && {
+            OCVCC="$c"
+            break
+        }
+    done
+    ocvmockc=""
+    for lang in $LANGS; do
+        [ -f "../std/opencv/native/mock/opencv_mock.c" ] && {
+            ocvmockc="../std/opencv/native/mock/opencv_mock.c"
+            break
+        }
+    done
+    ocvok=0
+    if [ -n "$OCVCC" ] && [ -n "$ocvmockc" ] && command -v ar >/dev/null 2>&1; then
+        mkdir -p "$WORK/opencvwork/.work"
+        if "$OCVCC" -c -std=c11 "$ocvmockc" -o "$WORK/opencvwork/.work/opencv_mock.o" >/dev/null 2>&1 &&
+            ar rcs "$WORK/opencvwork/.work/libsalam_opencv_mock.a" "$WORK/opencvwork/.work/opencv_mock.o" >/dev/null 2>&1; then
+            ocvok=1
+        fi
+    fi
+    for lang in $LANGS; do
+        [ -d "../tests/$lang/opencv" ] || continue
+        if [ "$ocvok" = "1" ]; then
+            for f in ../tests/"$lang"/opencv/*.salam; do
+                [ -e "$f" ] || continue
+                name=$(basename "$f" .salam)
+                case "$name" in _*) continue ;; esac
+                exp="$(pick_expect "../tests/$lang/opencv/$name")"
+                [ -f "$exp" ] || continue
+                add_job build "opencv/$lang/$name" "$f" "$lang" "$exp" "--cc=$OCVCC -DSALAM_OPENCV_MOCK"
+            done
+        else
+            note_result "SKIP opencv/$lang/* (no C compiler/ar to build the OpenCV mock shim)" "opencv/$lang/all"
         fi
     done
 fi

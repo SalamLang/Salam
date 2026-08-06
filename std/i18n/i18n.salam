@@ -1,0 +1,189 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "i18n"
+@fa "بین‌المللی‌سازی"
+@ar "التدویل"
+package i18n
+
+import str
+import env
+import config
+
+// Catalog is a flat "locale:key" -> message store (same flat-parallel-
+// vector shape as config.Config, for the same reason: a Vector<Catalog>-
+// per-locale nested structure would be a nested-generic shape this
+// compiler's codegen doesn't reliably support). This is a runtime
+// translation catalog for *program output* - unrelated to the compiler's
+// own self-hosted i18n.salam, which only translates compiler diagnostics.
+@en "Catalog"
+@fa "فهرست ترجمه"
+@ar "كتالوج الترجمة"
+pub struct Catalog:
+    pub keys: Vector<str> = Vector {}
+    pub vals: Vector<str> = Vector {}
+    pub fallback: str = "en"
+end
+
+func _combine(locale: str, key: str): str: ret locale.concat(":").concat(key) end
+
+func _find(c &: Catalog, locale: str, key: str): int:
+    combined := _combine(locale, key)
+    repeat c.keys.len() with i:
+        if c.keys.get(i)[0] == combined: ret i end
+    end
+    ret 0 - 1
+end
+
+func _normalize_locale(v: str): str:
+    mut s := str.Trim(v)
+    dot := s.find(".")
+    if dot >= 0: s = s.substr(0, dot) end
+    us := s.find("_")
+    if us >= 0: s = s.substr(0, us) end
+    dash := s.find("-")
+    if dash >= 0: s = s.substr(0, dash) end
+    ret str.Lower(s)
+end
+
+@en "New"
+@fa "جدید"
+@ar "جدید"
+pub func New(default_locale: str): Catalog: ret Catalog { fallback = default_locale } end
+
+@en "Set"
+@fa "تنظیم"
+@ar "تعیین"
+pub func Set(c &: Catalog, locale: str, key: str, val: str):
+    idx := _find(c, locale, key)
+    if idx >= 0:
+        c.vals.set(idx, val)
+    else:
+        c.keys.push(_combine(locale, key))
+        c.vals.push(val)
+    end
+end
+
+@en "Has"
+@fa "دارد"
+@ar "یملک"
+pub func Has(c &: Catalog, locale: str, key: str): bool: ret _find(c, locale, key) >= 0 end
+
+@en "RawGet"
+@fa "دریافت خام"
+@ar "جلب خام"
+pub func RawGet(c &: Catalog, locale: str, key: str): str:
+    idx := _find(c, locale, key)
+    if idx < 0: ret "" end
+    ret c.vals.get(idx)[0]
+end
+
+// T resolves key for locale, falling back to the catalog's default locale
+// and finally to the raw key itself (the conventional gettext/ICU fallback
+// chain), so a missing translation degrades to something visible instead of
+// an empty string.
+@en "T"
+@fa "ترجمه"
+@ar "ترجمة"
+pub func T(c &: Catalog, locale: str, key: str): str:
+    v := RawGet(c, locale, key)
+    if v.len() > 0: ret v end
+    if locale != c.fallback:
+        fv := RawGet(c, c.fallback, key)
+        if fv.len() > 0: ret fv end
+    end
+    ret key
+end
+
+// Interpolate substitutes "{name}"-style placeholders in msg from the
+// parallel param_names/param_vals vectors (Salam has no map literals to
+// pass named args directly, so named params travel as two parallel
+// Vectors, the same convention flag.salam/log.salam use elsewhere).
+@en "Interpolate"
+@fa "جایگذاری"
+@ar "استبدال"
+pub func Interpolate(msg: str, param_names: Vector<str>, param_vals: Vector<str>): str:
+    mut out := msg
+    repeat param_names.len() with i:
+        placeholder := "{".concat(param_names.get(i)[0]).concat("}")
+        out = str.Replace(out, placeholder, param_vals.get(i)[0])
+    end
+    ret out
+end
+
+// Tf resolves key like T, then applies Interpolate.
+@en "Tf"
+@fa "ترجمه قالبی"
+@ar "ترجمة منسقة"
+pub func Tf(c &: Catalog, locale: str, key: str, param_names: Vector<str>, param_vals: Vector<str>): str:
+    ret Interpolate(T(c, locale, key), param_names, param_vals)
+end
+
+// Plural resolves "key.one" for n==1 and "key.other" otherwise (falling
+// back to the bare key if neither suffixed variant is registered) - a
+// minimal English-shaped plural rule. Languages with richer plural
+// categories can still register whichever suffixed keys they need and call
+// RawGet/T directly with the suffix they compute themselves.
+@en "Plural"
+@fa "جمع"
+@ar "جمع"
+pub func Plural(c &: Catalog, locale: str, key: str, n: i64): str:
+    mut suffix := ".other"
+    if n == (1 as i64): suffix = ".one" end
+    combined_key := key.concat(suffix)
+    if Has(c, locale, combined_key) || Has(c, c.fallback, combined_key):
+        ret T(c, locale, combined_key)
+    end
+    ret T(c, locale, key)
+end
+
+// LoadLocale bulk-loads "key=value" translation pairs (reusing config's
+// KEY=VALUE parser) from a file into locale.
+@en "LoadLocale"
+@fa "بارگذاری زبان"
+@ar "تحمیل لغة"
+pub func LoadLocale(c &: Catalog, locale: str, path: str): int:
+    cfg := config.LoadEnv(path)
+    keys := config.Keys(cfg)
+    defer keys.free()
+    repeat keys.len() with i:
+        k := keys.get(i)[0]
+        Set(c, locale, k, config.Get(cfg, k))
+    end
+    ret keys.len()
+end
+
+// DetectLocale reads SALAM_LOCALE, then LANG, then LC_ALL, normalizing
+// "en_US.UTF-8"/"fa-IR" style values down to a bare "en"/"fa" tag; "en" if
+// none are set.
+@en "DetectLocale"
+@fa "تشخیص زبان"
+@ar "كشف اللغة"
+pub func DetectLocale(): str:
+    mut v := env.Get("SALAM_LOCALE")
+    if v.len() > 0: ret _normalize_locale(v) end
+    v = env.Get("LANG")
+    if v.len() > 0: ret _normalize_locale(v) end
+    v = env.Get("LC_ALL")
+    if v.len() > 0: ret _normalize_locale(v) end
+    ret "en"
+end
+
+@en "Free"
+@fa "آزادسازی"
+@ar "تحریر"
+pub func Free(c &: Catalog):
+    c.keys.free()
+    c.vals.free()
+end

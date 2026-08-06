@@ -1,0 +1,237 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package email
+
+import str
+import conv
+import net.tcp
+import tls
+
+// Basic IMAP4rev1 client: LOGIN/AUTHENTICATE, SELECT, LIST, FETCH,
+// LOGOUT - enough to read an inbox, not a full IMAP implementation.
+// No IDLE, no SEARCH beyond what FETCH's own arguments can express.
+//
+// Line-based command/response parsing: reads until a line starting
+// with the command's tag appears, treating everything before it as
+// untagged response lines. This covers LOGIN/SELECT/LIST/LOGOUT and
+// FETCH replies that fit one line per item cleanly. IMAP's byte-counted
+// literal syntax (`{123}` followed by 123 raw bytes that may themselves
+// contain "\r\n") is NOT specially parsed - a literal's content is
+// still captured (it arrives as ordinary bytes over the same buffered
+// reader), but it appears inline in the returned lines rather than
+// being sliced out by its declared length. Callers fetching large
+// bodies should expect to do their own literal-aware reassembly on the
+// returned lines.
+
+mut _imap_tls_slots := Vector {} as Vector<tls.Conn>
+
+@en "IMAPClient"
+@fa "کارخواه آی‌مپ"
+@ar "عمیل IMAP"
+pub struct IMAPClient:
+    pub conn: tcp.Conn = tcp.Conn {}
+    pub secure: bool = false
+    pub tls_idx: int = 0 - 1
+    pub ok: bool = false
+    pub rxbuf: str = ""
+    pub tag_counter: int = 0
+end
+
+@en "IMAPReply"
+@fa "پاسخ آی‌مپ"
+@ar "رد IMAP"
+pub struct IMAPReply:
+    pub ok: bool = false
+    pub status: str = ""
+    pub lines: Vector<str> = Vector {}
+end
+
+func _imap_tls_store(tc: tls.Conn): int:
+    _imap_tls_slots.push(tc)
+    ret _imap_tls_slots.len() - 1
+end
+
+func _imap_tls_get(idx: int): tls.Conn:
+    ret _imap_tls_slots.get(idx)[0]
+end
+
+func _imap_tls_put(idx: int, tc: tls.Conn):
+    _imap_tls_slots.set(idx, tc)
+end
+
+func _imap_fill(c &: IMAPClient):
+    mut chunk := ""
+    if c.secure:
+        mut tc := _imap_tls_get(c.tls_idx)
+        chunk = tls.Read(tc, 4096)
+        _imap_tls_put(c.tls_idx, tc)
+    else:
+        chunk = tcp.Read(c.conn, 4096)
+    end
+    c.rxbuf += chunk
+end
+
+func _imap_read_line(c &: IMAPClient): str:
+    mut idx := c.rxbuf.find("\r\n")
+    mut tries := 0
+    until idx < 0 && tries < 200:
+        _imap_fill(c)
+        idx = c.rxbuf.find("\r\n")
+        tries += 1
+    end
+    if idx < 0:
+        line := c.rxbuf
+        c.rxbuf = ""
+        ret line
+    end
+    line := c.rxbuf.substr(0, idx)
+    c.rxbuf = c.rxbuf.substr(idx + 2, c.rxbuf.len() - idx - 2)
+    ret line
+end
+
+func _imap_send_line(c &: IMAPClient, line: str): int:
+    if c.secure:
+        mut tc := _imap_tls_get(c.tls_idx)
+        n := tls.Write(tc, line + "\r\n")
+        _imap_tls_put(c.tls_idx, tc)
+        ret n
+    end
+    ret tcp.Write(c.conn, line + "\r\n")
+end
+
+func _imap_next_tag(c &: IMAPClient): str:
+    c.tag_counter += 1
+    ret "A" + conv.FormatInt(c.tag_counter as i64)
+end
+
+func _imap_read_reply(c &: IMAPClient, tag: str): IMAPReply:
+    mut r := IMAPReply {}
+    mut done := false
+    mut safety := 0
+    until !done:
+        safety += 1
+        line := _imap_read_line(c)
+        if line.len() >= tag.len() && line.substr(0, tag.len()) == tag:
+            r.status = line
+            r.ok = str.Contains(line, " OK")
+            done = true
+        else:
+            r.lines.push(line)
+            if line.len() == 0 || safety > 10000:
+                done = true
+            end
+        end
+    end
+    ret r
+end
+
+func _imap_connect_common(conn: tcp.Conn): IMAPClient:
+    mut c := IMAPClient { conn = conn }
+    if !tcp.ConnOk(conn):
+        c.ok = false
+        ret c
+    end
+    greeting := _imap_read_line(c)
+    c.ok = str.Contains(greeting, "* OK")
+    ret c
+end
+
+@en "Dial"
+@fa "شماره‌گیری"
+@ar "اتصال"
+pub func DialIMAP(host: str, port: int): IMAPClient:
+    ret _imap_connect_common(tcp.Dial(host, port))
+end
+
+@en "DialTLS"
+@fa "شماره‌گیری امن"
+@ar "اتصال آمن"
+pub func DialIMAPTLS(host: str, port: int): IMAPClient:
+    cfg := tls.NewConfig(host)
+    tc := tls.Dial(host, port, cfg)
+    mut c := IMAPClient {}
+    c.secure = true
+    c.tls_idx = _imap_tls_store(tc)
+    if !tls.ConnOk(tc):
+        c.ok = false
+        ret c
+    end
+    greeting := _imap_read_line(c)
+    c.ok = str.Contains(greeting, "* OK")
+    ret c
+end
+
+@en "Command"
+@fa "دستور"
+@ar "أمر"
+pub func Command(c &: IMAPClient, cmd: str): IMAPReply:
+    tag := _imap_next_tag(c)
+    _imap_send_line(c, tag + " " + cmd)
+    ret _imap_read_reply(c, tag)
+end
+
+@en "Login"
+@fa "ورود"
+@ar "تسجیل الدخول"
+pub func Login(c &: IMAPClient, username: str, password: str): bool:
+    r := Command(c, "LOGIN \"" + username + "\" \"" + password + "\"")
+    ret r.ok
+end
+
+@en "LoginXOAuth2"
+@fa "ورود ایکس‌اواث۲"
+@ar "تسجیل دخول XOAUTH2"
+pub func LoginXOAuth2(c &: IMAPClient, username: str, access_token: str): bool:
+    r := Command(c, "AUTHENTICATE XOAUTH2 " + BuildXOAuth2(username, access_token))
+    ret r.ok
+end
+
+@en "Select"
+@fa "انتخاب"
+@ar "تحدید"
+pub func Select(c &: IMAPClient, mailbox: str): bool:
+    r := Command(c, "SELECT \"" + mailbox + "\"")
+    ret r.ok
+end
+
+@en "List"
+@fa "فهرست"
+@ar "قائمة"
+pub func List(c &: IMAPClient, reference: str, pattern: str): Vector<str>:
+    r := Command(c, "LIST \"" + reference + "\" \"" + pattern + "\"")
+    ret r.lines
+end
+
+@en "Fetch"
+@fa "دریافت"
+@ar "جلب"
+pub func Fetch(c &: IMAPClient, seq: str, items: str): Vector<str>:
+    r := Command(c, "FETCH " + seq + " (" + items + ")")
+    ret r.lines
+end
+
+@en "Logout"
+@fa "خروج"
+@ar "تسجیل الخروج"
+pub func Logout(c &: IMAPClient):
+    Command(c, "LOGOUT")
+    if c.secure:
+        mut tc := _imap_tls_get(c.tls_idx)
+        tls.Close(tc)
+        _imap_tls_put(c.tls_idx, tc)
+    else:
+        tcp.Close(c.conn)
+    end
+end

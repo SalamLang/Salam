@@ -1,0 +1,192 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "debug"
+@fa "اشکال زدایی"
+@ar "تصحیح"
+package debug
+
+import str
+import conv
+import time
+import mem
+
+if SALAM_OS_WINDOWS:
+    link dynamic "kernel32"
+    extern:
+        func DebugBreak()
+    end
+else:
+    extern:
+        func raise(sig: int): int
+    end
+end
+
+extern:
+    noret func abort()
+end
+
+mut _frames := Vector {} as Vector<str>
+mut _trace_enabled := false
+mut _timer_names := Vector {} as Vector<str>
+mut _timer_starts := Vector {} as Vector<i64>
+
+func _find_timer(name: str): int:
+    repeat _timer_names.len() with i:
+        if _timer_names.get(i)[0] == name: ret i end
+    end
+    ret 0 - 1
+end
+
+// Assert halts the program (via a panic, unlike testing.Assert which merely
+// records a failed check) when cond is false. Use for invariants that must
+// never be violated in correct code.
+@en "Assert"
+@fa "ادعا"
+@ar "تأکید"
+pub func Assert(cond: bool, msg: str):
+    if cond == false:
+        printerrln "assertion failed: ".concat(msg)
+        abort()
+    end
+end
+
+@en "AssertNotNil"
+@fa "ادعای خالی نبودن"
+@ar "تأکید عدم فراغ"
+pub func AssertNotNil(p: void*, msg: str): Assert(p != null, msg) end
+
+// Enter/Exit maintain a manual logical call-frame stack. Salam programs have
+// no automatic runtime stack unwinding, so instrumented code pushes/pops its
+// own frame names; Stack()/Trace() report from that self-maintained stack.
+@en "Enter"
+@fa "ورود"
+@ar "دخول"
+pub func Enter(frame: str):
+    _frames.push(frame)
+    if _trace_enabled: Trace("enter") end
+end
+
+@en "Exit"
+@fa "خروج"
+@ar "خروج"
+pub func Exit():
+    n := _frames.len()
+    if n > 0:
+        if _trace_enabled: Trace("exit") end
+        _frames.remove_at(n - 1)
+    end
+end
+
+@en "Stack"
+@fa "پشته"
+@ar "المكدس"
+pub func Stack(): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    repeat _frames.len() with i:
+        if i > 0: str.BufAppend(b, " > ") end
+        str.BufAppend(b, _frames.get(i)[0])
+    end
+    ret str.BufStr(b)
+end
+
+@en "Depth"
+@fa "عمق"
+@ar "عمق"
+pub func Depth(): int: ret _frames.len() end
+
+@en "EnableTrace"
+@fa "فعال‌سازی ردیابی"
+@ar "تفعیل التتبع"
+pub func EnableTrace(enabled: bool): _trace_enabled = enabled end
+
+@en "TraceEnabled"
+@fa "ردیابی فعال است"
+@ar "التتبع مفعل"
+pub func TraceEnabled(): bool: ret _trace_enabled end
+
+@en "Trace"
+@fa "ردیابی"
+@ar "تتبع"
+pub func Trace(msg: str):
+    if _trace_enabled == false: ret end
+    mut line := "[TRACE] "
+    s := Stack()
+    if s.len() > 0: line = line.concat(s).concat(": ") end
+    line = line.concat(msg)
+    printerrln line
+end
+
+// StartTimer/StopTimer are lightweight profiling hooks: StartTimer marks
+// 'now', StopTimer returns milliseconds elapsed since the matching
+// StartTimer call (0.0 if the timer was never started).
+@en "StartTimer"
+@fa "شروع تایمر"
+@ar "بدء المؤقت"
+pub func StartTimer(name: str):
+    idx := _find_timer(name)
+    now := time.NowMillis()
+    if idx >= 0:
+        _timer_starts.set(idx, now)
+    else:
+        _timer_names.push(name)
+        _timer_starts.push(now)
+    end
+end
+
+@en "StopTimer"
+@fa "پایان تایمر"
+@ar "إیقاف المؤقت"
+pub func StopTimer(name: str): f64:
+    idx := _find_timer(name)
+    if idx < 0: ret 0.0 end
+    started := _timer_starts.get(idx)[0]
+    now := time.NowMillis()
+    ret (now - started) as f64
+end
+
+// Break traps into an attached debugger at the call site (DebugBreak on
+// Windows, SIGTRAP elsewhere). No-op-like if no debugger is attached, beyond
+// the OS's default handling of the trap/signal.
+@en "Break"
+@fa "شکست‌نقطه"
+@ar "نقطة توقف"
+pub func Break():
+    if SALAM_OS_WINDOWS:
+        DebugBreak()
+    else:
+        raise(5)
+    end
+end
+
+@en "MemStats"
+@fa "آمار حافظه"
+@ar "إحصاءات الذاکرة"
+pub func MemStats(): str:
+    if mem.MemDebugActive() == false:
+        ret "mem stats unavailable (build with --debug-info/mem-debug or --asan to enable)"
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, "allocs=")
+    str.BufAppend(b, conv.FormatInt(mem.AllocCount()))
+    str.BufAppend(b, " frees=")
+    str.BufAppend(b, conv.FormatInt(mem.FreeCount()))
+    str.BufAppend(b, " live=")
+    str.BufAppend(b, conv.FormatInt(mem.LiveBytes()))
+    str.BufAppend(b, " peak=")
+    str.BufAppend(b, conv.FormatInt(mem.PeakBytes()))
+    ret str.BufStr(b)
+end

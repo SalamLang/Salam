@@ -41,6 +41,7 @@ Salam is a general-purpose and systems programming language designed for efficie
   - [Supported Languages](#supported-languages)
   - [Why Choose Salam?](#why-choose-salam)
   - [Key Features](#key-features)
+- [Quick Installing](#quick-installing)
 - [🧩 Editor Support](#-editor-support)
   - [Visual Studio Code](#visual-studio-code)
 - [🛠️ The Compiler (`salam`)](#-the-compiler-salam)
@@ -119,6 +120,20 @@ inclusive environment for building high-performance software.
 - 🔧 Linting and code checks for best practices.
 - 🔄 Built-in commands for versioning and updates.
 
+## Quick Installing
+
+**GNU-Linux/Mac:**
+
+```bash
+{ curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh && export PATH="$HOME/.salam/bin:$PATH"
+```
+
+**Windows:**
+
+```bash
+powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat','%TEMP%\salam-install.bat')" && call "%TEMP%\salam-install.bat" && set "PATH=%USERPROFILE%\.salam\bin;%PATH%"
+```
+
 ## 🧩 Editor Support
 
 ### [Visual Studio Code](https://code.visualstudio.com/)
@@ -166,8 +181,8 @@ salam layout build page.salam --inline         # one self-contained page.html
 salam layout build a.salam b.salam             # per-page html + merged style.css/script.js
 
 # inspect any stage (general or layout)
-salam app.salam --emit-tokens-xml | --emit-ast-xml | --emit-symbol-xml
-salam app.salam --log-level=trace
+salam inspect app.salam --emit-tokens-xml | --emit-ast-xml | --emit-symbol-xml
+salam inspect app.salam --log-level=trace
 salam build app.salam -DDEBUG                  # preprocessor define
 
 # format source in place (auto-detects nothing - pass --lang=fa for Persian files)

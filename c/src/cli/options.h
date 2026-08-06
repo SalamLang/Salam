@@ -37,7 +37,9 @@ typedef enum {
     CMD_REPL,
     CMD_REPL_LAYOUT,
     CMD_HELP,
-    CMD_VERSION
+    CMD_VERSION,
+    CMD_SERVE,
+    CMD_UNKNOWN
 } cli_command_t;
 
 typedef struct {
@@ -83,6 +85,8 @@ typedef struct {
     bool no_js_minify_names;
     bool no_minify;
     bool version_short;
+    const char *serve_host;
+    int serve_port;
 } options_t;
 
 #define OPTIONS_INIT_NO_JS_MINIFY_NAMES 0

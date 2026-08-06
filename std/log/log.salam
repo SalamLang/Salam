@@ -21,6 +21,9 @@ import str
 import time
 import fmt
 import io
+import os
+import conv
+import encoding.json
 
 extern:
     noret func exit(code: int)
@@ -47,25 +50,113 @@ pub const LevelWarn := 2
 @ar "مستوى الخطأ"
 pub const LevelError := 3
 
+@en "FormatText"
+@fa "قالب متن"
+@ar "تنسیق نص"
+pub const FormatText := 0
+
+@en "FormatJSON"
+@fa "قالب جیسون"
+@ar "تنسیق جیسون"
+pub const FormatJSON := 1
+
 mut _level := 1
 mut _prefix := ""
 mut _show_time := true
 mut _sink := 0
 mut _file := null as File*
+mut _format := 0
+mut _file_path := ""
+mut _rotate_max_bytes := 0 as i64
+mut _rotate_max_backups := 5
+mut _bytes_since_rotate := 0 as i64
 
-func _emit(l: int, msg: str):
-    if l < _level: ret end
+func _level_name(l: int): str:
+    if l <= 0: ret "DEBUG"
+    else l == 1: ret "INFO"
+    else l == 2: ret "WARN"
+    else:
+        ret "ERROR"
+    end
+end
+
+func _rotate_if_needed():
+    if _rotate_max_bytes <= (0 as i64) || _sink != 2 || _file_path == "": ret end
+    if _bytes_since_rotate < _rotate_max_bytes: ret end
+    if _file != null: _file.close() end
+
+    mut i := _rotate_max_backups
+    until i >= 2:
+        src := _file_path.concat(".").concat(conv.FormatInt(i - 1 as i64))
+        dst := _file_path.concat(".").concat(conv.FormatInt(i as i64))
+        if os.Exists(src):
+            os.Remove(dst)
+            os.Move(src, dst)
+        end
+        i -= 1
+    end
+    if os.Exists(_file_path):
+        bak1 := _file_path.concat(".1")
+        os.Remove(bak1)
+        os.Move(_file_path, bak1)
+    end
+    _file = salam_open(_file_path, "ab")
+    _bytes_since_rotate = 0 as i64
+end
+
+func _text_line(l: int, msg: str, keys: Vector<str>, vals: Vector<str>): str:
     mut line := ""
     if _show_time:
         line = line.concat(time.Format(time.Now())).concat(" ")
     end
-    line = line.concat("[").concat(LevelName(l)).concat("]")
+    line = line.concat("[").concat(_level_name(l)).concat("]")
     if _prefix.len() > 0:
         line = line.concat(" ").concat(_prefix)
     end
     line = line.concat(" ").concat(msg)
+    repeat keys.len() with i:
+        line = line.concat(" ").concat(Field(keys.get(i)[0], vals.get(i)[0]))
+    end
+    ret line
+end
+
+func _json_line(l: int, msg: str, keys: Vector<str>, vals: Vector<str>): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, "{")
+    mut first := true
+    if _show_time:
+        str.BufAppend(b, json.Member("time", time.FormatISO(time.Now())))
+        first = false
+    end
+    if first == false: str.BufAppend(b, ", ") end
+    str.BufAppend(b, json.Member("level", _level_name(l)))
+    if _prefix.len() > 0:
+        str.BufAppend(b, ", ")
+        str.BufAppend(b, json.Member("prefix", _prefix))
+    end
+    str.BufAppend(b, ", ")
+    str.BufAppend(b, json.Member("msg", msg))
+    repeat keys.len() with i:
+        str.BufAppend(b, ", ")
+        str.BufAppend(b, json.Member(keys.get(i)[0], vals.get(i)[0]))
+    end
+    str.BufAppend(b, "}")
+    ret str.BufStr(b)
+end
+
+func _emit_kv(l: int, msg: str, keys: Vector<str>, vals: Vector<str>):
+    if l < _level: ret end
+    mut line := ""
+    if _format == 1:
+        line = _json_line(l, msg, keys, vals)
+    else:
+        line = _text_line(l, msg, keys, vals)
+    end
     if _sink == 2 && _file != null:
+        _rotate_if_needed()
         _file.write(line.concat("\n"))
+        _bytes_since_rotate += (line.len() as i64) + (1 as i64)
     else:
         if _sink == 1:
             println line
@@ -75,17 +166,15 @@ func _emit(l: int, msg: str):
     end
 end
 
+func _emit(l: int, msg: str):
+    empty := Vector {} as Vector<str>
+    _emit_kv(l, msg, empty, empty)
+end
+
 @en "LevelName"
 @fa "نام سطح"
 @ar "اسم المستوى"
-pub func LevelName(l: int): str:
-    if l <= 0: ret "DEBUG"
-    else l == 1: ret "INFO"
-    else l == 2: ret "WARN"
-    else:
-        ret "ERROR"
-    end
-end
+pub func LevelName(l: int): str: ret _level_name(l) end
 
 @en "ParseLevel"
 @fa "تجزیه سطح"
@@ -122,6 +211,28 @@ pub func SetPrefix(p: str): _prefix = p end
 @ar "عرض الوقت"
 pub func ShowTime(b: bool): _show_time = b end
 
+@en "SetFormat"
+@fa "تنظیم قالب"
+@ar "تعیین التنسیق"
+pub func SetFormat(f: int): _format = f end
+
+@en "GetFormat"
+@fa "دریافت قالب"
+@ar "جلب التنسیق"
+pub func GetFormat(): int: ret _format end
+
+// SetRotation enables size-based file-sink rotation: once the active log
+// file reaches max_bytes, it's rotated to '<path>.1' (shifting existing
+// '.1'..'.N-1' up by one, dropping anything beyond max_backups) before the
+// next line is written. max_bytes <= 0 disables rotation (the default).
+@en "SetRotation"
+@fa "تنظیم چرخش"
+@ar "تعیین التدویر"
+pub func SetRotation(max_bytes: i64, max_backups: int):
+    _rotate_max_bytes = max_bytes
+    _rotate_max_backups = max_backups
+end
+
 @en "ToStderr"
 @fa "به خطای استاندارد"
 @ar "للخطأ القیاسی"
@@ -144,7 +255,14 @@ pub func ToFile(path: str): int:
     if f == null: ret 0 - 1 end
     if _sink == 2 && _file != null: _file.close() end
     _file = f
+    _file_path = path
     _sink = 2
+    existing := os.FileSize(path)
+    if existing > (0 as i64):
+        _bytes_since_rotate = existing
+    else:
+        _bytes_since_rotate = 0 as i64
+    end
     ret 0
 end
 
@@ -215,8 +333,8 @@ end
 @fa "فیلد"
 @ar "حقل"
 pub func Field(key: str, val: str): str:
-    if str.Contains(val, " ") || str.Contains(val, "\""):
-        ret key.concat("=\"").concat(str.Replace(val, "\"", "\\\"")).concat("\"")
+    if str.Contains(val, " ") || str.Contains(val, `"`):
+        ret key.concat(`="`).concat(str.Replace(val, `"`, `\"`)).concat(`"`)
     end
     ret key.concat("=").concat(val)
 end
@@ -246,3 +364,26 @@ pub func KV(msg: str, fields: Vector<str>): str:
     end
     ret out
 end
+
+// DebugKV/InfoKV/WarnKV/ErrorKV log msg plus structured key/value pairs
+// (parallel keys/vals vectors) in whichever format is active: appended as
+// "key=value" tokens in text mode, or as extra JSON members in JSON mode.
+@en "DebugKV"
+@fa "اشکال زدایی با فیلد"
+@ar "تصحیح ببیانات"
+pub func DebugKV(msg: str, keys: Vector<str>, vals: Vector<str>): _emit_kv(0, msg, keys, vals) end
+
+@en "InfoKV"
+@fa "اطلاعات با فیلد"
+@ar "معلومة ببیانات"
+pub func InfoKV(msg: str, keys: Vector<str>, vals: Vector<str>): _emit_kv(1, msg, keys, vals) end
+
+@en "WarnKV"
+@fa "هشدار با فیلد"
+@ar "تحذیر ببیانات"
+pub func WarnKV(msg: str, keys: Vector<str>, vals: Vector<str>): _emit_kv(2, msg, keys, vals) end
+
+@en "ErrorKV"
+@fa "خطا با فیلد"
+@ar "خطأ ببیانات"
+pub func ErrorKV(msg: str, keys: Vector<str>, vals: Vector<str>): _emit_kv(3, msg, keys, vals) end

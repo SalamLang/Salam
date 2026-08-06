@@ -20,6 +20,9 @@ endif
 ifneq (,$(findstring MSYS,$(UNAME_S)))
   IS_WINDOWS := 1
 endif
+ifneq (,$(findstring Darwin,$(UNAME_S)))
+  IS_MACOS := 1
+endif
 
 PREFIX   ?= /usr/local
 DESTDIR  ?=
@@ -112,11 +115,40 @@ ifeq ($(WITH_LLVM),1)
   CPPFLAGS += -DSALAM_HAVE_LLVM -I$(shell $(LLVM_CONFIG) --includedir) \
               -DSALAM_LLVM_VERSION_MAJOR=$(shell $(LLVM_CONFIG) --version | cut -d. -f1)
   LDFLAGS  += $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --ldflags)
+  # z3 is dropped everywhere: Homebrew (and several Linux distros) build
+  # their llvm package with LLVM_ENABLE_Z3_SOLVER=ON, so llvm-config reports
+  # Z3 as a system lib. Linking it stamps a dynamic reference to a *versioned*
+  # Cellar dylib - /opt/homebrew/opt/z3/lib/libz3.<maj>.<min>.dylib - into the
+  # binary, a path that exists only on a machine with that exact Homebrew z3
+  # installed. Every released macOS salam therefore aborted under dyld on any
+  # other Mac ("Library not loaded: .../libz3.4.16.dylib"). Z3 is clang's
+  # static-analyzer constraint solver; salam links LLVM libraries only, never
+  # clang, so no object here references a Z3 symbol and dropping it is safe.
+  # z3 is keg-only in Homebrew, so llvm-config emits its *full path*
+  # (.../opt/z3/lib/libz3.dylib), not a bare "-lz3" flag - match on the
+  # substring the same way the zstd filter below does, not an anchored
+  # "^-lz3$", or the keg-only path form slips through unfiltered.
+  LLVM_SYSTEM_LIBS := $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --system-libs \
+      | tr ' ' '\n' | grep -viE 'z3' | tr '\n' ' ')
   ifeq ($(IS_WINDOWS),1)
-    LLVM_SYSTEM_LIBS := $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --system-libs \
+    LLVM_SYSTEM_LIBS := $(shell printf '%s' "$(LLVM_SYSTEM_LIBS)" \
         | tr ' ' '\n' | grep -viE 'zstd' | tr '\n' ' ') $(LLVM_ZSTD_LIB)
-  else
-    LLVM_SYSTEM_LIBS := $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --system-libs)
+  endif
+  # Same reasoning as z3, for the one system lib macOS cannot get from the
+  # SDK: LLVM's Support library really does call into zstd, and with
+  # -L$(brew --prefix)/lib on the link line -lzstd resolves to Homebrew's
+  # *dylib*. Prefer the static archive Homebrew ships beside it (Apple's ld
+  # has no -l:libzstd.a, so this has to be a full path) and fall back to the
+  # dylib only when it is genuinely absent.
+  ifeq ($(IS_MACOS),1)
+    MACOS_ZSTD_A := $(firstword $(wildcard \
+        $(shell brew --prefix zstd 2>/dev/null)/lib/libzstd.a \
+        /opt/homebrew/opt/zstd/lib/libzstd.a \
+        /usr/local/opt/zstd/lib/libzstd.a))
+    ifneq (,$(MACOS_ZSTD_A))
+      LLVM_SYSTEM_LIBS := $(shell printf '%s' "$(LLVM_SYSTEM_LIBS)" \
+          | tr ' ' '\n' | grep -viE 'zstd' | tr '\n' ' ') $(MACOS_ZSTD_A)
+    endif
   endif
   LDLIBS   += $(LLD_LIBS) \
               $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --libs $(LLVM_COMPONENTS)) \

@@ -1,0 +1,157 @@
+package tls
+
+// TLS 1.2 server handshake (RFC 5246), the mirror image of the client flow
+// in driver.salam/tls12.salam:
+//
+//   <- ClientHello               (read by _do_server_handshake, shared with 1.3)
+//   -> ServerHello
+//   -> Certificate
+//   -> ServerKeyExchange         (ECDHE params, signed by our leaf key)
+//   -> ServerHelloDone
+//   <- ClientKeyExchange         (client's ECDHE public key)
+//   <- ChangeCipherSpec          (plaintext)
+//   <- Finished
+//   -> ChangeCipherSpec          (plaintext)
+//   -> Finished
+//
+// Same restriction as the client side: ECDHE key exchange and AEAD suites
+// only, no CBC. X25519 is the only group offered here (see
+// _do_server_handshake12) - not because P-256/P-384 don't work over the
+// wire, but because this package's OWN client eagerly generates a single
+// P-256 key share during ClientHello construction rather than waiting to
+// see which group a server picks, so a self-test against a server that
+// chose P-384 would fail on the client side, not the server side being
+// tested. A real client (which generates its ECDHE key AFTER seeing
+// ServerKeyExchange, per spec) would work with any of the three.
+func _do_server_handshake12(c &: Conn, h &: Handshake, cfg: ServerConfig, chi: ClientHelloInfo, buf &: Buf): bool:
+    scheme := _pick_sig_scheme12(cfg.key)
+    if !_hs_server_kx_gen(h, GROUP_X25519):
+        ret _conn_fail(c, "key generation failed")
+    end
+
+    mut sh := _newbuf(256)
+    defer _buf_free(sh)
+    if !_hs_build_server_hello(h, chi, h.suite, false, sh):
+        ret _conn_fail(c, "could not build ServerHello")
+    end
+    _hash_update(h.tr, sh.p, sh.len)
+    if !_rec_write(h.rec, REC_HANDSHAKE, sh.p, sh.len):
+        ret _conn_fail(c, "could not send ServerHello")
+    end
+
+    mut certmsg := _newbuf(8192)
+    defer _buf_free(certmsg)
+    _hs_build_certificate_msg(cfg.chain, false, certmsg)
+    _hash_update(h.tr, certmsg.p, certmsg.len)
+    if !_rec_write(h.rec, REC_HANDSHAKE, certmsg.p, certmsg.len):
+        ret _conn_fail(c, "could not send Certificate")
+    end
+
+    mut ske := _newbuf(600)
+    defer _buf_free(ske)
+    if !_hs_build_ske(h, cfg.key, scheme, ske):
+        ret _conn_fail(c, "could not build ServerKeyExchange")
+    end
+    _hash_update(h.tr, ske.p, ske.len)
+    if !_rec_write(h.rec, REC_HANDSHAKE, ske.p, ske.len):
+        ret _conn_fail(c, "could not send ServerKeyExchange: " + h.rec.err + " (len=" + str.FromInt(ske.len as i64) + ")")
+    end
+
+    mut shd := _newbuf(8)
+    defer _buf_free(shd)
+    _put8(shd, HS_SERVER_HELLO_DONE)
+    _put24(shd, 0)
+    _hash_update(h.tr, shd.p, shd.len)
+    if !_rec_write(h.rec, REC_HANDSHAKE, shd.p, shd.len):
+        ret _conn_fail(c, "could not send ServerHelloDone")
+    end
+
+    // ClientKeyExchange
+    mut typ := 0
+    mut cke := _newbuf(256)
+    defer _buf_free(cke)
+    if !_hs_next_msg(h, buf, typ, cke):
+        ret _conn_fail(c, h.err)
+    end
+    if typ != HS_CLIENT_KEY_EXCHANGE:
+        ret _conn_fail(c, "expected ClientKeyExchange")
+    end
+    mut ckr := _readerof(cke)
+    plen := _rd8(ckr)
+    pr := _rdbytes(ckr, plen)
+    if ckr.bad:
+        ret _conn_fail(c, "malformed ClientKeyExchange")
+    end
+    mut peer := _newbuf(plen)
+    defer _buf_free(peer)
+    repeat plen with i:
+        _put8(peer, _rdat(pr, i))
+    end
+    if !_hs_server_kx_finish(h, peer):
+        ret _conn_fail(c, "key exchange failed")
+    end
+
+    mut sesshash := _newbuf(64)
+    defer _buf_free(sesshash)
+    _bufreset(h.master)
+    _putzeros(h.master, MASTER_SECRET_LEN)
+    if h.ems:
+        _hs_transcript(h, sesshash)
+        _tls12_master_ext(h.hash, h.shared.p, h.shared.len, sesshash, h.master.p)
+    else:
+        _tls12_master(h.hash, h.shared.p, h.shared.len, h.crand, h.srand, h.master.p)
+    end
+    h.master.len = MASTER_SECRET_LEN
+
+    if !_tls12_install_keys_server(h):
+        ret _conn_fail(c, "could not install TLS 1.2 keys")
+    end
+
+    // The expected verify_data MUST be computed from the transcript as it
+    // stands BEFORE the client's Finished is read - _hs_next_msg hashes
+    // whatever it reads into h.tr as a side effect, so snapshotting after
+    // the read would (wrongly) fold the very message being checked into
+    // its own expected value. The client's own driver.salam takes this
+    // snapshot before its equivalent read for the same reason.
+    mut th1 := _newbuf(64)
+    defer _buf_free(th1)
+    _hs_transcript(h, th1)
+    mut wantvd := _newbuf(VERIFY_DATA_LEN)
+    defer _buf_free(wantvd)
+    _putzeros(wantvd, VERIFY_DATA_LEN)
+    _tls12_verify_data(h.hash, h.master.p, h.master.len, PRF_LABEL_CLIENT_FINISHED, th1, wantvd.p)
+
+    // The client's ChangeCipherSpec is plaintext filler; _hs_next_msg skips
+    // it automatically the same way the client's own reader does.
+    mut cfinbody := _newbuf(64)
+    defer _buf_free(cfinbody)
+    if !_hs_next_msg(h, buf, typ, cfinbody):
+        ret _conn_fail(c, h.err)
+    end
+    if typ != HS_FINISHED:
+        ret _conn_fail(c, "expected client Finished")
+    end
+    if cfinbody.len != VERIFY_DATA_LEN || !_cteq(cfinbody.p, wantvd.p, VERIFY_DATA_LEN):
+        _rec_send_alert(h.rec, 2, ALERT_DECRYPT_ERROR)
+        ret _conn_fail(c, "client Finished did not verify")
+    end
+
+    mut ccs := _newbuf(1)
+    defer _buf_free(ccs)
+    _put8(ccs, 1)
+    _rec_write_plain(h.rec, REC_CHANGE_CIPHER_SPEC, ccs.p, 1)
+
+    mut th2 := _newbuf(64)
+    defer _buf_free(th2)
+    _hs_transcript(h, th2)
+    mut sfin := _newbuf(64)
+    defer _buf_free(sfin)
+    _tls12_finished_msg(h, PRF_LABEL_SERVER_FINISHED, th2, sfin)
+    if !_rec_write(h.rec, REC_HANDSHAKE, sfin.p, sfin.len):
+        ret _conn_fail(c, "could not send server Finished")
+    end
+
+    h.ok = true
+    c.open = true
+    ret true
+end

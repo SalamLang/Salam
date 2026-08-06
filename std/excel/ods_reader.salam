@@ -1,0 +1,317 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package excel
+
+import archive
+import compress
+import conv
+import str
+
+// Reads any .ods file's content.xml: one Sheet per <table:table>, cells
+// read positionally within each <table:table-row> (ODF has no per-cell A1
+// reference - column position advances by table:number-columns-repeated,
+// which real Calc files use heavily to pad rows out to a fixed column
+// count with empty cells, so it must be honored or parsing would be both
+// wrong and, on a 1024-column padded row, needlessly slow).
+
+// Standard civil-calendar-to-days-since-epoch algorithm (Howard Hinnant's
+// days_from_civil), used to parse ODF's ISO-8601 office:date-value since
+// std/time only decomposes an epoch, it does not compose one.
+func _ods_days_from_civil(y: i64, m: i64, d: i64): i64:
+    mut yy := y
+    if m <= (2 as i64): yy = yy - (1 as i64) end
+    mut era := 0 as i64
+    if yy >= (0 as i64): era = yy / (400 as i64)
+    else: era = (yy - (399 as i64)) / (400 as i64)
+    end
+    yoe := yy - era * (400 as i64)
+    mp := (m + (9 as i64)) % (12 as i64)
+    doy := ((153 as i64) * mp + (2 as i64)) / (5 as i64) + d - (1 as i64)
+    doe := yoe * (365 as i64) + yoe / (4 as i64) - yoe / (100 as i64) + doy
+    ret era * (146097 as i64) + doe - (719468 as i64)
+end
+
+func _ods_parse_iso_date(s: str): i64:
+    if s.len() < 10: ret 0 as i64 end
+    year := conv.ParseInt(s.substr(0, 4))
+    month := conv.ParseInt(s.substr(5, 2))
+    day := conv.ParseInt(s.substr(8, 2))
+    mut hour := 0 as i64
+    mut minute := 0 as i64
+    mut second := 0 as i64
+    if s.len() >= 19:
+        hour = conv.ParseInt(s.substr(11, 2))
+        minute = conv.ParseInt(s.substr(14, 2))
+        second = conv.ParseInt(s.substr(17, 2))
+    end
+    days := _ods_days_from_civil(year, month, day)
+    ret days * (86400 as i64) + hour * (3600 as i64) + minute * (60 as i64) + second
+end
+
+func _ods_strip_formula_prefix(f: str): str:
+    if str.StartsWith(f, "of:="): ret f.substr(4, f.len() - 4) end
+    if str.StartsWith(f, "="): ret f.substr(1, f.len() - 1) end
+    ret f
+end
+
+func _ods_collect_text(xml: str, from: int, to_pos: int): str:
+    mut out := ""
+    mut pos := from
+    until true:
+        idx := XmlFind(xml, "text:p", pos)
+        if idx < 0 || idx >= to_pos: break end
+        if XmlSelfClosing(xml, idx):
+            pos = XmlTagEnd(xml, idx)
+        else:
+            cs := XmlTagEnd(xml, idx)
+            ce := XmlFindClose(xml, "text:p", cs)
+            if ce < 0 || ce > to_pos: break end
+            if out.len() > 0: out = out.concat("\n") end
+            out = out.concat(XmlUnescape(xml.substr(cs, ce - cs)))
+            pos = XmlTagEnd(xml, ce)
+        end
+    end
+    ret out
+end
+
+func _ods_align_from_str(h: str): int:
+    if h == "start" || h == "left": ret AlignLeft end
+    if h == "center": ret AlignCenter end
+    if h == "end" || h == "right": ret AlignRight end
+    ret AlignDefault
+end
+
+func _ods_strip_hash(c: str): str:
+    if str.StartsWith(c, "#"): ret c.substr(1, c.len() - 1) end
+    ret c
+end
+
+// Parses <office:automatic-styles>'s table-cell styles into a name-keyed
+// map (ODF styles are referenced by name, e.g. "ce1" - unlike OOXML's
+// positional cellXfs index) so cells' `table:style-name` can be resolved
+// back to a Style when reading.
+func _ods_parse_automatic_styles(xml: str): HashMap<str, Style>:
+    mut out := HashMap {} as HashMap<str, Style>
+    start := XmlFind(xml, "office:automatic-styles", 0)
+    if start < 0: ret out end
+    if XmlSelfClosing(xml, start): ret out end
+    cs := XmlTagEnd(xml, start)
+    ce := XmlFindClose(xml, "office:automatic-styles", cs)
+    if ce < 0: ret out end
+    mut pos := cs
+    until true:
+        idx := XmlFind(xml, "style:style", pos)
+        if idx < 0 || idx >= ce: break end
+        name := XmlAttr(xml, idx, "style:name")
+        family := XmlAttr(xml, idx, "style:family")
+        if XmlSelfClosing(xml, idx):
+            pos = XmlTagEnd(xml, idx)
+        else:
+            scs := XmlTagEnd(xml, idx)
+            sce := XmlFindClose(xml, "style:style", scs)
+            if sce < 0 || sce > ce: break end
+            if family == "table-cell" && name.len() > 0:
+                mut st := Style {}
+                tpidx := XmlFind(xml, "style:text-properties", scs)
+                if tpidx >= 0 && tpidx < sce:
+                    if XmlAttr(xml, tpidx, "fo:font-weight") == "bold": st.bold = true end
+                    if XmlAttr(xml, tpidx, "fo:font-style") == "italic": st.italic = true end
+                    us := XmlAttr(xml, tpidx, "style:text-underline-style")
+                    if us.len() > 0 && us != "none": st.underline = true end
+                    fsz := XmlAttr(xml, tpidx, "fo:font-size")
+                    if fsz.len() > 0:
+                        mut numpart := fsz
+                        if str.EndsWith(fsz, "pt"): numpart = fsz.substr(0, fsz.len() - 2) end
+                        st.font_size = conv.ParseInt(numpart) as int
+                    end
+                    fc := XmlAttr(xml, tpidx, "fo:color")
+                    if fc.len() > 0: st.font_color = _ods_strip_hash(fc) end
+                end
+                cpidx := XmlFind(xml, "style:table-cell-properties", scs)
+                if cpidx >= 0 && cpidx < sce:
+                    bg := XmlAttr(xml, cpidx, "fo:background-color")
+                    if bg.len() > 0: st.bg_color = _ods_strip_hash(bg) end
+                end
+                ppidx := XmlFind(xml, "style:paragraph-properties", scs)
+                if ppidx >= 0 && ppidx < sce:
+                    align := XmlAttr(xml, ppidx, "fo:text-align")
+                    if align.len() > 0: st.align_h = _ods_align_from_str(align) end
+                end
+                out.put(name, st)
+            end
+            pos = XmlTagEnd(xml, sce)
+        end
+    end
+    ret out
+end
+
+func _ods_parse_row_into(xml: str, from: int, to_pos: int, sheet &: Sheet, row: int, styles &: StyleSheet, style_by_name: HashMap<str, Style>):
+    mut pos := from
+    mut col := 0
+    until true:
+        cidx := XmlFind(xml, "table:table-cell", pos)
+        covidx := XmlFind(xml, "table:covered-table-cell", pos)
+        mut idx := cidx
+        mut is_covered := false
+        if covidx >= 0 && (cidx < 0 || covidx < cidx):
+            idx = covidx
+            is_covered = true
+        end
+        if idx < 0 || idx >= to_pos: break end
+
+        rep_str := XmlAttr(xml, idx, "table:number-columns-repeated")
+        mut rep := 1
+        if rep_str.len() > 0: rep = conv.ParseInt(rep_str) as int end
+        if rep < 1: rep = 1 end
+
+        if is_covered:
+            col += rep
+            pos = XmlTagEnd(xml, idx)
+        else:
+            if XmlSelfClosing(xml, idx):
+                pos = XmlTagEnd(xml, idx)
+            else:
+                vtype := XmlAttr(xml, idx, "office:value-type")
+                cs := XmlTagEnd(xml, idx)
+                ce := XmlFindClose(xml, "table:table-cell", cs)
+                if ce < 0 || ce > to_pos: break end
+
+                if vtype == "string":
+                    sheet.set_string(row, col, _ods_collect_text(xml, cs, ce))
+                else vtype == "boolean":
+                    bv := XmlAttr(xml, idx, "office:boolean-value")
+                    sheet.set_bool(row, col, bv == "true")
+                else vtype == "date":
+                    dv := XmlAttr(xml, idx, "office:date-value")
+                    sheet.set_date(row, col, _ods_parse_iso_date(dv))
+                else vtype == "float" || vtype == "currency" || vtype == "percentage":
+                    vv := XmlAttr(xml, idx, "office:value")
+                    num := conv.ParseFloat(vv)
+                    formula := XmlAttr(xml, idx, "table:formula")
+                    if formula.len() > 0:
+                        sheet.set_formula(row, col, _ods_strip_formula_prefix(formula), num)
+                    else:
+                        sheet.set_number(row, col, num)
+                    end
+                end
+
+                span_cols_str := XmlAttr(xml, idx, "table:number-columns-spanned")
+                span_rows_str := XmlAttr(xml, idx, "table:number-rows-spanned")
+                if span_cols_str.len() > 0 || span_rows_str.len() > 0:
+                    mut sc := 1
+                    mut sr := 1
+                    if span_cols_str.len() > 0: sc = conv.ParseInt(span_cols_str) as int end
+                    if span_rows_str.len() > 0: sr = conv.ParseInt(span_rows_str) as int end
+                    if sc > 1 || sr > 1:
+                        sheet.merge_cells(row, col, row + sr - 1, col + sc - 1)
+                    end
+                end
+
+                sname := XmlAttr(xml, idx, "table:style-name")
+                if sname.len() > 0 && style_by_name.has(sname):
+                    sid := styles.get_or_add(style_by_name.get(sname))
+                    sheet.set_style(row, col, sid)
+                end
+
+                pos = XmlTagEnd(xml, ce)
+            end
+            col += rep
+        end
+    end
+end
+
+func _ods_parse_table_into(xml: str, from: int, to_pos: int, sheet &: Sheet, styles &: StyleSheet, style_by_name: HashMap<str, Style>):
+    mut pos := from
+    mut row := 0
+    until true:
+        ridx := XmlFind(xml, "table:table-row", pos)
+        if ridx < 0 || ridx >= to_pos: break end
+        rep_str := XmlAttr(xml, ridx, "table:number-rows-repeated")
+        mut rep := 1
+        if rep_str.len() > 0: rep = conv.ParseInt(rep_str) as int end
+        if rep < 1: rep = 1 end
+
+        if XmlSelfClosing(xml, ridx):
+            row += rep
+            pos = XmlTagEnd(xml, ridx)
+        else:
+            rcs := XmlTagEnd(xml, ridx)
+            rce := XmlFindClose(xml, "table:table-row", rcs)
+            if rce < 0 || rce > to_pos: break end
+            _ods_parse_row_into(xml, rcs, rce, sheet, row, styles, style_by_name)
+            row += rep
+            pos = XmlTagEnd(xml, rce)
+        end
+    end
+end
+
+// Reads `path` as a .ods file. `ok` is false (and `err` set to a
+// human-readable message) if the file cannot be opened or is not a
+// readable .ods archive.
+@en "ReadODS"
+@fa "خواندن اُدی‌اس"
+@ar "قراءة أو دي إس"
+pub func ReadODS(path: str, ok &: bool, err &: str): Workbook:
+    ok = false
+    err = ""
+    mut book := NewWorkbook()
+    mut read_ok := false
+    data := archive.ReadBinaryFile(path, read_ok)
+    if !read_ok:
+        err = "cannot open file: ".concat(path)
+        compress.BufFree(data)
+        ret book
+    end
+
+    mut content_ok := false
+    contentbuf := archive.ZipExtractByName(data.data, data.len, "content.xml", content_ok)
+    if !content_ok:
+        err = "not a valid .ods file (missing content.xml)"
+        compress.BufFree(contentbuf)
+        compress.BufFree(data)
+        ret book
+    end
+    xml := compress.BufToStrUnsafe(contentbuf)
+    style_by_name := _ods_parse_automatic_styles(xml)
+
+    mut pos := 0
+    until true:
+        tidx := XmlFind(xml, "table:table", pos)
+        if tidx < 0: break end
+        name := XmlAttr(xml, tidx, "table:name")
+        mut sh := NewSheet(name)
+        if XmlSelfClosing(xml, tidx):
+            pos = XmlTagEnd(xml, tidx)
+        else:
+            tcs := XmlTagEnd(xml, tidx)
+            tce := XmlFindClose(xml, "table:table", tcs)
+            if tce < 0:
+                pos = XmlTagEnd(xml, tidx)
+            else:
+                _ods_parse_table_into(xml, tcs, tce, sh, book.styles, style_by_name)
+                pos = XmlTagEnd(xml, tce)
+            end
+        end
+        book.sheets.push(sh)
+    end
+
+    style_by_name.free()
+    compress.BufFree(contentbuf)
+    compress.BufFree(data)
+    book.format = FormatODS
+    book.source_path = path
+    ok = true
+    ret book
+end

@@ -1,0 +1,349 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/url"
+@fa "نشانی وب شبکه"
+@ar "عنوان URL للشبکة"
+package url
+
+import str
+import encoding
+import encoding.query
+
+// A real RFC 3986 URL type - scheme, userinfo, host, port, path, query,
+// fragment - replacing std/net/net.salam's `Parse`, which only splits
+// scheme/host/port/path and understands neither query strings nor
+// fragments nor userinfo. Query access is not reinvented here: it hands
+// off to std/encoding/query's QueryMap/QueryValues, which is already the
+// multi-value ("a=1&a=2") map this package would otherwise have had to
+// build from scratch.
+//
+// `path`/`raw_query`/`fragment`/`userinfo` are stored percent-ENCODED,
+// exactly as they appeared in the source string (or as the caller built
+// them via EncodePathSegment) - mirroring Go's net/url.URL.Path vs
+// .RawPath split, this package keeps one field and gives you
+// DecodedPath()/DecodedUserinfo() rather than silently decoding on parse
+// and re-encoding on String(), which loses information for paths with a
+// percent-encoded "/" inside a segment.
+
+@en "URL"
+@fa "نشانی وب"
+@ar "عنوان URL"
+pub struct URL:
+    pub scheme: str = ""
+    pub userinfo: str = ""
+    pub host: str = ""
+    pub port: int = 0
+    pub path: str = ""
+    pub raw_query: str = ""
+    pub fragment: str = ""
+end
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+func _hexdigit(v: int): int:
+    if v >= 0 && v <= 9: ret 48 + v end
+    ret 65 + (v - 10)
+end
+
+func _hexval(c: int): int:
+    if c >= 48 && c <= 57: ret c - 48 end
+    if c >= 65 && c <= 70: ret c - 65 + 10 end
+    if c >= 97 && c <= 102: ret c - 97 + 10 end
+    ret 0 - 1
+end
+
+// RFC 3986 pchar-ish safe set for a single path segment: unreserved
+// (A-Za-z0-9-_.~) plus the sub-delims and ":"/"@" that are legal unescaped
+// inside a segment. "/" is deliberately NOT in this set - callers building
+// a path join segments with "/" themselves after encoding each one.
+func _path_seg_safe(code: int): bool:
+    if code >= 65 && code <= 90: ret true end
+    if code >= 97 && code <= 122: ret true end
+    if code >= 48 && code <= 57: ret true end
+    if code == 45 || code == 95 || code == 46 || code == 126: ret true end // - _ . ~
+    if code == 58 || code == 64: ret true end // : @
+    if code == 33 || code == 36 || code == 38 || code == 39: ret true end // ! $ & '
+    if code == 40 || code == 41 || code == 42 || code == 43: ret true end // ( ) * +
+    if code == 44 || code == 59 || code == 61: ret true end // , ; =
+    ret false
+end
+
+func _pct_decode_no_plus(s: str): str:
+    n := s.len()
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < n:
+        code := _ub(bp, i)
+        if code == 37 && i + 2 < n:
+            hi := _hexval(_ub(bp, i + 1))
+            lo := _hexval(_ub(bp, i + 2))
+            if hi >= 0 && lo >= 0:
+                str.BufAppendChar(sb, hi * 16 + lo)
+                i += 3
+            else:
+                str.BufAppendChar(sb, code)
+                i += 1
+            end
+        else:
+            str.BufAppendChar(sb, code)
+            i += 1
+        end
+    end
+    ret str.BufStr(sb)
+end
+
+func _split_authority(authority: str, u &: URL):
+    mut rest := authority
+    at := rest.find("@")
+    if at >= 0:
+        u.userinfo = rest.substr(0, at)
+        rest = rest.substr(at + 1, rest.len() - at - 1)
+    end
+    if rest.len() > 0 && rest.substr(0, 1) == "[":
+        close := rest.find("]")
+        if close >= 0:
+            u.host = rest.substr(1, close - 1)
+            tail := rest.substr(close + 1, rest.len() - close - 1)
+            if tail.len() > 1 && tail.substr(0, 1) == ":":
+                u.port = tail.substr(1, tail.len() - 1).to_int()
+            end
+            ret
+        end
+    end
+    colon := rest.find(":")
+    if colon >= 0:
+        u.host = rest.substr(0, colon)
+        u.port = rest.substr(colon + 1, rest.len() - colon - 1).to_int()
+    else:
+        u.host = rest
+    end
+end
+
+func _path_dir(p: str): str:
+    mut slash := 0 - 1
+    mut i := p.len() - 1
+    until i >= 0:
+        if p.substr(i, 1) == "/":
+            slash = i
+            i = 0 - 1
+        else:
+            i -= 1
+        end
+    end
+    if slash < 0: ret "" end
+    ret p.substr(0, slash + 1)
+end
+
+@en "Parse"
+@fa "تجزیه نشانی"
+@ar "تحلیل العنوان"
+pub func Parse(raw: str): URL:
+    mut u := URL {}
+    mut rest := raw
+
+    hash := rest.find("#")
+    if hash >= 0:
+        u.fragment = rest.substr(hash + 1, rest.len() - hash - 1)
+        rest = rest.substr(0, hash)
+    end
+
+    q := rest.find("?")
+    if q >= 0:
+        u.raw_query = rest.substr(q + 1, rest.len() - q - 1)
+        rest = rest.substr(0, q)
+    end
+
+    mut has_authority := false
+    scheme_end := rest.find("://")
+    if scheme_end >= 0:
+        u.scheme = rest.substr(0, scheme_end)
+        rest = rest.substr(scheme_end + 3, rest.len() - scheme_end - 3)
+        has_authority = true
+    else rest.len() >= 2 && rest.substr(0, 2) == "//":
+        rest = rest.substr(2, rest.len() - 2)
+        has_authority = true
+    end
+
+    if has_authority:
+        slash := rest.find("/")
+        mut authority := rest
+        mut path_rest := ""
+        if slash >= 0:
+            authority = rest.substr(0, slash)
+            path_rest = rest.substr(slash, rest.len() - slash)
+        end
+        _split_authority(authority, u)
+        u.path = path_rest
+    else:
+        u.path = rest
+    end
+    ret u
+end
+
+@en "HostPort"
+@fa "میزبان و درگاه"
+@ar "المضیف والمنفذ"
+pub func HostPort(u: URL): str:
+    mut h := u.host
+    if h.find(":") >= 0:
+        h = "[" + h + "]"
+    end
+    if u.port != 0:
+        ret h + ":" + str.FromInt(u.port as i64)
+    end
+    ret h
+end
+
+@en "String"
+@fa "متن"
+@ar "نص"
+pub func String(u: URL): str:
+    mut out := ""
+    mut has_authority := u.host.len() > 0
+    if u.scheme.len() > 0:
+        out += u.scheme + "://"
+        has_authority = true
+    else has_authority:
+        out += "//"
+    end
+    if has_authority:
+        if u.userinfo.len() > 0:
+            out += u.userinfo + "@"
+        end
+        out += HostPort(u)
+    end
+    out += u.path
+    if u.raw_query.len() > 0:
+        out += "?" + u.raw_query
+    end
+    if u.fragment.len() > 0:
+        out += "#" + u.fragment
+    end
+    ret out
+end
+
+@en "DecodedPath"
+@fa "مسیر کدگشایی‌شده"
+@ar "المسار مفکوک الترمیز"
+pub func DecodedPath(u: URL): str:
+    ret _pct_decode_no_plus(u.path)
+end
+
+@en "DecodedUserinfo"
+@fa "اطلاعات کاربر کدگشایی‌شده"
+@ar "معلومات المستخدم مفکوکة الترمیز"
+pub func DecodedUserinfo(u: URL): str:
+    ret _pct_decode_no_plus(u.userinfo)
+end
+
+@en "EncodePathSegment"
+@fa "کدگذاری بخش مسیر"
+@ar "ترمیز جزء المسار"
+pub func EncodePathSegment(s: str): str:
+    n := s.len()
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < n:
+        code := _ub(bp, i)
+        if _path_seg_safe(code):
+            str.BufAppendChar(sb, code)
+        else:
+            str.BufAppendChar(sb, 37)
+            str.BufAppendChar(sb, _hexdigit(code / 16))
+            str.BufAppendChar(sb, _hexdigit(code % 16))
+        end
+        i += 1
+    end
+    ret str.BufStr(sb)
+end
+
+@en "Query"
+@fa "پرس‌وجو"
+@ar "استعلام"
+pub func Query(u: URL): query.QueryMap:
+    ret query.Decode(u.raw_query)
+end
+
+@en "SetQuery"
+@fa "تنظیم پرس‌وجو"
+@ar "تعیین الاستعلام"
+pub func SetQuery(u &: URL, q: query.QueryMap):
+    u.raw_query = query.Encode(q)
+end
+
+// Resolves `ref` (absolute or relative) against `base`, RFC 3986 section
+// 5-ish. Handles the common cases - an absolute ref, a "//host/path"
+// scheme-relative ref, a "/path" root-relative ref, and a plain relative
+// ref merged against base's directory - but does not normalize "."/".."
+// segments in the merged result (a documented simplification, not a
+// silent correctness gap: callers chaining many relative Joins may see an
+// un-collapsed path).
+@en "Join"
+@fa "پیوستن نشانی"
+@ar "دمج العنوان"
+pub func Join(base: URL, ref: str): URL:
+    if ref.len() == 0: ret base end
+    if ref.find("://") >= 0: ret Parse(ref) end
+    if ref.len() >= 2 && ref.substr(0, 2) == "//":
+        ret Parse(base.scheme + ":" + ref)
+    end
+    if ref.substr(0, 1) == "/":
+        mut u := base
+        hash := ref.find("#")
+        mut path_and_query := ref
+        u.fragment = ""
+        if hash >= 0:
+            u.fragment = ref.substr(hash + 1, ref.len() - hash - 1)
+            path_and_query = ref.substr(0, hash)
+        end
+        q := path_and_query.find("?")
+        u.raw_query = ""
+        if q >= 0:
+            u.raw_query = path_and_query.substr(q + 1, path_and_query.len() - q - 1)
+            u.path = path_and_query.substr(0, q)
+        else:
+            u.path = path_and_query
+        end
+        ret u
+    end
+    mut u := base
+    u.path = _path_dir(base.path) + ref
+    u.raw_query = ""
+    u.fragment = ""
+    hash := ref.find("#")
+    mut rel := ref
+    if hash >= 0:
+        u.fragment = ref.substr(hash + 1, ref.len() - hash - 1)
+        rel = ref.substr(0, hash)
+    end
+    q := rel.find("?")
+    if q >= 0:
+        u.raw_query = rel.substr(q + 1, rel.len() - q - 1)
+        u.path = _path_dir(base.path) + rel.substr(0, q)
+    else:
+        u.path = _path_dir(base.path) + rel
+    end
+    ret u
+end

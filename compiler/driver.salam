@@ -123,6 +123,12 @@ pub const CMD_REPL := 12
 pub const CMD_REPL_LAYOUT := 13
 pub const CMD_HELP := 14
 pub const CMD_VERSION := 15
+pub const CMD_SERVE := 16
+pub const CMD_UNKNOWN := 17
+
+// `salam doc` (not from cli/options.h - no C parity field, same as CMD_SERVE
+// above: a cli-wave-only addition with no C original to port).
+pub const CMD_DOC := 18
 
 // Not from build.c: parallel object-file compilation. A single
 // `gcc a.c b.c ... -o exe` invocation compiles each translation unit one
@@ -131,9 +137,19 @@ pub const CMD_VERSION := 15
 // instead. Shared mutable job-queue state is fine here since
 // compile_parallel (below) is only ever called once per build, never
 // nested or run concurrently with itself.
+//
+// g_cw_mu starts as the zero-value Mutex (handle = null) rather than
+// sync.NewMutex() here: this is a `package driver` global, and codegen's
+// deferred-global-init pass only ever flushes a package's deferred
+// initializers into ITS OWN entry function - which only exists for
+// `package main`. driver.salam has no main, so a non-literal initializer
+// on a package-level global here would silently never run, leaving
+// g_cw_mu.handle NULL for every caller. Instead it is lazily created
+// inside compile_parallel() below, an ordinary function-body assignment
+// that always executes.
 mut g_cw_jobs := Vector {} as Vector<str>
 mut g_cw_next := 0
-mut g_cw_mu := sync.NewMutex()
+mut g_cw_mu := sync.Mutex {}
 mut g_cw_rc := 0
 
 // ===== driver/js_build.c: k_prelude[] (name/text pairs, split into two
@@ -235,6 +251,11 @@ pub struct Dr:
         pub no_js_minify_names: bool = false
         pub no_minify: bool = false
         pub version_short: bool = false
+        // `salam serve` (not from cli/options.h - no C parity field, since
+        // the C driver reads the same two flags straight off options_t's own
+        // serve_host/serve_port added alongside CMD_SERVE there).
+        pub serve_host: str = ""
+        pub serve_port: int = 0
     end
 
     // Private, package-internal (not pub - E017 still requires pub fields for
@@ -350,7 +371,7 @@ pub struct Dr:
             repeat n with i:
                 c := byte_at(s, i)
                 if c == 34:
-                    str.BufAppend(b, "\\\"")
+                    str.BufAppend(b, `\"`)
                 else:
                     str.BufAppendChar(b, c)
                 end
@@ -563,6 +584,7 @@ pub struct Dr:
         if jobs.len() == 0:
             ret 0
         end
+        g_cw_mu = sync.NewMutex()
         g_cw_jobs = jobs
         g_cw_next = 0
         g_cw_rc = 0
@@ -604,6 +626,30 @@ pub struct Dr:
             )
             ret 2
         end
+        // A bare `salam build` (no inputs) or a directory passed as the sole
+        // input (`salam build .`, `salam build ./compiler/`) doesn't name a
+        // file - scan that directory's top-level .salam files for the one
+        // that defines `main` and build that, same auto-detection Run()/Exec()
+        // already do for a bare `salam run`/`salam exec`. Without this, a
+        // directory input used to fall through to the per-file work-loop
+        // below, which reads it as a (nonexistent) source file and either
+        // fails to read it or - worse - silently resolves partial package
+        // state depending on unrelated import chains, neither of which is
+        // "build the program in this directory".
+        if opt.inputs.len() == 0:
+            first := resolve_dir_entry(lgr, pack, ".")
+            if str.Len(first) == 0:
+                ret 2
+            end
+            opt.inputs.push(first)
+        else if opt.inputs.len() == 1 && os.IsDir(opt.inputs.get(0)[0]):
+            first := resolve_dir_entry(lgr, pack, opt.inputs.get(0)[0])
+            if str.Len(first) == 0:
+                ret 2
+            end
+            opt.inputs.set(0, first)
+        end
+
         sm.SetStdlibRoot(opt.stdlib_path)
         sm.LayoutSchemaInit(opt.stdlib_path)
 
@@ -1124,6 +1170,19 @@ pub struct Dr:
                     str.BufAppend(cmdb2, shell_arg(scratch))
                     str.BufAppend(cmdb2, " -o ")
                     str.BufAppend(cmdb2, shell_arg(output))
+                    // See the matching stack-size/weak-symbol comments on
+                    // the other final-link command below (musl_tcc/--lto
+                    // path) - this is the default (non-LTO) fast-path's own
+                    // separate link step, added for the parallel-object-
+                    // compile optimization that has no C-original
+                    // counterpart, so it needs the same fixes independently.
+                    if SALAM_OS_WINDOWS:
+                        if use_tcc:
+                            str.BufAppend(cmdb2, " -Wl,--stack=8388608")
+                        else:
+                            str.BufAppend(cmdb2, " -Wl,--allow-multiple-definition")
+                        end
+                    end
                     repeat objs.len() with oi2:
                         str.BufAppendChar(cmdb2, 32)
                         str.BufAppend(cmdb2, shell_arg(objs.get(oi2)[0]))
@@ -1185,6 +1244,43 @@ pub struct Dr:
                 str.BufAppend(cmdb, shell_arg(scratch))
                 str.BufAppend(cmdb, " -o ")
                 str.BufAppend(cmdb, shell_arg(output))
+                // tcc's default linked stack (SizeOfStackReserve in the PE
+                // header) is only 1MiB on this target - half of MinGW gcc's
+                // 2MiB default - which is too little for the self-hosted
+                // compiler's own recursive descent parser/semantic pass to
+                // process its own (large, deeply nested) source: a
+                // tcc-linked salam.exe building compiler/*.salam with
+                // --cc=tcc reliably stack-overflows partway through
+                // parsing, while the identical workload run from a
+                // gcc-linked salam.exe (2MiB stack) does not. Confirmed via
+                // objdump -p on minimal tcc output (SizeOfStackReserve
+                // 0x100000) vs the same source built by gcc (0x200000), and
+                // via a direct A/B: a tcc-linked self-hosted binary crashes
+                // rebuilding itself; the same binary relinked with gcc
+                // instead does not. -Wl,--stack tells tcc's linker to
+                // reserve more (8MiB, matching common *nix default thread
+                // stack sizes) regardless of which --cc built the binary
+                // doing the *compiling*.
+                if SALAM_OS_WINDOWS:
+                    if use_tcc:
+                        str.BufAppend(cmdb, " -Wl,--stack=8388608")
+                    else:
+                        // codegen.salam's per-module SALAM_OUT_DEFINED
+                        // prelude marks salam_ob/salam_obn/salam_out_flush/
+                        // salam_out_fini __attribute__((weak)) so every
+                        // module can carry its own copy and the linker
+                        // picks one - reliable on ELF, but on this
+                        // MinGW/GCC + binutils combination weak *data*
+                        // symbols (salam_ob/salam_obn) sometimes still
+                        // collide: "multiple definition of
+                        // `.weak.salam_ob.'" etc - reproduced building
+                        // tests/*/general/web_router.salam (query.o vs
+                        // url.o). tcc takes the plain non-weak fallback in
+                        // that same prelude (guarded by
+                        // `!defined(__TINYC__)`), so it never hits this.
+                        str.BufAppend(cmdb, " -Wl,--allow-multiple-definition")
+                    end
+                end
                 str.BufAppend(cmdb, dbg_flag2)
                 str.BufAppend(cmdb, asan_flag)
                 str.BufAppend(cmdb, link_defines)
@@ -1252,18 +1348,83 @@ pub struct Dr:
 
     // ===== driver/driver.c =====
 
-    // driver/driver.c list_salam_files (bare filenames, cwd only - no recursion).
-    func list_salam_files(): Vector<str>:
+    // driver/driver.c list_salam_files (bare filenames when dir=="." for
+    // backward compat with the cwd-only callers below; dir-prefixed
+    // otherwise - no recursion either way).
+    func list_salam_files(dir: str): Vector<str>:
         mut out := Vector {} as Vector<str>
-        entries := os.ListDir(".")
+        entries := os.ListDir(dir)
         defer entries.free()
+        is_cwd := str.Equals(dir, ".")
+        mut prefix := ""
+        if !is_cwd:
+            mut trimmed := dir
+            if str.EndsWith(trimmed, "/") || str.EndsWith(trimmed, "\\"):
+                trimmed = str.Substr(trimmed, 0, str.Len(trimmed) - 1)
+            end
+            prefix = trimmed + "/"
+        end
         repeat entries.len() with i:
             name := entries.get(i)[0]
             if str.EndsWith(name, ".salam"):
-                out.push(name)
+                out.push(prefix + name)
             end
         end
         ret out
+    end
+
+    // Shared "scan dir for exactly one file defining `entry`" used by
+    // Run()/Exec() (dir="." when no input was given) and build_impl (when
+    // an explicit directory is passed instead of a file). Logs its own
+    // error and returns "" on failure (0 or >1 matches); returns the
+    // resolved path on success.
+    func resolve_dir_entry(lgr: lg.Logger, pack: lp.Langpack, dir: str): str:
+        entry := lp.Entry(pack)
+        mut files := list_salam_files(dir)
+        mut entries := Vector {} as Vector<str>
+        defer files.free()
+        defer entries.free()
+        if files.len() == 0:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("no .salam files found in the current directory")
+            )
+            ret ""
+        end
+        repeat files.len() with fi:
+            f := files.get(fi)[0]
+            if file_has_entry(pack, entry, f):
+                entries.push(f)
+            end
+        end
+        if entries.len() == 0:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format3(
+                    i18.Tr(
+                        "no entry point: none of the %d .salam file%s here defines a '%s' function"
+                    ), co.ArgInt(files.len() as i64), co.ArgStr(plural_suffix(files.len())),
+                    co.ArgStr(entry)
+                )
+            )
+            ret ""
+        end
+        if entries.len() > 1:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                    i18.Tr("ambiguous entry point: %d files define '%s':"), co.ArgInt(entries.len() as i64),
+                    co.ArgStr(entry)
+                )
+            )
+            repeat entries.len() with ei:
+                io.EPrintln("    " + entries.get(ei)[0])
+            end
+            io.EPrintln("  run a specific one with: salam run <file.salam>")
+            ret ""
+        end
+        first := entries.get(0)[0]
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("entry point: %s"), co.ArgStr(first))
+        )
+        ret first
     end
 
     // driver/driver.c file_has_entry - quiet lex+parse+condcomp probe (no sema).
@@ -1787,7 +1948,7 @@ pub struct Dr:
         // ---- assemble the bundle ----
         mut js := str.NewBuilder()
         str.BufAppend(
-            js, minify_ws ? "(function(){\"use strict\";" : "(function () {\n\"use strict\";\n\n"
+            js, minify_ws ? `(function(){"use strict";` : "(function () {\n\"use strict\";\n\n"
         )
         mut have_globals := false
         mut m3 := nmod - 1
@@ -1818,11 +1979,11 @@ pub struct Dr:
         end
         if minify_ws:
             str.BufAppend(
-                js, "if(document.readyState===\"loading\"){document." + "addEventListener(\"DOMContentLoaded\"," + boot + ");}else{" + boot + "();}"
+                js, `if(typeof document!=="undefined"&&document.readyState==="loading"){document.` + `addEventListener("DOMContentLoaded",` + boot + ");}else{" + boot + "();}"
             )
         else:
             str.BufAppend(
-                js, "if (document.readyState === \"loading\") {\n" + "    document.addEventListener(" + "\"DOMContentLoaded\", " + boot + ");\n" + "} else {\n    " + boot + "();\n}\n"
+                js, "if (typeof document !== \"undefined\" && document.readyState === \"loading\") {\n" + "    document.addEventListener(" + `"DOMContentLoaded", ` + boot + ");\n" + "} else {\n    " + boot + "();\n}\n"
             )
         end
         str.BufAppend(js, minify_ws ? "})();" : "})();\n")
@@ -1836,10 +1997,10 @@ pub struct Dr:
     func js_html_page(module: str, js_text: str, minify_ws: bool): str:
         mut b := str.NewBuilder()
         if minify_ws:
-            str.BufAppend(b, "<!doctype html><html lang=\"en\"><head>")
-            str.BufAppend(b, "<meta charset=\"utf-8\">")
+            str.BufAppend(b, `<!doctype html><html lang="en"><head>`)
+            str.BufAppend(b, `<meta charset="utf-8">`)
             str.BufAppend(
-                b, "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+                b, `<meta name="viewport" content="width=device-width, initial-scale=1">`
             )
             str.BufAppend(b, "<title>" + module + "</title>")
             str.BufAppend(b, "</head><body><script>")
@@ -2437,6 +2598,24 @@ pub struct Dr:
         at.FreeAst(a)
     end
 
+    // Quoted string literal for the tiny generated Salam source `Serve()`
+    // (below) writes out to drive `salam serve`.
+    func salam_str_literal(s: str): str:
+        mut b := str.NewBuilder()
+        defer str.BufFree(b)
+        str.BufAppendChar(b, 34) // '"'
+        n := str.Len(s)
+        repeat n with i:
+            c := str.Substr(s, i, 1)
+            if c == `\` || c == `"`:
+                str.BufAppendChar(b, 92) // '\'
+            end
+            str.BufAppend(b, c)
+        end
+        str.BufAppendChar(b, 34)
+        ret str.BufStr(b)
+    end
+
     // ===== PUBLIC API (rule E088: nothing but pub funcs below this line) =====
 
     // cli_set_defaults equivalent - `Dr {}` already carries every default (see
@@ -2479,19 +2658,6 @@ pub struct Dr:
         end
         lgr := lg.New(opt.log_level, resolve_color(opt.color))
 
-        // PORT-NOTE: `files`/`entries` are hoisted to function scope (instead of
-        // living inside the `if opt.inputs.len() == 0` block where the C's
-        // equivalent locals do) because the codegen's defer-cleanup list is NOT
-        // C-block-scoped - it re-emits `X.free()` at every later `ret` in the
-        // function regardless of which nested `if` declared `X` (the same
-        // gotcha interp.salam's port notes already document). A Vector declared
-        // + deferred only inside this nested branch would leave `entries`/
-        // `files` out of C scope at the later `ret brc` / final `ret` below.
-        mut files := Vector {} as Vector<str>
-        mut entries := Vector {} as Vector<str>
-        defer files.free()
-        defer entries.free()
-
         if opt.inputs.len() == 0:
             pack := lp.Load(opt.lang)
             if pack == lp.LP_NONE:
@@ -2500,50 +2666,12 @@ pub struct Dr:
                 )
                 ret 2
             end
-            entry := lp.Entry(pack)
-            files = list_salam_files()
-            if files.len() == 0:
-                lg.Log(
-                    lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("no .salam files found in the current directory")
-                )
+            first := resolve_dir_entry(lgr, pack, ".")
+            if str.Len(first) == 0:
                 ret 2
             end
-            repeat files.len() with fi:
-                f := files.get(fi)[0]
-                if file_has_entry(pack, entry, f):
-                    entries.push(f)
-                end
-            end
-            if entries.len() == 0:
-                lg.Log(
-                    lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format3(
-                        i18.Tr(
-                            "no entry point: none of the %d .salam file%s here defines a '%s' function"
-                        ), co.ArgInt(files.len() as i64), co.ArgStr(plural_suffix(files.len())),
-                        co.ArgStr(entry)
-                    )
-                )
-                ret 2
-            end
-            if entries.len() > 1:
-                lg.Log(
-                    lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
-                        i18.Tr("ambiguous entry point: %d files define '%s':"), co.ArgInt(entries.len() as i64),
-                        co.ArgStr(entry)
-                    )
-                )
-                repeat entries.len() with ei:
-                    io.EPrintln("    " + entries.get(ei)[0])
-                end
-                io.EPrintln("  run a specific one with: salam run <file.salam>")
-                ret 2
-            end
-            first := entries.get(0)[0]
             opt.inputs.push(first)
             opt.input = first
-            lg.Log(
-                lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("entry point: %s"), co.ArgStr(first))
-            )
         end
 
         mut temp_exe := false
@@ -2619,7 +2747,7 @@ pub struct Dr:
         defer entries.free()
 
         if str.Len(opt.input) == 0:
-            files = list_salam_files()
+            files = list_salam_files(".")
             repeat files.len() with fi:
                 f := files.get(fi)[0]
                 if file_has_entry(pack, entry, f):
@@ -2684,8 +2812,9 @@ pub struct Dr:
         ret rc
     end
 
-    // driver_main's CMD_INSPECT fallback: raw single-file compile driving the
-    // --emit-tokens-xml / --emit-ast-xml / --emit-symbol-xml flags.
+    // driver_main's CMD_INSPECT body ("salam inspect <file>"): raw
+    // single-file compile driving the --emit-tokens-xml / --emit-ast-xml /
+    // --emit-symbol-xml flags.
     pub func Inspect(opt &: Dr): int:
         if str.Len(opt.input) == 0:
             io.EPrintln(i18.Tr("salam: no input file"))
@@ -3347,6 +3476,62 @@ pub struct Dr:
         ret rc
     end
 
+    // Not from any C driver/*.c file: `salam serve [dir]`, the Salam
+    // equivalent of `python -m http.server` / `php -S`. Rather than
+    // reimplementing sockets/HTTP here, this generates a tiny Salam program
+    // that wires up the real std/web router (web.Static + web.EnableListing
+    // own the actual path-traversal safety and directory-listing logic -
+    // see std/web/web.salam's _safe_static_path/_dir_listing_html) and runs
+    // it exactly like Run() above does for `salam run` - one implementation
+    // of "serve files safely over HTTP", shared with the C driver's own
+    // driver/serve_build.c (which takes the same generate-and-build
+    // approach, for the same reason: std/web's thread-per-connection model
+    // needs a real compiled binary, not the tree-walking interpreter).
+    pub func Serve(opt &: Dr): int:
+        mut dir := opt.input
+        if str.Len(dir) == 0:
+            dir = "."
+        end
+        if !os.IsDir(dir):
+            lgr := lg.New(opt.log_level, resolve_color(opt.color))
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                    i18.Tr("salam: serve directory '%s' does not exist"), co.ArgStr(dir)
+                )
+            )
+            ret 2
+        end
+        mut host := opt.serve_host
+        if str.Len(host) == 0:
+            host = "127.0.0.1"
+        end
+        mut port := opt.serve_port
+        if port <= 0:
+            port = 8000
+        end
+
+        mut src_text := "import web\n\nfunc main:\n    r := web.NewRouter()\n    web.EnableListing(r)\n    web.Static(r, \"/\", "
+        src_text = src_text + salam_str_literal(dir) + ")\n    s := web.NewServer(" + co.I64Toa(port as i64)
+        src_text = src_text + ")\n    web.SetHost(s, " + salam_str_literal(host)
+        src_text = src_text + ")\n    web.EnableAccessLog(s)\n    web.Use(s, r)\n    web.Run(s)\nend\n"
+
+        salam_path := scratch_dir() + "/salam-serve-" + time.NowMicros() + ".salam"
+        if os.WriteFile(salam_path, src_text) < 0:
+            io.EPrintln(
+                co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(salam_path))
+            )
+            ret 2
+        end
+
+        opt.inputs.push(salam_path)
+        opt.input = salam_path
+
+        println "salam: serving " + dir + " at http://" + host + ":" + co.I64Toa(port as i64) + "/ (Ctrl+C to stop)"
+        rc := Run(opt)
+        _rm := os.Remove(salam_path)
+        ret rc
+    end
+
     // ===== driver/embed_sysroot.c (stage 8b, NEW - see the private section's
     // header note: source fidelity only, unreachable without SALAM_HAVE_LLVM
     // like sal_web.salam's web_api.c port) =====
@@ -3542,7 +3727,7 @@ pub struct Dr:
 
             if str.Equals(line, ":help"):
                 if opt.command == CMD_REPL_LAYOUT:
-                    print "Layout REPL commands:\n" + "  :clear  erase accumulated session\n" + "  :defs   show current session\n" + "  :quit   exit  (also: :q  quit  exit  q  Ctrl-D)\n" + "\nType a 'layout: ... end' block to render HTML inline.\n" + "Blocks can span multiple lines - the REPL waits until every\n" + "':' opener has a matching 'end' (always lowercase) before running.\n" + "\nRoot-level attributes: title, lang, dir\n" + "Common elements:  box  heading  p  link  image  input  button\n" + "Element attrs:    content  color  background  font-size  ...\n" + "\nExample:\n" + "  layout: title = \"Hi\" box: heading: size = 1 content = \"Hello\" " + "end end end\n"
+                    print "Layout REPL commands:\n" + "  :clear  erase accumulated session\n" + "  :defs   show current session\n" + "  :quit   exit  (also: :q  quit  exit  q  Ctrl-D)\n" + "\nType a 'layout: ... end' block to render HTML inline.\n" + "Blocks can span multiple lines - the REPL waits until every\n" + "':' opener has a matching 'end' (always lowercase) before running.\n" + "\nRoot-level attributes: title, lang, dir\n" + "Common elements:  box  heading  p  link  image  input  button\n" + "Element attrs:    content  color  background  font-size  ...\n" + "\nExample:\n" + `  layout: title = "Hi" box: heading: size = 1 content = "Hello" ` + "end end end\n"
                 else:
                     print "Commands:\n" + "  :run    compile + run the session (requires func main:)\n" + "  :clear  erase all accumulated definitions\n" + "  :defs   print current session\n" + "  :quit   exit  (also: :q  quit  exit  q  Ctrl-D)\n" + "\nTop-level defs (func/struct/enum/type) are accumulated.\n" + "Statements are wrapped in func main: and executed immediately.\n" + "Any block opened with ':' waits for a matching 'end' (lowercase).\n"
                 end

@@ -1,0 +1,153 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package http
+
+import net.router
+import mem
+import tls
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _beginthreadex(sec: void *, stack: u32, start: void *, arg: void *, flags: u32, thrdaddr: void *): u64
+        func CloseHandle(h: void *): int
+    end
+else:
+    extern:
+        func pthread_create(thread: void *, attr: void *, start: void *, arg: void *): int
+        func pthread_detach(thread: u64): int
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func salam_spawn_fn_i64(fn: i64, arg: i64):
+            h := _beginthreadex(null, 0 as u32, fn as void *, arg as void *, 0 as u32, null)
+            if h != (0 as u64): CloseHandle(h as void *) end
+        end
+    end
+else:
+    extern:
+        func salam_spawn_fn_i64(fn: i64, arg: i64):
+            t := mem.Allocate(8 as u64)
+            if pthread_create(t, null, fn as void *, arg as void *) == 0:
+                tp := t as i64 *
+                pthread_detach(tp[0] as u64)
+            end
+            mem.Free(t)
+        end
+    end
+end
+
+@en "NewServer"
+@fa "سرور جدید"
+@ar "خادم جدید"
+pub func NewServer(port: int): Server:
+    ret Server { port = port }
+end
+
+@en "Use"
+@fa "استفاده"
+@ar "استخدام"
+pub func Use(s &: Server, r: router.Router):
+    s.router = r
+end
+
+@en "HideTokens"
+@fa "پنهان سازی توکن"
+@ar "إخفاء الرموز"
+pub func HideTokens(s &: Server):
+    s.hide_tokens = true
+end
+
+@en "SetHost"
+@fa "تنظیم میزبان"
+@ar "تعیین المضیف"
+pub func SetHost(s &: Server, host: str):
+    s.host = host
+end
+
+@en "EnableAccessLog"
+@fa "فعال سازی گزارش دسترسی"
+@ar "تفعیل سجل الوصول"
+pub func EnableAccessLog(s &: Server):
+    s.access_log = true
+end
+
+@en "Run"
+@fa "اجرا"
+@ar "تشغیل"
+pub func Run(s: Server):
+    _reqctx_sizeof()
+    _warm_up_split()
+    _current_router = s.router
+    _hide_tokens = s.hide_tokens
+    _access_log = s.access_log
+    port := s.port
+    lfd := _net_listen(s.host, port)
+    if lfd < 0:
+        ret
+    end
+    until 1 == 1:
+        cfd := _net_accept(lfd)
+        if cfd >= 0:
+            salam_spawn_fn_i64(funcptr(_web_conn_handler), cfd)
+        end
+    end
+end
+
+// TLS-serving counterpart to Run: loads `cert_file`/`key_file` once
+// (std/tls.NewServerConfig - PEM certificate chain + private key),
+// stores the resulting config in a package-global read only from then
+// on (same "set once before the accept loop starts, read from every
+// handler thread" pattern Run already uses for `_current_router` - see
+// ctx_internal.salam), then spawns _web_tls_conn_handler per accepted
+// connection instead of the plain handler. If the cert/key fail to
+// load, every connection is refused with a handshake error rather than
+// silently falling back to plaintext.
+//
+// KNOWN ISSUE, not yet root-caused: an end-to-end check (this server
+// against a real tls.Dial client, both local) got past cert loading
+// (cfg.ok was true, no "bad certificate" error) and past accept (the
+// server did take the connection), then hung inside the handshake
+// itself with no error on either side. `grep -r WrapServer tests/`
+// turns up zero existing coverage anywhere in this repo - this call is
+// wired exactly per std/tls/conn.salam's documented signature and
+// usage, but WrapServer's handshake path appears to be genuinely
+// unexercised by any test in the codebase, which is consistent with a
+// pre-existing gap in std/tls itself rather than a bug in this wiring.
+// Treat RunTLS as unverified until std/tls's server-side handshake gets
+// its own passing local client/server test.
+@en "RunTLS"
+@fa "اجرای امن"
+@ar "تشغیل آمن"
+pub func RunTLS(s: Server, cert_file: str, key_file: str):
+    _reqctx_sizeof()
+    _warm_up_split()
+    _current_router = s.router
+    _hide_tokens = s.hide_tokens
+    _access_log = s.access_log
+    _current_tls_cfg = tls.NewServerConfig(cert_file, key_file)
+    port := s.port
+    lfd := _net_listen(s.host, port)
+    if lfd < 0:
+        ret
+    end
+    until 1 == 1:
+        cfd := _net_accept(lfd)
+        if cfd >= 0:
+            salam_spawn_fn_i64(funcptr(_web_tls_conn_handler), cfd)
+        end
+    end
+end

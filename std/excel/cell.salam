@@ -1,0 +1,237 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package excel
+
+import conv
+
+// Cell values, their kind tag, A1-style reference conversion, and Excel's
+// serial-date encoding. Kinds are plain int constants rather than a `pub
+// enum` - pub enum values cannot cross a package boundary in this compiler,
+// and every one of these needs to reach caller code outside std/excel.
+
+@en "CellEmpty"
+@fa "سلول خالی"
+@ar "خلیة فارغة"
+pub const CellEmpty := 0
+
+@en "CellString"
+@fa "سلول رشته‌ای"
+@ar "خلیة نصیة"
+pub const CellString := 1
+
+@en "CellNumber"
+@fa "سلول عددی"
+@ar "خلیة رقمیة"
+pub const CellNumber := 2
+
+@en "CellBool"
+@fa "سلول منطقی"
+@ar "خلیة منطقیة"
+pub const CellBool := 3
+
+@en "CellDate"
+@fa "سلول تاریخ"
+@ar "خلیة تاریخ"
+pub const CellDate := 4
+
+@en "CellFormula"
+@fa "سلول فرمول"
+@ar "خلیة صیغة"
+pub const CellFormula := 5
+
+@en "CellError"
+@fa "سلول خطا"
+@ar "خلیة خطأ"
+pub const CellError := 6
+
+// A single spreadsheet cell. `row`/`col` are 0-based. Only one of
+// `text`/`num`/`flag` is meaningful at a time, selected by `kind`; `formula`
+// additionally holds the raw formula text (without the leading '=') when
+// `kind == CellFormula`, with `num`/`text` holding the last computed value.
+// `style_id` indexes into the owning Workbook's StyleSheet, or -1 for the
+// default style.
+@en "Cell"
+@fa "سلول"
+@ar "خلیة"
+pub struct Cell:
+    pub row: int = 0
+    pub col: int = 0
+    pub kind: int = 0
+    pub text: str = ""
+    pub num: f64 = 0.0
+    pub flag: bool = false
+    pub formula: str = ""
+    pub style_id: int = -1
+end
+
+// A (row, col) coordinate, used by Sheet.find to report matches without
+// nesting a Vector<Cell> inside another container.
+@en "CellPos"
+@fa "موقعیت سلول"
+@ar "موضع الخلیة"
+pub struct CellPos:
+    pub row: int = 0
+    pub col: int = 0
+end
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+@en "NewStringCell"
+@fa "سلول رشته‌ای جدید"
+@ar "خلیة نصیة جدیدة"
+pub func NewStringCell(row: int, col: int, value: str): Cell:
+    ret Cell { row = row, col = col, kind = CellString, text = value }
+end
+
+@en "NewNumberCell"
+@fa "سلول عددی جدید"
+@ar "خلیة رقمیة جدیدة"
+pub func NewNumberCell(row: int, col: int, value: f64): Cell:
+    ret Cell { row = row, col = col, kind = CellNumber, num = value }
+end
+
+@en "NewBoolCell"
+@fa "سلول منطقی جدید"
+@ar "خلیة منطقیة جدیدة"
+pub func NewBoolCell(row: int, col: int, value: bool): Cell:
+    ret Cell { row = row, col = col, kind = CellBool, flag = value }
+end
+
+@en "NewDateCell"
+@fa "سلول تاریخ جدید"
+@ar "خلیة تاریخ جدیدة"
+pub func NewDateCell(row: int, col: int, epoch: i64): Cell:
+    ret Cell { row = row, col = col, kind = CellDate, num = EpochToSerial(epoch) }
+end
+
+@en "NewFormulaCell"
+@fa "سلول فرمول جدید"
+@ar "خلیة صیغة جدیدة"
+pub func NewFormulaCell(row: int, col: int, formula: str, cached: f64): Cell:
+    ret Cell { row = row, col = col, kind = CellFormula, formula = formula, num = cached }
+end
+
+// -------------------------------------------------------- A1 references
+
+// Converts a 0-based column index to its spreadsheet letters (0 -> "A",
+// 25 -> "Z", 26 -> "AA", ...).
+@en "ColumnLabel"
+@fa "برچسب ستون"
+@ar "تسمیة العمود"
+pub func ColumnLabel(col: int): str:
+    mut n := col + 1
+    mut out := ""
+    until n > 0:
+        n -= 1
+        rem := n % 26
+        out = char_from_code(65 + rem).concat(out)
+        n /= 26
+    end
+    ret out
+end
+
+// Converts spreadsheet column letters ("A", "Z", "AA", ...) back to a
+// 0-based column index. Case-insensitive; returns -1 for an invalid label.
+@en "ColumnIndex"
+@fa "اندیس ستون"
+@ar "فهرس العمود"
+pub func ColumnIndex(label: str): int:
+    up := label.upper()
+    n := up.len()
+    if n == 0: ret -1 end
+    bp := _bp(up)
+    mut idx := 0
+    mut i := 0
+    until i < n:
+        code := _ub(bp, i)
+        if code < 65 || code > 90: ret -1 end
+        idx = idx * 26 + (code - 64)
+        i += 1
+    end
+    ret idx - 1
+end
+
+// Formats a 0-based (row, col) pair as an A1-style reference ("A1", "C10").
+@en "CellRef"
+@fa "ارجاع سلول"
+@ar "مرجع الخلیة"
+pub func CellRef(row: int, col: int): str:
+    ret ColumnLabel(col).concat(conv.FormatInt((row + 1) as i64))
+end
+
+// Parses an A1-style reference back into 0-based row/col. Returns false
+// (leaving row_out/col_out untouched) if `ref` is not a valid reference.
+@en "ParseCellRef"
+@fa "تجزیه ارجاع سلول"
+@ar "تحلیل مرجع الخلیة"
+pub func ParseCellRef(ref: str, row_out &: int, col_out &: int): bool:
+    n := ref.len()
+    if n == 0: ret false end
+    bp := _bp(ref)
+    mut i := 0
+    until i < n:
+        code := _ub(bp, i)
+        mut is_alpha := false
+        if code >= 65 && code <= 90: is_alpha = true
+        else code >= 97 && code <= 122: is_alpha = true
+        end
+        if !is_alpha: break end
+        i += 1
+    end
+    if i == 0 || i >= n: ret false end
+    col := ColumnIndex(ref.substr(0, i))
+    if col < 0: ret false end
+    rowpart := ref.substr(i, n - i)
+    rp := _bp(rowpart)
+    mut j := 0
+    until j < rowpart.len():
+        c := _ub(rp, j)
+        if c < 48 || c > 57: ret false end
+        j += 1
+    end
+    row1 := conv.ParseInt(rowpart) as int
+    if row1 <= 0: ret false end
+    row_out = row1 - 1
+    col_out = col
+    ret true
+end
+
+// ------------------------------------------------------ Excel serial dates
+
+// Excel (and ODF) store dates as a day count from a fixed epoch, with the
+// fractional part encoding time-of-day. This uses the common "1900 date
+// system" Excel defaults to (serial 1 = 1900-01-01), under which
+// 1970-01-01 (the Unix epoch) is serial 25569 - it does not special-case
+// the historical Lotus 1-2-3 leap-year bug for Feb 1900, which only
+// matters for dates before 1900-03-01.
+@en "EpochToSerial"
+@fa "تبدیل زمان به سریال"
+@ar "تحویل الوقت إلى مسلسل"
+pub func EpochToSerial(epoch: i64): f64:
+    ret (epoch as f64) / 86400.0 + 25569.0
+end
+
+@en "SerialToEpoch"
+@fa "تبدیل سریال به زمان"
+@ar "تحویل المسلسل إلى وقت"
+pub func SerialToEpoch(serial: f64): i64:
+    ret ((serial - 25569.0) * 86400.0) as i64
+end

@@ -1,0 +1,135 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package excel
+
+import encoding.csv
+import os
+import str
+
+// Sheet <-> CSV, built on std/encoding/csv's quote-aware line codec. Cell
+// values round-trip as their display text only (SheetToCSV/CSVToSheet, and
+// the workbook-level Read/WriteCSVWorkbook this powers, always produce or
+// consume plain strings) - CSV has no concept of a cell type, so numbers,
+// booleans and dates all become and come back as text, and a workbook read
+// from CSV is always a single sheet named "Sheet1".
+
+// Splits `s` on '\n' by hand rather than via str.Split/`.split()`: that
+// builtin was found (while building this package) to corrupt the last
+// element of any 2+-element split result under the native (compiled, not
+// `salam exec`) backend - reproduced with a two-line, no-dependencies
+// repro unrelated to this package, so it looks like a compiler/runtime
+// bug rather than anything specific to CSV text. Filed as a known issue;
+// this local implementation sidesteps it rather than blocking on a fix.
+func _split_lines(s: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    n := s.len()
+    mut start := 0
+    mut idx := str.IndexFrom(s, "\n", 0)
+    until idx >= 0:
+        out.push(s.substr(start, idx - start))
+        start = idx + 1
+        idx = str.IndexFrom(s, "\n", start)
+    end
+    out.push(s.substr(start, n - start))
+    ret out
+end
+
+@en "SheetToCSV"
+@fa "برگه به سی‌اس‌وی"
+@ar "ورقة إلى سی إس فی"
+pub func SheetToCSV(sheet: Sheet): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    nr := sheet.row_count()
+    nc := sheet.col_count()
+    mut r := 0
+    until r < nr:
+        mut fields := Vector {} as Vector<str>
+        mut c := 0
+        until c < nc:
+            fields.push(sheet.get_string(r, c))
+            c += 1
+        end
+        str.BufAppend(sb, csv.WriteLine(fields))
+        fields.free()
+        if r < nr - 1: str.BufAppend(sb, "\n") end
+        r += 1
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+@en "CSVToSheet"
+@fa "سی‌اس‌وی به برگه"
+@ar "سی إس فی إلى ورقة"
+pub func CSVToSheet(text: str, sheet_name: str): Sheet:
+    mut sh := NewSheet(sheet_name)
+    normalized := str.Replace(text, "\r\n", "\n")
+    lines := _split_lines(normalized)
+    defer lines.free()
+    mut r := 0
+    until r < lines.len():
+        line := lines.get(r)[0]
+        skip := r == lines.len() - 1 && line.len() == 0
+        if !skip:
+            fields := csv.ReadLine(line)
+            mut c := 0
+            until c < fields.len():
+                sh.set_string(r, c, fields.get(c)[0])
+                c += 1
+            end
+            fields.free()
+        end
+        r += 1
+    end
+    ret sh
+end
+
+// Reads `path` as CSV into a single-sheet workbook ("Sheet1"). `ok` is
+// false (and `err` set) if the file cannot be read.
+@en "ReadCSVWorkbook"
+@fa "خواندن کتاب کار سی‌اس‌وی"
+@ar "قراءة مصنف سی إس فی"
+pub func ReadCSVWorkbook(path: str, ok &: bool, err &: str): Workbook:
+    ok = false
+    err = ""
+    if !os.Exists(path):
+        err = "cannot open file: ".concat(path)
+        ret NewWorkbook()
+    end
+    text := os.ReadFile(path)
+    mut book := NewWorkbook()
+    sh := CSVToSheet(text, "Sheet1")
+    book.sheets.push(sh)
+    book.format = FormatCSV
+    book.source_path = path
+    ok = true
+    ret book
+end
+
+// Writes `book`'s active sheet (index 0 if unset/out of range) to `path`
+// as CSV. Returns false if the workbook has no sheets or the file could
+// not be written.
+@en "WriteCSVWorkbook"
+@fa "نوشتن کتاب کار سی‌اس‌وی"
+@ar "كتابة مصنف سی إس فی"
+pub func WriteCSVWorkbook(book &: Workbook, path: str): bool:
+    if book.sheets.len() == 0: ret false end
+    mut idx := book.active_sheet
+    if idx < 0 || idx >= book.sheets.len(): idx = 0 end
+    sh := book.sheets.get(idx)[0]
+    text := SheetToCSV(sh)
+    ret os.WriteFile(path, text) >= 0
+end

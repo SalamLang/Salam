@@ -5,12 +5,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh | sh -s -- --dir .
 #
-# Env overrides:
-#   SALAM_INSTALL_DIR   directory to place the `salam` binary in (default: $HOME/.salam/bin)
-#   SALAM_VERSION       version to install, e.g. "0.2.7" (default: latest on main)
-#
-# Written in POSIX sh on purpose: this must run unmodified under dash (Debian/Ubuntu
-# /bin/sh), ash (Alpine/BusyBox), and bash/zsh (macOS, BSD), so no bashisms/[[ ]]/arrays.
+
 set -eu
 
 REPO="SalamLang/Salam"
@@ -73,7 +68,6 @@ fetch_to_file() {
     fi
 }
 
-# --- detect OS ---------------------------------------------------------
 os="$(uname -s)"
 case "$os" in
 Linux)
@@ -94,7 +88,6 @@ MINGW* | MSYS* | CYGWIN*)
     ;;
 esac
 
-# --- detect arch (Linux only; macOS ships a single 'mac' asset) --------
 arch="$(uname -m)"
 platform=""
 if [ "$kernel" = "mac" ]; then
@@ -119,11 +112,6 @@ else
     esac
 fi
 
-# --- resolve version and download -----------------------------------------
-# A GitHub "latest" release can exist with zero assets (a build-matrix
-# failure still lets the release-notes step succeed), so rather than trust
-# main's VERSION file or the /releases/latest alias blindly, walk releases
-# newest-first and use the first one that actually publishes our asset.
 workdir="$(mktemp -d 2>/dev/null || mktemp -d -t salam)"
 trap 'rm -rf "$workdir"' EXIT INT TERM
 archive="$workdir/download.zip"
@@ -179,7 +167,6 @@ binary="$extract_dir/salam-${platform}/salam"
 [ -f "$binary" ] || binary="$(find "$extract_dir" -type f -name salam | head -n 1)"
 [ -f "$binary" ] || die "could not find 'salam' binary inside $ASSET"
 
-# --- install ---------------------------------------------------------------
 if [ -z "$INSTALL_DIR" ]; then
     INSTALL_DIR="$HOME/.salam/bin"
 fi
@@ -190,9 +177,6 @@ chmod +x "$INSTALL_DIR/salam"
 log "Installed: $INSTALL_DIR/salam"
 "$INSTALL_DIR/salam" version >&2 2>/dev/null || true
 
-# Only touch PATH/rc files for the default, non-CI install location; a
-# caller-specified --dir (e.g. a build pipeline dropping ./salam next to a
-# script that expects it there) means "just put it here", not "onto PATH".
 if [ "$INSTALL_DIR" = "$HOME/.salam/bin" ]; then
     case ":$PATH:" in
     *":$INSTALL_DIR:"*) ;;

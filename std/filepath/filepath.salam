@@ -17,12 +17,50 @@
 @ar "مسار الملف"
 package filepath
 
+import mem
 import str
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func GetCurrentDirectoryA(sz: int, buf: void*): int
+    end
+else:
+    extern:
+        func getcwd(buf: void*, sz: int): void*
+    end
+end
 
 @en "Separator"
 @fa "جداکننده"
 @ar "فاصل"
 pub const Separator := "/"
+
+func _fp_cwd(): str:
+    buf := mem.Allocate(2048 as u64)
+    mut s := ""
+    if SALAM_OS_WINDOWS:
+        n := GetCurrentDirectoryA(2048, buf)
+        if n > 0 && n < 2048: s = str.Clone(buf as str) end
+    else:
+        r := getcwd(buf, 2048)
+        if r != null: s = str.Clone(r as str) end
+    end
+    mem.Free(buf)
+    ret s
+end
+
+func _fp_segments(p: str): Vector<str>:
+    parts := p.split("/")
+    defer parts.free()
+    out := Vector {} as Vector<str>
+    repeat parts.len() with i:
+        seg := parts.get(i)[0]
+        if seg.len() > 0:
+            out.push(seg)
+        end
+    end
+    ret out
+end
 
 @en "Normalize"
 @fa "نرمال سازی"
@@ -144,4 +182,62 @@ pub func Clean(p: str): str:
     if abs: ret "/".concat(out) end
     if out.len() == 0: ret "." end
     ret out
+end
+
+@en "Abs"
+@fa "مسیر مطلق"
+@ar "مسار مطلق"
+pub func Abs(p: str): str:
+    if IsAbs(p): ret Clean(p) end
+    cwd := _fp_cwd()
+    ret Clean(Join(cwd, p))
+end
+
+@en "Rel"
+@fa "مسیر نسبی"
+@ar "مسار نسبی"
+pub func Rel(base: str, target: str): str:
+    ab := Abs(base)
+    at := Abs(target)
+    bs := _fp_segments(ab)
+    defer bs.free()
+    ts := _fp_segments(at)
+    defer ts.free()
+    mut common := 0
+    until common < bs.len() && common < ts.len() && bs.get(common)[0] == ts.get(common)[0]:
+        common += 1
+    end
+    out := Vector {} as Vector<str>
+    defer out.free()
+    mut up := common
+    until up < bs.len():
+        out.push("..")
+        up += 1
+    end
+    mut i := common
+    until i < ts.len():
+        out.push(ts.get(i)[0])
+        i += 1
+    end
+    if out.len() == 0: ret "." end
+    ret str.Join(out, "/")
+end
+
+@en "Validate"
+@fa "اعتبارسنجی مسیر"
+@ar "التحقق من المسار"
+pub func Validate(p: str): bool:
+    ret p.len() > 0
+end
+
+@en "IsSafe"
+@fa "مسیر امن است"
+@ar "هل المسار آمن"
+pub func IsSafe(base: str, p: str): bool:
+    if Validate(p) == false: ret false end
+    b := Clean(Abs(base))
+    full := Clean(Join(b, p))
+    if full == b: ret true end
+    prefix := b.concat("/")
+    ret str.StartsWith(full, prefix)
 end

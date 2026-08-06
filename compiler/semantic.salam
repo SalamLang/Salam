@@ -3901,12 +3901,39 @@ func sema_check_pass(s &: Sema, a &: at.Ast, program: int):
         end
         lint_lang_types(s, a, did)
     end
+    // A top-level `const NAME := <expr>` (no type annotation) leaves its
+    // symbol's type TYPE_NONE after sema_collect(); sema_check_var_decl()
+    // (inside check_toplevel) is what fills it in. Package files are merged
+    // in sorted-filename order, not declaration order, so a function body in
+    // an alphabetically earlier sibling file can be checked before the file
+    // that declares a const it references. Resolving every top-level
+    // const/var here first - ahead of any function body, struct default, or
+    // impl - makes that reference order-independent: identifier lookup
+    // always sees the real type instead of a still-unresolved placeholder
+    // (which reads as an error type with no diagnostic, silently poisoning
+    // the expression and surfacing only as a nonsense generated-C error such
+    // as "unknown type name '_3cerror_3e'").
+    mut ic := 0
+    until ic < at.ChildCount(a, program):
+        didc := at.Child(a, program, ic)
+        ic += 1
+        dc := at.Get(a, didc)
+        if dc.synthetic || dc.typarams.len() > 0:
+            continue
+        end
+        if dc.kind == at.AST_CONST_DECL || dc.kind == at.AST_VAR_DECL:
+            check_toplevel(s, a, didc)
+        end
+    end
     mut i2 := 0
     until i2 < at.ChildCount(a, program):
         did2 := at.Child(a, program, i2)
         i2 += 1
         d2 := at.Get(a, did2)
         if d2.synthetic || d2.typarams.len() > 0:
+            continue
+        end
+        if d2.kind == at.AST_CONST_DECL || d2.kind == at.AST_VAR_DECL:
             continue
         end
         check_toplevel(s, a, did2)
@@ -6767,10 +6794,25 @@ func schema_list_files(dir: str): Vector<str>:
 end
 
 // layout_schema_init
+//
+// An empty `root` falls back to the resolved stdlib root rather than
+// straight to the cwd-relative "std/layout". The C reaches the same place
+// from the other side - driver.c:686 only ever calls this as
+// layout_schema_init(salam_get_stdlib_root()) - but several callers here
+// hand over opt.stdlib_path, which is "" unless --stdlib was passed. That
+// left base as a bare relative "std/layout", so every layout check silently
+// no-op'd (empty schema tables => nothing to validate against => exit 0, no
+// diagnostic) whenever salam ran from any directory that is not the repo
+// root. Resolving here fixes all call sites at once; when nothing resolves,
+// get_stdlib_root() returns "" and the old relative base still applies.
 func layout_schema_init(root: str):
+    mut eff := root
+    if str.Len(eff) == 0:
+        eff = get_stdlib_root()
+    end
     mut base := "std/layout"
-    if str.Len(root) > 0:
-        base = root + "/std/layout"
+    if str.Len(eff) > 0:
+        base = eff + "/std/layout"
     end
     mut ef := schema_list_files(base + "/elements")
     defer ef.free()
@@ -10268,6 +10310,20 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
     if ckind == at.AST_IDENTIFIER:
         mut nm := at.Get(a, callee).name
         if str.Equals(nm, "print") || str.Equals(nm, "println") || str.Equals(nm, "printerr") || str.Equals(nm, "printerrln"):
+            repeat argtypes.len() with pi:
+                tid := argtypes.get(pi)[0]
+                if tid >= 0:
+                    pk := ty_at(s, tid).kind
+                    if pk == TY_ARRAY || pk == TY_STRUCT || pk == TY_MAP || pk == TY_MAP_ITER || pk == TY_VEC || pk == TY_FILE || pk == TY_FUNC || pk == TY_SLICE || pk == TY_VARIANT:
+                        serr(
+                            s, 2, sp, co.Format1(
+                                i18.Tr("cannot print value of type '%s' directly - print its elements or fields instead"),
+                                co.ArgStr(type_to_string(s, tid))
+                            )
+                        )
+                    end
+                end
+            end
             _d9 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
             ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
         end

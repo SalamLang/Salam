@@ -1,0 +1,130 @@
+package csv
+
+import encoding.value
+import str
+import conv
+
+// multirow - additive multi-row CSV support (existing ReadLine/WriteLine
+// are unchanged, single-line only). Vector<Vector<str>> is a known-broken
+// nested-generic pattern in this compiler, so rows are wrapped in a named
+// CSVRow struct instead - Vector<CSVRow> is just one level of generic.
+
+pub struct CSVRow:
+    pub fields: Vector<str> = Vector {}
+end
+
+// CSVTable wraps Vector<CSVRow> - a public function taking a parameter AND
+// spelling out Vector<CSVRow> directly as a param/return type fails to
+// compile when called cross-package (the same landmine documented in
+// encoding.query's QueryMap; see that file's header comment for the full
+// isolated-repro writeup). Every public function here takes/returns
+// CSVTable, never the raw Vector<CSVRow>.
+pub struct CSVTable:
+    pub rows: Vector<CSVRow> = Vector {}
+end
+
+pub struct CSVOptions:
+    pub header: bool = true
+end
+
+func _split_lines(text: str): Vector<str>:
+    ret str.Split(str.Replace(text, "\r\n", "\n"), "\n")
+end
+
+func _index_key(i: int): str:
+    ret "col".concat(conv.FormatInt(i as i64))
+end
+
+pub func ReadAll(text: str): CSVTable:
+    mut out := CSVTable {}
+    lines := _split_lines(text)
+    mut i := 0
+    until i < lines.len():
+        line := lines.get(i)[0]
+        i += 1
+        if line.len() == 0: continue end
+        mut row := CSVRow {}
+        row.fields = ReadLine(line)
+        out.rows.push(row)
+    end
+    ret out
+end
+
+pub func WriteAll(table: CSVTable): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < table.rows.len():
+        if i > 0: str.BufAppend(sb, "\r\n") end
+        str.BufAppend(sb, WriteLine(table.rows.get(i)[0].fields))
+        i += 1
+    end
+    ret str.BufStr(sb)
+end
+
+// Header row <-> array-of-objects convention: row 0 is field names, each
+// subsequent row becomes an object keyed by those names. All cell values
+// decode as strings (CSV has no native typing) - callers needing int/float
+// coerce downstream via value.AsInt/AsFloat.
+pub func ToValueWith(text: str, opts: CSVOptions): value.Value:
+    table := ReadAll(text)
+    mut out := value.NewValueArray()
+    if table.rows.len() == 0: ret out end
+    mut headerIdx := 0
+    mut header := Vector {} as Vector<str>
+    if opts.header:
+        header = table.rows.get(0)[0].fields
+        headerIdx = 1
+    end
+    mut i := headerIdx
+    until i < table.rows.len():
+        row := table.rows.get(i)[0].fields
+        mut obj := value.NewValueObject()
+        mut j := 0
+        until j < row.len():
+            mut key := _index_key(j)
+            if opts.header && j < header.len(): key = header.get(j)[0] end
+            value.ObjectSet(obj, key, value.ValueString(row.get(j)[0]))
+            j += 1
+        end
+        value.ArrayPush(out, obj)
+        i += 1
+    end
+    ret out
+end
+
+pub func ToValue(text: str): value.Value:
+    ret ToValueWith(text, CSVOptions {})
+end
+
+pub func FromValueWith(v: value.Value, opts: CSVOptions): str:
+    mut table := CSVTable {}
+    n := value.ArrayLen(v)
+    if n == 0: ret "" end
+    first := value.ArrayGet(v, 0)
+    header := value.ObjectKeys(first)
+    if opts.header:
+        mut headerRow := CSVRow {}
+        headerRow.fields = header
+        table.rows.push(headerRow)
+    end
+    mut i := 0
+    until i < n:
+        item := value.ArrayGet(v, i)
+        mut fields := Vector {} as Vector<str>
+        mut j := 0
+        until j < header.len():
+            fields.push(value.AsString(value.ObjectGet(item, header.get(j)[0])))
+            j += 1
+        end
+        mut r := CSVRow {}
+        r.fields = fields
+        table.rows.push(r)
+        i += 1
+    end
+    ret WriteAll(table)
+end
+
+pub func FromValue(v: value.Value): str:
+    ret FromValueWith(v, CSVOptions {})
+end

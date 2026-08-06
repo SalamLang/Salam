@@ -1,0 +1,150 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+// LZW (Lempel-Ziv-Welch), in the classic variable-width-code form used by
+// GIF/TIFF: codes start at 9 bits (256 single-byte entries already taken)
+// and widen to 10, 11, then 12 bits as the dictionary grows past each
+// threshold. Unlike GIF, there is no CLEAR code: once the dictionary fills
+// its 4096-entry table, it simply stops growing and coding continues with
+// the entries already learned - simpler to implement correctly, at some
+// cost in ratio on inputs long enough to want a fresh dictionary.
+//
+// The dictionary is keyed by (prefix code, next byte) rather than by byte
+// string, so it works uniformly on arbitrary binary (no embedded-NUL
+// concerns): key = prefix*256 + byte, which always fits an `int` because
+// prefix stays below 4096.
+//
+// Format: [4 bytes n][bitstream of codes, 9..12 bits each]
+
+const _LZW_MAX_CODE := 4096
+
+@en "LZWCompress"
+@fa "فشرده سازی ال زد دبلیو"
+@ar "ضغط إل زد دبليو"
+pub func LZWCompress(p: void*, n: int): ByteBuf:
+    mut out := NewByteBuf()
+    BufPushU32(out, n)
+    if n == 0: ret out end
+
+    mut dict := HashMap {} as HashMap<int, int>
+    defer dict.free()
+    mut next_code := 256
+    mut code_width := 9
+
+    mut w := NewBitWriter()
+    bp := p as u8*
+    mut wcode := bp[0] as int
+    mut i := 1
+    until i < n:
+        c := bp[i] as int
+        key := wcode * 256 + c
+        if dict.has(key):
+            wcode = dict.get(key)
+        else:
+            BitWriteBits(w, wcode, code_width)
+            if next_code < _LZW_MAX_CODE:
+                dict.put(key, next_code)
+                next_code += 1
+                if next_code > (1 << code_width) - 1 && code_width < 12:
+                    code_width += 1
+                end
+            end
+            wcode = c
+        end
+        i += 1
+    end
+    BitWriteBits(w, wcode, code_width)
+    BitFlush(w)
+    BufPushBuf(out, w.buf)
+    BitWriterFree(w)
+    ret out
+end
+
+@en "LZWDecompress"
+@fa "کدگشایی ال زد دبلیو"
+@ar "فك ضغط إل زد دبليو"
+pub func LZWDecompress(p: void*, n: int): ByteBuf:
+    mut r := NewByteReader(p, n)
+    origLen := RdU32(r)
+    mut out := NewByteBufCap(origLen)
+    if origLen == 0: ret out end
+
+    remaining := RdLeft(r)
+    mut br := NewBitReader(((r.data as i64) + (r.pos as i64)) as void*, remaining)
+
+    mut prefix_of: int[4096]
+    mut byte_of: int[4096]
+    repeat 4096 with k:
+        prefix_of[k] = -1
+        byte_of[k] = 0
+    end
+    repeat 256 with k:
+        byte_of[k] = k
+    end
+
+    mut next_code := 256
+    mut code_width := 9
+
+    mut prev := BitReadBits(br, code_width)
+    BufPush(out, byte_of[prev])
+
+    until BufLen(out) < origLen:
+        code := BitReadBits(br, code_width)
+        mut resolved := code
+        if code >= next_code:
+            resolved = prev
+        end
+
+        mut stack: int[4096]
+        mut top := 0
+        mut cur := resolved
+        until cur >= 0:
+            stack[top] = byte_of[cur]
+            top += 1
+            cur = prefix_of[cur]
+        end
+        firstbyte := stack[top - 1]
+        until top > 0:
+            top -= 1
+            BufPush(out, stack[top])
+        end
+        if code >= next_code:
+            BufPush(out, firstbyte)
+        end
+
+        if next_code < 4096:
+            prefix_of[next_code] = prev
+            byte_of[next_code] = firstbyte
+            next_code += 1
+            // The decoder can only build dictionary entry E once it has
+            // decoded the code whose first byte completes E - one code
+            // later than the encoder, which had both halves in hand
+            // immediately. So the decoder's dictionary is always exactly
+            // one entry behind the encoder's at "the same" code index,
+            // and a naive `next_code > max-for-width` check widens one
+            // code too late here. `>=` (equivalently: check as if the
+            // pending entry already existed) corrects for that lag and
+            // keeps both sides reading/writing the same number of bits
+            // for every code - verified against the encoder's own
+            // (unshifted) `>` check in lzw.salam's LZWCompress.
+            if next_code >= (1 << code_width) - 1 && code_width < 12:
+                code_width += 1
+            end
+        end
+        prev = code
+    end
+    ret out
+end

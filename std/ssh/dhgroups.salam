@@ -1,0 +1,146 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import crypto
+
+// Classic (finite-field) Diffie-Hellman key exchange - "diffie-hellman-
+// group14-sha256" and "-sha1". This is the fallback KEX for servers that
+// predate curve25519-sha256 (RFC 3526 group 14 has been in OpenSSH since
+// 3.9, 2004), which is why it is worth the extra bigint machinery even
+// though curve25519 (x25519.salam) is always preferred when offered.
+//
+// Group 14 is RFC 3526's 2048-bit MODP group with generator 2. The prime
+// below was fetched from the RFC text and independently verified (locally,
+// outside this package) to be both prime and a safe prime - (p-1)/2 is
+// also prime - which is exactly the structure RFC 3526 group 14 requires;
+// see dhgroups.salam's git history/PR description for the verification
+// transcript rather than re-deriving it by eye from 512 hex digits.
+
+const _DH14_P_HEX := "ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804f1746c08ca18217c32905e462e36ce3be39e772c180e86039b2783a2ec07a28fb5c55df06f4c52c9de2bcbf6955817183995497cea956ae515d2261898fa051015728e5a8aacaa68ffffffffffffffff"
+
+struct DH14KeyPair:
+    pub secret: Buf = Buf {}
+    pub public: Buf = Buf {}
+end
+
+func _dh14_prime(): Big:
+    h := _hexbuf(_DH14_P_HEX)
+    p := _big_from_bytes(h.p, h.len)
+    FreeBuf(h)
+    ret p
+end
+
+// order = p-1, used only as the modulus for exponent blinding (dhgroups'
+// own secret exponent, via bigint.salam's _big_modexp_blinded_dh) - never
+// as a modexp modulus itself.
+func _dh14_order(p: Big): Big:
+    mut one := _big_new(1)
+    _big_set_u32(one, 1 as u32)
+    mut order := _big_new(p.n + 1)
+    _ok := _big_sub(order, p, one)
+    _big_free(one)
+    ret order
+end
+
+// Generate a fresh ephemeral keypair: a random private exponent x (full
+// group width, so it carries as much entropy as the group allows) and the
+// public value e = g^x mod p, g = 2.
+func _dh14_generate(): DH14KeyPair:
+    mut p := _dh14_prime()
+    mut order := _dh14_order(p)
+
+    mut xbytes := NewBuf(256)
+    BufPutZeros(xbytes, 256)
+    crypto.RandomBytes(xbytes.p, 256)
+    // Keep x in [2, p-2]: clear the top bit so x < p unconditionally (p's
+    // own top bit is set, so this alone guarantees x < p) and force the
+    // bottom bit on so x is never degenerately small/even in a way that
+    // would matter - x only needs to avoid the trivial 0/1 edge cases.
+    _bput(xbytes.p, 0, _bget(xbytes.p, 0) & 0x7F)
+    _bput(xbytes.p, 255, _bget(xbytes.p, 255) | 0x01)
+    mut x := _big_from_bytes(xbytes.p, 256)
+
+    mut g := _big_new(1)
+    _big_set_u32(g, 2 as u32)
+
+    mut rndmask := NewBuf(32)
+    BufPutZeros(rndmask, 32)
+    crypto.RandomBytes(rndmask.p, 32)
+
+    mut e := _big_new(p.n + 1)
+    _ok := _big_modexp_blinded_dh(e, g, x, order, p, rndmask.p, rndmask.len)
+
+    mut kp := DH14KeyPair {}
+    kp.secret = xbytes
+    kp.public = NewBuf(_big_bytelen(e))
+    BufPutZeros(kp.public, _big_bytelen(e))
+    _tobytes_ok := _big_to_bytes(e, kp.public.p, kp.public.len)
+
+    _big_free(p)
+    _big_free(order)
+    _big_free(x)
+    _big_free(g)
+    FreeBuf(rndmask)
+    _big_free(e)
+    ret kp
+end
+
+// K = peer_public^secret mod p - the raw shared-secret magnitude, ready to
+// be mpint-encoded into the exchange hash and the key-derivation input
+// (kdf.salam). `ok` is false if the peer's public value is degenerate
+// (0, 1, or p-1 - the classic small-subgroup values that would make K
+// predictable regardless of either side's secret exponent); RFC 4253 does
+// not mandate this check but every serious implementation performs it.
+func _dh14_shared(secret_x: Buf, peer_public: Buf): Buf:
+    mut p := _dh14_prime()
+    mut order := _dh14_order(p)
+    mut x := _big_from_bytes(secret_x.p, secret_x.len)
+    mut f := _big_from_bytes(peer_public.p, peer_public.len)
+
+    // Reject the classic small-subgroup values: f must be in [2, p-2].
+    mut two := _big_new(1)
+    _big_set_u32(two, 2 as u32)
+    mut pm1 := _big_new(p.n + 1)
+    mut one := _big_new(1)
+    _big_set_u32(one, 1 as u32)
+    _ok1 := _big_sub(pm1, p, one)
+    bad := _big_cmp(f, two) < 0 || _big_cmp(f, pm1) >= 0
+    _big_free(two)
+    _big_free(pm1)
+    _big_free(one)
+
+    mut rndmask := NewBuf(32)
+    BufPutZeros(rndmask, 32)
+    crypto.RandomBytes(rndmask.p, 32)
+
+    mut k := _big_new(p.n + 1)
+    mut out := NewBuf(1)
+    if !bad:
+        _ok2 := _big_modexp_blinded_dh(k, f, x, order, p, rndmask.p, rndmask.len)
+        FreeBuf(out)
+        out = NewBuf(_big_bytelen(k))
+        BufPutZeros(out, _big_bytelen(k))
+        _tobytes_ok := _big_to_bytes(k, out.p, out.len)
+    end
+
+    _big_free(p)
+    _big_free(order)
+    _big_free(x)
+    _big_free(f)
+    FreeBuf(rndmask)
+    _big_free(k)
+    ret out
+end

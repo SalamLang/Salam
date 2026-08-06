@@ -61,8 +61,14 @@ int cli_dispatch_command(int argc, char **argv, options_t *out)
     } else if (strcmp(cmd, "version") == 0) {
         out->command = CMD_VERSION;
         start = 2;
+    } else if (strcmp(cmd, "inspect") == 0) {
+        out->command = CMD_INSPECT;
+        start = 2;
     } else if (strcmp(cmd, "web") == 0) {
         out->command = CMD_WEB;
+        start = 2;
+    } else if (strcmp(cmd, "serve") == 0) {
+        out->command = CMD_SERVE;
         start = 2;
     } else if (strcmp(cmd, "layout") == 0) {
         if (argc > 2 && strcmp(argv[2], "build") == 0) {
@@ -83,6 +89,8 @@ int cli_dispatch_command(int argc, char **argv, options_t *out)
             out->command = CMD_REPL;
             start = 2;
         }
+    } else {
+        out->command = CMD_UNKNOWN;
     }
 
     return start;

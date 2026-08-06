@@ -1,0 +1,215 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import str
+
+// Self-tests for bytes.salam's Buf/Reader wire primitives. These are the
+// lowest layer of the whole package - every other selftest module and the
+// live E2E path depends on BufPut*/RGet* being correct - so this file
+// specifically targets the failure modes already caught once in this
+// package's history (see the memory note salam_ssh_pkg_bugs_and_landmines):
+// the _buf_grow capacity-doubling loop, which silently produced a
+// zero-length "grown" buffer when inverted, and the mpint leading-zero
+// strip loop, which is a second, independent `until` condition of the
+// same shape a few lines away.
+
+func _selftest_bytes():
+    // ---------------------------------------------------------- Buf growth
+    // NewBuf always rounds a small request up to a 32-byte floor.
+    mut b_small := NewBuf(1)
+    _ck(b_small.cap >= 32, "buf: NewBuf floors capacity at 32 bytes")
+    _ck(b_small.len == 0, "buf: NewBuf starts empty")
+    FreeBuf(b_small)
+
+    // Push far more than the initial floor one byte at a time so
+    // _buf_grow's doubling loop has to run several times, not just once -
+    // this is exactly the code path that was silently broken (loop body
+    // never ran, .len stayed 0) before the fix.
+    mut grown := NewBuf(4)
+    mut i := 0
+    until i < 300:
+        BufPutByte(grown, i & 0xFF)
+        i += 1
+    end
+    _ck(grown.len == 300, "buf: 300 single-byte appends land at len 300")
+    _ck(grown.cap >= 300, "buf: capacity grew to cover 300 bytes")
+    mut grow_ok := true
+    mut j := 0
+    until j < 300:
+        if _bget(grown.p, j) != (j & 0xFF):
+            grow_ok = false
+        end
+        j += 1
+    end
+    _ck(grow_ok, "buf: every byte written during growth reads back correctly")
+    FreeBuf(grown)
+
+    // A single BufPutBytes call that itself demands more than one doubling.
+    mut src := NewBuf(500)
+    repeat 500 with k:
+        BufPutByte(src, (k * 7) & 0xFF)
+    end
+    mut bulk := NewBuf(1)
+    BufPutBytes(bulk, src.p, src.len)
+    _ck(bulk.len == 500, "buf: single bulk append past many doublings lands at correct len")
+    _ckhex(_hex_of(bulk.p, 500), _hex_of(src.p, 500), "buf: bulk-appended bytes match source exactly")
+    FreeBuf(src)
+    FreeBuf(bulk)
+
+    // ------------------------------------------------------------ scalars
+    mut u32b := NewBuf(4)
+    BufPutUint32(u32b, 0x01020304 as u32)
+    _ckhex(_hex_of(u32b.p, 4), "01020304", "buf: BufPutUint32 is big-endian")
+    mut ru32 := NewReader(u32b.p, u32b.len)
+    got32 := RGetUint32(ru32)
+    _ck(got32 == (0x01020304 as u32), "reader: RGetUint32 round-trips BufPutUint32")
+    FreeBuf(u32b)
+
+    mut u64b := NewBuf(8)
+    BufPutUint64(u64b, 0x0102030405060708 as u64)
+    _ckhex(_hex_of(u64b.p, 8), "0102030405060708", "buf: BufPutUint64 is big-endian")
+    mut ru64 := NewReader(u64b.p, u64b.len)
+    got64 := RGetUint64(ru64)
+    _ck(got64 == (0x0102030405060708 as u64), "reader: RGetUint64 round-trips BufPutUint64")
+    FreeBuf(u64b)
+
+    mut boolb := NewBuf(2)
+    BufPutBool(boolb, true)
+    BufPutBool(boolb, false)
+    _ckhex(_hex_of(boolb.p, 2), "0100", "buf: BufPutBool encodes true=1 false=0")
+    mut rbool := NewReader(boolb.p, boolb.len)
+    _ck(RGetBool(rbool) == true, "reader: RGetBool decodes true")
+    _ck(RGetBool(rbool) == false, "reader: RGetBool decodes false")
+    FreeBuf(boolb)
+
+    // ------------------------------------------------------------ strings
+    mut sb := NewBuf(16)
+    BufPutStringStr(sb, "ssh-rsa")
+    _ck(sb.len == 4 + 7, "buf: BufPutStringStr is 4-byte length prefix + bytes")
+    mut rs := NewReader(sb.p, sb.len)
+    name := RGetStringAsStr(rs)
+    _ck(str.Equals(name, "ssh-rsa"), "reader: RGetStringAsStr round-trips BufPutStringStr")
+    FreeBuf(sb)
+
+    // Binary-safe path: a string field containing an embedded 0x00, which
+    // would truncate if it were ever routed through a Salam `str`.
+    mut binsrc := NewBuf(5)
+    BufPutByte(binsrc, 0xAA)
+    BufPutByte(binsrc, 0x00)
+    BufPutByte(binsrc, 0xBB)
+    BufPutByte(binsrc, 0x00)
+    BufPutByte(binsrc, 0xCC)
+    mut binb := NewBuf(16)
+    BufPutString(binb, binsrc.p, binsrc.len)
+    mut rbin := NewReader(binb.p, binb.len)
+    binview := RGetStringView(rbin)
+    _ck(binview.len == 5, "reader: RGetStringView preserves embedded-NUL length")
+    _ckhex(_hex_of(binview.p, 5), "aa00bb00cc", "reader: RGetStringView bytes survive embedded 0x00 untouched")
+    FreeBuf(binsrc)
+    FreeBuf(binb)
+
+    mut copysrc := NewBuf(16)
+    BufPutStringStr(copysrc, "copy-me")
+    mut rcopy := NewReader(copysrc.p, copysrc.len)
+    mut copied := RGetStringCopy(rcopy)
+    _ck(copied.len == 7, "reader: RGetStringCopy has the right length")
+    _ckhex(_hex_of(copied.p, 7), _hex_of(("copy-me" as void*), 7), "reader: RGetStringCopy content matches original")
+    FreeBuf(copysrc)
+    FreeBuf(copied)
+
+    // -------------------------------------------------------------- mpint
+    // Zero magnitude encodes as an empty string (length 0, no bytes).
+    // Built via _hexbuf, not a "\x00..." string literal: a Salam string is
+    // C-style/NUL-terminated even at the source-literal level, so multiple
+    // embedded 0x00 escapes in one literal are not reliable raw-byte
+    // fixtures (see bytes.salam's own header on why this package never
+    // carries binary data through `str`) - _hexbuf is this package's own
+    // safe way to build an exact byte sequence for a test.
+    mut mp0src := _hexbuf("000000")
+    mut mp0 := NewBuf(8)
+    BufPutMpintBytes(mp0, mp0src.p, mp0src.len)
+    _ckhex(_hex_of(mp0.p, 4), "00000000", "mpint: an all-zero magnitude encodes as length 0")
+    FreeBuf(mp0src)
+    FreeBuf(mp0)
+
+    // High bit clear: no padding byte needed.
+    mut mp1 := NewBuf(8)
+    BufPutMpintBytes(mp1, "\x01" as void*, 1)
+    _ckhex(_hex_of(mp1.p, mp1.len), "0000000101", "mpint: 0x01 needs no pad byte")
+    FreeBuf(mp1)
+
+    // High bit set: a 0x00 pad byte must be inserted so the value can't be
+    // misread as negative two's-complement.
+    mut mp2 := NewBuf(8)
+    BufPutMpintBytes(mp2, "\x80" as void*, 1)
+    _ckhex(_hex_of(mp2.p, mp2.len), "000000020080", "mpint: 0x80 gets a leading 0x00 pad byte")
+    FreeBuf(mp2)
+
+    // Leading zero bytes in the source magnitude must be stripped before
+    // the pad-or-not decision is made (this is the exact loop that was
+    // inverted once - see the module header).
+    mut mp3src := _hexbuf("00000102")
+    mut mp3 := NewBuf(8)
+    BufPutMpintBytes(mp3, mp3src.p, mp3src.len)
+    _ckhex(_hex_of(mp3.p, mp3.len), "000000020102", "mpint: leading zero bytes in the source are stripped")
+    FreeBuf(mp3src)
+    FreeBuf(mp3)
+
+    // Round trip through the Reader side: RGetMpintView must drop exactly
+    // the pad byte BufPutMpintBytes inserted, and no more.
+    mut mpbuf := NewBuf(8)
+    BufPutMpintBytes(mpbuf, "\x80" as void*, 1)
+    mut rmp := NewReader(mpbuf.p, mpbuf.len)
+    mpview := RGetMpintView(rmp)
+    _ck(mpview.len == 1, "reader: RGetMpintView strips the pad byte back off")
+    _ckhex(_hex_of(mpview.p, 1), "80", "reader: RGetMpintView magnitude matches the original byte")
+    FreeBuf(mpbuf)
+
+    // -------------------------------------------------------------- Reader bounds
+    mut short := NewBuf(2)
+    BufPutByte(short, 0xAB)
+    BufPutByte(short, 0xCD)
+    mut rshort := NewReader(short.p, short.len)
+    _first := RGetByte(rshort)
+    _second := RGetByte(rshort)
+    _ck(!rshort.bad, "reader: reading exactly the available bytes leaves .bad false")
+    third := RGetByte(rshort)
+    _ck(rshort.bad, "reader: reading past the end sets .bad")
+    _ck(third == 0, "reader: a read past the end returns 0, not garbage")
+    FreeBuf(short)
+
+    mut rskip := NewReader(short.p, 0)
+    RSkip(rskip, 5)
+    _ck(rskip.bad, "reader: RSkip past the end sets .bad")
+
+    // -------------------------------------------------------------- name-lists / negotiation
+    _ck(NameListContains("ssh-rsa,rsa-sha2-256,rsa-sha2-512", "rsa-sha2-256"), "namelist: contains finds a middle entry")
+    _ck(!NameListContains("ssh-rsa,rsa-sha2-256", "ssh-ed25519"), "namelist: contains correctly rejects a missing entry")
+    _ck(!NameListContains("", "anything"), "namelist: contains on an empty list is always false")
+
+    firstmatch := NegotiateFirstMatch("curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group14-sha256", "diffie-hellman-group14-sha256,diffie-hellman-group14-sha1")
+    _ck(str.Equals(firstmatch, "diffie-hellman-group14-sha256"), "negotiate: first-of-mine-that-appears-in-theirs, skipping unsupported entries")
+
+    nomatch := NegotiateFirstMatch("aes128-ctr,aes256-ctr", "aes192-cbc,3des-cbc")
+    _ck(str.Equals(nomatch, ""), "negotiate: no overlap returns empty string")
+
+    preforder := NegotiateFirstMatch("hmac-sha2-256,hmac-sha1", "hmac-sha1,hmac-sha2-256")
+    _ck(str.Equals(preforder, "hmac-sha2-256"), "negotiate: my preference order wins even if theirs lists the other one first")
+
+    // -------------------------------------------------------------- constant-time compare
+    _ck(ConstantTimeEqual("identical" as void*, "identical" as void*, 9), "constanttime: identical byte ranges compare equal")
+    _ck(!ConstantTimeEqual("identicalX" as void*, "identicalY" as void*, 10), "constanttime: a single differing byte compares unequal")
+end

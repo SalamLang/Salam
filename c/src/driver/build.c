@@ -575,6 +575,10 @@ int driver_build(options_t *opt)
     const char *b_pkg[SALAM_MAX_INPUTS] = {0};
     const char *b_srcpath[SALAM_MAX_INPUTS] = {0};
     int nb = 0;
+    /* Shared across every work-list file so each imported package is loaded,
+       parsed and analyzed once per build instead of once per importer. */
+    vec_t pkg_cache;
+    vec_init(&pkg_cache);
 
     dce_reset(arena);
     dce_enable();
@@ -634,8 +638,8 @@ int driver_build(options_t *opt)
                 }
             }
 
-            sema_result_t *sr =
-                sema_run(arena, log, program, src->path, langpack_code(modpack), cc);
+            sema_result_t *sr = sema_run_cached(arena, log, program, src->path,
+                                                langpack_code(modpack), cc, &pkg_cache);
             if (!lok || !pok || !sr->ok) {
                 all_ok = false;
                 continue;

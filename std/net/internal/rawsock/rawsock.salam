@@ -716,10 +716,24 @@ pub func RecvFromBytes(sock: Socket, buf: void*, max: int, out_host &: str, out_
         out_port = 0
         ret n
     end
+    // Read sin_port directly out of the sockaddr_in's bytes 2-3 (network/
+    // big-endian order) instead of reconstructing it via arithmetic on
+    // the packed 32-bit word - see LocalPort's doc comment above for why
+    // that division is wrong for any port whose network-byte-order form
+    // sets the top bit (packed goes negative, and signed division does
+    // not recover an unsigned high half from a negative dividend the way
+    // a same-signedness bit shift would). This was silently returning
+    // the wrong sender port for roughly half of all possible ephemeral
+    // ports - the reply-to address UDP callers build from out_port would
+    // aim at the wrong port and just never get a response, indistinguishable
+    // from a dropped packet without reading the raw bytes to compare.
+    sap := sa as i8*
     sa32 := sa as int*
-    packed := sa32[0]
-    port_n := (packed / 65536) as int
-    out_port = ntohs(port_n)
+    mut hi := sap[2] as int
+    mut lo := sap[3] as int
+    if hi < 0: hi += 256 end
+    if lo < 0: lo += 256 end
+    out_port = hi * 256 + lo
     out_host = str.Clone(inet_ntoa(sa32[1]))
     ret n
 end

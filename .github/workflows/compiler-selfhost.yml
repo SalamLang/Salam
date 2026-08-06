@@ -100,7 +100,58 @@ jobs:
           set -eu
           sh ./install.sh
           echo "$HOME/.salam/bin" >> "$GITHUB_PATH"
-          "$HOME/.salam/bin/salam" version | head -1
+
+      # Released macOS binaries up to 0.2.7 were linked against Homebrew's
+      # llvm@22 and inherited its optional Z3 solver as a *versioned* Cellar
+      # dylib (/opt/homebrew/opt/z3/lib/libz3.4.16.dylib). Nothing installs
+      # that on a stock runner, so the seed aborts under dyld before it can
+      # compile anything and stage 1 dies with "Abort trap: 6". c/Makefile no
+      # longer links -lz3 and compiler-release.yml now gates on otool, so this
+      # whole step can be deleted once the resolved seed is a release built
+      # after those changes - it is a no-op for a clean binary.
+      - name: Repair the seed binary's Homebrew dylib deps (macOS)
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          set -eu
+          seed="$HOME/.salam/bin/salam"
+          otool -L "$seed" || true
+          for lib in $(otool -L "$seed" | awk 'NR > 1 { print $1 }' | grep '^/opt/homebrew/' || true); do
+            if [ -f "$lib" ]; then continue; fi
+            formula=$(printf '%s' "$lib" | sed -n 's#^/opt/homebrew/opt/\([^/]*\)/.*#\1#p')
+            [ -n "$formula" ] || {
+              echo "::warning::cannot map $lib to a Homebrew formula - leaving it"
+              continue
+            }
+            echo "seed needs missing $lib - installing formula '$formula'"
+            brew install "$formula" || true
+            if [ -f "$lib" ]; then continue; fi
+            # Homebrew has moved on to a different soname than the one the
+            # seed was built against. Point the old name at whatever is
+            # there: the seed links these libraries but never calls into
+            # them, so it only has to satisfy dyld at load time.
+            dir=$(dirname "$lib")
+            stem=$(basename "$lib" | cut -d. -f1)
+            alt=$(ls "$dir/$stem".*.dylib 2>/dev/null | head -1 || true)
+            [ -n "$alt" ] || {
+              echo "::error::no substitute available for $lib"
+              exit 1
+            }
+            ln -sf "$alt" "$lib"
+            echo "linked $lib -> $alt"
+          done
+
+      # Deliberately not `salam version | head -1`: in a pipeline the exit
+      # status is head's, so a seed that cannot even start reports success and
+      # the real failure only surfaces several steps later, inside bootstrap.sh.
+      - name: Verify the seed compiler runs
+        run: |
+          set -eu
+          "$HOME/.salam/bin/salam" version > seed-version.txt
+          head -1 seed-version.txt
+          rm -f seed-version.txt
 
       - name: Bootstrap stage1 -> stage2 -> stage3
         run: |

@@ -687,6 +687,33 @@ jobs:
             EXTRA_LDFLAGS="-L$(brew --prefix)/lib"
           ccache --show-stats 2>/dev/null | head -5 || true
           ./salam version
+      # The Linux and Windows jobs already refuse to ship a binary that
+      # imports a third-party library; macOS had no such gate, and 0.2.7
+      # shipped with a dynamic reference to Homebrew's versioned
+      # /opt/homebrew/opt/z3/lib/libz3.4.16.dylib. That path exists only on a
+      # machine with that exact formula version installed, so the released
+      # binary aborted under dyld before main() on every other Mac - including
+      # the runner that the self-host workflow bootstraps from. The build now
+      # drops -lz3 and prefers a static libzstd (see c/Makefile); this check is
+      # what keeps the next such leak from reaching a release.
+      - name: Verify salam is self-contained (no Homebrew dylibs)
+        run: |
+          set -eu
+          echo "dylib dependencies of salam:"
+          otool -L salam
+          bad=$(otool -L salam | awk 'NR > 1 { print $1 }' \
+            | grep -E '^(/opt/homebrew/|/usr/local/(opt|Cellar|lib)/|.*/Cellar/)' || true)
+          if [ -n "$bad" ]; then
+            echo "ERROR: salam links non-system dylibs that will not exist on a user's Mac:"
+            echo "$bad"
+            echo ""
+            echo "These are Homebrew Cellar paths, usually versioned. dyld aborts at"
+            echo "startup on any machine without that exact formula version installed."
+            echo "Either drop the library (see the -lz3 note in c/Makefile) or link its"
+            echo "static archive instead of the dylib."
+            exit 1
+          fi
+          echo "OK: salam only links macOS system libraries."
       - name: Smoke-test the embedded LLVM backend
         run: |
           export SALAM_STD="$PWD/std"

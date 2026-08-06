@@ -74,6 +74,8 @@ void cli_print_usage(FILE *out)
         "                           (else: $SALAM_STD, sibling salam.cfg,\n"
         "                            binary-relative, install prefix, then ./std)\n"
         "  --keep-c                 Keep generated .c/.h files\n"
+        "  -B, --force              Rebuild everything: ignore cached .o objects and\n"
+        "                           recompile every module, even if unchanged\n"
         "  -g, --debug-info         Embed DWARF debug symbols; emit #line directives\n"
         "  --asan                   Enable AddressSanitizer (requires gcc/clang)\n"
         "  --release                Release build: strip bounds/safety checks "

@@ -64,6 +64,7 @@ typedef struct {
     const char *output;
     const char *cc;
     bool keep_c;
+    bool force;
     bool safe;
     bool fmt_check;
     bool fmt_recursive;

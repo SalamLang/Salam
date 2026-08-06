@@ -226,6 +226,42 @@ static bool write_file(logger_t *log, const char *path, const char *content)
     return true;
 }
 
+/* True when 'path' already holds exactly 'content'. Used to leave an unchanged
+   generated file (and therefore its .o) untouched on an incremental build. */
+static bool file_has_content(const char *path, const char *content)
+{
+    FILE *f = fopen(path, "rb");
+    size_t want = strlen(content);
+    size_t off = 0;
+    char buf[4096];
+    if (!f) return false;
+    while (off < want) {
+        size_t chunk = want - off;
+        size_t got;
+        if (chunk > sizeof(buf)) chunk = sizeof(buf);
+        got = fread(buf, 1, chunk, f);
+        if (got == 0 || memcmp(buf, content + off, got) != 0) {
+            fclose(f);
+            return false;
+        }
+        off += got;
+    }
+    /* Must be EOF: a file that starts with 'content' but is longer differs. */
+    {
+        bool eof = fread(buf, 1, 1, f) == 0;
+        fclose(f);
+        return eof;
+    }
+}
+
+static bool file_exists(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    fclose(f);
+    return true;
+}
+
 static bool link_spec_is_path(const char *spec)
 {
     if (strpbrk(spec, "/\\")) return true;
@@ -514,6 +550,11 @@ int driver_build(options_t *opt)
     const char *scratch = salam_scratch_dir();
     const char *cfiles[SALAM_MAX_INPUTS];
     int ncfiles = 0;
+    /* Per-module object path, and whether that object must be rebuilt. A module
+       is clean only when its regenerated .c/.h are byte-identical to what is
+       already on disk, its .o exists, and the compile command has not changed. */
+    const char *ofiles[SALAM_MAX_INPUTS];
+    bool cdirty[SALAM_MAX_INPUTS];
     const char *generated[SALAM_MAX_INPUTS * 2 + 2];
     int ngen = 0;
     const char *first_module = NULL;
@@ -769,10 +810,23 @@ int driver_build(options_t *opt)
             char *hpath = (char *)arena_alloc(arena, pathcap);
             sal_snprintf(cpath, pathcap, "%s/%s%s.c", scratch, SALAM_MOD_PREFIX, module);
             sal_snprintf(hpath, pathcap, "%s/%s%s.h", scratch, SALAM_MOD_PREFIX, module);
-            if (!write_file(log, cpath, out->c_src) ||
-                !write_file(log, hpath, out->h_src)) {
-                all_ok = false;
-                continue;
+            {
+                char *opath = (char *)arena_alloc(arena, pathcap);
+                bool unchanged;
+                sal_snprintf(opath, pathcap, "%s/%s%s.o", scratch, SALAM_MOD_PREFIX,
+                             module);
+                /* Compare before writing: rewriting an identical file would only
+                   churn its timestamp and force a needless recompile. */
+                unchanged = !opt->force && file_exists(opath) &&
+                            file_has_content(cpath, out->c_src) &&
+                            file_has_content(hpath, out->h_src);
+                if (!unchanged && (!write_file(log, cpath, out->c_src) ||
+                                   !write_file(log, hpath, out->h_src))) {
+                    all_ok = false;
+                    continue;
+                }
+                ofiles[ncfiles] = opath;
+                cdirty[ncfiles] = !unchanged;
             }
             cfiles[ncfiles++] = cpath;
             generated[ngen++] = cpath;
@@ -875,6 +929,121 @@ int driver_build(options_t *opt)
         }
         char hostlibs[1024];
         hostlibs[0] = '\0';
+
+        /* AddressSanitizer is rejected before anything is compiled, not midway
+           through, so a failed build leaves no half-written object cache. */
+        if (opt->asan && use_tcc) {
+            LOG_E(log, PH_DRIVER,
+                  "tcc does not support AddressSanitizer; use --cc=gcc or --cc=clang");
+            if (!opt->keep_c) {
+                int i = 0;
+                for (; i < ngen; i++)
+                    remove(generated[i]);
+            }
+            logger_free(log);
+            arena_free(arena);
+            return 2;
+        }
+
+        /* Compile each module to its own .o, skipping those whose generated C
+           was byte-identical to the cached copy. The flags below must match the
+           ones the link command uses, so they are rebuilt from the same values. */
+        {
+            sb_t cflags;
+            sb_init(&cflags);
+#if !defined(_WIN32)
+            if (musl_tcc.active) {
+                sb_puts(&cflags, " -B");
+                sb_put_shell_arg(&cflags, musl_tcc.tcc_dir);
+                sb_puts(&cflags, " -nostdlib -static -I");
+                sb_put_shell_arg(&cflags, musl_tcc.tcc_dir);
+                sb_puts(&cflags, "/include -I");
+                sb_put_shell_arg(&cflags, musl_tcc.musl_dir);
+                sb_puts(&cflags, "/include");
+            }
+#endif
+            sb_puts(&cflags, opt_flag);
+            sb_puts(&cflags, lto_flag);
+            sb_puts(&cflags, " -I. -I");
+            sb_put_shell_arg(&cflags, scratch);
+            if (opt->debug_info && !use_tcc) sb_puts(&cflags, " -g");
+            if (opt->asan)
+                sb_puts(&cflags,
+                        " -fsanitize=address -fno-omit-frame-pointer -DSALAM_MEM_DEBUG");
+            {
+                int i = 0;
+                for (; i < nlinks; i++) {
+                    sb_puts(&cflags, " -DSALAM_LINK_");
+                    {
+                        const char *p = links[i];
+                        for (; *p; p++) {
+                            char c = *p;
+                            if (c >= 'a' && c <= 'z')
+                                c = (char)(c - 'a' + 'A');
+                            else if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')))
+                                c = '_';
+                            sb_putc(&cflags, c);
+                        }
+                    }
+                }
+            }
+
+            /* Cached objects were built with the previous flag set; if it moved
+               (--release, -g, --asan, a new link directive, a different cc) every
+               object is stale regardless of whether its source changed. */
+            {
+                size_t sigcap = strlen(scratch) + 32;
+                char *sigpath = (char *)arena_alloc(arena, sigcap);
+                sb_t sig;
+                sb_init(&sig);
+                sb_puts(&sig, opt->cc);
+                sb_puts(&sig, sb_cstr(&cflags));
+                sal_snprintf(sigpath, sigcap, "%s/salam_build.flags", scratch);
+                if (!file_has_content(sigpath, sb_cstr(&sig))) {
+                    int i = 0;
+                    for (; i < ncfiles; i++)
+                        cdirty[i] = true;
+                    write_file(log, sigpath, sb_cstr(&sig));
+                }
+                sb_free(&sig);
+            }
+
+            {
+                int i = 0;
+                int nrebuilt = 0;
+                for (; i < ncfiles && crc == 0; i++) {
+                    sb_t cc1;
+                    if (!cdirty[i]) continue;
+                    sb_init(&cc1);
+                    sb_puts(&cc1, opt->cc);
+                    sb_puts(&cc1, sb_cstr(&cflags));
+                    sb_puts(&cc1, " -c ");
+                    sb_put_shell_arg(&cc1, cfiles[i]);
+                    sb_puts(&cc1, " -o ");
+                    sb_put_shell_arg(&cc1, ofiles[i]);
+                    LOG_I(log, PH_DRIVER, "compiling: %s", sb_cstr(&cc1));
+                    crc = system(sb_cstr(&cc1));
+                    sb_free(&cc1);
+                    nrebuilt++;
+                }
+                LOG_I(log, PH_DRIVER, "compiled %d module(s), reused %d cached object(s)",
+                      nrebuilt, ncfiles - nrebuilt);
+            }
+            sb_free(&cflags);
+        }
+        if (crc != 0) {
+            LOG_E(log, PH_DRIVER, i18n_tr("C compiler '%s' failed (exit %d)"), opt->cc,
+                  crc);
+            if (!opt->keep_c) {
+                int i = 0;
+                for (; i < ngen; i++)
+                    remove(generated[i]);
+            }
+            logger_free(log);
+            arena_free(arena);
+            return 3;
+        }
+
         sb_t cmd;
         sb_init(&cmd);
         sb_puts(&cmd, opt->cc);
@@ -936,25 +1105,8 @@ int driver_build(options_t *opt)
             else
                 sb_puts(&cmd, " -g");
         }
-        if (opt->asan) {
-            if (use_tcc) {
-                LOG_E(
-                    log, PH_DRIVER,
-                    "tcc does not support AddressSanitizer; use --cc=gcc or --cc=clang");
-                sb_free(&cmd);
-                if (!opt->keep_c) {
-                    int i = 0;
-                    for (; i < ngen; i++)
-                        remove(generated[i]);
-                }
-                logger_free(log);
-                arena_free(arena);
-                return 2;
-            }
-            sb_puts(&cmd, " -fsanitize=address -fno-omit-frame-pointer");
-
-            sb_puts(&cmd, " -DSALAM_MEM_DEBUG");
-        }
+        /* The tcc rejection already happened before the compile phase. */
+        if (opt->asan) sb_puts(&cmd, " -fsanitize=address -fno-omit-frame-pointer");
 
         {
             int i = 0;
@@ -988,7 +1140,7 @@ int driver_build(options_t *opt)
             int i = 0;
             for (; i < ncfiles; i++) {
                 sb_putc(&cmd, ' ');
-                sb_put_shell_arg(&cmd, cfiles[i]);
+                sb_put_shell_arg(&cmd, ofiles[i]);
             }
         }
         sb_puts(&cmd, lm);
@@ -1035,12 +1187,10 @@ int driver_build(options_t *opt)
                 sal_snprintf(opt->exe_path, sizeof(opt->exe_path), "%s", output);
         }
     }
-    if (!opt->keep_c) {
-        int i = 0;
-        for (; i < ngen; i++)
-            remove(generated[i]);
-    } else
-        LOG_I(log, PH_DRIVER, "kept generated C files");
+    /* The generated .c/.h are the object cache's key: deleting them would make
+       every module look changed on the next build. They stay in the scratch
+       dir (gitignored) and --force ignores them anyway. */
+    if (opt->keep_c) LOG_I(log, PH_DRIVER, "kept generated C files");
     logger_free(log);
     arena_free(arena);
     return rc;

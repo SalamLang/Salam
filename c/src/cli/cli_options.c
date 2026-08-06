@@ -103,6 +103,8 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
             const char *val;
             if (strcmp(arg, "--keep-c") == 0) {
                 out->keep_c = true;
+            } else if (strcmp(arg, "--force") == 0 || strcmp(arg, "-B") == 0) {
+                out->force = true;
 
             } else if (strcmp(arg, "--short") == 0 && out->command == CMD_VERSION) {
                 out->version_short = true;

@@ -37,6 +37,7 @@ static void cli_set_defaults(options_t *out)
     out->output = NULL;
     out->cc = "tcc";
     out->keep_c = false;
+    out->force = false;
     out->safe = true;
     out->fmt_check = false;
     out->fmt_recursive = false;

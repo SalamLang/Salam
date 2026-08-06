@@ -137,9 +137,19 @@ pub const CMD_DOC := 18
 // instead. Shared mutable job-queue state is fine here since
 // compile_parallel (below) is only ever called once per build, never
 // nested or run concurrently with itself.
+//
+// g_cw_mu starts as the zero-value Mutex (handle = null) rather than
+// sync.NewMutex() here: this is a `package driver` global, and codegen's
+// deferred-global-init pass only ever flushes a package's deferred
+// initializers into ITS OWN entry function - which only exists for
+// `package main`. driver.salam has no main, so a non-literal initializer
+// on a package-level global here would silently never run, leaving
+// g_cw_mu.handle NULL for every caller. Instead it is lazily created
+// inside compile_parallel() below, an ordinary function-body assignment
+// that always executes.
 mut g_cw_jobs := Vector {} as Vector<str>
 mut g_cw_next := 0
-mut g_cw_mu := sync.NewMutex()
+mut g_cw_mu := sync.Mutex {}
 mut g_cw_rc := 0
 
 // ===== driver/js_build.c: k_prelude[] (name/text pairs, split into two
@@ -574,6 +584,7 @@ pub struct Dr:
         if jobs.len() == 0:
             ret 0
         end
+        g_cw_mu = sync.NewMutex()
         g_cw_jobs = jobs
         g_cw_next = 0
         g_cw_rc = 0

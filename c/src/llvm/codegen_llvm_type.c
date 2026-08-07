@@ -385,6 +385,25 @@ static symbol_t *ll_sym_plain(ll_t *ll, const char *name)
     return s;
 }
 
+/*
+ * Find a struct/enum in `sc` by its *mangled* type name ("rawsock_Socket")
+ * rather than by its declared name ("Socket").
+ */
+static symbol_t *ll_scan_mangled(ll_t *ll, scope_t *sc, const char *name)
+{
+    size_t i = 0;
+    if (!sc) return NULL;
+    for (; i < sc->symbols.len; i++) {
+        symbol_t *s = (symbol_t *)sc->symbols.data[i];
+        const char *ts;
+        if (!s || !s->type) continue;
+        if (s->kind != SYM_STRUCT && s->kind != SYM_ENUM) continue;
+        ts = type_to_string(ll->sem->tc, s->type);
+        if (ts && !strcmp(ts, name)) return s;
+    }
+    return NULL;
+}
+
 static symbol_t *ll_sym_qualified(ll_t *ll, const char *name)
 {
     const char *us = strchr(name, '_');
@@ -393,6 +412,34 @@ static symbol_t *ll_sym_qualified(ll_t *ll, const char *name)
         if (s && s->type) {
             const char *ts = type_to_string(ll->sem->tc, s->type);
             if (ts && !strcmp(ts, name)) return s;
+        }
+    }
+    /*
+     * The split-on-'_' walk above resolves the tail by *declared* name, so
+     * it silently picks the wrong type whenever two packages declare the
+     * same one - std/net has both a udp.Socket and a rawsock.Socket, and
+     * only one of them wins the bare "Socket" in the global scope, leaving
+     * the other unreachable ("member 'fd' of non-struct/unknown type
+     * 'rawsock_Socket'").
+     *
+     * Mangled names are unique by construction, so scan for that instead.
+     * Package hits are touched, which is also what makes a program that
+     * uses only a package's *types* - never its functions, so nothing else
+     * would ever trigger ll_touch_pkg - get that package's struct layouts
+     * emitted.
+     */
+    {
+        symbol_t *s = ll_scan_mangled(ll, ll->sem->global, name);
+        size_t p = 0;
+        if (s) return s;
+        for (; p < ll->sem->packages.len; p++) {
+            symbol_t *pk = (symbol_t *)ll->sem->packages.data[p];
+            if (!pk || pk->kind != SYM_PACKAGE) continue;
+            s = ll_scan_mangled(ll, pk->members, name);
+            if (s) {
+                ll_touch_pkg(ll, pk);
+                return s;
+            }
         }
     }
     return NULL;

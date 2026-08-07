@@ -47,6 +47,34 @@ land in the order given.
 | **B. Program profiling**       | "Why is _my program_ slow?"                       | `salam build --profile=MODE`, `salam prof <sub>` |
 | **C. Benchmark harness**       | "Is this change faster or slower than last week?" | `std/bench`, `salam bench`                       |
 
+### 0.1 What is written twice, and what is not
+
+Both compilers must gain every feature here, but "both compilers" does not mean
+"everything twice". The design deliberately pushes as much as possible into
+shared Salam packages, so the duplicated surface stays small enough to keep in
+sync by hand. Every row below is specified for both implementations in its own
+section; use this table to check that nothing is missing before calling a part
+done.
+
+| Component | Written once (shared) | Written twice (C + `compiler/*.salam`) |
+|---|---|---|
+| Monotonic clock (§1) | `std/time._mono_ns` for user programs | `salam_mono_ns` (`c/src/core/timer.c`) and `co.CpuNanos` (`compiler/sal_core.salam`), because the compilers cannot import their own stdlib |
+| Self-profiler (A) | - | the whole accumulator: `c/src/core/prof_self.c` + `compiler/prof_self.salam` |
+| A: instrumentation points | - | ~8 scope calls in each driver |
+| A: CLI flags, help | - | `cli_options.c` / `cli.salam`, `cli_help.c` / `UsageText` |
+| Program profiler runtime (B) | **`std/prof/prof.salam`** - accumulator, recursion handling, `.prof` writer | - |
+| B: codegen instrumentation | - | `cg_function` in each backend of each compiler (table in B.4/B.5) |
+| B: interpreter instrumentation | - | `call_func` in each interpreter (table in B.5) |
+| B: `.prof` report/diff/folded | ideally `std/prof`, see B.7 | fallback only |
+| B: `salam prof` command wiring | - | the five rows of B.7's table |
+| Benchmark harness (C) | **`std/bench`** - adaptive iteration, statistics, `Keep` | - |
+| C: `salam bench` command | the synthesized driver is generated Salam, identical from both | discovery, driver synthesis, rendering |
+| C: langpack `Bench` prefix | - | `langpack_data.c` + `compiler/langpack.salam` tables |
+
+The two `std/` packages are where the hard logic lives (recursion-correct
+`total_ns`, Go-style iteration scaling, median/stddev). Getting them into `std/`
+rather than into either compiler is what keeps the duplicated code mechanical.
+
 What is explicitly **out of scope** for the first implementation, and why:
 
 - **Sampling/interrupt-driven profilers** (SIGPROF, Windows timer queue thread).
@@ -107,7 +135,7 @@ Implementation matrix:
 | macOS    | `clock_gettime(CLOCK_MONOTONIC, ...)` (10.12+), else `mach_absolute_time` + `mach_timebase_info`          | `getrusage` user+sys                           | `getrusage().ru_maxrss` (already bytes on macOS)    |
 | other    | `clock()` scaled by `CLOCKS_PER_SEC`                                                                      | same                                           | 0                                                   |
 
-Notes that matter for this repo specifically:
+Notes that matter for this repository specifically:
 
 - `QueryPerformanceCounter` needs `windows.h`, which the compiler already pulls
   in from `driver.c`. Do **not** add it to `core/prelude.h`; keep it local to
@@ -167,7 +195,7 @@ pub func MonoElapsedNs(start_ns: i64): i64: ret _mono_ns() - start_ns end
 Then `std/debug/debug.salam:138-165` (`StartTimer`/`StopTimer`) switches from
 `time.NowNanos` to `time.MonoNanos`. Those two functions are currently
 unreliable on Windows for exactly the granularity reason above; this is a real
-bug fix that falls out of the design.
+bugfix that falls out of the design.
 
 ---
 
@@ -519,13 +547,35 @@ Why this beats emitting a C runtime from `codegen_header.c`:
 1. **Backend parity for free.** The C backend, the LLVM backend and the
    interpreter all compile the same Salam source. Writing the runtime in C would
    mean writing it three times (C text for `codegen`, IR for `llvm.salam`,
-   builtins for `interp`).
+   built-ins for `interp`).
 2. **Compiler parity for free.** `c/src/` and `compiler/` both consume
    `std/prof/prof.salam`. There is no second copy to keep in sync, which is the
-   single largest recurring cost in this repo.
+   single largest recurring cost in this repository.
 3. It is testable as an ordinary stdlib package before any codegen work exists.
 
 The JS backend is the one exception and is handled in B.5.
+
+The self-hosted driver force-injects the same two packages at
+`compiler/driver.salam:883-887`, so its counterpart goes in the same place:
+
+```salam
+if opt.profile_mode != PROF_MODE_OFF:
+    profp := sm.ResolveImport("", "prof")
+    if str.Len(profp) > 0 && os.Exists(profp):
+        work.push(profp)
+    else:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
+               i18.Tr("--profile needs the 'prof' package in the stdlib"))
+        all_ok = false
+    end
+end
+```
+
+Note what is *not* duplicated: `std/prof/prof.salam` itself. Both compilers
+consume the identical package from `std/`, so the profiler's accumulator,
+recursion handling and file format exist exactly once. Only the ~10 lines of
+injection and the instrumentation call sites are written twice. That asymmetry
+is the whole reason for putting the runtime in Salam.
 
 ### B.3 `std/prof` API
 
@@ -575,10 +625,10 @@ pub func Report(): str: ... end
 pub func Reset(): ... end
 ```
 
-`@fa` / `@ar` names are required on every `pub` symbol; the repo convention is
+`@fa` / `@ar` names are required on every `pub` symbol; the repository convention is
 that all three are present or the translated import paths break.
 
-**Internal representation.** One flat array of records, indexed by slot id:
+**Internal representation.** One flat array of records, indexed by slot ID:
 
 ```salam
 struct Slot:
@@ -748,6 +798,16 @@ if (opt->profile_mode != PROF_MODE_OFF) {
 right after `dce_enable()`. This is the kind of thing that produces a confusing
 link error six hours into implementation, so it belongs in the design.
 
+The self-hosted DCE exposes the same three entry points, so the same four calls
+go into the equivalent spot in `driver.salam`'s build path:
+
+| C (`c/src/semantic/dce.h`) | Salam (`compiler/semantic.salam`) |
+|---|---|
+| `dce_enable()` | `sm.DceEnable()`, line 11754 |
+| `dce_enabled()` | `sm.DceEnabled()`, line 11764 |
+| `dce_mark_root(pkg, fn)` | `sm.DceMarkRoot(pkg, fn)`, line 11769 |
+| (queried during pruning) | `sm.DceReachable(pkg, fn)`, line 11815, used at `driver.salam:1127` |
+
 **Which functions get instrumented** (`cg_prof_wants`):
 
 - skip anything whose home package is `prof`, `core`, `mem`, `time` (the
@@ -774,9 +834,15 @@ noisy. Document that `--profile` builds should use `-O1` for stable attribution,
 and have the driver emit an informational log line when `--profile` is combined
 with `-O2` or higher rather than silently changing the user's optimization level.
 
-**JS backend** (`c/src/driver/js_build.c`, `compiler/jsgen.salam`). The JS
-backend does not compile `std/prof` as Salam; it emits JavaScript. Instrument
-with a small emitted preamble that mirrors the same API:
+**JS backend.** Emission point in each compiler:
+
+| C | Salam |
+|---|---|
+| `jsg_function`, `c/src/jsgen/jsgen_stmt.c:477` | `jsg_function`, `compiler/jsgen.salam:3202` |
+| called from `jsgen.c:83` | `jsg_emit_functions`, `compiler/jsgen.salam:3388` |
+
+The JS backend does not compile `std/prof` as Salam; it emits JavaScript.
+Instrument with a small emitted preamble that mirrors the same API:
 
 ```js
 const __salam_prof = { slots: [], stack: [], on: true,
@@ -789,23 +855,40 @@ interaction: the profiler preamble must be excluded from name minification or
 the report shows mangled names; `js_build.c` already has a
 `no_js_minify_names` concept to hook into.
 
-**Interpreter** (`c/src/interp/*`, `compiler/interp.salam`). This one is nearly
-free and worth doing first, because it needs no codegen at all. The interpreter
-has a single choke point where it invokes a user function; wrap it:
+**Interpreter.** This one is nearly free and worth doing first, because it needs
+no codegen at all. Both interpreters funnel *every* user-function invocation
+through one function, so there is exactly one place to instrument on each side:
+
+| C | Salam |
+|---|---|
+| `call_func`, defined at `c/src/interp/interp_expr.c:260`, declared `interp_internal.h:258` | `call_func`, `compiler/interp.salam:2838` |
+| ~10 call sites across `interp_expr.c` + `interp.c:594` (the `main` entry) | `eval_call`, `compiler/interp.salam:3344`; public entry `CallFunc`, `:5137` |
+
+Instrument the *definition*, never the call sites; the call sites are where a
+future one gets missed.
 
 ```c
-/* in the interp's call path */
-uint64_t t0 = 0; int sid = -1;
-if (interp_prof_on) { sid = interp_prof_slot(fn); t0 = interp_prof_enter(sid); }
-... existing call ...
-if (interp_prof_on) interp_prof_exit(sid, t0);
+/* c/src/interp/interp_expr.c, at the top of call_func */
+uint64_t t0 = 0;
+int sid = -1;
+if (interp_prof_on()) { sid = interp_prof_slot(fn); t0 = interp_prof_enter(sid); }
+... existing body ...
+if (sid >= 0) interp_prof_exit(sid, t0);   /* every return path */
 ```
 
-The interpreter's accumulator is a C-side copy of the same `Slot` layout and
-writes the same file format, so `salam prof report` does not care which backend
-produced the profile. `salam exec --profile` therefore gives users a
-zero-build-step profiler, which is the fastest thing to ship and the best way to
-validate the report tooling.
+`call_func` has multiple `return`s, so the C wraps its body in an inner
+`call_func_inner()` and instruments the wrapper, the same shape `driver_main` /
+`driver_main_inner` already uses for `--time-report`. The Salam port does the
+same to `call_func` at `interp.salam:2838`, with the E088 caveat from §8.4:
+`call_func` is private and sits above the file's public section, so the inner
+function must be placed above it rather than appended.
+
+The interpreter's accumulator is a private copy of the same `Slot` layout on
+each side (it cannot call into `std/prof`, since the interpreter does not link
+the program it is running) and writes the same file format, so
+`salam prof report` does not care which backend produced the profile.
+`salam exec --profile` therefore gives users a zero-build-step profiler, which
+is the fastest thing to ship and the best way to validate the report tooling.
 
 Note the caveat from `salam_exec_unsigned_wrong`: the interpreter gets u32/u64
 arithmetic wrong, so interpreter profiles of crypto/bit-heavy code may reflect
@@ -838,14 +921,37 @@ E 1 1 1664078
 ```
 
 Rules: lines starting with `#` are comments, unknown record types are skipped by
-readers (forward compatibility), the header is order-independent key/value pairs
+readers (forward compatibility), the header is order-independent key-value pairs
 until the first `#`. Names are printed in the source language of the definition,
 not translated, so the profile of a Persian-source program shows Persian names.
 
 ### B.7 `salam prof` subcommand
 
-New command `CMD_PROF` in `c/src/cli/options.h`, dispatched in
-`cli_subcmd.c:18` and mirrored in `compiler/cli.salam:337`:
+A new command, so it needs the same five-point wiring in each compiler. Both
+lists are exact; `CMD_PROF`/`CMD_BENCH` take the next free ordinals after
+`CMD_DOC` (C: the `cli_command_t` enum in `options.h:25-44`; Salam:
+`pub const CMD_DOC := 18` at `compiler/driver.salam:133`, so `CMD_PROF := 19`
+and `CMD_BENCH := 20`).
+
+| Step | C | Salam |
+|---|---|---|
+| command constant | `cli_command_t` enum, `c/src/cli/options.h` | `pub const CMD_PROF := 19`, `compiler/driver.salam` next to `CMD_DOC` (line 133) |
+| argv dispatch | `cli_dispatch_command`, `c/src/cli/cli_subcmd.c:18` | `dispatch_command`, `compiler/cli.salam:337` |
+| option fields | `options_t`, `c/src/cli/options.h` | `pub struct Dr`, `compiler/driver.salam:202` |
+| option parsing | `cli_parse_options`, `c/src/cli/cli_options.c:97` | `parse_options`, `compiler/cli.salam:439` |
+| command handler | `driver_main_inner`'s switch, `c/src/driver/driver.c` | `RunCommand`'s `if` chain, `compiler/cli.salam:1279` |
+| help text | `cli_print_usage`, `c/src/cli/cli_help.c` | `UsageText`, `compiler/cli.salam:1125` |
+
+The report/diff/folded rendering itself is a pure function of the `.prof` text
+file, so it is the one part worth writing *once* as a Salam package
+(`std/prof`'s `Report`/`Diff`/`Folded` reading a parsed file) and calling from
+both drivers, rather than porting a renderer twice. The C driver already links
+nothing of the sort today, so if that proves awkward, the fallback is a small
+duplicated renderer in `c/src/driver/prof_cmd.c` +
+`compiler/prof_cmd.salam` - which is the same shape as every other
+already-duplicated driver command.
+
+Subcommands:
 
 ```
 salam prof report [FILE]           # flat table, default sort by self time
@@ -1029,14 +1135,39 @@ salam bench --cc=... -O3 ...      # build flags pass through
 
 **Discovery.** Files matching `bench_*.salam` or `*_bench.salam`, and inside
 them, top-level functions whose name starts with `Bench` (English) or the
-langpack's translated equivalent. The langpack already carries the entry-point
-name (`langpack_entry`, used at `build.c:563`); add a `langpack_bench_prefix`
-alongside it so `@fa`/`@ar` sources can name benchmarks in their own language.
+langpack's translated equivalent.
+
+**Per-compiler split.** `std/bench` is shared, like `std/prof`: one Salam
+package, consumed identically by both compilers, so the adaptive-iteration
+algorithm and the statistics exist once. What is written twice is only the
+`bench` *command*: discovery, driver synthesis, and result rendering.
+
+| Piece | C | Salam |
+|---|---|---|
+| `CMD_BENCH` constant + dispatch + options + handler + help | the five rows of the B.7 table, same files | same, `compiler/{driver,cli}.salam` |
+| new `bench` command body | `c/src/driver/bench_build.c` (new), alongside `doc_build.c` / `serve_build.c` | `compiler/bench_build.salam` (new), imported by `cli.salam` |
+| directory walk for `bench_*.salam` | `list_salam_files_in`, `c/src/driver/build.c:367` | `list_salam_files`-equivalent in `compiler/driver.salam` |
+| "does this file define X" scan | `file_has_entry`, `c/src/driver/build.c:419` | its `driver.salam` counterpart |
+| langpack bench prefix | `langpack_bench_prefix`, next to `langpack_entry` (`c/src/langpack/langpack.h:34`) | `lp.BenchPrefix`, next to `pub func Entry` (`compiler/langpack.salam:429`) and `EntryFor` (`:443`) |
+| build + run the synthesized driver | reuse `driver_build` (`build.c:487`) | reuse `dr.Build` (`compiler/driver.salam`) |
+
+The langpack addition is the only one that touches a data table rather than
+code: `langpack_entry` already returns the per-language name of `main`, so
+`langpack_bench_prefix` returns the per-language `Bench` prefix from the same
+three tables (`c/src/langpack/langpack_data.c` and its `compiler/langpack.salam`
+twin). Without it, an `@fa` source could not name a benchmark in Persian, which
+would be the only place in the language where that is true.
 
 **Generated driver.** `salam bench` synthesizes a `main` into the scratch dir
-(`.salam-build`, `driver.c:74`) that imports the discovered files and calls
-`bench.Run` for each discovered function, then builds and runs that. This mirrors
-how the test suite is driven and avoids needing reflection in the language.
+(`.salam-build`, `driver.c:74`; `salam_scratch_dir()`'s Salam counterpart in
+`compiler/driver.salam`) that imports the discovered files and calls `bench.Run`
+for each discovered function, then builds and runs that. This mirrors how the
+test suite is driven and avoids needing reflection in the language.
+
+Because the synthesized `main` is ordinary Salam, both compilers produce a
+byte-identical driver from the same discovery result. That makes the C-vs-Salam
+parity test for Part C trivial: synthesize with each binary, `diff` the two
+generated files, and require them to match.
 
 The synthesized file must be written into a **per-invocation subdirectory** of
 `.salam-build`. Per `salam_ssh_pkg_bugs_and_landmines`, the shared `.salam-build`
@@ -1175,6 +1306,21 @@ The deterministic call-count test is the load-bearing one: it validates
 `defer`, recursion and lambdas, without depending on timing at all. Give it a
 program that exercises each of those shapes deliberately.
 
+**Parity tests, one per part.** Each follows the shape already shipped for Part
+A's `timereport/parity`: run both binaries, compare the part of the output that
+is deterministic, and SKIP rather than FAIL when `SALAM_SELFHOST` is unset.
+
+| Part | What is compared | Why it is deterministic |
+|---|---|---|
+| A (shipped) | the set of phase keys in `--time-report=json` | timings differ, key sets must not |
+| B | the whole `.prof` file with the `wall_ns`/`self_ns`/`total_ns` columns stripped | call counts and the slot table are exact, times are not |
+| C | the synthesized bench driver `main`, byte for byte | it is generated from the same discovery result by the same rules |
+
+Part B's comparison is the strongest of the three: identical call counts from
+two independently written instrumentation passes means both got `Enter`/`Exit`
+pairing right on every control-flow path, which is the only part of this feature
+where a silent wrong answer is plausible.
+
 ### 5.4 Docs
 
 - `docs/PROFILING.md` (this file) becomes the user guide once implemented.
@@ -1186,7 +1332,7 @@ program that exercises each of those shapes deliberately.
 
 ## 6. Known landmines for the implementer
 
-Collected from prior work in this repo; each one has cost a debugging session
+Collected from prior work in this repository; each one has cost a debugging session
 before.
 
 1. **Build source lists.** Adding `core/timer.c`, `core/prof_self.c` means
@@ -1210,7 +1356,7 @@ before.
    `prof.salam` does not collide with anything (it currently does not; verified
    against `std/`).
 9. **Never edit `run-tests.sh` while a run is in flight.**
-10. **A concurrent Claude Code session may be working this same repo/branch.**
+10. **A concurrent Claude Code session may be working this same repository/branch.**
     Re-check `git status` before trusting file state.
 
 ---
@@ -1302,7 +1448,7 @@ values that differ by design:
 
 | Field                           | C                                                                      | Self-hosted                                                                                                                               |
 | ------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `peak_rss`                      | real (psapi resolved at run time via `GetProcAddress`, or `getrusage`) | always 0; there is no runtime-resolved function pointer here, and a link-time psapi dependency is the kind of extern that fails under tcc |
+| `peak_rss`                      | real (psapi resolved at runtime via `GetProcAddress`, or `getrusage`) | always 0; there is no runtime-resolved function pointer here, and a link-time psapi dependency is the kind of extern that fails under tcc |
 | `ast_nodes`                     | exact (`ast_new` counts every node)                                    | 0; the self-hosted AST is a node-id arena with no equivalent single choke point wired up yet                                              |
 | `arena_bytes` / `arena_blocks`  | real (`arena_stats()`)                                                 | 0; `sal_core.salam`'s `Arena` has no block list to walk                                                                                   |
 | `cc` calls                      | one per module                                                         | one, because the self-hosted driver compiles all modules in a single `compile_parallel` scope                                             |

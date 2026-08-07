@@ -69,11 +69,31 @@ else
   LDLIBS ?= -lm
 endif
 
-WITH_LLVM       ?= 0
-WITH_LLD        ?= 0
 LLVM_CONFIG     ?= llvm-config
-LLVM_LINK_STATIC ?= 0
 CXX             ?= c++
+
+#
+# LLVM/LLD are the default backend, so a plain `make` builds them in
+# whenever this host can - a salam without them falls back to the C backend
+# and needs a compiler installed on the *end user's* machine, which is
+# exactly what shipping LLVM in-process is meant to avoid.
+#
+# "Can" means llvm-config resolves AND the static lld archives are present
+# (llvm-config knows nothing about lld, so it is probed separately). A host
+# missing either still builds, just without the LLVM path - so this stays a
+# capability upgrade rather than a new hard build dependency. Set
+# WITH_LLVM=0 to opt out explicitly.
+#
+LLVM_CONFIG_OK := $(shell $(LLVM_CONFIG) --version >/dev/null 2>&1 && echo 1)
+ifeq ($(LLVM_CONFIG_OK),1)
+  LLVM_LIBDIR_PROBE := $(shell $(LLVM_CONFIG) --libdir 2>/dev/null)
+  LLD_STATIC_OK := $(if $(wildcard $(LLVM_LIBDIR_PROBE)/liblldCommon.a),1)
+endif
+
+WITH_LLVM       ?= $(if $(LLVM_CONFIG_OK),1,0)
+WITH_LLD        ?= $(if $(LLD_STATIC_OK),1,0)
+LLVM_LINK_STATIC ?= $(if $(LLVM_CONFIG_OK),1,0)
+
 
 LLD_LIBS  :=
 LLD_SRCS  :=
@@ -169,6 +189,17 @@ endif
 LLVM_CXXFLAGS := $(if $(filter 1,$(WITH_LLD)),$(shell $(LLVM_CONFIG) --cxxflags))
 
 BUILD_DIR ?= build/$(BUILD)
+
+#
+# CPPFLAGS is assembled from the WITH_*/SALAM_EMBED_* switches above, but
+# the compile rules depend only on sources - so flipping a switch (adding an
+# embedded sysroot, say) silently reuses objects compiled without it, and
+# the resulting salam reports "no mingw sysroot" despite having one baked
+# in. Recording the flag set in a file that every object depends on makes
+# such a change rebuild exactly what it must, instead of needing a clean.
+#
+CONFIG_STAMP := $(BUILD_DIR)/.config-stamp
+
 OBJS      := $(SRCS:src/%.c=$(BUILD_DIR)/%.o)
 CXXOBJS   := $(LLD_SRCS:src/%.cc=$(BUILD_DIR)/%.o)
 MAIN_OBJ  := $(MAIN_SRC:src/%.c=$(BUILD_DIR)/%.o)
@@ -278,11 +309,20 @@ $(BUILD_DIR)/embed/mingw.o:
 	printf '.section .rodata\n.global salam_embed_mingw\nsalam_embed_mingw:\n.incbin "%s"\n.global salam_embed_mingw_end\nsalam_embed_mingw_end:\n' "$(BUILD_DIR)/embed/mingw.tar" > $(BUILD_DIR)/embed/mingw.S
 	$(CC) -c $(BUILD_DIR)/embed/mingw.S -o $@
 
-$(BUILD_DIR)/%.o: src/%.c
+$(CONFIG_STAMP): FORCE
+	@mkdir -p $(dir $@)
+	@printf '%s\n' "$(CPPFLAGS)" > $@.new
+	@cmp -s $@.new $@ || mv -f $@.new $@
+	@rm -f $@.new
+
+.PHONY: FORCE
+FORCE:
+
+$(BUILD_DIR)/%.o: src/%.c $(CONFIG_STAMP)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/%.o: src/%.cc
+$(BUILD_DIR)/%.o: src/%.cc $(CONFIG_STAMP)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(LLVM_CXXFLAGS) $(CXXFLAGS) -c $< -o $@
 
@@ -300,30 +340,73 @@ MINGW_ARCH ?= x86_64
 MUSL_SR    := $(STAGE_DIR)/$(MUSL_ARCH)-linux-musl
 MINGW_SR   := $(STAGE_DIR)/$(MINGW_ARCH)-w64-mingw32
 
+#
+# Where a mingw sysroot lives differs by build host: a Linux cross-build has
+# it under /usr/<triple>, while an MSYS2 host keeps the same files directly
+# in /mingw64/lib. Both are searched so `make stage-sysroots` works natively
+# on Windows instead of being Linux-only.
+#
+MINGW_LIBDIRS := /usr/$(MINGW_ARCH)-w64-mingw32/lib \
+                 /mingw64/lib /clang64/lib /ucrt64/lib \
+                 /c/msys64/mingw64/lib
+MINGW_GCCDIRS := $(wildcard /usr/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*win32) \
+                 $(wildcard /usr/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*) \
+                 $(wildcard /mingw64/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*) \
+                 $(wildcard /c/msys64/mingw64/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*)
+
+# Import libs beyond the bare CRT. These are what `link dynamic "ws2_32"`
+# and friends resolve against, so a sysroot without them links hello-world
+# but not anything using sockets, crypto or COM. Missing ones are skipped,
+# not fatal - the set differs between mingw-w64 packagings.
+MINGW_EXTRA_LIBS := libws2_32.a libgdi32.a libole32.a liboleaut32.a libuuid.a \
+                    libcomdlg32.a libwinspool.a libpsapi.a libiphlpapi.a \
+                    libcrypt32.a libbcrypt.a libsecur32.a libwinmm.a \
+                    libversion.a libnetapi32.a libuserenv.a libdbghelp.a
+
 stage-sysroots:
 	@echo "Staging sysroots into $(STAGE_DIR) ..."
 	@mkdir -p "$(MUSL_SR)" "$(MINGW_SR)/lib"
-	@cp /usr/lib/$(MUSL_ARCH)-linux-musl/crt1.o /usr/lib/$(MUSL_ARCH)-linux-musl/crti.o \
-	    /usr/lib/$(MUSL_ARCH)-linux-musl/crtn.o /usr/lib/$(MUSL_ARCH)-linux-musl/libc.a \
-	    "$(MUSL_SR)/" || { echo "  ! musl not found - 'apt install musl-dev'"; exit 1; }
-	@cp $$(ls /usr/lib/llvm-*/lib/clang/*/lib/linux/libclang_rt.builtins-$(MUSL_ARCH).a 2>/dev/null | head -1) \
-	    "$(MUSL_SR)/" 2>/dev/null || echo "  (compiler-rt builtins not bundled; optional)"
-	@for x in crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a libmsvcrt.a \
-	          libadvapi32.a libshell32.a libuser32.a libkernel32.a; do \
-	    cp /usr/$(MINGW_ARCH)-w64-mingw32/lib/$$x "$(MINGW_SR)/lib/" 2>/dev/null \
-	      || { echo "  ! mingw not found - 'apt install mingw-w64'"; exit 1; }; \
-	  done
-	@G=$$(ls -d /usr/lib/gcc/$(MINGW_ARCH)-w64-mingw32/*win32 2>/dev/null | head -1); \
-	  test -n "$$G" && cp "$$G/crtbegin.o" "$$G/crtend.o" "$$G/libgcc.a" "$$G/libgcc_eh.a" \
-	     "$(MINGW_SR)/lib/" || { echo "  ! gcc-mingw runtime not found"; exit 1; }
-	@echo "Staged:"
-	@echo "  musl  -> $(MUSL_SR)"
-	@echo "  mingw -> $(MINGW_SR)"
+	@if [ -f /usr/lib/$(MUSL_ARCH)-linux-musl/crt1.o ]; then \
+	   cp /usr/lib/$(MUSL_ARCH)-linux-musl/crt1.o /usr/lib/$(MUSL_ARCH)-linux-musl/crti.o \
+	      /usr/lib/$(MUSL_ARCH)-linux-musl/crtn.o /usr/lib/$(MUSL_ARCH)-linux-musl/libc.a \
+	      "$(MUSL_SR)/"; \
+	   cp $$(ls /usr/lib/llvm-*/lib/clang/*/lib/linux/libclang_rt.builtins-$(MUSL_ARCH).a 2>/dev/null | head -1) \
+	      "$(MUSL_SR)/" 2>/dev/null || echo "  (compiler-rt builtins not bundled; optional)"; \
+	   echo "  musl  -> $(MUSL_SR)"; \
+	 else \
+	   echo "  (musl not found - skipped; 'apt install musl-dev' to cross-compile Linux)"; \
+	   rmdir "$(MUSL_SR)" 2>/dev/null || true; \
+	 fi
+	@SRC=""; for d in $(MINGW_LIBDIRS); do \
+	   if [ -f "$$d/crt2.o" ]; then SRC="$$d"; break; fi; \
+	 done; \
+	 if [ -z "$$SRC" ]; then \
+	   echo "  (mingw not found - skipped; 'apt install mingw-w64', or MSYS2 mingw-w64-x86_64-gcc)"; \
+	   rm -rf "$(MINGW_SR)"; \
+	 else \
+	   for x in crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a libmsvcrt.a \
+	            libadvapi32.a libshell32.a libuser32.a libkernel32.a; do \
+	     cp "$$SRC/$$x" "$(MINGW_SR)/lib/" || { echo "  ! incomplete mingw sysroot in $$SRC ($$x)"; exit 1; }; \
+	   done; \
+	   for x in $(MINGW_EXTRA_LIBS); do cp "$$SRC/$$x" "$(MINGW_SR)/lib/" 2>/dev/null || true; done; \
+	   G=""; for g in $(MINGW_GCCDIRS); do if [ -f "$$g/crtbegin.o" ]; then G="$$g"; break; fi; done; \
+	   test -n "$$G" || { echo "  ! gcc-mingw runtime (crtbegin.o/libgcc.a) not found"; exit 1; }; \
+	   cp "$$G/crtbegin.o" "$$G/crtend.o" "$$G/libgcc.a" "$$G/libgcc_eh.a" "$(MINGW_SR)/lib/"; \
+	   echo "  mingw -> $(MINGW_SR) (from $$SRC)"; \
+	 fi
 
+# Only pass an embed directory that stage-sysroots actually produced -
+# naming a missing one makes the embed rule fail the whole build, which
+# would turn "this host cannot cross-compile to Linux" into "this host
+# cannot build salam at all". Tested in the recipe, not with $(wildcard),
+# since the directories do not exist yet when this Makefile is parsed.
 self-contained: stage-sysroots
-	$(MAKE) WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 \
-	        SALAM_EMBED_MUSL_DIR="$(MUSL_SR)" SALAM_EMBED_MINGW_DIR="$(MINGW_SR)" \
-	        LLVM_CONFIG="$(LLVM_CONFIG)" CXX="$(CXX)" CC="$(CC)"
+	@EMB=""; \
+	 test -f "$(MUSL_SR)/crt1.o"     && EMB="$$EMB SALAM_EMBED_MUSL_DIR=$(MUSL_SR)"; \
+	 test -f "$(MINGW_SR)/lib/crt2.o" && EMB="$$EMB SALAM_EMBED_MINGW_DIR=$(MINGW_SR)"; \
+	 echo "  embedding:$${EMB:- (none - host-only build)}"; \
+	 $(MAKE) WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1 $$EMB \
+	         LLVM_CONFIG="$(LLVM_CONFIG)" CXX="$(CXX)" CC="$(CC)"
 	@echo "Built self-contained salam -> $(OUTBIN)"
 	@echo "  cross-compile with e.g.:"
 	@echo "    $(OUTBIN) build app.salam --target=x86_64-linux-musl      -o app"

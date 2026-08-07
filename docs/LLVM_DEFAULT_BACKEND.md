@@ -39,7 +39,7 @@ Measured by running `salam llvm` over all 802 files in `tests/en`:
 | sweep           | OK  | codegen FAIL | expected-error tests |
 | --------------- | --- | ------------ | -------------------- |
 | baseline        | 512 | 162          | 127                  |
-| after this work | 673 | 2            | 127                  |
+| after this work | 675 | **0**        | 127                  |
 
 The 2 remaining are `tests/en/games/pacman/src/{ui,game}.salam`, which are
 _library modules_ of a web app - `ui.salam` has no `main` at all. Compiling
@@ -53,15 +53,13 @@ Per-category, baseline -> now:
 | gap                                      | before | after |
 | ---------------------------------------- | ------ | ----- |
 | `member X of non-struct/unknown type`    | 405    | 0     |
-| `address of an unknown identifier`       | 249    | 10    |
+| `address of an unknown identifier`       | 249    | 0     |
 | `method X on type X`                     | 184    | 0     |
 | `call to unknown/unsupported function`   | 150    | 0     |
 | layout (`LayoutBlock`/`LayoutComponent`) | 50     | 0     |
 | `struct literal of unknown type`         | 32     | 0     |
 
-The 10 remaining `address of an unknown identifier` all come from the two
-web-app library modules above (a lambda capturing a function-typed
-parameter), in files neither backend compiles standalone.
+Every category is at zero.
 
 Note `tests/en/errors/` accounts for most of the 127 "expected-error" files;
 those are supposed to fail and are not a gap.
@@ -143,6 +141,25 @@ built-in work:
   not in a two-line test. Now falls back to a package lookup by name, but
   only when the receiver is not a value in scope, so a local that
   legitimately shadows a package name still wins.
+
+### Also fixed: lambda capturing a function value it calls
+
+The last failures, and a **shared front-end bug**, not a backend one. Captures
+were recorded only on the `AST_IDENTIFIER` expression path, and a call's
+callee never goes through it - so in
+
+```salam
+func wire(d: int, dir: func (int)):
+    apply((x: int): dir(x) end, d)
+end
+```
+
+`dir` was left out of the lambda's capture list entirely. Both backends then
+failed to find it (`address of an unknown identifier 'dir'` /
+`'dir' undeclared`). Passing the same value along _without calling it_
+worked, which is what made it look target-specific for so long. Fixed in
+`sema_call.c` and `compiler/semantic.salam` by recording the capture on the
+indirect-call path with the same condition the expression path uses.
 
 ### Still open
 
@@ -506,8 +523,8 @@ Verified by running the same 802-file sweep with both:
 
 | compiler    | OK  | codegen FAIL | expected-error |
 | ----------- | --- | ------------ | -------------- |
-| C           | 673 | 2            | 127            |
-| self-hosted | 673 | 2            | 127            |
+| C           | 675 | 0            | 127            |
+| self-hosted | 675 | 0            | 127            |
 
 Zero differing files. The self-hosted compiler also passes 73/73 on
 `tests/en/llvm/` built and run with output compared byte-for-byte.

@@ -394,12 +394,30 @@ const char *driver_output_stem(arena_t *a, const char *path)
     if (strcmp(module, "salam") != 0) return module;
     const char *dir = dir_of(a, path);
     if (!dir[0]) dir = ".";
-    char abs[1024];
+    /* Resolve to an absolute path on the heap - a fixed local buffer is
+     * both unsafe (realpath() writes up to PATH_MAX and cannot be told the
+     * caller's size) and too small (Windows long paths reach ~32k), so
+     * realpath() allocates the exact answer and _fullpath(), which only
+     * fails with ERANGE when the result does not fit, is retried on a
+     * growing buffer. */
 #if defined(_WIN32)
-    if (!_fullpath(abs, dir, sizeof abs)) return module;
+    char *abs = NULL;
+    {
+        size_t cap = 1024;
+        for (; cap <= 65536; cap *= 4) {
+            char *buf = (char *)malloc(cap);
+            if (!buf) break;
+            if (_fullpath(buf, dir, cap)) {
+                abs = buf;
+                break;
+            }
+            free(buf);
+        }
+    }
 #else
-    if (!realpath(dir, abs)) return module;
+    char *abs = realpath(dir, NULL);
 #endif
+    if (!abs) return module;
     size_t L = strlen(abs);
     while (L > 1 && (abs[L - 1] == '/' || abs[L - 1] == '\\'))
         abs[--L] = '\0';
@@ -409,8 +427,11 @@ const char *driver_output_stem(arena_t *a, const char *path)
         for (; *p; p++)
             if (*p == '/' || *p == '\\') base = p + 1;
     }
-    if (!base[0] || strcmp(base, ".") == 0 || strcmp(base, "..") == 0) return module;
-    return arena_strdup(a, base);
+    const char *stem = module;
+    if (base[0] && strcmp(base, ".") != 0 && strcmp(base, "..") != 0)
+        stem = arena_strdup(a, base);
+    free(abs);
+    return stem;
 }
 
 const char *driver_page_stem(arena_t *a, const char *path)

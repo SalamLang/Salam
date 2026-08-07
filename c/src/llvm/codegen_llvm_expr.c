@@ -1096,7 +1096,17 @@ static llv_t ll_call_method(ll_t *ll, ast_node_t *n, ast_node_t *callee)
     if (!strcmp(mname, "len") && (ll_is_slice_ts(ots) || (ots && strchr(ots, '['))))
         return ll_len_of(ll, n, obj);
 
-    if (obj->kind == AST_IDENTIFIER) {
+    /*
+     * Package-qualified call (`str.Equals(...)`). Gated on the receiver
+     * having no value type of its own: ll_sym searches the global scope and
+     * then *every loaded package*, so a function-local whose name matches a
+     * package's - `mut map := Vector {} as Vector<int>` in jsgen.salam,
+     * against std/map's `package map` - resolved to the package and its
+     * `map.free()` became "package function 'free' not found". A package
+     * identifier carries no value type, so requiring an empty/<null> type
+     * separates the two cleanly.
+     */
+    if (obj->kind == AST_IDENTIFIER && (!ots[0] || !strcmp(ots, "<null>"))) {
         symbol_t *pk = ll_sym(ll, obj->name);
         if (pk && pk->kind == SYM_PACKAGE) return ll_call_pkg(ll, n, pk, mname);
         /*
@@ -1111,7 +1121,7 @@ static llv_t ll_call_method(ll_t *ll, ast_node_t *n, ast_node_t *callee)
          * Only consulted when the receiver is not a value in scope, so a
          * local that legitimately shadows a package name still wins.
          */
-        if (!ll_local_find(ll, obj->name) && !ll_global_find(ll, obj->name)) {
+        {
             size_t p = 0;
             for (; p < ll->sem->packages.len; p++) {
                 symbol_t *cand = (symbol_t *)ll->sem->packages.data[p];
@@ -1437,6 +1447,26 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
         }
         lvar_t *g = ll_global_find(ll, n->name);
         if (g) return (ll_addr_t){g->ptr, g->ts};
+        /*
+         * A package-level global reached from a function of that same
+         * package that nothing has touched yet - std/core's `mut _argc`,
+         * read by its own salam_args(), when the only entry point into
+         * core was an ensure_fn from elsewhere. ll_touch_pkg emits the
+         * package's globals, so the lookup can only succeed after it.
+         */
+        {
+            size_t p = 0;
+            for (; p < ll->sem->packages.len; p++) {
+                symbol_t *pk = (symbol_t *)ll->sem->packages.data[p];
+                symbol_t *gv;
+                if (!pk || pk->kind != SYM_PACKAGE || !pk->members) continue;
+                gv = scope_lookup_local(pk->members, n->name);
+                if (!gv || (gv->kind != SYM_VAR && gv->kind != SYM_CONST)) continue;
+                ll_touch_pkg(ll, pk);
+                g = ll_global_find(ll, n->name);
+                if (g) return (ll_addr_t){g->ptr, g->ts};
+            }
+        }
         ll_error(ll, n, "address of an unknown identifier '%s'", n->name);
         return (ll_addr_t){"null", n->type_str ? n->type_str : "i32"};
     }

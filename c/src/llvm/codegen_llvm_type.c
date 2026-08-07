@@ -483,10 +483,36 @@ int ll_field_index(symbol_t *ssym, const char *field, symbol_t **out_field)
     return -1;
 }
 
+/*
+ * Length of the "func(" / "externfunc(" prefix, or 0 when `ts` is neither.
+ * Both spellings come out of type_to_string (types.c picks by t->length),
+ * and every structural helper below parses them identically - only the
+ * *call* lowering differs, since an externfunc is a bare C function
+ * pointer with no closure environment.
+ */
+static size_t ll_fnprefix(const char *ts)
+{
+    if (!ts) return 0;
+    if (!strncmp(ts, "func(", 5)) return 4;
+    if (!strncmp(ts, "externfunc(", 11)) return 10;
+    return 0;
+}
+
+bool ll_is_extern_fn_ts(const char *ts)
+{
+    return ts && !strncmp(ts, "externfunc(", 11);
+}
+
+bool ll_is_any_fn_ts(const char *ts)
+{
+    return ll_fnprefix(ts) != 0;
+}
+
 const char *ll_func_ret(ll_t *ll, const char *ts)
 {
-    if (!ts || strncmp(ts, "func(", 5)) return "void";
-    const char *p = ts + 4;
+    size_t pre = ll_fnprefix(ts);
+    if (!pre) return "void";
+    const char *p = ts + pre;
     int d = 0;
     for (; *p; p++) {
         if (*p == '(')
@@ -505,9 +531,10 @@ const char *ll_func_ret(ll_t *ll, const char *ts)
 
 void ll_func_params(ll_t *ll, const char *ts, vec_t *out)
 {
+    size_t pre = ll_fnprefix(ts);
     vec_init(out);
-    if (!ts || strncmp(ts, "func(", 5)) return;
-    const char *start = ts + 5;
+    if (!pre) return;
+    const char *start = ts + pre + 1;
     int depth = 0;
     {
         const char *p = start;

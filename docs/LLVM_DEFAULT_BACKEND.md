@@ -39,7 +39,14 @@ Measured by running `salam llvm` over all 802 files in `tests/en`:
 | sweep           | OK  | codegen FAIL | expected-error tests |
 | --------------- | --- | ------------ | -------------------- |
 | baseline        | 512 | 162          | 127                  |
-| after this work | 621 | 54           | 127                  |
+| after this work | 673 | 2            | 127                  |
+
+The 2 remaining are `tests/en/games/pacman/src/{ui,game}.salam`, which are
+*library modules* of a web app - `ui.salam` has no `main` at all. Compiling
+them standalone fails identically on the C backend ("no entry point"), and
+the real entry point (`index.salam`) builds fine via `salam web`. So they are
+not a backend gap: **the LLVM backend now compiles everything the C backend
+compiles.**
 
 Per-category, baseline -> now:
 
@@ -47,13 +54,14 @@ Per-category, baseline -> now:
 | ---------------------------------------- | ------ | ----- |
 | `member X of non-struct/unknown type`    | 405    | 0     |
 | `address of an unknown identifier`       | 249    | 10    |
-| `method X on type X`                     | 184    | 3     |
-| `call to unknown/unsupported function`   | 150    | 18    |
-| layout (`LayoutBlock`/`LayoutComponent`) | 50     | 50    |
+| `method X on type X`                     | 184    | 0     |
+| `call to unknown/unsupported function`   | 150    | 0     |
+| layout (`LayoutBlock`/`LayoutComponent`) | 50     | 0     |
 | `struct literal of unknown type`         | 32     | 0     |
 
-50 of the remaining 54 are the layout DSL; only 18 test files outside
-`tests/en/layout/` still fail.
+The 10 remaining `address of an unknown identifier` all come from the two
+web-app library modules above (a lambda capturing a function-typed
+parameter), in files neither backend compiles standalone.
 
 Note `tests/en/errors/` accounts for most of the 127 "expected-error" files;
 those are supposed to fail and are not a gap.
@@ -106,24 +114,43 @@ built-in work:
   `SYM_METHOD` lookup could ever match, so it fell through to the error.
   Routed to `ll_call_indirect`.
 
+### Also fixed (second pass)
+
+- **Raw C function pointers** (`externfunc(...)`, from
+  `x as extern func (i32, i32) i32` and std/webview's COM vtable slot
+  casts). The LLVM backend had no case for them at all. Unlike a `func(...)`
+  closure - env pointer whose first word is the code pointer - an
+  externfunc *is* the code pointer and takes no hidden argument, so it needs
+  its own lowering (`ll_call_raw_ptr`), dispatched first exactly as
+  `cg_call` has always done. Also taught `ll_func_ret`/`ll_func_params` the
+  second prefix. Fixed 4 files.
+- **Layout declarations are skipped, not an error.** `AST_LAYOUT_BLOCK` /
+  `AST_LAYOUT_COMPONENT` are the HTML/UI DSL, lowered by `c/src/layout/` for
+  `layout-build`/`web` and never by a code generator - the C backend emits
+  "layout block omitted in general (C) mode" and drops them. Reporting them
+  as unsupported made 50 files look like backend gaps that the C backend
+  does not compile either. Fixed 42 files.
+- **`d.free()` on an interface value** releases the box, not a vtable
+  method, so no slot could ever match ("interface 'Shape' has no method
+  'free'").
+- **Assignment as an expression** (`a = b = c`): store, then reload the
+  target so a narrowing target yields what a subsequent read would.
+- **Package name shadowed by an extern of the same name.** `ll_sym` searches
+  the global scope first, so `time.FormatDate(...)` could resolve `time` to
+  std/time's `extern func time(...)` rather than the package, reported as a
+  method on type `<null>`. Whether it happened depended on which other
+  packages a program pulled in, which is why it surfaced in std/excel and
+  not in a two-line test. Now falls back to a package lookup by name, but
+  only when the receiver is not a value in scope, so a local that
+  legitimately shadows a package name still wins.
+
 ### Still open
 
-1. **Layout DSL** (`LayoutBlock`, `LayoutComponent`) - 50 of the remaining
-   54 failures. This is the HTML/UI subsystem and has its own generator
-   (`c/src/layout/`). It is not reached by `salam build` for ordinary
-   programs; decide explicitly whether the LLVM backend should support it or
-   whether `layout-build` stays on the C backend. Until then the automatic
-   fallback covers it.
-
-2. **The last 18 non-layout files** - a long tail of webview callback
-   plumbing (`*_fn` indirect calls through integer handles), two interface
-   method lookups, and one assignment-expression form.
-
-3. **Cross-package name collisions.** `ll_emit_globals` names globals
-   `@g.<bare name>` and `ll_global_find` matches on the bare name, so two
-   packages exporting the same constant name silently resolve to whichever
-   was touched first. The C backend has the same class of bug at link time
-   (recorded in the project notes). Both want package-qualified symbol names.
+**Cross-package name collisions.** `ll_emit_globals` names globals
+`@g.<bare name>` and `ll_global_find` matches on the bare name, so two
+packages exporting the same constant name silently resolve to whichever was
+touched first. The C backend has the same class of bug at link time. Both
+want package-qualified symbol names. No test currently trips it.
 
 ## Self-contained toolchain
 
@@ -479,8 +506,8 @@ Verified by running the same 802-file sweep with both:
 
 | compiler    | OK  | codegen FAIL | expected-error |
 | ----------- | --- | ------------ | -------------- |
-| C           | 621 | 54           | 127            |
-| self-hosted | 621 | 54           | 127            |
+| C           | 673 | 2            | 127            |
+| self-hosted | 673 | 2            | 127            |
 
 Zero differing files. The self-hosted compiler also passes 73/73 on
 `tests/en/llvm/` built and run with output compared byte-for-byte.

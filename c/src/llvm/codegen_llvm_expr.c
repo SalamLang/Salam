@@ -1008,6 +1008,19 @@ static llv_t ll_call_dyn(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *i
         ll_error(ll, n, "dynamic call on non-interface '%s'", ib);
         return ll_poison(n->type_str);
     }
+    /*
+     * `d.free()` on an interface value releases the *box*, not a method on
+     * the interface - so no vtable slot could ever match it and the lookup
+     * below would report "interface 'Shape' has no method 'free'". Same
+     * lowering the C backend gives it in call_dyn().
+     */
+    if (!strcmp(mname, "free") && n->list.len == 0) {
+        llv_t dv = ll_expr(ll, obj);
+        const char *data = ll_new_tmp(ll);
+        ll_emit(ll, "%s = extractvalue %%dyn %s, 0", data, dv.ref);
+        ll_emit(ll, "call void @free(ptr %s)", data);
+        return (llv_t){"0", "void"};
+    }
     int idx = 0, slot = -1;
     func_sig_t *msig = NULL;
     {
@@ -1086,6 +1099,27 @@ static llv_t ll_call_method(ll_t *ll, ast_node_t *n, ast_node_t *callee)
     if (obj->kind == AST_IDENTIFIER) {
         symbol_t *pk = ll_sym(ll, obj->name);
         if (pk && pk->kind == SYM_PACKAGE) return ll_call_pkg(ll, n, pk, mname);
+        /*
+         * ll_sym searches the global scope first, so a package whose name
+         * is also an extern function's - std/time is `package time` and
+         * declares `extern func time(...)` - can resolve to the function
+         * instead, leaving `time.FormatDate(...)` reported as a method on
+         * type '<null>'. Whether that happens depends on which other
+         * packages a program pulls in, which is why it only showed up in
+         * std/excel and not in a two-line test.
+         *
+         * Only consulted when the receiver is not a value in scope, so a
+         * local that legitimately shadows a package name still wins.
+         */
+        if (!ll_local_find(ll, obj->name) && !ll_global_find(ll, obj->name)) {
+            size_t p = 0;
+            for (; p < ll->sem->packages.len; p++) {
+                symbol_t *cand = (symbol_t *)ll->sem->packages.data[p];
+                if (!cand || cand->kind != SYM_PACKAGE || !cand->pkgname) continue;
+                if (!strcmp(cand->pkgname, obj->name))
+                    return ll_call_pkg(ll, n, cand, mname);
+            }
+        }
     }
 
     bool isptr = ll_is_ptr_ts(ots);
@@ -1162,6 +1196,49 @@ static llv_t ll_call_indirect(ll_t *ll, ast_node_t *n, ast_node_t *callee)
 static bool ll_is_func_ts(const char *ts)
 {
     return ts && !strncmp(ts, "func(", 5);
+}
+
+/*
+ * Call through a raw C function pointer - `externfunc(...)`, produced by
+ * `x as extern func (i32, i32) i32` and by COM vtable slot casts in
+ * std/webview. Unlike a `func(...)` value, which is a closure (env pointer
+ * whose first word is the code pointer, so ll_call_indirect loads through
+ * it and passes the env as argument 0), an externfunc IS the code pointer
+ * and takes no hidden argument. The C backend has kept these apart since
+ * cg_call's first line; this is the LLVM side of that split.
+ */
+static llv_t ll_call_raw_ptr(ll_t *ll, ast_node_t *n, ast_node_t *callee)
+{
+    const char *fts = callee->type_str;
+    llv_t fv = ll_expr(ll, callee);
+    const char *fn = ll_new_tmp(ll);
+    const char *rts = ll_func_ret(ll, fts);
+    vec_t pts;
+    sb_t ab;
+    const char *args;
+    ll_emit(ll, "%s = inttoptr %s %s to ptr", fn, ll_ty(ll, fv.ts), fv.ref);
+    ll_func_params(ll, fts, &pts);
+    sb_init(&ab);
+    {
+        size_t i = 0;
+        for (; i < n->list.len; i++) {
+            llv_t v = ll_expr(ll, (ast_node_t *)n->list.data[i]);
+            const char *pt = i < pts.len ? (const char *)pts.data[i] : v.ts;
+            if (i) sb_puts(&ab, ", ");
+            sb_puts(&ab, ll_fmt(ll, "%s %s", ll_ty(ll, pt), ll_conv(ll, v, pt)));
+        }
+    }
+    args = arena_strdup(ll->a, sb_cstr(&ab));
+    sb_free(&ab);
+    if (rts && !strcmp(rts, "void")) {
+        ll_emit(ll, "call void %s(%s)", fn, args);
+        return (llv_t){"0", "void"};
+    }
+    {
+        const char *r = ll_new_tmp(ll);
+        ll_emit(ll, "%s = call %s %s(%s)", r, ll_ty(ll, rts), fn, args);
+        return (llv_t){r, rts};
+    }
 }
 
 static bool ll_call_intrinsic(ll_t *ll, ast_node_t *n, const char *nm, llv_t *out)
@@ -1275,6 +1352,10 @@ static bool ll_call_intrinsic(ll_t *ll, ast_node_t *n, const char *nm, llv_t *ou
 static llv_t ll_call(ll_t *ll, ast_node_t *n)
 {
     ast_node_t *callee = n->a;
+    /* Checked before every other form, exactly as cg_call does: a raw C
+     * function pointer is callable whatever expression shape produced it. */
+    if (callee && ll_is_extern_fn_ts(callee->type_str))
+        return ll_call_raw_ptr(ll, n, callee);
     if (callee && callee->kind == AST_MEMBER) return ll_call_method(ll, n, callee);
     if (callee && callee->kind == AST_IDENTIFIER) {
         const char *nm = callee->name;
@@ -1827,6 +1908,22 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
         return ll_slice_expr(ll, n);
     case AST_LAMBDA:
         return ll_lambda_value(ll, n);
+    case AST_ASSIGN:
+        /*
+         * Assignment used as an expression, which is how `a = b = c`
+         * parses: the inner `b = c` is the right operand of the outer
+         * assignment. Perform the store, then yield the value now in the
+         * target - reloading rather than reusing the stored value so a
+         * narrowing target ("a: i8 = 300") produces what a subsequent read
+         * would, which is also what the C backend's `(a = b)` gives.
+         */
+        ll_assign(ll, n);
+        {
+            ll_addr_t a = ll_addr_of(ll, n->a);
+            const char *r = ll_new_tmp(ll);
+            ll_emit(ll, "%s = load %s, ptr %s", r, ll_ty(ll, a.ts), a.ptr);
+            return (llv_t){r, a.ts};
+        }
     default:
         ll_error(ll, n, "%s expression", ast_kind_name(n->kind));
         return ll_poison(n->type_str);

@@ -35,6 +35,15 @@ on:
         description: 'Released salam version to bootstrap FROM (e.g. 0.2.7). Blank = latest release with an asset for the runner platform.'
         type: string
         default: ''
+# ccache stores its objects zstd-compressed, but at its default level. The
+# 10 GB Actions cache budget is repository-wide and shared with every other
+# workflow, so raise the level: smaller uploads, and because --max-size caps
+# the COMPRESSED size, more objects fit in the same budget. Matches the value
+# compiler-release.yml sets for the same reason.
+env:
+  CCACHE_COMPRESS: '1'
+  CCACHE_COMPRESSLEVEL: '9'
+
 permissions:
   contents: read
 concurrency:
@@ -245,7 +254,27 @@ jobs:
           if make -C c libsalam-llvm -j2 WITH_LLVM=1 WITH_LLD=1 \
             LLVM_LINK_STATIC=1 LLVM_CONFIG="$LLVM_CONFIG" \
             CC="$CCOMPILER" CXX="$CXXCOMPILER"; then
-            ls -la libsalam_llvm.a
+            # The merged archive carries LLVM's own DWARF, which nothing here
+            # ever reads: it describes LLVM's internals, not the user program
+            # being compiled. Dropping it is the single biggest lever on this
+            # cache entry, and the repository's 10 GB cache budget is shared
+            # with every other workflow.
+            #
+            # --strip-debug only, never --strip-all or --strip-unneeded: those
+            # drop the symbol table a static archive is linked BY. ranlib
+            # afterwards rebuilds the archive index that strip invalidates.
+            before=$(wc -c <libsalam_llvm.a | tr -d ' ')
+            strip --strip-debug libsalam_llvm.a 2>/dev/null ||
+              strip -S libsalam_llvm.a 2>/dev/null || true
+            ranlib libsalam_llvm.a 2>/dev/null || true
+            after=$(wc -c <libsalam_llvm.a | tr -d ' ')
+            echo "libsalam_llvm.a: $before -> $after bytes after --strip-debug"
+            # A stripped archive that no longer links is worse than a big one.
+            if ! ar t libsalam_llvm.a >/dev/null 2>&1; then
+              echo "::error::libsalam_llvm.a is unreadable after strip"
+              rm -f libsalam_llvm.a
+              exit 0
+            fi
             echo "libsalam_llvm.a built - stage2 will link LLVM/LLD in-process"
           else
             echo "::warning::libsalam-llvm failed; stage2 uses the C backend"

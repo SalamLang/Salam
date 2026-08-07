@@ -506,6 +506,17 @@ static void ll_toplevel(ll_t *ll, ast_node_t *d)
     case AST_LINK:
     case AST_TYPE_ALIAS:
         break;
+    /*
+     * Layout declarations are the HTML/UI DSL and are lowered by
+     * c/src/layout/ for `salam layout-build`/`web`, never by a code
+     * generator - the C backend emits "layout block omitted in general (C)
+     * mode" and drops them. Reporting them as unsupported here made every
+     * layout-using file look like an LLVM backend gap (50 of 54 remaining
+     * failures) when the C backend does not compile them either.
+     */
+    case AST_LAYOUT_BLOCK:
+    case AST_LAYOUT_COMPONENT:
+        break;
     default:
         ll_error(ll, d, "top-level %s (layout/unsupported)", ast_kind_name(d->kind));
         break;

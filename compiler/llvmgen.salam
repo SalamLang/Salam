@@ -1314,12 +1314,32 @@ func field_index(s &: sm.Sema, ssym: int, field: str, out_field &: int): int:
 end
 
 // ll_func_ret
+// Length of the "func(" / "externfunc(" prefix, or 0 when `ts` is neither.
+// Both spellings come out of type_to_string (semantic picks by t->length),
+// and every structural helper parses them identically - only the *call*
+// lowering differs, since an externfunc is a bare C function pointer with
+// no closure environment.
+func fn_prefix(ts: str): int:
+    if str.StartsWith(ts, "func("):
+        ret 4
+    end
+    if str.StartsWith(ts, "externfunc("):
+        ret 10
+    end
+    ret 0
+end
+
+func is_extern_fn_ts(ts: str): bool:
+    ret str.StartsWith(ts, "externfunc(")
+end
+
 func func_ret(ts: str): str:
-    if !str.StartsWith(ts, "func("):
+    pre := fn_prefix(ts)
+    if pre == 0:
         ret "void"
     end
     n := str.Len(ts)
-    mut p := 4
+    mut p := pre
     mut d := 0
     mut brk0 := false
     until p < n && !brk0:
@@ -1351,13 +1371,14 @@ end
 // ll_func_params - caller owns (and frees) the returned vector.
 func func_params(ts: str): Vector<str>:
     mut out2 := Vector {} as Vector<str>
-    if !str.StartsWith(ts, "func("):
+    pre := fn_prefix(ts)
+    if pre == 0:
         ret out2
     end
     n := str.Len(ts)
-    mut start0 := 5
+    mut start0 := pre + 1
     mut depth := 0
-    mut p := 5
+    mut p := pre + 1
     mut fin := false
     until !fin:
         c := p < n ? byte_at(ts, p) : 0
@@ -1903,7 +1924,12 @@ func toplevel(v &: Lv, s &: sm.Sema, a &: at.Ast, d: int):
                 emit_function(v, s, a, m, ssym)
             end
         end
-    else k == at.AST_ENUM_DEF || k == at.AST_CONST_DECL || k == at.AST_VAR_DECL || k == at.AST_INTERFACE_DEF || k == at.AST_IMPL_DEF || k == at.AST_IMPORT || k == at.AST_LINK || k == at.AST_TYPE_ALIAS:
+    // Layout declarations are the HTML/UI DSL, lowered by sal_layout.salam
+    // for `layout-build`/`web`, never by a code generator - the C backend
+    // emits "layout block omitted in general (C) mode" and drops them.
+    // Reporting them as unsupported made every layout-using file look like
+    // an LLVM backend gap when the C backend does not compile them either.
+    else k == at.AST_ENUM_DEF || k == at.AST_CONST_DECL || k == at.AST_VAR_DECL || k == at.AST_INTERFACE_DEF || k == at.AST_IMPL_DEF || k == at.AST_IMPORT || k == at.AST_LINK || k == at.AST_TYPE_ALIAS || k == at.AST_LAYOUT_BLOCK || k == at.AST_LAYOUT_COMPONENT:
         // nothing at the top level
         _k := k
     else:
@@ -4275,6 +4301,17 @@ func call_dyn(
         lv_error(v, a, n, "dynamic call on non-interface '" + ib + "'")
         ret poison(at.Get(a, n).type_str)
     end
+    // `d.free()` on an interface value releases the *box*, not a method on
+    // the interface - so no vtable slot could ever match and the lookup
+    // below would report "interface 'Shape' has no method 'free'". Same
+    // lowering the C backend gives it in call_dyn().
+    if str.Equals(mname, "free") && at.Get(a, n).list.len() == 0:
+        dv0 := lv_expr(v, s, a, obj)
+        data0 := new_tmp(v)
+        emit(v, data0 + " = extractvalue %dyn " + dv0.ref + ", 0")
+        emit(v, "call void @free(ptr " + data0 + ")")
+        ret make_llv("0", "void")
+    end
     mut idx := 0
     mut slot := 0 - 1
     mut msig := 0
@@ -4368,6 +4405,22 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
         if pk != 0 && sm.SymAt(s, pk).kind == sm.SYM_PACKAGE:
             ret call_pkg(v, s, a, n, pk, mname)
         end
+        // sym_of searches the global scope first, so a package whose name
+        // is also an extern function's - std/time is `package time` and
+        // declares `extern func time(...)` - can resolve to the function
+        // instead, leaving `time.FormatDate(...)` reported as a method on
+        // type '<null>'. Only consulted when the receiver is not a value
+        // in scope, so a local shadowing a package name still wins.
+        if local_find(v, objn.name) < 0 && global_find(v, objn.name) < 0:
+            mut pi := 0
+            until pi < sm.PackageCount(s):
+                cand := sm.PackageAt(s, pi)
+                if cand != 0 && str.Equals(sm.SymAt(s, cand).pkgname, objn.name):
+                    ret call_pkg(v, s, a, n, cand, mname)
+                end
+                pi += 1
+            end
+        end
     end
 
     isptr := is_ptr_ts(ots)
@@ -4448,6 +4501,45 @@ end
 // ll_is_func_ts
 func is_func_ts(ts: str): bool:
     ret str.StartsWith(ts, "func(")
+end
+
+// ll_call_raw_ptr - call through a raw C function pointer,
+// `externfunc(...)`, produced by `x as extern func (i32, i32) i32` and by
+// COM vtable slot casts in std/webview. Unlike a `func(...)` value, which
+// is a closure (env pointer whose first word is the code pointer, so
+// call_indirect loads through it and passes the env as argument 0), an
+// externfunc IS the code pointer and takes no hidden argument.
+func call_raw_ptr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
+    fts := at.Get(a, callee).type_str
+    fv := lv_expr(v, s, a, callee)
+    fn := new_tmp(v)
+    emit(v, fn + " = inttoptr " + ty_of(v, s, a, fv.ts) + " " + fv.ref + " to ptr")
+    rts := func_ret(fts)
+    mut pts := func_params(fts)
+    nn := at.Get(a, n)
+    mut ab := co.SbNew()
+    mut i := 0
+    until i < nn.list.len():
+        av := lv_expr(v, s, a, nn.list.get(i)[0])
+        mut pt := av.ts
+        if i < pts.len():
+            pt = pts.get(i)[0]
+        end
+        if i > 0:
+            co.SbPuts(ab, ", ")
+        end
+        co.SbPuts(ab, ty_of(v, s, a, pt) + " " + conv(v, s, a, av, pt))
+        i += 1
+    end
+    argsx := co.SbCstr(ab)
+    co.SbFree(ab)
+    if str.Equals(rts, "void"):
+        emit(v, "call void " + fn + "(" + argsx + ")")
+        ret make_llv("0", "void")
+    end
+    r := new_tmp(v)
+    emit(v, r + " = call " + ty_of(v, s, a, rts) + " " + fn + "(" + argsx + ")")
+    ret make_llv(r, rts)
 end
 
 // ll_call_intrinsic
@@ -4571,6 +4663,11 @@ end
 func lv_call(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     nn := at.Get(a, n)
     callee := nn.a
+    // Checked before every other form, exactly as cg_call does: a raw C
+    // function pointer is callable whatever expression shape produced it.
+    if callee != 0 && is_extern_fn_ts(at.Get(a, callee).type_str):
+        ret call_raw_ptr(v, s, a, n, callee)
+    end
     if callee != 0 && at.KindOf(a, callee) == at.AST_MEMBER:
         ret call_method(v, s, a, n, callee)
     end
@@ -5267,6 +5364,18 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     end
     if k == at.AST_LAMBDA:
         ret lv_lambda_value(v, s, a, n)
+    end
+    // Assignment used as an expression, which is how `a = b = c` parses:
+    // the inner `b = c` is the right operand of the outer assignment.
+    // Store, then yield the value now in the target - reloading rather
+    // than reusing the stored value so a narrowing target produces what a
+    // subsequent read would, matching the C backend's `(a = b)`.
+    if k == at.AST_ASSIGN:
+        lv_assign(v, s, a, n)
+        ad := lv_addr_of(v, s, a, nd.a)
+        r2 := new_tmp(v)
+        emit(v, r2 + " = load " + ty_of(v, s, a, ad.ts) + ", ptr " + ad.ptr)
+        ret make_llv(r2, ad.ts)
     end
     lv_error(v, a, n, at.KindName(k) + " expression")
     ret poison(nd.type_str)

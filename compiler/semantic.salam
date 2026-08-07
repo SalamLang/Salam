@@ -11037,6 +11037,69 @@ pub func New(lgr: lg.Logger, file: str, lang: str): Sema:
     ret s
 end
 
+// Re-points one Sema at the next file of a build instead of building a new
+// one, so every imported package is loaded/parsed/analyzed once per build
+// rather than once per importer (the C gets this from sema_run_cached's
+// shared_pkg_cache: there symbols are arena pointers that outlive each
+// sema_t, here they are SymIds into syms/scopes/sigs, so the Sema itself is
+// what has to persist).
+//
+// KEEPS the symbol/type/scope storage, the package cache and the prelude.
+// RESETS everything per-file and installs a FRESH global scope, matching the
+// C where each sema_run has its own scope tree over a shared symbol arena.
+// Returns the new global ScopeId: the caller must hand it back via
+// RebindScope before codegen, which resolves names through s.global.
+//
+// The caller must also keep ONE at.Ast alive for the whole build - cached
+// package symbols hold NodeIds into the tree they were parsed from.
+pub func Rebind(sm &: Sema, file: str, lang: str): int:
+    sm.diag = dg.New(sm.log, lg.PH_SEMANTIC)
+    sm.file = file
+    if str.Len(lang) > 0:
+        sm.lang = lang
+    else:
+        sm.lang = "en"
+    end
+    g := scope_new(sm, SCOPE_GLOBAL, 0)
+    mut gv := scope_at(sm, g)
+    gv.lang = sm.lang
+    scope_put(sm, g, gv)
+    sm.global = g
+    sm.cur = g
+    sm.dir = dir_of(file)
+    sm.pkg = "main"
+    sm.self_type = TYPE_NONE
+    sm.cur_func = 0
+    sm.loop_depth = 0
+    sm.program = 0
+    sm.expected = TYPE_NONE
+    sm.gen_pkg = 0
+    sm.in_pkg = false
+    sm.relax_unused = false
+    sm.requal = false
+    sm.each_n = 0
+    sm.match_arm_depth = 0
+    sm.match_yield_expected = TYPE_NONE
+    sm.match_yield_active = false
+    sm.imported.clear()
+    sm.loading.clear()
+    sm.pending.clear()
+    sm.lam.clear()
+    sm.match_yield_collect.clear()
+    ret g
+end
+
+// Restores the per-file view recorded by Rebind. Codegen resolves top-level
+// names through s.global/s.pkg, so a shared Sema must be pointed back at the
+// right file's scope before generating that file's C.
+pub func RebindScope(sm &: Sema, scope: int, pkg: str, file: str):
+    sm.global = scope
+    sm.cur = scope
+    sm.pkg = pkg
+    sm.file = file
+    sm.dir = dir_of(file)
+end
+
 // Releases every vector owned by the Sema (no C equivalent; arena freed all).
 pub func Free(sm &: Sema):
     repeat sm.types.len() with i0:

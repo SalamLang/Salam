@@ -755,6 +755,10 @@ static bool is_wellknown_libc_name(const char *name)
         "GetSystemTimeAsFileTime",
         "GetCurrentDirectoryA",
         "GetFileAttributesA",
+        /* std/fs spells the info-level param `int`; <windows.h> spells it
+         * GET_FILEEX_INFO_LEVELS (an enum), which no Salam extern can
+         * express, so this one is only ever safe behind the guard. */
+        "GetFileAttributesExA",
         "MultiByteToWideChar",
         "WideCharToMultiByte",
         "CreateWindowExA",

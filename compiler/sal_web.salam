@@ -199,7 +199,7 @@ end
 // regardless of reachability from `main`, and llvm.salam/codegen.salam both
 // emit it under its exact, unmangled name with external linkage - together,
 // "survives tree-shaking" + "callable by this exact C symbol name", which is
-// exactly what editor/src/app.salam's cwrap(module, "salam_web_run_app",
+// exactly what editor/app.salam's cwrap(module, "salam_web_run_app",
 // "string", [...]) needs on the other side of the wasm/JS boundary. `str`
 // already lowers to a bare `ptr` (see llvm.salam's ty_of/is_str and the
 // matching C-backend representation), the same representation emscripten's
@@ -221,6 +221,10 @@ extern:
 
     func salam_web_version(): str:
         ret Version()
+    end
+
+    func salam_web_syntax_ok(source: str, lang: str): str:
+        ret SyntaxOk(source, lang)
     end
 end
 
@@ -468,4 +472,43 @@ end
 // salam_web_version
 pub func Version(): str:
     ret "Salam WebAssembly playground"
+end
+
+// salam_web_syntax_ok - lex + parse only, reporting whether `source` is
+// syntactically well formed. Deliberately stops before sema/layout: the
+// editor calls this on every Enter to decide whether to scaffold a block
+// terminator, and a half-written program routinely has unresolved names
+// (a sema error) while being perfectly well-formed syntax.
+//
+// Returns the verdict as "1" = clean, "0" = syntax errors, "-1" = could not
+// check (bad langpack). A fixed ASCII verdict rather than diagnostic text
+// because the diagnostic header itself is localized (diag_render.salam's
+// Tr("error")), so callers must never have to string-match localized prose
+// to learn the answer; `str` rather than `int` to match every other export
+// here (the playground marshals them all through one cwrap "string" shim).
+// LOG_OFF: this runs on every Enter and the caller wants the verdict, not
+// the diagnostics.
+pub func SyntaxOk(source: str, lang: str): str:
+    i18.SetLang(lang)
+    sm.SetStdlibRoot("")
+    pack := lp.Load(lang)
+    if pack == lp.LP_NONE:
+        ret "-1"
+    end
+    lgr := lg.New(lg.LOG_OFF, false)
+    sf := src_from_string(source)
+
+    mut toks := tok.StreamNew(sf.path)
+    lok := lx.Run(lgr, pack, sf, toks)
+    if !lok:
+        tok.StreamFree(toks)
+        ret "0"
+    end
+
+    mut a := at.NewAst()
+    mut prog := 0
+    pok := ps.Run(lgr, toks, a, prog)
+    tok.StreamFree(toks)
+    at.FreeAst(a)
+    ret pok ? "1" : "0"
 end

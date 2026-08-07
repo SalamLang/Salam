@@ -217,12 +217,14 @@ pub struct Dr:
         pub output: str = ""
         pub cc: str = "tcc"
         pub keep_c: bool = false
+        pub force: bool = false
         pub safe: bool = true
         pub fmt_check: bool = false
         pub fmt_recursive: bool = false
         pub fmt_tabs: bool = false
         pub fmt_indent_width: int = 4
         pub fmt_fix_order: bool = false
+        pub fmt_minify: bool = false
         pub debug_info: bool = false
         pub asan: bool = false
         // Whole-program LTO for the final link (gcc/clang only). Opt-in:
@@ -321,6 +323,17 @@ pub struct Dr:
             ret false
         end
         ret true
+    end
+
+    // driver/build.c file_has_content - true when 'path' already holds exactly
+    // 'content'. Comparing before writing leaves an unchanged generated file
+    // (and therefore its cached .o) untouched, so an incremental build can
+    // skip recompiling that module.
+    func file_unchanged(path: str, content: str): bool:
+        if !os.Exists(path):
+            ret false
+        end
+        ret str.Equals(os.ReadFile(path), content)
     end
 
     // driver/driver.c salam_scratch_dir - scratch dir for intermediate
@@ -698,8 +711,13 @@ pub struct Dr:
 
         mut cfiles := Vector {} as Vector<str>
         mut generated := Vector {} as Vector<str>
+        // 1 when cfiles[i]'s object must be rebuilt, 0 when the cached .o is
+        // still valid. Parallel to cfiles (int, not bool, to stay clear of the
+        // generic-nesting limits noted in PORTING.md).
+        mut cdirty := Vector {} as Vector<int>
         defer cfiles.free()
         defer generated.free()
+        defer cdirty.free()
         mut first_module := ""
         mut all_ok := true
         // paths that failed to read/parse/check/generate, recapped on abort
@@ -748,15 +766,28 @@ pub struct Dr:
             work.push(corep)
         end
 
-        mut w_ast := Vector {} as Vector<at.Ast>
-        mut w_sema := Vector {} as Vector<sm.Sema>
+        // ONE Ast and ONE Sema for the whole build (the C uses a single arena
+        // for both). Sharing them is what lets an imported package be lexed,
+        // parsed and analyzed once per build instead of once per importer:
+        // cached package symbols are SymIds into this Sema and hold NodeIds
+        // into this Ast, so neither may be freed between work-list files.
+        // NOTE: never copy these into a local (`mut x := a`) - at.Ast/Sema own
+        // Vectors, and a struct copy snapshots the vector headers, so growth
+        // through the copy would not be visible through the original (the
+        // "Vector-header copy hazard" PORTING.md warns about). Pass them by
+        // reference (`&:`) only, which every lexer/parser/sema/codegen entry
+        // point already takes.
+        mut a := at.NewAst()
+        mut s := sm.New(lgr, "", "en")
+        // Each file's own global ScopeId, handed back to sm.RebindScope before
+        // that file's codegen (codegen resolves top-level names via s.global).
+        mut w_global := Vector {} as Vector<int>
         mut w_prog := Vector {} as Vector<int>
         mut w_module := Vector {} as Vector<str>
         mut w_entry := Vector {} as Vector<str>
         mut w_pkg := Vector {} as Vector<str>
         mut w_path := Vector {} as Vector<str>
-        defer w_ast.free()
-        defer w_sema.free()
+        defer w_global.free()
         defer w_prog.free()
         defer w_module.free()
         defer w_entry.free()
@@ -806,7 +837,6 @@ pub struct Dr:
 
             mut toks := tok.StreamNew(path)
             mut lok := lx.Run(lgr, modpack, sf, toks)
-            mut a := at.NewAst()
             mut prog := 0
             mut pok := ps.Run(lgr, toks, a, prog)
             tok.StreamFree(toks)
@@ -845,15 +875,13 @@ pub struct Dr:
             end
             pfiles.free()
 
-            mut s := sm.New(lgr, path, lp.Code(modpack))
+            gscope := sm.Rebind(s, path, lp.Code(modpack))
             sm.SetCc(s, table)
             sok := sm.Run(s, a, prog)
 
             if !lok || !pok || !sok:
                 all_ok = false
                 failed_files.push(path)
-                sm.Free(s)
-                at.FreeAst(a)
                 wi += 1
                 continue
             end
@@ -935,8 +963,7 @@ pub struct Dr:
                 end
             end
 
-            w_ast.push(a)
-            w_sema.push(s)
+            w_global.push(gscope)
             w_prog.push(prog)
             w_module.push(module)
             w_entry.push(modentry)
@@ -948,19 +975,19 @@ pub struct Dr:
         sm.DceFinish()
 
         repeat w_prog.len() with bi:
-            mut a2 := w_ast.get(bi)[0]
-            mut s2 := w_sema.get(bi)[0]
             prog2 := w_prog.get(bi)[0]
             module2 := w_module.get(bi)[0]
             entry2 := w_entry.get(bi)[0]
             pkg2 := w_pkg.get(bi)[0]
             path2 := w_path.get(bi)[0]
+            // Point the shared Sema back at this file's own global scope.
+            sm.RebindScope(s, w_global.get(bi)[0], pkg2, path2)
 
             mut kept := Vector {} as Vector<int>
-            pn := at.Get(a2, prog2)
+            pn := at.Get(a, prog2)
             repeat pn.list.len() with ki:
                 did2 := pn.list.get(ki)[0]
-                d3 := at.Get(a2, did2)
+                d3 := at.Get(a, did2)
                 mut keep := true
                 if d3.kind == at.AST_FUNC_DEF && !d3.is_extern && !d3.synthetic && d3.typarams.len() == 0 && !str.Equals(d3.name, entry2):
                     keep = sm.DceReachable(pkg2, d3.name)
@@ -969,32 +996,48 @@ pub struct Dr:
                     kept.push(did2)
                 end
             end
-            mut pw := at.Get(a2, prog2)
+            mut pw := at.Get(a, prog2)
             old_list := pw.list
             pw.list = kept
-            at.Put(a2, prog2, pw)
+            at.Put(a, prog2, pw)
             old_list.free()
 
             o := cg.Run(
-                lgr, s2, a2, prog2, module2, opt.safe, opt.debug_info, path2, entry2, ""
+                lgr, s, a, prog2, module2, opt.safe, opt.debug_info, path2, entry2, ""
             )
 
             cpath := scratch + "/salam_mod_" + module2 + ".c"
             hpath := scratch + "/salam_mod_" + module2 + ".h"
-            wok1 := write_file(lgr, cpath, o.c_src)
-            wok2 := write_file(lgr, hpath, o.h_src)
+            opath := scratch + "/salam_mod_" + module2 + ".o"
+            // Only rewrite when the generated C actually differs: rewriting an
+            // identical file would churn its timestamp and force a needless
+            // recompile of an object that is still valid.
+            unchanged := !opt.force && os.Exists(opath) && file_unchanged(cpath, o.c_src) && file_unchanged(hpath, o.h_src)
+            mut wok1 := true
+            mut wok2 := true
+            if !unchanged:
+                wok1 = write_file(lgr, cpath, o.c_src)
+                wok2 = write_file(lgr, hpath, o.h_src)
+            end
             if !wok1 || !wok2:
                 all_ok = false
                 failed_files.push(path2)
             else:
                 cfiles.push(cpath)
+                if unchanged:
+                    cdirty.push(0)
+                else:
+                    cdirty.push(1)
+                end
                 generated.push(cpath)
                 generated.push(hpath)
             end
 
-            sm.Free(s2)
-            at.FreeAst(a2)
         end
+        // The shared Ast/Sema are owned by the whole build, so they are freed
+        // once here rather than per file.
+        sm.Free(s)
+        at.FreeAst(a)
 
         if !all_ok:
             lg.Log(
@@ -1122,10 +1165,25 @@ pub struct Dr:
                 // compile_parallel's comment for why LTO stays opt-in instead.
                 mut objs := Vector {} as Vector<str>
                 mut jobs := Vector {} as Vector<str>
+                // Cached objects were built with the previous flag set; if it
+                // moved (--release, -g, --asan, a new link directive, a
+                // different --cc) every object is stale no matter whether its
+                // source changed.
+                sigpath := scratch + "/salam_build.flags"
+                sigtext := opt.cc + " " + opt_flag + " " + dbg_flag2 + " " + asan_flag + " " + link_defines
+                if !file_unchanged(sigpath, sigtext):
+                    repeat cfiles.len() with cd0:
+                        cdirty.set(cd0, 1)
+                    end
+                    _wsig := write_file(lgr, sigpath, sigtext)
+                end
                 repeat cfiles.len() with ci2:
                     cf2 := cfiles.get(ci2)[0]
                     obj2 := str.Substr(cf2, 0, str.Len(cf2) - 2) + ".o"
                     objs.push(obj2)
+                    if cdirty.get(ci2)[0] == 0:
+                        continue
+                    end
                     mut jb := str.NewBuilder()
                     str.BufAppend(jb, opt.cc)
                     str.BufAppend(jb, " -c -I. -I")
@@ -1151,7 +1209,7 @@ pub struct Dr:
                     str.BufFree(jb)
                 end
                 lg.Log(
-                    lgr, lg.PH_DRIVER, lg.LOG_INFO, "compiling " + str.FromInt(jobs.len() as i64) + " object file" + plural_suffix(jobs.len()) + " in parallel"
+                    lgr, lg.PH_DRIVER, lg.LOG_INFO, "compiling " + str.FromInt(jobs.len() as i64) + " object file" + plural_suffix(jobs.len()) + " in parallel, reused " + str.FromInt((cfiles.len() - jobs.len()) as i64) + " cached object" + plural_suffix(cfiles.len() - jobs.len())
                 )
                 crc = compile_parallel(jobs)
                 jobs.free()
@@ -1209,9 +1267,9 @@ pub struct Dr:
                         end
                     end
                 end
-                repeat objs.len() with oi3:
-                    _rmo := os.Remove(objs.get(oi3)[0])
-                end
+                // Objects are the incremental build cache now: keeping them is
+                // what lets the next build reuse unchanged modules. They live
+                // in the gitignored scratch dir, and --force ignores them.
                 objs.free()
             else:
                 mut lto_flag := ""
@@ -1336,11 +1394,10 @@ pub struct Dr:
             end
         end
 
-        if !opt.keep_c:
-            repeat generated.len() with gi4:
-                _rm4 := os.Remove(generated.get(gi4)[0])
-            end
-        else:
+        // The generated .c/.h are the object cache's key: deleting them would
+        // make every module look changed on the next build, so they stay in the
+        // gitignored scratch dir regardless of --keep-c.
+        if opt.keep_c:
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "kept generated C files")
         end
         ret rc

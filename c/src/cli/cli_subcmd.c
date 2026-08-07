@@ -70,6 +70,9 @@ int cli_dispatch_command(int argc, char **argv, options_t *out)
     } else if (strcmp(cmd, "serve") == 0) {
         out->command = CMD_SERVE;
         start = 2;
+    } else if (strcmp(cmd, "doc") == 0) {
+        out->command = CMD_DOC;
+        start = 2;
     } else if (strcmp(cmd, "layout") == 0) {
         if (argc > 2 && strcmp(argv[2], "build") == 0) {
             out->command = CMD_LAYOUT_BUILD;

@@ -760,7 +760,20 @@ int driver_build(options_t *opt)
                         for (; j < nwork; j++)
                             if (strcmp(work[j], ipath) == 0) known = true;
                     }
-                    if (!known) work[nwork++] = ipath;
+                    /* Every other push site bounds-checks; this one discovers
+                       imports and is the one that actually grows the list, so
+                       an import closure over SALAM_MAX_INPUTS files would run
+                       off the end of work[] rather than report a limit. */
+                    if (!known) {
+                        if (nwork >= SALAM_MAX_INPUTS) {
+                            LOG_E(log, PH_DRIVER,
+                                  "too many modules in the import graph (limit %d)",
+                                  SALAM_MAX_INPUTS);
+                            all_ok = false;
+                            break;
+                        }
+                        work[nwork++] = ipath;
+                    }
                 }
             }
             b_programs[wi] = program;

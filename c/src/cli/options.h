@@ -39,6 +39,7 @@ typedef enum {
     CMD_HELP,
     CMD_VERSION,
     CMD_SERVE,
+    CMD_DOC,
     CMD_UNKNOWN
 } cli_command_t;
 
@@ -71,6 +72,7 @@ typedef struct {
     bool fmt_tabs;
     int fmt_indent_width;
     bool fmt_fix_order;
+    bool fmt_minify;
     bool debug_info;
     bool asan;
     bool interp;

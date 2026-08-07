@@ -598,6 +598,29 @@ func is_synth_typaram(name: str): bool:
     ret str.StartsWith(name, "__T")
 end
 
+// Both front-end passes fall back to bracketed placeholders when they give up:
+// the parser substitutes "<error>" for a name it could not read (parser.salam's
+// p_name), and the semantic pass stringifies an unresolved type as "<error>" or
+// "<null>". Neither tells a reader anything, and unresolved types are routine
+// here - documenting is per-file, so a type declared in a sibling file simply
+// is not in scope. A real name never starts with '<', which makes the check
+// both simple and future-proof.
+func is_placeholder(s: str): bool:
+    if s.len() == 0:
+        ret true
+    end
+    ret byte_at(s, 0) == 60
+end
+
+// type_node_to_str, but blank for anything not worth showing.
+func type_str_or_blank(a: at.Ast, id: int): str:
+    t := type_node_to_str(a, id)
+    if is_placeholder(t):
+        ret ""
+    end
+    ret t
+end
+
 func type_node_to_str(a: at.Ast, id: int): str:
     if id == 0:
         ret ""
@@ -694,16 +717,16 @@ func typarams_str(a: at.Ast, id: int): str:
         ret ""
     end
     mut b := str.NewBuilder()
-    str.BufAppend(b, "<")
+    mut shown := 0
     mut i := 0
     until i < n:
-        if i != 0:
-            str.BufAppend(b, ", ")
-        end
         tp := at.Typaram(a, id, i)
         if is_synth_typaram(tp):
             i += 1
             continue
+        end
+        if shown != 0:
+            str.BufAppend(b, ", ")
         end
         str.BufAppend(b, tp)
         bound := at.TyparamBound(a, id, i)
@@ -711,12 +734,18 @@ func typarams_str(a: at.Ast, id: int): str:
             str.BufAppend(b, ": ")
             str.BufAppend(b, bound)
         end
+        shown += 1
         i += 1
     end
-    str.BufAppend(b, ">")
-    r := str.BufStr(b)
+    inner := str.BufStr(b)
     str.BufFree(b)
-    ret r
+    // Every param was synthesized by finish_untyped_params, so there is no
+    // user-visible type parameter list at all: `func f(x)` must not render as
+    // `func f<>(x)`, nor `func g<T>(x)` as `func g<T, >(x)`.
+    if shown == 0:
+        ret ""
+    end
+    ret "<" + inner + ">"
 end
 
 func params_str(a: at.Ast, fid: int): str:
@@ -740,8 +769,8 @@ func params_str(a: at.Ast, fid: int): str:
             str.BufAppend(b, " &")
         end
         if pn.ty != 0:
-            tstr := type_node_to_str(a, pn.ty)
-            if !str.Equals(tstr, "auto"):
+            tstr := type_str_or_blank(a, pn.ty)
+            if tstr.len() != 0 && !str.Equals(tstr, "auto"):
                 str.BufAppend(b, ": ")
                 str.BufAppend(b, tstr)
             end
@@ -770,8 +799,11 @@ func func_signature(a: at.Ast, id: int): str:
     str.BufAppend(b, typarams_str(a, id))
     str.BufAppend(b, params_str(a, id))
     if n.ty != 0:
-        str.BufAppend(b, ": ")
-        str.BufAppend(b, type_node_to_str(a, n.ty))
+        rt := type_str_or_blank(a, n.ty)
+        if rt.len() != 0:
+            str.BufAppend(b, ": ")
+            str.BufAppend(b, rt)
+        end
     end
     r := str.BufStr(b)
     str.BufFree(b)
@@ -783,9 +815,9 @@ end
 func resolved_type_str(a: at.Ast, id: int): str:
     n := at.Get(a, id)
     if n.ty != 0:
-        ret type_node_to_str(a, n.ty)
+        ret type_str_or_blank(a, n.ty)
     end
-    if n.type_str.len() != 0:
+    if !is_placeholder(n.type_str):
         ret n.type_str
     end
     ret ""
@@ -894,6 +926,12 @@ func strip_block_comment(raw: str): str:
     mut stop := n
     if stop >= 2 && byte_at(raw, stop - 1) == 47 && byte_at(raw, stop - 2) == 42:
         stop -= 2
+    end
+    // An empty block comment leaves the open and close markers overlapping
+    // (the '*'-skipping loop above can run past the closing marker); clamp
+    // rather than hand Substr a negative length.
+    if stop < start:
+        stop = start
     end
     body := str.Substr(raw, start, stop - start)
     lines := split_lines(body)
@@ -1045,6 +1083,9 @@ end
 
 func walk_member(db &: DocDb, a: at.Ast, mid: int, file_idx: int, parent: int, blocks: Vector<CommentBlock>):
     mn := at.Get(a, mid)
+    if is_placeholder(mn.name):
+        ret
+    end
     mut mkind := 0 - 1
     mut msig := ""
     if mn.kind == at.AST_FIELD:
@@ -1065,6 +1106,15 @@ end
 
 func walk_top(db &: DocDb, a: at.Ast, id: int, file_idx: int, blocks: Vector<CommentBlock>):
     n := at.Get(a, id)
+    // Parse wreckage rather than API: parser.salam's p_name substitutes
+    // "<error>" for a name it could not read, and whatever the parser then
+    // recovered around it - parameters, types, even which declaration this is -
+    // is guesswork. Drop the row entirely; its members are no more trustworthy
+    // than its name. The file still counts as a warning, so the run reports
+    // that something failed to parse instead of publishing nonsense.
+    if is_placeholder(n.name):
+        ret
+    end
     mut kind := 0 - 1
     mut sig := ""
     if n.kind == at.AST_CONST_DECL:
@@ -1075,7 +1125,11 @@ func walk_top(db &: DocDb, a: at.Ast, id: int, file_idx: int, blocks: Vector<Com
         sig = var_decl_sig(a, id)
     else n.kind == at.AST_TYPE_ALIAS:
         kind = DOC_TYPE
-        sig = "type " + n.name + " = " + type_node_to_str(a, n.ty)
+        sig = "type " + n.name
+        alias_ty := type_str_or_blank(a, n.ty)
+        if alias_ty.len() != 0:
+            sig = sig + " = " + alias_ty
+        end
     else n.kind == at.AST_FUNC_DEF:
         kind = DOC_FUNC
         sig = func_signature(a, id)
@@ -1090,7 +1144,11 @@ func walk_top(db &: DocDb, a: at.Ast, id: int, file_idx: int, blocks: Vector<Com
         sig = "enum " + n.name
     else n.kind == at.AST_IMPL_DEF:
         kind = DOC_IMPL
-        sig = "impl " + n.name + " on " + type_node_to_str(a, n.ty)
+        sig = "impl " + n.name
+        impl_ty := type_str_or_blank(a, n.ty)
+        if impl_ty.len() != 0:
+            sig = sig + " on " + impl_ty
+        end
     else:
         ret
     end

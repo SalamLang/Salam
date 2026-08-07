@@ -64,6 +64,7 @@ mut g_module := 0 as i64
 mut fn_run_app := (a: str, b: str) => ""
 mut fn_build_layout := (a: str, b: str) => ""
 mut fn_emit := (a: str, b: str, c: str) => ""
+mut fn_syntax_ok := (a: str, b: str) => ""
 mut run_timer := 0 as i64
 mut dd_open := false
 mut menu_open := false
@@ -732,6 +733,7 @@ func on_wasm_ready():
     fn_run_app = salam_js_call(g_module, "cwrap", "salam_web_run_app", "string", ["string", "string"])
     fn_build_layout = salam_js_call(g_module, "cwrap", "salam_web_build_layout", "string", ["string", "string"])
     fn_emit = salam_js_call(g_module, "cwrap", "salam_web_emit", "string", ["string", "string", "string"])
+    fn_syntax_ok = salam_js_call(g_module, "cwrap", "salam_web_syntax_ok", "string", ["string", "string"])
     g_wasm_ready = true
     dom.SetBool(el_run_btn, "disabled", false)
     set_status("ready", "ok")
@@ -1083,6 +1085,33 @@ func insert_at_cursor(text: str):
     on_edit()
 end
 
+// needs_block_end - should Enter on a block-opening line scaffold a matching
+// `end`/`تمام`/`نهاية`? Answered by the real compiler front end (the wasm
+// `salam_web_syntax_ok`, i.e. the actual lexer + parser) instead of by
+// counting characters.
+//
+// Two questions, in order:
+//   1. Does the buffer ALREADY parse? Then nothing is missing, and adding a
+//      terminator would CREATE an error - this is the "typed `:` and got a
+//      second تمام even though the function already had one" bug.
+//   2. Otherwise, does inserting the terminator RIGHT HERE make it parse?
+//      That is exactly the edit we are about to perform, so a yes is proof
+//      the scaffold is wanted - and it is grammar-exact, so it is not fooled
+//      by `func f(): T:` (two colons, one `end`), by a `:` inside a string
+//      or a `// comment:`, or by a non-English `end` spelling.
+//
+// If neither holds (compiler not loaded yet, or the buffer has a separate
+// syntax error that keeps both candidates failing) the verdict is unknown
+// and we do NOT scaffold: a terminator the user has to type themselves is a
+// small annoyance, an unwanted one they must hunt down and delete is the bug
+// being fixed here.
+func needs_block_end(val: str, pos: int, scaffold: str): bool:
+    if g_wasm_ready == false: ret false end
+    if fn_syntax_ok(val, g_lang) == "1": ret false end
+    cand := val.substr(0, pos) + scaffold + val.substr(pos, val.len() - pos)
+    ret fn_syntax_ok(cand, g_lang) == "1"
+end
+
 func auto_indent_enter():
     val := dom.GetValue(el_code)
     pos := get_sel_start()
@@ -1103,8 +1132,13 @@ func auto_indent_enter():
     opens_block := line.len() > 0 && cc(line, line.len() - 1) == 58
     if opens_block:
         child_indent := indent + "    "
-        insert_at_cursor("\n" + child_indent + "\n" + indent + end_keyword())
-        set_caret(pos + 1 + child_indent.len())
+        scaffold := "\n" + child_indent + "\n" + indent + end_keyword()
+        if needs_block_end(val, pos, scaffold):
+            insert_at_cursor(scaffold)
+            set_caret(pos + 1 + child_indent.len())
+        else:
+            insert_at_cursor("\n" + child_indent)
+        end
     else:
         insert_at_cursor("\n" + indent)
     end

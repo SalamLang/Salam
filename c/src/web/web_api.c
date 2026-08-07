@@ -91,6 +91,41 @@ static ast_node_t *find_layout(ast_node_t *program)
     return NULL;
 }
 
+/* salam_web_syntax_ok - lex + parse `source` and report only whether it is
+ * syntactically well formed. Deliberately stops before sema/layout: the
+ * editor calls this on every Enter to decide whether to scaffold a block
+ * terminator, and a half-written program routinely has unresolved names
+ * (a sema error) while being perfectly well-formed syntax.
+ *
+ * Returns the verdict as "1" = clean, "0" = syntax errors, "-1" = could not
+ * check (bad langpack). A fixed ASCII verdict rather than diagnostic text
+ * because the diagnostic header itself is localized
+ * (diag_render_source.c's i18n_tr("error")), so callers must never have to
+ * string-match localized prose to learn the answer; `const char *` rather
+ * than `int` to match every other export here (the playground marshals them
+ * all through one cwrap "string" shim). Logging is LOG_OFF: this runs on
+ * every Enter and the caller wants the verdict, not the diagnostics. */
+EMSCRIPTEN_KEEPALIVE
+const char *salam_web_syntax_ok(const char *source, const char *lang)
+{
+    i18n_set_lang(lang);
+    salam_set_stdlib_root(NULL);
+    langpack_t *pack = langpack_load(lang);
+    if (!pack) return set_result("-1");
+    arena_t *arena = arena_new(1 << 20);
+    logger_t *log = logger_new(stderr, LOG_OFF, false);
+    source_file_t *src = src_from_string(arena, source);
+    token_stream_t *toks = NULL;
+    bool ok = false;
+    if (lexer_run(arena, log, pack, src, &toks)) {
+        ast_node_t *program = NULL;
+        ok = parser_run(arena, log, toks, &program);
+    }
+    logger_free(log);
+    arena_free(arena);
+    return set_result(ok ? "1" : "0");
+}
+
 static bool front_end(arena_t *arena, logger_t *log, FILE *diagf, const char *lang,
                       const char *source, ast_node_t **program, sema_result_t **sema,
                       const char **out_entry, char **out_diag)

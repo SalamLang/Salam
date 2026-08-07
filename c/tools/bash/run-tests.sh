@@ -400,6 +400,24 @@ want_example() {
     return 1
 }
 
+# The redis_* tests talk to a real server on 127.0.0.1:6379 instead of the
+# mysql-style mock, so they are only runnable where one is listening. Probe
+# once and skip (not fail) when it is absent, the same way the llvm/opencv
+# sections degrade - a missing optional service is not a test failure.
+# Start one with e.g. `redis-server --port 6379` (under WSL on Windows: WSL2
+# forwards localhost, so a server bound in the distro is reachable here).
+REDIS_OK=0
+if (exec 3<>/dev/tcp/127.0.0.1/6379) 2>/dev/null; then
+    REDIS_OK=1
+elif command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 6379 >/dev/null 2>&1; then
+    REDIS_OK=1
+elif command -v redis-cli >/dev/null 2>&1 &&
+    redis-cli -h 127.0.0.1 -p 6379 ping >/dev/null 2>&1; then
+    REDIS_OK=1
+fi
+export REDIS_OK
+REDIS_SKIP_MSG="requires a Redis server on 127.0.0.1:6379"
+
 if want fmt; then
     for lang in $LANGS; do
         for f in ../tests/"$lang"/fmt/*.salam; do
@@ -427,7 +445,9 @@ collect_example_dir() {
             fi
             if [ -f "$base.expect" ]; then
                 skip=""
-                if [ -f "$base.network" ] && [ "${SALAM_TEST_NETWORK:-0}" != "1" ]; then
+                if [ -f "$base.redis" ] && [ "${REDIS_OK:-0}" != "1" ]; then
+                    skip="requires a Redis server on 127.0.0.1:6379"
+                elif [ -f "$base.network" ] && [ "${SALAM_TEST_NETWORK:-0}" != "1" ]; then
                     skip="requires live network; set SALAM_TEST_NETWORK=1"
                 elif [ -f "$base.interactive" ] && [ "${SALAM_TEST_INTERACTIVE:-0}" != "1" ]; then
                     skip="opens a modal window; set SALAM_TEST_INTERACTIVE=1 on a desktop session"
@@ -462,6 +482,7 @@ if want general; then
     done
 fi
 
+
 if want db; then
     DBCC=""
     for c in tcc gcc cc clang; do
@@ -494,6 +515,14 @@ if want db; then
                 case "$name" in _*) continue ;; esac
                 exp="$(pick_expect "../tests/$lang/db/$name")"
                 [ -f "$exp" ] || continue
+                case "$name" in
+                redis_*)
+                    if [ "$REDIS_OK" != "1" ]; then
+                        note_result "SKIP db/$lang/$name ($REDIS_SKIP_MSG)" "db/$lang/$name"
+                        continue
+                    fi
+                    ;;
+                esac
                 add_job build "db/$lang/$name" "$f" "$lang" "$exp" "--cc=$DBCC -DSALAM_DB_MOCK"
             done
         else

@@ -60,6 +60,12 @@ const FMT_WRAP_WIDTH := 100
 pub struct FmtStyle:
     pub tabs: bool = false
     pub width: int = 0
+    // Strip everything the lexer treats as trivia: comments (line, block and
+    // doc), indentation, and blank lines. Statement-terminating newlines are
+    // NOT presentation and are always kept - TK_STMT_END is a real token, and
+    // dropping it would weld statements together. Used to shrink the `std/`
+    // tree that gets preloaded into the wasm playground.
+    pub minify: bool = false
 end
 
 // fmt_ctx_t (st is carried alongside; the vectors are the C fixed arrays)
@@ -172,6 +178,9 @@ func emit_indent(out &: str.StringBuilder, style: FmtStyle, indent0: int):
     mut indent := indent0
     if indent < 0:
         indent = 0
+    end
+    if style.minify:
+        ret
     end
     if style.tabs:
         mut s := 0
@@ -444,7 +453,7 @@ end
 // fmt_step_leading
 func step_leading(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int):
     if !c.line_has_content:
-        if c.bracket == 0 && c.has_prev && (t.begin_line as int) > c.prev_end_line + 1:
+        if !c.st.minify && c.bracket == 0 && c.has_prev && (t.begin_line as int) > c.prev_end_line + 1:
             co.SbPutc(out, 10)
         end
         emit_indent(out, c.st, c.indent + c.bracket_indent)
@@ -602,8 +611,8 @@ end
 // Constructor for non-default styles (cross-package struct literals are not
 // supported); mirrors the driver's `style.tabs = opt->fmt_tabs; style.width =
 // opt->fmt_indent_width` assignments.
-pub func NewStyle(tabs: bool, width: int): FmtStyle:
-    ret FmtStyle { tabs = tabs, width = width }
+pub func NewStyle(tabs: bool, width: int, minify: bool): FmtStyle:
+    ret FmtStyle { tabs = tabs, width = width, minify = minify }
 end
 
 // fmt_tokens
@@ -637,6 +646,15 @@ pub func Tokens(ts: tok.TokenStream, style: FmtStyle, out &: str.StringBuilder):
         end
         if k == tok.TK_STMT_END:
             step_stmt_end(c, out, t, cur_ml)
+            i += 1
+            continue
+        end
+        // Comments are dropped before any state is touched, so they cannot
+        // leave a force_break or a stale `prev` behind. A block comment that
+        // spanned a newline already had its own TK_STMT_END emitted after it
+        // by the lexer (scan_block_comment), so the statement boundary it
+        // created survives even though the comment text does not.
+        if c.st.minify && (k == tok.TK_COMMENT_LINE || k == tok.TK_COMMENT_BLOCK):
             i += 1
             continue
         end

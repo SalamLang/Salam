@@ -22,6 +22,7 @@
 #include "driver/layout_build.h"
 #include "driver/web_build.h"
 #include "driver/serve_build.h"
+#include "driver/doc_build.h"
 #include "driver/debug_cmd.h"
 #include "driver/repl.h"
 #include "core/arena.h"
@@ -624,6 +625,7 @@ static int driver_fmt(options_t *opt)
     c.fix_order = opt->fmt_fix_order;
     c.style.tabs = opt->fmt_tabs;
     c.style.width = opt->fmt_indent_width;
+    c.style.minify = opt->fmt_minify;
     if (opt->input_count == 0) {
         fmt_walk(&c, ".");
     } else {
@@ -697,6 +699,10 @@ int driver_main(int argc, char **argv)
         return driver_new(&opt);
     case CMD_FMT:
         return driver_fmt(&opt);
+    case CMD_DOC:
+        /* No input given -> the current directory, so a bare `salam doc`
+         * documents the tree it is run in. */
+        return driver_doc(&opt);
     case CMD_RUN:
         return opt.interp ? driver_interp(&opt) : driver_run(&opt);
     case CMD_REPL:

@@ -337,14 +337,45 @@ Getting there needed three link-order corrections in `std/llvm`, all of the
 libstdc++ and libgcc_eh after `libsalam_llvm.a`, and winpthread after those
 (mingw's libstdc++ threading layer sits on it).
 
-### What remains
+### Wiring `NativeRun` to std/llvm
 
-- **Wire `NativeRun`** in `compiler/llvm.salam` to prefer `std/llvm` under
-  `-DSALAM_HAVE_LLVM`, falling back to the shell-out path otherwise. Both
-  halves now exist; this is the connection between them.
-- **Port the codegen fixes** to `compiler/llvm.salam` (see parity note).
-- **Build the self-hosted compiler this way in CI** and check it against
-  the same test corpus as the C compiler.
+Done, with two real blockers resolved on the way. Both were name clashes
+between the self-hosted backend and the std package:
+
+- **Package name.** Both were `package llvm`. Sema binds two same-named
+  packages to one symbol, so whichever loses is silently unreachable -
+  "package function 'LldAvailable' not found". `compiler/llvm.salam` is now
+  `package llvmgen`.
+- **Filename.** A .salam file's generated C module is keyed by _filename_,
+  not package, so `compiler/llvm.salam` and `std/llvm/llvm.salam` both
+  produced `salam_mod_llvm.c` and clobbered each other, leaving the
+  compiler's own types undeclared at their use sites ("unknown type size").
+  The file is now `compiler/llvmgen.salam`. Both importers alias it, so the
+  rename is invisible to callers.
+
+The gate itself lives in a third package, `compiler/llvm_bridge.salam`,
+because the flag can only be tested at _top level_: a `-D` name that was not
+passed is absent from the symbol table, so referencing `SALAM_HAVE_LLVM`
+inside a function body is an "unknown identifier" error rather than a false.
+The bridge keeps every reference in one top-level `if SALAM_HAVE_LLVM:`
+block with an `else` arm supplying identical signatures, and exposes a
+primitive-typed API so the gated `std/llvm` types never leak into ungated
+modules. `NativeAvailable`/`NativeRun` consult it first and fall through to
+the shell-out toolchain when it reports unavailable.
+
+Verified: the self-hosted compiler builds and passes 73/73 with the flag
+off, and `salam build ... -DSALAM_HAVE_LLVM` gets all the way through
+codegen and per-module compilation with the bridge active.
+
+### Not yet verified
+
+Linking the self-hosted compiler _against_ `libsalam_llvm.a` does not
+complete on this Windows host: gcc exits non-zero with no diagnostic while
+linking against the 417 MB archive, consistent with resource exhaustion
+rather than a code defect (every individual module compiles clean, and the
+same archive links fine into a small Salam program - see the `import llvm`
+result above). Worth retrying on a machine with more headroom, and the link
+command should be logged the way the in-process lld path now logs its argv.
 
 ## Flipping the default
 
@@ -398,6 +429,44 @@ no external toolchain involved.
    fallback path becomes an error rather than a safety net.
 4. Consider making `--release` imply `-O2` through LLVM.
 5. Port everything to `compiler/llvm.salam` (see parity note).
+
+## Bugs found along the way
+
+Both surfaced only once std/llvm was compiled into a real program, and both
+affect **both** backends.
+
+### 1. `defer` on a binding declared inside a loop body (open)
+
+`SKILL.md` documents defer as running at _scope_ exit. Both backends emit
+every defer at _function_ exit (`cg->fn_defers`, `ll->defers`), so a defer on
+a loop-local binding lands in the function epilogue where that binding is out
+of scope. 20-line repro:
+
+```salam
+repeat bases.len() with bi:
+    entries := os.ListDir(bases.get(bi)[0])
+    defer entries.free()          // <- epilogue cannot see `entries`
+    ...
+end
+```
+
+- C backend: `error: 'entries' undeclared`
+- LLVM backend: `address of an unknown identifier 'entries'`
+
+This also accounts for part of the remaining `address of an unknown
+identifier` bucket in the sweep. Not fixed here: making defers block-scoped
+is a language-semantics change with stdlib-wide blast radius and wants its
+own change with tests. `std/llvm/linker.salam` was rewritten to free
+explicitly instead, with a comment pointing here.
+
+### 2. `funcptr()` on an extern mangled the symbol (fixed)
+
+`funcptr(printf)` in `std/llvm/orc.salam` emitted
+`_Salam_llvm_printf_str` - a name that exists nowhere - because the C
+backend mangled unconditionally when it resolved the symbol. An extern keeps
+its declared C name. Fixed in `codegen_call.c` and `compiler/codegen.salam`.
+The LLVM backend's own `funcptr` lowering, written in this pass, already had
+the extern check.
 
 ## Parity: the self-hosted compiler
 

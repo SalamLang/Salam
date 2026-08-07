@@ -153,10 +153,74 @@ jobs:
           head -1 seed-version.txt
           rm -f seed-version.txt
 
+      # Static in-process LLVM/LLD for the self-hosted compiler, so stage2
+      # lowers IR itself instead of shelling out to a clang/lld the user
+      # would have to install. Without libsalam_llvm.a, bootstrap.sh's
+      # SALAM_HAVE_LLVM gate stays off and the compiler falls back to the C
+      # backend - which is what the parity gate used to measure.
+      #
+      # Best-effort on purpose: the archive needs LLVM development libraries,
+      # and this job's value (does the compiler bootstrap at all) must not
+      # depend on apt. A failure here downgrades stage2 to the C backend and
+      # says so; it never fails the job. Once this is green on a few runs,
+      # tighten it by setting SALAM_WITH_LLVM=1 on the bootstrap step below,
+      # which turns a missing archive into a hard error.
+      - name: Build static LLVM/LLD archive (best-effort)
+        run: |
+          set -u
+          case "${{ matrix.os }}" in
+          ubuntu*)
+            wget -qO llvm.sh https://apt.llvm.org/llvm.sh
+            chmod +x llvm.sh
+            sudo ./llvm.sh 22 || true
+            sudo apt-get update || true
+            sudo apt-get install -y llvm-22-dev liblld-22-dev libpolly-22-dev \
+              libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev || true
+            LLVM_CONFIG=llvm-config-22
+            ;;
+          macos*)
+            brew install llvm lld || true
+            LLVM_CONFIG="$(brew --prefix llvm)/bin/llvm-config"
+            ;;
+          *)
+            LLVM_CONFIG=llvm-config
+            ;;
+          esac
+          if ! command -v "$LLVM_CONFIG" >/dev/null 2>&1; then
+            echo "::warning::no $LLVM_CONFIG; stage2 uses the C backend"
+            exit 0
+          fi
+          "$LLVM_CONFIG" --version
+          if make -C c libsalam-llvm -j2 WITH_LLVM=1 WITH_LLD=1 \
+            LLVM_LINK_STATIC=1 LLVM_CONFIG="$LLVM_CONFIG"; then
+            ls -la libsalam_llvm.a
+            echo "libsalam_llvm.a built - stage2 will link LLVM/LLD in-process"
+          else
+            echo "::warning::libsalam-llvm failed; stage2 uses the C backend"
+          fi
+
       - name: Bootstrap stage1 -> stage2 -> stage3
         run: |
           set -eu
           sh compiler/tools/bash/bootstrap.sh "$HOME/.salam/bin/salam" build/selfhost
+
+      # Records which backend stage2 actually got, so a silent downgrade to
+      # the C backend is visible in the log rather than only showing up as a
+      # parity number weeks later.
+      - name: Report stage2 backend
+        env:
+          SALAM_STD: ${{ github.workspace }}/std
+        run: |
+          set -eu
+          sh=build/selfhost/salam-stage2
+          printf 'func main:\n    println "backend-probe"\nend\n' > probe.salam
+          if "$sh" build probe.salam --output=probe_exe --log-level=info 2>&1 |
+            grep -qi "generating LLVM IR"; then
+            echo "stage2 backend: LLVM (in-process)"
+          else
+            echo "stage2 backend: C (no static LLVM linked in)"
+          fi
+          rm -f probe.salam probe_exe
 
       - name: Smoke-test the self-hosted compiler
         env:

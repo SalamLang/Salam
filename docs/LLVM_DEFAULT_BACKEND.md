@@ -67,7 +67,7 @@ lowering from surface syntax down to them was absent.
   New `ll_call_file()`, mirroring the C backend's `call_file()`.
 - **`str.split`** - 51 errors. Returns `Vector<str>`, built as
   `{ ptr, i32, i32 }` matching `std/collections/vector.salam`.
-- **Builtin functions** - 150 errors: `char_code`, `funcptr`, `spawn`,
+- **Built-in functions** - 150 errors: `char_code`, `funcptr`, `spawn`,
   `listdir`, `args`, `input`, `lang`, `callhandler`, plus a generic fallback
   through `salam_builtin_lookup()` so the shared `k_builtins` table
   (`join` -> `salam_thread_join`, `strcmp`) reaches both backends from one
@@ -77,12 +77,12 @@ lowering from surface syntax down to them was absent.
   emits its globals and only then can `ll_global_find` see them.
 
 Two reusable helpers came out of this and should be preferred for any further
-builtin work:
+built-in work:
 
-- `ll_runtime_fn(ll, name, &owner)` - find a `salam_*` runtime builtin in any
+- `ll_runtime_fn(ll, name, &owner)` - find a `salam_*` runtime built-in in any
   loaded package.
 - `ll_call_runtime(ll, n, name, recv, &out)` - call it, with the receiver as
-  parameter 0 for method-shaped builtins.
+  parameter 0 for method-shaped built-ins.
 
 ### Still open
 

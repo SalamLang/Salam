@@ -328,6 +328,52 @@ $(BUILD_DIR)/%.o: src/%.cc $(CONFIG_STAMP)
 
 -include $(DEPS)
 
+#
+# One merged static archive holding everything std/llvm needs: every LLVM
+# component `llvm-config --libs all` resolves, the six lld archives, and
+# salam's own C shims over them (llvm_native.o, lld_link.o).
+#
+# This exists for the *self-hosted* compiler. A Salam source file can only
+# say `link static "NAME"`; it cannot shell out to `llvm-config --libs` the
+# way this Makefile does, and LLVM ships ~200 version-dependent component
+# archives rather than one libLLVM.a. std/llvm/llvm.salam records that as
+# its blocking TODO(build-pipeline). Merging them here turns the whole
+# graph into a single name, so std/llvm can link with:
+#
+#     link static "salam_llvm"
+#
+# plus the handful of system libs below, which are not LLVM's to merge.
+# Build with: make libsalam-llvm
+#
+LLVM_MERGE_LIBS = $(shell $(LLVM_CONFIG) --link-static --libs all 2>/dev/null) $(LLD_LIBS)
+LLVM_MERGE_DIR  = $(BUILD_DIR)/merge
+SALAM_LLVM_A    = $(OUTDIR)/libsalam_llvm.a
+
+.PHONY: libsalam-llvm
+libsalam-llvm: $(BUILD_DIR)/llvm/llvm_native.o $(CXXOBJS) $(WIN_LLD_SHIM_OBJS)
+	@test "$(WITH_LLVM)$(WITH_LLD)" = "11" \
+	  || { echo "libsalam-llvm needs WITH_LLVM=1 WITH_LLD=1 (llvm-config: $(LLVM_CONFIG))"; exit 1; }
+	@rm -rf $(LLVM_MERGE_DIR); mkdir -p $(LLVM_MERGE_DIR)
+	@LIBDIR=$$($(LLVM_CONFIG) --libdir); \
+	 : > $(LLVM_MERGE_DIR)/mri; \
+	 echo "create $(SALAM_LLVM_A)" >> $(LLVM_MERGE_DIR)/mri; \
+	 for o in $(BUILD_DIR)/llvm/llvm_native.o $(CXXOBJS) $(WIN_LLD_SHIM_OBJS); do \
+	   echo "addmod $$o" >> $(LLVM_MERGE_DIR)/mri; \
+	 done; \
+	 n=0; \
+	 for l in $(LLVM_MERGE_LIBS); do \
+	   case "$$l" in -l*) a="$$LIBDIR/lib$${l#-l}.a";; *) continue;; esac; \
+	   if [ -f "$$a" ]; then echo "addlib $$a" >> $(LLVM_MERGE_DIR)/mri; n=$$((n+1)); fi; \
+	 done; \
+	 echo "save"  >> $(LLVM_MERGE_DIR)/mri; \
+	 echo "end"   >> $(LLVM_MERGE_DIR)/mri; \
+	 echo "merging $$n LLVM/lld archives + salam shims -> $(SALAM_LLVM_A)"; \
+	 rm -f $(SALAM_LLVM_A); \
+	 ar -M < $(LLVM_MERGE_DIR)/mri
+	@echo "Built $(SALAM_LLVM_A)"
+	@echo "  std/llvm then links with: link static \"salam_llvm\""
+	@echo "  plus system libs: $$($(LLVM_CONFIG) --link-static --system-libs 2>/dev/null) -lstdc++"
+
 test: $(OUTBIN)
 	SALAM=$(OUTBIN) sh tools/bash/run-tests.sh
 

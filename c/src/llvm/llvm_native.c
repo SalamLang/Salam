@@ -272,6 +272,13 @@ static int link_executable(logger_t *log, const char *obj, const char *out,
     sb_puts(&cmd, "\" -o \"");
     sb_puts(&cmd, out);
     sb_puts(&cmd, "\"");
+    {
+        int i = 0;
+        for (; i < opts->nlibpath; i++) {
+            sb_puts(&cmd, " -L");
+            sb_put_shell_arg(&cmd, opts->lib_paths[i]);
+        }
+    }
     if (!opts->target_triple || !opts->target_triple[0]) {
         /* Host-arch static libs only make sense for a same-host build -
          * this path is also reached as a fallback for cross triples the
@@ -550,6 +557,7 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
     char sr[1024], crt1[1200], crti[1200], crtn[1200], Lsr[1100], rt[1200];
     char exdir[1024], Lex[1100];
     char userlibs[16][160];
+    char userlibpaths[8][1100];
     const char *argv[64];
     int n = 0, i, rc, have_rt, have_gcc = 0, have_extralibs;
     FILE *f;
@@ -633,6 +641,12 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
     argv[n++] = crti;
     sal_snprintf(Lsr, sizeof Lsr, "-L%s", sr);
     argv[n++] = Lsr;
+    /* --libpath=DIR entries first: an explicitly named directory should win
+     * over the sysroot's own copy of a same-named archive. */
+    for (i = 0; i < opts->nlibpath && i < 8 && n < 40; i++) {
+        sal_snprintf(userlibpaths[i], sizeof userlibpaths[i], "-L%s", opts->lib_paths[i]);
+        argv[n++] = userlibpaths[i];
+    }
     have_extralibs = salam_try_embed_extralibs_musl(log, arch, exdir, sizeof exdir);
     if (have_extralibs) {
         sal_snprintf(Lex, sizeof Lex, "-L%s", exdir);
@@ -676,6 +690,7 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
     char Lgcc[1100], Lsr[1100], Lsrmingw[1100], gccdir[1024];
     char exdir[1024], Lex[1100];
     char userlibs[16][160];
+    char userlibpaths[8][1100];
     const char *argv[96];
     int n = 0, have_gcc, i, rc, have_extralibs;
     FILE *f;
@@ -745,6 +760,11 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
     argv[n++] = Lsr;
     sal_snprintf(Lsrmingw, sizeof Lsrmingw, "-L%s/mingw/lib", sr);
     argv[n++] = Lsrmingw;
+    /* --libpath=DIR entries - see the same block in native_link_elf. */
+    for (i = 0; i < opts->nlibpath && i < 8 && n < 60; i++) {
+        sal_snprintf(userlibpaths[i], sizeof userlibpaths[i], "-L%s", opts->lib_paths[i]);
+        argv[n++] = userlibpaths[i];
+    }
     have_extralibs = salam_try_embed_extralibs_mingw(log, arch, exdir, sizeof exdir);
     if (have_extralibs) {
         sal_snprintf(Lex, sizeof Lex, "-L%s", exdir);
@@ -789,6 +809,19 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
     }
 
     LOG_I(log, PH_DRIVER, "in-process lld: linking %s -> %s (%s)", obj, out, t);
+    /* The full argv, so a "cannot find -lfoo" is diagnosable without a
+     * rebuild - which -L directories were actually searched is otherwise
+     * invisible. */
+    {
+        sb_t dbg;
+        sb_init(&dbg);
+        for (i = 0; i < n; i++) {
+            if (i) sb_puts(&dbg, " ");
+            sb_puts(&dbg, argv[i]);
+        }
+        LOG_D(log, PH_DRIVER, "lld argv: %s", sb_cstr(&dbg));
+        sb_free(&dbg);
+    }
     rc = salam_lld_link(SALAM_LLD_MINGW, n, argv);
     if (rc != 0) LOG_E(log, PH_DRIVER, i18n_tr("in-process lld link failed (%d)"), rc);
     return rc == 0 ? 0 : 1;

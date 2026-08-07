@@ -257,6 +257,8 @@ int driver_llvm(options_t *opt)
     o.debug_info = opt->debug_info;
     o.verify_module = opt->llvm_verify;
     o.target_triple = opt->llvm_target;
+    o.lib_paths = opt->lib_paths;
+    o.nlibpath = opt->nlibpath;
     o.native_cpu = opt->llvm_native_cpu && !(opt->llvm_target && opt->llvm_target[0]);
 
     const char *link_libs[SALAM_MAX_INPUTS];

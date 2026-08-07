@@ -85,6 +85,10 @@ typedef struct {
     char exe_path[512];
     const char *defines[SALAM_MAX_INPUTS];
     int ndefines;
+    /* --libpath=DIR, repeatable: extra library search directories for the
+     * link step, for archives not installed under the usual prefix. */
+    const char *lib_paths[SALAM_MAX_INPUTS];
+    int nlibpath;
     int llvm_opt_level;
     int llvm_emit;
     bool llvm_verify;

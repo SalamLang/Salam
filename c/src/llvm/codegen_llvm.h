@@ -51,6 +51,12 @@ typedef struct {
     const char *const *link_kinds;
     int nlink;
     const char *sysroot;
+    /* Extra `-L` directories from --libpath=DIR, searched ahead of the
+     * sysroot's own. Needed to link against an archive that is not
+     * installed yet - `link static "salam_llvm"` against a
+     * libsalam_llvm.a still sitting in a build tree, say. */
+    const char *const *lib_paths;
+    int nlibpath;
 } codegen_llvm_options_t;
 
 void codegen_llvm_options_default(codegen_llvm_options_t *o);

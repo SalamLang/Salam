@@ -52,6 +52,7 @@ static void cli_set_defaults(options_t *out)
     out->stdlib_path = NULL;
     out->exe_path[0] = '\0';
     out->ndefines = 0;
+    out->nlibpath = 0;
     out->llvm_opt_level = 0;
     out->llvm_emit = 0;
     out->llvm_verify = false;

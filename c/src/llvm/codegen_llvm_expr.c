@@ -575,6 +575,19 @@ static void ll_fill_defaults(ll_t *ll, sb_t *ab, ast_node_t *n, func_sig_t *sig,
 static llv_t ll_call_user(ll_t *ll, ast_node_t *n, const char *nm)
 {
     symbol_t *fsym = ll_sym(ll, nm);
+    /*
+     * A package and one of its own functions can share a name: std/time is
+     * `package time` and also declares `extern func time(tp: void*): i64`
+     * inside it. ll_sym searches the global scope first, where the package
+     * binding lives, so a bare `time(null)` *within* that package resolved
+     * to SYM_PACKAGE and was then reported as an unknown function. Ordinary
+     * scoping would prefer the enclosing package's own function, so do
+     * that before giving up.
+     */
+    if ((!fsym || fsym->kind != SYM_FUNC) && ll->pkg_scope) {
+        symbol_t *local = scope_lookup_local(ll->pkg_scope, nm);
+        if (local && local->kind == SYM_FUNC) fsym = local;
+    }
     if (!fsym || fsym->kind != SYM_FUNC) {
         ll_error(ll, n, "call to unknown/unsupported function '%s'", nm);
         return ll_poison(n->type_str);
@@ -678,6 +691,10 @@ static llv_t ll_emit_call(ll_t *ll, ast_node_t *n, func_sig_t *sig, const char *
     ll_emit(ll, "%s = call %s @%s(%s)", r, ll_ty(ll, rts), fname, args);
     return (llv_t){r, rts};
 }
+
+/* Defined below, but needed by ll_call_method's func-typed-field case. */
+static llv_t ll_call_indirect(ll_t *ll, ast_node_t *n, ast_node_t *callee);
+static bool ll_is_func_ts(const char *ts);
 
 /*
  * Locate a `salam_*` runtime builtin by name in any package sema has
@@ -1096,6 +1113,16 @@ static llv_t ll_call_method(ll_t *ll, ast_node_t *n, ast_node_t *callee)
                                 type_to_string(ll->sem->tc, sig->ret));
         }
     }
+
+    /*
+     * `o.fn(args)` where `fn` is a *field* holding a function value, not a
+     * method - so no SYM_METHOD lookup above could ever match it. Same
+     * lowering as any other indirect call; ll_call_indirect re-evaluates
+     * the callee to get the closure pointer, which for a member expression
+     * is the field load.
+     */
+    if (ss && ll_is_func_ts(callee->type_str))
+        return ll_call_indirect(ll, n, callee);
 
     ll_error(ll, n, "method '%s' on type '%s' (or overloaded/builtin method)", mname,
              ots);

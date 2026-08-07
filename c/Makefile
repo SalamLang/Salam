@@ -27,6 +27,7 @@ endif
 PREFIX   ?= /usr/local
 DESTDIR  ?=
 BINDIR   := $(PREFIX)/bin
+LIBDIR   := $(PREFIX)/lib
 DATADIR  := $(PREFIX)/share/salam
 
 SRCDIRS := core source condcomp logger xml diag i18n langpack        \
@@ -470,11 +471,21 @@ install: all
 	rm -rf $(DESTDIR)$(DATADIR)/std
 	mkdir -p $(DESTDIR)$(DATADIR)/std
 	cp -R std/. $(DESTDIR)$(DATADIR)/std/
+	@# std/llvm says `link static "salam_llvm"`, which the linker resolves
+	@# by name off its search path - so the merged archive has to land in
+	@# libdir for `import llvm` to work from an installed salam. Optional:
+	@# only built by `make libsalam-llvm`, and nothing else needs it.
+	@if [ -f "$(SALAM_LLVM_A)" ]; then \
+	   echo "Installing libsalam_llvm.a -> $(DESTDIR)$(LIBDIR)"; \
+	   mkdir -p $(DESTDIR)$(LIBDIR); \
+	   cp -f "$(SALAM_LLVM_A)" $(DESTDIR)$(LIBDIR)/libsalam_llvm.a; \
+	 fi
 	@echo "Done. 'salam' resolves std/ from $(DATADIR)/std automatically."
 
 uninstall:
 	rm -f  $(DESTDIR)$(BINDIR)/$(TARGET)
+	rm -f  $(DESTDIR)$(LIBDIR)/libsalam_llvm.a
 	rm -rf $(DESTDIR)$(DATADIR)
 
 clean:
-	rm -rf build $(OUTBIN) $(OUTBIN).exe $(TARGET) $(TARGET).exe
+	rm -rf build $(OUTBIN) $(OUTBIN).exe $(TARGET) $(TARGET).exe $(SALAM_LLVM_A)

@@ -333,6 +333,81 @@ pub struct Dr:
         ret str.Substr(path, 0, cut)
     end
 
+    // driver/build.c driver_project_entry_file. The fixed project entry
+    // filename (SALAM_PROJECT_FILE in driver/build.h): when a directory
+    // (or no input at all) is given, <dir>/salam.salam - if present - IS
+    // the project's entry file; no scanning or guessing happens.
+    // Single-file invocations (`salam build test.salam`) never come here.
+    // Returns "" when <dir>/salam.salam does not exist (bare filename for
+    // dir==".", matching list_salam_files).
+    func project_entry_file(dir: str): str:
+        mut trimmed := dir
+        until str.Len(trimmed) > 1 && (str.EndsWith(trimmed, "/") || str.EndsWith(trimmed, "\\")):
+            trimmed = str.Substr(trimmed, 0, str.Len(trimmed) - 1)
+        end
+        mut p := "salam.salam"
+        if !str.Equals(trimmed, "."):
+            p = trimmed + "/salam.salam"
+        end
+        if os.Exists(p) && !os.IsDir(p):
+            ret p
+        end
+        ret ""
+    end
+
+    // driver/build.c driver_output_stem. Stem for a default output name:
+    // normally the entry file's module name, but the fixed project entry
+    // file salam.salam would make every project's default executable
+    // "salam(.exe)" - which cmd.exe would then run from that directory
+    // instead of the real compiler - so a project executable is named
+    // after its directory instead.
+    //
+    // PORT-NOTE: the C resolves the directory to an absolute path first
+    // (realpath/_fullpath), so "salam build .." also gets a real name;
+    // here only the textual path is inspected and ".."-shaped inputs fall
+    // back to the module name - the common cases (bare build, ./dir,
+    // ../name) behave identically.
+    func output_stem_of(path: str): str:
+        module := module_of(path)
+        if !str.Equals(module, "salam"):
+            ret module
+        end
+        mut dir := dir_of(path)
+        if str.Len(dir) == 0 || str.Equals(dir, "."):
+            dir = os.Cwd()
+        end
+        until str.Len(dir) > 1 && (str.EndsWith(dir, "/") || str.EndsWith(dir, "\\")):
+            dir = str.Substr(dir, 0, str.Len(dir) - 1)
+        end
+        slash := str.LastIndex(dir, "/")
+        bs := str.LastIndex(dir, "\\")
+        mut cut := slash
+        if bs >= 0 && (slash < 0 || bs > slash):
+            cut = bs
+        end
+        mut base := dir
+        if cut >= 0:
+            base = str.Substr(dir, cut + 1, str.Len(dir) - cut - 1)
+        end
+        if str.Len(base) == 0 || str.Equals(base, ".") || str.Equals(base, ".."):
+            ret module
+        end
+        ret base
+    end
+
+    // driver/build.c driver_page_stem. Stem for a default web/layout
+    // output name: the page file's module name, except the fixed project
+    // entry file salam.salam, whose page is the site's landing page -
+    // index.html, the name every web server (including `salam serve`)
+    // treats as the directory's entry.
+    func page_stem_of(path: str): str:
+        module := module_of(path)
+        if str.Equals(module, "salam"):
+            ret "index"
+        end
+        ret module
+    end
+
     // driver/build.c write_file (fflush/fsync dropped - os.WriteFile already
     // opens+writes+closes in one call; no partial-write scenario to guard).
     func write_file(lgr: lg.Logger, path: str, content: str): bool:
@@ -761,6 +836,38 @@ pub struct Dr:
     // driver/build.c driver_build (the CMD_BUILD/CMD_OBJ shared body; `opt`
     // must have .command already set to CMD_BUILD or CMD_OBJ by the caller).
     func build_impl(opt &: Dr): int:
+        // A bare `salam build` (no inputs) or a directory passed as the
+        // sole input (`salam build .`, `salam build ../project/`) doesn't
+        // name a file - resolve it to the project's entry file
+        // (salam.salam when present, else the one .salam file defining
+        // `main`) BEFORE picking a backend: the LLVM path reads opt.input
+        // directly and must see the resolved file, not a directory, and
+        // the project-file rule has to hold for every backend equally.
+        if opt.inputs.len() == 0 || (opt.inputs.len() == 1 && os.IsDir(opt.inputs.get(0)[0])):
+            rlgr := lg.New(opt.log_level, resolve_color(opt.color))
+            rpack := lp.Load(opt.lang)
+            if rpack == lp.LP_NONE:
+                lg.Log(
+                    rlgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
+                )
+                ret 2
+            end
+            mut rdir := "."
+            if opt.inputs.len() == 1:
+                rdir = opt.inputs.get(0)[0]
+            end
+            first := resolve_dir_entry(rlgr, rpack, rdir)
+            if str.Len(first) == 0:
+                ret 2
+            end
+            if opt.inputs.len() == 0:
+                opt.inputs.push(first)
+            else:
+                opt.inputs.set(0, first)
+            end
+            opt.input = first
+        end
+
         // driver/build.c: `if (opt->llvm_target && opt->llvm_target[0]) return
         // driver_llvm_build(opt);` - NOT a bare driver_llvm call (that would
         // skip setting llvm_emit from opt->command). LlvmBuild (below, in the
@@ -807,36 +914,12 @@ pub struct Dr:
             )
             ret 2
         end
-        // A bare `salam build` (no inputs) or a directory passed as the sole
-        // input (`salam build .`, `salam build ./compiler/`) doesn't name a
-        // file - scan that directory's top-level .salam files for the one
-        // that defines `main` and build that, same auto-detection Run()/Exec()
-        // already do for a bare `salam run`/`salam exec`. Without this, a
-        // directory input used to fall through to the per-file work-loop
-        // below, which reads it as a (nonexistent) source file and either
-        // fails to read it or - worse - silently resolves partial package
-        // state depending on unrelated import chains, neither of which is
-        // "build the program in this directory".
-        if opt.inputs.len() == 0:
-            first := resolve_dir_entry(lgr, pack, ".")
-            if str.Len(first) == 0:
-                ret 2
-            end
-            opt.inputs.push(first)
-        else if opt.inputs.len() == 1 && os.IsDir(opt.inputs.get(0)[0]):
-            first := resolve_dir_entry(lgr, pack, opt.inputs.get(0)[0])
-            if str.Len(first) == 0:
-                ret 2
-            end
-            opt.inputs.set(0, first)
-        end
-
         // Not from build.c: whole-build skip (see build_up_to_date's comment).
         // CMD_OBJ has no single tracked output and already has its own
         // per-object cache below, so this only applies to a real `salam
         // build` producing one executable.
         if opt.command == CMD_BUILD && !opt.force:
-            predicted_output := str.Len(opt.output) > 0 ? opt.output : module_of(opt.inputs.get(0)[0]) + ".exe"
+            predicted_output := str.Len(opt.output) > 0 ? opt.output : output_stem_of(opt.inputs.get(0)[0]) + ".exe"
             sig0 := build_signature(opt)
             if build_up_to_date(scratch, sig0, predicted_output):
                 lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "up to date: " + predicted_output)
@@ -1329,7 +1412,11 @@ pub struct Dr:
         else:
             mut output := opt.output
             if str.Len(output) == 0:
-                output = first_module + ".exe"
+                // Not first_module + ".exe": the fixed project entry file
+                // salam.salam names the executable after its directory
+                // (see output_stem_of), and this must agree with
+                // build_up_to_date's predicted_output above.
+                output = output_stem_of(opt.inputs.get(0)[0]) + ".exe"
             end
             mut lm := " -lm"
             if SALAM_OS_WINDOWS:
@@ -1657,13 +1744,34 @@ pub struct Dr:
         ret out
     end
 
-    // Shared "scan dir for exactly one file defining `entry`" used by
-    // Run()/Exec() (dir="." when no input was given) and build_impl (when
-    // an explicit directory is passed instead of a file). Logs its own
-    // error and returns "" on failure (0 or >1 matches); returns the
-    // resolved path on success.
+    // Shared "resolve the entry file of `dir`" used by Run()/Exec()
+    // (dir="." when no input was given) and build_impl (when an explicit
+    // directory is passed instead of a file). The fixed project entry
+    // file salam.salam wins when present; otherwise the dir's top-level
+    // .salam files are scanned for exactly one defining `entry`. Logs its
+    // own error and returns "" on failure; returns the resolved path on
+    // success.
     func resolve_dir_entry(lgr: lg.Logger, pack: lp.Langpack, dir: str): str:
         entry := lp.Entry(pack)
+        proj := project_entry_file(dir)
+        if str.Len(proj) > 0:
+            if !file_has_entry(pack, entry, proj):
+                lg.Log(
+                    lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                        i18.Tr("project entry file '%s' does not define a '%s' function"),
+                        co.ArgStr(proj), co.ArgStr(entry)
+                    )
+                )
+                if file_has_layout_block(pack, proj):
+                    io.EPrintln("  this looks like a web layout project; build it with: salam web " + proj)
+                end
+                ret ""
+            end
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("entry point: %s"), co.ArgStr(proj))
+            )
+            ret proj
+        end
         mut files := list_salam_files(dir)
         mut entries := Vector {} as Vector<str>
         defer files.free()
@@ -1702,6 +1810,7 @@ pub struct Dr:
                 io.EPrintln("    " + entries.get(ei)[0])
             end
             io.EPrintln("  run a specific one with: salam run <file.salam>")
+            io.EPrintln("  or name the project's entry file 'salam.salam' to make it the project entry")
             ret ""
         end
         first := entries.get(0)[0]
@@ -1739,6 +1848,92 @@ pub struct Dr:
         end
         at.FreeAst(a)
         ret found
+    end
+
+    // driver/build.c file_has_layout_block - quiet lex+parse+condcomp
+    // probe: does `path` contain a top-level `layout` block (a front-end
+    // DSL page rather than a program)?
+    func file_has_layout_block(pack: lp.Langpack, path: str): bool:
+        quiet := lg.New(lg.LOG_OFF, false)
+        mut sf := src.New()
+        if !src.Load(path, sf):
+            ret false
+        end
+        mut toks := tok.StreamNew(path)
+        _lok := lx.Run(quiet, pack, sf, toks)
+        mut a := at.NewAst()
+        mut prog := 0
+        _pok := ps.Run(quiet, toks, a, prog)
+        tok.StreamFree(toks)
+        mut nodefs := Vector {} as Vector<str>
+        defer nodefs.free()
+        table := cc.TableBuild("", nodefs)
+        _ck := cc.PruneProgram(a, quiet, path, table, prog)
+        found := lo.FindLayout(a, prog) != 0
+        at.FreeAst(a)
+        ret found
+    end
+
+    // driver/build.c driver_resolve_dir_layout - front-end counterpart of
+    // resolve_dir_entry, for projects that have no entry function:
+    // salam.salam when present, else the .salam files containing a
+    // `layout` block. `single` demands exactly one page (salam web);
+    // otherwise every page found is returned (salam layout build). An
+    // empty vector = error already logged.
+    func resolve_dir_layout(lgr: lg.Logger, pack: lp.Langpack, dir: str, single: bool): Vector<str>:
+        mut out := Vector {} as Vector<str>
+        proj := project_entry_file(dir)
+        if str.Len(proj) > 0:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("entry point: %s"), co.ArgStr(proj))
+            )
+            out.push(proj)
+            ret out
+        end
+        mut files := list_salam_files(dir)
+        mut pages := Vector {} as Vector<str>
+        defer files.free()
+        defer pages.free()
+        if files.len() == 0:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("no .salam files found in the current directory")
+            )
+            ret out
+        end
+        repeat files.len() with fi:
+            f := files.get(fi)[0]
+            if file_has_layout_block(pack, f):
+                pages.push(f)
+            end
+        end
+        if pages.len() == 0:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                    i18.Tr("no layout entry: none of the %d .salam file%s here has a 'layout' block"),
+                    co.ArgInt(files.len() as i64), co.ArgStr(plural_suffix(files.len()))
+                )
+            )
+            io.EPrintln("  name the project's entry file 'salam.salam' to make it the project entry")
+            ret out
+        end
+        if single && pages.len() > 1:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                    i18.Tr("ambiguous layout entry: %d files have a 'layout' block:"),
+                    co.ArgInt(pages.len() as i64)
+                )
+            )
+            repeat pages.len() with pi:
+                io.EPrintln("    " + pages.get(pi)[0])
+            end
+            io.EPrintln("  build a specific one with: salam web <file.salam>")
+            io.EPrintln("  or name the project's entry file 'salam.salam' to make it the project entry")
+            ret out
+        end
+        repeat pages.len() with qi:
+            out.push(pages.get(qi)[0])
+        end
+        ret out
     end
 
     // driver/driver.c write_xml / emit_{tokens,ast,symbol}_xml's shared tail:
@@ -3024,29 +3219,19 @@ pub struct Dr:
         end
         entry := lp.Entry(pack)
 
-        // PORT-NOTE: same defer-cleanup-is-not-block-scoped hoist as Run() above.
-        mut files := Vector {} as Vector<str>
-        mut entries := Vector {} as Vector<str>
-        defer files.free()
-        defer entries.free()
-
-        if str.Len(opt.input) == 0:
-            files = list_salam_files(".")
-            repeat files.len() with fi:
-                f := files.get(fi)[0]
-                if file_has_entry(pack, entry, f):
-                    entries.push(f)
-                end
+        // Bare `salam exec` or `salam exec <dir>`: resolve the project's
+        // entry file (salam.salam when present, else the single .salam
+        // file defining `main`), same rule as `salam build`/`salam run`.
+        if str.Len(opt.input) == 0 || os.IsDir(opt.input):
+            mut rdir := "."
+            if str.Len(opt.input) > 0:
+                rdir = opt.input
             end
-            if entries.len() != 1:
-                lg.Log(
-                    lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                        i18.Tr("no entry point: define a '%s' function"), co.ArgStr(entry)
-                    )
-                )
+            first := resolve_dir_entry(lgr, pack, rdir)
+            if str.Len(first) == 0:
                 ret 2
             end
-            opt.input = entries.get(0)[0]
+            opt.input = first
         end
 
         sm.SetStdlibRoot(opt.stdlib_path)
@@ -3337,7 +3522,9 @@ pub struct Dr:
             if str.Len(opt.output) > 0:
                 o.output_file = opt.output
             else:
-                o.output_file = default_llvm_output(module, o.output_mode, opt.llvm_target)
+                o.output_file = default_llvm_output(
+                    output_stem_of(opt.input), o.output_mode, opt.llvm_target
+                )
             end
             rc = lv.NativeRun(lgr, llpath, o)
             if !opt.keep_c:
@@ -3420,31 +3607,43 @@ pub struct Dr:
     // driver_layout_build (driver/layout_build.c) - each input: lex/parse/
     // prune -> lo.Expand -> sm.Run -> lo.FindLayout -> lo.Generate; then write
     // each module's HTML(+CSS+JS), sharing a merged style.css/script.js when
-    // multiple inputs are given (matching the C's `multi` branch).
-    //
-    // PORT-NOTE (defensive addition, not from layout_build.c itself): the C's
-    // own driver_layout_build has no "no input" guard at all - an empty
-    // opt->input_count just makes its `for` loop run zero times and it happily
-    // returns rc=0, protected only by driver_main's `if (opt.input_count==0)
-    // ...return 2;` precondition (cli wave, not yet ported). Since this pub
-    // function is directly callable today with no CLI in front of it yet
-    // (same reasoning as Web()'s own guard below), it reproduces that
-    // precondition's message here rather than silently "succeeding" on
-    // nothing.
+    // multiple inputs are given (matching the C's `multi` branch). No input
+    // (or a directory) resolves the project's layout entry below, same as
+    // the C's driver_layout_build.
     pub func LayoutBuild(opt &: Dr): int:
         lgr := lg.New(opt.log_level, resolve_color(opt.color))
-        if opt.inputs.len() == 0:
-            lg.Log(
-                lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("salam: 'layout build' requires at least one input file")
-            )
-            ret 2
-        end
         pack := lp.Load(opt.lang)
         if pack == lp.LP_NONE:
             lg.Log(
                 lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
             )
             ret 2
+        end
+        // `salam layout build` with no input (or a directory): the fixed
+        // project entry file salam.salam wins when present; otherwise
+        // every .salam file here with a `layout` block is built (a
+        // multi-page site).
+        // PORT-NOTE: same defer-cleanup-is-not-block-scoped hoist as
+        // Run()/Exec() - `resolved` must live at function scope for its
+        // defer to compile.
+        mut resolved := Vector {} as Vector<str>
+        defer resolved.free()
+        if opt.inputs.len() == 0 || (opt.inputs.len() == 1 && os.IsDir(opt.inputs.get(0)[0])):
+            mut rdir := "."
+            if opt.inputs.len() == 1:
+                rdir = opt.inputs.get(0)[0]
+            end
+            resolved = resolve_dir_layout(lgr, pack, rdir, false)
+            if resolved.len() == 0:
+                ret 2
+            end
+            repeat resolved.len() with ri:
+                if ri == 0 && opt.inputs.len() > 0:
+                    opt.inputs.set(0, resolved.get(0)[0])
+                else:
+                    opt.inputs.push(resolved.get(ri)[0])
+                end
+            end
         end
         sm.SetStdlibRoot(opt.stdlib_path)
         // driver_main calls `layout_schema_init(salam_get_stdlib_root())` - the
@@ -3513,7 +3712,7 @@ pub struct Dr:
                 continue
             end
             r := lo.Generate(lgr, diag, path, a, lb, minify_ws)
-            modules.push(module_of(path))
+            modules.push(page_stem_of(path))
             htmls.push(r.html)
             csss.push(r.css)
             jss.push(r.js)
@@ -3605,26 +3804,40 @@ pub struct Dr:
     // `layout:` block with its <script src="*.salam"> page scripts, each
     // compiled via the same js_build_bundle() Js() uses. If the file has no
     // layout block at all, the C falls back to driver_js verbatim; ported the
-    // same way here (falls back to this module's own Js()).
-    //
-    // PORT-NOTE (deliberate safety addition, not a functional deviation): the
-    // C dereferences opt->inputs[0] with no bounds check at all here (only
-    // driver_main's `if (opt.input_count == 0) return 2;` precondition, in the
-    // not-yet-ported cli wave, keeps that safe) - this port adds that same
-    // check directly, since an out-of-bounds Vector access panics loudly here
-    // instead of silently reading garbage.
+    // same way here (falls back to this module's own Js()). No input (or a
+    // directory) resolves the project's layout entry below - a single page
+    // is demanded - same as the C's driver_web.
     pub func Web(opt &: Dr): int:
         lgr := lg.New(opt.log_level, resolve_color(opt.color))
-        if opt.inputs.len() == 0:
-            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("salam: no input file"))
-            ret 2
-        end
         pack := lp.Load(opt.lang)
         if pack == lp.LP_NONE:
             lg.Log(
                 lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
             )
             ret 2
+        end
+        // `salam web` with no input (or a directory): the fixed project
+        // entry file salam.salam wins when present; otherwise exactly one
+        // .salam file with a `layout` block is expected here.
+        // PORT-NOTE: same defer-cleanup-is-not-block-scoped hoist as
+        // Run()/Exec() - `resolved` must live at function scope for its
+        // defer to compile.
+        mut resolved := Vector {} as Vector<str>
+        defer resolved.free()
+        if opt.inputs.len() == 0 || (opt.inputs.len() == 1 && os.IsDir(opt.inputs.get(0)[0])):
+            mut rdir := "."
+            if opt.inputs.len() == 1:
+                rdir = opt.inputs.get(0)[0]
+            end
+            resolved = resolve_dir_layout(lgr, pack, rdir, true)
+            if resolved.len() != 1:
+                ret 2
+            end
+            if opt.inputs.len() == 0:
+                opt.inputs.push(resolved.get(0)[0])
+            else:
+                opt.inputs.set(0, resolved.get(0)[0])
+            end
         end
         path := opt.inputs.get(0)[0]
         sm.SetStdlibRoot(opt.stdlib_path)
@@ -3667,7 +3880,7 @@ pub struct Dr:
         lb := lo.FindLayout(a, prog)
         if lb == 0:
             if str.Len(opt.output) == 0:
-                opt.output = module_of(path) + ".html"
+                opt.output = page_stem_of(path) + ".html"
             end
             at.FreeAst(a)
             ret Js(opt)
@@ -3727,7 +3940,7 @@ pub struct Dr:
             end
         end
         if rc == 0:
-            mod := module_of(path)
+            mod := page_stem_of(path)
             mut html_path := opt.output
             if str.Len(html_path) == 0:
                 html_path = mod + ".html"

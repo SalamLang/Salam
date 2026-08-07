@@ -330,10 +330,10 @@ int driver_llvm(options_t *opt)
         rc = salam_llvm_toolchain(log, llpath, &o);
         if (!opt->keep_c) remove(llpath);
     } else {
-        o.output_file =
-            opt->output ? opt->output
-                        : default_output(arena, driver_output_stem(arena, opt->input),
-                                         o.output_mode, opt->llvm_target);
+        o.output_file = opt->output
+                            ? opt->output
+                            : default_output(arena, driver_output_stem(arena, opt->input),
+                                             o.output_mode, opt->llvm_target);
         rc = salam_llvm_toolchain(log, llpath, &o);
         if (!opt->keep_c) remove(llpath);
         if (rc == 0) {

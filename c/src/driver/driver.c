@@ -328,8 +328,8 @@ static int driver_interp(options_t *opt)
      * entry file (salam.salam when present, else the single .salam file
      * defining `main`), same rule as `salam build`/`salam run`. */
     if (opt->input == NULL || driver_path_is_dir(opt->input)) {
-        const char *first = driver_resolve_dir_entry(arena, log, pack,
-                                                     opt->input ? opt->input : ".");
+        const char *first =
+            driver_resolve_dir_entry(arena, log, pack, opt->input ? opt->input : ".");
         if (!first) {
             arena_free(arena);
             logger_free(log);

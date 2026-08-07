@@ -401,7 +401,8 @@ const char *driver_output_stem(arena_t *a, const char *path)
     if (!realpath(dir, abs)) return module;
 #endif
     size_t L = strlen(abs);
-    while (L > 1 && (abs[L - 1] == '/' || abs[L - 1] == '\\')) abs[--L] = '\0';
+    while (L > 1 && (abs[L - 1] == '/' || abs[L - 1] == '\\'))
+        abs[--L] = '\0';
     const char *base = abs;
     {
         const char *p = abs;
@@ -595,8 +596,7 @@ const char *driver_resolve_dir_entry(arena_t *arena, logger_t *log, langpack_t *
 }
 
 int driver_resolve_dir_layout(arena_t *arena, logger_t *log, langpack_t *pack,
-                              const char *dir, const char **out, int max_out,
-                              bool single)
+                              const char *dir, const char **out, int max_out, bool single)
 {
     const char *proj = driver_project_entry_file(arena, dir);
     if (proj) {
@@ -616,8 +616,7 @@ int driver_resolve_dir_layout(arena_t *arena, logger_t *log, langpack_t *pack,
     {
         int i = 0;
         for (; i < nfiles; i++)
-            if (file_has_layout_block(arena, pack, files[i]))
-                pages[npages++] = files[i];
+            if (file_has_layout_block(arena, pack, files[i])) pages[npages++] = files[i];
     }
     if (npages == 0) {
         LOG_E(log, PH_DRIVER,
@@ -629,8 +628,9 @@ int driver_resolve_dir_layout(arena_t *arena, logger_t *log, langpack_t *pack,
         return 0;
     }
     if (single && npages > 1) {
-        LOG_E(log, PH_DRIVER, i18n_tr("ambiguous layout entry: %d files have a "
-                                      "'layout' block:"),
+        LOG_E(log, PH_DRIVER,
+              i18n_tr("ambiguous layout entry: %d files have a "
+                      "'layout' block:"),
               npages);
         int i = 0;
         for (; i < npages; i++)

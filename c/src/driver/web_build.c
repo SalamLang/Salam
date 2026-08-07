@@ -194,8 +194,8 @@ int driver_web(options_t *opt)
         (opt->input_count == 1 && driver_path_is_dir(opt->inputs[0]))) {
         const char *resolved[1];
         if (driver_resolve_dir_layout(arena, log, pack,
-                                      opt->input_count ? opt->inputs[0] : ".",
-                                      resolved, 1, true) != 1) {
+                                      opt->input_count ? opt->inputs[0] : ".", resolved,
+                                      1, true) != 1) {
             logger_free(log);
             arena_free(arena);
             return 2;

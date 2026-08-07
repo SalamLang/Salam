@@ -38,8 +38,8 @@ const char *driver_project_entry_file(arena_t *a, const char *dir);
 /* Resolve the program entry file of `dir`: salam.salam when present,
  * else the single top-level .salam file defining the langpack's entry
  * function. Logs its own error and returns NULL on failure. */
-const char *driver_resolve_dir_entry(arena_t *arena, logger_t *log,
-                                     langpack_t *pack, const char *dir);
+const char *driver_resolve_dir_entry(arena_t *arena, logger_t *log, langpack_t *pack,
+                                     const char *dir);
 
 /* Front-end (layout DSL) counterpart, for projects that have no entry
  * function: salam.salam when present, else the .salam files containing

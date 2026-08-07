@@ -69,7 +69,7 @@ def read_raw(text, name):
         i = text.index(key) + len(key)
         j = text.index("`", i)
     except ValueError:
-        sys.exit("gen_doc_assets: cannot find raw string '%s' in %s" % (name, SRC))
+        sys.exit(f"gen_doc_assets: cannot find raw string '{name}' in {SRC}")
     return text[i:j]
 
 
@@ -100,19 +100,21 @@ def emit_array(w, cname, s):
         lines.pop()
     w.write("const char *const %s[] = {\n" % cname)
     for line in lines:
-        w.write("    %s,\n" % c_literal(line))
+        w.write(f"    {c_literal(line)},\n")
     w.write("    NULL\n};\n\n")
 
 
 def main():
-    text = io.open(SRC, encoding="utf-8", newline="\n").read()
+    with io.open(SRC, encoding="utf-8", newline="\n") as src:
+        text = src.read()
     w = io.StringIO()
     w.write(HEADER)
     emit_array(w, "doc_css_lines", read_raw(text, "css_text"))
     emit_array(w, "doc_js_lines", read_raw(text, "js_text"))
     emit_array(w, "doc_body_lines", read_raw(text, "body_text"))
-    io.open(OUT, "w", encoding="utf-8", newline="\n").write(w.getvalue())
-    sys.stdout.write("wrote %s\n" % os.path.relpath(OUT, ROOT))
+    with io.open(OUT, "w", encoding="utf-8", newline="\n") as out:
+        out.write(w.getvalue())
+    sys.stdout.write(f"wrote {os.path.relpath(OUT, ROOT)}\n")
 
 
 if __name__ == "__main__":

@@ -803,8 +803,8 @@ TIMEREPORT_EOF
     # fails) otherwise, the same way the llvm/opencv sections degrade.
     if [ -n "${SALAM_SELFHOST:-}" ] && [ -x "$SALAM_SELFHOST" ]; then
         rm -rf "$tr_dir/.salam-build"
-        (cd "$tr_dir" && "$SALAM_SELFHOST" build --time-report=json tiny.salam             >/dev/null 2>"$tr_dir/self.json")
-        grep '"schema":"salam.timereport.v1"' "$tr_dir/self.json" | head -1             >"$tr_dir/self1.json"
+        (cd "$tr_dir" && "$SALAM_SELFHOST" build --time-report=json tiny.salam >/dev/null 2>"$tr_dir/self.json")
+        grep '"schema":"salam.timereport.v1"' "$tr_dir/self.json" | head -1 >"$tr_dir/self1.json"
         if [ ! -s "$tr_dir/self1.json" ]; then
             note_result "FAIL timereport/parity (self-hosted emitted no report)" "timereport/parity"
         else
@@ -822,7 +822,6 @@ TIMEREPORT_EOF
         note_result "SKIP timereport/parity (set SALAM_SELFHOST to the self-hosted binary)" "timereport/parity"
     fi
 fi
-
 
 ALL="$WORK/all-results.txt"
 cat "$WORK/results"/* >"$ALL" 2>/dev/null || true

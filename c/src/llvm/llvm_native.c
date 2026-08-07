@@ -544,9 +544,8 @@ static int salam_try_embed_extralibs_mingw(logger_t *log, const char *arch, char
 }
 
 static int native_link_elf(logger_t *log, const char *obj, const char *out,
-                           const codegen_llvm_options_t *opts)
+                           const codegen_llvm_options_t *opts, const char *t)
 {
-    const char *t = opts->target_triple;
     const char *arch, *emul, *rtarch;
     char sr[1024], crt1[1200], crti[1200], crtn[1200], Lsr[1100], rt[1200];
     char exdir[1024], Lex[1100];
@@ -670,9 +669,8 @@ static int native_link_elf(logger_t *log, const char *obj, const char *out,
 }
 
 static int native_link_mingw(logger_t *log, const char *obj, const char *out,
-                             const codegen_llvm_options_t *opts)
+                             const codegen_llvm_options_t *opts, const char *t)
 {
-    const char *t = opts->target_triple;
     const char *arch, *emul;
     char sr[1024], crt2[1200], crtbegin[1200], crtend[1200];
     char Lgcc[1100], Lsr[1100], Lsrmingw[1100], gccdir[1024];
@@ -797,16 +795,66 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
 }
 
 static int native_link_lld(logger_t *log, const char *obj, const char *out,
-                           const codegen_llvm_options_t *opts)
+                           const codegen_llvm_options_t *opts, const char *t)
 {
-    const char *t = opts->target_triple;
     if (!t) return -1;
     if ((strstr(t, "windows") || strstr(t, "mingw") || strstr(t, "win32")) &&
         (strstr(t, "gnu") || strstr(t, "mingw")))
-        return native_link_mingw(log, obj, out, opts);
+        return native_link_mingw(log, obj, out, opts, t);
     if (strstr(t, "linux") && strstr(t, "musl"))
-        return native_link_elf(log, obj, out, opts);
+        return native_link_elf(log, obj, out, opts, t);
     return -1;
+}
+
+/*
+ * Triple to hand the in-process linker for a *native* build (no --target).
+ *
+ * The point is that a salam built with WITH_LLD=1 plus an embedded sysroot
+ * needs neither a compiler nor a linker installed on the end user's
+ * machine, so the host case has to reach ld.lld the same way a cross build
+ * already does - link_executable()'s system-cc fallback is what we are
+ * trying to stop depending on, not the intended path.
+ *
+ * Two host triples need rewriting before lld_can_link() will accept them:
+ *
+ *   - Linux hosts report *-linux-gnu. Statically linking glibc is not
+ *     something glibc supports cleanly (NSS dlopens at runtime), so the
+ *     native path targets the embedded musl sysroot instead and produces a
+ *     fully static binary. Only done when a musl sysroot is actually
+ *     present, so a salam built without one still falls back rather than
+ *     failing at link time.
+ *   - Windows hosts already report *-w64-windows-gnu under mingw, which
+ *     the mingw flavor takes as-is. An MSVC-hosted build reports
+ *     *-pc-windows-msvc, which needs the COFF flavor and MSVC's own libs;
+ *     that is deliberately left to the fallback.
+ *
+ * macOS is absent by design: linking a Mach-O executable requires
+ * libSystem from the installed SDK, which cannot be embedded and
+ * redistributed, so macOS keeps using the system toolchain.
+ */
+static const char *native_host_link_triple(logger_t *log, const char *host, char *buf,
+                                           size_t cap)
+{
+    if (!host || !host[0]) return NULL;
+    if (strstr(host, "windows") || strstr(host, "mingw") || strstr(host, "win32")) {
+        if (strstr(host, "msvc")) return NULL;
+        return host;
+    }
+    if (strstr(host, "linux")) {
+        const char *arch = "x86_64";
+        char probe[1024];
+        if (strstr(host, "aarch64") || strstr(host, "arm64"))
+            arch = "aarch64";
+        else if (strstr(host, "i686") || strstr(host, "i386") || strstr(host, "i586"))
+            arch = "i386";
+        else if (strstr(host, "arm"))
+            arch = "arm";
+        if (!salam_try_embed_musl(log, arch, probe, sizeof probe)) return NULL;
+        sal_snprintf(buf, cap, "%s-linux-musl",
+                     strcmp(arch, "i386") == 0 ? "i686" : arch);
+        return buf;
+    }
+    return NULL;
 }
 #  endif
 
@@ -1170,8 +1218,16 @@ int salam_llvm_native(logger_t *log, const char *ll_path,
             } else {
                 rc = -1;
 #  ifdef SALAM_HAVE_LLD
-                if (opts->target_triple && opts->target_triple[0])
-                    rc = native_link_lld(log, objpath, opts->output_file, opts);
+                if (opts->target_triple && opts->target_triple[0]) {
+                    rc = native_link_lld(log, objpath, opts->output_file, opts,
+                                         opts->target_triple);
+                } else {
+                    char hbuf[512];
+                    const char *ht =
+                        native_host_link_triple(log, host_triple, hbuf, sizeof hbuf);
+                    if (ht)
+                        rc = native_link_lld(log, objpath, opts->output_file, opts, ht);
+                }
 #  endif
                 if (rc < 0) rc = link_executable(log, objpath, opts->output_file, opts);
                 remove(objpath);

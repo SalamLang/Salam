@@ -302,9 +302,17 @@ int driver_llvm(options_t *opt)
               "%s; the program uses constructs the LLVM backend does not yet "
               "support, so %s may be incomplete",
               e ? e : "unsupported construct", llpath);
+        /*
+         * The partial .ll is written above so it can be inspected, but for a
+         * build that is about to fall back to the C backend it is just
+         * litter in the user's working directory - keep it only when the
+         * user asked for intermediates, or when it *is* the requested
+         * output (`salam llvm -o foo.ll`).
+         */
+        if (!opt->keep_c && !(ir_mode && opt->output)) remove(llpath);
         logger_free(log);
         arena_free(arena);
-        return 1;
+        return SALAM_RC_LLVM_UNSUPPORTED;
     }
     if (ir_mode) {
         if (o.verify_module || o.opt_level != LLVM_OPT_O0)
@@ -339,13 +347,20 @@ int driver_llvm_build(options_t *opt)
 {
     opt->llvm_emit = (opt->command == CMD_OBJ) ? (int)LLVM_OUT_OBJ : (int)LLVM_OUT_EXEC;
     int rc = driver_llvm(opt);
-    if (rc != 0) {
+    /*
+     * Only a genuine cross-compile failure gets the toolchain hint. A native
+     * build never asked for a target, and SALAM_RC_LLVM_UNSUPPORTED is
+     * handled by driver_build() (which falls back to the C backend), so
+     * neither should be reported as a missing cross toolchain.
+     */
+    if (rc != 0 && rc != SALAM_RC_LLVM_UNSUPPORTED && opt->llvm_target &&
+        opt->llvm_target[0]) {
         fprintf(stderr,
                 i18n_tr("salam: cross-compilation for target '%s' failed; see the "
                         "diagnostics above. If they point to a missing toolchain, "
                         "install the LLVM tools (clang/llc), plus lld and a sysroot for "
                         "Windows targets.\n"),
-                opt->llvm_target ? opt->llvm_target : "");
+                opt->llvm_target);
     }
     return rc;
 }

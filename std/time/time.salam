@@ -30,6 +30,8 @@ if SALAM_OS_WINDOWS:
     extern:
         func SleepEx(ms: u32, alertable: int): u32
         func GetSystemTimeAsFileTime(ft: void*)
+        func QueryPerformanceCounter(counter: void*): int
+        func QueryPerformanceFrequency(freq: void*): int
     end
 else:
     extern:
@@ -182,6 +184,57 @@ else:
         end
     else:
         func _now_ns(): i64:
+            ret time_now() * 1000000000
+        end
+    end
+end
+
+// _mono_ns is a MONOTONIC clock: it never runs backwards and never jumps when
+// the wall clock is adjusted, so the difference of two readings is a valid
+// elapsed time. _now_ns above is a wall clock and is not usable for timing:
+// on Windows GetSystemTimeAsFileTime only updates every ~15.6 ms, and on POSIX
+// clock_gettime(0) is CLOCK_REALTIME, which NTP can step. Everything that
+// measures a duration (time.Elapsed*, debug timers, bench, prof) uses this one.
+if SALAM_OS_WINDOWS:
+    func _mono_ns(): i64:
+        buf := mem.AllocateZeroed(16 as u64)
+        mut out := 0 as i64
+        if QueryPerformanceCounter(buf) != 0:
+            fbuf := mem.AllocateZeroed(8 as u64)
+            if QueryPerformanceFrequency(fbuf) != 0:
+                cp := buf as i64*
+                fp := fbuf as i64*
+                counter := cp[0]
+                freq := fp[0]
+                if freq > 0:
+                    // Split so the multiply cannot overflow: counter * 1e9
+                    // wraps a signed 64-bit value a few seconds into uptime
+                    // at a 10 MHz performance counter.
+                    whole := counter / freq
+                    frac := counter % freq
+                    out = whole * 1000000000 + (frac * 1000000000) / freq
+                end
+            end
+            mem.Free(fbuf)
+        end
+        mem.Free(buf)
+        ret out
+    end
+else:
+    if SALAM_ARCH_X64 || SALAM_ARCH_ARM64:
+        func _mono_ns(): i64:
+            buf := mem.AllocateZeroed(16 as u64)
+            mut out := 0 as i64
+            // 1 is CLOCK_MONOTONIC on Linux, macOS and the BSDs.
+            if clock_gettime(1, buf) == 0:
+                p := buf as i64*
+                out = p[0] * 1000000000 + p[1]
+            end
+            mem.Free(buf)
+            ret out
+        end
+    else:
+        func _mono_ns(): i64:
             ret time_now() * 1000000000
         end
     end

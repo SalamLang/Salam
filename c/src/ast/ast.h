@@ -119,6 +119,10 @@ struct ast_node {
 
 ast_node_t *ast_new(arena_t *a, ast_kind_t kind, const src_span_t *span);
 
+/* Total nodes allocated by ast_new() since process start. Reported by
+ * --time-report; not reset between builds. */
+uint64_t ast_node_count(void);
+
 void ast_add(arena_t *a, ast_node_t *parent, ast_node_t *child);
 
 const char *ast_kind_name(ast_kind_t kind);

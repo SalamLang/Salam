@@ -13,7 +13,7 @@
 #
 # Usage:
 #   sh tools/bash/run-tests.sh [-j N] [section ...]
-# Sections: general exec js errors layout fmt ssl db opencv llvm cross
+# Sections: general exec js errors layout fmt ssl db opencv llvm cross timereport
 #           examples apps basics data editor-selected features games
 #           interop stdlib types webframework
 # Env: SALAM, SALAM_STD, LANGS, NPROC, SALAM_TEST_TIMEOUT,
@@ -733,6 +733,96 @@ if [ "$TOTAL" -gt 0 ]; then
         wait
     fi
 fi
+
+# ---------------------------------------------------------------------------
+# timereport: --time-report / --time-trace, and the C-vs-Salam parity of the
+# JSON they emit. Timings are machine-dependent, so nothing here asserts a
+# duration; it checks the report's SHAPE (schema tag, phase keys, self <= wall)
+# and that the two implementations agree on it.
+# ---------------------------------------------------------------------------
+if want timereport; then
+    tr_dir="$WORK/timereport"
+    mkdir -p "$tr_dir"
+    cat >"$tr_dir/tiny.salam" <<'TIMEREPORT_EOF'
+func main:
+    mut i := 0
+    mut s := 0
+    until i < 10:
+        s += i
+        i += 1
+    end
+    println s
+    ret 0
+end
+TIMEREPORT_EOF
+
+    # Extract a top-level key's value from the one-line report JSON.
+    tr_field() {
+        tr -d ' ' <"$1" | grep -o "\"$2\":[0-9]*" | head -1 | cut -d: -f2
+    }
+
+    tr_json="$tr_dir/report.json"
+    (cd "$tr_dir" && "$SALAM" build --time-report=json tiny.salam >/dev/null 2>"$tr_json")
+    tr_rc=$?
+    tr_line=$(grep '"schema":"salam.timereport.v1"' "$tr_json" | head -1)
+    if [ "$tr_rc" -ne 0 ]; then
+        note_result "FAIL timereport/json (build exited $tr_rc)" "timereport/json"
+    elif [ -z "$tr_line" ]; then
+        note_result "FAIL timereport/json (no salam.timereport.v1 object on stderr)" "timereport/json"
+    else
+        printf '%s\n' "$tr_line" >"$tr_json"
+        tr_wall=$(tr_field "$tr_json" wall_ns)
+        tr_bad=""
+        [ -n "$tr_wall" ] && [ "$tr_wall" -gt 0 ] || tr_bad="wall_ns not positive"
+        for k in source lexer parser semantic codegen write; do
+            grep -q "\"$k\":{" "$tr_json" || tr_bad="missing phase '$k'"
+        done
+        # Sum of per-phase self time can never exceed wall time (5% slack for
+        # the clock reads the profiler itself performs).
+        tr_sum=$(tr -d ' ' <"$tr_json" | grep -o '"self_ns":[0-9]*' | cut -d: -f2 |
+            awk '{ t += $1 } END { print t + 0 }')
+        [ -n "$tr_wall" ] && [ "$tr_sum" -le $((tr_wall + tr_wall / 20)) ] ||
+            tr_bad="self_ns sum $tr_sum exceeds wall $tr_wall"
+        if [ -n "$tr_bad" ]; then
+            note_result "FAIL timereport/json ($tr_bad)" "timereport/json"
+        else
+            note_result "PASS timereport/json" "timereport/json"
+        fi
+    fi
+
+    # --time-trace writes a Chrome Trace Event array the same run.
+    (cd "$tr_dir" && "$SALAM" build --time-trace=trace.json tiny.salam >/dev/null 2>&1)
+    if [ -s "$tr_dir/trace.json" ] && grep -q '"ph":"X"' "$tr_dir/trace.json"; then
+        note_result "PASS timereport/trace" "timereport/trace"
+    else
+        note_result "FAIL timereport/trace (no trace events written)" "timereport/trace"
+    fi
+
+    # Parity: the self-hosted compiler must report the same phase key set. Only
+    # runs when a second binary is pointed at by SALAM_SELFHOST; skips (not
+    # fails) otherwise, the same way the llvm/opencv sections degrade.
+    if [ -n "${SALAM_SELFHOST:-}" ] && [ -x "$SALAM_SELFHOST" ]; then
+        rm -rf "$tr_dir/.salam-build"
+        (cd "$tr_dir" && "$SALAM_SELFHOST" build --time-report=json tiny.salam             >/dev/null 2>"$tr_dir/self.json")
+        grep '"schema":"salam.timereport.v1"' "$tr_dir/self.json" | head -1             >"$tr_dir/self1.json"
+        if [ ! -s "$tr_dir/self1.json" ]; then
+            note_result "FAIL timereport/parity (self-hosted emitted no report)" "timereport/parity"
+        else
+            keys_c=$(grep -o '"[a-z]*":{"self_ns"' "$tr_json" | sort | tr -d '
+')
+            keys_s=$(grep -o '"[a-z]*":{"self_ns"' "$tr_dir/self1.json" | sort | tr -d '
+')
+            if [ "$keys_c" = "$keys_s" ]; then
+                note_result "PASS timereport/parity" "timereport/parity"
+            else
+                note_result "FAIL timereport/parity (C phases [$keys_c] vs Salam [$keys_s])" "timereport/parity"
+            fi
+        fi
+    else
+        note_result "SKIP timereport/parity (set SALAM_SELFHOST to the self-hosted binary)" "timereport/parity"
+    fi
+fi
+
 
 ALL="$WORK/all-results.txt"
 cat "$WORK/results"/* >"$ALL" 2>/dev/null || true

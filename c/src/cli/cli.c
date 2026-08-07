@@ -36,6 +36,7 @@ static void cli_set_defaults(options_t *out)
     out->run_args_count = 0;
     out->output = NULL;
     out->cc = "tcc";
+    out->backend = "auto";
     out->keep_c = false;
     out->force = false;
     out->safe = true;
@@ -61,6 +62,9 @@ static void cli_set_defaults(options_t *out)
     out->version_short = false;
     out->serve_host = NULL;
     out->serve_port = -1;
+    out->time_report = false;
+    out->time_report_fmt = PROF_FMT_TABLE;
+    out->time_trace = NULL;
 }
 
 bool cli_parse(int argc, char **argv, options_t *out)

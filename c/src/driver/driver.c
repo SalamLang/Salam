@@ -26,6 +26,7 @@
 #include "driver/debug_cmd.h"
 #include "driver/repl.h"
 #include "core/arena.h"
+#include "core/prof_self.h"
 #include "core/sb.h"
 #include "cli/options.h"
 #include "langpack/langpack.h"
@@ -673,7 +674,14 @@ static void driver_print_version(bool short_form)
     printf("built:   %s\n", SALAM_BUILD_DATE);
 }
 
-int driver_main(int argc, char **argv)
+/* Set by driver_main_inner() as soon as the options are parsed, so the
+ * driver_main() wrapper can emit the report on every exit path without
+ * threading the options through fifteen `return` statements. */
+static bool g_time_report = false;
+static int g_time_report_fmt = PROF_FMT_TABLE;
+static const char *g_time_trace = NULL;
+
+static int driver_main_inner(int argc, char **argv)
 {
 #if defined(_WIN32)
     SetConsoleOutputCP(CP_UTF8);
@@ -683,6 +691,12 @@ int driver_main(int argc, char **argv)
     options_t opt;
     if (!cli_parse(argc, argv, &opt)) {
         return 2;
+    }
+    if (opt.time_report || opt.time_trace) {
+        prof_self_enable(opt.time_trace != NULL);
+        g_time_report = opt.time_report;
+        g_time_report_fmt = opt.time_report_fmt;
+        g_time_trace = opt.time_trace;
     }
     i18n_set_lang(opt.lang);
     salam_set_stdlib_root(opt.stdlib_path);
@@ -803,8 +817,27 @@ int driver_main(int argc, char **argv)
         if (rc == 0 && (!pok || !sr->ok)) rc = 1;
     }
     if (rc == 0 && !ok) rc = 1;
-cleanup:
+cleanup: {
+    arena_stats_t as = arena_stats(arena);
+    prof_self_count(TC_ARENA_BYTES, as.bytes_reserved);
+    prof_self_count(TC_ARENA_BLOCKS, as.blocks);
+    prof_self_count(TC_AST_NODES, ast_node_count());
+}
     arena_free(arena);
     logger_free(log);
+    return rc;
+}
+
+int driver_main(int argc, char **argv)
+{
+    int rc = driver_main_inner(argc, argv);
+    if (prof_self_on()) {
+        /* stderr, never stdout: `salam js`, `salam doc` and the --emit-*
+         * paths write their real output to stdout. */
+        if (g_time_report) prof_self_report(stderr, g_time_report_fmt);
+        if (g_time_trace && !prof_self_write_trace(g_time_trace))
+            fprintf(stderr, i18n_tr("salam: cannot write trace to '%s'\n"), g_time_trace);
+        prof_self_shutdown();
+    }
     return rc;
 }

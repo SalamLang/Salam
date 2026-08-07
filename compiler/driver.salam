@@ -78,6 +78,7 @@ import lv "llvm.salam"
 import jg "jsgen.salam"
 import mn "minify.salam"
 import lo "sal_layout.salam"
+import pf "prof_self.salam"
 import thread
 import sync
 import fs
@@ -228,6 +229,11 @@ pub struct Dr:
         pub fmt_minify: bool = false
         pub debug_info: bool = false
         pub asan: bool = false
+        // --time-report[=table|json]: where the compiler spent its own time.
+        pub time_report: bool = false
+        pub time_report_fmt: int = 0 // pf.PROF_FMT_TABLE
+        // --time-trace[=FILE]: Chrome Trace Event JSON of the same run.
+        pub time_trace: str = ""
         // Whole-program LTO for the final link (gcc/clang only). Opt-in:
         // on this toolchain's Windows lto-wrapper, LTRANS always falls back
         // to serial compilation regardless of -flto=N, so a plain optimizing
@@ -929,7 +935,10 @@ pub struct Dr:
             end
 
             mut sf := src.New()
-            if !src.Load(path, sf):
+            _pt_source := pf.Begin(pf.TP_SOURCE, path)
+            src_ok := src.Load(path, sf)
+            pf.End(pf.TP_SOURCE, _pt_source)
+            if !src_ok:
                 lg.Log(
                     lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path))
                 )
@@ -953,13 +962,18 @@ pub struct Dr:
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "compiling " + path + " -> " + module + ".c")
 
             mut toks := tok.StreamNew(path)
+            _pt_lexer := pf.Begin(pf.TP_LEXER, path)
             mut lok := lx.Run(lgr, modpack, sf, toks)
+            pf.End(pf.TP_LEXER, _pt_lexer)
+            pf.Count(pf.TC_TOKENS, tok.StreamCount(toks) as i64)
             mut prog := 0
+            _pt_parser := pf.Begin(pf.TP_PARSER, path)
             mut pok := ps.Run(lgr, toks, a, prog)
             tok.StreamFree(toks)
             if !cc.PruneProgram(a, lgr, path, table, prog):
                 pok = false
             end
+            pf.End(pf.TP_PARSER, _pt_parser)
 
             mut pfiles := sm.PackageFiles(path)
             mut pi := 1
@@ -994,7 +1008,10 @@ pub struct Dr:
 
             gscope := sm.Rebind(s, path, lp.Code(modpack))
             sm.SetCc(s, table)
+            _pt_sema := pf.Begin(pf.TP_SEMANTIC, path)
             sok := sm.Run(s, a, prog)
+            pf.End(pf.TP_SEMANTIC, _pt_sema)
+            pf.Count(pf.TC_SYMBOLS, sm.ScopeAt(s, gscope).symbols.len() as i64)
 
             if !lok || !pok || !sok:
                 all_ok = false
@@ -1119,9 +1136,21 @@ pub struct Dr:
             at.Put(a, prog2, pw)
             old_list.free()
 
+            if pf.On():
+                mut nfuncs := 0
+                kn := at.Get(a, prog2)
+                repeat kn.list.len() with fi:
+                    if at.Get(a, kn.list.get(fi)[0]).kind == at.AST_FUNC_DEF:
+                        nfuncs += 1
+                    end
+                end
+                pf.Count(pf.TC_FUNCS_EMITTED, nfuncs as i64)
+            end
+            _pt_cg := pf.Begin(pf.TP_CODEGEN, path2)
             o := cg.Run(
                 lgr, s, a, prog2, module2, opt.safe, opt.debug_info, path2, entry2, ""
             )
+            pf.End(pf.TP_CODEGEN, _pt_cg)
 
             cpath := scratch + "/salam_mod_" + module2 + ".c"
             hpath := scratch + "/salam_mod_" + module2 + ".h"
@@ -1129,6 +1158,7 @@ pub struct Dr:
             // Only rewrite when the generated C actually differs: rewriting an
             // identical file would churn its timestamp and force a needless
             // recompile of an object that is still valid.
+            _pt_w := pf.Begin(pf.TP_WRITE, path2)
             unchanged := !opt.force && os.Exists(opath) && file_unchanged(cpath, o.c_src) && file_unchanged(hpath, o.h_src)
             mut wok1 := true
             mut wok2 := true
@@ -1136,6 +1166,7 @@ pub struct Dr:
                 wok1 = write_file(lgr, cpath, o.c_src)
                 wok2 = write_file(lgr, hpath, o.h_src)
             end
+            pf.End(pf.TP_WRITE, _pt_w)
             if !wok1 || !wok2:
                 all_ok = false
                 failed_files.push(path2)
@@ -1328,7 +1359,11 @@ pub struct Dr:
                 lg.Log(
                     lgr, lg.PH_DRIVER, lg.LOG_INFO, "compiling " + str.FromInt(jobs.len() as i64) + " object file" + plural_suffix(jobs.len()) + " in parallel, reused " + str.FromInt((cfiles.len() - jobs.len()) as i64) + " cached object" + plural_suffix(cfiles.len() - jobs.len())
                 )
+                _pt_cc := pf.Begin(pf.TP_CC, "")
                 crc = compile_parallel(jobs)
+                pf.End(pf.TP_CC, _pt_cc)
+                pf.Count(pf.TC_MODULES_BUILT, jobs.len() as i64)
+                pf.Count(pf.TC_MODULES_CACHED, (cfiles.len() - jobs.len()) as i64)
                 jobs.free()
                 if crc != 0:
                     lg.Log(
@@ -1369,7 +1404,9 @@ pub struct Dr:
                     cmdtext2 := str.BufStr(cmdb2)
                     str.BufFree(cmdb2)
                     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "linking: " + cmdtext2)
+                    _pt_lk2 := pf.Begin(pf.TP_LINK, output)
                     crc = proc_status(system(cmdtext2))
+                    pf.End(pf.TP_LINK, _pt_lk2)
                     if crc != 0:
                         lg.Log(
                             lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
@@ -1497,7 +1534,9 @@ pub struct Dr:
                 cmdtext := str.BufStr(cmdb)
                 str.BufFree(cmdb)
                 lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "linking: " + cmdtext)
+                _pt_lk := pf.Begin(pf.TP_LINK, output)
                 crc = proc_status(system(cmdtext))
+                pf.End(pf.TP_LINK, _pt_lk)
                 if crc != 0:
                     lg.Log(
                         lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(

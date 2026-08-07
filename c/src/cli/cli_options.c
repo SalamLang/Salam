@@ -103,6 +103,25 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
             const char *val;
             if (strcmp(arg, "--keep-c") == 0) {
                 out->keep_c = true;
+            } else if (strcmp(arg, "--time-report") == 0) {
+                out->time_report = true;
+            } else if ((val = cli_opt_value(arg, "--time-report")) != NULL) {
+                out->time_report = true;
+                if (strcmp(val, "json") == 0) {
+                    out->time_report_fmt = PROF_FMT_JSON;
+                } else if (strcmp(val, "table") == 0) {
+                    out->time_report_fmt = PROF_FMT_TABLE;
+                } else {
+                    fprintf(stderr,
+                            i18n_tr("salam: unknown --time-report format '%s' "
+                                    "(expected 'table' or 'json')\n"),
+                            val);
+                    return false;
+                }
+            } else if (strcmp(arg, "--time-trace") == 0) {
+                out->time_trace = "salam-trace.json";
+            } else if ((val = cli_opt_value(arg, "--time-trace")) != NULL) {
+                out->time_trace = val;
             } else if (strcmp(arg, "--force") == 0 || strcmp(arg, "-B") == 0) {
                 out->force = true;
 
@@ -192,8 +211,14 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                     return false;
                 }
                 out->output = argv[++i];
+            } else if ((val = cli_opt_value(arg, "--backend")) != NULL) {
+                out->backend = val;
             } else if ((val = cli_opt_value(arg, "--cc")) != NULL) {
                 out->cc = val;
+                /* --cc names a *C* compiler, so asking for one is asking for
+                 * the C backend; without this an explicit --cc=gcc would be
+                 * silently ignored once LLVM became the default. */
+                if (!strcmp(out->backend, "auto")) out->backend = "c";
             } else if ((val = cli_opt_value(arg, "--stdlib-path")) != NULL) {
                 out->stdlib_path = val;
             } else if ((val = cli_opt_value(arg, "--define")) != NULL) {

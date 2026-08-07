@@ -112,9 +112,20 @@ long ast_str_lit_len(const ast_node_t *n)
     return (long)strlen(n->value.as.s);
 }
 
+/* Every AST node in the process passes through ast_new, so this is an exact
+ * count. It is a plain increment rather than a prof_self_count() call so the
+ * parser's hot path is unaffected whether or not --time-report is on. */
+static uint64_t g_ast_nodes = 0;
+
+uint64_t ast_node_count(void)
+{
+    return g_ast_nodes;
+}
+
 ast_node_t *ast_new(arena_t *a, ast_kind_t kind, const src_span_t *span)
 {
     ast_node_t *n = (ast_node_t *)arena_alloc(a, sizeof(*n));
+    g_ast_nodes++;
     memset(n, 0, sizeof(*n));
     n->kind = kind;
     if (span) n->span = *span;

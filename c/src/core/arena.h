@@ -29,4 +29,14 @@ char *arena_strdup(arena_t *a, const char *s);
 
 void arena_free(arena_t *a);
 
+typedef struct {
+    uint64_t bytes_used;     /* handed out by arena_alloc, after alignment */
+    uint64_t bytes_reserved; /* malloc'd from the system, block headers included */
+    uint64_t blocks;
+} arena_stats_t;
+
+/* Walks the block list, so it is O(blocks). Meant for reporting, not for a
+ * hot path. */
+arena_stats_t arena_stats(const arena_t *a);
+
 #endif /* SALAM_CORE_ARENA_H */

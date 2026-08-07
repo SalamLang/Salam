@@ -15,6 +15,8 @@
 #include "llvm/codegen_llvm_internal.h"
 #include "core/sal_format.h"
 #include "codegen/print_fmt.h"
+#include "semantic/builtins.h"
+#include "i18n/i18n.h"
 
 /*
  * No 'nsw'/'nuw': salam defines signed and unsigned overflow alike as
@@ -677,6 +679,183 @@ static llv_t ll_emit_call(ll_t *ll, ast_node_t *n, func_sig_t *sig, const char *
     return (llv_t){r, rts};
 }
 
+/*
+ * Locate a `salam_*` runtime builtin by name in any package sema has
+ * loaded. These are not symbols that have to come from a prebuilt runtime
+ * archive: the stdlib declares them as `extern:` blocks that *do* carry a
+ * Salam body (std/fs/fs.salam's salam_file_read, std/text/text.salam's
+ * salam_str_split, ...), which ll_toplevel already emits - only the
+ * dispatch from the surface syntax (`f.read(n)`, `s.split(d)`) down to
+ * them was missing. Mirrors how the C backend names the same runtime
+ * entry points in codegen_call.c's call_file/call_str.
+ */
+static func_sig_t *ll_runtime_fn(ll_t *ll, const char *name, symbol_t **owner)
+{
+    size_t p = 0;
+    for (; p < ll->sem->packages.len; p++) {
+        symbol_t *pk = (symbol_t *)ll->sem->packages.data[p];
+        symbol_t *fs;
+        if (!pk || pk->kind != SYM_PACKAGE || !pk->members) continue;
+        fs = scope_lookup_local(pk->members, name);
+        if (!fs || fs->kind != SYM_FUNC || fs->overloads.len == 0) continue;
+        *owner = pk;
+        return (func_sig_t *)fs->overloads.data[0];
+    }
+    return NULL;
+}
+
+/*
+ * Emit a call to a runtime builtin resolved by ll_runtime_fn. `recv`, when
+ * non-NULL, is lowered as the leading argument - the runtime entry points
+ * for method-shaped builtins take their receiver as parameter 0, so the
+ * call's own argument list lines up with sig->params starting at index 1.
+ * That offset is why this does not go through ll_emit_call, which pairs
+ * n->list.data[i] with sig->params.data[i].
+ */
+static bool ll_call_runtime(ll_t *ll, ast_node_t *n, const char *rtname, ast_node_t *recv,
+                            llv_t *out)
+{
+    symbol_t *pk = NULL;
+    func_sig_t *sig = ll_runtime_fn(ll, rtname, &pk);
+    size_t base, i;
+    sb_t ab;
+    const char *args, *rts, *r;
+    if (!sig || !sig->decl) return false;
+    ll_touch_pkg_named(ll, pk->pkgname);
+    ll_ensure_fn(ll, sig->decl, NULL, pk->members);
+    sb_init(&ab);
+    base = 0;
+    if (recv) {
+        llv_t rv = ll_expr(ll, recv);
+        const char *pts = sig->params.len
+                              ? type_to_string(ll->sem->tc, (type_t *)sig->params.data[0])
+                              : rv.ts;
+        sb_puts(&ab, ll_fmt(ll, "%s %s", ll_ty(ll, pts), ll_conv(ll, rv, pts)));
+        base = 1;
+    }
+    for (i = 0; i < n->list.len; i++) {
+        llv_t v = ll_expr(ll, (ast_node_t *)n->list.data[i]);
+        const char *pts =
+            (i + base) < sig->params.len
+                ? type_to_string(ll->sem->tc, (type_t *)sig->params.data[i + base])
+                : v.ts;
+        if (base || i) sb_puts(&ab, ", ");
+        sb_puts(&ab, ll_fmt(ll, "%s %s", ll_ty(ll, pts), ll_conv(ll, v, pts)));
+    }
+    args = arena_strdup(ll->a, sb_cstr(&ab));
+    sb_free(&ab);
+    rts = type_to_string(ll->sem->tc, sig->ret);
+    if (rts && !strcmp(rts, "void")) {
+        ll_emit(ll, "call void @%s(%s)", rtname, args);
+        *out = (llv_t){"0", "void"};
+        return true;
+    }
+    r = ll_new_tmp(ll);
+    ll_emit(ll, "%s = call %s @%s(%s)", r, ll_ty(ll, rts), rtname, args);
+    *out = (llv_t){r, rts};
+    return true;
+}
+
+/*
+ * Builtins that hand back a freshly allocated `const char**` plus an
+ * out-param element count, which the surface language sees as a
+ * Vector<str>. Vector<T> is { data: T*, _len: int, _cap: int } (see
+ * std/collections/vector.salam), so cap is filled with the same count as
+ * len - the buffer is exactly sized and never grown in place, matching
+ * what the C backend's call_ident/call_str build for the same runtimes.
+ * `recv` is the receiver for method-shaped builtins (s.split(d)) and NULL
+ * for free functions (listdir(p), args()).
+ */
+static bool ll_call_vec_str(ll_t *ll, ast_node_t *n, const char *rtname, ast_node_t *recv,
+                            llv_t *out)
+{
+    symbol_t *pk = NULL;
+    func_sig_t *sig = ll_runtime_fn(ll, rtname, &pk);
+    const char *vts = n->type_str ? n->type_str : "Vector<str>";
+    const char *vty, *cnt, *data, *ln, *v0, *v1, *v2;
+    sb_t ab;
+    size_t i;
+    if (!sig || !sig->decl) return false;
+    ll_touch_pkg_named(ll, pk->pkgname);
+    ll_ensure_fn(ll, sig->decl, NULL, pk->members);
+    vty = ll_ty(ll, vts);
+    cnt = ll_new_tmp(ll);
+    ll_emit_alloca(ll, "%s = alloca i32", cnt);
+    sb_init(&ab);
+    if (recv) sb_puts(&ab, ll_fmt(ll, "ptr %s", ll_expr(ll, recv).ref));
+    for (i = 0; i < n->list.len; i++) {
+        llv_t v = ll_expr(ll, (ast_node_t *)n->list.data[i]);
+        if (recv || i) sb_puts(&ab, ", ");
+        sb_puts(&ab, ll_fmt(ll, "ptr %s", v.ref));
+    }
+    if (recv || n->list.len) sb_puts(&ab, ", ");
+    sb_puts(&ab, ll_fmt(ll, "ptr %s", cnt));
+    data = ll_new_tmp(ll);
+    ll_emit(ll, "%s = call ptr @%s(%s)", data, rtname, arena_strdup(ll->a, sb_cstr(&ab)));
+    sb_free(&ab);
+    ln = ll_new_tmp(ll);
+    ll_emit(ll, "%s = load i32, ptr %s", ln, cnt);
+    v0 = ll_new_tmp(ll);
+    v1 = ll_new_tmp(ll);
+    v2 = ll_new_tmp(ll);
+    ll_emit(ll, "%s = insertvalue %s undef, ptr %s, 0", v0, vty, data);
+    ll_emit(ll, "%s = insertvalue %s %s, i32 %s, 1", v1, vty, v0, ln);
+    ll_emit(ll, "%s = insertvalue %s %s, i32 %s, 2", v2, vty, v1, ln);
+    *out = (llv_t){v2, vts};
+    return true;
+}
+
+/* File* methods - the C backend's call_file() counterpart. */
+static bool ll_call_file(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
+                         llv_t *out)
+{
+    static const struct {
+        const char *method;
+        const char *runtime;
+    } map[] = {{"read", "salam_file_read"},
+               {"readline", "salam_file_readline"},
+               {"write", "salam_file_write"},
+               {"seek", "salam_file_seek"},
+               {"close", "salam_file_close"}};
+    size_t i = 0;
+    for (; i < sizeof map / sizeof map[0]; i++)
+        if (!strcmp(m, map[i].method))
+            return ll_call_runtime(ll, n, map[i].runtime, obj, out);
+    return false;
+}
+
+/*
+ * `pkg.NAME` where NAME is a package-level const/var or an enum member of
+ * an enum the package exports - the non-call half of package-qualified
+ * access, which previously fell through to ll_member_addr and reported the
+ * package identifier itself as an unknown address.
+ *
+ * Touching the package first is what makes this work: ll_touch_pkg emits
+ * that package's globals and registers them in ll->globals, so the
+ * ll_global_find below can only succeed afterwards.
+ */
+static bool ll_pkg_value(ll_t *ll, ast_node_t *n, symbol_t *pk, llv_t *out)
+{
+    symbol_t *m;
+    lvar_t *g;
+    const char *r;
+    if (!pk->members) return false;
+    m = scope_lookup_local(pk->members, n->name);
+    if (!m) return false;
+    if (m->kind == SYM_ENUM_MEMBER) {
+        *out = (llv_t){ll_fmt(ll, "%lld", (long long)m->enum_value), "i32"};
+        return true;
+    }
+    if (m->kind != SYM_CONST && m->kind != SYM_VAR) return false;
+    ll_touch_pkg_named(ll, pk->pkgname);
+    g = ll_global_find(ll, n->name);
+    if (!g) return false;
+    r = ll_new_tmp(ll);
+    ll_emit(ll, "%s = load %s, ptr %s", r, ll_ty(ll, g->ts), g->ptr);
+    *out = (llv_t){r, g->ts};
+    return true;
+}
+
 static llv_t ll_call_pkg(ll_t *ll, ast_node_t *n, symbol_t *pk, const char *fname_)
 {
     ll_touch_pkg_named(ll, pk->pkgname);
@@ -703,6 +882,11 @@ static bool ll_call_str(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *m,
             return true;
         }
     }
+    /* Before `recv` is materialized below: ll_call_vec_str lowers the
+     * receiver itself, and evaluating `obj` twice would duplicate any side
+     * effects in it. */
+    if (!strcmp(m, "split") && na == 1)
+        return ll_call_vec_str(ll, n, "salam_str_split", obj, out);
     const char *recv = ll_expr(ll, obj).ref;
     const char *r;
     if (!strcmp(m, "len")) {
@@ -874,6 +1058,11 @@ static llv_t ll_call_method(ll_t *ll, ast_node_t *n, ast_node_t *callee)
         if (ll_call_str(ll, n, obj, mname, &o)) return o;
     }
 
+    if (!strcmp(ots, "File*")) {
+        llv_t o;
+        if (ll_call_file(ll, n, obj, mname, &o)) return o;
+    }
+
     if (!strcmp(mname, "len") && (ll_is_slice_ts(ots) || (ots && strchr(ots, '['))))
         return ll_len_of(ll, n, obj);
 
@@ -975,6 +1164,84 @@ static bool ll_call_intrinsic(ll_t *ll, ast_node_t *n, const char *nm, llv_t *ou
                 ll_conv(ll, ll_expr(ll, a0), "i32"));
         *out = (llv_t){r, "str"};
         return true;
+    }
+    /* char_code(s) is the inverse of char_from_code: the unsigned value of
+     * the first byte. Loaded directly rather than through a runtime call,
+     * matching the C backend's `(int32_t)(unsigned char)(s)[0]`. */
+    if (!strcmp(nm, "char_code") && na == 1) {
+        const char *b = ll_new_tmp(ll);
+        r = ll_new_tmp(ll);
+        ll_emit(ll, "%s = load i8, ptr %s", b, ll_expr(ll, a0).ref);
+        ll_emit(ll, "%s = zext i8 %s to i32", r, b);
+        *out = (llv_t){r, "i32"};
+        return true;
+    }
+    if (!strcmp(nm, "args") && na == 0)
+        return ll_call_vec_str(ll, n, "salam_args", NULL, out);
+    if (!strcmp(nm, "listdir") && na == 1)
+        return ll_call_vec_str(ll, n, "salam_os_listdir", NULL, out);
+    if (!strcmp(nm, "input") && na == 0)
+        return ll_call_runtime(ll, n, "salam_input", NULL, out);
+    if (!strcmp(nm, "lang") && na == 0) {
+        *out = (llv_t){ll_strconst(ll, i18n_lang()), "str"};
+        return true;
+    }
+    /*
+     * funcptr(f)/spawn(f) take a *function name*, not a value, so the
+     * argument is lowered to the mangled symbol's address rather than
+     * through ll_expr. spawn additionally hands that address to the
+     * thread runtime. Mirrors call_ident() in the C backend.
+     */
+    if ((!strcmp(nm, "funcptr") || !strcmp(nm, "spawn")) && na == 1 &&
+        a0->kind == AST_IDENTIFIER) {
+        symbol_t *fs = ll_sym(ll, a0->name);
+        func_sig_t *fsig = (fs && fs->kind == SYM_FUNC && fs->overloads.len)
+                               ? (func_sig_t *)fs->overloads.data[0]
+                               : NULL;
+        const char *sym;
+        if (!fsig || !fsig->decl) return false;
+        ll_ensure_fn(ll, fsig->decl, NULL, ll->pkg_scope);
+        sym = fsig->decl->is_extern ? a0->name : ll_mangle(ll, NULL, a0->name, fsig);
+        r = ll_new_tmp(ll);
+        ll_emit(ll, "%s = ptrtoint ptr @%s to i64", r, sym);
+        if (!strcmp(nm, "funcptr")) {
+            *out = (llv_t){r, "i64"};
+            return true;
+        }
+        {
+            symbol_t *pk = NULL;
+            func_sig_t *sp = ll_runtime_fn(ll, "salam_thread_spawn", &pk);
+            const char *h;
+            if (!sp || !sp->decl) return false;
+            ll_touch_pkg_named(ll, pk->pkgname);
+            ll_ensure_fn(ll, sp->decl, NULL, pk->members);
+            h = ll_new_tmp(ll);
+            ll_emit(ll, "%s = inttoptr i64 %s to ptr", h, r);
+            r = ll_new_tmp(ll);
+            ll_emit(ll, "%s = call i64 @salam_thread_spawn(ptr %s)", r, h);
+            *out = (llv_t){r, "i64"};
+            return true;
+        }
+    }
+    /* callhandler(fp, arg) - an indirect call through an integer-encoded
+     * function pointer, the shape the layout/webview callbacks use. */
+    if (!strcmp(nm, "callhandler") && na == 2) {
+        ast_node_t *a1 = (ast_node_t *)n->list.data[1];
+        const char *fp = ll_new_tmp(ll);
+        ll_emit(ll, "%s = inttoptr i64 %s to ptr", fp,
+                ll_conv(ll, ll_expr(ll, a0), "i64"));
+        ll_emit(ll, "call void %s(i64 %s)", fp, ll_conv(ll, ll_expr(ll, a1), "i64"));
+        *out = (llv_t){"0", "void"};
+        return true;
+    }
+    /*
+     * Table-driven builtins (join -> salam_thread_join, strcmp, ...) - the
+     * same k_builtins table the C backend falls back to in call_ident(),
+     * so a new entry there reaches both backends without a second edit.
+     */
+    {
+        const salam_builtin_t *bi = salam_builtin_lookup(nm);
+        if (bi && ll_call_runtime(ll, n, bi->runtime, NULL, out)) return true;
     }
     return false;
 }
@@ -1506,6 +1773,12 @@ llv_t ll_expr(ll_t *ll, ast_node_t *n)
                 symbol_t *m = scope_lookup_local(e->members, n->name);
                 if (m && m->kind == SYM_ENUM_MEMBER)
                     return (llv_t){ll_fmt(ll, "%lld", (long long)m->enum_value), "i32"};
+            }
+            {
+                llv_t pv;
+                symbol_t *pk = ll_sym(ll, n->a->name);
+                if (pk && pk->kind == SYM_PACKAGE && ll_pkg_value(ll, n, pk, &pv))
+                    return pv;
             }
         }
         return ll_load_addr(ll, n);

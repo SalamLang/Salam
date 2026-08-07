@@ -26,6 +26,7 @@ if not errorlevel 1 set "LDLIBS="
 "%CC%" -Wall -Isrc -o salam.exe ^
     src/salam.c ^
     src/core/arena.c src/core/vec.c src/core/sb.c src/core/numstr.c src/core/sal_format.c ^
+    src/core/timer.c src/core/prof_self.c ^
     src/source/source.c src/logger/logger.c src/logger/logger_emit.c src/logger/logger_level.c ^
     src/xml/xml.c src/xml/xml_emit.c ^
     src/condcomp/condcomp_table.c src/condcomp/condcomp_fold.c ^

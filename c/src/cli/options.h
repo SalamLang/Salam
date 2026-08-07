@@ -16,6 +16,7 @@
 #define SALAM_CLI_OPTIONS_H
 
 #include "core/prelude.h"
+#include "core/prof_self.h"
 #include "logger/logger.h"
 #include "diag/diag_render.h"
 
@@ -64,6 +65,10 @@ typedef struct {
     int run_args_count;
     const char *output;
     const char *cc;
+    /* Backend selection for `salam build`/`obj`: "auto" (default - LLVM when
+     * this binary has it compiled in, C otherwise), "llvm", or "c". Set to
+     * "c" implicitly by an explicit --cc=, which only the C backend uses. */
+    const char *backend;
     bool keep_c;
     bool force;
     bool safe;
@@ -90,6 +95,11 @@ typedef struct {
     bool version_short;
     const char *serve_host;
     int serve_port;
+    /* --time-report[=table|json]: where the compiler spent its own time. */
+    bool time_report;
+    int time_report_fmt; /* PROF_FMT_TABLE | PROF_FMT_JSON */
+    /* --time-trace[=FILE]: Chrome Trace Event JSON of the same run. */
+    const char *time_trace;
 } options_t;
 
 #define OPTIONS_INIT_NO_JS_MINIFY_NAMES 0

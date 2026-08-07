@@ -17,7 +17,9 @@
 #include "driver/build.h"
 #include "driver/driver.h"
 #include "driver/llvm_build.h"
+#include "llvm/llvm_native.h"
 #include "core/arena.h"
+#include "core/prof_self.h"
 #include "core/sb.h"
 #include "logger/logger.h"
 #include "langpack/langpack.h"
@@ -26,6 +28,7 @@
 #include "parser/parser.h"
 #include "semantic/sema.h"
 #include "semantic/dce.h"
+#include "ast/ast.h"
 #include "codegen/codegen.h"
 #include "condcomp/condcomp.h"
 #include "i18n/i18n.h"
@@ -484,9 +487,47 @@ static const char *resolve_dir_entry(arena_t *arena, logger_t *log, langpack_t *
     return entries[0];
 }
 
+/*
+ * Backend choice for a native build.
+ *
+ * LLVM is preferred whenever this binary actually has it compiled in
+ * (WITH_LLVM=1), because it optimizes and, with WITH_LLD=1 plus an embedded
+ * sysroot, links in-process - no compiler or linker needed on the machine
+ * running salam. A binary built without LLVM has nothing to switch to and
+ * stays on the C backend.
+ *
+ * The C backend is not deprecated by this: --backend=c selects it, and so
+ * does any explicit --cc=, which names a C compiler and therefore can only
+ * mean the C path.
+ */
+static bool build_use_llvm(const options_t *opt)
+{
+    if (!strcmp(opt->backend, "c")) return false;
+    if (!strcmp(opt->backend, "llvm")) return true;
+    return salam_llvm_native_available() != 0;
+}
+
 int driver_build(options_t *opt)
 {
     if (opt->llvm_target && opt->llvm_target[0]) return driver_llvm_build(opt);
+
+    if (build_use_llvm(opt)) {
+        int lrc = driver_llvm_build(opt);
+        /*
+         * SALAM_RC_LLVM_UNSUPPORTED means the module was emitted but is
+         * incomplete - the program uses a construct the LLVM backend does
+         * not lower yet. Falling back to the C backend keeps every program
+         * that builds today building, which is what makes defaulting to
+         * LLVM safe before backend parity is finished. Any other non-zero
+         * code is a real error (bad source, failed link) and is reported
+         * as-is rather than retried, so a genuine mistake is not hidden
+         * behind a second compile.
+         */
+        if (lrc != SALAM_RC_LLVM_UNSUPPORTED) return lrc;
+        if (!strcmp(opt->backend, "llvm")) return lrc;
+        fprintf(stderr, i18n_tr("salam: falling back to the C backend for this file "
+                                "(build with --backend=llvm to make this an error)\n"));
+    }
 
     logger_t *log = logger_new(stderr, opt->log_level, resolve_color(opt->color));
     arena_t *arena = arena_new(1 << 20);
@@ -549,6 +590,9 @@ int driver_build(options_t *opt)
 
     const char *scratch = salam_scratch_dir();
     const char *cfiles[SALAM_MAX_INPUTS];
+    /* Source path each generated .c came from, so --time-report can charge the
+       host C compiler's time to the .salam file the user actually wrote. */
+    const char *csrc[SALAM_MAX_INPUTS];
     int ncfiles = 0;
     /* Per-module object path, and whether that object must be rebuilt. A module
        is clean only when its regenerated .c/.h are byte-identical to what is
@@ -635,7 +679,9 @@ int driver_build(options_t *opt)
                     if (strcmp(work[j], path) == 0) dup = true;
             }
             if (dup) continue;
+            PROF_SCOPE_BEGIN(TP_SOURCE, path);
             source_file_t *src = source_load(arena, path);
+            PROF_SCOPE_END(TP_SOURCE);
             if (!src) {
                 LOG_E(log, PH_DRIVER, i18n_tr("cannot read source file '%s'"), path);
                 all_ok = false;
@@ -652,17 +698,24 @@ int driver_build(options_t *opt)
             if (!first_module) first_module = module;
             LOG_I(log, PH_DRIVER, "compiling %s -> %s.c", path, module);
             token_stream_t *toks = NULL;
+            PROF_SCOPE_BEGIN(TP_LEXER, path);
             bool lok = lexer_run(arena, log, modpack, src, &toks);
+            PROF_SCOPE_END(TP_LEXER);
+            prof_self_count(TC_TOKENS, (uint64_t)token_stream_count(toks));
             ast_node_t *program = NULL;
+            PROF_SCOPE_BEGIN(TP_PARSER, path);
             bool pok = parser_run(arena, log, toks, &program);
             if (!cc_prune_program(arena, log, path, cc, program)) pok = false;
+            PROF_SCOPE_END(TP_PARSER);
 
             {
                 const char *pfiles[SALAM_MAX_INPUTS];
                 int npf = salam_package_files(arena, path, pfiles, SALAM_MAX_INPUTS);
                 int pi = 1;
                 for (; pi < npf; pi++) {
+                    PROF_SCOPE_BEGIN(TP_SOURCE, pfiles[pi]);
                     source_file_t *psrc = source_load(arena, pfiles[pi]);
+                    PROF_SCOPE_END(TP_SOURCE);
                     if (!psrc) {
                         LOG_E(log, PH_DRIVER, i18n_tr("cannot read source file '%s'"),
                               pfiles[pi]);
@@ -671,16 +724,25 @@ int driver_build(options_t *opt)
                     }
                     logger_add_diag_source(log, pfiles[pi], psrc->text, psrc->len);
                     token_stream_t *ptoks = NULL;
+                    PROF_SCOPE_BEGIN(TP_LEXER, pfiles[pi]);
                     if (!lexer_run(arena, log, modpack, psrc, &ptoks)) lok = false;
+                    PROF_SCOPE_END(TP_LEXER);
+                    prof_self_count(TC_TOKENS, (uint64_t)token_stream_count(ptoks));
                     ast_node_t *pprog = NULL;
+                    PROF_SCOPE_BEGIN(TP_PARSER, pfiles[pi]);
                     if (!parser_run(arena, log, ptoks, &pprog)) pok = false;
                     if (!cc_prune_program(arena, log, pfiles[pi], cc, pprog)) pok = false;
+                    PROF_SCOPE_END(TP_PARSER);
                     salam_merge_program(arena, program, pprog);
                 }
             }
 
+            PROF_SCOPE_BEGIN(TP_SEMANTIC, path);
             sema_result_t *sr = sema_run_cached(arena, log, program, src->path,
                                                 langpack_code(modpack), cc, &pkg_cache);
+            PROF_SCOPE_END(TP_SEMANTIC);
+            if (sr && sr->global)
+                prof_self_count(TC_SYMBOLS, (uint64_t)sr->global->symbols.len);
             if (!lok || !pok || !sr->ok) {
                 all_ok = false;
                 continue;
@@ -814,9 +876,19 @@ int driver_build(options_t *opt)
                 program->list = kept;
             }
 
+            PROF_SCOPE_BEGIN(TP_CODEGEN, b_srcpath[wi]);
             codegen_output_t *out =
                 codegen_run(arena, log, program, sr, module, opt->safe, opt->debug_info,
                             b_srcpath[wi], modentry, opt->llvm_target);
+            PROF_SCOPE_END(TP_CODEGEN);
+            if (prof_self_on()) {
+                size_t fi = 0;
+                uint64_t nfuncs = 0;
+                for (; fi < program->list.len; fi++)
+                    if (((ast_node_t *)program->list.data[fi])->kind == AST_FUNC_DEF)
+                        nfuncs++;
+                prof_self_count(TC_FUNCS_EMITTED, nfuncs);
+            }
             size_t pfxlen = strlen(SALAM_MOD_PREFIX);
             size_t pathcap = strlen(scratch) + 1 + pfxlen + strlen(module) + 3;
             char *cpath = (char *)arena_alloc(arena, pathcap);
@@ -828,6 +900,7 @@ int driver_build(options_t *opt)
                 bool unchanged;
                 sal_snprintf(opath, pathcap, "%s/%s%s.o", scratch, SALAM_MOD_PREFIX,
                              module);
+                PROF_SCOPE_BEGIN(TP_WRITE, b_srcpath[wi]);
                 /* Compare before writing: rewriting an identical file would only
                    churn its timestamp and force a needless recompile. */
                 unchanged = !opt->force && file_exists(opath) &&
@@ -835,12 +908,15 @@ int driver_build(options_t *opt)
                             file_has_content(hpath, out->h_src);
                 if (!unchanged && (!write_file(log, cpath, out->c_src) ||
                                    !write_file(log, hpath, out->h_src))) {
+                    PROF_SCOPE_END(TP_WRITE);
                     all_ok = false;
                     continue;
                 }
+                PROF_SCOPE_END(TP_WRITE);
                 ofiles[ncfiles] = opath;
                 cdirty[ncfiles] = !unchanged;
             }
+            csrc[ncfiles] = b_srcpath[wi] ? b_srcpath[wi] : cpath;
             cfiles[ncfiles++] = cpath;
             generated[ngen++] = cpath;
             generated[ngen++] = hpath;
@@ -908,7 +984,9 @@ int driver_build(options_t *opt)
                 sb_puts(&cmd, " -o ");
                 sb_put_shell_arg(&cmd, obj);
                 LOG_I(log, PH_DRIVER, "assembling: %s", sb_cstr(&cmd));
+                PROF_SCOPE_BEGIN(TP_CC, csrc[i]);
                 crc = system(sb_cstr(&cmd));
+                PROF_SCOPE_END(TP_CC);
                 sb_free(&cmd);
             }
         }
@@ -1035,12 +1113,16 @@ int driver_build(options_t *opt)
                     sb_puts(&cc1, " -o ");
                     sb_put_shell_arg(&cc1, ofiles[i]);
                     LOG_I(log, PH_DRIVER, "compiling: %s", sb_cstr(&cc1));
+                    PROF_SCOPE_BEGIN(TP_CC, csrc[i]);
                     crc = system(sb_cstr(&cc1));
+                    PROF_SCOPE_END(TP_CC);
                     sb_free(&cc1);
                     nrebuilt++;
                 }
                 LOG_I(log, PH_DRIVER, "compiled %d module(s), reused %d cached object(s)",
                       nrebuilt, ncfiles - nrebuilt);
+                prof_self_count(TC_MODULES_BUILT, (uint64_t)nrebuilt);
+                prof_self_count(TC_MODULES_CACHED, (uint64_t)(ncfiles - nrebuilt));
             }
             sb_free(&cflags);
         }
@@ -1186,7 +1268,9 @@ int driver_build(options_t *opt)
         }
 #endif
         LOG_I(log, PH_DRIVER, "linking: %s", sb_cstr(&cmd));
+        PROF_SCOPE_BEGIN(TP_LINK, output);
         crc = system(sb_cstr(&cmd));
+        PROF_SCOPE_END(TP_LINK);
         sb_free(&cmd);
         if (crc != 0) {
             LOG_E(log, PH_DRIVER, i18n_tr("C compiler '%s' failed (exit %d)"), opt->cc,
@@ -1204,6 +1288,12 @@ int driver_build(options_t *opt)
        every module look changed on the next build. They stay in the scratch
        dir (gitignored) and --force ignores them anyway. */
     if (opt->keep_c) LOG_I(log, PH_DRIVER, "kept generated C files");
+    {
+        arena_stats_t as = arena_stats(arena);
+        prof_self_count(TC_ARENA_BYTES, as.bytes_reserved);
+        prof_self_count(TC_ARENA_BLOCKS, as.blocks);
+        prof_self_count(TC_AST_NODES, ast_node_count());
+    }
     logger_free(log);
     arena_free(arena);
     return rc;

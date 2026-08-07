@@ -42,7 +42,7 @@ Measured by running `salam llvm` over all 802 files in `tests/en`:
 | after this work | 673 | 2            | 127                  |
 
 The 2 remaining are `tests/en/games/pacman/src/{ui,game}.salam`, which are
-*library modules* of a web app - `ui.salam` has no `main` at all. Compiling
+_library modules_ of a web app - `ui.salam` has no `main` at all. Compiling
 them standalone fails identically on the C backend ("no entry point"), and
 the real entry point (`index.salam`) builds fine via `salam web`. So they are
 not a backend gap: **the LLVM backend now compiles everything the C backend
@@ -120,7 +120,7 @@ built-in work:
   `x as extern func (i32, i32) i32` and std/webview's COM vtable slot
   casts). The LLVM backend had no case for them at all. Unlike a `func(...)`
   closure - env pointer whose first word is the code pointer - an
-  externfunc *is* the code pointer and takes no hidden argument, so it needs
+  externfunc _is_ the code pointer and takes no hidden argument, so it needs
   its own lowering (`ll_call_raw_ptr`), dispatched first exactly as
   `cg_call` has always done. Also taught `ll_func_ret`/`ll_func_params` the
   second prefix. Fixed 4 files.

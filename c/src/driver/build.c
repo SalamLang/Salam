@@ -350,7 +350,7 @@ static const char *plural_suffix(int n)
     return n == 1 ? "" : "s";
 }
 
-static bool path_is_dir(const char *p)
+bool driver_path_is_dir(const char *p)
 {
 #if defined(_WIN32)
     struct _stat st;
@@ -359,6 +359,64 @@ static bool path_is_dir(const char *p)
     struct stat st;
     return stat(p, &st) == 0 && S_ISDIR(st.st_mode);
 #endif
+}
+
+static bool path_is_file(const char *p)
+{
+#if defined(_WIN32)
+    struct _stat st;
+    return _stat(p, &st) == 0 && (st.st_mode & _S_IFDIR) == 0;
+#else
+    struct stat st;
+    return stat(p, &st) == 0 && S_ISREG(st.st_mode);
+#endif
+}
+
+const char *driver_project_entry_file(arena_t *a, const char *dir)
+{
+    char trimmed[1024];
+    sal_snprintf(trimmed, sizeof trimmed, "%s", dir);
+    size_t tlen = strlen(trimmed);
+    while (tlen > 1 && (trimmed[tlen - 1] == '/' || trimmed[tlen - 1] == '\\'))
+        trimmed[--tlen] = '\0';
+    char buf[1200];
+    if (strcmp(trimmed, ".") == 0)
+        sal_snprintf(buf, sizeof buf, "%s", SALAM_PROJECT_FILE);
+    else
+        sal_snprintf(buf, sizeof buf, "%s/%s", trimmed, SALAM_PROJECT_FILE);
+    if (!path_is_file(buf)) return NULL;
+    return arena_strdup(a, buf);
+}
+
+const char *driver_output_stem(arena_t *a, const char *path)
+{
+    const char *module = module_of(a, path);
+    if (strcmp(module, "salam") != 0) return module;
+    const char *dir = dir_of(a, path);
+    if (!dir[0]) dir = ".";
+    char abs[1024];
+#if defined(_WIN32)
+    if (!_fullpath(abs, dir, sizeof abs)) return module;
+#else
+    if (!realpath(dir, abs)) return module;
+#endif
+    size_t L = strlen(abs);
+    while (L > 1 && (abs[L - 1] == '/' || abs[L - 1] == '\\')) abs[--L] = '\0';
+    const char *base = abs;
+    {
+        const char *p = abs;
+        for (; *p; p++)
+            if (*p == '/' || *p == '\\') base = p + 1;
+    }
+    if (!base[0] || strcmp(base, ".") == 0 || strcmp(base, "..") == 0) return module;
+    return arena_strdup(a, base);
+}
+
+const char *driver_page_stem(arena_t *a, const char *path)
+{
+    const char *module = module_of(a, path);
+    if (strcmp(module, "salam") == 0) return "index";
+    return module;
 }
 
 /* driver.c's list_salam_files, generalized to an arbitrary directory (still
@@ -444,14 +502,61 @@ static bool file_has_entry(arena_t *a, langpack_t *pack, const char *entry,
     return found;
 }
 
-/* Shared "scan dir for exactly one file defining `entry`" used by driver_build
- * when no input was given (dir=".") or an explicit directory was passed
- * instead of a file. Logs its own error and returns NULL on failure (0 or >1
- * matches); returns the resolved path (arena-owned) on success. */
-static const char *resolve_dir_entry(arena_t *arena, logger_t *log, langpack_t *pack,
+/* Quiet lex+parse probe: does `path` contain a top-level `layout` block
+ * (a front-end DSL page rather than a program)? */
+static bool file_has_layout_block(arena_t *a, langpack_t *pack, const char *path)
+{
+    logger_t *quiet = logger_new(stderr, LOG_OFF, false);
+    source_file_t *src = source_load(a, path);
+    bool found = false;
+    if (src) {
+        token_stream_t *toks = NULL;
+        lexer_run(a, quiet, pack, src, &toks);
+        ast_node_t *program = NULL;
+        parser_run(a, quiet, toks, &program);
+        if (program) {
+            cc_table_t *cc = cc_table_build(a, NULL, NULL, 0);
+            cc_prune_program(a, quiet, path, cc, program);
+            size_t i = 0;
+            for (; i < program->list.len; i++) {
+                ast_node_t *d = (ast_node_t *)program->list.data[i];
+                if (d->kind == AST_LAYOUT_BLOCK) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    logger_free(quiet);
+    return found;
+}
+
+/* Shared "resolve the entry file of `dir`" used by driver_build/driver_run/
+ * driver_interp when no input was given (dir=".") or an explicit directory
+ * was passed instead of a file. The fixed project entry file salam.salam
+ * wins when present; otherwise the dir's top-level .salam files are scanned
+ * for exactly one defining `entry`. Logs its own error and returns NULL on
+ * failure; returns the resolved path (arena-owned) on success. */
+const char *driver_resolve_dir_entry(arena_t *arena, logger_t *log, langpack_t *pack,
                                      const char *dir)
 {
     const char *entry = langpack_entry(pack);
+    const char *proj = driver_project_entry_file(arena, dir);
+    if (proj) {
+        if (!file_has_entry(arena, pack, entry, proj)) {
+            LOG_E(log, PH_DRIVER,
+                  i18n_tr("project entry file '%s' does not define a '%s' function"),
+                  proj, entry);
+            if (file_has_layout_block(arena, pack, proj))
+                fprintf(stderr,
+                        "  this looks like a web layout project; build it with: "
+                        "salam web %s\n",
+                        proj);
+            return NULL;
+        }
+        LOG_I(log, PH_DRIVER, i18n_tr("entry point: %s"), proj);
+        return proj;
+    }
     const char *files[SALAM_MAX_INPUTS];
     int nfiles = 0;
     list_salam_files_in(arena, dir, files, &nfiles);
@@ -480,11 +585,68 @@ static const char *resolve_dir_entry(arena_t *arena, logger_t *log, langpack_t *
         int i = 0;
         for (; i < nentries; i++)
             fprintf(stderr, "    %s\n", entries[i]);
-        fprintf(stderr, "  run a specific one with: salam run <file.salam>\n");
+        fprintf(stderr, "  run a specific one with: salam run <file.salam>\n"
+                        "  or name the project's entry file '" SALAM_PROJECT_FILE
+                        "' to make it the project entry\n");
         return NULL;
     }
     LOG_I(log, PH_DRIVER, i18n_tr("entry point: %s"), entries[0]);
     return entries[0];
+}
+
+int driver_resolve_dir_layout(arena_t *arena, logger_t *log, langpack_t *pack,
+                              const char *dir, const char **out, int max_out,
+                              bool single)
+{
+    const char *proj = driver_project_entry_file(arena, dir);
+    if (proj) {
+        LOG_I(log, PH_DRIVER, i18n_tr("entry point: %s"), proj);
+        out[0] = proj;
+        return 1;
+    }
+    const char *files[SALAM_MAX_INPUTS];
+    int nfiles = 0;
+    list_salam_files_in(arena, dir, files, &nfiles);
+    if (nfiles == 0) {
+        LOG_E(log, PH_DRIVER, i18n_tr("no .salam files found in the current directory"));
+        return 0;
+    }
+    const char *pages[SALAM_MAX_INPUTS];
+    int npages = 0;
+    {
+        int i = 0;
+        for (; i < nfiles; i++)
+            if (file_has_layout_block(arena, pack, files[i]))
+                pages[npages++] = files[i];
+    }
+    if (npages == 0) {
+        LOG_E(log, PH_DRIVER,
+              i18n_tr("no layout entry: none of the %d .salam file%s here has a "
+                      "'layout' block"),
+              nfiles, plural_suffix(nfiles));
+        fprintf(stderr, "  name the project's entry file '" SALAM_PROJECT_FILE
+                        "' to make it the project entry\n");
+        return 0;
+    }
+    if (single && npages > 1) {
+        LOG_E(log, PH_DRIVER, i18n_tr("ambiguous layout entry: %d files have a "
+                                      "'layout' block:"),
+              npages);
+        int i = 0;
+        for (; i < npages; i++)
+            fprintf(stderr, "    %s\n", pages[i]);
+        fprintf(stderr, "  build a specific one with: salam web <file.salam>\n"
+                        "  or name the project's entry file '" SALAM_PROJECT_FILE
+                        "' to make it the project entry\n");
+        return 0;
+    }
+    int n = npages < max_out ? npages : max_out;
+    {
+        int i = 0;
+        for (; i < n; i++)
+            out[i] = pages[i];
+    }
+    return n;
 }
 
 /*
@@ -509,6 +671,34 @@ static bool build_use_llvm(const options_t *opt)
 
 int driver_build(options_t *opt)
 {
+    /* A bare `salam build` (no inputs) or a directory passed as the sole
+     * input (`salam build .`, `salam build ../project/`) doesn't name a
+     * file - resolve it to the project's entry file (salam.salam when
+     * present, else the one .salam file defining `main`) BEFORE picking
+     * a backend: the LLVM path reads opt->input directly and must see
+     * the resolved file, not a directory, and the project-file rule has
+     * to hold for every backend equally. */
+    if (opt->input_count == 0 ||
+        (opt->input_count == 1 && driver_path_is_dir(opt->inputs[0]))) {
+        static char resolved[1024];
+        logger_t *rlog = logger_new(stderr, opt->log_level, resolve_color(opt->color));
+        arena_t *rarena = arena_new(1 << 20);
+        langpack_t *rpack = langpack_load(opt->lang);
+        const char *first = NULL;
+        if (!rpack)
+            LOG_E(rlog, PH_DRIVER, i18n_tr("unknown language pack '%s'"), opt->lang);
+        else
+            first = driver_resolve_dir_entry(rarena, rlog, rpack,
+                                             opt->input_count ? opt->inputs[0] : ".");
+        if (first) sal_snprintf(resolved, sizeof resolved, "%s", first);
+        logger_free(rlog);
+        arena_free(rarena);
+        if (!first) return 2;
+        opt->inputs[0] = resolved;
+        opt->input_count = 1;
+        opt->input = resolved;
+    }
+
     if (opt->llvm_target && opt->llvm_target[0]) return driver_llvm_build(opt);
 
     if (build_use_llvm(opt)) {
@@ -539,33 +729,6 @@ int driver_build(options_t *opt)
         arena_free(arena);
         return 2;
     }
-    /* A bare `salam build` (no inputs) or a directory passed as the sole
-     * input (`salam build .`, `salam build ./compiler/`) doesn't name a
-     * file - scan that directory's top-level .salam files for the one that
-     * defines `main` and build that, same auto-detection driver_run()
-     * already does for a bare `salam run`. Without this, a directory input
-     * used to fall through to the per-file work-loop below, which reads it
-     * as a (nonexistent) source file instead of "build the program in this
-     * directory". */
-    if (opt->input_count == 0) {
-        const char *first = resolve_dir_entry(arena, log, pack, ".");
-        if (!first) {
-            logger_free(log);
-            arena_free(arena);
-            return 2;
-        }
-        opt->inputs[0] = first;
-        opt->input_count = 1;
-    } else if (opt->input_count == 1 && path_is_dir(opt->inputs[0])) {
-        const char *first = resolve_dir_entry(arena, log, pack, opt->inputs[0]);
-        if (!first) {
-            logger_free(log);
-            arena_free(arena);
-            return 2;
-        }
-        opt->inputs[0] = first;
-    }
-
     salam_set_stdlib_root(opt->stdlib_path);
 
 #if !defined(_WIN32)
@@ -1004,9 +1167,12 @@ int driver_build(options_t *opt)
     } else {
         const char *output = opt->output;
         if (!output) {
-            size_t ocap = strlen(first_module) + 5;
+            const char *stem = opt->input_count > 0
+                                   ? driver_output_stem(arena, opt->inputs[0])
+                                   : first_module;
+            size_t ocap = strlen(stem) + 5;
             char *o = (char *)arena_alloc(arena, ocap);
-            sal_snprintf(o, ocap, "%s.exe", first_module);
+            sal_snprintf(o, ocap, "%s.exe", stem);
             output = o;
         }
 #ifdef _WIN32

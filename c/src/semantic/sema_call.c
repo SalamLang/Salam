@@ -318,8 +318,8 @@ type_t *check_call(sema_t *s, ast_node_t *n)
             return decorate(s, n, ty(s, TY_SIZE));
         }
         ast_node_t *op = (ast_node_t *)n->list.data[0];
-        type_t *ot = sema_resolve_type(s, op);
-        decorate(s, op, ot);
+        type_t *op_type = sema_resolve_type(s, op);
+        decorate(s, op, op_type);
         decorate(s, callee, ty(s, TY_VOID));
         return decorate(s, n, ty(s, TY_SIZE));
     }

@@ -10238,8 +10238,8 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             ret sema_decorate(s, a, n, sema_ty(s, TY_SIZE))
         end
         opid := at.Child(a, n, 0)
-        ot := sema_resolve_type(s, a, opid)
-        _d6 := sema_decorate(s, a, opid, ot)
+        op_type := sema_resolve_type(s, a, opid)
+        _d6 := sema_decorate(s, a, opid, op_type)
         _d7 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
         ret sema_decorate(s, a, n, sema_ty(s, TY_SIZE))
     end
@@ -10263,6 +10263,21 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 mut fvm := sym_at(s, fvid)
                 fvm.used = true
                 sym_put(s, fvid, fvm)
+                // A function value *called* from inside a lambda is still a
+                // capture. Only the AST_IDENTIFIER expression path recorded
+                // captures, and a call's callee never goes through it - so
+                // `(x: int): dir(x) end` left `dir` out of the capture list
+                // entirely, and both backends then failed to find it.
+                // Using the same value without calling it worked, which is
+                // what made this look target-specific. Same condition as
+                // the expression path.
+                if s.lam.len() > 0 && (fvv.kind == SYM_VAR || fvv.kind == SYM_PARAM):
+                    ctop := s.lam.get(s.lam.len() - 1)[0]
+                    cname := at.Get(a, callee).name
+                    if !defined_within(s, s.cur, ctop.boundary, cname) && scope_lookup_local(s, s.global, cname) == 0:
+                        record_capture(s, a, callee, fvv.ty)
+                    end
+                end
             end
         end
     else callee != 0 && ckind != at.AST_MEMBER:

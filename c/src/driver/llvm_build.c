@@ -16,6 +16,7 @@
 #include "core/sal_format.h"
 #include "driver/llvm_build.h"
 #include "driver/driver.h"
+#include "driver/build.h"
 #include "core/arena.h"
 #include "logger/logger.h"
 #include "langpack/langpack.h"
@@ -331,7 +332,8 @@ int driver_llvm(options_t *opt)
     } else {
         o.output_file =
             opt->output ? opt->output
-                        : default_output(arena, module, o.output_mode, opt->llvm_target);
+                        : default_output(arena, driver_output_stem(arena, opt->input),
+                                         o.output_mode, opt->llvm_target);
         rc = salam_llvm_toolchain(log, llpath, &o);
         if (!opt->keep_c) remove(llpath);
         if (rc == 0) {

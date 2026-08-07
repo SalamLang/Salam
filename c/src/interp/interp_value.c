@@ -229,9 +229,9 @@ void array_push(interp_t *I, sarray_t *a, value_t v)
 {
     if (a->len == a->cap) {
         size_t nc = salam_grow_cap(a->cap, a->len + 1, 4);
-        value_t *nd = (value_t *)arena_alloc(I->a, salam_size_mul(nc, sizeof(value_t)));
-        memcpy(nd, a->data, salam_size_mul(a->len, sizeof(value_t)));
-        a->data = nd;
+        value_t *newdata = (value_t *)arena_alloc(I->a, salam_size_mul(nc, sizeof(value_t)));
+        memcpy(newdata, a->data, salam_size_mul(a->len, sizeof(value_t)));
+        a->data = newdata;
         a->cap = nc;
     }
     a->data[a->len++] = v;

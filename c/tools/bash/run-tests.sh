@@ -425,13 +425,24 @@ want_example() {
 # sections degrade - a missing optional service is not a test failure.
 # Start one with e.g. `redis-server --port 6379` (under WSL on Windows: WSL2
 # forwards localhost, so a server bound in the distro is reachable here).
+# `nc` and `redis-cli` are the portable probes and are tried first; bash's
+# /dev/tcp is only a last resort for the common Git-Bash-on-Windows case where
+# neither is installed. It is a bash extension (undefined in POSIX sh, hence
+# the SC3025 suppression), so it is reached only when this really is bash.
+redis_listening() {
+    if command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 6379 >/dev/null 2>&1; then
+        return 0
+    fi
+    if command -v redis-cli >/dev/null 2>&1 &&
+        redis-cli -h 127.0.0.1 -p 6379 ping >/dev/null 2>&1; then
+        return 0
+    fi
+    [ -n "${BASH_VERSION:-}" ] || return 1
+    # shellcheck disable=SC3025
+    (exec 3<>/dev/tcp/127.0.0.1/6379) 2>/dev/null
+}
 REDIS_OK=0
-if (exec 3<>/dev/tcp/127.0.0.1/6379) 2>/dev/null; then
-    REDIS_OK=1
-elif command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 6379 >/dev/null 2>&1; then
-    REDIS_OK=1
-elif command -v redis-cli >/dev/null 2>&1 &&
-    redis-cli -h 127.0.0.1 -p 6379 ping >/dev/null 2>&1; then
+if redis_listening; then
     REDIS_OK=1
 fi
 export REDIS_OK

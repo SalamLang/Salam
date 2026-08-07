@@ -55,8 +55,8 @@ struct doc_decl {
     bool is_deprecated;
     int file_idx;
     int line;
-    int self;   /* own index into doc_db_t.decls, for the emitted JSON links */
-    int parent; /* -1 = top level, else index of the owning struct/enum/impl */
+    int self;      /* own index into doc_db_t.decls, for the emitted JSON links */
+    int parent;    /* -1 = top level, else index of the owning struct/enum/impl */
     vec_t members; /* doc_decl_t*, child rows in declaration order */
     vec_t aliases; /* doc_pair_t*, from @lang name metas */
     vec_t doc;     /* doc_pair_t*, from the preceding doc comment */

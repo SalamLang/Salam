@@ -313,7 +313,8 @@ static void typarams_to_sb(sb_t *out, const ast_node_t *n)
         if (!tp || is_synth_typaram(tp)) continue;
         if (shown) sb_puts(&b, ", ");
         sb_puts(&b, tp);
-        bound = i < n->typaram_bounds.len ? (const char *)n->typaram_bounds.data[i] : NULL;
+        bound =
+            i < n->typaram_bounds.len ? (const char *)n->typaram_bounds.data[i] : NULL;
         if (bound && bound[0]) {
             sb_puts(&b, ": ");
             sb_puts(&b, bound);
@@ -1008,7 +1009,8 @@ void docgen_render(const doc_db_t *db, const char *title, sb_t *out)
 {
     sb_puts(out, "<!doctype html>\n<html lang=\"en\">\n<head>\n");
     sb_puts(out, "<meta charset=\"utf-8\">\n");
-    sb_puts(out, "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
+    sb_puts(out,
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
     sb_puts(out, "<title>");
     sb_puts(out, title);
     sb_puts(out, " - API Documentation</title>\n");

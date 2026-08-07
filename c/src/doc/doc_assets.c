@@ -184,8 +184,7 @@ const char *const doc_css_lines[] = {
     "  main#main-content { padding: 16px; }\n",
     "  .topbar .title { display: none; }\n",
     "}\n",
-    NULL
-};
+    NULL};
 
 const char *const doc_js_lines[] = {
     "\n",
@@ -426,8 +425,7 @@ const char *const doc_js_lines[] = {
     "\n",
     "  init();\n",
     "})();\n",
-    NULL
-};
+    NULL};
 
 const char *const doc_body_lines[] = {
     "<div class=\"topbar\">\n",
@@ -442,6 +440,4 @@ const char *const doc_body_lines[] = {
     "  <aside class=\"sidebar\"><nav id=\"sidebar-nav\"></nav></aside>\n",
     "  <main id=\"main-content\"></main>\n",
     "</div>\n",
-    NULL
-};
-
+    NULL};

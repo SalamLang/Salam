@@ -112,6 +112,12 @@ end
 pub const CMD_INSPECT := 0
 pub const CMD_BUILD := 1
 pub const CMD_OBJ := 2
+// Distinct exit code for "the LLVM backend does not lower some construct in
+// this program yet". Separated from the generic failure code so build_impl
+// can fall back to the C backend on exactly this case and still surface
+// real errors (bad source, failed link) unchanged.
+pub const RC_LLVM_UNSUPPORTED := 7
+
 pub const CMD_LLVM := 3
 pub const CMD_JS := 4
 pub const CMD_RUN := 5
@@ -218,6 +224,13 @@ pub struct Dr:
         pub run_args: Vector<str> = Vector {}
         pub output: str = ""
         pub cc: str = "tcc"
+        // Backend for `build`/`obj`: "auto" (LLVM when this binary can
+        // drive it, C otherwise), "llvm", or "c". Set to "c" implicitly by
+        // an explicit --cc=, which only the C backend uses.
+        pub backend: str = "auto"
+        // --libpath=DIR, repeatable: extra library search directories for
+        // the link step, for archives not installed under the usual prefix.
+        pub lib_paths: Vector<str> = Vector {}
         pub keep_c: bool = false
         pub force: bool = false
         pub safe: bool = true
@@ -724,6 +737,22 @@ pub struct Dr:
         ret g_cw_rc
     end
 
+    // driver/build.c build_use_llvm. The C gates on a compile-time #ifdef
+    // (WITH_LLVM); here the equivalent question is whether a toolchain this
+    // binary can drive is actually reachable, which is exactly what
+    // lv.NativeAvailable() answers. The C backend is not deprecated by
+    // this: --backend=c selects it, and so does any explicit --cc=, which
+    // names a C compiler and can therefore only mean the C path.
+    func use_llvm_backend(opt &: Dr): bool:
+        if str.Equals(opt.backend, "c"):
+            ret false
+        end
+        if str.Equals(opt.backend, "llvm"):
+            ret true
+        end
+        ret lv.NativeAvailable()
+    end
+
     // driver/build.c driver_build (the CMD_BUILD/CMD_OBJ shared body; `opt`
     // must have .command already set to CMD_BUILD or CMD_OBJ by the caller).
     func build_impl(opt &: Dr): int:
@@ -733,6 +762,33 @@ pub struct Dr:
         // public section) is that wrapper.
         if str.Len(opt.llvm_target) > 0:
             ret LlvmBuild(opt)
+        end
+
+        // Backend choice for a native build, mirroring driver_build()'s
+        // build_use_llvm() in the C. LLVM is preferred whenever this binary
+        // can actually drive it, because it optimizes and (with in-process
+        // LLD) links without a compiler on the end user's machine.
+        //
+        // RC_LLVM_UNSUPPORTED means the module was emitted but is
+        // incomplete - the program uses a construct the LLVM backend does
+        // not lower yet. Falling back to the C backend keeps every program
+        // that builds today building, which is what makes defaulting to
+        // LLVM safe before backend parity is finished. Any other non-zero
+        // code is a real error and is reported as-is rather than retried,
+        // so a genuine mistake is not hidden behind a second compile.
+        if use_llvm_backend(opt):
+            lrc := LlvmBuild(opt)
+            if lrc != RC_LLVM_UNSUPPORTED:
+                ret lrc
+            end
+            if str.Equals(opt.backend, "llvm"):
+                ret lrc
+            end
+            io.EPrintln(
+                i18.Tr(
+                    "salam: falling back to the C backend for this file (build with --backend=llvm to make this an error)"
+                )
+            )
         end
 
         lgr := lg.New(opt.log_level, resolve_color(opt.color))
@@ -3199,6 +3255,7 @@ pub struct Dr:
         o.debug_info = opt.debug_info
         o.verify_module = opt.llvm_verify
         o.target_triple = opt.llvm_target
+        o.lib_paths = opt.lib_paths
         o.native_cpu = opt.llvm_native_cpu && str.Len(opt.llvm_target) == 0
 
         if o.output_mode == lv.LV_OUT_EXEC:
@@ -3238,9 +3295,17 @@ pub struct Dr:
             lg.Log(
                 lgr, lg.PH_DRIVER, lg.LOG_WARN, lv.ErrorOf(out) + "; the program uses constructs the LLVM backend does not yet " + "support, so " + llpath + " may be incomplete"
             )
+            // The partial .ll is written above so it can be inspected, but
+            // for a build about to fall back to the C backend it is just
+            // litter in the user's working directory - keep it only when
+            // the user asked for intermediates, or when it IS the requested
+            // output (`salam llvm -o foo.ll`).
+            if !opt.keep_c && !(ir_mode && str.Len(opt.output) > 0):
+                os.Remove(llpath)
+            end
             sm.Free(s)
             at.FreeAst(a)
-            ret 1
+            ret RC_LLVM_UNSUPPORTED
         end
 
         mut rc := 0
@@ -3293,7 +3358,11 @@ pub struct Dr:
             opt.llvm_emit = lv.LV_OUT_EXEC
         end
         rc := Llvm(opt)
-        if rc != 0:
+        // Only a genuine cross-compile failure gets the toolchain hint. A
+        // native build never asked for a target, and RC_LLVM_UNSUPPORTED is
+        // handled by build_impl (which falls back to the C backend), so
+        // neither should be reported as a missing cross toolchain.
+        if rc != 0 && rc != RC_LLVM_UNSUPPORTED && str.Len(opt.llvm_target) > 0:
             io.EPrintln(
                 co.Format1(
                     i18.Tr(

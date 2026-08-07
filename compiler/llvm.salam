@@ -230,6 +230,11 @@ pub struct Options:
     pub link_kinds: Vector<str> = Vector {} // "" | "framework" | "static", parallel to link_libs
     pub nlink: int = 0
     pub sysroot: str = ""
+    // Extra `-L` directories from --libpath=DIR, searched ahead of the
+    // sysroot's own. Needed to link against an archive that is not
+    // installed yet - `link static "salam_llvm"` against a libsalam_llvm.a
+    // still sitting in a build tree, say.
+    pub lib_paths: Vector<str> = Vector {}
 end
 
 // llvm_output_t. C field `module` -> module_name (codegen-port convention).
@@ -1196,6 +1201,49 @@ func sym_qualified(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
             q += 1
         end
         us = nxt
+    end
+    // The '_'-split walk above resolves the tail by *declared* name, so it
+    // silently picks the wrong type whenever two packages declare the same
+    // one - std/net has both a udp.Socket and a rawsock.Socket, and only
+    // one wins the bare "Socket" in the global scope, leaving the other
+    // unreachable. Mangled names are unique by construction, so scan for
+    // that instead. Package hits are touched, which is also what makes a
+    // program that uses only a package's types get its layouts emitted.
+    mut r := scan_mangled(s, s.global, name)
+    if r != 0:
+        ret r
+    end
+    mut p := 0
+    until p < sm.PackageCount(s) && r == 0:
+        pk := sm.PackageAt(s, p)
+        if pk != 0:
+            r = scan_mangled(s, sm.SymAt(s, pk).members, name)
+            if r != 0:
+                touch_pkg(v, s, a, pk)
+            end
+        end
+        p += 1
+    end
+    ret r
+end
+
+// ll_scan_mangled - find a struct/enum in `sc` by its *mangled* type name
+// ("rawsock_Socket") rather than by its declared name ("Socket").
+func scan_mangled(s &: sm.Sema, sc: int, name: str): int:
+    if sc == 0:
+        ret 0
+    end
+    syms := sm.ScopeAt(s, sc).symbols
+    repeat syms.len() with i:
+        sid := syms.get(i)[0]
+        sy := sm.SymAt(s, sid)
+        if sy.kind == sm.SYM_STRUCT || sy.kind == sm.SYM_ENUM:
+            if sy.ty != sm.TYPE_NONE:
+                if str.Equals(sm.ToString(s, sy.ty), name):
+                    ret sid
+                end
+            end
+        end
     end
     ret 0
 end
@@ -3710,7 +3758,21 @@ end
 
 // ll_call_user
 func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
-    fsym := sym_of(v, s, a, nm)
+    mut fsym := sym_of(v, s, a, nm)
+    // A package and one of its own functions can share a name: std/time is
+    // `package time` and also declares `extern func time(tp: void*): i64`.
+    // sym_of searches the global scope first, where the package binding
+    // lives, so a bare `time(null)` *within* that package resolved to
+    // SYM_PACKAGE and was then reported as an unknown function. Ordinary
+    // scoping prefers the enclosing package's own function.
+    if fsym == 0 || sm.SymAt(s, fsym).kind != sm.SYM_FUNC:
+        if v.pkg_scope != 0:
+            lf := sm.LookupLocal(s, v.pkg_scope, nm)
+            if lf != 0 && sm.SymAt(s, lf).kind == sm.SYM_FUNC:
+                fsym = lf
+            end
+        end
+    end
     if fsym == 0 || sm.SymAt(s, fsym).kind != sm.SYM_FUNC:
         lv_error(v, a, n, "call to unknown/unsupported function '" + nm + "'")
         ret poison(at.Get(a, n).type_str)
@@ -3862,6 +3924,204 @@ func call_pkg(
     )
 end
 
+// ll_runtime_fn - locate a `salam_*` runtime builtin by name in any package
+// sema has loaded. These are not symbols that must come from a prebuilt
+// runtime archive: the stdlib declares them as `extern:` blocks that DO
+// carry a Salam body (std/fs/fs.salam's salam_file_read, std/text's
+// salam_str_split, ...), which toplevel() already emits - only the dispatch
+// from the surface syntax down to them was missing.
+// Returns the signature id; sets out_pk to the owning package.
+func runtime_fn(s &: sm.Sema, name: str, out_pk &: int): int:
+    mut p := 0
+    until p < sm.PackageCount(s):
+        pk := sm.PackageAt(s, p)
+        if pk != 0:
+            pkm := sm.SymAt(s, pk).members
+            if pkm != 0:
+                fs := sm.LookupLocal(s, pkm, name)
+                if fs != 0 && sm.SymAt(s, fs).kind == sm.SYM_FUNC && sm.SymAt(s, fs).overloads.len() > 0:
+                    out_pk = pk
+                    ret sm.SymAt(s, fs).overloads.get(0)[0]
+                end
+            end
+        end
+        p += 1
+    end
+    ret 0
+end
+
+// ll_call_runtime - emit a call to a runtime builtin resolved by
+// runtime_fn. `recv` (0 when absent) is lowered as the leading argument:
+// method-shaped builtins take their receiver as parameter 0, so the call's
+// own arguments line up with sig params starting at index 1. That offset is
+// why this does not go through emit_call, which pairs argument i with
+// param i.
+func call_runtime(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, rtname: str, recv: int, out2 &: Llv
+): bool:
+    mut pk := 0
+    sig := runtime_fn(s, rtname, pk)
+    if sig == 0 || sm.SigAt(s, sig).decl == 0:
+        ret false
+    end
+    touch_pkg_named(v, s, a, sm.SymAt(s, pk).pkgname)
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, sm.SymAt(s, pk).members)
+    params := sm.SigAt(s, sig).params
+    mut ab := co.SbNew()
+    mut base := 0
+    if recv != 0:
+        rv := lv_expr(v, s, a, recv)
+        mut pts0 := rv.ts
+        if params.len() > 0:
+            pts0 = sm.ToString(s, params.get(0)[0])
+        end
+        co.SbPuts(ab, ty_of(v, s, a, pts0) + " " + conv(v, s, a, rv, pts0))
+        base = 1
+    end
+    nn := at.Get(a, n)
+    mut i := 0
+    until i < nn.list.len():
+        av := lv_expr(v, s, a, nn.list.get(i)[0])
+        mut pts := av.ts
+        if i + base < params.len():
+            pts = sm.ToString(s, params.get(i + base)[0])
+        end
+        if base > 0 || i > 0:
+            co.SbPuts(ab, ", ")
+        end
+        co.SbPuts(ab, ty_of(v, s, a, pts) + " " + conv(v, s, a, av, pts))
+        i += 1
+    end
+    argsx := co.SbCstr(ab)
+    co.SbFree(ab)
+    rts := sm.ToString(s, sm.SigAt(s, sig).ret_type)
+    if str.Equals(rts, "void"):
+        emit(v, "call void @" + rtname + "(" + argsx + ")")
+        out2 = make_llv("0", "void")
+        ret true
+    end
+    r := new_tmp(v)
+    emit(v, r + " = call " + ty_of(v, s, a, rts) + " @" + rtname + "(" + argsx + ")")
+    out2 = make_llv(r, rts)
+    ret true
+end
+
+// ll_call_vec_str - builtins that hand back a freshly allocated
+// `const char**` plus an out-param element count, which the surface
+// language sees as a Vector<str>. Vector<T> is { data, _len, _cap } (see
+// std/collections/vector.salam), so cap is filled with the same count as
+// len - the buffer is exactly sized and never grown in place.
+func call_vec_str(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, rtname: str, recv: int, out2 &: Llv
+): bool:
+    mut pk := 0
+    sig := runtime_fn(s, rtname, pk)
+    if sig == 0 || sm.SigAt(s, sig).decl == 0:
+        ret false
+    end
+    touch_pkg_named(v, s, a, sm.SymAt(s, pk).pkgname)
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, sm.SymAt(s, pk).members)
+    nn := at.Get(a, n)
+    mut vts := nn.type_str
+    if str.Len(vts) == 0:
+        vts = "Vector<str>"
+    end
+    vty := ty_of(v, s, a, vts)
+    cnt := new_tmp(v)
+    emit_alloca(v, cnt + " = alloca i32")
+    mut ab := co.SbNew()
+    if recv != 0:
+        co.SbPuts(ab, "ptr " + lv_expr(v, s, a, recv).ref)
+    end
+    mut i := 0
+    until i < nn.list.len():
+        av := lv_expr(v, s, a, nn.list.get(i)[0])
+        if recv != 0 || i > 0:
+            co.SbPuts(ab, ", ")
+        end
+        co.SbPuts(ab, "ptr " + av.ref)
+        i += 1
+    end
+    if recv != 0 || nn.list.len() > 0:
+        co.SbPuts(ab, ", ")
+    end
+    co.SbPuts(ab, "ptr " + cnt)
+    argsx := co.SbCstr(ab)
+    co.SbFree(ab)
+    data := new_tmp(v)
+    emit(v, data + " = call ptr @" + rtname + "(" + argsx + ")")
+    ln := new_tmp(v)
+    emit(v, ln + " = load i32, ptr " + cnt)
+    v0 := new_tmp(v)
+    v1 := new_tmp(v)
+    v2 := new_tmp(v)
+    emit(v, v0 + " = insertvalue " + vty + " undef, ptr " + data + ", 0")
+    emit(v, v1 + " = insertvalue " + vty + " " + v0 + ", i32 " + ln + ", 1")
+    emit(v, v2 + " = insertvalue " + vty + " " + v1 + ", i32 " + ln + ", 2")
+    out2 = make_llv(v2, vts)
+    ret true
+end
+
+// ll_call_file - File* methods, the C backend's call_file() counterpart.
+func call_file(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, m: str, out2 &: Llv
+): bool:
+    if str.Equals(m, "read"):
+        ret call_runtime(v, s, a, n, "salam_file_read", obj, out2)
+    end
+    if str.Equals(m, "readline"):
+        ret call_runtime(v, s, a, n, "salam_file_readline", obj, out2)
+    end
+    if str.Equals(m, "write"):
+        ret call_runtime(v, s, a, n, "salam_file_write", obj, out2)
+    end
+    if str.Equals(m, "seek"):
+        ret call_runtime(v, s, a, n, "salam_file_seek", obj, out2)
+    end
+    if str.Equals(m, "close"):
+        ret call_runtime(v, s, a, n, "salam_file_close", obj, out2)
+    end
+    ret false
+end
+
+// ll_pkg_value - `pkg.NAME` where NAME is a package-level const/var or an
+// enum member the package exports: the non-call half of package-qualified
+// access, which previously fell through to member_addr and reported the
+// package identifier itself as an unknown address. Touching the package
+// first is what makes this work - touch_pkg emits its globals, and only
+// then can global_find see them.
+func pkg_value(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, pk: int, out2 &: Llv
+): bool:
+    py := sm.SymAt(s, pk)
+    if py.members == 0:
+        ret false
+    end
+    nn := at.Get(a, n)
+    m := sm.LookupLocal(s, py.members, nn.name)
+    if m == 0:
+        ret false
+    end
+    mk := sm.SymAt(s, m).kind
+    if mk == sm.SYM_ENUM_MEMBER:
+        out2 = make_llv(co.I64Toa(sm.SymAt(s, m).enum_value), "i32")
+        ret true
+    end
+    if mk != sm.SYM_CONST && mk != sm.SYM_VAR:
+        ret false
+    end
+    touch_pkg_named(v, s, a, py.pkgname)
+    gi := global_find(v, nn.name)
+    if gi < 0:
+        ret false
+    end
+    g := v.globals.get(gi)[0]
+    r := new_tmp(v)
+    emit(v, r + " = load " + ty_of(v, s, a, g.ts) + ", ptr " + g.ptr)
+    out2 = make_llv(r, g.ts)
+    ret true
+end
+
 // ll_call_str
 func call_str(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, m: str, out2 &: Llv
@@ -3874,6 +4134,11 @@ func call_str(
             out2 = make_llv(co.I64Toa(klen), "i32")
             ret true
         end
+    end
+    // Before `recv` is materialized below: call_vec_str lowers the receiver
+    // itself, and evaluating `obj` twice would duplicate any side effects.
+    if str.Equals(m, "split") && na == 1:
+        ret call_vec_str(v, s, a, n, "salam_str_split", obj, out2)
     end
     recv := lv_expr(v, s, a, obj).ref
     mut r := ""
@@ -4071,6 +4336,13 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
         end
     end
 
+    if str.Equals(ots, "File*"):
+        mut of := Llv {}
+        if call_file(v, s, a, n, obj, mname, of):
+            ret of
+        end
+    end
+
     if str.Equals(mname, "len") && (is_slice(ots) || (str.Len(ots) > 0 && idx_byte(ots, 91) >= 0)):
         ret len_of(v, s, a, n, obj)
     end
@@ -4110,6 +4382,15 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
                 sm.ToString(s, sm.SigAt(s, sig2).ret_type)
             )
         end
+    end
+
+    // `o.fn(args)` where `fn` is a *field* holding a function value, not a
+    // method - so no SYM_METHOD lookup above could ever match it. Same
+    // lowering as any other indirect call; call_indirect re-evaluates the
+    // callee to get the closure pointer, which for a member expression is
+    // the field load.
+    if ss != 0 && str.StartsWith(calleen.type_str, "func("):
+        ret call_indirect(v, s, a, n, callee)
     end
 
     lv_error(
@@ -4185,6 +4466,87 @@ func call_intrinsic(
         )
         out2 = make_llv(r, "str")
         ret true
+    end
+    // char_code(s) is the inverse of char_from_code: the unsigned value of
+    // the first byte. Loaded directly rather than through a runtime call,
+    // matching the C backend's `(int32_t)(unsigned char)(s)[0]`.
+    if str.Equals(nm, "char_code") && na == 1:
+        b := new_tmp(v)
+        r = new_tmp(v)
+        emit(v, b + " = load i8, ptr " + lv_expr(v, s, a, a0).ref)
+        emit(v, r + " = zext i8 " + b + " to i32")
+        out2 = make_llv(r, "i32")
+        ret true
+    end
+    if str.Equals(nm, "args") && na == 0:
+        ret call_vec_str(v, s, a, n, "salam_args", 0, out2)
+    end
+    if str.Equals(nm, "listdir") && na == 1:
+        ret call_vec_str(v, s, a, n, "salam_os_listdir", 0, out2)
+    end
+    if str.Equals(nm, "input") && na == 0:
+        ret call_runtime(v, s, a, n, "salam_input", 0, out2)
+    end
+    if str.Equals(nm, "lang") && na == 0:
+        out2 = make_llv(strconst(v, i18.Lang()), "str")
+        ret true
+    end
+    // funcptr(f)/spawn(f) take a *function name*, not a value, so the
+    // argument is lowered to the mangled symbol's address rather than
+    // through lv_expr. spawn additionally hands that address to the thread
+    // runtime. Mirrors call_ident() in the C backend.
+    if (str.Equals(nm, "funcptr") || str.Equals(nm, "spawn")) && na == 1 && at.KindOf(a, a0) == at.AST_IDENTIFIER:
+        fs2 := sym_of(v, s, a, at.Get(a, a0).name)
+        if fs2 == 0 || sm.SymAt(s, fs2).kind != sm.SYM_FUNC || sm.SymAt(s, fs2).overloads.len() == 0:
+            ret false
+        end
+        fsig := sm.SymAt(s, fs2).overloads.get(0)[0]
+        if sm.SigAt(s, fsig).decl == 0:
+            ret false
+        end
+        ensure_fn(v, s, a, sm.SigAt(s, fsig).decl, 0, v.pkg_scope)
+        mut symn := at.Get(a, a0).name
+        if !at.Get(a, sm.SigAt(s, fsig).decl).is_extern:
+            symn = mangle(v, s, "", at.Get(a, a0).name, fsig)
+        end
+        r = new_tmp(v)
+        emit(v, r + " = ptrtoint ptr @" + symn + " to i64")
+        if str.Equals(nm, "funcptr"):
+            out2 = make_llv(r, "i64")
+            ret true
+        end
+        mut spk := 0
+        ssig := runtime_fn(s, "salam_thread_spawn", spk)
+        if ssig == 0 || sm.SigAt(s, ssig).decl == 0:
+            ret false
+        end
+        touch_pkg_named(v, s, a, sm.SymAt(s, spk).pkgname)
+        ensure_fn(v, s, a, sm.SigAt(s, ssig).decl, 0, sm.SymAt(s, spk).members)
+        h := new_tmp(v)
+        emit(v, h + " = inttoptr i64 " + r + " to ptr")
+        r2 := new_tmp(v)
+        emit(v, r2 + " = call i64 @salam_thread_spawn(ptr " + h + ")")
+        out2 = make_llv(r2, "i64")
+        ret true
+    end
+    // callhandler(fp, arg) - an indirect call through an integer-encoded
+    // function pointer, the shape the layout/webview callbacks use.
+    if str.Equals(nm, "callhandler") && na == 2:
+        a1 := nn.list.get(1)[0]
+        fp := new_tmp(v)
+        emit(v, fp + " = inttoptr i64 " + conv(v, s, a, lv_expr(v, s, a, a0), "i64") + " to ptr")
+        emit(v, "call void " + fp + "(i64 " + conv(v, s, a, lv_expr(v, s, a, a1), "i64") + ")")
+        out2 = make_llv("0", "void")
+        ret true
+    end
+    // Table-driven builtins (join -> salam_thread_join, strcmp, ...) - the
+    // same table the C backend falls back to in call_ident(), so a new
+    // entry there reaches both backends from one edit.
+    bidx := sm.BuiltinLookup(nm)
+    if bidx >= 0:
+        if call_runtime(v, s, a, n, sm.BuiltinAt(bidx).runtime, 0, out2):
+            ret true
+        end
     end
     ret false
 end
@@ -4851,6 +5213,13 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
                 m := sm.LookupLocal(s, sm.SymAt(s, e).members, nd.name)
                 if m != 0 && sm.SymAt(s, m).kind == sm.SYM_ENUM_MEMBER:
                     ret make_llv(co.I64Toa(sm.SymAt(s, m).enum_value), "i32")
+                end
+            end
+            pk2 := sym_of(v, s, a, at.Get(a, nd.a).name)
+            if pk2 != 0 && sm.SymAt(s, pk2).kind == sm.SYM_PACKAGE:
+                mut pv := Llv {}
+                if pkg_value(v, s, a, n, pk2, pv):
+                    ret pv
                 end
             end
         end
@@ -5566,6 +5935,13 @@ func nt_emit_tool_cmd(opts: Options): str:
         end
         if win:
             out += " -fuse-ld=lld"
+        end
+        // --libpath=DIR entries first: an explicitly named directory should
+        // win over the sysroot's own copy of a same-named archive.
+        mut lp2 := 0
+        until lp2 < opts.lib_paths.len():
+            out += ` -L"` + opts.lib_paths.get(lp2)[0] + `"`
+            lp2 += 1
         end
         out += ` "$IN"`
         mut li := 0

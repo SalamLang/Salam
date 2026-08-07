@@ -212,7 +212,8 @@ bool cli_parse_options(int argc, char **argv, int start, options_t *out)
                 }
                 out->output = argv[++i];
             } else if ((val = cli_opt_value(arg, "--libpath")) != NULL) {
-                if (out->nlibpath < SALAM_MAX_INPUTS) out->lib_paths[out->nlibpath++] = val;
+                if (out->nlibpath < SALAM_MAX_INPUTS)
+                    out->lib_paths[out->nlibpath++] = val;
             } else if ((val = cli_opt_value(arg, "--backend")) != NULL) {
                 out->backend = val;
             } else if ((val = cli_opt_value(arg, "--cc")) != NULL) {

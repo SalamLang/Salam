@@ -1121,8 +1121,7 @@ static llv_t ll_call_method(ll_t *ll, ast_node_t *n, ast_node_t *callee)
      * the callee to get the closure pointer, which for a member expression
      * is the field load.
      */
-    if (ss && ll_is_func_ts(callee->type_str))
-        return ll_call_indirect(ll, n, callee);
+    if (ss && ll_is_func_ts(callee->type_str)) return ll_call_indirect(ll, n, callee);
 
     ll_error(ll, n, "method '%s' on type '%s' (or overloaded/builtin method)", mname,
              ots);

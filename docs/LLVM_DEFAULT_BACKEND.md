@@ -90,14 +90,14 @@ built-in work:
 - **Package-qualified struct types** (`opencv.Color {}`, `tcp.Conn`,
   `rawsock.Socket`) - 437 errors across two categories, now zero. The
   mangled name (`rawsock_Socket`) was resolved by splitting on `_` and
-  looking the tail up by *declared* name, which silently picked the wrong
+  looking the tail up by _declared_ name, which silently picked the wrong
   type whenever two packages declare the same one - std/net has both a
   `udp.Socket` and a `rawsock.Socket`, and only one wins the bare name in
   the global scope. `ll_sym_qualified` now falls back to scanning for the
-  symbol whose *mangled* name matches, which is unique by construction, and
+  symbol whose _mangled_ name matches, which is unique by construction, and
   touches the owning package - which is also what makes a program that uses
   only a package's types get that package's struct layouts emitted.
-- **Package/function name collision** (`std/time` is `package time` *and*
+- **Package/function name collision** (`std/time` is `package time` _and_
   declares `extern func time(...)`). The global scope holds the package, so
   a bare `time(null)` inside that package resolved to `SYM_PACKAGE` and was
   reported as an unknown function. `ll_call_user` now prefers a function of
@@ -131,7 +131,7 @@ Three separate questions, often conflated:
 
 1. **Does a user compiling a Salam program need a toolchain?** No. This is
    the one that matters for "everybody can use salam", and it is done.
-2. **Does someone *building the C compiler from source* need LLVM?** No -
+2. **Does someone _building the C compiler from source_ need LLVM?** No -
    it is used when present and skipped when absent.
 3. **Can Salam code itself drive static LLVM/lld?** Yes - `import llvm` now
    links and runs. What is left is wiring the self-hosted compiler's
@@ -152,7 +152,7 @@ The pieces:
 
 ### Now on by default
 
-A plain `make -C c` previously produced a salam *without* LLVM; the
+A plain `make -C c` previously produced a salam _without_ LLVM; the
 self-contained build was opt-in, so the shipped default was the one that
 needs a compiler on the end user's machine. That is inverted:
 
@@ -171,7 +171,7 @@ upgrade, not a new hard build dependency. `WITH_LLVM=0` opts out.
 
 `CPPFLAGS` is assembled from the `WITH_*`/`SALAM_EMBED_*` switches, but the
 compile rules depended only on sources. Adding `SALAM_EMBED_MINGW_DIR` to an
-existing build tree therefore rebuilt *nothing*: `llvm_native.o` kept its old
+existing build tree therefore rebuilt _nothing_: `llvm_native.o` kept its old
 `#ifdef SALAM_HAVE_EMBED_MINGW`-less body, and the resulting salam reported
 "no mingw sysroot" while carrying a 16 MB sysroot inside it. This cost real
 debugging time here and would silently ship broken releases.
@@ -186,8 +186,8 @@ adding an embed dir -> recompile with the new define.
 The recipe hard-coded Debian paths (`/usr/x86_64-w64-mingw32/lib`,
 `/usr/lib/gcc/...`), so it only ever worked on a Linux cross-build host. It
 now searches MSYS2 layouts (`/mingw64/lib`, `/clang64/lib`, `/ucrt64/lib`)
-too, stages the extra import libraries real programs need (ws2_32, crypt32,
-bcrypt, iphlpapi, ...) rather than only the bare CRT, and *skips* a missing
+too, stages the extra import libraries real programs need (ws2*32, crypt32,
+bcrypt, iphlpapi, ...) rather than only the bare CRT, and \_skips* a missing
 sysroot instead of aborting - so a Windows host can stage mingw without
 having musl, and vice versa. Verified on this host: mingw staged from
 `/mingw64/lib`, musl skipped cleanly.
@@ -236,7 +236,7 @@ in-process linker can accept.
 ### Remaining work
 
 - **Release jobs must run `make self-contained`,** not plain `make`. The
-  LLVM/lld half is now automatic, but the *embedded sysroots* still come
+  LLVM/lld half is now automatic, but the _embedded sysroots_ still come
   from `stage-sysroots`, and without them a cross target reports "no mingw
   sysroot". The stale-flags fix above means this no longer silently
   half-works, but the release workflow still has to ask for it.
@@ -399,10 +399,50 @@ no external toolchain involved.
 4. Consider making `--release` imply `-O2` through LLVM.
 5. Port everything to `compiler/llvm.salam` (see parity note).
 
-## Parity note
+## Parity: the self-hosted compiler
 
 `compiler/llvm.salam` is the self-hosted counterpart of
 `c/src/llvm/codegen_llvm*.c` and mirrors the same dispatch structure
-(`str.Equals(m, "concat")` where the C reads `!strcmp(m, "concat")`). It has
-the same gaps, and every fix above needs porting there before the self-hosted
-compiler can follow.
+(`str.Equals(m, "concat")` where the C reads `!strcmp(m, "concat")`).
+Everything above is now ported, and the two compilers agree exactly.
+
+Verified by running the same 802-file sweep with both:
+
+| compiler | OK  | codegen FAIL | expected-error |
+| -------- | --- | ------------ | -------------- |
+| C        | 621 | 54           | 127            |
+| self-hosted | 621 | 54        | 127            |
+
+Zero differing files. The self-hosted compiler also passes 73/73 on
+`tests/en/llvm/` built and run with output compared byte-for-byte.
+
+### What was ported
+
+| C | self-hosted |
+| --- | --- |
+| `ll_runtime_fn` / `ll_call_runtime` | `runtime_fn` / `call_runtime` |
+| `ll_call_file` | `call_file` |
+| `ll_call_vec_str` (split/args/listdir) | `call_vec_str` |
+| `ll_pkg_value` | `pkg_value` |
+| built-ins (`char_code`, `funcptr`, `spawn`, `input`, `lang`, `callhandler`, table fallback) | same, in `call_intrinsic` |
+| `ll_sym_qualified` mangled-name scan | `sym_qualified` + `scan_mangled` |
+| `ll_call_user` package/function preference | `call_user` |
+| func-typed struct field -> indirect call | `call_method` |
+| `SALAM_RC_LLVM_UNSUPPORTED` + C fallback | `RC_LLVM_UNSUPPORTED` + `use_llvm_backend` |
+| `--backend=llvm\|c`, `--cc=` implies `c` | same, in `cli.salam` |
+| `--libpath=DIR` | same, threaded through `Opts.lib_paths` |
+| stray `.ll` cleanup on fallback | same |
+| native build must not report "cross-compilation failed" | same |
+
+Two C-side items have no self-hosted counterpart *yet*, both for the same
+reason - `NativeRun` still uses the shell-out toolchain path rather than
+`std/llvm`:
+
+- `native_host_link_triple` (in-process lld for a native build). The
+  self-hosted equivalent already exists as `std/llvm/linker.salam`'s
+  `LinkAuto`; it just is not called from `NativeRun`.
+- The lld argv debug log.
+
+Wiring `NativeRun` to prefer `std/llvm` under `-DSALAM_HAVE_LLVM` closes
+both, and is the single remaining step for full self-hosted
+self-containment.

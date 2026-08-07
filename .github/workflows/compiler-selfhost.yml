@@ -165,21 +165,65 @@ jobs:
       # says so; it never fails the job. Once this is green on a few runs,
       # tighten it by setting SALAM_WITH_LLVM=1 on the bootstrap step below,
       # which turns a missing archive into a hard error.
+      # `make libsalam-llvm` merges every LLVM/LLD static archive into
+      # libsalam_llvm.a with `ar -M` (see c/Makefile's LLVM_MERGE_LIBS), so
+      # the result is SELF-CONTAINED: a cache hit needs neither llvm-*-dev
+      # nor lld installed, only the handful of small system libs std/llvm
+      # links alongside it. That is what makes caching worth it here - a hit
+      # skips a ~1 GB apt install and the whole archive merge.
+      #
+      # No restore-keys, deliberately. Every other cache in this repository
+      # uses them, but a prefix match here would restore an archive built
+      # from *different* sources: it would link happily and miscompile. The
+      # key is an exact content hash of everything that ends up in the
+      # archive - the two translation units plus the headers they include -
+      # so a miss is correct and a hit is safe.
+      - name: Cache static LLVM/LLD archive
+        id: llvm-archive
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: libsalam_llvm.a
+          key: >-
+            salam-llvm-a-${{ matrix.os }}-llvm22-${{ hashFiles('c/Makefile',
+            'c/src/llvm/**', 'c/src/core/*.h', 'c/src/semantic/*.h',
+            'c/src/i18n/*.h', 'c/src/logger/*.h', 'c/src/diag/*.h') }}
+
+      # Only useful on a miss, and only for the two objects that are actually
+      # compiled (llvm_native.c + lld_link.cc); the bulk of the archive is
+      # prebuilt LLVM. Cheap to keep, and it makes a source-only change to
+      # those two files rebuild in seconds instead of minutes.
+      - name: Cache ccache for the LLVM archive build
+        if: steps.llvm-archive.outputs.cache-hit != 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ccache
+          key: ccache-selfhost-llvm-${{ matrix.os }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-selfhost-llvm-${{ matrix.os }}-
+
       - name: Build static LLVM/LLD archive (best-effort)
+        if: steps.llvm-archive.outputs.cache-hit != 'true'
         run: |
           set -u
+          # Not `env: CCACHE_DIR: ~/.ccache`: Actions does not expand `~` in
+          # env values, so ccache would create a literal "~" directory in the
+          # workspace and the cache step above would never see a thing.
+          CCACHE_DIR="$HOME/.ccache"
+          export CCACHE_DIR
+          mkdir -p "$CCACHE_DIR"
           case "${{ matrix.os }}" in
           ubuntu*)
             wget -qO llvm.sh https://apt.llvm.org/llvm.sh
             chmod +x llvm.sh
             sudo ./llvm.sh 22 || true
             sudo apt-get update || true
-            sudo apt-get install -y llvm-22-dev liblld-22-dev libpolly-22-dev \
-              libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev || true
+            sudo apt-get install -y ccache llvm-22-dev liblld-22-dev \
+              libpolly-22-dev libzstd-dev zlib1g-dev libtinfo-dev \
+              libxml2-dev || true
             LLVM_CONFIG=llvm-config-22
             ;;
           macos*)
-            brew install llvm lld || true
+            brew install ccache llvm lld || true
             LLVM_CONFIG="$(brew --prefix llvm)/bin/llvm-config"
             ;;
           *)
@@ -191,13 +235,37 @@ jobs:
             exit 0
           fi
           "$LLVM_CONFIG" --version
+          CCOMPILER=gcc
+          CXXCOMPILER=g++
+          if command -v ccache >/dev/null 2>&1; then
+            ccache --max-size=500M >/dev/null 2>&1 || true
+            CCOMPILER="ccache gcc"
+            CXXCOMPILER="ccache g++"
+          fi
           if make -C c libsalam-llvm -j2 WITH_LLVM=1 WITH_LLD=1 \
-            LLVM_LINK_STATIC=1 LLVM_CONFIG="$LLVM_CONFIG"; then
+            LLVM_LINK_STATIC=1 LLVM_CONFIG="$LLVM_CONFIG" \
+            CC="$CCOMPILER" CXX="$CXXCOMPILER"; then
             ls -la libsalam_llvm.a
             echo "libsalam_llvm.a built - stage2 will link LLVM/LLD in-process"
           else
             echo "::warning::libsalam-llvm failed; stage2 uses the C backend"
           fi
+          command -v ccache >/dev/null 2>&1 && ccache --show-stats | head -5
+
+      # Needed whether the archive was built or restored: std/llvm links
+      # `link static "z"` / `"zstd"` next to libsalam_llvm.a, and the static
+      # libz.a/libzstd.a come from these packages. A few hundred KB, versus
+      # the ~1 GB of llvm-*-dev the cache hit avoided.
+      # Unconditional on Linux rather than gated on the archive existing:
+      # these are a few hundred KB and usually already present, so the check
+      # would cost more than the install. Notably NOT gated with
+      # `hashFiles('libsalam_llvm.a')`, which would read and hash a
+      # multi-hundred-MB archive just to decide whether to run apt.
+      - name: Install LLVM link-time system libs
+        if: runner.os == 'Linux'
+        run: |
+          set -u
+          sudo apt-get install -y zlib1g-dev libzstd-dev || true
 
       - name: Bootstrap stage1 -> stage2 -> stage3
         run: |

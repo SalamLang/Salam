@@ -90,15 +90,27 @@ func find_compiler_rt(rtarch: str): str:
         if !os.IsDir(base):
             continue
         end
+        // Freed explicitly, not with `defer`: SKILL.md documents defer as
+        // running at *scope* exit, but both backends currently emit every
+        // defer at *function* exit (cg->fn_defers / ll->defers). A defer on
+        // a binding declared inside a loop body therefore lands in the
+        // function epilogue, where that binding is out of scope - tcc says
+        // "'entries' undeclared" and the LLVM backend says "address of an
+        // unknown identifier 'entries'". Explicit frees sidestep it; see
+        // docs/LLVM_DEFAULT_BACKEND.md for the standing bug.
         entries := os.ListDir(base)
-        defer entries.free()
+        mut hit := ""
         repeat entries.len() with i:
             name := entries.get(i)[0]
             candidate := filepath.Join(filepath.Join(filepath.Join(base, name), "lib"), "linux")
             path := filepath.Join(candidate, "libclang_rt.builtins-" + rtarch + ".a")
-            if os.Exists(path):
-                ret path
+            if os.Exists(path) && str.Len(hit) == 0:
+                hit = path
             end
+        end
+        entries.free()
+        if str.Len(hit) > 0:
+            ret hit
         end
     end
     ret ""
@@ -258,6 +270,12 @@ pub func LinkElf(obj: str, out_path: str, opts: Options): LinkResult:
     argv.push(crt1)
     argv.push(crti)
     argv.push("-L" + sr)
+    // --libpath entries after the sysroot but before the object: an
+    // explicitly named directory should still be searched, and archive
+    // order only matters relative to the object and -l flags.
+    repeat opts.lib_paths.len() with lpi:
+        argv.push("-L" + opts.lib_paths.get(lpi)[0])
+    end
     argv.push(obj)
     libs := user_libs_of(opts)
     defer libs.free()
@@ -331,6 +349,9 @@ pub func LinkMingw(obj: str, out_path: str, opts: Options): LinkResult:
     end
     argv.push("-L" + filepath.Join(sr, "lib"))
     argv.push("-L" + filepath.Join(sr, "mingw/lib"))
+    repeat opts.lib_paths.len() with lpi:
+        argv.push("-L" + opts.lib_paths.get(lpi)[0])
+    end
     argv.push(obj)
     libs := user_libs_of(opts)
     defer libs.free()

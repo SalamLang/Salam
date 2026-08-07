@@ -572,10 +572,15 @@ int driver_build(options_t *opt)
     bundled_musl_tcc_t musl_tcc;
     musl_tcc.active = false;
 #endif
+    /* `--backend=auto` is a priority ladder: in-process LLVM first (handled
+     * by build_use_llvm above), else the C backend, which resolves its
+     * compiler clang > gcc > tcc. clang leads because it is the same
+     * codegen family as the LLVM backend, so an auto build degrades to the
+     * closest thing available rather than to a different toolchain. */
     if (opt->cc && strcmp(opt->cc, "tcc") == 0) {
         static char bundled_cc[1200];
-        if (salam_find_bundled_tool("gcc", bundled_cc, sizeof bundled_cc) ||
-            salam_find_bundled_tool("clang", bundled_cc, sizeof bundled_cc) ||
+        if (salam_find_bundled_tool("clang", bundled_cc, sizeof bundled_cc) ||
+            salam_find_bundled_tool("gcc", bundled_cc, sizeof bundled_cc) ||
             salam_find_bundled_tool("tcc", bundled_cc, sizeof bundled_cc)) {
             opt->cc = bundled_cc;
             LOG_I(log, PH_DRIVER, "using bundled C compiler: %s", opt->cc);
@@ -1243,6 +1248,16 @@ int driver_build(options_t *opt)
         if (try_embed_hostlibs(log, hostlibs, sizeof hostlibs)) {
             sb_puts(&cmd, " -L");
             sb_put_shell_arg(&cmd, hostlibs);
+        }
+        /* --libpath=DIR, same as the LLVM link paths honor - so an archive
+         * that is not installed yet (a freshly built libsalam_llvm.a, say)
+         * is linkable through the C backend too, not only through LLVM. */
+        {
+            int i = 0;
+            for (; i < opt->nlibpath; i++) {
+                sb_puts(&cmd, " -L");
+                sb_put_shell_arg(&cmd, opt->lib_paths[i]);
+            }
         }
 
         {

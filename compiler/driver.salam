@@ -74,7 +74,7 @@ import sm "semantic.salam"
 import cg "codegen.salam"
 import ip "interp.salam"
 import co "sal_core.salam"
-import lv "llvm.salam"
+import lv "llvmgen.salam"
 import jg "jsgen.salam"
 import mn "minify.salam"
 import lo "sal_layout.salam"
@@ -737,12 +737,17 @@ pub struct Dr:
         ret g_cw_rc
     end
 
-    // driver/build.c build_use_llvm. The C gates on a compile-time #ifdef
-    // (WITH_LLVM); here the equivalent question is whether a toolchain this
-    // binary can drive is actually reachable, which is exactly what
-    // lv.NativeAvailable() answers. The C backend is not deprecated by
-    // this: --backend=c selects it, and so does any explicit --cc=, which
+    // driver/build.c build_use_llvm. Both compilers now gate on the same
+    // question: was static in-process LLVM linked into THIS binary
+    // (SALAM_HAVE_LLVM in the C, lb.Available() here). Deliberately not "is
+    // there a clang somewhere on this machine" - a Salam install must not
+    // depend on clang/llvm/lld being present, so `auto` never shells out to
+    // a toolchain the user did not ask for. The C backend is not deprecated
+    // by this: --backend=c selects it, and so does any explicit --cc=, which
     // names a C compiler and can therefore only mean the C path.
+    //
+    // `auto` is a priority ladder: in-process LLVM first, else the C backend,
+    // which itself prefers clang > gcc > tcc when resolving its compiler.
     func use_llvm_backend(opt &: Dr): bool:
         if str.Equals(opt.backend, "c"):
             ret false
@@ -872,7 +877,11 @@ pub struct Dr:
         mut musl_tcc := MuslTcc {}
         if str.Equals(opt.cc, "tcc"):
             mut bundled := ""
-            if sm.FindBundledTool("gcc", bundled) || sm.FindBundledTool("clang", bundled) || sm.FindBundledTool("tcc", bundled):
+            // clang > gcc > tcc, matching build.c's ladder exactly: clang
+            // leads because it is the same codegen family as the LLVM
+            // backend, so an auto build degrades to the closest thing
+            // available rather than to a different toolchain.
+            if sm.FindBundledTool("clang", bundled) || sm.FindBundledTool("gcc", bundled) || sm.FindBundledTool("tcc", bundled):
                 opt.cc = bundled
                 lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using bundled C compiler: " + opt.cc)
                 if SALAM_OS_WINDOWS:

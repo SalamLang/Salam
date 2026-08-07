@@ -138,7 +138,22 @@
 //   nlink, consumed by stage C.
 // - salam_module_single_threaded comes from the codegen port
 //   (cg.ModuleSingleThreaded), mirroring the C #include "codegen/codegen.h".
-package llvm
+//
+// Named `llvmgen`, in both package AND filename, to coexist with std/llvm.
+// Two separate clashes had to be resolved before NativeRun could import it:
+//
+//  - Package: std/llvm is also `package llvm`, and two packages cannot
+//    share a name - sema binds both to one symbol, so whichever loses is
+//    silently unreachable ("package function 'LldAvailable' not found").
+//  - Filename: a .salam file's generated C module is keyed by *filename*,
+//    not package, so `compiler/llvm.salam` and `std/llvm/llvm.salam` both
+//    produced salam_mod_llvm.c and silently clobbered each other, leaving
+//    this module's types undeclared at their use sites ("unknown type
+//    size" from tcc, in a translation unit that had never seen the struct).
+//
+// Every importer aliases this module (`import lv "llvmgen.salam"`), so both
+// names are internal and renaming them costs nothing.
+package llvmgen
 
 import str
 import os
@@ -149,6 +164,7 @@ import lg "logger.salam"
 import i18 "i18n.salam"
 import sm "semantic.salam"
 import cg "codegen.salam"
+import lb "llvm_bridge.salam"
 
 // ===== codegen_llvm.h =====
 // llvm_opt_level_t - order and values MUST stay identical to the C enum.
@@ -6283,11 +6299,35 @@ pub func EmitLambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     emit_lambda(v, s, a, n)
 end
 
-// Whether a usable clang toolchain is reachable: a bundled tool next to the
-// running executable (sm.FindBundledTool, checked first - matches
+// Whether THIS BINARY can lower LLVM IR with no help from the machine it is
+// running on: static in-process LLVM/LLD linked at build time
+// (-DSALAM_HAVE_LLVM; see llvm_bridge.salam).
+//
+// Exact counterpart of the C's salam_llvm_native_available()
+// (c/src/llvm/llvm_native.c:102/129), which returns 1 only under
+// SALAM_HAVE_LLVM. Keeping the two identical matters because this is what
+// `--backend=auto` consults: it must answer "is LLVM built in", never "did
+// someone happen to install clang".
+//
+// This used to also return true when a bundled or PATH `clang` was found.
+// That made a stock CI runner (clang preinstalled) auto-select LLVM and
+// shell out to a toolchain the build never asked for, which is both a
+// parity divergence from the C and the opposite of the goal: a Salam
+// install must not depend on clang/llvm/lld being present. External
+// toolchains are still used, but only when explicitly requested
+// (--backend=llvm or --target=), through ToolchainAvailable() below.
+pub func NativeAvailable(): bool:
+    ret lb.Available()
+end
+
+// Whether an EXTERNAL clang toolchain is reachable: a bundled tool next to
+// the running executable (sm.FindBundledTool, checked first - matches
 // nt_resolve_tool's own preference order), else a PATH probe for "clang"
 // then the versioned fallback name emit_tool_cmd would fall back to.
-pub func NativeAvailable(): bool:
+//
+// Only consulted by NativeRun's shell-out path, which is reached exclusively
+// on an explicit --backend=llvm or --target=. Never used to pick a backend.
+pub func ToolchainAvailable(): bool:
     mut path := ""
     if sm.FindBundledTool("clang", path):
         ret true
@@ -6324,12 +6364,27 @@ end
 // salam_llvm_toolchain - the real link/emit step: writes NativeBuildScript's
 // output to `<ll_path>.run.sh` and runs it (bash directly on POSIX,
 // `wsl.exe -e bash` on Windows, exactly like the C). -1 = no toolchain
-// available at all (NativeAvailable() false) - the C's "native path
+// available at all (ToolchainAvailable() false) - the C's "native path
 // unavailable" sentinel is repurposed for that instead of the unreachable
 // SALAM_HAVE_LLVM branch. Otherwise returns the child process's exit code
 // (0 = success), logged via `lgr` like the C's LOG_I/LOG_E.
 pub func NativeRun(lgr: lg.Logger, ll_path: str, opts: Options): int:
-    if !NativeAvailable():
+    // In-process LLVM/LLD first - no compiler or linker needed on the
+    // machine running salam. Returns -1 when this binary has no static
+    // LLVM linked in, which falls through to the shell-out path below.
+    brc := lb.Run(
+        ll_path, opts.opt_level, opts.output_mode, opts.output_file,
+        opts.target_triple, opts.debug_info, opts.verify_module,
+        opts.native_cpu, opts.sysroot, opts.link_libs, opts.link_kinds,
+        opts.lib_paths
+    )
+    if brc >= 0:
+        if brc != 0:
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, "in-process LLVM step failed")
+        end
+        ret brc
+    end
+    if !ToolchainAvailable():
         ret 0 - 1
     end
     script := NativeBuildScript(ll_path, opts)

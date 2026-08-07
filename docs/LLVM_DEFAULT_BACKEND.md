@@ -183,7 +183,7 @@ adding an embed dir -> recompile with the new define.
 
 ### stage-sysroots beyond Linux
 
-The recipe hard-coded Debian paths (`/usr/x86_64-w64-mingw32/lib`,
+The recipe hardcoded Debian paths (`/usr/x86_64-w64-mingw32/lib`,
 `/usr/lib/gcc/...`), so it only ever worked on a Linux cross-build host. It
 now searches MSYS2 layouts (`/mingw64/lib`, `/clang64/lib`, `/ucrt64/lib`)
 too, stages the extra import libraries real programs need (ws2*32, crypt32,
@@ -192,7 +192,7 @@ sysroot instead of aborting - so a Windows host can stage mingw without
 having musl, and vice versa. Verified on this host: mingw staged from
 `/mingw64/lib`, musl skipped cleanly.
 
-### Verified end to end
+### Verified end-to-end
 
 On this Windows host against MSYS2's LLVM 22.1.8, with `gcc`, `clang`, `tcc`
 and `ld` all removed from `PATH`:

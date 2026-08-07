@@ -50,7 +50,7 @@ esac
     src/codegen/codegen_decl.c src/codegen/codegen_header.c src/codegen/print_fmt.c \
     src/llvm/codegen_llvm.c src/llvm/codegen_llvm_emit.c src/llvm/codegen_llvm_type.c \
     src/llvm/codegen_llvm_expr.c src/llvm/codegen_llvm_stmt.c src/llvm/codegen_llvm_decl.c \
-    src/llvm/codegen_llvm_debug.c src/llvm/llvm_native.c \
+    src/llvm/codegen_llvm_debug.c src/llvm/llvm_native.c src/llvm/orc_call.c \
     src/jsgen/jsgen.c src/jsgen/jsgen_expr.c src/jsgen/jsgen_stmt.c \
     src/jsgen/jsgen_host.c \
     src/interp/interp.c src/interp/interp_builtin.c src/interp/interp_value.c \
@@ -59,11 +59,12 @@ esac
     src/layout/layout_gen_value.c src/layout/schema.c src/layout/layout_expand.c \
     src/minify/minify.c \
     src/fmt/fmt.c src/fmt/fmt_rules.c src/fmt/fmt_order.c \
+    src/doc/docgen.c src/doc/doc_assets.c \
     src/cli/cli.c src/cli/cli_help.c src/cli/cli_options.c src/cli/cli_subcmd.c \
     src/driver/driver.c src/driver/build.c src/driver/llvm_build.c \
     src/driver/llvm_toolchain.c src/driver/js_build.c src/driver/web_build.c \
     src/driver/embed_sysroot.c \
     src/driver/layout_build.c src/driver/debug_cmd.c src/driver/repl.c \
-    src/driver/serve_build.c \
+    src/driver/serve_build.c src/driver/doc_build.c \
     $LDLIBS
 echo "built ./salam with $CC"

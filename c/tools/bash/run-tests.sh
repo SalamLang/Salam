@@ -191,6 +191,25 @@ if [ "${1:-}" = "--worker" ]; then
             echo "SKIP $label (cross build unavailable for $target - no embedded static libs, or self-hosted/non-flagship salam)"
             return
         fi
+        if [ -z "$runner" ]; then
+            # An empty runner means "this host executes the target natively",
+            # which only holds when the target OS matches the host OS. A
+            # Windows host cannot exec an ELF (and a Linux host cannot exec a
+            # PE), so report the same SKIP the qemu/wine paths use instead of
+            # letting the exec fail with a bare "Exec format error".
+            hostos=$(uname -s 2>/dev/null || echo unknown)
+            native=1
+            case "$hostos" in
+            MINGW* | MSYS* | CYGWIN*) case "$target" in *windows*) ;; *) native=0 ;; esac ;;
+            Linux) case "$target" in *linux*) ;; *) native=0 ;; esac ;;
+            Darwin) case "$target" in *darwin* | *apple* | *macos*) ;; *) native=0 ;; esac ;;
+            esac
+            if [ "$native" -eq 0 ]; then
+                echo "SKIP $label (build OK; a $hostos host cannot run a $target binary and no emulator is configured for it)"
+                rm -f "$outbin"
+                return
+            fi
+        fi
         if [ -n "$runner" ] && ! command -v "$runner" >/dev/null 2>&1; then
             alt="${runner%-static}"
             if [ "$alt" != "$runner" ] && command -v "$alt" >/dev/null 2>&1; then

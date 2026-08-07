@@ -769,6 +769,28 @@ static bool is_wellknown_libc_name(const char *name)
         "DispatchMessageA",
         "SetWindowTextA",
         "SetWindowPos",
+        /* std/os/process (CreateProcessA/CreatePipe/ReadFile/... for the
+         * Run/RunCapture pipeline), std/debug (DebugBreak) and the REPL's
+         * raw-console mode. Same collision as the block above: <windows.h>
+         * spells these with HANDLE/DWORD/BOOL/LPVOID and STARTUPINFO-style
+         * struct pointers, none of which a Salam extern can name, so any GUI
+         * program that imports those modules failed to compile without this.
+         * Derived by testing every `extern:` name in std/ and compiler/
+         * against <windows.h>, not by hand, so the list is complete. */
+        "CreateProcessA",
+        "CreatePipe",
+        "ReadFile",
+        "GetStdHandle",
+        "GetFileType",
+        "GetLastError",
+        "GetExitCodeProcess",
+        "TerminateProcess",
+        "SetHandleInformation",
+        "MoveFileExA",
+        "GetConsoleMode",
+        "SetConsoleMode",
+        "ReadConsoleInputA",
+        "DebugBreak",
     };
     size_t i = 0;
     for (; i < sizeof(names) / sizeof(names[0]); i++)

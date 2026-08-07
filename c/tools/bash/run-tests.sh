@@ -512,7 +512,6 @@ if want general; then
     done
 fi
 
-
 if want db; then
     DBCC=""
     for c in tcc gcc cc clang; do

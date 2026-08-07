@@ -82,8 +82,7 @@ void prof_self_shutdown(void);
 
 const char *prof_self_phase_name(timing_phase_t ph);
 
-#define PROF_SCOPE_BEGIN(ph, label)                                                      \
-    uint64_t _pt_##ph = prof_self_begin((ph), (label))
+#define PROF_SCOPE_BEGIN(ph, label) uint64_t _pt_##ph = prof_self_begin((ph), (label))
 #define PROF_SCOPE_END(ph) prof_self_end((ph), _pt_##ph)
 
 #endif /* SALAM_CORE_PROF_SELF_H */

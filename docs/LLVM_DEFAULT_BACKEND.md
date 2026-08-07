@@ -19,16 +19,16 @@ exists (see "Self-contained toolchain" below).
 
 ## What `salam build` does today
 
-| invocation | path |
-| --- | --- |
-| `salam build app.salam` | Salam -> C -> bundled tcc |
-| `salam build app.salam --cc=gcc` | Salam -> C -> system gcc, auto `-O2` |
-| `salam build app.salam --target=T` | Salam -> LLVM IR -> object -> lld |
-| `salam llvm app.salam ...` | Salam -> LLVM IR (explicit, all emit modes) |
+| invocation                         | path                                        |
+| ---------------------------------- | ------------------------------------------- |
+| `salam build app.salam`            | Salam -> C -> bundled tcc                   |
+| `salam build app.salam --cc=gcc`   | Salam -> C -> system gcc, auto `-O2`        |
+| `salam build app.salam --target=T` | Salam -> LLVM IR -> object -> lld           |
+| `salam llvm app.salam ...`         | Salam -> LLVM IR (explicit, all emit modes) |
 
 The default comes from [`cli.c:38`](../c/src/cli/cli.c#L38) (`out->cc = "tcc"`),
 and the cross path is chosen at
-[`build.c:489`](../c/src/driver/build.c#L489). tcc is resolved to a *bundled*
+[`build.c:489`](../c/src/driver/build.c#L489). tcc is resolved to a _bundled_
 copy, which is why the default build works on a clean machine.
 
 ## Backend coverage: the actual blocker
@@ -36,21 +36,21 @@ copy, which is why the default build works on a clean machine.
 LLVM cannot be the default until it compiles what the C backend compiles.
 Measured by running `salam llvm` over all 802 files in `tests/en`:
 
-| sweep | OK | codegen FAIL | expected-error tests |
-| --- | --- | --- | --- |
-| baseline | 512 | 162 | 127 |
-| after this work | 587 | 87 | 127 |
+| sweep           | OK  | codegen FAIL | expected-error tests |
+| --------------- | --- | ------------ | -------------------- |
+| baseline        | 512 | 162          | 127                  |
+| after this work | 587 | 87           | 127                  |
 
 Per-category, baseline -> now:
 
-| gap | before | after |
-| --- | --- | --- |
-| `member X of non-struct/unknown type` | 405 | 182 |
-| `address of an unknown identifier` | 249 | 10 |
-| `method X on type X` | 184 | 4 |
-| `call to unknown/unsupported function` | 150 | 24 |
-| layout (`LayoutBlock`/`LayoutComponent`) | 50 | 50 |
-| `struct literal of unknown type` | 32 | 32 |
+| gap                                      | before | after |
+| ---------------------------------------- | ------ | ----- |
+| `member X of non-struct/unknown type`    | 405    | 182   |
+| `address of an unknown identifier`       | 249    | 10    |
+| `method X on type X`                     | 184    | 4     |
+| `call to unknown/unsupported function`   | 150    | 24    |
+| layout (`LayoutBlock`/`LayoutComponent`) | 50     | 50    |
+| `struct literal of unknown type`         | 32     | 32    |
 
 Note `tests/en/errors/` accounts for most of the 127 "expected-error" files;
 those are supposed to fail and are not a gap.
@@ -73,7 +73,7 @@ lowering from surface syntax down to them was absent.
   (`join` -> `salam_thread_join`, `strcmp`) reaches both backends from one
   edit.
 - **Package-qualified constants** (`dns.TypeA`) - new `ll_pkg_value()`. The
-  key detail is that the package must be *touched* first; `ll_touch_pkg`
+  key detail is that the package must be _touched_ first; `ll_touch_pkg`
   emits its globals and only then can `ll_global_find` see them.
 
 Two reusable helpers came out of this and should be preferred for any further
@@ -91,7 +91,7 @@ Ordered by error count from the post-fix sweep.
 1. **Package-qualified struct types** (`opencv.Color {}`, `tcp.Conn`,
    `shell.CmdResult`). The type string arrives already package-mangled
    (`opencv_Color`), but `ll_struct_sym` cannot resolve it because the owning
-   package was never touched: a program that uses only a package's *types*,
+   package was never touched: a program that uses only a package's _types_,
    never its functions, never triggers `ll_touch_pkg`. Fix: resolve the
    package prefix in `ll_struct_sym`/`ll_struct_lit` and touch it, the same
    way `ll_pkg_value` now does for constants.
@@ -115,15 +115,15 @@ Ordered by error count from the post-fix sweep.
 
 This is further along than the codegen work. The pieces:
 
-| piece | flag | state |
-| --- | --- | --- |
-| LLVM codegen in-process | `WITH_LLVM=1` | works |
-| lld in-process (ELF/MinGW/COFF/MachO/Wasm) | `WITH_LLD=1` | works |
-| static LLVM/lld archives | `LLVM_LINK_STATIC=1` | works |
-| embedded musl sysroot | `SALAM_EMBED_MUSL*_DIR` | works (cross) |
-| embedded mingw sysroot | `SALAM_EMBED_MINGW_DIR` | works (cross) |
-| embedded third-party libs | `SALAM_EMBED_*LIBS_DIR` | works |
-| **native build uses in-process lld** | - | added in this pass |
+| piece                                      | flag                    | state              |
+| ------------------------------------------ | ----------------------- | ------------------ |
+| LLVM codegen in-process                    | `WITH_LLVM=1`           | works              |
+| lld in-process (ELF/MinGW/COFF/MachO/Wasm) | `WITH_LLD=1`            | works              |
+| static LLVM/lld archives                   | `LLVM_LINK_STATIC=1`    | works              |
+| embedded musl sysroot                      | `SALAM_EMBED_MUSL*_DIR` | works (cross)      |
+| embedded mingw sysroot                     | `SALAM_EMBED_MINGW_DIR` | works (cross)      |
+| embedded third-party libs                  | `SALAM_EMBED_*LIBS_DIR` | works              |
+| **native build uses in-process lld**       | -                       | added in this pass |
 
 `make -C c self-contained` wires the cross-compile half together. Verified on
 this Windows host against MSYS2's LLVM 22.1.8: a 217 MB `salam.exe` that runs
@@ -134,7 +134,7 @@ shell-out.
 
 `link_executable()` in `llvm_native.c` shells out to `gcc`/`clang`/`cc`/`tcc`
 for any build without `--target`, and `lld_can_link()` returns 0 when the
-triple is NULL. So the *cross* path was self-contained while the *native*
+triple is NULL. So the _cross_ path was self-contained while the _native_
 path, the one most users hit, still required a system compiler.
 
 Added: `native_host_link_triple()`, which resolves a host triple that the
@@ -200,13 +200,13 @@ build. Nothing that compiled before stops compiling.
 
 ### Verification
 
-`tests/en/llvm/` (73 programs with expected-output files), built and *run*,
+`tests/en/llvm/` (73 programs with expected-output files), built and _run_,
 output compared byte-for-byte:
 
-| backend | pass | wrong output | build failures |
-| --- | --- | --- | --- |
-| LLVM (new default) | 73 | 0 | 0 |
-| C (`--backend=c`) | 73 | 0 | 0 |
+| backend            | pass | wrong output | build failures |
+| ------------------ | ---- | ------------ | -------------- |
+| LLVM (new default) | 73   | 0            | 0              |
+| C (`--backend=c`)  | 73   | 0            | 0              |
 
 The LLVM runs went through in-process lld and the embedded mingw sysroot, with
 no external toolchain involved.

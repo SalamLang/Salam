@@ -7,12 +7,12 @@ expected to land in `compiler/X.salam` in the same change).
 
 ## Status
 
-| Part | State |
-|---|---|
-| §1 Monotonic clock (C, self-hosted, stdlib) | **Implemented** |
-| §2 Part A: compiler self-profiling (`--time-report`, `--time-trace`), both compilers | **Implemented** |
-| §3 Part B: program profiling (`--profile`, `salam prof`) | Designed, not implemented |
-| §4 Part C: benchmark harness (`std/bench`, `salam bench`) | Designed, not implemented |
+| Part                                                                                 | State                     |
+| ------------------------------------------------------------------------------------ | ------------------------- |
+| §1 Monotonic clock (C, self-hosted, stdlib)                                          | **Implemented**           |
+| §2 Part A: compiler self-profiling (`--time-report`, `--time-trace`), both compilers | **Implemented**           |
+| §3 Part B: program profiling (`--profile`, `salam prof`)                             | Designed, not implemented |
+| §4 Part C: benchmark harness (`std/bench`, `salam bench`)                            | Designed, not implemented |
 
 Shipped files, §1 and Part A:
 
@@ -41,11 +41,11 @@ original design, and why.
 Three separate subsystems ship under this umbrella. They are independent and can
 land in the order given.
 
-| Part | Question it answers | User-facing surface |
-|---|---|---|
-| **A. Compiler self-profiling** | "Why is *compiling* my program slow?" | `salam build --time-report`, `--time-trace=FILE` |
-| **B. Program profiling** | "Why is *my program* slow?" | `salam build --profile=MODE`, `salam prof <sub>` |
-| **C. Benchmark harness** | "Is this change faster or slower than last week?" | `std/bench`, `salam bench` |
+| Part                           | Question it answers                               | User-facing surface                              |
+| ------------------------------ | ------------------------------------------------- | ------------------------------------------------ |
+| **A. Compiler self-profiling** | "Why is _compiling_ my program slow?"             | `salam build --time-report`, `--time-trace=FILE` |
+| **B. Program profiling**       | "Why is _my program_ slow?"                       | `salam build --profile=MODE`, `salam prof <sub>` |
+| **C. Benchmark harness**       | "Is this change faster or slower than last week?" | `std/bench`, `salam bench`                       |
 
 What is explicitly **out of scope** for the first implementation, and why:
 
@@ -57,8 +57,8 @@ What is explicitly **out of scope** for the first implementation, and why:
 - **Heap profiling by allocation site.** `std/mem` already tracks totals under
   `SALAM_MEM_DEBUG`; a full allocation-site profiler is a separate design.
 - **Replacing the existing cross-language suite in `benchmark/`.** That suite
-  compares Salam against C/Rust/Go/Python. Part C is a *microbenchmark harness
-  for Salam code*. Section C.6 covers how they meet.
+  compares Salam against C/Rust/Go/Python. Part C is a _microbenchmark harness
+  for Salam code_. Section C.6 covers how they meet.
 
 ---
 
@@ -69,9 +69,8 @@ Everything here needs a clock, and the clock we have today is not good enough.
 `std/time/time.salam:162-188` defines `_now_ns()` as:
 
 - Windows: `GetSystemTimeAsFileTime`. This is wall-clock time, and although its
-  unit is 100 ns its *actual* update granularity is the system timer tick,
-  typically 15.6 ms. Timing anything under ~50 ms with it produces either 0 or
-  15600000. It is unusable for profiling.
+  unit is 100 ns its _actual_ update granularity is the system timer tick,
+  typically 15.6 ms. Timing anything under ~50 ms with it produces either 0 or 15600000. It is unusable for profiling.
 - POSIX: `clock_gettime(0, ...)`, and 0 is `CLOCK_REALTIME`. That is wall clock
   too, so it steps when NTP adjusts and can go backwards.
 
@@ -101,12 +100,12 @@ uint64_t salam_peak_rss(void);
 
 Implementation matrix:
 
-| Platform | `salam_mono_ns` | `salam_cpu_ns` | `salam_peak_rss` |
-|---|---|---|---|
-| Windows | `QueryPerformanceCounter` / `QueryPerformanceFrequency` (frequency cached in a file-static, queried once) | `GetProcessTimes`, kernel+user 100 ns ticks | `GetProcessMemoryInfo().PeakWorkingSetSize` (psapi) |
-| Linux | `clock_gettime(CLOCK_MONOTONIC, ...)` | `clock_gettime(CLOCK_PROCESS_CPUTIME_ID, ...)` | `getrusage().ru_maxrss * 1024` |
-| macOS | `clock_gettime(CLOCK_MONOTONIC, ...)` (10.12+), else `mach_absolute_time` + `mach_timebase_info` | `getrusage` user+sys | `getrusage().ru_maxrss` (already bytes on macOS) |
-| other | `clock()` scaled by `CLOCKS_PER_SEC` | same | 0 |
+| Platform | `salam_mono_ns`                                                                                           | `salam_cpu_ns`                                 | `salam_peak_rss`                                    |
+| -------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | --------------------------------------------------- |
+| Windows  | `QueryPerformanceCounter` / `QueryPerformanceFrequency` (frequency cached in a file-static, queried once) | `GetProcessTimes`, kernel+user 100 ns ticks    | `GetProcessMemoryInfo().PeakWorkingSetSize` (psapi) |
+| Linux    | `clock_gettime(CLOCK_MONOTONIC, ...)`                                                                     | `clock_gettime(CLOCK_PROCESS_CPUTIME_ID, ...)` | `getrusage().ru_maxrss * 1024`                      |
+| macOS    | `clock_gettime(CLOCK_MONOTONIC, ...)` (10.12+), else `mach_absolute_time` + `mach_timebase_info`          | `getrusage` user+sys                           | `getrusage().ru_maxrss` (already bytes on macOS)    |
+| other    | `clock()` scaled by `CLOCKS_PER_SEC`                                                                      | same                                           | 0                                                   |
 
 Notes that matter for this repo specifically:
 
@@ -186,17 +185,17 @@ The pipeline in `driver_build` (`c/src/driver/build.c:487`) already has clean
 phase boundaries. The phases, matching the existing `phase_t` enum in
 `c/src/logger/logger.h:31`:
 
-| Phase | Measured around |
-|---|---|
-| `driver` | everything not attributed elsewhere (arg parsing, dir scans, path resolution) |
-| `source` | `source_load` |
-| `lexer` | `lexer_run` |
-| `parser` | `parser_run` + `cc_prune_program` + `salam_merge_program` |
-| `semantic` | `sema_run_cached` |
-| `codegen` | `cg_run` / the C-emitting step |
-| `cc` | the `system()` invocation of the host C compiler, per module |
-| `link` | the final link command |
-| `write` | `write_file` for `.c`/`.h`, plus `file_has_content` comparisons |
+| Phase      | Measured around                                                               |
+| ---------- | ----------------------------------------------------------------------------- |
+| `driver`   | everything not attributed elsewhere (arg parsing, dir scans, path resolution) |
+| `source`   | `source_load`                                                                 |
+| `lexer`    | `lexer_run`                                                                   |
+| `parser`   | `parser_run` + `cc_prune_program` + `salam_merge_program`                     |
+| `semantic` | `sema_run_cached`                                                             |
+| `codegen`  | `cg_run` / the C-emitting step                                                |
+| `cc`       | the `system()` invocation of the host C compiler, per module                  |
+| `link`     | the final link command                                                        |
+| `write`    | `write_file` for `.c`/`.h`, plus `file_has_content` comparisons               |
 
 Two extra phases exist only for other backends and are recorded the same way:
 `llvm` (in `llvm_build.c`) and `jsgen` (in `js_build.c`).
@@ -466,7 +465,7 @@ with `--time-report=json`, parses the JSON, and asserts:
 3. every phase key present in the C output is present in the Salam output,
 4. `wall_ns > 0` and `sum(phase.self_ns) <= wall_ns * 1.05`.
 
-That validates parity of *shape* without depending on machine speed.
+That validates parity of _shape_ without depending on machine speed.
 
 ---
 
@@ -594,6 +593,7 @@ end
 ```
 
 `Enter(id)`:
+
 ```
 if !_on: ret end
 _stack[_sp].id = id
@@ -604,6 +604,7 @@ _slots[id].depth += 1
 ```
 
 `Exit(id)`:
+
 ```
 if !_on: ret end
 _sp -= 1
@@ -711,14 +712,14 @@ do not hardcode the string.
 **Self-hosted parity.** `compiler/codegen.salam` mirrors this structure exactly,
 so the change is mechanical:
 
-| C | Salam |
-|---|---|
-| `cg_function`, `codegen_decl.c:137` | `cg_function`, `compiler/codegen.salam:1522` |
-| `cg_t.fn_defers` (`vec_t` of `ast_node_t *`) | `Cg.fn_defers` (`Vector<int>` of `at.NodeId`), `codegen.salam:179` |
-| save/restore at `codegen_decl.c:155`, `199` | `codegen.salam:1548-1549`, `1594-1596` |
-| `cg_emit_defers`, `codegen_stmt.c:17` | `cg_emit_defers`, `codegen.salam:4713` |
-| four `AST_RETURN` flush points, `codegen_stmt.c:184/190/193/196` | `codegen.salam:4910/4917/4920/4923` |
-| lambda save/restore, `codegen_lambda.c:68`, `133` | `codegen.salam:5147`, `5154` |
+| C                                                                | Salam                                                              |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `cg_function`, `codegen_decl.c:137`                              | `cg_function`, `compiler/codegen.salam:1522`                       |
+| `cg_t.fn_defers` (`vec_t` of `ast_node_t *`)                     | `Cg.fn_defers` (`Vector<int>` of `at.NodeId`), `codegen.salam:179` |
+| save/restore at `codegen_decl.c:155`, `199`                      | `codegen.salam:1548-1549`, `1594-1596`                             |
+| `cg_emit_defers`, `codegen_stmt.c:17`                            | `cg_emit_defers`, `codegen.salam:4713`                             |
+| four `AST_RETURN` flush points, `codegen_stmt.c:184/190/193/196` | `codegen.salam:4910/4917/4920/4923`                                |
+| lambda save/restore, `codegen_lambda.c:68`, `133`                | `codegen.salam:5147`, `5154`                                       |
 
 Add `pub fn_prof_exit: str = ""` to `struct Cg` next to `fn_defers` and flush it
 at the end of `cg_emit_defers`. Use `""` rather than a null check; an empty
@@ -731,7 +732,7 @@ from the module initializer list (`cg->deferred`, emitted into `main` at
 work, so slot registration piggybacks on it.
 
 **DCE.** `dce_enable()` is on for builds (`build.c:624-625`), and it marks roots
-by *source-level* usage. Codegen-injected calls happen after that analysis, so
+by _source-level_ usage. Codegen-injected calls happen after that analysis, so
 `prof.Enter`, `prof.Exit`, `prof.Register` and `prof.Dump` would be dead-stripped
 and the build would fail to link. `driver_build` must call:
 
@@ -768,7 +769,7 @@ LLVM path, the symbol exists naturally.
 
 One caveat worth stating: with `-O2`/`-O3`, LLVM can and will inline the
 instrumented function into its caller, and the `Enter`/`Exit` pair travels with
-it, so counts stay correct but the *attribution* of very small functions gets
+it, so counts stay correct but the _attribution_ of very small functions gets
 noisy. Document that `--profile` builds should use `-O1` for stable attribution,
 and have the driver emit an informational log line when `--profile` is combined
 with `-O2` or higher rather than silently changing the user's optimization level.
@@ -896,18 +897,18 @@ flamegraphs without us writing an SVG renderer.
 Expected and to be verified against `benchmark/programs/01_fib_recursive`
 (the call-heavy one) as the worst case:
 
-| Mode | Expected overhead on `01_fib_recursive` |
-|---|---|
-| `count` | 1.5x to 2x (one increment per call) |
-| `fn` | 4x to 8x (two clock reads per call) |
-| `graph` | 5x to 10x |
+| Mode    | Expected overhead on `01_fib_recursive` |
+| ------- | --------------------------------------- |
+| `count` | 1.5x to 2x (one increment per call)     |
+| `fn`    | 4x to 8x (two clock reads per call)     |
+| `graph` | 5x to 10x                               |
 
 These are honest numbers for an instrumenting profiler on a workload that is
 nothing but function calls; on realistic code the overhead is far lower. The
 `salam prof report` header should print the mode so nobody compares an
 instrumented run's absolute time against an uninstrumented one.
 
-`--profile-min=N` filters the *report*, not the collection, so filtering does not
+`--profile-min=N` filters the _report_, not the collection, so filtering does not
 change measured times.
 
 ---
@@ -1078,14 +1079,25 @@ noise-aware to be useful.
 {
   "schema": "salam.bench.v1",
   "salam_version": "0.2.8",
-  "backend": "c", "cc": "gcc", "flags": "-O2",
-  "host": {"os": "windows", "arch": "x86_64", "cpu": "...", "cores": 16},
+  "backend": "c",
+  "cc": "gcc",
+  "flags": "-O2",
+  "host": { "os": "windows", "arch": "x86_64", "cpu": "...", "cores": 16 },
   "started": "2026-08-07T10:33:02Z",
   "benchmarks": [
-    {"name": "BenchFibRecursive", "iters": 200, "samples": 8,
-     "ns_per_op": {"median": 5120000.0, "min": 5080000.0,
-                   "mean": 5140000.0, "stddev": 56000.0},
-     "mb_per_sec": null, "noisy": false}
+    {
+      "name": "BenchFibRecursive",
+      "iters": 200,
+      "samples": 8,
+      "ns_per_op": {
+        "median": 5120000.0,
+        "min": 5080000.0,
+        "mean": 5140000.0,
+        "stddev": 56000.0
+      },
+      "mb_per_sec": null,
+      "noisy": false
+    }
   ]
 }
 ```
@@ -1109,7 +1121,7 @@ question. Two integration points:
 
 **Filename collision warning.** Per
 `salam_filename_collision_across_stdlib_packages`, a `.salam` file's C module is
-keyed by *filename*, not package. `std/bench/bench.salam` and
+keyed by _filename_, not package. `std/bench/bench.salam` and
 `benchmark/bench/bench.salam` are the same filename. They will not normally be
 linked into the same program, but `benchmark/bench/run.salam` importing `bench`
 would suddenly resolve differently. Rename the harness file to
@@ -1129,7 +1141,7 @@ decided before the first commit, not after.
 - Every new user-visible string in `c/src/` goes through `i18n_tr(...)`, and the
   same key is added to the `fa`/`ar` catalogs in `c/src/i18n/`.
 - `compiler/i18n.salam` needs the mirrored entries.
-- Report *tables* are not translated string-by-string; column headers are, and
+- Report _tables_ are not translated string-by-string; column headers are, and
   numbers go through `sal_format` for digit shaping.
 
 ### 5.2 Help text
@@ -1148,15 +1160,15 @@ the reference doc and any examples must use that form.
 New section `bench` in `c/tools/bash/run-tests.sh` (modelled on the `opencv`
 section at line 563, which degrades to SKIP when a dependency is missing):
 
-| Test | Asserts |
-|---|---|
-| `tests/en/stdlib/prof_api.salam` | hand-called `BeginRegion`/`EndRegion`, `Report()` contains the region name, elapsed > 0 |
-| `tests/en/stdlib/bench_stats.salam` | feed `bench`'s statistics functions known arrays, check median/stddev to a fixed epsilon |
-| shell: `salam exec --profile=count prog.salam` | `salam.prof` exists, has a `F` record for every function in the program, call counts are exactly right (counts are deterministic, unlike times) |
-| shell: `salam build --profile=fn` then `salam prof report` | exit 0, report names the hot function |
-| shell: `salam prof diff a.prof b.prof` | correct sign and magnitude on a hand-written pair of `.prof` files |
-| shell: `--time-report=json` on both binaries | schema parity (section A.6) |
-| `tests/fa/stdlib/prof_api.salam` | the Persian-named API resolves and works |
+| Test                                                       | Asserts                                                                                                                                         |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/en/stdlib/prof_api.salam`                           | hand-called `BeginRegion`/`EndRegion`, `Report()` contains the region name, elapsed > 0                                                         |
+| `tests/en/stdlib/bench_stats.salam`                        | feed `bench`'s statistics functions known arrays, check median/stddev to a fixed epsilon                                                        |
+| shell: `salam exec --profile=count prog.salam`             | `salam.prof` exists, has a `F` record for every function in the program, call counts are exactly right (counts are deterministic, unlike times) |
+| shell: `salam build --profile=fn` then `salam prof report` | exit 0, report names the hot function                                                                                                           |
+| shell: `salam prof diff a.prof b.prof`                     | correct sign and magnitude on a hand-written pair of `.prof` files                                                                              |
+| shell: `--time-report=json` on both binaries               | schema parity (section A.6)                                                                                                                     |
+| `tests/fa/stdlib/prof_api.salam`                           | the Persian-named API resolves and works                                                                                                        |
 
 The deterministic call-count test is the load-bearing one: it validates
 `Enter`/`Exit` pairing on every control-flow path, including early `ret`,
@@ -1178,7 +1190,7 @@ Collected from prior work in this repo; each one has cost a debugging session
 before.
 
 1. **Build source lists.** Adding `core/timer.c`, `core/prof_self.c` means
-   editing `c/Makefile` *and* the quick-build source lists. Commit `24fd5d43`
+   editing `c/Makefile` _and_ the quick-build source lists. Commit `24fd5d43`
    exists because a previous addition missed them.
 2. **`pub const` collides at link time across packages.** Prefix the new
    constants and grep the whole stdlib before choosing names.
@@ -1207,17 +1219,17 @@ before.
 
 Each step is independently shippable and independently useful.
 
-| Step | Work | Why first |
-|---|---|---|
-| 1 | Section 1: `salam_mono_ns` in C, `MonoNanos` in `compiler/` and `std/time`, repoint `std/debug` timers and `benchmark/bench/timing.salam` | Fixes a real accuracy bug today, unblocks everything else, tiny surface |
-| 2 | Part A: `--time-report` table format only, C compiler | Self-contained, immediately useful to compiler developers |
-| 3 | Part A parity: `compiler/prof_self.salam` + JSON format + `--time-trace` | Parity rule; JSON enables the CI check |
-| 4 | Part B runtime: `std/prof` package + hand-called `BeginRegion`/`EndRegion` + `Dump` | Testable with zero codegen changes |
-| 5 | Part B: interpreter instrumentation (`salam exec --profile`) + `salam prof report`/`folded`/`diff` | No codegen risk, delivers a working end-to-end profiler and validates the file format and the report tooling |
-| 6 | Part B: C-backend codegen instrumentation via the defer mechanism, both compilers | The riskiest step, and by now the format and tooling are already proven |
-| 7 | Part B: LLVM and JS backends | Parity |
-| 8 | Part C: `std/bench` + `salam bench` + JSON + `--baseline` | Builds on the step 1 clock and the step 5 reporting conventions |
-| 9 | `--profile=graph`, `salam prof graph`, CI regression gate wiring | Refinement |
+| Step | Work                                                                                                                                      | Why first                                                                                                    |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| 1    | Section 1: `salam_mono_ns` in C, `MonoNanos` in `compiler/` and `std/time`, repoint `std/debug` timers and `benchmark/bench/timing.salam` | Fixes a real accuracy bug today, unblocks everything else, tiny surface                                      |
+| 2    | Part A: `--time-report` table format only, C compiler                                                                                     | Self-contained, immediately useful to compiler developers                                                    |
+| 3    | Part A parity: `compiler/prof_self.salam` + JSON format + `--time-trace`                                                                  | Parity rule; JSON enables the CI check                                                                       |
+| 4    | Part B runtime: `std/prof` package + hand-called `BeginRegion`/`EndRegion` + `Dump`                                                       | Testable with zero codegen changes                                                                           |
+| 5    | Part B: interpreter instrumentation (`salam exec --profile`) + `salam prof report`/`folded`/`diff`                                        | No codegen risk, delivers a working end-to-end profiler and validates the file format and the report tooling |
+| 6    | Part B: C-backend codegen instrumentation via the defer mechanism, both compilers                                                         | The riskiest step, and by now the format and tooling are already proven                                      |
+| 7    | Part B: LLVM and JS backends                                                                                                              | Parity                                                                                                       |
+| 8    | Part C: `std/bench` + `salam bench` + JSON + `--baseline`                                                                                 | Builds on the step 1 clock and the step 5 reporting conventions                                              |
+| 9    | `--profile=graph`, `salam prof graph`, CI regression gate wiring                                                                          | Refinement                                                                                                   |
 
 Steps 1, 2, 4 and 5 together already give users a usable profiler and a faster
 feedback loop on compiler performance, which is most of the value.
@@ -1285,16 +1297,16 @@ Also: arithmetic on a `void*` is not an operator this language has, so
 
 ### 8.5 Where the two implementations legitimately differ
 
-The parity test compares the report's *shape*, not its values, and these are the
+The parity test compares the report's _shape_, not its values, and these are the
 values that differ by design:
 
-| Field | C | Self-hosted |
-|---|---|---|
-| `peak_rss` | real (psapi resolved at run time via `GetProcAddress`, or `getrusage`) | always 0; there is no runtime-resolved function pointer here, and a link-time psapi dependency is the kind of extern that fails under tcc |
-| `ast_nodes` | exact (`ast_new` counts every node) | 0; the self-hosted AST is a node-id arena with no equivalent single choke point wired up yet |
-| `arena_bytes` / `arena_blocks` | real (`arena_stats()`) | 0; `sal_core.salam`'s `Arena` has no block list to walk |
-| `cc` calls | one per module | one, because the self-hosted driver compiles all modules in a single `compile_parallel` scope |
-| `lexer`/`parser`/`source` calls | 31 | 12, because the C counts each sibling file of a multi-file package separately |
+| Field                           | C                                                                      | Self-hosted                                                                                                                               |
+| ------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `peak_rss`                      | real (psapi resolved at run time via `GetProcAddress`, or `getrusage`) | always 0; there is no runtime-resolved function pointer here, and a link-time psapi dependency is the kind of extern that fails under tcc |
+| `ast_nodes`                     | exact (`ast_new` counts every node)                                    | 0; the self-hosted AST is a node-id arena with no equivalent single choke point wired up yet                                              |
+| `arena_bytes` / `arena_blocks`  | real (`arena_stats()`)                                                 | 0; `sal_core.salam`'s `Arena` has no block list to walk                                                                                   |
+| `cc` calls                      | one per module                                                         | one, because the self-hosted driver compiles all modules in a single `compile_parallel` scope                                             |
+| `lexer`/`parser`/`source` calls | 31                                                                     | 12, because the C counts each sibling file of a multi-file package separately                                                             |
 
 The phase key set is identical, which is what `timereport/parity` asserts.
 

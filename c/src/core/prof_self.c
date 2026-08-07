@@ -72,12 +72,12 @@ static struct {
     size_t cap_events;
 } g;
 
-static const char *k_phase_name[TP__COUNT] = {"driver", "source", "lexer", "parser",
-                                              "semantic", "codegen", "llvm", "jsgen",
-                                              "write", "cc", "link"};
+static const char *k_phase_name[TP__COUNT] = {"driver",   "source",  "lexer", "parser",
+                                              "semantic", "codegen", "llvm",  "jsgen",
+                                              "write",    "cc",      "link"};
 
 static const char *k_counter_name[TC__COUNT] = {
-    "tokens", "ast_nodes", "symbols", "funcs_emitted",
+    "tokens",        "ast_nodes",      "symbols",     "funcs_emitted",
     "modules_built", "modules_cached", "arena_bytes", "arena_blocks"};
 
 const char *prof_self_phase_name(timing_phase_t ph)
@@ -117,7 +117,8 @@ static const char *u64s(uint64_t v, char *buf, size_t cap)
             v /= 10;
         }
     }
-    for (i = 0; i < n && i + 1 < cap; i++) buf[i] = tmp[n - 1 - i];
+    for (i = 0; i < n && i + 1 < cap; i++)
+        buf[i] = tmp[n - 1 - i];
     buf[i] = '\0';
     return buf;
 }
@@ -324,7 +325,8 @@ static void report_table(FILE *out, uint64_t wall_ns, uint64_t cpu_ns)
             fmt_dur(cpu_ns, b2, sizeof b2), i18n_tr("peak rss"),
             fmt_bytes(salam_peak_rss(), b3, sizeof b3));
 
-    for (i = 0; i < TP__COUNT; i++) order[i] = i;
+    for (i = 0; i < TP__COUNT; i++)
+        order[i] = i;
     qsort(order, TP__COUNT, sizeof order[0], cmp_phase_self);
 
     fprintf(out, "\n  %-10s %10s %11s %8s %8s\n", i18n_tr("phase"), i18n_tr("self"),
@@ -476,8 +478,8 @@ bool prof_self_write_trace(const char *path)
         json_escape(f, ev->name);
         fprintf(f, "\",\"cat\":\"%s\",\"ph\":\"X\",\"pid\":1,\"tid\":1",
                 k_phase_name[ev->ph]);
-        fprintf(f, ",\"ts\":%.3f,\"dur\":%.3f}",
-                (double)(ev->ts - g.start_ns) / 1000.0, (double)ev->dur / 1000.0);
+        fprintf(f, ",\"ts\":%.3f,\"dur\":%.3f}", (double)(ev->ts - g.start_ns) / 1000.0,
+                (double)ev->dur / 1000.0);
     }
     fputs("\n]\n", f);
     fclose(f);

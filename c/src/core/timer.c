@@ -130,8 +130,7 @@ uint64_t salam_mono_ns(void)
         /* Pre-10.12 macOS has no clock_gettime. */
         static mach_timebase_info_data_t tb;
         if (tb.denom == 0) mach_timebase_info(&tb);
-        if (tb.denom != 0)
-            return (uint64_t)mach_absolute_time() * tb.numer / tb.denom;
+        if (tb.denom != 0) return (uint64_t)mach_absolute_time() * tb.numer / tb.denom;
     }
 #  endif
     {

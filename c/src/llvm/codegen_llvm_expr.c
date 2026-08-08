@@ -1053,6 +1053,18 @@ static llv_t ll_call_dyn(ll_t *ll, ast_node_t *n, ast_node_t *obj, const char *i
     }
 
     llv_t dv = ll_expr(ll, obj);
+    /*
+     * `dyn X*` - a pointer TO an interface value, which is what Vector.get()
+     * hands back. Auto-deref before dispatching: extractvalue needs the %dyn
+     * itself, not the address of the slot holding it. This used to appear to
+     * work only because ll_ty("dyn X*") wrongly answered "%dyn", which broke
+     * the data-pointer side of the same vector instead.
+     */
+    if (ll_is_ptr_ts(dv.ts)) {
+        const char *ld = ll_new_tmp(ll);
+        ll_emit(ll, "%s = load %%dyn, ptr %s", ld, dv.ref);
+        dv.ref = ld;
+    }
     const char *data = ll_new_tmp(ll), *vt = ll_new_tmp(ll), *sl = ll_new_tmp(ll),
                *fn = ll_new_tmp(ll);
     ll_emit(ll, "%s = extractvalue %%dyn %s, 0", data, dv.ref);
@@ -1092,7 +1104,15 @@ static llv_t ll_call_method(ll_t *ll, ast_node_t *n, ast_node_t *callee)
     const char *mname = callee->name;
     const char *ots = obj->type_str ? obj->type_str : "";
 
-    if (!strncmp(ots, "dyn ", 4)) return ll_call_dyn(ll, n, obj, ots + 4, mname);
+    /* Trailing '*'s are not part of the interface name (see ll_call_dyn's
+     * auto-deref): "dyn Shape*" dispatches on Shape, not on "Shape*". */
+    if (!strncmp(ots, "dyn ", 4)) {
+        const char *ib = ots + 4;
+        size_t ibn = strlen(ib);
+        while (ibn && ib[ibn - 1] == '*')
+            ibn--;
+        return ll_call_dyn(ll, n, obj, arena_strndup(ll->a, ib, ibn), mname);
+    }
 
     if (!strcmp(ots, "str")) {
         llv_t o;

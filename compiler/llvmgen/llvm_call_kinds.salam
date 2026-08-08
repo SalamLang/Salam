@@ -177,12 +177,23 @@ func call_dyn(
     end
 
     dv := lv_expr(v, s, a, obj)
+    // `dyn X*` - a pointer TO an interface value, which is what Vector.get()
+    // hands back. Auto-deref before dispatching: extractvalue needs the %dyn
+    // itself, not the address of the slot holding it. This used to appear to
+    // work only because ty_of("dyn X*") wrongly answered "%dyn", which broke
+    // the data-pointer side of the same vector instead.
+    mut dvref := dv.ref
+    if is_ptr_ts(dv.ts):
+        ld := new_tmp(v)
+        emit(v, ld + " = load %dyn, ptr " + dvref)
+        dvref = ld
+    end
     data := new_tmp(v)
     vt := new_tmp(v)
     sl := new_tmp(v)
     fn := new_tmp(v)
-    emit(v, data + " = extractvalue %dyn " + dv.ref + ", 0")
-    emit(v, vt + " = extractvalue %dyn " + dv.ref + ", 1")
+    emit(v, data + " = extractvalue %dyn " + dvref + ", 0")
+    emit(v, vt + " = extractvalue %dyn " + dvref + ", 1")
     emit(
         v, sl + " = getelementptr inbounds ptr, ptr " + vt + ", i64 " + co.I64Toa(slot as i64)
     )
@@ -220,8 +231,14 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
     objn := at.Get(a, obj)
     ots := objn.type_str
 
+    // Trailing '*'s are not part of the interface name (see call_dyn's
+    // auto-deref): "dyn Shape*" dispatches on Shape, not on "Shape*".
     if str.StartsWith(ots, "dyn "):
-        ret call_dyn(v, s, a, n, obj, str.Substr(ots, 4, str.Len(ots) - 4), mname)
+        mut ibn := str.Len(ots)
+        until ibn > 4 && byte_at(ots, ibn - 1) == 42:
+            ibn -= 1
+        end
+        ret call_dyn(v, s, a, n, obj, str.Substr(ots, 4, ibn - 4), mname)
     end
 
     if str.Equals(ots, "str"):

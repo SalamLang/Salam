@@ -15,6 +15,10 @@
 # real proof the self-hosted compiler is sound - stage1 only proves the seed
 # can parse the sources. stage2 is the artifact you ship/test with.
 #
+# The seed must be 0.2.8 or newer: earlier ones do not collapse '..' in
+# import paths, so compiler/'s per-directory layout blows past their module
+# limit (see the stage 1 hint below). `make -C c` builds a usable one.
+#
 # Usage:
 #   compiler/tools/bash/bootstrap.sh <seed-salam> [outdir] [--stages N]
 #
@@ -175,6 +179,14 @@ while [ "$stage" -le "$STAGES" ]; do
                 --output="$out" --cc="$SALAM_CC" --log-level=error $stage_llvm
     ) || {
         echo "::error::stage $stage build failed" >&2
+        if [ "$stage" -eq 1 ]; then
+            echo "hint: stage 1 is built by the seed, and seeds older than 0.2.8 do not" >&2
+            echo "      collapse '..' in import paths - compiler/'s per-directory layout" >&2
+            echo "      then overruns their 64-entry module work list and whole modules" >&2
+            echo "      go missing, which surfaces as the C compiler failing on a" >&2
+            echo "      'salam_mod_*.h: No such file or directory'. Use a newer seed, or" >&2
+            echo "      build one from this checkout with 'make -C c' and pass ./salam." >&2
+        fi
         exit 1
     }
     [ -x "$out" ] || {

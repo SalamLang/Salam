@@ -131,7 +131,7 @@ salam exec                  # interpret the project here
   (`myproject.exe`), not `salam.exe`.
 - `salam new <name>` scaffolds the project with a `salam.salam` entry file.
 
-Front-end (layout DSL) projects have no `main` function; there the same rule
+Frontend (layout DSL) projects have no `main` function; there the same rule
 applies to the `layout` block instead:
 
 ```sh

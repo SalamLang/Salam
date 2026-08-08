@@ -144,7 +144,7 @@ built-in work:
 
 ### Also fixed: lambda capturing a function value it calls
 
-The last failures, and a **shared front-end bug**, not a backend one. Captures
+The last failures, and a **shared frontend bug**, not a backend one. Captures
 were recorded only on the `AST_IDENTIFIER` expression path, and a call's
 callee never goes through it - so in
 

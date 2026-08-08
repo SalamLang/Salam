@@ -4,11 +4,16 @@ name: 🧬 Self-Host - Bootstrap & Parity
 # install a released `salam`, then `salam build compiler/main.salam` - and
 # gates it against the reference compiler on the shared test corpus.
 #
-# Deliberately touches nothing in c/: no `make`, no C sources. The only
-# compiler this workflow needs is the released binary install.sh fetches,
-# which is also the reference the parity gate diffs against. That is the
-# whole point - it is the proving ground for making the self-hosted
-# compiler primary, and it must not depend on the C build to work.
+# Wants to touch nothing in c/: no `make`, no C sources. The only compiler
+# this workflow should need is the released binary install.sh fetches, which
+# is also the reference the parity gate diffs against. That is the whole
+# point - it is the proving ground for making the self-hosted compiler
+# primary, and it must not depend on the C build to work.
+#
+# One exception, and it is meant to be temporary: when the latest release
+# predates SEED_MIN it cannot resolve the compiler's `../` imports at all
+# (see "Pick the stage-0 compiler"), so stage 0 falls back to building c/.
+# The parity gate still diffs against the released binary either way.
 # checkov:skip=CKV_GHA_7:inputs are only ever read via env: indirection, never interpolated into a run: script
 on:
   push:
@@ -162,6 +167,52 @@ jobs:
           head -1 seed-version.txt
           rm -f seed-version.txt
 
+      # Which compiler builds stage 1. Normally the release - proving it can
+      # is most of why this workflow exists. But 0.2.7 and older join an
+      # import spec onto the importing file's directory and never collapse
+      # the "..", so compiler/cli/../token.salam and compiler/token.salam are
+      # two separate modules to them, and every extra hop through a
+      # subdirectory multiplies the spellings again
+      # (compiler/cli/../driver/../ast.salam, and so on). Since compiler/ was
+      # split into per-stage directories, its 45 modules expand to 501
+      # work-list entries on such a seed - against its SALAM_MAX_INPUTS of
+      # 64. Entries past the cap are dropped with no diagnostic, so stage 1
+      # died in the C compiler on a missing salam_mod_encoding.h that
+      # crypto.h still #include'd. No amount of trimming closes a 501-vs-64
+      # gap; the seed simply has to be one that canonicalizes "..".
+      #
+      # Both that collapse and the raised cap are already in c/, so until a
+      # release carries them the in-repo reference compiler stands in as
+      # stage 0. Once SEED_MIN is published this step no-ops itself; delete
+      # it then, along with the note at the top of the file.
+      - name: Pick the stage-0 compiler
+        env:
+          SEED_VERSION: ${{ needs.seed.outputs.version }}
+          # First release whose import resolver collapses "seg/../".
+          SEED_MIN: '0.2.8'
+        run: |
+          set -eu
+          newest=$(printf '%s\n%s\n' "$SEED_MIN" "$SEED_VERSION" |
+            sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+          if [ "$newest" = "$SEED_VERSION" ]; then
+            echo "seed $SEED_VERSION >= $SEED_MIN - bootstrapping from the release"
+            echo "SALAM_SEED=$HOME/.salam/bin/salam" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          echo "::warning::seed $SEED_VERSION predates $SEED_MIN and cannot" \
+            "resolve compiler/'s ../ imports - building stage 0 from c/ instead"
+          # WITH_LLVM=0: stage 0 only has to lower compiler/main.salam
+          # through the C backend, and bootstrap.sh hands the LLVM flags to
+          # stage 2 onwards anyway. Left to default, the Makefile would link
+          # in whatever llvm-config the runner happens to have - minutes of
+          # link time and a dependency on system libs, for nothing.
+          make -C c WITH_LLVM=0 WITH_LLD=0 \
+            -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
+          "$GITHUB_WORKSPACE/salam" version > stage0-version.txt
+          head -1 stage0-version.txt
+          rm -f stage0-version.txt
+          echo "SALAM_SEED=$GITHUB_WORKSPACE/salam" >> "$GITHUB_ENV"
+
       # Static in-process LLVM/LLD for the self-hosted compiler, so stage2
       # lowers IR itself instead of shelling out to a clang/lld the user
       # would have to install. Without libsalam_llvm.a, bootstrap.sh's
@@ -299,7 +350,7 @@ jobs:
       - name: Bootstrap stage1 -> stage2 -> stage3
         run: |
           set -eu
-          sh compiler/tools/bash/bootstrap.sh "$HOME/.salam/bin/salam" build/selfhost
+          sh compiler/tools/bash/bootstrap.sh "$SALAM_SEED" build/selfhost
 
       # Records which backend stage2 actually got, so a silent downgrade to
       # the C backend is visible in the log rather than only showing up as a

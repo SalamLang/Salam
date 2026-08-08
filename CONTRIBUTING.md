@@ -489,7 +489,7 @@ make -C c                                     # a normal salam to bootstrap with
 sh compiler/tools/bash/leakcheck-selfhost.sh ./salam-selfhost-asan
 ```
 
-The counts are exactly reproducible, so the check fails on a regression and tells you to lower the number when you improve one. Lower it in the same pull request that earned it. To find out *where* a leak came from, rebuild with `--asan -g` as well: the stacks then name the `.salam` file and line that allocated.
+The counts are exactly reproducible, so the check fails on a regression and tells you to lower the number when you improve one. Lower it in the same pull request that earned it. To find out _where_ a leak came from, rebuild with `--asan -g` as well: the stacks then name the `.salam` file and line that allocated.
 
 Add a line to `c/tools/lsan.supp` only when an allocation genuinely is not the compiler's to free, and say why in the file. A suppression hides a finding forever.
 

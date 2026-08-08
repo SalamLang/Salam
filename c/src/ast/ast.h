@@ -115,6 +115,16 @@ struct ast_node {
     vec_t captures;
     const char *type_str;
     const char *origin_lang;
+    /* Interpreter-only inline cache for identifier lookups; ignored by every
+     * other consumer of the AST. Resolving a name meant walking the scope
+     * chain and strcmp-ing at each level, on every single evaluation. Lexical
+     * scoping means an identifier node resolves to the same relative place
+     * every time, so the interpreter records where it landed (`ic_hops`
+     * parents up, slot `ic_slot`) and revalidates with one strcmp instead of a
+     * search. See interp_expr.c's AST_IDENTIFIER case. */
+    uint32_t ic_hops;
+    uint32_t ic_slot;
+    bool ic_valid;
 };
 
 ast_node_t *ast_new(arena_t *a, ast_kind_t kind, const src_span_t *span);

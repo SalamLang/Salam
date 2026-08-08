@@ -2854,6 +2854,44 @@ func extern_seen(v &: Lv, name: str): bool:
 end
 
 // ll_emit_externs_in
+// A function of this name that some package declares *with* a body, if
+// any; -1 when none does. A bodyless `extern:` re-declaration is how one
+// package calls another's runtime entry point - std/collections re-declares
+// `noret func salam_panic(msg: str)` so its bounds checks can call it,
+// while the real body lives in std/core. Both are SYM_FUNCs of the same
+// name, and which one a given emission order reached first decided whether
+// the module got a definition or only a declaration.
+func body_sig_for(s &: sm.Sema, a &: at.Ast, name: str, owner &: int): int:
+    mut pi := 0
+    until pi < sm.PackageCount(s):
+        pk := sm.PackageAt(s, pi)
+        pi += 1
+        if pk == 0 || sm.SymAt(s, pk).kind != sm.SYM_PACKAGE:
+            continue
+        end
+        mems := sm.SymAt(s, pk).members
+        if mems == 0:
+            continue
+        end
+        fs := sm.LookupLocal(s, mems, name)
+        if fs == 0 || sm.SymAt(s, fs).kind != sm.SYM_FUNC:
+            continue
+        end
+        ov := sm.SymAt(s, fs).overloads
+        mut o := 0
+        until o < ov.len():
+            sgid := ov.get(o)[0]
+            o += 1
+            d := sm.SigAt(s, sgid).decl
+            if d != 0 && at.Get(a, d).a != 0:
+                owner = pk
+                ret sgid
+            end
+        end
+    end
+    ret 0 - 1
+end
+
 func emit_externs_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
     syms := sm.ScopeAt(s, gsc).symbols
     repeat syms.len() with i:
@@ -2881,6 +2919,19 @@ func emit_externs_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
                 if str.Equals(sy.name, v.emitted.get(ke)[0]):
                     skip = true
                 end
+            end
+        end
+        // Emit the body instead of a declaration whenever one exists, so
+        // the outcome no longer depends on which package is walked first.
+        // Without this, `salam_panic` was declared (from collections) and
+        // never defined (from core) in any program where collections was
+        // reached first - every Vector bounds check then failed to link.
+        if !skip:
+            mut bowner := 0
+            bsig := body_sig_for(s, a, sy.name, bowner)
+            if bsig >= 0:
+                ensure_fn(v, s, a, sm.SigAt(s, bsig).decl, 0, sm.SymAt(s, bowner).members)
+                skip = true
             end
         end
         if !skip:
@@ -4600,6 +4651,10 @@ func call_intrinsic(
     end
     if str.Equals(nm, "input") && na == 0:
         ret call_runtime(v, s, a, n, "salam_input", 0, out2)
+    end
+    // open(path, mode) -> std/fs's salam_open, the File* constructor.
+    if str.Equals(nm, "open") && na == 2:
+        ret call_runtime(v, s, a, n, "salam_open", 0, out2)
     end
     if str.Equals(nm, "lang") && na == 0:
         out2 = make_llv(strconst(v, i18.Lang()), "str")

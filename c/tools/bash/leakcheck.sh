@@ -105,6 +105,12 @@ ASAN_BUILD_DIR=build/asan
 # ---------------------------------------------------------------------------
 if [ "$DO_BUILD" -eq 1 ]; then
     echo "== building ASan salam ($ASAN_BUILD_DIR/salam) =="
+    # EXTRA_LDFLAGS, never LDFLAGS: a `make LDFLAGS=...` command-line
+    # assignment OVERRIDES the Makefile's own `LDFLAGS += $(llvm-config
+    # --ldflags)`, so a WITH_LLVM=1 build would lose -L/usr/lib/llvm-NN/lib
+    # and fail to find every single -lLLVM*. EXTRA_LDFLAGS exists on the link
+    # line beside LDFLAGS for exactly this. CFLAGS is safe to override,
+    # because nothing in the Makefile appends to it after the `?=`.
     ASAN_CFLAGS="-O1 -g -fsanitize=address -fno-omit-frame-pointer"
     ASAN_CFLAGS="$ASAN_CFLAGS -std=gnu89 -Wall -Wextra -Wno-unused-parameter"
     ASAN_CFLAGS="$ASAN_CFLAGS -Wno-unused-function -Wno-unused-variable"
@@ -113,7 +119,7 @@ if [ "$DO_BUILD" -eq 1 ]; then
         LLVM_CONFIG="${LLVM_CONFIG:-llvm-config}" \
         WITH_LLVM="${WITH_LLVM:-0}" WITH_LLD="${WITH_LLD:-0}" \
         BUILD_DIR="$ASAN_BUILD_DIR" OUTDIR="$CDIR/$ASAN_BUILD_DIR" \
-        CFLAGS="$ASAN_CFLAGS" LDFLAGS="-fsanitize=address" ||
+        CFLAGS="$ASAN_CFLAGS" EXTRA_LDFLAGS="-fsanitize=address" ||
         {
             echo "leakcheck: ASan build failed" >&2
             exit 1

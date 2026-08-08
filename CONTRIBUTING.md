@@ -30,6 +30,7 @@ Welcome to Salam! We're glad you're interested in contributing to our open-sourc
     - [Useful hook commands](#useful-hook-commands)
     - [Hook priority in this repository](#hook-priority-in-this-repository)
 - [⚙️ Continuous Integration](#-continuous-integration)
+  - [🧪 Memory leak checks](#-memory-leak-checks)
 - [💬 Feedback and Support](#-feedback-and-support)
 
 <!-- END doctoc -->

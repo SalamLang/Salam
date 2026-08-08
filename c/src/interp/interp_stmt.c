@@ -49,7 +49,7 @@ iloc_t interp_resolve_loc(interp_t *I, env_t *env, ast_node_t *target)
     loc.target = target;
 
     if (target->kind == AST_IDENTIFIER) {
-        binding_t *b = env_find(env, target->name);
+        binding_t *b = env_find_cached(env, target);
         if (b) {
             loc.kind = ILOC_VAR;
             loc.b = b;
@@ -202,8 +202,7 @@ flow_t exec_list(interp_t *I, env_t *env, frame_t *fr, vec_t *list, value_t *ret
  * pool afterwards. This is the shape every non-looping construct that opens a
  * scope wants: a block, a taken `if` branch, a match arm. The scope is only
  * recycled when nothing captured it, exactly as in loop_env_next. */
-static flow_t exec_scoped(interp_t *I, env_t *env, frame_t *fr, vec_t *list,
-                          value_t *ret)
+static flow_t exec_scoped(interp_t *I, env_t *env, frame_t *fr, vec_t *list, value_t *ret)
 {
     unsigned long long esc0 = I->env_escapes;
     env_t *c = env_acquire(I, env);

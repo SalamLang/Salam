@@ -377,7 +377,7 @@ static value_t eval_node(interp_t *I, env_t *env, ast_node_t *n)
             return val_null();
         }
     case AST_IDENTIFIER: {
-        binding_t *b = env_find(env, n->name);
+        binding_t *b = env_find_cached(env, n);
         if (b) return b->val;
 
         binding_t *self = env_find(env, "this");

@@ -172,6 +172,8 @@ binding_t *env_find_local(env_t *e, const char *name);
 
 binding_t *env_find(env_t *e, const char *name);
 
+binding_t *env_find_cached(env_t *e, ast_node_t *n);
+
 void env_define(interp_t *I, env_t *e, const char *name, value_t v);
 
 ast_node_t *find_struct(interp_t *I, const char *name);

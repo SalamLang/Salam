@@ -97,22 +97,9 @@ jobs:
           retention-days: 7
 
   c-compiler-llvm:
-    name: C compiler - leaks with the in-process LLVM backend (reporting)
+    name: C compiler - zero leaks with the in-process LLVM backend
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # Non-blocking on its first landing, same as compiler-selfhost.yml keeps
-    # macOS visible without letting it gate the branch. Reason: the two
-    # `leak:llvm::`/`leak:lld::` suppressions match on a demangled C++ frame,
-    # and LLVM's *C* API entry points (LLVMCreateBuilderInContext and friends,
-    # which is all c/src/llvm/*.c calls) may allocate without any such frame in
-    # the stack. Whether that set is sufficient can only be established from a
-    # real run against a complete llvm-22-dev - it could not be verified on the
-    # machine this job was written on, whose LLVM packages are missing several
-    # target archives, and a hard gate that has never been observed green is a
-    # broken branch waiting to happen. Once this has a few green runs, delete
-    # `continue-on-error` and rename it back to "zero leaks"; if it is red for
-    # LLVM's own allocations, widen c/tools/lsan.supp instead.
-    continue-on-error: true
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -146,9 +133,18 @@ jobs:
           test -x c/build/asan/salam
           ./c/build/asan/salam version
 
-      # Only the sections the C-backend job cannot reach: `llvm` exercises the
-      # IR path end to end (emit + JIT), and the sweep covers the rest of the
-      # CLI surface with the LLVM code linked in.
+      # Only what the C-backend job cannot reach: the `llvm` section drives the
+      # IR path end to end (emit + JIT), and leakcheck-sweep.sh then walks the
+      # whole CLI surface with 111k LLVM symbols statically linked in. The
+      # sweep is the part that always runs - run-tests.sh SKIPS the llvm
+      # section when its `salam llvm --jit` probe does not answer, so if the
+      # JIT ever stops working here this step reports clean on the sweep
+      # alone. Watch the log for "SKIP llvm/en/*" if that matters to you.
+      #
+      # If this job is ever red for LLVM's own allocations rather than
+      # salam's, widen the `leak:llvm::` entry in c/tools/lsan.supp - the
+      # reports are uploaded as an artifact below. It was green locally
+      # against a statically linked LLVM 18 (0 reports over the sweep).
       - name: Run the LLVM sections under LeakSanitizer
         run: |
           set -eu

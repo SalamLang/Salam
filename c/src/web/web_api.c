@@ -32,6 +32,8 @@
 #include "token/token.h"
 #include "codegen/codegen.h"
 #include "llvm/codegen_llvm.h"
+#include "driver/js_build.h"
+#include "cli/options.h"
 #ifdef __EMSCRIPTEN__
 #  include <emscripten.h>
 #else
@@ -178,7 +180,8 @@ const char *salam_web_run_app(const char *source, const char *lang)
         return r;
     }
     FILE *outf = tmpfile();
-    interp_options_t io = {outf ? outf : stdout, outf ? outf : stderr, NULL, lang, 3000, NULL, NULL};
+    interp_options_t io = {
+        outf ? outf : stdout, outf ? outf : stderr, NULL, lang, 3000, NULL, NULL};
     interp_run(arena, log, program, sema, entry, &io);
     char *out = outf ? slurp(outf) : strdup("");
     char *errs = diagf ? slurp(diagf) : strdup("");
@@ -198,6 +201,83 @@ const char *salam_web_run_app(const char *source, const char *lang)
     if (diagf) fclose(diagf);
     arena_free(arena);
     return r;
+}
+
+/* salam_web_compile_js - compile `source` to a self-contained JavaScript
+ * program the page can execute directly.
+ *
+ * salam_web_run_app interprets, which is fine for a program that prints a
+ * result and stops but not for one that animates: the tree-walking
+ * interpreter renders a donut frame in about 250 ms, where the same program
+ * compiled to JavaScript renders one in about 17 ms. That is the difference
+ * between 4 and 57 frames a second, so anything interactive goes through here
+ * and the interpreter stays the fallback for programs jsgen cannot compile.
+ *
+ * The bundler works from files rather than a string, and it already resolves
+ * imports through the preloaded /std image, so the source is staged as a file
+ * and handed over unchanged. Returns the JavaScript on success. On failure it
+ * returns the diagnostics, which the caller distinguishes by the "//!salam-error"
+ * first line rather than by pattern-matching localized prose. */
+EMSCRIPTEN_KEEPALIVE
+const char *salam_web_compile_js(const char *source, const char *lang)
+{
+    static const char *kErrLead = "//!salam-error\n";
+    arena_t *arena = arena_new(1 << 20);
+    FILE *diagf = tmpfile();
+    logger_t *log = logger_new(diagf ? diagf : stderr, LOG_WARN, false);
+    const char *js = NULL;
+    const char *module = NULL;
+    int rc = 0;
+    options_t opt;
+    const char *entries[1];
+
+    {
+        FILE *f = fopen("/main.salam", "wb");
+        if (!f) {
+            logger_free(log);
+            if (diagf) fclose(diagf);
+            arena_free(arena);
+            return set_result("//!salam-error\ncannot stage the program source");
+        }
+        if (source && source[0]) fwrite(source, 1, strlen(source), f);
+        fclose(f);
+    }
+
+    memset(&opt, 0, sizeof opt);
+    opt.lang = lang;
+    opt.stdlib_path = NULL;
+    opt.diag_style = DIAG_STYLE_RUST;
+    opt.diag_format = DIAG_FORMAT_HUMAN;
+    /* Readable output: the page hands this to the JS engine, and a stack trace
+     * that points at one-letter names is useless when a program misbehaves. */
+    opt.no_minify = true;
+    opt.no_js_minify_names = true;
+    entries[0] = "/main.salam";
+
+    {
+        vec_t pkg_cache;
+        vec_init(&pkg_cache);
+        js = js_build_bundle(arena, log, &opt, entries, 1, &module, &rc, &pkg_cache);
+    }
+
+    {
+        const char *r;
+        if (!js || rc != 0) {
+            char *d = slurp(diagf);
+            sb_t b;
+            sb_init(&b);
+            sb_puts(&b, kErrLead);
+            sb_puts(&b, (d && d[0]) ? d : i18n_tr("compilation failed"));
+            r = set_result(sb_cstr(&b));
+            sb_free(&b);
+            free(d);
+        } else
+            r = set_result(js);
+        logger_free(log);
+        if (diagf) fclose(diagf);
+        arena_free(arena);
+        return r;
+    }
 }
 
 EMSCRIPTEN_KEEPALIVE

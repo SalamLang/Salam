@@ -241,6 +241,55 @@ binding_t *env_find(env_t *e, const char *name)
     return NULL;
 }
 
+/* env_find, but remembering where the answer was for next time.
+ *
+ * The plain walk compares `name` against every binding of every enclosing
+ * scope, which is the interpreter's single hottest operation: a donut inner
+ * loop touches two globals that sit five scopes up, 28k times a frame. Names
+ * are resolved and checked by sema before this runs, so an identifier node
+ * refers to one fixed declaration and therefore lands the same number of hops
+ * up the chain on every evaluation. Recording (hops, slot) turns the repeat
+ * lookups into a few pointer derefs plus one strcmp.
+ *
+ * The strcmp is the guard, not an optimisation: scopes are reused and refilled
+ * (env_reset), so a slot can hold a different binding than it did last time.
+ * Any mismatch just falls back to the full search and re-records. */
+binding_t *env_find_cached(env_t *e, ast_node_t *n)
+{
+    if (n->ic_valid) {
+        env_t *t = e;
+        uint32_t k = n->ic_hops;
+        while (k && t) {
+            t = t->parent;
+            k--;
+        }
+        if (!k && t && n->ic_slot < t->bindings.len) {
+            binding_t *b = (binding_t *)t->bindings.data[n->ic_slot];
+            if (strcmp(b->name, n->name) == 0) return b;
+        }
+    }
+    {
+        uint32_t hops = 0;
+        env_t *t = e;
+        for (; t; t = t->parent, hops++) {
+            binding_t *b = env_find_local(t, n->name);
+            if (!b) continue;
+            {
+                size_t i = 0;
+                for (; i < t->bindings.len; i++)
+                    if ((binding_t *)t->bindings.data[i] == b) {
+                        n->ic_hops = hops;
+                        n->ic_slot = (uint32_t)i;
+                        n->ic_valid = true;
+                        break;
+                    }
+            }
+            return b;
+        }
+    }
+    return NULL;
+}
+
 void env_define(interp_t *I, env_t *e, const char *name, value_t v)
 {
     binding_t *b = env_find_local(e, name);
@@ -454,8 +503,8 @@ static void collect_decls(interp_t *I, ast_node_t *program)
                  * indexing null is not an lvalue: `buf[i] = x` failed with
                  * "value is not index-assignable" even though the C and LLVM
                  * backends both zero-fill the array. */
-                value_t v = d->a ? eval(I, I->globals, d->a)
-                                 : default_for_type(I, d->type_str);
+                value_t v =
+                    d->a ? eval(I, I->globals, d->a) : default_for_type(I, d->type_str);
                 env_define(I, I->globals, d->name, v);
                 break;
             }

@@ -1,0 +1,86 @@
+#
+# The readiness gate for the LLVM backend.
+#
+# Compiling the compiler with itself is a far stronger test than the test
+# corpus: `tests/en` has 802 files and reported zero codegen errors while
+# `salam build compiler/main.salam --backend=llvm` was still finding real
+# bugs - ten of them, including a runtime entry point that was declared but
+# never defined (salam_panic), a missing `open` builtin, and argv globals
+# that were never emitted. None of those were reachable from the corpus.
+#
+# So "the LLVM backend is ready" means this job is green, not that the
+# sweep is clean.
+#
+# NOTE: `verify` is continue-on-error while the produced compiler still
+# hangs at startup (it builds and links; running it never returns). Flip
+# continue-on-error to false the moment that is fixed - that is the whole
+# point of this workflow, and leaving it soft indefinitely defeats it.
+#
+name: LLVM self-host gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "c/src/llvm/**"
+      - "c/src/semantic/**"
+      - "compiler/llvmgen.salam"
+      - "compiler/semantic.salam"
+      - "std/**"
+      - ".github/workflows/llvm-selfhost-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: llvm-selfhost-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM and lld
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-dev liblld-dev libzstd-dev zlib1g-dev
+
+      - name: Build the C compiler with LLVM in-process
+        run: make -C c -j"$(nproc)" WITH_LLVM=1 WITH_LLD=1
+
+      - name: Backend must compile the whole corpus
+        run: |
+          fail=0
+          for f in $(find tests/en -name '*.salam' | sort); do
+            if ./salam llvm "$f" --output=/tmp/gate.ll 2>&1 | grep -q 'CODEGEN.*ERROR'; then
+              echo "codegen FAIL: $f"
+              fail=$((fail + 1))
+            fi
+          done
+          echo "codegen failures: $fail"
+          test "$fail" -eq 0
+
+      - name: Build the self-hosted compiler through the LLVM backend
+        run: |
+          ./salam build compiler/main.salam --backend=llvm --output=/tmp/selfhost-llvm
+          test -s /tmp/selfhost-llvm
+
+      # The actual gate: a compiler that builds but cannot run is not a
+      # compiler. `version` is the cheapest command that still exercises
+      # startup, argv, the layout-schema load and the output path.
+      - name: Produced compiler must actually run
+        continue-on-error: true
+        run: |
+          timeout 120 /tmp/selfhost-llvm version | tee /tmp/gate-version.txt
+          grep -q '^salam ' /tmp/gate-version.txt
+
+      - name: Produced compiler must compile and run a program
+        continue-on-error: true
+        run: |
+          timeout 300 /tmp/selfhost-llvm build tests/en/llvm/ll_fib.salam --output=/tmp/gate-fib
+          diff <(/tmp/gate-fib) tests/en/llvm/ll_fib.out

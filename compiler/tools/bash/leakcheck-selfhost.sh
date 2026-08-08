@@ -14,9 +14,12 @@
 # leaked allocations that CI enforces and that only ever moves down. A fix
 # shows up as "budget can be lowered"; a regression fails the job.
 #
-# The counts are exactly reproducible - the same binary on the same corpus
-# leaks the same number of blocks every run - so the ratchet is a real signal,
-# not a threshold with slack tuned to hide noise.
+# The counts are reproducible to the allocation on any one machine - the same
+# binary leaks the same number of blocks every run - so the ratchet is a real
+# signal rather than a threshold tuned to hide noise. They do drift by a few
+# dozen BETWEEN machines, because the compiler allocates while walking
+# absolute paths and no two checkouts sit at the same depth; the budgets
+# therefore carry ~2% headroom and the "lower it" nag has a 5% deadband.
 #
 # Usage:
 #   compiler/tools/bash/leakcheck-selfhost.sh <asan-selfhosted-salam> [budget-file]
@@ -118,16 +121,26 @@ run_case() {
         MISSING=$((MISSING + 1))
         return
     fi
+    # The nag threshold is 5% below the budget, not "one allocation below".
+    # Repeated runs of one binary on one machine are bit-identical, but the
+    # count moves by a few dozen between MACHINES - the compiler allocates
+    # while walking absolute paths, and /home/runner/work/Salam/Salam is not
+    # the same length as anyone's checkout. Budgets therefore carry ~2%
+    # headroom, and only a real improvement (past that headroom) should ask
+    # to be ratcheted down.
+    slack=$((want / 20))
+    [ "$slack" -lt 50 ] && slack=50
     if [ "$allocs" -gt "$want" ]; then
         printf '  %-14s %9s B  %7s allocs   OVER budget %s\n' \
             "$name" "$bytes" "$allocs" "$want"
         OVER=$((OVER + 1))
-    elif [ "$allocs" -lt "$want" ]; then
-        printf '  %-14s %9s B  %7s allocs   under budget %s - lower it\n' \
+    elif [ "$allocs" -lt $((want - slack)) ]; then
+        printf '  %-14s %9s B  %7s allocs   well under budget %s - lower it\n' \
             "$name" "$bytes" "$allocs" "$want"
         UNDER=$((UNDER + 1))
     else
-        printf '  %-14s %9s B  %7s allocs   at budget\n' "$name" "$bytes" "$allocs"
+        printf '  %-14s %9s B  %7s allocs   within budget %s\n' \
+            "$name" "$bytes" "$allocs" "$want"
     fi
 }
 

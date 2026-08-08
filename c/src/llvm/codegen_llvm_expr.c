@@ -1306,6 +1306,9 @@ static bool ll_call_intrinsic(ll_t *ll, ast_node_t *n, const char *nm, llv_t *ou
         return ll_call_vec_str(ll, n, "salam_os_listdir", NULL, out);
     if (!strcmp(nm, "input") && na == 0)
         return ll_call_runtime(ll, n, "salam_input", NULL, out);
+    /* open(path, mode) -> std/fs's salam_open, the File* constructor. */
+    if (!strcmp(nm, "open") && na == 2)
+        return ll_call_runtime(ll, n, "salam_open", NULL, out);
     if (!strcmp(nm, "lang") && na == 0) {
         *out = (llv_t){ll_strconst(ll, i18n_lang()), "str"};
         return true;

@@ -43,6 +43,16 @@ static const js_seg_t k_prelude[] = {
      "function __salam_unsupported(what) {\n"
      "    throw new Error(\"not supported in the browser build: \" + what);\n"
      "}\n"},
+    /* Backs `s as i8*` / `as void*`. JavaScript has no pointers, so such a cast
+     * used to pass the string through untouched and `p[i]` then produced a
+     * one-character string that every caller coerced to 0 - std/str's
+     * TrimRight, for instance, quietly stopped trimming anything. Handing back
+     * the UTF-8 bytes makes `p[i]` the byte the Salam side is written against.
+     * Note str.len() still counts UTF-16 units here, so callers that pair the
+     * two agree on ASCII and can still disagree beyond it. */
+    {"__salam_str_bytes", "function __salam_str_bytes(s) {\n"
+                          "    return new TextEncoder().encode(String(s));\n"
+                          "}\n"},
     {"salam_input",
      "function salam_input() {\n"
      "    return typeof prompt === \"function\" ? String(prompt(\"\") || \"\") : "

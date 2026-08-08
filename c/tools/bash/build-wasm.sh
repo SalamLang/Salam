@@ -70,9 +70,14 @@ mkdir -p "$STD_MIN"
 "$SALAM" format --minify -r "$STD_MIN" >/dev/null
 echo "staged minified stdlib preload image at $STD_MIN"
 SRC_DIRS="core source logger xml condcomp token langpack i18n lexer ast parser
-        diag semantic interp layout minify codegen llvm web"
+        diag semantic interp layout minify codegen llvm jsgen web"
 SRCS=""
 for d in $SRC_DIRS; do SRCS="$SRCS src/$d/*.c"; done
+# js_build.c only, not all of src/driver: it is the bundler that turns jsgen's
+# per-module output into one runnable program (prelude, globals, entry call),
+# which is exactly what salam_web_compile_js needs. The rest of the driver
+# shells out to a C toolchain and has no meaning in the browser.
+SRCS="$SRCS src/driver/js_build.c"
 # shellcheck disable=SC2086
 "$EMCC" -O2 -Isrc $SRCS \
     -o "$OUT_DIR/salam-wa.js" \
@@ -85,7 +90,7 @@ for d in $SRC_DIRS; do SRCS="$SRCS src/$d/*.c"; done
     -s EXIT_RUNTIME=0 \
     -s IGNORE_MISSING_MAIN=1 \
     -s FILESYSTEM=1 \
-    -s EXPORTED_FUNCTIONS="['_salam_web_run_app','_salam_web_build_layout','_salam_web_emit','_salam_web_syntax_ok','_salam_web_version','_malloc','_free']" \
+    -s EXPORTED_FUNCTIONS="['_salam_web_run_app','_salam_web_compile_js','_salam_web_build_layout','_salam_web_emit','_salam_web_syntax_ok','_salam_web_version','_malloc','_free']" \
     -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']"
 echo "built $OUT_DIR/salam-wa.js (+ .wasm, .data)"
 "$SALAM" web "$OUT_DIR/page.salam" --output="$OUT_DIR/index.html"

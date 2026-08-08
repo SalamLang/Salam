@@ -171,8 +171,16 @@ ifeq ($(WITH_LLVM),1)
           | tr ' ' '\n' | grep -viE 'zstd' | tr '\n' ' ') $(MACOS_ZSTD_A)
     endif
   endif
-  LDLIBS   += $(LLD_LIBS) \
-              $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --libs $(LLVM_COMPONENTS)) \
+  # Polly is dropped for the same reason as z3 above, but the failure mode
+  # is the reverse: Debian/Ubuntu's llvm-N packages register Polly as a
+  # component, so `llvm-config --libs all` emits -lPolly -lPollyISL, while
+  # the static archives live in a separate package that is usually absent
+  # ("cannot find -lPolly"). Polly is LLVM's polyhedral loop optimizer,
+  # reached only through an opt-in pass pipeline that salam never requests,
+  # so no object here references a Polly symbol.
+  LLVM_COMPONENT_LIBS := $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --libs $(LLVM_COMPONENTS) \
+      | tr ' ' '\n' | grep -viE '^-l(Polly|PollyISL)$$' | tr '\n' ' ')
+  LDLIBS   += $(LLD_LIBS) $(LLVM_COMPONENT_LIBS) \
               $(LLVM_SYSTEM_LIBS) $(LLVM_CXXLIB)
   ifeq ($(IS_WINDOWS),1)
     ifeq ($(WITH_LLD),1)
@@ -347,18 +355,26 @@ $(BUILD_DIR)/%.o: src/%.cc $(CONFIG_STAMP)
 # Build with: make libsalam-llvm
 #
 LLVM_MERGE_LIBS = $(shell $(LLVM_CONFIG) --link-static --libs all 2>/dev/null) $(LLD_LIBS)
+
+# Salam's own C shims that std/llvm binds to. llvm_native.o and lld_link.o
+# carry salam_llvm_native/salam_lld_link; orc_call.o carries
+# salam_orc_call_main plus the salam_llvm_init_all_* wrappers around LLVM-C's
+# header-inline target initializers (see orc_call.h). Omitting orc_call.o
+# left both undefined at link time.
+LLVM_MERGE_SHIMS = $(BUILD_DIR)/llvm/llvm_native.o $(BUILD_DIR)/llvm/orc_call.o \
+                   $(CXXOBJS) $(WIN_LLD_SHIM_OBJS)
 LLVM_MERGE_DIR  = $(BUILD_DIR)/merge
 SALAM_LLVM_A    = $(OUTDIR)/libsalam_llvm.a
 
 .PHONY: libsalam-llvm
-libsalam-llvm: $(BUILD_DIR)/llvm/llvm_native.o $(CXXOBJS) $(WIN_LLD_SHIM_OBJS)
+libsalam-llvm: $(LLVM_MERGE_SHIMS)
 	@test "$(WITH_LLVM)$(WITH_LLD)" = "11" \
 	  || { echo "libsalam-llvm needs WITH_LLVM=1 WITH_LLD=1 (llvm-config: $(LLVM_CONFIG))"; exit 1; }
 	@rm -rf $(LLVM_MERGE_DIR); mkdir -p $(LLVM_MERGE_DIR)
 	@LIBDIR=$$($(LLVM_CONFIG) --libdir); \
 	 : > $(LLVM_MERGE_DIR)/mri; \
 	 echo "create $(SALAM_LLVM_A)" >> $(LLVM_MERGE_DIR)/mri; \
-	 for o in $(BUILD_DIR)/llvm/llvm_native.o $(CXXOBJS) $(WIN_LLD_SHIM_OBJS); do \
+	 for o in $(LLVM_MERGE_SHIMS); do \
 	   echo "addmod $$o" >> $(LLVM_MERGE_DIR)/mri; \
 	 done; \
 	 n=0; \

@@ -2211,6 +2211,20 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
     saved_tmp := v.tmp
     saved_lbl := v.lbl
     saved_nloop := v.nloop
+    // The break/continue target stacks, not just their depth. A
+    // function can be emitted *nested* inside another's body
+    // (ensure_fn fires while lowering a call expression), and the
+    // nested emission resets nloop to 0 and then writes brk[0]/cont[0]
+    // for its own loops - which are the outer function's live
+    // entries. The outer `continue` then branched to a label
+    // belonging to the inner function and never defined in its own,
+    // producing IR that fails to parse.
+    mut saved_brk := Vector {} as Vector<str>
+    mut saved_cont := Vector {} as Vector<str>
+    repeat saved_nloop with sbi:
+        saved_brk.push(v.brk.get(sbi)[0])
+        saved_cont.push(v.cont.get(sbi)[0])
+    end
     saved_main := v.is_main
     saved_byval := v.self_byval
     saved_term := v.term
@@ -2272,6 +2286,12 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
     v.tmp = saved_tmp
     v.lbl = saved_lbl
     v.nloop = saved_nloop
+    repeat saved_nloop with rbi:
+        v.brk.set(rbi, saved_brk.get(rbi)[0])
+        v.cont.set(rbi, saved_cont.get(rbi)[0])
+    end
+    saved_brk.free()
+    saved_cont.free()
     v.is_main = saved_main
     v.ret_ts = saved_ret
     v.self_byval = saved_byval
@@ -2536,6 +2556,15 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     saved_tmp := v.tmp
     saved_lbl := v.lbl
     saved_nloop := v.nloop
+    // Same reasoning as the function emitter above: a lambda body is
+    // emitted nested inside whatever was being lowered, so the outer
+    // loops' live break/continue targets must survive it.
+    mut saved_brk2 := Vector {} as Vector<str>
+    mut saved_cont2 := Vector {} as Vector<str>
+    repeat saved_nloop with sbi2:
+        saved_brk2.push(v.brk.get(sbi2)[0])
+        saved_cont2.push(v.cont.get(sbi2)[0])
+    end
     saved_main := v.is_main
     saved_term := v.term
     saved_ret := v.ret_ts
@@ -2624,6 +2653,12 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     v.tmp = saved_tmp
     v.lbl = saved_lbl
     v.nloop = saved_nloop
+    repeat saved_nloop with rbi2:
+        v.brk.set(rbi2, saved_brk2.get(rbi2)[0])
+        v.cont.set(rbi2, saved_cont2.get(rbi2)[0])
+    end
+    saved_brk2.free()
+    saved_cont2.free()
     v.is_main = saved_main
     v.term = saved_term
     v.ret_ts = saved_ret

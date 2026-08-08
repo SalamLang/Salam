@@ -42,6 +42,15 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     saved_tmp := v.tmp
     saved_lbl := v.lbl
     saved_nloop := v.nloop
+    // Same reasoning as the function emitter: a lambda body is
+    // emitted nested inside whatever was being lowered, so the outer
+    // loops' live break/continue targets must survive it.
+    mut saved_brk2 := Vector {} as Vector<str>
+    mut saved_cont2 := Vector {} as Vector<str>
+    repeat saved_nloop with sbi2:
+        saved_brk2.push(v.brk.get(sbi2)[0])
+        saved_cont2.push(v.cont.get(sbi2)[0])
+    end
     saved_main := v.is_main
     saved_term := v.term
     saved_ret := v.ret_ts
@@ -130,6 +139,12 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     v.tmp = saved_tmp
     v.lbl = saved_lbl
     v.nloop = saved_nloop
+    repeat saved_nloop with rbi2:
+        v.brk.set(rbi2, saved_brk2.get(rbi2)[0])
+        v.cont.set(rbi2, saved_cont2.get(rbi2)[0])
+    end
+    saved_brk2.free()
+    saved_cont2.free()
     v.is_main = saved_main
     v.term = saved_term
     v.ret_ts = saved_ret
@@ -312,9 +327,32 @@ func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
     until i < at.ChildCount(a, program):
         d := at.Child(a, program, i)
         dn := at.Get(a, d)
-        skip := (
-            dn.kind != at.AST_CONST_DECL && dn.kind != at.AST_VAR_DECL
-        ) || dn.is_extern
+        mut skip := dn.kind != at.AST_CONST_DECL && dn.kind != at.AST_VAR_DECL
+        // Idempotent: emitting the same global twice would produce a
+        // duplicate definition in the module. This lets the function be
+        // called again for a package whose globals may or may not have been
+        // emitted already, which lv_addr_of relies on.
+        if !skip && global_find(v, dn.name) >= 0:
+            skip = true
+        end
+        // An extern *variable* - POSIX `environ`, which std/os/process
+        // declares in its non-Windows branch. emit_externs_in only handles
+        // SYM_FUNC and this loop used to skip is_extern outright, so nothing
+        // emitted these at all and every reference became "address of an
+        // unknown identifier 'environ'". Declared under its real C name,
+        // never the @g. prefix: the system linker is what resolves it.
+        if !skip && dn.is_extern:
+            ets := str.Len(dn.type_str) > 0 ? dn.type_str : "i32"
+            eref := "@" + dn.name
+            out_g(v, eref + " = external global " + ty_of(v, s, a, ets) + "\n")
+            mut ev := LvVar {}
+            ev.name = dn.name
+            ev.ptr = eref
+            ev.ts = ets
+            v.globals.push(ev)
+            any = true
+            skip = true
+        end
         if !skip:
             ts := str.Len(dn.type_str) > 0 ? dn.type_str : "i32"
             gref := "@g." + str.TrimPrefix(struct_ltype(dn.name), "%struct.")
@@ -359,6 +397,44 @@ func extern_seen(v &: Lv, name: str): bool:
     ret false
 end
 
+// A function of this name that some package declares *with* a body, if
+// any; -1 when none does. A bodyless `extern:` re-declaration is how one
+// package calls another's runtime entry point - std/collections redeclares
+// `noret func salam_panic(msg: str)` so its bounds checks can call it,
+// while the real body lives in std/core. Both are SYM_FUNCs of the same
+// name, and which one a given emission order reached first decided whether
+// the module got a definition or only a declaration.
+func body_sig_for(s &: sm.Sema, a &: at.Ast, name: str, owner &: int): int:
+    mut pi := 0
+    until pi < sm.PackageCount(s):
+        pk := sm.PackageAt(s, pi)
+        pi += 1
+        if pk == 0 || sm.SymAt(s, pk).kind != sm.SYM_PACKAGE:
+            continue
+        end
+        mems := sm.SymAt(s, pk).members
+        if mems == 0:
+            continue
+        end
+        fs := sm.LookupLocal(s, mems, name)
+        if fs == 0 || sm.SymAt(s, fs).kind != sm.SYM_FUNC:
+            continue
+        end
+        ov := sm.SymAt(s, fs).overloads
+        mut o := 0
+        until o < ov.len():
+            sgid := ov.get(o)[0]
+            o += 1
+            d := sm.SigAt(s, sgid).decl
+            if d != 0 && at.Get(a, d).a != 0:
+                owner = pk
+                ret sgid
+            end
+        end
+    end
+    ret 0 - 1
+end
+
 // ll_emit_externs_in
 func emit_externs_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
     syms := sm.ScopeAt(s, gsc).symbols
@@ -387,6 +463,19 @@ func emit_externs_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
                 if str.Equals(sy.name, v.emitted.get(ke)[0]):
                     skip = true
                 end
+            end
+        end
+        // Emit the body instead of a declaration whenever one exists, so
+        // the outcome no longer depends on which package is walked first.
+        // Without this, `salam_panic` was declared (from collections) and
+        // never defined (from core) in any program where collections was
+        // reached first - every Vector bounds check then failed to link.
+        if !skip:
+            mut bowner := 0
+            bsig := body_sig_for(s, a, sy.name, bowner)
+            if bsig >= 0:
+                ensure_fn(v, s, a, sm.SigAt(s, bsig).decl, 0, sm.SymAt(s, bowner).members)
+                skip = true
             end
         end
         if !skip:

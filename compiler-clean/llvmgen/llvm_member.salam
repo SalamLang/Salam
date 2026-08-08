@@ -61,6 +61,38 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
             ra3.ts = gv.ts
             ret ra3
         end
+        // A package's own top-level global reached before anything emitted
+        // it. emit_globals rather than touch_pkg: a package can be recorded
+        // in pkg_touched while these globals were never emitted, so the
+        // touch would short-circuit and change nothing. Emitting straight
+        // from the package's AST is what resolves the name, and it is safe
+        // to repeat now that emit_globals skips names already emitted.
+        //
+        // Whether this path is needed depends on the platform, which is how
+        // it went unnoticed: std/net/internal/rawsock declares a
+        // `_rawsock_wsa_init` global inside `if SALAM_OS_WINDOWS`, and
+        // emitting it got the package touched early, so `AF_INET` and
+        // `SOCK_STREAM` resolved by luck. On Linux that global is condcomp'd
+        // away and every socket program failed to compile.
+        mut pgi := 0
+        until pgi < sm.PackageCount(s):
+            pgk := sm.PackageAt(s, pgi)
+            if pgk != 0:
+                pgy := sm.SymAt(s, pgk)
+                if pgy.kind == sm.SYM_PACKAGE && pgy.decl != 0:
+                    emit_globals(v, s, a, pgy.decl)
+                    pgf := global_find(v, nm)
+                    if pgf >= 0:
+                        pgv := v.globals.get(pgf)[0]
+                        mut ra6 := LvAddr {}
+                        ra6.ptr = pgv.ptr
+                        ra6.ts = pgv.ts
+                        ret ra6
+                    end
+                end
+            end
+            pgi += 1
+        end
         lv_error(v, a, n, "address of an unknown identifier '" + nm + "'")
         mut ra4 := LvAddr {}
         ra4.ptr = "null"

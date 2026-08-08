@@ -171,15 +171,32 @@ ifeq ($(WITH_LLVM),1)
           | tr ' ' '\n' | grep -viE 'zstd' | tr '\n' ' ') $(MACOS_ZSTD_A)
     endif
   endif
-  # Polly is dropped for the same reason as z3 above, but the failure mode
-  # is the reverse: Debian/Ubuntu's llvm-N packages register Polly as a
-  # component, so `llvm-config --libs all` emits -lPolly -lPollyISL, while
-  # the static archives live in a separate package that is usually absent
-  # ("cannot find -lPolly"). Polly is LLVM's polyhedral loop optimizer,
-  # reached only through an opt-in pass pipeline that salam never requests,
-  # so no object here references a Polly symbol.
-  LLVM_COMPONENT_LIBS := $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --libs $(LLVM_COMPONENTS) \
-      | tr ' ' '\n' | grep -viE '^-l(Polly|PollyISL)$$' | tr '\n' ' ')
+  # Polly needs to be kept or dropped depending on the installation, and
+  # both choices are wrong somewhere:
+  #
+  #   Ubuntu's own llvm-18 registers Polly as a component, so `llvm-config
+  #   --libs all` emits -lPolly -lPollyISL, but the static archives live in
+  #   a package that is normally absent -> "cannot find -lPolly".
+  #
+  #   apt.llvm.org's llvm-22 ships libPolly.a *and* builds libLLVMLTO.a
+  #   against it, so LTOBackend.cpp.o calls getPollyPluginInfo() -> dropping
+  #   Polly there gives "undefined reference to getPollyPluginInfo()".
+  #
+  # Testing for the archive is the only rule that is correct on both. Scoped
+  # to Polly deliberately: a blanket "drop every component whose archive is
+  # missing" would silently swallow a genuinely broken LLVM install, and a
+  # mistake in the probe would drop real libraries instead of one optional
+  # optimizer.
+  # The two archives are probed separately: they are advertised as one
+  # component pair but are not guaranteed to be packaged together, and
+  # keeping a -l for a file that is not there is the very failure being
+  # fixed.
+  LLVM_LIBDIR_L := $(shell $(LLVM_CONFIG) --libdir 2>/dev/null)
+  LLVM_DROP_POLLY := $(strip \
+      $(if $(wildcard $(LLVM_LIBDIR_L)/libPolly.a),,-lPolly) \
+      $(if $(wildcard $(LLVM_LIBDIR_L)/libPollyISL.a),,-lPollyISL))
+  LLVM_COMPONENT_LIBS := $(filter-out $(LLVM_DROP_POLLY), \
+      $(shell $(LLVM_CONFIG) $(LLVM_STATIC_FLAG) --libs $(LLVM_COMPONENTS)))
   LDLIBS   += $(LLD_LIBS) $(LLVM_COMPONENT_LIBS) \
               $(LLVM_SYSTEM_LIBS) $(LLVM_CXXLIB)
   ifeq ($(IS_WINDOWS),1)

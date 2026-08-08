@@ -989,13 +989,14 @@ static void ll_declare_extern(ll_t *ll, const char *name, func_sig_t *sig)
         size_t j = 0;
         for (; j < sig->params.len; j++) {
             if (j) sb_puts(&b, ", ");
-            sb_puts(&b,
-                    ll_ty(ll, type_to_string(ll->sem->tc, (type_t *)sig->params.data[j])));
+            sb_puts(&b, ll_ty(ll, type_to_string(ll->sem->tc,
+                                                 (type_t *)sig->params.data[j])));
         }
     }
     if (sig->variadic) sb_puts(&b, sig->params.len ? ", ..." : "...");
     sb_puts(&b, ")");
-    if (sig->decl->is_pure) sb_puts(&b, " nounwind willreturn nofree nosync memory(read)");
+    if (sig->decl->is_pure)
+        sb_puts(&b, " nounwind willreturn nofree nosync memory(read)");
     if (sig->decl->is_noret) sb_puts(&b, " noreturn");
     sb_puts(&b, "\n");
     sb_puts(ll->g, sb_cstr(&b));

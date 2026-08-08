@@ -1021,7 +1021,15 @@ int driver_build(options_t *opt)
             const char *idir = dir_of(arena, path);
             {
                 size_t k = 0;
-                for (; k < program->list.len && nwork < SALAM_MAX_INPUTS; k++) {
+                /* Deliberately no `nwork < SALAM_MAX_INPUTS` guard on the loop
+                   itself. It ended the scan the moment work[] filled, which
+                   dropped every remaining `link` directive in this file and
+                   made the overflow report below unreachable - the body only
+                   runs while nwork is still under the limit, so its
+                   `nwork >= SALAM_MAX_INPUTS` arm could never be taken and the
+                   closure truncated as silently as it did before that report
+                   was added. Every push inside bounds-checks itself. */
+                for (; k < program->list.len; k++) {
                     ast_node_t *d = (ast_node_t *)program->list.data[k];
                     if (d->kind == AST_LINK) {
                         const char *lib = (d->value.kind == TV_STRING && d->value.as.s)

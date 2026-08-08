@@ -433,6 +433,7 @@ value_t mk_closure(interp_t *I, ast_node_t *fn, env_t *env)
     sclosure_t *c = (sclosure_t *)arena_alloc(I->a, sizeof *c);
     c->fn = fn;
     c->env = env;
+    I->env_escapes++; /* `env` now outlives its statement; see env_reset */
     value_t v;
     v.kind = VAL_FUNC;
     v.ity = ITY_NONE;

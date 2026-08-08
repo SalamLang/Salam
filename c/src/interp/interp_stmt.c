@@ -198,6 +198,24 @@ flow_t exec_list(interp_t *I, env_t *env, frame_t *fr, vec_t *list, value_t *ret
     return FLOW_NORMAL;
 }
 
+/* Hand back the scope a loop body should use for its next iteration.
+ *
+ * Reusing one scope for every pass is what keeps a long-running loop from
+ * allocating without bound, but it is only safe while the pass just finished
+ * left no lasting reference to it. `esc0` is I->env_escapes sampled before the
+ * body ran: unchanged means no closure captured the scope and no defer
+ * registered against it, so its bindings can be dropped and its storage
+ * refilled. Otherwise something still points at those bindings and the next
+ * iteration has to start from a fresh scope, which is also what gives each
+ * iteration its own captured variable. */
+static env_t *loop_env_next(interp_t *I, env_t *parent, env_t *cur,
+                            unsigned long long esc0)
+{
+    if (I->env_escapes != esc0) return env_new(I, parent);
+    env_reset(cur);
+    return cur;
+}
+
 flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *ret)
 {
     tick(I);
@@ -261,7 +279,8 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
         }
         return FLOW_NORMAL;
     }
-    case AST_UNTIL:
+    case AST_UNTIL: {
+        env_t *c = env_new(I, env);
         for (;;) {
             flow_t pf;
             bool cond;
@@ -270,13 +289,15 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
             if (take_pending_flow(I, &pf)) return pf;
             if (!cond) break;
             {
-                env_t *c = env_new(I, env);
+                unsigned long long esc0 = I->env_escapes;
                 flow_t f = exec_list(I, c, fr, &n->b->list, ret);
                 if (f == FLOW_RETURN) return f;
                 if (f == FLOW_BREAK) break;
+                c = loop_env_next(I, env, c, esc0);
             }
         }
         return FLOW_NORMAL;
+    }
     case AST_REPEAT: {
 #define REP_NUM(NODE, OUT, WHAT)                                                         \
     do {                                                                                 \
@@ -312,19 +333,22 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
 #undef REP_NUM
         {
             int64_t k = start;
+            env_t *c = env_new(I, env);
             for (; (step > 0) ? (k <= end) : (k >= end); k += step) {
+                unsigned long long esc0 = I->env_escapes;
                 tick(I);
-                env_t *c = env_new(I, env);
                 if (n->name) env_define(I, c, n->name, val_int(k));
                 flow_t f = exec_list(I, c, fr, &n->b->list, ret);
                 if (f == FLOW_RETURN) return f;
                 if (f == FLOW_BREAK) break;
+                c = loop_env_next(I, env, c, esc0);
             }
         }
         return FLOW_NORMAL;
     }
     case AST_FOR: {
         env_t *loop = env_new(I, env);
+        env_t *c = env_new(I, loop);
         if (n->a) exec_stmt(I, loop, fr, n->a, ret);
         for (;;) {
             flow_t pf;
@@ -334,10 +358,11 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
             if (take_pending_flow(I, &pf)) return pf;
             if (!cond) break;
             {
-                env_t *c = env_new(I, loop);
+                unsigned long long esc0 = I->env_escapes;
                 flow_t f = exec_list(I, c, fr, &n->d->list, ret);
                 if (f == FLOW_RETURN) return f;
                 if (f == FLOW_BREAK) break;
+                c = loop_env_next(I, loop, c, esc0);
             }
             if (n->c) exec_stmt(I, loop, fr, n->c, ret);
         }
@@ -364,6 +389,7 @@ flow_t exec_stmt(interp_t *I, env_t *env, frame_t *fr, ast_node_t *n, value_t *r
         d->stmt = n->a;
         d->env = env;
         vec_push(I->a, &fr->defers, d);
+        I->env_escapes++; /* runs at function exit, long after this scope */
         return FLOW_NORMAL;
     }
     default:

@@ -1,0 +1,267 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Flat single-file module (see salam/PORTING.md "Layout - FLAT").
+// Port of compiler/src/driver/build.c + compiler/src/driver/driver.c
+// (stage 8a of the FINAL wave). Package `driver`, alias `dr`.
+//
+// Scope (see salam/PORTING.md + the stage-8a brief):
+// - build.c: source discovery, front-end run (lex/parse/condcomp/sema,
+//   multi-file package merge via sm.PackageFiles/MergeProgram), DCE,
+//   codegen (cg.Run), writing generated .c/.h, invoking the C compiler
+//   (tcc/gcc/clang), linking, `link` directives -> library flags.
+// - driver.c: `salam build`/`salam obj`/`salam run`/`salam exec` command
+//   bodies, --emit-{tokens,ast,symbol}-xml wiring, temp/build dir mgmt,
+//   top-level error reporting via the logger. `salam exec` (Exec()) is a
+//   REAL port wired to ip.Run. Llvm()/Js()/LayoutBuild()/Web() below are
+//   likewise real ports, not stubs: the driver-side glue that gathers `link`
+//   imports / builds Options for llvm.salam/jsgen.salam/sal_layout.salam/
+//   sal_web.salam - once left for a later wave per llvm.salam's own
+//   "Driver-wave notes" - was completed here; cli.salam's Run() dispatches
+//   CMD_LLVM/CMD_JS/CMD_LAYOUT_BUILD/CMD_WEB straight to dr.Llvm/dr.Js/
+//   dr.LayoutBuild/dr.Web.
+//   driver_new/driver_fmt (project scaffolding, `salam format`'s CLI glue)
+//   are NOT ported here - out of the stage-8a brief (sal_fmt.salam already
+//   owns real formatting; project scaffolding is cli-wave territory).
+//
+// Deviations from the C (all deliberate, non-functional):
+// - Fixed SALAM_MAX_INPUTS arrays (inputs/links/defines/generated/...)
+//   become Vector<str> - no cap, simpler code, same behavior.
+// - options_t's C-array `inputs[]`/`input_count` pair collapses to one
+//   `Vector<str> inputs`.
+// - The temp executable name for `salam run` (driver_run's tmp_exe) uses
+//   time.NowMicros() instead of getpid() - the ported `os` package has no
+//   Pid() accessor; NowMicros() gives the same "avoid collisions" property
+//   without a second platform-specific extern.
+// - `logger_set_diag_source`'s rich diag-context rendering IS wired (see
+//   logger.salam's LogAt -> render_rich -> diag_render.salam's RenderAt):
+//   lg.SetDiagSource/AddDiagSource below make every lex/parse/sema error
+//   for a file registered that way print full rustc/gcc/clang-style
+//   diagnostics with a source excerpt to stderr, exactly like the C build.
+// - Bundled-musl-tcc sysroot detection (POSIX-only, `detect_bundled_musl_tcc`
+//   in the C) is ported faithfully but is inert unless a real bundled musl
+//   tcc directory is found next to the executable (none exists in this
+//   repo's dev/CI environment, matching the C's own behavior there).
+package driver
+
+import time
+import lg "../logger.salam"
+import dg "../diag.salam"
+import pf "../prof_self.salam"
+import sync
+
+// process spawn (system()) - same idiom the C driver uses directly; no
+// link needed, libc is always linked.
+extern:
+    func system(cmd: str): int
+    // driver/repl.c's fallback (non-tty) repl_readline: a bare getchar()
+    // loop, same idiom core.salam's own salam_input() uses.
+    func getchar(): int
+end
+
+// isatty - used by resolve_color's auto-detect branch (color == -1 ->
+// "color iff stderr is a terminal", matching salam_isatty(fileno(stderr))).
+// fd 2 is always stderr in a normal process, same assumption the C makes
+// via fileno(stderr).
+if SALAM_OS_WINDOWS:
+    extern:
+        func _isatty(fd: int): int
+    end
+else:
+    extern:
+        func isatty(fd: int): int
+    end
+end
+
+// ===== cli/options.h (cli_command_t) - repo-unique consts (E029/E017 rule:
+// cross-package enums don't work; pub const ints instead, values matching
+// the C enum exactly so a future cli wave can assign dr.CMD_BUILD etc.) =====
+pub const CMD_INSPECT := 0
+pub const CMD_BUILD := 1
+pub const CMD_OBJ := 2
+// Distinct exit code for "the LLVM backend does not lower some construct in
+// this program yet". Separated from the generic failure code so build_impl
+// can fall back to the C backend on exactly this case and still surface
+// real errors (bad source, failed link) unchanged.
+pub const RC_LLVM_UNSUPPORTED := 7
+
+pub const CMD_LLVM := 3
+pub const CMD_JS := 4
+pub const CMD_RUN := 5
+pub const CMD_LAYOUT_BUILD := 6
+pub const CMD_WEB := 7
+pub const CMD_DEBUG := 8
+pub const CMD_MEMCHECK := 9
+pub const CMD_NEW := 10
+pub const CMD_FMT := 11
+pub const CMD_REPL := 12
+pub const CMD_REPL_LAYOUT := 13
+pub const CMD_HELP := 14
+pub const CMD_VERSION := 15
+pub const CMD_SERVE := 16
+pub const CMD_UNKNOWN := 17
+
+// `salam doc` (not from cli/options.h - no C parity field, same as CMD_SERVE
+// above: a cli-wave-only addition with no C original to port).
+pub const CMD_DOC := 18
+
+// Not from build.c: parallel object-file compilation. A single
+// `gcc a.c b.c ... -o exe` invocation compiles each translation unit one
+// at a time inside one gcc process; compiling each .c to its own .o
+// across worker threads, then linking the .o files, uses every core
+// instead. Shared mutable job-queue state is fine here since
+// compile_parallel (below) is only ever called once per build, never
+// nested or run concurrently with itself.
+//
+// g_cw_mu starts as the zero-value Mutex (handle = null) rather than
+// sync.NewMutex() here: this is a `package driver` global, and codegen's
+// deferred-global-init pass only ever flushes a package's deferred
+// initializers into ITS OWN entry function - which only exists for
+// `package main`. driver.salam has no main, so a non-literal initializer
+// on a package-level global here would silently never run, leaving
+// g_cw_mu.handle NULL for every caller. Instead it is lazily created
+// inside compile_parallel() below, an ordinary function-body assignment
+// that always executes.
+mut g_cw_jobs := Vector {} as Vector<str>
+mut g_cw_next := 0
+mut g_cw_mu := sync.Mutex {}
+mut g_cw_rc := 0
+
+// ===== driver/js_build.c: k_prelude[] (name/text pairs, split into two
+// parallel arrays - cross-module enum/struct-array limitations don't apply
+// to plain str[] consts). Repo-unique name per the "package globals share
+// one flat C namespace" rule. Copied byte-for-byte from the C (and from
+// tests_port/jsgen_run.salam's own already-verified copy of the same table).
+k_dr_js_prelude_names := [
+    "salam_panic", "__salam_unsupported", "salam_input", "salam_strcat", "salam_str_hash", "salam_hash_int",
+    "sqrt", "cbrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "log2", "log10",
+    "floor", "ceil", "round", "trunc", "hypot", "fabs", "pow", "fmod", "__sal_loop", "__sal_tone", "__sal_img",
+    "__sal_rrect", "__sal_lsget_i", "__sal_lsget_s", "__sal_lsset", "__sal_touch"
+] as str[35]
+
+k_dr_js_prelude_texts := [
+    "function salam_panic(message) {\n    throw new Error(\"Salam panic: \" + String(message));\n}\n",
+    "function __salam_unsupported(what) {\n    throw new Error(\"not supported in the browser build: \" + what);\n}\n",
+    "function salam_input() {\n    return typeof prompt === \"function\" ? String(prompt(\"\") || \"\") : \"\";\n}\n",
+    "function salam_strcat(a, b) {\n    return String(a) + String(b);\n}\n", "function salam_str_hash(s) {\n    let h = 2166136261 >>> 0;\n    for (let i = 0; i < s.length; i++) {\n        h = Math.imul(h ^ s.charCodeAt(i), 16777619) >>> 0;\n    }\n    return h;\n}\n",
+    "function salam_hash_int(v) {\n    return Math.abs(Math.trunc(v)) >>> 0;\n}\n", "const sqrt = Math.sqrt;\n",
+    "const cbrt = Math.cbrt;\n", "const sin = Math.sin;\n", "const cos = Math.cos;\n", "const tan = Math.tan;\n",
+    "const asin = Math.asin;\n", "const acos = Math.acos;\n", "const atan = Math.atan;\n", "const atan2 = Math.atan2;\n",
+    "const exp = Math.exp;\n", "const log = Math.log;\n", "const log2 = Math.log2;\n", "const log10 = Math.log10;\n",
+    "const floor = Math.floor;\n", "const ceil = Math.ceil;\n", "const round = Math.round;\n", "const trunc = Math.trunc;\n",
+    "const hypot = Math.hypot;\n", "const fabs = Math.abs;\n", "const pow = Math.pow;\n", "function fmod(a, b) {\n    return a % b;\n}\n",
+    "function __sal_loop(f) {\n    let prev = performance.now();\n    const step = function (t) {\n        let dt = t - prev;\n        prev = t;\n        if (dt > 100) dt = 100;\n        f(dt);\n        requestAnimationFrame(step);\n    };\n    requestAnimationFrame(step);\n}\n",
+    "let __sal_audio = null;\nfunction __sal_tone(freq, ms) {\n    try {\n        if (!__sal_audio)\n            __sal_audio = new (window.AudioContext || window.webkitAudioContext)();\n        const t = __sal_audio.currentTime;\n        const osc = __sal_audio.createOscillator();\n        const gain = __sal_audio.createGain();\n        osc.type = \"square\";\n        osc.frequency.value = freq;\n        gain.gain.setValueAtTime(0.04, t);\n        gain.gain.exponentialRampToValueAtTime(0.001, t + ms / 1000);\n        osc.connect(gain);\n        gain.connect(__sal_audio.destination);\n        osc.start(t);\n        osc.stop(t + ms / 1000);\n    } catch (e) {\n        console.warn(\"__sal_tone: audio playback failed\", e);\n    }\n}\n",
+    "function __sal_img(src) {\n    const img = new Image();\n    img.src = src;\n    return img;\n}\n",
+    "function __sal_rrect(c, x, y, w, h, r) {\n    if (c.roundRect) c.roundRect(x, y, w, h, r);\n    else c.rect(x, y, w, h);\n}\n",
+    "function __sal_lsget_i(k) {\n    try {\n        return Math.trunc(Number(localStorage.getItem(k) || 0)) || 0;\n    } catch (e) {\n        console.warn(\"__sal_lsget_i: localStorage read failed\", e);\n        return 0;\n    }\n}\n",
+    "function __sal_lsget_s(k) {\n    try {\n        return String(localStorage.getItem(k) || \"\");\n    } catch (e) {\n        console.warn(\"__sal_lsget_s: localStorage read failed\", e);\n        return \"\";\n    }\n}\n",
+    "function __sal_lsset(k, v) {\n    try {\n        localStorage.setItem(k, String(v));\n    } catch (e) {\n        console.warn(\"__sal_lsset: localStorage write failed\", e);\n    }\n}\n",
+    "function __sal_touch(ev, axis) {\n    const t = (ev.changedTouches && ev.changedTouches[0]) || ev;\n    return Number((axis ? t.clientY : t.clientX) || 0);\n}\n"
+] as str[35]
+
+pub type Command = int
+
+// ===== cli/options.h (options_t) - the Dr state struct. All fields pub
+// (E017: non-pub struct fields are unusable even from free functions in the
+// SAME package). Defaults mirror cli.c's cli_set_defaults() exactly (see
+// the table in compiler/src/cli/cli.c) so a future cli-wave port that
+// starts from `Dr {}` and overrides only the flags the user passed behaves
+// identically to the C's memset-then-set-defaults dance. NOTE: cli.c also
+// pushes "SALAM_SAFE" onto opt->defines *after* parsing, only when the
+// final resolved `safe` is true - that belongs to the (not-yet-ported) cli
+// wave, not here; Build()/Obj() below read opt.defines as-is, exactly like
+// build.c does (it never adds SALAM_SAFE itself either).
+pub struct Dr:
+    pub command: Command = CMD_INSPECT
+    pub input: str = ""
+        pub lang: str = "en"
+        pub log_level: int = 2 // lg.LOG_INFO
+        pub emit_tokens_xml: bool = false
+        pub emit_ast_xml: bool = false
+        pub emit_symbol_xml: bool = false
+        pub xml_out: str = ""
+        pub color: int = -1 // -1 = auto (isatty), 0 = off, 1 = on
+        pub diag_style: int = 0 // dg.DIAG_STYLE_RUST
+        pub diag_format: int = 0 // dg.DIAG_FORMAT_HUMAN
+        pub new_name: str = ""
+        pub inline_mode: bool = false
+        pub split: bool = false
+        pub inputs: Vector<str> = Vector {}
+        pub run_args: Vector<str> = Vector {}
+        pub output: str = ""
+        pub cc: str = "tcc"
+        // Backend for `build`/`obj`: "auto" (LLVM when this binary can
+        // drive it, C otherwise), "llvm", or "c". Set to "c" implicitly by
+        // an explicit --cc=, which only the C backend uses.
+        pub backend: str = "auto"
+        // --libpath=DIR, repeatable: extra library search directories for
+        // the link step, for archives not installed under the usual prefix.
+        pub lib_paths: Vector<str> = Vector {}
+        pub keep_c: bool = false
+        pub force: bool = false
+        pub safe: bool = true
+        pub fmt_check: bool = false
+        pub fmt_recursive: bool = false
+        pub fmt_tabs: bool = false
+        pub fmt_indent_width: int = 4
+        pub fmt_fix_order: bool = false
+        pub fmt_minify: bool = false
+        pub debug_info: bool = false
+        pub asan: bool = false
+        // --time-report[=table|json]: where the compiler spent its own time.
+        pub time_report: bool = false
+        pub time_report_fmt: int = 0 // pf.PROF_FMT_TABLE
+        // --time-trace[=FILE]: Chrome Trace Event JSON of the same run.
+        pub time_trace: str = ""
+        // Whole-program LTO for the final link (gcc/clang only). Opt-in:
+        // on this toolchain's Windows lto-wrapper, LTRANS always falls back
+        // to serial compilation regardless of -flto=N, so a plain optimizing
+        // build compiles its .c files in parallel (compile_parallel below)
+        // and skips LTO by default instead of paying that serial cost.
+        pub lto: bool = false
+        pub interp: bool = false
+        pub timeout_ms: int = 0
+        pub stdlib_path: str = ""
+        // out-param: the real path of the binary Build() produced (build.c sets
+        // this only if it was still empty, matching opt->exe_path[0]=='\0').
+        pub exe_path: str = ""
+        pub defines: Vector<str> = Vector {}
+        // --export=FnName:CName (repeatable): keep a normally-DCE'd top-level
+        // pub func alive and emit it under the literal C name instead of the
+        // usual mangled one. For embedding a hand-picked API surface (e.g. the
+        // WASM playground) into a build that has no entry point of its own.
+        pub exports: Vector<str> = Vector {}
+        pub llvm_opt_level: int = 0
+        pub llvm_emit: int = 0
+        pub llvm_verify: bool = false
+        pub llvm_target: str = ""
+        pub llvm_native_cpu: bool = false
+        pub no_js_minify_names: bool = false
+        pub no_minify: bool = false
+        pub version_short: bool = false
+        // `salam serve` (not from cli/options.h - no C parity field, since
+        // the C driver reads the same two flags straight off options_t's own
+        // serve_host/serve_port added alongside CMD_SERVE there).
+        pub serve_host: str = ""
+        pub serve_port: int = 0
+    end
+
+    // Private, package-internal (not pub - E017 still requires pub fields for
+    // same-package free-function access). driver/build.c's bundled_musl_tcc_t.
+    struct MuslTcc:
+        pub active: bool = false
+        pub tcc_dir: str = ""
+        pub musl_dir: str = ""
+    end

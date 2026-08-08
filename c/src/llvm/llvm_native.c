@@ -746,6 +746,16 @@ static int native_link_mingw(logger_t *log, const char *obj, const char *out,
     argv[n++] = "-m";
     argv[n++] = emul;
     argv[n++] = "-Bdynamic";
+    /*
+     * PE defaults to a 1MiB stack reserve, which is not enough for a
+     * recursive-descent compiler: a salam built this way overflowed the
+     * stack (0xC00000FD) before printing anything. The C backend already
+     * passes -Wl,--stack=8388608 for the same reason (see build.c); match
+     * it here so an LLVM-linked Windows binary behaves the same. 8MiB also
+     * matches the common *nix default thread stack.
+     */
+    argv[n++] = "--stack";
+    argv[n++] = "8388608";
     if (!opts->debug_info) argv[n++] = "-s"; /* strip symbols unless -g */
     argv[n++] = "-o";
     argv[n++] = out;

@@ -1,0 +1,188 @@
+package codegen
+
+import str
+import tok "../token.salam"
+import at "../ast.salam"
+import sm "../semantic/semantic.salam"
+
+// ===== codegen_overload.c (rest) =====
+
+// pick_overload - SigId (0 = C NULL). fsym is a SymId, call an at.NodeId.
+func pick_overload(s &: sm.Sema, a &: at.Ast, fsym: int, call: int): int:
+    mut fallback := 0
+    fs := sm.SymAt(s, fsym)
+    cn := at.Get(a, call)
+    repeat fs.overloads.len() with i:
+        sg := fs.overloads.get(i)[0]
+        if fallback == 0:
+            fallback = sg
+        end
+        sv := sm.SigAt(s, sg)
+        if cn.list.len() < sv.required:
+            continue
+        end
+        if !sv.variadic && cn.list.len() > sv.params.len():
+            continue
+        end
+        mut nfix := cn.list.len()
+        if nfix > sv.params.len():
+            nfix = sv.params.len()
+        end
+        mut ok := true
+        repeat nfix with j:
+            argn := at.Get(a, cn.list.get(j)[0])
+            pt := sm.ToString(s, sv.params.get(j)[0])
+            if str.Len(argn.type_str) == 0 || !str.Equals(argn.type_str, pt):
+                ok = false
+                break
+            end
+        end
+        if ok:
+            ret sg
+        end
+    end
+    ret fallback
+end
+
+// struct_by_name - SymId (0 = C NULL).
+func struct_by_name(s &: sm.Sema, name: str): int:
+    sy := sm.Lookup(s, s.global, name)
+    if sy != 0 && sm.SymAt(s, sy).kind == sm.SYM_STRUCT:
+        ret sy
+    end
+    gsc := sm.ScopeAt(s, s.global)
+    repeat gsc.symbols.len() with i:
+        symid := gsc.symbols.get(i)[0]
+        sv := sm.SymAt(s, symid)
+        if sv.kind == sm.SYM_STRUCT && sv.ty != sm.TYPE_NONE && str.Equals(sm.TypeAt(s, sv.ty).name, name) && str.Len(sm.TypeAt(s, sv.ty).name) > 0:
+            ret symid
+        end
+    end
+    repeat gsc.symbols.len() with i2:
+        pkid := gsc.symbols.get(i2)[0]
+        pk := sm.SymAt(s, pkid)
+        if pk.kind != sm.SYM_PACKAGE || pk.members == 0:
+            continue
+        end
+        psc := sm.ScopeAt(s, pk.members)
+        repeat psc.symbols.len() with j:
+            symid2 := psc.symbols.get(j)[0]
+            sv2 := sm.SymAt(s, symid2)
+            if sv2.kind != sm.SYM_STRUCT:
+                continue
+            end
+            if str.Equals(sv2.name, name):
+                ret symid2
+            end
+            if sv2.ty != sm.TYPE_NONE && str.Len(sm.TypeAt(s, sv2.ty).name) > 0 && str.Equals(sm.TypeAt(s, sv2.ty).name, name):
+                ret symid2
+            end
+        end
+    end
+    ret 0
+end
+
+// A member/index expression is only really addressable in the emitted C if
+// its BASE is: `x.field`/`x[i]` need `x` itself to be a real lvalue (or a
+// compound literal, which C99 lvalues too). A base that is itself a call
+// result (e.g. `sm.SymAt(s, sym).overloads`) is emitted as a GNU
+// statement-expression (see call_sret) whose value gcc/clang do NOT treat
+// as addressable once a further `.field`/`&(...)` is chained onto it
+// ("lvalue required as unary '&' operand") - so this must recurse into the
+// base rather than assume every AST_MEMBER/AST_INDEX is addressable.
+func cg_addressable(a &: at.Ast, n: int): bool:
+    k := at.KindOf(a, n)
+    if k == at.AST_MEMBER || k == at.AST_INDEX:
+        ret cg_addressable(a, at.Get(a, n).a)
+    end
+    ret k == at.AST_IDENTIFIER || k == at.AST_THIS || k == at.AST_STRUCT_LIT
+end
+
+// cg_struct_of - SymId; sname gets the parsed base typestr (the C wrote
+// into the caller's char sname[96] buffer).
+func cg_struct_of(s &: sm.Sema, ts: str, sname &: str): int:
+    mut ptr := false
+    mut dims := Vector {} as Vector<int>
+    defer dims.free()
+    parse_typestr(ts, 96, sname, ptr, dims)
+    ret struct_by_name(s, sname)
+end
+
+// cg_op_method - "" = C NULL.
+func cg_op_method(k: int): str:
+    if k == tok.TK_PLUS:
+        ret "operator_add"
+    end
+    if k == tok.TK_MINUS:
+        ret "operator_sub"
+    end
+    if k == tok.TK_STAR:
+        ret "operator_mul"
+    end
+    if k == tok.TK_SLASH:
+        ret "operator_div"
+    end
+    if k == tok.TK_PERCENT:
+        ret "operator_mod"
+    end
+    if k == tok.TK_POWER:
+        ret "operator_pow"
+    end
+    if k == tok.TK_EQ:
+        ret "operator_eq"
+    end
+    if k == tok.TK_NE:
+        ret "operator_ne"
+    end
+    if k == tok.TK_LT:
+        ret "operator_lt"
+    end
+    if k == tok.TK_GT:
+        ret "operator_gt"
+    end
+    if k == tok.TK_LE:
+        ret "operator_le"
+    end
+    if k == tok.TK_GE:
+        ret "operator_ge"
+    end
+    ret ""
+end
+
+// cg_compound_base - tok.TK_EOF = none.
+func cg_compound_base(k: int): int:
+    if k == tok.TK_PLUS_EQ:
+        ret tok.TK_PLUS
+    end
+    if k == tok.TK_MINUS_EQ:
+        ret tok.TK_MINUS
+    end
+    if k == tok.TK_STAR_EQ:
+        ret tok.TK_STAR
+    end
+    if k == tok.TK_SLASH_EQ:
+        ret tok.TK_SLASH
+    end
+    if k == tok.TK_PERCENT_EQ:
+        ret tok.TK_PERCENT
+    end
+    if k == tok.TK_POWER_EQ:
+        ret tok.TK_POWER
+    end
+    ret tok.TK_EOF
+end
+
+// pick_op_overload - SigId; first overload with the wanted param count.
+func pick_op_overload(s &: sm.Sema, msym: int, want_nparams: int): int:
+    mut fallback := 0
+    ms := sm.SymAt(s, msym)
+    repeat ms.overloads.len() with i:
+        sg := ms.overloads.get(i)[0]
+        if sm.SigAt(s, sg).params.len() == want_nparams:
+            if fallback == 0:
+                fallback = sg
+            end
+        end
+    end
+    ret fallback
+end

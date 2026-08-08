@@ -1,0 +1,664 @@
+package llvmgen
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import sm "../semantic/semantic.salam"
+
+// ll_addr_of (forward decls of ll_member_addr/ll_index_addr not needed - // Salam allows forward reference within the same file).
+func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
+    k := at.KindOf(a, n)
+    if k == at.AST_IDENTIFIER:
+        nm := at.Get(a, n).name
+        li := local_find(v, nm)
+        if li >= 0:
+            lvar := v.locals.get(li)[0]
+            mut r := LvAddr {}
+            r.ptr = lvar.ptr
+            r.ts = lvar.ts
+            ret r
+        end
+        if v.cur_lambda != 0:
+            capn := at.Get(a, v.cur_lambda)
+            mut ci := 0
+            until ci < capn.captures.len():
+                c := at.Get(a, capn.captures.get(ci)[0])
+                if str.Equals(c.name, nm):
+                    rr := new_tmp(v)
+                    emit(
+                        v, rr + " = getelementptr inbounds " + v.env_ty + ", ptr " + v.env_ref + ", i32 0, i32 " + co.I64Toa((ci + 1) as i64)
+                    )
+                    mut ra := LvAddr {}
+                    ra.ptr = rr
+                    ra.ts = c.type_str
+                    ret ra
+                end
+                ci += 1
+            end
+        end
+        if str.Len(v.self_ts) > 0:
+            ss := struct_sym(v, s, a, v.self_ts)
+            mut fs := 0
+            idx := ss != 0 ? field_index(s, ss, nm, fs) : 0 - 1
+            if idx >= 0:
+                fts := sm.ToString(s, sm.SymAt(s, fs).ty)
+                rr2 := new_tmp(v)
+                emit(
+                    v, rr2 + " = getelementptr inbounds " + struct_ltype(v.self_ts) + ", ptr " + v.this_ref + ", i32 0, i32 " + co.I64Toa(idx as i64)
+                )
+                mut ra2 := LvAddr {}
+                ra2.ptr = rr2
+                ra2.ts = fts
+                ret ra2
+            end
+        end
+        gi := global_find(v, nm)
+        if gi >= 0:
+            gv := v.globals.get(gi)[0]
+            mut ra3 := LvAddr {}
+            ra3.ptr = gv.ptr
+            ra3.ts = gv.ts
+            ret ra3
+        end
+        lv_error(v, a, n, "address of an unknown identifier '" + nm + "'")
+        mut ra4 := LvAddr {}
+        ra4.ptr = "null"
+        nts := at.Get(a, n).type_str
+        ra4.ts = str.Len(nts) > 0 ? nts : "i32"
+        ret ra4
+    end
+    if k == at.AST_MEMBER:
+        ret member_addr(v, s, a, n)
+    end
+    if k == at.AST_INDEX:
+        ret index_addr(v, s, a, n)
+    end
+    val := lv_expr(v, s, a, n)
+    p := "%agg." + co.I64Toa(v.tmp as i64)
+    v.tmp += 1
+    emit_alloca(v, p + " = alloca " + ty_of(v, s, a, val.ts))
+    emit(v, "store " + ty_of(v, s, a, val.ts) + " " + val.ref + ", ptr " + p)
+    mut ra5 := LvAddr {}
+    ra5.ptr = p
+    ra5.ts = val.ts
+    ret ra5
+end
+
+// ll_member_addr
+func member_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
+    nn := at.Get(a, n)
+    ots := at.Get(a, nn.a).type_str
+    mut base := ""
+    mut sname2 := ""
+    if is_ptr_ts(ots):
+        base = lv_expr(v, s, a, nn.a).ref
+        sname2 = str.Substr(ots, 0, str.Len(ots) - 1)
+    else:
+        b := lv_addr_of(v, s, a, nn.a)
+        base = b.ptr
+        sname2 = ots
+    end
+    ss := struct_sym(v, s, a, sname2)
+    mut fs := 0
+    idx := ss != 0 ? field_index(s, ss, nn.name, fs) : 0 - 1
+    if idx < 0:
+        lv_error(
+            v, a, n, "member '" + nn.name + "' of non-struct/unknown type '" + sname2 + "'"
+        )
+        mut ra := LvAddr {}
+        ra.ptr = "null"
+        ra.ts = str.Len(nn.type_str) > 0 ? nn.type_str : "i32"
+        ret ra
+    end
+    fts := sm.ToString(s, sm.SymAt(s, fs).ty)
+    r := new_tmp(v)
+    emit(
+        v, r + " = getelementptr inbounds " + struct_ltype(sname2) + ", ptr " + base + ", i32 0, i32 " + co.I64Toa(idx as i64)
+    )
+    mut ra2 := LvAddr {}
+    ra2.ptr = r
+    ra2.ts = fts
+    ret ra2
+end
+
+// ll_index_addr
+func index_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
+    nn := at.Get(a, n)
+    ots := at.Get(a, nn.a).type_str
+    if is_slice(ots):
+        ets := slice_elem(ots)
+        sv := lv_expr(v, s, a, nn.a)
+        data := new_tmp(v)
+        emit(v, data + " = extractvalue { ptr, i64 } " + sv.ref + ", 0")
+        idxv := conv(v, s, a, lv_expr(v, s, a, nn.b), "i64")
+        r := new_tmp(v)
+        emit(
+            v, r + " = getelementptr inbounds " + ty_of(v, s, a, ets) + ", ptr " + data + ", i64 " + idxv
+        )
+        mut ra := LvAddr {}
+        ra.ptr = r
+        ra.ts = ets
+        ret ra
+    end
+    if is_ptr_ts(ots):
+        base := lv_expr(v, s, a, nn.a).ref
+        ets2 := str.Substr(ots, 0, str.Len(ots) - 1)
+        idxv2 := conv(v, s, a, lv_expr(v, s, a, nn.b), "i64")
+        r2 := new_tmp(v)
+        emit(
+            v, r2 + " = getelementptr inbounds " + ty_of(v, s, a, ets2) + ", ptr " + base + ", i64 " + idxv2
+        )
+        mut ra2 := LvAddr {}
+        ra2.ptr = r2
+        ra2.ts = ets2
+        ret ra2
+    end
+    b2 := lv_addr_of(v, s, a, nn.a)
+    ets3 := array_elem(ots)
+    idxv3 := conv(v, s, a, lv_expr(v, s, a, nn.b), "i64")
+    r3 := new_tmp(v)
+    emit(
+        v, r3 + " = getelementptr inbounds " + ty_of(v, s, a, ots) + ", ptr " + b2.ptr + ", i64 0, i64 " + idxv3
+    )
+    mut ra3 := LvAddr {}
+    ra3.ptr = r3
+    ra3.ts = ets3
+    ret ra3
+end
+
+// ll_load_addr
+func load_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
+    addr := lv_addr_of(v, s, a, n)
+    r := new_tmp(v)
+    emit(v, r + " = load " + ty_of(v, s, a, addr.ts) + ", ptr " + addr.ptr)
+    ret make_llv(r, addr.ts)
+end
+
+// ll_struct_lit
+func lv_struct_lit(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
+    nn := at.Get(a, n)
+    sname2 := str.Len(nn.type_str) > 0 ? nn.type_str : nn.name
+    ss := struct_sym(v, s, a, sname2)
+    if ss == 0:
+        lv_error(
+            v, a, n, "struct literal of unknown/unsupported type '" + (str.Len(nn.name) > 0 ? nn.name : "?") + "'"
+        )
+        ret poison(nn.type_str)
+    end
+    sty := struct_ltype(sname2)
+    mut cur := "zeroinitializer"
+    mut idx := 0
+    fsyms := sm.ScopeAt(s, sm.SymAt(s, ss).members).symbols
+    mut i := 0
+    until i < fsyms.len():
+        f := sm.SymAt(s, fsyms.get(i)[0])
+        if f.kind == sm.SYM_FIELD:
+            fts := sm.ToString(s, f.ty)
+            mut prov := 0
+            mut j := 0
+            until j < nn.list.len():
+                fi := at.Get(a, nn.list.get(j)[0])
+                if prov == 0 && str.Len(fi.name) > 0 && str.Equals(fi.name, f.name):
+                    prov = nn.list.get(j)[0]
+                end
+                j += 1
+            end
+            mut val := ""
+            if prov != 0:
+                val = conv(v, s, a, lv_expr(v, s, a, at.Get(a, prov).a), fts)
+            else f.decl != 0 && at.Get(a, f.decl).a != 0:
+                val = conv(v, s, a, lv_expr(v, s, a, at.Get(a, f.decl).a), fts)
+            else:
+                val = zero_of(fts)
+            end
+            r := new_tmp(v)
+            emit(
+                v, r + " = insertvalue " + sty + " " + cur + ", " + ty_of(v, s, a, fts) + " " + val + ", " + co.I64Toa(idx as i64)
+            )
+            cur = r
+            idx += 1
+        end
+        i += 1
+    end
+    ret make_llv(idx != 0 ? cur : "zeroinitializer", sname2)
+end
+
+// ll_array_lit
+func lv_array_lit(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
+    nn := at.Get(a, n)
+    ats := nn.type_str
+    if str.Len(ats) == 0 || idx_byte(ats, 91) < 0:
+        lv_error(v, a, n, "array literal without an array type")
+        ret poison(ats)
+    end
+    ety := array_elem(ats)
+    aty := ty_of(v, s, a, ats)
+    lety := ty_of(v, s, a, ety)
+    mut cur := "zeroinitializer"
+    mut i := 0
+    until i < nn.list.len():
+        vv := conv(v, s, a, lv_expr(v, s, a, nn.list.get(i)[0]), ety)
+        r := new_tmp(v)
+        emit(
+            v, r + " = insertvalue " + aty + " " + cur + ", " + lety + " " + vv + ", " + co.I64Toa(i as i64)
+        )
+        cur = r
+        i += 1
+    end
+    ret make_llv(nn.list.len() > 0 ? cur : "zeroinitializer", ats)
+end
+
+// ll_slice_expr
+func lv_slice_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
+    nn := at.Get(a, n)
+    sts := nn.type_str
+    ets := slice_elem(sts)
+    let2 := ty_of(v, s, a, ets)
+    bts := at.Get(a, nn.a).type_str
+
+    lo := nn.b != 0 ? conv(v, s, a, lv_expr(v, s, a, nn.b), "i64") : "0"
+    mut data := ""
+    mut blen := ""
+
+    if is_slice(bts):
+        bv := lv_expr(v, s, a, nn.a)
+        bp := new_tmp(v)
+        emit(v, bp + " = extractvalue { ptr, i64 } " + bv.ref + ", 0")
+        blen = new_tmp(v)
+        emit(v, blen + " = extractvalue { ptr, i64 } " + bv.ref + ", 1")
+        data = new_tmp(v)
+        emit(
+            v, data + " = getelementptr inbounds " + let2 + ", ptr " + bp + ", i64 " + lo
+        )
+    else:
+        b := lv_addr_of(v, s, a, nn.a)
+        blen = co.I64Toa(array_dim(bts))
+        data = new_tmp(v)
+        emit(
+            v, data + " = getelementptr inbounds " + ty_of(v, s, a, bts) + ", ptr " + b.ptr + ", i64 0, i64 " + lo
+        )
+    end
+
+    hi := nn.c != 0 ? conv(v, s, a, lv_expr(v, s, a, nn.c), "i64") : blen
+    len2 := new_tmp(v)
+    emit(v, len2 + " = sub i64 " + hi + ", " + lo)
+
+    a0 := new_tmp(v)
+    a1 := new_tmp(v)
+    emit(v, a0 + " = insertvalue { ptr, i64 } zeroinitializer, ptr " + data + ", 0")
+    emit(v, a1 + " = insertvalue { ptr, i64 } " + a0 + ", i64 " + len2 + ", 1")
+    ret make_llv(a1, sts)
+end
+
+// ll_lambda_value
+func lv_lambda_value(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
+    emit_lambda(v, s, a, n)
+    node := at.Get(a, n)
+    name := node.name
+    // "salam_lambda_" is 13 bytes; the index text follows it.
+    idxtxt := str.Substr(name, 13, str.Len(name) - 13)
+    envty := "%lam." + idxtxt + ".env"
+    ncap := node.captures.len()
+    if ncap == 0:
+        ret make_llv("@" + name + ".env", node.type_str)
+    end
+
+    szp := new_tmp(v)
+    sz := new_tmp(v)
+    env := new_tmp(v)
+    emit(v, szp + " = getelementptr " + envty + ", ptr null, i32 1")
+    emit(v, sz + " = ptrtoint ptr " + szp + " to i64")
+    emit(v, env + " = call ptr @malloc(i64 " + sz + ")")
+    f0 := new_tmp(v)
+    emit(
+        v, f0 + " = getelementptr inbounds " + envty + ", ptr " + env + ", i32 0, i32 0"
+    )
+    emit(v, "store ptr @" + name + ", ptr " + f0)
+    mut i := 0
+    until i < ncap:
+        c := at.Get(a, node.captures.get(i)[0])
+        cv := lv_expr(v, s, a, node.captures.get(i)[0])
+        fp := new_tmp(v)
+        emit(
+            v, fp + " = getelementptr inbounds " + envty + ", ptr " + env + ", i32 0, i32 " + co.I64Toa((i + 1) as i64)
+        )
+        emit(
+            v, "store " + ty_of(v, s, a, c.type_str) + " " + conv(v, s, a, cv, c.type_str) + ", ptr " + fp
+        )
+        i += 1
+    end
+    ret make_llv(env, node.type_str)
+end
+
+// ll_literal
+func float_lit_text(f: f64): str:
+    buf := co.Format1("%.17g", co.ArgFloat(f))
+    n := str.Len(buf)
+    mut hasmark := false
+    mut i := 0
+    until i < n && !hasmark:
+        c := byte_at(buf, i)
+        if c == 46 || c == 101 || c == 69 || c == 110 || c == 78:
+            hasmark = true
+        end
+        i += 1
+    end
+    if !hasmark:
+        ret buf + ".0"
+    end
+    ret buf
+end
+
+func lv_literal(v &: Lv, a &: at.Ast, n: int): Llv:
+    node := at.Get(a, n)
+    if node.op == tok.TK_INT:
+        ts := str.Len(node.type_str) > 0 ? node.type_str : "i32"
+        ret make_llv(co.I64Toa(node.value_int as i64), ts)
+    end
+    if node.op == tok.TK_FLOAT:
+        ts2 := str.Len(node.type_str) > 0 ? node.type_str : "f64"
+        ret make_llv(float_lit_text(node.value_float), ts2)
+    end
+    if node.op == tok.TK_STRING || node.op == tok.TK_TRIPLE_STRING || node.op == tok.TK_RAW_STRING || node.op == tok.TK_UTF8_CHAR:
+        ret make_llv(strconst(v, node.value_str), "str")
+    end
+    if node.op == tok.TK_CHAR:
+        ret make_llv(co.I64Toa(node.value_int as i64), "char")
+    end
+    if node.op == tok.TK_KW_TRUE:
+        ret make_llv("true", "bool")
+    end
+    if node.op == tok.TK_KW_FALSE:
+        ret make_llv("false", "bool")
+    end
+    if node.op == tok.TK_KW_NULL:
+        ret make_llv("null", str.Len(node.type_str) > 0 ? node.type_str : "i32*")
+    end
+    ret make_llv("0", "i32")
+end
+
+// ll_match_pat_eq
+func match_pat_eq(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, subj: Llv, pat_head: int
+): str:
+    pv := lv_expr(v, s, a, pat_head)
+    if is_str(subj.ts):
+        c := new_tmp(v)
+        r := new_tmp(v)
+        emit(v, c + " = call i32 @strcmp(ptr " + subj.ref + ", ptr " + pv.ref + ")")
+        emit(v, r + " = icmp eq i32 " + c + ", 0")
+        ret r
+    end
+    cv := conv(v, s, a, pv, subj.ts)
+    r2 := new_tmp(v)
+    if is_float(subj.ts):
+        emit(
+            v, r2 + " = fcmp oeq " + ty_of(v, s, a, subj.ts) + " " + subj.ref + ", " + cv
+        )
+    else:
+        emit(
+            v, r2 + " = icmp eq " + ty_of(v, s, a, subj.ts) + " " + subj.ref + ", " + cv
+        )
+    end
+    ret r2
+end
+
+// ll_match_variant_tag_cond
+func match_variant_tag_cond(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, subj: Llv, tag: int
+): str:
+    t := new_tmp(v)
+    r := new_tmp(v)
+    emit(
+        v, t + " = extractvalue " + ty_of(v, s, a, subj.ts) + " " + subj.ref + ", 0"
+    )
+    emit(v, r + " = icmp eq i32 " + t + ", " + co.I64Toa(tag as i64))
+    ret r
+end
+
+// ll_match_arm_cond
+func lv_match_arm_cond(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, arm: int, subj: Llv, is_variant: bool
+): str:
+    armn := at.Get(a, arm)
+    if armn.op == tok.TK_KW_ELSE:
+        ret "true"
+    end
+    mut acc := ""
+    mut i := 0
+    until i < armn.list.len():
+        pat := at.Get(a, armn.list.get(i)[0])
+        mut c := ""
+        if is_variant:
+            c = match_variant_tag_cond(v, s, a, subj, pat.value_int as int)
+        else:
+            c = match_pat_eq(v, s, a, subj, pat.a)
+        end
+        if str.Len(acc) == 0:
+            acc = c
+        else:
+            r := new_tmp(v)
+            emit(v, r + " = or i1 " + acc + ", " + c)
+            acc = r
+        end
+        i += 1
+    end
+    ret str.Len(acc) > 0 ? acc : "false"
+end
+
+// ll_match_expr
+func lv_match_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
+    nn := at.Get(a, n)
+    subj := lv_expr(v, s, a, nn.a)
+    is_variant := str.StartsWith(subj.ts, "Variant<")
+    rts := str.Len(nn.type_str) > 0 ? nn.type_str : "i32"
+    resptr := "%mres." + co.I64Toa(v.tmp as i64)
+    v.tmp += 1
+    endL := new_lbl(v, "mend")
+    fallbackL := new_lbl(v, "mtrap")
+    saved_ptr := v.match_result_ptr
+    saved_ts := v.match_result_ts
+    saved_merge := v.match_merge_block
+    emit_alloca(v, resptr + " = alloca " + ty_of(v, s, a, rts))
+    v.match_result_ptr = resptr
+    v.match_result_ts = rts
+    v.match_merge_block = endL
+    mut i := 0
+    until i < nn.list.len():
+        arm := nn.list.get(i)[0]
+        cond := lv_match_arm_cond(v, s, a, arm, subj, is_variant)
+        bodyL := new_lbl(v, "marm")
+        nextL := (i + 1 < nn.list.len()) ? new_lbl(v, "mnext") : fallbackL
+        emit_term(v, "br i1 " + cond + ", label %" + bodyL + ", label %" + nextL)
+        emit_label(v, bodyL)
+        lv_stmt(v, s, a, at.Get(a, arm).b)
+        emit_term(v, "br label %" + endL)
+        emit_label(v, nextL)
+        i += 1
+    end
+    if nn.list.len() == 0:
+        emit_term(v, "br label %" + fallbackL)
+        emit_label(v, fallbackL)
+    end
+    emit(v, "call void @llvm.trap()")
+    emit_term(v, "unreachable")
+    emit_label(v, endL)
+    v.match_result_ptr = saved_ptr
+    v.match_result_ts = saved_ts
+    v.match_merge_block = saved_merge
+    r := new_tmp(v)
+    emit(v, r + " = load " + ty_of(v, s, a, rts) + ", ptr " + resptr)
+    ret make_llv(r, rts)
+end
+
+// ll_expr
+func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
+    if n == 0:
+        ret make_llv("0", "i32")
+    end
+    node := at.Get(a, n)
+    k := node.kind
+    if k == at.AST_LITERAL:
+        ret lv_literal(v, a, n)
+    end
+    if k == at.AST_IDENTIFIER:
+        addr := lv_addr_of(v, s, a, n)
+        r := new_tmp(v)
+        emit(v, r + " = load " + ty_of(v, s, a, addr.ts) + ", ptr " + addr.ptr)
+        ret make_llv(r, addr.ts)
+    end
+    if k == at.AST_FUNC_ADDR:
+        fsym := sym_of(v, s, a, node.name)
+        if fsym == 0 || sm.SymAt(s, fsym).kind != sm.SYM_FUNC || sm.SymAt(s, fsym).overloads.len() != 1:
+            lv_error(v, a, n, "cannot take the address of '" + node.name + "'")
+            ret poison(str.Len(node.type_str) > 0 ? node.type_str : "ptr")
+        end
+        sig := sm.SymAt(s, fsym).overloads.get(0)[0]
+        is_ext := sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).is_extern
+        if !is_ext:
+            ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, v.pkg_scope)
+        end
+        fname := is_ext ? node.name : mangle(v, s, "", node.name, sig)
+        ret make_llv("@" + fname, "void*")
+    end
+    if k == at.AST_THIS:
+        if str.Len(v.this_ref) == 0:
+            lv_error(v, a, n, "'this' outside a method")
+            ret poison(node.type_str)
+        end
+        if v.self_byval:
+            r2 := new_tmp(v)
+            emit(
+                v, r2 + " = load " + ty_of(v, s, a, v.self_ts) + ", ptr " + v.this_ref
+            )
+            ret make_llv(r2, v.self_ts)
+        end
+        ret make_llv(v.this_ref, v.self_ts + "*")
+    end
+    if k == at.AST_BINARY:
+        ret lv_binary(v, s, a, n)
+    end
+    if k == at.AST_MATCH:
+        ret lv_match_expr(v, s, a, n)
+    end
+    if k == at.AST_VARIANT_BOX:
+        vv := lv_expr(v, s, a, node.a)
+        ret make_llv(
+            box_variant(v, s, a, vv, node.value_int as int, node.type_str), node.type_str
+        )
+    end
+    if k == at.AST_VARIANT_UNWRAP:
+        vv2 := lv_expr(v, s, a, node.a)
+        ret unwrap_variant(
+            v, s, a, vv2, str.Len(node.type_str) > 0 ? node.type_str : "i32"
+        )
+    end
+    if k == at.AST_TERNARY:
+        rt := str.Len(node.type_str) > 0 ? node.type_str : "i32"
+        cond := as_i1(v, s, a, lv_expr(v, s, a, node.a))
+        thenL := new_lbl(v, "tern_then")
+        elseL := new_lbl(v, "tern_else")
+        tjoinL := new_lbl(v, "tern_tjoin")
+        fjoinL := new_lbl(v, "tern_fjoin")
+        endL := new_lbl(v, "tern_end")
+        emit_term(v, "br i1 " + cond + ", label %" + thenL + ", label %" + elseL)
+        emit_label(v, thenL)
+        tv := conv(v, s, a, lv_expr(v, s, a, node.b), rt)
+        emit_term(v, "br label %" + tjoinL)
+        emit_label(v, tjoinL)
+        emit_term(v, "br label %" + endL)
+        emit_label(v, elseL)
+        fv := conv(v, s, a, lv_expr(v, s, a, node.c), rt)
+        emit_term(v, "br label %" + fjoinL)
+        emit_label(v, fjoinL)
+        emit_term(v, "br label %" + endL)
+        emit_label(v, endL)
+        r3 := new_tmp(v)
+        emit(
+            v, r3 + " = phi " + ty_of(v, s, a, rt) + " [ " + tv + ", %" + tjoinL + " ], [ " + fv + ", %" + fjoinL + " ]"
+        )
+        ret make_llv(r3, rt)
+    end
+    if k == at.AST_UNARY:
+        ret lv_unary(v, s, a, n)
+    end
+    if k == at.AST_INCDEC:
+        ret lv_incdec(v, s, a, n)
+    end
+    if k == at.AST_CAST:
+        vv3 := lv_expr(v, s, a, node.a)
+        mut to_ts := ""
+        if node.ty != 0 && str.Len(at.Get(a, node.ty).type_str) > 0:
+            to_ts = at.Get(a, node.ty).type_str
+        else str.Len(node.type_str) > 0:
+            to_ts = node.type_str
+        else:
+            to_ts = vv3.ts
+        end
+        ret make_llv(conv(v, s, a, vv3, to_ts), to_ts)
+    end
+    if k == at.AST_CALL:
+        ret lv_call(v, s, a, n)
+    end
+    if k == at.AST_MEMBER:
+        if node.a != 0 && at.KindOf(a, node.a) == at.AST_IDENTIFIER:
+            e := enum_sym(v, s, a, at.Get(a, node.a).name)
+            if e != 0:
+                m := sm.LookupLocal(s, sm.SymAt(s, e).members, node.name)
+                if m != 0 && sm.SymAt(s, m).kind == sm.SYM_ENUM_MEMBER:
+                    ret make_llv(co.I64Toa(sm.SymAt(s, m).enum_value), "i32")
+                end
+            end
+            pk2 := sym_of(v, s, a, at.Get(a, node.a).name)
+            if pk2 != 0 && sm.SymAt(s, pk2).kind == sm.SYM_PACKAGE:
+                mut pv := Llv {}
+                if pkg_value(v, s, a, n, pk2, pv):
+                    ret pv
+                end
+            end
+        end
+        ret load_addr(v, s, a, n)
+    end
+    if k == at.AST_INDEX:
+        if node.a != 0 && str.Len(at.Get(a, node.a).type_str) > 0:
+            mut sname2 := ""
+            oss := op_struct(v, s, a, at.Get(a, node.a).type_str, sname2)
+            if oss != 0:
+                mut out2 := Llv {}
+                if op_call(
+                    v, s, a, node.a, sname2, oss, "operator_index", node.b, out2
+                ):
+                    ret out2
+                end
+            end
+        end
+        ret load_addr(v, s, a, n)
+    end
+    if k == at.AST_STRUCT_LIT:
+        ret lv_struct_lit(v, s, a, n)
+    end
+    if k == at.AST_ARRAY_LIT:
+        ret lv_array_lit(v, s, a, n)
+    end
+    if k == at.AST_SLICE:
+        ret lv_slice_expr(v, s, a, n)
+    end
+    if k == at.AST_LAMBDA:
+        ret lv_lambda_value(v, s, a, n)
+    end
+    // Assignment used as an expression, which is how `a = b = c` parses:
+    // the inner `b = c` is the right operand of the outer assignment.
+    // Store, then yield the value now in the target - reloading rather
+    // than reusing the stored value so a narrowing target produces what a
+    // subsequent read would, matching the C backend's `(a = b)`.
+    if k == at.AST_ASSIGN:
+        lv_assign(v, s, a, n)
+        ad := lv_addr_of(v, s, a, node.a)
+        r2 := new_tmp(v)
+        emit(v, r2 + " = load " + ty_of(v, s, a, ad.ts) + ", ptr " + ad.ptr)
+        ret make_llv(r2, ad.ts)
+    end
+    lv_error(v, a, n, at.KindName(k) + " expression")
+    ret poison(node.type_str)
+end

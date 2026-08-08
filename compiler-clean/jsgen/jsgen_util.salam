@@ -1,0 +1,455 @@
+package jsgen
+
+import str
+import tok "../token.salam"
+import at "../ast.salam"
+import sm "../semantic/semantic.salam"
+
+// ---------------------------------------------------------------------------
+// Byte access + C-locale ctype (same idiom as the lexer/minify ports).
+// ---------------------------------------------------------------------------
+func byte_at(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+func is_digit(c: int): bool:
+    ret c >= 48 && c <= 57
+end
+
+func is_alpha(c: int): bool:
+    ret (c >= 97 && c <= 122) || (c >= 65 && c <= 90)
+end
+
+func is_alnum(c: int): bool:
+    ret is_alpha(c) || is_digit(c)
+end
+
+func to_upper(c: int): int:
+    if c >= 97 && c <= 122:
+        ret c - 32
+    end
+    ret c
+end
+
+// strcmp(x, y) == 0 over a Vector<str>
+func name_in_strvec(v: Vector<str>, name: str): bool:
+    n := v.len()
+    mut i := 0
+    until i < n:
+        if str.Equals(v.get(i)[0], name):
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+// ---------------------------------------------------------------------------
+// codegen_emit.c slice: cg_indent / cg_line / local_known / local_add.
+// cg_fmt is not needed - call sites build the line with str concatenation.
+// ---------------------------------------------------------------------------
+func cg_indent(g &: Jg):
+    if g.compact:
+        ret
+    end
+    repeat g.indent:
+        str.BufAppend(g.out, "    ")
+    end
+end
+
+func cg_line(g &: Jg, txt: str):
+    cg_indent(g)
+    str.BufAppend(g.out, txt)
+    str.BufAppendChar(g.out, g.compact ? 32 : 10)
+end
+
+func local_known(g &: Jg, name: str): bool:
+    ret name_in_strvec(g.locals, name)
+end
+
+func local_add(g &: Jg, name: str):
+    g.locals.push(name)
+end
+
+// ---------------------------------------------------------------------------
+// codegen_type.c slice: cg_put_ident_byte / cg_is_c_keyword / cg_cident /
+// parse_typestr (base part) / cg_is_int_typestr / cg_is_unsigned_typestr /
+// cg_is_slice_ts / cg_encode_typestr / cg_mangle_in / cg_mangle_ti /
+// array_size_of.
+// ---------------------------------------------------------------------------
+func put_ident_byte(b &: str.StringBuilder, c: int):
+    hex := "0123456789abcdef"
+    if is_alnum(c):
+        str.BufAppendChar(b, c)
+    else c == 95: // '_'
+        str.BufAppend(b, "__")
+    else:
+        str.BufAppendChar(b, 95)
+        str.BufAppendChar(b, byte_at(hex, (c >> 4) & 15))
+        str.BufAppendChar(b, byte_at(hex, c & 15))
+    end
+end
+
+func is_c_keyword(s: str): bool:
+    each w in k_js_ckw:
+        if str.Equals(s, w):
+            ret true
+        end
+    end
+    ret false
+end
+
+func cg_cident(name: str): str:
+    n := str.Len(name)
+    if n == 0:
+        ret "_"
+    end
+    mut ok := !is_digit(byte_at(name, 0))
+    mut i := 0
+    until ok && i < n:
+        if !is_alnum(byte_at(name, i)):
+            ok = false
+        end
+        i += 1
+    end
+    if ok:
+        if is_c_keyword(name):
+            ret name + "_"
+        end
+        ret name
+    end
+    mut b := str.NewBuilder()
+    if is_digit(byte_at(name, 0)):
+        str.BufAppendChar(b, 95)
+    end
+    mut j := 0
+    until j < n:
+        put_ident_byte(b, byte_at(name, j))
+        j += 1
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+// parse_typestr, reduced to the base-name part cg_struct_of needs:
+// strip ONE trailing '*', then cut at the first '['.
+func ts_base(ts: str): str:
+    mut n := str.Len(ts)
+    if n > 0 && byte_at(ts, n - 1) == 42: // '*'
+        n -= 1
+    end
+    mut cut := n
+    mut i := 0
+    until i < n:
+        if byte_at(ts, i) == 91: // '['
+            cut = i
+            break
+        end
+        i += 1
+    end
+    ret ts.substr(0, cut)
+end
+
+func cg_is_int_typestr(ts: str): bool:
+    ret str.Equals(ts, "i8") || str.Equals(ts, "i16") || str.Equals(ts, "i32") || str.Equals(ts, "i64") || str.Equals(ts, "u8") || str.Equals(ts, "u16") || str.Equals(ts, "u32") || str.Equals(ts, "u64") || str.Equals(ts, "size")
+end
+
+func cg_is_unsigned_typestr(ts: str): bool:
+    ret str.Equals(ts, "u8") || str.Equals(ts, "u16") || str.Equals(ts, "u32") || str.Equals(ts, "u64") || str.Equals(ts, "size")
+end
+
+// Common type of an integer binary operation (SALAM-TYPES.md 15): same
+// signedness picks the higher rank, mixed signedness has no common type
+// (semantic analysis rejects it as E021).
+func cg_common_int_typestr(x: str, y: str): str:
+    if !cg_is_int_typestr(x) || !cg_is_int_typestr(y):
+        ret ""
+    end
+    if str.Equals(x, y):
+        ret x
+    end
+    if cg_is_unsigned_typestr(x) != cg_is_unsigned_typestr(y):
+        ret ""
+    end
+    ret jsg_int_ts_bits(x) >= jsg_int_ts_bits(y) ? x : y
+end
+
+func cg_is_slice_ts(ts: str): bool:
+    ret str.StartsWith(ts, "slice<")
+end
+
+// strchr(ts, '[') != NULL
+func has_bracket(ts: str): bool:
+    n := str.Len(ts)
+    mut i := 0
+    until i < n:
+        if byte_at(ts, i) == 91:
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func cg_encode_typestr(b &: str.StringBuilder, s: str, skip_spaces: bool):
+    n := str.Len(s)
+    mut i := 0
+    until i < n:
+        c := byte_at(s, i)
+        if c == 42: // '*'
+            str.BufAppend(b, "_ptr")
+        else c == 91: // '['
+            str.BufAppend(b, "_arr")
+        else !(c == 93 || (c == 32 && skip_spaces)): // ']' / skipped ' '
+            put_ident_byte(b, c)
+        end
+        i += 1
+    end
+end
+
+// static const char *type_code(cg_t*, type_t*)
+func type_code(s &: sm.Sema, t: int): str:
+    mut b := str.NewBuilder()
+    cg_encode_typestr(b, sm.ToString(s, t), false)
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+// struct_name "" = the C NULL
+func cg_mangle_in(
+    s &: sm.Sema, pkg: str, struct_name: str, fn: str, params: Vector<int>
+): str:
+    mut out := "_Salam_" + cg_cident(str.Len(pkg) > 0 ? pkg : "main")
+    if str.Len(struct_name) > 0:
+        out = out + "_S_" + cg_cident(struct_name)
+    end
+    out = out + "_" + cg_cident(fn)
+    n := params.len()
+    mut i := 0
+    until i < n:
+        out = out + "_" + type_code(s, params.get(i)[0])
+        i += 1
+    end
+    ret out
+end
+
+func cg_mangle_ti(
+    s &: sm.Sema, typestr: str, fn: str, params: Vector<int>
+): str:
+    ret cg_mangle_in(s, "ti", typestr, fn, params)
+end
+
+func array_size_of(ts: str): i64:
+    n := str.Len(ts)
+    mut i := 0
+    mut lb := 0 - 1
+    until i < n:
+        if byte_at(ts, i) == 91: // '['
+            lb = i
+            break
+        end
+        i += 1
+    end
+    if lb < 0:
+        ret 0 as i64
+    end
+    mut v := 0 as i64
+    mut p := lb + 1
+    until p < n && byte_at(ts, p) != 93: // ']'
+        c := byte_at(ts, p)
+        if c >= 48 && c <= 57:
+            v = v * 10 + ((c - 48) as i64)
+        end
+        p += 1
+    end
+    ret v
+end
+
+// ---------------------------------------------------------------------------
+// codegen_overload.c slice: sig_of_decl / pick_overload / struct_by_name /
+// cg_struct_of / cg_op_method / cg_compound_base / pick_op_overload.
+// ---------------------------------------------------------------------------
+func sig_of_decl(s &: sm.Sema, fsym: int, decl: int): int:
+    if fsym == 0:
+        ret 0
+    end
+    fv := sm.SymAt(s, fsym)
+    n := fv.overloads.len()
+    mut i := 0
+    until i < n:
+        sg := fv.overloads.get(i)[0]
+        if sm.SigAt(s, sg).decl == decl:
+            ret sg
+        end
+        i += 1
+    end
+    ret 0
+end
+
+func pick_overload(s &: sm.Sema, a &: at.Ast, fsym: int, call: int): int:
+    fv := sm.SymAt(s, fsym)
+    cv := at.Get(a, call)
+    nargs := cv.list.len()
+    mut fallback := 0
+    n := fv.overloads.len()
+    mut i := 0
+    until i < n:
+        sg := fv.overloads.get(i)[0]
+        sv := sm.SigAt(s, sg)
+        if fallback == 0:
+            fallback = sg
+        end
+        if nargs < sv.required:
+            i += 1
+            continue
+        end
+        if !sv.variadic && nargs > sv.params.len():
+            i += 1
+            continue
+        end
+        nfix := nargs < sv.params.len() ? nargs : sv.params.len()
+        mut ok := true
+        mut j := 0
+        until j < nfix:
+            arg := at.Get(a, cv.list.get(j)[0])
+            pt := sm.ToString(s, sv.params.get(j)[0])
+            if str.Len(arg.type_str) == 0 || !str.Equals(arg.type_str, pt):
+                ok = false
+                break
+            end
+            j += 1
+        end
+        if ok:
+            ret sg
+        end
+        i += 1
+    end
+    ret fallback
+end
+
+func struct_by_name(s &: sm.Sema, name: str): int:
+    sid := sm.Lookup(s, s.global, name)
+    if sid != 0 && sm.SymAt(s, sid).kind == sm.SYM_STRUCT:
+        ret sid
+    end
+    gsc := sm.ScopeAt(s, s.global)
+    n := gsc.symbols.len()
+    mut i := 0
+    until i < n:
+        sy := gsc.symbols.get(i)[0]
+        sv := sm.SymAt(s, sy)
+        if sv.kind == sm.SYM_STRUCT && sv.ty != sm.TYPE_NONE:
+            tn := sm.TypeAt(s, sv.ty).name
+            if str.Len(tn) > 0 && str.Equals(tn, name):
+                ret sy
+            end
+        end
+        i += 1
+    end
+    mut i2 := 0
+    until i2 < n:
+        pk := gsc.symbols.get(i2)[0]
+        pv := sm.SymAt(s, pk)
+        if pv.kind != sm.SYM_PACKAGE || pv.members == 0:
+            i2 += 1
+            continue
+        end
+        msc := sm.ScopeAt(s, pv.members)
+        m := msc.symbols.len()
+        mut j := 0
+        until j < m:
+            sy2 := msc.symbols.get(j)[0]
+            sv2 := sm.SymAt(s, sy2)
+            if sv2.kind == sm.SYM_STRUCT:
+                if str.Equals(sv2.name, name):
+                    ret sy2
+                end
+                if sv2.ty != sm.TYPE_NONE:
+                    tn2 := sm.TypeAt(s, sv2.ty).name
+                    if str.Len(tn2) > 0 && str.Equals(tn2, name):
+                        ret sy2
+                    end
+                end
+            end
+            j += 1
+        end
+        i2 += 1
+    end
+    ret 0
+end
+
+// cg_struct_of: sname receives the parsed base type name.
+func cg_struct_of(s &: sm.Sema, ts: str, sname &: str): int:
+    sname = ts_base(ts)
+    ret struct_by_name(s, sname)
+end
+
+func cg_op_method(k: int): str:
+    if k == tok.TK_PLUS:
+        ret "operator_add"
+    else k == tok.TK_MINUS:
+        ret "operator_sub"
+    else k == tok.TK_STAR:
+        ret "operator_mul"
+    else k == tok.TK_SLASH:
+        ret "operator_div"
+    else k == tok.TK_PERCENT:
+        ret "operator_mod"
+    else k == tok.TK_POWER:
+        ret "operator_pow"
+    else k == tok.TK_EQ:
+        ret "operator_eq"
+    else k == tok.TK_NE:
+        ret "operator_ne"
+    else k == tok.TK_LT:
+        ret "operator_lt"
+    else k == tok.TK_GT:
+        ret "operator_gt"
+    else k == tok.TK_LE:
+        ret "operator_le"
+    else k == tok.TK_GE:
+        ret "operator_ge"
+    end
+    ret "" // C NULL
+end
+
+func cg_compound_base(k: int): int:
+    if k == tok.TK_PLUS_EQ:
+        ret tok.TK_PLUS
+    else k == tok.TK_MINUS_EQ:
+        ret tok.TK_MINUS
+    else k == tok.TK_STAR_EQ:
+        ret tok.TK_STAR
+    else k == tok.TK_SLASH_EQ:
+        ret tok.TK_SLASH
+    else k == tok.TK_PERCENT_EQ:
+        ret tok.TK_PERCENT
+    else k == tok.TK_POWER_EQ:
+        ret tok.TK_POWER
+    end
+    ret tok.TK_EOF
+end
+
+func pick_op_overload(s &: sm.Sema, msym: int, want_nparams: int): int:
+    mv := sm.SymAt(s, msym)
+    n := mv.overloads.len()
+    mut fallback := 0
+    mut i := 0
+    until i < n:
+        sg := mv.overloads.get(i)[0]
+        if sm.SigAt(s, sg).params.len() == want_nparams:
+            if fallback == 0:
+                fallback = sg
+            end
+        end
+        i += 1
+    end
+    ret fallback
+end

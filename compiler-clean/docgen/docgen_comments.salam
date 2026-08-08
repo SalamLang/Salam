@@ -1,0 +1,199 @@
+package docgen
+
+import tok "../token.salam"
+import str
+
+func split_lines(s: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    n := s.len()
+    mut start := 0
+    mut i := 0
+    until i < n:
+        if byte_at(s, i) == 10:
+            out.push(str.Substr(s, start, i - start))
+            start = i + 1
+        end
+        i += 1
+    end
+    out.push(str.Substr(s, start, n - start))
+    ret out
+end
+
+// "// text" / "/// text" -> "text"
+func strip_line_comment(raw: str): str:
+    n := raw.len()
+    mut i := 0
+    until i < n && byte_at(raw, i) == 47:
+        i += 1
+    end
+    ret str.Trim(str.Substr(raw, i, n - i))
+end
+
+// "/* ... */" / "/** ... */" -> inner text, with a leading '*' (JSDoc style)
+// stripped from each interior line.
+func strip_block_comment(raw: str): str:
+    n := raw.len()
+    mut start := 0
+    if n >= 2 && byte_at(raw, 0) == 47 && byte_at(raw, 1) == 42:
+        start = 2
+    end
+    until start < n && byte_at(raw, start) == 42:
+        start += 1
+    end
+    mut stop := n
+    if stop >= 2 && byte_at(raw, stop - 1) == 47 && byte_at(raw, stop - 2) == 42:
+        stop -= 2
+    end
+    // An empty block comment leaves the open and close markers overlapping
+    // (the '*'-skipping loop above can run past the closing marker); clamp
+    // rather than hand Substr a negative length.
+    if stop < start:
+        stop = start
+    end
+    body := str.Substr(raw, start, stop - start)
+    lines := split_lines(body)
+    mut b := str.NewBuilder()
+    mut first := true
+    mut li := 0
+    until li < lines.len():
+        mut line := str.Trim(lines.get(li)[0])
+        if line.len() > 0 && byte_at(line, 0) == 42:
+            line = str.Trim(str.Substr(line, 1, line.len() - 1))
+        end
+        if !first:
+            str.BufAppendChar(b, 10)
+        end
+        str.BufAppend(b, line)
+        first = false
+        li += 1
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret str.Trim(r)
+end
+
+// Splits a doc-comment block's joined text on "@lang" tags into flat
+// [lang, text, lang, text, ...] pairs pushed onto `out`. Untagged text (no
+// "@lang" line at all) becomes one pair with lang = "" (the default/fallback
+// bucket).
+func split_lang_sections(text: str, out &: Vector<str>):
+    lines := split_lines(text)
+    mut cur_lang := ""
+    mut cur := ""
+    mut has_any := false
+    mut i := 0
+    until i < lines.len():
+        line := lines.get(i)[0]
+        trimmed := str.Trim(line)
+        mut tag := ""
+        mut rest := ""
+        mut is_tag := false
+        if trimmed.len() > 1 && byte_at(trimmed, 0) == 64:
+            mut j := 1
+            until j < trimmed.len() && is_alpha(byte_at(trimmed, j)):
+                j += 1
+            end
+            if j > 1:
+                tag = str.Substr(trimmed, 1, j - 1)
+                rest = str.Trim(str.Substr(trimmed, j, trimmed.len() - j))
+                is_tag = true
+            end
+        end
+        if is_tag:
+            if has_any:
+                out.push(cur_lang)
+                out.push(str.Trim(cur))
+            end
+            cur_lang = tag
+            cur = rest
+            has_any = true
+        else:
+            if has_any || line.len() > 0:
+                if cur.len() > 0:
+                    cur = cur + "\n"
+                end
+                cur = cur + line
+                has_any = true
+            end
+        end
+        i += 1
+    end
+    if has_any:
+        out.push(cur_lang)
+        out.push(str.Trim(cur))
+    end
+end
+
+func finalize_block(blocks &: Vector<CommentBlock>, raw: Vector<str>, end_line: int):
+    if raw.len() == 0:
+        ret
+    end
+    mut joined := ""
+    mut i := 0
+    until i < raw.len():
+        if i != 0:
+            joined = joined + "\n"
+        end
+        joined = joined + raw.get(i)[0]
+        i += 1
+    end
+    mut cb := CommentBlock {}
+    cb.end_line = end_line
+    split_lang_sections(joined, cb.texts)
+    blocks.push(cb)
+end
+
+func collect_comment_blocks(toks2: tok.TokenStream): Vector<CommentBlock>:
+    mut blocks := Vector {} as Vector<CommentBlock>
+    n := tok.StreamCount(toks2)
+    mut raw := Vector {} as Vector<str>
+    mut last_end := 0 - 1000
+    mut i := 0
+    until i < n:
+        t := tok.StreamAt(toks2, i)
+        if t.kind == tok.TK_COMMENT_BLOCK:
+            finalize_block(blocks, raw, last_end)
+            raw.free()
+            raw = Vector {} as Vector<str>
+            mut single := Vector {} as Vector<str>
+            single.push(strip_block_comment(t.lexeme))
+            finalize_block(blocks, single, t.end_line as int)
+            single.free()
+            last_end = 0 - 1000
+        else t.kind == tok.TK_COMMENT_LINE:
+            this_begin := t.begin_line as int
+            if raw.len() > 0 && this_begin != last_end + 1:
+                finalize_block(blocks, raw, last_end)
+                raw.free()
+                raw = Vector {} as Vector<str>
+            end
+            raw.push(strip_line_comment(t.lexeme))
+            last_end = t.end_line as int
+        end
+        i += 1
+    end
+    finalize_block(blocks, raw, last_end)
+    raw.free()
+    ret blocks
+end
+
+func attach_doc(db &: DocDb, blocks: Vector<CommentBlock>, decl_idx: int, begin_line: int):
+    n := blocks.len()
+    mut i := 0
+    until i < n:
+        cb := blocks.get(i)[0]
+        if cb.end_line == begin_line - 1:
+            mut j := 0
+            until j + 1 < cb.texts.len():
+                db_add_doc(db, decl_idx, cb.texts.get(j)[0], cb.texts.get(j + 1)[0])
+                j += 2
+            end
+            ret
+        end
+        i += 1
+    end
+end
+
+// ---------------------------------------------------------------------------
+// AST walk
+// ---------------------------------------------------------------------------

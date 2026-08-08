@@ -1,0 +1,507 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Flat merge of the salam/semantic port (see salam/PORTING.md "Layout - FLAT"):
+// compiler/src/semantic/ - one package `semantic`, one file. Import alias for
+// consumers: `sm`. Because the checker functions are mutually recursive, the
+// module is ported by four sequential agents INTO THIS ONE FILE:
+//
+//   5a (DONE): sema_internal.h (state struct + helpers), types.h/types.c,
+//       symbol.h/symbol.c, sema_util.c, sema_type.c, builtins.h/builtins.c.
+//   5b (DONE): sema.c + sema_order.c + sema_decl.c (run/collect/imports/
+//       packages/prelude/ordering/unused checks/xml).
+//   5c (DONE): sema_generic.c, sema_expr.c, sema_call.c, sema_lit.c,
+//       sema_fold.c + the lvalue/pure-write slice of sema_stmt.c
+//       (analyze_lvalue/sema_classify_write/sema_check_pure_write).
+//   5d (DONE): the rest of sema_stmt.c (blocks/statements/var decls/
+//       terminators/E062 unused params), sema_match.c, sema_layout.c (plus
+//       the layout registry/schema slice it validates against), dce.c.
+//
+// >>> The port is COMPLETE - no stubs remain. New private functions go
+// >>> before the "PUBLIC API" section (rule E088: pub funcs come last).
+//
+// C -> Salam decisions for this module (later stages must inherit these):
+// - type_t* -> `pub type TypeId = int`, an index into Sema.types.
+//   The 18 primitive types are pre-seeded at ids 0..TY_F64, so for
+//   primitives TypeId == TY_* kind value (mirrors type_ctx_t.prims[]).
+//   The C NULL type pointer is TYPE_NONE (= -1), NOT 0 (0 is the TY_ERROR
+//   primitive; C distinguishes "<null>" from "<error>" and NULL checks).
+// - scope_t* / symbol_t* / func_sig_t* -> ScopeId / SymId / SigId indices
+//   into Sema.scopes / Sema.syms / Sema.sigs; slot 0 is a sentinel = C NULL
+//   (same convention as ast.NodeId).
+// - ast_node_t* -> at.NodeId int (0 = none). The Ast is NOT stored inside
+//   Sema (Vector-header copy hazard); it is threaded as `a &: at.Ast`
+//   through every function that touches nodes, like the parser port.
+// - type_ctx_t / sema_t are merged into ONE `pub struct Sema` (the C tc was
+//   a field of sema_t anyway). No globals except the const data tables
+//   (k_sm_*; repo-unique names per PORTING.md).
+// - Renamed fields (Salam keywords): type_t.kind..params keep C names;
+//   symbol_t.type -> Symbol.ty; func_sig_t.ret -> Sig.ret_type;
+//   scope_t.func -> Scope.fn; sema_t.cc -> Sema.cctab (import-alias clash).
+// - scope_t's lazy hash index (hindex/hcap, symbol.c) is dropped: lookup is
+//   a linear scan with identical semantics (perf-only difference).
+// - lambda_ctx_t linked list (prev) -> Vector<LambdaCtx> stack Sema.lam.
+// - sema_t.pkg_cache (vec of [path, symbol] pairs) -> two parallel vectors
+//   pkg_cache_paths / pkg_cache_syms.
+// - s->match_yield_collect (vec_t* into a caller's local) -> the vector
+//   match_yield_collect + bool match_yield_active on Sema.
+// - SERR/SWARN macros -> serr()/swarn() below; messages are pre-formatted at
+//   the call site with co.FormatN(i18.Tr(fmt), ...) (the C diag_report did
+//   the i18n_tr internally; the diag port takes a final message body).
+// - type_to_string/mangle_func: the C clamps output at fixed char buffers
+//   (128/160/256/512 bytes); not replicated - only pathological giant nested
+//   types would differ.
+// 5b (DONE): sema.c + sema_order.c + sema_decl.c are ported. Notes:
+// - the C static globals g_stdlib_root / g_seg_aliases[512] are the g_sm_* module
+//   globals below; get_exe_dir derives from os.Args()[0] (the C read
+//   /proc/self/exe) and SALAM_STDLIB_PREFIX (a configure-time #define) has
+//   no port equivalent - SALAM_STD / salam.cfg / exe-relative paths cover it.
+// - RunCached's shared_pkg_cache cannot cross Sema instances (SymIds are
+//   Sema-local); the package cache is Sema-owned (pkg_cache_paths/syms).
+// - imported package files are lexed/parsed into the SAME at.Ast that holds
+//   the main program (the C used one arena; NodeIds stay tree-unique).
+// 5c (DONE): sema_generic.c + sema_expr.c + sema_call.c + sema_lit.c +
+// sema_fold.c are ported, plus sema_stmt.c's lvalue classification and
+// pure-write check (AST_INCDEC needed them - 5d must NOT port them again).
+// Notes for 5d:
+// - generic_template gained an `a &: at.Ast` param (the C read
+//   sym->decl->typarams directly; the port needs the tree).
+// - g_subst does NOT share the clone's list/dims vectors (the C did); it
+//   copies the child NodeIds into fresh vectors so FreeAst frees each
+//   vector exactly once.
+// - sema_collect / sema_check_pass iterate the program with LIVE
+//   at.Child/ChildCount reads: g_instantiate_struct/-func APPEND synthetic
+//   instances to s.program's list mid-iteration, and a snapshot Vector
+//   header would dangle on realloc. Keep any new program-list loops live.
+// - check_lambda builds its inference Sig as a real Sema-owned s.sigs slot
+//   (the C used a stack func_sig_t); the slot simply stays allocated.
+// - global `const N := 2*3` is NOT usable as an array dim even in the C
+//   (collect resolves field types before the initializer folds; only
+//   literal-initialized consts carry ival there). Local consts get their
+//   ival from the folded initializer in check_stmt (5d).
+// 5d (DONE): sema_stmt.c remainder + sema_match.c + sema_layout.c + dce.c.
+// - dce.c state -> g_sm_dce_* globals (DceReset/Enable/Finish/Reachable…);
+//   dce_note gained an `a &: at.Ast` param (dce_caller_rooted reads the
+//   current function's decl node). Disabled by default, like the C.
+// - sema_layout.c needs the layout registry: the registry.c/schema.c slice
+//   it reads (elem/attr/value tables, layout_schema_init, value validators,
+//   layout_localize_names) is ported HERE as g_sm_lay_* + lay_*/schema_*
+//   private funcs; pub LayoutSchemaInit(root) replaces the driver's
+//   layout_schema_init call - callers of Run that check layout blocks must
+//   invoke it once (the tests and tests_port/sema_run.salam do).
+// - sema_check_match: the C per-arm heap vec of match_yield_t and the
+//   arm_yields vec-of-vecs are flattened into parallel vectors with
+//   per-arm [offset,count) windows; s.match_yield_collect is swapped
+//   per-arm exactly like the C pointer (match_yield_active = "collect is
+//   non-NULL"). Exhaustiveness messages replicate sal_catf's 256-byte
+//   clamping byte-for-byte (sm_catf256).
+// - Corpus gate: tests_port/sema_run.salam mirrors the driver's
+//   `--emit-symbol-xml` pipeline; symbol XML + rc byte-identical to HEAD
+//   bin/salam across compiler/tests (see PORTING.md for numbers). stderr
+//   matches after stripping logger lines and code-less lexer/parser render
+//   blocks (the logger port's rich diag path is unwired; LogAt carries no
+//   span length - note for the driver/logger wave).
+package semantic
+
+import co "../sal_core.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import dg "../diag.salam"
+import cc "../condcomp.salam"
+
+// ===== types.h =====
+// type_kind_t - order and values MUST stay identical to the C enum.
+pub const TY_ERROR := 0
+pub const TY_VOID := 1
+pub const TY_BOOL := 2
+pub const TY_CHAR := 3
+pub const TY_STR := 4
+pub const TY_UCHAR := 5
+pub const TY_NULL := 6
+pub const TY_I8 := 7
+pub const TY_I16 := 8
+pub const TY_I32 := 9
+pub const TY_I64 := 10
+pub const TY_U8 := 11
+pub const TY_U16 := 12
+pub const TY_U32 := 13
+pub const TY_U64 := 14
+pub const TY_SIZE := 15
+pub const TY_F32 := 16
+pub const TY_F64 := 17
+pub const TY_ARRAY := 18
+pub const TY_PTR := 19
+pub const TY_STRUCT := 20
+pub const TY_ENUM := 21
+pub const TY_MAP := 22
+pub const TY_MAP_ITER := 23
+pub const TY_VEC := 24
+pub const TY_FILE := 25
+pub const TY_FUNC := 26
+pub const TY_DYN := 27
+pub const TY_SLICE := 28
+pub const TY_VARIANT := 29
+
+// The C NULL type_t* (see file header; 0 is the TY_ERROR primitive).
+pub const TYPE_NONE := 0 - 1
+
+// ===== symbol.h =====
+// sym_kind_t
+pub const SYM_VAR := 0
+pub const SYM_CONST := 1
+pub const SYM_PARAM := 2
+pub const SYM_FIELD := 3
+pub const SYM_FUNC := 4
+pub const SYM_METHOD := 5
+pub const SYM_STRUCT := 6
+pub const SYM_ENUM := 7
+pub const SYM_ALIAS := 8
+pub const SYM_ENUM_MEMBER := 9
+pub const SYM_PACKAGE := 10
+pub const SYM_INTERFACE := 11
+pub const SYM_TYPEIMPL := 12
+
+// ConstVal kinds - see sema_const_eval (the sema_fold.c section below).
+pub const CV_NONE := 0
+pub const CV_INT := 1
+pub const CV_FLOAT := 2
+pub const CV_BOOL := 3
+
+// scope_kind_t
+pub const SCOPE_GLOBAL := 0
+pub const SCOPE_STRUCT := 1
+pub const SCOPE_FUNC := 2
+pub const SCOPE_BLOCK := 3
+
+// ===== sema_internal.h =====
+// lvalue_verdict_t (used by sema_stmt/sema_expr - ported in 5c/5d)
+pub const LV_OK := 0
+pub const LV_NOT_LVALUE := 1
+pub const LV_CONST := 2
+pub const LV_IMMUTABLE := 3
+
+// language tags for the primitive-name table (types.c, local enum)
+const L_EN := 1
+const L_FA := 2
+const L_AR := 3
+
+const K_SM_PRIM_COUNT := 77
+const K_SM_INTR_TYPE_COUNT := 5
+const K_SM_INTR_METHOD_COUNT := 28
+const K_SM_BUILTIN_COUNT := 3
+// sema.c: g_seg_aliases[512] capacity and package_files' max (256).
+const K_SM_SEG_MAX := 512
+const K_SM_PKG_FILES_MAX := 256
+
+// ===== layout/registry.h (5d) =====
+// layout_elem_type_t
+const LE_SINGLE := 0
+const LE_MOTHER := 1
+const LE_SINGLE2MOTHER := 2
+const LE_MOTHER2SINGLE := 3
+// layout_attr_dest_t
+const LA_CONTENT := 0
+const LA_CLASS := 1
+const LA_HTML := 2
+const LA_STYLE := 3
+const LA_DIR := 4
+const LA_LANG := 5
+const LA_SOURCE := 6
+const LA_CSS := 7
+const LA_META := 8
+// layout_value_type_t
+const VT_STRING := 0
+const VT_INT := 1
+const VT_FLOAT := 2
+const VT_BOOL := 3
+const VT_EMAIL := 4
+const VT_URL := 5
+const VT_COLOR := 6
+const VT_DIR := 7
+const VT_LANG := 8
+const VT_ENUM := 9
+const VT_LENGTH := 10
+// LAYOUT_DYN_VAL_MAX (registry.c) / SCHEMA_MAX_ELEMS (schema.c)
+const K_SM_LAY_VAL_MAX := 512
+const K_SM_SCHEMA_MAX := 256
+
+// bundled-tool executable suffix (#if defined(_WIN32) in sema.c)
+if SALAM_OS_WINDOWS:
+    const K_SM_EXE_SUFFIX := ".exe"
+else:
+    const K_SM_EXE_SUFFIX := ""
+end
+
+// ===== types.c (data) =====
+// type_prim_kind_from_name's tab[] as three parallel arrays (order kept).
+k_sm_prim_names := [
+    "void", "bool", "char", "str", "uchar", "i8", "i16", "i32", "int", "i64", "u8", "u16", "u32", "uint",
+    "u64", "size", "f32", "float", "f64", "تهی", "منطقی", "نویسه", "رشته", "یونیکد",
+    "صحیح۸", "صحیح۱۶", "صحیح۳۲", "صحیح", "صحیح۶۴", "صحیح8", "صحیح16",
+    "صحیح32", "صحیح64", "طبیعی۸", "طبیعی۱۶", "طبیعی۳۲", "طبیعی", "طبیعی۶۴",
+    "طبیعی8", "طبیعی16", "طبیعی32", "طبیعی64", "اندازه", "اعشار۳۲",
+    "اعشار", "اعشار۶۴", "اعشار32", "اعشار64", "فراغ", "منطقي", "حرف",
+    "نص", "يونيكود", "صحيح٨", "صحيح١٦", "صحيح٣٢", "صحيح", "صحيح٦٤",
+    "صحيح8", "صحيح16", "صحيح32", "صحيح64", "طبيعي٨", "طبيعي١٦", "طبيعي٣٢",
+    "طبيعي", "طبيعي٦٤", "طبيعي8", "طبيعي16", "طبيعي32", "طبيعي64", "حجم",
+    "عشري٣٢", "عشري", "عشري٦٤", "عشري32", "عشري64"
+] as str[77]
+
+// declared mut: immutable global int arrays in a non-main package hit the
+// extern-const codegen bug (see salam/PORTING.md) - do not reassign.
+mut k_sm_prim_kinds := [
+    1, 2, 3, 4, 5, 7, 8, 9, 9, 10, 11, 12, 13, 13, 14, 15, 16, 16, 17, 1, 2, 3, 4, 5, 7, 8, 9, 9, 10,
+    7, 8, 9, 10, 11, 12, 13, 13, 14, 11, 12, 13, 14, 15, 16, 16, 17, 16, 17, 1, 2, 3, 4, 5, 7, 8, 9,
+    9, 10, 7, 8, 9, 10, 11, 12, 13, 13, 14, 11, 12, 13, 14, 15, 16, 16, 17, 16, 17
+] as int[77]
+
+mut k_sm_prim_langs := [
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3
+] as int[77]
+
+// ===== sema_util.c (data) =====
+// k_intrinsic_types / k_intrinsic_methods, flattened with stride 3:
+// [i*3] = fa, [i*3+1] = ar, [i*3+2] = en.
+k_sm_intr_types := [
+    "وکتور", "متجه", "Vector", "نگاشت", "خريطة", "HashMap", "پیمایشگرنگاشت",
+    "مكررخريطة", "MapIter", "پرونده", "ملف", "File", "گوناگون", "متنوع",
+    "Variant"
+] as str[15]
+
+k_sm_intr_methods := [
+    "بیفزا", "أضف", "push", "دربیاور", "أخرج", "pop", "بگیر", "احصل", "get",
+    "بنشان", "عين", "set", "طول", "طول", "len", "ظرفیت", "سعة", "cap", "آزادکن",
+    "حرر", "free", "درج", "ضع", "put", "دارد", "يحوي", "has", "حذف", "احذف", "remove",
+    "اندازه", "حجم", "size", "پیمایش", "تكرار", "iter", "داردبعدی", "يوجدتالي",
+    "has_next", "کلید", "مفتاح", "key", "مقدار", "قيمة", "value", "بعدی", "التالي",
+    "next", "خواندن", "قراءة", "read", "خواندن خط", "قراءةسطر", "readline",
+    "نوشتن", "كتابة", "write", "جابجایی", "انتقال", "seek", "ببند", "أغلق",
+    "close", "پیوست", "دمج", "concat", "زیررشته", "مقطع", "substr", "بیاب", "ابحث",
+    "find", "بشکاف", "قسم", "split", "پیراست", "شذب", "trim", "به صحیح", "إلىصحيح",
+    "to_int", "به اعشار", "إلىعشري", "to_float"
+] as str[84]
+
+// ===== builtins.c (data) =====
+// k_builtins[] as parallel arrays.
+k_sm_builtin_names := ["char_from_code", "strcmp", "join"] as str[3]
+k_sm_builtin_runtime := ["salam_char_from_code", "strcmp", "salam_thread_join"] as str[3]
+// see the mut note on k_sm_prim_kinds - do not reassign.
+mut k_sm_builtin_nargs := [1, 2, 1] as int[3]
+k_sm_builtin_ret := ["str", "i32", "void"] as str[3]
+k_sm_builtin_arg := ["i32", "str", "i64"] as str[3]
+
+// ===== sema.c (data) =====
+// g_stdlib_root_buf / g_stdlib_root / g_stdlib_resolved
+mut g_sm_stdlib_root := ""
+mut g_sm_stdlib_resolved := false
+// g_seg_aliases[512] + g_seg_alias_n + g_seg_alias_root as parallel vectors
+// (lang, alias, canon); n = -1 means "index not built yet" like the C.
+mut g_sm_seg_lang := Vector {} as Vector<str>
+mut g_sm_seg_alias := Vector {} as Vector<str>
+mut g_sm_seg_canon := Vector {} as Vector<str>
+mut g_sm_seg_n := 0 - 1
+mut g_sm_seg_root := ""
+
+// ===== dce.c (data, 5d) =====
+// g_arena presence -> g_sm_dce_init; g_edges as parallel from/to vectors.
+mut g_sm_dce_init := false
+mut g_sm_dce_enabled := false
+mut g_sm_dce_edge_from := Vector {} as Vector<str>
+mut g_sm_dce_edge_to := Vector {} as Vector<str>
+mut g_sm_dce_roots := Vector {} as Vector<str>
+mut g_sm_dce_reach := Vector {} as Vector<str>
+
+// ===== layout/registry.c + schema.c (data, 5d) =====
+// g_elems / g_attrs / g_vals as parallel vectors ("" = the C NULL string;
+// or_null() collapsed empties at load time, so "" always means absent).
+mut g_sm_lay_elem_name := Vector {} as Vector<str>
+mut g_sm_lay_elem_tag := Vector {} as Vector<str>
+mut g_sm_lay_elem_type := Vector {} as Vector<int>
+mut g_sm_lay_elem_parents := Vector {} as Vector<str>
+mut g_sm_lay_elem_required := Vector {} as Vector<str>
+mut g_sm_lay_attr_name := Vector {} as Vector<str>
+mut g_sm_lay_attr_out := Vector {} as Vector<str>
+mut g_sm_lay_attr_dest := Vector {} as Vector<int>
+mut g_sm_lay_attr_vtype := Vector {} as Vector<int>
+mut g_sm_lay_attr_allowed := Vector {} as Vector<str>
+mut g_sm_lay_val_group := Vector {} as Vector<str>
+mut g_sm_lay_val_spell := Vector {} as Vector<str>
+mut g_sm_lay_val_canon := Vector {} as Vector<str>
+
+// ===== handle type aliases =====
+pub type TypeId = int
+pub type ScopeId = int
+pub type SymId = int
+pub type SigId = int
+
+// ===== types.h =====
+// struct type_t. `decl` (void* in C, symbol_t* in practice) is a SymId.
+// For TY_FUNC, `elem` is the return type and `length != 0` marks an extern
+// ("externfunc") signature, exactly like the C.
+pub struct Type:
+    pub kind: int = 0
+    pub elem: int = TYPE_NONE
+    pub length: i64 = 0 as i64
+    pub pointee: int = TYPE_NONE
+    pub key: int = TYPE_NONE
+    pub decl: int = 0
+    pub name: str = ""
+    pub params: Vector<int> = Vector {} // TypeIds (func params / variant members)
+end
+
+// ===== symbol.h =====
+// func_sig_t. C field `ret` -> ret_type (keyword). decl is an at.NodeId,
+// owner a SymId; params holds TypeIds.
+pub struct Sig:
+    pub params: Vector<int> = Vector {}
+    pub required: int = 0
+    pub ret_type: int = TYPE_NONE
+    pub ret_span: co.SrcSpan = co.EmptySpan()
+    pub ret_int_span: co.SrcSpan = co.EmptySpan()
+    pub ret_int_seen: bool = false
+    pub ret_float_seen: bool = false
+    pub decl: int = 0
+    pub owner: int = 0
+    pub mangled: str = ""
+    pub variadic: bool = false
+    pub infer_ret: bool = false
+    pub ret_weak: bool = false
+    pub ret_widened: bool = false
+    pub checked: bool = false
+    pub in_check: bool = false
+end
+
+// struct symbol_t. C field `type` -> ty (keyword). decl is an at.NodeId;
+// overloads holds SigIds; members/home are ScopeIds; generic_args TypeIds.
+pub struct Symbol:
+    pub kind: int = 0
+    pub name: str = ""
+    pub ty: int = TYPE_NONE
+    pub is_mut: bool = false
+    pub is_ref: bool = false
+    pub is_pub: bool = false
+    pub used: bool = false
+    pub mutated: bool = false
+    pub decl: int = 0
+    pub overloads: Vector<int> = Vector {}
+    pub members: int = 0
+    pub enum_value: i64 = 0 as i64
+    pub has_ival: bool = false
+    pub ival: i64 = 0 as i64
+    pub pkgname: str = ""
+    pub generic_base: str = ""
+    pub generic_args: Vector<int> = Vector {}
+    pub home: int = 0
+end
+
+// The value of a compile-time-constant expression, or CV_NONE when it has
+// none. Filled in by sema_const_eval (the sema_fold.c section).
+pub struct ConstVal:
+    pub kind: int = CV_NONE
+    pub i: i64 = 0 as i64
+    pub f: f64 = 0.0
+    pub b: bool = false
+end
+
+// struct scope_t. C field `func` -> fn (keyword; a SigId). The hash index
+// (hindex/hcap) is dropped - lookups scan `symbols` linearly.
+pub struct Scope:
+    pub kind: int = 0
+    pub parent: int = 0
+    pub symbols: Vector<int> = Vector {} // SymIds
+    pub self_type: int = TYPE_NONE
+    pub fn: int = 0
+    pub label: str = ""
+    pub aux: int = 0
+    pub lang: str = ""
+end
+
+// ===== sema_internal.h =====
+// lambda_ctx_t (the `prev` chain becomes the Sema.lam stack)
+pub struct LambdaCtx:
+    pub boundary: int = 0 // ScopeId
+    pub node: int = 0 // at.NodeId
+end
+
+// match_yield_t. C fields `ret`/`type` -> ret_node/ty (keywords).
+pub struct MatchYield:
+    pub ret_node: int = 0 // at.NodeId of the yielding ret/expr
+    pub ty: int = TYPE_NONE // TypeId
+end
+
+// ===== builtins.h =====
+// salam_builtin_t. C field `ret` -> ret_type (keyword).
+pub struct Builtin:
+    pub name: str = ""
+    pub runtime: str = ""
+    pub nargs: int = 0
+    pub ret_type: str = ""
+    pub arg: str = ""
+end
+
+// sema_t + type_ctx_t merged (see file header for every representation
+// change). Always create through New() - a bare `Sema {}` has empty tables.
+pub struct Sema:
+    // arena_t *a - dropped (Vector ownership); logger_t*/diag_engine_t*:
+    pub log: lg.Logger = lg.New(2, false)
+    pub diag: dg.Engine = dg.NewDefault(2, false, 4) // phase 4 = PH_SEMANTIC
+    pub file: str = ""
+    pub lang: str = "en"
+    // type_ctx_t tc (prims are types[0..TY_F64]; arrays/ptrs intern lists):
+    pub types: Vector<Type> = Vector {}
+    pub arrays_intern: Vector<int> = Vector {} // TypeIds of TY_ARRAY types
+    pub ptrs_intern: Vector<int> = Vector {} // TypeIds of TY_PTR types
+    // symbol/scope/signature storage (slot 0 = sentinel = C NULL):
+    pub scopes: Vector<Scope> = Vector {}
+    pub syms: Vector<Symbol> = Vector {}
+    pub sigs: Vector<Sig> = Vector {}
+    pub global: int = 0 // ScopeId
+    pub cur: int = 0 // ScopeId
+    pub self_type: int = TYPE_NONE
+    pub cur_func: int = 0 // SigId (C: func_sig_t *cur_func)
+    pub loop_depth: int = 0
+    pub dir: str = ""
+    pub imported: Vector<str> = Vector {}
+    pub pkg: str = ""
+    // vec_t *pkg_cache ([path, symbol] pairs) -> parallel vectors:
+    pub pkg_cache_paths: Vector<str> = Vector {}
+    pub pkg_cache_syms: Vector<int> = Vector {} // SymIds
+    pub loading: Vector<str> = Vector {}
+    pub program: int = 0 // at.NodeId
+    pub pending: Vector<int> = Vector {} // at.NodeIds (generic instantiations)
+    pub expected: int = TYPE_NONE
+    pub lam: Vector<LambdaCtx> = Vector {} // lambda_ctx_t *lam (stack)
+    pub gen_pkg: int = 0 // ScopeId
+    pub prelude: int = 0 // ScopeId
+    pub prelude_tried: bool = false
+    pub in_pkg: bool = false
+    pub relax_unused: bool = false
+    pub requal: bool = false
+    pub each_n: int = 0
+    // const cc_table_t *cc -> value copy (field renamed: alias clash).
+    // has_cc mirrors "cc != NULL"; replace via SetCc().
+    pub cctab: cc.Table = cc.TableBuild("", Vector {} as Vector<str>)
+    pub has_cc: bool = false
+    pub match_arm_depth: int = 0
+    pub match_yield_expected: int = TYPE_NONE
+    // vec_t *match_yield_collect -> vector + active flag:
+    pub match_yield_active: bool = false
+    pub match_yield_collect: Vector<MatchYield> = Vector {}
+end
+
+// ---------------------------------------------------------------------------
+// Low-level shared helpers (no direct C equivalent).
+// ---------------------------------------------------------------------------

@@ -1,0 +1,326 @@
+package cli
+
+import io
+import str
+import dr "../driver/driver.salam"
+import rp "../repl.salam"
+import i18 "../i18n.salam"
+import co "../sal_core.salam"
+import sm "../semantic/semantic.salam"
+import pf "../prof_self.salam"
+
+// cli.c's cli_parse: fresh defaults (dr.NewOptions(), mirroring
+// cli_set_defaults) + dispatch_command + parse_options + the post-parse
+// "safe -> push SALAM_SAFE define" step, verbatim.
+pub func ParseArgs(args: Vector<str>, out &: dr.Dr): bool:
+    out = dr.NewOptions()
+    start := dispatch_command(args, out)
+    if out.command == dr.CMD_UNKNOWN:
+        io.EPrintln(co.Format1(i18.Tr("salam: unknown command '%s'"), co.ArgStr(args.get(1)[0])))
+        io.EPrintln("")
+        io.EPrint(UsageText())
+        ret false
+    end
+    if !parse_options(args, start, out):
+        ret false
+    end
+    if out.safe:
+        out.defines.push("SALAM_SAFE")
+    end
+    ret true
+end
+
+// cli_help.c's cli_print_usage, returned as text (instead of taking a
+// FILE*) so tests can assert on it and Run() can send it to stdout or
+// stderr as the C does depending on the call site.
+pub func UsageText(): str:
+    ret """salam - Salam compiler
+
+Usage:
+  salam <command> [arguments] [options]
+
+Commands:
+  build    [files|dir] [build options]          Compile to an executable (cross-compile with --target); no
+                                                input builds the project here (entry file: salam.salam)
+  obj      <files...> [build options]           Compile to an object file (cross-compile with --target)
+  llvm     <file.salam> [--output=FILE]         Emit LLVM IR (.ll) for the LLVM/wasm backend
+  js       <files...> [--output=FILE]           Compile to browser-ready JavaScript (.js, or a
+                                                self-contained page when FILE ends in .html)
+  web      [page.salam|dir] [--output=FILE] [--split]  Build a web project: layout page + compiled
+                                                'script: src="*.salam"' programs; one .html
+                                                (default) or .html/.css/.js with --split
+  serve    [dir] [--port=N] [--host=H]          Serve a directory over HTTP (default: '.',
+                                                127.0.0.1:8000); directory listing when no
+                                                index.html is present
+  run      [file.salam] [build options]         Build (auto-detect entry) + run, no artifacts kept
+  exec     [file.salam] [--timeout=MS]           Run with the tree-walking interpreter (no C toolchain)
+  new      [name] [--lang=en|fa|ar]             Scaffold a new project directory
+  format   [files/dirs...] [--check] [-r] [--tabs]  Format .salam source in place (recursive)
+  doc      [path] [--output=FILE] [--lang=CODE]     Generate a self-contained API doc.html from a
+                                                project directory (default '.') or a single file
+  layout   build [files|dir] [--inline]         Build the layout DSL to HTML/CSS/JS (no input: salam.salam,
+                                                else every layout page here)
+  debug    <file.salam> [build options]         Build -g + launch GDB/LLDB
+  memcheck <file.salam> [build options]         Build ASAN + run memory checker
+  inspect  <file.salam> [inspect options]       Lex/parse/analyze and dump tokens/AST/symbols as XML
+  cli                                           Start the general REPL
+  layout                                        Start the layout REPL
+  help                                          Show this help
+  version  [--short]                            Show version, git commit, and build date (--short: just the version number)
+
+Build options:
+  --output=FILE            Output executable (default: <module>.exe)
+  --backend=llvm|c         Code generator (default: llvm when this build
+                           has it, else c). llvm optimizes and links
+                           in-process; c goes through a C compiler
+  --cc=PATH                C compiler to invoke (default: tcc);
+                           implies --backend=c
+  --libpath=DIR            Extra library search directory for the link
+                           step (repeatable), for archives not installed
+                           under the usual prefix
+  --stdlib-path=DIR        Root directory for 'std/...' imports
+                           (else: $SALAM_STD, sibling salam.cfg,
+                            binary-relative, install prefix, then ./std)
+  --keep-c                 Keep generated .c/.h files
+  --time-report[=FMT]      Report where the compiler spent its own time
+                           (FMT: table (default) or json; written to stderr)
+  --time-trace[=FILE]      Write a Chrome Trace Event JSON of the same run
+                           (default: salam-trace.json; open in Perfetto,
+                            chrome://tracing or speedscope)
+  -B, --force              Rebuild everything: ignore cached .o objects and
+                           recompile every module, even if unchanged
+  --export=Fn:CName        Keep top-level pub func Fn alive despite DCE and
+                           emit it under the literal C name CName instead of
+                           the usual mangled one (repeatable). For embedding
+                           a hand-picked API into a host with no entry point.
+  -g, --debug-info         Embed DWARF debug symbols; emit #line directives
+  --asan                   Enable AddressSanitizer (requires gcc/clang)
+  --lto                    Whole-program LTO on the final link (gcc/clang;
+                           slower, single-threaded link vs. the default
+                           parallel per-file compile - smaller/faster binary)
+  --release                Release build: strip bounds/safety checks (e.g. Vector.get/set, array indexing) for speed
+                           (default: development build, checks kept)
+  --target=TRIPLE          Cross-compile via LLVM to this target triple,
+                           e.g. x86_64-w64-windows-gnu (needs clang/llc + lld
+                           and a sysroot); honors link/OS macros; a bundled
+                           mingw sysroot ($SALAM_SYSROOTS) is used if present
+
+Interpreter options (salam exec/run/jit <file>):
+  --timeout=MS              Wall-clock deadline for the tree-walking
+                           interpreter, in milliseconds (default: 5000)
+
+Serve options (salam serve [dir]):
+  --port=N                 Port to listen on (default: 8000)
+  --host=HOST              Address to bind: 127.0.0.1 (default), 0.0.0.0 (all
+                           interfaces), localhost, or any resolvable host/IP
+
+LLVM backend options (salam llvm <file>):
+  -O0|-O1|-O2|-O3|-Os|-Oz   Optimization level (default -O0)
+  --emit-llvm               Emit textual LLVM IR (.ll) [default]
+  --emit-asm                Emit target assembly (.s)
+  --emit-obj, -c            Emit an object file (.o)
+  --emit-bitcode, -flto     Emit LLVM bitcode (.bc) for LTO
+  --exec                    Build a native executable (links libc/m)
+  --jit                     JIT-run immediately via lli (no artifact)
+  --target=TRIPLE           Cross-compile target (e.g. wasm32-wasi)
+  -g                        Emit DWARF debug info into the IR
+  --verify-ir               Run the LLVM verifier before emitting
+  --native-cpu              Tune generated code for this machine's CPU
+                            (host-only artifacts; ignored with --target)
+  -o FILE                   Output path (default: derived from module)
+
+JavaScript backend options (salam js <files>):
+  --no-minify               Disable output minification (JS/CSS/HTML kept pretty-printed;
+                            minified to a single compact line by default)
+  --no-js-minify-names      Disable minification of variable/function names
+                            (minified by default: a, b, c... reduces code size;
+                            implied by --no-minify)
+
+Format options:
+  --check                  Report files that need formatting; do not rewrite (exit 1 if any)
+  -r, --recursive          Recurse into directories (implied when no path is given)
+  --tabs                   Indent with one tab per level (convert spaces to tabs)
+  --spaces                 Indent with spaces (default)
+  --indent=tab|N           Indent style: 'tab', or N spaces per level (1-16, default 4)
+  --minify                 Strip all comments, indentation and blank lines (keeps
+                           statement newlines; token stream is unchanged)
+  --fix-order              Also reorder top-level declarations to satisfy the
+                           import/const/var/type/func ordering rules (pure
+                           reordering only; anything it can't safely move on
+                           its own, e.g. inside 'extern:' blocks or platform
+                           'if' blocks, is left in place and reported)
+  --lang=CODE              Language pack of the source (fa=Persian, ar=Arabic)
+
+Doc options:
+  --output=FILE            Output HTML file (default: '<dir>/doc.html', or
+                           '<file-stem>.doc.html' next to a single input file)
+  --lang=CODE              Language pack of the source (fa=Persian, ar=Arabic)
+  Doc comments: a run of leading '//' or '///' line comments, or one
+  '/** ... */' block, with no blank line before the declaration, becomes its
+  doc text. Optional '@lang' tags split it per language, e.g.:
+    /// @en Adds two integers.
+    /// @fa دو عدد صحیح را جمع می کند.
+    pub func Add(x: int, y: int): int
+  Struct/interface/enum members and existing @en/@fa/@ar name aliases are
+  picked up automatically; the generated page's language switcher only
+  appears when more than one language is actually present in the project.
+
+Inspect options:
+  --emit-tokens-xml        Emit the token stream as XML
+  --emit-ast-xml           Lex + parse + analyze, emit the decorated AST as XML
+  --emit-symbol-xml        Lex + parse + analyze, emit the symbol table as XML
+  --xml-out=FILE           Write XML to FILE (default: stdout)
+  --log-level=LEVEL        trace|debug|info|warn|error|off (default: info)
+  --lang=CODE              Language pack (default: en)
+  --color / --no-color     Force or disable colored logs (default: auto)
+  --error-style=STYLE      rust|gcc|clang (default: rust)
+  --error-format=FORMAT    human|json|xml (default: human)
+"""
+end
+
+// driver_print_version (core/build_info.h) - see the header note on why the
+// commit/date fields are hardcoded fallbacks rather than build-injected.
+pub func VersionText(short_form: bool): str:
+    if short_form:
+        ret co.VERSION + "\n"
+    end
+    mut out := "salam " + co.VERSION + "\n"
+    out = out + "commit:  " + co.GIT_COMMIT + co.GIT_DIRTY + "\n"
+    out = out + "date:    " + co.GIT_DATE + "\n"
+    out = out + "built:   " + co.BUILD_DATE + "\n"
+    ret out
+end
+
+// driver_main: parse -> i18n_set_lang -> stdlib root/layout-schema init ->
+// dispatch on opt.command. This is the real entry point main.salam calls.
+// The body of Run. Public only because this file's public section has
+// already started by this point and a non-pub function may not follow a pub
+// one (E088); callers should use Run, which adds the --time-report teardown.
+pub func RunCommand(args: Vector<str>): int:
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+
+    if !ParseArgs(args, opt):
+        ret 2
+    end
+    if opt.time_report || str.Len(opt.time_trace) > 0:
+        pf.Enable(str.Len(opt.time_trace) > 0)
+        _time_report = opt.time_report
+        _time_report_fmt = opt.time_report_fmt
+        _time_trace = opt.time_trace
+    end
+    i18.SetLang(opt.lang)
+    sm.SetStdlibRoot(opt.stdlib_path)
+    sm.LayoutSchemaInit(opt.stdlib_path)
+
+    if opt.command == dr.CMD_HELP:
+        text := UsageText()
+        print text
+        ret 0
+    end
+    if opt.command == dr.CMD_VERSION:
+        text := VersionText(opt.version_short)
+        print text
+        ret 0
+    end
+    if opt.command == dr.CMD_NEW:
+        r_new := new_project(opt)
+        ret r_new
+    end
+    if opt.command == dr.CMD_FMT:
+        r_fmt := fmt_cmd(opt)
+        ret r_fmt
+    end
+    if opt.command == dr.CMD_DOC:
+        r_doc := doc_cmd(opt)
+        ret r_doc
+    end
+    if opt.command == dr.CMD_RUN:
+        r_run := opt.interp ? dr.Exec(opt) : dr.Run(opt)
+        ret r_run
+    end
+    if opt.command == dr.CMD_REPL || opt.command == dr.CMD_REPL_LAYOUT:
+        r_repl := rp.Run(opt)
+        ret r_repl
+    end
+    if opt.command == dr.CMD_DEBUG:
+        r_dbg := debug_cmd(opt)
+        ret r_dbg
+    end
+    if opt.command == dr.CMD_MEMCHECK:
+        r_mc := memcheck_cmd(opt)
+        ret r_mc
+    end
+    if opt.command == dr.CMD_BUILD || opt.command == dr.CMD_OBJ:
+        // No input given -> build_impl scans the current directory for the
+        // one .salam file defining `main` (same auto-detection CMD_RUN
+        // already gets below), so an empty opt.inputs is not an error here.
+        r_bo := opt.command == dr.CMD_OBJ ? dr.Obj(opt) : dr.Build(opt)
+        ret r_bo
+    end
+    if opt.command == dr.CMD_LLVM:
+        if opt.inputs.len() == 0:
+            io.EPrintln(i18.Tr("salam: 'llvm' requires an input file"))
+            ret 2
+        end
+        r_llvm := dr.Llvm(opt)
+        ret r_llvm
+    end
+    if opt.command == dr.CMD_JS:
+        if opt.inputs.len() == 0:
+            io.EPrintln(i18.Tr("salam: 'js' requires at least one input file"))
+            ret 2
+        end
+        r_js := dr.Js(opt)
+        ret r_js
+    end
+    if opt.command == dr.CMD_LAYOUT_BUILD:
+        // No input (or a directory) -> dr.LayoutBuild resolves the
+        // project's layout entry (salam.salam when present, else every
+        // .salam file here with a `layout` block), so an empty
+        // opt.inputs is not an error here.
+        r_lb := dr.LayoutBuild(opt)
+        ret r_lb
+    end
+    if opt.command == dr.CMD_WEB:
+        // Same resolution inside dr.Web(), demanding a single page.
+        r_web := dr.Web(opt)
+        ret r_web
+    end
+    if opt.command == dr.CMD_SERVE:
+        r_serve := dr.Serve(opt)
+        ret r_serve
+    end
+    // CMD_INSPECT ("salam inspect <file.salam> [inspect options]").
+    if str.Len(opt.input) == 0:
+        io.EPrintln(i18.Tr("salam: no input file"))
+        io.EPrintln("")
+        text := UsageText()
+        io.EPrint(text)
+        ret 2
+    end
+    r_insp := dr.Inspect(opt)
+    ret r_insp
+end
+
+pub func Run(args: Vector<str>): int:
+    rc := RunCommand(args)
+    if pf.On():
+        // stderr, never stdout: `salam js`, `salam doc` and the --emit-*
+        // paths write their real output to stdout.
+        if _time_report:
+            pf.Report(_time_report_fmt)
+        end
+        if str.Len(_time_trace) > 0:
+            if !pf.WriteTrace(_time_trace):
+                io.EPrint(
+                    co.Format1(i18.Tr("salam: cannot write trace to '%s'\n"), co.ArgStr(_time_trace))
+                )
+            end
+        end
+        pf.Shutdown()
+    end
+    ret rc
+end

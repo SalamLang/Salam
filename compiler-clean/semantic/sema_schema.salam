@@ -1,0 +1,373 @@
+package semantic
+
+import str
+import os
+import tok "../token.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import i18 "../i18n.salam"
+import lp "../langpack.salam"
+import src "../source.salam"
+import lx "../lexer/lexer.salam"
+import ps "../parser/parser.salam"
+
+// ===== schema.c loaders =====
+
+// kind_of
+func schema_kind_of(k: str): int:
+    if str.Len(k) == 0:
+        ret LE_MOTHER
+    end
+    if str.Equals(k, "Single") || str.Equals(k, "single"):
+        ret LE_SINGLE
+    end
+    if str.Equals(k, "Single2Mother") || str.Equals(k, "single2mother"):
+        ret LE_SINGLE2MOTHER
+    end
+    if str.Equals(k, "Mother2Single") || str.Equals(k, "mother2single"):
+        ret LE_MOTHER2SINGLE
+    end
+    ret LE_MOTHER
+end
+
+// dest_of
+func schema_dest_of(d: str): int:
+    if str.Len(d) == 0:
+        ret LA_HTML
+    end
+    if str.Equals(d, "content"):
+        ret LA_CONTENT
+    end
+    if str.Equals(d, "class"):
+        ret LA_CLASS
+    end
+    if str.Equals(d, "style"):
+        ret LA_STYLE
+    end
+    if str.Equals(d, "dir"):
+        ret LA_DIR
+    end
+    if str.Equals(d, "lang"):
+        ret LA_LANG
+    end
+    if str.Equals(d, "source"):
+        ret LA_SOURCE
+    end
+    if str.Equals(d, "css"):
+        ret LA_CSS
+    end
+    if str.Equals(d, "meta"):
+        ret LA_META
+    end
+    ret LA_HTML
+end
+
+// vtype_of
+func schema_vtype_of(t: str): int:
+    if str.Len(t) == 0:
+        ret VT_STRING
+    end
+    if str.Equals(t, "int"):
+        ret VT_INT
+    end
+    if str.Equals(t, "float"):
+        ret VT_FLOAT
+    end
+    if str.Equals(t, "bool"):
+        ret VT_BOOL
+    end
+    if str.Equals(t, "email"):
+        ret VT_EMAIL
+    end
+    if str.Equals(t, "url"):
+        ret VT_URL
+    end
+    if str.Equals(t, "color"):
+        ret VT_COLOR
+    end
+    if str.Equals(t, "dir"):
+        ret VT_DIR
+    end
+    if str.Equals(t, "lang"):
+        ret VT_LANG
+    end
+    if str.Equals(t, "enum"):
+        ret VT_ENUM
+    end
+    if str.Equals(t, "length"):
+        ret VT_LENGTH
+    end
+    ret VT_STRING
+end
+
+// field_atom - "" = C NULL.
+func schema_field_atom(a &: at.Ast, lit: int, field: str): str:
+    repeat at.ChildCount(a, lit) with i:
+        fi := at.Child(a, lit, i)
+        fv := at.Get(a, fi)
+        if !str.Equals(fv.name, field) || fv.a == 0:
+            continue
+        end
+        av := at.Get(a, fv.a)
+        if av.kind == at.AST_LITERAL && av.value_kind == tok.TV_STRING:
+            ret av.value_str
+        end
+        if av.kind == at.AST_MEMBER && str.Len(av.name) > 0:
+            ret av.name
+        end
+        ret ""
+    end
+    ret ""
+end
+
+// field_csv - "" = C NULL (empty strings collapse like the C).
+func schema_field_csv(a &: at.Ast, lit: int, field: str): str:
+    repeat at.ChildCount(a, lit) with i:
+        fi := at.Child(a, lit, i)
+        fv := at.Get(a, fi)
+        if !str.Equals(fv.name, field) || fv.a == 0:
+            continue
+        end
+        av := at.Get(a, fv.a)
+        if av.kind == at.AST_LITERAL && av.value_kind == tok.TV_STRING:
+            ret av.value_str
+        end
+        if av.kind == at.AST_ARRAY_LIT:
+            mut out := ""
+            repeat at.ChildCount(a, fv.a) with j:
+                ev := at.Get(a, at.Child(a, fv.a, j))
+                if ev.kind == at.AST_LITERAL && ev.value_kind == tok.TV_STRING:
+                    if str.Len(out) > 0:
+                        out = out + ","
+                    end
+                    out = out + ev.value_str
+                end
+            end
+            ret out
+        end
+        ret ""
+    end
+    ret ""
+end
+
+// register_name_spellings - every en/fa/ar alias of the decl node.
+func schema_register_words(a &: at.Ast, did: int, canon: str):
+    d := at.Get(a, did)
+    mut i := 0
+    until i + 1 < d.aliases.len():
+        lang := d.aliases.get(i)[0]
+        spelling := d.aliases.get(i + 1)[0]
+        if str.Equals(lang, "en") || str.Equals(lang, "fa") || str.Equals(lang, "ar"):
+            i18.RegisterLayoutWord(lang, spelling, canon)
+        end
+        i += 2
+    end
+end
+
+// lex+parse one schema file into a scratch Ast; returns the program id
+// (0 = unreadable/unparsable, mirroring the C early returns).
+func schema_parse_file(a &: at.Ast, path: str): int:
+    mut sf := src.New()
+    if !src.Load(path, sf):
+        ret 0
+    end
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut toks := tok.StreamNew(path)
+    _l := lx.Run(quiet, lp.Load("en"), sf, toks)
+    mut prog := 0
+    _p := ps.Run(quiet, toks, a, prog)
+    tok.StreamFree(toks)
+    // Every string the caller keeps out of `a` (schema_field_atom/_csv return
+    // node strings, which FreeAst leaves alone) is an independent substr copy
+    // made by the lexer, never a pointer into sf.text - so the file buffer is
+    // dead the moment parsing is done. Releasing it here matters because
+    // layout_schema_init walks the whole std/layout schema on EVERY salam
+    // invocation, `version` and `help` included: ~150 files whose text used
+    // to be read and then abandoned.
+    src.Free(sf)
+    ret prog
+end
+
+// load_file (elements)
+func schema_load_elem_file(path: str):
+    mut a := at.NewAst()
+    prog := schema_parse_file(a, path)
+    if prog == 0:
+        at.FreeAst(a)
+        ret
+    end
+    mut i := 0
+    until i < at.ChildCount(a, prog) && g_sm_lay_elem_name.len() < K_SM_SCHEMA_MAX:
+        did := at.Child(a, prog, i)
+        i += 1
+        d := at.Get(a, did)
+        if d.kind != at.AST_CONST_DECL || d.a == 0 || at.KindOf(a, d.a) != at.AST_STRUCT_LIT:
+            continue
+        end
+        lit := d.a
+        mut name := schema_field_atom(a, lit, "name")
+        if str.Len(name) == 0:
+            name = alias_for_lang(d.aliases, "en")
+        end
+        mut gen := schema_field_atom(a, lit, "generated_name")
+        if str.Len(gen) == 0:
+            gen = schema_field_atom(a, lit, "tag")
+        end
+        if str.Len(name) == 0:
+            continue
+        end
+        mut parents := schema_field_csv(a, lit, "parents")
+        if str.Len(parents) == 0:
+            parents = schema_field_csv(a, lit, "parentElements")
+        end
+        g_sm_lay_elem_name.push(name)
+        g_sm_lay_elem_tag.push(gen)
+        g_sm_lay_elem_type.push(
+            schema_kind_of(
+                schema_field_atom(
+                    a, lit, "kind"
+                )
+            )
+        )
+        g_sm_lay_elem_parents.push(parents)
+        g_sm_lay_elem_required.push(schema_field_csv(a, lit, "required"))
+        schema_register_words(a, did, name)
+    end
+    at.FreeAst(a)
+end
+
+// load_attr_file (attributes + style share the table and its cap)
+func schema_load_attr_file(path: str):
+    mut a := at.NewAst()
+    prog := schema_parse_file(a, path)
+    if prog == 0:
+        at.FreeAst(a)
+        ret
+    end
+    mut i := 0
+    until i < at.ChildCount(a, prog) && g_sm_lay_attr_name.len() < K_SM_SCHEMA_MAX:
+        did := at.Child(a, prog, i)
+        i += 1
+        d := at.Get(a, did)
+        if d.kind != at.AST_CONST_DECL || d.a == 0 || at.KindOf(a, d.a) != at.AST_STRUCT_LIT:
+            continue
+        end
+        lit := d.a
+        mut name := schema_field_atom(a, lit, "name")
+        if str.Len(name) == 0:
+            name = alias_for_lang(d.aliases, "en")
+        end
+        if str.Len(name) == 0:
+            continue
+        end
+        g_sm_lay_attr_name.push(name)
+        g_sm_lay_attr_out.push(schema_field_atom(a, lit, "generated_name"))
+        g_sm_lay_attr_dest.push(
+            schema_dest_of(schema_field_atom(a, lit, "destination"))
+        )
+        g_sm_lay_attr_vtype.push(
+            schema_vtype_of(schema_field_atom(a, lit, "value_type"))
+        )
+        g_sm_lay_attr_allowed.push(schema_field_csv(a, lit, "allowed"))
+        schema_register_words(a, did, name)
+    end
+    at.FreeAst(a)
+end
+
+// load_value_file (values)
+func schema_load_value_file(path: str):
+    mut a := at.NewAst()
+    prog := schema_parse_file(a, path)
+    if prog == 0:
+        at.FreeAst(a)
+        ret
+    end
+    mut i := 0
+    until i < at.ChildCount(a, prog):
+        did := at.Child(a, prog, i)
+        i += 1
+        d := at.Get(a, did)
+        if d.kind != at.AST_CONST_DECL || d.a == 0 || at.KindOf(a, d.a) != at.AST_STRUCT_LIT:
+            continue
+        end
+        lit := d.a
+        gen := schema_field_atom(a, lit, "generated_value")
+        group := schema_field_atom(a, lit, "group")
+        if str.Len(gen) == 0 || str.Len(group) == 0:
+            continue
+        end
+        lay_add_value(group, gen, gen)
+        mut j := 0
+        until j + 1 < d.aliases.len():
+            lang := d.aliases.get(j)[0]
+            spelling := d.aliases.get(j + 1)[0]
+            j += 2
+            if str.Equals(lang, "en"):
+                lay_add_value(group, spelling, gen)
+                i18.RegisterLayoutValue("*", spelling, gen)
+            else str.Equals(lang, "fa") || str.Equals(lang, "ar"):
+                lay_add_value(group, spelling, gen)
+                i18.RegisterLayoutValue(lang, spelling, gen)
+            end
+        end
+    end
+    at.FreeAst(a)
+end
+
+// list_schema_files - *.salam entries of one directory (readdir order),
+// capped at SCHEMA_MAX_ELEMS files like the C.
+func schema_list_files(dir: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut names := os.ListDir(dir)
+    defer names.free()
+    repeat names.len() with i:
+        nm := names.get(i)[0]
+        if str.EndsWith(nm, ".salam") && str.Len(nm) > 6 && out.len() < K_SM_SCHEMA_MAX:
+            out.push(dir + "/" + nm)
+        end
+    end
+    ret out
+end
+
+// layout_schema_init
+//
+// An empty `root` falls back to the resolved stdlib root rather than
+// straight to the cwd-relative "std/layout". The C reaches the same place
+// from the other side - driver.c:686 only ever calls this as
+// layout_schema_init(salam_get_stdlib_root()) - but several callers here
+// hand over opt.stdlib_path, which is "" unless --stdlib was passed. That
+// left base as a bare relative "std/layout", so every layout check silently
+// no-op'd (empty schema tables => nothing to validate against => exit 0, no
+// diagnostic) whenever salam ran from any directory that is not the repo
+// root. Resolving here fixes all call sites at once; when nothing resolves,
+// get_stdlib_root() returns "" and the old relative base still applies.
+func layout_schema_init(root: str):
+    mut eff := root
+    if str.Len(eff) == 0:
+        eff = get_stdlib_root()
+    end
+    mut base := "std/layout"
+    if str.Len(eff) > 0:
+        base = eff + "/std/layout"
+    end
+    mut ef := schema_list_files(base + "/elements")
+    defer ef.free()
+    repeat ef.len() with i:
+        schema_load_elem_file(ef.get(i)[0])
+    end
+    mut af := schema_list_files(base + "/attributes")
+    defer af.free()
+    repeat af.len() with j:
+        schema_load_attr_file(af.get(j)[0])
+    end
+    mut stf := schema_list_files(base + "/style")
+    defer stf.free()
+    repeat stf.len() with k:
+        schema_load_attr_file(stf.get(k)[0])
+    end
+    mut vf := schema_list_files(base + "/values")
+    defer vf.free()
+    repeat vf.len() with l:
+        schema_load_value_file(vf.get(l)[0])
+    end
+end

@@ -166,15 +166,30 @@ static func_sig_t *ll_sig_of(ll_t *ll, ast_node_t *fn, symbol_t *owner)
     return s->overloads.len ? (func_sig_t *)s->overloads.data[0] : NULL;
 }
 
+/* Defined below; needed by main's argc/argv wiring. */
+static func_sig_t *ll_body_sig_for(ll_t *ll, const char *name, symbol_t **owner);
+
 static const char *ll_fn_header(ll_t *ll, ast_node_t *fn, func_sig_t *sig,
                                 const char *ret_lty, const char *fname,
-                                const char *recv_param, bool exported)
+                                const char *recv_param, bool exported, bool is_main)
 {
     sb_t hdr;
     sb_init(&hdr);
     sb_puts(&hdr,
             ll_fmt(ll, "define %s%s @%s(", exported ? "" : "internal ", ret_lty, fname));
     bool first = true;
+    /*
+     * main takes the real C argc/argv. Salam's own `func main:` declares no
+     * parameters, so this emitted `define i32 @main()` and the process
+     * arguments never reached the runtime - args() returned an empty vector
+     * in every LLVM-built program (the C backend has always emitted
+     * `main(int argc, char **argv)` and called salam_set_args, see
+     * codegen_decl.c).
+     */
+    if (is_main) {
+        sb_puts(&hdr, "i32 %argc, ptr %argv");
+        first = false;
+    }
     if (recv_param) {
         sb_puts(&hdr, recv_param);
         first = false;
@@ -302,14 +317,24 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
         ll_debug_subprogram(ll, fn->name, fn->span.begin.line);
         ll->cur_dbg = ll_debug_location(ll, fn->span.begin.line, fn->span.begin.col);
     }
-    const char *header = ll_fn_header(ll, fn, sig, ret_lty, fname, recv_param, exported);
+    const char *header =
+        ll_fn_header(ll, fn, sig, ret_lty, fname, recv_param, exported, is_main);
     if (is_impl) {
         ll_emit_alloca(ll, "%%p.this = alloca %s", ll_ty(ll, recv_ts));
         ll_emit(ll, "store %s %%this, ptr %%p.this", ll_ty(ll, recv_ts));
         ll->this_ref = "%p.this";
     }
     ll_spill_params(ll, fn, sig);
-    if (is_main) ll_emit_global_inits(ll);
+    if (is_main) {
+        /* Hand argc/argv to the runtime before anything can call args(). */
+        symbol_t *sa_owner = NULL;
+        func_sig_t *sa = ll_body_sig_for(ll, "salam_set_args", &sa_owner);
+        if (sa && sa->decl) {
+            ll_ensure_fn(ll, sa->decl, NULL, sa_owner->members);
+            ll_emit(ll, "call void @salam_set_args(i32 %%argc, ptr %%argv)");
+        }
+        ll_emit_global_inits(ll);
+    }
     if (fn->a) ll_block_top(ll, fn->a);
     if (!ll->term) ll_emit_return(ll, NULL);
     sb_puts(ll->g, header);
@@ -866,7 +891,7 @@ static bool ll_extern_seen(ll_t *ll, const char *name)
 /*
  * A function of this name that some package declares *with* a body, if any.
  * A bodyless `extern:` re-declaration is how one package calls another's
- * runtime entry point - std/collections re-declares `noret func
+ * runtime entry point - std/collections redeclares `noret func
  * salam_panic(msg: str)` so its bounds checks can call it, while the real
  * body lives in std/core. Both are SYM_FUNCs of the same name, and which
  * one a given emission order happens to reach first decided whether the

@@ -1,0 +1,497 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+
+// ===========================================================================
+// ===== sema_expr.c (5c) =====
+// ===========================================================================
+
+func tk_is_arith(k: int): bool:
+    ret k == tok.TK_PLUS || k == tok.TK_MINUS || k == tok.TK_STAR || k == tok.TK_SLASH || k == tok.TK_PERCENT
+end
+
+// sema_tk_is_bitwise (shared with 5d's sema_stmt).
+func sema_tk_is_bitwise(k: int): bool:
+    ret k == tok.TK_AMP || k == tok.TK_PIPE || k == tok.TK_CARET || k == tok.TK_SHL || k == tok.TK_SHR
+end
+
+func int_lit_fits(u: u64, k: int): bool:
+    if k == TY_I8:
+        ret u <= 127 as u64
+    end
+    if k == TY_I16:
+        ret u <= 32767 as u64
+    end
+    if k == TY_I32:
+        ret u <= 2147483647 as u64
+    end
+    if k == TY_I64:
+        ret u <= 9223372036854775807 as u64
+    end
+    if k == TY_U8:
+        ret u <= 255 as u64
+    end
+    if k == TY_U16:
+        ret u <= 65535 as u64
+    end
+    if k == TY_U32:
+        ret u <= 4294967295 as u64
+    end
+    if k == TY_U64 || k == TY_SIZE:
+        ret true
+    end
+    ret false
+end
+
+// sema_type_is_stringable - `+`-concatenation operand rule.
+func sema_type_is_stringable(s &: Sema, t: int): bool:
+    k := ty_at(s, t).kind
+    ret k == TY_STR || k == TY_UCHAR || k == TY_BOOL || k == TY_CHAR || type_is_numeric(s, t)
+end
+
+func tk_is_cmp(k: int): bool:
+    ret k == tok.TK_LT || k == tok.TK_GT || k == tok.TK_LE || k == tok.TK_GE
+end
+
+func tk_is_eq(k: int): bool:
+    ret k == tok.TK_EQ || k == tok.TK_NE
+end
+
+// sema_op_method - "" = the C NULL (no operator method for this token).
+func sema_op_method(k: int): str:
+    if k == tok.TK_PLUS:
+        ret "operator_add"
+    end
+    if k == tok.TK_MINUS:
+        ret "operator_sub"
+    end
+    if k == tok.TK_STAR:
+        ret "operator_mul"
+    end
+    if k == tok.TK_SLASH:
+        ret "operator_div"
+    end
+    if k == tok.TK_PERCENT:
+        ret "operator_mod"
+    end
+    if k == tok.TK_POWER:
+        ret "operator_pow"
+    end
+    if k == tok.TK_EQ:
+        ret "operator_eq"
+    end
+    if k == tok.TK_NE:
+        ret "operator_ne"
+    end
+    if k == tok.TK_LT:
+        ret "operator_lt"
+    end
+    if k == tok.TK_GT:
+        ret "operator_gt"
+    end
+    if k == tok.TK_LE:
+        ret "operator_le"
+    end
+    if k == tok.TK_GE:
+        ret "operator_ge"
+    end
+    ret ""
+end
+
+// sema_compound_base - TK_EOF = the C "not a compound assignment".
+func sema_compound_base(k: int): int:
+    if k == tok.TK_PLUS_EQ:
+        ret tok.TK_PLUS
+    end
+    if k == tok.TK_MINUS_EQ:
+        ret tok.TK_MINUS
+    end
+    if k == tok.TK_STAR_EQ:
+        ret tok.TK_STAR
+    end
+    if k == tok.TK_SLASH_EQ:
+        ret tok.TK_SLASH
+    end
+    if k == tok.TK_PERCENT_EQ:
+        ret tok.TK_PERCENT
+    end
+    if k == tok.TK_POWER_EQ:
+        ret tok.TK_POWER
+    end
+    if k == tok.TK_AMP_EQ:
+        ret tok.TK_AMP
+    end
+    if k == tok.TK_PIPE_EQ:
+        ret tok.TK_PIPE
+    end
+    if k == tok.TK_CARET_EQ:
+        ret tok.TK_CARET
+    end
+    if k == tok.TK_SHL_EQ:
+        ret tok.TK_SHL
+    end
+    if k == tok.TK_SHR_EQ:
+        ret tok.TK_SHR
+    end
+    ret tok.TK_EOF
+end
+
+// sema_try_op_overload - TYPE_NONE = the C NULL (no such operator method);
+// rhs_type TYPE_NONE = unary (no argument pushed).
+func sema_try_op_overload(
+    s &: Sema, a &: at.Ast, n: int, ssym: int, mname: str, rhs_type: int
+): int:
+    m := scope_lookup_local(s, sym_at(s, ssym).members, mname)
+    if m == 0 || sym_at(s, m).kind != SYM_METHOD:
+        ret TYPE_NONE
+    end
+    mut otys := Vector {} as Vector<int>
+    defer otys.free()
+    if rhs_type != TYPE_NONE:
+        otys.push(rhs_type)
+    end
+    sig := resolve_overload(s, a, m, otys, span_of(a, n), mname)
+    if sig == 0:
+        ret TYPE_NONE
+    end
+    ret sig_at(s, sig).ret_type
+end
+
+func is_int_lit(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    ret n.kind == at.AST_LITERAL && n.op == tok.TK_INT
+end
+
+func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
+    n := at.Get(a, nid)
+    sp := span_of(a, nid)
+    l_lit := is_int_lit(a, n.a)
+    r_lit := is_int_lit(a, n.b)
+    mut l := TYPE_NONE
+    mut r := TYPE_NONE
+    if r_lit && !l_lit:
+        l = sema_check_expr(s, a, n.a)
+        if type_is_integer(s, l):
+            s.expected = l
+        end
+        r = sema_check_expr(s, a, n.b)
+    else l_lit && !r_lit:
+        r = sema_check_expr(s, a, n.b)
+        if type_is_integer(s, r):
+            s.expected = r
+        end
+        l = sema_check_expr(s, a, n.a)
+    else:
+        l = sema_check_expr(s, a, n.a)
+        r = sema_check_expr(s, a, n.b)
+    end
+    op := n.op
+    if type_is_error(s, l) || type_is_error(s, r):
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+
+    ssym := struct_sym_of(s, l)
+    if ssym != 0:
+        if op == tok.TK_NE:
+            m_ne := scope_lookup_local(s, sym_at(s, ssym).members, "operator_ne")
+            mut ne_is_method := m_ne != 0
+            if ne_is_method && sym_at(s, m_ne).kind != SYM_METHOD:
+                ne_is_method = false
+            end
+            if !ne_is_method:
+                ov := sema_try_op_overload(s, a, nid, ssym, "operator_eq", r)
+                if ov != TYPE_NONE:
+                    mut nv := at.Get(a, nid)
+                    nv.synthetic = true
+                    at.Put(a, nid, nv)
+                    ret sema_decorate(s, a, nid, sema_ty(s, TY_BOOL))
+                end
+            end
+        end
+        mname := sema_op_method(op)
+        if str.Len(mname) > 0:
+            ov2 := sema_try_op_overload(s, a, nid, ssym, mname, r)
+            if ov2 != TYPE_NONE:
+                ret sema_decorate(s, a, nid, ov2)
+            end
+        end
+    end
+    if op == tok.TK_POWER:
+        if !type_is_numeric(s, l) || !type_is_numeric(s, r):
+            serr(s, 21, sp, i18.Tr("operator '**' requires numeric operands"))
+        end
+        ret sema_decorate(s, a, nid, sema_ty(s, TY_F64))
+    end
+    if op == tok.TK_AND || op == tok.TK_OR:
+        if ty_at(s, l).kind != TY_BOOL || ty_at(s, r).kind != TY_BOOL:
+            serr(s, 21, sp, i18.Tr("logical operator requires bool operands"))
+        end
+        ret sema_decorate(s, a, nid, sema_ty(s, TY_BOOL))
+    end
+    if tk_is_arith(op):
+        lk := ty_at(s, l).kind
+        rk := ty_at(s, r).kind
+        if op == tok.TK_PLUS && (
+            lk == TY_STR || rk == TY_STR || lk == TY_UCHAR || rk == TY_UCHAR
+        ):
+            if sema_type_is_stringable(s, l) && sema_type_is_stringable(s, r):
+                ret sema_decorate(s, a, nid, sema_ty(s, TY_STR))
+            end
+            serr(
+                s, 21, sp, co.Format2(
+                    i18.Tr("operator '+' on a string requires the other operand to be a string, number, bool, or char (got '%s' and '%s')"),
+                    co.ArgStr(type_to_string(s, l)), co.ArgStr(type_to_string(s, r))
+                )
+            )
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
+        if op == tok.TK_STAR && (lk == TY_STR || rk == TY_STR):
+            if (lk == TY_STR && type_is_integer(s, r)) || (rk == TY_STR && type_is_integer(s, l)):
+                ret sema_decorate(s, a, nid, sema_ty(s, TY_STR))
+            end
+            serr(
+                s, 21, sp, co.Format2(
+                    i18.Tr("operator '*' on a string requires the other operand to be an integer (got '%s' and '%s')"),
+                    co.ArgStr(type_to_string(s, l)), co.ArgStr(type_to_string(s, r))
+                )
+            )
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
+        c := type_common_arith(s, l, r)
+        if c < 0:
+            serr(
+                s, 21, sp, co.Format2(
+                    i18.Tr("operator cannot be applied to '%s' and '%s'"), co.ArgStr(type_to_string(s, l)),
+                    co.ArgStr(type_to_string(s, r))
+                )
+            )
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
+        if op == tok.TK_PERCENT && !type_is_integer(s, c):
+            serr(
+                s, 21, sp, co.Format0(i18.Tr("operator '%%' requires integer operands"))
+            )
+        end
+        ret sema_decorate(s, a, nid, c)
+    end
+    if sema_tk_is_bitwise(op):
+        if !type_is_integer(s, l) || !type_is_integer(s, r):
+            serr(
+                s, 21, sp, co.Format2(
+                    i18.Tr("bitwise operator requires integer operands (got '%s' and '%s')"), co.ArgStr(type_to_string(s, l)),
+                    co.ArgStr(type_to_string(s, r))
+                )
+            )
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
+        // Shifts keep the left operand's (promoted) type; the other bitwise
+        // operators take the common integer type of both operands.
+        if op == tok.TK_SHL || op == tok.TK_SHR:
+            lt := type_common_arith(s, l, l)
+            ret sema_decorate(s, a, nid, lt >= 0 ? lt : l)
+        end
+        c2 := type_common_arith(s, l, r)
+        if c2 < 0 || !type_is_integer(s, c2):
+            serr(
+                s, 21, sp, co.Format2(
+                    i18.Tr("bitwise operator cannot be applied to '%s' and '%s'"), co.ArgStr(type_to_string(s, l)),
+                    co.ArgStr(type_to_string(s, r))
+                )
+            )
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
+        ret sema_decorate(s, a, nid, c2)
+    end
+    if tk_is_cmp(op) || tk_is_eq(op):
+        mut cok := false
+        if type_is_numeric(s, l) && type_is_numeric(s, r) && type_common_arith(s, l, r) >= 0:
+            cok = true
+        else type_equiv(s, l, r):
+            cok = true
+        else tk_is_eq(op) && (
+            (ty_at(s, l).kind == TY_NULL && ty_at(s, r).kind == TY_PTR) || (ty_at(s, r).kind == TY_NULL && ty_at(s, l).kind == TY_PTR)
+        ):
+            cok = true
+        end
+        if !cok:
+            serr(
+                s, 21, sp, co.Format2(
+                    i18.Tr("cannot compare '%s' and '%s'"), co.ArgStr(type_to_string(s, l)), co.ArgStr(type_to_string(s, r))
+                )
+            )
+        end
+        ret sema_decorate(s, a, nid, sema_ty(s, TY_BOOL))
+    end
+    ret sema_decorate(s, a, nid, sema_err_ty(s))
+end
+
+func check_ternary(s &: Sema, a &: at.Ast, nid: int): int:
+    n := at.Get(a, nid)
+    exp := s.expected
+    s.expected = TYPE_NONE
+    c := sema_check_expr(s, a, n.a)
+    if ty_at(s, c).kind != TY_BOOL && !type_is_error(s, c):
+        serr(
+            s, 21, span_of(a, n.a), co.Format1(
+                i18.Tr("'?:' condition must be bool, got '%s'"), co.ArgStr(type_to_string(s, c))
+            )
+        )
+    end
+    t_lit := is_int_lit(a, n.b)
+    f_lit := is_int_lit(a, n.c)
+    mut tt := TYPE_NONE
+    mut tf := TYPE_NONE
+    if f_lit && !t_lit:
+        s.expected = exp
+        tt = sema_check_expr(s, a, n.b)
+        s.expected = type_is_integer(s, tt) ? tt : exp
+        tf = sema_check_expr(s, a, n.c)
+    else t_lit && !f_lit:
+        s.expected = exp
+        tf = sema_check_expr(s, a, n.c)
+        s.expected = type_is_integer(s, tf) ? tf : exp
+        tt = sema_check_expr(s, a, n.b)
+    else:
+        s.expected = exp
+        tt = sema_check_expr(s, a, n.b)
+        s.expected = exp
+        tf = sema_check_expr(s, a, n.c)
+    end
+    s.expected = TYPE_NONE
+    if type_is_error(s, tt) || type_is_error(s, tf):
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    if type_equiv(s, tt, tf):
+        ret sema_decorate(s, a, nid, tt)
+    end
+    if type_is_numeric(s, tt) && type_is_numeric(s, tf):
+        common := type_common_arith(s, tt, tf)
+        if common >= 0:
+            ret sema_decorate(s, a, nid, common)
+        end
+    end
+    if ty_at(s, tt).kind == TY_NULL && ty_at(s, tf).kind == TY_PTR:
+        ret sema_decorate(s, a, nid, tf)
+    end
+    if ty_at(s, tf).kind == TY_NULL && ty_at(s, tt).kind == TY_PTR:
+        ret sema_decorate(s, a, nid, tt)
+    end
+    serr(
+        s, 21, span_of(a, nid), co.Format2(
+            i18.Tr("'?:' branches have mismatched types '%s' and '%s'"), co.ArgStr(type_to_string(s, tt)),
+            co.ArgStr(type_to_string(s, tf))
+        )
+    )
+    ret sema_decorate(s, a, nid, sema_err_ty(s))
+end
+
+func check_member(s &: Sema, a &: at.Ast, nid: int): int:
+    n := at.Get(a, nid)
+    sp := span_of(a, nid)
+    if n.a != 0 && at.KindOf(a, n.a) == at.AST_IDENTIFIER:
+        pk := scope_lookup(s, s.cur, at.Get(a, n.a).name)
+        if pk != 0 && sym_at(s, pk).kind == SYM_PACKAGE:
+            mname := pkg_member_canon(s, a, pk, n.name, sp)
+            at.SetName(a, nid, mname)
+            pkv := sym_at(s, pk)
+            m := scope_lookup_local(s, pkv.members, mname)
+            if m == 0:
+                serr(
+                    s, 16, sp, co.Format2(
+                        i18.Tr("package '%s' has no exported member '%s'"), co.ArgStr(pkv.name), co.ArgStr(mname)
+                    )
+                )
+                ret sema_decorate(s, a, nid, sema_err_ty(s))
+            end
+            mv := sym_at(s, m)
+            if !mv.is_pub:
+                serr(
+                    s, 17, sp, co.Format2(
+                        i18.Tr("'%s' is not exported by package '%s' (mark it 'pub')"), co.ArgStr(mname),
+                        co.ArgStr(pkv.name)
+                    )
+                )
+                ret sema_decorate(s, a, nid, sema_err_ty(s))
+            end
+            if mv.kind == SYM_FUNC:
+                serr(
+                    s, 17, sp, co.Format2(
+                        i18.Tr("function '%s.%s' used as a value (call it)"), co.ArgStr(pkv.name), co.ArgStr(mname)
+                    )
+                )
+                ret sema_decorate(s, a, nid, sema_err_ty(s))
+            end
+            _da := sema_decorate(s, a, n.a, pkv.ty)
+            ret sema_decorate(s, a, nid, mv.ty)
+        end
+    end
+
+    if n.a != 0 && at.KindOf(a, n.a) == at.AST_IDENTIFIER:
+        sy := scope_lookup(s, s.cur, at.Get(a, n.a).name)
+        if sy != 0 && sym_at(s, sy).kind == SYM_ENUM:
+            syv := sym_at(s, sy)
+            _de := sema_decorate(s, a, n.a, syv.ty)
+            mut m2 := 0
+            if syv.members != 0:
+                m2 = scope_lookup_local(s, syv.members, n.name)
+            end
+            if m2 == 0:
+                serr(
+                    s, 16, sp, co.Format2(
+                        i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(syv.name), co.ArgStr(n.name)
+                    )
+                )
+            end
+            ret sema_decorate(s, a, nid, syv.ty)
+        end
+    end
+    objt := sema_check_expr(s, a, n.a)
+    if type_is_error(s, objt):
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    ssym := struct_sym_of(s, objt)
+    if ssym == 0:
+        serr(
+            s, 29, sp, co.Format1(
+                i18.Tr("member access on non-struct type '%s'"), co.ArgStr(type_to_string(s, objt))
+            )
+        )
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    ssv := sym_at(s, ssym)
+    fname := scope_member_canon(s, a, ssv.members, n.name, sp)
+    at.SetName(a, nid, fname)
+    f := scope_lookup_local(s, ssv.members, fname)
+    if f == 0:
+        serr(
+            s, 16, sp, co.Format2(
+                i18.Tr("no field '%s' in struct '%s'"), co.ArgStr(fname), co.ArgStr(ssv.name)
+            )
+        )
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    fv := sym_at(s, f)
+    if fv.kind == SYM_METHOD:
+        serr(
+            s, 17, sp, co.Format1(
+                i18.Tr("method '%s' used as a value (call it)"), co.ArgStr(fname)
+            )
+        )
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    if !fv.is_pub && struct_sym_of(s, s.self_type) != ssym:
+        serr(
+            s, 17, sp, co.Format2(
+                i18.Tr("field '%s' is private in struct '%s' (mark it 'pub')"), co.ArgStr(fname), co.ArgStr(ssv.name)
+            )
+        )
+    end
+    ret sema_decorate(s, a, nid, fv.ty)
+end

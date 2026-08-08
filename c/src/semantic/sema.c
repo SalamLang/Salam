@@ -330,6 +330,11 @@ bool salam_find_bundled_tool(const char *name, char *out, size_t n)
     return false;
 }
 
+/* path_normalize - strips leading "./" pairs, collapses "/./" and lexically
+ * collapses "seg/../". The ".." collapse keeps import dedup keys canonical:
+ * the same file imported as "token.salam" from the root and as
+ * "../token.salam" from a sibling directory must resolve to ONE module, or
+ * its globals get linked twice ('defined twice' at link time). */
 static char *path_normalize(char *p)
 {
     while (p[0] == '.' && p[1] == '/')
@@ -338,6 +343,23 @@ static char *path_normalize(char *p)
     char *q;
     while ((q = strstr(p, "/./")) != NULL)
         memmove(q + 1, q + 3, strlen(q + 3) + 1);
+
+    char *dd = p;
+    while ((dd = strstr(dd, "/../")) != NULL) {
+        char *seg = dd;
+        while (seg > p && seg[-1] != '/')
+            seg--;
+        size_t seglen = (size_t)(dd - seg);
+        /* never collapse a ".." segment, an empty segment ("//../", a
+         * rooted "/../") or a drive prefix like "c:" - skip past those */
+        if (seglen == 0 || (seglen == 2 && seg[0] == '.' && seg[1] == '.') ||
+            memchr(seg, ':', seglen) != NULL) {
+            dd += 1;
+            continue;
+        }
+        memmove(seg, dd + 4, strlen(dd + 4) + 1);
+        dd = p;
+    }
     return p;
 }
 

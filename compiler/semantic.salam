@@ -2310,9 +2310,11 @@ end
 // ===== sema.c (import path resolution) =====
 // ===========================================================================
 
-// path_normalize - EXACTLY the C: strips leading "./" pairs and collapses
-// "/./"; ".." is deliberately NOT collapsed (import dedup keys depend on
-// this - see salam/PORTING.md "Layout - FLAT").
+// path_normalize - strips leading "./" pairs, collapses "/./" and lexically
+// collapses "seg/../". The ".." collapse keeps import dedup keys canonical:
+// the same file imported as "token.salam" from the root and as
+// "../token.salam" from a sibling directory must resolve to ONE module, or
+// its globals get linked twice ('defined twice' at link time).
 func path_normalize(p: str): str:
     mut q := p
     until str.Len(q) >= 2 && byte_at(q, 0) == 46 && byte_at(q, 1) == 47:
@@ -2322,6 +2324,28 @@ func path_normalize(p: str): str:
     until idx >= 0:
         q = str.Substr(q, 0, idx + 1) + str.Substr(q, idx + 3, str.Len(q) - idx - 3)
         idx = str.IndexOf(q, "/./")
+    end
+    mut dd := str.IndexOf(q, "/../")
+    until dd >= 0:
+        // start of the path segment right before this "/../"
+        mut segstart := 0
+        mut k := dd - 1
+        until k >= 0:
+            if byte_at(q, k) == 47:
+                segstart = k + 1
+                break
+            end
+            k -= 1
+        end
+        seg := str.Substr(q, segstart, dd - segstart)
+        // never collapse a ".." segment, an empty segment ("//../", a
+        // rooted "/../") or a drive prefix like "c:" - skip past those
+        if str.Len(seg) == 0 || str.Equals(seg, "..") || str.Contains(seg, ":"):
+            dd = str.IndexFrom(q, "/../", dd + 1)
+            continue
+        end
+        q = str.Substr(q, 0, segstart) + str.Substr(q, dd + 4, str.Len(q) - dd - 4)
+        dd = str.IndexOf(q, "/../")
     end
     ret q
 end

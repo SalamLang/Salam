@@ -1,0 +1,430 @@
+package llvmgen
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import sm "../semantic/semantic.salam"
+
+// ll_param_is_ref
+func param_is_ref(s &: sm.Sema, a &: at.Ast, sig: int, i: int): bool:
+    decl := sm.SigAt(s, sig).decl
+    if decl == 0:
+        ret false
+    end
+    dn := at.Get(a, decl)
+    if i >= dn.list.len():
+        ret false
+    end
+    ret at.Get(a, dn.list.get(i)[0]).is_ref
+end
+
+// ll_emit_arg
+func emit_arg(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ab &: str.StringBuilder, arg: int, sig: int, i: int
+):
+    if param_is_ref(s, a, sig, i):
+        addr := lv_addr_of(v, s, a, arg)
+        co.SbPuts(ab, "ptr " + addr.ptr)
+        ret
+    end
+    val := lv_expr(v, s, a, arg)
+    sg := sm.SigAt(s, sig)
+    pts := i < sg.params.len() ? sm.ToString(s, sg.params.get(i)[0]) : val.ts
+    co.SbPuts(ab, ty_of(v, s, a, pts) + " " + conv(v, s, a, val, pts))
+end
+
+// ll_fill_defaults
+func fill_defaults(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ab &: str.StringBuilder, n: int, sig: int, first0: bool
+):
+    if sig == 0:
+        ret
+    end
+    decl := sm.SigAt(s, sig).decl
+    if decl == 0:
+        ret
+    end
+    dn := at.Get(a, decl)
+    np := dn.list.len()
+    nn := at.Get(a, n)
+    mut first := first0
+    mut i := nn.list.len()
+    until i < np:
+        param := at.Get(a, dn.list.get(i)[0])
+        if param.a != 0:
+            if !first:
+                co.SbPuts(ab, ", ")
+            end
+            emit_arg(v, s, a, ab, param.a, sig, i)
+            first = false
+        end
+        i += 1
+    end
+end
+
+// ll_call_user
+func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
+    mut fsym := sym_of(v, s, a, nm)
+    // A package and one of its own functions can share a name: std/time is
+    // `package time` and also declares `extern func time(tp: void*): i64`.
+    // sym_of searches the global scope first, where the package binding
+    // lives, so a bare `time(null)` *within* that package resolved to
+    // SYM_PACKAGE and was then reported as an unknown function. Ordinary
+    // scoping prefers the enclosing package's own function.
+    if fsym == 0 || sm.SymAt(s, fsym).kind != sm.SYM_FUNC:
+        if v.pkg_scope != 0:
+            lf := sm.LookupLocal(s, v.pkg_scope, nm)
+            if lf != 0 && sm.SymAt(s, lf).kind == sm.SYM_FUNC:
+                fsym = lf
+            end
+        end
+    end
+    if fsym == 0 || sm.SymAt(s, fsym).kind != sm.SYM_FUNC:
+        lv_error(v, a, n, "call to unknown/unsupported function '" + nm + "'")
+        ret poison(at.Get(a, n).type_str)
+    end
+    sig := pick_overload(v, s, a, fsym, n)
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, v.pkg_scope)
+    nn := at.Get(a, n)
+    mut ab := co.SbNew()
+    mut i := 0
+    until i < nn.list.len():
+        if i > 0:
+            co.SbPuts(ab, ", ")
+        end
+        emit_arg(v, s, a, ab, nn.list.get(i)[0], sig, i)
+        i += 1
+    end
+    fill_defaults(v, s, a, ab, n, sig, nn.list.len() == 0)
+    argsx := co.SbCstr(ab)
+    co.SbFree(ab)
+    rts := sm.ToString(s, sm.SigAt(s, sig).ret_type)
+
+    is_ext := sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).is_extern
+    fname := is_ext ? nm : mangle(v, s, "", nm, sig)
+    mut callty := ""
+    if is_ext && sm.SigAt(s, sig).variadic:
+        mut sp := co.SbNew()
+        co.SbPutc(sp, 40)
+        sg := sm.SigAt(s, sig)
+        mut j := 0
+        until j < sg.params.len():
+            if j > 0:
+                co.SbPuts(sp, ", ")
+            end
+            co.SbPuts(sp, ty_of(v, s, a, sm.ToString(s, sg.params.get(j)[0])))
+            j += 1
+        end
+        co.SbPuts(sp, sg.params.len() > 0 ? ", ...)" : "...)")
+        callty = " " + co.SbCstr(sp)
+        co.SbFree(sp)
+    end
+    if str.Equals(rts, "void"):
+        emit(v, "call void" + callty + " @" + fname + "(" + argsx + ")")
+        ret make_llv("0", "void")
+    end
+    r := new_tmp(v)
+    emit(
+        v, r + " = call " + ty_of(v, s, a, rts) + callty + " @" + fname + "(" + argsx + ")"
+    )
+    ret make_llv(r, rts)
+end
+
+// ast_str_lit_len - -1 = not a foldable string literal.
+func ast_str_lit_len(a &: at.Ast, n: int): i64:
+    if n == 0:
+        ret (0 - 1) as i64
+    end
+    node := at.Get(a, n)
+    if node.kind != at.AST_LITERAL:
+        ret (0 - 1) as i64
+    end
+    if node.op != tok.TK_STRING && node.op != tok.TK_TRIPLE_STRING && node.op != tok.TK_RAW_STRING:
+        ret (0 - 1) as i64
+    end
+    if node.value_kind != tok.TV_STRING:
+        ret (0 - 1) as i64
+    end
+    ret str.Len(node.value_str) as i64
+end
+
+// ll_len_of
+func len_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, arg: int): Llv:
+    ts := at.Get(a, arg).type_str
+    if is_slice(ts):
+        val := lv_expr(v, s, a, arg)
+        l := new_tmp(v)
+        emit(v, l + " = extractvalue { ptr, i64 } " + val.ref + ", 1")
+        ret make_llv(conv(v, s, a, make_llv(l, "i64"), "i32"), "i32")
+    end
+    if str.Len(ts) > 0 && idx_byte(ts, 91) >= 0:
+        ret make_llv(co.I64Toa(array_dim(ts)), "i32")
+    end
+    if str.Len(ts) == 0 || !is_str(ts):
+        lv_error(v, a, n, "len() of an unsupported type")
+        ret poison("i32")
+    end
+    klen := ast_str_lit_len(a, arg)
+    if klen >= (0 as i64):
+        ret make_llv(co.I64Toa(klen), "i32")
+    end
+    val2 := lv_expr(v, s, a, arg)
+    l2 := new_tmp(v)
+    emit(v, l2 + " = call " + v.usize + " @strlen(ptr " + val2.ref + ")")
+    ret make_llv(usize_to_i32(v, l2), "i32")
+end
+
+// ll_call_len
+func call_len(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
+    ret len_of(v, s, a, n, at.Get(a, n).list.get(0)[0])
+end
+
+// ll_emit_call
+func emit_call(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, sig: int, lead: str, fname: str, rts: str
+): Llv:
+    nn := at.Get(a, n)
+    mut ab := co.SbNew()
+    mut first := str.Len(lead) == 0
+    if !first:
+        co.SbPuts(ab, lead)
+    end
+    mut i := 0
+    until i < nn.list.len():
+        if !first:
+            co.SbPuts(ab, ", ")
+        end
+        emit_arg(v, s, a, ab, nn.list.get(i)[0], sig, i)
+        first = false
+        i += 1
+    end
+    fill_defaults(v, s, a, ab, n, sig, first)
+    argsx := co.SbCstr(ab)
+    co.SbFree(ab)
+    if str.Equals(rts, "void"):
+        emit(v, "call void @" + fname + "(" + argsx + ")")
+        ret make_llv("0", "void")
+    end
+    r := new_tmp(v)
+    emit(v, r + " = call " + ty_of(v, s, a, rts) + " @" + fname + "(" + argsx + ")")
+    ret make_llv(r, rts)
+end
+
+// ll_call_pkg
+func call_pkg(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, pk: int, fname_: str
+): Llv:
+    py := sm.SymAt(s, pk)
+    touch_pkg_named(v, s, a, py.pkgname)
+    fs := sm.LookupLocal(s, py.members, fname_)
+    if fs == 0 || sm.SymAt(s, fs).kind != sm.SYM_FUNC || sm.SymAt(s, fs).overloads.len() == 0:
+        lv_error(v, a, n, "package function '" + fname_ + "' not found")
+        ret poison(at.Get(a, n).type_str)
+    end
+    sig := pick_overload(v, s, a, fs, n)
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, py.members)
+    is_ext := sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).is_extern
+    fname := is_ext ? fname_ : mangle(v, s, "", fname_, sig)
+    ret emit_call(
+        v, s, a, n, sig, "", fname, sm.ToString(s, sm.SigAt(s, sig).ret_type)
+    )
+end
+
+// ll_runtime_fn - locate a `salam_*` runtime builtin by name in any package
+// sema has loaded. These are not symbols that must come from a prebuilt
+// runtime archive: the stdlib declares them as `extern:` blocks that DO
+// carry a Salam body (std/fs/fs.salam's salam_file_read, std/text's
+// salam_str_split, ...), which toplevel() already emits - only the dispatch
+// from the surface syntax down to them was missing.
+// Returns the signature id; sets out_pk to the owning package.
+func runtime_fn(s &: sm.Sema, name: str, out_pk &: int): int:
+    mut p := 0
+    until p < sm.PackageCount(s):
+        pk := sm.PackageAt(s, p)
+        if pk != 0:
+            pkm := sm.SymAt(s, pk).members
+            if pkm != 0:
+                fs := sm.LookupLocal(s, pkm, name)
+                if fs != 0 && sm.SymAt(s, fs).kind == sm.SYM_FUNC && sm.SymAt(s, fs).overloads.len() > 0:
+                    out_pk = pk
+                    ret sm.SymAt(s, fs).overloads.get(0)[0]
+                end
+            end
+        end
+        p += 1
+    end
+    ret 0
+end
+
+// ll_call_runtime - emit a call to a runtime builtin resolved by
+// runtime_fn. `recv` (0 when absent) is lowered as the leading argument:
+// method-shaped builtins take their receiver as parameter 0, so the call's
+// own arguments line up with sig params starting at index 1. That offset is
+// why this does not go through emit_call, which pairs argument i with
+// param i.
+func call_runtime(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, rtname: str, recv: int, out2 &: Llv
+): bool:
+    mut pk := 0
+    sig := runtime_fn(s, rtname, pk)
+    if sig == 0 || sm.SigAt(s, sig).decl == 0:
+        ret false
+    end
+    touch_pkg_named(v, s, a, sm.SymAt(s, pk).pkgname)
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, sm.SymAt(s, pk).members)
+    params := sm.SigAt(s, sig).params
+    mut ab := co.SbNew()
+    mut base := 0
+    if recv != 0:
+        rv := lv_expr(v, s, a, recv)
+        mut pts0 := rv.ts
+        if params.len() > 0:
+            pts0 = sm.ToString(s, params.get(0)[0])
+        end
+        co.SbPuts(ab, ty_of(v, s, a, pts0) + " " + conv(v, s, a, rv, pts0))
+        base = 1
+    end
+    nn := at.Get(a, n)
+    mut i := 0
+    until i < nn.list.len():
+        av := lv_expr(v, s, a, nn.list.get(i)[0])
+        mut pts := av.ts
+        if i + base < params.len():
+            pts = sm.ToString(s, params.get(i + base)[0])
+        end
+        if base > 0 || i > 0:
+            co.SbPuts(ab, ", ")
+        end
+        co.SbPuts(ab, ty_of(v, s, a, pts) + " " + conv(v, s, a, av, pts))
+        i += 1
+    end
+    argsx := co.SbCstr(ab)
+    co.SbFree(ab)
+    rts := sm.ToString(s, sm.SigAt(s, sig).ret_type)
+    if str.Equals(rts, "void"):
+        emit(v, "call void @" + rtname + "(" + argsx + ")")
+        out2 = make_llv("0", "void")
+        ret true
+    end
+    r := new_tmp(v)
+    emit(v, r + " = call " + ty_of(v, s, a, rts) + " @" + rtname + "(" + argsx + ")")
+    out2 = make_llv(r, rts)
+    ret true
+end
+
+// ll_call_vec_str - builtins that hand back a freshly allocated
+// `const char**` plus an out-param element count, which the surface
+// language sees as a Vector<str>. Vector<T> is { data, _len, _cap } (see
+// std/collections/vector.salam), so cap is filled with the same count as
+// len - the buffer is exactly sized and never grown in place.
+func call_vec_str(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, rtname: str, recv: int, out2 &: Llv
+): bool:
+    mut pk := 0
+    sig := runtime_fn(s, rtname, pk)
+    if sig == 0 || sm.SigAt(s, sig).decl == 0:
+        ret false
+    end
+    touch_pkg_named(v, s, a, sm.SymAt(s, pk).pkgname)
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, sm.SymAt(s, pk).members)
+    nn := at.Get(a, n)
+    mut vts := nn.type_str
+    if str.Len(vts) == 0:
+        vts = "Vector<str>"
+    end
+    vty := ty_of(v, s, a, vts)
+    cnt := new_tmp(v)
+    emit_alloca(v, cnt + " = alloca i32")
+    mut ab := co.SbNew()
+    if recv != 0:
+        co.SbPuts(ab, "ptr " + lv_expr(v, s, a, recv).ref)
+    end
+    mut i := 0
+    until i < nn.list.len():
+        av := lv_expr(v, s, a, nn.list.get(i)[0])
+        if recv != 0 || i > 0:
+            co.SbPuts(ab, ", ")
+        end
+        co.SbPuts(ab, "ptr " + av.ref)
+        i += 1
+    end
+    if recv != 0 || nn.list.len() > 0:
+        co.SbPuts(ab, ", ")
+    end
+    co.SbPuts(ab, "ptr " + cnt)
+    argsx := co.SbCstr(ab)
+    co.SbFree(ab)
+    data := new_tmp(v)
+    emit(v, data + " = call ptr @" + rtname + "(" + argsx + ")")
+    ln := new_tmp(v)
+    emit(v, ln + " = load i32, ptr " + cnt)
+    v0 := new_tmp(v)
+    v1 := new_tmp(v)
+    v2 := new_tmp(v)
+    emit(v, v0 + " = insertvalue " + vty + " undef, ptr " + data + ", 0")
+    emit(v, v1 + " = insertvalue " + vty + " " + v0 + ", i32 " + ln + ", 1")
+    emit(v, v2 + " = insertvalue " + vty + " " + v1 + ", i32 " + ln + ", 2")
+    out2 = make_llv(v2, vts)
+    ret true
+end
+
+// ll_call_file - File* methods, the C backend's call_file() counterpart.
+func call_file(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, m: str, out2 &: Llv
+): bool:
+    if str.Equals(m, "read"):
+        ret call_runtime(v, s, a, n, "salam_file_read", obj, out2)
+    end
+    if str.Equals(m, "readline"):
+        ret call_runtime(v, s, a, n, "salam_file_readline", obj, out2)
+    end
+    if str.Equals(m, "write"):
+        ret call_runtime(v, s, a, n, "salam_file_write", obj, out2)
+    end
+    if str.Equals(m, "seek"):
+        ret call_runtime(v, s, a, n, "salam_file_seek", obj, out2)
+    end
+    if str.Equals(m, "close"):
+        ret call_runtime(v, s, a, n, "salam_file_close", obj, out2)
+    end
+    ret false
+end
+
+// ll_pkg_value - `pkg.NAME` where NAME is a package-level const/var or an
+// enum member the package exports: the non-call half of package-qualified
+// access, which previously fell through to member_addr and reported the
+// package identifier itself as an unknown address. Touching the package
+// first is what makes this work - touch_pkg emits its globals, and only
+// then can global_find see them.
+func pkg_value(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, pk: int, out2 &: Llv
+): bool:
+    py := sm.SymAt(s, pk)
+    if py.members == 0:
+        ret false
+    end
+    nn := at.Get(a, n)
+    m := sm.LookupLocal(s, py.members, nn.name)
+    if m == 0:
+        ret false
+    end
+    mk := sm.SymAt(s, m).kind
+    if mk == sm.SYM_ENUM_MEMBER:
+        out2 = make_llv(co.I64Toa(sm.SymAt(s, m).enum_value), "i32")
+        ret true
+    end
+    if mk != sm.SYM_CONST && mk != sm.SYM_VAR:
+        ret false
+    end
+    touch_pkg_named(v, s, a, py.pkgname)
+    gi := global_find(v, nn.name)
+    if gi < 0:
+        ret false
+    end
+    g := v.globals.get(gi)[0]
+    r := new_tmp(v)
+    emit(v, r + " = load " + ty_of(v, s, a, g.ts) + ", ptr " + g.ptr)
+    out2 = make_llv(r, g.ts)
+    ret true
+end

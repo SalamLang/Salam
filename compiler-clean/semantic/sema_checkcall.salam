@@ -1,0 +1,891 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+
+// check_call - the whole call checker (special forms, function values,
+// print-family builtins, overloads, generics, package calls, intrinsic
+// collection/File/str methods, dyn dispatch, struct methods).
+func check_call(s &: Sema, a &: at.Ast, n: int): int:
+    callee := at.Get(a, n).a
+    call_expected := s.expected
+    s.expected = TYPE_NONE
+    sp := span_of(a, n)
+
+    mut ckind := 0 - 1
+    if callee != 0:
+        ckind = at.KindOf(a, callee)
+    end
+    if ckind == at.AST_IDENTIFIER:
+        check_pure_builtin(s, a, n, at.Get(a, callee).name)
+    end
+
+    if ckind == at.AST_IDENTIFIER && str.Equals(at.Get(a, callee).name, "spawn"):
+        if at.ChildCount(a, n) != 1 || at.KindOf(a, at.Child(a, n, 0)) != at.AST_IDENTIFIER:
+            serr(s, 12, sp, i18.Tr("spawn(func) takes a single function name"))
+            ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
+        end
+        fnid := at.Child(a, n, 0)
+        fname := at.Get(a, fnid).name
+        fsym := scope_lookup(s, s.cur, fname)
+        mut is_fn := fsym != 0
+        if is_fn && sym_at(s, fsym).kind != SYM_FUNC:
+            is_fn = false
+        end
+        if !is_fn:
+            serr(
+                s, 12, sp, co.Format1(
+                    i18.Tr("spawn argument '%s' is not a function"), co.ArgStr(fname)
+                )
+            )
+            ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
+        end
+        mut fsv := sym_at(s, fsym)
+        fsv.used = true
+        sym_put(s, fsym, fsv)
+        dce_mark_root(s.pkg, fname)
+        mut sok := false
+        fsv2 := sym_at(s, fsym)
+        repeat fsv2.overloads.len() with i:
+            sg := sig_at(s, fsv2.overloads.get(i)[0])
+            if sg.params.len() == 0 && sg.ret_type >= 0 && ty_at(s, sg.ret_type).kind == TY_VOID:
+                sok = true
+            end
+        end
+        if !sok:
+            serr(
+                s, 12, sp, i18.Tr("spawn requires a function taking no arguments and returning nothing")
+            )
+        end
+        _d1 := sema_decorate(s, a, fnid, sema_ty(s, TY_VOID))
+        _d2 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+        ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
+    end
+
+    if ckind == at.AST_IDENTIFIER && str.Equals(at.Get(a, callee).name, "funcptr"):
+        if at.ChildCount(a, n) != 1 || at.KindOf(a, at.Child(a, n, 0)) != at.AST_IDENTIFIER:
+            serr(s, 12, sp, i18.Tr("funcptr(func) takes a single function name"))
+            ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
+        end
+        fnid2 := at.Child(a, n, 0)
+        fname2 := at.Get(a, fnid2).name
+        fsym2 := scope_lookup(s, s.cur, fname2)
+        mut is_fn2 := fsym2 != 0
+        if is_fn2 && sym_at(s, fsym2).kind != SYM_FUNC:
+            is_fn2 = false
+        end
+        if !is_fn2:
+            serr(
+                s, 12, sp, co.Format1(
+                    i18.Tr("funcptr argument '%s' is not a function"), co.ArgStr(fname2)
+                )
+            )
+            ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
+        end
+        mut fsv3 := sym_at(s, fsym2)
+        fsv3.used = true
+        sym_put(s, fsym2, fsv3)
+        dce_mark_root(s.pkg, fname2)
+        _d3 := sema_decorate(s, a, fnid2, sema_ty(s, TY_VOID))
+        _d4 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+        ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
+    end
+
+    if ckind == at.AST_IDENTIFIER && str.Equals(at.Get(a, callee).name, "callhandler"):
+        if at.ChildCount(a, n) != 2:
+            serr(
+                s, 12, sp, i18.Tr("callhandler(fn, arg) takes a function pointer and an i64 argument")
+            )
+            ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
+        end
+        _c1 := sema_check_expr(s, a, at.Child(a, n, 0))
+        _c2 := sema_check_expr(s, a, at.Child(a, n, 1))
+        _d5 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+        ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
+    end
+
+    if ckind == at.AST_IDENTIFIER && str.Equals(at.Get(a, callee).name, "sizeof"):
+        if at.ChildCount(a, n) != 1 || at.KindOf(a, at.Child(a, n, 0)) != at.AST_TYPE:
+            serr(s, 12, sp, i18.Tr("sizeof(Type) takes a single type operand"))
+            ret sema_decorate(s, a, n, sema_ty(s, TY_SIZE))
+        end
+        opid := at.Child(a, n, 0)
+        op_type := sema_resolve_type(s, a, opid)
+        _d6 := sema_decorate(s, a, opid, op_type)
+        _d7 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+        ret sema_decorate(s, a, n, sema_ty(s, TY_SIZE))
+    end
+
+    mut argtypes := Vector {} as Vector<int>
+    defer argtypes.free()
+    repeat at.ChildCount(a, n) with ai:
+        argtypes.push(sema_check_expr(s, a, at.Child(a, n, ai)))
+    end
+
+    // Calls through a function-typed value (variable/param/const/expr).
+    mut ft := TYPE_NONE
+    if ckind == at.AST_IDENTIFIER:
+        fvid := scope_lookup(s, s.cur, at.Get(a, callee).name)
+        if fvid != 0:
+            fvv := sym_at(s, fvid)
+            if fvv.ty >= 0 && ty_at(s, fvv.ty).kind == TY_FUNC && (
+                fvv.kind == SYM_VAR || fvv.kind == SYM_PARAM || fvv.kind == SYM_CONST
+            ):
+                ft = fvv.ty
+                mut fvm := sym_at(s, fvid)
+                fvm.used = true
+                sym_put(s, fvid, fvm)
+                // A function value *called* from inside a lambda is still a
+                // capture. Only the AST_IDENTIFIER expression path recorded
+                // captures, and a call's callee never goes through it - so
+                // `(x: int): dir(x) end` left `dir` out of the capture list
+                // entirely, and both backends then failed to find it.
+                // Using the same value without calling it worked, which is
+                // what made this look target-specific. Same condition as
+                // the expression path.
+                if s.lam.len() > 0 && (fvv.kind == SYM_VAR || fvv.kind == SYM_PARAM):
+                    ctop := s.lam.get(s.lam.len() - 1)[0]
+                    cname := at.Get(a, callee).name
+                    if !defined_within(s, s.cur, ctop.boundary, cname) && scope_lookup_local(s, s.global, cname) == 0:
+                        record_capture(s, a, callee, fvv.ty)
+                    end
+                end
+            end
+        end
+    else callee != 0 && ckind != at.AST_MEMBER:
+        ct := sema_check_expr(s, a, callee)
+        if ct >= 0 && ty_at(s, ct).kind == TY_FUNC:
+            ft = ct
+        end
+    end
+    if ft >= 0:
+        _d8 := sema_decorate(s, a, callee, ft)
+        pf := sema_pure_fn(s, a)
+        if pf != 0:
+            serr(
+                s, 12, sp, co.Format1(
+                    i18.Tr("'pure' function '%s' cannot call a function value: its purity cannot be verified"),
+                    co.ArgStr(at.Get(a, pf).name)
+                )
+            )
+        end
+        ftv := ty_at(s, ft)
+        if argtypes.len() != ftv.params.len():
+            serr(
+                s, 12, sp, co.Format3(
+                    i18.Tr("function value takes %zu argument%s, got %zu"), co.ArgUint(ftv.params.len() as u64),
+                    co.ArgStr(plural_suffix(ftv.params.len())), co.ArgUint(argtypes.len() as u64)
+                )
+            )
+        else:
+            repeat argtypes.len() with fi:
+                if !type_assignable(
+                    s, ftv.params.get(fi)[0], argtypes.get(fi)[0]
+                ):
+                    serr(
+                        s, 2, sp, co.Format3(
+                            i18.Tr("argument %zu: cannot pass '%s' to '%s'"), co.ArgUint((fi + 1) as u64),
+                            co.ArgStr(type_to_string(s, argtypes.get(fi)[0])), co.ArgStr(type_to_string(s, ftv.params.get(fi)[0]))
+                        )
+                    )
+                end
+            end
+        end
+        ret sema_decorate(s, a, n, ftv.elem)
+    end
+
+    if ckind == at.AST_IDENTIFIER:
+        mut nm := at.Get(a, callee).name
+        if str.Equals(nm, "print") || str.Equals(nm, "println") || str.Equals(nm, "printerr") || str.Equals(nm, "printerrln"):
+            repeat argtypes.len() with pi:
+                tid := argtypes.get(pi)[0]
+                if tid >= 0:
+                    pk := ty_at(s, tid).kind
+                    if pk == TY_ARRAY || pk == TY_STRUCT || pk == TY_MAP || pk == TY_MAP_ITER || pk == TY_VEC || pk == TY_FILE || pk == TY_FUNC || pk == TY_SLICE || pk == TY_VARIANT:
+                        serr(
+                            s, 2, sp, co.Format1(
+                                i18.Tr("cannot print value of type '%s' directly - print its elements or fields instead"),
+                                co.ArgStr(type_to_string(s, tid))
+                            )
+                        )
+                    end
+                end
+            end
+            _d9 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+            ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
+        end
+        if str.Equals(nm, "input"):
+            _da2 := sema_decorate(s, a, callee, sema_ty(s, TY_STR))
+            ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
+        end
+        if str.Equals(nm, "hash") && argtypes.len() == 1:
+            _db2 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+            ret sema_decorate(s, a, n, sema_ty(s, TY_U64))
+        end
+        if str.Equals(nm, "open"):
+            if argtypes.len() != 2:
+                serr(s, 12, sp, i18.Tr("open(path, mode) takes 2 args"))
+            end
+            _dc2 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+            ret sema_decorate(s, a, n, type_ptr(s, type_file(s)))
+        end
+        if str.Equals(nm, "env"):
+            if argtypes.len() != 1:
+                serr(s, 12, sp, i18.Tr("env(name) takes 1 arg"))
+            end
+            _dd2 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+            ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
+        end
+        if str.Equals(nm, "args"):
+            if argtypes.len() != 0:
+                serr(s, 12, sp, i18.Tr("args() takes no arguments"))
+            end
+            _de2 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+            ret sema_decorate(s, a, n, sema_vec_str(s, a, sp))
+        end
+        if str.Equals(nm, "lang"):
+            if argtypes.len() != 0:
+                serr(s, 12, sp, i18.Tr("lang() takes no arguments"))
+            end
+            _df2 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+            ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
+        end
+        if str.Equals(nm, "listdir"):
+            if argtypes.len() != 1:
+                serr(
+                    s, 12, sp, co.Format1(i18.Tr("%s takes 1 argument"), co.ArgStr(nm))
+                )
+            end
+            _dg2 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+            ret sema_decorate(s, a, n, sema_vec_str(s, a, sp))
+        end
+        mut sym := scope_lookup(s, s.cur, nm)
+        if sym == 0:
+            c := local_canon(s, a, nm, sp)
+            if !str.Equals(c, nm):
+                nm = c
+                at.SetName(a, callee, c)
+                sym = scope_lookup(s, s.cur, nm)
+            end
+        end
+        mut sym_callable := sym != 0
+        if sym_callable:
+            sk := sym_at(s, sym).kind
+            if sk != SYM_FUNC && sk != SYM_METHOD:
+                sym_callable = false
+            end
+        end
+        if !sym_callable:
+            if str.Equals(nm, "len") && argtypes.len() == 1:
+                ak := ty_at(s, argtypes.get(0)[0]).kind
+                if ak == TY_ARRAY || ak == TY_SLICE || ak == TY_STR:
+                    _dh2 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+                    ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
+                end
+            end
+            if str.Equals(nm, "char_code") && argtypes.len() == 1 && ty_at(s, argtypes.get(0)[0]).kind == TY_STR:
+                _di2 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+                ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
+            end
+            bi := builtin_lookup(nm)
+            if bi >= 0:
+                bnargs := k_sm_builtin_nargs[bi]
+                barg := k_sm_builtin_arg[bi]
+                bret := k_sm_builtin_ret[bi]
+                if bnargs >= 0 && argtypes.len() != bnargs:
+                    serr(
+                        s, 12, sp, co.Format4(
+                            i18.Tr("builtin '%s' takes %d argument%s, got %zu"), co.ArgStr(nm), co.ArgInt(bnargs as i64),
+                            co.ArgStr(plural_suffix(bnargs)), co.ArgUint(argtypes.len() as u64)
+                        )
+                    )
+                end
+                if !str.Equals(barg, "*"):
+                    bak := type_prim_kind_from_name(barg, "")
+                    repeat argtypes.len() with bj:
+                        if !type_assignable(
+                            s, sema_ty(s, bak), argtypes.get(bj)[0]
+                        ):
+                            serr(
+                                s, 2, sp, co.Format3(
+                                    i18.Tr("builtin '%s' expects '%s', got '%s'"), co.ArgStr(nm), co.ArgStr(barg),
+                                    co.ArgStr(
+                                        type_to_string(
+                                            s, argtypes.get(bj)[0]
+                                        )
+                                    )
+                                )
+                            )
+                        end
+                    end
+                end
+                _dj2 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+                ret sema_decorate(
+                    s, a, n, sema_ty(s, type_prim_kind_from_name(bret, ""))
+                )
+            end
+            serr(
+                s, 12, sp, co.Format1(
+                    i18.Tr("call to undefined function '%s'"), co.ArgStr(nm)
+                )
+            )
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+
+        mut symv := sym_at(s, sym)
+        symv.used = true
+        sym_put(s, sym, symv)
+        dce_note(s, a, str.Len(symv.pkgname) > 0 ? symv.pkgname : s.pkg, nm)
+        if symv.kind == SYM_FUNC && symv.decl != 0 && at.TyparamCount(a, symv.decl) > 0:
+            inst := g_infer_call(s, a, sym, argtypes, sp, call_expected)
+            if inst == 0:
+                ret sema_decorate(s, a, n, sema_err_ty(s))
+            end
+            sym = inst
+            at.SetName(a, callee, sym_at(s, inst).name)
+            // NOTE: `nm` (the written name) is kept for error messages.
+        end
+        sig := resolve_overload(s, a, sym, argtypes, sp, nm)
+        mark_ref_args(s, a, n, sig)
+        coerce_args_to_dyn(s, a, n, argtypes, sig)
+        coerce_args_to_variant(s, a, n, argtypes, sig)
+        _dk2 := sema_decorate(s, a, callee, sym_at(s, sym).ty)
+        if sig == 0:
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+        ret sema_decorate(
+            s, a, n, g_localize_instance(s, a, sig_ret_or_err(s, sig), sp)
+        )
+    end
+
+    if ckind == at.AST_MEMBER && at.Get(a, callee).a != 0 && at.KindOf(a, at.Get(a, callee).a) == at.AST_IDENTIFIER:
+        pk := scope_lookup(s, s.cur, at.Get(a, at.Get(a, callee).a).name)
+        if pk != 0 && sym_at(s, pk).kind == SYM_PACKAGE:
+            csp := span_of(a, callee)
+            fname3 := pkg_member_canon(s, a, pk, at.Get(a, callee).name, csp)
+            at.SetName(a, callee, fname3)
+            pkv := sym_at(s, pk)
+            fn := scope_lookup_local(s, pkv.members, fname3)
+            mut fn_ok := fn != 0
+            if fn_ok && sym_at(s, fn).kind != SYM_FUNC:
+                fn_ok = false
+            end
+            if !fn_ok:
+                serr(
+                    s, 12, sp, co.Format2(
+                        i18.Tr("package '%s' has no exported function '%s'"), co.ArgStr(pkv.name), co.ArgStr(fname3)
+                    )
+                )
+                ret sema_decorate(s, a, n, sema_err_ty(s))
+            end
+            fnv := sym_at(s, fn)
+            if !fnv.is_pub:
+                serr(
+                    s, 17, sp, co.Format2(
+                        i18.Tr("'%s' is not exported by package '%s' (mark it 'pub')"), co.ArgStr(fname3),
+                        co.ArgStr(pkv.name)
+                    )
+                )
+                ret sema_decorate(s, a, n, sema_err_ty(s))
+            end
+            mut fnm := sym_at(s, fn)
+            fnm.used = true
+            sym_put(s, fn, fnm)
+            dce_note(s, a, pkv.pkgname, fname3)
+
+            if fnm.decl != 0 && at.TyparamCount(a, fnm.decl) > 0:
+                save_cur := s.cur
+                save_gp := s.gen_pkg
+                s.cur = pkv.members
+                s.gen_pkg = pkv.members
+                inst2 := g_infer_call(s, a, fn, argtypes, sp, call_expected)
+                s.cur = save_cur
+                s.gen_pkg = save_gp
+                if inst2 == 0:
+                    ret sema_decorate(s, a, n, sema_err_ty(s))
+                end
+                mut cv := at.Get(a, callee)
+                cv.kind = at.AST_IDENTIFIER
+                cv.name = sym_at(s, inst2).name
+                at.Put(a, callee, cv)
+                sig2 := resolve_overload(s, a, inst2, argtypes, sp, fname3)
+                mark_ref_args(s, a, n, sig2)
+                _dl2 := sema_decorate(s, a, callee, sym_at(s, inst2).ty)
+                if sig2 == 0:
+                    ret sema_decorate(s, a, n, sema_err_ty(s))
+                end
+                ret sema_decorate(
+                    s, a, n, g_localize_instance(s, a, sig_ret_or_err(s, sig2), sp)
+                )
+            end
+            sig3 := resolve_overload(s, a, fn, argtypes, sp, fname3)
+            mark_ref_args(s, a, n, sig3)
+            _dm2 := sema_decorate(s, a, at.Get(a, callee).a, pkv.ty)
+            _dn2 := sema_decorate(s, a, callee, sym_at(s, fn).ty)
+            if sig3 == 0:
+                ret sema_decorate(s, a, n, sema_err_ty(s))
+            end
+            ret sema_decorate(
+                s, a, n, g_localize_instance(s, a, sig_ret_or_err(s, sig3), sp)
+            )
+        end
+    end
+
+    if ckind == at.AST_MEMBER:
+        objt := sema_check_expr(s, a, at.Get(a, callee).a)
+        if type_is_error(s, objt):
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+        // any method call through a member chain marks the root mutated
+        mut root := at.Get(a, callee).a
+        until root != 0 && (
+            at.KindOf(a, root) == at.AST_MEMBER || at.KindOf(a, root) == at.AST_INDEX
+        ):
+            root = at.Get(a, root).a
+        end
+        if root != 0 && at.KindOf(a, root) == at.AST_IDENTIFIER && str.Len(at.Get(a, root).name) > 0:
+            rsym := scope_lookup(s, s.cur, at.Get(a, root).name)
+            if rsym != 0:
+                mut rv := sym_at(s, rsym)
+                rv.mutated = true
+                sym_put(s, rsym, rv)
+            end
+        end
+
+        csp2 := span_of(a, callee)
+        ov := ty_at(s, objt)
+        mut is_file_ptr := false
+        if ov.kind == TY_PTR && ov.pointee >= 0 && ty_at(s, ov.pointee).kind == TY_FILE:
+            is_file_ptr = true
+        end
+        if str.Len(at.Get(a, callee).name) > 0 && (
+            ov.kind == TY_MAP || ov.kind == TY_MAP_ITER || ov.kind == TY_VEC || ov.kind == TY_STR || ov.kind == TY_ARRAY || ov.kind == TY_SLICE || is_file_ptr
+        ):
+            orig := at.Get(a, callee).name
+            at.SetName(a, callee, intrinsic_method_canon(orig))
+            sema_check_intrinsic_method_lang(
+                s, orig, at.Get(a, callee).name, csp2
+            )
+        end
+
+        if ov.kind == TY_MAP:
+            m := at.Get(a, callee).name
+            _do2 := sema_decorate(s, a, callee, objt)
+            if str.Equals(m, "put"):
+                check_pure_recv_mut(s, a, n, m)
+                if argtypes.len() != 2:
+                    serr(s, 12, sp, i18.Tr("put(key,value) takes 2 args"))
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
+            end
+            if str.Equals(m, "get"):
+                if argtypes.len() != 1:
+                    serr(s, 12, sp, i18.Tr("get(key) takes 1 arg"))
+                end
+                ret sema_decorate(s, a, n, ov.elem)
+            end
+            if str.Equals(m, "has"):
+                if argtypes.len() != 1:
+                    serr(s, 12, sp, i18.Tr("has(key) takes 1 arg"))
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_BOOL))
+            end
+            if str.Equals(m, "remove"):
+                check_pure_recv_mut(s, a, n, m)
+                if argtypes.len() != 1:
+                    serr(s, 12, sp, i18.Tr("remove(key) takes 1 arg"))
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_BOOL))
+            end
+            if str.Equals(m, "size"):
+                ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
+            end
+            if str.Equals(m, "iter"):
+                ret sema_decorate(s, a, n, type_map_iter(s, ov.key, ov.elem))
+            end
+            serr(
+                s, 17, sp, co.Format1(i18.Tr("HashMap has no method '%s'"), co.ArgStr(m))
+            )
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+        if ov.kind == TY_MAP_ITER:
+            m2 := at.Get(a, callee).name
+            _dp2 := sema_decorate(s, a, callee, objt)
+            if str.Equals(m2, "has_next"):
+                ret sema_decorate(s, a, n, sema_ty(s, TY_BOOL))
+            end
+            if str.Equals(m2, "key"):
+                ret sema_decorate(s, a, n, ov.key)
+            end
+            if str.Equals(m2, "value"):
+                ret sema_decorate(s, a, n, ov.elem)
+            end
+            if str.Equals(m2, "next"):
+                ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
+            end
+            serr(
+                s, 17, sp, co.Format1(i18.Tr("MapIter has no method '%s'"), co.ArgStr(m2))
+            )
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+
+        if ov.kind == TY_VEC:
+            m3 := at.Get(a, callee).name
+            _dq2 := sema_decorate(s, a, callee, objt)
+            if ov.elem >= 0 && ty_at(s, ov.elem).kind == TY_DYN && (str.Equals(m3, "push") || str.Equals(m3, "set")):
+                vi := str.Equals(m3, "push") ? 0 : 1
+                if vi < at.ChildCount(a, n) && vi < argtypes.len():
+                    nb := coerce_to_dyn(
+                        s, a, ov.elem, at.Child(a, n, vi), argtypes.get(vi)[0]
+                    )
+                    mut cn := at.Get(a, n)
+                    cn.list.set(vi, nb)
+                    at.Put(a, n, cn)
+                end
+            end
+            if str.Equals(m3, "push"):
+                check_pure_recv_mut(s, a, n, m3)
+                if argtypes.len() != 1:
+                    serr(s, 12, sp, i18.Tr("push(value) takes 1 arg"))
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
+            end
+            if str.Equals(m3, "pop"):
+                check_pure_recv_mut(s, a, n, m3)
+                ret sema_decorate(s, a, n, ov.elem)
+            end
+            if str.Equals(m3, "get"):
+                if argtypes.len() != 1:
+                    serr(s, 12, sp, i18.Tr("get(index) takes 1 arg"))
+                end
+                ret sema_decorate(s, a, n, type_ptr(s, ov.elem))
+            end
+            if str.Equals(m3, "set"):
+                check_pure_recv_mut(s, a, n, m3)
+                if argtypes.len() != 2:
+                    serr(s, 12, sp, i18.Tr("set(index,value) takes 2 args"))
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
+            end
+            if str.Equals(m3, "len"):
+                ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
+            end
+            if str.Equals(m3, "cap"):
+                ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
+            end
+            if str.Equals(m3, "free"):
+                check_pure_recv_mut(s, a, n, m3)
+                ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
+            end
+            serr(
+                s, 17, sp, co.Format1(i18.Tr("Vector has no method '%s'"), co.ArgStr(m3))
+            )
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+
+        if is_file_ptr:
+            m4 := at.Get(a, callee).name
+            _dr2 := sema_decorate(s, a, callee, objt)
+            pf2 := sema_pure_fn(s, a)
+            if pf2 != 0:
+                serr(
+                    s, 12, sp, co.Format2(
+                        i18.Tr("'pure' function '%s' cannot call '%s': it has side effects"), co.ArgStr(at.Get(a, pf2).name),
+                        co.ArgStr(m4)
+                    )
+                )
+            end
+            if str.Equals(m4, "read"):
+                if argtypes.len() != 1:
+                    serr(s, 12, sp, i18.Tr("read(size) takes 1 arg"))
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
+            end
+            if str.Equals(m4, "readline"):
+                ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
+            end
+            if str.Equals(m4, "write"):
+                if argtypes.len() != 1:
+                    serr(s, 12, sp, i18.Tr("write(data) takes 1 arg"))
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
+            end
+            if str.Equals(m4, "seek"):
+                if argtypes.len() != 2:
+                    serr(s, 12, sp, i18.Tr("seek(offset,whence) takes 2 args"))
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
+            end
+            if str.Equals(m4, "close"):
+                ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
+            end
+            serr(
+                s, 17, sp, co.Format1(i18.Tr("File has no method '%s'"), co.ArgStr(m4))
+            )
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+
+        if ov.kind == TY_STR:
+            m5 := at.Get(a, callee).name
+            _ds2 := sema_decorate(s, a, callee, objt)
+            if str.Equals(m5, "len"):
+                ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
+            end
+            if str.Equals(m5, "concat"):
+                if argtypes.len() != 1:
+                    serr(s, 12, sp, i18.Tr("concat(other) takes 1 arg"))
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
+            end
+            if str.Equals(m5, "substr"):
+                if argtypes.len() != 2:
+                    serr(s, 12, sp, i18.Tr("substr(start,len) takes 2 args"))
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
+            end
+            if str.Equals(m5, "find") || str.Equals(m5, "search") || str.Equals(m5, "indexOf"):
+                if argtypes.len() != 1:
+                    serr(
+                        s, 12, sp, co.Format1(
+                            i18.Tr("%s(sub) takes 1 arg"), co.ArgStr(m5)
+                        )
+                    )
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
+            end
+            if str.Equals(m5, "split"):
+                if argtypes.len() != 1:
+                    serr(s, 12, sp, i18.Tr("split(delim) takes 1 arg"))
+                end
+                ret sema_decorate(s, a, n, sema_vec_str(s, a, sp))
+            end
+            if str.Equals(m5, "trim"):
+                ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
+            end
+            if str.Equals(m5, "to_int"):
+                ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
+            end
+            if str.Equals(m5, "to_float"):
+                ret sema_decorate(s, a, n, sema_ty(s, TY_F64))
+            end
+            if str.Equals(m5, "lower") || str.Equals(m5, "upper"):
+                if argtypes.len() != 0:
+                    serr(
+                        s, 12, sp, co.Format1(
+                            i18.Tr("%s() takes no args"), co.ArgStr(m5)
+                        )
+                    )
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
+            end
+            if str.Equals(m5, "repeat"):
+                if argtypes.len() != 1:
+                    serr(s, 12, sp, i18.Tr("repeat(n) takes 1 arg"))
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
+            end
+            ric := try_impl_call(s, a, n, callee, objt, argtypes)
+            if ric != TYPE_NONE:
+                ret ric
+            end
+            serr(
+                s, 17, sp, co.Format1(i18.Tr("str has no method '%s'"), co.ArgStr(m5))
+            )
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+
+        if ov.kind == TY_ARRAY || ov.kind == TY_SLICE:
+            m6 := at.Get(a, callee).name
+            _dt2 := sema_decorate(s, a, callee, objt)
+            if str.Equals(m6, "len"):
+                ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
+            end
+            ric2 := try_impl_call(s, a, n, callee, objt, argtypes)
+            if ric2 != TYPE_NONE:
+                ret ric2
+            end
+            serr(
+                s, 17, sp, co.Format1(i18.Tr("array has no method '%s'"), co.ArgStr(m6))
+            )
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+
+        mut dynt := TYPE_NONE
+        if ov.kind == TY_DYN:
+            dynt = objt
+        else ov.kind == TY_PTR && ov.pointee >= 0 && ty_at(s, ov.pointee).kind == TY_DYN:
+            dynt = ov.pointee
+        end
+        if dynt >= 0 && ty_at(s, dynt).decl != 0:
+            iface := ty_at(s, dynt).decl
+            _du2 := sema_decorate(s, a, callee, objt)
+            if str.Equals(at.Get(a, callee).name, "free"):
+                ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
+            end
+            im := scope_member_canon(
+                s, a, sym_at(s, iface).members, at.Get(a, callee).name, csp2
+            )
+            at.SetName(a, callee, im)
+            md := scope_lookup_local(s, sym_at(s, iface).members, im)
+            mut md_ok := md != 0
+            if md_ok && sym_at(s, md).kind != SYM_METHOD:
+                md_ok = false
+            end
+            if !md_ok:
+                serr(
+                    s, 17, sp, co.Format2(
+                        i18.Tr("interface '%s' has no method '%s'"), co.ArgStr(sym_at(s, iface).name),
+                        co.ArgStr(im)
+                    )
+                )
+                ret sema_decorate(s, a, n, sema_err_ty(s))
+            end
+            sig4 := resolve_overload(s, a, md, argtypes, sp, im)
+            mark_ref_args(s, a, n, sig4)
+            coerce_args_to_dyn(s, a, n, argtypes, sig4)
+            coerce_args_to_variant(s, a, n, argtypes, sig4)
+            ret sema_decorate(s, a, n, sig_ret_or_err(s, sig4))
+        end
+        ssym := struct_sym_of(s, objt)
+        if ssym == 0:
+            ric3 := try_impl_call(s, a, n, callee, objt, argtypes)
+            if ric3 != TYPE_NONE:
+                ret ric3
+            end
+            serr(
+                s, 29, sp, co.Format1(
+                    i18.Tr("method call on non-struct type '%s'"), co.ArgStr(type_to_string(s, objt))
+                )
+            )
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+        ssv := sym_at(s, ssym)
+        orig_method_name := at.Get(a, callee).name
+        at.SetName(
+            a, callee, scope_member_canon(s, a, ssv.members, orig_method_name, csp2)
+        )
+        if scope_lookup_local(s, ssv.members, at.Get(a, callee).name) == 0:
+            intr := intrinsic_method_canon(at.Get(a, callee).name)
+            if !str.Equals(intr, at.Get(a, callee).name) && scope_lookup_local(s, ssv.members, intr) != 0:
+                at.SetName(a, callee, intr)
+            end
+        end
+        if scope_lookup_local(s, ssv.members, at.Get(a, callee).name) != 0:
+            sema_check_intrinsic_method_lang(
+                s, orig_method_name, at.Get(a, callee).name, csp2
+            )
+        end
+        mname := at.Get(a, callee).name
+        m7 := scope_lookup_local(s, ssv.members, mname)
+
+        mut is_func_field := false
+        if m7 != 0:
+            m7v := sym_at(s, m7)
+            if m7v.kind == SYM_FIELD && m7v.ty >= 0 && ty_at(s, m7v.ty).kind == TY_FUNC:
+                is_func_field = true
+            end
+        end
+        if is_func_field:
+            m7v2 := sym_at(s, m7)
+            fft := m7v2.ty
+            if !m7v2.is_pub && struct_sym_of(s, s.self_type) != ssym:
+                serr(
+                    s, 17, sp, co.Format2(
+                        i18.Tr("field '%s' is private in struct '%s' (mark it 'pub')"), co.ArgStr(mname),
+                        co.ArgStr(ssv.name)
+                    )
+                )
+            end
+            _dv2 := sema_decorate(s, a, callee, fft)
+            pf3 := sema_pure_fn(s, a)
+            if pf3 != 0:
+                serr(
+                    s, 12, sp, co.Format1(
+                        i18.Tr("'pure' function '%s' cannot call a function value: its purity cannot be verified"),
+                        co.ArgStr(at.Get(a, pf3).name)
+                    )
+                )
+            end
+            fftv := ty_at(s, fft)
+            if argtypes.len() != fftv.params.len():
+                serr(
+                    s, 12, sp, co.Format3(
+                        i18.Tr("function value takes %zu argument%s, got %zu"), co.ArgUint(fftv.params.len() as u64),
+                        co.ArgStr(plural_suffix(fftv.params.len())), co.ArgUint(argtypes.len() as u64)
+                    )
+                )
+            else:
+                repeat argtypes.len() with gi:
+                    if !type_assignable(
+                        s, fftv.params.get(gi)[0], argtypes.get(gi)[0]
+                    ):
+                        serr(
+                            s, 2, sp, co.Format3(
+                                i18.Tr("argument %zu: cannot pass '%s' to '%s'"), co.ArgUint((gi + 1) as u64),
+                                co.ArgStr(
+                                    type_to_string(
+                                        s, argtypes.get(gi)[0]
+                                    )
+                                ), co.ArgStr(
+                                    type_to_string(
+                                        s, fftv.params.get(gi)[0]
+                                    )
+                                )
+                            )
+                        )
+                    end
+                end
+            end
+            ret sema_decorate(s, a, n, fftv.elem)
+        end
+        mut m7_ok := m7 != 0
+        if m7_ok && sym_at(s, m7).kind != SYM_METHOD:
+            m7_ok = false
+        end
+        if !m7_ok:
+            serr(
+                s, 17, sp, co.Format2(
+                    i18.Tr("no method '%s' for type '%s'"), co.ArgStr(mname), co.ArgStr(ssv.name)
+                )
+            )
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+        if !sym_at(s, m7).is_pub && struct_sym_of(s, s.self_type) != ssym:
+            serr(
+                s, 17, sp, co.Format2(
+                    i18.Tr("method '%s' is private in struct '%s' (mark it 'pub')"), co.ArgStr(mname),
+                    co.ArgStr(ssv.name)
+                )
+            )
+        end
+        sig5 := resolve_overload(s, a, m7, argtypes, sp, mname)
+        mark_ref_args(s, a, n, sig5)
+        coerce_args_to_dyn(s, a, n, argtypes, sig5)
+        coerce_args_to_variant(s, a, n, argtypes, sig5)
+        _dw2 := sema_decorate(s, a, callee, sym_at(s, m7).ty)
+        if sig5 == 0:
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+        ret sema_decorate(
+            s, a, n, g_localize_instance(s, a, sig_ret_or_err(s, sig5), sp)
+        )
+    end
+    _dx2 := sema_check_expr(s, a, callee)
+    serr(s, 12, sp, i18.Tr("expression is not callable"))
+    ret sema_decorate(s, a, n, sema_err_ty(s))
+end
+
+// plural_suffix: "" for a count of exactly 1, "s" otherwise. Not a direct
+// port of any one C function - each diagnostic call site below has its own
+// static `plural_suffix` in the corresponding sema_*.c file; this is the
+// single shared copy for the merged Salam file.
+func plural_suffix(n: int): str:
+    ret n == 1 ? "" : "s"
+end
+
+// ===========================================================================
+// >>> 5b/5c/5d INSERTION POINT: add all new PRIVATE functions ABOVE this
+// >>> banner (and new pub functions below, inside the PUBLIC API section).
+// ===========================================================================

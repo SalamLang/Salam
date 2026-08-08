@@ -1,0 +1,85 @@
+package docgen
+
+import at "../ast.salam"
+
+// Unsigned byte read from a str (same idiom used throughout the port, e.g.
+// driver.salam's byte_at / jsgen.salam's jsg_escape).
+func byte_at(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+func is_alpha(b: int): bool:
+    ret (b >= 97 && b <= 122) || (b >= 65 && b <= 90)
+end
+
+// ---------------------------------------------------------------------------
+// DocDb row builders. Every get-mutate-set pair below is tight (nothing else
+// touches the same row between the Get and the Set), matching ast.salam's
+// own mutation protocol.
+// ---------------------------------------------------------------------------
+
+func db_add_file(db &: DocDb, rel: str): int:
+    idx := db.files.len()
+    db.files.push(rel)
+    ret idx
+end
+
+func db_add_decl(
+    db &: DocDb, kind: int, name: str, sig: str, is_pub: bool, is_dep: bool, file_idx: int, line: int,
+    parent: int
+): int:
+    mut d := DocDecl {}
+    d.kind = kind
+    d.name = name
+    d.sig = sig
+    d.is_pub = is_pub
+    d.is_deprecated = is_dep
+    d.file_idx = file_idx
+    d.line = line
+    d.parent = parent
+    idx := db.decls.len()
+    db.decls.push(d)
+    if parent >= 0:
+        mut pd := db.decls.get(parent)[0]
+        pd.members.push(idx)
+        db.decls.set(parent, pd)
+    end
+    ret idx
+end
+
+func db_add_alias(db &: DocDb, id: int, lang: str, val: str):
+    mut d := db.decls.get(id)[0]
+    d.aliases.push(lang)
+    d.aliases.push(val)
+    db.decls.set(id, d)
+end
+
+func db_add_doc(db &: DocDb, id: int, lang: str, text: str):
+    mut d := db.decls.get(id)[0]
+    d.doc.push(lang)
+    d.doc.push(text)
+    db.decls.set(id, d)
+end
+
+func attach_aliases(db &: DocDb, a: at.Ast, node_id: int, decl_idx: int):
+    cnt := at.AliasCount(a, node_id)
+    mut i := 0
+    until i + 1 < cnt:
+        lang := at.Alias(a, node_id, i)
+        val := at.Alias(a, node_id, i + 1)
+        db_add_alias(db, decl_idx, lang, val)
+        i += 2
+    end
+end
+
+// ---------------------------------------------------------------------------
+// Type / signature rendering (purely syntactic - walks AST_TYPE trees
+// directly). `finish_untyped_params` (parser.salam) synthesizes "__T0"-style
+// placeholder type names for untyped params; hide those and just show the
+// bare param name instead.
+// ---------------------------------------------------------------------------

@@ -1,0 +1,856 @@
+package llvmgen
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import sm "../semantic/semantic.salam"
+
+// ===== codegen_llvm_type.c =====
+
+// ll_int_bits ("" = the C NULL -> 32)
+func int_bits(v &: Lv, ts: str): int:
+    if str.Equals(ts, "bool"):
+        ret 1
+    end
+    if str.Equals(ts, "char") || str.Equals(ts, "i8") || str.Equals(ts, "u8"):
+        ret 8
+    end
+    if str.Equals(ts, "i16") || str.Equals(ts, "u16"):
+        ret 16
+    end
+    if str.Equals(ts, "i32") || str.Equals(ts, "u32"):
+        ret 32
+    end
+    if str.Equals(ts, "i64") || str.Equals(ts, "u64"):
+        ret 64
+    end
+    if str.Equals(ts, "size"):
+        ret v.ptr_bits
+    end
+    ret 32
+end
+
+// Host pointer width - the C's sizeof(void *) * 8 at compile time.
+func host_ptr_bits(): int:
+    if SALAM_ARCH_X64 || SALAM_ARCH_ARM64:
+        ret 64
+    else:
+        ret 32
+    end
+end
+
+// ll_target_ptr_bits
+func target_ptr_bits_of(triple: str): int:
+    if str.Len(triple) == 0:
+        ret host_ptr_bits()
+    end
+    repeat 12 with i:
+        if str.Contains(triple, k_lv_w64[i]):
+            ret 64
+        end
+    end
+    repeat 2 with k:
+        if str.Contains(triple, k_lv_w16[k]):
+            ret 16
+        end
+    end
+    repeat 15 with j:
+        if str.Contains(triple, k_lv_w32[j]):
+            ret 32
+        end
+    end
+    ret host_ptr_bits()
+end
+
+// ll_usize_to_i32
+func usize_to_i32(v &: Lv, ref2: str): str:
+    if v.ptr_bits <= 32:
+        ret ref2
+    end
+    r := new_tmp(v)
+    emit(v, r + " = trunc " + v.usize + " " + ref2 + " to i32")
+    ret r
+end
+
+// ll_is_int
+func is_int_ts(ts: str): bool:
+    repeat 11 with i:
+        if str.Equals(ts, k_lv_ints[i]):
+            ret true
+        end
+    end
+    ret false
+end
+
+// ll_is_signed ("" = the C NULL -> true)
+func is_signed_ts(ts: str): bool:
+    repeat 5 with i:
+        if str.Equals(ts, k_lv_uns[i]):
+            ret false
+        end
+    end
+    if str.Equals(ts, "bool"):
+        ret false
+    end
+    if str.Equals(ts, "char"):
+        ret false
+    end
+    ret true
+end
+
+// ll_array_dim
+func array_dim(ts: str): i64:
+    lb := idx_byte(ts, 91)
+    if lb < 0:
+        ret 0 as i64
+    end
+    mut n := 0 as i64
+    mut p := lb + 1
+    sn := str.Len(ts)
+    until p < sn && byte_at(ts, p) != 93:
+        c := byte_at(ts, p)
+        if c >= 48 && c <= 57:
+            n = n * 10 + ((c - 48) as i64)
+        end
+        p += 1
+    end
+    ret n
+end
+
+// ll_array_elem
+func array_elem(ts: str): str:
+    lb := idx_byte(ts, 91)
+    if lb < 0:
+        ret ts
+    end
+    // C: strchr(lb, ']') - first ']' at/after lb
+    n := str.Len(ts)
+    mut rb := 0 - 1
+    mut p := lb
+    until p < n && rb < 0:
+        if byte_at(ts, p) == 93:
+            rb = p
+        end
+        p += 1
+    end
+    if rb < 0:
+        ret ts
+    end
+    ret str.Substr(ts, 0, lb) + str.Substr(ts, rb + 1, n - rb - 1)
+end
+
+// ll_is_slice_ts
+func is_slice(ts: str): bool:
+    ret str.StartsWith(ts, "slice<")
+end
+
+// ll_slice_elem
+func slice_elem(ts: str): str:
+    lt := idx_byte(ts, 60)
+    gt := last_byte(ts, 62)
+    if lt < 0 || gt < 0 || gt <= lt:
+        ret "i32"
+    end
+    ret str.Substr(ts, lt + 1, gt - lt - 1)
+end
+
+// ll_struct_ltype
+func struct_ltype(name: str): str:
+    n := str.Len(name)
+    mut ascii := n > 0 && !is_digit_b(byte_at(name, 0))
+    mut i := 0
+    until ascii && i < n:
+        if !is_alnum_b(byte_at(name, i)):
+            ascii = false
+        end
+        i += 1
+    end
+    if ascii:
+        ret "%struct." + name
+    end
+    mut b := co.SbNew()
+    co.SbPuts(b, "%struct.")
+    if n > 0 && is_digit_b(byte_at(name, 0)):
+        co.SbPutc(b, 95)
+    end
+    mut j := 0
+    until j < n:
+        c := byte_at(name, j)
+        if is_alnum_b(c):
+            co.SbPutc(b, c)
+        else c == 95:
+            co.SbPuts(b, "__")
+        else:
+            co.SbPuts(b, "_" + hex2_lower(c))
+        end
+        j += 1
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+// ll_variant_push_trimmed + ll_variant_members - members clamp at 64
+// entries of at most 159 bytes, exactly like the C's char[64][160].
+func variant_push_trimmed(ts: str, start0: int, end0: int, out2 &: Vector<str>):
+    mut s0 := start0
+    mut e0 := end0
+    until s0 < e0 && byte_at(ts, s0) == 32:
+        s0 += 1
+    end
+    until e0 > s0 && byte_at(ts, e0 - 1) == 32:
+        e0 -= 1
+    end
+    if out2.len() >= 64:
+        ret
+    end
+    mut l := e0 - s0
+    if l >= 160:
+        l = 159
+    end
+    out2.push(str.Substr(ts, s0, l))
+end
+
+func variant_members(ts: str): Vector<str>:
+    mut out2 := Vector {} as Vector<str>
+    lt := idx_byte(ts, 60)
+    gt := last_byte(ts, 62)
+    if lt < 0 || gt < 0 || gt <= lt:
+        ret out2
+    end
+    mut start0 := lt + 1
+    mut depth := 0
+    mut p := start0
+    until p < gt:
+        c := byte_at(ts, p)
+        if c == 60:
+            depth += 1
+        else c == 62:
+            depth -= 1
+        else c == 44 && depth == 0:
+            variant_push_trimmed(ts, start0, p, out2)
+            start0 = p + 1
+        end
+        p += 1
+    end
+    variant_push_trimmed(ts, start0, gt, out2)
+    ret out2
+end
+
+// ll_variant_tag_of
+func variant_tag_of(variant_ts: str, member_ts: str): int:
+    mut members := variant_members(variant_ts)
+    defer members.free()
+    repeat members.len() with i:
+        if str.Equals(members.get(i)[0], member_ts):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+// ll_ident_byte / ll_put_ident_byte (identical in type.c and decl.c).
+func put_ident_byte(b &: str.StringBuilder, c: int):
+    if is_alnum_b(c):
+        co.SbPutc(b, c)
+    else c == 95:
+        co.SbPuts(b, "__")
+    else:
+        co.SbPuts(b, "_" + hex2_lower(c))
+    end
+end
+
+// ll_put_ident
+func put_ident(b &: str.StringBuilder, name: str):
+    n := str.Len(name)
+    mut i := 0
+    until i < n:
+        put_ident_byte(b, byte_at(name, i))
+        i += 1
+    end
+end
+
+// ll_encode_ts / ll_put_type_code (identical in type.c and decl.c).
+func put_type_code(b &: str.StringBuilder, ts: str):
+    n := str.Len(ts)
+    mut i := 0
+    until i < n:
+        c := byte_at(ts, i)
+        if c == 42:
+            co.SbPuts(b, "_ptr")
+        else c == 91:
+            co.SbPuts(b, "_arr")
+        else c == 93 || c == 32:
+            // dropped
+            _c := c
+        else:
+            put_ident_byte(b, c)
+        end
+        i += 1
+    end
+end
+
+// ll_variant_cname
+func variant_cname(ts: str): str:
+    mut members := variant_members(ts)
+    defer members.free()
+    mut b := co.SbNew()
+    co.SbPuts(b, "%_Salam_variant")
+    repeat members.len() with i:
+        co.SbPutc(b, 95)
+        put_type_code(b, members.get(i)[0])
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+// ll_struct_layout
+func struct_layout(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, out_size &: i64, out_align &: i64
+):
+    ssym := struct_sym(v, s, a, ts)
+    mut off := 0 as i64
+    mut maxalign := 1 as i64
+    if ssym == 0:
+        p := (v.ptr_bits / 8) as i64
+        out_size = p
+        out_align = p
+        ret
+    end
+    members := sm.SymAt(s, ssym).members
+    syms := sm.ScopeAt(s, members).symbols
+    repeat syms.len() with j:
+        f := sm.SymAt(s, syms.get(j)[0])
+        if f.kind == sm.SYM_FIELD:
+            mut fsz := 0 as i64
+            mut fal := 0 as i64
+            type_layout(v, s, a, sm.ToString(s, f.ty), fsz, fal)
+            if fal < (1 as i64):
+                fal = 1 as i64
+            end
+            if fal > maxalign:
+                maxalign = fal
+            end
+            off = (off + fal - (1 as i64)) / fal * fal
+            off += fsz
+        end
+    end
+    off = (off + maxalign - (1 as i64)) / maxalign * maxalign
+    if off == (0 as i64):
+        off = 1 as i64
+    end
+    out_size = off
+    out_align = maxalign
+end
+
+// ll_variant_layout_size
+func variant_layout_size(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, out_size &: i64, out_align &: i64
+):
+    mut members := variant_members(ts)
+    defer members.free()
+    mut maxsz := 1 as i64
+    mut maxal := 1 as i64
+    repeat members.len() with i:
+        mut sz := 0 as i64
+        mut al := 0 as i64
+        type_layout(v, s, a, members.get(i)[0], sz, al)
+        if sz > maxsz:
+            maxsz = sz
+        end
+        if al > maxal:
+            maxal = al
+        end
+    end
+    out_size = maxsz
+    out_align = maxal
+end
+
+// ll_type_layout
+func type_layout(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, out_size &: i64, out_align &: i64
+):
+    p := (v.ptr_bits / 8) as i64
+    if str.Len(ts) == 0 || str.Equals(ts, "void"):
+        out_size = 0 as i64
+        out_align = 1 as i64
+    else str.StartsWith(ts, "dyn ") && idx_byte(ts, 91) < 0:
+        out_size = (2 as i64) * p
+        out_align = p
+    else str.StartsWith(ts, "Variant<"):
+        variant_layout_size(v, s, a, ts, out_size, out_align)
+    else is_str(ts) || is_ptr_ts(ts):
+        out_size = p
+        out_align = p
+    else is_slice(ts):
+        out_size = p + (8 as i64)
+        out_align = p > (8 as i64) ? p : 8 as i64
+    else idx_byte(ts, 91) >= 0:
+        dim := array_dim(ts)
+        mut esz := 0 as i64
+        mut eal := 0 as i64
+        type_layout(v, s, a, array_elem(ts), esz, eal)
+        out_size = esz * (dim > (0 as i64) ? dim : 0 as i64)
+        out_align = eal
+    else str.Equals(ts, "f32"):
+        out_size = 4 as i64
+        out_align = 4 as i64
+    else str.Equals(ts, "f64"):
+        out_size = 8 as i64
+        out_align = 8 as i64
+    else str.Equals(ts, "bool") || str.Equals(ts, "char"):
+        out_size = 1 as i64
+        out_align = 1 as i64
+    else is_int_ts(ts):
+        bytes := ((int_bits(v, ts) + 7) / 8) as i64
+        out_size = bytes
+        out_align = bytes
+    else struct_sym(v, s, a, ts) != 0:
+        struct_layout(v, s, a, ts, out_size, out_align)
+    else enum_sym(v, s, a, ts) != 0:
+        out_size = 4 as i64
+        out_align = 4 as i64
+    else:
+        out_size = p
+        out_align = p
+    end
+end
+
+// ll_ensure_variant_type
+func ensure_variant_type(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str):
+    cn := variant_cname(ts)
+    repeat v.emitted.len() with i:
+        if str.Equals(cn, v.emitted.get(i)[0]):
+            ret
+        end
+    end
+    v.emitted.push(cn)
+    mut sz := 0 as i64
+    mut al := 0 as i64
+    variant_layout_size(v, s, a, ts, sz, al)
+    _al := al
+    mut k := (sz + (7 as i64)) / (8 as i64)
+    if k < (1 as i64):
+        k = 1 as i64
+    end
+    out_g(v, cn + " = type { i32, [" + co.I64Toa(k) + " x i64] }\n")
+end
+
+// ll_sym_plain
+func sym_plain(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
+    mut r := sm.Lookup(s, s.global, name)
+    if r == 0 && v.pkg_scope != 0:
+        r = sm.LookupLocal(s, v.pkg_scope, name)
+    end
+    if r == 0:
+        mut p := 0
+        until p < sm.PackageCount(s) && r == 0:
+            pk := sm.PackageAt(s, p)
+            if pk != 0:
+                pkm := sm.SymAt(s, pk).members
+                if pkm != 0:
+                    r = sm.LookupLocal(s, pkm, name)
+                end
+                if r != 0:
+                    touch_pkg(v, s, a, pk)
+                end
+            end
+            p += 1
+        end
+    end
+    ret r
+end
+
+// ll_sym_qualified - try every '_'-suffix; accept when the symbol's type
+// string equals the full name.
+func sym_qualified(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
+    n := str.Len(name)
+    mut us := idx_byte(name, 95)
+    until us >= 0:
+        cand := str.Substr(name, us + 1, n - us - 1)
+        s2 := sym_plain(v, s, a, cand)
+        if s2 != 0:
+            t2 := sm.SymAt(s, s2).ty
+            if t2 != sm.TYPE_NONE:
+                if str.Equals(sm.ToString(s, t2), name):
+                    ret s2
+                end
+            end
+        end
+        // strchr(us + 1, '_')
+        mut nxt := 0 - 1
+        mut q := us + 1
+        until q < n && nxt < 0:
+            if byte_at(name, q) == 95:
+                nxt = q
+            end
+            q += 1
+        end
+        us = nxt
+    end
+    // The '_'-split walk above resolves the tail by *declared* name, so it
+    // silently picks the wrong type whenever two packages declare the same
+    // one - std/net has both a udp.Socket and a rawsock.Socket, and only
+    // one wins the bare "Socket" in the global scope, leaving the other
+    // unreachable. Mangled names are unique by construction, so scan for
+    // that instead. Package hits are touched, which is also what makes a
+    // program that uses only a package's types get its layouts emitted.
+    mut r := scan_mangled(s, s.global, name)
+    if r != 0:
+        ret r
+    end
+    mut p := 0
+    until p < sm.PackageCount(s) && r == 0:
+        pk := sm.PackageAt(s, p)
+        if pk != 0:
+            r = scan_mangled(s, sm.SymAt(s, pk).members, name)
+            if r != 0:
+                touch_pkg(v, s, a, pk)
+            end
+        end
+        p += 1
+    end
+    ret r
+end
+
+// ll_scan_mangled - find a struct/enum in `sc` by its *mangled* type name
+// ("rawsock_Socket") rather than by its declared name ("Socket").
+func scan_mangled(s &: sm.Sema, sc: int, name: str): int:
+    if sc == 0:
+        ret 0
+    end
+    syms := sm.ScopeAt(s, sc).symbols
+    repeat syms.len() with i:
+        sid := syms.get(i)[0]
+        sy := sm.SymAt(s, sid)
+        if sy.kind == sm.SYM_STRUCT || sy.kind == sm.SYM_ENUM:
+            if sy.ty != sm.TYPE_NONE:
+                if str.Equals(sm.ToString(s, sy.ty), name):
+                    ret sid
+                end
+            end
+        end
+    end
+    ret 0
+end
+
+// ll_sym
+func sym_of(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
+    if str.Len(name) == 0:
+        ret 0
+    end
+    mut r := sym_plain(v, s, a, name)
+    if r == 0 && idx_byte(name, 95) >= 0:
+        r = sym_qualified(v, s, a, name)
+    end
+    ret r
+end
+
+// ll_struct_sym
+func struct_sym(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
+    r := sym_of(v, s, a, name)
+    if r != 0 && sm.SymAt(s, r).kind == sm.SYM_STRUCT:
+        ret r
+    end
+    ret 0
+end
+
+// ll_enum_sym
+func enum_sym(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
+    r := sym_of(v, s, a, name)
+    if r != 0 && sm.SymAt(s, r).kind == sm.SYM_ENUM:
+        ret r
+    end
+    ret 0
+end
+
+// ll_field_index - index among SYM_FIELDs; out_field = the field SymId.
+func field_index(s &: sm.Sema, ssym: int, field: str, out_field &: int): int:
+    mut idx := 0
+    members := sm.SymAt(s, ssym).members
+    syms := sm.ScopeAt(s, members).symbols
+    repeat syms.len() with i:
+        fid := syms.get(i)[0]
+        f := sm.SymAt(s, fid)
+        if f.kind == sm.SYM_FIELD:
+            if str.Equals(f.name, field):
+                out_field = fid
+                ret idx
+            end
+            idx += 1
+        end
+    end
+    ret 0 - 1
+end
+
+// ll_func_ret
+// Length of the "func(" / "externfunc(" prefix, or 0 when `ts` is neither.
+// Both spellings come out of type_to_string (semantic picks by t->length),
+// and every structural helper parses them identically - only the *call*
+// lowering differs, since an externfunc is a bare C function pointer with
+// no closure environment.
+func fn_prefix(ts: str): int:
+    if str.StartsWith(ts, "func("):
+        ret 4
+    end
+    if str.StartsWith(ts, "externfunc("):
+        ret 10
+    end
+    ret 0
+end
+
+func is_extern_fn_ts(ts: str): bool:
+    ret str.StartsWith(ts, "externfunc(")
+end
+
+func func_ret(ts: str): str:
+    pre := fn_prefix(ts)
+    if pre == 0:
+        ret "void"
+    end
+    n := str.Len(ts)
+    mut p := pre
+    mut d := 0
+    mut brk0 := false
+    until p < n && !brk0:
+        c := byte_at(ts, p)
+        if c == 40:
+            d += 1
+            p += 1
+        else c == 41:
+            d -= 1
+            if d == 0:
+                p += 1
+                brk0 = true
+            else:
+                p += 1
+            end
+        else:
+            p += 1
+        end
+    end
+    until p < n && byte_at(ts, p) == 32:
+        p += 1
+    end
+    if p < n:
+        ret str.Substr(ts, p, n - p)
+    end
+    ret "void"
+end
+
+// ll_func_params - caller owns (and frees) the returned vector.
+func func_params(ts: str): Vector<str>:
+    mut out2 := Vector {} as Vector<str>
+    pre := fn_prefix(ts)
+    if pre == 0:
+        ret out2
+    end
+    n := str.Len(ts)
+    mut start0 := pre + 1
+    mut depth := 0
+    mut p := pre + 1
+    mut fin := false
+    until !fin:
+        c := p < n ? byte_at(ts, p) : 0
+        if c == 60 || c == 40:
+            depth += 1
+        else c == 62:
+            depth -= 1
+        else c == 41 && depth > 0:
+            depth -= 1
+        end
+        if (c == 44 && depth == 0) || (c == 41 && depth == 0) || c == 0:
+            mut st := start0
+            mut ln := p - start0
+            until ln > 0 && byte_at(ts, st) == 32:
+                st += 1
+                ln -= 1
+            end
+            until ln > 0 && byte_at(ts, st + ln - 1) == 32:
+                ln -= 1
+            end
+            if ln > 0:
+                out2.push(str.Substr(ts, st, ln))
+            end
+            if c == 41 || c == 0:
+                fin = true
+            else:
+                start0 = p + 1
+            end
+        end
+        p += 1
+    end
+    ret out2
+end
+
+// ll_zero
+func zero_of(ts: str): str:
+    if is_str(ts) || is_ptr_ts(ts):
+        ret "null"
+    end
+    if is_bool(ts):
+        ret "false"
+    end
+    if is_float(ts):
+        ret "0.0"
+    end
+    if is_int_ts(ts):
+        ret "0"
+    end
+    ret "zeroinitializer"
+end
+
+// ll_ty - Salam typestring -> LLVM type text.
+func ty_of(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): str:
+    if str.Len(ts) == 0 || str.Equals(ts, "void"):
+        ret "void"
+    end
+    if str.StartsWith(ts, "dyn ") && idx_byte(ts, 91) < 0:
+        ret "%dyn"
+    end
+    if str.StartsWith(ts, "Variant<"):
+        ensure_variant_type(v, s, a, ts)
+        ret variant_cname(ts)
+    end
+    if is_str(ts):
+        ret "ptr"
+    end
+    if is_ptr_ts(ts):
+        ret "ptr"
+    end
+    if is_slice(ts):
+        ret "{ ptr, i64 }"
+    end
+    if idx_byte(ts, 91) >= 0:
+        ret "[" + co.I64Toa(array_dim(ts)) + " x " + ty_of(v, s, a, array_elem(ts)) + "]"
+    end
+    if str.Equals(ts, "f32"):
+        ret "float"
+    end
+    if str.Equals(ts, "f64"):
+        ret "double"
+    end
+    if is_int_ts(ts):
+        ret "i" + co.I64Toa(int_bits(v, ts) as i64)
+    end
+    if struct_sym(v, s, a, ts) != 0:
+        ret struct_ltype(ts)
+    end
+    if enum_sym(v, s, a, ts) != 0:
+        ret "i32"
+    end
+    ret "ptr"
+end
+
+// ll_conv - value conversion; the temp is allocated exactly where the C
+// allocates it (numbering fidelity - see the file header).
+func conv(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, to_ts: str): str:
+    from := str.Len(val.ts) > 0 ? val.ts : "i32"
+    if str.Equals(from, to_ts):
+        ret val.ref
+    end
+    if str.StartsWith(to_ts, "dyn ") && struct_sym(v, s, a, from) != 0:
+        ret box_dyn(
+            v, s, a, val, str.Substr(to_ts, 4, str.Len(to_ts) - 4)
+        )
+    end
+    fi := is_int_ts(from)
+    ff := is_float(from)
+    fp := is_str(from) || is_ptr_ts(from)
+    ti := is_int_ts(to_ts)
+    tf := is_float(to_ts)
+    tp := is_str(to_ts) || is_ptr_ts(to_ts)
+    lf := ty_of(v, s, a, from)
+    lt := ty_of(v, s, a, to_ts)
+    r := new_tmp(v)
+    if fi && ti:
+        bf := int_bits(v, from)
+        bt := int_bits(v, to_ts)
+        if bt == bf:
+            ret val.ref
+        end
+        if bt < bf:
+            emit(v, r + " = trunc " + lf + " " + val.ref + " to " + lt)
+        else is_signed_ts(from):
+            emit(v, r + " = sext " + lf + " " + val.ref + " to " + lt)
+        else:
+            emit(v, r + " = zext " + lf + " " + val.ref + " to " + lt)
+        end
+        ret r
+    end
+    if ff && tf:
+        if str.Equals(from, "f32") && str.Equals(to_ts, "f64"):
+            emit(v, r + " = fpext float " + val.ref + " to double")
+        else:
+            emit(v, r + " = fptrunc double " + val.ref + " to float")
+        end
+        ret r
+    end
+    if fi && tf:
+        emit(
+            v, r + " = " + (is_signed_ts(from) ? "sitofp" : "uitofp") + " " + lf + " " + val.ref + " to " + lt
+        )
+        ret r
+    end
+    if ff && ti:
+        emit(
+            v, r + " = " + (is_signed_ts(to_ts) ? "fptosi" : "fptoui") + " " + lf + " " + val.ref + " to " + lt
+        )
+        ret r
+    end
+    if fi && tp:
+        emit(v, r + " = inttoptr " + lf + " " + val.ref + " to ptr")
+        ret r
+    end
+    if fp && ti:
+        emit(v, r + " = ptrtoint ptr " + val.ref + " to " + lt)
+        ret r
+    end
+    if fp && tp:
+        ret val.ref
+    end
+    ret val.ref
+end
+
+// ll_common
+func common_ts(v &: Lv, a1: str, b1: str): str:
+    if is_float(a1) || is_float(b1):
+        if str.Equals(a1, "f64") || str.Equals(b1, "f64"):
+            ret "f64"
+        end
+        ret "f32"
+    end
+    ba := int_bits(v, a1)
+    bb2 := int_bits(v, b1)
+    bits := ba > bb2 ? ba : bb2
+    sgn := is_signed_ts(a1) && is_signed_ts(b1)
+    if bits <= 8:
+        ret sgn ? "i8" : "u8"
+    end
+    if bits <= 16:
+        ret sgn ? "i16" : "u16"
+    end
+    if bits <= 32:
+        ret sgn ? "i32" : "u32"
+    end
+    ret sgn ? "i64" : "u64"
+end
+
+// ll_as_i1
+func as_i1(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv): str:
+    if is_bool(val.ts):
+        ret val.ref
+    end
+    r := new_tmp(v)
+    if is_float(val.ts):
+        emit(
+            v, r + " = fcmp one " + ty_of(v, s, a, val.ts) + " " + val.ref + ", 0.0"
+        )
+    else:
+        emit(
+            v, r + " = icmp ne " + ty_of(v, s, a, val.ts) + " " + val.ref + ", 0"
+        )
+    end
+    ret r
+end

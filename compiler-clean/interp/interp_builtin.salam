@@ -1,0 +1,492 @@
+package interp
+
+import str
+import io
+import math
+import time
+import co "../sal_core.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+
+// ===========================================================================
+// ===== interp_builtin.c =====
+// ===========================================================================
+
+func bstr_trim(s: str): str:
+    n := str.Len(s)
+    mut st := 0
+    until st < n && is_trim_ws(byte_at(s, st)):
+        st += 1
+    end
+    mut en := n
+    until en > st && is_trim_ws(byte_at(s, en - 1)):
+        en -= 1
+    end
+    ret str.Substr(s, st, en - st)
+end
+
+func is_trim_ws(c: int): bool:
+    ret c == 32 || c == 9 || c == 10 || c == 13
+end
+
+func bstr_substr(s: str, start: i64, length: i64): str:
+    n := str.Len(s) as i64
+    mut st := start
+    if st < (0 as i64):
+        st = 0 as i64
+    end
+    if st > n:
+        st = n
+    end
+    mut l := length
+    if l < (0 as i64):
+        l = 0 as i64
+    end
+    if l > n - st:
+        l = n - st
+    end
+    ret str.Substr(s, st as int, l as int)
+end
+
+func bstr_upper(s: str): str:
+    n := str.Len(s)
+    mut b := str.NewBuilder()
+    repeat n with i:
+        c := byte_at(s, i)
+        str.BufAppendChar(b, c >= 97 && c <= 122 ? c - 32 : c)
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func bstr_lower(s: str): str:
+    n := str.Len(s)
+    mut b := str.NewBuilder()
+    repeat n with i:
+        c := byte_at(s, i)
+        str.BufAppendChar(b, c >= 65 && c <= 90 ? c + 32 : c)
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func bstr_split(ip &: Interp, s: str, sep: str): Value:
+    aid := arr_new(ip, 8)
+    if str.Len(sep) == 0:
+        arr_push(ip, aid, val_str(s))
+        ret val_arr(aid)
+    end
+    seplen := str.Len(sep)
+    mut p := 0
+    until true:
+        hit := str.IndexFrom(s, sep, p)
+        if hit < 0:
+            break
+        end
+        arr_push(ip, aid, val_str(str.Substr(s, p, hit - p)))
+        p = hit + seplen
+    end
+    arr_push(ip, aid, val_str(str.Substr(s, p, str.Len(s) - p)))
+    ret val_arr(aid)
+end
+
+// strtol(s, NULL, 10) - whitespace skip, sign, digits, LONG_MIN/MAX clamp.
+func c_strtol10(s: str): i64:
+    n := str.Len(s)
+    mut i := 0
+    until i < n && is_c_space(byte_at(s, i)):
+        i += 1
+    end
+    mut neg := false
+    if i < n:
+        c0 := byte_at(s, i)
+        if c0 == 45:
+            neg = true
+            i += 1
+        else c0 == 43:
+            i += 1
+        end
+    end
+    mut lim := 9223372036854775807 as u64 // LONG_MAX
+    if neg:
+        lim = 0x8000000000000000 as u64 // |LONG_MIN|
+    end
+    mut acc := 0 as u64
+    mut over := false
+    until i < n && byte_at(s, i) >= 48 && byte_at(s, i) <= 57:
+        d := (byte_at(s, i) - 48) as u64
+        if acc > (lim - d) / (10 as u64):
+            over = true
+        else:
+            acc = acc * (10 as u64) + d
+        end
+        i += 1
+    end
+    if over:
+        acc = lim
+    end
+    if neg:
+        ret ((0 as u64) - acc) as i64
+    end
+    ret acc as i64
+end
+
+// FILE* sink - stdout/stderr, or the capture buffers (see file header).
+func sink(ip &: Interp, txt: str, to_err: bool):
+    if ip.capture:
+        if to_err:
+            ip.err_text = ip.err_text + txt
+        else:
+            ip.out_text = ip.out_text + txt
+        end
+        ret
+    end
+    if to_err:
+        io.EPrint(txt)
+    else:
+        print txt
+    end
+end
+
+func do_print(
+    ip &: Interp, a &: at.Ast, env: int, call: int, newline: bool, to_err: bool
+):
+    repeat at.ChildCount(a, call) with i:
+        if i != 0:
+            sink(ip, " ", to_err)
+        end
+        v := eval(ip, a, env, at.Child(a, call, i))
+        if ip.failed:
+            ret
+        end
+        sink(ip, to_str(ip, v), to_err)
+    end
+    if newline:
+        sink(ip, "\n", to_err)
+    end
+end
+
+func do_input(ip &: Interp): Value:
+    if ip.in_has:
+        n := str.Len(ip.in_data)
+        if ip.in_pos >= n:
+            ret val_str("")
+        end
+        mut e := ip.in_pos
+        until e < n && byte_at(ip.in_data, e) != 10:
+            e += 1
+        end
+        line := str.Substr(ip.in_data, ip.in_pos, e - ip.in_pos)
+        ip.in_pos = e < n ? e + 1 : e
+        ret val_str(line)
+    end
+    buf := io.Input()
+    mut m := str.Len(buf)
+    until m > 0 && (byte_at(buf, m - 1) == 10 || byte_at(buf, m - 1) == 13):
+        m -= 1
+    end
+    ret val_str(str.Substr(buf, 0, m))
+end
+
+func call_module_func(
+    ip &: Interp, a &: at.Ast, call: int, mid: int, fnname: str, args: Vector<Value>
+): Value:
+    md := ip.mods.get(mid)[0]
+    slot := env_find_local(ip, md.env, fnname)
+    mut fv := val_null()
+    if slot >= 0:
+        fv = env_slot_val(ip, md.env, slot)
+    end
+    if slot < 0 || fv.kind != VAL_FUNC:
+        rt_error(
+            ip, a, call, co.Format2(
+                i18.Tr("package '%s' has no exported function '%s'"), co.ArgStr(md.name), co.ArgStr(fnname)
+            )
+        )
+        ret val_null()
+    end
+    cl := ip.closures.get(fv.id)[0]
+    ret call_func(ip, a, cl.fn, cl.env, false, val_null(), args)
+end
+
+// INTRINSICS[] dispatch (index order = k_ip_intrinsics = the C table).
+func call_intrinsic(
+    ip &: Interp, name: str, args: Vector<Value>, handled &: bool
+): Value:
+    idx := IntrinsicLookup(name)
+    if idx < 0:
+        handled = false
+        ret val_null()
+    end
+    handled = true
+    a0 := args.len() > 0 ? args.get(0)[0] : val_null()
+    a1 := args.len() > 1 ? args.get(1)[0] : val_null()
+    if idx == 0:
+        ret val_float(math.Sqrt(to_float(a0)))
+    end
+    if idx == 1:
+        ret val_float(math.Sin(to_float(a0)))
+    end
+    if idx == 2:
+        ret val_float(math.Cos(to_float(a0)))
+    end
+    if idx == 3:
+        ret val_float(math.Tan(to_float(a0)))
+    end
+    if idx == 4:
+        ret val_float(math.Asin(to_float(a0)))
+    end
+    if idx == 5:
+        ret val_float(math.Acos(to_float(a0)))
+    end
+    if idx == 6:
+        ret val_float(math.Atan(to_float(a0)))
+    end
+    if idx == 7:
+        ret val_float(math.Atan2(to_float(a0), to_float(a1)))
+    end
+    if idx == 8:
+        ret val_float(math.Log(to_float(a0)))
+    end
+    if idx == 9:
+        ret val_float(math.Log10(to_float(a0)))
+    end
+    if idx == 10:
+        ret val_float(math.Exp(to_float(a0)))
+    end
+    if idx == 11:
+        ret val_float(math.Floor(to_float(a0)))
+    end
+    if idx == 12:
+        ret val_float(math.Ceil(to_float(a0)))
+    end
+    if idx == 13:
+        ret val_float(math.Abs(to_float(a0)))
+    end
+    if idx == 14:
+        ret val_float(math.Mod(to_float(a0), to_float(a1)))
+    end
+    if idx == 15:
+        ret val_float(math.Pow(to_float(a0), to_float(a1)))
+    end
+    if idx == 16:
+        ret val_int(str.Len(to_str(ip, a0)) as i64)
+    end
+    if idx == 17:
+        ret val_int(str.Compare(to_str(ip, a0), to_str(ip, a1)) as i64)
+    end
+    if idx == 18:
+        ret val_int(c_strtol10(to_str(ip, a0)))
+    end
+    if idx == 19:
+        ret val_float(str.ToFloat(to_str(ip, a0)))
+    end
+    if idx == 20:
+        ret do_input(ip)
+    end
+    if idx == 21:
+        ret val_int(time.Now())
+    end
+    // idx == 22: SleepEx(ms) on Windows, usleep(µs) elsewhere.
+    if SALAM_OS_WINDOWS:
+        time.Sleep(to_int(a0) as int)
+    else:
+        time.Sleep((to_int(a0) / (1000 as i64)) as int)
+    end
+    ret val_int(0 as i64)
+end
+
+func call_builtin_method(
+    ip &: Interp, a &: at.Ast, call: int, recv: Value, method: str, args: Vector<Value>
+): Value:
+    a0 := args.len() > 0 ? args.get(0)[0] : val_null()
+    a1 := args.len() > 1 ? args.get(1)[0] : val_null()
+    if recv.kind == VAL_STR:
+        s := recv.s
+        if str.Equals(method, "len"):
+            ret val_int(str.Len(s) as i64)
+        end
+        if str.Equals(method, "concat"):
+            ret val_str(s + to_str(ip, a0))
+        end
+        if str.Equals(method, "substr"):
+            ret val_str(bstr_substr(s, to_int(a0), to_int(a1)))
+        end
+        if str.Equals(method, "find") || str.Equals(method, "search") || str.Equals(method, "indexOf"):
+            ret val_int(str.Find(s, to_str(ip, a0)) as i64)
+        end
+        if str.Equals(method, "trim"):
+            ret val_str(bstr_trim(s))
+        end
+        if str.Equals(method, "to_int"):
+            ret val_int(c_strtol10(s))
+        end
+        if str.Equals(method, "to_float"):
+            ret val_float(str.ToFloat(s))
+        end
+        if str.Equals(method, "split"):
+            ret bstr_split(ip, s, to_str(ip, a0))
+        end
+        if str.Equals(method, "lower"):
+            ret val_str(bstr_lower(s))
+        end
+        if str.Equals(method, "upper"):
+            ret val_str(bstr_upper(s))
+        end
+        if str.Equals(method, "repeat"):
+            ret str_repeat(s, to_int(a0))
+        end
+    else recv.kind == VAL_ARRAY:
+        aid := recv.id
+        if str.Equals(method, "push"):
+            arr_push(ip, aid, a0)
+            ret val_null()
+        end
+        if str.Equals(method, "pop"):
+            n := arr_len(ip, aid)
+            if n == 0:
+                rt_error(ip, a, call, i18.Tr("pop from empty vector"))
+                ret val_null()
+            end
+            last := arr_get(ip, aid, n - 1)
+            arr_shrink(ip, aid)
+            ret last
+        end
+        if str.Equals(method, "get"):
+            iv := to_int(a0)
+            n2 := arr_len(ip, aid)
+            if iv < (0 as i64) || iv >= (n2 as i64):
+                rt_error(
+                    ip, a, call, co.Format2(
+                        i18.Tr("vector index %lld out of range (len %zu)"), co.ArgInt(iv), co.ArgUint(n2 as u64)
+                    )
+                )
+                ret val_null()
+            end
+            box := arr_new(ip, 1)
+            arr_push(ip, box, arr_get(ip, aid, iv as int))
+            ret val_arr(box)
+        end
+        if str.Equals(method, "set"):
+            iv2 := to_int(a0)
+            n3 := arr_len(ip, aid)
+            if iv2 < (0 as i64) || iv2 >= (n3 as i64):
+                rt_error(
+                    ip, a, call, co.Format2(
+                        i18.Tr("vector index %lld out of range (len %zu)"), co.ArgInt(iv2), co.ArgUint(n3 as u64)
+                    )
+                )
+                ret val_null()
+            end
+            arr_set(ip, aid, iv2 as int, a1)
+            ret val_null()
+        end
+        if str.Equals(method, "len"):
+            ret val_int(arr_len(ip, aid) as i64)
+        end
+        if str.Equals(method, "cap"):
+            an := ip.arrs.get(aid)[0]
+            ret val_int(an.cap as i64)
+        end
+        if str.Equals(method, "free"):
+            ret val_null()
+        end
+    else recv.kind == VAL_MAP:
+        mid := recv.id
+        if str.Equals(method, "put"):
+            map_put(ip, mid, a0, a1)
+            ret val_null()
+        end
+        if str.Equals(method, "get"):
+            m := ip.maps.get(mid)[0]
+            e := map_find(m, a0)
+            ret e >= 0 ? m.vals.get(e)[0] : val_null()
+        end
+        if str.Equals(method, "has"):
+            m2 := ip.maps.get(mid)[0]
+            ret val_bool(map_find(m2, a0) >= 0)
+        end
+        if str.Equals(method, "remove"):
+            ret val_bool(map_remove(ip, mid, a0))
+        end
+        if str.Equals(method, "size"):
+            m3 := ip.maps.get(mid)[0]
+            ret val_int(m3.count as i64)
+        end
+        if str.Equals(method, "iter"):
+            itid := ip.iters.len()
+            ip.iters.push(SMapIter { map = mid })
+            ret Value { kind = VAL_MAPITER, id = itid }
+        end
+    else recv.kind == VAL_PTR:
+        fmn := ["read", "readline", "write", "seek", "close"] as str[5]
+        fmf := [
+            "salam_file_read", "salam_file_readline", "salam_file_write", "salam_file_seek", "salam_file_close"
+        ] as str[5]
+        repeat 5 with i:
+            if !str.Equals(method, fmn[i]):
+                continue
+            end
+            efi := find_extern_fn(ip, fmf[i])
+            if efi == 0:
+                break
+            end
+            ef := ip.extern_fns.get(efi)[0]
+            mut allargs := Vector {} as Vector<Value>
+            allargs.push(recv)
+            repeat args.len() with j:
+                allargs.push(args.get(j)[0])
+            end
+            cl := ip.closures.get(ef.id)[0]
+            r := call_func(ip, a, cl.fn, cl.env, false, val_null(), allargs)
+            allargs.free()
+            ret r
+        end
+    else recv.kind == VAL_MAPITER:
+        itv := ip.iters.get(recv.id)[0]
+        m4 := ip.maps.get(itv.map)[0]
+        if str.Equals(method, "has_next"):
+            mut i := itv.idx
+            until i < m4.cap:
+                if m4.used.get(i)[0]:
+                    ret val_bool(true)
+                end
+                i += 1
+            end
+            ret val_bool(false)
+        end
+        if str.Equals(method, "next"):
+            mut i2 := itv.idx
+            until i2 < m4.cap && !m4.used.get(i2)[0]:
+                i2 += 1
+            end
+            if i2 < m4.cap:
+                i2 += 1
+            end
+            ip.iters.set(recv.id, SMapIter { map = itv.map, idx = i2 })
+            ret val_null()
+        end
+        if str.Equals(method, "key"):
+            mut i3 := itv.idx
+            until i3 < m4.cap && !m4.used.get(i3)[0]:
+                i3 += 1
+            end
+            ret i3 < m4.cap ? m4.keys.get(i3)[0] : val_null()
+        end
+        if str.Equals(method, "value"):
+            mut i4 := itv.idx
+            until i4 < m4.cap && !m4.used.get(i4)[0]:
+                i4 += 1
+            end
+            ret i4 < m4.cap ? m4.vals.get(i4)[0] : val_null()
+        end
+    end
+    rt_error(
+        ip, a, call, co.Format1(
+            i18.Tr("method '%s' is not available on this value"), co.ArgStr(method)
+        )
+    )
+    ret val_null()
+end

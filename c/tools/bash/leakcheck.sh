@@ -110,6 +110,7 @@ if [ "$DO_BUILD" -eq 1 ]; then
     ASAN_CFLAGS="$ASAN_CFLAGS -Wno-unused-function -Wno-unused-variable"
     make -j"${NPROC:-4}" \
         CC="${CC:-gcc}" \
+        LLVM_CONFIG="${LLVM_CONFIG:-llvm-config}" \
         WITH_LLVM="${WITH_LLVM:-0}" WITH_LLD="${WITH_LLD:-0}" \
         BUILD_DIR="$ASAN_BUILD_DIR" OUTDIR="$CDIR/$ASAN_BUILD_DIR" \
         CFLAGS="$ASAN_CFLAGS" LDFLAGS="-fsanitize=address" ||
@@ -162,9 +163,16 @@ esac
 # and the leak itself is buried under a wall of unrelated diffs. The reports
 # on disk are the verdict; the tests keep grading correctness only.
 ASAN_OPTIONS="detect_leaks=1:exitcode=0:log_path=$REPORTS/leak"
-ASAN_OPTIONS="$ASAN_OPTIONS:suppressions=$SUPP_ABS:print_suppressions=0"
 ASAN_OPTIONS="$ASAN_OPTIONS:max_leaks=200:fast_unwind_on_malloc=0"
 export ASAN_OPTIONS
+# Suppressions belong to LSAN_OPTIONS, NOT ASAN_OPTIONS. ASan parses
+# `suppressions=` with its own parser, which knows interceptor_via_fun /
+# interceptor_via_lib / odr_violation and nothing else - hand it a file of
+# `leak:` lines and every single process dies at startup with
+# "AddressSanitizer: failed to parse suppressions", which reads exactly like
+# a compiler that cannot build anything.
+LSAN_OPTIONS="suppressions=$SUPP_ABS:print_suppressions=0"
+export LSAN_OPTIONS
 export SALAM="$SALAM_ABS"
 # run-tests.sh only auto-sets SALAM_STD when ./std exists, and from c/ it does
 # not - so an ASan salam living under c/build/asan, rather than beside the
@@ -196,20 +204,23 @@ if [ "$DO_SWEEP" -eq 1 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Verdict. One file per leaking process, so the count is "how many salam
-# invocations leaked", and the files themselves say where.
+# Verdict. log_path gives one file per process that had anything to report, so
+# the count is "how many salam invocations the sanitizer flagged". That is
+# leaks in practice, but a heap-use-after-free or a buffer overflow lands here
+# too - which is the right behaviour: none of them should ever be zero-count.
 # ---------------------------------------------------------------------------
 nleaks=$(find "$REPORTS" -type f 2>/dev/null | wc -l | tr -d ' ')
 echo "========================================"
 if [ "$nleaks" -eq 0 ]; then
-    echo "LEAKCHECK: clean - 0 leaking salam invocations"
+    echo "LEAKCHECK: clean - 0 sanitizer reports"
 else
-    echo "LEAKCHECK: $nleaks leaking salam invocation(s)"
+    echo "LEAKCHECK: $nleaks salam invocation(s) reported a leak or memory error"
     echo
     # Distinct allocation sites, not distinct processes: the same leak in
     # 300 tests is one thing to fix, and printing it 300 times helps nobody.
     echo "--- distinct allocation sites ---"
-    grep -h '^    #[0-9]* 0x' "$REPORTS"/* 2>/dev/null |
+    find "$REPORTS" -type f -print0 2>/dev/null |
+        xargs -0 grep -h '^    #[0-9]* 0x' 2>/dev/null |
         sed 's/^ *#[0-9]* 0x[0-9a-f]* in //; s/ (.*//; s/+0x[0-9a-f]*$//' |
         grep -v '^__libc_start\|^_start\|asan_malloc_linux\|^malloc$\|^calloc$\|^realloc$' |
         sort | uniq -c | sort -rn | head -40

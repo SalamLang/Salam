@@ -1,0 +1,112 @@
+package lexer
+
+import src "../source.salam"
+import tok "../token.salam"
+import lg "../logger.salam"
+
+// ===== lexer.c =====
+// lx_scan_one
+func scan_one(L &: Lx):
+    c := peek(L)
+    if at_digit(L, 0) != 0:
+        scan_number(L)
+        ret
+    end
+    if c == 46 && at_digit(L, 1) != 0: // '.' digit
+        scan_number(L)
+        ret
+    end
+    if c == 117 && (peek2(L, 1) == 34 || peek2(L, 1) == 39): // u" / u'
+        scan_utf8_char(L)
+        ret
+    end
+    if c >= 128 && scan_unicode_op(L):
+        ret
+    end
+    if is_ident_start(c):
+        scan_ident(L)
+        ret
+    end
+    if c == 34: // '"'
+        if peek2(L, 1) == 34 && peek2(L, 2) == 34:
+            scan_triple(L)
+        else:
+            scan_string(L)
+        end
+        ret
+    end
+    if c == 39: // '\''
+        scan_char(L)
+        ret
+    end
+    if c == 96: // '`'
+        scan_raw_string(L)
+        ret
+    end
+    if c == 64 && is_ident_start(peek2(L, 1)): // '@'
+        scan_meta(L)
+        ret
+    end
+    scan_op(L)
+end
+
+// lx_emit_eof
+func emit_eof(L &: Lx):
+    mut t := tok.New(tok.TK_EOF, "")
+    t.begin_line = L.line as u32
+    t.begin_col = L.col as u32
+    t.begin_index = L.pos as u32
+    t.end_line = L.line as u32
+    t.end_col = L.col as u32
+    t.end_index = L.pos as u32
+    t.length = 0 as u32
+    L.toks.push(t)
+end
+
+// ===== lexer_detect.c =====
+func det_match_ci(text: str, p: int, le: int, tag: str, n: int): int:
+    if p + n > le:
+        ret 0
+    end
+    repeat n with k:
+        mut ch := byte_at(text, p + k)
+        if ch >= 65 && ch <= 90:
+            ch = ch - 65 + 97
+        end
+        if ch != byte_at(tag, k):
+            ret 0
+        end
+    end
+    ret n
+end
+
+func det_match_bytes(text: str, p: int, le: int, tag: str, n: int): int:
+    if p + n > le:
+        ret 0
+    end
+    repeat n with k:
+        if byte_at(text, p + k) != byte_at(tag, k):
+            ret 0
+        end
+    end
+    ret n
+end
+
+// det_count_keywords
+func det_count_keywords(quiet: lg.Logger, pack: int, sf: src.SourceFile): int:
+    mut toks := tok.StreamNew(sf.path)
+    _ok := RunEx(quiet, pack, sf, false, toks)
+    mut count := 0
+    n := tok.StreamCount(toks)
+    repeat n with i:
+        t := tok.StreamAt(toks, i)
+        if t.kind == tok.TK_EOF:
+            break
+        end
+        if tok.IsKeyword(t.kind):
+            count += 1
+        end
+    end
+    tok.StreamFree(toks)
+    ret count
+end

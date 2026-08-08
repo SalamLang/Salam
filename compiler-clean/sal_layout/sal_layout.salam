@@ -1,0 +1,166 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Flat port of compiler/src/layout's GENERATOR half (see salam/PORTING.md
+// "Layout - FLAT"): layout_expand.c + layout_gen.c + layout_gen_element.c +
+// layout_gen_value.c + layout_internal.h - one package `layout`, one file.
+// File stem is sal_layout (NOT layout.salam): `layout` is a stdlib module
+// name and would collide in the driver's salam_mod_<stem>.c naming.
+// Import alias for consumers: `lo`.
+//
+// registry.c + schema.c are NOT here: semantic stage 5d already ported them
+// into salam/semantic.salam (sema_layout.c needs them). This module reads
+// the registry through the pub accessors added there (LayoutElemLookup /
+// LayoutElemTag / LayoutElemKind / LayoutAttrLookup / LayoutAttrOut /
+// LayoutAttrDest / LayoutAttrVtype / LayoutAttrAllowed / LayoutDynValue /
+// LayoutMapColor) - the C linked both .c files against the same globals.
+// layout_map_length/layout_map_unit (registry.c) were NOT in the 5d slice
+// (sema treats VT_LENGTH as always-ok), so they are ported HERE, on top of
+// sm.LayoutDynValue("unit", …).
+//
+// C differences (per salam/PORTING.md):
+// - ast_node_t* -> NodeId ints into the shared at.Ast (0 = C NULL);
+//   includes are lexed/parsed into the SAME Ast, like the shared C arena.
+// - sb_t buffers -> plain `str` accumulation; arena_strdup/sb_free drop out.
+// - const char* NULL vs "" is significant in layout_gen_element.c
+//   (content/class/source/src/type/condition/selector), so each carries an
+//   explicit has_* bool; "" alone plays NULL only where the C never stores
+//   an empty string (registry lookups, dyn values, class names).
+// - layout_result_t* -> pub struct Result returned by value.
+// - LWARN -> dg.Report with a pre-formatted i18.Tr'd body (the C
+//   diag_report i18n_tr's the format itself).
+// - The LOG_* calls keep the C texts; messages are pre-formatted with
+//   co.Format (the reference comparison strips logger lines anyway).
+// - djb2() (layout_gen_value.c) is dead code in the C module - not ported.
+// - comp_t/loaded_t vectors -> parallel Vectors in LoExpand; frame_t ->
+//   LoFrame with a `present` flag standing in for the C NULL frame.
+// - LoExpand's log/pack/cctab field defaults are throwaways overwritten by
+//   Expand (same pattern as semantic.Sema); the default cctab is freed
+//   before the caller's table is stored.
+package layout
+
+import co "../sal_core.salam"
+import lg "../logger.salam"
+import lp "../langpack.salam"
+import at "../ast.salam"
+import cc "../condcomp.salam"
+
+// LX_EXPAND_MAX_DEPTH (layout_expand.c)
+const K_LO_MAX_DEPTH := 64
+// LAYOUT_LEN_MAX_TOKENS (registry.c layout_map_length)
+const K_LO_LEN_MAX_TOKENS := 24
+// normalize_unit_phrase's char norm[128] / joined[128] caps (registry.c)
+const K_LO_UNIT_CAP := 128
+// layout_elem_type_t / layout_attr_dest_t / layout_value_type_t values
+// (registry.h; K_LO_-prefixed - semantic.salam owns the unprefixed consts
+// and package consts share one flat namespace).
+const K_LO_LE_SINGLE := 0
+const K_LO_LE_MOTHER := 1
+const K_LO_LA_CONTENT := 0
+const K_LO_LA_CLASS := 1
+const K_LO_LA_HTML := 2
+const K_LO_LA_STYLE := 3
+const K_LO_LA_DIR := 4
+const K_LO_LA_LANG := 5
+const K_LO_LA_SOURCE := 6
+const K_LO_LA_CSS := 7
+const K_LO_LA_META := 8
+const K_LO_VT_COLOR := 6
+const K_LO_VT_DIR := 7
+const K_LO_VT_LANG := 8
+const K_LO_VT_ENUM := 9
+const K_LO_VT_LENGTH := 10
+
+// layout_result_t (layout_gen.h). "" plays the C NULL/empty string - the C
+// generator always returns non-NULL fields.
+pub struct Result:
+    pub html: str = ""
+    pub css: str = ""
+    pub js: str = ""
+    pub head: str = ""
+    pub title: str = "Salam Page"
+    pub lang: str = "en"
+    pub dir: str = "ltr"
+end
+
+// expand_t (layout_expand.c): comps/loaded as parallel vectors.
+struct LoExpand:
+    pub log: lg.Logger = lg.New(5, false)
+    pub pack: lp.Langpack = lp.Load("en")
+    pub cctab: cc.Table = cc.TableBuild("", Vector {} as Vector<str>)
+    pub errors: int = 0
+    pub comp_name: Vector<str> = Vector {}
+    pub comp_def: Vector<int> = Vector {}
+    pub comp_dir: Vector<str> = Vector {}
+    pub comp_mother: Vector<bool> = Vector {}
+    pub loaded_path: Vector<str> = Vector {}
+    pub loaded_prog: Vector<int> = Vector {}
+    pub loaded_dir: Vector<str> = Vector {}
+end
+
+// frame_t (layout_expand.c); present=false is the C NULL frame pointer.
+struct LoFrame:
+    pub present: bool = false
+    pub names: Vector<str> = Vector {}
+    pub vals: Vector<int> = Vector {}
+    pub content: Vector<int> = Vector {}
+end
+
+// layout_ctx_t (layout_internal.h); sb_t sinks are plain strs.
+struct LoCtx:
+    pub log: lg.Logger = lg.New(5, false)
+    pub file: str = ""
+    pub html: str = ""
+    pub css: str = ""
+    pub js: str = ""
+    pub head: str = ""
+    pub title: str = "Salam Page"
+    pub lang: str = "en"
+    pub dir: str = "ltr"
+    pub css_seen: Vector<str> = Vector {}
+    pub cls_keys: Vector<str> = Vector {}
+    pub cls_names: Vector<str> = Vector {}
+    pub cls_next: int = 0
+    pub indent: int = 0
+    pub compact: bool = false
+end
+
+// ---------------------------------------------------------------------------
+// Byte access (same helper as the sibling module ports).
+// ---------------------------------------------------------------------------
+func byte_at(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+// &node->span rebuilt as a co.SrcSpan (for diag reports).
+func span_of(a &: at.Ast, id: int): co.SrcSpan:
+    n := at.Get(a, id)
+    ret co.MakeSpan(
+        co.MakePos(n.begin_line, n.begin_col, n.begin_index), co.MakePos(n.end_line, n.end_col, n.end_index),
+        n.length
+    )
+end
+
+// Copies src's span fields onto dst (ast_new's span argument).
+func copy_span(a &: at.Ast, dst: int, from: int):
+    n := at.Get(a, from)
+    at.SetSpan(
+        a, dst, n.begin_line, n.begin_col, n.begin_index, n.end_line, n.end_col, n.end_index, n.length
+    )
+end

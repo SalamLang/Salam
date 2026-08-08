@@ -164,7 +164,28 @@ env_t *env_new(interp_t *I, env_t *parent)
     e->parent = parent;
     vec_init(&e->bindings);
     e->index = NULL;
+    e->pool = 0;
     return e;
+}
+
+/* Empty an env for reuse, keeping its binding_t objects for the next round.
+ *
+ * A loop used to call env_new for every iteration, so a body declaring k
+ * locals cost 1 + k arena allocations per turn and never gave any of it back
+ * (the interpreter arena is only released when the program exits). A donut
+ * frame is 28k iterations, which measured at ~17 MB per frame: fine for a
+ * program that prints six frames and stops, fatal for one that animates until
+ * the user stops it.
+ *
+ * Recycling is only sound while nothing kept a pointer to the old scope, so
+ * the caller checks I->env_escapes across the iteration and falls back to a
+ * genuinely fresh env when a closure or a defer captured this one. That keeps
+ * the usual "each iteration captures its own variable" semantics intact. */
+void env_reset(env_t *e)
+{
+    if (e->bindings.len > e->pool) e->pool = e->bindings.len;
+    e->bindings.len = 0;
+    e->index = NULL;
 }
 
 binding_t *env_find_local(env_t *e, const char *name)
@@ -196,10 +217,18 @@ void env_define(interp_t *I, env_t *e, const char *name, value_t v)
         b->val = v;
         return;
     }
-    b = (binding_t *)arena_alloc(I->a, sizeof *b);
-    b->name = name;
-    b->val = v;
-    vec_push(I->a, &e->bindings, b);
+    if (e->bindings.len < e->pool) {
+        /* Recycled slot from a previous pass through this scope. */
+        b = (binding_t *)e->bindings.data[e->bindings.len++];
+        b->name = name;
+        b->val = v;
+    } else {
+        b = (binding_t *)arena_alloc(I->a, sizeof *b);
+        b->name = name;
+        b->val = v;
+        vec_push(I->a, &e->bindings, b);
+        e->pool = e->bindings.len;
+    }
     if (e->index) {
         itab_put(I, e->index, name, b);
     } else if (e->bindings.len >= ENV_INDEX_THRESHOLD) {
@@ -388,7 +417,14 @@ static void collect_decls(interp_t *I, ast_node_t *program)
 
             case AST_CONST_DECL:
             case AST_VAR_DECL: {
-                value_t v = d->a ? eval(I, I->globals, d->a) : val_null();
+                /* An uninitialized global gets the same zero value a local
+                 * would (exec_stmt's AST_VAR_DECL). Binding it to null instead
+                 * left declarations like `mut buf: f64[N]` unusable, because
+                 * indexing null is not an lvalue: `buf[i] = x` failed with
+                 * "value is not index-assignable" even though the C and LLVM
+                 * backends both zero-fill the array. */
+                value_t v = d->a ? eval(I, I->globals, d->a)
+                                 : default_for_type(I, d->type_str);
                 env_define(I, I->globals, d->name, v);
                 break;
             }

@@ -168,6 +168,7 @@ static func_sig_t *ll_sig_of(ll_t *ll, ast_node_t *fn, symbol_t *owner)
 
 /* Defined below; needed by main's argc/argv wiring. */
 static func_sig_t *ll_body_sig_for(ll_t *ll, const char *name, symbol_t **owner);
+static void ll_declare_extern(ll_t *ll, const char *name, func_sig_t *sig);
 
 static const char *ll_fn_header(ll_t *ll, ast_node_t *fn, func_sig_t *sig,
                                 const char *ret_lty, const char *fname,
@@ -243,7 +244,18 @@ static void ll_spill_params(ll_t *ll, ast_node_t *fn, func_sig_t *sig)
 
 void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
 {
-    if (!owner && fn->is_extern && !fn->a) return;
+    /*
+     * A bodyless `extern func` has no definition to emit - but it does need a
+     * `declare`, and this is the one place every call site funnels through
+     * (ll_call_user -> ll_ensure_fn). Returning silently left the call
+     * referencing an undeclared @name whenever the declaring package was
+     * never touched by the scope walk in ll_emit_externs_in.
+     */
+    if (!owner && fn->is_extern && !fn->a) {
+        func_sig_t *xsig = ll_sig_of(ll, fn, owner);
+        if (xsig) ll_declare_extern(ll, fn->name, xsig);
+        return;
+    }
     func_sig_t *sig = ll_sig_of(ll, fn, owner);
     if (!sig) return;
     bool is_main = !owner && !strcmp(fn->name, ll->entry);
@@ -698,20 +710,9 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     ll->match_merge_block = saved_mmerge;
 }
 
-static bool ll_text_is_int(const char *s)
-{
-    if (!s || !*s) return false;
-    size_t i = (s[0] == '-') ? 1 : 0;
-    if (!s[i]) return false;
-    for (; s[i]; i++)
-        if (s[i] < '0' || s[i] > '9') return false;
-    return true;
-}
-
 static const char *ll_const_fpfix(ll_t *ll, const char *lety, const char *v)
 {
-    if ((!strcmp(lety, "double") || !strcmp(lety, "float")) && ll_text_is_int(v))
-        return ll_fmt(ll, "%s.0", v);
+    if (!strcmp(lety, "double") || !strcmp(lety, "float")) return ll_fp_text(ll, v);
     return v;
 }
 
@@ -944,6 +945,63 @@ static func_sig_t *ll_body_sig_for(ll_t *ll, const char *name, symbol_t **owner)
     return NULL;
 }
 
+/*
+ * One bodyless `extern func` -> one `declare` line, de-duplicated against
+ * everything already declared or defined.
+ *
+ * Split out of ll_emit_externs_in so ll_function can reach it too: that scope
+ * walk only ever runs over the global scope and over packages ll_touch_pkg
+ * has visited, but a call can reach an extern in a package nothing touched -
+ * std/fs' `fopen`, std/net's `send` - and then the module referenced @fopen
+ * with no declaration anywhere ("use of undefined value '@fopen'", which
+ * every program doing file or socket I/O hit).
+ */
+static void ll_declare_extern(ll_t *ll, const char *name, func_sig_t *sig)
+{
+    if (!sig || !sig->decl) return;
+    if (ll_extern_seen(ll, name)) return;
+    {
+        size_t k = 0;
+        for (; k < ll->emitted.len; k++)
+            if (!strcmp(name, (const char *)ll->emitted.data[k])) return;
+    }
+    /*
+     * Emit the body instead of a declaration whenever one exists, so the
+     * outcome no longer depends on which package is walked first. Without
+     * this, `salam_panic` was declared (from collections) and never defined
+     * (from core) in any program where collections was reached first - every
+     * Vector bounds check then failed to link.
+     */
+    {
+        symbol_t *bowner = NULL;
+        func_sig_t *bsig = ll_body_sig_for(ll, name, &bowner);
+        if (bsig) {
+            ll_ensure_fn(ll, bsig->decl, NULL, bowner->members);
+            return;
+        }
+    }
+    vec_push(ll->a, &ll->extern_names, CONST_CAST(name));
+    sb_t b;
+    sb_init(&b);
+    sb_puts(&b, ll_fmt(ll, "declare %s @%s(",
+                       ll_ty(ll, type_to_string(ll->sem->tc, sig->ret)), name));
+    {
+        size_t j = 0;
+        for (; j < sig->params.len; j++) {
+            if (j) sb_puts(&b, ", ");
+            sb_puts(&b,
+                    ll_ty(ll, type_to_string(ll->sem->tc, (type_t *)sig->params.data[j])));
+        }
+    }
+    if (sig->variadic) sb_puts(&b, sig->params.len ? ", ..." : "...");
+    sb_puts(&b, ")");
+    if (sig->decl->is_pure) sb_puts(&b, " nounwind willreturn nofree nosync memory(read)");
+    if (sig->decl->is_noret) sb_puts(&b, " noreturn");
+    sb_puts(&b, "\n");
+    sb_puts(ll->g, sb_cstr(&b));
+    sb_free(&b);
+}
+
 static void ll_emit_externs_in(ll_t *ll, scope_t *g)
 {
     {
@@ -953,55 +1011,7 @@ static void ll_emit_externs_in(ll_t *ll, scope_t *g)
             if (s->kind != SYM_FUNC || s->overloads.len == 0) continue;
             func_sig_t *sig = (func_sig_t *)s->overloads.data[0];
             if (!sig->decl || !sig->decl->is_extern || sig->decl->a) continue;
-            if (ll_extern_seen(ll, s->name)) continue;
-            {
-                bool already_defined = false;
-                size_t k = 0;
-                for (; k < ll->emitted.len; k++)
-                    if (!strcmp(s->name, (const char *)ll->emitted.data[k])) {
-                        already_defined = true;
-                        break;
-                    }
-                if (already_defined) continue;
-            }
-            /*
-             * Emit the body instead of a declaration whenever one exists,
-             * so the outcome no longer depends on which package is walked
-             * first. Without this, `salam_panic` was declared (from
-             * collections) and never defined (from core) in any program
-             * where collections was reached first - every Vector bounds
-             * check then failed to link.
-             */
-            {
-                symbol_t *bowner = NULL;
-                func_sig_t *bsig = ll_body_sig_for(ll, s->name, &bowner);
-                if (bsig) {
-                    ll_ensure_fn(ll, bsig->decl, NULL, bowner->members);
-                    continue;
-                }
-            }
-            vec_push(ll->a, &ll->extern_names, CONST_CAST(s->name));
-            sb_t b;
-            sb_init(&b);
-            sb_puts(&b,
-                    ll_fmt(ll, "declare %s @%s(",
-                           ll_ty(ll, type_to_string(ll->sem->tc, sig->ret)), s->name));
-            {
-                size_t j = 0;
-                for (; j < sig->params.len; j++) {
-                    if (j) sb_puts(&b, ", ");
-                    sb_puts(&b, ll_ty(ll, type_to_string(ll->sem->tc,
-                                                         (type_t *)sig->params.data[j])));
-                }
-            }
-            if (sig->variadic) sb_puts(&b, sig->params.len ? ", ..." : "...");
-            sb_puts(&b, ")");
-            if (sig->decl->is_pure)
-                sb_puts(&b, " nounwind willreturn nofree nosync memory(read)");
-            if (sig->decl->is_noret) sb_puts(&b, " noreturn");
-            sb_puts(&b, "\n");
-            sb_puts(ll->g, sb_cstr(&b));
-            sb_free(&b);
+            ll_declare_extern(ll, s->name, sig);
         }
     }
 }

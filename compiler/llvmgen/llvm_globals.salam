@@ -164,30 +164,39 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     v.match_merge_block = saved_mmerge
 end
 
-// ll_text_is_int
-func text_is_int(sx: str): bool:
-    n := str.Len(sx)
-    if n == 0:
-        ret false
+// ll_fp_text - a decimal floating constant LLVM's .ll parser will accept.
+//
+// It requires a '.' in every decimal FP literal, and printf's %g drops the
+// point whenever the value is exactly integral - including in exponent form
+// for large magnitudes, where "1e+308" then lexes as an integer with a stray
+// exponent and the module fails to parse ("integer constant must have
+// integer type"). Put the point back, before the exponent when there is one.
+//
+// inf/nan text is left alone: those are not decimal literals and splicing a
+// point into them would only make things worse.
+func fp_text(vtext: str): str:
+    if str.Len(vtext) == 0:
+        ret "0.0"
     end
-    mut i := byte_at(sx, 0) == 45 ? 1 : 0
-    if i >= n:
-        ret false
+    if str.Contains(vtext, ".") || str.Contains(vtext, "n") || str.Contains(vtext, "N") || str.Contains(vtext, "i") || str.Contains(vtext, "I"):
+        ret vtext
     end
-    until i < n:
-        c := byte_at(sx, i)
-        if c < 48 || c > 57:
-            ret false
-        end
-        i += 1
+    mut epos := str.IndexOf(vtext, "e")
+    if epos < 0:
+        epos = str.IndexOf(vtext, "E")
     end
-    ret true
+    if epos < 0:
+        ret vtext + ".0"
+    end
+    mant := str.Substr(vtext, 0, epos)
+    expo := str.Substr(vtext, epos, str.Len(vtext) - epos)
+    ret mant + ".0" + expo
 end
 
 // ll_const_fpfix
 func const_fpfix(lety: str, vtext: str): str:
-    if (str.Equals(lety, "double") || str.Equals(lety, "float")) && text_is_int(vtext):
-        ret vtext + ".0"
+    if str.Equals(lety, "double") || str.Equals(lety, "float"):
+        ret fp_text(vtext)
     end
     ret vtext
 end
@@ -435,6 +444,67 @@ func body_sig_for(s &: sm.Sema, a &: at.Ast, name: str, owner &: int): int:
     ret 0 - 1
 end
 
+// ll_declare_extern - one bodyless `extern func` -> one `declare` line,
+// de-duplicated against everything already declared or defined.
+//
+// Split out of emit_externs_in so emit_function can reach it too: that scope
+// walk only ever runs over the global scope and over packages touch_pkg has
+// visited, but a call can reach an extern in a package nothing touched -
+// std/fs' `fopen`, std/net's `send` - and then the module referenced @fopen
+// with no declaration anywhere ("use of undefined value '@fopen'", which
+// every program doing file or socket I/O hit).
+func declare_extern(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, sigid: int):
+    sg := sm.SigAt(s, sigid)
+    if sg.decl == 0 || extern_seen(v, name):
+        ret
+    end
+    repeat v.emitted.len() with ke:
+        if str.Equals(name, v.emitted.get(ke)[0]):
+            ret
+        end
+    end
+    // Emit the body instead of a declaration whenever one exists, so the
+    // outcome no longer depends on which package is walked first. Without
+    // this, `salam_panic` was declared (from collections) and never defined
+    // (from core) in any program where collections was reached first - every
+    // Vector bounds check then failed to link.
+    mut bowner := 0
+    bsig := body_sig_for(s, a, name, bowner)
+    if bsig >= 0:
+        ensure_fn(v, s, a, sm.SigAt(s, bsig).decl, 0, sm.SymAt(s, bowner).members)
+        ret
+    end
+    v.extern_names.push(name)
+    dn2 := at.Get(a, sg.decl)
+    mut b := co.SbNew()
+    co.SbPuts(
+        b, "declare " + ty_of(v, s, a, sm.ToString(s, sg.ret_type)) + " @" + name + "("
+    )
+    repeat sg.params.len() with j:
+        if j != 0:
+            co.SbPuts(b, ", ")
+        end
+        co.SbPuts(
+            b, ty_of(
+                v, s, a, sm.ToString(s, sg.params.get(j)[0])
+            )
+        )
+    end
+    if sg.variadic:
+        co.SbPuts(b, sg.params.len() > 0 ? ", ..." : "...")
+    end
+    co.SbPuts(b, ")")
+    if dn2.is_pure:
+        co.SbPuts(b, " nounwind willreturn nofree nosync memory(read)")
+    end
+    if dn2.is_noret:
+        co.SbPuts(b, " noreturn")
+    end
+    co.SbPuts(b, "\n")
+    out_g(v, co.SbCstr(b))
+    co.SbFree(b)
+end
+
 // ll_emit_externs_in
 func emit_externs_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
     syms := sm.ScopeAt(s, gsc).symbols
@@ -455,60 +525,8 @@ func emit_externs_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
                 end
             end
         end
-        if !skip && extern_seen(v, sy.name):
-            skip = true
-        end
         if !skip:
-            repeat v.emitted.len() with ke:
-                if str.Equals(sy.name, v.emitted.get(ke)[0]):
-                    skip = true
-                end
-            end
-        end
-        // Emit the body instead of a declaration whenever one exists, so
-        // the outcome no longer depends on which package is walked first.
-        // Without this, `salam_panic` was declared (from collections) and
-        // never defined (from core) in any program where collections was
-        // reached first - every Vector bounds check then failed to link.
-        if !skip:
-            mut bowner := 0
-            bsig := body_sig_for(s, a, sy.name, bowner)
-            if bsig >= 0:
-                ensure_fn(v, s, a, sm.SigAt(s, bsig).decl, 0, sm.SymAt(s, bowner).members)
-                skip = true
-            end
-        end
-        if !skip:
-            v.extern_names.push(sy.name)
-            sg := sm.SigAt(s, sigid)
-            dn2 := at.Get(a, sg.decl)
-            mut b := co.SbNew()
-            co.SbPuts(
-                b, "declare " + ty_of(v, s, a, sm.ToString(s, sg.ret_type)) + " @" + sy.name + "("
-            )
-            repeat sg.params.len() with j:
-                if j != 0:
-                    co.SbPuts(b, ", ")
-                end
-                co.SbPuts(
-                    b, ty_of(
-                        v, s, a, sm.ToString(s, sg.params.get(j)[0])
-                    )
-                )
-            end
-            if sg.variadic:
-                co.SbPuts(b, sg.params.len() > 0 ? ", ..." : "...")
-            end
-            co.SbPuts(b, ")")
-            if dn2.is_pure:
-                co.SbPuts(b, " nounwind willreturn nofree nosync memory(read)")
-            end
-            if dn2.is_noret:
-                co.SbPuts(b, " noreturn")
-            end
-            co.SbPuts(b, "\n")
-            out_g(v, co.SbCstr(b))
-            co.SbFree(b)
+            declare_extern(v, s, a, sy.name, sigid)
         end
     end
 end

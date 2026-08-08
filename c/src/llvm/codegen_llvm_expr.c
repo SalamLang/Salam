@@ -1237,7 +1237,16 @@ static llv_t ll_call_raw_ptr(ll_t *ll, ast_node_t *n, ast_node_t *callee)
     vec_t pts;
     sb_t ab;
     const char *args;
-    ll_emit(ll, "%s = inttoptr %s %s to ptr", fn, ll_ty(ll, fv.ts), fv.ref);
+    /*
+     * The callee only needs an inttoptr when it really is an integer. A raw
+     * function pointer is already a ptr under opaque pointers, and
+     * `inttoptr ptr ... to ptr` is not a legal cast at all - `raw as extern
+     * func (...)` produced exactly that and the module failed to parse.
+     */
+    if (!strcmp(ll_ty(ll, fv.ts), "ptr"))
+        fn = fv.ref;
+    else
+        ll_emit(ll, "%s = inttoptr %s %s to ptr", fn, ll_ty(ll, fv.ts), fv.ref);
     ll_func_params(ll, fts, &pts);
     sb_init(&ab);
     {
@@ -1573,6 +1582,23 @@ static ll_addr_t ll_index_addr(ll_t *ll, ast_node_t *n)
                 data, idx);
         return (ll_addr_t){r, ets};
     }
+    /*
+     * `s[i]` on a str. A str IS the pointer, so this indexes the value, not
+     * the slot holding it - the array path below took the variable's address
+     * and emitted `getelementptr ptr, ptr %v.s, i64 0, i64 %i`, which is not
+     * valid IR at all ("invalid getelementptr indices": ptr is not an
+     * aggregate, so the leading 0 has nothing to step through). Element type
+     * comes from sema, which types str[i] as TY_CHAR.
+     */
+    if (!strcmp(ots, "str")) {
+        const char *base = ll_expr(ll, n->a).ref;
+        const char *ets = n->type_str ? n->type_str : "char";
+        const char *idx = ll_conv(ll, ll_expr(ll, n->b), "i64");
+        const char *r = ll_new_tmp(ll);
+        ll_emit(ll, "%s = getelementptr inbounds %s, ptr %s, i64 %s", r, ll_ty(ll, ets),
+                base, idx);
+        return (ll_addr_t){r, ets};
+    }
     if (ll_is_ptr_ts(ots)) {
         const char *base = ll_expr(ll, n->a).ref;
         const char *ets = arena_strndup(ll->a, ots, strlen(ots) - 1);
@@ -1740,9 +1766,7 @@ static llv_t ll_literal(ll_t *ll, ast_node_t *n)
     case TK_FLOAT: {
         char buf[64];
         sal_snprintf(buf, sizeof buf, "%.17g", n->value.as.f);
-        if (!strpbrk(buf, ".eEnN"))
-            sal_snprintf(buf, sizeof buf, "%.17g.0", n->value.as.f);
-        return (llv_t){arena_strdup(ll->a, buf), n->type_str ? n->type_str : "f64"};
+        return (llv_t){ll_fp_text(ll, buf), n->type_str ? n->type_str : "f64"};
     }
     case TK_STRING:
     case TK_TRIPLE_STRING:

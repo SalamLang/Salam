@@ -207,6 +207,25 @@ func index_addr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
         ra.ts = ets
         ret ra
     end
+    // `s[i]` on a str. A str IS the pointer, so this indexes the value, not
+    // the slot holding it - the array path below took the variable's address
+    // and emitted `getelementptr ptr, ptr %v.s, i64 0, i64 %i`, which is not
+    // valid IR at all ("invalid getelementptr indices": ptr is not an
+    // aggregate, so the leading 0 has nothing to step through). Element type
+    // comes from sema, which types str[i] as TY_CHAR.
+    if str.Equals(ots, "str"):
+        sbase := lv_expr(v, s, a, nn.a).ref
+        sets := str.Len(nn.type_str) > 0 ? nn.type_str : "char"
+        sidx := conv(v, s, a, lv_expr(v, s, a, nn.b), "i64")
+        rs := new_tmp(v)
+        emit(
+            v, rs + " = getelementptr inbounds " + ty_of(v, s, a, sets) + ", ptr " + sbase + ", i64 " + sidx
+        )
+        mut ras := LvAddr {}
+        ras.ptr = rs
+        ras.ts = sets
+        ret ras
+    end
     if is_ptr_ts(ots):
         base := lv_expr(v, s, a, nn.a).ref
         ets2 := str.Substr(ots, 0, str.Len(ots) - 1)
@@ -399,21 +418,7 @@ end
 
 // ll_literal
 func float_lit_text(f: f64): str:
-    buf := co.Format1("%.17g", co.ArgFloat(f))
-    n := str.Len(buf)
-    mut hasmark := false
-    mut i := 0
-    until i < n && !hasmark:
-        c := byte_at(buf, i)
-        if c == 46 || c == 101 || c == 69 || c == 110 || c == 78:
-            hasmark = true
-        end
-        i += 1
-    end
-    if !hasmark:
-        ret buf + ".0"
-    end
-    ret buf
+    ret fp_text(co.Format1("%.17g", co.ArgFloat(f)))
 end
 
 func lv_literal(v &: Lv, a &: at.Ast, n: int): Llv:

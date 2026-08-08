@@ -15,6 +15,35 @@
 #include "llvm/codegen_llvm_internal.h"
 #include "core/sal_format.h"
 
+/*
+ * A decimal floating constant LLVM's .ll parser will accept.
+ *
+ * It requires a '.' in every decimal FP literal, and printf's %g drops the
+ * point whenever the value is exactly integral - including in exponent form
+ * for large magnitudes, where "1e+308" then lexes as an integer with a stray
+ * exponent and the module fails to parse ("integer constant must have
+ * integer type"). Put the point back, before the exponent when there is one.
+ *
+ * inf/nan text is left alone: those are not decimal literals and splicing a
+ * point into them would only make things worse.
+ */
+const char *ll_fp_text(ll_t *ll, const char *v)
+{
+    const char *ep;
+    char mant[64], expo[64];
+    size_t mlen;
+    if (!v || !*v) return "0.0";
+    if (strchr(v, '.') || strpbrk(v, "nNiI")) return v;
+    ep = strpbrk(v, "eE");
+    if (!ep) return ll_fmt(ll, "%s.0", v);
+    mlen = (size_t)(ep - v);
+    if (mlen >= sizeof mant || strlen(ep) >= sizeof expo) return v;
+    memcpy(mant, v, mlen);
+    mant[mlen] = '\0';
+    sal_snprintf(expo, sizeof expo, "%s", ep);
+    return ll_fmt(ll, "%s.0%s", mant, expo);
+}
+
 int ll_int_bits(ll_t *ll, const char *ts)
 {
     if (!ts) return 32;

@@ -230,6 +230,7 @@ symbol_t *ll_enum_sym(ll_t *ll, const char *name);
 int ll_field_index(symbol_t *ssym, const char *field, symbol_t **out_field);
 
 const char *ll_zero(const char *ts);
+const char *ll_fp_text(ll_t *ll, const char *v);
 
 const char *ll_func_ret(ll_t *ll, const char *ts);
 

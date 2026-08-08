@@ -18,6 +18,7 @@
 package io
 
 import str
+import mem
 
 extern:
     func salam_open(path: str, mode: str): File*
@@ -126,13 +127,29 @@ pub func EPrintln(s: str): printerrln s end
 @fa "خواندن همه"
 @ar "قراءة الکل"
 pub func ReadAll(f: File*): str:
+    // Guarded here so the mem.Free calls below can be unconditional:
+    // f.read on a null handle is the one case that answers with the empty
+    // string LITERAL rather than a heap block, and freeing static storage
+    // is not something to leave to chance.
+    if f == null:
+        ret ""
+    end
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
     mut chunk := f.read(4096)
+    // Each f.read is a fresh mem.AllocateZeroed(size + 1) (see
+    // salam_file_read in std/fs/fs.salam), and its contents are copied into
+    // the builder - so the block is dead the moment BufAppend returns.
+    // Without these frees, reading a file cost 4 KB of leaked buffer per
+    // 4 KB read: the compiler alone dropped ~2 MB just indexing std/.
     until chunk.len() > 0:
         str.BufAppend(sb, chunk)
+        mem.Free(chunk as void*)
         chunk = f.read(4096)
     end
+    // The loop always exits holding one more allocation: EOF is signalled by
+    // a zero-length read, not by a null return, and that read allocated too.
+    mem.Free(chunk as void*)
     out := str.BufStr(sb)
     ret out
 end
@@ -141,13 +158,20 @@ end
 @fa "کپی"
 @ar "نسخ"
 pub func Copy(dst: File*, src: File*): i64:
+    if dst == null || src == null:
+        ret 0 as i64
+    end
     mut total := 0 as i64
     mut chunk := src.read(4096)
+    // Same ownership as ReadAll above: every read is a fresh buffer, and
+    // this one is done with it as soon as it has been written out.
     until chunk.len() > 0:
         dst.write(chunk)
         total += chunk.len() as i64
+        mem.Free(chunk as void*)
         chunk = src.read(4096)
     end
+    mem.Free(chunk as void*)
     ret total
 end
 

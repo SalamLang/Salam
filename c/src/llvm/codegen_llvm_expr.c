@@ -223,6 +223,15 @@ static bool ll_op_call(ll_t *ll, ast_node_t *recv, const char *sname, symbol_t *
     if (!ms || ms->kind != SYM_METHOD) return false;
     func_sig_t *sig = ll_pick_arity(ms, rhs ? 1 : 0);
     if (!sig) return false;
+    /*
+     * Operator methods reached this way (v[i] lowering to
+     * operator_index, etc.) emitted the call without ever requesting the
+     * callee's body, so a monomorphized instance nothing else referenced -
+     * Vector<diag.Diag>'s operator_index - was called but never defined,
+     * and the module failed to parse. Every other call site pairs its
+     * emit with an ensure_fn; this one was missing it.
+     */
+    ll_ensure_fn(ll, sig->decl, ss, ll->pkg_scope);
     const char *recvref =
         ll_is_ptr_ts(recv->type_str) ? ll_expr(ll, recv).ref : ll_addr_of(ll, recv).ptr;
     sb_t ab;
@@ -261,6 +270,8 @@ bool ll_index_set(ll_t *ll, ast_node_t *idx, ast_node_t *value)
     if (!ms || ms->kind != SYM_METHOD) return false;
     func_sig_t *sig = ll_pick_arity(ms, 2);
     if (!sig) return false;
+    /* Same missing pairing as ll_op_call: emit the call, request the body. */
+    ll_ensure_fn(ll, sig->decl, ss, ll->pkg_scope);
     const char *recv = ll_is_ptr_ts(idx->a->type_str) ? ll_expr(ll, idx->a).ref
                                                       : ll_addr_of(ll, idx->a).ptr;
     const char *p0 = type_to_string(ll->sem->tc, (type_t *)sig->params.data[0]);

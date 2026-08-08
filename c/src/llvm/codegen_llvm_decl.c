@@ -262,6 +262,25 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
     sb_init(&allocs);
     sb_t *saved_b = ll->b, *saved_allocas = ll->allocas;
     int saved_tmp = ll->tmp, saved_lbl = ll->lbl, saved_nloop = ll->nloop;
+    /*
+     * The break/continue target stacks, not just their depth. A function
+     * can be emitted *nested* inside another's body (ll_ensure_fn fires
+     * while lowering a call expression), and the nested emission resets
+     * nloop to 0 and then writes brk[0]/cont[0] for its own loops - which
+     * are the outer function's live entries. The outer `continue` then
+     * branched to a label belonging to the inner function and never
+     * defined in its own, producing IR that fails to parse ("use of
+     * undefined value '%L4_wcond'"). Only the entries actually live for
+     * the outer function need preserving.
+     */
+    const char *saved_brk[64], *saved_cont[64];
+    {
+        int bi = 0;
+        for (; bi < saved_nloop && bi < 64; bi++) {
+            saved_brk[bi] = ll->brk[bi];
+            saved_cont[bi] = ll->cont[bi];
+        }
+    }
     bool saved_main = ll->is_main, saved_byval = ll->self_byval, saved_term = ll->term;
     const char *saved_ret = ll->ret_ts, *saved_sp = ll->cur_sp, *saved_dbg = ll->cur_dbg;
     const char *saved_self = ll->self_ts, *saved_this = ll->this_ref;
@@ -305,6 +324,13 @@ void ll_function(ll_t *ll, ast_node_t *fn, symbol_t *owner)
     ll->tmp = saved_tmp;
     ll->lbl = saved_lbl;
     ll->nloop = saved_nloop;
+    {
+        int bi = 0;
+        for (; bi < saved_nloop && bi < 64; bi++) {
+            ll->brk[bi] = saved_brk[bi];
+            ll->cont[bi] = saved_cont[bi];
+        }
+    }
     ll->is_main = saved_main;
     ll->ret_ts = saved_ret;
     ll->self_byval = saved_byval;
@@ -528,6 +554,25 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     sb_init(&allocs);
     sb_t *saved_b = ll->b, *saved_allocas = ll->allocas;
     int saved_tmp = ll->tmp, saved_lbl = ll->lbl, saved_nloop = ll->nloop;
+    /*
+     * The break/continue target stacks, not just their depth. A function
+     * can be emitted *nested* inside another's body (ll_ensure_fn fires
+     * while lowering a call expression), and the nested emission resets
+     * nloop to 0 and then writes brk[0]/cont[0] for its own loops - which
+     * are the outer function's live entries. The outer `continue` then
+     * branched to a label belonging to the inner function and never
+     * defined in its own, producing IR that fails to parse ("use of
+     * undefined value '%L4_wcond'"). Only the entries actually live for
+     * the outer function need preserving.
+     */
+    const char *saved_brk[64], *saved_cont[64];
+    {
+        int bi = 0;
+        for (; bi < saved_nloop && bi < 64; bi++) {
+            saved_brk[bi] = ll->brk[bi];
+            saved_cont[bi] = ll->cont[bi];
+        }
+    }
     bool saved_main = ll->is_main, saved_term = ll->term;
     const char *saved_ret = ll->ret_ts, *saved_self = ll->self_ts,
                *saved_this = ll->this_ref;
@@ -604,6 +649,13 @@ void ll_emit_lambda(ll_t *ll, ast_node_t *n)
     ll->tmp = saved_tmp;
     ll->lbl = saved_lbl;
     ll->nloop = saved_nloop;
+    {
+        int bi = 0;
+        for (; bi < saved_nloop && bi < 64; bi++) {
+            ll->brk[bi] = saved_brk[bi];
+            ll->cont[bi] = saved_cont[bi];
+        }
+    }
     ll->is_main = saved_main;
     ll->term = saved_term;
     ll->ret_ts = saved_ret;
@@ -811,6 +863,36 @@ static bool ll_extern_seen(ll_t *ll, const char *name)
     return false;
 }
 
+/*
+ * A function of this name that some package declares *with* a body, if any.
+ * A bodyless `extern:` re-declaration is how one package calls another's
+ * runtime entry point - std/collections re-declares `noret func
+ * salam_panic(msg: str)` so its bounds checks can call it, while the real
+ * body lives in std/core. Both are SYM_FUNCs of the same name, and which
+ * one a given emission order happens to reach first decided whether the
+ * module got a definition or only a declaration.
+ */
+static func_sig_t *ll_body_sig_for(ll_t *ll, const char *name, symbol_t **owner)
+{
+    size_t p = 0;
+    for (; p < ll->sem->packages.len; p++) {
+        symbol_t *pk = (symbol_t *)ll->sem->packages.data[p];
+        symbol_t *fs;
+        size_t o = 0;
+        if (!pk || pk->kind != SYM_PACKAGE || !pk->members) continue;
+        fs = scope_lookup_local(pk->members, name);
+        if (!fs || fs->kind != SYM_FUNC) continue;
+        for (; o < fs->overloads.len; o++) {
+            func_sig_t *sg = (func_sig_t *)fs->overloads.data[o];
+            if (sg->decl && sg->decl->a) {
+                *owner = pk;
+                return sg;
+            }
+        }
+    }
+    return NULL;
+}
+
 static void ll_emit_externs_in(ll_t *ll, scope_t *g)
 {
     {
@@ -830,6 +912,22 @@ static void ll_emit_externs_in(ll_t *ll, scope_t *g)
                         break;
                     }
                 if (already_defined) continue;
+            }
+            /*
+             * Emit the body instead of a declaration whenever one exists,
+             * so the outcome no longer depends on which package is walked
+             * first. Without this, `salam_panic` was declared (from
+             * collections) and never defined (from core) in any program
+             * where collections was reached first - every Vector bounds
+             * check then failed to link.
+             */
+            {
+                symbol_t *bowner = NULL;
+                func_sig_t *bsig = ll_body_sig_for(ll, s->name, &bowner);
+                if (bsig) {
+                    ll_ensure_fn(ll, bsig->decl, NULL, bowner->members);
+                    continue;
+                }
             }
             vec_push(ll->a, &ll->extern_names, CONST_CAST(s->name));
             sb_t b;

@@ -1,0 +1,32 @@
+# LeakSanitizer suppressions for the Salam compiler's leak gate
+# (c/tools/bash/leakcheck.sh, .github/workflows/lint-memory-leaks.yml).
+#
+# Format: one `leak:<substring>` per line. LSan matches the substring
+# against every frame of the allocation stack, so a match here means "this
+# allocation is not the compiler's to free".
+#
+# Keep this file SMALL and justify every entry. A suppression hides a real
+# LSan finding forever; the reflex when the gate goes red should be to fix
+# the leak, not to add a line here.
+
+# The tree-walking interpreter's `extern` bridge (interp_ffi.c). Every
+# nf_malloc/nf_realloc that reaches here was requested by the Salam program
+# being interpreted - `salam exec prog.salam` running a prog.salam that calls
+# std/mem.Allocate, directly or through a stdlib function that returns an
+# owned string. Salam is manually memory-managed, so whether that block is
+# freed is the interpreted program's business, exactly as it would be in a
+# compiled build; the interpreter must not free it on the program's behalf
+# (it has no idea when the program is done with it) and it does not leak a
+# single byte of its own here. tests/en/exec/strings.salam is the standing
+# example: it prints str.Title(...)/str.Reverse(...)/str.Replace(...), each
+# of which returns a fresh buffer the test then drops.
+leak:call_native_extern
+
+# LLVM/LLD internals, reached only by builds configured WITH_LLVM=1. LLD in
+# particular is documented as a deliberately arena-per-link, never-free
+# design (it expects to run as a short-lived process), and LLVM's
+# ManagedStatic registry is torn down by llvm_shutdown() only in binaries
+# that call it. Neither is salam's memory to account for, and neither
+# frame can appear in a stack that allocated something salam owns.
+leak:llvm::
+leak:lld::

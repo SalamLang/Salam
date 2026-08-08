@@ -590,7 +590,19 @@ llvm_output_t *codegen_llvm_run_opts(arena_t *a, logger_t *log, ast_node_t *prog
         size_t p = 0;
         for (; p < ll.sem->packages.len; p++) {
             symbol_t *pk = (symbol_t *)ll.sem->packages.data[p];
-            if (pk && pk->kind == SYM_PACKAGE && pk->name && !strcmp(pk->name, "core")) {
+            /*
+             * Match on pkgname as well as name. A package symbol's `name`
+             * is whatever binding introduced it, which is not always the
+             * package's own name - when it wasn't "core" this loop found
+             * nothing, salam_panic/salam_idx were never emitted, and the
+             * bounds checks in every Vector.get referenced a symbol the
+             * module only declared ("undefined symbol: salam_panic" at
+             * link time). Everything else that resolves a package uses
+             * pkgname (see ll_touch_pkg_named).
+             */
+            if (pk && pk->kind == SYM_PACKAGE &&
+                ((pk->name && !strcmp(pk->name, "core")) ||
+                 (pk->pkgname && !strcmp(pk->pkgname, "core")))) {
                 core_pk = pk;
                 break;
             }

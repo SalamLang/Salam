@@ -1,0 +1,724 @@
+package jsgen
+
+import str
+import co "../sal_core.salam"
+import lg "../logger.salam"
+import i18 "../i18n.salam"
+import at "../ast.salam"
+import sm "../semantic/semantic.salam"
+
+func jsg_unsupported(g &: Jg, what: str): str:
+    lg.Log(
+        g.log, lg.PH_CODEGEN, lg.LOG_WARN, "js backend: '" + what + "' is not supported yet"
+    )
+    ret `__salam_unsupported("` + what + `")`
+end
+
+func jsg_call_args(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, call: int, sig: int
+): str:
+    mut b := str.NewBuilder()
+    cv := at.Get(a, call)
+    nargs := cv.list.len()
+    mut i := 0
+    until i < nargs:
+        if i > 0:
+            str.BufAppend(b, ", ")
+        end
+        str.BufAppend(b, jsg_expr_p(g, s, a, cv.list.get(i)[0], 0))
+        i += 1
+    end
+    if sig != 0:
+        sgv := sm.SigAt(s, sig)
+        if sgv.decl != 0:
+            dv := at.Get(a, sgv.decl)
+            np := dv.list.len()
+            mut emitted := nargs
+            mut i2 := nargs
+            until i2 < np:
+                pv := at.Get(a, dv.list.get(i2)[0])
+                if pv.a == 0:
+                    i2 += 1
+                    continue
+                end
+                if emitted > 0:
+                    str.BufAppend(b, ", ")
+                end
+                str.BufAppend(b, jsg_expr_p(g, s, a, pv.a, 0))
+                emitted += 1
+                i2 += 1
+            end
+        end
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+// static const char *jsg_handler_base(...)
+func jsg_handler_base(a &: at.Ast, extname: str, args: Vector<int>): str:
+    mut ev := ""
+    n := args.len()
+    mut i := 0
+    until i < n:
+        aid := args.get(i)[0]
+        if jsg_is_str_lit(a, aid):
+            vs := at.Get(a, aid).value_str
+            if str.Len(vs) > 0:
+                ev = vs
+                break
+            end
+        end
+        i += 1
+    end
+    if str.Len(ev) > 0:
+        mut b := str.NewBuilder()
+        str.BufAppend(b, "on")
+        mut up := true
+        m := str.Len(ev)
+        mut p := 0
+        until p < m:
+            ch := byte_at(ev, p)
+            if !is_alnum(ch):
+                up = true
+                p += 1
+                continue
+            end
+            str.BufAppendChar(b, up ? to_upper(ch) : ch)
+            up = false
+            p += 1
+        end
+        r := str.BufStr(b)
+        str.BufFree(b)
+        ret r
+    end
+    if str.Equals(extname, "salam_js_raf"):
+        ret "onFrame"
+    end
+    if str.Equals(extname, "salam_js_set_timeout"):
+        ret "onTimeout"
+    end
+    if str.Equals(extname, "salam_js_set_interval"):
+        ret "onTick"
+    end
+    if str.Equals(extname, "salam_js_on_ready"):
+        ret "onReady"
+    end
+    if str.Equals(extname, "salam_js_on_resize"):
+        ret "onResize"
+    end
+    ret "handler"
+end
+
+func jsg_should_hoist(a &: at.Ast, id: int): bool:
+    if id == 0:
+        ret false
+    end
+    n := at.Get(a, id)
+    if n.kind != at.AST_LAMBDA || n.a == 0:
+        ret false
+    end
+    bv := at.Get(a, n.a)
+    ret bv.kind == at.AST_BLOCK && bv.list.len() >= 2
+end
+
+func jsg_emit_extern_call(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, extname: str, args: Vector<int>
+): str:
+    mut rendered := Vector {} as Vector<str>
+    defer rendered.free()
+    nargs := args.len()
+    mut i := 0
+    until i < nargs && i < 12:
+        aid := args.get(i)[0]
+        if jsg_should_hoist(a, aid):
+            name := jsg_fresh(g, jsg_handler_base(a, extname, args))
+            _lv := jsg_local(g, name, false)
+            cg_line(g, "const " + name + " = " + jsg_lambda(g, s, a, aid) + ";")
+            rendered.push(name)
+        else:
+            rendered.push(jsg_expr_p(g, s, a, aid, 0))
+        end
+        i += 1
+    end
+    tmpl := host_lookup(extname)
+    if str.Len(tmpl) == 0:
+        mut b := str.NewBuilder()
+        str.BufAppend(b, cg_cident(extname))
+        str.BufAppendChar(b, 40) // '('
+        mut i2 := 0
+        until i2 < nargs && i2 < 12:
+            if i2 > 0:
+                str.BufAppend(b, ", ")
+            end
+            str.BufAppend(b, rendered.get(i2)[0])
+            i2 += 1
+        end
+        str.BufAppendChar(b, 41) // ')'
+        r := str.BufStr(b)
+        str.BufFree(b)
+        ret r
+    end
+    mut b2 := str.NewBuilder()
+    tn := str.Len(tmpl)
+    mut p := 0
+    until p < tn:
+        c := byte_at(tmpl, p)
+        if c != 37: // '%'
+            str.BufAppendChar(b2, c)
+            p += 1
+            continue
+        end
+        p += 1
+        if p >= tn: // C: *p == '\0' -> break
+            break
+        end
+        c2 := byte_at(tmpl, p)
+        if c2 == 37:
+            str.BufAppendChar(b2, 37)
+        else c2 == 43 && p + 1 < tn && byte_at(tmpl, p + 1) >= 48 && byte_at(tmpl, p + 1) <= 57: // "%+N"
+            start := byte_at(tmpl, p + 1) - 48
+            p += 1
+            mut k := start
+            until k < nargs && k < 12:
+                if k > start:
+                    str.BufAppend(b2, ", ")
+                end
+                str.BufAppend(b2, rendered.get(k)[0])
+                k += 1
+            end
+        else c2 >= 48 && c2 <= 57:
+            idx := c2 - 48
+            if idx < nargs && idx < 12:
+                str.BufAppend(b2, rendered.get(idx)[0])
+            else:
+                str.BufAppend(b2, "undefined")
+            end
+        end
+        p += 1
+    end
+    r2 := str.BufStr(b2)
+    str.BufFree(b2)
+    ret r2
+end
+
+// "" = C NULL (not inlinable). home is a ScopeId (0 = C NULL).
+func jsg_try_inline(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, call: int, sig: int, home: int
+): str:
+    if sig == 0:
+        ret ""
+    end
+    decl := sm.SigAt(s, sig).decl
+    if decl == 0:
+        ret ""
+    end
+    dv := at.Get(a, decl)
+    if dv.is_extern || dv.synthetic || dv.typarams.len() > 0:
+        ret ""
+    end
+    if dv.a == 0:
+        ret ""
+    end
+    bodyv := at.Get(a, dv.a)
+    if bodyv.kind != at.AST_BLOCK || bodyv.list.len() != 1:
+        ret ""
+    end
+    st := bodyv.list.get(0)[0]
+    stv := at.Get(a, st)
+    if stv.kind != at.AST_RETURN && stv.kind != at.AST_EXPR_STMT:
+        ret ""
+    end
+    inner := stv.a
+    if inner == 0 || at.KindOf(a, inner) != at.AST_CALL:
+        ret ""
+    end
+    innerv := at.Get(a, inner)
+    callee := innerv.a
+    if callee == 0:
+        ret ""
+    end
+    calleev := at.Get(a, callee)
+    if calleev.kind != at.AST_IDENTIFIER || str.Len(calleev.name) == 0:
+        ret ""
+    end
+    nparams := dv.list.len()
+    if nparams > 12 || innerv.list.len() > 12:
+        ret ""
+    end
+    callv := at.Get(a, call)
+    if callv.list.len() > nparams:
+        ret ""
+    end
+    es := home != 0 ? sm.Lookup(s, home, calleev.name) : 0
+    if es != 0:
+        esv := sm.SymAt(s, es)
+        if esv.kind != sm.SYM_FUNC || esv.overloads.len() != 1:
+            ret ""
+        end
+        esig := esv.overloads.get(0)[0]
+        if esig == 0:
+            ret ""
+        end
+        edecl := sm.SigAt(s, esig).decl
+        if edecl == 0 || !at.Get(a, edecl).is_extern:
+            ret ""
+        end
+    else:
+        if str.Len(host_lookup(calleev.name)) == 0:
+            ret ""
+        end
+    end
+    mut map := Vector {} as Vector<int>
+    mut used := Vector {} as Vector<int>
+    repeat nparams:
+        used.push(0)
+    end
+    ninner := innerv.list.len()
+    mut k := 0
+    until k < ninner:
+        argv := at.Get(a, innerv.list.get(k)[0])
+        if argv.kind != at.AST_IDENTIFIER || str.Len(argv.name) == 0:
+            map.free()
+            used.free()
+            ret ""
+        end
+        mut found := false
+        mut i := 0
+        until i < nparams:
+            pv := at.Get(a, dv.list.get(i)[0])
+            if str.Len(pv.name) > 0 && str.Equals(pv.name, argv.name) && used.get(i)[0] == 0:
+                map.push(i)
+                used.set(i, 1)
+                found = true
+                break
+            end
+            i += 1
+        end
+        if !found:
+            map.free()
+            used.free()
+            ret ""
+        end
+        k += 1
+    end
+    mut i2 := 0
+    until i2 < nparams:
+        if used.get(i2)[0] == 0:
+            map.free()
+            used.free()
+            ret ""
+        end
+        i2 += 1
+    end
+    mut outer := Vector {} as Vector<int>
+    mut i3 := 0
+    until i3 < nparams:
+        if i3 < callv.list.len():
+            outer.push(callv.list.get(i3)[0])
+        else:
+            pv3 := at.Get(a, dv.list.get(i3)[0])
+            if pv3.a == 0:
+                map.free()
+                used.free()
+                outer.free()
+                ret ""
+            end
+            outer.push(pv3.a)
+        end
+        i3 += 1
+    end
+    mut slots := Vector {} as Vector<int>
+    mut k2 := 0
+    until k2 < ninner:
+        slots.push(outer.get(map.get(k2)[0])[0])
+        k2 += 1
+    end
+    result := jsg_emit_extern_call(g, s, a, calleev.name, slots)
+    slots.free()
+    outer.free()
+    used.free()
+    map.free()
+    ret result
+end
+
+func jsg_call_extern_direct(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, name: str
+): str:
+    mut args := Vector {} as Vector<int>
+    nv := at.Get(a, n)
+    cnt := nv.list.len()
+    mut i := 0
+    until i < cnt && i < 12:
+        args.push(nv.list.get(i)[0])
+        i += 1
+    end
+    result := jsg_emit_extern_call(g, s, a, name, args)
+    args.free()
+    ret result
+end
+
+func jsg_print(g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, err: bool): str:
+    mut b := str.NewBuilder()
+    str.BufAppend(b, err ? "console.error(" : "console.log(")
+    nv := at.Get(a, n)
+    cnt := nv.list.len()
+    mut i := 0
+    until i < cnt:
+        if i > 0:
+            str.BufAppend(b, ", ")
+        end
+        str.BufAppend(b, jsg_expr_p(g, s, a, nv.list.get(i)[0], 0))
+        i += 1
+    end
+    str.BufAppendChar(b, 41) // ')'
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func jsg_call_ident(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, callee: int
+): str:
+    nm := at.Get(a, callee).name
+    nv := at.Get(a, n)
+    is_print := str.Equals(nm, "print") || str.Equals(nm, "println")
+    is_printerr := str.Equals(nm, "printerr") || str.Equals(nm, "printerrln")
+    if is_print || is_printerr:
+        ret jsg_print(g, s, a, n, is_printerr)
+    end
+    if str.Equals(nm, "input"):
+        ret "salam_input()"
+    end
+    if str.Equals(nm, "lang"):
+        ret `"` + i18.Lang() + `"`
+    end
+    if str.Equals(nm, "funcptr") && nv.list.len() == 1:
+        fnid := nv.list.get(0)[0]
+        fnv := at.Get(a, fnid)
+        fsym := sm.Lookup(s, s.global, fnv.name)
+        if fsym != 0:
+            fsv := sm.SymAt(s, fsym)
+            if fsv.overloads.len() > 0:
+                sig := fsv.overloads.get(0)[0]
+                mut d_ext := false
+                mut d_syn := false
+                if sig != 0:
+                    d := sm.SigAt(s, sig).decl
+                    if d != 0:
+                        dv := at.Get(a, d)
+                        d_ext = dv.is_extern
+                        d_syn = dv.synthetic
+                    end
+                end
+                ret jsg_fn_name(
+                    g, s, str.Len(fsv.pkgname) > 0 ? fsv.pkgname : g.pkg, "", fnv.name, fsym, sig, d_ext,
+                    d_syn
+                )
+            end
+        end
+        ret cg_cident(fnv.name)
+    end
+    if str.Equals(nm, "callhandler") && nv.list.len() == 2:
+        ret jsg_expr_p(g, s, a, nv.list.get(0)[0], JSP_MEMBER) + "(" + jsg_expr_p(g, s, a, nv.list.get(1)[0], 0) + ")"
+    end
+    if str.Equals(nm, "len") && nv.list.len() == 1:
+        arg := nv.list.get(0)[0]
+        klen := at.StrLitLen(a, arg)
+        if klen >= 0:
+            ret co.I64Toa(klen)
+        end
+        ret jsg_expr_p(g, s, a, arg, JSP_MEMBER) + ".length"
+    end
+    if str.Equals(nm, "char_code") && nv.list.len() == 1:
+        ret jsg_expr_p(g, s, a, nv.list.get(0)[0], JSP_MEMBER) + ".charCodeAt(0)"
+    end
+    if sm.Lookup(s, s.global, nm) == 0:
+        if str.Equals(nm, "hash") && nv.list.len() == 1:
+            a0 := nv.list.get(0)[0]
+            ats := at.Get(a, a0).type_str
+            if str.Equals(ats, "str"):
+                ret "salam_str_hash(" + jsg_expr_p(g, s, a, a0, 0) + ")"
+            end
+            ret "salam_hash_int(" + jsg_expr_p(g, s, a, a0, 0) + ")"
+        end
+        if str.Equals(nm, "sizeof") || str.Equals(nm, "spawn") || str.Equals(nm, "args") || str.Equals(nm, "listdir"):
+            ret jsg_unsupported(g, nm)
+        end
+    end
+    bidx := sm.BuiltinLookup(nm)
+    fsym0 := sm.Lookup(s, s.global, nm)
+    if bidx >= 0 && fsym0 == 0:
+        ret sm.BuiltinAt(bidx).runtime + "(" + jsg_call_args(g, s, a, n, 0) + ")"
+    end
+    mut fsym := sm.Lookup(s, s.global, nm)
+    mut home_pkg := "" // C NULL
+    mut home := s.global
+    if fsym == 0 && g.cur_fn_home != 0:
+        hs := sm.Lookup(s, g.cur_fn_home, nm)
+        if hs != 0:
+            hv := sm.SymAt(s, hs)
+            if hv.kind == sm.SYM_FUNC:
+                fsym = hs
+                home_pkg = hv.pkgname
+                home = hv.home != 0 ? hv.home : g.cur_fn_home
+            end
+        end
+    end
+    if fsym == 0 && g.cur_struct != 0:
+        csv := sm.SymAt(s, g.cur_struct)
+        if csv.home != 0:
+            hs2 := sm.Lookup(s, csv.home, nm)
+            if hs2 != 0:
+                hv2 := sm.SymAt(s, hs2)
+                if hv2.kind == sm.SYM_FUNC:
+                    fsym = hs2
+                    home_pkg = hv2.pkgname
+                    home = hv2.home != 0 ? hv2.home : csv.home
+                end
+            end
+        end
+    end
+    if fsym != 0 && !local_known(g, nm):
+        fv0 := sm.SymAt(s, fsym)
+        if fv0.kind == sm.SYM_VAR || fv0.kind == sm.SYM_CONST:
+            mut callee0 := ""
+            if fv0.decl != 0 && at.Get(a, fv0.decl).is_extern:
+                callee0 = cg_cident(nm)
+            else:
+                gp0 := str.Len(fv0.pkgname) > 0 ? fv0.pkgname : g.pkg
+                callee0 = jsg_global_ref(g, gp0, nm)
+            end
+            ret callee0 + "(" + jsg_call_args(g, s, a, n, 0) + ")"
+        end
+    end
+    sig := fsym != 0 ? pick_overload(s, a, fsym, n) : 0
+    mut is_extern_call := false
+    mut inst_fn := false
+    if sig != 0:
+        d2 := sm.SigAt(s, sig).decl
+        if d2 != 0:
+            dv2 := at.Get(a, d2)
+            is_extern_call = dv2.is_extern
+            inst_fn = dv2.synthetic
+        end
+    end
+    if is_extern_call:
+        ret jsg_call_extern_direct(g, s, a, n, nm)
+    end
+    inl := jsg_try_inline(g, s, a, n, sig, home)
+    if str.Len(inl) > 0:
+        ret inl
+    end
+    mut fnname := ""
+    if sig != 0:
+        hp := str.Len(home_pkg) > 0 ? home_pkg : g.pkg
+        fnname = jsg_fn_name(g, s, hp, "", nm, fsym, sig, false, inst_fn)
+    else:
+        fnname = jsg_ident(nm)
+    end
+    ret fnname + "(" + jsg_call_args(g, s, a, n, sig) + ")"
+end
+
+func jsg_call_pkg(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, pk: int, callee: int
+): str:
+    calleev := at.Get(a, callee)
+    pkv := sm.SymAt(s, pk)
+    fn := pkv.members != 0 ? sm.LookupLocal(s, pkv.members, calleev.name) : 0
+    sig := fn != 0 ? pick_overload(s, a, fn, n) : 0
+    mut is_ext := false
+    mut inst := false
+    if sig != 0:
+        d := sm.SigAt(s, sig).decl
+        if d != 0:
+            dv := at.Get(a, d)
+            is_ext = dv.is_extern
+            inst = dv.synthetic
+        end
+    end
+    if is_ext:
+        ret jsg_call_extern_direct(g, s, a, n, calleev.name)
+    end
+    inl := jsg_try_inline(g, s, a, n, sig, pkv.members)
+    if str.Len(inl) > 0:
+        ret inl
+    end
+    name := jsg_fn_name(
+        g, s, pkv.pkgname, "", calleev.name, fn, sig, false, inst
+    )
+    ret name + "(" + jsg_call_args(g, s, a, n, sig) + ")"
+end
+
+func jsg_call_array(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, obj: int, callee: int
+): str:
+    if str.Equals(at.Get(a, callee).name, "len"):
+        ret jsg_expr_p(g, s, a, obj, JSP_MEMBER) + ".length"
+    end
+    ret "0"
+end
+
+func jsg_call_str(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int
+): str:
+    m := at.Get(a, callee).name
+    if str.Equals(m, "len"):
+        klen := at.StrLitLen(a, obj)
+        if klen >= 0:
+            ret co.I64Toa(klen)
+        end
+    end
+    nv := at.Get(a, n)
+    recv := jsg_expr_p(g, s, a, obj, JSP_MEMBER)
+    a0 := nv.list.len() > 0 ? jsg_expr_p(g, s, a, nv.list.get(0)[0], 0) : "0"
+    a1 := nv.list.len() > 1 ? jsg_expr_p(g, s, a, nv.list.get(1)[0], 0) : "0"
+    if str.Equals(m, "len"):
+        ret recv + ".length"
+    end
+    if str.Equals(m, "concat"):
+        ret recv + " + " + a0
+    end
+    if str.Equals(m, "substr"):
+        ret recv + ".substr(" + a0 + ", " + a1 + ")"
+    end
+    if str.Equals(m, "find") || str.Equals(m, "search") || str.Equals(m, "indexOf"):
+        ret recv + ".indexOf(" + a0 + ")"
+    end
+    if str.Equals(m, "trim"):
+        ret recv + ".trim()"
+    end
+    if str.Equals(m, "to_int"):
+        ret "(parseInt(" + recv + ", 10) || 0)"
+    end
+    if str.Equals(m, "to_float"):
+        ret "(parseFloat(" + recv + ") || 0)"
+    end
+    if str.Equals(m, "split"):
+        ret recv + ".split(" + a0 + ")"
+    end
+    if str.Equals(m, "lower"):
+        ret recv + ".toLowerCase()"
+    end
+    if str.Equals(m, "upper"):
+        ret recv + ".toUpperCase()"
+    end
+    if str.Equals(m, "repeat"):
+        ret recv + ".repeat(Math.max(0, " + a0 + "))"
+    end
+    ret "0"
+end
+
+func jsg_call_method(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int, objts: str
+): str:
+    mut sname := ""
+    ssym := cg_struct_of(s, objts, sname)
+    calleev := at.Get(a, callee)
+    mut msym := 0
+    if ssym != 0:
+        mems := sm.SymAt(s, ssym).members
+        if mems != 0:
+            msym = sm.LookupLocal(s, mems, calleev.name)
+        end
+    end
+    sig := msym != 0 ? pick_overload(s, a, msym, n) : 0
+    mut spkg := g.pkg
+    if ssym != 0:
+        pn := sm.SymAt(s, ssym).pkgname
+        if str.Len(pn) > 0:
+            spkg = pn
+        end
+    end
+    mut d_syn := false
+    if sig != 0:
+        d := sm.SigAt(s, sig).decl
+        if d != 0:
+            d_syn = at.Get(a, d).synthetic
+        end
+    end
+    fn := jsg_fn_name(g, s, spkg, sname, calleev.name, msym, sig, false, d_syn)
+    as_ := jsg_call_args(g, s, a, n, sig)
+    ret fn + "(" + jsg_expr_p(g, s, a, obj, 0) + (str.Len(as_) > 0 ? ", " : "") + as_ + ")"
+end
+
+func jsg_call_impl(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, obj: int, callee: int, objts: str, owner: int
+): str:
+    calleev := at.Get(a, callee)
+    ov := sm.SymAt(s, owner)
+    msym := ov.members != 0 ? sm.LookupLocal(s, ov.members, calleev.name) : 0
+    sig := msym != 0 ? pick_overload(s, a, msym, n) : 0
+    mut fn := ""
+    if msym != 0 && sig != 0 && sm.SymAt(s, msym).overloads.len() > 1:
+        fn = cg_mangle_ti(s, objts, calleev.name, sm.SigAt(s, sig).params)
+    else:
+        fn = jsg_ident(cg_cident(objts) + "_" + calleev.name)
+    end
+    as_ := jsg_call_args(g, s, a, n, sig)
+    ret fn + "(" + jsg_expr_p(g, s, a, obj, 0) + (str.Len(as_) > 0 ? ", " : "") + as_ + ")"
+end
+
+func jsg_call_member(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, callee: int
+): str:
+    calleev := at.Get(a, callee)
+    obj := calleev.a
+    objv := at.Get(a, obj)
+    if obj != 0 && objv.kind == at.AST_IDENTIFIER && !local_known(g, objv.name):
+        mut pk := sm.Lookup(s, s.global, objv.name)
+        if (pk == 0 || sm.SymAt(s, pk).kind != sm.SYM_PACKAGE) && g.cur_struct != 0:
+            cs := sm.SymAt(s, g.cur_struct)
+            if cs.home != 0:
+                pk = sm.Lookup(s, cs.home, objv.name)
+            end
+        end
+        if (pk == 0 || sm.SymAt(s, pk).kind != sm.SYM_PACKAGE) && g.cur_fn_home != 0:
+            pk = sm.Lookup(s, g.cur_fn_home, objv.name)
+        end
+        if pk != 0 && sm.SymAt(s, pk).kind == sm.SYM_PACKAGE:
+            ret jsg_call_pkg(g, s, a, n, pk, callee)
+        end
+    end
+    objts := objv.type_str
+    impl_sym := sm.Lookup(s, s.global, sm.ImplOwnerKey(objts))
+    if impl_sym != 0:
+        iv := sm.SymAt(s, impl_sym)
+        if iv.kind == sm.SYM_TYPEIMPL && iv.members != 0 && sm.LookupLocal(s, iv.members, calleev.name) != 0:
+            ret jsg_call_impl(g, s, a, n, obj, callee, objts, impl_sym)
+        end
+    end
+    if str.StartsWith(objts, "dyn "):
+        ret jsg_unsupported(g, "dyn interface call")
+    end
+    if str.Equals(objts, "File*"):
+        ret jsg_unsupported(g, "File")
+    end
+    if str.Equals(objts, "str"):
+        ret jsg_call_str(g, s, a, n, obj, callee)
+    end
+    if cg_is_slice_ts(objts) || has_bracket(objts):
+        ret jsg_call_array(g, s, a, obj, callee)
+    end
+    ret jsg_call_method(g, s, a, n, obj, callee, objts)
+end
+
+func jsg_call(g &: Jg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    callee := at.Get(a, n).a
+    if callee != 0:
+        cv := at.Get(a, callee)
+        if str.StartsWith(cv.type_str, "func(") && cv.kind != at.AST_IDENTIFIER:
+            ret "(" + jsg_expr_p(g, s, a, callee, 0) + ")(" + jsg_call_args(g, s, a, n, 0) + ")"
+        end
+        if cv.kind == at.AST_IDENTIFIER && str.StartsWith(cv.type_str, "func(") && local_known(g, cv.name):
+            ret jsg_local_ref(g, cv.name) + "(" + jsg_call_args(g, s, a, n, 0) + ")"
+        end
+        if cv.kind == at.AST_IDENTIFIER:
+            ret jsg_call_ident(g, s, a, n, callee)
+        end
+        if cv.kind == at.AST_MEMBER:
+            ret jsg_call_member(g, s, a, n, callee)
+        end
+    end
+    ret "undefined"
+end

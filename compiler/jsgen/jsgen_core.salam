@@ -1,0 +1,245 @@
+package jsgen
+
+import str
+import co "../sal_core.salam"
+import lg "../logger.salam"
+import i18 "../i18n.salam"
+import at "../ast.salam"
+import sm "../semantic/semantic.salam"
+
+// ===== jsgen.c =====
+
+func collect_local_names(g &: Jg, a &: at.Ast, id: int):
+    if id == 0:
+        ret
+    end
+    n := at.Get(a, id)
+    if str.Len(n.name) > 0 && (
+        n.kind == at.AST_PARAM || n.kind == at.AST_VAR_DECL || n.kind == at.AST_CONST_DECL || n.kind == at.AST_REPEAT || n.kind == at.AST_EACH
+    ):
+        g.taken.push(n.name)
+    end
+    if n.kind == at.AST_EACH && n.c != 0:
+        cn := at.Get(a, n.c).name
+        if str.Len(cn) > 0:
+            g.taken.push(cn)
+        end
+    end
+    collect_local_names(g, a, n.a)
+    collect_local_names(g, a, n.b)
+    collect_local_names(g, a, n.c)
+    collect_local_names(g, a, n.d)
+    cnt := n.list.len()
+    mut i := 0
+    until i < cnt:
+        collect_local_names(g, a, n.list.get(i)[0])
+        i += 1
+    end
+end
+
+func census(g &: Jg, a &: at.Ast, program: int):
+    pv := at.Get(a, program)
+    cnt := pv.list.len()
+    mut i := 0
+    until i < cnt:
+        d := pv.list.get(i)[0]
+        k := at.KindOf(a, d)
+        if k == at.AST_FUNC_DEF || k == at.AST_STRUCT_DEF:
+            collect_local_names(g, a, d)
+        end
+        i += 1
+    end
+end
+
+func jsg_emit_globals(g &: Jg, s &: sm.Sema, a &: at.Ast, program: int):
+    pv := at.Get(a, program)
+    cnt := pv.list.len()
+    mut i := 0
+    until i < cnt:
+        did := pv.list.get(i)[0]
+        d := at.Get(a, did)
+        if d.kind != at.AST_CONST_DECL && d.kind != at.AST_VAR_DECL:
+            i += 1
+            continue
+        end
+        if d.is_extern:
+            i += 1
+            continue
+        end
+        ref := jsg_global_ref(g, g.pkg, d.name)
+        kw := d.kind == at.AST_CONST_DECL ? "const" : "let"
+        if d.a != 0:
+            cg_line(g, kw + " " + ref + " = " + jsg_expr(g, s, a, d.a) + ";")
+        else:
+            cg_line(
+                g, (d.is_mut ? "let" : "const") + " " + ref + " = " + jsg_zero(s, d.type_str) + ";"
+            )
+        end
+        i += 1
+    end
+end
+
+func jsg_emit_one(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, out &: Output, fnid: int, owner: int
+):
+    saved := g.out
+    g.out = str.NewBuilder()
+    g.last_fn_name = ""
+    jsg_function(g, s, a, fnid, owner)
+    body_len := str.BufLen(g.out)
+    body := str.BufStr(g.out)
+    str.BufFree(g.out)
+    g.out = saved
+    if str.Len(g.last_fn_name) > 0 && body_len > 0:
+        out.fn_names.push(g.last_fn_name)
+        out.fn_texts.push(body)
+    end
+end
+
+func jsg_emit_functions(
+    g &: Jg, s &: sm.Sema, a &: at.Ast, out &: Output, program: int
+):
+    pv := at.Get(a, program)
+    cnt := pv.list.len()
+    mut i := 0
+    until i < cnt:
+        did := pv.list.get(i)[0]
+        d := at.Get(a, did)
+        if d.typarams.len() > 0:
+            i += 1
+            continue
+        end
+        if d.kind == at.AST_FUNC_DEF:
+            if d.is_extern && d.a == 0:
+                i += 1
+                continue
+            end
+            jsg_emit_one(g, s, a, out, did, 0)
+        else d.kind == at.AST_STRUCT_DEF:
+            ssym := sm.LookupLocal(s, s.global, d.name)
+            m := d.list.len()
+            mut j := 0
+            until j < m:
+                mid := d.list.get(j)[0]
+                if at.KindOf(a, mid) == at.AST_FUNC_DEF:
+                    jsg_emit_one(g, s, a, out, mid, ssym)
+                end
+                j += 1
+            end
+        end
+        i += 1
+    end
+end
+
+func jsg_emit_impls(g &: Jg, s &: sm.Sema, a &: at.Ast, out &: Output):
+    gsc := sm.ScopeAt(s, s.global)
+    cnt := gsc.symbols.len()
+    mut i := 0
+    until i < cnt:
+        owner := gsc.symbols.get(i)[0]
+        ov := sm.SymAt(s, owner)
+        if ov.kind != sm.SYM_TYPEIMPL || ov.members == 0:
+            i += 1
+            continue
+        end
+        msc := sm.ScopeAt(s, ov.members)
+        mcnt := msc.symbols.len()
+        mut j := 0
+        until j < mcnt:
+            m := msc.symbols.get(j)[0]
+            mv := sm.SymAt(s, m)
+            if mv.kind != sm.SYM_METHOD:
+                j += 1
+                continue
+            end
+            ocnt := mv.overloads.len()
+            mut k := 0
+            until k < ocnt:
+                sig := mv.overloads.get(k)[0]
+                if sig != 0:
+                    d := sm.SigAt(s, sig).decl
+                    if d != 0:
+                        jsg_emit_one(g, s, a, out, d, owner)
+                    end
+                end
+                k += 1
+            end
+            j += 1
+        end
+        i += 1
+    end
+end
+
+// plural_suffix: "" for a count of exactly 1, "s" otherwise.
+func plural_suffix(n: int): str:
+    ret n == 1 ? "" : "s"
+end
+
+// ---------------------------------------------------------------------------
+// Public API (rule E088: pub section last).
+// ---------------------------------------------------------------------------
+
+// js_host_lookup ("" = the C NULL).
+pub func HostLookup(name: str): str:
+    ret host_lookup(name)
+end
+
+// jsgen_output_t factory (cross-package struct literals don't parse).
+pub func NewOutput(): Output:
+    ret Output {}
+end
+
+pub func FreeOutput(o &: Output):
+    o.fn_names.free()
+    o.fn_texts.free()
+end
+
+// jsgen_run. minify_last/minify_keys/minify_vals thread the JS name-minify
+// state across modules exactly like the C's in/out pointers ("" = NULL);
+// the final state is copied back before returning.
+pub func Run(
+    lgr: lg.Logger, a &: at.Ast, s &: sm.Sema, program: int, module: str, entry: str, enable_minify: bool,
+    compact: bool, minify_last &: str, minify_keys &: Vector<str>, minify_vals &: Vector<str>, out &: Output
+):
+    mut g := Jg {}
+    defer g.locals.free()
+    defer g.local_muts.free()
+    defer g.local_emit.free()
+    defer g.taken.free()
+    defer g.fn_used_names.free()
+    defer g.fn_defers.free()
+    g.log = lgr
+    g.module = module
+    prog := at.Get(a, program)
+    g.pkg = str.Len(prog.name) > 0 ? prog.name : "main"
+    g.entry = str.Len(entry) > 0 ? entry : "main"
+    g.compact = compact
+    g.enable_minify = enable_minify
+    g.minify_last = minify_last
+    g.minify_keys.free()
+    g.minify_keys = minify_keys
+    g.minify_vals.free()
+    g.minify_vals = minify_vals
+    out.module = module
+    lg.Log(
+        lgr, lg.PH_CODEGEN, lg.LOG_INFO, co.Format1(
+            i18.Tr("generating JavaScript for module '%s'"), co.ArgStr(module)
+        )
+    )
+    census(g, a, program)
+    jsg_emit_globals(g, s, a, program)
+    jsg_emit_functions(g, s, a, out, program)
+    jsg_emit_impls(g, s, a, out)
+    out.globals_src = str.BufStr(g.out)
+    out.entry_mangled = g.entry_mangled
+    str.BufFree(g.out)
+    minify_last = g.minify_last
+    minify_keys = g.minify_keys
+    minify_vals = g.minify_vals
+    lg.Log(
+        lgr, lg.PH_CODEGEN, lg.LOG_INFO, co.Format3(
+            i18.Tr("generated %zu function%s for '%s'"), co.ArgUint(out.fn_names.len() as u64),
+            co.ArgStr(plural_suffix(out.fn_names.len())), co.ArgStr(module)
+        )
+    )
+end

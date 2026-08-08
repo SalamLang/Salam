@@ -53,12 +53,14 @@ fmt_style_t fmt_style_default(void)
     fmt_style_t s;
     s.tabs = false;
     s.width = FMT_INDENT_WIDTH;
+    s.minify = false;
     return s;
 }
 
 static void fmt_emit_indent(sb_t *out, const fmt_style_t *st, int indent)
 {
     if (indent < 0) indent = 0;
+    if (st->minify) return;
     if (st->tabs) {
         int s = 0;
         for (; s < indent; s++)
@@ -332,7 +334,7 @@ static void fmt_step_dedent(fmt_ctx_t *c, const token_t *t, token_kind_t k,
 static void fmt_step_leading(fmt_ctx_t *c, const token_t *t, token_kind_t k)
 {
     if (!c->line_has_content) {
-        if (c->bracket == 0 && c->prev != NULL &&
+        if (!c->st->minify && c->bracket == 0 && c->prev != NULL &&
             t->span.begin.line > c->prev_end_line + 1)
             sb_putc(c->out, '\n');
         fmt_emit_indent(c->out, c->st, c->indent + c->bracket_indent);
@@ -458,6 +460,12 @@ void fmt_tokens(const token_stream_t *toks, const fmt_style_t *style, sb_t *out)
             fmt_step_stmt_end(&c, t, cur_ml);
             continue;
         }
+        /* Comments are dropped before any state is touched, so they cannot
+         * leave a force_break or a stale `prev` behind. A block comment that
+         * spanned a newline already had its own TK_STMT_END emitted after it
+         * by the lexer (scan_block_comment), so the statement boundary it
+         * created survives even though the comment text does not. */
+        if (c.st->minify && (k == TK_COMMENT_LINE || k == TK_COMMENT_BLOCK)) continue;
 
         fmt_step_break_before(&c, t, k, cur_ml);
         fmt_step_dedent(&c, t, k, toks, i);

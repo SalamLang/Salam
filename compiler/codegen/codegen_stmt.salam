@@ -1,0 +1,393 @@
+package codegen
+
+import str
+import tok "../token.salam"
+import at "../ast.salam"
+import sm "../semantic/semantic.salam"
+
+// ===== codegen_stmt.c =====
+
+// cg_emit_defers - flush g.fn_defers LIFO (without popping).
+func cg_emit_defers(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    mut i := g.fn_defers.len()
+    until i > 0:
+        cg_stmt(g, s, a, g.fn_defers.get(i - 1)[0])
+        i -= 1
+    end
+end
+
+func cg_vardecl_inline(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    nn := at.Get(a, n)
+    ts := str.Len(nn.type_str) > 0 ? nn.type_str : "int32_t"
+    decl := cg_decl(ts, nn.name)
+    local_add(g, nn.name)
+    is_ref := str.IndexOf(ts, "[") >= 0 || str.EndsWith(ts, "*") || struct_by_name(s, ts) != 0
+    already_const := str.StartsWith(cg_ctype(ts), "const ")
+    prefix := (nn.is_mut || is_ref || already_const) ? "" : "const "
+    if nn.a != 0:
+        ret prefix + decl + " = " + cg_expr(g, s, a, nn.a)
+    end
+    if str.IndexOf(ts, "[") >= 0:
+        ret prefix + decl + " = {0}"
+    end
+    ret prefix + decl
+end
+
+func cg_simple_inline(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    nn := at.Get(a, n)
+    if nn.kind == at.AST_VAR_DECL:
+        ret cg_vardecl_inline(g, s, a, n)
+    end
+    if nn.kind == at.AST_ASSIGN:
+        if nn.op == tok.TK_POWER_EQ:
+            e1 := cg_expr(g, s, a, nn.a)
+            e2 := cg_expr(g, s, a, nn.a)
+            e3 := cg_expr(g, s, a, nn.b)
+            ret e1 + " = pow((double)(" + e2 + "), (double)(" + e3 + "))"
+        end
+        ea := cg_expr(g, s, a, nn.a)
+        eb := cg_expr(g, s, a, nn.b)
+        ret ea + " " + cg_op(nn.op) + " " + eb
+    end
+    if nn.kind == at.AST_EXPR_STMT:
+        ret cg_expr(g, s, a, nn.a)
+    end
+    ret cg_expr(g, s, a, n)
+end
+
+func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
+    if n == 0:
+        ret
+    end
+    cg_source_line(g, span_of(a, n))
+    nn := at.Get(a, n)
+    k := nn.kind
+    if k == at.AST_BLOCK:
+        cg_block(g, s, a, n)
+        ret
+    end
+    if k == at.AST_VAR_DECL:
+        if str.StartsWith(nn.type_str, "dyn ") && str.IndexOf(nn.type_str, "[") >= 0 && nn.a != 0 && at.KindOf(a, nn.a) == at.AST_ARRAY_LIT:
+            local_add(g, nn.name)
+            cg_line(g, cg_decl(nn.type_str, nn.name) + ";")
+            an := at.Get(a, nn.a)
+            repeat an.list.len() with i:
+                cg_line(
+                    g, cg_cident(nn.name) + "[" + i + "] = " + cg_expr(g, s, a, an.list.get(i)[0]) + ";"
+                )
+            end
+            ret
+        end
+        cg_line(g, cg_vardecl_inline(g, s, a, n) + ";")
+        ret
+    end
+    if k == at.AST_CONST_DECL:
+        cts := str.Len(nn.type_str) > 0 ? nn.type_str : "int32_t"
+        decl := cg_decl(cts, nn.name)
+        local_add(g, nn.name)
+        cpfx := str.StartsWith(cg_ctype(cts), "const ") ? "" : "const "
+        cg_line(g, cpfx + decl + " = " + cg_expr(g, s, a, nn.a) + ";")
+        ret
+    end
+    if k == at.AST_ASSIGN:
+        if nn.op == tok.TK_ASSIGN && nn.a != 0 && at.KindOf(a, nn.a) == at.AST_INDEX:
+            ixn := at.Get(a, nn.a)
+            container_ts := at.Get(a, ixn.a).type_str
+            if ixn.a != 0 && str.Len(container_ts) > 0:
+                mut sname := ""
+                ssym := cg_struct_of(s, container_ts, sname)
+                if ssym != 0:
+                    m := sm.LookupLocal(
+                        s, sm.SymAt(s, ssym).members, "operator_index_set"
+                    )
+                    if m != 0 && sm.SymAt(s, m).kind == sm.SYM_METHOD:
+                        sig := pick_op_overload(s, m, 2)
+                        if sig != 0:
+                            mangled := cg_mangle_method(
+                                g, s, sname, ssym, "operator_index_set", sm.SigAt(s, sig).params
+                            )
+                            container := ixn.a
+                            idx_c := cg_expr(g, s, a, ixn.b)
+                            val_c := cg_expr(g, s, a, nn.b)
+                            ck := at.KindOf(a, container)
+                            addressable := ck == at.AST_IDENTIFIER || ck == at.AST_MEMBER || ck == at.AST_INDEX || ck == at.AST_THIS
+                            if addressable:
+                                recv := "&(" + cg_expr(g, s, a, container) + ")"
+                                cg_line(
+                                    g, mangled + "(" + recv + ", " + idx_c + ", " + val_c + ");"
+                                )
+                            else:
+                                g.tmpn += 1
+                                t := g.tmpn
+                                cts2 := at.Get(a, container).type_str
+                                ct := cg_ctype(str.Len(cts2) > 0 ? cts2 : sname)
+                                lc := cg_expr(g, s, a, container)
+                                cg_line(
+                                    g, "{ " + ct + " __t" + t + " = (" + lc + "); " + mangled + "(&__t" + t + ", " + idx_c + ", " + val_c + "); }"
+                                )
+                            end
+                            ret
+                        end
+                    end
+                end
+            end
+        end
+        if nn.op != tok.TK_ASSIGN && nn.a != 0 && str.Len(at.Get(a, nn.a).type_str) > 0:
+            base_op := cg_compound_base(nn.op)
+            if base_op != tok.TK_EOF:
+                mut sname2 := ""
+                ssym2 := cg_struct_of(s, at.Get(a, nn.a).type_str, sname2)
+                if ssym2 != 0:
+                    mname := cg_op_method(base_op)
+                    if str.Len(mname) > 0:
+                        callv := cg_emit_op_call(
+                            g, s, a, nn.a, ssym2, sname2, mname, nn.b
+                        )
+                        if str.Len(callv) > 0:
+                            cg_line(
+                                g, cg_expr(g, s, a, nn.a) + " = " + callv + ";"
+                            )
+                            ret
+                        end
+                    end
+                end
+            end
+        end
+        if nn.op == tok.TK_PLUS_EQ && str.Equals(at.Get(a, nn.a).type_str, "str"):
+            e1 := cg_expr(g, s, a, nn.a)
+            e2 := cg_expr(g, s, a, nn.a)
+            ob := cg_str_operand(g, s, a, nn.b)
+            cg_line(g, e1 + " = salam_strcat(" + e2 + ", " + ob + ");")
+            ret
+        end
+        if nn.op == tok.TK_POWER_EQ:
+            a_ts := at.Get(a, nn.a).type_str
+            ct2 := cg_ctype(str.Len(a_ts) > 0 ? a_ts : "double")
+            g.tmpn += 1
+            t2 := g.tmpn
+            lhs := cg_expr(g, s, a, nn.a)
+            rhs := cg_expr(g, s, a, nn.b)
+            cg_line(
+                g, "{ " + ct2 + " *__pw" + t2 + " = &(" + lhs + "); " + "*__pw" + t2 + " = (" + ct2 + ")pow((double)(*__pw" + t2 + "), (double)(" + rhs + ")); }"
+            )
+            ret
+        end
+        ea := cg_expr(g, s, a, nn.a)
+        eb := cg_expr(g, s, a, nn.b)
+        cg_line(g, ea + " " + cg_op(nn.op) + " " + eb + ";")
+        ret
+    end
+    if k == at.AST_EXPR_STMT:
+        cg_line(g, cg_expr(g, s, a, nn.a) + ";")
+        ret
+    end
+    if k == at.AST_DEFER:
+        g.fn_defers.push(nn.a)
+        ret
+    end
+    if k == at.AST_RETURN:
+        if str.Len(g.match_result_tmp) > 0:
+            if nn.a != 0:
+                cg_line(
+                    g, g.match_result_tmp + " = (" + g.match_result_ctype + ")(" + cg_expr(g, s, a, nn.a) + "); goto " + g.match_end_label + ";"
+                )
+            else:
+                cg_line(g, "goto " + g.match_end_label + ";")
+            end
+            ret
+        end
+        if nn.a != 0 && g.fn_defers.len() > 0:
+            expr := cg_expr(g, s, a, nn.a)
+            r_ts := at.Get(a, nn.a).type_str
+            g.tmpn += 1
+            t := g.tmpn
+            tmp := "__retv" + t
+            cg_line(
+                g, cg_ctype(str.Len(r_ts) > 0 ? r_ts : "int32_t") + " " + tmp + " = (" + expr + ");"
+            )
+            cg_emit_defers(g, s, a)
+            if g.cur_sret:
+                cg_line(g, "*__ret = " + tmp + "; return;")
+            else:
+                cg_line(g, "return " + tmp + ";")
+            end
+        else nn.a != 0 && g.cur_sret:
+            cg_emit_defers(g, s, a)
+            cg_line(g, "*__ret = (" + cg_expr(g, s, a, nn.a) + "); return;")
+        else nn.a != 0:
+            cg_emit_defers(g, s, a)
+            cg_line(g, "return " + cg_expr(g, s, a, nn.a) + ";")
+        else:
+            cg_emit_defers(g, s, a)
+            cg_line(g, "return;")
+        end
+        ret
+    end
+    if k == at.AST_MATCH:
+        subj_ts := at.Get(a, nn.a).type_str
+        g.tmpn += 1
+        t := g.tmpn
+        subj_var := "__msubj" + t
+        cg_line(g, "{")
+        g.indent += 1
+        cg_line(
+            g, cg_ctype(str.Len(subj_ts) > 0 ? subj_ts : "int32_t") + " " + subj_var + " = (" + cg_expr(g, s, a, nn.a) + ");"
+        )
+        repeat nn.list.len() with i:
+            armid := nn.list.get(i)[0]
+            cond := cg_match_arm_cond(g, s, a, armid, subj_var, subj_ts)
+            cg_line(g, (i > 0 ? "} else " : "") + "if (" + cond + ") {")
+            g.indent += 1
+            mark := g.locals.len()
+            bn := at.Get(a, at.Get(a, armid).b)
+            repeat bn.list.len() with j:
+                cg_stmt(g, s, a, bn.list.get(j)[0])
+            end
+            locals_trunc(g, mark)
+            g.indent -= 1
+        end
+        if nn.list.len() > 0:
+            cg_line(g, "}")
+        end
+        g.indent -= 1
+        cg_line(g, "}")
+        ret
+    end
+    if k == at.AST_BREAK:
+        cg_line(g, "break;")
+        ret
+    end
+    if k == at.AST_CONTINUE:
+        cg_line(g, "continue;")
+        ret
+    end
+    if k == at.AST_IF:
+        cg_line(g, "if (" + cg_expr(g, s, a, nn.a) + ") {")
+        g.indent += 1
+        mark := g.locals.len()
+        bn := at.Get(a, nn.b)
+        repeat bn.list.len() with i:
+            cg_stmt(g, s, a, bn.list.get(i)[0])
+        end
+        locals_trunc(g, mark)
+        g.indent -= 1
+        if nn.c != 0 && at.KindOf(a, nn.c) == at.AST_IF:
+            cg_indent(g)
+            out(g, "} else ")
+            en := at.Get(a, nn.c)
+            out(g, "if (" + cg_expr(g, s, a, en.a) + ") {\n")
+            g.indent += 1
+            mark2 := g.locals.len()
+            ebn := at.Get(a, en.b)
+            repeat ebn.list.len() with i2:
+                cg_stmt(g, s, a, ebn.list.get(i2)[0])
+            end
+            locals_trunc(g, mark2)
+            g.indent -= 1
+            if en.c != 0:
+                cg_line(g, "} else {")
+                g.indent += 1
+                cg_stmt(g, s, a, en.c)
+                g.indent -= 1
+            end
+            cg_line(g, "}")
+        else nn.c != 0:
+            cg_line(g, "} else {")
+            g.indent += 1
+            mark3 := g.locals.len()
+            en2 := at.Get(a, nn.c)
+            repeat en2.list.len() with i3:
+                cg_stmt(g, s, a, en2.list.get(i3)[0])
+            end
+            locals_trunc(g, mark3)
+            g.indent -= 1
+            cg_line(g, "}")
+        else:
+            cg_line(g, "}")
+        end
+        ret
+    end
+    if k == at.AST_UNTIL:
+        cg_line(g, "while (" + cg_expr(g, s, a, nn.a) + ") {")
+        g.indent += 1
+        mark := g.locals.len()
+        bn := at.Get(a, nn.b)
+        repeat bn.list.len() with i:
+            cg_stmt(g, s, a, bn.list.get(i)[0])
+        end
+        locals_trunc(g, mark)
+        g.indent -= 1
+        cg_line(g, "}")
+        ret
+    end
+    if k == at.AST_REPEAT:
+        g.tmpn += 1
+        t := g.tmpn
+        if nn.c != 0:
+            from_c := cg_expr(g, s, a, nn.a)
+            to_c := cg_expr(g, s, a, nn.c)
+            mut step := "1"
+            if nn.d != 0:
+                step = cg_expr(g, s, a, nn.d)
+            end
+            cg_line(
+                g, "for (int64_t __rep" + t + " = (int64_t)(" + from_c + "), __repe" + t + " = (int64_t)(" + to_c + "), __repa" + t + " = (int64_t)(" + step + "), __reps" + t + " = (__rep" + t + " <= __repe" + t + ") ? __repa" + t + " : -__repa" + t + "; (__reps" + t + " > 0) ? (__rep" + t + " <= __repe" + t + ") : (__rep" + t + " >= __repe" + t + "); __rep" + t + " += __reps" + t + ") {"
+            )
+        else:
+            cg_line(
+                g, "for (int64_t __rep" + t + " = 0, __repn" + t + " = (int64_t)(" + cg_expr(g, s, a, nn.a) + "); __rep" + t + " < __repn" + t + "; __rep" + t + "++) {"
+            )
+        end
+        g.indent += 1
+        mark := g.locals.len()
+        if str.Len(nn.name) > 0:
+            ivct := cg_ctype(str.Len(nn.type_str) > 0 ? nn.type_str : "i32")
+            cg_line(
+                g, "const " + ivct + " " + cg_cident(nn.name) + " = (" + ivct + ")__rep" + t + ";"
+            )
+            local_add(g, nn.name)
+        end
+        bn := at.Get(a, nn.b)
+        repeat bn.list.len() with i:
+            cg_stmt(g, s, a, bn.list.get(i)[0])
+        end
+        locals_trunc(g, mark)
+        g.indent -= 1
+        cg_line(g, "}")
+        ret
+    end
+    if k == at.AST_FOR:
+        mark := g.locals.len()
+        mut init := ""
+        if nn.a != 0:
+            init = cg_simple_inline(g, s, a, nn.a)
+        end
+        mut cond := ""
+        if nn.b != 0:
+            cond = cg_expr(g, s, a, nn.b)
+        end
+        mut post := ""
+        if nn.c != 0:
+            post = cg_simple_inline(g, s, a, nn.c)
+        end
+        cg_line(g, "for (" + init + "; " + cond + "; " + post + ") {")
+        g.indent += 1
+        dn := at.Get(a, nn.d)
+        repeat dn.list.len() with i:
+            cg_stmt(g, s, a, dn.list.get(i)[0])
+        end
+        g.indent -= 1
+        cg_line(g, "}")
+        locals_trunc(g, mark)
+        ret
+    end
+end
+
+func cg_block(g &: Cg, s &: sm.Sema, a &: at.Ast, block: int):
+    mark := g.locals.len()
+    bn := at.Get(a, block)
+    repeat bn.list.len() with i:
+        cg_stmt(g, s, a, bn.list.get(i)[0])
+    end
+    locals_trunc(g, mark)
+end

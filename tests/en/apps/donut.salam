@@ -1,0 +1,168 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// donut.c - Andy Sloane's spinning ASCII torus, ported to Salam.
+//
+// The original is a page of obfuscated C that rasterises a torus into an
+// 80x22 character buffer and re-prints it forever after a "\x1b[H" cursor
+// home. Every magic number below is donut.c's, just given a name; the only
+// deliberate change is the driver: instead of looping forever over a cleared
+// terminal we print a fixed strip of frames, so the output is reproducible.
+//
+// The surface is a circle of radius R1 in the xy-plane, pushed out to x = R2
+// and swept around the y-axis by phi. It is then spun by A about the x-axis
+// and by B about the z-axis, pushed K2 away from the eye, and projected.
+
+package main
+
+import math
+import str
+
+// ---------------------------------------------------------------------------
+// Screen
+// ---------------------------------------------------------------------------
+
+const WIDTH := 80
+const HEIGHT := 22
+const CELLS := 1760 // WIDTH * HEIGHT - donut.c's b[1760] and z[1760]
+
+// Brightness ramp, dimmest to brightest: donut.c's ".,-~:;=!*#$@".
+const RAMP := ".,-~:;=!*#$@"
+
+// Centre of the projection, plus the horizontal and vertical pixel scales.
+// They differ 2:1 because a terminal cell is about twice as tall as it is
+// wide - that is what keeps the donut round instead of egg-shaped.
+const CENTER_X := 40.0
+const CENTER_Y := 12.0
+const X_SCALE := 30.0
+const Y_SCALE := 15.0
+
+// ---------------------------------------------------------------------------
+// Geometry
+// ---------------------------------------------------------------------------
+
+const R1 := 1.0 // radius of the tube's circular cross-section
+const R2 := 2.0 // distance from the origin out to the tube's centre
+const K2 := 5.0 // distance from the eye to the torus
+
+const THETA_STEP := 0.07 // step around the cross-section
+const PHI_STEP := 0.02 // step around the torus
+const SWEEP := 6.28 // donut.c stops just shy of a full 2*PI turn
+
+// ---------------------------------------------------------------------------
+// Animation
+// ---------------------------------------------------------------------------
+
+const A_STEP := 0.04 // donut.c: A += 0.04 every tick (spin about x)
+const B_STEP := 0.02 // donut.c: B += 0.02 every tick (spin about z)
+const SPIN := 26.0 // ticks between the frames we actually print
+const FRAMES := 6 // 6 * 26 * 0.04 is one full turn about x
+
+// ---------------------------------------------------------------------------
+// Frame buffers - donut.c keeps these as two flat arrays, and so do we.
+// g_lum holds a RAMP index per cell, or -1 for "nothing drawn here".
+// ---------------------------------------------------------------------------
+
+mut g_lum: int[CELLS]
+mut g_zbuf: f64[CELLS]
+
+// donut.c's memset(b, 32, 1760) plus memset(z, 0, 7040).
+func clear_frame:
+    repeat CELLS with i:
+        g_lum[i] = -1
+        g_zbuf[i] = 0.0
+    end
+end
+
+// Rasterise the whole torus for one pair of rotation angles, z-buffered so
+// the near side of the tube hides the far side.
+func plot(a: f64, b: f64):
+    sa := math.Sin(a)
+    ca := math.Cos(a)
+    sb := math.Sin(b)
+    cb := math.Cos(b)
+
+    mut theta := 0.0
+    until theta < SWEEP:
+        st := math.Sin(theta)
+        ct := math.Cos(theta)
+
+        // The cross-section circle, before it is swept around the y-axis.
+        cx := R2 + R1 * ct
+        cy := R1 * st
+
+        mut phi := 0.0
+        until phi < SWEEP:
+            sp := math.Sin(phi)
+            cp := math.Cos(phi)
+
+            // 1/z of the rotated point. Larger means nearer the eye, which
+            // is exactly what makes it usable as the depth key below.
+            ooz := 1.0 / (sp * cx * sa + cy * ca + K2)
+
+            // The shared sub-expression donut.c calls t: the y-ish component
+            // of the point once A has been applied.
+            ty := sp * cx * ca - cy * sa
+
+            sx := (CENTER_X + X_SCALE * ooz * (cp * cx * cb - ty * sb)) as int
+            sy := (CENTER_Y + Y_SCALE * ooz * (cp * cx * sb + ty * cb)) as int
+
+            // Surface normal dotted with the light direction (0, 1, -1),
+            // scaled by 8 to land on the 12-step ramp. Negative means the
+            // patch faces away from the light; donut.c clamps that to 0.
+            lum := (8.0 * ((st * sa - sp * ct * ca) * cb - sp * ct * sa - st * ca - cp * ct * sb)) as int
+
+            if sy > 0 && sy < HEIGHT && sx > 0 && sx < WIDTH:
+                o := sx + WIDTH * sy
+                if ooz > g_zbuf[o]:
+                    g_zbuf[o] = ooz
+                    if lum > 0:
+                        g_lum[o] = lum
+                    else:
+                        g_lum[o] = 0
+                    end
+                end
+            end
+
+            phi = phi + PHI_STEP
+        end
+
+        theta = theta + THETA_STEP
+    end
+end
+
+// donut.c's putchar loop. Right-trimmed so the frames stay easy to diff.
+func draw:
+    repeat HEIGHT with row:
+        mut line := ""
+        repeat WIDTH with col:
+            idx := g_lum[row * WIDTH + col]
+            if idx < 0:
+                line = line.concat(" ")
+            else:
+                line = line.concat(RAMP.substr(idx, 1))
+            end
+        end
+        println str.TrimRight(line)
+    end
+end
+
+func main:
+    repeat FRAMES with f:
+        println "-- frame", f
+        clear_frame()
+        plot((f as f64) * A_STEP * SPIN, (f as f64) * B_STEP * SPIN)
+        draw()
+    end
+end

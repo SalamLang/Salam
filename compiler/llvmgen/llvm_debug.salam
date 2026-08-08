@@ -1,0 +1,114 @@
+package llvmgen
+
+import str
+import co "../sal_core.salam"
+
+// ===== codegen_llvm_debug.c (stage A - C stage must NOT re-port) =====
+
+// ll_meta_add
+func meta_add(v &: Lv, text: str): str:
+    id := "!" + co.I64Toa(v.meta_n as i64)
+    v.meta_n += 1
+    out_meta(v, id + " = " + text + "\n")
+    ret id
+end
+
+// di_escape
+func di_escape(sx: str): str:
+    n := str.Len(sx)
+    mut b := co.SbNew()
+    mut i := 0
+    until i < n:
+        c := byte_at(sx, i)
+        if c == 92 || c == 34:
+            co.SbPutc(b, 92)
+        end
+        co.SbPutc(b, c)
+        i += 1
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+// di_split_path
+func di_split_path(v &: Lv, path: str):
+    if str.Len(path) == 0:
+        v.src_file = v.module + ".salam"
+        v.src_dir = "."
+        ret
+    end
+    slash := last_byte(path, 47)
+    bs := last_byte(path, 92)
+    mut cut := slash
+    if bs >= 0 && (slash < 0 || bs > slash):
+        cut = bs
+    end
+    if cut >= 0:
+        v.src_file = str.Substr(path, cut + 1, str.Len(path) - cut - 1)
+        v.src_dir = str.Substr(path, 0, cut)
+    else:
+        v.src_file = path
+        v.src_dir = "."
+    end
+end
+
+// ll_debug_init
+func debug_init(v &: Lv, src_path: str):
+    di_split_path(v, src_path)
+    v.di_file = meta_add(
+        v, `!DIFile(filename: "` + di_escape(v.src_file) + `", directory: "` + di_escape(v.src_dir) + `")`
+    )
+    v.di_cu = meta_add(
+        v, "distinct !DICompileUnit(language: DW_LANG_C99, " + "file: " + v.di_file + `, producer: "salam", ` + "isOptimized: false, runtimeVersion: 0, " + "emissionKind: FullDebug)"
+    )
+    types := meta_add(v, "!{null}")
+    v.di_subty = meta_add(v, "!DISubroutineType(types: " + types + ")")
+    v.di_flag_dwarf = meta_add(v, `!{i32 7, !"Dwarf Version", i32 5}`)
+    v.di_flag_debug = meta_add(v, `!{i32 2, !"Debug Info Version", i32 3}`)
+end
+
+// ll_debug_subprogram
+func debug_subprogram(v &: Lv, name: str, line: int): str:
+    sp := meta_add(
+        v, `distinct !DISubprogram(name: "` + name + `", scope: ` + v.di_file + ", file: " + v.di_file + ", line: " + co.I64Toa(line as i64) + ", type: " + v.di_subty + ", scopeLine: " + co.I64Toa(line as i64) + ", spFlags: DISPFlagDefinition, unit: " + v.di_cu + ")"
+    )
+    v.cur_sp = sp
+    ret sp
+end
+
+// ll_debug_location - "" when there is no current subprogram (C NULL).
+func debug_location(v &: Lv, line: int, col: int): str:
+    if str.Len(v.cur_sp) == 0:
+        ret ""
+    end
+    ret meta_add(
+        v, "!DILocation(line: " + co.I64Toa(line as i64) + ", column: " + co.I64Toa(col as i64) + ", scope: " + v.cur_sp + ")"
+    )
+end
+
+// ll_debug_finalize
+func debug_finalize(v &: Lv):
+    if !v.debug:
+        ret
+    end
+    out_g(v, "\n")
+    out_g(
+        v, "!llvm.module.flags = !{" + v.di_flag_dwarf + ", " + v.di_flag_debug + "}\n"
+    )
+    out_g(v, "!llvm.dbg.cu = !{" + v.di_cu + "}\n")
+    out_g(v, co.SbCstr(v.bmeta))
+end
+
+// ===========================================================================
+// >>> STAGE B INSERTION POINT - replace the three stubs below IN PLACE and
+// >>> add the rest of codegen_llvm_expr.c / codegen_llvm_stmt.c here as new
+// >>> private functions (ll_binary -> lv_binary, ll_addr_of -> lv_addr_of,
+// >>> ll_index_set, ll_match_arm_cond, ll_call*, ll_literal, ll_struct_lit,
+// >>> ll_array_lit, ll_slice_expr, ll_lambda_value, ll_match_expr,
+// >>> ll_lower_print, ...). Everything ABOVE this banner is stage A and
+// >>> must not be re-ported (incl. emit_defers/emit_return/emit_lambda and
+// >>> all of the debug slice). Loop-stack protocol: on loop entry, if
+// >>> v.brk.len() == v.nloop push, else v.brk.set(v.nloop, ...); same for
+// >>> v.cont; then v.nloop += 1 (the C wrote brk[nloop] in place).
+// ===========================================================================

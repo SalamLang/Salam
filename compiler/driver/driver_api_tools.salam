@@ -1,0 +1,309 @@
+package driver
+
+import os
+import io
+import str
+import tok "../token.salam"
+import lg "../logger.salam"
+import at "../ast.salam"
+import lp "../langpack.salam"
+import lx "../lexer/lexer.salam"
+import ps "../parser/parser.salam"
+import cc "../condcomp.salam"
+import sm "../semantic/semantic.salam"
+import co "../sal_core.salam"
+
+    pub func MaterializeSysroot(name: str, tar: str, out &: str): bool:
+        if str.Len(tar) < 512:
+            ret false
+        end
+        out = cache_root() + "/salam/sysroots/" + name + "_" + co.I64Toa(str.Len(tar) as i64)
+        marker := out + "/.salam-ok"
+        if os.Exists(marker):
+            ret true
+        end
+        if os.MkdirAll(out) != 0:
+            ret false
+        end
+        if !untar(tar, out):
+            ret false
+        end
+        _w := os.WriteFile(marker, "ok\n")
+        ret true
+    end
+
+    // ===== driver/debug_cmd.c (stage 8b, NEW) =====
+
+    // driver_debug (`salam debug`) - build with debug info (+SALAM_SAFE if not
+    // already safe), then launch the platform debugger attached to the
+    // resulting binary. PORT-NOTE: the C compares the raw `system()` return
+    // against 127 (its "command not found" convention) and against 0 with NO
+    // WEXITSTATUS-style unpacking anywhere in this function - on POSIX,
+    // system()'s return is actually a packed wait-status, so the `== 127`
+    // branch is latent dead code upstream too (a real "not found" exit packs
+    // as 127<<8, not 127) while `== 0` still works (a 0 exit packs as literal
+    // 0). Ported bit-for-bit, warts included, rather than silently
+    // "correcting" behavior HEAD itself doesn't have.
+    pub func Debug(opt &: Dr): int:
+        if opt.inputs.len() == 0:
+            io.EPrintln("salam debug: no input file")
+            ret 2
+        end
+        opt.debug_info = true
+        if !opt.safe:
+            opt.safe = true
+            opt.defines.push("SALAM_SAFE")
+        end
+        opt.command = CMD_BUILD
+        mut exe := opt.output
+        if str.Len(exe) == 0:
+            exe = module_of(opt.inputs.get(0)[0]) + ".exe"
+            opt.output = exe
+        end
+        rc := build_impl(opt)
+        if rc != 0:
+            ret rc
+        end
+        target := str.Len(opt.exe_path) > 0 ? opt.exe_path : exe
+
+        dbg := debug_tool_name()
+        mut cmd := ""
+        if SALAM_OS_MAC:
+            cmd = dbg + " -o 'breakpoint set --name main' -o 'run' -- " + shell_arg(target)
+            print "\nsalam: launching " + dbg + "\n"
+            print "  (lldb) breakpoint set --name main  -> already set\n"
+            print "  (lldb) next / step                 -> step over / into\n"
+            print "  (lldb) frame variable <var>        -> inspect a variable\n"
+            print "  (lldb) source list                 -> show Salam source (via #line)\n"
+            print "  (lldb) continue / quit              -> resume / exit\n\n"
+        else SALAM_OS_WINDOWS:
+            cmd = dbg + " " + shell_arg(target)
+            print "\nsalam: launching " + dbg + "\n"
+            print "  Tip: (gdb) break main   -> set a breakpoint\n"
+            print "       (gdb) run          -> start the program\n"
+            print "       (gdb) next / step  -> step over / into\n"
+            print "       (gdb) print <var>  -> inspect a variable\n\n"
+        else:
+            cmd = dbg + " -ex 'break main' -ex 'run' " + shell_arg(target)
+            print "\nsalam: launching " + dbg + "\n"
+            print "  (gdb) break main  -> already set\n"
+            print "  (gdb) next / step -> step over / into\n"
+            print "  (gdb) print <var> -> inspect a variable\n"
+            print "  (gdb) list        -> show Salam source (via #line)\n\n"
+        end
+        rc2 := system(cmd)
+        if rc2 == 127:
+            io.EPrintln("salam debug: '" + dbg + "' not found in PATH.")
+            io.EPrintln("  Linux:  sudo apt-get install gdb      (or: sudo apt-get install lldb)")
+            io.EPrintln("  macOS:  xcode-select --install         (ships lldb)")
+            io.EPrintln("          or: brew install llvm           (provides a newer lldb)")
+            io.EPrintln("  Win:    pacman -S mingw-w64-x86_64-gdb (MSYS2)")
+            ret 3
+        end
+        ret rc2 == 0 ? 0 : 1
+    end
+
+    // driver_memcheck (`salam memcheck`) - build with ASan + debug info, then
+    // run under Valgrind (POSIX, if available) or just the ASan binary
+    // (Windows, or POSIX without valgrind on PATH). Same raw-system()-return
+    // fidelity note as Debug() above (the `==0` checks are unaffected by the
+    // packed-wait-status subtlety; only an `==127`-style check would be).
+    pub func Memcheck(opt &: Dr): int:
+        if opt.inputs.len() == 0:
+            io.EPrintln("salam memcheck: no input file")
+            ret 2
+        end
+        if str.Contains(opt.cc, "tcc"):
+            io.EPrintln("salam memcheck: tcc does not support AddressSanitizer.")
+            io.EPrintln("  Use --cc=gcc or --cc=clang:")
+            io.EPrintln("    salam memcheck " + opt.inputs.get(0)[0] + " --cc=gcc")
+            ret 2
+        end
+        opt.debug_info = true
+        opt.asan = true
+        if !opt.safe:
+            opt.safe = true
+            opt.defines.push("SALAM_SAFE")
+        end
+        opt.command = CMD_BUILD
+        mut exe := opt.output
+        if str.Len(exe) == 0:
+            exe = module_of(opt.inputs.get(0)[0]) + ".exe"
+            opt.output = exe
+        end
+        println "salam memcheck: building with AddressSanitizer + debug symbols..."
+        rc := build_impl(opt)
+        if rc != 0:
+            ret rc
+        end
+        target := str.Len(opt.exe_path) > 0 ? opt.exe_path : exe
+        mut cmd := ""
+        if SALAM_OS_WINDOWS:
+            println "salam memcheck: Valgrind is not available on Windows."
+            print "  Running binary with ASAN error reporting...\n\n"
+            cmd = shell_arg(target)
+        else:
+            vrc := system("valgrind --version > /dev/null 2>&1")
+            if vrc == 0:
+                print "salam memcheck: running under Valgrind...\n\n"
+                cmd = "valgrind --leak-check=full --track-origins=yes --show-leak-kinds=all " + "--error-exitcode=1 " + shell_arg(target)
+            else:
+                println "salam memcheck: valgrind not found; running with ASAN error reporting."
+                print "  (Install: sudo apt-get install valgrind)\n\n"
+                cmd = shell_arg(target)
+            end
+        end
+        rc2 := system(cmd)
+        if rc2 == 0:
+            println "\nsalam memcheck: no memory errors detected."
+        else:
+            io.EPrintln(
+                "\nsalam memcheck: errors detected (exit " + co.I64Toa(rc2 as i64) + "). Review the output above."
+            )
+        end
+        ret rc2 == 0 ? 0 : 1
+    end
+
+    // ===== driver/repl.c (stage 8b, NEW - see the private section's fidelity
+    // note above repl_readline for the one deliberate simplification) =====
+
+    // driver_repl (`salam repl` / `salam repl layout`, CMD_REPL / CMD_REPL_LAYOUT
+    // share this one entry point exactly like the C).
+    pub func Repl(opt &: Dr): int:
+        lgr := lg.New(opt.log_level, resolve_color(opt.color))
+        pack := lp.Load(opt.lang)
+        if pack == lp.LP_NONE:
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, "unknown language pack '" + opt.lang + "'")
+            ret 2
+        end
+        mut which := "general"
+        if opt.command == CMD_REPL_LAYOUT:
+            which = "layout"
+        end
+        println "Salam " + which + " REPL (lang=" + opt.lang + "). ':help' for commands."
+
+        mut session := ""
+        mut has_main := false
+        mut cc_bin := opt.cc
+        if str.Len(cc_bin) == 0:
+            cc_bin = "tcc"
+        end
+
+        until true:
+            mut eof := false
+            line := repl_readline("salam> ", eof)
+            if eof:
+                break
+            end
+            if str.Len(line) == 0:
+                continue
+            end
+            if str.Equals(line, ":quit") || str.Equals(line, ":q") || str.Equals(line, "quit") || str.Equals(line, "exit") || str.Equals(line, "q"):
+                break
+            end
+
+            if str.Equals(line, ":help"):
+                if opt.command == CMD_REPL_LAYOUT:
+                    print "Layout REPL commands:\n" + "  :clear  erase accumulated session\n" + "  :defs   show current session\n" + "  :quit   exit  (also: :q  quit  exit  q  Ctrl-D)\n" + "\nType a 'layout: ... end' block to render HTML inline.\n" + "Blocks can span multiple lines - the REPL waits until every\n" + "':' opener has a matching 'end' (always lowercase) before running.\n" + "\nRoot-level attributes: title, lang, dir\n" + "Common elements:  box  heading  p  link  image  input  button\n" + "Element attrs:    content  color  background  font-size  ...\n" + "\nExample:\n" + `  layout: title = "Hi" box: heading: size = 1 content = "Hello" ` + "end end end\n"
+                else:
+                    print "Commands:\n" + "  :run    compile + run the session (requires func main:)\n" + "  :clear  erase all accumulated definitions\n" + "  :defs   print current session\n" + "  :quit   exit  (also: :q  quit  exit  q  Ctrl-D)\n" + "\nTop-level defs (func/struct/enum/type) are accumulated.\n" + "Statements are wrapped in func main: and executed immediately.\n" + "Any block opened with ':' waits for a matching 'end' (lowercase).\n"
+                end
+                continue
+            end
+            if str.Equals(line, ":clear"):
+                session = ""
+                has_main = false
+                println "session cleared."
+                continue
+            end
+            if str.Equals(line, ":defs"):
+                if str.Len(session) > 0:
+                    println session
+                else:
+                    println "(empty)"
+                end
+                continue
+            end
+            if str.Equals(line, ":run") || repl_wants_run(line):
+                if opt.command == CMD_REPL_LAYOUT:
+                    println "layout REPL: type 'layout: ... end' blocks to render HTML."
+                else !has_main:
+                    println "no func main defined - define one, or type a statement."
+                else:
+                    _ok := repl_exec(session, cc_bin, pack, opt)
+                end
+                continue
+            end
+
+            mut block := line + "\n"
+            until repl_block_depth(pack, block) > 0:
+                mut eof2 := false
+                cont := repl_readline("  ... ", eof2)
+                if eof2:
+                    break
+                end
+                block += cont + "\n"
+            end
+            first := repl_ltrim(line)
+
+            if opt.command == CMD_REPL_LAYOUT:
+                mut after_ok := str.Len(first) == 6
+                if !after_ok && str.Len(first) > 6:
+                    nc := byte_at(first, 6)
+                    after_ok = nc == 58 || nc == 32 || nc == 9 // ':' ' ' '\t'
+                end
+                if str.StartsWith(first, "layout") && after_ok:
+                    repl_layout_exec(block, pack, opt)
+                else:
+                    io.EPrintln("error: layout REPL only accepts 'layout: ... end' blocks")
+                end
+                continue
+            end
+
+            if repl_is_def(first):
+                test := session + block
+                mut vl := lg.New(lg.LOG_ERROR, resolve_color(opt.color))
+                vsf := repl_source(test)
+                lg.SetDiagSource(vl, vsf.text, vsf.len, opt.diag_style, opt.diag_format)
+                mut vtoks := tok.StreamNew("<repl>")
+                mut vok := lx.Run(vl, pack, vsf, vtoks)
+                mut va := at.NewAst()
+                mut vprog := 0
+                if vok:
+                    vok = ps.Run(vl, vtoks, va, vprog)
+                end
+                tok.StreamFree(vtoks)
+                vtable := cc.TableBuild("", opt.defines)
+                if vok:
+                    vok = cc.PruneProgram(va, vl, vsf.path, vtable, vprog)
+                end
+                mut vs := sm.New(vl, vsf.path, lp.Code(pack))
+                sm.SetCc(vs, vtable)
+                mut vsok := false
+                if vok:
+                    vsok = sm.Run(vs, va, vprog)
+                end
+                sm.Free(vs)
+                at.FreeAst(va)
+                if vok && vsok:
+                    session += block
+                    if str.StartsWith(first, "func main"):
+                        has_main = true
+                        println "defined. ':run' to execute."
+                    else:
+                        println "defined."
+                    end
+                end
+                continue
+            end
+
+            if has_main:
+                println "func main is defined - ':run' to execute, ':clear' to reset."
+            else:
+                full := session + "\nfunc main:\n" + block + "end\n"
+                _ok3 := repl_exec(full, cc_bin, pack, opt)
+            end
+        end
+        println "bye."
+        ret 0
+    end

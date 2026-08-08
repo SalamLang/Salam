@@ -1,0 +1,96 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Flat merge of the salam/lexer port (see salam/PORTING.md "Layout - FLAT"):
+// lexer.c + lexer.h + lexer_internal.h + lexer_char.c + lexer_cursor.c +
+// lexer_detect.c + lexer_escape.c + lexer_ident.c + lexer_layout.c +
+// lexer_number.c + lexer_operator.c + lexer_string.c + lexer_trivia.c - // one package `lexer`, one file. Import alias for consumers: `lx`.
+//
+// C differences (per salam/PORTING.md):
+// - lx_t -> struct Lx (private). The arena is gone (str owns its bytes), the
+//   logger_t* is a value logger.Logger field, langpack_t* is the int handle
+//   from langpack.salam, and the token_stream_t* out-pointer is a
+//   Vector<tok.Token> owned by Lx, moved into the caller's TokenStream when
+//   lexing finishes.
+// - lexer_run/lexer_run_ex -> Run/RunEx: fill a caller-provided
+//   tok.TokenStream (made with tok.StreamNew) and return `false` when any
+//   lexical error was reported, exactly like the C bool.
+// - langpack_marker_code -> MarkerCode returns "" where the C returns NULL.
+// - langpack_detect -> Detect returns a langpack handle int (lp.LP_*).
+// - All character scanning is done on byte codes 0..255 (int); Salam str is
+//   NUL-terminated like the C buffer, so `byte_at(s, len) == 0` reproduces
+//   the C sentinel reads.
+// - lx_adv is split into adv() (void) and advc() (returns the byte) so no
+//   call site discards a return value.
+// - lx_expect/lx_consume_hex drop their (never used) return values.
+// - lx_utf8_encode appends to a StringBuilder (utf8_append) instead of
+//   filling a char[4]; `(char)` truncation is preserved by BufAppendChar's
+//   `as i8` store.
+// - Number decode uses str's `.to_float()`, which compiles to
+//   strtod(s, NULL) - the exact C call.
+// - Errors go through logger.LogAt (plain rendering, like the current
+//   logger port) with the message translated by i18n.Tr, mirroring
+//   LOG_E_AT(..., "%s", i18n_tr(msg)).
+package lexer
+
+import tok "../token.salam"
+import lg "../logger.salam"
+import lp "../langpack.salam"
+import co "../sal_core.salam"
+
+// ===== lexer_internal.h =====
+// lx_layout_sub_t
+const LX_SUB_NAME := 0
+const LX_SUB_VALUE := 1
+
+// enum { LX_ESC_HEX_X = 2, LX_ESC_HEX_U = 4, LX_ESC_HEX_BIG_U = 8 }
+const LX_ESC_HEX_X := 2
+const LX_ESC_HEX_U := 4
+const LX_ESC_HEX_BIG_U := 8
+
+// ===== lexer_detect.c =====
+// Marker byte sequences (static const char[] in C, byte-for-byte).
+k_lx_fa_tag := "\xd8\xb2\xd8\xa8\xd8\xa7\xd9\x86" // "زبان" (8 bytes)
+k_lx_ar_tag := "\xd9\x84\xd8\xba\xd8\xa9" // "لغة" (6 bytes)
+k_lx_fa_val := "\xd9\x81\xd8\xa7\xd8\xb1\xd8\xb3\xdb\x8c" // "فارسی" (10 bytes)
+k_lx_en_val := "\xd8\xa7\xd9\x86\xda\xaf\xd9\x84\xdb\x8c\xd8\xb3\xdb\x8c" // "انگلیسی" (14 bytes)
+k_lx_ar_val := "\xd8\xa7\xd9\x84\xd8\xb9\xd8\xb1\xd8\xa8\xd9\x8a\xd8\xa9" // "العربية" (14 bytes)
+
+// ===== lexer_internal.h =====
+// lx_t
+struct Lx:
+    pub s: str = "" // source text (L->s)
+    pub n: int = 0 // byte length (L->n)
+    pub pos: int = 0
+    pub line: int = 1
+    pub col: int = 1
+    pub file: str = ""
+    pub group_depth: int = 0
+    pub last: int = 0 // token_kind_t last (TK_EOF)
+    pub has_last: bool = false
+    pub had_error: bool = false
+    pub keep_comments: bool = false
+    pub layout_mode: bool = false
+    pub layout_depth: int = 0
+    pub layout_sub: int = 0 // LX_SUB_NAME
+    pub comp_header: bool = false
+    pub lgr: lg.Logger = lg.New(2, false) // replaced in RunEx
+    pub pack: int = 0 // langpack handle (lp.LP_*)
+    pub toks: Vector<tok.Token> = Vector {}
+end
+
+// ---------------------------------------------------------------------------
+// Byte access (Salam str is NUL-terminated, like the C buffer).
+// ---------------------------------------------------------------------------
+inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end

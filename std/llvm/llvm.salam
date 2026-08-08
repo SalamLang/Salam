@@ -32,19 +32,71 @@ package llvm
 // did). So `static` below really does request a static link, all the way
 // through - this is NOT a placeholder.
 //
-// TODO(build-pipeline): what remains a real gap is that "LLVM" alone
-// assumes a single monolithic static libLLVM.a exists on the link path.
-// That's true on some distros/vcpkg setups but not guaranteed in general -
-// LLVM's static archives are actually a large, version-dependent component
-// graph (LLVMCore.a, LLVMTarget.a, ...), which the C build instead
-// resolves by shelling out to `llvm-config --libs $(COMPONENTS)` at build
-// time (c/Makefile:97-135), not by naming every archive in source. A
-// self-host build pipeline (not yet written) would need to either locate a
-// monolithic static libLLVM.a, or extend this file with one `link static
-// "LLVM<X>"` line per component `llvm-config --libs all` resolves - and
-// (on Windows) still needs c/src/llvm/win_lld_demangle_shim.S's __imp_
-// aliases for liblld*.a's dllimport-style demangler/libxml2 refs.
-link static "LLVM"
+// RESOLVED (was TODO(build-pipeline)): naming "LLVM" alone assumed one
+// monolithic static libLLVM.a on the link path. That is not guaranteed -
+// LLVM ships a large, version-dependent component graph (LLVMCore.a,
+// LLVMTarget.a, ...) that the C build resolves by shelling out to
+// `llvm-config --libs $(COMPONENTS)` at build time, something a .salam
+// source file cannot do.
+//
+// `make -C c libsalam-llvm` now merges that whole graph - every archive
+// `llvm-config --libs all` resolves (207 of them on LLVM 22), the six lld
+// component archives, salam's own llvm_native.o/lld_link.o shims, and on
+// Windows win_lld_demangle_shim.o's __imp_ aliases - into a single
+// libsalam_llvm.a. So one name suffices here, and lld.salam no longer
+// names its six archives separately.
+//
+// The system libraries below are deliberately NOT merged: they belong to
+// the host, not to LLVM, and `llvm-config --link-static --system-libs`
+// reports them per platform. Keep this list in step with that output.
+link static "salam_llvm"
+
+// LLVM and LLD are C++; their archives reference the C++ runtime, so it has
+// to be linked too - and *after* libsalam_llvm.a, since a static link only
+// resolves a symbol from an archive it has not already scanned past. The
+// declaration order here is the link order.
+if SALAM_OS_WINDOWS:
+    link dynamic "psapi"
+    link dynamic "shell32"
+    link dynamic "ole32"
+    link dynamic "uuid"
+    link dynamic "advapi32"
+    link dynamic "ws2_32"
+    link dynamic "ntdll"
+    link static "z"
+    link static "zstd"
+    link static "xml2"
+    link static "iconv"
+    link dynamic "bcrypt"
+    link static "stdc++"
+    link static "gcc_eh"
+    // LLVM/LLD use std::mutex and friends, which mingw's libstdc++ threading
+    // layer implements on top of winpthreads.
+    link static "pthread"
+else:
+    link dynamic "pthread"
+    link dynamic "dl"
+    link dynamic "m"
+    link static "z"
+    link static "zstd"
+    // libLLVMWindowsManifest.a is part of `llvm-config --libs all` on EVERY
+    // host, not just Windows, and the apt.llvm.org builds compile it with
+    // LLVM_ENABLE_LIBXML2=ON - so WindowsManifestMerger.cpp.o inside
+    // libsalam_llvm.a references xmlNewDoc/xmlFree/... on Linux too, and the
+    // self-host bootstrap failed to link without this. `llvm-config
+    // --link-static --system-libs` lists it (`-lz -lzstd -lxml2`) for exactly
+    // this reason; the C build picks it up from there automatically, and this
+    // is the same entry for the Salam side.
+    //
+    // dynamic, unlike the Windows branch's `link static "xml2"`: a static
+    // libxml2.a drags in zlib and liblzma symbols that would have to be
+    // resolved by archives listed AFTER it, and liblzma-dev is not something
+    // to make a build dependency. libxml2.so.2 is present on every mainstream
+    // Linux and carries its own DT_NEEDED, which is also how upstream LLVM's
+    // own tools link it.
+    link dynamic "xml2"
+    link static "stdc++"
+end
 
 // Imports are package-wide once declared in any one file of a merged
 // package (see std/ssl/ssl.salam vs its sibling files) - declared here
@@ -103,6 +155,10 @@ pub struct Options:
     pub link_libs: Vector<str> = Vector {}
     pub link_kinds: Vector<str> = Vector {}
     pub sysroot: str = ""
+    // Extra `-L` directories, searched ahead of the sysroot's own. Lets a
+    // caller link against an archive that is not installed yet - the C
+    // driver's --libpath=DIR maps straight onto this.
+    pub lib_paths: Vector<str> = Vector {}
 end
 
 // llvm_output_t.

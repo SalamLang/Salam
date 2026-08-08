@@ -1,0 +1,519 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Flat merge of the salam/llvm port (see salam/PORTING.md "Layout - FLAT"):
+// compiler/src/llvm/ - one package `llvm`, one file. Import alias for
+// consumers: `lv`. The backend's expr/stmt emitters are mutually recursive
+// with everything else, so the module is ported by three sequential agents
+// INTO THIS ONE FILE:
+//
+//   A (DONE): codegen_llvm_internal.h (ll_t state + inline helpers),
+//       codegen_llvm_emit.c (emit context, string constants, locals),
+//       codegen_llvm_type.c (LLVM type strings, layouts, symbol lookups,
+//       conversions), codegen_llvm_decl.c (struct types, mangling,
+//       function/lambda frames, vtables, variant boxing, globals, externs,
+//       package touch), codegen_llvm.c (datalayout/prologue/on-demand
+//       runtime helpers/toplevel/run), PLUS two slices other stages must
+//       NOT re-port: ll_emit_defers + ll_emit_return from
+//       codegen_llvm_stmt.c (the function frame needs them) and ALL of
+//       codegen_llvm_debug.c (run/function frames call the DI hooks).
+//   B (DONE): codegen_llvm_expr.c and the REST of codegen_llvm_stmt.c
+//       (ll_stmt/ll_block/ll_block_top and every static in both files:
+//       ll_binary, ll_addr_of, ll_index_set, ll_match_arm_cond, ll_call*,
+//       ll_lower_print, ll_literal, ll_struct_lit, ...). Replace the three
+//       stubs at the marked insertion banner IN PLACE (lv_expr,
+//       lv_block_top, lv_stmt) and add the remaining functions as new
+//       privates in the same section. Do NOT re-port emit_defers,
+//       emit_return, emit_lambda, box_dyn/box_variant/unwrap_variant,
+//       conv/as_i1/common_ts, pick_overload, strconst, local_* - stage A
+//       owns them.
+//   C (DONE): native toolchain glue, replacing the NativeAvailable/NativeRun
+//       stubs. CORRECTION (2026-08): this banner previously claimed
+//       llvm_native.c's `#ifdef SALAM_HAVE_LLVM` body was "unreachable in
+//       every build this repo ships" - false. CI's flagship release builds
+//       (see .github/workflows/compiler-release.yml) build the C compiler
+//       with WITH_LLVM=1 WITH_LLD=1 LLVM_LINK_STATIC=1, statically linking
+//       real LLVM-C + in-process LLD; only the default/dev build omits it.
+//       That surface (~48 LLVM-C functions incl. the full ORC/LLJIT API,
+//       plus native_link_elf/native_link_mingw's in-process LLD linking) IS
+//       now ported, as its own reusable package: std/llvm/ (9 files -
+//       core/target/passes/emit/orc/lld/linker + the llvm.salam/run.salam
+//       entry points), not inline here, so any Salam program can drive
+//       static LLVM/LLD, not just this compiler. It is deliberately NOT
+//       imported by NativeRun below yet: doing so would add std/llvm's
+//       `link static "LLVM"`/`link static "lldELF"`/etc directives to every
+//       self-host build unconditionally (condcomp.salam's flag set is a fixed list of
+//       20 OS/arch bools - there is no user-definable flag to gate an
+//       opt-in the way the C's WITH_LLVM does), which would break any build
+//       or CI job where those static libraries aren't installed. Wiring
+//       NativeRun to prefer std/llvm when linked in - and adding whatever
+//       condcomp/build-flag mechanism makes that opt-in safe - is future
+//       work alongside the self-host static-link build pipeline itself
+//       (std/llvm/llvm.salam has its own TODO(build-pipeline) marker).
+//       Meanwhile NativeRun below still ports `salam_llvm_toolchain` - the
+//       always-available fallback that shells out to `clang`/`opt`/`lli`
+//       directly on the .ll text via a generated bash script (its
+//       LLVM_OUT_EXEC case IS the observed `clang *.ll -lm -o <exe>`
+//       convention, and its LLVM_OUT_ASM/OBJ/BITCODE/JIT/IR cases are
+//       ported too). So NativeRun ports `salam_llvm_toolchain` +
+//       `emit_tool_cmd` (private `nt_*` helpers below), and NativeAvailable
+//       becomes a real "is a clang toolchain reachable" probe (bundled
+//       tool via sm.FindBundledTool, else a PATH `--version` check) instead
+//       of the C's compile-time `#ifdef` - matching what NativeAvailable is
+//       actually FOR in this port (gating whether NativeRun can do
+//       anything). A new pub `NativeBuildScript(ll_path, opts): str` exposes
+//       the generated script text so llvm_test.salam can assert the exact
+//       command line NativeRun would run without requiring a real
+//       toolchain. `nt_to_tool_path`'s Windows branch (drive-letter ->
+//       `/mnt/x` for `wsl.exe -e bash`) skips the C's `_fullpath`
+//       resolve-to-absolute step (no equivalent Salam stdlib call) - a
+//       relative path is passed through unresolved; harmless here since
+//       every caller in this port already supplies a resolved-enough path
+//       and the branch is compile-time-pruned out entirely on the
+//       Linux/WSL builds this port is verified against (SALAM_OS_WINDOWS
+//       false), same as `target_is_windows_of`'s pre-existing host-OS
+//       fallback a few hundred lines up. llvm_native.c's own
+//       `native_link_elf`/`native_link_mingw` in-process-lld path is now
+//       ported too, as std/llvm/linker.salam's LinkElf/LinkMingw/LinkAuto -
+//       see the CORRECTION above; lld_link.cc itself stays exactly as-is
+//       (unported, unmodified), since it's already the minimal C-ABI shim
+//       over LLD's C++ driver headers that std/llvm/lld.salam's `extern:`
+//       declarations bind straight to.
+//
+// C -> Salam decisions for this module (B/C must inherit these):
+// - ll_t -> `pub struct Lv` (all fields pub - E017). sema_result_t *sem is
+//   NOT stored: thread `s &: sm.Sema` and `a &: at.Ast` through every
+//   function that needs them; parameter order is (v, s, a, ...), exactly
+//   like the codegen port's (g, s, a, ...).
+// - arena_t* and ll_fmt(...) are GONE: strings are values; call sites build
+//   text with `+` / co.I64Toa / co.U64Toa. NO co.Format in this module - //   IR text must be byte-exact, so everything is explicit concatenation.
+// - "" is the C NULL for every str field/return (ts, ret_ts, this_ref,
+//   self_ts, cur_sp, cur_dbg, first_error, triple, env_ref, ...); 0 is the
+//   C NULL for every id (NodeId/SymId/SigId/ScopeId); local_find /
+//   global_find return an INDEX into v.locals / v.globals, -1 = C NULL.
+// - sb_t *g/b/allocas/hg/meta -> five str.StringBuilder fields bg (module
+//   text), bb (current function body), ba (current allocas), bhg
+//   (on-demand helpers), bmeta (debug metadata). The C pointer swap
+//   `ll->b = &body` becomes: in_fn=true selects bb for out_b()/emit();
+//   emit_function/emit_lambda SAVE the builder HEADERS (StringBuilder is a
+//   {data,len,cap} value), install fresh builders, and restore after
+//   appending header+entry+allocas+body to bg - byte-identical nesting
+//   (inner ensure_fn'd functions land in bg before their caller, like C).
+//   NEVER alias two live builders; only header save/restore is safe.
+// - Value numbering: v.tmp -> "%t<N>" (new_tmp), v.lbl -> "L<N>_<tag>"
+//   (new_lbl), both reset to 0 per function/lambda and saved/restored
+//   around nested emission. conv() allocates its tmp AT THE SAME POINT the
+//   C does (after the dyn-box check, before the int/int fast path), so
+//   numbering matches even when the tmp goes unused.
+// - String constants: v.strings is a Vector<LvStr> {bytes,len,hash,gref};
+//   dedup by FNV-1 hash (the C's exact constants, incl. the truncated
+//   0x14650FB0739D0383 offset basis) + length + bytes; gref = "@.str.<i>".
+// - const char *brk[64]/cont[64] -> Vector<str> brk/cont + nloop. B's loop
+//   protocol: on loop entry, if v.brk.len() == v.nloop push, else set
+//   (v.nloop indexes; slots are reused exactly like the C array); the
+//   64-deep clamp ("loop nesting too deep") stays.
+// - bool hneed[LL_H_COUNT] -> Vector<bool> seeded by new_lv0(); the
+//   LL_HELPER_EMIT function-pointer table is an if/else chain in need().
+// - ll_t.ok/first_error replace the C error protocol unchanged; lv_error
+//   clamps the message at 255 bytes (the C's vsnprintf buf[256]).
+// - Host-dependent defaults (ll_datalayout(NULL), ll_target_ptr_bits(NULL),
+//   ll_target_is_windows(NULL)) use compile-time SALAM_ARCH_*/SALAM_OS_*
+//   conditionals mirroring the C's #if chains.
+// - codegen_llvm.h's codegen_llvm_options_t -> pub struct Options
+//   (OptionsDefault() = codegen_llvm_options_default; the C NULL opts ==
+//   OptionsDefault()). llvm_output_t -> pub struct Output (field `module`
+//   -> module_name like the codegen port; `error` keeps its name).
+//   link_libs/link_kinds (const char *const * + nlink) -> Vector<str> x2 +
+//   nlink, consumed by stage C.
+// - salam_module_single_threaded comes from the codegen port
+//   (cg.ModuleSingleThreaded), mirroring the C #include "codegen/codegen.h".
+//
+// Named `llvmgen`, in both package AND filename, to coexist with std/llvm.
+// Two separate clashes had to be resolved before NativeRun could import it:
+//
+//  - Package: std/llvm is also `package llvm`, and two packages cannot
+//    share a name - sema binds both to one symbol, so whichever loses is
+//    silently unreachable ("package function 'LldAvailable' not found").
+//  - Filename: a .salam file's generated C module is keyed by *filename*,
+//    not package, so `compiler/llvm.salam` and `std/llvm/llvm.salam` both
+//    produced salam_mod_llvm.c and silently clobbered each other, leaving
+//    this module's types undeclared at their use sites ("unknown type
+//    size" from tcc, in a translation unit that had never seen the struct).
+//
+// Every importer aliases this module (`import lv "llvmgen.salam"`), so both
+// names are internal and renaming them costs nothing.
+package llvmgen
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+
+// ===== codegen_llvm.h =====
+// llvm_opt_level_t - order and values MUST stay identical to the C enum.
+pub const LV_OPT_O0 := 0
+pub const LV_OPT_O1 := 1
+pub const LV_OPT_O2 := 2
+pub const LV_OPT_O3 := 3
+pub const LV_OPT_OS := 4
+pub const LV_OPT_OZ := 5
+
+// llvm_output_mode_t
+pub const LV_OUT_IR := 0
+pub const LV_OUT_ASM := 1
+pub const LV_OUT_OBJ := 2
+pub const LV_OUT_BITCODE := 3
+pub const LV_OUT_EXEC := 4
+pub const LV_OUT_JIT := 5
+
+// ===== codegen_llvm_internal.h =====
+// ll_helper_t
+pub const LV_H_SUBSTR := 0
+pub const LV_H_STRCAT := 1
+pub const LV_H_ISWS := 2
+pub const LV_H_TRIM := 3
+pub const LV_H_STRHASH := 4
+pub const LV_H_INTHASH := 5
+pub const LV_H_I64STR := 6
+pub const LV_H_U64STR := 7
+pub const LV_H_F64STR := 8
+pub const LV_H_CHARSTR := 9
+pub const LV_H_OUTBUF := 10
+pub const LV_H_REPEAT := 11
+pub const LV_H_UPPER := 12
+pub const LV_H_LOWER := 13
+pub const LV_H_COUNT := 14
+
+// ll_target_ptr_bits' w64[]/w16[]/w32[] (codegen_llvm_type.c), order kept.
+k_lv_w64 := [
+    "x86_64", "amd64", "aarch64", "arm64", "riscv64", "wasm64", "powerpc64", "ppc64", "mips64", "sparc64",
+    "s390x", "loongarch64"
+] as str[12]
+
+// Real LLVM backends with a 16-bit pointer datalayout (p:16). Checked before
+// w32 so "avr"/"msp430" triples don't fall into a generic bucket.
+k_lv_w16 := ["msp430", "avr"] as str[2]
+
+k_lv_w32 := [
+    "i386", "i486", "i586", "i686", "wasm32", "armv6", "armv7", "armv5", "thumb", "mipsel", "mips", "riscv32",
+    "powerpc", "ppc", "arm"
+] as str[15]
+
+// ll_is_int's ints[] / ll_is_signed's uns[] (order kept).
+k_lv_ints := [
+    "bool", "char", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "size"
+] as str[11]
+
+k_lv_uns := ["u8", "u16", "u32", "u64", "size"] as str[5]
+
+// ll_extern_seen's prologue[] (codegen_llvm_decl.c), order kept.
+k_lv_prologue_externs := [
+    "printf", "dprintf", "strlen", "strcmp", "malloc", "memcpy", "realloc", "free", "memmove", "abort",
+    "exit", "snprintf", "strtol", "strtod", "strstr", "write"
+] as str[16]
+
+// codegen_llvm_run_opts' rt_essentials[].
+k_lv_rt_essentials := ["salam_panic", "salam_idx"] as str[2]
+
+// ===== codegen_llvm.h =====
+// codegen_llvm_options_t. The C NULL opts pointer == OptionsDefault().
+pub struct Options:
+    pub opt_level: int = 0
+    pub debug_info: bool = false
+    pub verify_module: bool = false
+    pub native_cpu: bool = false
+    pub output_mode: int = 0
+    pub output_file: str = ""
+    pub target_triple: str = ""
+    pub link_libs: Vector<str> = Vector {} // consumed by NativeRun (-l/-framework/etc.)
+    pub link_kinds: Vector<str> = Vector {} // "" | "framework" | "static", parallel to link_libs
+    pub nlink: int = 0
+    pub sysroot: str = ""
+    // Extra `-L` directories from --libpath=DIR, searched ahead of the
+    // sysroot's own. Needed to link against an archive that is not
+    // installed yet - `link static "salam_llvm"` against a libsalam_llvm.a
+    // still sitting in a build tree, say.
+    pub lib_paths: Vector<str> = Vector {}
+end
+
+// llvm_output_t. C field `module` -> module_name (codegen-port convention).
+pub struct Output:
+    pub module_name: str = ""
+    pub ll_src: str = ""
+    pub ok: bool = false
+    pub error: str = ""
+end
+
+// ===== codegen_llvm_internal.h =====
+// llv_t - an emitted value: SSA/constant text + Salam typestring.
+pub struct Llv:
+    pub ref: str = ""
+    pub ts: str = ""
+end
+
+// ll_addr_t - an address: pointer text + pointee typestring.
+pub struct LvAddr:
+    pub ptr: str = ""
+    pub ts: str = ""
+end
+
+// lvar_t - a named local/global slot.
+pub struct LvVar:
+    pub name: str = ""
+    pub ptr: str = ""
+    pub ts: str = ""
+end
+
+// lstr_t - an interned string constant.
+pub struct LvStr:
+    pub bytes: str = ""
+    pub len: int = 0
+    pub hash: u64 = 0 as u64
+    pub gref: str = ""
+end
+
+// ll_t (see the file header for every representation change).
+// Always create through NewLv()/new_lv0() - a bare `Lv {}` lacks hneed.
+pub struct Lv:
+    pub log: lg.Logger = lg.New(2, false)
+    pub module: str = ""
+    pub entry: str = ""
+    pub bg: str.StringBuilder = str.NewBuilder() // sb_t *g
+    pub bb: str.StringBuilder = str.NewBuilder() // sb_t *b (function body)
+    pub ba: str.StringBuilder = str.NewBuilder() // sb_t *allocas
+    pub bhg: str.StringBuilder = str.NewBuilder() // sb_t *hg
+    pub bmeta: str.StringBuilder = str.NewBuilder() // sb_t *meta
+    pub in_fn: bool = false // C: ll->b == &body / ll->allocas != NULL
+    pub tmp: int = 0
+    pub lbl: int = 0
+    pub term: bool = false
+    pub locals: Vector<LvVar> = Vector {}
+    pub strings: Vector<LvStr> = Vector {}
+    pub ret_ts: str = ""
+    pub is_main: bool = false
+    pub brk: Vector<str> = Vector {} // const char *brk[64] (see header)
+    pub cont: Vector<str> = Vector {} // const char *cont[64]
+    pub nloop: int = 0
+    pub defers: Vector<int> = Vector {} // at.NodeIds of deferred stmts
+    pub self_ts: str = ""
+    pub this_ref: str = ""
+    pub self_byval: bool = false
+    pub globals: Vector<LvVar> = Vector {}
+    pub gdefer: Vector<int> = Vector {} // at.NodeIds of runtime-init decls
+    pub extern_names: Vector<str> = Vector {}
+    pub pkg_scope: int = 0 // sm ScopeId (0 = C NULL)
+    pub emitted: Vector<str> = Vector {}
+    pub pkg_touched: Vector<int> = Vector {} // sm SymIds
+    pub cur_lambda: int = 0 // at.NodeId (0 = C NULL)
+    pub env_ref: str = ""
+    pub env_ty: str = ""
+    pub lam_n: int = 0
+    pub ok: bool = false
+    pub first_error: str = ""
+    pub debug: bool = false
+    pub meta_n: int = 0
+    pub di_file: str = ""
+    pub di_cu: str = ""
+    pub di_subty: str = ""
+    pub cur_sp: str = ""
+    pub cur_dbg: str = ""
+    pub di_flag_dwarf: str = ""
+    pub di_flag_debug: str = ""
+    pub src_file: str = ""
+    pub src_dir: str = ""
+    pub triple: str = ""
+    pub usize: str = ""
+    pub ptr_bits: int = 0
+    pub optsize: bool = false
+    pub minsize: bool = false
+    pub single_threaded: bool = false
+    pub hneed: Vector<bool> = Vector {}
+    pub match_result_ptr: str = ""
+    pub match_result_ts: str = ""
+    pub match_merge_block: str = ""
+end
+
+// ---------------------------------------------------------------------------
+// Low-level shared helpers (no direct C equivalent).
+// ---------------------------------------------------------------------------
+
+// Unsigned byte read from a str (same idiom as the other ports).
+inline func byte_at(sx: str, i: int): int: ret co.ByteAt(sx, i) end
+
+// isdigit / isalnum on a byte (C default locale: ASCII only).
+func is_digit_b(c: int): bool:
+    ret c >= 48 && c <= 57
+end
+
+func is_alnum_b(c: int): bool:
+    ret (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+end
+
+// isalpha on a byte (used by nt_to_tool_path's drive-letter detection).
+func is_alpha_b(c: int): bool:
+    ret (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+end
+
+// "%02x" / "%02X" of a byte.
+func hex2_lower(c: int): str:
+    d := "0123456789abcdef"
+    ret str.Substr(d, (c / 16) % 16, 1) + str.Substr(d, c % 16, 1)
+end
+
+func hex2_upper(c: int): str:
+    d := "0123456789ABCDEF"
+    ret str.Substr(d, (c / 16) % 16, 1) + str.Substr(d, c % 16, 1)
+end
+
+// First index of byte `want` in sx, -1 if absent (C strchr).
+func idx_byte(sx: str, want: int): int:
+    n := str.Len(sx)
+    mut i := 0
+    until i < n:
+        if byte_at(sx, i) == want:
+            ret i
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+// Last index of byte `want` in sx, -1 if absent (C strrchr).
+func last_byte(sx: str, want: int): int:
+    mut i := str.Len(sx) - 1
+    until i >= 0:
+        if byte_at(sx, i) == want:
+            ret i
+        end
+        i -= 1
+    end
+    ret 0 - 1
+end
+
+// The C's vsnprintf(buf[256], ...) clamp in ll_error.
+func clamp255(msg: str): str:
+    if str.Len(msg) > 255:
+        ret str.Substr(msg, 0, 255)
+    end
+    ret msg
+end
+
+// Builder sinks. out_g = sb_puts(ll->g, ...); out_b = sb_puts(ll->b, ...)
+// (the C b pointer: body inside a function, g at the top level).
+func out_g(v &: Lv, sx: str):
+    co.SbPuts(v.bg, sx)
+end
+
+func out_b(v &: Lv, sx: str):
+    if v.in_fn:
+        co.SbPuts(v.bb, sx)
+    else:
+        co.SbPuts(v.bg, sx)
+    end
+end
+
+func out_hg(v &: Lv, sx: str):
+    co.SbPuts(v.bhg, sx)
+end
+
+func out_meta(v &: Lv, sx: str):
+    co.SbPuts(v.bmeta, sx)
+end
+
+// sb_t *dst = ll->allocas ? ll->allocas : ll->b;
+func out_al(v &: Lv, sx: str):
+    if v.in_fn:
+        co.SbPuts(v.ba, sx)
+    else:
+        out_b(v, sx)
+    end
+end
+
+// Lv construction/teardown (RunOpts' memset + vec_init block).
+func new_lv0(): Lv:
+    mut v := Lv {}
+    v.locals = Vector {} as Vector<LvVar>
+    v.strings = Vector {} as Vector<LvStr>
+    v.brk = Vector {} as Vector<str>
+    v.cont = Vector {} as Vector<str>
+    v.defers = Vector {} as Vector<int>
+    v.globals = Vector {} as Vector<LvVar>
+    v.gdefer = Vector {} as Vector<int>
+    v.extern_names = Vector {} as Vector<str>
+    v.emitted = Vector {} as Vector<str>
+    v.pkg_touched = Vector {} as Vector<int>
+    v.hneed = Vector {} as Vector<bool>
+    repeat LV_H_COUNT with hi:
+        _hi := hi
+        v.hneed.push(false)
+    end
+    ret v
+end
+
+func free_lv(v &: Lv):
+    str.BufFree(v.bg)
+    str.BufFree(v.bb)
+    str.BufFree(v.ba)
+    str.BufFree(v.bhg)
+    str.BufFree(v.bmeta)
+    v.locals.free()
+    v.strings.free()
+    v.brk.free()
+    v.cont.free()
+    v.defers.free()
+    v.globals.free()
+    v.gdefer.free()
+    v.extern_names.free()
+    v.emitted.free()
+    v.pkg_touched.free()
+    v.hneed.free()
+end
+
+// ===== codegen_llvm_internal.h (SAL_INLINE helpers) =====
+
+// ll_is_str
+func is_str(ts: str): bool:
+    ret str.Equals(ts, "str") || str.Equals(ts, "uchar")
+end
+
+// ll_is_bool
+func is_bool(ts: str): bool:
+    ret str.Equals(ts, "bool")
+end
+
+// ll_is_float
+func is_float(ts: str): bool:
+    ret str.Equals(ts, "f32") || str.Equals(ts, "f64")
+end
+
+// ll_is_ptr_ts
+func is_ptr_ts(ts: str): bool:
+    n := str.Len(ts)
+    ret n > 0 && byte_at(ts, n - 1) == 42
+end
+
+// ll_poison
+func poison(ts: str): Llv:
+    mut r := Llv {}
+    r.ref = "0"
+    r.ts = str.Len(ts) > 0 ? ts : "i32"
+    ret r
+end
+
+func make_llv(ref2: str, ts: str): Llv:
+    mut r := Llv {}
+    r.ref = ref2
+    r.ts = ts
+    ret r
+end

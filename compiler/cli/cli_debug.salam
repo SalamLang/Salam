@@ -1,0 +1,141 @@
+package cli
+
+import os
+import io
+import str
+import dr "../driver/driver.salam"
+
+// ---------------------------------------------------------------------------
+// driver/debug_cmd.c's driver_debug/driver_memcheck.
+// ---------------------------------------------------------------------------
+func debug_cmd(opt &: dr.Dr): int:
+    if opt.inputs.len() == 0:
+        io.EPrintln("salam debug: no input file")
+        ret 2
+    end
+    opt.debug_info = true
+    if !opt.safe:
+        opt.safe = true
+        opt.defines.push("SALAM_SAFE")
+    end
+    mut exe := opt.output
+    if str.Len(exe) == 0:
+        exe = path_stem(opt.inputs.get(0)[0]) + ".exe"
+        opt.output = exe
+    end
+    rc := dr.Build(opt)
+    if rc != 0:
+        ret rc
+    end
+    target := str.Len(opt.exe_path) > 0 ? opt.exe_path : exe
+    mut dbg := "gdb"
+    if SALAM_OS_MAC:
+        dbg = "lldb"
+    else:
+        dbg = "gdb"
+    end
+    mut cmd := ""
+    if SALAM_OS_MAC:
+        cmd = dbg + " -o 'breakpoint set --name main' -o 'run' -- " + shell_arg(target)
+        println ""
+        println "salam: launching " + dbg
+        println "  (lldb) breakpoint set --name main  -> already set"
+        println "  (lldb) next / step                 -> step over / into"
+        println "  (lldb) frame variable <var>        -> inspect a variable"
+        println "  (lldb) source list                 -> show Salam source (via #line)"
+        println "  (lldb) continue / quit             -> resume / exit"
+        println ""
+    else SALAM_OS_WINDOWS:
+        cmd = dbg + " " + shell_arg(target)
+        println ""
+        println "salam: launching " + dbg
+        println "  Tip: (gdb) break main   -> set a breakpoint"
+        println "       (gdb) run          -> start the program"
+        println "       (gdb) next / step  -> step over / into"
+        println "       (gdb) print <var>  -> inspect a variable"
+        println ""
+    else:
+        cmd = dbg + " -ex 'break main' -ex 'run' " + shell_arg(target)
+        println ""
+        println "salam: launching " + dbg
+        println "  (gdb) break main  -> already set"
+        println "  (gdb) next / step -> step over / into"
+        println "  (gdb) print <var> -> inspect a variable"
+        println "  (gdb) list        -> show Salam source (via #line)"
+        println ""
+    end
+    run_rc := os.Run(cmd)
+    if run_rc == 127:
+        io.EPrintln("salam debug: '" + dbg + "' not found in PATH.")
+        io.EPrintln("  Linux:  sudo apt-get install gdb      (or: sudo apt-get install lldb)")
+        io.EPrintln("  macOS:  xcode-select --install         (ships lldb)")
+        io.EPrintln("          or: brew install llvm           (provides a newer lldb)")
+        io.EPrintln("  Win:    pacman -S mingw-w64-x86_64-gdb (MSYS2)")
+        ret 3
+    end
+    ret run_rc == 0 ? 0 : 1
+end
+
+func memcheck_cmd(opt &: dr.Dr): int:
+    if opt.inputs.len() == 0:
+        io.EPrintln("salam memcheck: no input file")
+        ret 2
+    end
+    if str.Contains(opt.cc, "tcc"):
+        io.EPrintln("salam memcheck: tcc does not support AddressSanitizer.")
+        io.EPrintln("  Use --cc=gcc or --cc=clang:")
+        io.EPrintln("    salam memcheck " + opt.inputs.get(0)[0] + " --cc=gcc")
+        ret 2
+    end
+    opt.debug_info = true
+    opt.asan = true
+    if !opt.safe:
+        opt.safe = true
+        opt.defines.push("SALAM_SAFE")
+    end
+    mut exe := opt.output
+    if str.Len(exe) == 0:
+        exe = path_stem(opt.inputs.get(0)[0]) + ".exe"
+        opt.output = exe
+    end
+    println "salam memcheck: building with AddressSanitizer + debug symbols..."
+    rc := dr.Build(opt)
+    if rc != 0:
+        ret rc
+    end
+    target := str.Len(opt.exe_path) > 0 ? opt.exe_path : exe
+    mut cmd := ""
+    if SALAM_OS_WINDOWS:
+        println "salam memcheck: Valgrind is not available on Windows."
+        println "  Running binary with ASAN error reporting..."
+        println ""
+        cmd = shell_arg(target)
+    else:
+        probe := os.Run("valgrind --version > /dev/null 2>&1")
+        if probe == 0:
+            println "salam memcheck: running under Valgrind..."
+            println ""
+            cmd = "valgrind --leak-check=full --track-origins=yes --show-leak-kinds=all " + "--error-exitcode=1 " + shell_arg(target)
+        else:
+            println "salam memcheck: valgrind not found; running with ASAN error reporting."
+            println "  (Install: sudo apt-get install valgrind)"
+            println ""
+            cmd = shell_arg(target)
+        end
+    end
+    run_rc := os.Run(cmd)
+    if run_rc == 0:
+        println ""
+        println "salam memcheck: no memory errors detected."
+    else:
+        io.EPrintln("")
+        io.EPrintln(
+            "salam memcheck: errors detected (exit " + str.FromInt(run_rc as i64) + "). Review the output above."
+        )
+    end
+    ret run_rc == 0 ? 0 : 1
+end
+
+// ---------------------------------------------------------------------------
+// Public API (E088: pub section last)
+// ---------------------------------------------------------------------------

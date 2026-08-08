@@ -1,0 +1,524 @@
+package cli
+
+import os
+import io
+import str
+import dr "../driver/driver.salam"
+import lg "../logger.salam"
+import dg "../diag.salam"
+import i18 "../i18n.salam"
+import co "../sal_core.salam"
+import pf "../prof_self.salam"
+
+// plural_suffix: "" for a count of exactly 1, "s" otherwise.
+func plural_suffix(n: int): str:
+    ret n == 1 ? "" : "s"
+end
+
+// Unsigned byte read from a str (same idiom used throughout the port, e.g.
+// driver.salam's byte_at / str/str.salam's _bp+_ub - re-derived locally
+// since those are private to their own packages).
+inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
+
+// cli_opt_value: arg == "key=VALUE" ? val=VALUE, true : false.
+func opt_value(arg: str, key: str, val &: str): bool:
+    prefix := key + "="
+    if str.StartsWith(arg, prefix):
+        val = str.Substr(arg, str.Len(prefix), str.Len(arg) - str.Len(prefix))
+        ret true
+    end
+    ret false
+end
+
+// strtol(val, &endp, 10) with the same "every char must be a digit, no
+// trailing junk, range 1-16" validation cli_options.c's --indent handler
+// does (endp==val || *endp || n<1 || n>16 -> reject).
+func parse_indent_width(val: str, out &: int): bool:
+    n := str.Len(val)
+    if n == 0:
+        ret false
+    end
+    mut num := 0
+    mut i := 0
+    until i < n:
+        code := byte_at(val, i)
+        if !str.IsDigit(code):
+            ret false
+        end
+        num = num * 10 + (code - 48)
+        i += 1
+    end
+    if num < 1 || num > 16:
+        ret false
+    end
+    out = num
+    ret true
+end
+
+// --timeout=<ms> for `salam run`/`exec`/`jit`: the tree-walking interpreter's
+// wall-clock deadline (interp.salam defaults to 5000ms when unset). Same
+// digit-only validation as parse_indent_width, but no small upper cap since
+// long-running interpreted programs are a legitimate use case; still bounded
+// so a garbage/huge value can't overflow the int field.
+func parse_timeout_ms(val: str, out &: int): bool:
+    n := str.Len(val)
+    if n == 0 || n > 9:
+        ret false
+    end
+    mut num := 0
+    mut i := 0
+    until i < n:
+        code := byte_at(val, i)
+        if !str.IsDigit(code):
+            ret false
+        end
+        num = num * 10 + (code - 48)
+        i += 1
+    end
+    if num < 1:
+        ret false
+    end
+    out = num
+    ret true
+end
+
+// cli_options.c's --port handler for `salam serve`.
+func parse_port(val: str, out &: int): bool:
+    n := str.Len(val)
+    if n == 0 || n > 5:
+        ret false
+    end
+    mut num := 0
+    mut i := 0
+    until i < n:
+        code := byte_at(val, i)
+        if !str.IsDigit(code):
+            ret false
+        end
+        num = num * 10 + (code - 48)
+        i += 1
+    end
+    if num < 1 || num > 65535:
+        ret false
+    end
+    out = num
+    ret true
+end
+
+// core/sb.c's sb_put_shell_arg: quote a single argv-style token so it
+// survives a shell command line built with string concatenation (used by
+// debug_cmd/memcheck_cmd, which invoke gdb/lldb/valgrind via os.Run).
+func shell_arg(s: str): str:
+    if SALAM_OS_WINDOWS:
+        mut out := `"`
+        out = out + str.Replace(s, `"`, `\"`)
+        out = out + `"`
+        ret out
+    else:
+        mut sb := str.NewBuilder()
+        str.BufAppendChar(sb, 39) // '
+        n := str.Len(s)
+        mut i := 0
+        until i < n:
+            code := byte_at(s, i)
+            if code == 39:
+                str.BufAppend(sb, "'\\''")
+            else:
+                str.BufAppendChar(sb, code)
+            end
+            i += 1
+        end
+        str.BufAppendChar(sb, 39)
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+end
+
+// debug_cmd.c's path_stem: basename with the extension stripped.
+func path_stem(path: str): str:
+    mut base := path
+    slash := str.LastIndex(path, "/")
+    bslash := str.LastIndex(path, "\\")
+    mut cut := slash
+    if bslash > cut:
+        cut = bslash
+    end
+    if cut >= 0:
+        base = str.Substr(path, cut + 1, str.Len(path) - cut - 1)
+    end
+    dot := str.LastIndex(base, ".")
+    if dot >= 0:
+        base = str.Substr(base, 0, dot)
+    end
+    ret base
+end
+
+// ---------------------------------------------------------------------------
+// cli_options.c's cli_positional
+// ---------------------------------------------------------------------------
+func positional(arg: str, out &: dr.Dr): bool:
+    if out.command == dr.CMD_NEW:
+        if str.Len(out.new_name) > 0:
+            io.EPrintln(
+                co.Format2(
+                    i18.Tr("salam: 'new' takes a single project name ('%s' after '%s')"), co.ArgStr(arg),
+                    co.ArgStr(out.new_name)
+                )
+            )
+            ret false
+        end
+        out.new_name = arg
+    else out.command == dr.CMD_SERVE:
+        if str.Len(out.input) > 0:
+            io.EPrintln(
+                co.Format2(
+                    i18.Tr("salam: 'serve' takes a single directory argument ('%s' after '%s')"), co.ArgStr(arg),
+                    co.ArgStr(out.input)
+                )
+            )
+            ret false
+        end
+        out.input = arg
+    else out.command == dr.CMD_RUN:
+        if str.Len(out.input) == 0:
+            out.inputs.push(arg)
+            out.input = arg
+        else:
+            out.run_args.push(arg)
+        end
+    else out.command == dr.CMD_BUILD || out.command == dr.CMD_OBJ || out.command == dr.CMD_LLVM || out.command == dr.CMD_JS || out.command == dr.CMD_LAYOUT_BUILD || out.command == dr.CMD_WEB || out.command == dr.CMD_DEBUG || out.command == dr.CMD_MEMCHECK || out.command == dr.CMD_FMT || out.command == dr.CMD_DOC:
+        out.inputs.push(arg)
+        if str.Len(out.input) == 0:
+            out.input = arg
+        end
+    else:
+        if str.Len(out.input) > 0:
+            io.EPrintln(
+                co.Format2(
+                    i18.Tr(
+                        "salam: multiple input files require the 'build' command ('%s' after '%s')"
+                    ), co.ArgStr(arg), co.ArgStr(out.input)
+                )
+            )
+            ret false
+        end
+        out.input = arg
+    end
+    ret true
+end
+
+// ---------------------------------------------------------------------------
+// cli_subcmd.c's cli_dispatch_command. `args` mirrors C's argv exactly:
+// args[0] is the program name (see main.salam / os.Args()'s salam_set_args
+// contract), args[1] is the first real word.
+// ---------------------------------------------------------------------------
+func dispatch_command(args: Vector<str>, out &: dr.Dr): int:
+    mut start := 1
+    n := args.len()
+    mut cmd := ""
+    if n > 1:
+        cmd = args.get(1)[0]
+    end
+    if str.Len(cmd) == 0:
+        out.command = dr.CMD_HELP
+    else str.Equals(cmd, "build"):
+        out.command = dr.CMD_BUILD
+        start = 2
+    else str.Equals(cmd, "obj"):
+        out.command = dr.CMD_OBJ
+        start = 2
+    else str.Equals(cmd, "llvm") || str.Equals(cmd, "emit-llvm"):
+        out.command = dr.CMD_LLVM
+        start = 2
+    else str.Equals(cmd, "js") || str.Equals(cmd, "emit-js"):
+        out.command = dr.CMD_JS
+        start = 2
+    else str.Equals(cmd, "run"):
+        out.command = dr.CMD_RUN
+        start = 2
+    else str.Equals(cmd, "exec") || str.Equals(cmd, "jit"):
+        out.command = dr.CMD_RUN
+        out.interp = true
+        start = 2
+    else str.Equals(cmd, "debug"):
+        out.command = dr.CMD_DEBUG
+        out.debug_info = true
+        start = 2
+    else str.Equals(cmd, "memcheck"):
+        out.command = dr.CMD_MEMCHECK
+        out.debug_info = true
+        out.asan = true
+        start = 2
+    else str.Equals(cmd, "new"):
+        out.command = dr.CMD_NEW
+        start = 2
+    else str.Equals(cmd, "format"):
+        out.command = dr.CMD_FMT
+        start = 2
+    else str.Equals(cmd, "help"):
+        out.command = dr.CMD_HELP
+        start = 2
+    else str.Equals(cmd, "version"):
+        out.command = dr.CMD_VERSION
+        start = 2
+    else str.Equals(cmd, "inspect"):
+        out.command = dr.CMD_INSPECT
+        start = 2
+    else str.Equals(cmd, "doc"):
+        out.command = dr.CMD_DOC
+        start = 2
+    else str.Equals(cmd, "web"):
+        out.command = dr.CMD_WEB
+        start = 2
+    else str.Equals(cmd, "serve"):
+        out.command = dr.CMD_SERVE
+        start = 2
+    else str.Equals(cmd, "layout"):
+        if n > 2 && str.Equals(args.get(2)[0], "build"):
+            out.command = dr.CMD_LAYOUT_BUILD
+            start = 3
+        else:
+            out.command = dr.CMD_REPL_LAYOUT
+            start = 2
+        end
+    else str.Equals(cmd, "cli"):
+        if n > 2 && str.Equals(args.get(2)[0], "build"):
+            out.command = dr.CMD_BUILD
+            start = 3
+        else n > 2 && str.Equals(args.get(2)[0], "obj"):
+            out.command = dr.CMD_OBJ
+            start = 3
+        else:
+            out.command = dr.CMD_REPL
+            start = 2
+        end
+    else:
+        // Unmatched `cmd` (e.g. a bare "file.salam"): no command word was
+        // given, so this is an error - a command (run/build/exec/inspect/...)
+        // is now required. ParseArgs checks for CMD_UNKNOWN and bails before
+        // parse_options ever runs.
+        out.command = dr.CMD_UNKNOWN
+    end
+    ret start
+end
+
+// ---------------------------------------------------------------------------
+// cli_options.c's cli_parse_options
+// ---------------------------------------------------------------------------
+func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
+    n := args.len()
+    mut i := start
+    until i < n:
+        arg := args.get(i)[0]
+        mut val := ""
+        if str.Equals(arg, "--keep-c"):
+            out.keep_c = true
+        else str.Equals(arg, "--time-report"):
+            out.time_report = true
+        else opt_value(arg, "--time-report", val):
+            out.time_report = true
+            if str.Equals(val, "json"):
+                out.time_report_fmt = pf.PROF_FMT_JSON
+            else str.Equals(val, "table"):
+                out.time_report_fmt = pf.PROF_FMT_TABLE
+            else:
+                io.EPrint(
+                    co.Format1(
+                        i18.Tr("salam: unknown --time-report format '%s' (expected 'table' or 'json')\n"), co.ArgStr(val)
+                    )
+                )
+                ret false
+            end
+        else str.Equals(arg, "--time-trace"):
+            out.time_trace = "salam-trace.json"
+        else opt_value(arg, "--time-trace", val):
+            out.time_trace = val
+        else str.Equals(arg, "--force") || str.Equals(arg, "-B"):
+            out.force = true
+        else str.Equals(arg, "--short") && out.command == dr.CMD_VERSION:
+            out.version_short = true
+        else str.Equals(arg, "-O0"):
+            out.llvm_opt_level = 0
+        else str.Equals(arg, "-O1"):
+            out.llvm_opt_level = 1
+        else str.Equals(arg, "-O2"):
+            out.llvm_opt_level = 2
+        else str.Equals(arg, "-O3"):
+            out.llvm_opt_level = 3
+        else str.Equals(arg, "-Os"):
+            out.llvm_opt_level = 4
+        else str.Equals(arg, "-Oz"):
+            out.llvm_opt_level = 5
+        else str.Equals(arg, "--emit-llvm"):
+            out.llvm_emit = 0
+        else str.Equals(arg, "--emit-asm"):
+            out.llvm_emit = 1
+        else str.Equals(arg, "--emit-obj") || str.Equals(arg, "-c"):
+            out.llvm_emit = 2
+        else str.Equals(arg, "--emit-bitcode") || str.Equals(arg, "-flto"):
+            out.llvm_emit = 3
+        else str.Equals(arg, "--exec") || str.Equals(arg, "--emit-exec"):
+            out.llvm_emit = 4
+        else str.Equals(arg, "--jit") && out.command == dr.CMD_LLVM:
+            out.llvm_emit = 5
+        else str.Equals(arg, "--verify-ir"):
+            out.llvm_verify = true
+        else str.Equals(arg, "--native-cpu") || str.Equals(arg, "-march=native"):
+            out.llvm_native_cpu = true
+        else opt_value(arg, "--target", val):
+            out.llvm_target = val
+        else str.Equals(arg, "--release"):
+            out.safe = false
+        else str.Equals(arg, "--check"):
+            out.fmt_check = true
+        else str.Equals(arg, "--fix-order"):
+            out.fmt_fix_order = true
+        else str.Equals(arg, "--minify"):
+            out.fmt_minify = true
+        else str.Equals(arg, "-r") || str.Equals(arg, "--recursive"):
+            out.fmt_recursive = true
+        else str.Equals(arg, "--tabs"):
+            out.fmt_tabs = true
+        else str.Equals(arg, "--spaces"):
+            out.fmt_tabs = false
+        else opt_value(arg, "--indent", val):
+            if str.Equals(val, "tab") || str.Equals(val, "tabs"):
+                out.fmt_tabs = true
+            else:
+                mut width := 0
+                if !parse_indent_width(val, width):
+                    io.EPrintln(
+                        co.Format1(
+                            i18.Tr(
+                                "salam: invalid --indent value '%s' (use 'tab' or a width 1-16)"
+                            ), co.ArgStr(val)
+                        )
+                    )
+                    ret false
+                end
+                out.fmt_tabs = false
+                out.fmt_indent_width = width
+            end
+        else str.Equals(arg, "-g") || str.Equals(arg, "--debug-info"):
+            out.debug_info = true
+        else str.Equals(arg, "--asan"):
+            out.asan = true
+        else str.Equals(arg, "--lto"):
+            out.lto = true
+        else str.Equals(arg, "--interp") || str.Equals(arg, "--jit"):
+            out.interp = true
+        else str.Equals(arg, "--inline"):
+            out.inline_mode = true
+        else str.Equals(arg, "--split"):
+            out.split = true
+        else str.Equals(arg, "--no-js-minify-names"):
+            out.no_js_minify_names = true
+        else str.Equals(arg, "--no-minify"):
+            out.no_minify = true
+        else opt_value(arg, "--output", val):
+            out.output = val
+        else str.Equals(arg, "-o"):
+            if i + 1 >= n:
+                io.EPrintln(i18.Tr("salam: -o requires a file argument"))
+                ret false
+            end
+            i += 1
+            out.output = args.get(i)[0]
+        else opt_value(arg, "--backend", val):
+            out.backend = val
+        else opt_value(arg, "--libpath", val):
+            out.lib_paths.push(val)
+        else opt_value(arg, "--cc", val):
+            out.cc = val
+            // --cc names a *C* compiler, so asking for one is asking for the
+            // C backend; without this an explicit --cc=gcc would be silently
+            // ignored once LLVM became the default.
+            if str.Equals(out.backend, "auto"):
+                out.backend = "c"
+            end
+        else opt_value(arg, "--stdlib-path", val):
+            out.stdlib_path = val
+        else opt_value(arg, "--define", val):
+            out.defines.push(val)
+        else str.StartsWith(arg, "-D") && str.Len(arg) > 2:
+            out.defines.push(str.Substr(arg, 2, str.Len(arg) - 2))
+        else opt_value(arg, "--export", val):
+            out.exports.push(val)
+        else str.Equals(arg, "--emit-tokens-xml"):
+            out.emit_tokens_xml = true
+        else str.Equals(arg, "--emit-ast-xml"):
+            out.emit_ast_xml = true
+        else str.Equals(arg, "--emit-symbol-xml") || str.Equals(arg, "--emit-symbols-xml"):
+            out.emit_symbol_xml = true
+        else str.Equals(arg, "--color"):
+            out.color = 1
+        else str.Equals(arg, "--no-color"):
+            out.color = 0
+        else opt_value(arg, "--error-style", val):
+            mut st := 0
+            if !dg.StyleFromString(val, st):
+                io.EPrintln(
+                    co.Format1(
+                        i18.Tr("salam: invalid error style '%s' (rust|gcc|clang)"), co.ArgStr(val)
+                    )
+                )
+                ret false
+            end
+            out.diag_style = st
+        else opt_value(arg, "--error-format", val):
+            mut efmt := 0
+            if !dg.FormatFromString(val, efmt):
+                io.EPrintln(
+                    co.Format1(
+                        i18.Tr("salam: invalid error format '%s' (human|json|xml)"), co.ArgStr(val)
+                    )
+                )
+                ret false
+            end
+            out.diag_format = efmt
+        else opt_value(arg, "--log-level", val):
+            mut lvl := 0
+            if !lg.LevelFromString(val, lvl):
+                io.EPrintln(co.Format1(i18.Tr("salam: invalid log level '%s'"), co.ArgStr(val)))
+                ret false
+            end
+            out.log_level = lvl
+        else opt_value(arg, "--lang", val):
+            out.lang = val
+        else opt_value(arg, "--xml-out", val):
+            out.xml_out = val
+        else opt_value(arg, "--host", val):
+            out.serve_host = val
+        else opt_value(arg, "--port", val):
+            mut prt := 0
+            if !parse_port(val, prt):
+                io.EPrintln(
+                    co.Format1(i18.Tr("salam: invalid --port value '%s' (use 1-65535)"), co.ArgStr(val))
+                )
+                ret false
+            end
+            out.serve_port = prt
+        else opt_value(arg, "--timeout", val):
+            mut ms := 0
+            if !parse_timeout_ms(val, ms):
+                io.EPrintln(
+                    co.Format1(
+                        i18.Tr("salam: invalid --timeout value '%s' (milliseconds, > 0)"), co.ArgStr(val)
+                    )
+                )
+                ret false
+            end
+            out.timeout_ms = ms
+        else str.StartsWith(arg, "-") && str.Len(arg) > 1:
+            io.EPrintln(co.Format1(i18.Tr("salam: unknown option '%s'"), co.ArgStr(arg)))
+            ret false
+        else:
+            if !positional(arg, out):
+                ret false
+            end
+        end
+        i += 1
+    end
+    ret true
+end

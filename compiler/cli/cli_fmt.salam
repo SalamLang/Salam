@@ -1,0 +1,134 @@
+package cli
+
+import os
+import io
+import str
+import dr "../driver/driver.salam"
+import lg "../logger.salam"
+import i18 "../i18n.salam"
+import lp "../langpack.salam"
+import lx "../lexer/lexer.salam"
+import src "../source.salam"
+import co "../sal_core.salam"
+import sf "../sal_fmt.salam"
+
+// ---------------------------------------------------------------------------
+// driver.c's driver_fmt + fmt_walk + fmt_one_file (CMD_FMT), calling
+// sal_fmt.salam's already-ported Source() formatter.
+// ---------------------------------------------------------------------------
+func has_salam_ext(name: str): bool:
+    ret str.EndsWith(name, ".salam")
+end
+
+func fmt_one_file(c &: FmtCtx, path: str):
+    mut sfile := src.New()
+    if !src.Load(path, sfile):
+        io.EPrintln(co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path)))
+        c.errors += 1
+        ret
+    end
+    c.total += 1
+    pack := lx.Detect(sfile, c.pack)
+    style := sf.NewStyle(c.tabs, c.width, c.minify)
+    mut out := co.SbNew()
+    lgr := lg.New(lg.LOG_OFF, false)
+    ok := sf.Source(lgr, pack, sfile, style, out)
+    if !ok:
+        co.SbFree(out)
+        io.EPrintln(
+            co.Format1(
+                i18.Tr("cannot format '%s': fix the lexical errors first"), co.ArgStr(path)
+            )
+        )
+        c.errors += 1
+        ret
+    end
+    formatted := co.SbCstr(out)
+    changed := !str.Equals(formatted, sfile.text)
+    if !changed:
+        c.ok += 1
+        co.SbFree(out)
+        ret
+    end
+    c.changed += 1
+    if c.check:
+        println path
+    else:
+        wrc := io.WriteFile(path, formatted)
+        if wrc < 0:
+            io.EPrintln(co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(path)))
+            c.errors += 1
+        else:
+            println co.Format1(i18.Tr("formatted %s"), co.ArgStr(path))
+        end
+    end
+    co.SbFree(out)
+end
+
+func fmt_walk(c &: FmtCtx, dir: str):
+    entries := os.ListDir(dir)
+    defer entries.free()
+    repeat entries.len() with i:
+        name := entries.get(i)[0]
+        if str.StartsWith(name, "."):
+            continue
+        end
+        child := dir + "/" + name
+        if os.IsDir(child):
+            fmt_walk(c, child)
+        else has_salam_ext(name):
+            fmt_one_file(c, child)
+        end
+    end
+end
+
+func fmt_cmd(opt &: dr.Dr): int:
+    pack := lp.Load(opt.lang)
+    if pack == lp.LP_NONE:
+        io.EPrintln(co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang)))
+        ret 2
+    end
+    mut c := FmtCtx {}
+    c.check = opt.fmt_check
+    c.fix_order = opt.fmt_fix_order
+    c.minify = opt.fmt_minify
+    c.tabs = opt.fmt_tabs
+    c.width = opt.fmt_indent_width
+    c.pack = pack
+    if opt.inputs.len() == 0:
+        fmt_walk(c, ".")
+    else:
+        repeat opt.inputs.len() with i:
+            p := opt.inputs.get(i)[0]
+            if os.IsDir(p):
+                fmt_walk(c, p)
+            else:
+                fmt_one_file(c, p)
+            end
+        end
+    end
+    if c.check:
+        if c.changed == 0:
+            println co.Format2(
+                i18.Tr("all %d file%s already formatted"), co.ArgInt(c.total as i64),
+                co.ArgStr(plural_suffix(c.total))
+            )
+        else:
+            println co.Format3(
+                i18.Tr("%d of %d file%s need formatting"), co.ArgInt(c.changed as i64), co.ArgInt(c.total as i64),
+                co.ArgStr(plural_suffix(c.total))
+            )
+        end
+    else:
+        println co.Format2(
+            i18.Tr("done: %d formatted, %d unchanged"), co.ArgInt(c.changed as i64), co.ArgInt(c.ok as i64)
+        )
+    end
+    mut rc := 0
+    if c.errors > 0:
+        rc = 2
+    else c.check && c.changed > 0:
+        rc = 1
+    end
+    ret rc
+end

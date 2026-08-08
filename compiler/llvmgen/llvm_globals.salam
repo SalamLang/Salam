@@ -1,0 +1,604 @@
+package llvmgen
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import sm "../semantic/semantic.salam"
+
+// ll_emit_lambda - the lambda frame (stage A); the body comes from stage
+// B's lv_block_top like ll_function.
+func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
+    node := at.Get(a, n)
+    if str.Len(node.name) > 0:
+        ret
+    end
+    idx := v.lam_n
+    v.lam_n += 1
+    name := "salam_lambda_" + co.I64Toa(idx as i64)
+    envty := "%lam." + co.I64Toa(idx as i64) + ".env"
+    at.SetName(a, n, name)
+    rts := func_ret(node.type_str)
+    ncap := node.captures.len()
+
+    mut et := co.SbNew()
+    co.SbPuts(et, envty + " = type { ptr")
+    repeat ncap with ci:
+        cap := at.Get(a, node.captures.get(ci)[0])
+        co.SbPuts(et, ", " + ty_of(v, s, a, cap.type_str))
+    end
+    co.SbPuts(et, " }\n")
+    out_g(v, co.SbCstr(et))
+    co.SbFree(et)
+    if ncap == 0:
+        out_g(
+            v, "@" + name + ".env = internal global " + envty + " { ptr @" + name + " }\n"
+        )
+    end
+
+    saved_bb := v.bb
+    saved_ba := v.ba
+    saved_in_fn := v.in_fn
+    saved_tmp := v.tmp
+    saved_lbl := v.lbl
+    saved_nloop := v.nloop
+    // Same reasoning as the function emitter: a lambda body is
+    // emitted nested inside whatever was being lowered, so the outer
+    // loops' live break/continue targets must survive it.
+    mut saved_brk2 := Vector {} as Vector<str>
+    mut saved_cont2 := Vector {} as Vector<str>
+    repeat saved_nloop with sbi2:
+        saved_brk2.push(v.brk.get(sbi2)[0])
+        saved_cont2.push(v.cont.get(sbi2)[0])
+    end
+    saved_main := v.is_main
+    saved_term := v.term
+    saved_ret := v.ret_ts
+    saved_self := v.self_ts
+    saved_this := v.this_ref
+    saved_sp := v.cur_sp
+    saved_dbg := v.cur_dbg
+    saved_lam := v.cur_lambda
+    saved_env := v.env_ref
+    saved_envty := v.env_ty
+    saved_locals := v.locals
+    saved_defers := v.defers
+    saved_mres := v.match_result_ptr
+    saved_mts := v.match_result_ts
+    saved_mmerge := v.match_merge_block
+
+    v.bb = str.NewBuilder()
+    v.ba = str.NewBuilder()
+    v.in_fn = true
+    v.tmp = 0
+    v.lbl = 0
+    v.nloop = 0
+    v.term = false
+    v.is_main = false
+    v.ret_ts = rts
+    v.self_ts = ""
+    v.this_ref = ""
+    v.cur_lambda = n
+    v.env_ref = "%env"
+    v.env_ty = envty
+    v.match_result_ptr = ""
+    v.match_result_ts = ""
+    v.match_merge_block = ""
+    v.locals = Vector {} as Vector<LvVar>
+    v.defers = Vector {} as Vector<int>
+
+    mut hdr := co.SbNew()
+    co.SbPuts(
+        hdr, "define internal " + ty_of(v, s, a, rts) + " @" + name + "(ptr noundef %env"
+    )
+    repeat at.ChildCount(a, n) with i:
+        p := at.Get(a, node.list.get(i)[0])
+        if p.is_ref:
+            co.SbPuts(hdr, ", ptr %arg" + co.I64Toa(i as i64))
+        else:
+            co.SbPuts(
+                hdr, ", " + ty_of(v, s, a, p.type_str) + " %arg" + co.I64Toa(i as i64)
+            )
+        end
+    end
+    co.SbPuts(hdr, ") nounwind {\n")
+    header := co.SbCstr(hdr)
+    co.SbFree(hdr)
+
+    repeat at.ChildCount(a, n) with i2:
+        p2 := at.Get(a, node.list.get(i2)[0])
+        if p2.is_ref:
+            local_add(v, p2.name, "%arg" + co.I64Toa(i2 as i64), p2.type_str)
+        else:
+            ptr2 := "%p." + safe_name(p2.name)
+            emit_alloca(v, ptr2 + " = alloca " + ty_of(v, s, a, p2.type_str))
+            emit(
+                v, "store " + ty_of(v, s, a, p2.type_str) + " %arg" + co.I64Toa(i2 as i64) + ", ptr " + ptr2
+            )
+            local_add(v, p2.name, ptr2, p2.type_str)
+        end
+    end
+    if node.a != 0:
+        lv_block_top(v, s, a, node.a)
+    end
+    if !v.term:
+        emit_return(v, s, a, 0)
+    end
+
+    out_g(v, header)
+    out_g(v, "entry:\n")
+    out_g(v, co.SbCstr(v.ba))
+    out_g(v, co.SbCstr(v.bb))
+    out_g(v, "}\n\n")
+    str.BufFree(v.bb)
+    str.BufFree(v.ba)
+
+    v.bb = saved_bb
+    v.ba = saved_ba
+    v.in_fn = saved_in_fn
+    v.tmp = saved_tmp
+    v.lbl = saved_lbl
+    v.nloop = saved_nloop
+    repeat saved_nloop with rbi2:
+        v.brk.set(rbi2, saved_brk2.get(rbi2)[0])
+        v.cont.set(rbi2, saved_cont2.get(rbi2)[0])
+    end
+    saved_brk2.free()
+    saved_cont2.free()
+    v.is_main = saved_main
+    v.term = saved_term
+    v.ret_ts = saved_ret
+    v.self_ts = saved_self
+    v.this_ref = saved_this
+    v.cur_sp = saved_sp
+    v.cur_dbg = saved_dbg
+    v.cur_lambda = saved_lam
+    v.env_ref = saved_env
+    v.env_ty = saved_envty
+    v.locals.free()
+    v.defers.free()
+    v.locals = saved_locals
+    v.defers = saved_defers
+    v.match_result_ptr = saved_mres
+    v.match_result_ts = saved_mts
+    v.match_merge_block = saved_mmerge
+end
+
+// ll_fp_text - a decimal floating constant LLVM's .ll parser will accept.
+//
+// It requires a '.' in every decimal FP literal, and printf's %g drops the
+// point whenever the value is exactly integral - including in exponent form
+// for large magnitudes, where "1e+308" then lexes as an integer with a stray
+// exponent and the module fails to parse ("integer constant must have
+// integer type"). Put the point back, before the exponent when there is one.
+//
+// inf/nan text is left alone: those are not decimal literals and splicing a
+// point into them would only make things worse.
+func fp_text(vtext: str): str:
+    if str.Len(vtext) == 0:
+        ret "0.0"
+    end
+    if str.Contains(vtext, ".") || str.Contains(vtext, "n") || str.Contains(vtext, "N") || str.Contains(vtext, "i") || str.Contains(vtext, "I"):
+        ret vtext
+    end
+    mut epos := str.IndexOf(vtext, "e")
+    if epos < 0:
+        epos = str.IndexOf(vtext, "E")
+    end
+    if epos < 0:
+        ret vtext + ".0"
+    end
+    mant := str.Substr(vtext, 0, epos)
+    expo := str.Substr(vtext, epos, str.Len(vtext) - epos)
+    ret mant + ".0" + expo
+end
+
+// ll_const_fpfix
+func const_fpfix(lety: str, vtext: str): str:
+    if str.Equals(lety, "double") || str.Equals(lety, "float"):
+        ret fp_text(vtext)
+    end
+    ret vtext
+end
+
+// ll_const_value - true when `n` folds to a global-initializer constant.
+func const_value(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str
+): bool:
+    if n == 0:
+        ret false
+    end
+    node := at.Get(a, n)
+    if node.kind == at.AST_CAST:
+        ret const_value(v, s, a, node.a, out2)
+    end
+    if node.kind == at.AST_LITERAL:
+        op := node.op
+        if op == tok.TK_INT || op == tok.TK_FLOAT || op == tok.TK_STRING || op == tok.TK_TRIPLE_STRING || op == tok.TK_RAW_STRING || op == tok.TK_UTF8_CHAR || op == tok.TK_CHAR || op == tok.TK_KW_TRUE || op == tok.TK_KW_FALSE || op == tok.TK_KW_NULL:
+            out2 = lv_expr(v, s, a, n).ref
+            ret true
+        end
+        ret false
+    end
+    if node.kind == at.AST_ARRAY_LIT || node.kind == at.AST_STRUCT_LIT:
+        ret const_agg(v, s, a, n, out2)
+    end
+    ret false
+end
+
+// ll_const_agg
+func const_agg(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str): bool:
+    node := at.Get(a, n)
+    if node.kind == at.AST_ARRAY_LIT:
+        ats := node.type_str
+        if str.Len(ats) == 0 || idx_byte(ats, 91) < 0:
+            ret false
+        end
+        ety := array_elem(ats)
+        lety := ty_of(v, s, a, ety)
+        if node.list.len() == 0:
+            out2 = "zeroinitializer"
+            ret true
+        end
+        mut b := co.SbNew()
+        co.SbPuts(b, "[")
+        mut okall := true
+        mut i := 0
+        until i < node.list.len() && okall:
+            mut vtext := ""
+            if !const_value(v, s, a, node.list.get(i)[0], vtext):
+                okall = false
+            else:
+                if i != 0:
+                    co.SbPuts(b, ", ")
+                end
+                co.SbPuts(b, lety + " " + const_fpfix(lety, vtext))
+            end
+            i += 1
+        end
+        if !okall:
+            co.SbFree(b)
+            ret false
+        end
+        co.SbPuts(b, "]")
+        out2 = co.SbCstr(b)
+        co.SbFree(b)
+        ret true
+    end
+    if node.kind == at.AST_STRUCT_LIT:
+        ss := struct_sym(
+            v, s, a, str.Len(node.type_str) > 0 ? node.type_str : node.name
+        )
+        if ss == 0:
+            ret false
+        end
+        mut b2 := co.SbNew()
+        co.SbPuts(b2, "{ ")
+        mut idx := 0
+        mut okall2 := true
+        fsyms := sm.ScopeAt(s, sm.SymAt(s, ss).members).symbols
+        mut fi := 0
+        until fi < fsyms.len() && okall2:
+            f := sm.SymAt(s, fsyms.get(fi)[0])
+            if f.kind == sm.SYM_FIELD:
+                fts := sm.ToString(s, f.ty)
+                mut prov := 0
+                repeat node.list.len() with j:
+                    fld := at.Get(a, node.list.get(j)[0])
+                    if prov == 0 && str.Len(fld.name) > 0 && str.Equals(fld.name, f.name):
+                        prov = node.list.get(j)[0]
+                    end
+                end
+                mut vtext2 := ""
+                if prov != 0:
+                    if !const_value(v, s, a, at.Get(a, prov).a, vtext2):
+                        okall2 = false
+                    end
+                else f.decl != 0 && at.Get(a, f.decl).a != 0:
+                    if !const_value(v, s, a, at.Get(a, f.decl).a, vtext2):
+                        okall2 = false
+                    end
+                else:
+                    vtext2 = zero_of(fts)
+                end
+                if okall2:
+                    flety := ty_of(v, s, a, fts)
+                    if idx != 0:
+                        co.SbPuts(b2, ", ")
+                    end
+                    co.SbPuts(b2, flety + " " + const_fpfix(flety, vtext2))
+                    idx += 1
+                end
+            end
+            fi += 1
+        end
+        if !okall2:
+            co.SbFree(b2)
+            ret false
+        end
+        if idx == 0:
+            co.SbFree(b2)
+            out2 = "zeroinitializer"
+            ret true
+        end
+        co.SbPuts(b2, " }")
+        out2 = co.SbCstr(b2)
+        co.SbFree(b2)
+        ret true
+    end
+    ret false
+end
+
+// ll_emit_globals
+func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
+    mut any := false
+    mut i := 0
+    until i < at.ChildCount(a, program):
+        d := at.Child(a, program, i)
+        dn := at.Get(a, d)
+        mut skip := dn.kind != at.AST_CONST_DECL && dn.kind != at.AST_VAR_DECL
+        // Idempotent: emitting the same global twice would produce a
+        // duplicate definition in the module. This lets the function be
+        // called again for a package whose globals may or may not have been
+        // emitted already, which lv_addr_of relies on.
+        if !skip && global_find(v, dn.name) >= 0:
+            skip = true
+        end
+        // An extern *variable* - POSIX `environ`, which std/os/process
+        // declares in its non-Windows branch. emit_externs_in only handles
+        // SYM_FUNC and this loop used to skip is_extern outright, so nothing
+        // emitted these at all and every reference became "address of an
+        // unknown identifier 'environ'". Declared under its real C name,
+        // never the @g. prefix: the system linker is what resolves it.
+        if !skip && dn.is_extern:
+            ets := str.Len(dn.type_str) > 0 ? dn.type_str : "i32"
+            eref := "@" + dn.name
+            out_g(v, eref + " = external global " + ty_of(v, s, a, ets) + "\n")
+            mut ev := LvVar {}
+            ev.name = dn.name
+            ev.ptr = eref
+            ev.ts = ets
+            v.globals.push(ev)
+            any = true
+            skip = true
+        end
+        if !skip:
+            ts := str.Len(dn.type_str) > 0 ? dn.type_str : "i32"
+            gref := "@g." + str.TrimPrefix(struct_ltype(dn.name), "%struct.")
+            lty := ty_of(v, s, a, ts)
+            mut init := ""
+            mut cv := ""
+            if dn.a != 0 && const_value(v, s, a, dn.a, cv):
+                init = cv
+            else:
+                init = zero_of(ts)
+                if dn.a != 0:
+                    v.gdefer.push(d)
+                end
+            end
+            out_g(v, gref + " = internal global " + lty + " " + init + "\n")
+            mut gv := LvVar {}
+            gv.name = dn.name
+            gv.ptr = gref
+            gv.ts = ts
+            v.globals.push(gv)
+            any = true
+        end
+        i += 1
+    end
+    if any:
+        out_g(v, "\n")
+    end
+end
+
+// ll_extern_seen
+func extern_seen(v &: Lv, name: str): bool:
+    repeat 16 with p:
+        if str.Equals(name, k_lv_prologue_externs[p]):
+            ret true
+        end
+    end
+    repeat v.extern_names.len() with i:
+        if str.Equals(name, v.extern_names.get(i)[0]):
+            ret true
+        end
+    end
+    ret false
+end
+
+// A function of this name that some package declares *with* a body, if
+// any; -1 when none does. A bodyless `extern:` re-declaration is how one
+// package calls another's runtime entry point - std/collections redeclares
+// `noret func salam_panic(msg: str)` so its bounds checks can call it,
+// while the real body lives in std/core. Both are SYM_FUNCs of the same
+// name, and which one a given emission order reached first decided whether
+// the module got a definition or only a declaration.
+func body_sig_for(s &: sm.Sema, a &: at.Ast, name: str, owner &: int): int:
+    mut pi := 0
+    until pi < sm.PackageCount(s):
+        pk := sm.PackageAt(s, pi)
+        pi += 1
+        if pk == 0 || sm.SymAt(s, pk).kind != sm.SYM_PACKAGE:
+            continue
+        end
+        mems := sm.SymAt(s, pk).members
+        if mems == 0:
+            continue
+        end
+        fs := sm.LookupLocal(s, mems, name)
+        if fs == 0 || sm.SymAt(s, fs).kind != sm.SYM_FUNC:
+            continue
+        end
+        ov := sm.SymAt(s, fs).overloads
+        mut o := 0
+        until o < ov.len():
+            sgid := ov.get(o)[0]
+            o += 1
+            d := sm.SigAt(s, sgid).decl
+            // `is_extern` too, not just "has a body": the point of this
+            // lookup is to find the definition that emits the *unmangled*
+            // @name the bodyless declaration would otherwise stand in for,
+            // and only `extern:`-block functions get that name. An ordinary
+            // same-named function is a different symbol entirely - std/net's
+            // `send(method, url, headers, body)` shadowed the libc `send`
+            // every socket write calls, so nothing declared @send and no
+            // server program could be built.
+            if d != 0 && at.Get(a, d).a != 0 && at.Get(a, d).is_extern:
+                owner = pk
+                ret sgid
+            end
+        end
+    end
+    ret 0 - 1
+end
+
+// ll_declare_extern - one bodyless `extern func` -> one `declare` line,
+// de-duplicated against everything already declared or defined.
+//
+// Split out of emit_externs_in so emit_function can reach it too: that scope
+// walk only ever runs over the global scope and over packages touch_pkg has
+// visited, but a call can reach an extern in a package nothing touched -
+// std/fs' `fopen`, std/net's `send` - and then the module referenced @fopen
+// with no declaration anywhere ("use of undefined value '@fopen'", which
+// every program doing file or socket I/O hit).
+func declare_extern(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, sigid: int):
+    sg := sm.SigAt(s, sigid)
+    if sg.decl == 0 || extern_seen(v, name):
+        ret
+    end
+    repeat v.emitted.len() with ke:
+        if str.Equals(name, v.emitted.get(ke)[0]):
+            ret
+        end
+    end
+    // Emit the body instead of a declaration whenever one exists, so the
+    // outcome no longer depends on which package is walked first. Without
+    // this, `salam_panic` was declared (from collections) and never defined
+    // (from core) in any program where collections was reached first - every
+    // Vector bounds check then failed to link.
+    mut bowner := 0
+    bsig := body_sig_for(s, a, name, bowner)
+    if bsig >= 0:
+        ensure_fn(v, s, a, sm.SigAt(s, bsig).decl, 0, sm.SymAt(s, bowner).members)
+        ret
+    end
+    v.extern_names.push(name)
+    dn2 := at.Get(a, sg.decl)
+    mut b := co.SbNew()
+    co.SbPuts(
+        b, "declare " + ty_of(v, s, a, sm.ToString(s, sg.ret_type)) + " @" + name + "("
+    )
+    repeat sg.params.len() with j:
+        if j != 0:
+            co.SbPuts(b, ", ")
+        end
+        co.SbPuts(
+            b, ty_of(
+                v, s, a, sm.ToString(s, sg.params.get(j)[0])
+            )
+        )
+    end
+    if sg.variadic:
+        co.SbPuts(b, sg.params.len() > 0 ? ", ..." : "...")
+    end
+    co.SbPuts(b, ")")
+    if dn2.is_pure:
+        co.SbPuts(b, " nounwind willreturn nofree nosync memory(read)")
+    end
+    if dn2.is_noret:
+        co.SbPuts(b, " noreturn")
+    end
+    co.SbPuts(b, "\n")
+    out_g(v, co.SbCstr(b))
+    co.SbFree(b)
+end
+
+// ll_emit_externs_in
+func emit_externs_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
+    syms := sm.ScopeAt(s, gsc).symbols
+    repeat syms.len() with i:
+        symid := syms.get(i)[0]
+        sy := sm.SymAt(s, symid)
+        mut skip := sy.kind != sm.SYM_FUNC || sy.overloads.len() == 0
+        mut sigid := 0
+        if !skip:
+            sigid = sy.overloads.get(0)[0]
+            d := sm.SigAt(s, sigid).decl
+            if d == 0:
+                skip = true
+            else:
+                dn := at.Get(a, d)
+                if !dn.is_extern || dn.a != 0:
+                    skip = true
+                end
+            end
+        end
+        if !skip:
+            declare_extern(v, s, a, sy.name, sigid)
+        end
+    end
+end
+
+// ll_emit_externs
+func emit_externs(v &: Lv, s &: sm.Sema, a &: at.Ast):
+    emit_externs_in(v, s, a, s.global)
+end
+
+// ll_touch_pkg - emit a package's struct types/externs/globals/impls once.
+func touch_pkg(v &: Lv, s &: sm.Sema, a &: at.Ast, pk: int):
+    if pk == 0:
+        ret
+    end
+    py := sm.SymAt(s, pk)
+    if py.kind != sm.SYM_PACKAGE || py.decl == 0:
+        ret
+    end
+    repeat v.pkg_touched.len() with i:
+        if v.pkg_touched.get(i)[0] == pk:
+            ret
+        end
+    end
+    v.pkg_touched.push(pk)
+    prog := py.decl
+    saved := v.pkg_scope
+    v.pkg_scope = py.members
+    emit_struct_types(v, s, a, prog)
+    if py.members != 0:
+        emit_externs_in(v, s, a, py.members)
+    end
+    emit_globals(v, s, a, prog)
+    if py.members != 0:
+        emit_impls_in(v, s, a, py.members)
+    end
+    v.pkg_scope = saved
+end
+
+// ll_touch_pkg_named
+func touch_pkg_named(v &: Lv, s &: sm.Sema, a &: at.Ast, pkgname: str):
+    if str.Len(pkgname) == 0:
+        ret
+    end
+    repeat sm.PackageCount(s) with i:
+        pk := sm.PackageAt(s, i)
+        if pk != 0 && str.Equals(sm.SymAt(s, pk).pkgname, pkgname):
+            touch_pkg(v, s, a, pk)
+            ret
+        end
+    end
+end
+
+// ll_emit_global_inits - runs at the top of main().
+func emit_global_inits(v &: Lv, s &: sm.Sema, a &: at.Ast):
+    repeat v.gdefer.len() with i:
+        d := v.gdefer.get(i)[0]
+        dn := at.Get(a, d)
+        gi := global_find(v, dn.name)
+        if gi >= 0:
+            g := v.globals.get(gi)[0]
+            val := conv(v, s, a, lv_expr(v, s, a, dn.a), g.ts)
+            emit(
+                v, "store " + ty_of(v, s, a, g.ts) + " " + val + ", ptr " + g.ptr
+            )
+        end
+    end
+end

@@ -1,0 +1,380 @@
+package parser
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import i18 "../i18n.salam"
+
+// ===== parser_cursor.c =====
+
+func is_comment_kind(k: int): bool:
+    ret k == tok.TK_COMMENT_LINE || k == tok.TK_COMMENT_BLOCK
+end
+
+func skip_comments_from(p &: Ps, from: int): int:
+    mut i := from
+    until i < p.count - 1 && is_comment_kind(p.toks.toks.get(i)[0].kind):
+        i += 1
+    end
+    ret i
+end
+
+func p_peek(p &: Ps): tok.Token:
+    mut i := skip_comments_from(p, p.pos)
+    if i >= p.count:
+        i = p.count - 1
+    end
+    ret p.toks.toks.get(i)[0]
+end
+
+func p_peek2(p &: Ps): tok.Token:
+    mut i := skip_comments_from(p, p.pos)
+    if i < p.count - 1:
+        i = skip_comments_from(p, i + 1)
+    end
+    if i >= p.count:
+        i = p.count - 1
+    end
+    ret p.toks.toks.get(i)[0]
+end
+
+func p_prev(p &: Ps): tok.Token:
+    mut i := 0
+    if p.pos > 0:
+        i = p.pos - 1
+    end
+    ret p.toks.toks.get(i)[0]
+end
+
+func p_at(p &: Ps, k: int): bool:
+    ret p_peek(p).kind == k
+end
+
+func p_at_eof(p &: Ps): bool:
+    ret p_peek(p).kind == tok.TK_EOF
+end
+
+// p_advance - the C token_t* return is dropped (call sites p_peek first).
+func p_advance(p &: Ps):
+    p.pos = skip_comments_from(p, p.pos)
+    if p.pos < p.count - 1:
+        p.pos += 1
+        p.pos = skip_comments_from(p, p.pos)
+    end
+end
+
+func p_match(p &: Ps, k: int): bool:
+    if p_at(p, k):
+        p_advance(p)
+        ret true
+    end
+    ret false
+end
+
+func p_skip_terminators(p &: Ps):
+    until p_at(p, tok.TK_STMT_END):
+        p_advance(p)
+    end
+end
+
+func p_error(p &: Ps, msg: str):
+    if p.panic:
+        ret
+    end
+    t := p_peek(p)
+    // C: t->lexeme ? t->lexeme : "<eof>" - the lexer never emits a NULL
+    // lexeme (EOF carries ""), so the fallback cannot trigger here.
+    m := co.Format2(
+        i18.Tr("%s (near '%s')"), co.ArgStr(i18.Tr(msg)), co.ArgStr(t.lexeme)
+    )
+    lg.LogAt(
+        p.lgr, lg.PH_PARSER, lg.LOG_ERROR, p.file, t.begin_line as int, t.begin_col as int, m
+    )
+    p.had_error = true
+    p.panic = true
+end
+
+func p_expect(p &: Ps, k: int, what: str): bool:
+    if p_at(p, k):
+        p_advance(p)
+        ret true
+    end
+    p_error(p, co.Format1(i18.Tr("expected %s"), co.ArgStr(i18.Tr(what))))
+    ret false
+end
+
+func p_close_angle(p &: Ps, what: str): bool:
+    if p.angle_pending > 0:
+        p.angle_pending -= 1
+        ret true
+    end
+    if p_at(p, tok.TK_GT):
+        p_advance(p)
+        ret true
+    end
+    if p_at(p, tok.TK_SHR):
+        p_advance(p)
+        p.angle_pending += 1
+        ret true
+    end
+    p_error(p, co.Format1(i18.Tr("expected %s"), co.ArgStr(i18.Tr(what))))
+    ret false
+end
+
+func p_sync(p &: Ps):
+    p.panic = false
+    // Drop any half-consumed '>>' split so a malformed generic can't leak a
+    // synthetic '>' into a later, unrelated one.
+    p.angle_pending = 0
+    until !p_at_eof(p):
+        k := p_peek(p).kind
+        if k == tok.TK_STMT_END:
+            p_advance(p)
+            ret
+        end
+        if k == tok.TK_KW_FUNC || k == tok.TK_KW_STRUCT || k == tok.TK_KW_ENUM || k == tok.TK_KW_TYPE || k == tok.TK_KW_CONST || k == tok.TK_KW_IMPORT || k == tok.TK_KW_LAYOUT || k == tok.TK_KW_IF || k == tok.TK_KW_UNTIL || k == tok.TK_KW_EACH || k == tok.TK_KW_REPEAT || k == tok.TK_KW_MATCH || k == tok.TK_KW_RET || k == tok.TK_RBRACE || k == tok.TK_KW_END:
+            ret
+        end
+        p_advance(p)
+    end
+end
+
+// p_mk - ast_new with the current token's span.
+func p_mk(p &: Ps, a &: at.Ast, kind: int): int:
+    t := p_peek(p)
+    id := at.NewNode(a, kind)
+    at.SetSpan(
+        a, id, t.begin_line, t.begin_col, t.begin_index, t.end_line, t.end_col, t.end_index, t.length
+    )
+    ret id
+end
+
+// p_fin - n->span.end = p_prev(p)->span.end.
+func p_fin(p &: Ps, a &: at.Ast, id: int):
+    t := p_prev(p)
+    mut n := at.Get(a, id)
+    n.end_line = t.end_line
+    n.end_col = t.end_col
+    n.end_index = t.end_index
+    at.Put(a, id, n)
+end
+
+func p_term(p &: Ps):
+    if p_at(p, tok.TK_STMT_END):
+        p_advance(p)
+    end
+end
+
+// P_RULE macro - trace-level rule logging.
+func p_rule(p &: Ps, nm: str):
+    if lg.Enabled(p.lgr, lg.LOG_TRACE):
+        t := p_peek(p)
+        lg.LogAt(
+            p.lgr, lg.PH_PARSER, lg.LOG_TRACE, p.file, t.begin_line as int, t.begin_col as int, "rule " + nm + " @ " + tok.KindName(t.kind)
+        )
+    end
+end
+
+func p_at_reserved_word(p &: Ps): bool:
+    t := p_peek(p)
+    if tok.IsKeyword(t.kind):
+        ret true
+    end
+    if t.kind == tok.TK_AND || t.kind == tok.TK_OR:
+        ret t.lexeme.len() > 0 && byte_at(t.lexeme, 0) >= 128
+    end
+    ret false
+end
+
+func p_name(p &: Ps, what: str): str:
+    if p_at(p, tok.TK_IDENT):
+        s := p_peek(p).lexeme
+        p_advance(p)
+        ret s
+    end
+    if p_at_reserved_word(p):
+        p_error(
+            p, co.Format1(
+                i18.Tr("%s (reserved word cannot be used as a name)"), co.ArgStr(i18.Tr(what))
+            )
+        )
+        p_advance(p)
+        ret "<error>"
+    end
+    p_error(p, what)
+    ret "<error>"
+end
+
+// "" stands in for the C NULL return.
+func p_member_name(p &: Ps, what: str): str:
+    if p_at(p, tok.TK_IDENT) || tok.IsKeyword(p_peek(p).kind):
+        s := p_peek(p).lexeme
+        p_advance(p)
+        ret s
+    end
+    p_error(p, what)
+    ret ""
+end
+
+func p_error_node(p &: Ps, a &: at.Ast): int:
+    n := p_mk(p, a, at.AST_IDENTIFIER)
+    at.SetName(a, n, "<error>")
+    p_fin(p, a, n)
+    ret n
+end
+
+func p_peekn(p &: Ps, k: int): tok.Token:
+    mut i := skip_comments_from(p, p.pos)
+    repeat k:
+        if i < p.count - 1:
+            i += 1
+            i = skip_comments_from(p, i)
+        end
+    end
+    if i >= p.count:
+        i = p.count - 1
+    end
+    ret p.toks.toks.get(i)[0]
+end
+
+func p_ident_run_len(p &: Ps): int:
+    mut m := 0
+    mut line := 0 as u32
+    mut have := false
+    until p_peekn(p, m).kind == tok.TK_IDENT:
+        l := p_peekn(p, m).begin_line
+        if !have:
+            line = l
+            have = true
+        else l != line:
+            break
+        end
+        m += 1
+    end
+    ret m
+end
+
+func p_munch_name(p &: Ps): str:
+    if !p_at(p, tok.TK_IDENT):
+        ret p_name(p, "expected name")
+    end
+    mut b := ""
+    mut first := true
+    line := p_peek(p).begin_line
+    until p_at(p, tok.TK_IDENT) && p_peek(p).begin_line == line:
+        if !first:
+            b = b + " "
+        end
+        b = b + p_peek(p).lexeme
+        first = false
+        p_advance(p)
+    end
+    ret b
+end
+
+func p_is_alias_word_keyword(k: int): bool:
+    ret k == tok.TK_KW_WITH || k == tok.TK_KW_PACKAGE
+end
+
+/* 'with' normally merges into a multi-word member name ('cfg.retry with backoff'),
+ * but a repeat header ends with 'with <index>', so the loop bound must stop the
+ * merge there or 'repeat box.count with i' reads as the field 'count with i'. */
+func p_at_mergeable_word(p &: Ps): bool:
+    k := p_peek(p).kind
+    if k == tok.TK_KW_WITH && p.no_with_word:
+        ret false
+    end
+    ret k == tok.TK_IDENT || p_is_alias_word_keyword(k)
+end
+
+func p_at_mergeable_value_word(p &: Ps): bool:
+    k := p_peek(p).kind
+    ret k == tok.TK_IDENT || k == tok.TK_KW_PACKAGE
+end
+
+/* Only ':=' introduces a brand-new binding; plain '=' and the compound
+ * assign operators always target an already-declared name, so they must
+ * not stop a multi-word merge (e.g. 'thread result = 99', 'up seq = ...').
+ * ':=' does stop it, since a bare identifier immediately followed by ':='
+ * is starting its own declaration, not continuing the identifier before
+ * it (e.g. '... - base\ny := ...' on one line). */
+func tk_is_new_binding(k: int): bool:
+    ret k == tok.TK_COLON_ASSIGN
+end
+
+func p_munch_value_name(p &: Ps): str:
+    if !p_at(p, tok.TK_IDENT):
+        ret p_name(p, "expected name")
+    end
+    line := p_peek(p).begin_line
+    mut b := p_peek(p).lexeme
+    p_advance(p)
+    until p_at_mergeable_value_word(p) && p_peek(p).begin_line == line && !tk_is_new_binding(p_peek2(p).kind):
+        b = b + " " + p_peek(p).lexeme
+        p_advance(p)
+    end
+    ret b
+end
+
+func p_munch_member_name(p &: Ps, what: str): str:
+    if !p_at_mergeable_word(p):
+        ret p_member_name(p, what)
+    end
+    line := p_peek(p).begin_line
+    mut b := p_peek(p).lexeme
+    p_advance(p)
+    until p_at_mergeable_word(p) && p_peek(p).begin_line == line:
+        b = b + " " + p_peek(p).lexeme
+        p_advance(p)
+    end
+    ret b
+end
+
+func parse_decl_name(p &: Ps): str:
+    ret p_munch_name(p)
+end
+
+func p_recurse_enter(p &: Ps, what: str): bool:
+    if p.depth >= PS_MAX_DEPTH:
+        p_error(p, what)
+        ret false
+    end
+    p.depth += 1
+    ret true
+end
+
+func p_recurse_leave(p &: Ps):
+    p.depth -= 1
+end
+
+// p_try_return_type - speculative ": Type" after a function header. Writes
+// `out_type` and returns true only on success (C wrote *out_type).
+func p_try_return_type(p &: Ps, a &: at.Ast, out_type &: int): bool:
+    if !p_at(p, tok.TK_COLON):
+        ret false
+    end
+    save_pos := p.pos
+    colon_line := p_peek(p).begin_line
+    p_advance(p)
+    if p_peek(p).begin_line != colon_line:
+        p.pos = save_pos
+        ret false
+    end
+    save_panic := p.panic
+    save_had_error := p.had_error
+    p.panic = true
+    t := parse_type(p, a)
+    tname := at.Get(a, t).name
+    valid_name := tname.len() > 0 && !str.Equals(tname, "<error>")
+    if valid_name && (p_at(p, tok.TK_COLON) || p_at(p, tok.TK_STMT_END) || p_at_eof(p)):
+        p.panic = save_panic
+        out_type = t
+        ret true
+    end
+    p.pos = save_pos
+    p.panic = save_panic
+    p.had_error = save_had_error
+    ret false
+end

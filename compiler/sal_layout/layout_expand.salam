@@ -1,0 +1,550 @@
+package layout
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import src "../source.salam"
+import lg "../logger.salam"
+import lx "../lexer/lexer.salam"
+import at "../ast.salam"
+import ps "../parser/parser.salam"
+import cc "../condcomp.salam"
+import sm "../semantic/semantic.salam"
+
+// ===========================================================================
+// ===== layout_expand.c =====
+// ===========================================================================
+
+// is_include_attr - the C checks the en + fa spellings only.
+func is_include_attr(n: str): bool:
+    ret str.Equals(n, "include") || str.Equals(n, "بگنجان")
+end
+
+// is_content_word
+func is_content_word(n: str): bool:
+    ret str.Equals(n, "content") || str.Equals(n, "محتوا")
+end
+
+// dir_of - path prefix before the last '/' or '\\', "" if none.
+func lo_dir_of(path: str): str:
+    mut cut := 0 - 1
+    n := str.Len(path)
+    repeat n with i:
+        b := byte_at(path, i)
+        if b == 47 || b == 92:
+            cut = i
+        end
+    end
+    if cut < 0:
+        ret ""
+    end
+    ret str.Substr(path, 0, cut)
+end
+
+// mk_str - a synthetic string literal node carrying span_from's span.
+func mk_str(a &: at.Ast, s: str, span_from: int): int:
+    n := at.NewNode(a, at.AST_LITERAL)
+    copy_span(a, n, span_from)
+    at.SetOp(a, n, tok.TK_STRING)
+    at.SetName(a, n, s)
+    mut v := tok.ValueNone()
+    v.kind = tok.TV_STRING
+    v.sval = s
+    at.SetTokenValue(a, n, v)
+    ret n
+end
+
+// node_text
+func node_text(a &: at.Ast, vid: int): str:
+    if vid == 0:
+        ret ""
+    end
+    v := at.Get(a, vid)
+    if v.kind == at.AST_IDENTIFIER:
+        ret v.name
+    end
+    if v.kind == at.AST_LITERAL:
+        if v.op == tok.TK_STRING || v.op == tok.TK_TRIPLE_STRING:
+            ret v.value_str
+        end
+        if v.op == tok.TK_INT:
+            ret co.U64Toa(v.value_int)
+        end
+        if v.op == tok.TK_FLOAT:
+            ret co.Format1("%g", co.ArgFloat(v.value_float))
+        end
+        if v.op == tok.TK_KW_TRUE:
+            ret "true"
+        end
+        if v.op == tok.TK_KW_FALSE:
+            ret "false"
+        end
+        ret v.name
+    end
+    ret ""
+end
+
+// frame_lookup - bound value node id (may be 0 = C NULL binding).
+func frame_lookup(f &: LoFrame, name: str, found &: bool): int:
+    found = false
+    if !f.present:
+        ret 0
+    end
+    repeat f.names.len() with i:
+        if str.Equals(f.names.get(i)[0], name):
+            found = true
+            ret f.vals.get(i)[0]
+        end
+    end
+    ret 0
+end
+
+// frame_set
+func frame_set(f &: LoFrame, name: str, val: int):
+    repeat f.names.len() with i:
+        if str.Equals(f.names.get(i)[0], name):
+            f.vals.set(i, val)
+            ret
+        end
+    end
+    f.names.push(name)
+    f.vals.push(val)
+end
+
+// interpolate - replaces {param} spans bound in the frame.
+func interpolate(a &: at.Ast, s: str, f &: LoFrame): str:
+    if !f.present || str.IndexOf(s, "{") < 0:
+        ret s
+    end
+    mut out := ""
+    mut changed := false
+    n := str.Len(s)
+    mut p := 0
+    until p < n:
+        if byte_at(s, p) == 123:
+            close := str.IndexFrom(s, "}", p)
+            if close >= 0:
+                key := str.Substr(s, p + 1, close - (p + 1))
+                mut found := false
+                bound := frame_lookup(f, key, found)
+                if found:
+                    out += node_text(a, bound)
+                    changed = true
+                    p = close + 1
+                    continue
+                end
+            end
+        end
+        out += str.Substr(s, p, 1)
+        p += 1
+    end
+    if changed:
+        ret out
+    end
+    ret s
+end
+
+// subst_value
+func subst_value(a &: at.Ast, vid: int, f &: LoFrame): int:
+    if vid == 0 || !f.present:
+        ret vid
+    end
+    v := at.Get(a, vid)
+    if v.kind == at.AST_IDENTIFIER:
+        mut found := false
+        bound := frame_lookup(f, v.name, found)
+        if found:
+            if bound != 0:
+                ret bound
+            end
+            ret mk_str(a, "", vid)
+        end
+    end
+    if v.kind == at.AST_LITERAL && (v.op == tok.TK_STRING || v.op == tok.TK_TRIPLE_STRING):
+        interp := interpolate(a, v.value_str, f)
+        if !str.Equals(interp, v.value_str):
+            ret mk_str(a, interp, vid)
+        end
+    end
+    ret vid
+end
+
+// find_comp - index into ex.comp_*, -1 = C NULL.
+func find_comp(ex &: LoExpand, name: str): int:
+    repeat ex.comp_name.len() with i:
+        if str.Equals(ex.comp_name.get(i)[0], name):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+// body_has_content_sink
+func body_has_content_sink(a &: at.Ast, node: int): bool:
+    repeat at.ChildCount(a, node) with i:
+        cid := at.Child(a, node, i)
+        c := at.Get(a, cid)
+        if c.kind != at.AST_LAYOUT_ELEMENT:
+            continue
+        end
+        if is_content_word(c.name):
+            ret true
+        end
+        if body_has_content_sink(a, cid):
+            ret true
+        end
+    end
+    ret false
+end
+
+// register_components
+func register_components(ex &: LoExpand, a &: at.Ast, program: int, dir: str):
+    repeat at.ChildCount(a, program) with i:
+        did := at.Child(a, program, i)
+        d := at.Get(a, did)
+        if d.kind != at.AST_LAYOUT_COMPONENT:
+            continue
+        end
+        if find_comp(ex, d.name) >= 0:
+            lg.Log(
+                ex.log, lg.PH_DRIVER, lg.LOG_WARN, co.Format1(
+                    "duplicate component '%s' ignored", co.ArgStr(d.name)
+                )
+            )
+            continue
+        end
+        repeat at.ChildCount(a, did) with j:
+            p := at.Get(a, at.Child(a, did, j))
+            if p.kind == at.AST_PARAM && is_content_word(p.name):
+                lg.Log(
+                    ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                        "component '%s': 'content' is reserved and cannot be a parameter", co.ArgStr(d.name)
+                    )
+                )
+                ex.errors += 1
+            end
+        end
+        mut mother := false
+        if d.a != 0:
+            mother = body_has_content_sink(a, d.a)
+        end
+        ex.comp_name.push(d.name)
+        ex.comp_def.push(did)
+        ex.comp_dir.push(dir)
+        ex.comp_mother.push(mother)
+        lg.Log(
+            ex.log, lg.PH_DRIVER, lg.LOG_DEBUG, co.Format2(
+                "registered component '%s' (%s)", co.ArgStr(d.name), co.ArgStr(mother ? "mother" : "single")
+            )
+        )
+    end
+end
+
+// find_layout_block
+func find_layout_block(a &: at.Ast, program: int): int:
+    repeat at.ChildCount(a, program) with i:
+        did := at.Child(a, program, i)
+        if at.KindOf(a, did) == at.AST_LAYOUT_BLOCK:
+            ret did
+        end
+    end
+    ret 0
+end
+
+// has_component_def
+func has_component_def(a &: at.Ast, program: int): bool:
+    repeat at.ChildCount(a, program) with i:
+        if at.KindOf(a, at.Child(a, program, i)) == at.AST_LAYOUT_COMPONENT:
+            ret true
+        end
+    end
+    ret false
+end
+
+// find_loaded - index into ex.loaded_*, -1 = C NULL.
+func find_loaded(ex &: LoExpand, path: str): int:
+    repeat ex.loaded_path.len() with i:
+        if str.Equals(ex.loaded_path.get(i)[0], path):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+// load_include - returns the loaded index, -1 when unreadable/unparsable
+// (the C returned NULL; the failed entry stays cached with prog == 0).
+func load_include(ex &: LoExpand, a &: at.Ast, path: str): int:
+    cached := find_loaded(ex, path)
+    if cached >= 0:
+        if ex.loaded_prog.get(cached)[0] != 0:
+            ret cached
+        end
+        ret 0 - 1
+    end
+    li := ex.loaded_path.len()
+    ex.loaded_path.push(path)
+    ex.loaded_prog.push(0)
+    ex.loaded_dir.push(lo_dir_of(path))
+    mut sf := src.New()
+    if !src.Load(path, sf):
+        lg.Log(
+            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1("cannot read included layout '%s'", co.ArgStr(path))
+        )
+        ex.errors += 1
+        ret 0 - 1
+    end
+    mut toks := tok.StreamNew(path)
+    _l := lx.Run(ex.log, ex.pack, sf, toks)
+    mut prog := 0
+    _p := ps.Run(ex.log, toks, a, prog)
+    tok.StreamFree(toks)
+    if prog != 0:
+        _c := cc.PruneProgram(a, ex.log, path, ex.cctab, prog)
+    end
+    if prog == 0:
+        lg.Log(
+            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1("cannot parse included layout '%s'", co.ArgStr(path))
+        )
+        ex.errors += 1
+        ret 0 - 1
+    end
+    ex.loaded_prog.set(li, prog)
+    lg.Log(
+        ex.log, lg.PH_DRIVER, lg.LOG_INFO, co.Format1("included layout %s", co.ArgStr(path))
+    )
+    ret li
+end
+
+// collect - register components of a program and scan its layout bodies.
+func collect(ex &: LoExpand, a &: at.Ast, program: int, dir: str, depth: int):
+    register_components(ex, a, program, dir)
+    repeat at.ChildCount(a, program) with i:
+        did := at.Child(a, program, i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_LAYOUT_BLOCK:
+            scan_includes(ex, a, did, dir, depth)
+        else d.kind == at.AST_LAYOUT_COMPONENT:
+            scan_includes(ex, a, d.a, dir, depth)
+        end
+    end
+end
+
+// scan_includes
+func scan_includes(
+    ex &: LoExpand, a &: at.Ast, container: int, dir: str, depth: int
+):
+    if container == 0 || depth > K_LO_MAX_DEPTH:
+        ret
+    end
+    repeat at.ChildCount(a, container) with i:
+        iid := at.Child(a, container, i)
+        item := at.Get(a, iid)
+        if item.kind == at.AST_LAYOUT_ATTR && is_include_attr(item.name):
+            mut spec := ""
+            mut has_spec := false
+            if item.a != 0:
+                av := at.Get(a, item.a)
+                if av.kind == at.AST_LITERAL && av.value_kind == tok.TV_STRING:
+                    spec = av.value_str
+                    has_spec = true
+                end
+            end
+            if !has_spec:
+                continue
+            end
+            path := sm.ResolveImport(dir, spec)
+            if find_loaded(ex, path) < 0:
+                l := load_include(ex, a, path)
+                if l >= 0:
+                    collect(
+                        ex, a, ex.loaded_prog.get(l)[0], ex.loaded_dir.get(l)[0], depth + 1
+                    )
+                end
+            end
+        else item.kind == at.AST_LAYOUT_ELEMENT:
+            scan_includes(ex, a, iid, dir, depth)
+        end
+    end
+end
+
+// expand_component
+func expand_component(
+    ex &: LoExpand, a &: at.Ast, out &: Vector<int>, invocation: int, ci: int, caller &: LoFrame, dir: str,
+    depth: int
+):
+    comp_name := ex.comp_name.get(ci)[0]
+    if depth > K_LO_MAX_DEPTH:
+        lg.Log(
+            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                "component '%s' nested too deeply (cyclic invocation?)", co.ArgStr(comp_name)
+            )
+        )
+        ex.errors += 1
+        ret
+    end
+    mut fr := LoFrame { present = true }
+    defer fr.names.free()
+    defer fr.vals.free()
+    defer fr.content.free()
+    comp_def := ex.comp_def.get(ci)[0]
+
+    repeat at.ChildCount(a, comp_def) with i:
+        pid := at.Child(a, comp_def, i)
+        p := at.Get(a, pid)
+        if p.kind == at.AST_PARAM:
+            frame_set(fr, p.name, p.a)
+        end
+    end
+
+    mut got_content := false
+    repeat at.ChildCount(a, invocation) with i2:
+        aid := at.Child(a, invocation, i2)
+        an := at.Get(a, aid)
+        if an.kind == at.AST_LAYOUT_ATTR:
+            if is_content_word(an.name):
+                txt := at.NewNode(a, at.AST_LAYOUT_ATTR)
+                copy_span(a, txt, aid)
+                at.SetName(a, txt, "content")
+                sub := subst_value(a, an.a, caller)
+                mut tn := at.Get(a, txt)
+                tn.a = sub
+                at.Put(a, txt, tn)
+                fr.content.push(txt)
+                got_content = true
+            else:
+                frame_set(fr, an.name, subst_value(a, an.a, caller))
+            end
+        else an.kind == at.AST_LAYOUT_ELEMENT:
+            before := fr.content.len()
+            mut cvec := fr.content
+            expand_item(ex, a, cvec, aid, caller, dir, depth)
+            fr.content = cvec
+            if fr.content.len() > before:
+                got_content = true
+            end
+        end
+    end
+    if !ex.comp_mother.get(ci)[0] && got_content:
+        lg.Log(
+            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                "component '%s' does not accept content (it has no `content:` placeholder)", co.ArgStr(comp_name)
+            )
+        )
+        ex.errors += 1
+    end
+    body := at.Get(a, comp_def).a
+    expand_items(ex, a, out, body, fr, ex.comp_dir.get(ci)[0], depth + 1)
+end
+
+// expand_item
+func expand_item(
+    ex &: LoExpand, a &: at.Ast, out &: Vector<int>, iid: int, fr &: LoFrame, dir: str, depth: int
+):
+    item := at.Get(a, iid)
+    if item.kind == at.AST_LAYOUT_ATTR:
+        if is_include_attr(item.name):
+            vid := subst_value(a, item.a, fr)
+            mut spec := ""
+            mut has_spec := false
+            if vid != 0:
+                v := at.Get(a, vid)
+                if v.kind == at.AST_LITERAL && v.value_kind == tok.TV_STRING:
+                    spec = v.value_str
+                    has_spec = true
+                end
+            end
+            if !has_spec:
+                lg.Log(
+                    ex.log, lg.PH_DRIVER, lg.LOG_ERROR, "include path must be a string"
+                )
+                ex.errors += 1
+                ret
+            end
+            path := sm.ResolveImport(dir, spec)
+            mut l := find_loaded(ex, path)
+            if l < 0:
+                l = load_include(ex, a, path)
+            end
+            if l >= 0 && ex.loaded_prog.get(l)[0] != 0:
+                lprog := ex.loaded_prog.get(l)[0]
+                lb := find_layout_block(a, lprog)
+                if lb != 0:
+                    mut none := LoFrame {}
+                    expand_items(
+                        ex, a, out, lb, none, ex.loaded_dir.get(l)[0], depth + 1
+                    )
+                    none.names.free()
+                    none.vals.free()
+                    none.content.free()
+                else !has_component_def(a, lprog):
+                    lg.Log(
+                        ex.log, lg.PH_DRIVER, lg.LOG_WARN, co.Format1(
+                            "included file '%s' has no layout block", co.ArgStr(path)
+                        )
+                    )
+                end
+            end
+            ret
+        end
+
+        attr := at.Clone(a, iid)
+        sub := subst_value(a, item.a, fr)
+        mut an := at.Get(a, attr)
+        an.a = sub
+        at.Put(a, attr, an)
+        out.push(attr)
+        ret
+    end
+    if item.kind == at.AST_LAYOUT_ELEMENT:
+        ci := find_comp(ex, item.name)
+        if ci >= 0:
+            expand_component(ex, a, out, iid, ci, fr, dir, depth)
+            ret
+        end
+
+        if fr.present && is_content_word(item.name):
+            if fr.content.len() > 0:
+                repeat fr.content.len() with i:
+                    out.push(fr.content.get(i)[0])
+                end
+            else:
+                expand_items(ex, a, out, iid, fr, dir, depth)
+            end
+            ret
+        end
+
+        el := at.NewNode(a, at.AST_LAYOUT_ELEMENT)
+        copy_span(a, el, iid)
+        at.SetName(a, el, item.name)
+        repeat item.aliases.len() with i2:
+            at.AddAlias(a, el, item.aliases.get(i2)[0])
+        end
+        mut kids := Vector {} as Vector<int>
+        expand_items(ex, a, kids, iid, fr, dir, depth)
+        mut en := at.Get(a, el)
+        mut old := en.list
+        en.list = kids
+        at.Put(a, el, en)
+        old.free()
+        out.push(el)
+        ret
+    end
+
+    out.push(iid)
+end
+
+// expand_items
+func expand_items(
+    ex &: LoExpand, a &: at.Ast, out &: Vector<int>, container: int, fr &: LoFrame, dir: str, depth: int
+):
+    if depth > K_LO_MAX_DEPTH:
+        lg.Log(
+            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, "layout include/component nesting too deep"
+        )
+        ex.errors += 1
+        ret
+    end
+    repeat at.ChildCount(a, container) with i:
+        expand_item(ex, a, out, at.Child(a, container, i), fr, dir, depth)
+    end
+end

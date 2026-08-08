@@ -261,7 +261,17 @@ static const char *call_ident(cg_t *cg, ast_node_t *n, ast_node_t *callee)
         const char *mangled;
         if (fsym && fsym->overloads.len > 0) {
             func_sig_t *sig = (func_sig_t *)fsym->overloads.data[0];
-            mangled = cg_mangle(cg, NULL, fn->name, &sig->params);
+            /*
+             * An extern keeps its declared C name - it is not one of ours
+             * to mangle. Without this, funcptr() on a libc extern emitted
+             * a mangled symbol that exists nowhere: `funcptr(printf)` in
+             * std/llvm/orc.salam became `_Salam_llvm_printf_str` and the
+             * link failed with "undeclared". Matches how ll_call_user and
+             * the LLVM backend's funcptr lowering both treat externs.
+             */
+            mangled = (sig->decl && sig->decl->is_extern)
+                          ? fn->name
+                          : cg_mangle(cg, NULL, fn->name, &sig->params);
         } else {
             mangled = fn->name;
         }

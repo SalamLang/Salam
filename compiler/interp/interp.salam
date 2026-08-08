@@ -1,0 +1,451 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Flat merge of the salam/interp port (see salam/PORTING.md "Layout - FLAT"):
+// compiler/src/interp/ - one package `interp`, one file. Import alias for
+// consumers: `ip`. The module is ported by TWO sequential agents INTO THIS
+// ONE FILE (the evaluator is mutually recursive with the statement executor):
+//
+//   A (THIS STAGE, DONE): interp.h/value.h/interp_internal.h (state, value
+//     representation), interp.c (environments/scopes, decl collection,
+//     module wiring, generic-env fixup, entry point), interp_value.c (value
+//     construction/conversion/printing, arrays/maps/structs/closures,
+//     arithmetic, comparisons), interp_builtin.c (print/input, intrinsic
+//     shims, builtin methods on str/array/map/iter/ptr). call_func and
+//     exec_list (interp_expr.c/interp_stmt.c glue) are ALSO ported here - //     stage B must NOT re-port them.
+//   B (THIS STAGE, DONE): interp_expr.c eval() + eval_call/eval_args/
+//     eval_match/do_listdir/sizeof-alignof, interp_stmt.c (exec_stmt,
+//     interp_assign_to, interp_resolve_loc, interp_loc_get/set,
+//     interp_match_arm, interp_find_match_arm) and interp_ffi.c
+//     (call_native_extern via a NATIVE_SYMS-equivalent extern-decl table +
+//     name dispatch; the C called every symbol through a cast
+//     int64(*)(int64 x8) - the port declares each symbol with its
+//     std-compatible signature and marshals the same i64 argument bits).
+//     `link` directives are ignored exactly like the C (collect_decls has
+//     no AST_LINK case; native symbols come from the fixed table only).
+//
+// C -> Salam decisions for this module (stage B must inherit these):
+// - value_t stays a small COPY-BY-VALUE struct (`Value`); heap kinds carry an
+//   integer handle (`id`) into a per-kind pool on Interp:
+//     VAL_ARRAY -> Interp.arrs (Arr), VAL_MAP -> Interp.maps (SMap),
+//     VAL_MAPITER -> Interp.iters, VAL_STRUCT -> Interp.sts (SStruct),
+//     VAL_FUNC -> Interp.closures (Closure), VAL_MODULE -> Interp.mods,
+//     VAL_VARIANT -> Interp.variants. Slot 0 of every pool is a sentinel
+//     (= the C NULL pointer), so handle 0 means "none".
+//   Copying a Value copies the handle - heap values share identity exactly
+//   like the C pointer union (struct assignment aliases, value_eq on structs
+//   compares ids). VAL_PTR keeps the raw address bits in `pa` (i64) plus the
+//   PTR_* element kind in `pe`.
+// - env_t* -> EnvId index into Interp.envs; Env keeps parallel names/vals
+//   vectors. The C lazy itab index on envs (ENV_INDEX_THRESHOLD) is dropped:
+//   lookup is a linear scan with identical semantics (perf-only difference,
+//   same call the semantic port made for scope_t's hash index).
+// - itab_t/ptab_t (interp.c) ARE ported (open addressing, FNV-1a / splitmix
+//   avalanche, same growth policy). itab vals are ints with per-table
+//   meaning: tab_structs/tab_enums/tab_extern_decls -> at.NodeId,
+//   tab_modules -> ModId, tab_funcs -> index into Interp.fnlists (the C
+//   per-name vec_t* of overloads), tab_extern_fns -> index into
+//   Interp.extern_fns (the C boxed value_t*), tab_def_envs (ptab, keyed by
+//   def NodeId) -> EnvId.
+// - ast_node_t* -> at.NodeId ints; the Ast is threaded `a &: at.Ast` through
+//   every function that touches nodes (never stored in Interp). The
+//   sema_result_t is likewise threaded `sem &: sm.Sema` (only the setup path
+//   needs it: build_modules/wire_imports/fixup_generic_envs).
+// - arena allocation -> pool Vectors owned by Interp; Free() releases
+//   everything (the C freed the arena wholesale).
+// - setjmp/longjmp (rt_error) -> cooperative unwinding: rt_error/rt_fail set
+//   Interp.failed/errmsg/errspan and KEEP THE FIRST error; every caller of a
+//   fallible function must check `ip.failed` and bail out (Run logs
+//   "runtime error ..." exactly like the C setjmp branch and returns 1).
+//   STAGE B RULE: check ip.failed after eval/exec/call_* calls, and make
+//   loops exit when it is set.
+// - FILE *out/err -> print/io.EPrint, or capture-to-string when
+//   Options.capture is set (Interp.out_text/err_text; the web wave writes
+//   the captured text to its file - it passed one FILE* for both streams).
+// - clock()-based timeout -> wall-clock time.NowMillis deadline (CPU-time vs
+//   wall-clock is the only difference; default 5000ms like the C).
+// - afmt/"%..." -> co.FormatN at call sites; rt_error messages are
+//   pre-translated with i18.Tr and pre-formatted at the call site (the C
+//   rt_error ran i18n_tr internally).
+// - Array slices (array_view) can't share a data pointer: a view Arr stores
+//   base/off/vlen and reads/writes THROUGH the base (views of views compose
+//   at creation). arr_push on a view overwrites base[off+vlen] when the slot
+//   exists, else appends to the base (the C wrote past the view's data
+//   pointer - UB beyond the base allocation; not replicable).
+// - smap_t is ported field-for-field (entries as parallel keys/vals/used
+//   vectors + the uint32 open-addressed index with 0=empty/1=tomb/idx+2,
+//   free_hint reuse, same rebuild thresholds) so `each` iteration order over
+//   maps matches the C byte-for-byte.
+// - PTR_STR ptr_load/ptr_store (reading/writing C `char*` cells) ARE ported
+//   (stage B): a str's byte pointer is `(s as void*) as i64` and a char*
+//   read back is `(bits as void*) as str` (the same reinterpretation
+//   std/fs uses). The values ALIAS the target bytes exactly like the C.
+//   One deviation: loading a NULL char* cell yields "" (the C's
+//   val_str(NULL) crashed on first use). ptr addresses live in i64 (like
+//   the web package's funcptr slots).
+// - INTRINSICS[] function-pointer table -> k_ip_intrinsics name table (same
+//   order) + an index dispatch in call_intrinsic; the platform row is
+//   "SleepEx" (ms) on Windows and "usleep" (µs) elsewhere via compile-time
+//   `if SALAM_OS_WINDOWS`, exactly like the C #ifdef.
+package interp
+
+import co "../sal_core.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+
+// ===== interp_ffi.c NATIVE_SYMS[] extern prototypes =====
+// Bodyless externs count as ORDER_IMPORT (see ast_toplevel_order_phase in
+// ast.c) so they must sit here, right after the imports; native_dispatch
+// (near the bottom of the private section) does the by-name call.
+extern:
+    func getenv(name: str): void*
+    func malloc(size: u64): void*
+    func realloc(ptr: void*, size: u64): void*
+    func free(ptr: void*)
+    func memset(ptr: void*, value: int, n: u64): void*
+    func memcpy(dst: void*, src: void*, n: u64): void*
+    func memmove(dst: void*, src: void*, n: u64): void*
+    func remove(path: str): int
+    func rename(old: str, new_path: str): int
+    func fopen(path: str, mode: str): void*
+    func fclose(fp: void*): int
+    func fseek(fp: void*, off: int, whence: int): int
+    func ftell(fp: void*): int
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fgetc(stream: void*): int
+    func fgets(buf: void*, n: int, fp: void*): void*
+    noret func exit(code: int)
+    noret func abort()
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _mkdir(path: str): int
+        func _rmdir(path: str): int
+        func _chdir(path: str): int
+        func GetCurrentDirectoryA(sz: int, buf: void*): int
+        func GetFileAttributesA(path: str): int
+        func _fseeki64(fp: void*, off: i64, whence: int): int
+        func FindFirstFileA(pat: str, data: void*): void*
+        func FindNextFileA(h: void*, data: void*): int
+        func FindClose(h: void*): int
+        func GetSystemTimeAsFileTime(ft: void*)
+        func _getpid(): int
+        func _popen(cmd: str, mode: str): void*
+        func _pclose(fp: void*): int
+    end
+else:
+    extern:
+        func mkdir(path: str, mode: int): int
+        func rmdir(path: str): int
+        func chdir(path: str): int
+        func access(path: str, mode: int): int
+        func getcwd(buf: void*, sz: int): void*
+        func opendir(path: str): void*
+        func readdir(d: void*): void*
+        func closedir(d: void*): int
+        func fseeko(fp: void*, off: i64, whence: int): int
+        func clock_gettime(clock_id: int, ts: void*): int
+        func popen(cmd: str, mode: str): void*
+        func pclose(fp: void*): int
+        func getpid(): int
+        func system(cmd: str): int
+    end
+end
+
+// ===== value.h =====
+// int_ty_t - the static integer type carried by a VAL_INT/VAL_CHAR value.
+//
+// Every integer is stored in an i64, but the language defines arithmetic to
+// wrap modulo 2^n in the operand's own type and to keep signed and unsigned
+// apart (SALAM-TYPES.md 4.1 and 15). Without a tag a u64 product reads back
+// as a negative i64 and `>>`/`/`/`%`/comparisons pick the signed operation,
+// so every value remembers the type semantic analysis gave it.
+//
+// ITY_NONE means "untyped/unknown" - it behaves as i64 and is what values
+// built by paths with no static type carry.
+pub const ITY_NONE := 0
+pub const ITY_I8 := 1
+pub const ITY_I16 := 2
+pub const ITY_I32 := 3
+pub const ITY_I64 := 4
+pub const ITY_U8 := 5
+pub const ITY_U16 := 6
+pub const ITY_U32 := 7
+pub const ITY_U64 := 8
+
+// val_kind_t - order and values MUST stay identical to the C enum.
+pub const VAL_NULL := 0
+pub const VAL_INT := 1
+pub const VAL_CHAR := 2
+pub const VAL_FLOAT := 3
+pub const VAL_BOOL := 4
+pub const VAL_STR := 5
+pub const VAL_ARRAY := 6
+pub const VAL_MAP := 7
+pub const VAL_MAPITER := 8
+pub const VAL_STRUCT := 9
+pub const VAL_FUNC := 10
+pub const VAL_MODULE := 11
+pub const VAL_PTR := 12
+pub const VAL_VARIANT := 13
+
+// ptr_elem_t
+pub const PTR_I8 := 0
+pub const PTR_U8 := 1
+pub const PTR_I16 := 2
+pub const PTR_U16 := 3
+pub const PTR_I32 := 4
+pub const PTR_U32 := 5
+pub const PTR_I64 := 6
+pub const PTR_U64 := 7
+pub const PTR_F32 := 8
+pub const PTR_F64 := 9
+pub const PTR_STR := 10
+pub const PTR_OPAQUE := 11
+
+// ===== interp_internal.h =====
+// flow_t
+pub const FLOW_NORMAL := 0
+pub const FLOW_RETURN := 1
+pub const FLOW_BREAK := 2
+pub const FLOW_CONTINUE := 3
+pub const FLOW_MATCH_RET := 4
+
+// iloc_kind_t
+pub const ILOC_VAR := 0
+pub const ILOC_FIELD := 1
+pub const ILOC_ARR := 2
+pub const ILOC_PTR := 3
+pub const ILOC_OPIDX := 4
+
+// #define INTERP_MAX_DEPTH 1000
+pub const INTERP_MAX_DEPTH := 1000
+
+const K_IP_INTR_COUNT := 22
+
+// INTRINSICS[] name column (interp_builtin.c), same order as the C table.
+// Index 22 is the platform sleep row (SleepEx / usleep), handled separately.
+// Declared mut only because of the non-main-package const-array codegen bug
+// (see salam/PORTING.md) - never reassigned.
+mut k_ip_intrinsics := [
+    "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "log", "log10", "exp", "floor", "ceil",
+    "fabs", "fmod", "pow", "strlen", "strcmp", "strtol", "strtod", "salam_input", "time"
+] as str[22]
+
+// ===== handle type aliases (all 0 = the C NULL pointer) =====
+pub type EnvId = int
+pub type ArrId = int
+pub type MapId = int
+pub type IterId = int
+pub type StructId = int
+pub type ClosId = int
+pub type VariantId = int
+pub type ModId = int
+
+// ===== value.h (struct value) =====
+// The tagged union is flattened; `id` is the per-kind pool handle (see the
+// file header for the pool table). Copying a Value copies the handle only.
+pub struct Value:
+    pub kind: int = VAL_NULL
+    pub ity: int = ITY_NONE // ITY_* - only meaningful for VAL_INT/VAL_CHAR
+    pub i: i64 = 0 as i64 // VAL_INT / VAL_CHAR (codepoint)
+    pub f: f64 = 0.0 // VAL_FLOAT
+    pub b: bool = false // VAL_BOOL
+    pub s: str = "" // VAL_STR
+    pub id: int = 0 // ArrId/MapId/IterId/StructId/ClosId/ModId/VariantId
+    pub pa: i64 = 0 as i64 // VAL_PTR address bits (sptr_t.addr)
+    pub pe: int = 0 // VAL_PTR element kind (sptr_t.elem, PTR_*)
+end
+
+// struct sarray. Non-view: items owns the data, cap mirrors the C capacity
+// (observable through the `.cap` builtin method). View (array_view): base is
+// the (never-view) root ArrId, off/vlen give the window; items stays empty.
+pub struct Arr:
+    pub items: Vector<Value> = Vector {}
+    pub cap: int = 0
+    pub is_view: bool = false
+    pub base: ArrId = 0
+    pub off: int = 0
+    pub vlen: int = 0
+end
+
+// struct smap. entries[] -> parallel keys/vals/used (cap = their length);
+// index[] semantics identical to the C: 0 = empty, 1 = tomb, entry_idx + 2.
+pub struct SMap:
+    pub keys: Vector<Value> = Vector {}
+    pub vals: Vector<Value> = Vector {}
+    pub used: Vector<bool> = Vector {}
+    pub count: int = 0
+    pub cap: int = 0
+    pub index: Vector<int> = Vector {}
+    pub index_cap: int = 0
+    pub index_used: int = 0
+    pub free_hint: int = 0
+end
+
+// struct smapiter
+pub struct SMapIter:
+    pub map: MapId = 0
+    pub idx: int = 0
+end
+
+// struct sstruct (fields[] -> parallel fnames/fvals; def is the AST_STRUCT_DEF)
+pub struct SStruct:
+    pub type_name: str = ""
+    pub def: int = 0 // at.NodeId
+    pub fnames: Vector<str> = Vector {}
+    pub fvals: Vector<Value> = Vector {}
+end
+
+// struct sclosure
+pub struct Closure:
+    pub fn: int = 0 // at.NodeId of the AST_FUNC_DEF / extern decl
+    pub env: EnvId = 0
+end
+
+// struct svariant (boxed value_t* -> inline Value + has_boxed flag)
+pub struct SVariant:
+    pub tag: int = 0
+    pub has_boxed: bool = false
+    pub boxed: Value = Value {}
+end
+
+// struct env (bindings vec of binding_t* -> parallel names/vals; the lazy
+// itab index is dropped - see the file header).
+pub struct Env:
+    pub parent: EnvId = 0
+    pub names: Vector<str> = Vector {}
+    pub vals: Vector<Value> = Vector {}
+end
+
+// struct module
+pub struct Module:
+    pub name: str = ""
+    pub env: EnvId = 0
+end
+
+// One overload list of tab_funcs (the C per-name vec_t*).
+pub struct FuncList:
+    pub nodes: Vector<int> = Vector {} // at.NodeIds of AST_FUNC_DEF
+end
+
+// itab_t - string-keyed open-addressed table ("" = empty slot, val 0 = miss).
+pub struct Itab:
+    pub keys: Vector<str> = Vector {}
+    pub vals: Vector<int> = Vector {}
+    pub cap: int = 0
+    pub count: int = 0
+end
+
+// ptab_t - int-keyed (NodeId) open-addressed table (key 0 = empty slot).
+pub struct Ptab:
+    pub keys: Vector<int> = Vector {}
+    pub vals: Vector<int> = Vector {}
+    pub cap: int = 0
+    pub count: int = 0
+end
+
+// frame_t (defer_t vec -> parallel stmt/env vectors)
+pub struct Frame:
+    pub defer_stmts: Vector<int> = Vector {} // at.NodeIds
+    pub defer_envs: Vector<int> = Vector {} // EnvIds
+end
+
+// iloc_t. binding_t *b -> (env, slot); sarray_t* -> ArrId; sptr_t -> pa/pe.
+pub struct Loc:
+    pub kind: int = ILOC_VAR
+    pub target: int = 0 // at.NodeId
+    pub env: EnvId = 0 // ILOC_VAR
+    pub slot: int = 0 // ILOC_VAR (binding index inside env)
+    pub obj: Value = Value {} // ILOC_FIELD / ILOC_OPIDX: the struct value
+    pub field_idx: int = 0 // ILOC_FIELD
+    pub arr: ArrId = 0 // ILOC_ARR
+    pub idx: i64 = 0 as i64 // ILOC_ARR / ILOC_PTR
+    pub pa: i64 = 0 as i64 // ILOC_PTR address bits
+    pub pe: int = 0 // ILOC_PTR element kind
+    pub key: Value = Value {} // ILOC_OPIDX
+    pub get_m: int = 0 // ILOC_OPIDX (at.NodeId)
+    pub set_m: int = 0 // ILOC_OPIDX (at.NodeId)
+end
+
+// interp_options_t. FILE *out/err -> capture flag (see file header);
+// input_data's C NULL vs "" distinction -> has_input.
+pub struct Options:
+    pub capture: bool = false
+    pub has_input: bool = false
+    pub input_data: str = ""
+    pub lang: str = "en"
+    pub timeout_ms: int = 0
+end
+
+// interp_t. Always create through New() - a bare `Interp {}` has no pool
+// sentinels. See the file header for every representation change.
+pub struct Interp:
+    pub log: lg.Logger = lg.New(2, false)
+    pub entry: str = ""
+    pub lang: str = "en"
+    // output sinks (FILE *out/err):
+    pub capture: bool = false
+    pub out_text: str = ""
+    pub err_text: str = ""
+    // scripted input (in_data/in_pos):
+    pub in_has: bool = false
+    pub in_data: str = ""
+    pub in_pos: int = 0
+    pub globals: EnvId = 0
+    // pools (slot 0 = sentinel = C NULL):
+    pub envs: Vector<Env> = Vector {}
+    pub arrs: Vector<Arr> = Vector {}
+    pub maps: Vector<SMap> = Vector {}
+    pub iters: Vector<SMapIter> = Vector {}
+    pub sts: Vector<SStruct> = Vector {}
+    pub closures: Vector<Closure> = Vector {}
+    pub variants: Vector<SVariant> = Vector {}
+    pub mods: Vector<Module> = Vector {}
+    pub fnlists: Vector<FuncList> = Vector {}
+    // decl registries (at.NodeIds), mirroring the C vec_t fields:
+    pub funcs: Vector<int> = Vector {}
+    pub structs: Vector<int> = Vector {}
+    pub enums: Vector<int> = Vector {}
+    pub impls: Vector<int> = Vector {}
+    pub extern_fns: Vector<Value> = Vector {} // boxed closures (slot 0 sentinel)
+    pub extern_decls: Vector<int> = Vector {}
+    pub def_env_defs: Vector<int> = Vector {} // vec def_envs (parallel)
+    pub def_env_envs: Vector<int> = Vector {}
+    // lookup tables:
+    pub tab_funcs: Itab = Itab {}
+    pub tab_structs: Itab = Itab {}
+    pub tab_enums: Itab = Itab {}
+    pub tab_modules: Itab = Itab {}
+    pub tab_extern_fns: Itab = Itab {}
+    pub tab_extern_decls: Itab = Itab {}
+    pub tab_def_envs: Ptab = Ptab {}
+    // jmp_buf on_error/errmsg/errspan -> cooperative error state:
+    pub failed: bool = false
+    pub errmsg: str = ""
+    pub errspan: co.SrcSpan = co.EmptySpan()
+    pub have_errspan: bool = false
+    // steps/deadline/depth/match_expr_depth/pending_flow:
+    pub steps: u64 = 0 as u64
+    pub deadline_ms: i64 = 0 as i64 // 0 = no deadline
+    pub depth: int = 0
+    pub match_expr_depth: int = 0
+    pub pending_flow: int = FLOW_NORMAL
+end
+
+// ---------------------------------------------------------------------------
+// Low-level shared helpers (no direct C equivalent).
+// ---------------------------------------------------------------------------

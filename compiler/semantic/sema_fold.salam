@@ -1,0 +1,429 @@
+package semantic
+
+import str
+import tok "../token.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+
+// ===========================================================================
+// ===== sema_fold.c (5c) =====
+// ===========================================================================
+
+func fold_i64_max(): i64:
+    ret 9223372036854775807
+end
+
+func fold_i64_min(): i64:
+    ret (0 - 9223372036854775807) - 1
+end
+
+// lit_int - the node is an int literal whose value fits in i64.
+func lit_int(a &: at.Ast, nid: int, out &: i64): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind != at.AST_LITERAL || n.op != tok.TK_INT:
+        ret false
+    end
+    u := n.value_int
+    uns := str.Len(n.type_str) > 0 && (byte_at(n.type_str, 0) == 117 || str.Equals(n.type_str, "size"))
+    if uns && u > fold_i64_max() as u64:
+        ret false
+    end
+    out = u as i64
+    ret true
+end
+
+func lit_flt(a &: at.Ast, nid: int, out &: f64): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind != at.AST_LITERAL:
+        ret false
+    end
+    if n.op == tok.TK_FLOAT:
+        out = n.value_float
+        ret true
+    end
+    if n.op == tok.TK_INT:
+        mut v := 0 as i64
+        if !lit_int(a, nid, v):
+            ret false
+        end
+        out = v as f64
+        ret true
+    end
+    ret false
+end
+
+func lit_bool(a &: at.Ast, nid: int, out &: bool): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind != at.AST_LITERAL:
+        ret false
+    end
+    if n.op == tok.TK_KW_TRUE:
+        out = true
+        ret true
+    end
+    if n.op == tok.TK_KW_FALSE:
+        out = false
+        ret true
+    end
+    ret false
+end
+
+func lit_str(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    ret n.kind == at.AST_LITERAL && (
+        n.op == tok.TK_STRING || n.op == tok.TK_TRIPLE_STRING || n.op == tok.TK_RAW_STRING
+    ) && n.value_kind == tok.TV_STRING
+end
+
+// fold_done - rewrites the node into a literal in place.
+func fold_done(a &: at.Ast, nid: int, op: int):
+    mut n := at.Get(a, nid)
+    n.kind = at.AST_LITERAL
+    n.op = op
+    n.a = 0
+    n.b = 0
+    n.synthetic = false
+    at.Put(a, nid, n)
+end
+
+func fold_int(a &: at.Ast, nid: int, v: i64):
+    mut n := at.Get(a, nid)
+    n.value_kind = tok.TV_INT
+    n.value_int = v as u64
+    at.Put(a, nid, n)
+    fold_done(a, nid, tok.TK_INT)
+end
+
+func fold_flt(a &: at.Ast, nid: int, v: f64):
+    mut n := at.Get(a, nid)
+    n.value_kind = tok.TV_FLOAT
+    n.value_float = v
+    at.Put(a, nid, n)
+    fold_done(a, nid, tok.TK_FLOAT)
+end
+
+func fold_bool(a &: at.Ast, nid: int, v: bool):
+    mut n := at.Get(a, nid)
+    n.value_kind = tok.TV_BOOL
+    n.value_bool = v
+    at.Put(a, nid, n)
+    fold_done(a, nid, v ? tok.TK_KW_TRUE : tok.TK_KW_FALSE)
+end
+
+func add_ok(va: i64, vb: i64): bool:
+    if vb > 0:
+        ret va <= fold_i64_max() - vb
+    end
+    ret va >= fold_i64_min() - vb
+end
+
+func sub_ok(va: i64, vb: i64): bool:
+    if vb > 0:
+        ret va >= fold_i64_min() + vb
+    end
+    ret va <= fold_i64_max() + vb
+end
+
+func mul_ok(va: i64, vb: i64): bool:
+    if va == 0 || vb == 0:
+        ret true
+    end
+    if va == (0 - 1):
+        ret vb != fold_i64_min()
+    end
+    if vb == (0 - 1):
+        ret va != fold_i64_min()
+    end
+    if va > 0:
+        if vb > 0:
+            ret va <= fold_i64_max() / vb
+        end
+        ret vb >= fold_i64_min() / va
+    end
+    if vb > 0:
+        ret va >= fold_i64_min() / vb
+    end
+    ret va >= fold_i64_max() / vb
+end
+
+// flt_finite - NaN/inf probe without giant literals: only 0, NaN and the
+// infinities satisfy v*0.5 == v.
+func flt_finite(v: f64): bool:
+    if v != v:
+        ret false
+    end
+    if v * 0.5 == v && v != 0.0:
+        ret false
+    end
+    ret true
+end
+
+// fold_result_is_int - folding only happens for these decorated types.
+func fold_result_is_int(a &: at.Ast, nid: int): bool:
+    ts := at.Get(a, nid).type_str
+    if str.Len(ts) == 0:
+        ret false
+    end
+    ret str.Equals(ts, "i8") || str.Equals(ts, "i16") || str.Equals(ts, "i32") || str.Equals(ts, "i64") || str.Equals(ts, "u8") || str.Equals(ts, "u16") || str.Equals(ts, "u32") || str.Equals(ts, "u64") || str.Equals(ts, "char")
+end
+
+func fold_binary_int(s &: Sema, a &: at.Ast, nid: int, va: i64, vb: i64):
+    op := at.Get(a, nid).op
+    if op == tok.TK_PLUS:
+        if fold_result_is_int(a, nid) && add_ok(va, vb):
+            fold_int(a, nid, va + vb)
+        end
+        ret
+    end
+    if op == tok.TK_MINUS:
+        if fold_result_is_int(a, nid) && sub_ok(va, vb):
+            fold_int(a, nid, va - vb)
+        end
+        ret
+    end
+    if op == tok.TK_STAR:
+        if fold_result_is_int(a, nid) && mul_ok(va, vb):
+            fold_int(a, nid, va * vb)
+        end
+        ret
+    end
+    if op == tok.TK_SLASH || op == tok.TK_PERCENT:
+        if vb == 0:
+            serr(
+                s, 21, span_of(a, nid), i18.Tr("division by zero in constant expression")
+            )
+            ret
+        end
+        if !fold_result_is_int(a, nid):
+            ret
+        end
+        if va == fold_i64_min() && vb == (0 - 1):
+            ret
+        end
+        fold_int(a, nid, op == tok.TK_SLASH ? va / vb : va % vb)
+        ret
+    end
+    if op == tok.TK_EQ:
+        fold_bool(a, nid, va == vb)
+        ret
+    end
+    if op == tok.TK_NE:
+        fold_bool(a, nid, va != vb)
+        ret
+    end
+    if op == tok.TK_LT:
+        fold_bool(a, nid, va < vb)
+        ret
+    end
+    if op == tok.TK_GT:
+        fold_bool(a, nid, va > vb)
+        ret
+    end
+    if op == tok.TK_LE:
+        fold_bool(a, nid, va <= vb)
+        ret
+    end
+    if op == tok.TK_GE:
+        fold_bool(a, nid, va >= vb)
+        ret
+    end
+    if op == tok.TK_AMP:
+        if fold_result_is_int(a, nid):
+            fold_int(a, nid, ((va as u64) & (vb as u64)) as i64)
+        end
+        ret
+    end
+    if op == tok.TK_PIPE:
+        if fold_result_is_int(a, nid):
+            fold_int(a, nid, ((va as u64) | (vb as u64)) as i64)
+        end
+        ret
+    end
+    if op == tok.TK_CARET:
+        if fold_result_is_int(a, nid):
+            fold_int(a, nid, ((va as u64) ^ (vb as u64)) as i64)
+        end
+        ret
+    end
+    if op == tok.TK_SHL:
+        if fold_result_is_int(a, nid) && vb >= 0 && vb < 64:
+            fold_int(a, nid, ((va as u64) << (vb as int)) as i64)
+        end
+        ret
+    end
+    if op == tok.TK_SHR:
+        if fold_result_is_int(a, nid) && vb >= 0 && vb < 64:
+            fold_int(a, nid, va >> (vb as int))
+        end
+        ret
+    end
+end
+
+func fold_binary_flt(a &: at.Ast, nid: int, fa: f64, fb: f64):
+    n := at.Get(a, nid)
+    op := n.op
+    mut r := 0.0
+    if op == tok.TK_PLUS:
+        r = fa + fb
+    else op == tok.TK_MINUS:
+        r = fa - fb
+    else op == tok.TK_STAR:
+        r = fa * fb
+    else op == tok.TK_SLASH:
+        if fb == 0.0:
+            ret
+        end
+        r = fa / fb
+    else op == tok.TK_EQ:
+        fold_bool(a, nid, fa == fb)
+        ret
+    else op == tok.TK_NE:
+        fold_bool(a, nid, fa != fb)
+        ret
+    else op == tok.TK_LT:
+        fold_bool(a, nid, fa < fb)
+        ret
+    else op == tok.TK_GT:
+        fold_bool(a, nid, fa > fb)
+        ret
+    else op == tok.TK_LE:
+        fold_bool(a, nid, fa <= fb)
+        ret
+    else op == tok.TK_GE:
+        fold_bool(a, nid, fa >= fb)
+        ret
+    else:
+        ret
+    end
+    if !flt_finite(r):
+        ret
+    end
+    ts := n.type_str
+    if !str.Equals(ts, "f32") && !str.Equals(ts, "f64"):
+        ret
+    end
+    fold_flt(a, nid, r)
+end
+
+// FOLD_STR_REPEAT_MAX_BYTES = 1 << 20
+func fold_binary_str_repeat(a &: at.Ast, nid: int, strid: int, count: i64):
+    sv := at.Get(a, strid).value_str
+    sl := str.Len(sv) as i64
+    mut c := count
+    if c < 0:
+        c = 0 as i64
+    end
+    total := (sl as u64) * (c as u64)
+    if total > 1048576 as u64:
+        ret
+    end
+    mut n := at.Get(a, nid)
+    n.value_kind = tok.TV_STRING
+    n.value_str = str.Repeat(sv, c as int)
+    at.Put(a, nid, n)
+    fold_done(a, nid, tok.TK_STRING)
+end
+
+func fold_binary_str(a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    sa := at.Get(a, n.a).value_str
+    sb := at.Get(a, n.b).value_str
+    mut nv := at.Get(a, nid)
+    nv.value_kind = tok.TV_STRING
+    nv.value_str = str.Concat(sa, sb)
+    at.Put(a, nid, nv)
+    fold_done(a, nid, tok.TK_STRING)
+end
+
+func fold_binary(s &: Sema, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    mut ia := 0 as i64
+    mut ib := 0 as i64
+    mut fa := 0.0
+    mut fb := 0.0
+    mut ba := false
+    mut bb := false
+    if n.op == tok.TK_AND || n.op == tok.TK_OR:
+        if lit_bool(a, n.a, ba) && lit_bool(a, n.b, bb):
+            fold_bool(a, nid, n.op == tok.TK_AND ? (ba && bb) : (ba || bb))
+        end
+        ret
+    end
+    if lit_int(a, n.a, ia) && lit_int(a, n.b, ib):
+        fold_binary_int(s, a, nid, ia, ib)
+        ret
+    end
+    if lit_flt(a, n.a, fa) && lit_flt(a, n.b, fb) && (at.Get(a, n.a).op == tok.TK_FLOAT || at.Get(a, n.b).op == tok.TK_FLOAT):
+        fold_binary_flt(a, nid, fa, fb)
+        ret
+    end
+    if lit_bool(a, n.a, ba) && lit_bool(a, n.b, bb):
+        if n.op == tok.TK_EQ:
+            fold_bool(a, nid, ba == bb)
+        else n.op == tok.TK_NE:
+            fold_bool(a, nid, ba != bb)
+        end
+        ret
+    end
+    if n.op == tok.TK_PLUS && lit_str(a, n.a) && lit_str(a, n.b) && str.Equals(n.type_str, "str"):
+        fold_binary_str(a, nid)
+        ret
+    end
+    if n.op == tok.TK_STAR && str.Equals(n.type_str, "str"):
+        if lit_str(a, n.a) && lit_int(a, n.b, ia):
+            fold_binary_str_repeat(a, nid, n.a, ia)
+        else lit_str(a, n.b) && lit_int(a, n.a, ia):
+            fold_binary_str_repeat(a, nid, n.b, ia)
+        end
+    end
+end
+
+func fold_unary(a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    mut iv := 0 as i64
+    mut bv := false
+    if n.op == tok.TK_MINUS:
+        if lit_int(a, n.a, iv) && iv != fold_i64_min() && fold_result_is_int(a, nid):
+            fold_int(a, nid, 0 - iv)
+            ret
+        end
+        if n.a != 0:
+            an := at.Get(a, n.a)
+            if an.kind == at.AST_LITERAL && an.op == tok.TK_FLOAT:
+                fold_flt(a, nid, 0.0 - an.value_float)
+            end
+        end
+        ret
+    end
+    if n.op == tok.TK_NOT && lit_bool(a, n.a, bv):
+        fold_bool(a, nid, !bv)
+    end
+    if n.op == tok.TK_TILDE && lit_int(a, n.a, iv) && fold_result_is_int(a, nid):
+        fold_int(a, nid, (~(iv as u64)) as i64)
+    end
+end
+
+// sema_fold_expr - compile-time constant folding entry point.
+func sema_fold_expr(s &: Sema, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_BINARY:
+        fold_binary(s, a, nid)
+    else k == at.AST_UNARY:
+        fold_unary(a, nid)
+    end
+end

@@ -1,0 +1,613 @@
+package llvmgen
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import sm "../semantic/semantic.salam"
+
+// ===== codegen_llvm_decl.c =====
+
+// ll_emit_struct_types
+func emit_struct_types(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
+    mut i := 0
+    until i < at.ChildCount(a, program):
+        d := at.Child(a, program, i)
+        dn := at.Get(a, d)
+        if dn.kind == at.AST_STRUCT_DEF && dn.typarams.len() == 0:
+            ssym := struct_sym(v, s, a, dn.name)
+            if ssym != 0 && sm.SymAt(s, ssym).members != 0:
+                sy := sm.SymAt(s, ssym)
+                sname := sy.ty != sm.TYPE_NONE ? sm.ToString(s, sy.ty) : dn.name
+                ltname := struct_ltype(sname)
+                mut seen := false
+                repeat v.emitted.len() with ke:
+                    if str.Equals(ltname, v.emitted.get(ke)[0]):
+                        seen = true
+                    end
+                end
+                if !seen:
+                    v.emitted.push(ltname)
+                    mut b := co.SbNew()
+                    co.SbPuts(b, ltname + " = type { ")
+                    mut nf := 0
+                    syms := sm.ScopeAt(s, sy.members).symbols
+                    repeat syms.len() with j:
+                        f := sm.SymAt(s, syms.get(j)[0])
+                        if f.kind == sm.SYM_FIELD:
+                            if nf != 0:
+                                co.SbPuts(b, ", ")
+                            end
+                            co.SbPuts(b, ty_of(v, s, a, sm.ToString(s, f.ty)))
+                            nf += 1
+                        end
+                    end
+                    co.SbPuts(b, " }\n")
+                    out_g(v, co.SbCstr(b))
+                    co.SbFree(b)
+                end
+            end
+        end
+        i += 1
+    end
+    out_g(v, "\n")
+end
+
+// ll_mangle - "" owner = the C NULL; sig 0 = the C NULL.
+func mangle(v &: Lv, s &: sm.Sema, owner: str, fn_name: str, sig: int): str:
+    if str.Len(owner) == 0 && str.Equals(fn_name, v.entry):
+        ret "main"
+    end
+    mut b := co.SbNew()
+    co.SbPuts(b, "salam_")
+    if str.Len(owner) > 0:
+        put_ident(b, owner)
+        co.SbPutc(b, 95)
+    end
+    put_ident(b, fn_name)
+    if sig != 0:
+        sg := sm.SigAt(s, sig)
+        repeat sg.params.len() with i:
+            co.SbPutc(b, 95)
+            put_type_code(b, sm.ToString(s, sg.params.get(i)[0]))
+        end
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+// ll_pick_overload - first exact arg-typestring match; else first
+// arity-compatible; else overload 0.
+func pick_overload(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, symid: int, call: int
+): int:
+    _v := v.tmp
+    mut arity := 0
+    sy := sm.SymAt(s, symid)
+    nargs := at.ChildCount(a, call)
+    repeat sy.overloads.len() with i:
+        sigid := sy.overloads.get(i)[0]
+        sg := sm.SigAt(s, sigid)
+        skip := nargs < sg.required || (!sg.variadic && nargs > sg.params.len())
+        if !skip:
+            if arity == 0:
+                arity = sigid
+            end
+            nfix := nargs < sg.params.len() ? nargs : sg.params.len()
+            mut okm := true
+            mut j := 0
+            until j < nfix && okm:
+                arg := at.Get(a, at.Child(a, call, j))
+                pt := sm.ToString(s, sg.params.get(j)[0])
+                if str.Len(arg.type_str) == 0 || !str.Equals(arg.type_str, pt):
+                    okm = false
+                end
+                j += 1
+            end
+            if okm:
+                ret sigid
+            end
+        end
+    end
+    if arity != 0:
+        ret arity
+    end
+    if sy.overloads.len() > 0:
+        ret sy.overloads.get(0)[0]
+    end
+    ret 0
+end
+
+// ll_sig_of
+func sig_of(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int): int:
+    fname := at.Get(a, fn).name
+    mut symid := 0
+    if owner != 0:
+        symid = sm.LookupLocal(s, sm.SymAt(s, owner).members, fname)
+    else:
+        symid = sym_of(v, s, a, fname)
+    end
+    if symid == 0:
+        ret 0
+    end
+    sy := sm.SymAt(s, symid)
+    repeat sy.overloads.len() with i:
+        sigid := sy.overloads.get(i)[0]
+        if sm.SigAt(s, sigid).decl == fn:
+            ret sigid
+        end
+    end
+    if sy.overloads.len() > 0:
+        ret sy.overloads.get(0)[0]
+    end
+    ret 0
+end
+
+// ll_fn_header - recv_param "" = the C NULL.
+func fn_header(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, sig: int, ret_lty: str, fname: str, recv_param: str,
+    exported: bool, is_main: bool
+): str:
+    mut hdr := co.SbNew()
+    co.SbPuts(
+        hdr, "define " + (exported ? "" : "internal ") + ret_lty + " @" + fname + "("
+    )
+    mut first := true
+    // main takes the real C argc/argv. Salam's own `func main:` declares no
+    // parameters, so this emitted `define i32 @main()` and the process
+    // arguments never reached the runtime - args() returned an empty vector
+    // in every LLVM-built program (the C backend has always emitted
+    // `main(int argc, char **argv)` and called salam_set_args, see
+    // codegen_decl.c).
+    if is_main:
+        co.SbPuts(hdr, "i32 %argc, ptr %argv")
+        first = false
+    end
+    if str.Len(recv_param) > 0:
+        co.SbPuts(hdr, recv_param)
+        first = false
+    end
+    fnode := at.Get(a, fn)
+    sg := sm.SigAt(s, sig)
+    repeat at.ChildCount(a, fn) with i:
+        p := at.Get(a, fnode.list.get(i)[0])
+        pts := sm.ToString(s, sg.params.get(i)[0])
+        if !first:
+            co.SbPuts(hdr, ", ")
+        end
+        if p.is_ref:
+            co.SbPuts(hdr, "ptr noundef nonnull %arg" + co.I64Toa(i as i64))
+        else:
+            co.SbPuts(hdr, ty_of(v, s, a, pts) + " %arg" + co.I64Toa(i as i64))
+        end
+        first = false
+    end
+    co.SbPuts(hdr, ")")
+    if !v.is_main:
+        if fnode.is_inline:
+            co.SbPuts(hdr, " alwaysinline")
+        end
+        if fnode.is_noinline:
+            co.SbPuts(hdr, " noinline")
+        end
+        if fnode.is_pure:
+            co.SbPuts(hdr, " memory(read) willreturn nofree nosync")
+        end
+        if fnode.is_noret:
+            co.SbPuts(hdr, " noreturn")
+        end
+    end
+    if v.optsize:
+        co.SbPuts(hdr, " optsize")
+    end
+    if v.minsize:
+        co.SbPuts(hdr, " minsize")
+    end
+    co.SbPuts(hdr, " nounwind")
+    if v.debug && str.Len(v.cur_sp) > 0:
+        co.SbPuts(hdr, " !dbg " + v.cur_sp)
+    end
+    co.SbPuts(hdr, " {\n")
+    r := co.SbCstr(hdr)
+    co.SbFree(hdr)
+    ret r
+end
+
+// ll_spill_params
+func spill_params(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, sig: int):
+    fnode := at.Get(a, fn)
+    sg := sm.SigAt(s, sig)
+    repeat at.ChildCount(a, fn) with i:
+        p := at.Get(a, fnode.list.get(i)[0])
+        pts := sm.ToString(s, sg.params.get(i)[0])
+        if p.is_ref:
+            local_add(v, p.name, "%arg" + co.I64Toa(i as i64), pts)
+        else:
+            ptr2 := "%p." + safe_name(p.name)
+            emit_alloca(v, ptr2 + " = alloca " + ty_of(v, s, a, pts))
+            emit(
+                v, "store " + ty_of(v, s, a, pts) + " %arg" + co.I64Toa(i as i64) + ", ptr " + ptr2
+            )
+            local_add(v, p.name, ptr2, pts)
+        end
+    end
+end
+
+// ll_function - the function frame. Body statements come from stage B's
+// lv_block_top; everything else (header, spills, this-slot, global inits,
+// implicit return, builder nesting) is stage A.
+func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
+    fnode := at.Get(a, fn)
+    // A bodyless `extern func` has no definition to emit - but it does need a
+    // `declare`, and this is the one place every call site funnels through
+    // (call_user -> ensure_fn). Returning silently left the call referencing
+    // an undeclared @name whenever the declaring package was never touched by
+    // the scope walk in emit_externs_in.
+    if owner == 0 && fnode.is_extern && fnode.a == 0:
+        xsig := sig_of(v, s, a, fn, owner)
+        if xsig != 0:
+            declare_extern(v, s, a, fnode.name, xsig)
+        end
+        ret
+    end
+    sig := sig_of(v, s, a, fn, owner)
+    if sig == 0:
+        ret
+    end
+    is_main0 := owner == 0 && str.Equals(fnode.name, v.entry)
+    is_impl := owner != 0 && sm.SymAt(s, owner).kind == sm.SYM_TYPEIMPL
+    rts := sm.ToString(s, sm.SigAt(s, sig).ret_type)
+    ret_lty := is_main0 ? "i32" : ty_of(v, s, a, rts)
+    mut recv_ts := ""
+    if is_impl:
+        recv_ts = sm.ToString(s, sm.SymAt(s, owner).ty)
+    else owner != 0:
+        recv_ts = sm.SymAt(s, owner).name
+    end
+    mut fname := ""
+    if is_impl:
+        fname = mangle_ti(v, s, recv_ts, fnode.name, sig)
+    else owner == 0 && fnode.is_extern:
+        fname = fnode.name
+    else:
+        fname = mangle(
+            v, s, owner != 0 ? sm.SymAt(s, owner).name : "", fnode.name, sig
+        )
+    end
+    mut recv_param := ""
+    if owner != 0:
+        if is_impl:
+            recv_param = ty_of(v, s, a, recv_ts) + " %this"
+        else:
+            recv_param = "ptr noundef %this"
+        end
+    end
+    exported := is_main0 || (owner == 0 && fnode.is_extern)
+    repeat v.emitted.len() with i:
+        if str.Equals(fname, v.emitted.get(i)[0]):
+            ret
+        end
+    end
+    v.emitted.push(fname)
+
+    saved_bb := v.bb
+    saved_ba := v.ba
+    saved_in_fn := v.in_fn
+    saved_tmp := v.tmp
+    saved_lbl := v.lbl
+    saved_nloop := v.nloop
+    // The break/continue target stacks, not just their depth. A
+    // function can be emitted *nested* inside another's body
+    // (ensure_fn fires while lowering a call expression), and the
+    // nested emission resets nloop to 0 and then writes brk[0]/cont[0]
+    // for its own loops - which are the outer function's live
+    // entries. The outer `continue` then branched to a label
+    // belonging to the inner function and never defined in its own,
+    // producing IR that fails to parse.
+    mut saved_brk := Vector {} as Vector<str>
+    mut saved_cont := Vector {} as Vector<str>
+    repeat saved_nloop with sbi:
+        saved_brk.push(v.brk.get(sbi)[0])
+        saved_cont.push(v.cont.get(sbi)[0])
+    end
+    saved_main := v.is_main
+    saved_byval := v.self_byval
+    saved_term := v.term
+    saved_ret := v.ret_ts
+    saved_sp := v.cur_sp
+    saved_dbg := v.cur_dbg
+    saved_self := v.self_ts
+    saved_this := v.this_ref
+    saved_locals := v.locals
+    saved_defers := v.defers
+    v.bb = str.NewBuilder()
+    v.ba = str.NewBuilder()
+    v.in_fn = true
+    v.tmp = 0
+    v.lbl = 0
+    v.nloop = 0
+    v.term = false
+    v.ret_ts = rts
+    v.is_main = is_main0
+    v.self_ts = recv_ts
+    v.self_byval = is_impl
+    v.this_ref = owner != 0 ? "%this" : ""
+    v.locals = Vector {} as Vector<LvVar>
+    v.defers = Vector {} as Vector<int>
+    if v.debug:
+        _sp := debug_subprogram(v, fnode.name, fnode.begin_line as int)
+        v.cur_dbg = debug_location(
+            v, fnode.begin_line as int, fnode.begin_col as int
+        )
+    end
+    header := fn_header(
+        v, s, a, fn, sig, ret_lty, fname, recv_param, exported, is_main0
+    )
+    if is_impl:
+        emit_alloca(v, "%p.this = alloca " + ty_of(v, s, a, recv_ts))
+        emit(v, "store " + ty_of(v, s, a, recv_ts) + " %this, ptr %p.this")
+        v.this_ref = "%p.this"
+    end
+    spill_params(v, s, a, fn, sig)
+    if is_main0:
+        // Hand argc/argv to the runtime before anything can call args().
+        mut sa_owner := 0
+        sa := body_sig_for(s, a, "salam_set_args", sa_owner)
+        if sa >= 0 && sm.SigAt(s, sa).decl != 0:
+            ensure_fn(v, s, a, sm.SigAt(s, sa).decl, 0, sm.SymAt(s, sa_owner).members)
+            emit(v, "call void @salam_set_args(i32 %argc, ptr %argv)")
+        end
+        emit_global_inits(v, s, a)
+    end
+    if fnode.a != 0:
+        lv_block_top(v, s, a, fnode.a)
+    end
+    if !v.term:
+        emit_return(v, s, a, 0)
+    end
+    out_g(v, header)
+    out_g(v, "entry:\n")
+    out_g(v, co.SbCstr(v.ba))
+    out_g(v, co.SbCstr(v.bb))
+    out_g(v, "}\n\n")
+    str.BufFree(v.bb)
+    str.BufFree(v.ba)
+    v.bb = saved_bb
+    v.ba = saved_ba
+    v.in_fn = saved_in_fn
+    v.tmp = saved_tmp
+    v.lbl = saved_lbl
+    v.nloop = saved_nloop
+    repeat saved_nloop with rbi:
+        v.brk.set(rbi, saved_brk.get(rbi)[0])
+        v.cont.set(rbi, saved_cont.get(rbi)[0])
+    end
+    saved_brk.free()
+    saved_cont.free()
+    v.is_main = saved_main
+    v.ret_ts = saved_ret
+    v.self_byval = saved_byval
+    v.term = saved_term
+    v.cur_sp = saved_sp
+    v.cur_dbg = saved_dbg
+    v.self_ts = saved_self
+    v.this_ref = saved_this
+    v.locals.free()
+    v.defers.free()
+    v.locals = saved_locals
+    v.defers = saved_defers
+end
+
+// ll_ensure_fn
+func ensure_fn(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int, pscope: int
+):
+    if fn == 0:
+        ret
+    end
+    saved := v.pkg_scope
+    v.pkg_scope = pscope
+    emit_function(v, s, a, fn, owner)
+    v.pkg_scope = saved
+end
+
+// ll_vtbl_name
+func vtbl_name(iface: str, concrete: str): str:
+    mut b := co.SbNew()
+    co.SbPuts(b, "@vtbl.")
+    put_ident(b, iface)
+    co.SbPutc(b, 46)
+    put_ident(b, concrete)
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+// ll_match_sig
+func match_sig(s &: sm.Sema, m: int, want: int): int:
+    sy := sm.SymAt(s, m)
+    first := sy.overloads.len() > 0 ? sy.overloads.get(0)[0] : 0
+    repeat sy.overloads.len() with i:
+        sigid := sy.overloads.get(i)[0]
+        if sm.SigAt(s, sigid).params.len() == want:
+            ret sigid
+        end
+    end
+    ret first
+end
+
+// ll_ensure_vtbl
+func ensure_vtbl(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, iface: str, concrete: str
+):
+    name := vtbl_name(iface, concrete)
+    repeat v.emitted.len() with i:
+        if str.Equals(name, v.emitted.get(i)[0]):
+            ret
+        end
+    end
+    v.emitted.push(name)
+    isym := sym_of(v, s, a, iface)
+    csym := sym_of(v, s, a, concrete)
+    if isym == 0 || sm.SymAt(s, isym).kind != sm.SYM_INTERFACE || csym == 0 || sm.SymAt(s, csym).members == 0:
+        ret
+    end
+    mut slots := co.SbNew()
+    mut n := 0
+    isyms := sm.ScopeAt(s, sm.SymAt(s, isym).members).symbols
+    repeat isyms.len() with mi:
+        imid := isyms.get(mi)[0]
+        im := sm.SymAt(s, imid)
+        if im.kind == sm.SYM_METHOD && im.overloads.len() > 0:
+            isig := im.overloads.get(0)[0]
+            cm := sm.LookupLocal(s, sm.SymAt(s, csym).members, im.name)
+            mut csig := 0
+            if cm != 0 && sm.SymAt(s, cm).kind == sm.SYM_METHOD:
+                csig = match_sig(s, cm, sm.SigAt(s, isig).params.len())
+            end
+            if n != 0:
+                co.SbPuts(slots, ", ")
+            end
+            if csig != 0:
+                ensure_fn(v, s, a, sm.SigAt(s, csig).decl, csym, v.pkg_scope)
+                co.SbPuts(
+                    slots, "ptr @" + mangle(
+                        v, s, concrete, im.name, csig
+                    )
+                )
+            else:
+                co.SbPuts(slots, "ptr null")
+            end
+            n += 1
+        end
+    end
+    out_g(
+        v, name + " = private unnamed_addr constant [" + co.I64Toa(n as i64) + " x ptr] [" + co.SbCstr(slots) + "]\n"
+    )
+    co.SbFree(slots)
+end
+
+// ll_box_dyn - box a struct value into a %dyn { data, vtbl } pair.
+func box_dyn(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, iface: str): str:
+    // iface truncated at '*' / '[' into char ib[160]
+    n := str.Len(iface)
+    mut k := 0
+    mut stop := false
+    until k < n && k < 159 && !stop:
+        c := byte_at(iface, k)
+        if c == 42 || c == 91:
+            stop = true
+        else:
+            k += 1
+        end
+    end
+    ib := str.Substr(iface, 0, k)
+    ensure_vtbl(v, s, a, ib, val.ts)
+    cty := struct_ltype(val.ts)
+    szp := new_tmp(v)
+    sz := new_tmp(v)
+    data := new_tmp(v)
+    emit(v, szp + " = getelementptr " + cty + ", ptr null, i32 1")
+    emit(v, sz + " = ptrtoint ptr " + szp + " to " + v.usize)
+    emit(v, data + " = call ptr @malloc(" + v.usize + " " + sz + ")")
+    emit(v, "store " + cty + " " + val.ref + ", ptr " + data)
+    t0 := new_tmp(v)
+    t1 := new_tmp(v)
+    emit(v, t0 + " = insertvalue %dyn undef, ptr " + data + ", 0")
+    emit(
+        v, t1 + " = insertvalue %dyn " + t0 + ", ptr " + vtbl_name(ib, val.ts) + ", 1"
+    )
+    ret t1
+end
+
+// ll_box_variant
+func box_variant(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, tag: int, variant_ts: str
+): str:
+    vt := ty_of(v, s, a, variant_ts)
+    slot := new_tmp(v)
+    tagp := new_tmp(v)
+    payp := new_tmp(v)
+    result := new_tmp(v)
+    emit_alloca(v, slot + " = alloca " + vt)
+    emit(
+        v, tagp + " = getelementptr " + vt + ", ptr " + slot + ", i32 0, i32 0"
+    )
+    emit(v, "store i32 " + co.I64Toa(tag as i64) + ", ptr " + tagp)
+    emit(
+        v, payp + " = getelementptr " + vt + ", ptr " + slot + ", i32 0, i32 1"
+    )
+    emit(
+        v, "store " + ty_of(v, s, a, val.ts) + " " + val.ref + ", ptr " + payp
+    )
+    emit(v, result + " = load " + vt + ", ptr " + slot)
+    ret result
+end
+
+// ll_unwrap_variant
+func unwrap_variant(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, member_ts: str
+): Llv:
+    vt := ty_of(v, s, a, val.ts)
+    slot := new_tmp(v)
+    payp := new_tmp(v)
+    r := new_tmp(v)
+    emit_alloca(v, slot + " = alloca " + vt)
+    emit(v, "store " + vt + " " + val.ref + ", ptr " + slot)
+    emit(
+        v, payp + " = getelementptr " + vt + ", ptr " + slot + ", i32 0, i32 1"
+    )
+    emit(v, r + " = load " + ty_of(v, s, a, member_ts) + ", ptr " + payp)
+    ret make_llv(r, member_ts)
+end
+
+// ll_mangle_ti
+func mangle_ti(
+    v &: Lv, s &: sm.Sema, typestr: str, fn_name: str, sig: int
+): str:
+    _v := v.tmp
+    mut b := co.SbNew()
+    co.SbPuts(b, "salam_ti_")
+    put_type_code(b, typestr)
+    co.SbPutc(b, 95)
+    put_ident(b, fn_name)
+    if sig != 0:
+        sg := sm.SigAt(s, sig)
+        repeat sg.params.len() with i:
+            co.SbPutc(b, 95)
+            put_type_code(b, sm.ToString(s, sg.params.get(i)[0]))
+        end
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+// ll_emit_impls_in
+func emit_impls_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
+    syms := sm.ScopeAt(s, gsc).symbols
+    repeat syms.len() with i:
+        ownerid := syms.get(i)[0]
+        owner := sm.SymAt(s, ownerid)
+        if owner.kind == sm.SYM_TYPEIMPL && owner.members != 0:
+            msyms := sm.ScopeAt(s, owner.members).symbols
+            repeat msyms.len() with j:
+                m := sm.SymAt(s, msyms.get(j)[0])
+                if m.kind == sm.SYM_METHOD:
+                    repeat m.overloads.len() with k:
+                        sigid := m.overloads.get(k)[0]
+                        d := sm.SigAt(s, sigid).decl
+                        if d != 0:
+                            emit_function(v, s, a, d, ownerid)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+// ll_emit_impls
+func emit_impls(v &: Lv, s &: sm.Sema, a &: at.Ast):
+    emit_impls_in(v, s, a, s.global)
+end

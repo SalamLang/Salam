@@ -1,0 +1,507 @@
+package llvmgen
+
+import str
+import os
+import co "../sal_core.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import i18 "../i18n.salam"
+import sm "../semantic/semantic.salam"
+import cg "../codegen/codegen.salam"
+import lb "../llvm_bridge.salam"
+
+// codegen_llvm_options_default
+pub func OptionsDefault(): Options:
+    ret Options {}
+end
+
+// codegen_llvm_error
+pub func ErrorOf(o: Output): str:
+    ret o.error
+end
+
+// Test/backend constructor mirroring codegen_llvm_run_opts' init block
+// (no C equivalent; cross-package struct literals are impossible).
+pub func NewLv(
+    lgr: lg.Logger, module_name: str, entry: str, triple: str
+): Lv:
+    mut v := new_lv0()
+    v.log = lgr
+    v.module = module_name
+    v.entry = str.Len(entry) > 0 ? entry : "main"
+    v.ok = true
+    v.triple = triple
+    v.ptr_bits = target_ptr_bits_of(triple)
+    v.usize = v.ptr_bits == 32 ? "i32" : "i64"
+    ret v
+end
+
+pub func FreeLv(v &: Lv):
+    free_lv(v)
+end
+
+// ll_target_ptr_bits
+pub func TargetPtrBits(triple: str): int:
+    ret target_ptr_bits_of(triple)
+end
+
+// ll_target_is_windows
+pub func TargetIsWindows(triple: str): bool:
+    ret target_is_windows_of(triple)
+end
+
+// ll_datalayout ("" = none)
+pub func DatalayoutOf(triple: str): str:
+    ret datalayout(triple)
+end
+
+// ll_safe_name
+pub func SafeNameOf(raw: str): str:
+    ret safe_name(raw)
+end
+
+// ll_struct_ltype
+pub func StructLtypeOf(name: str): str:
+    ret struct_ltype(name)
+end
+
+// ll_variant_members (caller frees)
+pub func VariantMembersOf(ts: str): Vector<str>:
+    ret variant_members(ts)
+end
+
+// ll_variant_cname
+pub func VariantCnameOf(ts: str): str:
+    ret variant_cname(ts)
+end
+
+// ll_variant_tag_of
+pub func VariantTagOf(variant_ts: str, member_ts: str): int:
+    ret variant_tag_of(variant_ts, member_ts)
+end
+
+// ll_array_dim
+pub func ArrayDimOf(ts: str): i64:
+    ret array_dim(ts)
+end
+
+// ll_array_elem
+pub func ArrayElemOf(ts: str): str:
+    ret array_elem(ts)
+end
+
+// ll_is_slice_ts
+pub func IsSliceTs(ts: str): bool:
+    ret is_slice(ts)
+end
+
+// ll_slice_elem
+pub func SliceElemOf(ts: str): str:
+    ret slice_elem(ts)
+end
+
+// ll_func_ret
+pub func FuncRetOf(ts: str): str:
+    ret func_ret(ts)
+end
+
+// ll_func_params (caller frees)
+pub func FuncParamsOf(ts: str): Vector<str>:
+    ret func_params(ts)
+end
+
+// ll_zero
+pub func ZeroOf(ts: str): str:
+    ret zero_of(ts)
+end
+
+// ll_is_int / ll_is_signed
+pub func IsIntTs(ts: str): bool:
+    ret is_int_ts(ts)
+end
+
+pub func IsSignedTs(ts: str): bool:
+    ret is_signed_ts(ts)
+end
+
+// ll_int_bits
+pub func IntBitsOf(v &: Lv, ts: str): int:
+    ret int_bits(v, ts)
+end
+
+// ll_ty
+pub func TyOf(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): str:
+    ret ty_of(v, s, a, ts)
+end
+
+// ll_conv over (ref, ts) text (Llv literals are package-private).
+pub func ConvRef(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ref2: str, ts: str, to_ts: str
+): str:
+    ret conv(v, s, a, make_llv(ref2, ts), to_ts)
+end
+
+// ll_as_i1
+pub func AsI1Ref(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ref2: str, ts: str
+): str:
+    ret as_i1(v, s, a, make_llv(ref2, ts))
+end
+
+// ll_common
+pub func CommonTs(v &: Lv, a1: str, b1: str): str:
+    ret common_ts(v, a1, b1)
+end
+
+// ll_usize_to_i32
+pub func UsizeToI32(v &: Lv, ref2: str): str:
+    ret usize_to_i32(v, ref2)
+end
+
+// ll_type_layout
+pub func TypeLayoutOf(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, out_size &: i64, out_align &: i64
+):
+    type_layout(v, s, a, ts, out_size, out_align)
+end
+
+// ll_mangle ("" owner = C NULL, sig 0 = C NULL)
+pub func MangleOf(
+    v &: Lv, s &: sm.Sema, owner: str, fn_name: str, sig: int
+): str:
+    ret mangle(v, s, owner, fn_name, sig)
+end
+
+// ll_mangle_ti
+pub func MangleTiOf(
+    v &: Lv, s &: sm.Sema, typestr: str, fn_name: str, sig: int
+): str:
+    ret mangle_ti(v, s, typestr, fn_name, sig)
+end
+
+// ll_strconst
+pub func StrConst(v &: Lv, sx: str): str:
+    ret strconst(v, sx)
+end
+
+// ll_new_tmp / ll_new_lbl
+pub func NewTmp(v &: Lv): str:
+    ret new_tmp(v)
+end
+
+pub func NewLbl(v &: Lv, tag: str): str:
+    ret new_lbl(v, tag)
+end
+
+// ll_emit / ll_emit_term / ll_emit_alloca / ll_emit_label
+pub func Emit(v &: Lv, text: str):
+    emit(v, text)
+end
+
+pub func EmitTerm(v &: Lv, text: str):
+    emit_term(v, text)
+end
+
+pub func EmitAlloca(v &: Lv, text: str):
+    emit_alloca(v, text)
+end
+
+pub func EmitLabel(v &: Lv, label: str):
+    emit_label(v, label)
+end
+
+// ll_meta_add
+pub func MetaAdd(v &: Lv, text: str): str:
+    ret meta_add(v, text)
+end
+
+// ll_need
+pub func Need(v &: Lv, which: int):
+    need(v, which)
+end
+
+// ll_local_add / ll_local_find / ll_global_find (find: index, -1 = C NULL)
+pub func LocalAddV(v &: Lv, name: str, ptr2: str, ts: str):
+    local_add(v, name, ptr2, ts)
+end
+
+pub func LocalFind(v &: Lv, name: str): int:
+    ret local_find(v, name)
+end
+
+pub func LocalAt(v &: Lv, i: int): LvVar:
+    ret v.locals.get(i)[0]
+end
+
+pub func GlobalFind(v &: Lv, name: str): int:
+    ret global_find(v, name)
+end
+
+pub func GlobalAt(v &: Lv, i: int): LvVar:
+    ret v.globals.get(i)[0]
+end
+
+// ll_box_variant / ll_unwrap_variant over (ref, ts) text.
+pub func BoxVariantRef(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ref2: str, ts: str, tag: int, variant_ts: str
+): str:
+    ret box_variant(v, s, a, make_llv(ref2, ts), tag, variant_ts)
+end
+
+pub func UnwrapVariantRef(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ref2: str, ts: str, member_ts: str
+): Llv:
+    ret unwrap_variant(v, s, a, make_llv(ref2, ts), member_ts)
+end
+
+// ll_sym / ll_struct_sym / ll_enum_sym / ll_field_index
+pub func SymOf(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
+    ret sym_of(v, s, a, name)
+end
+
+pub func StructSymOf(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
+    ret struct_sym(v, s, a, name)
+end
+
+pub func EnumSymOf(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str): int:
+    ret enum_sym(v, s, a, name)
+end
+
+pub func FieldIndexOf(
+    s &: sm.Sema, ssym: int, field: str, out_field &: int
+): int:
+    ret field_index(s, ssym, field, out_field)
+end
+
+// ll_pick_overload
+pub func PickOverload(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, symid: int, call: int
+): int:
+    ret pick_overload(v, s, a, symid, call)
+end
+
+// ll_touch_pkg_named
+pub func TouchPkgNamed(v &: Lv, s &: sm.Sema, a &: at.Ast, pkgname: str):
+    touch_pkg_named(v, s, a, pkgname)
+end
+
+// ll_emit_lambda
+pub func EmitLambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
+    emit_lambda(v, s, a, n)
+end
+
+// Whether THIS BINARY can lower LLVM IR with no help from the machine it is
+// running on: static in-process LLVM/LLD linked at build time
+// (-DSALAM_HAVE_LLVM; see llvm_bridge.salam).
+//
+// Exact counterpart of the C's salam_llvm_native_available()
+// (c/src/llvm/llvm_native.c:102/129), which returns 1 only under
+// SALAM_HAVE_LLVM. Keeping the two identical matters because this is what
+// `--backend=auto` consults: it must answer "is LLVM built in", never "did
+// someone happen to install clang".
+//
+// This used to also return true when a bundled or PATH `clang` was found.
+// That made a stock CI runner (clang preinstalled) auto-select LLVM and
+// shell out to a toolchain the build never asked for, which is both a
+// parity divergence from the C and the opposite of the goal: a Salam
+// install must not depend on clang/llvm/lld being present. External
+// toolchains are still used, but only when explicitly requested
+// (--backend=llvm or --target=), through ToolchainAvailable() below.
+pub func NativeAvailable(): bool:
+    ret lb.Available()
+end
+
+// Whether an EXTERNAL clang toolchain is reachable: a bundled tool next to
+// the running executable (sm.FindBundledTool, checked first - matches
+// nt_resolve_tool's own preference order), else a PATH probe for "clang"
+// then the versioned fallback name emit_tool_cmd would fall back to.
+//
+// Only consulted by NativeRun's shell-out path, which is reached exclusively
+// on an explicit --backend=llvm or --target=. Never used to pick a backend.
+pub func ToolchainAvailable(): bool:
+    mut path := ""
+    if sm.FindBundledTool("clang", path):
+        ret true
+    end
+    if nt_probe_tool("clang"):
+        ret true
+    end
+    ret nt_probe_tool("clang-22")
+end
+
+// The exact multi-line bash script NativeRun would write and execute for
+// `ll_path`/`opts` (IN/OUT/SYSROOT assignments + emit_tool_cmd's tool
+// invocation), without running anything - lets tests assert the built
+// command line with no toolchain required.
+pub func NativeBuildScript(ll_path: str, opts: Options): str:
+    needs_out := opts.output_mode != LV_OUT_JIT && opts.output_mode != LV_OUT_IR
+    in_tp := nt_to_tool_path(ll_path)
+    mut out_tp := ""
+    if needs_out && str.Len(opts.output_file) > 0:
+        out_tp = nt_to_tool_path(opts.output_file)
+    end
+    mut script := "set -e\n"
+    script += "IN=" + nt_shell_arg(in_tp) + "\n"
+    if str.Len(out_tp) > 0:
+        script += "OUT=" + nt_shell_arg(out_tp) + "\n"
+    end
+    if str.Len(opts.sysroot) > 0:
+        script += "SYSROOT=" + nt_shell_arg(nt_to_tool_path(opts.sysroot)) + "\n"
+    end
+    script += nt_emit_tool_cmd(opts)
+    ret script
+end
+
+// salam_llvm_toolchain - the real link/emit step: writes NativeBuildScript's
+// output to `<ll_path>.run.sh` and runs it (bash directly on POSIX,
+// `wsl.exe -e bash` on Windows, exactly like the C). -1 = no toolchain
+// available at all (ToolchainAvailable() false) - the C's "native path
+// unavailable" sentinel is repurposed for that instead of the unreachable
+// SALAM_HAVE_LLVM branch. Otherwise returns the child process's exit code
+// (0 = success), logged via `lgr` like the C's LOG_I/LOG_E.
+pub func NativeRun(lgr: lg.Logger, ll_path: str, opts: Options): int:
+    // In-process LLVM/LLD first - no compiler or linker needed on the
+    // machine running salam. Returns -1 when this binary has no static
+    // LLVM linked in, which falls through to the shell-out path below.
+    brc := lb.Run(
+        ll_path, opts.opt_level, opts.output_mode, opts.output_file,
+        opts.target_triple, opts.debug_info, opts.verify_module,
+        opts.native_cpu, opts.sysroot, opts.link_libs, opts.link_kinds,
+        opts.lib_paths
+    )
+    if brc >= 0:
+        if brc != 0:
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, "in-process LLVM step failed")
+        end
+        ret brc
+    end
+    if !ToolchainAvailable():
+        ret 0 - 1
+    end
+    script := NativeBuildScript(ll_path, opts)
+    spath := ll_path + ".run.sh"
+    _w := os.WriteFile(spath, script)
+    script_tp := nt_to_tool_path(spath)
+    mut cmd := ""
+    if SALAM_OS_WINDOWS:
+        cmd = `wsl.exe -e bash "` + script_tp + `"`
+    else:
+        cmd = `bash "` + script_tp + `"`
+    end
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "llvm toolchain: " + cmd)
+    rc := os.Run(cmd)
+    _rm := os.Remove(spath)
+    if rc != 0:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, "LLVM toolchain step failed (exit " + co.I64Toa(rc as i64) + ")"
+        )
+    end
+    ret rc
+end
+
+// codegen_llvm_run_opts - the driver-facing entry (driver/llvm_build.c).
+// `s` must hold a successful sm.Run over `program`; module_name is the
+// output module stem; entry the langpack entry name ("" = "main").
+pub func RunOpts(
+    lgr: lg.Logger, s &: sm.Sema, a &: at.Ast, program: int, module_name: str, entry: str, opts: Options,
+    src_path: str
+): Output:
+    mut v := new_lv0()
+    v.log = lgr
+    v.module = module_name
+    v.entry = str.Len(entry) > 0 ? entry : "main"
+    v.ok = true
+    v.debug = opts.debug_info
+    v.triple = opts.target_triple
+    v.ptr_bits = target_ptr_bits_of(v.triple)
+    v.usize = v.ptr_bits == 32 ? "i32" : "i64"
+    v.optsize = opts.opt_level == LV_OPT_OS || opts.opt_level == LV_OPT_OZ
+    v.minsize = opts.opt_level == LV_OPT_OZ
+    v.single_threaded = cg.ModuleSingleThreaded(a, program) && !target_is_windows_of(v.triple)
+    out_g(v, "; ModuleID = '" + module_name + "'\n")
+    out_g(v, `source_filename = "` + module_name + ".salam\"\n\n")
+    if str.Len(v.triple) > 0:
+        out_g(v, `target triple = "` + v.triple + "\"\n")
+    end
+    dl := datalayout(v.triple)
+    if str.Len(dl) > 0:
+        out_g(v, `target datalayout = "` + dl + "\"\n")
+    end
+    out_g(v, "\n")
+    emit_prologue(v)
+    emit_struct_types(v, s, a, program)
+    // rt essentials from the core package (salam_panic / salam_idx)
+    mut core_pk := 0
+    mut p := 0
+    until p < sm.PackageCount(s) && core_pk == 0:
+        pk := sm.PackageAt(s, p)
+        if pk != 0:
+            py := sm.SymAt(s, pk)
+            if py.kind == sm.SYM_PACKAGE && str.Equals(py.name, "core"):
+                core_pk = pk
+            end
+        end
+        p += 1
+    end
+    if core_pk != 0 && sm.SymAt(s, core_pk).members != 0:
+        cmembers := sm.SymAt(s, core_pk).members
+        repeat 2 with ri:
+            fs := sm.LookupLocal(s, cmembers, k_lv_rt_essentials[ri])
+            if fs != 0:
+                fsym := sm.SymAt(s, fs)
+                if fsym.kind == sm.SYM_FUNC && fsym.overloads.len() > 0:
+                    sigid := fsym.overloads.get(0)[0]
+                    d := sm.SigAt(s, sigid).decl
+                    mut skip := false
+                    if d != 0:
+                        dn := at.Get(a, d)
+                        if dn.is_extern && dn.a == 0:
+                            skip = true
+                        end
+                    end
+                    if !skip:
+                        ensure_fn(v, s, a, d, 0, cmembers)
+                    end
+                end
+            end
+        end
+    end
+    emit_externs(v, s, a)
+    emit_globals(v, s, a, program)
+    if v.debug:
+        debug_init(v, src_path)
+    end
+    emit_impls(v, s, a)
+    lg.Log(
+        lgr, lg.PH_CODEGEN, lg.LOG_INFO, "generating LLVM IR for module '" + module_name + "'" + (v.debug ? i18.Tr(" (+debug info)") : "")
+    )
+    mut i := 0
+    until i < at.ChildCount(a, program):
+        toplevel(v, s, a, at.Child(a, program, i))
+        i += 1
+    end
+    if v.debug:
+        debug_finalize(v)
+    end
+    if co.SbLen(v.bhg) > (0 as i64):
+        out_g(v, "; on-demand runtime helpers\n")
+        out_g(v, co.SbCstr(v.bhg))
+    end
+    mut o := Output {}
+    o.module_name = module_name
+    o.ll_src = co.SbCstr(v.bg)
+    o.ok = v.ok
+    o.error = v.first_error
+    lg.Log(
+        lgr, lg.PH_CODEGEN, lg.LOG_INFO, "generated " + str.Len(o.ll_src) + " bytes of LLVM IR" + (v.ok ? "" : i18.Tr(" (with unsupported constructs)"))
+    )
+    free_lv(v)
+    ret o
+end
+
+// codegen_llvm_run
+pub func Run(
+    lgr: lg.Logger, s &: sm.Sema, a &: at.Ast, program: int, module_name: str, entry: str
+): Output:
+    ret RunOpts(lgr, s, a, program, module_name, entry, OptionsDefault(), "")
+end

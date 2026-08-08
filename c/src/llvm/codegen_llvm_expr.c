@@ -1481,6 +1481,34 @@ ll_addr_t ll_addr_of(ll_t *ll, ast_node_t *n)
                 if (g) return (ll_addr_t){g->ptr, g->ts};
             }
         }
+        /*
+         * Same problem, one scope further out: a package's own top-level
+         * `pub const` is registered in that package's sema scope, not in
+         * this one's members scope and not in ll->sem->global, so neither
+         * the walk above nor a global lookup can see it - there is simply no
+         * index from the name back to the declaring package. Touching
+         * packages until the global materializes is the only lookup
+         * available. It is bounded, idempotent, and reached only on the path
+         * that would otherwise be a hard error, and after the first sweep
+         * every package is already touched.
+         *
+         * Whether this path was needed used to depend on the platform, which
+         * is why it survived so long: std/net/internal/rawsock declares a
+         * `_rawsock_wsa_init` global inside `if SALAM_OS_WINDOWS`, and
+         * emitting it got the package touched early, so `AF_INET` and
+         * `SOCK_STREAM` resolved by luck. On Linux that global is condcomp'd
+         * away and every socket program failed to compile.
+         */
+        {
+            size_t p = 0;
+            for (; p < ll->sem->packages.len; p++) {
+                symbol_t *pk = (symbol_t *)ll->sem->packages.data[p];
+                if (!pk || pk->kind != SYM_PACKAGE) continue;
+                ll_touch_pkg(ll, pk);
+                g = ll_global_find(ll, n->name);
+                if (g) return (ll_addr_t){g->ptr, g->ts};
+            }
+        }
         ll_error(ll, n, "address of an unknown identifier '%s'", n->name);
         return (ll_addr_t){"null", n->type_str ? n->type_str : "i32"};
     }

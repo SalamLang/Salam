@@ -1,0 +1,265 @@
+package parser
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import i18 "../i18n.salam"
+
+// ===== parser.c =====
+
+func attach_pending(a &: at.Ast, target: int, pending &: Vector<str>):
+    repeat pending.len() with i:
+        at.AddAlias(a, target, pending.get(i)[0])
+    end
+    pending.clear()
+end
+
+func metas_have_lang(out: Vector<str>, lang: str): bool:
+    mut i := 0
+    until i + 1 < out.len():
+        if str.Equals(out.get(i)[0], lang):
+            ret true
+        end
+        i += 2
+    end
+    ret false
+end
+
+func parse_metas(p &: Ps, out &: Vector<str>):
+    p_skip_terminators(p)
+    until p_at(p, tok.TK_META):
+        lang := p_peek(p).lexeme
+        if metas_have_lang(out, lang):
+            p_error(
+                p, co.Format2(
+                    i18.Tr(`duplicate '@%s' marker on one definition; give one marker several values instead: @%s "a" "b"`),
+                    co.ArgStr(lang), co.ArgStr(lang)
+                )
+            )
+        end
+        p_advance(p)
+        if p_at(p, tok.TK_STRING):
+            until p_at(p, tok.TK_STRING):
+                out.push(lang)
+                out.push(p_peek(p).value.sval)
+                p_advance(p)
+            end
+        else:
+            p_error(p, "expected a string after '@' annotation")
+        end
+        p_skip_terminators(p)
+    end
+end
+
+func parse_package(p &: Ps, a &: at.Ast, prog: int, pending &: Vector<str>): bool:
+    if !p_at(p, tok.TK_KW_PACKAGE):
+        ret false
+    end
+    p_advance(p)
+    if p_at(p, tok.TK_IDENT) || p_at(p, tok.TK_KW_LAYOUT):
+        at.SetName(a, prog, p_peek(p).lexeme)
+        p_advance(p)
+    else:
+        p_error(p, "expected package name after 'package'")
+    end
+    attach_pending(a, prog, pending)
+    p_term(p)
+    ret true
+end
+
+func parse_top_level_item_into(p &: Ps, a &: at.Ast, dest: int, pending &: Vector<str>):
+    p_skip_terminators(p)
+    parse_metas(p, pending)
+    if p_at_eof(p):
+        ret
+    end
+    if p_at(p, tok.TK_KW_IMPORT):
+        pending.clear()
+        parse_imports_into(p, a, dest)
+        ret
+    end
+    if p_at(p, tok.TK_KW_EXTERN):
+        pending.clear()
+        parse_extern_into(p, a, dest)
+        ret
+    end
+    if try_link_directive(p, a, dest):
+        pending.clear()
+        ret
+    end
+    if p_at(p, tok.TK_KW_IF):
+        pending.clear()
+        at.AddChild(a, dest, parse_toplevel_if(p, a))
+        ret
+    end
+    def := parse_top_level(p, a)
+    if def != 0:
+        attach_pending(a, def, pending)
+        at.AddChild(a, dest, def)
+    end
+    pending.clear()
+    if p.panic:
+        p_sync(p)
+    end
+end
+
+func fill_toplevel_block_body(p &: Ps, a &: at.Ast, n: int):
+    mut pending := Vector {} as Vector<str>
+    defer pending.free()
+    p_skip_terminators(p)
+    until !p_at(p, tok.TK_KW_END) && !p_at(p, tok.TK_KW_ELSE) && !p_at_eof(p):
+        p_skip_terminators(p)
+        if p_at(p, tok.TK_KW_END) || p_at(p, tok.TK_KW_ELSE) || p_at_eof(p):
+            break
+        end
+        parse_top_level_item_into(p, a, n, pending)
+        if p.panic:
+            p_sync(p)
+        end
+    end
+end
+
+func parse_toplevel_if_tail(p &: Ps, a &: at.Ast): int:
+    if !p_recurse_enter(p, "if/else chain nested too deeply"):
+        ret p_mk(p, a, at.AST_IF)
+    end
+    n := p_mk(p, a, at.AST_IF)
+    ps_set_a(a, n, parse_cond_expr(p, a))
+    b := p_mk(p, a, at.AST_BLOCK)
+    ps_set_b(a, n, b)
+    p_expect(p, tok.TK_COLON, "':' after if condition")
+    fill_toplevel_block_body(p, a, b)
+    p_fin(p, a, b)
+    p_skip_terminators(p)
+    if p_match(p, tok.TK_KW_ELSE):
+        p_match(p, tok.TK_KW_IF)
+        if !p_at(p, tok.TK_COLON):
+            ps_set_c(a, n, parse_toplevel_if_tail(p, a))
+        else:
+            c := p_mk(p, a, at.AST_BLOCK)
+            ps_set_c(a, n, c)
+            p_expect(p, tok.TK_COLON, "':' after else")
+            fill_toplevel_block_body(p, a, c)
+            p_expect(p, tok.TK_KW_END, "'end' to close if")
+            p_fin(p, a, c)
+        end
+    else:
+        p_expect(p, tok.TK_KW_END, "'end' to close if")
+    end
+    p_fin(p, a, n)
+    p_recurse_leave(p)
+    ret n
+end
+
+func parse_toplevel_if(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "toplevel_if_stmt")
+    p_advance(p)
+    ret parse_toplevel_if_tail(p, a)
+end
+
+func parse_program(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "program")
+    prog := p_mk(p, a, at.AST_PROGRAM)
+    at.SetName(a, prog, "main")
+
+    mut pending := Vector {} as Vector<str>
+    defer pending.free()
+    p_skip_terminators(p)
+    parse_metas(p, pending)
+    parse_package(p, a, prog, pending)
+    until !p_at_eof(p):
+        parse_top_level_item_into(p, a, prog, pending)
+    end
+    p_fin(p, a, prog)
+    ret prog
+end
+
+func p_at_string_import(p &: Ps): bool:
+    ret p_at(p, tok.TK_STRING) || (p_at(p, tok.TK_IDENT) && p_peek2(p).kind == tok.TK_STRING)
+end
+
+func parse_string_import_entry(p &: Ps, a &: at.Ast): int:
+    n := p_mk(p, a, at.AST_IMPORT)
+    mut alias := ""
+    if p_at(p, tok.TK_IDENT) && p_peek2(p).kind == tok.TK_STRING:
+        alias = p_peek(p).lexeme
+        p_advance(p)
+    end
+    if p_at(p, tok.TK_STRING):
+        at.SetName(a, n, alias)
+        at.SetTokenValue(a, n, p_peek(p).value)
+        p_advance(p)
+    else:
+        p_error(p, "expected import path string")
+    end
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_ident_import_entry(p &: Ps, a &: at.Ast): int:
+    n := p_mk(p, a, at.AST_IMPORT)
+    mut b := p_munch_name(p)
+    until p_at(p, tok.TK_DOT):
+        p_advance(p)
+        b = b + "." + p_munch_name(p)
+    end
+    at.SetName(a, n, b)
+    // n->value.kind = TV_NONE is the Node default.
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_imports_into(p &: Ps, a &: at.Ast, prog: int):
+    p_advance(p)
+    if p_at(p, tok.TK_LPAREN):
+        p_error(p, `grouped imports are not supported; write import "a" "b"`)
+        until !p_at(p, tok.TK_RPAREN) && !p_at_eof(p):
+            p_advance(p)
+        end
+        p_match(p, tok.TK_RPAREN)
+        p_term(p)
+        ret
+    end
+    if p_at_string_import(p):
+        at.AddChild(a, prog, parse_string_import_entry(p, a))
+        until p_at_string_import(p):
+            at.AddChild(a, prog, parse_string_import_entry(p, a))
+        end
+    else p_at(p, tok.TK_IDENT):
+        at.AddChild(a, prog, parse_ident_import_entry(p, a))
+    else:
+        p_error(p, "expected import path string")
+    end
+    p_term(p)
+end
+
+// ---------------------------------------------------------------------------
+// Public API (E088: pub section last)
+// ---------------------------------------------------------------------------
+
+// ===== parser.c =====
+// parser_run - fills `out_program` with the AST_PROGRAM node id (into the
+// caller's Ast made with at.NewAst()) and returns !had_error, like the C bool.
+pub func Run(
+    lgr: lg.Logger, toks: tok.TokenStream, a &: at.Ast, out_program &: int
+): bool:
+    mut p := Ps {}
+    p.toks = toks
+    p.count = tok.StreamCount(toks)
+    p.pos = 0
+    p.file = tok.StreamFile(toks)
+    p.lgr = lgr
+    lg.Log(lgr, lg.PH_PARSER, lg.LOG_INFO, "parsing " + p.count + " tokens")
+    prog := parse_program(p, a)
+    out_program = prog
+    mut suffix := ""
+    if p.had_error:
+        suffix = i18.Tr(" (with errors)")
+    end
+    lg.Log(
+        lgr, lg.PH_PARSER, lg.LOG_INFO, "parse complete: " + at.ChildCount(a, prog) + " top-level defs" + suffix
+    )
+    ret !p.had_error
+end

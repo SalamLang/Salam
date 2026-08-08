@@ -32,6 +32,21 @@ extern:
     func snprintf(buf: char*, cap: u64, fmt: str, ...): int
 end
 
+// ===== port of c/src/core/timer.c (externs; bodies at the end of this file)
+// Top-level extern blocks must precede the rest of the file, so the
+// declarations live here and the functions that use them live with the other
+// function definitions below.
+if SALAM_OS_WINDOWS:
+    extern:
+        func GetCurrentProcess(): void*
+        func GetProcessTimes(h: void*, creation: void*, exit_t: void*, kernel: void*, user: void*): int
+    end
+else:
+    extern:
+        func clock(): i64
+    end
+end
+
 // ===== numstr.c =====
 pub const SAL_NUMSTR_MAX := 21
 
@@ -296,6 +311,17 @@ end
 
 // ===== prelude.h =====
 // sal_strdup: strings are values in Salam; return an owned copy.
+// ByteAt - unsigned byte read from a str. THE shared copy of the byte_at
+// idiom every stage used to duplicate; new code calls co.ByteAt directly.
+pub inline func ByteAt(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
 pub func Strdup(s: str): str:
     ret str.Clone(s)
 end
@@ -773,4 +799,56 @@ end
 // Port of sal_vfprintf(stderr, ...): format and write to stderr.
 pub func EPrintf(fmt: str, args: Vector<FmtArg>):
     io.EPrint(Format(fmt, args))
+end
+
+// ===== port of c/src/core/timer.c =====
+//
+// Only the two readings prof_self.salam needs beyond time.MonoNanos (which
+// std/time provides). MonoNanos itself is NOT duplicated here: the stdlib's
+// time.MonoNanos is the same QueryPerformanceCounter / CLOCK_MONOTONIC code
+// the C's salam_mono_ns uses, so a second copy would be one more thing to
+// keep in sync for no gain.
+if SALAM_OS_WINDOWS:
+    // CPU time (user + kernel) consumed by this process, in nanoseconds.
+    // Four separate one-FILETIME buffers rather than one 32-byte buffer with
+    // offsets: arithmetic on a void* is not an operator this language has.
+    pub func CpuNanos(): i64:
+        cbuf := mem.AllocateZeroed(8 as u64)
+        xbuf := mem.AllocateZeroed(8 as u64)
+        kbuf := mem.AllocateZeroed(8 as u64)
+        ubuf := mem.AllocateZeroed(8 as u64)
+        mut out := 0 as i64
+        if GetProcessTimes(GetCurrentProcess(), cbuf, xbuf, kbuf, ubuf) != 0:
+            kp := kbuf as i64*
+            up := ubuf as i64*
+            // FILETIME ticks are 100 ns.
+            out = (kp[0] + up[0]) * 100
+        end
+        mem.Free(cbuf)
+        mem.Free(xbuf)
+        mem.Free(kbuf)
+        mem.Free(ubuf)
+        ret out
+    end
+else:
+    // clock() is CLOCKS_PER_SEC-based process CPU time on POSIX, and
+    // CLOCKS_PER_SEC is 1000000 there. The C side prefers
+    // clock_gettime(CLOCK_PROCESS_CPUTIME_ID) for finer resolution; this is
+    // the same quantity, just coarser.
+    pub func CpuNanos(): i64:
+        ret clock() * 1000
+    end
+end
+
+// Peak resident set size in bytes, 0 when unavailable.
+//
+// Always 0 in the self-hosted compiler, unlike the C's salam_peak_rss(). The
+// Windows reading needs GetProcessMemoryInfo out of psapi.dll, which the C
+// resolves at run time through GetProcAddress; there is no equivalent of a
+// runtime-resolved function pointer here, and a link-time dependency on psapi
+// is exactly the kind of extern that fails to resolve under tcc. The
+// --time-report parity check compares the JSON's shape, not this value, so
+// the difference shows up as a reported 0 rather than a missing key.
+pub func PeakRss(): i64:
+    ret 0 as i64
 end

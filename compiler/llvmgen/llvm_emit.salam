@@ -1,0 +1,217 @@
+package llvmgen
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+
+// ===== codegen_llvm_emit.c =====
+
+// ll_safe_name
+func safe_name(raw: str): str:
+    if str.Len(raw) == 0:
+        ret "_"
+    end
+    n := str.Len(raw)
+    mut needs_fix := false
+    mut i := 0
+    until i < n && !needs_fix:
+        c := byte_at(raw, i)
+        okc := is_alnum_b(c) || c == 95 || c == 46 || c == 36
+        if !okc:
+            needs_fix = true
+        end
+        i += 1
+    end
+    if !needs_fix:
+        ret raw
+    end
+    // Hex-escape rather than blank out. Mapping every disallowed byte to '_'
+    // is not injective, and a non-ASCII identifier is *all* disallowed bytes:
+    // any two Arabic or Persian parameter names of the same length collapsed
+    // to the same "____", so a function taking two of them emitted
+    // `%p.__ = alloca` twice ("multiple definition of local value named
+    // 'p.__'"). '_' itself doubles so the escape stays unambiguous.
+    mut b := co.SbNew()
+    mut j := 0
+    until j < n:
+        c2 := byte_at(raw, j)
+        okc2 := is_alnum_b(c2) || c2 == 46 || c2 == 36
+        if okc2:
+            co.SbPutc(b, c2)
+        else c2 == 95:
+            co.SbPuts(b, "__")
+        else:
+            co.SbPuts(b, "_" + hex2_lower(c2))
+        end
+        j += 1
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+// ll_attach_dbg - returns the ", !dbg !N" suffix instead of writing it.
+func dbg_suffix(v &: Lv): str:
+    if v.debug && str.Len(v.cur_dbg) > 0:
+        ret ", !dbg " + v.cur_dbg
+    end
+    ret ""
+end
+
+// ll_emit - one two-space-indented instruction on the current body sink.
+func emit(v &: Lv, text: str):
+    if v.term:
+        ret
+    end
+    out_b(v, "  " + text + dbg_suffix(v) + "\n")
+end
+
+// ll_emit_alloca - no term gate, no !dbg, goes to the allocas sink.
+func emit_alloca(v &: Lv, text: str):
+    out_al(v, "  " + text + "\n")
+end
+
+// ll_emit_label
+func emit_label(v &: Lv, label: str):
+    out_b(v, label + ":\n")
+    v.term = false
+end
+
+// ll_emit_term
+func emit_term(v &: Lv, text: str):
+    if v.term:
+        ret
+    end
+    out_b(v, "  " + text + dbg_suffix(v) + "\n")
+    v.term = true
+end
+
+// ll_new_tmp
+func new_tmp(v &: Lv): str:
+    r := "%t" + co.I64Toa(v.tmp as i64)
+    v.tmp += 1
+    ret r
+end
+
+// ll_new_lbl
+func new_lbl(v &: Lv, tag: str): str:
+    r := "L" + co.I64Toa(v.lbl as i64) + "_" + tag
+    v.lbl += 1
+    ret r
+end
+
+// ll_error - message pre-formatted at the call site, clamped like the C's
+// char buf[256].
+func lv_error(v &: Lv, a &: at.Ast, n: int, msg: str):
+    v.ok = false
+    body := clamp255(msg)
+    mut full := "LLVM backend: " + body
+    if n != 0:
+        node := at.Get(a, n)
+        if node.begin_line != (0 as u32):
+            full = "LLVM backend (line " + co.U64Toa(node.begin_line as u64) + "): " + body
+        end
+    end
+    if str.Len(v.first_error) == 0:
+        v.first_error = full
+    end
+    lg.Log(v.log, lg.PH_CODEGEN, lg.LOG_ERROR, full)
+end
+
+// ll_escape - IR c"..." payload; arr_len = byte length + 1 (the \00).
+func escape_bytes(sx: str, arr_len &: int):
+    // (split: see escape_text; ref-returning a pair is clumsy - the two
+    //  outputs are produced by escape_text + this length rule)
+    arr_len = str.Len(sx) + 1
+end
+
+func escape_text(sx: str): str:
+    n := str.Len(sx)
+    mut b := co.SbNew()
+    mut i := 0
+    until i < n:
+        c := byte_at(sx, i)
+        if c == 34 || c == 92 || c < 32 || c > 126:
+            co.SbPuts(b, "\\" + hex2_upper(c))
+        else:
+            co.SbPutc(b, c)
+        end
+        i += 1
+    end
+    co.SbPuts(b, "\\00")
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+// ll_str_hash - FNV-1a 64-bit, matching the C's ll_str_hash on 64-bit hosts
+// (offset basis 14695981039346656037 = 0xCBF29CE484222325).
+func str_hash(sx: str): u64:
+    mut h := 0xCBF29CE484222325 as u64
+    n := str.Len(sx)
+    mut i := 0
+    until i < n:
+        h ^= byte_at(sx, i) as u64
+        h *= 0x100000001B3 as u64
+        i += 1
+    end
+    ret h
+end
+
+// ll_strconst - dedup + emit "@.str.N = private unnamed_addr constant ...".
+func strconst(v &: Lv, sx: str): str:
+    n := str.Len(sx)
+    h := str_hash(sx)
+    repeat v.strings.len() with i:
+        e := v.strings.get(i)[0]
+        if e.hash == h && e.len == n && str.Equals(e.bytes, sx):
+            ret e.gref
+        end
+    end
+    mut arr := 0
+    escape_bytes(sx, arr)
+    esc := escape_text(sx)
+    gref := "@.str." + co.I64Toa(v.strings.len() as i64)
+    out_g(
+        v, gref + " = private unnamed_addr constant [" + co.I64Toa(arr as i64) + ` x i8] c"` + esc + "\"\n"
+    )
+    mut e2 := LvStr {}
+    e2.bytes = sx
+    e2.len = n
+    e2.hash = h
+    e2.gref = gref
+    v.strings.push(e2)
+    ret gref
+end
+
+// ll_local_add
+func local_add(v &: Lv, name: str, ptr2: str, ts: str):
+    mut lvv := LvVar {}
+    lvv.name = name
+    lvv.ptr = ptr2
+    lvv.ts = ts
+    v.locals.push(lvv)
+end
+
+// ll_local_find - newest-first scan; returns index into v.locals, -1 = NULL.
+func local_find(v &: Lv, name: str): int:
+    mut i := v.locals.len()
+    until i > 0:
+        if str.Equals(v.locals.get(i - 1)[0].name, name):
+            ret i - 1
+        end
+        i -= 1
+    end
+    ret 0 - 1
+end
+
+// ll_global_find - returns index into v.globals, -1 = NULL.
+func global_find(v &: Lv, name: str): int:
+    repeat v.globals.len() with i:
+        if str.Equals(v.globals.get(i)[0].name, name):
+            ret i
+        end
+    end
+    ret 0 - 1
+end

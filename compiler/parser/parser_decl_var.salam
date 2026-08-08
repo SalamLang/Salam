@@ -1,0 +1,81 @@
+package parser
+
+import str
+import tok "../token.salam"
+import at "../ast.salam"
+
+// ===== parser_decl_var.c =====
+
+func demote_auto_type(a &: at.Ast, id: int):
+    n := at.Get(a, id)
+    if n.ty == 0:
+        ret
+    end
+    t := at.Get(a, n.ty)
+    if t.name.len() == 0 || t.is_pointer || t.is_dyn:
+        ret
+    end
+    if t.list.len() != 0 || t.dims.len() != 0:
+        ret
+    end
+    if str.Equals(t.name, "auto") || str.Equals(t.name, "\xD8\xAE\xD9\x88\xD8\xAF\xDA\xA9\xD8\xA7\xD8\xB1") || str.Equals(t.name, "\xD8\xAA\xD9\x84\xD9\x82\xD8\xA7\xD8\xA6\xD9\x8A"):
+        at.SetTypeNode(a, id, 0)
+    end
+end
+
+func parse_decl_tail(p &: Ps, a &: at.Ast, n: int):
+    if p_match(p, tok.TK_COLON_ASSIGN):
+        ps_set_a(a, n, parse_expr(p, a))
+        ret
+    end
+    if p_at(p, tok.TK_COLON):
+        at.SetTypeNode(a, n, parse_type_anno(p, a))
+        demote_auto_type(a, n)
+        if p_at(p, tok.TK_ASSIGN):
+            p_error(p, "declarations with a type annotation were removed; use 'name := value' (or 'name := value as Type')")
+            p_advance(p)
+            ps_set_a(a, n, parse_expr(p, a))
+        end
+        ret
+    end
+    if p_at(p, tok.TK_ASSIGN):
+        p_error(p, "use ':=' to declare a new variable ('name := value'); '=' only assigns to an existing one")
+        p_advance(p)
+        ps_set_a(a, n, parse_expr(p, a))
+        ret
+    end
+    p_error(p, "expected ':=' and an initializer, or ': Type' for an uninitialized declaration")
+end
+
+func parse_var_decl(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "var_decl")
+    n := p_mk(p, a, at.AST_VAR_DECL)
+    is_mut := p_match(p, tok.TK_KW_MUT)
+    nm := parse_decl_name(p)
+    mut nn := at.Get(a, n)
+    nn.is_mut = is_mut
+    nn.name = nm
+    if nm.len() == 0:
+        nn.name = "<error>"
+    end
+    at.Put(a, n, nn)
+    parse_decl_tail(p, a, n)
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_bare_var_decl(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "bare_var_decl")
+    n := p_mk(p, a, at.AST_VAR_DECL)
+    nm := parse_decl_name(p)
+    mut nn := at.Get(a, n)
+    nn.is_mut = false
+    nn.name = nm
+    if nm.len() == 0:
+        nn.name = "<error>"
+    end
+    at.Put(a, n, nn)
+    parse_decl_tail(p, a, n)
+    p_fin(p, a, n)
+    ret n
+end

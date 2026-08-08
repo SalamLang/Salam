@@ -1,0 +1,897 @@
+package codegen
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import sm "../semantic/semantic.salam"
+
+// ===== codegen_expr.c =====
+
+// cg_op - token kind -> C operator text.
+func cg_op(k: int): str:
+    if k == tok.TK_PLUS:
+        ret "+"
+    end
+    if k == tok.TK_MINUS:
+        ret "-"
+    end
+    if k == tok.TK_STAR:
+        ret "*"
+    end
+    if k == tok.TK_SLASH:
+        ret "/"
+    end
+    if k == tok.TK_PERCENT:
+        ret "%"
+    end
+    if k == tok.TK_EQ:
+        ret "=="
+    end
+    if k == tok.TK_NE:
+        ret "!="
+    end
+    if k == tok.TK_LT:
+        ret "<"
+    end
+    if k == tok.TK_GT:
+        ret ">"
+    end
+    if k == tok.TK_LE:
+        ret "<="
+    end
+    if k == tok.TK_GE:
+        ret ">="
+    end
+    if k == tok.TK_AND:
+        ret "&&"
+    end
+    if k == tok.TK_OR:
+        ret "||"
+    end
+    if k == tok.TK_NOT:
+        ret "!"
+    end
+    if k == tok.TK_AMP:
+        ret "&"
+    end
+    if k == tok.TK_PIPE:
+        ret "|"
+    end
+    if k == tok.TK_CARET:
+        ret "^"
+    end
+    if k == tok.TK_TILDE:
+        ret "~"
+    end
+    if k == tok.TK_SHL:
+        ret "<<"
+    end
+    if k == tok.TK_SHR:
+        ret ">>"
+    end
+    if k == tok.TK_ASSIGN:
+        ret "="
+    end
+    if k == tok.TK_PLUS_EQ:
+        ret "+="
+    end
+    if k == tok.TK_MINUS_EQ:
+        ret "-="
+    end
+    if k == tok.TK_STAR_EQ:
+        ret "*="
+    end
+    if k == tok.TK_SLASH_EQ:
+        ret "/="
+    end
+    if k == tok.TK_PERCENT_EQ:
+        ret "%="
+    end
+    if k == tok.TK_AMP_EQ:
+        ret "&="
+    end
+    if k == tok.TK_PIPE_EQ:
+        ret "|="
+    end
+    if k == tok.TK_CARET_EQ:
+        ret "^="
+    end
+    if k == tok.TK_SHL_EQ:
+        ret "<<="
+    end
+    if k == tok.TK_SHR_EQ:
+        ret ">>="
+    end
+    ret "?"
+end
+
+func cg_is_str_ts(ts: str): bool:
+    ret str.Equals(ts, "str") || str.Equals(ts, "uchar")
+end
+
+func cg_str_operand(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    nn := at.Get(a, n)
+    if cg_is_str_ts(nn.type_str):
+        ret cg_expr(g, s, a, n)
+    end
+    ret "salam_tostr_" + prim_suffix(print_tag(nn.type_str)) + "(" + cg_expr(g, s, a, n) + ")"
+end
+
+// cg_cescape - C string literal escaping (bug-compat: stops at a NUL byte
+// like the C's char* walk).
+func cg_cescape(sv: str): str:
+    mut b := co.SbNew()
+    co.SbPutc(b, 34)
+    n := str.Len(sv)
+    mut i := 0
+    until i < n:
+        c := byte_at(sv, i)
+        if c == 0:
+            break
+        end
+        if c == 10:
+            co.SbPuts(b, "\\n")
+        else c == 9:
+            co.SbPuts(b, "\\t")
+        else c == 13:
+            co.SbPuts(b, "\\r")
+        else c == 7:
+            co.SbPuts(b, "\\a")
+        else c == 8:
+            co.SbPuts(b, "\\b")
+        else c == 12:
+            co.SbPuts(b, "\\f")
+        else c == 11:
+            co.SbPuts(b, "\\v")
+        else c == 34:
+            co.SbPuts(b, `\"`)
+        else c == 92:
+            co.SbPuts(b, `\\`)
+        else:
+            if c < 32 || c >= 127:
+                co.SbPutc(b, 92)
+                co.SbPutc(b, 48 + ((c >> 6) & 7))
+                co.SbPutc(b, 48 + ((c >> 3) & 7))
+                co.SbPutc(b, 48 + (c & 7))
+            else:
+                co.SbPutc(b, c)
+            end
+        end
+        i += 1
+    end
+    co.SbPutc(b, 34)
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func cg_match_arm_cond(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, arm: int, subj_var: str, subj_ts: str
+): str:
+    armn := at.Get(a, arm)
+    is_variant := str.StartsWith(subj_ts, "Variant<")
+    mut b := co.SbNew()
+    if armn.op == tok.TK_KW_ELSE:
+        co.SbPuts(b, "1")
+    else:
+        repeat armn.list.len() with i:
+            patn := at.Get(a, armn.list.get(i)[0])
+            if i > 0:
+                co.SbPuts(b, " || ")
+            end
+            if is_variant:
+                co.SbPuts(
+                    b, "((" + subj_var + ").tag == " + (patn.value_int as int) + ")"
+                )
+            else cg_is_str_ts(subj_ts):
+                co.SbPuts(
+                    b, "(strcmp(" + subj_var + ", " + cg_expr(g, s, a, patn.a) + ") == 0)"
+                )
+            else:
+                co.SbPuts(
+                    b, "((" + subj_var + ") == (" + cg_expr(g, s, a, patn.a) + "))"
+                )
+            end
+        end
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func cg_variant_box(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    nn := at.Get(a, n)
+    vts := str.Len(nn.type_str) > 0 ? nn.type_str : "Variant<i32, i32>"
+    vc := cg_variant_cname(vts)
+    tag := nn.value_int as int
+    ret "(" + vc + "){ .tag = " + tag + ", .payload = { .v" + tag + " = (" + cg_expr(g, s, a, nn.a) + ") } }"
+end
+
+func cg_variant_unwrap(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    nn := at.Get(a, n)
+    member_ts := str.Len(nn.type_str) > 0 ? nn.type_str : "i32"
+    variant_ts := at.Get(a, nn.a).type_str
+    mut tag := cg_variant_tag_of(variant_ts, member_ts)
+    if tag < 0:
+        tag = 0
+    end
+    ret "(" + cg_expr(g, s, a, nn.a) + ").payload.v" + tag
+end
+
+func cg_match_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    nn := at.Get(a, n)
+    g.tmpn += 1
+    t := g.tmpn
+    rty := cg_ctype(str.Len(nn.type_str) > 0 ? nn.type_str : "int32_t")
+    subj_ts := at.Get(a, nn.a).type_str
+    sty := cg_ctype(str.Len(subj_ts) > 0 ? subj_ts : "int32_t")
+    // tcc 0.9.26 cannot parse a "({ ... })" GNU statement-expression whose
+    // trailing value is a bare identifier of pointer type declared inside
+    // that same block ("unsupported expression type"), even cast-wrapped,
+    // even though the identical block declared as a non-pointer (e.g.
+    // intptr_t) type is fine. Declare the temp as intptr_t internally and
+    // cast the whole "({ ... })" back to the real pointer type from the
+    // outside instead.
+    rty_is_ptr := str.Len(rty) > 0 && str.EndsWith(rty, "*")
+    res_ctype := rty_is_ptr ? "intptr_t" : rty
+    subj_var := "__msubj" + t
+    res_var := "__mres" + t
+    end_lbl := "__mend" + t
+    saved_tmp := g.match_result_tmp
+    saved_lbl := g.match_end_label
+    saved_ctype := g.match_result_ctype
+    mut has_wildcard := false
+    mut b := co.SbNew()
+    co.SbPuts(
+        b, (rty_is_ptr ? "(" + rty + ")" : "") + "({ " + res_ctype + " " + res_var + "; " + sty + " " + subj_var + " = (" + cg_expr(g, s, a, nn.a) + ");\n"
+    )
+    g.match_result_tmp = res_var
+    g.match_end_label = end_lbl
+    g.match_result_ctype = res_ctype
+    repeat nn.list.len() with i:
+        armid := nn.list.get(i)[0]
+        armn := at.Get(a, armid)
+        cond := cg_match_arm_cond(g, s, a, armid, subj_var, subj_ts)
+        if armn.op == tok.TK_KW_ELSE:
+            has_wildcard = true
+        end
+        co.SbPuts(b, (i > 0 ? "else" : "") + " if (" + cond + ") {\n")
+        saved_indent := g.indent
+        mark := g.locals.len()
+        pos := cur_sink_len(g)
+        g.indent = 0
+        bn := at.Get(a, armn.b)
+        repeat bn.list.len() with j:
+            cg_stmt(g, s, a, bn.list.get(j)[0])
+        end
+        g.indent = saved_indent
+        locals_trunc(g, mark)
+        co.SbPuts(b, cur_sink_take(g, pos))
+        co.SbPuts(b, "}\n")
+    end
+    if !has_wildcard:
+        co.SbPuts(b, "else { salam_panic(\"no match arm matched\"); }\n")
+    end
+    co.SbPuts(b, end_lbl + ": " + res_var + "; })")
+    g.match_result_tmp = saved_tmp
+    g.match_end_label = saved_lbl
+    g.match_result_ctype = saved_ctype
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func cg_dyn_box(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    nn := at.Get(a, n)
+    iface := str.Substr(nn.type_str, 4, str.Len(nn.type_str) - 4)
+    concrete := at.Get(a, nn.a).type_str
+    ci := cg_cident(iface)
+    cc2 := cg_cident(concrete)
+    g.tmpn += 1
+    t := g.tmpn
+    ret "({ " + cc2 + "* __dp" + t + " = (" + cc2 + "*)" + CG_MEM_ALLOC + "((uint64_t)sizeof(" + cc2 + ")); *__dp" + t + " = (" + cg_expr(g, s, a, nn.a) + "); (_Salam_dyn_" + ci + "){ (void*)__dp" + t + ", &_Salam_vtbl_" + ci + "_" + cc2 + " }; })"
+end
+
+// cg_emit_op_call - operator overloads. lhs/rhs are at.NodeIds (rhs 0 =
+// the C NULL), ssym a SymId; returns "" for the C NULL.
+func cg_emit_op_call(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, lhs: int, ssym: int, sname: str, mname: str, rhs: int
+): str:
+    m := sm.LookupLocal(s, sm.SymAt(s, ssym).members, mname)
+    if m == 0 || sm.SymAt(s, m).kind != sm.SYM_METHOD:
+        ret ""
+    end
+    nparams := rhs != 0 ? 1 : 0
+    sig := pick_op_overload(s, m, nparams)
+    if sig == 0:
+        ret ""
+    end
+    mangled := cg_mangle_method(
+        g, s, sname, ssym, mname, sm.SigAt(s, sig).params
+    )
+    ret_struct := type_is_byval_agg(s, sm.SigAt(s, sig).ret_type)
+    mut rc := ""
+    if ret_struct:
+        rc = cg_ctype(sm.ToString(s, sm.SigAt(s, sig).ret_type))
+    end
+    lhs_ts := at.Get(a, lhs).type_str
+    lhs_is_ptr := str.Len(lhs_ts) > 0 && str.EndsWith(lhs_ts, "*")
+    addressable := cg_addressable(a, lhs)
+    mut rhs_c := ""
+    if rhs != 0:
+        rhs_c = cg_expr(g, s, a, rhs)
+    end
+    sep := rhs != 0 ? ", " : ""
+    if lhs_is_ptr || addressable:
+        mut recv := ""
+        if lhs_is_ptr:
+            recv = cg_expr(g, s, a, lhs)
+        else:
+            recv = "&(" + cg_expr(g, s, a, lhs) + ")"
+        end
+        if ret_struct:
+            g.tmpn += 1
+            sv := g.tmpn
+            ret "({ " + rc + " __s" + sv + "; " + mangled + "(" + recv + sep + rhs_c + ", &__s" + sv + "); __s" + sv + "; })"
+        end
+        ret mangled + "(" + recv + sep + rhs_c + ")"
+    end
+    g.tmpn += 1
+    t := g.tmpn
+    lhs_c := cg_expr(g, s, a, lhs)
+    if ret_struct:
+        g.tmpn += 1
+        sv2 := g.tmpn
+        ret "({ " + cg_ctype(lhs_ts) + " __t" + t + " = (" + lhs_c + "); " + rc + " __s" + sv2 + "; " + mangled + "(&__t" + t + sep + rhs_c + ", &__s" + sv2 + "); __s" + sv2 + "; })"
+    end
+    ret "({ " + cg_ctype(lhs_ts) + " __t" + t + " = (" + lhs_c + "); " + mangled + "(&__t" + t + sep + rhs_c + "); })"
+end
+
+func cg_ident_char(c: int, first: bool): bool:
+    if c == 95 || (c >= 97 && c <= 122) || (c >= 65 && c <= 90):
+        ret true
+    end
+    if !first && c >= 48 && c <= 57:
+        ret true
+    end
+    ret false
+end
+
+func cg_val_is_bare_ident(v: str): bool:
+    n := str.Len(v)
+    if n == 0 || !cg_ident_char(byte_at(v, 0), true):
+        ret false
+    end
+    mut i := 1
+    until i < n:
+        if !cg_ident_char(byte_at(v, i), false):
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+// Two confirmed, distinct tcc 0.9.26 bugs, both reproduced with minimal
+// standalone .c files against the bundled tcc binary (see the matching
+// note in c/src/codegen/codegen_expr.c's own cg_val_needs_hoist):
+// 1. A "({ ... })" GNU statement-expression can't be a compound-literal
+//    initializer-list element at all, positional or designated, even
+//    cast-wrapped - "cast expected". Every stmt-expr this codegen emits
+//    ends in "})", optionally behind an outer cast, so that suffix
+//    reliably detects the shape.
+// 2. A plain bare-identifier field value (e.g. ".f = someVar", regardless
+//    of someVar's type or where it came from) is rejected with "field
+//    expected" whenever it is *not* the list's last element. Both
+//    symptoms disappear once the value lives in its own
+//    "tmp.field = value;" statement instead of the initializer list.
+// NULL/true/false are constant tokens, not variable references - they
+// never trip bug 2 and, unlike one, are always safe to leave in a
+// top-level/global initializer, which can't hold hoisted statements at
+// all (there is no enclosing function body to emit them into).
+func cg_val_needs_hoist(v: str): bool:
+    n := str.Len(v)
+    if n >= 2 && byte_at(v, n - 1) == 41 && byte_at(v, n - 2) == 125:
+        ret true
+    end
+    if str.Equals(v, "NULL") || str.Equals(v, "true") || str.Equals(v, "false"):
+        ret false
+    end
+    ret cg_val_is_bare_ident(v)
+end
+
+func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    nn := at.Get(a, n)
+    ssym := struct_by_name(s, nn.name)
+    mut sl_cn := nn.name
+    if ssym != 0:
+        sv := sm.SymAt(s, ssym)
+        if sv.ty != sm.TYPE_NONE && str.Len(sm.TypeAt(s, sv.ty).name) > 0:
+            sl_cn = sm.TypeAt(s, sv.ty).name
+        end
+    end
+    mut inl := co.SbNew()
+    mut first := true
+    mut post_names := Vector {} as Vector<str>
+    mut post_vals := Vector {} as Vector<str>
+    if ssym != 0:
+        msc := sm.ScopeAt(s, sm.SymAt(s, ssym).members)
+        repeat msc.symbols.len() with i:
+            f := sm.SymAt(s, msc.symbols.get(i)[0])
+            if f.kind != sm.SYM_FIELD:
+                continue
+            end
+            mut provided := 0
+            repeat nn.list.len() with j:
+                fiid := nn.list.get(j)[0]
+                fi := at.Get(a, fiid)
+                if provided == 0 && str.Len(fi.name) > 0 && str.Equals(fi.name, f.name):
+                    provided = fiid
+                end
+            end
+            mut val := ""
+            mut has_val := false
+            if provided != 0:
+                val = cg_expr(g, s, a, at.Get(a, provided).a)
+                has_val = true
+            else f.decl != 0 && at.Get(a, f.decl).a != 0:
+                val = cg_expr(g, s, a, at.Get(a, f.decl).a)
+                has_val = true
+            end
+            if !has_val:
+                continue
+            end
+            if cg_val_needs_hoist(val):
+                post_names.push(f.name)
+                post_vals.push(val)
+            else:
+                if !first:
+                    co.SbPuts(inl, ", ")
+                end
+                co.SbPuts(inl, "." + cg_cident(f.name) + " = " + val)
+                first = false
+            end
+        end
+    end
+    if first:
+        co.SbPuts(inl, "0")
+    end
+    mut r := ""
+    if post_names.len() == 0:
+        r = "(" + cg_cident(sl_cn) + "){ " + co.SbCstr(inl) + " }"
+    else:
+        // At least one field needs the post-assignment treatment:
+        // materialize the literal from only the safe fields into a named
+        // temp, apply the rest as plain "tmp.field = value;" statements
+        // (always accepted regardless of value shape or position), and
+        // use the bare temp as this expression's result. If that result
+        // itself ends up as a field value of an *enclosing* struct
+        // literal, cg_val_needs_hoist catches it there too (a bare
+        // identifier), so this composes safely at any nesting depth.
+        g.tmpn += 1
+        t := g.tmpn
+        cg_line(
+            g, cg_cident(sl_cn) + " __sl" + t + " = (" + cg_cident(sl_cn) + "){ " + co.SbCstr(inl) + " };"
+        )
+        repeat post_names.len() with k:
+            cg_line(g, "__sl" + t + "." + cg_cident(post_names.get(k)[0]) + " = " + post_vals.get(k)[0] + ";")
+        end
+        r = "__sl" + t
+    end
+    co.SbFree(inl)
+    ret r
+end
+
+// cg_expr - returns the C expression text ("0" for the C NULL node).
+func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    if n == 0:
+        ret "0"
+    end
+    nn := at.Get(a, n)
+    k := nn.kind
+    if k == at.AST_LITERAL:
+        if nn.op == tok.TK_INT:
+            u := nn.value_int
+            ts := nn.type_str
+            uns := str.Len(ts) > 0 && (byte_at(ts, 0) == 117 || str.Equals(ts, "size"))
+            imax := 9223372036854775807 as u64
+            if !uns && u > imax:
+                if u == imax + (1 as u64):
+                    ret "(-9223372036854775807LL - 1LL)"
+                end
+                ret "(" + co.I64Toa(u as i64) + "LL)"
+            end
+            mut suf := ""
+            if u > imax:
+                suf = "ULL"
+            else u > (2147483647 as u64):
+                suf = "LL"
+            end
+            ret co.U64Toa(u) + suf
+        end
+        if nn.op == tok.TK_FLOAT:
+            buf := co.Format1("%.17g", co.ArgFloat(nn.value_float))
+            nb := str.Len(buf)
+            mut hasmark := false
+            mut bi := 0
+            until bi < nb:
+                c2 := byte_at(buf, bi)
+                if c2 == 46 || c2 == 101 || c2 == 69 || c2 == 110 || c2 == 78:
+                    hasmark = true
+                    break
+                end
+                bi += 1
+            end
+            if !hasmark:
+                ret buf + ".0"
+            end
+            ret buf
+        end
+        if nn.op == tok.TK_STRING || nn.op == tok.TK_TRIPLE_STRING || nn.op == tok.TK_RAW_STRING || nn.op == tok.TK_UTF8_CHAR:
+            ret cg_cescape(nn.value_str)
+        end
+        if nn.op == tok.TK_CHAR:
+            ret co.U64Toa(nn.value_int)
+        end
+        if nn.op == tok.TK_KW_TRUE:
+            ret "true"
+        end
+        if nn.op == tok.TK_KW_FALSE:
+            ret "false"
+        end
+        if nn.op == tok.TK_KW_NULL:
+            ret "NULL"
+        end
+        ret "0"
+    end
+    if k == at.AST_IDENTIFIER:
+        if g.cur_lambda != 0:
+            lam := at.Get(a, g.cur_lambda)
+            repeat lam.captures.len() with ci:
+                if str.Equals(
+                    at.Get(a, lam.captures.get(ci)[0]).name, nn.name
+                ):
+                    ret "__env->" + cg_cident(nn.name)
+                end
+            end
+        end
+        if local_known(g, nn.name):
+            if nn.is_ref:
+                ret "(*" + cg_cident(nn.name) + ")"
+            end
+            ret cg_cident(nn.name)
+        end
+        if g.cur_struct != 0:
+            f := sm.LookupLocal(
+                s, sm.SymAt(s, g.cur_struct).members, nn.name
+            )
+            if f != 0 && sm.SymAt(s, f).kind == sm.SYM_FIELD:
+                ret "this->" + cg_cident(nn.name)
+            end
+        end
+        ret cg_cident(nn.name)
+    end
+    if k == at.AST_FUNC_ADDR:
+        mut fsym := sm.Lookup(s, s.global, nn.name)
+        mut home_pkg := ""
+        if fsym == 0 && g.cur_fn_home != 0:
+            hs := sm.Lookup(s, g.cur_fn_home, nn.name)
+            if hs != 0 && sm.SymAt(s, hs).kind == sm.SYM_FUNC:
+                fsym = hs
+                home_pkg = sm.SymAt(s, hs).pkgname
+            end
+        end
+        if fsym == 0 && g.cur_struct != 0 && sm.SymAt(s, g.cur_struct).home != 0:
+            hs2 := sm.Lookup(s, sm.SymAt(s, g.cur_struct).home, nn.name)
+            if hs2 != 0 && sm.SymAt(s, hs2).kind == sm.SYM_FUNC:
+                fsym = hs2
+                home_pkg = sm.SymAt(s, hs2).pkgname
+            end
+        end
+        mut sig := 0
+        if fsym != 0 && sm.SymAt(s, fsym).overloads.len() == 1:
+            sig = sm.SymAt(s, fsym).overloads.get(0)[0]
+        end
+        is_extern_fn := sig != 0 && sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).is_extern
+        mut raw := ""
+        if is_extern_fn:
+            raw = nn.name
+        else:
+            pkg2 := str.Len(home_pkg) > 0 ? home_pkg : g.pkg
+            if sig != 0:
+                raw = cg_mangle_in(
+                    s, pkg2, "", nn.name, sm.SigAt(s, sig).params
+                )
+            else:
+                mut empty := Vector {} as Vector<int>
+                raw = cg_mangle_in(s, pkg2, "", nn.name, empty)
+                empty.free()
+            end
+        end
+        ret "((void*)(&" + raw + "))"
+    end
+    if k == at.AST_THIS:
+        ret "this"
+    end
+    if k == at.AST_BINARY:
+        an := at.Get(a, nn.a)
+        bn := at.Get(a, nn.b)
+        if nn.a != 0 && str.Len(an.type_str) > 0:
+            mut sname := ""
+            ssym := cg_struct_of(s, an.type_str, sname)
+            if ssym != 0:
+                neg_eq := nn.op == tok.TK_NE && nn.synthetic
+                mname := neg_eq ? "operator_eq" : cg_op_method(nn.op)
+                if str.Len(mname) > 0:
+                    callv := cg_emit_op_call(
+                        g, s, a, nn.a, ssym, sname, mname, nn.b
+                    )
+                    if str.Len(callv) > 0:
+                        if neg_eq:
+                            ret "(!(" + callv + "))"
+                        end
+                        ret callv
+                    end
+                end
+            end
+        end
+        if nn.op == tok.TK_POWER:
+            ea := cg_expr(g, s, a, nn.a)
+            eb := cg_expr(g, s, a, nn.b)
+            ret "pow((double)(" + ea + "), (double)(" + eb + "))"
+        end
+        if nn.op == tok.TK_PLUS && (cg_is_str_ts(an.type_str) || cg_is_str_ts(bn.type_str)):
+            oa := cg_str_operand(g, s, a, nn.a)
+            ob := cg_str_operand(g, s, a, nn.b)
+            ret "salam_strcat(" + oa + ", " + ob + ")"
+        end
+        if nn.op == tok.TK_STAR && (cg_is_str_ts(an.type_str) || cg_is_str_ts(bn.type_str)):
+            a_str := cg_is_str_ts(an.type_str)
+            sop := a_str ? nn.a : nn.b
+            nop := a_str ? nn.b : nn.a
+            es := cg_expr(g, s, a, sop)
+            en := cg_expr(g, s, a, nop)
+            ret "salam_str_repeat(" + es + ", (int32_t)(" + en + "))"
+        end
+        if cg_is_str_ts(an.type_str) && cg_is_str_ts(bn.type_str):
+            mut opv := ""
+            if nn.op == tok.TK_EQ:
+                opv = "=="
+            else nn.op == tok.TK_NE:
+                opv = "!="
+            else nn.op == tok.TK_LT:
+                opv = "<"
+            else nn.op == tok.TK_GT:
+                opv = ">"
+            else nn.op == tok.TK_LE:
+                opv = "<="
+            else nn.op == tok.TK_GE:
+                opv = ">="
+            end
+            if str.Len(opv) > 0:
+                ea2 := cg_expr(g, s, a, nn.a)
+                eb2 := cg_expr(g, s, a, nn.b)
+                ret "(strcmp(" + ea2 + ", " + eb2 + ") " + opv + " 0)"
+            end
+        end
+        // Integer operands are converted to the operation's common type and
+        // the result is wrapped back into it. C's integer promotions would
+        // otherwise widen u8/u16/i8/i16 operands to int, so `(200 as u8) +
+        // (100 as u8)` yielded 300 instead of wrapping to 44, and a literal
+        // whose `as u64` cast was folded away would shift as a 32-bit int
+        // (`(1 as u64) << 63` produced 0). Salam defines arithmetic to wrap
+        // modulo 2^n in the operand type (SALAM-TYPES.md 4.1, 15).
+        shift := nn.op == tok.TK_SHL || nn.op == tok.TK_SHR
+        mut cts := ""
+        if cg_is_int_typestr(an.type_str) && cg_is_int_typestr(bn.type_str):
+            cts = shift ? an.type_str : cg_common_int_typestr(an.type_str, bn.type_str)
+        end
+        if str.Len(cts) > 0:
+            cty := cg_ctype(cts)
+            eaq := cg_expr(g, s, a, nn.a)
+            ebq := cg_expr(g, s, a, nn.b)
+            // Shifts keep the left operand's type; the right operand's value
+            // is used as-is.
+            if shift:
+                ret "((" + cty + ")((" + cty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + ebq + ")))"
+            end
+            if cg_op_is_cmp(nn.op):
+                ret "((" + cty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + cty + ")(" + ebq + "))"
+            end
+            ret "((" + cty + ")((" + cty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + cty + ")(" + ebq + ")))"
+        end
+        ea3 := cg_expr(g, s, a, nn.a)
+        eb3 := cg_expr(g, s, a, nn.b)
+        ret "(" + ea3 + " " + cg_op(nn.op) + " " + eb3 + ")"
+    end
+    if k == at.AST_TERNARY:
+        ea := cg_expr(g, s, a, nn.a)
+        eb := cg_expr(g, s, a, nn.b)
+        ec := cg_expr(g, s, a, nn.c)
+        ret "((" + ea + ") ? (" + eb + ") : (" + ec + "))"
+    end
+    if k == at.AST_UNARY:
+        if nn.a != 0 && str.Len(at.Get(a, nn.a).type_str) > 0:
+            mut sname2 := ""
+            ssym2 := cg_struct_of(s, at.Get(a, nn.a).type_str, sname2)
+            if ssym2 != 0:
+                mut mname2 := ""
+                if nn.op == tok.TK_MINUS:
+                    mname2 = "operator_sub"
+                else nn.op == tok.TK_NOT:
+                    mname2 = "operator_not"
+                end
+                if str.Len(mname2) > 0:
+                    m2 := sm.LookupLocal(
+                        s, sm.SymAt(s, ssym2).members, mname2
+                    )
+                    if m2 != 0 && sm.SymAt(s, m2).kind == sm.SYM_METHOD && pick_op_overload(s, m2, 0) != 0:
+                        callv2 := cg_emit_op_call(
+                            g, s, a, nn.a, ssym2, sname2, mname2, 0
+                        )
+                        if str.Len(callv2) > 0:
+                            ret callv2
+                        end
+                    end
+                end
+            end
+        end
+        // '-' and '~' preserve the operand's type (SALAM-TYPES.md 21); C
+        // would promote a narrow operand to int, so `~(0 as u8)` came back
+        // as -1 rather than 255.
+        if (nn.op == tok.TK_MINUS || nn.op == tok.TK_TILDE) && nn.a != 0 && cg_is_int_typestr(at.Get(a, nn.a).type_str):
+            ucty := cg_ctype(at.Get(a, nn.a).type_str)
+            ret "((" + ucty + ")(" + cg_op(nn.op) + "(" + cg_expr(g, s, a, nn.a) + ")))"
+        end
+        ret "(" + cg_op(nn.op) + cg_expr(g, s, a, nn.a) + ")"
+    end
+    if k == at.AST_INCDEC:
+        opc := nn.op == tok.TK_PLUS_PLUS ? "++" : "--"
+        operand := cg_expr(g, s, a, nn.a)
+        if nn.is_prefix:
+            ret "(" + opc + operand + ")"
+        end
+        ret "(" + operand + opc + ")"
+    end
+    if k == at.AST_CAST:
+        if str.StartsWith(nn.type_str, "dyn ") && !str.EndsWith(nn.type_str, "*"):
+            ret cg_dyn_box(g, s, a, n)
+        end
+        if nn.a != 0 && (
+            at.KindOf(a, nn.a) == at.AST_ARRAY_LIT || at.KindOf(a, nn.a) == at.AST_STRUCT_LIT
+        ):
+            ret cg_expr(g, s, a, nn.a)
+        end
+        sts := nn.a != 0 ? at.Get(a, nn.a).type_str : ""
+        dts := nn.ty != 0 ? at.Get(a, nn.ty).type_str : ""
+        if str.Len(sts) > 0 && str.Len(dts) > 0 && str.Equals(sts, dts):
+            ret cg_expr(g, s, a, nn.a)
+        end
+        dptr := str.Len(dts) > 0 && str.EndsWith(dts, "*")
+        sptr := str.Len(sts) > 0 && str.EndsWith(sts, "*")
+        tgt := str.Len(dts) > 0 ? dts : nn.type_str
+        if (
+            dptr != sptr && (cg_is_int_typestr(dts) || cg_is_int_typestr(sts))
+        ) || (dptr && str.Equals(sts, "str") && !str.Equals(dts, "str")):
+            ret "((" + cg_ctype(tgt) + ")(intptr_t)(" + cg_expr(g, s, a, nn.a) + "))"
+        end
+        ret "((" + cg_ctype(tgt) + ")(" + cg_expr(g, s, a, nn.a) + "))"
+    end
+    if k == at.AST_CALL:
+        ret cg_call(g, s, a, n)
+    end
+    if k == at.AST_MEMBER:
+        an2 := at.Get(a, nn.a)
+        if nn.a != 0 && an2.kind == at.AST_IDENTIFIER && !local_known(g, an2.name):
+            e := sm.Lookup(s, s.global, an2.name)
+            if e != 0 && sm.SymAt(s, e).kind == sm.SYM_ENUM:
+                ret cg_cident(sm.SymAt(s, e).name) + "_" + cg_cident(nn.name)
+            end
+            if e != 0 && sm.SymAt(s, e).kind == sm.SYM_PACKAGE:
+                m := sm.LookupLocal(s, sm.SymAt(s, e).members, nn.name)
+                if m != 0:
+                    ms := sm.SymAt(s, m)
+                    if ms.kind == sm.SYM_CONST && ms.decl != 0 && at.Get(a, ms.decl).a != 0:
+                        ret cg_expr(g, s, a, at.Get(a, ms.decl).a)
+                    end
+                    if ms.decl != 0 && at.Get(a, ms.decl).a != 0:
+                        ret cg_expr(g, s, a, at.Get(a, ms.decl).a)
+                    end
+                end
+            end
+        end
+        objts := an2.type_str
+        ptr := str.Len(objts) > 0 && str.EndsWith(objts, "*")
+        ret cg_expr(g, s, a, nn.a) + (ptr ? "->" : ".") + cg_cident(nn.name)
+    end
+    if k == at.AST_INDEX:
+        an3 := at.Get(a, nn.a)
+        if nn.a != 0 && str.Len(an3.type_str) > 0:
+            mut sname3 := ""
+            ssym3 := cg_struct_of(s, an3.type_str, sname3)
+            if ssym3 != 0:
+                m3 := sm.LookupLocal(
+                    s, sm.SymAt(s, ssym3).members, "operator_index"
+                )
+                if m3 != 0 && sm.SymAt(s, m3).kind == sm.SYM_METHOD:
+                    callv3 := cg_emit_op_call(
+                        g, s, a, nn.a, ssym3, sname3, "operator_index", nn.b
+                    )
+                    if str.Len(callv3) > 0:
+                        ret callv3
+                    end
+                end
+            end
+        end
+        if cg_is_slice_ts(an3.type_str):
+            ec2 := cg_ctype(cg_slice_elem(an3.type_str, 96))
+            se := cg_expr(g, s, a, nn.a)
+            idx := cg_expr(g, s, a, nn.b)
+            ret "(*(" + ec2 + "*)salam_slice_at(" + se + ", " + idx + ", (int64_t)sizeof(" + ec2 + "), " + (g.safe ? 1 : 0) + "))"
+        end
+        arr := cg_expr(g, s, a, nn.a)
+        idx2 := cg_expr(g, s, a, nn.b)
+        if g.safe:
+            sz := array_size_of(an3.type_str)
+            if sz > (0 as i64):
+                ret arr + "[salam_idx(" + idx2 + ", " + co.I64Toa(sz) + ")]"
+            end
+        end
+        ret arr + "[" + idx2 + "]"
+    end
+    if k == at.AST_SLICE:
+        ec3 := cg_ctype(cg_slice_elem(nn.type_str, 96))
+        base := cg_expr(g, s, a, nn.a)
+        mut lo := "0"
+        if nn.b != 0:
+            lo = cg_expr(g, s, a, nn.b)
+        end
+        g.tmpn += 1
+        t := g.tmpn
+        a_ts := at.Get(a, nn.a).type_str
+        if cg_is_slice_ts(a_ts):
+            if nn.c != 0:
+                ret "({ salam_slice __sl" + t + "; salam_slice_sub(&__sl" + t + ", " + base + ", " + lo + ", " + cg_expr(g, s, a, nn.c) + ", 1, (int64_t)sizeof(" + ec3 + ")); __sl" + t + "; })"
+            end
+            ret "({ salam_slice __sl" + t + "; salam_slice_sub(&__sl" + t + ", " + base + ", " + lo + ", 0, 0, (int64_t)sizeof(" + ec3 + ")); __sl" + t + "; })"
+        end
+        mut hi := ""
+        if nn.c != 0:
+            hi = cg_expr(g, s, a, nn.c)
+        else:
+            hi = co.I64Toa(array_size_of(a_ts))
+        end
+        ret "({ salam_slice __sl" + t + "; salam_slice_new(&__sl" + t + ", (void*)(" + base + "), " + lo + ", " + hi + ", (int64_t)sizeof(" + ec3 + ")); __sl" + t + "; })"
+    end
+    if k == at.AST_MATCH:
+        ret cg_match_expr(g, s, a, n)
+    end
+    if k == at.AST_VARIANT_BOX:
+        ret cg_variant_box(g, s, a, n)
+    end
+    if k == at.AST_VARIANT_UNWRAP:
+        ret cg_variant_unwrap(g, s, a, n)
+    end
+    if k == at.AST_LAMBDA:
+        ret cg_lambda_value(g, s, a, n)
+    end
+    if k == at.AST_STRUCT_LIT:
+        ret cg_struct_lit(g, s, a, n)
+    end
+    if k == at.AST_ARRAY_LIT:
+        mut b := co.SbNew()
+        co.SbPutc(b, 123)
+        repeat nn.list.len() with i:
+            if i > 0:
+                co.SbPuts(b, ", ")
+            end
+            co.SbPuts(b, cg_expr(g, s, a, nn.list.get(i)[0]))
+        end
+        co.SbPutc(b, 125)
+        r := co.SbCstr(b)
+        co.SbFree(b)
+        ret r
+    end
+    ret "0"
+end

@@ -1,0 +1,457 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import i18 "../i18n.salam"
+
+// ===========================================================================
+// ===== sema_layout.c (5d) =====
+// ===========================================================================
+
+// layout_localize_names (layout_gen.c) - canonicalizes element/attribute
+// spellings through the i18n layout-word registry, recursively.
+func layout_localize_names(a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LAYOUT_ELEMENT || n.kind == at.AST_LAYOUT_ATTR:
+        at.SetName(a, nid, i18.LayoutWord(n.name))
+    end
+    repeat at.ChildCount(a, nid) with i:
+        layout_localize_names(a, at.Child(a, nid, i))
+    end
+end
+
+// attr_string - true when the attribute's value is a string literal.
+func lay_attr_string(a &: at.Ast, attr: int, out &: str): bool:
+    v := at.Get(a, attr).a
+    if v == 0:
+        ret false
+    end
+    vv := at.Get(a, v)
+    if vv.kind == at.AST_LITERAL && vv.value_kind == tok.TV_STRING:
+        out = vv.value_str
+        ret true
+    end
+    ret false
+end
+
+// elem_attr - child AST_LAYOUT_ATTR named `name`, 0 = C NULL.
+func lay_elem_attr(a &: at.Ast, el: int, name: str): int:
+    repeat at.ChildCount(a, el) with i:
+        cid := at.Child(a, el, i)
+        c := at.Get(a, cid)
+        if c.kind == at.AST_LAYOUT_ATTR && str.Equals(c.name, name):
+            ret cid
+        end
+    end
+    ret 0
+end
+
+// subtree_has_id
+func lay_subtree_has_id(a &: at.Ast, el: int): bool:
+    repeat at.ChildCount(a, el) with i:
+        cid := at.Child(a, el, i)
+        if at.KindOf(a, cid) != at.AST_LAYOUT_ELEMENT:
+            continue
+        end
+        if lay_elem_attr(a, cid, "id") != 0 || lay_subtree_has_id(a, cid):
+            ret true
+        end
+    end
+    ret false
+end
+
+// check_repeat - E019.
+func lay_check_repeat(s &: Sema, a &: at.Ast, element: int):
+    if lay_elem_attr(a, element, "repeat") == 0:
+        ret
+    end
+    elname := at.Get(a, element).name
+    if lay_elem_attr(a, element, "id") != 0:
+        serr(
+            s, 19, span_of(a, element), co.Format1(
+                i18.Tr("element '%s' cannot use 'repeat' together with 'id'"), co.ArgStr(elname)
+            )
+        )
+    else lay_subtree_has_id(a, element):
+        serr(
+            s, 19, span_of(a, element), co.Format1(
+                i18.Tr("element '%s' has 'repeat' but a nested element has an 'id'"), co.ArgStr(elname)
+            )
+        )
+    end
+end
+
+// check_attr - E018.
+func lay_check_attr(s &: Sema, a &: at.Ast, attr: int):
+    name := at.Get(a, attr).name
+    if str.Len(name) == 0:
+        ret
+    end
+    ai := lay_attr_lookup(name)
+    if ai < 0:
+        ret
+    end
+    mut v := ""
+    if !lay_attr_string(a, attr, v):
+        ret
+    end
+    if !lay_attr_value_ok(ai, v):
+        serr(
+            s, 18, span_of(a, attr), co.Format3(
+                i18.Tr("invalid value for '%s': '%s' is not %s"), co.ArgStr(name), co.ArgStr(v), co.ArgStr(
+                    lay_value_type_name(
+                        g_sm_lay_attr_vtype.get(ai)[0]
+                    )
+                )
+            )
+        )
+    end
+end
+
+// check_required - E005 (the "%.*s" keeps the C csv-slice formatting).
+func lay_check_required(s &: Sema, a &: at.Ast, element: int, ei: int):
+    if ei < 0:
+        ret
+    end
+    req := g_sm_lay_elem_required.get(ei)[0]
+    if str.Len(req) == 0:
+        ret
+    end
+    elname := at.Get(a, element).name
+    n := str.Len(req)
+    mut p := 0
+    until p <= n:
+        comma := str.IndexFrom(req, ",", p)
+        mut l := 0
+        if comma >= 0:
+            l = comma - p
+        else:
+            l = n - p
+        end
+        piece := str.Substr(req, p, l)
+        mut found := false
+        repeat at.ChildCount(a, element) with i:
+            c := at.Get(a, at.Child(a, element, i))
+            if c.kind == at.AST_LAYOUT_ATTR && str.Equals(c.name, piece):
+                found = true
+                break
+            end
+        end
+        if !found:
+            serr(
+                s, 5, span_of(a, element), co.Format3(
+                    i18.Tr("element '%s' is missing required attribute '%.*s'"), co.ArgStr(elname), co.ArgInt(l as i64),
+                    co.ArgStr(str.Substr(req, p, n - p))
+                )
+            )
+        end
+        if comma < 0:
+            break
+        end
+        p = comma + 1
+    end
+end
+
+// sema_check_layout - parent "" plays the C NULL.
+func sema_check_layout(s &: Sema, a &: at.Ast, nid: int, parent: str):
+    k := at.KindOf(a, nid)
+    if k == at.AST_LAYOUT_BLOCK:
+        layout_localize_names(a, nid)
+        lg.Log(
+            s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, i18.Tr("validating layout block")
+        )
+        if lay_elem_attr(a, nid, "repeat") != 0 && lay_subtree_has_id(a, nid):
+            serr(
+                s, 19, span_of(a, nid), i18.Tr("layout uses 'repeat' but a nested element has an 'id'")
+            )
+        end
+        repeat at.ChildCount(a, nid) with i:
+            cid := at.Child(a, nid, i)
+            ck := at.KindOf(a, cid)
+            if ck == at.AST_LAYOUT_ELEMENT:
+                sema_check_layout(s, a, cid, "layout")
+            else ck == at.AST_LAYOUT_ATTR:
+                lay_check_attr(s, a, cid)
+            end
+        end
+        ret
+    end
+    if k == at.AST_LAYOUT_ELEMENT:
+        elname := at.Get(a, nid).name
+        ei := lay_elem_lookup(elname)
+        if ei < 0:
+            swarn(
+                s, 2, span_of(a, nid), co.Format1(
+                    i18.Tr("unrecognized layout element '%s' (ignored)"), co.ArgStr(elname)
+                )
+            )
+        else:
+            parents := g_sm_lay_elem_parents.get(ei)[0]
+            if str.Len(parents) > 0 && !lay_csv_has(parents, parent):
+                serr(
+                    s, 4, span_of(a, nid), co.Format2(
+                        i18.Tr("element '%s' cannot be placed inside '%s'"), co.ArgStr(elname), co.ArgStr(str.Len(parent) > 0 ? parent : "<root>")
+                    )
+                )
+            end
+            lay_check_required(s, a, nid, ei)
+        end
+        lay_check_repeat(s, a, nid)
+        repeat at.ChildCount(a, nid) with i2:
+            cid2 := at.Child(a, nid, i2)
+            ck2 := at.KindOf(a, cid2)
+            if ck2 == at.AST_LAYOUT_ELEMENT:
+                sema_check_layout(s, a, cid2, elname)
+            else ck2 == at.AST_LAYOUT_ATTR:
+                lay_check_attr(s, a, cid2)
+            end
+        end
+        ret
+    end
+end
+
+// loopless_break (sema_stmt.c, 5d) - a `break` not swallowed by a nested
+// loop, looking through blocks/ifs/matches.
+func loopless_break(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_BREAK:
+        ret true
+    end
+    if n.kind == at.AST_BLOCK:
+        repeat at.ChildCount(a, nid) with i:
+            if loopless_break(a, at.Child(a, nid, i)):
+                ret true
+            end
+        end
+        ret false
+    end
+    if n.kind == at.AST_IF:
+        ret loopless_break(a, n.b) || loopless_break(a, n.c)
+    end
+    if n.kind == at.AST_MATCH:
+        repeat at.ChildCount(a, nid) with j:
+            arm := at.Child(a, nid, j)
+            if loopless_break(a, at.Get(a, arm).b):
+                ret true
+            end
+        end
+        ret false
+    end
+    ret false
+end
+
+// sema_stmt_terminates (sema_stmt.c, 5d) - W071 termination analysis.
+func sema_stmt_terminates(s &: Sema, a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_RETURN || n.kind == at.AST_BREAK || n.kind == at.AST_CONTINUE:
+        ret true
+    end
+    if n.kind == at.AST_BLOCK:
+        repeat at.ChildCount(a, nid) with i:
+            if sema_stmt_terminates(s, a, at.Child(a, nid, i)):
+                ret true
+            end
+        end
+        ret false
+    end
+    if n.kind == at.AST_IF:
+        ret n.c != 0 && sema_stmt_terminates(s, a, n.b) && sema_stmt_terminates(s, a, n.c)
+    end
+    if n.kind == at.AST_UNTIL:
+        ret n.a != 0 && at.KindOf(a, n.a) == at.AST_LITERAL && at.Get(a, n.a).op == tok.TK_KW_TRUE && !loopless_break(a, n.b)
+    end
+    if n.kind == at.AST_MATCH:
+        mut has_else := false
+        if at.ChildCount(a, nid) == 0:
+            ret false
+        end
+        repeat at.ChildCount(a, nid) with j:
+            arm := at.Child(a, nid, j)
+            if at.Get(a, arm).op == tok.TK_KW_ELSE:
+                has_else = true
+            end
+            if !sema_stmt_terminates(s, a, at.Get(a, arm).b):
+                ret false
+            end
+        end
+        ret has_else
+    end
+    if n.kind == at.AST_EXPR_STMT:
+        c := n.a
+        if c != 0 && at.KindOf(a, c) == at.AST_CALL:
+            ca := at.Get(a, c).a
+            if ca != 0 && at.KindOf(a, ca) == at.AST_IDENTIFIER:
+                symid := scope_lookup(s, s.cur, at.Get(a, ca).name)
+                if symid != 0:
+                    sv := sym_at(s, symid)
+                    if sv.kind == SYM_FUNC && sv.overloads.len() == 1:
+                        sg := sig_at(s, sv.overloads.get(0)[0])
+                        if sg.decl != 0 && at.Get(a, sg.decl).is_noret:
+                            ret true
+                        end
+                    end
+                end
+            end
+        end
+        ret false
+    end
+    ret false
+end
+
+// stamp_empty_intrinsic (sema_call.c, 5c) - stamps `Vector {}`/`HashMap {}`
+// empty literals with the intrinsic target type (TY_VEC/TY_MAP only; the
+// generic-struct collections take the check_struct_lit path).
+func stamp_empty_intrinsic(s &: Sema, a &: at.Ast, val: int, target: int): bool:
+    if val == 0 || target < 0:
+        ret false
+    end
+    n := at.Get(a, val)
+    if n.kind != at.AST_STRUCT_LIT || str.Len(n.name) == 0:
+        ret false
+    end
+    sp := span_of(a, val)
+    orig := n.name
+    at.SetName(a, val, intrinsic_type_canon(orig))
+    sema_check_intrinsic_type_lang(s, orig, sp)
+    vname := at.Get(a, val).name
+    tk := ty_at(s, target).kind
+    if (tk == TY_VEC && str.Equals(vname, "Vector")) || (tk == TY_MAP && str.Equals(vname, "HashMap")):
+        at.SetTypeStr(a, val, type_to_string(s, target))
+        _sd := sema_decorate(s, a, val, target)
+        ret true
+    end
+    ret false
+end
+
+// The E062 unused-parameter loop at the end of check_function
+// (sema_decl.c) - live now that 5d's body checks set Symbol.used.
+func check_unused_params(s &: Sema, a &: at.Ast, sc: int, _fn: int):
+    scv := scope_at(s, sc)
+    repeat scv.symbols.len() with i:
+        p := sym_at(s, scv.symbols.get(i)[0])
+        if p.kind == SYM_PARAM && !p.used && p.decl != 0 && str.Len(p.name) > 0 && byte_at(p.name, 0) != 95 && !str.Equals(p.name, "this"):
+            serr(
+                s, 62, span_of(a, p.decl), co.Format1(
+                    i18.Tr("unused parameter '%s' (prefix with '_' if intentional)"), co.ArgStr(p.name)
+                )
+            )
+        end
+    end
+end
+
+// generic_template (sema_generic.c, 5c) - a visible symbol of `kind` whose
+// decl still carries type parameters; 0 = C NULL. (5c note: gained the
+// `a` parameter - the C read sym->decl->typarams directly.)
+func generic_template(s &: Sema, a &: at.Ast, name: str, kind: int): int:
+    if str.Len(name) == 0:
+        ret 0
+    end
+    sym := scope_lookup(s, s.cur, name)
+    if sym == 0:
+        ret 0
+    end
+    sv := sym_at(s, sym)
+    if sv.kind == kind && sv.decl != 0 && at.TyparamCount(a, sv.decl) > 0:
+        ret sym
+    end
+    ret 0
+end
+
+// g_instantiate_struct (sema_generic.c, 5c) - instantiates a generic struct
+// template for the given type-argument nodes; returns the instance SymId
+// (cached per instance name in the global scope); 0 = C NULL.
+func g_instantiate_struct(
+    s &: Sema, a &: at.Ast, tmpl: int, targ_nodes: Vector<int>, sp: co.SrcSpan
+): int:
+    tn := at.Get(a, tmpl)
+    if targ_nodes.len() != tn.typarams.len():
+        serr(
+            s, 1, sp, co.Format4(
+                i18.Tr("generic '%s' expects %zu type argument%s, got %zu"), co.ArgStr(tn.name), co.ArgUint(tn.typarams.len() as u64),
+                co.ArgStr(plural_suffix(tn.typarams.len())), co.ArgUint(targ_nodes.len() as u64)
+            )
+        )
+        ret 0
+    end
+    mut argtypes := Vector {} as Vector<int>
+    defer argtypes.free()
+    repeat targ_nodes.len() with i:
+        argtypes.push(sema_resolve_type(s, a, targ_nodes.get(i)[0]))
+    end
+    iname := g_instance_name(s, tn.name, argtypes)
+    existing := scope_lookup_local(s, s.global, iname)
+    if existing != 0:
+        ret existing
+    end
+    save_lang := s.lang
+    if str.Len(tn.origin_lang) > 0:
+        s.lang = tn.origin_lang
+    end
+    g_check_bounds(s, a, tmpl, argtypes, sp)
+    inst := at.Clone(a, tmpl)
+    mut iv := at.Get(a, inst)
+    iv.name = iname
+    iv.synthetic = true
+    at.Put(a, inst, iv)
+    g_subst(a, inst, tn.typarams, targ_nodes)
+    mut iv2 := at.Get(a, inst)
+    iv2.typarams.clear()
+    at.Put(a, inst, iv2)
+    at.AddChild(a, s.program, inst)
+    sym := symbol_new(s, SYM_STRUCT, iname)
+    members := scope_new(s, SCOPE_STRUCT, s.global)
+    mut msc := scope_at(s, members)
+    msc.label = iname
+    msc.aux = s.gen_pkg
+    scope_put(s, members, msc)
+    mut sv := sym_at(s, sym)
+    sv.decl = inst
+    sv.ty = type_struct(s, sym, iname)
+    sv.members = members
+    sv.home = s.gen_pkg
+    sv.generic_base = tn.name
+    repeat argtypes.len() with gi:
+        sv.generic_args.push(argtypes.get(gi)[0])
+    end
+    sym_put(s, sym, sv)
+    _sd := scope_define(s, s.global, sym)
+    repeat at.ChildCount(a, inst) with j:
+        mid := at.Child(a, inst, j)
+        m := at.Get(a, mid)
+        if m.kind == at.AST_FIELD:
+            f := symbol_new(s, SYM_FIELD, m.name)
+            ftt := sema_resolve_type(s, a, m.ty)
+            mut fv := sym_at(s, f)
+            fv.ty = ftt
+            fv.decl = mid
+            fv.is_pub = m.is_pub
+            sym_put(s, f, fv)
+            _fd := scope_define(s, members, f)
+        else m.kind == at.AST_FUNC_DEF:
+            mm := get_or_make_func(s, members, m.name, SYM_METHOD)
+            sig := build_sig(s, a, mid, sym)
+            mut mv := sym_at(s, mm)
+            if m.is_pub:
+                mv.is_pub = true
+            end
+            mv.overloads.push(sig)
+            mv.ty = sym_at(s, sym).ty
+            sym_put(s, mm, mv)
+        end
+    end
+    s.pending.push(inst)
+    s.lang = save_lang
+    ret sym
+end

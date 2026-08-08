@@ -13,7 +13,7 @@
 #
 # Usage:
 #   sh tools/bash/run-tests.sh [-j N] [section ...]
-# Sections: general exec js errors layout fmt ssl db opencv llvm cross
+# Sections: general exec js errors layout fmt ssl db opencv llvm cross timereport
 #           examples apps basics data editor-selected features games
 #           interop stdlib types webframework
 # Env: SALAM, SALAM_STD, LANGS, NPROC, SALAM_TEST_TIMEOUT,
@@ -190,6 +190,25 @@ if [ "${1:-}" = "--worker" ]; then
             --lang="$lang" --target="$target" >/dev/null 2>&1; then
             echo "SKIP $label (cross build unavailable for $target - no embedded static libs, or self-hosted/non-flagship salam)"
             return
+        fi
+        if [ -z "$runner" ]; then
+            # An empty runner means "this host executes the target natively",
+            # which only holds when the target OS matches the host OS. A
+            # Windows host cannot exec an ELF (and a Linux host cannot exec a
+            # PE), so report the same SKIP the qemu/wine paths use instead of
+            # letting the exec fail with a bare "Exec format error".
+            hostos=$(uname -s 2>/dev/null || echo unknown)
+            native=1
+            case "$hostos" in
+            MINGW* | MSYS* | CYGWIN*) case "$target" in *windows*) ;; *) native=0 ;; esac ;;
+            Linux) case "$target" in *linux*) ;; *) native=0 ;; esac ;;
+            Darwin) case "$target" in *darwin* | *apple* | *macos*) ;; *) native=0 ;; esac ;;
+            esac
+            if [ "$native" -eq 0 ]; then
+                echo "SKIP $label (build OK; a $hostos host cannot run a $target binary and no emulator is configured for it)"
+                rm -f "$outbin"
+                return
+            fi
         fi
         if [ -n "$runner" ] && ! command -v "$runner" >/dev/null 2>&1; then
             alt="${runner%-static}"
@@ -400,6 +419,35 @@ want_example() {
     return 1
 }
 
+# The redis_* tests talk to a real server on 127.0.0.1:6379 instead of the
+# mysql-style mock, so they are only runnable where one is listening. Probe
+# once and skip (not fail) when it is absent, the same way the llvm/opencv
+# sections degrade - a missing optional service is not a test failure.
+# Start one with e.g. `redis-server --port 6379` (under WSL on Windows: WSL2
+# forwards localhost, so a server bound in the distro is reachable here).
+# `nc` and `redis-cli` are the portable probes and are tried first; bash's
+# /dev/tcp is only a last resort for the common Git-Bash-on-Windows case where
+# neither is installed. It is a bash extension (undefined in POSIX sh, hence
+# the SC3025 suppression), so it is reached only when this really is bash.
+redis_listening() {
+    if command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 6379 >/dev/null 2>&1; then
+        return 0
+    fi
+    if command -v redis-cli >/dev/null 2>&1 &&
+        redis-cli -h 127.0.0.1 -p 6379 ping >/dev/null 2>&1; then
+        return 0
+    fi
+    [ -n "${BASH_VERSION:-}" ] || return 1
+    # shellcheck disable=SC3025
+    (exec 3<>/dev/tcp/127.0.0.1/6379) 2>/dev/null
+}
+REDIS_OK=0
+if redis_listening; then
+    REDIS_OK=1
+fi
+export REDIS_OK
+REDIS_SKIP_MSG="requires a Redis server on 127.0.0.1:6379"
+
 if want fmt; then
     for lang in $LANGS; do
         for f in ../tests/"$lang"/fmt/*.salam; do
@@ -427,7 +475,9 @@ collect_example_dir() {
             fi
             if [ -f "$base.expect" ]; then
                 skip=""
-                if [ -f "$base.network" ] && [ "${SALAM_TEST_NETWORK:-0}" != "1" ]; then
+                if [ -f "$base.redis" ] && [ "${REDIS_OK:-0}" != "1" ]; then
+                    skip="requires a Redis server on 127.0.0.1:6379"
+                elif [ -f "$base.network" ] && [ "${SALAM_TEST_NETWORK:-0}" != "1" ]; then
                     skip="requires live network; set SALAM_TEST_NETWORK=1"
                 elif [ -f "$base.interactive" ] && [ "${SALAM_TEST_INTERACTIVE:-0}" != "1" ]; then
                     skip="opens a modal window; set SALAM_TEST_INTERACTIVE=1 on a desktop session"
@@ -494,6 +544,14 @@ if want db; then
                 case "$name" in _*) continue ;; esac
                 exp="$(pick_expect "../tests/$lang/db/$name")"
                 [ -f "$exp" ] || continue
+                case "$name" in
+                redis_*)
+                    if [ "$REDIS_OK" != "1" ]; then
+                        note_result "SKIP db/$lang/$name ($REDIS_SKIP_MSG)" "db/$lang/$name"
+                        continue
+                    fi
+                    ;;
+                esac
                 add_job build "db/$lang/$name" "$f" "$lang" "$exp" "--cc=$DBCC -DSALAM_DB_MOCK"
             done
         else
@@ -673,6 +731,95 @@ if [ "$TOTAL" -gt 0 ]; then
             fi
         done <"$JOBS"
         wait
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# timereport: --time-report / --time-trace, and the C-vs-Salam parity of the
+# JSON they emit. Timings are machine-dependent, so nothing here asserts a
+# duration; it checks the report's SHAPE (schema tag, phase keys, self <= wall)
+# and that the two implementations agree on it.
+# ---------------------------------------------------------------------------
+if want timereport; then
+    tr_dir="$WORK/timereport"
+    mkdir -p "$tr_dir"
+    cat >"$tr_dir/tiny.salam" <<'TIMEREPORT_EOF'
+func main:
+    mut i := 0
+    mut s := 0
+    until i < 10:
+        s += i
+        i += 1
+    end
+    println s
+    ret 0
+end
+TIMEREPORT_EOF
+
+    # Extract a top-level key's value from the one-line report JSON.
+    tr_field() {
+        tr -d ' ' <"$1" | grep -o "\"$2\":[0-9]*" | head -1 | cut -d: -f2
+    }
+
+    tr_json="$tr_dir/report.json"
+    (cd "$tr_dir" && "$SALAM" build --time-report=json tiny.salam >/dev/null 2>"$tr_json")
+    tr_rc=$?
+    tr_line=$(grep '"schema":"salam.timereport.v1"' "$tr_json" | head -1)
+    if [ "$tr_rc" -ne 0 ]; then
+        note_result "FAIL timereport/json (build exited $tr_rc)" "timereport/json"
+    elif [ -z "$tr_line" ]; then
+        note_result "FAIL timereport/json (no salam.timereport.v1 object on stderr)" "timereport/json"
+    else
+        printf '%s\n' "$tr_line" >"$tr_json"
+        tr_wall=$(tr_field "$tr_json" wall_ns)
+        tr_bad=""
+        [ -n "$tr_wall" ] && [ "$tr_wall" -gt 0 ] || tr_bad="wall_ns not positive"
+        for k in source lexer parser semantic codegen write; do
+            grep -q "\"$k\":{" "$tr_json" || tr_bad="missing phase '$k'"
+        done
+        # Sum of per-phase self time can never exceed wall time (5% slack for
+        # the clock reads the profiler itself performs).
+        tr_sum=$(tr -d ' ' <"$tr_json" | grep -o '"self_ns":[0-9]*' | cut -d: -f2 |
+            awk '{ t += $1 } END { print t + 0 }')
+        [ -n "$tr_wall" ] && [ "$tr_sum" -le $((tr_wall + tr_wall / 20)) ] ||
+            tr_bad="self_ns sum $tr_sum exceeds wall $tr_wall"
+        if [ -n "$tr_bad" ]; then
+            note_result "FAIL timereport/json ($tr_bad)" "timereport/json"
+        else
+            note_result "PASS timereport/json" "timereport/json"
+        fi
+    fi
+
+    # --time-trace writes a Chrome Trace Event array the same run.
+    (cd "$tr_dir" && "$SALAM" build --time-trace=trace.json tiny.salam >/dev/null 2>&1)
+    if [ -s "$tr_dir/trace.json" ] && grep -q '"ph":"X"' "$tr_dir/trace.json"; then
+        note_result "PASS timereport/trace" "timereport/trace"
+    else
+        note_result "FAIL timereport/trace (no trace events written)" "timereport/trace"
+    fi
+
+    # Parity: the self-hosted compiler must report the same phase key set. Only
+    # runs when a second binary is pointed at by SALAM_SELFHOST; skips (not
+    # fails) otherwise, the same way the llvm/opencv sections degrade.
+    if [ -n "${SALAM_SELFHOST:-}" ] && [ -x "$SALAM_SELFHOST" ]; then
+        rm -rf "$tr_dir/.salam-build"
+        (cd "$tr_dir" && "$SALAM_SELFHOST" build --time-report=json tiny.salam >/dev/null 2>"$tr_dir/self.json")
+        grep '"schema":"salam.timereport.v1"' "$tr_dir/self.json" | head -1 >"$tr_dir/self1.json"
+        if [ ! -s "$tr_dir/self1.json" ]; then
+            note_result "FAIL timereport/parity (self-hosted emitted no report)" "timereport/parity"
+        else
+            keys_c=$(grep -o '"[a-z]*":{"self_ns"' "$tr_json" | sort | tr -d '
+')
+            keys_s=$(grep -o '"[a-z]*":{"self_ns"' "$tr_dir/self1.json" | sort | tr -d '
+')
+            if [ "$keys_c" = "$keys_s" ]; then
+                note_result "PASS timereport/parity" "timereport/parity"
+            else
+                note_result "FAIL timereport/parity (C phases [$keys_c] vs Salam [$keys_s])" "timereport/parity"
+            fi
+        fi
+    else
+        note_result "SKIP timereport/parity (set SALAM_SELFHOST to the self-hosted binary)" "timereport/parity"
     fi
 fi
 

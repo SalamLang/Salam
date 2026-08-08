@@ -26,6 +26,12 @@
 typedef struct {
     bool tabs;
     int width;
+    /* Strip everything the lexer treats as trivia: comments (line, block and
+     * doc), indentation, and blank lines. Statement-terminating newlines are
+     * NOT presentation and are always kept - TK_STMT_END is a real token, and
+     * dropping it would weld statements together. Used to shrink the `std/`
+     * tree that gets preloaded into the wasm playground. */
+    bool minify;
 } fmt_style_t;
 
 fmt_style_t fmt_style_default(void);

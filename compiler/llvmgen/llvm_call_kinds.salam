@@ -1,0 +1,584 @@
+package llvmgen
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+import sm "../semantic/semantic.salam"
+
+// ll_call_str
+func call_str(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, m: str, out2 &: Llv
+): bool:
+    nn := at.Get(a, n)
+    na := nn.list.len()
+    if str.Equals(m, "len") && na == 0:
+        klen := ast_str_lit_len(a, obj)
+        if klen >= (0 as i64):
+            out2 = make_llv(co.I64Toa(klen), "i32")
+            ret true
+        end
+    end
+    // Before `recv` is materialized below: call_vec_str lowers the receiver
+    // itself, and evaluating `obj` twice would duplicate any side effects.
+    if str.Equals(m, "split") && na == 1:
+        ret call_vec_str(v, s, a, n, "salam_str_split", obj, out2)
+    end
+    recv := lv_expr(v, s, a, obj).ref
+    mut r := ""
+    if str.Equals(m, "len"):
+        l := new_tmp(v)
+        emit(v, l + " = call " + v.usize + " @strlen(ptr " + recv + ")")
+        out2 = make_llv(usize_to_i32(v, l), "i32")
+        ret true
+    end
+    if str.Equals(m, "concat") && na == 1:
+        arg0 := lv_expr(v, s, a, nn.list.get(0)[0]).ref
+        r = new_tmp(v)
+        need(v, LV_H_STRCAT)
+        emit(
+            v, r + " = call ptr @salam_ll_strcat(ptr " + recv + ", ptr " + arg0 + ")"
+        )
+        out2 = make_llv(r, "str")
+        ret true
+    end
+    if str.Equals(m, "substr") && na == 2:
+        st := conv(v, s, a, lv_expr(v, s, a, nn.list.get(0)[0]), "i32")
+        ln := conv(v, s, a, lv_expr(v, s, a, nn.list.get(1)[0]), "i32")
+        r = new_tmp(v)
+        need(v, LV_H_SUBSTR)
+        emit(
+            v, r + " = call ptr @salam_ll_substr(ptr " + recv + ", i32 " + st + ", i32 " + ln + ")"
+        )
+        out2 = make_llv(r, "str")
+        ret true
+    end
+    if str.Equals(m, "trim"):
+        r = new_tmp(v)
+        need(v, LV_H_TRIM)
+        emit(v, r + " = call ptr @salam_ll_trim(ptr " + recv + ")")
+        out2 = make_llv(r, "str")
+        ret true
+    end
+    if str.Equals(m, "to_int"):
+        x := new_tmp(v)
+        r = new_tmp(v)
+        emit(v, x + " = call i64 @strtol(ptr " + recv + ", ptr null, i32 10)")
+        emit(v, r + " = trunc i64 " + x + " to i32")
+        out2 = make_llv(r, "i32")
+        ret true
+    end
+    if str.Equals(m, "to_float"):
+        r = new_tmp(v)
+        emit(v, r + " = call double @strtod(ptr " + recv + ", ptr null)")
+        out2 = make_llv(r, "f64")
+        ret true
+    end
+    if (
+        str.Equals(m, "find") || str.Equals(m, "search") || str.Equals(m, "indexOf")
+    ) && na == 1:
+        arg1 := lv_expr(v, s, a, nn.list.get(0)[0]).ref
+        p := new_tmp(v)
+        pi := new_tmp(v)
+        ri := new_tmp(v)
+        d := new_tmp(v)
+        o := new_tmp(v)
+        nz := new_tmp(v)
+        emit(v, p + " = call ptr @strstr(ptr " + recv + ", ptr " + arg1 + ")")
+        emit(v, pi + " = ptrtoint ptr " + p + " to i64")
+        emit(v, ri + " = ptrtoint ptr " + recv + " to i64")
+        emit(v, d + " = sub i64 " + pi + ", " + ri)
+        emit(v, o + " = trunc i64 " + d + " to i32")
+        emit(v, nz + " = icmp eq ptr " + p + ", null")
+        r = new_tmp(v)
+        emit(v, r + " = select i1 " + nz + ", i32 -1, i32 " + o)
+        out2 = make_llv(r, "i32")
+        ret true
+    end
+    if str.Equals(m, "lower"):
+        r = new_tmp(v)
+        need(v, LV_H_LOWER)
+        emit(v, r + " = call ptr @salam_ll_lower(ptr " + recv + ")")
+        out2 = make_llv(r, "str")
+        ret true
+    end
+    if str.Equals(m, "upper"):
+        r = new_tmp(v)
+        need(v, LV_H_UPPER)
+        emit(v, r + " = call ptr @salam_ll_upper(ptr " + recv + ")")
+        out2 = make_llv(r, "str")
+        ret true
+    end
+    if str.Equals(m, "repeat") && na == 1:
+        cnt := conv(v, s, a, lv_expr(v, s, a, nn.list.get(0)[0]), "i32")
+        r = new_tmp(v)
+        need(v, LV_H_REPEAT)
+        emit(
+            v, r + " = call ptr @salam_ll_repeat(ptr " + recv + ", i32 " + cnt + ")"
+        )
+        out2 = make_llv(r, "str")
+        ret true
+    end
+    ret false
+end
+
+// ll_call_dyn
+func call_dyn(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, iface: str, mname: str
+): Llv:
+    ni := str.Len(iface)
+    mut k := 0
+    mut stop := false
+    until k < ni && k < 159 && !stop:
+        c := byte_at(iface, k)
+        if c == 42 || c == 91:
+            stop = true
+        else:
+            k += 1
+        end
+    end
+    ib := str.Substr(iface, 0, k)
+    isym := sym_of(v, s, a, ib)
+    if isym == 0 || sm.SymAt(s, isym).kind != sm.SYM_INTERFACE:
+        lv_error(v, a, n, "dynamic call on non-interface '" + ib + "'")
+        ret poison(at.Get(a, n).type_str)
+    end
+    // `d.free()` on an interface value releases the *box*, not a method on
+    // the interface - so no vtable slot could ever match and the lookup
+    // below would report "interface 'Shape' has no method 'free'". Same
+    // lowering the C backend gives it in call_dyn().
+    if str.Equals(mname, "free") && at.Get(a, n).list.len() == 0:
+        dv0 := lv_expr(v, s, a, obj)
+        data0 := new_tmp(v)
+        emit(v, data0 + " = extractvalue %dyn " + dv0.ref + ", 0")
+        emit(v, "call void @free(ptr " + data0 + ")")
+        ret make_llv("0", "void")
+    end
+    mut idx := 0
+    mut slot := 0 - 1
+    mut msig := 0
+    isyms := sm.ScopeAt(s, sm.SymAt(s, isym).members).symbols
+    mut m := 0
+    until m < isyms.len():
+        im := sm.SymAt(s, isyms.get(m)[0])
+        if im.kind == sm.SYM_METHOD && im.overloads.len() > 0:
+            if str.Equals(im.name, mname):
+                slot = idx
+                msig = im.overloads.get(0)[0]
+                break
+            end
+            idx += 1
+        end
+        m += 1
+    end
+    if slot < 0:
+        lv_error(v, a, n, "interface '" + ib + "' has no method '" + mname + "'")
+        ret poison(at.Get(a, n).type_str)
+    end
+
+    dv := lv_expr(v, s, a, obj)
+    data := new_tmp(v)
+    vt := new_tmp(v)
+    sl := new_tmp(v)
+    fn := new_tmp(v)
+    emit(v, data + " = extractvalue %dyn " + dv.ref + ", 0")
+    emit(v, vt + " = extractvalue %dyn " + dv.ref + ", 1")
+    emit(
+        v, sl + " = getelementptr inbounds ptr, ptr " + vt + ", i64 " + co.I64Toa(slot as i64)
+    )
+    emit(v, fn + " = load ptr, ptr " + sl)
+
+    mut ab := co.SbNew()
+    co.SbPuts(ab, "ptr " + data)
+    nn := at.Get(a, n)
+    mut i := 0
+    until i < nn.list.len():
+        argi := nn.list.get(i)[0]
+        val := lv_expr(v, s, a, argi)
+        msig_ok := msig != 0 && i < sm.SigAt(s, msig).params.len()
+        pt := msig_ok ? sm.ToString(s, sm.SigAt(s, msig).params.get(i)[0]) : val.ts
+        co.SbPuts(ab, ", " + ty_of(v, s, a, pt) + " " + conv(v, s, a, val, pt))
+        i += 1
+    end
+    argsx := co.SbCstr(ab)
+    co.SbFree(ab)
+    rts := sm.ToString(s, sm.SigAt(s, msig).ret_type)
+    if str.Equals(rts, "void"):
+        emit(v, "call void " + fn + "(" + argsx + ")")
+        ret make_llv("0", "void")
+    end
+    r := new_tmp(v)
+    emit(v, r + " = call " + ty_of(v, s, a, rts) + " " + fn + "(" + argsx + ")")
+    ret make_llv(r, rts)
+end
+
+// ll_call_method
+func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
+    calleen := at.Get(a, callee)
+    obj := calleen.a
+    mname := calleen.name
+    objn := at.Get(a, obj)
+    ots := objn.type_str
+
+    if str.StartsWith(ots, "dyn "):
+        ret call_dyn(v, s, a, n, obj, str.Substr(ots, 4, str.Len(ots) - 4), mname)
+    end
+
+    if str.Equals(ots, "str"):
+        mut o := Llv {}
+        if call_str(v, s, a, n, obj, mname, o):
+            ret o
+        end
+    end
+
+    if str.Equals(ots, "File*"):
+        mut of := Llv {}
+        if call_file(v, s, a, n, obj, mname, of):
+            ret of
+        end
+    end
+
+    if str.Equals(mname, "len") && (is_slice(ots) || (str.Len(ots) > 0 && idx_byte(ots, 91) >= 0)):
+        ret len_of(v, s, a, n, obj)
+    end
+
+    if objn.kind == at.AST_IDENTIFIER:
+        pk := sym_of(v, s, a, objn.name)
+        if pk != 0 && sm.SymAt(s, pk).kind == sm.SYM_PACKAGE:
+            ret call_pkg(v, s, a, n, pk, mname)
+        end
+        // sym_of searches the global scope first, so a package whose name
+        // is also an extern function's - std/time is `package time` and
+        // declares `extern func time(...)` - can resolve to the function
+        // instead, leaving `time.FormatDate(...)` reported as a method on
+        // type '<null>'. Only consulted when the receiver is not a value
+        // in scope, so a local shadowing a package name still wins.
+        // Gated on the receiver having no type of its own. sema types a
+        // real value (`map.free()` where `map` is a local HashMap, and
+        // std/map is also `package map`) and leaves only the unresolved
+        // package case as "<null>" - keying off the codegen-time locals
+        // list instead was wrong, since a local declared in an enclosing
+        // block is not always registered yet at the call site.
+        if str.Len(ots) == 0 || str.Equals(ots, "<null>"):
+            mut pi := 0
+            until pi < sm.PackageCount(s):
+                cand := sm.PackageAt(s, pi)
+                if cand != 0 && str.Equals(sm.SymAt(s, cand).pkgname, objn.name):
+                    ret call_pkg(v, s, a, n, cand, mname)
+                end
+                pi += 1
+            end
+        end
+    end
+
+    isptr := is_ptr_ts(ots)
+    sname2 := isptr ? str.Substr(ots, 0, str.Len(ots) - 1) : ots
+    ss := struct_sym(v, s, a, sname2)
+    mut ms := 0
+    if ss != 0:
+        ms = sm.LookupLocal(s, sm.SymAt(s, ss).members, mname)
+    end
+    if ms != 0 && sm.SymAt(s, ms).kind == sm.SYM_METHOD && sm.SymAt(s, ms).overloads.len() > 0:
+        sig := pick_overload(v, s, a, ms, n)
+        ensure_fn(v, s, a, sm.SigAt(s, sig).decl, ss, v.pkg_scope)
+        recv := isptr ? lv_expr(v, s, a, obj).ref : lv_addr_of(v, s, a, obj).ptr
+        ret emit_call(
+            v, s, a, n, sig, "ptr " + recv, mangle(v, s, sname2, mname, sig), sm.ToString(s, sm.SigAt(s, sig).ret_type)
+        )
+    end
+
+    implsym := sym_of(v, s, a, sm.ImplOwnerKey(ots))
+    if implsym != 0 && sm.SymAt(s, implsym).kind == sm.SYM_TYPEIMPL:
+        im := sm.LookupLocal(s, sm.SymAt(s, implsym).members, mname)
+        if im != 0 && sm.SymAt(s, im).kind == sm.SYM_METHOD && sm.SymAt(s, im).overloads.len() > 0:
+            sig2 := pick_overload(v, s, a, im, n)
+            ensure_fn(v, s, a, sm.SigAt(s, sig2).decl, implsym, v.pkg_scope)
+            rv := lv_expr(v, s, a, obj)
+            ret emit_call(
+                v, s, a, n, sig2, ty_of(v, s, a, ots) + " " + rv.ref, mangle_ti(v, s, ots, mname, sig2),
+                sm.ToString(s, sm.SigAt(s, sig2).ret_type)
+            )
+        end
+    end
+
+    // `o.fn(args)` where `fn` is a *field* holding a function value, not a
+    // method - so no SYM_METHOD lookup above could ever match it. Same
+    // lowering as any other indirect call; call_indirect re-evaluates the
+    // callee to get the closure pointer, which for a member expression is
+    // the field load.
+    if ss != 0 && str.StartsWith(calleen.type_str, "func("):
+        ret call_indirect(v, s, a, n, callee)
+    end
+
+    lv_error(
+        v, a, n, "method '" + mname + "' on type '" + ots + "' (or overloaded/builtin method)"
+    )
+    ret poison(at.Get(a, n).type_str)
+end
+
+// ll_call_indirect
+func call_indirect(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
+    fts := at.Get(a, callee).type_str
+    env := lv_expr(v, s, a, callee)
+    fn := new_tmp(v)
+    emit(v, fn + " = load ptr, ptr " + env.ref)
+    rts := func_ret(fts)
+    mut pts := func_params(fts)
+    defer pts.free()
+    mut ab := co.SbNew()
+    co.SbPuts(ab, "ptr " + env.ref)
+    nn := at.Get(a, n)
+    mut i := 0
+    until i < nn.list.len():
+        val := lv_expr(v, s, a, nn.list.get(i)[0])
+        pt := i < pts.len() ? pts.get(i)[0] : val.ts
+        co.SbPuts(ab, ", " + ty_of(v, s, a, pt) + " " + conv(v, s, a, val, pt))
+        i += 1
+    end
+    argsx := co.SbCstr(ab)
+    co.SbFree(ab)
+    if str.Equals(rts, "void"):
+        emit(v, "call void " + fn + "(" + argsx + ")")
+        ret make_llv("0", "void")
+    end
+    r := new_tmp(v)
+    emit(v, r + " = call " + ty_of(v, s, a, rts) + " " + fn + "(" + argsx + ")")
+    ret make_llv(r, rts)
+end
+
+// ll_is_func_ts
+func is_func_ts(ts: str): bool:
+    ret str.StartsWith(ts, "func(")
+end
+
+// ll_call_raw_ptr - call through a raw C function pointer,
+// `externfunc(...)`, produced by `x as extern func (i32, i32) i32` and by
+// COM vtable slot casts in std/webview. Unlike a `func(...)` value, which
+// is a closure (env pointer whose first word is the code pointer, so
+// call_indirect loads through it and passes the env as argument 0), an
+// externfunc IS the code pointer and takes no hidden argument.
+func call_raw_ptr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
+    fts := at.Get(a, callee).type_str
+    fv := lv_expr(v, s, a, callee)
+    // The callee only needs an inttoptr when it really is an integer. A raw
+    // function pointer is already a ptr under opaque pointers, and
+    // `inttoptr ptr ... to ptr` is not a legal cast at all - `raw as extern
+    // func (...)` produced exactly that and the module failed to parse.
+    mut fn := fv.ref
+    if !str.Equals(ty_of(v, s, a, fv.ts), "ptr"):
+        fn = new_tmp(v)
+        emit(v, fn + " = inttoptr " + ty_of(v, s, a, fv.ts) + " " + fv.ref + " to ptr")
+    end
+    rts := func_ret(fts)
+    mut pts := func_params(fts)
+    nn := at.Get(a, n)
+    mut ab := co.SbNew()
+    mut i := 0
+    until i < nn.list.len():
+        av := lv_expr(v, s, a, nn.list.get(i)[0])
+        mut pt := av.ts
+        if i < pts.len():
+            pt = pts.get(i)[0]
+        end
+        if i > 0:
+            co.SbPuts(ab, ", ")
+        end
+        co.SbPuts(ab, ty_of(v, s, a, pt) + " " + conv(v, s, a, av, pt))
+        i += 1
+    end
+    argsx := co.SbCstr(ab)
+    co.SbFree(ab)
+    if str.Equals(rts, "void"):
+        emit(v, "call void " + fn + "(" + argsx + ")")
+        ret make_llv("0", "void")
+    end
+    r := new_tmp(v)
+    emit(v, r + " = call " + ty_of(v, s, a, rts) + " " + fn + "(" + argsx + ")")
+    ret make_llv(r, rts)
+end
+
+// ll_call_intrinsic
+func call_intrinsic(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str, out2 &: Llv
+): bool:
+    nn := at.Get(a, n)
+    na := nn.list.len()
+    a0 := na > 0 ? nn.list.get(0)[0] : 0
+    mut r := ""
+    if str.Equals(nm, "hash") && na == 1:
+        r = new_tmp(v)
+        if is_str(at.Get(a, a0).type_str):
+            need(v, LV_H_STRHASH)
+            emit(
+                v, r + " = call i64 @salam_ll_strhash(ptr " + lv_expr(v, s, a, a0).ref + ")"
+            )
+        else:
+            need(v, LV_H_INTHASH)
+            emit(
+                v, r + " = call i64 @salam_ll_inthash(i64 " + conv(v, s, a, lv_expr(v, s, a, a0), "u64") + ")"
+            )
+        end
+        out2 = make_llv(r, "u64")
+        ret true
+    end
+    if str.Equals(nm, "char_from_code") && na == 1:
+        r = new_tmp(v)
+        need(v, LV_H_CHARSTR)
+        emit(
+            v, r + " = call ptr @salam_ll_charstr(i32 " + conv(v, s, a, lv_expr(v, s, a, a0), "i32") + ")"
+        )
+        out2 = make_llv(r, "str")
+        ret true
+    end
+    // char_code(s) is the inverse of char_from_code: the unsigned value of
+    // the first byte. Loaded directly rather than through a runtime call,
+    // matching the C backend's `(int32_t)(unsigned char)(s)[0]`.
+    if str.Equals(nm, "char_code") && na == 1:
+        b := new_tmp(v)
+        r = new_tmp(v)
+        emit(v, b + " = load i8, ptr " + lv_expr(v, s, a, a0).ref)
+        emit(v, r + " = zext i8 " + b + " to i32")
+        out2 = make_llv(r, "i32")
+        ret true
+    end
+    if str.Equals(nm, "args") && na == 0:
+        ret call_vec_str(v, s, a, n, "salam_args", 0, out2)
+    end
+    if str.Equals(nm, "listdir") && na == 1:
+        ret call_vec_str(v, s, a, n, "salam_os_listdir", 0, out2)
+    end
+    if str.Equals(nm, "input") && na == 0:
+        ret call_runtime(v, s, a, n, "salam_input", 0, out2)
+    end
+    // open(path, mode) -> std/fs's salam_open, the File* constructor.
+    if str.Equals(nm, "open") && na == 2:
+        ret call_runtime(v, s, a, n, "salam_open", 0, out2)
+    end
+    if str.Equals(nm, "lang") && na == 0:
+        out2 = make_llv(strconst(v, i18.Lang()), "str")
+        ret true
+    end
+    // funcptr(f)/spawn(f) take a *function name*, not a value, so the
+    // argument is lowered to the mangled symbol's address rather than
+    // through lv_expr. spawn additionally hands that address to the thread
+    // runtime. Mirrors call_ident() in the C backend.
+    if (str.Equals(nm, "funcptr") || str.Equals(nm, "spawn")) && na == 1 && at.KindOf(a, a0) == at.AST_IDENTIFIER:
+        fs2 := sym_of(v, s, a, at.Get(a, a0).name)
+        if fs2 == 0 || sm.SymAt(s, fs2).kind != sm.SYM_FUNC || sm.SymAt(s, fs2).overloads.len() == 0:
+            ret false
+        end
+        fsig := sm.SymAt(s, fs2).overloads.get(0)[0]
+        if sm.SigAt(s, fsig).decl == 0:
+            ret false
+        end
+        ensure_fn(v, s, a, sm.SigAt(s, fsig).decl, 0, v.pkg_scope)
+        mut symn := at.Get(a, a0).name
+        if !at.Get(a, sm.SigAt(s, fsig).decl).is_extern:
+            symn = mangle(v, s, "", at.Get(a, a0).name, fsig)
+        end
+        r = new_tmp(v)
+        emit(v, r + " = ptrtoint ptr @" + symn + " to i64")
+        if str.Equals(nm, "funcptr"):
+            out2 = make_llv(r, "i64")
+            ret true
+        end
+        mut spk := 0
+        ssig := runtime_fn(s, "salam_thread_spawn", spk)
+        if ssig == 0 || sm.SigAt(s, ssig).decl == 0:
+            ret false
+        end
+        touch_pkg_named(v, s, a, sm.SymAt(s, spk).pkgname)
+        ensure_fn(v, s, a, sm.SigAt(s, ssig).decl, 0, sm.SymAt(s, spk).members)
+        h := new_tmp(v)
+        emit(v, h + " = inttoptr i64 " + r + " to ptr")
+        r2 := new_tmp(v)
+        emit(v, r2 + " = call i64 @salam_thread_spawn(ptr " + h + ")")
+        out2 = make_llv(r2, "i64")
+        ret true
+    end
+    // callhandler(fp, arg) - an indirect call through an integer-encoded
+    // function pointer, the shape the layout/webview callbacks use.
+    if str.Equals(nm, "callhandler") && na == 2:
+        a1 := nn.list.get(1)[0]
+        fp := new_tmp(v)
+        emit(v, fp + " = inttoptr i64 " + conv(v, s, a, lv_expr(v, s, a, a0), "i64") + " to ptr")
+        emit(v, "call void " + fp + "(i64 " + conv(v, s, a, lv_expr(v, s, a, a1), "i64") + ")")
+        out2 = make_llv("0", "void")
+        ret true
+    end
+    // Table-driven builtins (join -> salam_thread_join, strcmp, ...) - the
+    // same table the C backend falls back to in call_ident(), so a new
+    // entry there reaches both backends from one edit.
+    bidx := sm.BuiltinLookup(nm)
+    if bidx >= 0:
+        if call_runtime(v, s, a, n, sm.BuiltinAt(bidx).runtime, 0, out2):
+            ret true
+        end
+    end
+    ret false
+end
+
+// ll_call
+func lv_call(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
+    nn := at.Get(a, n)
+    callee := nn.a
+    // Checked before every other form, exactly as cg_call does: a raw C
+    // function pointer is callable whatever expression shape produced it.
+    if callee != 0 && is_extern_fn_ts(at.Get(a, callee).type_str):
+        ret call_raw_ptr(v, s, a, n, callee)
+    end
+    if callee != 0 && at.KindOf(a, callee) == at.AST_MEMBER:
+        ret call_method(v, s, a, n, callee)
+    end
+    if callee != 0 && at.KindOf(a, callee) == at.AST_IDENTIFIER:
+        nm := at.Get(a, callee).name
+        if str.Equals(nm, "print"):
+            lv_lower_print(v, s, a, n, false, false)
+            ret make_llv("0", "void")
+        end
+        if str.Equals(nm, "println"):
+            lv_lower_print(v, s, a, n, true, false)
+            ret make_llv("0", "void")
+        end
+        if str.Equals(nm, "printerr"):
+            lv_lower_print(v, s, a, n, false, true)
+            ret make_llv("0", "void")
+        end
+        if str.Equals(nm, "printerrln"):
+            lv_lower_print(v, s, a, n, true, true)
+            ret make_llv("0", "void")
+        end
+        if str.Equals(nm, "len") && nn.list.len() == 1:
+            ret call_len(v, s, a, n)
+        end
+        if str.Equals(nm, "sizeof") && nn.list.len() == 1:
+            t := at.Get(a, nn.list.get(0)[0]).type_str
+            szp := new_tmp(v)
+            sz := new_tmp(v)
+            emit(
+                v, szp + " = getelementptr " + ty_of(v, s, a, str.Len(t) > 0 ? t : "i32") + ", ptr null, i32 1"
+            )
+            emit(v, sz + " = ptrtoint ptr " + szp + " to " + v.usize)
+            ret make_llv(sz, "size")
+        end
+        fsym := sym_of(v, s, a, nm)
+        if fsym != 0 && sm.SymAt(s, fsym).kind == sm.SYM_FUNC:
+            ret call_user(v, s, a, n, nm)
+        end
+        if fsym == 0:
+            mut o := Llv {}
+            if call_intrinsic(v, s, a, n, nm, o):
+                ret o
+            end
+        end
+        if is_func_ts(at.Get(a, callee).type_str):
+            ret call_indirect(v, s, a, n, callee)
+        end
+        ret call_user(v, s, a, n, nm)
+    end
+    if callee != 0 && is_func_ts(at.Get(a, callee).type_str):
+        ret call_indirect(v, s, a, n, callee)
+    end
+    lv_error(v, a, n, "method / package / indirect call")
+    ret poison(nn.type_str)
+end

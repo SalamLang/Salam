@@ -107,6 +107,43 @@ salam obj app.salam
 salam build app.salam -DDEBUG
 ```
 
+### Project entry file: `salam.salam`
+
+Passing a single file always compiles exactly that file. When you pass a
+**directory** instead - or nothing at all - the compiler builds "the project
+in that directory", and the fixed filename `salam.salam` is the project's
+entry file:
+
+```sh
+salam build                 # build the project in the current directory
+salam build .               # same
+salam build ../myproject/   # build the project in ../myproject/
+salam run                   # build + run the project here
+salam exec                  # interpret the project here
+```
+
+- If `<dir>/salam.salam` exists, it must define `main` and is used as the
+  entry file; no scanning or guessing happens.
+- If it does not exist, the directory's top-level `.salam` files are scanned
+  for exactly one file defining `main` (more than one is an error that
+  suggests naming the entry file `salam.salam`).
+- The default executable name for a project is its **directory name**
+  (`myproject.exe`), not `salam.exe`.
+- `salam new <name>` scaffolds the project with a `salam.salam` entry file.
+
+Front-end (layout DSL) projects have no `main` function; there the same rule
+applies to the `layout` block instead:
+
+```sh
+salam web                   # build the page project here: salam.salam if
+                            # present, else the single .salam layout page
+salam layout build          # salam.salam if present, else EVERY layout
+                            # page in the directory (multi-page site)
+```
+
+A `salam.salam` layout page compiles to `index.html` (the web server entry
+name), so `salam serve` picks it up directly.
+
 More examples live in [`tests/en/`](../tests/en/).
 
 ## 🎨 Formatting with `salam format`

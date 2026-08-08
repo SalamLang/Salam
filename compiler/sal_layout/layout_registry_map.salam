@@ -1,0 +1,225 @@
+package layout
+
+import str
+import i18 "../i18n.salam"
+import sm "../semantic/semantic.salam"
+
+// ===========================================================================
+// ===== registry.c value-mapping slice not ported with 5d =====
+// (layout_map_length + normalize_unit_phrase + tokenize_ws + scan_number +
+// layout_attr_value_map - the generator-side pieces)
+// ===========================================================================
+
+// is_ws (registry.c: ' ' and '\t' only)
+func lo_is_ws(b: int): bool:
+    ret b == 32 || b == 9
+end
+
+// scan_number - [+-]digits[.digits]; out_end = first byte past the number.
+func scan_number(s: str, start: int, out_end &: int): bool:
+    n := str.Len(s)
+    mut p := start
+    if p < n && (byte_at(s, p) == 43 || byte_at(s, p) == 45):
+        p += 1
+    end
+    mut dig := false
+    until p < n && byte_at(s, p) >= 48 && byte_at(s, p) <= 57:
+        p += 1
+        dig = true
+    end
+    if p < n && byte_at(s, p) == 46:
+        mut q := p + 1
+        until q < n && byte_at(s, q) >= 48 && byte_at(s, q) <= 57:
+            q += 1
+        end
+        if q > p + 1:
+            p = q
+        end
+    end
+    if !dig:
+        ret false
+    end
+    out_end = p
+    ret true
+end
+
+// normalize_unit_phrase - ZWNJ -> space, Arabic yeh/kaf -> Persian, ws
+// collapse, ASCII lowercase; capped at 128 bytes like the C char buffer.
+func norm_unit_phrase(s: str, pos: int, length: int): str:
+    mut out := ""
+    mut oi := 0
+    mut prev_space := false
+    mut q := pos
+    qend := pos + length
+    until q < qend && oi < K_LO_UNIT_CAP - 1:
+        rem := qend - q
+        b0 := byte_at(s, q)
+        if rem >= 3 && b0 == 0xE2 && byte_at(s, q + 1) == 0x80 && byte_at(s, q + 2) == 0x8C:
+            if !prev_space:
+                out += " "
+                oi += 1
+                prev_space = true
+            end
+            q += 3
+            continue
+        end
+        if rem >= 2 && b0 == 0xD9 && (byte_at(s, q + 1) == 0x8A || byte_at(s, q + 1) == 0x83):
+            if oi + 2 >= K_LO_UNIT_CAP - 1:
+                break
+            end
+            if byte_at(s, q + 1) == 0x8A:
+                out += "ی"
+            else:
+                out += "ک"
+            end
+            oi += 2
+            prev_space = false
+            q += 2
+            continue
+        end
+        if lo_is_ws(b0):
+            if !prev_space:
+                out += " "
+                oi += 1
+                prev_space = true
+            end
+            q += 1
+            continue
+        end
+        if b0 >= 65 && b0 <= 90:
+            out += char_from_code(b0 + 32)
+        else:
+            out += str.Substr(s, q, 1)
+        end
+        oi += 1
+        prev_space = false
+        q += 1
+    end
+    ret out
+end
+
+// lookup_unit_span - normalized phrase -> canonical unit ("" = C NULL).
+func lookup_unit_span(s: str, pos: int, length: int): str:
+    ret sm.LayoutDynValue("unit", norm_unit_phrase(s, pos, length))
+end
+
+// layout_map_length - canonicalize "<number> <unit words>" runs.
+func map_length(v: str): str:
+    if str.Len(v) == 0:
+        ret v
+    end
+    // tokenize_ws
+    mut tstart := Vector {} as Vector<int>
+    mut tlen := Vector {} as Vector<int>
+    defer tstart.free()
+    defer tlen.free()
+    n := str.Len(v)
+    mut p := 0
+    mut bailed := false
+    until p < n:
+        until p < n && lo_is_ws(byte_at(v, p)):
+            p += 1
+        end
+        if p >= n:
+            break
+        end
+        if tstart.len() == K_LO_LEN_MAX_TOKENS:
+            bailed = true
+            break
+        end
+        s0 := p
+        until p < n && !lo_is_ws(byte_at(v, p)):
+            p += 1
+        end
+        tstart.push(s0)
+        tlen.push(p - s0)
+    end
+    ntok := bailed ? 0 : tstart.len()
+    if ntok == 0:
+        ret v
+    end
+
+    mut out := ""
+    mut i := 0
+    until i < ntok:
+        tp := tstart.get(i)[0]
+        tl := tlen.get(i)[0]
+        tend := tp + tl
+        if str.Len(out) > 0:
+            out += " "
+        end
+        mut numend := 0
+        ok := scan_number(v, tp, numend)
+        if !ok || numend > tend:
+            out += str.Substr(v, tp, tl)
+            i += 1
+            continue
+        end
+        attached := tend - numend
+        mut canon := ""
+        mut consumed := 1
+        if attached > 0:
+            canon = lookup_unit_span(v, numend, attached)
+        else i + 2 < ntok:
+            l1 := tlen.get(i + 1)[0]
+            l2 := tlen.get(i + 2)[0]
+            if l1 + 1 + l2 < K_LO_UNIT_CAP:
+                joined := str.Substr(v, tstart.get(i + 1)[0], l1) + " " + str.Substr(v, tstart.get(i + 2)[0], l2)
+                canon = lookup_unit_span(joined, 0, str.Len(joined))
+                if str.Len(canon) > 0:
+                    consumed = 3
+                end
+            end
+        end
+        if str.Len(canon) == 0 && attached == 0 && i + 1 < ntok:
+            canon = lookup_unit_span(
+                v, tstart.get(i + 1)[0], tlen.get(i + 1)[0]
+            )
+            if str.Len(canon) > 0:
+                consumed = 2
+            end
+        end
+        if str.Len(canon) == 0 && attached == 0:
+            canon = "px"
+            consumed = 1
+        end
+        if str.Len(canon) == 0:
+            out += str.Substr(v, tp, tl)
+            i += 1
+            continue
+        end
+        out += str.Substr(v, tp, numend - tp)
+        out += canon
+        i += consumed
+    end
+    ret out
+end
+
+// layout_attr_value_map - ai is the sm.LayoutAttrLookup index (-1 = no def).
+func attr_value_map(ai: int, value: str): str:
+    if ai < 0:
+        ret value
+    end
+    v := i18.LayoutValue(value)
+    vt := sm.LayoutAttrVtype(ai)
+    if vt == K_LO_VT_COLOR:
+        c := sm.LayoutMapColor(v)
+        ret str.Len(c) > 0 ? c : v
+    end
+    if vt == K_LO_VT_DIR:
+        c := sm.LayoutDynValue("dir", v)
+        ret str.Len(c) > 0 ? c : v
+    end
+    if vt == K_LO_VT_LANG:
+        c := sm.LayoutDynValue("lang", v)
+        ret str.Len(c) > 0 ? c : v
+    end
+    if vt == K_LO_VT_ENUM:
+        c := sm.LayoutDynValue(sm.LayoutAttrAllowed(ai), v)
+        ret str.Len(c) > 0 ? c : v
+    end
+    if vt == K_LO_VT_LENGTH:
+        ret map_length(v)
+    end
+    ret value
+end

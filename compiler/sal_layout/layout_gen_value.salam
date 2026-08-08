@@ -1,0 +1,170 @@
+package layout
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+
+// ===========================================================================
+// ===== layout_gen_value.c =====
+// ===========================================================================
+
+// html_line - one line of HTML output (pre-formatted by the caller).
+func html_line(cx &: LoCtx, s: str):
+    if !cx.compact:
+        ind := cx.indent
+        repeat ind with i:
+            cx.html += "  "
+        end
+    end
+    cx.html += s
+    if !cx.compact:
+        cx.html += "\n"
+    end
+end
+
+// hyphenate - '_' and ' ' -> '-'.
+func hyphenate(s: str): str:
+    ret str.Replace(str.Replace(s, "_", "-"), " ", "-")
+end
+
+// sb_put_html_escaped / html_escape
+func html_escape(s: str): str:
+    mut out := ""
+    n := str.Len(s)
+    repeat n with i:
+        b := byte_at(s, i)
+        if b == 38:
+            out += "&amp;"
+        else b == 60:
+            out += "&lt;"
+        else b == 62:
+            out += "&gt;"
+        else b == 34:
+            out += "&quot;"
+        else b == 39:
+            out += "&#39;"
+        else:
+            out += str.Substr(s, i, 1)
+        end
+    end
+    ret out
+end
+
+// val_str
+func val_str(a &: at.Ast, vid: int): str:
+    if vid == 0:
+        ret ""
+    end
+    v := at.Get(a, vid)
+    if v.kind == at.AST_LITERAL:
+        if v.op == tok.TK_STRING || v.op == tok.TK_TRIPLE_STRING:
+            ret v.value_str
+        end
+        if v.op == tok.TK_INT:
+            ret co.U64Toa(v.value_int)
+        end
+        if v.op == tok.TK_FLOAT:
+            ret co.Format1("%g", co.ArgFloat(v.value_float))
+        end
+        if v.op == tok.TK_KW_TRUE:
+            ret "true"
+        end
+        if v.op == tok.TK_KW_FALSE:
+            ret "false"
+        end
+        ret v.name
+    end
+    if v.kind == at.AST_IDENTIFIER:
+        ret v.name
+    end
+    if v.kind == at.AST_CALL:
+        mut fn := "fn"
+        if v.a != 0 && at.KindOf(a, v.a) == at.AST_IDENTIFIER:
+            fn = at.Get(a, v.a).name
+        end
+        mut out := fn + "("
+        repeat at.ChildCount(a, vid) with i:
+            argid := at.Child(a, vid, i)
+            arg := at.Get(a, argid)
+            if i > 0:
+                out += ", "
+            end
+            if arg.kind == at.AST_LITERAL && (arg.op == tok.TK_STRING || arg.op == tok.TK_TRIPLE_STRING):
+                out += `"` + val_str(a, argid) + `"`
+            else:
+                out += val_str(a, argid)
+            end
+        end
+        ret out + ")"
+    end
+    ret ""
+end
+
+// class_seq_name - a, b, …, z, aa, ab, … (bijective base-26).
+func class_seq_name(n: int): str:
+    mut out := ""
+    mut x := n + 1
+    until x > 0:
+        x -= 1
+        out = char_from_code(97 + x % 26) + out
+        x /= 26
+    end
+    ret out
+end
+
+// class_for_key
+func class_for_key(cx &: LoCtx, key: str): str:
+    repeat cx.cls_keys.len() with i:
+        if str.Equals(cx.cls_keys.get(i)[0], key):
+            ret cx.cls_names.get(i)[0]
+        end
+    end
+    name := class_seq_name(cx.cls_next)
+    cx.cls_next += 1
+    cx.cls_keys.push(key)
+    cx.cls_names.push(name)
+    ret name
+end
+
+// emit_rule - de-duplicated CSS rule sink.
+func emit_rule(cx &: LoCtx, rule: str):
+    repeat cx.css_seen.len() with i:
+        if str.Equals(cx.css_seen.get(i)[0], rule):
+            ret
+        end
+    end
+    cx.css_seen.push(rule)
+    cx.css += rule
+    if !cx.compact:
+        cx.css += "\n"
+    end
+end
+
+// css_decl
+func css_decl(compact: bool, prop: str, val: str): str:
+    if compact:
+        ret prop + ":" + val + ";"
+    end
+    ret prop + ": " + val + "; "
+end
+
+// css_rule
+func css_rule(compact: bool, sel: str, body: str): str:
+    if compact:
+        mut n := str.Len(body)
+        until n > 0 && byte_at(body, n - 1) == 32:
+            n -= 1
+        end
+        if n > 0 && byte_at(body, n - 1) == 59:
+            n -= 1
+        end
+        ret sel + "{" + str.Substr(body, 0, n) + "}"
+    end
+    ret sel + " { " + body + " }"
+end
+
+// is_bool_attr
+func is_bool_attr(n: str): bool:
+    ret str.Equals(n, "required") || str.Equals(n, "checked") || str.Equals(n, "disabled") || str.Equals(n, "hidden") || str.Equals(n, "selected") || str.Equals(n, "multiple")
+end

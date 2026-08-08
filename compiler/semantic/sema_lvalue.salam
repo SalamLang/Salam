@@ -1,0 +1,141 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+
+// ===========================================================================
+// ===== sema_stmt.c (5c slice): lvalue classification + pure-write check =====
+// (Ported here because AST_INCDEC needs them; 5d's statement checker reuses
+// these - do NOT port them again.)
+// ===========================================================================
+
+// analyze_lvalue (lvalue_info_t flattened into three out-params).
+func analyze_lvalue(
+    s &: Sema, a &: at.Ast, nid: int, is_lv &: bool, is_proj &: bool, root &: int
+):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        symid := scope_lookup(s, s.cur, n.name)
+        if symid == 0:
+            ret
+        end
+        is_lv = true
+        root = symid
+        ret
+    end
+    if n.kind == at.AST_THIS:
+        is_lv = true
+        ret
+    end
+    if n.kind == at.AST_MEMBER || n.kind == at.AST_INDEX:
+        analyze_lvalue(s, a, n.a, is_lv, is_proj, root)
+        if is_lv:
+            is_proj = true
+        end
+    end
+end
+
+// sema_classify_write - LV_* verdict; also marks mutated roots like the C.
+func sema_classify_write(s &: Sema, a &: at.Ast, nid: int, root_out &: int): int:
+    mut is_lv := false
+    mut is_proj := false
+    mut root := 0
+    analyze_lvalue(s, a, nid, is_lv, is_proj, root)
+    root_out = root
+    if !is_lv:
+        ret LV_NOT_LVALUE
+    end
+    if root != 0 && sym_at(s, root).kind == SYM_CONST:
+        ret LV_CONST
+    end
+    if is_proj:
+        if root != 0:
+            mut rv := sym_at(s, root)
+            if rv.is_mut || rv.is_ref:
+                rv.mutated = true
+                sym_put(s, root, rv)
+            end
+        end
+        ret LV_OK
+    end
+    if root == 0:
+        ret LV_OK
+    end
+    mut rv2 := sym_at(s, root)
+    if rv2.is_mut || rv2.is_ref:
+        rv2.mutated = true
+        sym_put(s, root, rv2)
+        ret LV_OK
+    end
+    ret LV_IMMUTABLE
+end
+
+func pure_param_escapes(s &: Sema, t: int): bool:
+    if t < 0:
+        ret false
+    end
+    k := ty_at(s, t).kind
+    ret k == TY_PTR || k == TY_VEC || k == TY_MAP || k == TY_SLICE
+end
+
+// sema_check_pure_write - E013 diagnostics for writes inside `pure` funcs.
+func sema_check_pure_write(s &: Sema, a &: at.Ast, target: int, sp: co.SrcSpan):
+    fn := sema_pure_fn(s, a)
+    if fn == 0:
+        ret
+    end
+    mut root := target
+    mut below := 0
+    until root != 0 && (
+        at.KindOf(a, root) == at.AST_MEMBER || at.KindOf(a, root) == at.AST_INDEX
+    ):
+        below = root
+        root = at.Get(a, root).a
+    end
+    if root == 0 || at.KindOf(a, root) != at.AST_IDENTIFIER:
+        ret
+    end
+    rname := at.Get(a, root).name
+    if str.Len(rname) == 0:
+        ret
+    end
+    mut where := 0
+    symid := scope_lookup_where(s, s.cur, rname, where)
+    if symid == 0:
+        ret
+    end
+    sv := sym_at(s, symid)
+    fname := at.Get(a, fn).name
+    if sv.kind == SYM_PACKAGE && below != 0 && at.KindOf(a, below) == at.AST_MEMBER:
+        bname := at.Get(a, below).name
+        serr(
+            s, 13, sp, co.Format2(
+                i18.Tr("'pure' function '%s' cannot assign to global '%s': writing a global variable is a side effect"),
+                co.ArgStr(fname), co.ArgStr(str.Len(bname) > 0 ? bname : rname)
+            )
+        )
+        ret
+    end
+    if sv.kind == SYM_VAR && where != 0 && scope_at(s, where).kind == SCOPE_GLOBAL:
+        serr(
+            s, 13, sp, co.Format2(
+                i18.Tr("'pure' function '%s' cannot assign to global '%s': writing a global variable is a side effect"),
+                co.ArgStr(fname), co.ArgStr(rname)
+            )
+        )
+        ret
+    end
+    if sv.kind == SYM_PARAM && target != root && pure_param_escapes(s, sv.ty):
+        serr(
+            s, 13, sp, co.Format2(
+                i18.Tr("'pure' function '%s' cannot write through parameter '%s': the write is visible to the caller"),
+                co.ArgStr(fname), co.ArgStr(rname)
+            )
+        )
+    end
+end

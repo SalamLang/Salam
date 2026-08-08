@@ -1,0 +1,956 @@
+package semantic
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import i18 "../i18n.salam"
+
+// ===========================================================================
+// ===== sema_stmt.c (5d) - statements/blocks/each lowering =====
+// (The lvalue slice - analyze_lvalue/sema_classify_write/sema_check_pure_write
+// - was ported in 5c further down; do not re-port.)
+// ===========================================================================
+
+// define_local
+func define_local(s &: Sema, a &: at.Ast, did: int, kind: int, t: int):
+    d := at.Get(a, did)
+    symid := symbol_new(s, kind, d.name)
+    mut sv := sym_at(s, symid)
+    sv.ty = t
+    sv.is_mut = d.is_mut
+    sv.decl = did
+    sym_put(s, symid, sv)
+    if scope_define(s, s.cur, symid) != 0:
+        serr(
+            s, 1, span_of(a, did), co.Format1(i18.Tr("redefinition of '%s'"), co.ArgStr(d.name))
+        )
+    end
+end
+
+// ea_node .. ea_binary - synthetic-node builders for the `each` lowering.
+func ea_node(a &: at.Ast, kind: int, sp: co.SrcSpan): int:
+    id := new_node_at(a, kind, sp)
+    mut nv := at.Get(a, id)
+    nv.synthetic = true
+    at.Put(a, id, nv)
+    ret id
+end
+
+func ea_ident(a &: at.Ast, name: str, sp: co.SrcSpan): int:
+    id := ea_node(a, at.AST_IDENTIFIER, sp)
+    at.SetName(a, id, name)
+    ret id
+end
+
+func ea_int(a &: at.Ast, v: u64, sp: co.SrcSpan): int:
+    id := ea_node(a, at.AST_LITERAL, sp)
+    mut nv := at.Get(a, id)
+    nv.op = tok.TK_INT
+    nv.value_kind = tok.TV_INT
+    nv.value_int = v
+    at.Put(a, id, nv)
+    ret id
+end
+
+func ea_decl(
+    a &: at.Ast, name: str, init: int, is_mut: bool, sp: co.SrcSpan
+): int:
+    id := ea_node(a, at.AST_VAR_DECL, sp)
+    mut nv := at.Get(a, id)
+    nv.name = name
+    nv.a = init
+    nv.is_mut = is_mut
+    at.Put(a, id, nv)
+    ret id
+end
+
+func ea_mcall(
+    a &: at.Ast, recv: str, method: str, arg: int, sp: co.SrcSpan
+): int:
+    mem := ea_node(a, at.AST_MEMBER, sp)
+    mut mv := at.Get(a, mem)
+    mv.a = ea_ident(a, recv, sp)
+    mv.name = method
+    at.Put(a, mem, mv)
+    call := ea_node(a, at.AST_CALL, sp)
+    mut cv := at.Get(a, call)
+    cv.a = mem
+    at.Put(a, call, cv)
+    if arg != 0:
+        at.AddChild(a, call, arg)
+    end
+    ret call
+end
+
+func ea_index(a &: at.Ast, base: int, idx: int, sp: co.SrcSpan): int:
+    id := ea_node(a, at.AST_INDEX, sp)
+    mut nv := at.Get(a, id)
+    nv.a = base
+    nv.b = idx
+    at.Put(a, id, nv)
+    ret id
+end
+
+func ea_binary(a &: at.Ast, op: int, l: int, r: int, sp: co.SrcSpan): int:
+    id := ea_node(a, at.AST_BINARY, sp)
+    mut nv := at.Get(a, id)
+    nv.op = op
+    nv.a = l
+    nv.b = r
+    at.Put(a, id, nv)
+    ret id
+end
+
+// each_finish - the AST_EACH node is rewritten in place into a synthetic
+// AST_BLOCK holding [seq_decl?, for] and re-checked as a block.
+func each_finish(s &: Sema, a &: at.Ast, nid: int, seq_decl: int, fr: int):
+    mut nv := at.Get(a, nid)
+    nv.kind = at.AST_BLOCK
+    nv.name = ""
+    nv.a = 0
+    nv.b = 0
+    nv.c = 0
+    nv.d = 0
+    nv.synthetic = true
+    nv.list.clear()
+    at.Put(a, nid, nv)
+    if seq_decl != 0:
+        at.AddChild(a, nid, seq_decl)
+    end
+    at.AddChild(a, nid, fr)
+    sema_check_block(s, a, nid)
+end
+
+// check_each - types the iterable, then desugars into an AST_FOR.
+func check_each(s &: Sema, a &: at.Ast, nid: int):
+    sp := span_of(a, nid)
+    n0 := at.Get(a, nid)
+    it := sema_check_expr(s, a, n0.a)
+    an := at.Get(a, n0.a)
+    if an.kind == at.AST_ARRAY_LIT && an.list.len() == 0:
+        serr(
+            s, 68, span_of(a, n0.a), i18.Tr("'each' over an empty array literal: the loop body can never run")
+        )
+    end
+    if type_is_error(s, it):
+        ret
+    end
+    have_key := n0.c != 0
+    mut keyname := ""
+    if have_key:
+        keyname = at.Get(a, n0.c).name
+    end
+    valname := n0.name
+    body := n0.b
+    s.each_n += 1
+    id := s.each_n
+    itv := ty_at(s, it)
+    mut vec_like := itv.kind == TY_VEC
+    mut map_like := itv.kind == TY_MAP
+
+    if itv.kind == TY_STRUCT && itv.decl != 0:
+        isym := sym_at(s, itv.decl)
+        if str.Equals(isym.generic_base, "Vector"):
+            vec_like = true
+        end
+        if str.Equals(isym.generic_base, "HashMap"):
+            map_like = true
+        end
+    end
+
+    if !vec_like && !map_like && itv.kind != TY_ARRAY && itv.kind != TY_SLICE:
+        serr(
+            s, 65, span_of(a, n0.a), co.Format1(
+                i18.Tr("each cannot iterate a value of type '%s'"), co.ArgStr(type_to_string(s, it))
+            )
+        )
+        ret
+    end
+    if map_like && !have_key:
+        serr(
+            s, 65, sp, i18.Tr("iterating a HashMap needs two bindings: each (key, value) in map")
+        )
+        ret
+    end
+    if (itv.kind == TY_ARRAY || itv.kind == TY_SLICE) && itv.elem >= 0 && ty_at(s, itv.elem).kind == TY_ARRAY:
+        serr(
+            s, 65, sp, i18.Tr("each over a multi-dimensional array is not supported; use repeat with an index")
+        )
+        ret
+    end
+
+    mut seq := ""
+    mut seq_decl := 0
+    if an.kind == at.AST_IDENTIFIER:
+        seq = an.name
+    else:
+        seq = "__ea" + id
+        seq_decl = ea_decl(a, seq, n0.a, false, sp)
+    end
+
+    if map_like:
+        itn := "__ei" + id
+        fr := ea_node(a, at.AST_FOR, sp)
+        mut fv := at.Get(a, fr)
+        fv.a = ea_decl(a, itn, ea_mcall(a, seq, "iter", 0, sp), true, sp)
+        fv.b = ea_mcall(a, itn, "has_next", 0, sp)
+        post := ea_node(a, at.AST_EXPR_STMT, sp)
+        mut pv := at.Get(a, post)
+        pv.a = ea_mcall(a, itn, "next", 0, sp)
+        at.Put(a, post, pv)
+        fv.c = post
+        blk := ea_node(a, at.AST_BLOCK, sp)
+        at.AddChild(
+            a, blk, ea_decl(
+                a, keyname, ea_mcall(a, itn, "key", 0, sp), false, have_key ? span_of(a, n0.c) : sp
+            )
+        )
+        at.AddChild(
+            a, blk, ea_decl(
+                a, valname, ea_mcall(a, itn, "value", 0, sp), false, sp
+            )
+        )
+        repeat at.ChildCount(a, body) with bi:
+            at.AddChild(a, blk, at.Child(a, body, bi))
+        end
+        fv.d = blk
+        at.Put(a, fr, fv)
+        each_finish(s, a, nid, seq_decl, fr)
+        ret
+    end
+
+    idx := "__ei" + id
+    fr2 := ea_node(a, at.AST_FOR, sp)
+    mut fv2 := at.Get(a, fr2)
+    fv2.a = ea_decl(a, idx, ea_int(a, 0 as u64, sp), true, sp)
+    mut lenx := 0
+    if vec_like:
+        lenx = ea_mcall(a, seq, "len", 0, sp)
+    else:
+        lenx = ea_node(a, at.AST_CALL, sp)
+        mut lv := at.Get(a, lenx)
+        lv.a = ea_ident(a, "len", sp)
+        at.Put(a, lenx, lv)
+        at.AddChild(a, lenx, ea_ident(a, seq, sp))
+    end
+    fv2.b = ea_binary(a, tok.TK_LT, ea_ident(a, idx, sp), lenx, sp)
+    asn := ea_node(a, at.AST_ASSIGN, sp)
+    mut av := at.Get(a, asn)
+    av.op = tok.TK_ASSIGN
+    av.a = ea_ident(a, idx, sp)
+    av.b = ea_binary(
+        a, tok.TK_PLUS, ea_ident(a, idx, sp), ea_int(a, 1 as u64, sp), sp
+    )
+    at.Put(a, asn, av)
+    fv2.c = asn
+    blk2 := ea_node(a, at.AST_BLOCK, sp)
+    if have_key:
+        at.AddChild(
+            a, blk2, ea_decl(
+                a, keyname, ea_ident(a, idx, sp), false, span_of(a, n0.c)
+            )
+        )
+    end
+    mut elem := 0
+    if vec_like:
+        elem = ea_index(
+            a, ea_mcall(a, seq, "get", ea_ident(a, idx, sp), sp), ea_int(a, 0 as u64, sp), sp
+        )
+    else:
+        elem = ea_index(a, ea_ident(a, seq, sp), ea_ident(a, idx, sp), sp)
+    end
+    at.AddChild(a, blk2, ea_decl(a, valname, elem, false, sp))
+    repeat at.ChildCount(a, body) with bi2:
+        at.AddChild(a, blk2, at.Child(a, body, bi2))
+    end
+    fv2.d = blk2
+    at.Put(a, fr2, fv2)
+    each_finish(s, a, nid, seq_decl, fr2)
+end
+
+// check_stmt - the C switch becomes an if/else chain; the C mid-case
+// `break`s become `ret`s.
+func check_stmt(s &: Sema, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    sp := span_of(a, nid)
+    if k == at.AST_BLOCK:
+        sema_check_block(s, a, nid)
+        ret
+    end
+    if k == at.AST_MATCH:
+        _mt := sema_check_match(s, a, nid, false, TYPE_NONE)
+        ret
+    end
+    if k == at.AST_VAR_DECL:
+        t := sema_check_var_decl(s, a, nid)
+        define_local(s, a, nid, SYM_VAR, t)
+        ret
+    end
+    if k == at.AST_CONST_DECL:
+        t2 := sema_check_var_decl(s, a, nid)
+        n := at.Get(a, nid) // re-read: var_decl may hoist an `as T` cast
+        symid := symbol_new(s, SYM_CONST, n.name)
+        mut sv := sym_at(s, symid)
+        sv.ty = t2
+        sv.is_mut = false
+        sv.decl = nid
+        if n.a != 0:
+            av := at.Get(a, n.a)
+            if av.kind == at.AST_LITERAL && av.value_kind == tok.TV_INT:
+                sv.has_ival = true
+                sv.ival = av.value_int as i64
+            end
+        end
+        sym_put(s, symid, sv)
+        if scope_define(s, s.cur, symid) != 0:
+            serr(
+                s, 1, sp, co.Format1(i18.Tr("redefinition of '%s'"), co.ArgStr(n.name))
+            )
+        end
+        ret
+    end
+    if k == at.AST_ASSIGN:
+        n2 := at.Get(a, nid)
+        tt := sema_check_expr(s, a, n2.a)
+        if tt >= 0 && n2.b != 0 && at.KindOf(a, n2.b) == at.AST_LITERAL:
+            s.expected = tt
+        end
+        vt := sema_check_expr(s, a, n2.b)
+        mut wroot := 0
+        if n2.a != 0 && at.KindOf(a, n2.a) == at.AST_INDEX:
+            ia := at.Get(a, n2.a).a
+            if ia != 0 && str.Equals(at.Get(a, ia).type_str, "str"):
+                serr(
+                    s, 13, sp, i18.Tr("strings are immutable: cannot assign to an index of a 'str'")
+                )
+            end
+        end
+        verdict := sema_classify_write(s, a, n2.a, wroot)
+        if verdict == LV_NOT_LVALUE:
+            serr(s, 13, sp, i18.Tr("assignment target is not assignable"))
+        else verdict == LV_CONST:
+            serr(
+                s, 13, sp, co.Format1(
+                    i18.Tr("cannot assign to '%s': a 'const' binding is fully immutable, including its elements and fields"),
+                    co.ArgStr(wroot != 0 ? sym_at(s, wroot).name : "target")
+                )
+            )
+        else verdict == LV_IMMUTABLE:
+            serr(
+                s, 13, sp, co.Format1(
+                    i18.Tr("cannot reassign immutable variable '%s'; declare it 'mut' to reassign it, or assign to its elements or fields instead"),
+                    co.ArgStr(wroot != 0 ? sym_at(s, wroot).name : "target")
+                )
+            )
+        else:
+            sema_check_pure_write(s, a, n2.a, sp)
+        end
+
+        if n2.op == tok.TK_ASSIGN && n2.a != 0 && at.KindOf(a, n2.a) == at.AST_INDEX:
+            ia2 := at.Get(a, n2.a).a
+            mut bts := ""
+            if ia2 != 0:
+                bts = at.Get(a, ia2).type_str
+            end
+            if str.Len(bts) > 0:
+                mut tmp := scope_lookup(s, s.cur, bts)
+                if tmp == 0:
+                    bl := str.Len(bts)
+                    if bl > 1 && byte_at(bts, bl - 1) == 42:
+                        tmp = scope_lookup(
+                            s, s.cur, str.Substr(bts, 0, bl - 1)
+                        )
+                    end
+                end
+                if tmp != 0 && sym_at(s, tmp).kind == SYM_STRUCT:
+                    m := scope_lookup_local(
+                        s, sym_at(s, tmp).members, "operator_index_set"
+                    )
+                    if m != 0 && sym_at(s, m).kind == SYM_METHOD:
+                        ret
+                    end
+                end
+            end
+        end
+
+        if n2.op != tok.TK_ASSIGN && tt >= 0 && ty_at(s, tt).kind == TY_STRUCT:
+            base_op := sema_compound_base(n2.op)
+            mname := sema_op_method(base_op)
+            if str.Len(mname) > 0:
+                ssym := struct_sym_of(s, tt)
+                if ssym != 0:
+                    ovl := sema_try_op_overload(s, a, nid, ssym, mname, vt)
+                    if ovl != TYPE_NONE:
+                        ret
+                    end
+                end
+            end
+        end
+
+        if n2.op == tok.TK_PLUS_EQ && tt >= 0 && ty_at(s, tt).kind == TY_STR && sema_type_is_stringable(s, vt):
+            ret
+        end
+
+        mut op_valid := true
+        if n2.op != tok.TK_ASSIGN && tt >= 0 && !type_is_error(s, tt) && !type_is_error(s, vt):
+            base_op2 := sema_compound_base(n2.op)
+            if base_op2 == tok.TK_POWER:
+                pow_res := type_prim(s, TY_F64)
+                if !type_is_numeric(s, tt) || !type_is_numeric(s, vt):
+                    serr(
+                        s, 21, sp, i18.Tr("operator '**' requires numeric operands")
+                    )
+                    op_valid = false
+                else !type_assignable(s, tt, pow_res):
+                    serr(
+                        s, 2, sp, co.Format2(
+                            i18.Tr("cannot assign '%s' to '%s'"), co.ArgStr(type_to_string(s, pow_res)),
+                            co.ArgStr(type_to_string(s, tt))
+                        )
+                    )
+                    op_valid = false
+                end
+            else base_op2 != tok.TK_EOF:
+                mut c := TYPE_NONE
+                if ty_at(s, tt).kind != TY_STRUCT:
+                    c = type_common_arith(s, tt, vt)
+                end
+                if c < 0:
+                    serr(
+                        s, 21, sp, co.Format2(
+                            i18.Tr("operator cannot be applied to '%s' and '%s'"), co.ArgStr(type_to_string(s, tt)),
+                            co.ArgStr(type_to_string(s, vt))
+                        )
+                    )
+                    op_valid = false
+                else base_op2 == tok.TK_PERCENT && !type_is_integer(s, c):
+                    serr(
+                        s, 21, sp, co.Format0(
+                            i18.Tr("operator '%%' requires integer operands")
+                        )
+                    )
+                    op_valid = false
+                else sema_tk_is_bitwise(base_op2) && (!type_is_integer(s, tt) || !type_is_integer(s, vt)):
+                    serr(
+                        s, 21, sp, i18.Tr("bitwise operator requires integer operands")
+                    )
+                    op_valid = false
+                end
+            end
+        end
+        if op_valid && !type_assignable(s, tt, vt):
+            serr(
+                s, 2, sp, co.Format2(
+                    i18.Tr("cannot assign '%s' to '%s'"), co.ArgStr(type_to_string(s, vt)), co.ArgStr(type_to_string(s, tt))
+                )
+            )
+        else op_valid && n2.op == tok.TK_ASSIGN && tt >= 0 && ty_at(s, tt).kind == TY_VARIANT && vt >= 0 && ty_at(s, vt).kind != TY_VARIANT:
+            tag := type_variant_tag(s, tt, vt)
+            if tag >= 0:
+                nb := coerce_to_variant(s, a, tt, at.Get(a, nid).b, tag)
+                mut nv := at.Get(a, nid)
+                nv.b = nb
+                at.Put(a, nid, nv)
+            end
+        end
+        ret
+    end
+    if k == at.AST_IF:
+        n3 := at.Get(a, nid)
+        c3 := sema_check_expr(s, a, n3.a)
+        csp := span_of(a, n3.a)
+        if ty_at(s, c3).kind != TY_BOOL && !type_is_error(s, c3):
+            serr(
+                s, 21, csp, co.Format1(
+                    i18.Tr("if condition must be bool, got '%s'"), co.ArgStr(type_to_string(s, c3))
+                )
+            )
+        end
+        mut cv3 := false
+        if sema_const_bool(s, a, n3.a, cv3):
+            if !cv3:
+                serr(
+                    s, 68, csp, i18.Tr("'if' condition is always false: its body can never run")
+                )
+            else n3.c != 0:
+                serr(
+                    s, 68, csp, i18.Tr("'if' condition is always true: the 'else' branch can never run")
+                )
+            else:
+                serr(
+                    s, 68, csp, i18.Tr("'if' condition is always true: remove the redundant 'if'")
+                )
+            end
+        end
+        if n3.b != 0 && at.KindOf(a, n3.b) == at.AST_BLOCK && at.ChildCount(a, n3.b) == 0:
+            serr(
+                s, 60, span_of(a, n3.b), i18.Tr("empty 'if' branch (it must contain at least one statement)")
+            )
+        end
+        check_stmt(s, a, n3.b)
+        if n3.c != 0:
+            if at.KindOf(a, n3.c) == at.AST_BLOCK && at.ChildCount(a, n3.c) == 0:
+                serr(
+                    s, 60, span_of(a, n3.c), i18.Tr("empty 'else' branch (it must contain at least one statement)")
+                )
+            end
+            check_stmt(s, a, n3.c)
+        end
+        ret
+    end
+    if k == at.AST_UNTIL:
+        n4 := at.Get(a, nid)
+        c4 := sema_check_expr(s, a, n4.a)
+        if ty_at(s, c4).kind != TY_BOOL && !type_is_error(s, c4):
+            serr(
+                s, 21, span_of(a, n4.a), co.Format1(
+                    i18.Tr("until condition must be bool, got '%s'"), co.ArgStr(type_to_string(s, c4))
+                )
+            )
+        end
+        mut cv4 := false
+        if sema_const_bool(s, a, n4.a, cv4) && !cv4:
+            serr(
+                s, 68, span_of(a, n4.a), i18.Tr("'until' condition is always false: the loop body can never run")
+            )
+        end
+        s.loop_depth += 1
+        check_stmt(s, a, n4.b)
+        s.loop_depth -= 1
+        ret
+    end
+    if k == at.AST_REPEAT:
+        n5 := at.Get(a, nid)
+        c5 := sema_check_expr(s, a, n5.a)
+        if !type_is_numeric(s, c5) && !type_is_error(s, c5):
+            serr(
+                s, 63, span_of(a, n5.a), co.Format1(
+                    i18.Tr("repeat count must be a number, got '%s'"), co.ArgStr(type_to_string(s, c5))
+                )
+            )
+        end
+        if n5.c == 0:
+            an5 := at.Get(a, n5.a)
+            mut cv5 := ConstVal {}
+            mut zero5 := false
+            mut neg5 := false
+            if sema_const_eval(s, a, n5.a, cv5):
+                zero5 = (cv5.kind == CV_INT && cv5.i == 0 as i64) || (cv5.kind == CV_FLOAT && cv5.f == 0.0)
+                neg5 = (cv5.kind == CV_INT && cv5.i < 0 as i64) || (cv5.kind == CV_FLOAT && cv5.f < 0.0)
+            else (
+                an5.kind == at.AST_UNARY && an5.op == tok.TK_MINUS && an5.a != 0 && at.KindOf(a, an5.a) == at.AST_LITERAL
+            ):
+                // `-<lit>` that stayed un-folded (an unsigned or overflowing
+                // literal) is still a negative count.
+                neg5 = true
+            end
+            if zero5:
+                serr(
+                    s, 68, span_of(a, n5.a), i18.Tr("'repeat' count is the constant 0: the loop body can never run")
+                )
+            else neg5:
+                serr(
+                    s, 68, span_of(a, n5.a), i18.Tr("'repeat' count is a negative constant: the loop body can never run")
+                )
+            end
+        end
+        mut iv_need64 := ty_at(s, c5).kind == TY_I64 || ty_at(s, c5).kind == TY_U64
+        if n5.c != 0:
+            e5 := sema_check_expr(s, a, n5.c)
+            if !type_is_numeric(s, e5) && !type_is_error(s, e5):
+                serr(
+                    s, 63, span_of(a, n5.c), co.Format1(
+                        i18.Tr("repeat range bound must be a number, got '%s'"), co.ArgStr(type_to_string(s, e5))
+                    )
+                )
+            end
+            if ty_at(s, e5).kind == TY_I64 || ty_at(s, e5).kind == TY_U64:
+                iv_need64 = true
+            end
+        end
+        if n5.d != 0:
+            st5 := sema_check_expr(s, a, n5.d)
+            if !type_is_numeric(s, st5) && !type_is_error(s, st5):
+                serr(
+                    s, 63, span_of(a, n5.d), co.Format1(
+                        i18.Tr("repeat step must be a number, got '%s'"), co.ArgStr(type_to_string(s, st5))
+                    )
+                )
+            end
+            dn5 := at.Get(a, n5.d)
+            if dn5.kind == at.AST_LITERAL && dn5.value_kind == tok.TV_INT && dn5.value_int == 0 as u64:
+                serr(
+                    s, 63, span_of(a, n5.d), i18.Tr("repeat step must be a positive number (the direction comes from the bounds)")
+                )
+            end
+            if dn5.kind == at.AST_UNARY && dn5.op == tok.TK_MINUS:
+                serr(
+                    s, 63, span_of(a, n5.d), i18.Tr("repeat step must be a positive number (the direction comes from the bounds)")
+                )
+            end
+            if ty_at(s, st5).kind == TY_I64 || ty_at(s, st5).kind == TY_U64:
+                iv_need64 = true
+            end
+        end
+        ivty := sema_ty(s, iv_need64 ? TY_I64 : TY_I32)
+        _dt := sema_decorate(s, a, nid, ivty)
+        saved5 := s.cur
+        if str.Len(n5.name) > 0:
+            sc5 := scope_new(s, SCOPE_BLOCK, s.cur)
+            iv5 := symbol_new(s, SYM_VAR, n5.name)
+            mut ivv := sym_at(s, iv5)
+            ivv.ty = ivty
+            ivv.is_mut = false
+            ivv.decl = nid
+            sym_put(s, iv5, ivv)
+            _sd := scope_define(s, sc5, iv5)
+            s.cur = sc5
+        end
+        s.loop_depth += 1
+        check_stmt(s, a, n5.b)
+        s.loop_depth -= 1
+        s.cur = saved5
+        ret
+    end
+    if k == at.AST_EACH:
+        check_each(s, a, nid)
+        ret
+    end
+    if k == at.AST_FOR:
+        n6 := at.Get(a, nid)
+        sc6 := scope_new(s, SCOPE_BLOCK, s.cur)
+        saved6 := s.cur
+        s.cur = sc6
+        if n6.a != 0:
+            check_stmt(s, a, n6.a)
+        end
+        if n6.b != 0:
+            c6 := sema_check_expr(s, a, n6.b)
+            if ty_at(s, c6).kind != TY_BOOL && !type_is_error(s, c6):
+                serr(
+                    s, 21, span_of(a, n6.b), co.Format1(
+                        i18.Tr("for condition must be bool, got '%s'"), co.ArgStr(type_to_string(s, c6))
+                    )
+                )
+            end
+        end
+        if n6.c != 0:
+            check_stmt(s, a, n6.c)
+        end
+        s.loop_depth += 1
+        check_stmt(s, a, n6.d)
+        s.loop_depth -= 1
+        s.cur = saved6
+        ret
+    end
+    if k == at.AST_RETURN:
+        n7 := at.Get(a, nid)
+        if s.match_arm_depth > 0 && s.match_yield_active:
+            saved_exp := s.expected
+            s.expected = s.match_yield_expected
+            mut yvt := 0
+            if n7.a != 0:
+                yvt = sema_check_expr(s, a, n7.a)
+            else:
+                yvt = sema_ty(s, TY_VOID)
+            end
+            s.expected = saved_exp
+            s.match_yield_collect.push(MatchYield { ret_node = nid, ty = yvt })
+            ret
+        end
+        if s.cur_func != 0:
+            sgn := sig_at(s, s.cur_func)
+            if sgn.decl != 0:
+                dn7 := at.Get(a, sgn.decl)
+                if dn7.is_noret && str.Len(dn7.name) > 0:
+                    serr(
+                        s, 12, sp, co.Format1(
+                            i18.Tr("'noret' function '%s' cannot contain 'ret': it never returns"), co.ArgStr(dn7.name)
+                        )
+                    )
+                end
+            end
+        end
+        if s.cur_func != 0 && sig_at(s, s.cur_func).infer_ret:
+            mut ivt := 0
+            if n7.a != 0:
+                ivt = sema_check_expr(s, a, n7.a)
+            else:
+                ivt = sema_ty(s, TY_VOID)
+            end
+            mut sgi := sig_at(s, s.cur_func)
+            sgi.ret_type = ivt
+            sgi.ret_span = sp
+            sgi.ret_weak = n7.a != 0 && at.KindOf(a, n7.a) == at.AST_LITERAL && at.Get(a, n7.a).op == tok.TK_INT
+            sgi.infer_ret = false
+            sig_put(s, s.cur_func, sgi)
+            ret
+        end
+        mut retty := 0
+        if s.cur_func != 0:
+            retty = sig_at(s, s.cur_func).ret_type
+        else:
+            retty = sema_ty(s, TY_VOID)
+        end
+        if n7.a != 0:
+            s.expected = retty
+            vt7 := sema_check_expr(s, a, n7.a)
+            s.expected = TYPE_NONE
+            if s.cur_func != 0 && type_is_float(s, retty):
+                if type_is_integer(s, vt7):
+                    mut sgf := sig_at(s, s.cur_func)
+                    if !sgf.ret_int_seen:
+                        sgf.ret_int_span = sp
+                    end
+                    sgf.ret_int_seen = true
+                    sig_put(s, s.cur_func, sgf)
+                else type_is_float(s, vt7):
+                    mut sgf2 := sig_at(s, s.cur_func)
+                    sgf2.ret_float_seen = true
+                    sig_put(s, s.cur_func, sgf2)
+                end
+            end
+            if ty_at(s, retty).kind == TY_VOID:
+                serr(
+                    s, 49, sp, i18.Tr("cannot return a value from a void function")
+                )
+            else !type_assignable(s, retty, vt7):
+                mut inferred := false
+                if s.cur_func != 0:
+                    sgd := sig_at(s, s.cur_func)
+                    if sgd.decl != 0 && at.Get(a, sgd.decl).ty == 0:
+                        inferred = true
+                    end
+                end
+                if inferred && s.lam.len() == 0 && sig_at(s, s.cur_func).ret_weak && type_is_numeric(s, retty) && type_is_numeric(s, vt7):
+                    mut sgw := sig_at(s, s.cur_func)
+                    sgw.ret_type = vt7
+                    sgw.ret_span = sp
+                    sgw.ret_weak = at.KindOf(a, n7.a) == at.AST_LITERAL && at.Get(a, n7.a).op == tok.TK_INT
+                    sgw.ret_widened = true
+                    sig_put(s, s.cur_func, sgw)
+                else inferred:
+                    sgd2 := sig_at(s, s.cur_func)
+                    serr(
+                        s, 2, sp, co.Format4(
+                            i18.Tr("conflicting inferred return types for '%s': an earlier 'ret' (line %u) produces '%s', this one produces '%s'; annotate the function's return type explicitly"),
+                            co.ArgStr(at.Get(a, sgd2.decl).name), co.ArgUint(sgd2.ret_span.begin.line as u64),
+                            co.ArgStr(type_to_string(s, retty)), co.ArgStr(type_to_string(s, vt7))
+                        )
+                    )
+                else:
+                    serr(
+                        s, 2, sp, co.Format2(
+                            i18.Tr("return type mismatch: expected '%s', got '%s'"), co.ArgStr(type_to_string(s, retty)),
+                            co.ArgStr(type_to_string(s, vt7))
+                        )
+                    )
+                end
+            else ty_at(s, retty).kind == TY_DYN:
+                na7 := coerce_to_dyn(s, a, retty, at.Get(a, nid).a, vt7)
+                mut nv7 := at.Get(a, nid)
+                nv7.a = na7
+                at.Put(a, nid, nv7)
+            else ty_at(s, retty).kind == TY_VARIANT && ty_at(s, vt7).kind != TY_VARIANT:
+                tag7 := type_variant_tag(s, retty, vt7)
+                if tag7 >= 0:
+                    na8 := coerce_to_variant(
+                        s, a, retty, at.Get(a, nid).a, tag7
+                    )
+                    mut nv8 := at.Get(a, nid)
+                    nv8.a = na8
+                    at.Put(a, nid, nv8)
+                end
+            end
+        else ty_at(s, retty).kind != TY_VOID:
+            serr(
+                s, 48, sp, co.Format1(
+                    i18.Tr("missing return value; function returns '%s'"), co.ArgStr(type_to_string(s, retty))
+                )
+            )
+        end
+        ret
+    end
+    if k == at.AST_DEFER:
+        da := at.Get(a, nid).a
+        if da != 0:
+            check_stmt(s, a, da)
+        end
+        ret
+    end
+    if k == at.AST_BREAK || k == at.AST_CONTINUE:
+        if s.loop_depth == 0:
+            serr(
+                s, 37, sp, co.Format1(
+                    i18.Tr("'%s' outside of a loop"), co.ArgStr(
+                        k == at.AST_BREAK ? "break" : "continue"
+                    )
+                )
+            )
+        end
+        ret
+    end
+    if k == at.AST_EXPR_STMT:
+        _et := sema_check_expr(s, a, at.Get(a, nid).a)
+        ret
+    end
+    if k == at.AST_INCDEC:
+        _it := sema_check_expr(s, a, nid)
+        ret
+    end
+end
+
+// sema_check_block
+func sema_check_block(s &: Sema, a &: at.Ast, block: int):
+    sc := scope_new(s, SCOPE_BLOCK, s.cur)
+    saved := s.cur
+    s.cur = sc
+    lg.Log(
+        s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, "enter block scope (" + at.ChildCount(a, block) + " stmts)"
+    )
+    mut i := 0
+    until i < at.ChildCount(a, block):
+        check_stmt(s, a, at.Child(a, block, i))
+        i += 1
+    end
+    if !s.requal:
+        mut j := 0
+        until j + 1 < at.ChildCount(a, block):
+            if sema_stmt_terminates(s, a, at.Child(a, block, j)):
+                serr(
+                    s, 70, span_of(a, at.Child(a, block, j + 1)), i18.Tr("unreachable code: the previous statement always exits this block")
+                )
+                break
+            end
+            j += 1
+        end
+    end
+
+    scv := scope_at(s, sc)
+    repeat scv.symbols.len() with si:
+        v := sym_at(s, scv.symbols.get(si)[0])
+        if v.kind == SYM_VAR && !v.used && v.decl != 0 && str.Len(v.name) > 0 && byte_at(v.name, 0) != 95:
+            serr(
+                s, 59, span_of(a, v.decl), co.Format1(
+                    i18.Tr("unused variable '%s' (prefix with '_' if intentional)"), co.ArgStr(v.name)
+                )
+            )
+        else v.kind == SYM_VAR && v.is_mut && !v.mutated && v.decl != 0 && !at.Get(a, v.decl).synthetic && str.Len(v.name) > 0 && byte_at(v.name, 0) != 95:
+            serr(
+                s, 69, span_of(a, v.decl), co.Format1(
+                    i18.Tr("variable '%s' is declared 'mut' but never mutated; remove 'mut' or declare it 'const'"),
+                    co.ArgStr(v.name)
+                )
+            )
+        end
+    end
+    s.cur = saved
+    lg.Log(s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, "exit block scope")
+end
+
+// sema_check_var_decl (sema_stmt.c, 5d) - shared by local and global
+// declarations. Handles the `x := v as T` type hoist, HashMap/Vector
+// literal early-outs, dyn/Variant coercion of the initializer.
+func sema_check_var_decl(s &: Sema, a &: at.Ast, nid: int): int:
+    sp := span_of(a, nid)
+    mut n := at.Get(a, nid)
+    if n.ty == 0 && n.a != 0 && at.KindOf(a, n.a) == at.AST_CAST:
+        cv := at.Get(a, n.a)
+        ck := at.KindOf(a, cv.a)
+        if cv.ty != 0 && (
+            ck == at.AST_ARRAY_LIT || ck == at.AST_STRUCT_LIT || ck == at.AST_LITERAL
+        ):
+            n.ty = cv.ty
+            n.a = cv.a
+            at.Put(a, nid, n)
+        end
+    end
+    n = at.Get(a, nid)
+    mut declared := TYPE_NONE
+    if n.ty != 0:
+        declared = sema_resolve_type(s, a, n.ty)
+    end
+
+    if n.a != 0 && at.KindOf(a, n.a) == at.AST_STRUCT_LIT && str.Len(at.Get(a, n.a).name) > 0:
+        orig := at.Get(a, n.a).name
+        at.SetName(a, n.a, intrinsic_type_canon(orig))
+        sema_check_intrinsic_type_lang(s, orig, span_of(a, n.a))
+    end
+
+    if declared >= 0 && ty_at(s, declared).kind == TY_MAP && n.a != 0 && at.KindOf(a, n.a) == at.AST_STRUCT_LIT && str.Equals(at.Get(a, n.a).name, "HashMap"):
+        tstr := type_to_string(s, declared)
+        at.SetTypeStr(a, n.a, tstr)
+        at.SetTypeStr(a, nid, tstr)
+        ret declared
+    end
+
+    if declared >= 0 && ty_at(s, declared).kind == TY_VEC && n.a != 0 && at.KindOf(a, n.a) == at.AST_STRUCT_LIT && str.Equals(at.Get(a, n.a).name, "Vector"):
+        tstr2 := type_to_string(s, declared)
+        at.SetTypeStr(a, n.a, tstr2)
+        at.SetTypeStr(a, nid, tstr2)
+        ret declared
+    end
+
+    if declared >= 0 && ty_at(s, declared).kind == TY_STRUCT && n.a != 0 && at.KindOf(a, n.a) == at.AST_STRUCT_LIT && str.Len(at.Get(a, n.a).name) > 0:
+        lname := at.Get(a, n.a).name
+        if generic_template(s, a, lname, SYM_STRUCT) != 0 || scope_lookup(s, s.global, lname) == 0:
+            at.SetName(a, n.a, ty_at(s, declared).name)
+        end
+    end
+
+    if declared >= 0 && n.a != 0:
+        ak := at.KindOf(a, n.a)
+        if ak == at.AST_CALL || ak == at.AST_LITERAL || ak == at.AST_ARRAY_LIT || ak == at.AST_TERNARY || ak == at.AST_MATCH:
+            s.expected = declared
+        end
+    end
+    mut initt := TYPE_NONE
+    if n.a != 0:
+        initt = sema_check_expr(s, a, n.a)
+    end
+    mut t := TYPE_NONE
+    if declared >= 0 && initt >= 0:
+        if !type_assignable(s, declared, initt):
+            serr(
+                s, 2, sp, co.Format3(
+                    i18.Tr("cannot assign '%s' to '%s' in declaration of '%s'"), co.ArgStr(type_to_string(s, initt)),
+                    co.ArgStr(type_to_string(s, declared)), co.ArgStr(n.name)
+                )
+            )
+        end
+        if ty_at(s, declared).kind == TY_DYN:
+            na := coerce_to_dyn(s, a, declared, at.Get(a, nid).a, initt)
+            mut nv := at.Get(a, nid)
+            nv.a = na
+            at.Put(a, nid, nv)
+        end
+        if ty_at(s, declared).kind == TY_VARIANT && ty_at(s, initt).kind != TY_VARIANT:
+            tag := type_variant_tag(s, declared, initt)
+            if tag >= 0:
+                na2 := coerce_to_variant(s, a, declared, at.Get(a, nid).a, tag)
+                mut nv2 := at.Get(a, nid)
+                nv2.a = na2
+                at.Put(a, nid, nv2)
+            end
+        end
+        t = declared
+    else declared >= 0:
+        t = declared
+    else initt >= 0:
+        t = initt
+    else:
+        serr(
+            s, 1, sp, co.Format1(
+                i18.Tr("cannot infer type of '%s' (no type or initializer)"), co.ArgStr(n.name)
+            )
+        )
+        t = sema_err_ty(s)
+    end
+    at.SetTypeStr(a, nid, type_to_string(s, t))
+    ret t
+end

@@ -1,0 +1,214 @@
+package driver
+
+import os
+import io
+import str
+import tok "../token.salam"
+import src "../source.salam"
+import lg "../logger.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+import lp "../langpack.salam"
+import lx "../lexer/lexer.salam"
+import ps "../parser/parser.salam"
+import cc "../condcomp.salam"
+import sm "../semantic/semantic.salam"
+import co "../sal_core.salam"
+import lv "../llvmgen/llvmgen.salam"
+
+    // driver_llvm (driver/llvm_build.c) - single-file lex/parse/prune/sema ->
+    // lv.RunOpts (IR text) -> write <module>.ll -> lv.NativeRun (the toolchain
+    // shell-out; see llvm.salam's stage-C notes on why NativeRun, not a direct
+    // LLVM-C native path, is the only reachable backend here) for every output
+    // mode except plain unoptimized --emit-llvm (which just leaves the .ll on
+    // disk, matching the C's `ir_mode && !verify && opt_level==O0` skip).
+    pub func Llvm(opt &: Dr): int:
+        lgr := lg.New(opt.log_level, resolve_color(opt.color))
+        pack := lp.Load(opt.lang)
+        if pack == lp.LP_NONE:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
+            )
+            ret 2
+        end
+        entry := lp.Entry(pack)
+        sm.SetStdlibRoot(opt.stdlib_path)
+        // See Web()'s identical PORT-NOTE: driver_main calls
+        // `layout_schema_init(salam_get_stdlib_root())` - the RESOLVED root, not
+        // opt->stdlib_path directly (which resolves relative to CWD when empty).
+        sm.LayoutSchemaInit(sm.GetStdlibRoot())
+        if str.Len(opt.input) == 0:
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("salam: no input file"))
+            ret 2
+        end
+        mut sf := src.New()
+        if !src.Load(opt.input, sf):
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(opt.input))
+            )
+            ret 2
+        end
+        lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+        lg.AddDiagSource(lgr, opt.input, sf.text, sf.len)
+        module := module_of(opt.input)
+        modpack := lx.Detect(sf, pack)
+        mut toks := tok.StreamNew(opt.input)
+        lok := lx.Run(lgr, modpack, sf, toks)
+        mut a := at.NewAst()
+        mut prog := 0
+        mut pok := ps.Run(lgr, toks, a, prog)
+        tok.StreamFree(toks)
+        // cc_table_build(arena, opt->llvm_target, opt->defines, ...) - the
+        // TARGET triple (not "") drives condcomp's SALAM_OS_*/SALAM_ARCH_*
+        // constants for a cross-compile.
+        table := cc.TableBuild(opt.llvm_target, opt.defines)
+        if !cc.PruneProgram(a, lgr, sf.path, table, prog):
+            pok = false
+        end
+        mut s := sm.New(lgr, sf.path, lp.Code(modpack))
+        sm.SetCc(s, table)
+        sok := sm.Run(s, a, prog)
+        if !lok || !pok || !sok:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("build aborted: errors in source") + " (" + opt.input + ")"
+            )
+            sm.Free(s)
+            at.FreeAst(a)
+            ret 1
+        end
+
+        mut o := lv.OptionsDefault()
+        o.opt_level = opt.llvm_opt_level
+        o.output_mode = opt.llvm_emit
+        o.debug_info = opt.debug_info
+        o.verify_module = opt.llvm_verify
+        o.target_triple = opt.llvm_target
+        o.lib_paths = opt.lib_paths
+        o.native_cpu = opt.llvm_native_cpu && str.Len(opt.llvm_target) == 0
+
+        if o.output_mode == lv.LV_OUT_EXEC:
+            mut links := Vector {} as Vector<str>
+            mut kinds := Vector {} as Vector<str>
+            ll_gather_links(
+                lgr, pack, opt.input, a, prog, lp.Code(modpack), table, links, kinds
+            )
+            o.link_libs = links
+            o.link_kinds = kinds
+            o.nlink = links.len()
+            if str.Len(opt.llvm_target) > 0:
+                mut sr := ""
+                if sm.FindSysroot(opt.llvm_target, sr):
+                    o.sysroot = sr
+                    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using bundled sysroot: " + sr)
+                end
+            end
+        end
+
+        out := lv.RunOpts(lgr, s, a, prog, module, entry, o, sf.path)
+
+        ir_mode := o.output_mode == lv.LV_OUT_IR
+        mut llpath := module + ".ll"
+        if ir_mode && str.Len(opt.output) > 0:
+            llpath = opt.output
+        end
+        if os.WriteFile(llpath, out.ll_src) < 0:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot write '%s'"), co.ArgStr(llpath))
+            )
+            sm.Free(s)
+            at.FreeAst(a)
+            ret 2
+        end
+        if !out.ok:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_WARN, lv.ErrorOf(out) + "; the program uses constructs the LLVM backend does not yet " + "support, so " + llpath + " may be incomplete"
+            )
+            // The partial .ll is written above so it can be inspected, but
+            // for a build about to fall back to the C backend it is just
+            // litter in the user's working directory - keep it only when
+            // the user asked for intermediates, or when it IS the requested
+            // output (`salam llvm -o foo.ll`).
+            if !opt.keep_c && !(ir_mode && str.Len(opt.output) > 0):
+                os.Remove(llpath)
+            end
+            sm.Free(s)
+            at.FreeAst(a)
+            ret RC_LLVM_UNSUPPORTED
+        end
+
+        mut rc := 0
+        if ir_mode:
+            if o.verify_module || o.opt_level != lv.LV_OPT_O0:
+                rc = lv.NativeRun(lgr, llpath, o)
+            end
+            if rc == 0:
+                lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "LLVM IR written to " + llpath)
+                lg.Log(
+                    lgr, lg.PH_DRIVER, lg.LOG_INFO, "  native: clang " + llpath + " -lm -o " + module + " | wasm: clang --target=wasm32-wasi ..."
+                )
+            end
+        else o.output_mode == lv.LV_OUT_JIT:
+            rc = lv.NativeRun(lgr, llpath, o)
+            if !opt.keep_c:
+                _rm := os.Remove(llpath)
+            end
+        else:
+            if str.Len(opt.output) > 0:
+                o.output_file = opt.output
+            else:
+                o.output_file = default_llvm_output(
+                    output_stem_of(opt.input), o.output_mode, opt.llvm_target
+                )
+            end
+            rc = lv.NativeRun(lgr, llpath, o)
+            if !opt.keep_c:
+                _rm2 := os.Remove(llpath)
+            end
+            if rc == 0:
+                lg.Log(
+                    lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("wrote %s"), co.ArgStr(o.output_file))
+                )
+                if str.Len(opt.exe_path) == 0 && o.output_mode == lv.LV_OUT_EXEC:
+                    opt.exe_path = o.output_file
+                end
+            end
+        end
+        sm.Free(s)
+        at.FreeAst(a)
+        // NativeRun's -1 means "this machine has neither in-process LLVM/LLD
+        // nor an external toolchain to shell out to" - nothing was attempted,
+        // so it is the same situation as a construct the backend cannot
+        // lower. Reporting it as RC_LLVM_UNSUPPORTED lets build_impl retry on
+        // the C backend instead of failing the build with a bare -1, which
+        // the shell would report as exit status 255.
+        if rc < 0:
+            ret RC_LLVM_UNSUPPORTED
+        end
+        ret rc
+    end
+
+    // driver_llvm_build - the CMD_BUILD/CMD_OBJ --target=<triple> redirect
+    // wrapper (build_impl calls this, not a bare Llvm(), so llvm_emit gets set
+    // from opt.command first, exactly like the C).
+    pub func LlvmBuild(opt &: Dr): int:
+        if opt.command == CMD_OBJ:
+            opt.llvm_emit = lv.LV_OUT_OBJ
+        else:
+            opt.llvm_emit = lv.LV_OUT_EXEC
+        end
+        rc := Llvm(opt)
+        // Only a genuine cross-compile failure gets the toolchain hint. A
+        // native build never asked for a target, and RC_LLVM_UNSUPPORTED is
+        // handled by build_impl (which falls back to the C backend), so
+        // neither should be reported as a missing cross toolchain.
+        if rc != 0 && rc != RC_LLVM_UNSUPPORTED && str.Len(opt.llvm_target) > 0:
+            io.EPrintln(
+                co.Format1(
+                    i18.Tr(
+                        "salam: cross-compilation for target '%s' failed; see the diagnostics " + "above. If they point to a missing toolchain, install the LLVM " + "tools (clang/llc), plus lld and a sysroot for Windows targets."
+                    ), co.ArgStr(opt.llvm_target)
+                )
+            )
+        end
+        ret rc
+    end

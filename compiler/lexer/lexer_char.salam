@@ -1,0 +1,143 @@
+package lexer
+
+import str
+import co "../sal_core.salam"
+
+// ===== lexer_char.c =====
+func is_digit(c: int): bool:
+    ret c >= 48 && c <= 57
+end
+
+func is_alpha(c: int): bool:
+    ret (c >= 97 && c <= 122) || (c >= 65 && c <= 90)
+end
+
+func is_ident_start(c: int): bool:
+    ret is_alpha(c) || c == 95 || c >= 128
+end
+
+func is_ident_cont(c: int): bool:
+    ret is_ident_start(c) || is_digit(c)
+end
+
+func hexval(c: int): int:
+    if c >= 48 && c <= 57:
+        ret c - 48
+    end
+    if c >= 97 && c <= 102:
+        ret c - 97 + 10
+    end
+    if c >= 65 && c <= 70:
+        ret c - 65 + 10
+    end
+    ret 0 - 1
+end
+
+// lx_is_base_digit - `base` is the byte after the leading 0 (x/b/o, any case)
+func is_base_digit(c: int, base: int): bool:
+    if base == 120 || base == 88: // 'x' 'X'
+        ret hexval(c) >= 0
+    end
+    if base == 98 || base == 66: // 'b' 'B'
+        ret c == 48 || c == 49
+    end
+    if base == 111 || base == 79: // 'o' 'O'
+        ret c >= 48 && c <= 55
+    end
+    ret false
+end
+
+// lx_decimal_digit - ASCII digit (1 byte) or Extended Arabic-Indic /
+// Arabic-Indic digit (2 bytes); returns the byte length, 0 if none.
+func decimal_digit_at(s: str, at: int, n: int, val &: int): int:
+    if n == 0:
+        ret 0
+    end
+    b0 := byte_at(s, at)
+    if b0 >= 48 && b0 <= 57:
+        val = b0 - 48
+        ret 1
+    end
+    if n < 2:
+        ret 0
+    end
+    b1 := byte_at(s, at + 1)
+    if b0 == 217 && b1 >= 160 && b1 <= 169: // 0xD9 0xA0..0xA9
+        val = b1 - 160
+        ret 2
+    end
+    if b0 == 219 && b1 >= 176 && b1 <= 185: // 0xDB 0xB0..0xB9
+        val = b1 - 176
+        ret 2
+    end
+    ret 0
+end
+
+// lx_utf8_encode - appends the encoded bytes instead of filling char[4]
+func utf8_append(out &: str.StringBuilder, cp: u32):
+    if cp < (128 as u32):
+        str.BufAppendChar(out, cp as int)
+        ret
+    end
+    if cp < (2048 as u32):
+        str.BufAppendChar(out, ((192 as u32) | (cp >> 6)) as int)
+        str.BufAppendChar(out, ((128 as u32) | (cp & (63 as u32))) as int)
+        ret
+    end
+    if cp < (65536 as u32):
+        str.BufAppendChar(out, ((224 as u32) | (cp >> 12)) as int)
+        str.BufAppendChar(out, ((128 as u32) | ((cp >> 6) & (63 as u32))) as int)
+        str.BufAppendChar(out, ((128 as u32) | (cp & (63 as u32))) as int)
+        ret
+    end
+    str.BufAppendChar(out, ((240 as u32) | (cp >> 18)) as int)
+    str.BufAppendChar(out, ((128 as u32) | ((cp >> 12) & (63 as u32))) as int)
+    str.BufAppendChar(out, ((128 as u32) | ((cp >> 6) & (63 as u32))) as int)
+    str.BufAppendChar(out, ((128 as u32) | (cp & (63 as u32))) as int)
+end
+
+// lx_utf8_seq_len
+func utf8_seq_len(s: str, n: int): int:
+    if n == 0:
+        ret 0
+    end
+    b0 := byte_at(s, 0)
+    if b0 < 128:
+        ret 1
+    end
+    if (b0 & 224) == 192 && n >= 2:
+        ret 2
+    end
+    if (b0 & 240) == 224 && n >= 3:
+        ret 3
+    end
+    if (b0 & 248) == 240 && n >= 4:
+        ret 4
+    end
+    ret 0
+end
+
+// lx_parse_uint - parses digits of `base` starting at `from`, saturating at
+// UINT64_MAX with the overflow flag, stopping at the first non-digit.
+func parse_uint(d: str, from: int, base: int, overflow &: bool): u64:
+    mut v := 0 as u64
+    b := base as u64
+    overflow = false
+    umax := co.SizeMax()
+    n := d.len()
+    mut i := from
+    until i < n:
+        digit := hexval(byte_at(d, i))
+        if digit < 0 || digit >= base:
+            break
+        end
+        if v > (umax - (digit as u64)) / b:
+            overflow = true
+            v = umax
+        else:
+            v = v * b + (digit as u64)
+        end
+        i += 1
+    end
+    ret v
+end

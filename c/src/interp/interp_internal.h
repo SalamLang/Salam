@@ -47,10 +47,18 @@ typedef struct {
     size_t count;
 } ptab_t;
 
+/* `bindings` holds binding_t* and `bindings.len` is the live count. `pool` is
+ * how many of those slots hold a binding_t this env has already allocated:
+ * env_reset drops len back to 0 but leaves pool alone, so the next iteration
+ * of a loop refills the same binding_t objects instead of allocating fresh
+ * ones. Invariant: pool >= bindings.len, and data[0..pool) are all live
+ * pointers. See env_reset for why a loop is allowed to do that at all. */
 typedef struct env {
     struct env *parent;
     vec_t bindings;
     itab_t *index;
+    size_t pool;
+    struct env *free_next; /* interp_t.env_free list link while unused */
 } env_t;
 
 typedef struct module {
@@ -106,6 +114,12 @@ typedef struct {
     src_span_t errspan;
     bool have_errspan;
     unsigned long long steps;
+    /* Bumped whenever an env pointer is stored somewhere that outlives the
+     * statement that created it: a closure's captured scope and a deferred
+     * statement's scope. Loops compare this across an iteration to decide
+     * whether the body's scope can be recycled (see env_reset). */
+    unsigned long long env_escapes;
+    env_t *env_free; /* recycled scopes, see env_acquire */
     clock_t deadline;
     unsigned depth;
     int match_expr_depth;
@@ -148,9 +162,17 @@ void tick(interp_t *I);
 
 env_t *env_new(interp_t *I, env_t *parent);
 
+void env_reset(env_t *e);
+
+env_t *env_acquire(interp_t *I, env_t *parent);
+
+void env_release(interp_t *I, env_t *e);
+
 binding_t *env_find_local(env_t *e, const char *name);
 
 binding_t *env_find(env_t *e, const char *name);
+
+binding_t *env_find_cached(env_t *e, ast_node_t *n);
 
 void env_define(interp_t *I, env_t *e, const char *name, value_t v);
 

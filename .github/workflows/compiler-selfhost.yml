@@ -35,6 +35,15 @@ on:
         description: 'Released salam version to bootstrap FROM (e.g. 0.2.7). Blank = latest release with an asset for the runner platform.'
         type: string
         default: ''
+# ccache stores its objects zstd-compressed, but at its default level. The
+# 10 GB Actions cache budget is repository-wide and shared with every other
+# workflow, so raise the level: smaller uploads, and because --max-size caps
+# the COMPRESSED size, more objects fit in the same budget. Matches the value
+# compiler-release.yml sets for the same reason.
+env:
+  CCACHE_COMPRESS: '1'
+  CCACHE_COMPRESSLEVEL: '9'
+
 permissions:
   contents: read
 concurrency:
@@ -153,10 +162,162 @@ jobs:
           head -1 seed-version.txt
           rm -f seed-version.txt
 
+      # Static in-process LLVM/LLD for the self-hosted compiler, so stage2
+      # lowers IR itself instead of shelling out to a clang/lld the user
+      # would have to install. Without libsalam_llvm.a, bootstrap.sh's
+      # SALAM_HAVE_LLVM gate stays off and the compiler falls back to the C
+      # backend - which is what the parity gate used to measure.
+      #
+      # Best-effort on purpose: the archive needs LLVM development libraries,
+      # and this job's value (does the compiler bootstrap at all) must not
+      # depend on apt. A failure here downgrades stage2 to the C backend and
+      # says so; it never fails the job. Once this is green on a few runs,
+      # tighten it by setting SALAM_WITH_LLVM=1 on the bootstrap step below,
+      # which turns a missing archive into a hard error.
+      # `make libsalam-llvm` merges every LLVM/LLD static archive into
+      # libsalam_llvm.a with `ar -M` (see c/Makefile's LLVM_MERGE_LIBS), so
+      # the result is SELF-CONTAINED: a cache hit needs neither llvm-*-dev
+      # nor lld installed, only the handful of small system libs std/llvm
+      # links alongside it. That is what makes caching worth it here - a hit
+      # skips a ~1 GB apt install and the whole archive merge.
+      #
+      # No restore-keys, deliberately. Every other cache in this repository
+      # uses them, but a prefix match here would restore an archive built
+      # from *different* sources: it would link happily and miscompile. The
+      # key is an exact content hash of everything that ends up in the
+      # archive - the two translation units plus the headers they include -
+      # so a miss is correct and a hit is safe.
+      - name: Cache static LLVM/LLD archive
+        id: llvm-archive
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: libsalam_llvm.a
+          key: >-
+            salam-llvm-a-${{ matrix.os }}-llvm22-${{ hashFiles('c/Makefile',
+            'c/src/llvm/**', 'c/src/core/*.h', 'c/src/semantic/*.h',
+            'c/src/i18n/*.h', 'c/src/logger/*.h', 'c/src/diag/*.h') }}
+
+      # Only useful on a miss, and only for the two objects that are actually
+      # compiled (llvm_native.c + lld_link.cc); the bulk of the archive is
+      # prebuilt LLVM. Cheap to keep, and it makes a source-only change to
+      # those two files rebuild in seconds instead of minutes.
+      - name: Cache ccache for the LLVM archive build
+        if: steps.llvm-archive.outputs.cache-hit != 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ccache
+          key: ccache-selfhost-llvm-${{ matrix.os }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-selfhost-llvm-${{ matrix.os }}-
+
+      - name: Build static LLVM/LLD archive (best-effort)
+        if: steps.llvm-archive.outputs.cache-hit != 'true'
+        run: |
+          set -u
+          # Not `env: CCACHE_DIR: ~/.ccache`: Actions does not expand `~` in
+          # env values, so ccache would create a literal "~" directory in the
+          # workspace and the cache step above would never see a thing.
+          CCACHE_DIR="$HOME/.ccache"
+          export CCACHE_DIR
+          mkdir -p "$CCACHE_DIR"
+          case "${{ matrix.os }}" in
+          ubuntu*)
+            wget -qO llvm.sh https://apt.llvm.org/llvm.sh
+            chmod +x llvm.sh
+            sudo ./llvm.sh 22 || true
+            sudo apt-get update || true
+            sudo apt-get install -y ccache llvm-22-dev liblld-22-dev \
+              libpolly-22-dev libzstd-dev zlib1g-dev libtinfo-dev \
+              libxml2-dev || true
+            LLVM_CONFIG=llvm-config-22
+            ;;
+          macos*)
+            brew install ccache llvm lld || true
+            LLVM_CONFIG="$(brew --prefix llvm)/bin/llvm-config"
+            ;;
+          *)
+            LLVM_CONFIG=llvm-config
+            ;;
+          esac
+          if ! command -v "$LLVM_CONFIG" >/dev/null 2>&1; then
+            echo "::warning::no $LLVM_CONFIG; stage2 uses the C backend"
+            exit 0
+          fi
+          "$LLVM_CONFIG" --version
+          C_COMPILER=gcc
+          CXX_COMPILER=g++
+          if command -v ccache >/dev/null 2>&1; then
+            ccache --max-size=500M >/dev/null 2>&1 || true
+            C_COMPILER="ccache gcc"
+            CXX_COMPILER="ccache g++"
+          fi
+          if make -C c libsalam-llvm -j2 WITH_LLVM=1 WITH_LLD=1 \
+            LLVM_LINK_STATIC=1 LLVM_CONFIG="$LLVM_CONFIG" \
+            CC="$C_COMPILER" CXX="$CXX_COMPILER"; then
+            # The merged archive carries LLVM's own DWARF, which nothing here
+            # ever reads: it describes LLVM's internals, not the user program
+            # being compiled. Dropping it is the single biggest lever on this
+            # cache entry, and the repository's 10 GB cache budget is shared
+            # with every other workflow.
+            #
+            # --strip-debug only, never --strip-all or --strip-unneeded: those
+            # drop the symbol table a static archive is linked BY. ranlib
+            # afterwards rebuilds the archive index that strip invalidates.
+            before=$(wc -c <libsalam_llvm.a | tr -d ' ')
+            strip --strip-debug libsalam_llvm.a 2>/dev/null ||
+              strip -S libsalam_llvm.a 2>/dev/null || true
+            ranlib libsalam_llvm.a 2>/dev/null || true
+            after=$(wc -c <libsalam_llvm.a | tr -d ' ')
+            echo "libsalam_llvm.a: $before -> $after bytes after --strip-debug"
+            # A stripped archive that no longer links is worse than a big one.
+            if ! ar t libsalam_llvm.a >/dev/null 2>&1; then
+              echo "::error::libsalam_llvm.a is unreadable after strip"
+              rm -f libsalam_llvm.a
+              exit 0
+            fi
+            echo "libsalam_llvm.a built - stage2 will link LLVM/LLD in-process"
+          else
+            echo "::warning::libsalam-llvm failed; stage2 uses the C backend"
+          fi
+          command -v ccache >/dev/null 2>&1 && ccache --show-stats | head -5
+
+      # Needed whether the archive was built or restored: std/llvm links
+      # `link static "z"` / `"zstd"` next to libsalam_llvm.a, and the static
+      # libz.a/libzstd.a come from these packages. A few hundred KB, versus
+      # the ~1 GB of llvm-*-dev the cache hit avoided.
+      # Unconditional on Linux rather than gated on the archive existing:
+      # these are a few hundred KB and usually already present, so the check
+      # would cost more than the install. Notably NOT gated with
+      # `hashFiles('libsalam_llvm.a')`, which would read and hash a
+      # multi-hundred-MB archive just to decide whether to run apt.
+      - name: Install LLVM link-time system libs
+        if: runner.os == 'Linux'
+        run: |
+          set -u
+          sudo apt-get install -y zlib1g-dev libzstd-dev || true
+
       - name: Bootstrap stage1 -> stage2 -> stage3
         run: |
           set -eu
           sh compiler/tools/bash/bootstrap.sh "$HOME/.salam/bin/salam" build/selfhost
+
+      # Records which backend stage2 actually got, so a silent downgrade to
+      # the C backend is visible in the log rather than only showing up as a
+      # parity number weeks later.
+      - name: Report stage2 backend
+        env:
+          SALAM_STD: ${{ github.workspace }}/std
+        run: |
+          set -eu
+          sh=build/selfhost/salam-stage2
+          printf 'func main:\n    println "backend-probe"\nend\n' > probe.salam
+          if "$sh" build probe.salam --output=probe_exe --log-level=info 2>&1 |
+            grep -qi "generating LLVM IR"; then
+            echo "stage2 backend: LLVM (in-process)"
+          else
+            echo "stage2 backend: C (no static LLVM linked in)"
+          fi
+          rm -f probe.salam probe_exe
 
       - name: Smoke-test the self-hosted compiler
         env:

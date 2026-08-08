@@ -1,0 +1,166 @@
+package lexer
+
+import co "../sal_core.salam"
+import tok "../token.salam"
+import lg "../logger.salam"
+import i18n "../i18n.salam"
+
+// ===== lexer_cursor.c =====
+// LX_POS(L)
+func lx_pos(L &: Lx): co.SrcPos:
+    ret co.MakePos(L.line as u32, L.col as u32, L.pos as u32)
+end
+
+func peek(L &: Lx): int:
+    if L.pos < L.n:
+        ret byte_at(L.s, L.pos)
+    end
+    ret 0
+end
+
+func peek2(L &: Lx, k: int): int:
+    if L.pos + k < L.n:
+        ret byte_at(L.s, L.pos + k)
+    end
+    ret 0
+end
+
+func at_end(L &: Lx): bool:
+    ret L.pos >= L.n
+end
+
+// lx_adv (void variant; see advc for the value-returning C shape)
+func adv(L &: Lx):
+    c := byte_at(L.s, L.pos)
+    L.pos += 1
+    if c == 10:
+        L.line += 1
+        L.col = 1
+    else:
+        L.col += 1
+    end
+end
+
+// lx_adv when the consumed byte is needed
+func advc(L &: Lx): int:
+    c := byte_at(L.s, L.pos)
+    adv(L)
+    ret c
+end
+
+// lx_slice (arena_strndup -> substr copy)
+func lex_slice(L &: Lx, start: int): str:
+    ret L.s.substr(start, L.pos - start)
+end
+
+// lx_match ("match" is a Salam keyword)
+func match_ch(L &: Lx, c: int): bool:
+    if peek(L) == c:
+        adv(L)
+        ret true
+    end
+    ret false
+end
+
+func skip_ident(L &: Lx):
+    until is_ident_cont(peek(L)):
+        adv(L)
+    end
+end
+
+func skip_to_eol(L &: Lx):
+    until !at_end(L) && peek(L) != 10:
+        adv(L)
+    end
+end
+
+func at_digit(L &: Lx, k: int): int:
+    p := L.pos + k
+    if p >= L.n:
+        ret 0
+    end
+    mut val := 0
+    ret decimal_digit_at(L.s, p, L.n - p, val)
+end
+
+func take_digit(L &: Lx): int:
+    if L.pos >= L.n:
+        ret 0 - 1
+    end
+    mut val := 0
+    len := decimal_digit_at(L.s, L.pos, L.n - L.pos, val)
+    if len == 0:
+        ret 0 - 1
+    end
+    repeat len:
+        adv(L)
+    end
+    ret val
+end
+
+// lx_consume_hex (return value was never used; dropped)
+func consume_hex(L &: Lx, maxn: int):
+    mut n := 0
+    until n < maxn && !at_end(L) && hexval(peek(L)) >= 0:
+        adv(L)
+        n += 1
+    end
+end
+
+// lx_trim_ws_end
+func trim_ws_end(s: str, start: int, stop: int): int:
+    mut e := stop
+    until e > start:
+        c := byte_at(s, e - 1)
+        if c == 32 || c == 9 || c == 13:
+            e -= 1
+        else:
+            break
+        end
+    end
+    ret e
+end
+
+// lx_emit_val
+func emit_val(L &: Lx, kind: int, b: co.SrcPos, lexeme: str, v: tok.TokenValue):
+    mut t := tok.New(kind, lexeme)
+    t.layout_mode = L.layout_mode
+    t.value = v
+    t.begin_line = b.line
+    t.begin_col = b.col
+    t.begin_index = b.index
+    t.end_line = L.line as u32
+    t.end_col = L.col as u32
+    t.end_index = L.pos as u32
+    t.length = (L.pos as u32) - b.index
+    L.toks.push(t)
+    L.last = kind
+    L.has_last = true
+    if lg.Enabled(L.lgr, lg.LOG_TRACE):
+        lg.LogAt(
+            L.lgr, lg.PH_LEXER, lg.LOG_TRACE, L.file, b.line as int, b.col as int, "token recognized: " + tok.KindName(kind) + " '" + lexeme + "'"
+        )
+    end
+end
+
+// lx_emit
+func emit(L &: Lx, kind: int, b: co.SrcPos, lexeme: str):
+    emit_val(L, kind, b, lexeme, tok.ValueNone())
+end
+
+// lx_error - LOG_E_AT(..., "%s", i18n_tr(msg)) via the plain logger path
+func error_at(L &: Lx, at: co.SrcPos, msg: str):
+    L.had_error = true
+    lg.LogAt(
+        L.lgr, lg.PH_LEXER, lg.LOG_ERROR, L.file, at.line as int, at.col as int, i18n.Tr(msg)
+    )
+end
+
+// lx_expect (bool return was never used; dropped)
+func expect(L &: Lx, close: int, b: co.SrcPos, errmsg: str):
+    if peek(L) == close:
+        adv(L)
+        ret
+    end
+    error_at(L, b, errmsg)
+end

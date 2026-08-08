@@ -1,0 +1,676 @@
+package interp
+
+import str
+import time
+import mem
+import co "../sal_core.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import i18 "../i18n.salam"
+import sm "../semantic/semantic.salam"
+
+// Unsigned byte read from a str (same idiom as the other ports).
+inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
+
+// &node->span - rebuild a co.SrcSpan from the node's inlined span fields.
+func span_of(a &: at.Ast, id: int): co.SrcSpan:
+    n := at.Get(a, id)
+    ret co.MakeSpan(
+        co.MakePos(n.begin_line, n.begin_col, n.begin_index), co.MakePos(n.end_line, n.end_col, n.end_index),
+        n.length
+    )
+end
+
+// C-locale isspace (strtol's whitespace skip).
+func is_c_space(c: int): bool:
+    ret c == 32 || (c >= 9 && c <= 13)
+end
+
+// Bit pattern of a double (the C memcpy'd into a uint64_t).
+func f64_bits(d: f64): u64:
+    p := mem.Allocate(8 as u64)
+    dp := p as f64*
+    dp[0] = d
+    up := p as u64*
+    bits := up[0]
+    mem.Free(p)
+    ret bits
+end
+
+// ===========================================================================
+// ===== interp.c =====
+// ===========================================================================
+
+// rt_error with a NULL node (tick's timeout). Keeps the FIRST error, like
+// the C longjmp which never came back for a second one.
+func rt_fail(ip &: Interp, msg: str):
+    if ip.failed:
+        ret
+    end
+    ip.failed = true
+    ip.errmsg = msg
+end
+
+// rt_error - `msg` is pre-translated/pre-formatted at the call site with
+// i18.Tr + co.FormatN (the C ran i18n_tr on the format internally).
+func rt_error(ip &: Interp, a &: at.Ast, n: int, msg: str):
+    if ip.failed:
+        ret
+    end
+    ip.failed = true
+    ip.errmsg = msg
+    if n != 0:
+        ip.errspan = span_of(a, n)
+        ip.have_errspan = true
+    end
+end
+
+func tick(ip &: Interp):
+    ip.steps = ip.steps + (1 as u64)
+    if (ip.steps & (0xFFFFF as u64)) == (0 as u64) && ip.deadline_ms != (0 as i64) && time.NowMillis() > ip.deadline_ms:
+        rt_fail(ip, i18.Tr("execution timed out (possible infinite loop)"))
+    end
+end
+
+// itab_hash - FNV-1a.
+func itab_hash(s: str): u64:
+    mut h := 1469598103934665603 as u64
+    n := str.Len(s)
+    repeat n with i:
+        h = h ^ (byte_at(s, i) as u64)
+        h = h * (1099511628211 as u64)
+    end
+    ret h
+end
+
+// ptab_hash - splitmix-style avalanche of the (former pointer) key.
+func ptab_hash(k: int): u64:
+    mut x := k as u64
+    x = x ^ (x >> (33 as u64))
+    x = x * (0xff51afd7ed558ccd as u64)
+    x = x ^ (x >> (33 as u64))
+    ret x
+end
+
+func itab_grow(t &: Itab, want: int):
+    ok := t.keys
+    defer ok.free()
+    ov := t.vals
+    defer ov.free()
+    oc := t.cap
+    mut nc := 16
+    until nc < want * 2:
+        nc *= 2
+    end
+    mut nk := Vector {} as Vector<str>
+    mut nv := Vector {} as Vector<int>
+    repeat nc:
+        nk.push("")
+        nv.push(0)
+    end
+    t.keys = nk
+    t.vals = nv
+    t.cap = nc
+    mask := nc - 1
+    repeat oc with i:
+        k := ok.get(i)[0]
+        if str.Len(k) == 0:
+            continue
+        end
+        mut j := (itab_hash(k) & (mask as u64)) as int
+        until str.Len(t.keys.get(j)[0]) != 0:
+            j = (j + 1) & mask
+        end
+        t.keys.set(j, k)
+        t.vals.set(j, ov.get(i)[0])
+    end
+end
+
+// Returns the stored val, 0 when absent (the C returned NULL; no table
+// stores 0 - every handle/NodeId val is >= 1).
+func itab_get(t: Itab, key: str): int:
+    if t.cap == 0:
+        ret 0
+    end
+    mask := t.cap - 1
+    mut i := (itab_hash(key) & (mask as u64)) as int
+    until str.Len(t.keys.get(i)[0]) != 0:
+        if str.Equals(t.keys.get(i)[0], key):
+            ret t.vals.get(i)[0]
+        end
+        i = (i + 1) & mask
+    end
+    ret 0
+end
+
+// First put wins (the C itab_put returned without overwriting).
+func itab_put(t &: Itab, key: str, val: int):
+    if (t.count + 1) * 4 >= t.cap * 3:
+        itab_grow(t, t.count + 1)
+    end
+    mask := t.cap - 1
+    mut i := (itab_hash(key) & (mask as u64)) as int
+    until str.Len(t.keys.get(i)[0]) != 0:
+        if str.Equals(t.keys.get(i)[0], key):
+            ret
+        end
+        i = (i + 1) & mask
+    end
+    t.keys.set(i, key)
+    t.vals.set(i, val)
+    t.count += 1
+end
+
+func ptab_get(t: Ptab, key: int): int:
+    if t.cap == 0:
+        ret 0
+    end
+    mask := t.cap - 1
+    mut i := (ptab_hash(key) & (mask as u64)) as int
+    until t.keys.get(i)[0] != 0:
+        if t.keys.get(i)[0] == key:
+            ret t.vals.get(i)[0]
+        end
+        i = (i + 1) & mask
+    end
+    ret 0
+end
+
+func ptab_put(t &: Ptab, key: int, val: int):
+    if (t.count + 1) * 4 >= t.cap * 3:
+        ok := t.keys
+        ov := t.vals
+        oc := t.cap
+        mut nc := 16
+        until nc < (t.count + 1) * 2:
+            nc *= 2
+        end
+        mut nk := Vector {} as Vector<int>
+        mut nv := Vector {} as Vector<int>
+        repeat nc:
+            nk.push(0)
+            nv.push(0)
+        end
+        t.keys = nk
+        t.vals = nv
+        t.cap = nc
+        m2 := nc - 1
+        repeat oc with i0:
+            k0 := ok.get(i0)[0]
+            if k0 == 0:
+                continue
+            end
+            mut j := (ptab_hash(k0) & (m2 as u64)) as int
+            until t.keys.get(j)[0] != 0:
+                j = (j + 1) & m2
+            end
+            t.keys.set(j, k0)
+            t.vals.set(j, ov.get(i0)[0])
+        end
+        ok.free()
+        ov.free()
+    end
+    mask := t.cap - 1
+    mut i := (ptab_hash(key) & (mask as u64)) as int
+    until t.keys.get(i)[0] != 0:
+        if t.keys.get(i)[0] == key:
+            ret
+        end
+        i = (i + 1) & mask
+    end
+    t.keys.set(i, key)
+    t.vals.set(i, val)
+    t.count += 1
+end
+
+func env_new(ip &: Interp, parent: int): int:
+    id := ip.envs.len()
+    ip.envs.push(Env { parent = parent })
+    ret id
+end
+
+// env_find_local - binding slot index inside `e`, -1 when absent.
+func env_find_local(ip &: Interp, e: int, name: str): int:
+    en := ip.envs.get(e)[0]
+    repeat en.names.len() with i:
+        if str.Equals(en.names.get(i)[0], name):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+// env_find - walks the parent chain; returns the slot and stores the owning
+// EnvId in `where` (-1/0 when absent). The C returned the binding pointer.
+func env_find(ip &: Interp, e0: int, name: str, where &: int): int:
+    mut e := e0
+    until e != 0:
+        slot := env_find_local(ip, e, name)
+        if slot >= 0:
+            where = e
+            ret slot
+        end
+        en := ip.envs.get(e)[0]
+        e = en.parent
+    end
+    where = 0
+    ret 0 - 1
+end
+
+func env_slot_val(ip &: Interp, e: int, slot: int): Value:
+    en := ip.envs.get(e)[0]
+    ret en.vals.get(slot)[0]
+end
+
+func env_slot_set(ip &: Interp, e: int, slot: int, v: Value):
+    mut en := ip.envs.get(e)[0]
+    en.vals.set(slot, v)
+    ip.envs.set(e, en)
+end
+
+func env_define(ip &: Interp, e: int, name: str, v: Value):
+    slot := env_find_local(ip, e, name)
+    if slot >= 0:
+        env_slot_set(ip, e, slot, v)
+        ret
+    end
+    mut en := ip.envs.get(e)[0]
+    en.names.push(name)
+    en.vals.push(v)
+    ip.envs.set(e, en)
+end
+
+func find_struct(ip &: Interp, name: str): int:
+    ret itab_get(ip.tab_structs, name)
+end
+
+func find_enum(ip &: Interp, name: str): int:
+    ret itab_get(ip.tab_enums, name)
+end
+
+func register_func(ip &: Interp, a &: at.Ast, f: int):
+    ip.funcs.push(f)
+    fn := at.Get(a, f)
+    if str.Len(fn.name) == 0:
+        ret
+    end
+    mut li := itab_get(ip.tab_funcs, fn.name)
+    if li == 0:
+        li = ip.fnlists.len()
+        ip.fnlists.push(FuncList {})
+        mut t := ip.tab_funcs
+        itab_put(t, fn.name, li)
+        ip.tab_funcs = t
+    end
+    mut fl := ip.fnlists.get(li)[0]
+    fl.nodes.push(f)
+    ip.fnlists.set(li, fl)
+end
+
+// find_func - exact param-count match, else the first overload. Call with
+// nargs = -1 (the C passed (size_t)-1) to take the first one (entry lookup).
+func find_func(ip &: Interp, a &: at.Ast, name: str, nargs: int): int:
+    li := itab_get(ip.tab_funcs, name)
+    if li == 0:
+        ret 0
+    end
+    fl := ip.fnlists.get(li)[0]
+    if fl.nodes.len() == 0:
+        ret 0
+    end
+    repeat fl.nodes.len() with i:
+        f := fl.nodes.get(i)[0]
+        if at.ChildCount(a, f) == nargs:
+            ret f
+        end
+    end
+    ret fl.nodes.get(0)[0]
+end
+
+func find_module(ip &: Interp, name: str): int:
+    ret itab_get(ip.tab_modules, name)
+end
+
+// find_extern_fn - index into ip.extern_fns (0 = none; the C returned the
+// boxed value_t*).
+func find_extern_fn(ip &: Interp, name: str): int:
+    ret itab_get(ip.tab_extern_fns, name)
+end
+
+func find_extern_decl(ip &: Interp, name: str): int:
+    ret itab_get(ip.tab_extern_decls, name)
+end
+
+func struct_method(a &: at.Ast, sdef: int, name: str): int:
+    repeat at.ChildCount(a, sdef) with i:
+        m := at.Child(a, sdef, i)
+        mn := at.Get(a, m)
+        if mn.kind == at.AST_FUNC_DEF && str.Len(mn.name) != 0 && str.Equals(mn.name, name):
+            ret m
+        end
+    end
+    ret 0
+end
+
+func struct_method_arity(a &: at.Ast, sdef: int, name: str, nparams: int): int:
+    repeat at.ChildCount(a, sdef) with i:
+        m := at.Child(a, sdef, i)
+        mn := at.Get(a, m)
+        if mn.kind == at.AST_FUNC_DEF && str.Len(mn.name) != 0 && str.Equals(mn.name, name) && mn.list.len() == nparams:
+            ret m
+        end
+    end
+    ret 0
+end
+
+func find_impl_method(
+    ip &: Interp, a &: at.Ast, typestr: str, method: str, nargs: int
+): int:
+    if str.Len(typestr) == 0:
+        ret 0
+    end
+    repeat ip.impls.len() with i:
+        d := ip.impls.get(i)[0]
+        dn := at.Get(a, d)
+        if dn.ty == 0:
+            continue
+        end
+        tn := at.Get(a, dn.ty)
+        if !str.Equals(tn.type_str, typestr):
+            continue
+        end
+        mut m := struct_method_arity(a, d, method, nargs)
+        if m == 0:
+            m = struct_method(a, d, method)
+        end
+        if m != 0:
+            ret m
+        end
+    end
+    ret 0
+end
+
+func register_def_env_one(ip &: Interp, def: int, env: int):
+    ip.def_env_defs.push(def)
+    ip.def_env_envs.push(env)
+    mut t := ip.tab_def_envs
+    ptab_put(t, def, env)
+    ip.tab_def_envs = t
+end
+
+func register_method_envs(ip &: Interp, a &: at.Ast, def: int, env: int):
+    register_def_env_one(ip, def, env)
+    repeat at.ChildCount(a, def) with i:
+        m := at.Child(a, def, i)
+        if at.KindOf(a, m) != at.AST_FUNC_DEF:
+            continue
+        end
+        register_def_env_one(ip, m, env)
+    end
+end
+
+func find_def_env(ip &: Interp, def: int): int:
+    ret ptab_get(ip.tab_def_envs, def)
+end
+
+func register_extern_decl(ip &: Interp, a &: at.Ast, env: int, d: int):
+    dn := at.Get(a, d)
+    if dn.a != 0:
+        cl := mk_closure(ip, d, env)
+        idx := ip.extern_fns.len()
+        ip.extern_fns.push(cl)
+        if str.Len(dn.name) != 0:
+            mut t := ip.tab_extern_fns
+            itab_put(t, dn.name, idx)
+            ip.tab_extern_fns = t
+        end
+        if str.Len(dn.name) != 0 && env_find_local(ip, env, dn.name) < 0:
+            env_define(ip, env, dn.name, cl)
+        end
+    else:
+        ip.extern_decls.push(d)
+        if str.Len(dn.name) != 0:
+            mut t2 := ip.tab_extern_decls
+            itab_put(t2, dn.name, d)
+            ip.tab_extern_decls = t2
+        end
+    end
+end
+
+func collect_decls(ip &: Interp, a &: at.Ast, program: int):
+    repeat at.ChildCount(a, program) with i:
+        d := at.Child(a, program, i)
+        dn := at.Get(a, d)
+        if dn.kind == at.AST_FUNC_DEF:
+            if dn.is_extern:
+                register_extern_decl(ip, a, ip.globals, d)
+            else:
+                register_func(ip, a, d)
+            end
+        else dn.kind == at.AST_STRUCT_DEF:
+            ip.structs.push(d)
+            if str.Len(dn.name) != 0:
+                mut t := ip.tab_structs
+                itab_put(t, dn.name, d)
+                ip.tab_structs = t
+            end
+            if !dn.synthetic:
+                register_method_envs(ip, a, d, ip.globals)
+            end
+        else dn.kind == at.AST_ENUM_DEF:
+            ip.enums.push(d)
+            if str.Len(dn.name) != 0:
+                mut t2 := ip.tab_enums
+                itab_put(t2, dn.name, d)
+                ip.tab_enums = t2
+            end
+        else dn.kind == at.AST_IMPL_DEF:
+            ip.impls.push(d)
+            if !dn.synthetic:
+                register_method_envs(ip, a, d, ip.globals)
+            end
+        else dn.kind == at.AST_CONST_DECL || dn.kind == at.AST_VAR_DECL:
+            v := dn.a != 0 ? eval(ip, a, ip.globals, dn.a) : val_null()
+            env_define(ip, ip.globals, dn.name, v)
+            if ip.failed:
+                ret
+            end
+        end
+    end
+    repeat ip.funcs.len() with j:
+        f := ip.funcs.get(j)[0]
+        fn := at.Get(a, f)
+        if str.Len(fn.name) != 0 && env_find_local(ip, ip.globals, fn.name) < 0:
+            env_define(ip, ip.globals, fn.name, mk_closure(ip, f, ip.globals))
+        end
+    end
+end
+
+func collect_module_funcs(ip &: Interp, a &: at.Ast, mid: int, prog: int):
+    md := ip.mods.get(mid)[0]
+    repeat at.ChildCount(a, prog) with i:
+        d := at.Child(a, prog, i)
+        dn := at.Get(a, d)
+        if dn.kind == at.AST_FUNC_DEF:
+            if dn.is_extern:
+                register_extern_decl(ip, a, md.env, d)
+            else str.Len(dn.name) != 0 && env_find_local(ip, md.env, dn.name) < 0:
+                env_define(ip, md.env, dn.name, mk_closure(ip, d, md.env))
+            end
+        else dn.kind == at.AST_STRUCT_DEF:
+            if find_struct(ip, dn.name) == 0:
+                ip.structs.push(d)
+                if str.Len(dn.name) != 0:
+                    mut t := ip.tab_structs
+                    itab_put(t, dn.name, d)
+                    ip.tab_structs = t
+                end
+                if !dn.synthetic:
+                    register_method_envs(ip, a, d, md.env)
+                end
+            end
+        else dn.kind == at.AST_ENUM_DEF:
+            if find_enum(ip, dn.name) == 0:
+                ip.enums.push(d)
+                if str.Len(dn.name) != 0:
+                    mut t2 := ip.tab_enums
+                    itab_put(t2, dn.name, d)
+                    ip.tab_enums = t2
+                end
+            end
+        else dn.kind == at.AST_IMPL_DEF:
+            ip.impls.push(d)
+            if !dn.synthetic:
+                register_method_envs(ip, a, d, md.env)
+            end
+        end
+    end
+end
+
+func wire_imports(ip &: Interp, sem &: sm.Sema, env: int, scope: int):
+    if scope == 0:
+        ret
+    end
+    sc := sm.ScopeAt(sem, scope)
+    repeat sc.symbols.len() with i:
+        symid := sc.symbols.get(i)[0]
+        sy := sm.SymAt(sem, symid)
+        if sy.kind != sm.SYM_PACKAGE || str.Len(sy.pkgname) == 0:
+            continue
+        end
+        target := find_module(ip, sy.pkgname)
+        if target != 0:
+            env_define(ip, env, sy.name, val_module(target))
+        end
+    end
+end
+
+func eval_module_consts(ip &: Interp, a &: at.Ast, mid: int, prog: int):
+    md := ip.mods.get(mid)[0]
+    repeat at.ChildCount(a, prog) with i:
+        d := at.Child(a, prog, i)
+        dn := at.Get(a, d)
+        if dn.kind == at.AST_CONST_DECL || dn.kind == at.AST_VAR_DECL:
+            env_define(
+                ip, md.env, dn.name, dn.a != 0 ? eval(ip, a, md.env, dn.a) : val_null()
+            )
+            if ip.failed:
+                ret
+            end
+        end
+    end
+end
+
+// Package symbol's display name (pk->pkgname ? : pk->decl->name).
+func pkg_name_of(a &: at.Ast, sem &: sm.Sema, pkid: int): str:
+    pk := sm.SymAt(sem, pkid)
+    if str.Len(pk.pkgname) != 0:
+        ret pk.pkgname
+    end
+    if pk.decl != 0:
+        dn := at.Get(a, pk.decl)
+        ret dn.name
+    end
+    ret ""
+end
+
+func build_modules(ip &: Interp, a &: at.Ast, sem &: sm.Sema):
+    npk := sm.PackageCount(sem)
+    repeat npk with i:
+        pkid := sm.PackageAt(sem, i)
+        pk := sm.SymAt(sem, pkid)
+        name := pkg_name_of(a, sem, pkid)
+        if str.Len(name) == 0 || pk.decl == 0 || find_module(ip, name) != 0:
+            continue
+        end
+        menv := env_new(ip, 0)
+        mid := ip.mods.len()
+        ip.mods.push(Module { name = name, env = menv })
+        mut t := ip.tab_modules
+        itab_put(t, name, mid)
+        ip.tab_modules = t
+        collect_module_funcs(ip, a, mid, pk.decl)
+    end
+    repeat npk with i2:
+        pkid2 := sm.PackageAt(sem, i2)
+        pk2 := sm.SymAt(sem, pkid2)
+        name2 := pkg_name_of(a, sem, pkid2)
+        mid2 := str.Len(name2) != 0 ? find_module(ip, name2) : 0
+        if mid2 != 0:
+            md := ip.mods.get(mid2)[0]
+            wire_imports(ip, sem, md.env, pk2.members)
+        end
+    end
+    wire_imports(ip, sem, ip.globals, sem.global)
+    repeat npk with i3:
+        pkid3 := sm.PackageAt(sem, i3)
+        pk3 := sm.SymAt(sem, pkid3)
+        name3 := pkg_name_of(a, sem, pkid3)
+        mid3 := str.Len(name3) != 0 ? find_module(ip, name3) : 0
+        if mid3 != 0 && pk3.decl != 0:
+            eval_module_consts(ip, a, mid3, pk3.decl)
+            if ip.failed:
+                ret
+            end
+        end
+    end
+end
+
+func fixup_generic_envs_in(
+    ip &: Interp, a &: at.Ast, sem &: sm.Sema, defs: Vector<int>
+):
+    repeat defs.len() with i:
+        d := defs.get(i)[0]
+        dn := at.Get(a, d)
+        if !dn.synthetic || str.Len(dn.name) == 0 || find_def_env(ip, d) != 0:
+            continue
+        end
+        symid := sm.Lookup(sem, sem.global, dn.name)
+        if symid == 0:
+            continue
+        end
+        sy := sm.SymAt(sem, symid)
+        if str.Len(sy.generic_base) == 0:
+            continue
+        end
+        repeat defs.len() with j:
+            bd := defs.get(j)[0]
+            if bd == d:
+                continue
+            end
+            bn := at.Get(a, bd)
+            if bn.synthetic || str.Len(bn.name) == 0:
+                continue
+            end
+            if !str.Equals(bn.name, sy.generic_base):
+                continue
+            end
+            base_env := find_def_env(ip, bd)
+            if base_env != 0:
+                register_method_envs(ip, a, d, base_env)
+            end
+            break
+        end
+    end
+end
+
+func fixup_generic_envs(ip &: Interp, a &: at.Ast, sem &: sm.Sema):
+    fixup_generic_envs_in(ip, a, sem, ip.structs)
+    fixup_generic_envs_in(ip, a, sem, ip.impls)
+end
+
+// The C interp_run's setjmp branch (runtime-error report), shared by Run.
+func run_fail(ip &: Interp): int:
+    if ip.have_errspan:
+        lg.Log(
+            ip.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                i18.Tr("runtime error at line %u: %s"), co.ArgUint(ip.errspan.begin.line as u64), co.ArgStr(ip.errmsg)
+            )
+        )
+    else:
+        lg.Log(
+            ip.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("runtime error: %s"), co.ArgStr(ip.errmsg))
+        )
+    end
+    ret 1
+end

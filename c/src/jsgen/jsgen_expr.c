@@ -1617,6 +1617,10 @@ const char *jsg_expr_p(jg_t *g, ast_node_t *n, int minprec)
             }
             if (!strcmp(dts, "str") && strcmp(sts, "str") != 0)
                 return cg_fmt(cg, "String(%s)", jsg_expr_p(g, n->a, 0));
+            /* Reinterpreting a string as a byte pointer; see __salam_str_bytes
+             * in js_build.c's prelude for why identity is not good enough. */
+            if (dts[0] && dts[strlen(dts) - 1] == '*' && !strcmp(sts, "str"))
+                return cg_fmt(cg, "__salam_str_bytes(%s)", jsg_expr_p(g, n->a, 0));
             return jsg_expr_p(g, n->a, minprec);
         }
     }

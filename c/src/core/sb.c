@@ -36,9 +36,9 @@ static void sb_ensure(sb_t *s, size_t add)
     size_t need = salam_size_add(salam_size_add(s->len, add), 1);
     if (need <= s->cap) return;
     size_t ncap = salam_grow_cap(s->cap, need, 64);
-    char *nd = (char *)realloc(s->data, ncap);
-    if (!nd) abort();
-    s->data = nd;
+    char *newdata = (char *)realloc(s->data, ncap);
+    if (!newdata) abort();
+    s->data = newdata;
     s->cap = ncap;
 }
 

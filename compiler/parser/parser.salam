@@ -1,0 +1,115 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Flat merge of the salam/parser port (see salam/PORTING.md "Layout - FLAT"):
+// parser.c + parser.h + parser_internal.h + parser_cursor.c + parser_decl.c +
+// parser_decl_var.c + parser_expr.c + parser_expr_primary.c + parser_ffi.c +
+// parser_layout.c + parser_stmt.c + parser_type.c - one package `parser`,
+// one file. Import alias for consumers: `ps`.
+//
+// C differences (per salam/PORTING.md):
+// - parser_t -> struct Ps (private). The arena is gone; nodes live in a
+//   caller-provided ast.Ast (`a &: at.Ast` threaded through every rule, the
+//   way the C code threads `p->a`). ast_node_t* results are at.NodeId ints
+//   (0 = C NULL).
+// - parser_run -> Run(lgr, toks, a, out_program): fills `out_program` with
+//   the AST_PROGRAM node id and returns !had_error, exactly like the C bool.
+// - p_advance() drops its (rarely used) token return: call sites that needed
+//   the token read p_peek() first, like the lexer port's adv()/advc() split.
+// - p_comma_list (C function-pointer helper) is inlined at its two call
+//   sites (led_call argument lists, parse_type_func parameter types).
+// - p_name/p_munch_* return "<error>" like C; p_member_name returns "" where
+//   the C returned NULL.
+// - Error paths mirror LOG_E_AT(log, PH_PARSER, file, span,
+//   i18n_tr("%s (near '%s')"), i18n_tr(msg), lexeme) through logger.LogAt +
+//   core.Format2 (same i18n msgids, same final text).
+// - The node mutation protocol from salam/ast.salam applies: every write is
+//   get-copy -> mutate -> Put inside one helper, never across a call that
+//   can add nodes.
+package parser
+
+import tok "../token.salam"
+import at "../ast.salam"
+import lg "../logger.salam"
+import co "../sal_core.salam"
+
+// ===== parser_internal.h =====
+// #define P_MAX_DEPTH 128 (parser_cursor.c)
+const PS_MAX_DEPTH := 128
+
+// parser_t - token cursor + error state. The token stream is read through
+// p.toks; the Ast is a separate `a &: at.Ast` parameter everywhere.
+struct Ps:
+    pub toks: tok.TokenStream = tok.StreamNew("")
+    pub count: int = 0
+    pub pos: int = 0
+    pub file: str = ""
+    pub lgr: lg.Logger = lg.New(2, false)
+    pub had_error: bool = false
+    pub panic: bool = false
+    pub no_struct_lit: bool = false
+    pub no_with_word: bool = false
+    pub depth: int = 0
+    pub angle_pending: int = 0
+end
+
+// ---------------------------------------------------------------------------
+// Small shared helpers (no C equivalent: NodeId field writes need get/put).
+// ---------------------------------------------------------------------------
+
+inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
+
+func ps_set_a(a &: at.Ast, id: int, v: int):
+    mut n := at.Get(a, id)
+    n.a = v
+    at.Put(a, id, n)
+end
+
+func ps_set_b(a &: at.Ast, id: int, v: int):
+    mut n := at.Get(a, id)
+    n.b = v
+    at.Put(a, id, n)
+end
+
+func ps_set_c(a &: at.Ast, id: int, v: int):
+    mut n := at.Get(a, id)
+    n.c = v
+    at.Put(a, id, n)
+end
+
+func ps_set_d(a &: at.Ast, id: int, v: int):
+    mut n := at.Get(a, id)
+    n.d = v
+    at.Put(a, id, n)
+end
+
+// ast_new(kind, &other->span): new node whose span is copied from `src`.
+func mk_from_node(a &: at.Ast, kind: int, src: int): int:
+    s := at.Get(a, src)
+    id := at.NewNode(a, kind)
+    at.SetSpan(
+        a, id, s.begin_line, s.begin_col, s.begin_index, s.end_line, s.end_col, s.end_index, s.length
+    )
+    ret id
+end
+
+// n->span.end = src->span.end
+func ps_end_from_node(a &: at.Ast, id: int, src: int):
+    s := at.Get(a, src)
+    mut n := at.Get(a, id)
+    n.end_line = s.end_line
+    n.end_col = s.end_col
+    n.end_index = s.end_index
+    at.Put(a, id, n)
+end

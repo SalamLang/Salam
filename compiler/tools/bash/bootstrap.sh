@@ -19,7 +19,23 @@
 #   compiler/tools/bash/bootstrap.sh <seed-salam> [outdir] [--stages N]
 #
 # Env:
-#   SALAM_CC  C compiler the Salam driver shells out to (default: cc/gcc/clang)
+#   SALAM_CC   C compiler the Salam driver shells out to (default: cc/gcc/clang)
+#   SALAM_WITH_LLVM
+#              Statically link in-process LLVM/LLD into the self-hosted
+#              compiler, so it needs no clang/llvm/lld installed to build
+#              native code. Values:
+#                (unset)  auto - use it when libsalam_llvm.a is found
+#                1        require it - fail if the archive is missing
+#                0        never
+#   SALAM_LLVM_LIB
+#              Directory holding libsalam_llvm.a. Default: the repository
+#              root, where `make -C c libsalam-llvm` puts it.
+#
+# Why this is opt-in-by-detection rather than always on: libsalam_llvm.a is
+# produced by `make -C c libsalam-llvm WITH_LLVM=1 WITH_LLD=1`, which needs
+# LLVM development libraries on the machine. Without the archive the link
+# would fail, so a missing archive degrades to a compiler that shells out to
+# a C toolchain instead of failing the bootstrap.
 #
 # Run from the repository root. Exits non-zero if any stage fails to build
 # or the resulting binary cannot report its version.
@@ -101,12 +117,40 @@ export SALAM_STD="$ROOT/std"
 
 case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) EXE=.exe ;; *) EXE= ;; esac
 
+# In-process LLVM/LLD for the self-hosted compiler. compiler/llvm_bridge.salam
+# gates `import llvm` (std/llvm, which carries `link static "salam_llvm"`) on
+# the SALAM_HAVE_LLVM condcomp flag; without the -D it compiles the else arm
+# whose Available() returns false, and the built compiler has no LLVM at all.
+# That is why a plain bootstrap produces a stage2 that always falls back to
+# the C backend.
+LLVM_LIBDIR=${SALAM_LLVM_LIB:-$ROOT}
+LLVM_FLAGS=
+LLVM_STATE=off
+case "${SALAM_WITH_LLVM:-auto}" in
+0 | no | off)
+    LLVM_STATE="off (SALAM_WITH_LLVM=0)"
+    ;;
+*)
+    if [ -f "$LLVM_LIBDIR/libsalam_llvm.a" ]; then
+        LLVM_FLAGS="-DSALAM_HAVE_LLVM --libpath=$LLVM_LIBDIR"
+        LLVM_STATE="static in-process ($LLVM_LIBDIR/libsalam_llvm.a)"
+    elif [ "${SALAM_WITH_LLVM:-auto}" = auto ]; then
+        LLVM_STATE="off (no $LLVM_LIBDIR/libsalam_llvm.a; build it with 'make -C c libsalam-llvm WITH_LLVM=1 WITH_LLD=1')"
+    else
+        echo "error: SALAM_WITH_LLVM=${SALAM_WITH_LLVM} but $LLVM_LIBDIR/libsalam_llvm.a is missing." >&2
+        echo "       Build it with: make -C c libsalam-llvm WITH_LLVM=1 WITH_LLD=1" >&2
+        exit 2
+    fi
+    ;;
+esac
+
 echo "root   : $ROOT"
 echo "seed   : $SEED"
 "$SEED" version 2>&1 | head -1 || true
 echo "cc     : $SALAM_CC"
 echo "outdir : $OUTDIR"
 echo "stages : $STAGES"
+echo "llvm   : $LLVM_STATE"
 echo
 
 prev=$SEED
@@ -115,10 +159,20 @@ while [ "$stage" -le "$STAGES" ]; do
     out="$OUTDIR/salam-stage${stage}${EXE}"
     echo "== stage $stage: $(basename "$prev") builds compiler/main.salam =="
     start=$(date +%s 2>/dev/null || echo 0)
+    # LLVM flags go to stage 2 and later only. Stage 1 is built by the SEED,
+    # which is whatever `salam` the machine already has - typically an older
+    # release that does not know --libpath and would abort on it. Stage 1 is
+    # a throwaway parse-check anyway; stage 2 is the shipped artifact, and it
+    # is built by stage 1, which is current and does understand the flags.
+    stage_llvm=
+    if [ "$stage" -ge 2 ]; then
+        stage_llvm=$LLVM_FLAGS
+    fi
+    # shellcheck disable=SC2086 # $stage_llvm is a flag list; splitting is wanted
     (
         cd "$ROOT" &&
             "$prev" build compiler/main.salam \
-                --output="$out" --cc="$SALAM_CC" --log-level=error
+                --output="$out" --cc="$SALAM_CC" --log-level=error $stage_llvm
     ) || {
         echo "::error::stage $stage build failed" >&2
         exit 1

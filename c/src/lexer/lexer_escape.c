@@ -65,14 +65,14 @@ const char *lx_decode_string(lx_t *L, const char *lex, bool triple)
     size_t q = triple ? 3 : 1;
     if (lexlen < 2 * q) return arena_strdup(L->a, "");
     const char *c = lex + q;
-    size_t clen = lexlen - 2 * q;
-    char *out = (char *)arena_alloc(L->a, clen + 1);
+    size_t content_len = lexlen - 2 * q;
+    char *out = (char *)arena_alloc(L->a, content_len + 1);
     size_t oi = 0;
     {
         size_t i = 0;
-        for (; i < clen; i++) {
+        for (; i < content_len; i++) {
             char ch = c[i];
-            if (ch != '\\' || i + 1 >= clen) {
+            if (ch != '\\' || i + 1 >= content_len) {
                 out[oi++] = ch;
                 continue;
             }
@@ -81,8 +81,8 @@ const char *lx_decode_string(lx_t *L, const char *lex, bool triple)
             if (simple >= 0) {
                 out[oi++] = (char)simple;
             } else if (e == 'x') {
-                int hi = (i + 1 < clen) ? lx_hex(c[i + 1]) : -1;
-                int lo = (i + 2 < clen) ? lx_hex(c[i + 2]) : -1;
+                int hi = (i + 1 < content_len) ? lx_hex(c[i + 1]) : -1;
+                int lo = (i + 2 < content_len) ? lx_hex(c[i + 2]) : -1;
                 if (hi >= 0 && lo >= 0) {
                     out[oi++] = (char)(hi * 16 + lo);
                     i += 2;
@@ -92,7 +92,7 @@ const char *lx_decode_string(lx_t *L, const char *lex, bool triple)
             } else if (e == 'u' || e == 'U') {
                 uint32_t cp;
                 int width = (e == 'u') ? LX_ESC_HEX_U : LX_ESC_HEX_BIG_U;
-                int n = decode_hex_run(c + i + 1, clen - (i + 1), width, &cp);
+                int n = decode_hex_run(c + i + 1, content_len - (i + 1), width, &cp);
                 i += (size_t)n;
                 char tmp[4];
                 size_t nb = lx_utf8_encode(cp, tmp);

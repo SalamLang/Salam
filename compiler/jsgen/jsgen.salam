@@ -1,0 +1,180 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// Flat port of compiler/src/jsgen (see salam/PORTING.md "Layout - FLAT"):
+// jsgen.c + jsgen_expr.c + jsgen_stmt.c + jsgen_host.c - one package `jsgen`,
+// one file. Import alias for consumers: `jg`.
+//
+// C differences (per salam/PORTING.md):
+// - jsgen_run -> Run. The arena_t* is gone; jsgen_output_t is the pub Output
+//   struct filled through a ref param (create with NewOutput() - cross-package
+//   struct literals don't parse). The nullable minify_last / minify_keys /
+//   minify_vals pointers are always-present ref params ("" / caller vectors);
+//   Run copies the final state back before returning, so the driver can
+//   thread one name sequence through several modules exactly like the C.
+// - jg_t + the used slice of cg_t (codegen_internal.h) are merged into the
+//   package struct Jg. cg->c (sb_t*) is Jg.out, a str.StringBuilder that is
+//   swapped exactly where the C swaps sb pointers (function bodies, lambda
+//   bodies, match-expression IIFEs). cg fields jsgen never touches
+//   (h/safe/debug_info/lam_*/vec_types/dyn_*/deferred/...) are dropped.
+// - The cg_* helpers jsgen calls (codegen_emit.c / codegen_type.c /
+//   codegen_overload.c / codegen_expr.c's cg_op) are ported here as private
+//   helpers because the codegen module is not ported yet; they keep their C
+//   names. When codegen is ported it can lift them from here.
+// - ast_node_t* -> at.NodeId (0 = C NULL), symbol_t*/scope_t*/func_sig_t* ->
+//   sm.SymId/ScopeId/SigId (0 = C NULL), type_t* -> sm TypeId via Sig.params.
+// - `const char *` that can be NULL -> str with "" = NULL (jsg_emit_op_call /
+//   jsg_try_inline / jsg_template_concat return "" for "no result"; a real
+//   result is never empty).
+// - All byte scanning uses the unsigned-byte idiom (byte_at) like the other
+//   ports; ctype checks are the C-locale ASCII sets, so UTF-8 bytes >= 0x80
+//   are "not alnum" exactly like the C's isalnum((unsigned char)c).
+package jsgen
+
+import str
+import lg "../logger.salam"
+
+// JS operator precedences (jsgen_internal.h). JSP_PRIMARY/JSP_CALL exist in
+// the C header but are unused by the C sources, so they are not ported.
+const JSP_MEMBER := 17
+const JSP_UNARY := 15
+const JSP_TERNARY := 3
+const JSP_LAMBDA := 2
+
+// ===== jsgen_expr.c: static tables of jsg_reserved() =====
+k_js_kw := [
+    "arguments", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default",
+    "delete", "do", "else", "enum", "eval", "export", "extends", "false", "finally", "for", "function",
+    "if", "implements", "import", "in", "instanceof", "interface", "let", "new", "null", "of", "package",
+    "private", "protected", "public", "return", "static", "super", "switch", "this", "throw", "true",
+    "try", "typeof", "undefined", "var", "void", "while", "with", "yield"
+] as str[50]
+
+k_js_hostg := [
+    "document", "window", "console", "Math", "JSON", "String", "Number", "Boolean", "Array", "Object",
+    "Error", "Date", "Promise", "Symbol", "Map", "Set", "globalThis", "performance", "navigator", "location",
+    "fetch", "alert", "confirm", "prompt", "parseInt", "parseFloat", "isNaN", "isFinite", "getComputedStyle",
+    "requestAnimationFrame", "setTimeout", "setInterval", "clearTimeout", "clearInterval"
+] as str[34]
+
+k_js_runtime := [
+    "salam_panic", "__salam_unsupported", "salam_input", "salam_strcat", "salam_str_hash", "salam_hash_int",
+    "fmod", "sqrt", "cbrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "log2",
+    "log10", "floor", "ceil", "round", "trunc", "hypot", "fabs", "pow"
+] as str[27]
+
+// ===== codegen_type.c: cg_is_c_keyword() table =====
+k_js_ckw := [
+    "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum",
+    "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return",
+    "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void",
+    "volatile", "while", "asm", "bool", "true", "false", "_Bool", "_Complex", "_Imaginary", "_Alignas",
+    "_Alignof", "_Atomic", "_Generic", "_Noreturn", "_Static_assert", "_Thread_local"
+] as str[48]
+
+// ===== jsgen_host.c: k_js_host[] (name/template pairs, split) =====
+k_js_host_names := [
+    "salam_js_query", "salam_js_query_all", "salam_js_by_id", "salam_js_id_exists", "salam_js_create",
+    "salam_js_body", "salam_js_document", "salam_js_window", "salam_js_global", "salam_js_append", "salam_js_remove",
+    "salam_js_set_text", "salam_js_get_text", "salam_js_set_html", "salam_js_set_value", "salam_js_get_value",
+    "salam_js_set_style", "salam_js_get_style", "salam_js_set_attr", "salam_js_get_attr", "salam_js_add_class",
+    "salam_js_remove_class", "salam_js_toggle_class", "salam_js_on", "salam_js_on_e", "salam_js_on_opts",
+    "salam_js_off", "salam_js_on_window", "salam_js_on_window_e", "salam_js_on_ready", "salam_js_on_resize",
+    "salam_js_raf", "salam_js_set_timeout", "salam_js_set_interval", "salam_js_clear_timeout", "salam_js_clear_interval",
+    "salam_js_win_width", "salam_js_win_height", "salam_js_doc_width", "salam_js_doc_height", "salam_js_scroll_x",
+    "salam_js_scroll_y", "salam_js_now", "salam_js_get_prop", "salam_js_get_num", "salam_js_get_str",
+    "salam_js_get_bool", "salam_js_set_prop", "salam_js_call", "salam_js_get_context", "salam_js_item_at",
+    "salam_js_count_of", "salam_js_event_target", "salam_js_event_x", "salam_js_event_y", "salam_js_event_key",
+    "salam_js_prevent_default", "salam_js_stop_propagation", "salam_js_alert", "salam_js_confirm", "salam_js_prompt",
+    "salam_js_set_title", "salam_js_every_frame", "salam_js_random", "salam_js_tone", "salam_js_load_image",
+    "salam_js_img_ready", "salam_js_lsget_i", "salam_js_lsset_i", "salam_js_lsget_s", "salam_js_lsset_s",
+    "salam_js_touch_x", "salam_js_touch_y", "salam_js_canvas_ctx", "salam_js_ctx_of", "salam_js_canvas_w",
+    "salam_js_canvas_h", "salam_js_fill_style", "salam_js_stroke_style", "salam_js_line_width", "salam_js_font",
+    "salam_js_text_align", "salam_js_global_alpha", "salam_js_fill_rect", "salam_js_stroke_rect", "salam_js_clear_rect",
+    "salam_js_round_rect", "salam_js_begin_path", "salam_js_close_path", "salam_js_move_to", "salam_js_line_to",
+    "salam_js_arc", "salam_js_path_fill", "salam_js_path_stroke", "salam_js_fill_text", "salam_js_ctx_save",
+    "salam_js_ctx_restore", "salam_js_translate", "salam_js_rotate", "salam_js_scale", "salam_js_draw_image",
+    "salam_js_new_promise", "salam_js_new", "salam_js_invoke", "salam_js_is_nullish", "salam_js_null", "salam_js_undefined",
+    "salam_js_to_str", "salam_js_to_num", "salam_js_to_bool", "salam_js_typeof", "salam_js_array0", "salam_js_obj0",
+    "strcmp"
+] as str[114]
+
+k_js_host_tmpls := [
+    "document.querySelector(%0)", "Array.from(document.querySelectorAll(%0))", "document.getElementById(%0)",
+    "(document.getElementById(%0) !== null)", "document.createElement(%0)", "document.body", "document",
+    "window", "globalThis[%0]", "%0.appendChild(%1)", "%0.remove()", "(%0.textContent = %1)", `String(%0.textContent || "")`,
+    "(%0.innerHTML = %1)", "(%0.value = %1)", `String(%0.value || "")`, "%0.style.setProperty(%1, %2)",
+    "String(getComputedStyle(%0).getPropertyValue(%1))", "%0.setAttribute(%1, %2)", `String(%0.getAttribute(%1) || "")`,
+    "%0.classList.add(%1)", "%0.classList.remove(%1)", "%0.classList.toggle(%1)", "%0.addEventListener(%1, %2)",
+    "%0.addEventListener(%1, %2)", "%0.addEventListener(%1, %2, %3)", "%0.removeEventListener(%1, %2)",
+    "window.addEventListener(%0, %1)", "window.addEventListener(%0, %1)", `document.addEventListener("DOMContentLoaded", %0)`,
+    `window.addEventListener("resize", %0)`, "requestAnimationFrame(%0)", "setTimeout(%0, %1)", "setInterval(%0, %1)",
+    "clearTimeout(%0)", "clearInterval(%0)", "window.innerWidth", "window.innerHeight", "document.documentElement.clientWidth",
+    "document.documentElement.clientHeight", "window.scrollX", "window.scrollY", "performance.now()",
+    "%0[%1]", "Number(%0[%1] || 0)", `String(%0[%1] || "")`, "!!(%0[%1])", "(%0[%1] = %2)", "%0[%1](%+2)",
+    "%0.getContext(%1)", "%0[%1]", "Number(%0.length || 0)", "%0.target", "Number(%0.clientX || 0)",
+    "Number(%0.clientY || 0)", `String(%0.key || "")`, "%0.preventDefault()", "%0.stopPropagation()",
+    "window.alert(%0)", "window.confirm(%0)", `String(window.prompt(%0) || "")`, "(document.title = %0)",
+    "__sal_loop(%0)", "Math.random()", "__sal_tone(%0, %1)", "__sal_img(%0)", "!!(%0.complete && %0.naturalWidth > 0)",
+    "__sal_lsget_i(%0)", "__sal_lsset(%0, %1)", "__sal_lsget_s(%0)", "__sal_lsset(%0, %1)", "__sal_touch(%0, 0)",
+    "__sal_touch(%0, 1)", `document.getElementById(%0).getContext("2d")`, `%0.getContext("2d")`,
+    "Number(%0.canvas.width)", "Number(%0.canvas.height)", "(%0.fillStyle = %1)", "(%0.strokeStyle = %1)",
+    "(%0.lineWidth = %1)", "(%0.font = %1)", "(%0.textAlign = %1)", "(%0.globalAlpha = %1)", "%0.fillRect(%1, %2, %3, %4)",
+    "%0.strokeRect(%1, %2, %3, %4)", "%0.clearRect(%1, %2, %3, %4)", "__sal_rrect(%0, %1, %2, %3, %4, %5)",
+    "%0.beginPath()", "%0.closePath()", "%0.moveTo(%1, %2)", "%0.lineTo(%1, %2)", "%0.arc(%1, %2, %3, %4, %5)",
+    "%0.fill()", "%0.stroke()", "%0.fillText(%1, %2, %3)", "%0.save()", "%0.restore()", "%0.translate(%1, %2)",
+    "%0.rotate(%1)", "%0.scale(%1, %2)", "%0.drawImage(%1, %2, %3, %4, %5)",
+    "new Promise(%0)", "new %0(%+1)", "%0(%+1)", "(%0 === null || %0 === undefined)", "null", "undefined",
+    "String(%0)", "Number(%0)", "!!(%0)", "typeof %0", "[]", "{}",
+    "(%0 < %1 ? -1 : (%0 > %1 ? 1 : 0))"
+] as str[114]
+
+// ===== jsgen.h: jsgen_output_t =====
+pub struct Output:
+    pub module: str = ""
+    pub globals_src: str = ""
+    pub fn_names: Vector<str> = Vector {}
+    pub fn_texts: Vector<str> = Vector {}
+    pub entry_mangled: str = ""
+end
+
+// ===== jsgen_internal.h: jg_t (+ the cg_t slice jsgen uses) =====
+pub struct Jg:
+    // cg_t slice
+    pub log: lg.Logger = lg.New(lg.LOG_OFF, false)
+    pub module: str = ""
+    pub pkg: str = "main"
+    pub entry: str = "main"
+    pub compact: bool = false
+    pub out: str.StringBuilder = str.NewBuilder() // cg->c
+    pub indent: int = 0
+    pub locals: Vector<str> = Vector {}
+    pub cur_struct: int = 0 // SymId
+    pub cur_fn_home: int = 0 // ScopeId
+    pub tmpn: int = 0
+    pub fn_defers: Vector<int> = Vector {} // NodeIds
+    pub match_result_tmp: str = "" // "" = C NULL
+    pub match_end_label: str = "" // "" = C NULL
+    // jg_t
+    pub entry_mangled: str = ""
+    pub last_fn_name: str = ""
+    pub local_muts: Vector<int> = Vector {} // 0/1 parallel to locals
+    pub local_emit: Vector<str> = Vector {} // emitted names parallel to locals
+    pub taken: Vector<str> = Vector {}
+    pub fn_used_names: Vector<str> = Vector {}
+    pub minify_keys: Vector<str> = Vector {}
+    pub minify_vals: Vector<str> = Vector {}
+    pub enable_minify: bool = false
+    pub minify_last: str = "" // "" = C NULL
+end

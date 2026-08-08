@@ -164,7 +164,59 @@ env_t *env_new(interp_t *I, env_t *parent)
     e->parent = parent;
     vec_init(&e->bindings);
     e->index = NULL;
+    e->pool = 0;
+    e->free_next = NULL;
     return e;
+}
+
+/* Empty an env for reuse, keeping its binding_t objects for the next round.
+ *
+ * A loop used to call env_new for every iteration, so a body declaring k
+ * locals cost 1 + k arena allocations per turn and never gave any of it back
+ * (the interpreter arena is only released when the program exits). A donut
+ * frame is 28k iterations, which measured at ~17 MB per frame: fine for a
+ * program that prints six frames and stops, fatal for one that animates until
+ * the user stops it.
+ *
+ * Recycling is only sound while nothing kept a pointer to the old scope, so
+ * the caller checks I->env_escapes across the iteration and falls back to a
+ * genuinely fresh env when a closure or a defer captured this one. That keeps
+ * the usual "each iteration captures its own variable" semantics intact. */
+void env_reset(env_t *e)
+{
+    if (e->bindings.len > e->pool) e->pool = e->bindings.len;
+    e->bindings.len = 0;
+    e->index = NULL;
+}
+
+/* Scope pool. Loops recycle one scope in place (env_reset); everything else
+ * that opens a scope for a bounded stretch of work - a function call, a taken
+ * `if` branch, a match arm, a bare block - borrows one from here and hands it
+ * back on the way out.
+ *
+ * It matters because scopes are the interpreter's most frequent allocation and
+ * the arena never gives memory back mid-run. Rasterising one donut frame makes
+ * roughly 113k calls to math.Sin/Cos alone, each of which used to leave an env
+ * and a parameter binding behind for good.
+ *
+ * Same soundness rule as env_reset: a caller only releases a scope when
+ * I->env_escapes shows nothing captured it. A scope that a closure or defer
+ * kept is simply never returned to the pool. */
+env_t *env_acquire(interp_t *I, env_t *parent)
+{
+    env_t *e = I->env_free;
+    if (!e) return env_new(I, parent);
+    I->env_free = e->free_next;
+    e->free_next = NULL;
+    e->parent = parent;
+    env_reset(e);
+    return e;
+}
+
+void env_release(interp_t *I, env_t *e)
+{
+    e->free_next = I->env_free;
+    I->env_free = e;
 }
 
 binding_t *env_find_local(env_t *e, const char *name)
@@ -189,6 +241,55 @@ binding_t *env_find(env_t *e, const char *name)
     return NULL;
 }
 
+/* env_find, but remembering where the answer was for next time.
+ *
+ * The plain walk compares `name` against every binding of every enclosing
+ * scope, which is the interpreter's single hottest operation: a donut inner
+ * loop touches two globals that sit five scopes up, 28k times a frame. Names
+ * are resolved and checked by sema before this runs, so an identifier node
+ * refers to one fixed declaration and therefore lands the same number of hops
+ * up the chain on every evaluation. Recording (hops, slot) turns the repeat
+ * lookups into a few pointer derefs plus one strcmp.
+ *
+ * The strcmp is the guard, not an optimisation: scopes are reused and refilled
+ * (env_reset), so a slot can hold a different binding than it did last time.
+ * Any mismatch just falls back to the full search and re-records. */
+binding_t *env_find_cached(env_t *e, ast_node_t *n)
+{
+    if (n->ic_valid) {
+        env_t *t = e;
+        uint32_t k = n->ic_hops;
+        while (k && t) {
+            t = t->parent;
+            k--;
+        }
+        if (!k && t && n->ic_slot < t->bindings.len) {
+            binding_t *b = (binding_t *)t->bindings.data[n->ic_slot];
+            if (strcmp(b->name, n->name) == 0) return b;
+        }
+    }
+    {
+        uint32_t hops = 0;
+        env_t *t = e;
+        for (; t; t = t->parent, hops++) {
+            binding_t *b = env_find_local(t, n->name);
+            if (!b) continue;
+            {
+                size_t i = 0;
+                for (; i < t->bindings.len; i++)
+                    if ((binding_t *)t->bindings.data[i] == b) {
+                        n->ic_hops = hops;
+                        n->ic_slot = (uint32_t)i;
+                        n->ic_valid = true;
+                        break;
+                    }
+            }
+            return b;
+        }
+    }
+    return NULL;
+}
+
 void env_define(interp_t *I, env_t *e, const char *name, value_t v)
 {
     binding_t *b = env_find_local(e, name);
@@ -196,10 +297,18 @@ void env_define(interp_t *I, env_t *e, const char *name, value_t v)
         b->val = v;
         return;
     }
-    b = (binding_t *)arena_alloc(I->a, sizeof *b);
-    b->name = name;
-    b->val = v;
-    vec_push(I->a, &e->bindings, b);
+    if (e->bindings.len < e->pool) {
+        /* Recycled slot from a previous pass through this scope. */
+        b = (binding_t *)e->bindings.data[e->bindings.len++];
+        b->name = name;
+        b->val = v;
+    } else {
+        b = (binding_t *)arena_alloc(I->a, sizeof *b);
+        b->name = name;
+        b->val = v;
+        vec_push(I->a, &e->bindings, b);
+        e->pool = e->bindings.len;
+    }
     if (e->index) {
         itab_put(I, e->index, name, b);
     } else if (e->bindings.len >= ENV_INDEX_THRESHOLD) {
@@ -388,7 +497,14 @@ static void collect_decls(interp_t *I, ast_node_t *program)
 
             case AST_CONST_DECL:
             case AST_VAR_DECL: {
-                value_t v = d->a ? eval(I, I->globals, d->a) : val_null();
+                /* An uninitialized global gets the same zero value a local
+                 * would (exec_stmt's AST_VAR_DECL). Binding it to null instead
+                 * left declarations like `mut buf: f64[N]` unusable, because
+                 * indexing null is not an lvalue: `buf[i] = x` failed with
+                 * "value is not index-assignable" even though the C and LLVM
+                 * backends both zero-fill the array. */
+                value_t v =
+                    d->a ? eval(I, I->globals, d->a) : default_for_type(I, d->type_str);
                 env_define(I, I->globals, d->name, v);
                 break;
             }
@@ -563,8 +679,13 @@ int interp_run(arena_t *a, logger_t *log, ast_node_t *program, sema_result_t *se
     I.in_data = opts ? opts->input_data : NULL;
 
     {
-        int ms = opts && opts->timeout_ms > 0 ? opts->timeout_ms : 5000;
-        I.deadline = clock() + (clock_t)((double)ms / 1000.0 * CLOCKS_PER_SEC);
+        int ms = opts ? opts->timeout_ms : 0;
+        if (ms < 0)
+            I.deadline = 0; /* run until it finishes or the caller kills it */
+        else {
+            if (ms == 0) ms = 5000;
+            I.deadline = clock() + (clock_t)((double)ms / 1000.0 * CLOCKS_PER_SEC);
+        }
     }
     I.globals = env_new(&I, NULL);
     vec_init(&I.funcs);

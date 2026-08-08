@@ -51,7 +51,8 @@ typedef struct {
 
 typedef struct {
     sema_t *s;
-    vec_t vars; /* di_var_t*, innermost last; a scope pops back to its mark */
+    vec_t vars;   /* di_var_t*, innermost last; a scope pops back to its mark */
+    vec_t filled; /* const char*, names written through a projection */
 } di_t;
 
 static void di_stmt(di_t *d, ast_node_t *n);
@@ -74,6 +75,46 @@ static di_var_t *di_find(di_t *d, const char *name)
     return NULL;
 }
 
+static ast_node_t *di_root_of(ast_node_t *n)
+{
+    while (n && (n->kind == AST_MEMBER || n->kind == AST_INDEX || n->kind == AST_SLICE))
+        n = n->a;
+    return n;
+}
+
+static bool di_is_filled(di_t *d, const char *name)
+{
+    size_t i = 0;
+    if (!name) return false;
+    for (; i < d->filled.len; i++)
+        if (strcmp((const char *)d->filled.data[i], name) == 0) return true;
+    return false;
+}
+
+/* Collect the names ever written through a projection - `w[i] = v`, `p.f = v`.
+ * Such a variable is storage to be filled, not a value to be read: the write
+ * computes a location and reads nothing, and codegen zeroes a declaration with
+ * no initializer, so whatever is never written is defined rather than
+ * indeterminate. Whole-variable definite assignment is the wrong granularity
+ * there, and insisting on it would reject correct code such as the
+ * `mut w: u32[64]` scratch block that std/crypto fills in a loop. */
+static void di_scan_filled(di_t *d, ast_node_t *n)
+{
+    size_t i = 0;
+    if (!n) return;
+    if (n->kind == AST_ASSIGN && n->a && n->a->kind != AST_IDENTIFIER) {
+        ast_node_t *root = di_root_of(n->a);
+        if (root && root->kind == AST_IDENTIFIER && root->name)
+            vec_push(d->s->a, &d->filled, (void *)(size_t)root->name);
+    }
+    di_scan_filled(d, n->a);
+    di_scan_filled(d, n->b);
+    di_scan_filled(d, n->c);
+    di_scan_filled(d, n->d);
+    for (; i < n->list.len; i++)
+        di_scan_filled(d, (ast_node_t *)n->list.data[i]);
+}
+
 /* Every declaration is tracked, initialized or not, so that an inner binding
  * shadows an outer one of the same name instead of aliasing it. */
 static void di_declare(di_t *d, ast_node_t *decl)
@@ -81,7 +122,7 @@ static void di_declare(di_t *d, ast_node_t *decl)
     di_var_t *v = (di_var_t *)arena_alloc(d->s->a, sizeof(*v));
     v->name = decl->name;
     v->decl = decl;
-    v->inited = decl->a != NULL;
+    v->inited = decl->a != NULL || di_is_filled(d, decl->name);
     vec_push(d->s->a, &d->vars, v);
 }
 
@@ -260,10 +301,9 @@ static void di_assign(di_t *d, ast_node_t *n)
         di_mark(d, root->name);
         return;
     }
-    /* `x[i] = v` and `x.f = v` compute a location; neither reads x's own value,
-     * so `mut m: u32[16]` followed by a loop that fills every slot is fine. The
-     * subscripts themselves are reads. Elements left unwritten are not garbage:
-     * codegen zero-initializes a declaration that has no initializer. */
+    /* `x[i] = v` / `x.f = v` compute a location rather than reading x, so only
+     * the subscripts count as reads. di_scan_filled() has already excused x
+     * itself. */
     while (root->kind == AST_MEMBER || root->kind == AST_INDEX ||
            root->kind == AST_SLICE) {
         di_expr(d, root->b);
@@ -367,5 +407,7 @@ void sema_check_definite_init(sema_t *s, ast_node_t *fn)
     if (!fn || !fn->a) return;
     d.s = s;
     vec_init(&d.vars);
+    vec_init(&d.filled);
+    di_scan_filled(&d, fn->a);
     di_stmt(&d, fn->a);
 }

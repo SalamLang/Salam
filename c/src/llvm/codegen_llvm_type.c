@@ -26,6 +26,15 @@
  *
  * inf/nan text is left alone: those are not decimal literals and splicing a
  * point into them would only make things worse.
+ *
+ * Every path returns storage that outlives the call - arena text, or a string
+ * literal. Handing `v` straight back would not: ll_literal() formats into a
+ * stack buffer and the text it gets is spliced into an instruction emitted
+ * further down, by which point that frame is gone. A literal already carrying
+ * a '.' took exactly that path, so "0.5" reached the module as whatever had
+ * since been written over those bytes ("expected value token" out of the .ll
+ * parser, on a line that reads correctly in any build where the frame happened
+ * to survive).
  */
 const char *ll_fp_text(ll_t *ll, const char *v)
 {
@@ -33,11 +42,11 @@ const char *ll_fp_text(ll_t *ll, const char *v)
     char mant[64], expo[64];
     size_t mlen;
     if (!v || !*v) return "0.0";
-    if (strchr(v, '.') || strpbrk(v, "nNiI")) return v;
+    if (strchr(v, '.') || strpbrk(v, "nNiI")) return ll_fmt(ll, "%s", v);
     ep = strpbrk(v, "eE");
     if (!ep) return ll_fmt(ll, "%s.0", v);
     mlen = (size_t)(ep - v);
-    if (mlen >= sizeof mant || strlen(ep) >= sizeof expo) return v;
+    if (mlen >= sizeof mant || strlen(ep) >= sizeof expo) return ll_fmt(ll, "%s", v);
     memcpy(mant, v, mlen);
     mant[mlen] = '\0';
     sal_snprintf(expo, sizeof expo, "%s", ep);
@@ -341,7 +350,7 @@ void ll_type_layout(ll_t *ll, const char *ts, size_t *out_size, size_t *out_alig
     if (!ts || !strcmp(ts, "void")) {
         *out_size = 0;
         *out_align = 1;
-    } else if (!strncmp(ts, "dyn ", 4) && !strchr(ts, '[')) {
+    } else if (!strncmp(ts, "dyn ", 4) && !strchr(ts, '[') && !ll_is_ptr_ts(ts)) {
         *out_size = 2 * p;
         *out_align = p;
     } else if (!strncmp(ts, "Variant<", 8)) {
@@ -602,7 +611,15 @@ const char *ll_zero(const char *ts)
 const char *ll_ty(ll_t *ll, const char *ts)
 {
     if (!ts || !strcmp(ts, "void")) return "void";
-    if (!strncmp(ts, "dyn ", 4) && !strchr(ts, '[')) return "%dyn";
+    /*
+     * A `dyn X` interface value is the two-word %dyn fat pointer, but `dyn
+     * X*` and `dyn X[N]` are an ordinary pointer and an array OF those - the
+     * array case was already excluded, the pointer case was not.
+     * Vector<dyn Shape>'s `data: T*` field therefore got LLVM type %dyn, so
+     * the buffer was loaded as a struct and handed to Reallocate where a ptr
+     * was expected, and no program holding interfaces in a Vector compiled.
+     */
+    if (!strncmp(ts, "dyn ", 4) && !strchr(ts, '[') && !ll_is_ptr_ts(ts)) return "%dyn";
     if (!strncmp(ts, "Variant<", 8)) {
         ll_ensure_variant_type(ll, ts);
         return ll_variant_cname(ll, ts);

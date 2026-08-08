@@ -936,7 +936,17 @@ static func_sig_t *ll_body_sig_for(ll_t *ll, const char *name, symbol_t **owner)
         if (!fs || fs->kind != SYM_FUNC) continue;
         for (; o < fs->overloads.len; o++) {
             func_sig_t *sg = (func_sig_t *)fs->overloads.data[o];
-            if (sg->decl && sg->decl->a) {
+            /*
+             * `is_extern` too, not just "has a body": the point of this
+             * lookup is to find the definition that emits the *unmangled*
+             * @name the bodyless declaration would otherwise stand in for,
+             * and only `extern:`-block functions get that name. An ordinary
+             * same-named function is a different symbol entirely - std/net's
+             * `send(method, url, headers, body)` shadowed the libc `send`
+             * every socket write calls, so nothing declared @send and no
+             * server program could be built.
+             */
+            if (sg->decl && sg->decl->a && sg->decl->is_extern) {
                 *owner = pk;
                 return sg;
             }

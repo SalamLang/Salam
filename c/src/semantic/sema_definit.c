@@ -106,14 +106,16 @@ static unsigned char *di_snap(di_t *d, size_t n)
 {
     unsigned char *buf = (unsigned char *)arena_alloc(d->s->a, n ? n : 1);
     size_t i = 0;
-    for (; i < n; i++) buf[i] = di_at(d, i)->inited ? 1 : 0;
+    for (; i < n; i++)
+        buf[i] = di_at(d, i)->inited ? 1 : 0;
     return buf;
 }
 
 static void di_load(di_t *d, const unsigned char *buf, size_t n)
 {
     size_t i = 0;
-    for (; i < n; i++) di_at(d, i)->inited = buf[i] != 0;
+    for (; i < n; i++)
+        di_at(d, i)->inited = buf[i] != 0;
 }
 
 /* Analyze one branch from `base`, restore the scope depth, and report the
@@ -125,7 +127,8 @@ static void di_arm(di_t *d, ast_node_t *stmt, const unsigned char *base,
     di_load(d, base, n);
     di_stmt(d, stmt);
     d->vars.len = n;
-    for (; i < n; i++) out[i] = di_at(d, i)->inited ? 1 : 0;
+    for (; i < n; i++)
+        out[i] = di_at(d, i)->inited ? 1 : 0;
 }
 
 static void di_commit(di_t *d, const unsigned char *base, const unsigned char *acc,
@@ -157,7 +160,8 @@ static void di_if(di_t *d, ast_node_t *n)
         el_live = !sema_stmt_terminates(d->s, n->c);
     } else {
         el_live = true; /* the implicit empty else assigns nothing */
-        for (; i < nv; i++) el[i] = base[i];
+        for (; i < nv; i++)
+            el[i] = base[i];
     }
 
     di_load(d, base, nv);
@@ -181,7 +185,8 @@ static void di_match(di_t *d, ast_node_t *n)
     base = di_snap(d, nv);
     acc = di_snap(d, nv);
     st = di_snap(d, nv);
-    for (i = 0; i < nv; i++) acc[i] = 1;
+    for (i = 0; i < nv; i++)
+        acc[i] = 1;
 
     for (i = 0; i < n->list.len; i++) {
         ast_node_t *arm = (ast_node_t *)n->list.data[i];
@@ -190,7 +195,8 @@ static void di_match(di_t *d, ast_node_t *n)
         di_arm(d, arm->b, base, st, nv);
         if (sema_stmt_terminates(d->s, arm->b)) continue;
         any_live = true;
-        for (; j < nv; j++) acc[j] = (unsigned char)(acc[j] && st[j]);
+        for (; j < nv; j++)
+            acc[j] = (unsigned char)(acc[j] && st[j]);
     }
     /* Without an else arm the match may match nothing, so nothing it assigns
      * is guaranteed. */
@@ -246,22 +252,37 @@ static void di_call(di_t *d, ast_node_t *n)
 
 static void di_assign(di_t *d, ast_node_t *n)
 {
-    ast_node_t *t = n->a;
+    ast_node_t *root = n->a;
     di_expr(d, n->b);
-    if (t && t->kind == AST_IDENTIFIER) {
-        if (n->op != TK_ASSIGN) di_read(d, t); /* `x += 1` reads x first */
-        di_mark(d, t->name);
+    if (!root) return;
+    if (root->kind == AST_IDENTIFIER) {
+        if (n->op != TK_ASSIGN) di_read(d, root); /* `x += 1` reads x first */
+        di_mark(d, root->name);
         return;
     }
-    /* `x.f = v` / `x[i] = v` read x to find the slot, so x must already hold a
-     * value; assigning one field does not make the rest of it defined. */
-    di_expr(d, t);
+    /* `x[i] = v` and `x.f = v` compute a location; neither reads x's own value,
+     * so `mut m: u32[16]` followed by a loop that fills every slot is fine. The
+     * subscripts themselves are reads. Elements left unwritten are not garbage:
+     * codegen zero-initializes a declaration that has no initializer. */
+    while (root->kind == AST_MEMBER || root->kind == AST_INDEX ||
+           root->kind == AST_SLICE) {
+        di_expr(d, root->b);
+        di_expr(d, root->c);
+        if (!root->a) return;
+        root = root->a;
+    }
+    if (root->kind == AST_IDENTIFIER) {
+        di_mark(d, root->name);
+        return;
+    }
+    di_expr(d, root);
 }
 
 static void di_block(di_t *d, ast_node_t *n)
 {
     size_t mark = d->vars.len, i = 0;
-    for (; i < n->list.len; i++) di_stmt(d, (ast_node_t *)n->list.data[i]);
+    for (; i < n->list.len; i++)
+        di_stmt(d, (ast_node_t *)n->list.data[i]);
     d->vars.len = mark;
 }
 
@@ -292,7 +313,8 @@ static void di_expr(di_t *d, ast_node_t *n)
     di_expr(d, n->b);
     di_expr(d, n->c);
     di_expr(d, n->d);
-    for (; i < n->list.len; i++) di_expr(d, (ast_node_t *)n->list.data[i]);
+    for (; i < n->list.len; i++)
+        di_expr(d, (ast_node_t *)n->list.data[i]);
 }
 
 static void di_stmt(di_t *d, ast_node_t *n)

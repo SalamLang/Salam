@@ -1,0 +1,601 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+// anim - turns frame-based program output into a real animation.
+//
+// The browser runs the interpreter to completion and hands us one finished
+// string, so there is nothing to stream. What we can do is recover the frames
+// the program meant to draw and replay them into the output pane, clearing
+// between them, instead of dumping every frame underneath the previous one.
+//
+// Two ways a console program marks a frame boundary:
+//
+//   1. Terminal control codes - "\x1b[2J" (clear) or "\x1b[H" (cursor home),
+//      the donut.c idiom, plus form feed. Every other escape sequence is
+//      stripped so colour codes never show up as literal garbage.
+//   2. A numbered header line - "-- frame 0", "-- frame 1", ... Detected by
+//      finding the most common "text followed by an integer" line shape and
+//      checking the integers really do count up. Guarded hard: at least
+//      MIN_FRAMES of them, and at least MIN_BODY lines per frame, so a program
+//      that merely prints "step 1", "step 2" is left alone.
+//
+// Playback is driven by requestAnimationFrame (dom.EveryFrame), not by a
+// timer: the frame rate follows the display, and a background tab stops
+// burning work instead of queueing up ticks.
+
+package anim
+
+import dom
+
+const MAX_FRAMES := 512
+const MAX_PFX := 16
+const MIN_FRAMES := 3
+const MIN_BODY := 3
+const FPS_COUNT := 6
+
+fps_list := [4, 8, 12, 20, 30, 60] as int[6]
+
+mut el_out := 0 as i64
+mut el_bar := 0 as i64
+mut el_play := 0 as i64
+mut el_prev := 0 as i64
+mut el_next := 0 as i64
+mut el_range := 0 as i64
+mut el_count := 0 as i64
+mut el_speed := 0 as i64
+mut el_loop := 0 as i64
+mut el_raw := 0 as i64
+
+mut g_lang := "en"
+mut g_count := 0
+mut g_at := 0
+mut g_fps_i := 2
+mut g_accum := 0.0
+mut g_playing := false
+mut g_repeat := true
+mut g_show_raw := false
+mut g_trunc := false
+mut g_clean := ""
+
+mut frames: str[MAX_FRAMES]
+mut mstart: int[MAX_FRAMES]
+mut mnum: int[MAX_FRAMES]
+mut pfx: str[MAX_PFX]
+mut pfxn: int[MAX_PFX]
+
+func cc(s: str, i: int): int: ret s[i] as int end
+
+func is_digit(c: int): bool: ret c >= 48 && c <= 57 end
+
+func fps(): int: ret fps_list[g_fps_i] end
+
+func L(key: str): str:
+    if key == "play":
+        if g_lang == "fa": ret "پخش" end
+        if g_lang == "ar": ret "تشغيل" end
+        ret "Play"
+    end
+    if key == "pause":
+        if g_lang == "fa": ret "مکث" end
+        if g_lang == "ar": ret "إيقاف مؤقت" end
+        ret "Pause"
+    end
+    if key == "prev":
+        if g_lang == "fa": ret "فریم قبلی" end
+        if g_lang == "ar": ret "الإطار السابق" end
+        ret "Previous frame"
+    end
+    if key == "next":
+        if g_lang == "fa": ret "فریم بعدی" end
+        if g_lang == "ar": ret "الإطار التالي" end
+        ret "Next frame"
+    end
+    if key == "speed":
+        if g_lang == "fa": ret "سرعت" end
+        if g_lang == "ar": ret "السرعة" end
+        ret "Speed"
+    end
+    if key == "loop":
+        if g_lang == "fa": ret "تکرار" end
+        if g_lang == "ar": ret "تكرار" end
+        ret "Loop"
+    end
+    if key == "raw":
+        if g_lang == "fa": ret "متن خام" end
+        if g_lang == "ar": ret "النص الخام" end
+        ret "Raw"
+    end
+    ret ""
+end
+
+func has_text(s: str): bool:
+    n := s.len()
+    mut i := 0
+    until i < n:
+        if cc(s, i) > 32: ret true end
+        i = i + 1
+    end
+    ret false
+end
+
+func find_from(s: str, sub: str, from: int): int:
+    n := s.len()
+    if from >= n: ret 0 - 1 end
+    idx := s.substr(from, n - from).find(sub)
+    if idx < 0: ret 0 - 1 end
+    ret from + idx
+end
+
+func line_end(s: str, from: int): int:
+    j := find_from(s, "\n", from)
+    if j < 0: ret s.len() end
+    ret j
+end
+
+func count_lines(s: str): int:
+    n := s.len()
+    mut total := 1
+    mut i := 0
+    until i < n:
+        if cc(s, i) == 10: total = total + 1 end
+        i = i + 1
+    end
+    ret total
+end
+
+func trim_right(s: str): str:
+    mut e := s.len()
+    until e > 0 && cc(s, e - 1) <= 32:
+        e = e - 1
+    end
+    ret s.substr(0, e)
+end
+
+func parse_num(s: str, from: int): int:
+    n := s.len()
+    mut v := 0
+    mut i := from
+    until i < n:
+        c := cc(s, i)
+        if is_digit(c): v = v * 10 + (c - 48) end
+        i = i + 1
+    end
+    ret v
+end
+
+// esc_end - index just past the escape sequence that starts at i.
+func esc_end(s: str, i: int): int:
+    n := s.len()
+    if i + 1 >= n: ret n end
+    if cc(s, i + 1) != 91: ret i + 2 end
+    mut j := i + 2
+    until j < n && (cc(s, j) < 64 || cc(s, j) > 126):
+        j = j + 1
+    end
+    if j < n: ret j + 1 end
+    ret n
+end
+
+// esc_is_home - does the sequence at [i, e) start a fresh screen?
+func esc_is_home(s: str, i: int, e: int): bool:
+    if e - i < 2: ret false end
+    last := cc(s, e - 1)
+    if cc(s, i + 1) != 91: ret last == 99 end
+    if last == 72 || last == 102: ret true end
+    if last != 74: ret false end
+    p := s.substr(i + 2, e - i - 3)
+    ret p == "2" || p == "3"
+end
+
+func push_frame(buf: str):
+    g_clean = g_clean + buf
+    if has_text(buf) == false: ret end
+    if g_count >= MAX_FRAMES:
+        g_trunc = true
+        ret
+    end
+    frames[g_count] = buf
+    g_count = g_count + 1
+end
+
+// scan_controls - strip every escape sequence, cutting a frame wherever the
+// program cleared the screen or homed the cursor. Also fills g_clean, which is
+// what the pane shows when there is no animation to play.
+func scan_controls(src: str):
+    n := src.len()
+    mut buf := ""
+    mut i := 0
+    until i < n:
+        c := cc(src, i)
+        if c == 27:
+            e := esc_end(src, i)
+            if esc_is_home(src, i, e):
+                push_frame(buf)
+                buf = ""
+            end
+            i = e
+        else c == 12:
+            push_frame(buf)
+            buf = ""
+            i = i + 1
+        else c == 13:
+            i = i + 1
+        else:
+            buf = buf + src.substr(i, 1)
+            i = i + 1
+        end
+    end
+    push_frame(buf)
+end
+
+func clear_pfx():
+    mut i := 0
+    until i < MAX_PFX:
+        pfx[i] = ""
+        pfxn[i] = 0
+        i = i + 1
+    end
+end
+
+// num_start - where the trailing run of digits begins, or -1.
+func num_start(line: str): int:
+    n := line.len()
+    if n == 0: ret 0 - 1 end
+    mut j := n
+    until j > 0 && is_digit(cc(line, j - 1)):
+        j = j - 1
+    end
+    if j == n: ret 0 - 1 end
+    if n - j > 9: ret 0 - 1 end
+    ret j
+end
+
+// marker_prefix - "-- frame 12" -> "-- frame ", anything else -> "".
+func marker_prefix(line: str): str:
+    j := num_start(line)
+    if j <= 0: ret "" end
+    p := line.substr(0, j)
+    if has_text(p) == false: ret "" end
+    ret p
+end
+
+func note_prefix(p: str):
+    mut i := 0
+    until i < MAX_PFX:
+        if pfx[i] == p:
+            pfxn[i] = pfxn[i] + 1
+            ret
+        end
+        if pfx[i] == "":
+            pfx[i] = p
+            pfxn[i] = 1
+            ret
+        end
+        i = i + 1
+    end
+end
+
+func scan_prefixes(src: str):
+    clear_pfx()
+    n := src.len()
+    mut ls := 0
+    until ls < n:
+        le := line_end(src, ls)
+        p := marker_prefix(trim_right(src.substr(ls, le - ls)))
+        if p != "": note_prefix(p) end
+        ls = le + 1
+    end
+end
+
+func best_prefix(): str:
+    mut best := ""
+    mut bn := 0
+    mut i := 0
+    until i < MAX_PFX:
+        if pfx[i] != "" && pfxn[i] > bn:
+            bn = pfxn[i]
+            best = pfx[i]
+        end
+        i = i + 1
+    end
+    if bn < MIN_FRAMES: ret "" end
+    ret best
+end
+
+func collect_markers(src: str, p: str): int:
+    n := src.len()
+    mut k := 0
+    mut ls := 0
+    until ls < n && k < MAX_FRAMES:
+        le := line_end(src, ls)
+        line := trim_right(src.substr(ls, le - ls))
+        if marker_prefix(line) == p:
+            mstart[k] = ls
+            mnum[k] = parse_num(line, num_start(line))
+            k = k + 1
+        end
+        ls = le + 1
+    end
+    if k >= MAX_FRAMES: g_trunc = true end
+    ret k
+end
+
+func nums_increase(k: int): bool:
+    mut i := 1
+    until i < k:
+        if mnum[i] <= mnum[i - 1]: ret false end
+        i = i + 1
+    end
+    ret true
+end
+
+func build_marker_frames(src: str, k: int): bool:
+    mut i := 0
+    until i < k:
+        st := i == 0 ? 0 : mstart[i]
+        en := i + 1 < k ? mstart[i + 1] : src.len()
+        seg := src.substr(st, en - st)
+        if count_lines(seg) < MIN_BODY: ret false end
+        frames[i] = seg
+        i = i + 1
+    end
+    g_count = k
+    ret true
+end
+
+func try_markers(src: str):
+    scan_prefixes(src)
+    p := best_prefix()
+    if p == "": ret end
+    k := collect_markers(src, p)
+    if k < MIN_FRAMES: ret end
+    if nums_increase(k) == false: ret end
+    if build_marker_frames(src, k) == false: g_count = 0 end
+end
+
+func pad_to(s: str, target: int): str:
+    mut out := s
+    mut l := count_lines(s)
+    until l < target:
+        out = out + "\n"
+        l = l + 1
+    end
+    ret out
+end
+
+// pad_frames - give every frame the same height so swapping one for the next
+// never resizes the pane or nudges the scroll position.
+func pad_frames():
+    mut tallest := 0
+    mut i := 0
+    until i < g_count:
+        l := count_lines(frames[i])
+        if l > tallest: tallest = l end
+        i = i + 1
+    end
+    i = 0
+    until i < g_count:
+        frames[i] = pad_to(frames[i], tallest)
+        i = i + 1
+    end
+end
+
+func prepare(src: str):
+    g_clean = ""
+    g_count = 0
+    g_trunc = false
+    scan_controls(src)
+    if g_count < 2:
+        g_count = 0
+        try_markers(g_clean)
+    end
+    if g_count >= 2: pad_frames() end
+end
+
+func render_frame():
+    if g_count == 0: ret end
+    mut total := "" + g_count
+    if g_trunc: total = total + "+" end
+    dom.SetText(el_out, frames[g_at])
+    dom.SetValue(el_range, "" + g_at)
+    dom.SetText(el_count, "" + (g_at + 1) + " / " + total)
+end
+
+func set_play(want: bool):
+    g_playing = want && g_count > 1 && g_show_raw == false
+    g_accum = 0.0
+    dom.SetText(el_play, g_playing ? "❚❚" : "▶")
+    dom.SetAttr(el_play, "title", g_playing ? L("pause") : L("play"))
+end
+
+func step(d: int):
+    if g_count == 0: ret end
+    mut nx := g_at + d
+    if nx >= g_count:
+        if g_repeat == false:
+            g_at = g_count - 1
+            set_play(false)
+            render_frame()
+            ret
+        end
+        nx = 0
+    end
+    if nx < 0: nx = g_count - 1 end
+    g_at = nx
+    render_frame()
+end
+
+func on_tick(dt: f64):
+    if g_playing == false: ret end
+    if g_count < 2: ret end
+    g_accum = g_accum + dt
+    ms := 1000.0 / (fps() as f64)
+    if g_accum < ms: ret end
+    g_accum = g_accum - ms
+    if g_accum > ms: g_accum = 0.0 end
+    step(1)
+end
+
+func apply_raw():
+    if g_show_raw:
+        set_play(false)
+        dom.AddClass(el_bar, "raw")
+        dom.AddClass(el_raw, "on")
+        dom.SetText(el_out, g_clean)
+    else:
+        dom.RemoveClass(el_bar, "raw")
+        dom.RemoveClass(el_raw, "on")
+        render_frame()
+    end
+end
+
+func on_play():
+    if g_playing:
+        set_play(false)
+        ret
+    end
+    if g_at >= g_count - 1: g_at = 0 end
+    set_play(true)
+    render_frame()
+end
+
+func on_prev():
+    set_play(false)
+    step(0 - 1)
+end
+
+func on_next():
+    set_play(false)
+    step(1)
+end
+
+func on_scrub():
+    v := parse_num(dom.GetValue(el_range), 0)
+    set_play(false)
+    if v >= g_count: ret end
+    g_at = v
+    render_frame()
+end
+
+func on_speed():
+    g_fps_i = g_fps_i + 1
+    if g_fps_i >= FPS_COUNT: g_fps_i = 0 end
+    g_accum = 0.0
+    dom.SetText(el_speed, "" + fps() + " fps")
+    dom.StoreSetStr("salam_anim_fps", "" + g_fps_i)
+end
+
+func on_loop():
+    g_repeat = g_repeat == false
+    if g_repeat:
+        dom.AddClass(el_loop, "on")
+    else:
+        dom.RemoveClass(el_loop, "on")
+    end
+end
+
+func on_raw():
+    g_show_raw = g_show_raw == false
+    apply_raw()
+end
+
+func relabel():
+    dom.SetAttr(el_play, "title", g_playing ? L("pause") : L("play"))
+    dom.SetAttr(el_prev, "title", L("prev"))
+    dom.SetAttr(el_next, "title", L("next"))
+    dom.SetAttr(el_speed, "title", L("speed"))
+    dom.SetAttr(el_loop, "title", L("loop"))
+    dom.SetAttr(el_raw, "title", L("raw"))
+    dom.SetText(el_raw, L("raw"))
+end
+
+func wire():
+    dom.OnEvent(el_play, "click", () => on_play())
+    dom.OnEvent(el_prev, "click", () => on_prev())
+    dom.OnEvent(el_next, "click", () => on_next())
+    dom.OnEvent(el_speed, "click", () => on_speed())
+    dom.OnEvent(el_loop, "click", () => on_loop())
+    dom.OnEvent(el_raw, "click", () => on_raw())
+    dom.OnEvent(el_range, "input", () => on_scrub())
+    dom.EveryFrame((dt: f64) => on_tick(dt))
+end
+
+@fa "آماده سازی"
+@ar "تهیئة"
+pub func Init():
+    el_out = dom.ById("output")
+    el_bar = dom.ById("anim-bar")
+    el_play = dom.ById("anim-play")
+    el_prev = dom.ById("anim-prev")
+    el_next = dom.ById("anim-next")
+    el_range = dom.ById("anim-range")
+    el_count = dom.ById("anim-count")
+    el_speed = dom.ById("anim-speed")
+    el_loop = dom.ById("anim-loop")
+    el_raw = dom.ById("anim-raw")
+    saved := dom.StoreGetStr("salam_anim_fps")
+    if saved != "": g_fps_i = parse_num(saved, 0) end
+    if g_fps_i >= FPS_COUNT: g_fps_i = 0 end
+    dom.SetText(el_speed, "" + fps() + " fps")
+    dom.SetAttr(el_range, "min", "0")
+    dom.SetAttr(el_range, "step", "1")
+    relabel()
+    wire()
+end
+
+@fa "تنظیم زبان"
+@ar "تعیین اللغة"
+pub func SetLang(l: str):
+    g_lang = l
+    relabel()
+end
+
+@fa "فعال است"
+@ar "نشط"
+pub func Active(): bool: ret g_count >= 2 end
+
+// Raw - the whole program output with escape sequences removed, which is what
+// Copy should hand over even while a single frame is on screen.
+@fa "خام"
+@ar "خام"
+pub func Raw(): str: ret g_clean end
+
+@fa "پنهان کن"
+@ar "أخف"
+pub func Hide():
+    set_play(false)
+    g_count = 0
+    dom.SetBool(el_bar, "hidden", true)
+end
+
+// Show - render program output into the pane, as an animation when the output
+// turns out to be frames. Returns the frame count (0 or 1 means plain text).
+@fa "نمایش بده"
+@ar "اعرض"
+pub func Show(out: str): int:
+    prepare(out)
+    dom.SetBool(el_bar, "hidden", g_count < 2)
+    if g_count < 2:
+        set_play(false)
+        dom.SetText(el_out, g_clean)
+        dom.SetAttr(el_out, "class", "output")
+        ret g_count
+    end
+    g_at = 0
+    dom.SetAttr(el_range, "max", "" + (g_count - 1))
+    dom.SetAttr(el_out, "class", "output codeview")
+    apply_raw()
+    set_play(true)
+    ret g_count
+end

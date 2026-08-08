@@ -2806,9 +2806,32 @@ func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
     until i < at.ChildCount(a, program):
         d := at.Child(a, program, i)
         dn := at.Get(a, d)
-        skip := (
-            dn.kind != at.AST_CONST_DECL && dn.kind != at.AST_VAR_DECL
-        ) || dn.is_extern
+        mut skip := dn.kind != at.AST_CONST_DECL && dn.kind != at.AST_VAR_DECL
+        // Idempotent: emitting the same global twice would produce a
+        // duplicate definition in the module. This lets the function be
+        // called again for a package whose globals may or may not have been
+        // emitted already, which lv_addr_of relies on.
+        if !skip && global_find(v, dn.name) >= 0:
+            skip = true
+        end
+        // An extern *variable* - POSIX `environ`, which std/os/process
+        // declares in its non-Windows branch. emit_externs_in only handles
+        // SYM_FUNC and this loop used to skip is_extern outright, so nothing
+        // emitted these at all and every reference became "address of an
+        // unknown identifier 'environ'". Declared under its real C name,
+        // never the @g. prefix: the system linker is what resolves it.
+        if !skip && dn.is_extern:
+            ets := str.Len(dn.type_str) > 0 ? dn.type_str : "i32"
+            eref := "@" + dn.name
+            out_g(v, eref + " = external global " + ty_of(v, s, a, ets) + "\n")
+            mut ev := LvVar {}
+            ev.name = dn.name
+            ev.ptr = eref
+            ev.ts = ets
+            v.globals.push(ev)
+            any = true
+            skip = true
+        end
         if !skip:
             ts := str.Len(dn.type_str) > 0 ? dn.type_str : "i32"
             gref := "@g." + str.TrimPrefix(struct_ltype(dn.name), "%struct.")
@@ -4839,6 +4862,38 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
             ra3.ptr = gv.ptr
             ra3.ts = gv.ts
             ret ra3
+        end
+        // A package's own top-level global reached before anything emitted
+        // it. emit_globals rather than touch_pkg: a package can be recorded
+        // in pkg_touched while these globals were never emitted, so the
+        // touch would short-circuit and change nothing. Emitting straight
+        // from the package's AST is what resolves the name, and it is safe
+        // to repeat now that emit_globals skips names already emitted.
+        //
+        // Whether this path is needed depends on the platform, which is how
+        // it went unnoticed: std/net/internal/rawsock declares a
+        // `_rawsock_wsa_init` global inside `if SALAM_OS_WINDOWS`, and
+        // emitting it got the package touched early, so `AF_INET` and
+        // `SOCK_STREAM` resolved by luck. On Linux that global is condcomp'd
+        // away and every socket program failed to compile.
+        mut pgi := 0
+        until pgi < sm.PackageCount(s):
+            pgk := sm.PackageAt(s, pgi)
+            if pgk != 0:
+                pgy := sm.SymAt(s, pgk)
+                if pgy.kind == sm.SYM_PACKAGE && pgy.decl != 0:
+                    emit_globals(v, s, a, pgy.decl)
+                    pgf := global_find(v, nm)
+                    if pgf >= 0:
+                        pgv := v.globals.get(pgf)[0]
+                        mut ra6 := LvAddr {}
+                        ra6.ptr = pgv.ptr
+                        ra6.ts = pgv.ts
+                        ret ra6
+                    end
+                end
+            end
+            pgi += 1
         end
         lv_error(v, a, n, "address of an unknown identifier '" + nm + "'")
         mut ra4 := LvAddr {}

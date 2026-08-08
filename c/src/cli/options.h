@@ -20,7 +20,17 @@
 #include "logger/logger.h"
 #include "diag/diag_render.h"
 
-#define SALAM_MAX_INPUTS 64
+/*
+ * Also bounds the module import closure in driver_build's work[] - every
+ * .salam file reached transitively, not just the files named on the command
+ * line. At 64 that was comfortable for a compiler laid out as ~30 flat
+ * modules, but the dir-per-stage layout is 150+ files: the closure
+ * overflowed and the push sites that bounds-check silently (rather than
+ * reporting the limit) dropped modules, so a generated header ended up
+ * including one that was never emitted - "salam_mod_encoding.h: No such
+ * file or directory", with nothing pointing at the real cause.
+ */
+#define SALAM_MAX_INPUTS 1024
 
 typedef enum {
     CMD_INSPECT = 0,

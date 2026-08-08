@@ -146,13 +146,23 @@ end
 // ll_fn_header - recv_param "" = the C NULL.
 func fn_header(
     v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, sig: int, ret_lty: str, fname: str, recv_param: str,
-    exported: bool
+    exported: bool, is_main: bool
 ): str:
     mut hdr := co.SbNew()
     co.SbPuts(
         hdr, "define " + (exported ? "" : "internal ") + ret_lty + " @" + fname + "("
     )
     mut first := true
+    // main takes the real C argc/argv. Salam's own `func main:` declares no
+    // parameters, so this emitted `define i32 @main()` and the process
+    // arguments never reached the runtime - args() returned an empty vector
+    // in every LLVM-built program (the C backend has always emitted
+    // `main(int argc, char **argv)` and called salam_set_args, see
+    // codegen_decl.c).
+    if is_main:
+        co.SbPuts(hdr, "i32 %argc, ptr %argv")
+        first = false
+    end
     if str.Len(recv_param) > 0:
         co.SbPuts(hdr, recv_param)
         first = false
@@ -322,7 +332,7 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
         )
     end
     header := fn_header(
-        v, s, a, fn, sig, ret_lty, fname, recv_param, exported
+        v, s, a, fn, sig, ret_lty, fname, recv_param, exported, is_main0
     )
     if is_impl:
         emit_alloca(v, "%p.this = alloca " + ty_of(v, s, a, recv_ts))
@@ -331,6 +341,13 @@ func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
     end
     spill_params(v, s, a, fn, sig)
     if is_main0:
+        // Hand argc/argv to the runtime before anything can call args().
+        mut sa_owner := 0
+        sa := body_sig_for(s, a, "salam_set_args", sa_owner)
+        if sa >= 0 && sm.SigAt(s, sa).decl != 0:
+            ensure_fn(v, s, a, sm.SigAt(s, sa).decl, 0, sm.SymAt(s, sa_owner).members)
+            emit(v, "call void @salam_set_args(i32 %argc, ptr %argv)")
+        end
         emit_global_inits(v, s, a)
     end
     if fnode.a != 0:

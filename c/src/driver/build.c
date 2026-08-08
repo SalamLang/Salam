@@ -683,6 +683,74 @@ int driver_resolve_dir_layout(arena_t *arena, logger_t *log, langpack_t *pack,
  * does any explicit --cc=, which names a C compiler and therefore can only
  * mean the C path.
  */
+/*
+ * Run a C compiler/linker command, falling back to a GCC-style @response
+ * file when the command line is too long for the platform to spawn.
+ *
+ * Windows caps a process command line at ~32 KB, and a link line naming one
+ * object per module blows through that well before the module count becomes
+ * unreasonable - a compiler laid out as 150+ files hits it, reported only as
+ * the shell's "The command line is too long." Both gcc and tcc accept
+ * @file, one argument per line.
+ *
+ * The threshold is deliberately below the real limit: `system()` goes
+ * through the shell, which needs headroom of its own.
+ */
+#define SALAM_CMDLINE_SAFE 30000
+
+static int run_cc_cmd(logger_t *log, const char *cmd, const char *builddir)
+{
+    size_t len = strlen(cmd);
+    const char *sp;
+    char rsp[1200];
+    FILE *f;
+    int rc;
+    if (len < SALAM_CMDLINE_SAFE || !builddir) return system(cmd);
+
+    /* Split at the first space: the program stays on the command line, every
+     * argument after it moves into the response file. */
+    sp = strchr(cmd, ' ');
+    if (!sp) return system(cmd);
+
+    sal_snprintf(rsp, sizeof rsp, "%s/link.rsp", builddir);
+    f = fopen(rsp, "wb");
+    if (!f) {
+        LOG_W(log, PH_DRIVER, "cannot write %s; passing the full command line", rsp);
+        return system(cmd);
+    }
+    {
+        /* One argument per line. Arguments were already shell-quoted into
+         * `cmd`; a response file needs no shell quoting, but keeping the
+         * quotes is harmless to both gcc and tcc and preserves paths with
+         * spaces. */
+        const char *p = sp + 1;
+        int inq = 0;
+        for (; *p; p++) {
+            if (*p == '"') inq = !inq;
+            if (*p == ' ' && !inq)
+                fputc('\n', f);
+            else
+                fputc(*p, f);
+        }
+        fputc('\n', f);
+    }
+    fclose(f);
+    {
+        sb_t rc_cmd;
+        const char *q = cmd;
+        sb_init(&rc_cmd);
+        for (; q < sp; q++)
+            sb_putc(&rc_cmd, *q);
+        sb_puts(&rc_cmd, " @");
+        sb_put_shell_arg(&rc_cmd, rsp);
+        LOG_I(log, PH_DRIVER, "command line too long (%lu bytes); using %s",
+              (unsigned long)len, rsp);
+        rc = system(sb_cstr(&rc_cmd));
+        sb_free(&rc_cmd);
+    }
+    return rc;
+}
+
 static bool build_use_llvm(const options_t *opt)
 {
     if (!strcmp(opt->backend, "c")) return false;
@@ -1471,7 +1539,7 @@ int driver_build(options_t *opt)
 #endif
         LOG_I(log, PH_DRIVER, "linking: %s", sb_cstr(&cmd));
         PROF_SCOPE_BEGIN(TP_LINK, output);
-        crc = system(sb_cstr(&cmd));
+        crc = run_cc_cmd(log, sb_cstr(&cmd), salam_scratch_dir());
         PROF_SCOPE_END(TP_LINK);
         sb_free(&cmd);
         if (crc != 0) {
